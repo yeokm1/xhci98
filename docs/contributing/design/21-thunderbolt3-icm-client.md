@@ -64,6 +64,10 @@ downstream ports names it, `xHCI98 USB4 PCI Bridge (ASMedia ASM4242)`.
 Section 6.1.2, added 2026-10-27 (task 44.54, the owner's decision of
 that day): on 98 SE and ME, under the USB4 profile, the removal of a
 drive that left with the controller waits for its return.
+Section 4.5, added 2026-10-29 (task 45.22, the owner's "Phase 45
+additions"; a design, no code): RX ring 0's interrupt wakes the
+connection-manager thread's idle wait for both profiles, polling kept as
+the fallback; decision D3 stands until its code is read.
 
 The sources this record rests on are in the `usb4-emu` repository
 (`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
@@ -1326,7 +1330,7 @@ looked at every 100 to 250 ms when idle for unsolicited events (section
 section 8, default 200). Data traffic (NVMe, USB) never crosses the NHI, so
 the idle period costs only hot-plug latency. The design leaves an interrupt
 mode for a later revision, behind a value of its own, once INTx has been
-read on real hardware.
+read on real hardware; section 4.5 (task 45.22) designs it.
 
 Polling still masks every interrupt cause at ring start, since this
 driver never resets the host interface (section 5.1) and so cannot rely
@@ -1390,6 +1394,197 @@ budget for the statement, against `nvme98`'s gone deadline (5 s in its
 test build, measured from the endpoint's own presence loss), is section
 7.2's; it needs more than this paragraph, since the idle poll, the port
 reading and the recipient lookup each cost time of their own.
+
+### 4.5 Ring interrupts in place of the idle poll (task 45.22)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.22 (the owner, the
+decisions table's "Phase 45 additions": hot plug and chains want lower
+latency than decision D3's 200 ms idle poll). **A design only; nothing in
+`src\` changes with it**; decision D3 stands until its code is read on
+the q35 legs below and the owner sets the default. It serves both
+profiles: this record's ICM client and record 22's USB4 software
+connection manager (record 22 section 5.4 points here and adds what is
+the USB4 hosts' own).
+
+Tags, beside this record's own: **[spec]** USB4 Specification 2.0,
+sections 12.5 and 12.6.3.4; **[linux]** Linux `drivers/thunderbolt` at the
+pinned `c6859eed`, facts only; **[emu]** `usb4-emu`'s
+`docs/ARCHITECTURE.md` section 5 and `docs/HARNESS.md` (read, not run).
+
+#### 4.5.1 What the interrupt is for, and what stays polled
+
+Only the **idle wait** changes. Today the thread sleeps `XhciCmPollIdleMs`
+(200 ms) between looks at RX ring 0 for an unsolicited frame (a hot-plug
+event, an ICM notification), so a plug is noticed up to 200 ms late (on
+98 SE up to a timer tick more). With the interrupt the thread sleeps until
+RX ring 0 receives a frame, and the timed wait remains as a watchdog
+(section 4.5.5). **Everything else stays as it is**: a command's
+response is still busy-polled on the thread (section 4.3: about 156 us a
+round trip, below any operating system's interrupt and DPC latency on
+these targets), the TX ring is still read by its consumer index, and
+every frame is still decoded on the thread, never in the interrupt.
+
+#### 4.5.2 The cause, and its programming [spec unless marked]
+
+- **One cause**: RX ring 0's Receive Data Buffer interrupt, bit N + 0 of
+  the Interrupt Status, Mask, Clear and Set arrays (N = Total Paths, the
+  ring count from the capabilities register; Spec 12.6.3.4.1, Figure
+  12-8). Every other cause stays masked, as section 4.3 masks them all
+  today (TX causes, the other rings, every Receive Ring Vacancy cause).
+- **The descriptor's Interrupt Enable** (bit 23 of an RX descriptor's
+  third dword, `TBT_DESC_IE` in `tbt_regs.h`, today "never set here") is
+  set in every RX ring 0 descriptor this driver posts, so the status bit
+  is set after each frame is written back (Spec 12.5.1). With the
+  interrupt off it stays clear, as today.
+- **Unmask** the one bit by the host's own contract, as section 4.3
+  masks: on Intel hosts a read-modify-write of the Interrupt Mask
+  register (whose status clears itself, `QUIRK_AUTO_CLEAR_INT`
+  [linux] `nhi.c` `nhi_mask_interrupt`); on every other host one write of
+  that bit to Interrupt Mask Set (`38210h` region, Spec 12.6.3.4.6).
+  Masking it again is section 4.3's own write.
+- **Moderation**: ITR[0] (`38C00h`, Spec 12.6.3.4.7) is the moderation
+  register for INTx and MSI (Spec 12.5.4). It is written 0 (no
+  moderation): hot-plug frames are rare and each wants to be seen at once.
+- **Status**: the Interrupt Status register clears on read unless the
+  "Disable ISR Auto-Clear" bit is set (Spec 12.6.3.4.1; Linux names it
+  `REG_DMA_MISC_DISABLE_AUTO_CLEAR`, bit 17 of `39864h`, and sets it on
+  non-Intel hosts only for MSI-X [linux] `nhi.c`
+  `ring_interrupt_active`). This driver never sets it; it reads `39864h`
+  once at start (it already does, for the log), and where it finds bit 17
+  set (another driver's or the firmware's) it clears the cause by writing
+  its bit to Interrupt Status Clear (`37808h` region, Spec 12.6.3.4.2)
+  after the read. Section 4.3's "the interrupt status register is never
+  read" changes to: read only by the interrupt service routine and the
+  self-test, one dword, the one holding bit N + 0.
+
+#### 4.5.3 The interrupt service routine and the thread
+
+At DIRQL, on a line that may be shared:
+
+1. If the instance's interrupt is not **armed** (a flag the thread sets
+   under `KeSynchronizeExecution` after unmasking and clears before
+   masking), return FALSE.
+2. Read the status dword. All ones: return FALSE (no answer; the
+   liveness monitor, section 5.5, decides what it means). Bit N + 0 clear:
+   return FALSE (not this device's; the read cleared nothing of ours,
+   since every other cause is masked and its status is not this driver's
+   business).
+3. Bit set: clear it by Interrupt Status Clear where auto-clear is
+   disabled (section 4.5.2); count `IrqSeen`; queue the instance's DPC;
+   return TRUE.
+
+The DPC sets a new work bit, `CM_WORK_RING`, under the work lock and
+signals `WorkEvent`; the thread's pass then drains RX ring 0 as its idle
+pass does today. On a level-triggered INTx line the read in step 2 is what
+deasserts the device's request (the emulator asserts INTx "while any
+unmasked ring interrupt status bit is set" [emu]); a frame landing between
+the read and the thread's drain sets the bit again and raises a new
+interrupt, so no frame is left unannounced.
+
+#### 4.5.4 The connection: NT first, then 98 SE and ME
+
+- **2000 and XP (x86 and x64)**: the line-based interrupt of
+  `IRP_MN_START_DEVICE`'s translated resources, `IoConnectInterrupt`,
+  shared as the resource says. A start with no interrupt resource polls
+  as today.
+- **Vista to 10**: the same line-based connection, and MSI when the INF's
+  hardware section asks for it (`Interrupt Management\
+  MessageSignaledInterruptProperties`, `MSISupported` 1,
+  `MessageNumberLimit` 1) and the PnP manager grants it: one message,
+  connected through `IoConnectInterruptEx` (`CONNECT_MESSAGE_BASED`),
+  found at run time with `MmGetSystemRoutineAddress` so that the one x86
+  image still loads on 2000 and the one amd64 image on XP x64; the MSI
+  routine runs steps 1 to 3 of section 4.5.3 without the "not ours"
+  outcome. Whether the x86 image may declare the Vista connection
+  structures itself or must go through `xhcihlpr.sys` as `xhci98.sys`
+  does (design record 18 section 15) is the code task's first reading. MSI
+  is the second step: the INF change reaches every Vista-to-10 install
+  path, so it waits for the line-based one to be read (owner question
+  Q2).
+- **98 SE and ME**: `xhcicm.sys` runs under NTKERN, whose
+  `IoConnectInterrupt` connects the IRQ the configuration manager
+  allocated, as `xhci98.sys` connects its own on these systems. Whether
+  98 SE's PCI enumerator gives the NHI an IRQ at all is the route to be
+  read first (the roadmap's "its route read first"): on q35 98 SE with the
+  ASM4242 model, the NHI's Interrupt Line register and its allocated
+  configuration after the start (`runs/run-45.md`, "45.22", records what
+  was read); a function that 98 SE leaves without an IRQ polls, as design
+  record 28 already lets a tunnelled function run without one. 98 SE and
+  ME are connected only after that reading and an INTx leg on each.
+- **Every system**: no interrupt resource, a failed connection or a failed
+  self-test (section 4.5.5) leaves the instance polling as today, with a
+  log line (`cm.irq.none`, `cm.irq.connect.fail`, `cm.irq.selftest.fail`)
+  and the counter `IrqMode` 0. `XhciCmRingInterrupt` (new, `REG_DWORD`):
+  0 polling, as today; 1 the interrupt where granted, polling otherwise.
+  Its default is decided by the q35 readings (section 4.5.7) and the
+  owner (Q1).
+
+#### 4.5.5 Polling kept as the fallback
+
+- **The self-test**, once per activation, after the rings start and
+  before the first command: the thread arms the interrupt, writes bit
+  N + 0 to Interrupt Status Set (`37810h` region, Spec 12.6.3.4.3) and
+  waits up to 100 ms for the DPC's work bit; none: disarm, mask, disconnect
+  and poll for this activation (`cm.irq.selftest.fail`). It needs no
+  device on the port and costs one wait at start.
+- **The watchdog**: with the interrupt live, the thread's timed wait is
+  `XhciCmIrqWatchdogMs` (new, default 1000, clamped 200 to 5000) in place
+  of `XhciCmPollIdleMs`, and every timed pass drains RX ring 0 as today.
+  A pass that finds a frame no interrupt announced counts `IrqMissed`;
+  three such passes in a row return the instance to polling for the rest
+  of the activation (`cm.irq.lost`), with no reconnection attempt.
+- **Every other wait the thread makes** (the liveness monitor's, the
+  Stor98 acknowledgement passes, the resume budgets) keeps its own
+  period; the interrupt only shortens the idle one.
+
+#### 4.5.6 Stop, removal, power and containment
+
+- **Order down** (stop, removal, surprise removal, D3, a containment
+  entry, the inert start after activation): disarm under
+  `KeSynchronizeExecution`, mask the cause where the liveness gate admits
+  the write, then `IoDisconnectInterrupt` (or its `Ex` twin), then the
+  ring stop as today. After a surprise removal or in a state where the
+  gate refuses the write, the mask is skipped and the disconnection is
+  what stops the routine being called.
+- **Order up** (D0, a recovery that returns to ACTIVE): the rings as
+  today, then connect, unmask, arm; the self-test runs again only at an
+  activation, not at each D0.
+- **Windows 98 SE and ME shutdown** keeps record 21 section 5.6's
+  quiescence; the interrupt is disarmed and disconnected first in it.
+- A contained or absent host interface (record 22 section 7.7, record 21
+  section 5.5) is disconnected on entry and reconnected only by the
+  recovery's "up" order.
+
+#### 4.5.7 Verification (when it is coded)
+
+- **Host vectors**: the cause bit and dword for N = 12 (Alpine Ridge) and
+  other Total Paths, the unmask by host contract, the service routine's
+  three outcomes, the watchdog's missed count and its fallback, the order
+  down and up.
+- **q35 legs** (the readings that decide the default, owner Q1): on
+  `tb3-alpine-ridge` and on the ASM4242 model, 98 SE (after the route
+  reading), XP, 7 x86 and 10 x64, interrupt on and off: the time from a
+  QMP `device_add` of the enclosure to the connection manager's
+  `connected` log line (hot-plug latency; ten plugs each), and the
+  guest's processor time idle for ten minutes with nothing attached (idle
+  cost); a lost interrupt with `usb4-emu`'s `x-intx-drop-every=3` [emu]
+  (the watchdog's catch and the fallback); the self-test's failure with
+  INTx dropped from the start; a shared line (the NHI on the same INTx as
+  the q35 xHCI) with traffic on the other device.
+- **Hardware**: the P14s's Alpine Ridge INTx (record 21 section 4.3: wired,
+  never used by any captured operating system [obs]) at the bench of
+  45-E.5.
+
+#### 4.5.8 Open, and the owner's
+
+- **Q1, the default.** (a) `XhciCmRingInterrupt` 1 where the q35 readings
+  show latency down and idle cost not up, 0 elsewhere; (b) 0 everywhere
+  until a hardware reading. Recommended: (a) on the NT systems, (b) on 98
+  SE and ME until their INTx leg and a hardware reading.
+- **Q2, MSI on Vista to 10.** (a) line-based only in the first code;
+  (b) MSI with it. Recommended: (a), MSI as its own step after, since a
+  USB4 host need not wire INTx at all (Spec 12.5) and record 22 section
+  5.4 lists the hosts whose INTx is unread.
 
 ## 5. The ICM client
 

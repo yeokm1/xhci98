@@ -46,6 +46,14 @@ record of the tunnels it built, so that a tunnel found preserved after a
 PnP stop and start of the NHI is still rebuilt across a sleep that lost
 the domain's configuration (section 7.6); sections 7.6 and 11 point to it.
 
+Revised 2026-10-29 (tasks 45.21 and 45.22, the owner's "Phase 45
+additions"; designs only, no code): section 19, new - Thunderbolt 1, 2
+and 3 hosts on Apple Macs run by this connection manager, from Linux's
+facts and Apple's public support pages; section 5.4, new - the ring
+interrupt for this profile, designed with the ICM client's in record 21
+section 4.5. Section 3.1's inert start for subsystem vendor `106B` stands
+until section 19's code.
+
 Revised 2026-10-25 (task 44.39, planned as U4HW.1): section 18, new - the
 ASMedia ASM4242, a USB4 host whose firmware can boot a CSM, as
 `usb4-emu`'s asm4242 model and data record it: the firmware's
@@ -139,7 +147,8 @@ In:
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
 - Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3).
+  decided for the ICM client (decision D3); ring interrupts are designed
+  in record 21 section 4.5 and section 5.4 (task 45.22), not yet code.
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -174,7 +183,8 @@ Out, each with where it goes:
 - Inter-domain (host-to-host) links and the DMA port: never set up.
 - Asymmetric links and USB4 version 2 features: a version 2 router is run
   as a version 1 one (section 6.2).
-- Interrupts, MSI and MSI-X: polling only.
+- Interrupts, MSI and MSI-X: polling only (section 5.4 designs the
+  interrupt for a later release, task 45.22).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -768,6 +778,35 @@ adds them to the allowlists with that evidence. `KeQuerySystemTime`, which
 the HCD already imports, is not used: system time can be set backwards. Waits
 under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
 21 section 4.3 allows on this thread only.
+
+### 5.4 Ring interrupts (task 45.22)
+
+The idle wait of this profile is the ICM client's (record 21 section 4.4),
+and task 45.22 designs one interrupt for both in record 21 section 4.5:
+RX ring 0's Receive Data Buffer cause wakes the thread's idle wait, the
+timed wait stays as a watchdog, commands stay busy-polled, and every
+failure returns to polling. **A design only; decision D3 and section 1.3's
+"polling only" stand until its code is read.** What this profile adds:
+
+- **USB4 hosts need not wire INTx**: a PCIe host router shall support MSI
+  or MSI-X, and INTx emulation is optional (Spec 12.5). Whether the
+  ASM4242, the AMD hosts and the Intel integrated hosts wire it is not
+  read here (`usb4-emu`'s `CONTROLLER-CATALOG.md` records INTx pin A on the
+  captured Alpine Ridge LP and Alder Lake functions [obs there], and the
+  ASM4242's INTx as inferred or unknown). On 98 SE, ME, 2000 and XP, which
+  have no MSI, a host without INTx keeps polling, and the self-test of
+  record 21 section 4.5.5 is what finds that out at start.
+- **The status contract is the host's**: on the non-Intel hosts the mask
+  is opened through Interrupt Mask Set and closed through Interrupt Mask
+  Clear, and the status is cleared by the service routine's read or, where
+  auto-clear is disabled, by Interrupt Status Clear (record 21 section
+  4.5.2); the Intel integrated hosts take Intel's contract.
+- **Hot plug on this profile** arrives as a hot-plug packet or a
+  notification on RX ring 0 (section 5.1), so the one cause covers it; the
+  port check of section 7.1 runs on the thread as today, and the router
+  operations and the waits of section 5.2 are unchanged.
+- **Containment** (section 7.7) disconnects the interrupt on entry and
+  reconnects it only on the recovery's return to ACTIVE.
 
 ## 6. The connection manager
 
@@ -4067,6 +4106,237 @@ invalid for PCIe, and 7 is no USB4 requirement.
   the thirteen log lines; on with an Intel host or another device: the
   gate closed; on with a pre-OS tunnel: preserved, nothing written).
 
+## 19. Thunderbolt 1, 2 and 3 hosts on Apple Macs (task 45.21)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.21 (the owner, the
+decisions table's "Phase 45 additions"): this driver as the connection
+manager of the Thunderbolt hosts Apple's Intel Macs carry, which run no
+connection manager in firmware. **A reading and a design only; nothing
+in `src\` changes with it**, and section 3.1's rule that a host with PCI
+subsystem vendor `106B` starts inert stays until this section's code is
+written and read on hardware (45-E.11). The release notes' "Not claimed:
+Apple machines" stays as it is until then.
+
+Tags, beside this record's own: **[linux]** Linux `drivers/thunderbolt`
+at the pinned `c6859eed` (`external/README.md`), GPL-2.0-only, read for
+facts only and cited by file and symbol, nothing adapted (AGENTS.md,
+"Reference Implementations"); **[pub]** Apple's public support pages, as
+listed under "Sources"; **[unread]** a question no source here answers,
+for the bench.
+
+### 19.1 The hosts, and who runs them on a Mac
+
+| Host NHI | Generation (its switch) | Linux on a Mac | Source |
+|---|---|---|---|
+| Light Ridge `8086:1513`, subsystem `2222:1111` | 1 | software connection manager: no `icm_probe` row | [linux] `pci.c` `nhi_ids[]` (the Thunderbolt 1 rows match that subsystem only), `switch.c` `tb_switch_get_generation`, `icm.c` `icm_probe` |
+| Cactus Ridge 4C `8086:1547`, subsystem `2222:1111` | 1 | the same | the same |
+| Falcon Ridge 2C `156A`, 4C `156C` | 2 | software: `icm_fr_is_supported` is false on an Apple machine | [linux] `icm.c` `icm_fr_is_supported` |
+| Alpine Ridge `1575` `1577` `15BF` `15D2` `15D9`; Titan Ridge `15E8` `15EB` | 3 | software unless the ICM firmware already runs or the `start_icm` module option asks Linux to reset and start it (off by default) | [linux] `icm.c` `icm_ar_is_supported` (`icm_firmware_running`, `start_icm`) |
+
+Linux recognises an Apple machine by its firmware's vendor string
+(`x86_apple_machine`, from `linux/platform_data/x86/apple.h`, not
+mirrored here) [linux]; this driver has no such reading and uses the
+NHI's PCI subsystem ids instead (section 19.3). The other Thunderbolt 1
+and 2 parts in Linux's tables - Eagle Ridge `151A`, Light Peak `151B`,
+Port Ridge `1549`, Redwood Ridge (`1566` to `1569`), Cactus Ridge 2C
+`1548`, Win Ridge `157D` `157E` - are switches Linux meets as **device
+routers** (`tb_switch_get_generation`); none is in `nhi_ids[]` as a host
+but Light Ridge and Cactus Ridge 4C [linux]. So the hosts this task
+claims are the five rows above, and Thunderbolt 1 and 2 hosts on PCs
+stay not claimed (the decisions table, "Phase 45 additions").
+
+### 19.2 Which Windows the Macs run, as far as public facts say
+
+- Apple supplied Windows support software for Windows 7 only on the
+  first Thunderbolt Macs of 2011, 32-bit and 64-bit, with no Windows XP
+  or Vista drivers ("Windows XP and Vista drivers are not supplied for
+  these computers and are not supported"), and Boot Camp 4 ran Windows 7
+  only [pub].
+- Boot Camp Support Software 5.0 and 5.1 (the Macs of 2011 to 2014,
+  Light Ridge to Falcon Ridge) are for the 64-bit Windows 7, 8 and 8.1
+  [pub].
+- Windows 10 is installed 64-bit only, from Mac models of 2012 on [pub];
+  Apple's page does not say whether it starts there through the firmware's
+  BIOS emulation or through UEFI, and this record does not say either
+  [unread].
+- Apple lists **no** 98 SE, ME, 2000, XP or Vista for any Thunderbolt
+  Mac [pub]. Whether any of them starts at all through the firmware's
+  BIOS emulation on these Macs, and with what of the machine working
+  (storage, the keyboard, the xHCI controller), is not in any public
+  source read here [unread]; the Macs of 2018 on, with Apple's T2 chip
+  (Titan Ridge among them), are commonly described as starting Windows
+  through UEFI only, which is not confirmed here [unread].
+
+So the systems this work can reach on a Mac are, by Apple's own support,
+the 32-bit and 64-bit Windows 7 and the 64-bit 8, 8.1 and 10, all run
+from this project's x64 package in test-signing mode where 64-bit
+(design record 19); 98 SE to Vista are owed to the bench, which reads
+first whether each starts (45-E.11), and nothing in this design depends
+on them starting.
+
+### 19.3 Selection: a third CM-table row, by subsystem and firmware status
+
+Section 3.1's table gains one row, kept apart from the others:
+
+| Matched | Hardware profile | CM candidates |
+|---|---|---|
+| Light Ridge `1513` and Cactus Ridge 4C `1547` with subsystem `2222:1111`; Falcon Ridge `156A` `156C`, Alpine Ridge and Titan Ridge NHIs with PCI subsystem vendor `106B` | discrete Thunderbolt, Apple | the software connection manager's Thunderbolt-host profile (section 19.4), or record 21's ICM client where its firmware runs |
+
+- Light Ridge and Cactus Ridge take the row by the subsystem pair Linux's
+  table matches [linux]; their INF lines name that pair
+  (`PCI\VEN_8086&DEV_1513&SUBSYS_11112222` and the `1547` twin), so a PC's
+  Light Ridge or Cactus Ridge never binds.
+- Falcon, Alpine and Titan Ridge are already this driver's (record 21);
+  at start, subsystem vendor `106B` moves them from "inert" (section 3.1)
+  to this row.
+- **Test (c)** for the row: on Falcon, Alpine and Titan Ridge a valid read
+  of the firmware status register (`0x39944`) with `ICM_EN` set keeps
+  record 21's ICM client, unchanged; `ICM_EN` clear on a valid read admits
+  the Thunderbolt-host profile; no valid read is inert. This driver never
+  resets or starts the ICM itself (Linux's `start_icm` path is not taken).
+  On Light Ridge and Cactus Ridge, which have no ICM [linux], the profile
+  is admitted once section 3.2's readiness passes.
+- **Test (d)** for the row is not section 3.5's: the host interface's
+  version field is read and logged, not checked, since a Thunderbolt 1, 2
+  or 3 host interface predates the USB4 versions [unread: the value these
+  hosts report]; the host router must answer ROUTER_CS_0 to 4 at route 0
+  and report a USB4 Version of major 0 (section 3.5: a Thunderbolt router),
+  and its device id must be one of section 19.1's switches of the matching
+  generation (`tb_switch_get_generation` [linux]); anything else is inert.
+- `XhciCmMode` 3 is refused on the row, as it is on the discrete
+  Thunderbolt rows today (decision U1).
+
+Whether a Mac's firmware leaves a Thunderbolt host powered and on the PCI
+bus at all when nothing was attached at power-on is [unread]: Linux
+carries PCI quirks for the Macs' Thunderbolt power (in
+`drivers/pci/quirks.c`, not mirrored here and not read); a host the
+firmware powered off is simply absent from the PCI bus, and this design
+does nothing about it (non-goal, section 19.7).
+
+### 19.4 The Thunderbolt-host profile: what differs from section 6
+
+The profile is the USB4 software connection manager's own code (transport,
+ports, paths, the PCIe tunnel, hot plug, the PCI side, Stor98's contract)
+with section 8's Thunderbolt 3 device-router handling **applied to the
+host router at route 0 as well**, and extended to generations 1 and 2.
+What a Thunderbolt host router needs that a USB4 host router does not
+[linux unless marked]:
+
+1. **No USB4 router registers.** No CMUV, no ROUTER_CS_5, no
+   Configuration Valid handshake, no router operations, no Buffer
+   Allocation Request: the host router is configured by the one write of
+   ROUTER_CS_1 to 4 with Valid, as section 8 item 2 does for a device
+   router (`switch.c` `tb_switch_configure`, the non-USB4 branch); its
+   Plug Events capability is required and written active (bits 2 to 6 of
+   its second dword cleared; the USB-disable bit set except on Light
+   Ridge, Eagle Ridge, Port Ridge and Alpine Ridge, `tb_plug_events_active`).
+2. **Light Ridge's two port-space quirks** (`cap.c`): TMU access enabled
+   (bit 20, `TMU_ACCESS_EN`, of switch dword `26h` on Light Ridge, `2Ah` on
+   Eagle Ridge) around a walk of a port's capabilities, and one dummy read
+   of port dword 0 after the walk, because the next-capability read
+   returns stale data on Light Ridge.
+3. **The link controller** (`lc.c`): present from generation 2 (every
+   `tb_lc_*` returns early below it), so on Light Ridge and Cactus Ridge
+   there is no port-configured marking, no UUID from the fuses and no
+   lane bonding through it; Falcon Ridge and later as section 8 item 3.
+   The DROM through the Plug Events EEPROM bit-bang (section 8 item 4)
+   applies to every generation.
+4. **The host's PCIe down adapter for each Thunderbolt port** is fixed per
+   controller (`tb.c` `tb_find_pcie_down`): adapter 6 or 7 on Cactus Ridge
+   and Alpine Ridge, 6 or 8 on Falcon Ridge, 8 or 9 on Titan Ridge, by the
+   port's physical index; Light Ridge has no fixed map and takes the first
+   free PCIe down adapter. Section 7.6's tunnel-port set (the PCI bridge
+   behind each adapter) is then read through record 21 section 6.3's
+   source, unchanged.
+5. **No USB3 tunnel, ever** (every link is Thunderbolt), and no USB4
+   credit negotiation: section 8 item 5's default credits on every
+   router of the domain.
+6. **TMU**: not configured, as section 8 item 6; if a host or device
+   router of generation 1 or 2 carries no PCIe tunnel without it, Linux's
+   sequence (`tb.c` `tb_enable_tmu`) is the second pass (section 16).
+7. **Reset**: a Thunderbolt host is never reset by default (section 9's
+   discover-and-preserve holds). Where a reset is asked
+   (`XhciCmPreOsCleanup` 1 or 2), generation 1 takes the "reset"
+   configuration packet and generations 2 and 3 a Downstream Port Reset
+   of each lane adapter and the clearing of each protocol adapter's path
+   entries (`switch.c` `tb_switch_reset_host`). At a resume, Linux resets
+   a non-USB4 host root router before rebuilding its tunnels
+   (`tb.c` `tb_resume_noirq`, "remove any PCIe devices the firmware might
+   have setup"); this profile follows section 11's resume as it is and
+   reads on the bench whether the Mac's firmware rebuilt tunnels at the
+   resume (45-E.11) before deciding that.
+8. **Device routers behind the host**: generations 1 to 3, section 8 as
+   it stands for generation 3, plus items 1 to 3 above for generations 1
+   and 2; a USB4 device router behind a Thunderbolt host runs in
+   Thunderbolt 3 compatible mode and is driven as section 8 drives a
+   generation 3 router [linux: `usb4.c` `link_is_usb4`].
+9. **Paths** use the same hop-table entries on every generation
+   (`path.c` makes no generation distinction) [linux]; the path entry
+   layout this driver writes (section 6.8) is unchanged.
+
+### 19.5 DisplayPort
+
+Thunderbolt 1 and 2 displays (Apple's Thunderbolt Display among them) are
+DisplayPort tunnels from the host's DP IN adapters, which carry the
+Mac's graphics output. This driver builds no DisplayPort tunnel today
+(section 8's "Left out", section 16); the Mac's firmware may have built
+one before Windows started (preserved by section 9 like any tunnel).
+Building them is not in this design: a DP tunnel needs, from generation 2,
+the DP IN to DP OUT capability exchange and its connection-manager
+handshake (`tunnel.c` `tb_dp_xchg_caps`, skipped below generation 2), the
+sink allocation from generation 3 (`lc.c`), bandwidth accounting, and a
+GPU driver on the Windows side that sees the display, none of which is
+read here. A Thunderbolt display plugged while Windows runs then shows
+nothing; one present at power-on works only as far as the firmware's
+tunnel survives (owner question Q3).
+
+### 19.6 Verification (when it is coded)
+
+- **Host vectors** in `test_u4cm`: the row's selection (each id and
+  subsystem, `ICM_EN` set and clear, a refused router id), the host
+  router's configuration without the USB4 registers, the Light Ridge
+  quirks, the PCIe down adapter map, generation 1 and 2 device routers
+  behind each host.
+- **The emulator**: `usb4-emu` has no Thunderbolt 1 or 2 router model and
+  no Apple host profile; its `tb3-alpine-ridge` and `tb3-titan-ridge`
+  hosts are firmware connection managers. A Thunderbolt-host profile there
+  (Alpine Ridge with `ICM_EN` clear and subsystem `106B`, then Falcon
+  Ridge, then Light Ridge) is that repository's own work, the owner's to
+  open, and each q35 leg (7 x86 and 10 x64) waits for it.
+- **The bench**, 45-E.11: on each Mac at hand, which of 98 SE to 10
+  starts, the NHI's ids and its host interface's version field, whether
+  the host is on the PCI bus when nothing is attached at power-on, a
+  PCIe device (an NVMe enclosure, a dock) plugged before power-on and
+  while Windows runs, a resume, and a display.
+
+### 19.7 Non-goals
+
+DisplayPort tunnels (section 19.5); powering a host the firmware switched
+off (section 19.3); starting or resetting the ICM on Alpine and Titan
+Ridge; NVM upgrade; XDomain (Mac to Mac); Thunderbolt 1 and 2 hosts on
+PCs and the Thunderbolt 2 hosts other than Falcon Ridge (the decisions
+table, "Phase 45 additions"); Apple Silicon Macs, which run no x86
+Windows.
+
+### 19.8 Open, and the owner's
+
+- **Q1, the first host.** Which Mac comes to the bench first decides the
+  order of the code: (a) an Alpine or Titan Ridge Mac (Thunderbolt 3:
+  section 8 already drives such routers as device routers, so the host
+  profile is the smallest step), (b) a Falcon Ridge Mac, (c) a Light
+  Ridge or Cactus Ridge Mac (both generation 1 quirks and no link
+  controller). Recommended: (a), then (b), then (c), each after its
+  emulator model.
+- **Q2, the systems.** (a) the systems Apple supports there (7, 8, 8.1,
+  10; section 19.2) first and 98 SE to Vista only if the bench shows them
+  starting; (b) 98 SE and XP read first. Recommended: (a).
+- **Q3, DisplayPort.** (a) out, as section 19.5 says, the release notes
+  saying a Thunderbolt display is not driven; (b) a later task of its
+  own. Recommended: (a) now, (b) if the owner wants displays.
+- **Q4, the emulator model.** A Thunderbolt-host profile in `usb4-emu`
+  (section 19.6) before any code here. Recommended: yes, Alpine Ridge
+  first.
+
 ## Sources
 
 - USB4 Specification 2.0 (sections 4.4.5.2, 5.2.1, 5.2.5, 5.4, 6.4, 6.8,
@@ -4101,3 +4371,20 @@ invalid for PCIe, and 7 is no USB4 requirement.
   section 2.2;
   design records 21, 28 and 31; `src\cm\cm_ports.c`, `cm_reenum.c`,
   `tbt_topo.c`.
+- For section 19 (read 2026-10-29): Linux `drivers/thunderbolt` at
+  `c6859eed` (`pci.c` `nhi_ids[]`, `icm.c` `icm_probe`,
+  `icm_fr_is_supported`, `icm_ar_is_supported`, `tb.c`
+  `tb_apple_add_links`, `tb_find_pcie_down`, `tb_resume_noirq`,
+  `switch.c` `tb_switch_get_generation`, `tb_switch_configure`,
+  `tb_plug_events_active`, `tb_switch_reset_host`, `cap.c`, `lc.c`,
+  `tunnel.c` `tb_dp_xchg_caps`, `usb4.c` `link_is_usb4`) and
+  `include/linux/pci_ids.h`; Apple Support, "Boot Camp Support Software
+  5.0.5033" (support.apple.com/en-us/106404), "Download Boot Camp Support
+  Software 5.1.5769" (106378), "Install Windows 10 on your Mac with Boot
+  Camp Assistant" (102622), "System requirements to install Windows using
+  Boot Camp for macOS" (HT204048), and the Windows 7-only statement for
+  the Early 2011 MacBook Pro as quoted in press reports of February and
+  August 2011 (Apple's HT1461, not read directly).
+- For section 5.4 (read 2026-10-29): USB4 Specification 2.0 sections 12.5
+  and 12.6.3.4; `usb4-emu` `docs/ARCHITECTURE.md` sections 3 and 5,
+  `docs/CONTROLLER-CATALOG.md`, `docs/HARNESS.md`.
