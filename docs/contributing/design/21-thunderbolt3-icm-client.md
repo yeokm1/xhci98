@@ -1761,21 +1761,33 @@ never take or clear work bits, which stay for the loop.
      posted keep it until consumed; their status bits are masked). Where
      step 1's mask was refused by the liveness gate, a D3 first makes one
      **emergency mask**: the IMC write of the one bit (on Intel, the IMR
-     read-modify-write only if the read is not all ones), made while the
-     BAR is still mapped and the function in D0, bypassing the gate,
-     whose refusal protects register values this write does not depend
-     on; and, for a line, the Interrupt Disable write of section 4.5.6.1.
-     Either read back is a verified retirement.
+     read-modify-write only if the read is not all ones), made on the
+     thread while the function is in D0 (the D3 not yet forwarded). It
+     bypasses only the gate's recoverable states (SUSPECT, ABSENT,
+     CONFIG_LOST, CONTAINED and the recovery states), whose refusal
+     protects register values this write does not depend on; it is never
+     made after `CmLiveRevoke` (`Revoked` is read first, lock-free, the
+     same check-then-access order every gated access already has, so no
+     lock is nested) nor once BAR0 is unmapped (the thread itself unmaps
+     it, after this step). For a line, the Interrupt Disable write of
+     section 4.5.6.1 follows under the same rule. Either read back is a
+     verified retirement.
   5. **Disconnect.** Retired: `IoDisconnectInterrupt` (or its `Ex` twin).
-     Unretired: in a fall back to polling, a containment entry and a D3
-     whose emergency mask also failed, the interrupt is **retained**
-     (section 4.5.6.2) and `cm.irq.unretired` logged, since a function
-     still in D0 may still assert the line and an impending D3 is no proof
-     that it has stopped; in a stop, a removal or
-     a surprise removal it is disconnected whatever the proof (the
-     resources go back to the PnP manager, or the device is gone), with
-     `cm.irq.unretired` logged where it was unproven: the one residual
-     window, section 4.5.7. In a 98 SE or ME shutdown's quiescence (section 5.6) the
+     Unretired: in a fall back to polling and a containment entry, the
+     interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
+     logged, since a function in D0 may still assert the line. In a D3
+     whose emergency mask and Interrupt Disable both failed their
+     read-back, in a stop, a removal and a surprise removal, it is
+     disconnected whatever the proof, before the D3 is forwarded, with
+     `cm.irq.unretired` logged and `IrqFailed` set: the routine never
+     reads a function outside D0, and the resources go back to the PnP
+     manager or the device is gone. That is the supported failure policy,
+     and its window is section 4.5.7's: reaching it in a D3 needs a
+     function that answers neither its BAR nor its configuration space
+     while still in D0 and still asserting. Vetoing the D3 instead (the
+     NHI kept in D0 through a system sleep) was rejected: the platform
+     removes its power in S3 and S4 anyway, and the D0 order on resume
+     would meet the same function. In a 98 SE or ME shutdown's quiescence (section 5.6) the
      mask is the quiescence's own register write and no configuration
      write is made; where the mask is refused, the interrupt stays
      connected and claiming until the system is down.
@@ -1850,17 +1862,9 @@ left asserted with no routine to acknowledge it:
   the device is in D0 they are legal;
 - the thread polls as today, and each later down order (the next
   maintenance pass's attempt, a containment exit, a D3, the stop) tries
-  the retirement again; only a stop, a removal or a surprise removal
-  disconnects it unproven;
-- across a D3 it stays connected and **ungated**: it acknowledges what
-  the function raises up to the moment the function leaves D0, and after
-  that its status read reaches a function in D3hot, whose memory space
-  does not decode; on the PC root complexes these systems run on, that
-  read completes as all ones and the routine declines at step 2 (no
-  answer), which is also what it does today for a function that has
-  vanished. A platform on which such a read faults or returns another
-  value is the second residual window of section 4.5.7, reached only when
-  the mask, the emergency mask and Interrupt Disable all failed in D0;
+  the retirement again; a D3 whose emergency mask also fails, a stop, a
+  removal or a surprise removal disconnects it unproven (section 4.5.6
+  step 5), so it is never connected while the function is outside D0;
 - an Up reuses it as above; a second connection is never made while one
   is retained.
 
@@ -1890,12 +1894,12 @@ left asserted with no routine to acknowledge it:
   asserted with its cause masked livelocks a uniprocessor before the
   thread can set PCI Interrupt Disable (section 4.5.3 step 5); a stop,
   removal or surprise removal disconnects a source it could not prove
-  quiet (section 4.5.6 step 5); and a retained routine reads a function in
-  D3 (section 4.5.6.2). The first needs a host that ignores its own mask;
-  the other two need every retirement write to have failed its read-back,
-  which a refused liveness gate alone no longer causes (the emergency
-  mask, section 4.5.6 step 4), but a failed configuration access or a
-  host that does not latch the mask still can.
+  quiet (section 4.5.6 step 5); and a D3 that does the same (the same
+  step). The first needs a host that ignores its own mask; the other two
+  need every retirement write to have failed its read-back, which a
+  refused liveness gate alone no longer causes (the emergency mask,
+  section 4.5.6 step 4), but a failed configuration access or a host that
+  latches neither its mask nor its Interrupt Disable still can.
 
 #### 4.5.8 Import gates
 
