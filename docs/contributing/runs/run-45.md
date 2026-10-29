@@ -307,12 +307,13 @@ single-instance check find the tray window by its class). Design record
   98 SE and a Windows 7 guest, and a screendump of the main window with
   the title `xHCI98 USB Tree <version>`.
 
-## 45.11 the kept kernel child: the prototype read under Driver Verifier (2026-10-29, DRAFT, partial)
+## 45.11 the kept kernel child: the prototype read under Driver Verifier (2026-10-29 and 30)
 
-DRAFT: the readings below are taken; the reading matrix is not complete,
-the design section is not written and nothing here is decided. Record 31
-section 9.3 items 11 and 12. Runtime, development host A, QEMU under TCG,
-15:11 to 18:28.
+The readings behind record 31 section 4.9, the design put to the owner;
+nothing here is decided. Record 31 section 9.3 items 11 and 12. Runtime,
+development host A, QEMU under TCG, 2026-10-29 15:11 to 19:45 and
+2026-10-30. The prototype `w45-kept-proto` up to `434665c8`, built with
+task 45.31's changes for 7 (below).
 
 ### The vehicle
 
@@ -370,7 +371,7 @@ read once in `CmQueryInit`, at `DriverEntry`.
 | Hot re-plug | tagged again, Stor98 bound (the q35 Code 31 of 44.45 not met here) |
 | Eject (`INSTALL /console /eject id=...`) | after the logical removal the kept child saw `IRP_MN_QUERY_RESOURCES`, `IRP_MN_EJECT`, `IRP_MN_QUERY_DEVICE_RELATIONS` and a second `IRP_MN_REMOVE_DEVICE`, the PDO deleted inside it; the departure recorded, `cm.reenum.eject`; the installer said "has not confirmed that the PCIe tunnel was closed", as it did with the kept child off |
 | Cold boot | the id given, Stor98 running |
-| Uninstall (`INSTALL /console /uninstall /yes`) | every kept child destroyed through its callback, the bridge filters' callbacks inside their removals, the driver unloaded; then bug check 0xC4 (0x62, ..., 1): one pool allocation of `xhcicm.sys` not freed at its unload. Whether the prototype's or earlier: not read (owed: the same with the kept child off and with `3.3.0.0`'s `xhcicm.sys`) |
+| Uninstall (`INSTALL /console /uninstall /yes`) | every kept child destroyed through its callback, the bridge filters' callbacks inside their removals, the driver unloaded; then bug check 0xC4 (0x62, ..., 1): one pool allocation of `xhcicm.sys` not freed at its unload, the link-state table (read on 7, below; task 45.31) |
 
 ### 8.1 x86, the kept child off (the control, the same overlay)
 
@@ -396,18 +397,55 @@ structures"), at an install and at a cold boot, with the device's
 started. Earlier boots of the same overlay with the value present
 started Stor98, so the condition is not read whole.
 
-### 8 x86
+### 8 x86 (2026-10-29, the same vehicle, overlay `k8a`)
 
-The prototype with Verifier booted with the enclosure; the drive tagged
-and bound to Stor98 by Windows (event 400 `oem3.inf`). The matrix is
-owed.
+The prototype `489cfc0d` with Verifier, the enclosure at boot: the drive
+tagged and bound to Stor98 by Windows (event 400 `oem3.inf`). Disable and
+enable: the id kept, Stor98. The DSP above the drive disabled and
+enabled: the drive's child called back at `PASSIVE_LEVEL` and destroyed,
+the DSP's child kept, a new child with the id, Stor98. Surprise unplug
+with the write loop and a file held open: the callbacks bottom-up, no bug
+check; a hot re-plug tagged and bound again. Eject: the same request
+sequence as on 8.1, and the installer said "The PCIe tunnel was closed."
+Uninstall: every kept child destroyed, then the same bug check 0xC4
+(0x62, 0x8A43D0F4, 0x8B66F3C8, 1) at the unload.
+
+### 7 x86 (2026-10-29 and 30, overlay `k7a`)
+
+- The prototype `489cfc0d`, its first boot with the enclosure: bug check
+  0xC4 (0x62) during the boot. The control, `3.3.0.0`'s release
+  `xhcicm.sys` copied over it with Verifier still on: bug check 0xA
+  (0x827E9FB7, 2, 8, 0x827E9FB7), execution of `ntkrnlpa.exe+1DAFB7` at
+  `DISPATCH_LEVEL`, called from `xhcicm.sys` `+36B1E`, which the release
+  image's disassembly shows as `cmQNt` calling `IoIsWdmVersionAvailable`
+  from `CmQueryPublish` under the query device's lock: the defect fixed
+  in `3967a033`, a page fault on 7 where the routine is pageable. Read
+  from the two minidumps (exported over COM1, parsed on the host).
+- The prototype with `3967a033` and `1ecdd85a` (`7a1d85dd...`): bug check
+  0xC4 (0x62) again. The debug port: `cm.nvlink.queries` 1, then the NHI's
+  removal (`cm.stop` 2): the boot's device installs (the NHI's driver
+  installed at that boot, "You must restart") removed every device of the
+  driver after Stor98 had taken the link-state table, the driver unloaded,
+  and the table, which `stor98cm.h` interface 2 never frees once handed
+  out, was what Verifier found. So the 0x62 of 8.1, 8 and 7 is that
+  table, not the prototype's.
+- The prototype with task 45.31's second change as well (`95420bf2...`:
+  the driver stays loaded once a stor98 holds the table): the same boot
+  went through the removal and a new start with no stop. The matrix:
+  disable and enable, the id kept, Stor98; the DSP restart, the drive's
+  child above ACPI's bus filter (`cm.reenum.child.under` "ACPI", decision
+  2), called back when ACPI's filter went with the PDO, destroyed, a new
+  child with the id, Stor98; surprise unplug with the write loop and a
+  file held open, callbacks bottom-up, no stop; re-plug, Stor98; eject,
+  "The PCIe tunnel was closed."; uninstall exit 3 with every kept child
+  destroyed and no stop, the restart after it clean.
 
 ### Owed
 
-The 8 and 7 x86 matrices; the unload leak's owner; the order of
-`FastIoDetachDevice` with ACPI's bus filter (no child above an ACPI
-filter on these q35 topologies); 2000, XP and 10 (record 31 section 9.3
-item 11); the design section and its review; the owner's decision.
+8.1 x64; another topology; a parent's removal with its children already
+disabled; the update from `3.3.0.0` on 8.1 (record 31 section 4.9 item
+10); 2000, XP, Vista and 10 for option (A2); the owner's decision on
+record 31 section 4.9.
 
 ## 45.29 the readme and the release history in the shape of the GitHub release notes (2026-10-29)
 
