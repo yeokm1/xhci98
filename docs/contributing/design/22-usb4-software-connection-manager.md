@@ -3947,7 +3947,8 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   later) it also links `usb4-router-img.c` and `usb4-router-asm2464.c`
   and runs section 6.11's device on `intel-adl`: cold, hot plug, unplug,
   re-plug, the pre-OS tunnel preserved and cleaned. Since task 44.42 it
-  needs QEMU fork `02dda40` or later and builds the `asm4242` host as
+  needs QEMU fork `2e063be` (on `usb4-emu` `main` after its merge of the
+  asm4242 model; `02dda40` before the 2026-10-29 squash) or later and builds the `asm4242` host as
   that fork's `usb4-host` does by default, the emulator's asm4242 preset, the
   ASM4242 host router of section 18.2 (lanes 1-4, the host
   interface 5 with 21 paths, PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11,
@@ -4181,7 +4182,9 @@ and the hardware bench's steps (task 44-E.6). Nothing in `src\` changes
 with it.
 
 Tags: **[hw]** the ASM4242's own state as `usb4-emu`'s asm4242 model
-and data record it (`usb4-emu` `7ec3865`, `5d7345a` and `9f333f3`, read
+and data record it (`usb4-emu` `a0b6749` and `376e2aa` on its `main`
+after the merge, the capture archives kept outside that repository;
+`7ec3865`, `5d7345a` and `9f333f3` before the 2026-10-29 squash), read
 there and never modified from here, `usb4-emu`'s asm4242 research note
 being that repository's own reading); where that data came from is
 recorded in `usb4-emu`; nothing of it is in this repository. **[inf]** an
@@ -4895,8 +4898,10 @@ profile in `usb4-emu` before any code. The options as they were put:
   record 21 read them.
 - This repository: design record 21; `AGENTS.md`; `src\xhci98.inf`.
 - For section 18 (read 2026-10-25): `usb4-emu`'s asm4242 model and data
-  (`7ec3865`, `5d7345a`, `9f333f3`) and its asm4242 research note
-  (`3090d19`), where that data came from is recorded in `usb4-emu`;
+  (`a0b6749` and `376e2aa` on `usb4-emu` `main` after the merge;
+  `7ec3865`, `5d7345a`, `9f333f3` before the 2026-10-29 squash) and its
+  asm4242 research note (section 11 at `a0b6749`; `3090d19` before the
+  squash), where that data came from is recorded in `usb4-emu`;
   nothing of it is in this repository; `docs/captures/P14S-ORICO-2026-10-15.md`
   section 2.2;
   design records 21, 28 and 31; `src\cm\cm_ports.c`, `cm_reenum.c`,
