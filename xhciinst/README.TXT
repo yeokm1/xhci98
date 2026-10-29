@@ -42,10 +42,13 @@ without such windows, and records what it did under
 HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW, in values whose
 names begin with XhciPfw. Untick it, or uninstall, to remove it.
 
-On Windows 2000, XP and the 32-bit Vista and 7 the same box, "Close
-PCI windows above 4 GB (XHCIPFW.SYS)", offers XHCIPFW.SYS. It is a small
-driver Windows loads at each start before its PCI driver, and it does
-the same. As on 98 SE and ME it is ticked whenever the Thunderbolt 3 /
+On Windows 2000, XP and the 32-bit Vista, 7, 8 and 8.1 the same box,
+"Close PCI windows above 4 GB (XHCIPFW.SYS)", offers XHCIPFW.SYS. It is a
+small driver Windows loads at each start before its PCI driver, and it
+does the same. On 8 and 8.1 it is a filter of each PCI root bus (the
+"PCI Express Root Complex" or "PCI bus" in Device Manager), named in that
+device's UpperFilters, and it acts as that bus starts.
+As on 98 SE and ME it is ticked whenever the Thunderbolt 3 /
 USB4 box is. Without that box it is unticked and greyed. You may untick
 it. A USB4 or Thunderbolt controller behind a bridge with such a window
 is not found until the window is closed. Device Manager then shows the
@@ -58,18 +61,29 @@ in BOOT.INI if they need this. It records what it did under
 HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters. No 64-bit
 Windows is offered it.
 
-The 32-bit Windows 8, 8.1 and 10 are not offered XHCIPFW.SYS. There it
-may start after Windows has read the PCI bridges. On a board that leaves
-the USB4 ports' windows above 4 GB, these systems cannot use the devices
-behind those ports. Windows 8 may not start at all on such a board. An
-XHCIPFW.SYS this installer placed there before is removed. /xhcipfw and
-/noxhcipfw are refused there.
+If Windows 8 or 8.1 stops at start with INACCESSIBLE_BOOT_DEVICE after
+XHCIPFW.SYS was installed (its file gone or damaged while a PCI root bus
+still names it), start Windows' recovery environment and open the
+registry editor (regedit) from its command prompt. Load the system's
+SYSTEM hive (Windows\System32\config\SYSTEM, File, Load Hive), read
+Select\Default in it for the control set the next start uses
+(ControlSet00n), search that set's Enum key for xhcipfw (Find, values and
+data), and remove the line xhcipfw from every UpperFilters that has it,
+keeping any other line. Then unload the hive and restart. Do not set the
+xhcipfw service to disabled while a root bus names it: that stops the
+start the same way.
+
+The 32-bit Windows 10 is not offered XHCIPFW.SYS: there it cannot start
+in time. On a board that leaves the USB4 ports' windows above 4 GB, 10
+cannot use the devices behind those ports. An XHCIPFW.SYS this installer
+placed there before is removed. /xhcipfw and /noxhcipfw are refused
+there.
 
 On the 32-bit Vista, 7, 8, 8.1 and 10, set "Above 4G Decoding" off in
 the computer's firmware setup where it offers that. With it on, those
 systems can stop at start on a board that offers much memory space above
 4 GB. Nothing here can help then. With it off, XHCIPFW.SYS closes the
-windows the firmware still leaves above 4 GB on Vista and 7.
+windows the firmware still leaves above 4 GB on Vista, 7, 8 and 8.1.
 
 It uses only routines Windows documents for this. It is not devcon, and
 this package's own files include no Microsoft file (the downloads'
@@ -303,7 +317,7 @@ Switches the window takes: /uninstall (the uninstall, below), /to path
 /thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
 /nos98vsd (98 SE and ME: S98VSD.VXD, Stor98's large transfers, ticked or
 unticked; /s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw
-(98 SE, ME, 2000, XP and the 32-bit Vista and 7: XHCIPFW.VXD or
+(98 SE, ME, 2000, XP and the 32-bit Vista to 8.1: XHCIPFW.VXD or
 XHCIPFW.SYS, PCI windows above 4 GB closed at each start, ticked or
 unticked; /xhcipfw only with /thunderbolt or /cmonly),
 /faster and /nofaster

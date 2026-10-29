@@ -553,9 +553,47 @@ static void test_ntdec(void)
           "Safe Mode on several processors: Safe Mode, not unheld");
 }
 
+/* One root bus's range (record 32 section 11.5.2): a bridge on a bus
+ * outside it is neither read nor closed. */
+static void test_range(void)
+{
+    PFW_RESULT r;
+    FN *a;
+    FN *b;
+
+    reset();
+    a = bridge(0, 3, 0, 1, 2, 0xFFF10001UL, 1, 0x40);
+    b = bridge(0x80, 3, 0, 0x81, 0x81, 0xFFF10001UL, 1, 0x40);
+    memset(&r, 0, sizeof(r));
+    PfwRunBuses(&r, 0, 0x7F);
+    CHECK(is_closed_form(a) && b->Writes == 0 && b->Cfg[0x28 / 4] == 1 &&
+          r.Closed == 1, "buses 0 to 7Fh: the bridge on 80h left");
+    memset(&r, 0, sizeof(r));
+    PfwRunBuses(&r, 0x80, 0xFF);
+    CHECK(is_closed_form(b) && r.Closed == 1,
+          "buses 80h to FFh: that bridge closed");
+}
+
+/* XHCIPFW.SYS's role by version (record 32 section 11.5.2). */
+static void test_ntrole(void)
+{
+    CHECK_EQ(PfwNtRole(5, 0), PFW_ROLE_ENTRY, "2000: the entry role");
+    CHECK_EQ(PfwNtRole(5, 1), PFW_ROLE_ENTRY, "XP: the entry role");
+    CHECK_EQ(PfwNtRole(5, 2), PFW_ROLE_NONE, "Server 2003: neither");
+    CHECK_EQ(PfwNtRole(6, 0), PFW_ROLE_ENTRY, "Vista: the entry role");
+    CHECK_EQ(PfwNtRole(6, 1), PFW_ROLE_ENTRY, "7: the entry role");
+    CHECK_EQ(PfwNtRole(6, 2), PFW_ROLE_FILTER, "8: the filter role");
+    CHECK_EQ(PfwNtRole(6, 3), PFW_ROLE_FILTER, "8.1: the filter role");
+    CHECK_EQ(PfwNtRole(6, 4), PFW_ROLE_NONE, "6.4: neither");
+    CHECK_EQ(PfwNtRole(10, 0), PFW_ROLE_NONE, "10: neither");
+    CHECK_EQ(PfwNtRole(4, 0), PFW_ROLE_NONE, "NT 4: neither");
+}
+
 int main(void)
 {
     test_classify();
+    test_ntrole();
+    test_range();
     test_close();
     test_scan();
     test_bars();

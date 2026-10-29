@@ -131,6 +131,9 @@ void PfwCfgWrite(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val);
 
 /* The whole step (record 32 section 4.1): r is zeroed by the caller. */
 void PfwRun(PFW_RESULT *r);
+/* The same over the buses first to last only (record 32 section 11.5.2:
+ * one PCI root bus's range, at that bus's start). */
+void PfwRunBuses(PFW_RESULT *r, PFW_U32 first, PFW_U32 last);
 
 /* The parts, for the host suite. */
 int PfwClassify(PFW_U32 r24, PFW_U32 r28, PFW_U32 r2c);

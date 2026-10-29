@@ -22,6 +22,22 @@
 #define PFW_SKIP_UNHELD     0x08UL  /* several processors and no way to
                                        hold them (2000 or XP, or the
                                        routine not found)               */
+#define PFW_SKIP_UNATTACHED 0x10UL  /* the filter role: a root bus it
+                                       is named on could not be attached,
+                                       so that bus starts unscanned
+                                       (record 32 section 11.5.2)       */
+#define PFW_SKIP_NORANGE    0x20UL  /* the filter role: the root bus's
+                                       start carries no bus numbers, so
+                                       its range is not known; nothing
+                                       scanned                          */
+
+/* The role DriverEntry takes (record 32 section 11.5.2): the step at
+ * DriverEntry on 2000, XP, Vista and 7; an upper filter of the PCI root
+ * bus, the step at its first start, on 8 and 8.1; neither elsewhere. */
+#define PFW_ROLE_NONE       0
+#define PFW_ROLE_ENTRY      1
+#define PFW_ROLE_FILTER     2
+int PfwNtRole(PFW_U32 major, PFW_U32 minor);
 
 /* major/minor: PsGetVersion's; nproc: the processors running; safeMode:
  * InitSafeBootMode not 0; late: not called at the boot drivers' time (the

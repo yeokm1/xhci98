@@ -19837,6 +19837,9 @@ static int pfw_seen(void)
 /* XHCIPFW.SYS already registered by this installer (its record names the
  * image and the service is there). */
 static int pfwsys_installed(void);
+/* The same, in the entry role's group (System Reserved): on 8 and 8.1 the
+ * 3.3.0.0 place, never kept there (record 32 section 11.5.2). */
+static int pfwsys_legacy(void);
 
 /* The box's default (inst_pfw_box), the one decision, with the
  * Thunderbolt support in the run (tb) or out of it; *open whether the box
@@ -19865,8 +19868,10 @@ static int pfw_mode(int uninstall)
     if (!pfwAsked) {
         pfwChoice = pfw_default(&shown, &open);
     }
-    return inst_pfw_mode(pfw_kind(), uninstall, pfw_have(),
-                         haveCm && tbInclude, pfwChoice);
+    return inst_pfw_mode_legacy(inst_pfw_mode(pfw_kind(), uninstall,
+                                              pfw_have(), haveCm && tbInclude,
+                                              pfwChoice),
+                                pfw_kind(), pfwsys_legacy());
 }
 
 /* 1 when the static-VxD key holds the two values this installer writes
@@ -19985,8 +19990,8 @@ static int pfw_run(int mode)
         return 1;
     }
     if (envNow.Nt) {
-        /* Not offered (8, 8.1 and 10): only a record of this installer's
-         * has anything to remove; none, and the run says nothing of it. */
+        /* Not offered (10): only a record of this installer's has
+         * anything to remove; none, and the run says nothing of it. */
         if (pfw_kind() == INST_PFW_SYS_GONE && mode != INST_VSD_UNINSTALL &&
             !pfwsys_recorded()) {
             return 1;
@@ -20062,8 +20067,7 @@ static void pfw_question(void)
         const char *pl = pfwsys_recorded() ? inst_eng_pfw_plan() : NULL;
         pfwChoice = 0;
         if (pl != NULL) {
-            out("%s.\n  XHCIPFW.SYS is not offered on Windows 8, 8.1 and "
-                "10.\n\n", pl);
+            out("%s.\n  XHCIPFW.SYS is not offered on Windows 10.\n\n", pl);
         }
         return;
     }
@@ -20089,7 +20093,7 @@ static void pfw_question(void)
     }
     if (envNow.Nt) {
         out("Close PCI windows above 4 GB (XHCIPFW.SYS): Windows 2000 and XP, "
-            "and the\n32-bit Vista and 7\n");
+            "and the\n32-bit Vista, 7, 8 and 8.1\n");
         out("  At each start it closes the PCI bridges' prefetchable windows "
             "that lie\n  wholly above 4 GB. It does so before Windows' PCI "
             "driver reads them.\n  This Windows cannot use such a window. "
@@ -20098,7 +20102,7 @@ static void pfw_question(void)
         if (envNow.Major >= 6) {
             out("  Where the firmware setup offers \"Above 4G Decoding\", "
                 "set it off for this\n  Windows. With it on, the 32-bit "
-                "Vista and 7 can stop at start on a\n  board that offers "
+                "Vista to 8.1 can stop at start on a\n  board that offers "
                 "much memory space above 4 GB. This cannot help\n  there. "
                 "With it off, this closes the windows the firmware still "
                 "leaves\n  above 4 GB.\n");
@@ -20464,8 +20468,179 @@ static int pfwsys_start(DWORD *start)
     return r == ERROR_SUCCESS && type == REG_DWORD;
 }
 
+/* The service's Group is `group` (1), another or none (0). */
+static int pfwsys_group_is(const char *group)
+{
+    HKEY k;
+    char g[64];
+    DWORD type = 0;
+    DWORD n = sizeof(g) - 1;
+    LONG r;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
+                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
+                      &k) != ERROR_SUCCESS) {
+        return 0;
+    }
+    memset(g, 0, sizeof(g));
+    r = RegQueryValueExA(k, "Group", NULL, &type, (BYTE *)g, &n);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS && type == REG_SZ && inst_eq(g, group);
+}
+
+static int pfwsys_legacy(void)
+{
+    return pfw_kind() == INST_PFW_SYS_FILTER && pfwsys_installed() &&
+           pfwsys_group_is(INST_PFWSYS_GROUP);
+}
+
+/* Record 32 section 11.5.2: xhcipfw added to (add) or taken out of the
+ * UpperFilters of every PCI root bus devnode (*PNP0A03, *PNP0A08), the
+ * other filters kept in order. Adding reads the present devnodes; taking
+ * out reads every devnode, present or not, since an entry naming this
+ * installer's service refers to its image whoever wrote it. The count of
+ * devnodes changed, or -1 when one could not be read or written (said):
+ * then nothing that depends on the entries being out may follow. */
+static int pfw_rootbus_filters(int add)
+{
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD type;
+    DWORD hwN;
+    DWORD cpN;
+    DWORD upN;
+    char hw[2048];
+    char cp[2048];
+    char up[1024];
+    char msz[1100];
+    char id[INST_ID_CHARS];
+    size_t n;
+    int changed;
+    int count = 0;
+    int failed = 0;
+
+    if (api.GetClassDevs == NULL || api.EnumInfo == NULL ||
+        api.GetRegProp == NULL || api.SetRegProp == NULL ||
+        api.Destroy == NULL) {
+        out("XHCIPFW.SYS: the device routines this needs are missing.\n");
+        return -1;
+    }
+    set = api.GetClassDevs(NULL, NULL, NULL,
+                           DIGCF_ALLCLASSES | (add ? DIGCF_PRESENT : 0));
+    if (set == INVALID_HANDLE_VALUE) {
+        out("XHCIPFW.SYS: the device list could not be read (error "
+            "0x%08lX).\n", (unsigned long)GetLastError());
+        return -1;
+    }
+    for (i = 0;; i++) {
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            break;
+        }
+        memset(hw, 0, sizeof(hw));
+        memset(cp, 0, sizeof(cp));
+        hwN = 0;
+        cpN = 0;
+        if (!api.GetRegProp(set, &data, SPDRP_HARDWAREID, &type, (PBYTE)hw,
+                            sizeof(hw) - 2, &hwN)) {
+            hwN = 0;
+        }
+        if (!api.GetRegProp(set, &data, SPDRP_COMPATIBLEIDS, &type, (PBYTE)cp,
+                            sizeof(cp) - 2, &cpN)) {
+            cpN = 0;
+        }
+        if (!inst_pfw_rootbus(hw, hwN, cp, cpN)) {
+            continue;
+        }
+        if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
+            inst_copy(id, "(a PCI root bus)", sizeof(id));
+        }
+        memset(up, 0, sizeof(up));
+        upN = 0;
+        if (!api.GetRegProp(set, &data, SPDRP_UPPERFILTERS, &type, (PBYTE)up,
+                            sizeof(up) - 2, &upN)) {
+            if (GetLastError() != ERROR_INVALID_DATA) {
+                out("XHCIPFW.SYS: the filters of %s could not be read (error "
+                    "0x%08lX).\n", id, (unsigned long)GetLastError());
+                failed = 1;
+                continue;
+            }
+            upN = 0;
+        }
+        n = add ? inst_msz_append(up, upN, INST_PFWSYS_SERVICE, msz,
+                                  sizeof(msz), &changed)
+                : inst_msz_remove(up, upN, INST_PFWSYS_SERVICE, msz,
+                                  sizeof(msz), &changed);
+        if (n == (size_t)-1) {
+            out("XHCIPFW.SYS: the filters of %s are too long.\n", id);
+            failed = 1;
+            continue;
+        }
+        if (!changed) {
+            continue;
+        }
+        if (!api.SetRegProp(set, &data, SPDRP_UPPERFILTERS,
+                            n ? (const BYTE *)msz : NULL, (DWORD)n)) {
+            out("XHCIPFW.SYS: the filters of %s could not be written (error "
+                "0x%08lX).\n", id, (unsigned long)GetLastError());
+            failed = 1;
+            continue;
+        }
+        count++;
+        logonly("xhcipfw: %s %s the UpperFilters of %s\n",
+                INST_PFWSYS_SERVICE, add ? "added to" : "taken out of", id);
+    }
+    api.Destroy(set);
+    if (count > 0) {
+        flagChanged = 1;
+        flagRestart = 1;
+    }
+    return failed ? -1 : count;
+}
+
+/* Before any change to the service or the image on 8, 8.1 and 10: every
+ * root bus entry out (record 32 section 11.5.2). 1 done or not this
+ * kind; 0 an entry is left, said, the run's step failed. */
+static int pfw_entries_out(void)
+{
+    int k = pfw_kind();
+
+    if (k != INST_PFW_SYS_FILTER && k != INST_PFW_SYS_GONE) {
+        return 1;
+    }
+    if (pfw_rootbus_filters(0) < 0) {
+        out("XHCIPFW.SYS is left as it is: a PCI root bus may still name it, "
+            "and Windows\nwould not start without its image.\n");
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "XHCIPFW.SYS: a root bus filter entry left");
+        return 0;
+    }
+    return 1;
+}
+
+/* After the service and the image are in place on 8 and 8.1: the entries
+ * in, last. 1 done (or not this kind). */
+static int pfw_entries_in(void)
+{
+    int n;
+
+    if (pfw_kind() != INST_PFW_SYS_FILTER) {
+        return 1;
+    }
+    n = pfw_rootbus_filters(1);
+    if (n < 0) {
+        flagSteps = 1;
+        steps_add_id(INST_PFWSYS_FILE, "it was not added to every PCI root "
+                     "bus: run the installer again");
+        return 0;
+    }
+    return 1;
+}
+
 /* The service's values for a boot-start driver of System Reserved
- * (record 32 section 11.2), the image named. Start is 4 while the other
+ * (record 32 section 11.2), or of PnP Filter on 8 and 8.1 (section
+ * 11.5.2), the image named. Start is 4 while the other
  * values are written and set to 0 last, so a run cut short leaves the
  * driver off, never on with a half-written service. start 4: Start
  * alone. 1 written. */
@@ -20477,6 +20652,8 @@ static int pfwsys_service(const char *name, DWORD start)
     DWORD type = SERVICE_KERNEL_DRIVER;
     DWORD err = SERVICE_ERROR_IGNORE;
     DWORD off = SERVICE_DISABLED;
+    const char *group = pfw_kind() == INST_PFW_SYS_FILTER ?
+                        INST_PFWSYS_GROUP_FILTER : INST_PFWSYS_GROUP;
 
     _snprintf(image, sizeof(image) - 1, "System32\\DRIVERS\\%s", name);
     image[sizeof(image) - 1] = '\0';
@@ -20495,8 +20672,8 @@ static int pfwsys_service(const char *name, DWORD start)
             }
             if (w == ERROR_SUCCESS) {
                 w = RegSetValueExA(k, "Group", 0, REG_SZ,
-                                   (const BYTE *)INST_PFWSYS_GROUP,
-                                   (DWORD)strlen(INST_PFWSYS_GROUP) + 1);
+                                   (const BYTE *)group,
+                                   (DWORD)strlen(group) + 1);
             }
             if (w == ERROR_SUCCESS) {
                 w = RegSetValueExA(k, "ImagePath", 0, REG_EXPAND_SZ,
@@ -20697,6 +20874,11 @@ static int pfwsys_run(int mode)
         return mode == INST_VSD_SELECTED ? 0 : 1;
     }
     if (mode == INST_VSD_DESELECTED || mode == INST_VSD_UNINSTALL) {
+        /* An entry naming this service goes before anything of it, even
+         * with no service left (it would name an image never loaded). */
+        if (!pfw_entries_out()) {
+            return 0;
+        }
         if (!r.Any && img == 0) {
             step(INST_STEP_DONE, "XHCIPFW.SYS: as it is");
             return 1;
@@ -20750,8 +20932,16 @@ static int pfwsys_run(int mode)
         stor_hash(curPath, hex) == 1 && inst_eq(hex, pfwSysHash) &&
         r.Any) {
         int was = pfwsys_start(&start) && start == SERVICE_BOOT_START;
+        /* On 8 and 8.1 a service already as this release writes it is not
+         * rewritten (its Start 4 while written would stop a start with an
+         * entry in); otherwise the entries go out first. */
+        int keep = pfw_kind() == INST_PFW_SYS_FILTER && was &&
+                   pfwsys_group_is(INST_PFWSYS_GROUP_FILTER);
+        if (!keep && !pfw_entries_out()) {
+            return 0;
+        }
         if (!vsd_rec_set(&pfwDesc, "File", pfwSysHash) ||
-            !pfwsys_service(cur, SERVICE_BOOT_START)) {
+            (!keep && !pfwsys_service(cur, SERVICE_BOOT_START))) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its service not written");
             return 0;
@@ -20768,9 +20958,18 @@ static int pfwsys_run(int mode)
             steps_add_id(INST_PFWSYS_FILE, "an earlier image could not be "
                          "removed: run the installer again");
         }
+        if (!pfw_entries_in()) {
+            step(INST_STEP_LEFT, "XHCIPFW.SYS: not on every PCI root bus");
+            return 0;
+        }
         step(INST_STEP_DONE, was ? "XHCIPFW.SYS: this release's, as it is" :
              "XHCIPFW.SYS: on again at the next start");
         return 1;
+    }
+    /* An install or update on 8 and 8.1: the entries out before the
+     * image or the service changes (record 32 section 11.5.2). */
+    if (!pfw_entries_out()) {
+        return 0;
     }
     /* What earlier runs left of their own (an old image, a copy cut short,
      * an image an uninstall cut short left) goes first, so that no hash
@@ -20877,6 +21076,10 @@ static int pfwsys_run(int mode)
         flagSteps = 1;
         steps_add_id(INST_PFWSYS_FILE, "an earlier image could not be "
                      "removed: run the installer again");
+    }
+    if (!pfw_entries_in()) {
+        step(INST_STEP_LEFT, "XHCIPFW.SYS: not on every PCI root bus");
+        return 0;
     }
     step(INST_STEP_DONE, img == 1 ? "XHCIPFW.SYS: updated at the next start" :
          "XHCIPFW.SYS: installed");
@@ -30786,15 +30989,15 @@ int inst_eng_begin(int argc, char **argv)
     }
     /* Design record 32 sections 8 and 11. */
     if (opts.Pfw && pfw_kind() == INST_PFW_SYS_GONE) {
-        /* Task 44.72 (the owner, 2026-10-28). */
-        out("REFUSED: /xhcipfw: XHCIPFW.SYS may start too late on Windows "
-            "8, 8.1 and 10.\n");
+        /* Task 44.72 (the owner, 2026-10-28); task 45.9 (2026-10-29). */
+        out("REFUSED: /xhcipfw: XHCIPFW.SYS cannot start in time on Windows "
+            "10.\n");
         return INST_EXIT_REFUSED;
     }
     if ((opts.Pfw || opts.NoPfw) && (pfw_kind() == INST_PFW_SYS_NONE ||
                                      pfw_kind() == INST_PFW_SYS_GONE)) {
         out("REFUSED: /xhcipfw and /noxhcipfw are for Windows 98 SE, ME, "
-            "2000, XP and\nthe 32-bit Vista and 7 only.\n");
+            "2000, XP and\nthe 32-bit Vista, 7, 8 and 8.1 only.\n");
         return INST_EXIT_REFUSED;
     }
     for (i = 0; i < opts.SetCount; i++) {

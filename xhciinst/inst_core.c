@@ -1529,6 +1529,43 @@ int inst_path_remove_prefix(const char *list, const char *prefix, char *out,
     }
     return removed;
 }
+size_t inst_msz_append(const char *in, size_t inBytes, const char *name,
+                       char *out, size_t cap, int *added)
+{
+    size_t off = 0;
+    size_t used = 0;
+    size_t n;
+    size_t len = strlen(name);
+
+    *added = 0;
+    while (in != NULL && off < inBytes && in[off] != '\0') {
+        n = 0;
+        while (off + n < inBytes && in[off + n] != '\0') {
+            n++;
+        }
+        if (used + n + 1 > cap) {
+            return (size_t)-1;
+        }
+        memcpy(out + used, in + off, n);
+        out[used + n] = '\0';
+        used += n + 1;
+        off += n + 1;
+    }
+    if (!inst_msz_has(out, used, name)) {
+        if (used + len + 1 > cap) {
+            return (size_t)-1;
+        }
+        memcpy(out + used, name, len + 1);
+        used += len + 1;
+        *added = 1;
+    }
+    if (used + 1 > cap) {
+        return (size_t)-1;
+    }
+    out[used] = '\0';
+    return used + 1;
+}
+
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed)
 {
@@ -6581,11 +6618,13 @@ int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86)
                minor == 1 ? INST_PFW_SYS_SEEN : INST_PFW_SYS_NONE;
     }
     /* From 8 on the boot drivers of System Reserved and the PCI driver's
-     * read of the root bus are not ordered, so the step may come after
-     * it (run-44 "44.72"; the owner, 2026-10-28: offered up to 7). */
+     * read of the root bus are not ordered (run-44 "44.72"); on 8 and 8.1
+     * a filter of the root bus runs first at every start read, on 10 such
+     * a filter is never initialised (run-45 "45.9"; the owner,
+     * 2026-10-29: the filter role on 8 and 8.1). */
     if (major == 6) {
         return minor <= 1 ? INST_PFW_SYS_SEEN :
-               minor <= 3 ? INST_PFW_SYS_GONE : INST_PFW_SYS_NONE;
+               minor <= 3 ? INST_PFW_SYS_FILTER : INST_PFW_SYS_NONE;
     }
     return major == 10 ? INST_PFW_SYS_GONE : INST_PFW_SYS_NONE;
 }
@@ -6621,6 +6660,24 @@ int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
         return INST_VSD_INACTIVE;
     }
     return ticked ? INST_VSD_SELECTED : INST_VSD_DESELECTED;
+}
+
+int inst_pfw_mode_legacy(int mode, int sysKind, int legacyOwned)
+{
+    if (sysKind == INST_PFW_SYS_FILTER && mode == INST_VSD_INACTIVE &&
+        legacyOwned) {
+        return INST_VSD_DESELECTED;
+    }
+    return mode;
+}
+
+int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes)
+{
+    return inst_msz_has(hw, hwBytes, "*PNP0A03") ||
+           inst_msz_has(hw, hwBytes, "*PNP0A08") ||
+           inst_msz_has(compat, compatBytes, "*PNP0A03") ||
+           inst_msz_has(compat, compatBytes, "*PNP0A08");
 }
 
 int inst_pfw_bootcfg_high(const unsigned char *buf, unsigned long n)
