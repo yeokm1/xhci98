@@ -1721,7 +1721,12 @@ never take or clear work bits, which stay for the loop.
 #### 4.5.6 Order down and up: stop, removal, power and containment
 
 - **Down** (stop, removal, surprise removal, D3, a 98 SE or ME shutdown's
-  quiescence, a containment entry, a fall back to polling), on the thread:
+  quiescence, a containment entry, a fall back to polling), on the thread.
+  Retiring the interrupt is apart from quiescing the transport: a fall
+  back to polling keeps both rings running with their buffers and goes on
+  polling them, and only the lifecycle paths that stop the transport today
+  (stop, removal, surprise removal, D3, the quiescence, containment as
+  section 5.5 and record 22 section 7.7 already do) add step 6.
   1. Clear `IrqArmed` and mask the cause in one `KeSynchronizeExecution`
      routine, where the liveness gate admits the write; from then on the
      routine queues no DPC.
@@ -1736,25 +1741,29 @@ never take or clear work bits, which stay for the loop.
      status holding the line falls; or, where the mask was refused or its
      read-back disagrees, the function's PCI Interrupt Disable (Command bit
      10, PCI 2.3; every PCI Express function implements it) set and read
-     back set (section 4.5.6.1). Either is a **verified retirement**; PCI
+     back set (section 4.5.6.1), for a **line** connection only: bit 10
+     suppresses INTx and not a message, so a message connection's only
+     proof is the IMR read-back. Either is a **verified retirement**; PCI
      Status bit 3 (Interrupt Status) is read for the log only, since it
      shows the function's condition whatever bit 10 blocks (as record 15's
      retirement takes the Command bit as its proof). A read that returns
      all ones, or a configuration access that failed, proves nothing: the
      source stays **unretired**.
-  4. RX descriptors are posted from then on without IE.
+  4. RX descriptors are posted from then on without IE (the ones already
+     posted keep it until consumed; their status bits are masked).
   5. **Disconnect.** Retired: `IoDisconnectInterrupt` (or its `Ex` twin).
-     Unretired: in a fall back to polling and a containment entry, the
-     interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
-     logged; in a stop, a removal, a surprise removal or a D3, the
-     interrupt is disconnected whatever the proof (the resources go back
-     to the PnP manager, the device is gone, or its registers are about to
-     become inaccessible), and `cm.irq.unretired` logged where it was
-     unproven. In a 98 SE or ME shutdown's quiescence (section 5.6) the
+     Unretired: in a fall back to polling, a containment entry and a D3,
+     the interrupt is **retained** (section 4.5.6.2) and `cm.irq.unretired`
+     logged, since a function still in D0 may still assert the line and an
+     impending D3 is no proof that it has stopped; in a stop, a removal or
+     a surprise removal it is disconnected whatever the proof (the
+     resources go back to the PnP manager, or the device is gone), with
+     `cm.irq.unretired` logged where it was unproven: the one residual
+     window, section 4.5.7. In a 98 SE or ME shutdown's quiescence (section 5.6) the
      mask is the quiescence's own register write and no configuration
      write is made; where the mask is refused, the interrupt stays
      connected and claiming until the system is down.
-  6. The ring stop as today.
+  6. The ring stop as today, in the lifecycle paths named above only.
 
   **The image outlives every DPC.** The count covers the extension, not
   the DPC's return sequence after its last decrement. As `cm_cfgwk.c`
@@ -1765,8 +1774,17 @@ never take or clear work bits, which stay for the loop.
   is not on 2000's export table, and `KeRemoveQueueDpc` has no Windows 98
   evidence. The cost: an update over a driver that used the interrupt
   takes effect at the restart, as on 98 SE and ME today.
+- **The failure latch.** Every fall back to polling (a failed arm or
+  self-test, `cm.irq.lost`, `cm.irq.storm`) sets `IrqFailed` for the
+  activation. While it is set, Up arms nothing: descriptors stay without
+  IE, PCI Interrupt Disable is not restored, and a retained routine stays
+  acknowledge-only. Only a new activation (a start after a stop or a
+  removal) clears it and qualifies the interrupt again, so the watchdog's
+  "no reconnection until the next activation" holds across D0 and
+  recovery.
 - **Up** (an activation, D0, a recovery that returns to ACTIVE, record 22
-  section 7.7's exit): the rings as today; then, if an interrupt is
+  section 7.7's exit), with `IrqFailed` clear: the rings as today; then,
+  if an interrupt is
   **retained**, it is reused (no second `IoConnectInterrupt`, the saved
   interrupt object kept), otherwise connected; then PCI Interrupt Disable
   restored where this driver set it (section 4.5.6.1); then the arm (the
@@ -1816,9 +1834,15 @@ left asserted with no routine to acknowledge it:
   the device is in D0 they are legal;
 - the thread polls as today, and each later down order (the next
   maintenance pass's attempt, a containment exit, a D3, the stop) tries
-  the retirement again; a D3, a stop or a removal disconnects it as step
-  5 says, before the D3 is forwarded, so no routine reads the BAR of a
-  function in D3;
+  the retirement again; only a stop, a removal or a surprise removal
+  disconnects it unproven;
+- across a D3 it stays connected, and its MMIO is gated: `IrqPowered`,
+  cleared by the thread in a `KeSynchronizeExecution` routine just before
+  the D3 is forwarded and set again at D0 before anything else, makes the
+  routine read nothing and return FALSE, so no routine reads the BAR of a
+  function in D3. A function that went on asserting INTx in D3 would then
+  hold the line: the second residual window of section 4.5.7, reached
+  only when the mask in D0 was refused or failed its read-back;
 - an Up reuses it as above; a second connection is never made while one
   is retained.
 
@@ -1843,10 +1867,14 @@ left asserted with no routine to acknowledge it:
   falls back to one MSI and otherwise fails, `pci.c` `nhi_pci_init_msi`
   [linux]), so the line is the one path no other operating system has
   exercised on these hosts (section 4.3: wired [obs], never used by a
-  captured system [inf]). And a host that holds its line asserted with
-  its cause masked livelocks a uniprocessor before the thread can set PCI
-  Interrupt Disable (section 4.5.3 step 5); no driver-side remedy exists
-  at DIRQL on these systems.
+  captured system [inf]). Three residual windows remain, none with a
+  driver-side remedy on these systems: a host that holds its line
+  asserted with its cause masked livelocks a uniprocessor before the
+  thread can set PCI Interrupt Disable (section 4.5.3 step 5); a stop,
+  removal or surprise removal disconnects a source it could not prove
+  quiet (section 4.5.6 step 5); and a retained routine is gated off across
+  a D3 (section 4.5.6.2). Each needs a host that ignores its own mask or
+  refuses every access while still asserting.
 
 #### 4.5.8 Import gates
 
