@@ -105,7 +105,16 @@ on, so that a busy drive is idle by the sleep, is left open (the record's
 section 4.3.2). The wait was revised after these legs (`87d3d489` and
 `0e9a6151`: armed only with the switch on, released only once the
 invalidation is taken, on the direct-transition route too, and settled by
-a stop or a fresh start); FINAL-LEG
+a stop or a fresh start). Read again with the `qemu` flavour of the
+final gated x86 build of `0e9a6151` (`xhci98.sys` `8953e2cb...`; the
+build's release `a021a33b...`) on the same overlay: the held file alone -
+"port/flags/why=0300E500", "endpoints replayed, mask=000001A4",
+"restored, port/slot=00000301", no popup, `D:\LONG5.TXT` grew from 726
+to 846 bytes after the resume; then `XhciResumeKeep` 0 in the
+machine-wide key and a restart: "port/flags/why=0300E501" (switch off),
+the drive dropped, "Delayed Write Failed ... D:\LONG6.TXT" as before the
+fix. With the switch at 0 the drop runs through the keep's own function,
+each device refused, and the D0 does not wait.
 
 ## 45.27 the legs the fixes of 2026-10-29 owe, and what that reading left (2026-10-29)
 

@@ -661,10 +661,13 @@ outside it changes:
   The selective suspend's state is not touched: only a device with none
   armed is kept.
 - K7 (`hcdRkeepDrop`): any failure drops that device alone, through the
-  teardown every departure takes - its slot given back when the restore
-  had enabled one - and the port's next inspection enumerates what is
-  there afresh. A command that fails asks for the controller reset, whose
-  invalidation takes what is left.
+  teardown every departure takes - a new slot the restore enabled goes
+  through Disable Slot, and when the controller refuses it (a halted one
+  does) the record stays quarantined in `SlotDevice[]`, freed only by a
+  later Disable Slot or a proven reset, as any departure's - and the
+  port's next inspection enumerates what is there. A command that fails
+  asks for the controller reset; what is left is the invalidation's of
+  that reset if one runs, and a recovery refused leaves it quarantined.
 - The D0 waits for the keep (`hcdResumeKeepWait`, `hcd_power.c`): the
   D0 of a resume that armed a keep polls, outside the power gate and
   bounded at 15 s, until the thread's pass has kept or dropped the
@@ -685,9 +688,10 @@ outside it changes:
 - Read on q35 XP (`runs/run-45.md`, "45.23"): a UAS drive idle at the
   hibernation, a file held open on it and written every second, is
   restored in place and the file goes on growing with no error; the
-  same drive under a copy loop had a command outstanding across the
-  hibernation (three URBs pending on its PDO at the resume), is dropped as
-  K4 says, and XP reports "Delayed Write Failed" as before. Whether
+  same drive under a copy loop had three URBs pending on its PDO when the
+  resume's pass looked (the count alone: which URBs, and whether they
+  were there at the power-down, was not read), is dropped as K4 says, and
+  XP reports "Delayed Write Failed" as before. Whether
   `xhciuas.sys` should wait out its commands before it passes a
   power-down on, so that a busy drive is idle by the sleep, is left open.
 - Not built, and dropped as before: devices behind a hub and hubs (K3's
