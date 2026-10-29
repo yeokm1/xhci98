@@ -65,7 +65,7 @@ The sources, and the tag each fact carries below:
   Manager Guide 2.0 ("Guide"), November 2025 bundle, fetched per machine
   into `docs/references/usb4_202511/` (`docs/references/README.md`), cited
   by section and table.
-- **[model]** the `usb4-emu` repository (`D:\OneDrive\git-projects\usb4-emu`,
+- **[model]** the `usb4-emu` repository (the `usb4-emu` checkout beside this repository,
   branch `main`, commit `a68bc74`; the documents and `tools/usb4cm` read
   here are unchanged since `eba0cf1`, the commit record 21 cites), read and
   never modified: `docs/XHCI98-HANDOFF.md`, `docs/ARCHITECTURE.md` sections

@@ -54,7 +54,7 @@ host's media is a tracked file that names nothing on any other host. The
 generated launchers carry the "edit this file or pass -Win7Iso" guard.
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win7.ps1 -Win7Iso "D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso" -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win7.ps1 -Win7Iso "<iso folder>\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso" -CreateDisk
 #>
 
 [CmdletBinding()]

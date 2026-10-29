@@ -1587,7 +1587,7 @@ a choice:
   smallest and largest sizes on the command line and make the run a sweep;
   added for 43.46's bench (the 9x study from 128 KiB to 2 MiB, with
   Stor98's 2 MiB maximum).
-- **The 98 SE smoke runs (2026-10-22, emulator, kit `E:\xhci98-vm\p43-50`)**:
+- **The 98 SE smoke runs (2026-10-22, emulator, kit `<vm root>\p43-50`)**:
   the generic benchmark ran on C: (IDE) and on the NVMe drive Stor98
   drives, verified, and saved its reports. They changed two things. A
   timed step's deadline is also checked by the workers: a 2 s random
@@ -1637,8 +1637,8 @@ a choice:
   (43.46) the demand for physical scatter/gather is gone and every
   request arrived whole in both orders. The 9x facts now say so when the
   demand stands, and the release notes carry it as a known limitation.
-- **ME, P.5 (2026-10-23, emulator, kit `E:\xhci98-vm\p43-50`, images `m2`
-  and `m3` from `E:\stor98-vm\int\me\base.qcow2`, this branch's Stor98 as
+- **ME, P.5 (2026-10-23, emulator, kit `<vm root>\p43-50`, images `m2`
+  and `m3` from `<stor98 vm root>\int\me\base.qcow2`, this branch's Stor98 as
   `stor98.mpd`)**: as on 98 SE. Without S98VSD.VXD the first study run
   after the start had aligned and offset requests whole and scattered ones
   double-buffered; the probe re-allocating its buffer then saw every round
@@ -1864,7 +1864,7 @@ alone.
 ### 16.4 The two long timed steps on the emulator's IDE disk
 
 **Read** (the 98 SE emulator's Quick run of 2026-10-23,
-`E:\xhci98-vm\p43-50\runs\pl\r-l1.txt`, i440FX, a 16 MiB file on C:
+`<vm root>\p43-50\runs\pl\r-l1.txt`, i440FX, a 16 MiB file on C:
 behind ESDI_506, 2 s steps): `Seq 1M d1 t1` write 127 requests in
 2.0 s, mean latency 15.6 ms; `Seq 1M d1 t1` read 67 requests in 27.8 s,
 mean latency 414 ms (the requests' latencies add up to about 27.7 s);
@@ -1929,7 +1929,7 @@ them; the fix follows the reading.
 ### 16.6 The legs of task 44.21 (as planned)
 
 Every new leg runs on QEMU's q35 machine (owner, 2026-10-25), from the
-bases in `E:\xhci98-vm\q35-bases\`, recorded in
+bases in `<vm root>\q35-bases\`, recorded in
 `docs/contributing/runs/run-44.md` section 44.21. Section 14.2's
 narrowed set, as the roadmap line names it: ME's P.1, P.2, P.7 and P.8;
 P.3, P.4 and P.6 on 2000, XP, 7 and 10; a Quick run (P.4) on 8 and 8.1.
@@ -1945,7 +1945,7 @@ Added by this section:
 
 ### 16.7 What the legs read (2026-10-26)
 
-On q35 (`E:\xhci98-vm\q35-bases`), the tool of this section's commits;
+On q35 (`<vm root>\q35-bases`), the tool of this section's commits;
 the run sheet `runs/run-44.md`, section 44.21, has the commands, the
 hashes and every figure.
 

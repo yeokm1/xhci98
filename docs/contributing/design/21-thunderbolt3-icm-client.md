@@ -66,7 +66,7 @@ that day): on 98 SE and ME, under the USB4 profile, the removal of a
 drive that left with the controller waits for its return.
 
 The sources this record rests on are in the `usb4-emu` repository
-(`D:\OneDrive\git-projects\usb4-emu`, branch `main`, commit `eba0cf1`; `main`
+(the `usb4-emu` checkout beside this repository, branch `main`, commit `eba0cf1`; `main`
 moved to `a68bc74` by 2026-10-15, and the two commits' trees are identical,
 read that day), which
 this project reads and never modifies: `docs/XHCI98-HANDOFF.md` (the
@@ -3327,7 +3327,7 @@ change list, and section 7.2 follows it. Its maintainer decisions (MD-1 to
 MD-6) and gates (G3, Q-9x) keep their names, and sections 7.1 and 7.3 cite
 its plan as it was read under the former name.
 
-`nvme98` (`D:\OneDrive\git-projects\nvme98`, `docs/PLAN.md` section 0.10 and
+`nvme98` (the `nvme98` checkout beside this repository, `docs/PLAN.md` section 0.10 and
 gate G3; maintainer decision MD-2 of 2026-10-14) accepts, under assumption
 A1, that a tunnel's PCIe link going down resets the endpoint, and places two
 obligations on this connection manager:

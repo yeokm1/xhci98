@@ -184,7 +184,7 @@ Run all setup helpers (both target VMs):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-all.ps1 `
-  -Win98Iso D:\isos\Win98SE.iso -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+  -Win98Iso <iso folder>\Win98SE.iso -Win2KIso <iso folder>\win2ksp4.ISO -CreateDisk
 ```
 
 Or run only one component:
@@ -192,8 +192,8 @@ Or run only one component:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-msvc6.ps1
 powershell -ExecutionPolicy Bypass -File scripts\setup-w2kddk.ps1
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso D:\isos\Win98SE.iso -CreateDisk
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso D:\isos\win2ksp4.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu.ps1 -Win98Iso <iso folder>\Win98SE.iso -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 -Win2KIso <iso folder>\win2ksp4.ISO -CreateDisk
 ```
 
 Setup scripts:
@@ -1556,7 +1556,7 @@ controller-free preparation launcher:
 7z e win2ksp4.ISO -o<dir> I386\USBD.SY_
 expand <dir>\USBD.SY_ <dir>\USBD.SYS        (5.00.2195.6658, 20688 bytes)
 powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k.ps1 \
-  -Win2KIso D:\isos\win2ksp4.ISO -Win2KUsbdSys <dir>\USBD.SYS
+  -Win2KIso <iso folder>\win2ksp4.ISO -Win2KUsbdSys <dir>\USBD.SYS
 scripts\local\qemu-win2k-prepare-usbd.cmd
 copy X:\USBD.SYS C:\WINNT\system32\drivers\ (in the guest; X: = QEMU VVFAT)
 ```
@@ -1694,7 +1694,7 @@ The recipe, `scripts\setup-qemu-win2k-xonly.ps1` and the two launchers it
 writes:
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso D:\isos\win2ksp4-retail.ISO -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-xonly.ps1 -Win2KIso <iso folder>\win2ksp4-retail.ISO -CreateDisk
 scripts\local\qemu-win2k-xonly-install.cmd        (the owner drives Setup; retail media asks for the key)
     on the desktop, before any controller exists:  dir %windir%\system32\drivers\usb*.sys
     shut down from the Start menu; quit at the monitor (port 55560) once "safe to turn off" is up
@@ -2408,7 +2408,7 @@ guest shut down from inside and the image cold - `qemu-img check` reported no
 errors first, and the snapshot lists with `VM_SIZE` 0 B, which is what a
 powered-off snapshot should read. Revert with `qemu-img snapshot -a
 winxp64-clean-install vm\winxp64.img`, guest off. Media
-`D:\isos\Win XP SP2 VL x64.iso`
+`<iso folder>\Win XP SP2 VL x64.iso`
 (628,168,704 bytes), the owner's own XP x64 SP2 media, which is also where
 `tools\winxp64-extracted\` came from. WHPX with `kernel-irqchip=off` probed OK
 on this host as a partition - and then wedged the guest, which is how the TCG
@@ -2459,7 +2459,7 @@ difference belongs in a parameter, never in a second copy of the body.
 
 | | value |
 |---|---|
-| Media | `D:\isos\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `D:\isos\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
+| Media | `<iso folder>\en_windows_vista_sp2_x86_dvd_342266.iso` (Vista SP2 x86, Business is image 1 of seven) and `<iso folder>\en_windows_7_professional_with_sp1_vl_build_x86_dvd_u_677896.iso` (Windows 7 SP1 x86 VL, Professional, one image) - **the same media tasks 22.1 and 22.2 read their measurements out of** on 2026-09-09, so the stack a guest installs is the stack that was measured. `usbport.sys` is byte-identical across Vista editions, so that does not rest on the edition alone |
 | Images | `vm\vista.img` and `vm\win7.img`, 32 GB qcow2 each (Windows 7 x86 wants 16 GB free, Vista 15 GB; qcow2 is sparse, so the file costs what the install writes) |
 | Monitor ports | **55565** (Vista) and **55566** (Windows 7) - *not* the next two free numbers; see the reservation above |
 | CPU | `-cpu qemu64`, **not** the 32-bit XP guest's `pentium3`. `pentium3` predates the NX bit and Windows 7 requires one: Setup refuses such a processor. A 32-bit guest wanting a 64-bit-era CPU *model* is not the same thing as a 64-bit guest, and this is the line most likely to be "corrected" back to the 32-bit recipe, so the shared body refuses such a `-Cpu` outright and the launcher gate asserts the generated text |
@@ -2764,7 +2764,7 @@ through the committed INF rather than a staged copy of the same sections.
 
 | | Vista Business SP2 x64 | Windows 7 Professional SP1 x64 |
 |---|---|---|
-| Media | `D:\isos\en_windows_vista_sp2_x64_dvd_342267.iso` | `D:\isos\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
+| Media | `<iso folder>\en_windows_vista_sp2_x64_dvd_342267.iso` | `<iso folder>\en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` |
 | Generator | `scripts\setup-qemu-vista-x64.ps1` | `scripts\setup-qemu-win7-x64.ps1` |
 | Image | `vm\vista-x64.img`, 32 GB | `vm\win7-x64.img`, 32 GB |
 | Monitor | 55563 | 55564 |
@@ -3546,14 +3546,14 @@ VM disk of development host A, outside the tree:
 | | value |
 |---|---|
 | Media | the owner's `Win10_22H2_English_x64v1.iso` and `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965 (the GVLK selects Pro; the guests are never activated) |
-| Pristine images | `E:\xhci98-vm\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `E:\xhci98-vm\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
-| Prepared starting points | `E:\xhci98-vm\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
-| Leg overlays | `E:\xhci98-vm\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
-| Launcher | `E:\xhci98-vm\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
+| Pristine images | `<vm root>\win8-10\w10x64\w10x64-pristine.qcow2` (SHA-256 `770f2795...6fdb636`) and `...\w10x86\w10x86-pristine.qcow2` (`10bfd472...135c92d`), read-only, 64 GiB, one NTFS partition on MBR; built 2026-10-22 by `<vm root>\win8-10\scripts\install2.sh` (`RECIPE.txt` there has the recipe and the full hashes): WinPE and the image copy under WHPX, specialize, OOBE and the first logon under TCG. Local administrator `xhci` / `xhci98` with autologon; `bcdedit /set testsigning on` (the desktop shows "Test Mode"); hibernation and Windows Update off; no network |
+| Prepared starting points | `<vm root>\p43-33\<g>\prep.qcow2` (read-only) over each pristine image: a scheduled task `xrun` (highest privileges, as `xhci`) that runs `<transfer drive>\auto\go.cmd`. A leg starts it with Win+R `schtasks /run /tn xrun`, elevated without a consent prompt; its logon trigger does not fire on these images |
+| Leg overlays | `<vm root>\p43-33\<g>-<set>\disk.qcow2` over `prep.qcow2`, one directory per leg, never reused across legs; a fresh `out.qcow2` (1 GiB, formatted `OUT` as O: by the leg's script, read after power-off with 7-Zip) |
+| Launcher | `<vm root>\p43-33\scripts\launch.ps1 -Guest w10x86\|w10x64 -Set <leg> [-Out] [-Devs ...]`; `q.ps1` (screendump, keys, typing, Win+R, the CD) and `stop.ps1` (ACPI power-off of only the pid the kit started) beside it |
 | QEMU | the usb4-emu build `vm\usb4\bin-2a893ea\qemu-system-x86_64.exe` (hash checked by the launcher), `-machine pc` (SeaBIOS), `-accel tcg,thread=multi`, `-cpu qemu64,+3dnowprefetch` (8.1 and 10 x64 need PrefetchW), `-smp 2`, 2048 MB, `-vga std`, `-display none`, `-nic none` |
 | Ports | QMP **48660** (`w10x86`) and **48661** (`w10x64`), from the block 48660-48689 |
 | USB | `qemu-xhci,p2=8,p3=4` at 00:03 (QEMU ports 1-4 USB 3 and 2.0, 5-8 USB 2.0 only): `usb-tablet` port 5, `usb-storage` on a USB 3 port (1) and a USB 2.0-only port (6), `usb-uas` port 2, `usb-audio` port 7, `usb-hub` port 8 with `usb-kbd` behind it; the emulator's Thunderbolt 3 NHI (`tb3-alpine-ridge`, 00:04), its xHCI (00:07) and tunnel bridge (00:05) |
-| Transfer | `E:\xhci98-vm\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
+| Transfer | `<vm root>\p43-33\xfer` as an IDE VVFAT drive (read at launch only): `auto\` the leg scripts, `pkg\` the package under test |
 | Secure Boot | none: SeaBIOS has none, which is why test-signing mode needs no firmware change. The OVMF guest with Secure Boot on that 43.32 asks for (for 43.36's refusal case) is **not built** (run sheet 43.32) |
 
 **The speed under TCG** (2026-10-22, host loaded): from power-on to the
@@ -3952,8 +3952,8 @@ Two host-specific traps in those launchers, both of which cost time:
 - The QEMU path is hard-coded. It happens to be identical on development host A
   and development host B, so it has not bitten yet, but it is the standing trap
   when moving hosts.
-- The ISO path differs per host: `D:\isos\win2ksp4.ISO` on development host A,
-  `D:\isos\win2ksp4-retail.ISO` on development host B.
+- The ISO path differs per host: `<iso folder>\win2ksp4.ISO` on development host A,
+  `<iso folder>\win2ksp4-retail.ISO` on development host B.
   `qemu-win2k-acpi-whpx-continue.cmd` probes a candidate list instead of
   hard-coding one; do the same in any new launcher.
 
@@ -5989,7 +5989,7 @@ binaries and the INF without a device present.
 #### Verified model: Windows 2000 SP4 `USB.INF` EHCI service install
 
 Transcribed from `I386\USB.IN_` on the Windows 2000 SP4 retail ISO
-(`D:\isos\win2ksp4-retail.ISO`, the same media the import gate's baselines come
+(`<iso folder>\win2ksp4-retail.ISO`, the same media the import gate's baselines come
 from), expanded with `expand.exe`. The file is Microsoft's
 `; USB.INF -- This file contains descriptions of all the HCD (USB controller)`,
 `DriverVer=06/19/2003,5.00.2195.6717`. Windows 2000 SP4 ships no separate
@@ -8498,11 +8498,11 @@ Express platform closer to the real boards' topology than `pc` (i440FX); the i44
 results already recorded stay as they are. Read-only q35 base images of every
 target, each made from that target's existing base image (not reinstalled),
 live outside the repository on development host A in
-`E:\xhci98-vm\q35-bases\<os>\disk.qcow2`, each with a `README.txt` that
+`<vm root>\q35-bases\<os>\disk.qcow2`, each with a `README.txt` that
 gives its exact command line, firmware (SeaBIOS), how it was made, its
 SHA-256 and what was checked. `STATE.md` there lists which are ready. None
 carries any of this project's drivers. They are booted only through an
-overlay, which `E:\xhci98-vm\q35-bases\launch-q35.ps1 -Os <os> -Dir <folder>
+overlay, which `<vm root>\q35-bases\launch-q35.ps1 -Os <os> -Dir <folder>
 -Qmp <port>` makes and starts; `-Usb4 asm4242|tb3ar|tb3tr|adl` adds the
 emulator's ASMedia ASM4242 (the emulator's asm4242 preset), Alpine Ridge, Titan Ridge
 or Intel USB4 host topology, and `-EncAtBoot` the enclosure with its NVMe at
@@ -8631,7 +8631,7 @@ Traps found while making it (development host A, 2026-10-25, QEMU 11.1.0):
   window's leg allows both.
 
 On QEMU's `q35` machine (owner, 2026-10-25), from the bases of
-`E:\xhci98-vm\q35-bases` (2026-10-26):
+`<vm root>\q35-bases` (2026-10-26):
 
 - **98 SE sees no CD on `q35`.** It reaches the board's AHCI through
   INT 13h alone, and a piix3-ide added beside it for a CD stopped its start

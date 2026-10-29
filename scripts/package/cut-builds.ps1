@@ -43,7 +43,7 @@ asks for its own -NoTargetEvidence. A run that builds refuses it: the x86
 build a cut takes needs the evidence (the helper's import gate).
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree E:\xhci98-wt\cut-x64
+powershell -ExecutionPolicy Bypass -File scripts\package\cut-builds.ps1 -X64Tree <worktree folder>\cut-x64
 #>
 
 [CmdletBinding()]

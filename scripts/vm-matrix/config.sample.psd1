@@ -31,7 +31,7 @@
     # The CABs live in \WIN98 on the CD.  This repo hardcodes no source; the
     # image is proprietary and where you get it from is your business. Every
     # ISO path in this file is an EXAMPLE to replace with your own.
-    Win98Cd = 'D:\isos\w98se.iso'
+    Win98Cd = '<iso folder>\w98se.iso'
 
     # $true (the default) boots every group with -snapshot, so the guest images
     # are never written to.  A matrix exists to be re-run, and a run that
@@ -300,7 +300,7 @@
             BootSeconds = 240
             Like     = '2a'
             PrepareOnly = $true
-            Cd       = 'D:\isos\winme.iso'
+            Cd       = '<iso folder>\winme.iso'
         }
     )
 }

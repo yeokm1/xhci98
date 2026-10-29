@@ -660,7 +660,7 @@ if ($Boot) {
         # config-wide Win98Cd is the fallback for the Windows 98 family.
         if ($tgt.ContainsKey('Cd') -and $tgt.Cd -ne '') { $candidates += (Resolve-RepoPath $tgt.Cd) }
         if ($cfg.ContainsKey('Win98Cd') -and $cfg.Win98Cd -ne '') { $candidates += (Resolve-RepoPath $cfg.Win98Cd) }
-        # The in-repo path only.  `D:\isos\w98se.iso` used to sit here as a
+        # The in-repo path only.  `<iso folder>\w98se.iso` used to sit here as a
         # second fallback, which is one host's layout committed as a default:
         # on that host it silently supplied a CD the config never named, and
         # everywhere else it was a path that could only miss.  Where the media
