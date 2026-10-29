@@ -6214,6 +6214,9 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
     }
     hc->SlotsInvalidated = 0;
     hc->SlotsUnproven = 0;
+    /* Task 45.23: no keep is owed to a fresh start. */
+    hc->ResumeKeepReady = 0;
+    hc->ResumeKeepPending = 0;
     hc->TerminalReleased = 0;
     hc->SavePublished = 0;
     /* 35-T.2: the queues that held requests went with their devices. */
@@ -6240,4 +6243,8 @@ VOID HcdEnumDrop(PHCD_CONTROLLER hc)
         HcdDevicePdoDormantAll(hc);
     }
     hcdDropAll(hc);
+    /* Task 45.23: every device dropped, so a keep still owed is settled
+     * and a D0 waiting for it goes on (hcd_power.c, hcdResumeKeepWait). */
+    hc->ResumeKeepReady = 0;
+    (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
 }
