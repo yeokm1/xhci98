@@ -365,6 +365,7 @@ Bugs in the free USB class drivers go to [usb-wdm-free's issues](https://github.
 
 - **The DOS report:** run `QUALREP.BAT` from real DOS in `TOOLS\XHCIQUAL\` and attach the `.LOG` it names (read-only). If a maintainer asks for the full run, `XHCIQUAL --no-page --log FULL.LOG` **resets the controller and its ports**: use a PS/2 keyboard, and do not write the log to a drive on that controller.
 - **The driver's report:** make the problem happen, then in the xHCI98 USB Tree use File > Save Report (or `XHCITR /report <file>`) and attach the `.TXT`. It needs the logging level at 2 or more (the default; View > Logging level...).
+- **The driver's snapshot:** right after the report, use File > Save Snapshot... (or `XHCITR /snapshot`; `XHCITR64` on 64-bit Windows) and attach the four files it writes (`.DEV`, `.TXT`, `.BIN` and `.PSC`, named from the date and time).
 - **An install problem:** `XHCIINST.LOG` from the root of the system drive.
 
 ## Known limitations/issues
@@ -489,26 +490,7 @@ None of these PDFs is tracked here; fetch your own into the git-ignored `docs/re
 
 ## Licensing and provenance
 
-This project's own source is licensed under the GNU General Public License, version 2 or (at your option) any later version ([LICENSE](LICENSE)), `GPL-2.0-or-later`, since 2026-10-26 (`3.3.0.0`); every release up to `3.2.0.0` was `GPL-2.0-only`. Code this project takes from the owner's `usb4-emu` keeps that file's notice and is offered here under `GPL-2.0-or-later` by its copyright holder; `usb4-emu` itself stays `GPL-2.0-only`.
-
-Apart from Stor98's earlier released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
-
-- `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls. `S98VSD.VXD` and `XHCIPFW.VXD` are compiled by Open Watcom 2.0 with no runtime linked, and `XHCIPFW.SYS` is linked by the Windows 2000 DDK as the 32-bit drivers are.
-- Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and keep their copyright lines and licence notices. The portions first adapted from Linux's `drivers/thunderbolt` were rewritten from the USB4 specifications for `3.3.0.0`. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
-- `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
-- `XHCISNAP.EXE`, in the releases up to `3.0.0.0`, embeds the MSVC 6.0 runtime.
-- `XHCICLN.EXE` and `XHCICL64.EXE`, in the releases from `2.4.0.0` to `3.2.0.0`, embed the MSVC 6.0 and the WDK 7.1 runtime.
-- `XHCIINST.EXE`, `XHCITR.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE`, `SETUP.EXE` and `XHCIMARK.EXE`, embed the MSVC 6.0 runtime; `XHCIIN64.EXE`, `XHCITR64.EXE`, and from `3.1.0.0` `XHCIWZ64.EXE` and `XHCIMK64.EXE`, the WDK 7.1 one. `XHCIDI.EXE`, the 98 SE and ME device install helper from `3.1.0.0`, embeds the Open Watcom 16-bit Windows C runtime and imports the running system's `SETUPX.DLL` through the Windows 98 SE DDK's `setupx.lib`, an import library. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
-
-Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
-
-The release download's `release-x86\` and `release-x64\` carry Stor98, built from this repository's `src/stor98/` with the drivers, under its own licence; its `LICENSE` and `NOTICE` ship beside it as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`. Since 2026-10-19 Stor98 itself - its source and its earlier released builds - is in this repository as [src/stor98/](src/stor98/), under its own licence ([src/stor98/LICENSE](src/stor98/LICENSE), BSD-3-Clause) with its [NOTICE](src/stor98/NOTICE) recording where its code came from.
-
-This repository carries no Microsoft file. `usbd.sys` and `usbui.dll` are the OS's own, copied by Windows Setup from its own install source. The release download may carry one set: NUSB 3.3's seven Windows 98 SE storage files (Microsoft's, apart from `USBU2A.SYS`), unmodified, from the separate driver-pack repository `usb-wdm-nonfree`, in a folder of their own with that pack's `NOTICE.md`, never committed here. They are not this project's work and no licence to redistribute them has been established; a download built without them says so in its `readme.txt`. On Windows 98 SE, `xhciuas.inf` names `USBNTMAP.SYS` as a filter on the UAS device.
-
-In the `-nonfree` download, `USBDRV\NONFREE\` also holds Microsoft files, the KMDF co-installers ASIX and Davicom ship with their drivers (`WdfCoInstaller01007.dll` and `WdfCoInstaller01009.dll`, in several folders), unmodified. No licence to redistribute them has been established either.
-
-The full inventory, provenance methods and redistribution boundaries are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md), which states facts, not legal conclusions.
+xHCI98 is licensed under `GPL-2.0-or-later` ([LICENSE](LICENSE)); Stor98 keeps its own BSD-3-Clause licence ([src/stor98/LICENSE](src/stor98/LICENSE)). The repository holds no Microsoft file, but some downloads carry third-party drivers unmodified, without an established licence to redistribute them. The details are in [docs/contributing/legal-provenance.md](docs/contributing/legal-provenance.md).
 
 ## Contributions
 

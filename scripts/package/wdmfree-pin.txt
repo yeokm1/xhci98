@@ -65,10 +65,15 @@
 # too, x86 and x64; uac2 on XP, XP x64, Vista x86 and 7 (owner, 2026-10-28;
 # no Vista x64 leg). Every x64 image of 0.1.4 is signed with the project's
 # new test certificate. The other packages and their systems as before.
+#
+# After the 3.3.0.0 cut v0.1.4 moved from 222730c to c28fce8, the changelog
+# and the real-PC records only: free\, STAGE.TXT and SHA256.TXT are the
+# same bytes, so the packages above are unchanged (task 45.2; owner,
+# 2026-10-29).
 
 Certificate: E6A2749B78E9E4074260CF79972A57EEB6E76C0A
 Tag: v0.1.4
-Commit: 222730cbbc8992880409c1d32c5038a043af6482
+Commit: c28fce810d44cf2824388d2cd3fcf6bdd2c3fe93
 Package: audio/uac2 | W98SE WME WXP WXP64 WVISTA W7 W7X64
 Package: audio/usbmidi | W98SE W2K
 Package: video/uvc98 | W98SE W2K

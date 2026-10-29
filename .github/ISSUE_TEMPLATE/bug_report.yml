@@ -162,6 +162,7 @@ body:
                                        set 2 and restart Windows)
             (make the problem happen)
             File > Save Report...     (writes one .TXT file)
+            File > Save Snapshot...   (writes four files)
 
         Attach the .TXT file here. It holds the device tree, both drivers'
         logs and the driver's snapshot (the controller's Device Manager
@@ -171,9 +172,9 @@ body:
         same. If you can, save one report while it works and one after the
         problem happens, under two names.
 
-        Attach the snapshot's raw files (File > Save Snapshot..., or
-        XHCITR /snapshot: a .DEV, .TXT, .BIN and .PSC) only if a maintainer
-        asks for them. On 3.0.0.0 or earlier, use that release's
+        Attach the snapshot's four files too (File > Save Snapshot..., or
+        XHCITR /snapshot: a .DEV, .TXT, .BIN and .PSC, named from the date
+        and time). On 3.0.0.0 or earlier, use that release's
         TOOLS\XHCISNAP and its SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT, as
         its release notes say.
 

@@ -163,7 +163,7 @@ problem report needs. At level 4 the dump can hold memory addresses, so
 the report leaves it out and says so.
 
 File > Save Snapshot... and XHCITR /snapshot write the snapshot's own
-files, for when a maintainer asks for them:
+files, which a problem report attaches beside the report:
 
   NAME.DEV   the device report
   NAME.TXT   the dump, as text
