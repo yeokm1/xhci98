@@ -6016,6 +6016,17 @@ static void test_kid_loss_and_eject(void)
     CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "its kid down");
     CHECK_EQ(fabAdp(&g_fab, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "the child's end disabled");
     CHECK_EQ(fabAdp(&g_fab, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "the parent's end disabled");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int open = 0;
+
+        for (h = 8; h < 24; h++) {
+            open += entryOpen(&g_fab, dev, a, h) + entryOpen(&g_fab, child, 1, h);
+        }
+        open += entryOpen(&g_fab, dev, 7, 8) + entryOpen(&g_fab, child, 5, 8);
+        CHECK_EQ(open, 0, "every entry of the chained tunnel invalid and drained");
+    }
     kidOff = findPe(&g_fab, mark, dev, 7, 0);
     hostOff = findPe(&g_fab, mark, dev, 5, 0);
     CHECK(kidOff >= 0 && hostOff > kidOff, "the kid's tunnel first, then the parent's");
@@ -6025,6 +6036,10 @@ static void test_kid_loss_and_eject(void)
     CHECK_EQ(TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index), TBT_OK, "the kid ejected");
     CHECK(!fabChainPcieUp(&g_fab, dev), "its tunnel down");
     CHECK(kidOf(&g_cm, 1) != NULL && kidOf(&g_cm, 1)->Ejected, "and marked ejected");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK(kidOf(&g_cm, 1) != NULL &&
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "every entry of the kid's tunnel invalid and drained at both ends");
     poll(&g_cm, &g_fab, 2);
     CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "it stays down");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
@@ -6038,6 +6053,21 @@ static void test_kid_loss_and_eject(void)
     mark = g_fab.WrCount;
     CHECK_EQ(TbtU4Eject(&g_cm, 1), TBT_OK, "the parent ejected");
     CHECK(!fabChainPcieUp(&g_fab, dev) && !fabPcieUp(&g_fab, 1), "both tunnels down");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK(kidOf(&g_cm, 1) == NULL || kidOf(&g_cm, 1)->State == TBT_U4_EMPTY ||
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "the kid's entries invalid and drained");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int open = 0;
+
+        for (h = 8; h < 24; h++) {
+            open += entryOpen(&g_fab, dev, a, h) + entryOpen(&g_fab, child, 1, h);
+        }
+        open += entryOpen(&g_fab, dev, 7, 8) + entryOpen(&g_fab, child, 5, 8);
+        CHECK_EQ(open, 0, "no entry of the chained tunnel left open after the parent's eject");
+    }
     kidOff = findPe(&g_fab, mark, dev, 7, 0);
     hostOff = findPe(&g_fab, mark, 0, (unsigned long)hp, 0);
     CHECK(kidOff >= 0 && hostOff > kidOff, "the kid's tunnel closed before the parent's");
