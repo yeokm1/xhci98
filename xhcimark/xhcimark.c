@@ -1803,6 +1803,11 @@ static void mk_judge(const char *id, const char *text)
         if ((w != MK_W_OK && w != MK_W_PRESENT) || unit != node) {
             return;
         }
+        if (mk_br_follows(owner, unit) && mk_br_pending(dn)) {
+            /* A bridge unit's mark waits for its install, as its write
+             * does (record 33 section 4.3). */
+            return;
+        }
         if (mk_write_due(id)) {
             m = mk_lock(MK_WRITE_MUTEX, 5000);
             if (m != NULL) {
