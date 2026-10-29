@@ -1329,10 +1329,14 @@ static void test_busy(void)
              "busy note: type and answer held to a byte each");
 }
 
-/* Task 45.23: the keep decision of design record 20 section 4.3.2. */
+/* Task 45.23: the keep decision of design record 20 sections 4.3.2 and
+ * 4.3.3. */
 static void test_resume_keep(void)
 {
     ULONG base;
+    ULONG flags;
+    ULONG mark;
+    ULONG gen;
 
     base = XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED;
     CHECK_EQ(XhciEnumResumeKeep(1, base), XHCI_RKEEP_KEEP, "a HID kept");
@@ -1359,11 +1363,58 @@ static void test_resume_keep(void)
              XHCI_RKEEP_WHY_NO_SERIAL, "UAS storage with no serial dropped");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
                                        XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
-                                       XHCI_RKEEP_F_BUSY),
+                                       XHCI_RKEEP_F_QUIET | XHCI_RKEEP_F_BUSY),
              XHCI_RKEEP_WHY_BUSY, "UAS storage with a URB outstanding dropped");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
                                        XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL),
-             XHCI_RKEEP_KEEP, "an idle UAS drive with a serial kept");
+             XHCI_RKEEP_WHY_NOT_QUIET,
+             "UAS storage with no quiet declaration dropped (4.3.3)");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_WHY_NOT_QUIET,
+             "busy and undeclared: the declaration is the first reason");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_QUIET),
+             XHCI_RKEEP_KEEP, "a declared quiet UAS drive with a serial kept");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_QUIET),
+             XHCI_RKEEP_KEEP, "the mark changes nothing for a HID");
+
+    /* The mark's life (section 4.3.3, B3 and B4), as hcd_urb.c, hcd_io.c,
+     * hcd_power.c and hcd_enum.c drive it: declared at a sleep, the resume
+     * restores without re-initializing (its end counts), the drive idles,
+     * the next sleep withdraws and its declaration fails, and the
+     * re-initializing resume that follows must not keep the drive. */
+    gen = 7;
+    mark = XhciEnumQuietMark(gen);
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 1, "declared: valid");
+    gen++;
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0,
+             "a resume's end voids it, re-initializing or not");
+    mark = 0;
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0, "withdrawn");
+    flags = base | XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+            XHCI_RKEEP_F_SERIAL;
+    if (XhciEnumQuietValid(mark, gen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    CHECK_EQ(XhciEnumResumeKeep(1, flags), XHCI_RKEEP_WHY_NOT_QUIET,
+             "a failed declaration after a restored resume: not kept");
+    mark = XhciEnumQuietMark(gen);
+    gen++;
+    flags = base | XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+            XHCI_RKEEP_F_SERIAL;
+    if (XhciEnumQuietValid(mark, gen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    CHECK_EQ(XhciEnumResumeKeep(1, flags), XHCI_RKEEP_WHY_NOT_QUIET,
+             "an earlier sleep's mark: not kept");
+    gen = 0xFFFFFFFFUL;
+    mark = XhciEnumQuietMark(gen);
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0,
+             "the wrap's mark is none: not kept, never wrongly");
+    CHECK_EQ(XhciEnumQuietValid(0, 0xFFFFFFFFUL), 0, "0 is never a mark");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_HUB |
                                        XHCI_RKEEP_F_FAULTED),
              XHCI_RKEEP_WHY_FAULTED, "the fault is the first reason");

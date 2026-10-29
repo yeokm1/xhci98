@@ -85,6 +85,13 @@ NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code)
     return uasInternalIoctl(fdo, code, NULL);
 }
 
+/* One internal device control to the bus with its argument (task 45.23's
+ * IOCTL_XHCI98_RESUME_STATE), waited for. */
+NTSTATUS UasBusIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
+{
+    return uasInternalIoctl(fdo, code, arg1);
+}
+
 /* One standard descriptor from the device, into nonpaged pool. */
 static NTSTATUS uasGetDescriptor(PUAS_FDO fdo, UCHAR type, UCHAR index,
                                  USHORT language, PVOID buffer,
@@ -791,8 +798,58 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
     return IoCallDriver(fdo->Lower, irp);
 }
 
+/* The S0's completion below (<= DISPATCH_LEVEL): the wake check asked
+ * for (task 45.23), the IRP left to complete on. */
+static NTSTATUS uasWakeDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    UNREFERENCED_PARAMETER(device);
+    if (irp->PendingReturned) {
+        IoMarkIrpPending(irp);
+    }
+    PoStartNextPowerIrp(irp);
+    UasEngineWake((PUAS_FDO)context);
+    /* The reference UasFdoPower took for this completion; the wake
+     * check's own is separate. */
+    UasEngineRelease((PUAS_FDO)context);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Power IRPs go down unchanged, except the system set-power (task 45.23,
+ * design record 20 section 4.3.3): to a sleeping state, the sleep phase
+ * (UasEngineSleep: the hold, the drain, the flushes, the declaration)
+ * runs first; to S0, the wake check is asked for once the bus below has
+ * completed it (UasEngineWake), which alone releases the hold.
+ */
 NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
+    NTSTATUS status;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == SystemPowerState) {
+        if (stack->Parameters.Power.State.SystemState > PowerSystemWorking) {
+            if (UasEngineSleep(fdo)) {
+                /* Its rundown reference covers this dispatch to its
+                 * last access. */
+                PoStartNextPowerIrp(irp);
+                IoSkipCurrentIrpStackLocation(irp);
+                status = PoCallDriver(fdo->Lower, irp);
+                UasEngineRelease(fdo);
+                return status;
+            }
+        } else if (stack->Parameters.Power.State.SystemState ==
+                   PowerSystemWorking) {
+            if (UasEngineHold(fdo)) {
+                IoCopyCurrentIrpStackLocationToNext(irp);
+                UAS_SET_COMPLETION_ALWAYS(irp, uasWakeDone, fdo);
+                return PoCallDriver(fdo->Lower, irp);
+            }
+            /* A stopped engine has no hold to check: passed down as any
+             * other. */
+        }
+    }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     return PoCallDriver(fdo->Lower, irp);

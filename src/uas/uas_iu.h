@@ -260,4 +260,84 @@ ULONG UasDeviceLimit(ULONG busBytes, ULONG busSource, ULONG found,
                      ULONG type, ULONG length, ULONG value, PULONG source,
                      PULONG why);
 
+/*
+ * Task 45.23 (design record 20 section 4.3.3): the wake check and the
+ * medium check of a drive kept across a resume's re-initialization.
+ *
+ * UasSenseClass folds the sense data of a CHECK CONDITION, fixed (70h,
+ * 71h) or descriptor (72h, 73h) format (SPC), into what the checks act on:
+ * a UNIT ATTENTION, one saying the medium may have changed (ASC 28h), NOT
+ * READY with no medium (ASC 3Ah) or becoming ready / needing a start
+ * (ASC 04h), ILLEGAL REQUEST, or anything else.
+ */
+#define UAS_SENSE_OTHER             0UL
+#define UAS_SENSE_UA                1UL
+#define UAS_SENSE_UA_MEDIUM         2UL
+#define UAS_SENSE_NO_MEDIUM         3UL
+#define UAS_SENSE_BECOMING          4UL
+#define UAS_SENSE_ILLEGAL           5UL
+
+ULONG UasSenseClass(const UCHAR *sense, ULONG length);
+
+/* Vital product data page 0x00 as `length` bytes of it came: 1 when it is
+ * page 0x00 and its whole advertised list came (UasVpdListComplete); 1
+ * when such a complete list names `page` (UasVpdListHas, 0 for an
+ * incomplete one). */
+ULONG UasVpdListComplete(const UCHAR *page0, ULONG length);
+ULONG UasVpdListHas(const UCHAR *page0, ULONG length, UCHAR page);
+
+/*
+ * One LUN's identity as the medium check records and compares it: the
+ * removable-medium bit of INQUIRY, the unit serial number (page 0x80, its
+ * bytes after the header) and the device identification page (0x83, its
+ * designators), each read whole (a page longer than these bounds, or one
+ * that did not come in full, is a failed read) and empty when page 0x00
+ * does not list it, and READ
+ * CAPACITY's answer - the last LBA (eight bytes, big-endian; READ CAPACITY
+ * (16)'s when (10) reports FFFFFFFFh) and the block length - or that the
+ * LUN reported no medium. Read is 1 when every read the record needs
+ * succeeded; MediumChanged when one met a UNIT ATTENTION with ASC 28h.
+ */
+#define UAS_ID_SERIAL_MAX           251UL
+#define UAS_ID_DEVID_MAX            251UL
+#define UAS_ID_CAP_FAILED           0UL
+#define UAS_ID_CAP_VALID            1UL
+#define UAS_ID_CAP_NO_MEDIUM        2UL
+
+typedef struct _UAS_LUN_ID {
+    ULONG Read;
+    ULONG Removable;
+    ULONG MediumChanged;
+    ULONG SerialLength;
+    UCHAR Serial[UAS_ID_SERIAL_MAX];
+    ULONG DevIdLength;
+    UCHAR DevId[UAS_ID_DEVID_MAX];
+    ULONG CapState;
+    UCHAR Cap[12];
+} UAS_LUN_ID, *PUAS_LUN_ID;
+
+/* 1 when `now` is the medium `was` recorded: both read, no medium change
+ * reported, the same removable bit, and either removable with no medium
+ * both times, or not removable with a serial or a device identification
+ * (non-empty), each equal, and the same capacity. Anything else is 0. */
+ULONG UasIdMatch(const UAS_LUN_ID *was, const UAS_LUN_ID *now);
+
+/*
+ * The wake check's next step. busKnown: the bus answered the sleep's
+ * withdrawal (not STATUS_NOT_SUPPORTED); withdrawOk: that withdrawal
+ * succeeded; declareTried: a quiet declaration was sent at the sleep
+ * (whatever its outcome); queryOk, state and epoch: the bus's answer to the
+ * query now (XHCI98_RESUME_*); verified: the epoch last verified;
+ * pastDeadline: the check's thirty seconds have run out.
+ */
+#define UAS_WAKE_RELEASE            0UL /* nothing to check               */
+#define UAS_WAKE_SAME               1UL /* not re-initialized: release    */
+#define UAS_WAKE_CHECK              2UL /* kept across one: the medium    */
+#define UAS_WAKE_FAIL               3UL /* Dead, the port cycled          */
+#define UAS_WAKE_WAIT               4UL /* the bus's pass still to end    */
+
+ULONG UasWakeDecide(ULONG busKnown, ULONG withdrawOk, ULONG declareTried,
+                    ULONG queryOk, ULONG state, ULONG epoch, ULONG verified,
+                    ULONG pastDeadline);
+
 #endif /* UAS_IU_H */

@@ -295,8 +295,9 @@ ULONG XhciEnumSettleReached(ULONG done, ULONG target);
 ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 
 /*
- * Task 45.23 (design record 20 sections 4.3.1 and 4.3.2): whether a device
- * is kept across a resume's re-initialization (K1 to K9 as built), from
+ * Task 45.23 (design record 20 sections 4.3.1 to 4.3.3): whether a device
+ * is kept across a resume's re-initialization (K1 to K9 as built, and a
+ * UAS drive only on its driver's quiet declaration), from
  * what the caller read of it, as XHCI_RKEEP_F_* flags; `on` is the switch
  * (XhciResumeKeep). Returns XHCI_RKEEP_KEEP, or the first reason it is
  * not kept, XHCI_RKEEP_WHY_*. Pure; any IRQL.
@@ -315,6 +316,9 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 #define XHCI_RKEEP_F_BUSY        0x0100UL /* a URB outstanding on its PDOs    */
 #define XHCI_RKEEP_F_FAULTED     0x0200UL /* gone, EP0 stuck, a cycle, a
                                            * send-back or a slot fault owed  */
+#define XHCI_RKEEP_F_QUIET       0x0400UL /* its function declared itself
+                                           * quiet for this sleep and has
+                                           * sent nothing since (4.3.3)      */
 
 #define XHCI_RKEEP_KEEP              0UL
 #define XHCI_RKEEP_WHY_OFF           1UL
@@ -328,8 +332,19 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
                                            * stacks' drain is unread          */
 #define XHCI_RKEEP_WHY_NO_SERIAL     9UL
 #define XHCI_RKEEP_WHY_BUSY         10UL
+#define XHCI_RKEEP_WHY_NOT_QUIET    11UL  /* UAS storage with no quiet
+                                           * declaration (4.3.3)              */
 
 ULONG XhciEnumResumeKeep(ULONG on, ULONG flags);
+
+/* Task 45.23 (design record 20 section 4.3.3): a function's quiet
+ * declaration, made while the controller's mark generation is `markGen`
+ * (one more at every resume's end): XhciEnumQuietMark is the device
+ * record's mark for it, and XhciEnumQuietValid 1 while `mark` still
+ * counts, so a declaration lasts to the end of the resume that follows it
+ * and no further. 0 is no mark (a withdrawal, a transfer since). Pure. */
+ULONG XhciEnumQuietMark(ULONG markGen);
+ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen);
 
 /* 1 when a relations answer for the parent `answering` (0 the root hub,
  * else the hub PDO's serial) carries a listed PDO presented under

@@ -693,7 +693,9 @@ outside it changes:
   were there at the power-down, was not read), is dropped as K4 says, and
   XP reports "Delayed Write Failed" as before. Whether
   `xhciuas.sys` should wait out its commands before it passes a
-  power-down on, so that a busy drive is idle by the sleep, is left open.
+  power-down on, so that a busy drive is idle by the sleep, was left
+  open here; section 4.3.3 decides it, and from it a UAS drive, idle or
+  not, is kept only on its driver's quiet declaration.
 - Not built, and dropped as before: devices behind a hub and hubs (K3's
   subtree restore), isochronous devices, a selectively suspended device's
   restore and re-suspension (K6), the quarantine of a busy storage
@@ -701,6 +703,196 @@ outside it changes:
   the log notes carry them).
 
 The legs read are `runs/run-45.md`, "45.23".
+
+#### 4.3.3 A UAS drive busy at the re-initialization, kept too (task 45.23; owner, 2026-10-30)
+
+The owner decided on 2026-10-30 that a UAS drive under load when a resume
+re-initializes the controller - a copy loop, a virtual machine's disk
+under constant writes - is kept as well, in `3.4.0.0`, instead of dropped
+(section 4.3.2's `XHCI_RKEEP_WHY_BUSY`). A Bulk-Only drive stays dropped
+(section 4.3.2: the drain contract of the `usbstor` drivers is unread).
+
+**B1. What the re-initialization leaves of a request in flight.** HCRST
+took the slot, so every TRB the controller held on the drive's rings, the
+stream contexts and the endpoint state are gone; the drive itself was
+reset by the restore's port reset (and may have lost power across a
+hibernation), an I_T nexus loss in T10's terms, so its UAS tags, its task
+set and any data phase's position are gone too. Nothing of a command in
+flight can be continued; it could only be ended, or issued again whole.
+
+**B2. Why no command is issued again.** Issuing again is not safe in
+general, even for a command that is idempotent alone. A command's end is
+known to the host only when its final information unit and every one of
+its transfers have come back (`uasCheckDone`), and the drive may have
+finished it long before: with a WRITE A in flight and an ORDERED WRITE B
+to the same blocks after it, B can complete to the class driver while A's
+completion is still owed, and A issued again would overwrite B. A command
+that is not idempotent - an ATA pass-through, MODE SELECT, a START STOP
+UNIT with LoEj - cannot be issued again at all, and ending a command with
+`SRB_STATUS_BUS_RESET` hands the decision to class drivers whose retry
+is bounded (Windows 2000 and XP's disk class driver) or unread (the
+Windows 98 storage mapping layer above `xhciuas.sys`, design record 13
+section 10). So the design keeps the drive only when `xhciuas.sys` has
+proved to the bus, before the controller slept, that nothing of its own
+was in flight and nothing would be sent until it had checked the drive
+after the wake; every other UAS drive is dropped as before.
+
+**B3. The sleep hold (`xhciuas.sys`).** The FDO's system set-power to a
+sleeping state (PASSIVE_LEVEL; every object of the driver is
+DO_POWER_PAGABLE; not the query) takes the FDO's power lock (a
+synchronization event, so it also waits out a wake check still running,
+B6), counts a new power episode, withdraws any declaration it made
+before (B4) and holds the queue: `uasPump` starts no
+request the class driver sends, only the driver's own internal commands,
+and the hold stays across the sleep. The power manager powers a child
+down before its parent, so the disk above has had its own power-down by
+then and in the ordinary case little or nothing is in flight. Within one
+deadline of thirty seconds from the hold:
+- the hold waits for every command in flight to end;
+- each present LUN's identity is recorded (B7) - a LUN whose record the
+  wake check could not pass makes no declaration, being cycled at the
+  wake otherwise - and it is sent SYNCHRONIZE CACHE (10), one at a time,
+  nothing else in flight, so it follows every write the drive
+  acknowledged; a GOOD answer means the drive's volatile cache is on its
+  medium before power can go; a flush refused (CHECK CONDITION) is
+  counted and changes nothing else (such a drive has no durability
+  guarantee beyond what it had before this design, kept or dropped);
+- then, under the FDO lock, the engine is proved quiescent: every slot
+  free, the shared status read idle, no recovery queued or running, no
+  submission between its decision and its IoCallDriver;
+- and the bus is told so (B4, *declare quiet*).
+An internal command of this phase carries the phase's deadline: when it
+passes, the command is aborted through the ordinary recovery and left to
+finish in its own time, its IRP, SRB and buffer freed by its own
+completion (an abandoned internal command), and the phase ends without
+the declaration. Whatever ends the phase - the deadline, a command in
+flight that did not end, a flush that failed in transport, a bus that
+refused the request - the IRP is then passed down, the lock released.
+No declaration, no keep (B5).
+
+**B4. The resume request (bus).** A new request of the private interface
+`xhci98_xfer.h`, `IOCTL_XHCI98_RESUME_STATE`, sent to the device's PDO,
+answered at <= DISPATCH_LEVEL. *Declare quiet* sets the device record's
+quiet mark; *withdraw* clears it. The bus clears it too when it takes or
+parks any transfer of the device on a pipe other than EP0
+(`HcdIoSubmit`, under the controller lock), and at the end of every
+resume, whatever its outcome: in `hcdResume` itself when the resume
+failed or did not re-initialize, and at the end of the thread's
+invalidation pass when it did. So a mark counts for one sleep only, is
+void as soon as the function sends anything again, and never survives
+into a later sleep. *Query* answers the controller's state - running
+with its last resume finished (no re-initialization, or the thread's
+invalidation pass ended), resume pending (from the suspend until then),
+or failed (a resume that failed, the controller contained or in its
+recovery) - and the device's resume epoch (one more each time a
+re-initialization keeps the device, after its restore). *Report* carries
+the wake check's outcome to the bus's log only. Every op but the query is
+logged (`uas.resume`). A bus without the
+request (any other bus, or `xhci98.sys` before `3.4.0.0`) completes it
+STATUS_NOT_SUPPORTED; such a bus never keeps a device.
+
+**B5. The bus's decision.** `XhciEnumResumeKeep` gains an input,
+`XHCI_RKEEP_F_QUIET` (the device's quiet mark), and a refusal,
+`XHCI_RKEEP_WHY_NOT_QUIET`: a UAS drive is kept only with the mark, and
+still not with URBs pending (`XHCI_RKEEP_WHY_BUSY`, which the mark makes
+a second test of the same fact). So a drive whose driver did not prove
+itself quiet - an older `xhciuas.sys`, a drain that ran out of time, a
+command prepared but not yet handed to the bus, anything sent after the
+declaration - is dropped as before, and the drive under a copy loop,
+whose requests wait in the FDO's queue, is kept.
+
+**B6. The wake check (`xhciuas.sys`).** The system set-power to S0, once
+the bus below has completed it, marks the hold as waiting for its check
+and queues the check (its own work item, not the recovery worker, so
+that its internal commands' timeouts and faults are recovered as any
+are; a reference held in the engine's rundown, so `UasEngineStop` waits
+for it; queued once, a second S0 meanwhile finding it queued). The check
+takes the power lock, and acts only when the hold is still waiting for
+its check, for the episode it reads then; a sleep that came meanwhile
+has taken the lock first and made a newer episode, whose own S0 queues
+the check again. Then:
+- the bus answered NOT_SUPPORTED at the sleep: no keep is possible, and
+  the hold is released;
+- the sleep withdrew any earlier declaration and made none: the bus
+  cannot have kept the drive across a re-initialization (B5), and the
+  hold is released; when the withdrawal itself failed, the check goes
+  on as if a declaration had been made;
+- otherwise the bus is queried, every 50 ms while its resume is
+  pending, within a deadline of thirty seconds from the check's start
+  (longer than the bus's own fifteen for its keep pass, section 4.3.2);
+  running, epoch as last verified: the controller was not
+  re-initialized, the drive kept its state, the hold is released;
+  running, epoch changed: the drive was kept across a re-initialization,
+  and its medium is checked (B7) before the hold is released; failed,
+  still pending at the deadline, or the query failing: the check fails.
+A failed check marks the FDO Dead, completes every held and queued
+request `SRB_STATUS_NO_DEVICE` and asks the bus to cycle the port
+(IOCTL_INTERNAL_USB_CYCLE_PORT), so the drive is enumerated afresh as a
+new device. A drive the bus dropped is removed by PnP: the held requests
+complete `SRB_STATUS_NO_DEVICE` with the engine's stop, as today.
+
+**B7. The medium check (`xhciuas.sys`).** The USB identity the bus checks
+(section 4.3.2) is the bridge's; behind it may be another disk, or another
+medium in the same reader. At each sleep hold, once nothing is in flight
+(B3), and after each check that passes, each present LUN's identity is
+recorded: the removable-medium bit
+of INQUIRY; the unit serial number (vital product data page 0x80) and the
+device identification page (0x83), each when page 0x00 lists it; and READ
+CAPACITY (10)'s answer, with READ CAPACITY (16)'s when (10) reports the
+largest LBA, or that the LUN reported no medium (sense key NOT READY,
+ASC 3Ah). The internal commands carry a sense buffer and the check's
+deadline (B6's thirty seconds, abandoned as in B3 when it passes). At the
+check each is read again: a UNIT ATTENTION is read past (up to four
+times), except one with ASC 28h (medium may have changed), which fails
+the check; NOT READY with ASC 04h (becoming ready, or a start needed) is
+answered with START STOP UNIT (start, no LoEj), which writes nothing,
+then retried every 500 ms within the deadline. A LUN passes when its
+removable bit is as recorded and either it is removable with no medium
+both times, or it is not removable, has page 0x80 or page 0x83
+(non-empty), each equal to the recorded one, and the same capacity. A
+removable LUN with a medium, a LUN with neither page, any differing value
+and any read that fails all fail the check (B6). Every LUN passing: the
+epoch is recorded as verified and the hold released. No request of the
+class driver reaches a drive kept across a re-initialization until it has
+passed the check. The bound of what is read: a bridge whose pages 0x80
+and 0x83 describe itself rather than the disk behind it does not tell
+apart a disk swapped inside the enclosure for one of the same capacity.
+
+**B8. RESET_PORT (bus).** `hcdCfgResetPort` gains the restore's final
+test before it resumes the pipes: the port still connected and enabled
+with no connection or enable change; otherwise the port is cycled, so a
+device that left or came during the reset is never handed its
+predecessor's pipes. Independent of the keep, and cheap.
+
+**B9. Where.** The bus: the quiet mark, the controller state and the
+epoch (`hcd_io.c`, `hcd_power.c`, `hcd_enum.c`), the request
+(`hcd_urb.c`, `xhci98_xfer.h`), the decision's new input
+(`xhci_enum.c`), B8 (`hcd_cfg.c`). `xhciuas.sys`: the power lock and
+episode, the hold, the flush, the declaration, the wake check, the
+medium check and the abandoned internal command (`uas_xport.c`,
+`uas_fdo.c`); the wake decision and the identity comparison pure
+(`uas_iu.c`). Host vectors: `test_enum` for the decision, `test_uas` for
+the wake decision (every branch of B6) and the identity comparison
+(every case of B7, capacity above (10)'s range, attention 28h), and the
+mark's life (declared, restored without re-initialization, idle, a
+sleep whose declaration fails, a re-initializing resume: not kept).
+
+**B10. Legs.** q35 XP hibernation with the copy loop running and a file
+held open, on a SuperSpeed port (streams) and on a High-Speed port
+(streamless): kept, no "Delayed Write Failed", every pass compared byte
+for byte after the resume, the held file still growing, the hold, flush,
+declaration and check in the log; the idle drive again; the drive's disk
+image swapped while the guest is hibernated for one with the same USB
+serial and another unit serial (cycled; the second image not written by
+a held write); `XhciResumeKeep` 0 (dropped as before); a drive with the
+previous `xhciuas.sys` (no declaration: dropped as before). A sleep and
+wake in quick succession (a hibernation entered again at once after the
+resume) for the episode rule. Not forced in QEMU, so owed with the real
+VL805 (45-E.12) or left to the host vectors and the code reading: a drain
+or a flush that runs out of time, an abandoned internal command, a check
+whose command times out, a keep pass slower than fifteen seconds, a drive
+with neither identification page, and Windows 2000 SP4 and 98 SE
+hibernation where the harness cannot enter it.
 
 ### 4.4 Q4, `XhciIntelShutdownToEhci` (`XHCI_SPURIOUS_REBOOT`)
 

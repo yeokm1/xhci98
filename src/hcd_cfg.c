@@ -4865,7 +4865,11 @@ static VOID hcdCfgReplayResume(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     PHCD_PIPE add[32];
+    PHCD_PORT port;
     PUCHAR s;
+    ULONG portsc;
+    ULONG status;
+    ULONG change;
     ULONG bytes;
     ULONG mask;
     ULONG dci;
@@ -4926,6 +4930,33 @@ static LONG hcdCfgResetPort(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
 
     if (!hcdCfgReplayConfig(hc, dev, add, mask)) {
+        goto cleanup;
+    }
+    /* Task 45.23 (design record 20 section 4.3.3, B8): still the device
+     * reset, connected and enabled with no connection or enable change, as
+     * a resume's restore ends (hcd_enum.c, hcdRkeepRestore); a change is
+     * the port's inspection's, after the cycle below. A hub port's from
+     * its hub (GET_STATUS: connection and enable, and no connection or
+     * enable change - wPortChange's bit 1 is reserved, 0, on a SuperSpeed
+     * hub). */
+    port = &hc->Ports[dev->Location - 1];
+    if (port->Hub == NULL) {
+        portsc = XhciReadPortsc(&hc->Hc, port->PortId);
+        if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+            (portsc & XHCI_PORTSC_PED) == 0 ||
+            (portsc & (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC)) != 0) {
+            XHCI_DBG_VALUE("hcd: reset port, port changed meanwhile, PORTSC",
+                           portsc);
+            goto cleanup;
+        }
+    } else if (!HcdHubPortStatus(hc, port->Hub, port->Number, &status,
+                                 &change) ||
+               (status & (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE)) !=
+                   (XHCI_HUB_PORT_CONNECTION | XHCI_HUB_PORT_ENABLE) ||
+               (change & (XHCI_HUB_C_PORT_CONNECTION |
+                          XHCI_HUB_C_PORT_ENABLE)) != 0) {
+        XHCI_DBG_VALUE("hcd: reset port, hub port changed meanwhile",
+                       (status << 16) | (change & 0xFFFFUL));
         goto cleanup;
     }
     ok = 1;

@@ -946,7 +946,11 @@ driver's resume re-initialization, in the report's own words; the owner
 decided the same day to keep devices across it, and that is built (design
 record 20 sections 4.3.1 and 4.3.2). A UAS drive with a serial number on a
 root port and idle at the sleep was restored in place and kept its open
-file; one with URBs pending across the sleep is still dropped.** The
+file; on 2026-10-30 the owner extended that to a drive under load (section
+4.3.3), built and read the same way: under a copy loop it is kept, every
+copy after the resume compared equal and the held file still growing, and
+a disk swapped behind it while the machine slept, with another unit
+serial, is found again as a new one, never written as the old.** The
 reporter's system, Windows version, xHCI98 version and log were not had,
 and hibernation stands in for standby, so the reporter's cause is not
 confirmed; the reading is the code's and the emulator's. The real VL805
@@ -1047,6 +1051,66 @@ machine-wide key and a restart: "port/flags/why=0300E501" (switch off),
 the drive dropped, "Delayed Write Failed ... D:\LONG6.TXT" as before the
 fix. With the switch at 0 the drop runs through the keep's own function,
 each device refused, and the D0 does not wait.
+
+### A drive under load kept too (2026-10-30)
+
+The owner decided on 2026-10-30 that a UAS drive busy at the
+re-initialization is kept as well, in this release. Designed in design
+record 20 section 4.3.3 (`30040196`, reviewed and revised before any
+code): no command is issued again; `xhciuas.sys` holds the class
+driver's requests from the system sleep, waits out the commands already
+in flight, records each LUN's identity and sends it SYNCHRONIZE CACHE (a
+LUN that refuses it is counted and declares all the same, with no
+durability claim), then declares itself quiet to the bus, which keeps a
+UAS drive only with that declaration; after the wake it waits for the
+bus's pass and, when the drive was kept across a re-initialization,
+checks each LUN's medium before it starts the held requests, or cycles
+the port. Built in `e8db6905` (reviewed and
+revised); host vectors in `test_enum` (the decision, the declaration's
+life) and `test_uas` (sense, the page list, the identity comparison, the
+wake decision). One gated build of `e8db6905`: x86 `all` (debug, release,
+qemu) BUILD + GATES PASSED, amd64 `both` BUILD + GATES PASSED, host tests
+PASSED.
+
+Read on the same q35 XP overlay (`xpk\`), the `qemu` flavour of the
+gated x86 build's `xhci98.sys` (`8a20a537...`) and its release
+`xhciuas.sys` (`3092ffde...`) copied over the installed ones,
+`XhciResumeKeep` absent (on), the `scsi-hd` LUN given a unit serial
+(`serial=W45LUN01`); load as above (`W.BAT D:`, a held file written every
+second); hibernation, the resume by starting the overlay again. Each sleep
+logs the withdrawal and the declaration (`uas resume state, op/value=
+02...` and `01000100`: one LUN flushed, none refused); each wake check
+its outcome (`03`, then 3 verified, 4 failed).
+
+| Leg | Load at the sleep | Result |
+|---|---|---|
+| SuperSpeed (streams), tags `k`, `l` | copy loop and held file `LONG7` | "port/flags/why=0304E500" (the quiet mark among the flags; kept), "endpoints replayed, mask=000001A4", "restored, port/slot=00000301", wake check verified (`03030000`); the copy loop's next pass after "H back" `OK` and every pass after it `OK` (each compared byte for byte by `fc /b`), no popup, `LONG7.TXT` grew from 666 to 768 bytes |
+| idle (no copy loop), tags `l`, `m` | held file alone | kept and verified as above; `LONG7.TXT` grew from 1,584 to 1,716 bytes, no popup |
+| two hibernations in a row, the second 86 s after the first resume (its wake check long done), tags `m`, `n`, `o` | copy loop and held file | both resumes kept and verified (`03030000`, `03030001`); no failed pass, `LONG7.TXT` grew from 2,934 to 3,048 bytes |
+| High-Speed (streamless): `qemu-xhci` with `p3=0`, the drive at 480 Mbit/s, tags `t`, `u` | copy loop and held file `LONG10` | "port/flags/why=0304E500", "endpoints replayed, mask=000001A4", verified; passes `OK` after "H back", `LONG10.TXT` grew from 690 to 804 bytes |
+| the disk image swapped while hibernated (`uas2.qcow2`, a fresh overlay of the same base, `serial=W45LUN02`, the same USB serial), tags `o`, `p` | copy loop and held file | the bus kept it (its USB identity matched), the wake check failed (`03040001`) and asked for the cycle ("cycle port asked, port=00000003"); "Delayed Write Failed ... D:\LONG7.TXT", the copy loop's passes in flight failed, then `OK` on the drive enumerated again; the second image holds only its `TESTDATA.BIN` - nothing of the held writes - and the first, attached again, still has `LONG7.TXT` (3,252 bytes) |
+| the previous `xhciuas.sys` (`24e7a9d4...`, no declaration), tags `q`, `r` | copy loop and held file `LONG8` | "a PDO's URBs pending=00000003", "port/flags/why=0301E50B" (busy, no mark: not quiet), dropped, "Delayed Write Failed ... D:\LONG8.TXT" as before the fix |
+| `XhciResumeKeep` 0, the new `xhciuas.sys`, tags `r`, `s` | copy loop and held file `LONG9` | the sleep declared quiet; "port/flags/why=0304E501" (switch off), dropped, "Delayed Write Failed ... D:\LONG9.TXT" |
+
+The sleep phase also runs at a shutdown (S5) and a restart: it declared
+there too (seen before the restarts of tags `q` and `r`), harmless, the
+declaration void at the next start.
+
+What the legs show is bounded: the held file's growth and the copy
+loop's comparisons, not the held file's every byte; the swap rejected
+for a different unit serial, not a swap the identification pages cannot
+tell (section 4.3.3 B7's bound, a bridge that describes itself there);
+one LUN, flushed each time (none refused).
+
+Owed: Windows 2000 SP4 and 98 SE (their hibernation was not tried), the
+real VL805 (45-E.12); a sleep that overtakes a wake check not yet run
+(the stacked hold); the paths QEMU was not made to force - a drain or a
+flush that runs out of time, an abandoned internal command, a check
+command that times out, a keep pass slower than fifteen seconds, a drive
+with neither identification page - whose decisions the host vectors
+cover but whose timeouts and abandonment were not run; RESET_PORT's new
+continuity test was not exercised by these legs (no transport error
+occurred).
 
 ## 45.27 the legs the fixes of 2026-10-29 owe, and what that reading left (2026-10-29)
 

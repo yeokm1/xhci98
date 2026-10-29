@@ -563,11 +563,27 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
         if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
             return XHCI_RKEEP_WHY_NO_SERIAL;
         }
+        /* Design record 20 section 4.3.3: only on the driver's proof that
+         * nothing of it was in flight and nothing will be sent until its
+         * wake check; the busy test then checks the same fact again. */
+        if ((flags & XHCI_RKEEP_F_QUIET) == 0) {
+            return XHCI_RKEEP_WHY_NOT_QUIET;
+        }
         if ((flags & XHCI_RKEEP_F_BUSY) != 0) {
             return XHCI_RKEEP_WHY_BUSY;
         }
     }
     return XHCI_RKEEP_KEEP;
+}
+
+ULONG XhciEnumQuietMark(ULONG markGen)
+{
+    return markGen + 1UL;
+}
+
+ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen)
+{
+    return (mark != 0 && mark == markGen + 1UL) ? 1UL : 0UL;
 }
 
 ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
