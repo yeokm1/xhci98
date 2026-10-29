@@ -882,6 +882,199 @@ attachment membership kept apart from a logical departure
 (`CmRegAttRemoved` today unlinks and counts), with the eject's
 stale-departure test; the readings on Vista, 8 and NT 5.2 as well.
 
+### 4.9 The kept child: the prototype's reading and the design (task 45.11; for the owner's decision)
+
+Section 4.8's option (A), read before any code as section 9.3 item 11
+asks, on a prototype that was never shipped (branch `w45-kept-proto`;
+`runs/run-45.md`, "45.11", has the systems, hashes and every step). This
+section is the design put to the owner; nothing in it is decided.
+
+**What the prototype does.** On NT 6.x a child the bridge's
+`BusRelations` attached (not one `AddDevice` made) answers
+`IRP_MN_REMOVE_DEVICE` by forwarding it and then, if its PDO still
+exists, by a logical removal: it stays attached and on the attachment
+list, records the departure (the marks entry's `PendingAt`, as
+`CmRegAttRemoved` does), counts as no presence in the marks
+(`KeptLogical`), drops its chain snapshot, and is re-armed at its next
+`IRP_MN_START_DEVICE`. It is destroyed when the object below it is
+deleted: the driver's `FAST_IO_DISPATCH` carries `FastIoDetachDevice`,
+which the I/O manager calls on the object attached above a device object
+being deleted; the callback detaches, and either the removal in progress
+on that object finishes the destruction or, outside any dispatch, the
+callback does. One detach owner serves the callback and every removal
+path, the bridge filters' and the NHI's included, since with a
+`FastIoDetachDevice` routine every object of the driver is called back
+when the object below it goes. A kept child holds a reference across
+every PnP request but its removal; the links of any child to a filter
+that leaves (`Parent`, `Bridge`) are dropped as that filter leaves. The
+prototype is a reading vehicle: its rundown is not the design below
+(items 3 to 6 say where it falls short).
+
+**What was read** (q35, the ASM4242 model with the ORICO enclosure, one
+topology: the drive at depth 5 below the tunnel DSP, the enclosure's USP
+and DSP; x86 only; Driver Verifier's standard checks on `xhcicm.sys`):
+
+| Reading | 8.1 x86 | 8 x86 | 7 x86 |
+|---|---|---|---|
+| the 8.1 arm's install by the id model (`DiInstallDevice`, its restart) | holds: one event 400, Stor98 running | - (Windows binds Stor98 by the id) | - (the same) |
+| disable and enable | the id kept, Stor98 | the same | the same |
+| Stor98 installed again over itself | the same | not read | not read |
+| the DSP above the drive restarted (a parent's removal) | `FastIoDetachDevice` at `PASSIVE_LEVEL` for the drive's child, outside its dispatch; the DSP's chain child kept; a new child, the id, Stor98 | the same | the same, the drive's child above ACPI's bus filter: the callback came when ACPI's filter went with the PDO |
+| surprise unplug, writes running, a file held open | callbacks bottom-up (drive, DSP, USP), each kept child destroyed; a registered child above a kept one called back when that one went; no bug check | the same | the same |
+| hot re-plug | tagged, Stor98 | the same | the same |
+| eject | after the removal the child sees `QUERY_RESOURCES`, `EJECT`, `QUERY_DEVICE_RELATIONS` and a second removal, the PDO deleted inside it; departure and eject recorded; the installer: "has not confirmed" (also with the kept child off) | the same; "The PCIe tunnel was closed." | "The PCIe tunnel was closed." |
+| cold boot | the id, Stor98 | the id, Stor98 | the id, Stor98; the boot's device install removed and restarted every device of the driver |
+| uninstall | every kept child destroyed by its callback; the driver unloaded and Verifier stopped at the unload (0xC4, 0x62: task 45.31) | the same | with task 45.31's fix: every kept child destroyed, no stop, the restart clean |
+
+Not read: 8.1 x64; another topology (a drive directly on the tunnel
+port, a dock); a parent's removal with its children already disabled; a
+removal delayed by a handle on the PDO itself (the held file is on the
+volume, above Stor98); 2000, XP, Vista and 10; real hardware.
+
+With the kept child off on the same 8.1 overlay, a disable and enable
+lost the id and 8.1 configured `stornvme` again (event 400, rank
+`0xFF2006`, "Device Updated: true"): a drive already on Stor98 leaves it
+at a later restart of its stack on 8.1, the case section 4.8 had not
+read. **Why 8.1 chooses again** (item 12): 8.1 chose a driver again when
+the configured driver's matching id had left the device's ids; a drive
+on `stornvme` that gained the id kept `stornvme` (no event 400). 7 and 8
+kept the configured driver in both directions (section 4.8). Read as
+8.1's behaviour on this vehicle, not as its documented rule.
+
+**Found on the way, not the kept child's** (task 45.31): `cmQNt` called
+`IoIsWdmVersionAvailable` under the query device's spin lock in every
+release with the query device (8.1's Verifier: bug check 0xC4, 0x2000E;
+7's: 0xA, the routine pageable there, `3.3.0.0`'s release `xhcicm.sys`
+read; fixed); the unload stop is the link-state table that `stor98cm.h`
+interface 2 never frees once a stor98 holds it (7: `cm.nvlink.queries` 1
+before the unload; the only allocation of the driver that outlives its
+devices by design), fixed by keeping the driver loaded once the table is
+handed out and freeing a table no stor98 received; and Stor98 failing
+to start on 8.1 after `stornvme` wrote `MSISupported` 1 (open).
+
+**The design, for the code if the owner takes (A).**
+
+1. *Which children are kept.* A child `cmChildCreate` made, on the
+   systems the owner's scope names (below); the registered child keeps
+   its stack's lifetime, the bridge filters and the NHI theirs. The
+   `FastIoDetachDevice` routine is set only on those systems, so on the
+   others no removal path of the driver changes.
+2. *States and one owner.* Each kept child has one state under its own
+   lock: Attached, Starting, Logical, Detached. Removal with the lower
+   object present goes from Attached to Logical; a start goes from
+   Logical to Starting and, only once the start has completed
+   successfully below it, to Attached (a refused or failed start goes
+   back to Logical); the callback goes from any state to Detached,
+   once. Destruction is the last reference's: the attach holds one, every
+   dispatch of every kind one (PnP, the removal included, power, WMI and
+   every other major function, a device-usage notification); the
+   callback first claims Detached under the lock, which closes admission,
+   then detaches (or hands the detach to the work item of item 3, which
+   owns it until it is done), and only then drops the attach's reference,
+   without waiting, so it never waits on a dispatch that caused it; the
+   release that drops the count to zero unlinks the attachment and
+   deletes the device object. An admitted dispatch also takes, under the
+   same lock and only while the state is not Detached, its own object
+   reference on the lower object (`ObReferenceObject`) and forwards
+   through that captured pointer; the reference is released after the
+   last access to the lower object, in the completion routine where one
+   reads it (the usage notification's `Flags`), so a detach meanwhile
+   never leaves a forwarded request or a completion with a freed lower
+   object. "Successful" for Starting means the start completed
+   successfully below the child, the one result it can observe; a
+   function driver above that then fails its own start is followed by a
+   removal, which is a new logical removal with its own departure (item
+   6).
+3. *Context.* Detach and deletion run at `PASSIVE_LEVEL` (read: every
+   callback came there). A callback or a last release above it hands
+   both to a work item the child allocates when it is made, so neither
+   is ever abandoned.
+4. *Requests after Detached.* Admission is refused (the dispatch takes
+   no reference): PnP and other requests complete with
+   `STATUS_NO_SUCH_DEVICE`, a power request is started on
+   (`PoStartNextPowerIrp`) and completed the same way, never forwarded to
+   the detached lower object. While Logical, every request is passed down
+   as today.
+5. *The object below.* The callback concerns the object directly below
+   the child: the PDO, or a bus filter such as ACPI's (section 4.1). Read
+   on 7: ACPI's filter left with its PDO. Were such a filter to leave
+   while its PDO stays, the child is destroyed with it, and that PDO's
+   next restart reads its ids without the id, as today; the design does
+   not re-attach.
+6. *Marks and eject.* Presence in the marks is Attached and Starting
+   alone; Logical and Detached are no presence, until the last reference
+   unlinks the attachment. The departure is recorded at the logical
+   removal, "the last attachment left" counted over the attachments
+   present; where the callback came inside the removal (the PDO deleted
+   below it), the removal records the departure before the final release,
+   as `CmRegAttRemoved` does today. The logical removal also clears the
+   child's `Answered` (the previous stack's Removable answer); the
+   transition to Attached brings the marks entry up to date and ends the
+   departure only then.
+   The eject's stackless test sees a Logical child as a bus child with
+   nothing above it (read: the eject confirmed on 8 and 7).
+7. *Links.* `CmRegAttRemoved` of any filter clears `Parent` and `Bridge`
+   (and the bridge's child count) of every child naming it; a callback's
+   records read neither.
+8. *Pure decision, host vectors.* The state table and the reference
+   rule as a pure function in `cm_ports.c`, with `test_cm_ports` vectors
+   for every order of removal, callback inside and outside a dispatch of
+   each kind, a start that fails, a repeated removal and the uninstall,
+   each asserting the state, who deletes, and the marks entry's
+   departure and confirmation.
+9. *Uninstall.* The uninstall removes the filter registrations; kept
+   children on PDOs that stay (inactive bridges, the host's own
+   functions, section 4.1) stay passive until their PDOs go, and the
+   image stays loaded (task 45.31) until the restart the uninstall
+   already asks for (exit 3). The installer's own checks do not see them
+   and need not: nothing of them survives the restart.
+10. *The update from `3.3.0.0` on 8.1.* Until the restart the earlier
+    `xhcicm.sys` runs and gives no id on 8.1, so the run stages the new
+    `stor98.inf` but installs the id model on no present drive; a drive
+    already on Stor98 keeps it across the restart (its matching id, the
+    class, stays among its ids). The installer's run after the restart
+    moves a drive already on Stor98 to the id model, as task 44.77's
+    "read again after the restart" does for a place it cannot read
+    (`/force` alike); the mark service does not (it takes driverless
+    drives and, on 8.1, displaces `stornvme`, never a drive on Stor98:
+    `mk_s98_wanted`), so the run's end says to run it again after the
+    restart while such a drive remains, and the earlier `stor98.inf`
+    leaves the driver store only once no present drive runs its model.
+    The mark service is held the same way: the run that stages the id
+    model on 8.1 does not publish it to the service (`Stor98Inf`) until
+    the new connection manager runs, a persistent gate the service reads
+    and the run after the restart lifts, so the service never switches a
+    `stornvme` drive to the id model while the earlier image gives no id
+    (which would end on `stornvme` and leave a failure record that blocks
+    the retry). Read before the code: the update leg on 8.1 with a drive
+    on Stor98 and one on `stornvme`.
+11. *Size.* The prototype is about 350 lines in `cm_filt.c`,
+    `cm_entry.c`, `cm_reenum.c` and `cm.h`; with items 2 to 4 and the
+    vectors, within section 4.8's 400 to 700.
+
+**The scope options** (the owner's):
+
+| | (A1) the kept child on NT 6.3 alone (candidate 2) | (A2) the kept child on every NT system | (B) as `3.3.0.0` |
+|---|---|---|---|
+| 8.1 | the id given; `stor98.inf`'s `NTx86.6.3` and `NTamd64.6.3` models match the id alone; a new `.10.0` section keeps the class model for 10 | the same | the class model (the structural rule not met on 8.1) |
+| 10 | no id, the class model (`.10.0`), as today | the id kept there too unless gated (a reading of its own first) | as today |
+| 2000 to 8 | as today: the id lost at a restart, the driver kept (read on 7 and 8) | the id kept: a restart, and on 2000 and XP the chain across a bridge's first install (section 4.3; not observed: the prototype keeps nothing on NT 5.x), which also serves the drives section 6.2's unit restart refuses (a dock with other functions running, a gated case) or that have no mark service | as today |
+| readings owed before approval | 8.1 x64; a drive directly on a tunnel port; a parent's removal with disabled children; a removal delayed by a handle on the PDO, the departure, the final release and the uninstall read before and after the handle closes; the update from `3.3.0.0` with a drive on Stor98 and one on `stornvme` (item 10) | those, and 2000, XP, XP x64, Vista and 10 with the ACPI order on each, under Verifier | none |
+| INF gate | `check-stor98-inf.ps1`: the 6.3 rule changed and a `.10.0` decoration admitted on both INFs (98 SE and ME read the undecorated section with two decorations: section 9.4 item 4) | the same | none |
+| installer and mark service | 8.1's arm and case 3b select the INF's model, now the id model; item 10's order | the same | none |
+| new removal paths | on 8.1 alone | on every NT system | none |
+
+**Recommendation: (A1).** It fixes what the task names, 8.1, read on
+x86 here, with five readings owed; it keeps 2000 to 8 on paths read
+working; and it puts the new removal paths on the one system that needs
+them. (A2) also keeps the id on 2000 to 8, whose drives keep Stor98
+without it (read on 7 and 8), and carries the chain across a bridge's
+first install on 2000 and XP for the drives section 6.2's unit restart
+does not serve: a real but conditional gain, unobserved, at the cost of
+the removal paths of every NT target and five more reading campaigns.
+Under either, the Stor98 start failure of task 45.31 bears on 8.1's arm,
+which installs over `stornvme`, and is fixed first.
+
 ## 5. Windows 98 SE and ME: the class match kept, the id a statement
 
 ### 5.1 `Add_ID` on an active member's descendants
