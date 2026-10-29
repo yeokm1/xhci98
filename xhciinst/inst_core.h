@@ -2420,7 +2420,7 @@ int inst_other_heading_index(const char *heading);
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
 /* Record 26 section 6.7.13 (task 45.7): on 98 SE and ME every package of
  * either set may be staged (on DevicePath) where its set has a STAGE line
- * for the system, within INST_9X_DEVICEPATH_MAX; section 6.7.12's list of
+ * for the system, within the system's limit; section 6.7.12's list of
  * two free packages is gone. 1 for any package id of a known set. */
 int inst_other_9x_stageable(int set, const char *id);
 /* Section 6.7.13's rule for an earlier run's DevicePath entry of a
@@ -2446,21 +2446,30 @@ void inst_other_rest_text(char *out, size_t cap, int part, int set,
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280
+/* ME's (task 45.7's ME leg, section 6.7.13): its wizard found a driver
+ * with 259 characters and stopped responding, its window "locating the
+ * software" for good, with 260, 270 and 280. */
+#define INST_ME_DEVICEPATH_MAX  259
+/* The limit on this system: me 1 for ME, 0 for 98 SE. */
+int inst_9x_devicepath_max(int me);
+/* What a longer DevicePath does there, after "past which ": "Windows 98
+ * SE's hardware wizard finds no driver" or ME's words. */
+const char *inst_9x_devicepath_harm(int me);
 /* Section 6.7.12's projection: base (DevicePath as this run will leave it
  * before any staging: its own changes and withdrawals made) with each of
- * the n folders appended in order where the value stays within
- * INST_9X_DEVICEPATH_MAX; fits[i] 1 for a folder appended or already an
- * entry, 0 for one left out (then counted no further). Returns the
- * projected length, or -1 when base alone passes the limit (every fits[i]
- * then 0) or a folder is not a valid entry (empty, or holding ';'). */
+ * the n folders appended in order where the value stays within max (the
+ * system's limit, at most INST_9X_DEVICEPATH_MAX); fits[i] 1 for a folder
+ * appended or already an entry, 0 for one left out (then counted no
+ * further). Returns the projected length, or -1 when base alone passes
+ * the limit (every fits[i] then 0) or a folder is not a valid entry
+ * (empty, or holding ';'). */
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits);
+                               int n, int *fits, int max);
 /* The same limit for the install directory's own entry: 1 when withDir,
- * DevicePath as the run would write it with that entry, stays within
- * INST_9X_DEVICEPATH_MAX; 0 when it passes it, and the entry is left off
- * (a longer value takes every driver from the wizard, not only this
- * package's). */
-int inst_9x_devicepath_room(const char *withDir);
+ * DevicePath as the run would write it with that entry, stays within max;
+ * 0 when it passes it, and the entry is left off (a longer value takes
+ * every driver from the wizard, not only this package's). */
+int inst_9x_devicepath_room(const char *withDir, int max);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
 /* 1 when the table's relations exclude the pair on system token tok

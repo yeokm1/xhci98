@@ -1421,8 +1421,19 @@ void inst_other_rest_text(char *out, size_t cap, int part, int set,
     strncat(out, ".", cap - strlen(out) - 1);
 }
 
+int inst_9x_devicepath_max(int me)
+{
+    return me ? INST_ME_DEVICEPATH_MAX : INST_9X_DEVICEPATH_MAX;
+}
+
+const char *inst_9x_devicepath_harm(int me)
+{
+    return me ? "Windows ME's hardware wizard stops responding" :
+                "Windows 98 SE's hardware wizard finds no driver";
+}
+
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits)
+                               int n, int *fits, int max)
 {
     char cur[INST_9X_DEVICEPATH_MAX + 2];
     char next[INST_9X_DEVICEPATH_MAX + 2];
@@ -1432,7 +1443,10 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
     for (i = 0; i < n; i++) {
         fits[i] = 0;
     }
-    if (strlen(base) > INST_9X_DEVICEPATH_MAX) {
+    if (max <= 0 || max > INST_9X_DEVICEPATH_MAX) {
+        max = INST_9X_DEVICEPATH_MAX;
+    }
+    if (strlen(base) > (size_t)max) {
         return -1;
     }
     inst_copy(cur, base, sizeof(cur));
@@ -1444,7 +1458,7 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
         }
         /* next holds at most the limit and its zero: a longer result is a
          * refusal of inst_path_append, so the folder is left out. */
-        if (inst_path_append(cur, f, next, INST_9X_DEVICEPATH_MAX + 1) < 0) {
+        if (inst_path_append(cur, f, next, (size_t)max + 1) < 0) {
             continue;
         }
         inst_copy(cur, next, sizeof(cur));
@@ -1453,9 +1467,9 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
     return bad ? -1 : (int)strlen(cur);
 }
 
-int inst_9x_devicepath_room(const char *withDir)
+int inst_9x_devicepath_room(const char *withDir, int max)
 {
-    return withDir != NULL && strlen(withDir) <= INST_9X_DEVICEPATH_MAX;
+    return withDir != NULL && max > 0 && strlen(withDir) <= (size_t)max;
 }
 
 int inst_path_remove(const char *list, const char *dir, char *out, size_t cap)

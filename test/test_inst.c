@@ -6268,6 +6268,9 @@ static int count_rename(void *ctx, const char *key, const char *value)
  * variants a run meets (task 43.80). */
 /* Task 44.11 (record 26 section 6.7.12): the two free packages staged on
  * 98 SE and ME, and the 280-character projection of DevicePath. */
+/* 98 SE's DevicePath limit, for the projection's vectors. */
+#define DP98 INST_9X_DEVICEPATH_MAX
+
 static void test_9x_stage(void)
 {
     static const char base[] = "C:\\WINDOWS\\INF;C:\\XHCI98";
@@ -6307,7 +6310,7 @@ static void test_9x_stage(void)
         };
         int six[6];
         CHECK(strlen(five[0]) == 52, "9x project: the stand-in folder");
-        r = inst_9x_devicepath_project(base, five, 6, six);
+        r = inst_9x_devicepath_project(base, five, 6, six, DP98);
         CHECK(six[0] && six[1] && six[2] && six[3] && !six[4] && !six[5] &&
               r == (int)strlen(base) + 4 * 53,
               "9x project: four 52-character folders fit, the fifth not");
@@ -6373,7 +6376,7 @@ static void test_9x_stage(void)
                              "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)),
           "lifted: rtl815x excluded until the free set's pin moves");
 
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&
           fits[0] && fits[1], "9x project: the default folders, 84 more");
     CHECK(r - (int)strlen(base) == 84, "9x project: about 90 characters");
@@ -6384,14 +6387,14 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[269] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX && fits[0], "9x project: 280 fits");
     b[269] = 'A';
     b[270] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == 270 && !fits[0], "9x project: 281 does not");
     b[268] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX - 1 && fits[0], "9x project: 279 fits");
 
     /* The install directory's own entry, by the same limit: a value of
@@ -6399,20 +6402,52 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[INST_9X_DEVICEPATH_MAX] = '\0';
-    CHECK(inst_9x_devicepath_room(b), "9x own entry: 280 kept");
+    CHECK(inst_9x_devicepath_room(b, DP98), "9x own entry: 280 kept");
     b[INST_9X_DEVICEPATH_MAX] = 'A';
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
-    CHECK(!inst_9x_devicepath_room(b), "9x own entry: 281 left off");
-    CHECK(inst_9x_devicepath_room(base), "9x own entry: an ordinary value kept");
-    CHECK(!inst_9x_devicepath_room(NULL), "9x own entry: nothing composed");
+    CHECK(!inst_9x_devicepath_room(b, DP98), "9x own entry: 281 left off");
+    CHECK(inst_9x_devicepath_room(base, DP98), "9x own entry: an ordinary value kept");
+    CHECK(!inst_9x_devicepath_room(NULL, DP98), "9x own entry: nothing composed");
+
+    /* ME's limit (record 26 section 6.7.13, task 45.7's ME leg): 259
+     * fits, 260 does not; 98 SE's stays 280. */
+    CHECK(inst_9x_devicepath_max(0) == 280 && inst_9x_devicepath_max(1) == 259,
+          "9x limit: 280 on 98 SE, 259 on ME");
+    CHECK(strstr(inst_9x_devicepath_harm(1), "ME") != NULL &&
+          strstr(inst_9x_devicepath_harm(0), "98 SE") != NULL,
+          "9x limit: the words name the system");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[248] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 259 && fits[0], "ME project: 259 fits");
+    b[248] = 'A';
+    b[249] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 249 && !fits[0], "ME project: 260 does not");
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
+    CHECK(r == 260 && fits[0], "98 SE project: 260 fits");
+    b[249] = 'A';
+    b[259] = '\0';
+    CHECK(inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 259 kept");
+    b[259] = 'A';
+    b[260] = '\0';
+    CHECK(!inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 260 left off");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[269] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, 0);
+    CHECK(r == DP98 && fits[0], "9x project: no limit given reads as 280");
 
     /* An oversized value as read is the caller's to shrink first; once
      * this run's withdrawals bring it under the limit, the folders count. */
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
     memset(b, 'A', INST_9X_DEVICEPATH_MAX + 1);
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(r == -1 && !fits[0] && !fits[1], "9x project: over the limit as read");
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r > 0 && fits[0] && fits[1], "9x project: after the withdrawals");
 
     /* Two folders of which only the first fits; a folder already there
@@ -6420,7 +6455,7 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[INST_9X_DEVICEPATH_MAX - 1 - (int)strlen(two[0]) - 10] = '\0';
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(fits[0] && !fits[1] && r <= INST_9X_DEVICEPATH_MAX,
           "9x project: the first fits, the second not");
     _snprintf(fold, sizeof(fold) - 1, "%s;%s", base, two[0]);
@@ -6428,12 +6463,12 @@ static void test_9x_stage(void)
     f[0] = two[0];
     f[1] = two[0];
     f[2] = two[1];
-    r = inst_9x_devicepath_project(fold, f, 3, fits);
+    r = inst_9x_devicepath_project(fold, f, 3, fits, DP98);
     CHECK(fits[0] && fits[1] && fits[2] &&
           r == (int)(strlen(fold) + 1 + strlen(two[1])),
           "9x project: an entry already there counted once");
     f[0] = "";
-    CHECK(inst_9x_devicepath_project(base, f, 1, fits) == -1 && !fits[0],
+    CHECK(inst_9x_devicepath_project(base, f, 1, fits, DP98) == -1 && !fits[0],
           "9x project: an empty folder is no entry");
 }
 

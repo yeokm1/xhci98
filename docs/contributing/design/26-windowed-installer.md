@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 49, 2026-10-29 (task 45.12's `XhciCmBridgeReq` an
+Status: draft 50, 2026-10-29 (task 45.7's ME leg: ME's `DevicePath`
+limit 259, not 98 SE's 280, section 6.7.13); draft 49, 2026-10-29
+(task 45.12's `XhciCmBridgeReq` an
 Advanced row of the Thunderbolt page on 2000 and XP, section 5.5);
 draft 48, 2026-10-29 (roadmap-usb4 task 45.28, the owner's
 decision of that day: the Components page evenly spaced, every shown
@@ -4683,6 +4685,28 @@ hold two drivers and not know that a ticked box means staged on
 `DevicePath`; the other packages were copied and not shown. This section
 amends sections 6.7.4, 6.7.6, 6.7.7, 6.7.11 and 6.7.12 where it says so;
 the rest stands.
+
+**ME's limit is 259 (draft 50).** The 280 of section 6.7.12 was read on
+98 SE; task 45.7's ME leg read ME's (q35, the `-free` test cut,
+2026-10-29). A fresh install with every free package ticked that fitted
+280 left `DevicePath` at exactly 280 characters, and at the next start
+ME's "New Hardware Found" window for the controller's root hub stayed at
+"locating the software" for more than twelve minutes, the guest busy,
+on two cold starts. The same install with the free set unticked started
+clean. With the controller's drivers in place, a USB keyboard, mouse or
+tablet plugged in while `DevicePath` held 24, 238 or 259 characters was
+installed by ME within seconds and with no wizard; with 260, 270 or 280
+characters its window stayed at "locating the software" the same way
+(the padding an absent folder or real ones alike). So on ME the limit is
+259 (`INST_ME_DEVICEPATH_MAX`, `inst_9x_devicepath_max`), and past it
+ME's wizard does not find no driver, as 98 SE's does: it stops
+responding, which holds every device's install, the controller's root
+hub's included. The projection, the install directory's own entry
+(`inst_9x_devicepath_room`) and the read before each append take the
+system's limit; the reason a box is barred names it ("DevicePath would
+pass 259 characters, past which Windows ME's hardware wizard stops
+responding: point the wizard at <folder> instead"). 98 SE keeps 280.
+Where this section says 280 below, it is 259 on ME.
 
 **What changes, and what does not.** Section 6.7.12 already keeps a run
 from taking `DevicePath` past the limit: the projection

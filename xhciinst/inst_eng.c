@@ -315,6 +315,13 @@ static int devTruncated;
 
 static INST_OPTS opts;
 static INST_ENV envNow;
+
+/* The DevicePath limit of this 98 SE or ME (record 26 sections 6.7.12 and
+ * 6.7.13). */
+static int dp_9x_max(void)
+{
+    return inst_9x_devicepath_max(!envNow.Nt && envNow.Minor == 90);
+}
 static OSVERSIONINFOA osv;
 static FILE *logFile;
 static char logPath[INST_PATH_CHARS];
@@ -8671,7 +8678,7 @@ stopped:
  * keeps its type. */
 static int devicepath_write(const char *addDir);
 static int dpLeftOff;       /* the last write left addDir off DevicePath,
-                               past INST_9X_DEVICEPATH_MAX with it    */
+                               past the system's limit with it      */
 
 /* devicepath_write, and on 98 SE whether this run left DevicePath without
  * the install directory: every way out of the run then reads the INF
@@ -8753,11 +8760,12 @@ static int devicepath_write(const char *addDir)
     /* Record 26 section 6.7.12's limit, as the other USB drivers' staging
      * keeps it: the entry is left off and the folder named for the
      * wizard, the withdrawals still written. */
-    if (addDir != NULL && !envNow.Nt && !inst_9x_devicepath_room(newList)) {
-        out("DevicePath would be %d characters with %s on it, past the %d "
-            "with which Windows 98 SE's hardware wizard finds a driver: %s "
-            "is left off it; point the wizard at it instead.\n",
-            (int)strlen(newList), addDir, INST_9X_DEVICEPATH_MAX, addDir);
+    if (addDir != NULL && !envNow.Nt &&
+        !inst_9x_devicepath_room(newList, dp_9x_max())) {
+        out("DevicePath would be %d characters with %s on it, more than "
+            "%d, past which %s: %s is left off it; point the wizard at it "
+            "instead.\n", (int)strlen(newList), addDir, dp_9x_max(),
+            inst_9x_devicepath_harm(envNow.Minor == 90), addDir);
         if (!devicepath_compose(list, rootDir, NULL, newList,
                                 sizeof(newList))) {
             out("DevicePath is too long to change.\n");
@@ -25226,8 +25234,8 @@ static void other_read_set(int set)
 /* The STAGE lines for this system, and each package's COPY lines for it.
  * On 98 SE and ME every package with a STAGE line there is stageable
  * (record 26 section 6.7.13, task 45.7), DevicePath held within
- * INST_9X_DEVICEPATH_MAX by the projection (section 6.7.12) rather than by
- * a list of packages. */
+ * the system's limit (dp_9x_max) by the projection (section 6.7.12)
+ * rather than by a list of packages. */
 static void other_count(int set)
 {
     OTHSET *o = &oth[set];
@@ -26030,12 +26038,12 @@ static int other_9x_replaced(int set, const char *dir)
 #define OTH_9X_CAND 16
 
 /* 98 SE and ME (record 26 section 6.7.12): whether set's package k would
- * fit on DevicePath within INST_9X_DEVICEPATH_MAX, after this run's own
- * changes (the install directory's entry, the withdrawals of the packages
- * staged elsewhere only and of a set this run's copy replaces), the
- * restorations of the kept entries, and every other package ticked now.
- * 1 fits (or cannot be told here: the run reads again before each
- * append); 0 with why. */
+ * fit on DevicePath within the system's limit (dp_9x_max), after this
+ * run's own changes (the install directory's entry, the withdrawals of the
+ * packages staged elsewhere only and of a set this run's copy replaces), the
+ * restorations of the kept entries, and every other package ticked now. 1
+ * fits (or cannot be told here: the run reads again before each append); 0
+ * with why. */
 static int other_9x_fits(int set, int k, char *why, size_t cap)
 {
     static char fold[OTH_9X_FOLDS][INST_PATH_CHARS];
@@ -26132,7 +26140,7 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
     for (j = 0; j < n; j++) {
         ptr[j] = fold[j];
     }
-    r = inst_9x_devicepath_project(base, ptr, n, fits);
+    r = inst_9x_devicepath_project(base, ptr, n, fits, dp_9x_max());
     /* More folders than the projection holds are read as not fitting
      * (record 26 section 6.7.13). */
     for (c = 0; c < nc && bad == NULL; c++) {
@@ -26144,8 +26152,8 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
         return 1;
     }
     _snprintf(why, cap - 1, "DevicePath would pass %d characters, past which "
-              "Windows 98 SE's hardware wizard finds no driver: point the "
-              "wizard at %s instead.", INST_9X_DEVICEPATH_MAX, bad);
+              "%s: point the wizard at %s instead.", dp_9x_max(),
+              inst_9x_devicepath_harm(envNow.Minor == 90), bad);
     why[cap - 1] = '\0';
     return 0;
 }
@@ -27976,11 +27984,10 @@ static int other_stage_9x(int set, const char *folderPath)
     }
     /* The limit 98 SE's hardware wizard was read to keep (record 26
      * section 6.7.12), read again before each append. */
-    if (r > 0 && strlen(newList) > INST_9X_DEVICEPATH_MAX) {
-        out("  DevicePath would pass %d characters, past which Windows 98 "
-            "SE's hardware wizard finds no driver: %s is not staged; point "
-            "the wizard at it instead.\n", INST_9X_DEVICEPATH_MAX,
-            folderPath);
+    if (r > 0 && strlen(newList) > (size_t)dp_9x_max()) {
+        out("  DevicePath would pass %d characters, past which %s: %s is "
+            "not staged; point the wizard at it instead.\n", dp_9x_max(),
+            inst_9x_devicepath_harm(envNow.Minor == 90), folderPath);
         return 0;
     }
     if (strcmp(newList, list) == 0) {
