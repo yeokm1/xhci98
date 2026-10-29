@@ -5615,7 +5615,7 @@ static int failWriteHook(struct FAB *f, unsigned long pdf, int router, unsigned 
 }
 
 /* Whether the quarantine holds `adp`'s entry `hop` (or, with `enable`,
- * its Path Enable) on `route` for host port 1 and a kid. */
+ * its Path Enable) on `route` for host port 1 and its kid, by index. */
 static int kidQuarantined(const TBT_ROUTE *route, ULONG adp, ULONG hop, int enable)
 {
     ULONG i;
@@ -5623,7 +5623,8 @@ static int kidQuarantined(const TBT_ROUTE *route, ULONG adp, ULONG hop, int enab
 
     for (i = 0; i < TBT_U4_QUARANTINE; i++) {
         q = &g_cm.Quarantine[i];
-        if (q->Used && q->Port == 1 && q->Kid != 0 && TbtRouteEqual(&q->Route, route) &&
+        if (q->Used && q->Port == 1 && kidOf(&g_cm, 1) != NULL &&
+            q->Kid == kidOf(&g_cm, 1)->Index && TbtRouteEqual(&q->Route, route) &&
             q->Adapter == adp && (enable ? q->Enable : (!q->Enable && q->Hop == hop))) {
             return 1;
         }
@@ -5748,7 +5749,8 @@ static void test_kid_path_failures(void)
         ULONG i;
         int kidOwned = 0;
         for (i = 0; i < TBT_U4_QUARANTINE; i++) {
-            if (g_cm.Quarantine[i].Used && g_cm.Quarantine[i].Kid != 0) {
+            if (g_cm.Quarantine[i].Used && kidOf(&g_cm, 1) != NULL &&
+                g_cm.Quarantine[i].Kid == kidOf(&g_cm, 1)->Index) {
                 kidOwned = 1;
             }
         }
