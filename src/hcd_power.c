@@ -107,6 +107,9 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     HcdSuspControllerDownLocked(hc);
+    /* Task 45.23 (design record 20 section 4.3.3): pending from here to
+     * this suspend's resume's end (hcdResume, HcdEnumService). */
+    hc->ResumePhase = XHCI98_RESUME_PENDING;
     if (XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
         hc->ShutLatched = 1;
     }
@@ -124,6 +127,7 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
  * that fails is the recovery's. IRQL: PASSIVE_LEVEL. */
 static VOID hcdResume(PHCD_CONTROLLER hc)
 {
+    KIRQL oldIrql;
     ULONG restores;
 
     restores = hc->Hc.Quirk.Restores;
@@ -136,6 +140,11 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
         hc->ResumeInvalidating = 0;
         hc->ResumeFailures++;
+        /* Section 4.3.3: the resume's end, failed; every quiet mark void. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->ResumePhase = XHCI98_RESUME_FAILED;
+        hc->MarkGen++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdControllerFail(hc);
         return;
     }
@@ -143,6 +152,14 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
     hc->ResumeKeepPending = (hc->ResumeKeepReady && hc->ResumeKeepOn) ? 1L
                                                                       : 0L;
+    if (!hc->ResumeKeepReady) {
+        /* Section 4.3.3: no re-initialization, so this is the resume's
+         * end; one that re-initialized ends with the thread's pass. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->ResumePhase = XHCI98_RESUME_RUNNING;
+        hc->MarkGen++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
     HcdQuirkResumed(hc, restores);
 }
 

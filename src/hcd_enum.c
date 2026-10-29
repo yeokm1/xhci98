@@ -4727,6 +4727,12 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
     if (dev->SerialState == HCD_SERIAL_OK && dev->SerialId[0] != 0) {
         flags |= XHCI_RKEEP_F_SERIAL;
     }
+    /* Section 4.3.3: the function's quiet declaration for this sleep. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (XhciEnumQuietValid(dev->QuietMark, hc->MarkGen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     if (dev->Pdo != NULL) {
         flags |= XHCI_RKEEP_F_STARTED;
         KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
@@ -5107,6 +5113,10 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
         }
         if (keep[i] == 1 && hcdRkeepRestore(hc, &hc->Ports[i])) {
             hc->ResumeKept++;
+            /* Section 4.3.3: what the function's wake check reads. */
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            hc->Ports[i].Device->ResumeEpoch++;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
             continue;
         }
         /* Every kept device left is dropped even once a failed command
@@ -5789,6 +5799,15 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
          * the D0 waits no longer (hcd_power.c, hcdResumeKeepWait); never
          * before, whatever disarmed the keep. */
         (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
+        /* Design record 20 section 4.3.3: and a resume that re-initialized
+         * ends here; every quiet mark is void (any invalidation's end, so
+         * a recovery's too). */
+        XhciControllerLockAcquire(ext, &oldIrql);
+        if (hc->ResumePhase == XHCI98_RESUME_PENDING) {
+            hc->ResumePhase = XHCI98_RESUME_RUNNING;
+        }
+        hc->MarkGen++;
+        XhciControllerLockRelease(ext, oldIrql);
     }
     if (detach) {
         hcdDetach(hc, powered);

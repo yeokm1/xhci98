@@ -693,7 +693,9 @@ outside it changes:
   were there at the power-down, was not read), is dropped as K4 says, and
   XP reports "Delayed Write Failed" as before. Whether
   `xhciuas.sys` should wait out its commands before it passes a
-  power-down on, so that a busy drive is idle by the sleep, is left open.
+  power-down on, so that a busy drive is idle by the sleep, was left
+  open here; section 4.3.3 decides it, and from it a UAS drive, idle or
+  not, is kept only on its driver's quiet declaration.
 - Not built, and dropped as before: devices behind a hub and hubs (K3's
   subtree restore), isochronous devices, a selectively suspended device's
   restore and re-suspension (K6), the quarantine of a busy storage
@@ -747,7 +749,9 @@ down before its parent, so the disk above has had its own power-down by
 then and in the ordinary case little or nothing is in flight. Within one
 deadline of thirty seconds from the hold:
 - the hold waits for every command in flight to end;
-- each present LUN is sent SYNCHRONIZE CACHE (10), one at a time,
+- each present LUN's identity is recorded (B7) - a LUN whose record the
+  wake check could not pass makes no declaration, being cycled at the
+  wake otherwise - and it is sent SYNCHRONIZE CACHE (10), one at a time,
   nothing else in flight, so it follows every write the drive
   acknowledged; a GOOD answer means the drive's volatile cache is on its
   medium before power can go; a flush refused (CHECK CONDITION) is
@@ -781,7 +785,9 @@ with its last resume finished (no re-initialization, or the thread's
 invalidation pass ended), resume pending (from the suspend until then),
 or failed (a resume that failed, the controller contained or in its
 recovery) - and the device's resume epoch (one more each time a
-re-initialization keeps the device, after its restore). A bus without the
+re-initialization keeps the device, after its restore). *Report* carries
+the wake check's outcome to the bus's log only. Every op but the query is
+logged (`uas.resume`). A bus without the
 request (any other bus, or `xhci98.sys` before `3.4.0.0`) completes it
 STATUS_NOT_SUPPORTED; such a bus never keeps a device.
 
@@ -827,8 +833,9 @@ complete `SRB_STATUS_NO_DEVICE` with the engine's stop, as today.
 
 **B7. The medium check (`xhciuas.sys`).** The USB identity the bus checks
 (section 4.3.2) is the bridge's; behind it may be another disk, or another
-medium in the same reader. At the FDO's start, and after each check that
-passes, each present LUN's identity is recorded: the removable-medium bit
+medium in the same reader. At each sleep hold, once nothing is in flight
+(B3), and after each check that passes, each present LUN's identity is
+recorded: the removable-medium bit
 of INQUIRY; the unit serial number (vital product data page 0x80) and the
 device identification page (0x83), each when page 0x00 lists it; and READ
 CAPACITY (10)'s answer, with READ CAPACITY (16)'s when (10) reports the

@@ -599,6 +599,15 @@ typedef struct _HCD_USB_DEVICE {
                              * its rings are held under while kept across
                              * a resume, before its new slot; 0 none
                              * (hcd_enum.c); thread                      */
+    ULONG QuietMark;        /* task 45.23 (design record 20 section
+                             * 4.3.3): its function's quiet declaration,
+                             * valid while it equals the controller's
+                             * MarkGen + 1; 0 none. Cleared by any transfer
+                             * taken or parked off EP0 (HcdIoSubmit).
+                             * Controller lock                           */
+    ULONG ResumeEpoch;      /* one more at each restore across a
+                             * re-initialization (hcd_enum.c); controller
+                             * lock                                       */
     ULONG HoldAsked;        /* a send-back to USB 2.0 was accepted for it
                              * (HcdHoldRequestUsb2): no PDO, Present until
                              * the hold service disconnects or refuses it */
@@ -1576,6 +1585,15 @@ typedef struct _HCD_CONTROLLER {
     ULONG ResumeKeepRefused;        /* not kept, by XhciEnumResumeKeep    */
     ULONG ResumeKeepFailed;         /* kept, then dropped: the restore
                                      * failed                              */
+    /* Task 45.23 (design record 20 section 4.3.3, IOCTL_XHCI98_RESUME_STATE
+     * in hcd_urb.c): ResumePhase is XHCI98_RESUME_PENDING from the
+     * controller's suspend (hcd_power.c, hcdSuspendSettled) to its resume's
+     * end - in hcdResume when that failed (XHCI98_RESUME_FAILED) or did not
+     * re-initialize, else at the end of the thread's invalidation pass
+     * (HcdEnumService) - and MarkGen counts those ends, so a device's
+     * QuietMark counts for one sleep only. Controller lock. */
+    ULONG ResumePhase;
+    ULONG MarkGen;
     /* The invalidation a terminal no recovery acts on raised for itself
      * (hcd_ctl.c, hcdTerminalRelease): once per lifetime. */
     ULONG TerminalReleased;
