@@ -578,7 +578,7 @@ static BOOLEAN cmBreqLowest(PCM_FILTER f)
 }
 
 /* The plan of an attempt that could not be planned (zero throughout). */
-static const CM_BREQ_PLAN cmBreqNoPlan;
+static const CM_BREQ_PLAN cmBreqNoPlan = { 0 };
 
 static NTSTATUS cmBridgeReqFilter(PCM_FILTER child, PIRP irp)
 {
