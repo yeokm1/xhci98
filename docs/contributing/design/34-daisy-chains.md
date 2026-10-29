@@ -673,9 +673,18 @@ leaves for later is listed at the end.
   secondary bus 7), before any chain action existed; unplug and re-plug
   of the child, and the dock's unplug with the child attached, were
   clean. So on Vista and later the action is a harmless second request
-  beside native hot plug (section 3.2's last item); it is for 2000 and
-  XP, whose PCI driver does not rescan a started downstream port's bus
-  by itself (section 3.2).
+  beside native hot plug (section 3.2's last item).
+- **What XP does without it** [run, 45.13's legs x0 and x1]: on XP with
+  the same layout (the dock at power-on, the chained device hot-plugged)
+  and the release `xhcicm.sys` of `1a2a72ca`, which has no chain action,
+  XP found the chained NVMe (Stor98 installed, Code 0) and removed it at
+  its unplug. [inf] The member's invalidation (`CmReenumAction`, every
+  member), the only request made there, reaches the started chain
+  port's bus on XP; the qemu flavour's log with the action (x1) does not
+  separate the two requests. Section 3.2's [inf] ("probably not") is
+  therefore not borne out on XP for this layout; 2000 is not read. The
+  action stays a second request that costs one invalidation per chain
+  port; whether to keep it is the owner's (run-45, "45.13").
 - **The walk** (`XhciTbtChainPorts`, `tbt_topo.c`, pure). From one
   member's secondary bus, depth first, inside the member's secondary
   to subordinate range read from its header at the walk, at most

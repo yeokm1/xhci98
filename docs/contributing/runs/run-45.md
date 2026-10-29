@@ -1669,3 +1669,102 @@ Thunderbolt 3 topology a chained device is read on q35 behind a dock
 present at power-on (SeaBIOS numbered the dock; a device without its
 own switch then lands on the chain port's own secondary bus), and a
 hot-plugged dock only behind a tunnel port with a reservation.
+
+## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30, partial)
+
+**The design.** Record 34 section 3.9 (revision 6), reviewed and revised
+before and with the code: chain ports walked below every active member
+(`XhciTbtChainPorts`, `tbt_topo.c`: a switch downstream port, Slot
+Implemented, Hot-Plug Capable, inside the member's bus range, at most
+four, one level, no descent below one); a chained tunnel's up, down and
+reconciliation invalidating each chain port's bus through the child
+filter on it, under that filter's removal reference (`CmFilterTryHold`,
+the list's lock then the filter's); an up owed per chained device (the
+action's `Slot`) until every chain port is done, cancelled when no
+longer live, at a loss and at the stop, dropped at 10 s
+(`cm.chain.nofilter` or `cm.chain.owed-expired`); the counters in the
+stop's log lines.
+
+**The code** (`38ac4e18`): `src\cm\tbt_topo.c`/`.h` (the walk, the owed
+table's pure part), `cm_reenum.c`/`.h` (`cmChainTake`, `cmChainTry`,
+`cmChainAction`, `cmChainService`, the hooks in `CmReenumAction`,
+`CmReenumService`, `CmReenumLossBegin`, `CmReenumStop`), `cm_filt.c`
+(`CmFilterTryHold`, `CmFilterUnhold`). No new import, no INF change.
+Host vectors: `test_tbt_topo.c` `test_chain_ports` (the emulator's dock
+as read on q35, a five-port switch with one hot-plug port, none, the
+non-candidates, the count and level bounds, a bridge outside the range,
+the member unnumbered, absent or unread, a failed read, a failed
+capability walk, a retry status, power off) and `test_chain_owed` (the
+first owe, a retry keeping the clock and the done list, a new tunnel
+restarting it, two children at one link and depth kept apart, the table
+full, the done list's bound, the millisecond wrap); the suite 679
+checks, 0 failures.
+
+**Builds.** The gated x86 build of `38ac4e18`
+(`scripts\build-driver.cmd all`): "BUILD + GATES PASSED (debug release
+qemu)" (`E:\xhci98-scratch\p45-w45-chain\gb-x86.log`); the gated amd64
+build (`all -amd64`): the same (`gb-amd64.log`); the release x86 package
+(`make-package.ps1 -Flavor release -Arch x86`): `xhcicm.sys`
+`23a2e9ab...`, `xhci98.sys` `5806fc7b...`.
+
+### The legs (q35; emulator `usb4-emu` `0b4a259`, `qemu-system-x86_64.exe` `c1227fda...`; Thunderbolt 3 Alpine Ridge, `-Usb4 tb3ar`)
+
+The chain: the dock `usb4-device ... dialect=tb3,downstream-ports=1,
+chain-power-controller=off` attached at power-on with the host's
+`preboot=on` (SeaBIOS numbers the dock's switch: the tunnel port
+`02:01.0` buses 4 to 7, the dock's upstream port `04:00.0`, its fixed
+port `05:00.0` to the dock's NVMe on bus 6, its chain port `05:01.0`,
+bus 7), and the chained device `usb4-device ... parent=enc0,port=1`
+(a plain enclosure, its NVMe directly on bus 7) plugged by QMP at the
+desktop. A dock hot-plugged on this layout cannot be read (45.37).
+Evidence: `E:\xhci98-vm\p45\w45-chain\w7\` (r2) and `xp\` (x0, x1):
+`serial-<leg>.log`, `debugcon-<leg>.log`, `trace-<leg>.log`,
+`cmdline-<leg>.txt`, screenshots.
+
+| Leg | System, build | Read | Verdict |
+|---|---|---|---|
+| r2 | 7 SP1 x86, the 45.17 golden (release of `1a2a72ca`, no chain action) | the child approved at depth 2 (`ICM approve link 1 depth 2: tunnel up`); 7 found and numbered the chained NVMe itself (native hot plug on the chain port), Stor98 started, its disk started (no volume: both disks are overlays of one image, Windows' duplicate-signature rule); the child unplugged and plugged again: gone, then Code 0 again; the dock unplugged with the child attached: every devnode gone, no hang; shutdown in 9 s | the child's hot plug behind a dock present at power-on (part of clause 1, without its file check: no volume), 2, 3, 8: pass; the chain action was not what found it |
+| x1 | XP SP3, a fresh golden (release of `1a2a72ca` installed with `/thunderbolt /stor98`, exit 3, restart; `1cec6889...`), the qemu flavour of `xhcicm.sys` at the reviewed source (`77f34053...`) swapped in | after the dock's first boot (Stor98 for the dock's NVMe by its wizard, a restart) the child plugged: `cm.chain.ports=00000001`, `cm.chain.invalidate=01020508` (an up at depth 2 on `05:01.0`), then the chain port's `BusRelations` with one new PDO, the child filter attached and the tunnel id given; Stor98 by its wizard; the drive as F: ("ORICO"), a file written and compared (`fc`: no differences). The child unplugged: `cm.chain.invalidate=02020508`, the NVMe gone. Plugged again: back at Code 0, F: again; a file written before the unplug was lost ("Delayed Write Failed" on F:: the chained unit is not offered for safe removal in this cut and was not stopped first). The dock unplugged with the child attached: both removed, XP's notice, no hang; shutdown in 10 s. Counters at the stop: ports 3, invalidate 3, owed 0, nofilter 0 | the child's hot plug with its file check behind a dock present at power-on (part of clauses 1 and 4), 2, 3: pass |
+| x2 | XP, the same golden, the gated release `xhcicm.sys` and `xhci98.sys` of `38ac4e18` swapped in | the same steps: the chained NVMe on Stor98 (its wizard), F: "ORICO", a file copied and compared (`fc`: no differences); the child unplugged: gone; plugged again: Code 0, F: again (the file copied before the unplug lost, as in x1); the dock unplugged with the child attached: no PCI devnode of the dock left, no hang; shutdown in 10 s | pass on the gated build |
+| x0 | XP, the same golden, its release `xhcicm.sys` (no chain action) | the same steps: the chained NVMe found (Stor98 by the "Found New Hardware" balloon, Code 0) and removed at its unplug | the A/B: XP finds and removes the chained device without the chain action |
+
+**What x0 shows.** On XP with this layout the chained device was found
+and removed without the chain action (x0). What found it there is an
+inference: the member's invalidation, made at every tunnel change
+(`CmReenumAction`), is the only request this tree made, so XP's
+re-enumeration from it reaches the bus behind the dock's started chain
+port. x1's log does not separate the two requests (`BusRelations` on
+`04:00.0` and `05:00.0` before the action's call, the chain port's
+answer with the new PDO after it). Record 34 section 3.2's inference
+that the member's invalidation would not reach it is therefore not
+borne out on XP; 2000 is not read. With 7's native hot plug (r2), the
+action was not needed on either system read. It is a second request
+that costs one invalidation per chain port per change.
+
+**The lost write.** In x1 and x2 a file written to the chained drive
+just before its surprise unplug was lost ("Delayed Write Failed"): XP
+caches writes to a disk it is not told is removable, and in this cut the
+chained unit is neither answered `Removable` nor offered for safe
+removal (record 34 section 3.7, left below). The dock's own drive is
+offered; a chained drive is to be stopped by stopping the dock until
+section 3.7's code.
+
+**The owner's question.** Keep the chain action (a second request beside
+what XP's member invalidation and 7's native hot plug already do, kept
+for 2000, unread, and for a layout where the member's re-enumeration
+does not reach the chain port), or take its invalidation out and keep
+the walk for section 3.7's chained unit and 45.14's 9x numbering, with
+the reading recorded. Recommended: keep it until 2000 is read; it is
+bounded (one call per chain port per change) and fails safe.
+
+**Left in 45.13** (not ticked): the owner's question above; 2000's
+reading (with and without the action); the correspondence learning, the chained unit's `Removable`,
+marks and eject on NT (the lost write above is the case it is for), the
+per-tunnel ownership, names and generations (record 34 sections 3.1,
+3.5, 3.7 and Q4), the status record's kind 3 entries. 45.17's PCI-side
+clauses read here on 7 and XP: 2, 3 and 8, and the parts of 1 and 4 the
+legs above name (clause 1's hot-plugged dock cannot be read on this
+layout, 45.37; clause 4's whole chain at power-on was not read); 5 (safe removal of
+the chained unit) waits for section 3.7's code; 6 is 9x (45.14); 7 on
+XP: the dock at power-on then the child hot-plugged works, a hot-plugged
+dock cannot be read on this layout (45.37).
