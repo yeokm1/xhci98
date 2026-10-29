@@ -1716,18 +1716,20 @@ with this tree's package at `1765b18c` (`runs/run-45.md`, "45.10", has
 the vehicle and every figure), comparable within that run only:
 
 - **Two and four threads** put no more than two commands at the drive,
-  what one 1 MiB request's two children already do at one thread, and
-  raised no rate: 98 SE's requests from several threads did not overlap
-  at Stor98 there [read]. Item 2 is no lever in the emulator.
-- **4 and 8 MiB requests** reach Stor98 as 63 KiB scatter/gather pieces,
-  each double-buffered, at about 80 to 107 MB/s against 215 to 250 at
-  2 MiB, Stor98's granted maximum being 2048 KiB [read]: item 4's cut
-  above the maximum is real, and C4 is what would remove it for a program
-  that asks for more than 2 MiB.
+  what one 1 MiB request's two children already do at one thread [read];
+  that the threads' requests did not overlap at Stor98 is inferred from
+  that depth [inf], and the rates moved little either way [read]. Item 2
+  showed no clear lever in the emulator.
+- **4 and 8 MiB requests** from an aligned buffer reach Stor98 as 63 KiB
+  scatter/gather pieces, each double-buffered, at about 80 to 108 MB/s
+  against 202 to 241 at 2 MiB, Stor98's granted maximum being 2048 KiB
+  [read]: item 4's cut above the maximum is real; whether C4's larger
+  maximum would let such requests through whole is not shown [inf].
 - **A scattered buffer** reaches Stor98 as pieces below 63 KiB, one
   command at a time, at about a third of the aligned rate at 1 and 2 MiB
-  [read]: the aligned-against-scattered difference there is IOS's cut,
-  not Stor98's per-page mapping, which this reading cannot isolate [inf].
+  [read]: the aligned-against-scattered difference there mixes IOS's
+  cut with Stor98's per-page mapping, which this reading can neither
+  isolate nor exclude [inf].
   C2's gain needs another reading (a counter of the mapping's time, or
   B4's refit of B).
 

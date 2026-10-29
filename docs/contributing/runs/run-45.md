@@ -157,36 +157,42 @@ column (write in brackets), aligned against scattered:
 | 4 MiB | 85.3 (83.2) | 67.7 (78.9) | |
 | 8 MiB | 80.0 (82.4) | 67.7 (76.9) | |
 
-At 4 and 8 MiB in R3, aligned, Stor98 received 779 requests "of 63 KiB"
-(plus a few below 4 KiB) for 12 reads of 4 MiB and for 6 of 8 MiB, every
-one a scatter/gather list double-buffered by IOS.
+At 4 and 8 MiB in R3, aligned, Stor98 received 779 requests "of 63 KiB",
+1 "below 63 KiB" and 11 (4 MiB) or 5 (8 MiB) "below 4 KiB" for 12 reads
+of 4 MiB and for 6 of 8 MiB, every one a scatter/gather list
+double-buffered by IOS. With the scattered buffer (R4) the requests at 1
+MiB and above arrived in the "below 63 KiB" class, not double-buffered.
 
 ### What it says, for the changes C1 to C5 (record 30 section 13.6)
 
 - **Two threads at Stor98** (section 13.3 item 2): two and four threads
   never put more than two commands at the drive, which is what one
   1 MiB request's two 512 KiB children already do at one thread [read];
-  so 98 SE's file system did not let two threads' requests overlap at
-  Stor98 here [inf], and the rate did not rise (R2 against R1's one
-  thread). Threads are not a lever on 98 SE in the emulator.
-- **The request sizes at 4 and 8 MiB** (item 4): requests above 2 MiB
-  never reach Stor98 whole: IOS cuts them into 63 KiB scatter/gather
-  pieces and double-buffers each, at about 80 to 107 MB/s against 215 to
-  250 MB/s at 2 MiB [read]. Stor98's granted maximum is 2048 KiB, so the
-  cut is IOS's above that maximum (record 30 section 1.3) [inf]. This is
-  C4's reading: a larger 9x maximum (with this layer's room raised) is
-  what would let a program's 4 and 8 MiB requests through; below 2 MiB
-  nothing changes. C4 stays planned, decided by the bench's B4 rows.
+  that two threads' requests did not overlap at Stor98 is an inference
+  from that depth, the pages carrying no request identities [inf]. The
+  rates moved little and both ways (R1's write 234.6 at one thread, 248.5
+  at two; R2's 210.6 and 183.9 at two and four) [read]: threads showed no
+  clear gain on 98 SE in the emulator.
+- **The request sizes at 4 and 8 MiB** (item 4): with the aligned
+  buffer, requests above 2 MiB never reached Stor98 whole: they arrived
+  as 63 KiB scatter/gather pieces, each double-buffered, at about 80 to
+  108 MB/s against 202 to 241 MB/s at 2 MiB (R1 and R3) [read]. Stor98's
+  granted maximum is 2048 KiB, so the cut is IOS's above that maximum
+  (record 30 section 1.3) [inf]. Whether a larger 9x maximum (C4, with
+  this layer's room raised) would let them through whole is not shown,
+  every run having the 2048 KiB maximum [inf]. C4 stays planned, decided
+  by the bench's B4 rows.
 - **The per-page mapping cost, aligned against scattered** (item 3,
   C2): the scattered buffer did not reach Stor98 as a large request at
   all: at 1 and 2 MiB it arrived as scatter/gather lists below 63 KiB
   each (16 a 1 MiB request), one command at a time, at about a third of
   the aligned rate [read]. So the emulator's aligned-against-scattered
-  difference is IOS's cut of a scattered buffer, not the cost of
-  Stor98's per-page `ScsiPortGetPhysicalAddress` calls, which this
-  reading cannot separate [inf]; C2's own gain needs another vehicle (a
-  Stor98 counter of the mapping's time, or the bench's refit of B), and
-  stays planned.
+  difference mixes IOS's cut of a scattered buffer (other request
+  sizes, command counts, depths and handover paths) with whatever
+  Stor98's per-page `ScsiPortGetPhysicalAddress` calls cost, and cannot
+  isolate or exclude the latter [inf]; C2's own gain needs another
+  vehicle (a Stor98 counter of the mapping's time, or the bench's refit
+  of B), and stays planned.
 - **C1** (a child size setting) and **C3** (more `ENG_PRP_PAGES`): the
   emulator's MDTS of 512 KiB already splits every request above it, and
   depth reached 3 to 4 at 2 MiB with one thread [read]; both stay
