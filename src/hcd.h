@@ -1254,7 +1254,6 @@ typedef struct _HCD_TMR {
     KEVENT Event;                   /* synchronization: an input changed  */
     PVOID ThreadObject;             /* referenced at the creation         */
     HANDLE ThreadHandle;            /* kept when the reference failed     */
-    volatile LONG Exited;           /* set just before it terminates      */
     ULONG Created;                  /* a thread to join                   */
     HCD_SET_TIMER_RESOLUTION Routine;
     ULONG Lookable;                 /* 32-bit NT 5: the thread's own look */
@@ -2515,9 +2514,6 @@ VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);
-/* A thread join's reference retries, 10 ms apart, before it falls back
- * to the thread's exit flag (hcd_tmr.c, hcd_susp.c). */
-#define HCD_JOIN_REF_TRIES 500UL
 /* 0 waits until satisfied; a gate's bound, in unsatisfied returns. */
 ULONG HcdWaitEvent(PKEVENT event, ULONG bound);
 #define HCD_GATE_WAIT_BOUND 100UL

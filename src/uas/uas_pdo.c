@@ -142,15 +142,17 @@ static NTSTATUS uasQueryId(PUAS_PDO pdo, ULONG kind, PIRP irp)
 }
 
 /*
- * A REMOVE of a LUN its parent no longer reports (a start's REPORT LUNS or
- * INQUIRY no longer answered it, uas_fdo.c): PnP will never see the object
- * again, so it goes now rather than at the parent's removal, which would
- * otherwise report it again if the LUN came back. Off the parent's list
- * under its lock (the worker reads the list there), the dispatches that
- * hold Busy waited out, then deleted. IRQL: PASSIVE_LEVEL, after the IRP
- * is completed.
+ * A REMOVE of a LUN its parent no longer reports (a start's REPORT LUNS no
+ * longer listed it, uas_fdo.c): PnP will never see the object again, so it
+ * goes now rather than at the parent's removal, which would otherwise
+ * report it again if the LUN came back. Off the parent's list under its
+ * lock (the worker reads the list there) and the dispatches that hold Busy
+ * waited out, all before the IRP is completed: until then PnP cannot send
+ * the parent its own REMOVE, so the parent is still whole here. The object
+ * itself is deleted after the completion, by the caller, with nothing of
+ * the parent touched. IRQL: PASSIVE_LEVEL.
  */
-static VOID uasPdoDelete(PUAS_PDO pdo)
+static VOID uasPdoUnlink(PUAS_PDO pdo)
 {
     PUAS_FDO fdo;
     KIRQL irql;
@@ -173,7 +175,6 @@ static VOID uasPdoDelete(PUAS_PDO pdo)
                                     FALSE, NULL);
     }
     pdo->Fdo = NULL;
-    IoDeleteDevice(pdo->Self);
 }
 
 static NTSTATUS uasCapabilities(PUAS_PDO pdo, PDEVICE_CAPABILITIES caps)
@@ -217,10 +218,12 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
     PDEVICE_RELATIONS rel;
     NTSTATUS status;
     BOOLEAN deleteIt;
+    PDEVICE_OBJECT self;
 
     stack = IoGetCurrentIrpStackLocation(irp);
     status = irp->IoStatus.Status;
     deleteIt = FALSE;
+    self = pdo->Self;
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
         if (pdo->Fdo == NULL) {
@@ -261,7 +264,7 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
          * queue lock and the claim are cleared. The object stays until the
          * FDO is removed: the unit is still on the bus while the FDO reports
          * it, and PnP may start it again. One the FDO no longer reports
-         * goes once the IRP is completed (uasPdoDelete). */
+         * is unlinked here and deleted once the IRP is completed. */
         pdo->Started = FALSE;
         if (pdo->Fdo != NULL) {
             UasEngineCloseLun(pdo->Fdo, pdo, SRB_STATUS_NO_DEVICE);
@@ -270,6 +273,9 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
         pdo->QueueLocked = FALSE;
         pdo->Claimed = FALSE;
         deleteIt = (BOOLEAN)(!pdo->Present && pdo->Fdo != NULL);
+        if (deleteIt) {
+            uasPdoUnlink(pdo);
+        }
         status = STATUS_SUCCESS;
         break;
 
@@ -326,7 +332,7 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp)
     irp->IoStatus.Status = status;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
     if (deleteIt) {
-        uasPdoDelete(pdo);
+        IoDeleteDevice(self);
     }
     return status;
 }

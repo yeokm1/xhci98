@@ -408,7 +408,7 @@ static ULONG uasStreamsWanted(PUAS_FDO fdo)
 
 /* REPORT LUNS on LUN 0, retried past a unit attention; LUN 0 alone when
  * the device cannot answer. */
-static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
+static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PBOOLEAN answered)
 {
     UCHAR cdb[12];
     PUCHAR buf;
@@ -419,6 +419,7 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
     UCHAR scsi;
 
     n = 0;
+    *answered = FALSE;
     length = 8 + 8 * UAS_MAX_LUNS;
     buf = (PUCHAR)UasAlloc(length);
     if (buf != NULL) {
@@ -429,6 +430,7 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
             if (NT_SUCCESS(UasInternalCommand(fdo, 0, cdb, 12, buf, length,
                                               &got, &scsi))) {
                 n = UasParseReportLuns(buf, got, luns, UAS_MAX_LUNS);
+                *answered = TRUE;
                 break;
             }
         }
@@ -485,6 +487,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     ULONG j;
     ULONG before;
     BOOLEAN known;
+    BOOLEAN answered;
     BOOLEAN seen[UAS_MAX_LUNS];
     PUAS_PDO pdo;
     UCHAR serialIndex;
@@ -579,17 +582,27 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     UasEngineStart(fdo);
 
     /* A start after a STOP asks again: a LUN of the earlier start that
-     * this one's REPORT LUNS or INQUIRY no longer answers stops being
-     * reported, so PnP removes it (uas_pdo.c deletes it then). Present is
-     * set from what answered only after the loop, not cleared first, so a
-     * LUN that stays is never briefly refused. */
+     * this one's REPORT LUNS answered without, or whose INQUIRY now says
+     * no unit is attached, stops being reported, so PnP removes it
+     * (uas_pdo.c deletes it then). Only a definite answer removes one: a
+     * REPORT LUNS that failed (its LUN 0 fallback) or an INQUIRY that
+     * failed keeps the LUN's earlier standing, so an allocation failure or
+     * a transient error never takes a working disk away. Present is set
+     * after the loop, not cleared first, so a LUN that stays is never
+     * briefly refused. */
     before = fdo->LunCount;
+    count = uasReportLuns(fdo, luns, &answered);
     for (j = 0; j < UAS_MAX_LUNS; j++) {
-        seen[j] = FALSE;
+        seen[j] = (BOOLEAN)(j < before && !answered &&
+                            fdo->Luns[j]->Present);
     }
-    count = uasReportLuns(fdo, luns);
     for (i = 0; i < count; i++) {
         if (!NT_SUCCESS(uasInquiry(fdo, luns[i], inquiry))) {
+            for (j = 0; j < before; j++) {
+                if (fdo->Luns[j]->Lun == luns[i]) {
+                    seen[j] = fdo->Luns[j]->Present;
+                }
+            }
             continue;
         }
         /* Peripheral qualifier 0: a unit is attached at this LUN. */
