@@ -790,8 +790,12 @@ owner's (record 21 section 4.5.10).** What this profile adds:
 
 - **One cause covers its events.** A hot-plug packet and a notification
   arrive on RX ring 0 (section 5.1), so the interrupt wakes the thread for
-  each; the port check of section 7.1 runs on the thread as today, and so
-  do the router operations and every wait of section 5.2. A chain is
+  each, and the wake runs only the RX ring 0 drain (record 21 section
+  4.5.1): a hot-plug packet's port check of section 7.1 is queued and runs
+  on the thread as today, and so do the router operations and every wait
+  of section 5.2. The idle tick's port scan is not run by an interrupt
+  wake: its control reads' responses would raise the interrupt again and
+  the scan would never stop. A chain is
   enumerated hop by hop, each router's own hot-plug packet waited for, so
   the gain on this profile is up to one idle period per hop.
 - **The timed pass stays at its period, because this profile hangs work

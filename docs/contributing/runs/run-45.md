@@ -57,6 +57,12 @@ ticked.
   watchdog of 1000 ms; MSI's `MmGetSystemRoutineAddress` admitted on
   amd64 only (x86 deny list), x86 through `xhcihlpr.sys`; the DPC drain at
   the stop; the NHI lost-interrupt leg owed to a `usb4-emu` addition.
+  Revised again after review: an interrupt wake drains RX ring 0 only
+  (the scan's responses would otherwise wake the thread forever); a storm
+  masked at DIRQL; disconnection only of a source proven quiet (mask read
+  back, or PCI Interrupt Disable); the image kept resident once an
+  interrupt was connected; MSI keeps the whole status read; the x86 MSI
+  step's `IoGetDeviceObjectPointer`.
 
 **Owed before any 98 SE or ME connection** (record 21 section 4.5.4): on
 the q35 bases with `-Usb4 tb3ar` and `-Usb4 asm4242`, each of 98 SE and
@@ -65,8 +71,10 @@ none), its Interrupt Line and Pin and the IRQ's sharers, by `XHCISNAP`
 level 2 or Device Manager's Resources page.
 
 **The q35 readings that would set the default** (record 21 section
-4.5.9): hot-plug latency on the host's clock (QMP plug to the emulator's
-trace of the driver's first RX consumer write), ten plugs each, interrupt
-off and on; idle cost over ten minutes with nothing attached and with an
+4.5.9): hot-plug latency on the host's clock, from the QMP plug to the
+emulator's trace of the RX consumer index passing that plug's own event
+frame (identified by type, route, adapter and ring slot), and to the
+connection manager's `connected` line, ten plugs each, interrupt off and
+on; idle cost over ten minutes with nothing attached and with an
 idle drive (NT: `% Processor Time`, `Interrupts/sec`; 98 SE and ME: the
 QEMU process's CPU time), and polling at 50 ms beside them.
