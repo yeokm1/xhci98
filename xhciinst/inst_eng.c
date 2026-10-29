@@ -470,7 +470,7 @@ static void s98_ask_values(void);
 static void s98_ask_unused(void);
 static void s98_file_update_9x(void);
 static void s98_mpd_place_9x(void);
-static void s98_wininit_cancel(const char *bin);
+static int s98_wininit_cancel(const char *bin);
 static int stor_hash(const char *path, char hex[65]);
 static int vxd_check_package(const VXDDESC *d);
 static int vsd_mode(int uninstall);
@@ -18422,7 +18422,9 @@ static int s98_un_service(void)
         group_binary(INST_GROUP_S98, path, sizeof(path));
         /* A file update queued and not yet done goes with it, or the
          * next start would put stor98.mpd back. */
-        s98_wininit_cancel(path);
+        if (!s98_wininit_cancel(path)) {
+            return 0;
+        }
     }
     s = file_state(path);
     if (s < 0) {
@@ -18901,9 +18903,6 @@ static void s98_mpd_place_9x(void)
         bin);
 }
 
-/* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
- * update this installer queued (s98_file_update_9x) is taken back - its
- * [rename] entry for stor98.mpd and STOR98.TMP beside it. */
 /* ======================================================================== */
 /* S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design record */
 /* 30 section 7; owner, 2026-10-22)                                          */
@@ -20924,43 +20923,112 @@ static const char *pfwsys_plan(int mode)
                       "installed, loaded at the next start";
 }
 
-static void s98_wininit_cancel(const char *bin)
+/* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
+ * update this installer queued (s98_file_update_9x) is taken back - its
+ * [rename] line putting STOR98.TMP in the place of stor98.mpd, and the
+ * .TMP itself. The lines are read from the file (wininit_text through
+ * vsd_entry_r), as wininit_pending reads them: 98 SE's and ME's profile
+ * routines did not give this installer's own line back, and they see only
+ * the first of equal keys. The line goes by the profile routine, by its
+ * 8.3 and its long key, and the file is read again until it is gone, as
+ * vsd_old_name takes back its own; another program's line naming either
+ * file is left and said. The .TMP is deleted in every case: with it gone,
+ * a line left behind has nothing to put back. 1 when no queued update can
+ * put stor98.mpd back (no such line, or the .TMP gone); 0 when one may
+ * (said), and the uninstall then keeps the driver and the record for a
+ * later run. */
+static int s98_wininit_cancel(const char *bin)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
     char sb[INST_PATH_CHARS];
     char tmp[INST_PATH_CHARS];
-    char val[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
     char *slash;
     DWORD n;
+    int unread = 0;
+    int r;
     int k;
+    int s;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
-        return;
+        out("The Windows directory cannot be read, so whether WININIT.INI "
+            "replaces %s at the next start is not known.\n", bin);
+        return 0;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
     n = GetShortPathNameA(bin, sb, sizeof(sb));
     if (n == 0 || n >= sizeof(sb)) {
         inst_copy(sb, bin, sizeof(sb));
     }
-    for (k = 0; k < 2; k++) {
-        const char *key = k == 0 ? sb : bin;
-        if (GetPrivateProfileStringA("rename", key, "", val, sizeof(val),
-                                     ini) > 0) {
-            WritePrivateProfileStringA("rename", key, NULL, ini);
-            logonly("stor98: WININIT.INI [rename] %s=%s taken back\n", key,
-                    val);
-        }
-    }
     inst_copy(tmp, bin, sizeof(tmp));
     slash = strrchr(tmp, '\\');
+    if (slash == NULL) {
+        return 0;
+    }
+    inst_copy(slash + 1, "STOR98.TMP",
+              sizeof(tmp) - (size_t)(slash + 1 - tmp));
+    /* The .TMP's 8.3 path from the driver's: the .TMP may be gone. */
+    inst_copy(tmpS, sb, sizeof(tmpS));
+    slash = strrchr(tmpS, '\\');
     if (slash != NULL) {
         inst_copy(slash + 1, "STOR98.TMP",
-                  sizeof(tmp) - (size_t)(slash + 1 - tmp));
-        if (file_state(tmp) > 0 && DeleteFileA(tmp)) {
-            logonly("stor98: %s deleted\n", tmp);
+                  sizeof(tmpS) - (size_t)(slash + 1 - tmpS));
+    } else {
+        inst_copy(tmpS, tmp, sizeof(tmpS));
+    }
+    r = vsd_entry_r(bin, tmp, sb, tmpS, &unread);
+    for (k = 0; r == INST_VE_EXACT && k < 16; k++) {
+        if (!WritePrivateProfileStringA("rename", (k & 1) == 0 ? sb : bin,
+                                        NULL, ini)) {
+            break;
+        }
+        /* 9x keeps profile writes in a cache: flushed before the file is
+         * read back. */
+        WritePrivateProfileStringA(NULL, NULL, NULL, ini);
+        r = vsd_entry_r(bin, tmp, sb, tmpS, &unread);
+        if (r == INST_VE_ABSENT) {
+            logonly("stor98: WININIT.INI [rename] %s=%s taken back\n", sb,
+                    tmpS);
         }
     }
+    if (r == INST_VE_EXACT) {
+        out("The queued update of %s in %s could not be taken back (error "
+            "%lu); deleting %s instead leaves it nothing to put back.\n",
+            bin, ini, (unsigned long)GetLastError(), tmp);
+    } else if (r == INST_VE_CONFLICT && unread) {
+        out("%s could not be read, so whether it still replaces %s at the "
+            "next start is not known.\n", ini, bin);
+        flagSteps = 1;
+    } else if (r == INST_VE_CONFLICT) {
+        out("%s has a [rename] line of another program naming %s or %s: it "
+            "is left as it is. Remove that line, or restart Windows to let "
+            "it run, then run the uninstall again.\n", ini, bin, tmp);
+        flagSteps = 1;
+    }
+    s = file_state(tmp);
+    if (s > 0) {
+        if (DeleteFileA(tmp)) {
+            logonly("stor98: %s deleted\n", tmp);
+            s = 0;
+        } else {
+            out("%s could not be deleted (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+        }
+    } else if (s < 0) {
+        out("Whether %s is there cannot be read.\n", tmp);
+    }
+    /* Only this installer's own line, its .TMP gone, is neutralized: an
+     * unread file shows nothing gone, and another program's line may put
+     * a file of its own at stor98.mpd's path, so the driver and the record
+     * stay for a run after that line is resolved. */
+    if (r == INST_VE_ABSENT || (r == INST_VE_EXACT && s == 0)) {
+        return 1;
+    }
+    out("A queued update may put %s back at the next start: it and Stor98's "
+        "record stay; restart Windows, then run the uninstall again.\n", bin);
+    flagSteps = 1;
+    return 0;
 }
 
 static int s98_adopt_inf(const char *infPath)

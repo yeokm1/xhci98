@@ -396,3 +396,14 @@ other value is refused and `1` stands. The install writes it at `1` on
 with `INSTALL /set XhciCmBridgeNumbering=0` (or `1`) or the installer's
 Thunderbolt "Advanced...", which write it machine-wide, or with Regedit,
 and restart Windows or disable and enable the controller.
+
+Whether the bundled Stor98 runs a drive on its interrupt or polls it is
+recorded at each start of the drive: a string value named `StorInterrupt
+<bus>.<device>.<function>` in `HKLM\System\CurrentControlSet\Services\stor98`, on every
+system, ending in `interrupt` or in `polling (...)` with the reason -
+`forced by StorPollMode` (98 SE and ME) or `forced by storpollmode` (2000
+to 10), `no interrupt pin`, `no interrupt assigned`, `interrupt line not
+set`, `configuration unreadable`, and from `3.4.0.0` `INTx would not
+enable`: the drive's interrupt enable did not take when Stor98 set it, so
+it polls rather than wait for interrupts that would not come. Stor98's
+own README, "Interrupt report", says what the rest of the value holds.

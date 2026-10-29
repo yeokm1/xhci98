@@ -2083,7 +2083,11 @@ typedef struct _HCD_HUB_FDO {
     /* System power (design record 13 section 10.12): the system IRP held
      * while the device IRP it asked for runs, and the work item that
      * completes it at PASSIVE_LEVEL when that IRP finished above it. One
-     * system IRP at a time - the power manager serializes them. */
+     * system IRP at a time - the power manager serializes them. One item
+     * is enough, unlike the controller's pair (hcdPowerDefer): a device
+     * D0 that overlaps the system IRP completes in its own completion
+     * routine (hcdHubD0Done), which needs no PASSIVE_LEVEL, so only the
+     * system IRP ever queues it. */
     PIRP PendingSystemIrp;
     WORK_QUEUE_ITEM PowerWork;
 } HCD_HUB_FDO, *PHCD_HUB_FDO;

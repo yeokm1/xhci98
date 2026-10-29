@@ -178,8 +178,10 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhcicm.sys
 LoadOrderGroup=Base
 
+; No temporary-file field, as in xhcicm.inf: that field is the 9x engine's
+; replace-a-loaded-file route through WININIT.INI, which no NT install takes.
 [Cm.CopyFiles]
-xhcicm.sys,,xhcicm.tmp
+xhcicm.sys
 
 ; Right-click Install pre-stages the driver with no device present.
 [DefaultInstall.NTamd64]
