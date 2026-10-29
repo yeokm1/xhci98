@@ -127,11 +127,20 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     ULONG restores;
 
     restores = hc->Hc.Quirk.Restores;
+    /* Task 45.23 (design record 20 section 4.3.2): the invalidation this
+     * resume's re-initialization raises is marked, and the devices may be
+     * kept only once it has succeeded - its HCRST done. */
+    hc->ResumeInvalidating = 1;
+    hc->ResumeSlotsInvalidated = 0;
+    hc->ResumeKeepReady = 0;
     if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        hc->ResumeInvalidating = 0;
         hc->ResumeFailures++;
         HcdControllerFail(hc);
         return;
     }
+    hc->ResumeInvalidating = 0;
+    hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
     HcdQuirkResumed(hc, restores);
 }
 

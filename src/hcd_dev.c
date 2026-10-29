@@ -921,6 +921,10 @@ VOID XhciSlotInvalidateAll(PXHCI_EXTENSION ext, ULONG controllerStopped)
 
     hc = HcdControllerFromExt(ext);
     hc->SlotsInvalidated = 1;
+    /* Task 45.23: an invalidation the resume raises may keep devices once
+     * that resume has succeeded; any other drops a keep still owed. */
+    hc->ResumeSlotsInvalidated = hc->ResumeInvalidating;
+    hc->ResumeKeepReady = 0;
     if (!controllerStopped) {
         hc->SlotsUnproven = 1;
     }

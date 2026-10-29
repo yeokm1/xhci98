@@ -1329,8 +1329,49 @@ static void test_busy(void)
              "busy note: type and answer held to a byte each");
 }
 
+/* Task 45.23: the keep decision of design record 20 section 4.3.2. */
+static void test_resume_keep(void)
+{
+    ULONG base;
+
+    base = XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED;
+    CHECK_EQ(XhciEnumResumeKeep(1, base), XHCI_RKEEP_KEEP, "a HID kept");
+    CHECK_EQ(XhciEnumResumeKeep(0, base), XHCI_RKEEP_WHY_OFF, "switch off");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_FAULTED),
+             XHCI_RKEEP_WHY_FAULTED, "a faulted device dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_STARTED),
+             XHCI_RKEEP_WHY_NOT_ROOT, "behind a hub dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_HUB),
+             XHCI_RKEEP_WHY_HUB, "a hub dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_ROOT),
+             XHCI_RKEEP_WHY_NOT_STARTED, "a PDO not started dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_SUSPENDED),
+             XHCI_RKEEP_WHY_SUSPENDED, "a suspended device dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_ISOCH),
+             XHCI_RKEEP_WHY_ISOCH, "isochronous dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_KEEP, "a HID with a poll outstanding kept");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_SERIAL),
+             XHCI_RKEEP_WHY_BULK_ONLY, "Bulk-Only storage dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS),
+             XHCI_RKEEP_WHY_NO_SERIAL, "UAS storage with no serial dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_WHY_BUSY, "UAS storage with a URB outstanding dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL),
+             XHCI_RKEEP_KEEP, "an idle UAS drive with a serial kept");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_HUB |
+                                       XHCI_RKEEP_F_FAULTED),
+             XHCI_RKEEP_WHY_FAULTED, "the fault is the first reason");
+}
+
 int main(void)
 {
+    test_resume_keep();
     test_clean_paths();
     test_bad_sizes();
     test_failures_and_retry();

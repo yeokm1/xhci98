@@ -385,9 +385,9 @@ any controller without FSC today. The matching is vendor-wide for VIA
 
 #### 4.3.1 Devices kept across a resume's re-initialization (task 45.23; draft, put to the owner)
 
-Status: draft of 2026-10-29, reviewed and revised, written from roadmap-usb4 task 45.23's
-reading (`runs/run-45.md`, "45.23"); not built. Nothing below changes the
-driver until the owner decides it.
+Status: draft of 2026-10-29, reviewed and revised; the owner decided
+option (a) the same day, and section 4.3.2 is what was built. Written
+from roadmap-usb4 task 45.23's reading (`runs/run-45.md`, "45.23").
 
 **The report.** A UAS flash drive behind a VIA VL805 (`1106:3483`), a
 virtual machine's disk image open on it, failed its writes after the
@@ -593,6 +593,79 @@ and a save that fails (no FSC, a transfer outstanding, a spoiled image)
 still takes the re-initialization, so a positive answer narrows the
 report and does not remove the need for (a) on every controller without
 a usable save.
+
+#### 4.3.2 As built (task 45.23, 2026-10-29)
+
+The owner decided (a) on 2026-10-29: K1 to K9 are built in `3.4.0.0`.
+What is built is the subset of K1 to K9 that keeps the device the report
+was about - a device on a root port, a UAS drive among them - and takes
+today's drop (K7) for every case the subset does not cover, so nothing
+outside it changes:
+
+- The switch, `XhciResumeKeep` (`hcd_ctl.c`): absent, or anything but a
+  DWORD 0, is on; no INF writes it, as `XhciUsb2Bos`. Log notes
+  `resume.keep.on` at each start, `resume.keep.port` (the root port and
+  its decision) and `resume.keep` (kept, failed and refused, a byte
+  each) at each resume that re-initialized.
+- K1 and K2: `hcdResume` (`hcd_power.c`) marks the invalidation its
+  `XhciResumeController` raises (`XhciSlotInvalidateAll`, `hcd_dev.c`)
+  and arms the keep only once that resume returned success, its HCRST
+  done; any other invalidation disarms it, and the thread takes it at
+  most once (`HcdEnumService`). An unproven invalidation keeps today's
+  containment: the keep runs only where `hcdInvalidate` would have.
+- The decision is pure, `XhciEnumResumeKeep` (`xhci_enum.c`, host
+  vectors in `test_enum`): the switch off, a device that is gone or owes
+  a fault's cycle, a send-back or a slot fault, a device behind a hub, a
+  hub (and so its subtree), a PDO not started or removed, a device whose
+  selective suspend is not active or that has a wake armed or pending
+  (K6's D2 and WAIT_WAKE cases), an isochronous pipe open, and storage
+  that is not one interface on UAS (`xhciuas.sys`), has no serial number
+  taken as its instance id, or has a URB outstanding on its PDOs, each
+  take K7. A HID device with its poll outstanding is kept.
+- K3 and K4 (`hcdResumeInvalidate`, `hcd_enum.c`; `HcdCfgResumeQuiet`,
+  `hcd_cfg.c`): a kept device stays on its port with its PDOs listed and
+  its record and pipe objects whole; it leaves `SlotDevice[]` and its
+  slot id is 0, so no command names the slot HCRST took; every pipe is
+  paused and everything it held - published or only waiting - completes
+  with `USBD_STATUS_DEV_NOT_RESPONDING`, never replayed (stricter than K4,
+  which held the unpublished ones: an idle storage interface has none,
+  and a HID poll is reissued by its driver), and the closed pipes and
+  retired blocks HCRST released are freed. Its pool rings, freed by the
+  re-initialization's `XhciPoolInit`, are claimed back before any device
+  is restored, under a temporary reference above every slot id
+  (`XhciPoolClaim`, `xhci_mem.c`, host vectors in `test_membuf`). Every
+  other device is drained and dropped as `hcdDropAll` drops it.
+- K5 and K6 (`hcdRkeepRestore`): the link awaited up to 1 s (a
+  SuperSpeed link trains by itself after HCRST), the port reset and its
+  speed compared, Enable Slot, the record put on the new slot and its
+  rings moved to it (`XhciPoolRehome`), Address Device at its EP0 size;
+  the SuperSpeed link rank, the device descriptor, the whole
+  configuration descriptor and - where one was taken - the serial number
+  compared; then `HcdCfgResumeReplay`: each pipe's pool ring laid again
+  (the re-initialization zeroed the carve it is in), each stream ring
+  restarted at its base, one Configure Endpoint for every open endpoint,
+  SET_CONFIGURATION and the nonzero alternates, each endpoint's sequence
+  and halt records cleared, the pipes resumed - RESET_PORT's replay,
+  which is now shared code (`hcdCfgReplayConfig`, `hcdCfgReplayResume`);
+  last, the port's change bits the re-initialization left acknowledged.
+  The selective suspend's state is not touched: only a device with none
+  armed is kept.
+- K7 (`hcdRkeepDrop`): any failure drops that device alone, through the
+  teardown every departure takes - its slot given back when the restore
+  had enabled one - and the port's next inspection enumerates what is
+  there afresh. A command that fails asks for the controller reset, whose
+  invalidation takes what is left.
+- K8 needs no change in `xhciuas.sys`: a UAS drive is kept only with
+  nothing outstanding, so no command spans the reset, and its stream
+  handles are the kept pipes'. A Bulk-Only drive is not kept until the
+  drain contract of each `usbstor` is read (K4).
+- Not built, and dropped as before: devices behind a hub and hubs (K3's
+  subtree restore), isochronous devices, a selectively suspended device's
+  restore and re-suspension (K6), the quarantine of a busy storage
+  interface (K4), and the counters in the snapshot's counter block (K9;
+  the log notes carry them).
+
+The legs read are `runs/run-45.md`, "45.23".
 
 ### 4.4 Q4, `XhciIntelShutdownToEhci` (`XHCI_SPURIOUS_REBOOT`)
 
