@@ -631,3 +631,44 @@ Found New Hardware wizard instead of Windows' USB Audio 1.0 driver, and `uac2`
 installs from it with nothing to tear down. A machine that already holds
 a "USB Audio Device" devnode for such a device keeps it; the way out is
 the `w1` row above (record 13 section 10.7.2, the release notes).
+
+## 45.34 a device with several configurations configured and split (2026-10-29)
+
+Owner, 2026-10-29, from `usb-wdm-free`'s USB Audio 3.0 reading
+(`docs/design/uac2.md` section 16.6): a USB Audio 3.0 device carries an
+ADC 1.0 or 2.0 function in its configuration index 0 (ADC 3.0 section
+3.3) and its 3.0 function later; under `3.4.0.0` before this task the bus
+read configuration 0 only, selected none and left the device one unsplit
+PDO with no driver. Design record 13 section 10.8 (reviewed and revised):
+a device with `bNumConfigurations` above 1 is split by configuration
+index 0 under the unchanged rule, and a function's SELECT_CONFIGURATION
+naming another `bConfigurationValue` is refused. Commit `3df23249`
+(`XhciFuncSplit`, `hcdCfgSelectFunction`, `test_func` vectors). Runtime
+readings, development host A.
+
+**Builds at `3df23249`:** the x86 and amd64 gated builds `all` passed,
+host tests passed (`out\gated-x86-release.txt` and
+`out\gated-amd64-release.txt`, tree clean); release x86 `xhci98.sys`
+`0098b4a3...`.
+
+**The device:** `usb-wdm-free`'s `uacemu.py` profile `uac3dual`
+(`FFFF:0230`, `bNumConfigurations` 2: configuration 1 at index 0 is a UAC
+2.0 function, IAD `01/00/20`; configuration 2 a UAC 3.0 function by its
+standard descriptors, protocol 30h), over `usb-redir`; `uac2` from
+`usb-wdm-free` `815957c` (`uac2wdm.sys` x86 `85b490ad...`).
+
+| Leg | System | Result |
+|---|---|---|
+| `m1` | XP SP3 x86, fresh q35 overlay, this build installed from the controller's Found New Hardware wizard | plug: the device got SET_CONFIGURATION 1 (the simulator's log), "xHCI98 USB Composite Device", then a Found New Hardware wizard for the function "UAC2 uac3dual - SIMULATED"; Have Disk `uac2`; `uac2wdm` RUNNING; `sndrec32` played through it (950 packets, signal). Configuration 2 never selected, protocol 30h never shown. Before this task (`usb-wdm-free` 16.6) the same device had no driver |
+| `m1` | the same guest, regression | a single-configuration UAC 2.0 device (`hs24`) on another port: composite parent and function as before, `uac2` taken from the installed INF without a prompt |
+| `p98` | 98 SE, the `pc`-machine pristine base (`E:\xhci98-vm\p43-5\base\w98se-pristine.qcow2`) with `qemu-xhci`, stock QEMU 11.1.0 (`usb-redir`); this build installed from the controller's Add New Hardware wizard | plug: SET_CONFIGURATION 1, the function's wizard "UAC2 uac3dual - SIMULATED", `uac2` from `w98se-me` (the KS file prompts skipped, as `usb-wdm-free`'s 98 SE legs do), `sndrec32` played (15348 packets, signal) |
+
+The q35 98 SE base did not boot under stock QEMU (a hang in SMM, then,
+with `smm=off`, "While initializing device IOS: Error: An I/O subsystem
+driver failed to load"), and the q35 bases' own emulator has no
+`usb-redir`, so the 98 SE leg ran on the `pc` base. ME, 2000 and the
+x64 systems were not read; the change is the same pure split on every
+target (record 13 section 10.12).
+
+Evidence: `E:\xhci98-vm\p45\w45-uac2\` (`shots\m1-*`, `p98-*`;
+`ev\m1-uac3.jsonl`, `m1-hs24.jsonl`, `p98-uac3.jsonl`).
