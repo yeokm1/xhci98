@@ -239,10 +239,20 @@ static void test_iad(void)
     CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
              XHCI_FUNC_NO_SPLIT, "EF/02/00: whole");
 
+    /* Task 45.34: several configurations split by configuration index 0,
+     * as the one-configuration twin above (a USB Audio 3.0 device's ADC
+     * 2.0 function, ADC 3.0 section 3.3). */
     copy_dev(iadDev);
     dev[17] = 2;
     CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
-             XHCI_FUNC_NO_SPLIT, "EF/02/01 with two configurations: whole");
+             XHCI_FUNC_OK, "EF/02/01 with two configurations: split");
+    CHECK_EQ(set.Count, 3, "two configurations: CDC, audio, HID");
+    check_func(&set.Func[1], 2, 0x0C, 2, 0x01, 0x00, 0x20, 66,
+               "two configurations: UAC 2.0 pair, the IAD's triple", __LINE__);
+    copy_dev(iadDev);
+    dev[17] = 255;
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
+             XHCI_FUNC_OK, "255 configurations: split");
 }
 
 /* IAD over if0-1 (CDC), then AudioControl if2 and AudioStreaming if3 with
@@ -297,12 +307,19 @@ static void test_no_split(void)
     CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
              XHCI_FUNC_NO_SPLIT, "no configuration at all: whole");
 
-    /* Several configurations: Microsoft's composite parent leaves the
-     * device whole, under the driver that matched USB\VID_v&PID_p. */
+    /* Several configurations (task 45.34): split by configuration index
+     * 0 when the rule holds there; a class of its own, or one interface,
+     * still keeps the device whole. */
     copy_dev(cmDev);
     dev[17] = 2;
     CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
-             XHCI_FUNC_NO_SPLIT, "two configurations: whole");
+             XHCI_FUNC_OK, "two configurations, class 0: split");
+    CHECK_EQ(set.Count >= 1, 1, "two configurations: functions");
+    copy_dev(kbDev);
+    dev[4] = 0x02;
+    dev[17] = 2;
+    CHECK_EQ(XhciFuncSplit(dev, kbCfg, sizeof(kbCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "two configurations, CDC class: whole");
     CHECK_EQ(set.Count, 0, "no functions");
 
     memcpy(one, kbCfg, 34);
@@ -311,6 +328,10 @@ static void test_no_split(void)
     copy_dev(kbDev);
     CHECK_EQ(XhciFuncSplit(dev, one, sizeof(one), &set), XHCI_FUNC_NO_SPLIT,
              "one interface: whole");
+    copy_dev(kbDev);
+    dev[17] = 2;
+    CHECK_EQ(XhciFuncSplit(dev, one, sizeof(one), &set), XHCI_FUNC_NO_SPLIT,
+             "two configurations, one interface: whole");
 }
 
 /* Task 36.46 (GitHub issue 17 item 7): SweetLow's low-speed mouse, VID 073A
