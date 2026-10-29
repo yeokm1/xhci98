@@ -408,3 +408,116 @@ The 8 and 7 x86 matrices; the unload leak's owner; the order of
 `FastIoDetachDevice` with ACPI's bus filter (no child above an ACPI
 filter on these q35 topologies); 2000, XP and 10 (record 31 section 9.3
 item 11); the design section and its review; the owner's decision.
+
+## 45.29 the readme and the release history in the shape of the GitHub release notes (2026-10-29)
+
+The owner, 2026-10-29: the download's `readme.txt` and
+`releases/history.md` were both too long-winded. The code is `34172250`,
+`d207bcfb` and `636e997e` (reviewed and revised). Development host A, no
+virtual machine.
+
+### What changed
+
+- **`releases/history.md`.** Every entry, `1.0.0.0` to `3.3.0.0`, is the
+  text the owner published with that release on GitHub (New, Changed,
+  Fixed, Installing/Updating, Known limitations, the downloads), under
+  its old heading and date. The text was made plain ASCII: two published
+  notes held three and nine characters outside it, a dash and arrows. A
+  markdown link artefact is plain text: `[wdmaudio.cat](http://wdmaudio.cat/)`
+  is `wdmaudio.cat`, and a link is its text with the address after it.
+  Three edits (the owner, 2026-10-29): `1.0.0.1`'s "(tested in QEMU
+  only)" and `1.0.1.0`'s "Tested in virtual machines only." are left out,
+  since no system is labelled so; `1.0.0.1`'s second address for
+  SweetLow's stack, a mirror, is left out; and `3.3.0.0`'s Known
+  limitations keep the Windows 2000 `CriticalDeviceDatabase\pci#cc_010802`
+  one the published text lacks. The detailed record of each change stays
+  in the roadmap and the run sheets.
+- **The readme**, from `3.4.0.0` on (`make-release.ps1`'s template): the
+  version's own entry (`Get-HistoryEntryLines`), a short install,
+  the files Windows supplies and 98 SE's storage, how to report a problem
+  (logging level 2, Save Report, Save Snapshot, `XHCIINST.LOG`, and the
+  DOS report only if a maintainer asks), the directory's files and the
+  earlier releases on one line (`Get-HistoryEarlierText`), with the full
+  release notes linked for the rest (each system's standing, the
+  registry settings, every file). XHCIQUAL is no longer a first step: it
+  is in the folder list and in the report section. The three texts each
+  download's readme replaces (`{DOWNLOAD}`, the other drivers' lines,
+  `{MSFILES}`) are each there once, as before, so downloads 2 and 3 are
+  still rendered from download 1's.
+- `ConvertFrom-MarkdownBlocks` renders bullets two levels deeper (the
+  published notes nest them). `check-readme-text.ps1` renders every entry
+  as the cut renders the version's own, and its self-tests cover the
+  entry, the earlier-release line and the nesting. `releases\3.3.0.0` and
+  every earlier cut folder are unchanged.
+
+### The readings
+
+| Step | Result |
+|---|---|
+| `check-text.ps1` and `-SelfTest` (`636e997e`) | OK; "readme text self-test: OK", "text check self-test: OK" |
+| The readme rendered for `3.3.0.0` from the template, as the cut renders it (a stand-in for the folder list) | 393 lines, none past 78 columns (the published `3.3.0.0` readme: 3,331) |
+| `test-package.ps1` at `34172250` | 3 of 1697 checks failed: three source checks naming the old install and missing-tool lines, corrected in `d207bcfb` |
+| `test-package.ps1` at `0581fbe0` | passed, 1698 checks (the not-a-repo and git cases among them) |
+
+### Not read
+
+- `make-release.ps1 -CheckOnly` and a dry cut: this worktree has no
+  XHCIQUAL build and no checkout of the driver packs, so the check stops
+  before it renders the readme. The `3.4.0.0` cut renders it.
+
+## 45.30 the INF gate's self-tests, in process and skipped when unchanged (2026-10-29)
+
+The owner, 2026-10-29: `scripts\inf-gate\test-inf-checks.ps1`, 56 of a
+gated build's 60 minutes in 45.3's readings, made fast both ways the
+owner chose. The design is `build-and-test.md`, "The INF gate's
+self-tests, in process and skipped when unchanged" (reviewed and
+revised); the code is `4da95db8` and `0581fbe0` (reviewed and revised).
+Development host A, loaded by other work throughout.
+
+**Verdict: in process the full run took 40:16 against 47:33 for the old
+suite beside it (15 % less); unchanged, it skips in under a second; a cut
+always runs it in full. Each case's gate run itself, about 7 seconds,
+is now nearly all of what is left.**
+
+### What changed
+
+- Each case runs `check-inf.ps1` in the self-test's process
+  (`Invoke-GateHere`): a script scope of its own per call, the `-Name
+  value` words made a named splat, the global `$LASTEXITCODE` reset and
+  read, an error leaving the gate read as exit 1 with what it printed
+  before. `check-inf.ps1` is unchanged for its other callers. The case
+  about a relative `-ManifestPath` after `Set-Location` stays a process.
+- A digest of every file it and the gate read (all of `scripts\inf-gate\`,
+  `common.ps1`, `test-harness.ps1`, every file directly in `src\`,
+  XHCITR's manifest, and the PowerShell version), held against
+  `out\inf-selftest-pass.txt`, which a passing run writes whole (digest,
+  tree, time, count, an end line) only if the digest at its end is the one
+  it began with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it all;
+  `build-driver.cmd all` and `cut-builds.ps1` set the second, so a cut and
+  any `all` build run it in full, and `both` or one flavour takes the skip.
+- A self-test that needs git fails at once without it: the packager's
+  (its fixtures are git repositories), and the cut launcher's two reads
+  of git's exit code no longer take an earlier program's.
+
+### The readings
+
+| Step | Commit | Result | Time |
+|---|---|---|---|
+| The old suite, base tree | `70bd2e0e` | passed, 1555 checks | 47:33 (18:02:12 to 18:49:45) |
+| In process, beside it | before `4da95db8` (the named binding in; the strict record, the per-run temporary name and the kept output not yet) | passed, 1568 checks | 40:16 (18:05:51 to 18:46:07) |
+| In process, `-Force` | `0581fbe0` | passed, 1569 checks; record written | 46:26 (19:15:27 to 20:01:53, beside a full packager run) |
+| Unchanged, the next run | `0581fbe0` | skipped: "nothing they or the gate read has changed since the run that passed at 2026-10-29T12:01:53Z (1569 checks ...)" | 0.6 s |
+| One gate run in process, alone | - | about 7 s; the costliest statements: the required-values loop over each route's AddReg sections (`check-inf.ps1` near line 1870, 2.4 s) and the OS-supplied files loop (near line 2494, 1.9 s) | - |
+| `test-package.ps1` with no git on `PATH` | `636e997e` | stopped at "the driver pack" with "The term 'git' is not recognized", exit 1; given that exit, `build-steps.ps1` marks the step failed and returns 1, and `build-driver.cmd` stops | - |
+
+A build reported (2026-10-29) to have ended with exit 0 after this
+self-test failed without git could not be reproduced: no log of it was
+kept, and the readings above stop the build. The check now names git
+before anything else runs.
+
+### Not read
+
+- The other gates' self-tests (`check-uas-inf.ps1`, `check-cm-inf.ps1`,
+  `check-stor98-inf.ps1`, `test-flavour-rules.ps1`) take seconds and start
+  no process per case; they were left as they were.
+- A faster gate itself: the two loops above are where its own time goes.
