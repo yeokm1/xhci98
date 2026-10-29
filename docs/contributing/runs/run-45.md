@@ -2256,3 +2256,127 @@ layout, 45.37; clause 4's whole chain at power-on was not read); 5 (safe removal
 the chained unit) waits for section 3.7's code; 6 is 9x (45.14); 7 on
 XP: the dock at power-on then the child hot-plugged works, a hot-plugged
 dock cannot be read on this layout (45.37).
+
+## 45.39 isochronous OUT slower than real time on the emulator's xHCI: the emulator's pacing, not the driver's (2026-10-30)
+
+**The question.** `usb-wdm-free`'s `uac2` legs (its `docs/design/uac2.md`
+section 15.3a) read a 3-second `UACWAV play` taking about 11.5 s on the
+simulated Sound Blaster X4, and about 13 s with 6 of 8 buffers on the
+real X4 passed through, under xHCI98 on QEMU's `qemu-xhci`. The same real
+device through the same passthrough under XP's own EHCI driver plays 8
+of 8 in about 3.3 s.
+
+**The driver's side, read.** `uac2` sends every isochronous URB with
+`USBD_START_ISO_TRANSFER_ASAP` (`uacusb.c`). xHCI98 publishes an ASAP
+request with SIA on every TD (`hcd_io.c`, the isochronous publication;
+`XhciXferIsoStartPlan` returns `XHCI_ISO_START_ASAP`) and IOC on every
+TD. The ring is the pipe's pool ring (62 TRBs) or, for a High Speed
+endpoint of `bInterval` 1 to 3 with a budget, a page ring of 120 (design
+record 13 section 11.8). An explicit `StartFrame` gets a Frame ID on
+every TD only where HCCPARAMS1's CFC bit is set, and otherwise on the
+first TD of a data flow alone (task 36.57, xHCI 4.11.2.5). The
+emulator's HCCPARAMS1 reads `0x00080001` plus its stream bits: CFC is 0.
+
+**The emulator's side, read** (QEMU 11.1, `hw/usb/hcd-xhci.c`,
+`xhci_calc_iso_kick`, `xhci_check_intr_iso_kick` and `xhci_kick_epctx`;
+facts only). The emulator keeps no frame schedule of its own. It gives
+each TD a target microframe and runs the TD once MFINDEX (the virtual
+clock in 125-us steps) has reached that target. A TD that is not yet due
+arms the endpoint's timer and ends the ring walk until the timer fires.
+For a TD with SIA the target is the previous TD's target plus the
+Interval, provided "as soon as possible" (now, rounded up to the
+Interval) lies within four Intervals of that previous target; otherwise
+the target is "as soon as possible". So when the emulator runs more than
+four Intervals after the last TD, it does not catch up. It runs the TD
+that was waiting, restarts the stream at "now", and arms the timer for
+the next TD one Interval later. Each time it gets to run more than 500
+us late it therefore serves about two TDs of a High Speed `bInterval` 1
+endpoint (Interval 125 us, so a 500-us window), and every TD that is
+due on a 1-ms endpoint up to 4 ms late. A TD with an explicit Frame ID
+is due once its frame has come, and late ones run at once, within
+limits: the target is rebuilt from the Frame ID in the current MFINDEX
+epoch, and one more than 32 ms (256 microframes) behind is read as
+2.048 s later. With CFC 0, though, only the first TD of a flow may
+carry a Frame ID. A doorbell also makes the emulator look at a waiting
+TD, under the same rule, outside its timer. The emulator's EHCI model, by
+contrast, walks every microframe that has elapsed since its last run
+(`hcd-ehci.c`, `ehci_work_bh`), which is why the EHCI path keeps time.
+
+**The leg** (development host A, 2026-10-30, worker kit
+`E:\xhci98-vm\p45\w45-iso`). Stock QEMU 11.1.0 (`qemu-system-x86_64.exe`
+SHA-256 `47d57a60...`), run with `-msg timestamp=on` and the trace events
+`usb_xhci_xfer_start`, `usb_xhci_queue_event` and
+`usb_xhci_doorbell_write`. XP SP3 x86 on q35 with `-smp 2` and
+`qemu-xhci` behind a root port. The disk is an overlay over copies of
+task 45.24's leg `f1`, which has this release's tree (`xhci98.sys`
+`a3de04a5...`; no isochronous source has changed since), and 45.25's
+`x6`, which has `uac2` build 18 with the jack fix. The simulator,
+`uacemu.py` (`usb-wdm-free` `0cf767a`, SHA-256 `b745ee98...`), ran over
+`usb-redir`, and `UACWAV.EXE` (`95a036b1...`) ran `play 2 16 48000 3`.
+The script `tools\isorate.py` counts, for each endpoint, the TDs that
+the emulator started, the groups of TDs that share one host timestamp
+(the trace stamps each line to the microsecond and does not mark the
+emulator's passes over the ring, so a group stands for a pass only by
+inference) and the completion codes of the Transfer Events.
+
+| Stream | Expected a second | TDs a second | Timestamp groups a second (median gap) | TDs a group | Ring Underrun | `UACWAV` |
+|---|---|---|---|---|---|---|
+| `x4full`, High Speed, EP 1 OUT, 24 bytes a microframe | 8,000 | 2,057 (24,123 TDs in 11.73 s) | 711 (1.065 ms) | 2 in 4,887 of 8,335 groups, 3 in 1,500, at most 13 | 4, in one 0.2-s burst mid-stream | 8 of 8, `elapsed_ms=11766` |
+| the same device, EP 3 IN feedback, Interval 1 ms | 1,000 | 983 | 697 (1.007 ms) | 1 or 2 | (31 Overrun) | |
+| `fs`, Full Speed, EP 1 OUT, 1 ms | 1,000 | 995 (3,045 TDs in 3.06 s) | 683 (1.143 ms) | 1 or 2 | 12, in the first 3 s | 8 of 8, `elapsed_ms=3062` |
+
+The simulator counted the same 24,122 OUT packets for the High Speed
+play. In all three streams the TDs started in about 700 groups a
+second, most about a millisecond apart (gaps of 1 or 2 ms). The 1-ms
+endpoints, on the same device, driver and guest, ran at real time,
+because a 4-ms window covers that gap. The 125-us endpoint ran at about
+two TDs a group, a quarter of real time, which is what the reading
+above predicts if the emulator ran about once a millisecond, as the
+groups suggest. Its ring ran empty only in one 0.2-s
+burst (four Underrun events in 11.7 s); for the rest of the play the
+driver had the next TD queued whenever the emulator looked, so the
+ring's depth was not the limit. The same reading fits the result that
+`uac2.md` records for the three ALC4080 outputs played at once, each at
+the slow rate, because each endpoint has its own timer and window. It
+is also consistent with the real X4's 6 of 8, a device that needs 8,000
+packets a second fed at this rate until `UACWAV`'s wait ends; that was
+not traced here, and `uac2.md` also records one re-enumeration by the
+passthrough during those runs. Evidence: `ev\r1-play1-rate.txt`,
+`ev\r1-fsplay-rate.txt`, `ev\r1-qtrace-full.log`, `ev\r1-x4a.jsonl`,
+`ev\r1-fs.jsonl`, `shots\r1-play1.png` and `shots\r1-fsplay.png`.
+
+**Verdict.** The cause is the emulator's. Its SIA pacing serves a High
+Speed `bInterval` 1 isochronous endpoint at about two TDs each time it
+gets to run late and never catches up, and on development host A the
+traced TDs started in groups about a millisecond apart. **Neither a deeper ring nor Frame IDs
+helps within the specification.** A deeper ring does not, because the ring
+was not the limit. The one path on which the emulator does catch up, a
+Frame ID on every TD, is not allowed on a controller without CFC, and
+the emulator is one; ASAP requests are published with SIA by design
+(`hcdIsoPublish`: a Frame ID from the driver's estimate of the
+stream's position would open a gap or miss a service whenever the
+estimate is off by one; SIA cannot be). Extra doorbells are within
+the specification and would give the emulator more passes; a pass that
+comes within four Intervals of the last TD runs every TD then due, so
+a doorbell every half millisecond or less while a stream runs could let
+it keep time. That is beyond what a timer on these systems gives, and
+it would cost real hardware a doorbell write every half millisecond per
+stream for an emulator's sake: not tried, and declined. A `qemu`-flavour hook that stamped Frame IDs everywhere would
+change the driver's behaviour only where no published flavour runs, and
+it is not proposed either.
+
+**What a real controller does.** It services the ring at every ESIT of
+the endpoint from its own frame schedule, SIA TDs back to back, with no
+dependence on the host's timers. A 125-us endpoint gets 8,000 TDs a
+second while the driver keeps the ring ahead, which the pool ring (7.75
+ms at one TRB a TD) and the page (15 ms) do with `uac2`'s requests. That
+is not read here. The bench reading owed is a High Speed UAC 2.0 device
+(the Sound Blaster X4) on a real xHCI controller under XP and 98 SE with
+`uac2`: `UACWAV play 2 16 48000 3` timed (about 3 s and 8 of 8
+expected) and, on XP, two outputs at once. Until then, the emulator's
+High Speed isochronous timings say nothing about the driver's.
+
+**Left.** The bench reading above. The change that would make the
+emulator keep time is in `qemu-xhci`'s SIA target: take the previous
+target plus the Interval, however late, while the ring has not run
+empty, up to a bound. That change lies outside this repository.
