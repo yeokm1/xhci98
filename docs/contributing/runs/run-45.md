@@ -1618,3 +1618,54 @@ On a USB4 host that this release's connection manager runs, the legs
 above removed the dock cleanly, the closure having been recorded before
 the proof was asked; the reverse order keeps the pin (record 17 section
 4.13.6).
+
+## 45.37 a switch hot-added behind a Thunderbolt 3 tunnel port on 7 x86 at Code 31: the emulated platform's bus numbers (2026-10-30)
+
+**The question.** 45.17's legs a and d found the hot-plugged dock's
+switch upstream port (`104C:8232`) at Code 31 (`CM_PROB_FAILED_ADD`) on
+7 x86 with the Thunderbolt 3 topology, its `LowerFilters` naming
+`xhcicm` (the unit's mark), while the same dock present at power-on
+started (leg b), and the same dock behind the ASM4242 layout started on
+7 x86 with the same mark (45.12's R8: `PCI\VEN_104C&DEV_8232...`,
+`LowerFilters` `xhcicm`, Code 0).
+
+**The reading (leg r1).** A child overlay of 45.17's 7 x86 golden (the
+release x86 package of `1a2a72ca`), the same emulator
+(`qemu-system-x86_64.exe` `c1227fda...`, `usb4-emu` `0b4a259`), the
+launcher's `-Usb4 tb3ar`; the dock (`usb4-device ... dialect=tb3,dock=on`)
+plugged by QMP at the desktop. Evidence:
+`E:\xhci98-vm\p45\w45-chain\w7\` (`serial-r1.log`, `trace-r1.log`,
+`cmdline-r1.txt`).
+
+| Step | Read |
+|---|---|
+| `info pci` before the plug | the root port `00:08.0` buses 1 to 9; the controller's switch upstream port 1 to 5; its downstream ports `02:00.0` (the NHI) 3 to 3, `02:01.0` (the tunnel port) **4 to 4**, `02:02.0` (the controller's xHCI) 5 to 5 |
+| the plug | approved (`ICM approve link 1 depth 1: tunnel up`); `info pci`: `104C:8232` at bus 4, its **secondary and subordinate bus 0**, windows closed; `XHCIINST /devices`: "PCI Express standard Upstream Switch Port - pci, problem code 31"; `setupapi.dev.log`: "Device not started: Device has problem: 0x1f: CM_PROB_FAILED_ADD"; `LowerFilters` `xhcicm` on its instance key |
+| A/B: the mark taken away | `net stop xhcimark`; the `LowerFilters` value deleted (as SYSTEM); the dock unplugged and plugged again: `LowerFilters` absent, so no `AddDevice` of `xhcicm` on the device, `104C:8232` again at bus 4 with secondary and subordinate 0, **again Code 31**. The tunnel port's bridge filter, left in place, still attaches its child filter above the new device's PDO at `BusRelations` (`cmAttachNew`), as it does in R8 and leg b, where the same switch started |
+
+**Cause.** The emulated platform's. The emulated Thunderbolt 3 tunnel port
+(`usb4-tb3-tunnel-dsp`, an `8086:15C0` downstream port of the
+controller's own switch) carries no bus reservation, and SeaBIOS
+reserves buses only for a bridge with QEMU's own resource-reserve
+capability on a QEMU bridge id (`1B36:000C` or `1B36:0001`, 44.45), so the tunnel port spans one bus
+(its own secondary). A switch hot-added there has no bus for its
+secondary side; 7 neither renumbers the parent nor starts the bridge.
+This is the limit "44.20 (continued)" read on 8 x86 and "44.64 Part A"
+read on all five systems (`info pci`: `104C:8232` at bus 4 with
+secondary and subordinate 0). Present at power-on, SeaBIOS numbers the
+dock's switch itself, which is why leg b started. The ASM4242 layout
+has its firmware padding (`fw-bus-pad`, 44.45), which is why R8 started
+with the same mark. `xhcicm`'s registered child (`CmChildAddDevice`)
+always answers success and is not the failing `AddDevice`: the A/B
+fails the same without it. The child filter the tunnel port's bridge
+filter attaches stayed in the A/B; it is on the stack in R8 and in leg
+b too, where the switch, numbered, started.
+
+**What follows.** No change in this tree. A hot-plugged switch behind
+the emulated Thunderbolt 3 tunnel port needs firmware padding in the
+emulator, as the ASM4242 preset has it (`usb4-emu`'s work, outside this
+repository; reported to the coordinator). Until then, on the
+Thunderbolt 3 topology a chained device is read on q35 behind a dock
+present at power-on (SeaBIOS numbered the dock; a device without its
+own switch then lands on the chain port's own secondary bus), and a
+hot-plugged dock only behind a tunnel port with a reservation.
