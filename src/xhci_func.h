@@ -127,6 +127,16 @@ ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface);
 ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
                            ULONG deviceMask);
 
+/*
+ * How many compatible ids a function or device with the class triple
+ * cls/sub/prot carries (design record 13 section 10.7.2): 2 - the
+ * &SubClass_ss&Prot_pp form and the &SubClass_ss form - for the audio
+ * class (01) with protocol 20h (USB Audio 2.0) or 30h (3.0), which the
+ * bare USB\Class_01 would hand to a USB Audio 1.0 driver; 3, the bare
+ * class id last, for every other triple.
+ */
+ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot);
+
 #define XHCI_FUNC_ID_DEVICE     0UL
 #define XHCI_FUNC_ID_HARDWARE   1UL
 #define XHCI_FUNC_ID_COMPATIBLE 2UL
