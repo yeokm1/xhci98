@@ -46,13 +46,11 @@ record of the tunnels it built, so that a tunnel found preserved after a
 PnP stop and start of the NHI is still rebuilt across a sleep that lost
 the domain's configuration (section 7.6); sections 7.6 and 11 point to it.
 
-Revised 2026-10-29 (tasks 45.21 and 45.22, the owner's "Phase 45
-additions"; designs only, no code): section 19, new - Thunderbolt 1, 2
-and 3 hosts on Apple Macs run by this connection manager, from Linux's
-facts and Apple's public support pages; section 5.4, new - the ring
-interrupt for this profile, designed with the ICM client's in record 21
-section 4.5. Section 3.1's inert start for subsystem vendor `106B` stands
-until section 19's code.
+Revised 2026-10-29 (task 45.21, the owner's "Phase 45 additions"; a
+design, no code): section 19, new - Thunderbolt 1, 2 and 3 hosts on
+Apple Macs run by this connection manager, from Linux's facts and Apple's
+public support pages. Section 3.1's inert start for subsystem vendor
+`106B` stands until section 19's code.
 
 Revised 2026-10-25 (task 44.39, planned as U4HW.1): section 18, new - the
 ASMedia ASM4242, a USB4 host whose firmware can boot a CSM, as
@@ -147,8 +145,7 @@ In:
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
 - Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3); ring interrupts are designed
-  in record 21 section 4.5 and section 5.4 (task 45.22), not yet code.
+  decided for the ICM client (decision D3).
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -183,8 +180,7 @@ Out, each with where it goes:
 - Inter-domain (host-to-host) links and the DMA port: never set up.
 - Asymmetric links and USB4 version 2 features: a version 2 router is run
   as a version 1 one (section 6.2).
-- Interrupts, MSI and MSI-X: polling only (section 5.4 designs the
-  interrupt for a later release, task 45.22).
+- Interrupts, MSI and MSI-X: polling only.
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -778,35 +774,6 @@ adds them to the allowlists with that evidence. `KeQuerySystemTime`, which
 the HCD already imports, is not used: system time can be set backwards. Waits
 under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
 21 section 4.3 allows on this thread only.
-
-### 5.4 Ring interrupts (task 45.22)
-
-The idle wait of this profile is the ICM client's (record 21 section 4.4),
-and task 45.22 designs one interrupt for both in record 21 section 4.5:
-RX ring 0's Receive Data Buffer cause wakes the thread's idle wait, the
-timed wait stays as a watchdog, commands stay busy-polled, and every
-failure returns to polling. **A design only; decision D3 and section 1.3's
-"polling only" stand until its code is read.** What this profile adds:
-
-- **USB4 hosts need not wire INTx**: a PCIe host router shall support MSI
-  or MSI-X, and INTx emulation is optional (Spec 12.5). Whether the
-  ASM4242, the AMD hosts and the Intel integrated hosts wire it is not
-  read here (`usb4-emu`'s `CONTROLLER-CATALOG.md` records INTx pin A on the
-  captured Alpine Ridge LP and Alder Lake functions [obs there], and the
-  ASM4242's INTx as inferred or unknown). On 98 SE, ME, 2000 and XP, which
-  have no MSI, a host without INTx keeps polling, and the self-test of
-  record 21 section 4.5.5 is what finds that out at start.
-- **The status contract is the host's**: on the non-Intel hosts the mask
-  is opened through Interrupt Mask Set and closed through Interrupt Mask
-  Clear, and the status is cleared by the service routine's read or, where
-  auto-clear is disabled, by Interrupt Status Clear (record 21 section
-  4.5.2); the Intel integrated hosts take Intel's contract.
-- **Hot plug on this profile** arrives as a hot-plug packet or a
-  notification on RX ring 0 (section 5.1), so the one cause covers it; the
-  port check of section 7.1 runs on the thread as today, and the router
-  operations and the waits of section 5.2 are unchanged.
-- **Containment** (section 7.7) disconnects the interrupt on entry and
-  reconnects it only on the recovery's return to ACTIVE.
 
 ## 6. The connection manager
 
@@ -4376,15 +4343,14 @@ Windows.
   `icm_fr_is_supported`, `icm_ar_is_supported`, `tb.c`
   `tb_apple_add_links`, `tb_find_pcie_down`, `tb_resume_noirq`,
   `switch.c` `tb_switch_get_generation`, `tb_switch_configure`,
-  `tb_plug_events_active`, `tb_switch_reset_host`, `cap.c`, `lc.c`,
-  `tunnel.c` `tb_dp_xchg_caps`, `usb4.c` `link_is_usb4`) and
+  `tb_plug_events_active`, `tb_switch_reset_host`,
+  `tb_switch_default_link_ports`, `tb_init_port`, `tb_switch_set_uuid`,
+  `cap.c`, `lc.c`, `eeprom.c` `tb_drom_read_uid_only`, `tunnel.c`
+  `tb_dp_xchg_caps`, `usb4.c` `link_is_usb4`, `usb4_switch_setup`) and
   `include/linux/pci_ids.h`; Apple Support, "Boot Camp Support Software
   5.0.5033" (support.apple.com/en-us/106404), "Download Boot Camp Support
   Software 5.1.5769" (106378), "Install Windows 10 on your Mac with Boot
   Camp Assistant" (102622), "System requirements to install Windows using
   Boot Camp for macOS" (HT204048), and the Windows 7-only statement for
-  the Early 2011 MacBook Pro as quoted in press reports of February and
-  August 2011 (Apple's HT1461, not read directly).
-- For section 5.4 (read 2026-10-29): USB4 Specification 2.0 sections 12.5
-  and 12.6.3.4; `usb4-emu` `docs/ARCHITECTURE.md` sections 3 and 5,
-  `docs/CONTROLLER-CATALOG.md`, `docs/HARNESS.md`.
+  the Early 2011 MacBook Pro as press reports of February and August 2011
+  quote it (Apple's HT1461, not read directly).
