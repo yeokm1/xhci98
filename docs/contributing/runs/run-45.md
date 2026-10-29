@@ -1243,19 +1243,87 @@ never entered and the start failed.
   makes the removal take the filter out of `UpperFilters` first.
 
 So the step can act in time on 8 and 8.1 in the root bus's stack; on 10
-it cannot be placed there as read. Record 32 section 11.5 (draft) designs
-the filter role for 8 and 8.1 and keeps 10 not offered. **The code is not
-this worker's** (roadmap: "the code only if the reading shows such a
-step acts in time"): it is reported to the coordinator, with the owner's
-questions Q10 to Q12 of that section. Left: the design's review loop to
-convergence, the owner's answers, the code and its legs; for 10, why the
-filter is not initialised. The task stays unticked.
+it cannot be placed there as read. The owner then chose the filter role
+on 8 and 8.1, coded in this release; the design, the code and its legs
+are "45.9 (continued)" below.
 
 Evidence: `E:\xhci98-vm\p45\w45-read\` (`g8`, `g81`, `g10`, `g10c`:
 `trace-*.log`, `debugcon-*.log`, `serial-*.log`, `leg-*.txt`,
 screenshots; `xflt`, `xfltc` the batches and the probe image;
 `pids.txt`, `STATE.md`); the probe's source in
 `E:\xhci98-scratch\p45-w45-read\flt`.
+
+## 45.9 (continued) - `XHCIPFW.SYS` as a Root-Bus Filter on the 32-bit 8 and 8.1: the Code and Its Legs (2026-10-30)
+
+The owner's answers of 2026-10-29 (record 32 section 11.5.4): the filter
+role on 8 and 8.1 only, the image boot-critical there accepted with the
+order of changes and the readme's recovery, coded in `3.4.0.0`. Record 32
+section 11.5.2 is the design (reviewed and revised over six rounds, the
+last with no findings); the code is commits `e409d8c7`, `8cbed23c`,
+`6fb1a773`, `106286a7` and `1c0a48d9` (reviewed and revised, the last
+round with no material findings): the driver's two roles by version, the
+filter role's step over its own root bus's bus range at that bus's first
+start, the installer's filter role under names of its own (service
+`xhcipff`, images `xhcipff.sys` and `xhcipff2.sys`, record
+`HKLM\Software\xhci98\XhciPfwFilter`) so that `3.3.0.0`'s installer
+cannot strand it, the entries taken out of every root bus before any
+removal and an update that keeps them, a machine-wide lock, the readme's
+recovery; host vectors (`test_pfw`, `test_inst`).
+
+### The vehicle
+
+Development host A; the gated `release` builds x86 and amd64 at
+`1c0a48d9` (`BUILD + GATES PASSED`, both), a TEST cut of the x86 half
+(`make-release.ps1 -Flavor release -Arch x86 -TestLabel`, zip SHA-256
+`51d5ba1d...0091`, `XHCIPFW.SYS` `c38e2e02...a8a`, `XHCIINST.EXE`
+`11887345...bf65`). q35, the launcher and emulator of "45.9" above; fresh
+overlays of the clean 8 x86, 8.1 x86 and 10 x86 bases, two processors,
+2 GB. The install `XHCIINST.EXE /dir release-x86 /yes /nopause
+/thunderbolt` from an elevated prompt on the board without the USB4 model
+(each "Windows can't verify the publisher" box answered "Install this
+driver software anyway"); then cold starts on the 4G-off layout with the
+ORICO at power-on, "RW" a read and write trace, "W" writes only; the
+registry, the filters and the problem codes read by a batch to COM1.
+
+### Readings
+
+| System | Step | Result |
+|---|---|---|
+| 8 | install | exit 3; service `xhcipff` (Type 1, `Start` 0, `ErrorControl` 0, `Group` `PnP Filter`, `ImagePath` `System32\DRIVERS\xhcipff.sys`); `UpperFilters` `xhcipff` on `ACPI\PNP0A08\0` |
+| 8 | cold starts a, b (RW), c (W) | the step's close of the root port before the PCI driver's probe at every start (trace lines 31 034 against 31 584; c 446 against 511); the Start screen; `XhciPfwRole` 2, `XhciPfwMode` 2 (inside `KeIpiGenericCall`), `XhciPfwBuses` 0 to FFh, `XhciPfwClosed` 9, `XhciPfwSkipped` 0 (no "late" bit), the hold about 70 ms of TCG time; every ASM4242 and enclosure bridge at problem 0 (only the NVMe, with no driver on 8, and `fw_cfg` at 28) |
+| 8 | the installer again (update over itself, 4G-off) | exit 3; the entry and the service kept as they were; the step closed 9 at that start |
+| 8 | the image deleted by hand, the entry left | the start stops: "Automatic Repair: Windows couldn't load correctly" offering System Restore; System Restore returned a working start, the package's registry rolled back to before its install (its restore point; Startup Repair's log: root cause "unspecified changes to system configuration", repair action System Restore) |
+| 8 | install again, then `/uninstall` | exit 3 each; after the uninstall no `xhcipff` service, no entry, no image; a cold start reached the Start screen |
+| 8 | install again, the image deleted, the repair's Cancel | the start stopped again and stayed at the logo; the readme's manual route (the entry removed from the recovery environment's registry editor) was not driven |
+| 8.1 | install | exit 3; the same service, group and entry |
+| 8.1 | cold starts a, b (RW), c (W) | close before probe at every start (31 034 against 31 585; 446 against 511); the desktop; `XhciPfwRole` 2, `XhciPfwClosed` 9, `XhciPfwSkipped` 0; only `fw_cfg` at 28 |
+| 8.1 | update over itself (4G-off), `/uninstall`, a cold start | exit 3, the entry kept; exit 3, "XHCIPFW.SYS is no longer registered", no entry; the desktop |
+| 10 | `/xhcipfw` | exit 1, "REFUSED: /xhcipfw: XHCIPFW.SYS cannot start in time on Windows 10.", nothing changed |
+| 10 | the install without it | exit 3; no `xhcipff` or `xhcipfw` service, no entry on any root bus, no image |
+
+### What it says
+
+- On 8 and 8.1 the filter role closes the windows before the PCI driver
+  reads them at every start read (three each), with no "late" bit, and
+  both systems start with every bridge behind the ASM4242 at problem 0
+  [read].
+- The update over itself keeps the entries and the service; the
+  uninstall takes the entry out and removes the service and the image,
+  and the system starts after it [read].
+- A root bus naming the filter with its image gone stops the start, as
+  the design says; Windows' own System Restore recovered it [read]; the
+  readme's manual route is owed (a recovery-environment leg).
+- On 10 nothing is placed and `/xhcipfw` is refused [read].
+
+Left: the readme's manual recovery route in the recovery environment;
+an update from one image to another (only the same release over itself
+was read); a two-processor hold's length on hardware and the hardware
+bench (45-E). The task stays unticked for the coordinator to decide.
+
+Evidence: `E:\xhci98-vm\p45\w45-read\` (`h8`, `h81`, `h10`:
+`serial-*.log`, `trace-*.log`, `leg-*.txt`, screenshots; `xfl` the
+batches and the cut; `pids.txt`, `STATE.md`); the builds' logs in
+`E:\xhci98-scratch\p45-w45-read\build2-x86.log` and `build2-amd64.log`.
 
 ## 45.10 - Tunnelled NVMe Speed on 98 SE and ME, the Emulator Readings (2026-10-29)
 
