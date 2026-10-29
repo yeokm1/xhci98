@@ -6809,12 +6809,14 @@ static void test_pfw_inst(void)
     CHECK(inst_pfw_sys(1, 6, 0, 1) == INST_PFW_SYS_SEEN &&
           inst_pfw_sys(1, 6, 1, 1) == INST_PFW_SYS_SEEN,
           "Vista, 7 x86: offered");
-    /* Task 44.72 (the owner, 2026-10-28): from 8 on the step's start
-     * races the PCI driver's. */
-    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_GONE &&
-          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_GONE &&
-          inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
-          "8, 8.1, 10 x86: not offered, an earlier one removed");
+    /* Task 44.72 (the owner, 2026-10-28): from 8 on the boot driver's
+     * start races the PCI driver's; task 45.9 (the owner, 2026-10-29): a
+     * root bus filter on 8 and 8.1, not 10. */
+    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_FILTER &&
+          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_FILTER,
+          "8, 8.1 x86: offered, the filter role");
+    CHECK(inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
+          "10 x86: not offered, an earlier one removed");
     CHECK(inst_pfw_sys(1, 6, 4, 1) == INST_PFW_SYS_NONE &&
           inst_pfw_sys(1, 11, 0, 1) == INST_PFW_SYS_NONE,
           "an unknown NT 6 or later: nothing");
@@ -6845,9 +6847,15 @@ static void test_pfw_inst(void)
     CHECK(!inst_pfw_box(INST_PFW_SYS_SEEN, 1, 1, 1, &shown, &open),
           "XP to 7, /noxhcipfw: unticked");
     CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 1, 0, &shown, &open) &&
-          !shown && !open, "8, 8.1 and 10 x86: not shown, never ticked");
+          !shown && !open, "10 x86: not shown, never ticked");
     CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 0, 0, &shown, &open) &&
-          !shown && !open, "8 to 10, Thunderbolt unticked: not shown");
+          !shown && !open, "10, Thunderbolt unticked: not shown");
+    CHECK(inst_pfw_box(INST_PFW_SYS_FILTER, 1, 1, 0, &shown, &open) &&
+          shown && open, "8 and 8.1, Thunderbolt ticked: ticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_FILTER, 1, 0, 0, &shown, &open) &&
+          shown && !open, "8 and 8.1, Thunderbolt unticked: unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_FILTER, 1, 1, 1, &shown, &open) &&
+          shown && open, "8 and 8.1, /noxhcipfw: unticked");
 
     CHECK(inst_pfw_mode(INST_PFW_SYS_NONE, 0, 1, 1, 1) == INST_VSD_NONE &&
           inst_pfw_mode(INST_PFW_SYS_NONE, 1, 1, 1, 1) == INST_VSD_NONE,
@@ -6874,6 +6882,50 @@ static void test_pfw_inst(void)
           "whatever the boxes or the package");
     CHECK(inst_pfw_mode(INST_PFW_SYS_GONE, 1, 1, 1, 1) == INST_VSD_UNINSTALL,
           "8 to 10 x86: the uninstall removes it");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 1, 1) ==
+              INST_VSD_SELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 1, 0) ==
+              INST_VSD_DESELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 0, 1) ==
+              INST_VSD_INACTIVE &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 1, 1, 1, 1) ==
+              INST_VSD_UNINSTALL,
+          "8 and 8.1: as on Vista and 7");
+
+    /* The root bus devnodes (record 32 section 11.5.2). */
+    {
+        static const char hw[] = "ACPI\\VEN_PNP&DEV_0A08\0ACPI\\PNP0A08\0*PNP0A08\0";
+        static const char cp[] = "*PNP0A03\0";
+        static const char other[] = "ACPI\\PNP0C0A\0*PNP0C0A\0";
+        static const char low[] = "*pnp0a03\0";
+        char out[64];
+        size_t n;
+        int added;
+
+        CHECK(inst_pfw_rootbus(hw, sizeof(hw), NULL, 0),
+              "a PCI Express root complex: a root bus");
+        CHECK(inst_pfw_rootbus(other, sizeof(other), cp, sizeof(cp)),
+              "*PNP0A03 among the compatible ids: a root bus");
+        CHECK(inst_pfw_rootbus(other, sizeof(other), low, sizeof(low)),
+              "compared without case");
+        CHECK(!inst_pfw_rootbus(other, sizeof(other), NULL, 0),
+              "a battery: no");
+
+        n = inst_msz_append(NULL, 0, "xhcipfw", out, sizeof(out), &added);
+        CHECK(n == 9 && added && memcmp(out, "xhcipfw\0\0", 9) == 0,
+              "no filters: the one entry");
+        n = inst_msz_append("partmgr\0\0", 9, "xhcipfw", out, sizeof(out),
+                            &added);
+        CHECK(n == 17 && added &&
+              memcmp(out, "partmgr\0xhcipfw\0\0", 17) == 0,
+              "another filter kept first, the entry appended");
+        n = inst_msz_append("XHCIPFW\0a\0\0", 12, "xhcipfw", out,
+                            sizeof(out), &added);
+        CHECK(n == 11 && !added && memcmp(out, "XHCIPFW\0a\0\0", 11) == 0,
+              "already there (without case): unchanged");
+        n = inst_msz_append("partmgr\0\0", 9, "xhcipfw", out, 12, &added);
+        CHECK(n == (size_t)-1, "too long: refused");
+    }
 
     /* BootConfig: 7 x86's root port on the 4G-off layout, as read
      * (runs/run-44.md "44.49"): a memory range, a second, the 64-bit
