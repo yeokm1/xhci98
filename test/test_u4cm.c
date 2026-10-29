@@ -5597,6 +5597,115 @@ static int snapHook(struct FAB *f, unsigned long pdf, int router, unsigned long 
     return FAB_HOOK_GO;
 }
 
+/* Hook: every write to one DW swallowed (never answered) once armed. */
+static int g_failRouter;
+static unsigned long g_failCs;
+static unsigned long g_failAdp;
+static unsigned long g_failAddr;
+static int failWriteHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                         unsigned long adp, unsigned long addr, unsigned long n,
+                         const unsigned long *data)
+{
+    (void)f; (void)n; (void)data;
+    if (pdf == TBT_PDF_WRITE && router == g_failRouter && cs == g_failCs &&
+        adp == g_failAdp && addr == g_failAddr) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* No entry of the kid's tunnel left Valid on either end unless the
+ * quarantine holds something. */
+static int kidPathsClosed(const FAB *f, int dev, int child)
+{
+    int a = fabDownLane0(f, dev);
+    int h;
+
+    if (quarantineCount(&g_cm) != 0) {
+        return 1;
+    }
+    for (h = 8; h < 24; h++) {
+        if ((fabPath0(f, dev, a, h) & TBT_PATH0_VALID) ||
+            (fabPath0(f, child, 1, h) & TBT_PATH0_VALID)) {
+            return 0;
+        }
+    }
+    return (fabPath0(f, dev, 7, 8) & TBT_PATH0_VALID) == 0 &&
+           (fabPath0(f, child, 5, 8) & TBT_PATH0_VALID) == 0 &&
+           (fabAdp(f, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE) == 0 &&
+           (fabAdp(f, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE) == 0;
+}
+
+/* Section 6.6: a failure after any write - the orderly teardown of the
+ * entries written, the kid FAILED, the parent's tunnel kept. A write
+ * that is never answered at each stage: the upstream path's first
+ * segment (the child's PCIe Up HopID 8), the parent's Path Enable (the
+ * last write); and a drain that never completes on the parent's lane. */
+static void test_kid_path_failures(void)
+{
+    int dev;
+    int child;
+    int stage;
+
+    for (stage = 0; stage < 2; stage++) {
+        dev = setupParent(FAB_DEV_USB4, NULL);
+        child = fabChild(&g_fab, dev);
+        if (stage == 0) {
+            g_failRouter = child;
+            g_failCs = TBT_CS_PATH;
+            g_failAdp = 5;
+            g_failAddr = 2 * 8;
+        } else {
+            g_failRouter = dev;
+            g_failCs = TBT_CS_ADAPTER;
+            g_failAdp = 7;
+            g_failAddr = FAB_CAP_ADP;
+        }
+        g_fab.Hook = failWriteHook;
+        fabHotPlugChild(&g_fab, dev, child);
+        poll(&g_cm, &g_fab, 4);
+        g_fab.Hook = NULL;
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "a write never answered: the kid FAILED");
+        CHECK(kidPathsClosed(&g_fab, dev, child), "what it wrote closed or quarantined");
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+        CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+    }
+
+    /* A drain that never completes: quarantined under the kid, its HopID
+     * not reused by the next connect. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = 7;
+    g_failAddr = FAB_CAP_ADP;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[8] = 1;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[9] = 1;
+    g_fab.Hook = failWriteHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    g_fab.Hook = NULL;
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "stuck drain: FAILED");
+    CHECK(quarantineCount(&g_cm) >= 1, "the undrained entry quarantined");
+    {
+        ULONG i;
+        int kidOwned = 0;
+        for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+            if (g_cm.Quarantine[i].Used && g_cm.Quarantine[i].Kid != 0) {
+                kidOwned = 1;
+            }
+        }
+        CHECK(kidOwned, "keyed by the kid (section 6.7)");
+    }
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[8] = 0;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[9] = 0;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP throughout");
+}
+
 /* Section 6.7: the end device's unplug, and a quick re-plug. */
 static void test_kid_end_unplug(void)
 {
@@ -6141,6 +6250,7 @@ int main(void)
     RUN_VEC(test_kid_connect_usb4);
     RUN_VEC(test_kid_connect_tbt3);
     RUN_VEC(test_kid_refused);
+    RUN_VEC(test_kid_path_failures);
     RUN_VEC(test_kid_end_unplug);
     RUN_VEC(test_kid_stale_unplug);
     RUN_VEC(test_kid_middle_unplug);
