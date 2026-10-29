@@ -132,6 +132,7 @@ static NTSTATUS cmChildCreate(PCM_FILTER parent, PDEVICE_OBJECT pdo,
                               ULONG isNew, PULONG over, PULONG again);
 static VOID cmDiscoverAndList(PCM_NHI nhi);
 static VOID cmMarksSyncAll(VOID);
+static VOID cmChainClassify(PCM_FILTER child);
 
 /* ====================================================================== */
 /* Configuration space                                                    */
@@ -856,10 +857,14 @@ VOID CmRegChainRelations(PCM_FILTER child, const DEVICE_RELATIONS *relations)
 {
     PVOID now[CM_SNAP_MAX];
     ULONG isNew[CM_SNAP_MAX];
+    ULONG locd[CM_SNAP_MAX];
+    ULONG bus[CM_SNAP_MAX];
+    ULONG addr[CM_SNAP_MAX];
     ULONG count;
     ULONG fresh;
     ULONG truncated;
     ULONG i;
+    ULONG j;
     KIRQL irql;
 
     count = 0;
@@ -879,13 +884,35 @@ VOID CmRegChainRelations(PCM_FILTER child, const DEVICE_RELATIONS *relations)
     fresh = CmPortsNewPdos((PVOID const *)child->Snap, child->SnapCount,
                            (PVOID const *)now, count, isNew);
     cmChainRelNote(child, count, fresh);
+    /* Before the new PDOs are attached and the answer goes up: Windows
+     * asks a new PDO's capabilities only after this answer, so its entry
+     * and its parent's classification exist by then (record 34 section
+     * 3.10). */
+    cmChainClassify(child);
     cmAttachNew(child, (PVOID const *)now, count, isNew);
     KeAcquireSpinLock(&cmRegLock, &irql);
     for (i = 0; i < count; i++) {
+        /* A PDO that stays keeps the location kept for it. */
+        locd[i] = 0;
+        bus[i] = 0;
+        addr[i] = 0;
+        for (j = 0; j < child->SnapCount && !isNew[i]; j++) {
+            if (child->Snap[j] == now[i] && child->SnapLocd[j]) {
+                locd[i] = 1;
+                bus[i] = child->SnapBus[j];
+                addr[i] = child->SnapAddr[j];
+            }
+        }
+    }
+    for (i = 0; i < count; i++) {
         child->Snap[i] = now[i];
+        child->SnapLocd[i] = locd[i];
+        child->SnapBus[i] = bus[i];
+        child->SnapAddr[i] = addr[i];
     }
     child->SnapCount = count;
     child->SnapTruncated = truncated;
+    cmMarksSyncAll();
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
@@ -1095,6 +1122,158 @@ ULONG CmRegIrqWire(PCM_FILTER child, ULONG address, PULONG why,
         devs[k] = XHCI_TBT_BDF_DEV(path[k]);
     }
     return CmIrqWire(pin, devs, n, portPin, portLine, why);
+}
+
+/*
+ * The chained unit's parent (design record 34 section 3.10): whether the
+ * bridge `child` sits on is a chain port of an active member now, made
+ * again at each of its BusRelations answers, before the answer goes up,
+ * and when a child of it asks its capabilities while it is not one
+ * (CmRegChainRecheck). Its location is the one read at its start (a chain
+ * child reads its BusRelations only once started); the member is the
+ * first active member on its ancestry (CmRegIrqWire's walk). The bridge,
+ * every bridge between it and the member, and the member's bus numbers
+ * are read now (XhciTbtChainPortTest): a bridge between them that is a
+ * chain port (one level of chain ports, section 3.9), or that cannot be
+ * told not to be one, withholds it. The outcome is committed only while
+ * the member is still active, and logged when it changes. PASSIVE_LEVEL;
+ * the list's lock is not held across the reads.
+ */
+static VOID cmChainClassify(PCM_FILTER child)
+{
+    XHCI_TBT_CFG io;
+    PCM_FILTER f;
+    PCM_FILTER a;
+    PCM_NHI dom;
+    ULONG path[CM_TUNNEL_DEPTH_MAX + 2UL];
+    ULONG n;
+    ULONG k;
+    ULONG self;
+    ULONG member;
+    ULONG bdf;
+    ULONG sec;
+    ULONG s;
+    ULONG out;
+    ULONG hops;
+    BOOLEAN found;
+    BOOLEAN nested;
+    KIRQL irql;
+
+    self = 0xFFFFUL;
+    member = 0;
+    found = FALSE;
+    nested = FALSE;
+    n = 0;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->Located) {
+        self = XHCI_TBT_BDF(child->LocBus, child->LocAddress >> 16,
+                            child->LocAddress & 0xFFFFUL) & 0xFFFFUL;
+        f = child;
+        for (hops = 0; hops <= CM_TUNNEL_DEPTH_MAX + 1UL; hops++) {
+            a = f->Parent;
+            if (a == NULL && f->Common.Kind == CM_KIND_CHILD) {
+                a = f->Bridge;
+            }
+            if (a == NULL) {
+                break;
+            }
+            bdf = cmFiltBdf(a);
+            if (bdf == 0xFFFFUL) {
+                break;
+            }
+            if (cmRegIsActiveMember(bdf)) {
+                member = bdf;
+                found = TRUE;
+                break;
+            }
+            path[n++] = bdf;
+            f = a;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    sec = 0;
+    io.Read = cmCfgRead;
+    io.Write = NULL;
+    io.Context = NULL;
+    io.Reads = 0;
+    io.Writes = 0;
+    if (self == 0xFFFFUL) {
+        out = XHCI_TBT_CPT_FAILED;
+    } else if (!found) {
+        out = XHCI_TBT_CPT_NOT;
+    } else {
+        out = XHCI_TBT_CPT_NOT;
+        for (k = 0; k < n && !nested; k++) {
+            s = XhciTbtChainPortTest(&io, path[k], member, &bdf);
+            if (s != XHCI_TBT_CPT_NOT) {
+                /* A chain port above it, or a bridge between it and the
+                 * member that is not a numbered bridge positively no
+                 * candidate. */
+                nested = TRUE;
+                out = (s == XHCI_TBT_CPT_YES) ? XHCI_TBT_CPT_NOT
+                                              : XHCI_TBT_CPT_FAILED;
+            }
+        }
+        if (!nested) {
+            out = XhciTbtChainPortTest(&io, self, member, &sec);
+        }
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (out == XHCI_TBT_CPT_YES && !cmRegIsActiveMember(member)) {
+        out = XHCI_TBT_CPT_NOT;
+    }
+    child->ChainLanding = (out == XHCI_TBT_CPT_YES)
+                              ? (self | CM_MK_LANDING_VALID) : 0;
+    child->ChainSec = (out == XHCI_TBT_CPT_YES) ? sec : 0;
+    child->ChainMember = (out == XHCI_TBT_CPT_YES) ? member : 0;
+    if (child->ChainWhy != out + 1UL) {
+        child->ChainWhy = out + 1UL;
+        dom = cmLogDom(cmTopOf(child));
+        if (dom != NULL && found) {
+            if (out == XHCI_TBT_CPT_YES) {
+                CmLogNote(dom, "cm.chain.class", (sec << 16) | self);
+            } else {
+                CmLogNote(dom, "cm.chain.class.no",
+                          (out << 24) | ((nested ? 1UL : 0UL) << 16) |
+                              (self & 0xFFFFUL));
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegChainRecheck(PCM_FILTER child)
+{
+    PCM_FILTER p;
+    KIRQL irql;
+    BOOLEAN need;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    p = child->Parent;
+    need = (BOOLEAN)(p != NULL && p->Common.Kind == CM_KIND_CHILD &&
+                     p->AttListed && p->Located && !p->SurpriseRemoved &&
+                     (p->ChainLanding & CM_MK_LANDING_VALID) == 0);
+    /* The parent's removal reference, taken under the list's lock (the
+     * list's lock, then the filter's), so a capabilities request that is
+     * not the PnP manager's own cannot outlive it. */
+    if (need && !CmFilterTryHold(p)) {
+        need = FALSE;
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (!need) {
+        return;
+    }
+    cmChainClassify(p);
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (!p->AttListed || p->SurpriseRemoved) {
+        /* Retired meanwhile: no landing of a filter on its way out. */
+        p->ChainLanding = 0;
+    }
+    if ((p->ChainLanding & CM_MK_LANDING_VALID) != 0) {
+        cmMarksSyncAll();
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    CmFilterUnhold(p);
 }
 
 VOID CmRegIrqNote(PCM_FILTER f, const char *label, ULONG value)
@@ -1971,12 +2150,37 @@ static PCM_MARK cmMarkFind(PVOID pdo, PCM_NHI *dom)
 
 /* The location of `pdo` kept beside the snapshot of the member bridge at
  * `memberBdf` (CM_FILTER.SnapLocd). Under the lock. */
-static VOID cmSnapKeepLoc(ULONG memberBdf, PVOID pdo, ULONG bus,
-                          ULONG address)
+static PCM_FILTER cmLandingFind(ULONG memberBdf, ULONG landing);
+
+static VOID cmSnapKeepLoc(ULONG memberBdf, ULONG landing, PVOID pdo,
+                          ULONG bus, ULONG address)
 {
     PCM_FILTER f;
     ULONG k;
 
+    PLIST_ENTRY e;
+
+    if (landing != 0) {
+        /* A chained entry's location is kept by its landing's snapshot
+         * (record 34 section 3.10), in every child filter classified as
+         * that chain port (a BusRelations child and an AddDevice one may
+         * both sit on its PDO, each with the same answer). */
+        for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+            f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+            if (f->Common.Kind != CM_KIND_CHILD || f->ChainLanding != landing ||
+                f->ChainMember != (memberBdf & 0xFFFFUL)) {
+                continue;
+            }
+            for (k = 0; k < f->SnapCount; k++) {
+                if (f->Snap[k] == pdo) {
+                    f->SnapLocd[k] = 1;
+                    f->SnapBus[k] = bus;
+                    f->SnapAddr[k] = address;
+                }
+            }
+        }
+        return;
+    }
     f = cmRegFind(memberBdf);
     if (f == NULL) {
         return;
@@ -2030,7 +2234,7 @@ static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
     /* A location once known stays known: the PDO is the same device. */
     flags |= m->Flags & CM_QM_EF_LOCATED;
     if (flags & CM_QM_EF_LOCATED) {
-        cmSnapKeepLoc(m->MemberBdf, m->Pdo, bus, address);
+        cmSnapKeepLoc(m->MemberBdf, m->Landing, m->Pdo, bus, address);
     }
     if (flags != m->Flags || bus != m->Bus || address != m->Address ||
         ((flags & (CM_QM_EF_BUS_ATT | CM_QM_EF_ADD_ATT)) != 0 &&
@@ -2046,6 +2250,66 @@ static VOID cmMarkAtt(PCM_NHI d, PCM_MARK m)
     }
 }
 
+/* A chain child that may carry chained entries (record 34 section 3.10):
+ * listed, located, not surprise-removed, classified a chain port. Under
+ * the lock. */
+static BOOLEAN cmIsLanding(PCM_FILTER g)
+{
+    return (BOOLEAN)(g->Common.Kind == CM_KIND_CHILD && g->AttListed &&
+                     g->Located && !g->SurpriseRemoved &&
+                     (g->ChainLanding & CM_MK_LANDING_VALID) != 0);
+}
+
+/* The chain child classified as the chain port `landing` under the member
+ * at `memberBdf`, or NULL. Under the lock. */
+static PCM_FILTER cmLandingFind(ULONG memberBdf, ULONG landing)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (cmIsLanding(g) && g->ChainLanding == landing &&
+            g->ChainMember == (memberBdf & 0xFFFFUL)) {
+            return g;
+        }
+    }
+    return NULL;
+}
+
+/* The chain ports classified under the member at `memberBdf`, at most
+ * XHCI_TBT_CHAIN_MAX (the first found; any further one carries no
+ * entries), each landing once. Under the lock. Returns the count. */
+static ULONG cmLandings(ULONG memberBdf, PULONG lands, PCM_FILTER *lf)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+    ULONG n;
+    ULONG k;
+    BOOLEAN dup;
+
+    n = 0;
+    for (e = cmRegAtts.Flink; e != &cmRegAtts && n < XHCI_TBT_CHAIN_MAX;
+         e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (!cmIsLanding(g) || g->ChainMember != (memberBdf & 0xFFFFUL)) {
+            continue;
+        }
+        dup = FALSE;
+        for (k = 0; k < n; k++) {
+            if (lands[k] == g->ChainLanding) {
+                dup = TRUE;
+            }
+        }
+        if (!dup) {
+            lands[n] = g->ChainLanding;
+            lf[n] = g;
+            n++;
+        }
+    }
+    return n;
+}
+
 /* Every listed domain's table against its members' snapshots and the
  * attachment list. Under the lock (cmRegRecompute's end, and each
  * BusRelations answer). */
@@ -2055,7 +2319,11 @@ static VOID cmMarksSyncAll(VOID)
     PCM_NHI d;
     PCM_REENUM r;
     PCM_FILTER f;
+    PCM_FILTER lf[XHCI_TBT_CHAIN_MAX];
+    ULONG lands[XHCI_TBT_CHAIN_MAX];
+    ULONG nl;
     ULONG i;
+    ULONG k;
     BOOLEAN active;
 
     for (e = cmRegDomains.Flink; e != &cmRegDomains; e = e->Flink) {
@@ -2069,15 +2337,42 @@ static VOID cmMarksSyncAll(VOID)
             f = cmRegFind(r->Port[i].Bdf);
             active = (BOOLEAN)(f != NULL && f->Owner == d && f->Active &&
                                (r->Port[i].Flags & CM_PORT_ACTIVE) != 0);
-            (VOID)CmMarksSync(&r->Marks, i, r->Port[i].Bdf,
+            /* Record 34 section 3.10: the member's own set and each chain
+             * port's below it, buried first and made after, so the
+             * member's bound is freed before a new entry needs it. */
+            nl = active ? cmLandings(r->Port[i].Bdf, lands, lf) : 0;
+            (VOID)CmMarksBury(&r->Marks, i, r->Port[i].Bdf, 0,
                               active ? (PVOID const *)f->Snap : NULL,
-                              active ? f->SnapCount : 0,
-                              (BOOLEAN)(active && f->SnapTruncated), active,
+                              active ? f->SnapCount : 0, active,
                               cmMarkNow(d));
-            if (active) {
-                (VOID)CmMarksLocate(&r->Marks, i, (PVOID const *)f->Snap,
-                                    f->SnapLocd, f->SnapBus, f->SnapAddr,
-                                    f->SnapCount, cmMarkNow(d));
+            for (k = 0; k < nl; k++) {
+                (VOID)CmMarksBury(&r->Marks, i, r->Port[i].Bdf, lands[k],
+                                  (PVOID const *)lf[k]->Snap,
+                                  lf[k]->SnapCount, TRUE, cmMarkNow(d));
+            }
+            (VOID)CmMarksBuryLandings(&r->Marks, i, lands, nl,
+                                      cmMarkNow(d));
+            if (!active) {
+                continue;
+            }
+            (VOID)CmMarksMake(&r->Marks, i, r->Port[i].Bdf, 0,
+                              (PVOID const *)f->Snap, f->SnapCount,
+                              (BOOLEAN)(f->SnapTruncated != 0), TRUE,
+                              cmMarkNow(d));
+            (VOID)CmMarksLocate(&r->Marks, i, (PVOID const *)f->Snap,
+                                f->SnapLocd, f->SnapBus, f->SnapAddr,
+                                f->SnapCount, cmMarkNow(d));
+            for (k = 0; k < nl; k++) {
+                (VOID)CmMarksMake(&r->Marks, i, r->Port[i].Bdf, lands[k],
+                                  (PVOID const *)lf[k]->Snap,
+                                  lf[k]->SnapCount,
+                                  (BOOLEAN)(lf[k]->SnapTruncated != 0), TRUE,
+                                  cmMarkNow(d));
+                (VOID)CmMarksLocate(&r->Marks, i,
+                                    (PVOID const *)lf[k]->Snap,
+                                    lf[k]->SnapLocd, lf[k]->SnapBus,
+                                    lf[k]->SnapAddr, lf[k]->SnapCount,
+                                    cmMarkNow(d));
             }
         }
         (VOID)CmMarksDropMembers(&r->Marks, r->Members, cmMarkNow(d));
@@ -2234,9 +2529,12 @@ BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
 {
     PLIST_ENTRY e;
     PCM_REENUM r;
+    PCM_MARK m;
+    PCM_FILTER g;
     KIRQL irql;
     ULONG i;
     ULONG v;
+    ULONG note;
     BOOLEAN may;
     BOOLEAN seen;
 
@@ -2249,15 +2547,41 @@ BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
             if (r->Route != CM_ROUTE_FILTER) {
                 continue;
             }
+            m = CmMarksFind(&r->Marks, (PVOID)filter->Common.Pdo);
             for (i = 0; i < r->Members; i++) {
-                v = CmPortsMayMark(
-                    1, filter->LocBus,
-                    (ULONG)((r->Port[i].Flags & CM_PORT_ACTIVE) != 0),
-                    (ULONG)((r->Port[i].Flags & CM_PORT_EXCLUSIVE) != 0),
-                    (ULONG)(r->Port[i].SecBusValid != 0), r->Port[i].SecBus,
-                    (ULONG)(CmMarksFind(&r->Marks,
-                                        (PVOID)filter->Common.Pdo) != NULL),
-                    (ULONG)(r->SafeEject != 0));
+                if (m != NULL && m->Landing != 0) {
+                    /* A chained unit (record 34 section 3.10): its bus is
+                     * the chain port's secondary, the chain port still
+                     * classified under this member. */
+                    g = (m->Member == i)
+                            ? cmLandingFind(r->Port[i].Bdf, m->Landing)
+                            : NULL;
+                    v = CmPortsMayMark(
+                        1, filter->LocBus,
+                        (ULONG)((r->Port[i].Flags & CM_PORT_ACTIVE) != 0),
+                        (ULONG)((r->Port[i].Flags & CM_PORT_EXCLUSIVE) != 0),
+                        (ULONG)(g != NULL), g != NULL ? g->ChainSec : 0,
+                        (ULONG)(g != NULL), (ULONG)(r->SafeEject != 0));
+                    note = (v << 28) | ((g != NULL ? 1UL : 0UL) << 24) |
+                           ((filter->LocBus & 0xFFUL) << 16) |
+                           (m->Landing & 0xFFFFUL);
+                    if (m->Member == i && filter->ChainMayLog != note) {
+                        /* The chained unit's answer, for the log when it
+                         * changes: the gate's verdict, the chain port
+                         * found, its bus, the chain port. */
+                        filter->ChainMayLog = note;
+                        CmLogNote(CONTAINING_RECORD(r, CM_NHI, Reenum),
+                                  "cm.chain.removable", note);
+                    }
+                } else {
+                    v = CmPortsMayMark(
+                        1, filter->LocBus,
+                        (ULONG)((r->Port[i].Flags & CM_PORT_ACTIVE) != 0),
+                        (ULONG)((r->Port[i].Flags & CM_PORT_EXCLUSIVE) != 0),
+                        (ULONG)(r->Port[i].SecBusValid != 0),
+                        r->Port[i].SecBus, (ULONG)(m != NULL),
+                        (ULONG)(r->SafeEject != 0));
+                }
                 if (v != CM_MM_NO) {
                     seen = TRUE;
                 }
@@ -2340,6 +2664,12 @@ VOID CmRegAttSurprise(PCM_FILTER filter, BOOLEAN started)
         }
         break;
     }
+    if (filter->ChainLanding != 0) {
+        /* A chain port surprise-removed: its chained entries buried
+         * (record 34 section 3.10). */
+        filter->ChainLanding = 0;
+        cmMarksSyncAll();
+    }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
@@ -2359,6 +2689,7 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
     PLIST_ENTRY e;
     PCM_FILTER other;
     BOOLEAN left;
+    BOOLEAN resync;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
     /* Record 33 section 4.4: no child keeps naming this one (a device's
@@ -2369,6 +2700,8 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
             other->Parent = NULL;
         }
     }
+    resync = (BOOLEAN)(filter->ChainLanding != 0);
+    filter->ChainLanding = 0;
     if (filter->AttListed) {
         RemoveEntryList(&filter->AttLink);
         InitializeListHead(&filter->AttLink);
@@ -2405,6 +2738,11 @@ VOID CmRegAttRemoved(PCM_FILTER filter, BOOLEAN afterQr)
             d->Reenum.Departures++;
             CmMarksTouch(&d->Reenum.Marks, m, cmMarkNow(d));
         }
+    }
+    if (resync) {
+        /* A chain port gone: its chained entries buried (record 34
+         * section 3.10). */
+        cmMarksSyncAll();
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }

@@ -689,6 +689,18 @@ typedef struct _CM_FILTER {
                                the binding, of generation IsoGens[n-1]     */
     ULONG IsoGens[TBT_U4_MAX_PORTS];
     LONG IsoRefs;           /* the interface's references held by xhci98   */
+
+    /* ---- the chained unit's parent (design record 34 section 3.10, task
+     * 45.13), a chain child on a bridge: classified at each of its
+     * BusRelations answers, written and read under cmRegLock ---- */
+    ULONG ChainLanding;     /* its location | CM_MK_LANDING_VALID when it is
+                               a chain port of an active member, else 0    */
+    ULONG ChainSec;         /* its secondary bus at that classification    */
+    ULONG ChainMember;      /* the member's location (16 bits)             */
+    ULONG ChainWhy;         /* the last outcome logged (XHCI_TBT_CPT_* + 1,
+                               0 none yet)                                 */
+    ULONG ChainMayLog;      /* a chained unit's: its Removable gate's last
+                               logged reading (cm.chain.removable)         */
 } CM_FILTER, *PCM_FILTER;
 
 #define CM_CHAIN_UNKNOWN    0UL

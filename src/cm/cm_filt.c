@@ -255,6 +255,11 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
     if (NT_SUCCESS(status) && caps != NULL && caps->Version >= 1 &&
         caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
         CmRegAttLocateCaps(child, caps->Address);
+        if (!child->InLocate) {
+            /* Record 34 section 3.10: a parent bridge not yet classified
+             * as a chain port is read again before the answer. */
+            CmRegChainRecheck(child);
+        }
         if (CmRegAttMayMark(child)) {
             caps->Removable = 1;
             CmRegAttAnswered(child);
