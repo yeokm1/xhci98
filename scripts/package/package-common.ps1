@@ -3199,6 +3199,47 @@ function Get-HistoryEmbedLines {
     })
 }
 
+function Get-HistoryEntryLines {
+    # history.md's entry for -Version, without its '##' heading: what the
+    # readme's section 1 renders (roadmap-usb4 task 45.29). Empty when there
+    # is no such entry; the changelog check refuses that before any build.
+    param([string[]]$Lines, [string]$Version)
+
+    if ($null -eq $Lines) { return @() }
+    $head = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $head) { $start = $i; break }
+    }
+    if ($start -lt 0 -or $start + 1 -ge $Lines.Count) { return @() }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $end = $i; break }
+    }
+    while ($end -gt $start + 1 -and $Lines[$end - 1].Trim() -eq "") { $end-- }
+    while ($end -gt $start + 1 -and $Lines[$start + 1].Trim() -eq "") { $start++ }
+    if ($end -le $start + 1) { return @() }
+    return @($Lines[($start + 1)..($end - 1)])
+}
+
+function Get-HistoryEarlierText {
+    # The versions history.md lists after -Version's entry (the earlier
+    # releases, newest first), as one comma-separated sentence wrapped to
+    # -Width with a two-space margin: the readme's section 6.
+    param([string[]]$Lines, [string]$Version, [int]$Width = 78)
+
+    $versions = @()
+    $past = $false
+    foreach ($l in @($Lines)) {
+        if ($l -match '^##\s+(\d+\.\d+\.\d+\.\d+)(\s|$)') {
+            if ($past) { $versions += $Matches[1] }
+            if ($Matches[1] -eq $Version) { $past = $true }
+        }
+    }
+    if ($versions.Count -eq 0) { return @("  None: this is the first release.") }
+    return @(Format-Wrapped -Text (($versions -join ", ") + ".") -Width $Width -FirstPrefix "  " -RestPrefix "  ")
+}
+
 function Format-Wrapped {
     # Greedy word wrap with a separate first-line and continuation prefix, so a
     # bullet hangs under its own text rather than under the marker.
@@ -3229,7 +3270,9 @@ function Format-Wrapped {
 
 function ConvertFrom-MarkdownBlocks {
     # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # '-' bullets that may continue on indented lines, '-' bullets indented
+    # by two spaces under them and by four under those (task 45.29), and
+    # plain paragraphs.
     # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
     # rendered - there is nothing to render them with in a .txt file.
     param([string[]]$Lines, [int]$Width = 78)
@@ -3243,6 +3286,12 @@ function ConvertFrom-MarkdownBlocks {
         if ($Text -eq "") { return @($Acc) }
         if ($Kind -eq "bullet") {
             return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        if ($Kind -eq "subsub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "            - " -RestPrefix "              "))
+        }
+        if ($Kind -eq "sub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "        - " -RestPrefix "          "))
         }
         return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
     }
@@ -3265,6 +3314,16 @@ function ConvertFrom-MarkdownBlocks {
             if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
             $out += ("  " + $Matches[1].Trim())
             $out += ""
+            continue
+        }
+        if ($line -match '^\s{4,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "subsub"
+            continue
+        }
+        if ($line -match '^\s{2,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "sub"
             continue
         }
         if ($line -match '^\s*-\s+(.*)$') {
