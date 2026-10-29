@@ -613,6 +613,7 @@ static const char *PlatPollWhyText(IN ULONG Why)
     case POLL_WHY_NO_PIN:       return "polling (no interrupt pin)";
     case POLL_WHY_NO_PORT_IRQ:  return "polling (no interrupt assigned)";
     case POLL_WHY_NO_LINE:      return "polling (interrupt line not set)";
+    case POLL_WHY_INTX_OFF:     return "polling (INTx would not enable)";
     default:                    return "polling (configuration unreadable)";
     }
 }

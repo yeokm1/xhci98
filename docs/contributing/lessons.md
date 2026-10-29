@@ -9797,11 +9797,15 @@ host harness on the real /O2 binary. Fixed in `abf5ee9`: one out-of-line
 `hcd_counter_name()` under `#pragma auto_inline(off)`, `test_snap` pinning
 each block's first word, and `xhcisnap\check-counter-names.ps1` guarding
 the names. The second MSVC 6.0 optimiser miscompile in this repo, after the
-count-down loop above.
+count-down loop above. Since `3.1.0.0` (roadmap-usb4 task 42-A.4) that
+code is `XHCITR`'s snapshot reader, `xhcitr\tr_snap.c`, and the guard is
+`scripts\check-counter-names.ps1`, run by `xhcitr\snaptest.cmd` on the
+built `XHCITR.EXE /snaptest -selftest-counters`.
 
-Rule. **Every multi-table name lookup in `XHCISNAP` goes through
+Rule. **Every multi-table name lookup in the snapshot reader
+(`xhcitr\tr_snap.c`; `XHCISNAP` up to `3.0.0.0`) goes through
 `hcd_counter_name()`; check name tables against the real /O2 binary
-(`check-counter-names.ps1`), not only at source level.**
+(`scripts\check-counter-names.ps1`), not only at source level.**
 
 ## A hub FDO must pass IRP_MJ_SYSTEM_CONTROL down: Driver Verifier stops with C9 0x220 otherwise
 

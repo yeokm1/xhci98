@@ -8663,6 +8663,8 @@ stopped:
  * appended when it is not NULL. No other entry is touched, and the value
  * keeps its type. */
 static int devicepath_write(const char *addDir);
+static int dpLeftOff;       /* the last write left addDir off DevicePath,
+                               past INST_9X_DEVICEPATH_MAX with it    */
 
 /* devicepath_write, and on 98 SE whether this run left DevicePath without
  * the install directory: every way out of the run then reads the INF
@@ -8672,7 +8674,7 @@ static int devicepath_update(const char *addDir)
     int r = devicepath_write(addDir);
 
     if (r) {
-        storDpOff = addDir == NULL && stor_98se();
+        storDpOff = (addDir == NULL || dpLeftOff) && stor_98se();
     }
     return r;
 }
@@ -8736,9 +8738,26 @@ static int devicepath_write(const char *addDir)
         return 0;
     }
     logonly("DevicePath was: %s\n", list);
+    dpLeftOff = 0;
     if (!devicepath_compose(list, rootDir, addDir, newList, sizeof(newList))) {
         out("DevicePath is too long to change.\n");
         return 0;
+    }
+    /* Record 26 section 6.7.12's limit, as the other USB drivers' staging
+     * keeps it: the entry is left off and the folder named for the
+     * wizard, the withdrawals still written. */
+    if (addDir != NULL && !envNow.Nt && !inst_9x_devicepath_room(newList)) {
+        out("DevicePath would be %d characters with %s on it, past the %d "
+            "with which Windows 98 SE's hardware wizard finds a driver: %s "
+            "is left off it; point the wizard at it instead.\n",
+            (int)strlen(newList), addDir, INST_9X_DEVICEPATH_MAX, addDir);
+        if (!devicepath_compose(list, rootDir, NULL, newList,
+                                sizeof(newList))) {
+            out("DevicePath is too long to change.\n");
+            return 0;
+        }
+        dpLeftOff = 1;
+        flagSteps = 1;
     }
     if (strcmp(newList, list) == 0) {
         out("DevicePath needs no change.\n");
@@ -9936,53 +9955,71 @@ left:
  * it and asks for the swap in WININIT.INI's [rename] section, done at the
  * next start ("target=source", read on the 98 SE update leg of
  * 2026-10-19: xhci98.sys=...\xhci98.tmp). 1 when such an entry renames a
- * file of version `want` over `bin`. */
+ * file of version `want` over `bin`. The section is read from the file
+ * (wininit_text), as for the VxD's line: 98 SE's and ME's profile routines
+ * did not give this installer's own line back. */
+typedef struct _WIPEND {
+    const char *Bin;
+    const char *BinS;
+    const INST_U32 *Want;
+    int Hit;
+} WIPEND;
+
+static int wininit_pending_line(void *ctx, const char *key, const char *value)
+{
+    WIPEND *w = (WIPEND *)ctx;
+    char st[INST_PATH_CHARS];
+    INST_U32 v[4];
+    DWORD n;
+
+    if (key[0] == '\0') {
+        return 1;
+    }
+    n = GetShortPathNameA(key, st, sizeof(st));
+    if (n == 0 || n >= sizeof(st)) {
+        inst_copy(st, key, sizeof(st));
+    }
+    if ((inst_eq(key, w->Bin) || inst_eq(st, w->BinS)) &&
+        file_version(value, v) > 0 && inst_ver_cmp(v, w->Want) == 0) {
+        w->Hit = 1;
+        return 0;
+    }
+    return 1;
+}
+
 static int wininit_pending(const char *bin, const INST_U32 *want)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
-    char *sec;
-    char *p;
     char sb[INST_PATH_CHARS];
-    char st[INST_PATH_CHARS];
-    INST_U32 v[4];
+    char *text;
+    WIPEND w;
     DWORD n;
-    int hit = 0;
+    int gone;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
-    sec = (char *)calloc(1, 32768);
-    if (sec == NULL) {
-        return 0;
-    }
-    n = GetPrivateProfileSectionA("rename", sec, 32766, ini);
     n = GetShortPathNameA(bin, sb, sizeof(sb));
     if (n == 0 || n >= sizeof(sb)) {
         inst_copy(sb, bin, sizeof(sb));
     }
-    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
-        char *eq = strchr(p, '=');
-        if (eq == NULL || eq == p) {
-            continue;
+    w.Bin = bin;
+    w.BinS = sb;
+    w.Want = want;
+    w.Hit = 0;
+    text = wininit_text(ini, &gone);
+    if (text != NULL) {
+        if (!inst_rename_scan(text, wininit_pending_line, &w) && !w.Hit) {
+            logonly("WININIT.INI: a line too long to read\n");
         }
-        *eq = '\0';
-        n = GetShortPathNameA(p, st, sizeof(st));
-        if (n == 0 || n >= sizeof(st)) {
-            inst_copy(st, p, sizeof(st));
-        }
-        if ((inst_eq(p, bin) || inst_eq(st, sb)) &&
-            file_version(eq + 1, v) > 0 && inst_ver_cmp(v, want) == 0) {
-            hit = 1;
-        }
-        *eq = '=';
+        free(text);
     }
-    free(sec);
     logonly("WININIT.INI: %s %s\n", bin,
-            hit ? "is replaced by this package's at the next start"
-                : "has no pending replacement");
-    return hit;
+            w.Hit ? "is replaced by this package's at the next start"
+                  : "has no pending replacement");
+    return w.Hit;
 }
 
 /* Record 26 section 8: each device the helper installed read again - its
@@ -10289,7 +10326,9 @@ static int run_install_9x(void)
         step(INST_STEP_FAILED, "The package's copy, not recorded");
         return inst_exit_code(0, 1, 0, 1);
     }
-    step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
+    step(INST_STEP_DONE, dpLeftOff ? "The package is in %s, off DevicePath" :
+                                     "The package is in %s and on DevicePath",
+         srcDir);
     hashed_cleanup();
     s98_mpd_place_9x();
     helper_installs();
@@ -29434,7 +29473,13 @@ void inst_eng_usage(void)
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
-"  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
+"  /s98vsd       98 SE and ME, with Stor98 in the run: install S98VSD.VXD\n"
+"                (Stor98's large transfers) unasked\n"
+"  /nos98vsd     leave S98VSD.VXD out\n"
+"  /xhcipfw      98 SE to 32-bit 7, with /thunderbolt or /cmonly: install\n"
+"                XHCIPFW (PCI windows above 4 GB closed at each start) unasked\n"
+"  /noxhcipfw    leave XHCIPFW out\n"
+"  /nouas      leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the install folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
@@ -31157,6 +31202,11 @@ int inst_eng_ask(void)
     comp_warnings_out();
     if (opts.List) {
         tray_install();
+        /* The real run's end-of-run scrub, previewed (its /list branch
+         * names each entry it would delete). */
+        if (envNow.Nt) {
+            (void)cddb_service_scrub();
+        }
         out("/list: nothing was changed.\n");
         return INST_EXIT_DONE;
     }

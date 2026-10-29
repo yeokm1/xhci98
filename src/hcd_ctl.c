@@ -1863,12 +1863,17 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
  * The power gate: a synchronization event used as a mutex - KeInitializeMutex
  * has no allowlist row - held by the in-place recovery and by every path that
  * suspends or resumes the controller, so the two never interleave on two
- * processors. IRQL: PASSIVE_LEVEL to enter.
+ * processors. Entry past a bounded run of unsatisfied waits is recorded,
+ * not refused (HcdWaitEvent). IRQL: PASSIVE_LEVEL to enter.
  */
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc)
 {
-    (VOID)KeWaitForSingleObject(&hc->PowerGate, Executive, KernelMode, FALSE,
-                                NULL);
+    ULONG missed;
+
+    missed = HcdWaitEvent(&hc->PowerGate, HCD_GATE_WAIT_BOUND);
+    if (missed != 0) {
+        XhciLogNote(&hc->Hc, "gate.power.missed", missed);
+    }
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */

@@ -127,6 +127,80 @@ static void test_start_refusals(void)
     CHECK_EQ(g_fake.Writes, 0, "a refused block writes nothing");
 }
 
+/* The RX Producer Index is the host interface's: one the start's base
+ * write left where it was is where the next frame lands, so the receive
+ * starts there with the Consumer Index one behind it; one unreadable is
+ * refused, the rings stopped. */
+static void test_rx_index_kept(void)
+{
+    ULONG dw[2];
+    TBT_FRAME f;
+
+    fakeReset();
+    g_fake.RxProdKept = 1;
+    g_fake.RxProd = 4;
+    CHECK_EQ(startRing(0), TBT_OK, "RX index kept: started");
+    CHECK_EQ(g_ring.RxNext, 4, "RX index kept: the receive starts at the producer");
+    CHECK_EQ(g_fake.RxCons, 3, "RX index kept: the consumer one behind it");
+    dw[0] = 0x01000003UL;
+    dw[1] = 7;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f) && f.Dw[1] == 7, "RX index kept: the frame received");
+
+    fakeReset();
+    g_fake.RxIndexOverride = 0xFFFFFFFFUL;
+    CHECK_EQ(startRing(0), TBT_E_HW, "RX index unreadable: refused");
+    CHECK_EQ(g_fake.RxCtrl, 0, "RX index unreadable: the RX ring stopped");
+    CHECK_EQ(g_fake.TxCtrl, 0, "RX index unreadable: the TX ring stopped");
+}
+
+/* A wait the gate ends (TBT_HOST.Cancelled) is no hardware fault and no
+ * timeout: the send's consume wait and the request's answer wait end
+ * TBT_E_STOPPED, neither counted, no retry sent. */
+static int g_cancel;
+static TBT_HOST g_cancelHost;
+
+static BOOLEAN cancelNow(PVOID context)
+{
+    (void)context;
+    return (BOOLEAN)(g_cancel != 0);
+}
+
+static void test_cancelled_waits(void)
+{
+    TBT_ROUTE root = { 0, 0 };
+    ULONG dw[3] = { 0, 0, 0 };
+    ULONG out[1];
+    ULONG sent;
+
+    fakeReset();
+    g_cancelHost = g_fakeHost;
+    g_cancelHost.Cancelled = cancelNow;
+    g_cancel = 0;
+    memset(&g_ring, 0, sizeof(g_ring));
+    CHECK_EQ(TbtRingStart(&g_ring, &g_cancelHost, fakeMem(), FAKE_PHYS,
+                          FAKE_MEM_BYTES, TBT_RX_PDF_ALL_ONES, 0),
+             TBT_OK, "cancelled: started");
+    g_fake.TxConsume = 0;
+    g_cancel = 1;
+    CHECK_EQ(TbtRingSend(&g_ring, 1, dw, 3), TBT_E_STOPPED, "cancelled: the send's wait");
+    CHECK_EQ(g_ring.Counters.TxStuck, 0, "cancelled: no ring counted stuck");
+
+    fakeReset();
+    g_cancel = 0;
+    memset(&g_ring, 0, sizeof(g_ring));
+    (void)TbtRingStart(&g_ring, &g_cancelHost, fakeMem(), FAKE_PHYS, FAKE_MEM_BYTES,
+                       TBT_RX_PDF_ALL_ONES, 0);
+    g_cancel = 1;
+    sent = g_fake.TxCount;
+    CHECK_EQ(TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 0, 0, 1, out, 100, 3),
+             TBT_E_STOPPED, "cancelled: the answer's wait");
+    CHECK_EQ(g_ring.Counters.CtlTimeouts, 0, "cancelled: no timeout counted");
+    CHECK_EQ(g_fake.TxCount - sent, 1, "cancelled: no retry sent");
+    g_cancel = 0;
+}
+
 static void test_send(void)
 {
     ULONG dw[3];
@@ -1207,6 +1281,8 @@ int main(void)
     RUN_VEC(test_crc_vectors);
     RUN_VEC(test_start);
     RUN_VEC(test_start_refusals);
+    RUN_VEC(test_rx_index_kept);
+    RUN_VEC(test_cancelled_waits);
     RUN_VEC(test_send);
     RUN_VEC(test_send_limits);
     RUN_VEC(test_tx_exhaustion);

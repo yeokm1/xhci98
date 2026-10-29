@@ -566,7 +566,7 @@ typedef struct _CM_FILTER {
     struct _CM_NHI *HeldBy;
     /* The snapshot of section 7.4: written by the PnP dispatch alone,
      * under the registration list's lock (the eject's eligibility reads
-     * it from a child's removal). */
+     * it from the CM thread, CmReenumService). */
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
     ULONG SnapTruncated;    /* the last answer held more than CM_SNAP_MAX  */

@@ -320,7 +320,11 @@ function Test-UasInfText {
             if ($as.Count -ne 1) { & $add "PATH-NT" "[$inst$ntSuffix.Services] needs exactly one AddService." }
             else {
                 $f = @($as[0] -split ',' | ForEach-Object { $_.Trim() })
-                if ($f.Count -lt 3 -or $f[0] -ine $service -or ([Convert]::ToInt32(($f[1] -replace '^0x', ''), 16) -band 2) -eq 0) {
+                # The flags field is read only when it is hex digits: an empty
+                # or malformed one is a refusal, never a parse exception.
+                $asFlags = -1L
+                if ($f.Count -ge 2 -and $f[1] -match '^(0x)?([0-9A-Fa-f]{1,8})$') { $asFlags = [Convert]::ToInt64($Matches[2], 16) }
+                if ($f.Count -lt 3 -or $f[0] -ine $service -or $asFlags -lt 0 -or ($asFlags -band 2) -eq 0) {
                     & $add "PATH-NT" "AddService must be $service with flag 0x2 (the function driver) and a service section."
                 } else {
                     $svc = & $get $f[2]
@@ -400,7 +404,9 @@ if ($SelfTest) {
                 @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.Svc]") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86]`r`nCopyFiles=Uas.CopyFiles", "[Uas.Dev.NTx86]") },
-                @{ Rule = "PATH-9X";       Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("AddService=xhciuas,0x00000002,Uas.AddService", "AddService=xhciuas,,Uas.AddService") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("AddService=xhciuas,0x00000002,Uas.AddService", "AddService=xhciuas,0xZZ,Uas.AddService") },
+                @{ Rule = "PATH-9X";      Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
                 @{ Rule = "W98-SECTLEN";   Text = $text.Replace("[Uas.AddService]", "[Uas.AddService.Very.Long.Section]").Replace("Uas.AddService`r`n", "Uas.AddService.Very.Long.Section`r`n").Replace(",Uas.AddService", ",Uas.AddService.Very.Long.Section") },
@@ -442,7 +448,12 @@ if ($SelfTest) {
             $total++
             $got = @(Test-UasInfText -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes($c.Text)) -HeaderText $headerText -Package "" -Profile $profile)
             $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
-            if ($hit.Count -eq 0) {
+            if ($c.Text -eq $text) {
+                # A mutation whose anchor text is gone changes nothing, and
+                # the committed file's own refusals would then pass for it.
+                $bad++
+                Write-Err "$profile mutation for $($c.Rule) did not change the file - the self-test is stale."
+            } elseif ($hit.Count -eq 0) {
                 $bad++
                 Write-Err ("$profile mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
             } else {

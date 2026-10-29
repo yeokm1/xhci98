@@ -120,9 +120,12 @@ typedef struct _TBT_HW_PROFILE {
 /*
  * (a) The candidate for an NHI's ids and its 24-bit class code, or NULL.
  * Listed ids first (Linux nhi.h, pci_ids.h, pci.c nhi_ids; FreeBSD
- * nhi_reg.h DEVICE_PINK_SARDINE_*); then, with `forceIntel` (XhciCmMode 2,
- * record 21 section 8), an unlisted Intel id as an Alpine Ridge ICM; then
- * any vendor's class 0C0340 as a software-CM candidate. The Thunderbolt 3
+ * nhi_reg.h DEVICE_PINK_SARDINE_*); then any vendor's class 0C0340 as a
+ * software-CM candidate; then, with `forceIntel` (XhciCmMode 2, record 21
+ * section 8), an unlisted Intel id of another class as an Alpine Ridge
+ * ICM. An unlisted Intel class 0C0340 NHI so stays the software-CM
+ * candidate, which mode 2 refuses (record 22 section 12: the ICM
+ * experiment is refused on an id with no ICM row). The Thunderbolt 3
  * USB-only NHIs (15DC, 15DD, 15DE), which have no ICM row, are not
  * candidates in this release. Any IRQL.
  */

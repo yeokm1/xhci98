@@ -13,9 +13,9 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 
 | Path | Upstream | Role in this project |
 |---|---|---|
-| `reactos/usbmport.h` | `sdk/include/reactos/drivers/usbport/usbmport.h` | The miniport-facing ABI header: `USBPORT_REGISTRATION_PACKET`, callback typedefs, version/flag constants. The single most important reference for Phase 3. |
-| `reactos/usbport/` | `drivers/usb/usbport/` | The port driver `xhci98.sys` plugs into: `usbport.c` (registration/takeover), `endpoint.c`, `roothub.c`, `device.c` (the SET_ADDRESS flow to intercept), `queue.c`, `iface.c`, `pnp.c`, `power.c`, plus `usbport.spec` (export list). |
-| `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for `src/xhci_dispatch.c`. |
+| `reactos/usbmport.h` | `sdk/include/reactos/drivers/usbport/usbmport.h` | The miniport-facing ABI header: `USBPORT_REGISTRATION_PACKET`, callback typedefs, version/flag constants. The single most important reference for the miniport's Phase 3. |
+| `reactos/usbport/` | `drivers/usb/usbport/` | The port driver the `1.x.x.x` miniport `xhci98.sys` plugged into: `usbport.c` (registration/takeover), `endpoint.c`, `roothub.c`, `device.c` (the SET_ADDRESS flow to intercept), `queue.c`, `iface.c`, `pnp.c`, `power.c`, plus `usbport.spec` (export list). |
+| `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for the miniport's `src/xhci_dispatch.c`, which left the tree with the miniport (its last sources are on branch `1.2.0.0`). |
 | `reactos/usbohci/`, `reactos/usbuhci/` | `drivers/usb/usbohci/`, `usbuhci/` | USB 1.1 miniports; secondary templates showing which parts vary by controller type. |
 | `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover); and, as single files from elsewhere in the tree, `include/linux/pci_ids.h` (the vendor and device constants) and `drivers/usb/core/message.c` (`usb_set_interface`'s rollback), copied flat as `pci_ids.h` and `message.c` (2026-10-14, design record 20). |
 | `freebsd/` | `sys/dev/usb/controller/` | Secondary. Clean xHCI register-sequence reference: `xhci.c`, `xhci.h`, `xhcireg.h`, `xhci_pci.c`. |
@@ -24,8 +24,12 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 | `haiku/` | `src/add-ons/kernel/busses/usb/` | Secondary. Readable xHCI implementation: `xhci.cpp`, `xhci.h`, `xhci_hardware.h`, `xhci_rh.cpp`. |
 | `qemu/` | `hw/usb/` | The emulated controller this project's guests actually run against, read to settle what the model does and does not implement: `hcd-xhci.c`, `hcd-xhci.h`. Added 2026-09-20 for roadmap task 23.3, whose first question is whether QEMU models interrupt moderation at all. It does not - `imod` is stored, returned and migrated, and no code path consults it - so no interrupt-rate reading can come out of a guest. **This tree documents the emulator, not the hardware**: where it and `xhci-data-structures.md` disagree the spec wins, and the disagreements are themselves findings (the model resets IMOD to 0 where hardware resets it to 4000). |
 
-Split by layer (per `AGENTS.md`): ReactOS documents the upward usbport
-miniport interface; Linux documents the downward xHCI hardware. FreeBSD and
+The ReactOS rows are the miniport's: since `2.0.0.0` `xhci98.sys` is a host
+controller driver that replaces `usbport.sys` rather than plugging into it
+(`AGENTS.md`, "Project Purpose"), and the `1.2.0.0` branch keeps the
+miniport's sources. Split by layer (per `AGENTS.md`): ReactOS documents the
+upward usbport miniport interface the miniport used; Linux documents the
+downward xHCI hardware. FreeBSD and
 Haiku are secondary, kept for a second opinion on a hardware detail. Nothing
 currently rests on them: the Route String tier order they were cited for was
 settled by the controller itself in batch 7b-A (see
@@ -45,7 +49,11 @@ only and are not to be copied into `src/`:
   ABI (struct layouts, function signatures for interoperability). Write this
   project's code independently; do not paste function bodies into `src/`
   (`docs/usb-xhci-info/usbport-miniport-interface.md`, license note).
-- Linux, GPL 2.0. Reference for hardware behaviour only.
+- Linux, GPL 2.0. Reference for hardware behaviour, and for the controller
+  quirk population of design record 20 (`docs/contributing/design/20-linux-xhci-quirks.md`).
+  `legal-provenance.md` section 3 records one exception to the do-not-copy
+  rule, for Linux's xHCI controller quirks and under the conditions it
+  lists; its table of copies is empty, and nothing has been copied under it.
 - FreeBSD, BSD 2-Clause.
 - Haiku, MIT.
 - Linux `drivers/thunderbolt` and `include/linux/thunderbolt.h`, GPL-2.0

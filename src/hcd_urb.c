@@ -2980,8 +2980,7 @@ static NTSTATUS hcdCompSend(PDEVICE_OBJECT lower, PURB urb)
     HCD_SET_COMPLETION_ALWAYS(irp, hcdCompDone, &done);
     status = IoCallDriver(lower, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        (VOID)HcdWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);

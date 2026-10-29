@@ -554,11 +554,16 @@ static VOID hcdNameDelete(PHCD_CONTROLLER hc, ULONG *taken, PWCHAR name,
 /* The door's lifetime                                                      */
 /* ----------------------------------------------------------------------- */
 
-/* IRQL: PASSIVE_LEVEL. */
+/* Entry past a bounded run of unsatisfied waits is recorded, not refused
+ * (HcdWaitEvent). IRQL: PASSIVE_LEVEL. */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc)
 {
-    (VOID)KeWaitForSingleObject(&hc->DoorGate, Executive, KernelMode, FALSE,
-                                NULL);
+    ULONG missed;
+
+    missed = HcdWaitEvent(&hc->DoorGate, HCD_GATE_WAIT_BOUND);
+    if (missed != 0) {
+        XhciLogNote(&hc->Hc, "gate.door.missed", missed);
+    }
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */

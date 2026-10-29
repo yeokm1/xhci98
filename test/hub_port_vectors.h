@@ -3,12 +3,16 @@
  * bus's own hub class will track it (roadmap tasks 27-A.1 and 27-A.4), written
  * down as data before the code that runs it exists.
  *
- * This file is a **vector table and nothing else**. No function in src\ runs
- * it yet; test\test_topo.c checks only that the table is well formed (every
+ * This file is a **vector table and nothing else**, and nothing in src\ runs
+ * it: test\test_topo.c checks only that the table is well formed (every
  * change bit cleared, the enumeration lock never leaked, a speed decoded on
- * exactly the rows that decode one, no two rows for one input). The hub-class
- * code of 27-A.1 is the consumer, and the interface it is written against is
- * an assumption made here, not a decision taken anywhere else:
+ * exactly the rows that decode one, no two rows for one input), so its
+ * checks hold the table to itself, never the driver to the table. The
+ * hub class of 27-A.1 took another shape - XhciHubPortDecide and its
+ * neighbours in src\xhci_hub.c, held by test\test_hub.c - and no adapter
+ * from these rows to it was written (noted 2026-10-29). The rows stay as
+ * the record of what each input was meant to produce. The interface they
+ * were written against was an assumption made here, never taken:
  *
  *   ULONG XhciHubPortStep(ULONG state,        HPV_ST_*
  *                         ULONG event,        HPV_EV_*

@@ -227,6 +227,8 @@ static ULONG PollCombine(ULONG EngineUs, ULONG OtherUs)
 #define POLL_WHY_NO_PORT_IRQ    3   // the OS assigned no interrupt resource
 #define POLL_WHY_NO_LINE        4   // Interrupt Line 0 or FFh
 #define POLL_WHY_NO_CONFIG      5   // Pin and Line unreadable
+#define POLL_WHY_INTX_OFF       6   // INTx enable not taken (HwFindAdapter's
+                                    // read-back; not a PollDecide answer)
 
 static ULONG PollDecide(ULONG Mode, BOOLEAN PinLine, UCHAR Pin, UCHAR Line, BOOLEAN PortGives,
                         ULONG PortLevel, ULONG PortVector)

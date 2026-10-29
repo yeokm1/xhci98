@@ -533,6 +533,22 @@ function Get-ModelPaths {
     return @($archPaths | Where-Object { $_.Models -eq $Model.Decoration })
 }
 
+# An install section and the sections the engine runs beside it by name
+# ([<install>.HW], .Services, .CoInstallers and the rest). For the
+# undecorated Windows 98 install the NT paths' own sections share the prefix
+# ([<install>.NTx86], [<install>.NTx86.Services]); they are not Windows 98's
+# and are left out (2026-10-29: they were swept in and reported under the
+# Windows 98 path's name).
+function Get-InstallSections {
+    param($Inf, [string]$Install, [string]$Suffix)
+    $prefix = ($Install + ".").ToLowerInvariant()
+    $beside = @($Inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith($prefix) })
+    if ($Suffix -eq "") {
+        $beside = @($beside | Where-Object { $_.Substring($prefix.Length) -inotmatch '^nt(x86|amd64|ia64)?(\.|$)' })
+    }
+    return @($Install) + $beside
+}
+
 if (-not (Test-Path -LiteralPath $InfPath)) {
     Write-Err "no INF at '$InfPath'."
     exit 1
@@ -678,7 +694,7 @@ if (-not (Test-SectionExists $inf "Version")) {
         #
         $verHdrPath = Join-Path (Split-Path -Parent $InfPath) $prod.VerHeader
         $rcPath     = Join-Path (Split-Path -Parent $InfPath) $prod.RcName
-        if (-not (Test-Path $verHdrPath)) {
+        if (-not (Test-Path -LiteralPath $verHdrPath)) {
             Write-Host ("  (no " + $prod.VerHeader + " beside this INF - DriverVer/version cross-check skipped)") -ForegroundColor DarkGray
         } else {
             $infVersion = ($dv[0].Value -split ',')[1].Trim()
@@ -793,7 +809,7 @@ if (-not (Test-SectionExists $inf "Version")) {
             # rc.exe is perfectly happy to compile one - and it would be the
             # copy an installed machine reads.
             #
-            if (Test-Path $rcPath) {
+            if (Test-Path -LiteralPath $rcPath) {
                 $rcText = Get-Content -LiteralPath $rcPath -Raw
                 $rcName = Split-Path -Leaf $rcPath
                 $rcRules = @(
@@ -1214,7 +1230,7 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "roothub" -or $_.Role -eq 
         # the rest - copy nothing either, and none of them may pull another
         # INF's sections in by Include/Needs, which this gate cannot follow
         # (task 33.4).
-        $hubSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
+        $hubSections = @(Get-InstallSections $inf $install $ap.Suffix)
         foreach ($hs in $hubSections) {
             $hubCopy = @(Get-Directive $inf $hs "CopyFiles")
             if ($hubCopy.Count -gt 0) {
@@ -2079,7 +2095,7 @@ foreach ($m in @($models | Where-Object { $_.Role -eq "composite" })) {
     foreach ($p in @(Get-ModelPaths $m)) {
         $install = $m.Section + $p.Suffix
         if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
-        $compSections = @($install) + @($inf.SectionOrder | Where-Object { $_.ToLowerInvariant().StartsWith(($install + ".").ToLowerInvariant()) })
+        $compSections = @(Get-InstallSections $inf $install $p.Suffix)
         foreach ($cs in $compSections) {
             foreach ($name in @("EnumPropPages", "EnumPropPages32")) {
                 $vals = @(Get-AddRegValues $inf @(Get-Directive $inf $cs "AddReg") $name)

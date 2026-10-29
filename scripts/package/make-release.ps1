@@ -4715,11 +4715,15 @@ helper (xhciinst\di\build.cmd).
         }
         $contents += ""
         $contents += "      xhci98.inf"
-        $contents += ("      xhci98.sys   {0:N0} bytes" -f $s.Length)
+        # Every byte count in the published readme is formatted in the
+        # invariant culture (1,234,567): -f takes the host's, which writes
+        # 1.234.567 on de-DE and a U+202F on fr-FR, and a cut on another host
+        # must be the same bytes (2026-10-29).
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhci98.sys   {0:N0} bytes", $s.Length)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.Sha256)
         $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
-        $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhciuas.sys  {0:N0} bytes", $s.UasLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.UasSha256)
         $contents += "      xhcicm.inf   (the Thunderbolt 3 / USB4 connection manager's INF)"
@@ -4730,7 +4734,7 @@ helper (xhciinst\di\build.cmd).
         } else {
             $contents += "      xhcicmf.inf  (its tunnel-port filter's INF)"
         }
-        $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhcicm.sys   {0:N0} bytes", $s.CmLength)
         $contents += "      SHA-256"
         $contents += ("      {0}" -f $s.CmSha256)
         $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
@@ -4767,7 +4771,7 @@ helper (xhciinst\di\build.cmd).
         $qexe = Get-Item -LiteralPath (Join-Path $qualtoolStaged "XHCIQUAL.EXE")
         $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
         $contents += ""
-        $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIQUAL.EXE {0:N0} bytes", $qexe.Length)
         $contents += "      XHCIQUAL.MAP keep it beside the EXE; see TOOLS\XHCIQUAL\readme.txt"
         $contents += "      QUALREP.BAT  the read-only probe a bug report asks for, saved"
         $contents += "                   to a new .LOG named from the date and time"
@@ -4780,8 +4784,8 @@ helper (xhciinst\di\build.cmd).
         $m64 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMK64.EXE")
         $contents += "  TOOLS\XHCIMARK\ - the Thunderbolt safe-removal mark service"
         $contents += ""
-        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 10" -f $m32.Length)
-        $contents += ("      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows" -f $m64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 10", $m32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows", $m64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
@@ -4799,17 +4803,17 @@ helper (xhciinst\di\build.cmd).
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $s32 = Get-Item -LiteralPath (Join-Path $destRoot "SETUP.EXE")
         $contents += ("  SETUP.EXE       - installs or updates the drivers: double-click")
-        $contents += ("                    it ({0:N0} bytes); Remove in Add/Remove" -f $s32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "                    it ({0:N0} bytes); Remove in Add/Remove", $s32.Length)
         $contents += "                    Programs uninstalls them"
         $contents += "  INSTALL.BAT     - for command-line and scripted installs:"
         $contents += "                    TOOLS\XHCIINST\readme.txt is the reference"
         $contents += ""
         $contents += "  TOOLS\XHCIINST\ - the programs SETUP.EXE and INSTALL.BAT run"
         $contents += ""
-        $contents += ("      XHCIWIZ.EXE  {0:N0} bytes, the installer's window" -f $w32.Length)
-        $contents += ("      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $w64.Length)
-        $contents += ("      XHCIINST.EXE {0:N0} bytes, the console tool" -f $i32.Length)
-        $contents += ("      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $i64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIWIZ.EXE  {0:N0} bytes, the installer's window", $w32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows", $w64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIINST.EXE {0:N0} bytes, the console tool", $i32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows", $i64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
@@ -4819,7 +4823,7 @@ helper (xhciinst\di\build.cmd).
     }
     if ($null -ne $ditoolStaged) {
         $dih = Get-Item -LiteralPath (Join-Path $ditoolStaged "XHCIDI.EXE")
-        $contents += ("      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit" -f $dih.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit", $dih.Length)
         $contents += "      helper that installs the drivers on Windows 98 SE"
         $contents += "      and ME devices; the install tool starts it"
         $contents += ""
@@ -4829,8 +4833,8 @@ helper (xhciinst\di\build.cmd).
         $t64 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR64.EXE")
         $contents += "  TOOLS\XHCITR\   - the xHCI98 USB Tree"
         $contents += ""
-        $contents += ("      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows" -f $t32.Length)
-        $contents += ("      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows" -f $t64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows", $t32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows", $t64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""

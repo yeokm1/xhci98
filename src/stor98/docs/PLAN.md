@@ -861,10 +861,13 @@ path set: CHECK CONDITION with the sense rules above, or GOOD (the parent error 
 
 None of the target systems supports a disk with 4 KiB **logical** sectors (native 4Kn):
 Windows 9x, 2000, XP and Vista assume 512-byte sectors, and Windows 7 supports 512e
-(512-byte logical, 4 KiB physical) but not 4Kn. stor98 therefore always presents
-**512-byte logical sectors** and translates to the namespace's block size in the driver.
-Supported native sizes: 512 and 4096 bytes (mandatory); larger sizes only within the bounce
-buffer budget, otherwise refused with a logged reason.
+(512-byte logical, 4 KiB physical) but not 4Kn. stor98 is therefore to present
+**512-byte logical sectors** and translate to the namespace's block size in the driver.
+**That translation is planned (1.7), not implemented:** today READ CAPACITY reports the
+namespace's own block size (src/nvme2k_scsi.c), so a 4Kn namespace reaches the OS as a disk
+with 4 KiB logical sectors, which 9x, 2000 and XP cannot use. Planned native sizes: 512 and
+4096 bytes (mandatory); larger sizes only within the bounce buffer budget, otherwise refused
+with a logged reason. The rest of this section is the design 1.7 is to implement.
 
 ### Request handling (on the phase 0 engine)
 

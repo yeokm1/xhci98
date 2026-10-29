@@ -1958,6 +1958,12 @@ try {
             try { Export-NonFreeSet -Root $packRepo -Pin $bad.Pin -Dest (Join-Path $script:work ("nf-bad-" + [System.IO.Path]::GetRandomFileName())) | Out-Null } catch { $msg = $_.Exception.Message }
             Assert-True ($msg.Contains($bad.Want)) ("the non-free export with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
         }
+        # A checkout git cannot read is not reported as a missing tag.
+        $notRepo = Join-Path $script:work ("not-a-repo-" + [System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $notRepo | Out-Null
+        $msg = ""
+        try { Resolve-OtherSetTag -Root $notRepo -Tag "v9.0.0" -Commit $nfCommit -What "usb-wdm-nonfree" | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -ne "" -and -not $msg.Contains("has no tag")) ("a directory that is no git checkout read as a missing tag: '" + $msg + "'")
         # STAGE.TXT's rules, and the paths the installer accepts.
         $threw = ""
         try { Assert-StageCovers -Lines @(Read-StageText -Text "STAGE | W98SE | non-free/a/A.INF | x" -Label "s") -Infs @("non-free/a/A.INF", "non-free/b/B.INF") -Label "s" } catch { $threw = $_.Exception.Message }
@@ -2030,6 +2036,7 @@ try {
             @{ Lines = @($freePinLines + @($cerPinLines[1])); Want = "go together"; Why = "the certificate's file with no Certificate line"; Read = $true },
             @{ Lines = @($freePinLines + @($cerPinLines[0])); Want = "go together"; Why = "a Certificate line with no file pinned"; Read = $true },
             @{ Lines = @($freePinLines + @($cerPinLines[0], $cerPinLines[0])); Want = "two certificates"; Why = "two Certificate lines"; Read = $true },
+            @{ Lines = @($freePinLines + @(("Commit: " + ("0" * 40)), $cerPinLines[0], $cerPinLines[1])); Want = "two commits"; Why = "two Commit lines"; Read = $true },
             @{ Lines = @($freePinLines + @(("Certificate: " + ("0" * 40)), $cerPinLines[1])); Want = "not the pinned"; Why = "another thumbprint"; Read = $false },
             @{ Lines = @($freePinLines + @($cerPinLines[0], ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "notacert.cer")) + " usb-wdm-free-test.cer"))); Want = "not the pinned"; Why = "the certificate at other bytes"; Read = $false })
         foreach ($cc in $cerCases) {

@@ -2418,6 +2418,12 @@ int inst_other_9x_stageable(int set, const char *id);
  * then 0) or a folder is not a valid entry (empty, or holding ';'). */
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
                                int n, int *fits);
+/* The same limit for the install directory's own entry: 1 when withDir,
+ * DevicePath as the run would write it with that entry, stays within
+ * INST_9X_DEVICEPATH_MAX; 0 when it passes it, and the entry is left off
+ * (a longer value takes every driver from the wizard, not only this
+ * package's). */
+int inst_9x_devicepath_room(const char *withDir);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
 /* 1 when the table's relations exclude the pair on system token tok. */

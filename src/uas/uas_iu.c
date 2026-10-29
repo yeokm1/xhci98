@@ -423,13 +423,17 @@ ULONG UasCdbDirection(UCHAR opcode)
     case 0x23:  /* READ FORMAT CAPACITIES */
     case 0x25:  /* READ CAPACITY(10) */
     case 0x28:  /* READ(10) */
+    case 0x3C:  /* READ BUFFER(10) */
     case 0x43:  /* READ TOC */
     case 0x46:  /* GET CONFIGURATION */
     case 0x4A:  /* GET EVENT STATUS NOTIFICATION */
+    case 0x4D:  /* LOG SENSE */
     case 0x5A:  /* MODE SENSE(10) */
+    case 0x5E:  /* PERSISTENT RESERVE IN */
     case 0x88:  /* READ(16) */
     case 0x9E:  /* SERVICE ACTION IN(16): READ CAPACITY(16) */
     case 0xA0:  /* REPORT LUNS */
+    case 0xA2:  /* SECURITY PROTOCOL IN */
     case 0xA8:  /* READ(12) */
     case 0xBE:  /* READ CD */
         return UAS_DIR_IN;
@@ -437,13 +441,31 @@ ULONG UasCdbDirection(UCHAR opcode)
     case 0x15:  /* MODE SELECT(6) */
     case 0x2A:  /* WRITE(10) */
     case 0x2E:  /* WRITE AND VERIFY(10) */
+    case 0x3B:  /* WRITE BUFFER(10) */
+    case 0x41:  /* WRITE SAME(10) */
     case 0x55:  /* MODE SELECT(10) */
+    case 0x5F:  /* PERSISTENT RESERVE OUT */
     case 0x8A:  /* WRITE(16) */
+    case 0x93:  /* WRITE SAME(16) */
     case 0xAA:  /* WRITE(12) */
+    case 0xB5:  /* SECURITY PROTOCOL OUT */
         return UAS_DIR_OUT;
+    /* 0x42 is not here: UNMAP (OUT) on a disk, READ SUB-CHANNEL (IN) on
+     * an MMC drive, and the opcode alone cannot tell which. */
     default:
         return UAS_DIR_NONE;
     }
+}
+
+ULONG UasCdbDataDirection(const UCHAR *cdb, ULONG cdbLength)
+{
+    /* SAT: byte 2 bit 3, T_DIR, 1 from the device and 0 to it, in both
+     * ATA PASS-THROUGH CDBs. */
+    if ((cdb[0] == 0x85 && cdbLength >= 16) ||
+        (cdb[0] == 0xA1 && cdbLength >= 12)) {
+        return ((cdb[2] & 0x08) != 0) ? UAS_DIR_IN : UAS_DIR_OUT;
+    }
+    return UasCdbDirection(cdb[0]);
 }
 
 /* ------------------------------------------------------------------ */

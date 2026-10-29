@@ -454,13 +454,14 @@ VOID CmStatusPass(PCM_NHI nhi)
     if (nhi->Stage == CM_STAGE_STOPPED) {
         return;
     }
-    if (s->DevKey != NULL) {
-        if (!s->Started) {
-            s->Started = 1;
-            s->LastBytes = 0;
-        }
-        cmStReadAsk(nhi);
+    if (s->DevKey != NULL && !s->Started) {
+        s->Started = 1;
+        s->LastBytes = 0;
     }
+    /* The driver key's values (XhciCmEjectConfirm, XhciCmEjectAsk) are
+     * read whether or not the device key opened: a device key that did
+     * not open must not turn the eject's confirmation off. */
+    cmStReadAsk(nhi);
     /* Built whether or not the key opened: the query device frames it
      * (cm_qryos.c, design record 25 section 4). */
     cmStInput(nhi, &in);

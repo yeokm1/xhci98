@@ -887,6 +887,11 @@ static VOID NTAPI hcdWaitCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     }
     IoReleaseCancelSpinLock(Irp->CancelIrql);
     if (hc == NULL) {
+        /* Not expected: a waiting IRP holds its device's Refs, which the
+         * bus waits out before a PDO loses its controller. Its list is the
+         * controller lock's, so with no controller it can be neither
+         * unlinked nor completed safely; left where it is, and counted. */
+        (VOID)InterlockedIncrement(&pdo->CancelsUnserved);
         return;
     }
     pipe = (PHCD_PIPE)Irp->Tail.Overlay.DriverContext[3];

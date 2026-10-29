@@ -332,7 +332,6 @@ typedef struct _CM_REENUM {
     /* 98: the CONFIGMG route, each port's children already seen, and the
      * window after a tunnel up in which CmReenumService looks for new
      * children to mark (the re-enumeration is not synchronous). */
-    CM_CFGMG Cfgmg;         /* unused since the worker (cm_cfgwk.c)       */
     ULONG CfgmgOwed;        /* the worker starts at the first Action or
                                Service, after the NHI's start completed  */
     struct _CM_CFGWK *Wk;   /* 98: the CONFIGMG worker (cm_cfgwk.c)       */

@@ -2173,6 +2173,24 @@ VOID HcdPdoReapRetired(VOID)
 }
 
 /*
+ * A relations list from above, on an IRP this driver fails: PnP reads no
+ * list from a failed IRP, so the list and the references it carries are
+ * this driver's to give back. NULL is no list. IRQL: <= DISPATCH_LEVEL.
+ */
+VOID HcdRelationsGiveBack(PDEVICE_RELATIONS old)
+{
+    ULONG i;
+
+    if (old == NULL) {
+        return;
+    }
+    for (i = 0; i < old->Count; i++) {
+        ObDereferenceObject(old->Objects[i]);
+    }
+    HcdPoolFreeForeign(old);
+}
+
+/*
  * A parent's BusRelations - the root hub's (`parent` 0) or a hub FDO's (the
  * Serial of its hub PDO; task 33.4): whatever the list already held, then
  * every listed PDO presented under that parent, referenced and marked

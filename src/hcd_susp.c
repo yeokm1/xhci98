@@ -753,13 +753,22 @@ static ULONG hcdSuspDoneNew(PHCD_CONTROLLER hc)
 static VOID hcdSuspDoneJoin(PHCD_SUSP_DONE w)
 {
     LARGE_INTEGER due;
+    ULONG tries;
 
-    /* NT, the reference still owed: retried until had - never the 9x flag
-     * on NT. */
+    /* NT, the reference still owed: retried for a while, then the flag
+     * (with the 9x join's standing) rather than a stop or remove wedged
+     * for good on a reference that never comes. */
+    tries = 0;
     while (w->Handle != NULL) {
         if (NT_SUCCESS(ObReferenceObjectByHandle(w->Handle, THREAD_ALL_ACCESS,
                                                  NULL, KernelMode,
                                                  &w->ThreadObject, NULL))) {
+            (VOID)ZwClose(w->Handle);
+            w->Handle = NULL;
+            break;
+        }
+        if (++tries >= HCD_JOIN_REF_TRIES) {
+            w->ThreadObject = NULL;
             (VOID)ZwClose(w->Handle);
             w->Handle = NULL;
             break;

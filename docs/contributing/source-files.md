@@ -314,6 +314,7 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | File | What it is |
 |---|---|
 | `test_vsd_list.c` | S98VSD.VXD's pure half (`src\vsd\vsd_list.c`, design record 30 section 9.1). |
+| `test_pfw.c` | XHCIPFW's pure halves (`src\pfw\pfw_scan.c` and `pfw_ntdec.c`, design record 32 section 10.1) over a model of PCI configuration space. |
 | `run-host-tests.cmd` | The host test runner: every suite compiled with the in-repo MSVC 6.0 under `XHCI_HOST_TEST` into its own output directory and run; `scripts\build-driver.cmd` runs it before any DDK build. |
 | `test_harness.h` | The one copy of the check helpers every host suite includes (`CHECK`, `CHECK_EQ`, the counts and the failure format); header-only, with no expectations of its own (design record 03). |
 | `test_membuf.c` | `xhci_mem.c` and the common-buffer constants of `xhci.h`; also built for amd64 (`test_membuf_amd64`). |
@@ -391,6 +392,28 @@ The Windows 98 SE and ME IOS vendor-supplied driver that lets large requests rea
 | `src\vsd\stage-ddk.ps1` | The DDK's ten headers and its linker pair, held to `docs\references\README.md`'s hashes and copied into the ignored `src\vsd\obj\`, the staged headers mended (a Ctrl-Z cut, `AEP.H`'s three typedef tails). |
 | `src\vsd\omfpub.py`, `omfcheck.py`, `callcheck.py` | The three link guards against the DDK linker's two mislinks of Watcom's OMF (record 30 section 6.1). |
 | `src\vsd\check-vsd.ps1`, `vsd-services.allow` | The gate on the image: its DDB, its VxD services against the allowlist, its stamp, and no debug-port write in the release image. |
+
+## XHCIPFW - `src\pfw\`
+
+The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly above 4 GB before the system reads the bridges, and logs any xHCI controller whose register BAR lies above 4 GB (roadmap-usb4 task 44.49, design record 32), in two images over one pure half: `XHCIPFW.VXD`, a static VxD for Windows 98 SE and ME that runs it at `Sys_Critical_Init`, built with S98VSD.VXD's toolchain and link guards (Open Watcom 2.0 and the Windows 98 SE DDK's `LINK.EXE` 5.12, record 30 section 6.1), and `XHCIPFW.SYS`, a boot-start driver of the group System Reserved for the 32-bit 2000, XP, Vista and 7 (record 32 section 11), built with the Windows 2000 DDK. This project's own, GPL-2.0-or-later, C throughout; shipped from `3.3.0.0`, offered by the installer as the Thunderbolt 3 / USB4 box's child and ticked by default whenever that box is (record 32 sections 8 and 11.3). `scripts\build-driver.cmd` builds both, release and qemu, on the x86 run; exit 2 from either build is "not built".
+
+| File | Role |
+|---|---|
+| `src\pfw\pfw_scan.c` / `pfw_scan.h` | The pure half, DDK-free and shared by both images: the scan of every PCI function, the classification of each bridge's prefetchable window, the count of BARs inside a window to be closed, the close with every write verified and undone when it is not taken, the xHCI controllers with a BAR above 4 GB, and the result and log records (record 32 sections 4.1, 4.4 and 6). No file-scope static and no data defined here (the linker's mislinks); the caller supplies the two configuration accesses. Host suite `test\test_pfw.c`. |
+| `src\pfw\pfw_ntdec.c` / `pfw_ntdec.h` | `XHCIPFW.SYS`'s decision whether and how to run the step at a start (record 32 section 11.2): 2000 and XP only with one processor, Vista and later inside `KeIpiGenericCall` where several run, never in Safe Mode or after the boot drivers' time; the skip reasons it writes. DDK-free, in `test\test_pfw.c` too. |
+| `src\pfw\pfw.c` | The VxD's control procedure: the step at `Sys_Critical_Init` with interrupts disabled and no VMM service, its result written once at `Device_Init` under `System\CurrentControlSet\Services\VxD\XHCIPFW` through VMM's registry services (record 32 sections 5.1 and 6), success returned to VMM in every case. The `qemu` build's debug-console lines (`PFW_DEBUGCON`). |
+| `src\pfw\pfw_io.c` | The VxD's configuration accesses, mechanism #1 through ports CF8h and CFCh; the only object of the release image with port instructions, which `build.cmd` holds. |
+| `src\pfw\pfw_data.c` | The DDB `XHCIPFW`, the step's result, the registry write's outcome and the stamp `XHCIPFW.VXD <version>`, in an object of their own (record 30 section 6.1). |
+| `src\pfw\pfw.h` | The declarations the VxD's three objects share. |
+| `src\pfw\pfw_vmm.h` | The DDB layout and the values the VxD needs from the Windows 98 SE DDK, under names of its own and each cited by header and line, as `src\vsd\vsd_vmm.h` does. |
+| `src\pfw\pfw.def` | The LE image: `VXD XHCIPFW`, its segments, the DDB export. |
+| `src\pfw\build.cmd` | `build.cmd [qemu]`: `obj\XHCIPFW.VXD` or `obj\qemu\XHCIPFW.VXD`. Stages the DDK through `src\vsd\stage-ddk.ps1`, compiles, runs `src\vsd`'s three link guards, links, disassembles every object to hold the release image's port instructions to `pfw_io.obj`'s CF8h/CFCh, and runs the gate; exit 2 "not built" without Open Watcom, Python or the DDK. |
+| `src\pfw\check-pfw.ps1`, `pfw-services.allow` | The gate on the VxD image: an LE image whose one entry is the DDB `XHCIPFW `, every VxD service it calls a row of the allowlist and every row called, the stamp at `XHCI_VER_STR`, and no write to port 0E9h in the release image. |
+| `src\pfw\nt\pfw_nt.c` | `XHCIPFW.SYS`: `DriverEntry` only, no device, dispatch or unload routine; the decision, the step inside `KeIpiGenericCall` (looked up at run time, so the image loads on 2000) or at `HIGH_LEVEL` with one processor, configuration mechanism #1 through `READ_PORT_ULONG`/`WRITE_PORT_ULONG`, record 32 section 6's values with `XhciPfwSkipped`, `XhciPfwMode`, `XhciPfwHoldTicks` and `XhciPfwTickHz` under its service key's `Parameters`, and the `XHCI98_FLAVOUR_*` marker; always `STATUS_SUCCESS`. |
+| `src\pfw\nt\sources`, `makefile`, `xhcipfw.rc` | Its DDK build description (x86 only, `fre` for release and `fre_qemu` for qemu, subsystem version 5.00), the build stub, and the version resource from `src\xhci_version.h`. |
+| `src\pfw\nt\build.cmd` | `build.cmd [qemu]`: `objfre\i386\xhcipfw.sys` or `objfre_qemu\i386\xhcipfw.sys` with the Windows 2000 DDK in `tools\ntddk` (`DDKROOT` overrides it), then the import gate's `hlprx86` profile and `check-pfwsys.ps1`; exit 2 "not built" without the DDK. |
+| `src\pfw\nt\check-pfwsys.ps1`, `pfw-sys-imports.allow` | The gate on the driver image: PE32 for i386, native subsystem, a driver; every import a row of the list and no module but `ntoskrnl.exe` and `HAL.dll`; the stamp `XHCIPFW.SYS <version>`; exactly one flavour marker; no `HAL.dll!WRITE_PORT_UCHAR` (the qemu image's debug-console writer) in the release image. |
+| `scripts\import-gate\xhcipfw-imports.allow` | `XHCIPFW.SYS`'s import allowlist for the import gate's `hlprx86` profile: every row an export of every authenticated kernel and HAL of 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86; `KeIpiGenericCall` denied. |
 
 ## The user-mode tools
 

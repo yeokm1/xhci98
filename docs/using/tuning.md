@@ -27,9 +27,9 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 | Windows | Key |
 |---|---|
 | 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
-| 2000, XP, Vista, 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
+| 2000 to 10 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
 
-`NNNN` is the subkey whose `DriverDesc` is "xHCI98 USB 3 Controller" (from `3.2.0.0`; "xHCI98 USB 3.x eXtensible Host Controller" before it). The number varies from machine to machine.
+`NNNN` is the subkey whose `DriverDesc` names the controller: "xHCI98 USB 3 Controller" (from `3.2.0.0`; "xHCI98 USB 3.x eXtensible Host Controller" before it), and from `3.3.0.0` on 98 SE, ME, 2000 and 32-bit XP "xHCI98 USB 3 Controller (...)" with the product's name, for a controller the installer's name table lists (the release notes, "Controller names in Device Manager"). The number varies from machine to machine.
 
 **One value for every controller (from `3.1.0.0`).** Every value below, and every `XhciCm*` value of the Thunderbolt driver, can also be set once for the whole machine, in this key on every Windows:
 
@@ -57,6 +57,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciWideMap` | Two pieces of a large bulk transfer on the controller at once (2000 to 7) | `0` | `1` | `0` | `0` |
 | `XhciSelectiveSuspend` | Selective suspend of idle devices when Windows asks | `0` | `1` | `0` | `0` |
 | `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see "The silent install" below) | `0` | `1` | `0` | `0` |
+| `XhciUsb2Bos` | From `3.2.0.0`: a device declaring USB 2.1 or later asked for its BOS descriptor at High or Full Speed, which tells Windows and the xHCI98 USB Tree's "can run faster" notice that it can run at SuperSpeed; `0` stops the request for every device, any other value is on (the release notes, "XhciUsb2Bos") | `0` | `1` | `1` | not written |
 
 **Hardware quirks**, each for a particular controller or chipset
 
@@ -95,7 +96,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciLogVerbosity` | The driver's log, read by `XHCITR` (its Driver log item and its snapshot) | `0` | `4` | `2` | `2` (a fresh install; an update keeps the value there) |
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` | `1` | `0` | `0` |
 
-**The Thunderbolt and USB4 driver (`xhcicm.sys`)**, from `3.0.0.0`: these values are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`HKLM\System\CurrentControlSet\Services\Class\System\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 7, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full), and from `3.1.0.0` also in the machine-wide `Services\USB` key above, which wins when the value is there. They are read at each start of that controller: restart Windows, or disable and enable the controller, after a change. A switch outside its range is refused and its default stands; a period or timeout outside its range is held to the nearer bound. The release notes' "The connection manager's registry values" says what each does in full.
+**The Thunderbolt and USB4 driver (`xhcicm.sys`)**, from `3.0.0.0`: these values are in the Thunderbolt or USB4 controller's driver key, not the xHCI controller's (`HKLM\System\CurrentControlSet\Services\Class\System\NNNN` on 98 SE and ME, `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` on 2000 to 10, the subkey whose `DriverDesc` names the Thunderbolt or USB4 controller; the xHCI98 USB Tree's "Driver log (xhcicm)" item names it in full), and from `3.1.0.0` also in the machine-wide `Services\USB` key above, which wins when the value is there. They are read at each start of that controller: restart Windows, or disable and enable the controller, after a change. A switch outside its range is refused and its default stands; a period or timeout outside its range is held to the nearer bound. The release notes' "The connection manager's registry values" says what each does in full.
 
 | Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
 |---|---|---|---|---|---|
@@ -114,10 +115,11 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: a comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports | - | - | absent (no override) | not written |
+| `XhciCmAsmediaPcie7Credits` | USB4 connection manager, from `3.3.0.0`: a bench experiment, leave it absent. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the driver builds between an ASMedia ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands | `0` | `1` | `0` | not written |
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
-The install writes every value in these tables but `XhciCmTunnelBridge`, whose absence means no override, at the number in its last column, so each one is already in the key, ready to change; a value marked "98 SE and ME" is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
+The install writes every value in these tables but the three marked "not written" (`XhciUsb2Bos`, `XhciCmTunnelBridge`, whose absence means no override, and `XhciCmAsmediaPcie7Credits`), at the number in its last column, so each one is already in the key, ready to change; a value marked "98 SE and ME" is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
 

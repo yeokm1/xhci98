@@ -325,10 +325,6 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     hc->PowerWorkIrp = NULL;
     hc->PowerWorkKind = 0;
 
-    if (kind == HCD_POWER_WORK_D0) {
-        hcdD0Finish(hc, irp);
-        return;
-    }
     if (kind == HCD_POWER_WORK_DIRECT) {
         hcdDirectTransition(hc);
     }
@@ -342,11 +338,32 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     HcdIoLeave(hc);
 }
 
-/* One power IRP of each kind is in flight at a time - the power manager
- * serializes them per device - so one work item serves both. IRQL:
- * <= DISPATCH_LEVEL. */
+/* IRQL: PASSIVE_LEVEL (a system worker thread). */
+static VOID NTAPI hcdPowerWorkD0(PVOID Context)
+{
+    PHCD_CONTROLLER hc;
+    PIRP irp;
+
+    hc = (PHCD_CONTROLLER)Context;
+    irp = hc->PowerWorkD0Irp;
+    hc->PowerWorkD0Irp = NULL;
+    hcdD0Finish(hc, irp);
+}
+
+/* The power manager serializes each kind per device but lets a system IRP
+ * and a device IRP be in flight together, so the device IRP's D0 has its
+ * own item and slot: a D0 deferred from hcdD0Done at DISPATCH_LEVEL must
+ * not overwrite a system IRP's deferral still queued, nor the reverse. The
+ * system IRP's paths (SYSTEM, DIRECT, SHUT) share the other, one system
+ * IRP being in flight at a time. IRQL: <= DISPATCH_LEVEL. */
 static VOID hcdPowerDefer(PHCD_CONTROLLER hc, PIRP irp, ULONG kind)
 {
+    if (kind == HCD_POWER_WORK_D0) {
+        hc->PowerWorkD0Irp = irp;
+        ExInitializeWorkItem(&hc->PowerWorkD0, hcdPowerWorkD0, hc);
+        ExQueueWorkItem(&hc->PowerWorkD0, DelayedWorkQueue);
+        return;
+    }
     hc->PowerWorkIrp = irp;
     hc->PowerWorkKind = kind;
     ExInitializeWorkItem(&hc->PowerWork, hcdPowerWork, hc);

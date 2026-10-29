@@ -938,7 +938,7 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
     r->PortMem = pw;
     pbase = (pw & 0xFFF0UL) << 16;
     plimit = (((pw >> 16) & 0xFFF0UL) << 16) | 0x000FFFFFUL;
-    if (pbase > plimit || plimit == 0xFFFFFFFFUL) {
+    if (pbase > plimit) {
         r->WinWhere = port;
         r->WinOutcome = XHCI_TBT_BRWIN_PORT_CLOSED;
         return;
@@ -952,7 +952,13 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
         if (align < BRWIN_GRAIN) {
             align = BRWIN_GRAIN;
         }
-        top = (plimit + 1UL) & ~(align - 1UL);
+        /* A window ending at 4 GiB is open: its end past the limit does
+         * not fit 32 bits, so its last unit of A is left out instead. */
+        if (plimit == 0xFFFFFFFFUL) {
+            top = plimit & ~(align - 1UL);
+        } else {
+            top = (plimit + 1UL) & ~(align - 1UL);
+        }
         bottom = brRound(pbase, align);
         if (bottom == 0 || top < bottom || top - bottom < need) {
             r->WinWhere = port;

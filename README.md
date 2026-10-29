@@ -25,7 +25,7 @@ My 2020 ThinkPad P14s Gen 1 on Windows 98 SE with a USB 3.0 hub, two UAS drives,
 
 <img src="images/xhci98-tb3-nvme-win7.jpg" width="800">
 
-Windows 7 with an ORICO USB4 NVMe enclosure on the Thunderbolt 3 port, through `xhcicm.sys` and [Stor98](src/stor98/): CrystalDiskMark sequential 1151 MB/s read, 1013 MB/s write.
+Windows 7 with an ORICO USB4 NVMe enclosure on the Thunderbolt 3 port, through `xhcicm.sys` and [Stor98](src/stor98/), in CrystalDiskMark's sequential test. No run record of this project covers this Windows 7 screen; [What is tested](#what-is-tested-and-what-is-not) lists the readings that are recorded.
 
 <img src="images/xhci98-tb3-nvme-98se.jpg" width="800">
 
@@ -291,9 +291,9 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 | Driver | Windows | Key (`NNNN` is the subkey whose `DriverDesc` names the controller) |
 |---|---|---|
 | `xhci98.sys` | 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\USB\NNNN` |
-| `xhci98.sys` | 2000 to 7 | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
+| `xhci98.sys` | 2000 to 10 | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{36FC9E60-C465-11CF-8056-444553540000}\NNNN` |
 | `xhcicm.sys` | 98 SE, ME | `HKLM\System\CurrentControlSet\Services\Class\System\NNNN` |
-| `xhcicm.sys` | 2000 to 7 | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` |
+| `xhcicm.sys` | 2000 to 10 | `HKLM\SYSTEM\CurrentControlSet\Control\Class\{4D36E97D-E325-11CE-BFC1-08002BE10318}\NNNN` |
 
 | Value | What it does | Default |
 |---|---|---|
@@ -316,8 +316,8 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 ## What is tested, and what is not
 
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
-- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250.
-- Every other target, Windows 2000 included, has run in QEMU virtual machines only.
+- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250. Thunderbolt 3: the P14s Gen 1 under Windows 98 SE, with Stor98, and with `S98VSD.VXD` at the bench of 2026-10-22.
+- The other targets, Windows 2000 included (its Setup bugchecked on both real machines tried), were read in QEMU virtual machines, and the Thunderbolt 3 and USB4 support beyond the P14s on an emulator of those controllers.
 - The free USB class drivers a download may carry are tested in their own project: which of their tests used an emulated device, a real device through a virtual machine, or a real PC is in [usb-wdm-free's "Tested by the author"](https://github.com/yeokm1/usb-wdm-free#tested-by-the-author).
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
@@ -341,8 +341,9 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 | `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
 | `SETUP.EXE` | The installer: double-click it to install or update |
 | `USBDRV\` | Other USB drivers the download carries: `NUSB33\`, plus `FREE\` in the `-free` download, and `FREE\` and `NONFREE\` in the `-nonfree` one ([Downloads](#downloads)) |
-| `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`) |
+| `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`, and on 98 SE and ME the device install helper `XHCIDI.EXE`) |
 | `tools\xhcitr\` | The xHCI98 USB Tree, also the driver's log and snapshot reader |
+| `tools\xhcimark\` | `XHCIMARK.EXE`, `XHCIMK64.EXE`: the Thunderbolt safe-removal mark service, which the installer puts in place on 2000 to 10 with the Thunderbolt 3 / USB4 support |
 | `tools\xhciqual\` | DOS: `XHCIQUAL.EXE` and `QUALREP.BAT` |
 | `tools\portsw\` | `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`: the Intel port switchover |
 | `tools\silent\` | 98 SE and ME: the silent install's list and switch |
@@ -355,7 +356,8 @@ Each driver directory holds:
 - `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
 - `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
 - `*.cat` (64-bit only): a test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need
-- `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives)), and `S98VSD.VXD` beside them in `release-x86\` for 98 SE and ME
+- `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives)), with `stor98w9.inf`, its INF for 98 SE and ME, and `S98VSD.VXD` beside them in `release-x86\` for 98 SE and ME
+- `XHCIPFW.VXD` and `XHCIPFW.SYS` (32-bit only): XHCIPFW, which closes the USB4 ports' memory windows above 4 GB at Windows start, the `.VXD` for 98 SE and ME and the `.SYS` for 32-bit 2000 to 7 (see [the BIOS](#before-you-start-the-bios))
 
 ## Reporting a bug
 
@@ -491,12 +493,12 @@ This project's own source is licensed under the GNU General Public License, vers
 
 Apart from Stor98's earlier released builds under `src/stor98/releases/` (below), the repository tracks no third-party binary on its own, although the tool executables it tracks under `releases/` carry statically linked third-party runtimes:
 
-- `xhci98.sys` and `xhciuas.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls.
+- `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` link no runtime or extender. The 32-bit builds link no third-party object either; the 64-bit builds, linked by WDK 7.1, carry that kit's `/GS` stack-cookie handler (`__security_check_cookie` / `__report_gsfailure`), which nothing in this project's source calls. `S98VSD.VXD` and `XHCIPFW.VXD` are compiled by Open Watcom 2.0 with no runtime linked, and `XHCIPFW.SYS` is linked by the Windows 2000 DDK as the 32-bit drivers are.
 - Some files of `xhcicm.sys`'s source, under `src/cm/`, are adapted from the `usb4-emu` project (some lifted from its `tools/usb4cm` under its earlier MIT licence) and keep their copyright lines and licence notices. The portions first adapted from Linux's `drivers/thunderbolt` were rewritten from the USB4 specifications for `3.3.0.0`. The [legal and provenance record](docs/contributing/legal-provenance.md), section 2a, lists each file.
 - `XHCIQUAL.EXE` embeds the Open Watcom runtime and the DOS/32A extender.
 - `XHCISNAP.EXE`, in the releases up to `3.0.0.0`, embeds the MSVC 6.0 runtime.
 - `XHCICLN.EXE` and `XHCICL64.EXE`, in the releases from `2.4.0.0` to `3.2.0.0`, embed the MSVC 6.0 and the WDK 7.1 runtime.
-- `XHCIINST.EXE` and `XHCITR.EXE` embed the MSVC 6.0 runtime; `XHCIIN64.EXE` and `XHCITR64.EXE` the WDK 7.1 one. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
+- `XHCIINST.EXE`, `XHCITR.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE`, `SETUP.EXE` and `XHCIMARK.EXE`, embed the MSVC 6.0 runtime; `XHCIIN64.EXE`, `XHCITR64.EXE`, and from `3.1.0.0` `XHCIWZ64.EXE` and `XHCIMK64.EXE`, the WDK 7.1 one. `XHCIDI.EXE`, the 98 SE and ME device install helper from `3.1.0.0`, embeds the Open Watcom 16-bit Windows C runtime and imports the running system's `SETUPX.DLL` through the Windows 98 SE DDK's `setupx.lib`, an import library. None of them contains or runs a Microsoft setup program such as devcon: they call the setup routines of the Windows they run on.
 
 Each tool ships with a `NOTICE.TXT` recording it, and the `LICENSE` scope note says that those runtimes carry their own terms and are outside the grant. Neither quotes the terms themselves.
 

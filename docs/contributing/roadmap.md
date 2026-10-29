@@ -4,7 +4,7 @@ This roadmap is the project-status index: the phase sequence, what each phase
 was for and what it delivered, the basis on which each closed, the task and
 batch ids that other documents, scripts and source comments cite, and the two
 acts that sit outside the phases (the upload and the hand-run acceptance).
-It is meant to orient a contributor. It is three files. This one carries the
+It is meant to orient a contributor. It is four files. This one carries the
 status, the conventions, the phase sequence, Phases 0-16 (the initial release)
 and the acceptance reminder;
 [`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) carries the
@@ -213,6 +213,13 @@ just before it, and the four were renumbered in order: the timer-arm race
 24.4 -> 24.6, and the cut 24.6 -> 24.7. What keeps an old id is an artifact name - a snapshot, a marker, an
 `out\` directory - and
 `runs/run-23.md` lists those under "On task ids inside artifact names".
+
+A commit hash in a ticked task line ("done ..., `hash`") names the commit
+the work was done in, which from Phase 25 on is often a worker branch's
+commit that a squash merge folded into one commit on `main`; such a hash
+is historical and may not resolve in a fresh clone. The commit a fresh
+clone can check is the phase's squash commit, which each released phase's
+Status line names.
 
 Three rules the batching exists to enforce:
 

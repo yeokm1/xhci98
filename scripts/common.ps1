@@ -1,7 +1,7 @@
 Set-StrictMode -Version 2.0
 
 function Get-RepoRoot {
-    return (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
 }
 
 function Get-DefaultToolsDir {

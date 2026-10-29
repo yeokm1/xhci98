@@ -4,7 +4,9 @@ Status: draft 2, 2026-10-15, before code, reviewed and revised the same
 day. Written for Phase 40 of
 `roadmap-usb4.md` ("USB4: the Software Connection Manager", planned as
 `U4CM` until the owner numbered it on 2026-10-15), task 40.1. Nothing in
-`src\` implements it yet. The owner's decision D7 of 2026-10-15 puts this
+`src\` implemented it when it was written; Phase 40 implemented it and it
+shipped in `3.0.0.0` (cut 2026-10-17), and the record is revised since as
+the paragraphs below say (the latest 2026-10-25). The owner's decision D7 of 2026-10-15 puts this
 work in `3.0.0.0` beside the Thunderbolt 3 ICM client of design record 21,
 in the same binary `xhcicm.sys`, with the profile chosen per host interface
 (record 21 sections 1.4 and 13). The owner also decided that day that
@@ -3625,8 +3627,9 @@ from their first form, as each row says.
   written in its HopID 8 entry (it resets to none; this driver keeps them
   as read, as Linux does), what its unused adapter 4 answers if read, and
   the PCIe switch in front of the NVMe under Windows 98 SE and 2000 are
-  unread; planned task U4HW.1 (40.4 until 2026-10-16) waits on a USB4 host that boots them
-  (section 18; the hardware bench, task 44-E.6).
+  unread; task U4HW.1 (40.4 until 2026-10-16; 44.39 and 44-E.6 from
+  2026-10-25; its bench task 45-E.5 from 2026-10-29) waits on a USB4 host
+  that boots them (section 18).
 
 ## 17. What this record needs record 21 to say differently
 

@@ -352,6 +352,19 @@ rem                  cleaning, quarantine, the statement's gating and anchor,
 rem                  links below depth 1, eject, suspend and resume, and the
 rem                  ASM2464 device router's captured quirks (record 22
 rem                  section 6.11)
+rem   test_cm_live - the host interface's liveness monitor (src\cm\cm_live.c,
+rem                  design record 21 sections 5.5 and 5.6): its states,
+rem                  cadence, recovery and gate
+rem   test_cm_pwrr - the system SET_POWER's route and the 9x shutdown taken
+rem                  with no device IRP (src\cm\cm_pwrr.c, task 43.65)
+rem   test_cm_irq  - the interrupt a child filter gives a function hot-added
+rem                  behind a tunnel on 2000's Standard PC HAL (src\cm\cm_irq.c,
+rem                  task 44.53, design record 21 section 6.2.1): the HAL id,
+rem                  the swizzle, the requirements and start lists, the
+rem                  records' sequences; also built for amd64 (below)
+rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
+rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
+rem                  tool's pure half
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -359,9 +372,10 @@ rem and its usbport callback surface). Their last copies are on branch
 rem 1.2.0.0. test_xfer and test_iso left with them and came back with task
 rem 26-A.9, unchanged, because src\xhci_xfer.c was kept whole (26-A.4).
 rem
-rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
-rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
-rem compiler, as test_packet_amd64 and test_membuf_amd64.
+rem THE SECOND ARCHITECTURE (roadmap task 21.4). Three suites are compiled and
+rem run twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
+rem compiler, as test_packet_amd64, test_membuf_amd64 and (task 44.53)
+rem test_cm_irq_amd64, whose resource descriptor is larger on amd64.
 rem
 rem   test_packet_amd64  src\xhci_usbport.h declares three structures and a
 rem                      registration packet that change shape under _WIN64 -
@@ -723,11 +737,12 @@ goto amd64done
 :noamd64
 set "SUITESKIPPED=1"
 echo.
-echo === test_packet_amd64, test_membuf_amd64 === SKIPPED
+echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64 === SKIPPED
 echo WDK 7.1 was not found at %WDK71%, and its amd64 compiler is the only thing
-echo here that compiles the _WIN64 half of src\xhci_usbport.h. That half is
-echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the
-echo verdict below as covering x86 alone.
+echo here that compiles the _WIN64 half of src\xhci_usbport.h and the amd64
+echo resource lists of src\cm\cm_irq.c. Those are therefore unchecked in this
+echo run. Set WDK71 to a WDK 7.1 root, or read the verdict below as covering
+echo x86 alone.
 
 :amd64done
 call :cleanrun

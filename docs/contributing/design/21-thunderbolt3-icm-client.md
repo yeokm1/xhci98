@@ -1,7 +1,9 @@
 # Design Record 21 - Thunderbolt 3 Firmware Connection Manager Client and Tunnel Re-enumeration
 
-Status: draft 6, 2026-10-15, reviewed and revised; the pure core landed,
-the driver integration pending; the
+Status: draft 6, 2026-10-15, reviewed and revised; the pure core landed
+first and the driver with it shipped in `3.0.0.0` (cut 2026-10-17), and
+the record is revised since as the paragraphs below say (the latest
+2026-10-27); the
 owner's decisions D1 to D13 taken (D4 on 2026-10-14, the rest on
 2026-10-15) and written into section 11 and the sections each one names.
 Written for Phase 39 of `roadmap-usb4.md` ("Phase 39 - The Thunderbolt 3
@@ -12,7 +14,7 @@ connection manager that follows is Phase 40 (planned as `U4CM`). Since it
 was written, the pure core has landed in `src\cm\` (`tbt_ring.c`,
 `tbt_icm.c`, `tbt_hw.c`, `tbt_topo.c`, tasks `39-A.2`, `39-A.3` and
 `39-A.5`'s pure half, with their host suites); the driver around it and
-the virtual-machine legs are still to come. Revised on 2026-10-15 for the
+the virtual-machine legs followed in Phase 39. Revised on 2026-10-15 for the
 `usb4-emu` relicensing (section 9), the decisions shared with design
 record 22 (sections 1.4.2 and 6.3) and the pure core's behaviour
 (sections 4, 5.3 to 5.5, 6.3 and 10). Section 12 lists what is open. Draft 6 adds, by

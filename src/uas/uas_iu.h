@@ -166,6 +166,9 @@ ULONG UasSrbStatus(ULONG scsiStatus, ULONG requested, ULONG transferred);
 #define UAS_DIR_OUT             2
 
 ULONG UasCdbDirection(UCHAR opcode);
+/* The same for a whole CDB: ATA PASS-THROUGH (12) and (16) carry their
+ * direction in the CDB (T_DIR), every other opcode is UasCdbDirection's. */
+ULONG UasCdbDataDirection(const UCHAR *cdb, ULONG cdbLength);
 
 /*
  * Storage ids from the INQUIRY data of a LUN, as the class INFs on each

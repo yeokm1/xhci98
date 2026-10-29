@@ -587,7 +587,8 @@ VOID CmRegRelations(PCM_FILTER filter, const DEVICE_RELATIONS *relations,
     cmAttachNew(filter, (PVOID const *)now, count, isNew);
 
     /* The snapshot is replaced under the lock, since the eject's
-     * eligibility (cmEjectReady) reads it from the child's removal. A
+     * eligibility (cmEjectReady) reads it from the CM thread
+     * (CmReenumService). A
      * function newly answering starts a new generation (RelGen,
      * CmPortsNewGeneration), which an eject posted against the old one
      * fails at its hand-off; a departure alone keeps it; a new function

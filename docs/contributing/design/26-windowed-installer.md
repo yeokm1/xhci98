@@ -4344,7 +4344,8 @@ packages whose devices Windows' own generic INFs would take, `uac2` and
 `usbmidi`, staged on `DevicePath` again, about 90 characters, so that
 their exact matches win; with copy-only the Sound Blaster X4 gets 98 SE's
 own `USBAUDIO` and stops with exception 0E; every other package stays
-copy-only, W9XSTAGE.1 kept in "Planned work"). This section amends
+copy-only, W9XSTAGE.1 kept in "Planned work", roadmap-usb4 task 45.7
+since 2026-10-29). This section amends
 sections 6.7.4, 6.7.6, 6.7.7 and 6.7.11 where it says so; the rest of
 section 6.7 (the downloads, the folders and their records, the
 detection, the copy and its journal, the uninstall) stands. Proposals of

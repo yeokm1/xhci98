@@ -1402,6 +1402,11 @@ int inst_9x_devicepath_project(const char *base, const char *const *folders,
     return bad ? -1 : (int)strlen(cur);
 }
 
+int inst_9x_devicepath_room(const char *withDir)
+{
+    return withDir != NULL && strlen(withDir) <= INST_9X_DEVICEPATH_MAX;
+}
+
 int inst_path_remove(const char *list, const char *dir, char *out, size_t cap)
 {
     char entry[INST_LINE_CHARS];

@@ -29,8 +29,10 @@
 # the registry values' precedence, ..\xhci_regsrc.c (test\test_regsrc.c;
 # task 42-A.17), compiled in the same way.
 # All DDK-free.
-# cm_pool.c is the one file that allocates pool; cm_reg.c the one that
-# opens a registry key; cm_log.c the one DbgPrint site (every flavour,
+# cm_pool.c is the one file that allocates pool; cm_reg.c and cm_statos.c
+# the two that open a registry key through the kernel's imports
+# (cm_nvlinkos.c's 9x keys go through the VMM's registry services);
+# cm_log.c the one DbgPrint site (every flavour,
 # under XhciCmLogDebugView, since the owner's reversal of decision D12 on
 # 2026-10-16). The allowlists hold each to its file with SITES=. cm_cfgmg.c is
 # the one file that calls CONFIGMG (Windows 98 SE and ME, x86 only).

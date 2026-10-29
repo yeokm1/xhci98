@@ -121,8 +121,10 @@ source comments, scripts, and other docs use these same locations.
   how the reading channel works end to end: route, wire format, the
   kernel-side ordering rules, the decode chain, the operating traps, and what
   was executed on which target. It ships in every flavour, switched off by
-  default behind the `XhciLogVerbosity` registry value, and the release
-  carries its `XHCISNAP` host tool. This document is the
+  default behind the `XhciLogVerbosity` registry value; its host-side reader
+  is `XHCITR /snapshot` since `3.1.0.0` (`XHCISNAP` up to `3.0.0.0`,
+  retired by roadmap-usb4 task 42-A.4;
+  [the snapshot reader](contributing/snapshot-reader.md)). This document is the
   as-built "what"; the "why" is
   [design record 08](contributing/design/08-build-flavours-and-the-log-channel.md),
   and each fact has one owner between the two. Its section 11 is the route
@@ -229,23 +231,33 @@ third-party documents remain untracked in `docs/references/`.
 
 ## Documents that live outside `docs/`
 
-Eight trees keep their documentation beside the thing it describes. This index
+Nine trees keep their documentation beside the thing it describes. This index
 points at them rather than copying them, so that everything tracked is
 reachable from here or from `AGENTS.md`'s repository layout.
 
 - [`xhciqual/README.md`](../xhciqual/README.md) and
   [`xhciqual/hardware-testing.md`](../xhciqual/hardware-testing.md) - the DOS
-  qualification tool and its bare-metal field procedure; `xhciqual/results/`
-  holds one README per machine and run.
-- [`xhcisnap/README.md`](../xhcisnap/README.md) - the host-side reader for the
-  driver's log channel, and what it can and cannot get off a Windows 98 machine.
+  qualification tool and its bare-metal field procedure. Its run logs,
+  `xhciqual/results/` (one README per machine and run), are git-ignored and
+  kept only on the maintainer's disk (`AGENTS.md`, "Repository Layout"), so
+  a clone does not have them.
 - [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
   uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.4,
   design record 23), with its Thunderbolt and USB4 device modes `/devices`
   and `/eject` (design record 24); published as the tool's `readme.txt`.
 - [`xhcitr/README.TXT`](../xhcitr/README.TXT) - the xHCI98 USB Tree, the
   graphical tree, eject and tray tool, from `3.0.0.0` (roadmap-usb4 Phase
-  41, design record 25); published as the tool's `readme.txt`.
+  41, design record 25); published as the tool's `readme.txt`. Since
+  `3.1.0.0` it is also the host-side reader of the driver's log channel,
+  `XHCITR /snapshot` (`XHCISNAP` up to `3.0.0.0`); the route's reference is
+  [the snapshot reader](contributing/snapshot-reader.md).
+- [`xhcimark/README.TXT`](../xhcimark/README.TXT) - XHCIMARK, the
+  Thunderbolt safe-removal mark service that keeps a device behind the
+  connection manager listed in "Safely Remove Hardware" across driver
+  rebuilds.
+- [`xhciperf/README.TXT`](../xhciperf/README.TXT) - XHCIPERF, the
+  developer's disk benchmark that also reads Stor98's counters, not shipped
+  (roadmap-usb4 task 43.50, design record 29).
 - [`src/stor98/README.md`](../src/stor98/README.md) - Stor98, the NVMe
   SCSI miniport the packages bundle, a BSD-3-Clause project in this tree
   since 2026-10-19 (roadmap-usb4 task 42-A.20) and built, versioned and
@@ -258,6 +270,8 @@ reachable from here or from `AGENTS.md`'s repository layout.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.
+- [`scripts/bench/README.md`](../scripts/bench/README.md) - the small batch
+  files run on a bench machine or a guest rather than the build host.
 - [`releases/README.md`](../releases/README.md) and
   [`releases/history.md`](../releases/history.md) - the numbering rule and what
   each cut release changed.

@@ -65,6 +65,7 @@ objfre/
 !xhciinst/selftest.cmd
 !xhcitr/build.cmd
 !xhcitr/selftest.cmd
+!xhcitr/snaptest.cmd
 !xhcimark/build.cmd
 !xhcimark/selftest.cmd
 !xhciperf/build.cmd

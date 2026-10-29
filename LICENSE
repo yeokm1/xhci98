@@ -1,6 +1,6 @@
 xhci98 - an xHCI USB host controller driver, with a USB Attached SCSI class
 driver, a Thunderbolt 3 and USB4 connection manager driver and their tools,
-for Windows 98 SE to Windows 7.
+for Windows 98 SE to Windows 10.
 
 Copyright (c) 2026 Yeo Kheng Meng
 
@@ -430,25 +430,36 @@ nvme9x/nvment and Dominik Behr's nvme2k among it).
 docs/contributing/legal-provenance.md, "Stor98 in this tree", has the record.
 
 This project's tools are compiled binaries that statically contain
-third-party code; the drivers are not among them. There are five tools and,
-for 3.0.0.0, eight executables: XHCIQUAL.EXE, the DOS qualification tool;
-XHCISNAP.EXE, the Windows snapshot reader; XHCICLN.EXE and XHCICL64.EXE, the
-cleanup tool, from release 2.4.0.0 to 3.2.0.0; and XHCIINST.EXE and
-XHCIIN64.EXE, the install tool, and XHCITR.EXE and XHCITR64.EXE, the xHCI98
-USB Tree, from release 3.0.0.0. None is one file: every cut keeps its own
+third-party code; the drivers are not among them. For 3.3.0.0 there are four
+tools, in ten executables, and SETUP.EXE: XHCIQUAL.EXE, the DOS
+qualification tool; XHCIINST.EXE and XHCIIN64.EXE, the install tool (from
+release 3.0.0.0), with its window, XHCIWIZ.EXE and XHCIWZ64.EXE, its Windows
+98 SE and ME device install helper, XHCIDI.EXE, and SETUP.EXE, which opens
+the window, all three from release 3.1.0.0; XHCITR.EXE and XHCITR64.EXE, the
+xHCI98 USB Tree (from release 3.0.0.0); and XHCIMARK.EXE and XHCIMK64.EXE,
+the Thunderbolt safe-removal mark service (from release 3.1.0.0). Earlier
+releases also carried XHCISNAP.EXE, the Windows snapshot reader (up to
+release 3.0.0.0), and XHCICLN.EXE and XHCICL64.EXE, the cleanup tool (from
+release 2.4.0.0 to 3.2.0.0). None is one file: every cut keeps its own
 copies, so the repository tracks each under releases/<version>/tools/<tool>/
 (XHCIQUAL and XHCISNAP at the version root, without tools/, in a release
-before 2.4.0.0), and a download carries them in the same places.
+before 2.4.0.0; SETUP.EXE at the version root), and a download carries them
+in the same places.
 XHCIQUAL.EXE is linked as a DOS/32 Advanced DOS Extender executable, which
 embeds that extender as the program's stub, and it statically links the Open
-Watcom C runtime. XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE and
-XHCITR.EXE statically link the Microsoft Visual C++ 6.0 C runtime: each tool's
-build.cmd compiles them without /MD, so the runtime is bound into the image
-rather than reached through a DLL at run time, and no C runtime DLL is in
-their import tables. XHCICL64.EXE, XHCIIN64.EXE and XHCITR64.EXE statically
-link the Windows Driver Kit 7.1's amd64 C runtime (LIBCMT, /MT) in the same
-way. None of those runtimes and extenders is covered by the grant above, and
-each carries its own terms.
+Watcom C runtime. XHCIDI.EXE is a 16-bit Windows program that statically
+links modules of the Open Watcom C runtime for 16-bit Windows, and it is
+linked against the Windows 98 SE DDK's setupx.lib, an import library whose
+references name the running system's SETUPX.DLL and carry no code.
+XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE, XHCIWIZ.EXE,
+SETUP.EXE, XHCITR.EXE and XHCIMARK.EXE statically link the Microsoft Visual
+C++ 6.0 C runtime: each tool's build.cmd compiles them without /MD, so the
+runtime is bound into the image rather than reached through a DLL at run
+time, and no C runtime DLL is in their import tables. XHCICL64.EXE,
+XHCIIN64.EXE, XHCIWZ64.EXE, XHCITR64.EXE and XHCIMK64.EXE statically link the
+Windows Driver Kit 7.1's amd64 C runtime (LIBCMT, /MT) in the same way. None
+of those runtimes and extenders is covered by the grant above, and each
+carries its own terms.
 NOTICE.TXT sits beside each tool's executables in a release directory, and
 they are not all the same document: the qualifier's reproduces the DOS/32A
 licence text in full and records the Open Watcom runtime linkage, while each
@@ -458,9 +469,10 @@ file combining this project's code with code under other licences, and
 docs/contributing/legal-provenance.md section 2a records what is in each.
 The drivers themselves - xhci98.sys, the host controller driver; xhciuas.sys,
 the USB Attached SCSI class driver; xhcicm.sys, the Thunderbolt 3 and USB4
-connection manager (one image, staged a second time under nt\ for its
-tunnel-port filter); and xhcihlpr.sys, the x86 helper of Windows 2000 to 7 -
-are described next.
+connection manager (one image, staged a second time under nt\ in the x86
+directories for its tunnel-port filter); and xhcihlpr.sys, the x86 helper of
+Windows 2000 to 7 - are described next, and after them the three smaller
+drivers of the x86 directories.
 
 xhci98.sys, xhciuas.sys and xhcicm.sys are each linked by the Windows 2000
 DDK (the 32-bit build) or by the Windows Driver Kit 7.1 (the amd64 build)
@@ -491,13 +503,28 @@ composition and that open question, and records the boundary above. The
 drivers are distributed by themselves and loaded by a kernel this project
 does not ship and could not ship.
 
+The x86 directories also carry S98VSD.VXD (from release 3.2.0.0), the
+Windows 98 SE and ME layer installed with Stor98, and XHCIPFW.VXD and
+XHCIPFW.SYS (from release 3.3.0.0), which close the USB4 ports' memory
+windows above 4 GB at Windows start, the VxD on Windows 98 SE and ME and the
+.SYS on 32-bit Windows 2000 to 7. Both VxDs are this project's code,
+compiled by Open Watcom 2.0 with no runtime library linked and linked by the
+Windows 98 SE DDK's LINK.EXE 5.12, which adds its MS-DOS stub as Microsoft's
+linkers do to every PE driver of this package. XHCIPFW.SYS is this project's
+code linked by the Windows 2000 DDK as the 32-bit drivers above are.
+
 This repository carries no Microsoft file. The release download carried none
 up to release 3.1.0.0; from 3.2.0.0 one built with the driver pack carries
 NUSB 3.3's seven Windows 98 SE storage files, unmodified, in a folder of
 their own with a NOTICE.md saying whose they are. They are not this
 project's work and are outside the grant above; no licence to
 redistribute them has been established (docs/contributing/legal-provenance.md
-section 5). Since release 2.0.0.0 the drivers depend on two of the operating
+section 5). From 3.2.0.0 the -nonfree download also carries, in
+USBDRV\NONFREE\, other manufacturers' drivers as released, two Microsoft KMDF
+co-installers among them, unmodified; they are outside the grant above too,
+and no licence to redistribute them has been found beyond the statements of
+a few makers that the pack's NOTICE.md quotes (the same section 5). Since
+release 2.0.0.0 the drivers depend on two of the operating
 systems' own files: usbd.sys, whose helper functions the class drivers above
 xhci98.sys call, and usbui.dll, which provides the controller's and the root
 hub's property pages. The INF has Windows Setup copy them from the user's own

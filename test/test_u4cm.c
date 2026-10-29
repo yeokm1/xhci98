@@ -5070,6 +5070,77 @@ static void test_port_vacant(void)
     CHECK(!TbtU4PortVacant(&g_cm, 2), "vacant: a device behind port 2");
 }
 
+/* Record 22 section 7.4: an eject is the port's own sequence. The router
+ * pulled while the eject's USB3 bandwidth release waits for the host's
+ * Ack: the safe points inside that wait see the unplug, and nest nothing
+ * for the port being ejected; the eject finishes both tunnels itself, and
+ * the unplug is the next check's, which tears the port down once. */
+static void test_eject_own_sequence(void)
+{
+    int dev;
+    ULONG down;
+
+    dev = setupMinimal(1, NULL);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "eject, own: UP");
+    (void)countActions(&g_cm, 0);
+    down = g_cm.Counters.PcieTornDown;
+    g_fab.R[0].Adp[7].HcaStuck = 1;
+    armUnplug(&g_fab, 0, TBT_CS_ADAPTER, 7, FAB_CAP_ADP + 2, 1, 1);
+    (void)TbtU4Eject(&g_cm, 1);
+    g_fab.Hook = NULL;
+    g_fab.R[0].Adp[7].HcaStuck = 0;
+    CHECK(g_hkFired, "eject, own: pulled inside the eject");
+    CHECK_EQ(g_cm.Counters.UnplugsNested, 0, "eject, own: no teardown nested");
+    CHECK_EQ(g_cm.DeferredTail[0], 0, "eject, own: no tail owed");
+    CHECK_EQ(g_cm.ActivePort, 0, "eject, own: the claim released");
+    CHECK_EQ(g_cm.Counters.PcieTornDown, down + 1, "eject, own: PCIe torn down by the eject");
+    CHECK(state(&g_cm, 1) == TBT_U4_FAILED && TbtU4Port(&g_cm, 1)->Why == TBT_U4_WHY_EJECTED,
+          "eject, own: FAILED, ejected");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "eject, own: the unplug EMPTY");
+    CHECK(hostClean(&g_fab, 1), "eject, own: the host side clean");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "eject, own: one removal");
+    (void)dev;
+}
+
+/* Section 7.6: a lane adapter below a port's not found again after the
+ * sleep renumbers the walk's ports; the obligations name the old Index.
+ * The table stays as it was before the sleep, the obligation HELD and
+ * judged by nothing, its tunnel untouched. */
+static void test_resume_renumbered(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    LONG rc;
+    const TBT_U4_PORT *p;
+    int lane;
+    int hp;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 2, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "renumbered: port 2 UP");
+    lane = fabPortLane0(&g_fab, 2);
+    hp = fabPortPcie(&g_fab, 2);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[0].Adp[1].Present = 0;
+    g_fab.R[0].Adp[2].Present = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "renumbered: an obligation unmet");
+    CHECK_EQ(g_cm.PortCount, 2, "renumbered: the table as before the sleep");
+    p = TbtU4Port(&g_cm, 2);
+    CHECK(p != NULL && p->Lane0 == (ULONG)lane, "renumbered: port 2 its own");
+    CHECK(p != NULL && p->State == TBT_U4_HELD && p->Why == TBT_U4_WHY_RESUME,
+          "renumbered: port 2 HELD");
+    CHECK(fabAdp(&g_fab, 0, hp, FAB_CAP_ADP) & 0x80000000UL, "renumbered: nothing torn down");
+    poll(&g_cm, &g_fab, 2);
+    CHECK(fabAdp(&g_fab, 0, hp, FAB_CAP_ADP) & 0x80000000UL,
+          "renumbered: nothing torn down at the next tick");
+}
+
 int main(void)
 {
     RUN_VEC(test_bw_units);
@@ -5121,6 +5192,8 @@ int main(void)
     RUN_VEC(test_contain);
     RUN_VEC(test_recover);
     RUN_VEC(test_port_vacant);
+    RUN_VEC(test_eject_own_sequence);
+    RUN_VEC(test_resume_renumbered);
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;

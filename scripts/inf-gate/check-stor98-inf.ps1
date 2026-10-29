@@ -36,7 +36,9 @@ decorations, so no other decoration can add a models section unchecked. scripts\
 runs it with the other INF gates, after -SelfTest.
 
 .PARAMETER Path
-One INF to check instead of both (the self-test's mutants).
+One INF to check instead of the three, under the rules its name says: a
+name with -x64 or amd64 the x64 INF's, one with -9x or w9 the 9x INF's, any
+other the x86 INF's.
 
 .PARAMETER SelfTest
 Check that the gate refuses a wrong date, a wrong version, an unpadded date,
@@ -301,14 +303,26 @@ try {
         Write-Host "  check-stor98-inf.ps1 self-test: $($cases.Count + $c64.Count + $c9.Count) cases"
         exit 0
     }
-    if ($Path -ne "") { $infs = @(@{ File = $Path; Sig = '$CHICAGO$' }) }
+    if ($Path -ne "") {
+        # The rules follow the INF's name: until 2026-10-29 a -Path INF was
+        # always held to the x86 INF's rules.
+        $leaf = Split-Path -Leaf $Path
+        if ($leaf -match '(-9x|w9)') {
+            $inf9x = $Path
+            $infs = @()
+        } elseif ($leaf -match '(-x64|amd64)') {
+            $infs = @(@{ File = $Path; Sig = '$Windows NT$' })
+        } else {
+            $infs = @(@{ File = $Path; Sig = '$CHICAGO$' })
+        }
+    }
     $bad = 0
     foreach ($inf in $infs) {
         $why = Get-InfFault -File $inf.File -Signature $inf.Sig -Want $want
         if ($why -ne "") { Write-Host ("  {0}: {1}" -f $inf.File, $why); $bad++ }
         else { Write-Host ("  {0}: DriverVer={1}" -f (Split-Path -Leaf $inf.File), $want) }
     }
-    if ($Path -eq "") {
+    if ($Path -eq "" -or $infs.Count -eq 0) {
         $why = Get-Inf9xFault -File $inf9x -Want $want
         if ($why -ne "") { Write-Host ("  {0}: {1}" -f $inf9x, $why); $bad++ }
         else { Write-Host ("  {0}: DriverVer={1}" -f (Split-Path -Leaf $inf9x), $want) }

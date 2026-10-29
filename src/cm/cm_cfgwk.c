@@ -300,7 +300,10 @@ typedef struct _CM_CFGWK {
     ULONG NiActive;         /* the claim the no-IRQ state belongs to      */
     ULONG NiClaimLost;      /* members whose claim a post took away since
                                the worker last looked (bit per index)    */
-    ULONG NiBase;           /* the no-IRQ clock's origin (tick count)     */
+    ULONG NiLast;           /* the no-IRQ clock (cmWkNiNow): the tick
+                               count it last read ...                    */
+    ULONG NiMs;             /* ... its milliseconds ...                  */
+    ULONG NiRest;           /* ... and the microseconds not yet one      */
     CM_WK_NI_NODE NiStack[CM_WK_NI_STACK];
     /* Design record 31 section 5: the tunnel id. TagReq under Lock (the
      * members newly active, posted); the rest the worker thread's own. */
@@ -345,6 +348,40 @@ static ULONG cmWkSince(ULONG thenTicks)
         unit = 10000UL;
     }
     return CmQueryAgeMs(cmWkNowTicks(), thenTicks, unit);
+}
+
+/*
+ * The no-IRQ machine's clock (CM_NI_CTX.Now, which may wrap: its
+ * intervals are differences), kept as cm_thr.c's cmNowMs keeps the
+ * thread's: each reading adds the ticks since the last, at most
+ * CM_WK_NI_MAX_TICKS of them (a longer gap only makes it run slow), so it
+ * runs for as long as the worker does. An age since the worker's start
+ * would stop at 0 once its tick difference passed 2^31 (CmQueryAgeMs
+ * takes that for a clock read backwards), after which no deadline of the
+ * machine could pass. The worker thread's own; PASSIVE_LEVEL.
+ */
+#define CM_WK_NI_MAX_TICKS  200000UL
+
+static ULONG cmWkNiNow(PCM_CFGWK w)
+{
+    ULONG now;
+    ULONG delta;
+    ULONG unitUs;
+
+    unitUs = KeQueryTimeIncrement() / 10UL;
+    if (unitUs == 0) {
+        unitUs = 1;
+    }
+    now = cmWkNowTicks();
+    delta = now - w->NiLast;
+    w->NiLast = now;
+    if (delta > CM_WK_NI_MAX_TICKS) {
+        delta = CM_WK_NI_MAX_TICKS;
+    }
+    w->NiRest += delta * unitUs;
+    w->NiMs += w->NiRest / 1000UL;
+    w->NiRest %= 1000UL;
+    return w->NiMs;
 }
 
 /* As cm_reenum.c's reader: HalGetBusData from offset 0. */
@@ -1532,7 +1569,9 @@ static BOOLEAN cmWkRemoveChild(PCM_CFGWK w, ULONG i, ULONG gen,
                              &keptEntry, &keptSeq, &keptGen);
     }
     if (claim == 0) {
-        if (!owned) {
+        /* Only a claim that found no free record owes its removal: an id
+         * that could not be read was never claimed at all. */
+        if (textOk && !owned) {
             w->ClaimFull = 1;
         }
         cmWkLog(w, "cm.vanish.claim.refused",
@@ -2244,7 +2283,7 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         if (p->NiIrqHave) {
             CmNiSetIrq(&p->Ni, p->PubGen, &p->NiIrqNext);
         }
-        CmNiOpenWindow(&p->Ni, p->PubGen, cmWkSince(w->NiBase));
+        CmNiOpenWindow(&p->Ni, p->PubGen, cmWkNiNow(w));
     }
     p->NiIrqHave = 0;
     if (cr == CMG_CR_SUCCESS && cmWkCurrent(w, i, gen)) {
@@ -3010,7 +3049,7 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
     ULONG state;
 
     m = &w->Port[i].Ni;
-    ctx.Now = cmWkSince(w->NiBase);
+    ctx.Now = cmWkNiNow(w);
     ctx.Switch = w->NoIrq;
     ctx.Gate = cmWkNiGate(w, i);
     ctx.Stor98 = CM_NI_STOR98_FAILED;
@@ -3018,7 +3057,7 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
         cmWkNiWalk(w, i);
         /* The walk's calls may have blocked: the clock and the gate as
          * they are now. */
-        ctx.Now = cmWkSince(w->NiBase);
+        ctx.Now = cmWkNiNow(w);
         ctx.Gate = cmWkNiGate(w, i);
     }
     CmNiPass(m, &ctx);
@@ -3037,7 +3076,7 @@ static VOID cmWkNoIrq(PCM_CFGWK w, ULONG i)
             res.Id = op.Id;
             res.Cr = CMG_CR_FAILURE;
         }
-        ctx.Now = cmWkSince(w->NiBase);
+        ctx.Now = cmWkNiNow(w);
         ctx.Gate = cmWkNiGate(w, i);
         CmNiTake(m, &ctx, &res);
         if (op.Dev < CM_NOIRQ_DEVICES && m->Dev[op.Dev].Used &&
@@ -3429,6 +3468,8 @@ static VOID cmWkThread(PVOID context)
     BOOLEAN go;
     BOOLEAN timed;
     BOOLEAN detached;
+    ULONG waitMs;
+    ULONG since;
     LARGE_INTEGER tick;
 
     w = (PCM_CFGWK)context;
@@ -3791,13 +3832,21 @@ static VOID cmWkThread(PVOID context)
             w->MarkOpen = 1;
             w->MarkFrom = cmWkNowTicks();
         }
-        timed = (BOOLEAN)(w->Retry != 0 || w->MarkOpen || w->PruneOwed != 0 ||
+        timed = (BOOLEAN)(w->MarkOpen || w->PruneOwed != 0 ||
                           (w->ReqGone & ~w->Defer) != 0 || w->TagOpen != 0);
         for (i = 0; i < w->Members && !timed; i++) {
             if (CmNiBusy(&w->Port[i].Ni) ||
                 CmEjectParkedAny(w->Port[i].Bdf)) {
                 timed = TRUE;
             }
+        }
+        /* A retry hold alone has nothing to do until it ends: the wait is
+         * what is left of it, not a tick at a time. */
+        waitMs = CM_WK_TICK_MS;
+        if (!timed && w->Retry != 0) {
+            timed = TRUE;
+            since = cmWkSince(w->RetryAt);
+            waitMs = since < CM_WK_RETRY_MS ? CM_WK_RETRY_MS - since : 1UL;
         }
         if (w->Exit) {
             KeReleaseSpinLock(&w->Lock, irql);
@@ -3806,8 +3855,10 @@ static VOID cmWkThread(PVOID context)
         KeReleaseSpinLock(&w->Lock, irql);
 
         if (timed) {
-            /* CM_WK_TICK_MS relative, in 100 ns units: -2,000,000. */
-            tick.LowPart = 0xFFE17B80UL;
+            /* waitMs relative, in 100 ns units (at most CM_WK_RETRY_MS, so
+             * the negated count fits the low word): CM_WK_TICK_MS is
+             * -2,000,000. */
+            tick.LowPart = 0UL - waitMs * 10000UL;
             tick.HighPart = -1;
             (VOID)KeWaitForSingleObject(&w->Wake, Executive, KernelMode,
                                         FALSE, &tick);
@@ -3867,7 +3918,9 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
     w->Numbering = numbering;
     w->NoIrq = noIrq;
     w->NiActive = active;
-    w->NiBase = cmWkNowTicks();
+    w->NiLast = cmWkNowTicks();
+    w->NiMs = 0;
+    w->NiRest = 0;
     w->OpenState = CM_CFGWK_OPEN_PENDING;
     w->OpMember = CM_WK_NO_OP;
     /* A worker the stop cannot wait for (inside a CONFIGMG call) runs this

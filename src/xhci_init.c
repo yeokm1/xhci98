@@ -120,8 +120,11 @@ static MPSTATUS xhciInitFailed(PXHCI_EXTENSION ext,
  * The common buffer is cached DMA memory (docs/contributing/design/04-controller-
  * common-buffer.md section 6), so every access to it goes through a volatile
  * pointer and ordering rests on the compiler not reordering the stores.
- * Nothing here publishes anything the controller is already looking at: all of
- * it happens before DCBAAP, CRCR and ERSTBA are written.
+ * These two only form addresses; they publish nothing. Their callers in this
+ * file write before DCBAAP, CRCR and ERSTBA are, but the HCD (hcd_*.c) also
+ * calls them at run time on a running controller (a DCBAA entry in
+ * hcd_enum.c, among others), and the ordering argument is then each
+ * caller's own.
  */
 volatile ULONG *XhciCommonAt(PXHCI_EXTENSION ext, ULONG offset)
 {
@@ -170,9 +173,9 @@ static VOID xhciZeroCommonBuffer(PXHCI_EXTENSION ext, ULONG bytes)
  * Low half first, matching XhciWrite64 and spec 5.1's rule for the registers.
  * Unlike a register, ordering here is not load-bearing: every structure this
  * writes into is still unpublished - DCBAAP and the scratchpad array pointer
- * are written afterwards - so the controller cannot be reading it yet. Phase 6
- * writes DCBAA entries while the controller *is* running, and will need the
- * ordering argument this function currently does not have to make.
+ * are written afterwards - so the controller cannot be reading it yet. The
+ * run-time DCBAA writes of a running controller are the HCD's (hcd_enum.c),
+ * through XhciCommonAt, not through this.
  */
 static VOID xhciStorePointer(PXHCI_EXTENSION ext, ULONG offset, ULONG low)
 {
@@ -3013,78 +3016,6 @@ static ULONG xhciSaveRestoreWait(PXHCI_EXTENSION ext, ULONG busyBit)
 }
 
 /*
- * Does this endpoint's quiescence state leave the driver unable to prove the
- * endpoint is not executing? The save gate below asks it of every chain.
- *
- * The bits are the ones that say a command is owed or outstanding
- * (`XHCI_EPQ_INFLIGHT`), that a chain failed (`XHCI_EPQ_FAILED`), or that TRBs
- * were given up on the ring whose Set TR Dequeue Pointer has not landed
- * (`XHCI_EPQ_REPOSITION`, `XHCI_EPQ_FORCE_DEQUEUE`).
- *
- * **`XHCI_EPQ_FAILED | XHCI_EPQ_UNAVAILABLE` is the one pair that is excluded,
- * and an earlier version of this gate deadlocked on it.** The two bits are
- * set together at exactly one site - `xhciEpArmQuiesce` when `xhciDevAdmitted`
- * refuses, i.e. when the *controller* could take no command - and its own
- * comment says "a successful restore is entitled to take it back".
- * `XhciSlotResumeSweep` is what takes it back, and it clears precisely that
- * pair. So a gate that declines the save on the pair declines the `CSS`, which
- * means no restore, which means the sweep never runs, which means the pair is
- * never cleared: the fix blocked the only recovery it depends on, permanently,
- * for the life of the driver.
- *
- * Excluding it is narrow rather than a relaxation of the gate, and the narrowness
- * is what makes it safe:
- *
- *   The pair says the controller was unavailable, **not** that a stop failed.
- *   An ordinary sticky `XHCI_EPQ_FAILED` - a Stop Endpoint that answered with an
- *   error, or one the engine abandoned - still declines, because there stop
- *   ownership genuinely is unproven.
- *   `xhciEpArmQuiesce` clears `XHCI_EPQ_INFLIGHT` when it sets the pair, so the
- *   remaining bits are still asked: a position debt declines the save whether or
- *   not the chain was marked unavailable.
- *   The queue count is asked separately and independently, so an endpoint that
- *   still has transfers on it declines regardless of any of this. The pair can
- *   only pass on an endpoint whose queue is empty and whose ring has no
- *   outstanding placement.
- *
- * The wider question that raised - that an ordinary `FAILED` is sticky
- * until a reset-pipe clears it, so one failed chain may cost this controller
- * every later `CSS` - is left as it is, and as of **task 12.1 that
- * is a decision rather than a deferral**. The task's two branches were to build
- * the synchronous suspend-path Stop Endpoint pass, which is the proof this gate
- * declines for want of, or to publish the behaviour; it was taken to publish, so
- * this gate does not change and `docs/using/release-notes.md` says what it costs
- * a user. `EndpointQuiesceFailures` counts every entry into the state, which is
- * what makes the published statement checkable on a running machine -
- * `EndpointQuiesceLost` and `EndpointQuiesceUnavailable` each name one route and
- * neither can answer the question on its own. Reopening it means reopening the
- * task, not editing this gate.
- *
- * **What is not established is that the excluded pair happens in production at
- * all**. It is set only by an endpoint callback
- * arriving after `XhciQuiesceController` has closed admission, and the whole of
- * that window is inside one `XhciSuspendController` call at PASSIVE - so on
- * Windows 98, which has no preemption, there may be no sequence that both
- * creates the pair and survives to the save. The carve-out is written as a
- * state-machine rule and is exercised as one: the vector sets the pair directly.
- * If a later measurement shows the pair is unreachable, the honest change is to
- * delete the carve-out and the state that produces it together - not to keep a
- * rule nothing can reach and a comment that implies something does.
- */
-static ULONG xhciSaveQuiesceUnproven(ULONG flags)
-{
-    ULONG unproven;
-
-    unproven = XHCI_EPQ_INFLIGHT | XHCI_EPQ_FAILED |
-               XHCI_EPQ_REPOSITION | XHCI_EPQ_FORCE_DEQUEUE;
-    if ((flags & (XHCI_EPQ_FAILED | XHCI_EPQ_UNAVAILABLE)) ==
-        (XHCI_EPQ_FAILED | XHCI_EPQ_UNAVAILABLE)) {
-        unproven &= ~XHCI_EPQ_FAILED;
-    }
-    return ((flags & unproven) != 0) ? 1UL : 0UL;
-}
-
-/*
  * Save State, as the last step of a suspend.
  *
  * **Two gates, and they answer two different halves of one specification step.**
@@ -3097,13 +3028,13 @@ static ULONG xhciSaveQuiesceUnproven(ULONG flags)
  * Stop Endpoint on a suspend is task 7a-B.1's and this driver does not issue it,
  * so both halves have to be discharged by declining.
  *
- *   **Busy endpoints** are excluded by the quiescence sweep below. That gate is
- *   as old as this function and it is sound: an endpoint with nothing queued is
- *   not Busy, and an idle suspend - the only kind Win98 performs - passes it.
+ *   **Busy endpoints** are excluded by the outstanding-transfer check below
+ *   (XhciSlotSaveBusy): an endpoint with nothing outstanding is not Busy, and
+ *   an idle suspend - the only kind Win98 performs - passes it.
  *
- *   **Idle-but-Running endpoints are the half the sweep cannot reach**, and it
- *   is not a corner: an empty software queue is exactly what an Idle endpoint in
- *   the Running state looks like from here, so the sweep passes precisely the
+ *   **Idle-but-Running endpoints are the half that check cannot reach**, and
+ *   it is not a corner: an empty software queue is exactly what an Idle endpoint in
+ *   the Running state looks like from here, so the check passes precisely the
  *   set p.313 names. The note under step 3 draws the same line from the other
  *   side - "If FSC = '1', then software shall ensure that any Running endpoint
  *   that did not receive a Stop Endpoint Command is Idle when Run/Stop (R/S) is
@@ -3137,7 +3068,6 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
 {
     ULONG usbcmd;
     ULONG usbsts;
-    ULONG i;
 
     ext->SavedStateValid = 0;
 
@@ -3191,76 +3121,12 @@ static ULONG xhciSaveState(PXHCI_EXTENSION ext)
     ext->SavedImod = XhciReadIr0(ext, XHCI_IR_IMOD);
 
     /*
-     * **Every queue, not just EP0's.** The save procedure begins "Stop all USB
-     * activity by issuing Stop Endpoint Commands for Busy endpoints in the
-     * Running state" (4.23.2, p.313); this driver has no Stop Endpoint until
-     * task 7a-B.1, so the only way to honour it is to decline the save while any
-     * endpoint is busy.
-     *
-     * Checking `Ep0Queue` alone was sufficient until task 7a-A.2 and is not any
-     * more, and the difference is not marginal: EP0 is idle between enumeration
-     * steps, so the gate almost always passed, while **a HID device keeps an
-     * interrupt read posted at all times**, so it would almost always have been
-     * wrong. Win98 idle-suspends the controller about a second after every
-     * start, which is precisely when a keyboard has a read outstanding.
-     *
-     * **A queue count is not the whole question**, and the part an earlier
-     * version documented and left open is closed. An empty software queue does
-     * not mean the xHC owns no TRBs on that ring: `XhciAbortTransfer` takes a
-     * transfer out of the queue while the controller may still be executing it
-     * - `AbortsBeforeStopped` counts exactly that window - and
-     * `XhciSlotCommandLost` clears `ActiveOp` for a Stop Endpoint that never
-     * answered, leaving the chain `XHCI_EPQ_FAILED` with nothing draining it.
-     * Both leave a Busy endpoint behind an empty queue, and step 1 asks about
-     * Busy endpoints, not about queued transfers: "Stop all USB activity by
-     * issuing Stop Endpoint Commands for Busy endpoints in the Running state"
-     * (4.23.2, p.313).
-     *
-     * So the quiescence state is consulted beside the count, through
-     * `xhciSaveQuiesceUnproven` - which is where the bits are, together with the
-     * one pair that is deliberately not among them and the reason it had to
-     * be carved out.
-     *
-     * **The cost is real and it is the right way round.** Declining the save
-     * means the resume reinitialises and every device re-enumerates, which is
-     * visible; saving over a Busy endpoint means restoring a controller whose
-     * internal state describes a ring the driver has since rewritten, which is
-     * not. A tighter answer - proving the stop completed rather than declining
-     * when it cannot be proven - is task 12.1's synchronous Stop Endpoint pass
-     * on the suspend path, and this gate is what that pass would relax.
-     */
-    for (i = 0; i < XHCI_MAX_SLOTS; i++) {
-        ULONG endpoint;
-        ULONG busy;
-
-        if (ext->Devices[i].State == XHCI_DEV_STATE_FREE) {
-            continue;
-        }
-        busy = (ext->Devices[i].Ep0Queue.Count != 0 ||
-                xhciSaveQuiesceUnproven(ext->Devices[i].Ep0Quiesce.Flags) ||
-                ext->Devices[i].ActiveOp != XHCI_DEV_OP_NONE ||
-                ext->Devices[i].PendingOp != XHCI_DEV_OP_NONE) ? 1UL : 0UL;
-        for (endpoint = 0; endpoint < XHCI_MAX_DEVICE_ENDPOINTS; endpoint++) {
-            if (ext->Devices[i].Endpoints[endpoint].Dci != 0 &&
-                (ext->Devices[i].Endpoints[endpoint].Queue.Count != 0 ||
-                 xhciSaveQuiesceUnproven(
-                     ext->Devices[i].Endpoints[endpoint].Quiesce.Flags))) {
-                busy = 1;
-            }
-        }
-        if (busy) {
-            XHCI_DBG_VALUE_CHANGED("save: declined - a device still has work "
-                                   "outstanding, slot", ext->Devices[i].SlotId);
-            return 0;
-        }
-    }
-    /*
-     * **The table above is the miniport's, and the HCD never fills it**: the
-     * start zeroes the extension, so every entry reads FREE and the loop
-     * passes whatever is queued. The HCD's own queues are the real answer,
-     * and the same rule applies to them - declined while any transfer is
-     * anywhere between submission and completion (mapping, held, waiting
-     * or on a ring), so the resume reinitializes and the invalidation that
+     * Busy endpoints: the save procedure begins "Stop all USB activity by
+     * issuing Stop Endpoint Commands for Busy endpoints in the Running
+     * state" (4.23.2, p.313), and no Stop Endpoint is issued on a suspend,
+     * so the save is declined while any transfer of the HCD's is anywhere
+     * between submission and completion (mapping, held, waiting or on a
+     * ring). The resume then reinitializes and the invalidation that
      * follows completes it, rather than a restore discarding its completion
      * (XhciEventDiscardStale) and leaving the request pending. A bus with
      * nothing outstanding saves as before. A transfer published after this
@@ -4799,7 +4665,9 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
              ? (XhciResourcesRequired & ~(ULONG)USBPORT_RESOURCES_INTERRUPT)
              : XhciResourcesRequired)) {
         return xhciInitFailed(ext, XHCI_INIT_STEP_RESOURCES,
-                              ext->ResourcesTypes, MP_STATUS_NO_RESOURCES);
+                              resources != NULL ? resources->ResourcesTypes
+                                                : ext->ResourcesTypes,
+                              MP_STATUS_NO_RESOURCES);
     }
     if (ext->ResourceBase == 0 ||
         ext->IoSpaceLength < XHCI_CAP_REGISTERS_BYTES) {
@@ -5064,8 +4932,11 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
                               MP_STATUS_HW_ERROR);
     }
     if (!XhciHcInfoEqual(&ext->HcInfo, &recheck)) {
+        /* HcInfo is the pre-reset decoding, which the ISR, the health poll
+         * and the frame number would otherwise go on trusting. */
         XHCI_DBG_TEXT("capability registers changed across reset - refusing");
-        return xhciInitFailed(ext, XHCI_INIT_STEP_RECHECK, XHCI_HC_NOT_DECODING,
+        ext->HcInfoStatus = XHCI_HC_CHANGED;
+        return xhciInitFailed(ext, XHCI_INIT_STEP_RECHECK, XHCI_HC_CHANGED,
                               MP_STATUS_HW_ERROR);
     }
 
@@ -5327,14 +5198,16 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
          *
          * Through XhciStopController rather than the quiesce alone, so that a
          * failed start leaves the same port state a stop does. Its port pass is
-         * self-refusing here, and that holds for **each** of this step's four
-         * exits rather than only the one this comment used to name: nothing has
-         * been powered yet, so there is no port state to take down whether the
-         * step refused an all-ones USBSTS, refused a controller it observed
-         * *not* halted, could not form a USBCMD operand, or wrote R/S and never
-         * saw HCHalted clear. Only the third of those leaves the controller
-         * provably still halted; the second publishes RUNNING precisely because
-         * it does not.
+         * self-refusing at four of this step's five exits: an all-ones USBSTS,
+         * a controller observed *not* halted (HW_RUNNING, not RUNNING), a
+         * USBCMD operand not formed (RUNNING retired), or R/S written and
+         * HCHalted never clear (HCH still set). Only the third leaves the
+         * controller provably still halted; the second publishes HW_RUNNING
+         * precisely because it does not. The fifth, Host Controller Error
+         * after HCHalted cleared, leaves RUNNING set and HCH clear, so the
+         * pass does run and takes down PP on every port the teardown wants
+         * off, though step 16 has powered none of them yet: power the
+         * firmware left up goes down, as at a stop.
          */
         if (!XhciStopController(ext)) {
             XhciFailClosedDma(ext);

@@ -1634,6 +1634,13 @@ static BOOLEAN tbtU4Disable(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
     LONG rc;
 
     bit = usb3 ? TBT_USB3_0_PE : TBT_PCIE0_PE;
+    if (adp == 0 || cap == 0) {
+        /* No protocol adapter, or none with its capability found (the
+         * forced teardowns pass whatever the port records): offset 0 is
+         * the adapter's basic configuration space, never written here,
+         * and nothing is proven closed. */
+        return FALSE;
+    }
     if (tbtU4Reserved(cm, r, adp, 0, TRUE) ||
         tbtU4Reserved(cm, r, adp, TBT_HOP_PROTOCOL, FALSE)) {
         /* Its ownership, or that of the adapter's own protocol path, not
@@ -5770,7 +5777,8 @@ static VOID tbtU4CleanAdapter(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG adp)
     ULONG e[2];
 
     h = &cm->HostRouter;
-    if (adp == 0 || !h->Adp[adp].Present) {
+    /* Lane 1 is Lane0 + 1, past the table for a lane 0 at adapter 63. */
+    if (adp == 0 || adp >= TBT_U4_MAX_ADP || !h->Adp[adp].Present) {
         return;
     }
     for (hop = TBT_HOP_FIRST; hop <= h->Adp[adp].MaxInHop; hop++) {
@@ -5790,7 +5798,8 @@ static VOID tbtU4CleanAdapter(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG adp)
  * statement and the tunnel ports' removal; a Downstream Port Reset on the
  * host's port (Guide 7.3 steps 2 to 4: PORT_CS_19 DPR set, at least 10 ms,
  * cleared; Spec 6.9 tClearDPR); the port's host-side entries deactivated;
- * the port EMPTY, to be connected afresh once its link retrains.
+ * the port EMPTY, to be connected afresh once its link retrains. The
+ * port's own sequence, as an eject is (TbtU4Eject).
  */
 static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
 {
@@ -5799,10 +5808,13 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
     BOOLEAN hadPcie;
     TBT_WAIT w;
     ULONG lane;
+    ULONG prev;
 
     h = &cm->HostRouter;
     cm->Counters.PortsCleaned++;
     tbtU4Log(cm, "u4.clean", p->Index);
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
     /* A deferred as-found connect (DeferFirstPoll) was for the preserved
      * configuration this cleaning removes: the port connects normally. */
     p->AsFoundOwed = FALSE;
@@ -5828,6 +5840,7 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
     if (!portReset) {
         /* Steps 1 and 2 only: the Host Router Reset that follows does the
          * rest for the whole domain. */
+        cm->ActivePort = prev;
         return;
     }
     if (h->Adp[p->Lane0].CapPort != 0 &&
@@ -5864,6 +5877,7 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
         }
         tbtU4Pause(cm, &w);
     }
+    cm->ActivePort = prev;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -5873,12 +5887,14 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
 /* Section 7.1 item 4: the PCIe tunnel lost with the router still there -
  * Path Enable read clear or LTSSM Detect, or a transitional LTSSM for 2 s.
  * Only that tunnel is torn down, in the orderly form; the port is FAILED
- * for PCIe until a re-plug, its USB3 tunnel kept. */
+ * for PCIe until a re-plug, its USB3 tunnel kept. The port's own sequence,
+ * as an eject is (TbtU4Eject). */
 static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
 {
     PTBT_U4_ROUTER h;
     ULONG v;
     ULONG s;
+    ULONG prev;
     BOOLEAN lost;
     BOOLEAN closed;
     TBT_WAIT w;
@@ -5889,6 +5905,8 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
                 h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
         return;
     }
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
     s = TBT_PCIE0_LTSSM(v);
     if (watch && !(p->Transitional &&
                    tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US)) {
@@ -5913,7 +5931,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
             tbtU4Pause(cm, &w);
             if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->PcieDown,
                         h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
-                return;
+                goto done;
             }
             s = TBT_PCIE0_LTSSM(v);
         }
@@ -5931,7 +5949,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
         lost = TRUE;
     }
     if (!lost) {
-        return;
+        goto done;
     }
     cm->Counters.PcieLost++;
     tbtU4Log(cm, "u4.pcie.lost", (p->Index << 8) | s);
@@ -5947,6 +5965,8 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
     p->PcieFailed = TRUE;
     p->State = TBT_U4_FAILED;
     p->Why = TBT_U4_WHY_LOST;
+done:
+    cm->ActivePort = prev;
 }
 
 /* One port check: lane 0's class and Lock, and on a port with a router its
@@ -6476,10 +6496,18 @@ VOID TbtU4PresenceSample(PTBT_U4CM cm, ULONG port, ULONG generation,
     }
 }
 
+/*
+ * The ejects, the cleaning and the PCIe loss are the port's own sequence
+ * (ActivePort), as a connect is: a safe point reached in one of their waits
+ * never nests this port's teardown under it (section 7.4), which would
+ * leave the outer sequence writing FAILED over a head whose tail is owed.
+ * An unplug seen meanwhile stays pending for tbtU4Check.
+ */
 LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
 {
     PTBT_U4_PORT p;
     BOOLEAN closed;
+    ULONG prev;
 
     if (cm->Contained) {
         cm->Counters.ContainedRefused++;
@@ -6490,6 +6518,8 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
         return TBT_E_PARAM;
     }
     cm->Counters.Ejects++;
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
     closed = TRUE;
     if (p->Usb3.Up || p->Usb3.Written != 0) {
         p->Usb3.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
@@ -6501,6 +6531,7 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
         cm->Counters.PcieTornDown++;
         tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
     }
+    cm->ActivePort = prev;
     p->Ejected = TRUE;
     p->PcieFailed = TRUE;
     p->State = TBT_U4_FAILED;
@@ -6512,6 +6543,7 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
 {
     PTBT_U4_PORT p;
     BOOLEAN closed;
+    ULONG prev;
 
     if (cm->Contained) {
         cm->Counters.ContainedRefused++;
@@ -6522,6 +6554,8 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
         return TBT_E_PARAM;
     }
     cm->Counters.Ejects++;
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
     closed = TRUE;
     if (p->Pcie.Up || p->Pcie.Written != 0) {
         p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
@@ -6529,6 +6563,7 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
         cm->Counters.PcieTornDown++;
         tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
     }
+    cm->ActivePort = prev;
     /* The USB3 tunnel stays, as on a port FAILED for PCIe alone (record 22
      * section 7.2): its devices are the host xHCI's, never asked to stop. */
     p->Ejected = TRUE;
@@ -6841,6 +6876,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     ULONG what;
     BOOLEAN met;
     BOOLEAN allMet;
+    BOOLEAN moved;
     PTBT_U4_OBLIGATION o;
     PTBT_U4_PORT p;
     PTBT_U4_PORT saved;
@@ -6888,8 +6924,35 @@ LONG TbtU4Resume(PTBT_U4CM cm)
     }
     /* The port table is rebuilt by the host router's walk; what each port
      * held across the sleep comes back from the saved copy, matched by
-     * its lane 0 adapter. */
-    for (i = 0; i < cm->PortCount; i++) {
+     * its lane 0 adapter. The obligations, DeferredTail[], the links and
+     * the queued actions name a port by its Index, which the walk
+     * renumbers when an adapter is not found again, so the table is
+     * checked whole first, as TbtU4Recover checks its snapshot: a saved
+     * port missing from the walk, or found under another Index, keeps the
+     * table as it was before the sleep, and every obligation is held
+     * unjudged rather than judged against another port's record. */
+    moved = FALSE;
+    for (k = 0; k < oldCount && k < TBT_U4_MAX_PORTS; k++) {
+        if (saved[k].Index == 0) {
+            continue;
+        }
+        for (i = 0; i < cm->PortCount; i++) {
+            if (cm->Ports[i].Lane0 == saved[k].Lane0) {
+                break;
+            }
+        }
+        if (i == cm->PortCount || cm->Ports[i].Index != saved[k].Index) {
+            tbtU4Log(cm, "u4.resume.port", saved[k].Index);
+            moved = TRUE;
+        }
+    }
+    if (moved) {
+        cm->PortCount = oldCount;
+        for (k = 0; k < oldCount && k < TBT_U4_MAX_PORTS; k++) {
+            cm->Ports[k] = saved[k];
+        }
+    }
+    for (i = 0; i < cm->PortCount && !moved; i++) {
         p = &cm->Ports[i];
         for (k = 0; k < oldCount && k < TBT_U4_MAX_PORTS; k++) {
             if (saved[k].Index != 0 && saved[k].Lane0 == p->Lane0) {
@@ -6926,7 +6989,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
         } else if (p->Generation != o->Generation) {
             /* Rebuilt for an earlier obligation of the same port. */
             met = (BOOLEAN)(o->Usb3 ? p->Usb3.Up : p->Pcie.Up);
-        } else if (!cm->BudgetSpent) {
+        } else if (!cm->BudgetSpent && !moved) {
             what = tbtU4ResumeClass(cm, p);
             if (what == TBT_U4_RES_LOST) {
                 p->LostKnown = TRUE;    /* cleared by a connection or a teardown */
@@ -6988,7 +7051,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
         }
     }
     tbtU4HotPlugEnable(cm);
-    if (cm->BudgetSpent) {
+    if (cm->BudgetSpent || moved) {
         allMet = FALSE;
     }
     cm->Budgeted = FALSE;

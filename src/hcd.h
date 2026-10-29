@@ -750,6 +750,8 @@ typedef struct _HCD_DEVICE_PDO {
     ULONG Closing;                  /* stopping or removed: URBs refused  */
     volatile LONG UrbsPending;      /* URB IRPs pended here and not yet
                                      * completed; REMOVE waits for 0      */
+    volatile LONG CancelsUnserved;  /* waiting IRPs cancelled with no
+                                     * controller (hcdWaitCancel)         */
     /* Refusals completed at the next clock tick (HcdIoRefuseLater):
      * the list under the cancel spin lock. RefusedPending counts each
      * refusal and one more while the timer is armed or its DPC runs;
@@ -1252,6 +1254,7 @@ typedef struct _HCD_TMR {
     KEVENT Event;                   /* synchronization: an input changed  */
     PVOID ThreadObject;             /* referenced at the creation         */
     HANDLE ThreadHandle;            /* kept when the reference failed     */
+    volatile LONG Exited;           /* set just before it terminates      */
     ULONG Created;                  /* a thread to join                   */
     HCD_SET_TIMER_RESOLUTION Routine;
     ULONG Lookable;                 /* 32-bit NT 5: the thread's own look */
@@ -1318,9 +1321,13 @@ typedef struct _HCD_CONTROLLER {
     ULONG SuspendedInD0;
     KEVENT PowerGate;
     ULONG WakesWithoutPower;
+    /* The system IRP's deferral, and the device IRP's D0 apart from it:
+     * the power manager lets one of each be in flight (hcd_power.c). */
     WORK_QUEUE_ITEM PowerWork;
     PIRP PowerWorkIrp;
     ULONG PowerWorkKind;
+    WORK_QUEUE_ITEM PowerWorkD0;
+    PIRP PowerWorkD0Irp;
     PIRP PendingSystemIrp;
 
     /* The DMA adapter and the common buffer (hcd_dma.c). */
@@ -2403,6 +2410,7 @@ VOID HcdDevicePdoDormantAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoExists(PHCD_CONTROLLER hc, ULONG serial);
 PDEVICE_RELATIONS HcdDevicePdoRelations(PHCD_CONTROLLER hc,
                                         PDEVICE_RELATIONS old, ULONG parent);
+VOID HcdRelationsGiveBack(PDEVICE_RELATIONS old);
 VOID HcdDevicePdoReleaseAll(PHCD_CONTROLLER hc);
 ULONG HcdDevicePdoLetGo(PHCD_CONTROLLER hc, ULONG hubSerial);
 ULONG HcdDevicePdoRepresent(PHCD_CONTROLLER hc, ULONG hubSerial);
@@ -2507,6 +2515,12 @@ VOID HcdDmaStreamFree(PHCD_CONTROLLER hc, ULONG bytes, PHYSICAL_ADDRESS pa,
 
 /* hcd_svc.c (the services themselves are in hcd_svc.h) */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds);
+/* A thread join's reference retries, 10 ms apart, before it falls back
+ * to the thread's exit flag (hcd_tmr.c, hcd_susp.c). */
+#define HCD_JOIN_REF_TRIES 500UL
+/* 0 waits until satisfied; a gate's bound, in unsatisfied returns. */
+ULONG HcdWaitEvent(PKEVENT event, ULONG bound);
+#define HCD_GATE_WAIT_BOUND 100UL
 VOID HcdTimersInit(PHCD_CONTROLLER hc);
 VOID HcdTimersDrain(PHCD_CONTROLLER hc);
 VOID HcdTimersOpen(PHCD_CONTROLLER hc);

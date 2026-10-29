@@ -233,6 +233,11 @@ static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
     tbtIcmLinkInfo(dw[5] >> 16, out);
     out->Link = TBT_ICM_LI_LINK(out->LinkInfo);
     out->Depth = TBT_ICM_LI_DEPTH(out->LinkInfo);
+    /* The firmware's fields, bounded as a disconnection's are
+     * (tbtIcmFrDisconnected) before anything is looked up by them. */
+    if (out->Link > TBT_ICM_MAX_LINK || out->Depth > TBT_ICM_MAX_DEPTH) {
+        return FALSE;
+    }
     TbtIcmDecodeNames(dw + 6, TBT_ICM_FR_CONNECTED_WORDS - 6, &out->Names);
     return tbtIcmAnnounceSane(out);
 }
@@ -1158,6 +1163,12 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                 rc = TBT_E_GONE;
                 break;
             }
+            /* Tested before the take, so a frame past the budget stays on
+             * the ring for the next service rather than being taken and
+             * dropped undecoded. */
+            if (frames >= TBT_WAIT_FRAME_BUDGET) {
+                break;
+            }
             if (!TbtRingReceive(icm->Ring, &f)) {
                 if (TbtDeadlinePassed(&d, icm->Host)) {
                     break;
@@ -1165,9 +1176,7 @@ static LONG tbtIcmCommand(PTBT_ICM icm,
                 TbtDeadlineWait(&d, icm->Host);
                 continue;
             }
-            if (++frames > TBT_WAIT_FRAME_BUDGET) {
-                break;
-            }
+            frames++;
             if (topology && f.Words != 0 && f.Pdf == TBT_PDF_ICM_RESP &&
                 TBT_ICM_HDR_CODE(f.Dw[0]) == TBT_ICM_HDR_CODE(req[0])) {
                 /* Linux icm.c icm_copy places packet i at slot i. The

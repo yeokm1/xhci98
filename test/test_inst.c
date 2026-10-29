@@ -6256,6 +6256,18 @@ static void test_9x_stage(void)
     r = inst_9x_devicepath_project(b, f, 1, fits);
     CHECK(r == INST_9X_DEVICEPATH_MAX - 1 && fits[0], "9x project: 279 fits");
 
+    /* The install directory's own entry, by the same limit: a value of
+     * 280 characters with it keeps it, 281 leaves it off. */
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[INST_9X_DEVICEPATH_MAX] = '\0';
+    CHECK(inst_9x_devicepath_room(b), "9x own entry: 280 kept");
+    b[INST_9X_DEVICEPATH_MAX] = 'A';
+    b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
+    CHECK(!inst_9x_devicepath_room(b), "9x own entry: 281 left off");
+    CHECK(inst_9x_devicepath_room(base), "9x own entry: an ordinary value kept");
+    CHECK(!inst_9x_devicepath_room(NULL), "9x own entry: nothing composed");
+
     /* An oversized value as read is the caller's to shrink first; once
      * this run's withdrawals bring it under the limit, the folders count. */
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';

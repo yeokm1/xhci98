@@ -39,7 +39,7 @@ NTSTATUS HcdForwardAndWait(PHCD_CONTROLLER hc, PIRP irp)
     HCD_SET_COMPLETION_ALWAYS(irp, hcdSignalOnComplete, &done);
     status = IoCallDriver(hc->LowerDevice, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+        (VOID)HcdWaitEvent(&done, 0);
         status = irp->IoStatus.Status;
     }
     return status;
@@ -105,8 +105,7 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
     HcdIoLeave(hc);
-    (VOID)KeWaitForSingleObject(&hc->RemoveEvent, Executive, KernelMode,
-                                FALSE, NULL);
+    (VOID)HcdWaitEvent(&hc->RemoveEvent, 0);
 
     if (hc->ControllerStarted) {
         HcdStopController(hc);

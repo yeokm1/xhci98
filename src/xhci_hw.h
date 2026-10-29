@@ -7,7 +7,11 @@
  * split worth having: files in `src/sources`' pure list encode and decide,
  * this layer is the only place that dereferences BAR0.
  *
- * Implemented in src/xhci_pci.c. C89 only; every function carries its IRQL.
+ * The MMIO accessors, PCI config access and bounded waits are implemented in
+ * src/xhci_pci.c; the controller lifecycle, the event, command and slot
+ * services declared further down live in the files each block names (the
+ * xhci_init.c, xhci_evt.c and xhci_cmd.c core, and the HCD's hcd_*.c). C89
+ * only; every function carries its IRQL.
  */
 
 #ifndef XHCI_HW_H

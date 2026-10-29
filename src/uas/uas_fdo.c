@@ -483,7 +483,9 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     ULONG wanted;
     ULONG i;
     ULONG j;
+    ULONG before;
     BOOLEAN known;
+    BOOLEAN seen[UAS_MAX_LUNS];
     PUAS_PDO pdo;
     UCHAR serialIndex;
     USHORT vid;
@@ -576,6 +578,15 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     }
     UasEngineStart(fdo);
 
+    /* A start after a STOP asks again: a LUN of the earlier start that
+     * this one's REPORT LUNS or INQUIRY no longer answers stops being
+     * reported, so PnP removes it (uas_pdo.c deletes it then). Present is
+     * set from what answered only after the loop, not cleared first, so a
+     * LUN that stays is never briefly refused. */
+    before = fdo->LunCount;
+    for (j = 0; j < UAS_MAX_LUNS; j++) {
+        seen[j] = FALSE;
+    }
     count = uasReportLuns(fdo, luns);
     for (i = 0; i < count; i++) {
         if (!NT_SUCCESS(uasInquiry(fdo, luns[i], inquiry))) {
@@ -589,7 +600,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         for (j = 0; j < fdo->LunCount; j++) {
             if (fdo->Luns[j]->Lun == luns[i]) {
                 known = TRUE;
-                fdo->Luns[j]->Present = TRUE;
+                seen[j] = TRUE;
             }
         }
         if (known || fdo->LunCount >= UAS_MAX_LUNS) {
@@ -598,6 +609,9 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         if (NT_SUCCESS(UasPdoCreate(fdo, luns[i], inquiry, &pdo))) {
             fdo->Luns[fdo->LunCount++] = pdo;
         }
+    }
+    for (j = 0; j < before; j++) {
+        fdo->Luns[j]->Present = seen[j];
     }
     return STATUS_SUCCESS;
 }

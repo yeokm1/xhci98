@@ -7,7 +7,9 @@ SUSP.1 is 36.28, SUSPa.1 to SUSPa.6 are 36.29 to 36.34, SUSPa-V and
 SUSPa-E 36.35 and 36.36, SUSPb.1, SUSPb.2, SUSPb-V and SUSPb-E 36.37 to
 36.40, SUSP.2 is 36.41, and SUSP.3 and SUSP.4 joined 36.20 and 36.final.
 This record keeps the old ids, and its revision history the old phase
-numbers). DRAFT, revision 10,
+numbers). Implemented by those tasks and shipped in `2.3.0.0`
+(2026-10-12), off by default (`XhciSelectiveSuspend`); the rest of this
+paragraph is the record's history as it was written. Draft revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
 "The idle power policy (28.3)"; release notes, "Known limitations").

@@ -359,6 +359,10 @@ typedef struct _PROGRESS_ROW {
 static const PROGRESS_ROW progressRows[] = {
     { "hot reset still driven", PWR | CONN | RST |
           LINK(XHCI_SSHUB_LINK_HOT_RESET), 0, XHCI_HUB_RESET_PENDING, 0 },
+    { "still in reset under an older C_PORT_RESET", PWR | CONN | RST |
+          LINK(XHCI_SSHUB_LINK_HOT_RESET), C_RST, XHCI_HUB_RESET_PENDING, 0 },
+    { "still in reset under an older C_BH_PORT_RESET", PWR | CONN | RST |
+          LINK(XHCI_SSHUB_LINK_POLLING), C_BH, XHCI_HUB_RESET_PENDING, 1 },
     { "warm reset, connection dropped while it runs", PWR | RST |
           LINK(XHCI_SSHUB_LINK_POLLING), 0, XHCI_HUB_RESET_PENDING, 0 },
     { "hot reset done, U0 enabled", UP, C_RST, XHCI_HUB_RESET_ENABLED, 0 },

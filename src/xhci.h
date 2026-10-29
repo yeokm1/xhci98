@@ -1929,6 +1929,7 @@ typedef struct _XHCI_HC_INFO {
 #define XHCI_HC_NO_INTERRUPTERS     9
 #define XHCI_HC_WINDOW_TOO_SMALL    10
 #define XHCI_HC_BAD_XECP            11  /* xECP inside the capability block */
+#define XHCI_HC_CHANGED             12  /* decodes, but not as before HCRST */
 
 /*
  * The first two capability values, checked before anything else is read.
@@ -7807,8 +7808,9 @@ typedef struct _XHCI_EXTENSION {
      *
      * `EndpointQuiesceFailures` counts every call to `xhciEpQuiesceFail`, which
      * is the only place `XHCI_EPQ_FAILED` is set *without* `XHCI_EPQ_UNAVAILABLE`
-     * beside it - and that is precisely the state `xhciSaveQuiesceUnproven`
-     * declines a `CSS` on for the life of the driver. Task 12.1 added it because
+     * beside it - and that is precisely the state the miniport's save gate
+     * declined a `CSS` on for the life of the driver (the HCD's gate is
+     * XhciSlotSaveBusy). Task 12.1 added it because
      * the limitation that task published names a counter which has to be able to
      * say a machine is in that state, and neither of the two above can: a Stop
      * Endpoint answered with an error completion, a failed Set TR Dequeue Pointer

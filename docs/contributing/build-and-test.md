@@ -714,7 +714,8 @@ Two more of `build-driver.cmd`'s steps read Stor98's files:
 `scripts\check-stor98-header.ps1` fails when `src\cm\stor98cm.h` is not
 the same bytes as `src\stor98\include\stor98cm.h`, the master
 (`source-files.md`, "Stor98"), and the batch-file line-ending check
-(`xhciqual\test\check-bat-eol.ps1`) covers every tracked `.bat`, Stor98's
+(`xhciqual\test\check-bat-eol.ps1`) covers every tracked `.bat` and
+`.cmd` (`.cmd` since 2026-10-29), Stor98's
 two in its `third_party\` copy among them. `check-source-charset.ps1`
 skips `src\stor98\`, which keeps Stor98's own rules.
 

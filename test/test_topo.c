@@ -28,7 +28,9 @@
  * table-driven placements with their Route String, Root Hub Port Number and
  * TT triple, each row citing the design record it was typed from; the depth
  * limit; subtree removal; malformed hub descriptors; and the well-formedness
- * of test\hub_port_vectors.h, the port state-machine table 27-A.1 will run.
+ * of test\hub_port_vectors.h, the port state-machine table written before
+ * 27-A.1, which no code in src\ runs (src\xhci_hub.c took another shape,
+ * held by test\test_hub.c): those checks are of the table alone.
  *
  * KNOWN GAPS. Where src\xhci_topo.c does not yet do what a design record
  * says, the vector is a KNOWN_GAP rather than a CHECK: it prints what the
@@ -1925,7 +1927,8 @@ static void testClosedGaps(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* Task 27-A.4: the hub port vector table is well formed               */
+/* Task 27-A.4: the hub port vector table is well formed. The table's  */
+/* own consistency only: no function in src\ consumes it.             */
 /* ------------------------------------------------------------------ */
 
 /* Written apart from any decoder in src\: LS bit, HS bit, neither is FS

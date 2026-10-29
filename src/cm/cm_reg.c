@@ -3,8 +3,11 @@
  * start from the NHI's driver (software) key: the key every install path
  * of xhcicm.inf and xhcicm-amd64.inf writes them to (HKR in the install
  * section's AddReg) at the defaults cm_vals.c holds, under
- * FLG_ADDREG_NOCLOBBER. The one file that opens a registry key, so the
- * import allowlists hold those imports to it (SITES=cm_reg.obj).
+ * FLG_ADDREG_NOCLOBBER. One of the two files that open a registry key
+ * through the kernel's imports, with cm_statos.c (the status record and
+ * the eject's values), so the import allowlists hold those imports to
+ * them (SITES=cm_reg.obj,cm_statos.obj); cm_nvlinkos.c's 9x keys go
+ * through the VMM's registry services, which are no import.
  *
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its

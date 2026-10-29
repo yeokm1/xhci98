@@ -227,6 +227,16 @@ src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
                 BSD-3-Clause driver with its own AGENTS.md and build,
                 built and versioned with this package since 3.1.0.0; see
                 "Stor98 (src/stor98/)" below
+src/vsd/        S98VSD.VXD, the Windows 98 SE and ME IOS vendor-supplied
+                driver that lets large requests reach Stor98 whole, staged
+                beside stor98.mpd from 3.2.0.0 (roadmap-usb4 task 43.46,
+                design record 30); Open Watcom 2.0 and the 98 SE DDK's
+                linker, built by build-driver.cmd on the x86 run
+src/pfw/        XHCIPFW, which closes PCI bridges' prefetchable windows
+                lying wholly above 4 GB before the system reads them:
+                XHCIPFW.VXD for 98 SE and ME and, under src/pfw/nt/,
+                XHCIPFW.SYS for the 32-bit 2000 to 7, from 3.3.0.0
+                (roadmap-usb4 task 44.49, design record 32)
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -573,6 +583,16 @@ gated by the import gate's `-GateProfile hlprx86` against
 2000 SP4, XP SP3, Vista SP2 and 7 SP1, every set required, not by the
 Windows 98 rules,
 because it is never installed on Windows 98 or ME.
+
+The x86 package carries two more images of this project's own, neither
+bound by the INF: `S98VSD.VXD` (`src/vsd/`, design record 30), staged
+beside `stor98.mpd` since 3.2.0.0, and since 3.3.0.0 `XHCIPFW.VXD` and
+`XHCIPFW.SYS` (`src/pfw/`, design record 32) at its root, each placed or
+removed by the installer alone. Each has a gate of its own
+(`src/vsd/check-vsd.ps1`, `src/pfw/check-pfw.ps1`,
+`src/pfw/nt/check-pfwsys.ps1`, and the import gate's `hlprx86` profile
+with `xhcipfw-imports.allow` for `XHCIPFW.SYS`), run by its build and again
+by the packager; the 64-bit package carries none of them.
 
 The media carries no Microsoft file, but for the one exception below. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class

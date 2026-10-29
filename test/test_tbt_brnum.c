@@ -826,6 +826,32 @@ static VOID test_windows(VOID)
     CHECK_EQ(m.N[usp].Mem, 0, "no window written");
     CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the numbering stands");
 
+    /* A port window ending at 4 GiB is open, not closed: 1 MiB of it is
+     * no room once its top unit is left out; 16 MiB is room, the windows
+     * below FFF00000. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xFFF0FFF0UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NO_ROOM, "a 1 MiB window at 4 GiB: no room");
+    CHECK_EQ(m.N[usp].Mem, 0, "no window written at 4 GiB");
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xFFF0FF00UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "a 16 MiB window at 4 GiB: windowed");
+    CHECK((m.N[usp].Mem & 0xFFF0UL) >= 0xFF00UL &&
+          ((m.N[usp].Mem >> 16) & 0xFFF0UL) < 0xFFF0UL,
+          "the upstream port's window inside it, below FFF00000");
+
     /* Too small: a 1 MiB port window, the chain plus a sibling endpoint. */
     mreset();
     ioreset(TRUE);

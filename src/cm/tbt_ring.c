@@ -577,6 +577,25 @@ LONG TbtRingStartEx(PTBT_RING ring,
         }
         ring->TxNext = TBT_RING_PROD(idx);
     }
+    /* The same for RX, whose Producer Index is the host interface's: one
+     * the base write did not move to 0 is where the next frame lands, so
+     * the receive starts there with the Consumer Index one behind it
+     * again; otherwise every answer would be waited for at slot 0. An
+     * unreadable or out-of-range one is refused as the TX pair is. */
+    idx = TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_INDEX);
+    if (TBT_RING_PROD(idx) != 0) {
+        tbtLog(host, "tbt.ring.rx-index", idx);
+        if (idx == 0xFFFFFFFFUL || TBT_RING_PROD(idx) >= entries) {
+            TBT_WR(ring, TBT_TX_CTRL(0), 0);
+            TBT_WR(ring, TBT_RX_CTRL(0), 0);
+            TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
+            tbtRingVerifyStopped(ring);
+            return TBT_E_HW;
+        }
+        ring->RxNext = TBT_RING_PROD(idx);
+        TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX,
+               (ring->RxNext + entries - 1) % entries);
+    }
     ring->Running = TRUE;
     return TBT_OK;
 }
@@ -727,6 +746,12 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
             break;
         }
         tbtRingStep(ring, &w);
+    }
+    /* A wait the gate ended (TBT_HOST.Cancelled) proves nothing about the
+     * hardware: not counted or answered as a ring that does not move. */
+    if (ring->Host->Cancelled != NULL &&
+        ring->Host->Cancelled(ring->Host->Context)) {
+        return TBT_E_STOPPED;
     }
     ring->Counters.TxStuck++;
     tbtLog(ring->Host, "tbt.ring.tx-stuck", idx);
@@ -1009,6 +1034,12 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 }
             }
             return TBT_OK;
+        }
+        /* As in TbtRingSend: the gate's end of the wait is no timeout, and
+         * no attempt follows it. */
+        if (ring->Host->Cancelled != NULL &&
+            ring->Host->Cancelled(ring->Host->Context)) {
+            return TBT_E_STOPPED;
         }
         tbtLog(ring->Host, "tbt.ring.ctl-no-answer", want);
     }

@@ -260,8 +260,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         (VOID)InterlockedExchange((PLONG)&fdo->DoorOpen, 0);
         fdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdHubIoLeave(fdo);
-        (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
-                                    FALSE, NULL);
+        (VOID)HcdWaitEvent(&fdo->RemoveEvent, 0);
         /* Only the door goes; the bus keeps the hub and the devices behind
          * it, whose PDOs PnP has removed already and which stay listed -
          * let go of, since PnP forgets them with this devnode: the next
@@ -292,8 +291,7 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
         HCD_SET_COMPLETION_ALWAYS(irp, hcdHubSignal, &done);
         status = IoCallDriver(fdo->LowerDevice, irp);
         if (status == STATUS_PENDING) {
-            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                        NULL);
+            (VOID)HcdWaitEvent(&done, 0);
         }
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
@@ -369,6 +367,14 @@ NTSTATUS HcdHubFdoPnp(PHCD_HUB_FDO fdo, PIRP irp)
                 }
                 irp->IoStatus.Information = (ULONG_PTR)rel;
                 irp->IoStatus.Status = STATUS_SUCCESS;
+            } else if (hc != NULL) {
+                /* Passed down, the list from above would read every child
+                 * of this hub as departed. */
+                HcdRelationsGiveBack(old);
+                status = HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES,
+                                        0);
+                hcdHubIoLeave(fdo);
+                return status;
             }
         }
         break;

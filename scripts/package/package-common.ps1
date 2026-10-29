@@ -3290,6 +3290,10 @@ function Resolve-OtherSetTag {
     try {
         $rev = (Invoke-DriverPackGit -Root $Root -Arguments @("rev-parse", "--verify", "--quiet", "refs/tags/$Tag^{commit}")).Trim()
     } catch {
+        # `rev-parse --verify --quiet` answers a missing tag with exit 1 and
+        # nothing on stderr. Any other failure (no git, not a repository) is
+        # not a missing tag and is not reported as one.
+        if ($_.Exception.Message -notmatch '\(exit 1\): $') { throw }
         $rev = ""
     }
     if ($rev -notmatch '^[0-9a-f]{40}$') {
@@ -3502,6 +3506,7 @@ function Read-WdmFreePin {
             if ($tag -ne "") { throw "'$Path' names two tags." }
             $tag = $Matches[1]
         } elseif ($t -match '^Commit: ([0-9a-f]{40})$') {
+            if ($commit -ne "") { throw "'$Path' names two commits." }
             $commit = $Matches[1]
         } elseif ($t -match '^Certificate: ([0-9A-Fa-f]{40})$') {
             if ($thumb -ne "") { throw "'$Path' names two certificates." }

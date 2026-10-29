@@ -470,7 +470,9 @@ function Read-AllowFile {
     }
 
     $allow = @()
-    $deny = @{}
+    # Ordinal, as Get-Win98Precedent's map: @{} is case-INSENSITIVE, while the
+    # allow rows match -ceq and the loader resolves a name exactly.
+    $deny = New-Object System.Collections.Hashtable([System.StringComparer]::Ordinal)
     $section = ""
     $lineNo = 0
 
@@ -676,7 +678,12 @@ function Get-Win98Precedent {
         try {
             $lines = Invoke-Dumpbin -Exe $Dumpbin -Mode "/imports" -Path $file.FullName
         } catch {
-            # Not a PE with an import table this dumpbin can read.
+            # Every precedent row is a PE whose length and SHA-256 the manifest
+            # has just authenticated, so a dumpbin that cannot read it is this
+            # host's fault (exit 53: MSPDB60.DLL off PATH), never the file's.
+            # Silently skipping it would shrink the evidence set unseen.
+            Add-Failure ("Win98 precedent '$($file.FullName)' could not be read: " +
+                $_.Exception.Message)
             continue
         }
         $scanned += $file.Name
@@ -710,7 +717,8 @@ function Get-NtkernNames {
 function Test-NtkernName {
     param([string]$Text, [string]$Symbol)
 
-    if ($null -eq $Text) {
+    # A [string] parameter is never $null ("" stands for none staged).
+    if ([string]::IsNullOrEmpty($Text)) {
         return $false
     }
     # NUL-delimited: the export name tables ntkern.vxd builds hold
@@ -911,7 +919,10 @@ function Test-Image {
         [object]$Win2k,
         [string]$BaselineLabel = "Windows 2000 SP4",
         [object]$Precedent,
-        [string]$NtkernText,
+        # [object], not [string]: a [string] parameter turns $null into "",
+        # and the Windows 98 rule below must tell "no ntkern.vxd staged"
+        # from a name table.
+        [object]$NtkernText,
         [string]$ImageArch = "x86"
     )
 
@@ -1093,7 +1104,7 @@ function Test-Image {
                 continue
             }
 
-            $win98Sources = ($null -ne $Precedent) -or ($null -ne $NtkernText)
+            $win98Sources = ($null -ne $Precedent) -or (-not [string]::IsNullOrEmpty([string]$NtkernText))
             $win98Evidence = @($evidence | Where-Object {
                 $_ -like "win98-precedent*" -or $_ -eq "ntkern-name"
             })

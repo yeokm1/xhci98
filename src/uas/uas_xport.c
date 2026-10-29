@@ -566,8 +566,15 @@ static UCHAR uasSlotPrepare(PUAS_SLOT slot, PIRP irp,
     slot->Request = irp;
     slot->Srb = srb;
     slot->Lun = lun;
-    slot->TimeLeft = (srb->TimeOutValue != 0) ? (LONG)srb->TimeOutValue
-                                              : UAS_DEFAULT_TIMEOUT;
+    /* Clamped, so a timeout from 0x80000000 up is not a negative count
+     * that ends the request at the first tick. */
+    if (srb->TimeOutValue == 0) {
+        slot->TimeLeft = UAS_DEFAULT_TIMEOUT;
+    } else if (srb->TimeOutValue > 0x7FFFFFFFUL) {
+        slot->TimeLeft = 0x7FFFFFFFL;
+    } else {
+        slot->TimeLeft = (LONG)srb->TimeOutValue;
+    }
 
     if (srb->DataTransferLength != 0) {
         if ((srb->SrbFlags & SRB_FLAGS_UNSPECIFIED_DIRECTION) ==
@@ -577,7 +584,7 @@ static UCHAR uasSlotPrepare(PUAS_SLOT slot, PIRP irp,
                    SRB_FLAGS_DATA_OUT) {
             dir = UAS_DIR_OUT;
         } else {
-            dir = UasCdbDirection(srb->Cdb[0]);
+            dir = UasCdbDataDirection(srb->Cdb, srb->CdbLength);
         }
         if (dir == UAS_DIR_NONE) {
             return SRB_STATUS_INVALID_REQUEST;

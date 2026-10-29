@@ -106,8 +106,9 @@ ULONG XhciPortscPower(ULONG portsc, ULONG on)
 }
 
 /* PR is RW1S: "when software writes a '1' to this flag, the bus reset sequence
- * ... is started" (Table 5-27, p.373). Warm reset (WPR) is SuperSpeed-only and
- * is deliberately not offered here. */
+ * ... is started" (Table 5-27, p.373). Warm reset (WPR) is a USB3 port's
+ * alone, so it has its own builder (XhciPortscWarmReset) rather than a flag
+ * here. */
 ULONG XhciPortscReset(ULONG portsc)
 {
     return XhciPortscWith(portsc, XHCI_PORTSC_PR);
@@ -155,7 +156,8 @@ ULONG XhciPortscSuspend(ULONG portsc)
  * (Resume) to PLS. After TDRSMDN is complete, software shall write a '0' (U0)
  * to the PLS field" (4.15.2.2, p.257). The USB 3.x port in the same list writes
  * '0' to *initiate* (step 1a) - which is exactly the value a USB 2.0 port uses
- * to *terminate*, and this driver serves only USB 2.0 ports.
+ * to *terminate*. This pair is the USB 2.0 port's resume; a USB3 port's
+ * resume is a single U0 write, which XhciPortscResumeDone also builds.
  *
  * The device-initiated case ends the same way and starts by itself: the port
  * enters Resume on its own and sets PLC, and "software shall start timing

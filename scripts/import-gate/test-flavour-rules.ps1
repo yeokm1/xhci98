@@ -69,6 +69,9 @@ try {
         }
         function Invoke-Dumpbin { @('    HAL.dll', '        0 WRITE_PORT_UCHAR', '    Summary') }
         function Test-NtkernName { $true }
+        # No Windows 98 source is passed here, so the Win98 rule only warns;
+        # the block below tests that rule.
+        function Add-Warning { param($Message) }
         function Add-Failure { param($Message) $script:importFailures += $Message }
         foreach ($order in @(@('debug', 'qemu'), @('qemu', 'debug'))) {
             $split = Join-Path $work 'split.allow'
@@ -225,6 +228,65 @@ try {
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'mixed obj directory' }).Count -eq 1) "SITES over a mixed obj directory fails: $($script:importFailures)"
+    }
+
+    # ---------------------------------------------------------------------
+    # The Windows 98 evidence rule on an x86 image, with the real
+    # Test-NtkernName. With neither ntkern.vxd nor a precedent binary staged
+    # the pair is a warning, not a failure: until 2026-10-29 a [string]
+    # parameter turned the absent name table into "", which read as staged,
+    # so a clone without the Windows 98 files failed every kernel pair. A
+    # name table without the symbol fails, one with it passes, and an empty
+    # precedent set with no name table still fails. The deny list matches a
+    # name exactly, as the allow rows and the loader do.
+    # ---------------------------------------------------------------------
+    & {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Test-NtkernName')) {
+            $function = $ast.Find({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text))
+        }
+        function Write-Ok { param($Message) }
+        function Add-Warning { param($Message) $script:importWarnings += $Message }
+        function Add-Failure { param($Message) $script:importFailures += $Message }
+        function Invoke-Dumpbin { @('    ntoskrnl.exe', '        0 IofCallDriver', '    Summary') }
+        $w98 = Join-Path $work 'w98.allow'
+        Set-Content -LiteralPath $w98 -Encoding ASCII -Value @('[imports]', 'ntoskrnl.exe!IofCallDriver all required synthetic')
+        $rules = Read-AllowFile $w98
+        $noPrecedent = $null
+        $noNames = $null
+        $script:importFailures = @()
+        $script:importWarnings = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -Precedent $noPrecedent -NtkernText $noNames -ImageArch x86
+        Assert-True ($script:importFailures.Count -eq 0) "Win98 rule: no ntkern.vxd and no precedent staged is no failure: $($script:importFailures)"
+        Assert-True (@($script:importWarnings | Where-Object { $_ -match 'Windows 98 evidence sources are not staged' }).Count -eq 1) "Win98 rule: no ntkern.vxd and no precedent staged is the warning: $($script:importWarnings)"
+        $script:importFailures = @()
+        $script:importWarnings = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "Win98 rule: the two sources omitted is no failure either: $($script:importFailures)"
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -NtkernText "`0OtherName`0" -ImageArch x86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'has no WINDOWS 98 evidence' }).Count -eq 1) "Win98 rule: a name table without the symbol fails: $($script:importFailures)"
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -NtkernText "`0IofCallDriver`0" -ImageArch x86
+        Assert-True ($script:importFailures.Count -eq 0) "Win98 rule: a name table with the symbol passes: $($script:importFailures)"
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -NtkernText "`0iofcalldriver`0" -ImageArch x86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'has no WINDOWS 98 evidence' }).Count -eq 1) "Win98 rule: the name table matches case-sensitively: $($script:importFailures)"
+        $emptyPrecedent = [pscustomobject]@{ Map = (New-Object System.Collections.Hashtable([System.StringComparer]::Ordinal)); Scanned = @('x.sys') }
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -Precedent $emptyPrecedent -NtkernText $noNames -ImageArch x86
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'has no WINDOWS 98 evidence' }).Count -eq 1) "Win98 rule: a precedent set without the pair and no name table fails: $($script:importFailures)"
+        Assert-True (-not (Test-NtkernName -Text $noNames -Symbol 'IofCallDriver')) 'Test-NtkernName: no name table is no evidence'
+
+        Set-Content -LiteralPath $w98 -Encoding ASCII -Value @('[imports]', 'ntoskrnl.exe!IofCallDriver all required synthetic', '[deny]', 'IOFCALLDRIVER synthetic denial', 'iofcalldriver another spelling')
+        $rules = Read-AllowFile $w98
+        Assert-True ($rules.Deny.Count -eq 2) "deny: two spellings are two rows, not a duplicate: $($rules.Deny.Count)"
+        $script:importFailures = @()
+        Test-Image -Path synthetic -ImageFlavor release -Rules $rules -NtkernText "`0IofCallDriver`0" -ImageArch x86
+        Assert-True ($script:importFailures.Count -eq 0) "deny: a row in another case does not deny the import: $($script:importFailures)"
     }
 
     # ---------------------------------------------------------------------

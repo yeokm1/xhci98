@@ -423,6 +423,36 @@ static void test_direction(void)
     CHECK_EQ(UasCdbDirection(0x00), UAS_DIR_NONE, "TEST UNIT READY");
     CHECK_EQ(UasCdbDirection(0x35), UAS_DIR_NONE, "SYNCHRONIZE CACHE(10)");
     CHECK_EQ(UasCdbDirection(0x1B), UAS_DIR_NONE, "START STOP UNIT");
+    CHECK_EQ(UasCdbDirection(0x4D), UAS_DIR_IN, "LOG SENSE");
+    CHECK_EQ(UasCdbDirection(0xA2), UAS_DIR_IN, "SECURITY PROTOCOL IN");
+    CHECK_EQ(UasCdbDirection(0xB5), UAS_DIR_OUT, "SECURITY PROTOCOL OUT");
+    CHECK_EQ(UasCdbDirection(0x93), UAS_DIR_OUT, "WRITE SAME(16)");
+    CHECK_EQ(UasCdbDirection(0x42), UAS_DIR_NONE,
+             "0x42: UNMAP or READ SUB-CHANNEL, not told by the opcode");
+    {
+        UCHAR ata[16];
+        ULONG k;
+
+        for (k = 0; k < 16; k++) {
+            ata[k] = 0;
+        }
+        ata[0] = 0x85;
+        ata[2] = 0x0E;
+        CHECK_EQ(UasCdbDataDirection(ata, 16), UAS_DIR_IN,
+                 "ATA PASS-THROUGH(16), T_DIR 1");
+        ata[2] = 0x06;
+        CHECK_EQ(UasCdbDataDirection(ata, 16), UAS_DIR_OUT,
+                 "ATA PASS-THROUGH(16), T_DIR 0");
+        ata[0] = 0xA1;
+        ata[2] = 0x0E;
+        CHECK_EQ(UasCdbDataDirection(ata, 12), UAS_DIR_IN,
+                 "ATA PASS-THROUGH(12), T_DIR 1");
+        CHECK_EQ(UasCdbDataDirection(ata, 6), UasCdbDirection(0xA1),
+                 "a short 0xA1 CDB is not ATA PASS-THROUGH");
+        ata[0] = 0x28;
+        CHECK_EQ(UasCdbDataDirection(ata, 10), UAS_DIR_IN,
+                 "any other opcode is the table's");
+    }
 }
 
 /* ------------------------------------------------------------------ */

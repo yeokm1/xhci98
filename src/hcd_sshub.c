@@ -410,6 +410,7 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     ULONG converted;
     ULONG warmSeen;
     ULONG progress;
+    ULONG stale;
     ULONG kind;
     ULONG i;
 
@@ -433,6 +434,13 @@ ULONG HcdSsHubPortReset(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n,
     XHCI_DBG_VALUE("hcd: SS hub port reset, hub/port/warm/link",
                    (hub->Index << 24) | (n << 16) | (kind << 8) |
                        XhciSsHubLinkState(status));
+    /* An older reset's change cleared first, so the one that ends this
+     * reset is this reset's (XhciSsHubResetProgress), as the USB 2.0 hub
+     * port's reset does. */
+    stale = change & (XHCI_SSHUB_C_PORT_RESET | XHCI_SSHUB_C_BH_PORT_RESET);
+    if (stale != 0 && hcdSsHubClear(hc, hub, n, stale) != stale) {
+        return 0;
+    }
     if (!hcdSsHubFeature(hc, hub, n, 1,
                          kind == XHCI_SSHUB_RESET_WARM
                              ? XHCI_SSHUB_FEAT_BH_PORT_RESET

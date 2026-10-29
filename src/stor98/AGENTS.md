@@ -76,9 +76,11 @@ they were written with; do not rewrite them. Apart from those, the rename record
     option there that is not marked decided.
 - **Decode the namespace correctly.** FLBAS selects an LBA format; the block size comes
   from that format's LBADS. Never misreport it.
-- **4 KiB-sector drives must work, not be refused** (maintainer decision). The OS always
-  sees 512-byte sectors; the driver translates, with read-modify-write for unaligned writes.
-  See docs/PLAN.md, "4 KiB-sector namespaces".
+- **4 KiB-sector drives must work, not be refused** (maintainer decision). A 4 KiB
+  namespace is never refused. The OS is to see 512-byte sectors, the driver translating
+  with read-modify-write for unaligned writes; that translation is planned (docs/PLAN.md
+  1.7, "4 KiB-sector namespaces"), not implemented, and until it lands the OS sees the
+  namespace's own block size (src/nsfmt.h).
 - **One source tree, all targets.** Windows 9x-specific code (VMM calls, PTE handling) is
   confined to the 9x build; amd64 uses compiler intrinsics, no inline assembly.
 - **Every fix gets a test in the emulator** (see docs/TESTING.md), including the 4 KiB

@@ -84,6 +84,7 @@ VOID HcdTmrStartReset(PHCD_CONTROLLER hc)
     t->Created = 0;
     t->ThreadObject = NULL;
     t->ThreadHandle = NULL;
+    t->Exited = 0;
     t->Calls = 0;
     t->ObsEpoch = 0;
     t->ObsPhase = XHCI_POLL_TMR_RELEASED;
@@ -324,6 +325,7 @@ static VOID NTAPI hcdTmrThread(PVOID Context)
         }
         XhciControllerLockRelease(ext, oldIrql);
     }
+    (VOID)InterlockedExchange((PLONG)&t->Exited, 1);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
@@ -432,19 +434,25 @@ VOID HcdTmrStopEarly(PHCD_CONTROLLER hc)
  * are dropped (every child D-IRP settled at its unlink), the idle callback
  * hand-off stopped and the completion workers drained, before the release
  * and outside the power gate. By its object, or the kept handle's
- * reference retried until had - never an event, which would leave the
- * thread's last instructions in this image unjoined. IRQL: PASSIVE_LEVEL.
+ * reference retried for a while - never an event, which would leave the
+ * thread's last instructions in this image unjoined. A reference still not
+ * had after HCD_JOIN_REF_TRIES falls back to the thread's exit flag and a
+ * short grace, which proves the context's last use but not that the thread
+ * has left the image (hcdSuspDoneJoin's 9x standing): better than a stop
+ * or remove wedged for good. IRQL: PASSIVE_LEVEL.
  */
 VOID HcdTmrJoin(PHCD_CONTROLLER hc)
 {
     PHCD_TMR t;
     LARGE_INTEGER due;
     KIRQL oldIrql;
+    ULONG tries;
 
     t = &hc->Tmr;
     if (!t->Created) {
         return;
     }
+    tries = 0;
     while (t->ThreadHandle != NULL) {
         if (NT_SUCCESS(ObReferenceObjectByHandle(t->ThreadHandle,
                                                  THREAD_ALL_ACCESS, NULL,
@@ -454,13 +462,29 @@ VOID HcdTmrJoin(PHCD_CONTROLLER hc)
             t->ThreadHandle = NULL;
             break;
         }
+        if (++tries >= HCD_JOIN_REF_TRIES) {
+            t->ThreadObject = NULL;
+            (VOID)ZwClose(t->ThreadHandle);
+            t->ThreadHandle = NULL;
+            break;
+        }
         HcdRelativeMs(&due, 10);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
     }
-    (VOID)KeWaitForSingleObject(t->ThreadObject, Executive, KernelMode,
-                                FALSE, NULL);
-    ObDereferenceObject(t->ThreadObject);
-    t->ThreadObject = NULL;
+    if (t->ThreadObject != NULL) {
+        (VOID)KeWaitForSingleObject(t->ThreadObject, Executive, KernelMode,
+                                    FALSE, NULL);
+        ObDereferenceObject(t->ThreadObject);
+        t->ThreadObject = NULL;
+    } else {
+        XhciLogNote(&hc->Hc, "poll.timer.join.flag", tries);
+        while (t->Exited == 0) {
+            HcdRelativeMs(&due, 1);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        }
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
     t->Created = 0;
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     t->Live = 0;
