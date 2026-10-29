@@ -1405,8 +1405,9 @@ Then, on the reviewed build:
   written again, no restart): placed again each time; which shape
   arrived, and which of this driver's filters acted, recorded.
 - **R8. Windows 7** x86 (and x64): the dock and the single enclosure
-  unchanged from today: `FilteredConfigVector` equal to
-  `BasicConfigVector`, no diagnostic entries, no bridge marks.
+  unchanged from today: the lists as 7 makes them (7 filters them
+  itself, so `FilteredConfigVector` is not `BasicConfigVector` there;
+  read in 45.12), no diagnostic entries, no bridge marks.
 - **R9. The single enclosure** (the ORICO model) on XP and 2000, hot and
   at a cold start: lists unchanged, the drive working (the regression
   leg).
