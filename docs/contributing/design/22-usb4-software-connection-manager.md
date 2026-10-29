@@ -1003,7 +1003,15 @@ one does:
    each PCIe and USB3 path): with one PCIe path at weight 1 and one USB3
    path at weight 2 in priority 3 (sections 6.8 and 6.9), and section
    6.9 step 2 keeping 1.5 Gb/s off the USB3 allocation for PCIe, it is
-   met on every link speed; nothing changes.
+   met on every link speed for the tunnels this driver accounts. Not
+   for a port carrying a preserved DisplayPort tunnel: DP paths sit in
+   a higher priority group (Spec 5.3.3.1, strict precedence over
+   priority 3), their consumption is not accounted here (section 6.9
+   step 2 already builds no USB3 tunnel beside one), and on a 10 Gb/s
+   single-lane link they could leave a new PCIe path less than 1.5
+   Gb/s. A new PCIe tunnel beside a preserved DP tunnel is still built,
+   as today, logged `u4.bw.dp-unaccounted`, and the floor there is not
+   verified: decision U32, the owner's to confirm.
 9. **No Host Interface Reset** of a version 2 host router (Spec Table
    12-14's recommendation): already so (section 2.2, section 4.4).
 10. **USB3 Gen T** is not supported: a USB3 Gen T adapter (Spec Table
@@ -1499,7 +1507,7 @@ Since every operation is optional, a blocked router still tunnels.
 | DROM Read | `24h` | names for the log | proceed unnamed ([linux] `usb4.c`: a host router may have no DROM) |
 | Buffer Allocation Request | `33h` | baMaxPCIe, baMaxUSB3 (data dwords: index bits 15:0, value bits 31:16; index 1 USB3, 4 PCIe, 5 host interface; [linux] `usb4.c` `usb4_switch_credits_init`) | the preference defaults to 32 credits on a bonded lane, 16 on a single lane ([linux] `tunnel.c` `tb_pci_init_credits`); either way the credits written are bounded by section 6.8's accounting |
 | Get PCIe Downstream Entry Mapping | `30h` | the tunnel port's routing id (section 6.3) | the pairing rule and section 7.6's other sources |
-| Get Capabilities | `31h` | the inherited capability state of section 6.4 (Capability Index 0); also section 6.2.2 item 3's read-back | routers this driver enumerated: all disabled, whatever the answer; a preserved router: adopted on success, none enabled on Not Supported, unknown on any failure, with section 6.4's consequences |
+| Get Capabilities | `31h` | the inherited capability state of section 6.4 (Capability Index 0); also section 6.2.2 item 3's read-back | routers this driver enumerated: all disabled, whatever the first answer, until a Set Capabilities, after which the read-back sets the state (enabled, plain, or unknown when the Set or the read-back is uncertain, section 6.2.2 item 3); a preserved router: adopted on success, none enabled on Not Supported, unknown on any failure, with section 6.4's consequences |
 | Set Capabilities | `32h` | nothing: Status only (Spec Table 8-55); since task 45.20 it enables the Sequence bit capability (section 6.2.2 item 3) | plain acknowledgements; a failure leaves the capability state unknown, as section 6.2.2 item 3 says |
 
 Nothing else is issued, and none of the five is needed for a tunnel.
@@ -3964,6 +3972,7 @@ from their first form, as each row says.
 | U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
 | U30 | USB4 version 2 routers (task 45.20) | run as version 2 by default: CMUV 2.0 written to a major 2 router this driver enumerates; the version 2 obligations keyed on the routers' own version (the Sequence bit capability enabled with a read-back, Extended Encapsulation on a PCIe tunnel between two version 2 routers, HiFi Enhanced Uni-Directional TMU on their links, a preserved CV never reconfigured, a preserved Gen 4 Link Recovery enable cleared); path entries written as two dwords on every router; `XhciCmUsb4V2` 0, a bench switch written by no INF, restores the version 1 run; owner to confirm, recommended over making version 1 the default because the Guide ties the CMUV to the router's version and Linux does the same | 6.2, 6.6, 12 |
 | U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; owner to confirm, recommended over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
+| U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; owner to choose: (a) build it, as now, recommended, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
 
 ## 16. What is open, and what is a risk
 
