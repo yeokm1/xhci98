@@ -833,6 +833,10 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
  * the top of what is on the PDO, passive until associated, and never a
  * failed AddDevice for want of a role (decision M7). */
 NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+/* A child filter's removal reference for the chain action (cm_filt.c,
+ * task 45.13): FALSE once its removal has begun. */
+BOOLEAN CmFilterTryHold(PCM_FILTER filter);
+VOID CmFilterUnhold(PCM_FILTER filter);
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp);
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 

@@ -2610,6 +2610,286 @@ static void test_learn_window(void)
              "window: NULL clock never due");
 }
 
+/* ---- chain ports (record 34 sections 3.1, 3.9 and 9.1; task 45.13) ---- */
+
+#define CH_UP       0x5UL
+#define CH_DOWN     0x6UL
+#define CH_ROOT     0x4UL
+#define CH_HPC      XHCI_TBT_SLOTCAP_HPC
+#define CH_PCP      XHCI_TBT_SLOTCAP_PCP
+
+/* A PCI Express bridge of `type`; `slotCap` 0 for no slot. */
+static MODEL_FN *chbr(ULONG b, ULONG d, ULONG fn, ULONG did, ULONG type,
+                      ULONG sec, ULONG sub, ULONG slotCap)
+{
+    MODEL_FN *f = mbridge(b, d, fn, 0x104C, did, sec, sub);
+
+    mpcie(f, 0x40, type, (type == CH_DOWN || type == CH_ROOT) ? 1UL : 0UL,
+          0, 0, slotCap, 0);
+    return f;
+}
+
+/*
+ * The emulator's Thunderbolt 3 chain as 45.13's leg r2 read it on q35: the
+ * tunnel port 02:01.0 (buses 4 to 7); the dock's upstream port 04:00.0
+ * (8232, buses 5 to 7); its fixed port 05:00.0 to the dock's NVMe on bus 6;
+ * its chain port 05:01.0 (8233, hot-plug, bus 7).
+ */
+static VOID chdock(ULONG chained)
+{
+    MODEL_FN *tp;
+
+    mreset();
+    ioreset();
+    tp = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 7);
+    mpcie(tp, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    chbr(4, 0, 0, 0x8232, CH_UP, 5, 7, 0);
+    chbr(5, 0, 0, 0x8233, CH_DOWN, 6, 6, 0);
+    mdev(6, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    chbr(5, 1, 0, 0x8233, CH_DOWN, 7, 7, CH_HPC);
+    if (chained) {
+        mdev(7, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    }
+}
+
+static XHCI_TBT_CHAIN_SET cs;
+
+static VOID test_chain_ports(VOID)
+{
+    MODEL_FN *f;
+    ULONG r;
+    ULONG d;
+
+    /* The dock, nothing chained, then something chained. */
+    chdock(0);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 2, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && !cs.Incomplete, "chain dock ok");
+    CHECK(cs.Count == 1 && cs.Over == 0, "chain dock one");
+    CHECK(cs.Port[0].Bdf == XHCI_TBT_BDF(5, 1, 0), "chain dock where");
+    CHECK(cs.Port[0].Id == 0x8233104CUL, "chain dock id");
+    CHECK(cs.Port[0].Secondary == 7 && cs.Port[0].Member == 2,
+          "chain dock sec member");
+    CHECK(cs.Port[0].Depth == 2 && cs.Port[0].Unpowered == 0,
+          "chain dock depth");
+    CHECK(model.Writes == 0, "chain reads only");
+    chdock(1);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 1 &&
+          cs.Port[0].Bdf == XHCI_TBT_BDF(5, 1, 0), "chain dock chained");
+    /* No descent below a candidate: the chained bus is never read. */
+    CHECK(model.MaxBusRead == 6, "chain no descent");
+
+    /* A power controller reading power off: flagged, recorded. */
+    chdock(0);
+    f = mfind(XHCI_TBT_BDF(5, 1, 0));
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, CH_HPC | CH_PCP);
+    put16(f, 0x40 + XHCI_TBT_PCIE_SLOTSTA, XHCI_TBT_SLOTCTL_PCC_OFF);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 1 &&
+          cs.Port[0].Unpowered == 1, "chain unpowered");
+    put16(f, 0x40 + XHCI_TBT_PCIE_SLOTSTA, 0);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Port[0].Unpowered == 0,
+          "chain powered");
+
+    /* A five-port switch with one hot-plug port (the TS3 Plus's shape),
+     * multi-function upstream port included. */
+    mreset();
+    ioreset();
+    f = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 0x0A);
+    mpcie(f, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    chbr(4, 0, 0, 0x8232, CH_UP, 5, 0x0A, 0);
+    for (d = 0; d < 5; d++) {
+        chbr(5, d, 0, 0x8233, CH_DOWN, 6 + d, 6 + d, d == 4 ? CH_HPC : 0);
+    }
+    mdev(5, 0, 1, 0x104C, 0x8240, 0x088000UL);
+    mmulti(5, 0);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 1, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 1 &&
+          cs.Port[0].Bdf == XHCI_TBT_BDF(5, 4, 0) &&
+          cs.Port[0].Secondary == 0x0A, "chain five ports");
+
+    /* None: an enclosure's NVMe directly on the member's bus. */
+    mreset();
+    ioreset();
+    f = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 4);
+    mpcie(f, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    mdev(4, 0, 0, 0x1B36, 0x0010, 0x010802UL);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 0, "chain none");
+
+    /* Not candidates: a hot-plug root-port type, an upstream port with a
+     * slot bit, a downstream port without Slot Implemented, a plain
+     * conventional bridge. */
+    mreset();
+    ioreset();
+    f = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 9);
+    mpcie(f, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    chbr(4, 0, 0, 0x8232, CH_UP, 5, 9, CH_HPC);
+    chbr(5, 0, 0, 0x8233, CH_ROOT, 6, 6, CH_HPC);
+    f = mbridge(5, 1, 0, 0x104C, 0x8233, 7, 7);
+    mpcie(f, 0x40, CH_DOWN, 0, 0, 0, CH_HPC, 0);
+    mbridge(5, 2, 0, 0x104C, 0x8233, 8, 9);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 0, "chain not cand");
+
+    /* The count bound: six hot-plug ports, four recorded. */
+    mreset();
+    ioreset();
+    f = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 0x0B);
+    mpcie(f, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    chbr(4, 0, 0, 0x8232, CH_UP, 5, 0x0B, 0);
+    for (d = 0; d < 6; d++) {
+        chbr(5, d, 0, 0x8233, CH_DOWN, 6 + d, 6 + d, CH_HPC);
+    }
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == XHCI_TBT_CHAIN_MAX &&
+          cs.Over == 2, "chain count bound");
+
+    /* The level bound: five bridges below the member, a hot-plug port at
+     * level 6 is found, one at level 7 is not walked. */
+    mreset();
+    ioreset();
+    f = mbridge(2, 1, 0, 0x8086, 0x15C0, 4, 0x20);
+    mpcie(f, 0x40, CH_DOWN, 1, 0, 0, CH_HPC, 0);
+    for (d = 0; d < 5; d++) {
+        chbr(4 + d, 0, 0, 0x8232, CH_UP, 5 + d, 0x20, 0);
+    }
+    chbr(9, 0, 0, 0x8233, CH_DOWN, 0x0A, 0x0A, CH_HPC);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 1 &&
+          cs.Port[0].Depth == XHCI_TBT_CHAIN_LEVELS, "chain level 6");
+    f = mfind(XHCI_TBT_BDF(9, 0, 0));
+    f->Cfg[0x40 + 2] = (UCHAR)(0x2UL | (CH_UP << 4));
+    f->Cfg[0x19] = 0x0A;
+    chbr(0x0A, 0, 0, 0x8233, CH_DOWN, 0x0B, 0x0B, CH_HPC);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 0 &&
+          model.MaxBusRead == 9, "chain level 7 not walked");
+
+    /* A bridge numbered outside the member's range is not walked. */
+    chdock(0);
+    f = mfind(XHCI_TBT_BDF(5, 0, 0));
+    f->Cfg[0x19] = 0x30;
+    f->Cfg[0x1A] = 0x30;
+    mdev(0x30, 0, 0, 0x104C, 0x8233, 0x060400UL);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_COMPLETE && cs.Count == 1 &&
+          model.MaxBusRead == 5, "chain out of range");
+
+    /* The member unnumbered, all ones, unread. */
+    chdock(0);
+    f = mfind(XHCI_TBT_BDF(2, 1, 0));
+    f->Cfg[0x19] = 0;
+    f->Cfg[0x1A] = 0;
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_MEMBER, "chain member unnumbered");
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(3, 0, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_MEMBER, "chain member absent");
+    chdock(0);
+    model.FailBdf = XHCI_TBT_BDF(2, 1, 0);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.FailBdf == XHCI_TBT_BDF(2, 1, 0), "chain member unread");
+
+    /* A failed read, a failed capability walk, a retry status. */
+    chdock(0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE && cs.Incomplete &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_READ &&
+          cs.FailBdf == XHCI_TBT_BDF(5, 1, 0), "chain read fails");
+    chdock(0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40;
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_CAP, "chain cap fails");
+    chdock(0);
+    model.FailBdf = XHCI_TBT_BDF(5, 1, 0);
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTCAP;
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_READ, "chain slot cap fails");
+    chdock(0);
+    f = mfind(XHCI_TBT_BDF(5, 0, 0));
+    put16(f, 0x00, 0x0001);
+    r = XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, &cs);
+    CHECK(r == XHCI_TBT_CHAIN_INCOMPLETE &&
+          cs.Why == XHCI_TBT_CHAIN_WHY_RETRY &&
+          cs.FailBdf == XHCI_TBT_BDF(5, 0, 0), "chain retry status");
+
+    /* Parameters. */
+    CHECK(XhciTbtChainPorts(NULL, XHCI_TBT_BDF(2, 1, 0), 0, &cs) ==
+          XHCI_TBT_CHAIN_BAD_PARAM, "chain no io");
+    CHECK(XhciTbtChainPorts(&io, XHCI_TBT_BDF(2, 1, 0), 0, NULL) ==
+          XHCI_TBT_CHAIN_BAD_PARAM, "chain no out");
+}
+
+static VOID test_chain_owed(VOID)
+{
+    XHCI_TBT_CHAIN_OWED owed[XHCI_TBT_CHAIN_MAX];
+    ULONG i;
+    ULONG n;
+
+    for (i = 0; i < sizeof(owed) / sizeof(ULONG); i++) {
+        ((PULONG)owed)[i] = 0;
+    }
+    n = XHCI_TBT_CHAIN_MAX;
+    /* Owed at 1000 for the device of table entry 5: a delayed
+     * enumeration retried, still the first time. */
+    CHECK(XhciTbtChainOwe(owed, n, 5, 7, XHCI_TBT_CHAIN_MISS_NONE,
+                          1000) == 0, "owe first");
+    CHECK(owed[0].Used && owed[0].Key == 5 && owed[0].Since == 1000 &&
+          owed[0].Serial == 7 && owed[0].DoneCount == 0, "owe kept");
+    /* One candidate done of two: the second stays owed. */
+    XhciTbtChainMark(&owed[0], XHCI_TBT_BDF(5, 1, 0));
+    XhciTbtChainMark(&owed[0], XHCI_TBT_BDF(5, 1, 0));
+    CHECK(owed[0].DoneCount == 1 &&
+          XhciTbtChainDone(&owed[0], XHCI_TBT_BDF(5, 1, 0)) &&
+          !XhciTbtChainDone(&owed[0], XHCI_TBT_BDF(5, 2, 0)),
+          "owe one done");
+    CHECK(XhciTbtChainOwe(owed, n, 5, 7, XHCI_TBT_CHAIN_MISS_FILTER,
+                          5000) == 0 && owed[0].Since == 1000 &&
+          owed[0].DoneCount == 1 &&
+          owed[0].Missing == XHCI_TBT_CHAIN_MISS_FILTER, "owe retried");
+    CHECK(!XhciTbtChainOwedExpired(&owed[0], 10999), "owe not expired");
+    CHECK(XhciTbtChainOwedExpired(&owed[0], 11000), "owe expired 10 s");
+    /* A new tunnel for the same device: the clock restarts, nothing done. */
+    CHECK(XhciTbtChainOwe(owed, n, 5, 8, XHCI_TBT_CHAIN_MISS_NONE,
+                          9000) == 0 && owed[0].Since == 9000 &&
+          owed[0].Serial == 8 && owed[0].DoneCount == 0, "owe new serial");
+    CHECK(!XhciTbtChainOwedExpired(&owed[0], 11000), "owe restarted");
+    /* Two children at the same link and depth (Titan Ridge routes 0303
+     * and 0503) are two keys: neither replaces the other. */
+    CHECK(XhciTbtChainOwe(owed, n, 6, 1, 0, 0) == 1, "owe second");
+    CHECK(owed[0].Key == 5 && owed[1].Key == 6, "owe two children");
+    CHECK(XhciTbtChainOwe(owed, n, 7, 1, 0, 0) == 2, "owe third");
+    CHECK(XhciTbtChainOwe(owed, n, 8, 1, 0, 0) == 3, "owe fourth");
+    CHECK(XhciTbtChainOwe(owed, n, 9, 1, 0, 0) == n, "owe full");
+    owed[1].Used = 0;
+    CHECK(XhciTbtChainOwe(owed, n, 9, 1, 0, 0) == 1 &&
+          owed[1].DoneCount == 0, "owe reused");
+    /* The done list's bound. */
+    for (i = 0; i < 40; i++) {
+        XhciTbtChainMark(&owed[2], XHCI_TBT_BDF(5, i & 31, i >> 5));
+    }
+    CHECK(owed[2].DoneCount == XHCI_TBT_CHAIN_MAX * XHCI_TBT_MAX_TUNNELS,
+          "owe done bound");
+    /* The millisecond counter wrapping. */
+    CHECK(XhciTbtChainOwe(owed, n, 5, 9, 0, 0xFFFFF000UL) == 0,
+          "owe near wrap");
+    CHECK(!XhciTbtChainOwedExpired(&owed[0], 0x00001000UL), "owe wrap 8 s");
+    CHECK(XhciTbtChainOwedExpired(&owed[0], 0x00002000UL), "owe wrap 12 s");
+    CHECK(!XhciTbtChainOwedExpired(NULL, 0), "owe null");
+    CHECK(!XhciTbtChainDone(NULL, 0), "owe done null");
+    XhciTbtChainMark(NULL, 0);
+    CHECK(XhciTbtChainOwe(NULL, n, 5, 9, 0, 0) == n, "owe no table");
+}
+
 int main(void)
 {
     test_decoders();
@@ -2629,6 +2909,8 @@ int main(void)
     test_named();
     test_learned();
     test_learn_window();
+    test_chain_ports();
+    test_chain_owed();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures;
 }

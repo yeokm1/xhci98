@@ -1,7 +1,8 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 5, 2026-10-29, task 45.17: section 4.6, the client's
-approval order as coded. Revision 4, 2026-10-27, before code, reviewed
+Status: revision 6, 2026-10-30, task 45.13: section 3.9, the NT chain
+action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
+client's approval order as coded. Revision 4, 2026-10-27, before code, reviewed
 and revised: the
 Thunderbolt 3 parent's LTSSM never interpreted, at the idle poll and at
 every verification; the kid's state table matched to the parent's three
@@ -659,6 +660,114 @@ useful on a hot-plugged dock.
 | `src/cm/cm_status.c`, `cm_statb.h` | kind 3 entries filled; chain counters |
 | `xhcitr\` (record 25) | the chained unit nested under its parent's |
 | `test\test_tbt_topo.c`, `test_tbt_brnum.c`, `test_cm_nvlink.c`, `test_cm_marks.c`, `test_cm_ports.c` | section 9.1 |
+
+### 3.9 The NT chain action, as coded (task 45.13)
+
+Sections 3.1 and 3.2 made exact for the NT targets' first cut. What 45.13
+leaves for later is listed at the end.
+
+- **What 7 does without it** [run, 45.13's leg r2]: on 7 x86 with the
+  Thunderbolt 3 topology, the dock present at power-on and the chained
+  device hot-plugged, 7 found, numbered and started the chained NVMe
+  itself (the chain port `05:01.0`, a hot-plug downstream port, its
+  secondary bus 7), before any chain action existed; unplug and re-plug
+  of the child, and the dock's unplug with the child attached, were
+  clean. So on Vista and later the action is a harmless second request
+  beside native hot plug (section 3.2's last item); it is for 2000 and
+  XP, whose PCI driver does not rescan a started downstream port's bus
+  by itself (section 3.2).
+- **The walk** (`XhciTbtChainPorts`, `tbt_topo.c`, pure). From one
+  member's secondary bus, depth first, inside the member's secondary
+  to subordinate range read from its header at the walk, at most
+  `XHCI_TBT_BRNUM_MAX_DEPTH` bridge levels below the member. Every
+  device 0 to 31 of a bus, functions 1 to 7 where function 0's header
+  says multi-function. A function is the candidate of section 3.1 when
+  it is type 1 with a PCI Express capability of Device/Port Type
+  downstream port, Slot Implemented, and Slot Capabilities Hot-Plug
+  Capable. A candidate is recorded with its location, its identity
+  dword, its secondary bus, the member's index and its bridge depth
+  below the member, and, when Slot Capabilities report a Power
+  Controller and Slot Control's Power Controller Control bit reads 1
+  (off), a flag (logged, `cm.chain.port-unpowered`; acted on all the
+  same). The walk does not descend below a candidate (one level of chain
+  ports, section 11), and descends below every other bridge whose
+  secondary bus is above its own bus and inside the member's range, each
+  bus at most once. `XHCI_TBT_CHAIN_MAX` (4) candidates per walk; a
+  fifth sets an overflow flag (logged, `cm.chain.over`) and is not
+  recorded. Outcomes: COMPLETE; INCOMPLETE when a configuration access
+  fails, a vendor reads 0001h (Configuration Request Retry Status), a
+  capability walk fails, or the member's own header reads all ones or
+  unnumbered. No action acts on an incomplete walk's candidates except
+  through the member's invalidation.
+- **The action** (`cm_reenum.c`, NT filter route only). After
+  `CmReenumAction`'s own handling of a `TUNNEL_UP` or a `TUNNEL_DOWN`
+  whose `Depth` is 2 or more (which already invalidates every active
+  member, so section 3.2's member fallback is paid there), the thread
+  walks every active member this domain owns (under the firmware
+  connection manager no member is named; a named member alone once Part
+  3 names one). For each recorded candidate not yet done for this action
+  it looks up the child filter on that candidate's PDO by location in
+  the attachment list (`CM_KIND_CHILD`, listed, located at the
+  candidate's bus, device and function, not surprise-removed) and, under
+  the list's lock, takes that filter's removal reference (`Removing` and
+  `Outstanding` under the filter's own lock, refused once its removal
+  has begun; the list's lock, then the filter's, an order no path
+  reverses), so the call is made before the filter has seen
+  `IRP_MN_REMOVE_DEVICE`, whose completion waits for the release; then,
+  without the list's lock, `IoInvalidateDeviceRelations(pdo,
+  BusRelations)`, the reference released, the candidate recorded done
+  (counted `cm.chain.invalidate`, logged with the action's kind and
+  depth and the candidate's location). The action is done when every
+  walk was complete, at least one candidate was found, and every
+  candidate found is done.
+- **A chained tunnel down** (section 3.2's second item), and **a
+  reconciliation** (`RESYNC`: an action that did not fit the queue, a
+  disconnect that matched no entry; not the containment's or the loss's,
+  whose publication mode exposes nothing), are tried once, whatever the
+  depth for a reconciliation, which names none: the chain ports'
+  invalidation lets 2000 and XP report a chained device missing; a chain
+  port found and not done is logged (`cm.chain.down.missed`, with the
+  action's kind) and not owed (the member was invalidated, and a later
+  up of the same device is its own action).
+- **Owed.** An up not done (no candidate under any member, an
+  incomplete walk, or a candidate with no child filter yet) is kept
+  owed: a copy of the action, its first time, what was missing and the
+  candidates already done, in one of `CM_CHAIN_OWED_MAX` (4) entries per
+  domain keyed by the chained device's identity in the connection
+  manager (the action's `Slot`: the firmware connection manager's table
+  entry; the software one's port), never by link and depth, which two
+  children on one Titan Ridge link share. A newer tunnel of the same
+  device (another `Serial`) restarts the entry; a fifth distinct device
+  is tried once, not kept, and counted. Each pass of the thread
+  (`CmReenumService`, which runs at every exposure and every idle tick)
+  tries each owed entry again, invalidating only the candidates not yet
+  done, so a child filter's completed `BusRelations` is acted on at the
+  next pass. An entry is cancelled when the action is no longer live
+  (`CmNhiActionLive`: its table entry gone, replaced, or under the
+  software connection manager its port's generation changed - the
+  parent's or the child's disconnect, or a new occupancy), at a
+  host-interface loss, and at the domain's stop. At 10 s from its first
+  time it is dropped, checked before any retry of that pass, and counted:
+  `cm.chain.nofilter` when a candidate had no child filter (2000 and XP after a never-seen dock's first-time
+  bridge installs, section 2.3), else `cm.chain.owed-expired`.
+- **Counters and log labels** (section 8's families): `cm.chain.ports`
+  (candidates recorded, per walk), `cm.chain.invalidate`,
+  `cm.chain.nofilter`, `cm.chain.owed`, `cm.chain.owed-expired`,
+  `cm.chain.owed-full`, `cm.chain.incomplete`,
+  `cm.chain.port-unpowered`, `cm.chain.over`, `cm.chain.cancelled`,
+  `cm.chain.down.missed`. No registry value and no status-record field:
+  the counters are in the log.
+- **Left in 45.13** (the task stays open; this record's sections are
+  their design): the correspondence learning (section 3.1; until then the
+  action acts on every candidate, which section 3.1 calls harmless); the
+  chained unit's `Removable`, marks and eject on NT (section 3.7; until
+  then a chained device is removed with the first device's unit, whose
+  eject takes the subtree, and is not offered on its own); the
+  connection manager's per-tunnel ownership, landing bridges, names and
+  generations (section 3.5 and Q4; no statement is made for a chained
+  drive, and the firmware connection manager states nothing on q35, so
+  until then a chained drive is held by Stor98's own gone deadline,
+  MD-1); the status record's kind 3 entries. The 9x half is task 45.14.
 
 ## 4. Part 2: the Thunderbolt 3 firmware connection manager's chain
 
