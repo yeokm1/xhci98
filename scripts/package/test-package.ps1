@@ -40,6 +40,14 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
+# The fixtures are git repositories (the driver pack, the free set, the
+# import's two trees, the records' commits): with no git to run, the
+# suite cannot read what it means to and fails here, at once, saying why
+# (task 45.30).
+if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+    Write-Err "packager self-tests FAILED: git is not on PATH, and the fixtures these tests build are git repositories. Put git on PATH and run again."
+    exit 1
+}
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"

@@ -2506,8 +2506,14 @@ function Get-DefaultCutX64Tree {
 function Invoke-CutTreeGit {
     # git in -At for Initialize-CutX64Tree; throws with git's own words.
     param([string]$At, [string[]]$GitArgs)
+    # With no git to run, $LASTEXITCODE would still be some earlier
+    # program's, and a failure would read as git's success.
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH: tree B is made and moved with git; put git on PATH and run again."
+    }
     $eap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
     try { $o = (& git -C $At @GitArgs 2>&1 | Out-String) } finally { $ErrorActionPreference = $eap }
     if ($LASTEXITCODE -ne 0) { throw ("git {0} in '{1}' failed (exit {2}): {3}" -f ($GitArgs -join " "), $At, $LASTEXITCODE, $o.Trim()) }
     return $o.Trim()
@@ -2554,7 +2560,8 @@ function Initialize-CutX64Tree {
         $b = Get-GitTreeState -Repo $X64Tree
         $eap = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        try { & git -C $X64Tree symbolic-ref -q HEAD 2>&1 | Out-Null; $onBranch = ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $eap }
+        $global:LASTEXITCODE = 128
+        try { & git -C $X64Tree symbolic-ref -q HEAD 2>&1 | Out-Null; $onBranch = ($LASTEXITCODE -ne 1) } finally { $ErrorActionPreference = $eap }
         if ($b.Head -eq "none" -or $b.Dirty -or $onBranch) {
             Write-Warn ("tree B ({0}) is {1}: left as it is, neither moved nor linked" -f $X64Tree,
                         $(if ($b.Head -eq "none") { "not readable by git" } elseif ($onBranch) { "on a branch" } else { "not clean" }))

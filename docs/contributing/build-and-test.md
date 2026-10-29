@@ -3548,6 +3548,86 @@ reviewed and revised).
   each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
   the build's two tables), which `build-driver.cmd` runs before the block.
 
+#### The INF gate's self-tests, in process and skipped when unchanged (roadmap-usb4 task 45.30)
+
+`scripts\inf-gate\test-inf-checks.ps1` ran `check-inf.ps1` as a new
+`powershell.exe` for every case, several hundred of them, and took 56 of a
+gated build's 60 minutes on 2026-10-29 (task 45.3's readings, a loaded
+host). The owner chose both ways out (2026-10-29). This is the design,
+settled before the code (reviewed and revised).
+
+- **In process.** Each case calls the gate as `& $gate -InfPath ... *>&1`
+  in the self-test's own process, not through `powershell.exe -File`. A
+  script invoked with `&` runs in a new script scope every time, so its
+  `$script:` variables (the failure and warning lists among them), its
+  functions, `Set-StrictMode` and `$ErrorActionPreference` are its own for
+  that call and gone after it: each case starts from the gate's own
+  initial state, and nothing a case sets reaches the next (what does
+  persist in one process - loaded assemblies, the error history - the gate
+  does not use; it adds no type and changes no culture). The arguments the
+  cases give as `powershell -File` words (`-Arch amd64`,
+  `-AllowUnpaddedDriverVer`) are turned into a hashtable splat, a name
+  with its value or a switch, since an array splatted on a script binds by
+  position. `exit` in the gate ends the gate, not the self-test, and sets
+  the global `$LASTEXITCODE`; the caller sets `$global:LASTEXITCODE` to 0
+  first and reads it back the same way, so a gate that ends without
+  `exit` reads as 0, and a terminating error that escapes the gate (an
+  exception, a parameter that does not bind) is caught and read as exit 1
+  with its message in the output, as the child process printed it and
+  exited 1.
+  `*>&1` takes every stream, `Write-Host`'s among them, into the text the
+  assertions read. `check-inf.ps1` itself does not change: `build-driver.cmd`,
+  `make-package.ps1` and every other caller still run it with
+  `powershell -File` exactly as before, and its exit codes and output are
+  the same either way. The one case that is about the process stays a
+  process: "a relative `-ManifestPath` after `Set-Location`", which starts
+  a `powershell.exe` from another directory on purpose. (Reshaping the
+  gate into a function returning its verdict was the other way; it would
+  mean rewriting a 3,600-line script's top level and its every `exit`, for
+  the same isolation a script scope already gives.)
+- **Skipped when nothing it reads has changed.** The self-test first
+  hashes (SHA-256) every file it and the gate read: the two scripts and
+  everything else under `scripts\inf-gate\` (the footprints, allowlists and
+  the other gates' files are there), `scripts\common.ps1`,
+  `scripts\test-harness.ps1`, every file directly in `src\` (the two INFs
+  and what the gate reads beside them: `xhci_version.h`, `xhci98.rc`,
+  `xhci_hub.h` and the rest) and `xhcitr\xhcitr.manifest`, each by its
+  path under the repository and its content, into one digest with the
+  PowerShell version's. When `out\inf-selftest-pass.txt` holds that digest
+  and this tree's full path, with its time and count - every field there,
+  or the record is no record - it prints one line, that it was skipped
+  and why (the time and count of the passing run, the digest), and exits
+  0. Otherwise it deletes the record before anything runs, runs the whole
+  suite and, if every check passed and the digest taken again at the end
+  is the one it began with (a file changed during the run makes it run
+  again next time), writes the record to a temporary name and moves it
+  into place. A file added, removed or changed in that set changes the
+  digest. It assumes no one edits those files while a run is reading
+  them; the end-of-run digest catches an edit that is not undone. `-Force`
+  runs it regardless, and so does `XHCI98_FULL_SELFTESTS=1`, which
+  `build-driver.cmd all` sets - `all` is what every cut builds, through
+  `cut-builds.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
+  `cut-builds.ps1` sets for its builds too, so a cut always runs it in
+  full (`make-release.ps1` runs the gate, not its self-tests). An
+  ordinary `build-driver.cmd` (`both`, or one flavour) takes the skip.
+  `out\` is git-ignored, so the record never reaches a commit or a clone.
+- **Not to the other gates.** `check-uas-inf.ps1`, `check-cm-inf.ps1`,
+  `check-stor98-inf.ps1` and `test-flavour-rules.ps1` start no process per
+  case and take seconds; they keep running in full.
+- **Checked by** the self-test itself: the in-process call's exit code,
+  output and isolation (two calls in a row, the second not seeing the
+  first's failures, and a parameter that does not bind read as exit 1),
+  and the skip's digest moving when one file in the set changes, staying
+  when a file outside it does, and the record written only after a pass.
+- **A self-test that cannot run says so.** A gated build's self-tests that
+  need git (the packager's builds fixture repositories) fail at once,
+  naming git, when it is not on `PATH`, and the two places the cut's
+  launcher read `$LASTEXITCODE` after a `git` that may not have run
+  (making and moving tree B) refuse instead of reading an earlier
+  program's code. A build whose packager self-test failed this way was
+  reported (2026-10-29) to have ended with exit 0; that could not be
+  reproduced: the self-test exits 1 and the build stops at its failure.
+
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, the
