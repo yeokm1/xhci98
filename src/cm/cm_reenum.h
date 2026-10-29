@@ -151,6 +151,7 @@
 #include "tbt_icm.h"
 #include "tbt_topo.h"
 #include "cm_marks.h"
+#include "cm_breq.h"
 
 /* cm.h's CM_NHI and CM_FILTER; the calls take them by their structure tags
  * so that this header stands before cm.h's definitions. */
@@ -742,6 +743,46 @@ VOID CmRegIdCounters(PULONG given, PULONG nomem, PULONG over, PULONG deep,
 ULONG CmRegIrqWire(struct _CM_FILTER *child, ULONG address, PULONG why,
                    PULONG fnBdf);
 VOID CmRegIrqNote(struct _CM_FILTER *f, const char *label, ULONG value);
+
+/*
+ * Design record 33 (task 45.12), a hot-added bridge's requirements on NT
+ * 5.x:
+ *
+ * CmRegBreqFind     the ancestry of `child` under the list's lock
+ *                   (Parent, else Bridge, as CmRegIrqWire walks it): TRUE
+ *                   when it meets an active member of a domain's set above
+ *                   its own device within CM_TUNNEL_DEPTH_MAX levels, with
+ *                   *parent the location of the first filter up (the
+ *                   bridge whose secondary bus the child's device is on;
+ *                   FFFFh when it is not located), *port the member's
+ *                   location and *mode that domain's XhciCmBridgeReq.
+ *                   FALSE when none is met (the child is no dock's).
+ *                   <= DISPATCH_LEVEL.
+ * CmRegBreqSnap     the snapshot of record 33 section 5.2 for the bridge
+ *                   whose DevicePropertyAddress is `address`, below the
+ *                   bridge at `parent`: *bdf its location (FFFFh when the
+ *                   parent's secondary bus cannot be read, the snapshot
+ *                   then unread) and *bus its bus-number register (18h),
+ *                   for the log. Reads only. PASSIVE_LEVEL (HalGetBusData).
+ * CmRegBreqPost     one attempt's entry (CmBreqEntry's seven dwords `e`)
+ *                   added to the ring of the domain whose active member is
+ *                   `port`, under its BrDiagLock, with its log lines and
+ *                   counts; `written` the lengths the plan wrote, for
+ *                   cm.breq.list. <= DISPATCH_LEVEL.
+ * CmRegBreqStarted  the start of a bridge whose list was rewritten:
+ *                   recorded on the newest entry of `bdf` in `port`'s
+ *                   domain, logged and counted. <= DISPATCH_LEVEL.
+ * CmRegBreqNoBridge a child with no active member above (counted on the
+ *                   first domain on the filter route). <= DISPATCH_LEVEL.
+ */
+BOOLEAN CmRegBreqFind(struct _CM_FILTER *child, PULONG parent, PULONG port,
+                      PULONG mode);
+VOID CmRegBreqSnap(ULONG parent, ULONG address, PCM_BREQ_SNAP s, PULONG bdf,
+                   PULONG bus);
+VOID CmRegBreqPost(ULONG port, const ULONG *e, const CM_BREQ_PLAN *plan,
+                   ULONG bus);
+VOID CmRegBreqStarted(ULONG port, ULONG bdf, BOOLEAN ok, NTSTATUS status);
+VOID CmRegBreqNoBridge(struct _CM_FILTER *child);
 
 /* Before a BusRelations request is passed down: the bridge's tunnel-change
  * sequence, handed to CmRegRelations with the answer. PASSIVE_LEVEL. */
