@@ -4844,6 +4844,12 @@ Windows.
 
 ### 19.8 Open, and the owner's
 
+Decided by the owner on 2026-10-29: Q1, all three generations in this
+task - Alpine and Titan Ridge, Falcon Ridge, Light and Cactus Ridge -
+each after its emulator model (Q4); Q2 (a), the systems Apple supports
+there first; Q3 (a), DisplayPort out; Q4 yes, a Thunderbolt-host
+profile in `usb4-emu` before any code. The options as they were put:
+
 - **Q1, the first host.** Which Mac comes to the bench first decides the
   order of the code: (a) an Alpine or Titan Ridge Mac (Thunderbolt 3:
   section 8 already drives such routers as device routers, so the host
