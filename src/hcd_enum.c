@@ -4778,13 +4778,15 @@ static ULONG hcdRkeepClaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return ok;
 }
 
-/* A kept device whose restore failed, on its root port: its temporary
+/* A kept device whose restore failed, on its root port (`taken`: the
+ * controller is halted for a reset, so no command is sent and a slot the
+ * restore enabled is left to that reset's HCRST): its temporary
  * rings released, then today's departure - its slot given back when the
  * restore had enabled one (HCD_GO_UNPLUG), else none to give (taken by
  * HCRST) - its PDOs reported missing and its URBs completed as any
  * device's, and the machine where a disconnect puts it, so the port's
  * next inspection enumerates what is there afresh (K7). Thread only. */
-static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p)
+static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG taken)
 {
     XHCI_ENUM_EVENT event;
     XHCI_ENUM_ACTION act;
@@ -4802,8 +4804,9 @@ static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p)
     }
     hcdConnectGen(hc, p);
     p->AwaitSerial = hcdSubtreeGo(hc, p,
-                                  dev->SlotId != 0 ? HCD_GO_UNPLUG
-                                                   : HCD_GO_TAKEN,
+                                  (dev->SlotId != 0 && !taken)
+                                      ? HCD_GO_UNPLUG
+                                      : HCD_GO_TAKEN,
                                   1);
     hcdEventInit(&event, XHCI_ENUM_EV_DISCONNECT, 1);
     (VOID)XhciEnumStep(&p->Enum, &event, &act);
@@ -4817,8 +4820,9 @@ static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p)
  * device descriptor, the whole configuration descriptor and - for a
  * storage device - the serial number read and compared with the record's;
  * then the pipes' endpoints, configuration and alternates replayed
- * (HcdCfgResumeReplay), and the port's change bits the re-initialization
- * left acknowledged, so the port's inspection takes the device as present.
+ * (HcdCfgResumeReplay). The port's change bits are acknowledged once, after
+ * the reset, so its inspection takes the device as present; a connection
+ * or enable change after that fails the restore.
  * Returns 0 on any failure, with the device as the failure left it for
  * hcdRkeepDrop. Thread only, powered.
  */
@@ -4866,6 +4870,20 @@ static ULONG hcdRkeepRestore(PHCD_CONTROLLER hc, PHCD_PORT p)
         return 0;
     }
     p->LinkPsiv = speed;
+    /* What the re-initialization and this reset raised is acknowledged now,
+     * before the device is identified: a connection change seen after
+     * this is a device that left or came during the restore, which fails
+     * it (below). */
+    portsc = XhciReadPortsc(ext, p->PortId);
+    if (portsc == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    if ((portsc & XHCI_PORTSC_CHANGE_MASK) != 0) {
+        XhciWritePortsc(ext, p->PortId,
+                        XhciPortscClearChanges(portsc,
+                                               portsc &
+                                                   XHCI_PORTSC_CHANGE_MASK));
+    }
 
     code = 0;
     if (XhciTrbEnableSlot(&trb, 0) == XHCI_RING_OK) {
@@ -4945,13 +4963,17 @@ static ULONG hcdRkeepRestore(PHCD_CONTROLLER hc, PHCD_PORT p)
     if (!HcdCfgResumeReplay(hc, dev)) {
         return 0;
     }
+    /* Still the device that was identified: connected and enabled, with no
+     * connection or enable change since the acknowledgement above. A change
+     * is left for the port's inspection, which enumerates what is there
+     * once the drop has taken this record. */
     portsc = XhciReadPortsc(ext, p->PortId);
-    if (portsc != 0xFFFFFFFFUL &&
-        (portsc & XHCI_PORTSC_CHANGE_MASK) != 0) {
-        XhciWritePortsc(ext, p->PortId,
-                        XhciPortscClearChanges(portsc,
-                                               portsc &
-                                                   XHCI_PORTSC_CHANGE_MASK));
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        (portsc & XHCI_PORTSC_PED) == 0 ||
+        (portsc & (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC)) != 0) {
+        XHCI_DBG_VALUE("hcd: resume keep, port changed meanwhile, PORTSC",
+                       portsc);
+        return 0;
     }
     XHCI_DBG_VALUE("hcd: resume keep, restored, port/slot",
                    (p->PortId << 8) | slotId);
@@ -4997,8 +5019,25 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
             hc->ResumeKeepRefused++;
         }
     }
-    /* As hcdDropAll: every departing device drained before any is waited
-     * out; a kept one is not drained, its URBs are its quiet's. */
+    /* The kept devices off their old slots, so nothing below frees them
+     * and no command names a slot HCRST took; then every device drained -
+     * a kept one by its quiet, a departing one as hcdDropAll drains it -
+     * before any is waited out (a request waiting for map registers can
+     * depend on another device's). */
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (!keep[i]) {
+            continue;
+        }
+        dev = hc->Ports[i].Device;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (dev->SlotId != 0 && dev->SlotId <= XHCI_MAX_SLOTS &&
+            hc->SlotDevice[dev->SlotId] == dev) {
+            hc->SlotDevice[dev->SlotId] = NULL;
+        }
+        dev->SlotId = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        HcdCfgResumeQuiet(hc, dev);
+    }
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
         dev = hc->Ports[i].Device;
         if (dev != NULL && !keep[i]) {
@@ -5019,20 +5058,10 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
             (VOID)HcdIoDeviceDrain(hc, dev);
         }
     }
-    /* The kept devices off their old slots, so nothing below frees them
-     * and no command names a slot HCRST took. */
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
-        if (!keep[i]) {
-            continue;
+        if (keep[i]) {
+            HcdCfgResumeSettle(hc, hc->Ports[i].Device);
         }
-        dev = hc->Ports[i].Device;
-        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
-        if (dev->SlotId != 0 && dev->SlotId <= XHCI_MAX_SLOTS &&
-            hc->SlotDevice[dev->SlotId] == dev) {
-            hc->SlotDevice[dev->SlotId] = NULL;
-        }
-        dev->SlotId = 0;
-        XhciControllerLockRelease(&hc->Hc, oldIrql);
     }
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
         if (!keep[i]) {
@@ -5060,16 +5089,12 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
     hc->SlotSweep = 0;
     hc->ScratchTainted = 0;
     hc->ScratchHeld = 0;
-    /* Quiet, then claim, every kept device before any is restored: a
+    /* Every kept device's rings claimed before any is restored: a
      * restore's Enable Slot and the pipes it configures must not meet a
      * ring another kept device still has to claim. */
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
-        if (!keep[i]) {
-            continue;
-        }
-        dev = hc->Ports[i].Device;
-        HcdCfgResumeQuiet(hc, dev);
-        if (!hcdRkeepClaim(hc, dev, HCD_RKEEP_REF_BASE + i)) {
+        if (keep[i] &&
+            !hcdRkeepClaim(hc, hc->Ports[i].Device, HCD_RKEEP_REF_BASE + i)) {
             keep[i] = 2;
         }
     }
@@ -5081,12 +5106,11 @@ static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
             hc->ResumeKept++;
             continue;
         }
-        if (hcdHalted(hc)) {
-            /* A command that failed asked for the controller's reset: its
-             * invalidation takes what is left, kept or not. */
-            break;
-        }
-        hcdRkeepDrop(hc, &hc->Ports[i]);
+        /* A command that failed asked for the controller's reset: from
+         * then on every kept device left is dropped with no command, so
+         * none is left slotless with paused pipes should that reset be
+         * refused (a recovery window spent). */
+        hcdRkeepDrop(hc, &hc->Ports[i], hcdHalted(hc));
     }
     XhciLogNote(&hc->Hc, "resume.keep",
                 ((hc->ResumeKept & 0xFFUL) << 16) |

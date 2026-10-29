@@ -4941,15 +4941,30 @@ cleanup:
 
 /*
  * The kept device's slot is gone with HCRST and dev->SlotId is 0, so no
- * command names it (hcdCfgEpState reads Disabled): every pipe paused, so
- * what is submitted from now on waits for HcdCfgResumeReplay; everything
- * the pipes held - published or only waiting - completed with a transport
- * error (DEV_NOT_RESPONDING), never replayed, since the device's reset ends
- * any command it was part of; every ring left empty; and the closed pipes
- * and retired blocks the controller held freed, which HCRST released (the
- * pool's own entries were freed by the re-initialization's XhciPoolInit,
- * so their releases are refused and change nothing). Thread only.
+ * command names it. Two halves, so that the caller drains every device -
+ * kept and departing - before it waits for any (a request waiting for map
+ * registers can depend on another device's): HcdCfgResumeQuiet waits for
+ * nothing - every pipe paused, so what is submitted from now on waits for
+ * HcdCfgResumeReplay; everything the pipes held, published or only
+ * waiting, completed with a transport error (DEV_NOT_RESPONDING), never
+ * replayed, since the device's reset ends any command it was part of; every
+ * ring left empty. HcdCfgResumeSettle then waits out the cancels in flight
+ * and frees the closed pipes and retired blocks the controller held, which
+ * HCRST released (the pool's own entries were freed by the
+ * re-initialization's XhciPoolInit, so their releases are refused and
+ * change nothing). Thread only.
  */
+static VOID hcdCfgResumeQuietPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+{
+    KIRQL oldIrql;
+
+    (VOID)HcdIoPipeCancelAll(hc, pipe, XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+    HcdIoDrainPipe(hc, pipe, XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hcdCfgRingsEmpty(pipe);
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+}
+
 VOID HcdCfgResumeQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
     ULONG dci;
@@ -4962,12 +4977,26 @@ VOID HcdCfgResumeQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     for (dci = 2; dci < 32; dci++) {
         if (dev->Pipes[dci] != NULL) {
-            (VOID)hcdCfgResetQuietAs(hc, dev, dev->Pipes[dci],
-                                     XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+            hcdCfgResumeQuietPipe(hc, dev->Pipes[dci]);
         }
     }
-    (VOID)hcdCfgResetQuietAs(hc, dev, &dev->Ep0Pipe,
-                             XHCI_USBD_STATUS_DEV_NOT_RESPONDING);
+    hcdCfgResumeQuietPipe(hc, &dev->Ep0Pipe);
+}
+
+VOID HcdCfgResumeSettle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PHCD_PIPE pipe;
+    ULONG dci;
+
+    for (dci = 1; dci < 32; dci++) {
+        pipe = dci == 1 ? &dev->Ep0Pipe : dev->Pipes[dci];
+        if (pipe == NULL) {
+            continue;
+        }
+        HcdIoPipeWaitCancelled(hc, pipe);
+        pipe->Halted = 0;
+        pipe->DrainPending = 0;
+    }
     dev->Stale = 0;
     hcdCfgRetiredReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);
     hcdCfgRetainedReclaim(hc, dev, XHCI_PIPE_ENDPOINT_MASK);

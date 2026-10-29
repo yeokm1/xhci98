@@ -2413,6 +2413,7 @@ VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
  * resume's re-initialization, quieted with its slot gone and replayed on
  * its new one (hcd_cfg.c). Thread only. */
 VOID HcdCfgResumeQuiet(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+VOID HcdCfgResumeSettle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 ULONG HcdCfgResumeReplay(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* The shutdown latch's flush of the queued commands (37.3, record 13
  * section 5.8); returns how many it completed. IRQL: PASSIVE_LEVEL, the
