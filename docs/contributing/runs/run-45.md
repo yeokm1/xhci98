@@ -1537,3 +1537,52 @@ the same layout on ME (`hm1`) did not prompt. The QEMU exit while the
 prompt was up (45.10's leg) did not recur in the four 98 SE installs
 that prompted (`w98x`, `w9w`, and the `3.3.0.0` installs on `h1` and
 `h2`). **Pass.**
+
+## 45.36 98 SE and ME stopping at the first start after an update over `3.3.0.0`: the rate and the stop (2026-10-30, partial)
+
+No code. Development host A, QEMU q35 with the ASM4242 model and the
+ORICO enclosure at power-on (as 45.27's legs), gated build 5's test cut
+as "this build".
+
+**The machines.** Fresh 98 SE (`h1`, `h2`) and ME (`hm1`) overlays:
+`3.3.0.0` installed with `/thunderbolt /stor98` (exit 3; on 98 SE the
+ASM4242's controller asked for the xhci98 disk, task 45.38, answered
+`C:\XHCI98`), one cold start to the desktop, then shut down and kept as
+read-only bases. Stor98 was bound to the tunnel's NVMe drive ("Stor98
+Storage Controller for NVMe SSDs" on `PCI\VEN_1B36&DEV_0010`), unlike
+45.27's guests, where it never was. Each trial is an overlay of a base:
+a start, `INSTALL`'s console with `/force /thunderbolt /stor98` from the
+cut (the release build, or the debug build), the `WININIT.INI` read
+(every time `[rename]` with `xhci98.sys=xhci98.tmp`), a shutdown, and
+the first start watched for nine minutes.
+
+**The rate.** 98 SE: six trials (`u1` to `u6`), five reached the
+desktop and one (`u5`, the release build) stopped about 30 seconds into
+its first start with "A fatal exception 0E has occurred at
+019F:BFF72170. The current application will be terminated."; after a
+key the screen stayed an empty desktop with no taskbar for minutes,
+which is how 45.27's black screen would look if its stop screen went
+unseen. ME: two trials (`um3`, `um4`) reached the desktop; a third
+overlay of the ME base (`um1`) stopped at its first start, before any
+update, with "Error: 0E : 01A7 : BFF62170" (ME0E.1's text and address,
+the 44.20 one) and then a grey screen.
+
+**The stop.** The code at `0xBFF72170` (read from the stopped guest's
+memory, `memsave`, and disassembled) is `pop ds; pop es; pop fs; pop gs;
+popa; popf; push -1; push 0x2A0009; call ...`: a register-frame restore
+followed by a VxD call into VWIN32 (device `0x2A`, service 9), the end of
+a ring-3 return path in the shared arena. The page fault is on the first
+`pop`: the thread's stack page was not present when the saved frame was
+popped. ME's stop is at the same offset, `0x2170`, of the same region
+(`BFF62170`), so 45.36's stop and ME0E.1 look to be one fault. Neither
+the release nor the debug build wrote anything to the debug port (the
+debug console file stayed empty), and none of this package's 9x drivers
+queues a user APC or calls into ring 3 (no `_VWIN32_QueueUserApc`,
+`_SHELL_CallAtAppyTime` or `_VWIN32_SetWin32Event` in the tree). Who
+queued the frame is not read.
+
+**Owed.** Which thread and frame: a gdb stub with a breakpoint on the
+fault (the VMM's page-fault path for `0x2170` with a non-present stack
+page) on more trials, and the same layout without the enclosure and
+without Stor98 to see whether either is needed; then the cause, and a
+fix where it is this package's. **Partial.**
