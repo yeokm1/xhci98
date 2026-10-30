@@ -81,6 +81,16 @@ symmetric or asymmetric, classified and used as found; sections 1.3,
 5.1, 6.1, 6.4, 6.5, 6.6, 6.7, 6.8, 7.1, 7.3, 9.2, 9.3, 12, 15 (U6,
 U16, the new U30 to U32) and 16 follow it.
 
+Revised 2026-10-30 (task 45.20, the code; reviewed and revised): section
+6.2 is coded in `src/cm/tbt_u4cm.c` (with `tbt_regs.h`, `tbt_ring.c`'s
+LINK_RECOVERY delivery and `XhciCmUsb4V2` in `cm_vals.c`, `cm_reg.c` and
+`cm_nhi.c`), its host vectors in a suite of their own, `test_u4v2`
+(sections 6.2.4 and 14.1), over a version 2 host and device router added
+to the fake fabric. Section 6.2.4's last paragraph records where the
+code settles what the section left open; `usb4-emu` has no version 2
+router model yet, so the q35 legs of a version 2 link are owed with it
+(section 16).
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -1219,7 +1229,8 @@ item 4), `tbt_regs.h` for CMUV
 2.0, Set Capabilities, EE, Current Link Speed and the asymmetric widths,
 and the registry value beside `XhciCmLaneBonding` in `cm_reg.c` and
 `cm_vals.c` (section 12). Host vectors in
-`test/test_u4cm.c` (section 14.1), against a version 2 router in the fake
+`test/test_u4v2.c`, a suite of its own beside `test_u4cm` over the same
+fabric (section 14.1), against a version 2 router in the fake
 fabric: CMUV `20h` written to a major 2 router and `10h` to a major 1
 one in the same domain, and `10h` everywhere with `XhciCmUsb4V2` 0; a
 preserved router's CMUV read and never written, each of item 6.2.1 3's
@@ -1243,6 +1254,51 @@ USB3 allocation's link bound at 72 and 36 Gb/s less 1.5 for Gen 4
 symmetric and asymmetric. `usb4-emu`'s version 2 router model for the
 q35 legs is that repository's work (roadmap task 45.20); a Barlow Ridge
 on the bench is task 45-E.10.
+
+What the code settled that this section left open (task 45.20's code,
+2026-10-30):
+
+- **Get Capabilities on a router enumerated here** is read for the Set's
+  decision while `XhciCmUsb4V2` is 1: the router stays at its default
+  (plain acknowledgements) unless the answer reports the Sequence bit
+  capability supported, when the Set and its read-back decide the state.
+  A recovery (section 7.7) classifies by reading alone, so it sends no
+  Set; a router whose record shows the capability this driver enabled has
+  the recovery's answer adopted, and a failing answer leaves it unknown
+  rather than at its default.
+- **A Gen 4 link is recognised** from the host's lane 0 Current Link
+  Speed (`2h`); the far end's lane 0 is read only for an asymmetric
+  width. On a link of two version 2 routers a lane 0 still in Training or
+  Lane Bonding is waited for up to 500 ms with no write before it is
+  classified; a reserved speed after that goes to section 6.5 as before
+  (no evidence of Gen 4). A Gen 4 x1 reading, an unpaired asymmetric one
+  or a reserved width leaves the port FAILED with no lane write (`Why`
+  23, the link). The read-only checks of an existing link (the resume's
+  verification and the recovery's lanes as left) count a Gen 4
+  asymmetric width as bonded.
+- **CV found** (section 6.2.2 item 5) is read in two places: section
+  9.2's discovery, where a router with no tunnel state found with CV set
+  and PTO clear is HELD at once (`Why` 22, so `XhciCmPreOsCleanup` 1
+  cleans it at start), and the connection of an adopted router, where CV
+  set skips section 6.6 (PTO clear: HELD; UTO clear: no USB3 tunnel). A
+  discovery whose Enable Gen 4 Link Recovery clear fails holds the port
+  too, even with no tunnel state.
+- **Enable Gen 4 Link Recovery** is cleared by a write of PORT_CS_19 as
+  read with bits 31 and 30 written 0; the discovered links below depth 1
+  are cleared on both ends as the walk finds them (the child's USB4 Port
+  Capability found by its upstream adapter's own capability chain), a
+  failure there logged and the link left as a predecessor's.
+- **LINK_RECOVERY** is its own class in `tbt_ring.c` (delivered, never
+  acknowledged); the connection manager takes the port from the host's
+  Event Info when the host router sent it, else from the route's first
+  level.
+- **Extended Encapsulation** is not touched by section 7.7's recovery
+  drains, which section 6.2.2 item 7 does not list; a rebuilt tunnel sets
+  it again before its Path Enable. A clear that fails is logged and the
+  teardown goes on.
+- **The USB3 link bound** is one function (`tbtU4LinkBound`), exposed to
+  the host suite, since no fabric router reports a USB3 rate the Gen 4
+  bound would limit.
 
 ### 6.3 Ports and protocol adapters: the fabric mapping
 
@@ -4012,6 +4068,32 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   (verified, nothing written to the router), never set, the budget spent
   inside its wait, and another router (another UUID) in its place during
   it (never verified as the first).
+- **`test_u4v2`**, task 45.20: section 6.2.4's vectors over the fake
+  fabric's USB4 version 2 host and device routers (USB4 Version `40h`,
+  Set Capabilities, Gen 4 links symmetric or asymmetric between two such
+  routers, Extended Encapsulation, the enhanced TMU fields): CMUV by each
+  router's version in one domain, with `XhciCmUsb4V2` 0 and on a
+  Thunderbolt 3 router; a preserved router's CMUV `10h`, `20h` and `30h`;
+  the Set and its read-back on version 2 and version 1 routers, the host
+  router included, refused (Not Supported, Status 1, nothing enabled),
+  failing (never completing, a read-back failing) and with a notification
+  held across it, none with `XhciCmUsb4V2` 0 or to a Thunderbolt 3
+  router, a preserved router's Set and its adoption; every path entry
+  write two DWs (an invalidation, a quarantine's retry) on version 2 and
+  version 1 domains; HiFi Enhanced Uni-Directional with and without a
+  USB3 tunnel, its order, kept past an eject and cleared on the host's
+  port at unplug, HiFi-Bi beside a version 1 router and with
+  `XhciCmUsb4V2` 0; CV found with PTO clear (HELD, ROUTER_CS_5 never
+  written) and with UTO clear (no USB3 tunnel); Enable Gen 4 Link
+  Recovery cleared at depths 1 and 2 with either `XhciCmUsb4V2` value,
+  left on a version 1 router; LINK_RECOVERY from the device and the host
+  routers; Extended Encapsulation before Path Enable and cleared after it,
+  at an eject, an unplug and a preserved tunnel's teardown, never on a
+  version 1 end or with `XhciCmUsb4V2` 0, and one that will not set; Gen
+  4 symmetric, with `XhciCmLaneBonding` 0, asymmetric both ways and
+  preserved asymmetric, never a lane write, and x1, unpaired and reserved
+  widths FAILED; a resume on an asymmetric link, verified and rebuilt
+  after a power loss; the USB3 allocation's link bound.
 - **`test_u4cm`, an earlier instance's tunnels** (section 9.4): an
   instance builds a tunnel, stops and hands its record; a second
   instance on the same fabric finds it preserved and its own, and a sleep
@@ -4180,7 +4262,16 @@ from their first form, as each row says.
   driver then treats as a version 2 router (section 6.2.1 item 4);
   after a Gen 4 link recovery a predecessor's enable allowed, the USB3,
   deeper PCIe and DisplayPort tunnels left unverified (section 6.2.3
-  item 4).
+  item 4). The code (task 45.20, 2026-10-30) has met only the host
+  suite's fake fabric: `usb4-emu`'s routers are version 1 routers (USB4
+  Version `20h`, no Gen 4 link), so no q35 leg has run a version 2 link.
+  What such a leg needs of `usb4-emu`: a host and a device router
+  reporting USB4 Version `40h` and a host interface version `40h`; Get
+  and Set Capabilities with the Sequence bit capability (the model has
+  them); Gen 4 links, symmetric and asymmetric, in LANE_ADP_CS_1 with
+  Lane Bonding clearing itself there; ADP_PCIE_CS_1 Extended
+  Encapsulation; TMU_ADP_CS_8 and 9; PORT_CS_19 Enable Gen 4 Link
+  Recovery; and a way to send ASYM_LINK and LINK_RECOVERY.
 - **The tunnel-port set on integrated and USB4-only hosts** rests on
   record 21 section 6.3's sources and this record's router-named one
   (section 7.6): a host whose ports no list names, whose router does not

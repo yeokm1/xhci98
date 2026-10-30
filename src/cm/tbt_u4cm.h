@@ -150,6 +150,14 @@ typedef struct _TBT_U4_CONFIG {
      * experiment for the hardware bench; nothing
      * else changes. */
     BOOLEAN AsmPcie7Credits;
+    /* XhciCmUsb4V2, default 1 (record 22 section 6.2, decision U30, task
+     * 45.20): a Ver. 2 Connection Manager - CMUV 2.0 written to a router
+     * whose USB4 Version has major 2, and section 6.2.2's version 2
+     * obligations keyed on each router's own version and capabilities.
+     * FALSE is the version 1 run of 3.3.0.0 (CMUV 1.0 everywhere, none of
+     * those obligations); the two-dword path writes and the Gen 4 Link
+     * Recovery clear hold either way. A bench switch: no INF writes it. */
+    BOOLEAN Usb4V2;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -208,6 +216,8 @@ typedef struct _TBT_U4_ROUTER {
     BOOLEAN DromOwed;       /* Thunderbolt 3: adopted, or rebuilt under a resume
                                budget, its EEPROM not yet read: its names read
                                by TbtU4Poll once no budget runs (section 8) */
+    ULONG Cmuv;             /* ROUTER_CS_4 CMUV as written here or found (section
+                               6.2.1), 0 on a Thunderbolt 3 router */
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 
@@ -276,6 +286,10 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_WHY_RECOVER          21UL    /* HELD by a recovery (section 7.7):
                                                unclassified, or drained and
                                                waiting for its rebuild */
+#define TBT_U4_WHY_CV_FOUND         22UL    /* HELD: a preserved router's CV set
+                                               without PTO (section 6.2.2 item 5) */
+#define TBT_U4_WHY_LINK             23UL    /* FAILED: a Gen 4 link not usable
+                                               (section 6.2.3 item 1) */
 
 /* TBT_U4CM.IsoWord (record 22 section 10.5). */
 #define TBT_U4_ISO_VALID        0x80000000UL
@@ -321,6 +335,8 @@ typedef struct _TBT_U4_PORT {
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
     BOOLEAN Bonded;
     BOOLEAN SingleLane;     /* verified single (section 6.5 step 6) */
+    BOOLEAN Gen4;           /* a Gen 4 link, used as bonded (section 6.2.3) */
+    BOOLEAN Asym;           /* and asymmetric, used as found (decision U31) */
     BOOLEAN LaneWritten;
     ULONG LaneSaved[4];     /* LANE_ADP_CS_1 before step 4: host 0, host 1, dev 0, dev 1 */
     BOOLEAN Lane1Disabled;  /* section 6.5 step 6.4 set Lane Disable */
@@ -331,10 +347,15 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN TmuConfigured;  /* this driver enabled HiFi-Bi on this link */
     BOOLEAN TmuOk;          /* the link has accuracy for a USB3 tunnel */
     BOOLEAN TmuQuarantine;
+    BOOLEAN TmuEnhanced;    /* with TmuConfigured: the mode is HiFi Enhanced
+                               Uni-Directional, a link of two version 2 routers
+                               (section 6.2.2 item 6), disabled only at unplug */
 
     TBT_U4_TUNNEL Pcie;
     TBT_U4_TUNNEL Usb3;
     BOOLEAN Usb3Failed;
+    BOOLEAN UtoOff;         /* a preserved router found with CV set and UTO
+                               clear: no USB3 tunnel (section 6.2.2 item 5) */
     BOOLEAN BwQuarantine;   /* CMR or HCA stuck (section 6.9 step 5) */
     BOOLEAN Usb3GapValid;
     ULONG LastUsb3TeardownUs;   /* kept per port, outside the generation */
@@ -615,6 +636,18 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG RecoverRebuilt;   /* tunnels drained, then rebuilt after the commit */
     ULONG RecoverDeparted;  /* tunnels whose router left: host side drained */
     ULONG RecoverHeld;      /* tunnels HELD for anything short of the rules */
+    /* Record 22 section 6.2 (task 45.20). */
+    ULONG Gen4Links;        /* Gen 4 links used as bonded, either form */
+    ULONG Gen4Asym;         /* of them asymmetric, used as found */
+    ULONG Gen4Unusable;     /* Gen 4 readings that left a port FAILED */
+    ULONG SeqEnabled;       /* Sequence bit capability read back enabled */
+    ULONG SeqRefused;       /* Set refused, the capability read back disabled */
+    ULONG SeqUnknown;       /* Set or read-back failed: capability state unknown */
+    ULONG EeSet;            /* Extended Encapsulation set on a v2-v2 PCIe tunnel */
+    ULONG EeCleared;        /* and cleared at a teardown */
+    ULONG ElrCleared;       /* a predecessor's Enable Gen 4 Link Recovery cleared */
+    ULONG LinkRecoveries;   /* LINK_RECOVERY notifications, each a port check */
+    ULONG CvFound;          /* preserved routers found with CV set, not reconfigured */
 } TBT_U4_COUNTERS;
 
 /* The start stages (section 3.5's two inert forms). */
@@ -901,6 +934,9 @@ const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
  * rounded up, and units back to Mb/s, rounded to nearest. */
 ULONG TbtU4TestBwUnits(ULONG mbps, ULONG scale);
 ULONG TbtU4TestBwMbps(ULONG units, ULONG scale);
+/* The USB3 allocation's link bound in Mb/s from a host lane 0
+ * LANE_ADP_CS_1 reading (record 22 section 6.2.3 item 5, task 45.20). */
+ULONG TbtU4TestLinkBound(ULONG lane);
 #endif
 
 #endif /* TBT_U4CM_H */

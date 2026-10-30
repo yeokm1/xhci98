@@ -1086,7 +1086,9 @@ static void test_u4_notifications(void)
     TbtCtlForget(&g_ctl, &dev);
     CHECK_EQ(g_ctl.DeferCount, 0, "a route below the unplugged one forgotten");
 
-    /* The silent codes, an unknown one and a stray request error. */
+    /* The silent codes, an unknown one and a stray request error;
+     * LINK_RECOVERY never acknowledged but delivered as a note (record 22
+     * section 6.2.3 item 4, task 45.20). */
     CHECK_EQ(u4Setup(0), TBT_OK, "start");
     {
         unsigned long e[3];
@@ -1106,8 +1108,11 @@ static void test_u4_notifications(void)
     fakePump();
     TbtCtlService(&g_ctl);
     CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK), 1, "only ERR_PLUG acknowledged (Guide 7.7.2)");
+    CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK_ENH), 0, "and no enhanced acknowledgement");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
-    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK first, for the port check");
+    CHECK_EQ(n.Code, TBT_EV_LINK_RECOVERY, "LINK_RECOVERY first, unacknowledged");
+    CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
+    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK next, for the port check");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "another");
     CHECK_EQ(n.Code, TBT_EV_ERR_PLUG, "ERR_PLUG");
     CHECK(!TbtCtlNextNote(&g_ctl, &n), "no more");
@@ -1121,6 +1126,8 @@ static void test_u4_notifications(void)
     CHECK_EQ(TbtCtlClassify(TBT_EV_DPTX_DISCOVERY), TBT_NOTE_ACK_IGNORE, "DPTX");
     CHECK_EQ(TbtCtlClassify(TBT_EV_ASYM_LINK), TBT_NOTE_SILENT, "ASYM_LINK");
     CHECK_EQ(TbtCtlClassify(TBT_EV_POP_CMPLT), TBT_NOTE_SILENT, "POP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_ROP_CMPLT), TBT_NOTE_SILENT, "ROP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_LINK_RECOVERY), TBT_NOTE_DELIVER, "LINK_RECOVERY");
     CHECK_EQ(TbtCtlClassify(TBT_EV_HP_ACK), TBT_NOTE_HP_ACK, "HP_ACK");
     CHECK_EQ(TbtCtlClassify(3), TBT_NOTE_UNKNOWN, "a reserved code");
 }
