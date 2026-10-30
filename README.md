@@ -107,7 +107,7 @@ On Vista x64 to 10 x64, **keep test-signing mode on for as long as the Thunderbo
 - **Thunderbolt BIOS Assist off.** With it on, the BIOS switches the controller off when nothing is attached at power-on, and the driver cannot switch it back on (on the P14s Gen 1 the controller disappears altogether).
 - **Security level User Authorization or No Security.** Secure Connect, DisplayPort-only and USB-only are not supported.
 - Pre-boot support (boot from Thunderbolt) may be on or off. When on, a device attached at power-on keeps working under the driver.
-- **Above 4G Decoding.** Off for XP, 2000 with the ACPI HAL, and 32-bit Vista to 10. Either way for 98 SE, ME and 2000 with the Standard PC HAL, with XHCIPFW. 64-bit Windows 10 needs it on. XHCIPFW is a small part of the install that runs at Windows start. Where the firmware leaves the USB4 ports' windows above 4 GB it closes them, so Windows finds the devices behind them. It is offered on 98 SE, ME and 32-bit 2000 to 7. It is ticked with the Thunderbolt 3 / USB4 box and can be unticked. It is not offered on 32-bit Windows 8, 8.1 and 10. There it may start after Windows has read the PCI bridges. So on a board that leaves the USB4 ports' windows above 4 GB, those systems cannot use the devices behind these ports. Windows 8 may not start at all on such a board. Read on an emulator, not yet on real hardware.
+- **Above 4G Decoding.** Off for XP, 2000 with the ACPI HAL, and 32-bit Vista to 10. Either way for 98 SE, ME and 2000 with the Standard PC HAL, with XHCIPFW. 64-bit Windows 10 needs it on. XHCIPFW is a small part of the install that runs at Windows start. Where the firmware leaves the USB4 ports' windows above 4 GB it closes them, so Windows finds the devices behind them. It is offered on 98 SE, ME and 32-bit 2000 to 8.1 (on 8 and 8.1 as a filter of the PCI root bus, the service `xhcipff`). It is ticked with the Thunderbolt 3 / USB4 box and can be unticked. It is not offered on 32-bit Windows 10, where it cannot start in time: on a board that leaves the USB4 ports' windows above 4 GB, 10 cannot use the devices behind these ports. Read on an emulator, not yet on real hardware.
 
 ### Approving and removing
 
@@ -178,7 +178,7 @@ Each release has three zips. Each holds everything in the one before it, so pick
 | `xhci98-<version>-free.zip` | Adds the free USB class drivers (audio, webcam, Ethernet and more) from [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) in `USBDRV\FREE\`. Experimental: they may not work with every device and can make Windows unstable. It includes the CamCheck webcam preview tool in `USBDRV\FREE\tools\camcheck\`. |
 | `xhci98-<version>-nonfree.zip` | Adds the makers' Ethernet, HID and serial drivers from [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) in `USBDRV\NONFREE\`, not this project's work. Wi-Fi drivers are not in this download. Get them from the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) release. |
 
-Nothing from `USBDRV\` is installed unless you tick it on the installer's Free USB drivers or Non-free USB drivers page (each shown when the download carries that set). On Windows 98 SE and ME the free and non-free drivers are copied only, except the free `uac2` (and on 98 SE `usbmidi`), which can be ticked for Windows to use at the first plug: for the others, when the hardware wizard asks for a driver, point it at the package's folder, `USBDRV\FREE\<class>\<package>\<folder>` (or `USBDRV\NONFREE\...`) in the install directory.
+Nothing from `USBDRV\` is installed unless you tick it on the installer's Free USB drivers or Non-free USB drivers page (each shown when the download carries that set). On Windows 98 SE and ME the free and non-free drivers are copied to the install directory, and the ones ticked are also added to the hardware wizard's search path, so Windows finds them at the first plug. That path must stay within 280 characters on 98 SE and 259 on ME, so the page greys a box that would pass it, and lists the drivers that are only copied. For those, when the hardware wizard asks for a driver, point it at the package's folder, `USBDRV\FREE\<class>\<package>\<folder>` (or `USBDRV\NONFREE\...`) in the install directory.
 
 ### Requirements
 
@@ -287,6 +287,7 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 | `XhciLogDebugView` | The log sent to DebugView as well | `0` |
 | `XhciInterruptMode` | How events arrive: `0` automatic, `1` interrupt line, `2` polling, `3` message-signalled interrupt only | `0` |
 | `XhciSelectiveSuspend` | `1` suspends idle devices when Windows asks | `0` |
+| `XhciResumeKeep` | `1` keeps a device on a root port (its drive letter and open files) across a resume that starts the controller afresh; `0` removes it and finds it again | `1` |
 | `XhciMaxTransferKB` | The largest UAS command, `64` to `2048` KiB | `1024` |
 | `XhciForceBulkOnly` | `1` uses Bulk-Only instead of UAS | `0` (`1` if the value is absent) |
 | `XhciIntelPortSwitch` | Intel 7/8/9-series port switchover: `1` on, `2` any Intel controller **at your own risk** (`tools\portsw\`) | `0` |
@@ -343,7 +344,7 @@ Each driver directory holds:
 - `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
 - `*.cat` (64-bit only): a test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need
 - `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives)), with `stor98w9.inf`, its INF for 98 SE and ME, and `S98VSD.VXD` beside them in `release-x86\` for 98 SE and ME
-- `XHCIPFW.VXD` and `XHCIPFW.SYS` (32-bit only): XHCIPFW, which closes the USB4 ports' memory windows above 4 GB at Windows start, the `.VXD` for 98 SE and ME and the `.SYS` for 32-bit 2000 to 7 (see [the BIOS](#before-you-start-the-bios))
+- `XHCIPFW.VXD` and `XHCIPFW.SYS` (32-bit only): XHCIPFW, which closes the USB4 ports' memory windows above 4 GB at Windows start, the `.VXD` for 98 SE and ME and the `.SYS` for 32-bit 2000 to 8.1 (see [the BIOS](#before-you-start-the-bios))
 
 ## Reporting a bug
 
@@ -362,13 +363,15 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Stock Windows 98 SE has no USB storage driver without NUSB. HID and audio still work.
   - Windows ME: do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
   - Windows ME: a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
-  - The free and non-free drivers are copied, not staged (but `uac2`, and on 98 SE `usbmidi`, if ticked): point the hardware wizard at the package's folder under `C:\XHCI98\USBDRV\`.
+  - The free and non-free drivers left unticked (and not staged by an earlier run), or greyed because the hardware wizard's search path would grow too long, are only copied: point the hardware wizard at the package's folder under `C:\XHCI98\USBDRV\`.
   - Windows 98 SE: the first USB audio device plugged in after a boot (a webcam with a microphone included) can freeze Windows, with Windows' own drivers too. Plug it in before switching on and leave it plugged in; for a webcam whose microphone you do not need, usb-wdm-free's `NOAUD98.INF` avoids it.
   - Windows 98 SE and ME: a USB Audio Class 2.0 device needs the free UAC 2.0 driver before its first plug: tick `uac2` on the installer's Free USB drivers page (the `-free` download); `uac2` matches these devices by their class. Otherwise Windows' own USB audio driver (USB Audio Class 1.0 only) takes the device and can stop Windows with a fatal exception 0E in `USBAUDIO`. Then unplug it and restart (Safe Mode if needed), then Update Driver on its audio entry -> "Display a list of all the drivers in a specific location" -> Have Disk -> `C:\XHCI98\USBDRV\FREE\audio\uac2\w98se-me`, and restart with it plugged in.
   - Windows 98 SE and ME: installing the free audio or MIDI driver, Windows may ask for `wdmaudio.cat`, `ks.cat` and other files of its own from the Windows CD. Point it at the CD's `WIN98` folder, or click Skip File for the `.cat` files: they only hold signatures, which 98 SE and ME do not check.
   - Windows 98 SE (ME is expected to behave the same; not tested): Windows crawls or freezes once xHCI98 is installed, when a device with no working Windows driver holds the IRQ an xHCI98 controller shares - for example an NVMe drive the BIOS still runs (System Properties, Performance: "MS-DOS compatibility mode"), or one whose driver failed (Code 10). Windows ignores that IRQ until a driver uses it; then xHCI98, or any other driver on that IRQ, cannot quiet it. Look in Device Manager (Computer, Properties, View Resources, Interrupt request (IRQ)) for such a device on an xHCI98 controller's IRQ. Then give the device a working driver, or remove it. Or, if no other working driver uses that IRQ, disable the xHCI98 controllers on it, or set [`XhciInterruptMode`](docs/using/tuning.md#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer) to `2` (polling) and restart Windows, so that xHCI98 leaves the IRQ unused and USB keeps working.
 - **Windows 2000**
   - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it, or disable and enable it.
+- **Windows 2000 to 8.1**
+  - A USB Audio 2.0 or 3.0 device that already shows as "USB Audio Device" (Windows' own USB Audio 1.0 driver, given it before `3.4.0.0`): unplug it, restart Windows (reset the computer if the shutdown hangs), run `cmd /c "set devmgr_show_nonpresent_devices=1&& devmgmt.msc"`, choose View, Show hidden devices, update the greyed "USB Audio Device" to `uac2`, then plug the device in.
 - **Windows XP**
   - Installing XP from the F6 floppy needs a PS/2 or built-in keyboard to answer GUI-mode Setup's unsigned-driver question. Windows 2000 does not ask.
 - **Vista x64 and 7 x64**
@@ -380,6 +383,8 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - A drive attached during the install or update appears in Safely Remove Hardware only after a restart or a replug.
   - Windows 2000 to 7 with a USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
   - A dual-mode NVMe enclosure (USB4 or Thunderbolt, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
+  - Windows 2000 and XP: the first time a dock or an enclosure with a switch is plugged in, its devices may stop and start again once, a few seconds after it is plugged in (after its Found New Hardware windows are answered), while xHCI98 sets up its PCI Express ports. If a drive behind it is already in use, unplug it safely and plug it in again instead.
+  - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller (on 98 SE and ME, and on 2000 and XP unless xHCI98 builds the computer's USB4 tunnels itself, where the unplug is normally handled). Otherwise Windows may never finish removing the dock: it is not found again when plugged back, and Windows does not shut down.
   - Windows 2000 with the "Standard PC" computer type: an NVMe drive plugged in behind the tunnel after the start works, but runs polled. Drives attached at power-on are not affected; other non-ACPI computer types are untested ([issue 19](docs/issues/19-w2k-standard-pc-hot-plug-interrupt.md)).
 - **Controllers**
   - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
