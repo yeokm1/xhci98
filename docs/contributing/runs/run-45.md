@@ -2919,3 +2919,191 @@ profile's idle cost at value 1 and at a 50 ms period (XP was read at
 value 0 alone); the readings of the "Not read" list; and the hardware
 reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
 default stays 0 (owner, Q2).
+
+8.1 x64 for both halves.
+
+## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
+
+**Verdict: the report's drop is the driver's design, reproduced on q35 XP
+with `3.3.0.0`.** A SuperSpeed link that falls to SS.Inactive under a
+device - behind a SuperSpeed hub, or on a root port - made the bus drop
+the device and enumerate it afresh; to the storage stack that is a
+surprise removal, and its cached writes are lost ("Delayed Write
+Failed"). Design record 13 section 15 now keeps a one-interface UAS
+drive with a serial number in place across that recovery, through the
+restore RESET_PORT already does, and every other device is dropped as
+before. The freeze the reporter also saw is not this driver's (task
+45.42, below).
+
+### The report and its snapshot
+
+A desktop with a VIA VL805 card (`1106:3483`), Windows XP x64 SP2
+(`xhci98.sys` 361432 bytes, `3.3.0.0`'s release-x64 build; `XHCITR`'s
+"bitness x86 (32-bit Windows)" line beside it is a fault of `XHCITR64`'s,
+which reads `IsWow64Process` as false on a native x64 system), `3.3.0.0`. A SanDisk UAS drive (`0781:55A9`) on port 1 of a Realtek
+SuperSpeed hub (`0BDA:0411`) at root port 3. The snapshot, taken 1347 s
+after the controller's start:
+
+- the UAS driver's telemetry: record 1 "its device departed, slot 4", its
+  last send 229.9 s before the dump; record 2 "its device present, slot
+  4", 229 sends; neither counted a sense, protocol error, timeout, abort,
+  LUN reset or port reset - the drive left with no error of its own;
+- `SsHubWarmResets` 1, `SsWarmResets` 1, `SlotsEnabled` 8 for 6 devices
+  present: the hub port's link recovery, and a second one;
+- root port 2's last note: "machine Bound, fed disconnect, link warm
+  reset; PORTSC PLS 6, changes CSC PLC" - a 5 Gbit/s RTL8157 network
+  adapter (`0BDA:8157`) whose link fell to SS.Inactive (PLS 6, CCS 0) and
+  which was dropped the same way; root port 2 reads Empty at the dump.
+
+One hub warm reset in 1347 s of uptime, the drive's departure at about
+1117 s; a single snapshot gives no rate beyond that.
+
+### The reading of the code
+
+`HcdSsHubPortLook` (`hcd_sshub.c`) reads a hub port's link in SS.Inactive
+or Compliance Mode, marks the port `HubSsRecover` and asks for the
+disconnect of what it holds; `hcdHubPortChanged` (`hcd_enum.c`) feeds it
+- the device frozen, its transfers ended, its slot disabled, its PDOs
+reported missing - and only then `HcdSsHubPortRecover` sends
+BH_PORT_RESET, and the trained link is a new device. A root port does the
+same through `XhciLinkPortFeed` and PORTSC.WPR. The transfers the
+teardown ended are held on the old PDO until its surprise removal
+(`HcdIoPark`). SS.Inactive is a link failure with the device attached,
+not a detach (USB 3.2 7.5.2); nothing in the path restored the device.
+
+### The vehicle
+
+Development host A, QEMU 11.1.0 under TCG, built in the worker's scratch
+from `usb-wdm-free`'s `qemu-cancel` tree (11.1.0 with its xHCI cancel and
+No Op fixes) plus a test-only patch of this task's, kept with the build:
+
+- `usb-ss-hub`, a SuperSpeed hub model (the SuperSpeed half of a USB 3
+  hub: bcdUSB 3.00, hub descriptor 0x2A, SET_HUB_DEPTH, the USB 3.2
+  section 10.16 port status, change bits and features, BH_PORT_RESET),
+  downstream ports SuperSpeed only;
+- its `link-drop` property: `qom-set <hub> link-drop N` fails port N's
+  link - SS.Inactive, PORT_ENABLE 0, C_PORT_LINK_STATE (with 0x100 the
+  connection bit drops too, with 0x200 no change bit is set) - and the
+  host controller forgets every transfer in flight to that device, with no
+  event, and starts none until the port's warm reset;
+- the same on `qemu-xhci`'s root ports: `qom-set <xhci>/xhci-core
+  link-drop N` sets PLS 6 with CCS 0, PED 0, CSC and PLC, as the VL805
+  reported; any reset of the port brings the link back.
+
+The q35 XP base (`launch-q35.ps1 -Os xp`, 2 processors, 1 GiB, `-vga
+cirrus`; the "before" readings, taken before the reporter's system was
+known to be XP x64) and the q35 XP x64 base (2 GiB unless stated), `3.3.0.0`
+installed on an overlay (`INSTALL.BAT /console /yes
+/nopause`, exit 3, then shut down); each run an overlay of that. The hub
+on `qemu-xhci` root port 3, a `usb-uas` (serial `W45UAS41`, one `scsi-hd`
+LUN on an overlay of the 128 MiB FAT test disk) on its port 1, the drive
+D:. Load: `W.BAT D:`, a 16 MiB file copied, compared and deleted in a
+loop, one COM1 line a pass with the guest's time.
+
+### Before the change: `3.3.0.0`
+
+| Run | Result |
+|---|---|
+| one hub-port link failure under the copy loop (host 09:28:59.6) | the drive dropped: the copy in flight failed at 09:29:01.5, 34 copies failed over 8 s while the drive was absent, the drive came back as a new device and passed from 09:29:17.3 - about 18 s without the disk |
+| twenty failures 40 s apart | each dropped and re-enumerated the drive; for the first seven, the disk was absent 11.3 to 31.2 s each (18.2, 29.9, 19.8, 31.2, 27.3, 14.5, 11.3 s from the last good pass before to the first after). From the eighth on every pass failed: the failed passes had left their 16 MiB files on the 128 MiB disk, which was full (15 MB free) - the harness's fault, corrected for the later runs (`W.BAT` deletes leftovers at each pass) |
+| `XHCITR /snapshot` after the twenty-one failures | `SsHubWarmResets` 21, `SlotsEnabled` 24 and `DevicesAddressed` 24 for three devices present, three slots held, six pool rings in use, 18 transfers cancelled; nothing of the bus grew beyond what each re-enumeration adds and frees |
+
+### The change
+
+Design record 13 section 15 (reviewed and revised, commits `273a95dc`,
+`b42919bc` - the merge of `3.4.0.0` with the resume keep's review fixes,
+which added the refusal of a device on another configuration - and
+`bd9be1d8`). A SuperSpeed link read in SS.Inactive or Compliance Mode
+under a device of one interface, storage on UAS under `xhciuas.sys`, with
+a serial number taken as its instance id, started, not under selective
+suspend, on its configuration index 0, is restored in place by
+RESET_PORT's own sequence instead of dropped: what its pipes held fails as
+a transport error, the port is warm-reset, Reset Device and Address
+Device run on the same slot, the device descriptor, the whole
+configuration and the serial number are compared, the configuration is
+replayed; `xhciuas.sys`'s own recovery then resets it once more and the
+disk class driver retries. Every other device - a hub, a composite device,
+Bulk-Only storage, a HID device, a network adapter - is dropped as before;
+so the RTL8157 the same snapshot shows dropped on root port 2 is not kept,
+and task 45.40 is not answered here (record 13 section 15, L2, says what a
+network adapter would need). Three keeps a device inside a window of 600
+tolerance-clock ticks (nominally 60 s); the fourth is dropped as before.
+`XhciLinkKeep` 0 (machine-wide `Services\USB` or the controller's driver
+key) restores the drop. Two changes reach beyond the link: RESET_PORT
+quiets every pipe before it settles any, within a bound; and a device
+reset of `xhciuas.sys` that gives up without the bus having had its
+RESET_PORT now asks the bus to cycle the device (charged to the location
+as a failed RESET_PORT is) instead of leaving the drive present and dead
+until it is unplugged.
+
+Builds: `bd9be1d8`, the gated x86 build (all three flavours, "BUILD +
+GATES PASSED (debug release qemu)", the host suites passed; release
+`xhci98.sys` `58cb5613...`, `xhciuas.sys` `6be02f4c...`), and a plain
+amd64 release build for the XP x64 legs ("BUILD + GATES PASSED
+(release)"; `xhci98.sys` `7d14bbd1...`, `xhciuas.sys` `e57f44dd...`).
+Each leg's guest is an overlay of a `3.3.0.0` install with this tree's two
+files copied over the installed ones and the guest restarted, and
+`XHCITR /snapshot` showing their hashes before the leg; on XP x64 the
+`3.3.0.0` x64 package was installed after its test certificate was
+imported in the overlay (`rundll32 cryptext.dll,CryptExtAddCER`, the
+wizard's automatic store), as the base's README says is owed.
+
+### After the change
+
+| Leg | System | Result |
+|---|---|---|
+| a hub-port link failure under the copy loop and a held file | XP x64, amd64 | kept: `link.keep=01000000` (location 0100h, the first hub's port 1, in the high half; reason 0, kept), `link.keep.done=01000001` (restored); `SsHubWarmResets` 1; no copy failed, the pass spacing (about 1.35 s) unchanged across the failure; the held file grew on; no "Delayed Write Failed"; the UAS telemetry's record unchanged (no second device) |
+| nine hub-port failures in eight minutes | XP x64, amd64 | all nine kept (`SsHubWarmResets` 9), `SlotsEnabled` unchanged at 4, the same telemetry record for 1038 sends, no copy failed, the held file at 1043 lines |
+| four failures inside 18 s | XP x64, amd64 | three kept, the fourth refused by the budget (`link.keep=01000009`, reason 9) and dropped as before: a new telemetry record, `SlotsEnabled` 5, and the held file's handle invalid ("The volume for a file has been externally altered so that the opened file is no longer valid") - the drop's own symptom, as designed |
+| a root-port link failure (PLS 6, CCS 0, CSC and PLC) | XP x64, amd64, disk on root port 3 | kept: `link.keep=00030000` (location 3, reason 0), `link.keep.done=00030001`; `SsWarmResets` 1 (the inspection's precharge refunded: one charge for one warm reset); `SlotsEnabled` unchanged; no copy failed; the held file grew on |
+| the same with `XhciLinkKeep` 0 | XP x64, amd64 | `link.keep.on=00000000`, `link.keep=00030001` (reason 1, the switch off): dropped as before - a new telemetry record, the held handle invalid |
+| a hub-port link failure under the copy loop and a held file | XP x86, x86 gated release | kept, restored, `SsHubWarmResets` 1; no copy failed, the pass spacing (about 5.5 s) unchanged across the failure (the copy after it at 14:17:59.9 for a failure at 14:17:55.8); one telemetry record; the held file grew on. `3.3.0.0` on the same harness: the disk absent about 18 s, 34 copies failed |
+| a plain unplug of the disk under load, then a replug | XP x86, x86 gated release | as before: the copy in flight failed 10 s after the unplug and every copy failed while the disk was absent; 0.7 s after the replug the disk was back and passing; no hang |
+| 45.23's keep: hibernation under the copy loop and a held file, `XhciResumeReinit` 2 | XP x86, x86 gated release, disk on root port 3 | kept as before: `resume.keep=00020000` (two kept - the disk and the tablet - none failed or refused), `resume.keep.port=00000300` (root port 3, decision 0), `resume.keep.d0wait=00000104`; no copy failed after the resume, one telemetry record, the held file grew on |
+
+Owed, of design record 13 section 15's L9: the soak after the change ran
+nine failures in eight minutes on XP x64, not twenty forty seconds apart;
+the hub model's variants (the connection bit dropped too, 0x100, and a
+failure the hub never reports, 0x200) and an unplug of the hub itself
+under load were not run; the root-port failure was read on XP x64 only (the
+XP x86 root-port leg is 45.23's resume regression, not a link failure).
+Not read on a guest: the Bulk-Only, composite, hub and no-serial refusals
+(host vectors only: QEMU's `usb-uas` always carries a serial, and every
+refusal ends in today's drop, which the budget and `XhciLinkKeep` 0 legs
+show); Windows 98 SE, ME and 2000 (the same bus binary; their storage
+stacks above `xhciuas.sys` were not exercised); a real VL805 and Realtek
+hub - the reporter's.
+
+### The freeze
+
+Not reproduced, and on 2026-10-30 the reporter wrote that the same random
+freezes come with the VL805 card removed (task 45.42): not this driver's.
+The keep removes the drop's own outage - every request failing for 11 to
+31 s, the old volume's handles failing for good - which section 45.41's
+first readings measured.
+
+### Side finding: a UAS disk present at boot on XP x64 is not enumerated
+
+On the XP x64 guests with `3.3.0.0`, a `usb-uas` attached at power-on was
+not enumerated: no PDO and no problem device; a replug from the emulator
+(`attached` false, then true) enumerated it at once. Seen on every XP x64
+boot of this task, `3.3.0.0` and this tree alike. Task 45.43.
+
+## 45.42 an X58 desktop with a VL805 freezing at random with no USB device attached (2026-10-30)
+
+**Verdict: not xHCI98's.** The reporter wrote on 2026-10-30 that the same
+random freezes come with the VL805 card removed. Before that, the reading
+of the snapshot found nothing of the controller's (no recovery, no
+tolerance event, the interrupt line healthy, the longest completion pass
+3.2 ms), and one candidate - transfer buffers above 4 GB bounced through
+map registers below it, `xhci98.sys` describing a 32-bit adapter on
+amd64 as on x86 - was read on q35:
+
+| Run | Result |
+|---|---|
+| XP x64, `3.3.0.0` release amd64 (the reporter's `xhci98.sys` by hash), `-m 8192` (8191 MB seen by Windows, 7573 MB free); a USB 2.0 hub with a mouse, the tablet and a UAS disk on xHCI; copy loops on the UAS disk and the IDE system disk at once, a COM1 ticker every second | no stall: the ticker over 593 s, the longest gap 1.42 s; the UAS loop 471 passes over 684 s (median 1.45 s, longest 3.35 s), the IDE loop 646 over 672 s (median 1.03 s, longest 2.16 s), none failed (guest clock throughout); `XHCITR`: 401615 bulk URBs, 7.99 GB, publication mean 32 us (longest 1.65 ms), completion pass mean 16 us (longest 0.67 ms), map grant 256, no URB waiting for a mapping |
+| the same at `-m 3072` | no stall: the ticker over the last 263 s, the longest gap 1.56 s; UAS 774 passes over 1003 s (median 1.30 s, longest 1.66 s), IDE 1086 over 991 s (median 0.91 s, longest 1.42 s), none failed |
+
+The 8 GB passes were about a tenth slower with a longer tail, consistent
+with bouncing, and nothing froze. The 64-bit DMA question is dropped with
+the task.
