@@ -6407,6 +6407,74 @@ static void test_kid_resume(void)
     }
     (void)dev;
 }
+
+/* Hook: an ERR_CONN from the child's own route delivered at the parent's
+ * TopologyID read (its check), once armed. */
+static int g_foreignDev;
+static int foreignHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                       unsigned long adp, unsigned long addr, unsigned long n,
+                       const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)n; (void)data;
+    if (pdf == TBT_PDF_READ && router == g_foreignDev && cs == TBT_CS_ROUTER && addr == 3) {
+        dw[0] = 0x80000000UL;
+        dw[1] = ((unsigned long)fabDownLane0(f, g_foreignDev) << 8) |
+                (unsigned long)fabPortLane0(f, 1);
+        dw[2] = TBT_EV_ERR_CONN | (3UL << 8);
+        g_foreignDev = -1;
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Record 34 section 6.5 at a request: an ERR_CONN from the child's own
+ * route, handed by the transport to the parent's identity read, is never
+ * the parent's removal; and under a parent HELD at resume the kid is
+ * still served by its own unplug (section 6.3). */
+static void test_kid_foreign_and_held(void)
+{
+    int dev;
+    int child;
+    LONG rc;
+    ULONG i;
+    ULONG n;
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    (void)countActions(&g_cm, 0);
+    g_foreignDev = dev;
+    g_fab.Hook = foreignHook;
+    poll(&g_cm, &g_fab, 2);
+    g_fab.Hook = NULL;
+    CHECK(g_foreignDev < 0, "the notification was delivered at the parent's read");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a child-route ERR_CONN: the parent kept UP");
+    CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "and the kid, still there, UP");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "nothing removed");
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "resume: the parent's obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent HELD");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_HELD, "its kid HELD");
+    (void)countActions(&g_cm, 0);
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "the child unplugged under the HELD parent: EMPTY");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "its chain port's removal");
+    n = 0;
+    for (i = 0; i < TBT_U4_OBLIGATIONS; i++) {
+        if (g_cm.Obligations[i].Used && g_cm.Obligations[i].Kid != 0) {
+            n++;
+        }
+    }
+    CHECK_EQ(n, 0, "and its obligation gone");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent still HELD");
+}
 #endif /* TBT_U4_MAX_KIDS */
 
 int main(void)
@@ -6476,6 +6544,7 @@ int main(void)
     RUN_VEC(test_kid_loss_and_eject);
     RUN_VEC(test_kid_adopt);
     RUN_VEC(test_kid_resume);
+    RUN_VEC(test_kid_foreign_and_held);
 #endif
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);

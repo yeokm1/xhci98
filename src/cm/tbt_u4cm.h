@@ -415,6 +415,9 @@ typedef struct _TBT_U4_LINK {
     ULONG ChildDromUnused[2];   /* its unused adapters (TBT_U4_ROUTER.DromUnused) */
     BOOLEAN AdoptTried;     /* record 34 section 6.9: a depth-2 link read once
                                for adoption under an UP parent */
+    BOOLEAN KidDown;        /* a kid ejected or FAILED for PCIe, made a link
+                               again by a recovery: never adopted or connected
+                               until it is removed and plugged again */
 } TBT_U4_LINK, *PTBT_U4_LINK;
 
 /*
