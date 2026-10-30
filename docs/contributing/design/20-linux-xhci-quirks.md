@@ -631,7 +631,9 @@ outside it changes:
   (K6's D2 and WAIT_WAKE cases), a device a whole-device driver
   configured with another configuration than index 0 (the one the record
   holds, every other test reads and the restore compares; reviewed and
-  revised 2026-10-30), an isochronous pipe open, and storage
+  revised 2026-10-30), an isochronous pipe open, and storage (an
+  interface of class 08 at any of its alternates, or one the bus chose a
+  storage transport for; reviewed and revised 2026-10-30)
   that is not one interface on UAS (`xhciuas.sys`), has no serial number
   taken as its instance id, or has a URB outstanding on its PDOs, each
   take K7. A HID device with its poll outstanding is kept.
