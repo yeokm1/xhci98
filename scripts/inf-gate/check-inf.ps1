@@ -114,7 +114,10 @@ What it checks, grouped by the failure each rule prevents:
            on every path though only 98 SE and ME read it.
            Thirty-seven since XhciCommandCheck joined at 1, the
            command-state checker every flavour carries since task 45.45
-           (design record 08 section 14; owner, 2026-10-30).
+           (design record 08 section 14; owner, 2026-10-30). Forty since
+           task 45.50 (owner, 2026-10-30: every value a released driver
+           reads is written by the install): XhciUsb2Bos, XhciResumeKeep
+           and XhciLinkKeep at 1.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1797,6 +1800,27 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-usb4 task 45.45's command-state checker (design record 08 section 14), read at each start and latched for its lifetime: it reads the slot and endpoint states before each command and counts and notes what a conforming controller would refuse, changing nothing the driver does. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-30)"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off (owner, 2026-10-30)"
+    },
+    @{
+        Name    = "XhciUsb2Bos"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 43.27's BOS read at High and Full Speed (design record 13 section 8.4.1), read at each start: 0 stops the request for every device. Written since task 45.50 (owner, 2026-10-30: every value a released driver reads is written by the install) so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
+    },
+    @{
+        Name    = "XhciResumeKeep"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 45.23's devices kept across a resume's re-initialization (design record 20 section 4.3.2), read at each start. Written since task 45.50 (owner, 2026-10-30) under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
+    },
+    @{
+        Name    = "XhciLinkKeep"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 45.41's device kept across its SuperSpeed link's recovery (design record 13 section 15), read at each start. Written since task 45.50 (owner, 2026-10-30) under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
     },
     @{
         Name    = "XhciVirtualHSHub"

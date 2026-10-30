@@ -85,7 +85,7 @@ stor98.sys=1
 
 [Stor98_Inst]
 CopyFiles=Stor98_Files_9x
-AddReg=Stor98_IOS,Stor98_AddReg_9x
+AddReg=Stor98_IOS,Stor98_AddReg_9x,Stor98_Settings_9x
 
 [Stor98_Files_9x]
 stor98.mpd
@@ -96,6 +96,22 @@ HKR,,DontLoadIfConflict,,"Y"
 
 [Stor98_AddReg_9x]
 HKR,,PortDriver,,stor98.mpd
+
+; The settings (README "Settings"), each at its Windows 98 SE / ME default,
+; in the key the driver reads them from (platform.c PLAT_WT_KEY), written
+; only where missing (FLG_ADDREG_NOCLOBBER), so a value the user set
+; survives an update (xhci98 roadmap-usb4 45.50): DWORDs, and
+; StorWriteThrough the string "auto", the only type it is read as.
+[Stor98_Settings_9x]
+HKLM,"System\CurrentControlSet\Services\stor98",StorMaxTransferKB,0x00010003,2048
+HKLM,"System\CurrentControlSet\Services\stor98",StorWriteThrough,0x00000002,"auto"
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollMode,0x00010003,0
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollBusyUs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollIdleMs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollSpinUs,0x00010003,0
+HKLM,"System\CurrentControlSet\Services\stor98",StorGoneMs,0x00010003,5000
+HKLM,"System\CurrentControlSet\Services\stor98",StorWriteIdleMs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000
 
 ; ---- Windows 2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit --------------------
 
@@ -135,6 +151,12 @@ AddReg=Stor98_ServiceReg
 HKR,"Parameters\PnpInterface","5",%REG_DWORD%,0x00000001
 HKR,"Parameters\Device","MaximumSGList",%REG_DWORD%,0x000000FF
 HKR,"Parameters\Device","NumberOfRequests",%REG_DWORD%,0x00000020
+; The settings (README "Settings"), every product key at its Windows 2000
+; to 10 default, in the one string the driver reads; written only where
+; missing (FLG_ADDREG_NOCLOBBER), so a DriverParameter the user set is kept
+; whole by an update, and a key missing from it still takes its default
+; (xhci98 roadmap-usb4 45.50).
+HKR,"Parameters\Device","DriverParameter",0x00000002,"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000"
 
 [Stor98_EventLog]
 AddReg=Stor98_EventLogReg

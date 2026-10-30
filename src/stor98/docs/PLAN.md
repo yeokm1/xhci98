@@ -1619,7 +1619,9 @@ review loop and a 9x/NT requalification before the release.
    (`LinkState`, `\Callback\Stor98LinkState`, `include/stor98cm.h`) are unchanged. The
    INFs write none of the settings (D3's "the INF writes the default" was never done):
    an absent value is the built-in default, and an update keeps what the user set
-   (apart from the `WriteThrough` rename above).
+   (apart from the `WriteThrough` rename above). Since xhci98 3.4.0.0 the INFs do
+   write each setting at its default where it is missing (xhci98 roadmap-usb4 45.50,
+   owner 2026-10-30), so an update still keeps what the user set.
    README "Settings" is the single reference. Tests: TESTING.md "Settings".
 
 5. **9x late lookup of the link-state entry (owner decision 2026-10-16).** On Windows 98

@@ -94,8 +94,9 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * Read at every start and latched for its lifetime. */
 #define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
 /* Task 43.27 (design record 13 section 8.4.1): the BOS read at High and
- * Full Speed, written by no INF: only a DWORD 0 turns it off; absent,
- * another number or another type is on. Read at every start. */
+ * Full Speed, written by the INFs at 1 since task 45.50: only a DWORD 0
+ * turns it off; absent, another number or another type is on. Read at
+ * every start. */
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 #define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
 #define HCD_VALUE_LINK_KEEP     L"XhciLinkKeep"
@@ -512,16 +513,16 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     XhciLogNote(ext, "strict.on", hc->StrictOn);
 
     /* Task 45.23 (design record 20 section 4.3.2): devices kept across a
-     * resume's re-initialization. No INF writes it: absent, or anything
-     * but a DWORD 0, is on. */
+     * resume's re-initialization. Written at 1 by the INFs since task
+     * 45.50: absent, or anything but a DWORD 0, is on. */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_RESUME_KEEP, &value);
     hc->ResumeKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "resume.keep.on", hc->ResumeKeepOn);
 
     /* Task 45.41 (design record 13 section 15, L7): a device kept across
-     * its SuperSpeed link's recovery. No INF writes it: absent, or anything
-     * but a DWORD 0, is on. */
+     * its SuperSpeed link's recovery. Written at 1 by the INFs since task
+     * 45.50: absent, or anything but a DWORD 0, is on. */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_LINK_KEEP, &value);
     hc->LinkKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;

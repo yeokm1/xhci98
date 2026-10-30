@@ -5366,8 +5366,9 @@ that:
 
 **The switch.** `XhciUsb2Bos`, a DWORD read at every start, machine-wide
 first as the other values are (`hcdReadDword`): only 0 turns the read off;
-absent, another number or another type is on. No INF writes it. The start
-logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
+absent, another number or another type is on. Written at 1 by both
+controller INFs since task 45.50 (record 21 section 8.1), never over a
+user's value; no INF wrote it before. The start logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
 upsets in a way the retry does not cure, until the device is known.
 
 **Who reads what the read keeps.** `dev->BosInfo` and `dev->Bos`, as at
@@ -12400,7 +12401,8 @@ move). The trace's `XHCI_DBG_VALUE` lines name each step.
 
 L7. **The switch.** `XhciLinkKeep`, a DWORD read as the other values at
 each start (`hcd_ctl.c`): absent, or anything but 0, is on; 0 restores
-today's drop. Noted `link.keep.on`. No INF writes it.
+today's drop. Noted `link.keep.on`. Written at 1 by both controller INFs
+since task 45.50 (record 21 section 8.1), never over a user's value.
 
 L8. **The freeze.** Reported separately ("after a while ... freezes except
 the mouse cursor", partly recovering after a wait; the drive plugged in

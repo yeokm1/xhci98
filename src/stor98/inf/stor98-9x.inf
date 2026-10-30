@@ -52,7 +52,7 @@ stor98.mpd=1
 
 [Stor98_Inst]
 CopyFiles=Stor98_Files_9x
-AddReg=Stor98_IOS,Stor98_AddReg_9x
+AddReg=Stor98_IOS,Stor98_AddReg_9x,Stor98_Settings_9x
 
 [Stor98_Files_9x]
 stor98.mpd
@@ -63,6 +63,22 @@ HKR,,DontLoadIfConflict,,"Y"
 
 [Stor98_AddReg_9x]
 HKR,,PortDriver,,stor98.mpd
+
+; The settings (README "Settings"), each at its Windows 98 SE / ME default,
+; in the key the driver reads them from (platform.c PLAT_WT_KEY), written
+; only where missing (FLG_ADDREG_NOCLOBBER), so a value the user set
+; survives an update (xhci98 roadmap-usb4 45.50): DWORDs, and
+; StorWriteThrough the string "auto", the only type it is read as.
+[Stor98_Settings_9x]
+HKLM,"System\CurrentControlSet\Services\stor98",StorMaxTransferKB,0x00010003,2048
+HKLM,"System\CurrentControlSet\Services\stor98",StorWriteThrough,0x00000002,"auto"
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollMode,0x00010003,0
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollBusyUs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollIdleMs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorPollSpinUs,0x00010003,0
+HKLM,"System\CurrentControlSet\Services\stor98",StorGoneMs,0x00010003,5000
+HKLM,"System\CurrentControlSet\Services\stor98",StorWriteIdleMs,0x00010003,1000
+HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000
 
 [Strings]
 Provider="Yeo Kheng Meng"

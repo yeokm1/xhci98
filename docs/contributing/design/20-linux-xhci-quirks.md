@@ -603,7 +603,8 @@ today's drop (K7) for every case the subset does not cover, so nothing
 outside it changes:
 
 - The switch, `XhciResumeKeep` (`hcd_ctl.c`): absent, or anything but a
-  DWORD 0, is on; no INF writes it, as `XhciUsb2Bos`. Log notes
+  DWORD 0, is on; written at 1 by both controller INFs since task 45.50
+  (record 21 section 8.1), as `XhciUsb2Bos`. Log notes
   `resume.keep.on` at each start, `resume.keep.port` (the root port and
   its decision) and `resume.keep` (kept, failed and refused, a byte
   each) at each resume that re-initialized.

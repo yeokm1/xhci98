@@ -1572,9 +1572,10 @@ static void test_values(void)
             n5.CmNhi = n2.CmNhi = n6.CmNhi = n9.CmNhi = 1;
             CHECK(br >= 0 && instValues[br].Inf == INST_INF_CM &&
                   instValues[br].Apply == INST_APPLY_NT5_CM &&
-                  instValues[br].Asked == 0 && instValues[br].NoInf &&
+                  instValues[br].Asked == 0 && !instValues[br].NoInf &&
                   instValues[br].Def == 1 && instValues[br].Loc == 0,
-                  "XhciCmBridgeReq: never asked, no INF, default 1");
+                  "XhciCmBridgeReq: never asked, written by the INFs "
+                  "(task 45.50), default 1");
             CHECK(br >= 0 && !inst_value_applies(br, &n5) &&
                   inst_value_relevant(br, &n5) &&
                   inst_value_relevant(br, &n2) &&
@@ -4493,6 +4494,101 @@ static int s98_block(const char *table, int i, char *out, size_t cap)
 static int has_text(const char *block, const char *text)
 {
     return text == NULL || strstr(block, text) != NULL;
+}
+
+/* Task 45.50: Stor98's INFs write each setting at the default the
+ * installer's table gives (record 21 section 8.1), and
+ * inst_s98_is_default_9x knows a default as read. */
+static void test_s98_inf_defaults(void)
+{
+    char *nine = load("..\\src\\stor98\\inf\\stor98-9x.inf");
+    char *x86 = load("..\\src\\stor98\\inf\\stor98-x86.inf");
+    char *x64 = load("..\\src\\stor98\\inf\\stor98-x64.inf");
+    char *infs[3];
+    char line[256];
+    char what[256];
+    char got[64];
+    const char *p;
+    const char *q;
+    int i;
+    int f;
+    int keys;
+    int pairs;
+
+    infs[0] = nine;
+    infs[1] = x86;
+    infs[2] = x64;
+    CHECK(nine != NULL && x86 != NULL && x64 != NULL, "Stor98's three INFs read");
+    for (f = 0; f < 2; f++) {
+        for (i = 0; infs[f] != NULL && i < INST_S98_COUNT; i++) {
+            const INST_S98_VALUE *v = &instS98Values[i];
+            if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+                continue;
+            }
+            sprintf(line, "HKLM,\"System\\CurrentControlSet\\Services\\stor98\",%s,%s,%s%s%s",
+                    v->Name9x,
+                    v->Kind == INST_S98_WORDS ? "0x00000002" : "0x00010003",
+                    v->Kind == INST_S98_WORDS ? "\"" : "", v->Def9x,
+                    v->Kind == INST_S98_WORDS ? "\"" : "");
+            sprintf(what, "%s writes %s at the table's 98 SE and ME default",
+                    f == 0 ? "stor98-9x.inf" : "stor98-x86.inf", v->Name9x);
+            CHECK(has_text(infs[f], line), what);
+        }
+    }
+    for (f = 1; f < 3; f++) {
+        p = infs[f] != NULL ? strstr(infs[f], "\"DriverParameter\",0x00000002,\"") : NULL;
+        CHECK(p != NULL, "an NT INF writes DriverParameter, only where missing");
+        if (p == NULL) {
+            continue;
+        }
+        p += strlen("\"DriverParameter\",0x00000002,\"");
+        q = strchr(p, '"');
+        CHECK(q != NULL && (size_t)(q - p) < sizeof(line), "the string ends");
+        if (q == NULL || (size_t)(q - p) >= sizeof(line)) {
+            continue;
+        }
+        memcpy(line, p, (size_t)(q - p));
+        line[q - p] = '\0';
+        keys = 0;
+        for (i = 0; i < INST_S98_COUNT; i++) {
+            const INST_S98_VALUE *v = &instS98Values[i];
+            if (v->KeyNt == NULL || !inst_s98_applies(i, 1)) {
+                continue;
+            }
+            keys++;
+            sprintf(what, "DriverParameter holds %s= at the table's NT default", v->KeyNt);
+            CHECK(inst_s98_param_get(line, v->KeyNt, got, sizeof(got)) &&
+                  strcmp(got, v->DefNt) == 0, what);
+        }
+        pairs = 1;
+        for (p = line; *p != '\0'; p++) {
+            if (*p == ';') {
+                pairs++;
+            }
+        }
+        CHECK_EQ(pairs, keys, "DriverParameter holds every key and nothing else");
+    }
+    free(nine);
+    free(x86);
+    free(x64);
+
+    CHECK(inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 1, 2048UL, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 1, 1024UL, NULL) &&
+          inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, "2048") &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, "2048k") &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, ""),
+          "a number's default, as a DWORD or decimal text");
+    CHECK(inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "auto") &&
+          inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "AUTO") &&
+          !inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "off") &&
+          !inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 1, 0, NULL),
+          "write-through's default is the word auto, as text");
+    CHECK(inst_s98_is_default_9x(INST_S98_POLLSPINUS, 1, 0, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_POLLSPINUS, 1, 500UL, NULL) &&
+          inst_s98_is_default_9x(INST_S98_HOLD9X, 1, 4000UL, NULL) &&
+          !inst_s98_is_default_9x(-1, 1, 0, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_COUNT, 1, 0, NULL),
+          "the 98 SE and ME defaults, and no row out of range");
 }
 
 static void test_s98(void)
@@ -7427,6 +7523,12 @@ static void test_other_sets(void)
                     "3.2.0.0");
     CHECK(strcmp(text, "Up to date: https://github.com/yeokm1/usb-wdm-nonfree.")
           == 0, "line: carried");
+    /* Owner, 2026-10-31: the free set's address once, in its notice. */
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_CARRIED, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Up to date: see the address above.") == 0 &&
+          strstr(text, "github") == NULL,
+          "line: the free set carried names no address twice");
     inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_ABSENT, 1,
                     "3.2.0.0");
     CHECK(strcmp(text, "Not in this download: the non-free driver pack is in "
@@ -7566,9 +7668,6 @@ static void names_inf(const char *text, const char *section, const char *label)
         sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
         CHECK(inst_nhi_name(ven, dev, name, sizeof(name)) == 1 &&
               strcmp(desc, name) == 0 && name_ok(desc), what);
-        sprintf(what, "%s %s: no id line for a FriendlyName NHI (no rank change)",
-                label, id);
-        CHECK(inst_nhi_fname(ven, dev, name, sizeof(name)) == 0, what);
         for (i = 0; i < instNhiNameCount; i++) {
             if (instNhiNames[i].Ven == ven && instNhiNames[i].Dev == dev) {
                 seen[i] = 1;
@@ -7788,18 +7887,6 @@ static void test_names(void)
 
     names_table(instXhciNames, instXhciNameCount, 0);
     names_table(instNhiNames, instNhiNameCount, 1);
-    names_table(instNhiFnNames, instNhiFnNameCount, 1);
-    {
-        int a;
-        int b;
-        for (a = 0; a < instNhiFnNameCount; a++) {
-            for (b = 0; b < instNhiNameCount; b++) {
-                CHECK(instNhiFnNames[a].Ven != instNhiNames[b].Ven ||
-                      instNhiFnNames[a].Dev != instNhiNames[b].Dev,
-                      "an NHI is named by its INF line or by FriendlyName, not both");
-            }
-        }
-    }
     CHECK(name_ok(INST_NAME_USB3) && name_ok(INST_NAME_USB4) &&
           name_ok(INST_NAME_TB2) && name_ok(INST_NAME_TB3), "the plain names");
 
@@ -7819,14 +7906,27 @@ static void test_names(void)
     CHECK(inst_xhci_name(0x1B21UL, 0x2426UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM4242)") == 0,
           "the ASM4242's xHCI");
+    /* Task 45.46: the ASM4242's router named by its own INF line (the
+     * table names_inf holds both NHI INFs to). */
     CHECK(inst_nhi_name(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
-          strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0 &&
-          inst_nhi_fname(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0,
-          "the ASM4242's router: named by the FriendlyName");
-    CHECK(inst_nhi_fname(0x8086UL, 0x15BFUL, name, sizeof(name)) == 0 &&
+          "the ASM4242's router: its INF line's name");
+    CHECK(inst_nhi_name(0x1B21UL, 0x2142UL, name, sizeof(name)) == 0 &&
           strcmp(name, INST_NAME_USB4) == 0,
-          "an NHI its INF line names: no FriendlyName");
+          "an NHI id the table lacks: the class line's plain name");
+    {
+        /* The FriendlyName 3.3.0.0's installer wrote on that router: an NHI
+         * has no table name for a FriendlyName now (names_canon NULL), so
+         * the update clears the recorded one, and a user's own stays. */
+        int r;
+        CHECK(inst_name_action(1, NULL, "xHCI98 USB4 Router (ASMedia ASM4242)",
+                               "xHCI98 USB4 Router (ASMedia ASM4242)", &r) ==
+                  INST_NAME_CLEAR && !r,
+              "task 45.46: the router's recorded FriendlyName cleared at an update");
+        CHECK(inst_name_action(1, NULL, "My router", NULL, &r) ==
+                  INST_NAME_NONE && !r,
+              "task 45.46: a user's name for the router stays");
+    }
     {
         static const char hwA[] = "PCI\\VEN_1B21&DEV_2425&SUBSYS_24211B21\0";
         static const char ccA[] = "PCI\\CC_0C0340\0";
@@ -8230,6 +8330,7 @@ int main(void)
     test_page_texts();
     test_secure_boot_refusals();
     test_s98();
+    test_s98_inf_defaults();
     test_s98_tunnel();
     test_marks();
     test_storage();

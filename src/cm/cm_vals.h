@@ -231,8 +231,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 /*
  * XhciCmTunnelBridge, REG_SZ, a comma-separated list of "bb:dd.f" bridges
  * that replaces record 21 section 6.3's discovery as the domain's whole
- * tunnel-port set. No INF writes it: its absence is meaningful (record 21
- * section 8), so absent and empty both mean no override. Held here
+ * tunnel-port set. Absent, empty and "auto" (any case, alone), the form
+ * the INFs write since task 45.50 (record 21 section 8.1), all mean no
+ * override, the driver's own finding. Held here
  * unparsed; task 39-A.5 parses it. A string of this many characters or
  * more (seven bridges and their separators fit) is refused, not
  * truncated.
@@ -273,8 +274,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * into the two protocol-adapter HopID 8 entries of a PCIe tunnel this
  * driver builds between an ASM4242 host router and an ASM2464 device
  * router (tbt_u4cm.h, TBT_U4_CONFIG AsmPcie7Credits); 0 keeps them as
- * read. No INF writes it and the installer does not ask for it; absent
- * reads as 0, and any other value is refused and 0 stands. Read once per
+ * read. The INFs write it at 0 since task 45.50 and the installer does
+ * not ask for it; absent reads as 0, and any other value is refused and 0
+ * stands. Read once per
  * start, machine-wide key first, as every value.
  */
 #define CM_ASM_PCIE7_DEFAULT 0UL
@@ -285,8 +287,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * driver enumerates as version 2 (CMUV 2.0) and keys section 6.2.2's
  * version 2 obligations on each router's own version and capabilities;
  * 0 is the version 1 run of 3.3.0.0 (tbt_u4cm.h, TBT_U4_CONFIG Usb4V2).
- * No INF writes it and the installer does not ask for it; absent reads
- * as 1, and any other value is refused and 1 stands. Read once per
+ * The INFs write it at 1 since task 45.50 and the installer does not
+ * ask for it; absent reads as 1, and any other value is refused and 1
+ * stands. Read once per
  * start, machine-wide key first, as every value.
  */
 #define CM_USB4_V2_DEFAULT 1UL
@@ -298,8 +301,8 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * and lets the mark service write its bridge marks (section 4.3); 0 does
  * neither, lists passing untouched and each attempt still recorded with
  * outcome "off"; 2 computes and records every attempt, replaces no list
- * and writes no bridge mark (a reading mode for the bench). No INF writes
- * it; absent reads as 1, any other value is refused and 1 stands. Read
+ * and writes no bridge mark (a reading mode for the bench). The NT 5.x
+ * install paths write it at 1 since task 45.50; absent reads as 1, any other value is refused and 1 stands. Read
  * once per start, machine-wide key first, as every value, and never on
  * Vista and later or on 98 SE and ME.
  */
@@ -308,8 +311,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * 45.22): 1 lets the NHI's line interrupt end the connection-manager
  * thread's idle wait where the start grants one and it is proven
  * (cm_rirqos.c), on 2000 to 10; 0 polls as before. 98 SE and ME poll
- * whatever it says until their route is read. No INF writes it and the
- * installer does not ask for it (owner, 2026-10-29: off by default);
+ * whatever it says until their route is read. The NT install paths write
+ * it at 0 since task 45.50 and the installer does not ask for it (owner,
+ * 2026-10-29: off by default);
  * absent reads as 0, and any other value (2 and above are reserved for the
  * message step) is refused and 0 stands. Read once per start, machine-wide
  * key first, as every value.

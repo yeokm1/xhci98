@@ -1815,6 +1815,13 @@ int inst_s98_param_get(const char *param, const char *key, char *out,
 int inst_s98_param_set(const char *param, const char *key, const char *value,
                        char *out, size_t cap);
 
+/* Task 45.50: 1 when a 98 SE and ME value of row i as read (a DWORD, or
+ * text) is its 98 SE and ME default, the one Stor98's INF and the
+ * installer's file-only update write; such a value goes with Stor98 at
+ * the uninstall, a value of another number stays. */
+int inst_s98_is_default_9x(int i, int isDword, INST_U32 dword,
+                           const char *text);
+
 /* A row's "now" as the page shows it: "not set (the built-in default is
  * <d>)" or "set: <value>"; state 1 set, 0 not set, -1 unreadable. */
 void inst_s98_now_text(int i, int nt, int me, int state, const char *value,
@@ -2849,11 +2856,6 @@ extern const INST_NAMEROW instXhciNames[];  /* xHCI controllers (0C0330) */
 extern const int instXhciNameCount;
 extern const INST_NAMEROW instNhiNames[];   /* xhcicm.inf's NHI ids      */
 extern const int instNhiNameCount;
-/* NHIs xhcicm.inf matches by its class line alone, named, as the xHCI
- * controllers are, by the installer's FriendlyName (task 44.55: no id line,
- * so no change of rank; record 23 section 5.13.8). */
-extern const INST_NAMEROW instNhiFnNames[];
-extern const int instNhiFnNameCount;
 const char *inst_name_base(int base);
 /* The canonical name of an xHCI controller (1: a row of the table, the
  * product in parentheses; 0: not one, the plain name) and of an NHI (1: a
@@ -2861,10 +2863,6 @@ const char *inst_name_base(int base);
  * INST_NAME_MAX + 1 bytes. */
 int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
-/* The FriendlyName the installer gives an NHI (1: a row of instNhiFnNames,
- * the name in out; 0: none, the INF's own name stands, out the plain
- * name). inst_nhi_name names both tables' rows, for XHCITR. */
-int inst_nhi_fname(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 /* A devnode's canonical name: 1 for an xHCI controller (PCI\CC_0C0330 in
  * its ids) whose service is xhci98, or a PCI device whose service is
  * xhcicm (the NHI), out then the name; 0 for any other. */
@@ -2872,7 +2870,7 @@ int inst_dev_canon(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const char *service, char *out,
                    size_t cap);
 /* The reconciliation of one controller's FriendlyName (record 23 section
- * 5.13): ours whether xhci98 drives it (an NHI of instNhiFnNames: xhcicm), canon its table name or NULL (an
+ * 5.13): ours whether xhci98 drives it, canon its table name or NULL (an
  * id the table does not hold), current the FriendlyName now ("" none),
  * recorded the name this installer recorded writing or NULL. *record is
  * set to 1 when the record is to hold canon afterwards, 0 when it is to be

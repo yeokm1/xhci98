@@ -489,6 +489,7 @@ static void s98_write_values(void);
 static void s98_ask_values(void);
 static void s98_ask_unused(void);
 static void s98_file_update_9x(void);
+static int s98_defaults_drop_9x(void);
 static void s98_mpd_place_9x(void);
 static int s98_wininit_cancel(const char *bin);
 static int stor_hash(const char *path, char hex[65]);
@@ -2049,8 +2050,7 @@ static void print_plan(void)
                  (tbInclude && d->Inf == INST_INF_CM)) &&
                 names_canon(d, canon, sizeof(canon)) != NULL) {
                 /* Ours after the run: this package's driver's now, or
-                 * installed by it (xhci98 a controller, xhcicm an NHI of
-                 * instNhiFnNames, task 44.55). */
+                 * installed by it (xhci98 a controller). */
                 int ours = names_ours(d) || (d->Runs && !d->Refused);
                 int hasRec = names_rec_get(d->Id, rec, sizeof(rec)) == 1;
                 int a = inst_name_action(ours, canon, d->Friendly,
@@ -10733,8 +10733,9 @@ static int is_u4_nhi(const DEVREC *d)
            inst_msz_has(d->Hw, d->HwBytes, "PCI\\CC_0C0340");
 }
 
-/* The devnodes the names follow: the xHCI controllers, and the NHIs named
- * by FriendlyName (task 44.55). */
+/* The devnodes the names follow: the xHCI controllers, and the USB4 NHIs,
+ * whose FriendlyName up to 3.3.0.0 (the ASM4242's, task 44.55) is cleared
+ * now that their INF line names them (task 45.46). */
 static int names_dev(const DEVREC *d)
 {
     return is_controller(d) || is_u4_nhi(d);
@@ -10747,8 +10748,8 @@ static int names_ours(const DEVREC *d)
     return inst_eq(d->Service, is_controller(d) ? "xhci98" : "xhcicm");
 }
 
-/* The table's name for an xHCI controller, or for an NHI of instNhiFnNames,
- * or NULL (no row: the INF's own name, no FriendlyName). */
+/* The table's name for an xHCI controller, or NULL (no row, or an NHI:
+ * the INF's own name, no FriendlyName). */
 static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
 {
     INST_U32 vd;
@@ -10758,10 +10759,6 @@ static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
     }
     if (is_controller(d)) {
         return inst_xhci_name(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
-                                                                      : NULL;
-    }
-    if (is_u4_nhi(d)) {
-        return inst_nhi_fname(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
                                                                       : NULL;
     }
     return NULL;
@@ -18540,6 +18537,9 @@ static int s98_un_service(void)
         if (!s98_wininit_cancel(path)) {
             return 0;
         }
+        if (!s98_defaults_drop_9x()) {
+            return 0;
+        }
     }
     s = file_state(path);
     if (s < 0) {
@@ -18856,6 +18856,130 @@ static int s98_inf_refresh_9x(void)
  * the setup engine does for a running xhci98.sys (wininit_pending reads
  * it back); the INF copies the driver keys name are refreshed; no device
  * is reinstalled. Windows is then shut down and started again. */
+/* Task 45.50 (record 21 section 8.1): 98 SE and ME, each Stor98 setting
+ * missing from Services\stor98 written at its default, as the INF's
+ * [Stor98_Settings_9x] does at a device's install, for the file-only
+ * update, which installs no device. A value there of any content stays.
+ * Not recorded: the uninstall takes such a value back by its being the
+ * default (s98_defaults_drop_9x). */
+static void s98_defaults_put_9x(void)
+{
+    HKEY k;
+    LONG w;
+    DWORD dw;
+    int i;
+
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_S98_SVC_9X, 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &k,
+                        NULL) != ERROR_SUCCESS) {
+        out("Stor98's settings could not be put in place: %s cannot be "
+            "opened.\n", INST_S98_SVC_9X);
+        flagSteps = 1;
+        return;
+    }
+    for (i = 0; i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+            continue;
+        }
+        w = RegQueryValueExA(k, v->Name9x, NULL, NULL, NULL, NULL);
+        if (w != ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (v->Kind == INST_S98_WORDS) {
+            w = RegSetValueExA(k, v->Name9x, 0, REG_SZ,
+                               (const BYTE *)v->Def9x,
+                               (DWORD)strlen(v->Def9x) + 1);
+        } else {
+            dw = (DWORD)strtoul(v->Def9x, NULL, 10);
+            w = RegSetValueExA(k, v->Name9x, 0, REG_DWORD, (const BYTE *)&dw,
+                               sizeof(dw));
+        }
+        if (w == ERROR_SUCCESS) {
+            logonly("stor98: %s written at its default %s\n", v->Name9x,
+                    v->Def9x);
+        } else {
+            out("Stor98's %s could not be written at its default (error "
+                "%ld).\n", v->Name9x, (long)w);
+            flagSteps = 1;
+        }
+    }
+    RegCloseKey(k);
+}
+
+/* Task 45.50: at the uninstall that removes Stor98 on 98 SE and ME, each
+ * setting at its default goes too - the INF's or s98_defaults_put_9x's,
+ * reading as its absence - so the key holds nothing of Stor98's that a
+ * later first run would take for a Stor98 there before (record 26 section
+ * 6.3, s98_svc_key_stor98_9x). A value of another number stays. 0 when a
+ * value could not be read or removed. */
+static int s98_defaults_drop_9x(void)
+{
+    HKEY k;
+    LONG w;
+    DWORD t;
+    DWORD n;
+    BYTE data[64];
+    int i;
+    int ok = 1;
+
+    w = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_S98_SVC_9X, 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &k);
+    if (w == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (w != ERROR_SUCCESS) {
+        out("%s could not be opened (error %ld): Stor98's settings stay.\n",
+            INST_S98_SVC_9X, (long)w);
+        return 0;
+    }
+    for (i = 0; i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        int def;
+        if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+            continue;
+        }
+        n = sizeof(data) - 1;
+        w = RegQueryValueExA(k, v->Name9x, NULL, &t, data, &n);
+        if (w == ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (w == ERROR_MORE_DATA) {
+            continue;
+        }
+        if (w != ERROR_SUCCESS) {
+            out("Stor98's %s could not be read (error %ld): it stays.\n",
+                v->Name9x, (long)w);
+            ok = 0;
+            continue;
+        }
+        data[n < sizeof(data) ? n : sizeof(data) - 1] = 0;
+        if (t == REG_DWORD && n == sizeof(DWORD)) {
+            DWORD dw;
+            memcpy(&dw, data, sizeof(dw));
+            def = inst_s98_is_default_9x(i, 1, (INST_U32)dw, NULL);
+        } else if (t == REG_SZ) {
+            def = inst_s98_is_default_9x(i, 0, 0, (const char *)data);
+        } else {
+            def = 0;
+        }
+        if (!def) {
+            continue;
+        }
+        w = RegDeleteValueA(k, v->Name9x);
+        if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+            out("Stor98's %s could not be removed (error %ld).\n", v->Name9x,
+                (long)w);
+            ok = 0;
+            continue;
+        }
+        logonly("stor98: %s, at its default, removed\n", v->Name9x);
+        flagChanged = 1;
+    }
+    RegCloseKey(k);
+    return ok;
+}
+
 static void s98_file_update_9x(void)
 {
     char bin[INST_PATH_CHARS];
@@ -18946,6 +19070,7 @@ static void s98_file_update_9x(void)
     flagChanged = 1;
     out("Stor98 %s replaces %s when Windows next starts; no drive is "
         "reinstalled.\n", s98VersionText, bin);
+    s98_defaults_put_9x();
     if (!s98_inf_refresh_9x()) {
         /* Retried by the next run (s98InfRefresh), the file then current. */
         flagSteps = 1;
@@ -30036,10 +30161,15 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 }
                 n++;
             }
-            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.%s%s",
-                      inst_other_label(set), dir, inst_other_address(set),
-                      set == INST_SET_FREE ? nl : "",
-                      set == INST_SET_FREE ? INST_FREE_NOTICE : "");
+            /* The free set's notice gives its address: not twice. */
+            if (set == INST_SET_FREE) {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s.%s%s",
+                          inst_other_label(set), dir, nl, INST_FREE_NOTICE);
+            } else {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.",
+                          inst_other_label(set), dir,
+                          inst_other_address(set));
+            }
             one[sizeof(one) - 1] = '\0';
             strncat(text, one, cap - strlen(text) - 1);
             for (i = 0; i < o->PkgCount; i++) {

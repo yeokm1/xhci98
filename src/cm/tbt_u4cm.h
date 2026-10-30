@@ -160,7 +160,8 @@ typedef struct _TBT_U4_CONFIG {
      * obligations keyed on each router's own version and capabilities.
      * FALSE is the version 1 run of 3.3.0.0 (CMUV 1.0 everywhere, none of
      * those obligations); the two-dword path writes and the Gen 4 Link
-     * Recovery clear hold either way. A bench switch: no INF writes it. */
+     * Recovery clear hold either way. A bench switch, written at 1 by the
+     * INFs since task 45.50. */
     BOOLEAN Usb4V2;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
