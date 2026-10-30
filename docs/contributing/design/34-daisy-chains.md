@@ -1253,8 +1253,10 @@ there, at both depths, as today.
    still requires a slot without a Power Controller, so the slot's own
    power never hides a chained device on the systems that cannot turn it
    on (section 2.5): the chain port with `chain-power-controller=off`, and
-   a member port given none on the command line (the property read at the
-   first leg [inf]). A retrain reads
+   a member port given none on the command line (`-global
+   usb4-tunnel-port.power_controller_present=off`, QEMU's `pcie-root-port`
+   property, read in its source and used at the first leg, `runs/run-45.md`
+   "45.18"). A retrain reads
    MIXED and is withheld: an eject's teardown on q35
    therefore states nothing (the unit was removed from the system before
    it, so no Stor98 instance waits), and a both-ends failure is left to
@@ -1415,7 +1417,8 @@ there, at both depths, as today.
       just after;
     - saturated: on NT the queue at Stor98's limit with every read held
       from one point on and more queued in the port (gate G3's QD 32
-      form; the workload is named in the run sheet), on 98 SE and ME one
+      form: Stor98's `tests\eio` at QD 32, nine reads held at the
+      controller on 2000), on 98 SE and ME one
       held request (owner, 2026-10-22, `runs/run-43.md`, "43.18");
     - during bring-up: the router unplugged while Stor98's start is held
       (the harness's delayed RDY);
