@@ -21,7 +21,9 @@
  * request that finds it closed takes its caller's path without the thread.
  * The thread takes every bit at each wake and runs them in cmThread's
  * order (the system IRP's work, D0, the start and its bind, D3, the stop,
- * the exit), then, while a bound client runs in D0, the idle poll.
+ * the exit), then, while a bound client runs in D0, the idle poll. Under
+ * the ring interrupt (cm_rirqos.c, task 45.22) a CM_WORK_RING wake drains
+ * RX ring 0 alone, and the idle poll runs only when its deadline is due.
  *
  * THE CLOCK. TBT_HOST.NowMs is a millisecond count kept here from the
  * tick count's low word (KeQueryTickCount) and the tick period
@@ -226,6 +228,62 @@ ULONG CmCfgRead32(PCM_NHI nhi, ULONG offset)
         nhi->RecOnes = 1;
     }
     return v;
+}
+
+/* One DW through the PDO with no gate, the retirement's (below): FALSE
+ * unless the request succeeded and reported the whole DW or no length (98
+ * SE's PCI bus driver reports none, cmConfig's comment). */
+static BOOLEAN cmRetireRead(PCM_NHI nhi, ULONG offset, PULONG out)
+{
+    UCHAR b[4];
+    ULONG info;
+
+    if (!NT_SUCCESS(cmConfigOnce(nhi, TRUE, b, offset, 4, 0xFF, &info)) ||
+        (info != 0 && info < 4)) {
+        return FALSE;
+    }
+    *out = (ULONG)b[0] | ((ULONG)b[1] << 8) | ((ULONG)b[2] << 16) |
+           ((ULONG)b[3] << 24);
+    return (BOOLEAN)(*out != 0xFFFFFFFFUL);
+}
+
+/* The ring interrupt's retirement (cm_rirqos.h, record 21 section
+ * 4.5.6.1): the one write past the gate's recoverable states, bit 10 of
+ * the Command word alone, on the identity the healthy start read. IRQL:
+ * PASSIVE_LEVEL. */
+BOOLEAN CmCfgIntxRetire(PCM_NHI nhi, PULONG ours)
+{
+    UCHAR b[2];
+    ULONG v;
+    ULONG info;
+    USHORT cmd;
+
+    if (nhi->Live.Revoked || nhi->Live.State == CM_LIVE_REVOKED) {
+        return FALSE;
+    }
+    if (!cmRetireRead(nhi, 0x00, &v) || v != nhi->LiveIds) {
+        return FALSE;
+    }
+    if (!cmRetireRead(nhi, CM_PCI_COMMAND, &v)) {
+        return FALSE;
+    }
+    cmd = (USHORT)(v & 0xFFFFUL);
+    if ((cmd & 0x0400U) != 0) {
+        return TRUE;
+    }
+    cmd = (USHORT)(cmd | 0x0400U);
+    b[0] = (UCHAR)(cmd & 0xFF);
+    b[1] = (UCHAR)((cmd >> 8) & 0xFF);
+    if (!NT_SUCCESS(cmConfigOnce(nhi, FALSE, b, CM_PCI_COMMAND, 2, 0,
+                                 &info))) {
+        nhi->Counters.ConfigFailures++;
+        return FALSE;
+    }
+    if (!cmRetireRead(nhi, CM_PCI_COMMAND, &v) || (v & 0x0400UL) == 0) {
+        return FALSE;
+    }
+    *ours = 1;
+    return TRUE;
 }
 
 /* One word, so a write of the command register leaves the status
@@ -754,14 +812,21 @@ static VOID NTAPI cmThread(PVOID context)
     PIRP systemIrp;
     PIRP d3Irp;
     PIRP d0Irp;
+    ULONG period;
+    BOOLEAN polling;
 
     nhi = (PCM_NHI)context;
     for (;;) {
         /* The wait recorded before it is entered and cleared after it
          * returns (an aligned volatile ULONG: one store), for the query
          * device's seed (task 42-A.7). */
+        period = CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
         if (cmPolling(nhi)) {
-            cmRelativeMs(&due, CmNvlinkIdleMs(nhi->Values.Value[CM_VAL_POLL_IDLE_MS]));
+            /* With the ring interrupt armed the wait runs to the
+             * maintenance pass's deadline, not for a fresh period
+             * (record 21 section 4.5.3); otherwise as it always did. */
+            cmRelativeMs(&due, CmRirqTimed(nhi) ? CmRirqLeft(nhi, period)
+                                                : period);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
@@ -849,9 +914,26 @@ static VOID NTAPI cmThread(PVOID context)
         }
         CmThrLiveness(nhi);
         if (cmPolling(nhi)) {
-            nhi->Counters.Polls++;
-            CmNhiPollPass(nhi);
+            /* The ring interrupt's wake drains RX ring 0 and nothing
+             * else; the idle pass keeps its own deadline, whatever woke
+             * the thread (record 21 section 4.5.1). Unarmed, every pass is
+             * the idle pass, as before. */
+            if ((bits & CM_WORK_RING) != 0) {
+                CmRirqWake(nhi);
+            }
+            /* The period again: the work and the wake may have changed
+             * the Stor98 entries it is held to. */
+            period = CmNvlinkIdleMs(
+                nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
+            if (CmRirqMaintenance(nhi, period)) {
+                nhi->Counters.Polls++;
+                CmRirqBeforeMaint(nhi);
+                CmNhiPollPass(nhi);
+                CmRirqAfterMaint(nhi, period);
+            }
         }
+        polling = cmPolling(nhi);
+        CmRirqService(nhi, polling, period);
         /* Once per pass, after the actions (cm_reenum.h): the seam's own
          * work, eject notifications and the filters' baselines. */
         if (nhi->ReenumOn) {

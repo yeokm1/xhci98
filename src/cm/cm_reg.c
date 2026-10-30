@@ -65,6 +65,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 /* Not written by any INF (record 33 section 9.1): absent is 1; read on
  * NT 5.x alone. */
 #define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
+#define CM_VALUE_RING_IRQ L"XhciCmRingInterrupt"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -282,6 +283,12 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeNoIrqStart(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_ASM_PCIE7, &take, 0);
     CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_RING_IRQ, &take, 0);
+    CmValuesTakeRingIrq(&nhi->Values, take.Found, take.Dword);
+#if defined(XHCI_FLAVOUR_QEMU)
+    cmQuery(key, L"XhciCmQemuIrqDead", &take, 0);
+    nhi->Values.QemuIrqDead = take.Found ? take.Dword : 0;
+#endif
     if (CmBreqGate != 0) {
         cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
         CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);
