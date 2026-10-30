@@ -3727,7 +3727,8 @@ mostly a tree's first or second. The owner chose (2026-10-30) one shared
 record per suite keyed by its digest, each digest narrowed to what its
 suite reads with every built output left out, and every case that reads
 the real tree only as a seed for behaviour moved onto a fixture. This is
-the design, settled before the code (reviewed and revised).
+the design, settled before the code and brought up to date with it
+(reviewed and revised).
 
 - **One shared store.** `Get-SelfTestPassDir` (`scripts\common.ps1`):
   `XHCI98_SELFTEST_PASS_DIR` when set, else
@@ -3745,30 +3746,36 @@ the design, settled before the code (reviewed and revised).
   does; a cut's pass is recorded like any other.
 - **A digest of inputs, not of a tree.** Every row is relative to the
   repository root: a file by its repository-relative path and content;
-  `tools\` junctions followed through every hop and every ancestor to their
-  final target, each toolchain file by its path under that target, size and
-  time; MakeCat by its resolved path and content; path-valued environment
-  values split, normalised and rewritten against the tree's root. Nothing
-  git ignores counts, except where a kept case scans a folder with
-  `-Force` (below). `TEMP` and `TMP` leave the digest because the suite
-  sets both to one scratch root at its start.
-- **Hermetic git.** At its start the suite sets, in its own environment,
-  `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` to an empty file,
-  `GIT_ATTR_NOSYSTEM=1`, empty `core.excludesFile` and
-  `core.attributesFile`, an empty `GIT_TEMPLATE_DIR` and `core.hooksPath`,
-  `GIT_NO_REPLACE_OBJECTS=1`, signing off, and clears the injection
-  variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`,
-  `GIT_CONFIG_COUNT`, `GIT_CONFIG_PARAMETERS`, the object-directory ones),
-  so the fixtures and every production git call the suite reaches see the
-  same git. The inherited rows are taken before that policy is set, and the
-  policy's own names are left out of them.
-- **The INF gate's set.** Every tracked file under `scripts\inf-gate\`,
-  `scripts\common.ps1`, `scripts\test-harness.ps1`, every tracked
-  `src\*.inf`, every file the gate reads beside an INF by its product
-  table (`VerHeader`, `RcName`, `IdHeader`, taken from that table at run
-  time), `xhcitr\xhcitr.manifest`, the child `powershell.exe` the relative
-  manifest case starts (path, version, size) and the PowerShell version. No
-  `.c` and no build log.
+  MakeCat, the catalog's PE sample and the import gate's dumpers by
+  content; path-valued environment values split, normalised and rewritten
+  against the tree's root (`<repo>`). No toolchain is listed file by file:
+  since the binary gates' case runs a fixture host runner (below), no case
+  compiles. Nothing git ignores counts, except where a kept case scans a
+  folder with `-Force` (below). `TEMP` and `TMP` leave the digest because
+  the suite sets both to one scratch root at its start.
+- **Hermetic git.** At its start each suite sets, in its own environment,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` to a
+  configuration of its own that holds only empty `core.excludesFile` and
+  `core.attributesFile`, an empty `core.hooksPath` and `init.templateDir`
+  and signing off, an empty `GIT_TEMPLATE_DIR`, `GIT_NO_REPLACE_OBJECTS=1`
+  and `GIT_TERMINAL_PROMPT=0`, and clears the injection variables
+  (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_COUNT` and its
+  pairs, `GIT_CONFIG_PARAMETERS`, the object-directory ones and the rest of
+  `Get-SelfTestGitPolicyNames`, `scripts\common.ps1`), so the digest's
+  listing, the fixtures and every production git call the suite reaches,
+  in it and in its children, see the same git. A repository's own
+  configuration still applies: it is the tree's. The inherited rows are
+  taken before that policy is set, and the policy's own names are left out
+  of them.
+- **The INF gate's set.** Every file git lists under `scripts\inf-gate\`
+  and every INF directly in `src\` (tracked, or untracked and not
+  ignored); by name, whatever git says, `scripts\common.ps1`,
+  `scripts\test-harness.ps1`, `xhcitr\xhcitr.manifest` and, beside the
+  INFs, the files the gate's product table names (`VerHeader`, `RcName`,
+  `IdHeader` in `check-inf.ps1`, read from it at run time, so a new one
+  joins); the child `powershell.exe` the relative manifest case starts
+  (path, version, size) and the PowerShell version. No `.c`, no other
+  header and no build log.
 - **The packager's cases, sorted.** A case about the real tree's content -
   text anchors in the scripts, the real INFs, scripts and batches staged
   and checked, the installer's tables against the pin, the historical
@@ -3778,42 +3785,62 @@ the design, settled before the code (reviewed and revised).
   that only seeds itself from the real tree - the stamp writes and checks,
   the sign-only record against HEAD and git status, the cut's refusals, the
   input rules' classification vectors, the upload and import cases - moves
-  onto a hermetic fixture repository whose scripts are today's, copied with
-  their layout at the case's start, and keeps its assertions: only inputs
-  move, never a condition or a message, except a message that named a real
-  path, and except the digest's own cases, whose expectations follow the
-  new digest (a built image no longer moves it; a checkout's pinned tag
-  does, an unrelated tag does not). The binary gates' cases run a fixture
-  host runner, a controlled stand-in for `test\run-host-tests.cmd`, never
-  the real host suite. `Invoke-Packager` refuses a call into the
-  packager without a
-  nonempty fixture `-DriverPath`; each case keeps the components it
-  selects.
-- **The packager's set.** Every tracked file under `scripts\`; the files
-  the kept cases read (the INFs and `.oem` files, the port-switch and
-  silent-install scripts, `xhciinst\inst_core.*`, `scripts\package\` data,
-  `xhciqual\QUALREP.BAT`, the release notes and the other documents named,
-  `releases\` with its full membership by path and size, ignored files
-  included, since the historical checks list it with `-Force`); for each
-  driver, the names `source-stamp.ps1 -List` gives and their presence, not
-  their contents; the fixture host runner's sources (the real host
-  suite runs in no case, so the driver sources it compiles and
-  `docs\contributing\legal-provenance.md` it reads are not inputs);
-  `test\stor98-settings.txt`, which `package-common.ps1` reads itself; the
-  driver sets' checkouts under
-  `scripts\local\` by the pinned tag's commit and tree ids, the objects the
-  export reads, the replace refs and the checkout's own configuration, any
-  failure there giving no digest; the catalog's PE sample; `cmd.exe`'s
-  AutoRun values (read only); the `dumpbin` the import gate would resolve;
-  the environment allowlist with `PSModulePath`; and the versions. No
-  driver source's content, no HEAD, no git status, no built output.
-- **Each set guarded.** An inventory of each suite's inputs, each entry with
-  the reader that needs it, sits beside its digest function; a case fails
-  when a path literal or a folder scan in the suite's scripts names a
-  tracked path outside the inventory and outside a short "data only" list
-  (a path a case uses as classification data). Runtime reads by the host
-  suite, git's implicit reads and external tools are entries by hand. This
-  catches an addition; it is not a proof of completeness.
+  onto a hermetic fixture and keeps its assertions: only inputs move, never
+  a condition or a message, except a message that named a real path, and
+  except the digest's own cases, whose expectations follow the new digest
+  (a built image no longer moves it; a checkout's pinned tag does, an
+  unrelated tag does not). Two fixtures carry them. **Fixture repository
+  P** (`New-PackagerFixtureRepo`) is the packager's set itself, copied
+  from the tree at the suite's start with its layout and committed in a
+  repository of its own under the suite's git policy: its scripts are
+  today's, never a frozen copy, and every packager, releaser, wrapper and
+  writer case runs its copies rooted there and seeds from its files, so a
+  moved case reads nothing of a tree that the digest does not hold, and
+  the HEAD and git status it reads are P's (the sign-only case runs both a
+  clean P and a P with a change in it). Its `test\run-host-tests.cmd` is a
+  fixture host runner, which notes that it ran and fails as a failing host
+  suite does, so the binary gates' case runs the packager's default gate
+  branch and never the real host suite. **Fixture tree S**
+  (`New-SourceFixtureTree`) is today's `source-stamp.ps1` over small
+  source trees of the six drivers and a host runner with its include
+  chains: the stamp's cases and the input rules the classification
+  vectors and the import's cases use are read from it. `Invoke-Packager`
+  refuses a call without a stand-in `-DriverPath` outside the tree; each
+  case keeps the components it selects.
+- **The packager's set** (`Get-PackagerSelfTestFileSet`). Every file git
+  lists (tracked, or untracked and not ignored, a compiler's intermediate
+  left out) under `scripts\`, `releases\`, `xhciinst\`, `xhcimark\`,
+  `xhciqual\`, `xhcitr\`, `docs\using\` and `src\` - of `src\` every file
+  but a compiled source (`.c`, `.cpp`, `.asm`, `.h`) and, of `src\stor98\`,
+  its INFs alone - and every `.gitignore` and `.gitattributes`; by name
+  `LICENSE`, `README.md`, the root `.gitignore` and `.gitattributes`,
+  `docs\contributing\design\19-x64-test-signing.md`,
+  `test\stor98-settings.txt`, the headers the cases and the releaser read
+  by name (`src\xhci_version.h`, `xhci.h`, `xhci_hub.h`,
+  `src\cm\cm_status.h`, `cm_query.h`, `cm_ejask.h`, `stor98cm.h`) and
+  Stor98's bundled files (`LICENSE`, `NOTICE`, `docs\package-readme.txt`
+  and its two interface headers). Beside it in the digest: `releases\`
+  with its full membership by path and size, ignored files included,
+  since the historical checks list it with `-Force`; for each driver, the
+  names `source-stamp.ps1 -List` gives and their presence, not their
+  contents; the driver sets' checkouts under `scripts\local\` by the
+  pinned tag's commit and tree ids, every object of that tree present or
+  missing, the replace refs and the checkout's own configuration, any git
+  failure there giving no digest; MakeCat, the catalog's PE sample and
+  the dumpers the import gate would resolve, by content; `cmd.exe`'s
+  AutoRun values (read only); the environment allowlist with
+  `PSModulePath`; and the versions. No driver source's content, no HEAD,
+  no git status, no built output.
+- **Each set guarded.** `Get-SelfTestUnlistedPaths` (`scripts\common.ps1`)
+  reads the scripts a suite runs for every repository-relative path
+  literal that names a tracked file, and a case of each suite fails when
+  one is outside its set and outside a short list of paths no case reads
+  as an input, each with its reason (the packager's: XHCITR's sources a
+  cut's tool step dates, a driver source the vectors classify, and the
+  host runner every case replaces by P's). A control case shows it finds
+  one. A path built from parts, a folder scanned, a child's runtime read
+  and git's own reads are the set's entries by hand. This catches an
+  addition; it is not a proof of completeness.
 - **The proof**, each a gated x86 build (`build-driver.cmd all`,
   `XHCI98_SELFTEST_SKIP_OK=1`) under the host's lock: tree 1 builds commit
   X and records both suites; tree 2, a fresh worktree of X, skips both on
