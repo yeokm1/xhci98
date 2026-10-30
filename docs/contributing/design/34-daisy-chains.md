@@ -792,8 +792,8 @@ leaves for later is listed at the end.
   child connection: no statement is made for a chained drive (the owner),
   the firmware connection manager states nothing on q35, and kind 3 is a
   child connection's row; until then a chained drive is held by Stor98's
-  own gone deadline, MD-1. Where they belong is the owner's (run-45,
-  "45.13"). The 9x half is task 45.14.
+  own gone deadline, MD-1. The owner moved them to task 45.15, Part 3
+  (2026-10-30; run-45, "45.13"). The 9x half is task 45.14.
 
 ### 3.10 The chained unit on NT, as designed (task 45.13)
 
