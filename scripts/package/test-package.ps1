@@ -80,7 +80,11 @@ function Get-PackagerSelfTestInherited {
     $read = @("PATH", "PATHEXT", "TEMP", "TMP", "SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "HOME", "APPDATA",
               "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
               "MSVC6", "WDK71", "WDKROOT", "DDKROOT", "DDK98", "XHCI_HOST_TEST_DEFINES", "INCLUDE", "LIB", "CL", "_CL_",
-              "LINK", "_LINK_")
+              "LINK", "_LINK_",
+              # run-host-tests.cmd's own flags, which a caller's would preset
+              # (NORUN skips running the suites), and the suites' getenv reads.
+              "NORUN", "RUNDIR", "SUITEBLOCKED", "SUITEFAILED", "SUITEPARTIAL", "SUITESKIPPED",
+              "TBT_TRACE", "U4_TRACE", "XHCIINST_SCREENS", "XHCISNAP_FAULT")
     $skip = @("XHCI98_GATED_RUN", "XHCI98_FULL_SELFTESTS", "XHCI98_SELFTEST_SKIP_OK")
     $vars = @{}
     foreach ($v in @(Get-ChildItem Env:)) { $vars[$v.Name.ToUpperInvariant()] = $v.Value }
@@ -6641,7 +6645,7 @@ try {
     Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited ($dgInh + @("env:X=1"))) -ne (Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh)) `
         "digest : a changed variable did not move the digest."
     $dgSaved = @{}
-    foreach ($n in @("XHCI98_GATED_RUN", "XHCI98_DIGEST_PROBE", "GIT_DIGEST_PROBE", "RUNT0", "STEPT0")) { $dgSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    foreach ($n in @("XHCI98_GATED_RUN", "XHCI98_DIGEST_PROBE", "GIT_DIGEST_PROBE", "RUNT0", "STEPT0", "NORUN")) { $dgSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
     try {
         [Environment]::SetEnvironmentVariable("XHCI98_GATED_RUN", "probe-1")
         [Environment]::SetEnvironmentVariable("RUNT0", "probe-1")
@@ -6657,6 +6661,10 @@ try {
         [Environment]::SetEnvironmentVariable("XHCI98_DIGEST_PROBE", $null)
         [Environment]::SetEnvironmentVariable("GIT_DIGEST_PROBE", "1")
         Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgA -join "|")) "digest : a GIT_ variable did not reach the inherited rows."
+        [Environment]::SetEnvironmentVariable("GIT_DIGEST_PROBE", $null)
+        $dgB = @(Get-PackagerSelfTestInherited -Root $dg)
+        [Environment]::SetEnvironmentVariable("NORUN", $(if ($null -eq $dgSaved["NORUN"]) { "1" } else { $null }))
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgB -join "|")) "digest : NORUN, which run-host-tests.cmd reads, did not reach the inherited rows."
     } finally {
         foreach ($n in $dgSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $dgSaved[$n]) }
     }

@@ -3668,7 +3668,8 @@ cases that drive them read across the whole tree. The digest
   path, size and time; the environment variables the suite and its
   children read (`PATH`, `TEMP`, `SystemRoot` and the rest of the
   scripts' reads, `MSVC6`, `WDK71`, `INCLUDE`, `LIB` and the compilers'
-  others, every `GIT_*` and every `XHCI98_*` but the gated run's token
+  others, `run-host-tests.cmd`'s own flags such as `NORUN` and the
+  suites' `getenv` reads, every `GIT_*` and every `XHCI98_*` but the gated run's token
   and the skip's own switches), set or not - not every variable, since
   `build-driver.cmd` sets its own per run (its step clock's times,
   `ARCH`) - and `git config --list --show-origin` in the tree, both
