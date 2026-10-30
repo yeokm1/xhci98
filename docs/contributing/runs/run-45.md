@@ -4038,3 +4038,9 @@ Also for `45.final`, outside the texts above (left by 45.45's follow-up,
 `README.md`'s download list still names `debug-x86` and `debug-x64`, and
 the release notes' installer switches still describe `/debug`; both go at
 the version bump.
+- 45.15 (the chained unit's stop, deferred teardown (owner, 2026-10-30); a
+  draft for 45.final to check against record 34 section 3.10 and the
+  systems the chain runs on): "Windows 2000 to 10, a drive behind a device
+  chained behind a dock (USB4 connection manager): stopping it stops the
+  drive, but its tunnel stays up until the unplug, so a rescan (Scan for
+  hardware changes) can find it again; unplug it after the stop."
