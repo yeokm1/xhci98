@@ -65,8 +65,8 @@ Section 3.3 revised 2026-10-30 (roadmap-usb4 task 45.46, the owner's
 decision of that day): the ASM4242's NHI has an id line of its own,
 `PCI\VEN_1B21&DEV_2425` under `U4AsDesc`, in both NHI INFs and a row of
 `cm_vals.c`'s `cmAsmNhi`, so the INF names it and the installer writes no
-FriendlyName for it; the match becomes a hardware id where it was the
-class's compatible one, and no system's choice of driver changes (record
+FriendlyName for it; the match becomes the device's own id, ahead of the
+class line, and no system's choice of driver changes (record
 23 section 5.13.9).
 Section 6.1.2, added 2026-10-27 (task 44.54, the owner's decision of
 that day): on 98 SE and ME, under the USB4 profile, the removal of a

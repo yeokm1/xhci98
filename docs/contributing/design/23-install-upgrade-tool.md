@@ -1951,7 +1951,7 @@ written for such an NHI. Up to `3.3.0.0` one NHI the class line alone
 matched, the ASMedia ASM4242's, was named by the FriendlyName from a
 second table (`instNhiFnNames`, task 44.55, section 5.13.8), to leave
 its match as it was; since task 45.46 it has a line of its own, which
-changes its match from a compatible to a hardware id and no system's
+makes its match its own id, ahead of the class, and changes no system's
 choice of driver (section 5.13.9). A description is no input to the ranking - a driver's
 rank comes from which of the device's ids the line matched and where that
 id stands in its list, then the signature, date and version (Microsoft,
@@ -2403,13 +2403,16 @@ it.
   `1B21` on an NHI line, `CM-DESC` holds the line to `U4AsDesc`, and its
   self-tests gain one mutation per rule (the line removed, the line under
   the plain `U4Desc`; `CM-ID`'s own mutation now names vendor `10EC`).
-- **The match class changes; the choice does not.** Before, the router
-  matched by `PCI\CC_0C0340` alone, a compatible id on every system. Now
-  the line's id is a hardware id on 98 SE and ME and on 2000 to 7
-  (`runs/run-39.md`, 39-0.3: those systems list `VEN&DEV` among the
-  hardware ids), and on 10 a compatible id, as record 21 section 3.6
-  read for `PCI\VEN_8086&DEV_15BF`, standing before `PCI\CC_0C0340` in that
-  list. So this INF's rank for the router gets better on every system.
+- **The match gets closer; the choice does not.** Before, the router
+  matched by `PCI\CC_0C0340` alone, the last of the device's compatible
+  ids. Now it matches by `PCI\VEN_1B21&DEV_2425`, the device's own id,
+  which every system lists before the class: as a compatible id where
+  the device has a subsystem id, as the ASM4242's NHI does (`24211B21`;
+  read on the 98 SE guest, `runs/run-45.md`, "45.46 and 45.50"; and on 10
+  for `PCI\VEN_8086&DEV_15BF`, record 21 section 3.6), and as a hardware
+  id where it has none (`runs/run-39.md`, 39-0.3, a port with subsystem
+  `00000000`). So this INF's rank for the router gets better or stays in
+  its class on every system, never worse.
   Which driver Windows ranks first still does not change: no other driver
   for this NHI exists for 98 SE, ME, 2000, XP, Vista or 7, so this INF was
   already the only candidate there. On 8 to 11, any other driver for it

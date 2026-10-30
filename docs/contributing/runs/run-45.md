@@ -3997,6 +3997,89 @@ identification (record 34 section 3.11 item 8). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 
+## 45.46 and 45.50: the ASM4242 router's own line, and every value written by the install, read on q35 (2026-10-30/31)
+
+Branch `w45-small` (from `8185602f`), tree `E:\xhci98-wt\w45-small` on
+development host A. Commits: `16f00df8` (45.46), `fa6ea0dc` (45.50),
+`8bd4753a` (the free drivers page's address once, owner 2026-10-31),
+and the small fixes `fd0ee2e7` (XHCITR's bitness on the x64 build),
+`79449edc` (`xhcitr\snaptest.cmd`'s `find` and `findstr` by full path),
+`eafe5ba0` (Stor98's `INTEGRATION-0.2.md`, no local path); each reviewed
+and revised. The gated x86 build at `fa6ea0dc`
+(`scripts\build-driver.cmd all`, `XHCI98_SELFTEST_SKIP_OK=1`, after
+`src\pfw\build.cmd`): BUILD + GATES PASSED (release, qemu), 49:09; host
+tests passed (`test_inst` 7028 checks, `test_cm` 244). The test package:
+`make-release.ps1 -Arch x86 -TestLabel w45small -NoNonFree -NoWdmFree
+-SkipQualtool -SkipMarkTool` of `fa6ea0dc` (its version still `3.3.0.0`,
+so the update legs ran it with `/force`); `release-x86\xhci98.sys`
+`0f095c57...`, `xhcicm.sys` `7b881743...`, `xhcicm.inf` `ef82578d...`,
+`stor98w9.inf` `1825e442...`. Each leg on a fresh overlay of the q35 base
+through `launch-q35.ps1 -Usb4 asm4242 -EncAtBoot` (the emulated ASM4242
+with the ORICO enclosure at power-on), QMP 49380 to 49382; every start
+and stop in `E:\xhci98-vm\p45\w45-small\pids.txt`.
+
+### 45.46: the driver's choice for the router (`1B21:2425`)
+
+| System | Before (`3.3.0.0`) | After the update | Evidence |
+|---|---|---|---|
+| 98 SE | `xhcicm.sys` (`NTMPDriver`, `Cm.Dev`); `DeviceDesc` `xHCI98 USB4 Router`, `FriendlyName` `xHCI98 USB4 Router (ASMedia ASM4242)` the installer's | `xhcicm.sys` (`Cm.Dev`); `DeviceDesc` and `DriverDesc` `xHCI98 USB4 Router (ASMedia ASM4242)`, no `FriendlyName`; the run printed "name removed: xHCI98 USB4 Router (ASMedia ASM4242)" | `w98u\exp-b33.log`, `exp-a50.log`, `upd-serial.log` |
+| XP | `xhcicm`, `MatchingDeviceId` `pci\cc_0c0340`, the same names | `xhcicm`, `MatchingDeviceId` `pci\ven_1b21&dev_2425`, `DriverDesc` and `DeviceDesc` with the product, no `FriendlyName`; "name removed" printed | `xpu\xq-b33.log`, `xq-a50.log`, `upd-serial.log` |
+| 10 x64 (22H2, 19045), the base alone, no package | the NHI has no driver: problem 28, "Universal Serial Bus (USB) Controller", no service (`wmic ... Win32_PnPEntity`); no INF in `C:\Windows\INF` names `CC_0C0340` or `DEV_2425` (`findstr /m /i`) | - | `w10a\s3.png`, `s5.png` |
+
+So with the line the router matches by its own id,
+`PCI\VEN_1B21&DEV_2425`, where it matched by the class: on the 98 SE
+guest a compatible id (the NHI has subsystem `24211B21`, and 98 SE lists
+`VEN&DEV` after the hardware ids `...&SUBSYS_...`, `...&CC_...`, but
+ahead of `PCI\CC_0C0340`), and the driver chosen is the same: on 98 SE
+and XP there is no other, and Windows 10 x64 has no driver of its own for
+it, so nothing there for this line to outrank (record 23 section 5.13.9).
+
+### 45.50: a user's values kept over an update from `3.3.0.0`
+
+On each guest `3.3.0.0` was installed (`/thunderbolt /stor98`), the
+machine restarted, values set by hand in the ASM4242 xHCI's and the
+router's own keys (98 SE: `regedit /s` of a `.REG`; XP: `reg add`), and
+the update run (`/force`), then a restart:
+
+| Value | Set by hand | After the update, 98 SE | After the update, XP |
+|---|---|---|---|
+| `XhciPollIdleMs` (written by both versions) | 60 | 60 | 60 |
+| `XhciUsb2Bos` (new) | 0 | 0; the other controller 1 | 0; the other controller 1 |
+| `XhciResumeKeep`, `XhciLinkKeep` (new) | - | 1, 1 | 1, 1 |
+| `XhciCmPollIdleMs` | 300 | 300 | 300 |
+| `XhciCmUsb4V2` (new) | 0 | 0 | 0 |
+| `XhciCmTunnelBridge` (new, `REG_SZ`) | `AUTO` | `AUTO` | `AUTO` |
+| `XhciCmAsmediaPcie7Credits` (new) | - | 0 | 0 |
+| `XhciCmRingInterrupt` (new, NT) | - | absent | 0 |
+| `XhciCmBridgeReq` (new, NT 5.x) | - | absent | 1 |
+| Stor98 `DriverParameter` (XP) | `storpollmode=1` | - | `storpollmode=1`, whole |
+| Stor98 `StorPollMode` (98 SE) | 1 | 1 | - |
+
+- On XP Stor98 ran the tunnelled drive under `3.3.0.0` and was updated
+  over it; its `DriverParameter` stayed the user's string whole, as the
+  owner's decision says (a missing key takes its default).
+- On 98 SE Stor98 bound no drive in this guest (as in the w45-legs
+  update legs of 2026-10-29), so neither the INF's
+  `[Stor98_Settings_9x]` nor the installer's file-only update ran there:
+  the 98 SE and ME half of Stor98's defaults (`s98_defaults_put_9x`, and
+  `s98_defaults_drop_9x` at the uninstall) is read by the host vectors
+  alone and owed to a leg where Stor98 binds on 98 SE or ME.
+- The test package carried no `XHCIMARK.EXE` (`-SkipMarkTool`), so the
+  XP run said the mark service was not installed: the test cut's, not a
+  defect.
+
+### Small fixes
+
+- XHCITR's bitness line (`fd0ee2e7`): `-selftest-sysinfo` prints the
+  three cases, which `snaptest.cmd` holds ("this x64 tool ran natively"
+  for the x64 build); `xhcitr\build.cmd` built `XHCITR.EXE` and
+  `XHCITR64.EXE` and the snapshot self-test passed (33 cases).
+- The q35 launcher (`E:\xhci98-vm\q35-bases\launch-q35.ps1`, untracked):
+  `-Usb4 tb3ar|tb3tr` on 98 SE and ME adds
+  `-global <usb4-tb3|usb4-tr>-tunnel-dsp.power_controller_present=off`
+  (45.14's finding; the pinned emulator has QEMU's property, not
+  usb4-emu's newer `power-controller` alias); noted in its `STATE.md`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
