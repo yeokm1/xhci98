@@ -2928,6 +2928,19 @@ static VOID uasWakeWorker(PVOID context)
         report = XHCI98_RESUME_RPT_FAILED;
         break;
     }
+    /* The declaration ends with the hold it was made under: one the bus
+     * never used - a sleep that ended with no controller suspend, so no
+     * resume voided it - would otherwise let a later re-initialization
+     * with no sleep phase of this driver (a controller's power-down of
+     * its own) keep the drive with no hold and no wake check. Withdrawn
+     * before the release; refused, the drive is failed rather than
+     * released with the declaration standing. */
+    if (fdo->BusKnown && fdo->DeclareTried &&
+        report != XHCI98_RESUME_RPT_FAILED &&
+        !NT_SUCCESS(uasResumeRequest(fdo, XHCI98_RESUME_OP_WITHDRAW,
+                                     fdo->Episode & 0x00FFFFFFUL, &rs))) {
+        report = XHCI98_RESUME_RPT_FAILED;
+    }
 
     cycle = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
