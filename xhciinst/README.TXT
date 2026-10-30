@@ -331,8 +331,7 @@ unticked; /xhcipfw only with /thunderbolt or /cmonly),
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista to 10: replace a stored development build with the same
-DriverVer), /debug (the debug- directory, only if a maintainer asks),
-/log path.
+DriverVer), /log path.
 
 The console tool
 ----------------
@@ -568,9 +567,9 @@ The drivers' own install writes each value of the release notes'
 its default where it is missing, so it is already in the controller's
 key (XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
 the systems that read them); XhciUsb2Bos, XhciResumeKeep,
-XhciCmAsmediaPcie7Credits and XhciCmRingInterrupt, XhciCmTunnelBridge,
-whose absence means no override, and XhciCmBridgeReq, whose absence
-means its default 1, are never written.
+XhciCmAsmediaPcie7Credits, XhciCmRingInterrupt and XhciCmUsb4V2,
+XhciCmTunnelBridge, whose absence means no override, and
+XhciCmBridgeReq, whose absence means its default 1, are never written.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it

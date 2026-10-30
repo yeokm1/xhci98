@@ -1774,6 +1774,19 @@ static void test_tbt3(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
 }
 
+/*
+ * A half-built path on a depth-1 router's downstream link (its PCIe Down 7
+ * HopID 8 into lane 3, lane 3's HopID 9 back, Path Enable set; nothing on
+ * the child): a depth-2 link with something on it, which record 34
+ * section 6.9 keeps watched rather than adopting or connecting it.
+ */
+static void strayDownPath(int dev)
+{
+    g_fab.R[dev].Adp[7].Path[2 * 8] = 0x80000000UL | 8UL | (3UL << 11) | (7UL << 17);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    g_fab.R[dev].Adp[3].Path[2 * 9] = 0x80000000UL | 8UL | (7UL << 11) | (16UL << 17);
+}
+
 static void test_links(void)
 {
     TBT_U4_CONFIG c;
@@ -1806,7 +1819,9 @@ static void test_links(void)
     CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_DEEP_REMOVED), 1, "the OS told");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the depth-1 tunnel kept");
 
-    /* A new router at depth 2 is left uninitialised: its event counted. */
+    /* A new router at depth 2 behind an UP parent with its PCIe tunnel:
+     * its event counted, and the router connected (record 34 section 6.4;
+     * before the minimal chain it was left uninitialised). */
     fabPlugChild(&g_fab, dev, child, 0);
     g_fab.R[dev].Adp[3].Cs[4] |= 0x80000000UL;
     {
@@ -1818,7 +1833,34 @@ static void test_links(void)
     }
     poll(&g_cm, &g_fab, 2);
     CHECK(g_cm.Counters.HotPlugDownstream >= 1, "a depth-2 plug event counted");
+    CHECK(fabRtr(&g_fab, child, 3) & 0x80000000UL, "and the router connected at depth 2");
+    CHECK(g_cm.Kids[0].Used && g_cm.Kids[0].State == TBT_U4_UP, "as a kid, UP");
+
+    /* With no PCIe tunnel on the parent (XhciCmApprove 0), a new router at
+     * depth 2 is left uninitialised, its event counted. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    c.Approve = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "XhciCmApprove 0: the parent UP, no tunnel");
+    fabPlugChild(&g_fab, dev, child, 0);
+    g_fab.R[dev].Adp[3].Cs[4] |= 0x80000000UL;
+    {
+        unsigned long dw[3];
+        dw[0] = 0x80000000UL;
+        dw[1] = 1;
+        dw[2] = 3;
+        fabInject(&g_fab, TBT_PDF_HOTPLUG, dw, 3);
+    }
+    poll(&g_cm, &g_fab, 2);
+    CHECK(g_cm.Counters.HotPlugDownstream >= 1, "XhciCmApprove 0: the depth-2 event counted");
     CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "and the router left uninitialised");
+    CHECK(!g_cm.Kids[0].Used, "and no kid");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2405,6 +2447,7 @@ static void test_edge_identity(void)
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, child, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     cfgDefault(&c);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
@@ -4188,6 +4231,7 @@ static void test_asm2464(void)
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, dev2, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Pcie.Preserved,
@@ -4216,6 +4260,7 @@ static void test_asm2464(void)
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, dev2, 1);
     fabPlugChild(&g_fab, dev2, dev3, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(g_cm.Links[0].Used && g_cm.Links[1].Used && g_cm.Links[0].ChildDromRead &&
@@ -5244,6 +5289,1594 @@ static void test_resume_renumbered(void)
           "renumbered: nothing torn down at the next tick");
 }
 
+/* ------------------------------------------------------------------ */
+/* Record 34 Part 3: the minimal chain at depth 2 (task 45.15)         */
+/* ------------------------------------------------------------------ */
+
+/* Writes the log holds to router `r` from entry `from` on. */
+static unsigned long writesTo(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* As writesTo, less the router operation registers (ROUTER_CS_9 to 26):
+ * the DROM reads and Get Capabilities a discovery may make (record 22
+ * section 6.7), which change no configuration. */
+static unsigned long configWritesTo(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r &&
+            !(f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] >= 9 && f->WrAddr[i] <= 26)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* As configWritesTo, less a Thunderbolt 3 router's EEPROM bit-bang
+ * (Plug Events + 4, record 22 section 8 item 4): the names an adopted
+ * router's DROM gives, read at the first tick (tbtU4DromLate). */
+static unsigned long configWritesNoEe(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r &&
+            !(f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] >= 9 && f->WrAddr[i] <= 26) &&
+            !(f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] == FAB_RCAP_PLUG + 4)) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The first write from entry `from` on to router `r`'s DW `addr` (space
+ * `cs`, adapter `adp`) whose value has a bit of `mask` set; -1 none. */
+static long findSet(const FAB *f, unsigned long from, int r, unsigned long cs,
+                    unsigned long adp, unsigned long addr, unsigned long mask)
+{
+    unsigned long i;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r && f->WrCs[i] == cs && f->WrAdp[i] == adp &&
+            f->WrAddr[i] == addr && (f->WrVal[i] & mask) != 0) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+/* The first write from entry `from` on to the Path Enable DW of router
+ * `r`'s protocol adapter `adp` that sets (`set`) or clears it; -1 none. */
+static long findPe(const FAB *f, unsigned long from, int r, unsigned long adp, int set)
+{
+    unsigned long i;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r && f->WrCs[i] == TBT_CS_ADAPTER && f->WrAdp[i] == adp &&
+            f->WrAddr[i] == FAB_CAP_ADP &&
+            ((f->WrVal[i] & TBT_PCIE0_PE) != 0) == (set != 0)) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+/* A parent of `kind` plugged into port 1 and UP with its PCIe tunnel. */
+static int setupParent(int kind, const TBT_U4_CONFIG *c)
+{
+    int dev;
+    TBT_U4_CONFIG d;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, kind);
+    fabPlug(&g_fab, 1, dev);
+    if (c == NULL) {
+        cfgDefault(&d);
+        c = &d;
+    }
+    g_ldCalls = 0;
+    g_ldAnswer = TBT_U4_STMT_WITHHELD;
+    memset(&g_ld, 0, sizeof(g_ld));
+    (void)start(&g_fab, &g_ring, &g_cm, c);
+    poll(&g_cm, &g_fab, 2);
+    (void)countActions(&g_cm, 0);   /* the parent's own */
+    return dev;
+}
+
+/* Whether path entry `hop` of router `r`'s adapter `adp` is Valid and
+ * leads to adapter `outAdp`, HopID `outHop`. */
+static int entryTo(const FAB *f, int r, int adp, int hop, unsigned long outAdp,
+                   unsigned long outHop)
+{
+    unsigned long e = fabPath0(f, r, adp, hop);
+
+    return (e & 0x80000000UL) != 0 && ((e >> 11) & 0x3FUL) == outAdp &&
+           (e & 0x7FUL) == outHop;
+}
+
+/*
+ * The fake fabric's depth-2 model and today's behaviour, which hold
+ * before the minimal chain's code: the Thunderbolt 3 dock connects at
+ * depth 1 as any Thunderbolt 3 router does; a child hot-plugged into a
+ * parent's downstream port arrives locked and uninitialised; the chained
+ * PCIe pair trains only with Path Enable at both of its ends; the
+ * parent's power loss takes the child's configuration and sets Lock on
+ * the parent's downstream lanes again (Spec 3.3).
+ */
+static void test_chain_fabric(void)
+{
+    int dev;
+    int child;
+    int a;
+
+    dev = setupParent(FAB_DEV_TBT3_DOCK, NULL);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the Thunderbolt 3 dock: UP at depth 1");
+    CHECK(fabPcieUp(&g_fab, 1), "its PCIe tunnel up, through its PCIe Up 6");
+    CHECK_EQ(fabDownLane0(&g_fab, dev), 3, "its downstream lane 0 is 3");
+
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a USB4 parent: UP");
+    child = fabChild(&g_fab, dev);
+    a = fabDownLane0(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    CHECK(fabAdp(&g_fab, dev, a, 4) & 0x80000000UL, "a hot-plugged child: Lock set");
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "and not enumerated");
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    CHECK(!fabChainPcieUp(&g_fab, dev), "the parent's end alone: no link");
+    fabUnplug(&g_fab, 1);
+    CHECK(fabAdp(&g_fab, dev, a, 4) & 0x80000000UL, "the parent unplugged: Lock set");
+
+    /* An enumerated child loses its configuration with its parent, and
+     * stays attached to the parent's downstream port. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    fabPlugChild(&g_fab, dev, child, 1);
+    CHECK(fabRtr(&g_fab, child, 3) & 0x80000000UL, "a child enumerated");
+    fabUnplug(&g_fab, 1);
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "the middle unplug resets it");
+    CHECK_EQ(g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].Peer, child, "still attached");
+
+    /* A pre-OS chain reads as a chained tunnel up, and not with one of
+     * its four entries missing. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    CHECK(fabChainPcieUp(&g_fab, dev), "fabPreosChild: the chained tunnel up");
+    g_fab.R[child].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    CHECK(!fabChainPcieUp(&g_fab, dev), "an entry missing: not up");
+}
+
+#ifdef TBT_U4_MAX_KIDS
+/*
+ * The vectors below are written against record 34 section 6's names
+ * (TBT_U4_KID in TBT_U4CM.Kids, TbtU4EjectKid, the kid index in the
+ * link-down record and the action) and compile once tbt_u4cm.h defines
+ * TBT_U4_MAX_KIDS. Expected values are worked from record 34 sections 6.4
+ * to 6.9 and record 22, not from the code under test.
+ */
+
+static const TBT_U4_KID *kidOf(const TBT_U4CM *cm, ULONG port)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (cm->Kids[i].Used && cm->Kids[i].Port == port) {
+            return &cm->Kids[i];
+        }
+    }
+    return NULL;
+}
+
+/* Section 6.3: a slot with no kid reads EMPTY. */
+static ULONG kidState(const TBT_U4CM *cm, ULONG port)
+{
+    const TBT_U4_KID *k = kidOf(cm, port);
+
+    return k != NULL ? k->State : TBT_U4_EMPTY;
+}
+
+static ULONG watched(const char *label)
+{
+    ULONG i;
+    ULONG n = 0;
+
+    for (i = 0; i < g_fab.WatchCount && i < 16; i++) {
+        if (strcmp(g_fab.WatchLabel[i], label) == 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* A kid connected behind a parent of `kind` (sections 6.4 to 6.6). */
+static int setupKid(int kind, int *childOut)
+{
+    int dev;
+    int child;
+
+    dev = setupParent(kind, NULL);
+    child = fabChild(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    *childOut = child;
+    return dev;
+}
+
+/* Hook: whether the parent was UP with its PCIe tunnel when its
+ * downstream lane's ADP_CS_5 was written. */
+static int g_dhpDev;
+static unsigned long g_dhpLane;
+static int g_dhpSeen;
+static int g_dhpEarly;
+static int dhpHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                   unsigned long adp, unsigned long addr, unsigned long n,
+                   const unsigned long *data)
+{
+    const TBT_U4_PORT *p = TbtU4Port(&g_cm, 1);
+
+    (void)f; (void)n; (void)data;
+    if (pdf == TBT_PDF_WRITE && router == g_dhpDev && cs == TBT_CS_ADAPTER &&
+        adp == g_dhpLane && addr == 5) {
+        g_dhpSeen = 1;
+        if (p == NULL || p->State != TBT_U4_UP || !p->Pcie.Up) {
+            g_dhpEarly = 1;
+        }
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Sections 6.4 and 6.6 behind a USB4 parent. */
+static void test_kid_connect_usb4(void)
+{
+    int dev;
+    int child;
+    int a;
+    long lb;
+    long cv;
+    long peChild;
+    long peParent;
+    const TBT_U4_KID *k;
+
+    /* Disable Hot Plug set on the parent's downstream lane before the
+     * start: cleared once the parent is UP with its PCIe tunnel (section
+     * 6.5), never inside the depth-1 connect. */
+    {
+        TBT_U4_CONFIG c;
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        a = fabDownLane0(&g_fab, dev);
+        g_fab.R[dev].Adp[a].Cs[5] |= TBT_ADP5_DHP;
+        g_dhpDev = dev;
+        g_dhpLane = (unsigned long)a;
+        g_dhpSeen = 0;
+        g_dhpEarly = 0;
+        g_fab.Hook = dhpHook;
+        fabPlug(&g_fab, 1, dev);
+        cfgDefault(&c);
+        g_ldCalls = 0;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        poll(&g_cm, &g_fab, 3);
+        g_fab.Hook = NULL;
+        (void)countActions(&g_cm, 0);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent UP");
+        CHECK_EQ(fabAdp(&g_fab, dev, a, 5) & TBT_ADP5_DHP, 0,
+                 "the parent's downstream Disable Hot Plug cleared after UP");
+        CHECK(g_dhpSeen && !g_dhpEarly, "written only once the parent was UP with its tunnel");
+    }
+    child = fabChild(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL, "a kid behind port 1");
+    if (k == NULL) {
+        return;
+    }
+    CHECK_EQ(k->State, TBT_U4_UP, "the kid: UP");
+    CHECK_EQ(k->ParentLane0, (ULONG)a, "on the parent's lane 0 adapter 3");
+    CHECK_EQ(k->ParentPcieDown, 7, "the parent's first PCIe Down pairs with its first downstream port");
+    CHECK_EQ(k->ParentGeneration, TbtU4Port(&g_cm, 1)->Generation, "the parent's generation kept");
+    CHECK_EQ(fabAdp(&g_fab, dev, a, 4) & 0x80000000UL, 0, "step 1: the parent's lane 0 unlocked");
+    CHECK(fabRtr(&g_fab, child, 3) & 0x80000000UL, "step 3: the child enumerated (TopologyID Valid)");
+    CHECK_EQ((fabRtr(&g_fab, child, 1) >> 20) & 7UL, 2, "at depth 2");
+    CHECK_EQ((fabAdp(&g_fab, child, 1, FAB_CAP_LANE + 1) >> 20) & 0x3FUL, 2, "step 5: bonded");
+    CHECK(fabAdp(&g_fab, dev, a, FAB_CAP_PORT + 19) & TBT_PORT19_PC,
+          "the parent's downstream port Configured");
+    CHECK(fabAdp(&g_fab, child, 1, FAB_CAP_PORT + 19) & TBT_PORT19_PC,
+          "the child's upstream port Configured");
+    CHECK((fabRtr(&g_fab, child, 5) & (TBT_RTR5_CV | TBT_RTR5_PTO)) ==
+          (TBT_RTR5_CV | TBT_RTR5_PTO), "step 6: PTO and CV");
+    CHECK(fabChainPcieUp(&g_fab, dev), "step 7: the chained PCIe tunnel up");
+    /* Section 6.6's four entries. */
+    CHECK(entryTo(&g_fab, dev, 7, 8, (ULONG)a, k->Pcie.Hd), "down 1: 3:7 HopID 8 to the parent's lane, hd");
+    CHECK(entryTo(&g_fab, child, 1, (int)k->Pcie.Hd, 5, 8), "down 2: the child's lane, hd, to its PCIe Up 8");
+    CHECK(entryTo(&g_fab, child, 5, 8, 1, k->Pcie.Hu), "up 1: the child's PCIe Up 8 to its lane, hu");
+    CHECK(entryTo(&g_fab, dev, a, (int)k->Pcie.Hu, 7, 8), "up 2: the parent's lane, hu, to 3:7 HopID 8");
+    CHECK(k->Pcie.Hd >= 8 && k->Pcie.Hu >= 8, "lane HopIDs from 8");
+    CHECK(fabPcieUp(&g_fab, 1), "the parent's own tunnel kept");
+    /* Bonding before Configuration Valid (record 22's order, section 9.2);
+     * Path Enable on the child's PCIe Up before the parent's PCIe Down
+     * (Guide 5.3.1 steps 5 and 6). */
+    lb = findSet(&g_fab, 0, dev, TBT_CS_ADAPTER, (unsigned long)a, FAB_CAP_LANE + 1, TBT_LANE1_LB);
+    cv = findSet(&g_fab, 0, child, TBT_CS_ROUTER, 0, 5, TBT_RTR5_CV);
+    CHECK(lb >= 0 && cv > lb, "Lane Bonding written before Configuration Valid");
+    peChild = findPe(&g_fab, 0, child, 5, 1);
+    peParent = findPe(&g_fab, 0, dev, 7, 1);
+    CHECK(peChild >= 0 && peParent > peChild, "Path Enable: the child's end first");
+    {
+        TBT_U4_ACTION act;
+        ULONG n = 0;
+        ULONG other = 0;
+
+        while (TbtU4NextAction(&g_cm, &act)) {
+            if (act.Kind == TBT_U4_ACT_TUNNEL_UP && act.Port == 1 && act.Kid == k->Index) {
+                n++;
+            } else {
+                other++;
+            }
+        }
+        CHECK_EQ(n, 1, "section 3's chain action queued once, for the kid");
+        CHECK_EQ(other, 0, "and nothing else");
+    }
+}
+
+/* Sections 6.4 and 6.6 behind a Thunderbolt 3 parent (the TS3 Plus). */
+static void test_kid_connect_tbt3(void)
+{
+    int dev;
+    int child;
+    unsigned long sx;
+    const TBT_U4_KID *k;
+
+    dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP, "behind the Thunderbolt 3 dock: UP");
+    CHECK_EQ(fabFindWrite(&g_fab, 0, dev, TBT_CS_ADAPTER, 3, 4), -1,
+             "step 1: no Lock write on a Thunderbolt 3 parent");
+    {
+        unsigned long i;
+        int lb = 0;
+
+        /* The fake advertises the lane capability at FAB_CAP_LANE (the
+         * emulator's dock at 0x36, so its Lane Bonding DW is 0x37). */
+        for (i = 0; i < g_fab.WrCount && i < FAB_WRLOG; i++) {
+            if (g_fab.WrRouter[i] == dev && g_fab.WrCs[i] == TBT_CS_ADAPTER && g_fab.WrAdp[i] == 3 &&
+                g_fab.WrAddr[i] == FAB_CAP_LANE + 1 && (g_fab.WrVal[i] & TBT_LANE1_LB) != 0) {
+                lb = 1;
+            }
+        }
+        CHECK(lb, "step 5: Lane Bonding on the dock's adapter 3");
+    }
+    CHECK(entryTo(&g_fab, dev, 7, 8, 3, kidOf(&g_cm, 1)->Pcie.Hd), "down 1 at 3:7");
+    CHECK(entryTo(&g_fab, child, 1, (int)kidOf(&g_cm, 1)->Pcie.Hd, 5, 8), "down 2");
+    CHECK(entryTo(&g_fab, child, 5, 8, 1, kidOf(&g_cm, 1)->Pcie.Hu), "up 1");
+    CHECK(entryTo(&g_fab, dev, 3, (int)kidOf(&g_cm, 1)->Pcie.Hu, 7, 8), "up 2 to 3:7");
+    sx = fabRtr(&g_fab, dev, FAB_RCAP_LC + FAB_LC_START + FAB_LC_PORT_SIZE + TBT_LC_SX_CTRL);
+    CHECK(sx & TBT_LC_SX_CTRL_L1C, "the dock's downstream port configured in its link controller");
+    CHECK_EQ(sx & TBT_LC_SX_CTRL_UPSTREAM, 0, "without UPSTREAM");
+    CHECK_EQ(fabRtr(&g_fab, child, 5) & TBT_RTR5_UTO, 0, "no UTO behind a Thunderbolt 3 parent");
+    CHECK(fabChainPcieUp(&g_fab, dev), "the chained tunnel: 3:7 to 303:5");
+    /* Section 6.5: the dock's adapter 7 reads LTSSM 3 throughout, the
+     * connect included (FAB_DEV_TBT3_DOCK); never interpreted, so 2 s of
+     * idle ticks keep the kid UP; the child's PCIe Up in Detect for 2 s
+     * is a loss. */
+    poll(&g_cm, &g_fab, 12);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the parent's LTSSM field ignored past 2 s");
+    g_fab.R[child].Adp[5].LtssmForce = 1 + 0;
+    poll(&g_cm, &g_fab, 12);
+    CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "the child's PCIe Up in Detect for 2 s: lost");
+    CHECK_EQ(fabAdp(&g_fab, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "the parent's end torn down");
+    g_fab.R[child].Adp[5].LtssmForce = 0;
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the dock itself kept UP");
+}
+
+/* Section 6.4's refusals and failures. */
+static void test_kid_refused(void)
+{
+    int dev;
+    int child;
+    unsigned long mark;
+
+    /* A Thunderbolt 3 child: UNSUPPORTED in the minimal cut. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    mark = g_fab.WrCount;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UNSUPPORTED, "a Thunderbolt 3 child: UNSUPPORTED");
+    CHECK_EQ(fabFindWrite(&g_fab, (long)mark, child, TBT_CS_ROUTER, 0, 1), -1,
+             "never enumerated");
+
+    /* No PCIe Down adapter on the parent: no tunnel, logged. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.R[dev].Adp[7].Present = 0;
+    fabPlug(&g_fab, 1, dev);
+    g_fab.Watch = "u4.kid";
+    {
+        TBT_U4_CONFIG c;
+        cfgDefault(&c);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+    }
+    poll(&g_cm, &g_fab, 2);
+    child = fabChild(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(watched("u4.kid.no-pcie-down") >= 1, "no PCIe Down: logged");
+    CHECK(!fabChainPcieUp(&g_fab, dev), "and no chained tunnel");
+    g_fab.Watch = NULL;
+
+    /* Detect not reached on the child's PCIe Up: FAILED, nothing left. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    g_fab.R[child].Adp[5].DetectStuck = 1;
+    g_fab.R[child].Adp[5].LtssmForce = 1 + 2;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "Detect not reached: FAILED");
+    CHECK_EQ(kidOf(&g_cm, 1) != NULL ? kidOf(&g_cm, 1)->Why : 0, TBT_U4_WHY_DETECT, "for Detect");
+    CHECK_EQ(fabPath0(&g_fab, dev, 7, 8) & TBT_PATH0_VALID, 0, "no entry written on the parent");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+
+    /* The approval rule as at depth 1: XhciCmApprove 0 leaves the parent
+     * without a PCIe tunnel, so the child stays locked and uninitialised. */
+    {
+        TBT_U4_CONFIG c;
+        cfgDefault(&c);
+        c.Approve = 0;
+        dev = setupParent(FAB_DEV_USB4, &c);
+    }
+    child = fabChild(&g_fab, dev);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(kidOf(&g_cm, 1) == NULL, "no PCIe tunnel on the parent: no kid");
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "the child left uninitialised");
+}
+
+/* Hook: the host port's and the kid's unplug hints at the first request
+ * that finds either set, before a check reads registers and clears it. */
+static int g_snapArmed;
+static int g_snapHost;
+static int g_snapKid;
+static int snapHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                    unsigned long adp, unsigned long addr, unsigned long n,
+                    const unsigned long *data)
+{
+    const TBT_U4_KID *k;
+
+    (void)f; (void)router; (void)cs; (void)adp; (void)addr; (void)n; (void)data;
+    if (g_snapArmed && (pdf == TBT_PDF_READ || pdf == TBT_PDF_WRITE)) {
+        k = kidOf(&g_cm, 1);
+        if (TbtU4Port(&g_cm, 1)->UnplugPending || (k != NULL && k->UnplugPending)) {
+            g_snapArmed = 0;
+            g_snapHost = TbtU4Port(&g_cm, 1)->UnplugPending;
+            g_snapKid = k != NULL && k->UnplugPending;
+        }
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Hook: every write to one DW swallowed (never answered) once armed. */
+static int g_failRouter;
+static unsigned long g_failCs;
+static unsigned long g_failAdp;
+static unsigned long g_failAddr;
+static int failWriteHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                         unsigned long adp, unsigned long addr, unsigned long n,
+                         const unsigned long *data)
+{
+    (void)f; (void)n; (void)data;
+    if (pdf == TBT_PDF_WRITE && router == g_failRouter && cs == g_failCs &&
+        adp == g_failAdp && addr == g_failAddr) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Whether the quarantine holds `adp`'s entry `hop` (or, with `enable`,
+ * its Path Enable) on `route` for host port 1 and its kid, by index. */
+static int kidQuarantined(const TBT_ROUTE *route, ULONG adp, ULONG hop, int enable)
+{
+    ULONG i;
+    const TBT_U4_QENTRY *q;
+
+    for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+        q = &g_cm.Quarantine[i];
+        if (q->Used && q->Port == 1 && kidOf(&g_cm, 1) != NULL &&
+            q->Kid == kidOf(&g_cm, 1)->Index && TbtRouteEqual(&q->Route, route) &&
+            q->Adapter == adp && (enable ? q->Enable : (!q->Enable && q->Hop == hop))) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* An entry live or not proven drained: Valid, or Pending Packets set. */
+static int entryOpen(const FAB *f, int r, int adp, int hop)
+{
+    return (fabPath0(f, r, adp, hop) & TBT_PATH0_VALID) != 0 ||
+           (fabPath1(f, r, adp, hop) & TBT_PATH1_PP) != 0;
+}
+
+/* Every entry of the kid's tunnel, and each Path Enable, on either end:
+ * closed and drained, or held by a quarantine record of its own. */
+static int kidPathsClosed(const FAB *f, int dev, int child, const TBT_ROUTE *dr,
+                          const TBT_ROUTE *cr)
+{
+    int a = fabDownLane0(f, dev);
+    int h;
+
+    for (h = 8; h < 24; h++) {
+        if (entryOpen(f, dev, a, h) && !kidQuarantined(dr, (ULONG)a, (ULONG)h, 0)) {
+            return 0;
+        }
+        if (entryOpen(f, child, 1, h) && !kidQuarantined(cr, 1, (ULONG)h, 0)) {
+            return 0;
+        }
+    }
+    if (entryOpen(f, dev, 7, 8) && !kidQuarantined(dr, 7, 8, 0)) {
+        return 0;
+    }
+    if (entryOpen(f, child, 5, 8) && !kidQuarantined(cr, 5, 8, 0)) {
+        return 0;
+    }
+    if ((fabAdp(f, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE) && !kidQuarantined(dr, 7, 0, 1)) {
+        return 0;
+    }
+    if ((fabAdp(f, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE) && !kidQuarantined(cr, 5, 0, 1)) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Section 6.6: a failure after any write - the orderly teardown of the
+ * entries written, the kid FAILED, the parent's tunnel kept. A write
+ * that is never answered at each stage: the upstream path's first
+ * segment (the child's PCIe Up HopID 8), the parent's Path Enable (the
+ * last write); and a drain that never completes on the parent's lane. */
+static void test_kid_path_failures(void)
+{
+    int dev;
+    int child;
+    int stage;
+
+    for (stage = 0; stage < 2; stage++) {
+        dev = setupParent(FAB_DEV_USB4, NULL);
+        child = fabChild(&g_fab, dev);
+        if (stage == 0) {
+            g_failRouter = child;
+            g_failCs = TBT_CS_PATH;
+            g_failAdp = 5;
+            g_failAddr = 2 * 8;
+        } else {
+            g_failRouter = dev;
+            g_failCs = TBT_CS_ADAPTER;
+            g_failAdp = 7;
+            g_failAddr = FAB_CAP_ADP;
+        }
+        g_fab.Hook = failWriteHook;
+        fabHotPlugChild(&g_fab, dev, child);
+        poll(&g_cm, &g_fab, 4);
+        g_fab.Hook = NULL;
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "a write never answered: the kid FAILED");
+        {
+            TBT_ROUTE cr;
+            const TBT_U4_KID *k = kidOf(&g_cm, 1);
+
+            cr = k != NULL ? k->Dev.Route : TbtU4Port(&g_cm, 1)->Dev.Route;
+            CHECK(k != NULL && kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &cr),
+                  "each entry and Path Enable it wrote closed or quarantined itself");
+        }
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+        CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+    }
+
+    /* A drain that never completes: quarantined under the kid, its HopID
+     * not reused by the next connect. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = 7;
+    g_failAddr = FAB_CAP_ADP;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[8] = 1;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[9] = 1;
+    g_fab.Hook = failWriteHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    g_fab.Hook = NULL;
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "stuck drain: FAILED");
+    CHECK(quarantineCount(&g_cm) >= 1, "the undrained entry quarantined");
+    CHECK(kidOf(&g_cm, 1) != NULL &&
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "each one held by its own record");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int stuck = 0;
+
+        for (h = 8; h <= 9; h++) {
+            if (entryOpen(&g_fab, dev, a, h)) {
+                stuck++;
+                CHECK(kidQuarantined(&TbtU4Port(&g_cm, 1)->Dev.Route, (ULONG)a, (ULONG)h, 0),
+                      "the undrained parent-lane HopID quarantined itself");
+            }
+        }
+        CHECK(stuck >= 1, "an entry left undrained on the parent's lane");
+    }
+    {
+        ULONG i;
+        int kidOwned = 0;
+        for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+            if (g_cm.Quarantine[i].Used && kidOf(&g_cm, 1) != NULL &&
+                g_cm.Quarantine[i].Kid == kidOf(&g_cm, 1)->Index) {
+                kidOwned = 1;
+            }
+        }
+        CHECK(kidOwned, "keyed by the kid (section 6.7)");
+    }
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[8] = 0;
+    g_fab.R[dev].Adp[fabDownLane0(&g_fab, dev)].PpStuck[9] = 0;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP throughout");
+}
+
+/* Section 6.7: the end device's unplug, and a quick re-plug. */
+static void test_kid_end_unplug(void)
+{
+    int dev;
+    int child;
+    int a;
+    ULONG gen;
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    a = fabDownLane0(&g_fab, dev);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    gen = kidOf(&g_cm, 1)->Generation;
+    (void)countActions(&g_cm, 0);
+    g_ldCalls = 0;
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "the child gone: EMPTY");
+    CHECK_EQ(fabAdp(&g_fab, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "step 1: the parent's PCIe Down disabled");
+    CHECK_EQ(fabPath0(&g_fab, dev, 7, 8) & TBT_PATH0_VALID, 0, "its HopID 8 entry invalid");
+    CHECK_EQ(fabPath0(&g_fab, dev, a, 9) & TBT_PATH0_VALID, 0, "the lane's hu entry invalid");
+    CHECK_EQ(fabAdp(&g_fab, dev, a, FAB_CAP_PORT + 19) & TBT_PORT19_PC, 0,
+             "step 5: the parent's downstream port Configured cleared");
+    CHECK_EQ(fabAdp(&g_fab, dev, a, FAB_CAP_LANE + 1) & 0x30UL, 0x10UL, "Target Link Width restored");
+    CHECK_EQ(g_ldCalls, 1, "steps 2 and 3: the link-down upcall once");
+    CHECK_EQ(g_ld.Port, 1, "for the host port");
+    CHECK_EQ(g_ld.Kid, 1, "and the kid");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "step 6: the chain port's removal");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+    CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+
+    /* A quick re-plug: a new generation, connected again. */
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "re-plugged: UP");
+    CHECK(kidOf(&g_cm, 1)->Generation > gen, "a new generation");
+
+    /* A child's ERR_CONN is never the host port's unplug (section 6.5):
+     * the flags read at the first request after the queues are taken,
+     * before any check clears them. */
+    {
+        unsigned long dw[3];
+        g_snapArmed = 1;
+        g_snapHost = 0;
+        g_snapKid = 0;
+        g_fab.Hook = snapHook;
+        dw[0] = 0x80000000UL;
+        dw[1] = (unsigned long)fabPortLane0(&g_fab, 1);
+        dw[2] = TBT_EV_ERR_CONN | ((unsigned long)a << 8);
+        fabInject(&g_fab, TBT_PDF_NOTIFY, dw, 3);
+    }
+    TbtU4Poll(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK(g_snapArmed == 0, "a request after the queues were taken");
+    CHECK(!g_snapHost, "the parent's unplug not set by its child's ERR_CONN");
+    CHECK(g_snapKid, "the kid's unplug hint set");
+}
+
+/* Hook: the parent pulled at the child's enumeration write. */
+static int g_pullDev;
+static int g_pullChild;
+static int pullParentHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                          unsigned long adp, unsigned long addr, unsigned long n,
+                          const unsigned long *data)
+{
+    (void)pdf; (void)adp; (void)n; (void)data;
+    if (router == g_pullChild && cs == TBT_CS_ROUTER && addr == 1 && g_pullDev >= 0) {
+        g_pullDev = -1;
+        fabUnplug(f, 1);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Hook: a stale unplug event for the kid's lane delivered at the child's
+ * enumeration write, the child still there (section 6.2). */
+static int g_staleDev;
+static int g_staleChild;
+static int staleUnplugHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                           unsigned long adp, unsigned long addr, unsigned long n,
+                           const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)pdf; (void)adp; (void)n; (void)data;
+    if (router == g_staleChild && cs == TBT_CS_ROUTER && addr == 1 && g_staleDev >= 0) {
+        dw[0] = 0x80000000UL;
+        dw[1] = (unsigned long)fabPortLane0(f, 1);
+        dw[2] = (unsigned long)fabDownLane0(f, g_staleDev) | 0x80000000UL;
+        g_staleDev = -1;
+        fabInject(f, TBT_PDF_HOTPLUG, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_kid_stale_unplug(void)
+{
+    int dev;
+    int child;
+
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    g_staleDev = dev;
+    g_staleChild = child;
+    g_fab.Hook = staleUnplugHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    g_fab.Hook = NULL;
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "a stale unplug event: the healthy connect goes on");
+    CHECK(fabChainPcieUp(&g_fab, dev), "its tunnel up");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent untouched");
+}
+
+/* Section 6.8: the middle device's unplug. */
+static void test_kid_middle_unplug(void)
+{
+    int dev;
+    int child;
+    unsigned long mark;
+
+    /* With the kid UP: dropped first with no register work. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    (void)countActions(&g_cm, 0);
+    mark = g_fab.TriedCount;
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "the parent gone: EMPTY");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "its kid dropped");
+    CHECK_EQ(fabTriedTo(&g_fab, mark, dev) + fabTriedTo(&g_fab, mark, child), 0,
+             "no write even attempted on the departed routers");
+    CHECK(hostClean(&g_fab, 1), "the host side torn down");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "no quarantine left for them");
+
+    /* With the kid CONNECTING: its sequence ends at its next check, the
+     * parent's teardown not nested under it. */
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    g_pullDev = dev;
+    g_pullChild = child;
+    g_fab.Hook = pullParentHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    g_fab.Hook = NULL;
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "the parent gone during the kid's connect: EMPTY");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "the kid's sequence ended");
+    CHECK(hostClean(&g_fab, 1), "the host side clean");
+    CHECK_EQ(g_cm.Counters.UnplugsNested, 0, "nothing nested under the kid's sequence");
+}
+
+/* Hook: the child on port 1 pulled at port 2's enumeration write. */
+static int g_pull2Parent;
+static int g_pull2Dev;
+static int pullKidHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                       unsigned long adp, unsigned long addr, unsigned long n,
+                       const unsigned long *data)
+{
+    (void)pdf; (void)adp; (void)n; (void)data;
+    if (router == g_pull2Dev && cs == TBT_CS_ROUTER && addr == 1 && g_pull2Parent >= 0) {
+        fabHotUnplugChild(f, g_pull2Parent);
+        g_pull2Parent = -1;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Section 6.2: a kid's unplug seen at a safe point of another port's
+ * sequence is not nested there; the next tick's kid check serves it. And
+ * section 6.7: a depth-3 link below a kid goes with it, unwritten. */
+static void test_kid_not_nested(void)
+{
+    int dev;
+    int child;
+    int dev2;
+    int grand;
+    unsigned long mark;
+    ULONG i;
+    ULONG n;
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid on port 1 UP");
+    dev2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_pull2Parent = dev;
+    g_pull2Dev = dev2;
+    g_fab.Hook = pullKidHook;
+    fabPlug(&g_fab, 2, dev2);
+    TbtU4Poll(&g_cm);
+    g_fab.Hook = NULL;
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2 connected through the kid's unplug");
+    CHECK_EQ(g_cm.Counters.UnplugsNested, 0, "the kid's teardown not nested in it");
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "served at the next tick");
+    CHECK_EQ(fabAdp(&g_fab, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "its parent side torn down");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+
+    /* A router behind the kid at depth 3, as a predecessor left it. */
+    {
+        TBT_U4_CONFIG c;
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        dev = fabDevice(&g_fab, FAB_DEV_USB4);
+        child = fabChild(&g_fab, dev);
+        grand = fabChild(&g_fab, child);
+        fabPlug(&g_fab, 1, dev);
+        fabPreos(&g_fab, 1, 0);
+        fabPreosChild(&g_fab, dev, child, 0);
+        fabPlugChild(&g_fab, child, grand, 1);
+        g_fab.RxQCount = 0;
+        cfgDefault(&c);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        poll(&g_cm, &g_fab, 2);
+    }
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid adopted");
+    n = 0;
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        n += g_cm.Links[i].Used ? 1 : 0;
+    }
+    CHECK_EQ(n, 1, "the depth-3 router a watched link");
+    mark = g_fab.TriedCount;
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "the kid gone");
+    n = 0;
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        n += g_cm.Links[i].Used ? 1 : 0;
+    }
+    CHECK_EQ(n, 0, "its depth-3 link dropped with it");
+    CHECK_EQ(fabTriedTo(&g_fab, mark, child) + fabTriedTo(&g_fab, mark, grand), 0,
+             "no write even attempted on the departed routers");
+}
+
+/* Section 6.3's first case and section 6.7's eject. */
+static void test_kid_loss_and_eject(void)
+{
+    int dev;
+    int child;
+    long kidOff;
+    long hostOff;
+    int hp;
+    unsigned long mark;
+
+    /* The parent's PCIe tunnel lost with both routers present: the kid
+     * torn down with both ends, then the parent's removal. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    hp = fabPortPcie(&g_fab, 1);
+    mark = g_fab.WrCount;
+    g_fab.R[0].Adp[hp].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "the parent: FAILED, lost");
+    CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "its kid down");
+    CHECK_EQ(fabAdp(&g_fab, child, 5, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "the child's end disabled");
+    CHECK_EQ(fabAdp(&g_fab, dev, 7, FAB_CAP_ADP) & TBT_PCIE0_PE, 0, "the parent's end disabled");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int open = 0;
+
+        for (h = 8; h < 24; h++) {
+            open += entryOpen(&g_fab, dev, a, h) + entryOpen(&g_fab, child, 1, h);
+        }
+        open += entryOpen(&g_fab, dev, 7, 8) + entryOpen(&g_fab, child, 5, 8);
+        CHECK_EQ(open, 0, "every entry of the chained tunnel invalid and drained");
+    }
+    kidOff = findPe(&g_fab, mark, dev, 7, 0);
+    hostOff = findPe(&g_fab, mark, dev, 5, 0);
+    CHECK(kidOff >= 0 && hostOff > kidOff, "the kid's tunnel first, then the parent's");
+
+    /* The kid's eject: its tunnel down orderly, the parent kept. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    CHECK_EQ(TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index), TBT_OK, "the kid ejected");
+    CHECK(!fabChainPcieUp(&g_fab, dev), "its tunnel down");
+    CHECK(kidOf(&g_cm, 1) != NULL && kidOf(&g_cm, 1)->Ejected, "and marked ejected");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK(kidOf(&g_cm, 1) != NULL &&
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "every entry of the kid's tunnel invalid and drained at both ends");
+    poll(&g_cm, &g_fab, 2);
+    CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "it stays down");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP");
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "unplugged and plugged again: UP");
+
+    /* The parent's eject with its kid up: the kid's tunnel first. */
+    mark = g_fab.WrCount;
+    CHECK_EQ(TbtU4Eject(&g_cm, 1), TBT_OK, "the parent ejected");
+    CHECK(!fabChainPcieUp(&g_fab, dev) && !fabPcieUp(&g_fab, 1), "both tunnels down");
+    CHECK_EQ(quarantineCount(&g_cm), 0, "nothing quarantined");
+    CHECK(kidOf(&g_cm, 1) == NULL || kidOf(&g_cm, 1)->State == TBT_U4_EMPTY ||
+          kidPathsClosed(&g_fab, dev, child, &TbtU4Port(&g_cm, 1)->Dev.Route, &kidOf(&g_cm, 1)->Dev.Route),
+          "the kid's entries invalid and drained");
+    {
+        int a = fabDownLane0(&g_fab, dev);
+        int h;
+        int open = 0;
+
+        for (h = 8; h < 24; h++) {
+            open += entryOpen(&g_fab, dev, a, h) + entryOpen(&g_fab, child, 1, h);
+        }
+        open += entryOpen(&g_fab, dev, 7, 8) + entryOpen(&g_fab, child, 5, 8);
+        CHECK_EQ(open, 0, "no entry of the chained tunnel left open after the parent's eject");
+    }
+    kidOff = findPe(&g_fab, mark, dev, 7, 0);
+    hostOff = findPe(&g_fab, mark, 0, (unsigned long)hp, 0);
+    CHECK(kidOff >= 0 && hostOff > kidOff, "the kid's tunnel closed before the parent's");
+}
+
+/* Section 6.9: chains present at the start. */
+static void test_kid_adopt(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    int child;
+    unsigned long mark;
+    const TBT_U4_KID *k;
+
+    /* A preserved chain that verifies: adopted, nothing written. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    mark = g_fab.WrCount;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP, "a preserved chain: the kid UP");
+    CHECK(k != NULL && k->Pcie.Preserved, "preserved");
+    CHECK(k != NULL && k->Pcie.Hd == 8 && k->Pcie.Hu == 9, "hd and hu recorded");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child), 0,
+             "no configuration written to the child (router operations aside)");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing re-enumerated");
+    CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "found as a link first");
+    {
+        ULONG i;
+        ULONG n = 0;
+        for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+            n += g_cm.Links[i].Used ? 1 : 0;
+        }
+        CHECK_EQ(n, 0, "the link freed into the kid");
+    }
+
+    /* The same behind the Thunderbolt 3 dock, its PCIe Down reading
+     * LTSSM 3: the USB4 end's LTSSM and both Path Enables verify it. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_DOCK);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    g_fab.RxQCount = 0;
+    mark = g_fab.WrCount;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->Pcie.Preserved,
+          "a preserved chain behind the dock: adopted");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesNoEe(&g_fab, mark, dev), 0,
+             "no configuration written to the dock or the child");
+    CHECK(fabChainPcieUp(&g_fab, dev), "both Path Enables kept");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing re-enumerated");
+
+    /* Half-built (the child's Path Enable clear): a watched link. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 0);
+    g_fab.R[child].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(kidOf(&g_cm, 1) == NULL, "half-built: no kid");
+    CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "a watched link");
+
+    /* Another path on the link: watched, its unplug sweeping it. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, dev, child, 1);
+    g_fab.RxQCount = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK(kidOf(&g_cm, 1) == NULL, "a second path on the link: no kid");
+    fabUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    CHECK_EQ(fabPath0(&g_fab, dev, fabDownLane0(&g_fab, dev), 10) & TBT_PATH0_VALID, 0,
+             "its unplug swept the second path");
+
+    /* A depth-2 link with no tunnel: connected, its TopologyID kept. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, dev, child, 1);
+    g_fab.RxQCount = 0;
+    mark = g_fab.WrCount;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "no tunnel: connected");
+    CHECK_EQ(fabFindWrite(&g_fab, (long)mark, child, TBT_CS_ROUTER, 0, 3), -1,
+             "its TopologyID kept, not written");
+    CHECK(fabChainPcieUp(&g_fab, dev), "the chained tunnel built");
+}
+
+/* Section 6.9: across a sleep. */
+static void test_kid_resume(void)
+{
+    int dev;
+    int child;
+    LONG rc;
+    unsigned long mark;
+
+    /* Verified: nothing written. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4Suspend(&g_cm);
+    mark = g_fab.WrCount;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume: the kid's obligation verified");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child), 0,
+             "no configuration written to the child (router operations aside)");
+
+    /* Verified behind the Thunderbolt 3 dock, its PCIe Down reading
+     * LTSSM 3 throughout: nothing written. */
+    dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+    TbtU4Suspend(&g_cm);
+    mark = g_fab.WrCount;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume behind the dock: verified");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesTo(&g_fab, mark, dev), 0,
+             "nothing written to the dock or the child");
+    CHECK(fabChainPcieUp(&g_fab, dev), "its tunnel kept");
+
+    /* The domain lost its configuration: rebuilt after its parent. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    g_fab.RxQCount = 0;
+    mark = g_fab.WrCount;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume: both obligations met");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent rebuilt in the resume");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid rebuilt in the resume");
+    CHECK(fabChainPcieUp(&g_fab, dev), "its tunnel up again");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "and stays UP");
+    {
+        long pp = findPe(&g_fab, mark, dev, 5, 1);
+        long kp = findPe(&g_fab, mark, child, 5, 1);
+        CHECK(pp >= 0 && kp > pp, "after its parent's");
+    }
+
+    /* Behind the Thunderbolt 3 dock, the domain's power lost: the dock's
+     * downstream lanes carry no Lock, and the kid is rebuilt after it. */
+    dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "a kid behind the dock");
+    TbtU4Suspend(&g_cm);
+    fabPowerCycle(&g_fab);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resume behind the dock: both obligations met");
+    CHECK_EQ(fabAdp(&g_fab, dev, 3, 4) & 0x80000000UL, 0, "no Lock on the dock's lane");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid behind the dock rebuilt in the resume");
+    CHECK(fabChainPcieUp(&g_fab, dev), "its tunnel up again");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "and stays UP");
+
+    /* The dock unplugged and plugged again with its child still attached:
+     * the dock first, then its kid connected afresh. */
+    fabUnplug(&g_fab, 1);
+    poll(&g_cm, &g_fab, 1);
+    fabPlug(&g_fab, 1, dev);
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the dock re-plugged: UP");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "its child found and connected again");
+
+    /* The parent HELD at resume: the kid HELD with it, nothing written,
+     * its obligation kept. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    mark = g_fab.WrCount;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "resume: the parent's obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent HELD");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_HELD, "its kid HELD");
+    CHECK_EQ(writesTo(&g_fab, mark, child) + writesTo(&g_fab, mark, dev), 0, "nothing written");
+    {
+        ULONG i;
+        ULONG n = 0;
+        for (i = 0; i < TBT_U4_OBLIGATIONS; i++) {
+            if (g_cm.Obligations[i].Used && g_cm.Obligations[i].Kid != 0) {
+                n++;
+            }
+        }
+        CHECK_EQ(n, 1, "the kid's obligation kept");
+    }
+    (void)dev;
+}
+
+/* Hook: an ERR_CONN from the child's own route delivered at the parent's
+ * TopologyID read (its check), once armed. */
+static int g_foreignDev;
+static int foreignHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                       unsigned long adp, unsigned long addr, unsigned long n,
+                       const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)n; (void)data;
+    if (pdf == TBT_PDF_READ && router == g_foreignDev && cs == TBT_CS_ROUTER && addr == 3) {
+        dw[0] = 0x80000000UL;
+        dw[1] = ((unsigned long)fabDownLane0(f, g_foreignDev) << 8) |
+                (unsigned long)fabPortLane0(f, 1);
+        dw[2] = TBT_EV_ERR_CONN | (3UL << 8);
+        g_foreignDev = -1;
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Hook: a host ERR_CONN naming port 2's lane 0 delivered at the first
+ * host path-entry write once armed (port 1's tunnel being built). */
+static int g_xportArmed;
+static int xportHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)addr; (void)n; (void)data;
+    if (g_xportArmed && pdf == TBT_PDF_WRITE && router == 0 && cs == TBT_CS_PATH) {
+        g_xportArmed = 0;
+        dw[0] = 0x80000000UL;
+        dw[1] = 0;
+        dw[2] = TBT_EV_ERR_CONN | ((unsigned long)fabPortLane0(f, 2) << 8);
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Hook: the same host ERR_CONN at the first router-operation launch
+ * (ROUTER_CS_9 written) to router g_ropDev once armed. */
+static int g_ropDev;
+static int ropHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                   unsigned long adp, unsigned long addr, unsigned long n,
+                   const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)n; (void)data;
+    if (g_ropDev >= 0 && pdf == TBT_PDF_WRITE && router == g_ropDev &&
+        cs == TBT_CS_ROUTER && addr == 9) {
+        g_ropDev = -1;
+        dw[0] = 0x80000000UL;
+        dw[1] = 0;
+        dw[2] = TBT_EV_ERR_CONN | ((unsigned long)fabPortLane0(f, 2) << 8);
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Router-operation launches written to router `r` from log entry `from`. */
+static unsigned long ropLaunches(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long k = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r && f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] == 26 &&
+            (f->WrVal[i] & 0x80000000UL) != 0) {
+            k++;
+        }
+    }
+    return k;
+}
+
+/* Record 34 section 6.5 at a request: an ERR_CONN from the child's own
+ * route, handed by the transport to the parent's identity read, is never
+ * the parent's removal; and under a parent HELD at resume the kid is
+ * still served by its own unplug (section 6.3). */
+static void test_kid_foreign_and_held(void)
+{
+    int dev;
+    int child;
+    LONG rc;
+    ULONG i;
+    ULONG n;
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the kid UP");
+    (void)countActions(&g_cm, 0);
+    g_foreignDev = dev;
+    g_fab.Hook = foreignHook;
+    poll(&g_cm, &g_fab, 2);
+    g_fab.Hook = NULL;
+    CHECK(g_foreignDev < 0, "the notification was delivered at the parent's read");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "a child-route ERR_CONN: the parent kept UP");
+    CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "and the kid, still there, UP");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "nothing removed");
+
+    dev = setupKid(FAB_DEV_USB4, &child);
+    TbtU4Suspend(&g_cm);
+    g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_E_STATE, "resume: the parent's obligation unmet");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent HELD");
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_HELD, "its kid HELD");
+    (void)countActions(&g_cm, 0);
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_EMPTY, "the child unplugged under the HELD parent: EMPTY");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "its chain port's removal");
+    n = 0;
+    for (i = 0; i < TBT_U4_OBLIGATIONS; i++) {
+        if (g_cm.Obligations[i].Used && g_cm.Obligations[i].Kid != 0) {
+            n++;
+        }
+    }
+    CHECK_EQ(n, 0, "and its obligation gone");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent still HELD");
+
+    /* A host ERR_CONN naming another port's lane, handed to a host-local
+     * request of port 1's connect: neither port torn down, the request
+     * asked again. */
+    {
+        int d1;
+        int d2;
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+        fabPlug(&g_fab, 2, d2);
+        {
+            TBT_U4_CONFIG c;
+            cfgDefault(&c);
+            (void)start(&g_fab, &g_ring, &g_cm, &c);
+        }
+        poll(&g_cm, &g_fab, 2);
+        CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2 UP");
+        (void)countActions(&g_cm, 0);
+        g_xportArmed = 1;
+        g_fab.Hook = xportHook;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        g_fab.Hook = NULL;
+        CHECK(g_xportArmed == 0, "the notification delivered at port 1's host path write");
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "port 1 connected through another port's ERR_CONN");
+        CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+        CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2, still there, kept UP");
+        CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "nothing removed");
+    }
+
+    /* The same notification at a router operation's launch: the launch is
+     * never written a second time (an operation running would be written
+     * over with OV set, record 22 section 6.7). */
+    {
+        int d1;
+        unsigned long mark;
+        unsigned long plain;
+        TBT_U4_CONFIG c;
+
+        cfgDefault(&c);
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        mark = g_fab.WrCount;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        plain = ropLaunches(&g_fab, mark, d1);
+        CHECK(plain >= 1, "a connect launches router operations");
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        mark = g_fab.WrCount;
+        g_ropDev = d1;
+        g_fab.Hook = ropHook;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        g_fab.Hook = NULL;
+        CHECK(g_ropDev < 0, "the notification delivered at a launch");
+        CHECK(ropLaunches(&g_fab, mark, d1) <= plain, "no launch written twice");
+    }
+}
+
+/* Section 6.7's cleanup gates the next connect: a re-plug while the last
+ * connection's entry is still undrained on the parent's lane, and while a
+ * lane change is not yet proven undone, waits; each connects once the
+ * link is clean. */
+static void test_kid_cleanup_gates(void)
+{
+    int dev;
+    int child;
+    int a;
+
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    a = fabDownLane0(&g_fab, dev);
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = 7;
+    g_failAddr = FAB_CAP_ADP;
+    g_fab.R[dev].Adp[a].PpStuck[8] = 1;
+    g_fab.R[dev].Adp[a].PpStuck[9] = 1;
+    g_fab.Hook = failWriteHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    g_fab.Hook = NULL;
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "stuck drain: FAILED");
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "re-plugged over an undrained entry: not connected");
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "the child left uninitialised");
+    /* The fabric drains at last (the model latches Pending Packets). */
+    g_fab.R[dev].Adp[a].PpStuck[8] = 0;
+    g_fab.R[dev].Adp[a].PpStuck[9] = 0;
+    g_fab.R[dev].Adp[a].Path[2 * 8 + 1] &= ~TBT_PATH1_PP;
+    g_fab.R[dev].Adp[a].Path[2 * 9 + 1] &= ~TBT_PATH1_PP;
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the entry drained: connected");
+
+    /* A lane change not undone at the end unplug keeps the kid's slot in
+     * TEARDOWN, and the re-plug waits for it. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    a = fabDownLane0(&g_fab, dev);
+    CHECK(kidOf(&g_cm, 1) != NULL && kidOf(&g_cm, 1)->LaneWritten, "bonded: the lane changes owned");
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = (unsigned long)a;
+    g_failAddr = FAB_CAP_LANE + 1;
+    g_fab.Hook = failWriteHook;
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "a lane restore not answered: still TEARDOWN");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "the removal not held back");
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "the re-plug waits for it");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "restored: the re-plug connected");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP throughout");
+
+    /* A kid whose teardown is still owed at a host-interface loss, its
+     * parent replaced before the recovery: dropped with the departed
+     * parent, nothing of it written to the router now on the port. */
+    {
+        LONG rc;
+        BOOLEAN final;
+        int d2;
+        unsigned long mark;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        a = fabDownLane0(&g_fab, dev);
+        g_failRouter = dev;
+        g_failCs = TBT_CS_ADAPTER;
+        g_failAdp = (unsigned long)a;
+        g_failAddr = FAB_CAP_LANE + 1;
+        g_fab.Hook = failWriteHook;
+        fabHotUnplugChild(&g_fab, dev);
+        poll(&g_cm, &g_fab, 2);
+        g_fab.Hook = NULL;
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "recovery: a kid's teardown owed");
+        d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+        g_fab.Gone = 1;
+        TbtU4Contain(&g_cm);
+        g_fab.Gone = 0;
+        g_fab.Cancel = 0;
+        fabSwapQuiet(&g_fab, 1, d2);
+        mark = g_fab.WrCount;
+        rc = TbtU4Recover(&g_cm, &final);
+        CHECK(!final, "recovery: not final");
+        if (rc == TBT_OK) {
+            TbtU4RecoverCommit(&g_cm);
+            (void)TbtU4TakeDebt(&g_cm, 1);
+            poll(&g_cm, &g_fab, 4);
+        }
+        CHECK(kidOf(&g_cm, 1) == NULL || kidOf(&g_cm, 1)->ParentGeneration ==
+                                             TbtU4Port(&g_cm, 1)->Generation,
+              "recovery: the old kid gone with its parent");
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, d2, TBT_CS_ADAPTER, (unsigned long)a,
+                              FAB_CAP_LANE + 1), -1,
+                 "recovery: no old lane restore written to the replacement");
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, d2, TBT_CS_ADAPTER, (unsigned long)a,
+                              FAB_CAP_PORT + 19), -1,
+                 "recovery: nor its old port mark");
+    }
+
+    /* A kid's quarantined Path Enable (the child's will not clear at its
+     * eject), the parent then HELD unclassified by a resume: the record is
+     * not retried before the parent's own check has classified it. */
+    {
+        unsigned long mark;
+        LONG rc;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        g_fab.R[child].Adp[5].PeStuck = 1;
+        (void)TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index);
+        CHECK(kidQuarantined(&kidOf(&g_cm, 1)->Dev.Route, 5, 0, 1),
+              "the child's Path Enable quarantined under the kid");
+        TbtU4Suspend(&g_cm);
+        g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+        rc = TbtU4Resume(&g_cm);
+        CHECK_EQ(rc, TBT_E_STATE, "resume: the parent HELD");
+        CHECK(TbtU4Port(&g_cm, 1)->ClassifyPending, "and not yet classified");
+        mark = g_fab.WrCount;
+        {
+            /* The tick's quarantine retry comes before the parent's check:
+             * one tick, then the child's adapter 5 must not have been
+             * written. */
+            ULONG i;
+            int before = 0;
+            for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+                if (g_cm.Quarantine[i].Used && g_cm.Quarantine[i].Enable &&
+                    g_cm.Quarantine[i].Adapter == 5 &&
+                    TbtRouteDepth(&g_cm.Quarantine[i].Route) == 2) {
+                    before = 1;
+                }
+            }
+            CHECK(before, "the record still there at the resume's end");
+        }
+        TbtU4Poll(&g_cm);
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, child, TBT_CS_ADAPTER, 5, FAB_CAP_ADP), -1,
+                 "not retried under the unclassified parent");
+        g_fab.R[child].Adp[5].PeStuck = 0;
+    }
+
+    /* The same record behind the Thunderbolt 3 dock (no Lock there), the
+     * child swapped for another before the next tick with no event: the
+     * record is never retried on the router now at its route. */
+    {
+        unsigned long mark;
+        int c2;
+
+        dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+        g_fab.R[child].Adp[5].PeStuck = 1;
+        (void)TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index);
+        CHECK(kidQuarantined(&kidOf(&g_cm, 1)->Dev.Route, 5, 0, 1),
+              "behind the dock: the child's Path Enable quarantined");
+        c2 = fabChild(&g_fab, dev);
+        fabUnplugChild(&g_fab, dev);
+        fabPlugChild(&g_fab, dev, c2, 1);
+        g_fab.R[c2].Adp[5].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.RxQCount = 0;
+        mark = g_fab.WrCount;
+        poll(&g_cm, &g_fab, 3);
+        CHECK_EQ(findPe(&g_fab, mark, c2, 5, 0), -1,
+                 "the replacement's Path Enable never cleared for the old child's record");
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the replacement connected as a new kid");
+        g_fab.R[child].Adp[5].PeStuck = 0;
+    }
+
+    /* The same record carried through a recovery (the ejected kid made a
+     * link again), the child swapped before the first tick after the
+     * commit: never retried on the router now at that route. */
+    {
+        unsigned long mark;
+        int c2;
+        LONG rc;
+        BOOLEAN final;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        g_fab.R[child].Adp[5].PeStuck = 1;
+        (void)TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index);
+        g_fab.Gone = 1;
+        TbtU4Contain(&g_cm);
+        g_fab.Gone = 0;
+        g_fab.Cancel = 0;
+        rc = TbtU4Recover(&g_cm, &final);
+        CHECK_EQ(rc, TBT_OK, "recovery with an ejected kid: TBT_OK");
+        TbtU4RecoverCommit(&g_cm);
+        (void)TbtU4TakeDebt(&g_cm, 1);
+        c2 = fabChild(&g_fab, dev);
+        fabUnplugChild(&g_fab, dev);
+        fabPlugChild(&g_fab, dev, c2, 1);
+        g_fab.R[c2].Adp[5].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.RxQCount = 0;
+        mark = g_fab.WrCount;
+        poll(&g_cm, &g_fab, 3);
+        CHECK_EQ(findPe(&g_fab, mark, c2, 5, 0), -1,
+                 "after a recovery: the replacement's Path Enable never cleared");
+        g_fab.R[child].Adp[5].PeStuck = 0;
+    }
+
+    /* Behind the dock, the child swapped quietly and then the dock's own
+     * PCIe tunnel lost before any tick: the kid's orderly teardown writes
+     * nothing to the router now at the child's route. */
+    {
+        unsigned long mark;
+        unsigned long tried;
+        int c2;
+        int hp;
+
+        dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "behind the dock: the kid UP");
+        c2 = fabChild(&g_fab, dev);
+        fabUnplugChild(&g_fab, dev);
+        fabPlugChild(&g_fab, dev, c2, 1);
+        g_fab.R[c2].Adp[5].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.RxQCount = 0;
+        hp = fabPortPcie(&g_fab, 1);
+        g_fab.R[0].Adp[hp].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+        mark = g_fab.WrCount;
+        tried = g_fab.TriedCount;
+        poll(&g_cm, &g_fab, 1);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "the dock's tunnel lost: FAILED");
+        CHECK_EQ(fabTriedTo(&g_fab, tried, c2), 0, "no write sent to the replacement child");
+    }
+}
+#endif /* TBT_U4_MAX_KIDS */
+
 int main(void)
 {
     RUN_VEC(test_bw_units);
@@ -5299,6 +6932,22 @@ int main(void)
     RUN_VEC(test_port_vacant);
     RUN_VEC(test_eject_own_sequence);
     RUN_VEC(test_resume_renumbered);
+    RUN_VEC(test_chain_fabric);
+#ifdef TBT_U4_MAX_KIDS
+    RUN_VEC(test_kid_connect_usb4);
+    RUN_VEC(test_kid_connect_tbt3);
+    RUN_VEC(test_kid_refused);
+    RUN_VEC(test_kid_path_failures);
+    RUN_VEC(test_kid_end_unplug);
+    RUN_VEC(test_kid_stale_unplug);
+    RUN_VEC(test_kid_middle_unplug);
+    RUN_VEC(test_kid_not_nested);
+    RUN_VEC(test_kid_loss_and_eject);
+    RUN_VEC(test_kid_adopt);
+    RUN_VEC(test_kid_resume);
+    RUN_VEC(test_kid_foreign_and_held);
+    RUN_VEC(test_kid_cleanup_gates);
+#endif
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);
     return failures;

@@ -17,6 +17,7 @@ static TBT_RING xcRing;
 static TBT_U4CM xcCm;
 static unsigned long xcLdCalls;
 static int xcLdClosed;
+static unsigned long xcLdKid;
 
 static ULONG xcRd(PVOID ctx, ULONG off)
 {
@@ -69,6 +70,9 @@ static ULONG xcLinkDown(PVOID ctx, const TBT_U4_LINKDOWN *info)
     (void)ctx;
     xcLdCalls++;
     xcLdClosed = info->PathClosed ? 1 : 0;
+    if (info->Kid != 0) {
+        xcLdKid++;
+    }
     return TBT_U4_STMT_WITHHELD;
 }
 
@@ -106,6 +110,7 @@ long xc_start_clean(const XC_OPS *ops, void *arena, unsigned long phys,
     TbtU4SetLinkDown(&xcCm, xcLinkDown, NULL);
     xcLdCalls = 0;
     xcLdClosed = 0;
+    xcLdKid = 0;
     return TbtU4Start(&xcCm, arena, phys, bytes);
 }
 
@@ -122,9 +127,25 @@ void xc_stop(void)
 unsigned long xc_get(int what, unsigned long port)
 {
     const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG i;
 
     p = TbtU4Port(&xcCm, port);
+    k = NULL;
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (xcCm.Kids[i].Used && xcCm.Kids[i].Port == port) {
+            k = &xcCm.Kids[i];
+            break;
+        }
+    }
     switch (what) {
+    case XC_KID_STATE: return k != NULL ? k->State : TBT_U4_EMPTY;
+    case XC_KID_PCIE_UP: return k != NULL ? k->Pcie.Up : 0;
+    case XC_KID_HD: return k != NULL ? k->Pcie.Hd : 0;
+    case XC_KID_HU: return k != NULL ? k->Pcie.Hu : 0;
+    case XC_KID_ROUTE: return k != NULL ? k->Dev.Route.Lo : 0;
+    case XC_KID_LD_CALLS: return xcLdKid;
+    case XC_KID_BONDED: return k != NULL ? k->Bonded : 0;
     case XC_STATE: return p != NULL ? p->State : 0xFFUL;
     case XC_WHY: return p != NULL ? p->Why : 0xFFUL;
     case XC_BONDED: return p != NULL ? p->Bonded : 0;

@@ -224,7 +224,8 @@ int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
                     int ntmapPresent);
 
 /* The XHCI98_FLAVOUR_* markers in an image: their count, and the first's
- * suffix (RELEASE, DEBUG, QEMU) in out. */
+ * suffix (RELEASE or QEMU; DEBUG in an image from before task 45.45) in
+ * out. */
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
                         size_t cap);
 
@@ -811,8 +812,6 @@ typedef struct _INST_OPTS {
     char To[260];           /* /to <path>: the install directory, unasked */
     char From[260];         /* /from <dir>: the uninstall's relaunch from the
                                install directory (record 26 section 9.2) */
-    int Debug;              /* /debug: the debug- directory (the window's
-                               own choice; INSTALL.BAT's for the console) */
     int Console;            /* /console: INSTALL.BAT's word, the console's */
     int SetCount;
     int SetIndex[INST_MAX_SET];
@@ -2332,7 +2331,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "0CBF177CF2AEBEE20DF28DFEFE9DFA33A7141D74868AF2FEB8ADC5F28C7FFA75"
+#define INST_WDMFREE_SUMS       "8AF8F638FA1616AEBEF02AED41F4BB3EE27B89D555A0289E51B3516F19DF0F05"
 #define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */

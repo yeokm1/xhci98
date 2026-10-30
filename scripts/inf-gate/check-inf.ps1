@@ -112,6 +112,9 @@ What it checks, grouped by the failure each rule prevents:
            design record 13 section 6.11.3's "the INFs write no value"
            for the switch alone; the SilentClasses list stays unwritten),
            on every path though only 98 SE and ME read it.
+           Thirty-seven since XhciCommandCheck joined at 1, the
+           command-state checker every flavour carries since task 45.45
+           (design record 08 section 14; owner, 2026-10-30).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -256,7 +259,7 @@ suite passes a mutated copy here.
 powershell -ExecutionPolicy Bypass -File scripts\inf-gate\check-inf.ps1
 
 .EXAMPLE
-powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-debug-x86
+powershell -File scripts\inf-gate\check-inf.ps1 -PackageDir out\pkg-release-x86
 #>
 
 [CmdletBinding()]
@@ -1787,6 +1790,13 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-hcd task 38.11's floor (design record 17 section 4.14.4), read at each start and latched for its lifetime: at 1 a controller whose HCIVERSION is 0.96 or above starts, driven as a 1.0 one but for the fields Linux writes differently below 1.0; at 0 one below 1.0 is refused (Code 10). The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-13)"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; 0 restores the 1.0 floor of 2.3.1.0"
+    },
+    @{
+        Name    = "XhciCommandCheck"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 45.45's command-state checker (design record 08 section 14), read at each start and latched for its lifetime: it reads the slot and endpoint states before each command and counts and notes what a conforming controller would refuse, changing nothing the driver does. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's 0 survives an update (owner, 2026-10-30)"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off (owner, 2026-10-30)"
     },
     @{
         Name    = "XhciVirtualHSHub"

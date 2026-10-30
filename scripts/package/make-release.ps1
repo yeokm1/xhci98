@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-Publish a built driver into releases\<version>\<flavour>-<arch>\ - four
-directories for an ordinary cut (release-x86, debug-x86, release-x64,
-debug-x64).
+Publish a built driver into releases\<version>\<flavour>-<arch>\ - two
+directories for an ordinary cut (release-x86, release-x64); the cuts before
+3.4.0.0 also published debug-x86 and debug-x64, until roadmap-usb4 task 45.45
+retired the debug flavour.
 
 .DESCRIPTION
 `releases\` is the tracked, published half of packaging. It carries the two
@@ -97,23 +98,25 @@ text, 78 columns, CRLF.
 Every published binary is at one version, in a directory of its own. They are
 byte-different builds sharing a file name and a `DriverVer`, so **nothing a
 user can SEE identifies one**: the `VS_FF_DEBUG` flag `src\xhci98.rc` sets under
-`#if DBG` separates release from debug and says nothing about the
-architecture, and Explorer shows nothing that separates the two architectures
+`#if DBG` marks a checked build (the qemu flavour's, and until task 45.45
+the debug one's) and says nothing about the architecture, and Explorer shows nothing that separates the two architectures
 at all. What IS in the file is the in-image `XHCI98_FLAVOUR_*` marker, which
-names all three flavours, and the PE header's Machine field, which the import
+names every flavour, and the PE header's Machine field, which the import
 gate reads to tell `0x014C` from `0x8664` - both need a tool.
 This script checks the flag on each staged binary rather than
 trusting which obj directory it came out of - packaging objfre twice is a
 silent mistake otherwise, and it is silent on the target too.
 
 **A published directory is a flavour AND an architecture** (roadmap task 21.3):
-`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`. The flavour half is
-the vocabulary this project uses everywhere - `-Flavor release|debug`,
+`release-x86\` and `release-x64\` (and `debug-x86\`, `debug-x64\` in the cuts up
+to `3.3.0.0`, before task 45.45 retired the debug flavour). The flavour half is
+the vocabulary this project uses everywhere - `-Flavor release`,
 `out\pkg-<flavour>-<arch>\` on the build side, and the same two words
 throughout `docs\contributing\`. The DDK's own words are "free" and "checked" -
 "free" reads as *free of charge* to anyone who has not met that convention -
 and they survive only where the DDK itself requires them: `setenv.bat`'s
-flavour argument and the `src\objfre` / `src\objchk` trees it writes into.
+flavour argument and the `src\objfre` / `src\objchk_qemu` trees it writes into
+(`src\objchk` was the debug flavour's, retired with task 45.45).
 **These names are NOT 8.3-clean**, and that is a deliberate change from the
 bare `release\` and `debug\` that were: `release-x86` is eleven characters, so
 a Win98 setup engine reading this directory off media sees a short-name alias
@@ -137,30 +140,33 @@ given, it must match the INF - this parameter is a statement of intent to be
 checked, not an override.
 
 .PARAMETER Flavor
-Which flavours to publish - `release` or `debug`, matching
-`make-package.ps1`, and each is published under its own name. Defaults to both.
-Publishing one at a time is supported, but a version directory holding only
-`debug\` is not something to release.
+Which flavours to publish: `release`, the default and since roadmap-usb4 task
+45.45 the only one (design record 08 section 14).
+
+**`debug` is accepted by this parameter and then REFUSED**, as `qemu` is
+below: the flavour was retired, and the refusal says so where a
+parameter-binding error would say only that the word is unknown.
 
 **`qemu` is accepted by this parameter and then REFUSED**, which is deliberate:
-there are three build flavours since task 13-L.1 and a parameter-binding error
+the flavour is built beside release (task 13-L.1) and a parameter-binding error
 would say only that the word is unknown, when the fact worth reading is that the
 flavour exists and must never be published. It carries the port-0xE9 mirror -
 `HAL.dll!WRITE_PORT_UCHAR`, the sole import delta between 0.0.0.4's two
 published binaries, of which the debug one gave the ThinkPad E460 a Code 2
 under Windows 98 SE - and it is built and
-gated like the other two so the instrument keeps working in the emulator.
+gated like release so the instrument keeps working in the emulator.
 `scripts\package\make-package.ps1 -Flavor qemu` stages it for a guest; nothing
 publishes it.
 
 That refusal is not the only guard, because a flavour name is not evidence: the
 binary staged for each published flavour is checked against the
 `XHCI98_FLAVOUR_*` marker in its own image, below. `VS_FF_DEBUG` cannot do that
-job - `debug` and `qemu` are both checked builds and both set it.
+job - it marks the checked `qemu` build, and marked the retired `debug` one too.
 
 This script does not build; it publishes what is already built and gated. Run
-`scripts\build-driver.cmd all` first, which builds and gates all three flavours,
-so that the one that is never published has still been through every gate.
+`scripts\build-driver.cmd all` first, which builds and gates both flavours,
+release and qemu, so that the one that is never published has still been
+through every gate.
 
 .PARAMETER Arch
 Which architectures to publish - `x86` or `x64`, which are `make-package.ps1`'s
@@ -287,7 +293,7 @@ release.** The upload set is assembled after the publish, so without this mode
 the only scripted way to produce it again is `-Force`, which rewrites a
 written-once version directory - the one thing `releases\README.md` says never
 to do. (`-Force` does not rebuild anything: it stages from the existing
-`src\objfre` / `src\objchk` trees and every gate still runs, so the binaries
+`src\objfre` trees and every gate still runs, so the binaries
 come through byte-identical. What it skips is the single "this version
 directory already exists" refusal.) That trap fired for real: the
 first cut's asset was malformed and there was no way to rebuild it in place.
@@ -346,8 +352,8 @@ the key is held and how it was made: design record 19.
 Cut without the bundled Stor98. By default (since 3.1.0.0, roadmap-usb4
 task 42-A.30, owner 2026-10-19) every release leg's package carries the
 Stor98 that scripts\build-driver.cmd built and gated from src\stor98, at
-the package's version and date (make-package.ps1, -NoStor98), and the
-debug legs carry none. Its files are published like this project's own:
+the package's version and date (make-package.ps1, -NoStor98); the debug
+legs, until task 45.45 retired them, carried none. Its files are published like this project's own:
 releases\<version>\release-x86\ and release-x64\ hold them (the x64
 stor98.sys signed with the other x64 drivers, by the same key), so the
 upload set and -UploadSetOnly take them from the published tree. Its
@@ -404,7 +410,8 @@ which -UploadSetOnly rebuilds them.
 .PARAMETER NoWdmFree
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
-every cut does; 3.2.0.0's named v0.1.0, and from 3.3.0.0 it names v0.1.4.
+every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, and from 3.4.0.0
+it names v0.1.5.
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -480,7 +487,7 @@ powershell -File scripts\package\make-release.ps1 -UploadSetOnly
 param(
     [string]$Version = "",
     [ValidateSet("release", "debug", "qemu")]
-    [string[]]$Flavor = @("release", "debug"),
+    [string[]]$Flavor = @("release"),
     [ValidateSet("x86", "x64")]
     [string[]]$Arch = @("x86", "x64"),
     [string]$ReleasesDir = "",
@@ -546,8 +553,16 @@ may carry it, and
 scripts\import-gate\xhci98-imports.allow enforces that as "qemu required".
 To put it on a guest, stage it without publishing:
   scripts\package\make-package.ps1 -Flavor qemu
-A release publishes the release and debug directories of each architecture it
-was asked for, and nothing else.
+A release publishes the release directory of each architecture it was asked
+for, and nothing else.
+"@
+}
+if ($Flavor -contains "debug") {
+    throw @"
+the debug flavour was retired with roadmap-usb4 task 45.45 (design record 08
+section 14): it is neither built nor published. The release flavour keeps what
+it gave - frame pointers on the 32-bit MSVC 6.0 builds and the command-state
+checker, on unless XhciCommandCheck is 0. Publish -Flavor release, the default.
 "@
 }
 #
@@ -767,7 +782,8 @@ $reportBatches = @{
 
 #
 # **A published directory is a flavour AND an architecture, and both are in its
-# name** - `release-x86`, `debug-x86`, `release-x64`, `debug-x64` (roadmap task
+# name** - `release-x86` and `release-x64` (with `debug-x86` and `debug-x64` up
+# to 3.3.0.0, before task 45.45 retired the debug flavour; roadmap task
 # 21.3, design record 11 section 8). The two architectures' binaries are both
 # called xhci98.sys, so they cannot share a directory; and the x86 pair is
 # renamed rather than left bare, because the moment a second set exists an
@@ -1298,14 +1314,13 @@ $catPublishable = @($script:PackageCatalogs.Keys)
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
 # directory name on its own.
-$objDirName = @{ "release" = "objfre"; "debug" = "objchk" }
+$objDirName = @{ "release" = "objfre" }
 
 function New-ReleaseLegs {
     #
     # Every (flavour, architecture) pair this cut publishes, in a fixed order -
-    # architecture outermost, so a four-directory cut reads release-x86,
-    # debug-x86, release-x64, debug-x64 and the readme's contents list comes
-    # out in that order too.
+    # architecture outermost, so a two-architecture cut reads release-x86,
+    # release-x64 and the readme's contents list comes out in that order too.
     #
     # One object per published directory, and everything that used to be
     # derived from the flavour word alone hangs off it: which obj tree the
@@ -1991,7 +2006,7 @@ function Assert-UasPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhciuas.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2062,7 +2077,7 @@ function Assert-CmPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcicm.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2133,7 +2148,7 @@ function Assert-HelperPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -3718,8 +3733,8 @@ the result in place of the marker, then cut again. The first:
 
     # --- XHCIPFW.VXD (task 44.49, design record 32 section 8) ---------------
     #
-    # Every x86 package carries it, release and debug, with or without
-    # Stor98; make-package.ps1 stages it and holds it to
+    # Every x86 package carries it (release; debug too up to 3.3.0.0),
+    # with or without Stor98; make-package.ps1 stages it and holds it to
     # src\pfw\check-pfw.ps1, and goes without it only on a host that could
     # not build it, which a cut is not. Checked here, after the cut's
     # inputs and before anything is built.
@@ -3829,7 +3844,8 @@ the result in place of the marker, then cut again. The first:
                 $pkgArgs += @("-TestSignPfx", $TestSignPfx)
             }
             # The bundled Stor98 build, in the release legs only (make-package.ps1
-            # bundles it by default; the debug legs pass -NoStor98); its files
+            # bundles it by default; any other leg - the debug ones until task
+            # 45.45 retired them - passes -NoStor98); its files
             # are accepted beside the declared set by exactly the paths it lands
             # at, and published with this project's own (task 42-A.30).
             $legStor98 = @()
@@ -3842,7 +3858,7 @@ the result in place of the marker, then cut again. The first:
                 $pkgArgs += "-NoStor98"
             }
             # XHCIPFW.VXD (task 44.49): make-package.ps1 stages it in every x86
-            # package, release and debug alike, as the gated build's bytes; it
+            # package, as the gated build's bytes (debug legs too until 45.45); it
             # is accepted and published with the bundled files.
             if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.VXD" }
             if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.SYS" }
@@ -3989,22 +4005,22 @@ Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }
         # **Which build this actually is, read from the binary.** VS_FF_DEBUG is
         # set by src\xhci98.rc under #if DBG, so it is the one field that
         # distinguishes two files that are otherwise the same name at the same
-        # version. Trusting the obj directory instead would let a release build be
-        # published as the debug one - and the person who later asks a user for a
-        # trace would get silence and blame the machine.
+        # version. Trusting the obj directory instead would let a checked build be
+        # published as the release (or, before task 45.45 retired the debug
+        # flavour, a release build as the debug one).
         $expectDebug = ($f -eq "debug")
         if ($info.IsDebug -ne $expectDebug) {
             Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
-That is the wrong obj directory: src\objchk\$($archDirName[$leg.Arch]) is the debug build and
-src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour you meant.
+That is the wrong obj directory: src\objfre\$($archDirName[$leg.Arch]) is the release build;
+a checked image is the qemu flavour's or one of the debug flavour task 45.45 retired.
+Rebuild the release flavour.
 "@
         }
 
-        # **And which of the three it is, which VS_FF_DEBUG cannot say.** Task
-        # 13-L.1 made `debug` and `qemu` both checked builds, so the field above
-        # is TRUE for either and would publish a qemu binary as the diagnostic
-        # download without a word. The marker in the image is the discriminator,
+        # **And which flavour it is, which VS_FF_DEBUG cannot say.** Task
+        # 13-L.1 made `debug` and `qemu` both checked builds (debug retired with
+        # task 45.45), so the field above alone could not tell them apart. The marker in the image is the discriminator,
         # and it is read here rather than inferred from a directory because
         # "objchk_qemu" contains "objchk" - a path match is wrong in exactly the
         # direction that matters.
@@ -4022,7 +4038,7 @@ src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour yo
             $found = if ($publishedFlavour -eq "") { "none" } else { $publishedFlavour }
             Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ carries the '$found' flavour marker.
-Only release and debug may be published; qemu carries the port-0xE9 mirror
+Only release is published; qemu carries the port-0xE9 mirror
 (HAL.dll!WRITE_PORT_UCHAR), the sole import delta of the build that gave the
 ThinkPad E460 a Code 2 under Windows 98 SE, and it is never shipped. Rebuild the flavour you
 meant: scripts\build-driver.cmd $f
@@ -4632,9 +4648,9 @@ helper (xhciinst\di\build.cmd).
     # binaries of the same flavour are different builds of different machine
     # code and could never hash alike, so a flat comparison across four staged
     # files would find every pair distinct and say nothing - while the pair
-    # this check exists for, release and debug of one architecture, would be
-    # buried among them. Two comparisons, each of the pair that could actually
-    # collide.
+    # this check existed for, release and debug of one architecture, would be
+    # buried among them. Since task 45.45 retired debug there is no pair to
+    # compare and the check passes over; it stays for a cut naming two.
     #
     foreach ($a in $Arch) {
         $rel = "release-$a"
@@ -4951,8 +4967,9 @@ helper (xhciinst\di\build.cmd).
 
     #
     # **The install section names the directories this cut actually wrote.**
-    # Since roadmap task 21.3 those are RELEASE-X86 and DEBUG-X86, and a cut
-    # carrying both architectures has four. A one-architecture cut names its
+    # Since roadmap task 21.3 those are RELEASE-X86 and, until task 45.45
+    # retired the debug flavour, DEBUG-X86; a cut carrying both
+    # architectures has RELEASE-X64 too. A one-architecture cut names its
     # pair outright, which is what a reader wants; a two-architecture one names
     # the pair for the architecture-neutral case and adds a paragraph saying
     # how to choose, because there is then no single directory to point at.
@@ -4964,7 +4981,6 @@ helper (xhciinst\di\build.cmd).
     $readmeArches = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique)
     if ($readmeArches.Count -eq 1) {
         $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
-        $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
         $readmeArchNote   = ""
         # Where the INF says its two files live, and what tells two copies of
         # xhci98.sys apart. Both were hardcoded in the template as "release\
@@ -4981,14 +4997,12 @@ helper (xhciinst\di\build.cmd).
         $readmeArchInstall = ""
     } else {
         $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
-        $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
         $readmeArchNote   = @"
 
 
-There are two of each, one per architecture: the -X86 directories are for
-32-bit Windows and the -X64 ones for 64-bit Windows. If you pick the wrong
-one nothing breaks - Windows finds no driver in it and says so - so try the
-other.
+There is one per architecture: the -X86 directory is for 32-bit Windows
+and the -X64 one for 64-bit Windows. If you pick the wrong one nothing
+breaks - Windows finds no driver in it and says so - so try the other.
 "@
         $readmeArchOs = @"
 
@@ -5118,8 +5132,7 @@ Properties, Driver, Update Driver, Have Disk, and point it at:
 
       {RELEASEDIR}\
 
-Point Windows at that directory, never at a loose .sys file: the DEBUG
-directories hold the same file names, built for tracing a crash.{ARCHNOTE}
+Point Windows at that directory, never at a loose .sys file.{ARCHNOTE}
 
 A UAS disk or an external hub asks for its driver when plugged in: give
 it the same directory. The release notes' "Installing" sections have

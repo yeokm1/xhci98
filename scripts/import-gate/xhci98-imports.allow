@@ -20,8 +20,9 @@
 #
 #   MODULE!SYMBOL   FLAVORS   REQUIREMENT   evidence notes to end of line
 #
-#   FLAVORS      release | debug | qemu | all - which build flavor may import it
-#                ("both" is retired and refused: there are three flavours)
+#   FLAVORS      release | qemu | all - which build flavor may import it
+#                ("both" and "debug" are retired and refused: there are two
+#                flavours since task 45.45)
 #   REQUIREMENT  required | optional
 #
 # Evidence tags in the last column, strongest first. check-imports.ps1

@@ -120,11 +120,11 @@ On Vista x64 to 10 x64, **keep test-signing mode on for as long as the Thunderbo
 |---|---|
 | 2000 | Stop it in "Unplug or Eject Hardware", then unplug. Without the stop, Windows 2000 shows "Unsafe Removal of Device". |
 | XP, Vista, 7 | Stop it in "Safely Remove Hardware", then unplug. |
-| 98 SE, ME | No such dialog lists them (ME's "Unplug or Eject Hardware", and NUSB 3.3's on 98 SE, list USB storage only): use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
+| 98 SE, ME | No such dialog lists them (ME's "Unplug or Eject Hardware", and NUSB 3.3's on 98 SE, list USB storage only): use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /console /eject`. Until you unplug, Device Manager's Refresh can start the device again. |
 
 - A **dock** is listed under a generic PCI bridge name; stopping it stops everything in the dock.
 - A **device missing from Windows' list** (its first plug, or after a disable and enable or a driver update): stop it in the USB Tree run as an administrator. Otherwise close every program using it, unplug it and plug it in again; Windows lists it from then on.
-- For scripts: `INSTALL /devices` and `INSTALL /eject` (`tools\xhciinst\readme.txt`).
+- For scripts: `INSTALL /console /devices` and `INSTALL /console /eject` (`tools\xhciinst\readme.txt`).
 
 ### NVMe drives
 
@@ -190,7 +190,7 @@ Nothing from `USBDRV\` is installed unless you tick it on the installer's Free U
 | XP x64 SP2, Vista SP2, 7 SP1 (x86/x64) | Nothing. **Vista x64 and 7 x64** need [test-signing mode](#64-bit-vista-to-10-test-signing-mode) (or F8 at every boot). |
 | 8, 8.1, 10 (x86/x64) | **Secure Boot off** in the firmware setup; the x64 editions also need [test-signing mode](#64-bit-vista-to-10-test-signing-mode). Windows' own USB 3 driver stays unless you tick the USB drivers. |
 
-- **The eject icon on 98 SE** comes only with NUSB 3.3's own setup, not with the seven storage files in this download. It lists USB sticks and UAS disks, never a Thunderbolt or USB4 drive: use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /eject` for those.
+- **The eject icon on 98 SE** comes only with NUSB 3.3's own setup, not with the seven storage files in this download. It lists USB sticks and UAS disks, never a Thunderbolt or USB4 drive: use the [xHCI98 USB Tree](#the-xhci98-usb-tree) or `INSTALL /console /eject` for those.
 - 98 SE storage of any kind needs NUSB's mass-storage files ([details](docs/using/release-notes.md#windows-98-se-and-me-the-stock-install-and-storage)).
 - On an xHCI-only 98 SE or ME machine, **have the Windows CD (or its files) at hand**: Windows may ask for files.
 
@@ -293,7 +293,7 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 | `XhciIntelPortSwitch` | Intel 7/8/9-series port switchover: `1` on, `2` any Intel controller **at your own risk** (`tools\portsw\`) | `0` |
 | `XhciCmMode` | Thunderbolt/USB4: `0` off, `1` automatic (`2` and `3` are at your own risk) | `1` |
 | `XhciCmApprove` | `1` approves every device, `0` none (see [approval](#approving-and-removing)) | `1` |
-| `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal (98 SE and ME: in the USB Tree and `INSTALL /eject` only) | `1` |
+| `XhciCmSafeEject` | `1` offers tunnelled devices for safe removal (98 SE and ME: in the USB Tree and `INSTALL /console /eject` only) | `1` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
@@ -413,11 +413,11 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
    powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1 # -> tools\ntddk
    ```
 
-3. Build. `both` (default) is the shipping `release` and `debug` flavours; `all` adds the emulator-only `qemu` flavour, which is never published. `-amd64` builds the separate 64-bit binaries. Every build runs the gates' self-tests, the host unit tests and the INF, import and charset gates, and stops on any failure.
+3. Build. `release` (default) is the one shipping flavour; `all` adds the emulator-only `qemu` flavour, which is never published. `-amd64` builds the separate 64-bit binaries. Every build runs the gates' self-tests, the host unit tests and the INF, import and charset gates, and stops on any failure.
 
    ```
-   scripts\build-driver.cmd both
-   scripts\build-driver.cmd both -amd64
+   scripts\build-driver.cmd release
+   scripts\build-driver.cmd release -amd64
    ```
 
    The same runs build and gate Stor98, the bundled NVMe driver, from `src\stor98` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)); `scripts\build-all.cmd` runs both architectures at once.

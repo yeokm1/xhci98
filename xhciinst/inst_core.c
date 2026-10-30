@@ -2472,10 +2472,6 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Uninstall = 1;
         } else if (inst_switch(a, "nopause")) {
             opts->NoPause = 1;
-        } else if (inst_switch(a, "debug")) {
-            /* INSTALL.BAT chose the directory for the console tool; the
-             * window, which takes no /dir, picks it itself. */
-            opts->Debug = 1;
         } else if (inst_switch(a, "console")) {
             /* INSTALL.BAT's word for the console tool (record 26 section
              * 2): the console takes it and goes on; the window refuses it. */
@@ -9165,8 +9161,13 @@ const INST_OTHER_REL instOtherRels[] = {
       INST_SYS_ALL, 1 },
     { INST_SET_FREE, "net/ax88179", INST_SET_NONFREE, "ethernet/ax88179",
       INST_SYS_ALL, 1 },
+    /* usb-wdm-free 0.1.5 reads the two apart on XP to 7 x64 (its STAGE.TXT
+     * COEXISTS there): lifted on WXP ... W7X64 (0x1F8), EXCLUDES on the
+     * rest (0x1E07). */
     { INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE, "ethernet/rtl815x",
-      INST_SYS_ALL, 1 },
+      0x1E07UL, 1 },
+    { INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE, "ethernet/rtl815x",
+      0x1F8UL, 2 },
     { INST_SET_FREE, "hid/xpad98", INST_SET_NONFREE, "hid/x360wc",
       INST_SYS_ALL, 1 },
     { INST_SET_FREE, "hid/xpad98", INST_SET_NONFREE, "hid/x360c",

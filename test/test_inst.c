@@ -4236,9 +4236,10 @@ static void test_uninstall_entry(void)
     argv[1] = "/list";
     CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 &&
           inst_window_refusal(&o, 2, argv) != NULL, "/list is the console's");
+    /* Task 45.45: /debug went with the debug- directory. */
     argv[1] = "/debug";
-    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Debug &&
-          inst_window_refusal(&o, 2, argv) == NULL, "/debug is the window's");
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) != 0,
+          "/debug is refused: the debug flavour was retired");
     argv[1] = "/thunderbolt";
     argv[2] = "/to";
     argv[3] = "C:\\XHCI98";
@@ -6383,11 +6384,33 @@ static void test_9x_stage(void)
           !inst_other_rel_bars(INST_REL_LIFTED, 1, 1) &&
           inst_other_rel_bars(INST_REL_LIFTED, 1, 0),
           "lifted: bars an earlier staging of another release alone");
-    CHECK(inst_other_excludes(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
-                              "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)) &&
-          !inst_other_lifted(INST_SET_FREE, "net/rtl815x", INST_SET_NONFREE,
-                             "ethernet/rtl815x", inst_sys_token(1, 5, 1, 2600, 0)),
-          "lifted: rtl815x excluded until the free set's pin moves");
+    /* usb-wdm-free 0.1.5: lifted on XP to 7 x64, EXCLUDES on the rest. */
+    {
+        static const unsigned long v[13][5] = {
+            { 0, 4, 10, 2222, 0 }, { 0, 4, 90, 3000, 0 },
+            { 1, 5, 0, 2195, 0 }, { 1, 5, 1, 2600, 0 }, { 1, 5, 2, 3790, 1 },
+            { 1, 6, 0, 6002, 0 }, { 1, 6, 0, 6002, 1 }, { 1, 6, 1, 7601, 0 },
+            { 1, 6, 1, 7601, 1 }, { 1, 6, 2, 9200, 0 }, { 1, 6, 2, 9200, 1 },
+            { 1, 10, 0, 19045, 0 }, { 1, 10, 0, 19045, 1 }
+        };
+        int k;
+        int ok = 1;
+        for (k = 0; k < 13; k++) {
+            int tok = inst_sys_token((int)v[k][0], v[k][1], v[k][2],
+                                     v[k][3], (int)v[k][4]);
+            int lift = tok >= 3 && tok <= 8;
+            if (tok != k ||
+                inst_other_excludes(INST_SET_FREE, "net/rtl815x",
+                                    INST_SET_NONFREE, "ethernet/rtl815x",
+                                    tok) == lift ||
+                inst_other_lifted(INST_SET_NONFREE, "ethernet/rtl815x",
+                                  INST_SET_FREE, "net/rtl815x", tok) != lift) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "lifted: rtl815x lifted on XP to 7 x64, excluded on the "
+                  "rest");
+    }
 
     r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&

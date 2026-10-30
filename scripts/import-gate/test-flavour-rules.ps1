@@ -1,10 +1,12 @@
 <#
 .SYNOPSIS
-Regression tests for the import allowlist's three-flavour FLAVORS grammar.
+Regression tests for the import allowlist's FLAVORS grammar.
 
 .DESCRIPTION
 Roadmap task 13-L.1 turned two build flavours into three - release, debug and
-qemu - and the whole of its enforcement is one column in
+qemu - and roadmap-usb4 task 45.45 retired debug again (design record 08
+section 14), leaving release and qemu; the whole of the enforcement is one
+column in
 scripts\import-gate\xhci98-imports.allow. This covers that column, on synthetic
 allowlists under the host temporary directory plus the production file, so it
 needs neither a built driver nor a Microsoft binary and can run before anything
@@ -14,11 +16,12 @@ rather than by a binary reaching a bench.
 
 What it proves:
 
-  - the grammar accepts release, debug, qemu and all, and rejects anything else;
+  - the grammar accepts release, qemu and all, and rejects anything else;
   - "both" is REFUSED rather than reinterpreted. It was the word for "every
     flavour" while there were two of them, and a row written about two builds
-    silently covering three is exactly the failure the third flavour exists to
-    prevent;
+    silently covering three is exactly the failure the third flavour existed
+    to prevent; "debug" is refused the same way since task 45.45;
+  - an image under objchk, the retired flavour's tree, is refused by name;
   - the production allowlist puts HAL.dll!WRITE_PORT_UCHAR in "qemu required"
     and nowhere else. That single row is task 13-L.1's repair: qemu is never
     published, so a published binary carrying the sole import delta of the
@@ -73,7 +76,7 @@ try {
         # the block below tests that rule.
         function Add-Warning { param($Message) }
         function Add-Failure { param($Message) $script:importFailures += $Message }
-        foreach ($order in @(@('debug', 'qemu'), @('qemu', 'debug'))) {
+        foreach ($order in @(@('release', 'qemu'), @('qemu', 'release'))) {
             $split = Join-Path $work 'split.allow'
             Set-Content -LiteralPath $split -Encoding ASCII -Value @(
                 '[imports]',
@@ -81,21 +84,29 @@ try {
                 "HAL.dll!WRITE_PORT_UCHAR $($order[1]) required"
             )
             $rules = Read-AllowFile $split
-            foreach ($flavour in @('debug', 'qemu', 'release')) {
+            foreach ($flavour in @('qemu', 'release')) {
                 $script:importFailures = @()
                 Test-Image -Path synthetic -ImageFlavor $flavour -Rules $rules
-                if ($flavour -eq 'release') {
-                    Assert-True ($script:importFailures.Count -eq 1) 'split debug/qemu rows still refuse release'
-                } else {
-                    Assert-True ($script:importFailures.Count -eq 0) "split rows admit $flavour in either order: $($script:importFailures)"
-                }
+                Assert-True ($script:importFailures.Count -eq 0) "split rows admit $flavour in either order: $($script:importFailures)"
+            }
+        }
+        $split = Join-Path $work 'split.allow'
+        Set-Content -LiteralPath $split -Encoding ASCII -Value @('[imports]', 'HAL.dll!WRITE_PORT_UCHAR qemu required')
+        $rules = Read-AllowFile $split
+        foreach ($flavour in @('qemu', 'release')) {
+            $script:importFailures = @()
+            Test-Image -Path synthetic -ImageFlavor $flavour -Rules $rules
+            if ($flavour -eq 'release') {
+                Assert-True ($script:importFailures.Count -eq 1) 'a qemu row still refuses release'
+            } else {
+                Assert-True ($script:importFailures.Count -eq 0) "a qemu row admits qemu: $($script:importFailures)"
             }
         }
         foreach ($case in @(
             @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR all required'); Failures = 0; Name = 'all still admits every flavour' },
             @{ Rows = @('other.dll!WRITE_PORT_UCHAR qemu optional'); Failures = 1; Name = 'same symbol from a different provider is refused' },
             @{ Rows = @('HAL.dll!write_port_uchar qemu optional'); Failures = 1; Name = 'symbol matching stays case-sensitive' },
-            @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR debug optional', 'HAL.dll!WRITE_PORT_UCHAR qemu required', 'HAL.dll!Missing qemu required'); Failures = 1; Name = 'a missing required import still fails' },
+            @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR release optional', 'HAL.dll!WRITE_PORT_UCHAR qemu required', 'HAL.dll!Missing qemu required'); Failures = 1; Name = 'a missing required import still fails' },
             @{ Rows = @('HAL.dll!WRITE_PORT_UCHAR qemu optional', '[deny]', 'WRITE_PORT_UCHAR synthetic denial'); Failures = 1; Name = 'deny still wins over an allowed row' }
         )) {
             Set-Content -LiteralPath $split -Encoding ASCII -Value (@('[imports]') + $case.Rows)
@@ -411,7 +422,7 @@ try {
     # ---------------------------------------------------------------------
     # The grammar, on synthetic files.
     # ---------------------------------------------------------------------
-    $accepted = @("release", "debug", "qemu", "all")
+    $accepted = @("release", "qemu", "all")
     foreach ($word in $accepted) {
         $path = Join-Path $work "ok-$word.allow"
         Set-Content -LiteralPath $path -Encoding ASCII -Value @(
@@ -436,7 +447,17 @@ try {
     Assert-True ($r.Text -match "retired") "the refusal of 'both' must say it is retired"
     Assert-True ($r.Text -match "all") "the refusal of 'both' must name 'all' as the replacement"
 
-    foreach ($word in @("checked", "free", "standard", "release,debug", "")) {
+    # "debug" the same way since task 45.45: the flavour it named is retired.
+    $debugPath = Join-Path $work "debug.allow"
+    Set-Content -LiteralPath $debugPath -Encoding ASCII -Value @(
+        "[imports]",
+        "ntoskrnl.exe!RtlAssert   debug   required  synthetic"
+    )
+    $r = Invoke-Parse -AllowPath $debugPath
+    Assert-True ($r.Code -eq 1) "FLAVORS 'debug' must be refused"
+    Assert-True ($r.Text -match "retired" -and $r.Text -match "45\.45") "the refusal of 'debug' must say it is retired, by task 45.45"
+
+    foreach ($word in @("checked", "free", "standard", "release,qemu", "")) {
         $path = Join-Path $work ("bad-" + ($word -replace "[^a-z]", "x") + ".allow")
         $row = "ntoskrnl.exe!DbgPrint   $word   required  synthetic"
         if ($word -eq "") {
@@ -463,7 +484,6 @@ try {
     Write-Step "-Flavor auto infers from a Windows path"
     foreach ($case in @(
         @{ Dir = "objfre";      Flavour = "release"; Under = "" },
-        @{ Dir = "objchk";      Flavour = "debug";   Under = "" },
         @{ Dir = "objchk_qemu"; Flavour = "qemu";    Under = "" },
         # **An ANCESTOR directory whose name is another flavour's tree.** These
         # are substring matches against an absolute path, so a clone under
@@ -471,10 +491,9 @@ try {
         # branch first and be gated as the wrong flavour. Nobody would choose
         # that directory name deliberately; a checkout under a scratch tree can
         # end up with one, and the cost is a binary tested against the wrong
-        # flavour's rules. The three cases above pass either way, which is why
-        # this one is here.
+        # flavour's rules. The two cases above pass either way, which is why
+        # these are here.
         @{ Dir = "objfre";      Flavour = "release"; Under = "objchk" },
-        @{ Dir = "objchk";      Flavour = "debug";   Under = "objchk_qemu" },
         @{ Dir = "objchk_qemu"; Flavour = "qemu";    Under = "objfre" }
     )) {
         $root = $work
@@ -497,6 +516,17 @@ try {
         Assert-True ($out -match ("{0} build:" -f $case.Flavour)) `
             ("-Flavor auto did not report '$($case.Flavour)' for a path under $where. Output:`n" + $out)
     }
+
+    # The retired debug flavour's tree (task 45.45): an image under objchk is
+    # refused by name, never inferred as a flavour.
+    $chkDir = Join-Path $work "src\objchk\i386"
+    New-Item -ItemType Directory -Path $chkDir -Force | Out-Null
+    $chkImg = Join-Path $chkDir "xhci98.sys"
+    Set-Content -LiteralPath $chkImg -Encoding ASCII -Value "not a real driver"
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $gate `
+        -Image $chkImg -NoTargetEvidence 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -ne 0 -and $out -match "retired debug flavour") `
+        ("an image under objchk was not refused as the retired debug flavour's. Output:`n" + $out)
 
     # ---------------------------------------------------------------------
     # The production allowlist. These are statements about this project's own

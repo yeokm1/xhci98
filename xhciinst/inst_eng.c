@@ -2382,10 +2382,10 @@ static int check_package(void)
     inst_copy(root, self, sizeof(root));
     root[n - t] = '\0';
     if (opts.Dir[0] == '\0') {
-        /* The window takes no /dir: its own architecture's release- (or,
-         * with /debug, debug-) directory (record 26 section 2). */
-        inst_copy(opts.Dir, opts.Debug ? "debug" INST_DIR_SUFFIX
-                                       : INST_DEFAULT_DIR, sizeof(opts.Dir));
+        /* The window takes no /dir: its own architecture's release-
+         * directory (record 26 section 2; the debug- one and /debug went
+         * with the debug flavour, task 45.45). */
+        inst_copy(opts.Dir, INST_DEFAULT_DIR, sizeof(opts.Dir));
     }
     if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
         strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
@@ -2401,10 +2401,6 @@ static int check_package(void)
     }
     if (inst_starts(opts.Dir, "release-")) {
         wantFlavour = "RELEASE";
-    } else if (inst_starts(opts.Dir, "debug-")) {
-        wantFlavour = "DEBUG";
-        out("The debug- directory is for troubleshooting only; install it "
-            "only if asked.\n");
     } else {
         return refuse("not a flavour directory of the package: ", opts.Dir);
     }
@@ -30390,7 +30386,6 @@ void inst_eng_usage(void)
 "                computer (/nofaster: off)\n"
 "  /restage      Vista to 10: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
-"  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
 "  /nopause      do not wait for Enter at the end\n"
 "  /log path     write the log there (default XHCIINST.LOG on the system\n"
 "                drive)\n"

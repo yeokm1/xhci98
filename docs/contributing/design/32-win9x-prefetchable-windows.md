@@ -415,7 +415,7 @@ runs at the resume is a later option, not this draft.
 ## 8. The package and the installer
 
 - **The file**: `XHCIPFW.VXD`, at the root of every x86 flavour
-  directory (release and debug, with or without Stor98; the qemu
+  directory (release, and debug up to `3.3.0.0`, with or without Stor98; the qemu
   flavour's image in the qemu package), built by
   `scripts\build-driver.cmd` as `S98VSD.VXD` is (`src\pfw\build.cmd`),
   with a gate of record 30 section 6.4's shape (`src\pfw\check-pfw.ps1`):

@@ -58,8 +58,8 @@
  * readiness timeout (a timeout is not evidence that nothing depends on the
  * controller; orchestrator decision of 2026-10-15, owner to confirm). Tunnels and
  * approvals survive every stop. The device table and the counters go to
- * the log, which is emitted at each stop (decision D12: debug and qemu
- * only).
+ * the log, which is emitted at each stop (always in the qemu flavour, and in
+ * every flavour with XhciCmLogDebugView 1: cm_log.c).
  *
  * IRQL: PASSIVE_LEVEL throughout - PnP IRPs on a DO_POWER_PAGABLE object,
  * and the *Work, Bind, PollPass and DrainActions functions on the
@@ -573,7 +573,12 @@ static const char *const cmU4CounterNames[] = {
     "u4.action-overflows", "u4.ejects", "u4.contained.refused",
     "u4.contained.retired", "u4.recover.attempts", "u4.recover.committed",
     "u4.recover.stop-unverified", "u4.recover.preserved",
-    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held"
+    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held",
+    "u4.kid.connects", "u4.kid.up", "u4.kid.adopted", "u4.kid.torn-down",
+    "u4.kid.dropped", "u4.kid.lost", "u4.kid.full",
+    "u4.gen4.links", "u4.gen4.asym", "u4.gen4.unusable", "u4.caps.seq-enabled",
+    "u4.caps.seq-refused", "u4.caps.seq-unknown", "u4.ee.set", "u4.ee.cleared",
+    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -1918,15 +1923,27 @@ VOID CmNhiWaitService(PCM_NHI nhi)
 
 /* Whether the device an action names is still the one it named: the
  * ICM's table entry, or the USB4 port's connection generation with its
- * router present (and, for a tunnel up, its PCIe tunnel still up). */
+ * router present (and, for a tunnel up, its PCIe tunnel still up); for a
+ * chained tunnel (design record 34 Part 3, Slot bits 15:8 the kid), the
+ * kid's generation with both routers present. */
 BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
     const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG kid;
 
     if (!nhi->U4On) {
         return TbtIcmActionLive(&nhi->Icm, action);
     }
     p = TbtU4Port(&nhi->U4, action->Link);
+    kid = (action->Slot >> 8) & 0xFFUL;
+    if (kid != 0) {
+        k = TbtU4Kid(&nhi->U4, kid);
+        return (BOOLEAN)(p != NULL && k != NULL && !nhi->U4.Failed && !cmU4Contained(nhi) &&
+                         p->Dev.Present && k->Used && k->Port == action->Link &&
+                         k->Generation == action->Serial && k->Dev.Present &&
+                         (action->Kind != TBT_ICM_ACT_TUNNEL_UP || k->Pcie.Up));
+    }
     return (BOOLEAN)(p != NULL && !nhi->U4.Failed && !cmU4Contained(nhi) &&
                      p->Generation == action->Serial && p->Dev.Present &&
                      (action->Kind != TBT_ICM_ACT_TUNNEL_UP || p->Pcie.Up));
@@ -1937,8 +1954,12 @@ BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
  * whole set then acts, as it always does under the ICM client. */
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
+    /* A chained tunnel's (record 34 Part 3, Slot bits 15:8 the kid) names
+     * no member: the member's exposure must not take the kid's generation
+     * for its own tunnel's (CmNvlinkActionTunnel), and the chain action
+     * walks every member, as under the firmware connection manager. */
     if (!nhi->U4On || !cmTopoUsable(nhi) ||
-        action->Kind == TBT_ICM_ACT_RESYNC) {
+        action->Kind == TBT_ICM_ACT_RESYNC || ((action->Slot >> 8) & 0xFFUL) != 0) {
         return XHCI_TBT_NO_MEMBER;
     }
     return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, action->Link);
@@ -1948,7 +1969,10 @@ ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
  * Serial its connection generation, Slot the port again (CmNhiActionLive
  * reads the port, never the ICM's table). A router removed below depth 1
  * re-enumerates the whole set, as a RESYNC: its function sat below the
- * depth-1 router's own switch (record 22 section 7.1). */
+ * depth-1 router's own switch (record 22 section 7.1). A chained tunnel's
+ * (record 34 Part 3): Depth 2, Serial the kid's generation, Slot the port
+ * with the kid in bits 15:8 - the chain action's owed key, one per kid
+ * (record 34 section 3.9). */
 static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
 {
     CmZero(a, sizeof(*a));
@@ -1960,10 +1984,10 @@ static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
         a->Kind = TBT_ICM_ACT_RESYNC;
     }
     a->Why = CM_U4_WHY_BASE | (u->Kind & 0xFUL);
-    a->Slot = u->Port;
+    a->Slot = u->Port | ((u->Kid & 0xFFUL) << 8);
     a->Serial = u->Generation;
     a->Link = u->Port;
-    a->Depth = (u->Kind == TBT_U4_ACT_DEEP_REMOVED) ? 2UL : 1UL;
+    a->Depth = (u->Kind == TBT_U4_ACT_DEEP_REMOVED || u->Kid != 0) ? 2UL : 1UL;
     a->WasApproved = TRUE;
 }
 
@@ -2270,7 +2294,9 @@ VOID CmNhiU4Take(PCM_NHI nhi)
      * it. A TUNNEL_DOWN alone is never closure. */
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Port >= 1 &&
+        /* A chained tunnel's (record 34 Part 3) is not its port's: no
+         * learning, and no stor98 statement before task 45.18. */
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0 && u->Port >= 1 &&
             u->Port <= XHCI_TBT_MAX_PORTS &&
             !cmU4ClosedFor(nhi, u->Port, u->Generation)) {
             XhciTbtLearnUp(&nhi->Binds, u->Port);
@@ -2289,7 +2315,7 @@ VOID CmNhiU4Take(PCM_NHI nhi)
         }
         for (i = 0; i < n; i++) {
             u = &nhi->U4Batch[i];
-            if (u->Kind != TBT_U4_ACT_TUNNEL_UP) {
+            if (u->Kind != TBT_U4_ACT_TUNNEL_UP || u->Kid != 0) {
                 continue;
             }
             cmU4ToIcm(u, &a);
@@ -2343,10 +2369,13 @@ static VOID cmU4Deliver(PCM_NHI nhi)
         CmLogNote(nhi, "u4.action",
                   (u->Kind << 24) | ((u->Port & 0xFFUL) << 16) |
                       (u->Generation & 0xFFFFUL));
+        if (u->Kid != 0) {
+            CmLogNote(nhi, "u4.action.kid", (u->Kid << 24) | (u->Generation & 0xFFFFFFUL));
+        }
         CmLogNote(nhi, "u4.action.map",
                   u->MapValid ? (0x80000000UL | (u->MapRid & 0xFFFFUL))
                               : (u->PcieDown & 0xFFUL));
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0) {
             cmU4LogRouter(nhi, u->Port);
         }
         cmU4ToIcm(u, &a);
@@ -2358,6 +2387,12 @@ static VOID cmU4Deliver(PCM_NHI nhi)
         }
         if (nhi->ReenumOn) {
             CmReenumAction(nhi, &a);
+        }
+        if (u->Kid != 0) {
+            /* A chained tunnel (record 34 Part 3): the chain action alone
+             * (CmReenumAction above); the port's own records, its eject's
+             * connection and its learning, are not its. */
+            continue;
         }
         if (u->Port >= 1 && u->Port <= TBT_U4_MAX_PORTS) {
             /* The connection the seam last heard of on this port: an
@@ -2420,6 +2455,17 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
 
     nhi = (PCM_NHI)context;
     nhi->Counters.U4LinkDowns++;
+    if (info->Kid != 0) {
+        /* A chained tunnel's (record 34 section 6.7): no statement at
+         * depth 2 before task 45.18 (record 34 section 12, Q4), so a
+         * chained drive is held by stor98's own gone deadline (MD-1); the
+         * port's learning and isolation are its own. */
+        CmLogNote(nhi, "u4.linkdown.kid",
+                  ((info->Port & 0xFFUL) << 24) | ((info->Kid & 0xFFUL) << 16) |
+                      ((info->Generation & 0xFFUL) << 8) |
+                      (info->PathClosed ? 0x01UL : 0));
+        return TBT_U4_STMT_WITHHELD;
+    }
     CmLogNote(nhi, "u4.linkdown",
               ((info->Port & 0xFFUL) << 24) |
                   ((info->Generation & 0xFFFFUL) << 8) |
@@ -2674,6 +2720,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
+    nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* The bind takes the tunnel ports' learning baseline between the
@@ -3218,6 +3265,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
                   (nhi->Values.AsmPcie7Refused << 9));
     if (nhi->Values.AsmPcie7Refused) {
         CmLogNote(nhi, "cm.asm.pcie7.raw", nhi->Values.AsmPcie7Raw);
+    }
+    /* XhciCmUsb4V2 as run with (record 22 section 6.2.1 item 5); bit 8
+     * found, bit 9 refused (the value read is then the next note's). */
+    CmLogNote(nhi, "cm.usb4.v2",
+              nhi->Values.Usb4V2 | (nhi->Values.Usb4V2Found << 8) |
+                  (nhi->Values.Usb4V2Refused << 9));
+    if (nhi->Values.Usb4V2Refused) {
+        CmLogNote(nhi, "cm.usb4.v2.raw", nhi->Values.Usb4V2Raw);
     }
 
     cmFindBar(nhi, irp);

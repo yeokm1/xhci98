@@ -23,6 +23,11 @@ typedef struct _BRNUM_CTX {
     ULONG Limit;            /* the port's subordinate bus                */
     ULONG Count;            /* bridges journalled in R                   */
     ULONG Flags;            /* XHCI_TBT_BRNUM_F_*                        */
+    ULONG PadBus;           /* pad candidates with buses in this walk    */
+    ULONG PadMem;           /* the memory brNeed adds to a qualifying
+                               candidate's window, 0 for none            */
+    ULONG InCand;           /* candidates above the bus being walked: one
+                               level, nothing below a candidate padded   */
 } BRNUM_CTX;
 
 static ULONG brRead(PXHCI_TBT_CFG io, ULONG bdf, ULONG offset, PULONG value)
@@ -175,6 +180,37 @@ static ULONG brSurvey(PXHCI_TBT_CFG io, ULONG bus, PXHCI_TBT_BRNUM r)
  * first, the subtree behind each. 0 when the bus is done, else the
  * refusal's outcome with r->Where set.
  */
+/* Whether the bridge at bdf is a chain-port candidate (record 34 section
+ * 3.1): *is 1 for a PCI Express downstream port with Slot Implemented and
+ * Hot-Plug Capable. Returns 0 when a read or the capability walk failed. */
+static ULONG brCandidate(PXHCI_TBT_CFG io, ULONG bdf, PULONG is)
+{
+    ULONG cap;
+    ULONG off;
+    ULONG caps;
+    ULONG slotCap;
+
+    *is = 0;
+    cap = XhciTbtFindCapStatus(io, bdf, XHCI_TBT_CAP_PCIE, &off);
+    if (cap == XHCI_TBT_CAP_FAILED || cap == XHCI_TBT_CAP_GONE) {
+        return 0;
+    }
+    if (cap != XHCI_TBT_CAP_FOUND) {
+        return 1;
+    }
+    if (!brRead(io, bdf, off + XHCI_TBT_PCIE_CAPS, &caps) ||
+        !brRead(io, bdf, off + XHCI_TBT_PCIE_SLOTCAP, &slotCap) ||
+        caps == 0xFFFFFFFFUL || slotCap == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    caps = (caps >> 16) & 0xFFFFUL;
+    if (XHCI_TBT_PCIE_TYPE(caps) == XHCI_TBT_PCIE_TYPE_DOWN &&
+        XhciTbtPcieHotPlug(caps, slotCap)) {
+        *is = 1;
+    }
+    return 1;
+}
+
 static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
 {
     PXHCI_TBT_BRNUM r;
@@ -191,6 +227,7 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
     ULONG slot;
     ULONG rc;
     ULONG below;
+    ULONG cand;
 
     r = c->R;
     *found = 0;
@@ -260,7 +297,19 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
                     r->Where = bdf;
                     return XHCI_TBT_BRNUM_ACCESS;
                 }
+                cand = 0;
+                if (c->PadBus && c->InCand == 0 &&
+                    !brCandidate(c->Io, bdf, &cand)) {
+                    r->Where = bdf;
+                    return XHCI_TBT_BRNUM_ACCESS;
+                }
+                if (cand) {
+                    c->InCand++;
+                }
                 rc = brBus(c, secondary, depth + 1, &below);
+                if (cand) {
+                    c->InCand--;
+                }
                 if (rc != 0) {
                     return rc;
                 }
@@ -272,6 +321,31 @@ static ULONG brBus(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG found)
                      * that answers a moment later. */
                     r->Where = bdf;
                     return XHCI_TBT_BRNUM_NOT_READY;
+                }
+                if (cand) {
+                    ULONG left;
+                    ULONG pad;
+
+                    /* Record 34 section 3.3.6: a chain-port candidate
+                     * (none below another) keeps half of what is left of
+                     * the port's range, at most 8 buses, past its own
+                     * subtree. */
+                    {
+                        left = (c->Next <= c->Limit)
+                                   ? c->Limit - c->Next + 1UL : 0UL;
+                        pad = left / 2UL;
+                        if (pad > XHCI_TBT_BRNUM_PAD_MAX_BUSES) {
+                            pad = XHCI_TBT_BRNUM_PAD_MAX_BUSES;
+                        }
+                        if (pad < XHCI_TBT_BRNUM_PAD_MIN_BUSES) {
+                            r->PadNoBus++;
+                        } else {
+                            c->Next += pad;
+                            r->Pad[slot] = pad;
+                            r->PadQual[slot] = 1;
+                            r->Padded++;
+                        }
+                    }
                 }
                 if (!brGo(c)) {
                     r->Where = bdf;
@@ -607,6 +681,14 @@ static ULONG brNeed(BRNUM_CTX *c, ULONG bus, ULONG depth, PULONG need,
                 if (rc != 0) {
                     return rc;
                 }
+                if (c->PadMem != 0 && c->R->PadQual[k]) {
+                    /* Record 34 section 3.3.6: the padding beside what
+                     * the subtree needs. */
+                    if (!brAdd(&sub, c->PadMem)) {
+                        c->R->WinWhere = bdf;
+                        return XHCI_TBT_BRWIN_NO_ROOM;
+                    }
+                }
                 if (sub == 0) {
                     size = 0;
                     subAlign = 0;
@@ -899,6 +981,102 @@ static VOID brWinUndo(BRNUM_CTX *c)
  * prefetchable and I/O windows closed, memory and bus master enabled.
  * Sets r->WinOutcome; on a refusal every window written is put back.
  */
+/* The port window's usable part for a need of `need` aligned to *align
+ * (raised to the grain): from its base rounded up to A to its top rounded
+ * down to A, the BARs' region at the bottom, the windows packed below the
+ * top. Returns XHCI_TBT_BRWIN_NO_ROOM when the need does not fit. */
+static ULONG brSpan(ULONG pbase, ULONG plimit, ULONG need, PULONG align,
+                    PULONG top, PULONG bottom)
+{
+    if (*align < BRWIN_GRAIN) {
+        *align = BRWIN_GRAIN;
+    }
+    /* A window ending at 4 GiB is open: its end past the limit does not
+     * fit 32 bits, so its last unit of A is left out instead. */
+    if (plimit == 0xFFFFFFFFUL) {
+        *top = plimit & ~(*align - 1UL);
+    } else {
+        *top = (plimit + 1UL) & ~(*align - 1UL);
+    }
+    *bottom = brRound(pbase, *align);
+    if (*bottom == 0 || *top < *bottom || *top - *bottom < need) {
+        return XHCI_TBT_BRWIN_NO_ROOM;
+    }
+    return 0;
+}
+
+/*
+ * Record 34 section 3.3.6: the memory padding, before anything is written.
+ * The qualifying candidates (PadQual) share the slack equally, rounded
+ * down to a power of two, at most 64 MiB, none below 2 MiB; the need is
+ * computed again with it and taken only when it fits, else computed again
+ * without it. *need, *align, *top and *bottom are what is placed.
+ */
+static ULONG brPadMem(BRNUM_CTX *c, ULONG secondary, ULONG pbase,
+                      ULONG plimit, PULONG need, PULONG align, PULONG top,
+                      PULONG bottom)
+{
+    PXHCI_TBT_BRNUM r;
+    ULONG n;
+    ULONG k;
+    ULONG m;
+    ULONG p;
+    ULONG need2;
+    ULONG align2;
+    ULONG top2;
+    ULONG bottom2;
+    ULONG rc;
+
+    r = c->R;
+    n = 0;
+    for (k = 0; k < c->Count; k++) {
+        if (r->PadQual[k]) {
+            n++;
+        }
+    }
+    if (n == 0) {
+        return 0;
+    }
+    m = (*top - *bottom - *need) / n;
+    if (m > XHCI_TBT_BRNUM_PAD_MAX_MEM) {
+        m = XHCI_TBT_BRNUM_PAD_MAX_MEM;
+    }
+    for (p = XHCI_TBT_BRNUM_PAD_MAX_MEM; p > m; p >>= 1) {
+    }
+    if (p < XHCI_TBT_BRNUM_PAD_MIN_MEM) {
+        r->PadNoMem++;
+        return 0;
+    }
+    c->PadMem = p;
+    rc = brNeed(c, secondary, 0, &need2, &align2);
+    if (rc == 0) {
+        rc = brSpan(pbase, plimit, need2, &align2, &top2, &bottom2);
+    }
+    if (rc == 0) {
+        r->PadMem = p;
+        *need = need2;
+        *align = align2;
+        *top = top2;
+        *bottom = bottom2;
+        return 0;
+    }
+    if (rc != XHCI_TBT_BRWIN_NO_ROOM) {
+        /* A sizing refusal (ACCESS, ACTIVE, STALE) is the window stage's
+         * own, padded or not. */
+        c->PadMem = 0;
+        return rc;
+    }
+    /* The padded need does not fit: the unpadded need, computed again, so
+     * that each bridge's Need and Align are the unpadded ones. */
+    r->PadNoMem++;
+    c->PadMem = 0;
+    rc = brNeed(c, secondary, 0, need, align);
+    if (rc == 0) {
+        rc = brSpan(pbase, plimit, *need, align, top, bottom);
+    }
+    return rc;
+}
+
 static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
 {
     PXHCI_TBT_BRNUM r;
@@ -943,27 +1121,18 @@ static VOID brWindows(BRNUM_CTX *c, ULONG port, ULONG secondary)
         r->WinOutcome = XHCI_TBT_BRWIN_PORT_CLOSED;
         return;
     }
+    c->PadMem = 0;
     rc = brNeed(c, secondary, 0, &need, &align);
-    r->WinNeed = need;
     if (rc == 0) {
-        /* The port's window only 1 MiB-aligned: its usable part runs from
-         * its base rounded up to A to its top rounded down to A, the BARs'
-         * region at the bottom of that, the windows packed below its top. */
-        if (align < BRWIN_GRAIN) {
-            align = BRWIN_GRAIN;
-        }
-        /* A window ending at 4 GiB is open: its end past the limit does
-         * not fit 32 bits, so its last unit of A is left out instead. */
-        if (plimit == 0xFFFFFFFFUL) {
-            top = plimit & ~(align - 1UL);
-        } else {
-            top = (plimit + 1UL) & ~(align - 1UL);
-        }
-        bottom = brRound(pbase, align);
-        if (bottom == 0 || top < bottom || top - bottom < need) {
-            r->WinWhere = port;
-            rc = XHCI_TBT_BRWIN_NO_ROOM;
-        }
+        rc = brSpan(pbase, plimit, need, &align, &top, &bottom);
+    }
+    if (rc == 0 && (c->Flags & XHCI_TBT_BRNUM_F_PAD) != 0) {
+        rc = brPadMem(c, secondary, pbase, plimit, &need, &align, &top,
+                      &bottom);
+    }
+    r->WinNeed = need;
+    if (rc == XHCI_TBT_BRWIN_NO_ROOM && r->WinWhere == XHCI_TBT_NO_BDF) {
+        r->WinWhere = port;
     }
     if (rc == 0) {
         rc = brPlace(c, secondary, top, bottom, 0);
@@ -1354,7 +1523,14 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     r->WinWhere = XHCI_TBT_NO_BDF;
     r->PortMem = 0;
     r->WinNeed = 0;
+    r->Padded = 0;
+    r->PadMem = 0;
+    r->PadNoBus = 0;
+    r->PadNoMem = 0;
+    r->PadDropped = 0;
     for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {
+        r->Pad[k] = 0;
+        r->PadQual[k] = 0;
         r->Bdf[k] = XHCI_TBT_NO_BDF;
         r->Id[k] = 0;
         r->Was[k] = 0;
@@ -1407,6 +1583,9 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         c.Limit = subordinate;
         c.Count = 0;
         c.Flags = flags;
+        c.PadBus = 0;
+        c.PadMem = 0;
+        c.InCand = 0;
         k = 0;
         r->Bridges = 0;
         rc = brJournal(&c, secondary, secondary + 1UL, subordinate, 0, &k,
@@ -1426,6 +1605,44 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         }
         r->Numbered = c.Count;
         r->Outcome = XHCI_TBT_BRNUM_REOPENED;
+        if ((flags & XHCI_TBT_BRNUM_F_PAD) != 0) {
+            /* Record 34 section 3.3.6: a candidate whose retained range
+             * leaves room for a chained switch is given its memory again;
+             * its bus numbers are left as they are. */
+            for (k = 0; k < c.Count; k++) {
+                if (!brCandidate(io, r->Bdf[k], &own)) {
+                    for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {
+                        r->PadQual[k] = 0;
+                    }
+                    r->Numbered = 0;
+                    r->Where = r->Bdf[0];
+                    r->Outcome = XHCI_TBT_BRNUM_ACCESS;
+                    return r->Outcome;
+                }
+                r->Pad[k] = own;    /* the candidates, for the rule below */
+                if (own && ((r->Now[k] >> 16) & 0xFFUL) >=
+                               ((r->Now[k] >> 8) & 0xFFUL) +
+                                   XHCI_TBT_BRNUM_PAD_MIN_BUSES) {
+                    r->PadQual[k] = 1;
+                }
+            }
+            /* One level: none below another candidate (its bus inside a
+             * candidate's secondary to subordinate range). */
+            for (k = 0; k < c.Count; k++) {
+                for (own = 0; own < c.Count; own++) {
+                    if (own != k && r->Pad[own] &&
+                        XHCI_TBT_BDF_BUS(r->Bdf[k]) >=
+                            ((r->Now[own] >> 8) & 0xFFUL) &&
+                        XHCI_TBT_BDF_BUS(r->Bdf[k]) <=
+                            ((r->Now[own] >> 16) & 0xFFUL)) {
+                        r->PadQual[k] = 0;
+                    }
+                }
+            }
+            for (k = 0; k < c.Count; k++) {
+                r->Pad[k] = 0;
+            }
+        }
         brWindows(&c, port, secondary);
         if (r->WinOutcome == XHCI_TBT_BRWIN_STALE) {
             r->Numbered = 0;
@@ -1456,7 +1673,37 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
     c.Limit = subordinate;
     c.Count = 0;
     c.Flags = flags;
+    c.PadBus = (ULONG)((flags & XHCI_TBT_BRNUM_F_PAD) != 0);
+    c.PadMem = 0;
+    c.InCand = 0;
     rc = brBus(&c, secondary, 0, &k);
+    if (rc == XHCI_TBT_BRNUM_NO_ROOM && r->Padded != 0) {
+        /* Record 34 section 3.3.6: never at the cost of the dock itself.
+         * Once every bridge is put back, numbered again at once without
+         * the bus padding; not when the undo failed. */
+        brUndo(&c);
+        if (r->UndoFailed == 0) {
+            r->PadDropped = 1;
+            r->Padded = 0;
+            r->Bridges = 0;
+            r->Where = XHCI_TBT_NO_BDF;
+            for (k = 0; k < XHCI_TBT_BRNUM_MAX_BRIDGES; k++) {
+                r->Bdf[k] = XHCI_TBT_NO_BDF;
+                r->Id[k] = 0;
+                r->Was[k] = 0;
+                r->Now[k] = 0;
+                r->Pad[k] = 0;
+                r->PadQual[k] = 0;
+            }
+            c.Next = secondary + 1;
+            c.Count = 0;
+            c.PadBus = 0;
+            rc = brBus(&c, secondary, 0, &k);
+        } else {
+            r->Outcome = rc;
+            return r->Outcome;
+        }
+    }
     if (rc == 0) {
         r->Numbered = c.Count;
         r->Last = c.Count != 0 ? c.Next - 1 : 0;

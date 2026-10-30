@@ -47,7 +47,7 @@ body:
     id: build
     attributes:
       label: Which directory of the download you installed from
-      description: release-x86 (or release-x64 on a 64-bit Windows) unless a maintainer asked you for a debug one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build.
+      description: release-x86 (or release-x64 on a 64-bit Windows). The debug-x86 and debug-x64 directories exist only in downloads up to 3.3.0.0.
       options:
         - release-x86
         - release-x64

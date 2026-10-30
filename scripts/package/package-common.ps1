@@ -68,9 +68,11 @@ function Read-MediaLayout {
 # not. A `Declared` value shorter than four parts is zero-extended, since an INF
 # `DriverVer` of "1.0" means 1.0.0.0.
 #
-# Which of the three build flavours an image is, read out of the file (task
-# 13-L.1). Returns "release", "debug", "qemu" or "" when the image carries no
-# marker at all - which means a binary built before the marker existed.
+# Which build flavour an image is, read out of the file (task 13-L.1).
+# Returns "release", "qemu", "debug" (an image of the flavour task 45.45
+# retired, which every caller then refuses as not the one asked for) or ""
+# when the image carries no marker at all - which means a binary built
+# before the marker existed.
 #
 # **This is shared because both packaging scripts need the same answer and must
 # not derive it two ways.** The path is not evidence: -DriverPath can name a
@@ -2111,7 +2113,7 @@ function Get-GatedHeadAdvance {
 # record that admits anything. Like the record itself this protects against
 # a mismatch by accident, not against someone who forges one.
 $script:ImportArch = "amd64"
-$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "debug" = "objchk"; "qemu" = "objchk_qemu" }
+$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "qemu" = "objchk_qemu" }
 $script:ImportStor98Dir = "src\stor98\out\free\amd64"
 
 function Get-GatedImportDirs {
@@ -2291,8 +2293,8 @@ function Enter-GatedLock {
 function Import-GatedBuild {
     # Copies the amd64 build of each flavour in $Flavor from the worktree
     # $From into the same directories of the tree $Repo, with its records,
-    # under the rules above. With no -Flavor: release and debug, and qemu
-    # where $From has its record. Throws with every reason when it refuses;
+    # under the rules above. With no -Flavor: release, and qemu where $From
+    # has its record (debug was retired with task 45.45). Throws with every reason when it refuses;
     # returns one object per flavour (Flavor, Commit, Time, Advance, Sha256,
     # Record). -RepoLockHeld: the caller (cut-builds.ps1) already holds
     # $Repo's amd64 lock, taken with Enter-GatedLock -Owner cut-builds, and
@@ -2308,11 +2310,11 @@ function Import-GatedBuild {
     $why = Get-GatedImportTreeFault -Repo $Repo -From $From
     if ($why -ne "") { throw "the amd64 build cannot be imported: $why." }
     if ($Flavor.Count -eq 0) {
-        $Flavor = @("release", "debug")
+        $Flavor = @("release")
         if (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $From -Arch $arch -Flavor "qemu") -PathType Leaf) { $Flavor += "qemu" }
     }
     foreach ($f in $Flavor) {
-        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release, debug or qemu)." }
+        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release or qemu; debug was retired with task 45.45)." }
     }
     $dirs = @()
     foreach ($f in $Flavor) { $dirs += Get-GatedImportDirs -Flavor $f }
@@ -4450,9 +4452,16 @@ function Test-OtherTableLifts {
     # every system a row of kind 2 (lifted) names lifted for its pair, and
     # every lifted pair and system named by such a row, since the installer
     # holds a lifted pair against an earlier staging of another release only
-    # through that row.
-    param($Table, $Lifted)
+    # through that row. -Carried names the sets this cut carries ("free",
+    # "nonfree"; $null for both): a row whose pair has a set the cut does
+    # not carry is not held to a lift, since no lift can be read there and
+    # the installer then holds the row as an EXCLUDES (the partner set is
+    # not this download's, inst_eng.c other_same_release).
+    param($Table, $Lifted, $Carried = $null)
     $rows = @($Table.Rels | Where-Object { $_.PSObject.Properties.Name -contains "Lifted" -and $_.Lifted })
+    if ($null -ne $Carried) {
+        $rows = @($rows | Where-Object { @($Carried) -ccontains $_.A.Split(':')[0] -and @($Carried) -ccontains $_.B.Split(':')[0] })
+    }
     foreach ($r in $rows) {
         $k = Get-OtherRelPairKey -A $r.A -B $r.B
         $have = @()
@@ -4732,6 +4741,48 @@ function Test-OtherPkgsTransition {
     }
 }
 
+function Get-OtherHeldLifts {
+    # Record 26 section 6.7.14 (draft 51): in a cut that leaves out a set of
+    # a pair the installer's table marks lifted (kind 2), the installer holds
+    # that row as an EXCLUDES (the partner set is not this download's), so
+    # the cut records it so: on the row's systems the pair's COEXISTS lines,
+    # the table's and the carried pack's, become EXCLUDES, and the rest of
+    # each line stays as it is. Returns the table and the metadata to check
+    # and record; both unchanged in a cut that carries both sets.
+    param($Table, $Meta, [string[]]$Carried)
+    $hold = @{}
+    foreach ($r in @($Table.Rels)) {
+        if (-not ($r.PSObject.Properties.Name -contains "Lifted" -and $r.Lifted)) { continue }
+        if (@($Carried) -ccontains $r.A.Split(':')[0] -and @($Carried) -ccontains $r.B.Split(':')[0]) { continue }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $hold.ContainsKey($k)) { $hold[$k] = @() }
+        $hold[$k] += @($r.Systems)
+    }
+    if ($hold.Count -eq 0) { return [pscustomobject]@{ Table = $Table; Meta = $Meta } }
+    function Split-Held($r) {
+        if ($r.Kind -cne "COEXISTS") { return $r }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $hold.ContainsKey($k)) { return $r }
+        $in = @($r.Systems | Where-Object { $hold[$k] -ccontains $_ })
+        $out = @($r.Systems | Where-Object { $hold[$k] -cnotcontains $_ })
+        $res = @()
+        if ($in.Count -gt 0) {
+            $x = $r.PSObject.Copy(); $x.Kind = "EXCLUDES"; $x.Systems = $in
+            if ($x.PSObject.Properties.Name -contains "Lifted") { $x.Lifted = $false }
+            $res += $x
+        }
+        if ($out.Count -gt 0) { $y = $r.PSObject.Copy(); $y.Systems = $out; $res += $y }
+        return $res
+    }
+    $heldRels = @()
+    foreach ($r in @($Table.Rels)) { $heldRels += @(Split-Held $r) }
+    # Not $meta: PowerShell names are case-blind, and that is -Meta.
+    $heldMeta = @()
+    foreach ($m in @($Meta)) { $heldMeta += @(Split-Held $m) }
+    $t = $Table.PSObject.Copy(); $t.Rels = $heldRels
+    return [pscustomobject]@{ Table = $t; Meta = $heldMeta }
+}
+
 function Find-PreviousOtherPkgs {
     # The newest releases\<v>\otherpkgs.txt below -Version, or $null.
     param([string]$ReleasesDir, [string]$Version)
@@ -4798,6 +4849,10 @@ function Invoke-OtherSetChecks {
     }
     Test-OtherStageIds -Sets $sets
     Test-OtherPkgTable -Table $table -Sets $sets -Meta $meta -Brands $brands -Headings $headings
+    $carried = @($sets | ForEach-Object { $_.Name })
+    $held = Get-OtherHeldLifts -Table $table -Meta $meta -Carried $carried
+    $table = $held.Table
+    $meta = $held.Meta
     $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta
     $prev = $null
     $lifted = @()
@@ -4811,7 +4866,7 @@ function Invoke-OtherSetChecks {
         $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
         Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
     }
-    Test-OtherTableLifts -Table $table -Lifted $lifted
+    Test-OtherTableLifts -Table $table -Lifted $lifted -Carried $carried
     if ($lifted.Count -gt 0) { $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta -Lifted $lifted }
     return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
