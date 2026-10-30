@@ -126,7 +126,12 @@
                                                interrupt reaches the port on
                                                the port's own pin gets the
                                                port's own Interrupt Line,
-                                               where its line is unset    */
+                                               where its line is unset;
+                                               also with no bridge below
+                                               (NONE), for the functions on
+                                               the port's secondary bus
+                                               (design record 28 section
+                                               13)                         */
 
 /* Configuration registers this file writes (a type 1 header but 04h). */
 #define XHCI_TBT_CFG_COMMAND        0x04UL  /* Command 15:0, Status 31:16   */
