@@ -6931,13 +6931,30 @@ read that fails.
   cycle, a link recovery, a controller stop and start, or a resume that
   re-initialized the controller keeps it; a controller removal (XP's
   disable) forgets it. An unplug does not clear it: a link that drops reads
-  as one, and that is the case this rule is for. Hub ports are not covered
-  (a device behind a hub is a follow-up).
+  as one, and that is the case this rule is for.
+- **Behind a hub** (owner, 2026-10-30, the 45.41 case): a device attached
+  directly to a downstream port of a USB 2.0 or SuperSpeed hub, at any
+  tier, has the same memory, held for its **place** rather than for a port
+  object: an entry of a controller table (`IdPlaces`,
+  `HCD_ID_PLACES` = 32) named by the place's instance key
+  (`XhciHubInstanceKey(root port, route)`, the key its location form
+  answers). A hub's port objects can sit at other indexes after the hub is
+  removed and enumerated again, but the places keep their keys, so the
+  memory survives the hub's own departure, re-enumeration and replacement
+  at the same place, and a controller stop and start; it goes with the
+  controller's storage, as a root port's. An entry is taken at the first
+  listing at its place; with all 32 taken, the one written least recently
+  is reused (`XhciFuncIdPlaceTake`, host vectors in `test_func`), and a
+  place whose entry went is treated as one never seen. The latch and the
+  deferral counts are the entry's. A different hub put at the same place
+  inherits its ports' entries, with the cost a root port's memory has (a
+  same-model device whose read fails there is deferred once). Root ports
+  keep their memory in `HCD_PORT` as before.
 - **The decision**, `XhciFuncSerialDefer` (`xhci_func.c`, host vectors in
   `test_func`), taken in `HcdDevicePdoCreate` right after the read and
   before anything is configured, so a composite device's whole group is
-  covered: a non-hub device attached directly to a root port, with an
-  `iSerialNumber`, whose read is `HCD_SERIAL_FAILED` or
+  covered: a non-hub device attached directly to a root port or to a
+  hub's downstream port, with an `iSerialNumber`, whose read is `HCD_SERIAL_FAILED` or
   `HCD_SERIAL_REFUSED`, where the port remembers the same vendor and
   product id answering the serial form, is **deferred** - unless the
   port's latch (below) is a bypass, when it is published, or a failure,
@@ -6957,9 +6974,17 @@ read that fails.
   failure is recorded, the deferral is cancelled - the creation fails with no latch
   and nothing counted as spent - when the controller has failed
   (`hcdHalted`), its thread is stopping or its root hub is no longer
-  started, or the root port reads disconnected, unreadable or with a
-  connection change (CSC, left set for the port's inspection: a departure
-  and a new arrival). A reader that times out (`Ep0Stuck`) returns as it
+  started, or the device's path no longer holds the same connection
+  (`hcdSerialDeferGone`): every hub port above the device, its own first,
+  read with GET_STATUS (which clears no change bit), cancels when it does
+  not answer, reads not connected or not enabled, or has C_PORT_CONNECTION
+  or C_PORT_ENABLE set, or when its hub is departing (`Draining`, or no
+  device); then the root port the path starts at cancels when it reads
+  unreadable, not connected, not enabled, or with a connection change
+  (CSC). Every change is left set for its port's own inspection: a
+  departure and a new arrival, or a port its hub disabled, which the
+  ordinary path retries. An ancestor's departure shows here even though
+  its teardown cannot run while this thread is in the child's creation. A reader that times out (`Ep0Stuck`) returns as it
   does now, with no PDO. A run that brings the serial goes on to the
   ordinary creation, the duplicate rule included (`serial.defer.ok`). The
   cost is up to 3 s of waits, plus the reads' own time (a control transfer
@@ -6974,9 +6999,14 @@ read that fails.
   the port is latched (`IdDeferFailed` = failed). The run's failure handler
   (`hcdRun`) does not take the machine's own retry for a latched
   `XHCI_ENUM_FAIL_PDO`: the port stays Failed, which waits for a new
-  connection. The next connection fed to that port (`hcdFeed`, a CONNECT
+  connection; a hub's port is left as it is, not disabled as a hub port
+  is at other final failures (`HcdHubPortDisable`), since a SuperSpeed
+  hub port disabled that way is re-armed by itself later, which would be a
+  new connection with no replug. The next connection fed to that port (`hcdFeed`, a CONNECT
   that starts an enumeration from Empty or Failed - a replug, or the
-  re-enumeration after a recovery) turns the latch into a bypass for that
+  re-enumeration after a recovery, the hub's own included; for a hub's
+  port the entry of its place, found by `XhciTopoChildOf`) turns the latch
+  into a bypass for that
   connection, kept across its own retries and device records: a bypassed
   arrival is never deferred, and is published whatever its read gives - on
   the location form if it still fails, a new devnode, which Windows shows.
@@ -6994,8 +7024,13 @@ read that fails.
   to `_IDFAILS`: the remembered ids, the serial-form flag and the latch,
   the deferrals made and spent there), which `XHCITR` prints as an
   "identity:" line under the port, an Empty one included; the counter block
-  of a stop's flush lists the same (`id.port` and its lines). It is a
-  diagnostic, not a Device Manager entry.
+  of a stop's flush lists the same (`id.port` and its lines). The places
+  behind hubs are a block appended to the region's header
+  (`XHCI_SNAPSHOT_HCD_IDPLACE_*`, version unchanged: the entry count, the
+  words of one and the first entry's word, then `HCD_ID_PLACES` entries of
+  the key, the ids, the serial-form flag and latch, the deferrals made and
+  spent), which `XHCITR` prints as "identity behind hubs", one line a
+  place in use. It is a diagnostic, not a Device Manager entry.
 - **Not changed.** The resume keep (`hcdRkeepRestore`) and the link keep
   (`HcdThreadSameIdentity`, task 45.41) still read the serial afresh and
   compare it, and never take the port's memory; the spaced tries only make
