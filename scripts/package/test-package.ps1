@@ -6118,7 +6118,9 @@ try {
     # make-package.ps1 itself: each refusal, before anything is staged. The
     # stand-in driver says release, the packager's default flavour.
     $soDbgSha = @{ "xhci98.sys" = (Get-FileSha256 -Path $driver) }
-    $soState = Get-GitTreeState -Repo $repo
+    # The tree the packager reads its HEAD and status from is fixture P
+    # (task 45.51), committed and clean, not this tree.
+    $soState = Get-GitTreeState -Repo $fxRepo
     function New-SoRecord {
         param([string]$Name, [string]$Arch = "amd64", [string]$Commit = $soState.Head, [hashtable]$Sha = $soDbgSha)
         $p = Join-Path $soDir $Name
@@ -6167,18 +6169,27 @@ try {
     }
     # A record that admits the stand-in is reported as admitting it, and the
     # run stops there - in a clean tree. In a tree with uncommitted changes the
-    # refusal is the tree's, which is the right answer there too.
+    # refusal is the tree's, which is the right answer there too. Both are
+    # run, on fixture P clean and then with a change in it (task 45.51).
+    Assert-True ($soState.Head -match '^[0-9a-f]{40}$' -and -not $soState.Dirty) "fixture P is not a clean committed repository for the sign-only cases."
     $soOkOut = Join-Path $script:work "pkg-signonly-ok"
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver,
                            "-OutDir", $soOkOut, "-SignOnly",
                            "-GatedManifestPath", (New-SoRecord -Name "ok.txt")) -WithBinaryGates
-    if ($soState.Dirty) {
+    Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
+                 $r.Output.Contains("REUSED from the gated build")) `
+        ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
+    $soDirtyFile = Join-Path $fxRepo "src\signonly-dirty.txt"
+    [System.IO.File]::WriteAllText($soDirtyFile, "an uncommitted change")
+    try {
+        $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver,
+                               "-OutDir", $soOkOut, "-SignOnly",
+                               "-GatedManifestPath", (New-SoRecord -Name "ok-dirty.txt")) -WithBinaryGates
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("uncommitted changes since")) `
             ("a matching record in a dirty tree was not refused for the tree. Output:`n" + $r.Output)
-    } else {
-        Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
-                     $r.Output.Contains("REUSED from the gated build")) `
-            ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
+    } finally {
+        Remove-Item -LiteralPath $soDirtyFile -Force -ErrorAction SilentlyContinue
     }
     Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
 
