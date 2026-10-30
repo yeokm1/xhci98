@@ -4521,6 +4521,61 @@ giving it a fixed interface metric of 1 (its TCP/IP Advanced settings,
 "Automatic metric" off); the adapter left with the static settings shows
 under Device Manager's hidden devices.
 
+## 45.15 (legs) the minimal chain on 98 SE, ME and 2000; 10 x64 owed (2026-10-31)
+
+Worker w45-u4chain2, development host A. Code at `d73e4b10` (`f1e9ec85`
+and record 34's revision 12, documentation only): the gated builds
+`all` (x86) and `all -amd64`, "BUILD + GATES PASSED (release qemu)"
+(`E:\xhci98-scratch\p45-w45-u4chain2\gb-x86-l.log`, `gb-x64-l.log`).
+Packages (`make-package.ps1`): release x86 `xhcicm.sys` `cb3dfcb3...`,
+`xhci98.sys` `ac0ab8c4...`; qemu x86 `xhcicm.sys` `0b771eaa...`,
+`xhci98.sys` `fcc8934f...`. The installer and the tools of the transfer
+folder are `3.3.0.0`'s, as in the 7 x86 and XP legs above.
+
+The emulator, the host and the chain as in "45.15 (continued)": QEMU
+v11.1.2 with `usb4-emu` main `fc16468`'s patch, `-Usb4 asm4242`
+(`asm-preset=asm4242-desktop`, its pre-OS connection manager on), the
+parent `usb4-device ... dialect=usb4,downstream-ports=1,
+chain-power-controller=off` with its NVMe on USB4 port 1 at power-on, the
+child `usb4-device ... parent=enc0,port=1` (a plain enclosure) plugged by
+QMP at the desktop or, with `-Chain`, at power-on. Goldens: fresh overlays
+of the q35 bases with the release package installed (98 SE and ME
+`XHCIINST /dir release-x86 /yes /nopause /thunderbolt /stor98`; 2000
+`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`), the qemu
+flavour's `xhcicm.sys` and `xhci98.sys` copied over the installed ones,
+shut down (98 SE `87699fc7...`, ME `d890cf1b...`, 2000 `cd49f1ba...`);
+each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
+`me\`, `w2k\` (`debugcon-<leg>.log`, `cmdline-<leg>.txt`, screenshots).
+
+| Leg | System | Read | Verdict |
+|---|---|---|---|
+| r1 | 98 SE | the parent preserved at the start (`u4.preserved=00010808`); the child plugged: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, the action with the kid, and the 9x chain action re-enumerating both members (`cm.reenum.9x.reenumerate`); the chained NVMe found (Stor98 by its Add New Hardware wizard), F: beside the parent's E:, `fc /b` of a file on both: no differences. The child unplugged: `u4.kid.teardown`, `u4.linkdown.kid`, F: gone, E: kept; plugged again: F: back. The parent unplugged with the child attached: `u4.kid.dropped` first, then the port's link-down, both drives gone; the parent plugged again (the emulator keeps the child on it): the parent's tunnel up and UP, then the kid's, both drives back | clauses 1 (the child's hot plug behind a parent present at power-on), 2, 3 and the approve order: pass |
+| r2 | 98 SE | the chain at power-on: adopted (`u4.kid.adopted=00010808`); the chained NVMe's first install asked a restart, taken (a restart ends QEMU on 98 SE; started again cold); then E: and F:; the child unplugged and plugged again: torn down, connected again, F: back | clause 4: pass |
+| r1 | ME | as on 98 SE: the kid connected, Stor98's wizard for the chained NVMe (the staged INF chosen); F: appeared at the next plug of the child (the first plug installed it); `fc /b`: no differences; the end unplug tore the kid down and kept E:; the middle unplug dropped the kid first; the parent plugged again with the child: parent first, then the kid, E: and F: back | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3 and the approve order: pass |
+| r2 | ME | adopted at power-on; the first install's restart taken, then E: and F:; the child unplugged and plugged again: connected again | clause 4: pass |
+| r1 | 2000 | the kid connected and the chain port classified (`cm.chain.class=00060408`); the chained NVMe on Stor98 at **Code 10** (no interrupt behind a hot-plugged chain on the Standard PC HAL, as 45.13 read); `XHCIINST /devices` lists the kid as a router "behind another device, approved, PCIe up" (the status record's kind 3 entry); the end unplug: `u4.kid.teardown`, the chain port invalidated (`cm.chain.invalidate=02020408`); plugged again: UP, invalidated again; the middle unplug: `u4.kid.dropped` first, then the port's link-down, Windows' "Unsafe Removal of Device" for the parent's tree | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3: pass for the connection manager and the PCI side; the chained drive's start: the platform limit already recorded |
+| r2 | 2000 | the chain at power-on: adopted; both NVMe on Stor98 **started**, each with its disk; the kid listed "behind another device" with no name (an adopted kid's name is not read) | the adoption (part of clause 4): pass; the child's unplug and re-plug after it not run |
+| - | 10 x64 | not run: the package of this clone is unsigned and has no catalogs (10 x64 refuses such a package, 43.33); the in-guest throwaway signing was not run in this session | owed |
+
+### Findings
+
+- 98 SE, golden: during the install Windows asked for the "xhci98 xHCI
+  Host Controller Disk" (`xhci98.sys` not found) for the second
+  controller; pointed at `C:\XHCI98`, the install went on and ended with
+  every controller installed. ME did not ask. Not chased here.
+- On 98 SE and ME a chained drive is reached through 45.14's padding and
+  9x re-enumeration of every member at each kid action (a kid's action
+  names no member, record 34 section 6.11).
+
+### Left
+
+- The 10 x64 leg (a signed package, or the in-guest throwaway signing).
+- Clause 1 with the parent hot-plugged at the desktop (on 7 not readable,
+  r3 above); on 2000, clause 4's unplug and re-plug after the adoption.
+- Deferred to the next release (owner, 2026-10-30; record 34 section
+  3.10, "Deferred"): the chained unit's eject teardown, the chain port's
+  correspondence and the per-tunnel ownership, names and generations.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
