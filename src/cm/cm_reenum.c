@@ -1393,7 +1393,10 @@ BOOLEAN CmRegBreqFind(PCM_FILTER child, PULONG parent, PULONG port,
  * runs the USB4 software connection manager, the USB4 port whose member by
  * correspondence it is, and that port's generation while its PCIe tunnel
  * is up: the binding, kept in the filter. Taken once a start; a later call
- * keeps the first. Under cmRegLock.
+ * keeps the first. The interface's first reference is taken here, under
+ * cmRegLock with the binding, and every reference after it and its release
+ * under the same lock (CmRegIsoRef, CmRegIsoDeref), so the last release's
+ * unbinding and a new binding never interleave.
  */
 BOOLEAN CmRegIsoBind(PCM_FILTER child)
 {
@@ -1410,7 +1413,8 @@ BOOLEAN CmRegIsoBind(PCM_FILTER child)
     bound = FALSE;
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (child->IsoBound && child->IsoRefs != 0) {
-        /* Immutable while a reference is held. */
+        /* Immutable while a reference is held; the caller's own. */
+        child->IsoRefs++;
         KeReleaseSpinLock(&cmRegLock, irql);
         return TRUE;
     }
@@ -1453,6 +1457,7 @@ BOOLEAN CmRegIsoBind(PCM_FILTER child)
             child->IsoStarts = dom->Reenum.Starts;
             child->IsoMember = bdf;
             child->IsoBound = 1;
+            child->IsoRefs++;
             bound = TRUE;
             CmLogNote(dom, "cm.iso.bind", (child->IsoUpMask << 24) | bdf);
         }
@@ -1534,13 +1539,25 @@ ULONG CmRegIsoAsk(PCM_FILTER child)
     return why;
 }
 
-VOID CmRegIsoUnbind(PCM_FILTER child)
+VOID CmRegIsoRef(PCM_FILTER child)
 {
     KIRQL irql;
 
     KeAcquireSpinLock(&cmRegLock, &irql);
-    if (child->IsoRefs == 0) {
-        child->IsoBound = 0;
+    child->IsoRefs++;
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
+VOID CmRegIsoDeref(PCM_FILTER child)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (child->IsoRefs > 0) {
+        child->IsoRefs--;
+        if (child->IsoRefs == 0) {
+            child->IsoBound = 0;
+        }
     }
     KeReleaseSpinLock(&cmRegLock, irql);
 }
@@ -4774,6 +4791,8 @@ VOID CmReenumResumed(PCM_NHI nhi, BOOLEAN ok)
 VOID CmReenumStop(PCM_NHI nhi)
 {
     PCM_REENUM r;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
     KIRQL irql;
     ULONG attached;
     ULONG over;
@@ -4796,6 +4815,17 @@ VOID CmReenumStop(PCM_NHI nhi)
     if (r->Listed) {
         RemoveEntryList(&r->Link);
         r->Listed = 0;
+    }
+    /* Task 45.35's bindings to this domain voided with its listing: a
+     * domain is named by its object's address and its starts count from
+     * 0 again, so a later domain at the same address must never be taken
+     * for it; an ask of a voided binding finds no domain and answers no
+     * until its holder lets go. */
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (f->IsoDom == (PVOID)nhi) {
+            f->IsoDom = NULL;
+        }
     }
     r->EjectPending = 0;
     CmMarksReset(&r->Marks);
