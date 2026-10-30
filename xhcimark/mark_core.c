@@ -825,6 +825,74 @@ static size_t mk_fake_query(unsigned char *b, INST_U32 stage, INST_U32 live,
     return id + strlen(text);
 }
 
+/* ---- a hot-added controller waiting for a restart (record 21 7.6) -------- */
+
+#define MK_CTL_DN_HAS_PROBLEM   0x00000400UL
+
+int mk_ctl_ready_why(const MK_CTL_IN *in)
+{
+    if (!in->Restart) {
+        return MK_CTL_OFF;
+    }
+    if (!in->Nt6x86) {
+        return MK_CTL_SYSTEM;
+    }
+    if (!in->Pci || in->Service == NULL || !inst_eq(in->Service, "xhci98") ||
+        !in->XhciCompat) {
+        return MK_CTL_NOT_OURS;
+    }
+    if (!in->DrvRead || in->InfSection == NULL || in->MatchingId == NULL ||
+        !inst_eq(in->InfSection, MK_CTL_SECTION) ||
+        !inst_eq(in->MatchingId, MK_CTL_MATCH)) {
+        return MK_CTL_DRIVER_KEY;
+    }
+    if (!in->FlagsRead ||
+        (in->Flags & (MK_CONFIGFLAG_REINSTALL | MK_CONFIGFLAG_FAILEDINSTALL |
+                      MK_CONFIGFLAG_FINISH_INSTALL)) != 0) {
+        return MK_CTL_FLAGS;
+    }
+    if (!in->StatusOk || (in->Status & MK_CTL_DN_HAS_PROBLEM) == 0 ||
+        (in->Status & MK_DN_NEED_RESTART) == 0 ||
+        in->Problem != MK_PROB_NOT_CONFIGURED) {
+        return MK_CTL_NOT_WAITING;
+    }
+    if (!in->Behind) {
+        return MK_CTL_NOT_BEHIND;
+    }
+    if (in->Protected) {
+        return MK_CTL_PROTECTED;
+    }
+    if (!in->HelperRunning) {
+        return MK_CTL_HELPER;
+    }
+    if (!in->InstallIdle) {
+        return MK_CTL_INSTALLING;
+    }
+    if (in->Tried) {
+        return MK_CTL_TRIED;
+    }
+    return MK_CTL_GO;
+}
+
+const char *mk_ctl_why_text(int why)
+{
+    switch (why) {
+    case MK_CTL_GO:          return "to be started";
+    case MK_CTL_OFF:         return "the service's Restart value is 0";
+    case MK_CTL_SYSTEM:      return "not 32-bit Windows Vista or 7";
+    case MK_CTL_NOT_OURS:    return "not an xHCI98 controller";
+    case MK_CTL_DRIVER_KEY:  return "not installed by xhci98.inf's Xhci.Dev6, or its driver key unread";
+    case MK_CTL_FLAGS:       return "its install is not finished (or its flags unread)";
+    case MK_CTL_NOT_WAITING: return "not waiting for a restart (problem 1 with DN_NEED_RESTART)";
+    case MK_CTL_NOT_BEHIND:  return "not behind a verified tunnel port";
+    case MK_CTL_PROTECTED:   return "a protected device";
+    case MK_CTL_HELPER:      return "the helper xhcihlpr is not running";
+    case MK_CTL_INSTALLING:  return "an installation is pending (or cannot be told)";
+    case MK_CTL_TRIED:       return "started once this arrival already";
+    default:                 return "?";
+    }
+}
+
 int mk_selftest(void (*report)(int ok, const char *what))
 {
     unsigned char b[1024];
@@ -1445,6 +1513,90 @@ int mk_selftest(void (*report)(int ok, const char *what))
                  !mk_s98_driverless(1, 0, 0) &&
                  !mk_s98_driverless(0, 1, MK_S98_PROB_DISABLED),
                  "the driverless states the restarts admit");
+    }
+    {
+        /* A hot-added controller waiting for a restart (record 21 7.6). */
+        MK_CTL_IN f;
+        MK_CTL_IN g;
+
+        memset(&f, 0, sizeof(f));
+        f.Restart = 1;
+        f.Nt6x86 = 1;
+        f.Pci = 1;
+        f.Service = "xhci98";
+        f.XhciCompat = 1;
+        f.DrvRead = 1;
+        f.InfSection = "Xhci.Dev6";
+        f.MatchingId = "pci\\cc_0c0330";
+        f.FlagsRead = 1;
+        f.Flags = 0;
+        f.StatusOk = 1;
+        f.Status = 0x01802500UL;
+        f.Problem = 1;
+        f.Behind = 1;
+        f.Protected = 0;
+        f.HelperRunning = 1;
+        f.InstallIdle = 1;
+        f.Tried = 0;
+        mk_check(mk_ctl_ready_why(&f) == MK_CTL_GO,
+                 "the dock's xHCI as read on 7 (0x01802500, problem 1): started");
+        g = f; g.Restart = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_OFF, "the switch off: never");
+        g = f; g.Nt6x86 = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_SYSTEM,
+                 "XP, 8 or a 64-bit system: never");
+        g = f; g.Pci = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS,
+                 "a root hub or hub (USB\\, service xhci98): never");
+        g = f; g.Service = "usbxhci";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "another driver: never");
+        g = f; g.Service = NULL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "the service unread: never");
+        g = f; g.XhciCompat = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "not an xHCI: never");
+        g = f; g.InfSection = "Xhci.Dev";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "another section with service xhci98: never");
+        g = f; g.MatchingId = "pci\\ven_1b36&dev_000d";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "another INF's id row: never");
+        g = f; g.DrvRead = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "the driver key unread: never");
+        g = f; g.Flags = 0x20UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "reinstall pending: never");
+        g = f; g.Flags = 0x40UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "a failed install: never");
+        g = f; g.Flags = 0x400UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "an unfinished install: never");
+        g = f; g.FlagsRead = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "the flags unread: never");
+        g = f; g.Status = 0x01802400UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING,
+                 "problem 1 without DN_NEED_RESTART: never");
+        g = f; g.Problem = 10;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING,
+                 "DN_NEED_RESTART with another problem: never");
+        g = f; g.Status = 0x0180200AUL; g.Problem = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING, "started: nothing to do");
+        g = f; g.StatusOk = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING, "the status unread: never");
+        g = f; g.Behind = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_BEHIND,
+                 "behind no verified tunnel port: never");
+        g = f; g.Protected = 1;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_PROTECTED, "a protected device: never");
+        g = f; g.HelperRunning = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_HELPER,
+                 "the helper stopped, absent or unread: never");
+        g = f; g.InstallIdle = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_INSTALLING, "an install pending: not now");
+        g = f; g.Tried = 1;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_TRIED,
+                 "a second attempt in the same arrival: never");
+        mk_check(strcmp(mk_ctl_why_text(MK_CTL_HELPER),
+                        "the helper xhcihlpr is not running") == 0,
+                 "a reason's text");
     }
     return mkFails;
 }
