@@ -2920,8 +2920,6 @@ value 0 alone); the readings of the "Not read" list; and the hardware
 reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
 default stays 0 (owner, Q2).
 
-8.1 x64 for both halves.
-
 ## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
 
 **Verdict: the report's drop is the driver's design, reproduced on q35 XP
