@@ -28,6 +28,10 @@ rem does not see, and the output checks after it could still pass on what
 rem was written before the crash.
 rem
 rem Exit code 0 = every case behaved. Run it after build.cmd.
+rem
+rem Every find and findstr is Windows' own, by its full path: with Git Bash's
+rem directories first on PATH a bare find is GNU find, which walks the disk
+rem from the current directory and never ends (read 2026-10-30).
 setlocal
 cd /d "%~dp0"
 
@@ -73,7 +77,7 @@ if not exist "%BASE%.TXT" (
     echo FAIL: a report with no fault injected left no .TXT
     set FAILED=1
 )
-findstr /C:"written and closed" "%BASE%.no-fault.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"written and closed" "%BASE%.no-fault.log" > nul
 if errorlevel 1 (
     echo FAIL: the no-fault summary does not say the report was written and closed
     set FAILED=1
@@ -85,7 +89,7 @@ if not errorlevel 3 (
     echo FAIL: a report whose writes fail exited %errorlevel%, expected 3
     set FAILED=1
 )
-findstr /C:"INCOMPLETE" "%BASE%.write-fault.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"INCOMPLETE" "%BASE%.write-fault.log" > nul
 if errorlevel 1 (
     echo FAIL: the write-fault summary does not say INCOMPLETE
     set FAILED=1
@@ -97,7 +101,7 @@ if not errorlevel 3 (
     echo FAIL: a report whose close fails exited %errorlevel%, expected 3
     set FAILED=1
 )
-findstr /C:"INCOMPLETE" "%BASE%.close-fault.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"INCOMPLETE" "%BASE%.close-fault.log" > nul
 if errorlevel 1 (
     echo FAIL: the close-fault summary does not say INCOMPLETE
     set FAILED=1
@@ -112,7 +116,7 @@ if not errorlevel 3 (
     echo FAIL: a report whose .TXT could not be created exited %errorlevel%, expected 3
     set FAILED=1
 )
-findstr /C:"NOT CREATED" "%BASE%.readonly.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"NOT CREATED" "%BASE%.readonly.log" > nul
 if errorlevel 1 (
     echo FAIL: the read-only summary does not say NOT CREATED
     set FAILED=1
@@ -126,7 +130,7 @@ if not "%errorlevel%"=="2" (
     echo FAIL: -probe beside -o exited %errorlevel%, expected 2
     set FAILED=1
 )
-findstr /C:"Run them as two commands" "%BASE%.probe-dump.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"Run them as two commands" "%BASE%.probe-dump.log" > nul
 if errorlevel 1 (
     echo FAIL: the -probe -o refusal does not say to run them as two commands
     set FAILED=1
@@ -145,7 +149,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("SuperSpeed, 5 Gbit/s, Gen 1x1" "SuperSpeedPlus, 10 Gbit/s, Gen 2x1" "configured     3  High Speed" "addressed      2  Low Speed" "(controller not started)" "5 device(s) hold a slot") do (
-    findstr /C:%%S "%BASE%.slots.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.slots.log" > nul
     if errorlevel 1 (
         echo FAIL: the slot decode does not say %%S
         set FAILED=1
@@ -161,13 +165,13 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("port 13 look:  machine Empty, fed connect, link none; PORTSC CCS PED PLS 0, changes CSC PLC" "port 13 reset: attempt 0 came back enabled; PORTSC low 1203: speed ID 4" "ID 4 is unknown, by no mapping" "attempt 1 failed on the speed (no EP0 size for it); no retry follows" "port 13 end:   machine Failed" "port 13 look:  machine Failed, fed nothing" "ID 4 is SuperSpeed, by default ID, unlisted on a USB 3 table" "port 14 prwait: a reset already running ended after 70 ms" "port 14 rate:  5000 Mbit/s" "port  2 rate:  1.5 Mbit/s" "Enable Slot completion 1 (Success), slot 5" "port 14 end:   machine Present" "port 15 quiet: its budget of 8 bursts is spent") do (
-    findstr /C:%%S "%BASE%.notes.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.notes.log" > nul
     if errorlevel 1 (
         echo FAIL: the note decode does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"tol.mode" "%BASE%.notes.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"tol.mode" "%BASE%.notes.log" > nul
 if not errorlevel 1 (
     echo FAIL: the note decode printed a record not its own
     set FAILED=1
@@ -182,7 +186,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown") do (
-    findstr /C:%%S "%BASE%.hcd.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.hcd.log" > nul
     if errorlevel 1 (
         echo FAIL: the HCD region decode does not say %%S
         set FAILED=1
@@ -200,20 +204,20 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("XhciTolerance    1 (on)" "XhciIntervalCap  1 (AMD controllers and 1002:7316):" "                   applies here, 2 endpoint(s) capped" "XhciAvgTrbEsit   0 (Average TRB Length 1024)" "controller       LATCHED FAILED: the recovery window refused a fourth" "3 of 3 begun inside ten minutes; 1 refused" "begun 300, 200, 100 ticks ago" "BackstopDrains            3" "RetryDiverts              4" "CyclesRefusedCode         2" "    4 USB Transaction Error        5" "   12 Endpoint Not Enabled         2" "  200 vendor-defined error         1" "root port 4        charges 3: re-enumerations 3 of 3" "NOW HELD, re-enumerations spent (powered)" "hub 1 port 2       charges 1" "not served by this driver (an xhci98.sys before 2.2.0.0's" "not a shape this build" "controller: LATCHED FAILED: the recovery window refused a fourth." "controller: CONTAINED: halt and reset did not complete and Bus Master Enable would not clear; DMA not proven stopped, common buffer pinned.") do (
-    findstr /C:%%S "%BASE%.tol.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.tol.log" > nul
     if errorlevel 1 (
         echo FAIL: the tolerance decode does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("2 of 3 begun inside ten minutes; 0 refused" "begun 512, 176 ticks ago" "1 older stamp(s) kept, past the window and not counted") do (
-    findstr /C:%%S "%BASE%.tol.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.tol.log" > nul
     if errorlevel 1 (
         echo FAIL: the expired window decode does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"QueueHalts" "%BASE%.tol.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"QueueHalts" "%BASE%.tol.log" > nul
 if not errorlevel 1 (
     echo FAIL: the tolerance decode printed a zero counter
     set FAILED=1
@@ -230,7 +234,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("decision         22 WROTE" "D20IR before     00003210 (INTA -> PIRQA)" "PIRQ wanted      PIRQF" "D20IR after      00003215 (INTA -> PIRQF)" "level 21, vector 21, flags 0, share 3" "16-23: PIRQA-H wired direct to I/O APIC inputs 16-23" "a message grant: 1 message(s)," "vector FFFFFFFE, flags 2, share 3" "not read: the routing step has not run for this start" "decision         19 STEERED_NT" "below 16: a PIRQx_ROUT byte steering a PIRQ to it" "PIRQF IRQ 11" "came back 80 bytes" "PIRQA IRQ 11, PIRQB IRQ 10" "PIRQE off" "decision         21 NOT_ADMITTED" "decision         12 MESSAGE" "at a return to D0" "decision         3 NOT_REVIEWED" "00:14.0          id not read" "not set (taken as 1: writes on the verified E7250 only)" "xhci98.sys before 2.3.0.0's" "a record of 40 words") do (
-    findstr /C:%%S "%BASE%.pirq.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.pirq.log" > nul
     if errorlevel 1 (
         echo FAIL: the routing decode does not say %%S
         set FAILED=1
@@ -247,7 +251,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("XhciMaxTransferKB           used as set (1024)" "command size in effect      1048576 bytes; asked 1 times" "a chunk spans at most 32 pages" "bulk data URBs              100, 104857600 bytes, the longest 1048576" "<=1M 100" "URBs of more than one 100, the most 8" "3-8: 100" "at 3000.0 counts a" "approximate where their counters disagree" "gap, retired to published   700, mean 90.0 us, longest 200.0 us" "ring empty, URB unfinished  700, mean 80.0 us, longest 180.0 us" "record 1: its device present, slot 2, 9 sends taken, the last 1.0 s before this dump" "command size 1048576 bytes (the bus's answer), streamed, depth 30" "1: 90 2: 14" "record 2: none has come" "out of 64-2048: the default (4096)" "times are not converted" "not measured by this driver" "came back 192 bytes" "9 records of 46 words" "3 records of 1431655795 words" "its device departed, slot 2" "across two processors 3" "older bus 0, out of contract 1, failed 0") do (
-    findstr /C:%%S "%BASE%.xstat.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xstat.log" > nul
     if errorlevel 1 (
         echo FAIL: the transfer-size decode does not say %%S
         set FAILED=1
@@ -264,7 +268,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("value 2; in effect 2 (polling)" "reason               forced polling (XhciInterruptMode 2)" "XhciImodInterval250ns has no effect" "1234, 56 of them found an event; peeks 78, 9 hits" "49 to 63 ms (2 discarded)" "PollService 1, PollServiceGen 7, LineMoved 0," "Interrupt Pin 0, the controller has no line interrupt" "9000 is above 5000, so the driver held it to 5000." "0 is not allowed, so the driver used its default, 1." "went dead; moved to polling at run time" "mask read back down at the move" "proven by PCI Interrupt Disable; attempts 1" "name different deliveries" "7 is reserved, so it runs as 0." "held to the idle period, 20 ms." "watching the line; last armed 100 ms (a watcher's look)" "not placed by this driver's HCD header (808 bytes)" "predates polled delivery" "does not fit its image" "80 counter words at +816 in 1200 bytes" "no helper and no line offered: the start fails (an earlier 2.3.0.0 build)" "but a message was granted: the start fails" "value 3; in effect 3 (a message interrupt only)" "forced message (XhciInterruptMode 3): a message interrupt" "but no message was granted: the start fails" "is xhcihlpr.sys bound?): the start fails" "this Windows has no message interrupts: the start fails") do (
-    findstr /C:%%S "%BASE%.intr.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.intr.log" > nul
     if errorlevel 1 (
         echo FAIL: the event delivery decode does not say %%S
         set FAILED=1
@@ -281,7 +285,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)" "4 (the connection's table; one is served); capability MSI" "message descriptors in the grant 1" "capability MSI-X" "MmGetSystemRoutineAddress (64-bit)" "REFUSED (its answer failed a check)" "a message with a line beside it" "BOUND; looks 1" "helper version       2.2.0.0" "not asked (helper bound, or 64-bit, and mode not 1 or 3)" "REPLACED: the line choices stripped, the message left (mode 3)" "not set (mode 0's default)" "no IRP for the query); looks 2, last status C0000034" "REPLACED: the message choices stripped, the line left" "1 configuration(s), 1 message and 1 line member(s); 1 stripped" "mode as read         0" "refused for          the answer's identity" "none has run: not applicable" "messages connected     0 (no message connected)" "this driver predates MSI" "100 counter words - not a shape") do (
-    findstr /C:%%S "%BASE%.msi.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.msi.log" > nul
     if errorlevel 1 (
         echo FAIL: the message interrupt decode does not say %%S
         set FAILED=1
@@ -290,13 +294,13 @@ for %%S in ("the helper xhcihlpr.sys (32-bit; xhcimsi.sys before 2.4)" "4 (the c
 rem The 63-word block and the truncated block print nothing of their own:
 rem seven sections in all (five decoded, the pre-MSI line, the refused
 rem shape).
-findstr /C:"[end]" "%BASE%.msi.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"[end]" "%BASE%.msi.log" > nul
 if errorlevel 1 (
     echo FAIL: the message interrupt selftest did not run to its end
     set FAILED=1
 )
 set MSICOUNT=0
-for /f %%N in ('findstr /C:"message interrupts" "%BASE%.msi.log" ^| find /c /v ""') do set MSICOUNT=%%N
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"message interrupts" "%BASE%.msi.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set MSICOUNT=%%N
 if not "%MSICOUNT%"=="7" (
     echo FAIL: expected 7 message interrupt sections, got %MSICOUNT%
     set FAILED=1
@@ -328,7 +332,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("not read: this start refused before it read XhciAccept096" "HCIVERSION     not read: this start refused before step 0c" "XhciAccept096  absent or not a DWORD, so 1; floor 0.96" "xHCI 1.00: XhciAccept096 not applicable" "xHCI 0.96 (HCIVERSION 0096h): accepted below 1.0; TD Size in 1 KiB units" "XhciAccept096  0; floor 1.00" "xHCI 0.96 (HCIVERSION 0096h): below 1.0, refused at XhciAccept096 0 (Code 10)" "XhciQemuHciVersion decoded 0096h in place of the register's 0100h" "HCIVERSION     FFFFh: not decoding, refused (Code 10)" "xHCI 0.95 (HCIVERSION 0095h): below 0.96, refused at every value (Code 10)" "[short]" "[end]") do (
-    findstr /C:%%S "%BASE%.version.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.version.log" > nul
     if errorlevel 1 (
         echo FAIL: the version line does not say %%S
         set FAILED=1
@@ -352,7 +356,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("XhciPollFineTimer      1; in effect ON" "XhciPollFineTimer      not set; in effect off (the default)" "the helper xhcihlpr.sys (32-bit)" "joined (the controller stopped)" "asks for               10000 (100 ns units); held now no" "holds 12, releases 12 (2 forced by a boundary); holds raced 1" "Windows answered       10032 at the last hold, 156250 at the last release" "a power transition (the controller left D0)" "held in this start     4321 ms" "7 crossed a call" "released  40 interval(s), mean 15.5 ms, 38 late" "held      400 interval(s), mean 1.0 ms, 3 late" "MSI not asked (before Vista); timer accepted") do (
-    findstr /C:%%S "%BASE%.timer.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.timer.log" > nul
     if errorlevel 1 (
         echo FAIL: the timer decode does not say %%S
         set FAILED=1
@@ -381,23 +385,23 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("matched against PCI 1B73:1000; revision 04 (never matched)" "matched against no PCI id (none read); revision unread" "XhciMsiAvoid (XHCI_BROKEN_MSI)" "id listed; policy overridden (XhciInterruptMode 3); last none yet" "read none (absent: the default): mode 1, the listed controllers" "id not listed; policy off; last none yet" "read 2 (as read): mode 2, every controller" "id not listed; policy on; last done" "read 2 (a 2 read as 1): mode 1, the listed controllers" "read none (another type: the default): mode 0, off" "read 7 (an unknown number: the default): mode 1, the listed controllers" "id listed; policy on; last skipped (not in D0)" "read 0 (as read): mode 0, off" "id listed; policy off; last none yet" "XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL)" "id listed; policy on; last failed (read back other than written)" "last failed (reason 15)" "last none yet (no PCI id ever read)" "XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part)" "id listed; policy on; last skipped (HCH not set)" "1002:7316 (ATI Navi10) has no value: XhciIntervalCap's 1 covers it." "messages XhciMsiAvoid refused or stripped 100" "interrupt endpoints capped at Interval 6  108" "shutdown log flushes not acknowledged     117" "QuirkShutFlushUnacked      117" "[end]") do (
-    findstr /C:%%S "%BASE%.quirks.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.quirks.log" > nul
     if errorlevel 1 (
         echo FAIL: the Linux quirks decode does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"read none (?): mode 3, ?" "%BASE%.quirks.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"read none (?): mode 3, ?" "%BASE%.quirks.log" > nul
 if errorlevel 1 (
     echo FAIL: the Linux quirks decode does not name unknown codes as ?
     set FAILED=1
 )
-findstr /C:"id not listed; policy off; last ?" "%BASE%.quirks.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"id not listed; policy off; last ?" "%BASE%.quirks.log" > nul
 if errorlevel 1 (
     echo FAIL: the Linux quirks decode does not name an unknown outcome as ?
     set FAILED=1
 )
-for /f %%N in ('findstr /C:"Linux quirks (task 38.10" "%BASE%.quirks.log" ^| find /c /v ""') do set QKCOUNT=%%N
+for /f %%N in ('%SystemRoot%\System32\findstr.exe /C:"Linux quirks (task 38.10" "%BASE%.quirks.log" ^| %SystemRoot%\System32\find.exe /c /v ""') do set QKCOUNT=%%N
 if not "%QKCOUNT%"=="2" (
     echo FAIL: expected 2 Linux quirks sections, got %QKCOUNT%
     set FAILED=1
@@ -412,7 +416,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("XhciWideMap                 1" "promotion                   on; the register-free check passed" "wide entries                8, 0 in use; claimed 100" "URBs with two TDs at once   100; TDs 900, refills 700" "short 2, error 0, verdict 0; taken off 2" "next TD ready at retirement 650" "not set (the default)" "promotion                   off; the register-free check not run (XhciWideMap off)" "not run (Windows 98 or ME)" "not the register-free 0x80001" "not in this driver" "3 counters in a 948-byte region" "built 2, refused 1; one-TD URBs 300, the largest 513 TRBs" "TDs of 256/257/512/513 TRBs 100 / 101 / 50 / 49" "stage 3 (task 36.25)        not in this driver") do (
-    findstr /C:%%S "%BASE%.xpipe.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xpipe.log" > nul
     if errorlevel 1 (
         echo FAIL: the stage 2 decode does not say %%S
         set FAILED=1
@@ -428,7 +432,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE (N1, FUNCTION_WAKE, enabled)" "DnctrlEnables              0x00EF" "DnctrlReadback             0x00F0" "   243  RECOVERING" "   299  ?" "a 1092-byte header, a stage B branch build's" "4294967295 counters in a 1092-byte region") do (
-    findstr /C:%%S "%BASE%.ssusp.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.ssusp.log" > nul
     if errorlevel 1 (
         echo FAIL: the stage B header decode does not say %%S
         set FAILED=1
@@ -444,7 +448,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("slot  2, root port 3, route 00000: UAS (the device offers Bulk-Only and UAS; UAS chosen)" "slot  5, root port 1, route 00002: Bulk-Only (the device offers UAS too; XhciForceBulkOnly is set on this controller)" "slot  7, root port 20, route 00021: UAS (interface 1) (the only transport the device offers); and 1 more storage interface" "slot  9, root port 2, route 00000: Bulk-Only (the device offers no UAS setting)" "not kept by this driver (a 1224-byte header" "device records: 33 of 10 words at 309 - not a shape") do (
-    findstr /C:%%S "%BASE%.xport.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.xport.log" > nul
     if errorlevel 1 (
         echo FAIL: the transport decode does not say %%S
         set FAILED=1
@@ -458,13 +462,13 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd-bad exited %errorlevel%, expected 0
     set FAILED=1
 )
-findstr /C:"not a shape this build" "%BASE%.hcdbad.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"not a shape this build" "%BASE%.hcdbad.log" > nul
 if errorlevel 1 (
     echo FAIL: the malformed header is not refused
     set FAILED=1
 )
 for %%S in ("controller tolerance" "interrupt routing" "transfer size" "event delivery" "message interrupts" "stage 2") do (
-    findstr /C:%%S "%BASE%.hcdbad.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.hcdbad.log" > nul
     if not errorlevel 1 (
         echo FAIL: a refused header was still decoded: %%S
         set FAILED=1
@@ -480,8 +484,8 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-sysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "6.2 build 9200 product 1 arch 9: Windows 8" "3.51 build 1057 product 0 arch 65535: unknown" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
-    findstr /C:%%S "%BASE%.sysinfo.log" > nul
+for %%S in ("build 950 product 0 arch 65535: Windows 95" "build 1998 product 0 arch 65535: Windows 98" "build 2222 product 0 arch 65535: Windows 98 SE" "4.90 build 3000 product 0 arch 65535: Windows ME" "build 2195 product 1 arch 65535: Windows 2000" "build 2600 product 1 arch 0: Windows XP" "product 1 arch 9: Windows XP x64" "product 3 arch 0: Windows Server 2003" "product 0 arch 65535: Windows Server 2003 or XP x64" "build 6002 product 1 arch 0: Windows Vista" "build 7601 product 1 arch 9: Windows 7" "product 3 arch 9: Windows Server 2008 R2" "6.2 build 9200 product 1 arch 9: Windows 8" "3.51 build 1057 product 0 arch 65535: unknown" "bitness tool64 0 wow 0 arch 0: x86 (32-bit Windows)" "bitness tool64 0 wow 1 arch 9: 64-bit Windows (x64); this x86 tool ran under WOW64" "bitness tool64 1 wow 0 arch 9: 64-bit Windows (x64); this x64 tool ran natively" "clean [Intel(R) Core(TM) i7-6500U CPU @ 2.50GHz]" "clean [LENOVO 20F5S0??]" "clean 99 chars, ends [x...]" "clean 98 chars, ends [x...]" "clean [Standard PC (i440FX + PIIX, 1996)]" "  captured on - this machine" "    OS                    Windows" "    bitness               " "    CPU                   " "    RAM                   ") do (
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sysinfo.log" > nul
     if errorlevel 1 (
         echo FAIL: the system block does not say %%S
         set FAILED=1
@@ -491,7 +495,7 @@ rem Where an NT machine's lines come from (wave 3 matrix, M-3): NT 6 takes
 rem the BIOS key first; NT 5 takes SystemBios values and, with none (XP x64),
 rem the BIOS key.
 for %%S in ("biossrc nt 6 key 1 systembios 0: the BIOS key" "biossrc nt 6 key 1 systembios 1: the BIOS key" "biossrc nt 6 key 0 systembios 1: SystemBiosVersion" "biossrc nt 6 key 0 systembios 0: none" "biossrc nt 5 key 1 systembios 1: SystemBiosVersion" "biossrc nt 5 key 0 systembios 1: SystemBiosVersion" "biossrc nt 5 key 1 systembios 0: the BIOS key" "biossrc nt 5 key 0 systembios 0: none") do (
-    findstr /C:%%S "%BASE%.sysinfo.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sysinfo.log" > nul
     if errorlevel 1 (
         echo FAIL: the BIOS source choice does not say %%S
         set FAILED=1
@@ -504,7 +508,7 @@ rem 96-character cut, and the QEMU product string is kept. It is deterministic, 
 rem host name is searched for (task 36.47: a host search
 rem matched the block's own fixed words and missed values under other labels).
 set WITHHELD=0
-for /f "delims=" %%L in ('findstr /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
+for /f "delims=" %%L in ('%SystemRoot%\System32\findstr.exe /C:"clean [(withheld: it contains" "%BASE%.sysinfo.log"') do set /a WITHHELD+=1
 if not "%WITHHELD%"=="6" (
     echo FAIL: the system block withheld %WITHHELD% canned strings, expected 6
     set FAILED=1
@@ -518,7 +522,7 @@ if not "%errorlevel%"=="0" (
     echo FAIL: a report with the system block exited %errorlevel%, expected 0
     set FAILED=1
 )
-findstr /C:"captured on - this machine" "%BASE%-sys.TXT" > nul
+%SystemRoot%\System32\findstr.exe /C:"captured on - this machine" "%BASE%-sys.TXT" > nul
 if errorlevel 1 (
     echo FAIL: the report does not carry the system block by default
     set FAILED=1
@@ -528,13 +532,13 @@ if not "%errorlevel%"=="0" (
     echo FAIL: a report with -nosysinfo exited %errorlevel%, expected 0
     set FAILED=1
 )
-findstr /C:"system details were skipped by /nosysinfo" "%BASE%-nosys.TXT" > nul
+%SystemRoot%\System32\findstr.exe /C:"system details were skipped by /nosysinfo" "%BASE%-nosys.TXT" > nul
 if errorlevel 1 (
     echo FAIL: the -nosysinfo report does not say the details were skipped
     set FAILED=1
 )
 for %%S in ("captured on - this machine" "    OS " "    CPU " "    RAM ") do (
-    findstr /C:%%S "%BASE%-nosys.TXT" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%-nosys.TXT" > nul
     if not errorlevel 1 (
         echo FAIL: the -nosysinfo report still says %%S
         set FAILED=1
@@ -553,17 +557,17 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%F in ("%BASE%.sys-after.log" "%BASE%.sys-before.log") do (
-    findstr /C:"system details were skipped by /nosysinfo" %%F > nul
+    %SystemRoot%\System32\findstr.exe /C:"system details were skipped by /nosysinfo" %%F > nul
     if errorlevel 1 (
         echo FAIL: -selftest-sysinfo with -nosysinfo did not skip the block: %%F
         set FAILED=1
     )
-    findstr /C:"    RAM " %%F > nul
+    %SystemRoot%\System32\findstr.exe /C:"    RAM " %%F > nul
     if not errorlevel 1 (
         echo FAIL: -selftest-sysinfo with -nosysinfo still read the system: %%F
         set FAILED=1
     )
-    findstr /C:"build 2222 product 0 arch 65535: Windows 98 SE" %%F > nul
+    %SystemRoot%\System32\findstr.exe /C:"build 2222 product 0 arch 65535: Windows 98 SE" %%F > nul
     if errorlevel 1 (
         echo FAIL: -selftest-sysinfo with -nosysinfo dropped the canned decodes: %%F
         set FAILED=1
@@ -586,13 +590,13 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("stamp month 1 day 5 00:00 free: 1050000A" "stamp month 9 day 30 23:59 free: 9302359A" "stamp month 10 day 1 12:34 free: A011234A" "stamp month 11 day 15 07:08 free: B150708A" "stamp month 12 day 31 08:07 free: C310807A" "stamp A.TXT taken: A011234B" "stamp A.BIN.TMP taken: A011234B" "stamp A.DEV and B.PSC.TMP taken: A011234C" "stamp other names only: A011234A" "stamp A to Y taken: A011234Z" "stamp all 26 taken: REFUSED, all 26 names taken" "stamp month 0: REFUSED, the clock is not valid" "stamp month 13: REFUSED, the clock is not valid" "stamp day 0: REFUSED, the clock is not valid" "stamp day 32: REFUSED, the clock is not valid" "stamp hour 24: REFUSED, the clock is not valid" "stamp minute 60: REFUSED, the clock is not valid" "[end]") do (
-    findstr /C:%%S "%BASE%.stamp.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.stamp.log" > nul
     if errorlevel 1 (
         echo FAIL: the stamp rule does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"but a name came back" "%BASE%.stamp.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"but a name came back" "%BASE%.stamp.log" > nul
 if not errorlevel 1 (
     echo FAIL: a refused stamp still returned a name
     set FAILED=1
@@ -608,7 +612,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("sha256 empty: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 ok" "sha256 abc: ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad ok" "sha256 448-bit: 248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1 ok" "sha256 million a, 1000 x 1000: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 million a, 1000000 x 1: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 file 1000000 bytes: cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0 ok" "sha256 file deleted: not present" "[end]") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
@@ -619,48 +623,48 @@ rem uneven pieces), the length carry across the low word driven through the
 rem count and bit-length routines, and the file path's failures: a read
 rem that fails, one cut short, a file held exclusively, a directory.
 for %%S in ("sha256 55 a: 9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318 ok" "sha256 56 a: b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a ok" "sha256 63 a: 7d3e74a05d7db15bce4ad9ec0658ea98e3f06eeecf16b4c6fff2da457ddc2f34 ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("sha256 64 a: ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb ok" "sha256 64 a, 1+63: ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb ok" "sha256 65 a: 635361c48bb9eab14198e76ea8ab7f1a41685d6ad62aa9146d301d4f17eb0ae0 ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("sha256 127 a, 1+62+64: c57e9278af78fa3cab38667bef4ce29d783787a2f731d4e12200270f0c32320a ok" "sha256 128 a, 63+1+63+1: 6836cf13bac400e9105071cd6af47084dfacad4e5e302c94bfed24e013afb73e ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("sha256 count no carry: 00000000 FFFFFFFF ok" "sha256 count wrap to 0: 00000001 00000000 ok" "sha256 count wrap past: 00000001 00000010 ok" "sha256 count second carry: 00000002 00000000 ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("sha256 bits 512 MiB - 1: 00000000 FFFFFFF8 ok" "sha256 bits 512 MiB: 00000001 00000000 ok" "sha256 bits 4 GiB - 1: 00000007 FFFFFFF8 ok" "sha256 bits 4 GiB: 00000008 00000000 ok" "sha256 length block after the wrap: 00000008 00000000 ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("sha256 file read fails: not read, error 30 ok" "sha256 file read cut short: not read, error 0 ok" "sha256 file held: not read, error 32 ok" "sha256 file directory: not read, error 5 ok") do (
-    findstr /C:%%S "%BASE%.sha.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.sha.log" > nul
     if errorlevel 1 (
         echo FAIL: the SHA-256 self-test does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"WRONG" "%BASE%.sha.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"WRONG" "%BASE%.sha.log" > nul
 if not errorlevel 1 (
     echo FAIL: the SHA-256 self-test printed a WRONG digest
     set FAILED=1
@@ -702,20 +706,20 @@ for %%F in (REFUSED.*) do (
 copy /b *.DEV "%BASE%.devs.txt" > nul
 popd
 for %%S in ("xhci98 device report - XHCITR /snapshot" "  local time         " "  devices - every PCI xHCI controller" "  installed files - size, file version and SHA-256" "    xhci98.sys   " "    usbui.dll    " "  dump result" "NOT taken: cannot open" "HCD99, error" "end of device report" "captured on - this machine" "skipped by /nosysinfo") do (
-    findstr /C:%%S "%BASE%.devs.txt" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.devs.txt" > nul
     if errorlevel 1 (
         echo FAIL: the .DEV files do not say %%S
         set FAILED=1
     )
 )
 for %%S in ("files named " ".DEV written" "No dump was taken; " "Attach: ") do (
-    findstr /C:%%S "%BASE%.report1.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.report1.log" > nul
     if errorlevel 1 (
         echo FAIL: the -report screen does not say %%S
         set FAILED=1
     )
 )
-findstr /C:"it carries a dot" "%BASE%.report3.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"it carries a dot" "%BASE%.report3.log" > nul
 if errorlevel 1 (
     echo FAIL: the -report -o REFUSED.X refusal does not say it carries a dot
     set FAILED=1
@@ -727,7 +731,7 @@ rem text unscreened - it says so, and the Windows directory is named, not
 rem shown.
 for %%I in ("%RUNDIR%") do set "RUNNAME=%%~nxI"
 for %%F in ("%BASE%.report1.log" "%BASE%.report2.log") do (
-    findstr /I /C:"%RUNNAME%" %%F > nul
+    %SystemRoot%\System32\findstr.exe /I /C:"%RUNNAME%" %%F > nul
     if not errorlevel 1 (
         echo FAIL: the -report screen names the current directory: %%F
         set FAILED=1
@@ -743,13 +747,13 @@ if not "%errorlevel%"=="4" (
 copy /b *.DEV "%BASE%.nosys.txt" > nul
 popd
 for %%S in ("/nosysinfo: this machine's names were not read, so no free text" "in the Windows directory's System32\Drivers" "skipped by /nosysinfo") do (
-    findstr /C:%%S "%BASE%.nosys.txt" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.nosys.txt" > nul
     if errorlevel 1 (
         echo FAIL: the -nosysinfo .DEV does not say %%S
         set FAILED=1
     )
 )
-findstr /I /C:"%SystemRoot%" "%BASE%.nosys.txt" > nul
+%SystemRoot%\System32\findstr.exe /I /C:"%SystemRoot%" "%BASE%.nosys.txt" > nul
 if not errorlevel 1 (
     echo FAIL: the -nosysinfo .DEV prints the Windows directory unscreened
     set FAILED=1
@@ -781,20 +785,20 @@ for %%F in (*.BIN *.PSC *.TMP) do (
     set FAILED=1
 )
 popd
-findstr /C:"made by XHCISNAP_FAULT=clash, standing in for another run" "%BASE%.clash-txt.txt" > nul
+%SystemRoot%\System32\findstr.exe /C:"made by XHCISNAP_FAULT=clash, standing in for another run" "%BASE%.clash-txt.txt" > nul
 if errorlevel 1 (
     echo FAIL: the other run's .TXT did not survive the clash as it was
     set FAILED=1
 )
 for %%S in ("appeared after" "NOT taken: " "end of device report") do (
-    findstr /C:%%S "%BASE%.clash-dev.txt" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.clash-dev.txt" > nul
     if errorlevel 1 (
         echo FAIL: the clash .DEV does not say %%S
         set FAILED=1
     )
 )
 for %%S in ("appeared after this run chose its name" "It was left alone and is not this" "Attach: ") do (
-    findstr /C:%%S "%BASE%.clash.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.clash.log" > nul
     if errorlevel 1 (
         echo FAIL: the clash screen does not say %%S
         set FAILED=1
@@ -819,12 +823,12 @@ if not exist MyRep_1.DEV (
     echo FAIL: -report -o MyRep_1 wrote no MyRep_1.DEV
     set FAILED=1
 )
-findstr /C:"files named MyRep_1 (the name given)" "%BASE%.named1.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"files named MyRep_1 (the name given)" "%BASE%.named1.log" > nul
 if errorlevel 1 (
     echo FAIL: the named -report screen does not say the name was given
     set FAILED=1
 )
-findstr /X /C:"Attach: MyRep_1.DEV" "%BASE%.named1.log" > nul
+%SystemRoot%\System32\findstr.exe /X /C:"Attach: MyRep_1.DEV" "%BASE%.named1.log" > nul
 if errorlevel 1 (
     echo FAIL: the named -report screen does not name MyRep_1.DEV to attach
     set FAILED=1
@@ -840,7 +844,7 @@ if errorlevel 1 (
     echo FAIL: a taken name's .DEV was changed by the refused run
     set FAILED=1
 )
-findstr /C:"Nothing was written, and nothing was overwritten." "%BASE%.named2.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"Nothing was written, and nothing was overwritten." "%BASE%.named2.log" > nul
 if errorlevel 1 (
     echo FAIL: the taken-name refusal does not say nothing was written
     set FAILED=1
@@ -851,7 +855,7 @@ if not "%errorlevel%"=="6" (
     echo FAIL: -report -o TAKEN beside TAKEN.PSC.TMP exited %errorlevel%, expected 6
     set FAILED=1
 )
-findstr /B /C:"theirs" TAKEN.PSC.TMP > nul
+%SystemRoot%\System32\findstr.exe /B /C:"theirs" TAKEN.PSC.TMP > nul
 if errorlevel 1 (
     echo FAIL: TAKEN.PSC.TMP did not survive the refused run as it was
     set FAILED=1
@@ -865,7 +869,7 @@ for %%N in ("sub\X" "C:X" "A.B" "ABCDEFGHI" "" "CON" "com1" "-X" "A&B") do (
         echo FAIL: -report -o %%N exited below 2, expected 2
         set FAILED=1
     )
-    findstr /C:"That" "%BASE%.badname.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:"That" "%BASE%.badname.log" > nul
     if errorlevel 1 (
         echo FAIL: -report -o %%N was not refused by the name rule
         set FAILED=1
@@ -891,25 +895,25 @@ if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-res exited %errorlevel%, expected 0
     set FAILED=1
 )
-findstr /R /C:"memory  *FEBF0000-FEBF3FFF (16 KB)$" "%BASE%.res.log" | find /c "FEBF0000" | findstr /X "3" > nul
+%SystemRoot%\System32\findstr.exe /R /C:"memory  *FEBF0000-FEBF3FFF (16 KB)$" "%BASE%.res.log" | %SystemRoot%\System32\find.exe /c "FEBF0000" | %SystemRoot%\System32\findstr.exe /X "3" > nul
 if errorlevel 1 (
     echo FAIL: the 9x and NT memory descriptors did not all decode to FEBF0000-FEBF3FFF
     type "%BASE%.res.log"
     set FAILED=1
 )
-findstr /C:"type 1, 68 bytes in a layout this tool does not" "%BASE%.res.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"type 1, 68 bytes in a layout this tool does not" "%BASE%.res.log" > nul
 if errorlevel 1 (
     echo FAIL: a memory descriptor of neither layout was not left raw
     set FAILED=1
 )
 for %%S in ("IRQ          11, shared, level" "IRQ          10, shared, level" "-2 as a signed number: a" "message-signalled interrupt (MSI)") do (
-    findstr /C:%%S "%BASE%.res.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.res.log" > nul
     if errorlevel 1 (
         echo FAIL: the IRQ descriptors do not decode to %%S
         set FAILED=1
     )
 )
-findstr /C:"[end]" "%BASE%.res.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"[end]" "%BASE%.res.log" > nul
 if errorlevel 1 (
     echo FAIL: -selftest-res did not finish
     set FAILED=1
@@ -924,7 +928,7 @@ if not "%errorlevel%"=="0" (
     set FAILED=1
 )
 for %%S in ("publish clean: ok" "publish .TXT taken: ok" "publish .PSC taken: ok" "publish .BIN.TMP taken: ok" "[end]") do (
-    findstr /C:%%S "%BASE%.publish.log" > nul
+    %SystemRoot%\System32\findstr.exe /C:%%S "%BASE%.publish.log" > nul
     if errorlevel 1 (
         echo FAIL: the publication self-test does not say %%S
         set FAILED=1
@@ -954,7 +958,7 @@ if not "%errorlevel%"=="2" (
     echo FAIL: /dump -verbosity 2 exited %errorlevel%, expected 2
     set FAILED=1
 )
-findstr /C:"Nothing was written." "%BASE%.user3.log" > nul
+%SystemRoot%\System32\findstr.exe /C:"Nothing was written." "%BASE%.user3.log" > nul
 if errorlevel 1 (
     echo FAIL: /dump -verbosity 2 did not say nothing was written
     set FAILED=1
