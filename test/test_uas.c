@@ -1487,6 +1487,10 @@ static void test_pt_result(void)
     CHECK(bytes_eq(ptbuf + 32, rsBack, 8),
           "the registers from fixed sense: F4h/2Ch");
     CHECK_EQ(info, 40, "the header alone");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 40, UAS_SRB_SUCCESS, 0, 0, NULL, 0,
+                         &info), UAS_PTR_IO_ERROR,
+             "non-data GOOD with no registers: no answer to report");
+    CHECK_EQ(info, 0, "nothing returned");
     CHECK_EQ(UasPtResult(&p, ptbuf, 40, UAS_SRB_ERROR, 2, 0, illegal, 18,
                          &info), UAS_PTR_SUCCESS, "refused by the bridge");
     CHECK(bytes_eq(ptbuf + 32, noRegsBack, 8),

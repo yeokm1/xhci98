@@ -1377,6 +1377,12 @@ ULONG UasPtResult(const UAS_PT_PLAN *plan, PUCHAR buf, ULONG outLength,
             return UAS_PTR_BUSY;
         }
         if (scsiStatus == UAS_SCSI_GOOD) {
+            /* A non-data command asked for its registers (CK_COND); GOOD
+             * brought none, and an echo of the sent ones would read as the
+             * drive's answer (SMART RETURN STATUS's 4Fh/C2h). */
+            if (plan->DataLength == 0) {
+                return UAS_PTR_IO_ERROR;
+            }
             /* Written by this driver, not read from the drive. */
             uasBytes(prev, plan->Prev, 8);
             uasBytes(cur, plan->Cur, 8);
