@@ -498,3 +498,38 @@ function Restore-SelfTestGitPolicy {
     foreach ($n in $Policy.Saved.Keys) { [Environment]::SetEnvironmentVariable($n, $Policy.Saved[$n]) }
     Remove-Item -LiteralPath $Policy.Root -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+function Get-SelfTestUnlistedPaths {
+    # The guard on a self-test's set (task 45.51; build-and-test.md, "The
+    # self-tests' skip across worktrees", "Each set guarded"): every
+    # repository-relative path literal in -Scripts (paths under -Root) that
+    # names a file git tracks there and is neither in -Set nor a key of
+    # -NotInput (a path the scripts name that no case reads as an input,
+    # each with its reason), as "path (script:line)". It catches a new read
+    # by name, not every read: a path built from parts, a folder scanned, a
+    # runtime read by a child and git's own reads are the set's entries by
+    # hand. One entry naming git's failure when git cannot list -Root.
+    param([string]$Root, [string[]]$Scripts, [string[]]$Set, [hashtable]$NotInput = @{})
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $tracked = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $listed = & git -C $Root -c core.quotePath=false ls-files 2>$null
+    if ($LASTEXITCODE -ne 0) { return @("git could not list '$Root'") }
+    foreach ($n in @($listed)) { if ("$n" -ne "") { [void]$tracked.Add(([string]$n).Replace('/', '\')) } }
+    $in = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($n in @($Set)) { [void]$in.Add([string]$n) }
+    $rx = '["'']((?:src|docs|releases|scripts|xhciinst|xhcimark|xhciqual|xhcitr|xhciperf|test|tools)\\[^"''$*?\s]+|LICENSE|README\.md)["'']'
+    $out = @()
+    foreach ($sc in $Scripts) {
+        $lines = [System.IO.File]::ReadAllLines((Join-Path $Root $sc))
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            foreach ($m in [regex]::Matches($lines[$i], $rx)) {
+                $lit = $m.Groups[1].Value.TrimEnd('\')
+                if ($tracked.Contains($lit) -and -not $in.Contains($lit) -and -not $NotInput.ContainsKey($lit)) {
+                    $out += ("{0} ({1}:{2})" -f $lit, $sc, ($i + 1))
+                }
+            }
+        }
+    }
+    return $out
+}

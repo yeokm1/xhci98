@@ -7100,6 +7100,40 @@ try {
     Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh) -ne $dg1) "digest : the inherited environment did not reach the digest."
     Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited ($dgInh + @("env:X=1"))) -ne (Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh)) `
         "digest : a changed variable did not move the digest."
+
+    # The set's guard (task 45.51): every tracked file the scripts this
+    # suite runs name is in the packager's set, or below as a path no case
+    # reads as an input, with its reason. Its control: a script in the
+    # digest tree naming a tracked file outside the set is found.
+    Write-Step "the packager's set holds every tracked file its scripts name"
+    $gdNotInput = @{
+        "src\xhci_psw.c" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\xhci_psw.h" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\xhci_ring.c" = "a path the input rules' vectors and the import's fixtures classify or write in a fixture, never read here"
+        "test\run-host-tests.cmd" = "the binary gates' host suite: every case that reaches it runs fixture P's host runner, and the input rules read fixture S's"
+    }
+    # The files of fixture tree S and of the digest's tree, named here to
+    # be written there, never read from this tree.
+    foreach ($n in @("src\xhci_log.c", "src\xhci_hlpr.c", "src\xhci_log.h", "src\xhci98_streams.h", "src\xhci_hlpr.h",
+                     "src\uas\uas_xport.c", "src\uas\uas.h", "src\stor98\src\sources", "src\stor98\src\engine.c", "test\test_ring.c")) {
+        $gdNotInput[$n] = "a file of fixture tree S or of the digest's tree, written there, never read from this tree"
+    }
+    $gdSet = Get-PackagerSelfTestFileSet -Root $repo
+    $gdOut = @(Get-SelfTestUnlistedPaths -Root $repo -Set (@($gdSet.Listed) + @($gdSet.Named)) -NotInput $gdNotInput -Scripts @(
+                 "scripts\package\test-package.ps1", "scripts\package\make-package.ps1", "scripts\package\make-release.ps1",
+                 "scripts\package\package-common.ps1", "scripts\package\cut-builds.ps1", "scripts\package\write-gated-manifest.ps1",
+                 "scripts\inf-gate\check-inf.ps1", "scripts\inf-gate\check-cm-inf.ps1", "scripts\inf-gate\check-uas-inf.ps1",
+                 "scripts\inf-gate\check-stor98-inf.ps1", "scripts\inf-gate\check-txtsetup-oem.ps1",
+                 "scripts\import-gate\check-imports.ps1", "scripts\import-gate\evidence-common.ps1",
+                 "scripts\check-stor98-build.ps1", "scripts\check-stor98-header.ps1", "scripts\check-flavour-marker.ps1",
+                 "scripts\check-helper-build.ps1", "src\pfw\check-pfw.ps1", "src\pfw\nt\check-pfwsys.ps1", "src\vsd\check-vsd.ps1",
+                 "scripts\common.ps1", "scripts\test-harness.ps1", "scripts\source-stamp.ps1"))
+    Assert-True ($gdOut.Count -eq 0) ("guard : the packager's scripts name tracked files its digest does not hold: " + ($gdOut -join ", "))
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_ring.c`"`r`n")
+    $ErrorActionPreference = "Continue"
+    try { & git -C $dg add -A 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
+    $gdProbe = @(Get-SelfTestUnlistedPaths -Root $dg -Scripts @("scripts\probe.ps1") -Set (@((Get-PackagerSelfTestFileSet -Root $dg).Listed)))
+    Assert-True ($gdProbe.Count -eq 1 -and $gdProbe[0] -eq "src\xhci_ring.c (scripts\probe.ps1:1)") ("guard : a tracked driver source a script names was not found: " + ($gdProbe -join ", "))
     $dgSaved = @{}
     foreach ($n in @("XHCI98_GATED_RUN", "XHCI98_DIGEST_PROBE", "GIT_DIGEST_PROBE", "RUNT0", "STEPT0", "NORUN")) { $dgSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
     try {
