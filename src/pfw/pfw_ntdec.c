@@ -52,3 +52,16 @@ int PfwNtRole(PFW_U32 major, PFW_U32 minor)
     }
     return PFW_ROLE_NONE;
 }
+
+void PfwNtSumAdd(PFW_NT_SUM *sum, PFW_U32 skip, PFW_U32 result,
+                 PFW_U32 closed)
+{
+    if (sum->RootBuses != 0xFFFFFFFFUL) {
+        sum->RootBuses++;
+    }
+    sum->SkippedAny |= skip;
+    sum->ResultAny |= result;
+    sum->ClosedAll = closed > 0xFFFFFFFFUL - sum->ClosedAll ? 0xFFFFFFFFUL
+                                                           : sum->ClosedAll +
+                                                             closed;
+}

@@ -39,6 +39,19 @@
 #define PFW_ROLE_FILTER     2
 int PfwNtRole(PFW_U32 major, PFW_U32 minor);
 
+/* The filter role's account of every root bus it recorded since it was
+ * loaded (record 32 section 11.5.2): each bus's record replaces the one
+ * before it, so these are kept beside the last bus's values. */
+typedef struct PFW_NT_SUM {
+    PFW_U32 RootBuses;      /* root buses recorded: run, skipped or not
+                               attached                                 */
+    PFW_U32 SkippedAny;     /* every bus's skip reasons, ORed           */
+    PFW_U32 ResultAny;      /* every bus's result bits, ORed            */
+    PFW_U32 ClosedAll;      /* windows closed on every bus, summed      */
+} PFW_NT_SUM;
+void PfwNtSumAdd(PFW_NT_SUM *sum, PFW_U32 skip, PFW_U32 result,
+                 PFW_U32 closed);
+
 /* major/minor: PsGetVersion's; nproc: the processors running; safeMode:
  * InitSafeBootMode not 0; late: not called at the boot drivers' time (the
  * SOFTWARE hive is loaded, or the test could not tell); haveIpi:

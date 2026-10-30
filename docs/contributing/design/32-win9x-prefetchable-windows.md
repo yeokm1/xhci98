@@ -1102,7 +1102,15 @@ every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
   decision (`PfwNtDecide`: Safe Mode, "late", the processors), the same
   hold inside `KeIpiGenericCall`, the same log under the service's
   `Parameters`, with `XhciPfwMode` and the new `XhciPfwRole` (1 entry, 2
-  filter, and `XhciPfwBuses`, the range scanned). It is called at
+  filter, and `XhciPfwBuses`, the range scanned). On a computer with
+  more than one root bus each bus's record replaces the one before it,
+  so those values are the last bus's; beside them the driver keeps an
+  account of every root bus recorded since it was loaded (the steps, the
+  "no range" and the "not attached" records alike; `PfwNtSumAdd`, pure,
+  in `pfw_ntdec.c`, with host vectors): `XhciPfwRootBuses` their count,
+  `XhciPfwSkippedAny` and `XhciPfwResultAny` their skip reasons and
+  result bits ORed, `XhciPfwClosedAll` the windows closed on all of them
+  (task 45.9, 2026-10-30). It is called at
   `PASSIVE_LEVEL` in the PnP manager's thread, as `DriverEntry` is. A
   root bus's start comes before the PCI driver enumerates that bus, so
   each filtered root bus's bridges are closed before they are read, and
