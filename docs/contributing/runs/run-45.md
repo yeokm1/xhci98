@@ -2106,3 +2106,75 @@ claimed: Apple machines" stay until the code and 45-E.11.
 Left: the code (after the owner's answers and an emulator model in
 `usb4-emu`, section 19.6), its host vectors and legs, and 45-E.11. The
 task stays unticked.
+
+## 45.22 ring interrupts for the connection manager: the code (2026-10-30)
+
+The owner's answers to record 21 section 4.5.10 (2026-10-29: Q1 (a) coded
+in this release behind `XhciCmRingInterrupt` 0, Q2 (b) 0 everywhere until a
+hardware reading, Q3 (a) the line first, Q4 (a) the idle period unchanged;
+98 SE and ME only after their route is read) coded on branch `w45-irq2`
+from `2a86c41d`. Development host A.
+
+### What was coded
+
+Record 21 section 4.5 for both profiles, as section 4.5.11 (new) records
+where the code settles what the design left open; record 22 section 5.4
+and section 1.3's two lines, record 21's section 8 table and decision D3's
+row brought up to date. Files: `src\cm\cm_rirq.c` and `.h` (the pure
+half), `cm_rirqos.c` and `.h` (the service routine, its DPC, the
+connection, the arm and mask under `KeSynchronizeExecution`, the self-test
+through Interrupt Status Set, the watchdog, the orders down and up),
+`cm_thr.c` (the wait to the maintenance deadline, the `CM_WORK_RING` wake,
+`CmCfgIntxRetire`), `tbt_ring.c` (IE in RX descriptors, `TbtRingRxPending`),
+`tbt_icm.c` `TbtIcmRingWake`, `tbt_u4cm.c` `TbtU4RingWake`, `tbt_regs.h`
+(ISC, ISS, IMS, ITR[0], bit 17), `cm_nhi.c` and `cm_power.c` (the intent
+before every ring start, the order down first in every stop and
+quiescence), `cm.h` (`CM_WORK_RING`, the field), `cm_vals.c`, `cm_reg.c`
+(`XhciCmRingInterrupt`, no INF writes it; the qemu flavour's
+`XhciCmQemuIrqDead`), the five interrupt pairs in both `xhcicm` allowlists
+(`xhci98.sys`'s rows, evidence verbatim), `docs\using\tuning.md`'s row.
+
+Host vectors: `test_cm_rirq` (new: the cause for every Total Paths, the
+routine's outcomes, the storm count, the mask by contract and its proof,
+the watchdog's suspicion and slower storm, the order down's end and latch,
+the waits across the clock's wrap), `test_tbt_ring` (IE from the initial
+post, kept by a repost, dropped after the retirement; the peek takes
+nothing), `test_u4cm` and `test_tbt_icm` `test_ring_wake` (a plug served
+by one wake with no tick between; the wakes end; a check already owed is
+the tick's), `test_cm` (the value's rule).
+
+Commits: `d311d97b` (the code), `1098f0f6` (reviewed and revised: a
+retained interrupt's geometry published only before the connection or
+under the interrupt's lock; an armed interrupt taken down before every
+ring start, since a full recovery can restart the rings within one pass;
+the maintenance deadline the last pass plus the period in force),
+`addee4bb` (the wakes' vectors). Reviewed and revised in three areas
+(IRQL and lifetime, the lifecycle, registers and supporting files) until
+nothing material was left.
+
+Builds at `addee4bb`: the x86 gated build `all` passed
+(`out\gated-x86-release.txt`; `xhcicm.sys` release `550c3e18...`, qemu
+`bbb1a272...`), the amd64 gated build `all` passed
+(`out\gated-amd64-release.txt`; `xhcicm.sys` release `88991790...`,
+unsigned as a clone without the key stages it), `src\pfw\build.cmd` once
+before; the host suites passed (`test\run-host-tests.cmd`).
+
+### 98 SE and ME: the NHI's route (record 21 section 4.5.4's reading)
+
+On fresh overlays of the q35 bases, no xHCI98 installed, `bin\asm4242-20261025-2230`
+as the launcher pins it, one vCPU: Device Manager, Computer's View
+Resources (IRQ) and the NHI's own Resources page, read by QMP screendump
+(`E:\xhci98-vm\p45\w45-irq2\r98t`, `r98a`, `rmet`, `rmea`).
+
+| System | Profile | The NHI as Device Manager names it | Allocated | Sharing its IRQ |
+|---|---|---|---|---|
+| 98 SE | `tb3ar` (Alpine Ridge behind its switch, root port `00:08.0`) | "PCI System Peripheral", Code 28 (no driver), basic configuration 0000 | IRQ 10, memory `FE400000-FE43FFFF` and `FE440000-FE440FFF` | the SMBus, the ICH9 AHCI ("PCI Card"), two PCI-to-PCI bridges, one of the two xHCI controllers, an IRQ holder |
+| 98 SE | `asm4242` (the NHI behind the chip's own switch) | "PCI Universal Serial Bus" (class `0C0340`), Code 28 | IRQ 11, memory `FA800000-FA83FFFF` and `FA840000-FA84FFFF` | one PCI-to-PCI bridge and an IRQ holder |
+| ME | `tb3ar` | as on 98 SE | IRQ 10, the same ranges | as on 98 SE |
+| ME | `asm4242` | as on 98 SE | IRQ 11, the same ranges | as on 98 SE |
+
+So on q35 both 98 SE and ME give the NHI an IRQ under both profiles,
+shared and level (PCI). Not read: the configuration space's Interrupt Line
+and Pin, and whether the IRQ is the one the pin raises, which only the
+self-test can say (section 4.5.4). The code connects nothing on 98 SE and
+ME (`cm.irq.9x`); their connection and its first leg stay owed.
