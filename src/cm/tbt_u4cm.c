@@ -1946,7 +1946,9 @@ static VOID tbtU4QLifted(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
  * too until the child reads as the same router now (its UUID, ROUTER_CS_7
  * and 8), and while an unplug hint of the kid is unresolved: behind a
  * Thunderbolt 3 parent no Lock tells a replacement, and the retry runs
- * before the kid's own check. */
+ * before the kid's own check. The same holds for a record on a USB4
+ * router a watched link names (a kid made a link again by a recovery
+ * among them): retried only while that router reads its link's UUID. */
 static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
 {
     PTBT_U4_PORT p;
@@ -1976,6 +1978,15 @@ static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
                  u[0] != k->Dev.Uuid[0] || u[1] != k->Dev.Uuid[1])) {
                 return TRUE;
             }
+        }
+    }
+    for (i = 0; i < TBT_U4_MAX_LINKS; i++) {
+        if (cm->Links[i].Used && cm->Links[i].Port == q->Port && !cm->Links[i].ChildTbt3 &&
+            TbtRouteEqual(&cm->Links[i].Child, &q->Route) &&
+            (!cm->Links[i].ChildUuidValid ||
+             tbtU4RdN(cm, &q->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u) != TBT_OK ||
+             u[0] != cm->Links[i].ChildUuid[0] || u[1] != cm->Links[i].ChildUuid[1])) {
+            return TRUE;
         }
     }
     return (BOOLEAN)(kid && p->State == TBT_U4_HELD &&

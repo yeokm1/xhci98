@@ -6766,6 +6766,38 @@ static void test_kid_cleanup_gates(void)
         CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the replacement connected as a new kid");
         g_fab.R[child].Adp[5].PeStuck = 0;
     }
+
+    /* The same record carried through a recovery (the ejected kid made a
+     * link again), the child swapped before the first tick after the
+     * commit: never retried on the router now at that route. */
+    {
+        unsigned long mark;
+        int c2;
+        LONG rc;
+        BOOLEAN final;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        g_fab.R[child].Adp[5].PeStuck = 1;
+        (void)TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index);
+        g_fab.Gone = 1;
+        TbtU4Contain(&g_cm);
+        g_fab.Gone = 0;
+        g_fab.Cancel = 0;
+        rc = TbtU4Recover(&g_cm, &final);
+        CHECK_EQ(rc, TBT_OK, "recovery with an ejected kid: TBT_OK");
+        TbtU4RecoverCommit(&g_cm);
+        (void)TbtU4TakeDebt(&g_cm, 1);
+        c2 = fabChild(&g_fab, dev);
+        fabUnplugChild(&g_fab, dev);
+        fabPlugChild(&g_fab, dev, c2, 1);
+        g_fab.R[c2].Adp[5].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.RxQCount = 0;
+        mark = g_fab.WrCount;
+        poll(&g_cm, &g_fab, 3);
+        CHECK_EQ(findPe(&g_fab, mark, c2, 5, 0), -1,
+                 "after a recovery: the replacement's Path Enable never cleared");
+        g_fab.R[child].Adp[5].PeStuck = 0;
+    }
 }
 #endif /* TBT_U4_MAX_KIDS */
 

@@ -1531,7 +1531,10 @@ differs from them, this section is the record.
   A record on the child itself is retried only once the child reads as
   the same router at that tick (its UUID) and no unplug hint of the kid
   is unresolved: behind a Thunderbolt 3 parent no Lock tells a
-  replacement, and the retry runs before the kid's own check.
+  replacement, and the retry runs before the kid's own check. The same
+  holds for a record on a USB4 router a watched link names (a kid made a
+  link again by a recovery among them): retried only while that router
+  reads its link's UUID.
 - **Adoption** runs at that tick, the first after the parent is UP - at
   the start and after a recovery's commit alike - rather than inside
   section 9.2's walk, so the walk is unchanged. "Nothing else on the
