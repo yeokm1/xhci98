@@ -2919,3 +2919,77 @@ profile's idle cost at value 1 and at a 50 ms period (XP was read at
 value 0 alone); the readings of the "Not read" list; and the hardware
 reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
 default stays 0 (owner, Q2).
+
+## 45.14 record 34 section 3.3, the 9x half: the padding and PCI.VXD's first reading (2026-10-30, partial)
+
+**The design.** Record 34 section 3.3.6 (revision 8, `9b3e0936`),
+reviewed and revised before code: section 3.3.2's Option A made exact for
+its first part, the padding of a chain port at the first numbering, which
+the rest of section 3.3 (the chain port's own numbering, the devnode
+locate, the removal, `DN_REMOVABLE`) rests on. A chain-port candidate
+(none below another) keeps half of what is left of the port's range, at
+most 8 buses and at least 2; a numbering that ends `NO_ROOM` with the
+padding is made again at once without it, once its undo has put every
+bridge back; the memory slack beside what the chain needs is shared
+equally among the padded candidates, a power of two, at most 64 MiB and
+at least 2 MiB, added beside each one's own need and checked before any
+window-placement write; a `REOPENED` chain gives its memory again to a
+candidate whose retained range leaves room for a chained switch.
+
+**The code** (`02676bbb`): `src\cm\tbt_brnum.c`/`.h`
+(`XHCI_TBT_BRNUM_F_PAD`, `brCandidate`, the bus padding in `brBus` with
+`InCand`, the retry in `XhciTbtNumberBridges`, `brSpan`, `brPadMem`, the
+padded size in `brNeed`, the `REOPENED` qualification), `cm_cfgwk.c`
+(`cmWkNumber` passes the flag; `cm.brnum.9x.pad`, `cm.brnum.9x.pad-mem`);
+host vectors in `test\test_tbt_brnum.c` (the model given a PCI Express
+capability; `test_pad_buses`, `test_pad_memory`, `test_pad_nested`), 506
+checks, 0 failures; `test\run-host-tests.cmd` links `tbt_topo.c` into
+that suite. The gated x86 build is recorded below once run.
+
+### The reading (2026-10-30)
+
+**Vehicle.** 98 SE and ME goldens made for this task: overlays of the
+q35 bases, the launcher's `-Usb4 tb3ar` on the `usb4-emu` `230bed5`
+emulator (`qemu-system-x86_64.exe` `bb2b1ec9...`, its Thunderbolt 3
+tunnel port padded by the firmware model and its switch ports with
+Interrupt Pin A), the release x86 package of `1a2a72ca` installed
+(`XHCIINST /thunderbolt /stor98`, exit 3; on 98 SE the installer's
+second xHCI controller asked for the driver disk, 45.38, answered with
+`C:\XHCI98`), a cold second boot (98 SE `4c12f9b2...`, ME
+`7b84aa34...`). Each leg a child overlay with the qemu flavour of
+`xhcicm.sys` at `02676bbb` (`a083d92f...`) copied over the installed
+one and a cold start; the dock `usb4-device ... dialect=tb3,
+downstream-ports=1, chain-power-controller=off` plugged by QMP at the
+desktop. Evidence: `E:\xhci98-vm\p45\w45-chain\w98\` and `me\`
+(`debugcon-<leg>.log`, `infopci-<leg>-<n>.txt`, `serial-<leg>.log`,
+screenshots).
+
+**The tunnel port's slot power.** With the emulator's default the
+Thunderbolt 3 tunnel port has a Power Controller, and 98 SE never turns
+the slot on: the hot-plugged dock's switch read nothing for the
+numbering's twenty tries (`cm.brnum.9x.outcome` NONE, functions 0; leg
+p2b) and stayed unnumbered at bus 4. Every leg below runs with
+`-global usb4-tb3-tunnel-dsp.power-controller=off`, as the ASM4242
+legs run their tunnel ports.
+
+| Leg | System | Read |
+|---|---|---|
+| p2c | 98 SE | the dock numbered (`cm.brnum.9x.outcome=00020801`): its upstream port `04:00.0` buses 04/05/0F, the fixed port `05:00.0` 05/06/06, the chain port `05:01.0` **05/07/0F** (pad 8; `cm.brnum.9x.pad=00000001`) with the memory window **FA100000-FE0FFFFF** (`cm.brnum.9x.pad-mem=04000000`, 64 MiB), the port's window F2200000-FE1FFFFF; `info pci` after the re-enumeration: the chain port 7 to 15, its window as written. Windows' bridge wizards then asked for a restart, which ends the emulator (98 SE's warm restart is a cold one here) |
+| p2d | 98 SE, the same overlay, cold | the dock plugged again: numbered alike; `info pci` after the plug, after the next bridge's install, after Stor98's install for the dock's NVMe and after the chain port's own install: **unchanged** (7 to 15, FA100000-FE0FFFFF) |
+| p2e | 98 SE, the same overlay, cold, every driver installed | the dock plugged: no wizard; numbered alike; `info pci`: unchanged; `XHCIINST /devices` lists the dock (link 1, depth 1, approved) and its upstream port started |
+| m1b | ME | numbered alike (pad 8, 64 MiB); one bridge wizard; `info pci` after it: unchanged |
+| m1c | ME, the same overlay, cold | the dock plugged: numbered alike; `info pci`: unchanged; shutdown with the dock attached ended normally |
+
+**What it shows.** On 98 SE and ME, PCI.VXD leaves a padded empty chain
+port's bus range and memory window as the numbering wrote them, through
+the re-enumeration that follows, the first installs of the dock's
+bridges and of Stor98, and in a later session: section 3.3.6's first
+premise holds on both. That PCI.VXD's allocation holds them (that a
+device chained later is placed inside them) is read only with the chain
+port's own numbering, next.
+
+**Left in 45.14** (not ticked): the chain port's own numbering and
+re-enumeration, the devnode locate (section 3.3.4), the removal (section
+3.3.5) and `DN_REMOVABLE` on the chained unit (section 3.7), each
+designed in detail and reviewed before its code, then their legs on 98
+SE and ME with a device chained behind the padded port.

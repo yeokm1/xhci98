@@ -618,6 +618,11 @@ reading. Where this section and section 3.3.2's first two bullets differ
   first premise. A restart after it is read apart: at a restart the
   firmware numbers the dock present at power-on itself (section 3.3.3),
   so it says nothing of PCI.VXD.
+- **Read** [run, 45.14, 2026-10-30]: on 98 SE and ME the emulator's
+  chain port padded 07h to 0Fh with a 64 MiB window read unchanged after
+  the re-enumeration, the dock's first driver installs and in a later
+  session (run-45, "45.14"): the first premise holds; that the allocation
+  holds them waits for the chain port's own numbering.
 
 ### 3.4 Boot, and chains present at the start
 
