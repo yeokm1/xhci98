@@ -6798,6 +6798,31 @@ static void test_kid_cleanup_gates(void)
                  "after a recovery: the replacement's Path Enable never cleared");
         g_fab.R[child].Adp[5].PeStuck = 0;
     }
+
+    /* Behind the dock, the child swapped quietly and then the dock's own
+     * PCIe tunnel lost before any tick: the kid's orderly teardown writes
+     * nothing to the router now at the child's route. */
+    {
+        unsigned long mark;
+        unsigned long tried;
+        int c2;
+        int hp;
+
+        dev = setupKid(FAB_DEV_TBT3_DOCK, &child);
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "behind the dock: the kid UP");
+        c2 = fabChild(&g_fab, dev);
+        fabUnplugChild(&g_fab, dev);
+        fabPlugChild(&g_fab, dev, c2, 1);
+        g_fab.R[c2].Adp[5].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+        g_fab.RxQCount = 0;
+        hp = fabPortPcie(&g_fab, 1);
+        g_fab.R[0].Adp[hp].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+        mark = g_fab.WrCount;
+        tried = g_fab.TriedCount;
+        poll(&g_cm, &g_fab, 1);
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_FAILED, "the dock's tunnel lost: FAILED");
+        CHECK_EQ(fabTriedTo(&g_fab, tried, c2), 0, "no write sent to the replacement child");
+    }
 }
 #endif /* TBT_U4_MAX_KIDS */
 

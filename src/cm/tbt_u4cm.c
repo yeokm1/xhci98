@@ -7484,8 +7484,10 @@ static BOOLEAN tbtU4KidDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG w
 {
     ULONG prevPort;
     ULONG prevKid;
+    ULONG u[2];
     BOOLEAN closed;
     BOOLEAN had;
+    BOOLEAN present;
 
     prevPort = cm->ActivePort;
     prevKid = cm->KidCtx;
@@ -7495,7 +7497,21 @@ static BOOLEAN tbtU4KidDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG w
     had = (BOOLEAN)(k->Pcie.Up || k->Pcie.Written != 0);
     if (had) {
         k->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
+        /* The child's side only on the child this kid is: read as the
+         * same router now (its UUID), since this can run before the
+         * kid's own check (a parent's PCIe loss or eject) and behind a
+         * Thunderbolt 3 parent no Lock tells a replacement. Unconfirmed,
+         * the parent's side alone; the kid's check settles the rest. */
+        present = k->Dev.Present;
+        if (present && (!k->Dev.UuidValid ||
+                        tbtU4RdN(cm, &k->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u) !=
+                            TBT_OK ||
+                        u[0] != k->Dev.Uuid[0] || u[1] != k->Dev.Uuid[1])) {
+            tbtU4Log(cm, "u4.kid.down.unverified", k->Index);
+            k->Dev.Present = FALSE;
+        }
         closed = tbtU4KidTunnelDown(cm, p, k);
+        k->Dev.Present = present;
         cm->Counters.KidsTornDown++;
         if (why == TBT_U4_WHY_LOST) {
             if (closed && !p->Dev.Tbt3 && k->ParentPcieDown != 0) {

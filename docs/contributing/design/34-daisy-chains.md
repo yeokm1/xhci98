@@ -1567,7 +1567,10 @@ differs from them, this section is the record.
   (`tbtU4KidsDown`, `tbtU4KidDown`, `TbtU4EjectKid`): the kid's tunnel
   down in the orderly form with both ends, TUNNEL_DOWN with the kid, the
   kid FAILED (`Ejected` for an eject) and kept until the child's or the
-  parent's unplug; the upcall only for a loss, as at depth 1 (an eject's
+  parent's unplug. The child's side is written only on the child read as
+  the same router at that moment (its UUID): this runs before the kid's
+  own check, and behind a Thunderbolt 3 parent no Lock tells a
+  replacement; unconfirmed, the parent's side alone; the upcall only for a loss, as at depth 1 (an eject's
   removal is the operating system's own).
 - **The kid's PCIe loss** behind a Thunderbolt 3 parent reads the
   parent's Path Enable every fourth idle tick the kid is UP
