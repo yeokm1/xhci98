@@ -1721,12 +1721,12 @@ above removed the dock cleanly, the closure having been recorded before
 the proof was asked; the reverse order keeps the pin (record 17 section
 4.13.6).
 
-## 45.31 the connection manager's unload under Driver Verifier (2026-10-30, the `xhcicm.sys` half)
+## 45.31 the connection manager's unload under Driver Verifier, and Stor98 on a drive `stornvme` ran (2026-10-30)
 
 The `xhcicm.sys` unload stop that 45.11's reading found (bug check 0xC4,
 0x62, at the uninstall on 8.1 and 8 and during the boot on 7 x86) and
-what it hid. Stor98's start with `MSISupported` 1 on 8.1, the task's
-other half, is not read here.
+what it hid; and Stor98's start on 8.1 on a drive `stornvme` ran, the
+task's other half (below).
 
 ### The reading
 
@@ -1771,7 +1771,43 @@ at boot, fresh overlays `k7b` and `k81b`.
 With the prototype of 45.11 and these two commits (7 x86, `k7a`): the
 same boot and the uninstall with no stop (`runs/run-45.md`, "45.11").
 
+### Stor98 on a drive `stornvme` ran (8.1 x86, 2026-10-30)
+
+The failure 45.11's reading met (problem 10, the port's event 4 "Driver
+detected an internal error in its data structures") reproduced on a fresh
+q35 8.1 x86 overlay (`k81b`, the ORICO at boot): the drive on `stornvme`,
+Stor98 installed over it by `DIF_INSTALLDEVICE`, a cold boot, problem 10.
+
+- **The mechanism.** `stornvme.inf` writes `MSISupported` 1 and
+  `MessageNumberLimit` 0x41 under the drive's `Device Parameters\Interrupt
+  Management\MessageSignaledInterruptProperties`. With it, the drive's
+  filtered requirements (`Control\FilteredConfigVector`) list interrupt
+  descriptors with flags 7 (latched, message, policy) and vector
+  0xFFFFFFFE, the message-signaled form; Stor98 runs under the SCSI port
+  driver, which takes no message-signaled interrupt, and the start fails.
+  On the same devnode, the value set to 0 and the device restarted:
+  Stor98 started; set to 1 and restarted: problem 10 again. Why earlier
+  starts with the value present had worked (45.11, the first boots of
+  `k81a`) is not read; the restarts that failed were all after a new
+  resource assignment.
+- **The fix** (`a0020db6`): both NT install sections of `stor98.inf` write
+  `MSISupported` 0 through a `.HW` section; `check-stor98-inf.ps1` holds
+  it. The release package of that commit (x86 gated build passed),
+  staged as the download's `release-x86`:
+  - the failed drive (`k81b`, `MSISupported` 1): Stor98 installed again
+    from the new INF, the value 0, Stor98 running; after a cold boot,
+    running (problem 0, ORICO (E:));
+  - a fresh overlay (`k81c`): the install (exit 3) put Stor98 on the drive
+    `stornvme` ran at the first boot ("Stor98 now runs ...: recorded as
+    this installer's", the installer's case 3b); after a cold boot,
+    running;
+  - back to `stornvme`: the uninstall (exit 3) gave the drive back to
+    `stornvme`, running, with `MSISupported` 1 and `MessageNumberLimit`
+    0x41 written again by its own INF.
+- **Owed**: the mark service's switch from `stornvme` with the new INF
+  (on `k81c` the installer switched the drive itself); the same on 8.1
+  x64.
+
 ### Owed
 
-Stor98's start with `MSISupported` 1 on 8.1; the amd64 half read on a
-64-bit guest (the gated amd64 build is the coordinator's record).
+The mark service's switch with the new INF; 8.1 x64 for both halves.
