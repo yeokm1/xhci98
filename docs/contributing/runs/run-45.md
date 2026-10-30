@@ -4075,6 +4075,7 @@ ones (`fc /b` equal) as 45.41's x64 legs did. Each start read with
 | c2 a | XP x64, this tree's build, warm restart after the copy | slot 1 configured | - |
 | c2 b | XP x64, this tree's build, cold start | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
 | c3 a | XP x64, `3.3.0.0`, cold start, first time, 4 GB (memory above 4 GB, as 45.42's 3 GB and 8 GB legs) | the same as c1 a | the same as c1 a; a replug from the emulator (`attached` false, then true) changed nothing: no new install attempt in `setupapi.log`, the wizard still waiting |
+| c4 a | XP x64, `3.3.0.0`, cold start, first time, 45.42's configuration as far as this kit's limits allow: 45.41's link-drop emulator build (a copy), 3 GB, a USB 2.0 hub on port 1 with a USB keyboard behind it | the same first look on port 3; slot 1 addressed, UAS; the hub (port 5) configured | the same `#E358` for `oem1.inf`, and one for the hub (`xHCI98 USB Hub`, `oem0.inf`): the keyboard behind it does nothing until that wizard is answered (the emulator's keys went to it until it was removed); a replug of the disk changed nothing, slot 1 still addressed |
 
 **Reading.** The connection is seen at every start. The root hub's
 first reading marks every root port changed (`XhciRootHubInit` in
@@ -4103,17 +4104,16 @@ Found New Hardware window on its first start
 (`E:\xhci98-vm\p45\w45-hubuas\f42m8\s1.png`), but which device it was
 for is not recorded (every start here also has one for ACPI
 `QEMU0002`), and here a replug of the waiting device changed nothing.
-Those legs differed: 45.41's link-drop emulator build, a USB 2.0 hub
-with a keyboard on port 1, 3 GB and 8 GB. So these legs explain what
-they show, not 45.42's observation; reading that needs its own
-configuration, with Device Manager and `setupapi.log` read before the
-replug.
+Leg c4 took that leg's configuration (but 3 GB, not 8 GB, this kit's
+limit being 4 GB) and read the same as c1. So these legs explain what
+they show; 45.42's "a replug brings it" is not reproduced, and its 8 GB
+case is not read.
 
 **Result.** No defect of this driver found, and no change: in these
 legs the device is enumerated at every cold start, and a UAS device seen
 for the first time on XP and XP x64 under the Warn policy waits on
-Windows' wizard, at a cold start as at a plug. Owed: 45.42's own
-configuration (above), and the first-time case on XP x86 with this
+Windows' wizard, at a cold start as at a plug. Owed: 45.42's 8 GB case
+and its replug (above), and the first-time case on XP x86 with this
 tree's build.
 
 ## 45.final: the release-notes texts the tasks handed over
