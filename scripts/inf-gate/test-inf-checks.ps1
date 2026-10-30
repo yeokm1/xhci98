@@ -83,32 +83,81 @@ $gate = Join-Path $PSScriptRoot "check-inf.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
 $prodInfAmd64 = Join-Path $repo "src\xhci98-amd64.inf"
 
-function Get-InfSelfTestDigest {
-    # One SHA-256 over every file this self-test and the gate read, each by
-    # its path under -Root and its content, and the PowerShell version: the
-    # two scripts and the rest of scripts\inf-gate\, common.ps1 and
-    # test-harness.ps1, every file directly in src\ (the INFs and what the
-    # gate reads beside them) and XHCITR's manifest (task 45.30).
+function Get-InfSelfTestNamedInputs {
+    # The files this self-test and the gate read by name, repository-relative
+    # (task 45.51): the two scripts' shared code, XHCITR's manifest (the
+    # manifest rule) and, beside every INF in src\, the files the gate's
+    # product table names (VerHeader, RcName, IdHeader in check-inf.ps1),
+    # taken from that table as -Root has it, so a new one joins on its own.
+    # $null when the table cannot be read: no digest, no skip.
     param([string]$Root)
-    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
-    $files = @()
-    $gateDir = Join-Path $root "scripts\inf-gate"
-    if (Test-Path -LiteralPath $gateDir) { $files += @(Get-ChildItem -LiteralPath $gateDir -File -Recurse -Force) }
-    $srcDir = Join-Path $root "src"
-    if (Test-Path -LiteralPath $srcDir) { $files += @(Get-ChildItem -LiteralPath $srcDir -File -Force) }
-    foreach ($one in @("scripts\common.ps1", "scripts\test-harness.ps1", "xhcitr\xhcitr.manifest")) {
-        $f = Join-Path $root $one
-        if (Test-Path -LiteralPath $f -PathType Leaf) { $files += @(Get-Item -LiteralPath $f -Force) }
+    $gateFile = Join-Path $Root "scripts\inf-gate\check-inf.ps1"
+    if (-not (Test-Path -LiteralPath $gateFile -PathType Leaf)) { return $null }
+    $gateText = [System.IO.File]::ReadAllText($gateFile)
+    $table = [regex]::Match($gateText, '(?m)^\$prod = @\{[^\r\n]*(\r?\n[ \t]+[^\r\n]*)*')
+    if (-not $table.Success) { return $null }
+    $named = @("scripts\common.ps1", "scripts\test-harness.ps1", "xhcitr\xhcitr.manifest")
+    foreach ($key in @("VerHeader", "RcName", "IdHeader")) {
+        $m = [regex]::Match($table.Value, '\b' + $key + '\s*=\s*"([^"\\/]+)"')
+        if (-not $m.Success) { return $null }
+        $named += ("src\" + $m.Groups[1].Value)
     }
+    return $named
+}
+
+function Get-InfSelfTestListedInputs {
+    # The files of the INF self-tests' set that git lists (task 45.51):
+    # every one under scripts\inf-gate\ and every INF directly in src\,
+    # tracked (a tracked one deleted included) or untracked and not ignored,
+    # repository-relative. $null when git cannot list -Root.
+    param([string]$Root)
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $listed = & git -C $Root -c core.quotePath=false ls-files -z --cached --others --exclude-standard -- "scripts/inf-gate" ":(glob,icase)src/*.inf" 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return @((($listed | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') })
+}
+
+function Get-InfSelfTestDigest {
+    # One SHA-256 over what this self-test and the gate read, each file by
+    # its path under -Root and its content (task 45.30; narrowed to that by
+    # task 45.51, build-and-test.md, "The self-tests' skip across
+    # worktrees"): every file git lists under scripts\inf-gate\ and every
+    # INF directly in src\ (tracked, or untracked and not ignored; a tracked
+    # one deleted as absent), the files Get-InfSelfTestNamedInputs names
+    # (read by name, ignored or not, absent as absent), the powershell.exe
+    # the relative-manifest case starts (its path, version and size) and
+    # the PowerShell version. No .c, no other header, no build log: the
+    # gate reads none. $null when git cannot list -Root or the gate's
+    # product table cannot be read: no skip.
+    param([string]$Root)
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    $named = Get-InfSelfTestNamedInputs -Root $root
+    if ($null -eq $named) { return $null }
+    $names = Get-InfSelfTestListedInputs -Root $root
+    if ($null -eq $names) { return $null }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $rows = @()
-        foreach ($f in $files) {
-            $rel = $f.FullName.Substring($root.Length).ToLowerInvariant()
-            $bytes = [System.IO.File]::ReadAllBytes($f.FullName)
-            $rows += ($rel + ":" + (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString("x2") }) -join ""))
+        foreach ($n in @(@($names) + @($named) | Sort-Object -Unique)) {
+            $f = Join-Path $root $n
+            if (Test-Path -LiteralPath $f -PathType Leaf) {
+                $rows += ("file:" + $n.ToLowerInvariant() + ":" + (($sha.ComputeHash([System.IO.File]::ReadAllBytes($f)) | ForEach-Object { $_.ToString("x2") }) -join ""))
+            } else {
+                $rows += ("file:" + $n.ToLowerInvariant() + ":absent")
+            }
         }
-        $rows = @($rows | Sort-Object -CaseSensitive)
+        $rows = @($rows | Sort-Object -CaseSensitive -Unique)
+        $child = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($null -eq $child) {
+            $rows += "run:powershell.exe:absent"
+        } else {
+            $ci = Get-Item -LiteralPath $child.Source
+            $rows += ("run:" + $ci.FullName.ToLowerInvariant() + ":" + $ci.VersionInfo.FileVersion + ":" + $ci.Length)
+        }
         $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
         $all = [System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
         return (($sha.ComputeHash($all) | ForEach-Object { $_.ToString("x2") }) -join "")
@@ -125,7 +174,7 @@ function Get-InfSelfTestDigest {
 # out\inf-selftest-pass.txt, is retired; a leftover one is not read.
 $digest = Get-InfSelfTestDigest -Root $repo
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
-if (-not $fullAsked) {
+if (-not $fullAsked -and $null -ne $digest) {
     $rec = Read-SelfTestPassRecord -Suite "inf" -Digest $digest
     if ($null -ne $rec) {
         Write-Ok ("INF gate self-tests skipped: nothing they or the gate read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
@@ -312,25 +361,42 @@ try {
     Assert-True ($isoBind.ExitCode -eq 1 -and $isoBind.Output -match "NoSuchSwitch") ("inproc-bind : a parameter that does not bind was not exit 1 with its message:`n" + $isoBind.Output)
     Assert-True ("$ErrorActionPreference" -eq "Stop") "inproc-eap : a gate call changed this self-test's ErrorActionPreference."
 
-    # The skip's digest (task 45.30): it moves when a file in its set
-    # changes or appears, and stays when one outside it does.
+    # The skip's digest (task 45.30; its set narrowed by task 45.51): it
+    # moves when a file in its set changes or appears, and stays when one
+    # outside it does - a C source, a header the gate's table does not name,
+    # a build log, an ignored file; two trees of one content give one digest.
     Write-Step "the skip's digest: every file in the set, and none outside it"
     $dg = Join-Path $script:work "digest-tree"
     foreach ($d in @("scripts\inf-gate", "src\sub", "xhcitr", "elsewhere")) { New-Item -ItemType Directory -Force -Path (Join-Path $dg $d) | Out-Null }
-    foreach ($f in @("scripts\inf-gate\check-inf.ps1", "scripts\common.ps1", "scripts\test-harness.ps1", "src\xhci98.inf",
-                     "src\xhci_version.h", "xhcitr\xhcitr.manifest")) {
+    $dgTable = '$prod = @{ VerHeader = "xhci_version.h"; VerPrefix = "XHCI"; RcName = "xhci98.rc";' + "`r`n" + '           IdHeader = "xhci_hub.h" }' + "`r`n"
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\inf-gate\check-inf.ps1"), $dgTable)
+    foreach ($f in @("scripts\common.ps1", "scripts\test-harness.ps1", "src\xhci98.inf", "src\xhci_version.h", "src\xhci98.rc",
+                     "src\xhci_hub.h", "xhcitr\xhcitr.manifest")) {
         [System.IO.File]::WriteAllText((Join-Path $dg $f), "a")
     }
+    [System.IO.File]::WriteAllText((Join-Path $dg ".gitignore"), "*.log`r`nignored*`r`n")
+    $dgEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & git -C $dg init -q 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
     $dg0 = Get-InfSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dg0) "digest : a tree git can list gave no digest."
     $dgCases = @(
-        @{ Why = "an INF changed";                File = "src\xhci98.inf";                 Moves = $true },
-        @{ Why = "a header beside it added";      File = "src\xhci_new.h";                 Moves = $true },
-        @{ Why = "a gate file in a subfolder";    File = "scripts\inf-gate\sub\list.txt";  Moves = $true },
-        @{ Why = "the manifest changed";          File = "xhcitr\xhcitr.manifest";         Moves = $true },
-        @{ Why = "common.ps1 changed";            File = "scripts\common.ps1";             Moves = $true },
-        @{ Why = "a file under a src\ subfolder"; File = "src\sub\other.c";                Moves = $false },
-        @{ Why = "another script";                File = "scripts\other.ps1";              Moves = $false },
-        @{ Why = "a file elsewhere";              File = "elsewhere\x.txt";                Moves = $false }
+        @{ Why = "an INF changed";                    File = "src\xhci98.inf";                 Moves = $true },
+        @{ Why = "an INF added";                      File = "src\xhci98-amd64.inf";           Moves = $true },
+        @{ Why = "the version header changed";        File = "src\xhci_version.h";             Moves = $true },
+        @{ Why = "the version resource changed";      File = "src\xhci98.rc";                  Moves = $true },
+        @{ Why = "the id header changed";             File = "src\xhci_hub.h";                 Moves = $true },
+        @{ Why = "a gate file in a subfolder";        File = "scripts\inf-gate\sub\list.txt";  Moves = $true },
+        @{ Why = "the manifest changed";              File = "xhcitr\xhcitr.manifest";         Moves = $true },
+        @{ Why = "common.ps1 changed";                File = "scripts\common.ps1";             Moves = $true },
+        @{ Why = "the harness changed";               File = "scripts\test-harness.ps1";       Moves = $true },
+        @{ Why = "a C source beside the INFs";        File = "src\xhci_hcd.c";                 Moves = $false },
+        @{ Why = "a header the table does not name";  File = "src\xhci_new.h";                 Moves = $false },
+        @{ Why = "a build log";                       File = "src\build.log";                  Moves = $false },
+        @{ Why = "an ignored INF";                    File = "src\ignored.inf";                Moves = $false },
+        @{ Why = "an INF under a src\ subfolder";     File = "src\sub\other.inf";              Moves = $false },
+        @{ Why = "another script";                    File = "scripts\other.ps1";              Moves = $false },
+        @{ Why = "a file elsewhere";                  File = "elsewhere\x.txt";                Moves = $false }
     )
     foreach ($c in $dgCases) {
         $f = Join-Path $dg $c.File
@@ -341,6 +407,23 @@ try {
         $dg0 = $dg1
     }
     Assert-True ((Get-InfSelfTestDigest -Root $dg) -eq $dg0) "digest : the digest of one tree is not the same twice."
+    # The table names a new file beside the INFs: it joins the set.
+    [System.IO.File]::WriteAllText((Join-Path $dg "src\xhci_ids.h"), "a")
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\inf-gate\check-inf.ps1"), $dgTable.Replace("xhci_hub.h", "xhci_ids.h"))
+    $dg0 = Get-InfSelfTestDigest -Root $dg
+    [System.IO.File]::WriteAllText((Join-Path $dg "src\xhci_ids.h"), "b")
+    Assert-True ((Get-InfSelfTestDigest -Root $dg) -ne $dg0) "digest : a file the gate's table newly names did not join the set."
+    $dg0 = Get-InfSelfTestDigest -Root $dg
+    [System.IO.File]::WriteAllText((Join-Path $dg "src\xhci_hub.h"), "d")
+    Assert-True ((Get-InfSelfTestDigest -Root $dg) -eq $dg0) "digest : a file the gate's table no longer names stayed in the set."
+    # A second tree of the same content, at another path, gives the same
+    # digest: every row is relative to its root.
+    $dgTwo = Join-Path $script:work "digest-tree-two"
+    Copy-Item -LiteralPath $dg -Destination $dgTwo -Recurse -Force
+    Assert-True ((Get-InfSelfTestDigest -Root $dgTwo) -eq $dg0) "digest : two trees of one content gave two digests."
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\inf-gate\check-inf.ps1"), "no table here")
+    Assert-True ($null -eq (Get-InfSelfTestDigest -Root $dg)) "digest : a gate whose product table cannot be read gave a digest."
+    Assert-True ($null -eq (Get-InfSelfTestDigest -Root (Join-Path $script:work "no-such-tree"))) "digest : a tree that is not there gave a digest."
 
     # The shared store both suites record their passes in (task 45.51): a
     # record one tree wrote is found by another; a torn record, or one that
@@ -2860,7 +2943,7 @@ if ($script:failures.Count -gt 0) {
 # The record of this pass, for the next run's skip in any tree: written
 # only if what was read is still what the run began with (a file changed
 # during the run runs it again).
-if ((Get-InfSelfTestDigest -Root $repo) -eq $digest) {
+if ($null -ne $digest -and (Get-InfSelfTestDigest -Root $repo) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "inf" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
 Write-Ok ("INF gate self-tests passed ({0} checks)" -f $script:checks)
