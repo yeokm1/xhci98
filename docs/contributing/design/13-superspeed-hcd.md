@@ -6854,8 +6854,10 @@ device keeps the location form and `UniqueID` FALSE.
   newcomer on the location form (`serial.duplicate`); an instance id with
   `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
   only its own hub's ports. A PDO already unlisted (gone, its missing
-  report pending) on the same controller does not count - one relations
-  answer omits it and brings the newcomer - so a device moved quickly from
+  report pending) on the same controller and under the same parent does
+  not count - one relations answer omits it and brings the newcomer; under
+  another parent it does until its missing report (task 33.4) - so a
+  device moved quickly from
   one port to another keeps its id, as under `usbhub`; moved between
   controllers faster than the old root hub's next answer, it takes the
   location form for that plug. This is the other way a
@@ -6896,6 +6898,106 @@ device keeps the location form and `UniqueID` FALSE.
   before.
 - **Upgrading** from `2.0.0.0` gives every device with a usable serial one
   new devnode, at its first plug, because its instance id changed once.
+
+**Identity across a re-enumeration** (roadmap-usb4 task 45.40, `3.4.0.0`).
+A user's RTL8157 on 32-bit XP, set to a static address with no gateway,
+later took the default route. XP keeps a network adapter's TCP/IP settings
+under its devnode's `NetCfgInstanceId`, so an instance id that changes
+makes a new adapter with DHCP and leaves the old one's settings on a
+phantom. On a q35 XP guest with `3.3.0.0` and a simulated RTL8157 with a
+serial, set static: a replug whose first three serial reads STALL was
+published on the location form (`USB\VID_0BDA&PID_8157\6&58728d&0&1`),
+Windows installed a second adapter with DHCP, and its default route, metric
+10, outranked the other adapter's, metric 20 (`runs/run-45.md`, "45.40");
+the next replug, read cleanly, went back to the first devnode and its
+static address. The user's own cause is not read. The rule below keeps a
+device that was serial-named at a root port from being renamed there by a
+read that fails.
+
+- **Spaced tries.** The reader's three tries (`HCD_SERIAL_READ_TRIES`) are
+  no longer back to back: a try that does not bring the string waits 100 ms
+  before the second and 400 ms before the third, on the controller thread,
+  as `hcdAddress` waits its recovery. Only a failed try pays it; a STALL of
+  string descriptor 0 is not a failure (0409h), as before. A timeout
+  (`Ep0Stuck`) still returns at once. A string that arrives but is no
+  instance id (`HCD_SERIAL_REFUSED`) ends the reader at once, as before.
+- **The port's memory.** Each root port (`HCD_PORT`'s `IdMemVidPid` and
+  `IdMemSerial`) remembers the vendor and product id of the last non-hub
+  device group listed for a device attached to it directly, and whether
+  that group's first PDO answers the serial form - its effective identity,
+  after the duplicate rule, or the revived group's (Windows 98 SE and ME).
+  It is written by the controller thread once the group is listed or
+  revived (`hcdIdRemember`, which also clears the latch), and lasts as long as the controller's storage: a recovery, a
+  cycle, a link recovery, a controller stop and start, or a resume that
+  re-initialized the controller keeps it; a controller removal (XP's
+  disable) forgets it. An unplug does not clear it: a link that drops reads
+  as one, and that is the case this rule is for. Hub ports are not covered
+  (a device behind a hub is a follow-up).
+- **The decision**, `XhciFuncSerialDefer` (`xhci_func.c`, host vectors in
+  `test_func`), taken in `HcdDevicePdoCreate` right after the read and
+  before anything is configured, so a composite device's whole group is
+  covered: a non-hub device attached directly to a root port, with an
+  `iSerialNumber`, whose read is `HCD_SERIAL_FAILED` or
+  `HCD_SERIAL_REFUSED`, where the port remembers the same vendor and
+  product id answering the serial form, is **deferred** - unless the
+  port's latch (below) is a bypass, when it is published, or a failure,
+  when the creation fails at once. A read that brings a usable serial is
+  never deferred, latch or not. Any other device goes on as before. A
+  device without `iSerialNumber` is never deferred:
+  that is its own answer at every plug. The dormant groups of Windows 98 SE
+  and ME need no exception: a group revived by place has no serial id
+  (`XhciFuncReviveByPlace`), so its port never remembers the serial form
+  for it, and a serial-named group is revived only by a serial read again.
+- **Deferral is in place.** The deferred device is read again where it is,
+  in the same `HcdDevicePdoCreate` (`HcdDeviceSerialDefer`): up to
+  `HCD_SERIAL_DEFER_TRIES` (3) more reader runs, each after a 1 s wait,
+  each a fresh read (the serial state reset to unread), never a remembered
+  serial, and none started more than 6 s after the first wait began. After
+  every wait, after every run (before its success is taken) and before a
+  failure is recorded, the deferral is cancelled - the creation fails with no latch
+  and nothing counted as spent - when the controller has failed
+  (`hcdHalted`), its thread is stopping or its root hub is no longer
+  started, or the root port reads disconnected, unreadable or with a
+  connection change (CSC, left set for the port's inspection: a departure
+  and a new arrival). A reader that times out (`Ep0Stuck`) returns as it
+  does now, with no PDO. A run that brings the serial goes on to the
+  ordinary creation, the duplicate rule included (`serial.defer.ok`). The
+  cost is up to 3 s of waits, plus the reads' own time (a control transfer
+  may take up to its 5 s deadline before it fails), on the controller
+  thread under its power gate; the creation action is outside the per-port
+  enumeration budget already, and a first relations answer still stops at
+  its own deadline.
+- **The failure.** When the runs are spent the creation fails
+  (`STATUS_DEVICE_NOT_READY`): the port's machine takes it as any failed
+  creation does (`XHCI_ENUM_FAIL_PDO`, the slot disabled), nothing is
+  published, `serial.defer.fail` is counted and logged with the port, and
+  the port is latched (`IdDeferFailed` = failed). The run's failure handler
+  (`hcdRun`) does not take the machine's own retry for a latched
+  `XHCI_ENUM_FAIL_PDO`: the port stays Failed, which waits for a new
+  connection. The next connection fed to that port (`hcdFeed`, a CONNECT
+  that starts an enumeration from Empty or Failed - a replug, or the
+  re-enumeration after a recovery) turns the latch into a bypass for that
+  connection, kept across its own retries and device records: a bypassed
+  arrival is never deferred, and is published whatever its read gives - on
+  the location form if it still fails, a new devnode, which Windows shows.
+  Any listing at the port clears the latch and writes the memory afresh.
+  That is the way out for a device of the same model whose serial cannot be
+  read.
+- **What it shows.** Every listing writes `id.form` to the log - the
+  location, the read's outcome, whether a duplicate cleared the serial id,
+  and the form answered - and every deferral `serial.defer` with its run.
+  The counters are `serial.deferred`, `serial.defer.ok` and
+  `serial.defer.fail`. Because the log ring can overwrite a note, the
+  counter block also lists, from the ports' own state, each root port with
+  a memory (`id.port`, `id.mem.vidpid`, `id.mem.serial`, `id.defer.latch`),
+  so a snapshot says which port holds a failed arrival. It is a diagnostic,
+  not a Device Manager entry.
+- **Not changed.** The resume keep (`hcdRkeepRestore`) and the link keep
+  (`HcdThreadSameIdentity`, task 45.41) still read the serial afresh and
+  compare it, and never take the port's memory; the spaced tries only make
+  their reads slower when they fail. The duplicate rules stand. A
+  serial-less device keeps the location form, so one that comes back on
+  another port or on its USB 2.0 companion is still a new devnode.
 
 **A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
 a device PDO's one interface, or a function's when no IAD groups it) gets
