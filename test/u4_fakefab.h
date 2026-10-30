@@ -156,7 +156,8 @@ typedef struct FAB_ROUTER {
      * Gen4HostW at the parent and Gen4DevW here (0: symmetric x2) on both
      * lanes of each end. Gen4Up: the link up at Gen 4 now. SetCapsIgnore:
      * Set Capabilities answers success and enables nothing; CapsFailAfterSet:
-     * Get Capabilities fails once a Set has been made. */
+     * that many Get Capabilities fail once a Set has been made (-1: every
+     * one). */
     int Gen4;
     unsigned long Gen4HostW;
     unsigned long Gen4DevW;

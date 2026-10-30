@@ -218,6 +218,12 @@ typedef struct _TBT_U4_ROUTER {
                                by TbtU4Poll once no budget runs (section 8) */
     ULONG Cmuv;             /* ROUTER_CS_4 CMUV as written here or found (section
                                6.2.1), 0 on a Thunderbolt 3 router */
+    BOOLEAN SeqSet;         /* a Set Capabilities for the Sequence bit was sent
+                               to this router (section 6.2.2 item 3): its
+                               state may differ from the default, whatever a
+                               failed read-back left recorded */
+    BOOLEAN SeqOwed;        /* a recovery found the capability supported and
+                               disabled and sent no Set: owed to the next tick */
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 

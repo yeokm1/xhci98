@@ -338,7 +338,7 @@ static void test_set_capabilities(void)
     CHECK(p->Dev.OpBlocked, "the router operation-blocked");
     CHECK_EQ(g_fab.AcksPlain + g_fab.AcksEnh, 0, "no acknowledgement");
     CHECK(!p->Dev.BaValid, "no Buffer Allocation Request");
-    setWith(FAB_DEV_USB4V2, FAB_ROP_OK, 0, 1);
+    setWith(FAB_DEV_USB4V2, FAB_ROP_OK, 0, -1);
     p = port(1);
     CHECK_EQ(p->Dev.CapsState, TBT_U4_CAPS_UNKNOWN, "read-back failing: unknown");
     CHECK_EQ(g_fab.AcksPlain + g_fab.AcksEnh, 0, "no acknowledgement");
@@ -390,6 +390,63 @@ static void test_set_capabilities(void)
     (void)start(&c);
     CHECK_EQ(g_fab.R[d].SetCapsOps, 0, "preserved, enabled: adopted, no Set");
     CHECK_EQ(port(1)->Dev.CapsState, TBT_U4_CAPS_KNOWN, "adopted");
+}
+
+/* Section 7.7 and 6.2.2 item 3: a recovery reads alone. A router this
+ * driver sent the Set has its answer adopted even after a read-back that
+ * failed; one found with the capability disabled again gets its Set at the
+ * first tick after the commit. */
+static void recoverWith(void)
+{
+    BOOLEAN final;
+
+    g_fab.Gone = 1;
+    TbtU4Contain(&g_cm);
+    g_fab.Gone = 0;
+    g_fab.Cancel = 0;
+    CHECK_EQ(TbtU4Recover(&g_cm, &final), TBT_OK, "recovered");
+}
+
+static void test_set_and_recovery(void)
+{
+    TBT_U4_CONFIG c;
+    int d;
+
+    d = domain(1, FAB_DEV_USB4V2);
+    g_fab.R[d].CapsFailAfterSet = 1;
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK_EQ(port(1)->Dev.CapsState, TBT_U4_CAPS_UNKNOWN, "the read-back failed: unknown");
+    recoverWith();
+    CHECK_EQ(g_fab.R[d].SetCapsOps, 1, "no Set in the recovery");
+    CHECK_EQ(port(1)->Dev.CapsState, TBT_U4_CAPS_KNOWN, "the recovery's answer adopted");
+    CHECK(port(1)->Dev.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE),
+          "the Sequence bit the Set enabled");
+    TbtU4RecoverCommit(&g_cm);
+    g_fab.AcksPlain = 0;
+    g_fab.AcksEnh = 0;
+    notifyFromDevice();
+    poll(2);
+    CHECK_EQ(g_fab.AcksEnh, 1, "enhanced after the recovery");
+    CHECK_EQ(g_fab.AcksPlain, 0, "never plain");
+
+    /* The capability found disabled again: no Set before the commit, one
+     * at the first tick after it. */
+    d = domain(1, FAB_DEV_USB4V2);
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK_EQ(g_fab.R[d].SetCapsOps, 1, "the Set at the connection");
+    g_fab.R[d].CapsData &= ~(1UL << 5);
+    recoverWith();
+    CHECK_EQ(g_fab.R[d].SetCapsOps, 1, "none in the recovery");
+    CHECK(port(1)->Dev.SeqOwed, "owed");
+    CHECK_EQ(port(1)->Dev.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE), 0,
+             "the state as read: disabled, plain");
+    TbtU4RecoverCommit(&g_cm);
+    poll(2);
+    CHECK_EQ(g_fab.R[d].SetCapsOps, 2, "the owed Set after the commit");
+    CHECK(!port(1)->Dev.SeqOwed, "no longer owed");
+    CHECK(port(1)->Dev.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE), "enabled again");
 }
 
 /* ------------------------------------------------------------------ */
@@ -573,8 +630,27 @@ static void test_tmu_enhanced(void)
 /* CV found (section 6.2.2 item 5)                                     */
 /* ------------------------------------------------------------------ */
 
+static int g_cvSwallow;
+
+/* The connection's own read of a preserved router's ROUTER_CS_5 never
+ * answered. */
+static int cvHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                  unsigned long adp, unsigned long addr, unsigned long n,
+                  const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)data;
+    if (g_cvSwallow && pdf == TBT_PDF_READ && router > 0 && cs == TBT_CS_ROUTER &&
+        addr == 5 && n == 1) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
 /* A router a predecessor enumerated with CV set and the given PTO and UTO,
- * no tunnel. */
+ * no tunnel; with g_cvSwallow the connection's read of ROUTER_CS_5 is
+ * never answered. */
 static int cvFound(int kind, int pto, int uto, int v2)
 {
     TBT_U4_CONFIG c;
@@ -583,6 +659,9 @@ static int cvFound(int kind, int pto, int uto, int v2)
     unsigned long lo;
 
     d = domain(1, kind);
+    if (g_cvSwallow) {
+        g_fab.Hook = cvHook;
+    }
     g_fab.R[0].Adp[1].Cs[4] &= ~0x80000000UL;
     hi = 0;
     lo = 1;
@@ -621,6 +700,16 @@ static void test_cv_found(void)
     CHECK(!port(1)->Usb3.Up, "no USB3 tunnel");
     CHECK(port(1)->UtoOff, "UTO found clear");
     CHECK_EQ(writesTo(d, TBT_CS_ROUTER, 0, 5), 0, "ROUTER_CS_5 never written");
+
+    /* The connection's read of ROUTER_CS_5 failing: HELD, never
+     * configured. */
+    g_cvSwallow = 1;
+    d = cvFound(FAB_DEV_USB4V2, 1, 1, 1);
+    g_fab.Hook = NULL;
+    g_cvSwallow = 0;
+    CHECK_EQ(port(1)->State, TBT_U4_HELD, "CS_5 unread: HELD");
+    CHECK_EQ(writesTo(d, TBT_CS_ROUTER, 0, 5), 0, "CS_5 unread: never written");
+    CHECK(!fabPcieUp(&g_fab, 1), "CS_5 unread: no tunnel");
 
     /* XhciCmUsb4V2 0: today's path, the handshake rerun. */
     d = cvFound(FAB_DEV_USB4V2, 0, 1, 0);
@@ -792,6 +881,23 @@ static void test_ee(void)
     CHECK_EQ(fabPath0(&g_fab, 0, HOST_PCIE, 8) & 0x80000000UL, 0, "its entries invalidated");
     CHECK_EQ(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, 0, "the host's EE cleared again");
 
+    /* A device Path Enable that will not clear: its EE left until the
+     * quarantine's lift proves it clear; the host's cleared at once. */
+    d = domain(1, FAB_DEV_USB4V2);
+    cfgDefault(&c);
+    (void)start(&c);
+    g_fab.R[d].Adp[DEV_PCIE].PeStuck = 1;
+    g_fab.WrCount = 0;
+    (void)TbtU4Eject(&g_cm, 1);
+    CHECK(fabAdp(&g_fab, d, DEV_PCIE, PCIE0) & 0x80000000UL, "PE stuck");
+    CHECK(fabAdp(&g_fab, d, DEV_PCIE, PCIE1) & 1UL, "its EE untouched while PE stands");
+    CHECK_EQ(writesTo(d, TBT_CS_ADAPTER, DEV_PCIE, PCIE1), 0, "not written");
+    CHECK_EQ(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, 0, "the host's EE cleared");
+    g_fab.R[d].Adp[DEV_PCIE].PeStuck = 0;
+    poll(2);
+    CHECK_EQ(fabAdp(&g_fab, d, DEV_PCIE, PCIE0) & 0x80000000UL, 0, "PE cleared by the retry");
+    CHECK_EQ(fabAdp(&g_fab, d, DEV_PCIE, PCIE1) & 1UL, 0, "then its EE");
+
     /* A predecessor's EE on a preserved tunnel: kept while it stands,
      * cleared at its teardown. */
     d = domain(1, FAB_DEV_USB4V2);
@@ -961,6 +1067,7 @@ int main(void)
     RUN_VEC(test_cmuv);
     RUN_VEC(test_cmuv_preserved);
     RUN_VEC(test_set_capabilities);
+    RUN_VEC(test_set_and_recovery);
     RUN_VEC(test_two_dwords);
     RUN_VEC(test_tmu_enhanced);
     RUN_VEC(test_cv_found);

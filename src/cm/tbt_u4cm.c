@@ -327,6 +327,7 @@ static VOID tbtU4CmuvFound(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG cs4)
 }
 
 static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
+static BOOLEAN tbtU4EeClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp);
 
 /*
  * Whether a port's sequence may go on (record 22 sections 7.2, 7.4): its
@@ -1200,8 +1201,10 @@ static ULONG tbtU4FirstOf(const TBT_U4_ROUTER *rt, ULONG type)
  * or Not Supported is judged by the read-back; a Set or read-back that
  * fails otherwise, times out or finds the router operation-blocked leaves
  * the state unknown. A recovery (section 7.7) classifies by reading alone:
- * it sends no Set, and adopts the answer of a router whose record shows
- * the Sequence bit this driver enabled.
+ * it sends no Set (one it finds owed, SeqOwed, is made at the next tick),
+ * and for a router this driver ever sent the Set (SeqSet, whatever its
+ * read-back recorded) it adopts a successful answer and leaves a failed
+ * one unknown.
  */
 static ULONG tbtU4CapsParse(PTBT_U4_ROUTER rt, ULONG dw0)
 {
@@ -1227,6 +1230,9 @@ static ULONG tbtU4SetSequenceBit(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     LONG rc;
 
     meta = TBT_CAP_NOTIFY_SEQUENCE | TBT_ROP_SETCAP_ENABLE;
+    /* Owned before the request: a Set whose answer is lost may still have
+     * applied. */
+    rt->SeqSet = TRUE;
     rc = tbtU4RouterOp(cm, rt, TBT_ROP_SET_CAPABILITIES, &meta, NULL, 0, NULL, 0);
     if (rc != TBT_OK && rc != TBT_E_FAILED && rc != TBT_E_UNSUPPORTED) {
         cm->Counters.SeqUnknown++;
@@ -1260,8 +1266,10 @@ static VOID tbtU4GetCapabilities(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     BOOLEAN v2;
     LONG rc;
 
-    hadSeq = (BOOLEAN)(rt->CapsState == TBT_U4_CAPS_KNOWN &&
-                       (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0);
+    hadSeq = (BOOLEAN)(rt->SeqSet ||
+                       (rt->CapsState == TBT_U4_CAPS_KNOWN &&
+                        (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0));
+    rt->SeqOwed = FALSE;
     v2 = (BOOLEAN)(cm->Config.Usb4V2 && !rt->Tbt3);
     /* Held until this settles the form (section 6.4). */
     rt->CapsState = TBT_U4_CAPS_PENDING;
@@ -1279,10 +1287,13 @@ static VOID tbtU4GetCapabilities(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
             state = TBT_U4_CAPS_DEFAULT;
             rt->CapsEnabled = 0;
         }
-        if (v2 && !cm->Recovering &&
-            (rt->CapsSupported & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0 &&
+        if (v2 && (rt->CapsSupported & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0 &&
             (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) == 0) {
-            state = tbtU4SetSequenceBit(cm, rt);
+            if (cm->Recovering) {
+                rt->SeqOwed = TRUE;
+            } else {
+                state = tbtU4SetSequenceBit(cm, rt);
+            }
         }
         if (state == TBT_U4_CAPS_KNOWN &&
             (rt->CapsEnabled & ~((1UL << TBT_CAP_NOTIFY_SEQUENCE) |
@@ -1921,6 +1932,7 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
     ULONG e[2];
     ULONG v;
     PTBT_U4_QENTRY q;
+    PTBT_U4_ROUTER rt;
     LONG rc;
 
     for (i = 0; i < TBT_U4_QUARANTINE; i++) {
@@ -1979,6 +1991,14 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
                 q->Used = FALSE;
                 cm->Counters.QuarantineLifted++;
                 tbtU4QLifted(cm, q);
+                if (q->EnableBit == TBT_PCIE0_PE) {
+                    /* Its teardown's Extended Encapsulation clear, owed
+                     * while the enable stood (section 6.2.2 item 7). */
+                    rt = tbtU4RouterOf(cm, &q->Route);
+                    if (rt != NULL && rt->Adp[q->Adapter].CapAdp == q->EnableCap) {
+                        (void)tbtU4EeClear(cm, rt, q->Adapter);
+                    }
+                }
             }
             continue;
         }
@@ -3717,8 +3737,9 @@ static BOOLEAN tbtU4TunnelDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_TUNNEL t,
  * on a tunnel between two version 2 routers. tbtU4EeClear: at a PCIe
  * teardown, after the Path Enables and before the paths are invalidated,
  * read on an adapter of a version 2 router and written 0 if it reads 1 - a
- * predecessor's tunnel included; an adapter whose ownership is not
- * established (section 7.7) is never written. Neither while XhciCmUsb4V2
+ * predecessor's tunnel included - only once that adapter's Path Enable
+ * reads 0; an adapter whose ownership is not established (section 7.7) is
+ * never written. Neither while XhciCmUsb4V2
  * is 0. TRUE when EE reads as wanted.
  */
 static BOOLEAN tbtU4EeSet(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
@@ -3747,6 +3768,14 @@ static BOOLEAN tbtU4EeClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
     }
     if (tbtU4Reserved(cm, &rt->Route, adp, 0, TRUE) ||
         tbtU4Reserved(cm, &rt->Route, adp, TBT_HOP_PROTOCOL, FALSE)) {
+        return FALSE;
+    }
+    /* Never with the adapter's Path Enable set (Spec 8.2.2.7): a disable
+     * that failed is the adapter's quarantine, whose lift clears EE then
+     * (tbtU4RetryQuarantine). */
+    if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                rt->Adp[adp].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK ||
+        (v & TBT_PCIE0_PE) != 0) {
         return FALSE;
     }
     at = rt->Adp[adp].CapAdp + TBT_PCIE_CS_1;
@@ -5007,22 +5036,41 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
         }
     }
 
-    if (!p->Dev.Tbt3 && !asFound && cm->Config.Usb4V2 && p->Dev.Preserved &&
-        tbtU4Rd(cm, &p->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &lane) == TBT_OK &&
-        (lane & TBT_RTR5_CV) != 0) {
+    if (!p->Dev.Tbt3 && !asFound && cm->Config.Usb4V2 && p->Dev.Preserved) {
         /* Record 22 section 6.2.2 item 5: CV found set is never
          * configured again (CNS, PTO, UTO, HCO unchanged under it, Spec
          * 8.2.1.1). Without PTO no PCIe tunnel can be built: HELD;
-         * without UTO no USB3 tunnel. */
-        cm->Counters.CvFound++;
-        if ((lane & TBT_RTR5_UTO) == 0) {
-            p->UtoOff = TRUE;
-        }
-        if ((lane & TBT_RTR5_PTO) == 0) {
-            tbtU4Log(cm, "u4.cv.found", (p->Index << 24) | (lane >> 8));
+         * without UTO no USB3 tunnel. Section 6.6 runs only once CV is
+         * read clear; a read that fails holds the port. */
+        rc = tbtU4Rd(cm, &p->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &lane);
+        if (rc != TBT_OK) {
+            if (tbtU4Gone(cm, rc)) {
+                rc = TBT_E_GONE;
+                goto out;
+            }
+            tbtU4Log(cm, "u4.cv.unread", (ULONG)rc);
             next = TBT_U4_HELD;
             p->Why = TBT_U4_WHY_CV_FOUND;
             goto out;
+        }
+        if ((lane & TBT_RTR5_CV) != 0) {
+            cm->Counters.CvFound++;
+            if ((lane & TBT_RTR5_UTO) == 0) {
+                p->UtoOff = TRUE;
+            }
+            if ((lane & TBT_RTR5_PTO) == 0) {
+                tbtU4Log(cm, "u4.cv.found", (p->Index << 24) | (lane >> 8));
+                next = TBT_U4_HELD;
+                p->Why = TBT_U4_WHY_CV_FOUND;
+                goto out;
+            }
+        } else {
+            p->State = TBT_U4_CONFIGURING;
+            rc = tbtU4ConfigValid(cm, p, gen);
+            if (rc != TBT_OK) {
+                next = TBT_U4_FAILED;
+                goto out;
+            }
         }
     } else if (!p->Dev.Tbt3 && !asFound) {
         /* A router a predecessor enumerated may already hold CV with PTO;
@@ -7055,6 +7103,19 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4TakeQueues(cm);
     if (cm->HostTmuTdOwed || !cm->HostTmuOk) {
         tbtU4HostTmu(cm);
+    }
+    /* Record 22 section 6.2.2 item 3: a Set a recovery found owed and,
+     * reading only, did not send. */
+    if (cm->HostRouter.SeqOwed) {
+        tbtU4GetCapabilities(cm, &cm->HostRouter);
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        p = &cm->Ports[i];
+        if (p->Dev.Present && p->Dev.SeqOwed && !p->Dev.Tbt3 &&
+            (p->State == TBT_U4_UP || p->State == TBT_U4_HELD ||
+             p->State == TBT_U4_FAILED)) {
+            tbtU4GetCapabilities(cm, &p->Dev);
+        }
     }
     /* Steps 4 to 6 owed by teardowns nested at a safe point. */
     for (i = 0; i < cm->PortCount; i++) {

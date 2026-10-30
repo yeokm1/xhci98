@@ -542,7 +542,10 @@ static void fabRouterOp(FAB *f, int ri)
         r->MapNext = (r->MapNext + 1) % r->MapEntries;
         break;
     case FAB_OP_CAPS:
-        if (r->CapsFailAfterSet && r->SetCapsOps != 0) {
+        if (r->CapsFailAfterSet != 0 && r->SetCapsOps != 0) {
+            if (r->CapsFailAfterSet > 0) {
+                r->CapsFailAfterSet--;
+            }
             r->Rcs[26] = (r->Rcs[26] & 0xFFFFUL) | (1UL << 24);
             return;
         }

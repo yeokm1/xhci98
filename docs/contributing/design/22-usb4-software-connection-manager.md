@@ -1263,9 +1263,12 @@ What the code settled that this section left open (task 45.20's code,
   (plain acknowledgements) unless the answer reports the Sequence bit
   capability supported, when the Set and its read-back decide the state.
   A recovery (section 7.7) classifies by reading alone, so it sends no
-  Set; a router whose record shows the capability this driver enabled has
-  the recovery's answer adopted, and a failing answer leaves it unknown
-  rather than at its default.
+  Set: a router this driver ever sent the Set (recorded apart from the
+  capability state, since a Set may have applied though its read-back
+  failed) has the recovery's answer adopted, and a failing answer leaves
+  it unknown rather than at its default; one found with the capability
+  supported and disabled is owed the Set, made at the first tick after
+  the commit.
 - **A Gen 4 link is recognised** from the host's lane 0 Current Link
   Speed (`2h`); the far end's lane 0 is read only for an asymmetric
   width. On a link of two version 2 routers a lane 0 still in Training or
@@ -1280,9 +1283,10 @@ What the code settled that this section left open (task 45.20's code,
   9.2's discovery, where a router with no tunnel state found with CV set
   and PTO clear is HELD at once (`Why` 22, so `XhciCmPreOsCleanup` 1
   cleans it at start), and the connection of an adopted router, where CV
-  set skips section 6.6 (PTO clear: HELD; UTO clear: no USB3 tunnel). A
-  discovery whose Enable Gen 4 Link Recovery clear fails holds the port
-  too, even with no tunnel state.
+  set skips section 6.6 (PTO clear: HELD; UTO clear: no USB3 tunnel) and
+  section 6.6 runs only once CV is read clear - a read that fails holds
+  the port. A discovery whose Enable Gen 4 Link Recovery clear fails
+  holds the port too, even with no tunnel state.
 - **Enable Gen 4 Link Recovery** is cleared by a write of PORT_CS_19 as
   read with bits 31 and 30 written 0; the discovered links below depth 1
   are cleared on both ends as the walk finds them (the child's USB4 Port
@@ -1292,10 +1296,12 @@ What the code settled that this section left open (task 45.20's code,
   acknowledged); the connection manager takes the port from the host's
   Event Info when the host router sent it, else from the route's first
   level.
-- **Extended Encapsulation** is not touched by section 7.7's recovery
-  drains, which section 6.2.2 item 7 does not list; a rebuilt tunnel sets
-  it again before its Path Enable. A clear that fails is logged and the
-  teardown goes on.
+- **Extended Encapsulation** is cleared on an adapter only once its own
+  Path Enable reads 0: where the disable failed, the adapter's enable
+  quarantine (section 7.3) clears EE when its retry lifts it. It is not
+  touched by section 7.7's recovery drains, which section 6.2.2 item 7
+  does not list; a rebuilt tunnel sets it again before its Path Enable. A
+  clear that fails is logged and the teardown goes on.
 - **The USB3 link bound** is one function (`tbtU4LinkBound`), exposed to
   the host suite, since no fabric router reports a USB3 rate the Gen 4
   bound would limit.
