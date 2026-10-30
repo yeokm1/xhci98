@@ -25,6 +25,11 @@ Section 13 is a later addendum (task 13-L.2): the log channel that ships in
 every flavour, and the registry values that switch it. Sections 1-12 were
 written before it; read the two together.
 
+Section 14 is another (roadmap-usb4 task 45.45, 2026-10-30): the `debug`
+flavour retired, its frame pointers and its command-state checker kept in
+`release`. From `3.4.0.0` there are two flavours, and section 14 says how
+to read the three the earlier sections describe.
+
 ## 1. The question, and why it is not task 12.2 again
 
 Task 12.2 asked whether this project could read counters off a Windows 98
@@ -1032,3 +1037,165 @@ the debug build, install it, reproduce, send the capture", and this is the task
 that makes the last word of it true on Windows 98, which task 13-L.0 had no
 route to. That is the one sentence in this record that section 13 changes
 rather than extends.
+
+## 14. Addendum: one build for everyone (roadmap-usb4 task 45.45)
+
+The owner, 2026-10-30: the `debug` flavour is retired, for the builds'
+time. This section is the task's design, settled before its code
+(2026-10-30; reviewed and revised). Sections 1 to 13 describe three
+flavours; from `3.4.0.0` there are two, `release`, which ships, and
+`qemu`, which never does. Where an earlier section says "both shipping
+flavours" or "the diagnostic download", read this section.
+
+### 14.1 What `debug` was, read from the build files
+
+| Build | `release` | `debug` |
+|---|---|---|
+| MSVC 6.0 (`xhci98.sys`, `xhciuas.sys`, `xhcicm.sys`, x86) | `/Oxs /Oy` | `/Oxs /Oy-` (the Windows 2000 DDK's `i386mk.inc`, checked branch) |
+| WDK 7.1 (the three drivers on amd64; `xhcihlpr.sys` x86) | `/Oxs` | `/Od /Oi`, unoptimised (WDK 7.1's `setenv.bat` sets it for the checked environment; `i386mk.inc` and `amd64mk.inc` take it as `MSC_OPTIMIZATION`) |
+| Both | - | `DBG=1`: the command-state checker (`hcd_strict.c`, `xhci_strict.c`), `VS_FF_DEBUG`, the snapshot's `XHCI_SNAPSHOT_B_DEBUG`, and `xhcicm.sys`'s DebugView sink forced on (`cm_log.c`) |
+
+The producer set, the log ring and the snapshot door are the same in
+every flavour (section 5), so what a user gave up by installing `release`
+was the frame pointers on x86 and the checker. The one build keeps both.
+
+### 14.2 The decisions (owner, 2026-10-30)
+
+1. **The MSVC 6.0 release builds compile `/Oy-`.** `src\sources`,
+   `src\uas\sources` and `src\cm\sources` set `NTNOFPO=1` in their `fre`
+   branch. The Windows 2000 DDK's `i386mk.inc` reads it in a free build
+   to compile `/Oy-` and define `FPO=0` (printing its own "Overriding FPO
+   default with NTNOFPO"), and `makefile.def` includes `sources` before
+   `i386mk.inc`, so the setting reaches it. WDK 7.1's `amd64mk.inc` does
+   not read it, and its `i386mk.inc` compiles `/Oy-` in every flavour
+   already, so the amd64 drivers and the helper stay at `/Oxs`.
+   `XHCIPFW.SYS` and Stor98 never had a `debug` flavour and are not
+   changed. A new check, `scripts\check-frame-pointers.ps1` (with a
+   `-SelfTest` run among the others), reads the x86 `release` build log
+   of each of the three drivers and requires every `cl` line to carry
+   `/Oy-` and none `/Oy` alone, so a `sources` edit that loses it fails
+   the build.
+2. **The checker is compiled into `release` and on by default.** Its
+   `#if DBG` guards go (`hcd.h`'s fields and types, `xhci_strict.c`,
+   `hcd_strict.c`, the before, after and reset hooks in `hcd_enum.c`);
+   `DBG` stays 0 in `release`. It still only observes: before the
+   doorbell it reads the Output Device Context and, for a Configure
+   Endpoint, the Input Control Context, counts and notes; the command
+   goes out unchanged, and nothing it finds changes what the driver
+   does. It reports through `XhciLogNote` alone; its `XHCI_DBG_VALUE`
+   lines stay the `qemu` flavour's (`XHCI_DBG_TRACE`). No import is
+   added, and the import gate holds the release images to the rows they
+   have today.
+3. **`XhciCommandCheck`, a REG_DWORD, turns it off.** `0` is off;
+   absent, `1`, any other number, another type or a failed read is on.
+   It is read at every controller start in `hcdReadValues`, through
+   `hcdReadDword`, so a value in the machine-wide key
+   (`HKLM\System\CurrentControlSet\Services\USB`) wins over the
+   controller's driver key, as for every other value (task 42-A.17), and
+   it is latched for the start's lifetime: the controller thread is the
+   checker's only caller and does not exist while the value is read. The
+   start notes `strict.value` (the DWORD read, or `0xFFFFFFFF` for none
+   taken) and `strict.on`. Both controller INFs write it at `1` with
+   `FLG_ADDREG_NOCLOBBER` (`0x00010003`) in every `AddReg` section that
+   writes the other switches, so an update keeps a user's `0`;
+   `check-inf.ps1`'s value table and both footprint files carry the row.
+4. **Its counters reach the snapshot.** The counter block
+   (`xhci_counters.h`) gains six words appended at 252: `StrictSwitchRead`
+   (0 absent, 1 a DWORD taken, 2 another type), `StrictOn`, and
+   `StrictChecked`, `StrictViolations`, `StrictUndefined` and
+   `StrictRefusals`, which move there from `HCD_CONTROLLER` and are now
+   zeroed at every start with the block. `XHCITR` names them in its
+   counter list (`tr_snap.c`, `tr_hcctr.h`), and
+   `check-counter-names.ps1` holds the names word for word.
+   `XHCI_SNAPSHOT_HCD_COUNTER_WORDS` (`xhci.h`) becomes 258, which
+   `xhci_snap.c` asserts against the structure; `test_snap.c`'s pinned
+   counts and offsets, `tr_snap.c`'s canned counter block (two words
+   past the last named one, so 260) and `snapshot-reader.md`'s list
+   follow. The per-pair
+   "seen" maps and the slot bitmap stay in `HCD_CONTROLLER` as they are.
+   A block shorter than 258 words is a driver from before it, printed as
+   the reader prints every earlier append.
+5. **The CM log's DebugView sink stays the release registry value.**
+   `cm_log.c`'s `#if DBG` forcing it on stays, and now reaches the `qemu`
+   flavour alone.
+6. **`debug` is neither built nor shipped; `qemu` stays.** `qemu` is
+   still a checked build (`DBG=1` with its `XHCI_DBG_LIVE` and
+   `XHCI_DBG_E9`, `objchk_qemu`, `/Od /Oi` on amd64), so `VS_FF_DEBUG`
+   and the snapshot's `B_DEBUG` bit now mark it alone. Its leg kits are
+   unchanged.
+
+### 14.3 The build's vocabulary
+
+- `build-driver.cmd release|qemu|all [-amd64]`: the default is `release`;
+  `all` is `release qemu`, still what a cut builds. `debug` and `both`
+  are refused before any self-test with one message naming this task
+  (`both` meant `debug release`; reading it as `release` would hide a
+  caller that still expects two binaries). `build-all.cmd` follows.
+- Each driver's `sources` keeps two branches, `fre` and `chk_qemu`;
+  `chk` falls to the `!ERROR`, whose text names the two flavours and this
+  task, so a bare `build` from a checked DDK prompt makes no image.
+  `:validateflavor`, `:flavordirs` and the per-driver build steps lose
+  their `debug` arms. `scripts\setup-w2kddk.ps1`'s generated DDK
+  prompts stop calling the checked environment the project's debug build
+  (a bare `build` there now meets the `!ERROR`, by design).
+- The flavour marker: `XHCI_FLAVOUR_DEBUG` and its `#elif` arms go from
+  `hcd_entry.c`, `hcd_door.c`, `uas_entry.c`, `cm_entry.c` and
+  `hlpr_entry.c`. `check-flavour-marker.ps1 -Flavour` takes `release` or
+  `qemu`. `common.ps1`'s marker list keeps `XHCI98_FLAVOUR_DEBUG`, so an
+  old debug image is still found and refused as the wrong marker rather
+  than read as carrying none. The snapshot's
+  `XHCI_SNAPSHOT_FLAVOUR_DEBUG` (2) stays in the format, since `XHCITR`
+  reads older drivers.
+- The import gate: `-Flavor` takes `auto`, `release` or `qemu`; an image
+  under `objchk` is refused by name as the retired flavour; the
+  allowlists' `FLAVORS` column takes `release`, `qemu` or `all`, `debug`
+  refused as `both` is; `all` is the two. The four `RtlAssert debug
+  required` rows go (the amd64 drivers' and the helper's); the `qemu`
+  ones stay. `test-flavour-rules.ps1` follows.
+- The packager: `make-package.ps1 -Flavor` takes `release` (now the
+  default; it was `debug`) or `qemu`. `package-common.ps1`'s build-import
+  table and its default list are `release`, plus `qemu` where its record
+  is. `write-gated-manifest.ps1` follows.
+- `make-release.ps1 -Flavor` defaults to `release`; `debug` is accepted
+  by the parameter and refused with the retirement message, as `qemu` is
+  with its own, so a cut publishes `release-x86\` and `release-x64\` and
+  no `debug-*` directory. The checks on each leg's binaries
+  (`VS_FF_DEBUG`, the marker, the staged bytes) stay as they are for the
+  `release` leg; the one that compared the two flavours' bytes has
+  nothing to compare and says so. `-UploadSetOnly` rebuilds the current
+  version only (its existing rule), so no older tree with `debug-*`
+  reaches it. The readme's unused `debug` directory variables and
+  `check-text.ps1`'s stand-ins for them go.
+- `cut-builds.ps1` already runs `all`; it changes only in what `all` and
+  the import (`package-common.ps1`) mean.
+- `make-11v-media.ps1` (the update-over media): the current tree's
+  flavour words become `release`, `qemu` or `all`; a baseline checked out
+  from an older cut still builds with that cut's own `build-driver.cmd`
+  and keeps its words.
+- The installer's `/debug` (`INSTALL.BAT`, `XHCIINST`, `XHCIWIZ`) chose
+  the `debug-` directory, which the download no longer has. It is
+  withdrawn: `INSTALL.BAT` no longer reads it, `XHCIINST` refuses it as
+  an unknown switch, and a `/dir` naming a `debug-` directory is refused
+  as no flavour directory of the package. Its README and help text
+  follow.
+- The regression fixtures (`test-package.ps1`, the import gate's, the
+  helper check's) follow each change; a fixture that builds an older
+  version's published tree, with its `debug-*`, for a historical rule
+  keeps it.
+
+### 14.4 What the download loses
+
+`debug-x86\` and `debug-x64\` leave the download and
+`releases\<version>\` from `3.4.0.0`; task 45.44 rebuilds the layout
+afterwards, so nothing else in it moves here. Earlier cuts keep theirs
+(`releases\README.md`'s write-once rule). The release notes say it once:
+one build, with frame pointers on 32-bit Windows and the command-state
+checker, on unless `XhciCommandCheck` is 0. `docs\using\tuning.md`
+carries the row.
+
+### 14.5 The time
+
+Before and after are each a gated x86 build on development host A, read
+from `build-driver.cmd`'s own step times (`--- <step>: m:ss`). What
+leaves is the `debug` build of the four x86 images; the self-tests are
+the same. Run sheet `run-45.md`, "45.45", records both.
