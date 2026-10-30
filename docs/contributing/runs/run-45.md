@@ -3473,8 +3473,7 @@ Two things the legs met that are not this task's:
 
 Design record 22 section 6.2 coded, as the design half above left it
 owed: `020e930a` to `90c829fd` (branch `w45-u4v2c`, merged at
-`0f645d38`), reviewed and revised over four rounds per area (the core,
-then the vectors and the fake fabric) until neither had a finding.
+`0f645d38`), reviewed and revised.
 
 ### What the code does
 
@@ -3492,9 +3491,12 @@ then the vectors and the fake fabric) until neither had a finding.
 - A preserved router found with CV set never configured again: PTO clear
   holds the port, UTO clear means no USB3 tunnel, a read that fails holds
   it.
-- A predecessor's Enable Gen 4 Link Recovery cleared on every preserved
-  link, depth 2 included; LINK_RECOVERY delivered (never acknowledged) as
-  a port check.
+- A predecessor's Enable Gen 4 Link Recovery cleared where it reads set
+  on each preserved link the discovery walks: at depth 1 a clear that
+  fails holds the port; below it a failure is logged and the link stays
+  a predecessor's. LINK_RECOVERY delivered (never acknowledged) as a port
+  check; what a recovery leaves unverified (a USB3 tunnel, deeper PCIe and
+  DisplayPort tunnels) is record 22 section 6.2.3 item 4's limitation.
 - PCIe Extended Encapsulation set on both adapters before Path Enable on
   a tunnel between two version 2 routers, cleared after the Path Enables
   at its teardown, and cleared before a tunnel with a version 1 end.
