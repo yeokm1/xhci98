@@ -85,6 +85,19 @@ CopyFiles=Stor98_CopyFiles
 [Stor98_CopyFiles]
 stor98.sys
 
+; Line-based interrupts only (xhci98 roadmap-usb4 45.31): Stor98 is a SCSI
+; port miniport, and the SCSI port driver takes no message-signaled
+; interrupt. stornvme.inf writes MSISupported 1 in this key of every NVMe
+; drive it runs; Windows 8.1 then offers the drive message interrupts
+; (MSI-X, up to MessageNumberLimit) at its next resource assignment and
+; Stor98 does not start (problem 10, event 4). Read on 8.1 x86, 2026-10-30.
+; stornvme.inf writes the value again if the drive goes back to it.
+[Stor98_Inst.NTamd64.HW]
+AddReg=Stor98_HwReg
+
+[Stor98_HwReg]
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,%REG_DWORD%,0
+
 [Stor98_Inst.NTamd64.Services]
 AddService=stor98,%SPSVCINST_ASSOCSERVICE%,Stor98_Service,Stor98_EventLog
 
