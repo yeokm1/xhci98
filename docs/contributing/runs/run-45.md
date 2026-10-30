@@ -2212,23 +2212,26 @@ up behind the tunnel as with value 0.
 (QMP `device_add` at 70 s intervals, `device_del` 40 s after each; record
 21 section 4.5.9's two figures):
 
-| Value | Event frame taken by the driver after the emulator wrote it (`RX0.PROD_CONS` naming its descriptor) | Connection done (`cm.action.tunnel-up`) after the plug |
+| Value | The plug's own event frame consumed after the plug (`RX0.PROD_CONS` naming its descriptor) | Connection done (`cm.action.tunnel-up`) after the plug |
 |---|---|---|
-| 0 (poll, 200 ms) | median 154 ms, max 199 ms | median 206 ms, max 225 ms |
-| 1 (the interrupt) | median 2.1 ms, max 4.1 ms | median 25 ms, max 38 ms |
+| 0 (poll, 200 ms) | median 170 ms, max 201 ms | median 206 ms, max 225 ms |
+| 1 (the interrupt) | median 2.0 ms, max 3.3 ms | median 25 ms, max 38 ms |
 
-(The emulator writes the event frame 0.5 to 1.5 ms after the plug; for a
-few plugs the parser paired the unplug's frame, whose take-up is the same
-measure.)
+Each plug's own frame is the first frame of its type (`ICM_EVENT` here,
+`HOTPLUG` below) the emulator wrote from 5 ms before the plug's stamp on
+(the QMP script's clock and QEMU's trace clock differ by up to a
+millisecond) to 10 s after it, and its descriptor; every one of the
+twenty plugs matched its own (`kit\lat.py`). The emulator wrote it 0 to
+2 ms after the plug.
 
 **The same, XP `asm4242` under the USB4 profile, ten plugs of the ORICO
 enclosure each** (value 1: `cm.irq.connected`, `cm.irq.armed=00200000`,
 bit 21 of 63 causes for Total Paths 21, `cm.irq.selftest` passed):
 
-| Value | Hot-plug packet taken after it was written | Connection done (`u4.action`) after the plug |
+| Value | The plug's own hot-plug packet consumed after the plug | Connection done (`u4.action`) after the plug |
 |---|---|---|
-| 0 (poll, 200 ms) | median 123 ms, max 211 ms | median 2370 ms, max 2554 ms |
-| 1 (the interrupt) | median 2.6 ms, max 5.1 ms | median 2245 ms, max 2359 ms |
+| 0 (poll, 200 ms) | median 158 ms, max 213 ms | median 2370 ms, max 2554 ms |
+| 1 (the interrupt) | median 4.5 ms, max 6.9 ms | median 2245 ms, max 2359 ms |
 
 Under the USB4 profile the connection is the enumeration of section 6.4,
 about 2.2 s here, so the interrupt's gain (one poll's wait) is a small
@@ -2247,7 +2250,7 @@ process's host CPU, and the guest's `% Processor Time` and
 
 Within the noise of a TCG guest sharing the host (other workers' guests
 ran beside it): neither the interrupt nor the 50 ms period shows an idle
-cost there. XP `asm4242`, value 0: 102.6 % / 31.1 % / 130 with nothing
+cost there, on this guest and profile only. XP `asm4242`, value 0: 102.6 % / 31.1 % / 130 with nothing
 attached, 102.9 % / 31.5 % / 129 with the drive.
 
 **A lost interrupt, 7 x86 `tb3ar`, qemu flavour, value 1,
@@ -2271,6 +2274,10 @@ The task stays unticked: its line connects the interrupt on 98 SE and ME
 too once their route is read, and that connection (and its first leg,
 the self-test on those systems) is owed - the route is read above. Also
 owed: the latch to polling read on a guest (it needs an `usb4-emu` INTx
-drop on `usb4-host`, or a host with denser events), the readings of the
-"Not read" list, and the hardware reading at 45-E.5 (the P14s's Alpine
-Ridge INTx, the self-test first). The default stays 0 (owner, Q2).
+drop on `usb4-host`, or a host with denser events); section 4.5.9's
+no-interrupt leg (`usb4-host` `intx=off`, `cm.irq.none`) and shared-line
+leg (the NHI on another device's line, traffic on that device); the USB4
+profile's idle cost at value 1 and at a 50 ms period (XP was read at
+value 0 alone); the readings of the "Not read" list; and the hardware
+reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
+default stays 0 (owner, Q2).
