@@ -11989,8 +11989,8 @@ from roadmap-usb4 task 45.41's reading (`runs/run-45.md`, "45.41").
 ### 15.1 The report and the reading
 
 A SanDisk UAS drive (`0781:55A9`) on port 1 of a SuperSpeed hub
-(`0BDA:0411`) at root port 3 of a VIA VL805 (`1106:3483`), 32-bit Windows
-5.2, `3.3.0.0`; Windows reported "Delayed Write Failed" for files on it and,
+(`0BDA:0411`) at root port 3 of a VIA VL805 (`1106:3483`), Windows XP x64
+(the `3.3.0.0` release-x64 `xhci98.sys` by its size); Windows reported "Delayed Write Failed" for files on it and,
 separately, the machine "after a while" froze but for the mouse pointer,
 recovering partly after a wait; the drive stays plugged in for long hours.
 The user's snapshot: the UAS driver's telemetry record 1 "departed, slot
@@ -12308,8 +12308,8 @@ make the freeze through the programs that hold the old volume is read by
 the soak legs (L9); the keep removes the surprise removal from the path
 whatever the answer.
 
-L9. **Legs.** q35 XP (the closest base to the reporter's 32-bit Windows
-5.2), QEMU 11.1 with a test-only patch: a SuperSpeed hub model
+L9. **Legs.** q35 XP x64 with the amd64 build (the reporter's system) and
+q35 XP with the x86 build, QEMU 11.1 with a test-only patch: a SuperSpeed hub model
 (`usb-ss-hub`) whose `link-drop` property fails a downstream link
 (SS.Inactive and C_PORT_LINK_STATE; the host controller forgets the
 transfers in flight to the device, with no event, and starts none until
