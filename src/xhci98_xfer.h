@@ -147,6 +147,12 @@ typedef struct _XHCI98_TELEMETRY {
 #define XHCI98_RESUME_OP_WITHDRAW   2UL /* any declaration void             */
 #define XHCI98_RESUME_OP_REPORT     3UL /* Value, the wake check's outcome,
                                          * for the bus's log only           */
+#define XHCI98_RESUME_OP_CYCLE      4UL /* the function's own device reset
+                                         * failed: the device is cycled, the
+                                         * cycle charged to its location as
+                                         * a failed RESET_PORT's (task
+                                         * 45.41); a bus before 3.4.0.0
+                                         * refuses the op as INVALID        */
 
 /* Status, beside the IRP's NTSTATUS. */
 #define XHCI98_RESUME_SUCCESS       0UL /* STATUS_SUCCESS                   */

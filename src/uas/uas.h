@@ -210,6 +210,9 @@ typedef struct _UAS_FDO {
     BOOLEAN Recovering;
     BOOLEAN RecoveryQueued;
     BOOLEAN Dead;                   /* a reset failed: every SRB fails */
+    BOOLEAN CycleOwed;              /* task 45.41: a failed reset's cycle
+                                     * not yet taken by the bus; retried by
+                                     * the recovery worker (uasCycleOwed) */
 
     /* The configuration this driver selected. */
     PUCHAR Config;
