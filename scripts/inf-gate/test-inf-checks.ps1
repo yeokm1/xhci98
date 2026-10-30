@@ -375,6 +375,22 @@ try {
     Assert-True ((Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st).Tree -eq "C:\tree-two") "store : a torn record was not replaced."
     Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $st "inf") -Filter "*.tmp" -Force).Count -eq 0) "store : a temporary file was left beside the records."
     Assert-True (-not (Write-SelfTestPassRecord -Suite "inf" -Digest "not-a-digest" -Checks 9 -Tree "C:\x" -Dir $st)) "store : a malformed digest was recorded."
+    # A store that cannot be reached, or an override that names no path, is
+    # no record and records nothing; neither stops the suite.
+    $stSaved = $env:XHCI98_SELFTEST_PASS_DIR
+    try {
+        foreach ($c in @(@{ Why = "on a drive that is not there"; Dir = "QX:\store" }, @{ Why = "that names no path"; Dir = "a|b<c>" })) {
+            $env:XHCI98_SELFTEST_PASS_DIR = $c.Dir
+            $stThrew = $false
+            try {
+                $stR = Read-SelfTestPassRecord -Suite "inf" -Digest $stD
+                $stW = Write-SelfTestPassRecord -Suite "inf" -Digest $stD -Checks 9 -Tree "C:\x" 6>$null
+            } catch { $stThrew = $true }
+            Assert-True (-not $stThrew -and $null -eq $stR -and -not $stW) ("store : a store {0} gave a record, recorded one or stopped the suite." -f $c.Why)
+        }
+    } finally {
+        $env:XHCI98_SELFTEST_PASS_DIR = $stSaved
+    }
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
     # Both models sections READ - the undecorated one and NT 6.x's - for the
     # reason the 64-bit baseline below gives, each with the controller and

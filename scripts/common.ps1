@@ -347,10 +347,11 @@ function Read-SelfTestPassRecord {
     # Path }, or $null when there is none or it is not whole.
     param([string]$Suite, [string]$Digest, [string]$Dir = "")
     if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$') { return $null }
-    if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
-    if ($Dir -eq "") { return $null }
-    $file = Join-Path (Join-Path $Dir $Suite) ($Digest + ".txt")
+    # A store that cannot be named or reached is no record: the suite runs.
     try {
+        if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+        if ($Dir -eq "") { return $null }
+        $file = Join-Path (Join-Path $Dir $Suite) ($Digest + ".txt")
         if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
         $lines = @([System.IO.File]::ReadAllLines($file))
     } catch {
@@ -371,13 +372,13 @@ function Write-SelfTestPassRecord {
     # in place afterwards.
     param([string]$Suite, [string]$Digest, [int]$Checks, [string]$Tree, [string]$Dir = "")
     if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$' -or $Checks -lt 1) { return $false }
-    if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
-    if ($Dir -eq "") {
-        Write-Warn ("the {0} self-tests' pass was not recorded: neither XHCI98_SELFTEST_PASS_DIR nor LOCALAPPDATA is set." -f $Suite)
-        return $false
-    }
     $tmp = ""
     try {
+        if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+        if ($Dir -eq "") {
+            Write-Warn ("the {0} self-tests' pass was not recorded: neither XHCI98_SELFTEST_PASS_DIR nor LOCALAPPDATA is set." -f $Suite)
+            return $false
+        }
         $folder = Join-Path $Dir $Suite
         [void][System.IO.Directory]::CreateDirectory($folder)
         $dest = Join-Path $folder ($Digest + ".txt")
