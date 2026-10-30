@@ -455,26 +455,35 @@ function Set-SelfTestGitPolicy {
     foreach ($v in @(Get-ChildItem Env:)) {
         if (Test-SelfTestGitPolicyName -Name $v.Name) { $saved[$v.Name] = $v.Value }
     }
-    $dir = Join-Path $ScratchRoot "git-policy"
-    foreach ($d in @($dir, (Join-Path $dir "hooks"), (Join-Path $dir "template"))) { [void][System.IO.Directory]::CreateDirectory($d) }
-    $ignore = Join-Path $dir "ignore"
-    $attributes = Join-Path $dir "attributes"
-    foreach ($f in @($ignore, $attributes)) { [System.IO.File]::WriteAllText($f, "") }
-    $fwd = { param($p) $p.Replace('\', '/') }
-    $config = Join-Path $dir "config"
-    [System.IO.File]::WriteAllText($config, (("[core]`n`texcludesFile = ""{0}""`n`tattributesFile = ""{1}""`n`thooksPath = ""{2}""`n" +
-        "[init]`n`ttemplateDir = ""{3}""`n[commit]`n`tgpgSign = false`n[tag]`n`tgpgSign = false`n") -f
-        (& $fwd $ignore), (& $fwd $attributes), (& $fwd (Join-Path $dir "hooks")), (& $fwd (Join-Path $dir "template"))))
-    foreach ($v in @(Get-ChildItem Env:)) {
-        if (Test-SelfTestGitPolicyName -Name $v.Name) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+    # Set whole or not at all: an error or Ctrl+C before the caller holds the
+    # policy puts back what was changed.
+    $policy = @{ Root = $ScratchRoot; Saved = $saved; Restored = $false }
+    $held = $false
+    try {
+        $dir = Join-Path $ScratchRoot "git-policy"
+        foreach ($d in @($dir, (Join-Path $dir "hooks"), (Join-Path $dir "template"))) { [void][System.IO.Directory]::CreateDirectory($d) }
+        $ignore = Join-Path $dir "ignore"
+        $attributes = Join-Path $dir "attributes"
+        foreach ($f in @($ignore, $attributes)) { [System.IO.File]::WriteAllText($f, "") }
+        $fwd = { param($p) $p.Replace('\', '/') }
+        $config = Join-Path $dir "config"
+        [System.IO.File]::WriteAllText($config, (("[core]`n`texcludesFile = ""{0}""`n`tattributesFile = ""{1}""`n`thooksPath = ""{2}""`n" +
+            "[init]`n`ttemplateDir = ""{3}""`n[commit]`n`tgpgSign = false`n[tag]`n`tgpgSign = false`n") -f
+            (& $fwd $ignore), (& $fwd $attributes), (& $fwd (Join-Path $dir "hooks")), (& $fwd (Join-Path $dir "template"))))
+        foreach ($v in @(Get-ChildItem Env:)) {
+            if (Test-SelfTestGitPolicyName -Name $v.Name) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+        }
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1")
+        [Environment]::SetEnvironmentVariable("GIT_ATTR_NOSYSTEM", "1")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_GLOBAL", $config)
+        [Environment]::SetEnvironmentVariable("GIT_TEMPLATE_DIR", (Join-Path $dir "template"))
+        [Environment]::SetEnvironmentVariable("GIT_NO_REPLACE_OBJECTS", "1")
+        [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0")
+        $held = $true
+        return $policy
+    } finally {
+        if (-not $held) { Restore-SelfTestGitPolicy -Policy $policy }
     }
-    [Environment]::SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1")
-    [Environment]::SetEnvironmentVariable("GIT_ATTR_NOSYSTEM", "1")
-    [Environment]::SetEnvironmentVariable("GIT_CONFIG_GLOBAL", $config)
-    [Environment]::SetEnvironmentVariable("GIT_TEMPLATE_DIR", (Join-Path $dir "template"))
-    [Environment]::SetEnvironmentVariable("GIT_NO_REPLACE_OBJECTS", "1")
-    [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0")
-    return @{ Root = $ScratchRoot; Saved = $saved; Restored = $false }
 }
 
 function Restore-SelfTestGitPolicy {

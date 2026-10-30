@@ -177,12 +177,13 @@ function Get-InfSelfTestDigest {
 # every git call this suite reaches see one git whatever the caller's
 # configuration. It and its folder go when the run ends.
 $gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
-$gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot
 # The caller's environment comes back whichever way the run ends - a skip,
 # a pass, a failure, an error or Ctrl+C - through the finally at the end of
 # this file. The rest of the script is not indented under this try, to
 # keep its lines where every other change to it expects them.
+$gitPolicy = $null
 try {
+$gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot
 $digest = Get-InfSelfTestDigest -Root $repo
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
