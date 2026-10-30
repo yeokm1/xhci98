@@ -1,7 +1,9 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 11, 2026-10-30, task 45.15: section 6.11, Part 3 as
-coded. Revision 10, 2026-10-29 (task 45.15), before code, reviewed and revised:
+Status: revision 12, 2026-10-30, task 45.15: section 3.10's
+"Deferred" (the chained unit's eject teardown, the correspondence and
+the per-tunnel keying to the next release, owner). Revision 11,
+2026-10-30, task 45.15: section 6.11, Part 3 as coded. Revision 10, 2026-10-29 (task 45.15), before code, reviewed and revised:
 Part 3 read again against `tbt_u4cm.c` at `3e314cde` (task 45.15): a
 kid's sequence the host port's own, its unplug not nested before 45.18;
 a kid's own unplug hint confirmed by evidence; which check a
@@ -1112,6 +1114,17 @@ ancestor is not read; the legs read the eject, then the unplug].
   file there at the next plug; the dock's drive untouched. On 2000 the
   emulator's chained NVMe does not start (no interrupt; run-45, "45.13"),
   so 2000 reads the `Removable` answer and the eject's listing only.
+
+- **Deferred** (owner, 2026-10-30; task 45.15). Under the software
+  connection manager too, the confirmation keeps refusing a chained
+  entry in `3.4.0.0`: Windows' own eject stops the chained unit and its
+  tunnel stays up until the unplug, as above. Taking the confirmation to
+  the kid's teardown (`TbtU4EjectKid`) is deferred to the next release
+  together with the chain port's correspondence to a kid (section 3.1)
+  and the per-tunnel ownership, names and generations (section 3.5, Q4):
+  an eject attributed to a kid without a learnt correspondence could tear
+  down another live chained tunnel. The roadmap's 45.15 line
+  (`roadmap-usb4.md`) holds the plan for that release.
 
 ### 3.11 Stor98's statements for chained drives, and their q35 admission (task 45.18)
 
@@ -2336,11 +2349,11 @@ differs from them, this section is the record.
   cleared at the link's discovery (`tbtU4LinkElr`), as at depth 1.
   Vectors: `test_u4v2`'s `test_kid_v2`, `test_kid_adopt_asym`,
   `test_kid_training`, `test_kid_tmu_debt`, `test_kid_cv_found`.
-- **Not in this cut** (the task stays open for them): the eject paths
-  `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
-  section 3.7's chained unit, task 45.13: until then a chained device goes
-  with the first device's unit, whose eject tears the kid's tunnel down
-  first); the Windows 98 SE and ME worker's chain action (task 45.14).
+- **Not in this cut**: the eject paths to `TbtU4EjectKid` for a chained
+  unit (deferred to the next release, section 3.10's "Deferred": the
+  chained unit's own eject stops it and leaves its tunnel up, and the
+  first device's unit's eject tears the kid's tunnel down first); the
+  Windows 98 SE and ME worker's chain action (task 45.14).
 - **The status record** (`cm_status.c`, section 3.7): each kid in use is
   a kind 3 entry (`CM_ST_KIND_USB4_LINK`) before the links': its place
   the port with depth 2 in bits 15:8, its route, its approval and state
