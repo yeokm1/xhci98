@@ -69,6 +69,7 @@
 #define FAB_DEV_TBT3_TR     2       /* Titan Ridge DD 8086:15EF */
 #define FAB_DEV_TBT3_AR     3       /* Alpine Ridge LP bridge 8086:15C0 */
 #define FAB_DEV_ASM2464     4       /* ASMedia ASM2464PD 174C:2463, the ORICO capture */
+#define FAB_DEV_TBT1_PR     5       /* Port Ridge 8086:1549: generation 1, no link controller */
 
 typedef struct FAB_ADP {
     int Present;
@@ -209,6 +210,8 @@ typedef struct FAB {
     unsigned long AcksEnh;
     unsigned long HpAcks;
     unsigned long Notifications;    /* error notifications sent */
+    unsigned long LcResets;         /* a Thunderbolt host's LC port resets set */
+    unsigned long TmuAccessOn;      /* Light Ridge's TMU access enable set */
     unsigned long WrCount;
     unsigned long Lane1LockWrites;  /* ADP_CS_4 of a lane 1 adapter written:
                                      * undefined behaviour (Spec 8.2.2.1) */
@@ -234,6 +237,18 @@ void fabInit(FAB *f);
 int  fabHostMinimal(FAB *f);        /* usb4-emu `minimal`: returns the host index 0 */
 int  fabHostAdl(FAB *f);            /* usb4-emu `intel-adl` */
 int  fabHostAsm4242(FAB *f);        /* usb4-emu `asm4242`: ASMedia, public sources */
+/* A Thunderbolt host with no firmware CM, as usb4-emu's tb*-apple-*
+ * profiles present it (its docs/TB-SWCM-HOSTS.md; design record 22
+ * section 19): Intel host router `device` (1578 Alpine Ridge 4C, 156D
+ * Falcon Ridge 4C, 15EA Titan Ridge 4C, 1547 Cactus Ridge 4C, 1513 Light
+ * Ridge), USB4 Version 0, lanes 1-4 with no USB4 Port Capability and no
+ * Lock, NHI 5 the upstream adapter, the PCIe Down adapters of the
+ * emulator's layout, Plug Events with the EEPROM (its DROM's UID
+ * CRC-8-sealed), a link controller with two port blocks from generation 2
+ * (whose PORT_MODE bit 0 is the port's Downstream Port Reset), no router
+ * operations, Router CS 3 Valid clear at power-on and no hot plug event
+ * until it is set. */
+int  fabHostTbt(FAB *f, unsigned long device);
 int  fabDevice(FAB *f, int kind);   /* a device router, unplugged; its index */
 int  fabChild(FAB *f, int dev);     /* a USB4 router behind a device's downstream port */
 

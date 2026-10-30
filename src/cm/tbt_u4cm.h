@@ -150,6 +150,11 @@ typedef struct _TBT_U4_CONFIG {
      * experiment for the hardware bench; nothing
      * else changes. */
     BOOLEAN AsmPcie7Credits;
+    /* Record 22 section 19: a Mac's Thunderbolt 1 to 3 host (TbtHwSelect's
+     * TBT_SW_ROUTE_TBT_HOST), the host router's id test (d) wants; 0, the
+     * default, for a USB4 host. The host router is then a Thunderbolt
+     * router, driven as section 8 drives one at route 0 too. */
+    ULONG TbtHostRouter;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -186,6 +191,9 @@ typedef struct _TBT_U4_ROUTER {
     ULONG Usb4Version;      /* ROUTER_CS_4 31:24 */
     BOOLEAN Present;
     BOOLEAN Tbt3;           /* USB4 Version 0: record 22 section 8 */
+    ULONG TbtGen;           /* Tbt3: 1 to 3 by its id (TbtHwTbtGeneration) */
+    BOOLEAN UidFromDrom;    /* Tbt3 with no link controller: Uuid is the
+                               DROM's UID (record 22 section 19.4 item 3a) */
     BOOLEAN EnumeratedHere;
     BOOLEAN Preserved;      /* found enumerated at start or resume */
     BOOLEAN OpBlocked;      /* Operation Valid never cleared (section 6.7) */
@@ -324,6 +332,9 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN LaneWritten;
     ULONG LaneSaved[4];     /* LANE_ADP_CS_1 before step 4: host 0, host 1, dev 0, dev 1 */
     BOOLEAN Lane1Disabled;  /* section 6.5 step 6.4 set Lane Disable */
+    BOOLEAN LcDprOwed;      /* Thunderbolt host: the link controller's
+                               Downstream Port Reset possibly set by the
+                               cleaning, not yet read back clear */
     BOOLEAN PcSetHost;
     BOOLEAN PcSetDev;
 
