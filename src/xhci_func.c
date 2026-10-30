@@ -752,6 +752,21 @@ ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial)
     return xhciFuncExact(oldSerial, newSerial);
 }
 
+ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
+                          ULONG memVidPid, ULONG memSerial, ULONG latch)
+{
+    if (!covered || !readFailed || latch == XHCI_FUNC_LATCH_BYPASS) {
+        return XHCI_FUNC_DEFER_NO;
+    }
+    if (latch == XHCI_FUNC_LATCH_FAILED) {
+        return XHCI_FUNC_DEFER_FAIL;
+    }
+    if (memSerial && memVidPid == vidPid) {
+        return XHCI_FUNC_DEFER_YES;
+    }
+    return XHCI_FUNC_DEFER_NO;
+}
+
 ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
                             ULONG oldParent, ULONG newKey, ULONG newParent)
 {

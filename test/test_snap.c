@@ -34,15 +34,15 @@ static void test_header(void)
              "154, 36.9 two, 36.24 and 36.25 33, 36.38 69, 44.35 323)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 64,
-             "a sixteen-word record");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 80,
+             "a twenty-word record (45.40 appended four)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 2516,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 258,
              "the whole counter block (45.45's command-state checker: 252 "
              "to 257)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             2516 + 18 * 64, "counters after the last record");
+             2516 + 18 * 80, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
@@ -61,7 +61,7 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 16 + 258, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 20 + 258, "the E460's image");
     CHECK_EQ(XhciSnapHcdWords(0), 629 + 258,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
@@ -94,14 +94,14 @@ static void test_walk(ULONG ports)
             expectPart = XHCI_SNAPSHOT_HCD_IN_HEAD;
             expectRecord = 0;
             expectWord = index;
-        } else if (index < H + ports * 16) {
+        } else if (index < H + ports * 20) {
             expectPart = XHCI_SNAPSHOT_HCD_IN_PORT;
-            expectRecord = (index - H) / 16;
-            expectWord = (index - H) % 16;
+            expectRecord = (index - H) / 20;
+            expectWord = (index - H) % 20;
         } else if (index < total) {
             expectPart = XHCI_SNAPSHOT_HCD_IN_COUNTERS;
             expectRecord = 0;
-            expectWord = index - H - ports * 16;
+            expectWord = index - H - ports * 20;
         } else {
             expectPart = XHCI_SNAPSHOT_HCD_PAST_END;
             expectRecord = 0;
@@ -130,11 +130,12 @@ static void test_walk(ULONG ports)
                  XHCI_SNAPSHOT_HCD_IN_PORT,
                  "the header's record offset is the first record");
         CHECK_EQ(record + word, 0, "port 1's first word");
-        CHECK_EQ(XhciSnapHcdLocate(ports, H + ports * 16 - 1, &record,
+        CHECK_EQ(XhciSnapHcdLocate(ports, H + ports * 20 - 1, &record,
                                    &word),
                  XHCI_SNAPSHOT_HCD_IN_PORT, "the last record's last word");
         CHECK_EQ(record, ports - 1, "is the last port's");
-        CHECK_EQ(word, XHCI_SNAPSHOT_HCD_PORT_FLAGS, "its flags");
+        CHECK_EQ(word, XHCI_SNAPSHOT_HCD_PORT_IDFAILS,
+                 "its spent deferrals");
     }
 }
 
@@ -146,8 +147,11 @@ static void test_record_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_PSIV, 5, "the raw speed ID at 5");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_SOURCE, 7, "its meaning's source at 7");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_REFUSED, 13, "refused notes at 13");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_FLAGS, XHCI_SNAPSHOT_HCD_PORT_WORDS - 1,
-             "flags last");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_FLAGS, 15, "flags at 15");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_IDMEM, 16,
+             "task 45.40's identity words appended after the flags");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_PORT_IDFAILS, XHCI_SNAPSHOT_HCD_PORT_WORDS - 1,
+             "the spent deferrals last");
     CHECK_EQ(XhciSnapHcdFlags(0, 0, 0), 0, "no flags");
     CHECK_EQ(XhciSnapHcdFlags(1, 0, 0), XHCI_SNAPSHOT_HCD_F_DEFERRED,
              "deferred by the settle");

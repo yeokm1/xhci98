@@ -3130,12 +3130,33 @@ screenshots).
   which record 34 section 3.10 refuses today, turned into the kid's
   teardown; Windows' own eject of the chained unit, section 3.10's
   `Removable`, already stops the drive and leaves the tunnel up) and, moved into 45.15 from
-  45.13 by the owner, the chain-port correspondence learning, the
-  per-tunnel names and generations (section 3.5, Q4 (a)) and the status
-  record's kind 3 entries for kids (coded, under review).
+  45.13 by the owner, the chain-port correspondence learning and the
+  per-tunnel names and generations (section 3.5, Q4 (a)).
 - The legs on 98 SE, ME, 2000 and 10 x64. On 98 SE and ME the chained
   device's PCI side is task 45.14's (not done): the legs read what
   happens without it.
+
+### With 45.20's version 2 code (2026-10-30)
+
+`3.4.0.0` at `66187290` (45.20's USB4 version 2 code, 45.18's design)
+merged into the branch (`ae346700`, both sides kept). Its rules reached
+the kid paths in three commits, each reviewed until the review found
+nothing material, recorded in record 34 section 6.11 ("Version 2
+routers"): a kid's Gen 4 link classified as a port's, waited for while
+training, and Extended Encapsulation on a chained PCIe tunnel between two
+version 2 routers, cleared at its teardown; a preserved child with CV
+set and no PTO held (`32af0777`, `239f4ec4`); HiFi Enhanced
+Uni-Directional TMU on a v2-v2 kid link before CV, the parent's side
+reset at the kid's teardown and kept owed until proven (`239f4ec4`,
+`bc0c7be5`). `test_u4v2`: 373 checks, 0 failures; `test_u4cm` 1638, 0.
+At `bc0c7be5`: `test\run-host-tests.cmd` "Host tests PASSED"; the gated x86
+build `all`, "BUILD + GATES PASSED (debug release qemu)"
+(`E:\xhci98-scratch\p45-w45-u4chain2\gb-x86-m.log`). No leg was run on
+the version 2 paths: the emulator's chain in this run is version 1.
+
+The status record's kind 3 entries for kids (record 34 section 6.11, "The
+status record"; `11f58253`, reviewed): `test_cm_status` 131 checks, 0
+failures.
 
 ## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
 
@@ -3727,6 +3748,28 @@ Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`serial-h1.log`,
 Not read: Vista x86 (the same section and the same service path), and a
 leg with the service's `Restart` value 0 (the host vectors refuse it).
 
+**45.47, Vista x86 (legs vh1 and vh2, 2026-10-30).** The Vista Business
+SP2 x86 q35 base, `-Usb4 tb3ar`, the same emulator; the same TEST x86
+cut as h1 and h2 (its `XHCIMARK.EXE` built from the same `xhcimark\`
+sources as 3.4.0.0's `42093a03`). Evidence:
+`E:\xhci98-vm\p45\w45-emufix\vx\` (`serial-vh1.log`, `serial-vh2.log`,
+`steps-vh1.txt`, `steps-vh2.txt`, `rep-vh1r.txt`). On this base Windows
+opens "Found New Hardware" for devices with no driver (an unknown base
+device, and the dock's 82574L, for which Vista has none); each was
+answered "Ask me again later" or cancelled, and while one is open the
+install and the service both wait for it.
+
+| Leg | Steps | Read |
+|---|---|---|
+| vh1 | install with no dock: the first run ended at exit code 4 behind an open "Found New Hardware", the second at exit code 3 (changes made, restart); restart; the dock plugged by QMP | Windows asked "You must restart your computer to apply these changes" (answered Restart Later); "controller not started yet: ...DEV_000D...: an installation is pending (or cannot be told)" while a "Found New Hardware" was open (the dock's NIC has no Vista driver); once it was cancelled, "controller started: ...DEV_000D... (it waited for a restart of Windows; the helper is running)"; the dock xHCI at Code 0, its root hub, "USB Human Interface Device" and "HID-compliant mouse" started; the NIC "Ethernet Controller - no driver, problem code 1". No restart |
+| vh2 | the dock present at power-on, install (exit code 4: the NIC's "Found New Hardware" open), restart | the dock xHCI, its root hub and the tablet's USB and HID devices at Code 0; problem codes only on two base devices (`8086:2930`, `ACPI\QEMU0002`) |
+
+So on Vista x86 too a dock hot-added after the install starts its xHCI
+without a restart, once Windows has no installation pending, and a dock
+present at the install works after the install's restart. Windows' own
+restart prompt still appears at the hot-add, from the section's `Reboot`.
+Not read on Vista: the 45.49 stop-first sequence; `XHCIMARK.LOG` in vh2.
+
 ## 45.49 a 7 x86 guest hung by a Thunderbolt 3 dock unplugged and plugged in again: the reading (2026-10-30)
 
 **The question.** After the restart that started the dock's xHCI (45.47's
@@ -4163,6 +4206,550 @@ the next release with 45.15's correspondence and per-tunnel keying
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 
+## 45.27 (the owed legs) (2026-10-30, partial)
+
+**Verdict: two of the owed legs are read here. On XP, `xhciuas.sys` refuses
+every pass-through and SMART request a tool sends, so ATA pass-through and
+SMART from a tool do not reach a UAS drive at all (an owner question, below).
+Stor98's INTx fallback works: with the drive's interrupt enable stuck off it
+reports `polling (INTx would not enable)` and its I/O passes. The rest stays
+owed, each item named below.**
+
+Vehicle: the package of `e8db6905` (`release-x86`, stamped `3.3.0.0`;
+`xhci98.sys` d7f8ab2c..., `xhciuas.sys` fe57478a..., `stor98.sys`
+81924f85..., `xhcicm.sys` 5fdb710d...). No build slot was free for this
+session. The tip's `uas_pdo.c` answers the same two IOCTLs as that build,
+and Stor98's read-back of the INTx enable is in it (`2f57cad2`).
+`ATATEST.EXE` was built from `ff91c7ee` (43eef1b6...). Both legs ran on fresh
+q35 XP SP3 overlays, installed with `INSTALL.BAT /console /yes /nopause`.
+Evidence: `E:\xhci98-vm\p45\w45-owed27\xpa\` and `xpb\`.
+
+### ATA pass-through and SMART from a tool (XP)
+
+`xpa`: a `usb-uas` with one `scsi-hd` LUN on `qemu-xhci` port 3 and a
+`usb-storage` (Bulk-Only, XP's own `usbstor.sys`) on port 4, both blank
+64 MiB. `xhciuas` started at the install. Then `ATATEST \\.\PhysicalDriveN`
+for N = 0 to 4 (`atatest-xp.txt`):
+
+| Disk | Adapter (max transfer, bus type) | SCSI pass-through | ATA pass-through (12) and (16) | SMART IOCTLs, `IOCTL_ATA_PASS_THROUGH` |
+|---|---|---|---|---|
+| 0, 1: IDE (`atapi.sys`) | 128 KiB, ATA | INQUIRY in and unspecified: GOOD | refused, error 1 | answered: SMART version 1.1, READ DATA 512 bytes, IDENTIFY "QEMU HARDDISK", CHECK POWER MODE |
+| 2: Bulk-Only (`usbstor.sys`) | 64 KiB, USB | INQUIRY in GOOD; unspecified refused, error 87 | reached the drive: CHECK CONDITION, sense 5/20/00 (QEMU's disk has no SAT); unspecified direction refused, error 87 | error 50 (not supported) |
+| 3: UAS (`xhciuas.sys`) | 1 MiB, USB | **every request refused, error 1** | **refused, error 1** | **refused, error 1** |
+
+Error 1 is ERROR_INVALID_FUNCTION, the Win32 code for
+`STATUS_INVALID_DEVICE_REQUEST`. That is what `uas_pdo.c`'s device-control
+dispatch completes for any IOCTL other than `IOCTL_STORAGE_QUERY_PROPERTY`
+and `IOCTL_SCSI_GET_ADDRESS`. The disk class driver passes
+`IOCTL_SCSI_PASS_THROUGH` and `_DIRECT` down to the port, and for a UAS LUN
+the port is `xhciuas`'s LUN PDO. So the UAS driver's T_DIR handling
+(`UasCdbDataDirection`, `2f57cad2`) is never reached from a program on NT.
+Neither is any other SCSI command a program sends. The Bulk-Only stick under
+XP's own driver shows the route working. The finding is
+`xhciuas`'s and not new: the PDO never served pass-through. Serving it is a
+new interface, not a fix (the owner's question, below). 98 SE and ME were
+not read: a program there would go through ASPI, which was not tried.
+
+### Stor98's INTx fallback (XP)
+
+The emulator is usb4-emu's QEMU at `e05bf66`, the tree the q35 bases'
+emulator was built from, plus one test property on QEMU's NVMe model,
+`x-intx-stuck`. When on, the Interrupt Disable bit of the Command register
+is set and read-only, so a driver that clears it reads it back set. It is
+built on development host A (SHA-256 f904ca84..., `qemu-intx\intx.diff` in
+this kit's scratch) and launched with `-global nvme.x-intx-stuck=on`; QMP
+read the property back as true on `tp0-sw1-nvme`.
+
+`xpb`: ASM4242 model, the ORICO enclosure at power-on. `INSTALL.BAT /console
+/yes /nopause /thunderbolt /stor98` ended with exit 3, then a restart. After
+the restart, `HKLM\System\CurrentControlSet\Services\stor98` held `StorInterrupt
+5.0.0 = pin 1 line 23 msi no msix yes port 23/23 polling (INTx would not
+enable)` and the drive was mounted as "ORICO (D:)". Three system files (from
+`shell32.dll` to `xpsp2res.dll`) were copied to D: and compared clean with
+`fc /b`. The compare may have been served from the cache. PASS (`intx-xp.txt`).
+
+### Owed
+
+- A UAS STOP and START with a LUN gone, and a short REPORT LUNS answer. The
+  LUN list is read again only in `uasFdoStart` after an
+  `IRP_MN_STOP_DEVICE`, and no guest sends a USB function a STOP. That takes
+  a resource rebalance, which no guest can make (run-36, L2). A short answer
+  only matters on that second start. Owed to a vehicle that can rebalance,
+  or to a host test of the start's presence logic.
+- ATA pass-through and SMART from a tool: blocked on the owner's decision
+  below. On 98 SE and ME, not read.
+- A BUSY that keeps its length: not provoked. The harness route is the
+  tunnel port's `x-rdy-set-delay-ms` past the hold bound, with a dropped
+  read forcing a reset during a copy.
+- The connection manager's eject or PCIe loss with an unplug during it, and a
+  resume with a lane adapter gone. Its no-IRQ clock and retry wait on 98 SE. A
+  failed D0 during a re-enumeration on 98 SE.
+- The power gate's wait under an ME standby.
+- A D0 overlapping a system power IRP on 2000, XP and 7. A resume completing
+  does not show the overlap; only a trace at `hcdPowerDefer` with both items
+  queued would.
+- The hardware readings stay owed to the bench, as listed in the section above.
+
+### Owner question: pass-through for UAS drives
+
+`xhciuas.sys` does not serve `IOCTL_SCSI_PASS_THROUGH`,
+`IOCTL_SCSI_PASS_THROUGH_DIRECT` or the SMART IOCTLs, so SMART and
+drive-identification tools see nothing on a UAS drive on 2000 to 7. Options:
+(a) leave it, and say so in the release notes' known limitations;
+(b) serve SCSI pass-through, buffered and direct, in the LUN PDO:
+administrator rights as the system checks them, the user buffer checked,
+the request built as an SRB through the existing engine with its timeout
+clamped, sense returned, the CDB's own direction (T_DIR) used where the
+caller leaves it unspecified; then legs with this tool on 2000, XP and 7;
+(c) (b) plus the SMART IOCTLs, translated to ATA PASS-THROUGH.
+Recommendation: (b), behind a design record section reviewed first. SMART
+tools on these systems send SCSI pass-through to USB bridges, and (c) adds
+a translation layer of the driver's own.
+
+## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
+
+Design record 22 section 6.2 coded, as the design half above left it
+owed: `020e930a` to `90c829fd` (branch `w45-u4v2c`, merged at
+`0f645d38`), reviewed and revised.
+
+### What the code does
+
+- CMUV 20h written to a router whose USB4 Version has major 2, 10h to a
+  version 1 router; a preserved router's CMUV read and kept (`10h` on a
+  version 2 router and any odd value logged).
+- Set Capabilities for the Sequence bit capability on every USB4 router
+  that reports it supported and disabled, with a Get Capabilities
+  read-back deciding the acknowledgement form; the router's notifications
+  held until then. A recovery sends no Set: one it finds owed is made at
+  the next tick as the port's own sequence.
+- Every path entry written as two dwords, on every router.
+- HiFi Enhanced Uni-Directional TMU on a link of two version 2 routers
+  whatever the tunnels, kept until unplug; HiFi-Bi elsewhere as before.
+- A preserved router found with CV set never configured again: PTO clear
+  holds the port, UTO clear means no USB3 tunnel, a read that fails holds
+  it.
+- A predecessor's Enable Gen 4 Link Recovery cleared where it reads set
+  on each preserved link the discovery walks: at depth 1 a clear that
+  fails holds the port; below it a failure is logged and the link stays
+  a predecessor's. LINK_RECOVERY delivered (never acknowledged) as a port
+  check; what a recovery leaves unverified (a USB3 tunnel, deeper PCIe and
+  DisplayPort tunnels) is record 22 section 6.2.3 item 4's limitation.
+- PCIe Extended Encapsulation set on both adapters before Path Enable on
+  a tunnel between two version 2 routers, cleared after the Path Enables
+  at its teardown, and cleared before a tunnel with a version 1 end.
+- Gen 4 links classified only on an active lane: symmetric, or
+  asymmetric with the two ends a 3-transmitter and 3-receiver pair, used
+  as bonded with no lane write and never transitioned (decision U31);
+  x1, unpaired or reserved widths, or a lane that stays training, FAILED.
+- `XhciCmUsb4V2` (absent 1): 0 is the version 1 run of `3.3.0.0`.
+
+Host vectors: the new suite `test_u4v2` (316 checks) over a version 2
+host and device router added to the fake fabric; `test_u4cm`,
+`test_tbt_ring` and `test_cm` follow. The gated builds of `22be413f` in
+this worktree passed: x86 "BUILD + GATES PASSED (release qemu)" at
+21:03, amd64 at 21:36 (development host A).
+
+### The legs (2026-10-30)
+
+`usb4-emu` main `230bed5` (QEMU fork `674ff08`, its version 2 router
+model `cb36497`, docs/USB4-V2.md): `usb4-host` with `host-model=minimal`
+and `usb4-version=2` on q35, two `usb4-tunnel-port`s on `pcie.0` (the
+`adl` layout), `usb4-device dialect=usb4 usb4-version=2` with the NVMe
+test disk at power-on; plugs, unplugs and link events over QMP
+(`device_add`, `device_del`, `qom-set ... x-link-event`). The package of
+`22be413f`: the release package installed (`INSTALL.BAT /console /yes
+/nopause /thunderbolt /stor98`), then its `qemu` `xhcicm.sys` copied over
+the installed one and the guest restarted, so the connection manager's
+log reads on the debug console (x86 release `xhcicm.sys` `ddc788ca...`,
+qemu `5ef8374c...`; the amd64 images staged unsigned, `b08203e4...` and
+`4532501767...`, signed in the guest with a throwaway certificate made
+there, test signing on, nothing signed on the host). Fresh overlays of
+the q35 bases; evidence under `E:\xhci98-vm\p45\w45-u4v2c\<leg>\`
+(`steps.txt`, `debugcon-a.log`, `trace-a.log` with `-trace usb4_*`
+events, screenshots).
+
+| System | Configuration | Result |
+|---|---|---|
+| 7 x86 (`w7`) | v2 host, v2 device at power-on | Gen 4 x2 (`u4.link.gen4=00000102`, no lane write), CMUV 20h on both routers (ROUTER_CS_4 `0x400020ff`), Set Capabilities `32h` metadata `102h` on both and the Sequence bit read back enabled (`u4.caps.seq`), EE written 1 on both PCIe adapters before Path Enable, `u4.tmu.enhanced`, PCIe and USB3 tunnels up, ORICO (D:), the tray "connected (USB4 v2.0)" |
+| 7 x86 | the same, then unplug and plug `link-width=asym-tx` | `u4.link.gen4=00000104`, both tunnels, D: |
+| 7 x86 | `x-link-event=sym` on it (ASYM_LINK) | the link symmetric, nothing torn down |
+| 7 x86 | `x-link-event=elr`, then `error` | the emulator's Gen 4 Link Recovery: LINK_RECOVERY noted (`u4.note=00002601`), a port check, the tunnel up throughout |
+| 7 x86 | plug `asym-rx`, then `error` with the device's ELR clear | `u4.link.gen4=00000108`; the error a disconnect: teardown (`u4.linkdown`), the router back 50 ms later, enumerated and its tunnels rebuilt |
+| 7 x86 | a version 1 device behind the v2 host | Gen 3, CMUV 10h on it, no EE written, no enhanced TMU, Set Capabilities sent (the model's version 1 routers report the capability), D:, the tray "USB4 v1.0" |
+| 7 x86 | `XhciCmUsb4V2` 0 (machine-wide value), restart, v2 device | `cm.usb4.v2=00000100`; CMUV 10h on both version 2 routers, no Set, no EE, no enhanced TMU; the Gen 4 link still used as bonded, both tunnels up |
+| 7 x86 (`w7r`) | the version 1 regression: `asm4242` host, ORICO at power-on (pre-OS tunnel) | the tunnel preserved (`u4.preserved=00010808`), Set Capabilities to the preserved routers, D: ORICO (TESTDATA.BIN); hot unplug and re-plug rebuilt, D: back |
+| 10 x64 (`w10`) | v2 host, v2 device at power-on | as on 7 x86: Gen 4 x2, CMUV 20h, Set, EE, enhanced TMU, both tunnels; ORICO (E:) |
+| 10 x64 | `asym-tx` plug, `asym-rx` transition, `elr` and `error`; `asym-rx` plug; a version 1 device; `XhciCmUsb4V2` 0 and restart | each as on 7 x86 (LINK_RECOVERY a port check, the tunnel kept; the version 1 device at Gen 3 with CMUV 10h; the value 0: CMUV 10h, no Set) |
+| XP (`wxp`) | v2 host, v2 device at power-on | the connection manager as on 7 x86 (CMUV 20h, Set, Gen 4 x2, enhanced TMU, both tunnels; `asym-tx` plug and the recovery likewise); but no ORICO volume |
+| XP (`xpa`) | control: the version 1 `adl` host, ORICO at power-on | the tunnel up, and no ORICO volume either: not 45.20's |
+
+The XP volume: on this layout (tunnel root ports on `pcie.0`, no pre-OS
+tunnel) the NVMe behind the tunnel gets no volume on XP with a version 1
+host as with a version 2 one; the `3.2.0.0` base reading had ORICO (D:)
+on XP with the ASM4242 model and its pre-OS tunnel. Reported to the
+coordinator, not read further here.
+
+### What is left
+
+The bench reading on a real version 2 router (45-E.10). 45.20 is done
+here otherwise; ticked.
+
+## 45.43 a UAS disk attached at a cold start on XP x64: enumerated, its driver install waiting on Windows' wizard (2026-10-30)
+
+**The question.** 45.42's side finding: on the XP x64 guests with
+`3.3.0.0`, a `usb-uas` attached at power-on showed no disk, and a replug
+from the emulator brought it. Is the connection missed at the
+controller's start (the root port's first look, a lost change, a
+companion handoff), an emulator timing, or something else?
+
+**The legs.** q35, the stock emulator of `launch-q35.ps1` (not 45.41's
+link-drop build), `-smp 2`, 2 GB, `qemu-xhci` behind the root port, the
+tablet on port 2, a `usb-uas` (serial `W45COLD1`, the FAT test disk
+overlay) on root port 3 at power-on, nothing else on the bus. Disks:
+overlays of 45.41's kit disks with `3.3.0.0` installed (`prep330x64`,
+release x64: `xhci98.sys` `9e6a132b1ef98158...`, `xhciuas.sys`
+`69544021c6b1468a...`; `prep330`, release x86: `8ff8d0d2b9e9d212...`,
+`24e7a9d40b37d5b4...`); no UAS device had ever been attached to either.
+For this tree: the release amd64 `xhci98.sys` (`a333fa5239915244...`) and
+`xhciuas.sys` (`6fad01072dc9414a...`) of `f4fbf96d` (no source change in
+`src\` or `src\uas\` from there to `42093a03`), copied over the installed
+ones (`fc /b` equal) as 45.41's x64 legs did. Each start read with
+`XHCITR /snapshot`, `setupapi.log` and Device Manager. Evidence:
+`E:\xhci98-vm\p45\w45-cold\` (`c1\`, `c2\`, `x1\`: `serial-*.log`,
+`C2A.txt`, `C2B.txt`, `s*.png`).
+
+| Leg | System, build | The device at the start | Windows |
+|---|---|---|---|
+| c1 a | XP x64, `3.3.0.0`, cold start, first time the device is seen | root port 3's first look: "machine Empty, fed connect; PORTSC CCS PED PLS 0, changes CSC"; reset, slot 1, **addressed**, transport UAS | the PDO `USB\VID_46F4&PID_0003\W45COLD1` exists: Device Manager lists "USB Attached SCSI HBA" under the USB controllers at **Code 1**; `setupapi.log`: `xhciuas`'s `oem1.inf` found, then `#E358 ... blocked (server install). Error 1168` and `#E122 Device install failed`; the Found New Hardware wizard waits (behind the one for ACPI `QEMU0002`, which has no driver on any start) |
+| c1 a, then | the same, Reinstall Driver | - | the unsigned-driver warning, Continue Anyway, installed; slot 1 **configured** |
+| c1 b | XP x64, `3.3.0.0`, cold start, the device installed | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
+| x1 a | XP x86, `3.3.0.0`, cold start, first time | the same first look; slot 1 addressed | the same `#E358` (error 1168) for `oem1.inf`, the wizard waits |
+| c2 a | XP x64, this tree's build, warm restart after the copy | slot 1 configured | - |
+| c2 b | XP x64, this tree's build, cold start | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
+| c3 a | XP x64, `3.3.0.0`, cold start, first time, 4 GB (memory above 4 GB, as 45.42's 3 GB and 8 GB legs) | the same as c1 a | the same as c1 a; a replug from the emulator (`attached` false, then true) changed nothing: no new install attempt in `setupapi.log`, the wizard still waiting |
+| c4 a | XP x64, `3.3.0.0`, cold start, first time, 45.42's configuration as far as this kit's limits allow: 45.41's link-drop emulator build (a copy), 3 GB, a USB 2.0 hub on port 1 with a USB keyboard behind it | the same first look on port 3; slot 1 addressed, UAS; the hub (port 5) configured | the same `#E358` for `oem1.inf`, and one for the hub (`xHCI98 USB Hub`, `oem0.inf`): the keyboard behind it does nothing until that wizard is answered (the emulator's keys went to it until it was removed); a replug of the disk changed nothing, slot 1 still addressed |
+| x2 b | XP x86, this tree's build (the release x86 `xhci98.sys` `f18a3c4e795ef0ed...` and `xhciuas.sys` `989265a07bf16dc5...` of `f4fbf96d`, copied over `3.3.0.0`'s on a fresh overlay), cold start with a device of a new serial (`W45COLD3`) | the same first look; slot 1 addressed | the same `#E358` for `oem1.inf` on `W45COLD3`, the wizard waits |
+
+**Reading.** The connection is seen at every start. The root hub's
+first reading marks every root port changed (`XhciRootHubInit` in
+`hcd_dev.c` sets every bit of `PortChange`), so the first look reads
+each port whatever its change bits say; a change the controller
+announced before the run, or none at all, cannot hide a device present
+at the start. On the emulator the port is already enabled in U0 with CSC
+set, and the first look took it as a connect, reset it, gave it slot 1
+and addressed it, and the hub built its PDO. What stops at the first
+plug is Windows' install of `xhciuas`: the package is not
+WHQL-signed, and under the default driver-signing policy (Warn) a
+server-side install of an unsigned driver is refused on XP and XP x64
+(as recorded in run-22 to run-24, and for Stor98 in design record 31
+section 6, which also records it going through under Ignore), and the
+device waits on the
+Found New Hardware wizard and the unsigned-driver question, as README
+step 5 says ("A UAS disk ... asks for its driver when plugged in"). Until
+it is answered the device is listed at Code 1, not under the disk
+drives, and the slot stays addressed. Once installed, the same device at
+a cold start is configured and its volume mounted, under `3.3.0.0` and
+this tree alike.
+
+**What is not reconciled.** 45.42's record says no PDO and no problem
+device, and that a replug brought the disk at once. Its leg showed a
+Found New Hardware window on its first start
+(`E:\xhci98-vm\p45\w45-hubuas\f42m8\s1.png`), but which device it was
+for is not recorded (every start here also has one for ACPI
+`QEMU0002`), and here a replug of the waiting device changed nothing.
+Leg c4 took that leg's configuration (but 3 GB, not 8 GB, this kit's
+limit being 4 GB) and read the same as c1. So these legs explain what
+they show; 45.42's "a replug brings it" is not reproduced, and its 8 GB
+case is not read.
+
+**Result.** No defect of this driver found, and no change: in these
+legs the device is enumerated at every cold start, and a UAS device seen
+for the first time on XP and XP x64 under the Warn policy waits on
+Windows' wizard, at a cold start as at a plug. Owed: 45.42's 8 GB case
+and its replug (above).
+
+## 45.40 an RTL8157 on XP losing its static settings and taking the default route: read, reproduced, and the identity kept (2026-10-30)
+
+**Verdict: the report's symptom is what a new instance id gives, and a
+failed serial read at a re-enumeration is a way the bus gives one;
+reproduced on q35 XP and 7 with `3.3.0.0`.** XP and 7 keep a network
+adapter's TCP/IP settings under its devnode's `NetCfgInstanceId`. A
+devnode whose USB instance id changes is a new adapter: Windows installs
+it with DHCP, and the old one's static settings stay on a phantom. With
+the LAN's DHCP server handing out a router, the new adapter's default
+route can outrank the VPN adapter's (in the legs the simulated 5 Gbit/s
+adapter's automatic metric, 10 on XP and 5 on 7, was below the other
+adapter's 20). The bus names a device with a usable serial by that
+serial, and falls back to the location form when three serial reads in a
+row fail; a re-enumeration (a link recovery, a cycle, a controller
+recovery, a replug) reads the serial again. Design record 13 section 10.7,
+"Identity across a re-enumeration", now keeps a device that was
+serial-named at a root port from being renamed there by a read that
+fails. The user's own event is not read (owed: their `ipconfig /all`,
+`route print`, the `Enum\USB\VID_0BDA&PID_8157` keys and an `XHCITR`
+snapshot). `rtl815x` itself cannot change the devnode (below).
+
+### The reading
+
+- **Windows.** An adapter's TCP/IP settings live under its devnode's
+  `NetCfgInstanceId`; a devnode with a new instance id is a new adapter,
+  installed with DHCP. That is the mechanism the legs reproduce. The
+  symptom alone does not prove it: DHCP can be turned on for the same
+  adapter, and a default route can be added by other means; the user's
+  instance paths and `NetCfgInstanceId`s before and after would.
+- **`rtl815x` (usb-wdm-free 0.1.4, unchanged since).** Its NDIS Reset
+  resets pipes, applies the filter and reads the link; Halt and Initialize
+  keep the devnode; it sends no RESET_PORT or CYCLE_PORT; its address
+  choice (`ChooseAddress`) touches no TCP/IP setting. It cannot make a new
+  adapter. Separately, its `Recover` gives up after 30 failed recoveries
+  and reports the adapter gone - a dead LAN with the settings kept, not a
+  default route (a follow-up for that repository, not this task).
+- **The bus.** Every path that re-enumerates a configured device builds a
+  fresh device record and reads the serial again (root and hub link
+  recovery, the tolerance cycles, slot-fatal recovery, CYCLE_PORT, a
+  failed RESET_PORT, controller recovery, a resume that re-initializes the
+  controller in `3.3.0.0`); a successful RESET_PORT, the resume keep and
+  45.41's link keep (UAS only) keep the PDO. The read's three tries were
+  back to back, and a STALL counted as a failure. A serial-less device
+  keeps the location form, so one that comes back on another port or on
+  its USB 2.0 companion is a new devnode too (not changed here).
+- **A related reading.** The snapshot of task 45.41 (another user, VIA
+  VL805, XP x64) shows a 5 Gbit/s RTL8157 on root port 2 whose link fell
+  to SS.Inactive and was warm-reset, the device dropped and root port 2
+  Empty at the dump: such link drops happen with this adapter on real
+  hardware. Real RTL8157 units carry a MAC-like serial (a WisdPi WP-UT5
+  reads `000334C8D6B113C7`).
+
+### The vehicle
+
+`usb-wdm-free`'s `rtlemu.py` (SIMULATED RTL8157, usbredir, SuperSpeed),
+given `--serial` and `--serial-stall N` by this task (usb-wdm-free
+`2b1c293`: a serial string at index 3, and the first N reads of it in a
+run answered with a STALL). QEMU 11.1.0 (scoop build; the q35 emulator
+snapshot has no usb-redir), q35 bases `xp` and `w7x86`, 2 vCPUs, one guest
+at a time, overlays in `E:\xhci98-vm\p45\w45-rtl\`, QMP 49370, simulator
+49371. A second adapter, QEMU's `rtl8139` on user networking (DHCP, router
+10.0.2.2), stands for the VPN router. `rtl815x` 0.1.4 (`RTL815X.SYS`
+`5e1ef6be...`, `RTLXP7.INF` `479bf50c...`, as `SHA256.TXT`). Each replug
+is a `device_del` and a new simulator run on the same QEMU port.
+
+### Before the change: `3.3.0.0`
+
+XP SP3 (`xp1`, `3.3.0.0` release-x86, `xhci98.sys` `8ff8d0d2...`):
+
+| Step | Instance | Adapter | Result |
+|---|---|---|---|
+| plug, serial read | `USB\VID_0BDA&PID_8157\000334C8D6B113C7` | Local Area Connection 2, DHCP | default route via 192.168.77.1 metric 10, the rtl8139's metric 20 (`p1c`) |
+| set static 192.168.77.50/24, no gateway | same | static | default only via 10.0.2.2 (`p1d`) |
+| replug, 2 serial reads STALL | same | static kept | (`p2a`) |
+| replug, 3 serial reads STALL | **`USB\VID_0BDA&PID_8157\6&58728d&0&1`** | a new one, "... (RTL815X) #2", Found New Hardware wizard, DHCP 192.168.77.2 | **default route via 192.168.77.1 metric 10**; the static address gone (`p3b`) |
+| replug, serial read | the first | static again | (`p4a`) |
+
+7 SP1 x86 (`w7a`, `3.3.0.0`): the adapter "Local Area Connection 3" set
+static (`s10`); a replug with 3 STALLs made `USB\VID_0BDA&PID_8157\6&1a1ca75f&0&1`,
+**installed with no prompt at all**, DHCP 192.168.77.2, default route via
+192.168.77.1 metric 5 against the rtl8139's 20 (`s11`).
+
+### The change
+
+Design `f2916a2d`, code `54db4c51` (record 13 section 10.7, "Identity
+across a re-enumeration"; reviewed and revised):
+
+- the serial reader's tries 100 ms and 400 ms apart;
+- a root port remembers the last non-hub group listed for a device on it
+  directly (its ids, whether it answered the serial form);
+- a covered arrival whose read fails or is refused where its serial form
+  was is read again in place, up to three more reader runs 1 s apart,
+  cancelled on a departure, a connection change or a halted controller;
+- runs spent: no PDO, the port Failed and latched, `serial.defer.fail`;
+  the machine's own retry fails at once; the next connection (a replug, a
+  recovery's re-enumeration) is published whatever its read gives;
+- `id.form` and `serial.defer*` notes; counters `serial.deferred`,
+  `serial.defer.ok`, `serial.defer.fail`; four words appended to the HCD
+  region's root-port record (20 words), printed by `XHCITR` as an
+  "identity:" line.
+
+Host vectors: `test_func` (`test_serial_defer`, 12 cases), `test_snap`
+(the 20-word record), `XHCITR`'s `-selftest-hcd` (an Empty port kept for
+its identity line, a latch and a bypass).
+
+### After the change
+
+Build: `54db4c51`, the gated x86 build (release and qemu, "BUILD + GATES
+PASSED (release qemu)", the host suites passed; release `xhci98.sys`
+`a49d7846...`, 327552 bytes), and `XHCITR.EXE` of the same tree
+(`77cdc6a9...`) for the in-guest snapshots. Each guest a fresh overlay with
+`3.3.0.0` installed, this tree's `xhci98.sys` copied over the installed
+one and the guest restarted; the loaded file read back (327552 bytes,
+`driverquery` dated 30-Oct-26 10:55 PM). The adapter set static as before.
+
+| Step | XP SP3 (`xp2`) | 7 SP1 x86 (`w7b`) |
+|---|---|---|
+| plug, serial read; set static | `...\000334C8D6B113C7`, static, default via 10.0.2.2 (`a6`) | the same, "Local Area Connection 3" (`b7f`) |
+| replug, 3 serial reads STALL | **the same devnode, static kept** (`a7`) | **the same** (`b7g`) |
+| replug, 12 STALL (every run spent) | no adapter and no new instance; root port 1 Failed, cause PDO, its slot given back; the snapshot's notes `serial.defer=00010004`, runs `...0104`, `...0204`, `...0304`, `serial.defer.fail=00010004`, and "identity: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; failed, waits for a new connection" (`a8` to `a10`) | the same notes and line (`b7h`, `b7i`) |
+| replug, every read STALLs (the bypass) | published on the location form, `...\6&58728d&0&1` - the way out, as designed; its wizard cancelled (`a11`) | not run |
+| replug, serial read | the first devnode, static (`a12`) | the first, static (`b7j`) |
+
+The 3-STALL replug's notes (XP): `serial.defer=00010004` (the first read
+failed where the serial form was), `serial.defer=00010102` (run 1 read
+it), `id.form=00010201` (published on the serial form). Each simulator
+run's trace counts exactly its STALLs (`ev\a*.jsonl`, `ev\b*.jsonl`).
+Evidence: `E:\xhci98-vm\p45\w45-rtl\` (`shots\`, `ev\`, `pids.txt`), not
+tracked.
+
+### Not read
+
+- The user's own event and their adapter's serial behaviour.
+- A device behind a hub (hub ports are not covered), and a serial-less
+  device back on its USB 2.0 companion port (still a new devnode).
+- 98 SE, ME and 2000: the change is common code; no leg ran there.
+- A link drop or a recovery as the trigger (the legs replug); the
+  emulator cannot fail a SuperSpeed link.
+
+A user who meets this before the fix can keep the VPN adapter ahead by
+giving it a fixed interface metric of 1 (its TCP/IP Advanced settings,
+"Automatic metric" off); the adapter left with the static settings shows
+under Device Manager's hidden devices.
+
+## 45.15 (legs) the minimal chain on 98 SE, ME and 2000; 10 x64 owed (2026-10-31)
+
+Worker w45-u4chain2, development host A. Code at `d73e4b10` (`f1e9ec85`
+and record 34's revision 12, documentation only): the gated builds
+`all` (x86) and `all -amd64`, "BUILD + GATES PASSED (release qemu)"
+(`E:\xhci98-scratch\p45-w45-u4chain2\gb-x86-l.log`, `gb-x64-l.log`).
+Packages (`make-package.ps1`): release x86 `xhcicm.sys` `cb3dfcb3...`,
+`xhci98.sys` `ac0ab8c4...`; qemu x86 `xhcicm.sys` `0b771eaa...`,
+`xhci98.sys` `fcc8934f...`. The installer and the tools of the transfer
+folder are `3.3.0.0`'s, as in the 7 x86 and XP legs above.
+
+The emulator, the host and the chain as in "45.15 (continued)": QEMU
+v11.1.2 with `usb4-emu` main `fc16468`'s patch, `-Usb4 asm4242`
+(`asm-preset=asm4242-desktop`, its pre-OS connection manager on), the
+parent `usb4-device ... dialect=usb4,downstream-ports=1,
+chain-power-controller=off` with its NVMe on USB4 port 1 at power-on, the
+child `usb4-device ... parent=enc0,port=1` (a plain enclosure) plugged by
+QMP at the desktop or, with `-Chain`, at power-on. Goldens: fresh overlays
+of the q35 bases with the release package installed (98 SE and ME
+`XHCIINST /dir release-x86 /yes /nopause /thunderbolt /stor98`; 2000
+`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`), the qemu
+flavour's `xhcicm.sys` and `xhci98.sys` copied over the installed ones,
+shut down (98 SE `87699fc7...`, ME `d890cf1b...`, 2000 `cd49f1ba...`);
+each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
+`me\`, `w2k\` (`debugcon-<leg>.log`, `cmdline-<leg>.txt`, screenshots).
+
+| Leg | System | Read | Verdict |
+|---|---|---|---|
+| r1 | 98 SE | the parent preserved at the start (`u4.preserved=00010808`); the child plugged: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, the action with the kid, and the 9x chain action re-enumerating both members (`cm.reenum.9x.reenumerate`); the chained NVMe found (Stor98 by its Add New Hardware wizard), F: beside the parent's E:, `fc /b` of a file on both: no differences. The child unplugged: `u4.kid.teardown`, `u4.linkdown.kid`, F: gone, E: kept; plugged again: F: back. The parent unplugged with the child attached: `u4.kid.dropped` first, then the port's link-down, both drives gone; the parent plugged again (the emulator keeps the child on it): the parent's tunnel up and UP, then the kid's, both drives back | clauses 1 (the child's hot plug behind a parent present at power-on), 2, 3 and the approve order: pass |
+| r2 | 98 SE | the chain at power-on: adopted (`u4.kid.adopted=00010808`); the chained NVMe's first install asked a restart, taken (a restart ends QEMU on 98 SE; started again cold); then E: and F:; the child unplugged and plugged again: torn down, connected again, F: back | clause 4: pass |
+| r1 | ME | as on 98 SE: the kid connected, Stor98's wizard for the chained NVMe (the staged INF chosen); F: appeared at the next plug of the child (the first plug installed it); `fc /b`: no differences; the end unplug tore the kid down and kept E:; the middle unplug dropped the kid first; the parent plugged again with the child: parent first, then the kid, E: and F: back | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3 and the approve order: pass |
+| r2 | ME | adopted at power-on; the first install's restart taken, then E: and F:; the child unplugged and plugged again: connected again | clause 4: pass |
+| r1 | 2000 | the kid connected and the chain port classified (`cm.chain.class=00060408`); the chained NVMe on Stor98 at **Code 10** (no interrupt behind a hot-plugged chain on the Standard PC HAL, as 45.13 read); `XHCIINST /devices` lists the kid as a router "behind another device, approved, PCIe up" (the status record's kind 3 entry); the end unplug: `u4.kid.teardown`, the chain port invalidated (`cm.chain.invalidate=02020408`); plugged again: UP, invalidated again; the middle unplug: `u4.kid.dropped` first, then the port's link-down, Windows' "Unsafe Removal of Device" for the parent's tree | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3: pass for the connection manager and the PCI side; the chained drive's start: the platform limit already recorded |
+| r2 | 2000 | the chain at power-on: adopted; both NVMe on Stor98 **started**, each with its disk; the kid listed "behind another device" with no name (an adopted kid's name is not read) | the adoption (part of clause 4): pass; the child's unplug and re-plug after it not run |
+| - | 10 x64 | not run: the package of this clone is unsigned and has no catalogs (10 x64 refuses such a package, 43.33); the in-guest throwaway signing was not run in this session | owed |
+
+### Findings
+
+- 98 SE, golden: during the install Windows asked for the "xhci98 xHCI
+  Host Controller Disk" (`xhci98.sys` not found) for the second
+  controller; pointed at `C:\XHCI98`, the install went on and ended with
+  every controller installed. ME did not ask. Not chased here.
+- On 98 SE and ME a chained drive is reached through 45.14's padding and
+  9x re-enumeration of every member at each kid action (a kid's action
+  names no member, record 34 section 6.11).
+
+### Left
+
+- The 10 x64 leg (a signed package, or the in-guest throwaway signing).
+- Clause 1 with the parent hot-plugged at the desktop (on 7 not readable,
+  r3 above); on 2000, clause 4's unplug and re-plug after the adoption.
+- Deferred to the next release (owner, 2026-10-30; record 34 section
+  3.10, "Deferred"): the chained unit's eject teardown, the chain port's
+  correspondence and the per-tunnel ownership, names and generations.
+
+## 45.46 and 45.50: the ASM4242 router's own line, and every value written by the install, read on q35 (2026-10-30/31)
+
+Branch `w45-small` (from `8185602f`), tree `E:\xhci98-wt\w45-small` on
+development host A. Commits: `16f00df8` (45.46), `fa6ea0dc` (45.50),
+`8bd4753a` (the free drivers page's address once, owner 2026-10-31),
+and the small fixes `fd0ee2e7` (XHCITR's bitness on the x64 build),
+`79449edc` (`xhcitr\snaptest.cmd`'s `find` and `findstr` by full path),
+`eafe5ba0` (Stor98's `INTEGRATION-0.2.md`, no local path); each reviewed
+and revised. The gated x86 build at `fa6ea0dc`
+(`scripts\build-driver.cmd all`, `XHCI98_SELFTEST_SKIP_OK=1`, after
+`src\pfw\build.cmd`): BUILD + GATES PASSED (release, qemu), 49:09; host
+tests passed (`test_inst` 7028 checks, `test_cm` 244). The test package:
+`make-release.ps1 -Arch x86 -TestLabel w45small -NoNonFree -NoWdmFree
+-SkipQualtool -SkipMarkTool` of `fa6ea0dc` (its version still `3.3.0.0`,
+so the update legs ran it with `/force`); `release-x86\xhci98.sys`
+`0f095c57...`, `xhcicm.sys` `7b881743...`, `xhcicm.inf` `ef82578d...`,
+`stor98w9.inf` `1825e442...`. Each leg on a fresh overlay of the q35 base
+through `launch-q35.ps1 -Usb4 asm4242 -EncAtBoot` (the emulated ASM4242
+with the ORICO enclosure at power-on), QMP 49380 to 49382; every start
+and stop in `E:\xhci98-vm\p45\w45-small\pids.txt`.
+
+### 45.46: the driver's choice for the router (`1B21:2425`)
+
+| System | Before (`3.3.0.0`) | After the update | Evidence |
+|---|---|---|---|
+| 98 SE | `xhcicm.sys` (`NTMPDriver`, `Cm.Dev`); `DeviceDesc` `xHCI98 USB4 Router`, `FriendlyName` `xHCI98 USB4 Router (ASMedia ASM4242)` the installer's | `xhcicm.sys` (`Cm.Dev`); `DeviceDesc` and `DriverDesc` `xHCI98 USB4 Router (ASMedia ASM4242)`, no `FriendlyName`; the run printed "name removed: xHCI98 USB4 Router (ASMedia ASM4242)" | `w98u\exp-b33.log`, `exp-a50.log`, `upd-serial.log` |
+| XP | `xhcicm`, `MatchingDeviceId` `pci\cc_0c0340`, the same names | `xhcicm`, `MatchingDeviceId` `pci\ven_1b21&dev_2425`, `DriverDesc` and `DeviceDesc` with the product, no `FriendlyName`; "name removed" printed | `xpu\xq-b33.log`, `xq-a50.log`, `upd-serial.log` |
+| 10 x64 (22H2, 19045), the base alone, no package | the NHI has no driver: problem 28, "Universal Serial Bus (USB) Controller", no service (`wmic ... Win32_PnPEntity`); no INF in `C:\Windows\INF` names `CC_0C0340` or `DEV_2425` (`findstr /m /i`) | - | `w10a\s3.png`, `s5.png` |
+
+So with the line the router matches by its own id,
+`PCI\VEN_1B21&DEV_2425`, where it matched by the class: on the 98 SE
+guest a compatible id (the NHI has subsystem `24211B21`, and 98 SE lists
+`VEN&DEV` after the hardware ids `...&SUBSYS_...`, `...&CC_...`, but
+ahead of `PCI\CC_0C0340`), and the driver chosen is the same: on 98 SE
+and XP there is no other, and Windows 10 x64 has no driver of its own for
+it, so nothing there for this line to outrank (record 23 section 5.13.9).
+
+### 45.50: a user's values kept over an update from `3.3.0.0`
+
+On each guest `3.3.0.0` was installed (`/thunderbolt /stor98`), the
+machine restarted, values set by hand in the ASM4242 xHCI's and the
+router's own keys (98 SE: `regedit /s` of a `.REG`; XP: `reg add`), and
+the update run (`/force`), then a restart:
+
+| Value | Set by hand | After the update, 98 SE | After the update, XP |
+|---|---|---|---|
+| `XhciPollIdleMs` (written by both versions) | 60 | 60 | 60 |
+| `XhciUsb2Bos` (new) | 0 | 0; the other controller 1 | 0; the other controller 1 |
+| `XhciResumeKeep`, `XhciLinkKeep` (new) | - | 1, 1 | 1, 1 |
+| `XhciCmPollIdleMs` | 300 | 300 | 300 |
+| `XhciCmUsb4V2` (new) | 0 | 0 | 0 |
+| `XhciCmTunnelBridge` (new, `REG_SZ`) | `AUTO` | `AUTO` | `AUTO` |
+| `XhciCmAsmediaPcie7Credits` (new) | - | 0 | 0 |
+| `XhciCmRingInterrupt` (new, NT) | - | absent | 0 |
+| `XhciCmBridgeReq` (new, NT 5.x) | - | absent | 1 |
+| Stor98 `DriverParameter` (XP) | `storpollmode=1` | - | `storpollmode=1`, whole |
+| Stor98 `StorPollMode` (98 SE) | 1 | 1 | - |
+
+- On XP Stor98 ran the tunnelled drive under `3.3.0.0` and was updated
+  over it; its `DriverParameter` stayed the user's string whole, as the
+  owner's decision says (a missing key takes its default).
+- On 98 SE Stor98 bound no drive in this guest (as in the w45-legs
+  update legs of 2026-10-29), so neither the INF's
+  `[Stor98_Settings_9x]` nor the installer's file-only update ran there:
+  the 98 SE and ME half of Stor98's defaults (`s98_defaults_put_9x`, and
+  `s98_defaults_drop_9x` at the uninstall) is read by the host vectors
+  alone and owed to a leg where Stor98 binds on 98 SE or ME.
+- The test package carried no `XHCIMARK.EXE` (`-SkipMarkTool`), so the
+  XP run said the mark service was not installed: the test cut's, not a
+  defect.
+
+### Small fixes
+
+- XHCITR's bitness line (`fd0ee2e7`): `-selftest-sysinfo` prints the
+  three cases, which `snaptest.cmd` holds ("this x64 tool ran natively"
+  for the x64 build); `xhcitr\build.cmd` built `XHCITR.EXE` and
+  `XHCITR64.EXE` and the snapshot self-test passed (33 cases).
+- The q35 launcher (`E:\xhci98-vm\q35-bases\launch-q35.ps1`, untracked):
+  `-Usb4 tb3ar|tb3tr` on 98 SE and ME adds
+  `-global <usb4-tb3|usb4-tr>-tunnel-dsp.power_controller_present=off`
+  (45.14's finding; the pinned emulator has QEMU's property, not
+  usb4-emu's newer `power-controller` alias); noted in its `STATE.md`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
@@ -4210,3 +4797,44 @@ the version bump.
   chained behind a dock (USB4 connection manager): stopping it stops the
   drive, but its tunnel stays up until the unplug, so a rescan (Scan for
   hardware changes) can find it again; unplug it after the stop."
+- 45.20 (merged from `w45-u4v2c` at `4be5edf5`; the worker's text, its
+  "read on the emulator only" dropped by the owner's rule; also a registry
+  row for `XhciCmUsb4V2` (written by the install after 45.50) and an
+  "Untested ground" row: USB4 version 2 and Gen 4 links on real hardware
+  (45-E.10); "Thunderbolt 5" not claimed before that bench reading): "USB4
+  version 2 routers (Barlow Ridge, say) are run as version 2: Gen 4 links
+  at 80 Gbit/s, symmetric or asymmetric (120/40), used as the router
+  brings them up, with Extended Encapsulation and the enhanced time sync;
+  `XhciCmUsb4V2` 0 runs them as version 1, as in 3.3.0.0."
+- 45.40 (merged from `w45-rtl` at `7fcc6ff4`; the hub-port extension
+  (owner, 2026-10-30) still to come, which drops "behind a hub" from the
+  not-covered list; "reproduced on XP and 7" left out as a test label): "A
+  device with a serial number that the driver enumerates again at a root
+  port (after a link drop, a recovery or a replug) is no longer renamed
+  when its serial number cannot be read at that moment: the driver reads
+  it again for a few seconds, and if it still cannot, leaves the device
+  out until the next connection. Before, Windows took such a device for a
+  new one, and a network adapter came back as a new connection with
+  automatic (DHCP) settings, losing its static address and possibly taking
+  the default route (seen with a Realtek RTL8157 on XP). Devices without a
+  serial number that come back on another port are not covered."
+- 45.15 (2000) (merged at `f5e4ee86`; with the chained stop text already
+  above): "On Windows 2000 a drive daisy-chained behind another device
+  that is plugged in while Windows runs is found but does not start (Code
+  10, the Standard PC HAL); one chained at power-on starts."
+- 45.46 (merged at `4f092103`; also drop "by the installer" at
+  release-notes.md 279-282 and ", the name SETUP.EXE gives it" in
+  README.md's router row): "The ASMedia ASM4242's USB4 router is named
+  `xHCI98 USB4 Router (ASMedia ASM4242)` by the INF's own line, a hand
+  install included; an update clears the name 3.3.0.0's installer wrote."
+- 45.50 (merged at `4f092103`, for "Registry settings"; the CM values
+  table's "absent" and "not written" cells for XhciCmBridgeReq,
+  TunnelBridge, AsmediaPcie7Credits, RingInterrupt and Usb4V2, and the
+  release notes' "which no INF writes" (~3834), to change with it): "From
+  3.4.0.0 the install writes every value the drivers read at its default,
+  in each controller's (or the Thunderbolt/USB4 controller's) own key,
+  only where it is missing, so a value you set survives an update;
+  XhciCmTunnelBridge is written as `auto` (the driver finds the tunnel
+  ports itself). Stor98's install writes its settings too: each value on
+  98 SE and ME, and one DriverParameter on 2000 to 10, kept whole where
+  you wrote one."

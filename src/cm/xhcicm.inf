@@ -13,16 +13,16 @@
 ; The NHI ids: record 21 section 3.3's list (decision D9, owner 2026-10-15),
 ; every Intel firmware-connection-manager host Linux's drivers/thunderbolt
 ; addresses; and design record 22 section 3.7's USB4 hosts, the Intel ones
-; with no firmware connection manager, AMD's Pink Sardine and the class
-; line for any other. src\cm\cm_vals.c maps each id to its profile (the
-; gate's CM-IDLIST). Only 15BF (Alpine Ridge LP, the ThinkPad P14s Gen 1's)
-; has been read by this project; every other line is untested. A user who
-; needs another id adds a model line to a copy of this file (record 21
-; section 8, XhciCmMode 2).
+; with no firmware connection manager, AMD's Pink Sardine, ASMedia's
+; ASM4242 (task 45.46) and the class line for any other. src\cm\cm_vals.c
+; maps each id to its profile (the gate's CM-IDLIST). Only 15BF (Alpine
+; Ridge LP, the ThinkPad P14s Gen 1's) has been read by this project;
+; every other line is untested. A user who needs another id adds a model
+; line to a copy of this file (record 21 section 8, XhciCmMode 2).
 ;
 ; The description names the controller, never the connection manager that
 ; runs it: its generation (TB2, TB3 or USB4) and, on an id line, its maker
-; and product, one string per product (Tb2FrDesc ... U4PsDesc); the class
+; and product, one string per product (Tb2FrDesc ... U4AsDesc); the class
 ; line's U4Desc is the plain xHCI98 USB4 Router (record 21 section 3.3,
 ; task 43.73; the gate's CM-DESC, and test_inst holds each string to
 ; xhciinst\inst_core.c's name table and 98 SE's 46-character limit).
@@ -38,9 +38,12 @@
 ; section 12) is written by
 ; every install path at the driver's own default as a REG_DWORD under
 ; FLG_ADDREG_NOCLOBBER (0x00010003), so a value a user set survives a
-; reinstall and a written default reads exactly as an absent one - except
-; XhciCmTunnelBridge, whose absence is meaningful and which no INF writes.
-; The two values the driver reads on Windows 98 SE and ME alone,
+; reinstall and a written default reads exactly as an absent one. Since
+; task 45.50 that holds for every value the driver reads (record 21 section
+; 8.1): XhciCmTunnelBridge, a REG_SZ, is written as "auto", which the
+; driver takes as its absence, its own finding of the tunnel ports; the NT
+; paths alone write XhciCmRingInterrupt, and the NT 5.x paths alone
+; XhciCmBridgeReq. The two values the driver reads on Windows 98 SE and ME alone,
 ; XhciCmBridgeNumbering and XhciCmNoIrqStart, are written by the 98 SE and
 ; ME install alone (task 44.46).
 ;
@@ -88,9 +91,10 @@ DriverVer=10/28/2026,3.3.0.0
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E333
@@ -102,6 +106,7 @@ DriverVer=10/28/2026,3.3.0.0
 %U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev,PCI\CC_0C0340
 
 [CmModels.NTx86.6.0]
@@ -133,9 +138,10 @@ DriverVer=10/28/2026,3.3.0.0
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
@@ -147,6 +153,7 @@ DriverVer=10/28/2026,3.3.0.0
 %U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
@@ -174,7 +181,7 @@ HKR,,NTMPDriver,,xhcicm.sys
 ; --- Windows 2000 and XP ----------------------------------------------------
 
 [Cm.Dev.NTx86]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev.NTx86.Services]
@@ -183,7 +190,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 ; --- Windows Vista and 7 ----------------------------------------------------
 
 [Cm.Dev6.NTx86]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev6.NTx86.Services]
@@ -191,8 +198,8 @@ AddService=xhcicm,0x00000002,Cm.AddService
 
 ; --- Shared -----------------------------------------------------------------
 
-; The driver's values (record 21 section 8, record 22 section 12), each at the driver's default.
-; XhciCmTunnelBridge is not written: its absence means no override.
+; The driver's values (record 21 section 8, record 22 section 12), each at
+; the driver's default.
 [Cm.Values]
 HKR,,XhciCmMode,0x00010003,1
 HKR,,XhciCmApprove,0x00010003,1
@@ -208,6 +215,25 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+; Written since task 45.50 (record 21 section 8.1), each at the driver's
+; default: the tunnel ports' override, whose "auto" is the driver's own
+; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
+; credits experiment (record 22 section 18.8) and the USB4 version 2 switch
+; (record 22 section 12).
+HKR,,XhciCmTunnelBridge,0x00000002,"auto"
+HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
+HKR,,XhciCmUsb4V2,0x00010003,1
+
+; Task 45.50: the values the driver uses on Windows 2000 to 10 alone, written
+; by their install paths alone: the NHI's interrupt (record 21 section 4.5).
+[Cm.ValuesNt]
+HKR,,XhciCmRingInterrupt,0x00010003,0
+
+; Task 45.50: the values the driver reads on Windows 2000 and XP (and XP
+; x64) alone, written by their install paths alone: the bridges' memory
+; windows set at a hot plug (design record 33 section 9.1).
+[Cm.ValuesNt5]
+HKR,,XhciCmBridgeReq,0x00010003,1
 
 ; The values the driver reads on Windows 98 SE and ME alone (record 21
 ; section 8; task 44.46), written by their install alone, each at the
@@ -260,5 +286,6 @@ U4PlDesc="xHCI98 USB4 Router (Intel Panther Lake)"
 U4WlDesc="xHCI98 USB4 Router (Intel Wildcat Lake)"
 U4BrDesc="xHCI98 USB4 Router (Intel Barlow Ridge)"
 U4PsDesc="xHCI98 USB4 Router (AMD Pink Sardine)"
+U4AsDesc="xHCI98 USB4 Router (ASMedia ASM4242)"
 U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

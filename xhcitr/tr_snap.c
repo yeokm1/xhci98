@@ -406,6 +406,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
+#define SNAP_HCD_PORT_ID_WORDS      20UL /* task 45.40's words appended */
 #define SNAP_HCD_COUNTER_WORDS      96UL
 #define SNAP_HCD_MAX_BYTES          32768UL
 /*
@@ -1554,6 +1555,32 @@ typedef BOOL (WINAPI *PFN_GMSEX)(SYS_MEMORYSTATUSEX *);
  * refused; `nativeArch` is GetNativeSystemInfo's, SYS_ARCH_UNKNOWN where that
  * does not exist.
  */
+/* XHCITR.EXE is an x86 program, which on a 64-bit Windows runs under WOW64
+ * and says so; XHCITR64.EXE is a native x64 one, for which IsWow64Process
+ * answers FALSE, so there the build says the Windows is 64-bit. */
+#if defined(_WIN64)
+#define SYS_TOOL_64             1
+#else
+#define SYS_TOOL_64             0
+#endif
+
+static const char *sys_bitness(int tool64, int wow, unsigned arch)
+{
+    if (tool64) {
+        return "64-bit Windows (x64); this x64 tool ran natively";
+    }
+    if (!wow) {
+        return "x86 (32-bit Windows)";
+    }
+    if (arch == SYS_ARCH_AMD64) {
+        return "64-bit Windows (x64); this x86 tool ran under WOW64";
+    }
+    if (arch == SYS_ARCH_IA64) {
+        return "64-bit Windows (Itanium); this x86 tool ran under WOW64";
+    }
+    return "64-bit Windows (64-bit); this x86 tool ran under WOW64";
+}
+
 static const char *sys_os_name(unsigned long platform, unsigned long major,
                                unsigned long minor, unsigned long build,
                                int product, unsigned nativeArch)
@@ -2197,17 +2224,12 @@ static void write_companion_system(void)
                  csd);
     }
 
-    /* This tool is an x86 program on every target; on a 64-bit Windows it
-     * runs under WOW64 and says so. */
     wow = FALSE;
-    if (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) && wow) {
-        sys_line("bitness", "64-bit Windows (%s); this x86 tool ran under "
-                 "WOW64",
-                 (nativeArch == SYS_ARCH_AMD64) ? "x64" :
-                 (nativeArch == SYS_ARCH_IA64) ? "Itanium" : "64-bit");
-    } else {
-        sys_line("bitness", "x86 (32-bit Windows)");
+    if (isWow64 == NULL || !isWow64(GetCurrentProcess(), &wow)) {
+        wow = FALSE;
     }
+    sys_line("bitness", "%s",
+             sys_bitness(SYS_TOOL_64, wow ? 1 : 0, nativeArch));
 
     if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
         int haveBiosKey;
@@ -2338,6 +2360,13 @@ static int selftest_sysinfo(void)
                sys_os_name(cases[i].platform, cases[i].major, cases[i].minor,
                            cases[i].build, cases[i].product, cases[i].arch));
     }
+    /* The bitness line over each build and WOW64 answer. */
+    printf("bitness tool64 0 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_X86,
+           sys_bitness(0, 0, SYS_ARCH_X86));
+    printf("bitness tool64 0 wow 1 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(0, 1, SYS_ARCH_AMD64));
+    printf("bitness tool64 1 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(1, 0, SYS_ARCH_AMD64));
     for (i = 0; dirty[i] != NULL; i++) {
         sys_clean(dirty[i], out, sizeof(out));
         printf("clean [%s]\n", out);
@@ -3868,7 +3897,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         r = image + portsAt + i * portBytes;
         if (get32(r, 4) == 0 && get32(r, 8) == 0 && get32(r, 20) == 0 &&
             get32(r, 40) == 0 && get32(r, 44) == 0 && get32(r, 52) == 0 &&
-            get32(r, 60) == 0) {
+            get32(r, 60) == 0 &&
+            (portBytes < SNAP_HCD_PORT_ID_WORDS * 4 ||
+             (get32(r, 64) == 0 && get32(r, 68) == 0 && get32(r, 72) == 0))) {
             continue;
         }
         shown++;
@@ -3891,6 +3922,18 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
                  (v & 1UL) != 0 ? "; deferred by the settle" : "",
                  (v & 2UL) != 0 ? "; warm reset in flight" : "",
                  (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+        }
+        /* Task 45.40's identity words, where the driver appends them. */
+        if (portBytes >= SNAP_HCD_PORT_ID_WORDS * 4 &&
+            (get32(r, 64) != 0 || get32(r, 68) != 0 || get32(r, 72) != 0)) {
+            v = (get32(r, 68) >> 8) & 0xFFUL;
+            comp("        identity: last listed %04lX:%04lX on the %s form; "
+                 "%lu deferred, %lu spent%s\n",
+                 (get32(r, 64) >> 16) & 0xFFFFUL, get32(r, 64) & 0xFFFFUL,
+                 (get32(r, 68) & 1UL) != 0 ? "serial" : "location",
+                 get32(r, 72), get32(r, 76),
+                 v == 1UL ? "; failed, waits for a new connection"
+                          : v == 2UL ? "; bypass for this connection" : "");
         }
     }
     comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
@@ -6491,8 +6534,28 @@ static int selftest_hcd(void)
     put32(image, 24, 32);
     print_hcd(image, sizeof(image));
 
-    /* A later driver's longer record (80 bytes, words appended): walked by
-     * the header's record size, the known words read as before. */
+    /* A later driver's longer record (96 bytes, words appended past task
+     * 45.40's): walked by the header's record size, the known words read
+     * as before. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 96);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 2 * 96);
+    put32(image, 28, 8);
+    base = 32 + 96;
+    put32(image, base + 0, 17);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 20, 4);
+    put32(image, base + 80, 0xDEADBEEFUL);
+    print_hcd(image, 32 + 2 * 96);
+
+    /* Task 45.40's identity words: port 2 Empty, remembering a serial-named
+     * 0BDA:8157 whose deferral was spent, latched; port 3 a bypass. */
     memset(image, 0, sizeof(image));
     put32(image, 0, 1);
     put32(image, 4, 32);
@@ -6502,12 +6565,20 @@ static int selftest_hcd(void)
     put32(image, 20, 0);
     put32(image, 24, 32 + 2 * 80);
     put32(image, 28, 8);
+    base = 32;
+    put32(image, base + 0, 2);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x101UL);
+    put32(image, base + 72, 1);
+    put32(image, base + 76, 1);
     base = 32 + 80;
-    put32(image, base + 0, 17);
+    put32(image, base + 0, 3);
     put32(image, base + 4, 13);
-    put32(image, base + 8, 7);
-    put32(image, base + 20, 4);
-    put32(image, base + 64, 0xDEADBEEFUL);
+    put32(image, base + 8, 6);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x201UL);
+    put32(image, base + 72, 2);
+    put32(image, base + 76, 1);
     print_hcd(image, 32 + 2 * 80);
     return 0;
 }

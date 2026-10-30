@@ -187,6 +187,15 @@ static void test_profiles(void)
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "AMD Pink Sardine 1669");
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "an Intel id under AMD's vendor id");
+    /* Task 45.46: the ASM4242's row, the profile its class gives it. */
+    ids.Vendor = 0x1B21;
+    ids.Device = 0x2425;
+    ids.ClassCode = CM_CLASS_USB4_NHI;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425");
+    ids.ClassCode = 0x088000;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425 by its row");
+    ids.Device = 0x2423;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "the ASM4242's port is no NHI");
     ids.Vendor = 0x8086;
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_ICM_AR, "a listed id outranks the class");
@@ -205,6 +214,9 @@ static void test_values(void)
     CM_VALUES before;
     static const WCHAR bdf[] = { '0', '4', ':', '0', '0', '.', '0', 0 };
     WCHAR longer[CM_TUNNEL_BRIDGE_CHARS + 1];
+    static const WCHAR autoLower[] = { 'a', 'u', 't', 'o', 0 };
+    static const WCHAR autoMixed[] = { 'A', 'u', 'T', 'o' };
+    static const WCHAR autoLonger[] = { 'a', 'u', 't', 'o', 'x', 0 };
     ULONG i;
 
     CmValuesDefault(&v);
@@ -307,6 +319,19 @@ static void test_values(void)
     CHECK_EQ(v.TunnelBridgeChars, 7, "a counted terminator is dropped");
     CmValuesTakeBridge(&v, bdf, 0);
     CHECK_EQ(v.TunnelBridgeChars, 0, "empty is no override");
+    /* Task 45.50: "auto", the install's written form, is no override in
+     * any case, with or without its counted terminator; a longer word is
+     * text, held for the parser. */
+    CmValuesTakeBridge(&v, bdf, 7);
+    CmValuesTakeBridge(&v, autoLower, 5);
+    CHECK(v.TunnelBridgeChars == 0 && v.TunnelBridgeRefused == 0 &&
+          v.TunnelBridge[0] == 0, "auto is no override");
+    CmValuesTakeBridge(&v, autoMixed, 4);
+    CHECK_EQ(v.TunnelBridgeChars, 0, "AuTo is no override");
+    CmValuesTakeBridge(&v, autoLonger, 5);
+    CHECK_EQ(v.TunnelBridgeChars, 5, "autox is text, not auto");
+    CmValuesTakeBridge(&v, autoLonger, 3);
+    CHECK_EQ(v.TunnelBridgeChars, 3, "aut is text, not auto");
     for (i = 0; i <= CM_TUNNEL_BRIDGE_CHARS; i++) {
         longer[i] = 'x';
     }

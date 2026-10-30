@@ -133,8 +133,9 @@ unload) for the 9x build: quarantined memory now stays owned for the boot.
 
 ## Smoke test (trial, 2026-10-15)
 
-Private QEMU copy `E:\nvme98-vm\int\bin` (from `E:\nvme98-vm\9x\bin`), overlays under
-`E:\nvme98-vm\int`, QMP 48800 (98 SE), 48810 (Me), 48820 (2000). 9x images: copies of
+Private QEMU copy `<vm-dir>\int\bin` (from `<vm-dir>\9x\bin`; `<vm-dir>` is the
+maintainer's local folder of virtual machines, here and below), overlays under
+`<vm-dir>\int`, QMP 48800 (98 SE), 48810 (Me), 48820 (2000). 9x images: copies of
 the Q-9x prep overlays with the `int-0.2` `cm9x.sys` and the debug-port build of
 `nvme98.mpd` (stage codes in the debugcon log); script `smoke9x.sh` there. Run on the
 rebuilt branch (`9dec03d`); the first trial (`int-0.2-try1`) gave the same results except
@@ -196,7 +197,7 @@ top of `EngStartIo`, `PlatCmRemoveActive` in `EngResetBus`.
 
 ### Removal tests (2026-10-16, `638c460`, 98 SE and Me, cm9x of `a79d154`)
 
-Script `E:\nvme98-vm\int\rm9x.sh` (local). Same results on both systems.
+Script `<vm-dir>\int\rm9x.sh` (local). Same results on both systems.
 
 | Case | Result |
 |---|---|
@@ -305,9 +306,9 @@ and a Flush and SHST that both run long), and `eio` on Windows 2000 with the fin
 
 ### Running the harness
 
-Scripts are in `tests/int9x/` (copies of `E:\nvme98-vm\int\*.sh`, local paths inside):
+Scripts are in `tests/int9x/` (copies of `<vm-dir>\int\*.sh`, local paths inside):
 
-- `E:\nvme98-vm\int\bin`: private QEMU (from `E:\nvme98-vm\9x\bin`); DLLs from
+- `<vm-dir>\int\bin`: private QEMU (from `<vm-dir>\9x\bin`); DLLs from
   usb4-emu's `toolchain\msys64\ucrt64\bin`. VMs open an SDL window (maintainer rule).
 - `98\base.qcow2`, `me\base.qcow2`: copies of the Q-9x prep overlays (backed read-only by
   usb4-emu `vms\win98-g9`, `vms\winme-g9`); `prep.sh <os> NVINTD` installs the current
@@ -317,7 +318,7 @@ Scripts are in `tests/int9x/` (copies of `E:\nvme98-vm\int\*.sh`, local paths in
   worktree (`NVINTD.MPD` debug-port, `NVINT.MPD` release, `CM9X.SYS`, `CTL.EXE`, `INT.BAT`).
   Run only while no VM uses them.
 - Ports: 98 SE QMP 48800 (VNC 48801), Me 48810, Windows 2000 48820 (`runw2k.sh`; its
-  keyboard is Dvorak: drive it with `E:\nvme98-vm\engine\vm.py`).
+  keyboard is Dvorak: drive it with `<vm-dir>\engine\vm.py`).
 - Sets: `rm9x.sh <os> <tag>` (A-E), `rm9x4.sh` (F-H), `rm9x5.sh` (F, ordered),
   `SECTIONS='I J K' rm9x2.sh` (I-K), `rmacct2.sh <os> <tag> "3 4 1"` (accounting;
   `SKEW=1` adds S). Results go to `logs\`; guest logs are `<os>\debugcon-<tag>.log`

@@ -1976,7 +1976,8 @@ greyed on 2000 to 7, as section 5.4 says); design record 28's
 their systems, written machine-wide when changed. Since draft 49 (task
 45.12; design record 33 section 9.1) `XhciCmBridgeReq` is one more row,
 2000 and XP (and XP x64) only, shown greyed elsewhere: 0 off, 1 on (the
-default, the driver's own: no INF writes it), 2 record only, with the
+default, the driver's own, which the NHI INFs' 2000 and XP paths write
+since task 45.50), 2 record only, with the
 caution that 0 can leave a dock hot-plugged while Windows runs with one
 port and that 2 records and changes nothing; `/set` refuses it on
 another system. `XhciCmTunnelBridge` (a string
@@ -1986,8 +1987,12 @@ a diagnostic the release notes describe for a hand edit.
 ### 5.6 Stor98's settings
 
 Shown when Stor98 is ticked. Stor98's settings (its `readme.txt`,
-"Settings") are optional, its INFs write none, and an update keeps a
-value the user set, so the page reads what is set now and shows each row
+"Settings") are optional; since `3.4.0.0` its INFs write each at its
+default where it is missing (roadmap-usb4 task 45.50, record 21 section
+8.1: each 98 SE and ME value, and on 2000 to 10 one `DriverParameter`
+holding every key), so once Stor98 is installed a row reads the default
+as an explicit value; an update keeps a value the user set, so the page
+reads what is set now and shows each row
 either as "not set (the built-in default is <value>)" or as the explicit
 value found, preselected; a row left alone writes nothing, and choosing
 the default's value where none was set writes it explicitly, which the

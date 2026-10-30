@@ -129,10 +129,16 @@ Manager and its disk is not available.
 
 SETTINGS
 
-Stor98 needs no settings; every value below is optional. The INF writes
-none of them, so an absent value means the built-in default on every
-system, and a later Stor98 with a better default applies it without you
-doing anything. Updating the driver keeps any value you set.
+Stor98 needs no settings; every value below is at its default as
+installed. Since xhci98 3.4.0.0 the INF writes each one at its default
+for the system, so that it is already there, ready to change: on 98 SE /
+ME each value, on 2000 to 10 one DriverParameter holding every key. An
+install or update writes a value only where it is missing: a value you
+set, or a DriverParameter you wrote (whole), stays, and a key missing
+from it still takes its default. So a value the install wrote keeps that
+number, and a later Stor98 with a better default does not apply it by
+itself; to go back to the default, delete the value (or the key). An
+absent value means the built-in default.
 
 Windows 98 SE / ME: values with the 9x names below in
 HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98, as a string

@@ -944,7 +944,8 @@ items 6 and 7) is used only where both are version 2 routers.
    register stays keyed on the USB4 Version, as section 6.6's TMU-Off
    predicate is now.
 5. **`XhciCmUsb4V2`** (REG_DWORD, section 12), absent meaning 1, written
-   by no INF, a bench switch like `XhciCmAsmediaPcie7Credits`. 0 makes
+   at 1 by the INFs since task 45.50 (record 21 section 8.1), a bench switch
+   like `XhciCmAsmediaPcie7Credits`. 0 makes
    this driver a version 1 connection manager again, the `3.3.0.0`
    behaviour: CMUV 1.0 to every router it enumerates and none of section
    6.2.2's version 2 obligations (items 3, 5's adoption rule, 6 and
@@ -3944,8 +3945,8 @@ at its default under the don't-overwrite flag, each read once at start
 | `XhciCmUsb3Tunnel` | 1 | 1 build USB3 tunnels (section 6.9); 0 disconnect the USB3 adapters of routers this driver configures (Guide 5.5.3); a preserved USB3 tunnel is left as found either way (decision U3) |
 | `XhciCmLaneBonding` | 1 | 1 bond (section 6.5); 0 never bond, disable lane 1 where section 6.5 step 6 can verify it, and run single-lane; a preserved link keeps its configuration either way (decision U4) |
 | `XhciCmPreOsCleanup` | 0 | 0 discover and preserve, hold what does not verify (section 9.2); 1 clean what does not verify; 2 clean everything (section 9.3) (decision U2) |
-| `XhciCmAsmediaPcie7Credits` | absent (0) | a bench experiment, not written by any INF and not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
-| `XhciCmUsb4V2` | absent (1) | a bench switch, not written by any INF and not asked by the installer: 1 runs a USB4 version 2 router this driver enumerates as version 2 (section 6.2); 0 makes this driver a version 1 connection manager again, the `3.3.0.0` behaviour: CMUV 1.0 to every router it enumerates and none of section 6.2.2's version 2 obligations, on enumerated and adopted routers alike; at 1 those obligations follow each router's own version and the capabilities it reports, whatever CMUV a predecessor wrote, which is only read and logged; the two-dword path writes and the Gen 4 Link Recovery clear of section 6.2.3 item 4 hold either way; any other value refused, 1 standing (section 6.2.1 item 5, decision U30) |
+| `XhciCmAsmediaPcie7Credits` | 0 (written by the INFs since task 45.50) | a bench experiment, not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
+| `XhciCmUsb4V2` | 1 (written by the INFs since task 45.50) | a bench switch, not asked by the installer: 1 runs a USB4 version 2 router this driver enumerates as version 2 (section 6.2); 0 makes this driver a version 1 connection manager again, the `3.3.0.0` behaviour: CMUV 1.0 to every router it enumerates and none of section 6.2.2's version 2 obligations, on enumerated and adopted routers alike; at 1 those obligations follow each router's own version and the capabilities it reports, whatever CMUV a predecessor wrote, which is only read and logged; the two-dword path writes and the Gen 4 Link Recovery clear of section 6.2.3 item 4 hold either way; any other value refused, 1 standing (section 6.2.1 item 5, decision U30) |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
 
 `XhciCmCmdTimeoutMs` and `XhciCmApproveTimeoutMs` are the ICM profile's
@@ -4747,7 +4748,8 @@ invalid for PCIe, and 7 is no USB4 requirement.
   interface's driver key); absent or 0 is today's behaviour, 1 the
   experiment; any other value is refused, 0 stands, and the log says so
   (`cm.asm.pcie7`, bit 8 found, bit 9 refused, then `cm.asm.pcie7.raw`).
-  No INF writes it; the installer neither asks for it nor writes it.
+  The INFs write it at 0 since task 45.50 (record 21 section 8.1), never
+  over a user's value; the installer neither asks for it nor writes it.
 - **Where it acts**: only on a PCIe tunnel this driver builds (a plug, a
   re-plug, a rebuild after a resume of a tunnel it built), only when the
   host router reads `174C:2428` and the connected device router

@@ -1227,7 +1227,9 @@ ancestry walk reaches. 1 (the default; absent in both places reads as
 recorded with outcome "off". 2: every attempt computed and recorded, no
 list replaced, no bridge mark (a reading mode for the bench). Any other
 value is refused and 1 stands. Never read on Vista and later or on 98 SE
-and ME. Not written by the INFs; the installer never asks for it (record
+and ME. Written at 1 by the NT 5.x install paths of both NHI INFs since
+task 45.50 (record 21 section 8.1), never over a user's value; the
+installer never asks for it (record
 23 section 8.1's never-asked set) and the window offers it under
 "Advanced..." as a 2000 and XP row (record 26 section 5.5). The service
 reads it as it reads `XhciCmSafeEject`.
