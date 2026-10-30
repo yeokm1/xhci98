@@ -94,14 +94,12 @@ ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace);
  * sys/dev/thunderbolt/nhi_reg.h's DEVICE_PINK_SARDINE_* (pinned at
  * 9d50245a); legal-provenance.md has the rows. Only 15BF has been read by
  * this project [obs]; every other row is untested. Not claimed: the
- * USB-only Alpine Ridge NHIs (15DC 15DD 15DE), Light Ridge, Cactus Ridge,
- * Win Ridge and Redwood Ridge. Falcon, Alpine and Titan Ridge on an Apple
- * machine run the software CM's Thunderbolt-host profile (design record 22
- * section 19), which a run-time check of the subsystem and the firmware
- * status selects, not this table; its Light Ridge and Cactus Ridge 4C rows
- * (tbt_hw.c) wait for their INF lines (record 22 section 19.3: the class
- * form, and the ids Windows 98 SE and ME build read first), so no table
- * here names them yet.
+ * USB-only Alpine Ridge NHIs (15DC 15DD 15DE), Cactus Ridge 2C, Win Ridge
+ * and Redwood Ridge. Falcon, Alpine and Titan Ridge on an Apple machine,
+ * and Light Ridge and Cactus Ridge 4C, run the software CM's
+ * Thunderbolt-host profile (design record 22 section 19), which a run-time
+ * check of the subsystem and the firmware status selects; the INFs bind
+ * the last two by their class form on NT 6.x alone (section 19.9).
  *
  * A profile is a hardware candidate only. Whether the platform is ready,
  * who owns the connection manager and whether the router protocol is

@@ -39,6 +39,8 @@ CatalogFile=xhcicmf.cat
 ; 15C0 has been read by this project, every other line is untested.
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1513&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1547&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156D&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1576&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1578&CC_0604
@@ -90,6 +92,8 @@ CatalogFile=xhcicmf.cat
 ; 15C0 has been read by this project, every other line is untested.
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15C0&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1513&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1547&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156D&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1576&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1578&CC_0604

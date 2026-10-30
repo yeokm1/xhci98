@@ -40,7 +40,15 @@ rule named as the other gates name their families.
            no unclaimed generation's id in any INF (design record 22 section
            3.1): Titan Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's
            USB4 router functions, ASM2464PD, 15DC/15DD/15DE, Light Ridge to
-           Win Ridge.
+           Win Ridge - except the Thunderbolt 1 hosts below.
+  CM-TB1   Light Ridge (1513) and Cactus Ridge 4C (1547), the Thunderbolt
+           1 hosts of design record 22 section 19: the NHI INFs bind them by
+           their class form PCI\VEN_8086&DEV_xxxx&CC_0880 alone, in the NT
+           6.x models sections and in no other (Windows 98 SE's and ME's ids
+           for them are unread; their bridges carry the same id), and the
+           filter INFs their bridges by the CC_0604 form; CM-IDSET and
+           CM-IDLIST read the NT 6.x sections with them and the others
+           without.
   NHI INFs (default):
   PATH-*   x86 (xhcicm.inf): [Manufacturer] exactly CmModels,NTx86.6.0
            (PATH-MFGDEC); every model of the undecorated section reaching the
@@ -182,7 +190,10 @@ $excludedIds = @("8086:15EF", "8086:0B26", "8086:5786", "8086:57A4",
 # of QEMU's vendor takes BridgeDesc, the ASM4242's downstream port
 # U4AsBridgeDesc (its maker and product; task 44.55), one in neither list
 # U4BridgeDesc.
+$tb1Ids = @("8086:1513", "8086:1547")
 $descNhi = [ordered]@{
+    "Tb1LrDesc" = @("xHCI98 TB1 Controller (Intel Light Ridge)", @("8086:1513"))
+    "Tb1CrDesc" = @("xHCI98 TB1 Controller (Intel Cactus Ridge)", @("8086:1547"))
     "Tb2FrDesc" = @("xHCI98 TB2 Controller (Intel Falcon Ridge)", @("8086:156A", "8086:156C"))
     "Tb3ArDesc" = @("xHCI98 TB3 Controller (Intel Alpine Ridge)", @("8086:1575", "8086:1577", "8086:15BF", "8086:15D2", "8086:15D9"))
     "Tb3TrDesc" = @("xHCI98 TB3 Controller (Intel Titan Ridge)", @("8086:15E8", "8086:15EB"))
@@ -200,7 +211,7 @@ $descNhi = [ordered]@{
 }
 $descNhiById = @{}
 foreach ($k in $descNhi.Keys) { foreach ($i in $descNhi[$k][1]) { $descNhiById[$i] = $k } }
-$descTbBridge = @("8086:156B", "8086:156D", "8086:1576", "8086:1578", "8086:15C0", "8086:15D3", "8086:15DA", "8086:15E7", "8086:15EA",
+$descTbBridge = @("8086:1513", "8086:1547", "8086:156B", "8086:156D", "8086:1576", "8086:1578", "8086:15C0", "8086:15D3", "8086:15DA", "8086:15E7", "8086:15EA",
                   "8086:8A1D", "8086:8A1F", "8086:8A21", "8086:8A23")
 $descStrings = @{
     "nhi"    = [ordered]@{ "U4Desc" = "xHCI98 USB4 Router"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
@@ -536,13 +547,16 @@ function Test-CmInfText {
                     if ($id -match '(?i)^PCI\\CC_') {
                         if ($id -ine 'PCI\CC_0C0340') { & $add "CM-CLASSLINE" "model binds the class id '$id'; the one class line is PCI\CC_0C0340, the USB4 host interface (design record 22 section 3.7)." }
                         else { $classLines++ }
+                    } elseif ($id -match '(?i)^PCI\\VEN_8086&DEV_(1513|1547)&CC_0880$') {
+                        if (-not $ms.Nt6) { & $add "CM-TB1" "[$($ms.Name)] binds '$id'; the Thunderbolt 1 hosts are bound in the NT 6.x models sections alone (design record 22 section 19.9)." }
                     } elseif ($id -notmatch '(?i)^PCI\\VEN_(8086|1022)&DEV_[0-9A-F]{4}$') { & $add "CM-ID" "model binds '$id'; an NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx or the class line PCI\CC_0C0340 alone." }
                 }
                 # CM-NOROUTER: a device router's, a USB-only NHI's or an
                 # unclaimed generation's id is never an INF line (design
                 # record 22 section 3.1; record 21 section 3.3).
                 $m4 = [regex]::Match($id, '(?i)^PCI\\VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})')
-                if ($m4.Success -and $excludedIds -contains ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant()) {
+                $tb1Form = $id -match ('(?i)^PCI\\VEN_8086&DEV_(1513|1547)&CC_' + $(if ($Kind -eq "filter") { "0604" } else { "0880" }) + '$')
+                if ($m4.Success -and -not $tb1Form -and $excludedIds -contains ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant()) {
                     & $add "CM-NOROUTER" "model binds '$id', a device router's or an unclaimed controller's id (design record 22 section 3.1)."
                 }
                 $vd = if ($m4.Success) { ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant() } else { "" }
@@ -553,7 +567,7 @@ function Test-CmInfText {
                 }
                 if ($wantDesc -eq "") { & $add "CM-DESC" "model '$($l.Raw)' names '$id', an id the description table does not hold: add its product's string (record 21 section 3.3, task 43.73)." }
                 elseif ($l.Key -ine "%$wantDesc%") { & $add "CM-DESC" "model '$($l.Raw)' names '$id' under $($l.Key); its product's description is %$wantDesc% (record 21 section 3.3, task 43.73)." }
-                if ($isChicago) {
+                if ($isChicago -and -not $tb1Form) {
                     $isBridge = ($id -match '(?i)CC_06') -or ($FilterIds -contains $id.ToUpperInvariant())
                     foreach ($dev in $knownBridgeDevs) { if ($id -match "(?i)DEV_$dev(&|$)") { $isBridge = $true } }
                     if ($isBridge) { & $add "CM-NO9XBRIDGE" "a `$CHICAGO`$ INF binds the bridge id '$id': Windows 98 would load this driver on a bridge devnode and break the bridge." }
@@ -561,9 +575,12 @@ function Test-CmInfText {
             }
         }
         $idSets[$ms.Name] = (@($ids | Sort-Object -Unique) -join "|")
+        $tb1Seen = @($ids | Where-Object { $_ -match '^PCI\\VEN_8086&DEV_(1513|1547)&CC_0880$' }).Count
+        if ($Kind -eq "nhi" -and $ms.Nt6 -and $tb1Seen -ne 2) { & $add "CM-TB1" "[$($ms.Name)] binds $tb1Seen of the two Thunderbolt 1 hosts' class lines; an NT 6.x models section binds both (design record 22 section 19.9)." }
         if ($Kind -eq "nhi" -and $classLines -ne 1) { & $add "CM-CLASSLINE" "models section [$($ms.Name)] carries $classLines PCI\CC_0C0340 line(s); it carries exactly one, after the id lines that outrank it (design record 22 section 3.7)." }
     }
-    if (@($idSets.Values | Sort-Object -Unique).Count -gt 1) { & $add "CM-IDSET" "the models sections bind different ids; every target of this file must see the same set." }
+    $setsNoTb1 = @($idSets.Values | ForEach-Object { (@($_ -split '\|' | Where-Object { $_ -notmatch '^PCI\\VEN_8086&DEV_(1513|1547)&CC_0880$' }) -join "|") })
+    if (@($setsNoTb1 | Sort-Object -Unique).Count -gt 1) { & $add "CM-IDSET" "the models sections bind different ids; every target of this file must see the same set (CM-TB1's lines apart)." }
     # CM-IDLIST: the NHI's id lines are exactly the rows of cm_vals.c's
     # tables, Intel's (ICM and USB4 profiles) and AMD's, so the INF and the
     # profile the code gives each id cannot drift.
@@ -579,8 +596,8 @@ function Test-CmInfText {
         $tableIds = @($tableIds | Sort-Object -Unique)
         foreach ($ms in $modelSets) {
             if (-not $idSets.ContainsKey($ms.Name)) { continue }
-            $infIds = @($idSets[$ms.Name] -split '\|' | ForEach-Object { [regex]::Match($_, '^PCI\\VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})$') } | Where-Object { $_.Success } | ForEach-Object { $_.Groups[1].Value + ":" + $_.Groups[2].Value } | Sort-Object -Unique)
-            foreach ($d in $tableIds) { if ($infIds -notcontains $d) { & $add "CM-IDLIST" "[$($ms.Name)] does not bind $d, a row of src\cm\cm_vals.c." } }
+            $infIds = @($idSets[$ms.Name] -split '\|' | ForEach-Object { [regex]::Match($_, '^PCI\\VEN_([0-9A-F]{4})&DEV_([0-9A-F]{4})(&CC_0880)?$') } | Where-Object { $_.Success } | ForEach-Object { $_.Groups[1].Value + ":" + $_.Groups[2].Value } | Sort-Object -Unique)
+            foreach ($d in $tableIds) { if ($infIds -notcontains $d -and ($ms.Nt6 -or $tb1Ids -notcontains $d)) { & $add "CM-IDLIST" "[$($ms.Name)] does not bind $d, a row of src\cm\cm_vals.c." } }
             foreach ($d in $infIds) { if ($tableIds -notcontains $d) { & $add "CM-IDLIST" "[$($ms.Name)] binds $d, which src\cm\cm_vals.c gives no profile." } }
         }
     }
@@ -881,6 +898,9 @@ if ($SelfTest) {
                     @{ Rule = "CM-CLASSLINE";   Text = $t.Replace("%U4Desc%=Cm.Dev6,PCI\CC_0C0340", "%U4Desc%=Cm.Dev6,PCI\CC_0C0330") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15DC`r`n").Replace("[CmModels.NTx86.6.0]`r`n", "[CmModels.NTx86.6.0]`r`n%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15DC`r`n") },
                     @{ Rule = "CM-NOROUTER";    Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_5786`r`n") },
+                    @{ Rule = "CM-TB1";         Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb1LrDesc%=Cm.Dev,PCI\VEN_8086&DEV_1513&CC_0880`r`n") },
+                    @{ Rule = "CM-TB1";         Text = $t.Replace("%Tb1CrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1547&CC_0880`r`n", "") },
+                    @{ Rule = "CM-NOROUTER";    Text = $t.Replace("DEV_1513&CC_0880", "DEV_1513") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("HKR,,XhciCmLogVerbosity,0x00010003,2", "HKR,,XhciCmLogVerbosity,0x00010003,2`r`nHKR,,XhciCmUsb4Tunnel,0x00010003,1") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmPreOsCleanup,0x00010003,0`r`n", "") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("XhciCmLaneBonding,0x00010003,1", "XhciCmLaneBonding,0x00010003,0") },

@@ -196,7 +196,13 @@ static const CM_NHI_ROW cmIntelNhi[] = {
     { 0xE434, CM_PROFILE_USB4 },
     { 0x4D33, CM_PROFILE_USB4 },     /* Wildcat Lake                      */
     { 0x5781, CM_PROFILE_USB4 },     /* Barlow Ridge host 80G             */
-    { 0x5784, CM_PROFILE_USB4 }      /* Barlow Ridge host 40G             */
+    { 0x5784, CM_PROFILE_USB4 },     /* Barlow Ridge host 40G             */
+    /* Record 22 section 19: no ICM; the Thunderbolt-host profile on an
+     * Apple machine, inert on any other (tbt_hw.c). Bound by their class
+     * form (PCI\VEN_8086&DEV_1513&CC_0880), NT 6.x only: their bridges
+     * carry the same id and are filters by CC_0604 above. */
+    { 0x1513, CM_PROFILE_USB4 },     /* Light Ridge                       */
+    { 0x1547, CM_PROFILE_USB4 }      /* Cactus Ridge 4C                   */
 };
 
 #define CM_INTEL_VENDOR 0x8086

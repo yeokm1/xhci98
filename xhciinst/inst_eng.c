@@ -1936,7 +1936,7 @@ static void plan(void)
          * 2026-10-25): installed over, as Windows' own USBXHCI above, by
          * the NHI's forced install. */
         if (d->Inf == INST_INF_CM && dv.HasService &&
-            inst_tb_intel(d->Service)) {
+            inst_tb_intel(d->Service) && !inst_cm_tb1_foreign(d->Id)) {
             dv.HasService = 0;
         }
         dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
@@ -7126,6 +7126,12 @@ static int install_inf(int inf, int controllers)
             continue;
         }
         inst_copy(hwid, first_hw(d), sizeof(hwid));
+        if (inf == INST_INF_CM || inf == INST_INF_CMF) {
+            /* A Thunderbolt 1 NHI and its bridges share their hardware
+             * ids: the class form the INF binds reaches one role only. */
+            (void)inst_cm_tb1_classid(first_hw(d), inf == INST_INF_CM, hwid,
+                                      sizeof(hwid));
+        }
         if (!hwid_clear(hwid, inf)) {
             d->Done = 1;
             note_changed(d, 0);

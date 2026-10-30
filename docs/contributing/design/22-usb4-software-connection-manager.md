@@ -5094,13 +5094,19 @@ design left to it (reviewed and revised):
   subsystem `2222:1111`, inert (`TBT_INERT_NOT_MAC`) on any other, and no
   firmware status read. `XhciCmMode` 3 is refused on every row of the
   profile. Test (d)'s interface version is logged, not checked.
-- **Their INF lines are owed**: the class form section 19.3 names
-  (`PCI\VEN_8086&DEV_1513&CC_0880`) is outside what the CM INF gate admits
-  (its CM-ID, CM-IDSET and CM-NOROUTER rules), and the x86 INF's
-  undecorated models section, which CM-IDSET ties to its `.NTx86.6.0`
-  one, is Windows 98 SE's and ME's too, whose ids are read first. Until
-  then `cm_vals.c` names neither id and nothing binds them; Falcon, Alpine
-  and Titan Ridge are bound by their existing lines.
+- **Their INF lines**: the class form section 19.3 names
+  (`PCI\VEN_8086&DEV_1513&CC_0880` and `DEV_1547`), in the NT 6.x models
+  sections alone (`xhcicm.inf`'s `.NTx86.6.0`, `xhcicm-amd64.inf`'s
+  `.NTamd64.6.0`): the undecorated section is Windows 98 SE's, ME's,
+  2000's and XP's, whose ids for them are unread, and none of those runs
+  on these Macs (section 19.2). Their bridges are the filter INFs'
+  (`&CC_0604`, every section) and `cm_ports.c`'s `light-ridge` and
+  `cactus-ridge` families, the discrete-switch source taking type 1
+  siblings only, so the NHI that shares the id is never a member. The CM
+  INF gate's CM-TB1 rule holds this; the names are `xHCI98 TB1
+  Controller (Intel Light Ridge)` and `(Intel Cactus Ridge)`, in the
+  installer's table too. Falcon, Alpine and Titan Ridge are bound by their
+  existing lines.
 - **Test (d), the router half** (`tbtU4HostRouter`): a Thunderbolt router
   (USB4 Version major 0) whose id is the selection's, else inert
   (`TBT_INERT_ROUTER_VERSION`, `TBT_INERT_HOST_ID`); a Thunderbolt host

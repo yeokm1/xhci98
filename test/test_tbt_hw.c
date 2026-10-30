@@ -407,9 +407,7 @@ static void test_select(void)
  */
 static ULONG hwProfile(const TBT_HW_PROFILE *hw)
 {
-    /* Light Ridge and Cactus Ridge 4C: tbt_hw.c's rows, no AddDevice
-     * candidate until their INF lines exist (record 22 section 19.9). */
-    if (hw == NULL || (hw->Flags & TBT_HW_MAC_ONLY) != 0) {
+    if (hw == NULL) {
         return CM_PROFILE_UNKNOWN;
     }
     if (hw->Icm == &TbtIcmProfileFalconRidge) {
