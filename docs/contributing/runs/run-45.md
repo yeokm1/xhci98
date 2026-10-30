@@ -4526,3 +4526,15 @@ the version bump.
   at 80 Gbit/s, symmetric or asymmetric (120/40), used as the router
   brings them up, with Extended Encapsulation and the enhanced time sync;
   `XhciCmUsb4V2` 0 runs them as version 1, as in 3.3.0.0."
+- 45.40 (merged from `w45-rtl` at `7fcc6ff4`; the hub-port extension
+  (owner, 2026-10-30) still to come, which drops "behind a hub" from the
+  not-covered list; "reproduced on XP and 7" left out as a test label): "A
+  device with a serial number that the driver enumerates again at a root
+  port (after a link drop, a recovery or a replug) is no longer renamed
+  when its serial number cannot be read at that moment: the driver reads
+  it again for a few seconds, and if it still cannot, leaves the device
+  out until the next connection. Before, Windows took such a device for a
+  new one, and a network adapter came back as a new connection with
+  automatic (DHCP) settings, losing its static address and possibly taking
+  the default route (seen with a Realtek RTL8157 on XP). Devices without a
+  serial number that come back on another port are not covered."
