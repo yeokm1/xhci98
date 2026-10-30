@@ -3130,12 +3130,33 @@ screenshots).
   which record 34 section 3.10 refuses today, turned into the kid's
   teardown; Windows' own eject of the chained unit, section 3.10's
   `Removable`, already stops the drive and leaves the tunnel up) and, moved into 45.15 from
-  45.13 by the owner, the chain-port correspondence learning, the
-  per-tunnel names and generations (section 3.5, Q4 (a)) and the status
-  record's kind 3 entries for kids (coded, under review).
+  45.13 by the owner, the chain-port correspondence learning and the
+  per-tunnel names and generations (section 3.5, Q4 (a)).
 - The legs on 98 SE, ME, 2000 and 10 x64. On 98 SE and ME the chained
   device's PCI side is task 45.14's (not done): the legs read what
   happens without it.
+
+### With 45.20's version 2 code (2026-10-30)
+
+`3.4.0.0` at `66187290` (45.20's USB4 version 2 code, 45.18's design)
+merged into the branch (`ae346700`, both sides kept). Its rules reached
+the kid paths in three commits, each reviewed until the review found
+nothing material, recorded in record 34 section 6.11 ("Version 2
+routers"): a kid's Gen 4 link classified as a port's, waited for while
+training, and Extended Encapsulation on a chained PCIe tunnel between two
+version 2 routers, cleared at its teardown; a preserved child with CV
+set and no PTO held (`32af0777`, `239f4ec4`); HiFi Enhanced
+Uni-Directional TMU on a v2-v2 kid link before CV, the parent's side
+reset at the kid's teardown and kept owed until proven (`239f4ec4`,
+`bc0c7be5`). `test_u4v2`: 373 checks, 0 failures; `test_u4cm` 1638, 0.
+At `bc0c7be5`: `test\run-host-tests.cmd` "Host tests PASSED"; the gated x86
+build `all`, "BUILD + GATES PASSED (debug release qemu)"
+(`E:\xhci98-scratch\p45-w45-u4chain2\gb-x86-m.log`). No leg was run on
+the version 2 paths: the emulator's chain in this run is version 1.
+
+The status record's kind 3 entries for kids (record 34 section 6.11, "The
+status record"; `11f58253`, reviewed): `test_cm_status` 131 checks, 0
+failures.
 
 ## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
 
