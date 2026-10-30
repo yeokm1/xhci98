@@ -3806,6 +3806,38 @@ both say Windows does not list this unit there ("not listed in Safely
 Remove Hardware; /eject asks Windows to stop it"), so the stop is the USB
 Tree's or `INSTALL /console /eject`'s. Not read: Vista x86.
 
+## 45.48 the packager self-tests' skip: four gated x86 builds of one tree (2026-10-30)
+
+Branch `w45-pkgskip` (from `e7c70a50`), tree `E:\xhci98-wt\w45-pkgskip`
+on development host A, each build `scripts\build-driver.cmd all` with
+`XHCI98_SELFTEST_SKIP_OK=1` (a pre-merge build), `src\pfw\build.cmd`
+first, under the host's gated-build lock. Times are the steps' own
+(`--- ...: passed (exit 0, m:ss)`) and the build's start to end.
+
+| Run | Commit | Build | Packager self-tests | INF gate self-tests |
+|---|---|---|---|---|
+| 1, fresh tree | `7a1292c5` | 73 min | 27:20, whole, no record | 69:33, whole, record |
+| 2 | `7a1292c5` | 34 min | 20:58, whole, no record | 31:17, whole, record |
+| 3 | `4203fef8` | 37 min | 20:25, whole, record | 34:20, whole, record |
+| 4 | `4203fef8` | 42 min | 0:06, skipped | 39:03, whole, record |
+
+- Run 1 wrote no packager record: a gated build's parallel steps make and
+  delete `xhcitr\xhcitr.res` and `xhciperf\xhciperf64.res` (untracked, not
+  ignored) while the suite runs, so the digest at its end was not the one
+  at its start; `4203fef8` leaves compiler intermediates out of the
+  digest. Run 2's record was also voided by an edit made to
+  `test-package.ps1` in the tree while it ran. Run 3 ran whole because
+  `test-package.ps1` itself had changed, and wrote the record; run 4
+  skipped, in 6 seconds.
+- The INF gate's self-tests (task 45.30) ran whole in every run: their
+  digest reads every file directly in `src\`, which includes the flavour
+  builds' `buildfre.log` and `buildchk.log`, and each build writes a new
+  `nmake` response-file name into them (`...\tmp\nma79540.` against
+  `nma82812.`), so a tree's record never matches its next build. Task
+  45.51 (the built outputs left out of each digest, one shared record per
+  suite) is the owner's answer.
+- Every build exit 0; logs `E:\xhci98-scratch\p45-w45-rvhcd\pkgskip\`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
