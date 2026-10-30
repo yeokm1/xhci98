@@ -224,9 +224,11 @@ $inherited = @(Get-PackagerSelfTestInherited -Root $repo)
 # configuration. It and its folder go when the run ends.
 $gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
 $gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot -Keep @("TEMP", "TMP")
-# The caller's environment comes back whichever way the run ends: at each
-# exit below, and here for a terminating error nothing else catches.
-trap { Restore-SelfTestGitPolicy -Policy $gitPolicy; break }
+# The caller's environment comes back whichever way the run ends - a skip,
+# a pass, a failure, an error or Ctrl+C - through the finally at the end of
+# this file. The rest of the script is not indented under this try, to
+# keep its lines where every other change to it expects them.
+try {
 # TEMP and TMP: one scratch root for this suite and its children, so
 # neither value is an input (only where the cases make their scratch).
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
@@ -239,7 +241,6 @@ if (-not $fullAsked -and $null -ne $digest) {
     if ($null -ne $rec) {
         Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
                   $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
-        Restore-SelfTestGitPolicy -Policy $gitPolicy
         exit 0
     }
 }
@@ -6841,7 +6842,6 @@ try {
 Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
-    Restore-SelfTestGitPolicy -Policy $gitPolicy
     exit 1
 }
 # The record of this pass, for the next run's skip in any tree: written
@@ -6850,6 +6850,8 @@ if ($script:failures.Count -gt 0) {
 if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
-Restore-SelfTestGitPolicy -Policy $gitPolicy
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0
+} finally {
+    Restore-SelfTestGitPolicy -Policy $gitPolicy
+}
