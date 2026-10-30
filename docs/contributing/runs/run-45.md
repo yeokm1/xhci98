@@ -2435,8 +2435,13 @@ of a new thread, popping the frame its creator built. A boot of the
 `3.3.0.0` base hits it 27 times on 98 SE and 44 to 45 times on ME; the
 stock base of the same layout (no xHCI98 installed, `s98`) 21 times.
 The six more on 98 SE are threads whose stacks are in the shared arena
-(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: the
-controllers', the connection manager's and Stor98's system threads.
+(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: by the
+source, with selective suspend off (its default), one service thread
+per xHCI controller (two here, `hcd_ctl.c`), the connection manager's
+main thread (`cm_thr.c`), its configuration-manager worker
+(`cm_cfgwk.c`) and one call worker per USB4 port (two, `cm_callwk.c`).
+Stor98 creates no thread (corrected in the third reading below; this
+paragraph first said Stor98's).
 The page fault of the stop is therefore a new thread whose first stack
 page is not present when it first runs.
 
@@ -2470,7 +2475,7 @@ Not shown either way.
 **Owed.** The comparison with the enclosure and Stor98 left out, and
 the stock layout, each over enough starts for a rate (tens, unattended);
 the creation calls' arguments and timing on 9x (`hcd_ctl.c`,
-`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`, Stor98's); then
+`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`); then
 the cause, or the known issue. A text for the release notes if it stays
 unexplained, for the owner's choice: "Windows 98 SE and ME, rarely: the
 first start after the install or an update (and, on ME, any start) can
@@ -3105,3 +3110,76 @@ amd64 as on x86 - was read on q35:
 The 8 GB passes were about a tenth slower with a longer tail, consistent
 with bouncing, and nothing froze. The 64-bit DMA question is dropped with
 the task.
+
+### 45.36, the third reading: the rate by variant, the threads' creation read, and the known issue (2026-10-30)
+
+`3.4.0.0` at `79d46dc2` merged first. No code; the owner's limit for
+this task was about half a day, then a known-issue note.
+
+**The threads' creation, read in the source** (with a second read).
+Every `PsCreateSystemThread` of this package passes no stack size, runs
+at `PASSIVE_LEVEL` from a system thread's context (the PnP start, or the
+connection manager's own thread) and holds no spin lock across the call,
+which is what the call's documentation asks on Windows 98 and ME. With
+selective suspend off (its default) a 98 SE start with the ASM4242 model
+makes six: one service thread per xHCI controller (`hcd_ctl.c`), the
+connection manager's thread (`cm_thr.c`), its configuration-manager
+worker (`cm_cfgwk.c`, made by that thread right after the start) and one
+call worker per USB4 port (`cm_callwk.c`, the same). The fine-timer
+thread (`hcd_tmr.c`) is never made on 98 SE or ME, the suspend threads
+(`hcd_susp.c`) only with selective suspend on, and Stor98 makes none (the
+two creations under `src/stor98/` are its test connection manager's). No
+creation was found that breaks a documented rule; the read cannot tell
+whether NTKERN's creation in this boot phase can leave a new thread's
+first stack page unresolved. The experiment proposed with the read,
+creating the per-port call workers on first need, was not made: they are
+also the route of task 43.47's handover at start (`CmCfgwkTakeover`),
+so the change reaches the connection manager's start, and at the rates
+below no run in the time could show an effect.
+
+**The rate by variant.** Unattended cold starts of overlays of a kept
+base, each watched three minutes for the stop screen (its blue, read
+from a screendump), on the ASM4242 layout with the enclosure at power-on:
+
+| Variant | System | Starts | Stops |
+|---|---|---|---|
+| `3.3.0.0` with Thunderbolt and Stor98 (`hm1`), cold start | ME | 60 (20 + 40) | 0 |
+| this build, default rows: no Thunderbolt, no Stor98 (`bmenocm`), cold start | ME | 20 | 0 |
+| no xHCI98 (`bmestock`), cold start | ME | 20 | 0 |
+| `3.3.0.0` with Thunderbolt and Stor98 (`h1`), the update and its first start | 98 SE | 4 (`w2`, `w3`, `w5`, `w6`; two more lost to the script) | 0 |
+
+With the first two readings: 2 stops in 139 starts with xHCI98 installed
+(98 SE 1 in 11 first starts after an update, 0 in 30 cold starts; ME 1
+in 78 starts, none after an update), 0 in 28 without it (98 SE 8, ME
+20). The variants without the enclosure or without Stor98 on 98 SE were
+not run: the 98 SE cold start never stopped in 30, so they could not
+have shown a difference. A rate this low does not separate the package
+from the system: two stops against none in 28 is not evidence either
+way.
+
+**Result.** No cause found in the time given. What is known: the stop is
+a page fault on a new thread's first ring-3 instruction (its first stack
+page not present), at the same offset on 98 SE and ME (ME0E.1's), rare
+(about 1 in 70 starts with this package, more often at the first start
+after an update on 98 SE), and gone at the next start. **Partial; the
+known issue below is for the owner.**
+
+**The known-issue note, three wordings for the owner's choice:**
+
+1. Short: "Windows 98 SE and ME: rarely, a start stops with 'A fatal
+   exception 0E has occurred at 019F:BFF72170' (98 SE) or 'Error: 0E :
+   01A7 : BFF62170' (ME). Turn the computer off and on again; the next
+   start works."
+2. With what is known: "Windows 98 SE and ME: about one start in
+   seventy, more often the first start after installing or updating
+   xHCI98 on Windows 98 SE, can stop with 'A fatal exception 0E has
+   occurred at 019F:BFF72170' (98 SE) or 'Error: 0E : 01A7 : BFF62170'
+   (ME), followed by a black or empty screen. It is a fault in Windows'
+   start of a new program thread; it has also been seen without the
+   update. Turn the computer off and on again: the next start works and
+   nothing is lost. The cause is not known yet."
+3. As an install note: "After installing or updating on Windows 98 SE
+   or ME, if the first start stops at a blue screen naming exception 0E
+   (or at a black screen), switch the computer off and on again; the
+   install is complete and the next start works. This happens rarely and
+   its cause is still being looked into."
