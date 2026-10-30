@@ -215,6 +215,19 @@ function Get-PackagerCheckoutRow {
     }
 }
 
+function Test-CmdAutoRun {
+    # Whether cmd.exe has an AutoRun (read, never written; task 45.51). It
+    # runs before every cmd.exe a case starts, the packager's host runner
+    # among them, and what it runs is no file of the set, so while one is
+    # set this tree has no digest: the suite runs whole and records nothing.
+    foreach ($hive in @("HKLM:\Software\Microsoft\Command Processor", "HKCU:\Software\Microsoft\Command Processor")) {
+        $auto = $null
+        try { $auto = (Get-ItemProperty -LiteralPath $hive -Name "AutoRun" -ErrorAction Stop).AutoRun } catch { $auto = $null }
+        if ("$auto".Trim() -ne "") { return $true }
+    }
+    return $false
+}
+
 function Get-PackagerSelfTestDigest {
     # One SHA-256 over what these self-tests may read (task 45.48; narrowed
     # by task 45.51, build-and-test.md, "The self-tests' skip across
@@ -232,9 +245,8 @@ function Get-PackagerSelfTestDigest {
     #   - what the suite inherits (-Inherited, Get-PackagerSelfTestInherited,
     #     taken once at the start) and the PowerShell, .NET and git versions.
     # No driver source's content, no HEAD, no git status, no built output:
-    # no case reads them. $null when git cannot list the tree, a row
-    # cannot be read or cmd.exe has an AutoRun (what it runs is no file of
-    # the set): no skip.
+    # no case reads them. $null when git cannot list the tree or a row
+    # cannot be read: no skip. (cmd.exe's AutoRun is Test-CmdAutoRun's.)
     param([string]$Root, [string[]]$Inherited = @())
     # Local to this function: git's warnings on stderr are not errors here.
     $ErrorActionPreference = "Continue"
@@ -284,14 +296,6 @@ function Get-PackagerSelfTestDigest {
                            @{ Name = "dumper-amd64"; Path = (Join-Path $wdk "bin\x86\amd64\link.exe") })) {
             $rows += ("run:" + $run.Name + ":" + $(if (Test-Path -LiteralPath $run.Path -PathType Leaf) { & $hashOf $run.Path } else { "absent" }))
         }
-        # cmd.exe's AutoRun runs before every cmd.exe a case starts (the
-        # packager's host runner among them), and what it runs is no file
-        # of the set: with one set there is no digest, and the suite runs.
-        foreach ($hive in @("HKLM:\Software\Microsoft\Command Processor", "HKCU:\Software\Microsoft\Command Processor")) {
-            $auto = $null
-            try { $auto = (Get-ItemProperty -LiteralPath $hive -Name "AutoRun" -ErrorAction Stop).AutoRun } catch { $auto = $null }
-            if ("$auto".Trim() -ne "") { return $null }
-        }
         $rows = @($rows | Sort-Object -CaseSensitive -Unique)
         $rows += @($Inherited)
         $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
@@ -329,7 +333,7 @@ $gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot -Keep @("TEMP", "
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
 $env:TEMP = $tempRoot
 $env:TMP = $tempRoot
-$digest = Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited
+$digest = if (Test-CmdAutoRun) { $null } else { Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited }
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
     $rec = Read-SelfTestPassRecord -Suite "packager" -Digest $digest
