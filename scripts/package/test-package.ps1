@@ -27,12 +27,20 @@ in-memory certificate that signs them (CertificateRequest). One
 stand-in driver carries the exact probe marker to prove diagnostic artifacts
 are rejected before staging.
 
+The whole run is skipped when nothing it may read has changed since this
+tree's last passing run (out\packager-selftest-pass.txt): build-and-test.md,
+"The packager's self-tests, skipped when unchanged", is the design.
+
+.PARAMETER Force
+Run every case even when the last passing run read the same inputs.
+XHCI98_FULL_SELFTESTS=1 does the same; a cut's builds set it.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\test-package.ps1
 #>
 
 [CmdletBinding()]
-param()
+param([switch]$Force)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -48,6 +56,95 @@ if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyCon
     Write-Err "packager self-tests FAILED: git is not on PATH, and the fixtures these tests build are git repositories. Put git on PATH and run again."
     exit 1
 }
+function Get-PackagerSelfTestDigest {
+    # One SHA-256 over everything these self-tests may read, so that a skip
+    # is never taken on a changed input. The packager, the releaser and
+    # their cases read across the tree (scripts, INFs, sources, installer
+    # tables, docs, releases\ records, the free set's pin), so the set is
+    # the whole tree as git sees it - every tracked file and every
+    # untracked one not ignored, each by its path and content, a tracked
+    # file deleted as absent - and, of what git ignores, the built images
+    # the releaser reads by content (XHCIPFW.VXD, S98VSD.VXD), the names of
+    # the built drivers a case may take as a sample (src\**\*.sys, *.mpd,
+    # out\free\**), the WDK tools by name and size, and the PowerShell,
+    # .NET and git versions. $null when git cannot list the tree: no skip.
+    param([string]$Root)
+    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    $listed = & git -C $root ls-files -z --cached --others --exclude-standard 2>$null
+    if ($LASTEXITCODE -ne 0 -or $null -eq $listed) { return $null }
+    $names = @((($listed | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') })
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $rows = @()
+        foreach ($n in ($names | Sort-Object -Unique)) {
+            $f = Join-Path $root $n
+            if (Test-Path -LiteralPath $f -PathType Leaf) {
+                $rows += ("file:" + $n.ToLowerInvariant() + ":" + (($sha.ComputeHash([System.IO.File]::ReadAllBytes($f)) | ForEach-Object { $_.ToString("x2") }) -join ""))
+            } else {
+                $rows += ("file:" + $n.ToLowerInvariant() + ":absent")
+            }
+        }
+        foreach ($n in @("src\pfw\obj\XHCIPFW.VXD", "src\pfw\obj\qemu\XHCIPFW.VXD", "src\vsd\obj\S98VSD.VXD", "src\vsd\obj\qemu\S98VSD.VXD")) {
+            $f = Join-Path $root $n
+            if (Test-Path -LiteralPath $f -PathType Leaf) {
+                $rows += ("built:" + $n.ToLowerInvariant() + ":" + (($sha.ComputeHash([System.IO.File]::ReadAllBytes($f)) | ForEach-Object { $_.ToString("x2") }) -join ""))
+            } else {
+                $rows += ("built:" + $n.ToLowerInvariant() + ":absent")
+            }
+        }
+        foreach ($dir in @("src", "out\free")) {
+            $at = Join-Path $root $dir
+            if (-not (Test-Path -LiteralPath $at -PathType Container)) { continue }
+            foreach ($f in @(Get-ChildItem -LiteralPath $at -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+                if ($dir -eq "src" -and @(".sys", ".mpd") -notcontains $f.Extension.ToLowerInvariant()) { continue }
+                $rows += ("present:" + $f.FullName.Substring($root.Length).ToLowerInvariant())
+            }
+        }
+        $wdk = Join-Path $root "tools\WinDDK71\bin\x86"
+        if (Test-Path -LiteralPath $wdk -PathType Container) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $wdk -File -Filter "*.exe" -ErrorAction SilentlyContinue)) {
+                $rows += ("tool:" + $f.Name.ToLowerInvariant() + ":" + $f.Length)
+            }
+        }
+        $rows = @($rows | Sort-Object -CaseSensitive -Unique)
+        $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
+        $rows += ("clr:" + [System.Environment]::Version.ToString())
+        $rows += ("certrequest:" + [bool]("System.Security.Cryptography.X509Certificates.CertificateRequest" -as [type]))
+        $rows += ("git:" + ((& git --version 2>$null) | Out-String).Trim())
+        $all = [System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
+        return (($sha.ComputeHash($all) | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+# **Skipped when nothing it may read has changed**, as the INF gate's
+# self-tests are (task 45.30): out\packager-selftest-pass.txt, the record of
+# this tree's last passing run, names the digest it read. -Force and
+# XHCI98_FULL_SELFTESTS=1 (a cut's builds) run it all.
+$passRecord = Join-Path $repo "out\packager-selftest-pass.txt"
+$digest = Get-PackagerSelfTestDigest -Root $repo
+$fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
+if (-not $fullAsked -and $null -ne $digest -and (Test-Path -LiteralPath $passRecord -PathType Leaf)) {
+    # A record is taken whole or not at all: the digest, the tree it was
+    # made in, its time, a count of one check or more, then the end line.
+    $recLines = @([System.IO.File]::ReadAllLines($passRecord))
+    $recOk = $recLines.Count -eq 5 -and
+             $recLines[0] -match '^digest=[0-9a-f]{64}$' -and $recLines[1] -match '^tree=.+$' -and
+             $recLines[2] -match '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $recLines[3] -match '^checks=[1-9]\d*$' -and
+             $recLines[4] -eq "end"
+    if ($recOk -and $recLines[0].Substring(7) -eq $digest -and
+        [string]::Equals($recLines[1].Substring(5), [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}). -Force runs them." -f
+                  $recLines[2].Substring(5), $recLines[3].Substring(7), $digest.Substring(0, 16))
+        exit 0
+    }
+}
+# A record that no longer matches is gone before anything runs, so a run
+# stopped half-way leaves none.
+if (Test-Path -LiteralPath $passRecord) { Remove-Item -LiteralPath $passRecord -Force }
+
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
@@ -6397,6 +6494,43 @@ try {
                  ([regex]::Matches($soBuildText, 'set "XHCI98_GATED_RUN="')).Count -eq 1 -and
                  ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
         "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
+
+    # The skip's digest: it moves when a tracked or untracked-but-not-ignored
+    # file changes, appears or goes, when a built image the releaser reads
+    # changes, and when a built driver appears; it stays when another
+    # ignored file does.
+    Write-Step "the skip's digest: the tree as git sees it, and the built inputs"
+    $dg = Join-Path $script:work "digest-tree"
+    foreach ($dd in @("scripts\package", "src\pfw\obj", "out\free\x86", "out\logs")) { New-Item -ItemType Directory -Force -Path (Join-Path $dg $dd) | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $dg ".gitignore"), "out/`nobj/`nobjfre/`n*.sys`n")
+    foreach ($ff in @("scripts\package\make-package.ps1", "src\xhci98.inf")) { [System.IO.File]::WriteAllText((Join-Path $dg $ff), "a") }
+    & git -C $dg init -q 2>$null | Out-Null
+    & git -C $dg add -A 2>$null | Out-Null
+    $dg0 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dg0) "digest : no digest of a git tree."
+    $dgCases = @(
+        @{ Why = "a tracked script changed";        File = "scripts\package\make-package.ps1"; Moves = $true },
+        @{ Why = "a tracked INF changed";            File = "src\xhci98.inf";                   Moves = $true },
+        @{ Why = "an untracked file not ignored";    File = "docs\new.md";                      Moves = $true },
+        @{ Why = "the built XHCIPFW.VXD";            File = "src\pfw\obj\XHCIPFW.VXD";          Moves = $true },
+        @{ Why = "a built driver appeared";          File = "out\free\x86\stor98.sys";          Moves = $true },
+        @{ Why = "a built sys under src appeared";   File = "src\objfre\i386\xhci98.sys";       Moves = $true },
+        @{ Why = "another ignored file";             File = "out\logs\x.log";                   Moves = $false },
+        @{ Why = "an ignored object under src";      File = "src\objfre\i386\x.obj";            Moves = $false }
+    )
+    foreach ($c in $dgCases) {
+        $ff = Join-Path $dg $c.File
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ff) | Out-Null
+        [System.IO.File]::WriteAllText($ff, "b-" + $c.File)
+        $dg1 = Get-PackagerSelfTestDigest -Root $dg
+        Assert-True (($dg1 -ne $dg0) -eq $c.Moves) ("digest : {0}: the digest {1}." -f $c.Why, $(if ($c.Moves) { "did not move" } else { "moved" }))
+        $dg0 = $dg1
+    }
+    Remove-Item -LiteralPath (Join-Path $dg "src\xhci98.inf") -Force
+    $dg1 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($dg1 -ne $dg0) "digest : a tracked file deleted did not move the digest."
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -eq $dg1) "digest : the digest of one tree is not the same twice."
+    Assert-True ($null -eq (Get-PackagerSelfTestDigest -Root (Join-Path $script:work "no-such-tree"))) "digest : a tree git cannot list gave a digest."
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
@@ -6407,6 +6541,20 @@ Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
     exit 1
+}
+# The record of this pass, for the next run's skip: written whole to a
+# temporary name and moved into place, and only if what may be read is
+# still what the run began with (a change during the run runs it again).
+if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo) -eq $digest) {
+    Ensure-Directory (Split-Path -Parent $passRecord)
+    $tmpRecord = $passRecord + "." + [System.IO.Path]::GetRandomFileName() + ".tmp"
+    try {
+        [System.IO.File]::WriteAllText($tmpRecord, ("digest={0}`r`ntree={1}`r`ntime={2}`r`nchecks={3}`r`nend`r`n" -f $digest,
+            [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $script:checks))
+        Move-Item -LiteralPath $tmpRecord -Destination $passRecord -Force
+    } finally {
+        if (Test-Path -LiteralPath $tmpRecord) { Remove-Item -LiteralPath $tmpRecord -Force -ErrorAction SilentlyContinue }
+    }
 }
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0

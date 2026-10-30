@@ -3634,6 +3634,47 @@ a cut never sets it, so a cut's builds, and any caller that sets
 `XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
 2026-10-30).
 
+#### The packager's self-tests, skipped when unchanged (owner, 2026-10-30)
+
+`scripts\package\test-package.ps1` takes about half an hour of each gated
+build, and the same tree often runs it twice in a row (a build that is
+repeated, or the amd64 build after the x86 one). It takes the INF gate's
+skip above, with a wider set, because the packager, the releaser and the
+cases that drive them read across the whole tree. The digest
+(`Get-PackagerSelfTestDigest`) is one SHA-256 over:
+
+- every file `git ls-files --cached --others --exclude-standard` lists -
+  each tracked file, and each untracked one that is not ignored - by its
+  path and content, a tracked file that is gone as absent. That covers the
+  packager scripts, `package-common.ps1`, `common.ps1` and the harness,
+  the test fixtures' sources, the INFs and `txtsetup*.oem`, the installer
+  tables (`xhciinst\inst_core.*`), the docs and release notes it checks,
+  the `releases\` records, the free set's pin and everything else a case
+  might open;
+- of what git ignores: the built images the releaser reads by content
+  (`src\pfw\obj\XHCIPFW.VXD`, `src\vsd\obj\S98VSD.VXD` and their `qemu\`
+  twins, whose build is deterministic), the names of the built drivers a
+  case may take as a sample or stage (every `*.sys` and `*.mpd` under
+  `src\`, everything under `out\free\`), the WDK 7.1 tools in
+  `tools\WinDDK71\bin\x86` by name and size, and the PowerShell, .NET and
+  git versions (and whether .NET has `CertificateRequest`, which the
+  signing cases need).
+
+When git cannot list the tree there is no digest and the suite runs whole.
+The record is `out\packager-selftest-pass.txt`, of the INF gate's form
+(digest, the tree's full path, time, checks, `end`), taken whole or not at
+all, deleted before a run, and written only after a run in which every
+check passed and the digest taken again at the end is the one it began
+with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it whole, so every cut
+does (`cut-builds.ps1` and `package-common.ps1` set it, and
+`build-driver.cmd all` sets it unless a pre-merge build sets
+`XHCI98_SELFTEST_SKIP_OK=1`, above). A changed C source changes the
+digest too: the skip saves the repeated run of one tree, not a run after
+an edit. Checked by the self-test itself: the digest moves for a tracked
+file changed or deleted, an untracked file that is not ignored, a built
+`XHCIPFW.VXD` changed and a built driver appearing, and stays for any
+other ignored file.
+
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, the
