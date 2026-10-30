@@ -362,6 +362,10 @@ rem                  behind a tunnel on 2000's Standard PC HAL (src\cm\cm_irq.c,
 rem                  task 44.53, design record 21 section 6.2.1): the HAL id,
 rem                  the swizzle, the requirements and start lists, the
 rem                  records' sequences; also built for amd64 (below)
+rem   test_cm_rirq - the NHI's ring interrupt (src\cm\cm_rirq.c, task 45.22,
+rem                  design record 21 section 4.5): the cause's geometry, the
+rem                  service routine's outcomes, the storm count, the mask by
+rem                  host contract, the watchdog, the order down's end
 rem   test_cm_breq - the requirement lists of a hot-added bridge on 2000 and
 rem                  XP (src\cm\cm_breq.c, task 45.12, design record 33):
 rem                  the templates, the rules, the writer, the diagnostic;
@@ -689,6 +693,12 @@ rem HAL id, the swizzle, the requirements and start lists and the records'
 rem sequences; built for amd64 too (below), whose resource descriptor is
 rem larger.
 call :run test_cm_irq "test_cm_irq.c ..\src\cm\cm_irq.c"
+rem test_cm_rirq links the pure half of the NHI's ring interrupt
+rem (src\cm\cm_rirq.c, task 45.22, design record 21 section 4.5): the
+rem cause for every Total Paths, the service routine's outcomes, the storm
+rem count, the mask by host contract and its proof, the watchdog's
+rem suspicion and slower storm, the order down's end and latch, the waits.
+call :run test_cm_rirq "test_cm_rirq.c ..\src\cm\cm_rirq.c"
 rem test_cm_breq links the pure half of the requirement lists of a
 rem hot-added bridge on 2000 and XP (src\cm\cm_breq.c, task 45.12, design
 rem record 33 section 10.1): the templates on the captured lists, the

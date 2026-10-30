@@ -2222,6 +2222,7 @@ static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 {
     PHCD_USB_DEVICE dev;
     KIRQL oldIrql;
+    ULONG cycle;
 
     if (rq == NULL || rq->Size < sizeof(XHCI98_RESUME_STATE)) {
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
@@ -2230,9 +2231,10 @@ static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     rq->Epoch = 0;
     rq->Reserved[0] = 0;
     rq->Reserved[1] = 0;
+    cycle = 0;
     if (rq->Signature != XHCI98_RESUME_SIGNATURE ||
         rq->Version != XHCI98_RESUME_VERSION ||
-        rq->Op > XHCI98_RESUME_OP_REPORT) {
+        rq->Op > XHCI98_RESUME_OP_CYCLE) {
         rq->Status = XHCI98_RESUME_INVALID;
         return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
     }
@@ -2253,6 +2255,15 @@ static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
         dev->QuietMark = XhciEnumQuietMark(hc->MarkGen);
     } else if (rq->Op == XHCI98_RESUME_OP_WITHDRAW) {
         dev->QuietMark = 0;
+    } else if (rq->Op == XHCI98_RESUME_OP_CYCLE && dev->Location != 0 &&
+               dev->Location <= HCD_PORT_COUNT && dev->PdoGroup != 0) {
+        /* Task 45.41: the cycle, its serial and its charge published in
+         * this one hold of the lock, as HcdEnumCycle publishes the first
+         * two; carried out and charged by the thread (hcd_enum.c). */
+        cycle = dev->Location;
+        hc->PortCycle[(cycle - 1) / 32UL] |= 1UL << ((cycle - 1) % 32UL);
+        hc->PortCycleSerial[cycle - 1] = dev->PdoGroup;
+        hc->PortCycleCharge[(cycle - 1) / 32UL] |= 1UL << ((cycle - 1) % 32UL);
     }
     if (hc->Hc.ControllerFailed || hc->Hc.Tol.Unreadable ||
         hc->ResumePhase == XHCI98_RESUME_FAILED) {
@@ -2272,6 +2283,9 @@ static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
     if (rq->Op != XHCI98_RESUME_OP_QUERY) {
         XHCI_DBG_VALUE("hcd: uas resume state, op/value",
                        (rq->Op << 24) | (rq->Value & 0x00FFFFFFUL));
+    }
+    if (cycle != 0) {
+        HcdThreadWake(hc);
     }
     (VOID)InterlockedDecrement((PLONG)&dev->Refs);
     return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);

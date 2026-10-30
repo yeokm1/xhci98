@@ -550,6 +550,11 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
     if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
         return XHCI_RKEEP_WHY_NOT_STARTED;
     }
+    /* Every other test - storage among them - and the restore's
+     * identity check read configuration index 0. */
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_RKEEP_WHY_OTHER_CFG;
+    }
     if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
         return XHCI_RKEEP_WHY_SUSPENDED;
     }
@@ -574,6 +579,51 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
         }
     }
     return XHCI_RKEEP_KEEP;
+}
+
+ULONG XhciEnumLinkKeep(ULONG on, ULONG flags, ULONG recent)
+{
+    if (!on) {
+        return XHCI_LKEEP_WHY_OFF;
+    }
+    if ((flags & XHCI_RKEEP_F_FAULTED) != 0) {
+        return XHCI_LKEEP_WHY_FAULTED;
+    }
+    if ((flags & XHCI_RKEEP_F_HUB) != 0) {
+        return XHCI_LKEEP_WHY_HUB;
+    }
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_LKEEP_WHY_OTHER_CFG;
+    }
+    if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
+        return XHCI_LKEEP_WHY_NOT_STARTED;
+    }
+    if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
+        return XHCI_LKEEP_WHY_SUSPENDED;
+    }
+    if ((flags & XHCI_RKEEP_F_ISOCH) != 0) {
+        return XHCI_LKEEP_WHY_ISOCH;
+    }
+    if ((flags & XHCI_RKEEP_F_ONE_IFACE) == 0 ||
+        (flags & XHCI_RKEEP_F_STORAGE) == 0 ||
+        (flags & XHCI_RKEEP_F_UAS) == 0) {
+        return XHCI_LKEEP_WHY_NOT_UAS;
+    }
+    if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
+        return XHCI_LKEEP_WHY_NO_SERIAL;
+    }
+    if (recent >= XHCI_LINK_KEEP_MAX) {
+        return XHCI_LKEEP_WHY_BUDGET;
+    }
+    return XHCI_LKEEP_KEEP;
+}
+
+ULONG XhciEnumLinkKeepRecent(ULONG count, ULONG first, ULONG now)
+{
+    if (count == 0 || now - first >= XHCI_LINK_KEEP_WINDOW) {
+        return 0;
+    }
+    return count;
 }
 
 ULONG XhciEnumQuietMark(ULONG markGen)

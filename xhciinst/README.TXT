@@ -58,8 +58,8 @@ On such a computer tick the Thunderbolt 3 / USB4 box yourself (or use
 sees such a bridge. On Windows 2000 and XP it acts only when one
 processor runs. On a computer with several, start them with /NUMPROC=1
 in BOOT.INI if they need this. It records what it did under
-HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters. No 64-bit
-Windows is offered it.
+HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters (on 8 and
+8.1 under Services\xhcipff\Parameters). No 64-bit Windows is offered it.
 
 If Windows 8 or 8.1 stops at start with INACCESSIBLE_BOOT_DEVICE after
 XHCIPFW.SYS was installed (its file gone or damaged while a PCI root bus
@@ -387,11 +387,14 @@ The console tool
                                 and /nonfreestage are refused: name the
                                 packages. Without them the console asks,
                                 Enter for N, and /yes takes N. On 98 SE
-                                and ME only audio/uac2 (and on 98 SE
-                                audio/usbmidi) can be staged: any other
-                                package in /wdmfree:stage=, and
-                                /wdmnonfree:stage=, are refused, with
-                                nothing changed
+                                and ME a package can be staged when its
+                                set stages it on that Windows and its
+                                folders, after those of the packages
+                                named before it, keep DevicePath within
+                                280 characters (259 on ME); any other in
+                                /wdmfree:stage= or /wdmnonfree:stage= is
+                                refused, with the reason and nothing
+                                changed
   INSTALL /console /notray      installs without starting the xHCI98 USB
                                 Tree at login
   INSTALL /console /faster      turns the xHCI98 USB Tree's "can run
@@ -518,9 +521,11 @@ Finish, and type the install folder where they ask for a folder or for the
 through Finish, even when it finds no driver; never cancel one: on 98 SE
 a cancelled wizard hides its device until Windows restarts, and the
 installer can then only list the device for after the restart. Before
-the first device the installer asks you to finish any such wizard; later
-it asks again only when it sees one of those wizards open, or when it
-cannot look.
+the devices, and again between them, it asks you to finish any such
+wizard when it sees one of those wizards open, or when it cannot look; on
+a Windows not in English (whose wizards' titles it does not know), or
+whose language it cannot read, it also asks once before the first
+device. /yes asks nothing.
 
 Asked for the Windows CD (Windows' own files, such as usbd.sys), insert
 it and type its WIN98 folder (WIN9X on ME) with your CD drive's letter,
@@ -562,9 +567,10 @@ The drivers' own install writes each value of the release notes'
 "Registry settings" and "The connection manager's registry values" at
 its default where it is missing, so it is already in the controller's
 key (XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
-the systems that read them);
-XhciCmTunnelBridge, whose absence means no override, and XhciCmBridgeReq,
-whose absence means its default 1, are never written.
+the systems that read them); XhciUsb2Bos, XhciResumeKeep,
+XhciCmAsmediaPcie7Credits and XhciCmRingInterrupt, XhciCmTunnelBridge,
+whose absence means no override, and XhciCmBridgeReq, whose absence
+means its default 1, are never written.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it

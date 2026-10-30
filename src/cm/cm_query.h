@@ -421,7 +421,11 @@
 #define CM_QM_E_PENDING_GEN     36UL    /* the port's connection generation
                                            at that departure (USB4 profile;
                                            0 under the ICM client) */
-/* 40..43 reserved, 0 */
+#define CM_QM_E_LANDING         40UL    /* with CM_QM_EF_CHAINED: the chain
+                                           port the child's bus is behind,
+                                           bus 15:8, device 7:3, function
+                                           2:0 (design record 34 section
+                                           3.10); else 0 */
 #define CM_QM_E_CHANGED         44UL    /* the thread's clock at the
                                            entry's last change */
 /* 48..63 reserved, 0 */
@@ -434,6 +438,10 @@
                                            filter on the PDO) */
 #define CM_QM_EF_REMOVABLE      0x10UL  /* Removable answered set */
 #define CM_QM_EF_SAFE_EJECT_OFF 0x20UL  /* the domain's XhciCmSafeEject 0 */
+#define CM_QM_EF_CHAINED        0x40UL  /* a chained unit: a child of a
+                                           chain port below the member
+                                           (CM_QM_E_LANDING), never a unit
+                                           of the member itself */
 
 /* The sets are a member's (record 21 section 7.4, revision 3: two sets a
  * member keeps apart, so that neither can crowd the other out), and no

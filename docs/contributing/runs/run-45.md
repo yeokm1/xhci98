@@ -2196,7 +2196,7 @@ present at power-on (SeaBIOS numbered the dock; a device without its
 own switch then lands on the chain port's own secondary bus), and a
 hot-plugged dock only behind a tunnel port with a reservation.
 
-## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30, partial)
+## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30)
 
 **The design.** Record 34 section 3.9 (revision 6), reviewed and revised
 before and with the code: chain ports walked below every active member
@@ -2435,8 +2435,13 @@ of a new thread, popping the frame its creator built. A boot of the
 `3.3.0.0` base hits it 27 times on 98 SE and 44 to 45 times on ME; the
 stock base of the same layout (no xHCI98 installed, `s98`) 21 times.
 The six more on 98 SE are threads whose stacks are in the shared arena
-(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: the
-controllers', the connection manager's and Stor98's system threads.
+(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: by the
+source, with selective suspend off (its default), one service thread
+per xHCI controller (two here, `hcd_ctl.c`), the connection manager's
+main thread (`cm_thr.c`), its configuration-manager worker
+(`cm_cfgwk.c`) and one call worker per USB4 port (two, `cm_callwk.c`).
+Stor98 creates no thread (corrected in the third reading below; this
+paragraph first said Stor98's).
 The page fault of the stop is therefore a new thread whose first stack
 page is not present when it first runs.
 
@@ -2470,7 +2475,7 @@ Not shown either way.
 **Owed.** The comparison with the enclosure and Stor98 left out, and
 the stock layout, each over enough starts for a rate (tens, unattended);
 the creation calls' arguments and timing on 9x (`hcd_ctl.c`,
-`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`, Stor98's); then
+`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`); then
 the cause, or the known issue. A text for the release notes if it stays
 unexplained, for the owner's choice: "Windows 98 SE and ME, rarely: the
 first start after the install or an update (and, on ME, any start) can
@@ -2481,10 +2486,12 @@ not known." **Partial.**
 
 ## 45.31 the connection manager's unload under Driver Verifier (2026-10-30, the `xhcicm.sys` half)
 
+## 45.31 the connection manager's unload under Driver Verifier, and Stor98 on a drive `stornvme` ran (2026-10-30)
+
 The `xhcicm.sys` unload stop that 45.11's reading found (bug check 0xC4,
 0x62, at the uninstall on 8.1 and 8 and during the boot on 7 x86) and
-what it hid. Stor98's start with `MSISupported` 1 on 8.1, the task's
-other half, is not read here.
+what it hid; and Stor98's start on 8.1 on a drive `stornvme` ran, the
+task's other half (below).
 
 ### The reading
 
@@ -2529,7 +2536,650 @@ at boot, fresh overlays `k7b` and `k81b`.
 With the prototype of 45.11 and these two commits (7 x86, `k7a`): the
 same boot and the uninstall with no stop (`runs/run-45.md`, "45.11").
 
+### Stor98 on a drive `stornvme` ran (8.1 x86, 2026-10-30)
+
+The failure 45.11's reading met (problem 10, the port's event 4 "Driver
+detected an internal error in its data structures") reproduced on a fresh
+q35 8.1 x86 overlay (`k81b`, the ORICO at boot): the drive on `stornvme`,
+Stor98 installed over it by `DIF_INSTALLDEVICE`, a cold boot, problem 10.
+
+- **The mechanism.** `stornvme.inf` writes `MSISupported` 1 and
+  `MessageNumberLimit` 0x41 under the drive's `Device Parameters\Interrupt
+  Management\MessageSignaledInterruptProperties`. With it, the drive's
+  filtered requirements (`Control\FilteredConfigVector`) list interrupt
+  descriptors with flags 7 (latched, message, policy) and vector
+  0xFFFFFFFE, the message-signaled form; Stor98 runs under the SCSI port
+  driver, which takes no message-signaled interrupt, and the start fails.
+  On the same devnode, the value set to 0 and the device restarted:
+  Stor98 started; set to 1 and restarted: problem 10 again. Why earlier
+  starts with the value present had worked (45.11, the first boots of
+  `k81a`) is not read; the restarts that failed were all after a new
+  resource assignment.
+- **The fix** (`a0020db6`): both NT install sections of `stor98.inf` write
+  `MSISupported` 0 through a `.HW` section; `check-stor98-inf.ps1` holds
+  it. The release package of that commit (x86 gated build passed),
+  staged as the download's `release-x86`:
+  - the failed drive (`k81b`, `MSISupported` 1): Stor98 installed again
+    from the new INF, the value 0, Stor98 running; after a cold boot,
+    running (problem 0, ORICO (E:));
+  - a fresh overlay (`k81c`): the install (exit 3) put Stor98 on the drive
+    `stornvme` ran at the first boot ("Stor98 now runs ...: recorded as
+    this installer's", the installer's case 3b); after a cold boot,
+    running;
+  - back to `stornvme`: the uninstall (exit 3) gave the drive back to
+    `stornvme`, running, with `MSISupported` 1 and `MessageNumberLimit`
+    0x41 written again by its own INF.
+  - the mark service's switch (`k81d`, a fresh overlay, the package
+    installed with the ASM4242 and no enclosure, the ORICO first at the
+    next cold boot): `stornvme` first, then "switching ... from stornvme
+    (member 0200; no id on Windows 8.1 and later, by design)", the class
+    model selected from the staged INF, `DiInstallDevice` success, "now
+    runs Stor98", `MSISupported` 0; after a cold boot, running.
+
+### 8.1 x64 (2026-10-30, overlay `k81x`)
+
+The amd64 release package of `a0020db6` (gated build passed), staged
+unsigned with `make-package.ps1`, its five catalogs made unsigned with
+the packager's own `New-PackageCatalogFile`; in the guest its images and
+catalogs signed with a throwaway certificate made there (valid 2026 to
+2030, in Root and TrustedPublisher; never the project's key, nothing
+signed on the host); test signing on; Driver Verifier's standard checks
+on `xhcicm.sys`; the ASM4242 model with the ORICO at boot.
+
+- The install (exit 3), then a cold boot: `stornvme` first, the mark
+  service's switch, Stor98 running (problem 0, ORICO (E:)) with
+  `MSISupported` 0; another cold boot: running. Verifier: `xhcicm.sys`
+  loaded once, not unloaded.
+- The uninstall under Verifier: bug check 0xC9 (0x226,
+  0xFFFFF80037B97170, 0xFFFFCF81F9EE2DC0, 0), "DRIVER_VERIFIER_IOMANAGER_
+  VIOLATION (storport.sys)": the dispatch routine the minidump names is
+  `storport.sys+6170`, and no `xhcicm.sys` frame is on the stack (read
+  from the minidump on the host). The drive was moving back to
+  `stornvme`, whose port driver is `storport.sys`; Verifier checks that
+  stack's requests because `xhcicm.sys`'s child filter is in it. Not read
+  further: which request, and whether 8.1 x86's `storport.sys` behaves
+  the same (the x86 uninstalls under Verifier, 45.31's legs above, did
+  not stop).
+- With Verifier reset, the uninstall run again: exit 3, the drive on
+  `stornvme`, the restart after it clean.
+
+The stop in `storport.sys`, read from the complete memory dump (exported
+from the guest, parsed on the host from the dump's own page tables): the
+IRP (argument 3) has four stack locations and only the top one used,
+`IRP_MJ_PNP` / `IRP_MN_QUERY_CAPABILITIES`, sent to a device object of
+`\Driver\stornvme` (a controller-type device, so `storport.sys`'s
+adapter object, the dispatch routine argument 2 names) whose
+`DEVOBJ_EXTENSION` reads removal processed and deletion pending, attached
+to nothing below, reference count 0: a request sent to the drive's
+adapter after its own removal. Its unused lower locations mean it never
+went down the stack, so it never reached the child filter of
+`xhcicm.sys`, and the thread's whole kernel stack holds `ntoskrnl.exe`
+frames and that one `storport.sys` routine, no `xhcicm.sys` frame. So the
+failing request was dispatched to `storport.sys`'s removed adapter and
+not through the filter; why the adapter was removed then, and whether
+anything earlier contributed, is not read. The stop under the standard
+checks stays an unresolved observation (below).
+
+The unload half on 8.1 x64, read on a second fresh overlay (`k81y`, the
+same vehicle) with Verifier's pool checks alone on `xhcicm.sys` (special
+pool and pool tracking, flags 0x9): the install, a cold boot with the
+ORICO (the mark service's switch, Stor98 running), the uninstall (exit
+3) with no stop; `xhcicm.sys` loaded once and not unloaded (it stays for
+the boot once a stor98 holds the table, `ec1b21f0`); the restart after
+it clean. A second install on `k81x` over the first was refused by the
+installer (exit 1, the x64 connection manager's test-signing gate), so
+`k81y` was a fresh overlay.
+
+So on 8.1 x64 both halves of the task hold: Stor98 starts, and the
+unload leaves no allocation behind.
+
 ### Owed
 
-Stor98's start with `MSISupported` 1 on 8.1; the amd64 half read on a
-64-bit guest (the gated amd64 build is the coordinator's record).
+Nothing of 45.31's scope. Left open: the stop in `storport.sys` at the
+8.1 x64 uninstall under Verifier's standard checks on `xhcicm.sys`
+(location read, cause not).
+
+### 45.13 (continued): 2000 read, and the chained unit's own `Removable` (2026-10-30)
+
+**2000** (the reading the owner's question waited for). A 2000 SP4
+golden made like XP's: an overlay of the q35 2000 base (Standard PC
+HAL), the launcher's `-Usb4 tb3ar`, nothing attached; the release x86
+package of `1a2a72ca` installed with `/thunderbolt /stor98` (exit 0,
+the Found New Hardware wizards answered), a cold second boot
+(`XHCIINST /devices`: the Alpine Ridge controller, tunnel port
+`02:01.0`); kept read-only (`cd1b7ecf...`). Each leg a child overlay
+with the dock `enc0` at power-on (`preboot=on`, `downstream-ports=1`,
+`chain-power-controller=off`); the dock's first boot answered its
+wizards (Stor98 for the dock's NVMe, E: "ORICO") and was kept as the
+legs' starting state (`dockinst.qcow2`, `947a92b7...`); the chained
+device `usb4-device ... parent=enc0,port=1` plugged by QMP at the
+desktop. Evidence: `E:\xhci98-vm\p45\w45-chain\w2k\`
+(`serial-<leg>.log`, `debugcon-w2b.log`, `trace-<leg>.log`,
+`infopci-w0c*.txt`, `w0c-serial.txt`, screenshots).
+
+| Leg | Build | Read |
+|---|---|---|
+| w0b, w0c | the golden's release `xhcicm.sys` (`d012fccf...`, no chain action) | the child approved at depth 2; 2000 found the chained NVMe itself (a Found New Hardware wizard for it, Stor98 bound); the wizard's restart hung in real mode (EIP `0d4f`, the base's known warm-restart hang), so a cold start (w0c); the child plugged again: Stor98 at **Code 10**; unplugged and plugged again: gone, then Code 10 again; the dock unplugged with the child attached: every devnode of the dock gone, no hang; shutdown in 6 s |
+| w2b | the qemu flavour at `38ac4e18`'s source (`77f34053...`, with the chain action), swapped in, a cold start | the chain port's `BusRelations` reported the new PDO (`cm.chain.rel=01040508`, one new, the child filter attached) before the action's `cm.chain.invalidate=01020508`; Code 10 as in w0c; the child's unplug: `cm.chain.invalidate=02020508`, gone; the dock's unplug with the child: all gone, no hang; shutdown in 5 s |
+
+**Why Code 10 on 2000.** The chained NVMe's requirement list
+(`BasicConfigVector`, read from the registry) holds its memory BAR and no
+interrupt, where the dock's NVMe, numbered by SeaBIOS, has IRQ 10;
+`info pci`: the chained function's IRQ 0, its BAR unmapped. 2000 on the
+Standard PC HAL gives a hot-added function no interrupt, and the child
+filter's interrupt step (record 21 section 6.2.1, task 44.53) declined
+it: `cm.chain.irq.no=00020700`, why 2, the tunnel port's Interrupt Pin
+not 1 to 4 (the emulated Thunderbolt 3 tunnel port `02:01.0` carries no
+pin; `info pci` prints none). The chained function would also arrive on
+another pin of the tunnel port (the chain port is device 1 on the dock's
+internal bus: pin A becomes B), record 21 section 6.2.1's other
+documented limit. So on 2000's Standard PC HAL a chained drive behind the
+emulated dock is found and does not start; that is the platform's
+interrupt routing, not the chain's discovery. Reported to the
+coordinator (the emulator's tunnel port has no pin; on real hardware the
+other-pin limit applies to a chain port at an odd device number).
+
+**What 2000 shows.** As on XP (x0, x1): the member's invalidation alone
+reached the chain port's bus; the action's call came after the PDO was
+already reported. So on all three systems read (7, XP, 2000) the chain
+action is a second request. The owner kept it (below).
+
+**The chained unit's `Removable`** (record 34 section 3.10, reviewed and
+revised before and with the code): the chain port is classified by its
+own child filter at each of its `BusRelations` answers, before the answer
+goes up (`cmChainClassify`, `XhciTbtChainPortTest`); its children get
+marks entries with that chain port as their landing (`CmMarksBury`,
+`CmMarksBuryLandings`, `CmMarksMake`, two phases); the `Removable` gate
+compares a chained unit's bus with its chain port's secondary bus; a
+chained entry is never confirmed as a member eject
+(`CM_MK_CONF_CHAINED`); the answer carries `CM_QM_EF_CHAINED` and the
+landing at offset 40.
+
+The code is `0751ad83` (with the host vectors: `test_tbt_topo` 715
+checks, `test_cm_marks` 221, 0 failures each); `b83a5d34` adds three
+fixes from the integration review of 45.35's isolation interface (the
+first reference taken with the binding under the registration list's
+lock, every later one and the release under it; the bindings to a
+domain voided when it is delisted; a comment).
+
+**Builds.** The gated x86 build of `0751ad83` and of `b83a5d34`
+(`scripts\build-driver.cmd all`): "BUILD + GATES PASSED (debug release
+qemu)" each (`E:\xhci98-scratch\p45-w45-chain\gb-x86-0751ad83.log`,
+`gb-x86.log`); the gated amd64 build of `b83a5d34` (`all -amd64`):
+the same ("BUILD + GATES PASSED (debug release qemu)",
+`gb-amd64.log`); the host suite: "Host tests PASSED" (`hosttests.log`). The release `xhcicm.sys` of `b83a5d34` `a101d05f...`,
+`xhci98.sys` `cc189335...`.
+
+### The legs of section 3.10 (2026-10-30)
+
+| Leg | System, build | Read | Verdict |
+|---|---|---|---|
+| x3, x3b | XP, the XP golden, a qemu-flavour diagnostic build of the uncommitted section 3.10 code (`95857dde...`), swapped in | `cm.chain.class=00070508` (the chain port `05:01.0`, secondary bus 7); the chained Stor98 answered `Removable` (`cm.chain.removable=21070508`) and listed on its own in Safely Remove Hardware ("at PCI bus 7"); a file written to it, the unit stopped from the applet ("Safe To Remove Hardware"), the child unplugged and plugged again: the file there (`fc`: no differences), the dock's drive untouched. In x3, the session in which the chained device was installed for the first time, the applet did not list it | diagnostic |
+| x4 | XP, the qemu flavour of `b83a5d34` | the chained device plugged for the first time (never seen): `cm.chain.removable=21070508` at that plug | diagnostic |
+| x5 | XP, the gated release `xhcicm.sys` and `xhci98.sys` of `b83a5d34` swapped into the golden | the dock's first boot (Stor98 by its wizard), a restart, the chained device plugged for the first time: Stor98 by its wizard; Safely Remove Hardware lists "Stor98 Storage Controller for NVMe SSDs" on its own ("at PCI bus 7, device 0, function 0") beside the dock's bridge; a file copied to F: and compared; the unit stopped from the applet (its volume F: and its disk in the confirmation, "Safe To Remove Hardware"); the child unplugged and plugged again: the file there (`fc`: no differences), D: (the dock's drive) there; the dock unplugged with the child attached: no hang; shutdown in 17 s | pass (section 9.3 clause 5 on NT; the lost write of x1 and x2 avoided by the eject) |
+| w3, w3b | 2000, the dock-installed state, the gated release of `b83a5d34` swapped in, a cold start; emulator `usb4-emu` `b84be72` (`qemu-system-x86_64.exe` `7ff0d230...`: the Thunderbolt 3 switch ports report Interrupt Pin A, the tunnel port padded) | `info pci`: the tunnel port `02:01.0` IRQ 10, pin A, buses 4 to 40h; the chained device plugged: Stor98 by its wizard ("will not work until you restart"), the chained NVMe at Code 10, IRQ 0, BAR unmapped; the "Unplug or Eject Hardware" applet lists the chained Stor98 on its own; the child unplugged, then the dock: nothing left behind the tunnel port, no hang; shutdown in 7 s | the listing: pass. The interrupt: with the tunnel port's pin now present, the chained function still gets none, as its interrupt arrives on pin B of the tunnel port (the chain port is device 1 of the dock's internal bus; record 21 section 6.2.1's other-pin limit) |
+
+Evidence: `E:\xhci98-vm\p45\w45-chain\xp\` (`serial-x3*.log`,
+`debugcon-x3*.log`, `debugcon-x4.log`, `serial-x5.log`, `x3b-*.png`,
+`x5-*.png`) and `w2k\` (`serial-w3b.log`, `infopci-w3b.txt`,
+`w3b-*.png`).
+
+**The owner's decisions** (2026-10-30): the chain action is kept (Q1
+(a)); the correspondence learning, the per-tunnel ownership, names and
+generations and the status record's kind 3 entries move to 45.15, Part
+3, where a chained tunnel of the software connection manager gives them
+a reader (Q2 (a)); a chained drive on 2000's Standard PC HAL that gets no
+interrupt is a release-notes limitation, and the emulator's Thunderbolt 3
+tunnel port gets an Interrupt Pin (`usb4-emu` `b84be72`, read in w3b
+above) (Q3 (a)).
+
+**45.13 is done** with that: the chain action (section 3.9) and the
+chained unit's own `Removable` (section 3.10). What was read: on 7 x86
+the discovery and removal of a chained device, on the release of
+`1a2a72ca` before either action (r2); on XP the discovery without and
+with the chain action (x0 to x2) and, on the gated release of
+`b83a5d34`, the chained unit listed, stopped from the applet and a file
+kept through the unplug (x5); on 2000 the discovery without and with the
+action (w0b to w2b) and, on the gated release, the chained unit listed
+on its own (w3b; it does not start there, so no stop was read). The
+applet's stop on 2000 and 7 is not read. 45.17's PCI-side clause 5 (safe
+removal of the chained unit from the system's applet) is read on XP;
+from XHCITR it waits for record 25's chained unit (leg T.11).
+
+The unload half on 8.1 x64 under Verifier, behind the stop in
+`storport.sys` (which request, and whether it is the filter's doing);
+the same uninstall on 8.1 x86 was read with no stop.
+
+## 45.22 ring interrupts for the connection manager: the code (2026-10-30)
+
+The owner's answers to record 21 section 4.5.10 (2026-10-29: Q1 (a) coded
+in this release behind `XhciCmRingInterrupt` 0, Q2 (b) 0 everywhere until a
+hardware reading, Q3 (a) the line first, Q4 (a) the idle period unchanged;
+98 SE and ME only after their route is read) coded on branch `w45-irq2`
+from `2a86c41d`. Development host A.
+
+### What was coded
+
+Record 21 section 4.5 for both profiles, as section 4.5.11 (new) records
+where the code settles what the design left open; record 22 section 5.4
+and section 1.3's two lines, record 21's section 8 table and decision D3's
+row brought up to date. Files: `src\cm\cm_rirq.c` and `.h` (the pure
+half), `cm_rirqos.c` and `.h` (the service routine, its DPC, the
+connection, the arm and mask under `KeSynchronizeExecution`, the self-test
+through Interrupt Status Set, the watchdog, the orders down and up),
+`cm_thr.c` (the wait to the maintenance deadline, the `CM_WORK_RING` wake,
+`CmCfgIntxRetire`), `tbt_ring.c` (IE in RX descriptors, `TbtRingRxPending`),
+`tbt_icm.c` `TbtIcmRingWake`, `tbt_u4cm.c` `TbtU4RingWake`, `tbt_regs.h`
+(ISC, ISS, IMS, ITR[0], bit 17), `cm_nhi.c` and `cm_power.c` (the intent
+before every ring start, the order down first in every stop and
+quiescence), `cm.h` (`CM_WORK_RING`, the field), `cm_vals.c`, `cm_reg.c`
+(`XhciCmRingInterrupt`, no INF writes it; the qemu flavour's
+`XhciCmQemuIrqDead`), the five interrupt pairs in both `xhcicm` allowlists
+(`xhci98.sys`'s rows, evidence verbatim), `docs\using\tuning.md`'s row.
+
+Host vectors: `test_cm_rirq` (new: the cause for every Total Paths, the
+routine's outcomes, the storm count, the mask by contract and its proof,
+the watchdog's suspicion and slower storm, the order down's end and latch,
+the waits across the clock's wrap), `test_tbt_ring` (IE from the initial
+post, kept by a repost, dropped after the retirement; the peek takes
+nothing), `test_u4cm` and `test_tbt_icm` `test_ring_wake` (a plug served
+by one wake with no tick between; the wakes end; a check already owed is
+the tick's), `test_cm` (the value's rule).
+
+Commits: `d311d97b` (the code), `1098f0f6` (reviewed and revised: a
+retained interrupt's geometry published only before the connection or
+under the interrupt's lock; an armed interrupt taken down before every
+ring start, since a full recovery can restart the rings within one pass;
+the maintenance deadline the last pass plus the period in force),
+`addee4bb` (the wakes' vectors). Reviewed and revised in three areas
+(IRQL and lifetime, the lifecycle, registers and supporting files) until
+nothing material was left.
+
+Builds at `addee4bb`: the x86 gated build `all` passed
+(`out\gated-x86-release.txt`; `xhcicm.sys` release `550c3e18...`, qemu
+`bbb1a272...`), the amd64 gated build `all` passed
+(`out\gated-amd64-release.txt`; `xhcicm.sys` release `88991790...`,
+unsigned as a clone without the key stages it), `src\pfw\build.cmd` once
+before; the host suites passed (`test\run-host-tests.cmd`).
+
+### 98 SE and ME: the NHI's route (record 21 section 4.5.4's reading)
+
+On fresh overlays of the q35 bases, no xHCI98 installed, `bin\asm4242-20261025-2230`
+as the launcher pins it, one vCPU: Device Manager, Computer's View
+Resources (IRQ) and the NHI's own Resources page, read by QMP screendump
+(`E:\xhci98-vm\p45\w45-irq2\r98t`, `r98a`, `rmet`, `rmea`).
+
+| System | Profile | The NHI as Device Manager names it | Allocated | Sharing its IRQ |
+|---|---|---|---|---|
+| 98 SE | `tb3ar` (Alpine Ridge behind its switch, root port `00:08.0`) | "PCI System Peripheral", Code 28 (no driver), basic configuration 0000 | IRQ 10, memory `FE400000-FE43FFFF` and `FE440000-FE440FFF` | the SMBus, the ICH9 AHCI ("PCI Card"), two PCI-to-PCI bridges, one of the two xHCI controllers, an IRQ holder |
+| 98 SE | `asm4242` (the NHI behind the chip's own switch) | "PCI Universal Serial Bus" (class `0C0340`), Code 28 | IRQ 11, memory `FA800000-FA83FFFF` and `FA840000-FA84FFFF` | one PCI-to-PCI bridge and an IRQ holder |
+| ME | `tb3ar` | as on 98 SE | IRQ 10, the same ranges | as on 98 SE |
+| ME | `asm4242` | as on 98 SE | IRQ 11, the same ranges | as on 98 SE |
+
+So on q35 both 98 SE and ME give the NHI an IRQ under both profiles,
+shared and level (PCI). Not read: the configuration space's Interrupt Line
+and Pin, and whether the IRQ is the one the pin raises, which only the
+self-test can say (section 4.5.4). The code connects nothing on 98 SE and
+ME (`cm.irq.9x`); their connection and its first leg stay owed.
+
+### The legs on q35 (2026-10-30)
+
+Vehicle: fresh overlays of `E:\xhci98-vm\q35-bases\w7x86` and `xp`, the
+launcher's pinned emulator (`bin\asm4242-20261025-2230`), TCG, 2 vCPUs,
+with `-msg timestamp=on` and the trace events `usb4_host_rx_done`,
+`usb4_host_frame_decode`, `usb4_host_mmio_write` and `usb4_host_irq_intx`
+(host clock). Install set: `releases\3.3.0.0`'s `INSTALL.BAT` and tools with
+its `release-x86` replaced by this tree's `make-package.ps1 -Flavor release
+-Arch x86` output unchanged (`xhcicm.sys` `550c3e18...`, `xhci98.sys`
+`4022c19a...`; the owner, 2026-10-30: these legs count), `INSTALL.BAT
+/console /yes /nopause /thunderbolt /stor98`, exit 3, restart. The qemu
+phases replace `xhcicm.sys` alone by `make-package.ps1 -Flavor qemu`'s
+(`bbb1a272...`), whose log reaches the host through port `0xE9`, each
+line stamped on the host clock as it lands. Values set in `Services\USB`
+(`reg add`), each followed by a restart. Evidence:
+`E:\xhci98-vm\p45\w45-irq2\w7t` and `wxa` (`serial-*.log`: the XHCITR
+reports and `typeperf`; `cpu.txt`; `plugs-*.txt`; `dbg-*.txt`;
+`trace-*.log`; `seq.log`), the scripts in `kit\`.
+
+**The driver loaded is this build** on both: `cm.irq.value` and
+`cm.irq.resource` in each report (7 x86, Alpine Ridge under the ICM
+client: a line at IRQL 10, shared, level; XP, the ASM4242 under the USB4
+profile: IRQL 5, shared, level).
+
+**Value 1, 7 x86 `tb3ar`**: `cm.irq.connected`, `cm.irq.armed=00001000`
+(bit 12 of 36 causes: RX ring 0 for Total Paths 12), `cm.irq.selftest`
+passed (10 ms at the first start, 203 ms on a slower boot); the drive came
+up behind the tunnel as with value 0.
+
+**Hot-plug latency, 7 x86 `tb3ar`, ten plugs of the TB3 enclosure each**
+(QMP `device_add` at 70 s intervals, `device_del` 40 s after each; record
+21 section 4.5.9's two figures):
+
+| Value | The plug's own event frame consumed after the plug (`RX0.PROD_CONS` naming its descriptor) | Connection done (`cm.action.tunnel-up`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 170 ms, max 201 ms | median 206 ms, max 225 ms |
+| 1 (the interrupt) | median 2.0 ms, max 3.3 ms | median 25 ms, max 38 ms |
+
+Each plug's own frame is the first frame of its type (`ICM_EVENT` here,
+`HOTPLUG` below) the emulator wrote from 5 ms before the plug's stamp on
+(the QMP script's clock and QEMU's trace clock differ by up to a
+millisecond) to 10 s after it, and its descriptor; every one of the
+twenty plugs matched its own (`kit\lat.py`). The emulator wrote it 0 to
+2 ms after the plug.
+
+**The same, XP `asm4242` under the USB4 profile, ten plugs of the ORICO
+enclosure each** (value 1: `cm.irq.connected`, `cm.irq.armed=00200000`,
+bit 21 of 63 causes for Total Paths 21, `cm.irq.selftest` passed):
+
+| Value | The plug's own hot-plug packet consumed after the plug | Connection done (`u4.action`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 158 ms, max 213 ms | median 2370 ms, max 2554 ms |
+| 1 (the interrupt) | median 4.5 ms, max 6.9 ms | median 2245 ms, max 2359 ms |
+
+Under the USB4 profile the connection is the enumeration of section 6.4,
+about 2.2 s here, so the interrupt's gain (one poll's wait) is a small
+part of it; the wake's port check ran the whole connection (the tick did
+not have to), and no wake fed another (`TbtU4RingWake`).
+
+**Idle cost, 7 x86 `tb3ar`, release flavour, ten minutes each**: the QEMU
+process's host CPU, and the guest's `% Processor Time` and
+`Interrupts/sec` (`typeperf`, 10 s samples).
+
+| Configuration | Nothing attached: host / guest / interrupts per s | Drive attached, idle |
+|---|---|---|
+| value 0, period 200 ms | 65.2 % / 26.2 % / 152 | 65.0 % / 27.5 % / 140 |
+| value 1, period 200 ms | 63.1 % / 25.7 % / 135 | 62.9 % / 25.1 % / 134 |
+| value 0, period 50 ms | 67.2 % / 26.9 % / 148 | 60.2 % / 24.3 % / 134 |
+
+Within the noise of a TCG guest sharing the host (other workers' guests
+ran beside it): neither the interrupt nor the 50 ms period shows an idle
+cost there, on this guest and profile only. XP `asm4242`, value 0: 102.6 % / 31.1 % / 130 with nothing
+attached, 102.9 % / 31.5 % / 129 with the drive.
+
+**A lost interrupt, 7 x86 `tb3ar`, qemu flavour, value 1,
+`XhciCmQemuIrqDead` 12**: the line died after its twelfth claim during
+the second plug. The plugs after that were still served, by the
+maintenance pass (connection done 160 ms after the fourth plug, against
+25 to 49 ms before), and the drive came and went each time: a lost
+interrupt costs one idle period, today's latency. The latch to polling
+for the activation (two suspected misses in a row, the self-test,
+`cm.irq.lost`) was not reached: the ICM client's events are single frames
+70 s apart here, so no two maintenance passes in a row found an unannounced
+frame. That path rests on `test_cm_rirq`'s watchdog vectors.
+
+**Not read on a guest**: the storm stop (no emulator storm), the
+retained interrupt (no mask that does not latch), a D3 and resume with
+value 1 (no sleep leg), Windows 2000, Vista, 8 to 10 and the x64 build.
+
+### What is left
+
+The task stays unticked: its line connects the interrupt on 98 SE and ME
+too once their route is read, and that connection (and its first leg,
+the self-test on those systems) is owed - the route is read above. Also
+owed: the latch to polling read on a guest (it needs an `usb4-emu` INTx
+drop on `usb4-host`, or a host with denser events); section 4.5.9's
+no-interrupt leg (`usb4-host` `intx=off`, `cm.irq.none`) and shared-line
+leg (the NHI on another device's line, traffic on that device); the USB4
+profile's idle cost at value 1 and at a 50 ms period (XP was read at
+value 0 alone); the readings of the "Not read" list; and the hardware
+reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
+default stays 0 (owner, Q2).
+
+## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
+
+**Verdict: the report's drop is the driver's design, reproduced on q35 XP
+with `3.3.0.0`.** A SuperSpeed link that falls to SS.Inactive under a
+device - behind a SuperSpeed hub, or on a root port - made the bus drop
+the device and enumerate it afresh; to the storage stack that is a
+surprise removal, and its cached writes are lost ("Delayed Write
+Failed"). Design record 13 section 15 now keeps a one-interface UAS
+drive with a serial number in place across that recovery, through the
+restore RESET_PORT already does, and every other device is dropped as
+before. The freeze the reporter also saw is not this driver's (task
+45.42, below).
+
+### The report and its snapshot
+
+A desktop with a VIA VL805 card (`1106:3483`), Windows XP x64 SP2
+(`xhci98.sys` 361432 bytes, `3.3.0.0`'s release-x64 build; `XHCITR`'s
+"bitness x86 (32-bit Windows)" line beside it is a fault of `XHCITR64`'s,
+which reads `IsWow64Process` as false on a native x64 system), `3.3.0.0`. A SanDisk UAS drive (`0781:55A9`) on port 1 of a Realtek
+SuperSpeed hub (`0BDA:0411`) at root port 3. The snapshot, taken 1347 s
+after the controller's start:
+
+- the UAS driver's telemetry: record 1 "its device departed, slot 4", its
+  last send 229.9 s before the dump; record 2 "its device present, slot
+  4", 229 sends; neither counted a sense, protocol error, timeout, abort,
+  LUN reset or port reset - the drive left with no error of its own;
+- `SsHubWarmResets` 1, `SsWarmResets` 1, `SlotsEnabled` 8 for 6 devices
+  present: the hub port's link recovery, and a second one;
+- root port 2's last note: "machine Bound, fed disconnect, link warm
+  reset; PORTSC PLS 6, changes CSC PLC" - a 5 Gbit/s RTL8157 network
+  adapter (`0BDA:8157`) whose link fell to SS.Inactive (PLS 6, CCS 0) and
+  which was dropped the same way; root port 2 reads Empty at the dump.
+
+One hub warm reset in 1347 s of uptime, the drive's departure at about
+1117 s; a single snapshot gives no rate beyond that.
+
+### The reading of the code
+
+`HcdSsHubPortLook` (`hcd_sshub.c`) reads a hub port's link in SS.Inactive
+or Compliance Mode, marks the port `HubSsRecover` and asks for the
+disconnect of what it holds; `hcdHubPortChanged` (`hcd_enum.c`) feeds it
+- the device frozen, its transfers ended, its slot disabled, its PDOs
+reported missing - and only then `HcdSsHubPortRecover` sends
+BH_PORT_RESET, and the trained link is a new device. A root port does the
+same through `XhciLinkPortFeed` and PORTSC.WPR. The transfers the
+teardown ended are held on the old PDO until its surprise removal
+(`HcdIoPark`). SS.Inactive is a link failure with the device attached,
+not a detach (USB 3.2 7.5.2); nothing in the path restored the device.
+
+### The vehicle
+
+Development host A, QEMU 11.1.0 under TCG, built in the worker's scratch
+from `usb-wdm-free`'s `qemu-cancel` tree (11.1.0 with its xHCI cancel and
+No Op fixes) plus a test-only patch of this task's, kept with the build:
+
+- `usb-ss-hub`, a SuperSpeed hub model (the SuperSpeed half of a USB 3
+  hub: bcdUSB 3.00, hub descriptor 0x2A, SET_HUB_DEPTH, the USB 3.2
+  section 10.16 port status, change bits and features, BH_PORT_RESET),
+  downstream ports SuperSpeed only;
+- its `link-drop` property: `qom-set <hub> link-drop N` fails port N's
+  link - SS.Inactive, PORT_ENABLE 0, C_PORT_LINK_STATE (with 0x100 the
+  connection bit drops too, with 0x200 no change bit is set) - and the
+  host controller forgets every transfer in flight to that device, with no
+  event, and starts none until the port's warm reset;
+- the same on `qemu-xhci`'s root ports: `qom-set <xhci>/xhci-core
+  link-drop N` sets PLS 6 with CCS 0, PED 0, CSC and PLC, as the VL805
+  reported; any reset of the port brings the link back.
+
+The q35 XP base (`launch-q35.ps1 -Os xp`, 2 processors, 1 GiB, `-vga
+cirrus`; the "before" readings, taken before the reporter's system was
+known to be XP x64) and the q35 XP x64 base (2 GiB unless stated), `3.3.0.0`
+installed on an overlay (`INSTALL.BAT /console /yes
+/nopause`, exit 3, then shut down); each run an overlay of that. The hub
+on `qemu-xhci` root port 3, a `usb-uas` (serial `W45UAS41`, one `scsi-hd`
+LUN on an overlay of the 128 MiB FAT test disk) on its port 1, the drive
+D:. Load: `W.BAT D:`, a 16 MiB file copied, compared and deleted in a
+loop, one COM1 line a pass with the guest's time.
+
+### Before the change: `3.3.0.0`
+
+| Run | Result |
+|---|---|
+| one hub-port link failure under the copy loop (host 09:28:59.6) | the drive dropped: the copy in flight failed at 09:29:01.5, 34 copies failed over 8 s while the drive was absent, the drive came back as a new device and passed from 09:29:17.3 - about 18 s without the disk |
+| twenty failures 40 s apart | each dropped and re-enumerated the drive; for the first seven, the disk was absent 11.3 to 31.2 s each (18.2, 29.9, 19.8, 31.2, 27.3, 14.5, 11.3 s from the last good pass before to the first after). From the eighth on every pass failed: the failed passes had left their 16 MiB files on the 128 MiB disk, which was full (15 MB free) - the harness's fault, corrected for the later runs (`W.BAT` deletes leftovers at each pass) |
+| `XHCITR /snapshot` after the twenty-one failures | `SsHubWarmResets` 21, `SlotsEnabled` 24 and `DevicesAddressed` 24 for three devices present, three slots held, six pool rings in use, 18 transfers cancelled; nothing of the bus grew beyond what each re-enumeration adds and frees |
+
+### The change
+
+Design record 13 section 15 (reviewed and revised, commits `273a95dc`,
+`b42919bc` - the merge of `3.4.0.0` with the resume keep's review fixes,
+which added the refusal of a device on another configuration - and
+`bd9be1d8`). A SuperSpeed link read in SS.Inactive or Compliance Mode
+under a device of one interface, storage on UAS under `xhciuas.sys`, with
+a serial number taken as its instance id, started, not under selective
+suspend, on its configuration index 0, is restored in place by
+RESET_PORT's own sequence instead of dropped: what its pipes held fails as
+a transport error, the port is warm-reset, Reset Device and Address
+Device run on the same slot, the device descriptor, the whole
+configuration and the serial number are compared, the configuration is
+replayed; `xhciuas.sys`'s own recovery then resets it once more and the
+disk class driver retries. Every other device - a hub, a composite device,
+Bulk-Only storage, a HID device, a network adapter - is dropped as before;
+so the RTL8157 the same snapshot shows dropped on root port 2 is not kept,
+and task 45.40 is not answered here (record 13 section 15, L2, says what a
+network adapter would need). Three keeps a device inside a window of 600
+tolerance-clock ticks (nominally 60 s); the fourth is dropped as before.
+`XhciLinkKeep` 0 (machine-wide `Services\USB` or the controller's driver
+key) restores the drop. Two changes reach beyond the link: RESET_PORT
+quiets every pipe before it settles any, within a bound; and a device
+reset of `xhciuas.sys` that gives up without the bus having had its
+RESET_PORT now asks the bus to cycle the device (charged to the location
+as a failed RESET_PORT is) instead of leaving the drive present and dead
+until it is unplugged.
+
+Builds: `bd9be1d8`, the gated x86 build (all three flavours, "BUILD +
+GATES PASSED (debug release qemu)", the host suites passed; release
+`xhci98.sys` `58cb5613...`, `xhciuas.sys` `6be02f4c...`), and a plain
+amd64 release build for the XP x64 legs ("BUILD + GATES PASSED
+(release)"; `xhci98.sys` `7d14bbd1...`, `xhciuas.sys` `e57f44dd...`).
+Each leg's guest is an overlay of a `3.3.0.0` install with this tree's two
+files copied over the installed ones and the guest restarted, and
+`XHCITR /snapshot` showing their hashes before the leg; on XP x64 the
+`3.3.0.0` x64 package was installed after its test certificate was
+imported in the overlay (`rundll32 cryptext.dll,CryptExtAddCER`, the
+wizard's automatic store), as the base's README says is owed.
+
+### After the change
+
+| Leg | System | Result |
+|---|---|---|
+| a hub-port link failure under the copy loop and a held file | XP x64, amd64 | kept: `link.keep=01000000` (location 0100h, the first hub's port 1, in the high half; reason 0, kept), `link.keep.done=01000001` (restored); `SsHubWarmResets` 1; no copy failed, the pass spacing (about 1.35 s) unchanged across the failure; the held file grew on; no "Delayed Write Failed"; the UAS telemetry's record unchanged (no second device) |
+| nine hub-port failures in eight minutes | XP x64, amd64 | all nine kept (`SsHubWarmResets` 9), `SlotsEnabled` unchanged at 4, the same telemetry record for 1038 sends, no copy failed, the held file at 1043 lines |
+| four failures inside 18 s | XP x64, amd64 | three kept, the fourth refused by the budget (`link.keep=01000009`, reason 9) and dropped as before: a new telemetry record, `SlotsEnabled` 5, and the held file's handle invalid ("The volume for a file has been externally altered so that the opened file is no longer valid") - the drop's own symptom, as designed |
+| a root-port link failure (PLS 6, CCS 0, CSC and PLC) | XP x64, amd64, disk on root port 3 | kept: `link.keep=00030000` (location 3, reason 0), `link.keep.done=00030001`; `SsWarmResets` 1 (the inspection's precharge refunded: one charge for one warm reset); `SlotsEnabled` unchanged; no copy failed; the held file grew on |
+| the same with `XhciLinkKeep` 0 | XP x64, amd64 | `link.keep.on=00000000`, `link.keep=00030001` (reason 1, the switch off): dropped as before - a new telemetry record, the held handle invalid |
+| a hub-port link failure under the copy loop and a held file | XP x86, x86 gated release | kept, restored, `SsHubWarmResets` 1; no copy failed, the pass spacing (about 5.5 s) unchanged across the failure (the copy after it at 14:17:59.9 for a failure at 14:17:55.8); one telemetry record; the held file grew on. `3.3.0.0` on the same harness: the disk absent about 18 s, 34 copies failed |
+| a plain unplug of the disk under load, then a replug | XP x86, x86 gated release | as before: the copy in flight failed 10 s after the unplug and every copy failed while the disk was absent; 0.7 s after the replug the disk was back and passing; no hang |
+| 45.23's keep: hibernation under the copy loop and a held file, `XhciResumeReinit` 2 | XP x86, x86 gated release, disk on root port 3 | kept as before: `resume.keep=00020000` (two kept - the disk and the tablet - none failed or refused), `resume.keep.port=00000300` (root port 3, decision 0), `resume.keep.d0wait=00000104`; no copy failed after the resume, one telemetry record, the held file grew on |
+
+Owed, of design record 13 section 15's L9: the soak after the change ran
+nine failures in eight minutes on XP x64, not twenty forty seconds apart;
+the hub model's variants (the connection bit dropped too, 0x100, and a
+failure the hub never reports, 0x200) and an unplug of the hub itself
+under load were not run; the root-port failure was read on XP x64 only (the
+XP x86 root-port leg is 45.23's resume regression, not a link failure).
+Not read on a guest: the Bulk-Only, composite, hub and no-serial refusals
+(host vectors only: QEMU's `usb-uas` always carries a serial, and every
+refusal ends in today's drop, which the budget and `XhciLinkKeep` 0 legs
+show); Windows 98 SE, ME and 2000 (the same bus binary; their storage
+stacks above `xhciuas.sys` were not exercised); a real VL805 and Realtek
+hub - the reporter's.
+
+### The freeze
+
+Not reproduced, and on 2026-10-30 the reporter wrote that the same random
+freezes come with the VL805 card removed (task 45.42): not this driver's.
+The keep removes the drop's own outage - every request failing for 11 to
+31 s, the old volume's handles failing for good - which section 45.41's
+first readings measured.
+
+### Side finding: a UAS disk present at boot on XP x64 is not enumerated
+
+On the XP x64 guests with `3.3.0.0`, a `usb-uas` attached at power-on was
+not enumerated: no PDO and no problem device; a replug from the emulator
+(`attached` false, then true) enumerated it at once. Seen on every XP x64
+boot of this task, `3.3.0.0` and this tree alike. Task 45.43.
+
+## 45.42 an X58 desktop with a VL805 freezing at random with no USB device attached (2026-10-30)
+
+**Verdict: not xHCI98's.** The reporter wrote on 2026-10-30 that the same
+random freezes come with the VL805 card removed. Before that, the reading
+of the snapshot found nothing of the controller's (no recovery, no
+tolerance event, the interrupt line healthy, the longest completion pass
+3.2 ms), and one candidate - transfer buffers above 4 GB bounced through
+map registers below it, `xhci98.sys` describing a 32-bit adapter on
+amd64 as on x86 - was read on q35:
+
+| Run | Result |
+|---|---|
+| XP x64, `3.3.0.0` release amd64 (the reporter's `xhci98.sys` by hash), `-m 8192` (8191 MB seen by Windows, 7573 MB free); a USB 2.0 hub with a mouse, the tablet and a UAS disk on xHCI; copy loops on the UAS disk and the IDE system disk at once, a COM1 ticker every second | no stall: the ticker over 593 s, the longest gap 1.42 s; the UAS loop 471 passes over 684 s (median 1.45 s, longest 3.35 s), the IDE loop 646 over 672 s (median 1.03 s, longest 2.16 s), none failed (guest clock throughout); `XHCITR`: 401615 bulk URBs, 7.99 GB, publication mean 32 us (longest 1.65 ms), completion pass mean 16 us (longest 0.67 ms), map grant 256, no URB waiting for a mapping |
+| the same at `-m 3072` | no stall: the ticker over the last 263 s, the longest gap 1.56 s; UAS 774 passes over 1003 s (median 1.30 s, longest 1.66 s), IDE 1086 over 991 s (median 0.91 s, longest 1.42 s), none failed |
+
+The 8 GB passes were about a tenth slower with a longer tail, consistent
+with bouncing, and nothing froze. The 64-bit DMA question is dropped with
+the task.
+
+### 45.36, the third reading: the rate by variant, the threads' creation read, and the known issue (2026-10-30)
+
+`3.4.0.0` at `79d46dc2` merged first. No code; the owner's limit for
+this task was about half a day, then a known-issue note.
+
+**The threads' creation, read in the source** (with a second read).
+Every `PsCreateSystemThread` of this package passes no stack size, runs
+at `PASSIVE_LEVEL` from a system thread's context (the PnP start, or the
+connection manager's own thread) and holds no spin lock across the call,
+which is what the call's documentation asks on Windows 98 and ME. With
+selective suspend off (its default) a 98 SE start with the ASM4242 model
+makes six: one service thread per xHCI controller (`hcd_ctl.c`), the
+connection manager's thread (`cm_thr.c`), its configuration-manager
+worker (`cm_cfgwk.c`, made by that thread right after the start) and one
+call worker per USB4 port (`cm_callwk.c`, the same). The fine-timer
+thread (`hcd_tmr.c`) is never made on 98 SE or ME, the suspend threads
+(`hcd_susp.c`) only with selective suspend on, and Stor98 makes none (the
+two creations under `src/stor98/` are its test connection manager's). No
+creation was found that breaks a documented rule; the read cannot tell
+whether NTKERN's creation in this boot phase can leave a new thread's
+first stack page unresolved. The experiment proposed with the read,
+creating the per-port call workers on first need, was not made: they are
+also the route of task 43.47's handover at start (`CmCfgwkTakeover`),
+so the change reaches the connection manager's start, and at the rates
+below no run in the time could show an effect.
+
+**The rate by variant.** Unattended cold starts of overlays of a kept
+base, each watched three minutes for the stop screen (its blue, read
+from a screendump), on the ASM4242 layout with the enclosure at power-on:
+
+| Variant | System | Starts | Stops |
+|---|---|---|---|
+| `3.3.0.0` with Thunderbolt and Stor98 (`hm1`), cold start | ME | 60 (20 + 40) | 0 |
+| this build, default rows: no Thunderbolt, no Stor98 (`bmenocm`), cold start | ME | 20 | 0 |
+| no xHCI98 (`bmestock`), cold start | ME | 20 | 0 |
+| `3.3.0.0` with Thunderbolt and Stor98 (`h1`), the update and its first start | 98 SE | 4 (`w2`, `w3`, `w5`, `w6`; two more lost to the script) | 0 |
+
+With the first two readings: 2 stops in 139 starts with xHCI98 installed
+(98 SE 1 in 11 first starts after an update, 0 in 30 cold starts; ME 1
+in 78 starts, none after an update), 0 in 28 without it (98 SE 8, ME
+20). The variants without the enclosure or without Stor98 on 98 SE were
+not run: the 98 SE cold start never stopped in 30, so they could not
+have shown a difference. A rate this low does not separate the package
+from the system: two stops against none in 28 is not evidence either
+way.
+
+**Result.** No cause found in the time given. What is known: the stop is
+a page fault on a new thread's first ring-3 instruction (its first stack
+page not present), at the same offset on 98 SE and ME (ME0E.1's), rare
+(about 1 in 70 starts with this package, more often at the first start
+after an update on 98 SE), and gone at the next start. **Partial; the
+known issue below is for the owner.**
+
+**The known-issue note, three wordings for the owner's choice:**
+
+1. Short: "Windows 98 SE and ME: rarely, a start stops with 'A fatal
+   exception 0E has occurred at 019F:BFF72170' (98 SE) or 'Error: 0E :
+   01A7 : BFF62170' (ME). Turn the computer off and on again; the next
+   start works."
+2. With what is known: "Windows 98 SE and ME: about one start in
+   seventy, more often the first start after installing or updating
+   xHCI98 on Windows 98 SE, can stop with 'A fatal exception 0E has
+   occurred at 019F:BFF72170' (98 SE) or 'Error: 0E : 01A7 : BFF62170'
+   (ME), followed by a black or empty screen. It is a fault in Windows'
+   start of a new program thread; it has also been seen without the
+   update. Turn the computer off and on again: the next start works and
+   nothing is lost. The cause is not known yet."
+3. As an install note: "After installing or updating on Windows 98 SE
+   or ME, if the first start stops at a blue screen naming exception 0E
+   (or at a black screen), switch the computer off and on again; the
+   install is complete and the next start works. This happens rarely and
+   its cause is still being looked into."

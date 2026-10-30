@@ -234,6 +234,12 @@ typedef struct _TBT_RING {
      * into the common buffer, which is therefore never freed (cm_pool.c). */
     BOOLEAN DmaMayRun;
     ULONG RxPdfMask;        /* the RX PDF mask the last start programmed */
+    /* Interrupt Enable in every RX descriptor posted from now on (Spec
+     * 12.5.1: the RX cause's status set after the frame's write-back), the
+     * ring interrupt's intent (record 21 section 4.5.2), set by the driver
+     * before a start and kept by it; FALSE (polling) as a zeroed ring has
+     * it. A descriptor already posted keeps what it was posted with. */
+    BOOLEAN RxIe;
 
     /* The error notification that ended the last request with
      * TBT_E_NOTIFY (Spec 6.4.3): its event code, Event Info and the route
@@ -396,6 +402,12 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
  * delivered, as record 21 section 5.2 has the client strip it unchecked.
  */
 BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame);
+
+/* Whether the next RX descriptor TbtRingReceive would take holds a frame
+ * (DD set), read from the common buffer alone: no register access, nothing
+ * taken (the ring interrupt's watchdog, record 21 section 4.5.5). FALSE
+ * while the ring is not running. */
+BOOLEAN TbtRingRxPending(const TBT_RING *ring);
 
 /*
  * Read `count` DWs (1..60) of configuration space `cs`, adapter `adapter`,
