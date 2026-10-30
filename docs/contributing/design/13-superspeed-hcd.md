@@ -12361,11 +12361,13 @@ window start, the controller's switch).
 
 ## 16. A UAS drive's pass-through and SMART (task 45.52, 2026-10-31)
 
-Status: 2026-10-31, reviewed and revised; no code yet. Written from roadmap-usb4
-task 45.52 (the owner's choice of 2026-10-30, option (c) of the question in
+Status: 2026-10-31, reviewed and revised. Written from roadmap-usb4 task
+45.52 (the owner's choice of 2026-10-30, option (c) of the question in
 `runs/run-45.md`, "45.27 (the owed legs)") and that section's XP reading.
-The access check (16.3) is the owner's to choose; both choices are written
-and one is recommended.
+The owner's answers of 2026-10-31 are written in: the access check is
+choice B (16.3), `IOCTL_ATA_PASS_THROUGH_DIRECT` is served (16.2), and the
+emulator gains a test-only ATA answer so that a virtual machine shows a
+whole SMART reading (16.12).
 
 Tags in this section: [hdr] a fact from the WDK 7.1 headers this tree builds
 with (`tools\WinDDK71\inc\api\ntddscsi.h`, `ntdddisk.h`, `inc\ddk\scsi.h`;
@@ -12398,7 +12400,8 @@ ATA pass-through IOCTLs down to the device below it, here the LUN's PDO:
 the IDE disk under the same `disk.sys` answers them. Second, the SMART
 IOCTLs reach the device below in some form, because the Bulk-Only stick and
 the UAS LUN answer them with different errors under the same `disk.sys`.
-**In which form they arrive is not read** (16.6, reading R1).
+Reading R1 (16.11) found the form: `disk.sys` turns each SMART IOCTL into
+`IOCTL_SCSI_MINIPORT` with the `SCSIDISK` signature.
 
 What exists already: the engine (`uas_xport.c`) carries any CDB a class SRB
 brings, in a COMMAND IU, with autosense; `uasSlotPrepare` takes the
@@ -12416,16 +12419,20 @@ The LUN's PDO serves, in `UasPdoDeviceControl`:
 | `IOCTL_SCSI_PASS_THROUGH` | `0x4D004` | read and write | the caller's CDB, data in the system buffer (16.4, 16.5) |
 | `IOCTL_SCSI_PASS_THROUGH_DIRECT` | `0x4D014` | read and write | the caller's CDB, data in the caller's own buffer, locked (16.4, 16.5) |
 | `IOCTL_ATA_PASS_THROUGH` | `0x4D02C` | read and write | translated to ATA PASS-THROUGH (16) (16.8) |
-| `SMART_GET_VERSION` | `0x74080` | read | answered in the driver (16.9) |
-| `SMART_RCV_DRIVE_DATA` | `0x7C088` | read and write | translated to ATA PASS-THROUGH (16) (16.9) |
-| `SMART_SEND_DRIVE_COMMAND` | `0x7C084` | read and write | translated to ATA PASS-THROUGH (16) (16.9) |
-| `IOCTL_SCSI_MINIPORT`, signature `SCSIDISK`, control codes `0x1B0500` to `0x1B050B` | `0x4D008` | read and write | the same SMART translation, if R1 shows it is the form `disk.sys` sends the SMART IOCTLs down in (16.9) |
+| `IOCTL_ATA_PASS_THROUGH_DIRECT` | `0x4D030` | read and write | the same, data in the caller's own buffer, locked (16.5, 16.8) |
+| `IOCTL_SCSI_MINIPORT`, signature `SCSIDISK`, control codes `0x1B0500` to `0x1B050B` | `0x4D008` | read and write | the SMART IOCTLs as `disk.sys` sends them down (R1): `SMART_GET_VERSION` answered in the driver, the rest translated to ATA PASS-THROUGH (16) (16.9) |
 
-Every other code keeps `STATUS_INVALID_DEVICE_REQUEST`. Not served:
-`IOCTL_ATA_PASS_THROUGH_DIRECT` (`0x4D030`) and `IOCTL_IDE_PASS_THROUGH`.
-Serving the first would cost one more case, because the direct SCSI path
-already locks a caller's buffer. The owner's list does not name it, so it
-is left out and listed as a question in the report.
+A program's `SMART_GET_VERSION` (`0x74080`, read access),
+`SMART_RCV_DRIVE_DATA` (`0x7C088`) and `SMART_SEND_DRIVE_COMMAND`
+(`0x7C084`) never reach the PDO under those codes. `disk.sys` on 2000 to 7
+translates them at its FDO, and a partition's device passes them to the
+FDO first (R1). So the PDO serves only the miniport form, and the access
+rule of 16.3 applies to the program's original codes.
+
+Every other code keeps `STATUS_INVALID_DEVICE_REQUEST`, including
+`IOCTL_IDE_PASS_THROUGH`. `IOCTL_ATA_PASS_THROUGH_DIRECT` was added by the
+owner on 2026-10-31. It costs one case, because the direct SCSI path
+already locks a caller's buffer.
 
 `PathId`, `TargetId` and `Lun` in a request are ignored. The command goes to
 the PDO's own LUN, whatever they say. A program holding one disk's handle
@@ -12448,7 +12455,7 @@ its partition table and the file system on a mounted volume are the
 caller's responsibility, as they are on Windows' own ports [hyp: Windows'
 ports are not read for this].
 
-### 16.3 The access check (the owner's choice)
+### 16.3 The access check (the owner's decision: B)
 
 **What the system enforces before this driver runs.** Each IOCTL code
 carries its required access in its `CTL_CODE` [hdr]:
@@ -12505,9 +12512,10 @@ gives to administrators by default [hyp, until R2].
 - What it rests on: R2 showing that a Users member cannot get there on any
   of the three targets.
 
-**Recommendation: B.** It gives the same rule as Windows' own path on the
-same machine: whoever may write the disk's sectors may send it a CDB, and
-nobody else. It is the same in both binaries, and needs no import that
+**The owner's decision (2026-10-31): B.** Reading R2 on 2000, XP and 7
+is still to confirm it. It was the recommendation for these reasons. It gives the same
+rule as Windows' own path on the same machine: whoever may write the
+disk's sectors may send it a CDB, and nobody else. It is the same in both binaries, and needs no import that
 Windows 98 SE lacks. A is not available to the 32-bit binary at all. R2
 confirms B on each target before the legs close. If R2 shows Windows' own
 ports refusing something a user's handle can send, the design comes back
@@ -12520,7 +12528,8 @@ the direct form's buffer lock (16.5) reads the requestor mode.
 
 ### 16.4 The buffers and their checks, x86 and x64
 
-All seven codes are `METHOD_BUFFERED` [hdr]. The input and the output share
+All five served codes are `METHOD_BUFFERED` [hdr], and so are the three
+SMART codes a program sends `disk.sys`. The input and the output share
 `Irp->AssociatedIrp.SystemBuffer`, nonpaged and `max(in, out)` long. Every
 field of the request header is copied out of it before anything is written
 back.
@@ -12551,6 +12560,7 @@ WDK 7.1 declarations [hdr] and are compile-time asserts in the code:
 | `SCSI_PASS_THROUGH` | 44; `DataBufferOffset` at 20 | 56; at 24 (8 bytes) | `SCSI_PASS_THROUGH32`, 44; at 20 (4 bytes) |
 | `SCSI_PASS_THROUGH_DIRECT` | 44; `DataBuffer` at 20 | 56; at 24 | `SCSI_PASS_THROUGH_DIRECT32`, 44; a 32-bit pointer at 20 |
 | `ATA_PASS_THROUGH_EX` | 40; `DataBufferOffset` at 20 | 48; at 24 | `ATA_PASS_THROUGH_EX32`, 40; at 20 |
+| `ATA_PASS_THROUGH_DIRECT` | 40; `DataBuffer` at 20 | 48; at 24 | `ATA_PASS_THROUGH_DIRECT32`, 40; a 32-bit pointer at 20 |
 | `SENDCMDINPARAMS` (packed 1) | 33, `bBuffer` at 32 | the same | the same |
 | `SENDCMDOUTPARAMS` (packed 1) | 17, `bBuffer` at 16 | the same | the same |
 | `GETVERSIONINPARAMS` (packed 1) | 24 | the same | the same |
@@ -12598,10 +12608,11 @@ length, CDB. Its rules for the SCSI forms:
     a failure while data is moving. That is a limit, recorded in the
     release notes text. A non-data ATA PASS-THROUGH with CK_COND is served.
 
-The ATA form follows the same rules 1, 2, 4 and 6, with its own fields
-(16.8). The SMART forms check their fixed sizes (16.9).
+The ATA forms follow the same rules 1, 2 and 4, and rule 6 (buffered) or 8
+(direct), with their own fields (16.8). The SMART form checks its fixed
+sizes (16.9).
 
-**The miniport envelope** (`IOCTL_SCSI_MINIPORT`, only if R1 wires it).
+**The miniport envelope** (`IOCTL_SCSI_MINIPORT`, the SMART form R1 found).
 The input starts with `SRB_IO_CONTROL`, 28 bytes [hdr]: `HeaderLength`,
 `Signature[8]`, `Timeout`, `ControlCode`, `ReturnCode`, `Length`. Before
 the signature or the payload is read:
@@ -12614,11 +12625,14 @@ the signature or the payload is read:
 
 `Length` describes capacity, not the input: a sender may declare room for
 the reply while sending only the command. So `Length` is never used as a
-bound by itself. The payload's input is checked as the standalone SMART
-form's input (16.9) against the input length minus 28. Its reply is checked
-as the standalone form's output against both the output length minus 28
-and `Length`, so a reply never runs past what the sender declared or what
-the buffer holds. The reply is the zeroed envelope:
+bound by itself. Control code `0x1B0500` (SMART_VERSION) is taken first: its
+payload is a 24-byte `GETVERSIONINPARAMS` both ways (52 bytes in and out as
+`disk.sys` sends it), no `SENDCMDINPARAMS` is read, and its reply is the
+answer of 16.9 in a zeroed 24 bytes. Any other control code's payload input
+is checked as a `SENDCMDINPARAMS` (16.9) against the input length minus 28. Its reply is checked as a
+`SENDCMDOUTPARAMS` against both the output length minus 28 and `Length`,
+so a reply never runs past what the sender declared or what the buffer
+holds. The reply is the zeroed envelope:
 - `HeaderLength`, `Signature` and `ControlCode` as sent;
 - `ReturnCode` 0, or the SMART error code of 16.9;
 - `Length` the payload returned.
@@ -12762,7 +12776,8 @@ class command does. New imports: `IoReleaseCancelSpinLock`; the
   an internal command. For the SMART forms the system buffer is too small
   or shaped differently, so the record carries its own nonpaged buffer of
   the plan's length and the finish copies out of it.
-- *Direct* (`IOCTL_SCSI_PASS_THROUGH_DIRECT`): the caller's pointer is a
+- *Direct* (`IOCTL_SCSI_PASS_THROUGH_DIRECT`, `IOCTL_ATA_PASS_THROUGH_DIRECT`):
+  the caller's pointer is a
   user address when the requestor mode is `UserMode`. A new routine in
   `uas_mem.c`, the one site of the import rule, allocates an MDL over it
   (`IoAllocateMdl`) and locks it (`MmProbeAndLockPages`) for write when data
@@ -12957,18 +12972,41 @@ to carry them, so for this form and the SMART forms they fail the IOCTL
 with `STATUS_DEVICE_BUSY` and write nothing back. Only the SCSI forms
 return them as status.
 `DataTransferLength` holds the bytes moved, and `Information` is the header
-plus the data in, as in 16.7.
+plus the data in, as in 16.7. The direct form's `Information` is the header
+alone, its data already being in the caller's buffer.
 
 ### 16.9 The SMART IOCTLs as ATA PASS-THROUGH (16)
 
-One table, one translation core, two possible entries (R1 decides which
-are wired; both if R1 is not read):
-- the IOCTL codes themselves, as a program sends them to `disk.sys`, if
-  `disk.sys` forwards them unchanged;
-- `IOCTL_SCSI_MINIPORT` with an `SRB_IO_CONTROL` header whose `Signature`
-  is `SCSIDISK`, the `IOCTL_SCSI_MINIPORT_*` control codes of `scsi.h`
-  [hdr], followed by the same `SENDCMDINPARAMS` / `SENDCMDOUTPARAMS`, if
-  that is the form `disk.sys` sends the device below.
+One entry, as R1 read it: `IOCTL_SCSI_MINIPORT` with an `SRB_IO_CONTROL`
+header whose `Signature` is `SCSIDISK`, one of the `IOCTL_SCSI_MINIPORT_*`
+control codes of `scsi.h` [hdr], and then the program's
+`SENDCMDINPARAMS`, whose `bDriveNumber` `disk.sys` has overwritten. The
+control code decides the command. The registers in the payload must agree
+with it (command `ECh` for IDENTIFY, `B0h` and the matching feature for
+SMART), or the request is refused as `SMART_INVALID_COMMAND`.
+
+| Control code [hdr] | `disk.sys` sends it for [static, R1] | Served as |
+|---|---|---|
+| `0x1B0500` SMART_VERSION | `SMART_GET_VERSION` | answered in the driver |
+| `0x1B0501` IDENTIFY | RCV, command `ECh` | IDENTIFY DEVICE |
+| `0x1B0502` READ_SMART_ATTRIBS | RCV, `B0h` / `D0h` | SMART READ DATA |
+| `0x1B0503` READ_SMART_THRESHOLDS | RCV, `B0h` / `D1h` | SMART READ ATTRIBUTE THRESHOLDS |
+| `0x1B0504` ENABLE_SMART, `0x1B0505` DISABLE_SMART | SEND, `B0h` / `D8h`, `D9h` | SMART ENABLE / DISABLE OPERATIONS |
+| `0x1B0506` RETURN_STATUS | SEND, `B0h` / `DAh` | SMART RETURN STATUS |
+| `0x1B0507` ENABLE_DISABLE_AUTOSAVE | SEND, `B0h` / `D2h` | SMART ENABLE/DISABLE ATTRIBUTE AUTOSAVE |
+| `0x1B0508` SAVE_ATTRIBUTE_VALUES | SEND, `B0h` / `D3h` | SMART SAVE ATTRIBUTE VALUES (obsolete in ACS; passed as sent) |
+| `0x1B0509` EXECUTE_OFFLINE_DIAGS | SEND, `B0h` / `D4h` | SMART EXECUTE OFF-LINE IMMEDIATE |
+| `0x1B050A` ENABLE_DISABLE_AUTO_OFFLINE | SEND, `B0h` / `DBh` | SMART ENABLE/DISABLE AUTOMATIC OFF-LINE (obsolete; passed as sent) |
+| `0x1B050B` READ_SMART_LOG | its own failure-prediction path: in XP SP3 a routine at `14E52h` (called from `152E6h`) sends `B0h` / `D5h` with this code; XP SP3's RCV branch passes only `ECh`, `D0h` and `D1h`; the other versions' routing is not read; 2000 has no such code | SMART READ LOG, served when it arrives |
+| `0x1B050C` WRITE_SMART_LOG | its own path (XP SP3 `14F31h`); not read further | refused, `SMART_INVALID_COMMAND` |
+
+The sizes `disk.sys` sends (XP SP3, R1) are:
+- SMART_VERSION: 52 in and 52 out, `Length` 24;
+- RCV: 60 in (the envelope and the 32-byte `SENDCMDINPARAMS`), 557 out,
+  `Length` 529;
+- SEND: 60 in, `28 + Length` out, `Length` 33, or 41 for RETURN STATUS.
+
+16.4's envelope rules and the output sizes below accept all of these.
 
 Any other `IOCTL_SCSI_MINIPORT` signature or control code keeps
 `STATUS_INVALID_DEVICE_REQUEST`.
@@ -13004,6 +13042,7 @@ the caller set.
 | SEND | `B0h` | `DAh` | SMART RETURN STATUS | none | 1 | the 8-byte `IDEREGS` read back (LBA Mid/High `4Fh/C2h` or `F4h/2Ch`) |
 | SEND | `B0h` | `D2h` | SMART ENABLE/DISABLE ATTRIBUTE AUTOSAVE (`bSectorCountReg` `F1h` or 0) | none | 1 | none |
 | SEND | `B0h` | `D4h` | SMART EXECUTE OFF-LINE IMMEDIATE (subcommand in LBA Low) | none | 1 | none |
+| SEND | `B0h` | `D3h`, `DBh` | SMART SAVE ATTRIBUTE VALUES; ENABLE/DISABLE AUTOMATIC OFF-LINE (`bSectorCountReg` as sent) | none | 1 | none |
 
 Output sizes: a RCV row needs 16 bytes plus its data; RETURN STATUS needs
 16 plus 8; every other SEND row needs the 16-byte header alone.
@@ -13040,11 +13079,13 @@ Captive self-tests (`D4h` subcommands `81h`, `82h`) run under 16.6's
 
 - **Windows 2000 SP4, XP SP3, XP x64 / 2003 x64, Vista and 7** (both
   architectures): the LUN's PDO serves 16.2's list on each. What each
-  `disk.sys` passes down is the per-target contract that R1 reads. The XP
-  table shows it for XP's pass-through. Windows 2000's headers predate
-  `IOCTL_ATA_PASS_THROUGH`, so whether its `disk.sys` passes that code
-  down is part of R1. If it does not, a program on 2000 has only the SCSI
-  form of ATA pass-through, and the record says so.
+  `disk.sys` passes down is R1's reading. On 2000, `classpnp.sys` names
+  neither SCSI pass-through code and `disk.sys` names no ATA one.
+  Whether 2000 forwards them as unknown codes is read by the 2000 leg
+  [hyp until then]. If it does not, the record and the release notes say
+  so. A program's SMART READ LOG through `SMART_RCV_DRIVE_DATA` is not
+  passed down by XP SP3's `disk.sys` (16.9), and 2000's has no
+  READ_SMART_LOG code at all. For the others the routing is not read.
 - **Windows 8, 8.1 and 10**: wherever `xhciuas.sys` is the LUN's driver
   (section 6.12.4 and 6.14 for when Windows' own UAS driver binds instead,
   in which case Windows serves these IOCTLs itself). The same code, read at
@@ -13067,17 +13108,40 @@ Captive self-tests (`D4h` subcommands `81h`, `82h`) run under 16.6's
 ### 16.11 Readings, vectors and legs
 
 **Readings before the code is final:**
-- **R1** [static]: in the `disk.sys` (and `classpnp.sys` where present) of
-  2000 SP4, XP SP3 and 7 x86 and x64, the branches for the SCSI and ATA
-  pass-through codes and for the three SMART codes. Read the code each
-  sends the device below (unchanged, or `IOCTL_SCSI_MINIPORT` with which
-  signature and control code) and any condition it tests first (bus type,
-  a start-time detection). Each fact is tagged and gets a
-  `legal-provenance.md` section 4 row; the listings stay untracked. If
-  `disk.sys` tests the bus type and never passes SMART down for USB, the
-  SMART half is not reachable on that target, and the record and the
-  release notes say so: SMART tools then reach a UAS drive through SCSI
-  pass-through (16.8's CDB) only. That would not change the design.
+- **R1** [static, done 2026-10-31]: capstone over `disk.sys` and
+  `classpnp.sys` from the q35 bases of 2000 SP4, XP SP3, XP x64 SP2 and
+  Vista x86 SP2 (read out of the images with 7-Zip), and Windows 7 x86 RTM
+  from the symbol store under `tools\symbols`; nothing executed. The 7 SP1
+  bases' NTFS volume could not be read in place. Facts:
+  - `disk.sys` (every version) carries the `SCSIDISK` signature and the
+    SMART_VERSION to READ_SMART_THRESHOLDS control codes, and sends
+    `IOCTL_SCSI_MINIPORT` (`push 4D008h`; XP x64 `mov ecx, 4D008h`).
+  - XP SP3 `disk.sys`, device control at `10636h`, with the extension's
+    flag `[ext+38h]` bit 0 (`IsFdo`) tested first; a partition's device
+    passes the IRP down unchanged (`10B5Ah`, `IofCallDriver`):
+    - `SMART_GET_VERSION`: `SRB_IO_CONTROL` length `1Ch`, the signature
+      from `105D4h`, ControlCode `1B0500h` at `10A66h`, `Length` 18h,
+      `IoBuildDeviceIoControlRequest` with 34h in and out;
+    - RCV at `10E2Eh`: input at least 20h and output at least 210h; `ECh`
+      selects `1B0501h`, `B0h` with `D0h`/`D1h` selects `1B0502h`/`1B0503h`;
+      `bDriveNumber` is overwritten (`10EF7h`); `Length` 211h; in 3Ch, out
+      22Dh;
+    - SEND at `10F8Eh`: `B0h` only; features `D2h`, `D3h`, `D4h`, `D8h`,
+      `D9h`, `DAh`, `DBh` (`10FDDh` on); `Length` 21h, plus 8 for `DAh`
+      (`1111Fh`); in 3Ch.
+
+    No capability or bus-type test precedes any of them, so a UAS LUN gets
+    SMART requests on the same terms as an IDE disk.
+  - XP x64, Vista and 7 carry the same codes, plus `1B050Bh` and
+    `1B050Ch`. 2000 stops at `1B050Ah`.
+  - `classpnp.sys` of XP, XP x64, Vista and 7 compares the code with
+    `4D004h` and `4D014h`. Windows 7's (`15FDFh`) refuses an input shorter
+    than 2Ch with `C000000Dh` (`16C0Dh`). Otherwise it copies the stack
+    location down, sets the next location's MinorFunction to 1 (`16C41h`),
+    and calls the device below in the caller's thread (`16C56h`). 2000's
+    `classpnp.sys` names neither code.
+
+  The binaries' SHA-256 are in `legal-provenance.md` section 4.
 - **R2** [obs]: the access reading of 16.3, which the owner's choice rests
   on.
 
@@ -13104,14 +13168,18 @@ build.
 stick):
 - `ATATEST` on 2000, XP and 7 x86. On 7 x64, the x64 package is signed in
   the guest with a throwaway certificate (BRIEF practice), and the 32-bit
-  `ATATEST` there exercises the WOW64 layouts. The native 64-bit layouts
+  `ATATEST` there exercises the WOW64 layouts, the ATA direct form's
+  included. `ATATEST` gains the lines these legs need:
+  - `A6`: `IOCTL_ATA_PASS_THROUGH_DIRECT` IDENTIFY;
+  - `T3`: `IOCTL_ATA_PASS_THROUGH` SMART READ DATA;
+  - `M3`: SMART READ THRESHOLDS;
+  - `M4`: `SMART_SEND_DRIVE_COMMAND` RETURN STATUS. The native 64-bit layouts
   rest on the vectors unless a 64-bit `ATATEST` is built.
-- QEMU's `scsi-hd` has no SAT (16.1). So on the emulator the ATA and SMART
-  lines can show only that the request reached the drive and how its
-  refusal comes back (16.8, 16.9). A positive SMART reading needs a drive
-  behind a SAT bridge: owed to the bench, unless a test-only SAT answer is
-  added to the emulator (a question for the coordinator, not part of this
-  design).
+- Twice per system. First with QEMU's `scsi-hd` as it is: it has no SAT
+  (16.1), so it reads how a refusal comes back (16.8, 16.9). Then with
+  16.12's test answer on, which reads a whole IDENTIFY, SMART READ DATA,
+  thresholds and RETURN STATUS through the UAS path. A drive behind a real
+  SAT bridge stays on the bench list.
 - A free SMART reader in one guest, if one runs there.
 - R3, the 98 SE ASPI reading.
 - During one `ATATEST` loop, a Safely Remove and a surprise removal of the
@@ -13127,6 +13195,36 @@ the cancel routine and its clearing on every path off the queue),
 `uas/uas_mem.c` (the record, the user-buffer lock), `uas/uas_iu.c` and `.h`
 (the pure parts), `uas/uas.h`, `test/test_uas.c`, and both
 `xhciuas-imports*.allow`.
+
+### 16.12 The emulator's test answer (owner, 2026-10-31)
+
+QEMU's `scsi-hd` refuses both ATA PASS-THROUGH CDBs (ILLEGAL REQUEST,
+`20h/00h`), so no virtual machine can show a successful ATA or SMART
+reading through `xhciuas.sys`. The owner chose to add a test-only answer
+to the project's QEMU fork (`usb4-emu`, `src/qemu`, branch `usb4-emu`):
+- `scsi-hd` gains a property `x-sat`, off by default. With it off, the
+  device is unchanged.
+- With it on, the disk answers ATA PASS-THROUGH (12) and (16) as a SAT
+  layer over an emulated ATA drive would [spec: SAT-3, ACS-3], for this
+  set:
+  - IDENTIFY DEVICE (`ECh`): 512 bytes made from the disk's own size,
+    serial, model and firmware strings, with the integrity word;
+  - SMART (`B0h`) with LBA Mid/High `4Fh/C2h`: READ DATA (`D0h`) and READ
+    THRESHOLDS (`D1h`), with fixed attributes and their checksum; ENABLE
+    and DISABLE OPERATIONS (`D8h`, `D9h`); RETURN STATUS (`DAh`), with LBA
+    Mid/High `4Fh/C2h`; ENABLE/DISABLE AUTOSAVE (`D2h`); EXECUTE OFF-LINE
+    IMMEDIATE (`D4h`), answered at once;
+  - CHECK POWER MODE (`E5h`): count `FFh` (active).
+- Any other command ends ABORTED: Status `51h`, Error `04h`.
+- CK_COND returns the registers as descriptor sense (`72h`, descriptor
+  `09h`). D_SENSE is not read for this. An error always returns them.
+- The protocol and T_DIR are checked against the command as a SAT layer
+  would.
+
+It is test-only, says so in its help text, and is reviewed and committed
+in `usb4-emu` on its own branch. The legs of 16.11 name the fork commit
+and the command line. It makes no claim about any real bridge: the
+reading behind a real SAT bridge stays on the bench list.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 
