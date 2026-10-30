@@ -415,6 +415,63 @@ function New-PackagerFixtureRepo {
     }
 }
 
+function New-SourceFixtureTree {
+    # Fixture tree S (task 45.51; build-and-test.md, "The self-tests' skip
+    # across worktrees"): today's scripts\source-stamp.ps1 copied with its
+    # layout into -Dir, over small source trees of the six drivers it stamps
+    # (each its sources and makefile, its own sources and headers, the
+    # parent headers it includes, Stor98's interface headers) and a host
+    # runner with its quoted-include chains, so the stamp's and the input
+    # rules' cases read no driver source of this tree, whose content no
+    # digest holds. Returns -Dir.
+    param([string]$Dir)
+    $files = [ordered]@{
+        "src\sources" = "TARGETNAME=xhci98`r`nSOURCES= xhci_ring.c \`r`n         xhci_hcd.c`r`n`r`nINCLUDES=.`r`n"
+        "src\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\xhci_ring.c" = "#include `"xhci_log.h`"`r`n"
+        "src\xhci_hcd.c" = "#include `"xhci_version.h`"`r`n"
+        "src\xhci_log.c" = "#include `"xhci_log.h`"`r`n"
+        "src\xhci_hlpr.c" = "#include `"xhci_hlpr.h`"`r`n"
+        "src\xhci_log.h" = "#define XHCI_LOG 1`r`n"
+        "src\xhci_version.h" = "#define XHCI_VER_STR `"0.0.0.1`"`r`n"
+        "src\xhci98_streams.h" = "#define XHCI_STREAMS 1`r`n"
+        "src\xhci_hlpr.h" = "#define XHCI_HLPR 1`r`n"
+        "src\uas\sources" = "TARGETNAME=xhciuas`r`nSOURCES= uas_xport.c`r`n"
+        "src\uas\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\uas\uas_xport.c" = "#include `"..\xhci98_streams.h`"`r`n"
+        "src\uas\uas.h" = "#define UAS 1`r`n"
+        "src\cm\sources" = "TARGETNAME=xhcicm`r`nSOURCES= cm_main.c \`r`n         ..\xhci_log.c`r`n"
+        "src\cm\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\cm\cm_main.c" = "#include `"cm_ejask.h`"`r`n"
+        "src\cm\cm_ejask.h" = "#define CM_EJASK 1`r`n"
+        "src\hlpr\sources" = "TARGETNAME=xhcihlpr`r`nSOURCES= ..\xhci_hlpr.c \`r`n         xhci_hlpr.rc`r`n"
+        "src\hlpr\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\hlpr\xhci_hlpr.rc" = "#include `"..\xhci_version.h`"`r`n"
+        "src\stor98\src\sources" = "TARGETNAME=stor98`r`nSOURCES= engine.c"
+        "src\stor98\src\engine.c" = "#include `"stor98.h`"`r`n"
+        "src\stor98\src\stor98.h" = "#define STOR98 1`r`n"
+        "src\stor98\include\stor98cm.h" = "#define STOR98LS_VERSION 4`r`n"
+        "src\stor98\include\stor98pf.h" = "#define STOR98PF 1`r`n"
+        "test\run-host-tests.cmd" = "@echo off`r`ncl ..\xhciinst\inst_core.c ..\xhciinst\wiz_lay.c ..\xhcitr\tr_core.c test_ring.c`r`n"
+        "test\test_ring.c" = "#include `"../xhciinst/inst_ej9x.h`"`r`n#include `"..\src\cm\cm_ejask.h`"`r`n"
+        "xhciinst\inst_core.c" = "#include `"inst_core.h`"`r`n"
+        "xhciinst\inst_core.h" = "#define INST_CORE 1`r`n"
+        "xhciinst\wiz_lay.c" = "#include `"wiz_lay.h`"`r`n"
+        "xhciinst\wiz_lay.h" = "#define WIZ_LAY 1`r`n"
+        "xhciinst\inst_ej9x.h" = "#define INST_EJ9X 1`r`n"
+        "xhciinst\xhciwiz.c" = "#include `"xhciwiz_res.h`"`r`n"
+        "xhcitr\tr_core.c" = "int tr_core;`r`n"
+    }
+    foreach ($rel in $files.Keys) {
+        $full = Join-Path $Dir $rel
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $full))
+        [System.IO.File]::WriteAllText($full, $files[$rel], (New-Object System.Text.ASCIIEncoding))
+    }
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $Dir "scripts"))
+    [System.IO.File]::Copy((Join-Path $repo "scripts\source-stamp.ps1"), (Join-Path $Dir "scripts\source-stamp.ps1"), $true)
+    return $Dir
+}
+
 function Invoke-Releaser {
     # make-release.ps1 -UploadSetOnly, driven the same way and relaxed for the
     # same reason as Invoke-Packager above.
@@ -4125,10 +4182,12 @@ try {
     # Three rounds of review went into this one gate and each defect was found
     # by reading rather than by a failing test, so here is the test. The
     # `.sys` is a stand-in - `source-stamp.ps1` hashes it as bytes and never
-    # parses it - and the source half is hashed from the real `src\`, which is
-    # what makes case 4 a genuine mismatch rather than a fabricated one.
+    # parses it - and the source half is hashed from fixture tree S's `src\`
+    # (task 45.51: today's script over sources of its own), which is what
+    # makes case 4 a genuine mismatch rather than a fabricated one.
     Write-Step "the source stamp: sources, binary identity, and the legacy format"
-    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $sx = New-SourceFixtureTree -Dir (Join-Path $script:work "sx-tree")
+    $stampScript = Join-Path $sx "scripts\source-stamp.ps1"
     $stampWork = Join-Path $script:work "stamp"
     New-Item -ItemType Directory -Path $stampWork | Out-Null
     $stampSys = Join-Path $stampWork "xhci98.sys"
@@ -6157,7 +6216,7 @@ try {
     # Admitted when the recorded commit is an ancestor of HEAD and no file
     # changed since is a build input; a change to a source, a header, the
     # host suite or the import gates is refused as before. The rules are
-    # read from this tree; the commits are a fixture repository's.
+    # fixture tree S's; the commits are a fixture repository's.
     Write-Step "a HEAD newer than the gated build is admitted only when no build input changed"
     foreach ($d in @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")) {
         $l = @(& (Join-Path $repo "scripts\source-stamp.ps1") -Driver $d -List)
@@ -6165,7 +6224,10 @@ try {
         Assert-True (@($l | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf) }).Count -eq 0) `
             "source-stamp.ps1 -Driver $d -List names a file that is not in the tree."
     }
-    $biRules = Get-BuildInputRules -Repo $repo
+    # The rules the classification vectors and the import's cases use are
+    # fixture tree S's (task 45.51): its six drivers' lists, its host
+    # runner and its include chains; the loop above holds this tree's lists.
+    $biRules = Get-BuildInputRules -Repo $sx
     foreach ($v in @(
         @{ P = "docs/contributing/build-and-test.md"; In = $false },
         @{ P = "releases/history.md";                In = $false },
