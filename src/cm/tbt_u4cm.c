@@ -4042,6 +4042,15 @@ static LONG tbtU4PcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         } else {
             cm->Counters.EeSet++;
         }
+    } else if (rc == TBT_OK) {
+        /* Otherwise EE 0 (Spec 11.1.1.1's note): a version 2 end left
+         * with it set - an earlier tunnel's clear that failed, or a
+         * predecessor's - is cleared first, else no Path Enable. */
+        if (!tbtU4EeClear(cm, h, p->PcieDown) || (!d->Tbt3 && !tbtU4EeClear(cm, d, dp))) {
+            tbtU4Log(cm, "u4.ee.left", (p->Index << 8) | p->PcieDown);
+            p->Why = TBT_U4_WHY_PATH;
+            rc = TBT_E_STATE;
+        }
     }
     if (rc == TBT_OK) {
         p->Pcie.Written |= TBT_U4_E_DEV_ENABLE;

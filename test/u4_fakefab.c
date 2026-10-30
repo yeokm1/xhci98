@@ -787,6 +787,17 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
             for (pa = 1; pa <= f->R[d].MaxAdp; pa++) {
                 memset(f->R[d].Adp[pa].Path + 16, 0, sizeof(f->R[d].Adp[pa].Path) - 64);
                 f->R[d].Adp[pa].Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+                /* Version 2 state back to its defaults (task 45.20). */
+                if (fabPcieAdp(&f->R[d], pa)) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_ADP + 1] = 0;
+                } else if ((f->R[d].Adp[pa].Cs[2] & 0xFFFFFFUL) == 1) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 8] = 0;
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 9] = 0;
+                }
+            }
+            if (!f->R[d].Tbt3) {
+                f->R[d].CapsData &= 0x55555555UL;
+                f->R[d].SetCapsOps = 0;
             }
             ad->Cs[4] |= 0x80000000UL;
             r->Adp[a + 1].Cs[4] |= 0x80000000UL;

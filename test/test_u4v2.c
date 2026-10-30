@@ -492,6 +492,37 @@ static void test_set_and_recovery(void)
     CHECK_EQ(port(1)->State, TBT_U4_EMPTY, "torn down");
 }
 
+/* Section 9.3: a cleaning's Downstream Port Reset returns the router to
+ * its defaults; a preserved router's enabled capability is gone, and a
+ * Set refused after it leaves plain acknowledgements. */
+static void test_clean_resets_caps(void)
+{
+    TBT_U4_CONFIG c;
+    int d;
+
+    d = domain(1, FAB_DEV_USB4V2);
+    g_fab.R[d].CapsData = (1UL << 4) | (1UL << 5);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[0].Rcs[4] |= 0x2000UL;
+    g_fab.R[d].SetCapsIgnore = 1;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    c.PreOsCleanup = 2;
+    (void)start(&c);
+    poll(3);
+    CHECK(g_cm.Counters.PortsCleaned >= 1, "cleaned");
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "rebuilt: UP");
+    CHECK_EQ(g_fab.R[d].CapsData & (1UL << 5), 0, "the capability disabled by the reset");
+    CHECK_EQ(port(1)->Dev.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE), 0,
+             "recorded disabled after the refused Set");
+    g_fab.AcksPlain = 0;
+    g_fab.AcksEnh = 0;
+    notifyFromDevice();
+    poll(2);
+    CHECK_EQ(g_fab.AcksPlain, 1, "plain acknowledgement");
+    CHECK_EQ(g_fab.AcksEnh, 0, "never enhanced");
+}
+
 /* ------------------------------------------------------------------ */
 /* Two-DW path writes (section 6.2.2 item 4)                           */
 /* ------------------------------------------------------------------ */
@@ -945,6 +976,38 @@ static void test_ee(void)
               fabPath0(&g_fab, d, 1, 8) | fabPath0(&g_fab, d, DEV_PCIE, 8)) & 0x80000000UL,
              0, "all four entries invalidated");
 
+    /* The host's EE left set by a teardown whose clear failed: the next
+     * device, a version 1 one, finds it and clears it before its Path
+     * Enable. */
+    d = domain(1, FAB_DEV_USB4V2);
+    cfgDefault(&c);
+    (void)start(&c);
+    g_fab.R[0].Adp[HOST_PCIE].EeStuck = 1;     /* holds the bit as set */
+    fabUnplug(&g_fab, 1);
+    poll(2);
+    CHECK(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, "the host's EE left set");
+    g_fab.R[0].Adp[HOST_PCIE].EeStuck = 0;
+    d = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 1, d);
+    poll(3);
+    CHECK(port(1)->Pcie.Up, "a v1 device after it: PCIe up");
+    CHECK_EQ(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, 0, "the host's EE cleared first");
+    {
+        long clr = writeWith(0, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE1, 1UL, 0);
+        long pe = writeWith(clr < 0 ? 0 : clr, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE0,
+                            0x80000000UL, 1);
+        CHECK(clr >= 0 && pe > clr, "before its Path Enable");
+    }
+    /* And with it stuck: no tunnel. */
+    d = domain(1, FAB_DEV_USB4);
+    g_fab.R[0].Adp[HOST_PCIE].Cs[PCIE1] |= 1UL;
+    g_fab.R[0].Adp[HOST_PCIE].EeStuck = 1;
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK(!port(1)->Pcie.Up, "EE that will not clear on a v2-v1 link: no PCIe tunnel");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE0, 0x80000000UL, 1), -1,
+             "no Path Enable");
+
     /* A device Path Enable that will not clear: its EE left until the
      * quarantine's lift proves it clear; the host's cleared at once. */
     d = domain(1, FAB_DEV_USB4V2);
@@ -1178,6 +1241,7 @@ int main(void)
     RUN_VEC(test_cmuv_preserved);
     RUN_VEC(test_set_capabilities);
     RUN_VEC(test_set_and_recovery);
+    RUN_VEC(test_clean_resets_caps);
     RUN_VEC(test_two_dwords);
     RUN_VEC(test_tmu_enhanced);
     RUN_VEC(test_cv_found);

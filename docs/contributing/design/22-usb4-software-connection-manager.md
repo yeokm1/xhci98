@@ -1301,7 +1301,11 @@ What the code settled that this section left open (task 45.20's code,
   level.
 - **Extended Encapsulation** is cleared on an adapter only once its own
   Path Enable reads 0: where the disable failed, the adapter's enable
-  quarantine (section 7.3) clears EE when its retry lifts it. It is not
+  quarantine (section 7.3) clears EE when its retry lifts it. A PCIe
+  tunnel built with either end a version 1 router reads EE on each
+  version 2 end first and clears it where it reads 1 (an earlier
+  teardown's clear that failed, or a predecessor's), building no tunnel
+  where it will not clear. It is not
   touched by section 7.7's recovery drains, which section 6.2.2 item 7
   does not list; a rebuilt tunnel sets it again before its Path Enable. A
   clear that fails is logged and the teardown goes on.
