@@ -1937,6 +1937,37 @@ static VOID tbtU4QLifted(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
     p->Usb3GapValid = TRUE;
 }
 
+/* Record 34 section 6.11: a kid's record (keyed by a kid, or on a router
+ * below depth 1 under a kid) waits, neither written nor dropped, while
+ * the kid's parent is not classified (HELD by a resume before its check,
+ * by a recovery, or barred) or holds another connection than the kid's:
+ * the router there may not be the one the record was made on, and the
+ * kid service settles which it is. */
+static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
+{
+    PTBT_U4_PORT p;
+    ULONG i;
+    BOOLEAN kid;
+
+    p = tbtU4PortOf(cm, q->Port);
+    if (p == NULL) {
+        return FALSE;
+    }
+    kid = (BOOLEAN)(q->Kid != 0);
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (cm->Kids[i].Used && cm->Kids[i].Port == q->Port &&
+            (cm->Kids[i].Index == q->Kid ||
+             (cm->Kids[i].Dev.Depth == 2 && tbtU4Under(&q->Route, &cm->Kids[i].Dev.Route)))) {
+            kid = TRUE;
+            if (cm->Kids[i].ParentGeneration != p->Generation) {
+                return TRUE;
+            }
+        }
+    }
+    return (BOOLEAN)(kid && p->State == TBT_U4_HELD &&
+                     (p->ClassifyPending || p->Why == TBT_U4_WHY_RECOVER || p->Barred));
+}
+
 static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
 {
     ULONG i;
@@ -1948,6 +1979,9 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
     for (i = 0; i < TBT_U4_QUARANTINE; i++) {
         q = &cm->Quarantine[i];
         if (!q->Used) {
+            continue;
+        }
+        if (tbtU4KidQWait(cm, q)) {
             continue;
         }
         if (TbtRouteDepth(&q->Route) != 0 && !tbtU4QOwnerPresent(cm, q)) {

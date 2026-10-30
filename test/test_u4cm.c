@@ -6702,6 +6702,45 @@ static void test_kid_cleanup_gates(void)
                               FAB_CAP_PORT + 19), -1,
                  "recovery: nor its old port mark");
     }
+
+    /* A kid's quarantined Path Enable (the child's will not clear at its
+     * eject), the parent then HELD unclassified by a resume: the record is
+     * not retried before the parent's own check has classified it. */
+    {
+        unsigned long mark;
+        LONG rc;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        g_fab.R[child].Adp[5].PeStuck = 1;
+        (void)TbtU4EjectKid(&g_cm, 1, kidOf(&g_cm, 1)->Index);
+        CHECK(kidQuarantined(&kidOf(&g_cm, 1)->Dev.Route, 5, 0, 1),
+              "the child's Path Enable quarantined under the kid");
+        TbtU4Suspend(&g_cm);
+        g_fab.R[dev].Adp[1].Path[2 * 8] &= ~0x80000000UL;
+        rc = TbtU4Resume(&g_cm);
+        CHECK_EQ(rc, TBT_E_STATE, "resume: the parent HELD");
+        CHECK(TbtU4Port(&g_cm, 1)->ClassifyPending, "and not yet classified");
+        mark = g_fab.WrCount;
+        {
+            /* The tick's quarantine retry comes before the parent's check:
+             * one tick, then the child's adapter 5 must not have been
+             * written. */
+            ULONG i;
+            int before = 0;
+            for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+                if (g_cm.Quarantine[i].Used && g_cm.Quarantine[i].Enable &&
+                    g_cm.Quarantine[i].Adapter == 5 &&
+                    TbtRouteDepth(&g_cm.Quarantine[i].Route) == 2) {
+                    before = 1;
+                }
+            }
+            CHECK(before, "the record still there at the resume's end");
+        }
+        TbtU4Poll(&g_cm);
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, child, TBT_CS_ADAPTER, 5, FAB_CAP_ADP), -1,
+                 "not retried under the unclassified parent");
+        g_fab.R[child].Adp[5].PeStuck = 0;
+    }
 }
 #endif /* TBT_U4_MAX_KIDS */
 

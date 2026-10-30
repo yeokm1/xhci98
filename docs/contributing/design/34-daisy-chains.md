@@ -1525,7 +1525,9 @@ differs from them, this section is the record.
   parent is UP. A parent HELD and not yet classified (a resume's, which
   its own next check classifies before the kids are served; a
   recovery's; one behind the retirement barrier) is not written for its
-  kids at all: their checks and any cleanup owed wait.
+  kids at all: their checks and any cleanup owed wait, the quarantine
+  records the kids made included (`tbtU4KidQWait`: neither retried nor
+  dropped while the parent is unclassified or holds another connection).
 - **Adoption** runs at that tick, the first after the parent is UP - at
   the start and after a recovery's commit alike - rather than inside
   section 9.2's walk, so the walk is unchanged. "Nothing else on the
