@@ -8955,7 +8955,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * second binary before they can report anything is the same shape as telling
  * them to install one that does not load. **The verbosity level decides how
  * much there is to read; the flavour decides neither that nor whether the
- * door exists** - all three flavours record the same (design record 08,
+ * door exists** - every flavour records the same (design record 08,
  * section 5).
  *
  * **The door is shut until it is asked for.** `XhciLogVerbosity` in the

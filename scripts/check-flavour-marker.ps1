@@ -4,9 +4,10 @@ Assert that a linked xhci98.sys carries exactly its own build-flavour marker.
 
 .DESCRIPTION
 Roadmap task 13-L.1 split the build three ways - release, debug and qemu - and
-**two of the three are checked DDK builds**, so `VS_FF_DEBUG` is set in both and
-cannot tell them apart. Those two are exactly the pair that must never be
-confused: one ships as the diagnostic download and one carries the port-0xE9
+two of the three were checked DDK builds, so `VS_FF_DEBUG` was set in both and
+could not tell them apart; roadmap-usb4 task 45.45 retired debug (design record
+08 section 14). The marker still separates what must never be confused: the
+release image that ships and the qemu one, which carries the port-0xE9
 mirror (`HAL.dll!WRITE_PORT_UCHAR`, the sole import delta between 0.0.0.4's two
 published binaries, of which the debug one gave the ThinkPad E460 a Code 2 under
 Windows 98 SE; why it failed is not established) and is never published.
@@ -21,7 +22,7 @@ it, which is the same reason `scripts\build-driver.cmd :checkmarker` reads the
 do-not-deploy string out of the image. **Both halves are the check**: exactly
 one marker, and it must be this flavour's. An image with two would be one the
 preprocessor let through with more than one flavour define; an image with the
-wrong one is a qemu build wearing a debug name.
+wrong one is a qemu build wearing a release name, or an old debug image.
 
 It lives in a file rather than inline in build-driver.cmd because it did not
 survive being a `powershell -Command` continuation: the first version compared

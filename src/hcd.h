@@ -2164,7 +2164,7 @@ typedef struct _HCD_HUB_FDO {
     CONTAINING_RECORD((ext), HCD_CONTROLLER, Hc)
 
 /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it in,
- * which would import RtlAssert into the debug and qemu builds - a pair with
+ * which would import RtlAssert into the checked qemu build - a pair with
  * no Windows 98 evidence. Same three fields. */
 #define HCD_SET_COMPLETION_ALWAYS(irp, routine, context)                     \
     do {                                                                     \
@@ -2430,7 +2430,7 @@ ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
                        ULONG deqHigh);
 
 /* hcd_inj.c and hcd_ctl.c's qemu half: the qemu flavour only, nothing in
- * debug or release (design record 17 section 5; xhci_inj.h). */
+ * release (design record 17 section 5; xhci_inj.h). */
 #if defined(XHCI_FLAVOUR_QEMU)
 NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
 VOID HcdInjStart(PHCD_CONTROLLER hc);

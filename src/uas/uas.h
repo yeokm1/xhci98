@@ -61,7 +61,7 @@
 #define UAS_TMF_TIMEOUT_MS      3000
 
 /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it in,
- * which would import RtlAssert into the debug and qemu builds - a pair with
+ * which would import RtlAssert into the checked qemu build - a pair with
  * no Windows 98 evidence (hcd.h's HCD_SET_COMPLETION_ALWAYS, for the same
  * reason). Invoked on success, error and cancel. */
 #define UAS_SET_COMPLETION_ALWAYS(irp, routine, context)                     \

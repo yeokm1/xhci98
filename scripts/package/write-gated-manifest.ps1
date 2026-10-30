@@ -38,7 +38,7 @@ defence against someone who deliberately forges these files.
 x86 or amd64, as build-driver.cmd builds.
 
 .PARAMETER Flavor
-release, debug or qemu; every mode but -RunStart.
+release or qemu (debug was retired with task 45.45); every mode but -RunStart.
 
 .PARAMETER Name
 -Hash and -Capture: the binary's file name (xhci98.sys, xhciuas.sys,

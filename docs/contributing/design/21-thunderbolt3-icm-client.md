@@ -600,8 +600,9 @@ The connection manager is its own driver, `xhcicm.sys`, built from
 its own INFs (four: the NHI's and the NT-only filter's, one of each per
 package, section 3.3), its own import
 allowlists (`xhcicm-imports.allow`, `xhcicm-imports-amd64.allow`), its own
-INF gate script (`check-cm-inf.ps1`), and the same three flavours derived
-from `BUILD_ALT_DIR`. `build-driver.cmd` builds it after `xhciuas.sys` in
+INF gate script (`check-cm-inf.ps1`), and the same flavours derived from
+`BUILD_ALT_DIR` (release and qemu since roadmap-usb4 task 45.45 retired
+debug). `build-driver.cmd` builds it after `xhciuas.sys` in
 every x86 and amd64 run, `make-package.ps1` stages it in every flavour
 directory with its INFs, and the amd64 half is test-signed by the packager
 like the other two (design record 19).
