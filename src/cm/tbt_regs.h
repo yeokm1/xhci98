@@ -463,6 +463,11 @@
 #define TBT_RTR4_NOTIFY_TIMEOUT_MAX 0xFFUL      /* Guide 3.2.1; Linux plug_events_delay = 0xff */
 #define TBT_RTR4_CMUV_MASK          0x0000FF00UL
 #define TBT_RTR4_CMUV_1_0           0x00001000UL
+/* CMUV 20h, a Ver. 2 Connection Manager (Spec 8.2.1.1: major 15:12, minor
+ * 11:8; Linux ROUTER_CS_4_CMUV_V2), written to a router whose USB4 Version
+ * has major 2 (Guide 3.2.1 step 4; design record 22 section 6.2.1). */
+#define TBT_RTR4_CMUV_2_0           0x00002000UL
+#define TBT_RTR4_CMUV(v)            (((ULONG)(v) >> 8) & 0xFFUL)
 #define TBT_RTR4_VERSION(v)         (((ULONG)(v) >> 24) & 0xFFUL)
 #define TBT_USB4_VERSION_MAJOR(b)   (((ULONG)(b) >> 5) & 0x7UL)     /* 31:29 of the dword */
 #define TBT_USB4_VERSION_MINOR(b)   ((ULONG)(b) & 0x1FUL)           /* 28:24 of the dword */
@@ -490,6 +495,11 @@
 #define TBT_ROP_PCIE_DOWN_MAPPING   0x30UL
 #define TBT_ROP_GET_CAPABILITIES    0x31UL
 #define TBT_ROP_BUFFER_ALLOC        0x33UL
+/* Set Capabilities, Spec 8.3.1.3.3, Tables 8-53 to 8-55 (Linux has no such
+ * operation): metadata Capability Index 7:0, Enable Capability 8; no data
+ * DW for index 2 (Table 8-54); Status only in its completion. */
+#define TBT_ROP_SET_CAPABILITIES    0x32UL
+#define TBT_ROP_SETCAP_ENABLE       0x00000100UL
 #define TBT_ROP_DATA_DWORDS         16UL
 /* DROM Read metadata, Table 8-43 (Linux usb4.c USB4_DROM_ADDRESS_MASK,
  * USB4_DROM_SIZE_MASK): DW address 14:2, Read Size 19:15 (1 to 16). */
@@ -648,8 +658,23 @@
 #define TBT_TMU_ADP6_DTS            0x00000002UL    /* 1 Disable Time Sync */
 #define TBT_TMU_ADP_CS_8            8UL
 #define TBT_TMU_ADP8_EUDM           0x00008000UL    /* 15 Enable Enhanced Uni-Directional Mode */
+#define TBT_TMU_ADP8_REPL_TIMEOUT_MASK 0x00007FFFUL /* 14:0 Replenish Timeout */
+#define TBT_TMU_ADP8_REPL_THRESH_MASK 0x03FF0000UL  /* 25:16 Replenish Threshold */
+#define TBT_TMU_ADP8_REPL_THRESH_SHIFT 16
 #define TBT_TMU_ADP_CS_9            9UL
 #define TBT_TMU_ADP9_INTERVAL_MASK  0xFFFF0000UL    /* 31:16 AdapterTimeSyncInterval */
+#define TBT_TMU_ADP9_INTERVAL_SHIFT 16
+#define TBT_TMU_ADP9_REPLN_MASK     0x000000FFUL    /* 7:0 ReplenishN */
+#define TBT_TMU_ADP9_DIRSWN_MASK    0x0000FF00UL    /* 15:8 DirSwitchN */
+#define TBT_TMU_ADP9_DIRSWN_SHIFT   8
+/* HiFi in Enhanced Uni-Directional mode: Spec 8.2.2.2's connection manager
+ * note (Replenish Timeout 3125, Replenish Threshold 0, ReplenishN 30,
+ * DirSwitchN 255, AdapterTimeSyncInterval 16), Guide Tables 7-2 and 7-3. */
+#define TBT_TMU_REPL_TIMEOUT_HIFI   3125UL
+#define TBT_TMU_REPL_THRESH_HIFI    0UL
+#define TBT_TMU_REPLN_HIFI          30UL
+#define TBT_TMU_DIRSWN_HIFI         255UL
+#define TBT_TMU_ADP_INTERVAL_HIFI   16UL
 
 /* Lane Adapter Configuration Capability, Spec 8.2.2.3 (Linux LANE_ADP_CS_*). */
 #define TBT_LANE_CS_0               0UL
@@ -671,6 +696,8 @@
 #define TBT_LANE1_NLW(v)            (((ULONG)(v) >> 20) & 0x3FUL)   /* 25:20 Negotiated Link Width */
 #define TBT_LANE_WIDTH_X1           0x01UL
 #define TBT_LANE_WIDTH_X2           0x02UL
+#define TBT_LANE_WIDTH_ASYM_TX      0x04UL  /* Asymmetric, 3 transmitters (Gen 4) */
+#define TBT_LANE_WIDTH_ASYM_RX      0x08UL  /* Asymmetric, 3 receivers (Gen 4) */
 #define TBT_LANE1_STATE(v)          (((ULONG)(v) >> 26) & 0xFUL)    /* 29:26 Adapter State */
 #define TBT_LANE_STATE_DISABLED     0UL
 #define TBT_LANE_STATE_TRAINING     1UL
@@ -688,12 +715,18 @@
 #define TBT_PORT_CS_19              19UL
 #define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
 #define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
+#define TBT_PORT19_ILR              0x40000000UL    /* 30 Initiate Gen 4 Link Recovery, never written */
+#define TBT_PORT19_ELR              0x80000000UL    /* 31 Enable Gen 4 Link Recovery */
 
 /* PCIe Adapter Configuration Capability, Spec 8.2.2.7 (Linux
  * ADP_PCIE_CS_0_*, enum tb_pcie_ltssm_state). */
 #define TBT_PCIE_CS_0               0UL
 #define TBT_PCIE0_LTSSM(v)          (((ULONG)(v) >> 25) & 0xFUL)    /* 28:25 */
 #define TBT_PCIE0_PE                0x80000000UL    /* 31 Path Enable */
+/* ADP_PCIE_CS_1 Extended Encapsulation, bit 0 (Spec 8.2.2.7, 11.1.1.1.3):
+ * set before Path Enable, default 0. */
+#define TBT_PCIE_CS_1               1UL
+#define TBT_PCIE1_EE                0x00000001UL
 #define TBT_LTSSM_DETECT            0x0UL
 #define TBT_LTSSM_RECOVERY          0x4UL
 #define TBT_LTSSM_RECOVERY_IDLE     0x5UL
@@ -743,6 +776,7 @@
 #define TBT_PATH1_ISE               0x04000000UL
 #define TBT_PATH1_ESE               0x08000000UL
 #define TBT_PATH1_PP                0x10000000UL    /* 28 Pending Packets */
+#define TBT_PATH1_RSVDZ29           0x20000000UL    /* 29 RsvdZ: written 0 */
 /* Guide Table 6-1 and Linux tunnel.c: PCIe and USB3 priority 3; weight 1
  * for PCIe (TB_PCI_WEIGHT), 2 for USB3 (TB_USB3_WEIGHT). */
 #define TBT_PATH_PRIORITY_TUNNEL    3UL

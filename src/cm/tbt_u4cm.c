@@ -267,7 +267,95 @@ static PTBT_U4_ROUTER tbtU4RouterOf(PTBT_U4CM cm, const TBT_ROUTE *r)
     return NULL;
 }
 
+/* Record 22 section 6.2.1 item 1: a router whose USB4 Version has major 2
+ * (the router's own version, whatever CMUV a predecessor wrote). */
+static BOOLEAN tbtU4IsV2(const TBT_U4_ROUTER *rt)
+{
+    return (BOOLEAN)(!rt->Tbt3 &&
+                     TBT_USB4_VERSION_MAJOR(rt->Usb4Version) == TBT_USB4_MAJOR_2);
+}
+
+/* Section 6.2.2 items 6 and 7: both ends of a port's link version 2
+ * routers, and this driver a Ver. 2 Connection Manager (XhciCmUsb4V2). */
+static BOOLEAN tbtU4V2Link(PTBT_U4CM cm, const TBT_U4_PORT *p)
+{
+    return (BOOLEAN)(cm->Config.Usb4V2 && tbtU4IsV2(&cm->HostRouter) &&
+                     tbtU4IsV2(&p->Dev));
+}
+
+/*
+ * Section 6.2.3 item 1: a link classified from the host's lane 0
+ * LANE_ADP_CS_1 (Current Link Speed, Negotiated Link Width) and, for the
+ * asymmetric pairing, the far end's. Both fields are valid only with the
+ * link active (Spec 8.2.2.3, Table 8-12).
+ */
+#define TBT_U4_LINK_LEGACY      0UL     /* Gen 2 or Gen 3: section 6.5 */
+#define TBT_U4_LINK_GEN4        1UL     /* Gen 4 symmetric: bonded */
+#define TBT_U4_LINK_GEN4_ASYM   2UL     /* Gen 4 asymmetric, paired: bonded */
+#define TBT_U4_LINK_UNUSABLE    3UL     /* Gen 4 x1, unpaired or reserved width */
+#define TBT_U4_LINK_UNKNOWN     4UL     /* a reserved speed */
+
+static ULONG tbtU4LinkKind(ULONG host, ULONG dev)
+{
+    ULONG w;
+    ULONG dw;
+
+    switch (TBT_LANE1_SPEED(host)) {
+    case TBT_LANE_SPEED_GEN2:
+    case TBT_LANE_SPEED_GEN3:
+        return TBT_U4_LINK_LEGACY;
+    case TBT_LANE_SPEED_GEN4:
+        break;
+    default:
+        return TBT_U4_LINK_UNKNOWN;
+    }
+    w = TBT_LANE1_NLW(host);
+    dw = TBT_LANE1_NLW(dev);
+    if (w == TBT_LANE_WIDTH_X2) {
+        return TBT_U4_LINK_GEN4;
+    }
+    if ((w == TBT_LANE_WIDTH_ASYM_TX && dw == TBT_LANE_WIDTH_ASYM_RX) ||
+        (w == TBT_LANE_WIDTH_ASYM_RX && dw == TBT_LANE_WIDTH_ASYM_TX)) {
+        return TBT_U4_LINK_GEN4_ASYM;
+    }
+    return TBT_U4_LINK_UNUSABLE;
+}
+
+/* The host's lane 0 alone reads a link that carries paths as a bonded one:
+ * x2, or a Gen 4 asymmetric width (its pairing was read when the port came
+ * up). For the read-only checks of an existing link. */
+static BOOLEAN tbtU4WidthBonded(ULONG host)
+{
+    ULONG w;
+
+    w = TBT_LANE1_NLW(host);
+    if (w == TBT_LANE_WIDTH_X2) {
+        return TRUE;
+    }
+    return (BOOLEAN)(TBT_LANE1_SPEED(host) == TBT_LANE_SPEED_GEN4 &&
+                     (w == TBT_LANE_WIDTH_ASYM_TX || w == TBT_LANE_WIDTH_ASYM_RX));
+}
+
+/* Section 6.2.1 item 3: a preserved USB4 router's CMUV read and kept,
+ * never written; logged where it is not the one this driver would have
+ * written. */
+static VOID tbtU4CmuvFound(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG cs4)
+{
+    if (rt->Tbt3) {
+        rt->Cmuv = 0;
+        return;
+    }
+    rt->Cmuv = TBT_RTR4_CMUV(cs4);
+    if (rt->Cmuv == TBT_RTR4_CMUV(TBT_RTR4_CMUV_1_0) && tbtU4IsV2(rt)) {
+        tbtU4Log(cm, "u4.cmuv.v1", (rt->Route.Lo << 8) | rt->Cmuv);
+    } else if (rt->Cmuv != TBT_RTR4_CMUV(TBT_RTR4_CMUV_1_0) &&
+               rt->Cmuv != TBT_RTR4_CMUV(TBT_RTR4_CMUV_2_0)) {
+        tbtU4Log(cm, "u4.cmuv.odd", (rt->Route.Lo << 8) | rt->Cmuv);
+    }
+}
+
 static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
+static BOOLEAN tbtU4EeClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp);
 
 /*
  * Whether a port's sequence may go on (record 22 sections 7.2, 7.4): its
@@ -660,12 +748,26 @@ static VOID tbtU4TakeQueues(PTBT_U4CM cm)
     TBT_NOTE n;
     TBT_ROUTE top;
     ULONG i;
+    PTBT_U4_PORT p;
+    BOOLEAN lane1;
 
     while (TbtCtlNextHotPlug(&cm->Ctl, &e)) {
         tbtU4Hint(cm, &e.Route, e.Adapter, e.Unplug);
     }
     while (TbtCtlNextNote(&cm->Ctl, &n)) {
         tbtU4Log(cm, "u4.note", (n.Code << 8) | n.Info);
+        if (n.Code == TBT_EV_LINK_RECOVERY) {
+            /* Record 22 section 6.2.3 item 4: never acknowledged; a check
+             * of the port whose path holds the router that sent it (its
+             * lane adapter's port at the host, else the depth-1 one). */
+            cm->Counters.LinkRecoveries++;
+            p = tbtU4PortByLane(cm, TbtRouteDepth(&n.Route) == 0 ? n.Info :
+                                TbtRouteLevel(&n.Route, 0), &lane1);
+            if (p != NULL) {
+                p->CheckPending = TRUE;
+            }
+            continue;
+        }
         if (n.Code == TBT_EV_ERR_CONN || n.Code == TBT_EV_ERR_LOCK ||
             n.Code == TBT_EV_ERR_PLUG) {
             /* The adapter on the route that reported it, or the depth-1
@@ -1287,42 +1389,138 @@ static ULONG tbtU4FirstOf(const TBT_U4_ROUTER *rt, ULONG type)
  * preserved router's answer is adopted on success, none enabled on Not
  * Supported, and unknown on anything else (no Buffer Allocation Request,
  * no acknowledgement).
+ *
+ * As a Ver. 2 Connection Manager (XhciCmUsb4V2, record 22 section 6.2.2
+ * item 3), on any USB4 router: an answer reporting the Sequence bit in
+ * Notification Packet capability supported and not enabled is followed by
+ * Set Capabilities (opcode 32h, Capability Index 2, Enable Capability 1,
+ * Spec Tables 8-53 to 8-55) and Get Capabilities again as the read-back,
+ * whose answer is then the router's capability state - for a router
+ * enumerated here too, since the Set took it from its default. Until the
+ * read-back settles it the state stays PENDING, so the router's
+ * notifications are held (section 6.4). A Set answering Status non-zero
+ * or Not Supported is judged by the read-back; a Set or read-back that
+ * fails otherwise, times out or finds the router operation-blocked leaves
+ * the state unknown. A recovery (section 7.7) classifies by reading alone:
+ * it sends no Set (one it finds owed, SeqOwed, is made at the next tick),
+ * and for a router this driver ever sent the Set (SeqSet, whatever its
+ * read-back recorded) it adopts a successful answer and leaves a failed
+ * one unknown.
  */
+static ULONG tbtU4CapsParse(PTBT_U4_ROUTER rt, ULONG dw0)
+{
+    ULONG k;
+
+    rt->CapsSupported = 0;
+    rt->CapsEnabled = 0;
+    for (k = 1; k <= TBT_CAP_CLX_LATENCY; k++) {
+        if ((dw0 >> (2 * k)) & 1UL) {
+            rt->CapsSupported |= 1UL << k;
+        }
+        if ((dw0 >> (2 * k + 1)) & 1UL) {
+            rt->CapsEnabled |= 1UL << k;
+        }
+    }
+    return TBT_U4_CAPS_KNOWN;
+}
+
+static ULONG tbtU4SetSequenceBit(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
+{
+    ULONG meta;
+    ULONG data[TBT_ROP_DATA_DWORDS];
+    LONG rc;
+
+    meta = TBT_CAP_NOTIFY_SEQUENCE | TBT_ROP_SETCAP_ENABLE;
+    /* Owned before the request: a Set whose answer is lost may still have
+     * applied. */
+    rt->SeqSet = TRUE;
+    rc = tbtU4RouterOp(cm, rt, TBT_ROP_SET_CAPABILITIES, &meta, NULL, 0, NULL, 0);
+    if (rc != TBT_OK && rc != TBT_E_FAILED && rc != TBT_E_UNSUPPORTED) {
+        cm->Counters.SeqUnknown++;
+        tbtU4Log(cm, "u4.caps.seq-unknown", (ULONG)rc);
+        return TBT_U4_CAPS_UNKNOWN;
+    }
+    meta = 0;
+    data[0] = 0;
+    if (tbtU4RouterOp(cm, rt, TBT_ROP_GET_CAPABILITIES, &meta, NULL, 0, data, 1) != TBT_OK) {
+        cm->Counters.SeqUnknown++;
+        tbtU4Log(cm, "u4.caps.seq-unknown", 0xFFFFFFFFUL);
+        return TBT_U4_CAPS_UNKNOWN;
+    }
+    (void)tbtU4CapsParse(rt, data[0]);
+    if ((rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0) {
+        cm->Counters.SeqEnabled++;
+        tbtU4Log(cm, "u4.caps.seq", rt->Route.Lo);
+    } else {
+        cm->Counters.SeqRefused++;
+        tbtU4Log(cm, "u4.caps.seq-refused", (ULONG)rc);
+    }
+    return TBT_U4_CAPS_KNOWN;
+}
+
 static VOID tbtU4GetCapabilities(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
 {
     ULONG meta;
     ULONG data[TBT_ROP_DATA_DWORDS];
-    ULONG k;
+    ULONG state;
+    BOOLEAN hadSeq;
+    BOOLEAN v2;
     LONG rc;
 
+    hadSeq = (BOOLEAN)(rt->SeqSet ||
+                       (rt->CapsState == TBT_U4_CAPS_KNOWN &&
+                        (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0));
+    rt->SeqOwed = FALSE;
+    v2 = (BOOLEAN)(cm->Config.Usb4V2 && !rt->Tbt3);
+    /* Held until this settles the form (section 6.4). */
+    rt->CapsState = TBT_U4_CAPS_PENDING;
     meta = 0;
     data[0] = 0;
     rc = tbtU4RouterOp(cm, rt, TBT_ROP_GET_CAPABILITIES, &meta, NULL, 0, data, 1);
     rt->CapsSupported = 0;
     rt->CapsEnabled = 0;
-    if (rt->EnumeratedHere) {
-        rt->CapsState = TBT_U4_CAPS_DEFAULT;
+    if (rt->EnumeratedHere && !v2) {
+        state = TBT_U4_CAPS_DEFAULT;
     } else if (rc == TBT_OK) {
-        for (k = 1; k <= TBT_CAP_CLX_LATENCY; k++) {
-            if ((data[0] >> (2 * k)) & 1UL) {
-                rt->CapsSupported |= 1UL << k;
-            }
-            if ((data[0] >> (2 * k + 1)) & 1UL) {
-                rt->CapsEnabled |= 1UL << k;
+        state = tbtU4CapsParse(rt, data[0]);
+        if (rt->EnumeratedHere && !(cm->Recovering && hadSeq)) {
+            /* At its default whatever the answer, until a Set. */
+            state = TBT_U4_CAPS_DEFAULT;
+            rt->CapsEnabled = 0;
+        }
+        if (v2 && (rt->CapsSupported & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) != 0 &&
+            (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) == 0) {
+            if (cm->Recovering) {
+                rt->SeqOwed = TRUE;
+            } else if (cm->SeqGuardPort != 0 &&
+                       !tbtU4Live(cm, &cm->Ports[cm->SeqGuardPort - 1], cm->SeqGuardGen)) {
+                /* The owed Set's port gone or changed under the Get: no
+                 * request to whatever holds the route now. */
+                state = TBT_U4_CAPS_UNKNOWN;
+            } else {
+                state = tbtU4SetSequenceBit(cm, rt);
             }
         }
-        rt->CapsState = TBT_U4_CAPS_KNOWN;
-        if ((rt->CapsEnabled & ~((1UL << TBT_CAP_NOTIFY_SEQUENCE) |
+        if (state == TBT_U4_CAPS_KNOWN &&
+            (rt->CapsEnabled & ~((1UL << TBT_CAP_NOTIFY_SEQUENCE) |
                                  (1UL << TBT_CAP_BA_PER_PORT) |
                                  (1UL << TBT_CAP_HOT_PLUG_FAILURE))) != 0) {
             tbtU4Log(cm, "u4.caps.enabled-unhandled", rt->CapsEnabled);
         }
     } else if (rc == TBT_E_UNSUPPORTED) {
-        rt->CapsState = TBT_U4_CAPS_DEFAULT;
+        state = TBT_U4_CAPS_DEFAULT;
+    } else if (rt->EnumeratedHere && !(cm->Recovering && hadSeq)) {
+        /* Never Set here: still at its default. */
+        state = TBT_U4_CAPS_DEFAULT;
     } else {
-        rt->CapsState = TBT_U4_CAPS_UNKNOWN;
+        state = TBT_U4_CAPS_UNKNOWN;
         tbtU4Log(cm, "u4.caps.unknown", (ULONG)rc);
     }
+    if (state != TBT_U4_CAPS_KNOWN) {
+        rt->CapsSupported = 0;
+        rt->CapsEnabled = 0;
+    }
+    rt->CapsState = state;
     if (!tbtU4Off(cm)) {
         TbtCtlSettle(&cm->Ctl, &rt->Route);
     }
@@ -1784,9 +1982,25 @@ static BOOLEAN tbtU4Asm7(PTBT_U4CM cm, const TBT_U4_ROUTER *d, BOOLEAN usb3)
 }
 
 /*
+ * Record 22 section 6.2.2 item 4 (Spec 8.2.3.4): a path entry is written
+ * in one Write Request of both its DWs, on every router - here PATH_CS_0
+ * with Valid cleared and PATH_CS_1 as just read, its RsvdZ bit 29 written
+ * 0 (Pending Packets, bit 28, is read only).
+ */
+static LONG tbtU4WrPath(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp, ULONG hop,
+                        const ULONG *e)
+{
+    ULONG w[2];
+
+    w[0] = e[0] & ~TBT_PATH0_VALID;
+    w[1] = e[1] & ~TBT_PATH1_RSVDZ29;
+    return tbtU4WrN(cm, r, TBT_CS_PATH, adp, 2 * hop, 2, w);
+}
+
+/*
  * Guide 5.2.2 step 2 for one hop, at its ingress adapter: PATH_CS_0 Valid
  * cleared with no other field of the entry changed (written only when it
- * reads 1); PATH_CS_1 Pending Packets polled until the entry reads Valid 0
+ * reads 1, both DWs in one write); PATH_CS_1 Pending Packets polled until the entry reads Valid 0
  * and Pending Packets 0, within TBT_U4_DRAIN_US (record 22 section 5.2);
  * then tTeardown (Spec Table 5-16, at least 2 us) before the entry may be
  * made valid again. TRUE when both read 0; any other ending quarantines
@@ -1808,7 +2022,7 @@ static BOOLEAN tbtU4Invalidate(PTBT_U4CM cm, ULONG port, const TBT_ROUTE *r,
     e[0] = 0;
     rc = tbtU4RdN(cm, r, TBT_CS_PATH, adp, 2 * hop, 2, e);
     if (rc == TBT_OK && (e[0] & TBT_PATH0_VALID) != 0) {
-        rc = tbtU4Wr(cm, r, TBT_CS_PATH, adp, 2 * hop, e[0] & ~TBT_PATH0_VALID);
+        rc = tbtU4WrPath(cm, r, adp, hop, e);
     }
     if (rc == TBT_OK) {
         TbtWaitStart(&w, cm->Host, TBT_U4_DRAIN_US, FALSE);
@@ -1999,6 +2213,7 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
     ULONG e[2];
     ULONG v;
     PTBT_U4_QENTRY q;
+    PTBT_U4_ROUTER rt;
     LONG rc;
 
     for (i = 0; i < TBT_U4_QUARANTINE; i++) {
@@ -2060,13 +2275,20 @@ static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
                 q->Used = FALSE;
                 cm->Counters.QuarantineLifted++;
                 tbtU4QLifted(cm, q);
+                if (q->EnableBit == TBT_PCIE0_PE) {
+                    /* Its teardown's Extended Encapsulation clear, owed
+                     * while the enable stood (section 6.2.2 item 7). */
+                    rt = tbtU4RouterOf(cm, &q->Route);
+                    if (rt != NULL && rt->Adp[q->Adapter].CapAdp == q->EnableCap) {
+                        (void)tbtU4EeClear(cm, rt, q->Adapter);
+                    }
+                }
             }
             continue;
         }
         rc = tbtU4RdN(cm, &q->Route, TBT_CS_PATH, q->Adapter, 2 * q->Hop, 2, e);
         if (rc == TBT_OK && (e[0] & TBT_PATH0_VALID) != 0) {
-            rc = tbtU4Wr(cm, &q->Route, TBT_CS_PATH, q->Adapter, 2 * q->Hop,
-                         e[0] & ~TBT_PATH0_VALID);
+            rc = tbtU4WrPath(cm, &q->Route, q->Adapter, q->Hop, e);
             if (rc == TBT_OK) {
                 rc = tbtU4RdN(cm, &q->Route, TBT_CS_PATH, q->Adapter,
                               2 * q->Hop, 2, e);
@@ -2125,9 +2347,10 @@ static BOOLEAN tbtU4Enumerated(const TBT_U4_ROUTER *rt, const ULONG *v)
 /*
  * Enumerate (Guide 3.2.1 step 4; u4cm.c enumerate_router): one write of
  * ROUTER_CS_1 to 4 - Depth, TopologyID with Valid, Notification Timeout
- * 255, and on a USB4 router CMUV 1.0 - then, on a USB4 router, Router
- * Ready within 500 ms (Guide 3.2.1 note). `v` is ROUTER_CS_0 to 4 as
- * read.
+ * 255, and on a USB4 router CMUV by its version (record 22 section 6.2.1
+ * item 2: 2.0 on a major 2 router while XhciCmUsb4V2 is 1, else 1.0) -
+ * then, on a USB4 router, Router Ready within 500 ms (Guide 3.2.1 note).
+ * `v` is ROUTER_CS_0 to 4 as read.
  */
 static LONG tbtU4WaitReady(PTBT_U4CM cm, PTBT_U4_ROUTER rt);
 
@@ -2142,7 +2365,10 @@ static LONG tbtU4Enumerate(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG *v)
     w[2] = (rt->Route.Hi & TBT_RTR3_TOPOLOGY_MASK) | TBT_RTR3_V;
     w[3] = (v[4] & ~TBT_RTR4_NOTIFY_TIMEOUT_MASK) | TBT_RTR4_NOTIFY_TIMEOUT_MAX;
     if (!rt->Tbt3) {
-        w[3] = (w[3] & ~TBT_RTR4_CMUV_MASK) | TBT_RTR4_CMUV_1_0;
+        w[3] = (w[3] & ~TBT_RTR4_CMUV_MASK) |
+               ((cm->Config.Usb4V2 && tbtU4IsV2(rt)) ? TBT_RTR4_CMUV_2_0 :
+                                                       TBT_RTR4_CMUV_1_0);
+        rt->Cmuv = TBT_RTR4_CMUV(w[3]);
     }
     /* Marked before the write: a write applied whose answer was lost is
      * still this driver's enumeration (Router Ready required). */
@@ -2317,6 +2543,7 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
     } else {
         h->Preserved = TRUE;
         cm->Counters.RoutersAdopted++;
+        tbtU4CmuvFound(cm, h, v[4]);
     }
     rc = tbtU4DiscoverAdapters(cm, h);
     if (rc == TBT_OK) {
@@ -2918,14 +3145,23 @@ failed:
  * that is verified (tbtU4BondSingle), then the link marked configured.
  * A link already x2 (Negotiated Link Width read first, Guide 7.1) is
  * bonded without a bonding; XhciCmLaneBonding 0 goes straight to the
- * single-lane checks. TBT_OK when the port may carry paths, TBT_E_STATE
+ * single-lane checks. A Gen 4 link (record 22 section 6.2.3 items 1 and
+ * 2) is classified first and never bonded: symmetric, or asymmetric with
+ * the two ends a transmitter and receiver pair, it is used as bonded with
+ * no lane write (XhciCmLaneBonding 0 has no single-lane route there);
+ * any other Gen 4 reading leaves the port FAILED. On a link of two
+ * version 2 routers a lane 0 still training is waited for first, with no
+ * write. TBT_OK when the port may carry paths, TBT_E_STATE
  * when it is FAILED, TBT_E_GONE when the port's generation moved on.
  */
 static LONG tbtU4Bond(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
 {
     TBT_U4_LANES ln;
     ULONG lane0;
+    ULONG dev0;
+    ULONG kind;
     LONG rc;
+    TBT_WAIT w;
 
     ln.Rt[0] = &cm->HostRouter;
     ln.Rt[1] = &cm->HostRouter;
@@ -2939,6 +3175,61 @@ static LONG tbtU4Bond(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
 
     if (tbtU4LaneRd(cm, ln.Rt[0], ln.Adp[0], &lane0) != TBT_OK) {
         return TBT_E_STATE;
+    }
+    if (tbtU4IsV2(&cm->HostRouter) && tbtU4IsV2(&p->Dev)) {
+        /* Speed and width are valid only on an active link (Spec 8.2.2.3):
+         * a lane 0 still training is waited for with no write, and one
+         * that never reads connected leaves the port FAILED with no lane
+         * written, rather than classified on a stale reading. */
+        TbtWaitStart(&w, cm->Host, TBT_U4_CONNECT_US, FALSE);
+        while (TbtU4LaneClass(TBT_LANE1_STATE(lane0)) != TBT_U4_LANE_CONNECTED) {
+            if (!TBT_U4_LIVE(p, gen)) {
+                return TBT_E_GONE;
+            }
+            if (TbtU4LaneClass(TBT_LANE1_STATE(lane0)) != TBT_U4_LANE_TRANSITIONAL ||
+                TbtWaitDone(&w, cm->Host)) {
+                tbtU4Log(cm, "u4.link.not-active", (p->Index << 8) | TBT_LANE1_STATE(lane0));
+                p->Why = TBT_U4_WHY_LANE_STATE;
+                return TBT_E_STATE;
+            }
+            tbtU4Pause(cm, &w);
+            if (tbtU4LaneRd(cm, ln.Rt[0], ln.Adp[0], &lane0) != TBT_OK) {
+                return TBT_E_STATE;
+            }
+        }
+    }
+    kind = TBT_U4_LINK_LEGACY;
+    if (TBT_LANE1_SPEED(lane0) == TBT_LANE_SPEED_GEN4) {
+        dev0 = 0;
+        if (TBT_LANE1_NLW(lane0) != TBT_LANE_WIDTH_X2 &&
+            tbtU4LaneRd(cm, ln.Rt[2], ln.Adp[2], &dev0) != TBT_OK) {
+            return TBT_U4_LIVE(p, gen) ? TBT_E_STATE : TBT_E_GONE;
+        }
+        kind = tbtU4LinkKind(lane0, dev0);
+    }
+    if (kind == TBT_U4_LINK_UNUSABLE) {
+        cm->Counters.Gen4Unusable++;
+        tbtU4Log(cm, "u4.link.gen4-unusable", (p->Index << 8) | TBT_LANE1_NLW(lane0));
+        p->Why = TBT_U4_WHY_LINK;
+        return TBT_E_STATE;
+    }
+    if (kind == TBT_U4_LINK_GEN4 || kind == TBT_U4_LINK_GEN4_ASYM) {
+        /* Aggregated by link initialisation: no Target Link Width, Lane
+         * Bonding or Lane Disable written (Spec 4.2.2, Table 8-12). An
+         * asymmetric link is never transitioned (decision U31). */
+        p->Bonded = TRUE;
+        p->Gen4 = TRUE;
+        p->Asym = (BOOLEAN)(kind == TBT_U4_LINK_GEN4_ASYM);
+        cm->Counters.Gen4Links++;
+        if (p->Asym) {
+            cm->Counters.Gen4Asym++;
+        }
+        if (!cm->Config.LaneBonding) {
+            tbtU4Log(cm, "u4.bond.gen4", p->Index);
+        }
+        tbtU4Log(cm, "u4.link.gen4", (p->Index << 8) | TBT_LANE1_NLW(lane0));
+        rc = TBT_OK;
+        goto configured;
     }
     if (TBT_LANE1_NLW(lane0) == TBT_LANE_WIDTH_X2) {
         rc = TBT_OK;
@@ -2959,6 +3250,7 @@ static LONG tbtU4Bond(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
             return rc;
         }
     }
+configured:
     if (tbtU4Configured(cm, p) != TBT_OK) {
         /* What it set stays owned (PcSetHost, PcSetDev) for the
          * teardown; no tunnel is built over an unconfigured link. */
@@ -2994,13 +3286,27 @@ static LONG tbtU4TmuTd(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, BOOLEAN on)
 
 /*
  * Item 6: the link's TMU off from HiFi-Bi (Guide 7.4.3.4.2 step 2: the
- * downstream router's TSPacketInterval 0), then Disable Time Sync set on
- * both lane 0 adapters (as at a new connection, 7.4.3.1, which names no
+ * downstream router's TSPacketInterval 0) or, from HiFi Enhanced
+ * Uni-Directional (step 1, record 22 section 6.2.2 item 6),
+ * AdapterTimeSyncInterval 0 and Enable Enhanced Uni-Directional Mode 0
+ * on both lane 0 adapters, the device's first; then Disable Time Sync set
+ * on both lane 0 adapters (as at a new connection, 7.4.3.1, which names no
  * order; the device's first is [linux], record 22 section 6.6), inside a
  * time disruption of the device router. Done: the
  * link's TMU is no longer this driver's; failed: the port's TMU
  * quarantine.
  */
+static LONG tbtU4TmuEnhancedOff(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
+{
+    LONG rc;
+
+    rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_9, TBT_TMU_ADP9_INTERVAL_MASK, 0);
+    if (rc == TBT_OK) {
+        rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_8, TBT_TMU_ADP8_EUDM, 0);
+    }
+    return rc;
+}
+
 static LONG tbtU4TmuDisable(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
     PTBT_U4_ROUTER d;
@@ -3008,7 +3314,12 @@ static LONG tbtU4TmuDisable(PTBT_U4CM cm, PTBT_U4_PORT p)
 
     d = &p->Dev;
     rc = tbtU4TmuTd(cm, d, TRUE);
-    if (rc == TBT_OK) {
+    if (rc == TBT_OK && p->TmuEnhanced) {
+        rc = tbtU4TmuEnhancedOff(cm, d, d->UpAdp);
+        if (rc == TBT_OK) {
+            rc = tbtU4TmuEnhancedOff(cm, &cm->HostRouter, p->Lane0);
+        }
+    } else if (rc == TBT_OK) {
         rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_3,
                       TBT_TMU_RTR3_INTERVAL_MASK, 0);
     }
@@ -3027,6 +3338,7 @@ static LONG tbtU4TmuDisable(PTBT_U4CM cm, PTBT_U4_PORT p)
         return rc;
     }
     p->TmuConfigured = FALSE;
+    p->TmuEnhanced = FALSE;
     p->TmuOk = FALSE;
     return TBT_OK;
 }
@@ -3125,17 +3437,82 @@ static LONG tbtU4TmuHiFiBi(PTBT_U4CM cm, PTBT_U4_PORT p)
 }
 
 /*
+ * Guide 7.4.3.4.1 from Off to HiFi Enhanced Uni-Directional (record 22
+ * section 6.2.2 item 6), up to the Disable Time Sync bits: step 1, Table
+ * 7-3's parameters in the downstream router as for HiFi-Bi, and on both
+ * lane 0 adapters, the device's first (Table 7-3 names the downstream
+ * facing port; Spec 8.2.2.2 Table 8-11 requires DirSwitchN above 1 on a
+ * port whose enhanced mode is enabled), Spec 8.2.2.2's note's values:
+ * Replenish Timeout 3125 and Replenish Threshold 0 (TMU_ADP_CS_8),
+ * ReplenishN 30 and DirSwitchN 255 (TMU_ADP_CS_9); step 2b and 2c,
+ * AdapterTimeSyncInterval 16 and Enable Enhanced Uni-Directional Mode 1
+ * on the device's upstream lane 0 adapter, then on the host's. CLx is
+ * never enabled here (step 2a), and TSPacketInterval is not written (Spec
+ * 7.3.1.3: ignored in that mode).
+ */
+static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_ROUTER d;
+    const TBT_U4_ROUTER *rt;
+    ULONG adp;
+    ULONG avg;
+    ULONG k;
+    LONG rc;
+
+    d = &p->Dev;
+    avg = 0;
+    for (k = 0; k < 4; k++) {
+        avg |= TBT_TMU_AVG_CONST_HIFI << (6 * k);
+    }
+    rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_0,
+                  TBT_TMU_RTR0_FREQ_WIND_MASK,
+                  TBT_TMU_FREQ_WINDOW_HIFI << TBT_TMU_RTR0_FREQ_WIND_SHIFT);
+    if (rc == TBT_OK) {
+        rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_15,
+                      TBT_TMU_RTR15_AVG_MASK, avg);
+    }
+    for (k = 0; k < 2 && rc == TBT_OK; k++) {
+        rt = k == 0 ? d : &cm->HostRouter;
+        adp = k == 0 ? d->UpAdp : p->Lane0;
+        rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_8,
+                         TBT_TMU_ADP8_REPL_TIMEOUT_MASK | TBT_TMU_ADP8_REPL_THRESH_MASK,
+                         TBT_TMU_REPL_TIMEOUT_HIFI |
+                         (TBT_TMU_REPL_THRESH_HIFI << TBT_TMU_ADP8_REPL_THRESH_SHIFT));
+        if (rc == TBT_OK) {
+            rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_9,
+                             TBT_TMU_ADP9_REPLN_MASK | TBT_TMU_ADP9_DIRSWN_MASK,
+                             TBT_TMU_REPLN_HIFI |
+                             (TBT_TMU_DIRSWN_HIFI << TBT_TMU_ADP9_DIRSWN_SHIFT));
+        }
+    }
+    for (k = 0; k < 2 && rc == TBT_OK; k++) {
+        rt = k == 0 ? d : &cm->HostRouter;
+        adp = k == 0 ? d->UpAdp : p->Lane0;
+        rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_9, TBT_TMU_ADP9_INTERVAL_MASK,
+                         TBT_TMU_ADP_INTERVAL_HIFI << TBT_TMU_ADP9_INTERVAL_SHIFT);
+        if (rc == TBT_OK) {
+            rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_8, 0, TBT_TMU_ADP8_EUDM);
+        }
+    }
+    return rc;
+}
+
+/*
  * Items 2 to 5: HiFi-Bi from Off on a link that will carry a USB3 tunnel,
  * inside a time disruption of the device router: the local time posted
  * (tbtU4TmuPostTime), the mode set (tbtU4TmuHiFiBi), then Disable Time
  * Sync cleared on the device's upstream lane adapter and then on the
  * host's - Guide 7.4.3.4.1 steps 3c and 3d name the other order; this one
  * is [linux] (record 22 section 6.6) - and, the disruption over, 50 ms
- * for the TMU to converge (Guide 7.4.3.1 step 4). A failure clears the
+ * for the TMU to converge (Guide 7.4.3.1 step 4). `enhanced`: HiFi
+ * Enhanced Uni-Directional instead (tbtU4TmuEnhancedOn), on a link of two
+ * version 2 routers (section 6.2.2 item 6), Disable Time Sync then
+ * cleared in the Guide's own order (steps 2d and 2e, the device's first).
+ * A failure clears the
  * disruption, turns the link's TMU off again and leaves the USB3 tunnel
  * unbuilt; a step that cannot be undone is the port's TMU quarantine.
  */
-static VOID tbtU4TmuEnable(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
+static VOID tbtU4TmuEnable(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, BOOLEAN enhanced)
 {
     PTBT_U4_ROUTER h;
     PTBT_U4_ROUTER d;
@@ -3164,12 +3541,19 @@ static VOID tbtU4TmuEnable(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         tbtU4Log(cm, "u4.tmu.inherited", p->Index);
         return;
     }
+    p->TmuEnhanced = enhanced;
     rc = tbtU4TmuTd(cm, d, TRUE);
     if (rc == TBT_OK) {
         rc = tbtU4TmuPostTime(cm, p, gen);
     }
     if (rc == TBT_OK) {
-        rc = tbtU4TmuHiFiBi(cm, p);
+        if (enhanced) {
+            /* Owned before its writes: a failure undoes the enhanced fields. */
+            p->TmuConfigured = TRUE;
+            rc = tbtU4TmuEnhancedOn(cm, p);
+        } else {
+            rc = tbtU4TmuHiFiBi(cm, p);
+        }
     }
     if (rc == TBT_OK) {
         p->TmuConfigured = TRUE;
@@ -3189,6 +3573,9 @@ static VOID tbtU4TmuEnable(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         return;
     }
     cm->Counters.TmuEnabled++;
+    if (enhanced) {
+        tbtU4Log(cm, "u4.tmu.enhanced", p->Index);
+    }
     tbtU4WaitMin(cm, TBT_U4_TMU_SETTLE_US);
     p->TmuOk = TRUE;
 }
@@ -3307,6 +3694,7 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
                 }
                 if (!d->EnumeratedHere) {
                     d->Preserved = TRUE;
+                    tbtU4CmuvFound(cm, d, v[4]);
                 }
                 /* Enumerated here or by a predecessor: Router Ready either
                  * way before the router is used. */
@@ -3418,7 +3806,7 @@ static BOOLEAN tbtU4LinkUsb4(PTBT_U4CM cm, PTBT_U4_PORT p)
 /* Whether this connection will carry a USB3 tunnel built here. */
 static BOOLEAN tbtU4WantUsb3(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
-    return (BOOLEAN)(cm->Config.Usb3Tunnel && p->Usb3Down != 0 &&
+    return (BOOLEAN)(cm->Config.Usb3Tunnel && p->Usb3Down != 0 && !p->UtoOff &&
                      tbtU4FirstOf(&p->Dev, TBT_ADP_TYPE_USB3_UP) != 0 &&
                      !p->DpPreserved && tbtU4LinkUsb4(cm, p));
 }
@@ -3428,7 +3816,10 @@ static BOOLEAN tbtU4WantUsb3(PTBT_U4CM cm, PTBT_U4_PORT p)
  * adapters exist, UTO where both USB3 adapters exist on a USB4 link,
  * whatever XhciCmUsb3Tunnel says (Guide 3.2.3 "must"), HCO never, CNS left
  * as it is (0 on a fresh router; record 22 section 6.6) - then the TMU
- * where a USB3 tunnel will be built, then CV in a second write and
+ * where a USB3 tunnel will be built, and on a link of two version 2
+ * routers whose device router this driver enumerated whatever the tunnels
+ * (section 6.2.2 item 6: HiFi Enhanced Uni-Directional, its mode on any
+ * link of two version 2 routers), then CV in a second write and
  * Configuration Ready within 500 ms.
  */
 static LONG tbtU4ConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
@@ -3437,6 +3828,7 @@ static LONG tbtU4ConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     ULONG set;
     ULONG cs6;
     LONG rc;
+    BOOLEAN v2;
     TBT_WAIT w;
 
     d = &p->Dev;
@@ -3452,8 +3844,9 @@ static LONG tbtU4ConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     if (rc != TBT_OK) {
         return tbtU4Gone(cm, rc) ? TBT_E_GONE : rc;
     }
-    if (tbtU4WantUsb3(cm, p) && !p->TmuQuarantine) {
-        tbtU4TmuEnable(cm, p, gen);
+    v2 = tbtU4V2Link(cm, p);
+    if (!p->TmuQuarantine && ((v2 && d->EnumeratedHere) || tbtU4WantUsb3(cm, p))) {
+        tbtU4TmuEnable(cm, p, gen, v2);
     }
     if (!TBT_U4_LIVE(p, gen)) {
         return TBT_E_GONE;
@@ -3495,6 +3888,7 @@ static LONG tbtU4ConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
 static BOOLEAN tbtU4ReleaseBw(PTBT_U4CM cm, PTBT_U4_PORT p);
 static LONG tbtU4Entry(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp, ULONG hop,
                        PULONG e);
+static BOOLEAN tbtU4EeClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp);
 
 /*
  * The host side of a port's PCIe and/or USB3 tunnels found again from the
@@ -3524,6 +3918,9 @@ static BOOLEAN tbtU4HostSweep(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN pcie, BOOLEA
         }
         ok &= tbtU4Disable(cm, p->Index, &h->Route, adp, h->Adp[adp].CapAdp,
                            (BOOLEAN)(k == 1));
+        if (k == 0) {
+            (void)tbtU4EeClear(cm, h, adp);
+        }
         if (tbtU4Entry(cm, &h->Route, adp, TBT_HOP_PROTOCOL, e) != TBT_OK) {
             ok = FALSE;
         } else if ((e[0] & TBT_PATH0_VALID) != 0 || (e[1] & TBT_PATH1_PP) != 0) {
@@ -3585,6 +3982,14 @@ static BOOLEAN tbtU4TunnelDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_TUNNEL t,
     if ((t->Written & TBT_U4_E_DEV_ENABLE) != 0 && d->Present && dp != 0) {
         ok &= tbtU4Disable(cm, p->Index, &d->Route, dp, d->Adp[dp].CapAdp, usb3);
     }
+    if (!usb3) {
+        /* Its Extended Encapsulation, whoever set it (section 6.2.2 item
+         * 7); a failure is logged and the teardown goes on. */
+        (void)tbtU4EeClear(cm, h, hp);
+        if (d->Present) {
+            (void)tbtU4EeClear(cm, d, dp);
+        }
+    }
     if ((t->Written & TBT_U4_E_HOST_PROTO) != 0) {
         ok &= tbtU4Invalidate(cm, p->Index, &h->Route, hp, TBT_HOP_PROTOCOL);
     }
@@ -3618,6 +4023,71 @@ static BOOLEAN tbtU4TunnelDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_TUNNEL t,
     t->Preserved = FALSE;
     t->Own = FALSE;
     return ok;
+}
+
+/*
+ * Record 22 section 6.2.2 item 7 (Spec 11.1.1.1's note, 8.2.2.7; Guide
+ * 5.3.1 step 4, 5.3.2 step 3): ADP_PCIE_CS_1 Extended Encapsulation on a
+ * PCIe adapter. tbtU4EeSet: set and read back, before either Path Enable,
+ * on a tunnel between two version 2 routers. tbtU4EeClear: at a PCIe
+ * teardown, after the Path Enables and before the paths are invalidated,
+ * read on an adapter of a version 2 router and written 0 if it reads 1 - a
+ * predecessor's tunnel included - only once that adapter's Path Enable
+ * reads 0; an adapter whose ownership is not established (section 7.7) is
+ * never written. Neither while XhciCmUsb4V2
+ * is 0. TRUE when EE reads as wanted.
+ */
+static BOOLEAN tbtU4EeSet(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
+{
+    ULONG v;
+    ULONG at;
+
+    at = rt->Adp[adp].CapAdp + TBT_PCIE_CS_1;
+    if (tbtU4Rmw(cm, &rt->Route, TBT_CS_ADAPTER, adp, at, 0, TBT_PCIE1_EE) != TBT_OK ||
+        tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, at, &v) != TBT_OK ||
+        (v & TBT_PCIE1_EE) == 0) {
+        tbtU4Log(cm, "u4.ee.failed", (rt->Route.Lo << 8) | adp);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOLEAN tbtU4EeClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
+{
+    ULONG v;
+    ULONG at;
+
+    if (!cm->Config.Usb4V2 || !tbtU4IsV2(rt) || adp == 0 || adp >= TBT_U4_MAX_ADP ||
+        rt->Adp[adp].CapAdp == 0 || rt->Adp[adp].Type == TBT_ADP_TYPE_UNUSED) {
+        return TRUE;
+    }
+    if (tbtU4Reserved(cm, &rt->Route, adp, 0, TRUE) ||
+        tbtU4Reserved(cm, &rt->Route, adp, TBT_HOP_PROTOCOL, FALSE)) {
+        return FALSE;
+    }
+    /* Never with the adapter's Path Enable set (Spec 8.2.2.7): a disable
+     * that failed is the adapter's quarantine, whose lift clears EE then
+     * (tbtU4RetryQuarantine). */
+    if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                rt->Adp[adp].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK ||
+        (v & TBT_PCIE0_PE) != 0) {
+        return FALSE;
+    }
+    at = rt->Adp[adp].CapAdp + TBT_PCIE_CS_1;
+    if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, at, &v) != TBT_OK) {
+        return FALSE;
+    }
+    if ((v & TBT_PCIE1_EE) == 0) {
+        return TRUE;
+    }
+    if (tbtU4Wr(cm, &rt->Route, TBT_CS_ADAPTER, adp, at, v & ~TBT_PCIE1_EE) != TBT_OK ||
+        tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, at, &v) != TBT_OK ||
+        (v & TBT_PCIE1_EE) != 0) {
+        tbtU4Log(cm, "u4.ee.stuck", (rt->Route.Lo << 8) | adp);
+        return FALSE;
+    }
+    cm->Counters.EeCleared++;
+    return TRUE;
 }
 
 /* A protocol adapter's LTSSM in Detect within `us` (Guide 5.3.1 step 1). */
@@ -3803,7 +4273,9 @@ static BOOLEAN tbtU4PcieDetect(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, ULONG dp
 /*
  * Section 6.8: the PCIe tunnel, as Guide 5.3.1 sets one up. Step 1, the
  * Detect gate within TBT_U4_DETECT_US (tbtU4PcieDetect; section 10.1's
- * gate too); steps 2 and 3, the four entries (tbtU4Paths); steps 5 and 6,
+ * gate too); steps 2 and 3, the four entries (tbtU4Paths); step 4, on a
+ * link of two version 2 routers, Extended Encapsulation (tbtU4EeSet,
+ * record 22 section 6.2.2 item 7); steps 5 and 6,
  * Path Enable (ADP_PCIE_CS_0 bit 31) on the upstream PCIe adapter, the
  * device's, then on the host's downstream one. Then the host's LTSSM in
  * L0 within TBT_U4_L0_US (usb4-emu u4cm.c u4cm_pcie_tunnel). A failure
@@ -3845,6 +4317,25 @@ static LONG tbtU4PcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         return TBT_E_TIMEOUT;
     }
     rc = tbtU4Paths(cm, p, gen, &p->Pcie, FALSE, tbtU4WantUsb3(cm, p));
+    if (rc == TBT_OK && tbtU4V2Link(cm, p)) {
+        /* Section 6.2.2 item 7: Extended Encapsulation on both adapters
+         * before either Path Enable (Spec 8.2.2.7). */
+        if (!tbtU4EeSet(cm, d, dp) || !tbtU4EeSet(cm, h, p->PcieDown)) {
+            p->Why = TBT_U4_WHY_PATH;
+            rc = TBT_E_STATE;
+        } else {
+            cm->Counters.EeSet++;
+        }
+    } else if (rc == TBT_OK) {
+        /* Otherwise EE 0 (Spec 11.1.1.1's note): a version 2 end left
+         * with it set - an earlier tunnel's clear that failed, or a
+         * predecessor's - is cleared first, else no Path Enable. */
+        if (!tbtU4EeClear(cm, h, p->PcieDown) || (!d->Tbt3 && !tbtU4EeClear(cm, d, dp))) {
+            tbtU4Log(cm, "u4.ee.left", (p->Index << 8) | p->PcieDown);
+            p->Why = TBT_U4_WHY_PATH;
+            rc = TBT_E_STATE;
+        }
+    }
     if (rc == TBT_OK) {
         p->Pcie.Written |= TBT_U4_E_DEV_ENABLE;
         rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ADAPTER, dp, d->Adp[dp].CapAdp + TBT_PCIE_CS_0,
@@ -4114,6 +4605,36 @@ static BOOLEAN tbtU4ReleaseBw(PTBT_U4CM cm, PTBT_U4_PORT p)
  * 1.5 Gb/s the PCIe path keeps (Guide 6.1.2.3). The two rates are read
  * before the lane. TBT_E_STATE when the lane cannot be read.
  */
+/* The USB3 allocation's bound from the host's lane 0 (record 22 section
+ * 6.2.3 item 5, Guide Table 6-2): 10, 20 or 40 Gb/s a lane for Gen 2, 3 or
+ * 4, doubled for x2; a Gen 4 asymmetric link counted as one lane's 40,
+ * the lower direction, since the allocation is both ways; then 90% of it
+ * less the 1.5 Gb/s the PCIe path keeps. */
+static ULONG tbtU4LinkBound(ULONG lane)
+{
+    ULONG link;
+
+    if (TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4) {
+        link = 40000UL;
+    } else if (TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN3) {
+        link = 20000UL;
+    } else {
+        link = 10000UL;
+    }
+    if (TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2) {
+        link += link;
+    }
+    link = link * 9UL / 10UL;
+    return link > TBT_U4_PCIE_RESERVE_MBPS ? link - TBT_U4_PCIE_RESERVE_MBPS : 0;
+}
+
+#ifdef XHCI_HOST_TEST
+ULONG TbtU4TestLinkBound(ULONG lane)
+{
+    return tbtU4LinkBound(lane);
+}
+#endif
+
 static LONG tbtU4Usb3Budget(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG dp, PULONG mbps)
 {
     ULONG hostRate;
@@ -4132,18 +4653,7 @@ static LONG tbtU4Usb3Budget(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG dp, PULONG mbps)
     if (tbtU4LaneRd(cm, &cm->HostRouter, p->Lane0, &lane) != TBT_OK) {
         return TBT_E_STATE;
     }
-    if (TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4) {
-        link = 40000UL;
-    } else if (TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN3) {
-        link = 20000UL;
-    } else {
-        link = 10000UL;
-    }
-    if (TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2) {
-        link += link;
-    }
-    link = link * 9UL / 10UL;
-    link = link > TBT_U4_PCIE_RESERVE_MBPS ? link - TBT_U4_PCIE_RESERVE_MBPS : 0;
+    link = tbtU4LinkBound(lane);
     *mbps = want < link ? want : link;
     return TBT_OK;
 }
@@ -4255,7 +4765,10 @@ static BOOLEAN tbtU4Usb3Down(PTBT_U4CM cm, PTBT_U4_PORT p)
     if ((p->Usb3.Written & TBT_U4_E_BANDWIDTH) != 0 && !tbtU4ReleaseBw(cm, p)) {
         ok = FALSE;
     }
-    if (p->TmuConfigured && p->Dev.Present && tbtU4TmuDisable(cm, p) != TBT_OK) {
+    if (p->TmuConfigured && !p->TmuEnhanced && p->Dev.Present &&
+        tbtU4TmuDisable(cm, p) != TBT_OK) {
+        /* An enhanced link's TMU stays for the connection's life
+         * (section 6.2.2 item 6). */
         ok = FALSE;
     }
     return ok;
@@ -4303,6 +4816,9 @@ static BOOLEAN tbtU4PcieHostDown(PTBT_U4CM cm, PTBT_U4_PORT p)
     h = &cm->HostRouter;
     cap = h->Adp[p->PcieDown].CapAdp;
     ok = tbtU4Disable(cm, p->Index, &h->Route, p->PcieDown, cap, FALSE);
+    /* Section 6.2.2 item 7: on a version 2 host router its Extended
+     * Encapsulation too, a failure logged. */
+    (void)tbtU4EeClear(cm, h, p->PcieDown);
     if ((p->Pcie.Written & TBT_U4_E_HOST_PROTO) != 0) {
         ok &= tbtU4Invalidate(cm, p->Index, &h->Route, p->PcieDown, TBT_HOP_PROTOCOL);
     }
@@ -4433,7 +4949,10 @@ static VOID tbtU4HostTmuDefaults(PTBT_U4CM cm, PTBT_U4_PORT p)
 
     h = &cm->HostRouter;
     if (p->TmuConfigured) {
+        /* A version 2 host router's lane 0 also leaves enhanced
+         * uni-directional mode (section 6.6 item 6). */
         if (tbtU4TmuAdp(cm, h, p->Lane0, TBT_TMU_ADP_CS_3, TBT_TMU_ADP3_UDM, 0) != TBT_OK ||
+            (tbtU4IsV2(h) && tbtU4TmuEnhancedOff(cm, h, p->Lane0) != TBT_OK) ||
             tbtU4TmuAdp(cm, h, p->Lane0, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS) != TBT_OK) {
             p->TmuQuarantine = TRUE;
         }
@@ -4762,6 +5281,9 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     p->Generation++;
     gen = p->Generation;
     p->UnplugPending = FALSE;
+    p->Gen4 = FALSE;
+    p->Asym = FALSE;
+    p->UtoOff = FALSE;
     p->State = TBT_U4_CONNECTING;
     p->Why = TBT_U4_WHY_NONE;
     p->AnchorValid = FALSE;
@@ -4810,7 +5332,9 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     p->State = TBT_U4_BONDING;
     if (asFound) {
         p->Bonded = (BOOLEAN)(tbtU4LaneRd(cm, &cm->HostRouter, p->Lane0, &lane) == TBT_OK &&
-                              TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2);
+                              tbtU4WidthBonded(lane));
+        p->Gen4 = (BOOLEAN)(p->Bonded && TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4);
+        p->Asym = (BOOLEAN)(p->Gen4 && TBT_LANE1_NLW(lane) != TBT_LANE_WIDTH_X2);
         p->SingleLane = (BOOLEAN)!p->Bonded;
     } else {
         rc = tbtU4Bond(cm, p, gen);
@@ -4820,7 +5344,43 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
         }
     }
 
-    if (!p->Dev.Tbt3 && !asFound) {
+    if (!p->Dev.Tbt3 && !asFound && cm->Config.Usb4V2 && p->Dev.Preserved) {
+        /* Record 22 section 6.2.2 item 5: CV found set is never
+         * configured again (CNS, PTO, UTO, HCO unchanged under it, Spec
+         * 8.2.1.1). Without PTO no PCIe tunnel can be built: HELD;
+         * without UTO no USB3 tunnel. Section 6.6 runs only once CV is
+         * read clear; a read that fails holds the port. */
+        rc = tbtU4Rd(cm, &p->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &lane);
+        if (rc != TBT_OK) {
+            if (tbtU4Gone(cm, rc)) {
+                rc = TBT_E_GONE;
+                goto out;
+            }
+            tbtU4Log(cm, "u4.cv.unread", (ULONG)rc);
+            next = TBT_U4_HELD;
+            p->Why = TBT_U4_WHY_CV_FOUND;
+            goto out;
+        }
+        if ((lane & TBT_RTR5_CV) != 0) {
+            cm->Counters.CvFound++;
+            if ((lane & TBT_RTR5_UTO) == 0) {
+                p->UtoOff = TRUE;
+            }
+            if ((lane & TBT_RTR5_PTO) == 0) {
+                tbtU4Log(cm, "u4.cv.found", (p->Index << 24) | (lane >> 8));
+                next = TBT_U4_HELD;
+                p->Why = TBT_U4_WHY_CV_FOUND;
+                goto out;
+            }
+        } else {
+            p->State = TBT_U4_CONFIGURING;
+            rc = tbtU4ConfigValid(cm, p, gen);
+            if (rc != TBT_OK) {
+                next = TBT_U4_FAILED;
+                goto out;
+            }
+        }
+    } else if (!p->Dev.Tbt3 && !asFound) {
         /* A router a predecessor enumerated may already hold CV with PTO;
          * otherwise the handshake runs (Guide 3.2.3). */
         if (!p->Dev.Preserved ||
@@ -5393,6 +5953,68 @@ static BOOLEAN tbtU4CarryMatch(PTBT_U4CM cm, const TBT_U4_PORT *p)
     return FALSE;
 }
 
+/*
+ * Record 22 section 6.2.3 item 4 part 1: on a USB4 port of a version 2
+ * router (`cap` its USB4 Port Capability) a predecessor's PORT_CS_19
+ * Enable Gen 4 Link Recovery (bit 31) is read and, set, cleared by a
+ * read-modify-write of that bit alone, whatever XhciCmUsb4V2 says; this
+ * driver never sets it, nor Initiate Gen 4 Link Recovery. TRUE unless the
+ * read or the write failed. The one write a discovery makes.
+ */
+static BOOLEAN tbtU4ElrClearAt(PTBT_U4CM cm, const TBT_ROUTE *route, ULONG adp, ULONG cap)
+{
+    ULONG v;
+
+    if (cap == 0) {
+        return TRUE;
+    }
+    if (tbtU4Rd(cm, route, TBT_CS_ADAPTER, adp, cap + TBT_PORT_CS_19, &v) != TBT_OK) {
+        return FALSE;
+    }
+    if ((v & TBT_PORT19_ELR) == 0) {
+        return TRUE;
+    }
+    if (tbtU4Wr(cm, route, TBT_CS_ADAPTER, adp, cap + TBT_PORT_CS_19,
+                v & ~(TBT_PORT19_ELR | TBT_PORT19_ILR)) != TBT_OK) {
+        return FALSE;
+    }
+    cm->Counters.ElrCleared++;
+    tbtU4Log(cm, "u4.elr.cleared", (route->Lo << 8) | adp);
+    return TRUE;
+}
+
+static BOOLEAN tbtU4ElrClear(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp, ULONG cap)
+{
+    if (!tbtU4IsV2(rt) || adp == 0 || adp >= TBT_U4_MAX_ADP) {
+        return TRUE;
+    }
+    return tbtU4ElrClearAt(cm, &rt->Route, adp, cap);
+}
+
+/* An adapter's capability of id `id` found by its own chain (section 6.1's
+ * walk for one adapter), 0 for none. Reads only. */
+static ULONG tbtU4AdpCapOf(PTBT_U4CM cm, const TBT_ROUTE *route, ULONG adp, ULONG id)
+{
+    ULONG h;
+    ULONG ptr;
+    ULONG n;
+
+    if (tbtU4Rd(cm, route, TBT_CS_ADAPTER, adp, TBT_ADP_CS_1, &h) != TBT_OK) {
+        return 0;
+    }
+    ptr = TBT_ADP1_NEXT_CAP(h);
+    for (n = 0; ptr != 0 && n < TBT_CAP_WALK_LIMIT; n++) {
+        if (tbtU4Rd(cm, route, TBT_CS_ADAPTER, adp, ptr, &h) != TBT_OK) {
+            return 0;
+        }
+        if (TBT_CAP_ID(h) == id) {
+            return ptr;
+        }
+        ptr = TBT_CAP_NEXT(h);
+    }
+    return 0;
+}
+
 static VOID tbtU4DiscoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
     ULONG hw;
@@ -5429,6 +6051,7 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
     BOOLEAN usb3;
     BOOLEAN other;
     BOOLEAN cfgOk;
+    BOOLEAN elrOk;
     TBT_U4_TUNNEL tp;
     TBT_U4_TUNNEL tu;
     LONG rc;
@@ -5523,6 +6146,7 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
     d->Present = TRUE;
     d->Preserved = TRUE;
     cm->Counters.RoutersAdopted++;
+    tbtU4CmuvFound(cm, d, v[4]);
     if (!d->Tbt3) {
         /* As tbtU4Router: an adapter the DROM marks unused is never read. */
         tbtU4ReadDrom(cm, d);
@@ -5557,11 +6181,31 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
         cfgOk = (BOOLEAN)((v[6] & TBT_RTR6_RR) != 0 && (v[5] & TBT_RTR5_CV) != 0 &&
                           (v[6] & TBT_RTR6_CR) != 0);
     }
-    /* Step 3: bonded, or lane 1 disconnected or disabled. */
-    if (tbtU4LaneRd(cm, h, p->Lane0 + 1, &lane1) != TBT_OK) {
+    /* Section 6.2.3 item 4 part 1: a predecessor's Enable Gen 4 Link
+     * Recovery cleared on this link before its tunnels are verified; a
+     * write that fails holds the port. */
+    elrOk = (BOOLEAN)(tbtU4ElrClear(cm, h, p->Lane0, h->Adp[p->Lane0].CapPort) &&
+                      (d->Tbt3 || tbtU4ElrClear(cm, d, d->UpAdp, d->Adp[d->UpAdp].CapPort)));
+    if (!elrOk) {
+        cfgOk = FALSE;
+    }
+    /* Step 3: bonded, or lane 1 disconnected or disabled; a Gen 4 link
+     * bonded when symmetric or a paired asymmetric one (section 6.2.3). */
+    if (TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4 &&
+        TBT_LANE1_NLW(lane) != TBT_LANE_WIDTH_X2) {
+        if (tbtU4LaneRd(cm, d, d->UpAdp, &lane1) != TBT_OK ||
+            tbtU4LinkKind(lane, lane1) != TBT_U4_LINK_GEN4_ASYM) {
+            cfgOk = FALSE;
+        } else {
+            p->Bonded = TRUE;
+            p->Gen4 = TRUE;
+            p->Asym = TRUE;
+        }
+    } else if (tbtU4LaneRd(cm, h, p->Lane0 + 1, &lane1) != TBT_OK) {
         cfgOk = FALSE;
     } else if (TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2) {
         p->Bonded = TRUE;
+        p->Gen4 = (BOOLEAN)(TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4);
     } else if (TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_CLD ||
                TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_DISABLED) {
         p->SingleLane = TRUE;
@@ -5579,12 +6223,32 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
     usb3 = tbtU4Follow(cm, p, TRUE, &tu);
 
+    if (!hostState && !devState && !other && (!elrOk ||
+        (!d->Tbt3 && cm->Config.Usb4V2 && (v[5] & TBT_RTR5_CV) != 0 &&
+         (v[5] & TBT_RTR5_PTO) == 0))) {
+        /* Section 6.2.2 item 5: CV found without PTO is never configured
+         * again, so no PCIe tunnel can be built: HELD, which
+         * XhciCmPreOsCleanup 1 cleans. An Enable Gen 4 Link Recovery that
+         * would not clear holds the port too (section 6.2.3 item 4). */
+        if (elrOk) {
+            cm->Counters.CvFound++;
+            tbtU4Log(cm, "u4.cv.found", (p->Index << 24) | (v[5] >> 8));
+        }
+        if (!d->Tbt3) {
+            tbtU4GetCapabilities(cm, d);
+        }
+        tbtU4Hold(cm, p, elrOk ? TBT_U4_WHY_CV_FOUND : TBT_U4_WHY_DISCOVERY);
+        tbtU4DiscoverLinks(cm, p);
+        return;
+    }
     if (!hostState && !devState && !other) {
         /* Nothing to preserve: connected normally, the router adopted. */
         p->State = TBT_U4_EMPTY;
         tbtU4Zero(d, sizeof(*d));
         p->Bonded = FALSE;
         p->SingleLane = FALSE;
+        p->Gen4 = FALSE;
+        p->Asym = FALSE;
         p->CheckPending = TRUE;
         return;
     }
@@ -5627,6 +6291,8 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
         tbtU4Zero(d, sizeof(*d));
         p->Bonded = FALSE;
         p->SingleLane = FALSE;
+        p->Gen4 = FALSE;
+        p->Asym = FALSE;
         cm->Counters.PortsPreserved++;
         if (cm->Config.DeferFirstPoll && cm->Stage != TBT_U4_STAGE_RUNNING) {
             /* Built by the caller's first poll, as found (TbtU4Poll). */
@@ -5727,6 +6393,31 @@ static VOID tbtU4LinkCaps(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
     tbtU4Zero(s, sizeof(*s));
     s->Route = keep;
+}
+
+/* Section 6.2.3 item 4 part 1 on a discovered link below depth 1: the
+ * parent's downstream lane 0 `a` and the child's upstream one (`v` its
+ * ROUTER_CS_0 to 4), on each end that is a version 2 router. A write that
+ * fails is logged; the link stays a predecessor's, served by its own
+ * removal (section 7.1). */
+static VOID tbtU4LinkElr(PTBT_U4CM cm, const TBT_U4_ROUTER *s, ULONG a,
+                         const TBT_ROUTE *child, const ULONG *v)
+{
+    ULONG up;
+    BOOLEAN ok;
+
+    ok = tbtU4ElrClear(cm, s, a, s->Adp[a].CapPort);
+    if (TbtHwRouterVersion(TBT_RTR4_VERSION(v[4])) == TBT_HW_ROUTER_USB4 &&
+        TBT_USB4_VERSION_MAJOR(TBT_RTR4_VERSION(v[4])) == TBT_USB4_MAJOR_2) {
+        up = TBT_RTR1_UP_ADP(v[1]);
+        if (up != 0 &&
+            !tbtU4ElrClearAt(cm, child, up, tbtU4AdpCapOf(cm, child, up, TBT_ACAP_USB4_PORT))) {
+            ok = FALSE;
+        }
+    }
+    if (!ok) {
+        tbtU4Log(cm, "u4.elr.failed", (TbtRouteDepth(child) << 8) | a);
+    }
 }
 
 static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
@@ -5836,6 +6527,7 @@ static VOID tbtU4DiscoverLinks(PTBT_U4CM cm, PTBT_U4_PORT p)
                             tbtU4RdN(cm, &child, TBT_CS_ROUTER, 0, l->ChildLc + TBT_LC_FUSE,
                                      4, l->ChildUuid) == TBT_OK);
                     }
+                    tbtU4LinkElr(cm, s, a, &child, v);
                     cm->Counters.LinksDiscovered++;
                     tbtU4Log(cm, "u4.link", (TbtRouteDepth(&child) << 8) | a);
                 }
@@ -8477,6 +9169,7 @@ VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg)
     cfg->Usb3Tunnel = TRUE;
     cfg->LaneBonding = TRUE;
     cfg->PreOsCleanup = 0;
+    cfg->Usb4V2 = TRUE;
 }
 
 VOID TbtU4Init(PTBT_U4CM cm, PTBT_RING ring, const TBT_HOST *host,
@@ -8858,6 +9551,32 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     if (cm->HostTmuTdOwed || !cm->HostTmuOk) {
         tbtU4HostTmu(cm);
     }
+    /* Record 22 section 6.2.2 item 3: a Set a recovery found owed and,
+     * reading only, did not send. */
+    if (cm->HostRouter.SeqOwed) {
+        tbtU4GetCapabilities(cm, &cm->HostRouter);
+    }
+    for (i = 0; i < cm->PortCount; i++) {
+        p = &cm->Ports[i];
+        if (p->Dev.Present && p->Dev.SeqOwed && !p->Dev.Tbt3 &&
+            (p->State == TBT_U4_UP || p->State == TBT_U4_HELD ||
+             p->State == TBT_U4_FAILED) &&
+            !p->UnplugPending && !p->CheckPending && !p->ClassifyPending &&
+            !cm->DeferredTail[i]) {
+            /* The port's own sequence (section 7.4): no nested teardown of
+             * it at a safe point, and the Set withheld once a check shows
+             * removal evidence; the next check acts on it. */
+            cm->ActivePort = p->Index;
+            cm->SeqGuardPort = p->Index;
+            cm->SeqGuardGen = p->Generation;
+            tbtU4GetCapabilities(cm, &p->Dev);
+            cm->SeqGuardPort = 0;
+            cm->ActivePort = 0;
+            if (!tbtU4Live(cm, p, cm->SeqGuardGen)) {
+                p->CheckPending = TRUE;
+            }
+        }
+    }
     /* Steps 4 to 6 owed by teardowns nested at a safe point. */
     for (i = 0; i < cm->PortCount; i++) {
         if (cm->DeferredTail[i] && !cm->Ports[i].RecDeparted &&
@@ -8910,7 +9629,9 @@ VOID TbtU4Poll(PTBT_U4CM cm)
             }
         } else if (p->TmuQuarantine && !p->Dev.Present &&
                    tbtU4RecCleanupGate(cm, p)) {
-            if (tbtU4TmuAdp(cm, &cm->HostRouter, p->Lane0, TBT_TMU_ADP_CS_6, 0,
+            if ((!tbtU4IsV2(&cm->HostRouter) ||
+                 tbtU4TmuEnhancedOff(cm, &cm->HostRouter, p->Lane0) == TBT_OK) &&
+                tbtU4TmuAdp(cm, &cm->HostRouter, p->Lane0, TBT_TMU_ADP_CS_6, 0,
                             TBT_TMU_ADP6_DTS) == TBT_OK) {
                 p->TmuQuarantine = FALSE;
             }
@@ -9384,7 +10105,7 @@ static BOOLEAN tbtU4Verify(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3)
         tbtU4LaneRd(cm, h, p->Lane0 + 1, &lane1) != TBT_OK) {
         return FALSE;
     }
-    if (TBT_LANE1_NLW(lane) != TBT_LANE_WIDTH_X2 &&
+    if (!tbtU4WidthBonded(lane) &&
         TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
         TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED) {
         return FALSE;
@@ -10148,6 +10869,61 @@ static BOOLEAN tbtU4RecoverUndo(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
                      (t->Written & ~TBT_U4_E_BANDWIDTH) == 0);
 }
 
+/* The same for HiFi Enhanced Uni-Directional (record 22 section 6.2.2 item
+ * 6): no time disruption, the downstream parameters as written, and on
+ * both lane 0 adapters uni-directional mode clear, the enhanced mode and
+ * its HiFi interval set, the replenish values as written and time sync
+ * enabled. `cs0` is the device's TMU_RTR_CS_0 as just read. Read only. */
+static BOOLEAN tbtU4TmuEnhancedAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG cs0)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_ROUTER d;
+    const TBT_U4_ROUTER *rt;
+    ULONG adp;
+    ULONG k;
+    ULONG v;
+    ULONG avg;
+
+    h = &cm->HostRouter;
+    d = &p->Dev;
+    avg = TBT_TMU_AVG_CONST_HIFI | (TBT_TMU_AVG_CONST_HIFI << 6) |
+          (TBT_TMU_AVG_CONST_HIFI << 12) | (TBT_TMU_AVG_CONST_HIFI << 18);
+    if (!p->TmuConfigured || d->Adp[d->UpAdp].CapTmu == 0 ||
+        h->Adp[p->Lane0].CapTmu == 0 || (cs0 & TBT_TMU_RTR0_TD) != 0 ||
+        (cs0 & TBT_TMU_RTR0_FREQ_WIND_MASK) !=
+            (TBT_TMU_FREQ_WINDOW_HIFI << TBT_TMU_RTR0_FREQ_WIND_SHIFT) ||
+        tbtU4Rd(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_15,
+                &v) != TBT_OK ||
+        (v & TBT_TMU_RTR15_AVG_MASK) != avg) {
+        return FALSE;
+    }
+    for (k = 0; k < 2; k++) {
+        rt = k == 0 ? h : d;
+        adp = k == 0 ? p->Lane0 : d->UpAdp;
+        if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                    rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_3, &v) != TBT_OK ||
+            (v & TBT_TMU_ADP3_UDM) != 0 ||
+            tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                    rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_6, &v) != TBT_OK ||
+            (v & TBT_TMU_ADP6_DTS) != 0 ||
+            tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                    rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_8, &v) != TBT_OK ||
+            (v & TBT_TMU_ADP8_EUDM) == 0 ||
+            (v & TBT_TMU_ADP8_REPL_TIMEOUT_MASK) != TBT_TMU_REPL_TIMEOUT_HIFI ||
+            ((v & TBT_TMU_ADP8_REPL_THRESH_MASK) >> TBT_TMU_ADP8_REPL_THRESH_SHIFT) !=
+                TBT_TMU_REPL_THRESH_HIFI ||
+            tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
+                    rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_9, &v) != TBT_OK ||
+            (v >> TBT_TMU_ADP9_INTERVAL_SHIFT) != TBT_TMU_ADP_INTERVAL_HIFI ||
+            ((v & TBT_TMU_ADP9_DIRSWN_MASK) >> TBT_TMU_ADP9_DIRSWN_SHIFT) !=
+                TBT_TMU_DIRSWN_HIFI ||
+            (v & TBT_TMU_ADP9_REPLN_MASK) != TBT_TMU_REPLN_HIFI) {
+            return FALSE;
+        }
+    }
+    return TRUE;
+}
+
 /* Part 3 step 4 (iii): the link's TMU read now, as tbtU4TmuEnable left it
  * configured (the device router's TSPacketInterval HiFi, Disable Time
  * Sync clear on both lane 0 adapters), or a router whose TMU needs none;
@@ -10177,6 +10953,9 @@ static BOOLEAN tbtU4TmuAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
     if ((v & TBT_TMU_RTR0_TSP_NS) != 0) {
         return TRUE;
+    }
+    if (p->TmuEnhanced) {
+        return tbtU4TmuEnhancedAsLeft(cm, p, v);
     }
     /* HiFi-Bi completed: no time disruption left set, the measurement
      * window and averaging constants as written, TSPacketInterval HiFi,
@@ -10243,9 +11022,9 @@ static BOOLEAN tbtU4LanesAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
         return FALSE;
     }
     if (p->Bonded) {
-        return (BOOLEAN)(TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2);
+        return tbtU4WidthBonded(lane);
     }
-    return (BOOLEAN)(TBT_LANE1_NLW(lane) != TBT_LANE_WIDTH_X2 &&
+    return (BOOLEAN)(!tbtU4WidthBonded(lane) &&
                      (TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_CLD ||
                       TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_DISABLED));
 }

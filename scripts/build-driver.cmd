@@ -228,7 +228,10 @@ rem "all" is what a cut builds (cut-builds.ps1, or by hand for -ImportOnly or
 rem a one-tree cut), so it runs every self-test in full: the INF gate's
 rem self-tests skip themselves when nothing they read has changed since
 rem their last passing run, except under this (roadmap-usb4 task 45.30).
-if /i "%FLAVORS%"=="all" set "XHCI98_FULL_SELFTESTS=1"
+rem A pre-merge build of a branch sets XHCI98_SELFTEST_SKIP_OK=1 to let that
+rem skip stand in an "all" build too; a cut never sets it, and
+rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
+if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
 if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
 if /i "%FLAVORS%"=="debug" set "FLAVORS=debug"
 if /i "%FLAVORS%"=="release" set "FLAVORS=release"

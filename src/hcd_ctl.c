@@ -98,6 +98,7 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * another number or another type is on. Read at every start. */
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 #define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
+#define HCD_VALUE_LINK_KEEP     L"XhciLinkKeep"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). The INFs
@@ -499,6 +500,14 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_RESUME_KEEP, &value);
     hc->ResumeKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "resume.keep.on", hc->ResumeKeepOn);
+
+    /* Task 45.41 (design record 13 section 15, L7): a device kept across
+     * its SuperSpeed link's recovery. No INF writes it: absent, or anything
+     * but a DWORD 0, is on. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_LINK_KEEP, &value);
+    hc->LinkKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "link.keep.on", hc->LinkKeepOn);
 
     /* Task 38.11: latched in the extension, which this start has zeroed
      * and which no in-place reinitialization zeroes again, so every version

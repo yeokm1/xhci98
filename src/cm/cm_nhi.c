@@ -575,7 +575,10 @@ static const char *const cmU4CounterNames[] = {
     "u4.recover.stop-unverified", "u4.recover.preserved",
     "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held",
     "u4.kid.connects", "u4.kid.up", "u4.kid.adopted", "u4.kid.torn-down",
-    "u4.kid.dropped", "u4.kid.lost", "u4.kid.full"
+    "u4.kid.dropped", "u4.kid.lost", "u4.kid.full",
+    "u4.gen4.links", "u4.gen4.asym", "u4.gen4.unusable", "u4.caps.seq-enabled",
+    "u4.caps.seq-refused", "u4.caps.seq-unknown", "u4.ee.set", "u4.ee.cleared",
+    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -2717,6 +2720,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
+    nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* The bind takes the tunnel ports' learning baseline between the
@@ -3261,6 +3265,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
                   (nhi->Values.AsmPcie7Refused << 9));
     if (nhi->Values.AsmPcie7Refused) {
         CmLogNote(nhi, "cm.asm.pcie7.raw", nhi->Values.AsmPcie7Raw);
+    }
+    /* XhciCmUsb4V2 as run with (record 22 section 6.2.1 item 5); bit 8
+     * found, bit 9 refused (the value read is then the next note's). */
+    CmLogNote(nhi, "cm.usb4.v2",
+              nhi->Values.Usb4V2 | (nhi->Values.Usb4V2Found << 8) |
+                  (nhi->Values.Usb4V2Refused << 9));
+    if (nhi->Values.Usb4V2Refused) {
+        CmLogNote(nhi, "cm.usb4.v2.raw", nhi->Values.Usb4V2Raw);
     }
 
     cmFindBar(nhi, irp);

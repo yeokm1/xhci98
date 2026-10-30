@@ -589,10 +589,38 @@ static void test_ntrole(void)
     CHECK_EQ(PfwNtRole(4, 0), PFW_ROLE_NONE, "NT 4: neither");
 }
 
+/* The filter role's account of several root buses (record 32 section
+ * 11.5.2): a later bus's record does not hide an earlier one's. */
+static void test_ntsum(void)
+{
+    PFW_NT_SUM s;
+
+    memset(&s, 0, sizeof(s));
+    PfwNtSumAdd(&s, 0, 0x01UL, 9);
+    CHECK(s.RootBuses == 1 && s.SkippedAny == 0 && s.ResultAny == 0x01UL &&
+          s.ClosedAll == 9, "one root bus run: its values");
+    PfwNtSumAdd(&s, PFW_SKIP_LATE, 0, 0);
+    CHECK(s.RootBuses == 2 && s.SkippedAny == PFW_SKIP_LATE &&
+          s.ResultAny == 0x01UL && s.ClosedAll == 9,
+          "a second bus late: the first's closes kept, its reason added");
+    PfwNtSumAdd(&s, PFW_SKIP_UNATTACHED, 0, 0);
+    PfwNtSumAdd(&s, 0, 0x05UL, 2);
+    CHECK(s.RootBuses == 4 &&
+          s.SkippedAny == (PFW_SKIP_LATE | PFW_SKIP_UNATTACHED) &&
+          s.ResultAny == 0x05UL && s.ClosedAll == 11,
+          "an unattached bus and a third run: every reason, result and close");
+    s.RootBuses = 0xFFFFFFFFUL;
+    s.ClosedAll = 0xFFFFFFF0UL;
+    PfwNtSumAdd(&s, 0, 0, 0x20);
+    CHECK(s.RootBuses == 0xFFFFFFFFUL && s.ClosedAll == 0xFFFFFFFFUL,
+          "the counts held at their top");
+}
+
 int main(void)
 {
     test_classify();
     test_ntrole();
+    test_ntsum();
     test_range();
     test_close();
     test_scan();

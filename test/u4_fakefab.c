@@ -269,6 +269,12 @@ static void setLaneWidth(FAB_ADP *a, unsigned long w)
     a->Cs[FAB_CAP_LANE + 1] = (a->Cs[FAB_CAP_LANE + 1] & ~(0x3FUL << 20)) | (w << 20);
 }
 
+/* Current Link Speed (Spec 8.2.2.3): 8h Gen 2, 4h Gen 3, 2h Gen 4. */
+static void setLaneSpeed(FAB_ADP *a, unsigned long s)
+{
+    a->Cs[FAB_CAP_LANE + 1] = (a->Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 16)) | (s << 16);
+}
+
 /* Walk a route; -1 with the reporting router, the code and its adapter
  * when it cannot be delivered (Spec 6.4.3). */
 static int fabResolve(FAB *f, unsigned long hi, unsigned long lo, int *errRouter,
@@ -605,6 +611,7 @@ static void fabRouterOp(FAB *f, int ri)
     case 0x30: slot = FAB_OP_MAP; break;
     case 0x31: slot = FAB_OP_CAPS; break;
     case 0x33: slot = FAB_OP_BA; break;
+    case 0x32: slot = FAB_OP_SETCAPS; break;
     case 0x25:
         r->NvmOps++;
         slot = r->Kind == FAB_DEV_ASM2464 ? FAB_OP_NVM : -1;
@@ -646,8 +653,30 @@ static void fabRouterOp(FAB *f, int ri)
         r->MapNext = (r->MapNext + 1) % r->MapEntries;
         break;
     case FAB_OP_CAPS:
+        if (r->CapsFailAfterSet != 0 && r->SetCapsOps != 0) {
+            if (r->CapsFailAfterSet > 0) {
+                r->CapsFailAfterSet--;
+            }
+            r->Rcs[26] = (r->Rcs[26] & 0xFFFFUL) | (1UL << 24);
+            return;
+        }
         r->Rcs[25] = 5;
         r->Rcs[9] = r->CapsData;
+        break;
+    case FAB_OP_SETCAPS:
+        /* Spec 8.3.1.3.3: Capability Index 7:0, Enable Capability 8; a
+         * capability is enabled only where it is supported. */
+        r->SetCapsOps++;
+        r->SetCapsLastMeta = meta;
+        i = meta & 0xFFUL;
+        if (!r->SetCapsIgnore && i >= 1 && i <= 15 &&
+            (r->CapsData & (1UL << (2 * i))) != 0) {
+            if (meta & 0x100UL) {
+                r->CapsData |= 1UL << (2 * i + 1);
+            } else {
+                r->CapsData &= ~(1UL << (2 * i + 1));
+            }
+        }
         break;
     case FAB_OP_BA:
         r->BaLastMeta = meta;
@@ -812,6 +841,12 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         if (!(v & 0x4000UL) && (old & 0x4000UL) && ad->Peer >= 0) {
             setLaneState(ad, 2);
         }
+        if ((v & 0x8000UL) && ad->Peer >= 0 &&
+            ((ad->Cs[addr] >> 16) & 0xFUL) == 0x2UL) {
+            /* Spec 8.2.2.3: on a Gen 4 link the bit clears itself. */
+            ad->Cs[addr] &= ~0x8000UL;
+            return;
+        }
         if ((v & 0x8000UL) && ad->Peer >= 0) {
             /* Lane Bonding on lane 0: x2 on both lanes at both ends, LB
              * cleared, lane 1 reports a hot unplug (the emulator). */
@@ -863,6 +898,17 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
             for (pa = 1; pa <= f->R[d].MaxAdp; pa++) {
                 memset(f->R[d].Adp[pa].Path + 16, 0, sizeof(f->R[d].Adp[pa].Path) - 64);
                 f->R[d].Adp[pa].Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+                /* Version 2 state back to its defaults (task 45.20). */
+                if (fabPcieAdp(&f->R[d], pa)) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_ADP + 1] = 0;
+                } else if ((f->R[d].Adp[pa].Cs[2] & 0xFFFFFFUL) == 1) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 8] = 0;
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 9] = 0;
+                }
+            }
+            if (!f->R[d].Tbt3) {
+                f->R[d].CapsData &= 0x55555555UL;
+                f->R[d].SetCapsOps = 0;
             }
             ad->Cs[4] |= 0x80000000UL;
             r->Adp[a + 1].Cs[4] |= 0x80000000UL;
@@ -908,6 +954,10 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         return;
     }
     if (fabUsb3Adp(r, a) && (addr == FAB_CAP_ADP + 1 || addr == FAB_CAP_ADP + 4)) {
+        return;
+    }
+    if (fabPcieAdp(r, a) && addr == FAB_CAP_ADP + 1 && ad->EeStuck) {
+        ad->Cs[addr] = (v & ~1UL) | (old & 1UL);
         return;
     }
     (void)pr;
@@ -1049,6 +1099,7 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
                 f->WrAddr[f->WrCount] = addr + i;
                 f->WrVal[f->WrCount] = dw[3 + i];
                 f->WrAtUs[f->WrCount] = f->NowUs;
+                f->WrN[f->WrCount] = n;
             }
             f->WrCount++;
             if (cs == TBT_CS_ROUTER) {
@@ -1443,6 +1494,23 @@ int fabHostMinimal(FAB *f)
     return 0;
 }
 
+/* usb4-emu's `minimal` host as a USB4 version 2 host router (task 45.20):
+ * USB4 Version 40h, host interface version 40h (Spec Table 12-11), Get
+ * Capabilities reporting the Sequence bit capability supported, Gen 4
+ * links with another version 2 router. Test ids, no product's. */
+int fabHostV2(FAB *f)
+{
+    FAB_ROUTER *h = &f->R[0];
+
+    fabHostMinimal(f);
+    h->Rcs[4] = (h->Rcs[4] & 0x00FFFFFFUL) | (0x40UL << 24);
+    h->Rcs[0] = 0x46F4UL | (0x0002UL << 16);
+    h->CapsData = 1UL << 4;
+    h->Gen4 = 1;
+    f->Caps = (f->Caps & ~(0xFFUL << 16)) | (0x40UL << 16);
+    return 0;
+}
+
 int fabHostAdl(FAB *f)
 {
     FAB_ROUTER *h = &f->R[0];
@@ -1662,8 +1730,9 @@ int fabDevice(FAB *f, int kind)
     memset(d, 0, sizeof(*d));
     d->Parent = -1;
     d->Kind = kind;
-    if (kind == FAB_DEV_USB4) {
-        fabRouterBase(d, 0x46F4, 0x4242, 0x20);
+    if (kind == FAB_DEV_USB4 || kind == FAB_DEV_USB4V2) {
+        fabRouterBase(d, 0x46F4, kind == FAB_DEV_USB4 ? 0x4242 : 0x4280,
+                      kind == FAB_DEV_USB4 ? 0x20 : 0x40);
         fabTmuRouter(d);
         fabLane(d, 1, 1, 1);
         fabLane(d, 2, 0, 1);
@@ -1684,6 +1753,10 @@ int fabDevice(FAB *f, int kind)
         d->BaData[0] = 4UL | (32UL << 16);
         d->BaData[1] = 1UL | (16UL << 16);
         fabDrom(d, "QEMU", "USB4 NVMe Enclosure");
+        if (kind == FAB_DEV_USB4V2) {
+            d->CapsData = 1UL << 4;     /* the Sequence bit capability */
+            d->Gen4 = 1;
+        }
     } else if (kind == FAB_DEV_ASM2464) {
         fabAsm2464(d, i);
     } else {
@@ -1792,6 +1865,29 @@ int fabDevAt(const FAB *f, int port)
     return a != 0 ? f->R[0].Adp[a].Peer : -1;
 }
 
+/* A Gen 4 link's lanes at both ends: Current Link Speed Gen 4, CL0, the
+ * widths the device router's preset names (task 45.20). */
+static void fabGen4Lanes(FAB *f, int pr, unsigned pa, int dev)
+{
+    FAB_ROUTER *p = &f->R[pr];
+    FAB_ROUTER *d = &f->R[dev];
+    unsigned da = d->UpAdp;
+    unsigned k;
+
+    for (k = 0; k < 2; k++) {
+        if (p->Adp[pa + k].Present) {
+            setLaneSpeed(&p->Adp[pa + k], 0x2UL);
+            setLaneState(&p->Adp[pa + k], 2);
+            setLaneWidth(&p->Adp[pa + k], d->Gen4HostW != 0 ? d->Gen4HostW : 2UL);
+        }
+        if (d->Adp[da + k].Present) {
+            setLaneSpeed(&d->Adp[da + k], 0x2UL);
+            setLaneState(&d->Adp[da + k], 2);
+            setLaneWidth(&d->Adp[da + k], d->Gen4DevW != 0 ? d->Gen4DevW : 2UL);
+        }
+    }
+}
+
 static void fabConnect(FAB *f, int pr, unsigned pa, int dev)
 {
     FAB_ROUTER *p = &f->R[pr];
@@ -1823,6 +1919,17 @@ static void fabConnect(FAB *f, int pr, unsigned pa, int dev)
     if (p->Adp[pa].Cs[FAB_CAP_PORT] != 0) {
         p->Adp[pa].Cs[FAB_CAP_PORT + 18] = (p->BondPossible && d->BondPossible ? 0x100UL : 0) |
                                           (tcm ? 0x200UL : 0);
+    }
+    /* Two version 2 routers: Gen 4, its two lanes aggregated by link
+     * initialisation (Spec 4.2.2), the widths on both lanes of each end. */
+    d->Gen4Up = p->Gen4 && d->Gen4;
+    if (d->Gen4Up) {
+        fabGen4Lanes(f, pr, pa, dev);
+    } else if (((p->Adp[pa].Cs[FAB_CAP_LANE + 1] >> 16) & 0xFUL) == 0x2UL) {
+        setLaneSpeed(&p->Adp[pa], 0x4UL);
+        if (p->Adp[pa + 1].Present) {
+            setLaneSpeed(&p->Adp[pa + 1], 0x4UL);
+        }
     }
 }
 
@@ -1888,6 +1995,8 @@ static void fabResetRouter(FAB *f, int d)
             }
             ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
             ad->Cs[FAB_CAP_TMU_ADP + 6] = 0;
+            ad->Cs[FAB_CAP_TMU_ADP + 8] = 0;
+            ad->Cs[FAB_CAP_TMU_ADP + 9] = 0;
         } else if (t != 2 && r->Kind == FAB_DEV_ASM2464) {
             ad->Path[2 * 8] = t == 0x100102UL ? 0x00000008UL : 0;
             ad->Path[2 * 8 + 1] = 0;
@@ -1896,7 +2005,16 @@ static void fabResetRouter(FAB *f, int d)
             ad->Path[2 * 8] = 7UL << 17;
             ad->Path[2 * 8 + 1] = 0x01000000UL;
             ad->Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+            if (fabPcieAdp(r, a)) {
+                ad->Cs[FAB_CAP_ADP + 1] = 0;    /* Extended Encapsulation 0 */
+            }
         }
+    }
+    if (!r->Tbt3) {
+        /* Uninitialised again: every capability back to disabled (Spec
+         * 8.3.1.3.2), on every USB4 router, the host's included. */
+        r->CapsData &= 0x55555555UL;
+        r->SetCapsOps = 0;
     }
 }
 
@@ -1958,6 +2076,7 @@ static void fabDisconnect(FAB *f, int pr, unsigned pa)
                 f->R[dev].Adp[i].Peer = -1;
             }
         }
+        f->R[dev].Gen4Up = 0;
     }
     if (pr == 0) {
         /* Spec 4.4.5.2: the host's protocol adapters back to defaults. */
@@ -2018,6 +2137,10 @@ void fabPowerCycle(FAB *f)
         if (f->R[i].Used && f->R[i].Connected) {
             setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp], 1);
             setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp + 1], 1);
+            if (f->R[i].Gen4Up && f->R[i].Parent >= 0) {
+                /* A Gen 4 link retrains as Gen 4 (task 45.20). */
+                fabGen4Lanes(f, f->R[i].Parent, (unsigned)f->R[i].ParentAdp, i);
+            }
         }
     }
     f->RxQCount = 0;

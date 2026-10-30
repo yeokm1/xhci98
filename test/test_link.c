@@ -846,8 +846,52 @@ static void test_stuck_polling(void)
     CHECK_EQ(act.Kind, XHCI_LINK_ACT_GIVE_UP, "the budget spent");
 }
 
+/* Task 45.41 (design record 13 section 15, L3): the root port's feed
+ * charged a warm reset the keep does not write; taken back once, the
+ * budget whole again for the restore's own reset. */
+static void test_refund(void)
+{
+    XHCI_LINK_PORT link;
+    XHCI_LINK_ACTION act;
+    ULONG feed;
+
+    XhciLinkInit(&link);
+    feed = XhciLinkPortFeed(&link, 1,
+                            portsc(XHCI_PLS_INACTIVE, 0),
+                            XHCI_ENUM_BOUND, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_WARM_RESET, "SS.Inactive: warm reset");
+    CHECK_EQ(feed & XHCI_LINK_FEED_DISCONNECT, XHCI_LINK_FEED_DISCONNECT,
+             "the device fed a disconnect");
+    CHECK_EQ(link.WarmResets, 1, "one charged");
+    XhciLinkRefund(&link);
+    CHECK_EQ(link.WarmResets, 0, "taken back");
+    XhciLinkRefund(&link);
+    CHECK_EQ(link.WarmResets, 0, "never below 0");
+    XhciLinkRefund(NULL);
+
+    XhciLinkInit(&link);
+    link.WarmResets = XHCI_LINK_MAX_WARM_RESETS - 1;
+    (VOID)XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_INACTIVE, 0),
+                           XHCI_ENUM_BOUND, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_WARM_RESET, "the budget's last");
+    XhciLinkRefund(&link);
+    CHECK_EQ(XhciLinkDecide(&link, portsc(XHCI_PLS_INACTIVE, 0),
+                            XHCI_LINK_WANT_RESET, &act),
+             XHCI_LINK_ACT_WARM_RESET,
+             "the restore's own reset still allowed after the refund");
+    CHECK_EQ(link.GaveUp, 0, "not given up");
+
+    XhciLinkInit(&link);
+    link.WarmResets = XHCI_LINK_MAX_WARM_RESETS;
+    (VOID)XhciLinkPortFeed(&link, 1, portsc(XHCI_PLS_INACTIVE, 0),
+                           XHCI_ENUM_BOUND, &act);
+    CHECK_EQ(act.Kind, XHCI_LINK_ACT_GIVE_UP, "spent: given up");
+    CHECK_EQ(link.GaveUp, 1, "the give-up recorded");
+}
+
 int main(void)
 {
+    test_refund();
     test_stuck_polling();
     test_classify();
     test_service();
