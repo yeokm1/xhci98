@@ -95,6 +95,13 @@ ntoskrnl.exe!IoCreateSymbolicLink          all    required  nt52-amd64-export; t
 ntoskrnl.exe!IoDeleteSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoRegisterDeviceInterface     all    required  nt52-amd64-export; twin of the x86 row
 
+# --- the ring interrupt (cm_rirqos.c, design record 21 section 4.5.8) ---
+ntoskrnl.exe!IoConnectInterrupt            all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!IoDisconnectInterrupt         all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeInitializeDpc               all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeInsertQueueDpc              all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeSynchronizeExecution        all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag.

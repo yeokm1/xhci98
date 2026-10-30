@@ -2196,7 +2196,7 @@ present at power-on (SeaBIOS numbered the dock; a device without its
 own switch then lands on the chain port's own secondary bus), and a
 hot-plugged dock only behind a tunnel port with a reservation.
 
-## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30, partial)
+## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30)
 
 **The design.** Record 34 section 3.9 (revision 6), reviewed and revised
 before and with the code: chain ports walked below every active member
@@ -2603,6 +2603,290 @@ under Verifier: the stop in `storport.sys` came first.
 
 ### Owed
 
+8.1 x64 for both halves.
+
+### 45.13 (continued): 2000 read, and the chained unit's own `Removable` (2026-10-30)
+
+**2000** (the reading the owner's question waited for). A 2000 SP4
+golden made like XP's: an overlay of the q35 2000 base (Standard PC
+HAL), the launcher's `-Usb4 tb3ar`, nothing attached; the release x86
+package of `1a2a72ca` installed with `/thunderbolt /stor98` (exit 0,
+the Found New Hardware wizards answered), a cold second boot
+(`XHCIINST /devices`: the Alpine Ridge controller, tunnel port
+`02:01.0`); kept read-only (`cd1b7ecf...`). Each leg a child overlay
+with the dock `enc0` at power-on (`preboot=on`, `downstream-ports=1`,
+`chain-power-controller=off`); the dock's first boot answered its
+wizards (Stor98 for the dock's NVMe, E: "ORICO") and was kept as the
+legs' starting state (`dockinst.qcow2`, `947a92b7...`); the chained
+device `usb4-device ... parent=enc0,port=1` plugged by QMP at the
+desktop. Evidence: `E:\xhci98-vm\p45\w45-chain\w2k\`
+(`serial-<leg>.log`, `debugcon-w2b.log`, `trace-<leg>.log`,
+`infopci-w0c*.txt`, `w0c-serial.txt`, screenshots).
+
+| Leg | Build | Read |
+|---|---|---|
+| w0b, w0c | the golden's release `xhcicm.sys` (`d012fccf...`, no chain action) | the child approved at depth 2; 2000 found the chained NVMe itself (a Found New Hardware wizard for it, Stor98 bound); the wizard's restart hung in real mode (EIP `0d4f`, the base's known warm-restart hang), so a cold start (w0c); the child plugged again: Stor98 at **Code 10**; unplugged and plugged again: gone, then Code 10 again; the dock unplugged with the child attached: every devnode of the dock gone, no hang; shutdown in 6 s |
+| w2b | the qemu flavour at `38ac4e18`'s source (`77f34053...`, with the chain action), swapped in, a cold start | the chain port's `BusRelations` reported the new PDO (`cm.chain.rel=01040508`, one new, the child filter attached) before the action's `cm.chain.invalidate=01020508`; Code 10 as in w0c; the child's unplug: `cm.chain.invalidate=02020508`, gone; the dock's unplug with the child: all gone, no hang; shutdown in 5 s |
+
+**Why Code 10 on 2000.** The chained NVMe's requirement list
+(`BasicConfigVector`, read from the registry) holds its memory BAR and no
+interrupt, where the dock's NVMe, numbered by SeaBIOS, has IRQ 10;
+`info pci`: the chained function's IRQ 0, its BAR unmapped. 2000 on the
+Standard PC HAL gives a hot-added function no interrupt, and the child
+filter's interrupt step (record 21 section 6.2.1, task 44.53) declined
+it: `cm.chain.irq.no=00020700`, why 2, the tunnel port's Interrupt Pin
+not 1 to 4 (the emulated Thunderbolt 3 tunnel port `02:01.0` carries no
+pin; `info pci` prints none). The chained function would also arrive on
+another pin of the tunnel port (the chain port is device 1 on the dock's
+internal bus: pin A becomes B), record 21 section 6.2.1's other
+documented limit. So on 2000's Standard PC HAL a chained drive behind the
+emulated dock is found and does not start; that is the platform's
+interrupt routing, not the chain's discovery. Reported to the
+coordinator (the emulator's tunnel port has no pin; on real hardware the
+other-pin limit applies to a chain port at an odd device number).
+
+**What 2000 shows.** As on XP (x0, x1): the member's invalidation alone
+reached the chain port's bus; the action's call came after the PDO was
+already reported. So on all three systems read (7, XP, 2000) the chain
+action is a second request. The owner kept it (below).
+
+**The chained unit's `Removable`** (record 34 section 3.10, reviewed and
+revised before and with the code): the chain port is classified by its
+own child filter at each of its `BusRelations` answers, before the answer
+goes up (`cmChainClassify`, `XhciTbtChainPortTest`); its children get
+marks entries with that chain port as their landing (`CmMarksBury`,
+`CmMarksBuryLandings`, `CmMarksMake`, two phases); the `Removable` gate
+compares a chained unit's bus with its chain port's secondary bus; a
+chained entry is never confirmed as a member eject
+(`CM_MK_CONF_CHAINED`); the answer carries `CM_QM_EF_CHAINED` and the
+landing at offset 40.
+
+The code is `0751ad83` (with the host vectors: `test_tbt_topo` 715
+checks, `test_cm_marks` 221, 0 failures each); `b83a5d34` adds three
+fixes from the integration review of 45.35's isolation interface (the
+first reference taken with the binding under the registration list's
+lock, every later one and the release under it; the bindings to a
+domain voided when it is delisted; a comment).
+
+**Builds.** The gated x86 build of `0751ad83` and of `b83a5d34`
+(`scripts\build-driver.cmd all`): "BUILD + GATES PASSED (debug release
+qemu)" each (`E:\xhci98-scratch\p45-w45-chain\gb-x86-0751ad83.log`,
+`gb-x86.log`); the gated amd64 build of `b83a5d34` (`all -amd64`):
+the same ("BUILD + GATES PASSED (debug release qemu)",
+`gb-amd64.log`); the host suite: "Host tests PASSED" (`hosttests.log`). The release `xhcicm.sys` of `b83a5d34` `a101d05f...`,
+`xhci98.sys` `cc189335...`.
+
+### The legs of section 3.10 (2026-10-30)
+
+| Leg | System, build | Read | Verdict |
+|---|---|---|---|
+| x3, x3b | XP, the XP golden, a qemu-flavour diagnostic build of the uncommitted section 3.10 code (`95857dde...`), swapped in | `cm.chain.class=00070508` (the chain port `05:01.0`, secondary bus 7); the chained Stor98 answered `Removable` (`cm.chain.removable=21070508`) and listed on its own in Safely Remove Hardware ("at PCI bus 7"); a file written to it, the unit stopped from the applet ("Safe To Remove Hardware"), the child unplugged and plugged again: the file there (`fc`: no differences), the dock's drive untouched. In x3, the session in which the chained device was installed for the first time, the applet did not list it | diagnostic |
+| x4 | XP, the qemu flavour of `b83a5d34` | the chained device plugged for the first time (never seen): `cm.chain.removable=21070508` at that plug | diagnostic |
+| x5 | XP, the gated release `xhcicm.sys` and `xhci98.sys` of `b83a5d34` swapped into the golden | the dock's first boot (Stor98 by its wizard), a restart, the chained device plugged for the first time: Stor98 by its wizard; Safely Remove Hardware lists "Stor98 Storage Controller for NVMe SSDs" on its own ("at PCI bus 7, device 0, function 0") beside the dock's bridge; a file copied to F: and compared; the unit stopped from the applet (its volume F: and its disk in the confirmation, "Safe To Remove Hardware"); the child unplugged and plugged again: the file there (`fc`: no differences), D: (the dock's drive) there; the dock unplugged with the child attached: no hang; shutdown in 17 s | pass (section 9.3 clause 5 on NT; the lost write of x1 and x2 avoided by the eject) |
+| w3, w3b | 2000, the dock-installed state, the gated release of `b83a5d34` swapped in, a cold start; emulator `usb4-emu` `b84be72` (`qemu-system-x86_64.exe` `7ff0d230...`: the Thunderbolt 3 switch ports report Interrupt Pin A, the tunnel port padded) | `info pci`: the tunnel port `02:01.0` IRQ 10, pin A, buses 4 to 40h; the chained device plugged: Stor98 by its wizard ("will not work until you restart"), the chained NVMe at Code 10, IRQ 0, BAR unmapped; the "Unplug or Eject Hardware" applet lists the chained Stor98 on its own; the child unplugged, then the dock: nothing left behind the tunnel port, no hang; shutdown in 7 s | the listing: pass. The interrupt: with the tunnel port's pin now present, the chained function still gets none, as its interrupt arrives on pin B of the tunnel port (the chain port is device 1 of the dock's internal bus; record 21 section 6.2.1's other-pin limit) |
+
+Evidence: `E:\xhci98-vm\p45\w45-chain\xp\` (`serial-x3*.log`,
+`debugcon-x3*.log`, `debugcon-x4.log`, `serial-x5.log`, `x3b-*.png`,
+`x5-*.png`) and `w2k\` (`serial-w3b.log`, `infopci-w3b.txt`,
+`w3b-*.png`).
+
+**The owner's decisions** (2026-10-30): the chain action is kept (Q1
+(a)); the correspondence learning, the per-tunnel ownership, names and
+generations and the status record's kind 3 entries move to 45.15, Part
+3, where a chained tunnel of the software connection manager gives them
+a reader (Q2 (a)); a chained drive on 2000's Standard PC HAL that gets no
+interrupt is a release-notes limitation, and the emulator's Thunderbolt 3
+tunnel port gets an Interrupt Pin (`usb4-emu` `b84be72`, read in w3b
+above) (Q3 (a)).
+
+**45.13 is done** with that: the chain action (section 3.9) and the
+chained unit's own `Removable` (section 3.10). What was read: on 7 x86
+the discovery and removal of a chained device, on the release of
+`1a2a72ca` before either action (r2); on XP the discovery without and
+with the chain action (x0 to x2) and, on the gated release of
+`b83a5d34`, the chained unit listed, stopped from the applet and a file
+kept through the unplug (x5); on 2000 the discovery without and with the
+action (w0b to w2b) and, on the gated release, the chained unit listed
+on its own (w3b; it does not start there, so no stop was read). The
+applet's stop on 2000 and 7 is not read. 45.17's PCI-side clause 5 (safe
+removal of the chained unit from the system's applet) is read on XP;
+from XHCITR it waits for record 25's chained unit (leg T.11).
+
 The unload half on 8.1 x64 under Verifier, behind the stop in
 `storport.sys` (which request, and whether it is the filter's doing);
 the same uninstall on 8.1 x86 was read with no stop.
+
+## 45.22 ring interrupts for the connection manager: the code (2026-10-30)
+
+The owner's answers to record 21 section 4.5.10 (2026-10-29: Q1 (a) coded
+in this release behind `XhciCmRingInterrupt` 0, Q2 (b) 0 everywhere until a
+hardware reading, Q3 (a) the line first, Q4 (a) the idle period unchanged;
+98 SE and ME only after their route is read) coded on branch `w45-irq2`
+from `2a86c41d`. Development host A.
+
+### What was coded
+
+Record 21 section 4.5 for both profiles, as section 4.5.11 (new) records
+where the code settles what the design left open; record 22 section 5.4
+and section 1.3's two lines, record 21's section 8 table and decision D3's
+row brought up to date. Files: `src\cm\cm_rirq.c` and `.h` (the pure
+half), `cm_rirqos.c` and `.h` (the service routine, its DPC, the
+connection, the arm and mask under `KeSynchronizeExecution`, the self-test
+through Interrupt Status Set, the watchdog, the orders down and up),
+`cm_thr.c` (the wait to the maintenance deadline, the `CM_WORK_RING` wake,
+`CmCfgIntxRetire`), `tbt_ring.c` (IE in RX descriptors, `TbtRingRxPending`),
+`tbt_icm.c` `TbtIcmRingWake`, `tbt_u4cm.c` `TbtU4RingWake`, `tbt_regs.h`
+(ISC, ISS, IMS, ITR[0], bit 17), `cm_nhi.c` and `cm_power.c` (the intent
+before every ring start, the order down first in every stop and
+quiescence), `cm.h` (`CM_WORK_RING`, the field), `cm_vals.c`, `cm_reg.c`
+(`XhciCmRingInterrupt`, no INF writes it; the qemu flavour's
+`XhciCmQemuIrqDead`), the five interrupt pairs in both `xhcicm` allowlists
+(`xhci98.sys`'s rows, evidence verbatim), `docs\using\tuning.md`'s row.
+
+Host vectors: `test_cm_rirq` (new: the cause for every Total Paths, the
+routine's outcomes, the storm count, the mask by contract and its proof,
+the watchdog's suspicion and slower storm, the order down's end and latch,
+the waits across the clock's wrap), `test_tbt_ring` (IE from the initial
+post, kept by a repost, dropped after the retirement; the peek takes
+nothing), `test_u4cm` and `test_tbt_icm` `test_ring_wake` (a plug served
+by one wake with no tick between; the wakes end; a check already owed is
+the tick's), `test_cm` (the value's rule).
+
+Commits: `d311d97b` (the code), `1098f0f6` (reviewed and revised: a
+retained interrupt's geometry published only before the connection or
+under the interrupt's lock; an armed interrupt taken down before every
+ring start, since a full recovery can restart the rings within one pass;
+the maintenance deadline the last pass plus the period in force),
+`addee4bb` (the wakes' vectors). Reviewed and revised in three areas
+(IRQL and lifetime, the lifecycle, registers and supporting files) until
+nothing material was left.
+
+Builds at `addee4bb`: the x86 gated build `all` passed
+(`out\gated-x86-release.txt`; `xhcicm.sys` release `550c3e18...`, qemu
+`bbb1a272...`), the amd64 gated build `all` passed
+(`out\gated-amd64-release.txt`; `xhcicm.sys` release `88991790...`,
+unsigned as a clone without the key stages it), `src\pfw\build.cmd` once
+before; the host suites passed (`test\run-host-tests.cmd`).
+
+### 98 SE and ME: the NHI's route (record 21 section 4.5.4's reading)
+
+On fresh overlays of the q35 bases, no xHCI98 installed, `bin\asm4242-20261025-2230`
+as the launcher pins it, one vCPU: Device Manager, Computer's View
+Resources (IRQ) and the NHI's own Resources page, read by QMP screendump
+(`E:\xhci98-vm\p45\w45-irq2\r98t`, `r98a`, `rmet`, `rmea`).
+
+| System | Profile | The NHI as Device Manager names it | Allocated | Sharing its IRQ |
+|---|---|---|---|---|
+| 98 SE | `tb3ar` (Alpine Ridge behind its switch, root port `00:08.0`) | "PCI System Peripheral", Code 28 (no driver), basic configuration 0000 | IRQ 10, memory `FE400000-FE43FFFF` and `FE440000-FE440FFF` | the SMBus, the ICH9 AHCI ("PCI Card"), two PCI-to-PCI bridges, one of the two xHCI controllers, an IRQ holder |
+| 98 SE | `asm4242` (the NHI behind the chip's own switch) | "PCI Universal Serial Bus" (class `0C0340`), Code 28 | IRQ 11, memory `FA800000-FA83FFFF` and `FA840000-FA84FFFF` | one PCI-to-PCI bridge and an IRQ holder |
+| ME | `tb3ar` | as on 98 SE | IRQ 10, the same ranges | as on 98 SE |
+| ME | `asm4242` | as on 98 SE | IRQ 11, the same ranges | as on 98 SE |
+
+So on q35 both 98 SE and ME give the NHI an IRQ under both profiles,
+shared and level (PCI). Not read: the configuration space's Interrupt Line
+and Pin, and whether the IRQ is the one the pin raises, which only the
+self-test can say (section 4.5.4). The code connects nothing on 98 SE and
+ME (`cm.irq.9x`); their connection and its first leg stay owed.
+
+### The legs on q35 (2026-10-30)
+
+Vehicle: fresh overlays of `E:\xhci98-vm\q35-bases\w7x86` and `xp`, the
+launcher's pinned emulator (`bin\asm4242-20261025-2230`), TCG, 2 vCPUs,
+with `-msg timestamp=on` and the trace events `usb4_host_rx_done`,
+`usb4_host_frame_decode`, `usb4_host_mmio_write` and `usb4_host_irq_intx`
+(host clock). Install set: `releases\3.3.0.0`'s `INSTALL.BAT` and tools with
+its `release-x86` replaced by this tree's `make-package.ps1 -Flavor release
+-Arch x86` output unchanged (`xhcicm.sys` `550c3e18...`, `xhci98.sys`
+`4022c19a...`; the owner, 2026-10-30: these legs count), `INSTALL.BAT
+/console /yes /nopause /thunderbolt /stor98`, exit 3, restart. The qemu
+phases replace `xhcicm.sys` alone by `make-package.ps1 -Flavor qemu`'s
+(`bbb1a272...`), whose log reaches the host through port `0xE9`, each
+line stamped on the host clock as it lands. Values set in `Services\USB`
+(`reg add`), each followed by a restart. Evidence:
+`E:\xhci98-vm\p45\w45-irq2\w7t` and `wxa` (`serial-*.log`: the XHCITR
+reports and `typeperf`; `cpu.txt`; `plugs-*.txt`; `dbg-*.txt`;
+`trace-*.log`; `seq.log`), the scripts in `kit\`.
+
+**The driver loaded is this build** on both: `cm.irq.value` and
+`cm.irq.resource` in each report (7 x86, Alpine Ridge under the ICM
+client: a line at IRQL 10, shared, level; XP, the ASM4242 under the USB4
+profile: IRQL 5, shared, level).
+
+**Value 1, 7 x86 `tb3ar`**: `cm.irq.connected`, `cm.irq.armed=00001000`
+(bit 12 of 36 causes: RX ring 0 for Total Paths 12), `cm.irq.selftest`
+passed (10 ms at the first start, 203 ms on a slower boot); the drive came
+up behind the tunnel as with value 0.
+
+**Hot-plug latency, 7 x86 `tb3ar`, ten plugs of the TB3 enclosure each**
+(QMP `device_add` at 70 s intervals, `device_del` 40 s after each; record
+21 section 4.5.9's two figures):
+
+| Value | The plug's own event frame consumed after the plug (`RX0.PROD_CONS` naming its descriptor) | Connection done (`cm.action.tunnel-up`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 170 ms, max 201 ms | median 206 ms, max 225 ms |
+| 1 (the interrupt) | median 2.0 ms, max 3.3 ms | median 25 ms, max 38 ms |
+
+Each plug's own frame is the first frame of its type (`ICM_EVENT` here,
+`HOTPLUG` below) the emulator wrote from 5 ms before the plug's stamp on
+(the QMP script's clock and QEMU's trace clock differ by up to a
+millisecond) to 10 s after it, and its descriptor; every one of the
+twenty plugs matched its own (`kit\lat.py`). The emulator wrote it 0 to
+2 ms after the plug.
+
+**The same, XP `asm4242` under the USB4 profile, ten plugs of the ORICO
+enclosure each** (value 1: `cm.irq.connected`, `cm.irq.armed=00200000`,
+bit 21 of 63 causes for Total Paths 21, `cm.irq.selftest` passed):
+
+| Value | The plug's own hot-plug packet consumed after the plug | Connection done (`u4.action`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 158 ms, max 213 ms | median 2370 ms, max 2554 ms |
+| 1 (the interrupt) | median 4.5 ms, max 6.9 ms | median 2245 ms, max 2359 ms |
+
+Under the USB4 profile the connection is the enumeration of section 6.4,
+about 2.2 s here, so the interrupt's gain (one poll's wait) is a small
+part of it; the wake's port check ran the whole connection (the tick did
+not have to), and no wake fed another (`TbtU4RingWake`).
+
+**Idle cost, 7 x86 `tb3ar`, release flavour, ten minutes each**: the QEMU
+process's host CPU, and the guest's `% Processor Time` and
+`Interrupts/sec` (`typeperf`, 10 s samples).
+
+| Configuration | Nothing attached: host / guest / interrupts per s | Drive attached, idle |
+|---|---|---|
+| value 0, period 200 ms | 65.2 % / 26.2 % / 152 | 65.0 % / 27.5 % / 140 |
+| value 1, period 200 ms | 63.1 % / 25.7 % / 135 | 62.9 % / 25.1 % / 134 |
+| value 0, period 50 ms | 67.2 % / 26.9 % / 148 | 60.2 % / 24.3 % / 134 |
+
+Within the noise of a TCG guest sharing the host (other workers' guests
+ran beside it): neither the interrupt nor the 50 ms period shows an idle
+cost there, on this guest and profile only. XP `asm4242`, value 0: 102.6 % / 31.1 % / 130 with nothing
+attached, 102.9 % / 31.5 % / 129 with the drive.
+
+**A lost interrupt, 7 x86 `tb3ar`, qemu flavour, value 1,
+`XhciCmQemuIrqDead` 12**: the line died after its twelfth claim during
+the second plug. The plugs after that were still served, by the
+maintenance pass (connection done 160 ms after the fourth plug, against
+25 to 49 ms before), and the drive came and went each time: a lost
+interrupt costs one idle period, today's latency. The latch to polling
+for the activation (two suspected misses in a row, the self-test,
+`cm.irq.lost`) was not reached: the ICM client's events are single frames
+70 s apart here, so no two maintenance passes in a row found an unannounced
+frame. That path rests on `test_cm_rirq`'s watchdog vectors.
+
+**Not read on a guest**: the storm stop (no emulator storm), the
+retained interrupt (no mask that does not latch), a D3 and resume with
+value 1 (no sleep leg), Windows 2000, Vista, 8 to 10 and the x64 build.
+
+### What is left
+
+The task stays unticked: its line connects the interrupt on 98 SE and ME
+too once their route is read, and that connection (and its first leg,
+the self-test on those systems) is owed - the route is read above. Also
+owed: the latch to polling read on a guest (it needs an `usb4-emu` INTx
+drop on `usb4-host`, or a host with denser events); section 4.5.9's
+no-interrupt leg (`usb4-host` `intx=off`, `cm.irq.none`) and shared-line
+leg (the NHI on another device's line, traffic on that device); the USB4
+profile's idle cost at value 1 and at a 50 ms period (XP was read at
+value 0 alone); the readings of the "Not read" list; and the hardware
+reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
+default stays 0 (owner, Q2).

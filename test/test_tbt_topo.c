@@ -2890,6 +2890,171 @@ static VOID test_chain_owed(VOID)
     CHECK(XhciTbtChainOwe(NULL, n, 5, 9, 0, 0) == n, "owe no table");
 }
 
+/* Record 34 section 3.10: the chained unit's parent, by the stricter test. */
+static VOID test_chain_port_test(VOID)
+{
+    MODEL_FN *f;
+    ULONG sec;
+    ULONG r;
+    ULONG mb = XHCI_TBT_BDF(2, 1, 0);
+    ULONG cp = XHCI_TBT_BDF(5, 1, 0);
+
+    /* The emulator's chain port, with and without a device behind it. */
+    chdock(0);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_YES && sec == 7, "cpt dock");
+    CHECK(model.Writes == 0, "cpt reads only");
+    chdock(1);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_YES && sec == 7, "cpt dock chained");
+
+    /* Numbered bridges that are no chain port: the fixed downstream port,
+     * the upstream port; and what is no bridge in the range: the NVMe
+     * (type 0), the member itself (outside its own range). */
+    sec = 99;
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(5, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT && sec == 0, "cpt fixed port");
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(4, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT, "cpt upstream port");
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(6, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_OUTSIDE, "cpt type 0");
+    r = XhciTbtChainPortTest(&io, mb, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_OUTSIDE, "cpt the member");
+
+    /* An unnumbered upstream or fixed port is not NOT (an ancestor read so
+     * withholds its chain port). */
+    f = mfind(XHCI_TBT_BDF(4, 0, 0));
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00000004UL);
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(4, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt upstream unnumbered");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00080504UL);
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(4, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt upstream past member");
+    f = mfind(XHCI_TBT_BDF(5, 0, 0));
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00050505UL);
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(5, 0, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt fixed unnumbered");
+    r = XhciTbtChainPortTest(&io, XHCI_TBT_BDF(5, 9, 0), mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt absent");
+
+    /* A root-port type with a slot; Slot Implemented clear; Hot-Plug
+     * Capable clear; no PCI Express capability. */
+    chdock(0);
+    f = mfind(cp);
+    put16(f, 0x40 + 2, (CH_ROOT << 4) | 0x0100UL | 2UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT, "cpt root type");
+    chdock(0);
+    f = mfind(cp);
+    put16(f, 0x40 + 2, (CH_DOWN << 4) | 2UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT, "cpt no slot");
+    chdock(0);
+    f = mfind(cp);
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, 0);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT, "cpt no hpc");
+    chdock(0);
+    f = mfind(cp);
+    put16(f, XHCI_TBT_CFG_STATUS + 2, 0);
+    f->Cfg[XHCI_TBT_CFG_CAPPTR] = 0;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_NOT, "cpt no pcie cap");
+
+    /* The bus numbers: unnumbered; secondary at its own bus; at the
+     * member's secondary; subordinate below secondary; past the member's
+     * subordinate. */
+    chdock(0);
+    f = mfind(cp);
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00000005UL);
+    sec = 99;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED && sec == 0, "cpt unnumbered");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00050505UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt sec at own bus");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00070405UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt sec at member sec");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00060705UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt sub below sec");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00080705UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_UNNUMBERED, "cpt past member sub");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00070705UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_YES && sec == 7, "cpt restored");
+
+    /* The port on a bus outside the member's range. */
+    chdock(0);
+    f = mfind(mb);
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00040402UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_OUTSIDE, "cpt outside member");
+
+    /* The member: unnumbered, unread, absent (all ones). */
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00000002UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_MEMBER, "cpt member unnumbered");
+    put32(f, XHCI_TBT_CFG_BUSES, 0x00070402UL);
+    model.FailBdf = mb;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_MEMBER, "cpt member unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    chdock(0);
+    mfind(mb)->Bdf = XHCI_TBT_BDF(0x30, 0, 0);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_MEMBER, "cpt member all ones");
+
+    /* The port: a failed read at each step, Retry Status. */
+    chdock(0);
+    model.FailBdf = cp;
+    model.FailOffset = XHCI_TBT_CFG_ID;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt id unread");
+    model.FailOffset = XHCI_TBT_CFG_HEADER;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt header unread");
+    model.FailOffset = XHCI_TBT_CFG_BUSES;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt buses unread");
+    model.FailOffset = 0x40;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt cap walk failed");
+    model.FailOffset = 0x40 + XHCI_TBT_PCIE_SLOTCAP;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt slotcap unread");
+    model.FailBdf = XHCI_TBT_NO_BDF;
+    model.FailOffset = XHCI_TBT_NO_BDF;
+    f = mfind(cp);
+    put16(f, XHCI_TBT_CFG_ID, 0x0001UL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt retry status");
+
+    /* A dword of the capability reading all ones through an access that
+     * succeeds (the function stopped answering). */
+    chdock(0);
+    f = mfind(cp);
+    put32(f, 0x40 + XHCI_TBT_PCIE_SLOTCAP, 0xFFFFFFFFUL);
+    sec = 99;
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED && sec == 0, "cpt slotcap all ones");
+    chdock(0);
+    f = mfind(cp);
+    put32(f, 0x40 + XHCI_TBT_PCIE_CAPS, 0xFFFFFFFFUL);
+    r = XhciTbtChainPortTest(&io, cp, mb, &sec);
+    CHECK(r == XHCI_TBT_CPT_FAILED, "cpt caps all ones");
+
+    /* Bad parameters. */
+    CHECK(XhciTbtChainPortTest(NULL, cp, mb, &sec) == XHCI_TBT_CPT_FAILED,
+          "cpt no io");
+    CHECK(XhciTbtChainPortTest(&io, cp, mb, NULL) == XHCI_TBT_CPT_FAILED,
+          "cpt no out");
+    CHECK(XhciTbtChainPortTest(&io, 0x10000UL, mb, &sec) ==
+          XHCI_TBT_CPT_FAILED, "cpt bad bdf");
+}
+
 int main(void)
 {
     test_decoders();
@@ -2911,6 +3076,7 @@ int main(void)
     test_learn_window();
     test_chain_ports();
     test_chain_owed();
+    test_chain_port_test();
     printf("test_tbt_topo: %d checks, %d failures\n", checks, failures);
     return failures;
 }
