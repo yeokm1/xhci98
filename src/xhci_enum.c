@@ -550,6 +550,11 @@ ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
     if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
         return XHCI_RKEEP_WHY_NOT_STARTED;
     }
+    /* Every other test - storage among them - and the restore's
+     * identity check read configuration index 0. */
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_RKEEP_WHY_OTHER_CFG;
+    }
     if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
         return XHCI_RKEEP_WHY_SUSPENDED;
     }
@@ -586,6 +591,9 @@ ULONG XhciEnumLinkKeep(ULONG on, ULONG flags, ULONG recent)
     }
     if ((flags & XHCI_RKEEP_F_HUB) != 0) {
         return XHCI_LKEEP_WHY_HUB;
+    }
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_LKEEP_WHY_OTHER_CFG;
     }
     if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
         return XHCI_LKEEP_WHY_NOT_STARTED;

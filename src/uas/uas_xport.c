@@ -1854,6 +1854,12 @@ VOID UasEngineStart(PUAS_FDO fdo)
     fdo->Holding = FALSE;
     fdo->HoldCheck = FALSE;
     fdo->Sealed = FALSE;
+    /* And the epoch the last wake check verified: the bus's epoch is its
+     * device record's, which a restart may have replaced (a dormant PDO
+     * revived on a fresh record counts from 0 again), so the first keep
+     * after a start is always checked. No wake check runs here: the stop
+     * waited out its rundown reference. */
+    fdo->VerifiedEpoch = 0;
     fdo->TimerStop = FALSE;
     KeClearEvent(&fdo->TimerDone);
     fdo->Started = TRUE;
@@ -2929,6 +2935,7 @@ static VOID uasWakeWorker(PVOID context)
     ULONG spent;
     BOOLEAN act;
     BOOLEAN cycle;
+    BOOLEAN withdrawn;
     KIRQL irql;
 
     fdo = (PUAS_FDO)context;
@@ -2945,7 +2952,23 @@ static VOID uasWakeWorker(PVOID context)
 
     uasDeadlineStart(&deadline, UAS_POWER_PHASE_MS);
     UasZero(&rs, sizeof(rs));
-    if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
+    /* The declaration ends with the hold it was made under, and is
+     * withdrawn before anything is decided: one the bus never used - a
+     * sleep that ended with no controller suspend, so no resume voided
+     * it - would otherwise let a later re-initialization with no sleep
+     * phase of this driver keep the drive with no hold and no check. A
+     * keep pass that took it before this withdrawal is still to be seen
+     * by the queries below (pending until its end, the epoch advanced
+     * after); a refused withdrawal fails the check. */
+    withdrawn = TRUE;
+    if (fdo->BusKnown && fdo->DeclareTried) {
+        withdrawn = (BOOLEAN)NT_SUCCESS(
+            uasResumeRequest(fdo, XHCI98_RESUME_OP_WITHDRAW,
+                             fdo->Episode & 0x00FFFFFFUL, &rs));
+    }
+    if (!withdrawn) {
+        decision = UAS_WAKE_FAIL;
+    } else if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
         decision = UasWakeDecide(fdo->BusKnown, fdo->WithdrawOk,
                                  fdo->DeclareTried, 0, 0, 0, 0, 0);
     } else {

@@ -1350,6 +1350,8 @@ static void test_link_keep(void)
              XHCI_LKEEP_WHY_FAULTED, "faulted dropped");
     CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_HUB, 0),
              XHCI_LKEEP_WHY_HUB, "a hub dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_OTHER_CFG, 0),
+             XHCI_LKEEP_WHY_OTHER_CFG, "another configuration dropped");
     CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_STARTED, 0),
              XHCI_LKEEP_WHY_NOT_STARTED, "a PDO not started dropped");
     CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_SUSPENDED, 0),
@@ -1409,6 +1411,13 @@ static void test_resume_keep(void)
              XHCI_RKEEP_WHY_SUSPENDED, "a suspended device dropped");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_ISOCH),
              XHCI_RKEEP_WHY_ISOCH, "isochronous dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_OTHER_CFG),
+             XHCI_RKEEP_WHY_OTHER_CFG,
+             "another configuration than index 0 dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_OTHER_CFG |
+                                       XHCI_RKEEP_F_SUSPENDED),
+             XHCI_RKEEP_WHY_OTHER_CFG,
+             "another configuration: the first reason after the PDOs");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_BUSY),
              XHCI_RKEEP_KEEP, "a HID with a poll outstanding kept");
     CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |

@@ -73,9 +73,12 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
  * the PDO, so this call is the device's LowerFilters registration, made
  * before the PCI driver's FDO - and stays the bridge filter when the PCI
  * driver's FDO is above it (the filter INF's UpperFilters). Every other
- * role is returned as it came.
+ * role is returned as it came, and every role when `byPlace` is 0: the
+ * placement is Windows 2000 to XP x64's alone (record 33 sections 4.4 and
+ * 7.8: NT 6.x untouched, the lower and the upper call one bridge filter,
+ * decision M15).
  */
-ULONG CmRolePlace(ULONG role, ULONG pciAbove);
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace);
 
 /*
  * The NHI profiles (record 21 section 1.4, and the coverage plan of the
