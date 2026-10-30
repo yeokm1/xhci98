@@ -121,9 +121,19 @@ function Get-PackagerSelfTestDigest {
     $ErrorActionPreference = "Continue"
     $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
-    $listed = & git -C $root ls-files -z --cached --others --exclude-standard 2>$null
+    $listed = & git -C $root ls-files -z --cached 2>$null
     if ($LASTEXITCODE -ne 0 -or $null -eq $listed) { return $null }
     $names = @((($listed | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') })
+    # Untracked files git does not ignore, but not a compiler's or linker's
+    # intermediates: a gated build's parallel steps make and delete some
+    # (XHCITR's and XHCIPERF's .res beside their sources) while this suite
+    # runs, which would move the digest between its start and its end, and
+    # no packager script reads one.
+    $others = & git -C $root ls-files -z --others --exclude-standard 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $transient = @(".res", ".obj", ".pdb", ".ilk", ".exp", ".idb", ".pch", ".tmp")
+    $names += @((($others | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') } |
+                Where-Object { $transient -notcontains [System.IO.Path]::GetExtension($_).ToLowerInvariant() })
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
         $rows = @()
@@ -6595,6 +6605,7 @@ try {
         @{ Why = "a tracked script changed";        File = "scripts\package\make-package.ps1"; Moves = $true },
         @{ Why = "a tracked INF changed";            File = "src\xhci98.inf";                   Moves = $true },
         @{ Why = "an untracked file not ignored";    File = "docs\new.md";                      Moves = $true },
+        @{ Why = "an untracked compiler intermediate"; File = "xhcitr\xhcitr.res";              Moves = $false },
         @{ Why = "the built XHCIPFW.VXD";            File = "src\pfw\obj\XHCIPFW.VXD";          Moves = $true },
         @{ Why = "a built driver appeared";          File = "out\free\x86\stor98.sys";          Moves = $true },
         @{ Why = "a built sys under src appeared";   File = "src\objfre\i386\xhci98.sys";       Moves = $true },

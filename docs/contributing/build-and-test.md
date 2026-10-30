@@ -3644,7 +3644,11 @@ cases that drive them read across the whole tree. The digest
 (`Get-PackagerSelfTestDigest`) is one SHA-256 over:
 
 - every file `git ls-files --cached --others --exclude-standard` lists -
-  each tracked file, and each untracked one that is not ignored - by its
+  each tracked file, and each untracked one that is not ignored but a
+  compiler's or linker's intermediate (`.res`, `.obj`, `.pdb` and the
+  like: a gated build's parallel steps make and delete XHCITR's and
+  XHCIPERF's `.res` beside their sources while this suite runs, which
+  read 2026-10-30 kept the end's digest from matching) - by its
   path and content, a tracked file that is gone as absent. That covers the
   packager scripts, `package-common.ps1`, `common.ps1` and the harness,
   the test fixtures' sources, the INFs and `txtsetup*.oem`, the installer
