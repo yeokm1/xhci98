@@ -6999,6 +6999,167 @@ drive back to `stornvme`, which is 43.24's.
    choice of `stornvme` or a vendor's driver stands. The alternative is to
    switch it at every arrival.
 
+### 7.6 A hot-added xHCI98 controller left waiting for a restart (task 45.47, 2026-10-30; owner's option B)
+
+#### 7.6.1 The reading
+
+A Thunderbolt 3 dock carries its own xHCI controller. Plugged into a
+32-bit Windows 7 after the package's install, the dock's switch, NVMe and
+NIC start, and its xHCI (QEMU's `1B36:000D` in the `usb4-emu` dock) stays
+at problem 1 (`CM_PROB_NOT_CONFIGURED`), its BAR never assigned. Read on
+q35 (`run-45.md`, "45.47"; legs `d2` and `d3`), `setupapi.dev.log` for
+that device: the hardware-initiated install selects `xhci98.inf`'s
+`[Xhci.Dev6.NTx86]`, the `DelFiles` of `xhcimsi.sys` fails with error 2
+and is passed over (the 2.3.x file was never there; harmless), the install
+goes on, and then:
+
+    Device required reboot: 'Reboot' in section: [Xhci.Dev6.NTx86].
+    Device restart was skipped becasuse the DI_NEEDRESTART or DI_NEEDREBOOT flag was set.
+    Needs reboot=TRUE
+    [Exit status: SUCCESS]
+
+The section's `Reboot` (owner, 2026-10-09; design record 18 section 15.8;
+the INF gate's `HLPR-REBOOT`) is there for the first controller: the
+section installs `xhcihlpr.sys` as a boot-start service, which only runs
+from the next boot, and `xhci98.sys` on x86 needs it. For a second
+controller on a machine where the first already runs, the helper is
+loaded and the restart is not needed, but the INF cannot say so: Windows
+leaves the new devnode with `DN_NEED_RESTART` and problem 1 until the
+machine restarts. After a restart it starts (leg `d2b`). The devnode reads
+status `0x01802500` (`DN_HAS_PROBLEM`, `DN_NEED_RESTART`), problem 1.
+`CM_Setup_DevNode(dn, CM_SETUP_DEVNODE_READY)` from an administrator
+starts it (leg `d3`): status `0x0180200A` (`DN_DRIVER_LOADED`,
+`DN_STARTED`), no problem, its BAR assigned, its root hub started.
+
+The same holds on 32-bit Vista, whose controller takes the same section.
+2000 and XP never reach it (no `Reboot` on their path, decision H2), and
+the 64-bit file has neither the helper nor the `Reboot`.
+
+#### 7.6.2 What the service does (owner, 2026-10-30: option B)
+
+The INF, its `Reboot` and `HLPR-REBOOT` stay. The mark service starts the
+controller instead of the restart, once, where all of the following hold
+on the poll's walk:
+
+0. **The system**: 32-bit Windows Vista or 7 (NT 6.0 or 6.1), the
+   native 32-bit service (`XHCIMARK.EXE`; it refuses WOW64 already). Only
+   that system's controller section carries the `Reboot`; anywhere else
+   nothing is done.
+1. **An xHCI98 controller installed by this package's Vista and 7
+   section**: a PCI devnode (`PCI\` id) whose service is `xhci98` (the
+   root hub and the hubs are `USB\` devnodes and never qualify), one of
+   whose compatible ids is `PCI\CC_0C0330` (an xHCI), and whose driver
+   key (`CM_DRP_DRIVER`, under `Control\Class`) reads `InfSection`
+   `Xhci.Dev6` and `MatchingDeviceId` `PCI\CC_0C0330` (case
+   insensitive), what this INF's `[XhciModels.NTx86.6.0]` row writes. A
+   devnode bound to `xhci98` by any other INF or section, or whose driver
+   key cannot be read, is left alone.
+1a. **Its install finished**: `CM_DRP_CONFIGFLAGS` read, and none of
+   `CONFIGFLAG_REINSTALL` (0x20), `CONFIGFLAG_FAILEDINSTALL` (0x40) and
+   `CONFIGFLAG_FINISH_INSTALL` (0x400) set: a failed, pending or
+   unfinished install is Windows' to finish, not this service's.
+2. **Waiting for a restart**: its status read, `DN_HAS_PROBLEM` and
+   `DN_NEED_RESTART` (`0x00000100`) set and problem 1
+   (`CM_PROB_NOT_CONFIGURED`). Any other problem (a disabled device, a
+   failed start, problem 47 held for eject) is left alone.
+3. **Behind a verified tunnel port**: an ancestor within eight steps is a
+   member listed by a domain whose answer is verifiable (decision M11) and
+   that lists the member active (`mk_member_active`), as the marks'
+   `mk_br_owner` walk finds it; and the devnode is not protected (the
+   Thunderbolt controller's own functions and the computer's own USB
+   controllers, `inst_tb_protect`). A controller anywhere else is the
+   user's or Windows' business and keeps its restart.
+4. **The helper already running**: the service `xhcihlpr` exists and
+   `QueryServiceStatus` reads `SERVICE_RUNNING`. Without it a start would
+   leave `xhci98.sys` on x86 with no interrupt connection (record 18), so
+   the restart Windows asks for is the right answer; on 64-bit Windows
+   there is no such service and nothing is done (nothing needs doing).
+5. **No installation pending**: `CMP_WaitNoPendingInstallEvents(0)` twice
+   500 ms apart (`mk_no_install_pending`, as the first plug's restart).
+   This is a reading at one moment, which is why everything is read again
+   under the mutex just before the call (below).
+6. **Once per arrival**: the instance id is kept in a small table from
+   the call until the id is no longer in the walk (the dock left), so a
+   controller that does not start is not asked again and again; a re-plug
+   is a new arrival. Only the call spends it: a check that fails, before
+   the call or in the fresh reads, defers to a later poll and spends
+   nothing. The service's `Restart` value 0 (`paramRestart`, under its
+   parameters key, which already turns the first plug's restart off)
+   turns this off too.
+
+The call, under the tools' eject mutex (`Global\XhciinstTbAsk`, as the
+first plug's restart) and at most one per poll, after the marks' writes
+and restarts of the poll (`mk_entries`), and only when none of those ran
+(`mkRestartMade`, `mkBrRewalked`, since their walk no longer shows the
+tree). Under the mutex, the fresh reads, as `mk_restart`'s
+`mk_fresh_same` makes them for a unit: no installation pending (5); the
+owning domain read again (`mk_read_nhi`), still verifiable, with the same
+epoch and marks generation as the sample and the member still active
+(3); the helper's state read again (4); the devnode located afresh by its
+instance id, its parent chain reaching the same member, its status,
+problem, configuration flags and driver key read again (1, 1a, 2). Any
+of them failing or changed: nothing called, nothing spent, the reason
+logged once per arrival, tried again at a later poll. All holding: then
+`CM_Setup_DevNode(dn, CM_SETUP_DEVNODE_READY)` at once, the attempt
+spent, and the poll ends there (`mkRestartMade`: the walk no longer shows
+the tree). Its result and the status read 500 ms later are logged:
+`controller started: <id>`, or `controller not started: <id>: <CONFIGRET
+or status/problem>`. `CM_Setup_DevNode` is looked up at run
+time like every other routine; a Windows without it does nothing.
+
+`CM_SETUP_DEVNODE_READY` rather than `DIF_PROPERTYCHANGE` (the first
+plug's restart): the devnode is not started, so there is no stack to stop
+and nothing to veto; READY is the configuration manager's documented way
+to bring a devnode with a problem back, it shows no UI and needs no device
+information set; and it is the call leg `d3` read.
+
+#### 7.6.3 The pure half and the legs
+
+The decision is a pure function in `mark_core.c`,
+`mk_ctl_ready_why(const MK_CTL_IN *)`: inputs the system's version and
+bitness, the PCI-ness, the service name, the xHCI compatible id, the
+driver key's section and matching id and whether they were read, the
+configuration flags and whether they were read, the status read and its
+result, the problem, the behind-verified and protected answers, the
+helper's state, the install wait's answer, the once-table's answer and
+`paramRestart`; output 0 (start it) or the first reason that holds it
+back, each with a log text. The fresh reads under the mutex run the same
+function on the fresh inputs and add the domain's sameness (epoch,
+generation, member active). Vectors in `-selftest`: each condition alone
+failing, the root hub (`USB\`) never, another INF's section with service
+`xhci98` (`InfSection` other than `Xhci.Dev6`), an unreadable driver key,
+each of the three configuration flags, a controller behind no member, a
+protected one, the helper stopped, absent and unreadable, an install
+pending, a second attempt in the same arrival, problem 1 without
+`DN_NEED_RESTART`, `DN_NEED_RESTART` with another problem, a started
+controller, XP, 8 and a 64-bit system, and the switch off.
+
+Legs (`run-45.md`, "45.47"), 32-bit Windows 7 on q35 with the
+Thunderbolt 3 Alpine Ridge topology and `usb4-emu`'s dock, on this
+branch's gated x86 build:
+
+1. Installed, then the dock hot-added for the first time: its xHCI
+   started without a restart (`R.BAT`: started; the service's log line),
+   its root hub started.
+2. The dock present at the install: everything started after the
+   installer's restart, as before.
+3. The service's `Restart` value 0: the controller stays
+   at problem 1 until a restart, as before.
+4a. The dock unplugged and plugged in again before the service acts
+   (an arrival changed between the sample and the call): the log shows
+   the deferral, and the next arrival is started.
+4. 32-bit Vista, case 1, if a base allows it in the time.
+
+#### 7.6.4 The release notes
+
+Until this ships, the text for the known issue: "Windows Vista and 7,
+32-bit: the first time a Thunderbolt dock with its own USB controller is
+plugged in after the install, that USB controller may show 'This device is
+not configured correctly (Code 1)' until Windows is restarted once. Restart
+Windows; the dock works from then on, also when plugged in again." With
+this change on a machine with the Thunderbolt 3 / USB4 component (and
+safe eject on, which installs the mark service), no restart is needed.
+
 ## 8. Registry values, counters, the log and the snapshot
 
 Values, each `REG_DWORD` unless said, each written by every install path at

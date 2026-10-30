@@ -3469,6 +3469,110 @@ Two things the legs met that are not this task's:
 - A real controller with the checker on: owed to the bench with the
   rest of `3.4.0.0`'s hardware readings.
 
+## 45.47 a hot-added dock's xHCI at Code 1 on Vista and 7 x86 until a restart: `xhcimark` starts it once (2026-10-30)
+
+**The question.** On 7 x86 the first plug of a Thunderbolt 3 dock after
+the install leaves the dock's own xHCI controller at "This device is not
+configured correctly (Code 1)", while every other device of the dock
+starts. A restart starts it.
+
+**The reading (legs d1 to d3).** `setupapi.dev.log` of the dock xHCI's
+install: the `DelFiles` of `xhcimsi.sys` fails with error 2 and is
+handled (the file is absent), and the install goes on; then "Device
+required reboot: 'Reboot' in section: [Xhci.Dev6.NTx86]", "Device restart
+was skipped because DI_NEEDREBOOT", exit success. The devnode is left at
+problem 1 (`CM_PROB_NOT_CONFIGURED`) with `DN_NEED_RESTART`: status
+`0x01802500`. `CM_Setup_DevNode(..., CM_SETUP_DEVNODE_READY)` from an
+administrator's prompt started it: status `0x0180200A`, problem 0, its
+root hub and the tablet behind it started. The cause is the Vista and 7
+section's `Reboot`, which the HLPR-REBOOT gate rule keeps.
+
+**The owner's decision (option B).** The INF's `Reboot` and the gate rule
+stay. `xhcimark` starts such a controller once, and only when it sits
+behind a verified tunnel port, is not configured with a restart pending,
+and `xhcihlpr` is already running. Design record 21 section 7.6 is the
+design; `mark_core.c`'s `mk_ctl_ready_why` is its pure half, with the
+host vectors (every condition refused alone in the record's order), and
+`xhcimark.c`'s `mk_ctl_poll` and `mk_ctl_start` the service's half (the
+fresh reads under the eject mutex before `CM_Setup_DevNode`).
+
+**The legs.** 7 x86 on q35 with the launcher's `-Usb4 tb3ar`, from the
+plain 7 x86 base disk; the emulator `qemu-system-x86_64.exe`
+(`3e7f6bf5b98fde98...`, `usb4-emu` fork `674ff08`, the dock's switch
+ports on interrupt pin A); a TEST x86 release cut of this branch
+(`7ce1ed4d`, `xhci98.sys` md5 `1f49751fb50f...`), installed by
+`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`, every
+unsigned-driver prompt answered "Install this driver software anyway".
+Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`serial-h1.log`,
+`serial-h2.log`, `steps-h1.txt`, `steps-h2.txt`, `rep-h1c.txt`,
+`rep-h2r.txt`).
+
+| Leg | Steps | Read |
+|---|---|---|
+| h1 | install with no dock, exit 0; restart; `xhcimark` running with `Restart 1`, `xhcihlpr` running; the dock plugged by QMP at the desktop | 31 s after the plug: "controller not started yet: ...DEV_000D...: an installation is pending (or cannot be told)"; 32 s later "controller started: ...DEV_000D... (it waited for a restart of Windows; the helper is running)"; the dock xHCI's `ConfigManagerErrorCode` 0, its root hub, "USB Input Device" and "HID-compliant mouse" started; every other device of the dock started. No restart |
+| h2 | the dock present at power-on, install, exit 0 | the dock xHCI at Code 0 already before the restart, and every device of the dock started after it; `XHCIMARK.LOG` holds no "controller started" line: the service started nothing |
+
+Not read: Vista x86 (the same section and the same service path), and a
+leg with the service's `Restart` value 0 (the host vectors refuse it).
+
+## 45.49 a 7 x86 guest hung by a Thunderbolt 3 dock unplugged and plugged in again: the reading (2026-10-30)
+
+**The question.** After the restart that started the dock's xHCI (45.47's
+leg d2), an unplug and a replug of the dock hung the guest. Is it 45.35's
+dock-removal stall on 7, or something new?
+
+**The legs.** 7 x86 on q35, `-Usb4 tb3ar`, the same emulator as 45.47's;
+a disk with the release x86 package of `1a2a72ca` installed, then the
+dock installed and a restart taken, so the dock's xHCI starts at the
+plug. Each leg: the dock plugged by QMP at the desktop, `XHCIINST
+/devices`, the dock unplugged (`device_del`), `XHCIINST /devices` 60 s
+later, the dock plugged again, both processors' registers and the
+guest's interrupt time sampled every 4 s. Evidence:
+`E:\xhci98-vm\p45\w45-emufix\w7\` (`samp-u2*.txt`, `samp-u3.txt`,
+`samp-u4.txt`, `rep-u3u.txt`, `rep-u4u.txt`, `rep-u4r.txt`,
+`steps-u2.txt` to `steps-u4.txt`).
+
+| Leg | USB device on the dock's xHCI | After the unplug | After the replug |
+|---|---|---|---|
+| u2, u3 | the tablet (the emulator's default) | every device of the dock still listed, "not started", but "USB Input Device - HidUsb, **started**" | processor 0 never leaves one loop (sampled for 90 s and more); processor 1 keeps running; the console stops answering |
+| u4 | a USB disk (`usb-drive=`) | "(nothing behind it now)": the dock removed | the dock enumerated again, every device started; no hang |
+
+**Where processor 0 loops (u2).** The stack from the timer DPC:
+`nt` (the timer's DPC) -> `NDIS.SYS` -> the dock NIC's miniport
+(`e1qexpress`, the 82574L) -> `NDIS.SYS` -> `pci.sys` -> the HAL's byte
+read of configuration space (`ECAM 0xb0e00000`, bus 14, offset `0xFF`).
+The miniport (`e1q6032.sys` 11.0.5.21, Windows 7's own; the image
+offsets, the hash and the method in `legal-provenance.md` section 4:
+the registers and the bytes read from the running guest, the bytes
+disassembled, nothing of it executed) looks for a capability (id `0x10`,
+PCI Express) by walking the list: it reads the word at the pointer, compares the low
+byte with the id, takes the high byte as the next pointer, and stops only
+at a next pointer of 0. Configuration space reading all ones gives id
+`0xFF` and next `0xFF` for ever. Nothing decodes bus 14 then: after the
+replug the new dock's switch upstream port (`104C:8232` at bus 4) still
+has secondary bus 0.
+
+**Reading.** It is 45.35's removal stall, on 7. The tablet's interrupt-IN
+read stays on the dock xHCI's ring, the removal of the whole dock waits
+for it, and the dock NIC's devnode stays on, with its watchdog timer. A
+third-party driver's unbounded capability walk over the absent device
+then holds processor 0 at `DISPATCH_LEVEL` for good. A
+USB disk in the tablet's place leaves nothing pending: the removal runs
+and the replug works (u4), as 45.35's control did on XP. 45.35's proof
+(record 17 section 4.13.6: a tunnel path the USB4 connection manager
+closed and read back closed) does not apply here, by the owner's decision
+of 2026-10-29: under the firmware connection manager (the ICM profile,
+record 21) nothing reads the path back. The release notes' limitation
+("Stop a dock before unplugging it when a keyboard, mouse, tablet or
+similar device is on the dock's own USB controller") names 98 SE and ME,
+and 2000 and XP under a firmware connection manager; from 45.47 on, 7 and
+Vista x86 start the dock's xHCI at the first plug too, so the limitation
+reaches them.
+
+**What follows.** The owner's decision: a proof for the firmware
+connection manager's tunnels, or the limitation extended to Vista and 7
+(the stall there ends in a hang, through the dock NIC's driver).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
@@ -3495,3 +3599,12 @@ task's own, checked against its section above before it is used.
   USB Tree's snapshot. It changes nothing the driver does; set
   `XhciCommandCheck` to `0` to turn it off (tuning.md). `INSTALL /debug`
   and `SETUP /debug` are gone with the folders."
+- 45.47 (merged from `w45-dockxhci` at `5aa76156`; the known issue only
+  where the mark service is not installed - no Thunderbolt 3 / USB4
+  component, or safe eject off - since with it `xhcimark` starts the
+  controller and no restart is needed (record 21 section 7.6.4); the Vista
+  leg is still owed): "Windows Vista and 7, 32-bit: the first time a
+  Thunderbolt dock with its own USB controller is plugged in after the
+  install, that USB controller may show 'This device is not configured
+  correctly (Code 1)' until Windows is restarted once. Restart Windows;
+  the dock works from then on, also when plugged in again."
