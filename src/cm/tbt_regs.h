@@ -170,9 +170,20 @@
 #define TBT_HI_IMC                  0x38208UL   /* REG_RING_INTERRUPT_MASK_CLEAR_BASE */
 #define TBT_HI_IMR_DWORDS(paths)    ((3UL * (ULONG)(paths) + 31UL) / 32UL)
 /* Interrupt Status, Spec 12.6.3.4.1: read-to-clear unless auto-clear is
- * disabled, so never read by this driver (ICM 2.1 notes the capture tool
- * skipped it for the same reason). */
+ * disabled, so read only by the ring interrupt's service routine, its arm
+ * and its retirement, every DW at once (cm_rirqos.c; record 21 section
+ * 4.5.2), never while polling (ICM 2.1 notes the capture tool skipped it
+ * for the same reason). Status Clear, Status Set (Spec 12.6.3.4.2 and
+ * 12.6.3.4.3: a 1 clears or sets the cause's status), Mask Set (12.6.3.4.6)
+ * and Throttling Rate 0 (12.6.3.4.7, the rate INTx and MSI share) are the
+ * interrupt's alone too. */
 #define TBT_HI_ISR                  0x37800UL
+#define TBT_HI_ISC                  0x37808UL
+#define TBT_HI_ISS                  0x37810UL
+#define TBT_HI_IMS                  0x38210UL
+#define TBT_HI_ITR0                 0x38C00UL
+/* Host Interface Control bit 17, Disable ISR Auto-Clear (Table 12-14). */
+#define TBT_HI_CONTROL_NO_AUTOCLEAR 0x00020000UL
 
 /* ====================================================================== */
 /* Ring descriptors, 16 bytes, little-endian DWs (Spec 12.1.1)            */
@@ -191,7 +202,7 @@
 #define TBT_DESC_PDF_MASK           0xFUL
 #define TBT_DESC_DD                 0x00200000UL    /* 21 Descriptor Done */
 #define TBT_DESC_RS                 0x00400000UL    /* 22 Request Status */
-#define TBT_DESC_IE                 0x00800000UL    /* 23 Interrupt Enable; never set here */
+#define TBT_DESC_IE                 0x00800000UL    /* 23 Interrupt Enable: RX ring 0 under the ring interrupt */
 /* DW2 of a receive descriptor posted back by the host interface, Spec
  * 12.4.1, Table 12-8 (Length, EOF PDF and DD as above): */
 #define TBT_DESC_RX_CRC_ERR         0x00100000UL    /* 20 CRC Error, Frame Mode only */

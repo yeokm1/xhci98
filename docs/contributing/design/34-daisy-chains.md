@@ -1,7 +1,7 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 8, 2026-10-30, task 45.15: section 6.11, Part 3 as
-coded. Revision 7, 2026-10-29 (task 45.15), before code, reviewed and revised:
+Status: revision 9, 2026-10-30, task 45.15: section 6.11, Part 3 as
+coded. Revision 8, 2026-10-29 (task 45.15), before code, reviewed and revised:
 Part 3 read again against `tbt_u4cm.c` at `3e314cde` (task 45.15): a
 kid's sequence the host port's own, its unplug not nested before 45.18;
 a kid's own unplug hint confirmed by evidence; which check a
@@ -9,8 +9,10 @@ notification or event from a parent serves; the parent's Disable Hot
 Plug cleared after it is UP; links below a kid; adoption from a link
 only when the link carries nothing else, the kid's teardown sweeping
 the link's other entries; the arrays the kids grow.
-Revision 6, 2026-10-30, task 45.13: section 3.9, the NT chain
-action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
+Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
+unit's own `Removable` answer on NT, reviewed and revised before and with
+the code; section 3.9's 2000 reading. Revision 6, 2026-10-30, task 45.13:
+section 3.9, the NT chain action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
 client's approval order as coded. Revision 4, 2026-10-27, before code, reviewed
 and revised: the
 Thunderbolt 3 parent's LTSSM never interpreted, at the idle poll and at
@@ -694,6 +696,20 @@ leaves for later is listed at the end.
   therefore not borne out on XP for this layout; 2000 is not read. The
   action stays a second request that costs one invalidation per chain
   port; whether to keep it is the owner's (run-45, "45.13").
+- **What 2000 does without it** [run, 45.13's legs w0b, w0c and w2b]: on
+  2000 (the Standard PC HAL) with the same layout, the release
+  `xhcicm.sys` of `1a2a72ca` (no chain action), 2000 found the chained
+  NVMe (its Found New Hardware wizard, Stor98 bound) and removed it at its
+  unplug; with the action (the qemu flavour, w2b), the chain port's
+  `BusRelations` reported the new PDO before the action's invalidation
+  was made. So on all three systems read the member's invalidation (or
+  7's native hot plug) is what finds it. There the chained NVMe stayed at
+  Code 10: 2000 on the Standard PC HAL gives a hot-added function no
+  interrupt, and the child filter's interrupt step (record 21 section
+  6.2.1) declines it, the emulated Thunderbolt 3 tunnel port having no
+  Interrupt Pin (`cm.chain.irq.no`, why 2); the function would also
+  arrive on another pin of the tunnel port (the chain port is device 1 of
+  the dock's internal bus), that section's documented limit.
 - **The walk** (`XhciTbtChainPorts`, `tbt_topo.c`, pure). From one
   member's secondary bus, depth first, inside the member's secondary
   to subordinate range read from its header at the walk, at most
@@ -775,17 +791,214 @@ leaves for later is listed at the end.
   `cm.chain.port-unpowered`, `cm.chain.over`, `cm.chain.cancelled`,
   `cm.chain.down.missed`. No registry value and no status-record field:
   the counters are in the log.
-- **Left in 45.13** (the task stays open; this record's sections are
-  their design): the correspondence learning (section 3.1; until then the
-  action acts on every candidate, which section 3.1 calls harmless); the
-  chained unit's `Removable`, marks and eject on NT (section 3.7; until
-  then a chained device is removed with the first device's unit, whose
-  eject takes the subtree, and is not offered on its own); the
-  connection manager's per-tunnel ownership, landing bridges, names and
-  generations (section 3.5 and Q4; no statement is made for a chained
-  drive, and the firmware connection manager states nothing on q35, so
-  until then a chained drive is held by Stor98's own gone deadline,
-  MD-1); the status record's kind 3 entries. The 9x half is task 45.14.
+- **Left after 45.13's NT code** (this record's sections are their
+  design): the chained unit's `Removable` and its eject through Windows'
+  own applet are section 3.10's. The correspondence learning (section
+  3.1; the action acts on every candidate, which section 3.1 calls
+  harmless), the connection manager's per-tunnel ownership, landing
+  bridges, names and generations (section 3.5 and Q4) and the status
+  record's kind 3 entries (section 3.7) have no reader before Part 3's
+  child connection: no statement is made for a chained drive (the owner),
+  the firmware connection manager states nothing on q35, and kind 3 is a
+  child connection's row; until then a chained drive is held by Stor98's
+  own gone deadline, MD-1. The owner moved them to task 45.15, Part 3
+  (2026-10-30; run-45, "45.13"). The 9x half is task 45.14.
+
+### 3.10 The chained unit on NT, as designed (task 45.13)
+
+Section 3.7's NT item made exact. What it is for: in 45.13's legs x1 and
+x2 a file written to a chained drive just before its surprise unplug was
+lost on XP ("Delayed Write Failed"), and the chained drive was not
+offered for safe removal on its own (run-45, "45.13"). This section gives
+the chained unit its own `Removable` answer, so that Windows lists it in
+its Safely Remove Hardware applet and its own eject stops it before the
+unplug; it does not make a surprise unplug of an unstopped chained drive
+safe [inf: whether 2000 and XP cache differently for a `Removable`
+ancestor is not read; the legs read the eject, then the unplug].
+
+- **When it must be known.** Windows asks a new device's capabilities
+  (`IRP_MN_QUERY_CAPABILITIES`) after the parent's `BusRelations` answer
+  that reports it, before and after its start, and caches the answer; no
+  later change of this driver's state reaches it (record 21 section 7.4
+  says the same of a member's unit). So the chained unit's entry, and the
+  fact that its parent is a chain port, must exist when the chain port's
+  `BusRelations` answer that reports it goes up: they are made in that
+  answer's own completion path, not on the thread.
+- **The chain port's classification.** A child filter on a PCI-to-PCI
+  bridge reads its `BusRelations` on the way back (`CmRegChainRelations`,
+  record 31 section 4.3). There, before the answer goes up and before its
+  new PDOs are attached, it classifies its own PDO (PASSIVE_LEVEL, the PnP
+  dispatch; configuration reads through `cmCfgRead`, as
+  `CmRegIrqWire` reads in the same context):
+  1. its location known (`Located`, read at its start: a chain child
+     reads its `BusRelations` only once started; not read again here);
+  2. its ancestry (`Parent`, then `Bridge` for a child with none, the walk
+     of `CmRegIrqWire`) reaches a filter whose location is an active member
+     of a filter route's set; every bridge between them is read now by the
+     same test and must read NOT: a numbered bridge that is no candidate
+     (one level of chain ports, section 3.9; a bridge between them that is
+     one, or reads anything else, withholds the classification);
+  3. its configuration, read now: present (not all ones, not Retry
+     Status), a type 1 header, the candidate of section 3.1 (a PCI Express
+     capability of Device/Port Type downstream port, Slot Implemented,
+     Hot-Plug Capable), and its secondary and subordinate buses valid:
+     secondary above its own bus, subordinate at or above secondary, both
+     inside the member's secondary + 1 .. subordinate read from the
+     member's header now (so never the member's secondary bus); a dword
+     of its capability reading all ones (a function that stopped
+     answering, through an access that succeeds) fails it. This test is a
+     pure function in `tbt_topo.c` (`XhciTbtChainPortTest`), host tested,
+     with six outcomes: YES (a numbered candidate), NOT (a numbered bridge
+     that is no candidate), UNNUMBERED (a bridge in the range whose buses
+     fail the rule), OUTSIDE (a function outside the range, or no bridge),
+     MEMBER (the member's own header unread or unnumbered), FAILED. The
+     bridge itself is admitted on YES alone, a bridge between it and the
+     member on NOT alone. It is stricter than the walk's candidate test of
+     section 3.9, which records an unnumbered candidate for its
+     invalidation.
+  The ancestry is copied under the registration list's lock and the
+  reads made without it; the outcome replaces the filter's earlier one
+  under the lock, a positive one only while the member is still active:
+  `ChainLanding` (its 16-bit location with a valid bit), `ChainSec`, and
+  the member's location `ChainMember`; a failed read, or any test not
+  met, clears it (logged when it changes: `cm.chain.class` with the
+  secondary bus and the location, `cm.chain.class.no` with why). It is
+  made again at every `BusRelations` answer of that filter; the filter
+  object is the incarnation (it is deleted with its PDO). The thread walk
+  of section 3.9 is unchanged and separate: it decides invalidations
+  only.
+- **Recovery.** A chain port whose `BusRelations` was answered before its
+  member was active, or whose reads failed then, is classified again when
+  a child of it asks its capabilities (`CmRegChainRecheck`, in the child
+  filter's `IRP_MN_QUERY_CAPABILITIES` path before the `Removable` gate,
+  not for a request this driver's own location query caused), the
+  parent's removal reference held across it (`CmFilterTryHold` under the
+  list's lock, as section 3.9's action takes it; a parent whose removal
+  has begun is not read, and one retired meanwhile carries no landing):
+  when it now is one, the marks are synced and the gate reads the chained
+  unit's entry. Windows asks a device's capabilities at least before and after
+  its start, so a chained unit missed at the first is answered at the
+  second; one missed at both is offered with its parent's unit only, until
+  it is plugged again.
+- **Retirement.** A chain port's child filter seeing
+  `IRP_MN_SURPRISE_REMOVAL` (`CmRegAttSurprise`), or its removal
+  (`CmRegAttRemoved`), clears its classification and syncs the marks, so
+  its chained entries are buried at once, not at a later sync. A landing
+  filter must be listed, located and not surprise-removed to carry
+  entries.
+- **Locations.** As every attachment's today (record 21 section 7.4), a
+  chain port's and a chained unit's location is the one read at the
+  start: a rebalance that renumbers a running bridge without removing it
+  is not followed. Then the chain port's test reads another location: a
+  bridge that is not the candidate there clears the classification and
+  buries the chained entries, so later capability requests are answered
+  without `Removable`; an answer Windows already holds stays until the
+  device is removed or enumerated again; nothing else changes.
+- **Two filters on one chain port** (a `BusRelations` child and an
+  `AddDevice` one, the mark service's): both classify alike and see the
+  same answer; the sync takes the first listed as the landing's snapshot,
+  and a chained entry's location is kept in every filter classified as
+  that landing, so either serves.
+- **The chained unit's marks entry.** The marks table (record 21 section
+  7.4, revision 3; `cm_marks.c`) keeps, beside each member's own entries,
+  the PDOs in the last snapshot of each child filter classified as a chain
+  port under that member. Such an entry has its member's index and BDF and
+  its **landing** (`Landing`: the chain port's location with a valid bit;
+  0 for the member's own entries), kept through its burial. The sync of a
+  member (`cmMarksSyncAll`) runs in two phases: first it buries every
+  current entry of the member that is not wanted where it stands (a member
+  entry whose PDO is not in the member's snapshot; a chained entry whose
+  landing is no longer a listed, located, classified child filter under
+  this member, or whose PDO is not in that filter's snapshot; every entry
+  when the member is not active); then it makes the missing entries, the
+  member's own first, then each landing's, and gives each the location the
+  snapshot kept (`CmMarksLocate` on the landing's snapshot too). A PDO
+  that moves from one landing to another is buried in the first phase and
+  made again under its new landing in the second, in the same sync. A PDO
+  already holding a current entry anywhere is not entered twice (as
+  today). The chained entries count against their member's current and
+  tombstone bounds. `CmRegChainRelations` keeps the per-PDO locations of
+  its snapshot as `CmRegRelations` does (`SnapLocd`, `SnapBus`,
+  `SnapAddr`, carried by PDO into the new snapshot), `cmMarkAtt` keeps a
+  chained entry's location in its landing filter's snapshot (where
+  `cmSnapKeepLoc` keeps a member entry's in the member's; in every filter
+  of that landing), and the answer
+  ends with `cmMarksSyncAll`, as `CmRegRelations` does - all before it
+  goes up, so the entry exists when Windows asks the new PDO's
+  capabilities.
+- **The answer** (`IOCTL_XHCICM_MARKS`, `cm_query.h`): an entry with a
+  landing carries the new flag `CM_QM_EF_CHAINED` (`0x40`, derived from
+  `Landing` when the answer is built) and its landing in the entry's
+  reserved dword at offset 40, now `CM_QM_E_LANDING` (the chain port's bus
+  15:8, device 7:3, function 2:0; 0 without the flag). The version stays
+  1: a reader that does not know the flag ignores it and the dword. The
+  mark service takes as units only direct children of the member's
+  devnode (`mk_check_entry`), and XHCITR and XHCIINST match an entry to a
+  unit by the member and the child's bus and address; a chained entry's
+  bus is its chain port's secondary bus, never the member's, so none of
+  them takes a chained entry for a unit of the member.
+- **The `Removable` gate** (`CmRegAttMayMark`). For an attachment whose
+  PDO's current entry has a landing, the bus compared is that landing
+  filter's `ChainSec` now, and the landing must still be a listed,
+  located, classified child filter under the same member, which must be
+  active and exclusive with safe eject on; `CmPortsMayMark` is called
+  with `ChainSec` in place of the member's secondary bus. An attachment
+  whose entry has no landing answers as today. So the child filter the
+  chain port's `BusRelations` attached on the chained unit's PDO answers
+  `IRP_MN_QUERY_CAPABILITIES` with `Removable` set on the way up, as the
+  member's children's do.
+- **The confirmation** (`CmMarksConfirm`) refuses an entry with a landing,
+  current or a tombstone (`CM_MK_CONF_CHAINED`, 7, logged with
+  `cm.reenum.confirm.refused`): no member eject is posted for a chained
+  unit. Windows' own eject of the chained unit (the applet's, or a tool's
+  `CM_Request_Device_Eject`) is then the whole eject: under the firmware
+  connection manager no unit's eject tears a tunnel down (record 21
+  section 7.4), and under the software connection manager a member eject
+  would tear down the first device's tunnel; the chained tunnel's own
+  teardown is Part 3's (section 6.7). A tombstone's departure kept for a
+  confirmation stays member-wide, as today (a new function behind the
+  member clears every tombstone's of that member).
+- **Cost.** A handful of configuration reads per `BusRelations` answer of
+  a child filter on a bridge (the bridge's header and PCI Express
+  capability, the member's bus numbers): no thread pass, no periodic
+  walk.
+- **Not in this cut.** XHCITR's chained unit nested under its parent's,
+  with its own eject (record 25's leg T.11; until then the tool shows the
+  chained devices under the first device's unit and its eject of the
+  first device's unit takes the subtree); the mark service's
+  `LowerFilters` mark on a chained unit (the chain port's child filter
+  attaches the chained unit at its `BusRelations`; the 2000 and XP first
+  plug of a never-seen dock, which loses that filter, is record 33's);
+  the 9x `DN_REMOVABLE` (task 45.14); the correspondence learning, the
+  per-tunnel names and generations, and the status record's kind 3
+  entries (section 3.9's list).
+- **Vectors.** `test\test_tbt_topo.c` (`XhciTbtChainPortTest`): the
+  emulator's chain port; a fixed downstream port, an upstream port, a
+  root port, a type 0 header; Slot Implemented or Hot-Plug Capable clear;
+  unnumbered, secondary at or below its own bus, subordinate below
+  secondary, outside the member's range, equal to the member's secondary;
+  a failed read, all ones, Retry Status, a failed capability walk.
+  `test\test_cm_marks.c`: a landing synced beside the member's own,
+  neither burying the other; a landing gone buries its entries; the
+  member made inactive buries both kinds; a PDO moving between landings
+  in one sync; the two phases freeing the member's bound before the new
+  entries (a full member whose old landing's entries give way to a new
+  landing's in one sync); the location of a chained entry kept through
+  a burial and remade from its landing's snapshot; the answer's flag and
+  landing, and 0 for a member's own entry; the confirmation of a chained
+  entry, current and tombstone, refused with `CM_MK_CONF_CHAINED` and a
+  member's own still accepted.
+- **The log.** `cm.chain.removable`, a chained unit's gate reading when it
+  changes (the verdict, whether the chain port was found, the unit's bus,
+  the chain port).
+- **Legs** (2000 and XP, the dock at power-on, the chained device
+  hot-plugged, section 9.3 clause 5): the log's `cm.chain.class` for the
+  chain port; `XHCIINST /devices` reads the chained NVMe "removable: yes";
+  the Safely Remove Hardware applet lists it on its own; a file written,
+  the chained unit stopped from the applet, then the child unplugged: the
+  file there at the next plug; the dock's drive untouched. On 2000 the
+  emulator's chained NVMe does not start (no interrupt; run-45, "45.13"),
+  so 2000 reads the `Removable` answer and the eject's listing only.
 
 ## 4. Part 2: the Thunderbolt 3 firmware connection manager's chain
 

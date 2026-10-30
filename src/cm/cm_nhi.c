@@ -266,6 +266,7 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmValuesDefault(&nhi->Values);
     CmLogInit(nhi);
     CmThrInit(nhi);
+    CmRirqInit(nhi);
     nhi->Common.Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (nhi->Common.Lower == NULL) {
         IoDeleteDevice(self);
@@ -959,6 +960,7 @@ static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
         rc = TBT_E_STATE;
     }
     if (rc == TBT_OK) {
+        CmRirqIntent(nhi);
         rc = TbtIcmRecover(&nhi->Icm, full);
     }
     nhi->AccessClass = CM_ACCESS_ORDINARY;
@@ -1678,6 +1680,7 @@ static VOID cmU4Recover(PCM_NHI nhi)
     rc = TBT_E_STOPPED;
     nhi->AccessClass = CM_ACCESS_RECOVERY;
     if (!cmU4StopWaiting(nhi)) {
+        CmRirqIntent(nhi);
         rc = TbtU4Recover(&nhi->U4, &final);
     }
     CmLogNote(nhi, "u4.recover.core", (ULONG)(-rc));
@@ -3050,6 +3053,9 @@ VOID CmNhiBind(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_POWER);
         return;
     }
+    /* The ring interrupt's intent before the rings start (record 21
+     * section 4.5.2): the first frame after the arm raises it. */
+    CmRirqIntent(nhi);
     if (nhi->U4On) {
         cmU4Bind(nhi);
         return;
@@ -3091,6 +3097,9 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     BOOLEAN active;
     BOOLEAN powered;
 
+    /* The ring interrupt taken down before any ring stops (record 21
+     * section 4.5.6): a stop always disconnects it. */
+    CmRirqDown(nhi, CM_RIRQ_DOWN_STOP);
     active = (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE ||
                        nhi->Stage == CM_STAGE_FAILED);
     /* The bus's state, not the client's: a client suspended while the
@@ -3141,6 +3150,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     }
     cmLogTable(nhi);
     cmLogCounters(nhi);
+    CmRirqLogCounters(nhi);
     CmLogNote(nhi, "cm.live.final", (CmLiveEpisode(&nhi->Live) << 8) |
                                         nhi->Live.State);
     CmLogNote(nhi, "cm.live.refused",
@@ -3182,9 +3192,12 @@ static VOID cmFindBar(PCM_NHI nhi, PIRP irp)
     stack = IoGetCurrentIrpStackLocation(irp);
     translated = stack->Parameters.StartDevice.AllocatedResourcesTranslated;
     if (translated == NULL || translated->Count == 0) {
+        CmRirqStart(nhi, NULL);
         return;
     }
     list = &translated->List[0].PartialResourceList;
+    /* The line interrupt, if any, for the ring interrupt (task 45.22). */
+    CmRirqStart(nhi, list);
     for (i = 0; i < list->Count; i++) {
         d = &list->PartialDescriptors[i];
         if (d->Type == CmResourceTypeMemory) {

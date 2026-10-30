@@ -257,9 +257,9 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
     return CM_ROLE_CHILD;
 }
 
-ULONG CmRolePlace(ULONG role, ULONG pciAbove)
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace)
 {
-    if (role == CM_ROLE_FILTER && !pciAbove) {
+    if (byPlace && role == CM_ROLE_FILTER && !pciAbove) {
         return CM_ROLE_CHILD;
     }
     return role;
@@ -314,6 +314,25 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
     v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
+    v->RingIrq = CM_RING_IRQ_DEFAULT;
+}
+
+VOID CmValuesTakeRingIrq(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->RingIrq = CM_RING_IRQ_DEFAULT;
+    v->RingIrqFound = 0;
+    v->RingIrqRaw = 0;
+    v->RingIrqRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->RingIrqFound = 1;
+    v->RingIrqRaw = raw;
+    if (raw > CM_RING_IRQ_MAX) {
+        v->RingIrqRefused = 1;
+        return;
+    }
+    v->RingIrq = raw;
 }
 
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw)

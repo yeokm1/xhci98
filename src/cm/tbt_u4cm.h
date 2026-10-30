@@ -845,6 +845,11 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes);
  * queue. Bounded; what is left waits for the next call. */
 VOID TbtU4Poll(PTBT_U4CM cm);
 
+/* The ring interrupt's wake (record 22 section 5.4): the drain and the
+ * queues the tick takes, then only the port checks this drain's events
+ * asked for; never the port scan. */
+VOID TbtU4RingWake(PTBT_U4CM cm);
+
 /* The next queued tunnel change, oldest first. */
 BOOLEAN TbtU4NextAction(PTBT_U4CM cm, PTBT_U4_ACTION out);
 

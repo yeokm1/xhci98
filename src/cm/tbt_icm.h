@@ -613,6 +613,15 @@ LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes);
  */
 VOID TbtIcmPoll(PTBT_ICM icm);
 
+/*
+ * The ring interrupt's wake (design record 21 section 4.5.1): the idle
+ * poll's RX drain alone - every frame the RX ring holds decoded and acted
+ * on, then the events decoded meanwhile, under the same bounds - without
+ * its router read owed, its rediscovery or its count, which stay the idle
+ * poll's. A drain that finds the ring empty sends nothing.
+ */
+VOID TbtIcmRingWake(PTBT_ICM icm);
+
 /* Drain the RX ring as a wait does: device-connected events are queued
  * for the next TbtIcmPoll, disconnects act at once. Sends nothing. For the
  * driver's own waits (the tunnel-up poll of record 21 section 6.5). */

@@ -8956,6 +8956,45 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     }
 }
 
+/*
+ * The ring interrupt's wake (record 22 section 5.4): the RX ring drained
+ * and its queues taken as the tick takes them, then the check of each
+ * port this drain's own events asked for - and of no other: a port whose
+ * check was already owed, or one the tick serves with something else first
+ * (its recorded drain, a deferred tail, a discovery owed, the barrier), is
+ * left for the tick, so the responses to a check can never ask for
+ * another one and the wakes end. No port scan, quarantine retry, rebuild
+ * or link scan: those stay the tick's.
+ */
+VOID TbtU4RingWake(PTBT_U4CM cm)
+{
+    ULONG i;
+    ULONG owed;
+    PTBT_U4_PORT p;
+
+    if (cm->Failed || cm->Stage != TBT_U4_STAGE_RUNNING || cm->Suspended ||
+        cm->Contained) {
+        return;
+    }
+    owed = 0;
+    for (i = 0; i < cm->PortCount && i < 32; i++) {
+        if (cm->Ports[i].CheckPending) {
+            owed |= 1UL << i;
+        }
+    }
+    TbtCtlService(&cm->Ctl);
+    tbtU4TakeQueues(cm);
+    for (i = 0; i < cm->PortCount && i < 32; i++) {
+        p = &cm->Ports[i];
+        if (!p->CheckPending || (owed & (1UL << i)) != 0 || p->RecDeparted ||
+            p->DiscoverOwed || p->AsFoundOwed || p->Barred ||
+            cm->DeferredTail[i]) {
+            continue;
+        }
+        tbtU4Check(cm, p);
+    }
+}
+
 BOOLEAN TbtU4NextAction(PTBT_U4CM cm, PTBT_U4_ACTION out)
 {
     if (cm->ActionCount == 0 || cm->Contained) {

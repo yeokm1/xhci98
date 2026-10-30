@@ -50,6 +50,8 @@ Revised 2026-10-29 (task 45.22, the owner's "Phase 45 additions"; a
 design, reviewed and revised, no code): section 5.4, new - the ring
 interrupt for this profile, designed with the ICM client's in record 21
 section 4.5; section 1.3's "polling only" stands until it is coded.
+Coded 2026-10-30 behind `XhciCmRingInterrupt` 0 (record 21 sections
+4.5.10 and 4.5.11), reviewed and revised: polling stays the default.
 
 Revised 2026-10-29 (task 45.21, the owner's "Phase 45 additions"; a
 design, reviewed and revised, no code): section 19, new - Thunderbolt 1, 2 and 3 hosts on
@@ -160,10 +162,10 @@ In:
 - The USB4 software connection manager on the hosts section 3.4 admits, on
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
-- Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3); a ring interrupt beside the
-  idle poll is designed in section 5.4 and record 21 section 4.5 (task
-  45.22), not coded.
+- Polling by default, as record 21 section 4.3 decided for the ICM client
+  (decision D3); the ring interrupt beside the idle poll of section 5.4
+  and record 21 section 4.5 (task 45.22) is coded behind
+  `XhciCmRingInterrupt`, 0 by default, the line on NT only.
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -201,8 +203,9 @@ Out, each with where it goes:
   lists. A version 2 router is run as a version 2 one since task 45.20:
   CMUV 2.0, the Sequence bit capability set, Gen 4 links symmetric or
   asymmetric used as found (section 6.2).
-- Interrupts, MSI and MSI-X: polling only (section 5.4 designs the line
-  interrupt beside the idle poll, task 45.22; not coded).
+- MSI and MSI-X, and any interrupt on 98 SE and ME: polling (the line
+  interrupt of section 5.4 runs on NT behind `XhciCmRingInterrupt`, task
+  45.22).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -805,9 +808,9 @@ profile is the ICM client's (record 21 section 4.4), and the task designs
 one interrupt for both in record 21 section 4.5: RX ring 0's Receive Data
 Buffer cause ends the thread's idle wait early, the timed wait stays at
 its period, requests stay busy-polled (section 5.2), and every failure
-returns to polling. **A design only; section 1.3's "polling only" and the
-non-goal in section 1.3's "Out" stand until it is coded, which is the
-owner's (record 21 section 4.5.10).** What this profile adds:
+returns to polling. Designed as that section's companion; **coded on
+2026-10-30**, off by default (record 21 sections 4.5.10 and 4.5.11), the
+wake of this profile being `TbtU4RingWake`. What this profile adds:
 
 - **One cause covers its events.** A hot-plug packet and a notification
   arrive on RX ring 0 (section 5.1), so the interrupt wakes the thread for

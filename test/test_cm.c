@@ -116,21 +116,25 @@ static void test_role_decide(void)
 
     /* The role by position (design record 33 section 4.4, task 45.12). */
     classify(bridge, sizeof(bridge), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_FILTER,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 0), CM_ROLE_FILTER,
+             "NT 6.x: a listed bridge's lower call stays the bridge filter (M15)");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 0), CM_ROLE_FILTER,
+             "NT 6.x: the upper call the same");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_FILTER,
              "an INF-listed bridge with the PCI driver's FDO above: the bridge "
              "filter (its UpperFilters)");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_CHILD,
              "an INF-listed bridge with nothing of the PCI driver's above: the "
              "child (its LowerFilters bridge mark)");
     classify(nhi, sizeof(nhi), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_NHI,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_NHI,
              "the NHI with nothing above its PDO stays the NHI");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_NHI,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_NHI,
              "the NHI whatever is above it");
     classify(usp, sizeof(usp), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1, 1), CM_ROLE_CHILD,
              "an unlisted bridge is a child in either order");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0, 1), CM_ROLE_CHILD,
              "an unlisted bridge, below the FDO");
 }
 
@@ -358,6 +362,26 @@ static void test_values(void)
     CHECK_EQ(v.AsmPcie7, 0, "all-ones is refused");
     CmValuesTakeAsmPcie7(&v, 0, 0);
     CHECK_EQ(v.AsmPcie7Found | v.AsmPcie7Refused, 0, "a later absent read clears both");
+    CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
+
+    /* XhciCmRingInterrupt (task 45.22, record 21 section 4.5.4): 0 by
+     * default (owner, 2026-10-29), 0 or 1 taken, 2 and above refused. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_RING_IRQ_DEFAULT, 0, "XhciCmRingInterrupt defaults to 0");
+    CHECK_EQ(v.RingIrq, 0, "0 after CmValuesDefault");
+    CmValuesTakeRingIrq(&v, 0, 1);
+    CHECK_EQ(v.RingIrq | v.RingIrqFound | v.RingIrqRefused, 0, "absent: 0, nothing found");
+    CmValuesTakeRingIrq(&v, 1, 1);
+    CHECK(v.RingIrq == 1 && v.RingIrqFound == 1 && v.RingIrqRefused == 0, "1 is taken");
+    CmValuesTakeRingIrq(&v, 1, 0);
+    CHECK(v.RingIrq == 0 && v.RingIrqFound == 1, "0 is taken");
+    CmValuesTakeRingIrq(&v, 1, 2);
+    CHECK(v.RingIrq == 0 && v.RingIrqRefused == 1 && v.RingIrqRaw == 2,
+          "2 (the reserved message step) is refused: 0 stands");
+    CmValuesTakeRingIrq(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.RingIrq, 0, "all-ones is refused");
+    CmValuesTakeRingIrq(&v, 0, 0);
+    CHECK_EQ(v.RingIrqFound | v.RingIrqRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

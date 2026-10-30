@@ -462,6 +462,57 @@ static void test_hot_plug_unplug(void)
     CHECK_EQ(g_cm.Counters.PcieBuilt, 2, "two PCIe tunnels built in all");
 }
 
+/* Task 45.22 (record 22 section 5.4): the ring interrupt's wake drains
+ * the ring and checks only the ports its own events marked - never the
+ * scan, never a port already owed a check - and a check's responses mark
+ * nothing, so the wakes end. */
+static void test_ring_wake(void)
+{
+    int dev;
+    ULONG checks;
+    ULONG n;
+
+    dev = setupMinimal(0, NULL);
+    CHECK(g_cm.PortCount >= 2, "two ports");
+    checks = g_cm.Counters.PortChecks;
+    TbtU4RingWake(&g_cm);
+    CHECK_EQ(g_cm.Counters.PortChecks, checks, "an empty drain checks nothing");
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_cm.Counters.PortChecks, checks + g_cm.PortCount,
+             "the tick scans every port");
+
+    fabPlug(&g_fab, 1, dev);
+    /* The frame lands, then its interrupt wakes the thread. */
+    g_fab.Host.Sleep(g_fab.Host.Context, 1);
+    checks = g_cm.Counters.PortChecks;
+    TbtU4RingWake(&g_cm);
+    CHECK(g_fab.HpAcks >= 1, "the wake acknowledged the plug event");
+    CHECK_EQ(g_cm.Counters.PortChecks, checks + 1, "one check: the plugged port's");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "connected by the wake, no tick between");
+    checks = g_cm.Counters.PortChecks;
+    for (n = 0; n < 3; n++) {
+        TbtU4RingWake(&g_cm);
+    }
+    CHECK_EQ(g_cm.Counters.PortChecks, checks,
+             "the check's own responses mark nothing: the wakes end");
+
+    g_cm.Ports[1].CheckPending = TRUE;
+    checks = g_cm.Counters.PortChecks;
+    TbtU4RingWake(&g_cm);
+    CHECK_EQ(g_cm.Counters.PortChecks, checks, "a check already owed is the tick's");
+    CHECK(g_cm.Ports[1].CheckPending, "and still owed");
+    TbtU4Poll(&g_cm);
+    CHECK(!g_cm.Ports[1].CheckPending, "the tick served it");
+
+    fabUnplug(&g_fab, 1);
+    g_fab.Host.Sleep(g_fab.Host.Context, 1);
+    checks = g_cm.Counters.PortChecks;
+    TbtU4RingWake(&g_cm);
+    CHECK_EQ(g_cm.Counters.PortChecks, checks + 1, "the unplug's port checked");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "torn down by the wake");
+    CHECK(hostClean(&g_fab, 1), "the host side clean");
+}
+
 /* An unplug at each point of the sequence: never a hang, the port
  * EMPTY, the host side clean. */
 static void test_unplug_everywhere(void)
@@ -6833,6 +6884,7 @@ int main(void)
     RUN_VEC(test_eject_pcie);
     RUN_VEC(test_defer_first_poll);
     RUN_VEC(test_hot_plug_unplug);
+    RUN_VEC(test_ring_wake);
     RUN_VEC(test_isolation_word);
     RUN_VEC(test_unplug_everywhere);
     RUN_VEC(test_unplug_nested);

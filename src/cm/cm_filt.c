@@ -193,13 +193,14 @@ static VOID cmFilterRelease(PCM_FILTER filter)
 }
 
 /*
- * Task 45.13 (design record 34 section 3.9): the chain action holds a
- * child filter's removal reference across its IoInvalidateDeviceRelations
- * on the PDO below, so the call is made before the filter's removal has
- * begun and while that removal, if it comes, waits for the release. The
- * caller takes it under the registration list's lock (the list's lock,
- * then the filter's: no path takes them the other way round).
- * IRQL: <= DISPATCH_LEVEL.
+ * Task 45.13 (design record 34 sections 3.9 and 3.10): the chain action
+ * holds a child filter's removal reference across its
+ * IoInvalidateDeviceRelations on the PDO below, and the chained unit's
+ * recheck across its parent's classification, so each is done before the
+ * filter is detached and its IRP_MN_REMOVE_DEVICE completed, which waits
+ * for the release. The caller takes it under the registration list's lock
+ * (the list's lock, then the filter's: no path takes them the other way
+ * round). IRQL: <= DISPATCH_LEVEL.
  */
 BOOLEAN CmFilterTryHold(PCM_FILTER filter)
 {
@@ -255,6 +256,11 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
     if (NT_SUCCESS(status) && caps != NULL && caps->Version >= 1 &&
         caps->Size >= sizeof(DEVICE_CAPABILITIES)) {
         CmRegAttLocateCaps(child, caps->Address);
+        if (!child->InLocate) {
+            /* Record 34 section 3.10: a parent bridge not yet classified
+             * as a chain port is read again before the answer. */
+            CmRegChainRecheck(child);
+        }
         if (CmRegAttMayMark(child)) {
             caps->Removable = 1;
             CmRegAttAnswered(child);
@@ -793,19 +799,18 @@ static BOOLEAN cmIsoIsGuid(const GUID *g)
     return TRUE;
 }
 
-/* The interface's references: counted on the filter. xhci98.sys drops its
- * last before its own REMOVE goes down to this filter (record 17 section
- * 4.13.6), so the device object outlives every call. IRQL: any. */
+/* The interface's references: counted on the filter under cmRegLock,
+ * the first taken by CmRegIsoBind. xhci98.sys drops its last before its
+ * own REMOVE goes down to this filter (record 17 section 4.13.6), so the
+ * device object outlives every call. IRQL: <= DISPATCH_LEVEL. */
 static VOID cmIsoRef(PVOID context)
 {
-    (VOID)InterlockedIncrement(&((PCM_FILTER)context)->IsoRefs);
+    CmRegIsoRef((PCM_FILTER)context);
 }
 
 static VOID cmIsoDeref(PVOID context)
 {
-    if (InterlockedDecrement(&((PCM_FILTER)context)->IsoRefs) == 0) {
-        CmRegIsoUnbind((PCM_FILTER)context);
-    }
+    CmRegIsoDeref((PCM_FILTER)context);
 }
 
 /* 1 when the bound tunnel's path stands read back closed (CmRegIsoAsk,
@@ -842,7 +847,7 @@ static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
     out->Header.InterfaceReference = cmIsoRef;
     out->Header.InterfaceDereference = cmIsoDeref;
     out->Isolated = cmIsoIsolated;
-    cmIsoRef(filter);
+    /* The one reference the caller owns was taken with the binding. */
     return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
 }
 

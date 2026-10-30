@@ -2010,3 +2010,81 @@ ULONG XhciTbtChainOwedExpired(const XHCI_TBT_CHAIN_OWED *e, ULONG nowMs)
     }
     return (nowMs - e->Since >= XHCI_TBT_CHAIN_OWED_MS) ? 1UL : 0UL;
 }
+
+ULONG XhciTbtChainPortTest(PXHCI_TBT_CFG io, ULONG bdf, ULONG memberBdf,
+                           PULONG secondary)
+{
+    ULONG buses;
+    ULONG lo;
+    ULONG hi;
+    ULONG id;
+    ULONG header;
+    ULONG sec;
+    ULONG sub;
+    ULONG bus;
+    ULONG cap;
+    ULONG off;
+    ULONG caps;
+    ULONG slotCap;
+
+    if (secondary != NULL) {
+        *secondary = 0;
+    }
+    if (io == NULL || io->Read == NULL || secondary == NULL ||
+        bdf > 0xFFFFUL || memberBdf > 0xFFFFUL) {
+        return XHCI_TBT_CPT_FAILED;
+    }
+    if (!xhciTbtRead(io, memberBdf, XHCI_TBT_CFG_BUSES, &buses) ||
+        buses == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_CPT_MEMBER;
+    }
+    lo = (buses >> 8) & 0xFFUL;
+    hi = (buses >> 16) & 0xFFUL;
+    if (lo <= XHCI_TBT_BDF_BUS(memberBdf) || hi < lo) {
+        return XHCI_TBT_CPT_MEMBER;
+    }
+    bus = XHCI_TBT_BDF_BUS(bdf);
+    if (bus < lo || bus > hi) {
+        return XHCI_TBT_CPT_OUTSIDE;
+    }
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_ID, &id) ||
+        (id & 0xFFFFUL) == 0xFFFFUL || (id & 0xFFFFUL) == 0x0001UL ||
+        !xhciTbtRead(io, bdf, XHCI_TBT_CFG_HEADER, &header) ||
+        header == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_CPT_FAILED;
+    }
+    if ((id & 0xFFFFUL) == 0UL ||
+        XHCI_TBT_HDR_LAYOUT(header >> 16) != XHCI_TBT_HDR_BRIDGE) {
+        return XHCI_TBT_CPT_OUTSIDE;
+    }
+    if (!xhciTbtRead(io, bdf, XHCI_TBT_CFG_BUSES, &buses) ||
+        buses == XHCI_TBT_ALL_ONES) {
+        return XHCI_TBT_CPT_FAILED;
+    }
+    sec = (buses >> 8) & 0xFFUL;
+    sub = (buses >> 16) & 0xFFUL;
+    if (sec <= bus || sec <= lo || sub < sec || sub > hi) {
+        return XHCI_TBT_CPT_UNNUMBERED;
+    }
+    cap = XhciTbtFindCapStatus(io, bdf, XHCI_TBT_CAP_PCIE, &off);
+    if (cap == XHCI_TBT_CAP_FAILED || cap == XHCI_TBT_CAP_GONE) {
+        return XHCI_TBT_CPT_FAILED;
+    }
+    if (cap != XHCI_TBT_CAP_FOUND) {
+        return XHCI_TBT_CPT_NOT;
+    }
+    if (!xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_CAPS, &caps) ||
+        !xhciTbtRead(io, bdf, off + XHCI_TBT_PCIE_SLOTCAP, &slotCap) ||
+        caps == XHCI_TBT_ALL_ONES || slotCap == XHCI_TBT_ALL_ONES) {
+        /* A function that stopped answering reads all ones through an
+         * access that succeeds. */
+        return XHCI_TBT_CPT_FAILED;
+    }
+    caps = (caps >> 16) & 0xFFFFUL;
+    if (XHCI_TBT_PCIE_TYPE(caps) != XHCI_TBT_PCIE_TYPE_DOWN ||
+        !XhciTbtPcieHotPlug(caps, slotCap)) {
+        return XHCI_TBT_CPT_NOT;
+    }
+    *secondary = sec;
+    return XHCI_TBT_CPT_YES;
+}

@@ -73,9 +73,12 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
  * the PDO, so this call is the device's LowerFilters registration, made
  * before the PCI driver's FDO - and stays the bridge filter when the PCI
  * driver's FDO is above it (the filter INF's UpperFilters). Every other
- * role is returned as it came.
+ * role is returned as it came, and every role when `byPlace` is 0: the
+ * placement is Windows 2000 to XP x64's alone (record 33 sections 4.4 and
+ * 7.8: NT 6.x untouched, the lower and the upper call one bridge filter,
+ * decision M15).
  */
-ULONG CmRolePlace(ULONG role, ULONG pciAbove);
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace);
 
 /*
  * The NHI profiles (record 21 section 1.4, and the coverage plan of the
@@ -288,6 +291,20 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * once per start, machine-wide key first, as every value, and never on
  * Vista and later or on 98 SE and ME.
  */
+/*
+ * XhciCmRingInterrupt, REG_DWORD (design record 21 section 4.5.4, task
+ * 45.22): 1 lets the NHI's line interrupt end the connection-manager
+ * thread's idle wait where the start grants one and it is proven
+ * (cm_rirqos.c), on 2000 to 10; 0 polls as before. 98 SE and ME poll
+ * whatever it says until their route is read. No INF writes it and the
+ * installer does not ask for it (owner, 2026-10-29: off by default);
+ * absent reads as 0, and any other value (2 and above are reserved for the
+ * message step) is refused and 0 stands. Read once per start, machine-wide
+ * key first, as every value.
+ */
+#define CM_RING_IRQ_DEFAULT 0UL
+#define CM_RING_IRQ_MAX     1UL
+
 #define CM_BRIDGE_REQ_DEFAULT 1UL
 #define CM_BRIDGE_REQ_OFF     0UL
 #define CM_BRIDGE_REQ_ON      1UL
@@ -318,6 +335,15 @@ typedef struct _CM_VALUES {
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
     ULONG BridgeReqRefused;
+    ULONG RingIrq;              /* XhciCmRingInterrupt as run with          */
+    ULONG RingIrqFound;
+    ULONG RingIrqRaw;
+    ULONG RingIrqRefused;
+    /* XhciCmQemuIrqDead, read by the qemu flavour alone (never published):
+     * after this many claims the ring interrupt's service routine goes on
+     * acknowledging and stops counting and queueing - a line that died,
+     * for the lost-interrupt leg of task 45.22. 0: never. */
+    ULONG QemuIrqDead;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -352,6 +378,9 @@ VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmRingInterrupt: 0 or 1, anything else refused (0 stands). */
+VOID CmValuesTakeRingIrq(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

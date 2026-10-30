@@ -68,7 +68,10 @@ Section 4.5, added 2026-10-29 (task 45.22, the owner's "Phase 45
 additions"; a design, reviewed and revised, no code): RX ring 0's
 interrupt ends the connection-manager thread's idle wait early for both
 profiles, the timed wait and polling kept as the fallback; decision D3
-stands, and whether it is coded is the owner's.
+stands, and whether it is coded is the owner's. Coded 2026-10-30 (the
+owner's Q1 to Q4 of section 4.5.10: the line on NT, behind
+`XhciCmRingInterrupt` 0), reviewed and revised; section 4.5.11 records
+where the code settles what the design left open.
 
 The sources this record rests on are in the `usb4-emu` repository
 (the `usb4-emu` checkout beside this repository, branch `main`, commit `eba0cf1`; `main`
@@ -1407,7 +1410,11 @@ latency than decision D3's idle poll). **A design only; nothing in
 (section 4.5.10, Q1).** Decision D3 stands until then. It serves both
 profiles: this record's ICM client and record 22's USB4 software
 connection manager (record 22 section 5.4 points here and adds what is
-the USB4 hosts' own).
+the USB4 hosts' own). **Coded on 2026-10-30** after the owner's answers
+(section 4.5.10) - `src\cm\cm_rirq.c` (the pure half, `test_cm_rirq`) and
+`cm_rirqos.c` (the driver half) - off by default; section 4.5.11 says
+where the code settles what this section left open, and decision D3's
+polling stays the default and the fallback.
 
 Tags, beside this record's own: **[spec]** USB4 Specification 2.0
 (November 2025), sections 12.5 and 12.6.3.4 and Table 12-14; **[linux]**
@@ -1996,6 +2003,76 @@ options as they were put:
   interrupt, a shorter period (for example 50 ms) if its idle cost
   measures small. Recommended: (a) until the readings; (c) is the cheapest
   latency gain, needing no new code path.
+
+#### 4.5.11 As coded (2026-10-30)
+
+The code follows sections 4.5.1 to 4.5.8; what it settles that they left
+open, reviewed and revised with it:
+
+- **Files.** `cm_rirq.c` holds what reads no OS state (the geometry, the
+  routine's outcomes, the storm count, the mask by contract and its proof,
+  the watchdog, the order down's end and latch, the waits to a deadline);
+  `cm_rirqos.c` the routine, the DPC, the connection, the arm, the
+  self-test and the orders down and up; `cm_thr.c` the loop's deadlines,
+  the `CM_WORK_RING` wake and `CmCfgIntxRetire`, the one configuration
+  access past the gate (section 4.5.6.1's narrow class: the identity DW
+  matched, the Command word's bit 10 alone, read back; refused once
+  revoked); `tbt_ring.c` the descriptors' IE (`TBT_RING.RxIe`) and
+  `TbtRingRxPending`, the watchdog's peek at the next RX descriptor, from
+  the common buffer alone.
+- **When Up runs.** At the end of a pass on which the client polls (the
+  ICM bound, the USB4 profile running, D0, the gate admitting the
+  transport), the interrupt wanted and not connected or not armed: so an
+  activation's Up follows its bind, and the self-test runs after the
+  bind's commands rather than before the first one (its claims and DPC are
+  the self-test's whatever else the ring carries). A resume and a recovery
+  that returns to polling re-arm the same way, without the self-test. The
+  intent (IE in every RX descriptor) is set before each ring start: the
+  bind, the resume (`CmNhiReinit`) and both recoveries.
+- **When Down runs.** Before the ring stop of a stop (`CmNhiStopWork`, its
+  first step) and of every quiescence (`CmNhiQuiesce`: a D3, a sleep in D0
+  and an NT shutdown alike); before every ring start that finds it armed
+  (`CmRirqIntent`: a ring start masks every cause, and a full recovery
+  can run and return to polling inside one pass); and at the end of a
+  pass on which the client no longer polls (a containment, a liveness
+  loss, a failure after activation) - the containment itself writes
+  nothing, so taking it down at the end of that pass rather than on entry
+  changes no access.
+- **The wake.** The ICM's `TbtIcmRingWake` is `TbtIcmPoll` without the
+  router read owed, the rediscovery and the idle-poll count. The USB4
+  profile's `TbtU4RingWake` drains the ring and takes the queues as the
+  tick does, then checks only the ports this drain's own events marked: a
+  port already marked, or one the tick serves with something else first
+  (a recorded drain, a deferred tail, a discovery owed, the barrier), is
+  left for the tick, so no check's responses can mark another and the
+  wakes end. The link scan below depth 1 stays the tick's.
+- **The maintenance deadline** is kept as the time of the last
+  maintenance pass, and the deadline is that plus the period in force at
+  each look (`CmNvlinkIdleMs` again after the pass's work), so a period
+  that shrinks to 250 ms when a Stor98 entry reads `UP` brings the next
+  pass forward at once; an Up makes it due at once.
+- **Disable ISR Auto-Clear** is read from `39864h` at each Up (nothing read
+  it at start before), and logged.
+- **Command bit 10 found set** at the activation's first Up: nothing is
+  connected and the activation polls (`cm.irq.intx.found`), which is
+  where the self-test of section 4.5.5 would have ended.
+- **A retained interrupt** is retired again once an idle period, or reused
+  by the next Up.
+- **The lost interrupt on the emulator.** `usb4-host` has no INTx drop, so
+  the qemu flavour alone (never published) reads `XhciCmQemuIrqDead`: after
+  that many claims the routine goes on acknowledging but stops counting
+  and queueing - a line that died - which the watchdog's suspicion, the
+  self-test and the fall back read as on hardware. The `usb4-emu` addition
+  of section 4.5.9 stays the faithful form.
+- **98 SE and ME** connect nothing whatever the value says
+  (`cm.irq.9x`); their route reading of section 4.5.4 stays owed.
+- **Log and counters.** `cm.irq.value` and `cm.irq.resource` at each start;
+  `cm.irq.connected`, `.armed`, `.selftest`, `.selftest.fail`, `.suspect`,
+  `.lost`, `.storm`, `.down`, `.unretired`, `.intx.*`, `.none`, `.9x`; and
+  the `cm.irq.*` counters at the stop (claims, DPCs, wakes, connections,
+  self-tests and their failures, suspicions, losses, storms, downs,
+  unretired and disconnections), written only where the value is 1 or an
+  interrupt was connected.
 
 ## 5. The ICM client
 
@@ -6949,6 +7026,7 @@ record 13 section 5.5). The INFs still write only the driver key:
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); its own name, as every value of this driver, and the only one read: `xhcicm.sys` was never released under another (owner, 2026-10-16) |
 | `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
+| `XhciCmRingInterrupt` | 0 (written by no INF) | section 4.5 (task 45.22, owner 2026-10-29): 1 lets the NHI's line interrupt end the thread's idle wait where the start grants one and the self-test proves it, on 2000 to 10; 0 polls as before. 98 SE and ME poll whatever it says until their route is read. Absent reads as 0; 2 and above (reserved for the message step) are refused and 0 stands |
 
 Installing the package is already the user's choice of this driver, so the
 master switch defaults to on: a driver that installs and does nothing until
@@ -6957,8 +7035,8 @@ What the switch is for is turning the whole thing off on a machine that
 misbehaves without uninstalling, and forcing the kind on a machine where
 auto-detection guesses wrong. Values Phase 40 (design record 22) will add beside these,
 named now so the convention holds: `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`,
-`XhciCmPreOsCleanup`. Later, not in this cut: `XhciCmInterruptMode` (0 poll,
-1 INTx once read on hardware).
+`XhciCmPreOsCleanup`. The interrupt mode came as `XhciCmRingInterrupt`
+(section 4.5, task 45.22), off by default.
 
 Counters, in the driver's extension and emitted at stop through the log
 sink, named `cm.*`: commands sent, responses, timeouts, retries, errors;
@@ -7404,7 +7482,7 @@ revised to it in draft 6.
 |---|---|---|---|
 | D1 | One binary or two | **Owner, 2026-10-15, as recommended**: a second binary, `xhcicm.sys` in `src\cm\`, with its own INFs, allowlists and gate | 3.1 |
 | D2 | How the NT filter is installed | **Owner, 2026-10-15, as recommended; answered by `39-0.4`**: the device-specific route - a separate NT-only INF (`$Windows NT$`, undecorated Models for Windows 2000, `&CC_0604` lines only, no undecorated install section) whose DDInstall includes `machine.inf` and needs `PCI_DRV`, `PCI_DRV.HW` and `PCI_DRV.Services`, adding a device-specific `UpperFilters` with `pci.sys` kept as the service; unforced on 2000, forced on XP and 7 (the unsigned INF ranks `0x8005` against `machine.inf`'s `0x2004`; the installer forces it, a user by hand uses Have Disk); staged in `nt\`, since Windows 98 SE and ME read `$Windows NT$` INFs. No class filter | 3.2, 3.3, 6.2 |
-| D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware (task 45.22 designs it in section 4.5; this decision stands until the owner decides its code) | 4.3, 4.5 |
+| D3 | Interrupts | **Owner, 2026-10-15, as recommended**: none; polling only, 200 ms idle; an INTx mode later behind its own value once read on hardware (task 45.22 designs it in section 4.5; coded 2026-10-30 behind `XhciCmRingInterrupt`, 0 by default, so polling stays the default and the fallback) | 4.3, 4.5 |
 | D4 | Approval policy | **Owner, 2026-10-14**: `XhciCmApprove` 0 and 1 only, 1 the default, approve everything, stated plainly as a security property in the release notes; nothing remembered, and the record says why that is harmless; "approve known devices only, from a UUID list under the service key, filled by hand" listed as a later option, not a value | 5.4 |
 | D5 | What to do about a controller absent at boot (Assist on, nothing attached) | **Owner, 2026-10-15, as recommended**: nothing; a known limitation; force power is an ACPI WMI method out of reach on 98 and unread on NT | 1.3, 2 |
 | D6 | The `nvme98` notification channel | **Owner, 2026-10-15, as recommended**: the proposal of 7.2, settled with `nvme98` after the first checkpoint, shipped as `39-A.7`; the statement withheld on any OS until gate G3's ordering is qualified there. Settled by `nvme98` on 2026-10-15 (its MD-6): the link-state table of section 7.2 replaced the proposal | 7.1, 7.2 |
