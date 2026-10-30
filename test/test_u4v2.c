@@ -1030,15 +1030,16 @@ static void test_ee(void)
     CHECK(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, "the host's EE left set");
     g_fab.R[0].Adp[HOST_PCIE].EeStuck = 0;
     d = fabDevice(&g_fab, FAB_DEV_USB4);
+    g_fab.WrCount = 0;          /* this connection's writes alone */
     fabPlug(&g_fab, 1, d);
     poll(3);
     CHECK(port(1)->Pcie.Up, "a v1 device after it: PCIe up");
     CHECK_EQ(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, 0, "the host's EE cleared first");
     {
         long clr = writeWith(0, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE1, 1UL, 0);
-        long pe = writeWith(clr < 0 ? 0 : clr, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE0,
-                            0x80000000UL, 1);
-        CHECK(clr >= 0 && pe > clr, "before its Path Enable");
+        long peH = writeWith(0, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE0, 0x80000000UL, 1);
+        long peD = writeWith(0, d, TBT_CS_ADAPTER, DEV_PCIE, PCIE0, 0x80000000UL, 1);
+        CHECK(clr >= 0 && peH > clr && peD > clr, "before either Path Enable");
     }
     /* And with it stuck: no tunnel. */
     d = domain(1, FAB_DEV_USB4);
