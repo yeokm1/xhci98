@@ -1815,6 +1815,13 @@ int inst_s98_param_get(const char *param, const char *key, char *out,
 int inst_s98_param_set(const char *param, const char *key, const char *value,
                        char *out, size_t cap);
 
+/* Task 45.50: 1 when a 98 SE and ME value of row i as read (a DWORD, or
+ * text) is its 98 SE and ME default, the one Stor98's INF and the
+ * installer's file-only update write; such a value goes with Stor98 at
+ * the uninstall, a value of another number stays. */
+int inst_s98_is_default_9x(int i, int isDword, INST_U32 dword,
+                           const char *text);
+
 /* A row's "now" as the page shows it: "not set (the built-in default is
  * <d>)" or "set: <value>"; state 1 set, 0 not set, -1 unreadable. */
 void inst_s98_now_text(int i, int nt, int me, int state, const char *value,

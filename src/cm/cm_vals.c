@@ -473,6 +473,12 @@ VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars)
     while (chars != 0 && text[chars - 1] == 0) {
         chars--;
     }
+    /* Task 45.50: the word the install writes, the driver's own finding as
+     * absent and empty are. */
+    if (chars == 4 && (text[0] | 0x20) == 'a' && (text[1] | 0x20) == 'u' &&
+        (text[2] | 0x20) == 't' && (text[3] | 0x20) == 'o') {
+        return;
+    }
     if (chars >= CM_TUNNEL_BRIDGE_CHARS) {
         v->TunnelBridgeRefused = 1;
         return;

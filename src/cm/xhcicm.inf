@@ -38,9 +38,12 @@
 ; section 12) is written by
 ; every install path at the driver's own default as a REG_DWORD under
 ; FLG_ADDREG_NOCLOBBER (0x00010003), so a value a user set survives a
-; reinstall and a written default reads exactly as an absent one - except
-; XhciCmTunnelBridge, whose absence is meaningful and which no INF writes.
-; The two values the driver reads on Windows 98 SE and ME alone,
+; reinstall and a written default reads exactly as an absent one. Since
+; task 45.50 that holds for every value the driver reads (record 21 section
+; 8.1): XhciCmTunnelBridge, a REG_SZ, is written as "auto", which the
+; driver takes as its absence, its own finding of the tunnel ports; the NT
+; paths alone write XhciCmRingInterrupt, and the NT 5.x paths alone
+; XhciCmBridgeReq. The two values the driver reads on Windows 98 SE and ME alone,
 ; XhciCmBridgeNumbering and XhciCmNoIrqStart, are written by the 98 SE and
 ; ME install alone (task 44.46).
 ;
@@ -178,7 +181,7 @@ HKR,,NTMPDriver,,xhcicm.sys
 ; --- Windows 2000 and XP ----------------------------------------------------
 
 [Cm.Dev.NTx86]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev.NTx86.Services]
@@ -187,7 +190,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 ; --- Windows Vista and 7 ----------------------------------------------------
 
 [Cm.Dev6.NTx86]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev6.NTx86.Services]
@@ -195,8 +198,8 @@ AddService=xhcicm,0x00000002,Cm.AddService
 
 ; --- Shared -----------------------------------------------------------------
 
-; The driver's values (record 21 section 8, record 22 section 12), each at the driver's default.
-; XhciCmTunnelBridge is not written: its absence means no override.
+; The driver's values (record 21 section 8, record 22 section 12), each at
+; the driver's default.
 [Cm.Values]
 HKR,,XhciCmMode,0x00010003,1
 HKR,,XhciCmApprove,0x00010003,1
@@ -212,6 +215,25 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+; Written since task 45.50 (record 21 section 8.1), each at the driver's
+; default: the tunnel ports' override, whose "auto" is the driver's own
+; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
+; credits experiment (record 22 section 18.8) and the USB4 version 2 switch
+; (record 22 section 12).
+HKR,,XhciCmTunnelBridge,0x00000002,"auto"
+HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
+HKR,,XhciCmUsb4V2,0x00010003,1
+
+; Task 45.50: the values the driver uses on Windows 2000 to 10 alone, written
+; by their install paths alone: the NHI's interrupt (record 21 section 4.5).
+[Cm.ValuesNt]
+HKR,,XhciCmRingInterrupt,0x00010003,0
+
+; Task 45.50: the values the driver reads on Windows 2000 and XP (and XP
+; x64) alone, written by their install paths alone: the bridges' memory
+; windows set at a hot plug (design record 33 section 9.1).
+[Cm.ValuesNt5]
+HKR,,XhciCmBridgeReq,0x00010003,1
 
 ; The values the driver reads on Windows 98 SE and ME alone (record 21
 ; section 8; task 44.46), written by their install alone, each at the

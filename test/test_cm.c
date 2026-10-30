@@ -214,6 +214,9 @@ static void test_values(void)
     CM_VALUES before;
     static const WCHAR bdf[] = { '0', '4', ':', '0', '0', '.', '0', 0 };
     WCHAR longer[CM_TUNNEL_BRIDGE_CHARS + 1];
+    static const WCHAR autoLower[] = { 'a', 'u', 't', 'o', 0 };
+    static const WCHAR autoMixed[] = { 'A', 'u', 'T', 'o' };
+    static const WCHAR autoLonger[] = { 'a', 'u', 't', 'o', 'x', 0 };
     ULONG i;
 
     CmValuesDefault(&v);
@@ -316,6 +319,19 @@ static void test_values(void)
     CHECK_EQ(v.TunnelBridgeChars, 7, "a counted terminator is dropped");
     CmValuesTakeBridge(&v, bdf, 0);
     CHECK_EQ(v.TunnelBridgeChars, 0, "empty is no override");
+    /* Task 45.50: "auto", the install's written form, is no override in
+     * any case, with or without its counted terminator; a longer word is
+     * text, held for the parser. */
+    CmValuesTakeBridge(&v, bdf, 7);
+    CmValuesTakeBridge(&v, autoLower, 5);
+    CHECK(v.TunnelBridgeChars == 0 && v.TunnelBridgeRefused == 0 &&
+          v.TunnelBridge[0] == 0, "auto is no override");
+    CmValuesTakeBridge(&v, autoMixed, 4);
+    CHECK_EQ(v.TunnelBridgeChars, 0, "AuTo is no override");
+    CmValuesTakeBridge(&v, autoLonger, 5);
+    CHECK_EQ(v.TunnelBridgeChars, 5, "autox is text, not auto");
+    CmValuesTakeBridge(&v, autoLonger, 3);
+    CHECK_EQ(v.TunnelBridgeChars, 3, "aut is text, not auto");
     for (i = 0; i <= CM_TUNNEL_BRIDGE_CHARS; i++) {
         longer[i] = 'x';
     }

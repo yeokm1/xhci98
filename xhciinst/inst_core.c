@@ -2070,9 +2070,9 @@ const INST_VALUE instValues[] = {
       { "no", "yes", NULL, NULL },
       0, 0, 0, 1UL },
     /* Design record 33 section 9.1 (task 45.12): the hot-added bridges'
-     * requirement lists on 2000 and XP, not written by the INFs (NoInf,
-     * the driver's default 1); never asked, the Thunderbolt page's
-     * Advanced row and /set (record 26 section 5.5). */
+     * requirement lists on 2000 and XP, written at 1 by the INFs' NT 5.x
+     * paths since task 45.50 (no longer NoInf); never asked, the
+     * Thunderbolt page's Advanced row and /set (record 26 section 5.5). */
     { "XhciCmBridgeReq", INST_INF_CM, INST_APPLY_NT5_CM, 0x0UL, 0x7UL,
       "give a dock or enclosure hot-plugged on Windows 2000 or XP the "
       "bridge windows its devices need",
@@ -2080,7 +2080,7 @@ const INST_VALUE instValues[] = {
       "Windows runs may then get only one of its ports. 2 only records "
       "what would be done, for a report.", 0x5UL,
       { "off", "on", "record only, change nothing", NULL },
-      0, 0, 1, 1UL },
+      0, 0, 0, 1UL },
     /* Record 26 section 5.0: the mark service's own value, in its
      * Parameters key and never under Services\USB, read once at its start
      * (xhcimark.c) and written in its step of the run; never asked. */
@@ -6216,6 +6216,52 @@ const char *inst_s98_default(int i, int nt)
         return "";
     }
     return nt ? instS98Values[i].DefNt : instS98Values[i].Def9x;
+}
+
+/* A table default's number (its digits alone). */
+static INST_U32 s98_def_num(const char *d)
+{
+    INST_U32 v = 0;
+
+    while (*d >= '0' && *d <= '9') {
+        v = v * 10 + (INST_U32)(*d - '0');
+        d++;
+    }
+    return v;
+}
+
+int inst_s98_is_default_9x(int i, int isDword, INST_U32 dword,
+                           const char *text)
+{
+    const char *d;
+    const char *p;
+    INST_U32 v;
+    int any;
+
+    if (i < 0 || i >= INST_S98_COUNT || !inst_s98_applies(i, 0) ||
+        instS98Values[i].Name9x == NULL) {
+        return 0;
+    }
+    d = instS98Values[i].Def9x;
+    if (instS98Values[i].Kind == INST_S98_WORDS) {
+        return !isDword && text != NULL && inst_eq(text, d);
+    }
+    if (isDword) {
+        return dword == s98_def_num(d);
+    }
+    if (text == NULL) {
+        return 0;
+    }
+    v = 0;
+    any = 0;
+    for (p = text; *p >= '0' && *p <= '9'; p++) {
+        if (v > 429496729UL) {
+            return 0;
+        }
+        v = v * 10 + (INST_U32)(*p - '0');
+        any = 1;
+    }
+    return any && *p == '\0' && v == s98_def_num(d);
 }
 
 void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap)

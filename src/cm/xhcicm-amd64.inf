@@ -139,7 +139,7 @@ Cm.CopyFiles=10,System32\Drivers
 ; --- Windows XP x64 and Server 2003 x64 -------------------------------------
 
 [Cm.Dev.NTamd64]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev.NTamd64.Services]
@@ -148,7 +148,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 ; --- Windows Vista x64 and 7 x64 --------------------------------------------
 
 [Cm.Dev6.NTamd64]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev6.NTamd64.Services]
@@ -173,6 +173,25 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+; Written since task 45.50 (record 21 section 8.1), each at the driver's
+; default: the tunnel ports' override, whose "auto" is the driver's own
+; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
+; credits experiment (record 22 section 18.8) and the USB4 version 2 switch
+; (record 22 section 12).
+HKR,,XhciCmTunnelBridge,0x00000002,"auto"
+HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
+HKR,,XhciCmUsb4V2,0x00010003,1
+
+; Task 45.50: the values the driver uses on Windows 2000 to 10 alone, written
+; by their install paths alone: the NHI's interrupt (record 21 section 4.5).
+[Cm.ValuesNt]
+HKR,,XhciCmRingInterrupt,0x00010003,0
+
+; Task 45.50: the values the driver reads on Windows 2000 and XP (and XP
+; x64) alone, written by their install paths alone: the bridges' memory
+; windows set at a hot plug (design record 33 section 9.1).
+[Cm.ValuesNt5]
+HKR,,XhciCmBridgeReq,0x00010003,1
 
 [Cm.AddService]
 DisplayName=%CmSvcDesc%

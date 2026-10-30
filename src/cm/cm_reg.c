@@ -12,9 +12,10 @@
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its
  * default stands, which is also what the written default reads as.
- * XhciCmTunnelBridge, which no INF writes, and the two values only the
- * 98 SE and ME install writes, XhciCmBridgeNumbering and XhciCmNoIrqStart
- * (task 44.46), are read from the same key.
+ * XhciCmTunnelBridge (written as "auto" since task 45.50), the two values
+ * only the 98 SE and ME install writes, XhciCmBridgeNumbering and
+ * XhciCmNoIrqStart (task 44.46), and the values outside the rule table
+ * below are read from the same key.
  *
  * From 3.1.0.0 every value is read first from the machine-wide key
  * HKLM\System\CurrentControlSet\Services\USB, the one xhci98.sys reads
@@ -53,19 +54,22 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmLogDebugView"
 };
 
-/* Not written by any INF (record 21 section 8): absent is no override. */
+/* Written as "auto" since task 45.50 (record 21 section 8.1): "auto",
+ * absent and empty are no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 /* Written by the 98 SE and ME install alone (record 21 section 6.1.1,
  * task 44.46): absent is the default, CM_BRIDGE_NUMBERING_DEFAULT, as is
  * XhciCmNoIrqStart's absence CM_NOIRQ_START_DEFAULT. */
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 #define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
-/* Not written by any INF (record 22 section 18.8): absent is 0. */
+/* Record 22 section 18.8: absent is 0, as written since task 45.50. */
 #define CM_VALUE_ASM_PCIE7 L"XhciCmAsmediaPcie7Credits"
-/* Not written by any INF (record 22 section 12, decision U30): absent is 1. */
+/* Record 22 section 12, decision U30: absent is 1, as written since task
+ * 45.50. */
 #define CM_VALUE_USB4_V2 L"XhciCmUsb4V2"
-/* Not written by any INF (record 33 section 9.1): absent is 1; read on
- * NT 5.x alone. */
+/* Record 33 section 9.1: absent is 1, as the NT 5.x install paths write it
+ * since task 45.50; read on NT 5.x alone. XhciCmRingInterrupt: absent is
+ * 0, as the NT install paths write it. */
 #define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
 #define CM_VALUE_RING_IRQ L"XhciCmRingInterrupt"
 

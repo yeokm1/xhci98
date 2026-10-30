@@ -7187,7 +7187,7 @@ record 13 section 5.5). The INFs still write only the driver key:
 | `XhciCmMode` | 1 | the master switch (decision D11): 0 off - the inert start of section 1.4.2: the driver binds the NHI, logs it, touches no ring, approves nothing, re-enumerates nothing; 1 auto - section 1.4.2's selection: the ICM client where its four tests pass, design record 22's software connection manager where that record's selection takes the start, and the inert start otherwise; 2 the experimental route for an Intel NHI id the profile table does not list and whose class is not the USB4 host interface's `0x0C0340`: the ICM client with the Alpine Ridge table, at the user's own risk. `TbtHwMatch` (`tbt_hw.c`) tries the listed ids first, then the class `0x0C0340`, and only then the unlisted Intel id, so an unlisted Intel NHI of class `0x0C0340` stays the software connection manager's candidate, which value 2 refuses (design record 22 section 12: the ICM experiment is refused on an id with no ICM row) (the `XhciIntelPortSwitch` 2 pattern, said in the same words in the README and release notes). A registry value cannot make PnP bind a driver to an id its INF does not name, so 2 also needs the id matched: the user adds a model line for it to a copy of `xhcicm.inf` and installs through Have Disk, a procedure the README spells out. What 2 bypasses is the id-to-candidate lookup alone; the readiness, ownership and version tests of section 1.4.2 still give the inert start when they fail; 3 the experimental user override that forces design record 22's software connection manager (its section 3.6, decision U1), at the user's own risk: refused on the Falcon, Alpine and Titan Ridge hosts and on Ice Lake, whose host routers are not USB4 routers, and on an NHI whose ids were not read; never a takeover of a domain whose firmware connection manager runs (`ICM_EN` read set vetoes it on the Intel rows); and it bypasses none of the readiness, protocol, tunnel-preservation and DMA-cleanup tests |
 | `XhciCmApprove` | 1 | section 5.4; 0 and 1 only |
 | `XhciCmReenum` | 1 | 0 disables every re-enumeration call (section 6), for a machine where CONFIGMG or the filter misbehaves; the ICM client still runs |
-| `XhciCmTunnelBridge` | absent (`REG_SZ`) | under the NHI's own device key, so per domain: a comma-separated list of `bb:dd.f` bridges that replaces section 6.3's discovery as the domain's whole tunnel-port set; not written by the INFs (absence is meaningful), and named in the README for machines whose tunnel ports no source lists |
+| `XhciCmTunnelBridge` | `auto` (`REG_SZ`; written by the INFs since task 45.50, section 8.1) | under the NHI's own device key, so per domain: `auto`, absent or empty is section 6.3's discovery, the driver's own finding; a comma-separated list of `bb:dd.f` bridges replaces it as the domain's whole tunnel-port set; named in the README for machines whose tunnel ports no source lists |
 | `XhciCmNoIrqStart` | 1 (written by the x86 INF's 98 SE and ME install alone, task 44.46) | design record 28 section 7, Windows 98 SE and ME only: 1 starts an NVMe function below a tunnel port whose interrupt cannot be routed with no interrupt, for a bound Stor98 0.4.0.0 or later that polls (record 28 section 4); 0 leaves it at its problem code. Read where `XhciCmBridgeNumbering` is read; absent reads as 1; any value but 0 and 1 is refused and 1 stands. Read from `Services\USB` first and then the NHI's driver key (task 42-A.17). Ignored on NT |
 | `XhciCmBridgeNumbering` | 1 (written by the x86 INF's 98 SE and ME install alone, task 44.46, replacing the owner's 2026-10-16 "no INF writes it") | section 6.1.1, Windows 98 SE and ME only: 1 gives the bridges a tunnel brings up below a tunnel port their bus numbers and memory windows before the CONFIGMG re-enumeration; 0 turns that off (a hot-added bridge is then left as it came up: Code 29 on the P14s until a restart). Absent reads as 1; any value but 0 and 1 is refused and 1 stands. Ignored on NT |
 | `XhciCmSafeEject` | 1 | section 7.4: 1 marks the devices behind an active tunnel bridge removable (the NT child filters, and the 9x flag through `Change_DevNode_Status`); 0 marks nothing. Absent reads as 1, as written by the INFs. Read by the NHI at start and handed to the bridge filters with the active mark |
@@ -7196,7 +7196,7 @@ record 13 section 5.5). The INFs still write only the driver key:
 | `XhciCmApproveTimeoutMs` | 10000 | the `approve` timeout, the same bounds |
 | `XhciCmLogVerbosity` | 2 | the shared log rule (the `0`-`4` ladder of `xhci_log.h`); its own name, as every value of this driver, and the only one read: `xhcicm.sys` was never released under another (owner, 2026-10-16) |
 | `XhciCmLogDebugView` | 0 | 1 hands the log to `DbgPrint` in every flavour, as `xhci98.sys`'s `XhciLogDebugView` does; 0 to 1, refused otherwise (owner, 2026-10-16: the reversal of decision D12 below) |
-| `XhciCmRingInterrupt` | 0 (written by no INF) | section 4.5 (task 45.22, owner 2026-10-29): 1 lets the NHI's line interrupt end the thread's idle wait where the start grants one and the self-test proves it, on 2000 to 10; 0 polls as before. 98 SE and ME poll whatever it says until their route is read. Absent reads as 0; 2 and above (reserved for the message step) are refused and 0 stands |
+| `XhciCmRingInterrupt` | 0 (written by the NT install paths since task 45.50, section 8.1) | section 4.5 (task 45.22, owner 2026-10-29): 1 lets the NHI's line interrupt end the thread's idle wait where the start grants one and the self-test proves it, on 2000 to 10; 0 polls as before. 98 SE and ME poll whatever it says until their route is read. Absent reads as 0; 2 and above (reserved for the message step) are refused and 0 stands |
 
 Installing the package is already the user's choice of this driver, so the
 master switch defaults to on: a driver that installs and does nothing until
@@ -7297,6 +7297,149 @@ holds across a configuration access.
 The clock behind every wait and every time in the log is the tick count,
 `KeQueryTickCount` times `KeQueryTimeIncrement` (`cm_thr.c`): monotonic,
 unlike the system time, which a user or a time service may set.
+
+### 8.1 Every value written by the install (task 45.50; owner, 2026-10-30)
+
+The owner, 2026-10-30: "All registry keys available should be written by
+the installer": every value a released driver reads is written by the
+install at its default, with the don't-overwrite flag, so that each one is
+already in the key, ready to change, and a user's value survives an
+update. The defaults go into the controller's own driver key, or the
+NHI's, as since 3.1.0.0; the machine-wide `Services\USB` key stays an
+optional override the install never fills (owner, confirmed 2026-10-30).
+
+**The sweep.** Every value name the drivers' sources pass to a registry
+read (`hcdReadDword` in `src\hcd_ctl.c`, `cmQuery` in `src\cm\cm_reg.c`,
+`cm_statos.c`, `uas_fdo.c`, `hlpr_entry.c`; `XHCIPFW` and `S98VSD` read
+none) against every `HKR` line of the six driver INFs. Read and written by
+no INF before this task:
+
+| Driver | Value | Read on | Default | Written now |
+|---|---|---|---|---|
+| `xhci98.sys` | `XhciUsb2Bos` | every system | 1 (absent, or anything but a DWORD 0, is on) | 1, every path of both controller INFs |
+| `xhci98.sys` | `XhciResumeKeep` | every system | 1 (the same rule) | 1, the same |
+| `xhci98.sys` | `XhciLinkKeep` | every system | 1 (the same rule) | 1, the same |
+| `xhcicm.sys` | `XhciCmTunnelBridge` | every system | no override (absent or empty) | `auto` (REG_SZ), every path of both NHI INFs |
+| `xhcicm.sys` | `XhciCmAsmediaPcie7Credits` | every system | 0 | 0, every path of both NHI INFs |
+| `xhcicm.sys` | `XhciCmUsb4V2` | every system | 1 | 1, every path of both NHI INFs |
+| `xhcicm.sys` | `XhciCmRingInterrupt` | 2000 to 10 (98 SE and ME read it and poll whatever it says) | 0 | 0, the NT paths (`.NTx86`, `.NTx86.6.0`, `.NTamd64`, `.NTamd64.6.0`) |
+| `xhcicm.sys` | `XhciCmBridgeReq` | NT 5.x alone (2000, XP, XP x64; `CmBreqGate`) | 1 | 1, the NT 5.x paths (`.NTx86`, `.NTamd64`) |
+
+Exempt, as the owner's rule says: the `qemu` flavour's test-only values
+(`XhciQemu*`, `XhciCmQemuIrqDead`, `XhciMsi86NoStrip`,
+`XhciMsi86InjNoLine`, the helper's `XhciHlprInject`); values Windows owns
+(`MaximumTransferLength`, which `xhciuas.sys` reads from a device's key as
+Microsoft's per-device convention; `SilentClasses` and
+`DisableSelectiveSuspend` in `Services\USB`); and the request and status
+mailboxes and records the drivers write or the tools write for them
+(`XhciCmStatusAsk`, `XhciCmStatus`, `XhciCmEjectAsk`, `XhciCmEjectConfirm`,
+`XhciCmEjectReply`, `XhciCmEjectResult`, `XhciCmQueryName`,
+`XhciCmBridgeDiag`, `XhciCmBridgeReqDiag`, `XhciCmNoIrqDiag`, the
+`XhciUasCommand*` and `XhciUasDeviceLimit*` notes, every `XhciPfw*` result).
+The install's existing defaults stay where they differ from an absent
+value's: `XhciForceBulkOnly` 0 (absent is 1, for text-mode Setup) and
+`XhciImodInterval250ns` 160 (absent is 4000).
+
+**`XhciCmTunnelBridge`'s written form.** Absent and an empty string both
+mean "no override, the driver's own finding" today; anything else is
+parsed as a `bb:dd.f` list, and text that does not parse leaves no
+override and notes `cm.reenum.override-unparsed`. The install writes the
+word `auto` (`HKR,,XhciCmTunnelBridge,0x00000002,"auto"`, REG_SZ with
+`FLG_ADDREG_NOCLOBBER`), and `CmValuesTakeBridge` takes `auto` - any case,
+nothing before or after it, NULs at the end trimmed as now - exactly as it
+takes an empty string: no override, `TunnelBridgeChars` 0, no refusal, no
+unparsed note. So a key the install wrote reads, in regedit, as what it
+means; a user replaces the word with a list to override, and deletes or
+empties the value, or writes `auto` back, to return to the driver's own
+finding. The machine-wide value wins when present, as for every value, so
+an `auto` there too is the driver's own finding. Why `auto` and not the
+empty string the parser already takes: an empty value shows blank in
+regedit, its meaning written nowhere a user looks; why not leave it
+unwritten: the owner's rule has no exception for a string. The rule's
+caution about REG_SZ in INFs (two setup engines may quote, trim or
+tokenise text differently) is met by a short unquoted-safe word with no
+separator, quoted in the INF, and the leg reads it back on 98 SE and XP.
+
+**The gates.** `check-inf.ps1`'s value table gains the three `xhci98.sys`
+rows at 1 (its VAL-* rules then require each on every path, at that
+number, with `0x00010003`), its footprints follow, and its self-tests and
+`test-inf-checks.ps1`'s rows anchor the new lines in place of the
+`XhciUsb2Bos` comment. `check-cm-inf.ps1` gains three tables beside the
+rule table and the 98 SE and ME one: the values every path writes
+(`XhciCmAsmediaPcie7Credits`, `XhciCmUsb4V2`, from `cm_vals.h`'s
+`CM_ASM_PCIE7_DEFAULT` and `CM_USB4_V2_DEFAULT`, and `XhciCmTunnelBridge`
+at `auto` with flag `0x00000002`), the NT paths' (`XhciCmRingInterrupt`,
+`CM_RING_IRQ_DEFAULT`) and the NT 5.x paths' (`XhciCmBridgeReq`,
+`CM_BRIDGE_REQ_DEFAULT`); its rule refusing `XhciCmTunnelBridge` (VAL-EXTRA)
+becomes the requirement, and a value on a path that does not read it stays
+VAL-EXTRA. Each gains self-test mutations (missing, wrong default, wrong
+flag, on a path that does not read it).
+
+**An update.** `FLG_ADDREG_NOCLOBBER` writes a value only where it is
+missing, on every engine, so an update over `3.3.0.0` adds the new values
+at their defaults and leaves every value a user set; the leg reads it on
+XP and 98 SE (a value changed under `3.3.0.0`, then the update).
+
+**The documents.** `tuning.md`: a row for `XhciLinkKeep`, the "Written by
+the install" column filled for the seven, and the "not written" paragraph
+gone; the download readme likewise; `source-files.md`'s exceptions; the
+release notes' "Registry settings" and connection-manager tables.
+
+**The owner's decisions (2026-10-30).** `XhciCmTunnelBridge` is written as
+`auto`, as above. Stor98 is in the task: every product setting it reads is
+written by its INFs at its default, with the don't-overwrite flag.
+
+**Stor98** (`src\stor98\`, its own `AGENTS.md`; the rule's consequence
+stated in its README: a value the install wrote stays at that number, so a
+later Stor98 with a better default no longer applies it by itself, as for
+every value of this package).
+
+- *98 SE and ME* read named values in `HKLM\System\CurrentControlSet\
+  Services\stor98` (`platform.c`, `PLAT_WT_KEY`), not the driver key, so the
+  9x install half of `stor98-9x.inf` and of `stor98-x86.inf` writes them
+  there through `HKLM,"System\CurrentControlSet\Services\stor98",...`:
+  `StorMaxTransferKB` 2048 (the 9x build's maximum, `STOR98_MAX_TRANSFER`;
+  absent means that maximum, and 2048 is accepted as it), `StorPollMode` 0,
+  `StorPollBusyUs` 1000, `StorPollIdleMs` 1000, `StorPollSpinUs` 0 (the 9x
+  `POLL_SPIN_US_DEFAULT`), `StorGoneMs` 5000, `StorWriteIdleMs` 1000,
+  `StorHold9xMs` 4000 (`ENG_HOLD9X_DEF_MS`), each a DWORD with
+  `0x00010003`, and `StorWriteThrough` the string `auto` (`0x00000002`; the
+  value is read only as a string, and `auto` is the absent default, `off` on
+  98 SE and `cacheoff` on ME).
+- *2000 to 10, both INFs* read one string, `DriverParameter` in the
+  service's `Parameters\Device` key, as `key=value` pairs separated by
+  semicolons (`dpkeys.h`, `LcFind`): the service's AddReg writes it once
+  with `0x00000002`, `stormaxtransferkb=256;storwritethrough=auto;
+  storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;
+  storgonems=5000;storwriteidlems=1000` (one string, no spaces; 256 the NT
+  build's maximum, 500 the NT spin default). A `DriverParameter` already
+  there - a user's, of any content - is kept whole by the flag, and a key
+  missing from it still takes its default, as today. The test-build keys
+  (`hold9x=`, `frag=`, `stormtest=` and the rest of `dpkeys.h`'s test block)
+  and `dump=1` (the dump stack's own) are not written.
+- *The installer's part* (98 SE and ME). An update there replaces
+  `stor98.mpd` alone and installs no device (record 26 section 6.3), so the
+  INF's AddReg never runs: the installer's file-only update then writes
+  each setting missing from `Services\stor98` at its default itself
+  (`s98_defaults_put_9x`, from `instS98Values`, which `test_inst` holds
+  the three INFs to). And since a value in that key is what a first run
+  reads as a Stor98 there before (`s98_svc_key_stor98_9x`, its
+  `PreExisting`), the uninstall that removes Stor98 also removes each
+  setting whose data is its default (`s98_defaults_drop_9x`,
+  `inst_s98_is_default_9x`), the INF's or the installer's, which reads as
+  its absence; a value of another number stays. On 2000 to 10 the update
+  reinstalls the device through the INF, and the uninstall that removes
+  Stor98 deletes its service key with `DriverParameter` in it.
+- *Exempt*: `StorInterrupt <b>.<d>.<f>`, a report the driver writes; the
+  test-build keys.
+- *The gate*: `check-stor98-inf.ps1` holds each 9x half to the nine values
+  at those defaults and flags, and each NT install to the one
+  `DriverParameter` line, its string exactly the defaults above, with
+  self-test mutations (a value missing, a wrong default, a clobbering flag,
+  a key missing from the string).
+- *The leg*: an update over the previous Stor98 (`3.3.0.0`'s) on XP with a
+  `DriverParameter` the user set, read kept whole; and on 98 SE a value set
+  before the update, read kept.
 
 ## 9. Provenance and licence
 

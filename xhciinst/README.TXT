@@ -565,11 +565,12 @@ Restart on 2000 to 10); the console sets them only with /set Name=Value.
 The drivers' own install writes each value of the release notes'
 "Registry settings" and "The connection manager's registry values" at
 its default where it is missing, so it is already in the controller's
-key (XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
-the systems that read them); XhciUsb2Bos, XhciResumeKeep,
-XhciCmAsmediaPcie7Credits, XhciCmRingInterrupt and XhciCmUsb4V2,
-XhciCmTunnelBridge, whose absence means no override, and
-XhciCmBridgeReq, whose absence means its default 1, are never written.
+key, every value the drivers read (each on the systems that read it:
+XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE and ME alone,
+XhciCmRingInterrupt on 2000 to 10, XhciCmBridgeReq on 2000 and XP);
+XhciCmTunnelBridge is written as "auto", the driver's own finding of the
+tunnel ports. Stor98's install does the same for its settings (its
+readme, "Settings"). A value you set is never written over.
 
 When Windows starts installing a device by itself while the installer
 runs - a Found New Hardware window, perhaps behind the installer's - it
