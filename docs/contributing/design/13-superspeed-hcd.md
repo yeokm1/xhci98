@@ -15,7 +15,8 @@ against - the function-driver contract (25.2), the Windows 98 export evidence
 the gates (25.5), and hubs and composite devices inside the bus (25.6);
 section 11 is the transfer-buffer policy (25.7) and section 12 the index of
 what Phase 25 leaves open; section 14 is a cancelled TD behind the head
-(task 43.64). Appendix A is the full Windows 98 export table.
+(task 43.64), and section 15 a device kept across its SuperSpeed link's
+recovery (task 45.41). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -11979,6 +11980,383 @@ this branch, and 7 of 10 with the branch before 43.69. None of these
 differences is significant, and against its own base, side by side, this
 build faulted 5 times to 7. Nothing on hardware: the defect needs a
 controller that breaks 4.10.1.1.2 and a cancel in the window.
+
+## 15. A device kept across its link's recovery (task 45.41, 2026-10-30)
+
+Status: 2026-10-30, reviewed and revised; built the same day. Written
+from roadmap-usb4 task 45.41's reading (`runs/run-45.md`, "45.41").
+
+### 15.1 The report and the reading
+
+A SanDisk UAS drive (`0781:55A9`) on port 1 of a SuperSpeed hub
+(`0BDA:0411`) at root port 3 of a VIA VL805 (`1106:3483`), 32-bit Windows
+5.2, `3.3.0.0`; Windows reported "Delayed Write Failed" for files on it and,
+separately, the machine "after a while" froze but for the mouse pointer,
+recovering partly after a wait; the drive stays plugged in for long hours.
+The user's snapshot: the UAS driver's telemetry record 1 "departed, slot
+4", record 2 "present, slot 4", `SsHubWarmResets` 1, no UAS sense, timeout,
+abort or reset counted; and on root port 2 an RTL8157 network adapter
+whose look reads "machine Bound, fed disconnect, link warm reset; PORTSC
+PLS 6, changes CSC PLC" - a SuperSpeed link in SS.Inactive (PLS 6) under a
+bound device, with CCS 0 (xhci-data-structures.md section 10.4).
+
+What the code does with such a link, on a root port and behind a
+SuperSpeed hub alike, is to drop the device and enumerate it afresh:
+
+- a hub port: `HcdSsHubPortLook` (`hcd_sshub.c`) reads the link in
+  SS.Inactive or Compliance Mode (`XhciSsHubPortDecide`), marks the port
+  `HubSsRecover` and asks for the disconnect of what it holds;
+  `hcdHubPortChanged` (`hcd_enum.c`) feeds that disconnect - the device
+  frozen, its transfers ended, its slot disabled, its PDOs reported
+  missing - and only then `HcdSsHubPortRecover` sends BH_PORT_RESET, and
+  the trained link is enumerated as a new device (section 10.5, roadmap-hcd
+  30-A.1);
+- a root port: `hcdPortChanged` reads the link as `XHCI_LINK_ERROR` or
+  `XHCI_LINK_COMPLIANCE` (`XhciLinkPortFeed`, `xhci_link.c`), feeds the
+  disconnect and writes the warm reset (PORTSC.WPR), and the reset's
+  completion finds the machine Empty and enumerates (roadmap-hcd 29-A.2).
+
+To the storage stack that is a surprise removal and a new disk: requests
+in flight fail, cached writes not yet on the medium are lost ("Delayed
+Write Failed"), and every handle opened on the old volume fails for good.
+The transfers the teardown ends are held on the old PDO until PnP's
+surprise removal reaches it (`HcdIoPark`, `hcd_io.c`), so its class driver
+sees no error until then. Read on q35 XP with `3.3.0.0` and a test-only
+SuperSpeed hub model that fails a downstream link (`runs/run-45.md`,
+"45.41"): the drive under a copy loop is dropped about 2 s after the link
+fails, every copy fails for about 16 s, and the drive comes back as a new
+disk.
+
+SS.Inactive is not a disconnect. A port enters it when its link fails and
+cannot recover - "a link error", USB 3.2 7.5.2 - with the device still
+attached; a detach takes the link to Rx.Detect instead. Only a warm reset
+(or a directed transition) leaves it (USB 3.2 7.5.2, 7.5.5.2, the comment
+at `XhciSsHubPortDecide`; verified for 30-A.1). The device behind it is
+the device that was there, reset by the warm reset to its Default state.
+
+**What Linux does [linux].** The hub driver's port event handler
+(`drivers/usb/core/hub.c`, `port_event`) warm-resets a port whose link
+needs it; when a configured device is attached it does so through
+`usb_reset_device`, which keeps the device and its interface drivers:
+each driver's `pre_reset` quiesces it, the port is reset, the device is
+readdressed and its descriptors compared (`usb_reset_and_verify_device`),
+the configuration and alternate settings are restored, and `post_reset`
+resumes the driver; a device whose descriptors changed is disconnected
+instead. A driver with no reset handlers is unbound and bound again.
+Facts only, and not checked against a pinned commit: the local mirror
+(`external/README.md`) carries no `drivers/usb/core`, so this paragraph
+binds nothing in the design and is a reader's orientation.
+
+### 15.2 What already exists
+
+The bus already restores a device in place: IOCTL_INTERNAL_USB_RESET_PORT
+(`hcdCfgResetPort`, `hcd_cfg.c`; section 10.9) pauses every pipe, brings
+each to rest with what it held completed (`hcdCfgResetQuiet`), resets the
+port - warm where the link cannot take a hot reset (`hcdUsb3ResetWrite`
+on a root port, `HcdSsHubPortReset` on a hub port, each within the port's
+warm-reset budget) - runs Reset Device and Address Device on the same
+slot (`HcdThreadReaddress`, which also refuses a changed speed or
+SuperSpeed link rank), compares the device descriptor, replays the
+configuration (`hcdCfgReplayConfig`: one Configure Endpoint for every open
+endpoint, SET_CONFIGURATION, the nonzero alternates; stream rings
+restarted), checks the port once more (connected, enabled, no connection
+or enable change) and resumes the pipes; any failure cycles the device.
+Every pipe handle a function driver holds stays valid. `usbstor` and
+`xhciuas.sys` already rely on it, the latter as the last step of its
+transport recovery (`uasResetDevice`, `uas_xport.c`).
+
+### 15.3 The design
+
+L1. **When.** A SuperSpeed link read in SS.Inactive or Compliance Mode on
+a port whose machine holds a device, and nothing else in the same sample:
+- a hub port: the look (`HcdSsHubPortLook`) returns `WarmReset` with
+  `Disconnect`, and neither `OverCurrent` nor `Repower` (the decision
+  already carries both; the look has then acknowledged the change bits and
+  powered nothing);
+- a root port: the link class is `XHCI_LINK_ERROR` or
+  `XHCI_LINK_COMPLIANCE` (`XhciLinkClassify` on the sample), PP set, OCC
+  clear, `XhciLinkPortFeed` asked for a warm reset (not a give-up) with the
+  disconnect fed, and `hcdTolPortFeed` left the disconnect as it was - not
+  the Cold Attach case (CAS in Disconnected) nor 38.10's stuck-Polling
+  reading, which have no device behind a trained link to keep.
+Every other port event is unchanged.
+
+L2. **Which devices (the decision).** A pure function,
+`XhciEnumLinkKeep(on, flags, recent)` (`xhci_enum.c`, host vectors in
+`test_enum`), on the flags 45.23's `hcdRkeepFlags` gathers. Restoring the
+configuration restores only what the bus knows (endpoint contexts,
+SET_CONFIGURATION, alternates); any class or vendor state a function
+driver set with its own requests is lost by the device's reset (record 20
+section 4.3.1, "Cost and risk"). So a device is kept only where the
+function driver's recovery contract has been read to need nothing more:
+a device of one interface in its configuration (`bNumInterfaces` 1,
+`XHCI_RKEEP_F_ONE_IFACE`), that interface storage running UAS under
+`xhciuas.sys` (`XHCI_RKEEP_F_STORAGE` with `XHCI_RKEEP_F_UAS`) - a UAS
+device carries no class state beyond its configuration and alternate,
+and `xhciuas.sys`'s own recovery ends with RESET_PORT (L5); a composite
+device whose other functions would lose their state is not kept. It is
+refused, in this order, when:
+- the switch is off (`XhciLinkKeep`, L7);
+- the device is faulted (`XHCI_RKEEP_F_FAULTED`: gone, EP0 stuck, a cycle
+  or abandonment owed, a slot fault, a send-back asked, a function
+  release owed);
+- it is a hub;
+- not every PDO of it is listed, reported and started, or one is
+  surprised, removed, closing, let go or dormant;
+- selective suspend is not running it, or a wake is armed or pending
+  (record 14: its link and armed state are that machine's);
+- an isochronous pipe is open;
+- it is not a one-interface UAS storage device as above (every other
+  class, Bulk-Only storage and composite devices included, takes today's
+  drop until its drivers' contracts are read; record 20 section 4.3.2
+  leaves `usbstor`'s unread);
+- it has no serial number taken as its instance id: between the sample
+  that read the link failed and the reset's acknowledgement (L3) a drive
+  could be swapped for an identical one, which the descriptors and
+  configuration cannot tell apart, and the old volume's cached writes
+  would reach the new medium - record 20 section 4.3.1, K5's rule;
+- the device was kept this way `XHCI_LINK_KEEP_MAX` (3) times in the
+  current window - a fixed window, opened by the first keep after the last
+  one closed and lasting `XHCI_LINK_KEEP_WINDOW` tolerance-clock ticks
+  (600: nominally 60 s, at least 27 s; `HcdTolNow`), so a keep at the
+  window's 600th tick or later opens a new one and at most six keeps can
+  fall inside any 600 ticks spanning two windows; a link that keeps failing
+  is dropped as today, so the class driver is not held in a reset loop.
+  `recent` is the count in the window (`XhciEnumLinkKeepRecent`: the
+  record keeps the window's first tick and the count), and a dropped
+  device's successor starts at 0 under 35-T.5's location charge (L4).
+URBs outstanding do not refuse it: the link failure has already ended
+what they were part of, and they fail (L3).
+
+So the RTL8157 network adapter the same snapshot shows dropped on root
+port 2 (section 15.1) is not kept: it is dropped and enumerated afresh as
+before, and task 45.40 - an RTL8157 on XP losing its static settings - is
+not answered by this section. To keep a network adapter would need its
+driver's recovery contract read first: what the vendor's NDIS driver
+programs into the device with its own requests (the MAC filter, the
+receive configuration, the multicast list, offloads) and whether it
+programs it again after a transfer error and a port reset, or only at
+its start - a device reset loses all of it, as Linux's r8152 driver
+answers with reset handlers of its own [linux]. With that contract read
+for a named driver, L2 can admit the device by its vendor and product
+ids, and the keep's restore stays as it is; without it, an adapter kept
+in place but left unprogrammed would pass no traffic until it was
+restarted, which is worse than today's drop.
+
+L3. **The restore.** On the controller thread, in the inspection that read
+the link (powered, under the power gate, as every inspection), before
+anything is fed to the port's machine, the sequence RESET_PORT runs
+(section 15.2), as one function extracted from `hcdCfgResetPort` and
+shared by both, keeping its order - the final port check before the pipes
+resume - with these differences for the link's case:
+- the status the pipes' requests complete with is passed down as
+  `USBD_STATUS_DEV_NOT_RESPONDING` (`hcdCfgResetQuietAs`), as 45.23's
+  `HcdCfgResumeQuiet` passes it; on the paths of `HcdIoPipeCancelAll`
+  that complete with CANCELED whatever they are given (a held record, a
+  waiting IRP, a record still being mapped, `hcd_io.c`), CANCELED is what
+  the function driver sees. Both are failures to `xhciuas.sys`, which
+  tells its own cancels by its own mark (`x->Cancelling`,
+  `uasXferDone`), not by the status, so either way the slot faults and
+  its recovery runs (L5). Nothing is replayed;
+- every pipe is quieted - paused, its requests failed, its endpoint
+  stopped, its ring drained - before any pipe's cancels are waited out
+  (`hcdCfgResetQuietAs`, then `hcdCfgResetSettle` for each): a cancelled
+  record still mapping can wait for map registers that a transfer of a
+  later pipe holds until that pipe is drained, so waiting pipe by pipe
+  could wait for ever on a link that will never finish that transfer
+  (45.23's resume quiet and settle are split for the same reason). The
+  settling is bounded, `HCD_RESET_SETTLE_ROUNDS` (1000) 1 ms waits shared
+  by the device's pipes (`HcdIoPipeWaitCancelledFor`): a cancelled record
+  still mapping can also wait for map registers another device holds -
+  another device whose link failed, whose own recovery this thread would
+  then never reach - so a settle that runs out fails the restore (L4)
+  rather than waiting there. The cycle that follows does not cure that
+  case: its teardown waits, unbounded, for the device's references
+  (`hcdDeviceFree`, `HcdIoDeviceGone`), and the record still mapping
+  holds one. That wait is today's: the drop the keep replaces takes the
+  same teardown, as does every departure, and RESET_PORT and ABORT_PIPE
+  wait unbounded for their cancels (`HcdIoPipeWaitCancelled`); it needs
+  the map registers of the whole grant (256 on the reporter's controller)
+  to be held by transfers of devices whose links have failed together.
+  The keep neither adds a wait nor removes that one; L11 records it as an
+  item of its own. The split and the bound apply to RESET_PORT itself too,
+  which had the same order and an unbounded wait;
+- the warm-reset budget is charged once per physical reset. A hub port's
+  look charges nothing (`HcdSsHubPortReset` charges when it decides a warm
+  reset). A root port's `XhciLinkPortFeed` has already charged one warm
+  reset (`xhciLinkWarm` under `WANT_SERVICE`) that it would have written
+  itself; the keep writes none of its own, so that charge is refunded
+  (`XhciLinkRefund`, a pure helper with vectors: one warm reset off the
+  count, never below 0, the give-up untouched) before the shared reset
+  path decides and charges its own (`hcdUsb3ResetWrite`, `WANT_RESET`).
+  Neither path writes the warm reset the inspection would have written
+  (the root path's `LinkRecovering` stays 0: the reset is waited for
+  synchronously, as RESET_PORT's is);
+- on a root port the change bits the reset raises - CSC (CCS returns from
+  the 0 that SS.Inactive reads), PRC, WRC, PLC, PEC - are acknowledged
+  once the reset has ended with the port connected and enabled in U0,
+  right after it and before Reset Device, as 45.23's restore acknowledges
+  after its reset; a hub port's reset already clears C_PORT_CONNECTION
+  and C_PORT_LINK_STATE with C_BH_PORT_RESET (`XhciSsHubResetClears`).
+  A connection or enable change after that fails the final check;
+- the device is identified as the resume's keep identifies it
+  (`hcdRkeepRestore`): device descriptor, the whole configuration
+  descriptor, and the serial number, each compared with the record's;
+- the link's absence through the reset is the driver's own: on a root
+  port `HcdTolLocRecovery` before the reset, as the warm reset it replaces
+  did; a hub port's reset path observes the recovered connection itself
+  (`HcdSsHubPortReset` calls `HcdTolLocObserve`), and the keep calls
+  `HcdTolLocRecovery` before it there too;
+- on success the inspection's own action is consumed: the hub port's
+  `HubSsRecover` is cleared and neither the disconnect, the recovery's
+  warm reset nor the connect is fed; on a root port nothing is fed and no
+  warm reset written; the port is not looked at again for this sample.
+URBs submitted during the restore wait on the paused pipes and are
+published when they resume. Requests on the SlowIrps queue (a RESET_PORT,
+an ABORT_PIPE, a select) arriving meanwhile wait for the thread's next
+service pass, as they wait behind any inspection today, and are then
+served on the restored device; a selective-suspend deferral is not
+possible (L2 keeps only devices selective suspend is not holding).
+
+L4. **Failure.** Not started when the controller is halted or
+`hcdHalted` reads so (the inspection then does what it does today). Any
+step failing - the reset, a command, a read, a compare, the final check -
+ends as a failed RESET_PORT ends: `HcdCfgCycle`, which charges the
+location's re-enumeration (`XHCI_TOL_CHARGE_REENUM`) and holds it on a
+refusal (35-T.5), and asks the thread to drop the device at its next pass
+(`PortCycle`); the pipes stay paused until the drop's teardown completes
+what they hold (DEVICE_GONE), and the cycle's pass, then the port's next
+inspection, enumerate whatever the link offers - warm-resetting it first
+when it still reads SS.Inactive, through today's path. A command that
+never answered has asked for the controller reset, as RESET_PORT's do,
+and what is left is that recovery's invalidation's. On the hub path the
+look's `HubSsRecover` is cleared on failure too (the cycle owns the
+port's next steps), and the hub port is marked `Changed` so it is looked
+at again after the drop. Failure counts in the device's budget only in
+that the device is gone; its successor is a new record.
+
+L5. **The class driver above.** No change to `xhciuas.sys` is needed. A
+UAS command whose status or data transfer fails without the driver
+having cancelled it marks its slot failed (`uasSlotFault`,
+`uas_xport.c`), and the recovery worker's device reset (`uasResetDevice`)
+ends every command in flight with `SRB_STATUS_BUS_RESET`, waits up to
+5 s for every transfer to come back (`uasWaitAllFree`) and then sends
+RESET_PORT, which waits on the SlowIrps
+queue until the keep's inspection is over and then resets a device the
+bus has just restored (a hot reset; the device's tags are free after
+it). What the class driver above does with BUS_RESET is its own: Windows
+2000's and XP's disk class driver retries a bounded number of times, and
+the Windows 98 mapping layer's behaviour is unread (record 20 section
+4.3.3, B2, which also names the ordering hazard of a write issued again).
+What the keep changes is that the disk is not removed: the drop it
+replaces fails every request and loses every cached write outright.
+
+The worker can start before the keep does - at a transfer that failed
+before the inspection reached the port, while the thread served other
+requests - or while it quiets one pipe after another, so its 5 s wait can
+run out on a device the bus then restores. Until now `uasResetDevice`
+then marked the FDO Dead and left it so: every request failed
+`SRB_STATUS_NO_DEVICE` until the drive was unplugged, a state no timing
+bound on the bus's side can rule out (the system time is not monotonic,
+and the worker's start is not the bus's to see). So `uasResetDevice`
+changes in one place: when it gives up without the bus having had its
+RESET_PORT - its transfers not back within the 5 s, or no IRP to send it
+in - it marks the FDO Dead as before and owes the bus a cycle
+(`CycleOwed`, `uasCycleOwed`). The cycle is asked through the resume
+request's new op, `XHCI98_RESUME_OP_CYCLE` (`xhci98_xfer.h`), which the
+bus carries out as a failed RESET_PORT's: on the thread, charged to the
+location's re-enumeration budget (`XHCI_TOL_CHARGE_REENUM`, a refusal
+holding it, 35-T.5) before the cycle's disconnect (`PortCycleCharge`,
+published with `PortCycle` and its serial in one hold of the controller
+lock, and taken and cleared with them in the thread's pass), so repeated failures meet
+the same bound as repeated failed RESET_PORTs; a bus before `3.4.0.0`
+refuses the op as invalid and is asked with IOCTL_INTERNAL_USB_CYCLE_PORT
+instead (uncharged, as there). A request that could not be sent for want
+of an IRP stays owed: the driver's one-second timer queues its recovery
+worker while it is, and the worker asks again first thing, until the bus
+has taken it or the engine has stopped or the device gone; the engine's
+stop and its start clear what is owed, so a restarted drive is never
+cycled for its predecessor's failure. When the bus
+had the RESET_PORT and failed it, it has cycled and charged the device
+already (`hcdCfgResetPort`), and nothing more is asked. The worst case of
+the race is then today's outcome - the drive enumerated afresh - never a
+drive left present and dead. The change applies to every device reset of the driver,
+not only after a link's recovery: a drive whose reset fails is
+re-enumerated rather than left dead, as Linux disconnects a device whose
+reset fails [linux].
+
+L6. **What the driver reports.** Log notes, as the resume's keep:
+`link.keep` at each decision (the location in the high half, kept or the
+refusal's reason in the low byte) and `link.keep.done` (restored, or the
+step that failed); no counter-block change (the snapshot's layout would
+move). The trace's `XHCI_DBG_VALUE` lines name each step.
+
+L7. **The switch.** `XhciLinkKeep`, a DWORD read as the other values at
+each start (`hcd_ctl.c`): absent, or anything but 0, is on; 0 restores
+today's drop. Noted `link.keep.on`. No INF writes it.
+
+L8. **The freeze.** Reported separately ("after a while ... freezes except
+the mouse cursor", partly recovering after a wait; the drive plugged in
+for hours). The reading so far (`runs/run-45.md`, "45.41"): with
+`3.3.0.0` each link failure under load leaves the disk absent for 11 to 31
+s (seven drops measured) before its successor is usable, every request in
+that time fails, and the old volume's device stack stays until every
+handle on it is closed - a virtual machine's disk image, a browser
+profile; a snapshot after twenty-one failures shows nothing of the bus
+growing (slots, pool rings, transfer records). Whether repeated episodes
+make the freeze through the programs that hold the old volume is read by
+the soak legs (L9); the keep removes the surprise removal from the path
+whatever the answer.
+
+L9. **Legs.** q35 XP (the closest base to the reporter's 32-bit Windows
+5.2), QEMU 11.1 with a test-only patch: a SuperSpeed hub model
+(`usb-ss-hub`) whose `link-drop` property fails a downstream link
+(SS.Inactive and C_PORT_LINK_STATE; the host controller forgets the
+transfers in flight to the device, with no event, and starts none until
+a warm reset), and the same for a `qemu-xhci` root port (PLS 6, CCS 0,
+PED 0, CSC and PLC, as the VL805 reported). A UAS disk (`usb-uas`, serial
+set) under a copy loop compared byte for byte, and a file held open and
+written every second:
+- a hub-port and a root-port link failure: kept, the copies after it
+  compare equal, the held file grows on, no "Delayed Write Failed", the
+  stall measured from the serial log;
+- the soak, twenty failures forty seconds apart, before (`3.3.0.0`) and
+  after, comparing stall lengths and looking for growth and the freeze;
+- the budget: four failures inside the window, the fourth dropped;
+- the hub model's variants: the connection bit dropped too (0x100), and a
+  failure the hub never reports (0x200) - the class driver's timeout
+  path with a link nobody announced;
+- refusals: `XhciLinkKeep` 0; a UAS disk with no serial number; a
+  Bulk-Only disk (`usb-storage` at SuperSpeed) - each dropped as today;
+- a swap: the link failed, the disk image behind the same serial changed
+  is not detectable by the bus (the bridge's identity is the bus's
+  check; record 20 section 4.3.3, B7's bound) - recorded as such, not a
+  leg;
+- regressions: 45.23's resume keep (a hibernation under the copy loop),
+  a plain unplug of the disk and of the hub under load, and RESET_PORT
+  through `xhciuas.sys`'s own recovery.
+The VL805 and the Realtek hub are the reporter's to read.
+
+L11. **Not in this change: a departure that waits on another device's
+map registers.** A record of one device waiting in the map pump for
+registers that another device's transfers hold, when the other device's
+link has failed and only this thread's inspection would end them, blocks
+the thread in the first device's teardown (and in a RESET_PORT or
+ABORT_PIPE of it) before it reaches the second. It predates this section,
+whichever path the first device takes, and is left for a design of its
+own: deferring a departing record's reclamation while the thread serves
+other devices, or a controller-wide drain before it. Recorded in the
+release notes' known limitations only if it is ever observed.
+
+L10. **Where.** `xhci_enum.c`/`.h` (the decision, its reasons and
+constants), `xhci_link.c`/`.h` (`XhciLinkRefund`), `uas/uas_xport.c`
+(`uasResetDevice`'s owed cycle, L5), `uas/uas.h`, `xhci98_xfer.h` and
+`hcd_urb.c` (the CYCLE op), `test/test_enum.c`,
+`test/test_link.c`; `hcd_cfg.c` (`hcdCfgResetPort` split into the shared
+restore with the link case's options, and `HcdCfgLinkKeep`); `hcd_enum.c`
+(the two trigger points, the flags and budget, L3's consumption and L4's
+fallback); `hcd_ctl.c` (the switch); `hcd.h` (the device's count and
+window start, the controller's switch).
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

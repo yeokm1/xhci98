@@ -272,6 +272,13 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
     }
 }
 
+VOID XhciLinkRefund(PXHCI_LINK_PORT link)
+{
+    if (link != NULL && link->WarmResets != 0) {
+        link->WarmResets--;
+    }
+}
+
 ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen)
 {
     if (warmSeen != NULL) {

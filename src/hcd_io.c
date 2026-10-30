@@ -2402,8 +2402,11 @@ VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 
 /* Until no record of the pipe is still marked cancelled - each clears its
  * mark when it completes. A record in the map pump completes as CANCELED
- * through HcdIoMapped. IRQL: PASSIVE_LEVEL. */
-static VOID hcdWaitCancelledOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
+ * through HcdIoMapped. With `rounds`, at most that many 1 ms waits, shared
+ * by the caller across pipes (task 45.41): 0 when the budget ran out with
+ * a record still marked, else 1. IRQL: PASSIVE_LEVEL. */
+static ULONG hcdWaitCancelledOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
+                                 PULONG rounds)
 {
     LARGE_INTEGER due;
     PLIST_ENTRY entry;
@@ -2443,10 +2446,17 @@ static VOID hcdWaitCancelledOne(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
         if (!busy) {
             break;
         }
+        if (rounds != NULL) {
+            if (*rounds == 0) {
+                return 0;
+            }
+            (*rounds)--;
+        }
         HcdRelativeMs(&due, 1);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
         HcdIoDeferred(hc);
     }
+    return 1;
 }
 
 VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
@@ -2454,10 +2464,33 @@ VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe)
     PHCD_PIPE p;
     ULONG id;
 
-    hcdWaitCancelledOne(hc, pipe);
+    (VOID)hcdWaitCancelledOne(hc, pipe, NULL);
     for (id = 1; (p = hcdStreamAt(pipe, id)) != NULL; id++) {
-        hcdWaitCancelledOne(hc, p);
+        (VOID)hcdWaitCancelledOne(hc, p, NULL);
     }
+}
+
+/* Task 45.41 (design record 13 section 15, L3): as HcdIoPipeWaitCancelled,
+ * within a budget of *rounds 1 ms waits the caller shares across the
+ * pipes it settles - a cancelled record still mapping can wait for map
+ * registers another device holds, whose own recovery this thread would
+ * never reach. Returns 0, the records still marked, when the budget ran
+ * out. IRQL: PASSIVE_LEVEL. */
+ULONG HcdIoPipeWaitCancelledFor(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
+                                PULONG rounds)
+{
+    PHCD_PIPE p;
+    ULONG id;
+
+    if (!hcdWaitCancelledOne(hc, pipe, rounds)) {
+        return 0;
+    }
+    for (id = 1; (p = hcdStreamAt(pipe, id)) != NULL; id++) {
+        if (!hcdWaitCancelledOne(hc, p, rounds)) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 /* ----------------------------------------------------------------------- */

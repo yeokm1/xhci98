@@ -161,6 +161,15 @@ ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen);
 ULONG XhciLinkPortFeed(PXHCI_LINK_PORT link, ULONG usb3, ULONG portsc,
                        ULONG enumState, PXHCI_LINK_ACTION action);
 
+/*
+ * Task 45.41 (design record 13 section 15, L3): the warm reset
+ * XhciLinkPortFeed charged to the budget is not written - the device is
+ * kept and the restore's own reset decides and charges again - so the
+ * charge is taken back: the count less one, never below 0. A give-up is
+ * left as it is: XhciLinkPortFeed charges nothing when it gives up.
+ */
+VOID XhciLinkRefund(PXHCI_LINK_PORT link);
+
 /* ------------------------------------------------------------------ */
 /* 29-A.5's hold                                                       */
 /* ------------------------------------------------------------------ */
