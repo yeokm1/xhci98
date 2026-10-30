@@ -4711,11 +4711,35 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
     if (dev->Susp.State != XHCI_SUSP_ACTIVE || dev->FwArmedAll != 0) {
         flags |= XHCI_RKEEP_F_SUSPENDED;
     }
+    /* A pause still standing between the thread's passes is a failure's
+     * (a refused ABORT_PIPE leaves its pipe paused for the reset it asked
+     * for, whose invalidation drops the device): the replay resumes only
+     * the quiet's own pause, so a kept device would hold that pipe's
+     * requests for good. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Pipe.Paused != 0) {
+        flags |= XHCI_RKEEP_F_FAULTED;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe != NULL && pipe->Paused != 0) {
+            flags |= XHCI_RKEEP_F_FAULTED;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     for (dci = 2; dci < 32; dci++) {
         pipe = dev->Pipes[dci];
         if (pipe != NULL && pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
             flags |= XHCI_RKEEP_F_ISOCH;
         }
+    }
+    /* A whole-device driver may select another configuration than index
+     * 0 (an unsplit device, design record 13 section 10.8), which
+     * dev->Config does not describe. */
+    if (dev->ConfigValue != 0 &&
+        (dev->Config == NULL || dev->ConfigLength < 9 ||
+         dev->ConfigValue != (ULONG)dev->Config[5])) {
+        flags |= XHCI_RKEEP_F_OTHER_CFG;
     }
     if (hcdRkeepStorage(dev, &storage)) {
         flags |= XHCI_RKEEP_F_STORAGE;

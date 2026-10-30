@@ -621,10 +621,17 @@ outside it changes:
   the quiet.
 - The decision is pure, `XhciEnumResumeKeep` (`xhci_enum.c`, host
   vectors in `test_enum`): the switch off, a device that is gone or owes
-  a fault's cycle, a send-back or a slot fault, a device behind a hub, a
+  a fault's cycle, a send-back or a slot fault, or has a pipe still
+  paused by a failure (a refused ABORT_PIPE leaves its pipe paused for
+  the reset it asked for, which the resume's re-initialization took the
+  place of; the replay resumes only the quiet's own pause), a device
+  behind a hub, a
   hub (and so its subtree), a PDO not started or removed, a device whose
   selective suspend is not active or that has a wake armed or pending
-  (K6's D2 and WAIT_WAKE cases), an isochronous pipe open, and storage
+  (K6's D2 and WAIT_WAKE cases), a device a whole-device driver
+  configured with another configuration than index 0 (the one the record
+  holds, every other test reads and the restore compares; reviewed and
+  revised 2026-10-30), an isochronous pipe open, and storage
   that is not one interface on UAS (`xhciuas.sys`), has no serial number
   taken as its instance id, or has a URB outstanding on its PDOs, each
   take K7. A HID device with its poll outstanding is kept.
@@ -852,7 +859,10 @@ both times, or it is not removable, has page 0x80 or page 0x83
 (non-empty), each equal to the recorded one, and the same capacity. A
 removable LUN with a medium, a LUN with neither page, any differing value
 and any read that fails all fail the check (B6). Every LUN passing: the
-epoch is recorded as verified and the hold released. No request of the
+epoch is recorded as verified and the hold released; every start of
+the engine forgets it, since a device record the bus built afresh (a
+dormant PDO revived on Windows 98 and ME) counts its epoch from 0 again
+(reviewed and revised 2026-10-30). No request of the
 class driver reaches a drive kept across a re-initialization until it has
 passed the check. The bound of what is read: a bridge whose pages 0x80
 and 0x83 describe itself rather than the disk behind it does not tell
