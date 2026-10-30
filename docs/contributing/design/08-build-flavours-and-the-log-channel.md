@@ -1124,6 +1124,12 @@ was the frame pointers on x86 and the checker. The one build keeps both.
    and the snapshot's `B_DEBUG` bit now mark it alone. Its leg kits are
    unchanged.
 
+Two questions the code raised, answered by the owner on 2026-10-30:
+`XhciCommandCheck` stays out of the installer's Advanced list and its
+`/set` rows (`tuning.md` and the release notes alone carry it), and
+`XHCIPFW.SYS` and Stor98 keep their builds as they are, with no `/Oy-`
+change, since neither ever had a `debug` flavour to retire.
+
 ### 14.3 The build's vocabulary
 
 - `build-driver.cmd release|qemu|all [-amd64]`: the default is `release`;
