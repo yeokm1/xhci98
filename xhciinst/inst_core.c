@@ -8547,6 +8547,7 @@ const int instXhciNameCount =
 const INST_NAMEROW instNhiNames[] = {
     { 0x1022UL, 0x1668UL, INST_NB_USB4, "AMD Pink Sardine" },
     { 0x1022UL, 0x1669UL, INST_NB_USB4, "AMD Pink Sardine" },
+    { 0x1B21UL, 0x2425UL, INST_NB_USB4, "ASMedia ASM4242" },
     { 0x8086UL, 0x1134UL, INST_NB_USB4, "Intel Maple Ridge" },
     { 0x8086UL, 0x1137UL, INST_NB_USB4, "Intel Maple Ridge" },
     { 0x8086UL, 0x156AUL, INST_NB_TB2, "Intel Falcon Ridge" },
@@ -8583,15 +8584,6 @@ const INST_NAMEROW instNhiNames[] = {
 };
 const int instNhiNameCount =
     (int)(sizeof(instNhiNames) / sizeof(instNhiNames[0]));
-
-/* Task 44.55 (2026-10-25): matched by the class
- * line, named by the FriendlyName; test_inst holds that no NHI INF binds
- * these ids. */
-const INST_NAMEROW instNhiFnNames[] = {
-    { 0x1B21UL, 0x2425UL, INST_NB_USB4, "ASMedia ASM4242" }
-};
-const int instNhiFnNameCount =
-    (int)(sizeof(instNhiFnNames) / sizeof(instNhiFnNames[0]));
 
 const char *inst_name_base(int base)
 {
@@ -9493,21 +9485,6 @@ int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
 int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
 {
     const INST_NAMEROW *r = name_row(instNhiNames, instNhiNameCount, ven, dev);
-
-    if (r == NULL) {
-        r = name_row(instNhiFnNames, instNhiFnNameCount, ven, dev);
-    }
-    if (r == NULL) {
-        name_put(out, cap, INST_NB_USB4, NULL);
-        return 0;
-    }
-    return name_put(out, cap, r->Base, r->Product);
-}
-
-int inst_nhi_fname(INST_U32 ven, INST_U32 dev, char *out, size_t cap)
-{
-    const INST_NAMEROW *r = name_row(instNhiFnNames, instNhiFnNameCount, ven,
-                                     dev);
 
     if (r == NULL) {
         name_put(out, cap, INST_NB_USB4, NULL);

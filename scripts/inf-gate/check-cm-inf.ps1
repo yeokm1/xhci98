@@ -51,11 +51,12 @@ rule named as the other gates name their families.
            (PATH-NT6). amd64 (xhcicm-amd64.inf): [Manufacturer] exactly
            CmModels,NTamd64,NTamd64.6.0 and no undecorated models, install
            or right-click section (PATH-NO9X).
-  CM-ID    Every NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx
-           or the class line and nothing else, every models section of the
-           file binds the same set (CM-IDSET), and its id lines are exactly
-           the rows of src\cm\cm_vals.c's Intel and AMD tables, the ICM and
-           the USB4 profiles both (CM-IDLIST).
+  CM-ID    Every NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx,
+           PCI\VEN_1B21&DEV_xxxx or the class line and nothing else, every
+           models section of the file binds the same set (CM-IDSET), and its
+           id lines are exactly the rows of src\cm\cm_vals.c's Intel, AMD
+           and ASMedia tables, the ICM and the USB4 profiles both
+           (CM-IDLIST).
   CM-CLASSLINE
            Every NHI models section carries exactly one class line,
            PCI\CC_0C0340 (design record 22 section 3.7), and no other
@@ -95,7 +96,7 @@ rule named as the other gates name their families.
            description string reads as decided (record 21 section 3.3,
            record 22 section 3.7, task 43.73): an NHI id line its product's
            string (Tb2FrDesc, Tb3ArDesc, Tb3TrDesc, Tb3IlDesc, U4MrDesc ...
-           U4PsDesc: the generation, the maker and the product), the class
+           U4AsDesc: the generation, the maker and the product), the class
            line U4Desc, the plain name; filter lines TbBridgeDesc (the
            Thunderbolt 2 and 3 generation's ports), BridgeDesc (QEMU's
            1B36 bridges) or U4BridgeDesc (every other); CmSvcDesc the same
@@ -197,6 +198,7 @@ $descNhi = [ordered]@{
     "U4WlDesc"  = @("xHCI98 USB4 Router (Intel Wildcat Lake)", @("8086:4D33"))
     "U4BrDesc"  = @("xHCI98 USB4 Router (Intel Barlow Ridge)", @("8086:5781", "8086:5784"))
     "U4PsDesc"  = @("xHCI98 USB4 Router (AMD Pink Sardine)", @("1022:1668", "1022:1669"))
+    "U4AsDesc"  = @("xHCI98 USB4 Router (ASMedia ASM4242)", @("1B21:2425"))
 }
 $descNhiById = @{}
 foreach ($k in $descNhi.Keys) { foreach ($i in $descNhi[$k][1]) { $descNhiById[$i] = $k } }
@@ -536,7 +538,7 @@ function Test-CmInfText {
                     if ($id -match '(?i)^PCI\\CC_') {
                         if ($id -ine 'PCI\CC_0C0340') { & $add "CM-CLASSLINE" "model binds the class id '$id'; the one class line is PCI\CC_0C0340, the USB4 host interface (design record 22 section 3.7)." }
                         else { $classLines++ }
-                    } elseif ($id -notmatch '(?i)^PCI\\VEN_(8086|1022)&DEV_[0-9A-F]{4}$') { & $add "CM-ID" "model binds '$id'; an NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx or the class line PCI\CC_0C0340 alone." }
+                    } elseif ($id -notmatch '(?i)^PCI\\VEN_(8086|1022|1B21)&DEV_[0-9A-F]{4}$') { & $add "CM-ID" "model binds '$id'; an NHI model binds PCI\VEN_8086&DEV_xxxx, PCI\VEN_1022&DEV_xxxx, PCI\VEN_1B21&DEV_xxxx or the class line PCI\CC_0C0340 alone." }
                 }
                 # CM-NOROUTER: a device router's, a USB-only NHI's or an
                 # unclaimed generation's id is never an INF line (design
@@ -565,11 +567,11 @@ function Test-CmInfText {
     }
     if (@($idSets.Values | Sort-Object -Unique).Count -gt 1) { & $add "CM-IDSET" "the models sections bind different ids; every target of this file must see the same set." }
     # CM-IDLIST: the NHI's id lines are exactly the rows of cm_vals.c's
-    # tables, Intel's (ICM and USB4 profiles) and AMD's, so the INF and the
-    # profile the code gives each id cannot drift.
+    # tables, Intel's (ICM and USB4 profiles), AMD's and ASMedia's, so the
+    # INF and the profile the code gives each id cannot drift.
     if ($Kind -eq "nhi") {
         $tableIds = @()
-        foreach ($tbl in @(@{ Name = "cmIntelNhi"; Ven = "8086" }, @{ Name = "cmAmdNhi"; Ven = "1022" })) {
+        foreach ($tbl in @(@{ Name = "cmIntelNhi"; Ven = "8086" }, @{ Name = "cmAmdNhi"; Ven = "1022" }, @{ Name = "cmAsmNhi"; Ven = "1B21" })) {
             $tm = [regex]::Match($ValsText, '(?s)' + $tbl.Name + '\[\]\s*=\s*\{(.*?)\};')
             if (-not $tm.Success) { & $add "CM-IDLIST" "src\cm\cm_vals.c's $($tbl.Name) table could not be read."; continue }
             $rows = @([regex]::Matches($tm.Groups[1].Value, '\{\s*0x([0-9A-Fa-f]{4})\s*,\s*CM_PROFILE_(ICM_[A-Z]+|USB4)\s*\}') | ForEach-Object { $tbl.Ven + ":" + $_.Groups[1].Value.ToUpperInvariant() })
@@ -844,7 +846,7 @@ if ($SelfTest) {
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15C0&CC_0604`r`n") },
                     @{ Rule = "CM-NO9XBRIDGE";  Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15C0`r`n") },
                     @{ Rule = "CM-CLASSLINE";   Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\CC_0880`r`n") },
-                    @{ Rule = "CM-ID";          Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2142`r`n") },
+                    @{ Rule = "CM-ID";          Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_10EC&DEV_2142`r`n") },
                     @{ Rule = "CM-IDSET";       Text = $t.Replace("[CmModels.NTx86.6.0]`r`n", "[CmModels.NTx86.6.0]`r`n%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1234`r`n") },
                     @{ Rule = "PATH-MFGDEC";    Text = $t.Replace("%Mfg%=CmModels,NTx86.6.0", "%Mfg%=CmModels,NTx86,NTx86.6.0") },
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,NTMPDriver,,xhcicm.sys", "HKR,,NTMPDriver,,other.sys") },
@@ -875,6 +877,8 @@ if ($SelfTest) {
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_1234`r`n").Replace("%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1234`r`n") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669`r`n", "").Replace("%U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669`r`n", "") },
+                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425`r`n", "").Replace("%U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425`r`n", "") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425", "%U4Desc%=Cm.Dev,PCI\VEN_1B21&DEV_2425") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E434`r`n", "").Replace("%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E434`r`n", "") },
                     @{ Rule = "CM-CLASSLINE";   Text = $t.Replace("[CmModels]`r`n", "[CmModels]`r`n%Tb3ArDesc%=Cm.Dev,PCI\CC_0C0340`r`n") },
                     @{ Rule = "CM-CLASSLINE";   Text = $t.Replace("%U4Desc%=Cm.Dev,PCI\CC_0C0340`r`n", "") },

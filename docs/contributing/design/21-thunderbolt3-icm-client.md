@@ -61,6 +61,13 @@ line alone (no id line, so no change of rank), is named `xHCI98 USB4
 Router (ASMedia ASM4242)` by the installer's FriendlyName, as the xHCI
 controllers are (record 23 section 5.13.8), and the filter line of its
 downstream ports names it, `xHCI98 USB4 PCI Bridge (ASMedia ASM4242)`.
+Section 3.3 revised 2026-10-30 (roadmap-usb4 task 45.46, the owner's
+decision of that day): the ASM4242's NHI has an id line of its own,
+`PCI\VEN_1B21&DEV_2425` under `U4AsDesc`, in both NHI INFs and a row of
+`cm_vals.c`'s `cmAsmNhi`, so the INF names it and the installer writes no
+FriendlyName for it; the match becomes a hardware id where it was the
+class's compatible one, and no system's choice of driver changes (record
+23 section 5.13.9).
 Section 6.1.2, added 2026-10-27 (task 44.54, the owner's decision of
 that day): on 98 SE and ME, under the USB4 profile, the removal of a
 drive that left with the controller waits for its return.
@@ -907,7 +914,7 @@ filter INFs, the USB4-only hosts' tunnel ports where the same `pci.ids`
 | `8086:5783` | JHL9540 Thunderbolt 4 Bridge [Barlow Ridge Host 40G 2023] | Barlow Ridge `5784` | untested |
 | `1022:14CD`, `1022:14EF` | Family 19h USB4/Thunderbolt PCIe tunnel | AMD's USB4 hosts | untested |
 | `1022:150A` | Strix/Strix Halo PCIe USB4 Bridge | AMD's USB4 hosts | untested |
-| `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242, NHI `1B21:2425` (matched by class `0C0340`; a family since task 44.40; named by the installer's FriendlyName since task 44.55) | its topology as record 22 section 18.1 gives it; the driver untested |
+| `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242, NHI `1B21:2425` (a family since task 44.40; its own NHI line since task 45.46, the installer's FriendlyName from task 44.55 to 3.3.0.0) | its topology as record 22 section 18.1 gives it; the driver untested |
 | `1B36:0001` | the emulator's i440FX `usb4-tunnel-bridge` (QEMU's PCI-to-PCI bridge id) | `usb4-emu` | [obs] `runs/run-39.md` 39-0.7 |
 | `1B36:000C` | the emulator's q35 `usb4-tunnel-port` (QEMU's PCIe root port id) | `usb4-emu` | not read here |
 
@@ -969,7 +976,8 @@ the same lines rank as the three strings did (record 23 section 5.13).
 | `4D33` | `U4WlDesc` | `xHCI98 USB4 Router (Intel Wildcat Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_WCL_NHI0` |
 | `5781`, `5784` | `U4BrDesc` | `xHCI98 USB4 Router (Intel Barlow Ridge)` | `cm_vals.c` (host 80G, 40G); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_BARLOW_RIDGE_HOST_80G_NHI`, `_40G_NHI` |
 | `1022:1668`, `1022:1669` | `U4PsDesc` | `xHCI98 USB4 Router (AMD Pink Sardine)` | `cm_vals.c`; record 22 section 3.1; FreeBSD `nhi_reg.h` `DEVICE_PINK_SARDINE_0`, `_1` (Linux names no AMD NHI id) |
-| class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (ASMedia, other AMD, the emulator's `1B36:00F4`); the ASM4242 (`1B21:2425`) then gets `xHCI98 USB4 Router (ASMedia ASM4242)` as the installer's FriendlyName (`instNhiFnNames`; 2026-10-25; task 44.55, record 23 section 5.13.8) |
+| `1B21:2425` | `U4AsDesc` | `xHCI98 USB4 Router (ASMedia ASM4242)` | `cm_vals.c` (`cmAsmNhi`); record 22 section 18.1 (`1B21:2425` rev 01, class `0C0340`). Task 45.46: up to 3.3.0.0 matched by the class line and named by the installer's FriendlyName (task 44.55, record 23 section 5.13.8) |
+| class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (other ASMedia, other AMD, the emulator's `1B36:00F4`) |
 
 The product is the family, not the part: the 2C, 4C, LP and C parts of
 Alpine Ridge are one name, as Tiger Lake's UP3 and H are and Barlow Ridge's

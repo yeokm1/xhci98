@@ -187,6 +187,15 @@ static void test_profiles(void)
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "AMD Pink Sardine 1669");
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "an Intel id under AMD's vendor id");
+    /* Task 45.46: the ASM4242's row, the profile its class gives it. */
+    ids.Vendor = 0x1B21;
+    ids.Device = 0x2425;
+    ids.ClassCode = CM_CLASS_USB4_NHI;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425");
+    ids.ClassCode = 0x088000;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425 by its row");
+    ids.Device = 0x2423;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "the ASM4242's port is no NHI");
     ids.Vendor = 0x8086;
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_ICM_AR, "a listed id outranks the class");

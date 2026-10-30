@@ -60,9 +60,10 @@ CatalogFile=xhcicm.cat
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E333
@@ -74,6 +75,7 @@ CatalogFile=xhcicm.cat
 %U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev,PCI\CC_0C0340
 
 [CmModels.NTamd64.6.0]
@@ -105,9 +107,10 @@ CatalogFile=xhcicm.cat
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
@@ -119,6 +122,7 @@ CatalogFile=xhcicm.cat
 %U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
@@ -205,5 +209,6 @@ U4PlDesc="xHCI98 USB4 Router (Intel Panther Lake)"
 U4WlDesc="xHCI98 USB4 Router (Intel Wildcat Lake)"
 U4BrDesc="xHCI98 USB4 Router (Intel Barlow Ridge)"
 U4PsDesc="xHCI98 USB4 Router (AMD Pink Sardine)"
+U4AsDesc="xHCI98 USB4 Router (ASMedia ASM4242)"
 U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

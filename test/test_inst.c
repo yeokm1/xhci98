@@ -7566,9 +7566,6 @@ static void names_inf(const char *text, const char *section, const char *label)
         sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
         CHECK(inst_nhi_name(ven, dev, name, sizeof(name)) == 1 &&
               strcmp(desc, name) == 0 && name_ok(desc), what);
-        sprintf(what, "%s %s: no id line for a FriendlyName NHI (no rank change)",
-                label, id);
-        CHECK(inst_nhi_fname(ven, dev, name, sizeof(name)) == 0, what);
         for (i = 0; i < instNhiNameCount; i++) {
             if (instNhiNames[i].Ven == ven && instNhiNames[i].Dev == dev) {
                 seen[i] = 1;
@@ -7788,18 +7785,6 @@ static void test_names(void)
 
     names_table(instXhciNames, instXhciNameCount, 0);
     names_table(instNhiNames, instNhiNameCount, 1);
-    names_table(instNhiFnNames, instNhiFnNameCount, 1);
-    {
-        int a;
-        int b;
-        for (a = 0; a < instNhiFnNameCount; a++) {
-            for (b = 0; b < instNhiNameCount; b++) {
-                CHECK(instNhiFnNames[a].Ven != instNhiNames[b].Ven ||
-                      instNhiFnNames[a].Dev != instNhiNames[b].Dev,
-                      "an NHI is named by its INF line or by FriendlyName, not both");
-            }
-        }
-    }
     CHECK(name_ok(INST_NAME_USB3) && name_ok(INST_NAME_USB4) &&
           name_ok(INST_NAME_TB2) && name_ok(INST_NAME_TB3), "the plain names");
 
@@ -7819,14 +7804,27 @@ static void test_names(void)
     CHECK(inst_xhci_name(0x1B21UL, 0x2426UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM4242)") == 0,
           "the ASM4242's xHCI");
+    /* Task 45.46: the ASM4242's router named by its own INF line (the
+     * table names_inf holds both NHI INFs to). */
     CHECK(inst_nhi_name(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
-          strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0 &&
-          inst_nhi_fname(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0,
-          "the ASM4242's router: named by the FriendlyName");
-    CHECK(inst_nhi_fname(0x8086UL, 0x15BFUL, name, sizeof(name)) == 0 &&
+          "the ASM4242's router: its INF line's name");
+    CHECK(inst_nhi_name(0x1B21UL, 0x2142UL, name, sizeof(name)) == 0 &&
           strcmp(name, INST_NAME_USB4) == 0,
-          "an NHI its INF line names: no FriendlyName");
+          "an NHI id the table lacks: the class line's plain name");
+    {
+        /* The FriendlyName 3.3.0.0's installer wrote on that router: an NHI
+         * has no table name for a FriendlyName now (names_canon NULL), so
+         * the update clears the recorded one, and a user's own stays. */
+        int r;
+        CHECK(inst_name_action(1, NULL, "xHCI98 USB4 Router (ASMedia ASM4242)",
+                               "xHCI98 USB4 Router (ASMedia ASM4242)", &r) ==
+                  INST_NAME_CLEAR && !r,
+              "task 45.46: the router's recorded FriendlyName cleared at an update");
+        CHECK(inst_name_action(1, NULL, "My router", NULL, &r) ==
+                  INST_NAME_NONE && !r,
+              "task 45.46: a user's name for the router stays");
+    }
     {
         static const char hwA[] = "PCI\\VEN_1B21&DEV_2425&SUBSYS_24211B21\0";
         static const char ccA[] = "PCI\\CC_0C0340\0";

@@ -2049,8 +2049,7 @@ static void print_plan(void)
                  (tbInclude && d->Inf == INST_INF_CM)) &&
                 names_canon(d, canon, sizeof(canon)) != NULL) {
                 /* Ours after the run: this package's driver's now, or
-                 * installed by it (xhci98 a controller, xhcicm an NHI of
-                 * instNhiFnNames, task 44.55). */
+                 * installed by it (xhci98 a controller). */
                 int ours = names_ours(d) || (d->Runs && !d->Refused);
                 int hasRec = names_rec_get(d->Id, rec, sizeof(rec)) == 1;
                 int a = inst_name_action(ours, canon, d->Friendly,
@@ -10733,8 +10732,9 @@ static int is_u4_nhi(const DEVREC *d)
            inst_msz_has(d->Hw, d->HwBytes, "PCI\\CC_0C0340");
 }
 
-/* The devnodes the names follow: the xHCI controllers, and the NHIs named
- * by FriendlyName (task 44.55). */
+/* The devnodes the names follow: the xHCI controllers, and the USB4 NHIs,
+ * whose FriendlyName up to 3.3.0.0 (the ASM4242's, task 44.55) is cleared
+ * now that their INF line names them (task 45.46). */
 static int names_dev(const DEVREC *d)
 {
     return is_controller(d) || is_u4_nhi(d);
@@ -10747,8 +10747,8 @@ static int names_ours(const DEVREC *d)
     return inst_eq(d->Service, is_controller(d) ? "xhci98" : "xhcicm");
 }
 
-/* The table's name for an xHCI controller, or for an NHI of instNhiFnNames,
- * or NULL (no row: the INF's own name, no FriendlyName). */
+/* The table's name for an xHCI controller, or NULL (no row, or an NHI:
+ * the INF's own name, no FriendlyName). */
 static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
 {
     INST_U32 vd;
@@ -10758,10 +10758,6 @@ static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
     }
     if (is_controller(d)) {
         return inst_xhci_name(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
-                                                                      : NULL;
-    }
-    if (is_u4_nhi(d)) {
-        return inst_nhi_fname(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
                                                                       : NULL;
     }
     return NULL;

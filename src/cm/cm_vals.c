@@ -152,7 +152,9 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out)
 
 /* NHI ids by profile (cm_vals.h): Intel's from Linux
  * drivers/thunderbolt/nhi.h, AMD's from FreeBSD sys/dev/thunderbolt
- * nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1). */
+ * nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1), ASMedia's from design record
+ * 22 section 18.1 (the ASM4242's host interface: class 0C0340 gives it
+ * the same profile; the row is there for its INF line, task 45.46). */
 typedef struct _CM_NHI_ROW {
     ULONG Device;
     ULONG Profile;
@@ -161,6 +163,10 @@ typedef struct _CM_NHI_ROW {
 static const CM_NHI_ROW cmAmdNhi[] = {
     { 0x1668, CM_PROFILE_USB4 },     /* Pink Sardine                      */
     { 0x1669, CM_PROFILE_USB4 }
+};
+
+static const CM_NHI_ROW cmAsmNhi[] = {
+    { 0x2425, CM_PROFILE_USB4 }      /* ASM4242                           */
 };
 
 static const CM_NHI_ROW cmIntelNhi[] = {
@@ -201,6 +207,7 @@ static const CM_NHI_ROW cmIntelNhi[] = {
 
 #define CM_INTEL_VENDOR 0x8086
 #define CM_AMD_VENDOR   0x1022
+#define CM_ASM_VENDOR   0x1B21
 
 static ULONG cmLookup(const CM_NHI_ROW *rows, ULONG count, ULONG device)
 {
@@ -228,6 +235,9 @@ ULONG CmProfileFor(const CM_IDS *ids)
                            ids->Device);
     } else if (ids->Vendor == CM_AMD_VENDOR) {
         profile = cmLookup(cmAmdNhi, sizeof(cmAmdNhi) / sizeof(cmAmdNhi[0]),
+                           ids->Device);
+    } else if (ids->Vendor == CM_ASM_VENDOR) {
+        profile = cmLookup(cmAsmNhi, sizeof(cmAsmNhi) / sizeof(cmAsmNhi[0]),
                            ids->Device);
     }
     if (profile != CM_PROFILE_UNKNOWN) {
