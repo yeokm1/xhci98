@@ -988,6 +988,14 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
     case XHCI_SNAPSHOT_HCD_PORT_FLAGS:
         return XhciSnapHcdFlags(p->SettleDeferred, p->LinkRecovering,
                                 p->Unreadable);
+    case XHCI_SNAPSHOT_HCD_PORT_IDMEM:
+        return p->IdMemVidPid;
+    case XHCI_SNAPSHOT_HCD_PORT_IDSTATE:
+        return (p->IdMemSerial ? 1UL : 0UL) | ((p->IdDeferLatch & 0xFFUL) << 8);
+    case XHCI_SNAPSHOT_HCD_PORT_IDDEFERS:
+        return p->IdDeferrals;
+    case XHCI_SNAPSHOT_HCD_PORT_IDFAILS:
+        return p->IdDeferFails;
     default:
         return 0;
     }

@@ -2306,10 +2306,13 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * that arrives is OK when XhciFuncSerialId takes it and REFUSED when it
  * does not - both the device's own answer, the same at every plug. A try
  * that does not get the string (a STALL, an error, a request not sent) is
- * made again, HCD_SERIAL_READ_TRIES in all, and only when every try failed
- * is the device FAILED - counted and traced, never silent - and named by
- * its location: a device whose read fails at one plug and not at the next
- * changes devnode, and three fails in a row is what it takes. (The other
+ * made again, HCD_SERIAL_READ_TRIES in all, 100 ms and then 400 ms after
+ * the try before (task 45.40), and only when every try failed is the
+ * device FAILED - counted and traced, never silent - and named by its
+ * location unless its root port remembers its serial form, when
+ * HcdDeviceSerialDefer reads again: a device whose read fails at one plug
+ * and not at the next changes devnode, and three fails in a row is what it
+ * takes. A controller halted during a wait returns 0, as a timeout. (The other
  * way is a duplicate: a serial id a present PDO already carries leaves
  * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it
  * set dev->Ep0Stuck and either requested the controller reset or found the
@@ -2320,9 +2323,12 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * only, powered.
  */
 #define HCD_SERIAL_READ_TRIES 3UL
+#define HCD_SERIAL_READ_GAP1_MS 100UL
+#define HCD_SERIAL_READ_GAP2_MS 400UL
 
 ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
+    LARGE_INTEGER due;
     PUCHAR s;
     ULONG langid;
     ULONG outcome;
@@ -2341,6 +2347,18 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     s = (PUCHAR)hc->ScratchVa;
     for (tries = 0; tries < HCD_SERIAL_READ_TRIES; tries++) {
+        if (tries != 0) {
+            /* Task 45.40: a try that did not bring the string is not
+             * repeated at once - a device busy just after its reset gets
+             * the time; a halted controller ends the read as a timeout
+             * does, with no PDO made from it. */
+            HcdRelativeMs(&due, tries == 1 ? HCD_SERIAL_READ_GAP1_MS
+                                           : HCD_SERIAL_READ_GAP2_MS);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+            if (hcdHalted(hc)) {
+                return 0;
+            }
+        }
         langid = 0x0409UL;
         bytes = 0;
         outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6, (USHORT)0x0300,
@@ -2383,6 +2401,130 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_DBG_VALUE("hcd: serial string not read, location id, port",
                    dev->Port);
     return 1;
+}
+
+/* hcd.h. IRQL: any. */
+ULONG HcdDeviceVidPid(PHCD_USB_DEVICE dev)
+{
+    return ((ULONG)dev->DeviceDesc[8] << 16) |
+           ((ULONG)dev->DeviceDesc[9] << 24) |
+           (ULONG)dev->DeviceDesc[10] | ((ULONG)dev->DeviceDesc[11] << 8);
+}
+
+/* Whether a deferred arrival is to be given up rather than read again
+ * (task 45.40): the controller halted, its thread stopping or its root hub
+ * gone, or the root port no longer holding the same connection - read
+ * disconnected or unreadable, or with a connection change, which is left
+ * set for the port's inspection. Thread only. */
+static ULONG hcdSerialDeferGone(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    ULONG portsc;
+
+    if (hcdHalted(hc) || hc->ThreadStop || !hc->RootHubStarted) {
+        return 1;
+    }
+    portsc = XhciReadPortsc(&hc->Hc, p->PortId);
+    return portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+           (portsc & XHCI_PORTSC_CSC) != 0;
+}
+
+/*
+ * Identity across a re-enumeration (roadmap-usb4 task 45.40; design record
+ * 13 section 10.7), right after HcdDeviceReadSerial and before anything of
+ * the device is configured: a non-hub device attached directly to a root
+ * port, with an iSerialNumber, whose read gave no usable serial while the
+ * port remembers a group of its ids answering the serial form, is read
+ * again in place - up to HCD_SERIAL_DEFER_TRIES fresh reader runs, each
+ * after HCD_SERIAL_DEFER_WAIT_MS, none started past HCD_SERIAL_DEFER_SPAN_MS
+ * from the first wait, the connection and the controller checked again
+ * after every wait and every run. XhciFuncSerialDefer decides; the port's latch makes
+ * a failed arrival's own retry fail at once and lets the next connection
+ * be published. HCD_SDEFER_GO: go on with dev->SerialState as it is now.
+ * HCD_SDEFER_FAIL: every run spent, or the failure already latched for
+ * this connection - no PDO. HCD_SDEFER_CANCEL: the connection or the
+ * controller went meanwhile, or a reader returned 0 - no PDO, nothing
+ * latched or counted as spent. Thread only, powered.
+ */
+#define HCD_SERIAL_DEFER_TRIES   3UL
+#define HCD_SERIAL_DEFER_WAIT_MS 1000UL
+#define HCD_SERIAL_DEFER_SPAN_MS 6000UL
+
+ULONG HcdDeviceSerialDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    LARGE_INTEGER due;
+    PHCD_PORT p;
+    ULONG covered;
+    ULONG failed;
+    ULONG vidPid;
+    ULONG where;
+    ULONG start;
+    ULONG run;
+
+    if (dev->Location == 0 || dev->Location > XHCI_MAX_ROOT_PORTS) {
+        return HCD_SDEFER_GO;
+    }
+    p = &hc->Ports[dev->Location - 1];
+    covered = (p->Hub == NULL && p->Device == dev &&
+               dev->DeviceDesc[4] != XHCI_HUB_CLASS &&
+               dev->DeviceDesc[16] != 0) ? 1UL : 0UL;
+    failed = (dev->SerialState == HCD_SERIAL_FAILED ||
+              dev->SerialState == HCD_SERIAL_REFUSED) ? 1UL : 0UL;
+    vidPid = HcdDeviceVidPid(dev);
+    where = dev->Location << 16;
+    switch (XhciFuncSerialDefer(covered, failed, vidPid, p->IdMemVidPid,
+                                p->IdMemSerial, p->IdDeferLatch)) {
+    case XHCI_FUNC_DEFER_YES:
+        break;
+    case XHCI_FUNC_DEFER_FAIL:
+        XhciLogNote(&hc->Hc, "serial.defer.latched", where);
+        XHCI_DBG_VALUE("hcd: serial deferral latched, no PDO, location",
+                       dev->Location);
+        return HCD_SDEFER_FAIL;
+    default:
+        return HCD_SDEFER_GO;
+    }
+    hc->SerialDeferrals++;
+    p->IdDeferrals++;
+    XhciLogNote(&hc->Hc, "serial.defer", where | dev->SerialState);
+    XHCI_DBG_VALUE("hcd: serial read failed where its serial form was, "
+                   "read again, location", dev->Location);
+    start = HcdTolNow(hc);
+    for (run = 1; run <= HCD_SERIAL_DEFER_TRIES; run++) {
+        HcdRelativeMs(&due, HCD_SERIAL_DEFER_WAIT_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        if (hcdSerialDeferGone(hc, p)) {
+            XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+            return HCD_SDEFER_CANCEL;
+        }
+        if (HcdTolNow(hc) - start >
+            HCD_SERIAL_DEFER_SPAN_MS / XHCI_TOL_TICK_MS) {
+            break;
+        }
+        dev->SerialState = HCD_SERIAL_UNREAD;
+        if (!HcdDeviceReadSerial(hc, dev) || hcdSerialDeferGone(hc, p)) {
+            XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+            return HCD_SDEFER_CANCEL;
+        }
+        XhciLogNote(&hc->Hc, "serial.defer",
+                    where | (run << 8) | dev->SerialState);
+        if (dev->SerialState == HCD_SERIAL_OK) {
+            hc->SerialDeferOk++;
+            XHCI_DBG_VALUE("hcd: serial read again, its own id, location",
+                           dev->Location);
+            return HCD_SDEFER_GO;
+        }
+    }
+    if (hcdSerialDeferGone(hc, p)) {
+        XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+        return HCD_SDEFER_CANCEL;
+    }
+    hc->SerialDeferFailed++;
+    p->IdDeferFails++;
+    p->IdDeferLatch = XHCI_FUNC_LATCH_FAILED;
+    XhciLogNote(&hc->Hc, "serial.defer.fail", where | run);
+    XHCI_DBG_VALUE("hcd: serial deferral spent, no PDO, location",
+                   dev->Location);
+    return HCD_SDEFER_FAIL;
 }
 
 /*
@@ -3136,6 +3278,17 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
                 hcdNoteFail(hc, p, cause, attempt, 1);
                 break;
             }
+            /* Task 45.40: a creation its serial deferral failed is not
+             * retried on this connection; the port waits in Failed for a
+             * new one, which hcdFeed lets through (design record 13
+             * section 10.7). */
+            if (p->Hub == NULL && cause == XHCI_ENUM_FAIL_PDO &&
+                p->IdDeferLatch == XHCI_FUNC_LATCH_FAILED) {
+                hcdNoteFail(hc, p, cause, attempt, 1);
+                XHCI_DBG_VALUE("hcd: enumeration failed, port/cause",
+                               (p->PortId << 16) | cause);
+                break;
+            }
             (VOID)XhciEnumRetryUpTo(&p->Enum, retries, &act);
             hcdNoteFail(hc, p, cause, attempt,
                         act.Kind == XHCI_ENUM_ACT_NONE);
@@ -3222,6 +3375,17 @@ static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
          (p->Enum.State == XHCI_ENUM_EMPTY ||
           p->Enum.State == XHCI_ENUM_FAILED))) {
         hcdConnectGen(hc, p);
+    }
+    /* Task 45.40: a connection that starts an enumeration after a spent
+     * serial deferral - a replug, or a recovery's re-enumeration - is
+     * published whatever its read gives; the machine's own retry of the
+     * failed connection never comes here. */
+    if (kind == XHCI_ENUM_EV_CONNECT && p->Hub == NULL &&
+        p->IdDeferLatch == XHCI_FUNC_LATCH_FAILED &&
+        (p->Enum.State == XHCI_ENUM_EMPTY ||
+         p->Enum.State == XHCI_ENUM_FAILED)) {
+        p->IdDeferLatch = XHCI_FUNC_LATCH_BYPASS;
+        XhciLogNote(&hc->Hc, "serial.defer.bypass", p->PortId << 16);
     }
     hcdEventInit(&event, kind, 1);
     for (guard = 0; hcdRun(hc, p, event) && guard < XHCI_TOL_REENUMS;

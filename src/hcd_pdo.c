@@ -1426,6 +1426,44 @@ static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
     return taken;
 }
 
+/*
+ * Task 45.40 (design record 13 section 10.7, "Identity across a
+ * re-enumeration"): every listing or revival writes the identity it
+ * answers to the log - the location, the read's outcome (HCD_SERIAL_*),
+ * whether a duplicate cleared the serial id, and the form - and, for a
+ * non-hub group of a device attached directly to a root port, the port's
+ * memory of it: the ids and whether `first`, the group's effective first
+ * PDO, answers the serial form. Any group listed for a device attached
+ * directly to a root port, a hub's included, clears that port's deferral
+ * latch. Thread
+ * only, after the locks are let go; `first` is listed.
+ */
+static VOID hcdIdRemember(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                          PHCD_DEVICE_PDO first, ULONG duplicate)
+{
+    PHCD_PORT p;
+    ULONG serial;
+
+    serial = (first->SerialId[0] != 0) ? 1UL : 0UL;
+    XhciLogNote(&hc->Hc, "id.form",
+                (dev->Location << 16) | ((dev->SerialState & 0xFFUL) << 8) |
+                    ((duplicate ? 1UL : 0UL) << 4) | serial);
+    if (dev->Location == 0 || dev->Location > XHCI_MAX_ROOT_PORTS) {
+        return;
+    }
+    p = &hc->Ports[dev->Location - 1];
+    if (p->Hub != NULL || p->Device != dev) {
+        return;
+    }
+    /* Any listing at the port ends a bypass, a hub's too; only a non-hub
+     * group is remembered. */
+    p->IdDeferLatch = XHCI_FUNC_LATCH_NONE;
+    if (!first->Hub) {
+        p->IdMemVidPid = HcdDeviceVidPid(dev);
+        p->IdMemSerial = serial;
+    }
+}
+
 /* A device left on the location form because its serial id was taken:
  * counted and traced once the locks are let go. */
 static VOID hcdSerialDuplicateCount(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
@@ -1766,6 +1804,13 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (!HcdDeviceReadSerial(hc, dev)) {
         return STATUS_DEVICE_NOT_READY;
     }
+    /* Task 45.40: a device that was serial-named at its root port is not
+     * renamed there by a read that fails - read again in place, or no PDO
+     * (hcd_enum.c; design record 13 section 10.7). Before anything is
+     * configured, so a composite device's group goes as one. */
+    if (HcdDeviceSerialDefer(hc, dev) != HCD_SDEFER_GO) {
+        return STATUS_DEVICE_NOT_READY;
+    }
     if (XhciFuncSplit(dev->DeviceDesc, dev->Config, dev->ConfigLength,
                       &set) != XHCI_FUNC_OK) {
         set.Count = 0;
@@ -1858,6 +1903,8 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     if (hcdDormantRevive(hc, dev, first, elsewhere, &duplicate)) {
         KeReleaseSpinLock(&hcdSerialLock, serialIrql);
         hcdSerialDuplicateCount(hc, dev, duplicate);
+        hcdIdRemember(hc, dev, (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension,
+                      duplicate);
         /* The device came back to the PDOs PnP kept across the controller
          * stop: they are its own again, and the new ones, never listed,
          * go. Nothing changes in the relations. */
@@ -1909,6 +1956,7 @@ NTSTATUS HcdDevicePdoCreate(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
     KeReleaseSpinLock(&hcdSerialLock, serialIrql);
     hcdSerialDuplicateCount(hc, dev, duplicate);
+    hcdIdRemember(hc, dev, first, duplicate);
 
     XHCI_DBG_VALUE("hcd: device PDOs created, port/count",
                    (dev->Port << 16) | count);

@@ -406,6 +406,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
+#define SNAP_HCD_PORT_ID_WORDS      20UL /* task 45.40's words appended */
 #define SNAP_HCD_COUNTER_WORDS      96UL
 #define SNAP_HCD_MAX_BYTES          32768UL
 /*
@@ -3868,7 +3869,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         r = image + portsAt + i * portBytes;
         if (get32(r, 4) == 0 && get32(r, 8) == 0 && get32(r, 20) == 0 &&
             get32(r, 40) == 0 && get32(r, 44) == 0 && get32(r, 52) == 0 &&
-            get32(r, 60) == 0) {
+            get32(r, 60) == 0 &&
+            (portBytes < SNAP_HCD_PORT_ID_WORDS * 4 ||
+             (get32(r, 64) == 0 && get32(r, 68) == 0 && get32(r, 72) == 0))) {
             continue;
         }
         shown++;
@@ -3891,6 +3894,18 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
                  (v & 1UL) != 0 ? "; deferred by the settle" : "",
                  (v & 2UL) != 0 ? "; warm reset in flight" : "",
                  (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+        }
+        /* Task 45.40's identity words, where the driver appends them. */
+        if (portBytes >= SNAP_HCD_PORT_ID_WORDS * 4 &&
+            (get32(r, 64) != 0 || get32(r, 68) != 0 || get32(r, 72) != 0)) {
+            v = (get32(r, 68) >> 8) & 0xFFUL;
+            comp("        identity: last listed %04lX:%04lX on the %s form; "
+                 "%lu deferred, %lu spent%s\n",
+                 (get32(r, 64) >> 16) & 0xFFFFUL, get32(r, 64) & 0xFFFFUL,
+                 (get32(r, 68) & 1UL) != 0 ? "serial" : "location",
+                 get32(r, 72), get32(r, 76),
+                 v == 1UL ? "; failed, waits for a new connection"
+                          : v == 2UL ? "; bypass for this connection" : "");
         }
     }
     comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
@@ -6491,8 +6506,28 @@ static int selftest_hcd(void)
     put32(image, 24, 32);
     print_hcd(image, sizeof(image));
 
-    /* A later driver's longer record (80 bytes, words appended): walked by
-     * the header's record size, the known words read as before. */
+    /* A later driver's longer record (96 bytes, words appended past task
+     * 45.40's): walked by the header's record size, the known words read
+     * as before. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 96);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 2 * 96);
+    put32(image, 28, 8);
+    base = 32 + 96;
+    put32(image, base + 0, 17);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 20, 4);
+    put32(image, base + 80, 0xDEADBEEFUL);
+    print_hcd(image, 32 + 2 * 96);
+
+    /* Task 45.40's identity words: port 2 Empty, remembering a serial-named
+     * 0BDA:8157 whose deferral was spent, latched; port 3 a bypass. */
     memset(image, 0, sizeof(image));
     put32(image, 0, 1);
     put32(image, 4, 32);
@@ -6502,12 +6537,20 @@ static int selftest_hcd(void)
     put32(image, 20, 0);
     put32(image, 24, 32 + 2 * 80);
     put32(image, 28, 8);
+    base = 32;
+    put32(image, base + 0, 2);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x101UL);
+    put32(image, base + 72, 1);
+    put32(image, base + 76, 1);
     base = 32 + 80;
-    put32(image, base + 0, 17);
+    put32(image, base + 0, 3);
     put32(image, base + 4, 13);
-    put32(image, base + 8, 7);
-    put32(image, base + 20, 4);
-    put32(image, base + 64, 0xDEADBEEFUL);
+    put32(image, base + 8, 6);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x201UL);
+    put32(image, base + 72, 2);
+    put32(image, base + 76, 1);
     print_hcd(image, 32 + 2 * 80);
     return 0;
 }

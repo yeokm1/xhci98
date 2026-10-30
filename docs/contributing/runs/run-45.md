@@ -4304,6 +4304,150 @@ for the first time on XP and XP x64 under the Warn policy waits on
 Windows' wizard, at a cold start as at a plug. Owed: 45.42's 8 GB case
 and its replug (above).
 
+## 45.40 an RTL8157 on XP losing its static settings and taking the default route: read, reproduced, and the identity kept (2026-10-30)
+
+**Verdict: the report's symptom is what a new instance id gives, and a
+failed serial read at a re-enumeration is a way the bus gives one;
+reproduced on q35 XP and 7 with `3.3.0.0`.** XP and 7 keep a network
+adapter's TCP/IP settings under its devnode's `NetCfgInstanceId`. A
+devnode whose USB instance id changes is a new adapter: Windows installs
+it with DHCP, and the old one's static settings stay on a phantom. With
+the LAN's DHCP server handing out a router, the new adapter's default
+route can outrank the VPN adapter's (in the legs the simulated 5 Gbit/s
+adapter's automatic metric, 10 on XP and 5 on 7, was below the other
+adapter's 20). The bus names a device with a usable serial by that
+serial, and falls back to the location form when three serial reads in a
+row fail; a re-enumeration (a link recovery, a cycle, a controller
+recovery, a replug) reads the serial again. Design record 13 section 10.7,
+"Identity across a re-enumeration", now keeps a device that was
+serial-named at a root port from being renamed there by a read that
+fails. The user's own event is not read (owed: their `ipconfig /all`,
+`route print`, the `Enum\USB\VID_0BDA&PID_8157` keys and an `XHCITR`
+snapshot). `rtl815x` itself cannot change the devnode (below).
+
+### The reading
+
+- **Windows.** An adapter's TCP/IP settings live under its devnode's
+  `NetCfgInstanceId`; a devnode with a new instance id is a new adapter,
+  installed with DHCP. That is the mechanism the legs reproduce. The
+  symptom alone does not prove it: DHCP can be turned on for the same
+  adapter, and a default route can be added by other means; the user's
+  instance paths and `NetCfgInstanceId`s before and after would.
+- **`rtl815x` (usb-wdm-free 0.1.4, unchanged since).** Its NDIS Reset
+  resets pipes, applies the filter and reads the link; Halt and Initialize
+  keep the devnode; it sends no RESET_PORT or CYCLE_PORT; its address
+  choice (`ChooseAddress`) touches no TCP/IP setting. It cannot make a new
+  adapter. Separately, its `Recover` gives up after 30 failed recoveries
+  and reports the adapter gone - a dead LAN with the settings kept, not a
+  default route (a follow-up for that repository, not this task).
+- **The bus.** Every path that re-enumerates a configured device builds a
+  fresh device record and reads the serial again (root and hub link
+  recovery, the tolerance cycles, slot-fatal recovery, CYCLE_PORT, a
+  failed RESET_PORT, controller recovery, a resume that re-initializes the
+  controller in `3.3.0.0`); a successful RESET_PORT, the resume keep and
+  45.41's link keep (UAS only) keep the PDO. The read's three tries were
+  back to back, and a STALL counted as a failure. A serial-less device
+  keeps the location form, so one that comes back on another port or on
+  its USB 2.0 companion is a new devnode too (not changed here).
+- **A related reading.** The snapshot of task 45.41 (another user, VIA
+  VL805, XP x64) shows a 5 Gbit/s RTL8157 on root port 2 whose link fell
+  to SS.Inactive and was warm-reset, the device dropped and root port 2
+  Empty at the dump: such link drops happen with this adapter on real
+  hardware. Real RTL8157 units carry a MAC-like serial (a WisdPi WP-UT5
+  reads `000334C8D6B113C7`).
+
+### The vehicle
+
+`usb-wdm-free`'s `rtlemu.py` (SIMULATED RTL8157, usbredir, SuperSpeed),
+given `--serial` and `--serial-stall N` by this task (usb-wdm-free
+`2b1c293`: a serial string at index 3, and the first N reads of it in a
+run answered with a STALL). QEMU 11.1.0 (scoop build; the q35 emulator
+snapshot has no usb-redir), q35 bases `xp` and `w7x86`, 2 vCPUs, one guest
+at a time, overlays in `E:\xhci98-vm\p45\w45-rtl\`, QMP 49370, simulator
+49371. A second adapter, QEMU's `rtl8139` on user networking (DHCP, router
+10.0.2.2), stands for the VPN router. `rtl815x` 0.1.4 (`RTL815X.SYS`
+`5e1ef6be...`, `RTLXP7.INF` `479bf50c...`, as `SHA256.TXT`). Each replug
+is a `device_del` and a new simulator run on the same QEMU port.
+
+### Before the change: `3.3.0.0`
+
+XP SP3 (`xp1`, `3.3.0.0` release-x86, `xhci98.sys` `8ff8d0d2...`):
+
+| Step | Instance | Adapter | Result |
+|---|---|---|---|
+| plug, serial read | `USB\VID_0BDA&PID_8157\000334C8D6B113C7` | Local Area Connection 2, DHCP | default route via 192.168.77.1 metric 10, the rtl8139's metric 20 (`p1c`) |
+| set static 192.168.77.50/24, no gateway | same | static | default only via 10.0.2.2 (`p1d`) |
+| replug, 2 serial reads STALL | same | static kept | (`p2a`) |
+| replug, 3 serial reads STALL | **`USB\VID_0BDA&PID_8157\6&58728d&0&1`** | a new one, "... (RTL815X) #2", Found New Hardware wizard, DHCP 192.168.77.2 | **default route via 192.168.77.1 metric 10**; the static address gone (`p3b`) |
+| replug, serial read | the first | static again | (`p4a`) |
+
+7 SP1 x86 (`w7a`, `3.3.0.0`): the adapter "Local Area Connection 3" set
+static (`s10`); a replug with 3 STALLs made `USB\VID_0BDA&PID_8157\6&1a1ca75f&0&1`,
+**installed with no prompt at all**, DHCP 192.168.77.2, default route via
+192.168.77.1 metric 5 against the rtl8139's 20 (`s11`).
+
+### The change
+
+Design `f2916a2d`, code `54db4c51` (record 13 section 10.7, "Identity
+across a re-enumeration"; reviewed and revised):
+
+- the serial reader's tries 100 ms and 400 ms apart;
+- a root port remembers the last non-hub group listed for a device on it
+  directly (its ids, whether it answered the serial form);
+- a covered arrival whose read fails or is refused where its serial form
+  was is read again in place, up to three more reader runs 1 s apart,
+  cancelled on a departure, a connection change or a halted controller;
+- runs spent: no PDO, the port Failed and latched, `serial.defer.fail`;
+  the machine's own retry fails at once; the next connection (a replug, a
+  recovery's re-enumeration) is published whatever its read gives;
+- `id.form` and `serial.defer*` notes; counters `serial.deferred`,
+  `serial.defer.ok`, `serial.defer.fail`; four words appended to the HCD
+  region's root-port record (20 words), printed by `XHCITR` as an
+  "identity:" line.
+
+Host vectors: `test_func` (`test_serial_defer`, 12 cases), `test_snap`
+(the 20-word record), `XHCITR`'s `-selftest-hcd` (an Empty port kept for
+its identity line, a latch and a bypass).
+
+### After the change
+
+Build: `54db4c51`, the gated x86 build (release and qemu, "BUILD + GATES
+PASSED (release qemu)", the host suites passed; release `xhci98.sys`
+`a49d7846...`, 327552 bytes), and `XHCITR.EXE` of the same tree
+(`77cdc6a9...`) for the in-guest snapshots. Each guest a fresh overlay with
+`3.3.0.0` installed, this tree's `xhci98.sys` copied over the installed
+one and the guest restarted; the loaded file read back (327552 bytes,
+`driverquery` dated 30-Oct-26 10:55 PM). The adapter set static as before.
+
+| Step | XP SP3 (`xp2`) | 7 SP1 x86 (`w7b`) |
+|---|---|---|
+| plug, serial read; set static | `...\000334C8D6B113C7`, static, default via 10.0.2.2 (`a6`) | the same, "Local Area Connection 3" (`b7f`) |
+| replug, 3 serial reads STALL | **the same devnode, static kept** (`a7`) | **the same** (`b7g`) |
+| replug, 12 STALL (every run spent) | no adapter and no new instance; root port 1 Failed, cause PDO, its slot given back; the snapshot's notes `serial.defer=00010004`, runs `...0104`, `...0204`, `...0304`, `serial.defer.fail=00010004`, and "identity: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; failed, waits for a new connection" (`a8` to `a10`) | the same notes and line (`b7h`, `b7i`) |
+| replug, every read STALLs (the bypass) | published on the location form, `...\6&58728d&0&1` - the way out, as designed; its wizard cancelled (`a11`) | not run |
+| replug, serial read | the first devnode, static (`a12`) | the first, static (`b7j`) |
+
+The 3-STALL replug's notes (XP): `serial.defer=00010004` (the first read
+failed where the serial form was), `serial.defer=00010102` (run 1 read
+it), `id.form=00010201` (published on the serial form). Each simulator
+run's trace counts exactly its STALLs (`ev\a*.jsonl`, `ev\b*.jsonl`).
+Evidence: `E:\xhci98-vm\p45\w45-rtl\` (`shots\`, `ev\`, `pids.txt`), not
+tracked.
+
+### Not read
+
+- The user's own event and their adapter's serial behaviour.
+- A device behind a hub (hub ports are not covered), and a serial-less
+  device back on its USB 2.0 companion port (still a new devnode).
+- 98 SE, ME and 2000: the change is common code; no leg ran there.
+- A link drop or a recovery as the trigger (the legs replug); the
+  emulator cannot fail a SuperSpeed link.
+
+A user who meets this before the fix can keep the VPN adapter ahead by
+giving it a fixed interface metric of 1 (its TCP/IP Advanced settings,
+"Automatic metric" off); the adapter left with the static settings shows
+under Device Manager's hidden devices.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
