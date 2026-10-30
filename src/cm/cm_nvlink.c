@@ -419,11 +419,11 @@ ULONG CmNvlinkSystemNt(ULONG major, ULONG minor, BOOLEAN win64)
  * The q35 qualification (record 34 section 3.11 item 8): one row per
  * system, a bit per kind and case (CmNvlinkQ35Bit). Every bit is 0 until
  * a reading of task 45.18 passes it, and each is set by a commit that
- * cites that reading (runs/run-45.md, "45.18"): Windows 2000, the root
- * port's D1, read 2026-10-30.
+ * cites that reading (runs/run-45.md, "45.18"): Windows 2000 and XP, the
+ * root port's D1, read 2026-10-30.
  */
 static const UCHAR cmNvQ35Table[CM_NVLINK_SYSTEMS] = {
-    0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 ULONG CmNvlinkQ35Bit(ULONG kind, ULONG kase)

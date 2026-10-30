@@ -3184,7 +3184,7 @@ known issue below is for the owner.**
    install is complete and the next start works. This happens rarely and
    its cause is still being looked into."
 
-## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 reading on 2000 (2026-10-30)
+## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000 and XP (2026-10-30)
 
 Task 45.18 of `roadmap-usb4.md`; design record 34 section 3.11 (reviewed
 and revised; the owner's answers Q7 (b), Q8 (a), Q9 (a), Q10 (a) and Q11
@@ -3207,8 +3207,8 @@ filter's `IRP_MN_SURPRISE_REMOVAL`, `0x1C3` argument `0x17`), the
 connection manager's wait ended acknowledged (`0x1C1` argument `0x100`)
 before it, and no request was completed by Stor98's gone deadline (no
 `0x83`). The 2000 bit of the root-port D1 column is set on this reading
-(record 34 section 3.11 item 8). XP and XP x64 are not read yet; D2 and M
-wait for 45.13's per-tunnel keying and 45.15's kid.
+(record 34 section 3.11 item 8); XP the same, below. XP x64 is not read
+yet; D2 and M wait for 45.13's per-tunnel keying and 45.15's kid.
 
 ### The vehicle
 
@@ -3288,10 +3288,56 @@ Not counted (leg `r1`):
   the unplug. By the unplug the harness showed one held read or none, so
   those runs were not saturated, and they are not counted.
 
+### Windows XP (32-bit), the same reading
+
+**XP, D1, root port: passes at every injection point run**, the same
+conditions as 2000. The XP bit of the root-port D1 column is set on this
+reading.
+
+- The vehicle as for 2000, on the q35 base `xp` (SHA-256 `64ada103...`,
+  ACPI Multiprocessor PC HAL, `-smp 2 -m 1024`): the same release
+  package installed with `INSTALL /console /yes /nopause /thunderbolt
+  /stor98` (exit 0; the hardware wizards and the signing prompts answered
+  by keystrokes), a restart, the drive's wizard naming Stor98 (the tunnel
+  id), then the same trial `xhcicm.sys`, Stor98 debug-port build and
+  `XhciCmLogVerbosity` 2. Golden
+  `E:\xhci98-vm\p45\w45-s98chain\xp\golden.qcow2`; leg `x1`. The drive is
+  D:, the transfer disk E:.
+- Every counted run: `cm.nvlink.u4-q35=00001042` (SEND, root port,
+  system XP, reading DOWN). In the whole leg there was no Slot Control
+  write traced and no `0x83`.
+
+| Run | Injection | 0x1C0 statement | 0x141 seen | 0x142 ack | 0x1C1 wait end | first removal (0x1C3) | Time left at the reading |
+|---|---|---|---|---|---|---|---|
+| idle | no I/O | +132.7 | +187.6 | +188.5 | +208.1, acknowledged | +2155.5, surprise | 2796 ms |
+| I/O | `eio` QD 8 running, nothing held | +198.2 | +201.8 | +202.2 | +203.7, acknowledged | +2212.4 | 2796 ms |
+| held | eight reads held at their fetch (QD 8) | +173.6 | +182.0 | +186.7 | +253.3, acknowledged | +7873.9 | 2796 ms |
+| saturated | `eio` QD 32, every read held from the 150th: eight held at the controller, the rest queued in the port, unplugged once that count was steady (the eight discarded by the stage-2 reset) | +19.6 | +25.0 | +27.7 | +98.2, acknowledged | +2049.6 | 2796 ms |
+| bring-up | `x-rdy-set-delay-ms` 20000, unplugged 10 s after the plug | +47.6 | +113.5 | +114.0 | +116.0, acknowledged | +2206.7 | 2796 ms |
+| `RequestComplete` | `at=stage code=0x21 nth=300 act=gate` (fired 243.6 ms before the cutoff), then `device_del` | +146.2 | +147.2 | +147.5 | +194.8, acknowledged | +2196.7 | 2593 ms |
+| already gone | `at=fetch op=read nth=150 act=gate` (fired 1355.7 ms before the cutoff), `device_del` 1 s later | +38.2 | +97.0 | +97.7 | +114.7, acknowledged | +20469.6 | 1562 ms |
+| re-plug | unplugged as soon as Stor98's new instance traced its rendezvous (`0x140`) | +221.0 | +244.9 | +245.3 | +294.2, acknowledged | +2261.8 | 2766 ms |
+
+Not counted:
+
+- **The first saturation attempt.** The leg's sequence waited for nine
+  held reads, the count 2000 reached, but XP held eight. Before the unplug
+  a controller reset discarded the eight (`usb4_h_release ... discarded by
+  reset`), so nothing was held when the drive was unplugged. The run above
+  unplugs once the count is steady.
+- **The first re-plug attempt.** The unplug followed `cm.nvlink.up` before
+  Stor98 had started on the function: no rendezvous was traced and no
+  instance existed. The statement was made (+77.5) and XP removed the
+  device (`IRP_MN_REMOVE_DEVICE` at +191.6). The wait timed out at
+  +5263.0 (`0x1C1` argument `0x400`), since a Stor98 instance elsewhere
+  had read the table. With no instance on the function, no request
+  depended on the statement. The run above unplugs after Stor98's
+  rendezvous.
+
 ### What it changes
 
-The 2000 bit of the root-port D1 column (`cmNvQ35Table`). Left in 45.18:
-XP and XP x64 (the same runs), and D2 and M after 45.13's per-tunnel
+The 2000 and XP bits of the root-port D1 column (`cmNvQ35Table`). Left
+in 45.18: XP x64 (the same runs), and D2 and M after 45.13's per-tunnel
 keying and 45.15's kid. 98 SE and ME first need their system
 identification (record 34 section 3.11 item 8). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
