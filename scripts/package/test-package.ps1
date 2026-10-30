@@ -374,11 +374,15 @@ function Invoke-Packager {
         $Arguments = $Arguments + @("-HlprDriverPath", $standIn)
     }
     # Every call runs fixture P's packager (task 45.51) and names a stand-in
-    # -DriverPath of its own: a call with none, or one in this tree, would
-    # take the tree's build, which no digest holds, and is refused here.
+    # -DriverPath of its own: a call with none, or one in this tree that is
+    # not under this run's scratch (a gated build's TEMP is under the tree's
+    # out\), would take the tree's build, which no digest holds, and is
+    # refused here.
     $dpAt = [array]::IndexOf([string[]]$Arguments, "-DriverPath")
     $dpPath = if ($dpAt -ge 0 -and $dpAt + 1 -lt $Arguments.Count) { "$($Arguments[$dpAt + 1])" } else { "" }
-    if ($dpPath -eq "" -or [System.IO.Path]::GetFullPath($dpPath).StartsWith(([System.IO.Path]::GetFullPath($repo).TrimEnd('\') + '\'), [System.StringComparison]::OrdinalIgnoreCase)) {
+    $dpFull = if ($dpPath -ne "") { [System.IO.Path]::GetFullPath($dpPath) } else { "" }
+    $dpUnder = { param($Root) $dpFull.StartsWith(([System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'), [System.StringComparison]::OrdinalIgnoreCase) }
+    if ($dpPath -eq "" -or ((& $dpUnder $repo) -and -not (& $dpUnder $script:work))) {
         Assert-True $false ("a packager case named no stand-in -DriverPath of its own ('{0}'); it would take the tree's build." -f $dpPath)
         return @{ Output = "refused by the self-test: no stand-in -DriverPath"; ExitCode = 99 }
     }
