@@ -4076,6 +4076,7 @@ ones (`fc /b` equal) as 45.41's x64 legs did. Each start read with
 | c2 b | XP x64, this tree's build, cold start | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
 | c3 a | XP x64, `3.3.0.0`, cold start, first time, 4 GB (memory above 4 GB, as 45.42's 3 GB and 8 GB legs) | the same as c1 a | the same as c1 a; a replug from the emulator (`attached` false, then true) changed nothing: no new install attempt in `setupapi.log`, the wizard still waiting |
 | c4 a | XP x64, `3.3.0.0`, cold start, first time, 45.42's configuration as far as this kit's limits allow: 45.41's link-drop emulator build (a copy), 3 GB, a USB 2.0 hub on port 1 with a USB keyboard behind it | the same first look on port 3; slot 1 addressed, UAS; the hub (port 5) configured | the same `#E358` for `oem1.inf`, and one for the hub (`xHCI98 USB Hub`, `oem0.inf`): the keyboard behind it does nothing until that wizard is answered (the emulator's keys went to it until it was removed); a replug of the disk changed nothing, slot 1 still addressed |
+| x2 b | XP x86, this tree's build (the release x86 `xhci98.sys` `f18a3c4e795ef0ed...` and `xhciuas.sys` `989265a07bf16dc5...` of `f4fbf96d`, copied over `3.3.0.0`'s on a fresh overlay), cold start with a device of a new serial (`W45COLD3`) | the same first look; slot 1 addressed | the same `#E358` for `oem1.inf` on `W45COLD3`, the wizard waits |
 
 **Reading.** The connection is seen at every start. The root hub's
 first reading marks every root port changed (`XhciRootHubInit` in
@@ -4113,8 +4114,7 @@ case is not read.
 legs the device is enumerated at every cold start, and a UAS device seen
 for the first time on XP and XP x64 under the Warn policy waits on
 Windows' wizard, at a cold start as at a plug. Owed: 45.42's 8 GB case
-and its replug (above), and the first-time case on XP x86 with this
-tree's build.
+and its replug (above).
 
 ## 45.final: the release-notes texts the tasks handed over
 
