@@ -31,9 +31,10 @@ usbhub.sys and the virtual-hub values are refused rather than required.
 Since roadmap-usb4 task 45.30 each case runs the gate in this process (a
 script called with & has a script scope of its own each time, so no case
 sees another's state), and the whole run is skipped when nothing it and
-the gate read has changed since this tree's last passing run
-(out\inf-selftest-pass.txt). build-and-test.md, "The INF gate's self-tests,
-in process and skipped when unchanged", is the design.
+the gate read has changed since a passing run in this tree or any other
+(the shared store of task 45.51, Get-SelfTestPassDir in common.ps1).
+build-and-test.md, "The INF gate's self-tests, in process and skipped when
+unchanged" and "The self-tests' skip across worktrees", is the design.
 
 .PARAMETER Force
 Run every case even when the last passing run read the same files.
@@ -116,33 +117,22 @@ function Get-InfSelfTestDigest {
     }
 }
 
-# **Skipped when nothing it reads has changed** (task 45.30): the record of
-# this tree's last passing run, out\inf-selftest-pass.txt, names the digest
-# it read. -Force and XHCI98_FULL_SELFTESTS=1 (a cut's builds) run it all.
-$passRecord = Join-Path $repo "out\inf-selftest-pass.txt"
+# **Skipped when nothing it reads has changed** (task 45.30), across
+# worktrees since task 45.51: a pass is recorded in the shared store
+# (Get-SelfTestPassDir, common.ps1) under the digest it read, so any tree
+# whose inputs hash the same skips. -Force and XHCI98_FULL_SELFTESTS=1 (a
+# cut's builds) run it all. The in-tree record of 45.30,
+# out\inf-selftest-pass.txt, is retired; a leftover one is not read.
 $digest = Get-InfSelfTestDigest -Root $repo
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
-if (-not $fullAsked -and (Test-Path -LiteralPath $passRecord -PathType Leaf)) {
-    # A record is taken whole or not at all: exactly its four lines, in
-    # order, then the end line - the digest, the tree it was made in (a
-    # copied or junctioned out\ is no other tree's pass), its time and a
-    # count of one check or more - or it is no record and the suite runs.
-    $recLines = @([System.IO.File]::ReadAllLines($passRecord))
-    $recOk = $recLines.Count -eq 5 -and
-             $recLines[0] -match '^digest=[0-9a-f]{64}$' -and $recLines[1] -match '^tree=.+$' -and
-             $recLines[2] -match '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $recLines[3] -match '^checks=[1-9]\d*$' -and
-             $recLines[4] -eq "end"
-    if ($recOk -and $recLines[0].Substring(7) -eq $digest -and
-        [string]::Equals($recLines[1].Substring(5), [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
-        $rec = @{ time = $recLines[2].Substring(5); checks = $recLines[3].Substring(7) }
-        Write-Ok ("INF gate self-tests skipped: nothing they or the gate read has changed since the run that passed at {0} ({1} checks; digest {2}). -Force runs them." -f
-                  $rec["time"], $rec["checks"], $digest.Substring(0, 16))
+if (-not $fullAsked) {
+    $rec = Read-SelfTestPassRecord -Suite "inf" -Digest $digest
+    if ($null -ne $rec) {
+        Write-Ok ("INF gate self-tests skipped: nothing they or the gate read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
+                  $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
         exit 0
     }
 }
-# A record that no longer matches is gone before anything runs, so a run
-# stopped half-way leaves none.
-if (Test-Path -LiteralPath $passRecord) { Remove-Item -LiteralPath $passRecord -Force }
 
 . (Join-Path (Split-Path -Parent $PSScriptRoot) "test-harness.ps1")
 
@@ -351,6 +341,40 @@ try {
         $dg0 = $dg1
     }
     Assert-True ((Get-InfSelfTestDigest -Root $dg) -eq $dg0) "digest : the digest of one tree is not the same twice."
+
+    # The shared store both suites record their passes in (task 45.51): a
+    # record one tree wrote is found by another; a torn record, or one that
+    # names another suite or digest, is no record; a name a whole record
+    # already holds is left as it is, and a torn one is replaced.
+    Write-Step "the shared pass store: one record per suite and digest, whole or none"
+    $st = Join-Path $script:work "pass-store"
+    $stD = "0123456789abcdef" * 4
+    $stOther = "fedcba9876543210" * 4
+    Assert-True ($null -eq (Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st)) "store : an empty store gave a record."
+    Assert-True (Write-SelfTestPassRecord -Suite "inf" -Digest $stD -Checks 7 -Tree "C:\tree-one" -Dir $st) "store : a pass was not recorded."
+    $stRec = Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st
+    Assert-True ($null -ne $stRec -and $stRec.Checks -eq "7" -and $stRec.Tree -eq "C:\tree-one") "store : a record written was not read back whole."
+    Assert-True ($null -eq (Read-SelfTestPassRecord -Suite "packager" -Digest $stD -Dir $st)) "store : one suite's record was taken for another's."
+    Assert-True ($null -eq (Read-SelfTestPassRecord -Suite "inf" -Digest $stOther -Dir $st)) "store : one digest's record was taken for another's."
+    Assert-True ($null -eq (Read-SelfTestPassRecord -Suite "inf" -Digest "not-a-digest" -Dir $st)) "store : a malformed digest gave a record."
+    Assert-True (Write-SelfTestPassRecord -Suite "inf" -Digest $stD -Checks 9 -Tree "C:\tree-two" -Dir $st) "store : a second pass of the same inputs was not recorded."
+    Assert-True ((Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st).Tree -eq "C:\tree-one") "store : a whole record of the same digest was replaced."
+    $stLines = @([System.IO.File]::ReadAllLines($stRec.Path))
+    $stBad = @(
+        @{ Why = "torn (no end line)"; Lines = @($stLines[0..4]) },
+        @{ Why = "naming another suite"; Lines = @($stLines[0], "suite=packager") + @($stLines[2..5]) },
+        @{ Why = "naming another digest"; Lines = @("digest=" + $stOther) + @($stLines[1..5]) },
+        @{ Why = "a field out of order"; Lines = @($stLines[0], $stLines[1], $stLines[3], $stLines[2], $stLines[4], $stLines[5]) },
+        @{ Why = "with a line too many"; Lines = @($stLines) + @("end") }
+    )
+    foreach ($c in $stBad) {
+        [System.IO.File]::WriteAllLines($stRec.Path, [string[]]$c.Lines)
+        Assert-True ($null -eq (Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st)) ("store : a record {0} was taken." -f $c.Why)
+    }
+    Assert-True (Write-SelfTestPassRecord -Suite "inf" -Digest $stD -Checks 9 -Tree "C:\tree-two" -Dir $st) "store : a pass over a torn record was not recorded."
+    Assert-True ((Read-SelfTestPassRecord -Suite "inf" -Digest $stD -Dir $st).Tree -eq "C:\tree-two") "store : a torn record was not replaced."
+    Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $st "inf") -Filter "*.tmp" -Force).Count -eq 0) "store : a temporary file was left beside the records."
+    Assert-True (-not (Write-SelfTestPassRecord -Suite "inf" -Digest "not-a-digest" -Checks 9 -Tree "C:\x" -Dir $st)) "store : a malformed digest was recorded."
     Assert-True ($baseline.Output -notmatch "WARN:") ("src\xhci98.inf produced a warning:`n" + $baseline.Output)
     # Both models sections READ - the undecorated one and NT 6.x's - for the
     # reason the 64-bit baseline below gives, each with the controller and
@@ -2817,20 +2841,11 @@ if ($script:failures.Count -gt 0) {
     Write-Err ("INF gate self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
     exit 1
 }
-# The record of this pass, for the next run's skip: written whole to a
-# temporary name and moved into place, and only if what was read is still
-# what the run began with (a file changed during the run runs it again).
+# The record of this pass, for the next run's skip in any tree: written
+# only if what was read is still what the run began with (a file changed
+# during the run runs it again).
 if ((Get-InfSelfTestDigest -Root $repo) -eq $digest) {
-    Ensure-Directory (Split-Path -Parent $passRecord)
-    # A name of this run's own, so two runs at once never write one file.
-    $tmpRecord = $passRecord + "." + [System.IO.Path]::GetRandomFileName() + ".tmp"
-    try {
-        [System.IO.File]::WriteAllText($tmpRecord, ("digest={0}`r`ntree={1}`r`ntime={2}`r`nchecks={3}`r`nend`r`n" -f $digest,
-            [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $script:checks))
-        Move-Item -LiteralPath $tmpRecord -Destination $passRecord -Force
-    } finally {
-        if (Test-Path -LiteralPath $tmpRecord) { Remove-Item -LiteralPath $tmpRecord -Force -ErrorAction SilentlyContinue }
-    }
+    [void](Write-SelfTestPassRecord -Suite "inf" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
 Write-Ok ("INF gate self-tests passed ({0} checks)" -f $script:checks)
 exit 0

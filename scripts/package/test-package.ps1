@@ -27,9 +27,11 @@ in-memory certificate that signs them (CertificateRequest). One
 stand-in driver carries the exact probe marker to prove diagnostic artifacts
 are rejected before staging.
 
-The whole run is skipped when nothing it may read has changed since this
-tree's last passing run (out\packager-selftest-pass.txt): build-and-test.md,
-"The packager's self-tests, skipped when unchanged", is the design.
+The whole run is skipped when nothing it may read has changed since a
+passing run in this tree or any other (the shared store of task 45.51,
+Get-SelfTestPassDir in common.ps1): build-and-test.md, "The packager's
+self-tests, skipped when unchanged" and "The self-tests' skip across
+worktrees", is the design.
 
 .PARAMETER Force
 Run every case even when the last passing run read the same inputs.
@@ -207,31 +209,22 @@ function Get-PackagerSelfTestDigest {
 }
 
 # **Skipped when nothing it may read has changed**, as the INF gate's
-# self-tests are (task 45.30): out\packager-selftest-pass.txt, the record of
-# this tree's last passing run, names the digest it read. -Force and
-# XHCI98_FULL_SELFTESTS=1 (a cut's builds) run it all.
-$passRecord = Join-Path $repo "out\packager-selftest-pass.txt"
+# self-tests are (task 45.30), across worktrees since task 45.51: a pass is
+# recorded in the shared store (Get-SelfTestPassDir, common.ps1) under the
+# digest it read. -Force and XHCI98_FULL_SELFTESTS=1 (a cut's builds) run
+# it all. The in-tree record of 45.48, out\packager-selftest-pass.txt, is
+# retired; a leftover one is not read.
 $inherited = @(Get-PackagerSelfTestInherited -Root $repo)
 $digest = Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
-if (-not $fullAsked -and $null -ne $digest -and (Test-Path -LiteralPath $passRecord -PathType Leaf)) {
-    # A record is taken whole or not at all: the digest, the tree it was
-    # made in, its time, a count of one check or more, then the end line.
-    $recLines = @([System.IO.File]::ReadAllLines($passRecord))
-    $recOk = $recLines.Count -eq 5 -and
-             $recLines[0] -match '^digest=[0-9a-f]{64}$' -and $recLines[1] -match '^tree=.+$' -and
-             $recLines[2] -match '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $recLines[3] -match '^checks=[1-9]\d*$' -and
-             $recLines[4] -eq "end"
-    if ($recOk -and $recLines[0].Substring(7) -eq $digest -and
-        [string]::Equals($recLines[1].Substring(5), [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [System.StringComparison]::OrdinalIgnoreCase)) {
-        Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}). -Force runs them." -f
-                  $recLines[2].Substring(5), $recLines[3].Substring(7), $digest.Substring(0, 16))
+if (-not $fullAsked -and $null -ne $digest) {
+    $rec = Read-SelfTestPassRecord -Suite "packager" -Digest $digest
+    if ($null -ne $rec) {
+        Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
+                  $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
         exit 0
     }
 }
-# A record that no longer matches is gone before anything runs, so a run
-# stopped half-way leaves none.
-if (Test-Path -LiteralPath $passRecord) { Remove-Item -LiteralPath $passRecord -Force }
 
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
@@ -6772,19 +6765,11 @@ if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
     exit 1
 }
-# The record of this pass, for the next run's skip: written whole to a
-# temporary name and moved into place, and only if what may be read is
-# still what the run began with (a change during the run runs it again).
+# The record of this pass, for the next run's skip in any tree: written
+# only if what may be read is still what the run began with (a change
+# during the run runs it again).
 if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
-    Ensure-Directory (Split-Path -Parent $passRecord)
-    $tmpRecord = $passRecord + "." + [System.IO.Path]::GetRandomFileName() + ".tmp"
-    try {
-        [System.IO.File]::WriteAllText($tmpRecord, ("digest={0}`r`ntree={1}`r`ntime={2}`r`nchecks={3}`r`nend`r`n" -f $digest,
-            [System.IO.Path]::GetFullPath($repo).TrimEnd('\'), [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $script:checks))
-        Move-Item -LiteralPath $tmpRecord -Destination $passRecord -Force
-    } finally {
-        if (Test-Path -LiteralPath $tmpRecord) { Remove-Item -LiteralPath $tmpRecord -Force -ErrorAction SilentlyContinue }
-    }
+    [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0

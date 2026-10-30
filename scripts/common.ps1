@@ -315,3 +315,89 @@ function Assert-Win2KUsbdFile {
         throw "Expected Win2000 SP4 USBD.SYS 5.00.2195.6658 (20688 bytes); found version '$version' ($($file.Length) bytes) at: $Path"
     }
 }
+
+#
+# The self-tests' shared pass records (roadmap-usb4 task 45.51;
+# build-and-test.md, "The self-tests' skip across worktrees"). One store per
+# user and host, outside every worktree: a folder per suite and one file per
+# passing digest, so a pass in one tree is found by every tree whose inputs
+# hash the same. Nothing here deletes a record: one whose digest no tree
+# has any more is never asked for.
+#
+function Get-SelfTestPassDir {
+    # XHCI98_SELFTEST_PASS_DIR when set, else %LOCALAPPDATA%\xhci98\selftest-pass;
+    # "" when neither can be named (no store: every run runs whole).
+    if ("$env:XHCI98_SELFTEST_PASS_DIR" -ne "") { return [System.IO.Path]::GetFullPath("$env:XHCI98_SELFTEST_PASS_DIR") }
+    if ("$env:LOCALAPPDATA" -eq "") { return "" }
+    return (Join-Path $env:LOCALAPPDATA "xhci98\selftest-pass")
+}
+
+function Test-SelfTestPassRecordLines {
+    # A record counts only whole: exactly six lines in order - the digest and
+    # the suite asked, its time, a count of one check or more, the tree that
+    # passed (for the reader only, never compared), then the end line.
+    param([string[]]$Lines, [string]$Suite, [string]$Digest)
+    return ($Lines.Count -eq 6 -and $Lines[0] -ceq ("digest=" + $Digest) -and $Lines[1] -ceq ("suite=" + $Suite) -and
+            $Lines[2] -cmatch '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $Lines[3] -cmatch '^checks=[1-9]\d*$' -and
+            $Lines[4] -cmatch '^tree=.+$' -and $Lines[5] -ceq "end")
+}
+
+function Read-SelfTestPassRecord {
+    # The record of a pass of -Suite on -Digest, as @{ Time; Checks; Tree;
+    # Path }, or $null when there is none or it is not whole.
+    param([string]$Suite, [string]$Digest, [string]$Dir = "")
+    if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$') { return $null }
+    if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+    if ($Dir -eq "") { return $null }
+    $file = Join-Path (Join-Path $Dir $Suite) ($Digest + ".txt")
+    try {
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
+        $lines = @([System.IO.File]::ReadAllLines($file))
+    } catch {
+        return $null
+    }
+    if (-not (Test-SelfTestPassRecordLines -Lines $lines -Suite $Suite -Digest $Digest)) { return $null }
+    return @{ Time = $lines[2].Substring(5); Checks = $lines[3].Substring(7); Tree = $lines[4].Substring(5); Path = $file }
+}
+
+function Write-SelfTestPassRecord {
+    # Records a pass of -Suite on -Digest: the suite's folder made if it is
+    # not there, the record written whole to a temporary name beside its
+    # place and moved into it, so it is whole or absent. When the name is
+    # taken, a whole record for this digest is left as it is (another tree
+    # passed the same inputs) and anything else is replaced from the fresh
+    # temporary. Any other failure is a warning and records nothing: the
+    # pass stands and the next run runs whole. $true when a whole record is
+    # in place afterwards.
+    param([string]$Suite, [string]$Digest, [int]$Checks, [string]$Tree, [string]$Dir = "")
+    if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$' -or $Checks -lt 1) { return $false }
+    if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+    if ($Dir -eq "") {
+        Write-Warn ("the {0} self-tests' pass was not recorded: neither XHCI98_SELFTEST_PASS_DIR nor LOCALAPPDATA is set." -f $Suite)
+        return $false
+    }
+    $tmp = ""
+    try {
+        $folder = Join-Path $Dir $Suite
+        [void][System.IO.Directory]::CreateDirectory($folder)
+        $dest = Join-Path $folder ($Digest + ".txt")
+        $tmp = Join-Path $folder ($Digest + "." + [System.IO.Path]::GetRandomFileName() + ".tmp")
+        $text = ("digest={0}`r`nsuite={1}`r`ntime={2}`r`nchecks={3}`r`ntree={4}`r`nend`r`n" -f $Digest, $Suite,
+                 [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $Checks, $Tree)
+        [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+        try {
+            [System.IO.File]::Move($tmp, $dest)
+        } catch {
+            # Taken by another run's record, or failed for another reason.
+            if (-not [System.IO.File]::Exists($dest)) { throw }
+            if ($null -ne (Read-SelfTestPassRecord -Suite $Suite -Digest $Digest -Dir $Dir)) { return $true }
+            [System.IO.File]::Replace($tmp, $dest, [NullString]::Value)
+        }
+        return ($null -ne (Read-SelfTestPassRecord -Suite $Suite -Digest $Digest -Dir $Dir))
+    } catch {
+        Write-Warn ("the {0} self-tests' pass was not recorded ({1}); the next run runs them whole." -f $Suite, $_.Exception.Message)
+        return $false
+    } finally {
+        if ($tmp -ne "" -and [System.IO.File]::Exists($tmp)) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}

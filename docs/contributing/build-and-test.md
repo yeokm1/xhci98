@@ -3597,7 +3597,10 @@ settled before the code (reviewed and revised).
   gate into a function returning its verdict was the other way; it would
   mean rewriting a 3,600-line script's top level and its every `exit`, for
   the same isolation a script scope already gives.)
-- **Skipped when nothing it reads has changed.** The self-test first
+- **Skipped when nothing it reads has changed** (as task 45.30 made it;
+  task 45.51 moved the record into a store every tree shares and
+  narrowed the set: "The self-tests' skip across worktrees" below). The
+  self-test first
   hashes (SHA-256) every file it and the gate read: the two scripts and
   everything else under `scripts\inf-gate\` (the footprints, allowlists and
   the other gates' files are there), `scripts\common.ps1`,
@@ -3695,7 +3698,9 @@ cases that drive them read across the whole tree. The digest
   `CertificateRequest`, which the signing cases need).
 
 When git cannot list the tree there is no digest and the suite runs whole.
-The record is `out\packager-selftest-pass.txt`, of the INF gate's form
+The record (as task 45.48 made it; task 45.51 moved it into a store
+every tree shares and narrowed the digest: "The self-tests' skip across
+worktrees" below) is `out\packager-selftest-pass.txt`, of the INF gate's form
 (digest, the tree's full path, time, checks, `end`), taken whole or not at
 all, deleted before a run, and written only after a run in which every
 check passed and the digest taken again at the end is the one it began
