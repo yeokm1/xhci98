@@ -257,9 +257,9 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
     return CM_ROLE_CHILD;
 }
 
-ULONG CmRolePlace(ULONG role, ULONG pciAbove)
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace)
 {
-    if (role == CM_ROLE_FILTER && !pciAbove) {
+    if (byPlace && role == CM_ROLE_FILTER && !pciAbove) {
         return CM_ROLE_CHILD;
     }
     return role;

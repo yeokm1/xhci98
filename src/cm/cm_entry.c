@@ -166,7 +166,8 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     /* Since task 45.12 (design record 33 section 4.4): a listed bridge's
      * LowerFilters registration, made before the PCI driver's FDO, is the
      * child; the NHI's answer stands whatever is above its PDO. */
-    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo));
+    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo),
+                       (ULONG)(CmBreqGate != 0));
     if (role == CM_ROLE_FILTER) {
         if (cmBridgeOnStack(pdo)) {
             return STATUS_SUCCESS;

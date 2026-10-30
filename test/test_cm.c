@@ -116,21 +116,25 @@ static void test_role_decide(void)
 
     /* The role by position (design record 33 section 4.4, task 45.12). */
     classify(bridge, sizeof(bridge), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_FILTER,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 0), CM_ROLE_FILTER,
+             "NT 6.x: a listed bridge's lower call stays the bridge filter (M15)");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 0), CM_ROLE_FILTER,
+             "NT 6.x: the upper call the same");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_FILTER,
              "an INF-listed bridge with the PCI driver's FDO above: the bridge "
              "filter (its UpperFilters)");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_CHILD,
              "an INF-listed bridge with nothing of the PCI driver's above: the "
              "child (its LowerFilters bridge mark)");
     classify(nhi, sizeof(nhi), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0), CM_ROLE_NHI,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_NHI,
              "the NHI with nothing above its PDO stays the NHI");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1), CM_ROLE_NHI,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_NHI,
              "the NHI whatever is above it");
     classify(usp, sizeof(usp), &ids);
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1, 1), CM_ROLE_CHILD,
              "an unlisted bridge is a child in either order");
-    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0), CM_ROLE_CHILD,
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0, 1), CM_ROLE_CHILD,
              "an unlisted bridge, below the FDO");
 }
 
