@@ -1501,7 +1501,10 @@ differs from them, this section is the record.
   router included) and names the next hop towards it (`tbtU4NotifyOf`);
   a request to the host router itself forwards nothing, so none is its
   own. Any other is foreign: never removal evidence for the request
-  (`tbtU4Gone`), the request asked once more (`tbtU4RdN`, `tbtU4WrN`), and
+  (`tbtU4Gone`), the request asked once more (`tbtU4RdN`, `tbtU4WrN`) -
+  but never a router operation's launch (`ROUTER_CS_9` to `26`), which a
+  second write could run twice or write over while it runs: that request
+  fails as any other cut short - and
   the notification handled as its queued form would be - a kid's lane or
   route the kid's check (and unplug hint for its lane) with a plain check
   of the host port, a host lane that port's check and hint. This holds at
@@ -1577,7 +1580,10 @@ differs from them, this section is the record.
   FAILED for PCIe stays down (`TBT_U4_LINK.KidDown`: never adopted or
   connected) until its link is removed and the child plugged again. A
   kid whose teardown is still owed stays a kid, finished or dropped with
-  its parent after the commit; and with too few link records free for the
+  its parent after the commit: a departure the recovery reads drops the
+  port's kids at once (`tbtU4RecoverEmpty`), and no kid is ever written
+  once its port holds another connection (`ParentGeneration` against the
+  port's `Generation`; dropped unwritten instead); and with too few link records free for the
   rest the attempt is refused (`RecReserveFull`), the kids kept.
 - **The seam** (`cm_nhi.c`). A kid's action reaches `CmReenumAction` at
   depth 2, `Slot` the port with the kid in bits 15:8 (the chain action's

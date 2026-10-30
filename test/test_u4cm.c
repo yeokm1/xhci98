@@ -6449,6 +6449,42 @@ static int xportHook(struct FAB *f, unsigned long pdf, int router, unsigned long
     return FAB_HOOK_GO;
 }
 
+/* Hook: the same host ERR_CONN at the first router-operation launch
+ * (ROUTER_CS_9 written) to router g_ropDev once armed. */
+static int g_ropDev;
+static int ropHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                   unsigned long adp, unsigned long addr, unsigned long n,
+                   const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)n; (void)data;
+    if (g_ropDev >= 0 && pdf == TBT_PDF_WRITE && router == g_ropDev &&
+        cs == TBT_CS_ROUTER && addr == 9) {
+        g_ropDev = -1;
+        dw[0] = 0x80000000UL;
+        dw[1] = 0;
+        dw[2] = TBT_EV_ERR_CONN | ((unsigned long)fabPortLane0(f, 2) << 8);
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Router-operation launches written to router `r` from log entry `from`. */
+static unsigned long ropLaunches(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long k = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r && f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] == 26 &&
+            (f->WrVal[i] & 0x80000000UL) != 0) {
+            k++;
+        }
+    }
+    return k;
+}
+
 /* Record 34 section 6.5 at a request: an ERR_CONN from the child's own
  * route, handed by the transport to the parent's identity read, is never
  * the parent's removal; and under a parent HELD at resume the kid is
@@ -6526,6 +6562,40 @@ static void test_kid_foreign_and_held(void)
         CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2, still there, kept UP");
         CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "nothing removed");
     }
+
+    /* The same notification at a router operation's launch: the launch is
+     * never written a second time (an operation running would be written
+     * over with OV set, record 22 section 6.7). */
+    {
+        int d1;
+        unsigned long mark;
+        unsigned long plain;
+        TBT_U4_CONFIG c;
+
+        cfgDefault(&c);
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        mark = g_fab.WrCount;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        plain = ropLaunches(&g_fab, mark, d1);
+        CHECK(plain >= 1, "a connect launches router operations");
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        mark = g_fab.WrCount;
+        g_ropDev = d1;
+        g_fab.Hook = ropHook;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        g_fab.Hook = NULL;
+        CHECK(g_ropDev < 0, "the notification delivered at a launch");
+        CHECK(ropLaunches(&g_fab, mark, d1) <= plain, "no launch written twice");
+    }
 }
 
 /* Section 6.7's cleanup gates the next connect: a re-plug while the last
@@ -6587,6 +6657,51 @@ static void test_kid_cleanup_gates(void)
     poll(&g_cm, &g_fab, 4);
     CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "restored: the re-plug connected");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP throughout");
+
+    /* A kid whose teardown is still owed at a host-interface loss, its
+     * parent replaced before the recovery: dropped with the departed
+     * parent, nothing of it written to the router now on the port. */
+    {
+        LONG rc;
+        BOOLEAN final;
+        int d2;
+        unsigned long mark;
+
+        dev = setupKid(FAB_DEV_USB4, &child);
+        a = fabDownLane0(&g_fab, dev);
+        g_failRouter = dev;
+        g_failCs = TBT_CS_ADAPTER;
+        g_failAdp = (unsigned long)a;
+        g_failAddr = FAB_CAP_LANE + 1;
+        g_fab.Hook = failWriteHook;
+        fabHotUnplugChild(&g_fab, dev);
+        poll(&g_cm, &g_fab, 2);
+        g_fab.Hook = NULL;
+        CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "recovery: a kid's teardown owed");
+        d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+        g_fab.Gone = 1;
+        TbtU4Contain(&g_cm);
+        g_fab.Gone = 0;
+        g_fab.Cancel = 0;
+        fabSwapQuiet(&g_fab, 1, d2);
+        mark = g_fab.WrCount;
+        rc = TbtU4Recover(&g_cm, &final);
+        CHECK(!final, "recovery: not final");
+        if (rc == TBT_OK) {
+            TbtU4RecoverCommit(&g_cm);
+            (void)TbtU4TakeDebt(&g_cm, 1);
+            poll(&g_cm, &g_fab, 4);
+        }
+        CHECK(kidOf(&g_cm, 1) == NULL || kidOf(&g_cm, 1)->ParentGeneration ==
+                                             TbtU4Port(&g_cm, 1)->Generation,
+              "recovery: the old kid gone with its parent");
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, d2, TBT_CS_ADAPTER, (unsigned long)a,
+                              FAB_CAP_LANE + 1), -1,
+                 "recovery: no old lane restore written to the replacement");
+        CHECK_EQ(fabFindWrite(&g_fab, (long)mark, d2, TBT_CS_ADAPTER, (unsigned long)a,
+                              FAB_CAP_PORT + 19), -1,
+                 "recovery: nor its old port mark");
+    }
 }
 #endif /* TBT_U4_MAX_KIDS */
 

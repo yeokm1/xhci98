@@ -178,10 +178,13 @@ static LONG tbtU4WrN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
     }
     rc = TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
     tbtU4NotifyOf(cm, r, rc);
-    if (cm->ForeignNotify && !tbtU4Spent(cm)) {
+    if (cm->ForeignNotify && !tbtU4Spent(cm) &&
+        !(cs == TBT_CS_ROUTER && addr <= TBT_ROUTER_CS_26 && addr + n > TBT_ROUTER_CS_9)) {
         /* As tbtU4RdN: the same DWs written once more (a write applied
          * whose answer the notification cut short is written again with
-         * the same values). */
+         * the same values) - but never a router operation's launch, which
+         * a second write could run twice (the mapping operation's index
+         * moves on): that request fails, as any other that is cut short. */
         rc = TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
         tbtU4NotifyOf(cm, r, rc);
     }
@@ -8050,9 +8053,12 @@ static VOID tbtU4KidService(PTBT_U4CM cm, PTBT_U4_PORT p)
         if (!k->Used || k->Port != p->Index) {
             continue;
         }
-        if (p->State == TBT_U4_EMPTY || !pr->Present || pr->Depth != 1) {
-            /* Its parent left without the teardown dropping it (a
-             * recovery's departure): dropped now, unwritten. */
+        if (p->State == TBT_U4_EMPTY || !pr->Present || pr->Depth != 1 ||
+            k->ParentGeneration != p->Generation) {
+            /* Its parent left without the teardown dropping it, or the
+             * port holds another connection now: dropped, unwritten -
+             * nothing of it is ever written to a router that replaced its
+             * parent. */
             cm->Counters.KidsDropped++;
             tbtU4Log(cm, "u4.kid.dropped", (p->Index << 8) | k->Index);
             tbtU4KidFree(cm, k);
@@ -10141,6 +10147,9 @@ static BOOLEAN tbtU4LanesAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
  * router's cleanup is never applied to its link. */
 static VOID tbtU4RecoverEmpty(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN replaced)
 {
+    /* Record 34 section 6.8: its kids go with the departed router,
+     * unwritten, whatever cleanup they still owed. */
+    tbtU4KidsDrop(cm, p);
     tbtU4DropLinks(cm, p);
     TbtCtlForget(&cm->Ctl, &p->Dev.Route);
     tbtU4QDropPort(cm, p);
