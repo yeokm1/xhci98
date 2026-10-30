@@ -159,7 +159,8 @@ nothing here has been read).
 
 ### 2.1 The `qemu` flavour's injection
 
-The helper has the three flavours like every binary here (section 8.1).
+The helper has the flavours of every binary here (section 8.1; release
+and qemu since roadmap-usb4 task 45.45 retired debug).
 Its `qemu` flavour alone reads one `REG_DWORD`, `XhciMsiInject`, from
 its service key's `Parameters` subkey in `DriverEntry`, through
 `RtlQueryRegistryValues` (a `qemu`-only import row), and takes:
@@ -174,8 +175,9 @@ its service key's `Parameters` subkey in `DriverEntry`, through
 | 5 | the query answers a NULL `IoDisconnectInterruptEx` | "malformed" |
 | 6 | the query answers a wrong `Magic` | "malformed" |
 
-Any other value is taken as 0. The `release` and `debug` flavours read no
-registry and import no `RtlQueryRegistryValues`; the import gate's
+Any other value is taken as 0. The `release` flavour (and the `debug` one
+until task 45.45 retired it) reads no registry and imports no
+`RtlQueryRegistryValues`; the import gate's
 `FLAVORS` column holds that.
 
 ## 3. The channel

@@ -15,8 +15,7 @@
 # target line and libraries and the image's header, and the import gate's
 # hlprx86 profile against scripts\import-gate\xhcihlpr-imports.allow and
 # the Windows 2000, XP, Vista and 7 x86 kernels and HALs. Output:
-# src\hlpr\objfre\i386\xhcihlpr.sys (release), objchk (debug),
-# objchk_qemu (qemu).
+# src\hlpr\objfre\i386\xhcihlpr.sys (release) and objchk_qemu (qemu).
 #
 # The /GS cookie stays on, the kit's default: the wdmsec.lib members that
 # IoCreateDeviceSecure brings are compiled with cookie checks, so the image

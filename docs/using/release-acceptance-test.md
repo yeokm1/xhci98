@@ -154,8 +154,9 @@ Controller Deviations This Driver Acts On".
 | 2.10 | From `3.0.0.0`: list `tools\xhcitr\` | `XHCITR.EXE`, `XHCITR64.EXE`, `readme.txt` and `NOTICE.TXT`, and nothing else (roadmap-usb4 Phase 41, design record 25). An asset before `3.0.0.0` has no such directory |
 
 The `release` directory for the machine's architecture is the one to install.
-The `debug` directory beside it is the same drivers built for diagnosis, for a
-machine that has already gone wrong. Pointing a machine at the other
+Up to `3.3.0.0` a `debug` directory sat beside it, the same drivers built for
+diagnosis; from `3.4.0.0` there is one build (roadmap-usb4 task 45.45).
+Pointing a machine at the other
 architecture's directory is safe in both directions: the wrong directory
 offers no driver at all rather than installing one that cannot load. Record it
 as a wrong pick and point at the other one.

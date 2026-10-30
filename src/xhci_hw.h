@@ -1313,9 +1313,8 @@ ULONG XhciControllerUpdateFlags(PXHCI_EXTENSION ext,
  * what bugchecks Win98 on real hardware (task 12.2) - so the always-on producer
  * set must be reachable from a `release` build and must never print. These are
  * it. *(This said "both builds" and named debug-build `DbgPrint` until a
- * later revision; there are three flavours since task 13-L.1 and the per-line
- * trace is `qemu`'s alone, so shipping `debug` has none of it to
- * reproduce.)*
+ * later revision; the per-line trace is `qemu`'s alone since task 13-L.1, so
+ * the flavours that ship never had any of it to reproduce.)*
  *
  * Both refuse a NULL or unsignatured extension, and both are silent unless the
  * switch in the driver's own software key turned the ring on, so a call site

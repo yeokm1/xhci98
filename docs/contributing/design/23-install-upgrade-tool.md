@@ -474,7 +474,7 @@ program around them, in the shape `XHCICLN` already has.
 <package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
-<package>\debug-x86\, debug-x64\
+<package>\debug-x86\, debug-x64\     up to 3.3.0.0 (the debug flavour, retired by task 45.45)
 <package>\tools\xhciinst\XHCIINST.EXE   32-bit
 <package>\tools\xhciinst\XHCIIN64.EXE   x64
 <package>\tools\xhciinst\readme.txt, NOTICE.TXT
@@ -539,8 +539,9 @@ arguments on:
   to `AMD64`: `XHCIIN64.EXE`, `release-x64`, the arguments passed with
   `%*`.
 - `Windows_NT` otherwise: `XHCIINST.EXE`, `release-x86`.
-- `/debug` among the arguments: the `debug-` directory instead, which the
-  tool says is for troubleshooting only.
+- `/debug` among the arguments chose the `debug-` directory until
+  roadmap-usb4 task 45.45 retired the debug flavour; `INSTALL.BAT` no
+  longer reads it, and the tool refuses it as an unknown switch.
 
 The batch file is ASCII with CRLF endings (`.gitattributes` holds `*.BAT`
 to CRLF; MS-DOS 7.1 loses `goto` labels in LF files), and `make-release.ps1`
@@ -653,10 +654,11 @@ Before anything is read from the system, the tool refuses (exit 1) unless:
    equals the package version - an older `.sys` beside a current INF is
    refused - and, for the images that carry one (`xhci98.sys`,
    `xhciuas.sys`), whose `XHCI98_FLAVOUR_*` marker is exactly one and is the
-   directory's flavour (`RELEASE` in `release-`, `DEBUG` in `debug-`): the
-   marker `scripts\check-flavour-marker.ps1` reads at every build, so a
-   release and a debug binary swapped between directories, or a `qemu`
-   build, is refused.
+   directory's flavour (`RELEASE` in `release-`; `DEBUG` in `debug-` until
+   roadmap-usb4 task 45.45 retired that flavour, since when only a
+   `release-` directory is taken): the marker
+   `scripts\check-flavour-marker.ps1` reads at every build, so a debug or
+   `qemu` build in a `release-` directory is refused.
 
 ### 4.3 Mixing architectures
 
@@ -2891,7 +2893,7 @@ second-guessed (it may be an Update Driver's file waiting for its swap).
 | `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista to 10: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
-| `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
+| `/debug` | withdrawn with the `debug-` flavour directory (roadmap-usb4 task 45.45): refused |
 | `/nopause` | do not wait for Enter before closing |
 | `/log path` | write the log there |
 | `/devices` | the connected Thunderbolt and USB4 devices and the Windows devices behind them; reads only (design record 24) |

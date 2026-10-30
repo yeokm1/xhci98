@@ -9,7 +9,7 @@
 # src\uas for every flavour and runs the import gate on the result against
 # scripts\import-gate\xhcicm-imports.allow (x86) or
 # xhcicm-imports-amd64.allow (amd64). Output: src\cm\objfre\<arch>\
-# xhcicm.sys (release), src\cm\objchk (debug), src\cm\objchk_qemu (qemu).
+# xhcicm.sys (release) and src\cm\objchk_qemu (qemu).
 #
 # THE PURE CORE: cm_vals.c (test\test_cm.c); the host interface ring 0,
 # the ICM client and the hardware profiles, tbt_ring.c, tbt_icm.c and

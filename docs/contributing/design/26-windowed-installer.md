@@ -323,7 +323,7 @@ and ME; a windows-subsystem program opens none. `SETUP.EXE`
   `tools\xhciinst\XHCIWIZ.EXE` otherwise, 98 SE and ME included.
 - It starts the window with `ShellExecuteExA`, verb `open`, the working
   directory the package root, and its own command line after its name
-  passed on unchanged (`SETUP /uninstall`, `/debug`), then exits at
+  passed on unchanged (`SETUP /uninstall`), then exits at
   once. `ShellExecuteEx` is what raises the window's own
   `requireAdministrator` prompt on Vista and 7; `CreateProcess` refuses
   such an image with `ERROR_ELEVATION_REQUIRED`.
@@ -373,7 +373,8 @@ finds its package two levels up from itself, section 2).
 
 A double-click on `XHCIWIZ.EXE` itself is the same as `INSTALL` with no
 argument: the window reads its own location and picks the `release-`
-directory of its architecture, with `/debug` for the other (section 10).
+directory of its architecture (section 10; `/debug` and the `debug-`
+directory went with the debug flavour, roadmap-usb4 task 45.45).
 
 ## 3. One engine, two front ends
 
@@ -5369,7 +5370,7 @@ page:
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |
-| `/debug` | `INSTALL.BAT`'s flavour choice, and the window's own when started by hand |
+| `/debug` | withdrawn with the `debug-` directory (roadmap-usb4 task 45.45): refused as an unknown switch |
 | `/log <path>` | the log's path |
 | `/yes`, `/list`, `/nopause`, `/devices`, `/eject`, `/dir`, `/console` | console only: refused with "use INSTALL /console" |
 

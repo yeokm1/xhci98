@@ -6,8 +6,8 @@
  * makes each one real where QEMU allows it and, where it does not, answers
  * the register reads the driver's own handling would meet. It never ships:
  * src/sources compiles it into the qemu flavour alone (XHCI_FLAVOUR_QEMU),
- * the host suite test\test_inj.c into the host build, and the debug and
- * release images carry none of it.
+ * the host suite test\test_inj.c into the host build, and the release image
+ * carries none of it.
  *
  * THE TRIGGER. One REG_DWORD, XhciQemuInject, in the controller's driver key,
  * re-read by the controller thread about once a second, so a guest-side
