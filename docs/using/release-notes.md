@@ -472,7 +472,8 @@ Every system `3.3.0.0` supports is supported.
   devnode completed afterwards - Update Driver, Disable, the shutdown
   after an unplug - until a reset, also under Windows' own USB stack.
   Windows now asks for a driver, and `uac2` installs with nothing to tear
-  down; a USB Audio 1.0 function keeps the bare id. Read on XP with a
+  down; `wdma_usb.inf`'s few VID/PID lines still match the devices they
+  name, and a USB Audio 1.0 function keeps the bare id. Read on XP with a
   simulated device. A device already on "USB Audio Device" keeps it
   ("Known limitations" has the way out).
 - **A device with more than one configuration is configured and split**
@@ -3820,7 +3821,9 @@ To give one controller a different value, delete the machine-wide value
 and set that controller's own. `docs/using/tuning.md` has the details.
 
 Each value is a `DWORD` in the controller's driver (software) key, and
-the install writes every value the driver reads, thirty-six, in this key:
+the install writes thirty-six of the values the driver reads in this key
+(not `XhciUsb2Bos` or, from `3.4.0.0`, `XhciResumeKeep`, which no INF
+writes):
 
 | Windows | Key |
 |---|---|
@@ -4525,7 +4528,9 @@ driven as a 1.0 controller but for the fields Linux writes differently on
 control transfer's Transfer Type written 0, the isochronous burst counts
 written 0, every isochronous transfer scheduled at the next opportunity
 rather than at a named frame, and the capability register at offset 1Ch
-ignored, so a resume from standby re-enumerates the controller's devices.
+ignored, so a resume from standby starts the controller afresh: up to
+`3.3.0.0` its devices were found again, and from `3.4.0.0` a device on a
+root port is kept where "XhciResumeKeep" allows.
 On a 1.0 or later controller the value changes nothing.
 
 | | |
@@ -5239,8 +5244,10 @@ or says it was found by reading the code.
   stop, once the driver can prove the controller has left the bus or has
   stopped writing to memory. From `3.4.0.0` one such proof exists: for a
   dock's USB controller on 2000 and XP behind a USB4 tunnel that this
-  release's connection manager closed and read back closed (task 45.35),
-  its transfers are released; in every other case they are still kept,
+  release's connection manager closed and read back closed before the
+  proof was asked (task 45.35), its transfers are released; a closure read
+  only after the proof was asked leaves the pin, and in every other case
+  they are still kept,
   and a dock unplugged with an input device on its USB controller waits
   for ever ("Thunderbolt and USB4: known limitations").
 - **Windows 2000: after the driver recovers the controller, or after a
@@ -5374,7 +5381,7 @@ information.
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; on a VL805 reported working on `2.3.0.0` by the owner, not yet read in detail, and not run on any other controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
-| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
+| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby starts the controller afresh (its devices found again, but those `XhciResumeKeep` keeps from `3.4.0.0`); built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs"), and its `3.1.0.0` codes on Windows 98 SE alone, a Full-Speed device behind a hub included |
 | The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |

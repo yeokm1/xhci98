@@ -37,10 +37,10 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **XHCIPFW on 32-bit Windows 8 and 8.1:** now offered there too, as a
   filter of the PCI root bus (the service `xhcipff`). It is still not
   offered on Windows 10.
-- **USB devices with more than one configuration** (a USB Audio 3.0
-  device, for instance) are now set up in their first configuration, so
-  a USB Audio 2.0 part there gets the free `uac2`. Before, they had no
-  driver.
+- **USB devices with more than one configuration** that xHCI98 can split
+  into their parts are now set up in their first configuration. So a USB
+  Audio 3.0 device's USB Audio 2.0 part there gets the free `uac2`, where
+  before the device had no driver.
 - **xHCI98 USB Tree:** the window's title shows its version, as
   `xHCI98 USB Tree 3.4.0.0`.
 
@@ -51,7 +51,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   Audio Device"), which cannot run it and, once installed (read on XP),
   keeps Device Manager, the Update Driver wizard and shutdown waiting
   until a reset.
-  Windows now asks for a driver: the free download's `uac2`.
+  Windows now asks for a driver (the free download's `uac2`), unless one
+  of Windows' own lines names that device by its ids.
 - **Windows 98 SE and ME: more of the free and non-free drivers can be
   ticked** for Windows' hardware wizard to find by itself, as long as the
   wizard's search path stays short enough (280 characters on 98 SE, 259
@@ -96,11 +97,12 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **All systems**
   - Standby and hibernation with a Thunderbolt or USB4 device attached are
     not supported: use Safely Remove and unplug the device first.
-  - After standby or hibernation, a hub and the devices behind it, a
-    Bulk-Only drive, a drive with no serial number or one that could not
-    finish its work before the sleep, a card reader or other removable
-    drive with a medium in it, and an audio or video device are still
-    removed and found again.
+  - After a standby or hibernation that starts the USB controller afresh,
+    a hub and the devices behind it, a Bulk-Only drive, a drive with no
+    serial number or one that could not finish its work before the sleep,
+    a card reader or other removable drive with a medium in it, a drive
+    that does not report its own identity, and an audio or video device
+    are still removed and found again.
   - An internal NVMe drive already on Stor98 (put there by hand) keeps it.
   - A maker's driver that takes a whole USB device with more than one
     configuration no longer binds to it under xHCI98 where xHCI98 now
