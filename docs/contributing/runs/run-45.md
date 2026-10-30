@@ -3469,6 +3469,92 @@ Two things the legs met that are not this task's:
 - A real controller with the checker on: owed to the bench with the
   rest of `3.4.0.0`'s hardware readings.
 
+## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
+
+Design record 22 section 6.2 coded, as the design half above left it
+owed: `020e930a` to `90c829fd` (branch `w45-u4v2c`, merged at
+`0f645d38`), reviewed and revised over four rounds per area (the core,
+then the vectors and the fake fabric) until neither had a finding.
+
+### What the code does
+
+- CMUV 20h written to a router whose USB4 Version has major 2, 10h to a
+  version 1 router; a preserved router's CMUV read and kept (`10h` on a
+  version 2 router and any odd value logged).
+- Set Capabilities for the Sequence bit capability on every USB4 router
+  that reports it supported and disabled, with a Get Capabilities
+  read-back deciding the acknowledgement form; the router's notifications
+  held until then. A recovery sends no Set: one it finds owed is made at
+  the next tick as the port's own sequence.
+- Every path entry written as two dwords, on every router.
+- HiFi Enhanced Uni-Directional TMU on a link of two version 2 routers
+  whatever the tunnels, kept until unplug; HiFi-Bi elsewhere as before.
+- A preserved router found with CV set never configured again: PTO clear
+  holds the port, UTO clear means no USB3 tunnel, a read that fails holds
+  it.
+- A predecessor's Enable Gen 4 Link Recovery cleared on every preserved
+  link, depth 2 included; LINK_RECOVERY delivered (never acknowledged) as
+  a port check.
+- PCIe Extended Encapsulation set on both adapters before Path Enable on
+  a tunnel between two version 2 routers, cleared after the Path Enables
+  at its teardown, and cleared before a tunnel with a version 1 end.
+- Gen 4 links classified only on an active lane: symmetric, or
+  asymmetric with the two ends a 3-transmitter and 3-receiver pair, used
+  as bonded with no lane write and never transitioned (decision U31);
+  x1, unpaired or reserved widths, or a lane that stays training, FAILED.
+- `XhciCmUsb4V2` (absent 1): 0 is the version 1 run of `3.3.0.0`.
+
+Host vectors: the new suite `test_u4v2` (316 checks) over a version 2
+host and device router added to the fake fabric; `test_u4cm`,
+`test_tbt_ring` and `test_cm` follow. The gated builds of `22be413f` in
+this worktree passed: x86 "BUILD + GATES PASSED (release qemu)" at
+21:03, amd64 at 21:36 (development host A).
+
+### The legs (2026-10-30)
+
+`usb4-emu` main `230bed5` (QEMU fork `674ff08`, its version 2 router
+model `cb36497`, docs/USB4-V2.md): `usb4-host` with `host-model=minimal`
+and `usb4-version=2` on q35, two `usb4-tunnel-port`s on `pcie.0` (the
+`adl` layout), `usb4-device dialect=usb4 usb4-version=2` with the NVMe
+test disk at power-on; plugs, unplugs and link events over QMP
+(`device_add`, `device_del`, `qom-set ... x-link-event`). The package of
+`22be413f`: the release package installed (`INSTALL.BAT /console /yes
+/nopause /thunderbolt /stor98`), then its `qemu` `xhcicm.sys` copied over
+the installed one and the guest restarted, so the connection manager's
+log reads on the debug console (x86 release `xhcicm.sys` `ddc788ca...`,
+qemu `5ef8374c...`; the amd64 images staged unsigned, `b08203e4...` and
+`4532501767...`, signed in the guest with a throwaway certificate made
+there, test signing on, nothing signed on the host). Fresh overlays of
+the q35 bases; evidence under `E:\xhci98-vm\p45\w45-u4v2c\<leg>\`
+(`steps.txt`, `debugcon-a.log`, `trace-a.log` with `-trace usb4_*`
+events, screenshots).
+
+| System | Configuration | Result |
+|---|---|---|
+| 7 x86 (`w7`) | v2 host, v2 device at power-on | Gen 4 x2 (`u4.link.gen4=00000102`, no lane write), CMUV 20h on both routers (ROUTER_CS_4 `0x400020ff`), Set Capabilities `32h` metadata `102h` on both and the Sequence bit read back enabled (`u4.caps.seq`), EE written 1 on both PCIe adapters before Path Enable, `u4.tmu.enhanced`, PCIe and USB3 tunnels up, ORICO (D:), the tray "connected (USB4 v2.0)" |
+| 7 x86 | the same, then unplug and plug `link-width=asym-tx` | `u4.link.gen4=00000104`, both tunnels, D: |
+| 7 x86 | `x-link-event=sym` on it (ASYM_LINK) | the link symmetric, nothing torn down |
+| 7 x86 | `x-link-event=elr`, then `error` | the emulator's Gen 4 Link Recovery: LINK_RECOVERY noted (`u4.note=00002601`), a port check, the tunnel up throughout |
+| 7 x86 | plug `asym-rx`, then `error` with the device's ELR clear | `u4.link.gen4=00000108`; the error a disconnect: teardown (`u4.linkdown`), the router back 50 ms later, enumerated and its tunnels rebuilt |
+| 7 x86 | a version 1 device behind the v2 host | Gen 3, CMUV 10h on it, no EE written, no enhanced TMU, Set Capabilities sent (the model's version 1 routers report the capability), D:, the tray "USB4 v1.0" |
+| 7 x86 | `XhciCmUsb4V2` 0 (machine-wide value), restart, v2 device | `cm.usb4.v2=00000100`; CMUV 10h on both version 2 routers, no Set, no EE, no enhanced TMU; the Gen 4 link still used as bonded, both tunnels up |
+| 7 x86 (`w7r`) | the version 1 regression: `asm4242` host, ORICO at power-on (pre-OS tunnel) | the tunnel preserved (`u4.preserved=00010808`), Set Capabilities to the preserved routers, D: ORICO (TESTDATA.BIN); hot unplug and re-plug rebuilt, D: back |
+| 10 x64 (`w10`) | v2 host, v2 device at power-on | as on 7 x86: Gen 4 x2, CMUV 20h, Set, EE, enhanced TMU, both tunnels; ORICO (E:) |
+| 10 x64 | `asym-tx` plug, `asym-rx` transition, `elr` and `error`; `asym-rx` plug; a version 1 device; `XhciCmUsb4V2` 0 and restart | each as on 7 x86 (LINK_RECOVERY a port check, the tunnel kept; the version 1 device at Gen 3 with CMUV 10h; the value 0: CMUV 10h, no Set) |
+| XP (`wxp`) | v2 host, v2 device at power-on | the connection manager as on 7 x86 (CMUV 20h, Set, Gen 4 x2, enhanced TMU, both tunnels; `asym-tx` plug and the recovery likewise); but no ORICO volume |
+| XP (`xpa`) | control: the version 1 `adl` host, ORICO at power-on | the tunnel up, and no ORICO volume either: not 45.20's |
+
+The XP volume: on this layout (tunnel root ports on `pcie.0`, no pre-OS
+tunnel) the NVMe behind the tunnel gets no volume on XP with a version 1
+host as with a version 2 one; the `3.2.0.0` base reading had ORICO (D:)
+on XP with the ASM4242 model and its pre-OS tunnel. Reported to the
+coordinator, not read further here.
+
+### What is left
+
+The bench reading on a real version 2 router (45-E.10). 45.20 is done
+here otherwise; ticked.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
