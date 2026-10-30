@@ -423,7 +423,8 @@ function Get-SelfTestGitPolicyNames {
              "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_EXEC_PATH",
              "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR",
              "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
-             "GIT_COMMITTER_DATE", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_TRACE", "GIT_FLUSH")
+             "GIT_COMMITTER_DATE", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_TRACE", "GIT_FLUSH",
+             "GIT_DEFAULT_HASH", "GIT_DEFAULT_REF_FORMAT")
 }
 
 function Test-SelfTestGitPolicyName {
@@ -433,8 +434,11 @@ function Test-SelfTestGitPolicyName {
 }
 
 function Set-SelfTestGitPolicy {
-    # Sets the policy in this process's environment and returns the folder
-    # holding its files (under -ScratchRoot, which the caller removes):
+    # Sets the policy in this process's environment and returns it as
+    # @{ Root; Saved }: -ScratchRoot, which holds its files, and every
+    # variable it changes (and those -Keep names) as they were, for
+    # Restore-SelfTestGitPolicy to put back, since a suite run in a caller's
+    # session shares that session's environment. The policy:
     # no system configuration (GIT_CONFIG_NOSYSTEM, GIT_ATTR_NOSYSTEM); a
     # global configuration of the suite's own (GIT_CONFIG_GLOBAL) holding
     # only empty core.excludesFile and core.attributesFile, an empty
@@ -442,9 +446,15 @@ function Set-SelfTestGitPolicy {
     # GIT_TEMPLATE_DIR; replacement objects off (GIT_NO_REPLACE_OBJECTS);
     # no prompt; and every injection variable cleared (GIT_DIR, GIT_WORK_TREE,
     # GIT_INDEX_FILE, GIT_CONFIG_COUNT and its pairs, GIT_CONFIG_PARAMETERS,
-    # the object directories and the rest of Get-SelfTestGitPolicyNames).
+    # the object directories, GIT_DEFAULT_HASH and the rest of
+    # Get-SelfTestGitPolicyNames), so a fixture is SHA-1 with files refs.
     # A repository's own configuration still applies: it is the tree's.
-    param([string]$ScratchRoot)
+    param([string]$ScratchRoot, [string[]]$Keep = @())
+    $saved = @{}
+    foreach ($n in @(@(Get-SelfTestGitPolicyNames) + @($Keep))) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    foreach ($v in @(Get-ChildItem Env:)) {
+        if (Test-SelfTestGitPolicyName -Name $v.Name) { $saved[$v.Name] = $v.Value }
+    }
     $dir = Join-Path $ScratchRoot "git-policy"
     foreach ($d in @($dir, (Join-Path $dir "hooks"), (Join-Path $dir "template"))) { [void][System.IO.Directory]::CreateDirectory($d) }
     $ignore = Join-Path $dir "ignore"
@@ -464,5 +474,18 @@ function Set-SelfTestGitPolicy {
     [Environment]::SetEnvironmentVariable("GIT_TEMPLATE_DIR", (Join-Path $dir "template"))
     [Environment]::SetEnvironmentVariable("GIT_NO_REPLACE_OBJECTS", "1")
     [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0")
-    return $dir
+    return @{ Root = $ScratchRoot; Saved = $saved; Restored = $false }
+}
+
+function Restore-SelfTestGitPolicy {
+    # Puts back every variable Set-SelfTestGitPolicy changed, as it was, and
+    # removes its folder; once, whichever way the suite ends.
+    param($Policy)
+    if ($null -eq $Policy -or $Policy.Restored) { return }
+    $Policy.Restored = $true
+    foreach ($v in @(Get-ChildItem Env:)) {
+        if ((Test-SelfTestGitPolicyName -Name $v.Name) -and -not $Policy.Saved.ContainsKey($v.Name)) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+    }
+    foreach ($n in $Policy.Saved.Keys) { [Environment]::SetEnvironmentVariable($n, $Policy.Saved[$n]) }
+    Remove-Item -LiteralPath $Policy.Root -Recurse -Force -ErrorAction SilentlyContinue
 }

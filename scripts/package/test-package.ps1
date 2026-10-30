@@ -218,17 +218,20 @@ function Get-PackagerSelfTestDigest {
 # it all. The in-tree record of 45.48, out\packager-selftest-pass.txt, is
 # retired; a leftover one is not read.
 $inherited = @(Get-PackagerSelfTestInherited -Root $repo)
+# The self-tests' git (task 45.51; Set-SelfTestGitPolicy, common.ps1): set
+# here, before anything runs git, so the digest's listing, the fixtures and
+# every git call this suite reaches see one git whatever the caller's
+# configuration. It and its folder go when the run ends.
+$gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
+$gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot -Keep @("TEMP", "TMP")
+# The caller's environment comes back whichever way the run ends: at each
+# exit below, and here for a terminating error nothing else catches.
+trap { Restore-SelfTestGitPolicy -Policy $gitPolicy; break }
 # TEMP and TMP: one scratch root for this suite and its children, so
 # neither value is an input (only where the cases make their scratch).
 $tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
 $env:TEMP = $tempRoot
 $env:TMP = $tempRoot
-# The self-tests' git (task 45.51; Set-SelfTestGitPolicy, common.ps1): set
-# here, before anything runs git, so the digest's listing, the fixtures and
-# every git call this suite reaches see one git whatever the caller's
-# configuration. Its folder goes when the run ends.
-$gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
-[void](Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot)
 $digest = Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
@@ -236,7 +239,7 @@ if (-not $fullAsked -and $null -ne $digest) {
     if ($null -ne $rec) {
         Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
                   $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
-        Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Restore-SelfTestGitPolicy -Policy $gitPolicy
         exit 0
     }
 }
@@ -6686,7 +6689,7 @@ try {
         $gpOrigins = ((& git config --list --show-origin --show-scope 2>$null) | Out-String)
         $gpRepo = Join-Path $script:work "git-policy-probe"
         & git init -q $gpRepo 2>&1 | Out-Null
-        $gpChild = ((& powershell.exe -NoProfile -Command '$env:GIT_CONFIG_NOSYSTEM + "|" + $env:GIT_CONFIG_GLOBAL' 2>$null) | Out-String).Trim()
+        $gpChild = (@(& powershell.exe -NoProfile -Command '$env:GIT_CONFIG_NOSYSTEM; $env:GIT_CONFIG_GLOBAL' 2>$null) -join "|").Trim()
     } finally {
         $ErrorActionPreference = $gpEap
     }
@@ -6694,6 +6697,33 @@ try {
     Assert-True ($gpOrigins -notmatch '(?m)^system\s') ("git still reads a system configuration under the suite's policy:`n" + $gpOrigins)
     Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $gpRepo ".git\hooks") -Force -ErrorAction SilentlyContinue).Count -eq 0) "a repository the suite makes still takes a template's hooks."
     Assert-True ($gpChild -eq ("1|" + $env:GIT_CONFIG_GLOBAL)) "a child of the suite does not inherit its git policy."
+    # A caller's GIT_DEFAULT_HASH=sha256 still gives a SHA-1 fixture, and the
+    # caller's variables come back when the policy goes.
+    $gpOuter = @{}
+    foreach ($n in @("GIT_DEFAULT_HASH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_DIR")) { $gpOuter[$n] = [Environment]::GetEnvironmentVariable($n) }
+    [Environment]::SetEnvironmentVariable("GIT_DEFAULT_HASH", "sha256")
+    [Environment]::SetEnvironmentVariable("GIT_DIR", "C:\no-such-git-dir")
+    $gpInner = Set-SelfTestGitPolicy -ScratchRoot (Join-Path $script:work "git-policy-inner")
+    try {
+        $gpRepo2 = Join-Path $script:work "git-policy-sha1"
+        $ErrorActionPreference = "Continue"
+        try {
+            & git init -q $gpRepo2 2>&1 | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $gpRepo2 "a.txt"), "a")
+            & git -C $gpRepo2 add a.txt 2>&1 | Out-Null
+            & git -C $gpRepo2 -c user.name=t -c user.email=t@t commit -q -m a 2>&1 | Out-Null
+            $gpHead = ((& git -C $gpRepo2 rev-parse HEAD 2>$null) | Out-String).Trim()
+        } finally {
+            $ErrorActionPreference = $gpEap
+        }
+        Assert-True ($gpHead -match '^[0-9a-f]{40}$') ("a caller's GIT_DEFAULT_HASH=sha256 reached a fixture under the git policy: HEAD '{0}'." -f $gpHead)
+    } finally {
+        Restore-SelfTestGitPolicy -Policy $gpInner
+    }
+    Assert-True ("$env:GIT_DEFAULT_HASH" -eq "sha256" -and "$env:GIT_DIR" -eq "C:\no-such-git-dir" -and
+                 "$env:GIT_CONFIG_GLOBAL" -eq "$($gpOuter["GIT_CONFIG_GLOBAL"])" -and -not (Test-Path -LiteralPath (Join-Path $script:work "git-policy-inner"))) `
+        "the git policy did not put the caller's variables back, or left its folder."
+    foreach ($n in $gpOuter.Keys) { [Environment]::SetEnvironmentVariable($n, $gpOuter[$n]) }
 
     # The skip's digest: it moves when a tracked or untracked-but-not-ignored
     # file changes, appears or goes, when a built image the releaser reads
@@ -6811,7 +6841,7 @@ try {
 Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
-    Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
+    Restore-SelfTestGitPolicy -Policy $gitPolicy
     exit 1
 }
 # The record of this pass, for the next run's skip in any tree: written
@@ -6820,6 +6850,6 @@ if ($script:failures.Count -gt 0) {
 if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
-Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
+Restore-SelfTestGitPolicy -Policy $gitPolicy
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0
