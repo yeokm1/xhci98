@@ -1942,11 +1942,17 @@ static VOID tbtU4QLifted(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
  * the kid's parent is not classified (HELD by a resume before its check,
  * by a recovery, or barred) or holds another connection than the kid's:
  * the router there may not be the one the record was made on, and the
- * kid service settles which it is. */
+ * kid service settles which it is. A record on the child itself waits
+ * too until the child reads as the same router now (its UUID, ROUTER_CS_7
+ * and 8), and while an unplug hint of the kid is unresolved: behind a
+ * Thunderbolt 3 parent no Lock tells a replacement, and the retry runs
+ * before the kid's own check. */
 static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
 {
     PTBT_U4_PORT p;
+    PTBT_U4_KID k;
     ULONG i;
+    ULONG u[2];
     BOOLEAN kid;
 
     p = tbtU4PortOf(cm, q->Port);
@@ -1959,7 +1965,15 @@ static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
             (cm->Kids[i].Index == q->Kid ||
              (cm->Kids[i].Dev.Depth == 2 && tbtU4Under(&q->Route, &cm->Kids[i].Dev.Route)))) {
             kid = TRUE;
-            if (cm->Kids[i].ParentGeneration != p->Generation) {
+            k = &cm->Kids[i];
+            if (k->ParentGeneration != p->Generation) {
+                return TRUE;
+            }
+            if (k->Dev.Depth == 2 && tbtU4Under(&q->Route, &k->Dev.Route) &&
+                (!k->Dev.Present || !k->Dev.UuidValid || k->UnplugPending ||
+                 tbtU4RdN(cm, &k->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u) !=
+                     TBT_OK ||
+                 u[0] != k->Dev.Uuid[0] || u[1] != k->Dev.Uuid[1])) {
                 return TRUE;
             }
         }
