@@ -2230,9 +2230,16 @@ differs from them, this section is the record.
   `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
   section 3.7's chained unit, task 45.13: until then a chained device goes
   with the first device's unit, whose eject tears the kid's tunnel down
-  first); `cm_status.c`'s kind 3 entries; the Windows 98 SE and ME
-  worker's chain action (task 45.14); the `usb4-emu` cross-check of
-  section 9.2.
+  first); the Windows 98 SE and ME worker's chain action (task 45.14).
+- **The status record** (`cm_status.c`, section 3.7): each kid in use is
+  a kind 3 entry (`CM_ST_KIND_USB4_LINK`) before the links': its place
+  the port with depth 2 in bits 15:8, its route, its approval and state
+  (with `Why`), its ids, generation (a USB4 one with its version, or
+  Thunderbolt 3), lanes (bonded or single), its PCIe tunnel (up, failed,
+  ejected; no USB3 or DisplayPort at depth 2), short id and names; the
+  tunnel port its tunnel reaches is not named (`CM_ST_UNKNOWN`) until the
+  chain port's correspondence is learnt. Vector: `test_cm_status`'s
+  `test_kid`.
 
 ## 7. The roles of each target
 

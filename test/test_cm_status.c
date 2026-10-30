@@ -453,6 +453,72 @@ static ULONG fake_read(PVOID context, ULONG bdf, ULONG offset, PULONG value)
     return 1;
 }
 
+/* Design record 34 section 3.7: a kid (a router chained at depth 2) as a
+ * kind 3 entry with its fields filled; a free kid slot not listed. */
+static void test_kid(void)
+{
+    static TBT_U4CM u4;
+    CM_STATUS_IN in;
+    XHCI_TBT_BINDS binds;
+    ULONG n;
+    const UCHAR *e;
+    TBT_U4_KID *k;
+
+    memset(&u4, 0, sizeof(u4));
+    memset(&binds, 0, sizeof(binds));
+    u4.PortCount = 1;
+    u4.Ports[0].Index = 1;
+    u4.Ports[0].State = TBT_U4_UP;
+    u4.Ports[0].Pcie.Up = TRUE;
+    u4.Ports[0].Dev.Present = TRUE;
+    u4.Ports[0].Dev.Route.Lo = 0x1;
+    k = &u4.Kids[1];
+    k->Used = TRUE;
+    k->Index = 2;
+    k->Port = 1;
+    k->State = TBT_U4_UP;
+    k->Bonded = TRUE;
+    k->Pcie.Up = TRUE;
+    k->Dev.Present = TRUE;
+    k->Dev.Depth = 2;
+    k->Dev.Route.Lo = 0x0301;
+    k->Dev.Vendor = 0x174C;
+    k->Dev.Device = 0x2463;
+    k->Dev.Usb4Version = 0x20;
+    k->Dev.UuidValid = TRUE;
+    k->Dev.Uuid[0] = 0x00005678UL;
+    k->Dev.Uuid[3] = 0x00009ABCUL;
+    strcpy(k->Dev.ModelName, "Chained");
+    base_in(&in, CM_ST_CM_USB4);
+    n = CmStatusBuild(rec, &in, NULL, &u4, &binds);
+    CHECK_EQ(n, CM_ST_HDR_BYTES + 2 * CM_ST_ENTRY_BYTES, "the port and its kid");
+    e = entry(rec, 1);
+    CHECK_EQ(get32(e, CM_ST_E_KIND), CM_ST_KIND_USB4_LINK, "the kid: kind 3");
+    CHECK_EQ(get32(e, CM_ST_E_PLACE), 0x0201UL, "port 1, depth 2");
+    CHECK_EQ(get32(e, CM_ST_E_ROUTE_LO), 0x0301UL, "its route");
+    CHECK_EQ(get32(e, CM_ST_E_APPROVAL), CM_ST_APPR_APPROVED, "UP");
+    CHECK_EQ(get32(e, CM_ST_E_PORT_STATE), TBT_U4_UP, "its state");
+    CHECK_EQ(get32(e, CM_ST_E_IDS), 0x2463174CUL, "its ids");
+    CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_USB4 | 0x2000UL, "USB4");
+    CHECK_EQ(get32(e, CM_ST_E_LANES), CM_ST_LANES_BONDED, "bonded");
+    CHECK_EQ(get32(e, CM_ST_E_TUNNELS), CM_ST_TUN_UP, "its PCIe tunnel up, no USB3, no DP");
+    CHECK_EQ(get32(e, CM_ST_E_BRIDGE), CM_ST_UNKNOWN, "its chain port not named");
+    CHECK(strcmp((const char *)e + CM_ST_E_MODEL, "Chained") == 0, "its model");
+    k->Pcie.Up = FALSE;
+    k->Ejected = TRUE;
+    k->PcieFailed = TRUE;
+    k->State = TBT_U4_FAILED;
+    k->Why = TBT_U4_WHY_EJECTED;
+    (void)CmStatusBuild(rec, &in, NULL, &u4, &binds);
+    e = entry(rec, 1);
+    CHECK_EQ(get32(e, CM_ST_E_TUNNELS) & 0xF, CM_ST_TUN_EJECTED, "ejected");
+    CHECK_EQ(get32(e, CM_ST_E_PORT_STATE), TBT_U4_FAILED | (TBT_U4_WHY_EJECTED << 8),
+             "FAILED, ejected");
+    k->Used = FALSE;
+    n = CmStatusBuild(rec, &in, NULL, &u4, &binds);
+    CHECK_EQ(n, CM_ST_HDR_BYTES + CM_ST_ENTRY_BYTES, "a free slot not listed");
+}
+
 static void test_path(void)
 {
     XHCI_TBT_CFG cfg;
@@ -498,6 +564,7 @@ int main(void)
     test_icm_gen();
     test_limit();
     test_u4();
+    test_kid();
     test_path();
 
     printf("\n%d checks, %d failures\n", checks, failures);
