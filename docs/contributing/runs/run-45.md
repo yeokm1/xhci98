@@ -3105,3 +3105,90 @@ amd64 as on x86 - was read on q35:
 The 8 GB passes were about a tenth slower with a longer tail, consistent
 with bouncing, and nothing froze. The 64-bit DMA question is dropped with
 the task.
+
+## 45.45 one build for everyone: the debug flavour retired (2026-10-30)
+
+The owner, 2026-10-30: the `debug` flavour is retired, its frame
+pointers and its command-state checker kept in `release`. The design is
+record 08 section 14 (`a6f5578f`, reviewed and revised; the owner's two
+answers in `126c1515`); the code is `d4201bc4` (reviewed and revised),
+merged with `3.4.0.0` at `56682b82`. Development host A, loaded by other
+work throughout.
+
+**Verdict: the gated x86 build (`all`, now release and qemu) and the
+amd64 release build passed; the release package installed and ran on
+98 SE, XP, 7 x86 and XP x64, each read in an XHCITR snapshot with the
+checker on (the INFs' 1) and with `XhciCommandCheck` 0, and the value
+was obeyed on every one. Retiring the flavour saves about a minute of a
+gated build per architecture, against whole runs of 30 to 81 minutes
+that the INF gate's and the packager's self-tests fill.**
+
+### The builds
+
+| Build | Result | Time |
+|---|---|---|
+| x86 gated, `build-driver.cmd all`, at `126c1515` | BUILD + GATES PASSED (release qemu) | 74:53 in all: the INF gate's self-tests 72:22 (in full: the INFs changed), the packager's 16:54 beside them, release 0:47, qemu 0:51 |
+| amd64, `build-driver.cmd release -amd64`, at `126c1515` | BUILD + GATES PASSED (release) | 33:24 in all: the INF gate's self-tests 32:28, the packager's 16:02, release 0:31 |
+
+`scripts\check-frame-pointers.ps1` found `/Oy-` on every compiler line of
+the x86 release logs of `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
+("frame pointers kept (/Oy-)" three times); every release image carried
+`XHCI98_FLAVOUR_RELEASE` and every qemu one `XHCI98_FLAVOUR_QEMU`. The
+host suite passed on the merged tree beforehand, and `test-package.ps1`
+(1688 checks) on the code commit.
+
+The time before, from other workers' gated builds on the same host the
+same day (`build-driver.cmd both` or `all`, base `b5258e6e` or close to
+it): the debug flavour's step took 0:39 to 1:05 on x86 (release 0:38 to
+1:02) and 0:29 to 1:01 on amd64 (release 0:31 to 1:15), in whole runs of
+30:07 to 80:51 (x86) and 30:53 to 75:31 (amd64). Retiring it takes that
+one step out of each run, about a minute an architecture; the rest of a
+run is the INF gate's self-tests (28 to 78 minutes when they run in
+full) and the packager's (17 to 30), which this task does not touch.
+
+### The legs
+
+The release packages of these builds (`make-package.ps1 -Flavor
+release`, x86 and amd64, unsigned on this host), each installed with
+this tree's `INSTALL.BAT /console /yes` (98 SE: `XHCIINST /dir
+release-x86 /yes`) on a fresh overlay of the q35 base, a USB tablet on
+the controller (98 SE: plugged after the start). Each reading is an
+`XHCITR /snapshot`, its `strict` lines quoted (XHCITR prints a counter
+only when it is not 0). Then `XhciCommandCheck` 0 in the machine-wide
+key (`HKLM\System\CurrentControlSet\Services\USB`; `reg add`, on 98 SE
+`regedit /s`), a restart (98 SE: shut down and a cold start), and the
+second reading. The images: x86 `xhci98.sys` SHA-256 `9b315166...6798`,
+amd64 `366dab24...f3b2`, each the build's own.
+
+| System | The install | The checker on | `XhciCommandCheck` 0 |
+|---|---|---|---|
+| XP SP3 (2 vCPU) | exit 3; controller and root hub started | build flavour `release`; `strict.value=1`, `strict.on=1`; `StrictSwitchRead 1`, `StrictOn 1`, `StrictChecked 3` | `strict.value=0`, `strict.on=0`; `StrictSwitchRead 1`, nothing counted |
+| 7 SP1 x86 (2 vCPU) | exit 3, restart (the helper); started after it | the same, `StrictChecked 3` | the same as XP |
+| 98 SE (1 vCPU) | exit 3, restart pending; started after a cold start | `strict.value=1`, `strict.on=1`, `StrictOn 1`; no command before a device (`StrictChecked` 0), `StrictChecked 2` once the tablet was plugged | `strict.value=0`, `strict.on=0`, `StrictSwitchRead 1`; the tablet enumerated (one slot held), nothing counted |
+| XP x64 SP2 (2 vCPU) | exit 3; controller and root hub started (the package without `xhcicm`, below) | build flavour `release`; the same as XP, `StrictChecked 3` | the same as XP |
+
+QEMU's xHC refuses nothing, so the counters show that the checker ran
+and was switched off, and no violation, undefined case or refusal; a
+real controller's snapshot is where one would show, the owner's reason
+for keeping it on. What the driver did was the same with it on and off:
+each device enumerated and each install finished alike.
+
+Two things the legs met that are not this task's:
+
+- The installer refuses an unsigned 64-bit package that carries
+  `xhcicm.sys` without its catalog ("this 64-bit package carries the
+  Thunderbolt driver without its catalog, xhcicm.cat"), as designed; a
+  clone without the key stages no catalog, so the XP x64 leg ran from a
+  copy of the staged package with the three connection manager files
+  left out ("This package carries no Thunderbolt or USB4 driver ...;
+  going on without it").
+- On 98 SE `XHCITR /snapshot` returns before its window closes, so a
+  batch file reading the snapshot straight after it finds no file; the
+  lines were read in a second prompt.
+
+### Not read
+
+- The `qemu` flavour's leg kits were not run: nothing in them names the
+  retired flavour (they stage `-Flavor qemu`, which is unchanged).
+- A real controller with the checker on: owed to the bench with the
+  rest of `3.4.0.0`'s hardware readings.
