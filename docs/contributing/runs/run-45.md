@@ -2682,3 +2682,100 @@ on its own (w3b; it does not start there, so no stop was read). The
 applet's stop on 2000 and 7 is not read. 45.17's PCI-side clause 5 (safe
 removal of the chained unit from the system's applet) is read on XP;
 from XHCITR it waits for record 25's chained unit (leg T.11).
+
+## 45.6 (continued) the installer's row split, the cut's checks with one set, and the legs on XP and 7 (2026-10-30)
+
+The rest of 45.6 after `26973326`, on branch `w45-rtlpair` from
+`d265c092`, reviewed and revised. Not yet committed: by the
+coordinator's decision of 2026-10-30 it goes in as one commit with the
+free set's pin moved to `usb-wdm-free` 0.1.5 (`wdmfree-pin.txt` and
+`INST_WDMFREE_SUMS`), since the cut refuses the split row at 0.1.4. It
+is four parts:
+
+- `instOtherRels`' row for `free:net/rtl815x` and
+  `nonfree:ethernet/rtl815x` split, kind 1 (`EXCLUDES`) on `0x1E07` (98
+  SE, ME, 2000, 8 to 10 x64) and kind 2 (lifted) on `0x1F8` (XP to 7
+  x64), with a `test_inst` vector over the thirteen systems (7138
+  checks, 0 failures).
+- The packager self-test over the real pinned sets
+  (`test-package.ps1`) exports the pinned free set too and runs the
+  cut's checks against the repository's `releases\` at the INF's
+  version, as the cut does, and requires a `LIFTED` line when the table
+  has a lifted row; with the non-free checkout alone it runs as before.
+- A lifted row held to a lift only in a cut that carries both sets of
+  its pair (`Test-OtherTableLifts -Carried`); a cut that leaves either
+  set out records the pair's `COEXISTS` lines on the row's systems as
+  `EXCLUDES` (`Get-OtherHeldLifts`), which is how the installer holds
+  the row when the partner's set is not in the download
+  (`other_same_release`), while a cut carrying both keeps the
+  `COEXISTS` and must prove the lift.
+  Found by the first gated build: the self-test "a release recorded
+  without the pack is assembled without it", a `-NoWdmFree` cut, was
+  refused by the lifted row (1 of 1715 checks).
+- Design record 26 section 6.7.14, draft 51.
+
+**Gated build** (x86, `build-driver.cmd both`, the working tree above
+over `d265c092`): BUILD + GATES PASSED in 25:51, the packager's
+self-tests passing in 23:58; `xhci98.sys` release `270D1454...`.
+
+**The cut's checks with the real non-free set** (`usb-wdm-nonfree`
+v1.1.0, the cut's own functions, the repository's `releases\`, so
+3.2.0.0's record is the previous one while the tree's `DriverVer` is
+3.3.0.0):
+
+| Free set | Result |
+|---|---|
+| v0.1.4 (the pin) | refused: its single `EXCLUDES` and the table's lifted row are two kinds on XP to 7 x64, as expected until the pin moves |
+| stand-in A: v0.1.4's files with 0.1.5's split `STAGE.TXT` lines | admitted; recorded `LIFTED`, `free:net/rtl815x` and `nonfree:ethernet/rtl815x` on `W7 W7X64 WVISTA WVISTA64 WXP WXP64` |
+| stand-in B3: B1 (below) with `USB\VID_0BDA&PID_8153&REV_3099` added to the free XP INF | refused: "were excluded on WXP by 3.2.0.0, and this cut's COEXISTS there is admitted only where the cut reads them apart ...: both match VID_0BDA&PID_8153" |
+| stand-in A without the non-free set (`-NoNonFree`) | admitted; the pair recorded `EXCLUDES` on XP to 7 x64, no `LIFTED` |
+
+The stand-ins are tags in a scratch clone of `usb-wdm-free` at v0.1.4,
+not in that repository: A splits the line as 0.1.5 does (in 0.1.5 the
+free `rtl815x` is still copied only, so the lift shows nothing on the
+page); B1 is A with the free `rtl815x`'s four XP to 7 x64 `COPY` lines
+made `STAGE`, so both boxes can be ticked; B2 is B1 with one comment
+changed, another release of the set. Each was cut as a TEST
+(`make-release.ps1 -Arch x86 -TestLabel ... -WdmFreePin`, the
+repository's 3.2.0.0 record copied into the cut's `-ReleasesDir`) with
+an installer built for that stand-in's `SHA256.TXT`
+(`INST_WDMFREE_SUMS` set for the cut and restored afterwards):
+`XHCIINST.EXE` A `9AB8A6B1...`, B1 `36DF649A...`, B2 `9533E505...`.
+Each cut passed.
+
+**XP** (q35, `xp` base, a fresh overlay, `launch-q35.ps1 -Os xp -Smp
+2`, the `-nonfree` download as the transfer disk, `INSTALL.BAT
+/console`):
+
+| Run | Download | Switches | Result |
+|---|---|---|---|
+| R1 | B1 | `/list` | both `free:net/rtl815x` and `nonfree:ethernet/rtl815x` among the packages offered for this Windows |
+| R2 | B1 | `/wdmfree:stage=hid/xpad98 /wdmnonfree:stage=hid/x360wc` | "REFUSED: free:hid/xpad98: Not with nonfree:hid/x360wc, ticked: the two are not staged together (both bind the Play and Charge Kit 045E:028F).. Nothing was changed.", exit 1 |
+| R3 | B1 | `/wdmfree:stage=net/rtl815x /wdmnonfree:stage=ethernet/rtl815x` | xHCI98 3.3.0.0 installed and started; "free:net/rtl815x staged." and "nonfree:ethernet/rtl815x staged.", exit 3 |
+| R4 | B2, after a restart | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | "REFUSED: nonfree:ethernet/rtl815x: Not with free:net/rtl815x, staged by an earlier run (they would claim one device): uninstall the other drivers first.. Nothing was changed.", exit 1 |
+
+**7 x86** (q35, `w7x86` base, a fresh overlay, an elevated prompt, the
+publisher prompts answered "Install this driver software anyway"):
+
+| Run | Download | Switches | Result |
+|---|---|---|---|
+| R1 | A | `/list` | `nonfree:ethernet/rtl815x` offered; the free `rtl815x` copied only |
+| R2 | A | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | both sets copied, "nonfree:ethernet/rtl815x staged.", the free one's folder `C:\XHCI98\USBDRV\FREE\net\rtl815x\wv-7-x86` listed for a by-hand install, exit 3 |
+| R3 | B1, after a restart | `/wdmfree:stage=net/rtl815x /wdmnonfree:stage=ethernet/rtl815x` | the non-free one "Staged by an earlier run" of the same release and not barred; the free set's earlier copy of another release replaced; "free:net/rtl815x staged." and "nonfree:ethernet/rtl815x staged.", exit 3 |
+| R4 | B2, after a restart | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | refused as on XP, exit 1 |
+
+**Pass**: with the two packages' chips disjoint both install side by
+side on XP and 7, and the overlapping cases stay excluded: an id in
+common at the cut, the excluded pair `xpad98` and `x360wc`, and a
+lifted pair against an earlier staging of another release. No adapter
+is at hand, so no device was bound by either driver. A double full
+stop in the refusal's text ("first.. Nothing"), where the reason ends
+with its own, is older than this change.
+
+Evidence: `E:\xhci98-vm\p45\w45-rtlpair\shots\` (`xp1-*.png`,
+`w7a-*.png`), the cuts and the stand-in pins under
+`E:\xhci98-scratch\p45-w45-rtlpair\`.
+
+Left for the commit with the pin: `usb-wdm-free` v0.1.5 tagged, the
+pin and `INST_WDMFREE_SUMS` moved, the gated build and a real cut's
+`-CheckOnly` on that tree; then the roadmap line.
