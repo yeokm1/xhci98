@@ -630,7 +630,7 @@ call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
 rem numbering of the bridges below a tunnel port is pure (record 21
 rem section 6.1.1).
-call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
+call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c ..\src\cm\tbt_topo.c"
 rem test_cm_noirq links nothing else: design record 28's state machine of
 rem operations is pure; its CONFIGMG and PCI.VXD calls are the model's.
 call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
