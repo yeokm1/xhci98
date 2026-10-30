@@ -492,6 +492,48 @@ static void test_set_and_recovery(void)
     CHECK_EQ(port(1)->State, TBT_U4_EMPTY, "torn down");
 }
 
+/* Section 7.7 part 3 step 4 (iii): a USB3 tunnel whose host side was lost
+ * (its two host entries and the host's USB3 Down Path Enable gone, the
+ * device side intact) is rebuilt after a recovery only when the link's
+ * enhanced TMU reads exactly as set up; each adapter field changed alone
+ * fails that, and the tunnel is drained as failed instead. */
+static void tmuAsLeft(int r, unsigned long reg, unsigned long clr, unsigned long set,
+                      const char *what)
+{
+    TBT_U4_CONFIG c;
+    int d;
+    int rr;
+
+    d = domain(1, FAB_DEV_USB4V2);
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK(port(1)->Usb3.Up && port(1)->TmuEnhanced, what);
+    rr = r == 0 ? 0 : d;
+    if (reg != 0) {
+        g_fab.R[rr].Adp[1].Cs[reg] = (g_fab.R[rr].Adp[1].Cs[reg] & ~clr) | set;
+    }
+    g_fab.R[0].Adp[7].Path[2 * 8] &= ~0x80000000UL;
+    g_fab.R[0].Adp[1].Path[2 * port(1)->Usb3.Hu] &= ~0x80000000UL;
+    g_fab.R[0].Adp[7].Cs[PCIE0] &= ~0x80000000UL;
+    recoverWith();
+    if (reg == 0) {
+        CHECK(port(1)->RebuildUsb3 && !port(1)->Usb3Failed, "as left: owed its rebuild");
+    } else {
+        CHECK(!port(1)->RebuildUsb3 && port(1)->Usb3Failed, "changed: failed, no rebuild");
+    }
+}
+
+static void test_tmu_as_left(void)
+{
+    tmuAsLeft(0, 0, 0, 0, "TMU as left: the control");
+    tmuAsLeft(1, TMU8, 0x03FF0000UL, 1UL << 16, "device Replenish Threshold changed");
+    tmuAsLeft(0, TMU8, 0x03FF0000UL, 1UL << 16, "host Replenish Threshold changed");
+    tmuAsLeft(1, TMU9, 0xFFUL, 31UL, "device ReplenishN changed");
+    tmuAsLeft(0, TMU9, 0xFFUL, 31UL, "host ReplenishN changed");
+    tmuAsLeft(1, TMU8, 0x7FFFUL, 3000UL, "device Replenish Timeout changed");
+    tmuAsLeft(1, TMU9, 0xFF00UL, 128UL << 8, "device DirSwitchN changed");
+}
+
 /* Section 9.3: a cleaning's Downstream Port Reset returns the router to
  * its defaults; a preserved router's enabled capability is gone, and a
  * Set refused after it leaves plain acknowledgements. */
@@ -1242,6 +1284,7 @@ int main(void)
     RUN_VEC(test_set_capabilities);
     RUN_VEC(test_set_and_recovery);
     RUN_VEC(test_clean_resets_caps);
+    RUN_VEC(test_tmu_as_left);
     RUN_VEC(test_two_dwords);
     RUN_VEC(test_tmu_enhanced);
     RUN_VEC(test_cv_found);

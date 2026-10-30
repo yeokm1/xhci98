@@ -8393,11 +8393,14 @@ static BOOLEAN tbtU4TmuEnhancedAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG cs0)
                     rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_8, &v) != TBT_OK ||
             (v & TBT_TMU_ADP8_EUDM) == 0 ||
             (v & TBT_TMU_ADP8_REPL_TIMEOUT_MASK) != TBT_TMU_REPL_TIMEOUT_HIFI ||
+            ((v & TBT_TMU_ADP8_REPL_THRESH_MASK) >> TBT_TMU_ADP8_REPL_THRESH_SHIFT) !=
+                TBT_TMU_REPL_THRESH_HIFI ||
             tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp,
                     rt->Adp[adp].CapTmu + TBT_TMU_ADP_CS_9, &v) != TBT_OK ||
             (v >> TBT_TMU_ADP9_INTERVAL_SHIFT) != TBT_TMU_ADP_INTERVAL_HIFI ||
             ((v & TBT_TMU_ADP9_DIRSWN_MASK) >> TBT_TMU_ADP9_DIRSWN_SHIFT) !=
-                TBT_TMU_DIRSWN_HIFI) {
+                TBT_TMU_DIRSWN_HIFI ||
+            (v & TBT_TMU_ADP9_REPLN_MASK) != TBT_TMU_REPLN_HIFI) {
             return FALSE;
         }
     }
