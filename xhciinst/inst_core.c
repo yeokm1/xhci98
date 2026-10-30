@@ -9054,7 +9054,11 @@ void inst_other_line(char *out, size_t cap, int set, int state,
     if (cap == 0) {
         return;
     }
-    if (state == INST_OTHER_CARRIED) {
+    if (state == INST_OTHER_CARRIED && set == INST_SET_FREE) {
+        /* Shown under inst_other_sentence, whose notice (the owner's,
+         * verbatim) already gives the free set's address. */
+        inst_catv(out, cap, 1, "Up to date: see the address above.");
+    } else if (state == INST_OTHER_CARRIED) {
         inst_catv(out, cap, 3, "Up to date: ", addr, ".");
     } else if (state == INST_OTHER_NOTOURS && releaseHas) {
         inst_catv(out, cap, 11, "The ", inst_other_folder(set), " folder "

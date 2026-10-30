@@ -30161,10 +30161,15 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 }
                 n++;
             }
-            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.%s%s",
-                      inst_other_label(set), dir, inst_other_address(set),
-                      set == INST_SET_FREE ? nl : "",
-                      set == INST_SET_FREE ? INST_FREE_NOTICE : "");
+            /* The free set's notice gives its address: not twice. */
+            if (set == INST_SET_FREE) {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s.%s%s",
+                          inst_other_label(set), dir, nl, INST_FREE_NOTICE);
+            } else {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.",
+                          inst_other_label(set), dir,
+                          inst_other_address(set));
+            }
             one[sizeof(one) - 1] = '\0';
             strncat(text, one, cap - strlen(text) - 1);
             for (i = 0; i < o->PkgCount; i++) {

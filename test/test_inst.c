@@ -7523,6 +7523,12 @@ static void test_other_sets(void)
                     "3.2.0.0");
     CHECK(strcmp(text, "Up to date: https://github.com/yeokm1/usb-wdm-nonfree.")
           == 0, "line: carried");
+    /* Owner, 2026-10-31: the free set's address once, in its notice. */
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_CARRIED, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Up to date: see the address above.") == 0 &&
+          strstr(text, "github") == NULL,
+          "line: the free set carried names no address twice");
     inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_ABSENT, 1,
                     "3.2.0.0");
     CHECK(strcmp(text, "Not in this download: the non-free driver pack is in "

@@ -2284,6 +2284,21 @@ static void oth_flow(HWND dlg)
             h = text_h(dc, text, tw, NULL);
             if (h > dlu_y(dlg, 34)) {
                 h = dlu_y(dlg, 34);
+                /* The free set's notice, whose address ends it, cut off
+                 * (a long install folder): the line gives the address
+                 * itself instead of pointing above. */
+                if (set == INST_SET_FREE &&
+                    (GetWindowLongA(ln, GWL_STYLE) & WS_VISIBLE)) {
+                    char addr[200];
+                    _snprintf(addr, sizeof(addr) - 1, "Up to date: %s.",
+                              inst_other_address(set));
+                    addr[sizeof(addr) - 1] = '\0';
+                    GetWindowTextA(ln, text, sizeof(text));
+                    if (strcmp(text, "Up to date: see the address above.") ==
+                        0) {
+                        SetWindowTextA(ln, addr);
+                    }
+                }
             }
             SetWindowPos(t, NULL, tx, y, tw, h, SWP_NOZORDER |
                          SWP_NOACTIVATE);
