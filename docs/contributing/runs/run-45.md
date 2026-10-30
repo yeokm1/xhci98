@@ -3727,6 +3727,28 @@ Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`serial-h1.log`,
 Not read: Vista x86 (the same section and the same service path), and a
 leg with the service's `Restart` value 0 (the host vectors refuse it).
 
+**45.47, Vista x86 (legs vh1 and vh2, 2026-10-30).** The Vista Business
+SP2 x86 q35 base, `-Usb4 tb3ar`, the same emulator; the same TEST x86
+cut as h1 and h2 (its `XHCIMARK.EXE` built from the same `xhcimark\`
+sources as 3.4.0.0's `42093a03`). Evidence:
+`E:\xhci98-vm\p45\w45-emufix\vx\` (`serial-vh1.log`, `serial-vh2.log`,
+`steps-vh1.txt`, `steps-vh2.txt`, `rep-vh1r.txt`). On this base Windows
+opens "Found New Hardware" for devices with no driver (an unknown base
+device, and the dock's 82574L, for which Vista has none); each was
+answered "Ask me again later" or cancelled, and while one is open the
+install and the service both wait for it.
+
+| Leg | Steps | Read |
+|---|---|---|
+| vh1 | install with no dock: the first run ended at exit code 4 behind an open "Found New Hardware", the second at exit code 3 (changes made, restart); restart; the dock plugged by QMP | Windows asked "You must restart your computer to apply these changes" (answered Restart Later); "controller not started yet: ...DEV_000D...: an installation is pending (or cannot be told)" while a "Found New Hardware" was open (the dock's NIC has no Vista driver); once it was cancelled, "controller started: ...DEV_000D... (it waited for a restart of Windows; the helper is running)"; the dock xHCI at Code 0, its root hub, "USB Human Interface Device" and "HID-compliant mouse" started; the NIC "Ethernet Controller - no driver, problem code 1". No restart |
+| vh2 | the dock present at power-on, install (exit code 4: the NIC's "Found New Hardware" open), restart | the dock xHCI, its root hub and the tablet's USB and HID devices at Code 0; problem codes only on two base devices (`8086:2930`, `ACPI\QEMU0002`) |
+
+So on Vista x86 too a dock hot-added after the install starts its xHCI
+without a restart, once Windows has no installation pending, and a dock
+present at the install works after the install's restart. Windows' own
+restart prompt still appears at the hot-add, from the section's `Reboot`.
+Not read on Vista: the 45.49 stop-first sequence; `XHCIMARK.LOG` in vh2.
+
 ## 45.49 a 7 x86 guest hung by a Thunderbolt 3 dock unplugged and plugged in again: the reading (2026-10-30)
 
 **The question.** After the restart that started the dock's xHCI (45.47's
