@@ -2178,3 +2178,99 @@ shared and level (PCI). Not read: the configuration space's Interrupt Line
 and Pin, and whether the IRQ is the one the pin raises, which only the
 self-test can say (section 4.5.4). The code connects nothing on 98 SE and
 ME (`cm.irq.9x`); their connection and its first leg stay owed.
+
+### The legs on q35 (2026-10-30)
+
+Vehicle: fresh overlays of `E:\xhci98-vm\q35-bases\w7x86` and `xp`, the
+launcher's pinned emulator (`bin\asm4242-20261025-2230`), TCG, 2 vCPUs,
+with `-msg timestamp=on` and the trace events `usb4_host_rx_done`,
+`usb4_host_frame_decode`, `usb4_host_mmio_write` and `usb4_host_irq_intx`
+(host clock). Install set: `releases\3.3.0.0`'s `INSTALL.BAT` and tools with
+its `release-x86` replaced by this tree's `make-package.ps1 -Flavor release
+-Arch x86` output unchanged (`xhcicm.sys` `550c3e18...`, `xhci98.sys`
+`4022c19a...`; the owner, 2026-10-30: these legs count), `INSTALL.BAT
+/console /yes /nopause /thunderbolt /stor98`, exit 3, restart. The qemu
+phases replace `xhcicm.sys` alone by `make-package.ps1 -Flavor qemu`'s
+(`bbb1a272...`), whose log reaches the host through port `0xE9`, each
+line stamped on the host clock as it lands. Values set in `Services\USB`
+(`reg add`), each followed by a restart. Evidence:
+`E:\xhci98-vm\p45\w45-irq2\w7t` and `wxa` (`serial-*.log`: the XHCITR
+reports and `typeperf`; `cpu.txt`; `plugs-*.txt`; `dbg-*.txt`;
+`trace-*.log`; `seq.log`), the scripts in `kit\`.
+
+**The driver loaded is this build** on both: `cm.irq.value` and
+`cm.irq.resource` in each report (7 x86, Alpine Ridge under the ICM
+client: a line at IRQL 10, shared, level; XP, the ASM4242 under the USB4
+profile: IRQL 5, shared, level).
+
+**Value 1, 7 x86 `tb3ar`**: `cm.irq.connected`, `cm.irq.armed=00001000`
+(bit 12 of 36 causes: RX ring 0 for Total Paths 12), `cm.irq.selftest`
+passed (10 ms at the first start, 203 ms on a slower boot); the drive came
+up behind the tunnel as with value 0.
+
+**Hot-plug latency, 7 x86 `tb3ar`, ten plugs of the TB3 enclosure each**
+(QMP `device_add` at 70 s intervals, `device_del` 40 s after each; record
+21 section 4.5.9's two figures):
+
+| Value | Event frame taken by the driver after the emulator wrote it (`RX0.PROD_CONS` naming its descriptor) | Connection done (`cm.action.tunnel-up`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 154 ms, max 199 ms | median 206 ms, max 225 ms |
+| 1 (the interrupt) | median 2.1 ms, max 4.1 ms | median 25 ms, max 38 ms |
+
+(The emulator writes the event frame 0.5 to 1.5 ms after the plug; for a
+few plugs the parser paired the unplug's frame, whose take-up is the same
+measure.)
+
+**The same, XP `asm4242` under the USB4 profile, ten plugs of the ORICO
+enclosure each** (value 1: `cm.irq.connected`, `cm.irq.armed=00200000`,
+bit 21 of 63 causes for Total Paths 21, `cm.irq.selftest` passed):
+
+| Value | Hot-plug packet taken after it was written | Connection done (`u4.action`) after the plug |
+|---|---|---|
+| 0 (poll, 200 ms) | median 123 ms, max 211 ms | median 2370 ms, max 2554 ms |
+| 1 (the interrupt) | median 2.6 ms, max 5.1 ms | median 2245 ms, max 2359 ms |
+
+Under the USB4 profile the connection is the enumeration of section 6.4,
+about 2.2 s here, so the interrupt's gain (one poll's wait) is a small
+part of it; the wake's port check ran the whole connection (the tick did
+not have to), and no wake fed another (`TbtU4RingWake`).
+
+**Idle cost, 7 x86 `tb3ar`, release flavour, ten minutes each**: the QEMU
+process's host CPU, and the guest's `% Processor Time` and
+`Interrupts/sec` (`typeperf`, 10 s samples).
+
+| Configuration | Nothing attached: host / guest / interrupts per s | Drive attached, idle |
+|---|---|---|
+| value 0, period 200 ms | 65.2 % / 26.2 % / 152 | 65.0 % / 27.5 % / 140 |
+| value 1, period 200 ms | 63.1 % / 25.7 % / 135 | 62.9 % / 25.1 % / 134 |
+| value 0, period 50 ms | 67.2 % / 26.9 % / 148 | 60.2 % / 24.3 % / 134 |
+
+Within the noise of a TCG guest sharing the host (other workers' guests
+ran beside it): neither the interrupt nor the 50 ms period shows an idle
+cost there. XP `asm4242`, value 0: 102.6 % / 31.1 % / 130 with nothing
+attached, 102.9 % / 31.5 % / 129 with the drive.
+
+**A lost interrupt, 7 x86 `tb3ar`, qemu flavour, value 1,
+`XhciCmQemuIrqDead` 12**: the line died after its twelfth claim during
+the second plug. The plugs after that were still served, by the
+maintenance pass (connection done 160 ms after the fourth plug, against
+25 to 49 ms before), and the drive came and went each time: a lost
+interrupt costs one idle period, today's latency. The latch to polling
+for the activation (two suspected misses in a row, the self-test,
+`cm.irq.lost`) was not reached: the ICM client's events are single frames
+70 s apart here, so no two maintenance passes in a row found an unannounced
+frame. That path rests on `test_cm_rirq`'s watchdog vectors.
+
+**Not read on a guest**: the storm stop (no emulator storm), the
+retained interrupt (no mask that does not latch), a D3 and resume with
+value 1 (no sleep leg), Windows 2000, Vista, 8 to 10 and the x64 build.
+
+### What is left
+
+The task stays unticked: its line connects the interrupt on 98 SE and ME
+too once their route is read, and that connection (and its first leg,
+the self-test on those systems) is owed - the route is read above. Also
+owed: the latch to polling read on a guest (it needs an `usb4-emu` INTx
+drop on `usb4-host`, or a host with denser events), the readings of the
+"Not read" list, and the hardware reading at 45-E.5 (the P14s's Alpine
+Ridge INTx, the self-test first). The default stays 0 (owner, Q2).
