@@ -1497,14 +1497,16 @@ differs from them, this section is the record.
   departure can end a request to its parent or to another port. A router
   reports either error for the adapter it could not forward through
   (Spec 6.4.2.3), so one that ends a request is that request's own only
-  when it comes from a router on the way to the request's route (the
-  host router, or a router above it) and names the next hop towards it
-  (`tbtU4NotifyOf`). Any other is foreign: for the request a failure,
-  never removal evidence (`tbtU4Gone`), and the notification handled as
-  its queued form would be - a kid's lane or route the kid's check (and
-  unplug hint for its lane) with a plain check of the host port, a host
-  lane that port's check and hint. This holds at depth 1 too, where such
-  a notification was read as the requested router's removal.
+  when it comes from a router above the request's route (the host
+  router included) and names the next hop towards it (`tbtU4NotifyOf`);
+  a request to the host router itself forwards nothing, so none is its
+  own. Any other is foreign: never removal evidence for the request
+  (`tbtU4Gone`), the request asked once more (`tbtU4RdN`, `tbtU4WrN`), and
+  the notification handled as its queued form would be - a kid's lane or
+  route the kid's check (and unplug hint for its lane) with a plain check
+  of the host port, a host lane that port's check and hint. This holds at
+  depth 1 too, where such a notification was read as the requested
+  router's removal (or, at a host-local request, as the active port's).
 - **The idle tick** (`tbtU4KidService`, after each host port's own
   check): each kid of the port checked from the registers (its evidence:
   the parent lane's class, a USB4 parent's Lock on a lane this driver
@@ -1517,7 +1519,10 @@ differs from them, this section is the record.
   (`TBT_U4_LINK.AdoptTried`), a connected lane connected. Under a parent
   FAILED or HELD a kid is still served by its own unplug (section 6.3):
   its removal read and, on evidence, its teardown; nothing else until the
-  parent is UP.
+  parent is UP. A parent HELD and not yet classified (a resume's, which
+  its own next check classifies before the kids are served; a
+  recovery's; one behind the retirement barrier) is not written for its
+  kids at all: their checks and any cleanup owed wait.
 - **Adoption** runs at that tick, the first after the parent is UP - at
   the start and after a recovery's commit alike - rather than inside
   section 9.2's walk, so the walk is unchanged. "Nothing else on the
@@ -1536,7 +1541,10 @@ differs from them, this section is the record.
   the residual sweep (`tbtU4SweepLane`), and once the link is empty the
   parent's lanes back (`tbtU4KidLanesBack`: each change owned until a
   read-back proves it undone, as `tbtU4HostRestore` keeps the host's; the
-  child's put back too while it is there). An entry unread or a change
+  child's put back too while it is there), only once the link reads idle
+  (the parent's two lanes with the quarantine, `tbtU4KidLanesIdle`, and
+  its PCIe Down's Path Enable and HopID 8, `tbtU4AdapterFree`): a held
+  entry is not a closed one. An entry unread, a held one, or a change
   not undone leaves the kid in TEARDOWN (`SweepOwed`), retried at the next
   tick; the slot is freed once nothing is owed (the links below dropped
   and every route of the child and below forgotten). A connect waits for

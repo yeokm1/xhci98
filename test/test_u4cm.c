@@ -6429,6 +6429,26 @@ static int foreignHook(struct FAB *f, unsigned long pdf, int router, unsigned lo
     return FAB_HOOK_GO;
 }
 
+/* Hook: a host ERR_CONN naming port 2's lane 0 delivered at the first
+ * host path-entry write once armed (port 1's tunnel being built). */
+static int g_xportArmed;
+static int xportHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)adp; (void)addr; (void)n; (void)data;
+    if (g_xportArmed && pdf == TBT_PDF_WRITE && router == 0 && cs == TBT_CS_PATH) {
+        g_xportArmed = 0;
+        dw[0] = 0x80000000UL;
+        dw[1] = 0;
+        dw[2] = TBT_EV_ERR_CONN | ((unsigned long)fabPortLane0(f, 2) << 8);
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
 /* Record 34 section 6.5 at a request: an ERR_CONN from the child's own
  * route, handed by the transport to the parent's identity read, is never
  * the parent's removal; and under a parent HELD at resume the kid is
@@ -6474,6 +6494,38 @@ static void test_kid_foreign_and_held(void)
     }
     CHECK_EQ(n, 0, "and its obligation gone");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent still HELD");
+
+    /* A host ERR_CONN naming another port's lane, handed to a host-local
+     * request of port 1's connect: neither port torn down, the request
+     * asked again. */
+    {
+        int d1;
+        int d2;
+
+        fabInit(&g_fab);
+        fabHostMinimal(&g_fab);
+        d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+        d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+        fabPlug(&g_fab, 2, d2);
+        {
+            TBT_U4_CONFIG c;
+            cfgDefault(&c);
+            (void)start(&g_fab, &g_ring, &g_cm, &c);
+        }
+        poll(&g_cm, &g_fab, 2);
+        CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2 UP");
+        (void)countActions(&g_cm, 0);
+        g_xportArmed = 1;
+        g_fab.Hook = xportHook;
+        fabPlug(&g_fab, 1, d1);
+        poll(&g_cm, &g_fab, 3);
+        g_fab.Hook = NULL;
+        CHECK(g_xportArmed == 0, "the notification delivered at port 1's host path write");
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "port 1 connected through another port's ERR_CONN");
+        CHECK(fabPcieUp(&g_fab, 1), "with its tunnel");
+        CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2, still there, kept UP");
+        CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 0, "nothing removed");
+    }
 }
 
 /* Section 6.7's cleanup gates the next connect: a re-plug while the last

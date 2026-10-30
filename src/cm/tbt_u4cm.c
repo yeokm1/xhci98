@@ -146,6 +146,12 @@ static LONG tbtU4RdN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
     }
     rc = TbtCtlRead(&cm->Ctl, r, cs, adp, addr, n, v);
     tbtU4NotifyOf(cm, r, rc);
+    if (cm->ForeignNotify && !tbtU4Spent(cm)) {
+        /* Ended by another router's notification (tbtU4NotifyOf): asked
+         * once more, so a request is not lost to someone else's event. */
+        rc = TbtCtlRead(&cm->Ctl, r, cs, adp, addr, n, v);
+        tbtU4NotifyOf(cm, r, rc);
+    }
     if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL ||
         rc == TBT_E_TIMEOUT) {
         cm->HwErrors++;
@@ -172,6 +178,13 @@ static LONG tbtU4WrN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
     }
     rc = TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
     tbtU4NotifyOf(cm, r, rc);
+    if (cm->ForeignNotify && !tbtU4Spent(cm)) {
+        /* As tbtU4RdN: the same DWs written once more (a write applied
+         * whose answer the notification cut short is written again with
+         * the same values). */
+        rc = TbtCtlWrite(&cm->Ctl, r, cs, adp, addr, n, v);
+        tbtU4NotifyOf(cm, r, rc);
+    }
     if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL ||
         rc == TBT_E_TIMEOUT) {
         cm->HwErrors++;
@@ -481,12 +494,14 @@ static VOID tbtU4Hint(PTBT_U4CM cm, const TBT_ROUTE *route, ULONG adapter,
  * request to its parent or to another port. A router reports either
  * error for the adapter it could not forward through (Spec 6.4.2.3), so
  * one that ends a request to route `r` is that request's own only when it
- * comes from a router on the way to `r` (the host router, or a router
- * above `r`) and names the next hop towards `r`. Any other is foreign:
- * for the request a failure, never removal evidence (tbtU4Gone), and the
- * notification handled as its queued form would be (tbtU4KidNote, else
- * tbtU4Hint) - so a child's departure is its kid's check and unplug hint,
- * and only a plain check of the host port.
+ * comes from a router above `r` (the host router included) and names the
+ * next hop towards `r`; a request to the host router itself forwards
+ * nothing, so none is its own. Any other is foreign: for the request
+ * never removal evidence (tbtU4Gone; the request is asked once more,
+ * tbtU4RdN), and the notification handled as its queued form would be
+ * (tbtU4KidNote, else tbtU4Hint) - so a child's departure is its kid's
+ * check and unplug hint and only a plain check of the host port, and
+ * another host port's its own check and hint.
  */
 static VOID tbtU4NotifyOf(PTBT_U4CM cm, const TBT_ROUTE *r, LONG rc)
 {
@@ -507,9 +522,8 @@ static VOID tbtU4NotifyOf(PTBT_U4CM cm, const TBT_ROUTE *r, LONG rc)
     n.Sq = FALSE;
     de = TbtRouteDepth(&n.Route);
     dr = TbtRouteDepth(r);
-    if ((dr == 0 && de == 0) ||
-        (de < dr && (de == 0 || tbtU4Under(r, &n.Route)) &&
-         TbtRouteLevel(r, de) == n.Info)) {
+    if (de < dr && (de == 0 || tbtU4Under(r, &n.Route)) &&
+        TbtRouteLevel(r, de) == n.Info) {
         return;     /* the request's own */
     }
     cm->ForeignNotify = TRUE;
@@ -6289,6 +6303,8 @@ static VOID tbtU4Check(PTBT_U4CM cm, PTBT_U4_PORT p)
  * the kid (KidCtx).
  */
 
+static BOOLEAN tbtU4KidLanesIdle(PTBT_U4CM cm, const TBT_U4_ROUTER *pr, ULONG a);
+
 static PTBT_U4_KID tbtU4KidOf(PTBT_U4CM cm, ULONG index)
 {
     if (index == 0 || index > TBT_U4_MAX_KIDS || !cm->Kids[index - 1].Used) {
@@ -7364,7 +7380,13 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     }
     first = (BOOLEAN)!k->SweepOwed;
     complete = tbtU4SweepLane(cm, p->Index, pr, k->ParentLane0);
-    /* The lanes only once nothing is left on the link (Guide 7.1). */
+    /* The lanes only once nothing is left on the link (Guide 7.1): a held
+     * entry is not closed, so the lanes, read again with the quarantine,
+     * and the PCIe Down (its Path Enable and HopID 8) must read idle. */
+    if (complete) {
+        complete = (BOOLEAN)(tbtU4KidLanesIdle(cm, pr, k->ParentLane0) &&
+                             (hp == 0 || tbtU4AdapterFree(cm, pr, hp)));
+    }
     if (complete) {
         complete = tbtU4KidLanesBack(cm, p, k);
     }
@@ -8036,13 +8058,18 @@ static VOID tbtU4KidService(PTBT_U4CM cm, PTBT_U4_PORT p)
             tbtU4KidFree(cm, k);
             continue;
         }
-        if (k->SweepOwed) {
-            tbtU4KidTeardown(cm, p, k);
-            continue;
-        }
         if (!pr->Present || pr->Depth != 1 ||
             (p->State != TBT_U4_UP && p->State != TBT_U4_FAILED &&
-             p->State != TBT_U4_HELD)) {
+             p->State != TBT_U4_HELD) ||
+            (p->State == TBT_U4_HELD &&
+             (p->ClassifyPending || p->Why == TBT_U4_WHY_RECOVER || p->Barred))) {
+            /* A parent not yet classified (a resume's, read again at its
+             * next check; a recovery's) is not written for its kids: they
+             * wait, their cleanup and checks with them. */
+            continue;
+        }
+        if (k->SweepOwed) {
+            tbtU4KidTeardown(cm, p, k);
             continue;
         }
         /* Under a parent FAILED or HELD (record 34 section 6.3) a kid is

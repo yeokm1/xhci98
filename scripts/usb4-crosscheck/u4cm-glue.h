@@ -49,6 +49,14 @@ typedef struct XC_OPS {
 #define XC_ENUMERATED       31
 #define XC_HOST_ADP_TYPE    32      /* `port` is the adapter: ADP_CS_2's type */
 #define XC_USB3_DOWN        33
+/* Record 34 Part 3: the first kid of host port `port` */
+#define XC_KID_STATE        34
+#define XC_KID_PCIE_UP      35
+#define XC_KID_HD           36
+#define XC_KID_HU           37
+#define XC_KID_ROUTE        38      /* its route's low DW */
+#define XC_KID_LD_CALLS     39      /* link-down upcalls naming a kid */
+#define XC_KID_BONDED       40
 
 long xc_start(const XC_OPS *ops, void *arena, unsigned long phys,
               unsigned long bytes, int usb3);
