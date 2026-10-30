@@ -56,6 +56,29 @@ if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyCon
     Write-Err "packager self-tests FAILED: git is not on PATH, and the fixtures these tests build are git repositories. Put git on PATH and run again."
     exit 1
 }
+function Get-CatalogPeSample {
+    # The real image the catalog case gives MakeCat to hash as a PE member
+    # (MakeCat's PE hashing needs one): Windows' own kernel32.dll, the same
+    # file for every run of a tree, rather than a driver this tree has
+    # built, which every build replaces.
+    return (Join-Path $env:SystemRoot "System32\kernel32.dll")
+}
+
+function Get-PackagerSelfTestInherited {
+    # What the suite and its children inherit, as the digest's rows: every
+    # environment variable but the per-run ones (the gated run's token, and
+    # the switches this skip itself reads), and git's configuration as it
+    # applies in the tree (the fixtures' commits and tags take it).
+    param([string]$Root)
+    $rows = @()
+    foreach ($v in @(Get-ChildItem Env: | Sort-Object Name)) {
+        if (@("XHCI98_GATED_RUN", "XHCI98_FULL_SELFTESTS", "XHCI98_SELFTEST_SKIP_OK") -contains $v.Name.ToUpperInvariant()) { continue }
+        $rows += ("env:" + $v.Name.ToUpperInvariant() + "=" + $v.Value)
+    }
+    $rows += ("gitconfig:" + ((& git -C $Root config --list --show-origin 2>$null) | Out-String).Trim())
+    return ,$rows
+}
+
 function Get-PackagerSelfTestDigest {
     # One SHA-256 over everything these self-tests may read, so that a skip
     # is never taken on a changed input. The packager, the releaser and
@@ -65,10 +88,17 @@ function Get-PackagerSelfTestDigest {
     # untracked one not ignored, each by its path and content, a tracked
     # file deleted as absent - and, of what git ignores, the built images
     # the releaser reads by content (XHCIPFW.VXD, S98VSD.VXD), the names of
-    # the built drivers a case may take as a sample (src\**\*.sys, *.mpd,
-    # out\free\**), the WDK tools by name and size, and the PowerShell,
-    # .NET and git versions. $null when git cannot list the tree: no skip.
-    param([string]$Root)
+    # the built drivers a case may stage (src\**\*.sys, *.mpd, out\free\**);
+    # then what the cases run and inherit: the catalog case's PE sample and
+    # MakeCat by content, the toolchains the binary gates' host tests
+    # compile with (MSVC6, WDK 7.1, the Windows 98 DDK headers) by every
+    # file's path, size and time, the environment variables the suite and
+    # its children read, git's configuration, and the PowerShell, .NET and
+    # git versions. The inherited part is taken once, at the start
+    # (Get-PackagerSelfTestInherited), and handed in as -Inherited, so the
+    # variables a case sets for itself do not move the end's digest. $null
+    # when git cannot list the tree: no skip.
+    param([string]$Root, [string[]]$Inherited = @())
     $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
     if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
     $listed = & git -C $root ls-files -z --cached --others --exclude-standard 2>$null
@@ -101,13 +131,30 @@ function Get-PackagerSelfTestDigest {
                 $rows += ("present:" + $f.FullName.Substring($root.Length).ToLowerInvariant())
             }
         }
-        $wdk = Join-Path $root "tools\WinDDK71\bin\x86"
-        if (Test-Path -LiteralPath $wdk -PathType Container) {
-            foreach ($f in @(Get-ChildItem -LiteralPath $wdk -File -Filter "*.exe" -ErrorAction SilentlyContinue)) {
-                $rows += ("tool:" + $f.Name.ToLowerInvariant() + ":" + $f.Length)
+        foreach ($n in @((Join-Path $root "tools\WinDDK71\bin\x86\MakeCat.exe"), (Get-CatalogPeSample))) {
+            if (Test-Path -LiteralPath $n -PathType Leaf) {
+                $rows += ("run:" + $n.ToLowerInvariant() + ":" + (($sha.ComputeHash([System.IO.File]::ReadAllBytes($n)) | ForEach-Object { $_.ToString("x2") }) -join ""))
+            } else {
+                $rows += ("run:" + $n.ToLowerInvariant() + ":absent")
+            }
+        }
+        # The toolchains as run-host-tests.cmd resolves them: MSVC6 and
+        # WDK71 when set, else the tree's tools\ folders.
+        $chains = @(
+            $(if ("$env:MSVC6" -ne "") { "$env:MSVC6" } else { Join-Path $root "tools\MSVC600" }),
+            $(if ("$env:WDK71" -ne "") { "$env:WDK71" } else { Join-Path $root "tools\WinDDK71" }),
+            (Join-Path $root "tools\win98ddk-extracted"))
+        foreach ($chain in $chains) {
+            $rows += ("chain:" + $chain.ToLowerInvariant())
+            if (-not (Test-Path -LiteralPath $chain -PathType Container)) { continue }
+            $chainRoot = [System.IO.Path]::GetFullPath($chain).TrimEnd('\') + '\'
+            foreach ($f in @(Get-ChildItem -LiteralPath $chainRoot -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+                $rows += ("chain:" + $chain.ToLowerInvariant() + ":" + $f.FullName.Substring($chainRoot.Length).ToLowerInvariant() + ":" +
+                          $f.Length + ":" + $f.LastWriteTimeUtc.Ticks)
             }
         }
         $rows = @($rows | Sort-Object -CaseSensitive -Unique)
+        $rows += @($Inherited)
         $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
         $rows += ("clr:" + [System.Environment]::Version.ToString())
         $rows += ("certrequest:" + [bool]("System.Security.Cryptography.X509Certificates.CertificateRequest" -as [type]))
@@ -124,7 +171,8 @@ function Get-PackagerSelfTestDigest {
 # this tree's last passing run, names the digest it read. -Force and
 # XHCI98_FULL_SELFTESTS=1 (a cut's builds) run it all.
 $passRecord = Join-Path $repo "out\packager-selftest-pass.txt"
-$digest = Get-PackagerSelfTestDigest -Root $repo
+$inherited = Get-PackagerSelfTestInherited -Root $repo
+$digest = Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest -and (Test-Path -LiteralPath $passRecord -PathType Leaf)) {
     # A record is taken whole or not at all: the digest, the tree it was
@@ -5585,19 +5633,18 @@ try {
         Write-Step "x64 catalogs: the parser, on a catalog MakeCat makes of stand-ins"
         $catWork = Join-Path $script:work "catalog"
         New-Item -ItemType Directory -Force -Path $catWork | Out-Null
-        # The PE member: a driver this tree has built, where there is one
-        # (MakeCat's PE hashing needs a real image, which the synthetic
-        # header is not); otherwise a text stand-in, hashed flat, and the PE
-        # member type is left to the mocks above and to the packager's own
-        # check of every catalog it signs.
+        # The PE member: a real image, Get-CatalogPeSample's (MakeCat's PE
+        # hashing needs one, which the synthetic header is not; a fixed one,
+        # so the skip's digest can hold it); otherwise a text stand-in,
+        # hashed flat, and the PE member type is left to the mocks above
+        # and to the packager's own check of every catalog it signs.
         $catPe = Join-Path $catWork "x.sys"
-        $catBuilt = @(Get-ChildItem -LiteralPath (Join-Path $repo "src") -Recurse -File -Filter "xhci98.sys" -ErrorAction SilentlyContinue |
-                      Where-Object { $_.FullName -match '\\obj(fre|chk)' } | Select-Object -First 1)
+        $catBuilt = @(Get-Item -LiteralPath (Get-CatalogPeSample) -ErrorAction SilentlyContinue)
         if ($catBuilt.Count -gt 0) {
             Copy-Item -LiteralPath $catBuilt[0].FullName -Destination $catPe
         } else {
             [System.IO.File]::WriteAllText($catPe, "not a driver", (New-Object System.Text.ASCIIEncoding))
-            Write-Warn "x64 catalogs: no built xhci98.sys under src\obj*, so the catalog's second member is a text stand-in."
+            Write-Warn "x64 catalogs: no kernel32.dll to sample, so the catalog's second member is a text stand-in."
         }
         $catInf = Join-Path $catWork "x.inf"
         [System.IO.File]::WriteAllText($catInf, "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nCatalogFile=x.cat`r`n", (New-Object System.Text.ASCIIEncoding))
@@ -6531,6 +6578,11 @@ try {
     Assert-True ($dg1 -ne $dg0) "digest : a tracked file deleted did not move the digest."
     Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -eq $dg1) "digest : the digest of one tree is not the same twice."
     Assert-True ($null -eq (Get-PackagerSelfTestDigest -Root (Join-Path $script:work "no-such-tree"))) "digest : a tree git cannot list gave a digest."
+    $dgInh = @(Get-PackagerSelfTestInherited -Root $dg)
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh) -ne $dg1) "digest : the inherited environment did not reach the digest."
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited ($dgInh + @("env:X=1"))) -ne (Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh)) `
+        "digest : a changed variable did not move the digest."
+    Assert-True (@($dgInh | Where-Object { $_ -like "env:XHCI98_GATED_RUN=*" }).Count -eq 0) "digest : the gated run's token is in the inherited rows."
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
@@ -6545,7 +6597,7 @@ if ($script:failures.Count -gt 0) {
 # The record of this pass, for the next run's skip: written whole to a
 # temporary name and moved into place, and only if what may be read is
 # still what the run began with (a change during the run runs it again).
-if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo) -eq $digest) {
+if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
     Ensure-Directory (Split-Path -Parent $passRecord)
     $tmpRecord = $passRecord + "." + [System.IO.Path]::GetRandomFileName() + ".tmp"
     try {

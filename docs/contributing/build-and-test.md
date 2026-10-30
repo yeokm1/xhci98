@@ -3655,10 +3655,19 @@ cases that drive them read across the whole tree. The digest
   (`src\pfw\obj\XHCIPFW.VXD`, `src\vsd\obj\S98VSD.VXD` and their `qemu\`
   twins, whose build is deterministic), the names of the built drivers a
   case may take as a sample or stage (every `*.sys` and `*.mpd` under
-  `src\`, everything under `out\free\`), the WDK 7.1 tools in
-  `tools\WinDDK71\bin\x86` by name and size, and the PowerShell, .NET and
-  git versions (and whether .NET has `CertificateRequest`, which the
-  signing cases need).
+  `src\`, everything under `out\free\`);
+- what the cases run and inherit: `MakeCat.exe` and the catalog case's
+  PE sample by content (Windows' own `kernel32.dll`, a fixed file, where
+  that case used to take a driver the tree had built and every build
+  replaces); the toolchains the binary gates' host tests compile with -
+  MSVC6 and WDK 7.1 as `run-host-tests.cmd` resolves them (`MSVC6`,
+  `WDK71`, else `tools\`) and `tools\win98ddk-extracted` - by every file's
+  path, size and time; every environment variable but the gated run's
+  token and the skip's own switches, and `git config --list
+  --show-origin` in the tree, both taken once at the start, so a variable
+  a case sets for itself does not move the end's digest; and the
+  PowerShell, .NET and git versions (and whether .NET has
+  `CertificateRequest`, which the signing cases need).
 
 When git cannot list the tree there is no digest and the suite runs whole.
 The record is `out\packager-selftest-pass.txt`, of the INF gate's form
@@ -3673,7 +3682,8 @@ digest too: the skip saves the repeated run of one tree, not a run after
 an edit. Checked by the self-test itself: the digest moves for a tracked
 file changed or deleted, an untracked file that is not ignored, a built
 `XHCIPFW.VXD` changed and a built driver appearing, and stays for any
-other ignored file.
+other ignored file; an inherited variable moves it, the run's token
+does not.
 
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
