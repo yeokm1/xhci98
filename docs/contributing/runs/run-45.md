@@ -2598,12 +2598,41 @@ on `xhcicm.sys`; the ASM4242 model with the ORICO at boot.
 - With Verifier reset, the uninstall run again: exit 3, the drive on
   `stornvme`, the restart after it clean.
 
-So on 8.1 x64 the Stor98 half holds, and the unload half is not read
-under Verifier: the stop in `storport.sys` came first.
+The stop in `storport.sys`, read from the complete memory dump (exported
+from the guest, parsed on the host from the dump's own page tables): the
+IRP (argument 3) has four stack locations and only the top one used,
+`IRP_MJ_PNP` / `IRP_MN_QUERY_CAPABILITIES`, sent to a device object of
+`\Driver\stornvme` (a controller-type device, so `storport.sys`'s
+adapter object, the dispatch routine argument 2 names) whose
+`DEVOBJ_EXTENSION` reads removal processed and deletion pending, attached
+to nothing below, reference count 0: a request sent to the drive's
+adapter after its own removal. Its unused lower locations mean it never
+went down the stack, so it never reached the child filter of
+`xhcicm.sys`, and the thread's whole kernel stack holds `ntoskrnl.exe`
+frames and that one `storport.sys` routine, no `xhcicm.sys` frame. So the
+failing request was dispatched to `storport.sys`'s removed adapter and
+not through the filter; why the adapter was removed then, and whether
+anything earlier contributed, is not read. The stop under the standard
+checks stays an unresolved observation (below).
+
+The unload half on 8.1 x64, read on a second fresh overlay (`k81y`, the
+same vehicle) with Verifier's pool checks alone on `xhcicm.sys` (special
+pool and pool tracking, flags 0x9): the install, a cold boot with the
+ORICO (the mark service's switch, Stor98 running), the uninstall (exit
+3) with no stop; `xhcicm.sys` loaded once and not unloaded (it stays for
+the boot once a stor98 holds the table, `ec1b21f0`); the restart after
+it clean. A second install on `k81x` over the first was refused by the
+installer (exit 1, the x64 connection manager's test-signing gate), so
+`k81y` was a fresh overlay.
+
+So on 8.1 x64 both halves of the task hold: Stor98 starts, and the
+unload leaves no allocation behind.
 
 ### Owed
 
-8.1 x64 for both halves.
+Nothing of 45.31's scope. Left open: the stop in `storport.sys` at the
+8.1 x64 uninstall under Verifier's standard checks on `xhcicm.sys`
+(location read, cause not).
 
 ### 45.13 (continued): 2000 read, and the chained unit's own `Removable` (2026-10-30)
 
