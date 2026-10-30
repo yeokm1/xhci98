@@ -4650,21 +4650,29 @@ static VOID hcdDropAll(PHCD_CONTROLLER hc)
  * until its new slot is enabled: above every slot id. */
 #define HCD_RKEEP_REF_BASE      0x100UL
 
-/* 1 when the active configuration holds an interface of class 08. The
- * configuration as the device gave it (dev->Config); a malformed walk
+/* 1 when the active configuration holds an interface of class 08 at any
+ * of its alternates - a UAS setting may sit behind a vendor alternate 0
+ * (XhciXportChoose takes it) - or the bus chose a storage transport for
+ * one of its PDOs; *count is how many interface numbers carry class 08.
+ * The configuration as the device gave it (dev->Config); a malformed walk
  * answers 1, so the stricter storage rules apply. Thread only. */
 static ULONG hcdRkeepStorage(PHCD_USB_DEVICE dev, PULONG count)
 {
+    ULONG seen[8];
     PUCHAR c;
     ULONG len;
     ULONG at;
+    ULONG num;
     ULONG n;
 
     *count = 0;
     c = dev->Config;
     len = dev->ConfigLength;
     if (c == NULL || len < 9) {
-        return 0;
+        return dev->XportCount != 0 ? 1UL : 0UL;
+    }
+    for (n = 0; n < 8; n++) {
+        seen[n] = 0;
     }
     n = 0;
     for (at = 0; at + 2 <= len;) {
@@ -4673,15 +4681,17 @@ static ULONG hcdRkeepStorage(PHCD_USB_DEVICE dev, PULONG count)
             return 1;
         }
         if (c[at + 1] == 4 && c[at] >= 9 && c[at + 5] == 0x08) {
-            /* One per interface number: alternates of one interface. */
-            if (c[at + 3] == 0) {
+            /* One per interface number, whichever of its alternates. */
+            num = (ULONG)c[at + 2];
+            if ((seen[num >> 5] & (1UL << (num & 31UL))) == 0) {
+                seen[num >> 5] |= 1UL << (num & 31UL);
                 n++;
             }
         }
         at += c[at];
     }
     *count = n;
-    return n != 0 ? 1UL : 0UL;
+    return (n != 0 || dev->XportCount != 0) ? 1UL : 0UL;
 }
 
 /* What XhciEnumResumeKeep decides on, read for the device on root port or
@@ -4711,11 +4721,35 @@ static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
     if (dev->Susp.State != XHCI_SUSP_ACTIVE || dev->FwArmedAll != 0) {
         flags |= XHCI_RKEEP_F_SUSPENDED;
     }
+    /* A pause still standing between the thread's passes is a failure's
+     * (a refused ABORT_PIPE leaves its pipe paused for the reset it asked
+     * for, whose invalidation drops the device): the replay resumes only
+     * the quiet's own pause, so a kept device would hold that pipe's
+     * requests for good. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Pipe.Paused != 0) {
+        flags |= XHCI_RKEEP_F_FAULTED;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe != NULL && pipe->Paused != 0) {
+            flags |= XHCI_RKEEP_F_FAULTED;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     for (dci = 2; dci < 32; dci++) {
         pipe = dev->Pipes[dci];
         if (pipe != NULL && pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
             flags |= XHCI_RKEEP_F_ISOCH;
         }
+    }
+    /* A whole-device driver may select another configuration than index
+     * 0 (an unsplit device, design record 13 section 10.8), which
+     * dev->Config does not describe. */
+    if (dev->ConfigValue != 0 &&
+        (dev->Config == NULL || dev->ConfigLength < 9 ||
+         dev->ConfigValue != (ULONG)dev->Config[5])) {
+        flags |= XHCI_RKEEP_F_OTHER_CFG;
     }
     if (hcdRkeepStorage(dev, &storage)) {
         flags |= XHCI_RKEEP_F_STORAGE;

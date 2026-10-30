@@ -315,10 +315,16 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 #define XHCI_RKEEP_F_SERIAL      0x0080UL /* a serial number taken as its id  */
 #define XHCI_RKEEP_F_BUSY        0x0100UL /* a URB outstanding on its PDOs    */
 #define XHCI_RKEEP_F_FAULTED     0x0200UL /* gone, EP0 stuck, a cycle, a
-                                           * send-back or a slot fault owed  */
+                                           * send-back or a slot fault owed,
+                                           * or a pipe left paused by a
+                                           * failure                         */
 #define XHCI_RKEEP_F_QUIET       0x0400UL /* its function declared itself
                                            * quiet for this sleep and has
                                            * sent nothing since (4.3.3)      */
+#define XHCI_RKEEP_F_OTHER_CFG   0x0800UL /* configured with another
+                                           * configuration than index 0,
+                                           * the one the record holds and
+                                           * the restore compares            */
 
 #define XHCI_RKEEP_KEEP              0UL
 #define XHCI_RKEEP_WHY_OFF           1UL
@@ -334,6 +340,7 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 #define XHCI_RKEEP_WHY_BUSY         10UL
 #define XHCI_RKEEP_WHY_NOT_QUIET    11UL  /* UAS storage with no quiet
                                            * declaration (4.3.3)              */
+#define XHCI_RKEEP_WHY_OTHER_CFG    12UL  /* XHCI_RKEEP_F_OTHER_CFG          */
 
 ULONG XhciEnumResumeKeep(ULONG on, ULONG flags);
 
