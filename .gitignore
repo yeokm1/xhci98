@@ -71,6 +71,7 @@ objfre/
 !xhciperf/build.cmd
 !xhciperf/selftest.cmd
 !test/xfertest/build.cmd
+!test/atatest/build.cmd
 !test/pmclient/build.cmd
 !xhciinst/di/build.cmd
 !xhciinst/di/selftest.cmd

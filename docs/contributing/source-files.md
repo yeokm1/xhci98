@@ -361,6 +361,8 @@ The host suites of `xhci98.sys` and `xhciuas.sys`, and the shared and guest-side
 | `pmclient\build.cmd`, `pmclient\sources`, `pmclient\makefile` | The client's build: the driver with the DDK, the tool with MSVC 6.0. |
 | `xfertest\xfertest.c` | `XFERTEST.EXE`, the transfer-size test client (roadmap-hcd tasks 36.21, 36.22 and 36.26): moves data in requests of a given size from or to a file or raw disk and times them. In no package. |
 | `xfertest\build.cmd` | Its MSVC 6.0 build. |
+| `atatest\atatest.c` | `ATATEST.EXE`, the pass-through test client (roadmap-usb4 task 45.27): sends a disk the reads a SMART or ATA tool sends (SCSI and ATA pass-through, SMART) through each route Windows 2000 to 7 give a program, and prints the answers. Writes nothing to the disk. In no package. |
+| `atatest\build.cmd` | Its MSVC 6.0 build. |
 
 ## Stor98 - `src\stor98\`
 
