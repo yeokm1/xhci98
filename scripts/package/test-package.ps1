@@ -2392,6 +2392,29 @@ try {
         try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("lifted on W7")) ("a lifted table row past this cut's lifts was not refused: '" + $msg + "'")
         Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted
+        # ...in a cut that carries both of the pair's sets: one that leaves a
+        # set out (-NoWdmFree, -NoNonFree) reads no lift, and the row is not
+        # held to one.
+        $liftRow = [pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("nonfree")
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free")
+        $msg = ""
+        try { Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free", "nonfree") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on WXP W7")) ("a lifted table row with both sets carried and no lift was not refused: '" + $msg + "'")
+        # Such a cut records the pair's COEXISTS on the row's systems as an
+        # EXCLUDES (the installer's hold there), the rest of a line as it is,
+        # so the history check asks no proof of the absent set; with both
+        # sets carried nothing changes.
+        $heldMeta = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP", "W7", "W8")))
+        $h1 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("nonfree")
+        $hk = @($h1.Table.Rels) + @($h1.Meta) | ForEach-Object { $_.Kind + ":" + ($_.Systems -join " ") }
+        Assert-True (($hk -join ",") -ceq "EXCLUDES:WXP W7,EXCLUDES:WXP W7,COEXISTS:W8") ("a lifted pair with a set not carried was not recorded as held: " + ($hk -join ","))
+        Assert-True (@($h1.Table.Rels | Where-Object { $_.Lifted }).Count -eq 0 -and $liftRow.Rels[0].Kind -ceq "COEXISTS" -and $heldMeta[0].Kind -ceq "COEXISTS") "the hold changed the table it was given, or left a lifted row."
+        $h2 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("free", "nonfree")
+        Assert-True ([object]::ReferenceEquals($h2.Table, $liftRow) -and @($h2.Meta).Count -eq 1 -and $h2.Meta[0].Kind -ceq "COEXISTS") "a lifted pair with both sets carried was changed by the hold."
+        $heldNow = [pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @($h1.Table.Rels) + @($h1.Meta) + @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W2K"))); Lifted = @() }
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev -Now $heldNow -Sets @()).Count -eq 0) "a held pair was read as a lift."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $heldNow -Lifted @()
         # ...and a lift with no lifted row of the table, or a part of one,
         # refused: the installer's hold against an earlier release is that row.
         foreach ($case in @(0, 1)) {
@@ -2516,9 +2539,31 @@ try {
         if (Test-Path -LiteralPath $realPack) {
             $realNf = Export-NonFreeSet -Root $realPack -Dest (Join-Path $script:work "nonfree-real")
             Assert-True ($realNf.Sums -eq $instSums.NonFree) ("NONFREE\SHA256.TXT for the pinned usb-wdm-nonfree is {0}; the installer carries {1}." -f $realNf.Sums, $instSums.NonFree)
-            # The cut's checks of record 26 section 6.7.11 over the pinned pack.
-            $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
-            Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+            # The cut's checks of record 26 section 6.7.11 over the pinned pack,
+            # and over the pinned free set too where its checkout is here. A
+            # lifted row of the installer's table (section 6.7.14) is proved
+            # only by both sets against the release history, so with both the
+            # checks run as the cut runs them: the repository's releases\ and
+            # the INF's version.
+            $realLifted = @((Get-InstOtherTable -Repo $repo).Rels | Where-Object { $_.Lifted })
+            $realFreeRoot = Get-DefaultWdmFreeRoot
+            $realFree = $null
+            if ($null -ne $repoPin -and (Test-Path -LiteralPath $realFreeRoot)) {
+                $realFree = Export-WdmFreeSet -Root $realFreeRoot -Pin $repoPin -Dest (Join-Path $script:work "free-real")
+                Assert-True ($realFree.Sums -eq $instSums.Free) ("FREE\SHA256.TXT for the pinned usb-wdm-free is {0}; the installer carries {1}." -f $realFree.Sums, $instSums.Free)
+            }
+            if ($null -ne $realFree) {
+                $infVer = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $repo "src\xhci98.inf")), '(?m)^DriverVer=[^,]+,(\d+\.\d+\.\d+\.\d+)')
+                Assert-True $infVer.Success "src\xhci98.inf has no DriverVer this check can read."
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $repo "releases") -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned sets wrote no record."
+                Assert-True ($realLifted.Count -eq 0 -or @($realChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0) "the installer's table lifts a pair and the cut's checks over the pinned sets record no LIFTED line."
+            } else {
+                # The pack alone: a lifted row is not held to a lift there.
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+                if ($realLifted.Count -gt 0) { Write-Host "  (no usb-wdm-free checkout at ${realFreeRoot}: the installer's lifted rows are not proved against the pinned sets here)" }
+            }
         } else {
             Write-Host "  (no usb-wdm-nonfree checkout at ${realPack}: INST_NONFREE_SUMS is not checked against the pinned tag here)"
         }
