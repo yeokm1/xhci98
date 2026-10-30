@@ -33,19 +33,24 @@ SOURCES=uas_iu.c      \
 !ENDIF
 
 #
-# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# The flavours, derived from BUILD_ALT_DIR exactly as src\sources
 # derives them for xhci98.sys (design record 08), so the same flavour
-# marker check and packaging refusals apply to this binary. The qemu flavour
-# differs from debug only in its marker: this driver has no port-0xE9 trace.
+# marker check and packaging refusals apply to this binary: release and
+# qemu (debug was retired with task 45.45, design record 08 section 14). The
+# qemu flavour is a checked build and differs otherwise only in its marker:
+# this driver has no port-0xE9 trace.
 #
+# NTNOFPO: the release flavour keeps frame pointers on the MSVC 6.0 x86
+# build (/Oy- and FPO=0; the Windows 2000 DDK's i386mk.inc reads it after
+# this file), as the retired debug flavour did (task 45.45, design record 08
+# section 14). WDK 7.1 does not read it: its amd64 build has no FPO switch.
 !IF "$(BUILD_ALT_DIR)" == "chk_qemu"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
-!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
-C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
 !ELSEIF "$(BUILD_ALT_DIR)" == "fre"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+NTNOFPO=1
 !ELSE
-!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu). The debug flavour (chk) was retired with roadmap-usb4 task 45.45 (design record 08 section 14). Build through scripts\build-driver.cmd.
 !ENDIF
 
 LINKER_FLAGS=-merge:.rdata=.text

@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-Publish a built driver into releases\<version>\<flavour>-<arch>\ - four
-directories for an ordinary cut (release-x86, debug-x86, release-x64,
-debug-x64).
+Publish a built driver into releases\<version>\<flavour>-<arch>\ - two
+directories for an ordinary cut (release-x86, release-x64); the cuts before
+3.4.0.0 also published debug-x86 and debug-x64, until roadmap-usb4 task 45.45
+retired the debug flavour.
 
 .DESCRIPTION
 `releases\` is the tracked, published half of packaging. It carries the two
@@ -137,10 +138,12 @@ given, it must match the INF - this parameter is a statement of intent to be
 checked, not an override.
 
 .PARAMETER Flavor
-Which flavours to publish - `release` or `debug`, matching
-`make-package.ps1`, and each is published under its own name. Defaults to both.
-Publishing one at a time is supported, but a version directory holding only
-`debug\` is not something to release.
+Which flavours to publish: `release`, the default and since roadmap-usb4 task
+45.45 the only one (design record 08 section 14).
+
+**`debug` is accepted by this parameter and then REFUSED**, as `qemu` is
+below: the flavour was retired, and the refusal says so where a
+parameter-binding error would say only that the word is unknown.
 
 **`qemu` is accepted by this parameter and then REFUSED**, which is deliberate:
 there are three build flavours since task 13-L.1 and a parameter-binding error
@@ -481,7 +484,7 @@ powershell -File scripts\package\make-release.ps1 -UploadSetOnly
 param(
     [string]$Version = "",
     [ValidateSet("release", "debug", "qemu")]
-    [string[]]$Flavor = @("release", "debug"),
+    [string[]]$Flavor = @("release"),
     [ValidateSet("x86", "x64")]
     [string[]]$Arch = @("x86", "x64"),
     [string]$ReleasesDir = "",
@@ -547,8 +550,16 @@ may carry it, and
 scripts\import-gate\xhci98-imports.allow enforces that as "qemu required".
 To put it on a guest, stage it without publishing:
   scripts\package\make-package.ps1 -Flavor qemu
-A release publishes the release and debug directories of each architecture it
-was asked for, and nothing else.
+A release publishes the release directory of each architecture it was asked
+for, and nothing else.
+"@
+}
+if ($Flavor -contains "debug") {
+    throw @"
+the debug flavour was retired with roadmap-usb4 task 45.45 (design record 08
+section 14): it is neither built nor published. The release flavour keeps what
+it gave - frame pointers on the 32-bit MSVC 6.0 builds and the command-state
+checker, on unless XhciCommandCheck is 0. Publish -Flavor release, the default.
 "@
 }
 #
@@ -1299,7 +1310,7 @@ $catPublishable = @($script:PackageCatalogs.Keys)
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
 # directory name on its own.
-$objDirName = @{ "release" = "objfre"; "debug" = "objchk" }
+$objDirName = @{ "release" = "objfre" }
 
 function New-ReleaseLegs {
     #
@@ -1992,7 +2003,7 @@ function Assert-UasPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhciuas.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2063,7 +2074,7 @@ function Assert-CmPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcicm.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2134,7 +2145,7 @@ function Assert-HelperPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -4952,8 +4963,9 @@ helper (xhciinst\di\build.cmd).
 
     #
     # **The install section names the directories this cut actually wrote.**
-    # Since roadmap task 21.3 those are RELEASE-X86 and DEBUG-X86, and a cut
-    # carrying both architectures has four. A one-architecture cut names its
+    # Since roadmap task 21.3 those are RELEASE-X86 and, until task 45.45
+    # retired the debug flavour, DEBUG-X86; a cut carrying both
+    # architectures has RELEASE-X64 too. A one-architecture cut names its
     # pair outright, which is what a reader wants; a two-architecture one names
     # the pair for the architecture-neutral case and adds a paragraph saying
     # how to choose, because there is then no single directory to point at.
@@ -4965,7 +4977,6 @@ helper (xhciinst\di\build.cmd).
     $readmeArches = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique)
     if ($readmeArches.Count -eq 1) {
         $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
-        $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
         $readmeArchNote   = ""
         # Where the INF says its two files live, and what tells two copies of
         # xhci98.sys apart. Both were hardcoded in the template as "release\
@@ -4982,14 +4993,12 @@ helper (xhciinst\di\build.cmd).
         $readmeArchInstall = ""
     } else {
         $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
-        $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
         $readmeArchNote   = @"
 
 
-There are two of each, one per architecture: the -X86 directories are for
-32-bit Windows and the -X64 ones for 64-bit Windows. If you pick the wrong
-one nothing breaks - Windows finds no driver in it and says so - so try the
-other.
+There is one per architecture: the -X86 directory is for 32-bit Windows
+and the -X64 one for 64-bit Windows. If you pick the wrong one nothing
+breaks - Windows finds no driver in it and says so - so try the other.
 "@
         $readmeArchOs = @"
 
@@ -5119,8 +5128,7 @@ Properties, Driver, Update Driver, Have Disk, and point it at:
 
       {RELEASEDIR}\
 
-Point Windows at that directory, never at a loose .sys file: the DEBUG
-directories hold the same file names, built for tracing a crash.{ARCHNOTE}
+Point Windows at that directory, never at a loose .sys file.{ARCHNOTE}
 
 A UAS disk or an external hub asks for its driver when plugged in: give
 it the same directory. The release notes' "Installing" sections have

@@ -14,9 +14,12 @@ rem
 rem build-driver.cmd is called unchanged, so its gates, its lock and its
 rem gated-build records are exactly those of a run by hand.
 rem
-rem Usage:  scripts\build-all.cmd [release|debug|qemu|both|all]
+rem Usage:  scripts\build-all.cmd [release|qemu|all]
 rem                               [-NoTargetEvidence]
-rem                                                     (default: both)
+rem                                                  (default: release)
+rem
+rem   debug and both were retired with roadmap-usb4 task 45.45 (design record
+rem   08 section 14); build-driver.cmd refuses them by name.
 rem
 rem   -NoTargetEvidence  passed to both build-driver.cmd runs
 rem
@@ -26,7 +29,7 @@ rem 2 for inconclusive host tests).
 setlocal
 for %%I in ("%~dp0..") do set "REPO=%%~fI"
 set "FLAVORS=%~1"
-if "%FLAVORS%"=="" set "FLAVORS=both"
+if "%FLAVORS%"=="" set "FLAVORS=release"
 set "GATEOPT="
 set "BADOPT="
 call :readopt "%~2"

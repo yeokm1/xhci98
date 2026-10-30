@@ -91,6 +91,7 @@ function Get-BuildSteps {
     $s += New-Step "import-manifests" "import gate self-tests: evidence manifests" (Get-PsRun "scripts\import-gate\test-evidence-manifests.ps1") $gateTest
     $s += New-Step "import-flavours" "import gate self-tests: the FLAVORS column" (Get-PsRun "scripts\import-gate\test-flavour-rules.ps1") $gateTest
     $s += New-Step "helper-build" "import gate self-tests: the helper's toolchain rules" (Get-PsRun "scripts\check-helper-build.ps1" "-SelfTest") $gateTest
+    $s += New-Step "frame-pointers" "the frame-pointer check's self-tests" (Get-PsRun "scripts\check-frame-pointers.ps1" "-SelfTest") "the frame-pointer check's self-tests failed, so its verdict on the x86 release build logs cannot be trusted (task 45.45)."
     $s += New-Step "inf-selftest" "INF gate self-tests" (Get-PsRun "scripts\inf-gate\test-inf-checks.ps1") $infTest
     $s += New-Step "inf-x86" "INF gate (x86)" (Get-PsRun "scripts\inf-gate\check-inf.ps1" "-Arch x86") ("src\xhci98.inf " + $infFail) @("inf-selftest")
     $s += New-Step "inf-amd64" "INF gate (amd64)" (Get-PsRun "scripts\inf-gate\check-inf.ps1" "-Arch amd64") ("src\xhci98-amd64.inf " + $infFail) @("inf-selftest")

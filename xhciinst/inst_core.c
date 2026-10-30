@@ -2472,10 +2472,6 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->Uninstall = 1;
         } else if (inst_switch(a, "nopause")) {
             opts->NoPause = 1;
-        } else if (inst_switch(a, "debug")) {
-            /* INSTALL.BAT chose the directory for the console tool; the
-             * window, which takes no /dir, picks it itself. */
-            opts->Debug = 1;
         } else if (inst_switch(a, "console")) {
             /* INSTALL.BAT's word for the console tool (record 26 section
              * 2): the console takes it and goes on; the window refuses it. */

@@ -108,12 +108,12 @@ staged.
 powershell -ExecutionPolicy Bypass -File scripts\package\make-11v-media.ps1
 
 .EXAMPLE
-powershell -File scripts\package\make-11v-media.ps1 -Flavor both
+powershell -File scripts\package\make-11v-media.ps1 -Flavor all
 #>
 
 [CmdletBinding()]
 param(
-    [ValidateSet("qemu", "debug", "release", "both", "all")]
+    [ValidateSet("qemu", "release", "all")]
     [string]$Flavor = "qemu",
     [string]$OutRoot = "",
     [string]$BaselineVersion = "",
@@ -148,12 +148,10 @@ if (-not [System.IO.Path]::IsPathRooted($OutRoot)) {
 }
 $OutRoot = [System.IO.Path]::GetFullPath($OutRoot)
 
-# "both" is the two SHIPPING flavours and "all" is the three - never blur them,
-# because a run that wanted the trace and got `debug` fails as a boot timeout
-# with no hint of the cause (the vm-matrix break batch 13-L caused).
+# "all" is the two flavours, qemu and release; "both" and "debug" went with
+# the debug flavour (roadmap-usb4 task 45.45, design record 08 section 14).
 $flavors = switch ($Flavor) {
-    "both" { @("debug", "release") }
-    "all"  { @("qemu", "debug", "release") }
+    "all"  { @("qemu", "release") }
     default { @($Flavor) }
 }
 

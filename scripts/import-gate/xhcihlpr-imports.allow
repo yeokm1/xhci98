@@ -43,7 +43,6 @@ ntoskrnl.exe!IofCompleteRequest             all    required  w2k-export; xp-x86-
 ntoskrnl.exe!RtlInitUnicodeString           all    required  w2k-export; xp-x86-export; nt6-x86-export; the device name and the routines' names
 ntoskrnl.exe!IoIsWdmVersionAvailable        all    required  w2k-export; xp-x86-export; nt6-x86-export; DriverEntry's minimum-version test and the NT 6 test
 ntoskrnl.exe!RtlQueryRegistryValues         qemu   required  w2k-export; xp-x86-export; nt6-x86-export; XhciHlprInject (record 18 sections 2.1 and 15.12), the qemu flavour only
-ntoskrnl.exe!RtlAssert                      debug  required  w2k-export; xp-x86-export; nt6-x86-export; WDK 7.1 checked-header ASSERTs only
 ntoskrnl.exe!RtlAssert                      qemu   required  w2k-export; xp-x86-export; nt6-x86-export; WDK 7.1 checked-header ASSERTs only
 
 # --- /GS (GsDriverEntry and BufferOverflowK.lib, the kit's default) ---

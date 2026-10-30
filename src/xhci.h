@@ -9289,7 +9289,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 252UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 258UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 
@@ -9332,11 +9332,12 @@ ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
 #define XHCI_SNAPSHOT_B_DIAGNOSTIC      0x00000002UL
 
 /*
- * Which of the three build flavours produced this window (task 13-L.1).
- * `XHCI_SNAPSHOT_B_DEBUG` cannot say: it is `#if DBG`, which is set for BOTH
- * checked builds, and those are exactly the two that must not be confused -
- * one ships as the diagnostic download and one is never published. HOSTTEST is
- * the host suite's, so a vector cannot read a host build as a shipping one.
+ * Which build flavour produced this window (task 13-L.1).
+ * `XHCI_SNAPSHOT_B_DEBUG` cannot say: it is `#if DBG`, which was set for BOTH
+ * checked builds, debug (the diagnostic download until task 45.45 retired it;
+ * DEBUG stays here for the drivers before it) and qemu, never published, and
+ * is set for qemu alone since. HOSTTEST is the host suite's, so a vector
+ * cannot read a host build as a shipping one.
  */
 #define XHCI_SNAPSHOT_FLAVOUR_UNKNOWN   0UL
 #define XHCI_SNAPSHOT_FLAVOUR_RELEASE   1UL

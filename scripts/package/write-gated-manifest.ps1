@@ -56,7 +56,7 @@ param(
     [Parameter(Mandatory = $true)]
     [ValidateSet("x86", "amd64")]
     [string]$Arch,
-    [ValidateSet("", "debug", "release", "qemu")]
+    [ValidateSet("", "release", "qemu")]
     [string]$Flavor = "",
     [switch]$RunStart,
     [switch]$Begin,
