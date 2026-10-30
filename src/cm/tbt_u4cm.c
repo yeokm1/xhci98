@@ -501,6 +501,7 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
 static LONG tbtU4Tbt3Setup(PTBT_U4CM cm, PTBT_U4_ROUTER rt);
+static ULONG tbtU4Ltssm(PTBT_U4CM cm, ULONG v);
 static BOOLEAN tbtU4Departed(PTBT_U4CM cm, PTBT_U4_PORT p, const BOOLEAN *ob);
 static BOOLEAN tbtU4RecCleanupGate(PTBT_U4CM cm, PTBT_U4_PORT p);
 
@@ -4374,7 +4375,7 @@ static LONG tbtU4PcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         TbtWaitStart(&w, cm->Host, TBT_U4_L0_US, FALSE);
         while ((rc = tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->PcieDown,
                              h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &cs0)) == TBT_OK &&
-               TBT_PCIE0_LTSSM(cs0) != TBT_LTSSM_L0) {
+               tbtU4Ltssm(cm, cs0) != TBT_LTSSM_L0) {
             if (!TBT_U4_LIVE(p, gen)) {
                 rc = TBT_E_GONE;
                 break;
@@ -5628,6 +5629,26 @@ static BOOLEAN tbtU4Follow(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
                      !t->Incomplete);
 }
 
+/*
+ * The host's PCIe Down adapter's LTSSM from ADP_PCIE_CS_0 `v`. On a
+ * Thunderbolt host (record 22 section 19.4) the field is not the USB4
+ * encoding - usb4-emu's captured Thunderbolt 3 adapter reads 3 with its
+ * tunnel up, 0 idle - and Linux reads it on USB4 routers only (usb4.c
+ * usb4_pci_port_check_ltssm_state; tunnel.c activates a Thunderbolt
+ * router's PCIe path by Path Enable alone): there, Path Enable set and
+ * not Detect is taken as L0.
+ */
+static ULONG tbtU4Ltssm(PTBT_U4CM cm, ULONG v)
+{
+    ULONG s;
+
+    s = TBT_PCIE0_LTSSM(v);
+    if (cm->HostRouter.Tbt3 && (v & TBT_PCIE0_PE) != 0 && s != TBT_LTSSM_DETECT) {
+        return TBT_LTSSM_L0;
+    }
+    return s;
+}
+
 /* A PCIe Down adapter's LTSSM live (L0, L1, Recovery, Recovery.Idle), a
  * transitional state re-read up to 2 s, Detect failing (section 7.1 item
  * 4, 9.2 step 4). */
@@ -5645,7 +5666,7 @@ static BOOLEAN tbtU4PcieLive(PTBT_U4CM cm, PTBT_U4_PORT p)
                     h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
             return FALSE;
         }
-        s = TBT_PCIE0_LTSSM(v);
+        s = tbtU4Ltssm(cm, v);
         if ((v & TBT_PCIE0_PE) == 0 || s == TBT_LTSSM_DETECT) {
             return FALSE;
         }
@@ -6975,7 +6996,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
     }
     prev = cm->ActivePort;
     cm->ActivePort = p->Index;
-    s = TBT_PCIE0_LTSSM(v);
+    s = tbtU4Ltssm(cm, v);
     if (watch && !(p->Transitional &&
                    tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US)) {
         /* No later tick will look again (a resume): a transitional state
@@ -7001,7 +7022,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
                         h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
                 goto done;
             }
-            s = TBT_PCIE0_LTSSM(v);
+            s = tbtU4Ltssm(cm, v);
         }
     }
     lost = FALSE;

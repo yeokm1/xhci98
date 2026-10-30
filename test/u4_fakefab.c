@@ -479,10 +479,14 @@ static void fabPcieUpdate(FAB *f, int r, unsigned a)
     c = &f->R[r].Adp[a].Cs[FAB_CAP_ADP];
     o = &f->R[pr].Adp[pa].Cs[FAB_CAP_ADP];
     both = (*c & 0x80000000UL) && (*o & 0x80000000UL);
+    /* A Thunderbolt router's adapter reads 3 there with its tunnel up, not
+     * USB4's L0 (usb4-emu's captured Thunderbolt 3 adapter, 0x46210400). */
     *c = (*c & ~(0xFUL << 25)) |
-         ((both ? 6UL : (f->R[r].Adp[a].DetectStuck ? 1UL : 0UL)) << 25);
+         ((both ? (f->R[r].Tbt3 ? 3UL : 6UL) :
+                  (f->R[r].Adp[a].DetectStuck ? 1UL : 0UL)) << 25);
     *o = (*o & ~(0xFUL << 25)) |
-         ((both ? 6UL : (f->R[pr].Adp[pa].DetectStuck ? 1UL : 0UL)) << 25);
+         ((both ? (f->R[pr].Tbt3 ? 3UL : 6UL) :
+                  (f->R[pr].Adp[pa].DetectStuck ? 1UL : 0UL)) << 25);
 }
 
 static void fabRouterOp(FAB *f, int ri)
@@ -2334,7 +2338,8 @@ int fabPcieUp(const FAB *f, int port)
         if ((f->R[d].Adp[a].Cs[2] & 0xFFFFFFUL) == 0x100102UL) {
             return (f->R[0].Adp[hp].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
                    (f->R[d].Adp[a].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
-                   ((f->R[0].Adp[hp].Cs[FAB_CAP_ADP] >> 25) & 0xF) == 6;
+                   ((f->R[0].Adp[hp].Cs[FAB_CAP_ADP] >> 25) & 0xF) ==
+                   (f->R[0].Tbt3 ? 3UL : 6UL);
         }
     }
     return 0;
