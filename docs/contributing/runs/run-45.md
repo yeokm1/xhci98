@@ -4142,6 +4142,112 @@ Recommendation: (b), behind a design record section reviewed first. SMART
 tools on these systems send SCSI pass-through to USB bridges, and (c) adds
 a translation layer of the driver's own.
 
+## 45.52 a UAS drive's pass-through and SMART (2026-10-31)
+
+**Verdict: done but the x64 leg and two readings.** `xhciuas.sys`'s LUN PDO now serves SCSI and ATA
+pass-through, buffered and direct, and the SMART requests `disk.sys` sends, through the engine
+(design record 13 section 16). On q35 2000, XP and 7 x86, with a UAS LUN answering ATA PASS-THROUGH
+(the emulator's new test-only `x-sat`), every route reaches the drive and returns its data and
+registers. A free SMART reader (smartctl 7.4, Windows 7) reads identity, health and attributes through
+both its SAT and its ATA route. A Users member cannot open any disk on 2000, XP or 7 (error 5), so
+the owner's access choice B rests on the same check as Windows' own ports. `xhciuas.sys` loads on
+stock ME with its new imports. Owed: the 7 x64 leg (WOW64 layouts; needs an amd64 gated build and
+in-guest signing), R3 (98 SE ASPI) and a drive behind a real SAT bridge (bench).
+
+Commits (branch `w45-pass`): `e948c36d` (design, merged as `75669ee7`), `44cf435b` (the owner's
+answers, reading R1, a `legal-provenance.md` row), `f0ad326c`, `f4fe63a4`, `6738c96d` (the pure core
+and `test_uas`, 594 checks), `571873d5` (the PDO, the engine, the imports), `230c47cd` (ATATEST's new
+lines, the record aligned). Each reviewed and revised until no material finding was left.
+Emulator: `usb4-emu` branch `w45-pass` `1050071` (fork commit `4e94c3f`, scsi-hd `x-sat`).
+
+Vehicle: the gated x86 build of `230c47cd` (`out\gated-x86-release.txt`; `xhciuas.sys`
+963fb55b66bc2d57..., `xhci98.sys` bdfc5bc5df89e56f...), staged by `make-package.ps1` into the 3.3.0.0
+release layout's `release-x86` and installed with `INSTALL.BAT /console /yes /nopause`. `ATATEST.EXE`
+of `230c47cd` (56f34d94d767d1ab...). QEMU of `usb4-emu` `4e94c3f` (17bbce24bff03c78...). q35 bases
+`w2k`, `xp`, `w7x86`, `me` through `launch-q35.ps1 -Emu`, with `-device usb-uas` (port 3, one
+`scsi-hd` LUN, `x-sat=on` unless said) and `-device usb-storage` (port 4), both blank 64 MiB. Evidence:
+`E:\xhci98-vm\p45\w45-pass\<os>\`.
+
+### R1 (static) and R2 (the access reading)
+
+R1, the class drivers' routing, is in design record 13 section 16.11 and `legal-provenance.md`.
+`disk.sys` on 2000 to 7 turns the SMART IOCTLs into `IOCTL_SCSI_MINIPORT` "SCSIDISK", with no
+capability test.
+
+R2: `net user atu ... /add` (a member of Users only), `runas /user:atu cmd`, then `ATATEST
+\\.\PhysicalDrive0` to `3`. On every system each open fails with error 5, the IDE (`atapi`) or AHCI
+disks, the Bulk-Only stick (`usbstor`) and the UAS LUN (`xhciuas`) alike (`r2-w2k.txt`, `r2-xp.txt`,
+`r2-w7x86.txt`). As administrator the same opens succeed. So the access check that stands in front of
+Windows' own ports is the disk's own security, and B, which adds no check in `xhciuas`, gives the
+same answer.
+
+### ATATEST, `x-sat=on`
+
+The UAS LUN, on all three systems (`atatest-w2k-sat.txt`, `atatest-xp-sat.txt`,
+`atatest-w7x86-sat.txt`):
+
+| Line | Route | Result on the UAS LUN |
+|---|---|---|
+| P | `IOCTL_STORAGE_QUERY_PROPERTY` | max transfer 1 MiB, bus type USB |
+| S1, S2 | SCSI pass-through, INQUIRY in and unspecified | GOOD, 36 bytes |
+| A1, A2 | ATA PASS-THROUGH (16) IDENTIFY in a SCSI pass-through, in and unspecified (T_DIR) | GOOD, 512 bytes, model "QEMU HARDDISK" |
+| A3 | ATA PASS-THROUGH (12) SMART READ DATA, unspecified | GOOD, 512 bytes, checksum ok, attributes 01, 05, 09 (raw 1234), 0C, C2 |
+| A4 | ATA PASS-THROUGH (16) SMART RETURN STATUS, non-data, CK_COND | CHECK CONDITION, RECOVERED ERROR 00h/1Dh (the registers, as SAT returns them) |
+| A5 | SCSI pass-through direct, IDENTIFY | GOOD, 512 bytes |
+| A6 | `IOCTL_ATA_PASS_THROUGH_DIRECT` IDENTIFY | Status 50h, 512 bytes, model |
+| M1 | `SMART_GET_VERSION` | 1.1, map 01, caps 5 |
+| M2, M3 | `SMART_RCV_DRIVE_DATA` READ DATA, THRESHOLDS | 528 bytes, checksum ok |
+| M4 | `SMART_SEND_DRIVE_COMMAND` RETURN STATUS | IDEREGS 4Fh/C2h, Status 40h: healthy |
+| T1, T2, T3 | `IOCTL_ATA_PASS_THROUGH` IDENTIFY, CHECK POWER MODE, SMART READ DATA | Status 50h/40h, count FFh, the data |
+
+Windows 2000 forwards `IOCTL_ATA_PASS_THROUGH` and its direct form too: R1 had left that open, since
+2000's headers predate the code.
+
+`driverquery` on XP and 7, and `dir` of `system32\drivers` on 2000, show `xhciuas.sys` of this build
+(40,790 bytes, linked 01:56) running.
+
+### ATATEST, `x-sat` off (XP, `atatest-xp-nosat.txt`)
+
+The refusal shape a drive with no SAT gives, as designed (16.8, 16.9):
+- the SCSI forms return CHECK CONDITION 5/20/00 to the program, the call succeeding;
+- the ATA forms return Error 04h, Status 51h;
+- `SMART_GET_VERSION` is answered, and RCV and SEND fail with error 50 (`STATUS_NOT_SUPPORTED`).
+
+The Bulk-Only stick under XP's own `usbstor.sys`, beside it, is unchanged from 45.27: error 87 for an
+unspecified direction, error 50 for the ATA and SMART IOCTLs.
+
+### A SMART reader (Windows 7 x86, `smartctl-w7x86.txt`)
+
+smartctl 7.4 (`smartmontools-7.4-1.win32-setup.exe`, SHA-256 76880e73...; not tracked, run in the
+guest only; on XP it does not start: `GetTickCount64` is missing). On `/dev/pd3`, the UAS LUN:
+- `-d sat` (SCSI pass-through) and `-d ata` (the SMART IOCTLs) both read the identity (QEMU HARDDISK,
+  QM00001, ATA8-ACS);
+- both report "SMART support is: Enabled" and "overall-health self-assessment test result: PASSED";
+- both list the capabilities and the five attributes with their thresholds.
+
+The error and self-test log reads fail, because the test answer serves no READ LOG. Without `-d`,
+smartctl stops at "Unable to read USB device ID", as for any USB disk it cannot identify.
+
+### Windows ME: the new imports load (`me\me-uas-mounted.png`)
+
+Stock ME (no USB 2.0 stack), the package installed by `INSTALL /console /yes /nopause` (exit 3), two
+cold starts. The UAS LUN, here an overlay of the FAT test image, mounted as E: (ORICO,
+`TESTDATA.BIN`); the Bulk-Only stick is blank. So `xhciuas.sys` loads on ME with `_except_handler3`,
+`MmProbeAndLockPages` and the cancel imports. 98 SE was not read: the same imports have their 98 SE
+evidence in the allowlist (NUSB's `USBSTOR.SYS`, which a 98 SE UAS disk needs anyway, imports
+`_except_handler3`).
+
+### Owed
+
+- 7 x64 with the 32-bit ATATEST (the WOW64 `_32` layouts) and a native 64-bit caller. The amd64
+  binary compiles with the layout asserts and its import gate passes (a compile-only build). The leg
+  needs the amd64 gated build and the in-guest signing route.
+- R3: 98 SE's ASPI to a UAS LUN. No ASPI client is in this tree (Stor98's `t9x` is not), and no code
+  changed for 9x.
+- A drive behind a real SAT bridge, and a SMART reading of a real drive: the bench list.
+- The cancel path's leg (a program ended while its request waits queued) and removal during an
+  ATATEST loop: not run; the path rests on review.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
