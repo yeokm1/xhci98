@@ -413,11 +413,11 @@ The drivers are C89 (no C++ or CRT), built on Windows 11 x64. The toolchain unpa
    powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1 # -> tools\ntddk
    ```
 
-3. Build. `both` (default) is the shipping `release` and `debug` flavours; `all` adds the emulator-only `qemu` flavour, which is never published. `-amd64` builds the separate 64-bit binaries. Every build runs the gates' self-tests, the host unit tests and the INF, import and charset gates, and stops on any failure.
+3. Build. `release` (default) is the one shipping flavour; `all` adds the emulator-only `qemu` flavour, which is never published. `-amd64` builds the separate 64-bit binaries. Every build runs the gates' self-tests, the host unit tests and the INF, import and charset gates, and stops on any failure.
 
    ```
-   scripts\build-driver.cmd both
-   scripts\build-driver.cmd both -amd64
+   scripts\build-driver.cmd release
+   scripts\build-driver.cmd release -amd64
    ```
 
    The same runs build and gate Stor98, the bundled NVMe driver, from `src\stor98` (it also needs the Windows 98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc`; [src/stor98/docs/BUILD.md](src/stor98/docs/BUILD.md)); `scripts\build-all.cmd` runs both architectures at once.

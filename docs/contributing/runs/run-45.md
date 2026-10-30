@@ -3629,3 +3629,9 @@ task's own, checked against its section above before it is used.
   install, that USB controller may show 'This device is not configured
   correctly (Code 1)' until Windows is restarted once. Restart Windows;
   the dock works from then on, also when plugged in again."
+
+Also for `45.final`, outside the texts above (left by 45.45's follow-up,
+`05f19a47`, because they describe the published `3.3.0.0` download):
+`README.md`'s download list still names `debug-x86` and `debug-x64`, and
+the release notes' installer switches still describe `/debug`; both go at
+the version bump.
