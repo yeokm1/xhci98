@@ -480,6 +480,8 @@ typedef struct _TBT_U4_KID {
     TBT_U4_ROUTER Dev;      /* the child, route at depth 2 */
     BOOLEAN Bonded;
     BOOLEAN SingleLane;
+    BOOLEAN Gen4;           /* a Gen 4 link, used as bonded (record 22 section 6.2.3) */
+    BOOLEAN Asym;           /* and asymmetric, used as found */
     BOOLEAN LaneWritten;
     ULONG LaneSaved[4];     /* LANE_ADP_CS_1 before the bonding: parent 0, parent 1,
                                child 0, child 1 */

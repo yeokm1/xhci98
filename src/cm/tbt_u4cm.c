@@ -7531,6 +7531,7 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
     ULONG v;
     ULONG i;
     ULONG st;
+    ULONG kind;
     BOOLEAN bonded;
     TBT_WAIT w;
 
@@ -7550,6 +7551,33 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
         return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
     }
     bonded = (BOOLEAN)(TBT_LANE1_NLW(lane[0]) == TBT_LANE_WIDTH_X2);
+    if (TBT_LANE1_SPEED(lane[0]) == TBT_LANE_SPEED_GEN4) {
+        /* Record 22 section 6.2.3 through the link view: a Gen 4 link is
+         * aggregated by its initialisation, so no Target Link Width, Lane
+         * Bonding or Lane Disable is written. Symmetric, or a paired
+         * asymmetric width used as found (decision U31): bonded. Any
+         * other Gen 4 reading: FAILED, nothing written. */
+        lane[1] = 0;
+        if (!bonded && tbtU4LaneRd(cm, d, ln.Adp[2], &lane[1]) != TBT_OK) {
+            return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
+        }
+        kind = tbtU4LinkKind(lane[0], lane[1]);
+        if (kind != TBT_U4_LINK_GEN4 && kind != TBT_U4_LINK_GEN4_ASYM) {
+            cm->Counters.Gen4Unusable++;
+            tbtU4Log(cm, "u4.kid.link.gen4-unusable",
+                     (k->Index << 8) | TBT_LANE1_NLW(lane[0]));
+            k->Why = TBT_U4_WHY_LINK;
+            return TBT_E_STATE;
+        }
+        k->Gen4 = TRUE;
+        k->Asym = (BOOLEAN)(kind == TBT_U4_LINK_GEN4_ASYM);
+        cm->Counters.Gen4Links++;
+        if (k->Asym) {
+            cm->Counters.Gen4Asym++;
+        }
+        tbtU4Log(cm, "u4.kid.link.gen4", (k->Index << 8) | TBT_LANE1_NLW(lane[0]));
+        bonded = TRUE;
+    }
     if (!bonded && cm->Config.LaneBonding &&
         d->Adp[ln.Adp[2]].CapPort != 0 &&
         tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, ln.Adp[2],
@@ -7601,7 +7629,9 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
     }
     if (bonded) {
         k->Bonded = TRUE;
-        cm->Counters.BondX2++;
+        if (!k->Gen4) {
+            cm->Counters.BondX2++;
+        }
     } else {
         /* The single-lane fallback, verified (record 22 section 6.5 step
          * 6): what the bonding wrote put back, then either both lane 1
@@ -7766,6 +7796,13 @@ static BOOLEAN tbtU4KidTunnelDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     if ((t->Written & TBT_U4_E_DEV_ENABLE) != 0 && d->Present && dp != 0) {
         ok &= tbtU4Disable(cm, p->Index, &d->Route, dp, d->Adp[dp].CapAdp, FALSE);
     }
+    /* Extended Encapsulation, whoever set it (record 22 section 6.2.2
+     * item 7, as tbtU4TunnelDown): a failure is logged and the teardown
+     * goes on. */
+    (void)tbtU4EeClear(cm, pr, hp);
+    if (d->Present && dp != 0) {
+        (void)tbtU4EeClear(cm, d, dp);
+    }
     if ((t->Written & TBT_U4_E_HOST_PROTO) != 0) {
         ok &= tbtU4Invalidate(cm, p->Index, &pr->Route, hp, TBT_HOP_PROTOCOL);
     }
@@ -7907,6 +7944,25 @@ static LONG tbtU4KidPcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULON
         t->Written |= TBT_U4_E_HOST_LANE;
         rc = tbtU4WriteEntry(cm, &pr->Route, a, t->Hu, hp, TBT_HOP_PROTOCOL,
                              t->CreditsHost, TBT_PATH_WEIGHT_PCIE, TRUE, FALSE, FALSE, NULL);
+    }
+    if (rc == TBT_OK && tbtU4KidLive(cm, p, k, gen)) {
+        /* Record 22 section 6.2.2 item 7 through the link view: between
+         * two version 2 routers Extended Encapsulation set and read back
+         * on both adapters before either Path Enable; otherwise EE 0, a
+         * version 2 end left with it set (a predecessor's, or a clear
+         * that failed) cleared first, else no Path Enable. */
+        if (cm->Config.Usb4V2 && tbtU4IsV2(pr) && tbtU4IsV2(d)) {
+            if (!tbtU4EeSet(cm, d, dp) || !tbtU4EeSet(cm, pr, hp)) {
+                k->Why = TBT_U4_WHY_PATH;
+                rc = TBT_E_STATE;
+            } else {
+                cm->Counters.EeSet++;
+            }
+        } else if (!tbtU4EeClear(cm, pr, hp) || !tbtU4EeClear(cm, d, dp)) {
+            tbtU4Log(cm, "u4.kid.ee.left", (k->Index << 8) | hp);
+            k->Why = TBT_U4_WHY_PATH;
+            rc = TBT_E_STATE;
+        }
     }
     if (rc == TBT_OK && tbtU4KidLive(cm, p, k, gen)) {
         t->Written |= TBT_U4_E_DEV_ENABLE;
@@ -8114,6 +8170,7 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
         tbtU4Log(cm, "u4.kid.teardown", (p->Index << 8) | k->Index);
         if ((t->Up || t->Written != 0) && hp != 0) {
             closed = tbtU4Disable(cm, p->Index, &pr->Route, hp, pr->Adp[hp].CapAdp, FALSE);
+            (void)tbtU4EeClear(cm, pr, hp);
             if ((t->Written & TBT_U4_E_HOST_PROTO) != 0) {
                 closed &= tbtU4Invalidate(cm, p->Index, &pr->Route, hp, TBT_HOP_PROTOCOL);
             }
@@ -8523,6 +8580,8 @@ static VOID tbtU4KidAdopt(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG li)
     ULONG lane0;
     ULONG lane1;
     BOOLEAN bonded;
+    BOOLEAN gen4;
+    BOOLEAN asym;
 
     l = &cm->Links[li];
     pr = &p->Dev;
@@ -8570,6 +8629,18 @@ static VOID tbtU4KidAdopt(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG li)
         goto watched;
     }
     bonded = (BOOLEAN)(TBT_LANE1_NLW(lane0) == TBT_LANE_WIDTH_X2);
+    gen4 = (BOOLEAN)(TBT_LANE1_SPEED(lane0) == TBT_LANE_SPEED_GEN4);
+    asym = FALSE;
+    if (gen4 && !bonded) {
+        /* Record 22 section 6.2.3: a Gen 4 link is bonded when symmetric
+         * or a paired asymmetric one; anything else is not adopted. */
+        if (tbtU4LaneRd(cm, d, d->UpAdp, &lane1) != TBT_OK ||
+            tbtU4LinkKind(lane0, lane1) != TBT_U4_LINK_GEN4_ASYM) {
+            goto watched;
+        }
+        bonded = TRUE;
+        asym = TRUE;
+    }
     if (!bonded && TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
         TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED) {
         goto watched;
@@ -8594,6 +8665,8 @@ static VOID tbtU4KidAdopt(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG li)
     k->Unlocked = (BOOLEAN)!pr->Tbt3;   /* found unlocked: a Lock again is removal */
     k->Bonded = bonded;
     k->SingleLane = (BOOLEAN)!bonded;
+    k->Gen4 = (BOOLEAN)(gen4 && bonded);
+    k->Asym = asym;
     d->Present = TRUE;
     d->Preserved = TRUE;
     d->Uuid[0] = v[7];
@@ -8671,9 +8744,41 @@ static VOID tbtU4KidConnect(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     if (rc != TBT_OK) {
         goto out;
     }
-    if (!k->Dev.Preserved ||
-        tbtU4Rd(cm, &k->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &v) != TBT_OK ||
-        (v & (TBT_RTR5_CV | TBT_RTR5_PTO)) != (TBT_RTR5_CV | TBT_RTR5_PTO)) {
+    if (k->Dev.Preserved && !k->Dev.Tbt3 && cm->Config.Usb4V2) {
+        /* Record 22 section 6.2.2 item 5 through the link view: CV found
+         * set is never configured again; without PTO no PCIe tunnel can
+         * be built, so HELD; a read that fails holds the kid. Configured
+         * only once CV is read clear. */
+        rc = tbtU4Rd(cm, &k->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &v);
+        if (rc != TBT_OK) {
+            if (tbtU4Gone(cm, rc)) {
+                rc = TBT_E_GONE;
+                goto out;
+            }
+            tbtU4Log(cm, "u4.kid.cv.unread", (ULONG)rc);
+            next = TBT_U4_HELD;
+            k->Why = TBT_U4_WHY_CV_FOUND;
+            goto out;
+        }
+        if ((v & TBT_RTR5_CV) != 0) {
+            cm->Counters.CvFound++;
+            if ((v & TBT_RTR5_PTO) == 0) {
+                tbtU4Log(cm, "u4.kid.cv.found", (k->Index << 24) | (v >> 8));
+                next = TBT_U4_HELD;
+                k->Why = TBT_U4_WHY_CV_FOUND;
+                rc = TBT_E_STATE;
+                goto out;
+            }
+        } else {
+            k->State = TBT_U4_CONFIGURING;
+            rc = tbtU4KidConfigValid(cm, p, k, gen);
+            if (rc != TBT_OK) {
+                goto out;
+            }
+        }
+    } else if (!k->Dev.Preserved ||
+               tbtU4Rd(cm, &k->Dev.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, &v) != TBT_OK ||
+               (v & (TBT_RTR5_CV | TBT_RTR5_PTO)) != (TBT_RTR5_CV | TBT_RTR5_PTO)) {
         k->State = TBT_U4_CONFIGURING;
         rc = tbtU4KidConfigValid(cm, p, k, gen);
         if (rc != TBT_OK) {
@@ -8980,7 +9085,7 @@ static BOOLEAN tbtU4KidVerify(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     }
     if (tbtU4LaneRd(cm, pr, k->ParentLane0, &lane0) != TBT_OK ||
         tbtU4LaneRd(cm, pr, k->ParentLane0 + 1, &lane1) != TBT_OK ||
-        (TBT_LANE1_NLW(lane0) != TBT_LANE_WIDTH_X2 &&
+        (!tbtU4WidthBonded(lane0) &&
          TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
          TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED)) {
         return FALSE;

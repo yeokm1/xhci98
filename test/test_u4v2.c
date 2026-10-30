@@ -1278,6 +1278,183 @@ static void test_link_bound(void)
 
 #define RUN_VEC(fn) do { fabTraceMark(#fn); fn(); } while (0)
 
+/*
+ * Record 34 Part 3 with version 2 routers (record 22 section 6.2 through
+ * the link view): a kid's Gen 4 link classified as at depth 1 (bonded
+ * with no lane written, symmetric or a paired asymmetric width; FAILED
+ * otherwise); Extended Encapsulation set on a chained PCIe tunnel between
+ * two version 2 routers and cleared at its teardown, a predecessor's
+ * cleared before a tunnel to a version 1 child; a preserved child with CV
+ * set and no PTO HELD, never configured again.
+ */
+#define PAR_LANE    3       /* the parent's downstream lane 0 */
+#define PAR_PCIE    7       /* the parent's PCIe Down */
+
+static const TBT_U4_KID *kid(void)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (g_cm.Kids[i].Used && g_cm.Kids[i].Port == 1) {
+            return &g_cm.Kids[i];
+        }
+    }
+    return NULL;
+}
+
+static unsigned long kidLaneWrites(int d, int ch)
+{
+    return writesTo(d, TBT_CS_ADAPTER, PAR_LANE, FAB_CAP_LANE + 1) +
+           writesTo(d, TBT_CS_ADAPTER, PAR_LANE + 1, FAB_CAP_LANE + 1) +
+           writesTo(ch, TBT_CS_ADAPTER, 1, FAB_CAP_LANE + 1) +
+           writesTo(ch, TBT_CS_ADAPTER, 2, FAB_CAP_LANE + 1);
+}
+
+static int g_kidParent;
+
+static int kidV2(int childKind, unsigned long hostW, unsigned long devW, int eeLeft)
+{
+    TBT_U4_CONFIG c;
+    int ch;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    g_kidParent = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    ch = fabDevice(&g_fab, childKind);
+    g_fab.R[ch].Gen4HostW = hostW;
+    g_fab.R[ch].Gen4DevW = devW;
+    fabPlug(&g_fab, 1, g_kidParent);
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(2);
+    if (eeLeft) {
+        g_fab.R[g_kidParent].Adp[PAR_PCIE].Cs[PCIE1] |= 1UL;
+    }
+    g_fab.WrCount = 0;
+    fabHotPlugChild(&g_fab, g_kidParent, ch);
+    poll(3);
+    return ch;
+}
+
+static void test_kid_v2(void)
+{
+    const TBT_U4_KID *k;
+    int d;
+    int ch;
+
+    ch = kidV2(FAB_DEV_USB4V2, 0, 0, 0);
+    d = g_kidParent;
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP, "a v2 kid on a Gen 4 x2 link: UP");
+    CHECK(k != NULL && k->Bonded && k->Gen4 && !k->Asym, "used as bonded, symmetric");
+    CHECK_EQ(kidLaneWrites(d, ch), 0, "no lane write: no TLW, LB or LD");
+    CHECK_EQ(g_cm.Counters.Gen4Links, 2, "the parent's link and the kid's counted");
+    CHECK(fabChainPcieUp(&g_fab, d), "the chained tunnel up");
+    CHECK(fabAdp(&g_fab, d, PAR_PCIE, PCIE1) & 1UL, "the parent's PCIe Down: EE 1");
+    CHECK(fabAdp(&g_fab, ch, DEV_PCIE, PCIE1) & 1UL, "the child's PCIe Up: EE 1");
+    CHECK_EQ(g_cm.Counters.EeSet, 2, "set on both tunnels");
+    fabHotUnplugChild(&g_fab, d);
+    poll(3);
+    CHECK(kid() == NULL, "the child unplugged: the kid freed");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_PCIE, PCIE1) & 1UL, 0,
+             "the parent's PCIe Down: EE cleared at the teardown");
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "the parent kept");
+
+    (void)kidV2(FAB_DEV_USB4V2, 0x04, 0x08, 0);
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->Gen4 && k->Asym,
+          "asymmetric 3 Tx / 3 Rx: UP, used as found");
+    CHECK_EQ(g_cm.Counters.Gen4Asym, 1, "counted");
+
+    ch = kidV2(FAB_DEV_USB4V2, 0x04, 0x04, 0);
+    d = g_kidParent;
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_FAILED, "unpaired asymmetric: FAILED");
+    CHECK(k != NULL && k->Why == TBT_U4_WHY_LINK, "the link");
+    CHECK_EQ(kidLaneWrites(d, ch), 0, "no lane write");
+    CHECK(!fabChainPcieUp(&g_fab, d), "no chained tunnel");
+    CHECK_EQ(g_cm.Counters.Gen4Unusable, 1, "counted");
+
+    /* A version 1 child behind a version 2 parent whose PCIe Down a
+     * predecessor left with EE set: cleared before the Path Enables. */
+    ch = kidV2(FAB_DEV_USB4, 0, 0, 1);
+    d = g_kidParent;
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP && !k->Gen4, "a v1 kid: UP, not Gen 4");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_PCIE, PCIE1) & 1UL, 0, "the predecessor's EE cleared");
+    CHECK(fabChainPcieUp(&g_fab, d), "the chained tunnel up");
+    (void)ch;
+}
+
+/* A pre-OS chain over an asymmetric Gen 4 link: adopted as bonded, used
+ * as found, no lane written. */
+static void test_kid_adopt_asym(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_KID *k;
+    int d;
+    int ch;
+    int i;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    ch = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    g_fab.R[ch].Gen4HostW = 0x08;
+    g_fab.R[ch].Gen4DevW = 0x04;
+    fabPlug(&g_fab, 1, d);
+    fabPreos(&g_fab, 1, 0);
+    fabPreosChild(&g_fab, d, ch, 0);
+    /* the pre-OS chain left the link's widths as initialised: 3 Rx / 3 Tx */
+    for (i = 0; i < 2; i++) {
+        g_fab.R[d].Adp[PAR_LANE + i].Cs[FAB_CAP_LANE + 1] =
+            (g_fab.R[d].Adp[PAR_LANE + i].Cs[FAB_CAP_LANE + 1] & ~(0x3FUL << 20)) |
+            (0x08UL << 20);
+        g_fab.R[ch].Adp[1 + i].Cs[FAB_CAP_LANE + 1] =
+            (g_fab.R[ch].Adp[1 + i].Cs[FAB_CAP_LANE + 1] & ~(0x3FUL << 20)) | (0x04UL << 20);
+    }
+    g_fab.WrCount = 0;
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(3);
+    k = kid();
+    CHECK_EQ(g_cm.Counters.KidsAdopted, 1, "the chain adopted");
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->Bonded && k->Gen4 && k->Asym,
+          "asymmetric: bonded, used as found");
+    CHECK_EQ(kidLaneWrites(d, ch), 0, "no lane write");
+    CHECK(fabChainPcieUp(&g_fab, d), "the chained tunnel kept");
+}
+
+/* A child enumerated before this driver with CV set and no PTO, nothing
+ * on its link: connected as found, HELD, ROUTER_CS_5 never written. */
+static void test_kid_cv_found(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_KID *k;
+    int d;
+    int ch;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    ch = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    fabPlug(&g_fab, 1, d);
+    fabPreos(&g_fab, 1, 0);
+    fabPlugChild(&g_fab, d, ch, 1);
+    g_fab.R[ch].Rcs[5] = TBT_RTR5_CV;
+    g_fab.R[ch].Rcs[6] |= TBT_RTR6_CR;
+    g_fab.WrCount = 0;
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(3);
+    k = kid();
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "the parent preserved");
+    CHECK(k != NULL && k->State == TBT_U4_HELD, "CV found without PTO: HELD");
+    CHECK(k != NULL && k->Why == TBT_U4_WHY_CV_FOUND, "its reason");
+    CHECK_EQ(writesTo(ch, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5), 0, "ROUTER_CS_5 never written");
+    CHECK(!fabChainPcieUp(&g_fab, d), "no chained tunnel");
+}
+
 int main(void)
 {
     RUN_VEC(test_cmuv);
@@ -1295,6 +1472,9 @@ int main(void)
     RUN_VEC(test_gen4_training);
     RUN_VEC(test_resume_v2);
     RUN_VEC(test_link_bound);
+    RUN_VEC(test_kid_v2);
+    RUN_VEC(test_kid_adopt_asym);
+    RUN_VEC(test_kid_cv_found);
     fabTraceMark("end");
     printf("test_u4v2: %d checks, %d failures\n", checks, failures);
     return failures;

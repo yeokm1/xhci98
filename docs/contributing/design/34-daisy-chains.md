@@ -2182,6 +2182,26 @@ differs from them, this section is the record.
   `u4.kid.no-pcie-down`, `u4.kid.version`, `u4.kid.adopted`,
   `u4.kid.fresh`, `u4.kid.watched`, `u4.kid.teardown`, `u4.kid.down`,
   `u4.kid.lost`, `u4.kid.sweep-owed`, `u4.kid.dropped`, `u4.kid.full`.
+- **Version 2 routers** (record 22 section 6.2, task 45.20, through the
+  link view; at the merge of both). A kid's Gen 4 link is classified as a
+  port's is: symmetric, or a paired asymmetric width used as found,
+  bonded with no Target Link Width, Lane Bonding or Lane Disable written
+  (`TBT_U4_KID.Gen4`, `Asym`; adoption and the resume's verification
+  accept the paired asymmetric width); any other Gen 4 reading leaves the
+  kid FAILED (`TBT_U4_WHY_LINK`, `u4.kid.link.gen4-unusable`), nothing
+  written. A chained PCIe tunnel between two version 2 routers under
+  `XhciCmUsb4V2` 1 has Extended Encapsulation set and read back on both
+  adapters before either Path Enable; any other has it read clear first,
+  a version 2 end left set cleared, else no Path Enable
+  (`u4.kid.ee.left`); the kid's teardowns clear it after the Path
+  Enables, as a port's. A preserved child (not a Thunderbolt 3 one)
+  under `XhciCmUsb4V2` 1 is configured only once CV reads clear: CV set
+  with PTO is kept as found, CV set without PTO, or a read that fails,
+  leaves the kid HELD (`TBT_U4_WHY_CV_FOUND`, `u4.kid.cv.found`,
+  `u4.kid.cv.unread`), its ROUTER_CS_5 unwritten. A predecessor's Enable
+  Gen 4 Link Recovery on a depth-2 link is not cleared in this cut.
+  Vectors: `test_u4v2`'s `test_kid_v2`, `test_kid_adopt_asym`,
+  `test_kid_cv_found`.
 - **Not in this cut** (the task stays open for them): the eject paths
   `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
   section 3.7's chained unit, task 45.13: until then a chained device goes
