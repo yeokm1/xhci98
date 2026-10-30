@@ -228,12 +228,13 @@ function Get-PackagerSelfTestDigest {
     #     whether each is there, not their content;
     #   - the driver sets' checkouts (Get-PackagerCheckoutRow);
     #   - the catalog case's MakeCat and PE sample, and the dumpers the import
-    #     gate would resolve, by content; cmd.exe's AutoRun values;
+    #     gate would resolve, by content;
     #   - what the suite inherits (-Inherited, Get-PackagerSelfTestInherited,
     #     taken once at the start) and the PowerShell, .NET and git versions.
     # No driver source's content, no HEAD, no git status, no built output:
-    # no case reads them. $null when git cannot list the tree or a row
-    # cannot be read: no skip.
+    # no case reads them. $null when git cannot list the tree, a row
+    # cannot be read or cmd.exe has an AutoRun (what it runs is no file of
+    # the set): no skip.
     param([string]$Root, [string[]]$Inherited = @())
     # Local to this function: git's warnings on stderr are not errors here.
     $ErrorActionPreference = "Continue"
@@ -283,10 +284,13 @@ function Get-PackagerSelfTestDigest {
                            @{ Name = "dumper-amd64"; Path = (Join-Path $wdk "bin\x86\amd64\link.exe") })) {
             $rows += ("run:" + $run.Name + ":" + $(if (Test-Path -LiteralPath $run.Path -PathType Leaf) { & $hashOf $run.Path } else { "absent" }))
         }
+        # cmd.exe's AutoRun runs before every cmd.exe a case starts (the
+        # packager's host runner among them), and what it runs is no file
+        # of the set: with one set there is no digest, and the suite runs.
         foreach ($hive in @("HKLM:\Software\Microsoft\Command Processor", "HKCU:\Software\Microsoft\Command Processor")) {
             $auto = $null
             try { $auto = (Get-ItemProperty -LiteralPath $hive -Name "AutoRun" -ErrorAction Stop).AutoRun } catch { $auto = $null }
-            $rows += ("autorun:" + $hive + ":" + $(if ($null -eq $auto) { "unset" } else { "set:" + $auto }))
+            if ("$auto".Trim() -ne "") { return $null }
         }
         $rows = @($rows | Sort-Object -CaseSensitive -Unique)
         $rows += @($Inherited)

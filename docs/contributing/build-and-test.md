@@ -3827,10 +3827,12 @@ the design, settled before the code and brought up to date with it
   pinned tag's commit and tree ids, every object of that tree present or
   missing, the replace refs and the checkout's own configuration, any git
   failure there giving no digest; MakeCat, the catalog's PE sample and
-  the dumpers the import gate would resolve, by content; `cmd.exe`'s
-  AutoRun values (read only); the environment allowlist with
-  `PSModulePath`; and the versions. No driver source's content, no HEAD,
-  no git status, no built output.
+  the dumpers the import gate would resolve, by content; the environment
+  allowlist with `PSModulePath`; and the versions. No driver source's
+  content, no HEAD, no git status, no built output. With an AutoRun set
+  for `cmd.exe` (read, never written) there is no digest at all and the
+  suite runs whole: it runs before every `cmd.exe` a case starts, and
+  what it runs is no file of the set.
 - **Each set guarded.** `Get-SelfTestUnlistedPaths` (`scripts\common.ps1`)
   reads the scripts a suite runs for every repository-relative path
   literal that names a tracked file, and a case of each suite fails when
