@@ -6475,6 +6475,67 @@ static void test_kid_foreign_and_held(void)
     CHECK_EQ(n, 0, "and its obligation gone");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_HELD, "the parent still HELD");
 }
+
+/* Section 6.7's cleanup gates the next connect: a re-plug while the last
+ * connection's entry is still undrained on the parent's lane, and while a
+ * lane change is not yet proven undone, waits; each connects once the
+ * link is clean. */
+static void test_kid_cleanup_gates(void)
+{
+    int dev;
+    int child;
+    int a;
+
+    dev = setupParent(FAB_DEV_USB4, NULL);
+    child = fabChild(&g_fab, dev);
+    a = fabDownLane0(&g_fab, dev);
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = 7;
+    g_failAddr = FAB_CAP_ADP;
+    g_fab.R[dev].Adp[a].PpStuck[8] = 1;
+    g_fab.R[dev].Adp[a].PpStuck[9] = 1;
+    g_fab.Hook = failWriteHook;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 4);
+    g_fab.Hook = NULL;
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_FAILED, "stuck drain: FAILED");
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 1);
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    CHECK(kidState(&g_cm, 1) != TBT_U4_UP, "re-plugged over an undrained entry: not connected");
+    CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "the child left uninitialised");
+    /* The fabric drains at last (the model latches Pending Packets). */
+    g_fab.R[dev].Adp[a].PpStuck[8] = 0;
+    g_fab.R[dev].Adp[a].PpStuck[9] = 0;
+    g_fab.R[dev].Adp[a].Path[2 * 8 + 1] &= ~TBT_PATH1_PP;
+    g_fab.R[dev].Adp[a].Path[2 * 9 + 1] &= ~TBT_PATH1_PP;
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "the entry drained: connected");
+
+    /* A lane change not undone at the end unplug keeps the kid's slot in
+     * TEARDOWN, and the re-plug waits for it. */
+    dev = setupKid(FAB_DEV_USB4, &child);
+    a = fabDownLane0(&g_fab, dev);
+    CHECK(kidOf(&g_cm, 1) != NULL && kidOf(&g_cm, 1)->LaneWritten, "bonded: the lane changes owned");
+    g_failRouter = dev;
+    g_failCs = TBT_CS_ADAPTER;
+    g_failAdp = (unsigned long)a;
+    g_failAddr = FAB_CAP_LANE + 1;
+    g_fab.Hook = failWriteHook;
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "a lane restore not answered: still TEARDOWN");
+    CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_DOWN), 1, "the removal not held back");
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_TEARDOWN, "the re-plug waits for it");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 4);
+    CHECK_EQ(kidState(&g_cm, 1), TBT_U4_UP, "restored: the re-plug connected");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the parent kept UP throughout");
+}
 #endif /* TBT_U4_MAX_KIDS */
 
 int main(void)
@@ -6545,6 +6606,7 @@ int main(void)
     RUN_VEC(test_kid_adopt);
     RUN_VEC(test_kid_resume);
     RUN_VEC(test_kid_foreign_and_held);
+    RUN_VEC(test_kid_cleanup_gates);
 #endif
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);

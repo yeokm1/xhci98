@@ -7233,16 +7233,22 @@ static VOID tbtU4KidsDrop(PTBT_U4CM cm, PTBT_U4_PORT p)
 }
 
 /* The parent's downstream lane adapters back to what this driver found
- * (section 6.7 step 5): Target Link Width and Lane Bonding, lane 1's Lane
- * Disable, USB4 Port is Configured (LC_SX_CTRL on a Thunderbolt 3 parent).
- * And the child's lanes too while it is there. */
-static VOID tbtU4KidLanesBack(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
+ * (section 6.7 step 5): USB4 Port is Configured (LC_SX_CTRL on a
+ * Thunderbolt 3 parent), Target Link Width and Lane Bonding, lane 1's
+ * Lane Disable - each change kept owned until a read-back proves it
+ * undone, as tbtU4HostRestore keeps the host's, and retried; the child's
+ * lanes put back too while it is there, at best. TRUE when nothing is
+ * left owed on the parent. */
+static BOOLEAN tbtU4KidLanesBack(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
 {
     PTBT_U4_ROUTER pr;
     PTBT_U4_ROUTER d;
     ULONG a;
     ULONG i;
+    ULONG v;
+    ULONG mark;
     ULONG region;
+    BOOLEAN ok;
 
     pr = &p->Dev;
     d = &k->Dev;
@@ -7250,32 +7256,51 @@ static VOID tbtU4KidLanesBack(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     if (k->PcSetParent) {
         if (pr->Tbt3) {
             region = tbtU4LcPort(cm, pr, a);
-            if (region != 0) {
-                (void)tbtU4Rmw(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL,
-                               (a & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C, 0);
+            mark = (a & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C;
+            if (region == 0 ||
+                (tbtU4Rmw(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, mark, 0) ==
+                     TBT_OK &&
+                 tbtU4Rd(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, &v) ==
+                     TBT_OK && (v & mark) == 0)) {
+                k->PcSetParent = FALSE;
             }
-        } else if (pr->Adp[a].CapPort != 0) {
-            (void)tbtU4Rmw(cm, &pr->Route, TBT_CS_ADAPTER, a,
-                           pr->Adp[a].CapPort + TBT_PORT_CS_19, TBT_PORT19_PC, 0);
+        } else if (pr->Adp[a].CapPort == 0 ||
+                   (tbtU4Rmw(cm, &pr->Route, TBT_CS_ADAPTER, a,
+                             pr->Adp[a].CapPort + TBT_PORT_CS_19, TBT_PORT19_PC, 0) == TBT_OK &&
+                    tbtU4Rd(cm, &pr->Route, TBT_CS_ADAPTER, a,
+                            pr->Adp[a].CapPort + TBT_PORT_CS_19, &v) == TBT_OK &&
+                    (v & TBT_PORT19_PC) == 0)) {
+            k->PcSetParent = FALSE;
         }
-        k->PcSetParent = FALSE;
     }
     if (k->LaneWritten) {
+        ok = TRUE;
         for (i = 0; i < 4; i++) {
-            if (i >= 2 && !d->Present) {
-                break;
+            if (i >= 2) {
+                if (d->Present) {
+                    (void)tbtU4LaneRmw(cm, d, d->UpAdp + (i - 2),
+                                       TBT_LANE1_TLW_MASK | TBT_LANE1_LB,
+                                       k->LaneSaved[i] & (TBT_LANE1_TLW_MASK | TBT_LANE1_LB));
+                }
+                continue;
             }
-            (void)tbtU4LaneRmw(cm, i < 2 ? pr : d,
-                               i < 2 ? a + i : d->UpAdp + (i - 2),
-                               TBT_LANE1_TLW_MASK | TBT_LANE1_LB,
-                               k->LaneSaved[i] & (TBT_LANE1_TLW_MASK | TBT_LANE1_LB));
+            if (tbtU4LaneRmw(cm, pr, a + i, TBT_LANE1_TLW_MASK | TBT_LANE1_LB,
+                             k->LaneSaved[i] & (TBT_LANE1_TLW_MASK | TBT_LANE1_LB)) != TBT_OK ||
+                tbtU4LaneRd(cm, pr, a + i, &v) != TBT_OK ||
+                (v & TBT_LANE1_TLW_MASK) != (k->LaneSaved[i] & TBT_LANE1_TLW_MASK)) {
+                ok = FALSE;
+            }
         }
-        k->LaneWritten = FALSE;
+        if (ok) {
+            k->LaneWritten = FALSE;
+        }
     }
-    if (k->Lane1Disabled) {
-        (void)tbtU4LaneRmw(cm, pr, a + 1, TBT_LANE1_LD, 0);
+    if (k->Lane1Disabled &&
+        tbtU4LaneRmw(cm, pr, a + 1, TBT_LANE1_LD, 0) == TBT_OK &&
+        tbtU4LaneRd(cm, pr, a + 1, &v) == TBT_OK && (v & TBT_LANE1_LD) == 0) {
         k->Lane1Disabled = FALSE;
     }
+    return (BOOLEAN)(!k->PcSetParent && !k->LaneWritten && !k->Lane1Disabled);
 }
 
 /*
@@ -7285,10 +7310,12 @@ static VOID tbtU4KidLanesBack(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
  * Hu entry, each drained; the PCIe Down's LTSSM in Detect on a USB4
  * parent); steps 2 and 3, the upcall with the kid; then the residual
  * sweep of every other entry entering or leaving the link's lanes
- * (tbtU4SweepLane) - an entry unread keeps the removal pending, retried
- * at the next tick (SweepOwed); then step 5, the parent's lanes back, and
- * step 6, the chain port's removal (TUNNEL_DOWN). The kid's slot is
- * freed. The host port's sequence; no teardown nests in it.
+ * (tbtU4SweepLane), and once the link is empty step 5, the parent's lanes
+ * back (tbtU4KidLanesBack); step 6, the chain port's removal
+ * (TUNNEL_DOWN), at the first pass. An entry unread, or a lane change not
+ * proven undone, keeps the kid in TEARDOWN (SweepOwed), retried at the
+ * next tick; the slot is freed once nothing is owed. The host port's
+ * sequence; no teardown nests in it.
  */
 static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
 {
@@ -7299,6 +7326,7 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     BOOLEAN prevTd;
     BOOLEAN closed;
     BOOLEAN complete;
+    BOOLEAN first;
     ULONG hp;
 
     pr = &p->Dev;
@@ -7334,16 +7362,25 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
         /* What lived below the child went with it. */
         tbtU4Zero(&k->Dev.Adp, sizeof(k->Dev.Adp));
     }
+    first = (BOOLEAN)!k->SweepOwed;
     complete = tbtU4SweepLane(cm, p->Index, pr, k->ParentLane0);
+    /* The lanes only once nothing is left on the link (Guide 7.1). */
+    if (complete) {
+        complete = tbtU4KidLanesBack(cm, p, k);
+    }
+    if (first && k->RemovalOwed) {
+        /* Step 6 once, whatever is still owed: the operating system's
+         * removal does not wait on the parent's cleanup. */
+        k->RemovalOwed = FALSE;
+        tbtU4QueueKid(cm, TBT_U4_ACT_TUNNEL_DOWN, p, k);
+    }
     if (!complete) {
+        /* The slot stays TEARDOWN, so nothing connects on the link until
+         * every entry is closed and every lane change undone. */
         k->SweepOwed = TRUE;
         tbtU4Log(cm, "u4.kid.sweep-owed", (p->Index << 8) | k->Index);
     } else {
         k->SweepOwed = FALSE;
-        tbtU4KidLanesBack(cm, p, k);
-        if (k->RemovalOwed) {
-            tbtU4QueueKid(cm, TBT_U4_ACT_TUNNEL_DOWN, p, k);
-        }
         tbtU4KidFree(cm, k);
     }
     cm->InTeardown = prevTd;
@@ -7902,6 +7939,31 @@ out:
     cm->ActivePort = prevPort;
 }
 
+/* No entry of the parent's lane adapters `a` and `a` + 1 in use, as input
+ * or as output, from HopID 8 up (the registers and the quarantine).
+ * FALSE when anything cannot be read. */
+static BOOLEAN tbtU4KidLanesIdle(PTBT_U4CM cm, const TBT_U4_ROUTER *pr, ULONG a)
+{
+    TBT_U4_USAGE u;
+    ULONG k;
+    ULONG i;
+
+    for (k = 0; k < 2; k++) {
+        if (a + k >= TBT_U4_MAX_ADP || !pr->Adp[a + k].Present) {
+            continue;
+        }
+        if (tbtU4ScanLane(cm, pr, a + k, &u) != TBT_OK) {
+            return FALSE;
+        }
+        for (i = 0; i < 4; i++) {
+            if ((u.InUse[i] | u.OutUse[i]) != 0) {
+                return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
 /* The parent's downstream Disable Hot Plug cleared (section 6.5): on a
  * USB4 parent UP with its PCIe tunnel, once per connection of it, at the
  * first idle tick that finds it so. Read first; written only when set. */
@@ -7966,10 +8028,16 @@ static VOID tbtU4KidService(PTBT_U4CM cm, PTBT_U4_PORT p)
         if (!k->Used || k->Port != p->Index) {
             continue;
         }
+        if (p->State == TBT_U4_EMPTY || !pr->Present || pr->Depth != 1) {
+            /* Its parent left without the teardown dropping it (a
+             * recovery's departure): dropped now, unwritten. */
+            cm->Counters.KidsDropped++;
+            tbtU4Log(cm, "u4.kid.dropped", (p->Index << 8) | k->Index);
+            tbtU4KidFree(cm, k);
+            continue;
+        }
         if (k->SweepOwed) {
-            if (pr->Present) {
-                tbtU4KidTeardown(cm, p, k);
-            }
+            tbtU4KidTeardown(cm, p, k);
             continue;
         }
         if (!pr->Present || pr->Depth != 1 ||
@@ -8030,6 +8098,13 @@ static VOID tbtU4KidService(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
         if (busy || tbtU4LaneRd(cm, pr, a, &lane) != TBT_OK ||
             TbtU4LaneClass(TBT_LANE1_STATE(lane)) != TBT_U4_LANE_CONNECTED) {
+            continue;
+        }
+        if (!tbtU4KidLanesIdle(cm, pr, a)) {
+            /* Guide 7.1, as tbtU4Connect's tbtU4LanesIdle: no lane change
+             * while anything live, pending or held is on the link; the
+             * next tick reads it again. */
+            tbtU4Log(cm, "u4.kid.connect.deferred", (p->Index << 8) | a);
             continue;
         }
         k = tbtU4KidSlot(cm, p, a);
@@ -8202,13 +8277,41 @@ static VOID tbtU4KidsToLinks(PTBT_U4CM cm)
 {
     ULONG i;
     ULONG j;
+    ULONG need;
+    ULONG room;
     PTBT_U4_KID k;
     PTBT_U4_PORT p;
     PTBT_U4_LINK l;
 
+    need = 0;
+    room = 0;
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (cm->Kids[i].Used && !cm->Kids[i].SweepOwed &&
+            cm->Kids[i].State != TBT_U4_TEARDOWN && cm->Kids[i].Dev.Present &&
+            cm->Kids[i].Dev.Depth == 2 && tbtU4PortOf(cm, cm->Kids[i].Port) != NULL) {
+            need++;
+        }
+    }
+    for (j = 0; j < TBT_U4_MAX_LINKS; j++) {
+        if (!cm->Links[j].Used) {
+            room++;
+        }
+    }
+    if (need > room) {
+        /* No record would keep a kid's state (an eject's above all): the
+         * attempt is refused, as one that cannot hold an entry unwritten
+         * (RecReserveFull), and the kids stay as they are. */
+        cm->RecReserveFull = TRUE;
+        tbtU4Log(cm, "u4.recover.kids-full", (need << 8) | room);
+        return;
+    }
     for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
         k = &cm->Kids[i];
-        if (!k->Used) {
+        if (!k->Used || k->SweepOwed || k->State == TBT_U4_TEARDOWN) {
+            /* A child gone whose teardown still owes its sweep or a lane
+             * change stays a kid: what it owes is not yet a record a link
+             * could keep, and it is finished or dropped with its parent
+             * after the commit (tbtU4KidService). */
             continue;
         }
         p = tbtU4PortOf(cm, k->Port);

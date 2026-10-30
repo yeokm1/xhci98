@@ -1948,8 +1948,12 @@ BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
  * whole set then acts, as it always does under the ICM client. */
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
+    /* A chained tunnel's (record 34 Part 3, Slot bits 15:8 the kid) names
+     * no member: the member's exposure must not take the kid's generation
+     * for its own tunnel's (CmNvlinkActionTunnel), and the chain action
+     * walks every member, as under the firmware connection manager. */
     if (!nhi->U4On || !cmTopoUsable(nhi) ||
-        action->Kind == TBT_ICM_ACT_RESYNC) {
+        action->Kind == TBT_ICM_ACT_RESYNC || ((action->Slot >> 8) & 0xFFUL) != 0) {
         return XHCI_TBT_NO_MEMBER;
     }
     return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, action->Link);

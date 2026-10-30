@@ -1532,12 +1532,17 @@ differs from them, this section is the record.
   the link watched as their subject needs; `test_links`' depth-2 re-plug
   is now connected, and kept uninitialised for `XhciCmApprove` 0.
 - **The end unplug** (`tbtU4KidTeardown`): step 1 on the parent's side,
-  the upcall with the kid, the residual sweep (`tbtU4SweepLane`; an entry
-  unread leaves the kid in TEARDOWN with `SweepOwed`, the sweep and the
-  rest retried at the next tick), the parent's lanes back (and the
-  child's, while it is there), TUNNEL_DOWN with the kid, the slot freed
-  (the links below dropped and every route of the child and below
-  forgotten).
+  the upcall with the kid, TUNNEL_DOWN with the kid at the first pass;
+  the residual sweep (`tbtU4SweepLane`), and once the link is empty the
+  parent's lanes back (`tbtU4KidLanesBack`: each change owned until a
+  read-back proves it undone, as `tbtU4HostRestore` keeps the host's; the
+  child's put back too while it is there). An entry unread or a change
+  not undone leaves the kid in TEARDOWN (`SweepOwed`), retried at the next
+  tick; the slot is freed once nothing is owed (the links below dropped
+  and every route of the child and below forgotten). A connect waits for
+  the parent's two lanes to carry nothing live, pending or held
+  (`tbtU4KidLanesIdle`, as `tbtU4LanesIdle` at depth 1), and a kid whose
+  parent left without dropping it is dropped at the next tick.
 - **The parent's PCIe loss, its eject and the kid's eject**
   (`tbtU4KidsDown`, `tbtU4KidDown`, `TbtU4EjectKid`): the kid's tunnel
   down in the orderly form with both ends, TUNNEL_DOWN with the kid, the
@@ -1562,12 +1567,18 @@ differs from them, this section is the record.
   (`tbtU4KidsToLinks`), its obligation dropped; one that still verifies
   is adopted again at the first tick after the commit. One ejected or
   FAILED for PCIe stays down (`TBT_U4_LINK.KidDown`: never adopted or
-  connected) until its link is removed and the child plugged again.
+  connected) until its link is removed and the child plugged again. A
+  kid whose teardown is still owed stays a kid, finished or dropped with
+  its parent after the commit; and with too few link records free for the
+  rest the attempt is refused (`RecReserveFull`), the kids kept.
 - **The seam** (`cm_nhi.c`). A kid's action reaches `CmReenumAction` at
   depth 2, `Slot` the port with the kid in bits 15:8 (the chain action's
   owed key, one per kid, section 3.9), `Serial` the kid's generation;
   `CmNhiActionLive` reads the kid (its slot, generation, both routers
-  present, its PCIe tunnel for an up). A kid's action is not its port's:
+  present, its PCIe tunnel for an up). `CmNhiActionMember` names no
+  member for it, so no member's stor98 exposure takes the kid's
+  generation for its own tunnel's, and the chain action walks every
+  member. A kid's action is not its port's:
   no learning (`XhciTbtLearnUp`, `LearnOpen`, `cmU4LearnTry`, the arm),
   no `U4SeamGen` (the port's eject guard), no stor98 UP; and the link-down
   upcall with a kid is logged (`u4.linkdown.kid`) and withheld, the
