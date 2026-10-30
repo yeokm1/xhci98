@@ -3838,7 +3838,7 @@ first, under the host's gated-build lock. Times are the steps' own
   suite) is the owner's answer.
 - Every build exit 0; logs `E:\xhci98-scratch\p45-w45-rvhcd\pkgskip\`.
 
-## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000 and XP (2026-10-30)
+## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000, XP and XP x64 (2026-10-30)
 
 Task 45.18 of `roadmap-usb4.md`; design record 34 section 3.11 (reviewed
 and revised; the owner's answers Q7 (b), Q8 (a), Q9 (a), Q10 (a) and Q11
@@ -3861,8 +3861,8 @@ filter's `IRP_MN_SURPRISE_REMOVAL`, `0x1C3` argument `0x17`), the
 connection manager's wait ended acknowledged (`0x1C1` argument `0x100`)
 before it, and no request was completed by Stor98's gone deadline (no
 `0x83`). The 2000 bit of the root-port D1 column is set on this reading
-(record 34 section 3.11 item 8); XP the same, below. XP x64 is not read
-yet; D2 and M wait for 45.13's per-tunnel keying and 45.15's kid.
+(record 34 section 3.11 item 8); XP and XP x64 the same, below. D2 and
+M wait for 45.13's per-tunnel keying and 45.15's kid.
 
 ### The vehicle
 
@@ -3988,11 +3988,56 @@ Not counted:
   depended on the statement. The run above unplugs after Stor98's
   rendezvous.
 
+### Windows XP x64, the same reading
+
+**XP x64, D1, root port: passes at every injection point run**, the same
+conditions as 2000 and XP. The XP x64 bit of the root-port D1 column is
+set on this reading.
+
+- The vehicle: the q35 base `xpx64` (SHA-256 `bec51ebc...`, `-cpu qemu64
+  -smp 2 -m 2048`), otherwise as above. The package is the published
+  `3.2.0.0` x64 half (`release-x64` of `xhci98-3.2.0.0.zip`), because the
+  release package used on 2000 and XP has no x64 half. Its catalogs are
+  signed by the project test certificate, so that certificate's public
+  half (`xhci98-test.cer`) was first imported into the guest overlay's
+  root store; without it the INFs are not staged (0x800B0109, the q35
+  base's README). It was installed with `INSTALL /console /yes /nopause
+  /thunderbolt /stor98` (exit 0), and the drive's wizard installed Stor98
+  by the class match of `3.2.0.0`'s INF (the tunnel id came in `3.3.0.0`).
+  Then the amd64 builds of the same trial tree: `xhcicm.sys` (`qemu`
+  flavour, WDK 7.1, SHA-256 `508d3feb...`) and Stor98's debug-port
+  `stor98.sys` (SHA-256 `b9ed8392...`). XP x64 enforces no kernel-mode
+  signature. `XhciCmLogVerbosity` 2. Golden
+  `E:\xhci98-vm\p45\w45-s98chain\xpx64\golden.qcow2`; legs `y1` and `y2`. The
+  drive is D:, the transfer disk E:.
+- Every run: `cm.nvlink.u4-q35=00001052` (SEND, root port, system XP
+  x64, reading DOWN). In the whole leg there was no Slot Control write
+  traced and no `0x83`.
+
+| Run | Injection | 0x1C0 statement | 0x141 seen | 0x142 ack | 0x1C1 wait end | first removal (0x1C3) | Time left at the reading |
+|---|---|---|---|---|---|---|---|
+| idle | no I/O | +117.1 | +146.3 | +146.6 | +177.3, acknowledged | +2121.8, surprise | 2796 ms |
+| I/O | `eio` QD 8 running, nothing held | +7.7 | +54.0 | +54.9 | +68.9, acknowledged | +5780.9 | 2796 ms |
+| held | eight reads held at their fetch (QD 8; the eight discarded by the stage-2 reset) | +79.7 | +171.7 | +174.1 | +203.8, acknowledged | +2081.4 | 2796 ms |
+| saturated | `eio` QD 32, every read held from the 150th: nine held at the controller, the rest queued in the port (the nine discarded by the stage-2 reset) | +138.2 | +138.5 | +140.8 | +144.4, acknowledged | +2139.5 | 2796 ms |
+| bring-up | `x-rdy-set-delay-ms` 20000, unplugged 1 s after Stor98's bring-up entered its second step (`0x40` STARTING, then 1 to 7 at the unplug; leg `y2`) | +72.3 | +116.0 | +116.4 | +131.7, acknowledged | +2074.4 | 2796 ms |
+| `RequestComplete` | `at=stage code=0x21 nth=300 act=gate` (fired 387.9 ms before the cutoff), then `device_del` | +62.0 | +155.3 | +155.8 | +187.5, acknowledged | +2065.9 | 2390 ms |
+| already gone | `at=fetch op=read nth=150 act=gate` (fired 1406.0 ms before the cutoff), `device_del` 1 s later | +147.6 | +225.4 | +226.2 | +271.2, acknowledged | +2149.5 | 1375 ms |
+| re-plug | unplugged as soon as Stor98's new instance traced its rendezvous (`0x140`) | +15.3 | +28.5 | +29.3 | +75.4, acknowledged | +2018.1 | 2796 ms |
+
+Not counted: leg `y1`'s bring-up run. The unplug, 10 s after the plug,
+came 404 ms after Stor98's start had already given up (`0x40` 1 to 8,
+FAILED), so it was not an unplug during bring-up. The statement was
+ordered as in every other run (+49.6, acknowledged at +144.0). The run
+above, on leg `y2` (a fresh child overlay of the same golden), unplugs
+while the start is held. The 2000 and XP bring-up runs were in STARTING
+at the unplug (`0x40` 1 to 7).
+
 ### What it changes
 
-The 2000 and XP bits of the root-port D1 column (`cmNvQ35Table`). Left
-in 45.18: XP x64 (the same runs), and D2 and M after 45.13's per-tunnel
-keying and 45.15's kid. 98 SE and ME first need their system
+The 2000, XP and XP x64 bits of the root-port D1 column
+(`cmNvQ35Table`): every NT system item 5 admits. Left in 45.18: D2 and
+M after 45.13's per-tunnel keying and 45.15's kid. 98 SE and ME first need their system
 identification (record 34 section 3.11 item 8). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
