@@ -2944,7 +2944,10 @@ padded size in `brNeed`, the `REOPENED` qualification), `cm_cfgwk.c`
 host vectors in `test\test_tbt_brnum.c` (the model given a PCI Express
 capability; `test_pad_buses`, `test_pad_memory`, `test_pad_nested`), 506
 checks, 0 failures; `test\run-host-tests.cmd` links `tbt_topo.c` into
-that suite. The gated x86 build is recorded below once run.
+that suite. The gated x86 build of `92fd318c` (`scripts\build-driver.cmd
+all`): "BUILD + GATES PASSED (debug release qemu)"; the host suite:
+"Host tests PASSED" (`E:\xhci98-scratch\p45-w45-chain\gb-x86.log`,
+`hosttests.log`).
 
 ### The reading (2026-10-30)
 
