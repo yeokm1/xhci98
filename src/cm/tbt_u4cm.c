@@ -7719,14 +7719,14 @@ static BOOLEAN tbtU4LinkOnly(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG lane0,
     return TRUE;
 }
 
-/* Every protocol adapter of `rt` other than `except` carrying nothing
+/* Every protocol adapter of `rt` other than `skip` carrying nothing
  * (tbtU4ProtoEmpty's test). */
-static BOOLEAN tbtU4ProtosEmpty(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG except)
+static BOOLEAN tbtU4ProtosEmpty(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG skip)
 {
     ULONG a;
 
     for (a = 1; a <= rt->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
-        if (a == except || !rt->Adp[a].Present || rt->Adp[a].CapAdp == 0) {
+        if (a == skip || !rt->Adp[a].Present || rt->Adp[a].CapAdp == 0) {
             continue;
         }
         if (rt->Adp[a].Type != TBT_ADP_TYPE_PCIE_UP && rt->Adp[a].Type != TBT_ADP_TYPE_PCIE_DOWN &&
