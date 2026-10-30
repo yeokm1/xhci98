@@ -983,7 +983,7 @@ interface", function of a Thunderbolt or USB4 controller), by PCI id:
 | Lunar Lake, Panther Lake, Wildcat Lake (integrated) | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Lunar Lake)`, `(Intel Panther Lake)`, `(Intel Wildcat Lake)` |
 | Barlow Ridge | `5781`, `5784` | `xhcicm.sys`'s | `xHCI98 USB4 Router (Intel Barlow Ridge)` |
 | AMD Pink Sardine | `1022:1668`, `1022:1669` | `xhcicm.sys`'s | `xHCI98 USB4 Router (AMD Pink Sardine)` |
-| ASMedia ASM4242 | `1B21:2425`, by class | `xhcicm.sys`'s | `xHCI98 USB4 Router (ASMedia ASM4242)`, the name the installer gives it (by hand: `xHCI98 USB4 Router`) |
+| ASMedia ASM4242 | `1B21:2425`, by class | `xhcicm.sys`'s | `xHCI98 USB4 Router (ASMedia ASM4242)` |
 | Any other USB4 host (PCI class `0C0340`) | by class | `xhcicm.sys`'s | `xHCI98 USB4 Router` |
 
 Not claimed: Apple machines and Apple's controllers, the USB-only
