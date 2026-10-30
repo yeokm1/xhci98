@@ -6,7 +6,7 @@ registered child's role (`CmRolePlace`) and ancestry (`CmRegAttLink`),
 the bridge inventory in the marks answer (`cm_query.h` `CM_QB_*`), the
 mark service's bridge marks, restart and wait (`xhcimark\`), and
 `XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; the installer's
-"Advanced..." row for `XhciCmBridgeReq` (section 9.1) is not yet made.
+"Advanced..." row for `XhciCmBridgeReq` (section 9.1) since `9d6a8290`.
 Section 7.1 states what the bound covers. Revision 3, 2026-10-27, before
 code, reviewed and revised: the
 owner's answers to section 12's questions folded in; the NHI's role
