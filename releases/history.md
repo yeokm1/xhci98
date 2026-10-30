@@ -102,7 +102,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
     serial number or one that could not finish its work before the sleep,
     a card reader or other removable drive with a medium in it, a drive
     that does not report its own identity, and an audio or video device
-    are still removed and found again.
+    in use are still removed and found again.
   - An internal NVMe drive already on Stor98 (put there by hand) keeps it.
   - A maker's driver that takes a whole USB device with more than one
     configuration no longer binds to it under xHCI98 where xHCI98 now

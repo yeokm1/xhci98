@@ -459,7 +459,8 @@ Every system `3.3.0.0` supports is supported.
   number or one that could not finish its requests before the sleep, a
   drive whose medium cannot be checked after the wake (a removable-medium
   drive with a medium in it, or one whose units report neither
-  identification page), an isochronous device, and a device selective
+  identification page), a device with an isochronous stream open (audio
+  or video in use), and a device selective
   suspend held
   ("XhciResumeKeep: devices kept across such a resume"). Not yet read on
   2000 or 98 SE, or on a real VIA controller.
@@ -542,7 +543,8 @@ Every system `3.3.0.0` supports is supported.
   it came from; its message boxes keep the plain name. Built and
   host-tested only; the window is not yet read in a guest.
 - **Fixes from a reading of the whole code** (task 45.27): among them,
-  every event wait on 98 SE and ME now handles Windows 98's unsatisfied
+  the bus's and the UAS driver's event waits on 98 SE and ME
+  (`HcdWaitEvent`, `UasWaitEvent`) now handle Windows 98's unsatisfied
   wait return (the waiting paths read completing under load and replug
   on 98 SE and ME; the return itself cannot be forced, so its handling was
   not observed), a device's
@@ -4510,8 +4512,8 @@ Still found again: a hub and every device behind it, a Bulk-Only drive,
 a drive with no serial number or one that could not finish its requests
 before the sleep, a drive whose medium cannot be checked after the wake
 (a removable-medium drive with a medium in it, or one whose units report
-neither identification page, record 20 section 4.3.3), an isochronous
-device (audio, video), and a device
+neither identification page, record 20 section 4.3.3), a device with an
+isochronous stream open (audio or video in use), and a device
 selective suspend held. `XhciResumeKeep` (a `DWORD`, in the controller's
 key or machine-wide) `0` turns it off; absent or any other value, it is
 on. No INF writes it. Read on XP across hibernation with QEMU's UAS
@@ -5126,8 +5128,9 @@ or says it was found by reading the code.
   a Bulk-Only drive, a drive with no serial number or one that could not
   finish its requests before the sleep, a drive whose medium cannot be
   checked after the wake (a removable-medium drive with a medium in it,
-  or one whose units report neither identification page), an audio or
-  video device, and a device selective suspend held. A file open on such a drive across the
+  or one whose units report neither identification page), a device with
+  an isochronous stream open (audio or video in use), and a device
+  selective suspend held. A file open on such a drive across the
   sleep is lost, and cached writes with it.
 - **Windows 98 SE: a device that holds a shared IRQ with no working
   driver makes Windows crawl or freeze once this driver is installed**
