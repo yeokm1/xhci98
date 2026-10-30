@@ -1,5 +1,8 @@
 # Design Record 28 - A Windows 98 SE or ME Function With No Interrupt
 
+**Note, 2026-10-30 (task 45.18): section 13, a function directly on the
+tunnel port's bus, which the line stage did not reach.**
+
 **Note, 2026-10-19 (task 42-A.15's emulator leg, `runs/run-42.md`): the
 basic form is refuted for the case read; a redesign is owed.** On 98 SE,
 an NVMe below a tunnel port with no routing entry sat at Code 29 ("the
@@ -1663,6 +1666,100 @@ memory alone, Stor98 polling, a file written and compared; an unplug
 and re-plug (a new devnode) started again; `XhciCmNoIrqStart` 0 leaving
 it at problem 29; and the routed control (the tunnel bridge at 00:05),
 where the function starts on its IRQ and is never a candidate.
+
+## 13. A function directly on the tunnel port's bus (task 45.18)
+
+### 13.1 What was read
+
+On 2026-10-30 (`runs/run-45.md`, "45.18", the 98 SE subsection) task
+45.18's legs on the q35 98 SE base used the emulator's software
+connection manager host (`-Usb4 adl`). Its tunnel ports are QEMU's
+PCI Express root ports 00:05.0 and 00:06.0, numbered by the firmware at
+boot (00:05.0: secondary bus 1, subordinate 9, Interrupt Line 10, pin
+A). A plain NVMe router was plugged at the desktop. Its controller (QEMU's
+`1B36:0010`) sits directly on the port's secondary bus, at 01:00.0, pin
+A, Interrupt Line 0 (`info pci`), with no bridge between. What followed:
+
+- the worker's numbering found no bridge below the port
+  (`cm.brnum.9x.outcome=00002800`: 00:05.0, `XHCI_TBT_BRNUM_NONE`), so it
+  ran neither the window stage nor the line stage (section 4 rule 5's
+  "stage"), and the function's line stayed 0;
+- rule 5's fresh classification found the function's pin arriving on the
+  port's own pin with the port's line valid: routable, "the stage's
+  business, not this record's", and excluded it
+  (`cm.reenum.9x.noirq.refused=01000205`: 01:00.0, EXCLUDED, why 5,
+  "interrupt");
+- `PCI.VXD` gave it no IRQ, and Device Manager showed Stor98 at Code 29
+  ("the BIOS for the device did not give it an IRQ"). Section 12.1 item
+  1 is the path: no routing entry found for the function, a line of 0,
+  so no IRQ descriptor and problem 29. Why the routing lookup found no
+  entry on q35 was not read; the line stage does not depend on it, since
+  a line of 1 to 15 is taken as a fixed IRQ whatever the lookup finds
+  (record 21 section 6.1.1 read the same cure on the P14s).
+
+So the function fell between the two mechanisms: the stage that would
+have given it the port's line runs only on a chain it numbered or
+reopened, and rule 5 hands a routable function to that stage. Every real
+enclosure read so far puts a switch between the port and the drive
+(record 31 section 4.3), so the stage ran there; only a drive directly
+on the port's bus, the emulator's plain enclosure, meets the gap.
+
+### 13.2 The change
+
+`XhciTbtNumberBridges`, when its survey of the port's secondary bus
+finds no bridge (`XHCI_TBT_BRNUM_NONE`) and `XHCI_TBT_BRNUM_F_IRQ` is
+asked, runs the line stage on that bus as it does after a numbering:
+the port's own Interrupt Line and Pin read, and each function on the
+secondary bus whose pin arrives on the port's pin (device d, pin p, as
+pin (p - 1 + d) mod 4 + 1, with no bridge between) gets the port's line
+where its own is 0 or FFh, journalled, read back, and undone if the
+operation goes stale. Nothing else changes:
+
+- the outcome stays `XHCI_TBT_BRNUM_NONE` (no bridge numbered), and only
+  `IrqOutcome`, the counts and the per-function record are filled;
+- no window stage (no bridge needs a window), and the bus numbers are
+  not touched;
+- a function on another pin, a line already set, a port with no line of
+  its own, a read that fails: as in a numbered chain (section 4 rule 5,
+  `XHCI_TBT_BRFN_*`);
+- a survey that finds no function at all writes nothing.
+
+The worker hands this record to rule 5 as it hands a numbered chain's
+(`CmNiIrqFromBrnum` takes `XHCI_TBT_BRNUM_NONE` with an interrupt
+outcome), so a function given the line is `ROUTED_WRITTEN`, excluded as
+"interrupt" because it has one, and `PCI.VXD` routes it from the line,
+as on the P14s. The worker logs the stage's outcome and counts for a
+`NONE` survey as it does for a numbering.
+
+On hardware this reaches only a function directly on a tunnel port's
+bus, which no enclosure read so far has; where one does, the rule is the
+one the stage already applies behind a switch.
+
+What it does not change, the limits the stage already has: the line is
+written before the re-enumeration that lets `PCI.VXD` build the
+function's devnode, and a devnode built before it (a Device Manager
+Refresh between the tunnel's arrival and the numbering) keeps its Code 29
+(section 12.1 item 3), where section 12's memory-only form then applies;
+the undo checks the function's pin, not its whole identity; and a survey
+that found no function writes nothing, the worker's retry for an empty
+bus taking the next look.
+
+### 13.3 Host vectors and legs
+
+`test_tbt_brnum.c`: the emulator's layout (a root port with line 10,
+pin A, the NVMe at device 0, pin A, line 0, no bridge): `NONE`,
+`IrqOutcome` DONE, the line 10 written and recorded `WRITTEN`, the
+line the one write (no bus number, BAR, command or window); a second
+function at device 1 on pin A arriving on pin B, left and recorded
+`OTHER`; a line already set kept; the port with no line,
+`PORT_NONE`; `F_IRQ` not asked, nothing written; an empty bus, no
+stage; the go callback refusing before any write and after one, every
+line put back; a line write not held, `ACCESS` and `NOT_HELD`.
+`test_cm_noirq.c`: a `NONE` record with DONE, with ACCESS and with
+PORT_NONE handed to rule 5 as a numbered chain's; stale or no stage, no
+record. The legs are task 45.18's
+98 SE and ME runs on q35: the function started on IRQ 10, Stor98
+running, before their gate-G3 readings.
 
 ## Sources
 

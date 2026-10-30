@@ -4055,12 +4055,42 @@ above, on leg `y2` (a fresh child overlay of the same golden), unplugs
 while the start is held. The 2000 and XP bring-up runs were in STARTING
 at the unplug (`0x40` 1 to 7).
 
+### Windows 98 SE: the system identified, the reading not possible on q35
+
+98 SE and ME are told apart by the VMM's version since `af9e4c7d`
+(record 34 section 3.11 item 8). The first 98 SE boot of the trial
+build on q35 identified the system: `cm.nvlink.u4-q35=00001012` at an
+unplug (system 98 SE, SEND with the trial's bit, reading DOWN), and the
+statement was marked.
+
+The gate-G3 reading itself could not be taken. On the q35 base `w98se`
+(SHA-256 `ab1d4d65...`) with `-Usb4 adl`, the release package installed
+by `XHCIINST.EXE /dir release-x86 /yes /nopause /thunderbolt /stor98`
+(exit 3, a restart), the same trial `xhcicm.sys` (now with the 98 SE and
+ME bits and `0x1C2` at `CM_Query_Remove_SubTree`, SHA-256 `212e48fe...`)
+and Stor98's debug-port `stor98.mpd` (SHA-256 `dc61511d...`), and a cold
+start. The plain NVMe router plugged at the desktop was enumerated, given
+the tunnel id, and its wizard installed Stor98, but the drive never ran:
+- Device Manager showed "Stor98 Storage Controller for NVMe SSDs" at
+  Code 29: "the BIOS for the device did not give it an IRQ".
+- The connection manager's no-interrupt path (design record 28) excluded
+  the function (`cm.reenum.9x.noirq.refused=13000203`: 13:00.0,
+  EXCLUDED, why 3, the header rule).
+- After a cold start and a new plug, Stor98 traced no stage code at all.
+With no Stor98 instance on the drive, nothing receives the statement,
+so no 98 SE run can be counted and the 98 SE bit stays 0. ME was not
+tried: it has the same no-interrupt path. What a reading needs first is
+a tunnelled NVMe on q35 that 98 SE and ME give an interrupt, or that
+record 28's path admits. That is record 28's area, reported to the
+coordinator and not decided here.
+
 ### What it changes
 
 The 2000, XP and XP x64 bits of the root-port D1 column
-(`cmNvQ35Table`): every NT system item 5 admits. Left in 45.18: D2 and
-M after 45.13's per-tunnel keying and 45.15's kid. 98 SE and ME first need their system
-identification (record 34 section 3.11 item 8). Vista and later stay at 0
+(`cmNvQ35Table`): every NT system item 5 admits. D2 and M are deferred to
+the next release with 45.15's correspondence and per-tunnel keying
+(owner). The 98 SE and ME bits stay 0 until a drive behind a q35 tunnel
+port runs there (above). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 

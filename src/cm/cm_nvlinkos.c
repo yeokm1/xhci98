@@ -187,6 +187,9 @@ static ULONG cmNvCfgWrite(PVOID context, ULONG bdf, ULONG offset,
 }
 
 static BOOLEAN cmNvEmulator(ULONG bridge);
+#if defined(_X86_)
+static ULONG cmNvVmmVersion(VOID);
+#endif
 
 /* Reads `bridge` until it reads `want` (XHCI_TBT_PORT_*) or `budgetMs`
  * pass; returns the last verdict, and in `*emulator` whether the bridge
@@ -395,9 +398,14 @@ VOID CmNvlinkInit(VOID)
 #endif
     /* The q35 admission's system (record 34 section 3.11 item 8): on NT
      * the shared data page's version, which tells Vista from 7 and 8 from
-     * 8.1 where the WDM version cannot; 98 SE and ME are not told apart
-     * yet, so no q35 bit applies there. */
+     * 8.1 where the WDM version cannot; on 98 SE and ME the VMM's
+     * version. */
     cmNvSystem = CM_NVLINK_SYS_UNKNOWN;
+#if defined(_X86_)
+    if (!cmNvNt) {
+        cmNvSystem = CmNvlinkSystem9x(cmNvVmmVersion());
+    }
+#endif
     if (cmNvNt) {
 #if defined(_WIN64)
         cmNvSystem = CmNvlinkSystemNt(SharedUserData->NtMajorVersion,
@@ -536,6 +544,7 @@ static ULONG cmNvProofMade;     /* the dynamic key was created           */
  * so it is closed only at an unload, before the key is deleted. */
 static ULONG cmNvProofHkey;
 
+typedef ULONG (__cdecl *CM_NV_FN0)(VOID);
 typedef ULONG (__cdecl *CM_NV_FN1)(ULONG a);
 typedef ULONG (__cdecl *CM_NV_FN2)(ULONG a, ULONG b);
 typedef ULONG (__cdecl *CM_NV_FN3)(ULONG a, ULONG b, ULONG c);
@@ -552,6 +561,25 @@ static VOID cmNvThunk(PUCHAR t, ULONG service)
     t[5] = (UCHAR)((CM_NV_VMM_ID >> 8) & 0xFF);
     t[6] = 0xCC;
     t[7] = 0xCC;
+}
+
+/* Get_VMM_Version (VMM service 0, the Windows 98 DDK's VMM.H): AH the
+ * major version, AL the minor, from a thunk of its own; 0 when no thunk
+ * could be made. A register service, reached by the same jump dynalink as
+ * the registry services, so its AX comes back as the call's value. */
+static ULONG cmNvVmmVersion(VOID)
+{
+    PUCHAR t;
+    ULONG v;
+
+    t = (PUCHAR)CmAlloc(8);
+    if (t == NULL) {
+        return 0;
+    }
+    cmNvThunk(t, 0);
+    v = ((CM_NV_FN0)t)() & 0xFFFFUL;
+    CmFree(t);
+    return v;
 }
 
 /* The proof key's query handler, all four slots (R3a). */
@@ -1333,8 +1361,10 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     if (r->Topo.Source[member] != XHCI_TBT_SRC_SHPC) {
         /*
          * The q35 admission, depth 1 (record 34 section 3.11 items 5, 6, 8
-         * and 10): on NT only, a PCI Express port of the emulator's q35
-         * machine whose case is qualified on this system. Everything that
+         * and 10): a PCI Express port of the emulator's q35 machine whose
+         * case is qualified on this system. On 98 SE and ME too: the
+         * reading needs no write, so it is made here, through the same
+         * configuration read the scan makes there. Everything that
          * can withhold without a wait is read first, so a port that cannot
          * be admitted - every hardware port - costs no reading loop.
          */
@@ -1345,7 +1375,7 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
         /* One clock for the whole branch: the probes, the reading and the
          * identity read all spend the time left of the 3 s. */
         start = cmNvNow(nhi);
-        if (cmNvNt && pathClosed) {
+        if (pathClosed && cmNvSystem != CM_NVLINK_SYS_UNKNOWN) {
             kind = cmNvQ35Kind(nhi, bridge);
             platform = (BOOLEAN)(kind != CM_NVLINK_Q35_NONE &&
                                  cmNvEmulator(bridge));

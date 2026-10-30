@@ -298,8 +298,12 @@ VOID CmNiIrqFromBrnum(const XHCI_TBT_BRNUM *r, PCM_NI_IRQ irq)
     ULONG k;
 
     niZero(irq, sizeof(CM_NI_IRQ));
+    /* NONE: no bridge below the port, the line stage run on its own bus
+     * (design record 28 section 13); with no stage run it stays NONE. */
     if (r->Outcome != XHCI_TBT_BRNUM_DONE &&
-        r->Outcome != XHCI_TBT_BRNUM_REOPENED) {
+        r->Outcome != XHCI_TBT_BRNUM_REOPENED &&
+        !(r->Outcome == XHCI_TBT_BRNUM_NONE &&
+          r->IrqOutcome != XHCI_TBT_BRIRQ_NONE)) {
         return;
     }
     if (r->IrqOutcome == XHCI_TBT_BRIRQ_PORT_NONE) {

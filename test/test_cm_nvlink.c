@@ -1505,6 +1505,12 @@ static void test_q35(void)
     CHECK_EQ(CmNvlinkSystemNt(10, 0, TRUE), CM_NVLINK_SYS_1064, "10 x64");
     CHECK_EQ(CmNvlinkSystemNt(6, 4, FALSE), CM_NVLINK_SYS_UNKNOWN,
              "an unknown version");
+    CHECK_EQ(CmNvlinkSystem9x(0x040A), CM_NVLINK_SYS_98SE, "98 SE: VMM 4.10");
+    CHECK_EQ(CmNvlinkSystem9x(0x045A), CM_NVLINK_SYS_ME, "ME: VMM 4.90");
+    CHECK_EQ(CmNvlinkSystem9x(0x1234045AUL), CM_NVLINK_SYS_ME,
+             "ME: AX alone is read");
+    CHECK_EQ(CmNvlinkSystem9x(0x0400), CM_NVLINK_SYS_UNKNOWN, "95: no row");
+    CHECK_EQ(CmNvlinkSystem9x(0), CM_NVLINK_SYS_UNKNOWN, "no version read");
 
     /* The compiled table: the readings of runs/run-45.md "45.18" only. */
     for (i = 0; i < CM_NVLINK_SYSTEMS; i++) {
