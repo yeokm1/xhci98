@@ -402,3 +402,67 @@ function Write-SelfTestPassRecord {
         if ($tmp -ne "" -and [System.IO.File]::Exists($tmp)) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
     }
 }
+
+#
+# The self-tests' git (roadmap-usb4 task 45.51): one policy, set in the
+# suite's own environment at its start, so the fixtures it builds and every
+# production git call it reaches - in this process and in every child it
+# starts - see the same git on every host, whatever the caller's system and
+# global configuration, hooks, templates, replacement refs or injected
+# variables. The digest's inherited rows are taken before this is set, and
+# leave out the names this sets or clears (Get-SelfTestGitPolicyNames).
+#
+function Get-SelfTestGitPolicyNames {
+    # Every variable the policy sets or clears: a caller's value of one of
+    # them is overridden here, so it cannot change an outcome and is no
+    # input. GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n> are cleared too.
+    return @("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_ATTR_NOSYSTEM", "GIT_TEMPLATE_DIR", "GIT_NO_REPLACE_OBJECTS",
+             "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_COUNT",
+             "GIT_CONFIG_PARAMETERS", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE",
+             "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_ATTR_SOURCE", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS",
+             "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_EXEC_PATH",
+             "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR",
+             "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+             "GIT_COMMITTER_DATE", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_TRACE", "GIT_FLUSH")
+}
+
+function Test-SelfTestGitPolicyName {
+    param([string]$Name)
+    $n = $Name.ToUpperInvariant()
+    return ((Get-SelfTestGitPolicyNames) -contains $n -or $n -match '^GIT_CONFIG_(KEY|VALUE)_\d+$')
+}
+
+function Set-SelfTestGitPolicy {
+    # Sets the policy in this process's environment and returns the folder
+    # holding its files (under -ScratchRoot, which the caller removes):
+    # no system configuration (GIT_CONFIG_NOSYSTEM, GIT_ATTR_NOSYSTEM); a
+    # global configuration of the suite's own (GIT_CONFIG_GLOBAL) holding
+    # only empty core.excludesFile and core.attributesFile, an empty
+    # core.hooksPath and init.templateDir, and signing off; an empty
+    # GIT_TEMPLATE_DIR; replacement objects off (GIT_NO_REPLACE_OBJECTS);
+    # no prompt; and every injection variable cleared (GIT_DIR, GIT_WORK_TREE,
+    # GIT_INDEX_FILE, GIT_CONFIG_COUNT and its pairs, GIT_CONFIG_PARAMETERS,
+    # the object directories and the rest of Get-SelfTestGitPolicyNames).
+    # A repository's own configuration still applies: it is the tree's.
+    param([string]$ScratchRoot)
+    $dir = Join-Path $ScratchRoot "git-policy"
+    foreach ($d in @($dir, (Join-Path $dir "hooks"), (Join-Path $dir "template"))) { [void][System.IO.Directory]::CreateDirectory($d) }
+    $ignore = Join-Path $dir "ignore"
+    $attributes = Join-Path $dir "attributes"
+    foreach ($f in @($ignore, $attributes)) { [System.IO.File]::WriteAllText($f, "") }
+    $fwd = { param($p) $p.Replace('\', '/') }
+    $config = Join-Path $dir "config"
+    [System.IO.File]::WriteAllText($config, (("[core]`n`texcludesFile = ""{0}""`n`tattributesFile = ""{1}""`n`thooksPath = ""{2}""`n" +
+        "[init]`n`ttemplateDir = ""{3}""`n[commit]`n`tgpgSign = false`n[tag]`n`tgpgSign = false`n") -f
+        (& $fwd $ignore), (& $fwd $attributes), (& $fwd (Join-Path $dir "hooks")), (& $fwd (Join-Path $dir "template"))))
+    foreach ($v in @(Get-ChildItem Env:)) {
+        if (Test-SelfTestGitPolicyName -Name $v.Name) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+    }
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1")
+    [Environment]::SetEnvironmentVariable("GIT_ATTR_NOSYSTEM", "1")
+    [Environment]::SetEnvironmentVariable("GIT_CONFIG_GLOBAL", $config)
+    [Environment]::SetEnvironmentVariable("GIT_TEMPLATE_DIR", (Join-Path $dir "template"))
+    [Environment]::SetEnvironmentVariable("GIT_NO_REPLACE_OBJECTS", "1")
+    [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0")
+    return $dir
+}

@@ -172,6 +172,12 @@ function Get-InfSelfTestDigest {
 # whose inputs hash the same skips. -Force and XHCI98_FULL_SELFTESTS=1 (a
 # cut's builds) run it all. The in-tree record of 45.30,
 # out\inf-selftest-pass.txt, is retired; a leftover one is not read.
+# The self-tests' git (task 45.51; Set-SelfTestGitPolicy, common.ps1): set
+# here, before anything runs git, so the digest's listing, the fixtures and
+# every git call this suite reaches see one git whatever the caller's
+# configuration. Its folder goes when the run ends.
+$gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
+[void](Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot)
 $digest = Get-InfSelfTestDigest -Root $repo
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
@@ -179,6 +185,7 @@ if (-not $fullAsked -and $null -ne $digest) {
     if ($null -ne $rec) {
         Write-Ok ("INF gate self-tests skipped: nothing they or the gate read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
                   $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
+        Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
         exit 0
     }
 }
@@ -2938,6 +2945,7 @@ try {
 Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("INF gate self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
+    Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
 # The record of this pass, for the next run's skip in any tree: written
@@ -2946,5 +2954,6 @@ if ($script:failures.Count -gt 0) {
 if ($null -ne $digest -and (Get-InfSelfTestDigest -Root $repo) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "inf" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
+Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Ok ("INF gate self-tests passed ({0} checks)" -f $script:checks)
 exit 0

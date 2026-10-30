@@ -71,15 +71,17 @@ function Get-PackagerSelfTestInherited {
     # environment variables they read (the scripts' $env: reads, what
     # run-host-tests.cmd and the compilers it starts read, every GIT_* and
     # every XHCI98_* but the per-run ones - the gated run's token and the
-    # switches this skip reads), set or not, and git's configuration as it
-    # applies in the tree (the fixtures' commits and tags take it). Not
-    # every variable: build-driver.cmd sets its own per run (the step
-    # clock's times, ARCH), which no case reads and which would move the
-    # digest between two identical runs.
+    # switches this skip reads, and the names the suite's git policy sets or
+    # clears, which no caller's value can reach), set or not; no git
+    # configuration row, since the policy decides it (task 45.51). Not TEMP
+    # or TMP: the suite sets both to one scratch root. Not every variable:
+    # build-driver.cmd sets its own per run (the step clock's times, ARCH),
+    # which no case reads and which would move the digest between two
+    # identical runs. Taken before the suite sets its git policy.
     param([string]$Root)
     # Local to this function: git's warnings on stderr are not errors here.
     $ErrorActionPreference = "Continue"
-    $read = @("PATH", "PATHEXT", "TEMP", "TMP", "SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "HOME", "APPDATA",
+    $read = @("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "HOME", "APPDATA",
               "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
               "MSVC6", "WDK71", "WDKROOT", "DDKROOT", "DDK98", "XHCI_HOST_TEST_DEFINES", "INCLUDE", "LIB", "CL", "_CL_",
               "LINK", "_LINK_",
@@ -93,9 +95,10 @@ function Get-PackagerSelfTestInherited {
     $rows = @()
     foreach ($n in $read) { $rows += ("env:" + $n + "=" + $(if ($vars.ContainsKey($n)) { "set:" + $vars[$n] } else { "unset" })) }
     foreach ($n in @($vars.Keys | Sort-Object)) {
-        if (($n.StartsWith("GIT_") -or $n.StartsWith("XHCI98_")) -and $skip -notcontains $n) { $rows += ("env:" + $n + "=set:" + $vars[$n]) }
+        if (($n.StartsWith("GIT_") -or $n.StartsWith("XHCI98_")) -and $skip -notcontains $n -and -not (Test-SelfTestGitPolicyName -Name $n)) {
+            $rows += ("env:" + $n + "=set:" + $vars[$n])
+        }
     }
-    $rows += ("gitconfig:" + ((& git -C $Root config --list --show-origin 2>$null) | Out-String).Trim())
     return $rows
 }
 
@@ -215,6 +218,17 @@ function Get-PackagerSelfTestDigest {
 # it all. The in-tree record of 45.48, out\packager-selftest-pass.txt, is
 # retired; a leftover one is not read.
 $inherited = @(Get-PackagerSelfTestInherited -Root $repo)
+# TEMP and TMP: one scratch root for this suite and its children, so
+# neither value is an input (only where the cases make their scratch).
+$tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+$env:TEMP = $tempRoot
+$env:TMP = $tempRoot
+# The self-tests' git (task 45.51; Set-SelfTestGitPolicy, common.ps1): set
+# here, before anything runs git, so the digest's listing, the fixtures and
+# every git call this suite reaches see one git whatever the caller's
+# configuration. Its folder goes when the run ends.
+$gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
+[void](Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot)
 $digest = Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited
 $fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
 if (-not $fullAsked -and $null -ne $digest) {
@@ -222,6 +236,7 @@ if (-not $fullAsked -and $null -ne $digest) {
     if ($null -ne $rec) {
         Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
                   $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
+        Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
         exit 0
     }
 }
@@ -6657,6 +6672,29 @@ try {
                  ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
         "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
 
+    # The suite's git policy (task 45.51) is in force: no system
+    # configuration, the suite's own global one, no inherited injection, no
+    # hooks or templates in a new repository, and the same for a child.
+    Write-Step "the suite's git: one policy for its fixtures and every git it reaches"
+    Assert-True ("$env:GIT_CONFIG_NOSYSTEM" -eq "1" -and "$env:GIT_ATTR_NOSYSTEM" -eq "1" -and "$env:GIT_NO_REPLACE_OBJECTS" -eq "1" -and
+                 "$env:GIT_CONFIG_GLOBAL" -ne "" -and $null -eq $env:GIT_DIR -and $null -eq $env:GIT_CONFIG_PARAMETERS -and
+                 $null -eq $env:GIT_CONFIG_COUNT -and $null -eq $env:GIT_INDEX_FILE) "the suite's git policy is not in force in its environment."
+    $gpEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $gpSign = ((& git config --global --get commit.gpgsign 2>$null) | Out-String).Trim()
+        $gpOrigins = ((& git config --list --show-origin --show-scope 2>$null) | Out-String)
+        $gpRepo = Join-Path $script:work "git-policy-probe"
+        & git init -q $gpRepo 2>&1 | Out-Null
+        $gpChild = ((& powershell.exe -NoProfile -Command '$env:GIT_CONFIG_NOSYSTEM + "|" + $env:GIT_CONFIG_GLOBAL' 2>$null) | Out-String).Trim()
+    } finally {
+        $ErrorActionPreference = $gpEap
+    }
+    Assert-True ($gpSign -eq "false") "the suite's global git configuration does not turn signing off."
+    Assert-True ($gpOrigins -notmatch '(?m)^system\s') ("git still reads a system configuration under the suite's policy:`n" + $gpOrigins)
+    Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $gpRepo ".git\hooks") -Force -ErrorAction SilentlyContinue).Count -eq 0) "a repository the suite makes still takes a template's hooks."
+    Assert-True ($gpChild -eq ("1|" + $env:GIT_CONFIG_GLOBAL)) "a child of the suite does not inherit its git policy."
+
     # The skip's digest: it moves when a tracked or untracked-but-not-ignored
     # file changes, appears or goes, when a built image the releaser reads
     # changes, and when a built driver appears; it stays when another
@@ -6751,6 +6789,16 @@ try {
         $dgB = @(Get-PackagerSelfTestInherited -Root $dg)
         [Environment]::SetEnvironmentVariable("NORUN", $(if ($null -eq $dgSaved["NORUN"]) { "1" } else { $null }))
         Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgB -join "|")) "digest : NORUN, which run-host-tests.cmd reads, did not reach the inherited rows."
+        # A variable the git policy sets or clears is no input (task 45.51).
+        [Environment]::SetEnvironmentVariable("NORUN", $dgSaved["NORUN"])
+        $dgB = @(Get-PackagerSelfTestInherited -Root $dg)
+        $dgSaved["GIT_CONFIG_PARAMETERS"] = [Environment]::GetEnvironmentVariable("GIT_CONFIG_PARAMETERS")
+        $dgSaved["GIT_CONFIG_KEY_0"] = [Environment]::GetEnvironmentVariable("GIT_CONFIG_KEY_0")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", "'core.probe=1'")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_0", "core.probe")
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -eq ($dgB -join "|")) "digest : a variable the suite's git policy clears reached the inherited rows."
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", $dgSaved["GIT_CONFIG_PARAMETERS"])
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_0", $dgSaved["GIT_CONFIG_KEY_0"])
     } finally {
         foreach ($n in $dgSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $dgSaved[$n]) }
     }
@@ -6763,6 +6811,7 @@ try {
 Write-Host ""
 if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
+    Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
 # The record of this pass, for the next run's skip in any tree: written
@@ -6771,5 +6820,6 @@ if ($script:failures.Count -gt 0) {
 if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
     [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
 }
+Remove-Item -LiteralPath $gitPolicyRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0
