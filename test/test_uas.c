@@ -5,7 +5,10 @@
  * configuration walk for the UAS alternate setting and its Pipe Usage
  * descriptors, the REPORT LUNS parse, the status fold, the CDB direction
  * table and the storage id strings; and task 45.23's sense fold, vital
- * product data list, medium identity comparison and wake decision.
+ * product data list, medium identity comparison and wake decision; and task
+ * 45.52's pass-through header checks for the three caller layouts, the ATA
+ * PASS-THROUGH (16) CDB, the drive's registers from sense, the outcome
+ * written back, and the SMART requests disk.sys sends.
  *
  * Every expected byte was worked by hand from the UAS 1.0 specification's
  * IU layouts (COMMAND IU section 6.2.1, SENSE IU 6.2.2, RESPONSE IU 6.2.3,
@@ -962,6 +965,781 @@ static void test_wake(void)
              UAS_WAKE_CHECK, "an epoch that wrapped is still a change");
 }
 
+/* ------------------------------------------------------------------ */
+/* Task 45.52: pass-through and SMART (design record 13 section 16).  */
+/* The header offsets are the WDK 7.1 ntddscsi.h declarations', the   */
+/* CDB and sense bytes SAT-3's and the SMART bytes ACS-3's and        */
+/* ntdddisk.h's, each worked by hand.                                 */
+/* ------------------------------------------------------------------ */
+
+static void put32(UCHAR *p, ULONG v)
+{
+    p[0] = (UCHAR)v;
+    p[1] = (UCHAR)(v >> 8);
+    p[2] = (UCHAR)(v >> 16);
+    p[3] = (UCHAR)(v >> 24);
+}
+
+static ULONG get32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* SCSI_PASS_THROUGH: Length 0, ScsiStatus 2, CdbLength 6,
+ * SenseInfoLength 7, DataIn 8, DataTransferLength 12, TimeOutValue 16,
+ * DataBufferOffset 20 (32) or 24 (64, eight bytes), SenseInfoOffset 24 or
+ * 32, Cdb 28 or 36. */
+static void spt(UCHAR *b, ULONG layout, ULONG cdbLength, ULONG senseLength,
+                ULONG dataIn, ULONG length, ULONG timeout, ULONG dataLo,
+                ULONG dataHi, ULONG senseOffset, const UCHAR *cdb)
+{
+    ULONG wide;
+
+    wide = layout == UAS_PT_LAYOUT_64;
+    memset(b, 0xCC, 1024);
+    b[0] = (UCHAR)(wide ? 56 : 44);
+    b[1] = 0;
+    b[2] = 0xEE;
+    b[6] = (UCHAR)cdbLength;
+    b[7] = (UCHAR)senseLength;
+    b[8] = (UCHAR)dataIn;
+    put32(b + 12, length);
+    put32(b + 16, timeout);
+    put32(b + (wide ? 24 : 20), dataLo);
+    if (wide) {
+        put32(b + 28, dataHi);
+    }
+    put32(b + (wide ? 32 : 24), senseOffset);
+    memcpy(b + (wide ? 36 : 28), cdb, 16);
+}
+
+/* ATA_PASS_THROUGH_EX: Length 0, AtaFlags 2, DataTransferLength 8,
+ * TimeOutValue 12, DataBufferOffset 20 (32) or 24 (64), PreviousTaskFile
+ * 24 or 32, CurrentTaskFile 32 or 40. */
+static void apt(UCHAR *b, ULONG layout, ULONG flags, ULONG length,
+                ULONG timeout, ULONG dataLo, const UCHAR *prev,
+                const UCHAR *cur)
+{
+    ULONG wide;
+
+    wide = layout == UAS_PT_LAYOUT_64;
+    memset(b, 0xCC, 1024);
+    b[0] = (UCHAR)(wide ? 48 : 40);
+    b[1] = 0;
+    b[2] = (UCHAR)flags;
+    b[3] = (UCHAR)(flags >> 8);
+    put32(b + 8, length);
+    put32(b + 12, timeout);
+    put32(b + (wide ? 24 : 20), dataLo);
+    if (wide) {
+        put32(b + 28, 0);
+    }
+    memcpy(b + (wide ? 32 : 24), prev, 8);
+    memcpy(b + (wide ? 40 : 32), cur, 8);
+}
+
+static UCHAR ptbuf[1024];
+
+static void test_pt_basics(void)
+{
+    CHECK_EQ(UasPtHeaderSize(UAS_PT_SCSI, UAS_PT_LAYOUT_32), 44,
+             "SCSI_PASS_THROUGH, and _32 on x64: 44 bytes");
+    CHECK_EQ(UasPtHeaderSize(UAS_PT_SCSI_DIRECT, UAS_PT_LAYOUT_64), 56,
+             "SCSI_PASS_THROUGH_DIRECT, 64-bit: 56 bytes");
+    CHECK_EQ(UasPtHeaderSize(UAS_PT_ATA, UAS_PT_LAYOUT_32), 40,
+             "ATA_PASS_THROUGH_EX, and _32: 40 bytes");
+    CHECK_EQ(UasPtHeaderSize(UAS_PT_ATA_DIRECT, UAS_PT_LAYOUT_64), 48,
+             "ATA_PASS_THROUGH_DIRECT, 64-bit: 48 bytes");
+    CHECK_EQ(UasPtHeaderSize(4, UAS_PT_LAYOUT_32), 0, "an unknown kind");
+    CHECK_EQ(UasPtHeaderSize(UAS_PT_SCSI, 2), 0, "an unknown layout");
+
+    CHECK_EQ(UasPtTimeout(0), 30, "0: the class default, 30 s");
+    CHECK_EQ(UasPtTimeout(1), 1, "1 s as asked");
+    CHECK_EQ(UasPtTimeout(120), 120, "120 s as asked");
+    CHECK_EQ(UasPtTimeout(121), 120, "above 120: clamped");
+    CHECK_EQ(UasPtTimeout(0xFFFFFFFFUL), 120, "the largest: clamped");
+
+    CHECK(UasPtMultiTarget(0x18), "COPY addresses other targets");
+    CHECK(UasPtMultiTarget(0x39), "COMPARE");
+    CHECK(UasPtMultiTarget(0x3A), "COPY AND VERIFY");
+    CHECK(UasPtMultiTarget(0x83), "EXTENDED COPY and the token commands");
+    CHECK(!UasPtMultiTarget(0x12), "INQUIRY is single-target");
+    CHECK(!UasPtMultiTarget(0x85), "ATA PASS-THROUGH (16) is single-target");
+}
+
+static void test_pt_scsi_plan(void)
+{
+    static const UCHAR inquiry[16] = { 0x12, 0, 0, 0, 0x24, 0 };
+    static const UCHAR none42[16] = { 0x42, 0, 0, 0, 0, 0, 0, 0, 8, 0 };
+    static const UCHAR satIn[16] = { 0x85, 0x08, 0x0E, 0, 0, 0, 1, 0, 0,
+                                     0, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR satOut[16] = { 0x85, 0x0A, 0x06, 0, 0, 0, 1, 0, 0,
+                                      0, 0, 0, 0, 0xA0, 0x30, 0 };
+    static const UCHAR satCkData[16] = { 0x85, 0x08, 0x2E, 0, 0, 0, 1, 0,
+                                         0, 0, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR satCkNone[16] = { 0x85, 0x06, 0x20, 0, 0xDA, 0, 0,
+                                         0, 0, 0, 0x4F, 0, 0xC2, 0xA0, 0xB0,
+                                         0 };
+    static const UCHAR xcopy[16] = { 0x83, 0x00 };
+    UAS_PT_PLAN p;
+
+    /* INQUIRY, 36 bytes in at 76, 32 bytes of sense at 44. */
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 0, 76, 0, 44, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_OK, "INQUIRY, data in at 76");
+    CHECK_EQ(p.HeaderSize, 44, "header 44");
+    CHECK_EQ(p.Dir, UAS_DIR_IN, "data in");
+    CHECK_EQ(p.DataOffset, 76, "data at 76");
+    CHECK_EQ(p.DataLength, 36, "36 bytes");
+    CHECK_EQ(p.SenseOffset, 44, "sense at 44");
+    CHECK_EQ(p.SenseLength, 32, "32 sense bytes");
+    CHECK_EQ(p.Timeout, 30, "timeout 0 asks for 30 s");
+    CHECK_EQ(p.CdbLength, 6, "a 6-byte CDB");
+    CHECK(bytes_eq(p.Cdb, inquiry, 6), "the CDB as sent");
+
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 43, 112, 65536,
+                       &p), UAS_PT_INVALID, "input shorter than the header");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 43, 65536,
+                       &p), UAS_PT_TOO_SMALL, "output shorter than the header");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_64, ptbuf, 112, 112, 65536,
+                       &p), UAS_PT_INVALID,
+             "a 32-bit header read as the 64-bit layout: Length differs");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 111, 65536,
+                       &p), UAS_PT_INVALID, "data in runs past the output");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 35,
+                       &p), UAS_PT_INVALID, "longer than the LUN's maximum");
+
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 0x20, 600, 0xFFFFFFF0UL, 0, 44,
+        inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_INVALID,
+             "offset FFFFFFF0h with 20h bytes: no wrap");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 600, 40, 0, 76, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_INVALID, "data over the header");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 600, 76, 0, 60, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_INVALID, "sense overlapping the data");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 600, 76, 0, 40, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_INVALID, "sense over the header");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 600, 44, 0, 80, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_OK, "sense after the data");
+    CHECK_EQ(p.Timeout, 120, "600 s clamped to 120");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 0, 44, 0, 81, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_INVALID, "sense past the output");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 253, 1, 0, 0, 0, 0, 44, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 400, 65536,
+                       &p), UAS_PT_INVALID, "253 sense bytes: over the limit");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 0, 0, 1, 0, 0, 0, 0, 0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 44, 65536,
+                       &p), UAS_PT_INVALID, "a CDB of 0 bytes");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 17, 0, 1, 0, 0, 0, 0, 0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 44, 65536,
+                       &p), UAS_PT_INVALID, "a CDB of 17 bytes");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 0, 3, 0, 0, 0, 0, 0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 44, 65536,
+                       &p), UAS_PT_INVALID, "DataIn 3");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 0, 1, 0, 0, 0, 0, 0, xcopy);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 44, 65536,
+                       &p), UAS_PT_INVALID, "EXTENDED COPY refused");
+
+    /* Direction unspecified. */
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 0, 2, 36, 0, 44, 0, 0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 80, 65536,
+                       &p), UAS_PT_OK, "INQUIRY, direction unspecified");
+    CHECK_EQ(p.Dir, UAS_DIR_IN, "the opcode table says in");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 10, 0, 2, 8, 0, 44, 0, 0, none42);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 80, 65536,
+                       &p), UAS_PT_INVALID,
+             "an opcode with no direction, with data: refused");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 0, 2, 512, 0, 44, 0, 0, satIn);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_OK, "ATA PT (16), T_DIR in");
+    CHECK_EQ(p.Dir, UAS_DIR_IN, "T_DIR 1: in");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 0, 2, 512, 0, 44, 0, 0, satOut);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 44, 65536,
+                       &p), UAS_PT_INVALID,
+             "ATA PT (16), T_DIR out, data not in the input");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 556, 44, 65536,
+                       &p), UAS_PT_OK, "the same with the data in the input");
+    CHECK_EQ(p.Dir, UAS_DIR_OUT, "T_DIR 0: out");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 0, 1, 512, 0, 44, 0, 0, satCkData);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_INVALID, "CK_COND with data: refused");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 32, 2, 0, 0, 0, 0, 44, satCkNone);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 76, 65536,
+                       &p), UAS_PT_OK, "CK_COND with no data: served");
+    CHECK_EQ(p.Dir, UAS_DIR_NONE, "no data");
+
+    /* The 64-bit layout. */
+    spt(ptbuf, UAS_PT_LAYOUT_64, 6, 32, 1, 36, 5, 100, 0, 56, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_64, ptbuf, 56, 136, 65536,
+                       &p), UAS_PT_OK, "64-bit: INQUIRY at 100");
+    CHECK_EQ(p.HeaderSize, 56, "header 56");
+    CHECK_EQ(p.DataOffset, 100, "the offset's low half");
+    CHECK_EQ(p.SenseOffset, 56, "SenseInfoOffset at 32");
+    CHECK_EQ(p.Timeout, 5, "5 s");
+    CHECK(bytes_eq(p.Cdb, inquiry, 6), "the CDB at 36");
+    spt(ptbuf, UAS_PT_LAYOUT_64, 6, 32, 1, 36, 5, 100, 1, 56, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_64, ptbuf, 56, 136, 65536,
+                       &p), UAS_PT_INVALID, "an offset above 32 bits");
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 136, 136, 65536,
+                       &p), UAS_PT_INVALID,
+             "a 64-bit header read as the 32-bit layout");
+
+    /* The direct form: a pointer, no region in the buffer. */
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 0, 1, 512, 0, 0x00401000UL, 0, 0,
+        inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI_DIRECT, UAS_PT_LAYOUT_32, ptbuf, 44, 44,
+                       65536, &p), UAS_PT_OK, "direct: a 32-bit pointer");
+    CHECK_EQ(p.DataPtrLo, 0x00401000UL, "the pointer");
+    CHECK_EQ(p.DataPtrHi, 0, "no high half");
+    spt(ptbuf, UAS_PT_LAYOUT_64, 6, 0, 1, 512, 0, 0x00401000UL, 0x7FF,
+        0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI_DIRECT, UAS_PT_LAYOUT_64, ptbuf, 56, 56,
+                       65536, &p), UAS_PT_OK, "direct: a 64-bit pointer");
+    CHECK_EQ(p.DataPtrHi, 0x7FF, "its high half at 28");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 0, 1, 512, 0, 0, 0, 0, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI_DIRECT, UAS_PT_LAYOUT_32, ptbuf, 44, 44,
+                       65536, &p), UAS_PT_INVALID, "direct: a null pointer");
+}
+
+static void test_ata_cdb(void)
+{
+    static const UCHAR zero[8] = { 0 };
+    static const UCHAR ident[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR ident0[8] = { 0x00, 0x00, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR identWant[16] = { 0x85, 0x08, 0x0E, 0, 0x00, 0, 0x01,
+                                         0, 0, 0, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR rdPrev[8] = { 0, 0, 0x12, 0x34, 0x56, 0, 0, 0 };
+    static const UCHAR rdCur[8] = { 0, 0x02, 0x78, 0x9A, 0xBC, 0x40, 0x25,
+                                    0 };
+    static const UCHAR rdWant[16] = { 0x85, 0x0D, 0x0E, 0, 0, 0, 0x02, 0x12,
+                                      0x78, 0x34, 0x9A, 0x56, 0xBC, 0x40,
+                                      0x25, 0 };
+    static const UCHAR rs[8] = { 0xDA, 0, 0, 0x4F, 0xC2, 0xA0, 0xB0, 0 };
+    static const UCHAR rsWant[16] = { 0x85, 0x06, 0x20, 0, 0xDA, 0, 0, 0, 0,
+                                      0, 0x4F, 0, 0xC2, 0xA0, 0xB0, 0 };
+    static const UCHAR save[8] = { 0xD2, 0xF1, 0, 0x4F, 0xC2, 0xA0, 0xB0, 0 };
+    static const UCHAR wr[8] = { 0, 0x01, 0, 0, 0, 0xE0, 0x30, 0 };
+    static const UCHAR rd2[8] = { 0, 0x02, 0, 0, 0, 0xE0, 0x20, 0 };
+    static const UCHAR rd0[8] = { 0, 0x00, 0, 0, 0, 0xE0, 0xC8, 0 };
+    UCHAR cdb[16];
+
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, ident, 512, 0, cdb), UAS_PT_OK,
+             "IDENTIFY DEVICE, PIO in");
+    CHECK(bytes_eq(cdb, identWant, 16),
+          "85h; PIO in (4); T_DIR, BYTE_BLOCK, T_LENGTH 2; count 1; ECh");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, ident0, 512, 0, cdb), UAS_PT_OK,
+             "IDENTIFY with count 0: its count is not applicable");
+    CHECK(bytes_eq(cdb, identWant, 16), "sent with count 1");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN | UAS_ATA_48BIT | UAS_ATA_USE_DMA,
+                       rdPrev, rdCur, 1024, 0, cdb), UAS_PT_OK,
+             "READ DMA EXT, two blocks");
+    CHECK(bytes_eq(cdb, rdWant, 16),
+          "DMA (6) and EXTEND; LBA bytes 31:24, 7:0 ... 47:40, 23:16");
+    CHECK_EQ(UasAtaCdb(0, zero, rs, 0, 1, cdb), UAS_PT_OK,
+             "SMART RETURN STATUS, non-data, CK_COND");
+    CHECK(bytes_eq(cdb, rsWant, 16), "non-data (3), CK_COND, no length");
+    CHECK_EQ(UasAtaCdb(0, zero, save, 0, 1, cdb), UAS_PT_OK,
+             "AUTOSAVE: a non-data count register is a parameter");
+    CHECK_EQ(cdb[6], 0xF1, "F1h sent unchanged");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_OUT, zero, wr, 512, 0, cdb), UAS_PT_OK,
+             "WRITE SECTORS, PIO out");
+    CHECK_EQ(cdb[1], 0x0A, "PIO out (5)");
+    CHECK_EQ(cdb[2], 0x06, "no T_DIR; BYTE_BLOCK and T_LENGTH 2");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_OUT, zero, wr, 512, 1, cdb), UAS_PT_OK,
+             "CK_COND with data is not set");
+    CHECK_EQ(cdb[2], 0x06, "no CK_COND with data");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, rd2, 512, 0, cdb),
+             UAS_PT_INVALID, "count 2 with 512 bytes");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, rd2, 1025, 0, cdb),
+             UAS_PT_INVALID, "a length not a multiple of 512");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, rd0, 512, 0, cdb),
+             UAS_PT_INVALID, "count 0 with data, not a count-N/A command");
+}
+
+static void test_ata_plan(void)
+{
+    static const UCHAR zero[8] = { 0 };
+    static const UCHAR ident[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR power[8] = { 0, 0, 0, 0, 0, 0xA0, 0xE5, 0 };
+    UAS_PT_PLAN p;
+
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN, 512, 0, 40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 552, 65536,
+                       &p), UAS_PT_OK, "IOCTL_ATA_PASS_THROUGH IDENTIFY");
+    CHECK_EQ(p.HeaderSize, 40, "header 40");
+    CHECK_EQ(p.Dir, UAS_DIR_IN, "in");
+    CHECK_EQ(p.DataOffset, 40, "data at 40");
+    CHECK_EQ(p.CdbLength, 16, "ATA PASS-THROUGH (16)");
+    CHECK_EQ(p.Cdb[14], 0xEC, "the command");
+    CHECK(bytes_eq(p.Cur, ident, 8), "the task file kept");
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 551, 65536,
+                       &p), UAS_PT_INVALID, "data past the output");
+    apt(ptbuf, UAS_PT_LAYOUT_32, 0x20 | UAS_ATA_DATA_IN, 512, 0, 40, zero,
+        ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 552, 65536,
+                       &p), UAS_PT_INVALID, "an unknown flag");
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN | UAS_ATA_DATA_OUT, 512, 0,
+        40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 552, 552, 65536,
+                       &p), UAS_PT_INVALID, "both directions");
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN, 0, 0, 40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 40, 65536,
+                       &p), UAS_PT_INVALID, "a direction and no length");
+    apt(ptbuf, UAS_PT_LAYOUT_32, 0, 512, 0, 40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 552, 65536,
+                       &p), UAS_PT_INVALID, "a length and no direction");
+
+    apt(ptbuf, UAS_PT_LAYOUT_64, 0, 0, 7, 0, zero, power);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_64, ptbuf, 48, 48, 65536,
+                       &p), UAS_PT_OK, "64-bit CHECK POWER MODE, no data");
+    CHECK_EQ(p.HeaderSize, 48, "header 48");
+    CHECK_EQ(p.Cdb[2], 0x20, "non-data: CK_COND for the registers");
+    CHECK_EQ(p.Cdb[14], 0xE5, "CurrentTaskFile at 40");
+    CHECK_EQ(p.Timeout, 7, "7 s");
+
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN, 512, 0, 0x00402000UL, zero,
+        ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA_DIRECT, UAS_PT_LAYOUT_32, ptbuf, 40, 40,
+                       65536, &p), UAS_PT_OK,
+             "IOCTL_ATA_PASS_THROUGH_DIRECT: a pointer at 20");
+    CHECK_EQ(p.DataPtrLo, 0x00402000UL, "the pointer");
+}
+
+static void test_ata_regs(void)
+{
+    static const UCHAR desc[22] = { 0x72, 0x01, 0x00, 0x1D, 0, 0, 0, 14,
+                                    0x09, 0x0C, 0x01, 0x00, 0x00, 0x01,
+                                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                    0x40, 0x50 };
+    static const UCHAR descCur[8] = { 0x00, 0x01, 0x22, 0x44, 0x66, 0x40,
+                                      0x50, 0 };
+    static const UCHAR descPrev[8] = { 0, 0x00, 0x11, 0x33, 0x55, 0, 0, 0 };
+    static const UCHAR fixed[18] = { 0x70, 0, 0x0B, 0x04, 0x51, 0xA0, 0x00,
+                                     10, 0x00, 0x00, 0x4F, 0xC2, 0x00,
+                                     0x1D, 0, 0, 0, 0 };
+    static const UCHAR fixedCur[8] = { 0x04, 0x00, 0x00, 0x4F, 0xC2, 0xA0,
+                                       0x51, 0 };
+    static const UCHAR zero8[8] = { 0 };
+    UCHAR s[22];
+    UCHAR prev[8];
+    UCHAR cur[8];
+
+    CHECK_EQ(UasAtaRegsFromSense(desc, 22, prev, cur), UAS_ATAREG_OK,
+             "descriptor format, ATA Status Return descriptor");
+    CHECK(bytes_eq(cur, descCur, 8), "ERROR, COUNT, LBA low/mid/high, DEVICE,"
+          " STATUS");
+    CHECK(bytes_eq(prev, descPrev, 8), "EXTEND: the upper bytes");
+    memcpy(s, desc, 22);
+    s[10] = 0;
+    CHECK_EQ(UasAtaRegsFromSense(s, 22, prev, cur), UAS_ATAREG_OK,
+             "EXTEND clear");
+    CHECK(bytes_eq(prev, zero8, 8), "no upper bytes taken");
+    s[8] = 0x02;
+    CHECK_EQ(UasAtaRegsFromSense(s, 22, prev, cur), UAS_ATAREG_NONE,
+             "another descriptor only");
+    CHECK_EQ(UasAtaRegsFromSense(desc, 21, prev, cur), UAS_ATAREG_NONE,
+             "the descriptor cut short");
+
+    CHECK_EQ(UasAtaRegsFromSense(fixed, 18, prev, cur), UAS_ATAREG_OK,
+             "fixed format, 00h/1Dh");
+    CHECK(bytes_eq(cur, fixedCur, 8), "INFORMATION and COMMAND-SPECIFIC");
+    memcpy(s, fixed, 18);
+    s[8] = 0x80 | 0x40;
+    CHECK_EQ(UasAtaRegsFromSense(s, 18, prev, cur), UAS_ATAREG_PARTIAL,
+             "fixed format, an upper count byte non-zero");
+    s[8] = 0x80 | 0x20;
+    CHECK_EQ(UasAtaRegsFromSense(s, 18, prev, cur), UAS_ATAREG_PARTIAL,
+             "fixed format, an upper LBA byte non-zero");
+    memcpy(s, fixed, 18);
+    s[12] = 0x20;
+    s[13] = 0x00;
+    CHECK_EQ(UasAtaRegsFromSense(s, 18, prev, cur), UAS_ATAREG_NONE,
+             "fixed format, INVALID COMMAND OPERATION CODE: no registers");
+    CHECK_EQ(UasAtaRegsFromSense(fixed, 13, prev, cur), UAS_ATAREG_NONE,
+             "fixed format too short for its ASC/ASCQ");
+    CHECK_EQ(UasAtaRegsFromSense(NULL, 0, prev, cur), UAS_ATAREG_NONE,
+             "no sense");
+}
+
+static void test_pt_result(void)
+{
+    static const UCHAR inquiry[16] = { 0x12, 0, 0, 0, 0x24, 0 };
+    static const UCHAR zero[8] = { 0 };
+    static const UCHAR ident[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR identBack[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0x50, 0 };
+    static const UCHAR identNoRegs[8] = { 0x04, 0x01, 0, 0, 0, 0xA0, 0x51,
+                                          0 };
+    static const UCHAR rs[8] = { 0xDA, 0, 0, 0x4F, 0xC2, 0xA0, 0xB0, 0 };
+    static const UCHAR rsBack[8] = { 0x00, 0x00, 0x00, 0xF4, 0x2C, 0xA0, 0x50,
+                                     0 };
+    static const UCHAR noRegsBack[8] = { 0x04, 0, 0, 0x4F, 0xC2, 0xA0, 0x51,
+                                         0 };
+    static const UCHAR illegal[18] = { 0x70, 0, 0x05, 0, 0, 0, 0, 10, 0, 0,
+                                       0, 0, 0x20, 0x00, 0, 0, 0, 0 };
+    static const UCHAR rsSense[18] = { 0x70, 0, 0x01, 0x00, 0x50, 0xA0, 0x00,
+                                       10, 0x00, 0x00, 0xF4, 0x2C, 0x00, 0x1D,
+                                       0, 0, 0, 0 };
+    UAS_PT_PLAN p;
+    ULONG info;
+
+    spt(ptbuf, UAS_PT_LAYOUT_32, 6, 32, 1, 36, 0, 76, 0, 44, inquiry);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 112, 65536,
+                       &p), UAS_PT_OK, "plan");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_SUCCESS, 0, 36, NULL, 0,
+                         &info), UAS_PTR_SUCCESS, "GOOD");
+    CHECK_EQ(ptbuf[2], 0, "ScsiStatus GOOD");
+    CHECK_EQ(ptbuf[7], 0, "no sense");
+    CHECK_EQ(get32(ptbuf + 12), 36, "36 bytes moved");
+    CHECK_EQ(info, 112, "through the end of the data");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_DATA_OVERRUN, 0, 20, NULL, 0,
+                         &info), UAS_PTR_SUCCESS, "a short transfer");
+    CHECK_EQ(get32(ptbuf + 12), 20, "20 bytes moved");
+    CHECK_EQ(info, 96, "through the bytes moved");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_ERROR, 2, 0, illegal, 18,
+                         &info), UAS_PTR_SUCCESS,
+             "CHECK CONDITION: the drive answered");
+    CHECK_EQ(ptbuf[2], 2, "ScsiStatus CHECK CONDITION");
+    CHECK_EQ(ptbuf[7], 18, "18 sense bytes");
+    CHECK(bytes_eq(ptbuf + 44, illegal, 18), "the sense at its offset");
+    CHECK_EQ(info, 62, "through the sense");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_BUSY, UAS_SCSI_BUSY, 0, NULL,
+                         0, &info), UAS_PTR_SUCCESS, "BUSY from the drive");
+    CHECK_EQ(ptbuf[2], 8, "ScsiStatus BUSY");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_BUSY,
+                         UAS_SCSI_TASK_SET_FULL, 0, NULL, 0, &info),
+             UAS_PTR_SUCCESS, "TASK SET FULL from the drive");
+    CHECK_EQ(ptbuf[2], 0x28, "ScsiStatus TASK SET FULL");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_BUSY, 0, 0, NULL, 0, &info),
+             UAS_PTR_BUSY, "this driver's own BUSY");
+    CHECK_EQ(info, 0, "nothing returned");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_TIMEOUT, 0, 0, NULL, 0,
+                         &info), UAS_PTR_TIMEOUT, "TIMEOUT");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_NO_DEVICE, 0, 0, NULL, 0,
+                         &info), UAS_PTR_NO_DEVICE, "NO_DEVICE");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_INVALID_REQUEST, 0, 0, NULL,
+                         0, &info), UAS_PTR_INVALID, "INVALID_REQUEST");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, UAS_SRB_ABORTED, 0, 0, NULL, 0,
+                         &info), UAS_PTR_IO_ERROR, "ABORTED");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 112, 0x16, 0, 0, NULL, 0, &info),
+             UAS_PTR_IO_ERROR, "REQUEST_FLUSHED");
+
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN, 512, 0, 40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 552, 65536,
+                       &p), UAS_PT_OK, "ATA plan");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 552, UAS_SRB_SUCCESS, 0, 512, NULL, 0,
+                         &info), UAS_PTR_SUCCESS, "IDENTIFY GOOD");
+    CHECK(bytes_eq(ptbuf + 32, identBack, 8),
+          "Status 50h and Error 0 written by the driver");
+    CHECK(bytes_eq(ptbuf + 24, zero, 8), "previous registers as sent");
+    CHECK_EQ(get32(ptbuf + 8), 512, "512 bytes moved");
+    CHECK_EQ(info, 552, "the header and the data");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 552, UAS_SRB_ERROR, 2, 0, illegal, 18,
+                         &info), UAS_PTR_SUCCESS,
+             "a bridge with no SAT: the drive answered");
+    CHECK(bytes_eq(ptbuf + 32, identNoRegs, 8),
+          "the registers as sent, Error 04h, Status 51h");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 552, UAS_SRB_BUSY, UAS_SCSI_BUSY, 0, NULL,
+                         0, &info), UAS_PTR_BUSY,
+             "BUSY has no ATA form: the IOCTL fails");
+
+    apt(ptbuf, UAS_PT_LAYOUT_32, 0, 0, 0, 0, zero, rs);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 40, 65536,
+                       &p), UAS_PT_OK, "RETURN STATUS plan");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 40, UAS_SRB_ERROR, 2, 0, rsSense, 18,
+                         &info), UAS_PTR_SUCCESS, "CK_COND's CHECK CONDITION");
+    CHECK(bytes_eq(ptbuf + 32, rsBack, 8),
+          "the registers from fixed sense: F4h/2Ch");
+    CHECK_EQ(info, 40, "the header alone");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 40, UAS_SRB_ERROR, 2, 0, illegal, 18,
+                         &info), UAS_PTR_SUCCESS, "refused by the bridge");
+    CHECK(bytes_eq(ptbuf + 32, noRegsBack, 8),
+          "the registers as sent, Error 04h, Status 51h");
+}
+
+static void test_pt_partial48(void)
+{
+    static const UCHAR prev[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    static const UCHAR cur[8] = { 0, 0, 0, 0, 0, 0x40, 0x27, 0 };
+    static const UCHAR partial[18] = { 0x70, 0, 0x01, 0x00, 0x50, 0x40, 0xFF,
+                                       10, 0xA0, 0xFF, 0xFF, 0xFF, 0x00, 0x1D,
+                                       0, 0, 0, 0 };
+    UAS_PT_PLAN p;
+    ULONG info;
+
+    /* READ NATIVE MAX ADDRESS EXT: 48-bit, non-data. */
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_48BIT, 0, 0, 0, prev, cur);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 40, 65536,
+                       &p), UAS_PT_OK, "48-bit plan");
+    CHECK_EQ(p.Cdb[1], 0x07, "non-data (3) with EXTEND");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 40, UAS_SRB_ERROR, 2, 0, partial, 18,
+                         &info), UAS_PTR_IO_ERROR,
+             "fixed format cannot carry the upper LBA: failed, not wrong");
+    CHECK_EQ(info, 0, "nothing returned");
+}
+
+static void test_sioc(void)
+{
+    UCHAR b[64];
+    ULONG control;
+    ULONG timeout;
+    ULONG capacity;
+
+    memset(b, 0, sizeof(b));
+    put32(b, 28);
+    memcpy(b + 4, "SCSIDISK", 8);
+    put32(b + 12, 2);
+    put32(b + 16, UAS_SIOC_IDENTIFY);
+    put32(b + 24, 529);
+    CHECK_EQ(UasSiocCheck(b, 60, 557, &control, &timeout, &capacity),
+             UAS_PT_OK, "disk.sys's RCV shape: 60 in, 557 out, Length 529");
+    CHECK_EQ(control, UAS_SIOC_IDENTIFY, "control code");
+    CHECK_EQ(timeout, 2, "timeout");
+    CHECK_EQ(capacity, 529, "capacity, more than the input carries");
+    put32(b + 24, 530);
+    CHECK_EQ(UasSiocCheck(b, 60, 557, &control, &timeout, &capacity),
+             UAS_PT_INVALID, "Length past the buffer");
+    put32(b + 24, 24);
+    put32(b + 16, UAS_SIOC_SMART_VERSION);
+    CHECK_EQ(UasSiocCheck(b, 52, 52, &control, &timeout, &capacity),
+             UAS_PT_OK, "SMART_VERSION: 52 in and out, Length 24");
+    put32(b, 32);
+    CHECK_EQ(UasSiocCheck(b, 52, 52, &control, &timeout, &capacity),
+             UAS_PT_INVALID, "HeaderLength not 28");
+    put32(b, 28);
+    CHECK_EQ(UasSiocCheck(b, 52, 27, &control, &timeout, &capacity),
+             UAS_PT_TOO_SMALL, "output shorter than the envelope");
+    CHECK_EQ(UasSiocCheck(b, 27, 52, &control, &timeout, &capacity),
+             UAS_PT_UNKNOWN, "input shorter than the envelope");
+    b[11] = 'X';
+    CHECK_EQ(UasSiocCheck(b, 52, 52, &control, &timeout, &capacity),
+             UAS_PT_UNKNOWN, "another signature: not this driver's");
+    b[11] = 'K';
+    put32(b + 16, 0x1B050DUL);
+    CHECK_EQ(UasSiocCheck(b, 52, 52, &control, &timeout, &capacity),
+             UAS_PT_UNKNOWN, "a control code past WRITE_SMART_LOG");
+    put32(b + 16, 0x1B04FFUL);
+    CHECK_EQ(UasSiocCheck(b, 52, 52, &control, &timeout, &capacity),
+             UAS_PT_UNKNOWN, "a control code before SMART_VERSION");
+}
+
+/* SENDCMDINPARAMS: cBufferSize, IDEREGS (Features, SectorCount,
+ * SectorNumber, CylLow, CylHigh, DriveHead, Command, Reserved), then
+ * bDriveNumber, three reserved, four reserved ULONGs: 32 bytes. */
+static void smartIn(UCHAR *b, UCHAR feature, UCHAR count, UCHAR number,
+                    UCHAR cylLow, UCHAR cylHigh, UCHAR command)
+{
+    memset(b, 0, 32);
+    put32(b, 512);
+    b[4] = feature;
+    b[5] = count;
+    b[6] = number;
+    b[7] = cylLow;
+    b[8] = cylHigh;
+    b[9] = 0xA0;
+    b[10] = command;
+}
+
+static void test_smart_plan(void)
+{
+    static const UCHAR readWant[16] = { 0x85, 0x08, 0x0E, 0, 0xD0, 0, 0x01,
+                                        0, 0x01, 0, 0x4F, 0, 0xC2, 0xA0,
+                                        0xB0, 0 };
+    static const UCHAR rsWant[16] = { 0x85, 0x06, 0x20, 0, 0xDA, 0, 0x00, 0,
+                                      0x01, 0, 0x4F, 0, 0xC2, 0xA0, 0xB0, 0 };
+    static const UCHAR identWant[16] = { 0x85, 0x08, 0x0E, 0, 0, 0, 0x01, 0,
+                                         0, 0, 0, 0, 0, 0xA0, 0xEC, 0 };
+    UCHAR in[32];
+    UAS_SMART_PLAN p;
+
+    smartIn(in, 0xD0, 1, 1, 0x00, 0x00, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 32, 529, &p),
+             UAS_SMART_NO_ERROR, "READ_SMART_ATTRIBS");
+    CHECK_EQ(p.DataLength, 512, "512 bytes in");
+    CHECK_EQ(p.OutLength, 528, "SENDCMDOUTPARAMS header and the data");
+    CHECK(bytes_eq(p.Cdb, readWant, 16),
+          "PIO in, count 1, LBA Mid/High forced to 4Fh/C2h");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 32, 527, &p),
+             UAS_SMART_INVALID_BUFFER, "no room for the reply");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 31, 529, &p),
+             UAS_SMART_INVALID_BUFFER, "a payload shorter than 32");
+    smartIn(in, 0xD1, 1, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 32, 529, &p),
+             UAS_SMART_INVALID_COMMAND,
+             "the registers disagree with the control code");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_THRESHOLDS, in, 32, 529, &p),
+             UAS_SMART_NO_ERROR, "READ_SMART_THRESHOLDS");
+    CHECK_EQ(p.Cdb[4], 0xD1, "feature D1h");
+
+    smartIn(in, 0xDA, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_RETURN_STATUS, in, 32, 41, &p),
+             UAS_SMART_NO_ERROR, "RETURN_STATUS in disk.sys's 41 bytes");
+    CHECK(p.ReturnRegs, "IDEREGS back");
+    CHECK_EQ(p.OutLength, 24, "16 and 8");
+    CHECK(bytes_eq(p.Cdb, rsWant, 16), "non-data, CK_COND");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_RETURN_STATUS, in, 32, 23, &p),
+             UAS_SMART_INVALID_BUFFER, "no room for the registers");
+
+    smartIn(in, 0xD8, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_ENABLE_SMART, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "ENABLE_SMART in disk.sys's 33 bytes");
+    CHECK_EQ(p.OutLength, 16, "the header alone");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_ENABLE_SMART, in, 32, 16, &p),
+             UAS_SMART_NO_ERROR, "16 bytes are enough");
+    smartIn(in, 0xD2, 0xF1, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_AUTOSAVE, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "AUTOSAVE on");
+    CHECK_EQ(p.Cdb[6], 0xF1, "its count F1h");
+    smartIn(in, 0xD3, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_SAVE_ATTRIBS, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "SAVE ATTRIBUTE VALUES");
+    smartIn(in, 0xD4, 0, 0x01, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_OFFLINE_DIAGS, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "EXECUTE OFF-LINE IMMEDIATE");
+    CHECK_EQ(p.Cdb[8], 0x01, "subcommand in LBA Low");
+    smartIn(in, 0xDB, 0xF8, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_AUTO_OFFLINE, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "AUTOMATIC OFF-LINE");
+    smartIn(in, 0xD9, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_DISABLE_SMART, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "DISABLE_SMART");
+
+    smartIn(in, 0x00, 0, 0, 0, 0, 0xEC);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_IDENTIFY, in, 32, 529, &p),
+             UAS_SMART_NO_ERROR, "IDENTIFY");
+    CHECK(bytes_eq(p.Cdb, identWant, 16),
+          "IDENTIFY DEVICE, count 1, cylinders as sent");
+    smartIn(in, 0x00, 0, 0, 0, 0, 0xA1);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_IDENTIFY, in, 32, 529, &p),
+             UAS_SMART_INVALID_COMMAND, "ATAPI identify refused");
+
+    smartIn(in, 0xD5, 2, 0xE0, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_LOG, in, 32, 1040, &p),
+             UAS_SMART_NO_ERROR, "READ LOG, two blocks");
+    CHECK_EQ(p.DataLength, 1024, "1024 bytes");
+    CHECK_EQ(p.Cdb[6], 2, "count 2");
+    CHECK_EQ(p.Cdb[8], 0xE0, "the log address in LBA Low");
+    smartIn(in, 0xD5, 0, 0xE0, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_LOG, in, 32, 1040, &p),
+             UAS_SMART_INVALID_COMMAND, "READ LOG of 0 blocks");
+    smartIn(in, 0xD6, 1, 0xE0, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_WRITE_LOG, in, 32, 1040, &p),
+             UAS_SMART_INVALID_COMMAND, "WRITE LOG refused");
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_SMART_VERSION, in, 32, 1040, &p),
+             UAS_SMART_INVALID_COMMAND, "SMART_VERSION is not planned here");
+}
+
+static void test_smart_result(void)
+{
+    static const UCHAR rsOk[18] = { 0x70, 0, 0x01, 0x00, 0x50, 0xA0, 0x00,
+                                    10, 0x00, 0x01, 0x4F, 0xC2, 0x00, 0x1D,
+                                    0, 0, 0, 0 };
+    static const UCHAR rsBad[18] = { 0x70, 0, 0x01, 0x00, 0x50, 0xA0, 0x00,
+                                     10, 0x00, 0x01, 0xF4, 0x2C, 0x00, 0x1D,
+                                     0, 0, 0, 0 };
+    static const UCHAR abrt[18] = { 0x70, 0, 0x0B, 0x04, 0x51, 0xA0, 0x00,
+                                    10, 0x00, 0x01, 0x4F, 0xC2, 0x00, 0x1D,
+                                    0, 0, 0, 0 };
+    static const UCHAR fault[18] = { 0x70, 0, 0x0B, 0x00, 0x60, 0xA0, 0x00,
+                                     10, 0x00, 0x01, 0x4F, 0xC2, 0x00, 0x1D,
+                                     0, 0, 0, 0 };
+    static const UCHAR illegal[18] = { 0x70, 0, 0x05, 0, 0, 0, 0, 10, 0, 0,
+                                       0, 0, 0x20, 0x00, 0, 0, 0, 0 };
+    static const UCHAR okRegs[8] = { 0x00, 0x00, 0x01, 0x4F, 0xC2, 0xA0, 0x50,
+                                     0 };
+    UCHAR in[32];
+    UCHAR data[512];
+    UCHAR out[600];
+    UAS_SMART_PLAN p;
+    ULONG bytes;
+    ULONG err;
+    ULONG i;
+
+    for (i = 0; i < 512; i++) {
+        data[i] = (UCHAR)(i * 7);
+    }
+    smartIn(in, 0xD0, 1, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 32, 529, &p),
+             UAS_SMART_NO_ERROR, "plan");
+    memset(out, 0xCC, sizeof(out));
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_SUCCESS, 0, 512, data, NULL,
+                            0, &bytes, &err), UAS_PTR_SUCCESS,
+             "READ DATA GOOD");
+    CHECK_EQ(bytes, 528, "header and data");
+    CHECK_EQ(get32(out), 512, "cBufferSize 512");
+    CHECK_EQ(out[4], 0, "bDriverError 0");
+    CHECK_EQ(out[5], 0, "bIDEError 0");
+    CHECK_EQ(out[6] | out[7] | out[8] | out[15], 0, "reserved bytes 0");
+    CHECK(bytes_eq(out + 16, data, 512), "the data");
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_DATA_OVERRUN, 0, 100, data,
+                            NULL, 0, &bytes, &err), UAS_PTR_IO_ERROR,
+             "a short READ DATA fails");
+    CHECK_EQ(err, UAS_SMART_IDE_ERROR, "SMART_IDE_ERROR");
+    CHECK_EQ(bytes, 16, "the header alone");
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_ERROR, 2, 0, data, illegal,
+                            18, &bytes, &err), UAS_PTR_NOT_SUPPORTED,
+             "a bridge with no SAT");
+    CHECK_EQ(err, UAS_SMART_NOT_SUPPORTED, "SMART_NOT_SUPPORTED");
+    CHECK_EQ(out[4], 9, "in bDriverError");
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_ERROR, 2, 0, data, abrt, 18,
+                            &bytes, &err), UAS_PTR_IO_ERROR,
+             "the drive aborted READ DATA");
+    CHECK_EQ(out[5], 0x04, "bIDEError: ABRT");
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_TIMEOUT, 0, 0, data, NULL,
+                            0, &bytes, &err), UAS_PTR_TIMEOUT, "TIMEOUT");
+    CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_BUSY, UAS_SCSI_BUSY, 0,
+                            data, NULL, 0, &bytes, &err), UAS_PTR_BUSY,
+             "BUSY fails the request");
+
+    smartIn(in, 0xDA, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_RETURN_STATUS, in, 32, 41, &p),
+             UAS_SMART_NO_ERROR, "plan");
+    memset(out, 0xCC, sizeof(out));
+    CHECK_EQ(UasSmartResult(&p, out, 41, UAS_SRB_ERROR, 2, 0, NULL, rsOk, 18,
+                            &bytes, &err), UAS_PTR_SUCCESS,
+             "RETURN STATUS: no threshold exceeded");
+    CHECK_EQ(bytes, 24, "header and IDEREGS");
+    CHECK_EQ(get32(out), 8, "cBufferSize 8");
+    CHECK(bytes_eq(out + 16, okRegs, 8), "IDEREGS: 4Fh/C2h, Status 50h");
+    CHECK_EQ(UasSmartResult(&p, out, 41, UAS_SRB_ERROR, 2, 0, NULL, rsBad, 18,
+                            &bytes, &err), UAS_PTR_SUCCESS,
+             "threshold exceeded is an answer, not an error");
+    CHECK_EQ(out[16 + 3], 0xF4, "LBA Mid F4h");
+    CHECK_EQ(out[16 + 4], 0x2C, "LBA High 2Ch");
+    CHECK_EQ(UasSmartResult(&p, out, 41, UAS_SRB_SUCCESS, 0, 0, NULL, NULL, 0,
+                            &bytes, &err), UAS_PTR_IO_ERROR,
+             "GOOD without registers: no status to report");
+    CHECK_EQ(UasSmartResult(&p, out, 41, UAS_SRB_ERROR, 2, 0, NULL, fault, 18,
+                            &bytes, &err), UAS_PTR_IO_ERROR,
+             "DF with ERR clear is a failure");
+    CHECK_EQ(err, UAS_SMART_IDE_ERROR, "SMART_IDE_ERROR");
+    CHECK_EQ(out[5], 0x00, "bIDEError: the Error register, 0");
+
+    smartIn(in, 0xD8, 0, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_ENABLE_SMART, in, 32, 33, &p),
+             UAS_SMART_NO_ERROR, "plan");
+    CHECK_EQ(UasSmartResult(&p, out, 33, UAS_SRB_ERROR, 2, 0, NULL, rsOk, 18,
+                            &bytes, &err), UAS_PTR_SUCCESS, "ENABLE");
+    CHECK_EQ(bytes, 16, "no register block");
+    CHECK_EQ(get32(out), 0, "cBufferSize 0");
+
+    UasSmartVersion(out);
+    CHECK_EQ(out[0], 1, "bVersion 1");
+    CHECK_EQ(out[1], 1, "bRevision 1");
+    CHECK_EQ(out[2], 0, "bReserved");
+    CHECK_EQ(out[3], 1, "bIDEDeviceMap 1");
+    CHECK_EQ(get32(out + 4), 5, "CAP_ATA_ID_CMD | CAP_SMART_CMD");
+    for (i = 8; i < 24; i++) {
+        CHECK_EQ(out[i], 0, "dwReserved 0");
+    }
+}
+
 int main(void)
 {
     test_tags();
@@ -981,6 +1759,16 @@ int main(void)
     test_vpd_list();
     test_id_match();
     test_wake();
+    test_pt_basics();
+    test_pt_scsi_plan();
+    test_ata_cdb();
+    test_ata_plan();
+    test_ata_regs();
+    test_pt_result();
+    test_pt_partial48();
+    test_sioc();
+    test_smart_plan();
+    test_smart_result();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

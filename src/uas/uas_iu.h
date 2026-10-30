@@ -340,4 +340,222 @@ ULONG UasWakeDecide(ULONG busKnown, ULONG withdrawOk, ULONG declareTried,
                     ULONG queryOk, ULONG state, ULONG epoch, ULONG verified,
                     ULONG pastDeadline);
 
+/*
+ * Task 45.52 (design record 13 section 16): a program's SCSI and ATA
+ * pass-through and the SMART requests the disk class driver sends down,
+ * served by the LUN's PDO through the engine.
+ *
+ * The request headers are read and written at byte offsets, one layout
+ * per pointer size, so one host build checks all three callers: the x86
+ * driver's (UAS_PT_LAYOUT_32), a 64-bit process on the amd64 driver
+ * (UAS_PT_LAYOUT_64) and a 32-bit process there (WOW64, the ..._32
+ * structures: UAS_PT_LAYOUT_32 again). Offsets and sizes are the WDK 7.1
+ * declarations' (ntddscsi.h); the driver asserts them against the DDK
+ * structures where its headers carry them.
+ *
+ *   SCSI_PASS_THROUGH(_DIRECT)  32: 44 bytes, DataBufferOffset or
+ *                               DataBuffer at 20 (4), SenseInfoOffset 24,
+ *                               Cdb 28.  64: 56, at 24 (8), 32, Cdb 36.
+ *   ATA_PASS_THROUGH_EX(_DIRECT) 32: 40, DataBufferOffset or DataBuffer
+ *                               at 20 (4), PreviousTaskFile 24,
+ *                               CurrentTaskFile 32.  64: 48, at 24 (8),
+ *                               32, 40.
+ */
+#define UAS_PT_LAYOUT_32            0UL
+#define UAS_PT_LAYOUT_64            1UL
+
+#define UAS_PT_SCSI                 0UL /* IOCTL_SCSI_PASS_THROUGH        */
+#define UAS_PT_SCSI_DIRECT          1UL /* IOCTL_SCSI_PASS_THROUGH_DIRECT */
+#define UAS_PT_ATA                  2UL /* IOCTL_ATA_PASS_THROUGH         */
+#define UAS_PT_ATA_DIRECT           3UL /* IOCTL_ATA_PASS_THROUGH_DIRECT  */
+
+/* The checks' answers; the driver maps them to NTSTATUS. */
+#define UAS_PT_OK                   0UL
+#define UAS_PT_INVALID              1UL /* STATUS_INVALID_PARAMETER       */
+#define UAS_PT_TOO_SMALL            2UL /* STATUS_BUFFER_TOO_SMALL        */
+#define UAS_PT_UNKNOWN              3UL /* not this driver's: answered as
+                                         * an unknown IOCTL               */
+
+#define UAS_PT_SENSE_MAX            UAS_SENSE_MAX
+#define UAS_PT_TIMEOUT_DEFAULT      30UL    /* seconds: 0 asks for this   */
+#define UAS_PT_TIMEOUT_MAX          120UL   /* seconds: the clamp         */
+
+/* ATA_PASS_THROUGH_EX AtaFlags (ntddscsi.h) the driver accepts. */
+#define UAS_ATA_DRDY_REQUIRED       0x01UL
+#define UAS_ATA_DATA_IN             0x02UL
+#define UAS_ATA_DATA_OUT            0x04UL
+#define UAS_ATA_48BIT               0x08UL
+#define UAS_ATA_USE_DMA             0x10UL
+
+/*
+ * One request as the checks planned it. For the buffered forms the data
+ * and sense regions are offsets in the system buffer; for the direct
+ * forms DataPtrLo/Hi is the caller's pointer, which the driver locks.
+ * The ATA forms keep the task files they sent, for the registers back.
+ */
+typedef struct _UAS_PT_PLAN {
+    ULONG Kind;
+    ULONG Layout;
+    ULONG HeaderSize;
+    ULONG Dir;                      /* UAS_DIR_*                          */
+    ULONG DataOffset;
+    ULONG DataLength;
+    ULONG DataPtrLo;
+    ULONG DataPtrHi;
+    ULONG SenseOffset;
+    ULONG SenseLength;
+    ULONG Timeout;                  /* seconds, clamped                   */
+    ULONG CdbLength;
+    UCHAR Cdb[16];
+    UCHAR Prev[8];                  /* ATA: as sent                       */
+    UCHAR Cur[8];
+    ULONG Extend;                   /* ATA: 48-bit                        */
+} UAS_PT_PLAN, *PUAS_PT_PLAN;
+
+ULONG UasPtHeaderSize(ULONG kind, ULONG layout);
+
+/*
+ * Checks a request header in buf (the system buffer: inLength bytes of the
+ * caller's input, max(inLength, outLength) long) and plans it, or refuses
+ * it. maxTransfer is the LUN's MaximumTransferLength.
+ */
+ULONG UasPtPlan(ULONG kind, ULONG layout, const UCHAR *buf, ULONG inLength,
+                ULONG outLength, ULONG maxTransfer, PUAS_PT_PLAN plan);
+
+/* The timeout clamp: 0 is the default, the rest at most the maximum. */
+ULONG UasPtTimeout(ULONG seconds);
+
+/* 1 for a command that addresses other targets (COPY, COMPARE, COPY AND
+ * VERIFY, every service action of 83h), which pass-through refuses. */
+ULONG UasPtMultiTarget(UCHAR opcode);
+
+/*
+ * The ATA PASS-THROUGH (16) CDB for a task file (prev and cur, eight bytes
+ * each as ATA_PASS_THROUGH_EX carries them), AtaFlags and a data length;
+ * UAS_PT_OK or UAS_PT_INVALID. ckCond asks the drive's registers back; it
+ * is honoured for a command with no data only.
+ */
+ULONG UasAtaCdb(ULONG flags, const UCHAR *prev, const UCHAR *cur,
+                ULONG length, ULONG ckCond, PUCHAR cdb);
+
+/*
+ * The drive's registers from sense data: an ATA Status Return descriptor
+ * (09h) in descriptor format, or fixed format with ASC/ASCQ 00h/1Dh.
+ * prev and cur receive eight bytes each, in ATA_PASS_THROUGH_EX's order,
+ * output meaning: [0] Error, [1] Count, [2..4] LBA, [5] Device, [6]
+ * Status. UAS_ATAREG_PARTIAL: fixed format said an upper byte is non-zero,
+ * which that format cannot carry.
+ */
+#define UAS_ATAREG_NONE             0UL
+#define UAS_ATAREG_OK               1UL
+#define UAS_ATAREG_PARTIAL          2UL
+
+ULONG UasAtaRegsFromSense(const UCHAR *sense, ULONG length, PUCHAR prev,
+                          PUCHAR cur);
+
+/* SRB status values the outcome reads (srb.h). */
+#define UAS_SRB_ABORTED             0x02
+#define UAS_SRB_INVALID_REQUEST     0x06
+#define UAS_SRB_NO_DEVICE           0x08
+#define UAS_SRB_TIMEOUT             0x09
+
+/* How a pass-through ends; the driver maps it to NTSTATUS. */
+#define UAS_PTR_SUCCESS             0UL
+#define UAS_PTR_TIMEOUT             1UL /* STATUS_IO_TIMEOUT              */
+#define UAS_PTR_NO_DEVICE           2UL /* STATUS_NO_SUCH_DEVICE          */
+#define UAS_PTR_BUSY                3UL /* STATUS_DEVICE_BUSY             */
+#define UAS_PTR_INVALID             4UL /* STATUS_INVALID_PARAMETER       */
+#define UAS_PTR_IO_ERROR            5UL /* STATUS_IO_DEVICE_ERROR         */
+#define UAS_PTR_NOT_SUPPORTED       6UL /* STATUS_NOT_SUPPORTED           */
+
+/*
+ * Writes a finished request's outcome into buf (outLength bytes may be
+ * returned) and returns UAS_PTR_*, with *information the bytes to return
+ * (0 unless UAS_PTR_SUCCESS). srbStatus is the SRB's status without its
+ * flag bits; sense and senseLength the autosense the engine copied (0 when
+ * none); moved the bytes the data phase moved.
+ */
+ULONG UasPtResult(const UAS_PT_PLAN *plan, PUCHAR buf, ULONG outLength,
+                  ULONG srbStatus, ULONG scsiStatus, ULONG moved,
+                  const UCHAR *sense, ULONG senseLength,
+                  PULONG information);
+
+/*
+ * The SMART requests as disk.sys sends them: IOCTL_SCSI_MINIPORT with an
+ * SRB_IO_CONTROL (28 bytes: HeaderLength 0, Signature 4, Timeout 12,
+ * ControlCode 16, ReturnCode 20, Length 24; ntddscsi.h) whose signature is
+ * "SCSIDISK", and the program's SENDCMDINPARAMS after it (design record 13
+ * section 16.9).
+ */
+#define UAS_SIOC_LENGTH             28UL
+#define UAS_SIOC_SMART_VERSION      0x1B0500UL
+#define UAS_SIOC_IDENTIFY           0x1B0501UL
+#define UAS_SIOC_READ_ATTRIBS       0x1B0502UL
+#define UAS_SIOC_READ_THRESHOLDS    0x1B0503UL
+#define UAS_SIOC_ENABLE_SMART       0x1B0504UL
+#define UAS_SIOC_DISABLE_SMART      0x1B0505UL
+#define UAS_SIOC_RETURN_STATUS      0x1B0506UL
+#define UAS_SIOC_AUTOSAVE           0x1B0507UL
+#define UAS_SIOC_SAVE_ATTRIBS       0x1B0508UL
+#define UAS_SIOC_OFFLINE_DIAGS      0x1B0509UL
+#define UAS_SIOC_AUTO_OFFLINE       0x1B050AUL
+#define UAS_SIOC_READ_LOG           0x1B050BUL
+#define UAS_SIOC_WRITE_LOG          0x1B050CUL
+
+#define UAS_SMART_IN_LENGTH         32UL    /* SENDCMDINPARAMS less bBuffer */
+#define UAS_SMART_OUT_HEADER        16UL    /* SENDCMDOUTPARAMS less bBuffer */
+#define UAS_SMART_VERSION_LENGTH    24UL    /* GETVERSIONINPARAMS            */
+
+/* DRIVERSTATUS.bDriverError (ntdddisk.h). */
+#define UAS_SMART_NO_ERROR          0UL
+#define UAS_SMART_IDE_ERROR         1UL
+#define UAS_SMART_INVALID_COMMAND   3UL
+#define UAS_SMART_INVALID_BUFFER    4UL
+#define UAS_SMART_NOT_SUPPORTED     9UL
+
+/*
+ * Checks the envelope in buf (inLength in, outLength out) and returns
+ * UAS_PT_OK with *control, *timeout (seconds as sent) and *capacity (the
+ * payload room the sender declared), or UAS_PT_INVALID for anything not a
+ * SCSIDISK request (the dispatch then answers it as an unknown IOCTL) or
+ * UAS_PT_TOO_SMALL.
+ */
+ULONG UasSiocCheck(const UCHAR *buf, ULONG inLength, ULONG outLength,
+                   PULONG control, PULONG timeout, PULONG capacity);
+
+typedef struct _UAS_SMART_PLAN {
+    ULONG Control;
+    ULONG DataLength;               /* data in, bytes; 0: none            */
+    ULONG OutLength;                /* SENDCMDOUTPARAMS bytes returned on
+                                     * success: 16 + data or 16 + 8       */
+    ULONG ReturnRegs;               /* RETURN STATUS: IDEREGS back        */
+    UCHAR Cur[8];                   /* the task file sent                 */
+    UCHAR Cdb[16];
+} UAS_SMART_PLAN, *PUAS_SMART_PLAN;
+
+/*
+ * Plans one SMART control code other than SMART_VERSION from the payload
+ * (payloadIn bytes of SENDCMDINPARAMS) for a reply of at most replyRoom
+ * bytes. Returns UAS_SMART_NO_ERROR, or the DRIVERSTATUS error to answer
+ * with.
+ */
+ULONG UasSmartPlan(ULONG control, const UCHAR *payload, ULONG payloadIn,
+                   ULONG replyRoom, PUAS_SMART_PLAN plan);
+
+/* GETVERSIONINPARAMS, 24 bytes: version 1.1, one device, ATA IDENTIFY and
+ * SMART; reserved bytes 0. */
+VOID UasSmartVersion(PUCHAR out);
+
+/*
+ * Writes a SMART request's SENDCMDOUTPARAMS into out (room bytes) from its
+ * outcome and returns UAS_PTR_*; *outBytes the SENDCMDOUTPARAMS bytes
+ * written, *driverError the bDriverError given. data is the data-in the
+ * drive sent (moved bytes).
+ */
+ULONG UasSmartResult(const UAS_SMART_PLAN *plan, PUCHAR out, ULONG room,
+                     ULONG srbStatus, ULONG scsiStatus, ULONG moved,
+                     const UCHAR *data, const UCHAR *sense,
+                     ULONG senseLength, PULONG outBytes,
+                     PULONG driverError);
+
 #endif /* UAS_IU_H */
