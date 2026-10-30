@@ -17,7 +17,11 @@
  * device router, a Thunderbolt 3 device router (Titan Ridge or Alpine
  * Ridge, with the Plug Events and link controller capabilities), the
  * ASMedia ASM2464PD device router of usb4-emu's `asm2464` model (its
- * captured quirks), and the pre-OS connection manager's leftovers.
+ * captured quirks), the pre-OS connection manager's leftovers, and (task
+ * 45.20, design record 22 section 6.2.4) a USB4 version 2 host and device
+ * router: USB4 Version 40h, Set Capabilities, Gen 4 links symmetric or
+ * asymmetric between two such routers, Extended Encapsulation and the
+ * enhanced uni-directional TMU fields.
  *
  * A virtual clock in microseconds advances only when the code under test
  * stalls or sleeps. Test-only code; C89 with the C library.
@@ -62,13 +66,15 @@
 #define FAB_OP_CAPS         2
 #define FAB_OP_BA           3
 #define FAB_OP_NVM          4       /* NVM Sector Size, 25h: the ASM2464 preset only */
-#define FAB_OPS             5
+#define FAB_OP_SETCAPS      5       /* Set Capabilities, 32h (task 45.20) */
+#define FAB_OPS             6
 
 /* Device kinds */
 #define FAB_DEV_USB4        1
 #define FAB_DEV_TBT3_TR     2       /* Titan Ridge DD 8086:15EF */
 #define FAB_DEV_TBT3_AR     3       /* Alpine Ridge LP bridge 8086:15C0 */
 #define FAB_DEV_ASM2464     4       /* ASMedia ASM2464PD 174C:2463, the ORICO capture */
+#define FAB_DEV_USB4V2      5       /* a USB4 version 2 device router (task 45.20) */
 
 typedef struct FAB_ADP {
     int Present;
@@ -83,6 +89,7 @@ typedef struct FAB_ADP {
     int LtssmForce;                 /* PCIe: nonzero reads LTSSM LtssmForce - 1 */
     int Lane1;                      /* a lane 1 adapter (every fixture: even numbers) */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
+    int EeStuck;                    /* PCIe: Extended Encapsulation never sets (task 45.20) */
 } FAB_ADP;
 
 typedef struct FAB_ROUTER {
@@ -144,6 +151,21 @@ typedef struct FAB_ROUTER {
     unsigned long EeBase;
     unsigned long EeCtlWrites;
     unsigned long AdpTouches[FAB_MAX_ADP];  /* requests addressed to each adapter */
+    /* A USB4 version 2 router (task 45.20, record 22 section 6.2). Gen4:
+     * a link between two such routers comes up Gen 4, its widths
+     * Gen4HostW at the parent and Gen4DevW here (0: symmetric x2) on both
+     * lanes of each end. Gen4Up: the link up at Gen 4 now. SetCapsIgnore:
+     * Set Capabilities answers success and enables nothing; CapsFailAfterSet:
+     * that many Get Capabilities fail once a Set has been made (-1: every
+     * one). */
+    int Gen4;
+    unsigned long Gen4HostW;
+    unsigned long Gen4DevW;
+    int Gen4Up;
+    int SetCapsIgnore;
+    int CapsFailAfterSet;
+    unsigned long SetCapsOps;
+    unsigned long SetCapsLastMeta;
 } FAB_ROUTER;
 
 typedef struct FAB_FRAME {
@@ -218,6 +240,7 @@ typedef struct FAB {
     unsigned long WrAddr[FAB_WRLOG];
     unsigned long WrVal[FAB_WRLOG];
     unsigned long WrAtUs[FAB_WRLOG];
+    unsigned long WrN[FAB_WRLOG];   /* the DW count of the request each came in */
     unsigned long LogCount;
     const char *LastLabel;
     unsigned long LastValue;
@@ -234,6 +257,7 @@ void fabInit(FAB *f);
 int  fabHostMinimal(FAB *f);        /* usb4-emu `minimal`: returns the host index 0 */
 int  fabHostAdl(FAB *f);            /* usb4-emu `intel-adl` */
 int  fabHostAsm4242(FAB *f);        /* usb4-emu `asm4242`: ASMedia, public sources */
+int  fabHostV2(FAB *f);             /* `minimal` as a USB4 version 2 host router (45.20) */
 int  fabDevice(FAB *f, int kind);   /* a device router, unplugged; its index */
 int  fabChild(FAB *f, int dev);     /* a USB4 router behind a device's downstream port */
 

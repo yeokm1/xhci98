@@ -382,6 +382,25 @@ static void test_values(void)
     CHECK_EQ(v.RingIrq, 0, "all-ones is refused");
     CmValuesTakeRingIrq(&v, 0, 0);
     CHECK_EQ(v.RingIrqFound | v.RingIrqRefused, 0, "a later absent read clears both");
+    /* XhciCmUsb4V2 (task 45.20, decision U30): 1 by default, 0 or 1 taken,
+     * anything else refused with 1 standing. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_USB4_V2_DEFAULT, 1, "XhciCmUsb4V2 defaults to 1");
+    CHECK_EQ(v.Usb4V2, 1, "1 after CmValuesDefault");
+    CmValuesTakeUsb4V2(&v, 0, 0);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Found == 0 && v.Usb4V2Refused == 0,
+          "absent: 1, nothing found");
+    CmValuesTakeUsb4V2(&v, 1, 0);
+    CHECK(v.Usb4V2 == 0 && v.Usb4V2Found == 1 && v.Usb4V2Refused == 0, "0 is taken");
+    CmValuesTakeUsb4V2(&v, 1, 1);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Found == 1, "1 is taken");
+    CmValuesTakeUsb4V2(&v, 1, 2);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Refused == 1 && v.Usb4V2Raw == 2,
+          "2 is refused: 1 stands, the value recorded");
+    CmValuesTakeUsb4V2(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.Usb4V2, 1, "all-ones is refused");
+    CmValuesTakeUsb4V2(&v, 0, 0);
+    CHECK_EQ(v.Usb4V2Found | v.Usb4V2Refused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

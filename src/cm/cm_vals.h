@@ -280,6 +280,18 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_ASM_PCIE7_DEFAULT 0UL
 
 /*
+ * XhciCmUsb4V2, REG_DWORD (design record 22 sections 6.2 and 12, decision
+ * U30, task 45.20): a bench switch. 1 runs a USB4 version 2 router this
+ * driver enumerates as version 2 (CMUV 2.0) and keys section 6.2.2's
+ * version 2 obligations on each router's own version and capabilities;
+ * 0 is the version 1 run of 3.3.0.0 (tbt_u4cm.h, TBT_U4_CONFIG Usb4V2).
+ * No INF writes it and the installer does not ask for it; absent reads
+ * as 1, and any other value is refused and 1 stands. Read once per
+ * start, machine-wide key first, as every value.
+ */
+#define CM_USB4_V2_DEFAULT 1UL
+
+/*
  * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
  * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
  * a hot-added bridge below an active tunnel port (record 33 section 6)
@@ -331,6 +343,10 @@ typedef struct _CM_VALUES {
     ULONG AsmPcie7Found;
     ULONG AsmPcie7Raw;
     ULONG AsmPcie7Refused;
+    ULONG Usb4V2;               /* XhciCmUsb4V2 as run with                 */
+    ULONG Usb4V2Found;
+    ULONG Usb4V2Raw;
+    ULONG Usb4V2Refused;
     ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
@@ -375,6 +391,9 @@ VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmAsmediaPcie7Credits: 0 or 1, anything else refused. */
 VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmUsb4V2: 0 or 1, anything else refused (1 stands). */
+VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);

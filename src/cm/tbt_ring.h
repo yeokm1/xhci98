@@ -475,9 +475,13 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
 #define TBT_NOTE_REQUEST        1UL     /* fails the outstanding request */
 #define TBT_NOTE_EVENT          2UL     /* ERR_LINK, HEC, FC, PLUG: counted, acknowledged */
 #define TBT_NOTE_ACK_IGNORE     3UL     /* DP_BW, PCIE_WAKE, DP_CON_CHANGE, DPTX_DISCOVERY */
-#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, LINK_RECOVERY, ASYM_LINK: no acknowledgement */
+#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, ASYM_LINK: no acknowledgement */
 #define TBT_NOTE_HP_ACK         5UL     /* a hot plug acknowledgement: only a CM sends one */
 #define TBT_NOTE_UNKNOWN        6UL     /* a reserved code: counted, not acknowledged */
+/* LINK_RECOVERY (record 22 section 6.2.3 item 4, task 45.20): never
+ * acknowledged (Spec 6.6), and queued for the connection manager as a
+ * note, which checks the port whose path holds the router that sent it. */
+#define TBT_NOTE_DELIVER        7UL
 
 /* The acknowledgement form a router's notifications take (record 22
  * section 6.4), the connection manager's answer to TBT_CTL_ACK_FORM. */
@@ -499,8 +503,8 @@ typedef struct _TBT_HP_EVENT {
 } TBT_HP_EVENT, *PTBT_HP_EVENT;
 
 /* A notification the connection manager has to see: ERR_CONN, ERR_LOCK,
- * ERR_ENUM or ERR_NUA that arrived with no request waiting for it, and
- * ERR_PLUG. */
+ * ERR_ENUM or ERR_NUA that arrived with no request waiting for it,
+ * ERR_PLUG, and LINK_RECOVERY. */
 typedef struct _TBT_NOTE {
     TBT_ROUTE Route;
     ULONG Code;

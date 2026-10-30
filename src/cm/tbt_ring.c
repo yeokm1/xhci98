@@ -894,9 +894,10 @@ ULONG TbtCtlClassify(ULONG code)
         return TBT_NOTE_ACK_IGNORE;
     case TBT_EV_ROP_CMPLT:
     case TBT_EV_POP_CMPLT:
-    case TBT_EV_LINK_RECOVERY:
     case TBT_EV_ASYM_LINK:
         return TBT_NOTE_SILENT;
+    case TBT_EV_LINK_RECOVERY:
+        return TBT_NOTE_DELIVER;
     case TBT_EV_HP_ACK:
         return TBT_NOTE_HP_ACK;
     }
@@ -1255,6 +1256,9 @@ static VOID tbtCtlNotification(PTBT_CTL ctl, const TBT_FRAME *f)
         }
         break;
     case TBT_NOTE_SILENT:
+        break;
+    case TBT_NOTE_DELIVER:
+        tbtCtlQueueNote(ctl, &n);
         break;
     default:
         ctl->Counters.Strays++;

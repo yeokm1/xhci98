@@ -62,6 +62,8 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 #define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
 /* Not written by any INF (record 22 section 18.8): absent is 0. */
 #define CM_VALUE_ASM_PCIE7 L"XhciCmAsmediaPcie7Credits"
+/* Not written by any INF (record 22 section 12, decision U30): absent is 1. */
+#define CM_VALUE_USB4_V2 L"XhciCmUsb4V2"
 /* Not written by any INF (record 33 section 9.1): absent is 1; read on
  * NT 5.x alone. */
 #define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
@@ -289,6 +291,8 @@ VOID CmReadValues(PCM_NHI nhi)
     cmQuery(key, L"XhciCmQemuIrqDead", &take, 0);
     nhi->Values.QemuIrqDead = take.Found ? take.Dword : 0;
 #endif
+    cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
+    CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
     if (CmBreqGate != 0) {
         cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
         CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);
