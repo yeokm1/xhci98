@@ -3164,7 +3164,7 @@ amd64 `366dab24...f3b2`, each the build's own.
 |---|---|---|---|
 | XP SP3 (2 vCPU) | exit 3; controller and root hub started | build flavour `release`; `strict.value=1`, `strict.on=1`; `StrictSwitchRead 1`, `StrictOn 1`, `StrictChecked 3` | `strict.value=0`, `strict.on=0`; `StrictSwitchRead 1`, nothing counted |
 | 7 SP1 x86 (2 vCPU) | exit 3, restart (the helper); started after it | the same, `StrictChecked 3` | the same as XP |
-| 98 SE (1 vCPU) | exit 3, restart pending; started after a cold start | `strict.value=1`, `strict.on=1`, `StrictOn 1`; no command before a device (`StrictChecked` 0), `StrictChecked 2` once the tablet was plugged | `strict.value=0`, `strict.on=0`, `StrictSwitchRead 1`; the tablet enumerated (one slot held), nothing counted |
+| 98 SE (1 vCPU) | exit 3, restart pending; started after a cold start | `strict.value=1`, `strict.on=1`, `StrictOn 1`; no command checked before the tablet was plugged (`StrictChecked` 0), `StrictChecked 2` once the tablet was plugged | `strict.value=0`, `strict.on=0`, `StrictSwitchRead 1`; the tablet enumerated (one slot held), nothing counted |
 | XP x64 SP2 (2 vCPU) | exit 3; controller and root hub started (the package without `xhcicm`, below) | build flavour `release`; the same as XP, `StrictChecked 3` | the same as XP |
 
 QEMU's xHC refuses nothing, so the counters show that the checker ran
