@@ -3628,6 +3628,12 @@ settled before the code (reviewed and revised).
   reported (2026-10-29) to have ended with exit 0; that could not be
   reproduced: the self-test exits 1 and the build stops at its failure.
 
+A pre-merge build of a branch may set `XHCI98_SELFTEST_SKIP_OK=1`, and
+then `build-driver.cmd all` lets that skip stand as any other build does;
+a cut never sets it, so a cut's builds, and any caller that sets
+`XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
+2026-10-30).
+
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, the
