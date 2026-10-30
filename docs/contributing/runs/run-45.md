@@ -3573,6 +3573,27 @@ reaches them.
 connection manager's tunnels, or the limitation extended to Vista and 7
 (the stall there ends in a hang, through the dock NIC's driver).
 
+**45.49, the stop first (leg s1, 2026-10-30).** The owner closed 45.49 as
+a known limitation (`080c33dc`): stop such a dock before unplugging it.
+The advice read on 7 x86 with u2's setup (the same kit and emulator,
+`-Usb4 tb3ar`, the dock installed and a restart taken, the tablet on the
+dock's xHCI). Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`steps-s1.txt`,
+`rep-s1p.txt`, `rep-s1u.txt`, `rep-s1r.txt`, `samp-s1.txt`, `s1-*.png`).
+
+| Step | Read |
+|---|---|
+| the dock plugged | every device of the dock started, "USB Input Device - HidUsb" with them |
+| the xHCI98 USB Tree (`XHCITR.EXE` of the installed `1a2a72ca` package, from an administrator's prompt): the unit under "Port 1 (bridge 02:01.0)" selected (`104C:8232` at `04:00.0`, "[can be stopped]"), Del | the dialog "Stop a Thunderbolt device" listed the switch upstream port and everything on it: the three downstream ports, Stor98 and the disk, the 82574L, the dock's xHCI, its root hub, "USB Input Device" and "HID-compliant mouse"; OK; "Windows has stopped QEMU NVMe Ctrl SCSI Disk Device (D:). You can now unplug the device." |
+| the dock unplugged, `XHCIINST /devices` 60 s later | "(nothing behind it now)"; no device of the dock listed anywhere, HidUsb included |
+| the dock plugged again | processors sampled every 4 s for 90 s: idle or moving, no loop; every device of the dock started again, HidUsb included |
+| `shutdown /s /t 0` | Windows powered off and the emulator exited within 10 s, nothing on its error output |
+
+So the release notes' advice holds on 7 x86. Windows' own Safely Remove
+Hardware is not a way to give it: the USB Tree and `XHCIINST /devices`
+both say Windows does not list this unit there ("not listed in Safely
+Remove Hardware; /eject asks Windows to stop it"), so the stop is the USB
+Tree's or `INSTALL /console /eject`'s. Not read: Vista x86.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
