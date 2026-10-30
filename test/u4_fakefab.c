@@ -1864,8 +1864,10 @@ static void fabResetRouter(FAB *f, int d)
             }
         }
     }
-    if (r->Kind == FAB_DEV_USB4V2) {
-        r->CapsData &= 0x55555555UL;            /* every capability disabled */
+    if (!r->Tbt3) {
+        /* Uninitialised again: every capability back to disabled (Spec
+         * 8.3.1.3.2), on every USB4 router, the host's included. */
+        r->CapsData &= 0x55555555UL;
         r->SetCapsOps = 0;
     }
 }

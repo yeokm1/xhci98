@@ -698,6 +698,12 @@ typedef struct _TBT_U4CM {
     /* Section 7.4: the port whose sequence is running, and the nested
      * teardown in progress. */
     ULONG ActivePort;       /* 0 for none */
+    /* Record 22 section 6.2.2 item 3: a Set Capabilities owed by a
+     * recovery and made by TbtU4Poll as port SeqGuardPort's own sequence of
+     * generation SeqGuardGen (0: none); the Set is not sent once that port
+     * is no longer live. */
+    ULONG SeqGuardPort;
+    ULONG SeqGuardGen;
     BOOLEAN InTeardown;
     ULONG DeferredTail[TBT_U4_MAX_PORTS];   /* steps 4 to 6 owed, by port */
 

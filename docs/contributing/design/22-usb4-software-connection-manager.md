@@ -1268,13 +1268,16 @@ What the code settled that this section left open (task 45.20's code,
   failed) has the recovery's answer adopted, and a failing answer leaves
   it unknown rather than at its default; one found with the capability
   supported and disabled is owed the Set, made at the first tick after
-  the commit.
+  the commit as that port's own sequence (no nested teardown of it, and
+  no Set once the port shows removal evidence or a new generation).
 - **A Gen 4 link is recognised** from the host's lane 0 Current Link
   Speed (`2h`); the far end's lane 0 is read only for an asymmetric
-  width. On a link of two version 2 routers a lane 0 still in Training or
-  Lane Bonding is waited for up to 500 ms with no write before it is
-  classified; a reserved speed after that goes to section 6.5 as before
-  (no evidence of Gen 4). A Gen 4 x1 reading, an unpaired asymmetric one
+  width. On a link of two version 2 routers lane 0 must read connected
+  before it is classified: one in Training or Lane Bonding is waited for
+  up to 2 s with no write, and one that does not come back connected
+  leaves the port FAILED with no lane written (`Why` 19, the lane state);
+  a reserved speed on an active link goes to section 6.5 as before (no
+  evidence of Gen 4). A Gen 4 x1 reading, an unpaired asymmetric one
   or a reserved width leaves the port FAILED with no lane write (`Why`
   23, the link). The read-only checks of an existing link (the resume's
   verification and the recovery's lanes as left) count a Gen 4

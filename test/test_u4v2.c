@@ -407,6 +407,30 @@ static void recoverWith(void)
     CHECK_EQ(TbtU4Recover(&g_cm, &final), TBT_OK, "recovered");
 }
 
+static int g_unplugOnGet;
+static unsigned long g_setsAfter;
+
+/* The owed Get Capabilities of the tick after a recovery: the device
+ * unplugged the moment it is issued. */
+static int unplugOnGetHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                           unsigned long adp, unsigned long addr, unsigned long n,
+                           const unsigned long *data)
+{
+    (void)adp;
+    (void)router;
+    if (!g_unplugOnGet && pdf == TBT_PDF_WRITE && cs == TBT_CS_ROUTER && addr == 9 &&
+        n == 18 && data != NULL && (data[17] & 0xFFFFUL) == 0x32) {
+        g_setsAfter++;     /* any Set request after the unplug, routed or not */
+    }
+    if (g_unplugOnGet && pdf == TBT_PDF_WRITE && router > 0 && cs == TBT_CS_ROUTER &&
+        addr == 9 && n == 18 && data != NULL && (data[17] & 0xFFFFUL) == 0x31) {
+        g_unplugOnGet = 0;
+        fabUnplug(f, 1);
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
 static void test_set_and_recovery(void)
 {
     TBT_U4_CONFIG c;
@@ -447,6 +471,25 @@ static void test_set_and_recovery(void)
     CHECK_EQ(g_fab.R[d].SetCapsOps, 2, "the owed Set after the commit");
     CHECK(!port(1)->Dev.SeqOwed, "no longer owed");
     CHECK(port(1)->Dev.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE), "enabled again");
+
+    /* The device unplugged under the owed Get: no Set, the port torn down
+     * by its next check. */
+    d = domain(1, FAB_DEV_USB4V2);
+    cfgDefault(&c);
+    (void)start(&c);
+    g_fab.R[d].CapsData &= ~(1UL << 5);
+    recoverWith();
+    CHECK(port(1)->Dev.SeqOwed, "unplug under the Get: owed");
+    TbtU4RecoverCommit(&g_cm);
+    poll(1);    /* the commit's checks */
+    g_fab.Hook = unplugOnGetHook;
+    g_unplugOnGet = 1;
+    g_setsAfter = 0;
+    poll(3);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_unplugOnGet, 0, "the Get issued, the device pulled");
+    CHECK_EQ(g_setsAfter, 0, "no Set request sent after it");
+    CHECK_EQ(port(1)->State, TBT_U4_EMPTY, "torn down");
 }
 
 /* ------------------------------------------------------------------ */
@@ -881,6 +924,27 @@ static void test_ee(void)
     CHECK_EQ(fabPath0(&g_fab, 0, HOST_PCIE, 8) & 0x80000000UL, 0, "its entries invalidated");
     CHECK_EQ(fabAdp(&g_fab, 0, HOST_PCIE, PCIE1) & 1UL, 0, "the host's EE cleared again");
 
+    /* The host's EE that will not set, the device's set first: both
+     * Path Enables left clear, the device's EE cleared again and every
+     * entry invalidated. */
+    d = domain(1, FAB_DEV_USB4V2);
+    g_fab.R[0].Adp[HOST_PCIE].EeStuck = 1;
+    cfgDefault(&c);
+    c.Usb3Tunnel = FALSE;       /* no USB3 tunnel reusing the freed HopIDs */
+    (void)start(&c);
+    eeD = writeWith(0, d, TBT_CS_ADAPTER, DEV_PCIE, PCIE1, 1UL, 1);
+    CHECK(eeD >= 0, "host EE stuck: the device's EE set first");
+    CHECK(writeWith(eeD + 1, d, TBT_CS_ADAPTER, DEV_PCIE, PCIE1, 1UL, 0) > eeD,
+          "and written 0 again");
+    CHECK_EQ(fabAdp(&g_fab, d, DEV_PCIE, PCIE1) & 1UL, 0, "the device's EE 0");
+    CHECK_EQ(writeWith(0, d, TBT_CS_ADAPTER, DEV_PCIE, PCIE0, 0x80000000UL, 1) +
+             writeWith(0, 0, TBT_CS_ADAPTER, HOST_PCIE, PCIE0, 0x80000000UL, 1), -2,
+             "neither Path Enable written");
+    CHECK_EQ(port(1)->State, TBT_U4_FAILED, "FAILED");
+    CHECK_EQ((fabPath0(&g_fab, 0, HOST_PCIE, 8) | fabPath0(&g_fab, 0, 1, 9) |
+              fabPath0(&g_fab, d, 1, 8) | fabPath0(&g_fab, d, DEV_PCIE, 8)) & 0x80000000UL,
+             0, "all four entries invalidated");
+
     /* A device Path Enable that will not clear: its EE left until the
      * quarantine's lift proves it clear; the host's cleared at once. */
     d = domain(1, FAB_DEV_USB4V2);
@@ -1034,6 +1098,8 @@ static void test_resume_v2(void)
     d = gen4(0x04, 0x08, 1);
     TbtU4Suspend(&g_cm);
     fabPowerCycle(&g_fab);
+    CHECK_EQ(g_fab.R[d].CapsData & (1UL << 5), 0, "power loss: the device's capability disabled");
+    CHECK_EQ(g_fab.R[0].CapsData & (1UL << 5), 0, "and the host's");
     g_fab.WrCount = 0;
     rc = TbtU4Resume(&g_cm);
     CHECK_EQ(rc, TBT_OK, "resume after a power loss: rebuilt");
@@ -1044,7 +1110,51 @@ static void test_resume_v2(void)
     CHECK_EQ(g_fab.R[d].SetCapsOps, 1, "the Sequence bit set again");
     CHECK(fabAdp(&g_fab, d, DEV_PCIE, PCIE1) & 1UL, "EE set again");
     CHECK(port(1)->TmuEnhanced, "the enhanced TMU again");
+    CHECK_EQ(g_fab.R[0].SetCapsOps, 1, "the host router's Set again too");
+    CHECK(g_cm.HostRouter.CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE),
+          "the host's capability enabled again");
     CHECK_EQ(pathWritesNotPaired(), 0, "every PATH_CS write two DWs");
+}
+
+static int g_trainArmed;
+
+/* The device's enumerating write: from then the host's lane 0 reads
+ * Training (a link that will not settle). */
+static int trainHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)adp;
+    (void)n;
+    (void)data;
+    if (g_trainArmed && pdf == TBT_PDF_WRITE && router > 0 && cs == TBT_CS_ROUTER &&
+        addr == 1) {
+        g_trainArmed = 0;
+        f->R[0].Adp[1].Cs[FAB_CAP_LANE + 1] =
+            (f->R[0].Adp[1].Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 26)) | (1UL << 26);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Section 6.2.3 item 2: a v2-v2 lane 0 training past the wait - FAILED,
+ * no lane write, nothing classified. */
+static void test_gen4_training(void)
+{
+    TBT_U4_CONFIG c;
+    int d;
+
+    d = domain(1, FAB_DEV_USB4V2);
+    g_fab.Hook = trainHook;
+    g_trainArmed = 1;
+    cfgDefault(&c);
+    (void)start(&c);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_trainArmed, 0, "lane 0 put in Training after the enumeration");
+    CHECK_EQ(port(1)->State, TBT_U4_FAILED, "training past the wait: FAILED");
+    CHECK_EQ(port(1)->Why, TBT_U4_WHY_LANE_STATE, "for the lane state");
+    CHECK_EQ(laneWrites(d), 0, "no lane write");
+    CHECK(!port(1)->Bonded, "not used as bonded");
+    CHECK(!fabPcieUp(&g_fab, 1), "no tunnel");
 }
 
 /* The USB3 allocation's link bound (section 6.2.3 item 5). */
@@ -1074,6 +1184,7 @@ int main(void)
     RUN_VEC(test_elr_and_recovery);
     RUN_VEC(test_ee);
     RUN_VEC(test_gen4);
+    RUN_VEC(test_gen4_training);
     RUN_VEC(test_resume_v2);
     RUN_VEC(test_link_bound);
     fabTraceMark("end");

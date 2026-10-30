@@ -1291,6 +1291,11 @@ static VOID tbtU4GetCapabilities(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
             (rt->CapsEnabled & (1UL << TBT_CAP_NOTIFY_SEQUENCE)) == 0) {
             if (cm->Recovering) {
                 rt->SeqOwed = TRUE;
+            } else if (cm->SeqGuardPort != 0 &&
+                       !tbtU4Live(cm, &cm->Ports[cm->SeqGuardPort - 1], cm->SeqGuardGen)) {
+                /* The owed Set's port gone or changed under the Get: no
+                 * request to whatever holds the route now. */
+                state = TBT_U4_CAPS_UNKNOWN;
             } else {
                 state = tbtU4SetSequenceBit(cm, rt);
             }
@@ -2887,15 +2892,21 @@ static LONG tbtU4Bond(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     if (tbtU4LaneRd(cm, ln.Rt[0], ln.Adp[0], &lane0) != TBT_OK) {
         return TBT_E_STATE;
     }
-    if (tbtU4IsV2(&cm->HostRouter) && tbtU4IsV2(&p->Dev) &&
-        TBT_LANE1_STATE(lane0) == TBT_LANE_STATE_TRAINING) {
-        TbtWaitStart(&w, cm->Host, TBT_U4_BONDING_US, FALSE);
-        while (TBT_LANE1_STATE(lane0) == TBT_LANE_STATE_TRAINING) {
+    if (tbtU4IsV2(&cm->HostRouter) && tbtU4IsV2(&p->Dev)) {
+        /* Speed and width are valid only on an active link (Spec 8.2.2.3):
+         * a lane 0 still training is waited for with no write, and one
+         * that never reads connected leaves the port FAILED with no lane
+         * written, rather than classified on a stale reading. */
+        TbtWaitStart(&w, cm->Host, TBT_U4_CONNECT_US, FALSE);
+        while (TbtU4LaneClass(TBT_LANE1_STATE(lane0)) != TBT_U4_LANE_CONNECTED) {
             if (!TBT_U4_LIVE(p, gen)) {
                 return TBT_E_GONE;
             }
-            if (TbtWaitDone(&w, cm->Host)) {
-                break;
+            if (TbtU4LaneClass(TBT_LANE1_STATE(lane0)) != TBT_U4_LANE_TRANSITIONAL ||
+                TbtWaitDone(&w, cm->Host)) {
+                tbtU4Log(cm, "u4.link.not-active", (p->Index << 8) | TBT_LANE1_STATE(lane0));
+                p->Why = TBT_U4_WHY_LANE_STATE;
+                return TBT_E_STATE;
             }
             tbtU4Pause(cm, &w);
             if (tbtU4LaneRd(cm, ln.Rt[0], ln.Adp[0], &lane0) != TBT_OK) {
@@ -7113,8 +7124,21 @@ VOID TbtU4Poll(PTBT_U4CM cm)
         p = &cm->Ports[i];
         if (p->Dev.Present && p->Dev.SeqOwed && !p->Dev.Tbt3 &&
             (p->State == TBT_U4_UP || p->State == TBT_U4_HELD ||
-             p->State == TBT_U4_FAILED)) {
+             p->State == TBT_U4_FAILED) &&
+            !p->UnplugPending && !p->CheckPending && !p->ClassifyPending &&
+            !cm->DeferredTail[i]) {
+            /* The port's own sequence (section 7.4): no nested teardown of
+             * it at a safe point, and the Set withheld once a check shows
+             * removal evidence; the next check acts on it. */
+            cm->ActivePort = p->Index;
+            cm->SeqGuardPort = p->Index;
+            cm->SeqGuardGen = p->Generation;
             tbtU4GetCapabilities(cm, &p->Dev);
+            cm->SeqGuardPort = 0;
+            cm->ActivePort = 0;
+            if (!tbtU4Live(cm, p, cm->SeqGuardGen)) {
+                p->CheckPending = TRUE;
+            }
         }
     }
     /* Steps 4 to 6 owed by teardowns nested at a safe point. */
