@@ -923,7 +923,7 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   hardware changes, and one unplugged leaves.
 - **Safe removal.** A device behind a tunnel is offered in Windows 2000's
   "Unplug or Eject Hardware" and XP's, Vista's and 7's "Safely Remove
-  Hardware"; on every system, `INSTALL /console /eject` stops it too ("Removing a
+  Hardware"; on every system, `INSTALL /eject` stops it too ("Removing a
   Thunderbolt or USB4 device safely").
 - **`INSTALL.BAT`**, with `XHCIINST.EXE` and `XHCIIN64.EXE`: installs,
   updates and uninstalls every driver of the package in one run on
@@ -931,9 +931,9 @@ controllers, an install tool and a graphical tool, the xHCI98 USB Tree.
   ME ("Installing, updating and uninstalling with INSTALL.BAT").
   INSTALL.BAT is beta in 3.0.0.0: if it fails or you prefer, install
   through Device Manager as before ("Installing").
-- **A device viewer and eject in the same tool**: `INSTALL /console /devices` lists
+- **A device viewer and eject in the same tool**: `INSTALL /devices` lists
   the Thunderbolt and USB4 devices connected now and the Windows devices
-  behind each, and `INSTALL /console /eject` stops one, on every system (design
+  behind each, and `INSTALL /eject` stops one, on every system (design
   record 24).
 - **The xHCI98 USB Tree** (`XHCITR.EXE`, `XHCITR64.EXE` on 64-bit
   Windows): a window with every USB controller, hub and device and every
@@ -1526,7 +1526,7 @@ have every leg.
   boot left alone, nothing attached at boot, the controller absent with
   Thunderbolt BIOS Assist on, disable and enable, `XhciCmApprove` `0` and
   `XhciCmMode` `0`, a plug and an unplug while an Add New Hardware wizard
-  was open, and `INSTALL /console /devices` and `INSTALL /console /eject` (an eject refused
+  was open, and `INSTALL /devices` and `INSTALL /eject` (an eject refused
   while a file was open, then accepted). Under the USB4 connection
   manager, the install, hot plug, unplug and re-plug, a cold boot with
   the device attached, reads and writes on the ASM2464 enclosure model,
@@ -1536,7 +1536,7 @@ have every leg.
   connection managers a plug, unplug and re-plug with the NVMe drive
   found with no Refresh and its data intact; Stand by and resume under
   both. ME's "Unplug or Eject Hardware" does not list the drive (98 SE
-  as shipped has no such applet): the USB Tree and `INSTALL /console /eject` remove
+  as shipped has no such applet): the USB Tree and `INSTALL /eject` remove
   it.
 - **Windows 2000:** the firmware connection manager's legs read on 98 SE,
   the open wizard aside, and the Titan Ridge model,
@@ -1685,9 +1685,8 @@ have every leg.
   and Windows shut down (task 45.49). On 2000 and XP with a USB4 host
   whose tunnels this release's connection manager builds, the unplug is
   normally handled: the connection manager reads the tunnel closed before
-  this driver asks for the proof, and only in
-  the reverse order do the transfers stay kept (record 17 section
-  4.13.6).
+  this driver asks for the proof, and only in the reverse order do the
+  transfers stay kept (record 17 section 4.13.6).
 - **A device Windows has not seen before, or one disabled and enabled or
   whose driver was installed or updated, is missing from the safe-removal
   list** (Windows 2000 to 7): Windows rebuilds its driver stack without
