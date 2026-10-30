@@ -3838,6 +3838,165 @@ first, under the host's gated-build lock. Times are the steps' own
   suite) is the owner's answer.
 - Every build exit 0; logs `E:\xhci98-scratch\p45-w45-rvhcd\pkgskip\`.
 
+## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000 and XP (2026-10-30)
+
+Task 45.18 of `roadmap-usb4.md`; design record 34 section 3.11 (reviewed
+and revised; the owner's answers Q7 (b), Q8 (a), Q9 (a), Q10 (a) and Q11
+(a), 2026-10-30). Code: the depth-1 q35 admission at `0fdcde14` (every
+qualification bit 0), gated x86 build passed and host tests passed on it.
+This section is the first reading of item 11: case D1 (an end unplug at
+depth 1) on the root-port kind, on Windows 2000. Read on 2026-10-30.
+
+**On `E:\...` paths here.** They say where a reading was kept on the host
+that took it; they are not files a clone has.
+
+### Verdict
+
+**Windows 2000, D1, root port: passes at every injection point run.** In
+every counted run the entry was marked `DOWN_QUIESCED` after the
+emulator's stage-2 reset and quiesce of the endpoint (`usb4_tp_cutoff`),
+Stor98 saw the statement and wrote its acknowledgement (`0x141`, `0x142`)
+before the first removal request reached the function's stack (the child
+filter's `IRP_MN_SURPRISE_REMOVAL`, `0x1C3` argument `0x17`), the
+connection manager's wait ended acknowledged (`0x1C1` argument `0x100`)
+before it, and no request was completed by Stor98's gone deadline (no
+`0x83`). The 2000 bit of the root-port D1 column is set on this reading
+(record 34 section 3.11 item 8); XP the same, below. XP x64 is not read
+yet; D2 and M wait for 45.13's per-tunnel keying and 45.15's kid.
+
+### The vehicle
+
+- Development host A, QEMU under TCG, headless, one vCPU (`pentium3`),
+  512 MB; the q35 base `w2k` (Standard PC HAL, SHA-256 `7fc9714e...`)
+  through `launch-q35.ps1 -Usb4 adl`: `usb4-host` `profile=usb4-generic,
+  host-model=intel-adl` at 00:04.0, its tunnel ports `usb4-tunnel-port`
+  `tp0` (00:05.0) and `tp1` (00:06.0), with `-global
+  usb4-tunnel-port.power_controller_present=off` (QEMU's `pcie-root-port`
+  property `power_controller_present`, read in its source, so the tunnel
+  ports report no Power Controller), `-device usb4-debug-port` (stage
+  codes at 5A0h) and `-trace usb4_tp_*`, `usb4_dbg_*`,
+  `pci_nvme_pci_reset`. Emulator: the q35 bases' `asm4242-20261025-2230`
+  build (`qemu-system-x86_64.exe` SHA-256 `da60139f...`).
+- The device: a plain `usb4-device` (`id=enc0, bus=u4.0, port=1,
+  drive=nvme0`, no `device-model`), so the NVMe controller (QEMU's,
+  `1B36:0010`) sits on the tunnel port's secondary bus and gets an entry.
+  Plugged and unplugged with QMP `device_add` and `device_del`.
+- The golden (`E:\xhci98-vm\p45\w45-s98chain\w2k\golden.qcow2`): the
+  release package of `1a2a72ca` installed with `INSTALL
+  /console /yes /nopause /thunderbolt /stor98` (exit 0), the drive's
+  Found New Hardware wizard naming "Stor98 Storage Controller for NVMe
+  SSDs" (the tunnel id), then two images copied over the installed ones:
+  - `xhcicm.sys`, a trial `qemu` build from `0fdcde14`, never committed
+    (Q8 (a)), SHA-256 `d7ea9302...`: the 2000, XP and XP x64 bits of the
+    root-port D1 column set, and stage codes `0x1C0` (an entry marked
+    `DOWN_QUIESCED`; argument generation, bus, slot, the q35 flag in bit
+    24), `0x1C1` (an acknowledgement wait ended; argument
+    `CM_NVLINK_AW_*` << 8 | entry) and `0x1C3` (the child filter's
+    `IRP_MN_QUERY_REMOVE_DEVICE`, `IRP_MN_SURPRISE_REMOVAL` or
+    `IRP_MN_REMOVE_DEVICE`; argument the minor code);
+  - `stor98.sys`, Stor98's debug-port build of the same tree
+    (`STOR98_DBGPORT=1`), SHA-256 `d0068976...`;
+  and `XhciCmLogVerbosity` 2. Each leg is a child overlay of the golden.
+- The load: Stor98's `tests\eio` (`eio e:\t.bin 32 <qd> 20`), built with
+  MSVC 6.0. The holds: the harness's `x-faults` on `tp0`.
+
+### Results
+
+Leg `r2` (one boot of a child overlay, the runs in sequence, every run a
+new tunnel generation), with `-trace pcie_cap_slot_write_config`,
+`usb4_h_fire` and `usb4_h_release` added. Times are virtual milliseconds
+from the run's `usb4_tp_cutoff`. Every run: `cm.nvlink.u4-q35=00001032`
+(SEND, root port, system 2000, reading DOWN), then `cm.nvlink.down` and
+`cm.nvlink.retired`. In the whole leg: no Slot Control write traced
+(`pcie_cap_slot_write_config` absent, the condition of record 34 section
+3.11 item 5), and no `0x83`.
+
+| Run | Injection | 0x1C0 statement | 0x141 seen | 0x142 ack | 0x1C1 wait end | first removal (0x1C3) | Time left at the reading |
+|---|---|---|---|---|---|---|---|
+| idle | no I/O | +84.1 | +179.3 | +179.7 | +195.1, acknowledged | +2086.8, surprise | 2799 ms |
+| I/O | `eio` QD 8 running, nothing held | +72.4 | +170.5 | +171.0 | +181.2, acknowledged | +2077.5 | 2799 ms |
+| held | eight reads held at their fetch (QD 8; the eight discarded by the endpoint's stage-2 reset) | +64.6 | +104.2 | +106.2 | +127.7, acknowledged | +2070.2 | 2799 ms |
+| saturated | `eio` QD 32, every read held from the 150th: nine held at the controller, the rest queued in the port (the nine discarded by the stage-2 reset) | +141.3 | +148.2 | +150.8 | +194.9, acknowledged | +2143.0 | 2789 ms |
+| bring-up | `x-rdy-set-delay-ms` 20000, unplugged 10 s after the plug | +50.3 | +104.8 | +105.5 | +152.2, acknowledged | +2051.1 | 2779 ms |
+| `RequestComplete` | `at=stage code=0x21 nth=300 act=gate` (fired 269.9 ms before the cutoff), then `device_del` | +48.6 | +52.2 | +52.7 | +107.6, acknowledged | +2053.4 | 2579 ms |
+| already gone | `at=fetch op=read nth=150 act=gate` (fired 1110.7 ms before the cutoff), `device_del` 1 s later | +52.0 | +80.6 | +81.6 | +143.6, acknowledged | +2068.9 | 1387 ms |
+| re-plug | unplugged as soon as `cm.nvlink.up` reached the debug console | +78.6 | +101.8 | +102.3 | +126.9, acknowledged | +2087.8 | 2789 ms |
+
+An earlier leg, `r1`, on the same golden without the three added traces,
+gave the same order in the same eight runs (statement +5.0 to +173.7,
+acknowledgement +90.9 to +251.8, wait ended acknowledged, first removal
+request +2009.5 to +19164.0).
+
+Not counted (leg `r1`):
+
+- **Already gone, 3 s.** The gate closed 3 s before the `device_del`: the
+  endpoint's last presence sample was then over 3 s old, so the time left
+  was 0, no reading was made, and the statement was withheld
+  (`cm.nvlink.u4-q35=00041030`, `cm.nvlink.withheld=0400000A`; the code
+  reports NOT_DOWN because no reading was taken). Stor98's gone
+  deadline completed the held request at +1627.0 (`0x84`, `0x83`). This
+  is record 22 section 10.3's deadline acting as designed. Gate G3 has
+  the statement arriving within the gone deadline, so the counted run
+  closes the gate 1 s before the unplug.
+- **Two saturation attempts** left the reads held for over a minute before
+  the unplug. By the unplug the harness showed one held read or none, so
+  those runs were not saturated, and they are not counted.
+
+### Windows XP (32-bit), the same reading
+
+**XP, D1, root port: passes at every injection point run**, the same
+conditions as 2000. The XP bit of the root-port D1 column is set on this
+reading.
+
+- The vehicle as for 2000, on the q35 base `xp` (SHA-256 `64ada103...`,
+  ACPI Multiprocessor PC HAL, `-smp 2 -m 1024`): the same release
+  package installed with `INSTALL /console /yes /nopause /thunderbolt
+  /stor98` (exit 0; the hardware wizards and the signing prompts answered
+  by keystrokes), a restart, the drive's wizard naming Stor98 (the tunnel
+  id), then the same trial `xhcicm.sys`, Stor98 debug-port build and
+  `XhciCmLogVerbosity` 2. Golden
+  `E:\xhci98-vm\p45\w45-s98chain\xp\golden.qcow2`; leg `x1`. The drive is
+  D:, the transfer disk E:.
+- Every counted run: `cm.nvlink.u4-q35=00001042` (SEND, root port,
+  system XP, reading DOWN). In the whole leg there was no Slot Control
+  write traced and no `0x83`.
+
+| Run | Injection | 0x1C0 statement | 0x141 seen | 0x142 ack | 0x1C1 wait end | first removal (0x1C3) | Time left at the reading |
+|---|---|---|---|---|---|---|---|
+| idle | no I/O | +132.7 | +187.6 | +188.5 | +208.1, acknowledged | +2155.5, surprise | 2796 ms |
+| I/O | `eio` QD 8 running, nothing held | +198.2 | +201.8 | +202.2 | +203.7, acknowledged | +2212.4 | 2796 ms |
+| held | eight reads held at their fetch (QD 8) | +173.6 | +182.0 | +186.7 | +253.3, acknowledged | +7873.9 | 2796 ms |
+| saturated | `eio` QD 32, every read held from the 150th: eight held at the controller, the rest queued in the port, unplugged once that count was steady (the eight discarded by the stage-2 reset) | +19.6 | +25.0 | +27.7 | +98.2, acknowledged | +2049.6 | 2796 ms |
+| bring-up | `x-rdy-set-delay-ms` 20000, unplugged 10 s after the plug | +47.6 | +113.5 | +114.0 | +116.0, acknowledged | +2206.7 | 2796 ms |
+| `RequestComplete` | `at=stage code=0x21 nth=300 act=gate` (fired 243.6 ms before the cutoff), then `device_del` | +146.2 | +147.2 | +147.5 | +194.8, acknowledged | +2196.7 | 2593 ms |
+| already gone | `at=fetch op=read nth=150 act=gate` (fired 1355.7 ms before the cutoff), `device_del` 1 s later | +38.2 | +97.0 | +97.7 | +114.7, acknowledged | +20469.6 | 1562 ms |
+| re-plug | unplugged as soon as Stor98's new instance traced its rendezvous (`0x140`) | +221.0 | +244.9 | +245.3 | +294.2, acknowledged | +2261.8 | 2766 ms |
+
+Not counted:
+
+- **The first saturation attempt.** The leg's sequence waited for nine
+  held reads, the count 2000 reached, but XP held eight. Before the unplug
+  a controller reset discarded the eight (`usb4_h_release ... discarded by
+  reset`), so nothing was held when the drive was unplugged. The run above
+  unplugs once the count is steady.
+- **The first re-plug attempt.** The unplug followed `cm.nvlink.up` before
+  Stor98 had started on the function: no rendezvous was traced and no
+  instance existed. The statement was made (+77.5) and XP removed the
+  device (`IRP_MN_REMOVE_DEVICE` at +191.6). The wait timed out at
+  +5263.0 (`0x1C1` argument `0x400`), since a Stor98 instance elsewhere
+  had read the table. With no instance on the function, no request
+  depended on the statement. The run above unplugs after Stor98's
+  rendezvous.
+
+### What it changes
+
+The 2000 and XP bits of the root-port D1 column (`cmNvQ35Table`). Left
+in 45.18: XP x64 (the same runs), and D2 and M after 45.13's per-tunnel
+keying and 45.15's kid. 98 SE and ME first need their system
+identification (record 34 section 3.11 item 8). Vista and later stay at 0
+(Q11 (a)). The chained unit's eject, where the reading is expected to be
+MIXED and the statement withheld, is read with D2.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
