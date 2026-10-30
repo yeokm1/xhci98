@@ -515,6 +515,7 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
 static BOOLEAN tbtU4Departed(PTBT_U4CM cm, PTBT_U4_PORT p, const BOOLEAN *ob);
 static BOOLEAN tbtU4RecCleanupGate(PTBT_U4CM cm, PTBT_U4_PORT p);
 static VOID tbtU4KidsDrop(PTBT_U4CM cm, PTBT_U4_PORT p);
+static BOOLEAN tbtU4KidLive(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen);
 static BOOLEAN tbtU4KidsDown(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG why);
 
 /* One step of a poll loop of the connection manager's own: the wait, then
@@ -3353,7 +3354,7 @@ static LONG tbtU4TmuDisable(PTBT_U4CM cm, PTBT_U4_PORT p)
  * posted time; (e) Post Time read until it is 0, within TBT_U4_TMU_POST_US
  * (record 22 section 6.6).
  */
-static LONG tbtU4TmuPostTime(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
+static LONG tbtU4TmuPostTimeTo(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
 {
     PTBT_U4_ROUTER h;
     PTBT_U4_ROUTER d;
@@ -3363,7 +3364,7 @@ static LONG tbtU4TmuPostTime(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     TBT_WAIT w;
 
     h = &cm->HostRouter;
-    d = &p->Dev;
+    d = k != NULL ? &k->Dev : &p->Dev;
     rc = tbtU4RdN(cm, &h->Route, TBT_CS_ROUTER, 0, h->CapTmu + TBT_TMU_RTR_CS_1, 3, now);
     if (rc != TBT_OK) {
         return rc;
@@ -3385,12 +3386,20 @@ static LONG tbtU4TmuPostTime(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
     TbtWaitStart(&w, cm->Host, TBT_U4_TMU_POST_US, FALSE);
     while ((rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_24, 2,
                           pair)) == TBT_OK && (pair[0] | pair[1]) != 0) {
-        if (TbtWaitDone(&w, cm->Host) || !TBT_U4_LIVE(p, gen)) {
+        if (TbtWaitDone(&w, cm->Host) ||
+            (k != NULL ? !tbtU4KidLive(cm, p, k, gen) : !TBT_U4_LIVE(p, gen))) {
             return TBT_E_TIMEOUT;
         }
         tbtU4Pause(cm, &w);
     }
     return rc;
+}
+
+/* The device router on a port: its local time from the host's. A kid's
+ * (record 34 Part 3): tbtU4TmuPostTimeTo with the kid. */
+static LONG tbtU4TmuPostTime(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
+{
+    return tbtU4TmuPostTimeTo(cm, p, NULL, gen);
 }
 
 /*
@@ -3450,16 +3459,15 @@ static LONG tbtU4TmuHiFiBi(PTBT_U4CM cm, PTBT_U4_PORT p)
  * never enabled here (step 2a), and TSPacketInterval is not written (Spec
  * 7.3.1.3: ignored in that mode).
  */
-static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
+static LONG tbtU4TmuEnhancedOnAt(PTBT_U4CM cm, const TBT_U4_ROUTER *up, ULONG upAdp,
+                                 const TBT_U4_ROUTER *d)
 {
-    PTBT_U4_ROUTER d;
     const TBT_U4_ROUTER *rt;
     ULONG adp;
     ULONG avg;
     ULONG k;
     LONG rc;
 
-    d = &p->Dev;
     avg = 0;
     for (k = 0; k < 4; k++) {
         avg |= TBT_TMU_AVG_CONST_HIFI << (6 * k);
@@ -3472,8 +3480,8 @@ static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
                       TBT_TMU_RTR15_AVG_MASK, avg);
     }
     for (k = 0; k < 2 && rc == TBT_OK; k++) {
-        rt = k == 0 ? d : &cm->HostRouter;
-        adp = k == 0 ? d->UpAdp : p->Lane0;
+        rt = k == 0 ? d : up;
+        adp = k == 0 ? d->UpAdp : upAdp;
         rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_8,
                          TBT_TMU_ADP8_REPL_TIMEOUT_MASK | TBT_TMU_ADP8_REPL_THRESH_MASK,
                          TBT_TMU_REPL_TIMEOUT_HIFI |
@@ -3486,8 +3494,8 @@ static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
     }
     for (k = 0; k < 2 && rc == TBT_OK; k++) {
-        rt = k == 0 ? d : &cm->HostRouter;
-        adp = k == 0 ? d->UpAdp : p->Lane0;
+        rt = k == 0 ? d : up;
+        adp = k == 0 ? d->UpAdp : upAdp;
         rc = tbtU4TmuAdp(cm, rt, adp, TBT_TMU_ADP_CS_9, TBT_TMU_ADP9_INTERVAL_MASK,
                          TBT_TMU_ADP_INTERVAL_HIFI << TBT_TMU_ADP9_INTERVAL_SHIFT);
         if (rc == TBT_OK) {
@@ -3495,6 +3503,11 @@ static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
         }
     }
     return rc;
+}
+
+static LONG tbtU4TmuEnhancedOn(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    return tbtU4TmuEnhancedOnAt(cm, &cm->HostRouter, p->Lane0, &p->Dev);
 }
 
 /*
@@ -7550,6 +7563,29 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
     if (tbtU4LaneRd(cm, pr, ln.Adp[0], &lane[0]) != TBT_OK) {
         return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
     }
+    if (tbtU4IsV2(pr) && tbtU4IsV2(d)) {
+        /* As tbtU4Bond: speed and width are valid only on an active link
+         * (Spec 8.2.2.3), so a lane 0 still training is waited for with
+         * no write, and one that never reads connected leaves the kid
+         * FAILED with no lane written. */
+        TbtWaitStart(&w, cm->Host, TBT_U4_CONNECT_US, FALSE);
+        while (TbtU4LaneClass(TBT_LANE1_STATE(lane[0])) != TBT_U4_LANE_CONNECTED) {
+            if (!tbtU4KidLive(cm, p, k, gen)) {
+                return TBT_E_GONE;
+            }
+            if (TbtU4LaneClass(TBT_LANE1_STATE(lane[0])) != TBT_U4_LANE_TRANSITIONAL ||
+                TbtWaitDone(&w, cm->Host)) {
+                tbtU4Log(cm, "u4.kid.link.not-active",
+                         (k->Index << 8) | TBT_LANE1_STATE(lane[0]));
+                k->Why = TBT_U4_WHY_LANE_STATE;
+                return TBT_E_STATE;
+            }
+            tbtU4Pause(cm, &w);
+            if (tbtU4LaneRd(cm, pr, ln.Adp[0], &lane[0]) != TBT_OK) {
+                return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
+            }
+        }
+    }
     bonded = (BOOLEAN)(TBT_LANE1_NLW(lane[0]) == TBT_LANE_WIDTH_X2);
     if (TBT_LANE1_SPEED(lane[0]) == TBT_LANE_SPEED_GEN4) {
         /* Record 22 section 6.2.3 through the link view: a Gen 4 link is
@@ -7695,13 +7731,131 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
 }
 
 /*
+ * The link of a kid's TMU off again, on the parent's side always and on
+ * the child's when `dev` (both there): AdapterTimeSyncInterval 0 and
+ * Enable Enhanced Uni-Directional Mode 0, then Disable Time Sync set, the
+ * child's inside a time disruption of the child (record 22 section 6.6
+ * TMU item 6 through the link view). A write that fails leaves the link's
+ * TMU as it is: the next kid on the link finds it not Off
+ * (tbtU4LinkTmuOff) and configures none.
+ */
+static VOID tbtU4KidTmuOff(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, BOOLEAN dev)
+{
+    PTBT_U4_ROUTER pr;
+    PTBT_U4_ROUTER d;
+    LONG rc;
+
+    if (!k->TmuConfigured) {
+        return;
+    }
+    pr = &p->Dev;
+    d = &k->Dev;
+    rc = TBT_OK;
+    if (dev && d->Present) {
+        rc = tbtU4TmuTd(cm, d, TRUE);
+        if (rc == TBT_OK) {
+            rc = tbtU4TmuEnhancedOff(cm, d, d->UpAdp);
+        }
+        if (rc == TBT_OK) {
+            rc = tbtU4TmuAdp(cm, d, d->UpAdp, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS);
+        }
+        if (tbtU4TmuTd(cm, d, FALSE) != TBT_OK && rc == TBT_OK) {
+            rc = TBT_E_STATE;
+        }
+    }
+    if (tbtU4TmuEnhancedOff(cm, pr, k->ParentLane0) != TBT_OK ||
+        tbtU4TmuAdp(cm, pr, k->ParentLane0, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS) !=
+            TBT_OK) {
+        rc = TBT_E_STATE;
+    }
+    if (rc != TBT_OK) {
+        tbtU4Log(cm, "u4.kid.tmu.off-failed", (p->Index << 8) | k->Index);
+    }
+    k->TmuConfigured = FALSE;
+}
+
+/*
+ * Record 22 section 6.2.2 item 6 through the link view: on the link of a
+ * kid this driver enumerated, both ends version 2 routers with a TMU
+ * (neither reporting Time Synchronization Protocol Not Supported) under
+ * XhciCmUsb4V2 1, HiFi Enhanced Uni-Directional before CV, as at depth 1
+ * (tbtU4TmuEnable's enhanced form): Disable Time Sync set on both lane 0
+ * adapters (section 6.6 TMU item 1), the link's TMU read Off (else left
+ * as found, logged), then inside a time disruption of the child its
+ * local time posted from the host's, the mode set on the child's
+ * upstream and the parent's downstream lane 0 adapters, Disable Time
+ * Sync cleared on the child's then the parent's. A failure is logged and
+ * counted, what was written undone, and the PCIe tunnel proceeds (TMU
+ * item 5). Every other link of a kid: no TMU.
+ */
+static VOID tbtU4KidTmu(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
+{
+    PTBT_U4_ROUTER pr;
+    PTBT_U4_ROUTER d;
+    ULONG a;
+    ULONG v;
+    LONG rc;
+
+    pr = &p->Dev;
+    d = &k->Dev;
+    a = k->ParentLane0;
+    if (!cm->Config.Usb4V2 || !tbtU4IsV2(pr) || !tbtU4IsV2(d) || !d->EnumeratedHere ||
+        pr->CapTmu == 0 || d->CapTmu == 0 || pr->Adp[a].CapTmu == 0 ||
+        d->Adp[d->UpAdp].CapTmu == 0) {
+        return;
+    }
+    if (tbtU4Rd(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapTmu + TBT_TMU_RTR_CS_0, &v) != TBT_OK ||
+        (v & TBT_TMU_RTR0_TSP_NS) != 0 ||
+        tbtU4Rd(cm, &pr->Route, TBT_CS_ROUTER, 0, pr->CapTmu + TBT_TMU_RTR_CS_0, &v) != TBT_OK ||
+        (v & TBT_TMU_RTR0_TSP_NS) != 0) {
+        return;
+    }
+    (void)tbtU4TmuAdp(cm, pr, a, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS);
+    (void)tbtU4TmuAdp(cm, d, d->UpAdp, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS);
+    if (!tbtU4LinkTmuOff(cm, pr, a, d)) {
+        tbtU4Log(cm, "u4.kid.tmu.inherited", (p->Index << 8) | k->Index);
+        return;
+    }
+    rc = tbtU4TmuTd(cm, d, TRUE);
+    if (rc == TBT_OK) {
+        rc = tbtU4TmuPostTimeTo(cm, p, k, gen);
+    }
+    if (rc == TBT_OK) {
+        k->TmuConfigured = TRUE;    /* owned before its writes */
+        rc = tbtU4TmuEnhancedOnAt(cm, pr, a, d);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4TmuAdp(cm, d, d->UpAdp, TBT_TMU_ADP_CS_6, TBT_TMU_ADP6_DTS, 0);
+    }
+    if (rc == TBT_OK) {
+        rc = tbtU4TmuAdp(cm, pr, a, TBT_TMU_ADP_CS_6, TBT_TMU_ADP6_DTS, 0);
+    }
+    if (tbtU4TmuTd(cm, d, FALSE) != TBT_OK && rc == TBT_OK) {
+        rc = TBT_E_STATE;
+    }
+    if (rc != TBT_OK) {
+        cm->Counters.TmuFailures++;
+        tbtU4Log(cm, "u4.kid.tmu.failed", (k->Index << 8) | ((ULONG)rc & 0xFFUL));
+        if (tbtU4KidLive(cm, p, k, gen)) {
+            k->TmuConfigured = TRUE;    /* whatever was written is undone */
+            tbtU4KidTmuOff(cm, p, k, TRUE);
+        }
+        return;
+    }
+    cm->Counters.TmuEnabled++;
+    tbtU4Log(cm, "u4.kid.tmu.enhanced", (p->Index << 8) | k->Index);
+    tbtU4WaitMin(cm, TBT_U4_TMU_SETTLE_US);
+}
+
+/*
  * Section 6.4 step 6: ROUTER_CS_5 by record 22 section 6.6 step 1's
  * predicates through the link view - PTO where the parent's port has a
  * PCIe Down adapter and the child a PCIe Up; UTO where both USB3 adapters
  * exist on a USB4 link (Guide 3.2.3; never behind a Thunderbolt 3
  * parent); with no USB3 tunnel at depth 2, both USB3 adapters
- * disconnected (Path Enable 0, Valid 1, Guide 5.5.3); then CV and
- * Configuration Ready within 500 ms. No TMU.
+ * disconnected (Path Enable 0, Valid 1, Guide 5.5.3); the TMU on a link
+ * of two version 2 routers (tbtU4KidTmu), none on any other; then CV and
+ * Configuration Ready within 500 ms.
  */
 static LONG tbtU4KidConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
 {
@@ -7740,6 +7894,7 @@ static LONG tbtU4KidConfigValid(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULO
         (void)tbtU4Rmw(cm, &d->Route, TBT_CS_ADAPTER, up3, d->Adp[up3].CapAdp + TBT_USB3_CS_0,
                        TBT_USB3_0_PE, TBT_USB3_0_V);
     }
+    tbtU4KidTmu(cm, p, k, gen);
     if (!tbtU4KidLive(cm, p, k, gen)) {
         return TBT_E_GONE;
     }
@@ -8185,6 +8340,9 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
             k->RemovalOwed = TRUE;
         }
         tbtU4Zero(t, sizeof(*t));
+        /* The link's TMU, the parent's side (the child is gone or being
+         * let go: its side goes with its next connection). */
+        tbtU4KidTmuOff(cm, p, k, FALSE);
         k->Dev.Present = FALSE;
         /* What lived below the child went with it. */
         tbtU4Zero(&k->Dev.Adp, sizeof(k->Dev.Adp));

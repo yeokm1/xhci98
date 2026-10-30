@@ -1339,13 +1339,29 @@ static int kidV2(int childKind, unsigned long hostW, unsigned long devW, int eeL
 static void test_kid_v2(void)
 {
     const TBT_U4_KID *k;
+    long cv;
+    long eu;
     int d;
     int ch;
+    int i;
 
     ch = kidV2(FAB_DEV_USB4V2, 0, 0, 0);
     d = g_kidParent;
     k = kid();
     CHECK(k != NULL && k->State == TBT_U4_UP, "a v2 kid on a Gen 4 x2 link: UP");
+    /* Record 22 section 6.2.2 item 6 through the link view: HiFi Enhanced
+     * Uni-Directional on both lane 0 adapters of the link, before CV. */
+    CHECK(k != NULL && k->TmuConfigured, "the link's TMU configured");
+    for (i = 0; i < 2; i++) {
+        int r = i == 0 ? ch : d;
+        unsigned long a = i == 0 ? 1UL : PAR_LANE;
+        CHECK(fabAdp(&g_fab, r, a, TMU8) & 0x8000UL, "EUDM 1");
+        CHECK_EQ(fabAdp(&g_fab, r, a, TMU9) >> 16, 16, "AdapterTimeSyncInterval 16");
+        CHECK_EQ(fabAdp(&g_fab, r, a, TMU6) & 2UL, 0, "time sync enabled");
+    }
+    cv = writeWith(0, ch, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_5, TBT_RTR5_CV, 1);
+    eu = writeWith(0, d, TBT_CS_ADAPTER, PAR_LANE, TMU8, 0x8000UL, 1);
+    CHECK(cv >= 0 && eu >= 0 && eu < cv, "the mode set before CV");
     CHECK(k != NULL && k->Bonded && k->Gen4 && !k->Asym, "used as bonded, symmetric");
     CHECK_EQ(kidLaneWrites(d, ch), 0, "no lane write: no TLW, LB or LD");
     CHECK_EQ(g_cm.Counters.Gen4Links, 2, "the parent's link and the kid's counted");
@@ -1358,6 +1374,15 @@ static void test_kid_v2(void)
     CHECK(kid() == NULL, "the child unplugged: the kid freed");
     CHECK_EQ(fabAdp(&g_fab, d, PAR_PCIE, PCIE1) & 1UL, 0,
              "the parent's PCIe Down: EE cleared at the teardown");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_LANE, TMU8) & 0x8000UL, 0,
+             "the parent's lane 0: EUDM 0 at the teardown");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_LANE, TMU9) >> 16, 0, "AdapterTimeSyncInterval 0");
+    CHECK(fabAdp(&g_fab, d, PAR_LANE, TMU6) & 2UL, "Disable Time Sync set");
+    /* plugged again: the link's TMU read Off, configured again */
+    fabHotPlugChild(&g_fab, d, ch);
+    poll(3);
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->TmuConfigured, "re-plugged: TMU again");
     CHECK_EQ(port(1)->State, TBT_U4_UP, "the parent kept");
 
     (void)kidV2(FAB_DEV_USB4V2, 0x04, 0x08, 0);
@@ -1381,9 +1406,63 @@ static void test_kid_v2(void)
     d = g_kidParent;
     k = kid();
     CHECK(k != NULL && k->State == TBT_U4_UP && !k->Gen4, "a v1 kid: UP, not Gen 4");
+    CHECK(k != NULL && !k->TmuConfigured, "no TMU on a v2-v1 link");
+    CHECK_EQ(writesTo(d, TBT_CS_ADAPTER, PAR_LANE, TMU8), 0, "the parent's lane 0 TMU unwritten");
     CHECK_EQ(fabAdp(&g_fab, d, PAR_PCIE, PCIE1) & 1UL, 0, "the predecessor's EE cleared");
     CHECK(fabChainPcieUp(&g_fab, d), "the chained tunnel up");
     (void)ch;
+}
+
+/* The child's enumerating write: from then the parent's downstream lane
+ * 0 reads Training (a link that will not settle). */
+static int g_kidTrainChild;
+
+static int kidTrainHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)adp;
+    (void)n;
+    (void)data;
+    if (g_trainArmed && pdf == TBT_PDF_WRITE && router == g_kidTrainChild &&
+        cs == TBT_CS_ROUTER && addr == 1) {
+        g_trainArmed = 0;
+        f->R[g_kidParent].Adp[PAR_LANE].Cs[FAB_CAP_LANE + 1] =
+            (f->R[g_kidParent].Adp[PAR_LANE].Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 26)) |
+            (1UL << 26);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* A v2-v2 child link training past the wait: FAILED, no lane write. */
+static void test_kid_training(void)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_KID *k;
+    int ch;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    g_kidParent = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    ch = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    fabPlug(&g_fab, 1, g_kidParent);
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(2);
+    g_fab.WrCount = 0;
+    g_kidTrainChild = ch;
+    g_trainArmed = 1;
+    g_fab.Hook = kidTrainHook;
+    fabHotPlugChild(&g_fab, g_kidParent, ch);
+    poll(3);
+    g_fab.Hook = NULL;
+    k = kid();
+    CHECK_EQ(g_trainArmed, 0, "the parent's lane 0 put in Training after the enumeration");
+    CHECK(k != NULL && k->State == TBT_U4_FAILED, "training past the wait: FAILED");
+    CHECK(k != NULL && k->Why == TBT_U4_WHY_LANE_STATE, "for the lane state");
+    CHECK(k != NULL && !k->Bonded && !k->Gen4, "not classified");
+    CHECK_EQ(kidLaneWrites(g_kidParent, ch), 0, "no lane write");
+    CHECK(!fabChainPcieUp(&g_fab, g_kidParent), "no chained tunnel");
 }
 
 /* A pre-OS chain over an asymmetric Gen 4 link: adopted as bonded, used
@@ -1474,6 +1553,7 @@ int main(void)
     RUN_VEC(test_link_bound);
     RUN_VEC(test_kid_v2);
     RUN_VEC(test_kid_adopt_asym);
+    RUN_VEC(test_kid_training);
     RUN_VEC(test_kid_cv_found);
     fabTraceMark("end");
     printf("test_u4v2: %d checks, %d failures\n", checks, failures);

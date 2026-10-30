@@ -1590,7 +1590,9 @@ firmware's depth-2 messages are not captured.
   that router's downstream USB4 ports; the depth-2 router's own
   downstream ports left locked, as depth 1's are today.
 - PCIe only: no USB3 tunnel at depth 2, so no TMU at depth 2 (record 22
-  section 6.6: PCIe has no accuracy requirement), and no DisplayPort.
+  section 6.6: PCIe has no accuracy requirement), and no DisplayPort;
+  except a link of two version 2 routers, whose TMU record 22 section
+  6.2.2 item 6 sets whatever the tunnels (section 6.11).
 - The parent may be a USB4 router or a Thunderbolt 3 router (the TS3
   Plus, record 22 section 8); the child a USB4 router. A Thunderbolt 3
   child behind a parent is out (section 11): the emulator's chain puts a
@@ -1751,7 +1753,8 @@ a kid slot is free:
    disconnected as `XhciCmUsb3Tunnel` 0 does at depth 1 (Path Enable 0
    with Valid 1, Guide 5.5.3; `tbtU4Usb3Disconnect`); then CV and
    Configuration Ready within 500 ms (record 22 section 6.6 step 3;
-   section 2.4 step 1 [linux]). No TMU.
+   section 2.4 step 1 [linux]). No TMU, but on a link of two version 2
+   routers (section 6.11).
 7. **The PCIe tunnel** (section 6.6), when `XhciCmApprove` is 1.
 8. **The PCI side**: section 3's chain action; the kid is UP.
 
@@ -2198,10 +2201,27 @@ differs from them, this section is the record.
   under `XhciCmUsb4V2` 1 is configured only once CV reads clear: CV set
   with PTO is kept as found, CV set without PTO, or a read that fails,
   leaves the kid HELD (`TBT_U4_WHY_CV_FOUND`, `u4.kid.cv.found`,
-  `u4.kid.cv.unread`), its ROUTER_CS_5 unwritten. A predecessor's Enable
-  Gen 4 Link Recovery on a depth-2 link is not cleared in this cut.
+  `u4.kid.cv.unread`), its ROUTER_CS_5 unwritten. A v2-v2 child link's
+  lane 0 still training is waited for, as a port's, with no write; one
+  that never reads connected leaves the kid FAILED
+  (`TBT_U4_WHY_LANE_STATE`, `u4.kid.link.not-active`). On the link of a
+  kid this driver enumerated, both ends version 2 routers with a TMU,
+  neither reporting Time Synchronization Protocol Not Supported, under
+  `XhciCmUsb4V2` 1: HiFi Enhanced Uni-Directional before CV, as at depth
+  1 (Disable Time Sync set at connection, the link's TMU read Off or
+  left as found, `u4.kid.tmu.inherited`; the child's time posted from the
+  host's, the mode on the child's upstream and the parent's downstream
+  lane 0, Disable Time Sync cleared on the child's then the parent's,
+  `u4.kid.tmu.enhanced`, `TBT_U4_KID.TmuConfigured`); a failure undone,
+  counted (`TmuFailures`) and logged (`u4.kid.tmu.failed`), the PCIe
+  tunnel proceeding; at the kid's teardown the parent's side back to
+  AdapterTimeSyncInterval 0, Enable Enhanced Uni-Directional Mode 0 and
+  Disable Time Sync set (`u4.kid.tmu.off-failed` when a write fails,
+  after which the next kid finds the link's TMU not Off and configures
+  none). A predecessor's Enable Gen 4 Link Recovery on a depth-2 link is
+  cleared at the link's discovery (`tbtU4LinkElr`), as at depth 1.
   Vectors: `test_u4v2`'s `test_kid_v2`, `test_kid_adopt_asym`,
-  `test_kid_cv_found`.
+  `test_kid_training`, `test_kid_cv_found`.
 - **Not in this cut** (the task stays open for them): the eject paths
   `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
   section 3.7's chained unit, task 45.13: until then a chained device goes
