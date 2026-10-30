@@ -19,7 +19,6 @@ rem   INSTALL /console /uninstall  remove the drivers (the word REMOVE)
 rem   INSTALL /console /yes /set XhciInterruptMode=2   unattended
 rem   INSTALL /console /devices    the connected Thunderbolt and USB4
 rem                                devices; /eject removes one safely
-rem   INSTALL /debug     use the debug- directory (troubleshooting only)
 rem
 rem tools\xhciinst\readme.txt has the rest. ASCII, CRLF line endings: MS-DOS
 rem 7.1's COMMAND.COM loses goto labels in a file with LF endings.
@@ -34,8 +33,6 @@ rem so a ninth argument may mean a tenth was lost: refuse rather than run
 rem a shortened command.
 if not "%9"=="" goto toomany
 set XDIR=release-x86
-for %%A in (%1 %2 %3 %4 %5 %6 %7 %8 %9) do if "%%A"=="/debug" set XDIR=debug-x86
-for %%A in (%1 %2 %3 %4 %5 %6 %7 %8 %9) do if "%%A"=="/DEBUG" set XDIR=debug-x86
 if "%1"=="/console" goto console98
 if "%1"=="/CONSOLE" goto console98
 if not exist TOOLS\XHCIINST\XHCIWIZ.EXE goto nodir
@@ -73,7 +70,6 @@ if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64" set "XEXE=XHCIIN64.EXE"
 if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64" set "XWIZ=XHCIWZ64.EXE"
 if /i "%PROCESSOR_ARCHITEW6432%"=="AMD64" set "XARCH=x64"
 set "XDIR=release-%XARCH%"
-for %%A in (%*) do if /i "%%~A"=="/debug" set "XDIR=debug-%XARCH%"
 if /i "%~1"=="/console" goto consolent
 if not exist "%~dp0tools\xhciinst\%XWIZ%" (
     echo %~dp0tools\xhciinst\%XWIZ% is missing. Unzip the whole package and

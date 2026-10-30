@@ -224,7 +224,8 @@ int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
                     int ntmapPresent);
 
 /* The XHCI98_FLAVOUR_* markers in an image: their count, and the first's
- * suffix (RELEASE, DEBUG, QEMU) in out. */
+ * suffix (RELEASE or QEMU; DEBUG in an image from before task 45.45) in
+ * out. */
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
                         size_t cap);
 
@@ -811,8 +812,6 @@ typedef struct _INST_OPTS {
     char To[260];           /* /to <path>: the install directory, unasked */
     char From[260];         /* /from <dir>: the uninstall's relaunch from the
                                install directory (record 26 section 9.2) */
-    int Debug;              /* /debug: the debug- directory (the window's
-                               own choice; INSTALL.BAT's for the console) */
     int Console;            /* /console: INSTALL.BAT's word, the console's */
     int SetCount;
     int SetIndex[INST_MAX_SET];

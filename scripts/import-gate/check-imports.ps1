@@ -41,12 +41,13 @@ Three things happen, in order:
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
 
-Checks whichever of the six default images exist - the three flavours under
-src\objfre, src\objchk and src\objchk_qemu, in i386 and in amd64 - inferring
-the flavor AND the architecture from the path.
+Checks whichever of the four default images exist - the two flavours under
+src\objfre and src\objchk_qemu, in i386 and in amd64 - inferring the flavor
+AND the architecture from the path. An image under src\objchk, the retired
+debug flavour's tree (task 45.45), is refused by name.
 
 .EXAMPLE
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug-x86\xhci98.sys -Flavor debug -Arch x86
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-release-x86\xhci98.sys -Flavor release -Arch x86
 
 An image outside the obj trees infers nothing from its path, so -Flavor and
 -Arch are both required: `-Arch auto` throws rather than guess, because MSVC
@@ -58,7 +59,7 @@ all - a wrong guess would gate the allowlist against an empty set and pass.
 param(
     [string[]]$Image = @(),
 
-    [ValidateSet("auto", "release", "debug", "qemu")]
+    [ValidateSet("auto", "release", "qemu")]
     [string]$Flavor = "auto",
 
     # The five path overrides below all default to a file beside this script or
@@ -501,11 +502,17 @@ function Read-AllowFile {
             # "both" is refused rather than reinterpreted: a row silently read
             # as covering three builds when it was written about two is exactly
             # the failure the third flavor exists to prevent.
+            # Task 45.45 retired the debug flavour, and its word is refused
+            # the same way: "all" is release and qemu since, and a debug row
+            # names a build that no longer exists.
             if ($flavors -eq "both") {
-                throw "$Path line ${lineNo}: FLAVORS 'both' is retired - there are three flavors since task 13-L.1. Write 'all' for every flavor, or name one of release, debug, qemu."
+                throw "$Path line ${lineNo}: FLAVORS 'both' is retired - there are two flavors since task 45.45 (three from task 13-L.1). Write 'all' for every flavor, or name one of release, qemu."
             }
-            if ($flavors -notin @("release", "debug", "qemu", "all")) {
-                throw "$Path line ${lineNo}: FLAVORS must be release, debug, qemu or all"
+            if ($flavors -eq "debug") {
+                throw "$Path line ${lineNo}: FLAVORS 'debug' is retired - the debug flavour was retired with task 45.45 (design record 08 section 14). Write 'all' for every flavor, or name one of release, qemu."
+            }
+            if ($flavors -notin @("release", "qemu", "all")) {
+                throw "$Path line ${lineNo}: FLAVORS must be release, qemu or all"
             }
             $requirement = $fields[2].ToLower()
             if ($requirement -notin @("required", "optional")) {
@@ -1186,15 +1193,15 @@ try {
         }
     } else {
 
-        foreach ($candidate in @("objfre\i386", "objchk\i386", "objchk_qemu\i386",
-                                 "objfre\amd64", "objchk\amd64", "objchk_qemu\amd64")) {
+        foreach ($candidate in @("objfre\i386", "objchk_qemu\i386",
+                                 "objfre\amd64", "objchk_qemu\amd64")) {
             $path = Join-Path $repo "src\$candidate\xhci98.sys"
             if (Test-Path -LiteralPath $path) {
                 $images += $path
             }
         }
         if ($images.Count -eq 0) {
-            throw "no built driver found under src\objfre, src\objchk or src\objchk_qemu. Build first (scripts\build-driver.cmd), or pass -Image."
+            throw "no built driver found under src\objfre or src\objchk_qemu. Build first (scripts\build-driver.cmd), or pass -Image."
         }
     }
 
@@ -1247,10 +1254,10 @@ try {
                 $objDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $path))
                 switch ($objDir) {
                     "objfre"      { $imageFlavor = "release" }
-                    "objchk"      { $imageFlavor = "debug" }
                     "objchk_qemu" { $imageFlavor = "qemu" }
+                    "objchk"      { throw "'$path' is under objchk, the retired debug flavour's tree (task 45.45): no flavour builds there. Rebuild with scripts\build-driver.cmd release or qemu." }
                     default {
-                        throw "cannot infer the build flavor of '$path'. Pass -Flavor release, -Flavor debug or -Flavor qemu."
+                        throw "cannot infer the build flavor of '$path'. Pass -Flavor release or -Flavor qemu."
                     }
                 }
             }
@@ -1363,10 +1370,10 @@ Fix it one of these ways:
             $objDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $path))
             switch ($objDir) {
                 "objfre"      { $imageFlavor = "release" }
-                "objchk"      { $imageFlavor = "debug" }
                 "objchk_qemu" { $imageFlavor = "qemu" }
+                "objchk"      { throw "'$path' is under objchk, the retired debug flavour's tree (task 45.45): no flavour builds there. Rebuild with scripts\build-driver.cmd release or qemu." }
                 default {
-                    throw "cannot infer the build flavor of '$path': its grandparent directory is '$objDir', not one of objfre, objchk or objchk_qemu. Pass -Flavor release, -Flavor debug or -Flavor qemu."
+                    throw "cannot infer the build flavor of '$path': its grandparent directory is '$objDir', not one of objfre or objchk_qemu. Pass -Flavor release or -Flavor qemu."
                 }
             }
         }

@@ -5,16 +5,14 @@
  * section, and the quoted phrase is the branch the verdict comes from. The
  * table answers what a conforming controller would do, not what QEMU does.
  *
- * The release flavour compiles none of it (DBG is 0 there): strict mode is
- * an observer for the debug and qemu flavours only.
+ * Every flavour compiles it since task 45.45 (design record 08 section 14):
+ * strict mode is an observer, on unless XhciCommandCheck is 0.
  *
  * C89, pure: IRQL any.
  */
 
 #include "xhci.h"
 #include "xhci_strict.h"
-
-#if DBG || defined(XHCI_HOST_TEST)
 
 ULONG XhciStrictSlotState(ULONG outputSlotState, ULONG enabled)
 {
@@ -225,8 +223,3 @@ ULONG XhciStrictIsPreconditionCode(ULONG completionCode)
            completionCode == XHCI_CC_CONTEXT_STATE_ERROR;
 }
 
-#else /* release: strict mode is not in the image */
-
-typedef int xhciStrictReleasePlaceholder;
-
-#endif

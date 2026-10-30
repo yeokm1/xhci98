@@ -331,8 +331,7 @@ unticked; /xhcipfw only with /thunderbolt or /cmonly),
 (an option, preselected), /defaults,
 /force (reinstall this release, or go back to it from a newer one),
 /restage (Vista to 10: replace a stored development build with the same
-DriverVer), /debug (the debug- directory, only if a maintainer asks),
-/log path.
+DriverVer), /log path.
 
 The console tool
 ----------------

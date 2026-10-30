@@ -98,6 +98,11 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * another number or another type is on. Read at every start. */
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
 #define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
+/* Task 45.45 (design record 08 section 14): the command-state checker
+ * (hcd_strict.c), written by both INFs at 1: only a DWORD 0 turns it off;
+ * absent, another number, another type or a failed read is on. Read at
+ * every start and latched for its lifetime. */
+#define HCD_VALUE_COMMAND_CHECK L"XhciCommandCheck"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). The INFs
@@ -491,6 +496,19 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_USB2_BOS, &value);
     hc->Usb2Bos = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "enum.bos.usb2.on", hc->Usb2Bos);
+
+    /* Task 45.45: the command-state checker. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_COMMAND_CHECK, &value);
+    hc->Counters.StrictSwitchRead =
+        NT_SUCCESS(status) ? 1UL
+        : (status == STATUS_OBJECT_TYPE_MISMATCH) ? 2UL
+                                                 : 0UL;
+    hc->StrictOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    hc->Counters.StrictOn = hc->StrictOn;
+    XhciLogNote(ext, "strict.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "strict.on", hc->StrictOn);
 
     /* Task 45.23 (design record 20 section 4.3.2): devices kept across a
      * resume's re-initialization. No INF writes it: absent, or anything

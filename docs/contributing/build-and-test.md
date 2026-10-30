@@ -173,7 +173,7 @@ first two are one-time, and neither needs elevation:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-msvc6.ps1         # -> tools\MSVC600
 powershell -ExecutionPolicy Bypass -File scripts\install-w2kddk-cabs.ps1  # -> tools\ntddk
-scripts\build-driver.cmd both
+scripts\build-driver.cmd release
 ```
 
 They expect `tools\MSVC600.zip` and `tools\WIN2KDDK.EXE` to be present; the
@@ -327,16 +327,16 @@ Parameters:
   unquoted: `setenv.bat` assigns `BASEDIR` verbatim, so a relative path breaks
   the moment the build `cd`s elsewhere, and a quoted one puts literal quotes
   into every derived path
-- `free` - the DDK's own word for what this project calls the release build. Its `checked` is this project's debug build. These two words appear here because `setenv.bat` takes them literally; everywhere else the project says release and debug.
+- `free` - the DDK's own word for what this project calls the release build. Its `checked` is the environment of the `qemu` flavour (and of the `debug` flavour until roadmap-usb4 task 45.45 retired it). These two words appear here because `setenv.bat` takes them literally; everywhere else the project says release and qemu.
 - `w2k` - target OS (Windows 2000). This controls which headers/libs are used.
 - `x86` - architecture.
 
-For a debug build (recommended during development):
+The checked environment:
 ```
 tools\ntddk\bin\setenv.bat %CD%\tools\ntddk checked w2k x86
 ```
 
-That is the DDK's checked environment, which `build-driver.cmd` maps both `debug` and `qemu` onto. What it buys this driver is narrower than the DDK's general description: both flavours compile `/Oxs` and differ by `/Oy-` against `/Oy`, so a checked build keeps frame pointers rather than dropping optimisation. Every `XHCI_C_ASSERT` in this driver is compile-time and fires in every flavour, and the verbose per-line output belongs to `qemu` alone, not `debug`.
+That is the DDK's checked environment, which `build-driver.cmd` maps `qemu` onto (with its own `BUILD_ALT_DIR`, `chk_qemu`; a bare `build` there meets the `sources` files' flavour check, which refuses `chk`). It mapped `debug` onto it too until roadmap-usb4 task 45.45 retired that flavour (design record 08 section 14). What it bought this driver was narrower than the DDK's general description: on MSVC 6.0 both compile `/Oxs` and differed by `/Oy-` against `/Oy`, and since task 45.45 the release build compiles `/Oy-` as well (`NTNOFPO=1` in each driver's `sources`, held by `scripts\check-frame-pointers.ps1`). Every `XHCI_C_ASSERT` in this driver is compile-time and fires in every flavour, and the verbose per-line output belongs to `qemu` alone.
 
 ## Build Files
 
@@ -478,12 +478,20 @@ Use `scripts\build-driver.cmd`. It is non-interactive and runs the DDK
 build plus every gate a binary must pass before it goes near a VM:
 
 ```
-scripts\build-driver.cmd            REM both SHIPPING flavours (default)
-scripts\build-driver.cmd debug
+scripts\build-driver.cmd            REM release, the one that ships (default)
 scripts\build-driver.cmd release
-scripts\build-driver.cmd qemu       REM the emulator-only third flavour
-scripts\build-driver.cmd all        REM all three - what a release cut gates
+scripts\build-driver.cmd qemu       REM the emulator-only flavour
+scripts\build-driver.cmd all        REM both - what a release cut gates
 ```
+
+`debug` and `both` are refused by name: roadmap-usb4 task 45.45 (owner,
+2026-10-30) retired the debug flavour, and `both` was debug and release
+(design record 08 section 14). The release build keeps what debug gave: the
+frame pointers on the MSVC 6.0 x86 builds, which `:checkfpo` holds after each
+x86 release link of `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
+(`scripts\check-frame-pointers.ps1` reads every compiler line of the build
+log for `/Oy-`), and the command-state checker, on unless `XhciCommandCheck`
+is 0.
 
 **Every x86 run also builds `xhcihlpr.sys`**, the x86 helper for 32-bit
 Windows 2000, XP, Vista and 7 (design record 18 section 15; task 38.3; until
@@ -525,8 +533,8 @@ overrides it). An `-amd64` run builds no helper.
 flavour word:
 
 ```
-scripts\build-driver.cmd both -amd64    REM the shipping pair, 64-bit
-scripts\build-driver.cmd all  -amd64    REM all three - what a release cut gates
+scripts\build-driver.cmd release -amd64 REM the one that ships, 64-bit
+scripts\build-driver.cmd all  -amd64    REM both - what a release cut gates
 ```
 
 It selects WDK 7.1 (`x64 WNET`) instead of the Windows 2000 DDK, and
@@ -537,36 +545,36 @@ reads too - because handing the Win2000 DDK's
 `setenv.bat` an `x64 WNET` argument fails with a message about the wrong thing
 entirely.
 
-There are three flavours, and only two of them are ever published. `release`
-and `debug` are the shipping pair and are what `-Flavor`, `out\pkg-*`,
-`releases\<version>\` and "both flavours" mean throughout these documents.
-`qemu` is `debug` plus the port-`0xE9` trace mirror and the
-`HAL.dll!WRITE_PORT_UCHAR` import that carries it; it builds into
-`src\objchk_qemu\i386\` with `buildchk_qemu.*` logs, and it **must never be
-published**.
+There are two flavours, and only one of them is ever published. `release`
+ships and is what `-Flavor`, `out\pkg-*` and `releases\<version>\` mean
+throughout these documents; where an older section says "both flavours" it
+meant release and the retired debug. `qemu` is a checked build with the
+port-`0xE9` trace mirror and the `HAL.dll!WRITE_PORT_UCHAR` import that
+carries it; it builds into `src\objchk_qemu\i386\` with `buildchk_qemu.*`
+logs, and it **must never be published**.
 
 That import was the sole delta between the two binaries of the development
 package whose debug build gave the E460 a `Code 2`; why that build
 failed is not established (defect 2b). The import allowlist's one
 `qemu required` row is what makes a published binary carrying it impossible.
-`src\sources` refuses any `BUILD_ALT_DIR` outside the three with an `!ERROR`.
+`src\sources` refuses any `BUILD_ALT_DIR` outside the two (`fre`, `chk_qemu`)
+with an `!ERROR`; `chk`, the retired debug flavour's, among them.
 `docs/contributing/design/08-build-flavours-and-the-log-channel.md` section 5 is
 the design record.
 
-`both` and `all` are different words. `both` is the two shipping flavours and
-stays the wrapper's default, because widening it would build a never-published
-binary on every ordinary run; `all` is the three and is what a release cut
-uses, so every flavour is gated even though only two are staged. In the import
-allowlist's `FLAVORS` column the word is `all` and `both` is refused, which is
-a different rule in a different file; see "Post-link import-compatibility
-gate" below.
+`release` stays the wrapper's default, because widening it would build a
+never-published binary on every ordinary run; `all` is the two and is what a
+release cut uses, so every flavour is gated even though only one is staged.
+In the import allowlist's `FLAVORS` column the word is `all` and `both` and
+`debug` are refused, which is a different rule in a different file; see
+"Post-link import-compatibility gate" below.
 
-The DDK calls `release` and `debug` free and checked, and those words survive
-only where it requires them: `setenv.bat`'s flavour argument, the
-`src\objfre` / `src\objchk` trees, and the `buildfre` / `buildchk` logs.
-`build-driver.cmd` translates once, in `:flavordirs`, which is also where
-`qemu` is mapped onto checked with its own `BUILD_ALT_DIR`, since `debug` and
-`qemu` are both checked builds and would otherwise collide in one output tree.
+The DDK calls `release` free and `qemu`'s environment checked, and those words
+survive only where it requires them: `setenv.bat`'s flavour argument, the
+`src\objfre` / `src\objchk_qemu` trees, and the `buildfre` / `buildchk_qemu`
+logs. `build-driver.cmd` translates once, in `:flavordirs`, which is also
+where `qemu` is mapped onto checked with its own `BUILD_ALT_DIR` (a tree the
+retired checked debug flavour, `objchk`, never shared).
 Do not reintroduce the DDK vocabulary anywhere else: "free" reads as free of
 charge to a user, so `releases\` never says it.
 
@@ -628,16 +636,16 @@ and `buildchk_qemu.log`), and it must be overridden after `setenv.bat`, so that
 `SDK_LIB_PATH` still points at `libchk` and the link resolves.
 
 `build` appends its own flavour word to `TARGETPATH`, so output is
-`src\objchk\i386\xhci98.sys` (the debug build), `src\objfre\i386\xhci98.sys`
-(the release one) or `src\objchk_qemu\i386\xhci98.sys` (the emulator-only one),
-never `src\obj\`. Build errors are logged to `buildchk.log`/`buildchk.err` (or
-`buildfre.*`, or `buildchk_qemu.*`) in `src\`.
+`src\objfre\i386\xhci98.sys` (the release build) or
+`src\objchk_qemu\i386\xhci98.sys` (the emulator-only one), never `src\obj\`.
+Build errors are logged to `buildfre.log`/`buildfre.err` (or
+`buildchk_qemu.*`) in `src\`.
 
-`objchk_qemu` contains the substring `objchk`, so the import gate infers a
-flavour by matching the object directory's full name (`objfre`, `objchk` or
-`objchk_qemu`), and anything else is a refusal rather than a guess. A
-substring test would gate a qemu binary as `debug` and let through the one
-import the third flavour exists to exclude.
+The import gate infers a flavour by matching the object directory's full
+name (`objfre` or `objchk_qemu`); `objchk`, the retired debug flavour's
+tree, is refused by name, and anything else is a refusal rather than a
+guess. A substring test would read `objchk_qemu` as `objchk` and let a qemu
+binary through under the wrong flavour's rules.
 
 Useful flags when driving `build` by hand: `-c` clean first, `-e` show
 environment, `-f` force rebuild, `-Z` do not scan for dependencies (`build -cZ`
@@ -733,7 +741,7 @@ any binary:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\import-gate\check-imports.ps1
-powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-debug-x86\xhci98.sys -Flavor debug -Arch x86
+powershell -File scripts\import-gate\check-imports.ps1 -Image out\pkg-release-x86\xhci98.sys -Flavor release -Arch x86
 ```
 
 With no `-Image` it checks whichever of `src\objfre\i386\xhci98.sys`,
@@ -6800,14 +6808,16 @@ xhci98.inf   xhci98.sys
 ```
 
 ```
-powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug
+powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release
 ```
 
 It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
 directory, so a package is never less gated than the binary in it. A copy
 taken from a published release directory is the same two files. The packager
 has written `release-x86`, `debug-x86`, `release-x64` and `debug-x64` since
-the 2026-09-09 change (roadmap task 21.5, `runs\run-21.md`), and `1.1.0.0`
+the 2026-09-09 change, and `release-x86` and `release-x64` alone since
+roadmap-usb4 task 45.45 retired the debug flavour (`3.4.0.0` the first cut
+without them) (roadmap task 21.5, `runs\run-21.md`), and `1.1.0.0`
 will be the first cut to carry those names; the cuts up to `1.0.2.0` keep
 their flavour-only `release\` and `debug\` directories, as
 `releases\1.0.2.0\` shows. The
@@ -6989,8 +6999,9 @@ Rule ids are grouped by the failure they prevent:
   `HcDisableAllSelectiveSuspend`) anywhere in either file, machine-wide or
   per-controller (inverted at 1.1.0.0; they required one from 1.0.1.0).
   The driver's own `XhciSelectiveSuspend` is a `VAL-*` row, not one of these.
-- `VAL-*`: every registry value the driver reads, thirty-six since tasks
-  38.11, 38.3 and 38.10 and `XhciSilentInstall`'s 0 (owner, 2026-10-14),
+- `VAL-*`: every registry value the driver reads, thirty-seven since tasks
+  38.11, 38.3 and 38.10, `XhciSilentInstall`'s 0 (owner, 2026-10-14) and
+  `XhciCommandCheck`'s 1 (task 45.45),
   present on every install path with the required type, flags and default
   ("The registry values the driver reads", below).
 - `PKG-*`: the staged-package checks `-PackageDir` runs, below.
@@ -7074,6 +7085,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciSilentInstall` | each start, on 98 SE and ME only | 0 | only 1 on | 0 (since the owner's change of 2026-10-14; task 38.2 wrote none) | yes |
 | `XhciUsb2HubSpeedFallback` | each start | 1 | only 0 off | 1 (since 36.51) | yes |
 | `XhciAccept096` | each start, latched for the started lifetime | 1 | 0 the 1.0 floor, any other the 0.96 floor | 1 (since 38.11) | yes |
+| `XhciCommandCheck` | each start, latched for the started lifetime | 1 | only 0 off | 1 (since 45.45) | yes |
 | `XhciMsiAvoid` | each start; on NT 6 also at AddDevice (the requirements filter's cache, record 20 section 4.1) | 1 | 0 off, 1 listed, 2 every controller; another number or type, 1 | 1 (since 38.10) | yes |
 | `XhciStreamsOff` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
 | `XhciResumeReinit` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
@@ -7089,8 +7101,11 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciIsochSpuriousSuccess` | each start | 1 | 0, 1, 2; else 1 | 1 (since 38.10) | yes |
 | `XhciAmdSuspendBitClear` | each start | 1 | 0, 1; 2 read as 1; else 1 | 1 (since 38.10) | yes |
 
-Thirty-six, all written: sixteen before task 36.51, three by it,
+Thirty-seven, all written: sixteen before task 36.51, three by it,
 `XhciAccept096` by task 38.11 (design record 17 section 4.14.4),
+`XhciCommandCheck` by task 45.45 (the command-state checker in every
+flavour, design record 08 section 14; the counter block's words 252 to
+257 and the log notes `strict.*`),
 `XhciPollFineTimer` by task 38.3 (design record 15 section 7.2.4),
 `XhciSilentInstall` by the owner's change of 2026-10-14 (design record 13
 section 6.11.3; the `SilentClasses` list it gates stays unwritten by the

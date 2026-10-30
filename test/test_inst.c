@@ -4236,9 +4236,10 @@ static void test_uninstall_entry(void)
     argv[1] = "/list";
     CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 &&
           inst_window_refusal(&o, 2, argv) != NULL, "/list is the console's");
+    /* Task 45.45: /debug went with the debug- directory. */
     argv[1] = "/debug";
-    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Debug &&
-          inst_window_refusal(&o, 2, argv) == NULL, "/debug is the window's");
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) != 0,
+          "/debug is refused: the debug flavour was retired");
     argv[1] = "/thunderbolt";
     argv[2] = "/to";
     argv[3] = "C:\\XHCI98";

@@ -868,6 +868,17 @@ per reason, in the counter list by name. Until `3.3.0.0` they were
 `hc->XportDecisions`, outside the block and never zeroed; in the block
 they are zeroed at each start with it. A block shorter than 252 words is
 a driver from before it.
+Task 45.45's six follow (252 to 257, `StrictSwitchRead`, `StrictOn`,
+`StrictChecked`, `StrictViolations`, `StrictUndefined`,
+`StrictRefusals`; design record 08 section 14): how `XhciCommandCheck`
+was read (0 absent, 1 a DWORD, 2 another type), whether the
+command-state checker runs this start, and its counts - the commands
+checked, the preconditions a conforming controller would refuse, the
+spec's "undefined behavior" cases, and the commands answered Slot Not
+Enabled, Parameter or Context State Error - in the counter list by name;
+the log's `strict.*` notes say which. The last four were fields of the
+checked builds' controller until `3.4.0.0`, never published. A block
+shorter than 258 words is a driver from before it.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

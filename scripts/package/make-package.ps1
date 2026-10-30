@@ -8,7 +8,7 @@ CD - holding everything [SourceDisksFiles] names, which since release 1.0.0.1
 is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
-    xhci98.sys     the built miniport (debug or release)
+    xhci98.sys     the built driver (release, or qemu for a guest)
     xhciuas.inf    the UAS class driver's INF (roadmap task 31-A.2;
                    src\uas\xhciuas-amd64.inf under this name for amd64)
     xhciuas.sys    the UAS class driver, the same flavour
@@ -72,13 +72,16 @@ moves all three rather than three switches that can disagree.
 
 The two architectures' binaries share a filename, so they cannot share a
 directory: the default output is out\pkg-<flavor>-<arch>, and a release cuts
-them into release-x86, debug-x86, release-x64 and debug-x64 (roadmap task
-21.3, design record 11 section 8).
+them into release-x86 and release-x64 (roadmap task 21.3, design record 11
+section 8; the debug-x86 and debug-x64 of the cuts before 3.4.0.0 went with
+the debug flavour, task 45.45).
 
 .PARAMETER Flavor
-debug (default), release or qemu - which src\obj*\<arch>\xhci98.sys to package.
-The DDK's own words for the two *checked* builds are both "checked" and for the
-free one "free", and they survive only in the obj directory names it writes.
+release (default) or qemu - which src\obj*\<arch>\xhci98.sys to package.
+The debug flavour was retired with roadmap-usb4 task 45.45 (design record 08
+section 14). The DDK's own words for the checked qemu build and the free
+release one are "checked" and "free", and they survive only in the obj
+directory names it writes.
 
 qemu is a first-class flavour and this script stages it, because that is how it
 reaches a guest at all - it is the emulator and bench build, carrying the
@@ -265,8 +268,8 @@ package's DriverVer (scripts\inf-gate\check-stor98-inf.ps1), and Stor98's
 interface header byte for byte to src\cm\stor98cm.h. With -TestSignPfx the
 amd64 stor98.sys is signed with the other x64 drivers, by the same key;
 with -SignOnly its bytes are held to the gated build's record like theirs.
-make-release.ps1 passes this to its debug legs, so a cut's debug
-directories carry no Stor98. A caller that names -DriverPath (the
+make-release.ps1 passed this to its debug legs until the debug flavour was
+retired (task 45.45). A caller that names -DriverPath (the
 self-tests' stand-ins) stages Stor98 only when it names -Stor98Root too.
 
 .PARAMETER Stor98Root
@@ -311,7 +314,7 @@ Stage roadmap task 12.3's failed-start artifact: a package that installs,
 neither target has ever exercised. Build it first with
 
     set XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER
-    scripts\build-driver.cmd debug
+    scripts\build-driver.cmd release
 
 This is the **only** exception to the do-not-deploy rule above, and it is narrow
 by construction rather than by intention: the image must carry a *second*
@@ -370,8 +373,8 @@ powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir E:\xhc
 
 [CmdletBinding()]
 param(
-    [ValidateSet("debug", "release", "qemu")]
-    [string]$Flavor = "debug",
+    [ValidateSet("release", "qemu")]
+    [string]$Flavor = "release",
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
     [string]$OutDir = "",
@@ -466,7 +469,6 @@ if ($Arch -eq "amd64" -and $HlprDriverPath -ne "") {
 $stageHlpr = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($HlprDriverPath -ne ""))
 if ($Arch -eq "x86" -and $HlprDriverPath -eq "") {
     $hlprObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -477,7 +479,6 @@ $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhc
 if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\$uasInfName" }
 if ($UasDriverPath -eq "") {
     $uasObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -492,18 +493,15 @@ if ($CmFilterInfPath -eq "") {
 }
 if ($CmDriverPath -eq "") {
     $cmObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
     $CmDriverPath = Join-Path $repo "src\cm\$cmObjDir\$archDir\xhcicm.sys"
 }
 if ($DriverPath -eq "") {
-    # Three flavours, two of them checked: "objchk" alone stopped identifying a
-    # build when task 13-L.1 added qemu, which is exactly why it has a tree of
-    # its own (scripts\build-driver.cmd :flavordirs).
+    # Two flavours since task 45.45; qemu, the checked one, has a tree of its
+    # own (scripts\build-driver.cmd :flavordirs).
     $objDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -538,7 +536,7 @@ $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 #
 # Strip a trailing separator, which GetFullPath preserves. The staging
 # directory below is named by appending a suffix to this string, so with
-# `-OutDir out\pkg-debug\` it would be `out\pkg-debug\.staging-xxx` - a *child*
+# `-OutDir out\pkg-qemu\` it would be `out\pkg-qemu\.staging-xxx` - a *child*
 # of the destination rather than a sibling, and the swap would then delete its
 # own source. A path root keeps its separator: "E:\"
 # trimmed is "E:", which names the current directory on that drive.
@@ -1137,7 +1135,8 @@ is a stale binary from before that. Rebuild:
 '$DriverPath' is the $imageFlavour build, but -Flavor $Flavor was asked for.
 Staging one flavour under another's name is how a qemu binary - which carries
 the port-0xE9 mirror and must never be published - reaches media labelled
-debug. Rebuild the flavour you meant:
+release, or how an old image of the retired debug flavour (task 45.45) does.
+Rebuild the flavour you meant:
   scripts\build-driver.cmd $Flavor
 "@
     }

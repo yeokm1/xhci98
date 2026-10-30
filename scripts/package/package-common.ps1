@@ -68,9 +68,11 @@ function Read-MediaLayout {
 # not. A `Declared` value shorter than four parts is zero-extended, since an INF
 # `DriverVer` of "1.0" means 1.0.0.0.
 #
-# Which of the three build flavours an image is, read out of the file (task
-# 13-L.1). Returns "release", "debug", "qemu" or "" when the image carries no
-# marker at all - which means a binary built before the marker existed.
+# Which build flavour an image is, read out of the file (task 13-L.1).
+# Returns "release", "qemu", "debug" (an image of the flavour task 45.45
+# retired, which every caller then refuses as not the one asked for) or ""
+# when the image carries no marker at all - which means a binary built
+# before the marker existed.
 #
 # **This is shared because both packaging scripts need the same answer and must
 # not derive it two ways.** The path is not evidence: -DriverPath can name a
@@ -2111,7 +2113,7 @@ function Get-GatedHeadAdvance {
 # record that admits anything. Like the record itself this protects against
 # a mismatch by accident, not against someone who forges one.
 $script:ImportArch = "amd64"
-$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "debug" = "objchk"; "qemu" = "objchk_qemu" }
+$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "qemu" = "objchk_qemu" }
 $script:ImportStor98Dir = "src\stor98\out\free\amd64"
 
 function Get-GatedImportDirs {
@@ -2291,8 +2293,8 @@ function Enter-GatedLock {
 function Import-GatedBuild {
     # Copies the amd64 build of each flavour in $Flavor from the worktree
     # $From into the same directories of the tree $Repo, with its records,
-    # under the rules above. With no -Flavor: release and debug, and qemu
-    # where $From has its record. Throws with every reason when it refuses;
+    # under the rules above. With no -Flavor: release, and qemu where $From
+    # has its record (debug was retired with task 45.45). Throws with every reason when it refuses;
     # returns one object per flavour (Flavor, Commit, Time, Advance, Sha256,
     # Record). -RepoLockHeld: the caller (cut-builds.ps1) already holds
     # $Repo's amd64 lock, taken with Enter-GatedLock -Owner cut-builds, and
@@ -2308,11 +2310,11 @@ function Import-GatedBuild {
     $why = Get-GatedImportTreeFault -Repo $Repo -From $From
     if ($why -ne "") { throw "the amd64 build cannot be imported: $why." }
     if ($Flavor.Count -eq 0) {
-        $Flavor = @("release", "debug")
+        $Flavor = @("release")
         if (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $From -Arch $arch -Flavor "qemu") -PathType Leaf) { $Flavor += "qemu" }
     }
     foreach ($f in $Flavor) {
-        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release, debug or qemu)." }
+        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release or qemu; debug was retired with task 45.45)." }
     }
     $dirs = @()
     foreach ($f in $Flavor) { $dirs += Get-GatedImportDirs -Flavor $f }

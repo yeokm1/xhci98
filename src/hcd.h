@@ -1720,21 +1720,20 @@ typedef struct _HCD_CONTROLLER {
      * task 38.3; hcd_tmr.c). */
     HCD_TMR Tmr;
 
-#if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
-     * xHC enforces and QEMU does not, checked before each command. Thread
-     * only. StrictSlotEnabled is the half of the slot state the Output
-     * Slot Context cannot say (Disabled and Enabled are both 0). The Seen
-     * maps hold one trace per (command with DW3 bit 9, slot and EP state)
-     * and per (command, refusal code). */
+     * xHC enforces and QEMU does not, checked before each command, in
+     * every flavour since task 45.45 (design record 08 section 14).
+     * StrictOn is XhciCommandCheck as the start read it (hcdReadValues),
+     * latched for the started lifetime; the rest is the thread's alone.
+     * StrictSlotEnabled is the half of the slot state the Output Slot
+     * Context cannot say (Disabled and Enabled are both 0). The Seen maps
+     * hold one note per (command with DW3 bit 9, slot and EP state) and
+     * per (command, refusal code). The counters are the counter block's
+     * Strict* words. */
+    ULONG StrictOn;
     ULONG StrictSlotEnabled[(XHCI_MAX_SLOTS + 1 + 31) / 32];
-    ULONG StrictChecked;            /* commands checked                   */
-    ULONG StrictViolations;         /* precondition the xHC would refuse  */
-    ULONG StrictUndefined;          /* the spec's "undefined behavior"    */
-    ULONG StrictRefusals;           /* answered SNE, Parameter or CSE     */
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
-#endif
 #if defined(XHCI_FLAVOUR_QEMU)
     /* The qemu flavour's test aids, never in a published image (design
      * record 08). QemuPsiE460 is task 35.4's speed-table override, latched
@@ -2390,8 +2389,7 @@ ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
                    PULONG psiv);
 VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
-/* hcd_strict.c: debug and qemu flavours only; nothing in release. */
-#if DBG
+/* hcd_strict.c: every flavour, on unless XhciCommandCheck is 0. */
 typedef struct _HCD_STRICT_SNAP {
     ULONG Type;
     ULONG Key;                      /* Type, plus 32 when DW3 bit 9 is set */
@@ -2407,7 +2405,6 @@ VOID HcdStrictBefore(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
                     ULONG code, ULONG control);
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
-#endif
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
