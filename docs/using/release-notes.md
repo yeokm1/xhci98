@@ -543,7 +543,9 @@ Every system `3.3.0.0` supports is supported.
   host-tested only; the window is not yet read in a guest.
 - **Fixes from a reading of the whole code** (task 45.27): among them,
   every event wait on 98 SE and ME now handles Windows 98's unsatisfied
-  wait return (read under load and replug on 98 SE and ME), a device's
+  wait return (the waiting paths read completing under load and replug
+  on 98 SE and ME; the return itself cannot be forced, so its handling was
+  not observed), a device's
   D0 work item of its own, a SuperSpeed hub port's reset with a stale
   change bit, the UAS driver's departed units, Stor98's BUSY and INTx
   enable, and the connection manager's teardown, resume and retry paths.
@@ -5261,8 +5263,10 @@ or says it was found by reading the code.
   more faults. Seen again in `2.3.0.0`'s virtual-machine tests on Windows
   2000: after a recovery with the controller polled (`XhciInterruptMode`
   `2`), and after a resume from hibernation. A controller that lost its
-  state across the hibernation, as QEMU's does, is started afresh, and the
-  driver then finds every device again as on a recovery. Each time, a
+  state across the hibernation, as QEMU's does, is started afresh, and up
+  to `3.3.0.0` the driver then found every device again as on a recovery;
+  from `3.4.0.0` a device on a root port is kept where "XhciResumeKeep"
+  allows (not read on 2000). Each time, a
   restart of the drive's own device cleared it (read with a command-line
   device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
