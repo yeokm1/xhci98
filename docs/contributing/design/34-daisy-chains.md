@@ -1,6 +1,8 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 6, 2026-10-30, task 45.13: section 3.9, the NT chain
+Status: revision 7, 2026-10-30, task 45.18, before code: section 3.10,
+Stor98's statements for chained drives and their q35 admission, and
+questions Q7 to Q11. Revision 6, 2026-10-30, task 45.13: section 3.9, the NT chain
 action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
 client's approval order as coded. Revision 4, 2026-10-27, before code, reviewed
 and revised: the
@@ -587,7 +589,7 @@ alone must not state the first device's drive down.
   for the end device's unplug and the middle device's. Until those checks
   pass on a system, MD-1 stands there, at both depths; the qualification
   is a task of its own (section 12, Q4), not part of the chain's first
-  code.
+  code; section 3.10 is its design (task 45.18).
 - **The firmware connection manager** sends no statement on q35 today
   (record 21 section 7.2: the condition admits only the emulator's SHPC
   bridge on i440FX, and a set of exactly one member). A chain changes
@@ -777,6 +779,294 @@ leaves for later is listed at the end.
   drive, and the firmware connection manager states nothing on q35, so
   until then a chained drive is held by Stor98's own gone deadline,
   MD-1); the status record's kind 3 entries. The 9x half is task 45.14.
+
+### 3.10 Stor98's statements for chained drives, and their q35 admission (task 45.18)
+
+Section 3.5 made exact for the code of task 45.18 (the owner's Q4, a
+leaner (a): the chain work builds the per-tunnel ownership, names and
+generations; the anchors and the emission for chained drives come here,
+with their q35 qualification). Nothing here is coded before 45.13's
+per-tunnel keying (section 3.9, "Left in 45.13") and 45.15's kid
+(section 6) are in the tree, except the depth-1 half of the admission
+(item 10). Until a system passes its readings (item 8), MD-1 stands
+there, at both depths, as today.
+
+1. **What changes, and what does not.** The statement's meaning, its
+   channel and Stor98's side are unchanged: an entry is a function by
+   bus and slot, at any depth (`stor98cm.h`, entry protocol), and a
+   chained drive is one more entry of the same table, so Stor98 needs no
+   change and no interface version moves (its `AGENTS.md`: the isolation
+   proof is the statement's, MD-1 the one exception). The i440FX
+   admission (record 21 section 7.2, "The statement"; `CmNvlinkIcmVerdict`
+   and `CmNvlinkU4Verdict` with the SHPC source) stays as it is. What is
+   new is a second admission, for a landing bridge that is a PCI Express
+   port on the emulator's q35 machine, at depth 1 (a member) and at depth
+   2 (a chain port), under the USB4 software connection manager only
+   (item 9).
+2. **The cases.** Three, each a column of the qualification (item 8):
+   - **D1, an end unplug at depth 1**: a member's own tunnel down, the
+     entries whose landing bridge is that member, on the member's reading
+     (record 22 section 10.2, as today but with the q35 admission).
+   - **D2, an end unplug at depth 2**: a kid's teardown (section 6.7 step
+     3), the entries whose landing bridge is that kid's chain port, on the
+     chain port's reading after the parent-side read-back.
+   - **M, the middle unplug**: the host port's teardown with kids under it
+     (section 6.8 step 2), the entries behind the member at both depths on
+     the member's reading. At depth 1 behind a dock there is no entry (the
+     dock's own functions sit behind its switch, section 2.6), so in
+     practice M states only the chained entries; an entry landing on the
+     member itself is judged as D1. M's bridge is the **member**, the one
+     that survives: items 5 and 6's reading, capability tests and current
+     identity read are the member's, and M's column is the member's kind
+     (item 8). The chain port is gone with the dock (it reads all ones),
+     so for M it is only the bridge the entry was published on, its
+     identity the one recorded at the walk; the entry's own endpoint test
+     (item 6) applies as everywhere.
+   An entry gets a statement only from the case its landing bridge and the
+   teardown put it in, and only when that case is qualified on the running
+   system and kind (item 8); otherwise it goes to `IN_USE` alone, as every
+   withheld entry does.
+3. **The anchors** (section 3.5's two sets, made exact). `CmNvlinkService`
+   samples per set, one sample per set per idle tick, timestamped before
+   its first read, and matched only when every entry of the set answered
+   with its own ids for its own generation: the host port's set (every
+   `UP` entry behind the member, both depths), and each kid's set (the
+   `UP` entries landing on that kid's chain port). D1 and M use the host
+   port's anchor, D2 the kid's. Record 22 section 10.3's deadline holds per
+   statement: delivered within 3 s of its set's anchor, at least 100 ms of
+   it left before the table write (`CM_NVLINK_DELIVERY_MS`), else
+   withheld (`CM_NVLINK_LATE`). An entry that is not in a set with a valid
+   anchor gets none (MD-1). A kid's sample is taken only while the parent's
+   connection is the one the kid's generation was recorded under (the
+   liveness rule, section 6.2), so a sample never spans a middle unplug.
+4. **The emission points.** D1: `CmNvlinkPortDown` from the DOWN hook, as
+   today. D2: a new entry point beside it, called from the kid's teardown
+   at section 6.7 step 3, with the host port, the kid, the parent-side
+   `PathClosed` and the time left; it states only entries whose landing
+   bridge is that kid's chain port, known by correspondence (section 3.1;
+   an unlearned chain port states nothing). M: `CmNvlinkPortDown` for the
+   host port, after section 6.8 step 1 dropped the kids (no register work,
+   no statement of their own), stating the member's entries by D1's rule
+   and the chained ones by M's. A chained tunnel's name (section 3.5,
+   `CM_NVLINK_TUNNEL(0x40 | kid, generation)`) keys the kid's entries, so
+   a D2 statement never touches the first device's entries, and a re-plug
+   of the child advances only the child's. On 98 SE and ME the reading is
+   entered as a decision and made on the member's call worker as at depth 1
+   (record 21 section 7.2 part 2), with the chain port's location in place
+   of the member's; the verdict follows at `CmNvlinkDecided`.
+5. **The q35 reading** (the condition proper). On the landing bridge,
+   within the time left: a type 1 function with a PCI Express capability
+   whose Device/Port Type is a root port (4) or a downstream port (6),
+   Slot Implemented, Slot Capabilities Hot-Plug Capable and **no Power
+   Controller**, Link Capabilities Data Link Layer Link Active Reporting
+   Capable; and
+   `XhciTbtPortRead` answering DOWN, which needs **both** Data Link Layer
+   Link Active clear and Presence Detect State clear (its vote; MIXED,
+   either one still set, withholds). Link Active alone is not enough on
+   this emulator: on its PCI Express slots a down transition that is a
+   link retrain (a teardown the connection manager makes with the router
+   still attached: an eject, a failure with both ends present, a resume)
+   clears Link Active at stage 1, before stage 2 resets the endpoint, and
+   keeps Presence Detect set [emu: `docs/ARCHITECTURE.md` section 4.4,
+   "Link retrain"; `usb4-tunnel-slot.c`, `ts_set_state`]. A surprise
+   removal (the router unplugged) is not a retrain: stage 2 resets and
+   drains the endpoint (`ts_quiesce`, then `usb4_tp_cutoff`), and stage 3
+   removes it, which clears Presence Detect and Link Active [emu: the same
+   bottom half, `ts_bh_work`; QEMU's PCI Express slot unplug]. So on q35
+   Presence Detect clear after a disconnect is the later-than-stage-2
+   signal, as the SHPC slot's presence is on i440FX (record 21 section
+   7.1). That holds only while no guest command removes the slot's
+   occupant: a write of Slot Control turning a populated slot's power
+   off (the system's own hot plug, or an attention-button eject) marks
+   the slot empty at once, Presence Detect and Link Active cleared in the
+   write, while the occupant's removal waits for the bottom half and runs
+   no stage 2 (`pcie.c`, `pcie_cap_slot_write_config` and
+   `pcie_cap_slot_mark_empty`; `usb4-tunnel-slot.c`,
+   `usb4_tunnel_slot_guest_unplug`) [emu]. Removing the Power Controller does not remove the path: the emulator
+   tests the value written, not the bits Slot Control keeps, so a write
+   with the power-off code reaches the unplug on a slot that has none
+   (`pcie.c`, `pcie_cap_slot_write_config`, `pcie_sltctl_powered_off(val)`)
+   [emu]. Nothing on the bridge can tell afterwards that it happened. So
+   the admission rests on the system: only a system that writes no Slot
+   Control on these ports can be qualified. This driver never writes it
+   (section 3.1); 98 SE, ME, 2000, XP and XP x64 have no native PCI
+   Express hot plug [inf: none of them is known to write it; every run of
+   item 11 carries `-trace pcie_cap_slot_write_config` and a run with such
+   a write on the stated bridge fails]; Vista and later do run native hot
+   plug on these ports (section 3.9: 7 found the chained device itself),
+   so their bits cannot be set until `usb4-emu` runs stage 2 before a
+   guest slot-off marks the slot empty, or ignores the power-off code on
+   a slot without a Power Controller (section 12, Q11). The admission
+   still requires a slot without a Power Controller, so the slot's own
+   power never hides a chained device on the systems that cannot turn it
+   on (section 2.5): the chain port with `chain-power-controller=off`, and
+   a member port given none on the command line (the property read at the
+   first leg [inf]). A retrain reads
+   MIXED and is withheld: an eject's teardown on q35
+   therefore states nothing (the unit was removed from the system before
+   it, so no Stor98 instance waits), and a both-ends failure is left to
+   MD-1. A function 0 still answering on the landing bridge's secondary
+   bus withholds as today.
+6. **The emulator's identity, fail-closed.** All of these, each read
+   successfully, or no statement:
+   - **The endpoint**: the entry's function carried QEMU's vendor id
+     1B36h when its `UP` was published (the scan's read of its ids, kept
+     in the shadow; QEMU's NVMe controller is `1B36:0010` [emu]). This is
+     the part that excludes a passed-through device. The i440FX test's
+     premise, that no Thunderbolt or USB4 hardware sits below a 1B36h
+     bridge (`cm_nvlinkos.c`, `cmNvEmulator`), does not hold on q35 by
+     itself: a host controller passed through to a q35 guest sits below
+     QEMU's `pcie-root-port` (1B36h), and its own downstream ports are
+     PCI Express ports with Link Active and Presence Detect, as the
+     emulator's are. On i440FX the SHPC-without-PCI-Express test is what
+     excludes such a port; on q35 nothing about the port does. A function
+     QEMU emulates can only sit on a bus QEMU emulates, so an emulated
+     endpoint puts the whole path to it under the emulator's gates [inf:
+     QEMU attaches no emulated function below an assigned device]; a
+     passed-through drive carries its maker's id and is never admitted.
+   - **The platform**: the landing bridge itself when it is on bus 0, or
+     else a bridge on bus 0 whose secondary..subordinate range holds the
+     landing bridge's bus, carries 1B36h (on q35 the `usb4-tunnel-port`
+     and QEMU's `pcie-root-port` are `1B36:000C` [emu]; a `usb4-generic`
+     member is itself on bus 0), read now, as `cmNvEmulator`'s two
+     branches read it; and the
+     landing bridge's own identity read now matches the one recorded at
+     its discovery (the member's at the set's discovery, the chain port's
+     at the walk, section 3.9: the identity dword).
+   - **The kind**: the landing bridge's Device/Port Type, root port or
+     downstream port, selects the qualification column (item 8); the
+     chain port is always a downstream port (`usb4-tunnel-dsp`, an
+     XIO3130 downstream port, `104C:8233` [emu]), a `usb4-generic` member
+     a root port (`usb4-tunnel-port`), an `asm4242` host's member a
+     downstream port of its switch. A kind with no reading has no column
+     and is withheld.
+   Not taken: the emulator's debug port (`usb4-debug-port`, its magic
+   `U4DB` at 5A0h, `docs/HARNESS.md`): it is a harness device a leg may
+   omit, its base is a property, and an I/O read at a fixed port in a
+   shipping image is an access this driver makes nowhere else. On hardware
+   the endpoint test alone already fails, and the record 21 section 7.1
+   boundary stands: no hardware statement, whatever the qualification.
+7. **The ordering on the emulator, per case.** What G3's ordering check
+   (Stor98's gate G3, pass condition (2)) compares, per stated entry, in
+   the host trace:
+   - D1: the statement's marker later than the member's own slot's
+     `usb4_tp_cutoff` for the endpoint's generation.
+   - D2: later than the chain port's slot's `usb4_tp_cutoff` for the
+     chained endpoint's generation.
+   - M: later than the member's `usb4_tp_cutoff`, and the chained
+     endpoint's own reset traced before it. The member's stage 2 resets
+     the dock's switch upstream port with a cold reset, which QEMU's reset
+     tree carries to every function below it, and then drains all block
+     I/O (`ts_quiesce`: `device_cold_reset`, `blk_drain_all`) [inf: from
+     the emulator's code; the leg reads the chained controller's reset
+     with `-trace pci_nvme_*` between the member's stage 1 and its
+     cutoff]. Whether the chain port's own bottom half runs its stage 2
+     before the member's stage 3 removes the subtree is not documented
+     [emu: removing the dock closes both gates in the same call, leaf
+     first, `docs/USB4-HOSTS.md` section 8; the bottom halves' order is
+     not stated]; either form passes M where the reset is read before the
+     marker, and an M run where neither is read fails.
+   In each case also: the marker before that system's first removal
+   request for the function (gate G3's pass condition (2)). Stor98's own
+   stage codes do not show it: no stop callback reaches the miniport at
+   an NT surprise removal (Stor98's gate G2), and ME never calls its stop
+   callback. The boundary is read where it is first seen: on NT by this
+   driver's child filter on the function's own PDO (record 31 section
+   4.3), at its first `IRP_MN_QUERY_REMOVE_DEVICE`,
+   `IRP_MN_SURPRISE_REMOVAL` or `IRP_MN_REMOVE_DEVICE`, whichever system
+   made it; on 98 SE and ME, where only this driver removes the function,
+   at its worker's `CM_Query_Remove_SubTree` (task 43.18's `0x1C2`). A run
+   whose function has no child filter (section 4.3's loss on 2000 and XP)
+   has no reading of that clause and does not count;
+   and under a saturated queue the held requests completed by the
+   statement, not by the gone deadline (pass condition (3); Stor98's
+   MD-1 count unchanged).
+8. **The qualification table.** Compiled in, as `CM_EJ_QUALIFIED_98SE`
+   and `_ME` are for i440FX (record 21 section 7.2 part 2): one bit per
+   system, port kind and case - systems 98 SE, ME, 2000, XP, XP x64,
+   Vista, 7, 8, 8.1 and 10, each architecture separately; kinds root port
+   and downstream port; cases D1, D2 and M (D1 and M keyed by the
+   member's kind, root port or downstream port; D2 by the chain port's,
+   always a downstream port). Every
+   bit is 0 when the code lands, and each is set by a commit that cites
+   the reading that passed it (`runs/run-45.md`, "45.18"). The system is
+   told apart by what already tells each one apart here: 98 SE from ME by
+   CONFIGMG's `Get_Version`, which `cm_cfgmg.c`'s guard already calls
+   (98 SE answers 040Ah-range, ME 045Ah-range [inf: the exact words read at
+   the first leg; any other word has no bit]) - `CmEjQualified9x` only
+   returns the constant its caller names, and today's caller asks for
+   both; on NT the version in the kernel's shared data
+   page, as record 31's `cmChildIds` reads it (`IoIsWdmVersionAvailable`
+   cannot tell Vista from 7 or 8 from 8.1), major and minor exactly, and
+   `_WIN64` for the architecture; an unrecognised system has no bit. A bit is set only when every run of item 11's set
+   for that system, kind and case passed; one failure leaves it 0 and is
+   recorded with its trace.
+9. **The firmware connection manager** keeps MD-1 on q35 (section 3.5;
+   section 4.3): its condition needs a set of exactly one member, which
+   the `tb3-*` profiles' q35 layouts do not have, and it has no
+   path read-back. Extending this admission to it is not part of 45.18
+   (section 12, Q10).
+10. **Depth 1 first.** Items 5, 6 and 8's D1 column need nothing of the
+    chain: the predicate is `CmNvlinkU4Verdict`'s, with a q35 branch
+    beside the SHPC one (source no longer required to be SHPC when the
+    reading is item 5's and item 6 holds). It can be coded, host-tested
+    and read on q35 at depth 1 before 45.13's keying and 45.15's kid land,
+    and is the first commit of 45.18. D2 and M follow with the kid.
+11. **The legs** (q35 only; `usb4-emu` with `-device usb4-debug-port`,
+    `-trace usb4_tp_*`, `usb4_dbg_*`, `usb4_h_*` and `pci_nvme_*`):
+    `usb4-generic` with `host-model=intel-adl`; a plain NVMe router on
+    port 1 (D1, kind root port); on port 2 the dock (`dialect=tb3,
+    downstream-ports=1, chain-power-controller=off`) with a plain NVMe
+    router behind it (D2, M). A chained `device-model=asm2464` enclosure
+    gets no entry (its drive is behind its own switch) and is not a
+    qualification vehicle. The build: the `qemu` flavour of `xhcicm.sys`
+    with the qualification bits under test set, writing the stage codes
+    of task 43.18 (`0x1C0` an entry marked `DOWN_QUIESCED`, `0x1C1` its
+    wait ended, `0x1C2` the removal call; `runs/run-43.md`, "43.18") with
+    the case in the argument, and `0x1C3` the child filter's first removal
+    request on the function's PDO (argument the minor code), through the debug port at 5A0h - a trial
+    build, never committed, as 43.18's was (section 12, Q8). Stor98 bound to each drive: by the tunnel id on 2000
+    to 8, the mark service's arm on 8.1, an opt-in per drive on 10 (record
+    31 section 4.7), the class match on 98 SE and ME. Per system and case,
+    the runs:
+    - idle unplug;
+    - one read held at its fetch (the harness's `x-faults` `act=hold`),
+      the router unplugged just after;
+    - saturated: on NT the queue at Stor98's limit with every read held
+      from one point on and more queued in the port (gate G3's QD 32
+      form; the workload is named in the run sheet), on 98 SE and ME one
+      held request (owner, 2026-10-22, `runs/run-43.md`, "43.18");
+    - a re-plug unplugged just after `cm.nvlink.up`;
+    - and, not counted for a bit but recorded: the chained unit's eject
+      (MIXED, withheld, item 5), and a both-ends failure where the harness
+      gives one.
+    Unplugs: D1 `device_del` of the port-1 router; D2 `device_del` of the
+    chained router, the dock's own drive untouched; M `device_del` of the
+    dock with the child attached. Systems first: 98 SE, ME, 2000, XP, 7
+    x86 and 10 x64 (section 9.3's set); XP x64, Vista, 8 and 8.1 where time
+    allows. Expected on Vista and later [inf]: Windows' native hot plug
+    removes the function on its own (Stor98's `docs/TESTING.md`: on q35 a
+    surprise makes the system remove the controller at once), so the
+    second clause of item 7 may fail there, and those bits stay 0.
+12. **Host vectors** (`test_cm_nvlink.c`, with the code): the q35 branch
+    admitted on each kind with its bit set and withheld with it clear;
+    each identity part failing alone (the endpoint's recorded vendor not
+    1B36h, no 1B36h bridge on bus 0 holding the bus, the bridge's identity
+    changed, any read failing); a 1B36h landing bridge on bus 0 admitted
+    by itself; a Power Controller reported, withheld; MIXED (Link Active clear, Presence Detect
+    set) withheld; no slot, no Link Active reporting, a root port where a
+    downstream port's column is asked, an unknown system; the i440FX
+    verdicts unchanged; D2 stating only the chain port's entries, with the
+    kid's anchor, and withholding on the host set's; M stating the chained
+    entries on the member's reading by M's bit and the member's own by
+    D1's, each withheld alone when its bit is clear; a kid's sample
+    discarded across a parent's new connection; an unlearned chain port
+    stating nothing.
+13. **What stays MD-1 after 45.18**, whatever the readings: hardware;
+    i440FX on the systems not admitted there; the firmware connection
+    manager on q35; a drive behind an enclosure's or a dock's own switch;
+    a both-ends failure and an eject on q35; a system, kind or case with
+    no passed reading.
 
 ## 4. Part 2: the Thunderbolt 3 firmware connection manager's chain
 
@@ -1397,7 +1687,8 @@ attempt, member or chain port, with a flag bit saying which.
 - `test_cm_nvlink.c`: an entry's landing bridge; a chained tunnel's name;
   a chained tunnel down stating only the chain port's entries; the middle
   unplug stating both; an exposure of the parent not advancing the chained
-  entry.
+  entry; the q35 admission and the chained statements, section 3.10
+  item 12.
 - `test_cm_marks.c`, `test_cm_ports.c`: `CmRegAttMayMark` on a chain port
   under an active member and under an inactive one; the attachment lookup
   by location.
@@ -1493,6 +1784,9 @@ neighbours). The clauses:
    (expect `cm.chain.nofilter`, section 3.2).
 8. On 7 and 10: whether native hot plug or the invalidation finds the
    child first (section 3.2).
+
+The statement's qualification legs are task 45.18's, section 3.10
+item 11.
 
 What each leg records is the brief's list (system, machine type,
 command line, binary hashes, each step's result, Device Manager codes,
@@ -1631,6 +1925,45 @@ to E5 and E7, then E6 and E8, before Part 2's code. Q6: record 33's fix
   nothing extra there, and a chain behind a dock present at power-on is
   expected to work.
 
+
+**Task 45.18's questions (2026-10-30, open)**, section 3.10:
+
+- **Q7, the emulator's identity on q35** (section 3.10 item 6): (a) the
+  bridges alone, as section 3.5 first wrote it (1B36h on the landing
+  bridge or a bus-0 bridge above it), which a host controller passed
+  through to a q35 guest also meets; (b) (a) together with the
+  endpoint's own id read at its scan (QEMU's NVMe, 1B36h) and the
+  landing bridge's identity unchanged since its discovery; (c) (b) and
+  the debug port's magic. Recommended: (b): it is the part that keeps a
+  passed-through drive out, costs no new access, and (c) would make a
+  harness device a condition of shipping behaviour.
+- **Q8, the build the readings are taken on** (section 3.10 item 11):
+  (a) a trial `qemu` build per reading, never committed, as task 43.18's
+  (the stage codes written to the debug port, the source named by its
+  commit and diff in the run sheet); (b) the stage codes committed in
+  the `qemu` flavour, which needs a second qemu-only import row
+  (`HAL.dll!WRITE_PORT_ULONG`) beside the port-0xE9 mirror's. Recommended:
+  (a): the allowlist stays as it is, and the readings are few.
+- **Q9, Vista and later on q35** (section 3.10 items 7 and 11): where
+  Windows' native hot plug removes the function before the statement,
+  (a) the bits stay 0 and MD-1 stands there, as on i440FX today; (b)
+  the clause "before the system's first removal callback" dropped for
+  those systems. Recommended: (a): that clause is gate G3's, and Stor98
+  owns it.
+- **Q11, Vista and later and the slot-off path** (section 3.10 item
+  5): the emulator marks a slot empty at a guest's power-off write before
+  any stage 2, so a statement there could precede the endpoint's reset.
+  (a) Vista to 10 left at MD-1 on q35 (no bit can be set); (b) a request
+  to `usb4-emu` (its own repository) that a guest slot-off run stage 2
+  before it reports the slot empty, or that a slot without a Power
+  Controller ignore the power-off code, and then those systems read as
+  the others. Recommended: (a) for `3.4.0.0` (their native hot plug is
+  expected to fail Q9's clause anyway), (b) noted for `usb4-emu`.
+- **Q10, the firmware connection manager on q35** (section 3.10 item 9):
+  (a) MD-1 there, as section 3.5 says; (b) a task of its own to admit it
+  (a one-member condition per chain port, from the client's link and
+  depth). Recommended: (a) for `3.4.0.0`.
+
 ## 13. Open, and the risks
 
 - **The 9x padding's premise** (section 3.3.2): PCI.VXD keeping an empty
@@ -1651,7 +1984,12 @@ to E5 and E7, then E6 and E8, before Part 2's code. Q6: record 33's fix
   the PCI side's link poll rest on it.
 - **The middle unplug's ordering against Stor98** (sections 3.5 and 6.8):
   one statement covers two tunnels' entries, anchored by one sample of
-  every entry behind the member.
+  every entry behind the member; on the emulator it rests on the
+  member's stage 2 resetting the chained controller, read at the leg
+  (section 3.10 item 7).
+- **The q35 statement's signal** (section 3.10 item 5): Presence Detect
+  clearing only after stage 2 on a surprise removal is read from the
+  emulator's code and documents, not yet from a trace of this project's.
 - **Slot power on a chain port** (section 3.1): a real dock's downstream
   port with a Power Controller would leave a chained device unpowered on
   98 SE, ME, 2000 and XP.
