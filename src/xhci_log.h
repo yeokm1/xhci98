@@ -165,7 +165,7 @@
  * `DbgPrint` from DPC and ISR contexts is what bugchecks Win98 metal. So the
  * ring gets a small always-on producer set - the explicit
  * `XhciLogNote`/`XhciLogNoteLocked` call sites, which never call `DbgPrint` -
- * and that set is identical in all three flavours.
+ * and that set is identical in every flavour.
  *
  * *(This paragraph said "the release build as well as the debug one" and named
  * debug-build `DbgPrint` as the hazard, until after Phase 13. Since task

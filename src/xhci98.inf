@@ -275,6 +275,7 @@ HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
+HKR,,XhciCommandCheck,0x00010003,1
 ; XhciUsb2Bos, the BOS read at High and Full Speed, is not written, unlike
 ; the switches above: on is the driver's own default (absent, or anything
 ; but a DWORD 0, is on; src\hcd_ctl.c), and the value exists only as the
@@ -382,6 +383,7 @@ HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
+HKR,,XhciCommandCheck,0x00010003,1
 ; XhciUsb2Bos, the BOS read at High and Full Speed, is not written, unlike
 ; the switches above: on is the driver's own default (absent, or anything
 ; but a DWORD 0, is on; src\hcd_ctl.c), and the value exists only as the

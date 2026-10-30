@@ -58,8 +58,8 @@
  * readiness timeout (a timeout is not evidence that nothing depends on the
  * controller; orchestrator decision of 2026-10-15, owner to confirm). Tunnels and
  * approvals survive every stop. The device table and the counters go to
- * the log, which is emitted at each stop (decision D12: debug and qemu
- * only).
+ * the log, which is emitted at each stop (always in the qemu flavour, and in
+ * every flavour with XhciCmLogDebugView 1: cm_log.c).
  *
  * IRQL: PASSIVE_LEVEL throughout - PnP IRPs on a DO_POWER_PAGABLE object,
  * and the *Work, Bind, PollPass and DrainActions functions on the

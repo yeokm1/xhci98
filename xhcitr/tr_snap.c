@@ -3219,6 +3219,15 @@ static const char *const xportc_counter_names[SNAP_XPORTC_WORDS] = {
     "XportBotNoStreams", "XportNoStreams"
 };
 
+/* Task 45.45's six (the command-state checker in every flavour, design
+ * record 08 section 14) follow at 252, by name in the list. */
+#define SNAP_STRICT_AT              252UL
+#define SNAP_STRICT_WORDS           6UL
+static const char *const strict_counter_names[SNAP_STRICT_WORDS] = {
+    "StrictSwitchRead", "StrictOn", "StrictChecked", "StrictViolations",
+    "StrictUndefined", "StrictRefusals"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3319,6 +3328,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_XPORTC_AT && i - SNAP_XPORTC_AT < SNAP_XPORTC_WORDS) {
         return xportc_counter_names[i - SNAP_XPORTC_AT];
+    }
+    if (i >= SNAP_STRICT_AT && i - SNAP_STRICT_AT < SNAP_STRICT_WORDS) {
+        return strict_counter_names[i - SNAP_STRICT_AT];
     }
     return NULL;
 }
@@ -5747,13 +5759,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 245 and two words
+ * word is nonzero and its value names its place): 0 to 257 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_XPORTC_AT + SNAP_XPORTC_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STRICT_AT + SNAP_STRICT_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

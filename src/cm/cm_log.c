@@ -6,8 +6,8 @@
  * up fills the ring (xhci_log.h). Emission is the owner's decision of
  * 2026-10-16, which reversed decision D12 for the release flavour, for
  * consistency with xhci98.sys: every flavour hands the ring to DbgPrint
- * when XhciCmLogDebugView is 1, and the checked flavours (debug, qemu)
- * always do, as before; from the connection-manager thread after each of
+ * when XhciCmLogDebugView is 1, and the checked qemu flavour always does
+ * (the debug one did too until task 45.45 retired it); from the connection-manager thread after each of
  * its passes that recorded something and from the PnP path at each stop,
  * at PASSIVE_LEVEL only. The qemu flavour also mirrors the same bytes to
  * port 0xE9, the emulator's debug console. This file is the one DbgPrint

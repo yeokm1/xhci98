@@ -12,7 +12,7 @@ for Windows 7, and no field of the image's header shows it, because
 SUBSYSTEM_VERSION=5.00 in src\hlpr\sources overrides the subsystem whatever
 the target. So two things are read, each refused on its own:
 
-  - **The build log** (src\hlpr\build<fre|chk|chk_qemu>.log): the kit's own
+  - **The build log** (src\hlpr\build<fre|chk_qemu>.log): the kit's own
     line "BUILDMSG: _NT_TARGET_VERSION SET TO WINXP" must be there, and every
     library the link names must come from lib\wxp\i386 - except the one the
     kit adds for a driver whose subsystem is below 6.01,

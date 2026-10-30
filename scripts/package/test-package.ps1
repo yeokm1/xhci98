@@ -74,7 +74,7 @@ function Invoke-Packager {
     # unless it names its own or is about the helper's absence; the amd64
     # package carries none.
     $isAmd64 = $false
-    $flavour = "debug"
+    $flavour = "release"
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
         if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
@@ -193,12 +193,12 @@ try {
     #
     # Every stand-in "driver" carries a flavour marker, because the packager
     # reads one out of the image and refuses a binary with none (task 13-L.1).
-    # `debug` is make-package.ps1's default -Flavor, so that is what these say;
-    # the qemu cases below deliberately say something else.
+    # `release` is make-package.ps1's default -Flavor since task 45.45, so that
+    # is what these say; the qemu cases below deliberately say something else.
     #
     $driver = Join-Path $srcDir "xhci98.sys"
     Set-Content -LiteralPath $driver -Value `
-        "not a real driver XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+        "not a real driver XHCI98_FLAVOUR_RELEASE" -Encoding ASCII
 
     function New-Inf {
         param([string]$Name, [scriptblock]$Mutate)
@@ -387,7 +387,7 @@ try {
     Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper,
         "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
-    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
+    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a release package."
     $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
         "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
     Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -HlprDriverPath."
@@ -835,7 +835,7 @@ try {
     Write-Step "a diagnostic probe driver is refused"
     $probeDriver = Join-Path $srcDir "xhci98-probe.sys"
     Set-Content -LiteralPath $probeDriver -Value `
-        "stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY XHCI98_FLAVOUR_DEBUG driver" `
+        "stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY XHCI98_FLAVOUR_RELEASE driver" `
         -Encoding ASCII
     $probeOut = Join-Path $script:work "pkg-probe"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
@@ -851,7 +851,7 @@ try {
     Write-Step "the HCD build scaffold is refused"
     $scaffoldDriver = Join-Path $srcDir "xhci98-scaffold.sys"
     Set-Content -LiteralPath $scaffoldDriver -Value `
-        "stand-in XHCI98_SCAFFOLD_DO_NOT_STAGE XHCI98_FLAVOUR_DEBUG driver" `
+        "stand-in XHCI98_SCAFFOLD_DO_NOT_STAGE XHCI98_FLAVOUR_RELEASE driver" `
         -Encoding ASCII
     $scaffoldOut = Join-Path $script:work "pkg-scaffold"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $scaffoldDriver,
@@ -890,26 +890,42 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $nfOut)) `
         "the output directory was created for a driver with no flavour marker."
 
-    # 2. A qemu binary staged under -Flavor debug is the failure this exists to
-    #    prevent: media labelled `debug` carrying the import no published
+    # 2. A qemu binary staged under -Flavor release is the failure this exists
+    #    to prevent: media labelled `release` carrying the import no published
     #    binary may have.
     $qemuDriver = Join-Path $srcDir "xhci98-qemu.sys"
     Set-Content -LiteralPath $qemuDriver -Encoding ASCII -Value `
         "stand-in XHCI98_FLAVOUR_QEMU driver"
-    $qwOut = Join-Path $script:work "pkg-qemu-as-debug"
+    $qwOut = Join-Path $script:work "pkg-qemu-as-release"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $qemuDriver,
         "-OutDir", $qwOut)
-    Assert-True ($r.ExitCode -ne 0) "a qemu binary was staged as the debug flavour."
+    Assert-True ($r.ExitCode -ne 0) "a qemu binary was staged as the release flavour."
     Assert-True ($r.Output -match "qemu") `
         ("expected the refusal to name the flavour it found. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $qwOut)) `
         "the output directory was created for a mislabelled flavour."
 
-    # 3. The same mistake the other way round: a debug binary asked for as qemu.
-    $dqOut = Join-Path $script:work "pkg-debug-as-qemu"
+    # 2a. An image of the debug flavour task 45.45 retired is refused as the
+    #     release it is not, and -Flavor debug is no longer a flavour.
+    $oldDebugDriver = Join-Path $srcDir "xhci98-olddebug.sys"
+    Set-Content -LiteralPath $oldDebugDriver -Encoding ASCII -Value `
+        "stand-in XHCI98_FLAVOUR_DEBUG driver"
+    $odOut = Join-Path $script:work "pkg-olddebug"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $oldDebugDriver,
+        "-OutDir", $odOut)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "debug build") `
+        ("an image of the retired debug flavour was staged as release. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $odOut)) `
+        "the output directory was created for an image of the retired debug flavour."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OutDir", $odOut, "-Flavor", "debug")
+    Assert-True ($r.ExitCode -ne 0) "make-package.ps1 took -Flavor debug, the retired flavour."
+
+    # 3. The same mistake the other way round: a release binary asked for as qemu.
+    $dqOut = Join-Path $script:work "pkg-release-as-qemu"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OutDir", $dqOut, "-Flavor", "qemu")
-    Assert-True ($r.ExitCode -ne 0) "a debug binary was staged as the qemu flavour."
+    Assert-True ($r.ExitCode -ne 0) "a release binary was staged as the qemu flavour."
     Assert-True (-not (Test-Path -LiteralPath $dqOut)) `
         "the output directory was created for a mislabelled flavour."
 
@@ -939,7 +955,7 @@ try {
     $failStartDriver = Join-Path $srcDir "xhci98-failstart.sys"
     Set-Content -LiteralPath $failStartDriver -Encoding ASCII -Value `
         ("stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY " +
-         "XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_DEBUG driver")
+         "XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_RELEASE driver")
 
     # 1. Without the switch it is a diagnostic build like any other.
     $fsRefusedOut = Join-Path $script:work "pkg-failstart-refused"
@@ -966,7 +982,7 @@ try {
     #    have refused on its own.
     $fsBareDriver = Join-Path $srcDir "xhci98-failstart-bare.sys"
     Set-Content -LiteralPath $fsBareDriver -Encoding ASCII -Value `
-        ("stand-in XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_DEBUG " +
+        ("stand-in XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_RELEASE " +
          "driver with no probe marker")
     $fsBareOut = Join-Path $script:work "pkg-failstart-bare"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $fsBareDriver,
@@ -1170,7 +1186,7 @@ try {
     $otherDriver = Join-Path $srcDir "xhci98-other.sys"
     Set-Content -LiteralPath $otherDriver -Encoding ASCII -Value `
         ("a different stand-in driver, visibly not the one already packaged " +
-         "XHCI98_FLAVOUR_DEBUG")
+         "XHCI98_FLAVOUR_RELEASE")
     Assert-True ((Get-FileHash -LiteralPath $otherDriver).Hash -ne
                  (Get-FileHash -LiteralPath $driver).Hash) `
         "the two stand-in drivers are identical, so this vector proves nothing."
@@ -1399,7 +1415,7 @@ try {
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
     $hlprStandInDebug = Join-Path $script:work "xhcihlpr-relpkg.sys"
-    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_RELEASE" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
         "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -HlprDriverPath '$hlprStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
@@ -1455,7 +1471,7 @@ try {
         Ensure-Directory $upRoot
 
         $flavourBytes = @{}
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             # Distinct per flavour, so a run that crossed the two would fail the
             # published-vs-package identity check rather than pass unnoticed.
             $flavourBytes[$fl] = [System.Text.Encoding]::ASCII.GetBytes(
@@ -1545,7 +1561,7 @@ try {
 
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcihlpr.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
@@ -1575,7 +1591,7 @@ try {
             Assert-True ($backslashed.Count -eq 0) `
                 ("the archive names " + $backslashed.Count + " entry/entries with backslashes, which unzip on a Linux or macOS host extracts as flat files: " +
                  (($backslashed | Select-Object -First 3) -join ", "))
-            foreach ($want in @("release/xhci98.sys", "debug/xhci98.inf")) {
+            foreach ($want in @("release/xhci98.sys", "release/xhci98.inf")) {
                 Assert-True ($entries -contains $want) "the archive has no '$want' entry."
             }
             # The release's records stay in releases\<version>\: the zip
@@ -1627,7 +1643,7 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled without a package root:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory when assembled without a package root."
@@ -1801,7 +1817,7 @@ try {
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", $packRepo))
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\USBDRV\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
         $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "USBDRV\NUSB33") -Files $exp.Files
@@ -2392,6 +2408,29 @@ try {
         try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("lifted on W7")) ("a lifted table row past this cut's lifts was not refused: '" + $msg + "'")
         Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted
+        # ...in a cut that carries both of the pair's sets: one that leaves a
+        # set out (-NoWdmFree, -NoNonFree) reads no lift, and the row is not
+        # held to one.
+        $liftRow = [pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("nonfree")
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free")
+        $msg = ""
+        try { Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free", "nonfree") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on WXP W7")) ("a lifted table row with both sets carried and no lift was not refused: '" + $msg + "'")
+        # Such a cut records the pair's COEXISTS on the row's systems as an
+        # EXCLUDES (the installer's hold there), the rest of a line as it is,
+        # so the history check asks no proof of the absent set; with both
+        # sets carried nothing changes.
+        $heldMeta = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP", "W7", "W8")))
+        $h1 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("nonfree")
+        $hk = @($h1.Table.Rels) + @($h1.Meta) | ForEach-Object { $_.Kind + ":" + ($_.Systems -join " ") }
+        Assert-True (($hk -join ",") -ceq "EXCLUDES:WXP W7,EXCLUDES:WXP W7,COEXISTS:W8") ("a lifted pair with a set not carried was not recorded as held: " + ($hk -join ","))
+        Assert-True (@($h1.Table.Rels | Where-Object { $_.Lifted }).Count -eq 0 -and $liftRow.Rels[0].Kind -ceq "COEXISTS" -and $heldMeta[0].Kind -ceq "COEXISTS") "the hold changed the table it was given, or left a lifted row."
+        $h2 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("free", "nonfree")
+        Assert-True ([object]::ReferenceEquals($h2.Table, $liftRow) -and @($h2.Meta).Count -eq 1 -and $h2.Meta[0].Kind -ceq "COEXISTS") "a lifted pair with both sets carried was changed by the hold."
+        $heldNow = [pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @($h1.Table.Rels) + @($h1.Meta) + @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W2K"))); Lifted = @() }
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev -Now $heldNow -Sets @()).Count -eq 0) "a held pair was read as a lift."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $heldNow -Lifted @()
         # ...and a lift with no lifted row of the table, or a part of one,
         # refused: the installer's hold against an earlier release is that row.
         foreach ($case in @(0, 1)) {
@@ -2516,9 +2555,31 @@ try {
         if (Test-Path -LiteralPath $realPack) {
             $realNf = Export-NonFreeSet -Root $realPack -Dest (Join-Path $script:work "nonfree-real")
             Assert-True ($realNf.Sums -eq $instSums.NonFree) ("NONFREE\SHA256.TXT for the pinned usb-wdm-nonfree is {0}; the installer carries {1}." -f $realNf.Sums, $instSums.NonFree)
-            # The cut's checks of record 26 section 6.7.11 over the pinned pack.
-            $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
-            Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+            # The cut's checks of record 26 section 6.7.11 over the pinned pack,
+            # and over the pinned free set too where its checkout is here. A
+            # lifted row of the installer's table (section 6.7.14) is proved
+            # only by both sets against the release history, so with both the
+            # checks run as the cut runs them: the repository's releases\ and
+            # the INF's version.
+            $realLifted = @((Get-InstOtherTable -Repo $repo).Rels | Where-Object { $_.Lifted })
+            $realFreeRoot = Get-DefaultWdmFreeRoot
+            $realFree = $null
+            if ($null -ne $repoPin -and (Test-Path -LiteralPath $realFreeRoot)) {
+                $realFree = Export-WdmFreeSet -Root $realFreeRoot -Pin $repoPin -Dest (Join-Path $script:work "free-real")
+                Assert-True ($realFree.Sums -eq $instSums.Free) ("FREE\SHA256.TXT for the pinned usb-wdm-free is {0}; the installer carries {1}." -f $realFree.Sums, $instSums.Free)
+            }
+            if ($null -ne $realFree) {
+                $infVer = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $repo "src\xhci98.inf")), '(?m)^DriverVer=[^,]+,(\d+\.\d+\.\d+\.\d+)')
+                Assert-True $infVer.Success "src\xhci98.inf has no DriverVer this check can read."
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $repo "releases") -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned sets wrote no record."
+                Assert-True ($realLifted.Count -eq 0 -or @($realChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0) "the installer's table lifts a pair and the cut's checks over the pinned sets record no LIFTED line."
+            } else {
+                # The pack alone: a lifted row is not held to a lift there.
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+                if ($realLifted.Count -gt 0) { Write-Host "  (no usb-wdm-free checkout at ${realFreeRoot}: the installer's lifted rows are not proved against the pinned sets here)" }
+            }
         } else {
             Write-Host "  (no usb-wdm-nonfree checkout at ${realPack}: INST_NONFREE_SUMS is not checked against the pinned tag here)"
         }
@@ -2554,7 +2615,7 @@ try {
         # the cases above) nothing is required of it in this mode.
         Write-Step "the upload set gates the UAS class driver's pair by its own INF"
         $uasInfSrc = Join-Path $repo "src\uas\xhciuas.inf"
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $uasInfSrc -Destination (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
             [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhciuas.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhciuas.sys, $fl flavour"))
@@ -2566,7 +2627,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the UAS pair present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the UAS class driver") `
             ("expected the UAS pair to be gated by its own INF. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhciuas.sys", "xhciuas.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
@@ -2581,7 +2642,7 @@ try {
         Assert-True ($r.Output -match "check-uas-inf") `
             ("expected the refusal to name the UAS INF gate. Output:`n" + $r.Output)
         # Back to the fixture the cases below were written against.
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.sys") -Force
         }
@@ -2603,7 +2664,7 @@ try {
             "nt\xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
         }
         $putCm = {
-            foreach ($fl in @("release", "debug")) {
+            foreach ($fl in @("release")) {
                 Ensure-Directory (Join-Path $pubRoot "$fl\nt")
                 foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
                 [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
@@ -2621,7 +2682,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the connection manager present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf", "nt\xhcicm.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
@@ -2666,7 +2727,7 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0) "a filter INF beside xhcicm.inf, where a 98 wizard is pointed, was assembled into the asset."
         Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
                 Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\$name") -Force
             }
@@ -2697,7 +2758,7 @@ try {
         # has one).
         Write-Step "the upload set gates txtsetup.oem by its own gate"
         $oemSrc = Join-Path $repo "src\txtsetup.oem"
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $oemSrc -Destination (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
         }
         Remove-Item -LiteralPath $uploadDir -Recurse -Force
@@ -2707,7 +2768,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with txtsetup.oem present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the text-mode Setup description") `
             ("expected txtsetup.oem to be gated. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\txtsetup.oem")) `
                 "txtsetup.oem is missing from the upload set's $fl\ directory though the published one carries it."
         }
@@ -2718,7 +2779,7 @@ try {
         Assert-True ($r.ExitCode -ne 0) "a published txtsetup.oem binding an EHCI class id was assembled into the asset."
         Assert-True ($r.Output -match "check-txtsetup-oem") `
             ("expected the refusal to name the txtsetup.oem gate. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
         }
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
@@ -2737,7 +2798,7 @@ try {
         Write-Step "-UploadSetOnly refuses a version other than the current cut, and says why"
         $olderVersion = "0.9.9.9"
         $olderRoot = Join-Path $relRoot $olderVersion
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Ensure-Directory (Join-Path $olderRoot $fl)
             Copy-Item -LiteralPath (Join-Path $pubRoot "$fl\xhci98.sys") -Destination (Join-Path $olderRoot "$fl\xhci98.sys") -Force
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $olderRoot "$fl\xhci98.inf") -Force
@@ -2797,9 +2858,7 @@ try {
         $pubRoot4 = Join-Path $relRoot4 $relVersion
         foreach ($leg in @(
             @{ Dir = "release-x86"; Inf = $plainInf },
-            @{ Dir = "debug-x86";   Inf = $plainInf },
-            @{ Dir = "release-x64"; Inf = $amd64InfSrc },
-            @{ Dir = "debug-x64";   Inf = $amd64InfSrc }
+            @{ Dir = "release-x64"; Inf = $amd64InfSrc }
         )) {
             $d = Join-Path $pubRoot4 $leg.Dir
             Ensure-Directory $d
@@ -2839,7 +2898,7 @@ try {
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
         $st4 = @("-SelfTestCatalogThumbprint", (Get-SelfTestCatalogCert).Thumbprint)
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         # The thumbprint is the self-test's alone: refused without the marker,
         # and with the repository's own releases\.
         $r = Invoke-Releaser (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -2869,7 +2928,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) `
             ("-UploadSetOnly refused a published tree holding both architectures - the likeliest cause is the INF gate being run on the amd64 file under its default x86 profile:`n" + $r.Output)
         $uploadDir4 = Join-Path $up4 ("upload-" + $relVersion)
-        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+        foreach ($d in @("release-x86", "release-x64")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\$name")) `
                     "'$name' is missing from the upload set's $d\ directory."
@@ -2878,7 +2937,7 @@ try {
         # The 64-bit directories really do carry the 64-bit INF, so the run
         # above gated what it claims to have gated rather than four copies of
         # one file.
-        foreach ($d in @("release-x64", "debug-x64")) {
+        foreach ($d in @("release-x64")) {
             $t = [System.IO.File]::ReadAllText((Join-Path $uploadDir4 "$d\xhci98.inf"))
             Assert-True ($t -match [regex]::Escape("%Mfg%=XhciModels,NTamd64")) `
                 "the upload set's $d\xhci98.inf is not the amd64 file, so the case that needs the gate's amd64 profile was never run."
@@ -2906,7 +2965,7 @@ try {
             "Get-CmPublishable does not name the connection manager's files of each layout."
         $putCm4 = {
             param([bool]$X64InNt)
-            foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            foreach ($d in @("release-x86", "release-x64")) {
                 $dd = Join-Path $pubRoot4 $d
                 $isX64 = $d -like "*-x64"
                 if (Test-Path -LiteralPath (Join-Path $dd "nt")) { Remove-Item -LiteralPath (Join-Path $dd "nt") -Recurse -Force }
@@ -2928,7 +2987,7 @@ try {
             }
         }
         & $putCm4 $false
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -2938,12 +2997,12 @@ try {
         Assert-True ($r.Output -match "release-x64\\ carries the connection manager's xhcicmf\.inf" -and
                      $r.Output -match "release-x86\\ carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected each directory's filter INF gated at its own place. Output:`n" + $r.Output)
-        foreach ($d in @("release-x64", "debug-x64")) {
+        foreach ($d in @("release-x64")) {
             Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf")) -and
                          -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt"))) `
                 "the upload set's $d\ does not carry the filter INF at its root with no nt\."
         }
-        foreach ($d in @("release-x86", "debug-x86")) {
+        foreach ($d in @("release-x86")) {
             Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicmf.inf")) -and
                          (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicm.sys")) -and
                          -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf"))) `
@@ -2951,7 +3010,7 @@ try {
         }
         # The x86 layout in an x64 directory of this version is refused.
         & $putCm4 $true
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -3001,12 +3060,19 @@ try {
         # Microsoft's - which is the incomplete-media defect again, reached by
         # a different route, and it used to exit 0.
         #
+        # Since task 45.45 release is the only flavour a run completes, so the
+        # directory left behind is one of the retired debug flavour's beside it.
         Write-Step "-Flavor may not leave a published flavour directory incomplete"
+        $leftDir = Join-Path $pubRoot "debug"
+        Ensure-Directory $leftDir
+        Copy-Item -LiteralPath (Join-Path $pubRoot "release\xhci98.inf") -Destination (Join-Path $leftDir "xhci98.inf") -Force
+        Copy-Item -LiteralPath (Join-Path $pubRoot "release\xhci98.sys") -Destination (Join-Path $leftDir "xhci98.sys") -Force
         $r = Invoke-Releaser ($relArgs + @("-Flavor", "release"))
         Assert-True ($r.ExitCode -ne 0) `
             "-Flavor release completed only one of two published flavour directories and said nothing."
         Assert-True ($r.Output -match "was not asked to complete") `
             ("expected the refusal to name the flavour left behind. Output:`n" + $r.Output)
+        Remove-Item -LiteralPath $leftDir -Recurse -Force
 
         # --- a relative -PackageRoot --------------------------------------
         #
@@ -3040,7 +3106,7 @@ try {
             $ErrorActionPreference = $savedEap2
         }
         Assert-True ($relExit -eq 0) "a relative -PackageRoot was not accepted."
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from $fl\ after a relative -PackageRoot run; the relative path derivation cut in the wrong place."
@@ -3088,7 +3154,7 @@ try {
         $thirdInf = New-Inf -Name "third" -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1`r`nextra.bin=1")
         }
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $thirdInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
         }
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
@@ -3096,7 +3162,7 @@ try {
         Assert-True ($r.ExitCode -ne 0) "an INF naming a third media file assembled an upload set from the tracked directory alone."
         Assert-True ($r.Output -match "extra\.bin") `
             ("expected the refusal to name the file the tracked directory cannot supply. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
         }
 
@@ -3131,7 +3197,7 @@ try {
         $subPubInf = New-Inf -Name "subpub" -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1,setup")
         }
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $subPubInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
             Copy-Item -LiteralPath $subPubInf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
         }
@@ -3140,7 +3206,7 @@ try {
             "an INF declaring xhci98.inf in a subdirectory assembled an upload set."
         Assert-True ($r.Output -match "carries those two at its root") `
             ("expected the refusal to explain the release layout. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
         }
@@ -3261,6 +3327,19 @@ try {
                            "-Version", "9.9.9.9")
     Assert-True ($r.ExitCode -ne 0) `
         "-Flavor release,qemu was accepted: a publishable flavour beside qemu must not launder it."
+
+    # The debug flavour, retired with task 45.45 (design record 08 section
+    # 14): in the ValidateSet for the same reason, refused with its reason.
+    Write-Step "a release cut refuses the retired debug flavour"
+    $r = Invoke-Releaser @("-Flavor", "debug", "-UploadSetOnly",
+                           "-PackageRoot", $script:work, "-Version", "9.9.9.9")
+    Assert-True ($r.ExitCode -ne 0) "a release cut accepted -Flavor debug."
+    Assert-True ($r.Output -match "retired" -and $r.Output -match "45\.45") `
+        ("expected the refusal to say the debug flavour was retired, by task 45.45. Output:`n" + $r.Output)
+    $r = Invoke-Releaser @("-Flavor", "release", "-Flavor", "debug",
+                           "-UploadSetOnly", "-PackageRoot", $script:work,
+                           "-Version", "9.9.9.9")
+    Assert-True ($r.ExitCode -ne 0) "-Flavor release,debug was accepted."
 
     # --- and that refusal has to come before the publish, not after ---------
     #
@@ -3889,7 +3968,7 @@ try {
         Ensure-Directory $newUpRoot
 
         $newInf = $prodInf
-        foreach ($fl in @("release-x86", "debug-x86")) {
+        foreach ($fl in @("release-x86")) {
             $d = Join-Path $newPubRoot $fl
             Ensure-Directory $d
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
@@ -3925,7 +4004,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) (
             "-UploadSetOnly refused a published tree using the release-x86/debug-x86 names, which is what every cut from now on produces:`n" + $r.Output)
         $newAssembled = Join-Path $newUpRoot ("upload-" + $newVersion)
-        foreach ($fl in @("release-x86", "debug-x86")) {
+        foreach ($fl in @("release-x86")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.sys"))) (
                 "the assembled upload set has no $fl\xhci98.sys. Output:`n" + $r.Output)
             Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.inf"))) (
@@ -5634,7 +5713,7 @@ try {
     $soNoTeM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^target_evidence=1", "target_evidence=0")
     foreach ($c in @(
         @{ Why = "the x86 package";        Says = "records the release amd64 build"; F = (Get-SoFault -Arch "x86") },
-        @{ Why = "the debug flavour";      Says = "records the release amd64 build"; F = (Get-SoFault -Flavor "debug") },
+        @{ Why = "the qemu flavour";       Says = "records the release amd64 build"; F = (Get-SoFault -Flavor "qemu") },
         @{ Why = "an altered binary";      Says = "xhcicm.sys at";                   F = (Get-SoFault -Bins $soAlteredBins) },
         @{ Why = "an unrecorded binary";   Says = "no hash for xhcihlpr.sys";        F = (Get-SoFault -Bins $soExtraBins) },
         @{ Why = "a dirty build";          Says = "uncommitted changes";             F = (Get-SoFault -M $soDirtyM) },
@@ -5649,14 +5728,14 @@ try {
         "a record without target evidence was refused for a run that passes -NoTargetEvidence too."
 
     # make-package.ps1 itself: each refusal, before anything is staged. The
-    # stand-in driver says debug, the packager's default flavour.
+    # stand-in driver says release, the packager's default flavour.
     $soDbgSha = @{ "xhci98.sys" = (Get-FileSha256 -Path $driver) }
     $soState = Get-GitTreeState -Repo $repo
     function New-SoRecord {
         param([string]$Name, [string]$Arch = "amd64", [string]$Commit = $soState.Head, [hashtable]$Sha = $soDbgSha)
         $p = Join-Path $soDir $Name
         [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::ASCII.GetBytes(
-            (ConvertTo-GatedManifest -Arch $Arch -Flavor "debug" -Commit $Commit -Dirty $false `
+            (ConvertTo-GatedManifest -Arch $Arch -Flavor "release" -Commit $Commit -Dirty $false `
                 -TargetEvidence $true -Time "2026-10-16T00:00:00Z" -Sha256 $Sha)))
         return $p
     }
@@ -5678,7 +5757,7 @@ try {
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (Join-Path $soDir "none.txt")) },
         @{ Why = "an unreadable record";                   Says = "is not a gated build record";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", $soBins["xhci98.sys"]) },
-        @{ Why = "the other architecture's record";        Says = "records the debug x86 build";
+        @{ Why = "the other architecture's record";        Says = "records the release x86 build";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "x86.txt" -Arch "x86")) },
         @{ Why = "a hash mismatch";                        Says = "is not the binary the build gated";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "hash.txt" -Sha $soWrongHash)) },
@@ -5915,9 +5994,7 @@ try {
         return $p
     }
     $imShaR = Set-ImBuild -Root $imB -Flavor "release"
-    $imShaD = Set-ImBuild -Root $imB -Flavor "debug"
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR
-    $imRecD = Set-ImRecord -Root $imB -Flavor "debug" -Sha $imShaD
     # A's own, older amd64 build, with a qemu record that covers its Stor98.
     $imShaQ = Set-ImBuild -Root $imA -Flavor "qemu" -Tag " old"
     $imOldQ = Set-ImRecord -Root $imA -Flavor "qemu" -Sha $imShaQ
@@ -5969,7 +6046,7 @@ try {
         Remove-Item -LiteralPath $lock -Recurse -Force
         Test-ImUnchanged "a lock"
     }
-    $imPending = [System.IO.Path]::ChangeExtension($imRecD, ".pending")
+    $imPending = [System.IO.Path]::ChangeExtension($imRecR, ".pending")
     [System.IO.File]::WriteAllText($imPending, "run=1")
     $r = Invoke-Import
     Assert-True ($r.Error.Contains("did not finish")) ("the import was not refused for a pending record: '{0}'" -f $r.Error)
@@ -6012,20 +6089,21 @@ try {
     $imOldQ = Set-ImRecord -Root $imA -Flavor "qemu" -Sha $imShaQ
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR
     # A copy that is not what the record admitted: no amd64 record at all.
-    $r = Invoke-Import -AfterCopy { [System.IO.File]::AppendAllText((Join-Path $imA "src\cm\objchk\amd64\xhcicm.sys"), "!") }
+    $r = Invoke-Import -AfterCopy { [System.IO.File]::AppendAllText((Join-Path $imA "src\cm\objfre\amd64\xhcicm.sys"), "!") }
     Assert-True ($r.Error.Contains("no amd64 record was written")) ("a copy that is not its record's was not refused: '{0}'" -f $r.Error)
     Assert-True (@($script:ImportObjDirs.Keys | Where-Object { Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $_) }).Count -eq 0) `
         "a failed import left an amd64 record in the cut's tree."
     foreach ($t in @($imA, $imB)) {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $t "out\gated-amd64.lock"))) "a failed import left the lock in '$t'."
     }
-    # The import that passes: release and debug, at a documentation commit
-    # past the build's, and nothing else.
+    # The import that passes: release (the one flavour B recorded since task
+    # 45.45 retired debug), at a documentation commit past the build's, and
+    # nothing else.
     [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "b")
     [void](Invoke-ImGit $imA @("commit", "-q", "-am", "B"))
     $r = Invoke-Import
-    Assert-True ($r.Error -eq "" -and $r.Result.Count -eq 2) ("the import of a clean build at an ancestor commit failed: '{0}'" -f $r.Error)
-    foreach ($f in @("release", "debug")) {
+    Assert-True ($r.Error -eq "" -and $r.Result.Count -eq 1) ("the import of a clean build at an ancestor commit failed: '{0}'" -f $r.Error)
+    foreach ($f in @("release")) {
         $dst = Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $f
         $src = Get-GatedManifestPath -Repo $imB -Arch "amd64" -Flavor $f
         Assert-True ((Test-Path -LiteralPath $dst) -and
@@ -6038,7 +6116,7 @@ try {
             Assert-True (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $bins[$n]) "beside.obj")) "the import did not bring the objects beside the $f $n."
         }
     }
-    Assert-True (@($r.Result | Where-Object { $null -ne $_.Advance -and $_.Advance.Commits -eq 1 }).Count -eq 2) "the import did not report the HEAD one documentation commit past the build."
+    Assert-True (@($r.Result | Where-Object { $null -ne $_.Advance -and $_.Advance.Commits -eq 1 }).Count -eq 1) "the import did not report the HEAD one documentation commit past the build."
     Assert-True (-not (Test-Path -LiteralPath $imOldQ)) "the import left the cut tree's qemu record, which covers the Stor98 it replaced."
     # A build input changed since the build: refused by name.
     [System.IO.File]::WriteAllText((Join-Path $imA "src\xhci_ring.c"), "c")
@@ -6081,7 +6159,7 @@ try {
                  -not (Test-Path -LiteralPath (Join-Path $imA "out\gated-x86.lock"))) `
         ("a lock whose marker could not be written was kept: '{0}'" -f $r)
     # A stopped qemu build in B (its .pending, no record) is refused, though
-    # the default import would take release and debug alone.
+    # the default import would take release alone.
     $imQPending = [System.IO.Path]::ChangeExtension((Get-GatedManifestPath -Repo $imB -Arch "amd64" -Flavor "qemu"), ".pending")
     [System.IO.File]::WriteAllText($imQPending, "run=1")
     $r = Invoke-Import
@@ -6100,7 +6178,7 @@ try {
     Assert-True ($r.Error.Contains("junction") -and $r.Error.Contains("out")) ("an import through a junctioned out\ was not refused: '{0}'" -f $r.Error)
     [System.IO.Directory]::Delete($imAOut)
     Rename-Item -LiteralPath (Join-Path $imA "out-real") -NewName "out"
-    $imInner = Join-Path $imA "src\cm\objchk\amd64\linked"
+    $imInner = Join-Path $imA "src\cm\objfre\amd64\linked"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $imInner) | Out-Null
     New-ImJunction $imInner $imOutside
     $r = Invoke-Import
@@ -6111,11 +6189,15 @@ try {
     # Writing a later record fails: the ones written are deleted again.
     $imHeadNow = Invoke-ImGit $imA @("rev-parse", "HEAD")
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR -Commit $imHeadNow
-    $imRecD = Set-ImRecord -Root $imB -Flavor "debug" -Sha $imShaD -Commit $imHeadNow
+    # Two records to write needs a second flavour in B: a qemu build, for
+    # this case alone (its record is removed after it).
+    $imShaBQ = Set-ImBuild -Root $imB -Flavor "qemu"
+    $imRecBQ = Set-ImRecord -Root $imB -Flavor "qemu" -Sha $imShaBQ -Commit $imHeadNow
     $r = $null
     try {
-        [void](Import-GatedBuild -Repo $imA -From $imB -Rules $biRules -BeforeWrite { param($F) if ($F -eq "debug") { throw "disk full" } })
+        [void](Import-GatedBuild -Repo $imA -From $imB -Rules $biRules -BeforeWrite { param($F) if ($F -eq "qemu") { throw "disk full" } })
     } catch { $r = $_.Exception.Message }
+    Remove-Item -LiteralPath $imRecBQ -Force
     Assert-True ($null -ne $r -and $r.Contains("every one written was deleted again") -and
                  @($script:ImportObjDirs.Keys | Where-Object { Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $_) }).Count -eq 0) `
         ("a failure writing a later record left an earlier one: '{0}'" -f $r)
@@ -6181,14 +6263,14 @@ try {
     # import took A's amd64 lock as held and dropped none it did not take.
     $cb3 = Invoke-CbRun
     Assert-True ($cb3.Error -eq "" -and $cb3.Marks["x86"] -eq "held held" -and $cb3.Marks["amd64"] -eq "held held" -and
-                 $cb3.Locks.Count -eq 0 -and $cb3.Result.Imported.Count -eq 2 -and
-                 (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "debug"))) `
+                 $cb3.Locks.Count -eq 0 -and $cb3.Result.Imported.Count -eq 1 -and
+                 (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "release"))) `
         ("two stand-in builds at once and the import did not pass as designed: '{0}', x86 '{1}', amd64 '{2}', locks left {3}" -f `
             $cb3.Error, $cb3.Marks["x86"], $cb3.Marks["amd64"], ($cb3.Locks -join ", "))
     Assert-True (@($cb3.Result.Builds | Where-Object { $_.Elapsed.TotalSeconds -ge 1 -and $_.Elapsed -le $cb3.Result.Wall }).Count -eq 2) `
         "a build's own time was not taken from its process."
     $cb4 = Invoke-CbRun -Serial
-    Assert-True ($cb4.Error -eq "" -and $cb4.Result.Imported.Count -eq 2 -and $cb4.Locks.Count -eq 0 -and
+    Assert-True ($cb4.Error -eq "" -and $cb4.Result.Imported.Count -eq 1 -and $cb4.Locks.Count -eq 0 -and
                  $cb4.Result.Wall -ge ($cb4.Result.Builds[0].Elapsed + $cb4.Result.Builds[1].Elapsed)) `
         ("-Serial did not run the two one after the other and import: '{0}'" -f $cb4.Error)
     # The trees must be at one commit, clean, and free of either lock.
@@ -6211,7 +6293,7 @@ try {
                      [System.IO.Directory]::GetCurrentDirectory() -ne $imRoot) "Resolve-TreePath did not take a relative path against PowerShell's location."
         $r = $null
         try { $r = Invoke-CutBuilds -Repo "a" -X64Tree "b" -ImportOnly -Rules $biRules } catch { $r = $_.Exception.Message }
-        Assert-True ($r -isnot [string] -and $r.Imported.Count -eq 2) ("an import of relative trees failed: '{0}'" -f $r)
+        Assert-True ($r -isnot [string] -and $r.Imported.Count -eq 1) ("an import of relative trees failed: '{0}'" -f $r)
     } finally {
         Pop-Location
     }

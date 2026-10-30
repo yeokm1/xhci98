@@ -38,9 +38,9 @@ static void test_header(void)
              "a sixteen-word record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 2516,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 252,
-             "the whole counter block (44.35's transport decisions: 246 to "
-             "251)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 258,
+             "the whole counter block (45.45's command-state checker: 252 "
+             "to 257)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              2516 + 18 * 64, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
@@ -61,8 +61,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 16 + 252, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 629 + 252,
+    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 16 + 258, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 629 + 258,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -861,7 +861,19 @@ static void test_counter_tail(void)
              "XportBotNoStreams at 250");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, XportNoStreams), 251 * 4,
              "XportNoStreams at 251");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 252 * 4, "252 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictSwitchRead), 252 * 4,
+             "StrictSwitchRead at 252");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictOn), 253 * 4,
+             "StrictOn at 253");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictChecked), 254 * 4,
+             "StrictChecked at 254");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictViolations), 255 * 4,
+             "StrictViolations at 255");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictUndefined), 256 * 4,
+             "StrictUndefined at 256");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictRefusals), 257 * 4,
+             "StrictRefusals at 257");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 258 * 4, "258 words in all");
 }
 
 /* 44.35: the transport records' header words (tr_snap.c's print_xport

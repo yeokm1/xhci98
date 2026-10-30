@@ -2932,7 +2932,7 @@ manager's minimal chain at depth 2) read against `src/cm/tbt_u4cm.c` and
 `tbt_u4cm.h` at `3e314cde`, on development host A; no virtual machine,
 no QEMU, no `usb4-emu` run.
 
-**Verdict: the design holds with seven additions (record 34 revision 9, numbered 5 when written);
+**Verdict: the design holds with seven additions (record 34 revision 10 after the merges into `3.4.0.0`, numbered 5 when written);
 none of its code exists yet.** `tbt_u4cm.c` has no `TBT_U4_KID` and no
 `TBT_U4_VIEW`: below depth 1 it has only the watched `TBT_U4_LINK`
 path (`tbtU4DiscoverLinks`, `tbtU4CheckLinks`, `tbtU4RemoveLink`), a
@@ -3026,7 +3026,7 @@ revised until the review found nothing material.
 Worker w45-u4chain2, development host A. Record 34 Part 3 coded against
 today's tree, the guarded vectors enabled, and record 34 section 6.11
 written as the record of what the code does where it differs from
-sections 6.1 to 6.10 (revision 10).
+sections 6.1 to 6.10 (revision 11 after the merges into `3.4.0.0`).
 
 ### The code
 
@@ -3395,3 +3395,455 @@ known issue below is for the owner.**
    (or at a black screen), switch the computer off and on again; the
    install is complete and the next start works. This happens rarely and
    its cause is still being looked into."
+
+## 45.14 record 34 section 3.3, the 9x half: the padding and PCI.VXD's first reading (2026-10-30, partial)
+
+**The design.** Record 34 section 3.3.6 (revision 9 after the merge into `3.4.0.0`, written as revision 8 at `9b3e0936`),
+reviewed and revised before code: section 3.3.2's Option A made exact for
+its first part, the padding of a chain port at the first numbering, which
+the rest of section 3.3 (the chain port's own numbering, the devnode
+locate, the removal, `DN_REMOVABLE`) rests on. A chain-port candidate
+(none below another) keeps half of what is left of the port's range, at
+most 8 buses and at least 2; a numbering that ends `NO_ROOM` with the
+padding is made again at once without it, once its undo has put every
+bridge back; the memory slack beside what the chain needs is shared
+equally among the padded candidates, a power of two, at most 64 MiB and
+at least 2 MiB, added beside each one's own need and checked before any
+window-placement write; a `REOPENED` chain gives its memory again to a
+candidate whose retained range leaves room for a chained switch.
+
+**The code** (`02676bbb`): `src\cm\tbt_brnum.c`/`.h`
+(`XHCI_TBT_BRNUM_F_PAD`, `brCandidate`, the bus padding in `brBus` with
+`InCand`, the retry in `XhciTbtNumberBridges`, `brSpan`, `brPadMem`, the
+padded size in `brNeed`, the `REOPENED` qualification), `cm_cfgwk.c`
+(`cmWkNumber` passes the flag; `cm.brnum.9x.pad`, `cm.brnum.9x.pad-mem`);
+host vectors in `test\test_tbt_brnum.c` (the model given a PCI Express
+capability; `test_pad_buses`, `test_pad_memory`, `test_pad_nested`), 506
+checks, 0 failures; `test\run-host-tests.cmd` links `tbt_topo.c` into
+that suite. The gated x86 build of `92fd318c` (`scripts\build-driver.cmd
+all`): "BUILD + GATES PASSED (debug release qemu)"; the host suite:
+"Host tests PASSED" (`E:\xhci98-scratch\p45-w45-chain\gb-x86.log`,
+`hosttests.log`).
+
+### The reading (2026-10-30)
+
+**Vehicle.** 98 SE and ME goldens made for this task: overlays of the
+q35 bases, the launcher's `-Usb4 tb3ar` on the `usb4-emu` `230bed5`
+emulator (`qemu-system-x86_64.exe` `bb2b1ec9...`, its Thunderbolt 3
+tunnel port padded by the firmware model and its switch ports with
+Interrupt Pin A), the release x86 package of `1a2a72ca` installed
+(`XHCIINST /thunderbolt /stor98`, exit 3; on 98 SE the installer's
+second xHCI controller asked for the driver disk, 45.38, answered with
+`C:\XHCI98`), a cold second boot (98 SE `4c12f9b2...`, ME
+`7b84aa34...`). Each leg a child overlay with the qemu flavour of
+`xhcicm.sys` at `02676bbb` (`a083d92f...`) copied over the installed
+one and a cold start; the dock `usb4-device ... dialect=tb3,
+downstream-ports=1, chain-power-controller=off` plugged by QMP at the
+desktop. Evidence: `E:\xhci98-vm\p45\w45-chain\w98\` and `me\`
+(`debugcon-<leg>.log`, `infopci-<leg>-<n>.txt`, `serial-<leg>.log`,
+screenshots).
+
+**The tunnel port's slot power.** With the emulator's default the
+Thunderbolt 3 tunnel port has a Power Controller, and 98 SE never turns
+the slot on: the hot-plugged dock's switch read nothing for the
+numbering's twenty tries (`cm.brnum.9x.outcome` NONE, functions 0; leg
+p2b) and stayed unnumbered at bus 4. Every leg below runs with
+`-global usb4-tb3-tunnel-dsp.power-controller=off`, as the ASM4242
+legs run their tunnel ports.
+
+| Leg | System | Read |
+|---|---|---|
+| p2c | 98 SE | the dock numbered (`cm.brnum.9x.outcome=00020801`): its upstream port `04:00.0` buses 04/05/0F, the fixed port `05:00.0` 05/06/06, the chain port `05:01.0` **05/07/0F** (pad 8; `cm.brnum.9x.pad=00000001`) with the memory window **FA100000-FE0FFFFF** (`cm.brnum.9x.pad-mem=04000000`, 64 MiB), the port's window F2200000-FE1FFFFF; `info pci` after the re-enumeration: the chain port 7 to 15, its window as written. Windows' bridge wizards then asked for a restart, which ends the emulator (98 SE's warm restart is a cold one here) |
+| p2d | 98 SE, the same overlay, cold | the dock plugged again: numbered alike; `info pci` after the plug, after the next bridge's install, after Stor98's install for the dock's NVMe and after the chain port's own install: **unchanged** (7 to 15, FA100000-FE0FFFFF) |
+| p2e | 98 SE, the same overlay, cold, every driver installed | the dock plugged: no wizard; numbered alike; `info pci`: unchanged; `XHCIINST /devices` lists the dock (link 1, depth 1, approved) and its upstream port started |
+| m1b | ME | numbered alike (pad 8, 64 MiB); one bridge wizard; `info pci` after it: unchanged |
+| m1c | ME, the same overlay, cold | the dock plugged: numbered alike; `info pci`: unchanged; shutdown with the dock attached ended normally |
+
+**What it shows.** On 98 SE and ME, PCI.VXD leaves a padded empty chain
+port's bus range and memory window as the numbering wrote them, through
+the re-enumeration that follows, the first installs of the dock's
+bridges and of Stor98, and in a later session: section 3.3.6's first
+premise holds on both. That PCI.VXD's allocation holds them (that a
+device chained later is placed inside them) is read only with the chain
+port's own numbering, next.
+
+**Left in 45.14** (not ticked): the chain port's own numbering and
+re-enumeration, the devnode locate (section 3.3.4), the removal (section
+3.3.5) and `DN_REMOVABLE` on the chained unit (section 3.7), each
+designed in detail and reviewed before its code, then their legs on 98
+SE and ME with a device chained behind the padded port.
+
+## 45.6 (continued) the installer's row split, the cut's checks with one set, and the legs on XP and 7 (2026-10-30)
+
+The rest of 45.6 after `26973326`, on branch `w45-rtlpair` from
+`d265c092`, reviewed and revised. Not yet committed: by the
+coordinator's decision of 2026-10-30 it goes in as one commit with the
+free set's pin moved to `usb-wdm-free` 0.1.5 (`wdmfree-pin.txt` and
+`INST_WDMFREE_SUMS`), since the cut refuses the split row at 0.1.4. It
+is four parts:
+
+- `instOtherRels`' row for `free:net/rtl815x` and
+  `nonfree:ethernet/rtl815x` split, kind 1 (`EXCLUDES`) on `0x1E07` (98
+  SE, ME, 2000, 8 to 10 x64) and kind 2 (lifted) on `0x1F8` (XP to 7
+  x64), with a `test_inst` vector over the thirteen systems (7138
+  checks, 0 failures).
+- The packager self-test over the real pinned sets
+  (`test-package.ps1`) exports the pinned free set too and runs the
+  cut's checks against the repository's `releases\` at the INF's
+  version, as the cut does, and requires a `LIFTED` line when the table
+  has a lifted row; with the non-free checkout alone it runs as before.
+- A lifted row held to a lift only in a cut that carries both sets of
+  its pair (`Test-OtherTableLifts -Carried`); a cut that leaves either
+  set out records the pair's `COEXISTS` lines on the row's systems as
+  `EXCLUDES` (`Get-OtherHeldLifts`), which is how the installer holds
+  the row when the partner's set is not in the download
+  (`other_same_release`), while a cut carrying both keeps the
+  `COEXISTS` and must prove the lift.
+  Found by the first gated build: the self-test "a release recorded
+  without the pack is assembled without it", a `-NoWdmFree` cut, was
+  refused by the lifted row (1 of 1715 checks).
+- Design record 26 section 6.7.14, draft 51.
+
+**Gated build** (x86, `build-driver.cmd both`, the working tree above
+over `d265c092`): BUILD + GATES PASSED in 25:51, the packager's
+self-tests passing in 23:58; `xhci98.sys` release `270D1454...`.
+
+**The cut's checks with the real non-free set** (`usb-wdm-nonfree`
+v1.1.0, the cut's own functions, the repository's `releases\`, so
+3.2.0.0's record is the previous one while the tree's `DriverVer` is
+3.3.0.0):
+
+| Free set | Result |
+|---|---|
+| v0.1.4 (the pin) | refused: its single `EXCLUDES` and the table's lifted row are two kinds on XP to 7 x64, as expected until the pin moves |
+| stand-in A: v0.1.4's files with 0.1.5's split `STAGE.TXT` lines | admitted; recorded `LIFTED`, `free:net/rtl815x` and `nonfree:ethernet/rtl815x` on `W7 W7X64 WVISTA WVISTA64 WXP WXP64` |
+| stand-in B3: B1 (below) with `USB\VID_0BDA&PID_8153&REV_3099` added to the free XP INF | refused: "were excluded on WXP by 3.2.0.0, and this cut's COEXISTS there is admitted only where the cut reads them apart ...: both match VID_0BDA&PID_8153" |
+| stand-in A without the non-free set (`-NoNonFree`) | admitted; the pair recorded `EXCLUDES` on XP to 7 x64, no `LIFTED` |
+
+The stand-ins are tags in a scratch clone of `usb-wdm-free` at v0.1.4,
+not in that repository: A splits the line as 0.1.5 does (in 0.1.5 the
+free `rtl815x` is still copied only, so the lift shows nothing on the
+page); B1 is A with the free `rtl815x`'s four XP to 7 x64 `COPY` lines
+made `STAGE`, so both boxes can be ticked; B2 is B1 with one comment
+changed, another release of the set. Each was cut as a TEST
+(`make-release.ps1 -Arch x86 -TestLabel ... -WdmFreePin`, the
+repository's 3.2.0.0 record copied into the cut's `-ReleasesDir`) with
+an installer built for that stand-in's `SHA256.TXT`
+(`INST_WDMFREE_SUMS` set for the cut and restored afterwards):
+`XHCIINST.EXE` A `9AB8A6B1...`, B1 `36DF649A...`, B2 `9533E505...`.
+Each cut passed.
+
+**XP** (q35, `xp` base, a fresh overlay, `launch-q35.ps1 -Os xp -Smp
+2`, the `-nonfree` download as the transfer disk, `INSTALL.BAT
+/console`):
+
+| Run | Download | Switches | Result |
+|---|---|---|---|
+| R1 | B1 | `/list` | both `free:net/rtl815x` and `nonfree:ethernet/rtl815x` among the packages offered for this Windows |
+| R2 | B1 | `/wdmfree:stage=hid/xpad98 /wdmnonfree:stage=hid/x360wc` | "REFUSED: free:hid/xpad98: Not with nonfree:hid/x360wc, ticked: the two are not staged together (both bind the Play and Charge Kit 045E:028F).. Nothing was changed.", exit 1 |
+| R3 | B1 | `/wdmfree:stage=net/rtl815x /wdmnonfree:stage=ethernet/rtl815x` | xHCI98 3.3.0.0 installed and started; "free:net/rtl815x staged." and "nonfree:ethernet/rtl815x staged.", exit 3 |
+| R4 | B2, after a restart | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | "REFUSED: nonfree:ethernet/rtl815x: Not with free:net/rtl815x, staged by an earlier run (they would claim one device): uninstall the other drivers first.. Nothing was changed.", exit 1 |
+
+**7 x86** (q35, `w7x86` base, a fresh overlay, an elevated prompt, the
+publisher prompts answered "Install this driver software anyway"):
+
+| Run | Download | Switches | Result |
+|---|---|---|---|
+| R1 | A | `/list` | `nonfree:ethernet/rtl815x` offered; the free `rtl815x` copied only |
+| R2 | A | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | both sets copied, "nonfree:ethernet/rtl815x staged.", the free one's folder `C:\XHCI98\USBDRV\FREE\net\rtl815x\wv-7-x86` listed for a by-hand install, exit 3 |
+| R3 | B1, after a restart | `/wdmfree:stage=net/rtl815x /wdmnonfree:stage=ethernet/rtl815x` | the non-free one "Staged by an earlier run" of the same release and not barred; the free set's earlier copy of another release replaced; "free:net/rtl815x staged." and "nonfree:ethernet/rtl815x staged.", exit 3 |
+| R4 | B2, after a restart | `/wdmfree:copy /wdmnonfree:stage=ethernet/rtl815x` | refused as on XP, exit 1 |
+
+**Pass**: with the two packages' chips disjoint both install side by
+side on XP and 7, and the overlapping cases stay excluded: an id in
+common at the cut, the excluded pair `xpad98` and `x360wc`, and a
+lifted pair against an earlier staging of another release. No adapter
+is at hand, so no device was bound by either driver. A double full
+stop in the refusal's text ("first.. Nothing"), where the reason ends
+with its own, is older than this change.
+
+Evidence: `E:\xhci98-vm\p45\w45-rtlpair\shots\` (`xp1-*.png`,
+`w7a-*.png`), the cuts and the stand-in pins under
+`E:\xhci98-scratch\p45-w45-rtlpair\`.
+
+**The pin** (2026-10-30): `usb-wdm-free` v0.1.5 was released at
+`048aecd` (`uac2` 0.1.5.0 and `usbcom` 0.1.5.0; `rtl815x` and every
+other package 0.1.4's bytes; its `STAGE.TXT` splits the `rtl815x`
+line) and tagged by the owner. Commit `db824326` carries the four
+parts above with the pin moved to it (105 `SHA256` lines) and
+`INST_WDMFREE_SUMS` `8AF8F638...`, the hash of the exported
+`USBDRV\FREE\SHA256.TXT`. On that commit:
+
+- The gated build (x86, `both`): BUILD + GATES PASSED in 36:14, the
+  packager's self-tests in 22:15 with both sets' checkouts present (the
+  free one a scratch clone carrying v0.1.5 on the same commit, before the
+  owner's tag), so the self-test over the real pinned sets proved the
+  lift against the repository's history; `xhci98.sys` release
+  `D10F83CA...`. The installer's tools were rebuilt after it, since
+  `build-driver.cmd` does not rebuild them and they include
+  `inst_core.h`.
+- `make-release.ps1 -CheckOnly -Arch x86` against the real
+  `usb-wdm-free` (tag v0.1.5) and `usb-wdm-nonfree`: "download 2:
+  usb-wdm-free v0.1.5 (048aecd369f1), 107 files in USBDRV\FREE\" and
+  "the other USB drivers' sets: folders, self-containment, hardware ids
+  and the package table hold, against 3.2.0.0's otherpkgs.txt"; the
+  one refusal is `releases\3.3.0.0` already existing, since the tree's
+  version is still 3.3.0.0 until the release's bump.
+
+So `3.4.0.0`'s free download offers the free and non-free `rtl815x`
+together on XP to 7 x64; with v0.1.5 the free one is copied only, so
+the page shows no change until the free set stages it.
+
+## 45.45 one build for everyone: the debug flavour retired (2026-10-30)
+
+The owner, 2026-10-30: the `debug` flavour is retired, its frame
+pointers and its command-state checker kept in `release`. The design is
+record 08 section 14 (`a6f5578f`, reviewed and revised; the owner's two
+answers in `126c1515`); the code is `d4201bc4` (reviewed and revised),
+merged with `3.4.0.0` at `56682b82`. Development host A, loaded by other
+work throughout.
+
+**Verdict: the gated x86 build (`all`, now release and qemu) and the
+amd64 release build passed; the release package installed and ran on
+98 SE, XP, 7 x86 and XP x64, each read in an XHCITR snapshot with the
+checker on (the INFs' 1) and with `XhciCommandCheck` 0, and the value
+was obeyed on every one. Retiring the flavour saves about a minute of a
+gated build per architecture, against whole runs of 30 to 81 minutes
+that the INF gate's and the packager's self-tests fill.**
+
+### The builds
+
+| Build | Result | Time |
+|---|---|---|
+| x86 gated, `build-driver.cmd all`, at `126c1515` | BUILD + GATES PASSED (release qemu) | 74:53 in all: the INF gate's self-tests 72:22 (in full: the INFs changed), the packager's 16:54 beside them, release 0:47, qemu 0:51 |
+| amd64, `build-driver.cmd release -amd64`, at `126c1515` | BUILD + GATES PASSED (release) | 33:24 in all: the INF gate's self-tests 32:28, the packager's 16:02, release 0:31 |
+
+`scripts\check-frame-pointers.ps1` found `/Oy-` on every compiler line of
+the x86 release logs of `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
+("frame pointers kept (/Oy-)" three times); every release image carried
+`XHCI98_FLAVOUR_RELEASE` and every qemu one `XHCI98_FLAVOUR_QEMU`. The
+host suite passed on the merged tree beforehand, and `test-package.ps1`
+(1688 checks) on the code commit.
+
+The time before, from other workers' gated builds on the same host the
+same day (`build-driver.cmd both` or `all`, base `b5258e6e` or close to
+it): the debug flavour's step took 0:39 to 1:05 on x86 (release 0:38 to
+1:02) and 0:29 to 1:01 on amd64 (release 0:31 to 1:15), in whole runs of
+30:07 to 80:51 (x86) and 30:53 to 75:31 (amd64). Retiring it takes that
+one step out of each run, about a minute an architecture; the rest of a
+run is the INF gate's self-tests (28 to 78 minutes when they run in
+full) and the packager's (17 to 30), which this task does not touch.
+
+### The legs
+
+The release packages of these builds (`make-package.ps1 -Flavor
+release`, x86 and amd64, unsigned on this host), each installed with
+this tree's `INSTALL.BAT /console /yes` (98 SE: `XHCIINST /dir
+release-x86 /yes`) on a fresh overlay of the q35 base, a USB tablet on
+the controller (98 SE: plugged after the start). Each reading is an
+`XHCITR /snapshot`, its `strict` lines quoted (XHCITR prints a counter
+only when it is not 0). Then `XhciCommandCheck` 0 in the machine-wide
+key (`HKLM\System\CurrentControlSet\Services\USB`; `reg add`, on 98 SE
+`regedit /s`), a restart (98 SE: shut down and a cold start), and the
+second reading. The images: x86 `xhci98.sys` SHA-256 `9b315166...6798`,
+amd64 `366dab24...f3b2`, each the build's own.
+
+| System | The install | The checker on | `XhciCommandCheck` 0 |
+|---|---|---|---|
+| XP SP3 (2 vCPU) | exit 3; controller and root hub started | build flavour `release`; `strict.value=1`, `strict.on=1`; `StrictSwitchRead 1`, `StrictOn 1`, `StrictChecked 3` | `strict.value=0`, `strict.on=0`; `StrictSwitchRead 1`, nothing counted |
+| 7 SP1 x86 (2 vCPU) | exit 3, restart (the helper); started after it | the same, `StrictChecked 3` | the same as XP |
+| 98 SE (1 vCPU) | exit 3, restart pending; started after a cold start | `strict.value=1`, `strict.on=1`, `StrictOn 1`; no command checked before the tablet was plugged (`StrictChecked` 0), `StrictChecked 2` once the tablet was plugged | `strict.value=0`, `strict.on=0`, `StrictSwitchRead 1`; the tablet enumerated (one slot held), nothing counted |
+| XP x64 SP2 (2 vCPU) | exit 3; controller and root hub started (the package without `xhcicm`, below) | build flavour `release`; the same as XP, `StrictChecked 3` | the same as XP |
+
+QEMU's xHC refuses nothing, so the counters show that the checker ran
+and was switched off, and no violation, undefined case or refusal; a
+real controller's snapshot is where one would show, the owner's reason
+for keeping it on. What the driver did was the same with it on and off:
+each device enumerated and each install finished alike.
+
+Two things the legs met that are not this task's:
+
+- The installer refuses an unsigned 64-bit package that carries
+  `xhcicm.sys` without its catalog ("this 64-bit package carries the
+  Thunderbolt driver without its catalog, xhcicm.cat"), as designed; a
+  clone without the key stages no catalog, so the XP x64 leg ran from a
+  copy of the staged package with the three connection manager files
+  left out ("This package carries no Thunderbolt or USB4 driver ...;
+  going on without it").
+- On 98 SE `XHCITR /snapshot` returns before its window closes, so a
+  batch file reading the snapshot straight after it finds no file; the
+  lines were read in a second prompt.
+
+### Not read
+
+- The `qemu` flavour's leg kits were not run: nothing in them names the
+  retired flavour (they stage `-Flavor qemu`, which is unchanged).
+- A real controller with the checker on: owed to the bench with the
+  rest of `3.4.0.0`'s hardware readings.
+
+## 45.47 a hot-added dock's xHCI at Code 1 on Vista and 7 x86 until a restart: `xhcimark` starts it once (2026-10-30)
+
+**The question.** On 7 x86 the first plug of a Thunderbolt 3 dock after
+the install leaves the dock's own xHCI controller at "This device is not
+configured correctly (Code 1)", while every other device of the dock
+starts. A restart starts it.
+
+**The reading (legs d1 to d3).** `setupapi.dev.log` of the dock xHCI's
+install: the `DelFiles` of `xhcimsi.sys` fails with error 2 and is
+handled (the file is absent), and the install goes on; then "Device
+required reboot: 'Reboot' in section: [Xhci.Dev6.NTx86]", "Device restart
+was skipped because DI_NEEDREBOOT", exit success. The devnode is left at
+problem 1 (`CM_PROB_NOT_CONFIGURED`) with `DN_NEED_RESTART`: status
+`0x01802500`. `CM_Setup_DevNode(..., CM_SETUP_DEVNODE_READY)` from an
+administrator's prompt started it: status `0x0180200A`, problem 0, its
+root hub and the tablet behind it started. The cause is the Vista and 7
+section's `Reboot`, which the HLPR-REBOOT gate rule keeps.
+
+**The owner's decision (option B).** The INF's `Reboot` and the gate rule
+stay. `xhcimark` starts such a controller once, and only when it sits
+behind a verified tunnel port, is not configured with a restart pending,
+and `xhcihlpr` is already running. Design record 21 section 7.6 is the
+design; `mark_core.c`'s `mk_ctl_ready_why` is its pure half, with the
+host vectors (every condition refused alone in the record's order), and
+`xhcimark.c`'s `mk_ctl_poll` and `mk_ctl_start` the service's half (the
+fresh reads under the eject mutex before `CM_Setup_DevNode`).
+
+**The legs.** 7 x86 on q35 with the launcher's `-Usb4 tb3ar`, from the
+plain 7 x86 base disk; the emulator `qemu-system-x86_64.exe`
+(`3e7f6bf5b98fde98...`, `usb4-emu` fork `674ff08`, the dock's switch
+ports on interrupt pin A); a TEST x86 release cut of this branch
+(`7ce1ed4d`, `xhci98.sys` md5 `1f49751fb50f...`), installed by
+`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`, every
+unsigned-driver prompt answered "Install this driver software anyway".
+Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`serial-h1.log`,
+`serial-h2.log`, `steps-h1.txt`, `steps-h2.txt`, `rep-h1c.txt`,
+`rep-h2r.txt`).
+
+| Leg | Steps | Read |
+|---|---|---|
+| h1 | install with no dock, exit 0; restart; `xhcimark` running with `Restart 1`, `xhcihlpr` running; the dock plugged by QMP at the desktop | 31 s after the plug: "controller not started yet: ...DEV_000D...: an installation is pending (or cannot be told)"; 32 s later "controller started: ...DEV_000D... (it waited for a restart of Windows; the helper is running)"; the dock xHCI's `ConfigManagerErrorCode` 0, its root hub, "USB Input Device" and "HID-compliant mouse" started; every other device of the dock started. No restart |
+| h2 | the dock present at power-on, install, exit 0 | the dock xHCI at Code 0 already before the restart, and every device of the dock started after it; `XHCIMARK.LOG` holds no "controller started" line: the service started nothing |
+
+Not read: Vista x86 (the same section and the same service path), and a
+leg with the service's `Restart` value 0 (the host vectors refuse it).
+
+## 45.49 a 7 x86 guest hung by a Thunderbolt 3 dock unplugged and plugged in again: the reading (2026-10-30)
+
+**The question.** After the restart that started the dock's xHCI (45.47's
+leg d2), an unplug and a replug of the dock hung the guest. Is it 45.35's
+dock-removal stall on 7, or something new?
+
+**The legs.** 7 x86 on q35, `-Usb4 tb3ar`, the same emulator as 45.47's;
+a disk with the release x86 package of `1a2a72ca` installed, then the
+dock installed and a restart taken, so the dock's xHCI starts at the
+plug. Each leg: the dock plugged by QMP at the desktop, `XHCIINST
+/devices`, the dock unplugged (`device_del`), `XHCIINST /devices` 60 s
+later, the dock plugged again, both processors' registers and the
+guest's interrupt time sampled every 4 s. Evidence:
+`E:\xhci98-vm\p45\w45-emufix\w7\` (`samp-u2*.txt`, `samp-u3.txt`,
+`samp-u4.txt`, `rep-u3u.txt`, `rep-u4u.txt`, `rep-u4r.txt`,
+`steps-u2.txt` to `steps-u4.txt`).
+
+| Leg | USB device on the dock's xHCI | After the unplug | After the replug |
+|---|---|---|---|
+| u2, u3 | the tablet (the emulator's default) | every device of the dock still listed, "not started", but "USB Input Device - HidUsb, **started**" | processor 0 never leaves one loop (sampled for 90 s and more); processor 1 keeps running; the console stops answering |
+| u4 | a USB disk (`usb-drive=`) | "(nothing behind it now)": the dock removed | the dock enumerated again, every device started; no hang |
+
+**Where processor 0 loops (u2).** The stack from the timer DPC:
+`nt` (the timer's DPC) -> `NDIS.SYS` -> the dock NIC's miniport
+(`e1qexpress`, the 82574L) -> `NDIS.SYS` -> `pci.sys` -> the HAL's byte
+read of configuration space (`ECAM 0xb0e00000`, bus 14, offset `0xFF`).
+The miniport (`e1q6032.sys` 11.0.5.21, Windows 7's own; the image
+offsets, the hash and the method in `legal-provenance.md` section 4:
+the registers and the bytes read from the running guest, the bytes
+disassembled, nothing of it executed) looks for a capability (id `0x10`,
+PCI Express) by walking the list: it reads the word at the pointer, compares the low
+byte with the id, takes the high byte as the next pointer, and stops only
+at a next pointer of 0. Configuration space reading all ones gives id
+`0xFF` and next `0xFF` for ever. Nothing decodes bus 14 then: after the
+replug the new dock's switch upstream port (`104C:8232` at bus 4) still
+has secondary bus 0.
+
+**Reading.** It is 45.35's removal stall, on 7. The tablet's interrupt-IN
+read stays on the dock xHCI's ring, the removal of the whole dock waits
+for it, and the dock NIC's devnode stays on, with its watchdog timer. A
+third-party driver's unbounded capability walk over the absent device
+then holds processor 0 at `DISPATCH_LEVEL` for good. A
+USB disk in the tablet's place leaves nothing pending: the removal runs
+and the replug works (u4), as 45.35's control did on XP. 45.35's proof
+(record 17 section 4.13.6: a tunnel path the USB4 connection manager
+closed and read back closed) does not apply here, by the owner's decision
+of 2026-10-29: under the firmware connection manager (the ICM profile,
+record 21) nothing reads the path back. The release notes' limitation
+("Stop a dock before unplugging it when a keyboard, mouse, tablet or
+similar device is on the dock's own USB controller") names 98 SE and ME,
+and 2000 and XP under a firmware connection manager; from 45.47 on, 7 and
+Vista x86 start the dock's xHCI at the first plug too, so the limitation
+reaches them.
+
+**What follows.** The owner's decision: a proof for the firmware
+connection manager's tunnels, or the limitation extended to Vista and 7
+(the stall there ends in a hang, through the dock NIC's driver).
+
+**45.49, the stop first (leg s1, 2026-10-30).** The owner closed 45.49 as
+a known limitation (`080c33dc`): stop such a dock before unplugging it.
+The advice read on 7 x86 with u2's setup (the same kit and emulator,
+`-Usb4 tb3ar`, the dock installed and a restart taken, the tablet on the
+dock's xHCI). Evidence: `E:\xhci98-vm\p45\w45-emufix\w7\` (`steps-s1.txt`,
+`rep-s1p.txt`, `rep-s1u.txt`, `rep-s1r.txt`, `samp-s1.txt`, `s1-*.png`).
+
+| Step | Read |
+|---|---|
+| the dock plugged | every device of the dock started, "USB Input Device - HidUsb" with them |
+| the xHCI98 USB Tree (`XHCITR.EXE` of the installed `1a2a72ca` package, from an administrator's prompt): the unit under "Port 1 (bridge 02:01.0)" selected (`104C:8232` at `04:00.0`, "[can be stopped]"), Del | the dialog "Stop a Thunderbolt device" listed the switch upstream port and everything on it: the three downstream ports, Stor98 and the disk, the 82574L, the dock's xHCI, its root hub, "USB Input Device" and "HID-compliant mouse"; OK; "Windows has stopped QEMU NVMe Ctrl SCSI Disk Device (D:). You can now unplug the device." |
+| the dock unplugged, `XHCIINST /devices` 60 s later | "(nothing behind it now)"; no device of the dock listed anywhere, HidUsb included |
+| the dock plugged again | processors sampled every 4 s for 90 s: idle or moving, no loop; every device of the dock started again, HidUsb included |
+| `shutdown /s /t 0` | Windows powered off and the emulator exited within 10 s, nothing on its error output |
+
+So the release notes' advice holds on 7 x86. Windows' own Safely Remove
+Hardware is not a way to give it: the USB Tree and `XHCIINST /devices`
+both say Windows does not list this unit there ("not listed in Safely
+Remove Hardware; /eject asks Windows to stop it"), so the stop is the USB
+Tree's or `INSTALL /console /eject`'s. Not read: Vista x86.
+
+## 45.final: the release-notes texts the tasks handed over
+
+Collected as each task merges, for `45.final` to place; the wording is the
+task's own, checked against its section above before it is used.
+
+- 45.6 (merged at `312b8421`): "The free and non-free rtl815x USB Ethernet
+  drivers may now be staged side by side on Windows XP to 7, 32-bit and
+  x64, where their INFs list different chips; the release checks they
+  share no device, keeps them excluded on 98 SE, ME, 2000 and 8 to 10, and
+  keeps them apart from an earlier staging of either taken from another
+  release. The free set is usb-wdm-free 0.1.5: uac2 0.1.5.0 (each output
+  and input its own sound device; a co-installer, installed by hand, that
+  keeps Windows' USB Audio 1.0 driver off a UAC 2.0 device on 2000 to 7)
+  and usbcom 0.1.5.0 (FTDI FT-X, FT232H, FT4232H, Prolific PL2303, Silicon
+  Labs CP2105 and CP2108 on 98 SE and ME); its rtl815x is still copied
+  only, not staged."
+- 45.45 (merged from `w45-onebuild` at `ac2f5b4f`): "**One build.** The
+  download no longer has `debug-x86` and `debug-x64`: every driver has one
+  build for everyone. On 32-bit Windows it keeps the debug build's frame
+  pointers, and it carries the debug build's command-state checker. Before
+  each command the driver gives the controller, the checker reads the
+  device's state and counts what a controller following the xHCI
+  specification to the letter would refuse; the counts are in the xHCI98
+  USB Tree's snapshot. It changes nothing the driver does; set
+  `XhciCommandCheck` to `0` to turn it off (tuning.md). `INSTALL /debug`
+  and `SETUP /debug` are gone with the folders."
+- 45.47 (merged from `w45-dockxhci` at `5aa76156`; the known issue only
+  where the mark service is not installed - no Thunderbolt 3 / USB4
+  component, or safe eject off - since with it `xhcimark` starts the
+  controller and no restart is needed (record 21 section 7.6.4); the Vista
+  leg is still owed): "Windows Vista and 7, 32-bit: the first time a
+  Thunderbolt dock with its own USB controller is plugged in after the
+  install, that USB controller may show 'This device is not configured
+  correctly (Code 1)' until Windows is restarted once. Restart Windows;
+  the dock works from then on, also when plugged in again."
+
+Also for `45.final`, outside the texts above (left by 45.45's follow-up,
+`05f19a47`, because they describe the published `3.3.0.0` download):
+`README.md`'s download list still names `debug-x86` and `debug-x64`, and
+the release notes' installer switches still describe `/debug`; both go at
+the version bump.

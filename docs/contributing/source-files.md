@@ -42,7 +42,7 @@ The rule that organises the directory: files in the pure core **decide** (they e
 | `xhci_susp.c` | Selective suspend ([design record 14](design/14-selective-suspend.md)): the switch, eligibility and capabilities, the device's link machine, each function's power slot, the wake episode, the idle notification's batches, and stage B's SuperSpeed decisions. | `test_susp` |
 | `xhci_silent.c` | The Windows 98 SE and ME silent install (design record 13 section 6.11): the `XhciSilentInstall` gate, the `SilentClasses` table's admission and cap, the configuration walk and the PDO's answer. | `test_silent` |
 | `xhci_regsrc.c` | Where a registry value of `xhci98.sys` and `xhcicm.sys` is taken from (roadmap-usb4 42-A.17, design record 13 section 5.5): the machine-wide `Services\USB` key when the value is there in any type, else the driver key. Compiled into both drivers. | `test_regsrc` |
-| `xhci_strict.c` | Strict mode's command precondition table: would a conforming controller accept this command in this Slot and EP state. Debug and qemu flavours only. | `test_strict` |
+| `xhci_strict.c` | Strict mode's command precondition table: would a conforming controller accept this command in this Slot and EP state. Every flavour since roadmap-usb4 task 45.45 (design record 08 section 14). | `test_strict` |
 | `xhci_inj.c` | Task 35-T.9's fault injection: the `XhciQemuInject` trigger's encoding and sequence rule, the ports a fault may be aimed at, every register answer the layer gives. Compiled into the qemu flavour alone. | `test_inj` |
 | `xhci_dname.c` | The controller's `\DosDevices` name (roadmap-usb4 task 44.81, design record 13 section 8.8): `HCD<n>` on 98 SE and ME, `XHCI98HC<k>` on NT, the `HCD<m>` alias from `HCD9` down on 2000, XP and XP x64, the numbers held, what a probe's and a delete's status mean; `hcd_door.c` locks and calls. | `test_dname` |
 | `xhci_qry.c` | The answer of `IOCTL_XHCI98_QUERY` (design record 13 section 8.12): the counter block from level 1, the log ring as text at levels 2 and 3 (withheld at 4), the controller's configuration space at every level, and the sizing answers; `hcd_door.c` gathers and answers. | `test_xhq` |
@@ -82,7 +82,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `hcd_tmr.c` | The finer system timer while polling (task 38.3): the per-controller timer thread, the routine's lookup per image, the `ExSetTimerResolution` hold and release. |
 | `hcd_msi86.c` | Message-signalled interrupts on Vista and 7, the kernel half that is not the connection: the mode cache, the requirements filter, the helper's look and reference, the routines per architecture, the counters and trace. |
 | `hcd_quirk.c` | The quirks' controller-FDO half: the values read at each start, the identity `XhciMsiAvoid` needs, and the quirks that act from the FDO's own paths (record 20 sections 4 and 6); the value names from `xhci_quirk.h`'s `XHCI_QK_VALUE_NAMES`. |
-| `hcd_strict.c` | Strict mode's driver half: before each command, the slot and endpoint states read from the Output Device Context and checked against `xhci_strict.c`'s table; it counts and traces, and sends the command anyway. Debug and qemu flavours only. |
+| `hcd_strict.c` | Strict mode's driver half: before each command, the slot and endpoint states read from the Output Device Context and checked against `xhci_strict.c`'s table; it counts and notes, and sends the command anyway. Every flavour since roadmap-usb4 task 45.45, run unless `XhciCommandCheck` is 0; its counters are the counter block's `Strict*` words. |
 | `hcd_inj.c` | Fault injection's driver half: the trigger read, the executors, the ISR's lost-interrupt window and the hooks. Qemu flavour only. |
 
 ## Headers
@@ -158,14 +158,14 @@ The field report's batch file lives beside the tool it runs, outside `src\`: `xh
 
 | Path | What it is |
 |---|---|
-| `obj\`, `objchk*\`, `objfre*\` | DDK build output per flavour and architecture: the `.sys`, `.pdb`, `.res` and `.obj` files. |
+| `obj\`, `objchk_qemu\`, `objfre*\` | DDK build output per flavour and architecture: the `.sys`, `.pdb`, `.res` and `.obj` files (an old `objchk\` is the retired debug flavour's). |
 | `build*.log` | The DDK build engine's logs. |
 
-The three flavours (`debug`, `release`, `qemu`) and what distinguishes their outputs are in [design record 08](design/08-build-flavours-and-the-log-channel.md); the build procedure is in [build-and-test.md](build-and-test.md).
+The two flavours (`release` and `qemu`; `debug` was retired with roadmap-usb4 task 45.45) and what distinguishes their outputs are in [design record 08](design/08-build-flavours-and-the-log-channel.md); the build procedure is in [build-and-test.md](build-and-test.md).
 
 ## The UAS class driver - `src\uas\`
 
-`xhciuas.sys` (roadmap-hcd task 31-A.2), a class driver of this project's own above a device PDO whose interface is Mass Storage / SCSI / UAS, built by `scripts\build-driver.cmd` after `xhci98.sys` from its own `sources` and `makefile`, in the same three flavours.
+`xhciuas.sys` (roadmap-hcd task 31-A.2), a class driver of this project's own above a device PDO whose interface is Mass Storage / SCSI / UAS, built by `scripts\build-driver.cmd` after `xhci98.sys` from its own `sources` and `makefile`, in the same flavours.
 
 | File | What it is |
 |---|---|
@@ -193,7 +193,7 @@ The three flavours (`debug`, `release`, `qemu`) and what distinguishes their out
 
 ## The Thunderbolt 3 connection manager - `src\cm\`
 
-`xhcicm.sys`, the third driver (design record 21; `roadmap-usb4.md` Phase 39, scaffold of task 39-A.1), built by `scripts\build-driver.cmd` after `xhciuas.sys` in every x86 and amd64 run, from its own `sources` and `makefile`, in the same three flavours. One binary, two PnP roles: the NHI's function driver on every target and, on the NT targets only, the tunnel bridge's upper filter (with safe eject's child filter beside it), plus the query device of a started NHI. A new `.c` file is one more line in `src\cm\sources` (and, if it is pure, a `call :run` line in `test\run-host-tests.cmd`).
+`xhcicm.sys`, the third driver (design record 21; `roadmap-usb4.md` Phase 39, scaffold of task 39-A.1), built by `scripts\build-driver.cmd` after `xhciuas.sys` in every x86 and amd64 run, from its own `sources` and `makefile`, in the same flavours. One binary, two PnP roles: the NHI's function driver on every target and, on the NT targets only, the tunnel bridge's upper filter (with safe eject's child filter beside it), plus the query device of a started NHI. A new `.c` file is one more line in `src\cm\sources` (and, if it is pure, a `call :run` line in `test\run-host-tests.cmd`).
 
 | File | What it is |
 |---|---|
@@ -975,9 +975,9 @@ command precondition table: would a conforming controller accept this
 command in this Slot and EP state; pure, host suite `test_strict`) and
 its driver half `hcd_strict.c` (before each command `hcd_enum.c`'s
 `hcdCommand` submits, it reads the states from the Output Device Context,
-counts and traces a violation and still sends the command; it only
-observes), compiled into the debug and `qemu` flavours and none of it
-into `release`; and `src\uas\`, the UAS class driver `xhciuas.sys` (task
+counts and notes a violation and still sends the command; it only
+observes), compiled into every flavour since roadmap-usb4 task 45.45 and
+run unless `XhciCommandCheck` is 0; and `src\uas\`, the UAS class driver `xhciuas.sys` (task
 31-A.2), built by its own `sources` and `makefile`: `uas.h` (the stack
 and the transports), `uas_iu.c` / `uas_iu.h` (its pure core: the
 information units, LUN encoding, tags, the configuration walk for the

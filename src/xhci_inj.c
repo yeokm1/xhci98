@@ -1,8 +1,8 @@
 /*
  * xhci_inj.c - 35-T.9's fault injection, the pure half (xhci_inj.h).
  *
- * The qemu flavour alone compiles it into the driver; the debug and release
- * images carry none of it. C89, pure: IRQL any.
+ * The qemu flavour alone compiles it into the driver; the release image
+ * carries none of it. C89, pure: IRQL any.
  */
 
 #include "xhci_inj.h"
@@ -570,7 +570,7 @@ ULONG XhciInjEp0Fires(PXHCI_INJ_EP e, ULONG devPort, ULONG published)
     return 1;
 }
 
-#else /* debug and release: injection is not in the image */
+#else /* release: injection is not in the image */
 
 typedef int xhciInjNotInImage;
 
