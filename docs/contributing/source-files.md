@@ -170,10 +170,10 @@ The two flavours (`release` and `qemu`; `debug` was retired with roadmap-usb4 ta
 | File | What it is |
 |---|---|
 | `uas.h` | The stack and the transports, the extensions of the FDO and the LUN PDOs, the cross-file entry points. |
-| `uas_iu.c` / `uas_iu.h` | The pure core (host suite `test_uas`): the information units, the SAM LUN encoding, the tag allocator, the configuration walk for the UAS setting and its Pipe Usage descriptors, REPORT LUNS, the status fold, the CDB direction table, the storage ids, the policy reply and the telemetry buckets. |
+| `uas_iu.c` / `uas_iu.h` | The pure core (host suite `test_uas`): the information units, the SAM LUN encoding, the tag allocator, the configuration walk for the UAS setting and its Pipe Usage descriptors, REPORT LUNS, the status fold, the CDB direction table, the storage ids, the policy reply, the telemetry buckets, and the pass-through and SMART checks, CDB and outcome (task 45.52). |
 | `uas_entry.c` | `DriverEntry`, `AddDevice`, the dispatch table, the flavour marker and version string. |
 | `uas_fdo.c` | The FDO on the bus's PDO: PnP, power pass-through, the configuration and the four pipes, the transport choice, LUN discovery, the BusRelations of the LUN PDOs and the transfer-policy ask. |
-| `uas_pdo.c` | One PDO per logical unit: its ids, the SRBs the storage class layer sends, the two storage IOCTLs it asks first. |
+| `uas_pdo.c` | One PDO per logical unit: its ids, the SRBs the storage class layer sends, the two storage IOCTLs it asks first, and a program's SCSI and ATA pass-through and SMART requests (task 45.52). |
 | `uas_xport.c` | The transport engine: queue, tags, the information units streamed and streamless, timeouts, task management, reset recovery, the telemetry record. |
 | `uas_mem.c` | Every pool, MDL and IRP-memory call, the import allowlist's one site (`SITES=uas_mem.obj`). |
 | `uas_streams.c` / `uas_streams.h` | The one adapter to the bus's `IOCTL_XHCI98_OPEN_STREAMS` and `CLOSE_STREAMS` (`src\xhci98_streams.h`). |

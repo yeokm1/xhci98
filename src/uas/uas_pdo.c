@@ -1,6 +1,7 @@
 /*
  * uas_pdo.c - one PDO per logical unit: its PnP ids, the SRBs the storage
- * class layer sends it, and the two storage IOCTLs that layer asks first.
+ * class layer sends it, the two storage IOCTLs that layer asks first, and a
+ * program's SCSI and ATA pass-through and SMART requests (task 45.52).
  *
  * THE IDS (uas_iu.c, UasBuildId, from the LUN's INQUIRY data). The device
  * id is this driver's own enumerator, XHCIUAS\<Type>&Ven_&Prod_&Rev_, so a
@@ -29,6 +30,18 @@
  * sends LOGICAL UNIT RESET (or resets the port). Each completes with its
  * outcome, not before it.
  *
+ * PASS-THROUGH (task 45.52, design record 13 section 16). The disk class
+ * driver passes a program's IOCTL_SCSI_PASS_THROUGH(_DIRECT) and
+ * IOCTL_ATA_PASS_THROUGH(_DIRECT) down unchanged, and sends the SMART IOCTLs
+ * as IOCTL_SCSI_MINIPORT with the SCSIDISK signature. Each is checked by the
+ * pure core (uas_iu.c, UasPtPlan, UasSiocCheck, UasSmartPlan) and then runs
+ * as a class SRB does: the caller's own IRP queued with a record's SRB
+ * (UAS_PCMD), under the same admission, queue lock, sleep hold and
+ * recovery, with a cancel routine while it waits; the ATA and SMART forms as
+ * ATA PASS-THROUGH (16). UasPdoPassFinish writes the outcome back. No
+ * access check of its own: the I/O manager has held the code's required
+ * access to the handle (16.3, the owner's choice B).
+ *
  * LIFETIME. STOP, SURPRISE_REMOVAL and REMOVE close the LUN's admission and
  * wait for its requests to finish (UasEngineCloseLun). The SCSI and device
  * control dispatches run inside pdo->Busy, which the parent's removal waits
@@ -43,6 +56,70 @@
 
 #ifndef SRB_FUNCTION_RESET_LOGICAL_UNIT
 #define SRB_FUNCTION_RESET_LOGICAL_UNIT 0x20
+#endif
+
+/* Task 45.52: the ATA pass-through codes are not in the Windows 2000 DDK's
+ * ntddscsi.h; WDK 7.1's values. */
+#ifndef IOCTL_ATA_PASS_THROUGH
+#define IOCTL_ATA_PASS_THROUGH          CTL_CODE(IOCTL_SCSI_BASE, 0x040b, \
+                                                 METHOD_BUFFERED,         \
+                                                 FILE_READ_ACCESS |       \
+                                                 FILE_WRITE_ACCESS)
+#endif
+#ifndef IOCTL_ATA_PASS_THROUGH_DIRECT
+#define IOCTL_ATA_PASS_THROUGH_DIRECT   CTL_CODE(IOCTL_SCSI_BASE, 0x040c, \
+                                                 METHOD_BUFFERED,         \
+                                                 FILE_READ_ACCESS |       \
+                                                 FILE_WRITE_ACCESS)
+#endif
+
+/* The pure core reads the headers at byte offsets (uas_iu.h); these hold
+ * those offsets to the DDK's own declarations wherever its headers carry
+ * them: SCSI pass-through in both, ATA pass-through and the _32 forms in
+ * WDK 7.1's amd64 headers. */
+XHCI_C_ASSERT(uas_ioctl_ata, IOCTL_ATA_PASS_THROUGH == 0x4D02CUL &&
+                             IOCTL_ATA_PASS_THROUGH_DIRECT == 0x4D030UL);
+#if defined(_WIN64)
+XHCI_C_ASSERT(uas_spt64, sizeof(SCSI_PASS_THROUGH) == 56 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, DataBufferOffset) == 24 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, SenseInfoOffset) == 32 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, Cdb) == 36);
+XHCI_C_ASSERT(uas_sptd64, sizeof(SCSI_PASS_THROUGH_DIRECT) == 56 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH_DIRECT, DataBuffer) == 24);
+XHCI_C_ASSERT(uas_spt32, sizeof(SCSI_PASS_THROUGH32) == 44 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH32, DataBufferOffset) == 20 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH32, SenseInfoOffset) == 24 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH32, Cdb) == 28);
+XHCI_C_ASSERT(uas_sptd32, sizeof(SCSI_PASS_THROUGH_DIRECT32) == 44 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH_DIRECT32, DataBuffer) == 20);
+XHCI_C_ASSERT(uas_apt64, sizeof(ATA_PASS_THROUGH_EX) == 48 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, AtaFlags) == 2 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, DataTransferLength) == 8 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, TimeOutValue) == 12 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, DataBufferOffset) == 24 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, PreviousTaskFile) == 32 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX, CurrentTaskFile) == 40);
+XHCI_C_ASSERT(uas_aptd64, sizeof(ATA_PASS_THROUGH_DIRECT) == 48 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_DIRECT, DataBuffer) == 24);
+XHCI_C_ASSERT(uas_apt32, sizeof(ATA_PASS_THROUGH_EX32) == 40 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX32, DataBufferOffset) == 20 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX32, PreviousTaskFile) == 24 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_EX32, CurrentTaskFile) == 32);
+XHCI_C_ASSERT(uas_aptd32, sizeof(ATA_PASS_THROUGH_DIRECT32) == 40 &&
+              FIELD_OFFSET(ATA_PASS_THROUGH_DIRECT32, DataBuffer) == 20);
+#else
+XHCI_C_ASSERT(uas_spt32x86, sizeof(SCSI_PASS_THROUGH) == 44 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, ScsiStatus) == 2 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, CdbLength) == 6 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, SenseInfoLength) == 7 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, DataIn) == 8 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, DataTransferLength) == 12 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, TimeOutValue) == 16 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, DataBufferOffset) == 20 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, SenseInfoOffset) == 24 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH, Cdb) == 28);
+XHCI_C_ASSERT(uas_sptd32x86, sizeof(SCSI_PASS_THROUGH_DIRECT) == 44 &&
+              FIELD_OFFSET(SCSI_PASS_THROUGH_DIRECT, DataBuffer) == 20);
 #endif
 
 #define UAS_ID_BUFFER   512
@@ -400,6 +477,7 @@ static VOID uasPdoLeave(PUAS_PDO pdo)
 
 static NTSTATUS uasPdoScsiInside(PUAS_PDO pdo, PUAS_FDO fdo, PIRP irp,
                                  PSCSI_REQUEST_BLOCK srb);
+static NTSTATUS uasPassDispatch(PUAS_PDO pdo, PIRP irp);
 
 NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp)
 {
@@ -665,6 +743,16 @@ NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp)
         status = STATUS_SUCCESS;
         break;
 
+    case IOCTL_SCSI_PASS_THROUGH:
+    case IOCTL_SCSI_PASS_THROUGH_DIRECT:
+    case IOCTL_ATA_PASS_THROUGH:
+    case IOCTL_ATA_PASS_THROUGH_DIRECT:
+    case IOCTL_SCSI_MINIPORT:
+        /* Task 45.52: completed by the helper or by the finish. */
+        status = uasPassDispatch(pdo, irp);
+        uasPdoLeave(pdo);
+        return status;
+
     default:
         status = STATUS_INVALID_DEVICE_REQUEST;
         break;
@@ -672,4 +760,342 @@ NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp)
     status = UasCompleteIrp(irp, status, written);
     uasPdoLeave(pdo);
     return status;
+}
+
+/* ------------------------------------------------------------------ */
+/* Task 45.52: pass-through and SMART (design record 13 section 16)    */
+/* ------------------------------------------------------------------ */
+
+static NTSTATUS uasPassStatus(ULONG result)
+{
+    switch (result) {
+    case UAS_PTR_SUCCESS:
+        return STATUS_SUCCESS;
+    case UAS_PTR_TIMEOUT:
+        return STATUS_IO_TIMEOUT;
+    case UAS_PTR_NO_DEVICE:
+        return STATUS_NO_SUCH_DEVICE;
+    case UAS_PTR_BUSY:
+        return STATUS_DEVICE_BUSY;
+    case UAS_PTR_INVALID:
+        return STATUS_INVALID_PARAMETER;
+    case UAS_PTR_NOT_SUPPORTED:
+        return STATUS_NOT_SUPPORTED;
+    default:
+        return STATUS_IO_DEVICE_ERROR;
+    }
+}
+
+static NTSTATUS uasPlanStatus(ULONG check)
+{
+    switch (check) {
+    case UAS_PT_OK:
+        return STATUS_SUCCESS;
+    case UAS_PT_TOO_SMALL:
+        return STATUS_BUFFER_TOO_SMALL;
+    case UAS_PT_UNKNOWN:
+        return STATUS_INVALID_DEVICE_REQUEST;
+    default:
+        return STATUS_INVALID_PARAMETER;
+    }
+}
+
+/* The record's SRB, as a class driver would build it for this command. */
+static VOID uasPassSrb(PUAS_PCMD pc, ULONG lun, const UCHAR *cdb,
+                       ULONG cdbLength, PVOID data, ULONG length, ULONG dir,
+                       ULONG timeout)
+{
+    PSCSI_REQUEST_BLOCK srb;
+
+    srb = &pc->Srb;
+    srb->Length = sizeof(SCSI_REQUEST_BLOCK);
+    srb->Function = SRB_FUNCTION_EXECUTE_SCSI;
+    srb->Lun = (UCHAR)lun;
+    srb->CdbLength = (UCHAR)cdbLength;
+    UasCopy(srb->Cdb, cdb, cdbLength);
+    srb->DataBuffer = data;
+    srb->DataTransferLength = length;
+    if (dir == UAS_DIR_IN) {
+        srb->SrbFlags = SRB_FLAGS_DATA_IN;
+    } else if (dir == UAS_DIR_OUT) {
+        srb->SrbFlags = SRB_FLAGS_DATA_OUT;
+    } else {
+        srb->SrbFlags = SRB_FLAGS_NO_DATA_TRANSFER;
+    }
+    /* Autosense always: an ATA answer's registers come back as sense. */
+    srb->SenseInfoBuffer = pc->Sense;
+    srb->SenseInfoBufferLength = (UCHAR)UAS_PT_SENSE_MAX;
+    srb->TimeOutValue = timeout;
+    srb->OriginalRequest = pc->Irp;
+}
+
+/* A record's end before or without the engine: no count was taken. */
+static NTSTATUS uasPassDrop(PUAS_PCMD pc, NTSTATUS status)
+{
+    PIRP irp;
+
+    irp = pc->Irp;
+    if (pc->UserMdl != NULL) {
+        irp->MdlAddress = NULL;
+        UasUnlockBuffer(pc->UserMdl);
+    }
+    UasFree(pc->Data);
+    UasFree(pc);
+    return UasCompleteIrp(irp, status, 0);
+}
+
+/*
+ * SCSI and ATA pass-through, buffered and direct (16.4, 16.5). Inside the
+ * PDO's dispatch rundown. The direct forms at PASSIVE_LEVEL only.
+ */
+static NTSTATUS uasPassThrough(PUAS_PDO pdo, PIRP irp, ULONG kind,
+                               ULONG inLength, ULONG outLength)
+{
+    PUAS_FDO fdo;
+    PUAS_PCMD pc;
+    PUCHAR buf;
+    PVOID data;
+    ULONG layout;
+    ULONG direct;
+    ULONG check;
+    ULONG_PTR address;
+    NTSTATUS status;
+
+    fdo = pdo->Fdo;
+    buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    direct = kind == UAS_PT_SCSI_DIRECT || kind == UAS_PT_ATA_DIRECT;
+    if (buf == NULL) {
+        return UasCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (direct && KeGetCurrentIrql() != PASSIVE_LEVEL) {
+        return UasCompleteIrp(irp, STATUS_INVALID_DEVICE_REQUEST, 0);
+    }
+    layout = UAS_PT_LAYOUT_32;
+#if defined(_WIN64)
+    /* Only an IRP the I/O manager built for a process can be asked; a
+     * driver's own request is native. */
+    if (irp->RequestorMode != UserMode || !IoIs32bitProcess(irp)) {
+        layout = UAS_PT_LAYOUT_64;
+    }
+#endif
+    pc = (PUAS_PCMD)UasAlloc(sizeof(UAS_PCMD));
+    if (pc == NULL) {
+        return UasCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    pc->Fdo = fdo;
+    pc->Pdo = pdo;
+    pc->Irp = irp;
+    pc->Form = UAS_PCMD_PT;
+    pc->OutLength = outLength;
+    check = UasPtPlan(kind, layout, buf, inLength, outLength,
+                      fdo->CommandBytes, &pc->Plan);
+    if (check != UAS_PT_OK) {
+        return uasPassDrop(pc, uasPlanStatus(check));
+    }
+    /* No pool byte the caller never wrote goes back (16.4). */
+    if (outLength > inLength) {
+        UasZero(buf + inLength, outLength - inLength);
+    }
+    data = NULL;
+    if (pc->Plan.DataLength != 0 && direct) {
+        if (irp->MdlAddress != NULL ||
+            (irp->RequestorMode == UserMode &&
+             (PVOID)irp->Tail.Overlay.Thread != (PVOID)KeGetCurrentThread())) {
+            /* Not in the issuing thread: the address cannot be read in the
+             * caller's space here. */
+            return uasPassDrop(pc, STATUS_INVALID_DEVICE_REQUEST);
+        }
+#if defined(_WIN64)
+        address = ((ULONG_PTR)pc->Plan.DataPtrHi << 32) |
+                  (ULONG_PTR)pc->Plan.DataPtrLo;
+#else
+        address = (ULONG_PTR)pc->Plan.DataPtrLo;
+#endif
+        status = UasLockBuffer((PVOID)address, pc->Plan.DataLength,
+                               irp->RequestorMode,
+                               (BOOLEAN)(pc->Plan.Dir == UAS_DIR_IN),
+                               &pc->UserMdl);
+        if (!NT_SUCCESS(status)) {
+            return uasPassDrop(pc, status);
+        }
+        irp->MdlAddress = pc->UserMdl;
+        data = (PVOID)address;
+    } else if (pc->Plan.DataLength != 0) {
+        data = buf + pc->Plan.DataOffset;
+    }
+    uasPassSrb(pc, pdo->Lun, pc->Plan.Cdb, pc->Plan.CdbLength, data,
+               pc->Plan.DataLength, pc->Plan.Dir, pc->Plan.Timeout);
+    if (!UasEngineSubmitPass(fdo, pdo, pc)) {
+        return uasPassDrop(pc, STATUS_NO_SUCH_DEVICE);
+    }
+    return STATUS_PENDING;
+}
+
+/* Writes the envelope's reply fields (16.4): the rest of it as sent. */
+static VOID uasSiocReply(PUCHAR buf, ULONG returnCode, ULONG length)
+{
+    PULONG w;
+
+    w = (PULONG)buf;
+    w[3] = 0;               /* Timeout */
+    w[5] = returnCode;      /* ReturnCode */
+    w[6] = length;          /* Length */
+}
+
+/*
+ * The SMART requests as disk.sys sends them (16.9): IOCTL_SCSI_MINIPORT,
+ * signature SCSIDISK. Anything else keeps STATUS_INVALID_DEVICE_REQUEST.
+ */
+static NTSTATUS uasMiniport(PUAS_PDO pdo, PIRP irp, ULONG inLength,
+                            ULONG outLength)
+{
+    PUAS_FDO fdo;
+    PUAS_PCMD pc;
+    PUCHAR buf;
+    ULONG check;
+    ULONG control;
+    ULONG timeout;
+    ULONG capacity;
+    ULONG room;
+    ULONG err;
+
+    fdo = pdo->Fdo;
+    buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (buf == NULL) {
+        return UasCompleteIrp(irp, STATUS_INVALID_DEVICE_REQUEST, 0);
+    }
+    check = UasSiocCheck(buf, inLength, outLength, &control, &timeout,
+                         &capacity);
+    if (check != UAS_PT_OK) {
+        return UasCompleteIrp(irp, uasPlanStatus(check), 0);
+    }
+    if (outLength > inLength) {
+        UasZero(buf + inLength, outLength - inLength);
+    }
+    room = outLength - UAS_SIOC_LENGTH;
+    if (capacity < room) {
+        room = capacity;
+    }
+    if (control == UAS_SIOC_SMART_VERSION) {
+        if (inLength - UAS_SIOC_LENGTH < UAS_SMART_VERSION_LENGTH ||
+            room < UAS_SMART_VERSION_LENGTH) {
+            return UasCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+        }
+        UasSmartVersion(buf + UAS_SIOC_LENGTH);
+        uasSiocReply(buf, 0, UAS_SMART_VERSION_LENGTH);
+        return UasCompleteIrp(irp, STATUS_SUCCESS,
+                              UAS_SIOC_LENGTH + UAS_SMART_VERSION_LENGTH);
+    }
+    pc = (PUAS_PCMD)UasAlloc(sizeof(UAS_PCMD));
+    if (pc == NULL) {
+        return UasCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
+    }
+    pc->Fdo = fdo;
+    pc->Pdo = pdo;
+    pc->Irp = irp;
+    pc->Form = UAS_PCMD_SMART;
+    pc->OutLength = outLength;
+    pc->Room = room;
+    err = UasSmartPlan(control, buf + UAS_SIOC_LENGTH,
+                       inLength - UAS_SIOC_LENGTH, room, &pc->Smart);
+    if (err != UAS_SMART_NO_ERROR) {
+        /* Refused: the IRP fails, so nothing of this reaches the caller;
+         * written for a sender that reads its buffer anyway. */
+        if (room >= UAS_SMART_OUT_HEADER) {
+            UasZero(buf + UAS_SIOC_LENGTH, UAS_SMART_OUT_HEADER);
+            buf[UAS_SIOC_LENGTH + 4] = (UCHAR)err;
+            uasSiocReply(buf, err, UAS_SMART_OUT_HEADER);
+        }
+        return uasPassDrop(pc, STATUS_INVALID_PARAMETER);
+    }
+    if (pc->Smart.DataLength != 0) {
+        pc->Data = (PUCHAR)UasAlloc(pc->Smart.DataLength);
+        if (pc->Data == NULL) {
+            return uasPassDrop(pc, STATUS_INSUFFICIENT_RESOURCES);
+        }
+    }
+    uasPassSrb(pc, pdo->Lun, pc->Smart.Cdb, 16, pc->Data,
+               pc->Smart.DataLength,
+               (pc->Smart.DataLength != 0) ? UAS_DIR_IN : UAS_DIR_NONE,
+               UasPtTimeout(timeout));
+    if (!UasEngineSubmitPass(fdo, pdo, pc)) {
+        return uasPassDrop(pc, STATUS_NO_SUCH_DEVICE);
+    }
+    return STATUS_PENDING;
+}
+
+static NTSTATUS uasPassDispatch(PUAS_PDO pdo, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    ULONG inLength;
+    ULONG outLength;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    inLength = stack->Parameters.DeviceIoControl.InputBufferLength;
+    outLength = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    switch (stack->Parameters.DeviceIoControl.IoControlCode) {
+    case IOCTL_SCSI_PASS_THROUGH:
+        return uasPassThrough(pdo, irp, UAS_PT_SCSI, inLength, outLength);
+    case IOCTL_SCSI_PASS_THROUGH_DIRECT:
+        return uasPassThrough(pdo, irp, UAS_PT_SCSI_DIRECT, inLength,
+                              outLength);
+    case IOCTL_ATA_PASS_THROUGH:
+        return uasPassThrough(pdo, irp, UAS_PT_ATA, inLength, outLength);
+    case IOCTL_ATA_PASS_THROUGH_DIRECT:
+        return uasPassThrough(pdo, irp, UAS_PT_ATA_DIRECT, inLength,
+                              outLength);
+    default:
+        return uasMiniport(pdo, irp, inLength, outLength);
+    }
+}
+
+/*
+ * <= DISPATCH_LEVEL, no lock held, from the engine's completion of the
+ * request (uas_xport.c, uasCompleteRequest), which drops the LUN's count
+ * after this returns. The outcome is written into the system buffer, the
+ * direct form's pages are released (MdlAddress cleared first, so the I/O
+ * manager never sees this driver's MDL), and the IRP completes.
+ */
+VOID UasPdoPassFinish(PUAS_PCMD pc, PSCSI_REQUEST_BLOCK srb)
+{
+    PIRP irp;
+    PUCHAR buf;
+    ULONG senseLength;
+    ULONG result;
+    ULONG information;
+    ULONG bytes;
+    ULONG err;
+    NTSTATUS status;
+
+    irp = pc->Irp;
+    buf = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    senseLength = ((srb->SrbStatus & SRB_STATUS_AUTOSENSE_VALID) != 0)
+                      ? srb->SenseInfoBufferLength : 0;
+    information = 0;
+    if (pc->Cancelled) {
+        status = STATUS_CANCELLED;
+    } else if (pc->Form == UAS_PCMD_PT) {
+        result = UasPtResult(&pc->Plan, buf, pc->OutLength,
+                             SRB_STATUS(srb->SrbStatus), srb->ScsiStatus,
+                             srb->DataTransferLength, pc->Sense, senseLength,
+                             &information);
+        status = uasPassStatus(result);
+    } else {
+        result = UasSmartResult(&pc->Smart, buf + UAS_SIOC_LENGTH, pc->Room,
+                                SRB_STATUS(srb->SrbStatus), srb->ScsiStatus,
+                                srb->DataTransferLength, pc->Data, pc->Sense,
+                                senseLength, &bytes, &err);
+        uasSiocReply(buf, err, bytes);
+        if (result == UAS_PTR_SUCCESS) {
+            information = UAS_SIOC_LENGTH + bytes;
+        }
+        status = uasPassStatus(result);
+    }
+    if (pc->UserMdl != NULL) {
+        irp->MdlAddress = NULL;
+        UasUnlockBuffer(pc->UserMdl);
+    }
+    UasFree(pc->Data);
+    UasFree(pc);
+    (VOID)UasCompleteIrp(irp, status, NT_SUCCESS(status) ? information : 0);
 }
