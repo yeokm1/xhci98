@@ -4731,3 +4731,19 @@ the version bump.
   above): "On Windows 2000 a drive daisy-chained behind another device
   that is plugged in while Windows runs is found but does not start (Code
   10, the Standard PC HAL); one chained at power-on starts."
+- 45.46 (merged at `4f092103`; also drop "by the installer" at
+  release-notes.md 279-282 and ", the name SETUP.EXE gives it" in
+  README.md's router row): "The ASMedia ASM4242's USB4 router is named
+  `xHCI98 USB4 Router (ASMedia ASM4242)` by the INF's own line, a hand
+  install included; an update clears the name 3.3.0.0's installer wrote."
+- 45.50 (merged at `4f092103`, for "Registry settings"; the CM values
+  table's "absent" and "not written" cells for XhciCmBridgeReq,
+  TunnelBridge, AsmediaPcie7Credits, RingInterrupt and Usb4V2, and the
+  release notes' "which no INF writes" (~3834), to change with it): "From
+  3.4.0.0 the install writes every value the drivers read at its default,
+  in each controller's (or the Thunderbolt/USB4 controller's) own key,
+  only where it is missing, so a value you set survives an update;
+  XhciCmTunnelBridge is written as `auto` (the driver finds the tunnel
+  ports itself). Stor98's install writes its settings too: each value on
+  98 SE and ME, and one DriverParameter on 2000 to 10, kept whole where
+  you wrote one."
