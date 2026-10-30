@@ -2570,7 +2570,36 @@ Stor98 installed over it by `DIF_INSTALLDEVICE`, a cold boot, problem 10.
     (member 0200; no id on Windows 8.1 and later, by design)", the class
     model selected from the staged INF, `DiInstallDevice` success, "now
     runs Stor98", `MSISupported` 0; after a cold boot, running.
-- **Owed**: the same on 8.1 x64.
+
+### 8.1 x64 (2026-10-30, overlay `k81x`)
+
+The amd64 release package of `a0020db6` (gated build passed), staged
+unsigned with `make-package.ps1`, its five catalogs made unsigned with
+the packager's own `New-PackageCatalogFile`; in the guest its images and
+catalogs signed with a throwaway certificate made there (valid 2026 to
+2030, in Root and TrustedPublisher; never the project's key, nothing
+signed on the host); test signing on; Driver Verifier's standard checks
+on `xhcicm.sys`; the ASM4242 model with the ORICO at boot.
+
+- The install (exit 3), then a cold boot: `stornvme` first, the mark
+  service's switch, Stor98 running (problem 0, ORICO (E:)) with
+  `MSISupported` 0; another cold boot: running. Verifier: `xhcicm.sys`
+  loaded once, not unloaded.
+- The uninstall under Verifier: bug check 0xC9 (0x226,
+  0xFFFFF80037B97170, 0xFFFFCF81F9EE2DC0, 0), "DRIVER_VERIFIER_IOMANAGER_
+  VIOLATION (storport.sys)": the dispatch routine the minidump names is
+  `storport.sys+6170`, and no `xhcicm.sys` frame is on the stack (read
+  from the minidump on the host). The drive was moving back to
+  `stornvme`, whose port driver is `storport.sys`; Verifier checks that
+  stack's requests because `xhcicm.sys`'s child filter is in it. Not read
+  further: which request, and whether 8.1 x86's `storport.sys` behaves
+  the same (the x86 uninstalls under Verifier, 45.31's legs above, did
+  not stop).
+- With Verifier reset, the uninstall run again: exit 3, the drive on
+  `stornvme`, the restart after it clean.
+
+So on 8.1 x64 the Stor98 half holds, and the unload half is not read
+under Verifier: the stop in `storport.sys` came first.
 
 ### Owed
 
@@ -2682,3 +2711,7 @@ on its own (w3b; it does not start there, so no stop was read). The
 applet's stop on 2000 and 7 is not read. 45.17's PCI-side clause 5 (safe
 removal of the chained unit from the system's applet) is read on XP;
 from XHCITR it waits for record 25's chained unit (leg T.11).
+
+The unload half on 8.1 x64 under Verifier, behind the stop in
+`storport.sys` (which request, and whether it is the filter's doing);
+the same uninstall on 8.1 x86 was read with no stop.
