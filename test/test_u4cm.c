@@ -1723,6 +1723,19 @@ static void test_tbt3(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_EMPTY, "its unplug: EMPTY");
 }
 
+/*
+ * A half-built path on a depth-1 router's downstream link (its PCIe Down 7
+ * HopID 8 into lane 3, lane 3's HopID 9 back, Path Enable set; nothing on
+ * the child): a depth-2 link with something on it, which record 34
+ * section 6.9 keeps watched rather than adopting or connecting it.
+ */
+static void strayDownPath(int dev)
+{
+    g_fab.R[dev].Adp[7].Path[2 * 8] = 0x80000000UL | 8UL | (3UL << 11) | (7UL << 17);
+    g_fab.R[dev].Adp[7].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    g_fab.R[dev].Adp[3].Path[2 * 9] = 0x80000000UL | 8UL | (7UL << 11) | (16UL << 17);
+}
+
 static void test_links(void)
 {
     TBT_U4_CONFIG c;
@@ -1755,7 +1768,9 @@ static void test_links(void)
     CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_DEEP_REMOVED), 1, "the OS told");
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the depth-1 tunnel kept");
 
-    /* A new router at depth 2 is left uninitialised: its event counted. */
+    /* A new router at depth 2 behind an UP parent with its PCIe tunnel:
+     * its event counted, and the router connected (record 34 section 6.4;
+     * before the minimal chain it was left uninitialised). */
     fabPlugChild(&g_fab, dev, child, 0);
     g_fab.R[dev].Adp[3].Cs[4] |= 0x80000000UL;
     {
@@ -1767,7 +1782,34 @@ static void test_links(void)
     }
     poll(&g_cm, &g_fab, 2);
     CHECK(g_cm.Counters.HotPlugDownstream >= 1, "a depth-2 plug event counted");
+    CHECK(fabRtr(&g_fab, child, 3) & 0x80000000UL, "and the router connected at depth 2");
+    CHECK(g_cm.Kids[0].Used && g_cm.Kids[0].State == TBT_U4_UP, "as a kid, UP");
+
+    /* With no PCIe tunnel on the parent (XhciCmApprove 0), a new router at
+     * depth 2 is left uninitialised, its event counted. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_USB4);
+    child = fabChild(&g_fab, dev);
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    c.Approve = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    poll(&g_cm, &g_fab, 2);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "XhciCmApprove 0: the parent UP, no tunnel");
+    fabPlugChild(&g_fab, dev, child, 0);
+    g_fab.R[dev].Adp[3].Cs[4] |= 0x80000000UL;
+    {
+        unsigned long dw[3];
+        dw[0] = 0x80000000UL;
+        dw[1] = 1;
+        dw[2] = 3;
+        fabInject(&g_fab, TBT_PDF_HOTPLUG, dw, 3);
+    }
+    poll(&g_cm, &g_fab, 2);
+    CHECK(g_cm.Counters.HotPlugDownstream >= 1, "XhciCmApprove 0: the depth-2 event counted");
     CHECK_EQ(fabRtr(&g_fab, child, 3) & 0x80000000UL, 0, "and the router left uninitialised");
+    CHECK(!g_cm.Kids[0].Used, "and no kid");
 }
 
 /* ------------------------------------------------------------------ */
@@ -2354,6 +2396,7 @@ static void test_edge_identity(void)
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, child, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     cfgDefault(&c);
     (void)start(&g_fab, &g_ring, &g_cm, &c);
@@ -4137,6 +4180,7 @@ static void test_asm2464(void)
     fabPlug(&g_fab, 1, dev);
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, dev2, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Pcie.Preserved,
@@ -4165,6 +4209,7 @@ static void test_asm2464(void)
     fabPreos(&g_fab, 1, 0);
     fabPlugChild(&g_fab, dev, dev2, 1);
     fabPlugChild(&g_fab, dev2, dev3, 1);
+    strayDownPath(dev);
     g_fab.RxQCount = 0;
     (void)start(&g_fab, &g_ring, &g_cm, &c);
     CHECK(g_cm.Links[0].Used && g_cm.Links[1].Used && g_cm.Links[0].ChildDromRead &&
@@ -5228,6 +5273,24 @@ static unsigned long configWritesTo(const FAB *f, unsigned long from, int r)
     return n;
 }
 
+/* As configWritesTo, less a Thunderbolt 3 router's EEPROM bit-bang
+ * (Plug Events + 4, record 22 section 8 item 4): the names an adopted
+ * router's DROM gives, read at the first tick (tbtU4DromLate). */
+static unsigned long configWritesNoEe(const FAB *f, unsigned long from, int r)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = from; i < f->WrCount && i < FAB_WRLOG; i++) {
+        if (f->WrRouter[i] == r &&
+            !(f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] >= 9 && f->WrAddr[i] <= 26) &&
+            !(f->WrCs[i] == TBT_CS_ROUTER && f->WrAddr[i] == FAB_RCAP_PLUG + 4)) {
+            n++;
+        }
+    }
+    return n;
+}
+
 /* The first write from entry `from` on to router `r`'s DW `addr` (space
  * `cs`, adapter `adp`) whose value has a bit of `mask` set; -1 none. */
 static long findSet(const FAB *f, unsigned long from, int r, unsigned long cs,
@@ -6193,7 +6256,7 @@ static void test_kid_adopt(void)
     k = kidOf(&g_cm, 1);
     CHECK(k != NULL && k->State == TBT_U4_UP && k->Pcie.Preserved,
           "a preserved chain behind the dock: adopted");
-    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesTo(&g_fab, mark, dev), 0,
+    CHECK_EQ(configWritesTo(&g_fab, mark, child) + configWritesNoEe(&g_fab, mark, dev), 0,
              "no configuration written to the dock or the child");
     CHECK(fabChainPcieUp(&g_fab, dev), "both Path Enables kept");
     CHECK_EQ(countActions(&g_cm, TBT_U4_ACT_TUNNEL_UP), 0, "nothing re-enumerated");

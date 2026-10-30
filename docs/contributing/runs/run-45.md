@@ -2616,7 +2616,7 @@ The revision was reviewed and revised before its commit (`bb3434c7`).
   Checked to compile under `/Za /W3 /WX` against a copy of the header
   with section 6's fields added; not run.
 
-`testun-host-tests.cmd` on development host A at `39453f0d`: every
+`test\run-host-tests.cmd` on development host A at `39453f0d`: every
 suite passed, x86 and the amd64 legs. The vectors were reviewed and
 revised until the review found nothing material.
 
