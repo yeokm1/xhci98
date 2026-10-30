@@ -2,7 +2,7 @@
 
 Status: revision 8, 2026-10-30, task 45.18, before code: section 3.11,
 Stor98's statements for chained drives and their q35 admission, and
-questions Q7 to Q11. Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
+questions Q7 to Q11, answered by the owner the same day; reviewed and revised. Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
 unit's own `Removable` answer on NT, reviewed and revised before and with
 the code; section 3.9's 2000 reading. Revision 6, 2026-10-30, task 45.13:
 section 3.9, the NT chain action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
@@ -1037,8 +1037,13 @@ there, at both depths, as today.
      (item 6) applies as everywhere.
    An entry gets a statement only from the case its landing bridge and the
    teardown put it in, and only when that case is qualified on the running
-   system and kind (item 8); otherwise it goes to `IN_USE` alone, as every
-   withheld entry does.
+   system and kind (item 8). Otherwise the entry is withheld by today's
+   rule (record 21 section 7.2, "The statement"; `cmNvMarkEx`): an entry
+   whose function no longer answers moves to `IN_USE` alone (`UP`
+   cleared, no `DOWN_QUIESCED`), and one whose function still answers -
+   a failed read-back with both ends present, say - keeps its `UP`, so no
+   later exposure that names no new tunnel advances its generation under
+   a bound Stor98 instance.
 3. **The anchors** (section 3.5's two sets, made exact). `CmNvlinkService`
    samples per set, one sample per set per idle tick, timestamped before
    its first read, and matched only when every entry of the set answered
@@ -1067,6 +1072,21 @@ there, at both depths, as today.
    entered as a decision and made on the member's call worker as at depth 1
    (record 21 section 7.2 part 2), with the chain port's location in place
    of the member's; the verdict follows at `CmNvlinkDecided`.
+   **The gates.** An entry's acknowledgement wait holds the removal of
+   its landing bridge and of every bridge above it within the domain:
+   the shadow records the member above the landing bridge (section 3.5),
+   and the member's gate (`CmNvlinkHeld` for the member) is up while any
+   waiting entry's landing bridge is the member or a chain port below it,
+   not only while one's bridge is the member itself, as
+   `CmNvlinkWaitHeld`'s exact match has it today. So an M that follows a
+   D2 still waiting holds the member's removal and exposure until that
+   wait ends, although the entry, already `DOWN_QUIESCED`, is not marked
+   again. The chain port's own removal requests - section 3.9's
+   invalidation through the chain port's child filter at a chained tunnel
+   down or a reconciliation, and on 98 SE and ME the worker's removal of
+   the chain port's child - ask the chain port's gate first and are held
+   and run from a later pass, as the member's are; the chain action's
+   owed entry keeps them (section 3.9, "Owed") meanwhile.
 5. **The q35 reading** (the condition proper). On the landing bridge,
    within the time left: a type 1 function with a PCI Express capability
    whose Device/Port Type is a root port (4) or a downstream port (6),
@@ -1166,21 +1186,37 @@ there, at both depths, as today.
      `usb4_tp_cutoff` for the endpoint's generation.
    - D2: later than the chain port's slot's `usb4_tp_cutoff` for the
      chained endpoint's generation.
-   - M: later than the member's `usb4_tp_cutoff`, and the chained
-     endpoint's own reset traced before it. The member's stage 2 resets
-     the dock's switch upstream port with a cold reset, which QEMU's reset
-     tree carries to every function below it, and then drains all block
-     I/O (`ts_quiesce`: `device_cold_reset`, `blk_drain_all`) [inf: from
-     the emulator's code; the leg reads the chained controller's reset
-     with `-trace pci_nvme_*` between the member's stage 1 and its
-     cutoff]. Whether the chain port's own bottom half runs its stage 2
-     before the member's stage 3 removes the subtree is not documented
-     [emu: removing the dock closes both gates in the same call, leaf
-     first, `docs/USB4-HOSTS.md` section 8; the bottom halves' order is
-     not stated]; either form passes M where the reset is read before the
-     marker, and an M run where neither is read fails.
-   In each case also: the marker before that system's first removal
-   request for the function (gate G3's pass condition (2)). Stor98's own
+   - M: later than the chain port's own slot's `usb4_tp_cutoff` for the
+     chained endpoint's generation, as D2. The member's stage 2 also
+     resets the dock's switch upstream port with a cold reset, which
+     QEMU's reset tree carries to every function below it, and then drains
+     all block I/O (`ts_quiesce`: `device_cold_reset`, `blk_drain_all`)
+     [inf: from the emulator's code], but nothing in the trace shows that
+     reset for the chained controller alone: QEMU's NVMe reset event
+     (`pci_nvme_pci_reset`) names no controller, and the dock's switch
+     always holds an NVMe controller of its own, `drive=` or not (an unset
+     `drive=` only leaves it without a namespace; `usb4-tunnel-slot.c`,
+     `ts_build_switch`). So M rests on the chain port's cutoff alone.
+     Whether the chain port's bottom half runs its stage 2 before the
+     member's stage 3 removes the subtree is not documented [emu: removing
+     the dock closes both gates in the same call, leaf first, `docs/
+     USB4-HOSTS.md` section 8; the bottom halves' order is not stated]. An
+     M run whose chain-port cutoff is missing or later than the marker
+     fails; if that is the emulator's order, M stays MD-1 on every system
+     until `usb4-emu` guarantees the leaf's stage 2 first or traces the
+     endpoint's reset with its identity (a request for that repository,
+     section 13).
+   In each case also: the statement **received and acknowledged** before
+   that system's first removal request for the function (gate G3's pass
+   condition (2) asks for receipt, not publication): Stor98's receipt
+   and acknowledgement stage codes of its debug-port build - on NT
+   `0x141` and `0x142` (`STG_CML_SEEN`, `STG_CML_ACK`, its `cmlink.h`), on
+   98 SE and ME `0x124` and `0x125` (`STG_P9_LS_SEEN`, `STG_P9_LS_ACK`,
+   its `pool9x.h`), the acknowledgement's argument showing
+   `AckGeneration` written for the stated generation - and the wait's
+   end `0x1C1` with an acknowledged result, not a timeout, all before the
+   removal boundary below; a run whose wait
+   timed out does not pass. The removal boundary: Stor98's own
    stage codes do not show it: no stop callback reaches the miniport at
    an NT surprise removal (Stor98's gate G2), and ME never calls its stop
    callback. The boundary is read where it is first seen: on NT by this
@@ -1241,26 +1277,41 @@ there, at both depths, as today.
     build, never committed, as 43.18's was (section 12, Q8). Stor98 bound to each drive: by the tunnel id on 2000
     to 8, the mark service's arm on 8.1, an opt-in per drive on 10 (record
     31 section 4.7), the class match on 98 SE and ME. Per system and case,
-    the runs:
+    the runs, at gate G3's injection points (Stor98's `docs/TESTING.md`,
+    "CM notification"):
     - idle unplug;
-    - one read held at its fetch (the harness's `x-faults` `act=hold`),
-      the router unplugged just after;
+    - requests held: on NT eight reads held at their fetch (the harness's
+      `x-faults` `act=hold`), on 98 SE and ME one; the router unplugged
+      just after;
     - saturated: on NT the queue at Stor98's limit with every read held
       from one point on and more queued in the port (gate G3's QD 32
       form; the workload is named in the run sheet), on 98 SE and ME one
       held request (owner, 2026-10-22, `runs/run-43.md`, "43.18");
+    - during bring-up: the router unplugged while Stor98's start is held
+      (the harness's delayed RDY);
+    - at the `RequestComplete` stage: the harness's stage rule closes the
+      tunnel's gate at the request's completion step (`act=gate`; the
+      harness has no router removal of its own, and its `act=surprise`
+      takes the tunnel down unseen by this connection manager,
+      `runs/run-43.md`, "43.18"), and the router's `device_del` is sent
+      over QMP as soon as the harness shows the rule fired, as 43.18's
+      held-read runs did; both times are recorded, and the ordering is
+      read against the cutoff of the teardown the `device_del` starts;
+    - already gone: the harness closes the gate first (`act=gate`), Stor98
+      enters `gone` on all-ones, then the router is unplugged;
     - a re-plug unplugged just after `cm.nvlink.up`;
     - and, not counted for a bit but recorded: the chained unit's eject
       (MIXED, withheld, item 5), and a both-ends failure where the harness
       gives one.
     Unplugs: D1 `device_del` of the port-1 router; D2 `device_del` of the
     chained router, the dock's own drive untouched; M `device_del` of the
-    dock with the child attached. Systems first: 98 SE, ME, 2000, XP, 7
-    x86 and 10 x64 (section 9.3's set); XP x64, Vista, 8 and 8.1 where time
-    allows. Expected on Vista and later [inf]: Windows' native hot plug
-    removes the function on its own (Stor98's `docs/TESTING.md`: on q35 a
-    surprise makes the system remove the controller at once), so the
-    second clause of item 7 may fail there, and those bits stay 0.
+    dock with the child attached.
+    Systems: 98 SE, ME, 2000, XP and XP x64, the systems item 5 admits;
+    Vista and later are not read for a bit (the owner's Q11 (a): their
+    native hot plug writes Slot Control, and Stor98's `docs/TESTING.md`
+    says a q35 surprise makes them remove the controller at once), so
+    their bits stay 0; one 7 x86 run of D1 may be recorded as the
+    expected withholding.
 12. **Host vectors** (`test_cm_nvlink.c`, with the code): the q35 branch
     admitted on each kind with its bit set and withheld with it clear;
     each identity part failing alone (the endpoint's recorded vendor not
@@ -2139,7 +2190,9 @@ to E5 and E7, then E6 and E8, before Part 2's code. Q6: record 33's fix
   expected to work.
 
 
-**Task 45.18's questions (2026-10-30, open)**, section 3.11:
+**Task 45.18's questions, section 3.11. Answered (owner, 2026-10-30):
+Q7 (b), Q8 (a), Q9 (a), Q10 (a), Q11 (a), with (b) noted for
+`usb4-emu`.** The questions as asked follow.
 
 - **Q7, the emulator's identity on q35** (section 3.11 item 6): (a) the
   bridges alone, as section 3.5 first wrote it (1B36h on the landing
@@ -2198,8 +2251,11 @@ to E5 and E7, then E6 and E8, before Part 2's code. Q6: record 33's fix
 - **The middle unplug's ordering against Stor98** (sections 3.5 and 6.8):
   one statement covers two tunnels' entries, anchored by one sample of
   every entry behind the member; on the emulator it rests on the
-  member's stage 2 resetting the chained controller, read at the leg
-  (section 3.11 item 7).
+  chain port's own stage 2 being traced first (section 3.11 item 7).
+- **The middle unplug's trace on the emulator** (section 3.11 item 7):
+  whether the chain port's stage 2 is traced before the member's stage
+  3 removes the dock; if not, M waits for `usb4-emu` (a leaf-first
+  guarantee, or an NVMe reset event that names its controller).
 - **The q35 statement's signal** (section 3.11 item 5): Presence Detect
   clearing only after stage 2 on a surprise removal is read from the
   emulator's code and documents, not yet from a trace of this project's.
