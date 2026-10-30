@@ -19,12 +19,10 @@
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_QEMU"
-#elif defined(XHCI_FLAVOUR_DEBUG)
-#define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_DEBUG"
 #elif defined(XHCI_FLAVOUR_RELEASE)
 #define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_RELEASE"
 #else
-#error "no build flavour was defined. src/cm/sources derives XHCI_FLAVOUR_RELEASE, _DEBUG or _QEMU from BUILD_ALT_DIR; build through scripts\build-driver.cmd."
+#error "no build flavour was defined. src/cm/sources derives XHCI_FLAVOUR_RELEASE or _QEMU from BUILD_ALT_DIR (the debug flavour was retired with task 45.45); build through scripts\build-driver.cmd."
 #endif
 
 static volatile const char CmFlavourMarker[] = CM_FLAVOUR_NAME;
@@ -166,7 +164,8 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     /* Since task 45.12 (design record 33 section 4.4): a listed bridge's
      * LowerFilters registration, made before the PCI driver's FDO, is the
      * child; the NHI's answer stands whatever is above its PDO. */
-    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo));
+    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo),
+                       (ULONG)(CmBreqGate != 0));
     if (role == CM_ROLE_FILTER) {
         if (cmBridgeOnStack(pdo)) {
             return STATUS_SUCCESS;

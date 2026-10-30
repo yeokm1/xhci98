@@ -729,6 +729,35 @@ static void test_plug_approve_unplug(void)
     CHECK_EQ(act[0].Why, TBT_ICM_WHY_UNMATCHED, "unmatched");
 }
 
+/* Task 45.22 (record 21 section 4.5.1): the ring interrupt's wake drains
+ * and acts as the idle poll does - a plug approved and its tunnel-up
+ * queued with no idle poll between - without counting an idle poll; an
+ * empty drain sends nothing. */
+static void test_ring_wake(void)
+{
+    TBT_ICM_ACTION act[8];
+    ULONG polls;
+    ULONG tx;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind with nothing attached");
+    polls = g_icm.Counters.IdlePolls;
+    tx = g_icm.Ring->Counters.Tx;
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Ring->Counters.Tx, tx, "an empty drain sends nothing");
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakeSleep(NULL, 1);
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved by the wake");
+    CHECK_EQ(actions(act, 8), 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_UP, "tunnel up, no idle poll between");
+    CHECK_EQ(g_icm.Counters.IdlePolls, polls, "no idle poll counted");
+    tx = g_icm.Ring->Counters.Tx;
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Ring->Counters.Tx, tx, "the next drain finds the responses consumed");
+}
+
 static void test_policy(void)
 {
     TBT_ICM_ACTION act[4];
@@ -2936,6 +2965,7 @@ int main(void)
     RUN_VEC(test_names);
     RUN_VEC(test_bind_rebind);
     RUN_VEC(test_plug_approve_unplug);
+    RUN_VEC(test_ring_wake);
     RUN_VEC(test_policy);
     RUN_VEC(test_resume_refresh_and_reconcile);
     RUN_VEC(test_disconnect_during_approve);

@@ -534,6 +534,7 @@ accumulates the project's bug history.
   | `test_trlog` | `xhcitr/tr_log.c` + `tr_core.c` + `src/cm/cm_query.c` + `inst_core.c` - XHCITR's driver-log readers (design record 25 sections 4.5 and 4.6) |
   | `test_tbt_select` | `src/cm/tbt_hw.c` + `tbt_icm.c` + `tbt_ring.c` - the selection as design record 22 section 3 has it (task 40-A.2) |
   | `test_u4cm` | `src/cm/tbt_u4cm.c` over `test/u4_fakefab.c`, with `tbt_hw.c`, `tbt_icm.c` and `tbt_ring.c` - the USB4 software connection manager (tasks 40-A.3 and 40-A.8, design record 22 section 14.1) |
+  | `test_u4v2` | the same files - the connection manager as a Ver. 2 Connection Manager over the fabric's USB4 version 2 routers (task 45.20, design record 22 section 6.2.4) |
   | `test_cm_ports` | `src/cm/cm_ports.c` - the re-enumeration's pure half (39-A.5, 39-A.8) |
   | `test_cm_irq` | `src/cm/cm_irq.c` - the interrupt of a function hot-added on 2000's Standard PC HAL (44.53), also built for amd64 |
   | `test_cm_status` | `src/cm/cm_status.c` - the status record (design record 24 section 3) |

@@ -16,7 +16,9 @@ packager makes and test-signs (design record 19, owner 2026-10-22: Windows
 8 to 10 x64 refuse a package without one in test-signing mode), and writes
 no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
 docs/PLAN.md, 2026-10-23) and deletes one an earlier build wrote, in the
-service's DelReg; the x86 INF names no catalog. The models before NT
+service's DelReg; the x86 INF names no catalog. Both NT install sections
+have a .HW section writing MSISupported 0 (task 45.31: the SCSI port
+driver takes no message-signaled interrupt, and a drive stornvme ran has 1). The models before NT
 6.3 (the x86 INF's undecorated section, which Windows 2000 reads too; the
 x64 INF's NTamd64) match the tunnel id PCI\XHCI98_TUNNEL&CC_010802 alone,
 as the hardware id, which xhci98's connection manager gives a drive behind
@@ -75,6 +77,22 @@ function Get-InfFault {
     if ($got -cne $Want) { return "its DriverVer is '$got', and src\xhci_version.h says '$Want'" }
     $sig = [regex]::Match($t, '(?im)^[ \t]*Signature[ \t]*=[ \t]*"([^"]*)"')
     if (-not $sig.Success -or $sig.Groups[1].Value -ne $Signature) { return "its Signature is not `"$Signature`"" }
+    # Line-based interrupts (task 45.31): the NT install section's .HW
+    # section writes MSISupported 0, so a drive stornvme ran (MSISupported
+    # 1) starts on Stor98, which the SCSI port driver serves with no
+    # message-signaled interrupt.
+    $hwName = if ($Signature -eq '$Windows NT$') { 'Stor98_Inst.NTamd64.HW' } else { 'Stor98_Inst.NTx86.HW' }
+    $hw = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($hwName) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+    $hwl = @()
+    if ($hw.Success) { $hwl = @([regex]::Matches($hw.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value -replace '[ \t]', '' }) }
+    if ($hwl.Count -ne 1 -or $hwl[0] -notmatch '^(?i)AddReg=([A-Za-z0-9_]+)$') { return "its [$hwName] section is not the one line AddReg=<section> (MSISupported 0, task 45.31)" }
+    $hrName = $Matches[1]
+    $hr = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($hrName) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
+    $hrl = @()
+    if ($hr.Success) { $hrl = @([regex]::Matches($hr.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value }) }
+    # Space allowed around the commas alone: the subkey's one space is part
+    # of its name.
+    if ($hrl.Count -ne 1 -or $hrl[0] -cnotmatch '^HKR[ \t]*,[ \t]*"Interrupt Management\\MessageSignaledInterruptProperties"[ \t]*,[ \t]*MSISupported[ \t]*,[ \t]*%REG_DWORD%[ \t]*,[ \t]*0$') { return "its [$hrName] section is not the one line writing MSISupported 0 (task 45.31)" }
     $cat = @([regex]::Matches($t, '(?im)^[ \t]*CatalogFile(\.[^ \t=]*)?[ \t]*=[ \t]*([^\r\n;]*?)[ \t]*(;[^\r\n]*)?\r?$'))
     if ($Signature -eq '$Windows NT$') {
         if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
@@ -223,7 +241,13 @@ try {
                 @{ T = $base.Replace("[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802", "[Stor98_Models]`r`n%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL"); Ok = $false; Why = "another id in the x86 INF" },
                 @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "the class as the hardware id on 8.1 and 10 in the x86 INF" },
                 @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_0108"); Ok = $false; Why = "the whole subclass on 8.1 and 10 in the x86 INF" },
-                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 8.1 and 10 in the x86 INF" }
+                @{ T = $base.Replace("%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "the tunnel id on 8.1 and 10 in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Inst.NTx86.HW]", "[Stor98_Inst.NTx86.HWX]"); Ok = $false; Why = "no .HW section in the x86 INF" },
+                @{ T = $base.Replace("MSISupported,%REG_DWORD%,0", "MSISupported,%REG_DWORD%,1"); Ok = $false; Why = "MSISupported 1 in the x86 INF" },
+                @{ T = $base.Replace("Interrupt Management\MessageSignaled", "InterruptManagement\MessageSignaled"); Ok = $false; Why = "the subkey without its space in the x86 INF" },
+                @{ T = $base.Replace("Interrupt Management\MessageSignaled", "Interrupt  Management\MessageSignaled"); Ok = $false; Why = "the subkey with two spaces in the x86 INF" },
+                @{ T = $base.Replace("MSISupported,%REG_DWORD%,0", "MSISupported , %REG_DWORD% , 0"); Ok = $true; Why = "spaces around the commas in the x86 INF" },
+                @{ T = $base.Replace("AddReg=Stor98_HwReg", "AddReg=Stor98_Other"); Ok = $false; Why = "the .HW section naming another section" }
             )
             $i = 0
             foreach ($c in $cases) {
@@ -238,6 +262,9 @@ try {
         $b64 = [System.IO.File]::ReadAllText($infs[1].File)
         $c64 = @(
             @{ T = $b64; Ok = $true; Why = "the committed x64 INF" },
+            @{ T = $b64.Replace("[Stor98_Inst.NTamd64.HW]", "[Stor98_Inst.NTamd64.HWX]"); Ok = $false; Why = "no .HW section in the x64 INF" },
+            @{ T = $b64.Replace("MSISupported,%REG_DWORD%,0", "MSISupported,%REG_DWORD%,1"); Ok = $false; Why = "MSISupported 1 in the x64 INF" },
+            @{ T = $b64.Replace("Interrupt Management\MessageSignaled", "InterruptManagement\MessageSignaled"); Ok = $false; Why = "the subkey without its space in the x64 INF" },
             @{ T = $b64.Replace("[Stor98_Models.NTamd64]", "[Stor98_Models]`r`n`r`n[Stor98_Models.NTamd64]"); Ok = $false; Why = "an empty undecorated models section in the x64 INF" },
             @{ T = $b64.Replace("CatalogFile=stor98.cat`r`n", ""); Ok = $false; Why = "no catalog in the x64 INF" },
             @{ T = $b64.Replace("%Mfg%=Stor98_Models,NTamd64,NTamd64.6.3", "%Mfg%=Stor98_Models,NTamd64"); Ok = $false; Why = "no NT 6.3 models in the x64 INF" },

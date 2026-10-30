@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 50, 2026-10-29 (task 45.7's ME leg: ME's `DevicePath`
+Status: draft 51, 2026-10-30 (task 45.6: a lifted row of the
+installer's table held to a lift only in a cut carrying both sets of
+its pair, section 6.7.14); draft 50, 2026-10-29 (task 45.7's ME leg: ME's `DevicePath`
 limit 259, not 98 SE's 280, section 6.7.13); draft 49, 2026-10-29
 (task 45.12's `XhciCmBridgeReq` an
 Advanced row of the Thunderbolt page on 2000 and XP, section 5.5);
@@ -4986,7 +4988,15 @@ the table and its lifts to each other both ways (`Test-OtherTableLifts`):
 a table row of kind 2 whose pair and systems no lift of this cut covers
 is refused, and so is a lift (a pack's `COEXISTS`, or a table row left of
 kind 0) that no row of kind 2 names on every system it lifts, since the
-installer's hold against an earlier release is that row.
+installer's hold against an earlier release is that row. Both hold in a
+cut that carries both sets of the pair (draft 51): a cut that leaves one
+out (`-NoWdmFree`, `-NoNonFree`) reads no lift, and the installer then
+holds that row as an `EXCLUDES` against any earlier staging, the
+partner's set not being this download's (`other_same_release`); so
+such a cut records the pair's `COEXISTS` lines on the row's systems,
+the table's and the carried pack's, as `EXCLUDES` (`Get-OtherHeldLifts`;
+the rest of each line as it is), and neither the history nor the
+table is held to a lift there.
 
 **The pair this is for.** Read at the pins of `3.3.0.0` (free `v0.1.4`
 at `c28fce8`, non-free `v1.1.0` at `565d11b`) with the cut's own

@@ -341,7 +341,7 @@ branch `3.4.0.0`;
 the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
-ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
+ASCII and CRLF, the build flavours, the import and INF gates - bind the HCD
 and `xhciuas.sys` as they bound the miniport; where the HCD departs from the
 miniport's rules (pool, the INFs' file set, SuperSpeed), the sections below
 say so, and `roadmap-hcd.md`'s decisions table and design record 13 are the
@@ -487,24 +487,29 @@ and "Windows 2000 as a co-primary target") and
 
 ### Build flavours
 
-There are three build flavours and only two are ever published. `release` and
-`debug` are the shipping pair: what `make-package.ps1 -Flavor` stages and what
-every document here means by "both flavours". `qemu` is `debug` plus the
-port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR` import, and **must
-never be published**: that import is the sole delta between the two binaries
-of the development package whose debug build gave the E460 a `Code 2`, and
-since why is not established (defect 2b) the safe configuration is the
-default and the emulator-only one is opt-in.
+There are two build flavours and only one is ever published (since
+roadmap-usb4 task 45.45, owner 2026-10-30: "one build for everyone").
+`release` ships: it is what `make-package.ps1 -Flavor` stages by default and
+the one directory per architecture a cut publishes. Its MSVC 6.0 x86 builds
+keep frame pointers (`/Oy-`, `NTNOFPO` in each driver's `sources`, held by
+`scripts\check-frame-pointers.ps1`), and it carries the command-state
+checker (`hcd_strict.c`), on unless `XhciCommandCheck` is 0. `qemu` is a
+checked build with the port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR`
+import, and **must never be published**: that import is the sole delta
+between the two binaries of the development package whose debug build gave
+the E460 a `Code 2`, and since why is not established (defect 2b) the safe
+configuration is the default and the emulator-only one is opt-in. The third,
+`debug` (checked, the diagnostic download, `debug-x86\` and `debug-x64\` up
+to `3.3.0.0`), was retired with task 45.45: every tool refuses the word.
 `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is the
-source.
+source, section 14 for the retirement.
 
-Two vocabularies cover "all of them", and they are not interchangeable.
-`build-driver.cmd`'s `both` means the two shipping flavours and is its
-default; `all` means the three and is what a release cut uses. In the import
-allowlist's `FLAVORS` column the word is `all`, and `both` is refused. The
-DDK's own words, `free` and `checked`, survive only where the DDK itself
-requires them; `build-driver.cmd` makes that mapping in one place
-(`docs/contributing/build-and-test.md`).
+`build-driver.cmd`'s default is `release`; `all` means the two and is what a
+release cut uses; `both` and `debug` are refused by name. In the import
+allowlist's `FLAVORS` column the word for every flavour is `all`, and `both`
+and `debug` are refused. The DDK's own words, `free` and `checked`, survive
+only where the DDK itself requires them; `build-driver.cmd` makes that
+mapping in one place (`docs/contributing/build-and-test.md`).
 
 ### DMA memory
 
@@ -635,10 +640,11 @@ files"). Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
 staged for each driver, and the architecture both gates run under. A published release
-directory is a flavour AND an architecture - `release-x86`, `debug-x86`,
-`release-x64`, `debug-x64` - because both architectures' binaries are called
+directory is a flavour AND an architecture - `release-x86` and
+`release-x64` (and, up to `3.3.0.0`, `debug-x86` and `debug-x64`) - because
+both architectures' binaries are called
 `xhci98.sys` and `xhciuas.sys`; `make-release.ps1 -Arch` defaults to **both** since 2026-09-09,
-so an ordinary cut publishes four directories. It defaulted to `x86` alone
+so an ordinary cut publishes two directories (four until task 45.45). It defaulted to `x86` alone
 until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
 release flavour installed and read separately on the same guest, because the
@@ -652,7 +658,7 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` of `release-x64` and `debug-x64` (one copy each
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` (and of `debug-x64` up to `3.3.0.0`; one copy each
 since 3.1.0.0, whose x64 directories keep the filter INF at the root and
 have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
 `release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own

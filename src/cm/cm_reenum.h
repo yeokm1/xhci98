@@ -741,6 +741,16 @@ VOID CmRegRelations(struct _CM_FILTER *filter,
 VOID CmRegChainRelations(struct _CM_FILTER *child,
                          const DEVICE_RELATIONS *relations);
 VOID CmRegChainNote(struct _CM_FILTER *f, ULONG event);
+
+/*
+ * Design record 34 section 3.10: a child about to answer its capabilities
+ * whose parent is a chain child not classified as a chain port has that
+ * parent classified again (a BusRelations answer made before its member
+ * was active, or a read that failed), and the marks synced when it now
+ * is one, so the Removable gate reads the chained unit's entry.
+ * PASSIVE_LEVEL, the child's IRP_MN_QUERY_CAPABILITIES.
+ */
+VOID CmRegChainRecheck(struct _CM_FILTER *child);
 VOID CmRegIdCounters(PULONG given, PULONG nomem, PULONG over, PULONG deep,
                      PULONG reattached);
 

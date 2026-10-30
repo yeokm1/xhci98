@@ -1,6 +1,6 @@
 /*
  * xhci_strict.h - strict mode: the xHCI 1.2 command precondition table
- * (debug and qemu flavours; hcd_strict.c is the driver half).
+ * (every flavour since task 45.45; hcd_strict.c is the driver half).
  *
  * QEMU's xHC model does not refuse a command issued against the wrong Slot
  * State or EP State, and a conforming controller does - with Context State
@@ -18,7 +18,6 @@
  * Slot State each command requires".
  *
  * DDK-free and pure: part of the core, host-tested by test\test_strict.c.
- * The release flavour compiles none of it.
  */
 
 #ifndef XHCI_STRICT_H

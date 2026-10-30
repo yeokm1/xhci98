@@ -234,6 +234,12 @@ typedef struct _TBT_RING {
      * into the common buffer, which is therefore never freed (cm_pool.c). */
     BOOLEAN DmaMayRun;
     ULONG RxPdfMask;        /* the RX PDF mask the last start programmed */
+    /* Interrupt Enable in every RX descriptor posted from now on (Spec
+     * 12.5.1: the RX cause's status set after the frame's write-back), the
+     * ring interrupt's intent (record 21 section 4.5.2), set by the driver
+     * before a start and kept by it; FALSE (polling) as a zeroed ring has
+     * it. A descriptor already posted keeps what it was posted with. */
+    BOOLEAN RxIe;
 
     /* The error notification that ended the last request with
      * TBT_E_NOTIFY (Spec 6.4.3): its event code, Event Info and the route
@@ -397,6 +403,12 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
  */
 BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame);
 
+/* Whether the next RX descriptor TbtRingReceive would take holds a frame
+ * (DD set), read from the common buffer alone: no register access, nothing
+ * taken (the ring interrupt's watchdog, record 21 section 4.5.5). FALSE
+ * while the ring is not running. */
+BOOLEAN TbtRingRxPending(const TBT_RING *ring);
+
 /*
  * Read `count` DWs (1..60) of configuration space `cs`, adapter `adapter`,
  * DW address `address`, of the router at `route` (Spec 6.4.2.3), into
@@ -463,9 +475,13 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
 #define TBT_NOTE_REQUEST        1UL     /* fails the outstanding request */
 #define TBT_NOTE_EVENT          2UL     /* ERR_LINK, HEC, FC, PLUG: counted, acknowledged */
 #define TBT_NOTE_ACK_IGNORE     3UL     /* DP_BW, PCIE_WAKE, DP_CON_CHANGE, DPTX_DISCOVERY */
-#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, LINK_RECOVERY, ASYM_LINK: no acknowledgement */
+#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, ASYM_LINK: no acknowledgement */
 #define TBT_NOTE_HP_ACK         5UL     /* a hot plug acknowledgement: only a CM sends one */
 #define TBT_NOTE_UNKNOWN        6UL     /* a reserved code: counted, not acknowledged */
+/* LINK_RECOVERY (record 22 section 6.2.3 item 4, task 45.20): never
+ * acknowledged (Spec 6.6), and queued for the connection manager as a
+ * note, which checks the port whose path holds the router that sent it. */
+#define TBT_NOTE_DELIVER        7UL
 
 /* The acknowledgement form a router's notifications take (record 22
  * section 6.4), the connection manager's answer to TBT_CTL_ACK_FORM. */
@@ -487,8 +503,8 @@ typedef struct _TBT_HP_EVENT {
 } TBT_HP_EVENT, *PTBT_HP_EVENT;
 
 /* A notification the connection manager has to see: ERR_CONN, ERR_LOCK,
- * ERR_ENUM or ERR_NUA that arrived with no request waiting for it, and
- * ERR_PLUG. */
+ * ERR_ENUM or ERR_NUA that arrived with no request waiting for it,
+ * ERR_PLUG, and LINK_RECOVERY. */
 typedef struct _TBT_NOTE {
     TBT_ROUTE Route;
     ULONG Code;

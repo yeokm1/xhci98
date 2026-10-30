@@ -114,6 +114,7 @@ reg|Windows 98|Xhci.AddReg|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciAccept096|0x00010003|1|keep
+reg|Windows 98|Xhci.AddReg|HKR||XhciCommandCheck|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 98|Xhci.AddReg|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -155,6 +156,7 @@ reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
+reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows 2000|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep
@@ -260,6 +262,7 @@ reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSelectiveSuspend|0x00010003|
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciSilentInstall|0x00010003|0|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciUsb2HubSpeedFallback|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciAccept096|0x00010003|1|keep
+reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciCommandCheck|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciMsiAvoid|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciStreamsOff|0x00010003|1|keep
 reg|Windows Vista and 7 x86|Xhci.AddReg.NT|HKR||XhciResumeReinit|0x00010003|1|keep

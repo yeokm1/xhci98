@@ -921,4 +921,33 @@ VOID XhciTbtChainMark(PXHCI_TBT_CHAIN_OWED e, ULONG bdf);
 /* 1 when the entry has been owed for XHCI_TBT_CHAIN_OWED_MS or more. */
 ULONG XhciTbtChainOwedExpired(const XHCI_TBT_CHAIN_OWED *e, ULONG nowMs);
 
+/*
+ * The chained unit's parent (record 34 section 3.10): what the function at
+ * `bdf` is below the member at `memberBdf` now, by a stricter test than
+ * the walk's candidate (which records an unnumbered candidate for its
+ * invalidation). A bridge is NUMBERED when it is a present type 1 function
+ * on a bus inside the member's secondary to subordinate range, its own
+ * secondary bus above its bus and above the member's secondary bus, its
+ * subordinate at or above its secondary and at or below the member's
+ * subordinate. Outcomes: YES, a numbered bridge that is a chain-port
+ * candidate (a PCI Express capability of Device/Port Type downstream port,
+ * Slot Implemented and Hot-Plug Capable), with *secondary its secondary
+ * bus; NOT, a numbered bridge that is no candidate; UNNUMBERED, a type 1
+ * function inside the range whose buses fail the rule, candidate or not;
+ * OUTSIDE, a function on a bus outside the range, or no type 1 function;
+ * MEMBER, the member's own header unread, all ones or unnumbered; FAILED,
+ * an access failed, or the function, or a dword of its capability, reads
+ * all ones, or Retry Status, or its capability walk failed. *secondary is
+ * 0 but for YES. Its own parent is admitted only on YES; a bridge between
+ * it and the member only on NOT. Reads only.
+ */
+#define XHCI_TBT_CPT_YES            0UL
+#define XHCI_TBT_CPT_NOT            1UL
+#define XHCI_TBT_CPT_UNNUMBERED     2UL
+#define XHCI_TBT_CPT_MEMBER         3UL
+#define XHCI_TBT_CPT_FAILED         4UL
+#define XHCI_TBT_CPT_OUTSIDE        5UL
+ULONG XhciTbtChainPortTest(PXHCI_TBT_CFG io, ULONG bdf, ULONG memberBdf,
+                           PULONG secondary);
+
 #endif /* TBT_TOPO_H */

@@ -608,6 +608,11 @@ typedef struct _HCD_USB_DEVICE {
     ULONG ResumeEpoch;      /* one more at each restore across a
                              * re-initialization (hcd_enum.c); controller
                              * lock                                       */
+    ULONG LinkKeepCount;    /* task 45.41 (design record 13 section 15,
+                             * L2): kept across a link's recovery this
+                             * many times since LinkKeepFirst, a tolerance-
+                             * clock tick (XhciEnumLinkKeepRecent); thread */
+    ULONG LinkKeepFirst;
     ULONG HoldAsked;        /* a send-back to USB 2.0 was accepted for it
                              * (HcdHoldRequestUsb2): no PDO, Present until
                              * the hold service disconnects or refuses it */
@@ -1551,6 +1556,12 @@ typedef struct _HCD_CONTROLLER {
      * serial stands for. */
     ULONG PortCycle[HCD_PORT_WORDS];
     ULONG PortCycleSerial[HCD_PORT_COUNT];
+    /* Task 45.41 (design record 13 section 15, L5): the cycle a function
+     * driver asked after its own reset failed (IOCTL_XHCI98_RESUME_STATE,
+     * XHCI98_RESUME_OP_CYCLE), charged to the location's re-enumeration
+     * budget when the thread carries it out, as HcdCfgCycle charges a
+     * failed RESET_PORT's. Cleared with PortCycle. Controller lock. */
+    ULONG PortCycleCharge[HCD_PORT_WORDS];
     /* A composite FDO's start (HcdEnumRepresent, task 36.43): the let-go
      * function PDOs of the port's device re-presented in place, if it is
      * still the one that group serial stands for. */
@@ -1581,6 +1592,7 @@ typedef struct _HCD_CONTROLLER {
      * the thread has not yet kept or dropped (hcd_power.c, hcdD0Finish). */
     volatile LONG ResumeKeepPending;
     ULONG ResumeKeepOn;
+    ULONG LinkKeepOn;               /* task 45.41: XhciLinkKeep, at start   */
     ULONG ResumeKept;               /* devices restored in place          */
     ULONG ResumeKeepRefused;        /* not kept, by XhciEnumResumeKeep    */
     ULONG ResumeKeepFailed;         /* kept, then dropped: the restore
@@ -1720,21 +1732,20 @@ typedef struct _HCD_CONTROLLER {
      * task 38.3; hcd_tmr.c). */
     HCD_TMR Tmr;
 
-#if DBG
     /* Strict mode (hcd_strict.c): the command preconditions a conforming
-     * xHC enforces and QEMU does not, checked before each command. Thread
-     * only. StrictSlotEnabled is the half of the slot state the Output
-     * Slot Context cannot say (Disabled and Enabled are both 0). The Seen
-     * maps hold one trace per (command with DW3 bit 9, slot and EP state)
-     * and per (command, refusal code). */
+     * xHC enforces and QEMU does not, checked before each command, in
+     * every flavour since task 45.45 (design record 08 section 14).
+     * StrictOn is XhciCommandCheck as the start read it (hcdReadValues),
+     * latched for the started lifetime; the rest is the thread's alone.
+     * StrictSlotEnabled is the half of the slot state the Output Slot
+     * Context cannot say (Disabled and Enabled are both 0). The Seen maps
+     * hold one note per (command with DW3 bit 9, slot and EP state) and
+     * per (command, refusal code). The counters are the counter block's
+     * Strict* words. */
+    ULONG StrictOn;
     ULONG StrictSlotEnabled[(XHCI_MAX_SLOTS + 1 + 31) / 32];
-    ULONG StrictChecked;            /* commands checked                   */
-    ULONG StrictViolations;         /* precondition the xHC would refuse  */
-    ULONG StrictUndefined;          /* the spec's "undefined behavior"    */
-    ULONG StrictRefusals;           /* answered SNE, Parameter or CSE     */
     ULONG StrictSeen[64][2];
     ULONG StrictRefusalSeen[64];
-#endif
 #if defined(XHCI_FLAVOUR_QEMU)
     /* The qemu flavour's test aids, never in a published image (design
      * record 08). QemuPsiE460 is task 35.4's speed-table override, latched
@@ -2319,7 +2330,13 @@ ULONG HcdThreadControlOutcome(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
 ULONG HcdThreadControlDoor(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                            USHORT value, USHORT index, ULONG length,
                            PULONG bytes);
-ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         ULONG linkKeep);
+/* Task 45.41 (design record 13 section 15, L3): the whole configuration
+ * descriptor and the serial number, where one was taken, read again and
+ * compared with the record's, as a resume's keep identifies a device.
+ * Thread only, powered. */
+ULONG HcdThreadSameIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* dev->SerialState (33.2): not read yet, no iSerialNumber, a usable serial
  * id, a string read that is no instance id, every read try failed. */
 #define HCD_SERIAL_UNREAD   0UL
@@ -2390,8 +2407,7 @@ ULONG HcdSsHubPsiv(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG rootPort,
                    PULONG psiv);
 VOID HcdSsHubCountPair(PHCD_CONTROLLER hc, PHCD_HUB hub);
 
-/* hcd_strict.c: debug and qemu flavours only; nothing in release. */
-#if DBG
+/* hcd_strict.c: every flavour, on unless XhciCommandCheck is 0. */
 typedef struct _HCD_STRICT_SNAP {
     ULONG Type;
     ULONG Key;                      /* Type, plus 32 when DW3 bit 9 is set */
@@ -2407,7 +2423,6 @@ VOID HcdStrictBefore(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
 VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
                     ULONG code, ULONG control);
 VOID HcdStrictForgetSlots(PHCD_CONTROLLER hc);
-#endif
 
 /* hcd_dev.c */
 ULONG HcdDevRetryReplay(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG token);
@@ -2449,6 +2464,11 @@ VOID HcdCfgFlushDevice(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
  * thread transfer too). The caller has checked dev->Location and the PDO.
  * Thread only. */
 VOID HcdCfgCycle(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* Task 45.41 (design record 13 section 15, L3 and L4): a device whose
+ * SuperSpeed link failed, restored in place by RESET_PORT's sequence with
+ * what its pipes held failed; 1 restored, 0 failed and its cycle asked
+ * (HcdCfgCycle). Thread only, powered. */
+ULONG HcdCfgLinkKeep(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 /* Task 45.23 (design record 20 section 4.3.2): a device kept across a
  * resume's re-initialization, quieted with its slot gone and replayed on
  * its new one (hcd_cfg.c). Thread only. */
@@ -2529,6 +2549,8 @@ ULONG HcdIoPipeMarkAll(PHCD_CONTROLLER hc, PHCD_PIPE pipe, LONG usbd);
 VOID HcdIoCancelPdo(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                     struct _HCD_DEVICE_PDO *pdo);
 VOID HcdIoPipeWaitCancelled(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
+ULONG HcdIoPipeWaitCancelledFor(PHCD_CONTROLLER hc, PHCD_PIPE pipe,
+                                PULONG rounds);
 VOID HcdIoWaitPipe(PHCD_CONTROLLER hc, PHCD_PIPE pipe);
 VOID HcdIoMapped(PHCD_CONTROLLER hc, PHCD_XFER x, ULONG ok);
 VOID HcdIoRetired(PHCD_CONTROLLER hc, PXHCI_TRANSFER t);

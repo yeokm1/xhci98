@@ -140,8 +140,13 @@ static void PfwPutDword(HANDLE key, PCWSTR name, ULONG v)
     PfwPutValue(key, name, REG_DWORD, &v, sizeof(v));
 }
 
+/* The filter role's account of every root bus recorded since the load;
+ * changed under PfwStepLock only. */
+static PFW_NT_SUM PfwSum;
+
 /* Record 32 section 6's values, and Skipped, Mode, HoldTicks and TickHz,
- * under the service key's Parameters. */
+ * under the service key's Parameters; in the filter role these are the
+ * last root bus's, and the account of every bus is written beside them. */
 static void PfwLog(PUNICODE_STRING RegistryPath, ULONG skip, ULONG mode,
                    ULONG holdTicks, ULONG role)
 {
@@ -172,6 +177,12 @@ static void PfwLog(PUNICODE_STRING RegistryPath, ULONG skip, ULONG mode,
     PfwPutDword(key, L"XhciPfwMode", mode);
     PfwPutDword(key, L"XhciPfwRole", role);
     PfwPutDword(key, L"XhciPfwBuses", (ULONG)(PfwFirst | (PfwLast << 8)));
+    if (role == PFW_ROLE_FILTER) {
+        PfwPutDword(key, L"XhciPfwRootBuses", PfwSum.RootBuses);
+        PfwPutDword(key, L"XhciPfwSkippedAny", PfwSum.SkippedAny);
+        PfwPutDword(key, L"XhciPfwResultAny", PfwSum.ResultAny);
+        PfwPutDword(key, L"XhciPfwClosedAll", PfwSum.ClosedAll);
+    }
     PfwPutDword(key, L"XhciPfwHoldTicks", holdTicks);
     PfwPutDword(key, L"XhciPfwTickHz", PfwFreq.LowPart);
     PfwPutDword(key, L"XhciPfwResult", PfwRes.Result);
@@ -285,6 +296,9 @@ static void PfwStep(PUNICODE_STRING RegistryPath, ULONG role, ULONG extra)
             holdTicks = PfwT1.LowPart - PfwT0.LowPart;  /* modulo 2^32 */
         }
     }
+    if (role == PFW_ROLE_FILTER) {
+        PfwNtSumAdd(&PfwSum, skip, PfwRes.Result, PfwRes.Closed);
+    }
     PFW_TRACE(skip, (ULONG)mode, holdTicks);
     PfwLog(RegistryPath, skip, (ULONG)mode, holdTicks, role);
 }
@@ -305,12 +319,16 @@ static KEVENT PfwStepLock;      /* one step at a time (the globals above) */
 
 /* A root bus this driver is named on but could not attach to: logged
  * now, since no start of that bus will reach this driver; that bus's
- * bridges are not closed (record 32 section 11.5.2). */
+ * bridges are not closed (record 32 section 11.5.2). A record of its own,
+ * counted in the account, under the steps' lock. */
 static void PfwMarkUnattached(void)
 {
-    if (PfwRegPath.Length != 0) {
-        PfwLog(&PfwRegPath, PFW_SKIP_UNATTACHED, 0, 0, PFW_ROLE_FILTER);
-    }
+    (void)KeWaitForSingleObject(&PfwStepLock, Executive, KernelMode, FALSE,
+                                NULL);
+    PfwFirst = 0;
+    PfwLast = 0;
+    PfwStep(&PfwRegPath, PFW_ROLE_FILTER, PFW_SKIP_UNATTACHED);
+    KeSetEvent(&PfwStepLock, IO_NO_INCREMENT, FALSE);
 }
 
 /* AddDevice never fails: a filter's failure would fail the root bus. */

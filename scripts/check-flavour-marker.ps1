@@ -34,7 +34,10 @@ caret-continued quoted batch line.
 The linked .sys to read.
 
 .PARAMETER Flavour
-Which of release, debug or qemu it is meant to be.
+Which of release or qemu it is meant to be. The debug flavour was retired
+with task 45.45 (design record 08 section 14); common.ps1's marker list
+still knows XHCI98_FLAVOUR_DEBUG, so an old debug image is found and
+refused as the wrong marker rather than read as carrying none.
 #>
 
 [CmdletBinding()]
@@ -43,7 +46,7 @@ param(
     [string]$Image,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("release", "debug", "qemu")]
+    [ValidateSet("release", "qemu")]
     [string]$Flavour
 )
 

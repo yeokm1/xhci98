@@ -266,6 +266,7 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmValuesDefault(&nhi->Values);
     CmLogInit(nhi);
     CmThrInit(nhi);
+    CmRirqInit(nhi);
     nhi->Common.Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (nhi->Common.Lower == NULL) {
         IoDeleteDevice(self);
@@ -572,7 +573,10 @@ static const char *const cmU4CounterNames[] = {
     "u4.action-overflows", "u4.ejects", "u4.contained.refused",
     "u4.contained.retired", "u4.recover.attempts", "u4.recover.committed",
     "u4.recover.stop-unverified", "u4.recover.preserved",
-    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held"
+    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held",
+    "u4.gen4.links", "u4.gen4.asym", "u4.gen4.unusable", "u4.caps.seq-enabled",
+    "u4.caps.seq-refused", "u4.caps.seq-unknown", "u4.ee.set", "u4.ee.cleared",
+    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -957,6 +961,7 @@ static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
         rc = TBT_E_STATE;
     }
     if (rc == TBT_OK) {
+        CmRirqIntent(nhi);
         rc = TbtIcmRecover(&nhi->Icm, full);
     }
     nhi->AccessClass = CM_ACCESS_ORDINARY;
@@ -1676,6 +1681,7 @@ static VOID cmU4Recover(PCM_NHI nhi)
     rc = TBT_E_STOPPED;
     nhi->AccessClass = CM_ACCESS_RECOVERY;
     if (!cmU4StopWaiting(nhi)) {
+        CmRirqIntent(nhi);
         rc = TbtU4Recover(&nhi->U4, &final);
     }
     CmLogNote(nhi, "u4.recover.core", (ULONG)(-rc));
@@ -2671,6 +2677,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
+    nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* Record 22 section 19: a Mac's Thunderbolt host, its router's id. */
@@ -3011,6 +3018,9 @@ VOID CmNhiBind(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_POWER);
         return;
     }
+    /* The ring interrupt's intent before the rings start (record 21
+     * section 4.5.2): the first frame after the arm raises it. */
+    CmRirqIntent(nhi);
     if (nhi->U4On) {
         cmU4Bind(nhi);
         return;
@@ -3052,6 +3062,9 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     BOOLEAN active;
     BOOLEAN powered;
 
+    /* The ring interrupt taken down before any ring stops (record 21
+     * section 4.5.6): a stop always disconnects it. */
+    CmRirqDown(nhi, CM_RIRQ_DOWN_STOP);
     active = (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE ||
                        nhi->Stage == CM_STAGE_FAILED);
     /* The bus's state, not the client's: a client suspended while the
@@ -3102,6 +3115,7 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     }
     cmLogTable(nhi);
     cmLogCounters(nhi);
+    CmRirqLogCounters(nhi);
     CmLogNote(nhi, "cm.live.final", (CmLiveEpisode(&nhi->Live) << 8) |
                                         nhi->Live.State);
     CmLogNote(nhi, "cm.live.refused",
@@ -3143,9 +3157,12 @@ static VOID cmFindBar(PCM_NHI nhi, PIRP irp)
     stack = IoGetCurrentIrpStackLocation(irp);
     translated = stack->Parameters.StartDevice.AllocatedResourcesTranslated;
     if (translated == NULL || translated->Count == 0) {
+        CmRirqStart(nhi, NULL);
         return;
     }
     list = &translated->List[0].PartialResourceList;
+    /* The line interrupt, if any, for the ring interrupt (task 45.22). */
+    CmRirqStart(nhi, list);
     for (i = 0; i < list->Count; i++) {
         d = &list->PartialDescriptors[i];
         if (d->Type == CmResourceTypeMemory) {
@@ -3209,6 +3226,14 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
                   (nhi->Values.AsmPcie7Refused << 9));
     if (nhi->Values.AsmPcie7Refused) {
         CmLogNote(nhi, "cm.asm.pcie7.raw", nhi->Values.AsmPcie7Raw);
+    }
+    /* XhciCmUsb4V2 as run with (record 22 section 6.2.1 item 5); bit 8
+     * found, bit 9 refused (the value read is then the next note's). */
+    CmLogNote(nhi, "cm.usb4.v2",
+              nhi->Values.Usb4V2 | (nhi->Values.Usb4V2Found << 8) |
+                  (nhi->Values.Usb4V2Refused << 9));
+    if (nhi->Values.Usb4V2Refused) {
+        CmLogNote(nhi, "cm.usb4.v2.raw", nhi->Values.Usb4V2Raw);
     }
 
     cmFindBar(nhi, irp);

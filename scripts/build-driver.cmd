@@ -116,25 +116,25 @@ rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
 rem gates - do not deploy one.
 rem
-rem VOCABULARY. This project says "release", "debug" and "qemu" for the three
-rem build flavors, everywhere except where the DDK's own words are literally
+rem VOCABULARY. This project says "release" and "qemu" for the two build
+rem flavors, everywhere except where the DDK's own words are literally
 rem required: setenv.bat's third argument (free|checked), the src\objfre /
-rem src\objchk / src\objchk_qemu output trees, and the buildfre / buildchk /
-rem buildchk_qemu log names. The mapping is made once, in :flavordirs below.
+rem src\objchk_qemu output trees, and the buildfre / buildchk_qemu log
+rem names. The mapping is made once, in :flavordirs below.
 rem
-rem THREE FLAVORS, since roadmap task 13-L.1 (design record 08):
+rem TWO FLAVORS, since roadmap-usb4 task 45.45 (design record 08 section 14):
 rem
-rem   release  free     ships by default        no port-0xE9 mirror
-rem   debug    checked  ships as the diagnostic download, and its DEFINING
-rem                     requirement is that it LOADS on real Windows 98 and
-rem                     Windows 2000 metal - so no port-0xE9 mirror either
+rem   release  free     ships; no port-0xE9 mirror. Its MSVC 6.0 x86 builds
+rem                     keep frame pointers (/Oy-, NTNOFPO in each sources,
+rem                     held by scripts\check-frame-pointers.ps1) and the
+rem                     command-state checker runs unless XhciCommandCheck
+rem                     is 0
 rem   qemu     checked  the emulator/bench build: port-0xE9 mirror and the live
 rem                     per-line trace.  NEVER PUBLISHED.
 rem
-rem debug and qemu are both CHECKED builds, so they need distinct output trees
-rem or they overwrite each other's objects; BUILD_ALT_DIR is what separates
-rem them (:flavordirs).  The one import that distinguishes them -
-rem HAL.dll!WRITE_PORT_UCHAR - is the sole import delta between 0.0.0.4's two
+rem The third, debug (checked, the diagnostic download, task 13-L.1), was
+rem retired with task 45.45: "debug" and "both" are refused. qemu's import
+rem HAL.dll!WRITE_PORT_UCHAR is the sole import delta between 0.0.0.4's two
 rem published binaries, of which the debug one gave the ThinkPad E460 a Code 2.
 rem WHY that build failed is not established (defect 2b), so the import gate
 rem carries it as "qemu required" and no published binary can have it.
@@ -144,7 +144,7 @@ rem fed is assembled by a separate explicit step, which re-runs the INF gate
 rem against the finished directory so a package is never less gated than the
 rem binary in it:
 rem
-rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
+rem   scripts\package\make-package.ps1 [-Flavor release|qemu] [-Arch x86|amd64]
 rem
 rem The media holds no Microsoft file: it is the drivers (xhcihlpr.sys on x86
 rem only) and their INFs, txtsetup.oem, on amd64 the test certificate, and a
@@ -153,15 +153,14 @@ rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
 rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
 rem that fetches either (OS-HCDREPLACED).
 rem
-rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
+rem Usage:  scripts\build-driver.cmd [release|qemu|all]
 rem                                  [-amd64] [-NoTargetEvidence]
-rem                                                          (default: both)
+rem                                                       (default: release)
 rem
-rem   "both" is the two SHIPPING flavors - release and debug - and it stays the
-rem   default deliberately: widening it to three would build a binary that must
-rem   never be published on every ordinary run.  "all" is the three, and is what
-rem   a release cut uses so that every flavor is gated even though only two are
-rem   staged.
+rem   "release" is the default deliberately: widening it would build a binary
+rem   that must never be published on every ordinary run.  "all" is the two,
+rem   and is what a release cut uses so that every flavor is gated even though
+rem   only release is staged.
 rem
 rem   The DDK and MSVC 6.0 both live inside this repository - tools\ntddk and
 rem   tools\MSVC600 - and are found relative to this script, so a
@@ -170,7 +169,7 @@ rem   Set DDKROOT to build against a DDK somewhere else.
 rem   Add -NoTargetEvidence after the flavor to skip the gate's target-file
 rem   evidence steps on a host that has none staged.
 rem
-rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same three
+rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same
 rem flavors for amd64 with WDK 7.1 (tools\WinDDK71) instead of the Windows 2000
 rem DDK, which cannot target it. The two toolchains are separate all the way
 rem down and the x86 path is untouched by the switch:
@@ -180,7 +179,7 @@ rem                                                     src\obj*\i386
 rem   amd64  tools\WinDDK71    setenv <root> <flavor> x64 WNET no_oacr
 rem                                                     src\obj*\amd64
 rem
-rem BUILD_ALT_DIR is overridden back to fre/chk/chk_qemu after setenv.bat in
+rem BUILD_ALT_DIR is overridden back to fre/chk_qemu after setenv.bat in
 rem BOTH cases. WDK 7.1's setenv sets it to fre_wnet_AMD64, which src\sources
 rem hard-errors on, and build.exe appends the architecture itself - so the
 rem override is what puts the output at src\objfre\amd64 beside src\objfre\i386
@@ -222,15 +221,21 @@ set "ARCH=x86"
 set "BADOPT="
 call :readopt "%~2"
 call :readopt "%~3"
-if "%FLAVORS%"=="" set "FLAVORS=both"
-if /i "%FLAVORS%"=="both" set "FLAVORS=debug release"
+if "%FLAVORS%"=="" set "FLAVORS=release"
+rem Task 45.45 retired the debug flavour, and "both" meant debug and
+rem release: refused by name, before a single self-test, rather than read as
+rem release, which would hide a caller that still expects two binaries.
+if /i "%FLAVORS%"=="both" goto retiredflavor
+if /i "%FLAVORS%"=="debug" goto retiredflavor
 rem "all" is what a cut builds (cut-builds.ps1, or by hand for -ImportOnly or
 rem a one-tree cut), so it runs every self-test in full: the INF gate's
 rem self-tests skip themselves when nothing they read has changed since
 rem their last passing run, except under this (roadmap-usb4 task 45.30).
-if /i "%FLAVORS%"=="all" set "XHCI98_FULL_SELFTESTS=1"
-if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
-if /i "%FLAVORS%"=="debug" set "FLAVORS=debug"
+rem A pre-merge build of a branch sets XHCI98_SELFTEST_SKIP_OK=1 to let that
+rem skip stand in an "all" build too; a cut never sets it, and
+rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
+if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
+if /i "%FLAVORS%"=="all" set "FLAVORS=release qemu"
 if /i "%FLAVORS%"=="release" set "FLAVORS=release"
 if /i "%FLAVORS%"=="qemu" set "FLAVORS=qemu"
 rem Validate both arguments here, before the self-tests and the host suite
@@ -540,14 +545,13 @@ endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :checkflavour <release|debug|qemu>
+rem :checkflavour <release|qemu>
 rem
 rem Exactly one XHCI98_FLAVOUR_* string, and it must be this flavor's. Both
 rem halves are the check: a binary carrying two markers would be one the
 rem preprocessor let through with more than one flavor define, and a binary
-rem carrying the wrong one is a qemu build wearing a debug name - which is the
-rem confusion the marker exists to make impossible, since both are checked
-rem builds and VS_FF_DEBUG cannot tell them apart.
+rem carrying the wrong one is a qemu build wearing a release name, or an old
+rem debug image - which is the confusion the marker exists to make impossible.
 rem ------------------------------------------------------------------
 :checkflavour
 setlocal
@@ -580,7 +584,7 @@ exit /b 0
 :flavourmissing
 echo.
 echo ERROR: the %FLAVOR% image does not carry exactly its own flavour marker.
-echo src\sources derives XHCI_FLAVOUR_RELEASE / _DEBUG / _QEMU from
+echo src\sources derives XHCI_FLAVOUR_RELEASE / _QEMU from
 echo BUILD_ALT_DIR and src\hcd_entry.c emits the string; DriverEntry reads
 echo it so the linker cannot drop it. A binary that cannot be identified from
 echo the file is one a user cannot report against and one the packager cannot
@@ -600,17 +604,17 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :flavordirs <release|debug|qemu>
+rem :flavordirs <release|qemu>
 rem
 rem The one place a flavor name becomes a DDK output tree. Sets OBJDIR and
 rem ALTDIR, and leaves OBJDIR empty for a name this project does not know -
 rem every caller tests that and goes to :badflavor.
 rem
 rem ALTDIR is the DDK's BUILD_ALT_DIR, which build.exe concatenates onto `obj`
-rem to make the output tree: fre -> objfre, chk -> objchk, chk_qemu ->
-rem objchk_qemu. setenv.bat sets the first two itself; the third is this
-rem project's, and it exists because DEBUG AND QEMU ARE BOTH CHECKED BUILDS and
-rem would otherwise overwrite each other's objects in src\objchk\i386.
+rem to make the output tree: fre -> objfre, chk_qemu -> objchk_qemu.
+rem setenv.bat sets the first itself (and chk, the retired debug flavour's,
+rem which no sources accepts since task 45.45); the second is this
+rem project's, a tree of its own for the checked qemu build.
 rem
 rem Verified against this DDK's build.exe rather than assumed:
 rem the value may be at most 10 characters ("BUILD: environment variable
@@ -633,11 +637,6 @@ if /i "%~1"=="release" (
     set "ALTDIR=fre"
     set "DDKFLAVOR=free"
 )
-if /i "%~1"=="debug" (
-    set "OBJDIR=objchk"
-    set "ALTDIR=chk"
-    set "DDKFLAVOR=checked"
-)
 if /i "%~1"=="qemu" (
     set "OBJDIR=objchk_qemu"
     set "ALTDIR=chk_qemu"
@@ -646,12 +645,12 @@ if /i "%~1"=="qemu" (
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :buildflavor <release|debug|qemu>
+rem :buildflavor <release|qemu>
 rem
 rem DDKFLAVOR is the DDK's own word for the same thing, and it exists only
 rem because setenv.bat takes it as an argument. It no longer identifies the
-rem build on its own: debug and qemu are both "checked", which is exactly why
-rem ALTDIR exists.
+rem build on its own: the retired debug flavour and qemu were both "checked",
+rem which is why ALTDIR exists.
 rem ------------------------------------------------------------------
 :buildflavor
 setlocal
@@ -660,7 +659,7 @@ call :stepclock FLVT0
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
 set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
-rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
+rem objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
 set "LOGBASE=%REPO%\src\build%OBJDIR:obj=%"
@@ -693,6 +692,8 @@ rem build.exe's exit code is not sufficient on its own: it writes the errors it
 rem found to build<flavor>.err and that file only exists when there were some.
 if exist "%LOGBASE%.err" goto builderrfile
 if not exist "%OUTSYS%" goto nooutput
+call :checkfpo "%LOGBASE%.log"
+if errorlevel 1 goto fpofail
 
 echo.
 echo === import gate (%FLAVOR%) ===
@@ -874,7 +875,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :buildhlpr <release|debug|qemu>
+rem :buildhlpr <release|qemu>
 rem
 rem xhcihlpr.sys, the x86 helper (design record 18 section 15.10; until task
 rem 38.3 xhcimsi.sys, built for Vista): WDK 7.1, x86, Windows XP target
@@ -961,7 +962,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :builduas <release|debug|qemu>
+rem :builduas <release|qemu>
 rem
 rem xhciuas.sys, the UAS class driver (roadmap task 31-A.2): the same DDK,
 rem the same flavour and BUILD_ALT_DIR as the xhci98.sys just built, in
@@ -987,6 +988,8 @@ cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && se
 if errorlevel 1 goto uasbuildfail
 if exist "%UASLOG%.err" goto uasbuildfail
 if not exist "%UASSYS%" goto uasbuildfail
+call :checkfpo "%UASLOG%.log"
+if errorlevel 1 goto uasbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhciuas.sys) ===
@@ -1024,7 +1027,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :buildcm <release|debug|qemu>
+rem :buildcm <release|qemu>
 rem
 rem xhcicm.sys, the Thunderbolt 3 connection manager (roadmap-usb4.md task
 rem 39-A.1, design record 21): the same toolchain, flavour and
@@ -1050,6 +1053,8 @@ cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && se
 if errorlevel 1 goto cmbuildfail
 if exist "%CMLOG%.err" goto cmbuildfail
 if not exist "%CMSYS%" goto cmbuildfail
+call :checkfpo "%CMLOG%.log"
+if errorlevel 1 goto cmbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhcicm.sys) ===
@@ -1085,17 +1090,44 @@ echo wrong flavour marker, or could not be stamped - see above. Do not deploy it
 endlocal
 exit /b 1
 
+rem ------------------------------------------------------------------
+rem :checkfpo "<build log>" - on the x86 release build of xhci98.sys,
+rem xhciuas.sys and xhcicm.sys (MSVC 6.0), every compile kept frame
+rem pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
+rem check on amd64 (WDK 7.1) or in the qemu flavour.
+rem ------------------------------------------------------------------
+:checkfpo
+if /i not "%ARCH%"=="x86" exit /b 0
+if /i not "%FLAVOR%"=="release" exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-frame-pointers.ps1" -Log "%~1"
+exit /b %errorlevel%
+
+:fpofail
+echo.
+echo ERROR: the release build of xhci98.sys was compiled without frame
+echo pointers - see above. src\sources sets NTNOFPO=1 in its fre branch.
+endlocal
+exit /b 1
+
+:retiredflavor
+echo ERROR: "%FLAVORS%" names the debug flavour, which roadmap-usb4 task
+echo 45.45 retired (design record 08 section 14): "both" was debug and
+echo release. Use release, the default, or all for release and qemu.
+echo The release build keeps the debug build's frame pointers and its
+echo command-state checker (XhciCommandCheck).
+endlocal
+exit /b 1
+
 :badflavor
-echo ERROR: unknown build flavor "%FLAVOR%" - use release, debug, qemu, both
-echo or all.
+echo ERROR: unknown build flavor "%FLAVOR%" - use release, qemu or all.
 echo (The flavor formerly called "standard" is now "release".
 echo It is a hard cut: the old word is not accepted.)
-echo (There are THREE flavors since task 13-L.1. "both" is the two that ship -
-echo release and debug - and stays the default; "all" adds qemu, which carries
-echo the port-0xE9 mirror and must NEVER be published.)
+echo (There are TWO flavors since task 45.45: release ships and is the
+echo default; "all" adds qemu, which carries the port-0xE9 mirror and must
+echo NEVER be published. debug and both were retired with it.)
 echo (The DDK's own words are free and checked; this project uses them only
-echo where setenv.bat forces it. They no longer identify a build on their own,
-echo because debug and qemu are both checked - see :flavordirs.)
+echo where setenv.bat forces it - see :flavordirs.)
 endlocal
 exit /b 1
 

@@ -140,6 +140,16 @@ ntoskrnl.exe!IoRegisterDeviceInterface       all  required  w2k-export; win98-pr
 ntoskrnl.exe!IoCreateSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateSymbolicLink, hint 3B) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 15)
 ntoskrnl.exe!IoDeleteSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteSymbolicLink, hint 3E) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 16)
 
+# --- the ring interrupt (cm_rirqos.c, design record 21 section 4.5.8,
+# task 45.22): the line's connection, its DPC and the synchronize routines
+# of the arm and the mask. xhci98.sys's own pairs, its evidence verbatim;
+# connected on NT only (98 SE and ME poll until their route is read). ---
+ntoskrnl.exe!IoConnectInterrupt              all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoConnectInterrupt, hint 37) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDisconnectInterrupt           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDisconnectInterrupt, hint 40) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
+ntoskrnl.exe!KeSynchronizeExecution        all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSynchronizeExecution, hint 92) (+openhci.sys); task 36.7, the dead line's retirement under the ISR's lock (design record 15 section 4.2)
+
 [deny]
 
 # xhci98-imports.allow's deny set, unchanged: each reason is a fact about a

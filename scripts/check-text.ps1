@@ -99,8 +99,6 @@ function Get-PlaceholderStandIns {
         "{VERSION}"    = $Version
         "{DATE}"       = "2026-12-31"
         "{RELEASEDIR}" = "RELEASE-X86 or RELEASE-X64"
-        "{DEBUGDIR}"   = "DEBUG-X86 or DEBUG-X64"
-        "{DIRLIST}"    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
     }
 }
 

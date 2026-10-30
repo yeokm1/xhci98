@@ -50,6 +50,8 @@ Revised 2026-10-29 (task 45.22, the owner's "Phase 45 additions"; a
 design, reviewed and revised, no code): section 5.4, new - the ring
 interrupt for this profile, designed with the ICM client's in record 21
 section 4.5; section 1.3's "polling only" stands until it is coded.
+Coded 2026-10-30 behind `XhciCmRingInterrupt` 0 (record 21 sections
+4.5.10 and 4.5.11), reviewed and revised: polling stays the default.
 
 Revised 2026-10-29 (task 45.21, the owner's "Phase 45 additions"; a
 design, reviewed and revised, no code): section 19, new - Thunderbolt 1, 2 and 3 hosts on
@@ -80,6 +82,16 @@ Enhanced Uni-Directional TMU between two such routers, and Gen 4 links,
 symmetric or asymmetric, classified and used as found; sections 1.3,
 5.1, 6.1, 6.4, 6.5, 6.6, 6.7, 6.8, 7.1, 7.3, 9.2, 9.3, 12, 15 (U6,
 U16, the new U30 to U32) and 16 follow it.
+
+Revised 2026-10-30 (task 45.20, the code; reviewed and revised): section
+6.2 is coded in `src/cm/tbt_u4cm.c` (with `tbt_regs.h`, `tbt_ring.c`'s
+LINK_RECOVERY delivery and `XhciCmUsb4V2` in `cm_vals.c`, `cm_reg.c` and
+`cm_nhi.c`), its host vectors in a suite of their own, `test_u4v2`
+(sections 6.2.4 and 14.1), over a version 2 host and device router added
+to the fake fabric. Section 6.2.4's last paragraph records where the
+code settles what the section left open; `usb4-emu` has no version 2
+router model yet, so the q35 legs of a version 2 link are owed with it
+(section 16).
 
 The sources, and the tag each fact carries below:
 
@@ -160,10 +172,10 @@ In:
 - The USB4 software connection manager on the hosts section 3.4 admits, on
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
-- Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3); a ring interrupt beside the
-  idle poll is designed in section 5.4 and record 21 section 4.5 (task
-  45.22), not coded.
+- Polling by default, as record 21 section 4.3 decided for the ICM client
+  (decision D3); the ring interrupt beside the idle poll of section 5.4
+  and record 21 section 4.5 (task 45.22) is coded behind
+  `XhciCmRingInterrupt`, 0 by default, the line on NT only.
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -201,8 +213,9 @@ Out, each with where it goes:
   lists. A version 2 router is run as a version 2 one since task 45.20:
   CMUV 2.0, the Sequence bit capability set, Gen 4 links symmetric or
   asymmetric used as found (section 6.2).
-- Interrupts, MSI and MSI-X: polling only (section 5.4 designs the line
-  interrupt beside the idle poll, task 45.22; not coded).
+- MSI and MSI-X, and any interrupt on 98 SE and ME: polling (the line
+  interrupt of section 5.4 runs on NT behind `XhciCmRingInterrupt`, task
+  45.22).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -806,9 +819,9 @@ profile is the ICM client's (record 21 section 4.4), and the task designs
 one interrupt for both in record 21 section 4.5: RX ring 0's Receive Data
 Buffer cause ends the thread's idle wait early, the timed wait stays at
 its period, requests stay busy-polled (section 5.2), and every failure
-returns to polling. **A design only; section 1.3's "polling only" and the
-non-goal in section 1.3's "Out" stand until it is coded, which is the
-owner's (record 21 section 4.5.10).** What this profile adds:
+returns to polling. Designed as that section's companion; **coded on
+2026-10-30**, off by default (record 21 sections 4.5.10 and 4.5.11), the
+wake of this profile being `TbtU4RingWake`. What this profile adds:
 
 - **One cause covers its events.** A hot-plug packet and a notification
   arrive on RX ring 0 (section 5.1), so the interrupt wakes the thread for
@@ -1220,7 +1233,8 @@ item 4), `tbt_regs.h` for CMUV
 2.0, Set Capabilities, EE, Current Link Speed and the asymmetric widths,
 and the registry value beside `XhciCmLaneBonding` in `cm_reg.c` and
 `cm_vals.c` (section 12). Host vectors in
-`test/test_u4cm.c` (section 14.1), against a version 2 router in the fake
+`test/test_u4v2.c`, a suite of its own beside `test_u4cm` over the same
+fabric (section 14.1), against a version 2 router in the fake
 fabric: CMUV `20h` written to a major 2 router and `10h` to a major 1
 one in the same domain, and `10h` everywhere with `XhciCmUsb4V2` 0; a
 preserved router's CMUV read and never written, each of item 6.2.1 3's
@@ -1244,6 +1258,64 @@ USB3 allocation's link bound at 72 and 36 Gb/s less 1.5 for Gen 4
 symmetric and asymmetric. `usb4-emu`'s version 2 router model for the
 q35 legs is that repository's work (roadmap task 45.20); a Barlow Ridge
 on the bench is task 45-E.10.
+
+What the code settled that this section left open (task 45.20's code,
+2026-10-30):
+
+- **Get Capabilities on a router enumerated here** is read for the Set's
+  decision while `XhciCmUsb4V2` is 1: the router stays at its default
+  (plain acknowledgements) unless the answer reports the Sequence bit
+  capability supported, when the Set and its read-back decide the state.
+  A recovery (section 7.7) classifies by reading alone, so it sends no
+  Set: a router this driver ever sent the Set (recorded apart from the
+  capability state, since a Set may have applied though its read-back
+  failed) has the recovery's answer adopted, and a failing answer leaves
+  it unknown rather than at its default; one found with the capability
+  supported and disabled is owed the Set, made at the first tick after
+  the commit as that port's own sequence (no nested teardown of it, and
+  no Set once the port shows removal evidence or a new generation).
+- **A Gen 4 link is recognised** from the host's lane 0 Current Link
+  Speed (`2h`); the far end's lane 0 is read only for an asymmetric
+  width. On a link of two version 2 routers lane 0 must read connected
+  before it is classified: one in Training or Lane Bonding is waited for
+  up to 2 s with no write, and one that does not come back connected
+  leaves the port FAILED with no lane written (`Why` 19, the lane state);
+  a reserved speed on an active link goes to section 6.5 as before (no
+  evidence of Gen 4). A Gen 4 x1 reading, an unpaired asymmetric one
+  or a reserved width leaves the port FAILED with no lane write (`Why`
+  23, the link). The read-only checks of an existing link (the resume's
+  verification and the recovery's lanes as left) count a Gen 4
+  asymmetric width as bonded.
+- **CV found** (section 6.2.2 item 5) is read in two places: section
+  9.2's discovery, where a router with no tunnel state found with CV set
+  and PTO clear is HELD at once (`Why` 22, so `XhciCmPreOsCleanup` 1
+  cleans it at start), and the connection of an adopted router, where CV
+  set skips section 6.6 (PTO clear: HELD; UTO clear: no USB3 tunnel) and
+  section 6.6 runs only once CV is read clear - a read that fails holds
+  the port. A discovery whose Enable Gen 4 Link Recovery clear fails
+  holds the port too, even with no tunnel state.
+- **Enable Gen 4 Link Recovery** is cleared by a write of PORT_CS_19 as
+  read with bits 31 and 30 written 0; the discovered links below depth 1
+  are cleared on both ends as the walk finds them (the child's USB4 Port
+  Capability found by its upstream adapter's own capability chain), a
+  failure there logged and the link left as a predecessor's.
+- **LINK_RECOVERY** is its own class in `tbt_ring.c` (delivered, never
+  acknowledged); the connection manager takes the port from the host's
+  Event Info when the host router sent it, else from the route's first
+  level.
+- **Extended Encapsulation** is cleared on an adapter only once its own
+  Path Enable reads 0: where the disable failed, the adapter's enable
+  quarantine (section 7.3) clears EE when its retry lifts it. A PCIe
+  tunnel built with either end a version 1 router reads EE on each
+  version 2 end first and clears it where it reads 1 (an earlier
+  teardown's clear that failed, or a predecessor's), building no tunnel
+  where it will not clear. It is not
+  touched by section 7.7's recovery drains, which section 6.2.2 item 7
+  does not list; a rebuilt tunnel sets it again before its Path Enable. A
+  clear that fails is logged and the teardown goes on.
+- **The USB3 link bound** is one function (`tbtU4LinkBound`), exposed to
+  the host suite, since no fabric router reports a USB3 rate the Gen 4
+  bound would limit.
 
 ### 6.3 Ports and protocol adapters: the fabric mapping
 
@@ -4013,6 +4085,32 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   (verified, nothing written to the router), never set, the budget spent
   inside its wait, and another router (another UUID) in its place during
   it (never verified as the first).
+- **`test_u4v2`**, task 45.20: section 6.2.4's vectors over the fake
+  fabric's USB4 version 2 host and device routers (USB4 Version `40h`,
+  Set Capabilities, Gen 4 links symmetric or asymmetric between two such
+  routers, Extended Encapsulation, the enhanced TMU fields): CMUV by each
+  router's version in one domain, with `XhciCmUsb4V2` 0 and on a
+  Thunderbolt 3 router; a preserved router's CMUV `10h`, `20h` and `30h`;
+  the Set and its read-back on version 2 and version 1 routers, the host
+  router included, refused (Not Supported, Status 1, nothing enabled),
+  failing (never completing, a read-back failing) and with a notification
+  held across it, none with `XhciCmUsb4V2` 0 or to a Thunderbolt 3
+  router, a preserved router's Set and its adoption; every path entry
+  write two DWs (an invalidation, a quarantine's retry) on version 2 and
+  version 1 domains; HiFi Enhanced Uni-Directional with and without a
+  USB3 tunnel, its order, kept past an eject and cleared on the host's
+  port at unplug, HiFi-Bi beside a version 1 router and with
+  `XhciCmUsb4V2` 0; CV found with PTO clear (HELD, ROUTER_CS_5 never
+  written) and with UTO clear (no USB3 tunnel); Enable Gen 4 Link
+  Recovery cleared at depths 1 and 2 with either `XhciCmUsb4V2` value,
+  left on a version 1 router; LINK_RECOVERY from the device and the host
+  routers; Extended Encapsulation before Path Enable and cleared after it,
+  at an eject, an unplug and a preserved tunnel's teardown, never on a
+  version 1 end or with `XhciCmUsb4V2` 0, and one that will not set; Gen
+  4 symmetric, with `XhciCmLaneBonding` 0, asymmetric both ways and
+  preserved asymmetric, never a lane write, and x1, unpaired and reserved
+  widths FAILED; a resume on an asymmetric link, verified and rebuilt
+  after a power loss; the USB3 allocation's link bound.
 - **`test_u4cm`, an earlier instance's tunnels** (section 9.4): an
   instance builds a tunnel, stops and hands its record; a second
   instance on the same fabric finds it preserved and its own, and a sleep
@@ -4181,7 +4279,16 @@ from their first form, as each row says.
   driver then treats as a version 2 router (section 6.2.1 item 4);
   after a Gen 4 link recovery a predecessor's enable allowed, the USB3,
   deeper PCIe and DisplayPort tunnels left unverified (section 6.2.3
-  item 4).
+  item 4). The code (task 45.20, 2026-10-30) has met only the host
+  suite's fake fabric: `usb4-emu`'s routers are version 1 routers (USB4
+  Version `20h`, no Gen 4 link), so no q35 leg has run a version 2 link.
+  What such a leg needs of `usb4-emu`: a host and a device router
+  reporting USB4 Version `40h` and a host interface version `40h`; Get
+  and Set Capabilities with the Sequence bit capability (the model has
+  them); Gen 4 links, symmetric and asymmetric, in LANE_ADP_CS_1 with
+  Lane Bonding clearing itself there; ADP_PCIE_CS_1 Extended
+  Encapsulation; TMU_ADP_CS_8 and 9; PORT_CS_19 Enable Gen 4 Link
+  Recovery; and a way to send ASYM_LINK and LINK_RECOVERY.
 - **The tunnel-port set on integrated and USB4-only hosts** rests on
   record 21 section 6.3's sources and this record's router-named one
   (section 7.6): a host whose ports no list names, whose router does not

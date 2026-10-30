@@ -2084,6 +2084,7 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
         (VOID)XhciTbtNumberBridges(&io, bdf,
                                    XHCI_TBT_BRNUM_F_WINDOWS |
                                        XHCI_TBT_BRNUM_F_IRQ |
+                                       XHCI_TBT_BRNUM_F_PAD |
                                        (tries < CM_WK_NUMBER_TRIES
                                             ? XHCI_TBT_BRNUM_F_WAIT_EMPTY
                                             : 0UL),
@@ -2127,6 +2128,12 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
             cmWkLog(w, "cm.brnum.9x.window", r.Win[k]);
         }
         cmWkLog(w, "cm.brnum.9x.win-outcome", r.WinOutcome);
+        /* Design record 34 section 3.3.6: the chain ports padded. */
+        cmWkLog(w, "cm.brnum.9x.pad",
+                (r.Padded & 0xFFUL) | ((r.PadNoBus & 0xFFUL) << 8) |
+                    ((r.PadDropped & 0xFFUL) << 16) |
+                    ((r.PadNoMem & 0xFFUL) << 24));
+        cmWkLog(w, "cm.brnum.9x.pad-mem", r.PadMem);
         cmWkLog(w, "cm.brnum.9x.port-window", r.PortMem);
         cmWkLog(w, "cm.brnum.9x.win-need", r.WinNeed);
         cmWkLog(w, "cm.brnum.9x.irq",

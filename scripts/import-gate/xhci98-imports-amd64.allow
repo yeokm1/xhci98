@@ -50,7 +50,6 @@ ntoskrnl.exe!PoSetPowerState               all  required  nt52-amd64-export; twi
 # (IoSkipCurrentIrpStackLocation and its siblings) in ASSERT, which the x86
 # Windows 2000 DDK's do not, so the amd64 checked builds import RtlAssert and
 # the x86 ones do not. Checked flavours only; no source calls it.
-ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
 ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only (task 26-A.1)
 
 

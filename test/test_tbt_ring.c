@@ -305,6 +305,73 @@ static void test_receive_wrap(void)
     CHECK_EQ(g_ring.RxNext, 25 % 10, "wrapped");
 }
 
+/* DW2 of RX descriptor i, little-endian in the common buffer. */
+static ULONG rxDescDw2(ULONG i)
+{
+    const unsigned char *p;
+
+    p = fakeMem() + TBT_RING_RX_DESC_OFF + TBT_DESC_BYTES * i + TBT_DESC_DW2;
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* Task 45.22 (record 21 section 4.5.2): Interrupt Enable in the RX
+ * descriptors as the intent says, from the initial post on; and the
+ * watchdog's peek, which takes nothing. */
+static void test_rx_ie_and_pending(void)
+{
+    ULONG dw[2];
+    ULONG i;
+    ULONG bad;
+    TBT_FRAME f;
+
+    fakeReset();
+    CHECK_EQ(startRing(0), TBT_OK, "start, polling");
+    bad = 0;
+    for (i = 0; i < TBT_RING_ENTRIES; i++) {
+        if (rxDescDw2(i) != TBT_DESC_RS) {
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "polling: every RX descriptor RS alone, as before");
+    CHECK(!TbtRingRxPending(&g_ring), "nothing pending");
+
+    fakeReset();
+    memset(&g_ring, 0, sizeof(g_ring));
+    g_ring.RxIe = TRUE;
+    CHECK_EQ(TbtRingStart(&g_ring, &g_fakeHost, fakeMem(), FAKE_PHYS,
+                          FAKE_MEM_BYTES, TBT_RX_PDF_ALL_ONES, 0),
+             TBT_OK, "start, the interrupt intended");
+    CHECK(g_ring.RxIe, "the start keeps the intent");
+    bad = 0;
+    for (i = 0; i < TBT_RING_ENTRIES; i++) {
+        if (rxDescDw2(i) != (TBT_DESC_RS | TBT_DESC_IE)) {
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "every initial descriptor carries IE: no wrap needed");
+    dw[0] = 0x01000003UL;
+    dw[1] = 7;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingRxPending(&g_ring), "a frame written back: pending");
+    CHECK(TbtRingRxPending(&g_ring), "the peek takes nothing");
+    CHECK_EQ(g_ring.Counters.Rx, 0, "and counts nothing");
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(f.Dw[1], 7, "the frame");
+    CHECK(!TbtRingRxPending(&g_ring), "nothing pending after it");
+    CHECK_EQ(rxDescDw2(0), TBT_DESC_RS | TBT_DESC_IE, "reposted with IE");
+    g_ring.RxIe = FALSE;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(rxDescDw2(1), TBT_DESC_RS, "after the retirement: reposted without");
+    CHECK_EQ(rxDescDw2(2), TBT_DESC_RS | TBT_DESC_IE,
+             "one already posted keeps what it was posted with");
+    TbtRingStop(&g_ring);
+    CHECK(!TbtRingRxPending(&g_ring), "a stopped ring: never pending");
+}
+
 static void test_rx_exhaustion(void)
 {
     ULONG dw[2];
@@ -1086,7 +1153,9 @@ static void test_u4_notifications(void)
     TbtCtlForget(&g_ctl, &dev);
     CHECK_EQ(g_ctl.DeferCount, 0, "a route below the unplugged one forgotten");
 
-    /* The silent codes, an unknown one and a stray request error. */
+    /* The silent codes, an unknown one and a stray request error;
+     * LINK_RECOVERY never acknowledged but delivered as a note (record 22
+     * section 6.2.3 item 4, task 45.20). */
     CHECK_EQ(u4Setup(0), TBT_OK, "start");
     {
         unsigned long e[3];
@@ -1106,8 +1175,11 @@ static void test_u4_notifications(void)
     fakePump();
     TbtCtlService(&g_ctl);
     CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK), 1, "only ERR_PLUG acknowledged (Guide 7.7.2)");
+    CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK_ENH), 0, "and no enhanced acknowledgement");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
-    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK first, for the port check");
+    CHECK_EQ(n.Code, TBT_EV_LINK_RECOVERY, "LINK_RECOVERY first, unacknowledged");
+    CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
+    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK next, for the port check");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "another");
     CHECK_EQ(n.Code, TBT_EV_ERR_PLUG, "ERR_PLUG");
     CHECK(!TbtCtlNextNote(&g_ctl, &n), "no more");
@@ -1121,6 +1193,8 @@ static void test_u4_notifications(void)
     CHECK_EQ(TbtCtlClassify(TBT_EV_DPTX_DISCOVERY), TBT_NOTE_ACK_IGNORE, "DPTX");
     CHECK_EQ(TbtCtlClassify(TBT_EV_ASYM_LINK), TBT_NOTE_SILENT, "ASYM_LINK");
     CHECK_EQ(TbtCtlClassify(TBT_EV_POP_CMPLT), TBT_NOTE_SILENT, "POP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_ROP_CMPLT), TBT_NOTE_SILENT, "ROP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_LINK_RECOVERY), TBT_NOTE_DELIVER, "LINK_RECOVERY");
     CHECK_EQ(TbtCtlClassify(TBT_EV_HP_ACK), TBT_NOTE_HP_ACK, "HP_ACK");
     CHECK_EQ(TbtCtlClassify(3), TBT_NOTE_UNKNOWN, "a reserved code");
 }
@@ -1287,6 +1361,7 @@ int main(void)
     RUN_VEC(test_send_limits);
     RUN_VEC(test_tx_exhaustion);
     RUN_VEC(test_receive_wrap);
+    RUN_VEC(test_rx_ie_and_pending);
     RUN_VEC(test_rx_exhaustion);
     RUN_VEC(test_overflow_and_malformed);
     RUN_VEC(test_trailer);

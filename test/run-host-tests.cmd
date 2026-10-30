@@ -352,6 +352,13 @@ rem                  cleaning, quarantine, the statement's gating and anchor,
 rem                  links below depth 1, eject, suspend and resume, and the
 rem                  ASM2464 device router's captured quirks (record 22
 rem                  section 6.11)
+rem   test_u4v2    - the same connection manager as a Ver. 2 Connection
+rem                  Manager (task 45.20, design record 22 section 6.2.4),
+rem                  over the same fabric's USB4 version 2 routers: CMUV by
+rem                  version and as found, Set Capabilities and its
+rem                  read-back, two-DW path writes, the enhanced TMU, CV
+rem                  found, Gen 4 Link Recovery, Extended Encapsulation, Gen
+rem                  4 links symmetric and asymmetric, XhciCmUsb4V2 0
 rem   test_cm_live - the host interface's liveness monitor (src\cm\cm_live.c,
 rem                  design record 21 sections 5.5 and 5.6): its states,
 rem                  cadence, recovery and gate
@@ -362,6 +369,10 @@ rem                  behind a tunnel on 2000's Standard PC HAL (src\cm\cm_irq.c,
 rem                  task 44.53, design record 21 section 6.2.1): the HAL id,
 rem                  the swizzle, the requirements and start lists, the
 rem                  records' sequences; also built for amd64 (below)
+rem   test_cm_rirq - the NHI's ring interrupt (src\cm\cm_rirq.c, task 45.22,
+rem                  design record 21 section 4.5): the cause's geometry, the
+rem                  service routine's outcomes, the storm count, the mask by
+rem                  host contract, the watchdog, the order down's end
 rem   test_cm_breq - the requirement lists of a hot-added bridge on 2000 and
 rem                  XP (src\cm\cm_breq.c, task 45.12, design record 33):
 rem                  the templates, the rules, the writer, the diagnostic;
@@ -626,7 +637,7 @@ call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
 rem numbering of the bridges below a tunnel port is pure (record 21
 rem section 6.1.1).
-call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
+call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c ..\src\cm\tbt_topo.c"
 rem test_cm_noirq links nothing else: design record 28's state machine of
 rem operations is pure; its CONFIGMG and PCI.VXD calls are the model's.
 call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
@@ -677,6 +688,9 @@ rem tasks 40-A.3 and 40-A.8, design record 22 section 14.1) over the fake
 rem fabric of u4_fakefab.c, with the router-version helper of tbt_hw.c and
 rem the ring it drives (and tbt_icm.c, which tbt_hw.c links against).
 call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_u4v2 links the same files: the version 2 vectors (task 45.20), a
+rem suite of their own over the same fabric.
+call :run test_u4v2 "test_u4v2.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,
 rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
@@ -689,6 +703,12 @@ rem HAL id, the swizzle, the requirements and start lists and the records'
 rem sequences; built for amd64 too (below), whose resource descriptor is
 rem larger.
 call :run test_cm_irq "test_cm_irq.c ..\src\cm\cm_irq.c"
+rem test_cm_rirq links the pure half of the NHI's ring interrupt
+rem (src\cm\cm_rirq.c, task 45.22, design record 21 section 4.5): the
+rem cause for every Total Paths, the service routine's outcomes, the storm
+rem count, the mask by host contract and its proof, the watchdog's
+rem suspicion and slower storm, the order down's end and latch, the waits.
+call :run test_cm_rirq "test_cm_rirq.c ..\src\cm\cm_rirq.c"
 rem test_cm_breq links the pure half of the requirement lists of a
 rem hot-added bridge on 2000 and XP (src\cm\cm_breq.c, task 45.12, design
 rem record 33 section 10.1): the templates on the captured lists, the

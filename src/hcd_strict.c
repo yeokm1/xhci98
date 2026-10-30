@@ -14,14 +14,17 @@
  * sends one; metal will.
  *
  * Both traces go two ways: the qemu flavour's live line (XHCI_DBG_VALUE) and
- * the log ring (XhciLogNote), which the debug flavour keeps on metal and
- * XHCISNAP reads off. Value layout in both: type << 24 | slot << 16 |
+ * the log ring (XhciLogNote), which every flavour keeps and XHCITR's
+ * snapshot reads off with the counter block's Strict* words. Value layout
+ * in both: type << 24 | slot << 16 |
  * DCI << 8 | slot state << 4 | EP state, the slot state being the table's
  * XHCI_STRICT_SLOT_* (0 Disabled, 1 Enabled, 2 Default, 3 Addressed,
  * 4 Configured, 5 reserved; 6 a Drop and 7 an Add on the per-endpoint
  * Configure Endpoint lines) and the EP state the context's raw field.
  *
- * Debug and qemu flavours only: the release image carries none of it.
+ * Every flavour since task 45.45 (design record 08 section 14): the release
+ * image carries it too, run unless XhciCommandCheck is 0 (hc->StrictOn,
+ * which hcd_enum.c tests before each hook).
  *
  * IRQL: PASSIVE_LEVEL (the controller thread), the controller lock not held.
  */
@@ -30,8 +33,6 @@
 #include "xhci_hw.h"
 #include "xhci_strict.h"
 #include "xhci_dbg.h"
-
-#if DBG
 
 static ULONG hcdStrictEnabled(PHCD_CONTROLLER hc, ULONG slotId)
 {
@@ -92,9 +93,9 @@ static VOID hcdStrictReport(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
                             ULONG verdict, ULONG value)
 {
     if (verdict == XHCI_STRICT_UNDEFINED) {
-        hc->StrictUndefined++;
+        hc->Counters.StrictUndefined++;
     } else {
-        hc->StrictViolations++;
+        hc->Counters.StrictViolations++;
     }
     if (!hcdStrictFirst(hc, snap->Key, snap->SlotState, snap->EpState)) {
         return;
@@ -192,7 +193,7 @@ VOID HcdStrictBefore(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     ULONG output;
     ULONG bit9;
 
-    hc->StrictChecked++;
+    hc->Counters.StrictChecked++;
     snap->Type = XHCI_TRB_GET_TYPE(trb->Control);
     bit9 = (trb->Control & 0x00000200UL) != 0;
     snap->Key = snap->Type | (bit9 ? 32UL : 0UL);
@@ -249,7 +250,7 @@ VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
          * believed. */
         hcdStrictMark(hc, snap->SlotId, 0);
     }
-    hc->StrictRefusals++;
+    hc->Counters.StrictRefusals++;
     bit = code == XHCI_CC_SLOT_NOT_ENABLED ? 1UL :
           code == XHCI_CC_PARAMETER_ERROR ? 2UL : 4UL;
     if (snap->Verdict != XHCI_STRICT_OK) {
@@ -272,9 +273,3 @@ VOID HcdStrictAfter(PHCD_CONTROLLER hc, const HCD_STRICT_SNAP *snap,
     }
     XhciLogNote(&hc->Hc, "strict.refused.code", code);
 }
-
-#else /* release: strict mode is not in the image */
-
-typedef int hcdStrictReleasePlaceholder;
-
-#endif

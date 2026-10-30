@@ -1095,7 +1095,7 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
             expired = TRUE;
         }
     }
-    if (expired) {
+    if (expired || fdo->CycleOwed) {
         queue = uasWantRecovery(fdo);
     }
     tele = uasTeleBuild(fdo);
@@ -1321,6 +1321,50 @@ static VOID uasReleaseQuarantine(PUAS_FDO fdo)
     fdo->Quarantined = 0;
 }
 
+static NTSTATUS uasResumeRequest(PUAS_FDO fdo, ULONG op, ULONG value,
+                                 PXHCI98_RESUME_STATE rs);
+
+/*
+ * Task 45.41 (design record 13 section 15, L5): the cycle a failed reset
+ * owes, asked of the bus through the resume request's CYCLE op, which the
+ * bus charges to the location as a failed RESET_PORT; a bus without the op
+ * (it answers the op invalid, or the request not supported) gets
+ * IOCTL_INTERNAL_USB_CYCLE_PORT. A request that could not be sent for want
+ * of an IRP stays owed: the timer queues the recovery worker each second
+ * while it is, and the worker asks again. Nothing is owed once the engine
+ * has stopped or the device is gone. PASSIVE_LEVEL.
+ */
+static VOID uasCycleOwed(PUAS_FDO fdo)
+{
+    XHCI98_RESUME_STATE rs;
+    NTSTATUS status;
+    BOOLEAN owed;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    if (!fdo->Started || fdo->Gone) {
+        fdo->CycleOwed = FALSE;
+    }
+    owed = fdo->CycleOwed;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (!owed) {
+        return;
+    }
+    status = uasResumeRequest(fdo, XHCI98_RESUME_OP_CYCLE, 0, &rs);
+    if (status == STATUS_INSUFFICIENT_RESOURCES) {
+        return;
+    }
+    if (!NT_SUCCESS(status)) {
+        status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_CYCLE_PORT);
+        if (status == STATUS_INSUFFICIENT_RESOURCES) {
+            return;
+        }
+    }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->CycleOwed = FALSE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
 /*
  * The last resort: everything in flight ended with BUS_RESET (NO_DEVICE if
  * the device has gone), then - only once every transfer has come back - the
@@ -1332,6 +1376,7 @@ static VOID uasReleaseQuarantine(PUAS_FDO fdo)
 static BOOLEAN uasResetDevice(PUAS_FDO fdo)
 {
     NTSTATUS status;
+    BOOLEAN sent;
     KIRQL irql;
 
     uasAbortAll(fdo, (UCHAR)(fdo->Gone ? SRB_STATUS_NO_DEVICE
@@ -1340,14 +1385,26 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
         return FALSE;
     }
     status = STATUS_IO_TIMEOUT;
+    sent = FALSE;
     if (uasWaitAllFree(fdo)) {
         fdo->Counters[UAS_CTR_PORT_RESETS]++;
         status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
+        sent = (BOOLEAN)(status != STATUS_INSUFFICIENT_RESOURCES);
     }
     KeAcquireSpinLock(&fdo->Lock, &irql);
     if (!NT_SUCCESS(status)) {
+        /* Task 45.41 (design record 13 section 15, L5): a device left Dead
+         * here stayed so until it was unplugged - after a bus that restored
+         * it under a link's recovery as well, should this reset's wait have
+         * run out first. When the bus never had the RESET_PORT (the
+         * transfers did not come back, or no IRP for it), the device is
+         * cycled, so it is enumerated afresh and this stack removed; a bus
+         * that answered the RESET_PORT has cycled it after its own failed
+         * reset already (hcdCfgResetPort). */
         fdo->Dead = TRUE;
+        fdo->CycleOwed = (BOOLEAN)(!sent && fdo->Started && !fdo->Gone);
         KeReleaseSpinLock(&fdo->Lock, irql);
+        uasCycleOwed(fdo);
         return FALSE;
     }
     /* The port reset lost every task the device held: quarantined tags
@@ -1623,6 +1680,7 @@ static VOID uasRecoveryWorker(PVOID context)
 
     fdo = (PUAS_FDO)context;
     InitializeListHead(&drain);
+    uasCycleOwed(fdo);
     for (rounds = 0;; rounds++) {
         slot = NULL;
         irp = NULL;
@@ -1788,6 +1846,7 @@ VOID UasEngineStart(PUAS_FDO fdo)
     fdo->Quarantined = 0;
     fdo->Active = 0;
     fdo->Dead = FALSE;
+    fdo->CycleOwed = FALSE;     /* task 45.41: the last start's, void */
     fdo->Recovering = FALSE;
     fdo->RecoveryQueued = FALSE;
     /* Task 45.23: a start ends any sleep hold; a new one is the next
@@ -1795,6 +1854,12 @@ VOID UasEngineStart(PUAS_FDO fdo)
     fdo->Holding = FALSE;
     fdo->HoldCheck = FALSE;
     fdo->Sealed = FALSE;
+    /* And the epoch the last wake check verified: the bus's epoch is its
+     * device record's, which a restart may have replaced (a dormant PDO
+     * revived on a fresh record counts from 0 again), so the first keep
+     * after a start is always checked. No wake check runs here: the stop
+     * waited out its rundown reference. */
+    fdo->VerifiedEpoch = 0;
     fdo->TimerStop = FALSE;
     KeClearEvent(&fdo->TimerDone);
     fdo->Started = TRUE;
@@ -1823,6 +1888,9 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
     wasStarted = fdo->Started;
     fdo->Started = FALSE;
     fdo->TimerStop = TRUE;
+    /* Task 45.41: a stopped engine owes the bus no cycle; a removal ends
+     * the device, and a start configures it anew. */
+    fdo->CycleOwed = FALSE;
     KeReleaseSpinLock(&fdo->Lock, irql);
     if (wasStarted && !KeCancelTimer(&fdo->Timer)) {
         UasWaitEvent(&fdo->TimerDone);
@@ -2867,6 +2935,7 @@ static VOID uasWakeWorker(PVOID context)
     ULONG spent;
     BOOLEAN act;
     BOOLEAN cycle;
+    BOOLEAN withdrawn;
     KIRQL irql;
 
     fdo = (PUAS_FDO)context;
@@ -2883,7 +2952,23 @@ static VOID uasWakeWorker(PVOID context)
 
     uasDeadlineStart(&deadline, UAS_POWER_PHASE_MS);
     UasZero(&rs, sizeof(rs));
-    if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
+    /* The declaration ends with the hold it was made under, and is
+     * withdrawn before anything is decided: one the bus never used - a
+     * sleep that ended with no controller suspend, so no resume voided
+     * it - would otherwise let a later re-initialization with no sleep
+     * phase of this driver keep the drive with no hold and no check. A
+     * keep pass that took it before this withdrawal is still to be seen
+     * by the queries below (pending until its end, the epoch advanced
+     * after); a refused withdrawal fails the check. */
+    withdrawn = TRUE;
+    if (fdo->BusKnown && fdo->DeclareTried) {
+        withdrawn = (BOOLEAN)NT_SUCCESS(
+            uasResumeRequest(fdo, XHCI98_RESUME_OP_WITHDRAW,
+                             fdo->Episode & 0x00FFFFFFUL, &rs));
+    }
+    if (!withdrawn) {
+        decision = UAS_WAKE_FAIL;
+    } else if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
         decision = UasWakeDecide(fdo->BusKnown, fdo->WithdrawOk,
                                  fdo->DeclareTried, 0, 0, 0, 0, 0);
     } else {

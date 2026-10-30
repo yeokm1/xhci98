@@ -2382,10 +2382,10 @@ static int check_package(void)
     inst_copy(root, self, sizeof(root));
     root[n - t] = '\0';
     if (opts.Dir[0] == '\0') {
-        /* The window takes no /dir: its own architecture's release- (or,
-         * with /debug, debug-) directory (record 26 section 2). */
-        inst_copy(opts.Dir, opts.Debug ? "debug" INST_DIR_SUFFIX
-                                       : INST_DEFAULT_DIR, sizeof(opts.Dir));
+        /* The window takes no /dir: its own architecture's release-
+         * directory (record 26 section 2; the debug- one and /debug went
+         * with the debug flavour, task 45.45). */
+        inst_copy(opts.Dir, INST_DEFAULT_DIR, sizeof(opts.Dir));
     }
     if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
         strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
@@ -2401,10 +2401,6 @@ static int check_package(void)
     }
     if (inst_starts(opts.Dir, "release-")) {
         wantFlavour = "RELEASE";
-    } else if (inst_starts(opts.Dir, "debug-")) {
-        wantFlavour = "DEBUG";
-        out("The debug- directory is for troubleshooting only; install it "
-            "only if asked.\n");
     } else {
         return refuse("not a flavour directory of the package: ", opts.Dir);
     }
@@ -8772,7 +8768,10 @@ static int devicepath_write(const char *addDir)
     }
     /* Record 26 section 6.7.12's limit, as the other USB drivers' staging
      * keeps it: the entry is left off and the folder named for the
-     * wizard, the withdrawals still written. */
+     * wizard, the withdrawals still written. The step it leaves is the
+     * install's to say (run_install_9x): its later withdrawal of an
+     * earlier run's staging may make room, and the entry is tried again
+     * then. */
     if (addDir != NULL && !envNow.Nt &&
         !inst_9x_devicepath_room(newList, dp_9x_max())) {
         out("DevicePath would be %d characters with %s on it, more than "
@@ -8785,7 +8784,6 @@ static int devicepath_write(const char *addDir)
             return 0;
         }
         dpLeftOff = 1;
-        flagSteps = 1;
     }
     if (strcmp(newList, list) == 0) {
         out("DevicePath needs no change.\n");
@@ -10445,6 +10443,20 @@ static int run_install_9x(void)
     own_install();
     stor_tools_copy();
     other_run();
+    /* The install directory left off DevicePath above, tried again now
+     * that other_run has taken out the earlier staging it replaces, which
+     * the page's projection already discounted (record 26 section
+     * 6.7.12); still off, a step for the user. */
+    if (dpLeftOff) {
+        if (devicepath_update(srcDir) && !dpLeftOff) {
+            out("%s is on DevicePath now, with the earlier staging taken "
+                "out.\n", srcDir);
+            step(INST_STEP_DONE, "The package is in %s and on DevicePath",
+                 srcDir);
+        } else {
+            flagSteps = 1;
+        }
+    }
     old_dir_cleanup();
     arp_write(0);
     check_results_9x();
@@ -20814,6 +20826,28 @@ static int pfw_entries_in(void)
     return 1;
 }
 
+/* A boot-start image written out before the service or a root bus entry
+ * names it (record 32 section 11.5.2): Windows writes a copy's bytes and
+ * the registry out later, each on its own, and a power cut between them
+ * would otherwise leave a start naming an image cut short. 1 written. */
+static int pfwsys_flush(const char *path)
+{
+    HANDLE h;
+    int ok;
+
+    /* CopyFileA gives the copy the package file's attributes: a read-only
+     * one would refuse the write access the flush needs. */
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = FlushFileBuffers(h) ? 1 : 0;
+    CloseHandle(h);
+    return ok;
+}
+
 /* The service's values for a boot-start driver of System Reserved
  * (record 32 section 11.2), or of PnP Filter on 8 and 8.1 (section
  * 11.5.2), the image named. Start is 4 while the other
@@ -20948,7 +20982,11 @@ static int pfwsys_service_delete(void)
 
 /* The two names' files deleted where they are this installer's (the
  * record's, or a copy cut short while Pending was set), but keep's, each at
- * the next start if in use; another program's file is left. 1 done; 0 one could not be read or deleted (the record kept). */
+ * the next start if in use; another program's file is left. The registry
+ * is written out first, so no start after a power cut finds the service
+ * or a root bus entry naming an image already gone (record 32 section
+ * 11.5.2). 1 done; 0 one could not be read or deleted, or the registry
+ * not written out (the record kept). */
 static int pfwsys_clean(const PFWREC *r, const char *keep)
 {
     const char *names[2];
@@ -20958,6 +20996,11 @@ static int pfwsys_clean(const PFWREC *r, const char *keep)
     int c;
     int ok = 1;
 
+    if (RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out: XHCIPFW.SYS's earlier "
+            "images are kept.\n");
+        return 0;
+    }
     names[0] = pfw_name_a();
     names[1] = pfw_name_b();
     for (i = 0; i < 2; i++) {
@@ -21244,7 +21287,8 @@ static int pfwsys_run(int mode)
         return 0;
     }
     SetFileAttributesA(newPath, FILE_ATTRIBUTE_NORMAL);
-    if (!CopyFileA(src, newPath, FALSE) || same_file3(src, newPath) != 1) {
+    if (!CopyFileA(src, newPath, FALSE) || same_file3(src, newPath) != 1 ||
+        !pfwsys_flush(newPath)) {
         out("XHCIPFW.SYS could not be written as %s (error %lu).\n", newPath,
             (unsigned long)GetLastError());
         flagFailed = 1;
@@ -21264,7 +21308,8 @@ static int pfwsys_run(int mode)
     flagChanged = 1;
     flagRestart = 1;
     /* The earlier image and anything else of the record's but the new one;
-     * the record read again (File now this release's). */
+     * the record read again (File now this release's); pfwsys_clean
+     * writes the service's move to the new image out first. */
     if (!pfwsys_rec(&r) || !pfwsys_clean(&r, target) ||
         !vsd_rec_del(pfw_desc(), "Old")) {
         flagSteps = 1;
@@ -30341,7 +30386,6 @@ void inst_eng_usage(void)
 "                computer (/nofaster: off)\n"
 "  /restage      Vista to 10: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
-"  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
 "  /nopause      do not wait for Enter at the end\n"
 "  /log path     write the log there (default XHCIINST.LOG on the system\n"
 "                drive)\n"
