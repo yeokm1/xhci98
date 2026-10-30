@@ -546,6 +546,13 @@ header, a record or the counters is still read; a version past the one the
 tool knows is refused, since a version bump means a field changed meaning.
 35.3's driver sent an eight-word header; 35-T.8's appended twelve words with
 the version left at 1, and an older tool reads the region as before.
+From 3.4.0.0 (roadmap-usb4 task 45.40, design record 13 section 10.7,
+"Identity across a re-enumeration") the record is twenty words: four
+appended after the flags, the port's identity memory (the vendor and
+product id of the last group listed there), its serial-form flag and
+deferral latch, and its deferrals made and spent. The tool prints them as
+an "identity:" line under the port, and shows a port that holds them even
+when it is Empty.
 
 ### Controller tolerance (2.2.0.0)
 

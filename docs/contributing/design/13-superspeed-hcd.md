@@ -6980,18 +6980,22 @@ read that fails.
   connection, kept across its own retries and device records: a bypassed
   arrival is never deferred, and is published whatever its read gives - on
   the location form if it still fails, a new devnode, which Windows shows.
-  Any listing at the port clears the latch and writes the memory afresh.
+  Any listing for a device attached to the port, a hub's included, clears
+  the latch; a non-hub group's also writes the memory afresh.
   That is the way out for a device of the same model whose serial cannot be
   read.
 - **What it shows.** Every listing writes `id.form` to the log - the
   location, the read's outcome, whether a duplicate cleared the serial id,
   and the form answered - and every deferral `serial.defer` with its run.
   The counters are `serial.deferred`, `serial.defer.ok` and
-  `serial.defer.fail`. Because the log ring can overwrite a note, the
-  counter block also lists, from the ports' own state, each root port with
-  a memory (`id.port`, `id.mem.vidpid`, `id.mem.serial`, `id.defer.latch`),
-  so a snapshot says which port holds a failed arrival. It is a diagnostic,
-  not a Device Manager entry.
+  `serial.defer.fail`. Because the log ring can overwrite a note, each
+  root port's record in the snapshot's HCD region carries the port's own
+  state, four words appended after its flags (`XHCI_SNAPSHOT_HCD_PORT_IDMEM`
+  to `_IDFAILS`: the remembered ids, the serial-form flag and the latch,
+  the deferrals made and spent there), which `XHCITR` prints as an
+  "identity:" line under the port, an Empty one included; the counter block
+  of a stop's flush lists the same (`id.port` and its lines). It is a
+  diagnostic, not a Device Manager entry.
 - **Not changed.** The resume keep (`hcdRkeepRestore`) and the link keep
   (`HcdThreadSameIdentity`, task 45.41) still read the serial afresh and
   compare it, and never take the port's memory; the spaced tries only make

@@ -159,6 +159,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     PXHCI_LOG log;
+    ULONG i;
 
     ext = &hc->Hc;
     log = &ext->Log;
@@ -205,6 +206,20 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
     XhciLogAppend(log, "serial.readfailed", hc->SerialReadsFailed, 1);
     XhciLogAppend(log, "serial.duplicate", hc->SerialIdsDuplicate, 1);
+    XhciLogAppend(log, "serial.deferred", hc->SerialDeferrals, 1);
+    XhciLogAppend(log, "serial.defer.ok", hc->SerialDeferOk, 1);
+    XhciLogAppend(log, "serial.defer.fail", hc->SerialDeferFailed, 1);
+    /* Task 45.40: each root port's identity memory and deferral latch, from
+     * the port's own state, which a log note can be overwritten before. */
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (hc->Ports[i].IdMemVidPid != 0 || hc->Ports[i].IdDeferLatch != 0) {
+            XhciLogAppend(log, "id.port", i + 1, 1);
+            XhciLogAppend(log, "id.mem.vidpid", hc->Ports[i].IdMemVidPid, 1);
+            XhciLogAppend(log, "id.mem.serial", hc->Ports[i].IdMemSerial, 1);
+            XhciLogAppend(log, "id.defer.latch", hc->Ports[i].IdDeferLatch,
+                          1);
+        }
+    }
     XhciLogAppend(log, "fastpoll.mode", hc->FastPollMode, 1);
     XhciLogAppend(log, "fastpoll.opened", hc->FastPollOpened, 1);
     XhciLogAppend(log, "fastpoll.fallbacks", hc->FastPollFallbacks, 1);

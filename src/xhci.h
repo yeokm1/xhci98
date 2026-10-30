@@ -9282,7 +9282,14 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_PORT_REFUSED  13  /* note bursts refused           */
 #define XHCI_SNAPSHOT_HCD_PORT_HOLDFAIL 14  /* failed PDO recreations        */
 #define XHCI_SNAPSHOT_HCD_PORT_FLAGS    15  /* XHCI_SNAPSHOT_HCD_F_*         */
-#define XHCI_SNAPSHOT_HCD_PORT_WORDS    16UL
+/* Appended by task 45.40 (design record 13 section 10.7, "Identity across
+ * a re-enumeration"), version unchanged: the port's identity memory, its
+ * serial-form flag and deferral latch, and its deferrals. */
+#define XHCI_SNAPSHOT_HCD_PORT_IDMEM    16  /* (idVendor << 16) | idProduct  */
+#define XHCI_SNAPSHOT_HCD_PORT_IDSTATE  17  /* serial form | (latch << 8)    */
+#define XHCI_SNAPSHOT_HCD_PORT_IDDEFERS 18  /* arrivals deferred here        */
+#define XHCI_SNAPSHOT_HCD_PORT_IDFAILS  19  /* deferrals spent here          */
+#define XHCI_SNAPSHOT_HCD_PORT_WORDS    20UL
 
 #define XHCI_SNAPSHOT_HCD_F_DEFERRED    0x00000001UL /* set aside by the settle */
 #define XHCI_SNAPSHOT_HCD_F_RECOVERING  0x00000002UL /* warm reset in flight */
