@@ -1804,10 +1804,14 @@ Stor98 installed over it by `DIF_INSTALLDEVICE`, a cold boot, problem 10.
   - back to `stornvme`: the uninstall (exit 3) gave the drive back to
     `stornvme`, running, with `MSISupported` 1 and `MessageNumberLimit`
     0x41 written again by its own INF.
-- **Owed**: the mark service's switch from `stornvme` with the new INF
-  (on `k81c` the installer switched the drive itself); the same on 8.1
-  x64.
+  - the mark service's switch (`k81d`, a fresh overlay, the package
+    installed with the ASM4242 and no enclosure, the ORICO first at the
+    next cold boot): `stornvme` first, then "switching ... from stornvme
+    (member 0200; no id on Windows 8.1 and later, by design)", the class
+    model selected from the staged INF, `DiInstallDevice` success, "now
+    runs Stor98", `MSISupported` 0; after a cold boot, running.
+- **Owed**: the same on 8.1 x64.
 
 ### Owed
 
-The mark service's switch with the new INF; 8.1 x64 for both halves.
+8.1 x64 for both halves.
