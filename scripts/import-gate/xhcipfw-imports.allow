@@ -1,4 +1,5 @@
-# xhcipfw-imports.allow - XHCIPFW.SYS (design record 32 section 11.2), built
+# xhcipfw-imports.allow - XHCIPFW.SYS (design record 32 sections 11.2 and
+# 11.5.2), built
 # with the Windows 2000 DDK for x86 by src\pfw\nt\build.cmd, which passes it
 # with -AllowPath and -GateProfile hlprx86: every import resolves in the export
 # table of every authenticated kernel and HAL of Windows 2000 SP4, XP SP3 x86,
@@ -19,6 +20,21 @@ ntoskrnl.exe!ZwOpenKey                       all    required  w2k-export; xp-x86
 ntoskrnl.exe!ZwCreateKey                     all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
 ntoskrnl.exe!ZwSetValueKey                   all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
 ntoskrnl.exe!ZwClose                         all    required  w2k-export; xp-x86-export; nt6-x86-export; the log
+ntoskrnl.exe!IoCreateDevice                  all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's device object (record 32 section 11.5.2)
+ntoskrnl.exe!IoDeleteDevice                  all    required  w2k-export; xp-x86-export; nt6-x86-export; the same, at removal or a failed attach
+ntoskrnl.exe!IoAttachDeviceToDeviceStack     all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's attach above the PCI driver
+ntoskrnl.exe!IoDetachDevice                  all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's removal
+ntoskrnl.exe!IofCallDriver                   all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's pass-through
+ntoskrnl.exe!IofCompleteRequest              all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role: a refused request, the usage notification
+ntoskrnl.exe!PoStartNextPowerIrp             all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's power pass-through
+ntoskrnl.exe!PoCallDriver                    all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
+ntoskrnl.exe!IoInitializeRemoveLockEx        all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role's remove lock
+ntoskrnl.exe!IoAcquireRemoveLockEx           all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
+ntoskrnl.exe!IoReleaseRemoveLockEx           all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
+ntoskrnl.exe!IoReleaseRemoveLockAndWaitEx    all    required  w2k-export; xp-x86-export; nt6-x86-export; the same, at removal
+ntoskrnl.exe!KeInitializeEvent               all    required  w2k-export; xp-x86-export; nt6-x86-export; the filter role: the step's done event, the usage notification's wait
+ntoskrnl.exe!KeSetEvent                      all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
+ntoskrnl.exe!KeWaitForSingleObject           all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
 HAL.dll!KfRaiseIrql                          all    required  w2k-export; xp-x86-export; nt6-x86-export; HIGH_LEVEL around the step on one processor
 HAL.dll!KfLowerIrql                          all    required  w2k-export; xp-x86-export; nt6-x86-export; the same
 HAL.dll!KeQueryPerformanceCounter            all    required  w2k-export; xp-x86-export; nt6-x86-export; the hold's length

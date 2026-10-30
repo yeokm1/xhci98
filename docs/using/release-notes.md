@@ -19,6 +19,10 @@ the sections below say where each change was read. Where this file and
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
 
+The next release, `3.4.0.0`, is being prepared: what it changes from
+`3.3.0.0` so far is "What `3.4.0.0` changes", below, and is marked "new
+in `3.4.0.0`" or "from `3.4.0.0`" where it applies below.
+
 `2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
 tests where QEMU models no such device or controller. The owner's bench of
 2026-10-11 then read several on real hardware: a Dell Latitude E7250 under
@@ -386,6 +390,173 @@ and on Windows 2000 to 7 its downstream ports `xHCI98 USB4 PCI Bridge
 | Intel 200 Series | `8086:A2AF` | xHCI98 USB 3 Controller (Intel 200 Series) |
 | Intel 300 Series | `8086:A36D` | xHCI98 USB 3 Controller (Intel 300 Series) |
 | Intel Raptor Lake | `8086:A71E` | xHCI98 USB 3 Controller (Intel Raptor Lake) |
+
+## What `3.4.0.0` changes
+
+What `3.4.0.0` changes from `3.3.0.0` (roadmap-usb4 Phase 45; its entry
+in `releases/history.md` is the short list). Every item was read in QEMU
+virtual machines, the Thunderbolt 3 and USB4 ones on the `usb4-emu`
+emulator's hosts and enclosure, unless it says otherwise (an item that
+says it was built and host-tested only was not read in a guest); the
+records are `docs/contributing/runs/run-45.md`, under each task's number.
+Every system `3.3.0.0` supports is supported.
+
+- **Windows 2000 and 32-bit XP: a dock or an enclosure with a switch,
+  plugged in while Windows runs, gets room for every port in it** (task
+  45.12; design record 33). Windows 2000 and XP give each PCI bridge such
+  a device brings a small fixed list of resources, so only one of a
+  dock's downstream ports was placed and the others stayed at Code 12.
+  The connection manager's filter now rewrites those lists, below an
+  active tunnel port only, so each port asks for what the functions
+  behind it need, and the safe-removal mark service keeps its filter on
+  each bridge after the bridges' first installs, restarting the unit
+  once where a bridge lost it. Read on XP and 2000 (the Standard PC HAL)
+  with the emulator's dock (a switch with an NVMe drive, a USB controller
+  and a network adapter) behind its ASM4242 host: every downstream port
+  started, the drive on Stor98, the dock's USB controller on this driver
+  with its USB tablet. `XhciCmBridgeReq` (`1`, the default; `0` off; `2`
+  computes and records without changing anything) is a row of the
+  Thunderbolt page's "Advanced..." list on 2000, XP and XP x64, and
+  `XhciCmBridgeReqDiag` records the rewrites ("The connection manager's
+  registry values"). Windows 7 places such a dock itself and is
+  unchanged. XP x64's lists were not read, so there the rewrite does not
+  act yet. The first plug's restart and a device added later are under
+  "Thunderbolt and USB4: known limitations".
+- **Windows 2000 and XP, USB4 hosts: a dock unplugged with a USB tablet
+  on its own USB controller is removed** (task 45.35; design record 17
+  section 4.13.6, design record 22 section 10.5). With the dock's USB
+  controller now started, a surprise unplug with an input device on it
+  left this driver unable to prove the controller had stopped writing to
+  memory, so it kept its transfers, and Windows' removal waited for ever.
+  On a USB4 host whose tunnels this release's connection manager builds,
+  a tunnel path it has closed and read back closed is now that proof:
+  read on XP and 2000, the tablet's unplug removed, the dock found again
+  at the re-plug, the shutdown completed. The proof holds only when the
+  connection manager has read the closure before this driver asks for
+  it, as it did in every leg; in the reverse order the transfers stay
+  kept (record 17 section 4.13.6). Under a firmware connection
+  manager (Thunderbolt 3) and on 98 SE and ME, stop the dock first
+  ("Thunderbolt and USB4: known limitations").
+- **Devices kept across a resume that starts the controller afresh**
+  (task 45.23; design record 20 sections 4.3.1 to 4.3.3;
+  `XhciResumeKeep`, on by default). On every VIA controller
+  (`XhciResumeReinit`, "Linux's controller quirks") and on any controller
+  without a usable saved state, QEMU's included, each resume from standby
+  or hibernation started the controller afresh and every device was
+  removed and found again: a UAS drive's cached writes were lost and a
+  file open on it failed for good ("Delayed Write Failed", as a user
+  reported with a UAS drive behind a VIA VL805). Now a device on a root
+  port is restored in place. A UAS drive is kept under load too: at the
+  sleep `xhciuas.sys` holds new requests, waits out those in flight and
+  flushes each unit's cache; after the wake it checks each unit is the
+  same medium before it starts the held requests, and a drive found
+  changed is found again as a new one. Read on XP across hibernation with
+  QEMU's UAS device, at SuperSpeed and High Speed, idle and under a copy
+  loop: every copy after the resume compared equal and a file held open
+  across it kept growing; a disk swapped while the machine slept was
+  found again as new and never written as the old. Still found again: a
+  hub and what is behind it, a Bulk-Only drive, a drive with no serial
+  number or one that could not finish its requests before the sleep, a
+  drive whose medium cannot be checked after the wake (a removable-medium
+  drive with a medium in it, or one whose units report neither
+  identification page), a device with an isochronous stream open (audio
+  or video in use), and a device selective
+  suspend held
+  ("XhciResumeKeep: devices kept across such a resume"). Not yet read on
+  2000 or 98 SE, or on a real VIA controller.
+- **Windows 2000 to 8.1: a USB Audio 2.0 or 3.0 function is no longer
+  offered to Windows' own USB Audio 1.0 driver** (task 45.24; design
+  record 13 section 10.7.2). Such a function no longer carries the bare
+  `USB\Class_01` compatible id, by which Windows' signed `wdma_usb.inf`
+  gave it to `usbaudio.sys` ("USB Audio Device") ahead of the free `uac2`.
+  `usbaudio.sys` cannot run such a device, and on XP no change of that
+  devnode completed afterwards - Update Driver, Disable, the shutdown
+  after an unplug - until a reset, also under Windows' own USB stack.
+  Windows now asks for a driver, and `uac2` installs with nothing to tear
+  down; `wdma_usb.inf`'s few VID/PID lines still match the devices they
+  name, and a USB Audio 1.0 function keeps the bare id. Read on XP with a
+  simulated device. A device already on "USB Audio Device" keeps it
+  ("Known limitations" has the way out).
+- **A device with more than one configuration is configured and split**
+  (task 45.34; design record 13 section 10.8): by its first configuration,
+  under the rules a single-configuration device is split by (a device
+  with a class of its own, or with one interface, stays whole). A USB
+  Audio 3.0 device carries its USB Audio 1.0 or 2.0 function there; a
+  2.0 one now gets `uac2`, where before the device had no driver. Read on XP and on 98 SE with a simulated two-configuration
+  device. A driver of a device's maker that binds such a device whole no
+  longer matches it ("Known limitations").
+- **XHCIPFW on 32-bit Windows 8 and 8.1** (task 45.9; design record 32
+  section 11.5). There `XHCIPFW.SYS` is installed as a filter of every PCI
+  root bus (the service `xhcipff`), which acts before Windows' PCI driver
+  reads the bridges at every start read; the installer takes the filter
+  out of every root bus before it removes the file, and an update keeps
+  it. Read on 8 and 8.1 with the emulator's ASM4242 layout: every bridge
+  behind the host started. A root bus that names the filter with its file
+  gone stops Windows at the start; Windows' System Restore recovered such
+  a start on 8, and `tools\xhciinst\readme.txt` gives the manual route
+  from the recovery environment, which was not driven. On 32-bit Windows
+  10 a filter there is never started and the root bus fails, so
+  `XHCIPFW.SYS` is still not offered there, and `/xhcipfw` is refused.
+- **Windows 98 SE and ME: the free and non-free drivers staged again**
+  (tasks 45.7 and 45.8; design record 26 section 6.7.13). Every package
+  the free and non-free sets offer for staging on the system can be ticked
+  for the hardware wizard to find by itself, while `DevicePath` stays within the system's limit: 280
+  characters on 98 SE, past which its wizard finds no driver, and 259 on
+  ME, past which its wizard stops responding (read on ME: the root hub's
+  wizard then never finished). A box that would pass it is greyed with
+  the folder to point the wizard at. The Free USB drivers page also lists
+  the packages that are only copied (on 98 SE `rtl815x` and `noaud`, on
+  ME `usbmidi` and `rtl815x`) and says what a tick does. The install
+  folder itself is left off `DevicePath` when it would pass the limit
+  (task 45.27).
+- **Windows 98 SE and ME: the hardware-wizard question only when one is
+  open** (task 45.32; design record 27 section 6). On a system whose
+  language is English the installer looks for an open hardware wizard
+  and asks you to close it only when it finds one or cannot look; on any
+  other language it asks once, as before. `/yes` asks nothing.
+- **Fixed: on 98 SE an install with two USB 3 controllers asked for the
+  "xhci98 xHCI Host Controller Disk" at the second one** (task 45.38;
+  design record 27 sections 4.1 and 5.3). The second controller's install
+  of the same INF in a run now copies no files, the first having placed
+  them. Read with two controllers on 98 SE and ME, and in an update over
+  `3.3.0.0` behind the ASM4242 model, with no prompt.
+- **Fixed: on 98 SE a power cut during the install's file copy could
+  lose the record of the storage files it placed** (task 45.5; design
+  record 26 section 6.5.6), so the next run took them as already installed
+  and an uninstall left them. The record is now written out before each
+  storage file is put in place. Read with the power cut before the copy of
+  `USBSTOR.INF`: the record was whole, and the uninstall removed the seven
+  files.
+- **Fixed: under Driver Verifier the connection manager could stop
+  Windows** (task 45.31, and task 45.11's reading): with bug check 0xA at
+  the start on 7 x86 (a routine called under a spin lock), and with bug
+  check 0xC4 (0x62) when it was unloaded, its link-state table left behind
+  (by an uninstall on 8 and 8.1, during the start on 7). On NT it now stays loaded while Stor98's
+  channel is registered, and frees that table at its unload otherwise.
+  Read on 7 x86 and 8.1 x86 under Driver Verifier.
+- **The installer's Components page** (task 45.28; design record 26
+  section 5.3.4): the rows stacked with one gap each, every sentence at
+  the height its words take, on every system (read on 98 SE, ME, 2000,
+  XP, 7 and 10).
+- **The xHCI98 USB Tree's title carries its version** (task 45.4), as
+  `xHCI98 USB Tree 3.4.0.0`, so a screenshot or a report says which build
+  it came from; its message boxes keep the plain name. Built and
+  host-tested only; the window is not yet read in a guest.
+- **Fixes from a reading of the whole code** (task 45.27): among them,
+  the bus's and the UAS driver's event waits on 98 SE and ME
+  (`HcdWaitEvent`, `UasWaitEvent`) now handle Windows 98's unsatisfied
+  wait return (the waiting paths read completing under load and replug
+  on 98 SE and ME; the return itself cannot be forced, so its handling was
+  not observed), a device's
+  D0 work item of its own, a SuperSpeed hub port's reset with a stale
+  change bit, the UAS driver's departed units, Stor98's BUSY and INTx
+  enable, and the connection manager's teardown, resume and retry paths.
+  The legs each still owes are in `runs/run-45.md`, "45.27".
+- **Known limitation, new: a held shared IRQ on 98 SE** (task 45.33):
+  Windows 98 SE crawls or freezes once this driver is installed when a
+  device with no working driver holds asserted the IRQ an xHCI98
+  controller shares ("Known limitations"). Not this driver's defect;
+  `XhciInterruptMode` `2` is one way round it.
 
 ## What `3.3.0.0` changes
 
@@ -1294,7 +1465,7 @@ key, a `DWORD` unless it says otherwise:
 
 `NNNN` is the subkey whose `DriverDesc` is the controller's Device
 Manager name ("Which controllers"). The install writes each value below
-but `XhciCmTunnelBridge` and `XhciCmAsmediaPcie7Credits` at its default, only where it is missing
+but `XhciCmTunnelBridge`, `XhciCmAsmediaPcie7Credits` and `XhciCmBridgeReq` at its default, only where it is missing
 (`XhciCmNoIrqStart` and `XhciCmBridgeNumbering` on 98 SE and ME alone,
 the systems that read them, from `3.3.0.0`). From `3.1.0.0` each is also read from
 `HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
@@ -1312,6 +1483,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
 | `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
+| `XhciCmBridgeReq` | absent (`1`) | From `3.4.0.0` (roadmap-usb4 task 45.12, design record 33 section 9.1): Windows 2000, XP and XP x64 only. `1` rewrites the resource lists of the PCI bridges a dock or an enclosure with a switch brings, below an active tunnel port, and has the safe-removal mark service keep the filter on those bridges (the rewrite acts on 2000 and 32-bit XP; XP x64's lists are not read yet); `0` neither; `2` computes and records each list without changing it. Any other value is refused and `1` stands. Not written by the install; the installer offers it under the Thunderbolt page's "Advanced..." on those systems, and `INSTALL /set XhciCmBridgeReq=0..2` sets it there. What it did is recorded in `XhciCmBridgeReqDiag`, a binary value in the controller's hardware key |
 | `XhciCmTunnelBridge` | absent (`REG_SZ`) | A comma-separated list of `bb:dd.f` PCI bridges that replaces the driver's own finding of the tunnel ports, for a machine whose ports it does not find (the `debug` log says so). Not written by the install |
 | `XhciCmAsmediaPcie7Credits` | absent (`0`) | From `3.3.0.0` (roadmap-usb4 task 44.41): a bench experiment for the ASMedia ASM4242, leave it absent. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the USB4 connection manager builds between an ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands. Not written by the install, and the installer does not ask for it |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -1488,6 +1660,28 @@ have every leg.
 - **Windows 2000: an unplug without a stop shows "Unsafe Removal of
   Device"**, and the device is removed. Stop it in "Unplug or Eject
   Hardware" first.
+- **Windows 2000 and XP: the first plug of a dock or an enclosure with a
+  switch** (from `3.4.0.0`, task 45.12). The first time such a device is
+  plugged in, its devices may stop and start again once, a few seconds
+  after it is plugged in, while xHCI98 sets up its PCI Express ports: the
+  safe-removal mark service restarts it once its Found New Hardware
+  windows have been answered. If a drive behind it is already in use, the
+  restart is refused: unplug it safely and plug it in again instead. A
+  device added later behind a port that has no I/O range (a network
+  adapter behind a chained dock) is placed after the dock is unplugged
+  and plugged in again.
+- **Stop a dock before unplugging it when a keyboard, mouse, tablet or
+  similar device is on the dock's own USB controller** (task 45.35): on
+  98 SE and ME, and on 2000 and XP under a firmware connection manager
+  (Thunderbolt 3, and the Intel USB4 controllers whose firmware runs
+  one). Otherwise Windows may never finish removing the dock: it is not
+  found again when plugged back, and Windows does not shut down (record
+  17 section 4.13's kept transfers, below "Known limitations"). On 2000
+  and XP with a USB4 host whose tunnels this release's connection manager
+  builds, the unplug is normally handled: the connection manager reads
+  the tunnel closed before this driver asks for the proof, and only in
+  the reverse order do the transfers stay kept (record 17 section
+  4.13.6).
 - **A device Windows has not seen before, or one disabled and enabled or
   whose driver was installed or updated, is missing from the safe-removal
   list** (Windows 2000 to 7): Windows rebuilds its driver stack without
@@ -1534,14 +1728,20 @@ have every leg.
   type. Other non-ACPI computer types (Windows 2000's MPS ones, XP's
   Standard PC) are untested. Read on the emulator, not yet on real
   hardware.
-- **32-bit Windows 8, 8.1 and 10 on a board that leaves the USB4 ports'
-  windows above 4 GB** (roadmap-usb4 task 44.72). Some boards leave these
-  ports' memory windows above 4 GB even with "Above 4G Decoding" off.
-  32-bit Windows 8, 8.1 and 10 cannot use the devices behind such ports.
-  Windows 8 may not start at all on such a board. XHCIPFW.SYS closes
-  those windows on 32-bit Windows 2000 to 7. It is not offered on 8, 8.1
-  and 10. There it may start after Windows has read the PCI bridges. Read
-  on the emulator, not yet on real hardware.
+- **32-bit Windows 10 on a board that leaves the USB4 ports' windows
+  above 4 GB** (roadmap-usb4 tasks 44.72 and 45.9). Some boards leave
+  these ports' memory windows above 4 GB even with "Above 4G Decoding"
+  off. XHCIPFW.SYS closes those windows on 32-bit Windows 2000 to 7 and,
+  from `3.4.0.0`, on 8 and 8.1 as a filter of the PCI root bus. It is not
+  offered on 10, where such a filter is never started; 32-bit Windows 10
+  cannot use the devices behind such ports. Read on the emulator, not yet
+  on real hardware.
+- **32-bit Windows 8 and 8.1: a PCI root bus that names XHCIPFW.SYS's
+  filter with its file gone stops Windows at the start** (task 45.9).
+  The installer takes the filter off every root bus before it removes the
+  file. If the file was deleted or damaged by other means, Windows'
+  System Restore recovered such a start on 8; `tools\xhciinst\readme.txt`
+  gives the manual route from the recovery environment's registry editor.
 - **Windows 98 SE: answer No to the restart when an enclosure is first
   plugged in** (roadmap-usb4 task 44.78). When an enclosure is first
   plugged in after Windows 98 SE has started, Windows asks to restart
@@ -3625,7 +3825,9 @@ To give one controller a different value, delete the machine-wide value
 and set that controller's own. `docs/using/tuning.md` has the details.
 
 Each value is a `DWORD` in the controller's driver (software) key, and
-the install writes every value the driver reads, thirty-six, in this key:
+the install writes thirty-six of the values the driver reads in this key
+(not `XhciUsb2Bos` or, from `3.4.0.0`, `XhciResumeKeep`, which no INF
+writes):
 
 | Windows | Key |
 |---|---|
@@ -4291,6 +4493,33 @@ any other value, the request is made. No INF writes it; the driver reads
 it at each start. The driver's log notes each such request
 (`enum.bos.usb2`) and the switch (`enum.bos.usb2.on`).
 
+### XhciResumeKeep: devices kept across such a resume (new in `3.4.0.0`)
+
+Where a resume from standby or hibernation starts the controller afresh
+(`XhciResumeReinit` in "Linux's controller quirks" below, every VIA
+controller among them, and every
+controller that cannot save its state), a device on one of the
+controller's root ports is restored in place on a new slot, with its
+Device Manager entry, its drive letter and the files open on it, instead
+of being removed and found again (roadmap-usb4 task 45.23, design record
+20 sections 4.3.1 to 4.3.3). A UAS drive is kept while in use as well:
+at the sleep `xhciuas.sys` holds the requests that arrive, waits out the
+commands in flight and asks each unit to write out its cache, and after
+the wake it checks each unit's identity and medium before it starts the
+held requests; a drive found changed (another disk behind the same USB
+device) is reset and found again as a new one, never written as the old.
+Still found again: a hub and every device behind it, a Bulk-Only drive,
+a drive with no serial number or one that could not finish its requests
+before the sleep, a drive whose medium cannot be checked after the wake
+(a removable-medium drive with a medium in it, or one whose units report
+neither identification page, record 20 section 4.3.3), a device with an
+isochronous stream open (audio or video in use), and a device
+selective suspend held. `XhciResumeKeep` (a `DWORD`, in the controller's
+key or machine-wide) `0` turns it off; absent or any other value, it is
+on. No INF writes it. Read on XP across hibernation with QEMU's UAS
+device (`docs/contributing/runs/run-45.md`, "45.23"); not yet read on
+2000, on 98 SE or on a real VIA controller.
+
 ### XhciAccept096: controllers below xHCI 1.0
 
 New in `2.4.0.0`, and **on unless you set it to `0`**. A controller says
@@ -4303,7 +4532,9 @@ driven as a 1.0 controller but for the fields Linux writes differently on
 control transfer's Transfer Type written 0, the isochronous burst counts
 written 0, every isochronous transfer scheduled at the next opportunity
 rather than at a named frame, and the capability register at offset 1Ch
-ignored, so a resume from standby re-enumerates the controller's devices.
+ignored, so a resume from standby starts the controller afresh: up to
+`3.3.0.0` its devices were found again, and from `3.4.0.0` a device on a
+root port is kept where "XhciResumeKeep" allows.
 On a 1.0 or later controller the value changes nothing.
 
 | | |
@@ -4373,8 +4604,10 @@ did.
   controller; Phytium `1DB7:DC27`; ASMedia `1B21:3042`; Zhaoxin
   `1D17:9202`). These controllers do not keep their state across standby
   or hibernation, so the driver saves nothing and starts the controller
-  afresh at the resume: every device on it is found again, as on a
-  controller without Force Save Context. `2` on every controller.
+  afresh at the resume: up to `3.3.0.0` every device on it was found
+  again, as on a controller without Force Save Context; from `3.4.0.0`
+  a device on a root port is kept ("XhciResumeKeep"). `2` on every
+  controller.
 - **`XhciIntelShutdownToEhci`** (`XHCI_SPURIOUS_REBOOT`; Intel `8086:1E31`,
   `8086:9C31`, `8086:9CB1`). On some machines with these chipsets a
   computer shut down with its switchable connectors on the xHCI controller
@@ -4766,37 +4999,35 @@ or says it was found by reading the code.
   `3.3.0.0` install does not write that key. To remove it, delete
   `HKLM\SYSTEM\CurrentControlSet\Control\CriticalDeviceDatabase\pci#cc_010802`
   with Regedit as an administrator when its `Service` is `stor98`, then
-  restart. XP may do the same; it was not read there (roadmap-usb4
-  task 45.1).
+  restart. XP may do the same; it was not read there. `3.4.0.0` does not
+  remove the key either (roadmap-usb4 task 45.1, dropped): the update over
+  `3.2.0.0`, also from `3.3.0.0`, leaves it.
 - **Selective suspend is off unless you turn it on, and hubs are never
   suspended.** With `XhciSelectiveSuspend` at its default `0` no device is
   suspended to save power, as up to `2.2.0.0`. At `1` a device is
   suspended when Windows asks, but a hub, the root hub and the controller
   never are, and the driver never suspends anything on a timer of its own.
   See "XhciSelectiveSuspend: putting idle devices to sleep".
-- **On Windows 98 SE and ME the free and non-free drivers are copied, not
-  staged, all but two.** The installer copies them to `USBDRV\FREE\` and
-  `USBDRV\NONFREE\` in the install directory and adds none of their
-  folders to `DevicePath` but, from `3.3.0.0`, the free `uac2` (98 SE and
-  ME) and `usbmidi` (98 SE), each with an unticked box on the Free USB
-  drivers page (roadmap-usb4 task 44.11): Windows' own USB audio INF
-  would otherwise take their devices first. A long `DevicePath` stops 98
+- **On Windows 98 SE and ME the free and non-free drivers left unticked
+  are copied, not staged.** The installer copies them to `USBDRV\FREE\`
+  and `USBDRV\NONFREE\` in the install directory and adds to `DevicePath`
+  only the folders of the packages ticked on the Free USB drivers and
+  Non-free USB drivers pages (from `3.4.0.0` every package a set offers
+  for staging on the system, tasks 45.7 and 45.8; in `3.3.0.0` only the
+  free `uac2` and, on 98 SE, `usbmidi`). A long `DevicePath` stops 98
   SE's hardware wizard finding any driver, Windows' own in
-  `C:\WINDOWS\INF` included, so the installer keeps it within 280
-  characters and offers no box that would pass that.
+  `C:\WINDOWS\INF` included, past 280 characters, and ME's hardware
+  wizard stops responding past 259, so the installer keeps it within the
+  system's limit and greys a box that would pass it.
   When the wizard asks for a driver, choose "Specify a location" and point
   it at the package's folder, `USBDRV\FREE\<class>\<package>\<folder>` (or
-  `USBDRV\NONFREE\...`). Running the installer again takes out the
-  package folders an earlier build added to `DevicePath`.
+  `USBDRV\NONFREE\...`). A later run whose box is left unticked keeps
+  an earlier run's staging (its page lists it); the uninstall removes
+  what this installer placed and no device uses.
 - **No USB storage on a stock Windows 98 SE without NUSB's storage files.**
   From `3.2.0.0` the download carries NUSB 3.3's seven storage files in
   `USBDRV\NUSB33\` and the installer offers them on Windows 98 SE; see
   "Windows 98 SE and ME: the stock install, and storage".
-- **Windows 98 SE: a power cut during the install's file copy can leave
-  the storage files behind.** The installer records the USB storage files
-  it places. A power cut during its copy can lose that record while the
-  files stay. The next run then takes them as already installed. A later
-  uninstall leaves them in place (roadmap-usb4 task 45.5).
 - **Windows Vista x64 and Windows 7 x64 need test-signing mode, or driver
   signature enforcement disabled.** The x64 drivers carry the project's own
   test signature, not Microsoft's. Turn on test-signing mode once (see
@@ -4876,6 +5107,46 @@ or says it was found by reading the code.
   folder, or click Skip File for the `.cat` files: they only hold
   signatures, which 98 SE and ME do not check, and the device works
   without them.
+- **Windows 2000 to 8.1: a USB Audio 2.0 or 3.0 device that already
+  shows as "USB Audio Device" keeps Windows' own USB Audio 1.0 driver**
+  (task 45.24). From `3.4.0.0` such a device is no longer offered to that
+  driver, but Windows does not choose again for a device it already
+  installed, and on XP no change of it completes until a reset. Unplug
+  the device, restart Windows (reset the computer if the shutdown hangs),
+  run `cmd /c "set devmgr_show_nonpresent_devices=1&& devmgmt.msc"`,
+  choose View, Show hidden devices, update the greyed "USB Audio Device"
+  to `uac2`, then plug the device in (read on XP).
+- **A device with more than one configuration that the split rules allow
+  is split by its first one, so a driver of its maker that takes the
+  whole device no longer binds**
+  (from `3.4.0.0`, task 45.34; design record 13 section 10.8). Windows' own
+  stack gives such a device whole to one driver; under xHCI98 its
+  functions get drivers of their own. A list of devices to keep whole can
+  be added if one is reported.
+- **After a resume that starts the controller afresh, some devices are
+  still found again** ("XhciResumeKeep"): a hub and everything behind it,
+  a Bulk-Only drive, a drive with no serial number or one that could not
+  finish its requests before the sleep, a drive whose medium cannot be
+  checked after the wake (a removable-medium drive with a medium in it,
+  or one whose units report neither identification page), a device with
+  an isochronous stream open (audio or video in use), and a device
+  selective suspend held. A file open on such a drive across the
+  sleep is lost, and cached writes with it.
+- **Windows 98 SE: a device that holds a shared IRQ with no working
+  driver makes Windows crawl or freeze once this driver is installed**
+  (task 45.33; ME is expected to behave the same, not read). Windows 98
+  keeps such a line masked while no driver uses it; once any driver
+  connects to it, Windows unmasks it and the holder's interrupt storms,
+  which xHCI98's interrupt routine rightly declines (read in QEMU: the
+  storm froze 98 SE). Seen on a desktop board whose system NVMe drive the
+  BIOS still ran (System Properties, Performance: "MS-DOS compatibility
+  mode") on a line shared with three xHCI controllers. Look in Device
+  Manager (Computer, Properties, View Resources, Interrupt request (IRQ))
+  for a device without a working driver on an xHCI98 controller's IRQ.
+  Give it a working driver or remove it; or, if no other working driver
+  uses that IRQ, disable the xHCI98 controllers on it, or set
+  `XhciInterruptMode` to `2` (polling) and restart, which leaves the line
+  masked with USB working (`docs/using/tuning.md`).
 - **Windows 98 SE in a virtual machine cannot play USB audio** through
   Windows 98's own `USBAUDIO.VXD`; that is QEMU's emulated device and the
   VxD, through this driver and through a UHCI controller alike. On real
@@ -4976,7 +5247,14 @@ or says it was found by reading the code.
   the fault made on purpose. Restart the machine instead of disabling the
   controller. A later release is planned to hand back what is kept at the
   stop, once the driver can prove the controller has left the bus or has
-  stopped writing to memory.
+  stopped writing to memory. From `3.4.0.0` one such proof exists: for a
+  dock's USB controller on 2000 and XP behind a USB4 tunnel that this
+  release's connection manager closed and read back closed before the
+  proof was asked (task 45.35), its transfers are released; a closure read
+  only after the proof was asked leaves the pin, and in every other case
+  they are still kept,
+  and a dock unplugged with an input device on its USB controller waits
+  for ever ("Thunderbolt and USB4: known limitations").
 - **Windows 2000: after the driver recovers the controller, or after a
   resume from hibernation, a USB drive whose volume was mounted may come
   back at Code 31** (same section). The
@@ -4988,8 +5266,10 @@ or says it was found by reading the code.
   more faults. Seen again in `2.3.0.0`'s virtual-machine tests on Windows
   2000: after a recovery with the controller polled (`XhciInterruptMode`
   `2`), and after a resume from hibernation. A controller that lost its
-  state across the hibernation, as QEMU's does, is started afresh, and the
-  driver then finds every device again as on a recovery. Each time, a
+  state across the hibernation, as QEMU's does, is started afresh, and up
+  to `3.3.0.0` the driver then found every device again as on a recovery;
+  from `3.4.0.0` a device on a root port is kept where "XhciResumeKeep"
+  allows (not read on 2000). Each time, a
   restart of the drive's own device cleared it (read with a command-line
   device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
@@ -5086,7 +5366,7 @@ what `2.3.0.0` adds:
 | Windows 98 SE: USB audio could stutter while a drive was read at full speed | Not re-measured under `2.0.0.0` |
 | Windows 2000: a newer package over an older one was refused; disabling the controller with an audio device attached asked for a restart | The upgrade from `1.2.0.0` installs in place on Windows 2000. The disable with an audio device attached was not re-measured |
 | Windows 98: a driver that failed while starting the controller stopped the machine with a protection error | Not re-measured: no failing start was provoked under `2.0.0.0` |
-| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and every device is found again; with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and with a USB disk plugged in after Windows started, and stopped with a USB disk attached when the computer started (the BIOS presents it, and Windows uses it in MS-DOS compatibility mode), as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
+| On a controller without Force Save Context, a wake from standby rebuilt the bus | Under `2.0.0.0`: untested, the power handlers had not run. Since `2.3.0.0` (read in QEMU, which has no Force Save Context): hibernate and resume on XP, Vista and 7, and standby and hibernate on ME, idle, rebuild the bus through the controller's reinitialization and, up to `3.3.0.0`, every device is found again (from `3.4.0.0` a device on a root port is kept, "XhciResumeKeep"); with a copy running on a stick on XP, Vista and 7, the copy's requests fail for about 10 s while the stick is found again, then work. Open: Windows ME hangs on a standby or hibernate with a copy running on an xHCI stick. Windows 98 SE's standby resumed with a USB mouse at a root port or behind a hub, and with a USB disk plugged in after Windows started, and stopped with a USB disk attached when the computer started (the BIOS presents it, and Windows uses it in MS-DOS compatibility mode), as it does under NUSB's EHCI driver; QEMU's Windows 98 SE does not resume reliably with no USB controller either (the 98 SE Stand by entry in "Known limitations"). Standby on the other systems, and with devices suspended, is not yet read |
 | The virtual High-Speed hub switch and its costs. It also did nothing unless `XhciVirtualHSHubVid` and `XhciVirtualHSHubPid` were set beside `XhciVirtualHSHub`, since `1.2.0.0` has no default for either (reported on GitHub issue 4, 2026-10-03) | No switch: all three values have no effect (see "Registry settings") |
 
 ## Untested ground
@@ -5097,15 +5377,18 @@ information.
 | Area | State |
 |---|---|
 | Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 ran Stor98 through the installer from the owner's medium of 2026-10-23 (task 43.24, `runs/run-43-24.md`); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the `3.1.0.0` x64 package, which has no catalogs, was refused ("The third-party INF does not contain digital signature information"; read in test-signing mode; roadmap-usb4 task 43.23, `runs/run-43.md`). From `3.2.0.0` `stor98.inf` names `stor98.cat`, and on 8.1 x64 and 10 x64 in test-signing mode the package with it was taken into the driver store after the publisher prompt (task 43.36, the catalogs signed in the guest with a certificate of its own); no drive was bound to it there. In task 43.59 (`runs/run-43.md`), signed in the guest and trusted, Stor98 x64 ran tunnelled drives on 8.1 x64 and, without `DmaRemappingCompatible` (task 43.59s, as the INF ships), on 10 x64, a surprise unplug failing the transfer at once on both; the owner-signed package's leg is owed with the bench candidate, and 8 x64 with the catalogs ran it through the installer, with the owner-signed package (task 43.24) |
+| A device kept across a resume that starts the controller afresh (`XhciResumeKeep`, new in `3.4.0.0`) | Read on XP across hibernation with QEMU's UAS device, one unit with a serial number, idle and under a copy loop ("XhciResumeKeep"). Not read: Windows 2000, 98 SE and ME, standby on any system, a real VIA controller (the user's VL805), a swapped disk that the identification pages cannot tell apart (a bridge that describes itself there), and the timeouts of the sleep's drain and flush, of the wake's check and of a slow keep pass, whose decisions only host tests cover |
+| Docks and enclosures with a switch hot-plugged on Windows 2000 and XP (`XhciCmBridgeReq`, new in `3.4.0.0`) | Read on XP and on 2000 with the Standard PC HAL, on the emulator's dock behind its ASM4242 host. Not read: 2000 with the ACPI HAL, XP x64 (its lists, so the rewrite does not act there), a cold start with the dock attached on 2000, a single enclosure on 7, standby and hibernation, the uninstall and the update over `3.3.0.0`, and any real dock |
+| XHCIPFW.SYS as a root-bus filter on 32-bit 8 and 8.1 (new in `3.4.0.0`) | Read on 8 and 8.1 with the emulator's ASM4242 layout: the install, cold starts, the update over itself and the uninstall. Not read: the manual recovery route of `tools\xhciinst\readme.txt`, an update from one release's image to another's, and real hardware |
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
-| High Speed isochronous transfers, and the isochronous ring page | No High Speed isochronous device (a camera, USB Audio 2.0) has been read on any vehicle; QEMU's audio device is Full Speed. Since the planned isochronous ring work (design record 13 section 11.8, not yet in a release), an isochronous endpoint serviced more than once a frame gets a ring of its own when the event ring has room: 120 TRBs and up to 120 packets a request with the 256-entry event ring, against 62 on the shared pool ring, so a 3 x 1024-byte camera endpoint holds about 7.5 to 10 ms in flight and a stream of small packets 15 ms. A client keeps a stream continuous with at least two requests in flight, each at most half of that. An isochronous stream also interrupts at most every eighth packet and at each request's end (BEI), from xHCI 1.0; whether that saving shows on real hardware is unread |
+| High Speed isochronous transfers, and the isochronous ring page | No real High Speed isochronous device (a camera, USB Audio 2.0) has been read on a real xHCI controller. Simulated High Speed USB Audio 2.0 devices played through `uac2` on XP and 98 SE (tasks 45.24 and 45.34), and on QEMU's controller a 125-us isochronous endpoint runs at about a quarter of real time, the emulator's pacing and not this driver's (task 45.39), so the emulator's High Speed isochronous timings say nothing of the driver's; the bench reading (a High Speed UAC 2.0 device on a real controller under XP and 98 SE) is owed. Since the planned isochronous ring work (design record 13 section 11.8, not yet in a release), an isochronous endpoint serviced more than once a frame gets a ring of its own when the event ring has room: 120 TRBs and up to 120 packets a request with the 256-entry event ring, against 62 on the shared pool ring, so a 3 x 1024-byte camera endpoint holds about 7.5 to 10 ms in flight and a stream of small packets 15 ms. A client keeps a stream continuous with at least two requests in flight, each at most half of that. An isochronous stream also interrupts at most every eighth packet and at each request's end (BEI), from xHCI 1.0; whether that saving shows on real hardware is unread |
 | SuperSpeedPlus links, by mode | Accepted at the trained rate, built from the specification against host tests. Each mode is untested: Gen 2x1 (10 Gbit/s on one lane), Gen 1x2 (10 Gbit/s on two lanes, the same rate as Gen 2x1 and a different mode), and Gen 2x2 (20 Gbit/s). No Gen 2 device was read on any hardware; no 20 Gbit/s port is held |
 | SuperSpeedPlus isochronous transfers | Built from the specification against host tests; no vehicle |
 | SuperSpeedPlus hubs | Built from the specification against host tests; no vehicle |
 | SuperSpeed hubs, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only; no virtual machine models one. On Windows 2000, which has no bench, built from the specification and untested |
 | High-Speed hubs, single- and multi-TT, and Full and Low Speed devices behind them, on every target but Windows 98 SE | Read on real hardware under Windows 98 SE only. Virtual machines model only a Full-Speed hub, so on every other target the High-Speed paths rest on host tests |
 | Low- and Full-Speed devices behind a built-in hub whose USB 2.0 speed table lists only High Speed (`XhciUsb2HubSpeedFallback`; the VIA VL805, GitHub issue 18) | Built from the specification, the reporter's logs and other systems' practice against host tests; on a VL805 reported working on `2.3.0.0` by the owner, not yet read in detail, and not run on any other controller with such a table. QEMU's controller lists no table, so its legs read only that nothing else changed |
-| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby re-enumerates their devices; built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
+| Controllers below xHCI 1.0 (0.96: NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others) | Accepted by default (`XhciAccept096`), driven as xHCI 1.0 controllers but for the fields Linux writes differently on them (TD Size in 0.96's units, the control transfer's Transfer Type, the isochronous burst counts, and no isochronous Frame ID) and with the capability register at 1Ch ignored, so a resume from standby starts the controller afresh (its devices found again, but those `XhciResumeKeep` keeps from `3.4.0.0`); built against host tests and Linux's handling of the same parts; read on no 0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD 0.96 parts are not applied, so isochronous transfers (audio, video) on those parts are the least certain. Set `XhciAccept096` to `0` to refuse such a controller as `2.3.1.0` did |
 | A UAS-only device at SuperSpeed on a controller that cannot stream | Built from the specification against host tests; no such controller held |
 | Low- and Full-Speed polling above 1000 Hz (`XhciFastPollFsLs`) | Outside the xHCI specification, built against host tests; read on no real controller. Value `4`'s programming was read in QEMU on 32-bit Windows 7 and Windows 98 SE ("XhciFastPollFsLs"), and its `3.1.0.0` codes on Windows 98 SE alone, a Full-Speed device behind a hub included |
 | The Intel port switchover beyond two machines | Read on one `1E31` machine under Windows 98 SE and on one `9CB1` machine, the Dell Latitude E7250, under Windows 7 x64 ("Intel 7-, 8- and 9-series chipsets: the port switchover"). Device ids `8C31`, `9C31`, `8CB1` and `8D31` and every other system rest on Linux's handling of the same chipsets and on host tests of the sequence |
@@ -5163,9 +5446,11 @@ drivers" from `3.3.0.0` (one page, "Other USB drivers", before;
 roadmap-usb4 task 44.10). Ticked, the set is copied to the install folder
 and nothing is installed, and a box per driver package, grouped by kind
 and unticked, lets Windows 2000 to 10 use that package's drivers at a
-device's first plug; on 98 SE and ME the sets are copied only, but for
-the free `uac2` (98 SE and ME) and `usbmidi` (98 SE) from `3.3.0.0`
-("Known limitations"). A
+device's first plug; on 98 SE and ME the sets were copied only, but for
+the free `uac2` (98 SE and ME) and `usbmidi` (98 SE), in `3.3.0.0`, and
+from `3.4.0.0` every package a set offers for staging there can be
+ticked while `DevicePath` stays within the system's limit ("Known
+limitations"). A
 set the download does not carry has no page; the Finish page names the
 download and the address that have it. The uninstall removes what it
 placed.
@@ -5183,7 +5468,8 @@ and on XP to 7, 32-bit and x64, the ones Realtek's driver in the
 non-free set does not serve there, and whose `uac2` adds playback volume
 and mute). `v0.1.1` added `ax88179`, its driver for USB Gigabit Ethernet adapters with an
 AX88179 or AX88178A chip (`USBDRV\FREE\net\ax88179\`): `w98se-me\` for
-98 SE and ME, `w2k\` for 2000; copied only on 98 SE and ME, and never
+98 SE and ME, `w2k\` for 2000; copied only on 98 SE and ME up to
+`3.3.0.0` (from `3.4.0.0` it can be ticked there), and never
 staged on 2000 (the pack lists that INF as copy
 only: no 2000 leg). Its open point is usb-wdm-free's: in the first
 session after the adapter was plugged in, the chip was once seen passing

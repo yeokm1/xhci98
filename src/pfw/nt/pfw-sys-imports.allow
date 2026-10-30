@@ -1,5 +1,5 @@
 # pfw-sys-imports.allow - the imports XHCIPFW.SYS may have (design record
-# 32 section 11.2), one module!name a line, held by check-pfwsys.ps1. Each
+# 32 sections 11.2 and 11.5.2), one module!name a line, held by check-pfwsys.ps1. Each
 # is exported by the kernel and the HAL of Windows 2000 SP4 and of every
 # later 32-bit Windows (the documented kernel routines of the 2000 DDK;
 # InitSafeBootMode is 2000's export too). KeIpiGenericCall is never imported: the driver
@@ -14,6 +14,21 @@ ntoskrnl.exe!ZwOpenKey
 ntoskrnl.exe!ZwCreateKey
 ntoskrnl.exe!ZwSetValueKey
 ntoskrnl.exe!ZwClose
+ntoskrnl.exe!IoCreateDevice
+ntoskrnl.exe!IoDeleteDevice
+ntoskrnl.exe!IoAttachDeviceToDeviceStack
+ntoskrnl.exe!IoDetachDevice
+ntoskrnl.exe!IofCallDriver
+ntoskrnl.exe!IofCompleteRequest
+ntoskrnl.exe!PoStartNextPowerIrp
+ntoskrnl.exe!PoCallDriver
+ntoskrnl.exe!IoInitializeRemoveLockEx
+ntoskrnl.exe!IoAcquireRemoveLockEx
+ntoskrnl.exe!IoReleaseRemoveLockEx
+ntoskrnl.exe!IoReleaseRemoveLockAndWaitEx
+ntoskrnl.exe!KeInitializeEvent
+ntoskrnl.exe!KeSetEvent
+ntoskrnl.exe!KeWaitForSingleObject
 HAL.dll!KfRaiseIrql
 HAL.dll!KfLowerIrql
 HAL.dll!KeQueryPerformanceCounter

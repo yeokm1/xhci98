@@ -273,6 +273,14 @@ int inst_path_remove_copies(const char *list, const char *root, char *out,
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed);
 
+/* The multi-string with name appended as its last entry, the others kept
+ * in order, unless an entry already equals it (compared without case):
+ * then the same list and *added 0. Returns the new length in bytes
+ * including the final NUL pair; (size_t)-1 when out is too small. in may
+ * be NULL or empty (inBytes 0). */
+size_t inst_msz_append(const char *in, size_t inBytes, const char *name,
+                       char *out, size_t cap, int *added);
+
 /* A filter list value (LowerFilters or UpperFilters, read as a
  * multi-string of inBytes; a REG_SZ is passed with its NUL pair) with
  * every entry equal to `name` taken out, the other names kept in order
@@ -1509,6 +1517,14 @@ int inst_di_cmdline(char *out, size_t cap, const char *version,
 int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
+/* The same with nocopy, the FLAGS word that has the helper set
+ * DI_NOFILECOPY: a later controller of an INF whose files a controller's
+ * job of the same run copied (record 27 sections 4.1 and 6, task 45.38):
+ * setupx, one instance for every process, then asks for "xhci98 xHCI
+ * Host Controller Disk" at the Windows source for the second copy. */
+int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
+                       unsigned long hwnd, const char *devId, const char *inf,
+                       int force, int quiet, int nocopy);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
@@ -2032,9 +2048,13 @@ int inst_vsd_next(const INST_VSDFACTS *f);
 #define INST_PFW_SYS_SEEN   3   /* XP, Vista and 7 (x86): XHCIPFW.SYS;
                                    the installer reads the problem for
                                    its note                              */
-#define INST_PFW_SYS_GONE   4   /* 8, 8.1 and 10 (x86): not offered; an
-                                   XHCIPFW.SYS this installer placed is
-                                   removed (record 32 section 11.3)      */
+#define INST_PFW_SYS_GONE   4   /* 10 (x86): not offered; an XHCIPFW.SYS
+                                   this installer placed is removed
+                                   (record 32 sections 11.3 and 11.5.2) */
+#define INST_PFW_SYS_FILTER 5   /* 8 and 8.1 (x86): XHCIPFW.SYS as an upper
+                                   filter of every PCI root bus (record
+                                   32 section 11.5.2), offered as on
+                                   Vista and 7                           */
 /* nt 0: 98 SE or ME. major.minor: the version (RtlGetVersion's); x86: a
  * 32-bit system. */
 int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86);
@@ -2053,6 +2073,11 @@ int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
  * DESELECTED unticked. */
 int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
                   int ticked);
+/* 1 when a devnode's hardware or compatible ids (multi-strings of the
+ * byte lengths given) name a PCI root bus, *PNP0A03 or *PNP0A08: the
+ * devnodes XHCIPFW.SYS filters on 8 and 8.1. */
+int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes);
 /* A device's BootConfig (REG_RESOURCE_LIST, as the registry holds it):
  * 1 when it holds a prefetchable memory window (CmResourceTypeMemory or
  * CmResourceTypeMemoryLarge, CM_RESOURCE_MEMORY_PREFETCHABLE and
@@ -2588,6 +2613,15 @@ void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 #define INST_PFWSYS_NAME_A      "xhcipfw.sys"
 #define INST_PFWSYS_NAME_B      "xhcipf2.sys"
 #define INST_PFWSYS_GROUP       "System Reserved"
+/* The filter role on 8 and 8.1 (record 32 section 11.5.2): its group, and
+ * a service, two image names and a record of its own, which 3.3.0.0's
+ * installer (it removes the xhcipfw service there without its root bus
+ * entries) does not recognise. */
+#define INST_PFWSYS_GROUP_FILTER "PnP Filter"
+#define INST_PFWSYS_SERVICE_F   "xhcipff"
+#define INST_PFWSYS_NAME_FA     "xhcipff.sys"
+#define INST_PFWSYS_NAME_FB     "xhcipff2.sys"
+#define INST_PFW_KEY_F          "Software\\xhci98\\XhciPfwFilter"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 

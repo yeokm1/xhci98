@@ -3607,6 +3607,251 @@ static VOID cmEjectsVoid(PCM_NHI nhi)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* ---- NT: the chain action (task 45.13, design record 34 section 3.9) -- */
+
+/*
+ * The child filter on the PDO located at `bdf` (16-bit XHCI_TBT_BDF), its
+ * removal reference taken under the list's lock (CmFilterTryHold): TRUE
+ * with *child and *pdo. Release with CmFilterUnhold.
+ */
+static BOOLEAN cmChainTake(ULONG bdf, PCM_FILTER *child, PDEVICE_OBJECT *pdo)
+{
+    KIRQL irql;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    BOOLEAN ok;
+
+    ok = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (e = cmRegAtts.Flink; e != &cmRegAtts && !ok; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if (f->Common.Kind != CM_KIND_CHILD || !f->AttListed ||
+            !f->Located || f->SurpriseRemoved ||
+            XHCI_TBT_BDF(f->LocBus, f->LocAddress >> 16,
+                         f->LocAddress & 0xFFFFUL) != bdf) {
+            continue;
+        }
+        if (CmFilterTryHold(f)) {
+            *child = f;
+            *pdo = f->Common.Pdo;
+            ok = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return ok;
+}
+
+/*
+ * One try of a chain action: every active member this domain owns (the
+ * action's own member once one is named) walked, each candidate not yet
+ * done for the entry `e` invalidated through the child filter on it and
+ * recorded done. TRUE when every walk was complete, at least one candidate
+ * was found, and every candidate found is done; else *missing says what
+ * was lacking (XHCI_TBT_CHAIN_MISS_*). PASSIVE_LEVEL, the thread.
+ */
+static BOOLEAN cmChainTry(PCM_NHI nhi, const TBT_ICM_ACTION *action,
+                          PXHCI_TBT_CHAIN_OWED e, PULONG missing)
+{
+    PCM_REENUM r;
+    PXHCI_TBT_CHAIN_SET s;
+    PCM_FILTER f;
+    PDEVICE_OBJECT pdo;
+    ULONG member;
+    ULONG i;
+    ULONG k;
+    ULONG found;
+    ULONG left;
+    BOOLEAN incomplete;
+
+    r = &nhi->Reenum;
+    s = &r->ChainSet;
+    member = nhi->U4On ? CmNhiActionMember(nhi, action) : XHCI_TBT_NO_MEMBER;
+    found = 0;
+    left = 0;
+    incomplete = FALSE;
+    for (i = 0; i < r->Members; i++) {
+        if ((member != XHCI_TBT_NO_MEMBER && i != member) ||
+            (cmFlags(nhi, i) & CM_PORT_ACTIVE) == 0 ||
+            (nhi->RecBarred & (1UL << i)) != 0) {
+            continue;
+        }
+        if (XhciTbtChainPorts(&r->Cfg, r->Port[i].Bdf, i, s) !=
+            XHCI_TBT_CHAIN_COMPLETE) {
+            incomplete = TRUE;
+            r->ChainIncomplete++;
+            CmLogNote(nhi, "cm.chain.incomplete",
+                      (s->Why << 24) | (i << 16) | (s->FailBdf & 0xFFFFUL));
+            continue;
+        }
+        r->ChainPorts += s->Count;
+        CmLogNote(nhi, "cm.chain.ports", (i << 16) | s->Count);
+        if (s->Over != 0) {
+            r->ChainOver += s->Over;
+            CmLogNote(nhi, "cm.chain.over", (i << 16) | s->Over);
+        }
+        for (k = 0; k < s->Count; k++) {
+            found++;
+            if (XhciTbtChainDone(e, s->Port[k].Bdf)) {
+                continue;
+            }
+            if (s->Port[k].Unpowered) {
+                r->ChainUnpowered++;
+                CmLogNote(nhi, "cm.chain.port-unpowered", s->Port[k].Bdf);
+            }
+            if (!cmChainTake(s->Port[k].Bdf, &f, &pdo)) {
+                left++;
+                continue;
+            }
+            IoInvalidateDeviceRelations(pdo, BusRelations);
+            CmFilterUnhold(f);
+            XhciTbtChainMark(e, s->Port[k].Bdf);
+            r->ChainInvalidate++;
+            r->Calls++;
+            CmLogNote(nhi, "cm.chain.invalidate",
+                      (action->Kind << 24) | ((action->Depth & 0xFFUL) << 16) |
+                      s->Port[k].Bdf);
+        }
+    }
+    if (incomplete) {
+        *missing = XHCI_TBT_CHAIN_MISS_WALK;
+    } else if (found == 0) {
+        *missing = XHCI_TBT_CHAIN_MISS_NONE;
+    } else {
+        *missing = XHCI_TBT_CHAIN_MISS_FILTER;
+    }
+    return (BOOLEAN)(!incomplete && found != 0 && left == 0);
+}
+
+/* Every owed chain action dropped (a loss, the stop), counted. */
+static VOID cmChainDropAll(PCM_NHI nhi, const char *why)
+{
+    PCM_REENUM r;
+    ULONG k;
+
+    r = &nhi->Reenum;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        if (r->ChainOwed[k].Used) {
+            r->ChainOwed[k].Used = 0;
+            r->ChainCancelled++;
+            CmLogNote(nhi, why, (r->ChainAction[k].Depth << 16) |
+                                (r->ChainOwed[k].Key & 0xFFFFUL));
+        }
+    }
+}
+
+/*
+ * A tunnel change at depth 2 or more on the NT filter route, after the
+ * members' own handling (record 34 sections 3.2 and 3.9). An up is tried
+ * now and kept owed, keyed by the chained device's identity (the action's
+ * Slot), until every candidate is invalidated; a down, and a
+ * reconciliation (RESYNC), is tried once.
+ */
+static VOID cmChainAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
+{
+    PCM_REENUM r;
+    XHCI_TBT_CHAIN_OWED once;
+    ULONG missing;
+    ULONG k;
+    ULONG what;
+    BOOLEAN fresh;
+
+    r = &nhi->Reenum;
+    missing = XHCI_TBT_CHAIN_MISS_NONE;
+    what = (action->Depth << 16) | (action->Slot & 0xFFFFUL);
+    if (action->Kind != TBT_ICM_ACT_TUNNEL_UP) {
+        CmZero(&once, sizeof(once));
+        if (!cmChainTry(nhi, action, &once, &missing) &&
+            missing != XHCI_TBT_CHAIN_MISS_NONE) {
+            CmLogNote(nhi, "cm.chain.down.missed",
+                      (action->Kind << 28) | (missing << 24) | what);
+        }
+        return;
+    }
+    fresh = TRUE;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        if (r->ChainOwed[k].Used && r->ChainOwed[k].Key == action->Slot &&
+            r->ChainOwed[k].Serial == action->Serial) {
+            fresh = FALSE;
+        }
+    }
+    k = XhciTbtChainOwe(r->ChainOwed, CM_CHAIN_OWED_MAX, action->Slot,
+                        action->Serial, missing, cmNow(nhi));
+    if (k >= CM_CHAIN_OWED_MAX) {
+        /* Tried once, not kept. */
+        r->ChainOwedFull++;
+        CmLogNote(nhi, "cm.chain.owed-full", what);
+        CmZero(&once, sizeof(once));
+        (VOID)cmChainTry(nhi, action, &once, &missing);
+        return;
+    }
+    r->ChainAction[k] = *action;
+    if (cmChainTry(nhi, action, &r->ChainOwed[k], &missing)) {
+        r->ChainOwed[k].Used = 0;
+        return;
+    }
+    r->ChainOwed[k].Missing = missing;
+    if (fresh) {
+        r->ChainOwedCount++;
+    }
+    CmLogNote(nhi, "cm.chain.owed", (missing << 24) | what);
+}
+
+/*
+ * Each pass of the thread: every owed chain action tried again, cancelled
+ * when no longer live, dropped at 10 s (record 34 section 3.9).
+ */
+static VOID cmChainService(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PXHCI_TBT_CHAIN_OWED e;
+    ULONG missing;
+    ULONG k;
+    ULONG what;
+
+    r = &nhi->Reenum;
+    for (k = 0; k < CM_CHAIN_OWED_MAX; k++) {
+        e = &r->ChainOwed[k];
+        if (!e->Used) {
+            continue;
+        }
+        what = (r->ChainAction[k].Depth << 16) | (e->Key & 0xFFFFUL);
+        if (r->Route != CM_ROUTE_FILTER || r->Reenum == 0 ||
+            !CmNhiActionLive(nhi, &r->ChainAction[k])) {
+            e->Used = 0;
+            r->ChainCancelled++;
+            CmLogNote(nhi, "cm.chain.cancelled", what);
+            continue;
+        }
+        if (!cmTransport(nhi)) {
+            /* No bridge read while the host interface is lost; the loss
+             * drops the entry (CmReenumLossBegin). */
+            continue;
+        }
+        if (XhciTbtChainOwedExpired(e, cmNow(nhi))) {
+            /* The deadline first: an entry past it is never acted
+             * on, however late this pass runs. */
+            missing = e->Missing;
+            e->Used = 0;
+            if (missing == XHCI_TBT_CHAIN_MISS_FILTER) {
+                r->ChainNoFilter++;
+                CmLogNote(nhi, "cm.chain.nofilter", what);
+            } else {
+                r->ChainOwedExpired++;
+                CmLogNote(nhi, "cm.chain.owed-expired",
+                          (missing << 24) | what);
+            }
+            continue;
+        }
+        missing = e->Missing;
+        if (cmChainTry(nhi, &r->ChainAction[k], e, &missing)) {
+            e->Used = 0;
+            CmLogNote(nhi, "cm.chain.owed.done", what);
+            continue;
+        }
+        e->Missing = missing;
+    }
+}
+
 VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
     PCM_REENUM r;
@@ -3674,6 +3919,10 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
             r->PollTimeouts++;
         }
         cmReenumAll(nhi, FALSE, TRUE, action);
+        if (action->Depth >= 2 && r->Route == CM_ROUTE_FILTER) {
+            /* A chained tunnel: its chain port's bus (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     } else if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN) {
         /* The 9x statement decision's allowance counts from here (task
          * 43.18). */
@@ -3709,8 +3958,19 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
         /* The acknowledgement before the removal is per member: a member
          * with a statement pending is held, the rest go on (cmHeld). */
         cmReenumAll(nhi, TRUE, FALSE, action);
+        if (action->Depth >= 2 && r->Route == CM_ROUTE_FILTER) {
+            /* A chained tunnel down: its chain port's bus (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     } else {
         cmReenumAll(nhi, TRUE, TRUE, action);
+        if (r->Route == CM_ROUTE_FILTER &&
+            action->Why != TBT_ICM_WHY_RECOVERED &&
+            action->Why != TBT_ICM_WHY_UNAVAILABLE) {
+            /* A reconciliation may concern a chained device: its
+             * chain port's bus too (task 45.13). */
+            cmChainAction(nhi, action);
+        }
     }
     if (r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
         r->SafeEject != 0 && action->Kind != TBT_ICM_ACT_TUNNEL_DOWN) {
@@ -3745,6 +4005,8 @@ VOID CmReenumService(PCM_NHI nhi)
     /* The stor98 acknowledgement waits, stepped once per pass whatever
      * else the pass does (task 42-A.12). */
     CmNvlinkStep(nhi);
+    /* Owed chain actions, tried again each pass (task 45.13). */
+    cmChainService(nhi);
     /* The stor98 channel's per-pass work: on 98 SE and ME the rescan of a
      * bus a fresh exposure found silent; under the USB4 profile the
      * presence samples for the statement's anchor (record 22 section
@@ -4191,6 +4453,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     }
     r->Stops++;
     cmReleaseHeld(nhi, TRUE, 0xFFFFFFFFUL);
+    cmChainDropAll(nhi, "cm.chain.cancelled.stop");
     KeAcquireSpinLock(&cmRegLock, &irql);
     if (r->Listed) {
         RemoveEntryList(&r->Link);
@@ -4271,6 +4534,16 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.9x.gone-dropped", r->GoneDropped);
     CmLogNote(nhi, "cm.reenum.ejects", r->Ejects);
     CmLogNote(nhi, "cm.reenum.holds", r->Holds);
+    CmLogNote(nhi, "cm.chain.ports", r->ChainPorts);
+    CmLogNote(nhi, "cm.chain.invalidate", r->ChainInvalidate);
+    CmLogNote(nhi, "cm.chain.nofilter", r->ChainNoFilter);
+    CmLogNote(nhi, "cm.chain.owed", r->ChainOwedCount);
+    CmLogNote(nhi, "cm.chain.owed-expired", r->ChainOwedExpired);
+    CmLogNote(nhi, "cm.chain.owed-full", r->ChainOwedFull);
+    CmLogNote(nhi, "cm.chain.incomplete", r->ChainIncomplete);
+    CmLogNote(nhi, "cm.chain.port-unpowered", r->ChainUnpowered);
+    CmLogNote(nhi, "cm.chain.over", r->ChainOver);
+    CmLogNote(nhi, "cm.chain.cancelled", r->ChainCancelled);
     CmRegCounters(&attached, &over, &skipped, &refused, &passed);
     CmLogNote(nhi, "cm.reenum.child.attached", attached);
     CmLogNote(nhi, "cm.reenum.child.over", over);
@@ -4307,6 +4580,7 @@ VOID CmReenumStop(PCM_NHI nhi)
 VOID CmReenumLossBegin(PCM_NHI nhi)
 {
     nhi->Reenum.LossDrain = 1;
+    cmChainDropAll(nhi, "cm.chain.cancelled.loss");
     CmNvlinkDropLate(nhi);
     if (nhi->Reenum.Wk == NULL) {
         /* No 98 worker running (not started yet, or the set still being

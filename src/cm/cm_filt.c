@@ -192,6 +192,25 @@ static VOID cmFilterRelease(PCM_FILTER filter)
     }
 }
 
+/*
+ * Task 45.13 (design record 34 section 3.9): the chain action holds a
+ * child filter's removal reference across its IoInvalidateDeviceRelations
+ * on the PDO below, so the call is made before the filter's removal has
+ * begun and while that removal, if it comes, waits for the release. The
+ * caller takes it under the registration list's lock (the list's lock,
+ * then the filter's: no path takes them the other way round).
+ * IRQL: <= DISPATCH_LEVEL.
+ */
+BOOLEAN CmFilterTryHold(PCM_FILTER filter)
+{
+    return (BOOLEAN)NT_SUCCESS(cmFilterAcquire(filter));
+}
+
+VOID CmFilterUnhold(PCM_FILTER filter)
+{
+    cmFilterRelease(filter);
+}
+
 /* IRQL: <= DISPATCH_LEVEL (a completion routine). */
 static NTSTATUS cmFilterUsageDone(PDEVICE_OBJECT device, PIRP irp,
                                   PVOID context)

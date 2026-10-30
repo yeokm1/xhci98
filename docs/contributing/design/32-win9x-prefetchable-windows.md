@@ -1,6 +1,10 @@
 # Design Record 32 - Prefetchable Windows Above 4 GB Closed Before Windows 98 SE and ME Read Them
 
-Status: draft 11, 2026-10-28: `XHCIPFW.SYS` offered on the 32-bit
+Status: draft 12, 2026-10-29: section 11.5, new - task 45.9's reading (a filter in the PCI root bus's stack
+runs before the PCI driver reads the bridges at every start read on 8
+and 8.1; on 10 such a filter is never initialised and the start fails)
+and its design for 8 and 8.1, the owner's answers (Q10 to Q12)
+included. Draft 11, 2026-10-28: `XHCIPFW.SYS` offered on the 32-bit
 2000, XP, Vista and 7 only (the owner, after task 44.72's readings: from
 8 on its start and the PCI driver's read of the root bus are not
 ordered); on the 32-bit 8, 8.1 and 10 not offered, `/xhcipfw` refused,
@@ -898,7 +902,9 @@ that support (`/thunderbolt`) so that XHCIPFW is installed too; the
 readme says the same for a USB4 or Thunderbolt controller whose root
 port shows "This device cannot find enough free resources" (code 12).
 
-**The 32-bit 8, 8.1 and 10** (the owner, 2026-10-28; task 44.72): not
+**The 32-bit 8, 8.1 and 10** (the owner, 2026-10-28; task 44.72; from
+`3.4.0.0` 8 and 8.1 are offered again in the filter role of section
+11.5, the owner, 2026-10-29, and what follows holds for 10 alone): not
 offered, because there the step's start and the PCI driver's read of the
 root bus are not ordered (section 11.1). `inst_pfw_sys` gives them a kind
 of their own, `INST_PFW_SYS_GONE`: no box on the page and no console
@@ -984,6 +990,256 @@ removed at the uninstall) and for Vista and 7 still offered; legs of the
 window and the console on 10 and 8.1 x86 (no box, `/xhcipfw` refused,
 nothing placed) and on 7 x86 (the box shown and ticked with the
 Thunderbolt box), `runs/run-44.md` "44.72 (the owner's decision)".
+
+### 11.5 The 32-bit 8, 8.1 and 10: a filter in the PCI root bus's stack (task 45.9)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.9 (PFW8.1's reading and
+design, section 11.2's first alternative), and its code in `3.4.0.0`
+(the owner, 2026-10-29).
+
+#### 11.5.1 The reading
+
+A probe of this project's own (not tracked; `runs/run-45.md`, "45.9", has
+its hash, its install and every start): a PnP filter driver registered
+as **both** the upper and the lower filter of the root bus's devnode
+(`ACPI\PNP0A08\0`, the q35 board's PCI Express root complex, compatible
+id `*PNP0A03`), a boot-start service of group `PnP Filter`, which marks
+its `DriverEntry`, each `AddDevice` and its first `IRP_MN_START_DEVICE`
+in QEMU's configuration trace (three reads each of 00:00.0 at `F8h`,
+`F4h` and `F0h`) and runs this record's step (`pfw_scan.c`, inside
+`KeIpiGenericCall`) at that first start, before passing it down. On the
+4G-off layout with the ORICO at power-on, two processors, fast startup
+off, each start cold [emu]:
+
+| System | Starts | Order read at every start | Result |
+|---|---|---|---|
+| 8 x86 | 6 (4 read and write traces, 2 write traces) | `DriverEntry`, the lower filter's `AddDevice`, the upper filter's `AddDevice`, the upper filter's start (the step: 9 bridges closed), then the PCI driver's probe of the root port's window | the Start screen at all six; every ASM4242 bridge and both enclosure bridges problem 0 |
+| 8.1 x86 | 5 (3 read and write, 2 write) | the same, at the same trace lines as 8 | the desktop at all five; every bridge problem 0, only the NHI and QEMU's `fw_cfg` 28 |
+| 10 x86 (19041 base) | 2 with the filter in group `PnP Filter`, 1 in group `Core` (fresh overlay), 1 on the board without the USB4 model | **the filter's `DriverEntry` never entered** while the root bus devnode named it; the PCI driver probed the root port all the same (trace line 44 715) | no start: Windows' recovery ("Automatic Repair", "Diagnosing your PC") and, at the second start, the stop `INACCESSIBLE_BOOT_DEVICE`; the same image, as a boot driver no devnode named (the start before the filters were written), entered `DriverEntry` |
+
+The debug console shows the sequence the trace marks: the lower
+filter's `AddDevice` attached over the ACPI driver's object; three
+`IRP_MN_QUERY_INTERFACE` requests through the lower filter (the PCI
+driver's own `AddDevice` asking the ACPI driver below it); the upper
+filter's `AddDevice` attached over the PCI driver's object; then
+`IRP_MN_QUERY_LEGACY_BUS_INFORMATION`, `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`
+and `IRP_MN_START_DEVICE`, each to the upper filter first [read]. Where
+section 11.1's boot driver of `System Reserved` came after the PCI
+driver at three starts of four on 8 and one of six on 8.1 and 10, this
+filter came first at every start read, at the same trace lines each
+time [read].
+
+Why it is ordered [inf]: the PnP manager builds a devnode's whole stack
+- each lower filter's, the function driver's and each upper filter's
+`AddDevice` - before it sends that devnode `IRP_MN_START_DEVICE`, which
+reaches the upper filter first; a boot-start filter named by the devnode
+is initialised for that devnode when its stack is built; and the PCI
+driver reads the bridges below the root bus only when it enumerates the
+started bus. So the filter's place depends on the stack, not on the
+order of the boot drivers' groups, which is what varied from 8 on.
+
+#### 11.5.2 The design (the owner's answers of 2026-10-29: Q10 (a), Q11 (a), Q12 in `3.4.0.0`)
+
+`XHCIPFW.SYS` keeps its one image and gains a second role, chosen in
+`DriverEntry` by the system's version (`PfwNtRole`, pure, in
+`pfw_ntdec.c`, with host vectors):
+
+- **2000, XP, Vista and 7 (NT 5.0, 5.1, 6.0, 6.1)**: the entry role,
+  section 11.2's step at `DriverEntry`, group `System Reserved`,
+  unchanged.
+- **8 and 8.1 (NT 6.2 and 6.3, 32-bit)**: the filter role, below.
+- **Any other version** (10 among them, where it is not offered): neither
+  role; `DriverEntry` writes `XhciPfwSkipped` with the "not a system it
+  acts on" bit and returns, as a copy placed by hand on 10 did nothing
+  useful in time there (section 11.1).
+
+**The filter role.** `DriverEntry` copies its `RegistryPath` into a
+static buffer (the log's path, section 11.2's bound of 300 characters;
+longer, and the log is not written), points every major function at a
+pass-through routine and sets `AddDevice`, and returns; it writes
+nothing and touches no register. The service is an **upper filter of
+every PCI root bus devnode** (hardware or compatible id `*PNP0A03` or
+`*PNP0A08`).
+
+- **`AddDevice`** creates an unnamed device object, attaches it with
+  `IoAttachDeviceToDeviceStack`, copies the lower object's
+  `DeviceType`, `Characteristics` and the flags `DO_BUFFERED_IO`,
+  `DO_DIRECT_IO`, `DO_POWER_PAGABLE` and `DO_POWER_INRUSH`, and clears
+  `DO_DEVICE_INITIALIZING`, as the probe did. **It never fails**: if the
+  object cannot be created or attached it returns `STATUS_SUCCESS`
+  without attaching (a filter's failed `AddDevice` would fail the root
+  bus, which is the hazard below), and writes `XhciPfwSkipped` with the
+  "not attached" bit (bit 4) itself, there and then, at `PASSIVE_LEVEL`,
+  since a root bus it is not on sends it no start to log from. That root
+  bus's bridges are then not closed; no other root bus's step reaches
+  them (below).
+- **A remove lock** (`IO_REMOVE_LOCK`, `IoInitializeRemoveLockEx` at
+  `AddDevice`) guards every dispatch: each request acquires it before it
+  is passed down and releases it after the call down returns (a failed
+  acquisition completes the request with `STATUS_DELETE_PENDING`, a power
+  request after `PoStartNextPowerIrp`), so a power request racing the
+  removal never meets a detached object.
+- **Every request** is passed down untouched (`IoSkipCurrentIrpStackLocation`
+  and `IoCallDriver`); power requests through `PoStartNextPowerIrp`,
+  `IoSkipCurrentIrpStackLocation` and `PoCallDriver`. `IRP_MN_REMOVE_DEVICE`
+  is passed down first, then `IoReleaseRemoveLockAndWaitEx`, then the
+  object detached and deleted; `IRP_MN_SURPRISE_REMOVAL` is passed down
+  like any other request (the removal that follows it does the rest).
+- **`IRP_MN_DEVICE_USAGE_NOTIFICATION`** (a paging, dump or hibernation
+  file on a disk below this bus) follows the rule for a filter's
+  `DO_POWER_PAGABLE`: before it is passed down, the flag is set on this
+  object when the object above it is pageable or there is none above it;
+  it is then passed down synchronously (a completion routine signals an
+  event the dispatch waits on) and, on its return, the flag is cleared
+  when the lower object is no longer pageable, then the request is
+  completed with the lower driver's status.
+- **`IRP_MN_START_DEVICE`**: at the first one each instance receives (a
+  flag of that instance's), **before** it is passed down, the step runs
+  over **that root bus's own bus numbers** only - the bus number range of
+  the start's resources (`AllocatedResources`, the
+  `CmResourceTypeBusNumber` descriptor ACPI's `_CRS` gives a root bus) -
+  as section 11.2 runs it at `DriverEntry` over every bus: the same
+  decision (`PfwNtDecide`: Safe Mode, "late", the processors), the same
+  hold inside `KeIpiGenericCall`, the same log under the service's
+  `Parameters`, with `XhciPfwMode` and the new `XhciPfwRole` (1 entry, 2
+  filter, and `XhciPfwBuses`, the range scanned). It is called at
+  `PASSIVE_LEVEL` in the PnP manager's thread, as `DriverEntry` is. A
+  root bus's start comes before the PCI driver enumerates that bus, so
+  each filtered root bus's bridges are closed before they are read, and
+  no step ever writes a bridge of another root bus, which may already
+  have been read (a root bus not filtered: one added after the installer
+  ran, or one an interrupted install left without its entry, or one not
+  attached). The steps of several root buses run one after the other (a
+  synchronization event), the step's state being the driver's. A start
+  whose resources carry no bus number range runs nothing and logs the
+  "no range" bit (bit 5). Every later start of the same root bus (a
+  rebalance, a stop and start) passes down with nothing run.
+- **The "late" check** (section 11.2: the `SOFTWARE` hive not yet loaded)
+  stays, unchanged, the gate against a start long after the boot. That a
+  root bus's first start comes before that hive is loaded at every start
+  of 8 and 8.1 is read on the code's first legs (the probe did not read
+  it); a "late" bit at a cold start would mean the step does not run there
+  and is a defect of this design, not a pass.
+- **No unload routine**: the root bus's filter is never stopped while
+  Windows runs.
+- **Imports** added to the image: `IoCreateDevice`, `IoDeleteDevice`,
+  `IoAttachDeviceToDeviceStack`, `IoDetachDevice`, `IofCallDriver`,
+  `IofCompleteRequest`, `PoStartNextPowerIrp`, `PoCallDriver`,
+  `IoInitializeRemoveLockEx`, `IoAcquireRemoveLockEx`,
+  `IoReleaseRemoveLockEx`, `IoReleaseRemoveLockAndWaitEx`,
+  `KeInitializeEvent`, `KeSetEvent`, `KeWaitForSingleObject`;
+  `pfw_scan.c` gains `PfwRunBuses`, the step over a range of buses
+  (`PfwRun` is it over 0 to 255, unchanged for the VxD and the entry
+  role); each in the 2000, XP, Vista and
+  7 x86 kernels the import gate's `hlprx86` profile reads, so the one
+  image still loads on every system it is offered on.
+
+**The installer** (`inst_pfw_sys` gains the kind `INST_PFW_SYS_FILTER`
+for 6.2 and 6.3 x86; 10 keeps `INST_PFW_SYS_GONE`; the box, its default
+and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
+
+- **A name of its own.** The filter role is installed under a service,
+  two image names and a record of its own: the service `xhcipff`, the
+  images `xhcipff.sys` and `xhcipff2.sys` (the package's `XHCIPFW.SYS`
+  copied under them), the record `HKLM\Software\xhci98\XhciPfwFilter`.
+  `3.3.0.0`'s installer on 8 and 8.1 takes its kind as "not offered" and
+  removes a service `xhcipfw` whose image its record holds, without
+  touching any root bus's filters; under the entry role's names a filter
+  installation would then be left named by every root bus with its
+  image gone, and the next start would stop. Under names it does not
+  know, that installer (or its uninstall) leaves the filter role alone.
+- **Install**: section 11.2's image placement, ownership rules and
+  record, under the filter role's names; the service with `Group` `PnP
+  Filter` and `Start` 0; then, **last**, `xhcipff` appended to the
+  `UpperFilters` of every present devnode whose `HardwareID` or
+  `CompatibleIDs` holds `*PNP0A03` or `*PNP0A08`, through
+  `SetupDiSetDeviceRegistryProperty` (`SPDRP_UPPERFILTERS`), the other
+  filters kept in their order, a devnode already naming it left as it
+  is. No record of the devnodes is kept.
+- **The hazard, and the order of every change**: a root bus whose stack
+  names a filter that is not loaded does not start, and with it no disk:
+  Windows stops with `INACCESSIBLE_BOOT_DEVICE` (10's readings, section
+  11.5.1, show it). So while any devnode may name `xhcipff`, its service
+  is never set to `Start` 4 and its `ImagePath` never names an image not
+  written and compared:
+  - **an update** keeps the entries and the service on: the new image is
+    written under the other of the two names and compared, the record's
+    `Slot` and `Pending` set before its bytes as section 11.2 does, and
+    only then the service's values are written, `Start` 0 throughout and
+    `ImagePath` moved to the new image last; the earlier image is
+    deleted (at the next start, being in use). A run cut short at any
+    point leaves the service on the old image or the new, both loadable,
+    and every entry in, so the windows stay closed at the next start;
+  - **a removal** (the uninstall, the box unticked, the Thunderbolt
+    support removed) takes `xhcipff` out of **every** devnode with a root
+    bus id that names it, present or not (`DIGCF_ALLCLASSES` without
+    `DIGCF_PRESENT`), **first**, once the service's image is known to be
+    this installer's; then section 11.2's removal (`Start` 4, the service
+    key, the files, the record). An id list or the device list that
+    cannot be read, or an entry that cannot be taken out, stops it before
+    the service is touched (left at `Start` 0 and loadable), a step said.
+  Where the service or its image is not this installer's (section 11.2's
+  ownership), nothing of it and no entry is touched; a record that
+  cannot be read stops the run with a step said, as section 11.3's
+  removal does.
+- **One run at a time**: every change to `XHCIPFW.SYS` (both passes,
+  the service, the images and the root bus entries) is made under a
+  machine-wide lock of its own (`Global\XhciinstPfw`), each pass reading
+  the record and the service again under it, so two installer runs never
+  interleave an install's entries with another's removal.
+- **The installation it replaces**: an entry-role install of this
+  installer's on 8 or 8.1 (service `xhcipfw`, its record `XhciPfw`, left
+  by an earlier test install of `3.3.0.0`, unordered there) is removed by
+  its own names and record in a pass of its own, whatever the boxes,
+  before the filter role's run; it never had a root bus entry, and any
+  entry naming `xhcipfw` is taken out first all the same.
+- **10** (`INST_PFW_SYS_GONE`): as section 11.3, and the removal also
+  takes out first every root bus entry naming `xhcipfw`, present or not,
+  an entry left stopping the removal.
+- **Safe Mode** does not avoid a broken filter: the devnode names it in
+  every mode. The installer's readme gives the recovery in its
+  troubleshooting part: if 8 or 8.1 stops at start with
+  `INACCESSIBLE_BOOT_DEVICE` after this package, start Windows' recovery
+  environment, open the registry editor, load the system's `SYSTEM` hive
+  (`Windows\System32\config\SYSTEM`), read `Select\Default` in it for
+  the control set the next start uses (`ControlSet00n`), search that
+  set's `Enum` key for `xhcipff` (Find, values and data), and remove the
+  line `xhcipff` from every `UpperFilters` that has it, keeping any other
+  line; do not set the `xhcipff` service to disabled while an entry is
+  there, which stops the start the same way.
+- **Fast startup** on 8 and 8.1 resumes the kernel without a root bus
+  start, as section 11.2 already says for the boot driver: the step does
+  not run then, and the windows are those Windows assigned at the full
+  start before it.
+
+#### 11.5.3 Verification
+
+- **Host vectors**: `PfwNtRole` for every version; `PfwRunBuses` over a
+  range leaving a bridge outside it untouched; `PfwNtDecide` with the
+  filter role; `inst_pfw_sys` for 6.2 and 6.3 (the new kind), `inst_pfw_box`
+  and `inst_pfw_mode` for it; the multi-string append (empty, one other
+  filter, already present, too long) and the root bus id test.
+- **Legs** on the 4G-off layout with the ORICO at power-on, 8 and 8.1
+  x86, from the package: the install (the box, the service's group, the
+  entry on `ACPI\PNP0A08\0`, the record), three cold starts each (the
+  trace order: the step's close before the PCI driver's probe; no "late"
+  bit; the bridges at problem 0), the update over itself (the entries kept,
+  the image's slot moved), the uninstall (entries first, then
+  the service and the files; a cold start after it), and the recovery
+  path (the entry left with the image removed by hand: the stop; the
+  entry removed from the recovery environment's registry editor: the
+  start); Safe Mode (loaded, nothing written, the "safe mode" bit). On 10
+  x86: the box not shown, `/xhcipfw` refused, nothing placed, no entry on
+  any root bus. 2000 to 7: the entry role unchanged (host vectors; the
+  bench).
+
+#### 11.5.4 The owner's questions (answered 2026-10-29)
+
+- **Q10 (a)**: the filter role on 8 and 8.1 only; 2000 to 7 keep section
+  11.2's place, which read in order at every start there; 10 not served.
+- **Q11 (a)**: the image boot-critical on 8 and 8.1, accepted, with the
+  order of changes and the readme's recovery above.
+- **Q12**: coded in `3.4.0.0` once this section converged.
 
 ## Sources
 

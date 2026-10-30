@@ -811,4 +811,114 @@ ULONG XhciTbtPollAbandon(PXHCI_TBT_POLL poll, ULONG nowMs);
  */
 ULONG XhciTbtPollWait(const XHCI_TBT_POLL *poll, ULONG nowMs);
 
+/* ---- chain ports (design record 34 sections 3.1 and 3.9, task 45.13) --- */
+
+/*
+ * A chain port is a PCI-to-PCI bridge below a tunnel-port member that a
+ * chained device's tunnel lands on: a switch Downstream Port (Device/Port
+ * Type 6) with Slot Implemented and Slot Capabilities Hot-Plug Capable,
+ * inside the member's secondary to subordinate range. The walk records at
+ * most XHCI_TBT_CHAIN_MAX of them per member and never descends below one
+ * (one level of chain ports, record 34 section 11). A bridge level is one
+ * bridge between the member and a function: the first device's upstream
+ * port, on the member's secondary bus, is at depth 1, its downstream ports
+ * at depth 2; the walk goes no deeper than XHCI_TBT_CHAIN_LEVELS.
+ */
+#define XHCI_TBT_CHAIN_MAX          4UL
+#define XHCI_TBT_CHAIN_LEVELS       6UL     /* XHCI_TBT_BRNUM_MAX_DEPTH     */
+#define XHCI_TBT_CHAIN_STACK        64UL    /* buses waiting to be walked    */
+
+/* Slot Capabilities Power Controller Present (bit 1); Slot Control, the
+ * low half of the dword at XHCI_TBT_PCIE_SLOTSTA, Power Controller Control
+ * (bit 10, 1 = off). PCI Express Base 4.0, 7.5.3.9 and 7.5.3.10. */
+#define XHCI_TBT_SLOTCAP_PCP        0x00000002UL
+#define XHCI_TBT_SLOTCTL_PCC_OFF    0x0400UL
+
+/* XhciTbtChainPorts' outcome. */
+#define XHCI_TBT_CHAIN_COMPLETE     0UL
+#define XHCI_TBT_CHAIN_INCOMPLETE   1UL
+#define XHCI_TBT_CHAIN_BAD_PARAM    2UL
+
+/* Why a walk is incomplete (XHCI_TBT_CHAIN_SET.Why). */
+#define XHCI_TBT_CHAIN_WHY_NONE     0UL
+#define XHCI_TBT_CHAIN_WHY_MEMBER   1UL     /* the member's header unread,
+                                               all ones or unnumbered       */
+#define XHCI_TBT_CHAIN_WHY_READ     2UL     /* an access failed             */
+#define XHCI_TBT_CHAIN_WHY_RETRY    3UL     /* a vendor read 0001h          */
+#define XHCI_TBT_CHAIN_WHY_CAP      4UL     /* a capability walk failed or
+                                               found the function gone      */
+#define XHCI_TBT_CHAIN_WHY_STACK    5UL     /* more buses than the walk holds */
+
+typedef struct _XHCI_TBT_CHAIN_PORT {
+    ULONG Bdf;          /* its location                                     */
+    ULONG Id;           /* its identity dword (vendor 15:0, device 31:16)   */
+    ULONG Secondary;    /* its secondary bus at the walk                    */
+    ULONG Member;       /* the member's index the caller passed             */
+    ULONG Depth;        /* its bridge level below the member                */
+    ULONG Unpowered;    /* 1: a Power Controller reading power off          */
+} XHCI_TBT_CHAIN_PORT, *PXHCI_TBT_CHAIN_PORT;
+
+typedef struct _XHCI_TBT_CHAIN_SET {
+    XHCI_TBT_CHAIN_PORT Port[XHCI_TBT_CHAIN_MAX];
+    ULONG Count;        /* candidates recorded                              */
+    ULONG Over;         /* candidates found past XHCI_TBT_CHAIN_MAX         */
+    ULONG Incomplete;   /* 1 when the walk is incomplete                    */
+    ULONG Why;          /* XHCI_TBT_CHAIN_WHY_*                             */
+    ULONG FailBdf;      /* where it became incomplete, or XHCI_TBT_NO_BDF   */
+} XHCI_TBT_CHAIN_SET, *PXHCI_TBT_CHAIN_SET;
+
+/*
+ * Walks the member at `memberBdf` (its index `member` is copied into each
+ * candidate) and fills *out (emptied first). Returns
+ * XHCI_TBT_CHAIN_COMPLETE, XHCI_TBT_CHAIN_INCOMPLETE (out->Why; the
+ * candidates recorded before are kept but must not be acted on) or
+ * XHCI_TBT_CHAIN_BAD_PARAM. Reads only.
+ */
+ULONG XhciTbtChainPorts(PXHCI_TBT_CFG io, ULONG memberBdf, ULONG member,
+                        PXHCI_TBT_CHAIN_SET out);
+
+/*
+ * An owed chain action (record 34 sections 3.1 and 3.9): keyed by the
+ * connection manager's own identity of the chained device (the firmware
+ * connection manager's table entry; the software one's port), stamped with
+ * the tunnel's serial and the time it was first owed, with the candidates
+ * already invalidated for it. The caller keeps the action itself beside it.
+ */
+#define XHCI_TBT_CHAIN_OWED_MS      10000UL
+
+/* What the last try lacked (XHCI_TBT_CHAIN_OWED.Missing). */
+#define XHCI_TBT_CHAIN_MISS_NONE    0UL     /* no candidate under any member */
+#define XHCI_TBT_CHAIN_MISS_WALK    1UL     /* a walk was incomplete         */
+#define XHCI_TBT_CHAIN_MISS_FILTER  2UL     /* a candidate with no child
+                                               filter yet                    */
+
+typedef struct _XHCI_TBT_CHAIN_OWED {
+    ULONG Used;
+    ULONG Key;          /* the chained device's identity                    */
+    ULONG Serial;       /* its tunnel's                                     */
+    ULONG Since;        /* the caller's milliseconds when first owed        */
+    ULONG Missing;      /* XHCI_TBT_CHAIN_MISS_*                            */
+    ULONG DoneCount;    /* candidates invalidated for it so far ...         */
+    ULONG Done[XHCI_TBT_CHAIN_MAX * XHCI_TBT_MAX_TUNNELS];  /* ... where    */
+} XHCI_TBT_CHAIN_OWED, *PXHCI_TBT_CHAIN_OWED;
+
+/*
+ * Keeps an action owed in owed[0 .. count - 1]: the entry of the same key
+ * is kept when its serial is the same (Missing updated; Since and the done
+ * candidates kept) and restarted when it differs (a new tunnel: Since now,
+ * nothing done); else the first free entry is taken. Returns the entry's
+ * index, or count when every entry holds another key (nothing kept).
+ */
+ULONG XhciTbtChainOwe(PXHCI_TBT_CHAIN_OWED owed, ULONG count, ULONG key,
+                      ULONG serial, ULONG missing, ULONG nowMs);
+
+/* 1 when the candidate at `bdf` was already invalidated for the entry. */
+ULONG XhciTbtChainDone(const XHCI_TBT_CHAIN_OWED *e, ULONG bdf);
+
+/* Records the candidate at `bdf` invalidated for the entry (once). */
+VOID XhciTbtChainMark(PXHCI_TBT_CHAIN_OWED e, ULONG bdf);
+
+/* 1 when the entry has been owed for XHCI_TBT_CHAIN_OWED_MS or more. */
+ULONG XhciTbtChainOwedExpired(const XHCI_TBT_CHAIN_OWED *e, ULONG nowMs);
+
 #endif /* TBT_TOPO_H */

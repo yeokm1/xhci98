@@ -1721,6 +1721,766 @@ above removed the dock cleanly, the closure having been recorded before
 the proof was asked; the reverse order keeps the pin (record 17 section
 4.13.6).
 
+## 45.38 98 SE's driver-disk prompt at a second xHCI controller (2026-10-30)
+
+The finding above is task 45.38. Commit `a01f9c88` (reviewed and revised):
+a controller's job for an INF that an earlier controller's job of the
+same run installed (outcome installed, or installed with a restart) now
+passes `nocopy` on its `FLAGS` line, and the helper sets `DI_NOFILECOPY`
+for it. The first copy has put the same files in place, or left them
+for `WININIT` at the restart it already asks for. The root hub, the
+hubs, the composite entries and Stor98's devices neither set nor take
+the mark. Design record 27 sections 4.1, 5.3, 6 and H4 (draft 17).
+Why setupx looks at the Windows source for the second copy was not
+read: the prompt offered `C:\WIN98`, the value the first job had
+restored `LDID_SRCPATH` to, and setupx is one instance for every
+process. Keeping `LDID_SRCPATH` set for the whole run was the other
+remedy weighed. It was not taken: it would leave shared setupx state
+changed between helper jobs, while other installs may run, and it needs
+a restore on every way out.
+
+**The legs** (gated build 5, its test cut, fresh overlays with two QEMU
+xHCI controllers, development host A, 2026-10-30): the window install
+with its default rows on 98 SE (`g98`, the `-nonfree` download) and ME
+(`gme`, the `-free` download). On both the first controller's job read
+`FLAGS quiet`, the second's `FLAGS quiet nocopy` with the log line
+"helper: nocopy: a controller's job of this run copied xhci98.inf's
+files", both "installed-restart", and no prompt. After the cold start
+both systems had two xHCI98 root hubs, one under each controller. On
+98 SE, an update with `/force /thunderbolt /stor98` over `3.3.0.0`
+behind the ASM4242 model (task 45.36's `u1`) reinstalled both
+controllers (the ASM4242's own and QEMU's) with no prompt, where the
+same machine's `3.3.0.0` install had prompted. The `3.3.0.0` installs of
+the same layout on ME (`hm1`) did not prompt. The QEMU exit while the
+prompt was up (45.10's leg) did not recur in the four 98 SE installs
+that prompted (`w98x`, `w9w`, and the `3.3.0.0` installs on `h1` and
+`h2`). **Pass.**
+
+## 45.36 98 SE and ME stopping at the first start after an update over `3.3.0.0`: the rate and the stop (2026-10-30, partial)
+
+No code. Development host A, QEMU q35 with the ASM4242 model and the
+ORICO enclosure at power-on (as 45.27's legs), gated build 5's test cut
+as "this build".
+
+**The machines.** Fresh 98 SE (`h1`, `h2`) and ME (`hm1`) overlays:
+`3.3.0.0` installed with `/thunderbolt /stor98` (exit 3; on 98 SE the
+ASM4242's controller asked for the xhci98 disk, task 45.38, answered
+`C:\XHCI98`), one cold start to the desktop, then shut down and kept as
+read-only bases. Stor98 was bound to the tunnel's NVMe drive ("Stor98
+Storage Controller for NVMe SSDs" on `PCI\VEN_1B36&DEV_0010`), unlike
+45.27's guests, where it never was. Each trial is an overlay of a base:
+a start, `INSTALL`'s console with `/force /thunderbolt /stor98` from the
+cut (the release build, or the debug build), the `WININIT.INI` read
+(every time `[rename]` with `xhci98.sys=xhci98.tmp`), a shutdown, and
+the first start watched for nine minutes.
+
+**The rate.** 98 SE: six trials (`u1` to `u6`), five reached the
+desktop and one (`u5`, the release build) stopped about 30 seconds into
+its first start with "A fatal exception 0E has occurred at
+019F:BFF72170. The current application will be terminated."; after a
+key the screen stayed an empty desktop with no taskbar for minutes,
+which is how 45.27's black screen would look if its stop screen went
+unseen. ME: two trials (`um3`, `um4`) reached the desktop; a third
+overlay of the ME base (`um1`) stopped at its first start, before any
+update, with "Error: 0E : 01A7 : BFF62170" (ME0E.1's text and address,
+the 44.20 one) and then a grey screen.
+
+**The stop.** The code at `0xBFF72170` (read from the stopped guest's
+memory, `memsave`, and disassembled) is `pop ds; pop es; pop fs; pop gs;
+popa; popf; push -1; push 0x2A0009; call ...`: a register-frame restore
+followed by a VxD call into VWIN32 (device `0x2A`, service 9), the end of
+a ring-3 return path in the shared arena. The page fault is on the first
+`pop`: the thread's stack page was not present when the saved frame was
+popped. ME's stop is at the same offset, `0x2170`, of the same region
+(`BFF62170`), so 45.36's stop and ME0E.1 look to be one fault. Neither
+the release nor the debug build wrote anything to the debug port (the
+debug console file stayed empty), and none of this package's 9x drivers
+queues a user APC or calls into ring 3 (no `_VWIN32_QueueUserApc`,
+`_SHELL_CallAtAppyTime` or `_VWIN32_SetWin32Event` in the tree). Who
+queued the frame is not read.
+
+**Owed.** Which thread and frame: a gdb stub with a breakpoint on the
+fault (the VMM's page-fault path for `0x2170` with a non-present stack
+page) on more trials, and the same layout without the enclosure and
+without Stor98 to see whether either is needed; then the cause, and a
+fix where it is this package's. **Partial.**
+
+## 45.9 - The Prefetchable Windows on the 32-bit 8, 8.1 and 10: a Filter in the PCI Root Bus's Stack, Read (2026-10-29)
+
+The task's reading (roadmap-usb4 Phase 45, PFW8.1's first half): does a
+step in the PCI root bus's stack act before the PCI driver reads the
+bridges, at every start read? The design that follows from it is design
+record 32 section 11.5, **a draft not yet reviewed** (paused 2026-10-29).
+
+### The vehicle
+
+Development host A; q35, the launcher and emulator of "44.72"
+(`bin\asm4242-20261026-4goff`, `qemu-system-x86_64.exe` `08D49470...`),
+the 4G-off layout with the ORICO at power-on, `qemu64` processors, two
+per guest, 2 GB; fresh overlays of the clean q35 bases of 8 x86
+(`b8e091bd`), 8.1 x86 (`9714c3d8`) and 10 x86 (`ac361c39`). A probe of
+this project's own, not tracked: `pfwflt.sys` (SHA-256 `37ffe267...0a8a`),
+built with the Windows 2000 DDK from a scratch copy of `src\pfw\pfw_scan.c`
+and a PnP filter of about 200 lines: it marks its `DriverEntry`, each
+`AddDevice` and its first `IRP_MN_START_DEVICE` in the configuration
+trace (three reads each of 00:00.0 at `F8h`, `F4h` and `F0h`) and on the
+debug console, and runs record 32's step inside `KeIpiGenericCall` at
+that first start before passing it down; every other request passes
+down. Installed on the board without the USB4 model by a batch run
+elevated: the image to `system32\drivers\pfwflt.sys`, the service
+(Type 1, `Start` 0, `ErrorControl` 0, `Group` `PnP Filter`; the batch's
+`ImagePath` line did not take, so the default path served), `powercfg /h
+off`, and `pfwflt` written as both `UpperFilters` and `LowerFilters` of
+`Enum\ACPI\PNP0A08\0` by a task run as SYSTEM. Then cold starts on the
+4G-off layout, "RW" a read and write trace, "W" writes only; the
+problem codes by `wmic` to COM1 at the desktop.
+
+### Readings
+
+| System | Start | Trace | `DriverEntry` | `AddDevice` (lower, upper) | start | step's close of the root port | PCI driver's probe of the root port | Result |
+|---|---|---|---|---|---|---|---|---|
+| 8 | a, b, c, d | RW | 14 457 | 14 460, 14 463 | 14 466 | 31 046 | 31 599 | the Start screen; every bridge 0; NVMe, NHI, `fw_cfg` 28 |
+| 8 | e, f | W | - | - | - | 446 | 511 | the same |
+| 8.1 | a, b, c | RW | 14 457 | 14 460, 14 463 | 14 466 | 31 046 | 31 600 | the desktop; every bridge 0; NHI, `fw_cfg` 28 |
+| 8.1 | d, e | W | - | - | - | 446 | 511 | the same |
+| 10 (`g10`) | a | RW | none | none | none | none | 44 715 | "Automatic Repair: Your PC did not start correctly" |
+| 10 (`g10`) | b | RW | none | none | none | none | - | stop `INACCESSIBLE_BOOT_DEVICE` (screenshot) |
+| 10 (`g10c`, `Group` `Core`) | a | RW | none | - | - | - | - | "Diagnosing your PC" |
+| 10 (`g10c`) | the board without the USB4 model | - | none | - | - | - | - | "Preparing Automatic Repair" (after the failed starts) |
+
+On 8 and 8.1 the debug console showed the same sequence at every start:
+`DriverEntry`; `AddDevice` 1 (attached over the ACPI driver's object:
+the lower filter); three `IRP_MN_QUERY_INTERFACE` through it (the PCI
+driver's own `AddDevice`); `AddDevice` 2 (over the PCI driver's object:
+the upper filter); `IRP_MN_QUERY_LEGACY_BUS_INFORMATION`,
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS` and `IRP_MN_START_DEVICE`, each to
+the upper filter first; the step's line `result/functions/closed/refused`
+in hex, `1 12 9 0` (18 functions, nine bridges closed). On 10 the image had entered
+`DriverEntry` at the start before the filters were written (`g10`'s
+install start, a plain boot driver of group `PnP Filter`, "pfwflt
+DriverEntry" and no `AddDevice`); with the root bus naming it, it was
+never entered and the start failed.
+
+### What it says
+
+- **8 and 8.1**: a filter in the root bus's stack runs before the PCI
+  driver reads the bridges at every start read (six on 8, five on 8.1),
+  at the same trace lines every time, where "44.72"'s boot driver of
+  `System Reserved` came after the PCI driver at three of four starts on
+  8 and one of six on 8.1 [read]. The step there closes the windows and
+  8, which does not start without it ("44.49"), starts [read].
+- **10**: a boot-start filter named by the root bus devnode is not
+  initialised and the root bus does not start: Windows stops with
+  `INACCESSIBLE_BOOT_DEVICE` or goes to its recovery, in group `PnP
+  Filter` and in group `Core` alike [read]; why is not read.
+- **The hazard is real**: a root bus whose stack names a filter that is
+  not loaded stops Windows at start (10's readings) [read]; the design
+  makes the removal take the filter out of `UpperFilters` first.
+
+So the step can act in time on 8 and 8.1 in the root bus's stack; on 10
+it cannot be placed there as read. The owner then chose the filter role
+on 8 and 8.1, coded in this release; the design, the code and its legs
+are "45.9 (continued)" below.
+
+Evidence: `E:\xhci98-vm\p45\w45-read\` (`g8`, `g81`, `g10`, `g10c`:
+`trace-*.log`, `debugcon-*.log`, `serial-*.log`, `leg-*.txt`,
+screenshots; `xflt`, `xfltc` the batches and the probe image;
+`pids.txt`, `STATE.md`); the probe's source in
+`E:\xhci98-scratch\p45-w45-read\flt`.
+
+## 45.9 (continued) - `XHCIPFW.SYS` as a Root-Bus Filter on the 32-bit 8 and 8.1: the Code and Its Legs (2026-10-30)
+
+The owner's answers of 2026-10-29 (record 32 section 11.5.4): the filter
+role on 8 and 8.1 only, the image boot-critical there accepted with the
+order of changes and the readme's recovery, coded in `3.4.0.0`. Record 32
+section 11.5.2 is the design (reviewed and revised over six rounds, the
+last with no findings); the code is commits `e409d8c7`, `8cbed23c`,
+`6fb1a773`, `106286a7` and `1c0a48d9` (reviewed and revised, the last
+round with no material findings): the driver's two roles by version, the
+filter role's step over its own root bus's bus range at that bus's first
+start, the installer's filter role under names of its own (service
+`xhcipff`, images `xhcipff.sys` and `xhcipff2.sys`, record
+`HKLM\Software\xhci98\XhciPfwFilter`) so that `3.3.0.0`'s installer
+cannot strand it, the entries taken out of every root bus before any
+removal and an update that keeps them, a machine-wide lock, the readme's
+recovery; host vectors (`test_pfw`, `test_inst`).
+
+### The vehicle
+
+Development host A; the gated `release` builds x86 and amd64 at
+`1c0a48d9` (`BUILD + GATES PASSED`, both), a TEST cut of the x86 half
+(`make-release.ps1 -Flavor release -Arch x86 -TestLabel`, zip SHA-256
+`51d5ba1d...0091`, `XHCIPFW.SYS` `c38e2e02...a8a`, `XHCIINST.EXE`
+`11887345...bf65`). q35, the launcher and emulator of "45.9" above; fresh
+overlays of the clean 8 x86, 8.1 x86 and 10 x86 bases, two processors,
+2 GB. The install `XHCIINST.EXE /dir release-x86 /yes /nopause
+/thunderbolt` from an elevated prompt on the board without the USB4 model
+(each "Windows can't verify the publisher" box answered "Install this
+driver software anyway"); then cold starts on the 4G-off layout with the
+ORICO at power-on, "RW" a read and write trace, "W" writes only; the
+registry, the filters and the problem codes read by a batch to COM1.
+
+### Readings
+
+| System | Step | Result |
+|---|---|---|
+| 8 | install | exit 3; service `xhcipff` (Type 1, `Start` 0, `ErrorControl` 0, `Group` `PnP Filter`, `ImagePath` `System32\DRIVERS\xhcipff.sys`); `UpperFilters` `xhcipff` on `ACPI\PNP0A08\0` |
+| 8 | cold starts a, b (RW), c (W) | the step's close of the root port before the PCI driver's probe at every start (trace lines 31 034 against 31 584; c 446 against 511); the Start screen; `XhciPfwRole` 2, `XhciPfwMode` 2 (inside `KeIpiGenericCall`), `XhciPfwBuses` 0 to FFh, `XhciPfwClosed` 9, `XhciPfwSkipped` 0 (no "late" bit), the hold 70, 78 and 30 ms of TCG time; every ASM4242 and enclosure bridge at problem 0 (only the NVMe, with no driver on 8, and `fw_cfg` at 28) |
+| 8 | the installer again (update over itself, 4G-off) | exit 3; the entry and the service kept as they were; the step closed 9 at that start |
+| 8 | the image deleted by hand, the entry left | the start stops: "Automatic Repair: Windows couldn't load correctly" offering System Restore; System Restore returned a working start, the package's registry rolled back to before its install (a restore point from before it [inf]; Startup Repair's log: root cause "unspecified changes to system configuration", repair action System Restore) |
+| 8 | install again, then `/uninstall` | exit 3 each; after the uninstall no `xhcipff` service, no entry, no image; a cold start reached the Start screen |
+| 8 | install again, the image deleted, the repair's Cancel | the start stopped again and stayed at the logo; the readme's manual route (the entry removed from the recovery environment's registry editor) was not driven |
+| 8.1 | install | exit 3; the same service, group and entry |
+| 8.1 | cold starts a, b (RW), c (W) | close before probe at every start (31 034 against 31 585; 446 against 511); the desktop; `XhciPfwRole` 2, `XhciPfwClosed` 9, `XhciPfwSkipped` 0; only `fw_cfg` at 28 |
+| 8.1 | update over itself (4G-off), `/uninstall`, a cold start | exit 3, the entry kept; exit 3, "XHCIPFW.SYS is no longer registered", no entry; the desktop |
+| 10 | `/xhcipfw` | exit 1, "REFUSED: /xhcipfw: XHCIPFW.SYS cannot start in time on Windows 10.", nothing changed |
+| 10 | the install without it | exit 3; no `xhcipff` or `xhcipfw` service, no entry on any root bus, no image |
+
+### What it says
+
+- On 8 and 8.1 the filter role closes the windows before the PCI driver
+  reads them at every start read (three each), with no "late" bit, and
+  both systems start with every bridge behind the ASM4242 at problem 0
+  [read].
+- The update over itself keeps the entries and the service; the
+  uninstall takes the entry out and removes the service and the image,
+  and the system starts after it [read].
+- A root bus naming the filter with its image gone stops the start, as
+  the design says; Windows' own System Restore recovered it [read]; the
+  readme's manual route is owed (a recovery-environment leg).
+- On 10 nothing is placed and `/xhcipfw` is refused [read].
+
+Left: the readme's manual recovery route in the recovery environment;
+an update from one image to another (only the same release over itself
+was read); a two-processor hold's length on hardware and the hardware
+bench (45-E). The task stays unticked for the coordinator to decide.
+
+Evidence: `E:\xhci98-vm\p45\w45-read\` (`h8`, `h81`, `h10`:
+`serial-*.log`, `trace-*.log`, `leg-*.txt`, screenshots; `xfl` the
+batches and the cut; `pids.txt`, `STATE.md`); the builds' logs in
+`E:\xhci98-scratch\p45-w45-read\build2-x86.log` and `build2-amd64.log`.
+
+## 45.10 - Tunnelled NVMe Speed on 98 SE and ME, the Emulator Readings (2026-10-29)
+
+Design record 30 section 13.7's readings on a q35 98 SE guest: two
+threads at Stor98, the per-page mapping cost aligned against scattered,
+and the request sizes reaching Stor98 at 4 and 8 MiB. Every figure here
+is TCG's and compares within this table only (record 30 section 13.4).
+
+### The vehicle
+
+Development host A; q35, `launch-q35.ps1`'s machine (`-Usb4 asm4242
+-EncAtBoot`: the ASM4242 model with the ORICO and its 128 MiB FAT test
+disk tunnelled at power-on), `pentium3`, one processor, 512 MB; a fresh
+overlay of the clean q35 98 SE base (`ab1d4d65`), its bridge wizards
+answered. The package: the x86 `release` gated build at `1765b18c`
+(`BUILD + GATES PASSED`, this tree's 3.3.0.0 version stamp), cut as a
+TEST upload set (`make-release.ps1 -Flavor release -Arch x86
+-TestLabel`, zip SHA-256 `463564e8...24e0`), installed with `XHCIINST.EXE
+/dir release-x86 /yes /nopause /thunderbolt /stor98 /s98vsd` (exit 3),
+then a shut-down and cold start; the drive is E: on Stor98 3.3.0.0 (the
+Windows 98 and ME build) with `S98VSD.VXD`. XHCIPERF of the same build
+(SHA-256 `cf6b4a3d...25b3`), run from a batch by command line, 48 MiB
+test file (the disk's free space allows no more), unbuffered, the random
+fixed pattern, write-through off; each report with its Stor98 pages sent
+to COM1.
+
+Found on the way (outside this task, reported to the coordinator): the
+install's helper asked twice for "the disk labeled 'xhci98 xHCI Host
+Controller Disk'" (the file `xhci98.sys`, "Copy files from" offering
+`C:\WIN98`) while installing the second xHCI controller; pointing it at
+`C:\XHCI98` let the install finish. At the first attempt, on another
+fresh overlay, the guest's QEMU process ended by itself while that
+prompt stood; that overlay was discarded.
+
+### Readings
+
+R1, the `seqmax` preset (three passes of 5 s, best shown), aligned
+buffer:
+
+| Test | Write MB/s | Read MB/s | At Stor98 (read) |
+|---|---|---|---|
+| 512 KiB, 1 thread | 229.7 | 216.7 | one command a request, at most 1 at the drive |
+| 1 MiB, 1 thread | 234.6 | 249.8 | two 512 KiB commands a request (the emulator's MDTS), at most 2 |
+| 2 MiB, 1 thread | 241.0 | 234.4 | four 512 KiB commands, at most 3 to 4 |
+| 8 MiB, 1 thread | 104.6 | 107.6 | **63 KiB pieces**: 8450 requests "of 63 KiB" for 65 reads, every one a scatter/gather list and double-buffered by IOS; "Largest request granted: 2048 KiB" |
+| 1 MiB, 2 threads | 248.5 | 218.6 | at most 2 at the drive |
+
+R2, 1 MiB requests at two and four threads (three passes of 5 s):
+
+| Threads | Write MB/s | Read MB/s | Most commands at the drive at once |
+|---|---|---|---|
+| 2 | 210.6 | 209.6 | 2 (write and read) |
+| 4 | 183.9 | 205.9 | 2 (write and read) |
+
+R3 and R4, the `sweep` preset 64 KiB to 8 MiB at one thread, read
+column (write in brackets), aligned against scattered:
+
+| Size | Aligned MB/s | Scattered MB/s | Scattered at Stor98 |
+|---|---|---|---|
+| 64 KiB | 60.0 (67.9) | 34.0 (62.4) | |
+| 128 KiB | 109.3 (93.0) | 64.5 (67.7) | |
+| 256 KiB | 167.2 (120.7) | 53.8 (67.3) | |
+| 512 KiB | 171.9 (172.2) | 60.7 (73.9) | |
+| 1 MiB | 171.8 (170.3) | 67.3 (71.6) | 768 scatter/gather lists for 48 reads, each below 63 KiB; at most 1 at the drive |
+| 2 MiB | 215.9 (202.0) | 62.9 (84.5) | 768 lists below 63 KiB for 24 reads; at most 1 |
+| 4 MiB | 85.3 (83.2) | 67.7 (78.9) | |
+| 8 MiB | 80.0 (82.4) | 67.7 (76.9) | |
+
+At 4 and 8 MiB in R3, aligned, Stor98 received 779 requests "of 63 KiB",
+1 "below 63 KiB" and 11 (4 MiB) or 5 (8 MiB) "below 4 KiB" for 12 reads
+of 4 MiB and for 6 of 8 MiB, every one a scatter/gather list
+double-buffered by IOS. With the scattered buffer (R4) the requests at 1
+MiB and above arrived in the "below 63 KiB" class, not double-buffered.
+
+### What it says, for the changes C1 to C5 (record 30 section 13.6)
+
+- **Two threads at Stor98** (section 13.3 item 2): two and four threads
+  never put more than two commands at the drive, which is what one
+  1 MiB request's two 512 KiB children already do at one thread [read];
+  that two threads' requests did not overlap at Stor98 is an inference
+  from that depth, the pages carrying no request identities [inf]. The
+  rates moved little and both ways (R1's write 234.6 at one thread, 248.5
+  at two; R2's 210.6 and 183.9 at two and four) [read]: threads showed no
+  clear gain on 98 SE in the emulator.
+- **The request sizes at 4 and 8 MiB** (item 4): with the aligned
+  buffer, requests above 2 MiB never reached Stor98 whole: they arrived
+  as 63 KiB scatter/gather pieces, each double-buffered, at about 80 to
+  108 MB/s against 202 to 241 MB/s at 2 MiB (R1 and R3) [read]. Stor98's
+  granted maximum is 2048 KiB, so the cut is IOS's above that maximum
+  (record 30 section 1.3) [inf]. Whether a larger 9x maximum (C4, with
+  this layer's room raised) would let them through whole is not shown,
+  every run having the 2048 KiB maximum [inf]. C4 stays planned, decided
+  by the bench's B4 rows.
+- **The per-page mapping cost, aligned against scattered** (item 3,
+  C2): the scattered buffer did not reach Stor98 as a large request at
+  all: at 1 and 2 MiB it arrived as scatter/gather lists below 63 KiB
+  each (16 a 1 MiB request), one command at a time, at about a third of
+  the aligned rate [read]. So the emulator's aligned-against-scattered
+  difference mixes IOS's cut of a scattered buffer (other request
+  sizes, command counts, depths and handover paths) with whatever
+  Stor98's per-page `ScsiPortGetPhysicalAddress` calls cost, and cannot
+  isolate or exclude the latter [inf]; C2's own gain needs another
+  vehicle (a Stor98 counter of the mapping's time, or the bench's refit
+  of B), and stays planned.
+- **C1** (a child size setting) and **C3** (more `ENG_PRP_PAGES`): the
+  emulator's MDTS of 512 KiB already splits every request above it, and
+  depth reached 3 to 4 at 2 MiB with one thread [read]; both stay
+  planned, decided by the bench's MDTS and depth histogram (B4).
+- **C5** (interrupt coalescing): nothing here reads it; stays planned.
+
+The bench (45-E.9) is unchanged. Evidence:
+`E:\xhci98-vm\p45\w45-read\s98c\` (`perf-c.txt` the four reports with
+every Stor98 page, `serial-*.log`, `pids.txt`), `xfer98\` (`P.BAT`, the
+package).
+
+Read on the way, for task 45.22's 98 SE route (now another worker's):
+on the first overlay, before this project's package, QEMU's `info pci` showed
+the ASM4242's NHI (`1B21:2425`, bus 8) with Interrupt Line 11, pin A,
+beside the tunnelled NVMe (11, pin A) and the q35 xHCI and AHCI (10)
+[emu]; whether 98 SE's configuration manager allocates that IRQ to the
+NHI's devnode is not read.
+
+## 45.21 - Thunderbolt 1, 2 and 3 on Apple Macs: the Reading and the Design (2026-10-29)
+
+The task's first half (roadmap-usb4 Phase 45, the owner's "Phase 45
+additions"): what a Mac's Thunderbolt host needs from this driver as its
+connection manager, read from Linux's facts and the public record, then a
+design section converged before any code. No code, no leg.
+
+### What was read
+
+- Linux `drivers/thunderbolt` at the pinned `c6859eed` (GPL-2.0-only,
+  facts only): `pci.c` `nhi_ids[]` (Light Ridge `1513` and Cactus Ridge 4C
+  `1547` matched only with subsystem `2222:1111`, Falcon Ridge by id),
+  `icm.c` (`icm_probe` has no Light Ridge or Cactus Ridge row;
+  `icm_fr_is_supported` is false on an Apple machine;
+  `icm_ar_is_supported` takes the ICM on Alpine and Titan Ridge only when
+  its firmware already runs or `start_icm` asks), `tb.c`
+  (`tb_apple_add_links`, `tb_find_pcie_down`'s per-controller PCIe down
+  adapters, `tb_resume_noirq`'s reset of a non-USB4 host), `switch.c`
+  (`tb_switch_get_generation`: Light Ridge, Eagle Ridge, Light Peak,
+  Cactus Ridge, Port Ridge and Redwood Ridge generation 1, Win Ridge and
+  Falcon Ridge 2, Alpine and Titan Ridge 3; `tb_switch_configure`'s
+  non-USB4 branch; `tb_plug_events_active`; `tb_switch_reset_host`, the
+  "reset" packet on generation 1), `cap.c` (Light Ridge's TMU access bit
+  and dummy read), `lc.c` (nothing below generation 2, the DP sink from
+  3), `tunnel.c` `tb_dp_xchg_caps` (skipped below generation 2).
+- Apple's support pages (Boot Camp Support Software 5.0.5033 and 5.1:
+  64-bit Windows 7, 8 and 8.1 on the Macs of 2011 to 2014; Windows 10
+  64-bit only, Macs of 2012 on) and the press reports of 2011 quoting
+  Apple: the Early 2011 MacBook Pro, the first Thunderbolt Mac, supported
+  Windows 7 32-bit and 64-bit only, XP and Vista "not supported", Boot
+  Camp 4 Windows 7 only. No public page read names 98 SE, ME, 2000, XP or
+  Vista for any Thunderbolt Mac; whether any starts there through the
+  firmware's BIOS emulation is unread.
+- This project: design records 21 and 22 (sections 3, 6, 8, 9, 11),
+  `usb4-emu`'s `docs/CONTROLLER-CATALOG.md` (no Thunderbolt 1 or 2 model,
+  no Apple host profile).
+
+### What it says
+
+- The five Mac hosts (Light Ridge, Cactus Ridge 4C, Falcon Ridge, Alpine
+  Ridge, Titan Ridge) are, for Linux on a Mac, software-connection-manager
+  hosts; the rest of Linux's Thunderbolt 1 and 2 parts are device routers
+  there.
+- What the USB4 software connection manager lacks for them is small in
+  kind: section 8's Thunderbolt 3 device-router handling applied to the
+  host router at route 0 and extended to generations 1 and 2 (no USB4
+  router registers, the Plug Events capability, Light Ridge's two quirks,
+  no link controller below generation 2, a fixed PCIe down adapter per
+  controller); paths and the PCIe tunnel are the same code. DisplayPort is
+  the large part and is left out.
+- The systems within reach by Apple's own support are 7 (x86 and x64) and
+  the 64-bit 8, 8.1 and 10; 98 SE to Vista are owed to the bench.
+
+### The design
+
+Design record 22 section 19 (commits `1765b18c` and `f46fbf5c`,
+reviewed and revised), with the owner's questions Q1 to Q4 there. Section
+3.1's inert start for subsystem vendor `106B` and the release notes' "Not
+claimed: Apple machines" stay until the code and 45-E.11.
+
+Left: the code (after the owner's answers and an emulator model in
+`usb4-emu`, section 19.6), its host vectors and legs, and 45-E.11. The
+task stays unticked.
+
+## 45.37 a switch hot-added behind a Thunderbolt 3 tunnel port on 7 x86 at Code 31: the emulated platform's bus numbers (2026-10-30)
+
+**The question.** 45.17's legs a and d found the hot-plugged dock's
+switch upstream port (`104C:8232`) at Code 31 (`CM_PROB_FAILED_ADD`) on
+7 x86 with the Thunderbolt 3 topology, its `LowerFilters` naming
+`xhcicm` (the unit's mark), while the same dock present at power-on
+started (leg b), and the same dock behind the ASM4242 layout started on
+7 x86 with the same mark (45.12's R8: `PCI\VEN_104C&DEV_8232...`,
+`LowerFilters` `xhcicm`, Code 0).
+
+**The reading (leg r1).** A child overlay of 45.17's 7 x86 golden (the
+release x86 package of `1a2a72ca`), the same emulator
+(`qemu-system-x86_64.exe` `c1227fda...`, `usb4-emu` `0b4a259`), the
+launcher's `-Usb4 tb3ar`; the dock (`usb4-device ... dialect=tb3,dock=on`)
+plugged by QMP at the desktop. Evidence:
+`E:\xhci98-vm\p45\w45-chain\w7\` (`serial-r1.log`, `trace-r1.log`,
+`cmdline-r1.txt`).
+
+| Step | Read |
+|---|---|
+| `info pci` before the plug | the root port `00:08.0` buses 1 to 9; the controller's switch upstream port 1 to 5; its downstream ports `02:00.0` (the NHI) 3 to 3, `02:01.0` (the tunnel port) **4 to 4**, `02:02.0` (the controller's xHCI) 5 to 5 |
+| the plug | approved (`ICM approve link 1 depth 1: tunnel up`); `info pci`: `104C:8232` at bus 4, its **secondary and subordinate bus 0**, windows closed; `XHCIINST /devices`: "PCI Express standard Upstream Switch Port - pci, problem code 31"; `setupapi.dev.log`: "Device not started: Device has problem: 0x1f: CM_PROB_FAILED_ADD"; `LowerFilters` `xhcicm` on its instance key |
+| A/B: the mark taken away | `net stop xhcimark`; the `LowerFilters` value deleted (as SYSTEM); the dock unplugged and plugged again: `LowerFilters` absent, so no `AddDevice` of `xhcicm` on the device, `104C:8232` again at bus 4 with secondary and subordinate 0, **again Code 31**. The tunnel port's bridge filter, left in place, still attaches its child filter above the new device's PDO at `BusRelations` (`cmAttachNew`), as it does in R8 and leg b, where the same switch started |
+
+**Cause.** The emulated platform's. The emulated Thunderbolt 3 tunnel port
+(`usb4-tb3-tunnel-dsp`, an `8086:15C0` downstream port of the
+controller's own switch) carries no bus reservation, and SeaBIOS
+reserves buses only for a bridge with QEMU's own resource-reserve
+capability on a QEMU bridge id (`1B36:000C` or `1B36:0001`, 44.45), so the tunnel port spans one bus
+(its own secondary). A switch hot-added there has no bus for its
+secondary side; 7 neither renumbers the parent nor starts the bridge.
+This is the limit "44.20 (continued)" read on 8 x86 and "44.64 Part A"
+read on all five systems (`info pci`: `104C:8232` at bus 4 with
+secondary and subordinate 0). Present at power-on, SeaBIOS numbers the
+dock's switch itself, which is why leg b started. The ASM4242 layout
+has its firmware padding (`fw-bus-pad`, 44.45), which is why R8 started
+with the same mark. `xhcicm`'s registered child (`CmChildAddDevice`)
+always answers success and is not the failing `AddDevice`: the A/B
+fails the same without it. The child filter the tunnel port's bridge
+filter attaches stayed in the A/B; it is on the stack in R8 and in leg
+b too, where the switch, numbered, started.
+
+**What follows.** No change in this tree. A hot-plugged switch behind
+the emulated Thunderbolt 3 tunnel port needs firmware padding in the
+emulator, as the ASM4242 preset has it (`usb4-emu`'s work, outside this
+repository; reported to the coordinator). Until then, on the
+Thunderbolt 3 topology a chained device is read on q35 behind a dock
+present at power-on (SeaBIOS numbered the dock; a device without its
+own switch then lands on the chain port's own secondary bus), and a
+hot-plugged dock only behind a tunnel port with a reservation.
+
+## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30, partial)
+
+**The design.** Record 34 section 3.9 (revision 6), reviewed and revised
+before and with the code: chain ports walked below every active member
+(`XhciTbtChainPorts`, `tbt_topo.c`: a switch downstream port, Slot
+Implemented, Hot-Plug Capable, inside the member's bus range, at most
+four, one level, no descent below one); a chained tunnel's up, down and
+reconciliation invalidating each chain port's bus through the child
+filter on it, under that filter's removal reference (`CmFilterTryHold`,
+the list's lock then the filter's); an up owed per chained device (the
+action's `Slot`) until every chain port is done, cancelled when no
+longer live, at a loss and at the stop, dropped at 10 s
+(`cm.chain.nofilter` or `cm.chain.owed-expired`); the counters in the
+stop's log lines.
+
+**The code** (`38ac4e18`): `src\cm\tbt_topo.c`/`.h` (the walk, the owed
+table's pure part), `cm_reenum.c`/`.h` (`cmChainTake`, `cmChainTry`,
+`cmChainAction`, `cmChainService`, the hooks in `CmReenumAction`,
+`CmReenumService`, `CmReenumLossBegin`, `CmReenumStop`), `cm_filt.c`
+(`CmFilterTryHold`, `CmFilterUnhold`). No new import, no INF change.
+Host vectors: `test_tbt_topo.c` `test_chain_ports` (the emulator's dock
+as read on q35, a five-port switch with one hot-plug port, none, the
+non-candidates, the count and level bounds, a bridge outside the range,
+the member unnumbered, absent or unread, a failed read, a failed
+capability walk, a retry status, power off) and `test_chain_owed` (the
+first owe, a retry keeping the clock and the done list, a new tunnel
+restarting it, two children at one link and depth kept apart, the table
+full, the done list's bound, the millisecond wrap); the suite 679
+checks, 0 failures.
+
+**Builds.** The gated x86 build of `38ac4e18`
+(`scripts\build-driver.cmd all`): "BUILD + GATES PASSED (debug release
+qemu)" (`E:\xhci98-scratch\p45-w45-chain\gb-x86.log`); the gated amd64
+build (`all -amd64`): the same (`gb-amd64.log`); the release x86 package
+(`make-package.ps1 -Flavor release -Arch x86`): `xhcicm.sys`
+`23a2e9ab...`, `xhci98.sys` `5806fc7b...`.
+
+### The legs (q35; emulator `usb4-emu` `0b4a259`, `qemu-system-x86_64.exe` `c1227fda...`; Thunderbolt 3 Alpine Ridge, `-Usb4 tb3ar`)
+
+The chain: the dock `usb4-device ... dialect=tb3,downstream-ports=1,
+chain-power-controller=off` attached at power-on with the host's
+`preboot=on` (SeaBIOS numbers the dock's switch: the tunnel port
+`02:01.0` buses 4 to 7, the dock's upstream port `04:00.0`, its fixed
+port `05:00.0` to the dock's NVMe on bus 6, its chain port `05:01.0`,
+bus 7), and the chained device `usb4-device ... parent=enc0,port=1`
+(a plain enclosure, its NVMe directly on bus 7) plugged by QMP at the
+desktop. A dock hot-plugged on this layout cannot be read (45.37).
+Evidence: `E:\xhci98-vm\p45\w45-chain\w7\` (r2) and `xp\` (x0, x1):
+`serial-<leg>.log`, `debugcon-<leg>.log`, `trace-<leg>.log`,
+`cmdline-<leg>.txt`, screenshots.
+
+| Leg | System, build | Read | Verdict |
+|---|---|---|---|
+| r2 | 7 SP1 x86, the 45.17 golden (release of `1a2a72ca`, no chain action) | the child approved at depth 2 (`ICM approve link 1 depth 2: tunnel up`); 7 found and numbered the chained NVMe itself (native hot plug on the chain port), Stor98 started, its disk started (no volume: both disks are overlays of one image, Windows' duplicate-signature rule); the child unplugged and plugged again: gone, then Code 0 again; the dock unplugged with the child attached: every devnode gone, no hang; shutdown in 9 s | the child's hot plug behind a dock present at power-on (part of clause 1, without its file check: no volume), 2, 3, 8: pass; the chain action was not what found it |
+| x1 | XP SP3, a fresh golden (release of `1a2a72ca` installed with `/thunderbolt /stor98`, exit 3, restart; `1cec6889...`), the qemu flavour of `xhcicm.sys` at the reviewed source (`77f34053...`) swapped in | after the dock's first boot (Stor98 for the dock's NVMe by its wizard, a restart) the child plugged: `cm.chain.ports=00000001`, `cm.chain.invalidate=01020508` (an up at depth 2 on `05:01.0`), then the chain port's `BusRelations` with one new PDO, the child filter attached and the tunnel id given; Stor98 by its wizard; the drive as F: ("ORICO"), a file written and compared (`fc`: no differences). The child unplugged: `cm.chain.invalidate=02020508`, the NVMe gone. Plugged again: back at Code 0, F: again; a file written before the unplug was lost ("Delayed Write Failed" on F:: the chained unit is not offered for safe removal in this cut and was not stopped first). The dock unplugged with the child attached: both removed, XP's notice, no hang; shutdown in 10 s. Counters at the stop: ports 3, invalidate 3, owed 0, nofilter 0 | the child's hot plug with its file check behind a dock present at power-on (part of clauses 1 and 4), 2, 3: pass |
+| x2 | XP, the same golden, the gated release `xhcicm.sys` and `xhci98.sys` of `38ac4e18` swapped in | the same steps: the chained NVMe on Stor98 (its wizard), F: "ORICO", a file copied and compared (`fc`: no differences); the child unplugged: gone; plugged again: Code 0, F: again (the file copied before the unplug lost, as in x1); the dock unplugged with the child attached: no PCI devnode of the dock left, no hang; shutdown in 10 s | pass on the gated build |
+| x0 | XP, the same golden, its release `xhcicm.sys` (no chain action) | the same steps: the chained NVMe found (Stor98 by the "Found New Hardware" balloon, Code 0) and removed at its unplug | the A/B: XP finds and removes the chained device without the chain action |
+
+**What x0 shows.** On XP with this layout the chained device was found
+and removed without the chain action (x0). What found it there is an
+inference: the member's invalidation, made at every tunnel change
+(`CmReenumAction`), is the only request this tree made, so XP's
+re-enumeration from it reaches the bus behind the dock's started chain
+port. x1's log does not separate the two requests (`BusRelations` on
+`04:00.0` and `05:00.0` before the action's call, the chain port's
+answer with the new PDO after it). Record 34 section 3.2's inference
+that the member's invalidation would not reach it is therefore not
+borne out on XP; 2000 is not read. With 7's native hot plug (r2), the
+action was not needed on either system read. It is a second request
+that costs one invalidation per chain port per change.
+
+**The lost write.** In x1 and x2 a file written to the chained drive
+just before its surprise unplug was lost ("Delayed Write Failed"): XP
+caches writes to a disk it is not told is removable, and in this cut the
+chained unit is neither answered `Removable` nor offered for safe
+removal (record 34 section 3.7, left below). The dock's own drive is
+offered; a chained drive is to be stopped by stopping the dock until
+section 3.7's code.
+
+**The owner's question.** Keep the chain action (a second request beside
+what XP's member invalidation and 7's native hot plug already do, kept
+for 2000, unread, and for a layout where the member's re-enumeration
+does not reach the chain port), or take its invalidation out and keep
+the walk for section 3.7's chained unit and 45.14's 9x numbering, with
+the reading recorded. Recommended: keep it until 2000 is read; it is
+bounded (one call per chain port per change) and fails safe.
+
+**Left in 45.13** (not ticked): the owner's question above; 2000's
+reading (with and without the action); the correspondence learning, the chained unit's `Removable`,
+marks and eject on NT (the lost write above is the case it is for), the
+per-tunnel ownership, names and generations (record 34 sections 3.1,
+3.5, 3.7 and Q4), the status record's kind 3 entries. 45.17's PCI-side
+clauses read here on 7 and XP: 2, 3 and 8, and the parts of 1 and 4 the
+legs above name (clause 1's hot-plugged dock cannot be read on this
+layout, 45.37; clause 4's whole chain at power-on was not read); 5 (safe removal of
+the chained unit) waits for section 3.7's code; 6 is 9x (45.14); 7 on
+XP: the dock at power-on then the child hot-plugged works, a hot-plugged
+dock cannot be read on this layout (45.37).
+
+## 45.39 isochronous OUT slower than real time on the emulator's xHCI: the emulator's pacing, not the driver's (2026-10-30)
+
+**The question.** `usb-wdm-free`'s `uac2` legs (its `docs/design/uac2.md`
+section 15.3a) read a 3-second `UACWAV play` taking about 11.5 s on the
+simulated Sound Blaster X4, and about 13 s with 6 of 8 buffers on the
+real X4 passed through, under xHCI98 on QEMU's `qemu-xhci`. The same real
+device through the same passthrough under XP's own EHCI driver plays 8
+of 8 in about 3.3 s.
+
+**The driver's side, read.** `uac2` sends every isochronous URB with
+`USBD_START_ISO_TRANSFER_ASAP` (`uacusb.c`). xHCI98 publishes an ASAP
+request with SIA on every TD (`hcd_io.c`, the isochronous publication;
+`XhciXferIsoStartPlan` returns `XHCI_ISO_START_ASAP`) and IOC on every
+TD. The ring is the pipe's pool ring (62 TRBs) or, for a High Speed
+endpoint of `bInterval` 1 to 3 with a budget, a page ring of 120 (design
+record 13 section 11.8). An explicit `StartFrame` gets a Frame ID on
+every TD only where HCCPARAMS1's CFC bit is set, and otherwise on the
+first TD of a data flow alone (task 36.57, xHCI 4.11.2.5). The
+emulator's HCCPARAMS1 reads `0x00080001` plus its stream bits: CFC is 0.
+
+**The emulator's side, read** (QEMU 11.1, `hw/usb/hcd-xhci.c`,
+`xhci_calc_iso_kick`, `xhci_check_intr_iso_kick` and `xhci_kick_epctx`;
+facts only). The emulator keeps no frame schedule of its own. It gives
+each TD a target microframe and runs the TD once MFINDEX (the virtual
+clock in 125-us steps) has reached that target. A TD that is not yet due
+arms the endpoint's timer and ends the ring walk until the timer fires.
+For a TD with SIA the target is the previous TD's target plus the
+Interval, provided "as soon as possible" (now, rounded up to the
+Interval) lies within four Intervals of that previous target; otherwise
+the target is "as soon as possible". So when the emulator runs more than
+four Intervals after the last TD, it does not catch up. It runs the TD
+that was waiting, restarts the stream at "now", and arms the timer for
+the next TD one Interval later. Each time it gets to run more than 500
+us late it therefore serves about two TDs of a High Speed `bInterval` 1
+endpoint (Interval 125 us, so a 500-us window), and every TD that is
+due on a 1-ms endpoint up to 4 ms late. A TD with an explicit Frame ID
+is due once its frame has come, and late ones run at once, within
+limits: the target is rebuilt from the Frame ID in the current MFINDEX
+epoch, and one more than 32 ms (256 microframes) behind is read as
+2.048 s later. With CFC 0, though, only the first TD of a flow may
+carry a Frame ID. A doorbell also makes the emulator look at a waiting
+TD, under the same rule, outside its timer. The emulator's EHCI model, by
+contrast, walks every microframe that has elapsed since its last run
+(`hcd-ehci.c`, `ehci_work_bh`), which is why the EHCI path keeps time.
+
+**The leg** (development host A, 2026-10-30, worker kit
+`E:\xhci98-vm\p45\w45-iso`). Stock QEMU 11.1.0 (`qemu-system-x86_64.exe`
+SHA-256 `47d57a60...`), run with `-msg timestamp=on` and the trace events
+`usb_xhci_xfer_start`, `usb_xhci_queue_event` and
+`usb_xhci_doorbell_write`. XP SP3 x86 on q35 with `-smp 2` and
+`qemu-xhci` behind a root port. The disk is an overlay over copies of
+task 45.24's leg `f1`, which has this release's tree (`xhci98.sys`
+`a3de04a5...`; no isochronous source has changed since), and 45.25's
+`x6`, which has `uac2` build 18 with the jack fix. The simulator,
+`uacemu.py` (`usb-wdm-free` `0cf767a`, SHA-256 `b745ee98...`), ran over
+`usb-redir`, and `UACWAV.EXE` (`95a036b1...`) ran `play 2 16 48000 3`.
+The script `tools\isorate.py` counts, for each endpoint, the TDs that
+the emulator started, the groups of TDs that share one host timestamp
+(the trace stamps each line to the microsecond and does not mark the
+emulator's passes over the ring, so a group stands for a pass only by
+inference) and the completion codes of the Transfer Events.
+
+| Stream | Expected a second | TDs a second | Timestamp groups a second (median gap) | TDs a group | Ring Underrun | `UACWAV` |
+|---|---|---|---|---|---|---|
+| `x4full`, High Speed, EP 1 OUT, 24 bytes a microframe | 8,000 | 2,057 (24,123 TDs in 11.73 s) | 711 (1.065 ms) | 2 in 4,887 of 8,335 groups, 3 in 1,500, at most 13 | 4, in one 0.2-s burst mid-stream | 8 of 8, `elapsed_ms=11766` |
+| the same device, EP 3 IN feedback, Interval 1 ms | 1,000 | 983 | 697 (1.007 ms) | 1 or 2 | (31 Overrun) | |
+| `fs`, Full Speed, EP 1 OUT, 1 ms | 1,000 | 995 (3,045 TDs in 3.06 s) | 683 (1.143 ms) | 1 or 2 | 12, in the first 3 s | 8 of 8, `elapsed_ms=3062` |
+
+The simulator counted the same 24,122 OUT packets for the High Speed
+play. In all three streams the TDs started in about 700 groups a
+second, most about a millisecond apart (gaps of 1 or 2 ms). The 1-ms
+endpoints, on the same device, driver and guest, ran at real time,
+because a 4-ms window covers that gap. The 125-us endpoint ran at about
+two TDs a group, a quarter of real time, which is what the reading
+above predicts if the emulator ran about once a millisecond, as the
+groups suggest. Its ring ran empty only in one 0.2-s
+burst (four Underrun events in 11.7 s); for the rest of the play the
+driver had the next TD queued whenever the emulator looked, so the
+ring's depth was not the limit. The same reading fits the result that
+`uac2.md` records for the three ALC4080 outputs played at once, each at
+the slow rate, because each endpoint has its own timer and window. It
+is also consistent with the real X4's 6 of 8, a device that needs 8,000
+packets a second fed at this rate until `UACWAV`'s wait ends; that was
+not traced here, and `uac2.md` also records one re-enumeration by the
+passthrough during those runs. Evidence: `ev\r1-play1-rate.txt`,
+`ev\r1-fsplay-rate.txt`, `ev\r1-qtrace-full.log`, `ev\r1-x4a.jsonl`,
+`ev\r1-fs.jsonl`, `shots\r1-play1.png` and `shots\r1-fsplay.png`.
+
+**Verdict.** The cause is the emulator's. Its SIA pacing serves a High
+Speed `bInterval` 1 isochronous endpoint at about two TDs each time it
+gets to run late and never catches up, and on development host A the
+traced TDs started in groups about a millisecond apart. **Neither a deeper ring nor Frame IDs
+helps within the specification.** A deeper ring does not, because the ring
+was not the limit. The one path on which the emulator does catch up, a
+Frame ID on every TD, is not allowed on a controller without CFC, and
+the emulator is one; ASAP requests are published with SIA by design
+(`hcdIsoPublish`: a Frame ID from the driver's estimate of the
+stream's position would open a gap or miss a service whenever the
+estimate is off by one; SIA cannot be). Extra doorbells are within
+the specification and would give the emulator more passes; a pass that
+comes within four Intervals of the last TD runs every TD then due, so
+a doorbell every half millisecond or less while a stream runs could let
+it keep time. That is beyond what a timer on these systems gives, and
+it would cost real hardware a doorbell write every half millisecond per
+stream for an emulator's sake: not tried, and declined. A `qemu`-flavour hook that stamped Frame IDs everywhere would
+change the driver's behaviour only where no published flavour runs, and
+it is not proposed either.
+
+**What a real controller does.** It services the ring at every ESIT of
+the endpoint from its own frame schedule, SIA TDs back to back, with no
+dependence on the host's timers. A 125-us endpoint gets 8,000 TDs a
+second while the driver keeps the ring ahead, which the pool ring (7.75
+ms at one TRB a TD) and the page (15 ms) do with `uac2`'s requests. That
+is not read here. The bench reading owed is a High Speed UAC 2.0 device
+(the Sound Blaster X4) on a real xHCI controller under XP and 98 SE with
+`uac2`: `UACWAV play 2 16 48000 3` timed (about 3 s and 8 of 8
+expected) and, on XP, two outputs at once. Until then, the emulator's
+High Speed isochronous timings say nothing about the driver's.
+
+**Left.** The bench reading above. The change that would make the
+emulator keep time is in `qemu-xhci`'s SIA target: take the previous
+target plus the Interval, however late, while the ring has not run
+empty, up to a bound. That change lies outside this repository.
+
+### 45.36, the second reading: under the gdb stub, cold starts, and a stock comparison (2026-10-30, partial)
+
+`3.4.0.0` merged first (`28900e16`). The trials of the first reading
+went on with a breakpoint on the faulting instruction (`0xBFF72170` on
+98 SE, `0xBFF62170` on ME) through QEMU's gdb stub, every hit logged
+with its ESP and whether the page at ESP read; a stop screen is told by
+its 720 x 400 text mode in the screenshots taken every 30 seconds. The
+scripts are the worker's (`gdb36.py`, `cold.sh`, `trial2.sh`), not
+tracked.
+
+**What the instruction is.** Every hit has EAX to EBP zero and ESP at a
+stack's top less 0x48 (`xxxxFFB8`): it is the first ring-3 instruction
+of a new thread, popping the frame its creator built. A boot of the
+`3.3.0.0` base hits it 27 times on 98 SE and 44 to 45 times on ME; the
+stock base of the same layout (no xHCI98 installed, `s98`) 21 times.
+The six more on 98 SE are threads whose stacks are in the shared arena
+(`82Dxxxxx` to `83xxxxxx`), as `PsCreateSystemThread`'s are: the
+controllers', the connection manager's and Stor98's system threads.
+The page fault of the stop is therefore a new thread whose first stack
+page is not present when it first runs.
+
+**The rate, with the first reading's.**
+
+| Run | Starts | Stops |
+|---|---|---|
+| 98 SE, first start after the update | 7 (`u1` to `u6`, `u8`) | 1 (`u5`, 0E at 019F:BFF72170) |
+| ME, first start after the update | 3 (`um3` to `um5`) | 0 |
+| 98 SE, cold start of the `3.3.0.0` base, no update | 30 (`c1`, `c2`, `r1a`/`b` to `r14a`/`b`, under the stub from `r8`) | 0 |
+| ME, the same | 15 (`cm1`, `r1m` to `r14m` but `r7m`, `um1`) | 1 (`um1`, 0E : 01A7 : BFF62170, before any update) |
+| 98 SE stock, cold start, same layout | 8 (`sk1` to `sk8`) | 0 |
+
+`r7m` was stopped by the first version of the script at a page the
+stub could not read, a page the VMM faults in as it should (the next
+version steps over such a hit and goes on); it is left out.
+
+**What this says.** The stop is not specific to the update: ME stopped
+the same way at a plain cold start, which is ME0E.1's text and address.
+It is rare (2 of 55 starts with xHCI98 installed, 0 of 8 stock), too
+rare to tell the enclosure's or Stor98's part in the hours this reading
+had, and the run under the stub (21 starts from `r8`) never stopped. The
+stub changes the timing of every new thread's first instruction (each
+hit stops the machine), so a race at thread start would hide under it.
+The six system threads this package adds are the plausible exposure; a
+thread's first stack page not being present is the Windows 98 kernel's
+thread creation, not code of this package, unless a creation passes a
+stack size or starts a thread at a moment the kernel does not support.
+Not shown either way.
+
+**Owed.** The comparison with the enclosure and Stor98 left out, and
+the stock layout, each over enough starts for a rate (tens, unattended);
+the creation calls' arguments and timing on 9x (`hcd_ctl.c`,
+`hcd_tmr.c`, `hcd_susp.c`, `cm_thr.c`, `cm_cfgwk.c`, Stor98's); then
+the cause, or the known issue. A text for the release notes if it stays
+unexplained, for the owner's choice: "Windows 98 SE and ME, rarely: the
+first start after the install or an update (and, on ME, any start) can
+stop with 'A fatal exception 0E has occurred at 019F:BFF72170' (98 SE)
+or 'Error: 0E : 01A7 : BFF62170' (ME), then a black or empty screen.
+Turn the computer off and on again; the next start works. The cause is
+not known." **Partial.**
+
+## 45.31 the connection manager's unload under Driver Verifier (2026-10-30, the `xhcicm.sys` half)
+
 ## 45.31 the connection manager's unload under Driver Verifier, and Stor98 on a drive `stornvme` ran (2026-10-30)
 
 The `xhcicm.sys` unload stop that 45.11's reading found (bug check 0xC4,
