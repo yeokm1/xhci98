@@ -4042,6 +4042,66 @@ identification (record 34 section 3.11 item 8). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 
+## 45.43 a UAS disk attached at a cold start on XP x64: enumerated, its driver install waiting on Windows' wizard (2026-10-30)
+
+**The question.** 45.42's side finding: on the XP x64 guests with
+`3.3.0.0`, a `usb-uas` attached at power-on showed no disk, and a replug
+from the emulator brought it. Is the connection missed at the
+controller's start (the root port's first look, a lost change, a
+companion handoff), an emulator timing, or something else?
+
+**The legs.** q35, the stock emulator of `launch-q35.ps1` (not 45.41's
+link-drop build), `-smp 2`, 2 GB, `qemu-xhci` behind the root port, the
+tablet on port 2, a `usb-uas` (serial `W45COLD1`, the FAT test disk
+overlay) on root port 3 at power-on, nothing else on the bus. Disks:
+overlays of 45.41's kit disks with `3.3.0.0` installed (`prep330x64`,
+release x64: `xhci98.sys` `9e6a132b1ef98158...`, `xhciuas.sys`
+`69544021c6b1468a...`; `prep330`, release x86: `8ff8d0d2b9e9d212...`,
+`24e7a9d40b37d5b4...`); no UAS device had ever been attached to either.
+For this tree: the release amd64 `xhci98.sys` (`a333fa5239915244...`) and
+`xhciuas.sys` (`6fad01072dc9414a...`) of `f4fbf96d` (no source change in
+`src\` or `src\uas\` from there to `42093a03`), copied over the installed
+ones (`fc /b` equal) as 45.41's x64 legs did. Each start read with
+`XHCITR /snapshot`, `setupapi.log` and Device Manager. Evidence:
+`E:\xhci98-vm\p45\w45-cold\` (`c1\`, `c2\`, `x1\`: `serial-*.log`,
+`C2A.txt`, `C2B.txt`, `s*.png`).
+
+| Leg | System, build | The device at the start | Windows |
+|---|---|---|---|
+| c1 a | XP x64, `3.3.0.0`, cold start, first time the device is seen | root port 3's first look: "machine Empty, fed connect; PORTSC CCS PED PLS 0, changes CSC"; reset, slot 1, **addressed**, transport UAS | the PDO `USB\VID_46F4&PID_0003\W45COLD1` exists: Device Manager lists "USB Attached SCSI HBA" under the USB controllers at **Code 1**; `setupapi.log`: `xhciuas`'s `oem1.inf` found, then `#E358 ... blocked (server install). Error 1168` and `#E122 Device install failed`; the Found New Hardware wizard waits (behind the one for ACPI `QEMU0002`, which has no driver on any start) |
+| c1 a, then | the same, Reinstall Driver | - | the unsigned-driver warning, Continue Anyway, installed; slot 1 **configured** |
+| c1 b | XP x64, `3.3.0.0`, cold start, the device installed | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
+| x1 a | XP x86, `3.3.0.0`, cold start, first time | the same first look; slot 1 addressed | the same `#E358` (error 1168) for `oem1.inf`, the wizard waits |
+| c2 a | XP x64, this tree's build, warm restart after the copy | slot 1 configured | - |
+| c2 b | XP x64, this tree's build, cold start | the same first look; slot 1 configured, UAS | `D:` ORICO listed |
+
+**Reading.** The connection is seen at every start. The root hub's
+first reading marks every root port changed (`XhciRootHubInit` in
+`hcd_dev.c` sets every bit of `PortChange`), so the first look reads
+each port whatever its change bits say; a change the controller
+announced before the run, or none at all, cannot hide a device present
+at the start. On the emulator the port is already enabled in U0 with CSC
+set, and the first look took it as a connect, reset it, gave it slot 1
+and addressed it, and the hub built its PDO. What stops at the first
+plug is Windows' install of `xhciuas`: the package is not
+WHQL-signed, a server-side install of an unsigned driver is refused on
+XP and XP x64 (as recorded in run-22 to run-24, and for
+Stor98 in design record 31 section 6), and the device waits on the
+Found New Hardware wizard and the unsigned-driver question, as README
+step 5 says ("A UAS disk ... asks for its driver when plugged in"). Until
+it is answered the device is listed at Code 1, not under the disk
+drives, and the slot stays addressed. Once installed, the same device at
+a cold start is configured and its volume mounted, under `3.3.0.0` and
+this tree alike. 45.42's leg showed the same wizard on its first start
+(`E:\xhci98-vm\p45\w45-hubuas\f42m8\s1.png`, the XP x64 Found New
+Hardware window); its replug was not repeated here.
+
+**Result.** Not a defect of this driver, and no change: a UAS device
+seen for the first time on NT 5.x waits on Windows' wizard, at a cold
+start as at a plug. Not read here: the first-time case on XP x86 with
+this tree's build (the start path is the same source; the wizard is
+Windows').
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
