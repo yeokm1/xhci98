@@ -543,7 +543,8 @@ counters as text, then the log as text. Both texts are ASCII lines
   tray, the window and a second program read the same log, and the
   release flavour, which drains only under `XhciCmLogDebugView` 1, keeps
   the last 16 KiB. Where the thread hands the ring to DebugView after
-  each pass - the `debug` and `qemu` flavours always, and any flavour
+  each pass - the `qemu` flavour always (and the `debug` one until task
+  45.45 retired it), and any flavour
   with `XhciCmLogDebugView` 1 since the owner's decision of 2026-10-16
   (record 21 section 8) - the copy holds what has not been emitted yet;
   the answer's `CM_QL_F_EMITTED` flag says so. That emission withholds

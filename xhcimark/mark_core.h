@@ -426,6 +426,52 @@ typedef struct _MK_S98_MF {
  * not protected. Never one with a driver or an unread Service. */
 int mk_s98_mark_sets(const MK_S98_MF *in);
 
+/* ---- a hot-added controller waiting for a restart (record 21 7.6) -------- */
+
+/* A hot-added xHCI98 controller the Vista and 7 section's Reboot left at
+ * problem 1 with DN_NEED_RESTART (task 45.47, owner 2026-10-30: option
+ * B). The inputs of one devnode, as read on the walk or afresh. */
+#define MK_DN_NEED_RESTART      0x00000100UL
+#define MK_PROB_NOT_CONFIGURED  0x00000001UL
+#define MK_CTL_SECTION          "Xhci.Dev6"
+#define MK_CTL_MATCH            "PCI\\CC_0C0330"
+typedef struct _MK_CTL_IN {
+    int Restart;            /* the service's Restart value (paramRestart) */
+    int Nt6x86;             /* native 32-bit Vista or 7 (NT 6.0 or 6.1)   */
+    int Pci;                /* a PCI\ devnode                             */
+    const char *Service;    /* its Service value, or NULL when unread     */
+    int XhciCompat;         /* its compatible ids carry PCI\CC_0C0330     */
+    int DrvRead;            /* its driver key read                        */
+    const char *InfSection; /* that key's InfSection                      */
+    const char *MatchingId; /* that key's MatchingDeviceId                */
+    int FlagsRead;          /* CM_DRP_CONFIGFLAGS read                    */
+    INST_U32 Flags;
+    int StatusOk;           /* CM_Get_DevNode_Status succeeded            */
+    INST_U32 Status;
+    INST_U32 Problem;
+    int Behind;             /* behind a verified, active tunnel port      */
+    int Protected;          /* mk_protect's node                          */
+    int HelperRunning;      /* the xhcihlpr service reads RUNNING         */
+    int InstallIdle;        /* no device installation pending             */
+    int Tried;              /* started once this arrival already          */
+} MK_CTL_IN;
+/* 0 when the service starts the controller (CM_Setup_DevNode READY);
+ * otherwise the first reason it does not, MK_CTL_*. */
+#define MK_CTL_GO           0
+#define MK_CTL_OFF          1
+#define MK_CTL_SYSTEM       2
+#define MK_CTL_NOT_OURS     3
+#define MK_CTL_DRIVER_KEY   4
+#define MK_CTL_FLAGS        5
+#define MK_CTL_NOT_WAITING  6
+#define MK_CTL_NOT_BEHIND   7
+#define MK_CTL_PROTECTED    8
+#define MK_CTL_HELPER       9
+#define MK_CTL_INSTALLING   10
+#define MK_CTL_TRIED        11
+int mk_ctl_ready_why(const MK_CTL_IN *in);
+const char *mk_ctl_why_text(int why);
+
 /* ---- the self-test -------------------------------------------------------- */
 
 int mk_selftest(void (*report)(int ok, const char *what));

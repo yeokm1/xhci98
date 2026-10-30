@@ -1057,6 +1057,18 @@ typedef struct _HCD_PORT {
      * on the port asks for a send-back again; at HCD_HOLD_RECOVER_TRIES
      * the device is left refused with no PDO. */
     ULONG HoldRecoverFails;
+    /* Task 45.40 (design record 13 section 10.7, "Identity across a
+     * re-enumeration"), a root port's: the last non-hub group listed for a
+     * device attached directly to it - (idVendor << 16) | idProduct, 0
+     * none, and whether its first PDO answered the serial form - written
+     * once it is listed or revived (hcdIdRemember); and the deferral's
+     * latch (XHCI_FUNC_LATCH_*). Zero at AddDevice, kept for the
+     * controller's life. Thread only. */
+    ULONG IdMemVidPid;
+    ULONG IdMemSerial;
+    ULONG IdDeferLatch;
+    ULONG IdDeferrals;      /* arrivals deferred here, and those whose     */
+    ULONG IdDeferFails;     /* reads were all spent (the snapshot's record) */
     /* Root port: inspections in a row that read PORTSC as all ones. The
      * inspection is owed again at every pass until one reads it, and at
      * HCD_PORT_UNREADABLE_PASSES the controller goes to recovery
@@ -1896,6 +1908,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG SerialIdsRefused;
     ULONG SerialReadsFailed;
     ULONG SerialIdsDuplicate;
+    /* Task 45.40: arrivals deferred for a failed serial read at a port that
+     * remembers their serial form, those a later read published, and
+     * those whose reads were all spent. Never zeroed; thread only. */
+    ULONG SerialDeferrals;
+    ULONG SerialDeferOk;
+    ULONG SerialDeferFailed;
     /* Fast polling (33.8; hcd_cfg.c, XhciPipeFastPoll): the
      * XhciFastPollFsLs mode read at each start (XHCI_PIPE_FAST_*), the
      * endpoints a select opened below Table 6-12's FS/LS range, and the
@@ -2164,7 +2182,7 @@ typedef struct _HCD_HUB_FDO {
     CONTAINING_RECORD((ext), HCD_CONTROLLER, Hc)
 
 /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it in,
- * which would import RtlAssert into the debug and qemu builds - a pair with
+ * which would import RtlAssert into the checked qemu build - a pair with
  * no Windows 98 evidence. Same three fields. */
 #define HCD_SET_COMPLETION_ALWAYS(irp, routine, context)                     \
     do {                                                                     \
@@ -2345,6 +2363,16 @@ ULONG HcdThreadSameIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 #define HCD_SERIAL_REFUSED  3UL
 #define HCD_SERIAL_FAILED   4UL
 ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* Task 45.40 (design record 13 section 10.7, "Identity across a
+ * re-enumeration"): a root port's deferred arrival read again in place,
+ * after HcdDeviceReadSerial and before anything is configured;
+ * HCD_SDEFER_* (hcd_enum.c). Thread only, powered. */
+#define HCD_SDEFER_GO       0UL
+#define HCD_SDEFER_FAIL     1UL
+#define HCD_SDEFER_CANCEL   2UL
+ULONG HcdDeviceSerialDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* (idVendor << 16) | idProduct from the device descriptor. IRQL: any. */
+ULONG HcdDeviceVidPid(PHCD_USB_DEVICE dev);
 /* What one enumeration's text reads (33.6) carry from PDO to PDO: the
  * language id, once read, and the string indexes that gave nothing. */
 typedef struct _HCD_TEXT_READ {
@@ -2430,7 +2458,7 @@ ULONG HcdDevStopSettle(PHCD_CONTROLLER hc, PHCD_PIPE pipe, ULONG deqLow,
                        ULONG deqHigh);
 
 /* hcd_inj.c and hcd_ctl.c's qemu half: the qemu flavour only, nothing in
- * debug or release (design record 17 section 5; xhci_inj.h). */
+ * release (design record 17 section 5; xhci_inj.h). */
 #if defined(XHCI_FLAVOUR_QEMU)
 NTSTATUS HcdCtlQemuReadDword(PHCD_CONTROLLER hc, PCWSTR name, PULONG value);
 VOID HcdInjStart(PHCD_CONTROLLER hc);

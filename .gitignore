@@ -16,10 +16,10 @@
 *.err
 *.log
 # The DDK's build.exe appends BUILD_ALT_DIR to TARGETPATH, so `obj` in
-# src\sources becomes objfre (release), objchk (debug) or objchk_qemu (the
-# qemu flavour, task 13-L.1) - none of which matches obj/. The third name is
-# what keeps the two *checked* builds from overwriting each other's objects;
-# see scripts\build-driver.cmd :buildflavor.
+# src\sources becomes objfre (release) or objchk_qemu (the qemu flavour,
+# task 13-L.1) - neither matches obj/. objchk was the debug flavour's, retired
+# with roadmap-usb4 task 45.45, and stays ignored for trees built before it;
+# see scripts\build-driver.cmd :flavordirs.
 obj/
 objchk/
 objchk_qemu/
@@ -71,6 +71,7 @@ objfre/
 !xhciperf/build.cmd
 !xhciperf/selftest.cmd
 !test/xfertest/build.cmd
+!test/atatest/build.cmd
 !test/pmclient/build.cmd
 !xhciinst/di/build.cmd
 !xhciinst/di/selftest.cmd

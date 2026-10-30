@@ -4,9 +4,9 @@
  * 17 section 5.
  *
  * QEMU flavour only: src/sources defines XHCI_FLAVOUR_QEMU for that build
- * alone, and the debug and release images carry none of this file, its
+ * alone, and the release image carries none of this file, its
  * value name or its hooks (scripts\check-flavour-marker.ps1 names the
- * flavour; the "qemu.inj" strings are absent from both shipping images).
+ * flavour; the "qemu.inj" strings are absent from the shipping image).
  * It adds no import: the registry read is hcd_ctl.c's, the rest is the
  * spin lock, interlocked and register calls every flavour already makes.
  *
@@ -2198,7 +2198,7 @@ VOID HcdInjPoll(PHCD_CONTROLLER hc)
     }
 }
 
-#else /* debug and release: injection is not in the image */
+#else /* release: injection is not in the image */
 
 typedef int hcdInjNotInImage;
 

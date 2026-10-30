@@ -1072,7 +1072,7 @@ the logged-on user, with no administrator rights.
   View menu's check boxes hide or show each kind of item; File > Save
   Report writes it all to a text file.
 - **The icon's menu** lists the USB storage devices and the Thunderbolt
-  and USB4 devices that can be removed safely. Removing one follows the rules of `INSTALL /eject`: the
+  and USB4 devices that can be removed safely. Removing one follows the rules of `INSTALL /console /eject`: the
   tool confirms, waits for a current reading from `xhcicm.sys`, asks
   Windows to stop the device and says when to unplug it.
 - **Balloons** say when a device connects, waits for approval or
@@ -1250,11 +1250,11 @@ the logged-on user, with no administrator rights.
 ### Removing a Thunderbolt or USB4 device safely
 
 Close the files open on the device first, as for any removable disk. On
-every system `INSTALL /devices` shows what is connected and
-`INSTALL /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
+every system `INSTALL /console /devices` shows what is connected and
+`INSTALL /console /eject` removes one device safely (`XHCIINST`, or `XHCIIN64` on
 64-bit Windows, in `tools\xhciinst\` takes the same switches).
 
-- **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /eject`;
+- **Windows 98 SE and ME:** use the xHCI98 USB Tree or `INSTALL /console /eject`;
   only these offer a device behind a Thunderbolt or USB4 port there.
   Windows 98 SE as shipped has no "Unplug or Eject Hardware" applet, and
   the one ME has (or NUSB adds to 98 SE) does not list such a device,
@@ -1321,7 +1321,7 @@ every system `INSTALL /devices` shows what is connected and
   restarts that one device once, the way Device Manager applies a
   property change; a program with a file open on it refuses that, and the
   device is then listed from its next start. With the service stopped,
-  or for such a refused device, the xHCI98 USB Tree and `INSTALL /eject`
+  or for such a refused device, the xHCI98 USB Tree and `INSTALL /console /eject`
   still stop it when run as an administrator: they ask Windows for the same query-remove and
   remove by the routine meant for devices that are not removable, and a
   program with a file open still refuses it. The USB Tree asks for the
@@ -1339,12 +1339,12 @@ every system `INSTALL /devices` shows what is connected and
   behind it.
 
 On Windows 2000 and XP the tool needs an administrator; on Vista and 7 it
-asks for elevation. `INSTALL /eject 2` ejects device 2 of the list after
-one question, and `INSTALL /eject id=<instance id> /yes`, with the
+asks for elevation. `INSTALL /console /eject 2` ejects device 2 of the list after
+one question, and `INSTALL /console /eject id=<instance id> /yes`, with the
 instance id `/devices` prints, does it with no question, for scripts;
 `tools\xhciinst\README.TXT` has the exit codes.
 
-`INSTALL /devices` shows each connected device's name, generation, link,
+`INSTALL /console /devices` shows each connected device's name, generation, link,
 approval and connections (PCIe, USB3, DisplayPort) as `xhcicm.sys` knows
 them, and the PCI functions and Windows devices behind each Thunderbolt
 port with their drivers and problem codes. The driver writes what it
@@ -1364,7 +1364,7 @@ Express tunnel down (the USB3 tunnel stays) - from `3.1.0.0` only once
 the stop is confirmed: on XP, Vista and 7 by the `xhcimark` service,
 which sees Windows hold the device for removal, within a poll; on
 2000, whose applet leaves no such sign, only by an administrator's
-`INSTALL /eject` (or the USB Tree run as one). Without the confirmation
+`INSTALL /console /eject` (or the USB Tree run as one). Without the confirmation
 the tunnel stays up until the unplug, and the tools say the driver has
 not confirmed the teardown. In `3.1.0.0` the USB Tree run without
 administrator rights on XP, Vista and 7 said so after every stop, as it
@@ -1476,7 +1476,7 @@ Restart Windows, or disable and enable the controller, after a change.
 |---|---|---|
 | `XhciCmMode` | `1` | `0` off: the driver binds the controller, logs it and touches nothing. `1` automatic: the firmware's connection manager's client where it runs, `xhcicm.sys`'s own on a USB4 host whose firmware runs none, and nothing where neither is certain. `2`: an Intel controller the table above does not list, driven as an Alpine Ridge, at your own risk, after adding its id to a copy of `xhcicm.inf`. `3`: force `xhcicm.sys`'s own USB4 connection manager, at your own risk; refused on Falcon, Alpine and Titan Ridge and Ice Lake, and wherever the firmware's runs |
 | `XhciCmApprove` | `1` | `1` approves every device (see "Thunderbolt 3: which devices get a tunnel"); `0` approves none |
-| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal (on 98 SE and ME only through the USB Tree and `INSTALL /eject`: 98 SE as shipped has no "Unplug or Eject Hardware", and ME's does not list them); `0` does not |
+| `XhciCmSafeEject` | `1` | `1` offers devices behind a tunnel for safe removal (on 98 SE and ME only through the USB Tree and `INSTALL /console /eject`: 98 SE as shipped has no "Unplug or Eject Hardware", and ME's does not list them); `0` does not |
 | `XhciCmReenum` | `1` | `1` makes Windows look at the tunnel ports after each change; `0` leaves it to Refresh, for a machine where that misbehaves |
 | `XhciCmUsb3Tunnel` | `1` | USB4 connection manager: `1` builds a USB3 tunnel beside the PCI Express one where the device has one; `0` builds none |
 | `XhciCmLaneBonding` | `1` | USB4 connection manager: `1` bonds the link's two lanes; `0` runs on one |
@@ -1672,22 +1672,27 @@ have every leg.
   and plugged in again.
 - **Stop a dock before unplugging it when a keyboard, mouse, tablet or
   similar device is on the dock's own USB controller** (task 45.35): on
-  98 SE and ME, and on 2000 and XP under a firmware connection manager
-  (Thunderbolt 3, and the Intel USB4 controllers whose firmware runs
-  one). Otherwise Windows may never finish removing the dock: it is not
-  found again when plugged back, and Windows does not shut down (record
-  17 section 4.13's kept transfers, below "Known limitations"). On 2000
-  and XP with a USB4 host whose tunnels this release's connection manager
-  builds, the unplug is normally handled: the connection manager reads
-  the tunnel closed before this driver asks for the proof, and only in
-  the reverse order do the transfers stay kept (record 17 section
-  4.13.6).
+  98 SE and ME, and on 2000, XP, Vista and 7 under a firmware connection
+  manager (Thunderbolt 3, and the Intel USB4 controllers whose firmware
+  runs one). Stop it in the xHCI98 USB Tree or with
+  `INSTALL /console /eject` ("Removing a Thunderbolt or USB4 device
+  safely"); Windows' own Safely Remove Hardware may not list such a dock.
+  Otherwise Windows may never finish removing the dock: it is not found
+  again when plugged back, and Windows does not shut down (record 17
+  section 4.13's kept transfers, below "Known limitations"). On Vista and
+  7, plugging such a dock in again can then stop the computer responding;
+  on 7 a dock stopped first was removed, found again when plugged back,
+  and Windows shut down (task 45.49). On 2000 and XP with a USB4 host
+  whose tunnels this release's connection manager builds, the unplug is
+  normally handled: the connection manager reads the tunnel closed before
+  this driver asks for the proof, and only in the reverse order do the
+  transfers stay kept (record 17 section 4.13.6).
 - **A device Windows has not seen before, or one disabled and enabled or
   whose driver was installed or updated, is missing from the safe-removal
   list** (Windows 2000 to 7): Windows rebuilds its driver stack without
   the filter that marks it removable (the first plug read on 2000 and
   XP); the next plug puts it back. The xHCI98 USB Tree and
-  `INSTALL /eject` stop it when run as
+  `INSTALL /console /eject` stop it when run as
   an administrator ("Removing a Thunderbolt or USB4 device safely"); a
   pull without a stop is a surprise removal, with Windows 2000's warning
   and cached writes at risk. From `3.1.0.0` the `xhcimark` service keeps
@@ -1697,12 +1702,12 @@ have every leg.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support, or connected while the driver was installed) is offered for
   safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
-  Tree and `INSTALL /eject` stop it before that, as an administrator.
+  Tree and `INSTALL /console /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing
   it takes full effect at the next start.
 - **Windows 98 SE and ME, USB4 connection manager: a removal leaves the
-  tunnel up until the unplug.** After `INSTALL /eject` or Device Manager's
+  tunnel up until the unplug.** After `INSTALL /console /eject` or Device Manager's
   Remove, the device is stopped but its tunnel stays, so a Refresh can
   find it again; unplug it.
 - **A USB4 host that stops answering stays stopped until the controller is
@@ -2285,7 +2290,7 @@ does SweetLow's stack. With NUSB 3.3 installed, the icon lists USB sticks
 and UAS disks under `xhci98.sys`, as Windows ME's own does: Stop gives "Safe
 To Remove Hardware", and a disk with a file open is refused until the file
 is closed. Neither lists an NVMe drive behind a Thunderbolt or USB4 tunnel:
-remove that with the xHCI98 USB Tree or `INSTALL /eject`. The USB Tree's
+remove that with the xHCI98 USB Tree or `INSTALL /console /eject`. The USB Tree's
 Safely Remove also stops USB storage on both systems.
 
 **From `3.2.0.0` the download carries them, and the installer offers

@@ -111,6 +111,7 @@
 #define MK_DICS_FLAG_GLOBAL         0x00000001UL
 #define MK_DI_NEEDRESTART           0x00000080UL
 #define MK_DI_NEEDREBOOT            0x00000100UL
+#define MK_CM_SETUP_DEVNODE_READY   0x00000000UL
 
 /* ======================================================================== */
 /* The routines looked up at run time                                       */
@@ -124,6 +125,7 @@ typedef DWORD (WINAPI *PFN_CM_GETPROP)(DWORD, ULONG, ULONG *, void *, ULONG *,
                                        ULONG);
 typedef DWORD (WINAPI *PFN_CM_SETPROP)(DWORD, ULONG, void *, ULONG, ULONG);
 typedef DWORD (WINAPI *PFN_CM_WAIT)(DWORD);
+typedef DWORD (WINAPI *PFN_CM_SETUPDN)(DWORD, ULONG);
 typedef HDEVINFO (WINAPI *PFN_GETCLASSDEVS)(const GUID *, PCSTR, HWND, DWORD);
 typedef BOOL (WINAPI *PFN_ENUMINFO)(HDEVINFO, DWORD, PSP_DEVINFO_DATA);
 typedef BOOL (WINAPI *PFN_GETINSTID)(HDEVINFO, PSP_DEVINFO_DATA, PSTR, DWORD,
@@ -153,6 +155,7 @@ static struct {
     PFN_CM_GETPROP GetProp;
     PFN_CM_SETPROP SetProp;
     PFN_CM_WAIT WaitInstall;
+    PFN_CM_SETUPDN SetupDn;     /* record 21 7.6; optional               */
     PFN_GETCLASSDEVS GetClassDevs;
     PFN_ENUMINFO EnumInfo;
     PFN_GETINSTID GetInstanceId;
@@ -369,6 +372,8 @@ static int mk_load(void)
                       "CM_Set_DevNode_Registry_PropertyA", &missing);
     api.WaitInstall = (PFN_CM_WAIT)mk_proc(api.CfgMgr,
                           "CMP_WaitNoPendingInstallEvents", &optional);
+    api.SetupDn = (PFN_CM_SETUPDN)mk_proc(api.CfgMgr, "CM_Setup_DevNode",
+                                          &optional);
     api.GetClassDevs = (PFN_GETCLASSDEVS)mk_proc(api.SetupApi,
                            "SetupDiGetClassDevsA", &missing);
     api.EnumInfo = (PFN_ENUMINFO)mk_proc(api.SetupApi, "SetupDiEnumDeviceInfo",
@@ -4801,6 +4806,363 @@ static int mk_br_owner(int node, MK_NHI **owner, INST_U32 *memberBdf,
     return 0;
 }
 
+/* ======================================================================== */
+/* A hot-added controller waiting for a restart (record 21 section 7.6)     */
+/* ======================================================================== */
+
+/* The arrivals this service has met, by instance id: an entry stays while
+ * its id is on the walk (one start a dock's arrival), and keeps the last
+ * reason logged so a deferral is logged once. */
+#define MK_CTL_MAX  16
+typedef struct _MK_CTL_SEEN {
+    char Id[INST_ID_CHARS];
+    int Tried;
+    int LastWhy;
+    int Seen;
+} MK_CTL_SEEN;
+static MK_CTL_SEEN ctlSeen[MK_CTL_MAX];
+static int ctlSeenCount;
+
+static MK_CTL_SEEN *mk_ctl_seen(const char *id, int make)
+{
+    int i;
+
+    for (i = 0; i < ctlSeenCount; i++) {
+        if (inst_eq(ctlSeen[i].Id, id)) {
+            return &ctlSeen[i];
+        }
+    }
+    if (!make || ctlSeenCount >= MK_CTL_MAX) {
+        return NULL;
+    }
+    memset(&ctlSeen[ctlSeenCount], 0, sizeof(ctlSeen[0]));
+    inst_copy(ctlSeen[ctlSeenCount].Id, id, sizeof(ctlSeen[0].Id));
+    ctlSeen[ctlSeenCount].LastWhy = -1;
+    return &ctlSeen[ctlSeenCount++];
+}
+
+/* 32-bit Windows Vista or 7, this service the native 32-bit one. */
+static int mk_ctl_system(void)
+{
+#ifdef _WIN64
+    return 0;
+#else
+    return osv.dwMajorVersion == 6 && osv.dwMinorVersion <= 1;
+#endif
+}
+
+/* The helper's service reads SERVICE_RUNNING. */
+static int mk_ctl_helper(void)
+{
+    SC_HANDLE scm;
+    SC_HANDLE svc;
+    SERVICE_STATUS st;
+    int up = 0;
+
+    scm = OpenSCManagerA(NULL, NULL, SC_MANAGER_CONNECT);
+    if (scm == NULL) {
+        return 0;
+    }
+    svc = OpenServiceA(scm, "xhcihlpr", SERVICE_QUERY_STATUS);
+    if (svc != NULL) {
+        up = QueryServiceStatus(svc, &st) &&
+             st.dwCurrentState == SERVICE_RUNNING;
+        CloseServiceHandle(svc);
+    }
+    CloseServiceHandle(scm);
+    return up;
+}
+
+/* The devnode's driver key: its InfSection and MatchingDeviceId. */
+static int mk_ctl_drvkey(DWORD dn, char *sec, size_t secCap, char *match,
+                         size_t matchCap)
+{
+    char drv[128];
+    char path[200];
+    HKEY k;
+    DWORD type;
+    DWORD n;
+    int ok = 0;
+
+    sec[0] = '\0';
+    match[0] = '\0';
+    if (mk_prop_text(dn, MK_CM_DRP_DRIVER, drv, sizeof(drv), NULL) !=
+        MK_CR_SUCCESS || drv[0] == '\0' || strlen(drv) > 100) {
+        return 0;
+    }
+    sprintf(path, "SYSTEM\\CurrentControlSet\\Control\\Class\\%s", drv);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    /* Each value zeroed first and terminated at the length read: a value
+     * stored without its NUL never takes the rest of an earlier read. */
+    memset(sec, 0, secCap);
+    n = (DWORD)secCap - 1;
+    if (RegQueryValueExA(k, "InfSection", NULL, &type, (LPBYTE)sec, &n) ==
+        ERROR_SUCCESS && type == REG_SZ && n < (DWORD)secCap) {
+        sec[n] = '\0';
+        memset(match, 0, matchCap);
+        n = (DWORD)matchCap - 1;
+        if (RegQueryValueExA(k, "MatchingDeviceId", NULL, &type,
+                             (LPBYTE)match, &n) == ERROR_SUCCESS &&
+            type == REG_SZ && n < (DWORD)matchCap) {
+            match[n] = '\0';
+            ok = 1;
+        }
+    }
+    RegCloseKey(k);
+    if (!ok) {
+        sec[0] = '\0';
+        match[0] = '\0';
+    }
+    return ok;
+}
+
+/* The member node above `node` (within eight steps, as mk_br_owner) and
+ * its domain: 1 with *owner and *member when found. */
+static int mk_ctl_member(int node, MK_NHI **owner, int *member)
+{
+    int p;
+    int steps;
+    MK_NHI *o;
+
+    for (p = nodes[node].Parent, steps = 0; p >= 0 && steps <= 8;
+         p = nodes[p].Parent, steps++) {
+        if (!mk_is_pci(&nodes[p]) || !nodes[p].HasLoc) {
+            continue;
+        }
+        o = mk_owner(mk_node_bdf(&nodes[p]));
+        if (o != NULL) {
+            *owner = o;
+            *member = p;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The inputs of devnode `dn` (id `id`) read afresh, but the walk's
+ * Behind, Protected and Tried, which the caller fills. */
+static void mk_ctl_read(DWORD dn, MK_CTL_IN *in, char *service,
+                        size_t serviceCap, char *compat, size_t compatCap,
+                        char *sec, size_t secCap, char *match,
+                        size_t matchCap)
+{
+    size_t compatBytes = 0;
+    DWORD cr;
+    ULONG st = 0;
+    ULONG pr = 0;
+    ULONG flags = 0;
+
+    cr = mk_prop_text(dn, MK_CM_DRP_SERVICE, service, serviceCap, NULL);
+    in->Service = cr == MK_CR_SUCCESS ? service : NULL;
+    if (mk_prop_text(dn, MK_CM_DRP_COMPATIBLEIDS, compat, compatCap,
+                     &compatBytes) == MK_CR_SUCCESS) {
+        in->XhciCompat = inst_msz_has(compat, compatBytes, MK_CTL_MATCH);
+    }
+    in->DrvRead = mk_ctl_drvkey(dn, sec, secCap, match, matchCap);
+    in->InfSection = sec;
+    in->MatchingId = match;
+    in->FlagsRead = mk_prop_dword(dn, MK_CM_DRP_CONFIGFLAGS, &flags);
+    in->Flags = flags;
+    in->StatusOk = api.Status(&st, &pr, dn, 0) == MK_CR_SUCCESS;
+    in->Status = st;
+    in->Problem = pr;
+}
+
+/* The start, once the walk found a candidate: every condition read again
+ * under the tools' eject mutex, the owning domain's answer with them; a
+ * change defers to a later poll and spends nothing. */
+static void mk_ctl_start(int node, MK_NHI *owner, int member,
+                         MK_CTL_SEEN *seen)
+{
+    static MK_NHI f;
+    MK_CTL_IN in;
+    HANDLE em;
+    DWORD dn;
+    DWORD p;
+    DWORD cr;
+    ULONG st;
+    ULONG pr;
+    int steps;
+    int why;
+    int chain = 0;
+    char id[INST_ID_CHARS];
+    char pid[INST_ID_CHARS];
+    char memberId[INST_ID_CHARS];
+    char service[64];
+    char compat[1024];
+    char sec[64];
+    char match[128];
+
+    inst_copy(id, nodes[node].Id, sizeof(id));
+    inst_copy(memberId, nodes[member].Id, sizeof(memberId));
+    em = mk_lock(MK_EJECT_MUTEX, 1000);
+    if (em == NULL) {
+        return;
+    }
+    memset(&in, 0, sizeof(in));
+    in.Restart = paramRestart != 0;
+    in.Nt6x86 = mk_ctl_system();
+    in.Pci = inst_starts(id, "PCI\\");
+    in.Protected = 0;   /* the walk's answer; a protected device is never
+                           behind a verified port's chain afresh */
+    in.Tried = seen->Tried;
+    in.InstallIdle = mk_no_install_pending();
+    in.HelperRunning = mk_ctl_helper();
+    /* the owning domain, read again: verifiable, the same epoch and
+     * generation, the member still active */
+    memset(&f, 0, sizeof(f));
+    f.Node = owner->Node;
+    if (api.Status(&st, &pr, nodes[owner->Node].Dn, 0) == MK_CR_SUCCESS) {
+        f.DevOk = (st & MK_DN_STARTED) != 0 && (st & MK_DN_HAS_PROBLEM) == 0;
+        in.Behind = mk_read_nhi(&f) && mk_verifiable(f.DevOk, &f.Q, &f.M) &&
+                    f.Q.EpochLo == owner->Q.EpochLo &&
+                    f.Q.EpochHi == owner->Q.EpochHi &&
+                    f.M.Gen == owner->M.Gen &&
+                    mk_member_active(&f.Q, mk_node_bdf(&nodes[member]));
+    }
+    /* the devnode afresh, its parent chain reaching the same member */
+    if (api.Locate(&dn, id, MK_CM_LOCATE_NORMAL) != MK_CR_SUCCESS) {
+        in.StatusOk = 0;
+        why = MK_CTL_NOT_WAITING;
+    } else {
+        for (cr = api.Parent(&p, dn, 0), steps = 0;
+             cr == MK_CR_SUCCESS && steps <= 8;
+             cr = api.Parent(&p, p, 0), steps++) {
+            if (api.DeviceId(p, pid, sizeof(pid) - 1, 0) == MK_CR_SUCCESS) {
+                pid[sizeof(pid) - 1] = '\0';
+                if (inst_eq(pid, memberId)) {
+                    chain = 1;
+                    break;
+                }
+            }
+        }
+        if (!chain) {
+            in.Behind = 0;
+        }
+        mk_ctl_read(dn, &in, service, sizeof(service), compat,
+                    sizeof(compat), sec, sizeof(sec), match, sizeof(match));
+        why = mk_ctl_ready_why(&in);
+    }
+    if (why != MK_CTL_GO) {
+        if (seen->LastWhy != why) {
+            mk_log("controller not started yet: %s: %s", id,
+                   mk_ctl_why_text(why));
+            seen->LastWhy = why;
+        }
+        mk_unlock(em);
+        return;
+    }
+    /* Immediately after the fresh reads: the call, the attempt spent. */
+    seen->Tried = 1;
+    mkRestartMade = 1;
+    cr = api.SetupDn(dn, MK_CM_SETUP_DEVNODE_READY);
+    Sleep(500);
+    st = 0;
+    pr = 0;
+    if (cr == MK_CR_SUCCESS && api.Status(&st, &pr, dn, 0) == MK_CR_SUCCESS &&
+        (st & MK_DN_STARTED) != 0 && (st & MK_DN_HAS_PROBLEM) == 0) {
+        mk_log("controller started: %s (it waited for a restart of Windows; "
+               "the helper is running)", id);
+    } else {
+        mk_log("controller not started: %s: CM_Setup_DevNode %lu, status "
+               "%08lX problem %lu; a restart of Windows starts it", id,
+               (unsigned long)cr, (unsigned long)st, (unsigned long)pr);
+    }
+    mk_unlock(em);
+}
+
+/* One poll's look (after the marks): the arrivals no longer on the walk
+ * forgotten, then the first candidate started. */
+static void mk_ctl_poll(const int *prot)
+{
+    int i;
+    int j;
+    int cand = -1;
+    int candMember = -1;
+    MK_NHI *candOwner = NULL;
+    MK_CTL_SEEN *seen;
+
+    for (j = 0; j < ctlSeenCount; j++) {
+        ctlSeen[j].Seen = 0;
+    }
+    for (i = 0; i < nodeCount; i++) {
+        if ((seen = mk_ctl_seen(nodes[i].Id, 0)) != NULL) {
+            seen->Seen = 1;
+        }
+    }
+    for (j = 0; j < ctlSeenCount; ) {
+        if (!ctlSeen[j].Seen) {
+            ctlSeen[j] = ctlSeen[--ctlSeenCount];
+        } else {
+            j++;
+        }
+    }
+    if (api.SetupDn == NULL || !mk_ctl_system()) {
+        return;
+    }
+    for (i = 0; i < nodeCount && cand < 0; i++) {
+        MK_CTL_IN in;
+        MK_NHI *o = NULL;
+        int member = -1;
+        char sec[64];
+        char match[128];
+        int why;
+
+        if (!mk_is_pci(&nodes[i]) || !inst_eq(nodes[i].Service, "xhci98") ||
+            !nodes[i].StatusOk ||
+            (nodes[i].Status & MK_DN_HAS_PROBLEM) == 0) {
+            continue;
+        }
+        memset(&in, 0, sizeof(in));
+        in.Restart = paramRestart != 0;
+        in.Nt6x86 = 1;
+        in.Pci = 1;
+        in.Service = nodes[i].ServiceBad ? NULL : nodes[i].Service;
+        in.XhciCompat = inst_msz_has(nodes[i].Compat, nodes[i].CompatBytes,
+                                     MK_CTL_MATCH);
+        in.DrvRead = mk_ctl_drvkey(nodes[i].Dn, sec, sizeof(sec), match,
+                                   sizeof(match));
+        in.InfSection = sec;
+        in.MatchingId = match;
+        in.FlagsRead = mk_prop_dword(nodes[i].Dn, MK_CM_DRP_CONFIGFLAGS,
+                                     &in.Flags);
+        in.StatusOk = 1;
+        in.Status = nodes[i].Status;
+        in.Problem = nodes[i].Problem;
+        in.Behind = mk_ctl_member(i, &o, &member) && o->Verifiable &&
+                    mk_member_active(&o->Q, mk_node_bdf(&nodes[member]));
+        in.Protected = prot[i] != 0;
+        in.HelperRunning = 1;   /* read with the install's state, afresh */
+        in.InstallIdle = 1;
+        seen = mk_ctl_seen(nodes[i].Id, 0);
+        in.Tried = seen != NULL && seen->Tried;
+        why = mk_ctl_ready_why(&in);
+        if (why == MK_CTL_GO) {
+            cand = i;
+            candOwner = o;
+            candMember = member;
+        } else if (why != MK_CTL_NOT_OURS && why != MK_CTL_DRIVER_KEY &&
+                   why != MK_CTL_NOT_WAITING && why != MK_CTL_TRIED) {
+            /* a controller waiting for a restart that stays so: once */
+            seen = mk_ctl_seen(nodes[i].Id, 1);
+            if (seen != NULL && seen->LastWhy != why) {
+                mk_log("controller not started: %s: %s", nodes[i].Id,
+                       mk_ctl_why_text(why));
+                seen->LastWhy = why;
+            }
+        }
+    }
+    if (cand >= 0) {
+        seen = mk_ctl_seen(nodes[cand].Id, 1);
+        if (seen != NULL) {
+            mk_ctl_start(cand, candOwner, candMember, seen);
+        }
+    }
+}
+
 /* One poll; returns the milliseconds to the next. */
 /* The connection manager off the boot path (design record 23 section
  * 5.14; task 44.32, owner 2026-10-25): the setup engine makes xhcicm a
@@ -4936,6 +5298,10 @@ static DWORD mk_poll(void)
     }
     mk_entries(prot);
     if (mkRestartMade || mkBrRewalked) {
+        return mk_poll_ms(any);
+    }
+    mk_ctl_poll(prot);
+    if (mkRestartMade) {
         return mk_poll_ms(any);
     }
     mk_reconcile_all();

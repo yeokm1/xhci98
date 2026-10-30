@@ -6,7 +6,7 @@
 # Build with scripts\build-driver.cmd, which builds this directory after
 # src\ for every flavour and runs the import gate on the result against
 # scripts\import-gate\xhciuas-imports.allow. Output: src\uas\objfre\i386\
-# xhciuas.sys (release), src\uas\objchk (debug), src\uas\objchk_qemu (qemu).
+# xhciuas.sys (release) and src\uas\objchk_qemu (qemu).
 #
 # THE PURE CORE: uas_iu.c, DDK-free and host-tested (test\test_uas.c).
 # uas_mem.c is the one file that allocates pool, MDLs and IRP memory; the

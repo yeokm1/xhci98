@@ -44,7 +44,7 @@ without signing the driver themselves.
 ## 2. The decision
 
 **Owner, 2026-10-11:** every published x64 package directory
-(`release-x64`, `debug-x64`) carries `xhci98.sys` and `xhciuas.sys` with an
+(`release-x64`, and `debug-x64` up to `3.3.0.0`) carries `xhci98.sys` and `xhciuas.sys` with an
 embedded Authenticode signature by the project test certificate - SHA-1
 file digest, no timestamp, no catalog, both INFs unchanged - applied by the
 packager at staging and never by hand. It was to go into the `2.2.0.3` TEST
@@ -70,14 +70,14 @@ no opinion - is kept whole. Record 11 decision 9 now points here.
 ## 3. What is signed, and how
 
 - **The files:** `xhci98.sys`, `xhciuas.sys` and, since the Thunderbolt 3
-  connection manager joined the package, `xhcicm.sys` of both published
-  x64 flavours, each signed once. In `3.0.0.0` `nt\xhcicm.sys`, the
+  connection manager joined the package, `xhcicm.sys` of each published
+  x64 flavour (release, and debug up to `3.3.0.0`), each signed once. In `3.0.0.0` `nt\xhcicm.sys`, the
   filter INF's own copy, was the signed file staged a second time, the
   same bytes; from `3.1.0.0` the x64 package keeps the filter INF at the
   flavour directory's root beside the one `xhcicm.sys` and has no `nt\`.
   Since `3.1.0.0` also the
   bundled Stor98's `stor98.sys` of an amd64 package (`release-x64`; the
-  debug directories carry no Stor98): Stor98 is built from `src\stor98`
+  debug directories of the cuts up to `3.3.0.0` carried no Stor98): Stor98 is built from `src\stor98`
   with the drivers and versioned with them, and the owner's decision of
   2026-10-19 is that one signature signs everything. Until then the
   bundled `stor98.sys` (Stor98 `0.3.0.0` to `0.4.0.0`) carried Stor98's

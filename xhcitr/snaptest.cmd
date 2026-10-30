@@ -175,13 +175,14 @@ if not errorlevel 1 (
 
 rem Task 35.3's HCD region decoded over a canned image: a port Failed on the
 rem speed, a working SuperSpeed port by the fallback, an empty port left out,
-rem and the nonzero counters by name.
+rem and the nonzero counters by name; then task 45.40's identity words, an
+rem Empty port kept for them.
 "%~dp0XHCITR.EXE" /snaptest -selftest-hcd > "%BASE%.hcd.log"
 if not "%errorlevel%"=="0" (
     echo FAIL: -selftest-hcd exited %errorlevel%, expected 0
     set FAILED=1
 )
-for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown") do (
+for %%S in ("13  Failed      speed (no EP0 size)" "4  unknown (no mapping)" "notes 5 of 8, 2 refused" "14  Present     none" "4  SuperSpeed (default ID, unlisted on a USB 3 table)" "2 of 3 root ports shown" "SlotsEnabled               4" "PortSpeedSuper             1" "2 of 63 nonzero" "not a shape this build reads" "  17  Failed      speed (no EP0 size)" "1 of 2 root ports shown" "identity: last listed 0BDA:8157 on the serial form; 1 deferred, 1 spent; failed, waits for a new connection" "identity: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; bypass for this connection" "2 of 2 root ports shown") do (
     findstr /C:%%S "%BASE%.hcd.log" > nul
     if errorlevel 1 (
         echo FAIL: the HCD region decode does not say %%S
