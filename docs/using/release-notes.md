@@ -1674,11 +1674,15 @@ have every leg.
   similar device is on the dock's own USB controller** (task 45.35): on
   98 SE and ME, and on 2000, XP, Vista and 7 under a firmware connection
   manager (Thunderbolt 3, and the Intel USB4 controllers whose firmware
-  runs one). Otherwise Windows may never finish removing the dock: it is
-  not found again when plugged back, and Windows does not shut down
-  (record 17 section 4.13's kept transfers, below "Known limitations").
-  On Vista and 7, plugging such a dock in again can then stop the
-  computer responding (task 45.49). On 2000
+  runs one). Stop it in the xHCI98 USB Tree or with `INSTALL /eject`
+  ("Removing a Thunderbolt or USB4 device safely"); Windows' own Safely
+  Remove Hardware may not list such a dock. Otherwise Windows may never
+  finish removing the dock: it is not found again when plugged back, and
+  Windows does not shut down (record 17 section 4.13's kept transfers,
+  below "Known limitations"). On Vista and 7, plugging such a dock in
+  again can then stop the computer responding; a dock stopped first is
+  removed, found again when plugged back, and Windows shuts down (task
+  45.49). On 2000
   and XP with a USB4 host whose tunnels this release's connection manager
   builds, the unplug is normally handled: the connection manager reads
   the tunnel closed before this driver asks for the proof, and only in
