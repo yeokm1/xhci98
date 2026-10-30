@@ -490,6 +490,11 @@ BOOLEAN CmNvlinkQ35IdValid(ULONG id);
  * other pair (Server 2003 x86's 5.2 among them). */
 ULONG CmNvlinkSystemNt(ULONG major, ULONG minor, BOOLEAN win64);
 
+/* 98 SE or ME from the VMM's version (Get_VMM_Version's AX: major in the
+ * high byte, minor in the low): 4.10 (040Ah) is 98 SE, 4.90 (045Ah) ME;
+ * CM_NVLINK_SYS_UNKNOWN for any other word. */
+ULONG CmNvlinkSystem9x(ULONG vmmVersion);
+
 /* The qualification bit of `kind` and `kase` in a table row, and whether
  * `table` (CM_NVLINK_SYSTEMS rows) qualifies them on `system`; an unknown
  * system, kind or case is not qualified. CmNvlinkQ35Qualified asks the

@@ -1362,12 +1362,11 @@ there, at both depths, as today.
    bit is 0 when the code lands, and each is set by a commit that cites
    the reading that passed it (`runs/run-45.md`, "45.18"). The system is
    told apart by what already tells each one apart here: 98 SE from ME by
-   a version the system answers - the VMM's (4.10 and 4.90) or
-   CONFIGMG's `Get_Version`, which `cm_cfgmg.c`'s guard already calls -
-   chosen at the first 98 SE and ME leg, whose reading of the exact words
-   comes before that code [inf]; until then 98 SE and ME are an unknown
-   system and no q35 bit applies there (`CmEjQualified9x` only returns
-   the constant its caller names, and today's caller asks for both); on NT the version in the kernel's shared data
+   the VMM's version, `Get_VMM_Version` (VMM service 0, through the same
+   jump dynalink as the registry services): 4.10 is 98 SE, 4.90 ME, any
+   other word no system (the first edition of 98 also answers 4.10 and is
+   no target of this driver's); `CmEjQualified9x` only returns the
+   constant its caller names, and today's caller asks for both; on NT the version in the kernel's shared data
    page, as record 31's `cmChildIds` reads it (`IoIsWdmVersionAvailable`
    cannot tell Vista from 7 or 8 from 8.1), major and minor exactly, and
    `_WIN64` for the architecture; an unrecognised system has no bit. A bit is set only when every run of item 11's set
@@ -1388,11 +1387,13 @@ there, at both depths, as today.
     reading within the time left, and the mark tests each entry's
     endpoint and bridge identity (`cmNvMarkEx`'s q35 identity). Every bit
     is 0 in that code, so it changes nothing a user runs until a reading
-    sets one. On 98 SE and ME a PCI Express reading needs no write and
-    could be made on the thread, but the system is not told apart yet
-    (item 8), so the 9x half of D1 - the system's identification and,
-    if its leg shows the thread's read unfit, the call worker's route -
-    comes with the 98 SE and ME legs. D2 and M follow with the kid.
+    sets one. On 98 SE and ME a PCI Express reading needs no write, so
+    it is made on the thread through the configuration read the scan
+    already makes there (`HalGetBusData`), not through the call worker
+    that the SHPC bridge's select write needs; the system is told apart
+    by the VMM's version (item 8). D2 and M are deferred to the next
+    release with 45.15's chain-port correspondence and per-tunnel keying
+    (owner, 2026-10-30, the roadmap's 45.18 line).
 11. **The legs** (q35 only; `usb4-emu` with `-device usb4-debug-port`,
     `-trace usb4_tp_*`, `usb4_dbg_*`, `usb4_h_*` and `pci_nvme_*`):
     `usb4-generic` with `host-model=intel-adl`; a plain NVMe router on

@@ -415,6 +415,19 @@ ULONG CmNvlinkSystemNt(ULONG major, ULONG minor, BOOLEAN win64)
     return CM_NVLINK_SYS_UNKNOWN;
 }
 
+ULONG CmNvlinkSystem9x(ULONG vmmVersion)
+{
+    /* The first edition of 98 also answers 4.10; it is no target of this
+     * driver's. */
+    if ((vmmVersion & 0xFFFFUL) == 0x040AUL) {
+        return CM_NVLINK_SYS_98SE;
+    }
+    if ((vmmVersion & 0xFFFFUL) == 0x045AUL) {
+        return CM_NVLINK_SYS_ME;
+    }
+    return CM_NVLINK_SYS_UNKNOWN;
+}
+
 /*
  * The q35 qualification (record 34 section 3.11 item 8): one row per
  * system, a bit per kind and case (CmNvlinkQ35Bit). Every bit is 0 until
