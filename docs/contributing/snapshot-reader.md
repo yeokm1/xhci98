@@ -553,6 +553,12 @@ product id of the last group listed there), its serial-form flag and
 deferral latch, and its deferrals made and spent. The tool prints them as
 an "identity:" line under the port, and shows a port that holds them even
 when it is Empty.
+The places behind hubs (the same task, owner 2026-10-30) are a block
+appended to the header (header 792 words): the entry count, the words of
+one and the first entry's word at words 629 to 631, then 32 entries of
+five words - the place's instance key (root port in bits 7:0, Route
+String above), the ids, the serial-form flag and latch, the deferrals
+made and spent - which the tool prints under "identity behind hubs".
 
 ### Controller tolerance (2.2.0.0)
 

@@ -212,12 +212,20 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     /* Task 45.40: each root port's identity memory and deferral latch, from
      * the port's own state, which a log note can be overwritten before. */
     for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
-        if (hc->Ports[i].IdMemVidPid != 0 || hc->Ports[i].IdDeferLatch != 0) {
+        if (hc->Ports[i].Id.VidPid != 0 || hc->Ports[i].Id.Latch != 0) {
             XhciLogAppend(log, "id.port", i + 1, 1);
-            XhciLogAppend(log, "id.mem.vidpid", hc->Ports[i].IdMemVidPid, 1);
-            XhciLogAppend(log, "id.mem.serial", hc->Ports[i].IdMemSerial, 1);
-            XhciLogAppend(log, "id.defer.latch", hc->Ports[i].IdDeferLatch,
-                          1);
+            XhciLogAppend(log, "id.mem.vidpid", hc->Ports[i].Id.VidPid, 1);
+            XhciLogAppend(log, "id.mem.serial", hc->Ports[i].Id.Serial, 1);
+            XhciLogAppend(log, "id.defer.latch", hc->Ports[i].Id.Latch, 1);
+        }
+    }
+    /* And each place behind a hub that has a record. */
+    for (i = 0; i < HCD_ID_PLACES; i++) {
+        if (hc->IdPlaces[i].Key != 0) {
+            XhciLogAppend(log, "id.place", hc->IdPlaces[i].Key, 1);
+            XhciLogAppend(log, "id.mem.vidpid", hc->IdPlaces[i].VidPid, 1);
+            XhciLogAppend(log, "id.mem.serial", hc->IdPlaces[i].Serial, 1);
+            XhciLogAppend(log, "id.defer.latch", hc->IdPlaces[i].Latch, 1);
         }
     }
     XhciLogAppend(log, "fastpoll.mode", hc->FastPollMode, 1);

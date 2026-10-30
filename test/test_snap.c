@@ -29,20 +29,26 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 2516,
-             "a 629-word header (35-T.8 appended twelve, 36.3 28, 36.21 "
-             "154, 36.9 two, 36.24 and 36.25 33, 36.38 69, 44.35 323)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3168,
+             "a 792-word header (45.40 appended 163; 35-T.8 twelve, "
+             "36.3 28, 36.21 154, 36.9 two, 36.24 and 36.25 33, 36.38 69, 44.35 323)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 80,
              "a twenty-word record (45.40 appended four)");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 2516,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3168,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 258,
              "the whole counter block (45.45's command-state checker: 252 "
              "to 257)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             2516 + 18 * 80, "counters after the last record");
+             3168 + 18 * 80, "counters after the last record");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS), 32,
+             "45.40: 32 places behind hubs");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_WORDS), 5,
+             "of five words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_FIRST), 632,
+             "the first at word 632, ending the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
@@ -61,8 +67,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 629 + 18 * 20 + 258, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 629 + 258,
+    CHECK_EQ(XhciSnapHcdWords(18), 792 + 18 * 20 + 258, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 792 + 258,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -897,8 +903,13 @@ static void test_xport_words(void)
              "placed at 309");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_XPORT_AT), 0,
              "a record is a reading, the door's");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_AT + 32 * 10, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "the records end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_AT + 32 * 10,
+             XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS,
+             "the records end at 45.40's places");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_IDPLACE_AT + 32 * 5, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "45.40's places end the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_AT), 0,
+             "a place is a reading, the door's");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_X_SLOT, 0, "slot first");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_X_COUNT, 9, "count last");
 }

@@ -1431,16 +1431,17 @@ static ULONG hcdSerialTakenElsewhere(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
  * re-enumeration"): every listing or revival writes the identity it
  * answers to the log - the location, the read's outcome (HCD_SERIAL_*),
  * whether a duplicate cleared the serial id, and the form - and, for a
- * non-hub group of a device attached directly to a root port, the port's
- * memory of it: the ids and whether `first`, the group's effective first
- * PDO, answers the serial form. Any group listed for a device attached
- * directly to a root port, a hub's included, clears that port's deferral
- * latch. Thread
- * only, after the locks are let go; `first` is listed.
+ * non-hub group of a device attached directly to a root port or to a
+ * hub's port, its place's record (HcdIdPlace, taken behind a hub): the
+ * ids and whether `first`, the group's effective first PDO, answers the
+ * serial form. Any group listed there, a hub's included, clears the
+ * place's deferral latch (a hub's listing takes no entry of its own).
+ * Thread only, after the locks are let go; `first` is listed.
  */
 static VOID hcdIdRemember(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                           PHCD_DEVICE_PDO first, ULONG duplicate)
 {
+    PXHCI_ID_PLACE place;
     PHCD_PORT p;
     ULONG serial;
 
@@ -1448,19 +1449,23 @@ static VOID hcdIdRemember(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XhciLogNote(&hc->Hc, "id.form",
                 (dev->Location << 16) | ((dev->SerialState & 0xFFUL) << 8) |
                     ((duplicate ? 1UL : 0UL) << 4) | serial);
-    if (dev->Location == 0 || dev->Location > XHCI_MAX_ROOT_PORTS) {
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT) {
         return;
     }
     p = &hc->Ports[dev->Location - 1];
-    if (p->Hub != NULL || p->Device != dev) {
+    if (p->Device != dev) {
         return;
     }
-    /* Any listing at the port ends a bypass, a hub's too; only a non-hub
+    place = HcdIdPlace(hc, p, first->Hub ? 0UL : 1UL);
+    if (place == NULL) {
+        return;
+    }
+    /* Any listing at the place ends a bypass, a hub's too; only a non-hub
      * group is remembered. */
-    p->IdDeferLatch = XHCI_FUNC_LATCH_NONE;
+    place->Latch = XHCI_FUNC_LATCH_NONE;
     if (!first->Hub) {
-        p->IdMemVidPid = HcdDeviceVidPid(dev);
-        p->IdMemSerial = serial;
+        place->VidPid = HcdDeviceVidPid(dev);
+        place->Serial = serial;
     }
 }
 
