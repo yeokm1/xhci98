@@ -12577,8 +12577,8 @@ length, CDB. Its rules for the SCSI forms:
    back. Otherwise `STATUS_BUFFER_TOO_SMALL`.
 3. `CdbLength` is 1 to 16. `DataIn` is `SCSI_IOCTL_DATA_OUT` (0),
    `_IN` (1) or `_UNSPECIFIED` (2) [hdr]. `SenseInfoLength` is at most
-   `UAS_PASS_SENSE` (the engine's sense limit, 255 at most since
-   `SenseInfoBufferLength` is a byte).
+   `UAS_PT_SENSE_MAX`, 252 (a SENSE IU's limit, `UAS_SENSE_MAX`; under
+   the 255 a byte-wide `SenseInfoBufferLength` allows).
 4. `DataTransferLength` is at most the LUN's maximum transfer, the
    `MaximumTransferLength` the PDO reports in its adapter descriptor
    (`uasAdapterProperty`). Otherwise `STATUS_INVALID_PARAMETER`.
@@ -12814,15 +12814,18 @@ the code lands:
 
 | Import | Build | Evidence |
 |---|---|---|
-| `MmProbeAndLockPages`, `MmUnlockPages` | x86 and amd64 | 98 SE: `dmusic.sys` and `kmixer.sys` import both [static, name search of 2026-10-31; the row takes its hint from the file] |
-| `KeGetCurrentThread` | x86 (on amd64 an inline) | 98 SE: `acpi.sys`, `ec.sys` [static, the same search] |
-| `_except_handler3` (the compiler's SEH frame) | x86 | NUSB's `USBSTOR.SYS`, which this project already relies on for 98 SE mass storage, imports it; `NTKERN.VXD` names it [static, the same search] |
+| `MmProbeAndLockPages`, `MmUnlockPages` | x86 and amd64 | Appendix A rows 131 and 132, "evidenced (stock 98 SE precedent)": `ks.sys` 4.10.2222 (hints 9F, A5) and others |
+| `KeGetCurrentThread` | x86 (on amd64 an inline) | Appendix A row 115, evidenced: `ks.sys` 4.10.2222 (hint 71) and others |
+| `KeGetCurrentIrql` (HAL) | x86 (on amd64 an inline) | the row `xhci98-imports.allow` already carries (`uhcd.sys` 4.10.2222 precedent) |
+| `_except_handler3` (the compiler's SEH frame) | x86 | NUSB 3.3's `USBSTOR.SYS` 4.90.3000.1 imports it (hint 46C), and stock 98 SE's `NTKERN.VXD` names it; no stock 98 SE driver imports it. Windows ME's own `KS.SYS`, `USBHUB.SYS`, `SYSAUDIO.SYS` and `TDI.SYS` 4.90.3000.1 import it [static: their import tables, read out of the q35 ME base image, 2026-10-31] |
 | `__C_specific_handler` | amd64 | WNET; the amd64 rule of design record 11 |
 | `IoIs32bitProcess` | amd64 | WNET (XP x64 and later) |
 | `IoReleaseCancelSpinLock`, `InterlockedExchange` (x86: the `IoSetCancelRoutine` macro's) | x86 and amd64 (amd64: an intrinsic) | the rows `xhci98-imports.allow` already carries (`uhcd.sys` 4.10.2222 precedent), copied to `xhciuas`'s lists |
 
-`SITES` admits `uas_mem.obj` for the first four; the cancel pair is
-admitted for `uas_xport.obj`.
+`SITES` admits `uas_mem.obj` for the lock, unlock and exception frame,
+`uas_pdo.obj` for the thread, IRQL and WOW64 checks, and `uas_xport.obj`
+for the cancel pair. The loads on 98 SE and ME are read at the legs:
+`_except_handler3` is the one pair with no stock 98 SE importer.
 
 ### 16.6 The timeout clamp
 
@@ -12958,7 +12961,10 @@ ATA ports document it]:
 - With no such sense, on a good completion with data: Status `50h` (DRDY,
   and bit 4, which ATA-7 and earlier call DSC), Error 0, and the other
   registers as sent. These are written by this driver, not read from the
-  drive; the record and the release notes say so.
+  drive; the record and the release notes say so. A non-data command that
+  ends GOOD has asked for registers with CK_COND and got none: it fails
+  with `STATUS_IO_DEVICE_ERROR`, because an echo of the sent registers
+  would read as the drive's answer (SMART RETURN STATUS's `4Fh/C2h`).
 - With other sense (the bridge refused the CDB, or a transport fault):
   Status `51h` (ERR set), Error `04h` (ABRT), and the sense not returned,
   because `ATA_PASS_THROUGH_EX` has no sense field. That is how a program
