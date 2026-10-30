@@ -1440,6 +1440,31 @@ static VOID test_readings(VOID)
     r.IrqOutcome = XHCI_TBT_BRIRQ_DONE;
     CmNiIrqFromBrnum(&r, &irq);
     CHECK_EQ(irq.Valid, 0, "nothing numbered: no record");
+
+    /* Design record 28 section 13: no bridge below the port, the line
+     * stage run on the port's own bus. */
+    r.Outcome = XHCI_TBT_BRNUM_NONE;
+    r.IrqOutcome = XHCI_TBT_BRIRQ_DONE;
+    r.IrqFnCount = 1;
+    r.IrqFnBdf[0] = 5;
+    r.IrqFnOut[0] = XHCI_TBT_BRFN_WRITTEN;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK(irq.Valid && irq.Count == 1 && irq.Out[0] == CM_NI_IRQ_WRITTEN,
+          "NONE with the stage: the record handed on");
+    r.IrqOutcome = XHCI_TBT_BRIRQ_ACCESS;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK_EQ(irq.Valid, 1, "NONE with a read failed: a record");
+    r.IrqOutcome = XHCI_TBT_BRIRQ_PORT_NONE;
+    r.IrqPin = 1;
+    r.IrqLine = 0;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK(irq.Valid && irq.PortNoLine, "NONE, the port with no line");
+    r.IrqOutcome = XHCI_TBT_BRIRQ_STALE;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK_EQ(irq.Valid, 0, "NONE, stale: no record");
+    r.IrqOutcome = XHCI_TBT_BRIRQ_NONE;
+    CmNiIrqFromBrnum(&r, &irq);
+    CHECK_EQ(irq.Valid, 0, "NONE with no stage: no record, as before");
 }
 
 int main(void)

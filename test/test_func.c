@@ -1099,6 +1099,46 @@ static void test_revive(void)
 }
 
 /* Device text (task 33.6): the indexes a PDO is named from, in order. */
+/* Task 45.40: the deferral decision (design record 13 section 10.7). */
+static void test_serial_defer(void)
+{
+    const ULONG rtl = 0x0BDA8157UL;
+    const ULONG other = 0x0BDA8156UL;
+
+    /* The case it is for: a serial-named group of these ids last listed
+     * at the port, and this read failed or was refused. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_YES, "remembered serial form, read failed");
+    /* A usable read is never deferred, latched or not. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "read usable");
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_NO, "read usable, failure latched");
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_BYPASS),
+             XHCI_FUNC_DEFER_NO, "read usable, bypass");
+    /* Not covered: a hub, behind a hub, or no iSerialNumber. */
+    CHECK_EQ(XhciFuncSerialDefer(0, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "not covered");
+    CHECK_EQ(XhciFuncSerialDefer(0, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_NO, "not covered, failure latched");
+    /* The port remembers another device, or the location form, or
+     * nothing. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, other, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "other ids remembered");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 0, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "location form remembered");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, 0, 0, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "nothing remembered");
+    /* The failure latched for this connection fails at once; a new
+     * connection's bypass publishes. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_FAIL, "failure latched, same connection");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, other, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_FAIL, "failure latched, other ids read");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_BYPASS),
+             XHCI_FUNC_DEFER_NO, "bypass");
+}
+
 static void check_picks(const UCHAR *device, const XHCI_FUNC *func,
                         const UCHAR *cfg, ULONG length, ULONG n, ULONG a,
                         ULONG b, ULONG c, const char *what, int line)
@@ -1599,6 +1639,7 @@ int main(void)
     test_serial_ids();
     test_instance_ids();
     test_revive();
+    test_serial_defer();
     test_text_picks();
     test_text();
     test_firsts();

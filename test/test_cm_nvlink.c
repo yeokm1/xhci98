@@ -1505,13 +1505,24 @@ static void test_q35(void)
     CHECK_EQ(CmNvlinkSystemNt(10, 0, TRUE), CM_NVLINK_SYS_1064, "10 x64");
     CHECK_EQ(CmNvlinkSystemNt(6, 4, FALSE), CM_NVLINK_SYS_UNKNOWN,
              "an unknown version");
+    CHECK_EQ(CmNvlinkSystem9x(0x040A), CM_NVLINK_SYS_98SE, "98 SE: VMM 4.10");
+    CHECK_EQ(CmNvlinkSystem9x(0x045A), CM_NVLINK_SYS_ME, "ME: VMM 4.90");
+    CHECK_EQ(CmNvlinkSystem9x(0x1234045AUL), CM_NVLINK_SYS_ME,
+             "ME: AX alone is read");
+    CHECK_EQ(CmNvlinkSystem9x(0x0400), CM_NVLINK_SYS_UNKNOWN, "95: no row");
+    CHECK_EQ(CmNvlinkSystem9x(0), CM_NVLINK_SYS_UNKNOWN, "no version read");
 
+    /* The compiled table: the readings of runs/run-45.md "45.18" only. */
     for (i = 0; i < CM_NVLINK_SYSTEMS; i++) {
-        CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) &&
-              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
+        CHECK(CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) ==
+                  (i == CM_NVLINK_SYS_2000 || i == CM_NVLINK_SYS_XP ||
+                   i == CM_NVLINK_SYS_XP64),
+              "q35: the root port's D1 read on 2000, XP and XP x64 alone");
+        CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
               !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D2) &&
-              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M),
-              "q35: no bit compiled in before a reading passes");
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M) &&
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_M),
+              "q35: no other bit before a reading passes it");
     }
     memset(table, 0, sizeof(table));
     table[CM_NVLINK_SYS_2000] =

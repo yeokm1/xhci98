@@ -1661,6 +1661,26 @@ ULONG XhciTbtNumberBridges(PXHCI_TBT_CFG io, ULONG port, ULONG flags,
         }
         return r->Outcome;
     }
+    if (rc == XHCI_TBT_BRNUM_NONE && (flags & XHCI_TBT_BRNUM_F_IRQ) != 0 &&
+        r->Functions != 0) {
+        /* Design record 28 section 13: a function directly on the port's
+         * secondary bus, no bridge between, gets the port's line as one
+         * behind a numbered chain does; nothing else is touched. */
+        c.Io = io;
+        c.R = r;
+        c.Go = go;
+        c.GoContext = goContext;
+        c.Next = secondary + 1;
+        c.Limit = subordinate;
+        c.Count = 0;
+        c.Flags = flags;
+        c.PadBus = 0;
+        c.PadMem = 0;
+        c.InCand = 0;
+        brIrq(&c, port, secondary);
+        r->Outcome = XHCI_TBT_BRNUM_NONE;
+        return r->Outcome;
+    }
     if (rc != XHCI_TBT_BRNUM_DONE) {
         r->Outcome = rc;
         return r->Outcome;

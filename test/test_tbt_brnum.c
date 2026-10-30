@@ -1170,6 +1170,137 @@ static VOID test_irq(VOID)
     CHECK_EQ(r.IrqFnOut[2], XHCI_TBT_BRFN_NOT_READ, "the NVMe not read");
 }
 
+/* Design record 28 section 13: no bridge below the port (the emulator's
+ * plain enclosure on a q35 root port): the functions on the port's own
+ * bus get its line; the outcome stays NONE. */
+static VOID test_irq_nobridge(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, nvme, sib;
+
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    mnvmebars(nvme);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_NONE, "no bridge: NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_DONE, "the line stage ran");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010AUL, "the NVMe given line 10");
+    CHECK_EQ(r.IrqSet, 1, "one set");
+    CHECK_EQ(r.IrqFnCount, 1, "one outcome");
+    CHECK_EQ(r.IrqFnBdf[0], XHCI_TBT_BDF(0x06, 0, 0), "the NVMe's");
+    CHECK_EQ(r.IrqFnOut[0], XHCI_TBT_BRFN_WRITTEN, "written");
+    CHECK_EQ(m.N[port].Buses, (0x2AUL << 16) | (0x06UL << 8) | 0x04UL,
+             "the port's buses untouched");
+    CHECK_EQ(r.Writes, 1, "the line its one write: no bus, BAR, command or window");
+    CHECK_EQ(m.N[nvme].Cmd, 0, "the command register untouched");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NONE, "no window stage");
+
+    /* A refusal after a line was written: two functions on the port's pin
+     * (device 0 INTA, device 1 INTD), the second refused: the first put
+     * back. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].Intr = 0x00000400UL;
+    goCalls = 0;
+    goRefuseAt = 2;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_STALE, "stale after a write");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "the written line put back");
+    CHECK_EQ(m.N[sib].Intr, 0x00000400UL, "the second never written");
+    CHECK_EQ(r.Undone, 1, "one undone");
+    goRefuseAt = 0;
+
+    /* A line write not held: ACCESS, recorded NOT_HELD. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x06, 0, 0);
+    m.FailWriteOff = 0x3CUL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_ACCESS, "a write not held");
+    CHECK_EQ(r.IrqFnOut[0], XHCI_TBT_BRFN_NOT_HELD, "recorded not held");
+
+    /* A second function on device 1, INTA: arrives on INTB, left. A line
+     * already set is kept. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x0000010BUL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010BUL, "a line already set kept");
+    CHECK_EQ(m.N[sib].Intr, 0x00000100UL, "device 1 on INTB left");
+    CHECK_EQ(r.IrqKept, 1, "kept");
+    CHECK_EQ(r.IrqOther, 1, "another pin");
+
+    /* The port with no line: nothing written. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x000001FFUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_PORT_NONE, "the port has no line");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* F_IRQ not asked: nothing written, no stage. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "no stage");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* Nothing on the bus: no stage, nothing written. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "an empty bus: no stage");
+
+    /* The go callback refusing at the line's write: put back. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    goCalls = 0;
+    goRefuseAt = 1;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_STALE, "stale");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing left written");
+}
+
 /* A 64-bit prefetchable window is closed through 28h and 2Ch as well as
  * 24h, and a refusal puts all three back. */
 static VOID test_pf64(VOID)
@@ -1988,6 +2119,7 @@ int main(void)
     test_windows();
     test_windows_more();
     test_irq();
+    test_irq_nobridge();
     test_pf64();
     test_windows_order_and_stale();
     test_irq_stale();

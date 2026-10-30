@@ -224,6 +224,30 @@ ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
 
 /*
+ * Identity across a re-enumeration (roadmap-usb4 task 45.40; design record
+ * 13 section 10.7): what a device whose serial read has just ended does at
+ * a root port that remembers the last group listed there. `covered`: a
+ * non-hub device attached directly to a root port, with an iSerialNumber.
+ * `readFailed`: its read ended FAILED or REFUSED (no usable serial).
+ * `vidPid`: its (idVendor << 16) | idProduct. `memVidPid`, `memSerial`:
+ * the port's memory, the last listed group's ids and whether it answered
+ * the serial form. `latch`: the port's XHCI_FUNC_LATCH_*. A usable read
+ * is never deferred; a bypass publishes; a failure latched for this
+ * connection fails at once; a remembered serial form of the same ids
+ * defers. XHCI_FUNC_DEFER_*.
+ */
+#define XHCI_FUNC_LATCH_NONE    0UL /* nothing latched                   */
+#define XHCI_FUNC_LATCH_FAILED  1UL /* a deferral failed, this connection */
+#define XHCI_FUNC_LATCH_BYPASS  2UL /* a new connection after the failure */
+
+#define XHCI_FUNC_DEFER_NO      0UL /* go on as read                     */
+#define XHCI_FUNC_DEFER_YES     1UL /* read again in place               */
+#define XHCI_FUNC_DEFER_FAIL    2UL /* fail the creation, no reads       */
+
+ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
+                          ULONG memVidPid, ULONG memSerial, ULONG latch);
+
+/*
  * Whether a dormant group the device just listed did not revive is retired
  * for that device's place (Windows 98 SE and ME): named by its place (its
  * `oldSerial` empty), at the same instance key (XhciHubInstanceKey) and

@@ -2111,6 +2111,17 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     cmWkLog(w, "cm.brnum.9x.seen",
             (r.Functions << 16) | (r.Bridges << 8) | tries);
     if (r.Outcome == XHCI_TBT_BRNUM_NONE) {
+        if (r.IrqOutcome != XHCI_TBT_BRIRQ_NONE) {
+            /* Design record 28 section 13: no bridge, the port's own bus
+             * given its line. */
+            cmWkLog(w, "cm.brnum.9x.irq",
+                    (r.IrqOutcome & 0xFFUL) | ((r.IrqLine & 0xFFUL) << 8) |
+                        ((r.IrqPin & 0xFFUL) << 16));
+            cmWkLog(w, "cm.brnum.9x.irq-counts",
+                    (r.IrqFunctions & 0xFFUL) | ((r.IrqSet & 0xFFUL) << 8) |
+                        ((r.IrqKept & 0xFFUL) << 16) |
+                        ((r.IrqOther & 0xFFUL) << 24));
+        }
         return;
     }
     cmWkLog(w, "cm.brnum.9x.port-buses", r.PortBuses);

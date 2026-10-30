@@ -3646,6 +3646,71 @@ a cut never sets it, so a cut's builds, and any caller that sets
 `XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
 2026-10-30).
 
+#### The packager's self-tests, skipped when unchanged (owner, 2026-10-30)
+
+`scripts\package\test-package.ps1` takes about half an hour of each gated
+build, and the same tree often runs it twice in a row (a build that is
+repeated, or the amd64 build after the x86 one). It takes the INF gate's
+skip above, with a wider set, because the packager, the releaser and the
+cases that drive them read across the whole tree. The digest
+(`Get-PackagerSelfTestDigest`) is one SHA-256 over:
+
+- every file `git ls-files --cached --others --exclude-standard` lists -
+  each tracked file, and each untracked one that is not ignored but a
+  compiler's or linker's intermediate (`.res`, `.obj`, `.pdb` and the
+  like: a gated build's parallel steps make and delete XHCITR's and
+  XHCIPERF's `.res` beside their sources while this suite runs, which
+  read 2026-10-30 kept the end's digest from matching) - by its
+  path and content, a tracked file that is gone as absent. That covers the
+  packager scripts, `package-common.ps1`, `common.ps1` and the harness,
+  the test fixtures' sources, the INFs and `txtsetup*.oem`, the installer
+  tables (`xhciinst\inst_core.*`), the docs and release notes it checks,
+  the `releases\` records, the free set's pin and everything else a case
+  might open;
+- of what git ignores: the built images the releaser reads by content
+  (`src\pfw\obj\XHCIPFW.VXD`, `src\vsd\obj\S98VSD.VXD` and their `qemu\`
+  twins, whose build is deterministic), the names of the built drivers a
+  case may take as a sample or stage (every `*.sys` and `*.mpd` under
+  `src\`, everything under `out\free\`), and the driver sets' checkouts a
+  case reads when they are there (`scripts\local\usb-wdm-nonfree` and
+  `usb-wdm-free`): each one's presence, every ref and its working tree's
+  state;
+- what the cases run and inherit: `MakeCat.exe` and the catalog case's
+  PE sample by content (Windows' own `kernel32.dll`, a fixed file, where
+  that case used to take a driver the tree had built and every build
+  replaces); the toolchains the binary gates' host tests compile with -
+  MSVC6 and WDK 7.1 as `run-host-tests.cmd` resolves them (`MSVC6`,
+  `WDK71`, else `tools\`) and `tools\win98ddk-extracted` - by every file's
+  path, size and time; the environment variables the suite and its
+  children read (`PATH`, `TEMP`, `SystemRoot` and the rest of the
+  scripts' reads, `MSVC6`, `WDK71`, `INCLUDE`, `LIB` and the compilers'
+  others, `run-host-tests.cmd`'s own flags such as `NORUN` and the
+  suites' `getenv` reads, every `GIT_*` and every `XHCI98_*` but the gated run's token
+  and the skip's own switches), set or not - not every variable, since
+  `build-driver.cmd` sets its own per run (its step clock's times,
+  `ARCH`) - and `git config --list --show-origin` in the tree, both
+  taken once at the start, so a variable a case sets for itself does not
+  move the end's digest; and the
+  PowerShell, .NET and git versions (and whether .NET has
+  `CertificateRequest`, which the signing cases need).
+
+When git cannot list the tree there is no digest and the suite runs whole.
+The record is `out\packager-selftest-pass.txt`, of the INF gate's form
+(digest, the tree's full path, time, checks, `end`), taken whole or not at
+all, deleted before a run, and written only after a run in which every
+check passed and the digest taken again at the end is the one it began
+with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it whole, so every cut
+does (`cut-builds.ps1` and `package-common.ps1` set it, and
+`build-driver.cmd all` sets it unless a pre-merge build sets
+`XHCI98_SELFTEST_SKIP_OK=1`, above). A changed C source changes the
+digest too: the skip saves the repeated run of one tree, not a run after
+an edit. Checked by the self-test itself: the digest moves for a tracked
+file changed or deleted, an untracked file that is not ignored, a built
+`XHCIPFW.VXD` changed and a built driver appearing, and stays for any
+other ignored file; a checkout appearing and a tag added to it move
+it; an inherited variable moves it, and the run's token and the build's
+step-clock variables do not.
+
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
 The release download's `release-x86\` and `release-x64\` carry Stor98, the
