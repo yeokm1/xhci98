@@ -2776,6 +2776,30 @@ Evidence: `E:\xhci98-vm\p45\w45-rtlpair\shots\` (`xp1-*.png`,
 `w7a-*.png`), the cuts and the stand-in pins under
 `E:\xhci98-scratch\p45-w45-rtlpair\`.
 
-Left for the commit with the pin: `usb-wdm-free` v0.1.5 tagged, the
-pin and `INST_WDMFREE_SUMS` moved, the gated build and a real cut's
-`-CheckOnly` on that tree; then the roadmap line.
+**The pin** (2026-10-30): `usb-wdm-free` v0.1.5 was released at
+`048aecd` (`uac2` 0.1.5.0 and `usbcom` 0.1.5.0; `rtl815x` and every
+other package 0.1.4's bytes; its `STAGE.TXT` splits the `rtl815x`
+line) and tagged by the owner. Commit `db824326` carries the four
+parts above with the pin moved to it (105 `SHA256` lines) and
+`INST_WDMFREE_SUMS` `8AF8F638...`, the hash of the exported
+`USBDRV\FREE\SHA256.TXT`. On that commit:
+
+- The gated build (x86, `both`): BUILD + GATES PASSED in 36:14, the
+  packager's self-tests in 22:15 with both sets' checkouts present (the
+  free one a scratch clone carrying v0.1.5 on the same commit, before the
+  owner's tag), so the self-test over the real pinned sets proved the
+  lift against the repository's history; `xhci98.sys` release
+  `D10F83CA...`. The installer's tools were rebuilt after it, since
+  `build-driver.cmd` does not rebuild them and they include
+  `inst_core.h`.
+- `make-release.ps1 -CheckOnly -Arch x86` against the real
+  `usb-wdm-free` (tag v0.1.5) and `usb-wdm-nonfree`: "download 2:
+  usb-wdm-free v0.1.5 (048aecd369f1), 107 files in USBDRV\FREE\" and
+  "the other USB drivers' sets: folders, self-containment, hardware ids
+  and the package table hold, against 3.2.0.0's otherpkgs.txt"; the
+  one refusal is `releases\3.3.0.0` already existing, since the tree's
+  version is still 3.3.0.0 until the release's bump.
+
+So `3.4.0.0`'s free download offers the free and non-free `rtl815x`
+together on XP to 7 x64; with v0.1.5 the free one is copied only, so
+the page shows no change until the free set stages it.
