@@ -1506,12 +1506,16 @@ static void test_q35(void)
     CHECK_EQ(CmNvlinkSystemNt(6, 4, FALSE), CM_NVLINK_SYS_UNKNOWN,
              "an unknown version");
 
+    /* The compiled table: the readings of runs/run-45.md "45.18" only. */
     for (i = 0; i < CM_NVLINK_SYSTEMS; i++) {
-        CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) &&
-              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
+        CHECK(CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) ==
+                  (i == CM_NVLINK_SYS_2000),
+              "q35: the root port's D1 read on 2000 alone");
+        CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
               !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D2) &&
-              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M),
-              "q35: no bit compiled in before a reading passes");
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M) &&
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_M),
+              "q35: no other bit before a reading passes it");
     }
     memset(table, 0, sizeof(table));
     table[CM_NVLINK_SYS_2000] =
