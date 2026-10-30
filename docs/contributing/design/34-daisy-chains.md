@@ -1,6 +1,8 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 8, 2026-10-30, task 45.18, before code: section 3.11,
+Status: revision 9, 2026-10-30, task 45.14: section 3.3.6, the 9x
+padding at the first numbering, for its first reading, reviewed and
+revised before code. Revision 8, 2026-10-30, task 45.18, before code: section 3.11,
 Stor98's statements for chained drives and their q35 admission, and
 questions Q7 to Q11, answered by the owner the same day; reviewed and revised. Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
 unit's own `Removable` answer on NT, reviewed and revised before and with
@@ -515,6 +517,114 @@ runs it on the member, and the walk below the member already reaches
 every devnode below (record 22 section 7.1: the removal walk runs
 recursively below the domain's tunnel ports), the chained device's
 included.
+
+#### 3.3.6 The padding, as designed for its first reading (task 45.14)
+
+Section 3.3.2's Option A made exact for its first part: the padding at
+the first numbering, which the leg below reads before the rest of section
+3.3 (the chain port's own numbering, the devnode locate, the removal and
+`DN_REMOVABLE`) is designed in detail, since all of it rests on that
+reading. Where this section and section 3.3.2's first two bullets differ
+(the share of buses and of memory), this section governs.
+
+- **The flag.** `XHCI_TBT_BRNUM_F_PAD` (`0x8`) in
+  `XhciTbtNumberBridges`. `cmWkNumber` (`cm_cfgwk.c`) passes it at every
+  numbering of a member, with `F_WINDOWS` and `F_IRQ` as today; no
+  registry value.
+- **The candidate.** A bridge the numbering journals that reads, after its
+  bus register is written (in a `REOPENED` numbering: once the journal has
+  admitted the chain for reopening, its bus registers untouched), as
+  section 3.1's candidate: a PCI Express
+  capability of Device/Port Type downstream port, Slot Implemented, Slot
+  Capabilities Hot-Plug Capable (`XhciTbtFindCapStatus`,
+  `XhciTbtPcieHotPlug`). A failed read or a failed capability walk there
+  ends the numbering with `ACCESS` (undone, or in a `REOPENED` one with
+  nothing written), as any failed read does. One
+  level: nothing in a candidate's own subtree is padded.
+- **Buses** (a numbering that writes bus numbers, outcome `DONE`). After a
+  candidate's subtree is walked, before its subordinate is narrowed: the
+  buses still free in the port's range are `R` = the port's subordinate -
+  the next bus to give + 1; the pad `P` = the smaller of 8 and `R` / 2,
+  and the candidate's subordinate is its subtree's last bus + `P`, the
+  next bus to give moved past them. `P` below 2: no bus padding for that
+  candidate, counted (`PadNoBus`). Half of what is left, not an equal
+  share: the walk numbers depth first in one pass and cannot know what
+  later siblings need. **Never at the cost of the dock itself:** a
+  numbering with bus padding that ends `NO_ROOM`, once its undo has put
+  every bridge back (`UndoFailed` 0), is made again at once in the same
+  call without bus padding (counted, `PadDropped`); with an undo that
+  failed it is not made again. The journal records each candidate's pad
+  (`Pad[k]`, 0 for none).
+- **Memory** (the window stage of a `DONE` or a `REOPENED` numbering).
+  The windows are computed as today (`brNeed`, the usable span between
+  the port window's bottom and top as `brWindows` computes them). When at
+  least one candidate qualifies - one with bus padding in this numbering
+  (`DONE`), or in a `REOPENED` one a journalled candidate whose retained
+  subordinate is at least its secondary + 2 (its bus registers left as
+  they are) - the slack (the span - the need) is shared equally: `M` = the
+  slack / the qualifying candidates, rounded down to a power of two, at
+  most 64 MiB; below 2 MiB no memory padding (counted, `PadNoMem`). `M` is
+  space added beside what the candidate's subtree needs: its window is
+  that need + `M`, rounded up to its alignment (the 1 MiB grain, or more
+  where its subtree needs more). The need is then computed again with
+  those windows and checked against the span before any window-placement
+  write (the sizing of BARs that `brNeed` makes is today's, restored on
+  every pass); if it does not fit (an ancestor's rounding), the padded
+  sizes are dropped and the unpadded need, computed again, is placed
+  (counted, `PadNoMem`); a sizing refusal (`ACCESS`, `ACTIVE`, `STALE`)
+  in either pass is the window stage's refusal, as today. Placement is made once, as today, and a refusal during it
+  (`NO_ROOM`, `ACCESS`, `STALE`) is today's refusal: the windows undone,
+  no second placement. An empty padded candidate's window is then open,
+  where today it is closed. I/O and prefetchable windows stay closed.
+  `NUMBERED` (a chain already numbered with a window open) is not touched.
+- **Wait for an empty bus.** `F_WAIT_EMPTY` is unchanged: an empty
+  candidate is a bridge with nothing behind it, so every try but the last
+  returns `NOT_READY` as today, and the last pads.
+- **Outcome fields** (`XHCI_TBT_BRNUM`): `Pad[]`, `Padded` (candidates
+  padded with buses), `PadMem` (`M` as applied, 0 for none), `PadNoBus`,
+  `PadNoMem`, `PadDropped`; logged by `cmWkNumber`
+  (`cm.brnum.9x.pad`: padded, no-bus, dropped; `cm.brnum.9x.pad-mem`).
+- **What it rests on** [inf]: that PCI.VXD leaves a padded empty bridge's
+  bus range and memory window as the numbering wrote them through the
+  re-enumeration that follows and through the dock's driver installs, and
+  takes them as that bridge's configuration (record 21 section 6.1.1 read
+  that it takes a window already in place as a bridge's boot
+  configuration; not an empty one). The registers read unchanged is what
+  the first leg can show; that PCI.VXD's allocation holds them is shown
+  only when a device chained later is placed inside them (the chain
+  port's own numbering, after this). If the registers are not kept,
+  Option A is not available as designed and section 3.3 is revisited
+  with the owner (Option B, or no 9x chain).
+- **Vectors** (`test\test_tbt_brnum.c`): the emulator's dock with its
+  chain port (one candidate, empty): `P` 8 inside a wide port, 2 inside a
+  narrow one, none below 2; a chain port with a device behind it padded
+  past its subtree; two candidates (the second gets half of what the
+  first left); a dock that fits only without padding (`NO_ROOM` with it,
+  made again without, `PadDropped`), and with its undo failing (not made
+  again); a non-candidate (no slot, no Hot-Plug Capable, an upstream
+  port) not padded; a failed capability read undone; the memory share
+  (one and two candidates, a candidate with a device behind it given its
+  need + `M`, rounding, the 64 MiB cap, below 2 MiB none, a padded need
+  that does not fit dropped to the unpadded); a `REOPENED` chain with a
+  retained padded range given its window again, one with a narrow range
+  not; `NUMBERED` untouched; the undo with padding; every vector without
+  the flag unchanged.
+- **The leg** (98 SE and ME, q35, the emulator's Thunderbolt 3 topology
+  with the tunnel port padded by its firmware model, `usb4-emu`
+  `230bed5`): the dock (`downstream-ports=1`,
+  `chain-power-controller=off`) hot-plugged at the desktop with the test
+  build; read the log's numbering (`cm.brnum.9x.*`), then `info pci`
+  after the re-enumeration and again after Windows installed the dock's
+  devices: the chain port's secondary and subordinate and its memory
+  window as the numbering left them, or not. That decides Option A's
+  first premise. A restart after it is read apart: at a restart the
+  firmware numbers the dock present at power-on itself (section 3.3.3),
+  so it says nothing of PCI.VXD.
+- **Read** [run, 45.14, 2026-10-30]: on 98 SE and ME the emulator's
+  chain port padded 07h to 0Fh with a 64 MiB window read unchanged after
+  the re-enumeration, the dock's first driver installs and in a later
+  session (run-45, "45.14"): the first premise holds; that the allocation
+  holds them waits for the chain port's own numbering.
 
 ### 3.4 Boot, and chains present at the start
 
