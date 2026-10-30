@@ -1554,6 +1554,32 @@ typedef BOOL (WINAPI *PFN_GMSEX)(SYS_MEMORYSTATUSEX *);
  * refused; `nativeArch` is GetNativeSystemInfo's, SYS_ARCH_UNKNOWN where that
  * does not exist.
  */
+/* XHCITR.EXE is an x86 program, which on a 64-bit Windows runs under WOW64
+ * and says so; XHCITR64.EXE is a native x64 one, for which IsWow64Process
+ * answers FALSE, so there the build says the Windows is 64-bit. */
+#if defined(_WIN64)
+#define SYS_TOOL_64             1
+#else
+#define SYS_TOOL_64             0
+#endif
+
+static const char *sys_bitness(int tool64, int wow, unsigned arch)
+{
+    if (tool64) {
+        return "64-bit Windows (x64); this x64 tool ran natively";
+    }
+    if (!wow) {
+        return "x86 (32-bit Windows)";
+    }
+    if (arch == SYS_ARCH_AMD64) {
+        return "64-bit Windows (x64); this x86 tool ran under WOW64";
+    }
+    if (arch == SYS_ARCH_IA64) {
+        return "64-bit Windows (Itanium); this x86 tool ran under WOW64";
+    }
+    return "64-bit Windows (64-bit); this x86 tool ran under WOW64";
+}
+
 static const char *sys_os_name(unsigned long platform, unsigned long major,
                                unsigned long minor, unsigned long build,
                                int product, unsigned nativeArch)
@@ -2197,17 +2223,12 @@ static void write_companion_system(void)
                  csd);
     }
 
-    /* This tool is an x86 program on every target; on a 64-bit Windows it
-     * runs under WOW64 and says so. */
     wow = FALSE;
-    if (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) && wow) {
-        sys_line("bitness", "64-bit Windows (%s); this x86 tool ran under "
-                 "WOW64",
-                 (nativeArch == SYS_ARCH_AMD64) ? "x64" :
-                 (nativeArch == SYS_ARCH_IA64) ? "Itanium" : "64-bit");
-    } else {
-        sys_line("bitness", "x86 (32-bit Windows)");
+    if (isWow64 == NULL || !isWow64(GetCurrentProcess(), &wow)) {
+        wow = FALSE;
     }
+    sys_line("bitness", "%s",
+             sys_bitness(SYS_TOOL_64, wow ? 1 : 0, nativeArch));
 
     if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
         int haveBiosKey;
@@ -2338,6 +2359,13 @@ static int selftest_sysinfo(void)
                sys_os_name(cases[i].platform, cases[i].major, cases[i].minor,
                            cases[i].build, cases[i].product, cases[i].arch));
     }
+    /* The bitness line over each build and WOW64 answer. */
+    printf("bitness tool64 0 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_X86,
+           sys_bitness(0, 0, SYS_ARCH_X86));
+    printf("bitness tool64 0 wow 1 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(0, 1, SYS_ARCH_AMD64));
+    printf("bitness tool64 1 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(1, 0, SYS_ARCH_AMD64));
     for (i = 0; dirty[i] != NULL; i++) {
         sys_clean(dirty[i], out, sizeof(out));
         printf("clean [%s]\n", out);
