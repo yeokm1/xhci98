@@ -2196,7 +2196,7 @@ present at power-on (SeaBIOS numbered the dock; a device without its
 own switch then lands on the chain port's own secondary bus), and a
 hot-plugged dock only behind a tunnel port with a reservation.
 
-## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30, partial)
+## 45.13 record 34 Part 1, the NT half: the chain action's first cut, and what 7 and XP do without it (2026-10-30)
 
 **The design.** Record 34 section 3.9 (revision 6), reviewed and revised
 before and with the code: chain ports walked below every active member
@@ -2575,3 +2575,110 @@ Stor98 installed over it by `DIF_INSTALLDEVICE`, a cold boot, problem 10.
 ### Owed
 
 8.1 x64 for both halves.
+
+### 45.13 (continued): 2000 read, and the chained unit's own `Removable` (2026-10-30)
+
+**2000** (the reading the owner's question waited for). A 2000 SP4
+golden made like XP's: an overlay of the q35 2000 base (Standard PC
+HAL), the launcher's `-Usb4 tb3ar`, nothing attached; the release x86
+package of `1a2a72ca` installed with `/thunderbolt /stor98` (exit 0,
+the Found New Hardware wizards answered), a cold second boot
+(`XHCIINST /devices`: the Alpine Ridge controller, tunnel port
+`02:01.0`); kept read-only (`cd1b7ecf...`). Each leg a child overlay
+with the dock `enc0` at power-on (`preboot=on`, `downstream-ports=1`,
+`chain-power-controller=off`); the dock's first boot answered its
+wizards (Stor98 for the dock's NVMe, E: "ORICO") and was kept as the
+legs' starting state (`dockinst.qcow2`, `947a92b7...`); the chained
+device `usb4-device ... parent=enc0,port=1` plugged by QMP at the
+desktop. Evidence: `E:\xhci98-vm\p45\w45-chain\w2k\`
+(`serial-<leg>.log`, `debugcon-w2b.log`, `trace-<leg>.log`,
+`infopci-w0c*.txt`, `w0c-serial.txt`, screenshots).
+
+| Leg | Build | Read |
+|---|---|---|
+| w0b, w0c | the golden's release `xhcicm.sys` (`d012fccf...`, no chain action) | the child approved at depth 2; 2000 found the chained NVMe itself (a Found New Hardware wizard for it, Stor98 bound); the wizard's restart hung in real mode (EIP `0d4f`, the base's known warm-restart hang), so a cold start (w0c); the child plugged again: Stor98 at **Code 10**; unplugged and plugged again: gone, then Code 10 again; the dock unplugged with the child attached: every devnode of the dock gone, no hang; shutdown in 6 s |
+| w2b | the qemu flavour at `38ac4e18`'s source (`77f34053...`, with the chain action), swapped in, a cold start | the chain port's `BusRelations` reported the new PDO (`cm.chain.rel=01040508`, one new, the child filter attached) before the action's `cm.chain.invalidate=01020508`; Code 10 as in w0c; the child's unplug: `cm.chain.invalidate=02020508`, gone; the dock's unplug with the child: all gone, no hang; shutdown in 5 s |
+
+**Why Code 10 on 2000.** The chained NVMe's requirement list
+(`BasicConfigVector`, read from the registry) holds its memory BAR and no
+interrupt, where the dock's NVMe, numbered by SeaBIOS, has IRQ 10;
+`info pci`: the chained function's IRQ 0, its BAR unmapped. 2000 on the
+Standard PC HAL gives a hot-added function no interrupt, and the child
+filter's interrupt step (record 21 section 6.2.1, task 44.53) declined
+it: `cm.chain.irq.no=00020700`, why 2, the tunnel port's Interrupt Pin
+not 1 to 4 (the emulated Thunderbolt 3 tunnel port `02:01.0` carries no
+pin; `info pci` prints none). The chained function would also arrive on
+another pin of the tunnel port (the chain port is device 1 on the dock's
+internal bus: pin A becomes B), record 21 section 6.2.1's other
+documented limit. So on 2000's Standard PC HAL a chained drive behind the
+emulated dock is found and does not start; that is the platform's
+interrupt routing, not the chain's discovery. Reported to the
+coordinator (the emulator's tunnel port has no pin; on real hardware the
+other-pin limit applies to a chain port at an odd device number).
+
+**What 2000 shows.** As on XP (x0, x1): the member's invalidation alone
+reached the chain port's bus; the action's call came after the PDO was
+already reported. So on all three systems read (7, XP, 2000) the chain
+action is a second request. The owner kept it (below).
+
+**The chained unit's `Removable`** (record 34 section 3.10, reviewed and
+revised before and with the code): the chain port is classified by its
+own child filter at each of its `BusRelations` answers, before the answer
+goes up (`cmChainClassify`, `XhciTbtChainPortTest`); its children get
+marks entries with that chain port as their landing (`CmMarksBury`,
+`CmMarksBuryLandings`, `CmMarksMake`, two phases); the `Removable` gate
+compares a chained unit's bus with its chain port's secondary bus; a
+chained entry is never confirmed as a member eject
+(`CM_MK_CONF_CHAINED`); the answer carries `CM_QM_EF_CHAINED` and the
+landing at offset 40.
+
+The code is `0751ad83` (with the host vectors: `test_tbt_topo` 715
+checks, `test_cm_marks` 221, 0 failures each); `b83a5d34` adds three
+fixes from the integration review of 45.35's isolation interface (the
+first reference taken with the binding under the registration list's
+lock, every later one and the release under it; the bindings to a
+domain voided when it is delisted; a comment).
+
+**Builds.** The gated x86 build of `0751ad83` and of `b83a5d34`
+(`scripts\build-driver.cmd all`): "BUILD + GATES PASSED (debug release
+qemu)" each (`E:\xhci98-scratch\p45-w45-chain\gb-x86-0751ad83.log`,
+`gb-x86.log`); the gated amd64 build of `b83a5d34` (`all -amd64`):
+the same ("BUILD + GATES PASSED (debug release qemu)",
+`gb-amd64.log`); the host suite: "Host tests PASSED" (`hosttests.log`). The release `xhcicm.sys` of `b83a5d34` `a101d05f...`,
+`xhci98.sys` `cc189335...`.
+
+### The legs of section 3.10 (2026-10-30)
+
+| Leg | System, build | Read | Verdict |
+|---|---|---|---|
+| x3, x3b | XP, the XP golden, a qemu-flavour diagnostic build of the uncommitted section 3.10 code (`95857dde...`), swapped in | `cm.chain.class=00070508` (the chain port `05:01.0`, secondary bus 7); the chained Stor98 answered `Removable` (`cm.chain.removable=21070508`) and listed on its own in Safely Remove Hardware ("at PCI bus 7"); a file written to it, the unit stopped from the applet ("Safe To Remove Hardware"), the child unplugged and plugged again: the file there (`fc`: no differences), the dock's drive untouched. In x3, the session in which the chained device was installed for the first time, the applet did not list it | diagnostic |
+| x4 | XP, the qemu flavour of `b83a5d34` | the chained device plugged for the first time (never seen): `cm.chain.removable=21070508` at that plug | diagnostic |
+| x5 | XP, the gated release `xhcicm.sys` and `xhci98.sys` of `b83a5d34` swapped into the golden | the dock's first boot (Stor98 by its wizard), a restart, the chained device plugged for the first time: Stor98 by its wizard; Safely Remove Hardware lists "Stor98 Storage Controller for NVMe SSDs" on its own ("at PCI bus 7, device 0, function 0") beside the dock's bridge; a file copied to F: and compared; the unit stopped from the applet (its volume F: and its disk in the confirmation, "Safe To Remove Hardware"); the child unplugged and plugged again: the file there (`fc`: no differences), D: (the dock's drive) there; the dock unplugged with the child attached: no hang; shutdown in 17 s | pass (section 9.3 clause 5 on NT; the lost write of x1 and x2 avoided by the eject) |
+| w3, w3b | 2000, the dock-installed state, the gated release of `b83a5d34` swapped in, a cold start; emulator `usb4-emu` `b84be72` (`qemu-system-x86_64.exe` `7ff0d230...`: the Thunderbolt 3 switch ports report Interrupt Pin A, the tunnel port padded) | `info pci`: the tunnel port `02:01.0` IRQ 10, pin A, buses 4 to 40h; the chained device plugged: Stor98 by its wizard ("will not work until you restart"), the chained NVMe at Code 10, IRQ 0, BAR unmapped; the "Unplug or Eject Hardware" applet lists the chained Stor98 on its own; the child unplugged, then the dock: nothing left behind the tunnel port, no hang; shutdown in 7 s | the listing: pass. The interrupt: with the tunnel port's pin now present, the chained function still gets none, as its interrupt arrives on pin B of the tunnel port (the chain port is device 1 of the dock's internal bus; record 21 section 6.2.1's other-pin limit) |
+
+Evidence: `E:\xhci98-vm\p45\w45-chain\xp\` (`serial-x3*.log`,
+`debugcon-x3*.log`, `debugcon-x4.log`, `serial-x5.log`, `x3b-*.png`,
+`x5-*.png`) and `w2k\` (`serial-w3b.log`, `infopci-w3b.txt`,
+`w3b-*.png`).
+
+**The owner's decisions** (2026-10-30): the chain action is kept (Q1
+(a)); the correspondence learning, the per-tunnel ownership, names and
+generations and the status record's kind 3 entries move to 45.15, Part
+3, where a chained tunnel of the software connection manager gives them
+a reader (Q2 (a)); a chained drive on 2000's Standard PC HAL that gets no
+interrupt is a release-notes limitation, and the emulator's Thunderbolt 3
+tunnel port gets an Interrupt Pin (`usb4-emu` `b84be72`, read in w3b
+above) (Q3 (a)).
+
+**45.13 is done** with that: the chain action (section 3.9) and the
+chained unit's own `Removable` (section 3.10). What was read: on 7 x86
+the discovery and removal of a chained device, on the release of
+`1a2a72ca` before either action (r2); on XP the discovery without and
+with the chain action (x0 to x2) and, on the gated release of
+`b83a5d34`, the chained unit listed, stopped from the applet and a file
+kept through the unplug (x5); on 2000 the discovery without and with the
+action (w0b to w2b) and, on the gated release, the chained unit listed
+on its own (w3b; it does not start there, so no stop was read). The
+applet's stop on 2000 and 7 is not read. 45.17's PCI-side clause 5 (safe
+removal of the chained unit from the system's applet) is read on XP;
+from XHCITR it waits for record 25's chained unit (leg T.11).

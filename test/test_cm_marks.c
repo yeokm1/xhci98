@@ -572,6 +572,227 @@ static void test_may_mark(void)
              "no marks entry for the PDO: nothing");
 }
 
+/* Design record 34 section 3.10: chained units, each set by its landing. */
+#define L1 (0x0529UL | CM_MK_LANDING_VALID)     /* chain port 05:05.1 */
+#define L2 (0x0530UL | CM_MK_LANDING_VALID)     /* chain port 05:06.0 */
+
+static ULONG countLanding(ULONG member, ULONG landing, int tombs)
+{
+    ULONG i;
+    ULONG n = 0;
+
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        if (t.E[i].Pdo != NULL && (t.E[i].Tomb != 0) == (tombs != 0) &&
+            t.E[i].Member == member && t.E[i].Landing == landing) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void test_landings(void)
+{
+    PVOID own[40];
+    PVOID ch[40];
+    PVOID ch2[40];
+    ULONG keep[2];
+    PCM_MARK e;
+    ULONG serial;
+    ULONG len;
+    ULONG off;
+    ULONG locd[2];
+    ULONG bus[2];
+    ULONG addr[2];
+    CM_QM_IN in;
+    int i;
+
+    /* The member's own set and a landing's, neither burying the other. */
+    CmMarksReset(&t);
+    own[0] = P(1);
+    ch[0] = P(2);
+    keep[0] = L1;
+    CmMarksBegin(&t);
+    (VOID)CmMarksBury(&t, 0, 0x0400, 0, own, 1, TRUE, 10);
+    (VOID)CmMarksBury(&t, 0, 0x0400, L1, ch, 1, TRUE, 10);
+    (VOID)CmMarksBuryLandings(&t, 0, keep, 1, 10);
+    CHECK(CmMarksMake(&t, 0, 0x0400, 0, own, 1, FALSE, TRUE, 10), "own made");
+    CHECK(CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 10), "chained made");
+    e = CmMarksFind(&t, P(2));
+    CHECK(e != NULL && e->Landing == L1 && e->Member == 0 && e->MemberBdf == 0x0400,
+          "the chained entry: its member and landing");
+    CHECK(CmMarksFind(&t, P(1)) != NULL && CmMarksFind(&t, P(1))->Landing == 0, "the member's own: no landing");
+    /* The member's own sync (CmMarksSync, landing 0) leaves the chained. */
+    CmMarksBegin(&t);
+    CHECK(!CmMarksSync(&t, 0, 0x0400, own, 1, FALSE, TRUE, 20), "the member's sync: no change");
+    CHECK(CmMarksFind(&t, P(2)) != NULL, "the chained entry kept by the member's sync");
+    /* The member's own snapshot emptied: its entry buried, the chained kept. */
+    CmMarksBegin(&t);
+    CHECK(CmMarksSync(&t, 0, 0x0400, own, 0, FALSE, TRUE, 30), "the member's own leaves");
+    CHECK(CmMarksFind(&t, P(1)) == NULL && CmMarksFind(&t, P(2)) != NULL,
+          "only the member's own buried");
+    /* The landing's snapshot emptied: its entry buried. */
+    CHECK(CmMarksBury(&t, 0, 0x0400, L1, ch, 0, TRUE, 40), "the chained leaves");
+    CHECK(CmMarksFind(&t, P(2)) == NULL, "the chained buried");
+    CHECK_EQ(countLanding(0, L1, 1), 1, "its tombstone keeps its landing");
+
+    /* A landing gone (no longer classified) buries its entries; another
+     * kept. */
+    CmMarksReset(&t);
+    ch[0] = P(3);
+    ch2[0] = P(4);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 10);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L2, ch2, 1, FALSE, TRUE, 10);
+    keep[0] = L2;
+    CHECK(CmMarksBuryLandings(&t, 0, keep, 1, 20), "landing L1 gone");
+    CHECK(CmMarksFind(&t, P(3)) == NULL && CmMarksFind(&t, P(4)) != NULL, "L1's buried, L2's kept");
+    CHECK(CmMarksBuryLandings(&t, 0, NULL, 0, 30), "no landing kept");
+    CHECK(CmMarksFind(&t, P(4)) == NULL, "L2's buried");
+    /* Another member's landings untouched. */
+    (VOID)CmMarksMake(&t, 1, 0x0500, L1, ch, 1, FALSE, TRUE, 40);
+    CHECK(!CmMarksBuryLandings(&t, 0, NULL, 0, 50), "member 0's: nothing of member 1's");
+    CHECK(CmMarksFind(&t, P(3)) != NULL, "member 1's landing kept");
+
+    /* The member made inactive buries both kinds. */
+    CmMarksReset(&t);
+    own[0] = P(5);
+    ch[0] = P(6);
+    (VOID)CmMarksMake(&t, 2, 0x0600, 0, own, 1, FALSE, TRUE, 10);
+    (VOID)CmMarksMake(&t, 2, 0x0600, L1, ch, 1, FALSE, TRUE, 10);
+    (VOID)CmMarksBury(&t, 2, 0x0600, 0, NULL, 0, FALSE, 20);
+    (VOID)CmMarksBuryLandings(&t, 2, NULL, 0, 20);
+    CHECK_EQ(countKind(0), 0, "inactive: nothing current");
+    CHECK(!CmMarksMake(&t, 2, 0x0600, 0, own, 1, FALSE, FALSE, 30), "inactive: nothing made");
+
+    /* A PDO moving from one landing to another in one sync: buried first,
+     * made again under its new landing. */
+    CmMarksReset(&t);
+    ch[0] = P(7);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 10);
+    serial = CmMarksFind(&t, P(7))->Serial;
+    keep[0] = L2;
+    (VOID)CmMarksBury(&t, 0, 0x0400, L2, ch, 1, TRUE, 20);
+    (VOID)CmMarksBuryLandings(&t, 0, keep, 1, 20);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L2, ch, 1, FALSE, TRUE, 20);
+    e = CmMarksFind(&t, P(7));
+    CHECK(e != NULL && e->Landing == L2 && e->Serial != serial, "moved: a new entry under L2");
+    CHECK_EQ(countLanding(0, L1, 1), 1, "and L1's a tombstone");
+
+    /* The member's bound shared by both kinds, and freed by the burial
+     * before the new landing's entries are made. */
+    CmMarksReset(&t);
+    for (i = 0; i < 20; i++) {
+        own[i] = P(10 + i);
+    }
+    for (i = 0; i < 12; i++) {
+        ch[i] = P(40 + i);
+    }
+    (VOID)CmMarksMake(&t, 0, 0x0400, 0, own, 20, FALSE, TRUE, 10);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 12, FALSE, TRUE, 10);
+    CHECK_EQ(countKind(0), CM_QM_MAX_CURRENT, "full: 20 own and 12 chained");
+    CHECK(!t.Incomplete, "exactly full");
+    for (i = 0; i < 12; i++) {
+        ch2[i] = P(60 + i);
+    }
+    CmMarksBegin(&t);
+    keep[0] = L2;
+    (VOID)CmMarksBury(&t, 0, 0x0400, 0, own, 20, TRUE, 20);
+    (VOID)CmMarksBury(&t, 0, 0x0400, L2, ch2, 12, TRUE, 20);
+    (VOID)CmMarksBuryLandings(&t, 0, keep, 1, 20);
+    (VOID)CmMarksMake(&t, 0, 0x0400, 0, own, 20, FALSE, TRUE, 20);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L2, ch2, 12, FALSE, TRUE, 20);
+    CHECK_EQ(countLanding(0, L2, 0), 12, "the new landing's twelve made");
+    CHECK(!t.Incomplete, "in one sync, complete");
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 30);
+    CHECK(t.Incomplete, "past the shared bound: incomplete");
+
+    /* A chained entry's location: buried while its member is inactive,
+     * made again under the same landing from the same snapshot, its
+     * location given back from the landing's snapshot. */
+    CmMarksReset(&t);
+    ch[0] = P(8);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 10);
+    serial = CmMarksFind(&t, P(8))->Serial;
+    (VOID)CmMarksBury(&t, 0, 0x0400, 0, NULL, 0, FALSE, 15);
+    (VOID)CmMarksBuryLandings(&t, 0, NULL, 0, 15);
+    CHECK(CmMarksFind(&t, P(8)) == NULL, "buried with its member inactive");
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 18);
+    e = CmMarksFind(&t, P(8));
+    CHECK(e != NULL && e->Serial != serial && e->Landing == L1 &&
+          (e->Flags & CM_QM_EF_LOCATED) == 0, "made again: a new serial, no location yet");
+    locd[0] = 1;
+    bus[0] = 7;
+    addr[0] = 0;
+    CHECK(CmMarksLocate(&t, 0, ch, locd, bus, addr, 1, 20), "located from the landing's snapshot");
+    e = CmMarksFind(&t, P(8));
+    CHECK(e != NULL && (e->Flags & CM_QM_EF_LOCATED) && e->Bus == 7, "bus 7");
+
+    /* The answer: the flag and the landing; 0 for a member's own. */
+    CmMarksReset(&t);
+    own[0] = P(9);
+    ch[0] = P(8);
+    (VOID)CmMarksMake(&t, 0, 0x0400, 0, own, 1, FALSE, TRUE, 10);
+    (VOID)CmMarksMake(&t, 0, 0x0400, L1, ch, 1, FALSE, TRUE, 10);
+    memset(&in, 0, sizeof(in));
+    len = CmMarksBuild(buf, &t, &in);
+    CHECK(len == CM_QM_HDR_BYTES + 2 * CM_QM_ENT_BYTES, "two entries built");
+    for (i = 0; i < 2; i++) {
+        off = CM_QM_HDR_BYTES + (ULONG)i * CM_QM_ENT_BYTES;
+        if (get32(buf, off + CM_QM_E_SERIAL) == CmMarksFind(&t, P(8))->Serial) {
+            CHECK((get32(buf, off + CM_QM_E_FLAGS) & CM_QM_EF_CHAINED) != 0, "chained flag");
+            CHECK_EQ(get32(buf, off + CM_QM_E_LANDING), 0x0529, "its landing");
+            CHECK_EQ(get32(buf, off + CM_QM_E_MEMBER), 0x0400, "its member");
+        } else {
+            CHECK((get32(buf, off + CM_QM_E_FLAGS) & CM_QM_EF_CHAINED) == 0, "own: no chained flag");
+            CHECK_EQ(get32(buf, off + CM_QM_E_LANDING), 0, "own: landing 0");
+        }
+    }
+}
+
+/* The confirmation of a chained entry, current or a tombstone, refused;
+ * a member's own still accepted. */
+static void test_confirm_chained(void)
+{
+    PVOID snap[1];
+    PCM_MARK e;
+    UCHAR v[CM_QC_BYTES];
+    ULONG why;
+    ULONG gens[4];
+
+    CmMarksReset(&t);
+    snap[0] = P(3);
+    (VOID)CmMarksMake(&t, 1, 0x0520, L1, snap, 1, FALSE, TRUE, 7);
+    e = CmMarksFind(&t, P(3));
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 9;
+    e->Address = 0;
+    e->PendingAt = 50;
+    gens[0] = 0;
+    gens[1] = 0;
+    memset(v, 0, sizeof(v));
+    put32(v, CM_QC_O_EPOCH_LO, 1);
+    put32(v, CM_QC_O_EPOCH_HI, 2);
+    put32(v, CM_QC_O_MEMBER, 0x0520);
+    put32(v, CM_QC_O_BUS, 9);
+    put32(v, CM_QC_O_ADDRESS, 0);
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    CHECK(CmMarksConfirm(&t, v, CM_QC_BYTES, 1, 2, FALSE, gens, 2, &why) == NULL &&
+          why == CM_MK_CONF_CHAINED, "a chained entry: refused");
+    /* Its tombstone with the departure kept: refused as well. */
+    (VOID)CmMarksBury(&t, 1, 0x0520, L1, snap, 0, TRUE, 60);
+    CHECK(CmMarksConfirm(&t, v, CM_QC_BYTES, 1, 2, FALSE, gens, 2, &why) == NULL &&
+          why == CM_MK_CONF_CHAINED, "a chained tombstone: refused");
+    /* The same entry as a member's own is accepted. */
+    CmMarksReset(&t);
+    (VOID)CmMarksMake(&t, 1, 0x0520, 0, snap, 1, FALSE, TRUE, 7);
+    e = CmMarksFind(&t, P(3));
+    e->Flags = CM_QM_EF_LOCATED;
+    e->Bus = 9;
+    e->PendingAt = 50;
+    put32(v, CM_QC_O_SERIAL, e->Serial);
+    CHECK(CmMarksConfirm(&t, v, CM_QC_BYTES, 1, 2, FALSE, gens, 2, &why) == e &&
+          why == CM_MK_CONF_OK, "a member's own: confirmed");
+}
+
 int main(void)
 {
     test_may_mark();
@@ -581,6 +802,8 @@ int main(void)
     test_tombs();
     test_build();
     test_confirm();
+    test_landings();
+    test_confirm_chained();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;
 }
