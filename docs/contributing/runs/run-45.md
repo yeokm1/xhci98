@@ -4042,6 +4042,106 @@ identification (record 34 section 3.11 item 8). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 
+## 45.27 (the owed legs) (2026-10-30, partial)
+
+**Verdict: two of the owed legs are read here. On XP, `xhciuas.sys` refuses
+every pass-through and SMART request a tool sends, so ATA pass-through and
+SMART from a tool do not reach a UAS drive at all (an owner question, below).
+Stor98's INTx fallback works: with the drive's interrupt enable stuck off it
+reports `polling (INTx would not enable)` and its I/O passes. The rest stays
+owed, each item named below.**
+
+Vehicle: the package of `e8db6905` (`release-x86`, stamped `3.3.0.0`;
+`xhci98.sys` d7f8ab2c..., `xhciuas.sys` fe57478a..., `stor98.sys`
+81924f85..., `xhcicm.sys` 5fdb710d...). No build slot was free for this
+session. The tip's `uas_pdo.c` answers the same two IOCTLs as that build,
+and Stor98's read-back of the INTx enable is in it (`2f57cad2`).
+`ATATEST.EXE` was built from `ff91c7ee` (43eef1b6...). Both legs ran on fresh
+q35 XP SP3 overlays, installed with `INSTALL.BAT /console /yes /nopause`.
+Evidence: `E:\xhci98-vm\p45\w45-owed27\xpa\` and `xpb\`.
+
+### ATA pass-through and SMART from a tool (XP)
+
+`xpa`: a `usb-uas` with one `scsi-hd` LUN on `qemu-xhci` port 3 and a
+`usb-storage` (Bulk-Only, XP's own `usbstor.sys`) on port 4, both blank
+64 MiB. `xhciuas` started at the install. Then `ATATEST \\.\PhysicalDriveN`
+for N = 0 to 4 (`atatest-xp.txt`):
+
+| Disk | Adapter (max transfer, bus type) | SCSI pass-through | ATA pass-through (12) and (16) | SMART IOCTLs, `IOCTL_ATA_PASS_THROUGH` |
+|---|---|---|---|---|
+| 0, 1: IDE (`atapi.sys`) | 128 KiB, ATA | INQUIRY in and unspecified: GOOD | refused, error 1 | answered: SMART version 1.1, READ DATA 512 bytes, IDENTIFY "QEMU HARDDISK", CHECK POWER MODE |
+| 2: Bulk-Only (`usbstor.sys`) | 64 KiB, USB | INQUIRY in GOOD; unspecified refused, error 87 | reached the drive: CHECK CONDITION, sense 5/20/00 (QEMU's disk has no SAT); unspecified direction refused, error 87 | error 50 (not supported) |
+| 3: UAS (`xhciuas.sys`) | 1 MiB, USB | **every request refused, error 1** | **refused, error 1** | **refused, error 1** |
+
+Error 1 is ERROR_INVALID_FUNCTION, the Win32 code for
+`STATUS_INVALID_DEVICE_REQUEST`. That is what `uas_pdo.c`'s device-control
+dispatch completes for any IOCTL other than `IOCTL_STORAGE_QUERY_PROPERTY`
+and `IOCTL_SCSI_GET_ADDRESS`. The disk class driver passes
+`IOCTL_SCSI_PASS_THROUGH` and `_DIRECT` down to the port, and for a UAS LUN
+the port is `xhciuas`'s LUN PDO. So the UAS driver's T_DIR handling
+(`UasCdbDataDirection`, `2f57cad2`) is never reached from a program on NT.
+Neither is any other SCSI command a program sends. The Bulk-Only stick under
+XP's own driver shows the route working. The finding is
+`xhciuas`'s and not new: the PDO never served pass-through. Serving it is a
+new interface, not a fix (the owner's question, below). 98 SE and ME were
+not read: a program there would go through ASPI, which was not tried.
+
+### Stor98's INTx fallback (XP)
+
+The emulator is usb4-emu's QEMU at `e05bf66`, the tree the q35 bases'
+emulator was built from, plus one test property on QEMU's NVMe model,
+`x-intx-stuck`. When on, the Interrupt Disable bit of the Command register
+is set and read-only, so a driver that clears it reads it back set. It is
+built on development host A (SHA-256 f904ca84..., `qemu-intx\intx.diff` in
+this kit's scratch) and launched with `-global nvme.x-intx-stuck=on`; QMP
+read the property back as true on `tp0-sw1-nvme`.
+
+`xpb`: ASM4242 model, the ORICO enclosure at power-on. `INSTALL.BAT /console
+/yes /nopause /thunderbolt /stor98` ended with exit 3, then a restart. After
+the restart, `HKLM\System\CurrentControlSet\Services\stor98` held `StorInterrupt
+5.0.0 = pin 1 line 23 msi no msix yes port 23/23 polling (INTx would not
+enable)` and the drive was mounted as "ORICO (D:)". Three system files (from
+`shell32.dll` to `xpsp2res.dll`) were copied to D: and compared clean with
+`fc /b`. The compare may have been served from the cache. PASS (`intx-xp.txt`).
+
+### Owed
+
+- A UAS STOP and START with a LUN gone, and a short REPORT LUNS answer. The
+  LUN list is read again only in `uasFdoStart` after an
+  `IRP_MN_STOP_DEVICE`, and no guest sends a USB function a STOP. That takes
+  a resource rebalance, which no guest can make (run-36, L2). A short answer
+  only matters on that second start. Owed to a vehicle that can rebalance,
+  or to a host test of the start's presence logic.
+- ATA pass-through and SMART from a tool: blocked on the owner's decision
+  below. On 98 SE and ME, not read.
+- A BUSY that keeps its length: not provoked. The harness route is the
+  tunnel port's `x-rdy-set-delay-ms` past the hold bound, with a dropped
+  read forcing a reset during a copy.
+- The connection manager's eject or PCIe loss with an unplug during it, and a
+  resume with a lane adapter gone. Its no-IRQ clock and retry wait on 98 SE. A
+  failed D0 during a re-enumeration on 98 SE.
+- The power gate's wait under an ME standby.
+- A D0 overlapping a system power IRP on 2000, XP and 7. A resume completing
+  does not show the overlap; only a trace at `hcdPowerDefer` with both items
+  queued would.
+- The hardware readings stay owed to the bench, as listed in the section above.
+
+### Owner question: pass-through for UAS drives
+
+`xhciuas.sys` does not serve `IOCTL_SCSI_PASS_THROUGH`,
+`IOCTL_SCSI_PASS_THROUGH_DIRECT` or the SMART IOCTLs, so SMART and
+drive-identification tools see nothing on a UAS drive on 2000 to 7. Options:
+(a) leave it, and say so in the release notes' known limitations;
+(b) serve SCSI pass-through, buffered and direct, in the LUN PDO:
+administrator rights as the system checks them, the user buffer checked,
+the request built as an SRB through the existing engine with its timeout
+clamped, sense returned, the CDB's own direction (T_DIR) used where the
+caller leaves it unspecified; then legs with this tool on 2000, XP and 7;
+(c) (b) plus the SMART IOCTLs, translated to ATA PASS-THROUGH.
+Recommendation: (b), behind a design record section reviewed first. SMART
+tools on these systems send SCSI pass-through to USB bridges, and (c) adds
+a translation layer of the driver's own.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
