@@ -1060,12 +1060,14 @@ ULONG UasAtaCdb(ULONG flags, const UCHAR *prev, const UCHAR *cur,
         if ((length & 511) != 0) {
             return UAS_PT_INVALID;
         }
-        if (count * 512UL != length) {
-            if (!ext && cur[1] == 0 && length == 512 && uasAtaCountNa(cur)) {
-                count = 1;
-            } else {
+        if (!ext && uasAtaCountNa(cur)) {
+            /* One block, whatever the count register held. */
+            if (length != 512) {
                 return UAS_PT_INVALID;
             }
+            count = 1;
+        } else if (count * 512UL != length) {
+            return UAS_PT_INVALID;
         }
         if ((flags & UAS_ATA_USE_DMA) != 0) {
             protocol = 6;
@@ -1154,10 +1156,15 @@ ULONG UasPtPlan(ULONG kind, ULONG layout, const UCHAR *buf, ULONG inLength,
                 return UAS_PT_INVALID;
             }
         }
-        /* A SAT CDB asking for the registers with data: refused (16.8). */
+        /* A SAT CDB is whole or refused: the IU pads a short one with
+         * zeros into a command the device would run. Asking for the
+         * registers with data is refused (16.8), at any length. */
+        if ((plan->Cdb[0] == 0x85 && plan->CdbLength != 16) ||
+            (plan->Cdb[0] == 0xA1 && plan->CdbLength < 12)) {
+            return UAS_PT_INVALID;
+        }
         if (length != 0 && (plan->Cdb[2] & 0x20) != 0 &&
-            ((plan->Cdb[0] == 0x85 && plan->CdbLength >= 16) ||
-             (plan->Cdb[0] == 0xA1 && plan->CdbLength >= 12))) {
+            (plan->Cdb[0] == 0x85 || plan->Cdb[0] == 0xA1)) {
             return UAS_PT_INVALID;
         }
     } else {
@@ -1600,7 +1607,15 @@ ULONG UasSmartResult(const UAS_SMART_PLAN *plan, PUCHAR out, ULONG room,
         }
     }
     if (room < UAS_SMART_OUT_HEADER) {
-        return result;
+        return (result == UAS_PTR_SUCCESS) ? UAS_PTR_INVALID : result;
+    }
+    if (result == UAS_PTR_SUCCESS &&
+        (plan->ReturnRegs ? 8 : size) > room - UAS_SMART_OUT_HEADER) {
+        /* The plan checked the room it was given; this is the output's. */
+        *driverError = UAS_SMART_INVALID_BUFFER;
+        ideError = 0;
+        size = 0;
+        result = UAS_PTR_INVALID;
     }
     uasClear(out, UAS_SMART_OUT_HEADER);
     uasWr32(out, size);

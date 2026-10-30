@@ -1082,6 +1082,8 @@ static void test_pt_scsi_plan(void)
                                          0, 0, 0, 0x4F, 0, 0xC2, 0xA0, 0xB0,
                                          0 };
     static const UCHAR xcopy[16] = { 0x83, 0x00 };
+    static const UCHAR sat12Ck[16] = { 0xA1, 0x08, 0x2E, 0, 1, 0, 0, 0, 0xA0,
+                                       0xEC, 0, 0 };
     UAS_PT_PLAN p;
 
     /* INQUIRY, 36 bytes in at 76, 32 bytes of sense at 44. */
@@ -1170,6 +1172,20 @@ static void test_pt_scsi_plan(void)
     spt(ptbuf, UAS_PT_LAYOUT_32, 16, 0, 1, 512, 0, 44, 0, 0, satCkData);
     CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
                        &p), UAS_PT_INVALID, "CK_COND with data: refused");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 15, 0, 1, 512, 0, 44, 0, 0, satCkData);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_INVALID,
+             "ATA PT (16) cut to 15 bytes: refused, never padded");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 15, 0, 1, 512, 0, 44, 0, 0, satIn);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_INVALID,
+             "ATA PT (16) of 15 bytes, no CK_COND: refused as well");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 11, 0, 1, 512, 0, 44, 0, 0, sat12Ck);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_INVALID, "ATA PT (12) cut to 11 bytes");
+    spt(ptbuf, UAS_PT_LAYOUT_32, 12, 0, 1, 512, 0, 44, 0, 0, sat12Ck);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 556, 65536,
+                       &p), UAS_PT_INVALID, "ATA PT (12) CK_COND with data");
     spt(ptbuf, UAS_PT_LAYOUT_32, 16, 32, 2, 0, 0, 0, 0, 44, satCkNone);
     CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 44, 76, 65536,
                        &p), UAS_PT_OK, "CK_COND with no data: served");
@@ -1213,6 +1229,10 @@ static void test_ata_cdb(void)
     static const UCHAR zero[8] = { 0 };
     static const UCHAR ident[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0xEC, 0 };
     static const UCHAR ident0[8] = { 0x00, 0x00, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR ident2[8] = { 0x00, 0x02, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR smartD1[8] = { 0xD1, 0x07, 1, 0x4F, 0xC2, 0xA0, 0xB0,
+                                      0 };
+    static const UCHAR pktId[8] = { 0x00, 0x00, 0, 0, 0, 0xA0, 0xA1, 0 };
     static const UCHAR identWant[16] = { 0x85, 0x08, 0x0E, 0, 0x00, 0, 0x01,
                                          0, 0, 0, 0, 0, 0, 0xA0, 0xEC, 0 };
     static const UCHAR rdPrev[8] = { 0, 0, 0x12, 0x34, 0x56, 0, 0, 0 };
@@ -1237,6 +1257,16 @@ static void test_ata_cdb(void)
     CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, ident0, 512, 0, cdb), UAS_PT_OK,
              "IDENTIFY with count 0: its count is not applicable");
     CHECK(bytes_eq(cdb, identWant, 16), "sent with count 1");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, ident2, 512, 0, cdb), UAS_PT_OK,
+             "IDENTIFY with count 2 and one block");
+    CHECK(bytes_eq(cdb, identWant, 16), "sent with count 1 too");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, ident2, 1024, 0, cdb),
+             UAS_PT_INVALID, "IDENTIFY with two blocks: it returns one");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, smartD1, 512, 0, cdb),
+             UAS_PT_OK, "READ THRESHOLDS with count 7");
+    CHECK_EQ(cdb[6], 1, "count 1");
+    CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN, zero, pktId, 1024, 0, cdb),
+             UAS_PT_INVALID, "IDENTIFY PACKET DEVICE with two blocks");
     CHECK_EQ(UasAtaCdb(UAS_ATA_DATA_IN | UAS_ATA_48BIT | UAS_ATA_USE_DMA,
                        rdPrev, rdCur, 1024, 0, cdb), UAS_PT_OK,
              "READ DMA EXT, two blocks");
@@ -1677,6 +1707,17 @@ static void test_smart_result(void)
     CHECK_EQ(out[5], 0, "bIDEError 0");
     CHECK_EQ(out[6] | out[7] | out[8] | out[15], 0, "reserved bytes 0");
     CHECK(bytes_eq(out + 16, data, 512), "the data");
+    memset(out, 0xCC, sizeof(out));
+    CHECK_EQ(UasSmartResult(&p, out, 527, UAS_SRB_SUCCESS, 0, 512, data, NULL,
+                            0, &bytes, &err), UAS_PTR_INVALID,
+             "an output one byte short of the data: refused");
+    CHECK_EQ(err, UAS_SMART_INVALID_BUFFER, "SMART_INVALID_BUFFER");
+    CHECK_EQ(bytes, 16, "the header alone");
+    CHECK_EQ(out[16], 0xCC, "nothing written past the header");
+    CHECK_EQ(UasSmartResult(&p, out, 15, UAS_SRB_SUCCESS, 0, 512, data, NULL,
+                            0, &bytes, &err), UAS_PTR_INVALID,
+             "an output shorter than the header");
+    CHECK_EQ(bytes, 0, "nothing written");
     CHECK_EQ(UasSmartResult(&p, out, 529, UAS_SRB_DATA_OVERRUN, 0, 100, data,
                             NULL, 0, &bytes, &err), UAS_PTR_IO_ERROR,
              "a short READ DATA fails");
@@ -1712,6 +1753,11 @@ static void test_smart_result(void)
              "threshold exceeded is an answer, not an error");
     CHECK_EQ(out[16 + 3], 0xF4, "LBA Mid F4h");
     CHECK_EQ(out[16 + 4], 0x2C, "LBA High 2Ch");
+    memset(out, 0xCC, sizeof(out));
+    CHECK_EQ(UasSmartResult(&p, out, 23, UAS_SRB_ERROR, 2, 0, NULL, rsOk, 18,
+                            &bytes, &err), UAS_PTR_INVALID,
+             "RETURN STATUS with no room for its registers");
+    CHECK_EQ(out[16], 0xCC, "nothing written past the header");
     CHECK_EQ(UasSmartResult(&p, out, 41, UAS_SRB_SUCCESS, 0, 0, NULL, NULL, 0,
                             &bytes, &err), UAS_PTR_IO_ERROR,
              "GOOD without registers: no status to report");
