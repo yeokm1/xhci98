@@ -3381,3 +3381,20 @@ parts above with the pin moved to it (105 `SHA256` lines) and
 So `3.4.0.0`'s free download offers the free and non-free `rtl815x`
 together on XP to 7 x64; with v0.1.5 the free one is copied only, so
 the page shows no change until the free set stages it.
+
+## 45.final: the release-notes texts the tasks handed over
+
+Collected as each task merges, for `45.final` to place; the wording is the
+task's own, checked against its section above before it is used.
+
+- 45.6 (merged at `312b8421`): "The free and non-free rtl815x USB Ethernet
+  drivers may now be staged side by side on Windows XP to 7, 32-bit and
+  x64, where their INFs list different chips; the release checks they
+  share no device, keeps them excluded on 98 SE, ME, 2000 and 8 to 10, and
+  keeps them apart from an earlier staging of either taken from another
+  release. The free set is usb-wdm-free 0.1.5: uac2 0.1.5.0 (each output
+  and input its own sound device; a co-installer, installed by hand, that
+  keeps Windows' USB Audio 1.0 driver off a UAC 2.0 device on 2000 to 7)
+  and usbcom 0.1.5.0 (FTDI FT-X, FT232H, FT4232H, Prolific PL2303, Silicon
+  Labs CP2105 and CP2108 on 98 SE and ME); its rtl815x is still copied
+  only, not staged."
