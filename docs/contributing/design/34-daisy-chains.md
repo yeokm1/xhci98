@@ -1,10 +1,20 @@
 # Design Record 34 - Daisy Chains: a Device Behind a Device
 
-Status: revision 9, 2026-10-30, task 45.14: section 3.3.6, the 9x
+Status: revision 11, 2026-10-30, task 45.15: section 6.11, Part 3 as
+coded. Revision 10, 2026-10-29 (task 45.15), before code, reviewed and revised:
+Part 3 read again against `tbt_u4cm.c` at `3e314cde` (task 45.15): a
+kid's sequence the host port's own, its unplug not nested before 45.18;
+a kid's own unplug hint confirmed by evidence; which check a
+notification or event from a parent serves; the parent's Disable Hot
+Plug cleared after it is UP; links below a kid; adoption from a link
+only when the link carries nothing else, the kid's teardown sweeping
+the link's other entries; the arrays the kids grow.
+Revision 9, 2026-10-30, task 45.14: section 3.3.6, the 9x
 padding at the first numbering, for its first reading, reviewed and
 revised before code. Revision 8, 2026-10-30, task 45.18, before code: section 3.11,
 Stor98's statements for chained drives and their q35 admission, and
-questions Q7 to Q11, answered by the owner the same day; reviewed and revised. Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
+questions Q7 to Q11, answered by the owner the same day; reviewed and revised.
+Revision 7, 2026-10-30, task 45.13: section 3.10, the chained
 unit's own `Removable` answer on NT, reviewed and revised before and with
 the code; section 3.9's 2000 reading. Revision 6, 2026-10-30, task 45.13:
 section 3.9, the NT chain action as coded. Revision 5, 2026-10-29, task 45.17: section 4.6, the
@@ -1690,7 +1700,9 @@ firmware's depth-2 messages are not captured.
   that router's downstream USB4 ports; the depth-2 router's own
   downstream ports left locked, as depth 1's are today.
 - PCIe only: no USB3 tunnel at depth 2, so no TMU at depth 2 (record 22
-  section 6.6: PCIe has no accuracy requirement), and no DisplayPort.
+  section 6.6: PCIe has no accuracy requirement), and no DisplayPort;
+  except a link of two version 2 routers, whose TMU record 22 section
+  6.2.2 item 6 sets whatever the tunnels (section 6.11).
 - The parent may be a USB4 router or a Thunderbolt 3 router (the TS3
   Plus, record 22 section 8); the child a USB4 router. A Thunderbolt 3
   child behind a parent is out (section 11): the emulator's chain puts a
@@ -1750,7 +1762,31 @@ and depth-2 links whose state does not verify).
 generation is unchanged, its unplug is not pending, and its host port's
 generation is still `ParentGeneration` with the port UP: a parent that
 left ends every child's sequence at its next check (record 22 section
-7.4's rule, one level up).
+7.4's rule, one level up). A pending unplug of the kid itself ends its
+sequence only once its removal evidence is read (section 6.7's: lane
+0's class, Lock set again on a port this driver unlocked, ERR_CONN on
+its route, or another router), as `tbtU4Live` tests the active port's
+at depth 1 [code]: with none, the flag is cleared and the sequence goes
+on, since an event's age is unbounded (record 22 section 10.3) and a
+late unplug event must not cancel a healthy connect.
+
+**Whose sequence a kid's is** (`TBT_U4CM.ActivePort`, record 22 section
+7.4). A kid's connect, teardown, eject and PCIe-loss handling run as its
+host port's sequence: `ActivePort` is the host port for their whole
+length, as `TbtU4Eject`, `tbtU4Clean` and `tbtU4PcieLoss` set it at
+depth 1 [code], so a safe point inside one never nests the parent's
+teardown under it. A parent's unplug found meanwhile stays pending for
+the host port's check, and ends the kid's sequence through the liveness
+rule: the host port's `UnplugPending` with removal evidence (the test
+`tbtU4Live` makes for the active port [code]) counts as the port not UP.
+A kid's own unplug is never nested at a safe point of another sequence
+in this cut; it waits for the next idle tick's kid check. Record 22
+section 7.4 nests a depth-1 teardown so that its statement meets
+section 10.3's 3 s; at depth 2 no statement is made before task 45.18
+(section 12, Q4), so the wait loses nothing, and 45.18 decides whether a
+kid's teardown nests once its statements are admitted. A kid's teardown
+sets `InTeardown` as a depth-1 teardown does, so no teardown nests in
+it: at most one teardown nests (record 22 section 7.4).
 
 ### 6.3 The child's state machine
 
@@ -1827,7 +1863,8 @@ a kid slot is free:
    disconnected as `XhciCmUsb3Tunnel` 0 does at depth 1 (Path Enable 0
    with Valid 1, Guide 5.5.3; `tbtU4Usb3Disconnect`); then CV and
    Configuration Ready within 500 ms (record 22 section 6.6 step 3;
-   section 2.4 step 1 [linux]). No TMU.
+   section 2.4 step 1 [linux]). No TMU, but on a link of two version 2
+   routers (section 6.11).
 7. **The PCIe tunnel** (section 6.6), when `XhciCmApprove` is 1.
 8. **The PCI side**: section 3's chain action; the kid is UP.
 
@@ -1852,10 +1889,34 @@ of it. The minimal chain:
   already active for lane adapters (record 22 section 8 item 2; bit 3 of
   Plug Events + 1 clear), so the downstream lanes' events arrive [emu: the
   dock sends 3 and 4 after it is configured]. A USB4 parent's downstream
-  lane 0 adapter's ADP_CS_5 Disable Hot Plug Events is cleared at the
-  parent's configuration [spec, Spec 8.2.2.1]. A lane 0 event of the parent's
-  downstream port queues a **kid check**; lane 1 events are counted, as
-  at depth 1.
+  lane 0 adapter's ADP_CS_5 Disable Hot Plug Events is cleared [spec,
+  Spec 8.2.2.1] once the parent is UP with its PCIe tunnel up and
+  `XhciCmApprove` 1, at the first idle tick that finds it so, as a step
+  of the kid slot's service and never inside the depth-1 connect, whose
+  writes stay record 22 section 6.4 to 6.8's byte for byte. It is not
+  set again: an eject leaves the parent down until its re-plug, and a
+  parent's departure or reset takes the state with it; while it is still
+  set, the idle poll's scan below finds the plug. A lane 0 event of the
+  parent's downstream port queues a **kid check**; lane 1 events are
+  counted, as at depth 1.
+- **Which check a notification serves.** Today every Error Notification
+  from a device router (ERR_CONN, ERR_LOCK or ERR_PLUG, its route of
+  depth 1 or more) is handed to the host port its route's first level
+  names, an ERR_CONN or ERR_LOCK as that port's unplug, which the host
+  port's check then clears from registers (`tbtU4TakeQueues` [code]).
+  The notification names the router that could not forward and its
+  adapter [spec]. With kids: one whose route is a kid's parent's and
+  whose adapter is that kid's `ParentLane0` or the lane above it is the
+  kid's - its check queued, an ERR_CONN or ERR_LOCK its `UnplugPending`
+  - and queues only a plain check of the host port, never the host
+  port's unplug; one from a kid's own route or deeper serves the
+  discovered links there as today and the kid's check, never an unplug
+  of the kid or of the host port. A Hot Plug Event the same way: a lane
+  0 event of a kid's parent's lane is the kid's check (its
+  `UnplugPending` when the event reads unplug and the kid is not EMPTY),
+  a lane 1 event counted. So a child's departure never reads as its
+  parent's, and the parent's own removal is still found by the host
+  port's check, which reads registers.
 - **The idle poll** reads each kid's parent downstream lane 0 (LANE_ADP_CS_1
   and ADP_CS_4, two reads) and, for an UP kid, one PCIe adapter's
   ADP_PCIE_CS_0 (a third) and the presence sample of each Stor98 entry
@@ -1946,10 +2007,27 @@ down, on the routers that remain, every path through the removed router):
    on a Thunderbolt 3 parent).
 6. **The OS side**: the chain port's removal (sections 3.2 and 3.3.5).
 
+Step 1 is followed by the sweep a watched link's removal makes
+(`tbtU4RemoveLink` [code]): every other entry on the parent that enters
+or leaves the link's lanes read, and one found Valid or with Pending
+Packets invalidated or quarantined under the kid. It is a residual
+pass: a link this driver built, or one adoption proved carried nothing
+else, holds no such entry, and one found is closed rather than left. An
+entry unread keeps the kid's removal pending, retried at the next tick,
+as for a link.
+
 What does not complete is quarantined on the parent's adapters, keyed by
 the host port and the kid (`TBT_U4_QENTRY.Port` and a kid index), and
 retried at idle ticks as section 7.3 says; a parent that leaves drops its
 quarantine with it (`tbtU4QDropPort`).
+
+**Below the kid.** The links discovered below a kid (depth 3, watched,
+section 6.9) go with it with no register work, as `tbtU4DropLinks`
+drops a port's links today [code]: their parent is the departed child.
+Every route of the departed child and below it is forgotten by the
+transport (`TbtCtlForget`, as `tbtU4DropLinks` does at depth 1 [code]).
+The same holds in section 6.8 step 1 for the links below each dropped
+kid.
 
 **The eject of a chained unit** (section 3.7) calls the same orderly
 teardown with both ends present (record 22 section 9.3 step 1 through the
@@ -1989,14 +2067,35 @@ Ready, PTO, CV and Configuration Ready; the link bonded or lane 1
 disconnected or disabled; the four entries of section 6.6 Valid and
 chained at HopID 8 on the protocol adapters, with Path Enable at both
 ends and a live LTSSM at the USB4 ends (behind a Thunderbolt 3 parent the
-child's only, section 6.5) - and whose parent is UP, is **adopted**: a
-kid in state UP,
+child's only, section 6.5) - and whose parent is UP, and **whose link
+carries nothing else**, is **adopted**: a kid in state UP,
 Preserved, `hd` and `hu` recorded, nothing written, nothing re-enumerated
-(the operating system found it at boot). A depth-2 link that does not
-verify stays a watched `TBT_U4_LINK`, as today, served by its unplug. A
-depth-2 link with no tunnel at all, under an UP parent, is connected as a
-fresh plug (section 6.4), its router adopted as already enumerated (its
-TopologyID kept). Depth 3 and deeper stay watched links.
+(the operating system found it at boot). "Nothing else" is proven by
+reads, every one answered: on the parent, no entry Valid or with Pending
+Packets that enters the link's two lane adapters or leaves them (the set
+`tbtU4RemoveLink` sweeps [code]) other than the kid's two, and no
+protocol adapter's HopID 8 entry leading into the link other than the
+kid's PCIe Down's; on the child, no such entry on its upstream lanes
+other than the kid's two, and its USB3 Up and other protocol adapters
+carrying nothing (`tbtU4ProtoEmpty`'s test [code]). A USB3 or
+DisplayPort path a predecessor built there, or an entry unread, keeps
+the link watched: the kid's teardown (section 6.7) closes only the
+PCIe tunnel, while a watched link's removal sweeps every path through
+it. A depth-2 link that does not verify stays a watched `TBT_U4_LINK`,
+as today, served by its unplug. A depth-2 link with no tunnel at all
+and nothing else on it (the same reads), under an UP parent, is
+connected as a fresh plug (section 6.4), its router adopted as already
+enumerated (its TopologyID kept). Depth 3 and deeper stay watched
+links.
+
+**From link to kid.** Section 9.2's walk (`tbtU4DiscoverLinks` [code])
+still records every enumerated, unlocked depth-2 router as a
+`TBT_U4_LINK` first; adoption moves a verified one into a free kid slot,
+the link's UUID, capabilities and DROM answer carried and the link
+freed, so a router is never both a kid and a link. With no kid slot
+free the link stays watched and the fact is logged (`u4.kid.full`); a
+fresh plug with no kid slot free leaves the parent's downstream port
+locked, logged the same way.
 
 **Across a sleep** (record 22 sections 7.6 and 9.4): a kid's PCIe tunnel
 that is up at suspend is an obligation of its own (`TBT_U4_OBLIGATION`
@@ -2008,6 +2107,13 @@ sequence and the Detect gate; otherwise the failure path of section 7.6.
 System suspend with a tunnelled device attached stays unsupported in the
 release that carries this (record 21 section 6.3); this keeps the kid's
 state honest across one, not more.
+
+The arrays grow by the kids: `TBT_U4_OBLIGATIONS` by `TBT_U4_MAX_KIDS`
+(one PCIe obligation a kid), the obligation count that
+`TbtU4ResumeBoundUs` is given with them, and `TBT_U4_CARRY` gains
+`TBT_U4_MAX_KIDS` kid entries (the host port, the parent's downstream
+lane 0, the child's vendor, device and UUID, and the PCIe tunnel's `hd`
+and `hu`).
 
 **The host interface lost** (record 22 section 7.7): a recovery treats
 every kid as a discovered link under the recovery's own classification
@@ -2028,6 +2134,215 @@ A kid rebuild by the recovery is out (section 11).
 | `src/cm/cm_status.c` | kind 3 entries from the kids |
 | `test\test_u4cm.c`, `u4_fakefab.c`, `u4_fakefab.h` | section 9.1 |
 | `scripts\usb4-crosscheck\u4cm-crosscheck.c` | the chain case (section 9.2) |
+
+### 6.11 Part 3 as coded (task 45.15)
+
+Sections 6.1 to 6.10 made exact for the code (`tbt_u4cm.h`, the section
+"The minimal chain" of `tbt_u4cm.c`, and `cm_nhi.c`'s seam); where this
+differs from them, this section is the record.
+
+- **The link view** is the kid's own sequences over the shared
+  primitives, not a view argument threaded through the depth-1 ones:
+  `tbtU4KidRouter`, `tbtU4KidBond`, `tbtU4KidConfigured`,
+  `tbtU4KidConfigValid`, `tbtU4KidPcieTunnel` and `tbtU4KidTunnelDown`
+  take the parent's router and downstream lane 0 in the host's place and
+  call the primitives a router and an adapter already parameterise (the
+  reads and writes, `tbtU4Enumerate`, `tbtU4WaitReady`, `tbtU4ReadDrom`,
+  `tbtU4DiscoverAdapters`, `tbtU4RouterCaps`, `tbtU4GetCapabilities`,
+  `tbtU4BufferAllocation`, `tbtU4ScanLane`, `tbtU4LaneAvail`,
+  `tbtU4AllocHop`, `tbtU4WriteEntry`, `tbtU4Invalidate`, `tbtU4Disable`,
+  `tbtU4LaneRd`, `tbtU4LaneRmw`, `tbtU4LcPort`). Two depth-1 functions
+  were split so that a kid can share them, their behaviour unchanged:
+  the TMU-Off predicate (`tbtU4LinkTmuOff`, which `tbtU4TmuOff` calls with
+  the host's view) and the removed link's sweep (`tbtU4SweepLane`, which
+  `tbtU4RemoveLink` calls). Every depth-1 sequence is otherwise as it was.
+- **`TBT_U4_KID`** carries the fields of section 6.2 less the anchor (no
+  statement is made at depth 2 before task 45.18, so no presence sample
+  is taken for a kid), plus `ParentUsb3Down`, `SweepOwed` and `Ticks`.
+  A free slot reads EMPTY. A kid's `Generation` is drawn from one counter
+  per domain (`TBT_U4CM.KidGeneration`), so no two connections of any kid
+  share one, whatever slot they take.
+- **Whose work.** A kid's connect, teardown, eject, loss and resume run
+  with `ActivePort` its host port and `TBT_U4CM.KidCtx` the kid, which
+  keys every quarantine record they make (`TBT_U4_QENTRY.Kid`): one on
+  the child lives with the kid's connection (its `Generation` the
+  kid's), one on the parent with the parent's, as before. A teardown
+  nested at a safe point inside a kid's work is never keyed by the kid.
+- **Notifications.** Section 6.5's routing is made in two places: the
+  queued note (`tbtU4KidNote`) and the request. The transport ends the
+  one request outstanding with any ERR_CONN or ERR_LOCK that arrives
+  meanwhile, its route not compared (`tbt_ring.c`), so a child's
+  departure can end a request to its parent or to another port. A router
+  reports either error for the adapter it could not forward through
+  (Spec 6.4.2.3), so one that ends a request is that request's own only
+  when it comes from a router above the request's route (the host
+  router included) and names the next hop towards it (`tbtU4NotifyOf`);
+  a request to the host router itself forwards nothing, so none is its
+  own. Any other is foreign: never removal evidence for the request
+  (`tbtU4Gone`), the request asked once more (`tbtU4RdN`, `tbtU4WrN`) -
+  but never a router operation's launch (`ROUTER_CS_9` to `26`), which a
+  second write could run twice or write over while it runs: that request
+  fails as any other cut short - and
+  the notification handled as its queued form would be - a kid's lane or
+  route the kid's check (and unplug hint for its lane) with a plain check
+  of the host port, a host lane that port's check and hint. This holds at
+  depth 1 too, where such a notification was read as the requested
+  router's removal (or, at a host-local request, as the active port's).
+- **The idle tick** (`tbtU4KidService`, after each host port's own
+  check): each kid of the port checked from the registers (its evidence:
+  the parent lane's class, a USB4 parent's Lock on a lane this driver
+  unlocked or found unlocked, the child's TopologyID Valid and UUID, an
+  ERR_CONN on its route); an UP kid's PCIe tunnel judged by section 6.5;
+  then, with the parent UP with its PCIe tunnel and `XhciCmApprove` 1, the
+  parent's downstream Disable Hot Plug cleared once per connection of the
+  parent (read first, written only when set), and each downstream port
+  without a kid read: a watched depth-2 link there read for adoption once
+  (`TBT_U4_LINK.AdoptTried`), a connected lane connected. Under a parent
+  FAILED or HELD a kid is still served by its own unplug (section 6.3):
+  its removal read and, on evidence, its teardown; nothing else until the
+  parent is UP. A parent HELD and not yet classified (a resume's, which
+  its own next check classifies before the kids are served; a
+  recovery's; one behind the retirement barrier) is not written for its
+  kids at all: their checks and any cleanup owed wait, the quarantine
+  records the kids made included (`tbtU4KidQWait`: neither retried nor
+  dropped while the parent is unclassified or holds another connection).
+  A record on the child itself is retried only once the child reads as
+  the same router at that tick (its UUID) and no unplug hint of the kid
+  is unresolved: behind a Thunderbolt 3 parent no Lock tells a
+  replacement, and the retry runs before the kid's own check. The same
+  holds for a record on a USB4 router a watched link names (a kid made a
+  link again by a recovery among them): retried only while that router
+  reads its link's UUID.
+- **Adoption** runs at that tick, the first after the parent is UP - at
+  the start and after a recovery's commit alike - rather than inside
+  section 9.2's walk, so the walk is unchanged. "Nothing else on the
+  link" is read by `tbtU4LinkOnly` on both routers and the child's other
+  protocol adapters empty. On a Thunderbolt 3 parent the adopted PCIe
+  Down is the one whose HopID 8 entry leads into the link. A depth-2
+  link with nothing on it is freed and connected as a fresh plug, so
+  three host vectors whose depth-2 router stood on a bare link for a
+  link-handling check (`test_edge_identity`'s reset under a live link,
+  and `test_asm2464`'s ASM2464 at depth 2 and its depth-3 pair) were
+  given a half-built path on the parent's side, which keeps
+  the link watched as their subject needs; `test_links`' depth-2 re-plug
+  is now connected, and kept uninitialised for `XhciCmApprove` 0.
+- **The end unplug** (`tbtU4KidTeardown`): step 1 on the parent's side,
+  the upcall with the kid, TUNNEL_DOWN with the kid at the first pass;
+  the residual sweep (`tbtU4SweepLane`), and once the link is empty the
+  parent's lanes back (`tbtU4KidLanesBack`: each change owned until a
+  read-back proves it undone, as `tbtU4HostRestore` keeps the host's; the
+  child's put back too while it is there), only once the link reads idle
+  (the parent's two lanes with the quarantine, `tbtU4KidLanesIdle`, and
+  its PCIe Down's Path Enable and HopID 8, `tbtU4AdapterFree`): a held
+  entry is not a closed one. An entry unread, a held one, or a change
+  not undone leaves the kid in TEARDOWN (`SweepOwed`), retried at the next
+  tick; the slot is freed once nothing is owed (the links below dropped
+  and every route of the child and below forgotten). A connect waits for
+  the parent's two lanes to carry nothing live, pending or held
+  (`tbtU4KidLanesIdle`, as `tbtU4LanesIdle` at depth 1), and a kid whose
+  parent left without dropping it is dropped at the next tick.
+- **The parent's PCIe loss, its eject and the kid's eject**
+  (`tbtU4KidsDown`, `tbtU4KidDown`, `TbtU4EjectKid`): the kid's tunnel
+  down in the orderly form with both ends, TUNNEL_DOWN with the kid, the
+  kid FAILED (`Ejected` for an eject) and kept until the child's or the
+  parent's unplug. The child's side is written only on the child read as
+  the same router at that moment (its UUID): this runs before the kid's
+  own check, and behind a Thunderbolt 3 parent no Lock tells a
+  replacement; unconfirmed, the parent's side alone; the upcall only for a loss, as at depth 1 (an eject's
+  removal is the operating system's own).
+- **The kid's PCIe loss** behind a Thunderbolt 3 parent reads the
+  parent's Path Enable every fourth idle tick the kid is UP
+  (`TBT_U4_KID.Ticks`).
+- **Across a sleep** (`tbtU4KidResume`, `tbtU4KidVerify`): each kid
+  obligation after every port's. A parent HELD (or the resume unable to
+  judge) leaves the kid HELD, its obligation kept; a parent verified as
+  the same has its kid verified (reads only), a kid with removal evidence
+  torn down (the next tick connects what is there), anything else HELD; a
+  parent the resume rebuilt has a kid this driver built (or adopted and
+  matched by the carry) rebuilt after it by section 6.4's sequence.
+- **The carry** (`TBT_U4_CARRY.Kid`) records the kid's host lane, parent
+  lane, vendor, device, UUID and HopIDs; an adopted kid matched to it is
+  `Own`.
+- **The host interface lost:** at a recovery every kid becomes a
+  discovered link again before its parent is classified
+  (`tbtU4KidsToLinks`), its obligation dropped; one that still verifies
+  is adopted again at the first tick after the commit. One ejected or
+  FAILED for PCIe stays down (`TBT_U4_LINK.KidDown`: never adopted or
+  connected) until its link is removed and the child plugged again. A
+  kid whose teardown is still owed stays a kid, finished or dropped with
+  its parent after the commit: a departure the recovery reads drops the
+  port's kids at once (`tbtU4RecoverEmpty`), and no kid is ever written
+  once its port holds another connection (`ParentGeneration` against the
+  port's `Generation`; dropped unwritten instead); and with too few link records free for the
+  rest the attempt is refused (`RecReserveFull`), the kids kept.
+- **The seam** (`cm_nhi.c`). A kid's action reaches `CmReenumAction` at
+  depth 2, `Slot` the port with the kid in bits 15:8 (the chain action's
+  owed key, one per kid, section 3.9), `Serial` the kid's generation;
+  `CmNhiActionLive` reads the kid (its slot, generation, both routers
+  present, its PCIe tunnel for an up). `CmNhiActionMember` names no
+  member for it, so no member's stor98 exposure takes the kid's
+  generation for its own tunnel's, and the chain action walks every
+  member. A kid's action is not its port's:
+  no learning (`XhciTbtLearnUp`, `LearnOpen`, `cmU4LearnTry`, the arm),
+  no `U4SeamGen` (the port's eject guard), no stor98 UP; and the link-down
+  upcall with a kid is logged (`u4.linkdown.kid`) and withheld, the
+  port's learning and isolation word untouched, so a chained drive is held
+  by stor98's own gone deadline (MD-1) until task 45.18.
+- **Counters** (`TBT_U4_COUNTERS`, logged as `u4.kid.connects`,
+  `u4.kid.up`, `u4.kid.adopted`, `u4.kid.torn-down`, `u4.kid.dropped`,
+  `u4.kid.lost`, `u4.kid.full`) and log labels `u4.kid.connect`,
+  `u4.kid.router`, `u4.kid.state`, `u4.kid.pcie.up`, `u4.kid.pcie.failed`,
+  `u4.kid.no-pcie-down`, `u4.kid.version`, `u4.kid.adopted`,
+  `u4.kid.fresh`, `u4.kid.watched`, `u4.kid.teardown`, `u4.kid.down`,
+  `u4.kid.lost`, `u4.kid.sweep-owed`, `u4.kid.dropped`, `u4.kid.full`.
+- **Version 2 routers** (record 22 section 6.2, task 45.20, through the
+  link view; at the merge of both). A kid's Gen 4 link is classified as a
+  port's is: symmetric, or a paired asymmetric width used as found,
+  bonded with no Target Link Width, Lane Bonding or Lane Disable written
+  (`TBT_U4_KID.Gen4`, `Asym`; adoption and the resume's verification
+  accept the paired asymmetric width); any other Gen 4 reading leaves the
+  kid FAILED (`TBT_U4_WHY_LINK`, `u4.kid.link.gen4-unusable`), nothing
+  written. A chained PCIe tunnel between two version 2 routers under
+  `XhciCmUsb4V2` 1 has Extended Encapsulation set and read back on both
+  adapters before either Path Enable; any other has it read clear first,
+  a version 2 end left set cleared, else no Path Enable
+  (`u4.kid.ee.left`); the kid's teardowns clear it after the Path
+  Enables, as a port's. A preserved child (not a Thunderbolt 3 one)
+  under `XhciCmUsb4V2` 1 is configured only once CV reads clear: CV set
+  with PTO is kept as found, CV set without PTO, or a read that fails,
+  leaves the kid HELD (`TBT_U4_WHY_CV_FOUND`, `u4.kid.cv.found`,
+  `u4.kid.cv.unread`), its ROUTER_CS_5 unwritten. A v2-v2 child link's
+  lane 0 still training is waited for, as a port's, with no write; one
+  that never reads connected leaves the kid FAILED
+  (`TBT_U4_WHY_LANE_STATE`, `u4.kid.link.not-active`). On the link of a
+  kid this driver enumerated, both ends version 2 routers with a TMU,
+  neither reporting Time Synchronization Protocol Not Supported, under
+  `XhciCmUsb4V2` 1: HiFi Enhanced Uni-Directional before CV, as at depth
+  1 (Disable Time Sync set at connection, the link's TMU read Off or
+  left as found, `u4.kid.tmu.inherited`; the child's time posted from the
+  host's, the mode on the child's upstream and the parent's downstream
+  lane 0, Disable Time Sync cleared on the child's then the parent's,
+  `u4.kid.tmu.enhanced`, `TBT_U4_KID.TmuConfigured`); a failure undone,
+  counted (`TmuFailures`) and logged (`u4.kid.tmu.failed`), the PCIe
+  tunnel proceeding; at the kid's teardown the parent's side back to
+  AdapterTimeSyncInterval 0, Enable Enhanced Uni-Directional Mode 0 and
+  Disable Time Sync set, each attempted whatever the others did. The
+  parent's side is the kid's debt: a write that fails
+  (`u4.kid.tmu.off-failed`) keeps `TmuConfigured` and the slot TEARDOWN
+  (`SweepOwed`), so nothing, of either version, connects on the link
+  until the reset is retried and proven at the sweep. After a recovery a
+  kid adopted again holds its link as found, its TMU included, as it
+  does its lane fields. A predecessor's Enable Gen 4 Link Recovery on a depth-2 link is
+  cleared at the link's discovery (`tbtU4LinkElr`), as at depth 1.
+  Vectors: `test_u4v2`'s `test_kid_v2`, `test_kid_adopt_asym`,
+  `test_kid_training`, `test_kid_tmu_debt`, `test_kid_cv_found`.
+- **Not in this cut** (the task stays open for them): the eject paths
+  `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
+  section 3.7's chained unit, task 45.13: until then a chained device goes
+  with the first device's unit, whose eject tears the kid's tunnel down
+  first); `cm_status.c`'s kind 3 entries; the Windows 98 SE and ME
+  worker's chain action (task 45.14); the `usb4-emu` cross-check of
+  section 9.2.
 
 ## 7. The roles of each target
 
@@ -2111,7 +2426,20 @@ attempt, member or chain port, with a flag bit saying which.
   owed, then acting); a kid behind a Thunderbolt 3 parent whose PCIe Down
   reads `0xc6210400` staying UP past 2 s of idle ticks, then a genuine
   loss (the child's PCIe Up in Detect for 2 s, or the parent's Path
-  Enable clear) found and torn down. Every depth-1 vector unchanged.
+  Enable clear) found and torn down; a child's ERR_CONN never the host
+  port's unplug; a kid's unplug found during another port's sequence
+  served at the next tick; a stale unplug event during a healthy kid's
+  connect not cancelling it; and the parent's unplug during a kid's
+  connect ending the kid's sequence, not nested under it; a depth-3
+  link below a kid dropped with it; no kid slot free; a preserved chain
+  whose link also carries a USB3 or DisplayPort path kept watched, its
+  unplug sweeping every path. Every depth-1
+  vector unchanged. The one depth-2 vector of today that expects a
+  plugged depth-2 router left uninitialised (the preserved chain's
+  re-plug, "and the router left uninitialised") changes with the
+  minimal chain: behind an UP parent with its PCIe tunnel up the router
+  is connected; the vector is kept for a parent with no PCIe tunnel
+  (`XhciCmApprove` 0).
 
 ### 9.2 The `usb4-emu` cross-check
 

@@ -105,6 +105,9 @@ static USB4TunnelState tp_state[3];
 static int tp_calls[3];
 static int u3_calls;
 static USB4TunnelState u3_state;
+/* Record 34 Part 3: the chained tunnel, through a parent's PCIe Down */
+static USB4TunnelState chain_state;
+static int chain_calls;
 
 void usb4_icm_hotplug(USB4ICM *icm, USB4Router *r, unsigned adapter,
                       bool unplug)
@@ -178,6 +181,13 @@ void usb4_tunnel_port_set_state(USB4TunnelPort *p, USB4Device *dev,
             printf("  [model] port %d PCIe tunnel %s (reason %d)\n", i,
                    st == USB4_TUNNEL_UP ? "UP" : "DOWN", why);
         }
+    }
+    if (dev != NULL && p != (USB4TunnelPort *)&fake_tp[1] &&
+        p != (USB4TunnelPort *)&fake_tp[2]) {
+        chain_state = st;
+        chain_calls++;
+        printf("  [model] chained PCIe tunnel %s (reason %d)\n",
+               st == USB4_TUNNEL_UP ? "UP" : "DOWN", why);
     }
 }
 
@@ -532,6 +542,8 @@ static void new_fabric(USB4HostModel model, bool preos)
     }
     memset(tp_state, 0, sizeof(tp_state));
     memset(tp_calls, 0, sizeof(tp_calls));
+    chain_state = USB4_TUNNEL_DOWN;
+    chain_calls = 0;
     u3_calls = 0;
     n_hr_reset = 0;
 }
@@ -845,6 +857,73 @@ static void test_tb3_dock(USB4HostModel model)
     usb4_fabric_detach(fab, 1);
 }
 
+/*
+ * Design record 34 section 9.2: the minimal chain on the model - a parent
+ * on host port 2 of `model` (the Thunderbolt 3 dock, or a USB4 router)
+ * with one downstream port, a USB4 router behind it, cold (at the start)
+ * and hot (plugged later), both tunnels up; the end device's unplug and
+ * re-plug; the parent's unplug with the child attached. The routes are
+ * compared exactly (the child at 0x303 behind host adapter 3); the lane
+ * HopIDs as properties (from 8). A reading, not a gate.
+ */
+static USB4Device kid = { .serial = "USB4EMU04" };
+
+static void test_chain(USB4HostModel model, USB4Device *parent, bool cold)
+{
+    const char *pname = parent->dialect == USB4_DIALECT_TB3 ? "the TB3 dock" : "a USB4 router";
+
+    printf("== %s: chain on port 2 behind %s, %s\n", model_name(model), pname,
+           cold ? "cold" : "hot");
+    new_fabric(model, false);
+    parent->ndfp = 1;
+    CHECK(usb4_fabric_attach(fab, 2, parent, NULL), "attach the parent");
+    if (cold) {
+        CHECK(usb4_fabric_attach_chained(fab, parent, 1, &kid, NULL), "attach the child");
+    }
+    CHECK(cm_start(true) == 0, "start");
+    cm_poll(2);
+    CHECK(ST(2) == (unsigned long)xc_state_up(), "the parent UP (state %lu why %lu)",
+          ST(2), WHY(2));
+    CHECK(usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the parent's PCIe tunnel up");
+    if (!cold) {
+        CHECK(usb4_fabric_attach_chained(fab, parent, 1, &kid, NULL), "plug the child");
+    }
+    cm_poll(4);
+    CHECK(xc_get(XC_KID_STATE, 2) == (unsigned long)xc_state_up(), "the kid UP (state %lu)",
+          xc_get(XC_KID_STATE, 2));
+    CHECK(xc_get(XC_KID_ROUTE, 2) == 0x0303UL, "the child at route 0x303 (%#lx)",
+          xc_get(XC_KID_ROUTE, 2));
+    CHECK(xc_get(XC_KID_PCIE_UP, 2), "the kid's PCIe tunnel recorded up");
+    CHECK(chain_calls >= 1 && chain_state == USB4_TUNNEL_UP, "the model's chained tunnel up (%d)",
+          chain_calls);
+    CHECK(xc_get(XC_KID_HD, 2) >= 8 && xc_get(XC_KID_HU, 2) >= 8, "lane HopIDs %lu and %lu, from 8",
+          xc_get(XC_KID_HD, 2), xc_get(XC_KID_HU, 2));
+    printf("  [xc] kid hd %lu hu %lu bonded %lu\n", xc_get(XC_KID_HD, 2), xc_get(XC_KID_HU, 2),
+           xc_get(XC_KID_BONDED, 2));
+    CHECK(usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the parent's tunnel kept");
+
+    usb4_fabric_detach_device(fab, &kid);
+    cm_poll(3);
+    CHECK(xc_get(XC_KID_STATE, 2) == (unsigned long)xc_state_empty(), "the end unplug: EMPTY (%lu)",
+          xc_get(XC_KID_STATE, 2));
+    CHECK(chain_state == USB4_TUNNEL_DOWN, "the model's chained tunnel down");
+    CHECK(xc_get(XC_KID_LD_CALLS, 2) >= 1, "the link-down upcall with the kid");
+    CHECK(ST(2) == (unsigned long)xc_state_up() &&
+          usb4_fabric_tunnel_state(fab, 2) == USB4_TUNNEL_UP, "the parent and its tunnel kept");
+
+    CHECK(usb4_fabric_attach_chained(fab, parent, 1, &kid, NULL), "re-plug the child");
+    cm_poll(4);
+    CHECK(xc_get(XC_KID_STATE, 2) == (unsigned long)xc_state_up() && chain_state == USB4_TUNNEL_UP,
+          "re-plugged: the kid UP, its tunnel up (state %lu)", xc_get(XC_KID_STATE, 2));
+
+    usb4_fabric_detach(fab, 2);
+    cm_poll(3);
+    CHECK(ST(2) == (unsigned long)xc_state_empty(), "the middle unplug: the parent EMPTY");
+    CHECK(xc_get(XC_KID_STATE, 2) == (unsigned long)xc_state_empty(), "and its kid dropped");
+    xc_stop();
+    parent->ndfp = 0;
+}
+
 static void test_empty(void)
 {
     printf("== nothing attached\n");
@@ -889,6 +968,11 @@ int main(int argc, char **argv)
 #endif
     RUN(test_tb3_dock(USB4_HOST_MODEL_MINIMAL));
     RUN(test_tb3_dock(USB4_HOST_MODEL_INTEL_ADL));
+    RUN(test_chain(USB4_HOST_MODEL_INTEL_ADL, &dock, true));
+    RUN(test_chain(USB4_HOST_MODEL_INTEL_ADL, &dock, false));
+    RUN(test_chain(USB4_HOST_MODEL_INTEL_ADL, &dev1, false));
+    RUN(test_chain(USB4_HOST_MODEL_ASM4242, &dev1, true));
+    RUN(test_chain(USB4_HOST_MODEL_ASM4242, &dev1, false));
     RUN(test_empty());
     trace_mark("end");
     printf("%d checks, %d failures\n", checks, failures);

@@ -2925,6 +2925,218 @@ value 0 alone); the readings of the "Not read" list; and the hardware
 reading at 45-E.5 (the P14s's Alpine Ridge INTx, the self-test first). The
 default stays 0 (owner, Q2).
 
+## 45.15 record 34 Part 3, the no-VM part: the design read against the code, the host vectors (2026-10-29)
+
+Design record 34 Part 3 (section 6, the USB4 software connection
+manager's minimal chain at depth 2) read against `src/cm/tbt_u4cm.c` and
+`tbt_u4cm.h` at `3e314cde`, on development host A; no virtual machine,
+no QEMU, no `usb4-emu` run.
+
+**Verdict: the design holds with seven additions (record 34 revision 10 after the merges into `3.4.0.0`, numbered 5 when written);
+none of its code exists yet.** `tbt_u4cm.c` has no `TBT_U4_KID` and no
+`TBT_U4_VIEW`: below depth 1 it has only the watched `TBT_U4_LINK`
+path (`tbtU4DiscoverLinks`, `tbtU4CheckLinks`, `tbtU4RemoveLink`), a
+depth-2 router plugged later counted and left locked. The reading
+against the code found what Part 3 did not yet say:
+
+1. **Whose sequence a kid's is.** `ActivePort` makes a depth-1
+   sequence its port's own (`TbtU4Eject`, `tbtU4Clean`,
+   `tbtU4PcieLoss`, since `2f57cad2`); a kid's sequences now run as
+   their host port's, so the parent's teardown never nests under them,
+   and a kid's own unplug is not nested before 45.18 admits statements
+   at depth 2 (section 6.2).
+2. **A kid's own unplug hint confirmed by evidence**, as `tbtU4Live`
+   confirms the active port's, so a late event never cancels a healthy
+   connect (section 6.2).
+3. **Which check a notification serves.** `tbtU4TakeQueues` hands every
+   device router's ERR_CONN or ERR_LOCK to the host port as its unplug;
+   one naming a kid's parent lane is now the kid's, a plain check only
+   for the host port (section 6.5).
+4. **The parent's Disable Hot Plug** cleared after the parent is UP, so
+   depth 1's writes stay byte for byte (section 6.5).
+5. **Links below a kid** dropped with it, their routes forgotten
+   (section 6.7).
+6. **Adoption from a link only when the link carries nothing else**, and
+   the kid's teardown followed by `tbtU4RemoveLink`'s sweep as a residual
+   pass: a kid closes only its PCIe tunnel, a watched link's removal
+   every path (sections 6.7 and 6.9).
+7. **The arrays the kids grow**: the obligations, the resume bound's
+   count and the carry (section 6.9); and the one vector of today that
+   expects a depth-2 plug left uninitialised changes with the code
+   (section 9.1).
+
+The revision was reviewed and revised before its commit (`bb3434c7`).
+
+### The fake fabric and the vectors
+
+- `test/u4_fakefab.c`, `.h`: protocol adapters paired below depth 1 (a
+  device router's Nth down adapter with the child on its Nth downstream
+  port, Spec 5.2.5); a device router's power loss setting Lock on its
+  downstream lanes and resetting the routers behind them, still attached
+  (Spec 3.3), the host-only reset kept local, no Lock on a Thunderbolt 3
+  router's lanes; `FAB_DEV_TBT3_DOCK`, the Thunderbolt 3 dock with a
+  downstream port as `usb4-emu`'s `usb4-router-tb3.c` device router has
+  it (lanes 1 to 4, PCIe Up 6, PCIe Down 7, the latter's LTSSM field
+  fixed at 3 as the emulator reads it); `fabHotPlugChild`,
+  `fabHotUnplugChild`, `fabPreosChild`, `fabDownLane0`,
+  `fabChainPcieUp` (the four entries chained and both Path Enables) and
+  `fabTriedTo` (writes sent to a route, delivered or not).
+- `test/test_u4cm.c`: `test_chain_fabric` runs today (the dock at depth
+  1, a hot-plugged child locked and uninitialised, the chained pair
+  trained only with both Path Enables, Lock again after the parent's
+  power loss, an enumerated child reset by its parent's unplug): 1,375
+  checks, 0 failures (1,362 before). Eleven vectors under
+  `#ifdef TBT_U4_MAX_KIDS`, written against section 6's names and
+  compiled only once `tbt_u4cm.h` defines it: the connect behind a USB4
+  parent and behind the dock (sections 6.4 and 6.6, all four entries,
+  bonding before Configuration Valid, the child's Path Enable first),
+  the refusals (a Thunderbolt 3 child, no PCIe Down, Detect not reached,
+  no PCIe tunnel on the parent), a write never answered while the paths
+  are written or enabled and a drain that never completes (undone or
+  quarantined under the kid, the parent kept), the end device's unplug
+  and a quick re-plug, a child's ERR_CONN never the parent's unplug, a
+  stale unplug event during a healthy connect, the middle unplug with no
+  write even attempted on the departed routers with the kid UP and
+  CONNECTING, a kid's unplug at another port's safe point served at the
+  next tick and a depth-3 link dropped with its kid, the parent's PCIe
+  loss and both ejects, adoption (a preserved chain, a half-built one,
+  one with a second path, one with no tunnel, and a preserved chain
+  behind the dock), and the resume (verified, also behind the dock,
+  rebuilt after the parent, the parent HELD with its kid, and behind the
+  dock a power cycle and the dock re-plugged with its child attached).
+  Checked to compile under `/Za /W3 /WX` against a copy of the header
+  with section 6's fields added; not run.
+
+`test\run-host-tests.cmd` on development host A at `39453f0d`: every
+suite passed, x86 and the amd64 legs. The vectors were reviewed and
+revised until the review found nothing material.
+
+### Left
+
+- The code (record 34 section 6.10's `tbt_u4cm.c` and `.h` rows, then
+  `cm_nhi.c`, `cm_eject.c`, `cm_ejectos.c` and `cm_status.c`, after
+  45.12), until the guarded vectors pass with every depth-1 vector
+  unchanged; then the gated builds.
+- The `usb4-emu` cross-check on `CHAIN=1` (record 34 section 9.2,
+  `scripts\usb4-crosscheck\u4cm-crosscheck.c`'s `test_chain`).
+- The q35 legs on 98 SE to 10 x64 (record 34 section 9.3).
+
+## 45.15 (continued) the minimal chain coded, reviewed, built, and read on 7 x86 and XP (2026-10-30)
+
+Worker w45-u4chain2, development host A. Record 34 Part 3 coded against
+today's tree, the guarded vectors enabled, and record 34 section 6.11
+written as the record of what the code does where it differs from
+sections 6.1 to 6.10 (revision 11 after the merges into `3.4.0.0`).
+
+### The code
+
+- `src/cm/tbt_u4cm.h`, `tbt_u4cm.c`: `TBT_U4_KID` in `TBT_U4CM.Kids`
+  (`TBT_U4_MAX_KIDS` 4 a domain); the kid connect (a USB4 parent's lane
+  unlocked, the child read, enumerated or taken as found, its DROM,
+  adapters, capabilities, Get Capabilities and Buffer Allocation; bonding
+  through the parent's downstream lanes with the verified single-lane
+  fallback; the parent's port marked configured, `PORT_CS_19` or a
+  Thunderbolt 3 parent's link controller; PTO, the USB3 adapters
+  disconnected, CV and Configuration Ready; the Detect gate, the four
+  chained entries, the child's Path Enable first, L0 behind a USB4
+  parent); the idle tick's kid service (checks from the registers, the
+  parent's Disable Hot Plug, adoption, connect); the end and middle
+  unplugs; the parent's PCIe loss and eject taking the kid's tunnel down
+  first; `TbtU4EjectKid`; the kid's own PCIe loss; the resume obligation;
+  the carry; kids back to links at a recovery; the kid index in the
+  action, the link-down record, the obligation and the quarantine entry;
+  error notifications attributed to a kid in the queue and at the
+  request.
+- `src/cm/cm_nhi.c`: the seam (a kid's action reaches the chain action at
+  depth 2, keyed per kid, live by the kid; no learning, seam generation,
+  member exposure or stor98 statement for a chained tunnel; seven counter
+  names).
+- `test/test_u4cm.c`: the eleven guarded vectors enabled, eleven more from
+  the reviews; three link vectors given a half-built parent path and
+  `test_links`' depth-2 re-plug changed, as section 6.11 says. 1638
+  checks, 0 failures at `3ac7f071`.
+- `scripts/usb4-crosscheck`: `test_chain` (record 34 section 9.2) on
+  `intel-adl` behind the Thunderbolt 3 dock (cold and hot) and behind a
+  USB4 router, and on `asm4242` behind a USB4 router (cold and hot): the
+  kid UP at route `0x303` with the model's chained tunnel up, HopIDs 8
+  and 9, bonded, the end unplug and re-plug, the parent's unplug with the
+  child attached. Against a QEMU tree of v11.1.2 with `usb4-emu` main
+  `fc16468`'s patch: 376552 checks, 0 failures (a reading, not a gate).
+
+### The reviews
+
+Every change reviewed and revised until the review found nothing
+material: nine rounds, the last on `c3152fde..94568ef8` with no finding.
+What the rounds found and the fixes are section 6.11's points: the
+TMU-Off predicate before a lane is disabled; a Thunderbolt 3 parent's
+PCIe Down chosen only when free; a request-ended notification attributed
+by the reporting router's place on the request's path, a foreign one
+asked again (never a router operation's launch); kid removal checks under
+a FAILED or HELD parent, no kid write under one not yet classified; the
+link proven idle before the parent's lanes are put back, each lane change
+kept until read back undone; a connect gated on the parent's lanes being
+idle; kids of a departed parent dropped at the recovery and when the port
+holds another connection; a kid's quarantine and its child-side teardown
+written only on the same child (its UUID).
+
+### The builds
+
+`3ac7f071` (one rename on top of the reviewed tip: `except` is a keyword
+to the DDK's compiler): the gated x86 build `all`, "BUILD + GATES PASSED
+(debug release qemu)" (`E:\xhci98-scratch\p45-w45-u4chain2\gb-x86.log`);
+`test\run-host-tests.cmd` "Host tests PASSED" (`hosttests2.log`). The
+amd64 build is the coordinator's after the merges. Packages
+(`make-package.ps1 -Arch x86`): release `xhcicm.sys` `ca983242...`,
+`xhci98.sys` `ab426a3f...`; qemu `xhcicm.sys` `afe53c1a...`, `xhci98.sys`
+`d71bef37...`.
+
+### The legs (q35; `usb4-emu` main `fc16468`)
+
+The emulator: QEMU v11.1.2 with `fc16468`'s `src/patches` applied, built
+on development host A (`qemu-system-x86_64.exe` `7961f7f8...`). The host:
+`-Usb4 asm4242` of `launch-q35.ps1` (`asm-preset=asm4242-desktop`, its
+pre-OS connection manager on). The chain: the parent `usb4-device
+... dialect=usb4,downstream-ports=1,chain-power-controller=off` with its
+own NVMe on USB4 port 1 at power-on (the pre-OS connection manager builds
+its tunnel; SeaBIOS numbers its switch, the chain port `04:01.0` with one
+bus, 6, while empty); the child `usb4-device ... parent=enc0,port=1` (a
+plain enclosure, its NVMe directly behind the chain port: an ASM2464
+child's own switch needs three buses, which an empty chain port numbered
+at power-on does not have) plugged by QMP at the desktop, or with
+`-Chain` at power-on. Goldens: fresh overlays of the q35 bases with the
+release package installed (`INSTALL.BAT /console /yes /nopause
+/thunderbolt /stor98`, exit 3), the qemu flavour's `xhcicm.sys` and
+`xhci98.sys` of the same commit swapped in for the log, restarted
+(7 x86 `7cb86e5a...`, XP `8bbf0a75...`); each leg a child overlay.
+Evidence: `E:\xhci98-vm\p45\w45-u4chain\w7\` and `xp\`
+(`debugcon-<leg>.log`, `serial-<leg>.log`, `cmdline-<leg>.txt`,
+screenshots).
+
+| Leg | System | Read | Verdict |
+|---|---|---|---|
+| r1 | 7 SP1 x86 | the parent preserved at the start (`u4.preserved`), the chain port classified (`cm.chain.class=00060408`); the child plugged: `u4.kid.connect`, `u4.kid.pcie.up=00010809` (hd 8, hu 9), `u4.kid.state` UP, the action with the kid (`u4.action.kid`), the chain port invalidated (`cm.chain.invalidate=01020408`) and its new child attached; the chained NVMe on Stor98, Code 0; its disk offline at first (both NVMe disks are overlays of one image: Windows' duplicate signature), put online, F:, a file copied and compared (`fc`: no differences). The child unplugged: `u4.kid.teardown`, `u4.linkdown.kid` with the path read back closed, the TUNNEL_DOWN with the kid, the chain port's child removed, the parent's D: untouched. Plugged again: UP, F: again, a file compared. The parent unplugged with the child attached: `u4.kid.dropped` first, then the port's own link-down and removal; no NVMe left, no hang; shutdown in 20 s | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3: pass |
+| r2 | 7 SP1 x86 | the chain at power-on: the depth-2 link discovered and adopted (`u4.kid.adopted=00010808`, the pre-OS paths' HopID 8 both ways), nothing re-enumerated; both NVMe on Stor98, Code 0 (Windows asked a restart for the chained one's first install, not taken). The child unplugged and plugged again: torn down, connected again, F: compared. The parent unplugged with the child attached and plugged again (the emulator keeps the child attached to it): the parent's tunnel up and the parent UP first, then the kid connected; every switch port and both NVMe Code 0; shutdown in 20 s | clause 4 and the approve order: pass |
+| x1 | XP SP3 | as r1: the kid connected at the hot plug, the chain port invalidated, Stor98 by its Found New Hardware wizard for the chained NVMe, F:, a file compared; the child unplugged without being stopped first: torn down, the chain port invalidated again and the NVMe removed, D: kept - and XP's "Delayed Write Failed" for F: (the file just written; a surprise unplug, as 45.13's x1 and x2 read; the Safely Remove Hardware applet's listing of the chained unit, section 3.10, was not read in this leg); plugged again: F:, a file compared; the parent unplugged with the child attached: the kid dropped first, everything removed, no hang; shutdown in 22 s | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3: pass |
+| r3 | 7 SP1 x86 | the parent hot-plugged at the desktop (clause 1 as written), then the child: the parent's tunnel up and the parent UP, then the kid connected (`u4.kid.pcie.up=00010809`, UP); but the parent's PCIe switch upstream port at Code 31 (Windows could not give it bus numbers: the `asm4242` layout's tunnel port numbered at power-on with no room for a switch added later, the emulated platform's limit as 45.37 read for the Thunderbolt 3 tunnel port), so neither NVMe was reachable on the PCI side and the chain action's walk found its chain port only intermittently (`cm.chain.owed-expired`) | clause 1 on this layout: not readable (the platform); the connection manager's half pass |
+| x2 | XP SP3 | as r2: adopted at the start, both drives D: and F:; the child unplugged and plugged again, a file compared; the parent unplugged with the child attached and plugged again: the parent first, then the kid, both drives back; shutdown in 17 s | clause 4 and the approve order: pass |
+
+### Left
+
+- Clause 1 with the parent hot-plugged at the desktop on a layout whose
+  tunnel port leaves room for a switch added later (r3: Code 31 on this
+  one).
+- The chained unit's tunnel teardown at its eject (`TbtU4EjectKid` from
+  the eject paths: the mark service's confirmation of a chained unit,
+  which record 34 section 3.10 refuses today, turned into the kid's
+  teardown; Windows' own eject of the chained unit, section 3.10's
+  `Removable`, already stops the drive and leaves the tunnel up) and, moved into 45.15 from
+  45.13 by the owner, the chain-port correspondence learning, the
+  per-tunnel names and generations (section 3.5, Q4 (a)) and the status
+  record's kind 3 entries for kids (coded, under review).
+- The legs on 98 SE, ME, 2000 and 10 x64. On 98 SE and ME the chained
+  device's PCI side is task 45.14's (not done): the legs read what
+  happens without it.
+
 ## 45.41 a UAS drive behind a SuperSpeed hub dropped by its link's warm reset: read, reproduced, and kept in place (2026-10-30)
 
 **Verdict: the report's drop is the driver's design, reproduced on q35 XP

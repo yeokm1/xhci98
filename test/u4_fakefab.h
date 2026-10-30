@@ -75,6 +75,9 @@
 #define FAB_DEV_TBT3_AR     3       /* Alpine Ridge LP bridge 8086:15C0 */
 #define FAB_DEV_ASM2464     4       /* ASMedia ASM2464PD 174C:2463, the ORICO capture */
 #define FAB_DEV_USB4V2      5       /* a USB4 version 2 device router (task 45.20) */
+#define FAB_DEV_TBT3_DOCK   6       /* Titan Ridge dock with a downstream port, as usb4-emu's
+                                     * usb4-router-tb3.c device router: lanes 1 to 4, PCIe Up 6,
+                                     * PCIe Down 7 (record 34 section 6.4) */
 
 typedef struct FAB_ADP {
     int Present;
@@ -87,6 +90,7 @@ typedef struct FAB_ADP {
     int DetectStuck;                /* PCIe: LTSSM never Detect while PE is 0 */
     int HcaStuck;                   /* USB3 Down: HCA never follows CMR */
     int LtssmForce;                 /* PCIe: nonzero reads LTSSM LtssmForce - 1 */
+    int PeerFollows;                /* with LtssmForce: the far end still trains */
     int Lane1;                      /* a lane 1 adapter (every fixture: even numbers) */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
     int EeStuck;                    /* PCIe: Extended Encapsulation never sets (task 45.20) */
@@ -240,6 +244,11 @@ typedef struct FAB {
     unsigned long WrAddr[FAB_WRLOG];
     unsigned long WrVal[FAB_WRLOG];
     unsigned long WrAtUs[FAB_WRLOG];
+    /* Every write request by its route as sent, delivered or not (an
+     * undeliverable one answered with ERR_CONN never reaches WrRouter). */
+    unsigned long TriedCount;
+    unsigned long TriedHi[FAB_WRLOG];
+    unsigned long TriedLo[FAB_WRLOG];
     unsigned long WrN[FAB_WRLOG];   /* the DW count of the request each came in */
     unsigned long LogCount;
     const char *LastLabel;
@@ -273,6 +282,27 @@ void fabPlugChild(FAB *f, int dev, int child, int enumerate);
  * two checks (only its UUID tells). */
 void fabSwapQuiet(FAB *f, int port, int dev);
 void fabUnplugChild(FAB *f, int dev);
+/* Record 34 Part 3: a child plugged into `dev`'s downstream port as at a
+ * hot plug - not enumerated, its parent's lane 0 Lock left set - with the
+ * parent's hot plug event where its Disable Hot Plug is clear (always on a
+ * Thunderbolt 3 parent); and its unplug, with the event. */
+void fabHotPlugChild(FAB *f, int dev, int child);
+void fabHotUnplugChild(FAB *f, int dev);
+/* `dev`'s downstream lane 0 adapter (3 on every fixture), and whether the
+ * chained PCIe tunnel is up: record 34 section 6.6's four entries Valid
+ * and chained, the parent's PCIe Down and the child's PCIe Up both with
+ * Path Enable, and the child's LTSSM in L0. */
+int  fabDownLane0(const FAB *f, int dev);
+/* A pre-OS chain on `dev`'s downstream port, as record 34 section 6.9
+ * adopts it: the child enumerated at depth 2, Router Ready, PTO, CV and
+ * Configuration Ready, the link bonded, the four PCIe entries of section
+ * 6.6 at lane HopIDs 8 and 9, Path Enable at both ends; `stray` adds a
+ * second path entry through the link (the mixed case kept watched). */
+void fabPreosChild(FAB *f, int dev, int child, int stray);
+int  fabChainPcieUp(const FAB *f, int dev);
+/* Write requests sent from entry `from` of the tried log on to router
+ * `r`'s route as it stands, delivered or not. */
+unsigned long fabTriedTo(const FAB *f, unsigned long from, int r);
 
 /* The pre-OS connection manager's leftovers on `port` (record 22 section
  * 9.1): host and device enumerated, bonded, PTO and CV, PCIe paths at lane
