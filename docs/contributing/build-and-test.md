@@ -3776,7 +3776,12 @@ the design, settled before the code (reviewed and revised).
   onto a hermetic fixture repository whose scripts are today's, copied with
   their layout at the case's start, and keeps its assertions: only inputs
   move, never a condition or a message, except a message that named a real
-  path. `Invoke-Packager` refuses a call into the packager without a
+  path, and except the digest's own cases, whose expectations follow the
+  new digest (a built image no longer moves it; a checkout's pinned tag
+  does, an unrelated tag does not). The binary gates' cases run a fixture
+  host runner, a controlled stand-in for `test\run-host-tests.cmd`, never
+  the real host suite. `Invoke-Packager` refuses a call into the
+  packager without a
   nonempty fixture `-DriverPath`; each case keeps the components it
   selects.
 - **The packager's set.** Every tracked file under `scripts\`; the files
@@ -3786,10 +3791,11 @@ the design, settled before the code (reviewed and revised).
   `releases\` with its full membership by path and size, ignored files
   included, since the historical checks list it with `-Force`); for each
   driver, the names `source-stamp.ps1 -List` gives and their presence, not
-  their contents; the host suite's inputs that the binary gates' cases
-  compile and run (as `Get-BuildInputRules` computes them, with
-  `docs\contributing\legal-provenance.md` and `test\stor98-settings.txt`,
-  which the host suite reads at run time); the driver sets' checkouts under
+  their contents; the fixture host runner's sources (the real host
+  suite runs in no case, so the driver sources it compiles and
+  `docs\contributing\legal-provenance.md` it reads are not inputs);
+  `test\stor98-settings.txt`, which `package-common.ps1` reads itself; the
+  driver sets' checkouts under
   `scripts\local\` by the pinned tag's commit and tree ids, the objects the
   export reads, the replace refs and the checkout's own configuration, any
   failure there giving no digest; the catalog's PE sample; `cmd.exe`'s
