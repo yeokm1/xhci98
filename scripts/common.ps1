@@ -518,13 +518,14 @@ function Get-SelfTestUnlistedPaths {
     foreach ($n in @($listed)) { if ("$n" -ne "") { [void]$tracked.Add(([string]$n).Replace('/', '\')) } }
     $in = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($n in @($Set)) { [void]$in.Add([string]$n) }
-    $rx = '["'']((?:src|docs|releases|scripts|xhciinst|xhcimark|xhciqual|xhcitr|xhciperf|test|tools)\\[^"''$*?\s]+|LICENSE|README\.md)["'']'
+    # Either separator, the path taken back to backslashes.
+    $rx = '["'']((?:src|docs|releases|scripts|xhciinst|xhcimark|xhciqual|xhcitr|xhciperf|test|tools)[\\/][^"''$*?\s]+|LICENSE|README\.md)["'']'
     $out = @()
     foreach ($sc in $Scripts) {
         $lines = [System.IO.File]::ReadAllLines((Join-Path $Root $sc))
         for ($i = 0; $i -lt $lines.Count; $i++) {
             foreach ($m in [regex]::Matches($lines[$i], $rx)) {
-                $lit = $m.Groups[1].Value.TrimEnd('\')
+                $lit = $m.Groups[1].Value.Replace('/', '\').TrimEnd('\')
                 if ($tracked.Contains($lit) -and -not $in.Contains($lit) -and -not $NotInput.ContainsKey($lit)) {
                     $out += ("{0} ({1}:{2})" -f $lit, $sc, ($i + 1))
                 }

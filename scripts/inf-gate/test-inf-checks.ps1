@@ -446,13 +446,14 @@ try {
     $gdOut = @(Get-SelfTestUnlistedPaths -Root $repo -Set $gdSet -Scripts @("scripts\inf-gate\test-inf-checks.ps1",
                  "scripts\inf-gate\check-inf.ps1", "scripts\common.ps1", "scripts\test-harness.ps1"))
     Assert-True ($gdOut.Count -eq 0) ("guard : the INF self-tests' scripts name tracked files their digest does not hold: " + ($gdOut -join ", "))
-    [System.IO.File]::WriteAllText((Join-Path $dgTwo "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_hcd.c`"`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $dgTwo "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_hcd.c`"`r`n`$y = Join-Path `$repo 'src/xhci_new.h'`r`n")
     $dgEap = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try { & git -C $dgTwo add -A 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
     $gdProbe = @(Get-SelfTestUnlistedPaths -Root $dgTwo -Scripts @("scripts\probe.ps1") -Set @())
-    Assert-True ($gdProbe.Count -eq 1 -and $gdProbe[0] -eq "src\xhci_hcd.c (scripts\probe.ps1:1)") ("guard : a tracked file a script names outside the set was not found: " + ($gdProbe -join ", "))
-    Assert-True (@(Get-SelfTestUnlistedPaths -Root $dgTwo -Scripts @("scripts\probe.ps1") -Set @() -NotInput @{ "src\xhci_hcd.c" = "probe" }).Count -eq 0) `
+    Assert-True ($gdProbe.Count -eq 2 -and $gdProbe[0] -eq "src\xhci_hcd.c (scripts\probe.ps1:1)" -and $gdProbe[1] -eq "src\xhci_new.h (scripts\probe.ps1:2)") `
+        ("guard : a tracked file a script names outside the set, with either separator, was not found: " + ($gdProbe -join ", "))
+    Assert-True (@(Get-SelfTestUnlistedPaths -Root $dgTwo -Scripts @("scripts\probe.ps1") -Set @() -NotInput @{ "src\xhci_hcd.c" = "probe"; "src\xhci_new.h" = "probe" }).Count -eq 0) `
         "guard : a path listed as no input was still reported."
 
     # The shared store both suites record their passes in (task 45.51): a

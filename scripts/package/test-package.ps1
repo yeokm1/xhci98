@@ -188,7 +188,8 @@ function Get-PackagerCheckoutRow {
     # looking no higher than the checkout as Invoke-DriverPackGit does. $null
     # on any git failure: no digest, no skip.
     param([string]$Path, [string]$Name, [string]$Tag)
-    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return ("checkout:" + $Name + ":absent") }
+    if (-not (Test-Path -LiteralPath $Path)) { return ("checkout:" + $Name + ":absent") }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return ("checkout:" + $Name + ":not a directory") }
     if ($Tag -eq "") { return ("checkout:" + $Name + ":present:no pin") }
     $ErrorActionPreference = "Continue"
     $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
@@ -7043,6 +7044,13 @@ try {
     # A driver set's checkout in scripts\local\ (git-ignored): its appearing
     # moves the digest, its pinned tag moves it, an unrelated tag does not.
     $dgCo = Join-Path $dg "scripts\local\usb-wdm-nonfree"
+    # A file where the checkout would be is not its absence: the kept case
+    # takes any path there for a checkout and fails on it.
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dgCo) | Out-Null
+    [System.IO.File]::WriteAllText($dgCo, "not a checkout")
+    $dgFile = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dgFile -and $dgFile -ne $dg1) "digest : a file where a driver set's checkout would be read as no checkout."
+    Remove-Item -LiteralPath $dgCo -Force
     New-Item -ItemType Directory -Force -Path $dgCo | Out-Null
     $ErrorActionPreference = "Continue"
     try {
@@ -7114,6 +7122,8 @@ try {
         "src\xhci_psw.c" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
         "src\xhci_psw.h" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
         "src\xhci_ring.c" = "a path the input rules' vectors and the import's fixtures classify or write in a fixture, never read here"
+        "docs\contributing\build-and-test.md" = "a path the input rules' vectors classify, never read here"
+        "src\stor98\tests\unit\build.cmd" = "a path the input rules' vectors classify, never read here"
         "test\run-host-tests.cmd" = "the binary gates' host suite: every case that reaches it runs fixture P's host runner, and the input rules read fixture S's"
     }
     # The files of fixture tree S and of the digest's tree, named here to
@@ -7122,6 +7132,7 @@ try {
                      "src\uas\uas_xport.c", "src\uas\uas.h", "src\stor98\src\sources", "src\stor98\src\engine.c", "test\test_ring.c")) {
         $gdNotInput[$n] = "a file of fixture tree S or of the digest's tree, written there, never read from this tree"
     }
+    $gdNotInput["src\stor98\src\sources"] = "also read in this tree, by source-stamp.ps1 -List alone, whose names the digest holds"
     $gdSet = Get-PackagerSelfTestFileSet -Root $repo
     $gdOut = @(Get-SelfTestUnlistedPaths -Root $repo -Set (@($gdSet.Listed) + @($gdSet.Named)) -NotInput $gdNotInput -Scripts @(
                  "scripts\package\test-package.ps1", "scripts\package\make-package.ps1", "scripts\package\make-release.ps1",
@@ -7133,11 +7144,12 @@ try {
                  "scripts\check-helper-build.ps1", "src\pfw\check-pfw.ps1", "src\pfw\nt\check-pfwsys.ps1", "src\vsd\check-vsd.ps1",
                  "scripts\common.ps1", "scripts\test-harness.ps1", "scripts\source-stamp.ps1"))
     Assert-True ($gdOut.Count -eq 0) ("guard : the packager's scripts name tracked files its digest does not hold: " + ($gdOut -join ", "))
-    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_ring.c`"`r`n")
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_ring.c`"`r`n`$y = Join-Path `$repo 'src/xhci_hcd.c'`r`n")
     $ErrorActionPreference = "Continue"
     try { & git -C $dg add -A 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
     $gdProbe = @(Get-SelfTestUnlistedPaths -Root $dg -Scripts @("scripts\probe.ps1") -Set (@((Get-PackagerSelfTestFileSet -Root $dg).Listed)))
-    Assert-True ($gdProbe.Count -eq 1 -and $gdProbe[0] -eq "src\xhci_ring.c (scripts\probe.ps1:1)") ("guard : a tracked driver source a script names was not found: " + ($gdProbe -join ", "))
+    Assert-True ($gdProbe.Count -eq 2 -and $gdProbe[0] -eq "src\xhci_ring.c (scripts\probe.ps1:1)" -and $gdProbe[1] -eq "src\xhci_hcd.c (scripts\probe.ps1:2)") `
+        ("guard : a tracked driver source a script names, with either separator, was not found: " + ($gdProbe -join ", "))
     $dgSaved = @{}
     foreach ($n in @("XHCI98_GATED_RUN", "XHCI98_DIGEST_PROBE", "GIT_DIGEST_PROBE", "RUNT0", "STEPT0", "NORUN")) { $dgSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
     try {
