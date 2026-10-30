@@ -2873,6 +2873,7 @@ static VOID uasWakeWorker(PVOID context)
     ULONG spent;
     BOOLEAN act;
     BOOLEAN cycle;
+    BOOLEAN withdrawn;
     KIRQL irql;
 
     fdo = (PUAS_FDO)context;
@@ -2889,7 +2890,23 @@ static VOID uasWakeWorker(PVOID context)
 
     uasDeadlineStart(&deadline, UAS_POWER_PHASE_MS);
     UasZero(&rs, sizeof(rs));
-    if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
+    /* The declaration ends with the hold it was made under, and is
+     * withdrawn before anything is decided: one the bus never used - a
+     * sleep that ended with no controller suspend, so no resume voided
+     * it - would otherwise let a later re-initialization with no sleep
+     * phase of this driver keep the drive with no hold and no check. A
+     * keep pass that took it before this withdrawal is still to be seen
+     * by the queries below (pending until its end, the epoch advanced
+     * after); a refused withdrawal fails the check. */
+    withdrawn = TRUE;
+    if (fdo->BusKnown && fdo->DeclareTried) {
+        withdrawn = (BOOLEAN)NT_SUCCESS(
+            uasResumeRequest(fdo, XHCI98_RESUME_OP_WITHDRAW,
+                             fdo->Episode & 0x00FFFFFFUL, &rs));
+    }
+    if (!withdrawn) {
+        decision = UAS_WAKE_FAIL;
+    } else if (!fdo->BusKnown || (fdo->WithdrawOk && !fdo->DeclareTried)) {
         decision = UasWakeDecide(fdo->BusKnown, fdo->WithdrawOk,
                                  fdo->DeclareTried, 0, 0, 0, 0, 0);
     } else {
@@ -2927,19 +2944,6 @@ static VOID uasWakeWorker(PVOID context)
     default:
         report = XHCI98_RESUME_RPT_FAILED;
         break;
-    }
-    /* The declaration ends with the hold it was made under: one the bus
-     * never used - a sleep that ended with no controller suspend, so no
-     * resume voided it - would otherwise let a later re-initialization
-     * with no sleep phase of this driver (a controller's power-down of
-     * its own) keep the drive with no hold and no wake check. Withdrawn
-     * before the release; refused, the drive is failed rather than
-     * released with the declaration standing. */
-    if (fdo->BusKnown && fdo->DeclareTried &&
-        report != XHCI98_RESUME_RPT_FAILED &&
-        !NT_SUCCESS(uasResumeRequest(fdo, XHCI98_RESUME_OP_WITHDRAW,
-                                     fdo->Episode & 0x00FFFFFFUL, &rs))) {
-        report = XHCI98_RESUME_RPT_FAILED;
     }
 
     cycle = FALSE;

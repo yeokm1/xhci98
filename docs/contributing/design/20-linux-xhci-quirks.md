@@ -834,12 +834,14 @@ the check again. Then:
   running, epoch changed: the drive was kept across a re-initialization,
   and its medium is checked (B7) before the hold is released; failed,
   still pending at the deadline, or the query failing: the check fails.
-Before a release, a declaration the sleep made is withdrawn, so none
-outlives its hold: one the bus never used (a sleep that ended with no
-controller suspend, which no resume then voided) would otherwise let a
-later re-initialization with no sleep phase of this driver keep the
-drive with no hold and no check; a refused withdrawal fails the check
-(reviewed and revised 2026-10-30).
+A declaration the sleep made is withdrawn first, before the bus is
+queried, so none outlives its hold: one the bus never used (a sleep
+that ended with no controller suspend, which no resume then voided)
+would otherwise let a later re-initialization with no sleep phase of
+this driver keep the drive with no hold and no check, and a keep pass
+that took it before the withdrawal is still seen by the queries that
+follow (pending to its end, the epoch advanced after); a refused
+withdrawal fails the check (reviewed and revised 2026-10-30).
 A failed check marks the FDO Dead, completes every held and queued
 request `SRB_STATUS_NO_DEVICE` and asks the bus to cycle the port
 (IOCTL_INTERNAL_USB_CYCLE_PORT), so the drive is enumerated afresh as a
