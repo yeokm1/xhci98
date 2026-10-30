@@ -2439,8 +2439,11 @@ PXHCI_ID_PLACE HcdIdPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG take)
  * (task 45.40): the controller halted, its thread stopping or its root hub
  * gone, or the device's path no longer holding the same connection. Each
  * hub port above it, its own first, read with GET_STATUS: no answer, not
- * connected, not enabled, or a connection or enable change, or its hub
- * departing (Draining, or no device); then the root port the path starts
+ * connected, not enabled, or a connection change, or its hub departing
+ * (Draining, or no device) - C_PORT_ENABLE alone is not taken: a hub
+ * raises it when an error disabled the port (USB 2.0 11.24.2.7.2), which
+ * PORT_ENABLE clear already says, and QEMU's hub model raises it at every
+ * port reset as well, with the port enabled; then the root port the path starts
  * at: unreadable, not connected, not enabled, or a connection change. No
  * change bit is cleared: each is its port's own inspection's. An
  * ancestor's departure shows here though its teardown cannot run while
@@ -2463,8 +2466,7 @@ static ULONG hcdSerialDeferGone(PHCD_CONTROLLER hc, PHCD_PORT p)
             !HcdHubPortStatus(hc, hub, p->Number, &status, &change) ||
             (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
             (status & XHCI_HUB_PORT_ENABLE) == 0 ||
-            (change & (XHCI_HUB_C_PORT_CONNECTION |
-                       XHCI_HUB_C_PORT_ENABLE)) != 0) {
+            (change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
             return 1;
         }
         p = hub->Upstream;

@@ -6978,8 +6978,11 @@ read that fails.
   (`hcdSerialDeferGone`): every hub port above the device, its own first,
   read with GET_STATUS (which clears no change bit), cancels when it does
   not answer, reads not connected or not enabled, or has C_PORT_CONNECTION
-  or C_PORT_ENABLE set, or when its hub is departing (`Draining`, or no
-  device); then the root port the path starts at cancels when it reads
+  set (C_PORT_ENABLE alone is not taken: a hub raises it when an error
+  disabled the port, which PORT_ENABLE clear says already, and QEMU's hub
+  model raises it at every port reset too, with the port enabled - a leg
+  on QEMU's USB 2.0 hub cancelled every deferral by it), or when its hub
+  is departing (`Draining`, or no device); then the root port the path starts at cancels when it reads
   unreadable, not connected, not enabled, or with a connection change
   (CSC). Every change is left set for its port's own inspection: a
   departure and a new arrival, or a port its hub disabled, which the
@@ -7014,6 +7017,10 @@ read that fails.
   the latch; a non-hub group's also writes the memory afresh.
   That is the way out for a device of the same model whose serial cannot be
   read.
+  The device whose runs are spent stays invisible - no devnode, no
+  Device Manager entry - until that next connection (owner, 2026-10-31,
+  choosing it over a devnode under a failure id, which would add a
+  devnode and a hardware wizard each time).
 - **What it shows.** Every listing writes `id.form` to the log - the
   location, the read's outcome, whether a duplicate cleared the serial id,
   and the form answered - and every deferral `serial.defer` with its run.
