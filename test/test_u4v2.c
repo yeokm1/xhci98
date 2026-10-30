@@ -1465,6 +1465,65 @@ static void test_kid_training(void)
     CHECK(!fabChainPcieUp(&g_fab, g_kidParent), "no chained tunnel");
 }
 
+/* The parent's downstream lane 0 TMU_ADP_CS_9 writes swallowed while
+ * armed (a write that does not complete). */
+static int g_tmuSwallow;
+static unsigned long g_tmuSwallowed;
+
+static int tmuSwallowHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                          unsigned long adp, unsigned long addr, unsigned long n,
+                          const unsigned long *data)
+{
+    (void)f;
+    (void)n;
+    (void)data;
+    if (g_tmuSwallow > 0 && pdf == TBT_PDF_WRITE && router == g_kidParent &&
+        cs == TBT_CS_ADAPTER && adp == PAR_LANE && addr == TMU9) {
+        g_tmuSwallow--;
+        g_tmuSwallowed++;
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* The parent's side of a kid's TMU not reset at the unplug: the slot kept
+ * TEARDOWN, nothing connected on the link, the reset retried; then a
+ * version 1 child behind the same port finds the parent's lane 0 at its
+ * defaults. */
+static void test_kid_tmu_debt(void)
+{
+    const TBT_U4_KID *k;
+    int d;
+    int ch;
+    int v1;
+
+    ch = kidV2(FAB_DEV_USB4V2, 0, 0, 0);
+    d = g_kidParent;
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP && k->TmuConfigured, "a v2 kid with its TMU");
+    g_tmuSwallow = 1000;  /* every attempt in the unplug's tick */
+    g_tmuSwallowed = 0;
+    g_fab.Hook = tmuSwallowHook;
+    fabHotUnplugChild(&g_fab, d);
+    poll(1);
+    k = kid();
+    g_tmuSwallow = 0;
+    CHECK(g_tmuSwallowed >= 2, "the reset's write did not complete, retried");
+    CHECK(k != NULL && k->State == TBT_U4_TEARDOWN && k->TmuConfigured,
+          "the slot kept TEARDOWN, the debt kept");
+    v1 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabHotPlugChild(&g_fab, d, v1);
+    poll(3);
+    g_fab.Hook = NULL;
+    k = kid();
+    CHECK(k != NULL && k->State == TBT_U4_UP && !k->TmuConfigured,
+          "the reset retried, then the version 1 child connected");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_LANE, TMU8) & 0x8000UL, 0, "the parent's lane 0: EUDM 0");
+    CHECK_EQ(fabAdp(&g_fab, d, PAR_LANE, TMU9) >> 16, 0, "AdapterTimeSyncInterval 0");
+    CHECK(fabAdp(&g_fab, d, PAR_LANE, TMU6) & 2UL, "Disable Time Sync set");
+    (void)ch;
+}
+
 /* A pre-OS chain over an asymmetric Gen 4 link: adopted as bonded, used
  * as found, no lane written. */
 static void test_kid_adopt_asym(void)
@@ -1554,6 +1613,7 @@ int main(void)
     RUN_VEC(test_kid_v2);
     RUN_VEC(test_kid_adopt_asym);
     RUN_VEC(test_kid_training);
+    RUN_VEC(test_kid_tmu_debt);
     RUN_VEC(test_kid_cv_found);
     fabTraceMark("end");
     printf("test_u4v2: %d checks, %d failures\n", checks, failures);

@@ -7735,18 +7735,22 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
  * the child's when `dev` (both there): AdapterTimeSyncInterval 0 and
  * Enable Enhanced Uni-Directional Mode 0, then Disable Time Sync set, the
  * child's inside a time disruption of the child (record 22 section 6.6
- * TMU item 6 through the link view). A write that fails leaves the link's
- * TMU as it is: the next kid on the link finds it not Off
- * (tbtU4LinkTmuOff) and configures none.
+ * TMU item 6 through the link view); Disable Time Sync is attempted
+ * whatever the mode's writes did. The parent's side is the kid's debt:
+ * TmuConfigured stays set until it is proven, and the kid's teardown
+ * keeps the slot TEARDOWN, so nothing connects on the link, until then.
+ * The child's side goes with its next connection. TRUE when the parent's
+ * side is back to its defaults (or was never configured).
  */
-static VOID tbtU4KidTmuOff(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, BOOLEAN dev)
+static BOOLEAN tbtU4KidTmuOff(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, BOOLEAN dev)
 {
     PTBT_U4_ROUTER pr;
     PTBT_U4_ROUTER d;
     LONG rc;
+    BOOLEAN parent;
 
     if (!k->TmuConfigured) {
-        return;
+        return TRUE;
     }
     pr = &p->Dev;
     d = &k->Dev;
@@ -7763,15 +7767,19 @@ static VOID tbtU4KidTmuOff(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, BOOLEAN 
             rc = TBT_E_STATE;
         }
     }
-    if (tbtU4TmuEnhancedOff(cm, pr, k->ParentLane0) != TBT_OK ||
-        tbtU4TmuAdp(cm, pr, k->ParentLane0, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS) !=
-            TBT_OK) {
-        rc = TBT_E_STATE;
+    parent = (BOOLEAN)(tbtU4TmuEnhancedOff(cm, pr, k->ParentLane0) == TBT_OK);
+    if (tbtU4TmuAdp(cm, pr, k->ParentLane0, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS) !=
+        TBT_OK) {
+        parent = FALSE;
     }
-    if (rc != TBT_OK) {
-        tbtU4Log(cm, "u4.kid.tmu.off-failed", (p->Index << 8) | k->Index);
+    if (rc != TBT_OK || !parent) {
+        tbtU4Log(cm, "u4.kid.tmu.off-failed",
+                 (p->Index << 16) | (k->Index << 8) | (parent ? 0UL : 1UL));
     }
-    k->TmuConfigured = FALSE;
+    if (parent) {
+        k->TmuConfigured = FALSE;
+    }
+    return parent;
 }
 
 /*
@@ -7838,7 +7846,7 @@ static VOID tbtU4KidTmu(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
         tbtU4Log(cm, "u4.kid.tmu.failed", (k->Index << 8) | ((ULONG)rc & 0xFFUL));
         if (tbtU4KidLive(cm, p, k, gen)) {
             k->TmuConfigured = TRUE;    /* whatever was written is undone */
-            tbtU4KidTmuOff(cm, p, k, TRUE);
+            (void)tbtU4KidTmuOff(cm, p, k, TRUE);
         }
         return;
     }
@@ -8341,8 +8349,9 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
         }
         tbtU4Zero(t, sizeof(*t));
         /* The link's TMU, the parent's side (the child is gone or being
-         * let go: its side goes with its next connection). */
-        tbtU4KidTmuOff(cm, p, k, FALSE);
+         * let go: its side goes with its next connection); a failure is
+         * retried with the sweep below. */
+        (void)tbtU4KidTmuOff(cm, p, k, FALSE);
         k->Dev.Present = FALSE;
         /* What lived below the child went with it. */
         tbtU4Zero(&k->Dev.Adp, sizeof(k->Dev.Adp));
@@ -8355,6 +8364,9 @@ static VOID tbtU4KidTeardown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     if (complete) {
         complete = (BOOLEAN)(tbtU4KidLanesIdle(cm, pr, k->ParentLane0) &&
                              (hp == 0 || tbtU4AdapterFree(cm, pr, hp)));
+    }
+    if (complete) {
+        complete = tbtU4KidTmuOff(cm, p, k, FALSE);
     }
     if (complete) {
         complete = tbtU4KidLanesBack(cm, p, k);

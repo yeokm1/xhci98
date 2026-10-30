@@ -2216,12 +2216,16 @@ differs from them, this section is the record.
   counted (`TmuFailures`) and logged (`u4.kid.tmu.failed`), the PCIe
   tunnel proceeding; at the kid's teardown the parent's side back to
   AdapterTimeSyncInterval 0, Enable Enhanced Uni-Directional Mode 0 and
-  Disable Time Sync set (`u4.kid.tmu.off-failed` when a write fails,
-  after which the next kid finds the link's TMU not Off and configures
-  none). A predecessor's Enable Gen 4 Link Recovery on a depth-2 link is
+  Disable Time Sync set, each attempted whatever the others did. The
+  parent's side is the kid's debt: a write that fails
+  (`u4.kid.tmu.off-failed`) keeps `TmuConfigured` and the slot TEARDOWN
+  (`SweepOwed`), so nothing, of either version, connects on the link
+  until the reset is retried and proven at the sweep. After a recovery a
+  kid adopted again holds its link as found, its TMU included, as it
+  does its lane fields. A predecessor's Enable Gen 4 Link Recovery on a depth-2 link is
   cleared at the link's discovery (`tbtU4LinkElr`), as at depth 1.
   Vectors: `test_u4v2`'s `test_kid_v2`, `test_kid_adopt_asym`,
-  `test_kid_training`, `test_kid_cv_found`.
+  `test_kid_training`, `test_kid_tmu_debt`, `test_kid_cv_found`.
 - **Not in this cut** (the task stays open for them): the eject paths
   `cm_eject.c` and `cm_ejectos.c` to `TbtU4EjectKid` (they wait for
   section 3.7's chained unit, task 45.13: until then a chained device goes
