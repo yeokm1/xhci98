@@ -1163,9 +1163,9 @@ there, at both depths, as today.
      and QEMU's `pcie-root-port` are `1B36:000C` [emu]; a `usb4-generic`
      member is itself on bus 0), read now, as `cmNvEmulator`'s two
      branches read it; and the
-     landing bridge's own identity read now matches the one recorded at
-     its discovery (the member's at the set's discovery, the chain port's
-     at the walk, section 3.9: the identity dword).
+     landing bridge's own identity read now matches the one recorded
+     when the entry's `UP` was published (the shadow's `BridgeId`, read
+     by the scan that published it; an unread one is 0 and never matches).
    - **The kind**: the landing bridge's Device/Port Type, root port or
      downstream port, selects the qualification column (item 8); the
      chain port is always a downstream port (`usb4-tunnel-dsp`, an
@@ -1240,11 +1240,12 @@ there, at both depths, as today.
    bit is 0 when the code lands, and each is set by a commit that cites
    the reading that passed it (`runs/run-45.md`, "45.18"). The system is
    told apart by what already tells each one apart here: 98 SE from ME by
-   CONFIGMG's `Get_Version`, which `cm_cfgmg.c`'s guard already calls
-   (98 SE answers 040Ah-range, ME 045Ah-range [inf: the exact words read at
-   the first leg; any other word has no bit]) - `CmEjQualified9x` only
-   returns the constant its caller names, and today's caller asks for
-   both; on NT the version in the kernel's shared data
+   a version the system answers - the VMM's (4.10 and 4.90) or
+   CONFIGMG's `Get_Version`, which `cm_cfgmg.c`'s guard already calls -
+   chosen at the first 98 SE and ME leg, whose reading of the exact words
+   comes before that code [inf]; until then 98 SE and ME are an unknown
+   system and no q35 bit applies there (`CmEjQualified9x` only returns
+   the constant its caller names, and today's caller asks for both); on NT the version in the kernel's shared data
    page, as record 31's `cmChildIds` reads it (`IoIsWdmVersionAvailable`
    cannot tell Vista from 7 or 8 from 8.1), major and minor exactly, and
    `_WIN64` for the architecture; an unrecognised system has no bit. A bit is set only when every run of item 11's set
@@ -1256,11 +1257,20 @@ there, at both depths, as today.
    path read-back. Extending this admission to it is not part of 45.18
    (section 12, Q10).
 10. **Depth 1 first.** Items 5, 6 and 8's D1 column need nothing of the
-    chain: the predicate is `CmNvlinkU4Verdict`'s, with a q35 branch
-    beside the SHPC one (source no longer required to be SHPC when the
-    reading is item 5's and item 6 holds). It can be coded, host-tested
-    and read on q35 at depth 1 before 45.13's keying and 45.15's kid land,
-    and is the first commit of 45.18. D2 and M follow with the kid.
+    chain, and are the first code of 45.18, on NT: `CmNvlinkPortDown`
+    takes a member that is not the SHPC bridge to `CmNvlinkU4VerdictQ35`
+    (`cm_nvlink.c`, beside `CmNvlinkU4Verdict`), with the kind
+    (`CmNvlinkQ35Kind`), the platform (`cmNvEmulator`) and the system's
+    bit (`CmNvlinkQ35Qualified`) read first, so a port that cannot be
+    admitted - every hardware port - costs no reading loop; only then the
+    reading within the time left, and the mark tests each entry's
+    endpoint and bridge identity (`cmNvMarkEx`'s q35 identity). Every bit
+    is 0 in that code, so it changes nothing a user runs until a reading
+    sets one. On 98 SE and ME a PCI Express reading needs no write and
+    could be made on the thread, but the system is not told apart yet
+    (item 8), so the 9x half of D1 - the system's identification and,
+    if its leg shows the thread's read unfit, the call worker's route -
+    comes with the 98 SE and ME legs. D2 and M follow with the kid.
 11. **The legs** (q35 only; `usb4-emu` with `-device usb4-debug-port`,
     `-trace usb4_tp_*`, `usb4_dbg_*`, `usb4_h_*` and `pci_nvme_*`):
     `usb4-generic` with `host-model=intel-adl`; a plain NVMe router on

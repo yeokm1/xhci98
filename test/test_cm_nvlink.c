@@ -1452,6 +1452,116 @@ static void test_release(void)
     CHECK(!CmNvlinkReleaseEntry(&table, STOR98LS_ENTRIES), "release: past the table");
 }
 
+/* Record 34 section 3.11 (task 45.18): the q35 admission at depth 1. */
+static void test_q35(void)
+{
+    /* PCI Express Capabilities: a root port (4) or a downstream port (6)
+     * with Slot Implemented; Link Capabilities with DLLLARC; Slot
+     * Capabilities Hot-Plug Capable, no Power Controller. */
+    ULONG root = (XHCI_TBT_PCIE_TYPE_ROOT << 4) | XHCI_TBT_PCIE_SLOT_IMPL;
+    ULONG down = (XHCI_TBT_PCIE_TYPE_DOWN << 4) | XHCI_TBT_PCIE_SLOT_IMPL;
+    ULONG up = (XHCI_TBT_PCIE_TYPE_UP << 4) | XHCI_TBT_PCIE_SLOT_IMPL;
+    ULONG lnk = XHCI_TBT_LINKCAP_DLLLARC;
+    ULONG slt = XHCI_TBT_SLOTCAP_HPC | XHCI_TBT_SLOTCAP_HPS;
+    UCHAR table[CM_NVLINK_SYSTEMS];
+    ULONG i;
+
+    CHECK_EQ(CmNvlinkQ35Kind(root, lnk, slt), CM_NVLINK_Q35_ROOT,
+             "q35: a hot-plug root port");
+    CHECK_EQ(CmNvlinkQ35Kind(down, lnk, slt), CM_NVLINK_Q35_DOWN,
+             "q35: a hot-plug downstream port");
+    CHECK_EQ(CmNvlinkQ35Kind(up, lnk, slt), CM_NVLINK_Q35_NONE,
+             "q35: an upstream port is no landing bridge");
+    CHECK_EQ(CmNvlinkQ35Kind(root & ~XHCI_TBT_PCIE_SLOT_IMPL, lnk, slt),
+             CM_NVLINK_Q35_NONE, "q35: no slot");
+    CHECK_EQ(CmNvlinkQ35Kind(root, lnk, XHCI_TBT_SLOTCAP_HPS),
+             CM_NVLINK_Q35_NONE, "q35: not hot-plug capable");
+    CHECK_EQ(CmNvlinkQ35Kind(root, lnk, slt | CM_NVLINK_SLOTCAP_PCP),
+             CM_NVLINK_Q35_NONE, "q35: a Power Controller is never admitted");
+    CHECK_EQ(CmNvlinkQ35Kind(down, 0, slt), CM_NVLINK_Q35_NONE,
+             "q35: no Link Active reporting");
+
+    CHECK(CmNvlinkQ35Endpoint(0x00101B36UL), "q35: QEMU's NVMe");
+    CHECK(!CmNvlinkQ35Endpoint(0x5765144DUL),
+          "q35: a maker's NVMe (passed through) is not admitted");
+    CHECK(!CmNvlinkQ35Endpoint(0xFFFFFFFFUL), "q35: all ones");
+    CHECK(!CmNvlinkQ35Endpoint(0), "q35: nothing recorded");
+    CHECK(CmNvlinkQ35IdValid(0x000C1B36UL), "q35: a bridge's ids");
+    CHECK(!CmNvlinkQ35IdValid(0), "q35: vendor 0000h names nothing");
+    CHECK(!CmNvlinkQ35IdValid(0x1234FFFFUL), "q35: vendor FFFFh");
+    CHECK(!CmNvlinkQ35IdValid(0xFFFFFFFFUL), "q35: all ones");
+
+    CHECK_EQ(CmNvlinkSystemNt(5, 0, FALSE), CM_NVLINK_SYS_2000, "2000");
+    CHECK_EQ(CmNvlinkSystemNt(5, 1, FALSE), CM_NVLINK_SYS_XP, "XP");
+    CHECK_EQ(CmNvlinkSystemNt(5, 2, TRUE), CM_NVLINK_SYS_XP64, "XP x64");
+    CHECK_EQ(CmNvlinkSystemNt(5, 2, FALSE), CM_NVLINK_SYS_UNKNOWN,
+             "Server 2003 x86: no row");
+    CHECK_EQ(CmNvlinkSystemNt(6, 0, FALSE), CM_NVLINK_SYS_VISTA, "Vista");
+    CHECK_EQ(CmNvlinkSystemNt(6, 1, FALSE), CM_NVLINK_SYS_7, "7 x86");
+    CHECK_EQ(CmNvlinkSystemNt(6, 1, TRUE), CM_NVLINK_SYS_764, "7 x64");
+    CHECK_EQ(CmNvlinkSystemNt(6, 2, TRUE), CM_NVLINK_SYS_864, "8 x64");
+    CHECK_EQ(CmNvlinkSystemNt(6, 3, FALSE), CM_NVLINK_SYS_81,
+             "8.1 apart from 8");
+    CHECK_EQ(CmNvlinkSystemNt(10, 0, TRUE), CM_NVLINK_SYS_1064, "10 x64");
+    CHECK_EQ(CmNvlinkSystemNt(6, 4, FALSE), CM_NVLINK_SYS_UNKNOWN,
+             "an unknown version");
+
+    for (i = 0; i < CM_NVLINK_SYSTEMS; i++) {
+        CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) &&
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D2) &&
+              !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M),
+              "q35: no bit compiled in before a reading passes");
+    }
+    memset(table, 0, sizeof(table));
+    table[CM_NVLINK_SYS_2000] =
+        (UCHAR)CmNvlinkQ35Bit(CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1);
+    CHECK(CmNvlinkQ35QualifiedIn(table, CM_NVLINK_SYS_2000, CM_NVLINK_Q35_ROOT,
+                                 CM_NVLINK_CASE_D1), "q35: the bit read");
+    CHECK(!CmNvlinkQ35QualifiedIn(table, CM_NVLINK_SYS_2000,
+                                  CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1),
+          "q35: the other kind's column");
+    CHECK(!CmNvlinkQ35QualifiedIn(table, CM_NVLINK_SYS_XP, CM_NVLINK_Q35_ROOT,
+                                  CM_NVLINK_CASE_D1), "q35: another system");
+    CHECK(!CmNvlinkQ35QualifiedIn(table, CM_NVLINK_SYS_UNKNOWN,
+                                  CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1),
+          "q35: an unknown system");
+    CHECK(!CmNvlinkQ35QualifiedIn(table, CM_NVLINK_SYS_2000,
+                                  CM_NVLINK_Q35_NONE, CM_NVLINK_CASE_D1),
+          "q35: no kind");
+    CHECK_EQ(CmNvlinkQ35Bit(CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D2), 0,
+             "q35: no D2 column for a root port");
+    CHECK_EQ(CmNvlinkQ35Bit(CM_NVLINK_Q35_DOWN, 3), 0, "q35: no fourth case");
+
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_SEND, "q35: closed, known, emulated, qualified, DOWN");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(FALSE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_PATH_OPEN, "q35: PathClosed not proven");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, FALSE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_SEVERAL, "q35: member unknown");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_NONE, TRUE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_HARDWARE, "q35: no admissible kind");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, FALSE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_HARDWARE, "q35: no 1B36h bridge");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, FALSE,
+                                  XHCI_TBT_PORT_DOWN, 2000),
+             CM_NVLINK_UNQUALIFIED, "q35: the case not qualified here");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_MIXED, 2000),
+             CM_NVLINK_NOT_DOWN, "q35: a retrain (Link Active only) is MIXED");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_GONE, 2000),
+             CM_NVLINK_NOT_DOWN, "q35: the bridge gone");
+    CHECK_EQ(CmNvlinkU4VerdictQ35(TRUE, TRUE, CM_NVLINK_Q35_ROOT, TRUE, TRUE,
+                                  XHCI_TBT_PORT_DOWN, 99),
+             CM_NVLINK_LATE, "q35: under the delivery bound");
+}
+
 int main(void)
 {
     test_layout();
@@ -1459,6 +1569,7 @@ int main(void)
     test_release();
     test_full();
     test_verdicts();
+    test_q35();
     test_fresh();
     test_r8b_replug();
     test_pending();

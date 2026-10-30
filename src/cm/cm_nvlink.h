@@ -434,6 +434,83 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
                         ULONG source, BOOLEAN emulator, BOOLEAN osQualified,
                         ULONG reading, ULONG remainingMs);
 
+/*
+ * The q35 admission (record 34 section 3.11, task 45.18): a landing
+ * bridge that is a PCI Express port on the emulator's q35 machine. The
+ * kind (CM_NVLINK_Q35_*) from the port's PCI Express Capabilities (16
+ * bits, as XHCI_TBT_PORT.PcieCaps), Link Capabilities and Slot
+ * Capabilities: a root port or a downstream port, Slot Implemented,
+ * Hot-Plug Capable, no Power Controller, Data Link Layer Link Active
+ * Reporting Capable (item 5); anything else is CM_NVLINK_Q35_NONE.
+ */
+#define CM_NVLINK_Q35_NONE          0UL
+#define CM_NVLINK_Q35_ROOT          1UL
+#define CM_NVLINK_Q35_DOWN          2UL
+#define CM_NVLINK_SLOTCAP_PCP       0x00000002UL /* Power Controller Present */
+ULONG CmNvlinkQ35Kind(ULONG pcieCaps, ULONG linkCap, ULONG slotCap);
+
+/* QEMU's vendor id (the emulator's NVMe controller 1B36:0010, its
+ * pcie-root-port and usb4-tunnel-port 1B36:000C). */
+#define CM_NVLINK_QEMU_VENDOR       0x1B36UL
+
+/* The entry's function read as an emulated one when its UP was published
+ * (item 6): QEMU's vendor id, the identifier not all-ones. */
+BOOLEAN CmNvlinkQ35Endpoint(ULONG id);
+
+/* An identifier that names a function: vendor neither 0000h nor FFFFh. */
+BOOLEAN CmNvlinkQ35IdValid(ULONG id);
+
+/* The cases (item 2): an end unplug at depth 1, at depth 2, the middle
+ * unplug. */
+#define CM_NVLINK_CASE_D1           0UL
+#define CM_NVLINK_CASE_D2           1UL
+#define CM_NVLINK_CASE_M            2UL
+
+/* The systems (item 8), each architecture apart. */
+#define CM_NVLINK_SYS_UNKNOWN       0UL
+#define CM_NVLINK_SYS_98SE          1UL
+#define CM_NVLINK_SYS_ME            2UL
+#define CM_NVLINK_SYS_2000          3UL
+#define CM_NVLINK_SYS_XP            4UL
+#define CM_NVLINK_SYS_XP64          5UL
+#define CM_NVLINK_SYS_VISTA         6UL
+#define CM_NVLINK_SYS_VISTA64       7UL
+#define CM_NVLINK_SYS_7             8UL
+#define CM_NVLINK_SYS_764           9UL
+#define CM_NVLINK_SYS_8             10UL
+#define CM_NVLINK_SYS_864           11UL
+#define CM_NVLINK_SYS_81            12UL
+#define CM_NVLINK_SYS_8164          13UL
+#define CM_NVLINK_SYS_10            14UL
+#define CM_NVLINK_SYS_1064          15UL
+#define CM_NVLINK_SYSTEMS           16UL
+
+/* An NT system from the version in the kernel's shared data page (major
+ * and minor exactly) and the architecture; CM_NVLINK_SYS_UNKNOWN for any
+ * other pair (Server 2003 x86's 5.2 among them). */
+ULONG CmNvlinkSystemNt(ULONG major, ULONG minor, BOOLEAN win64);
+
+/* The qualification bit of `kind` and `kase` in a table row, and whether
+ * `table` (CM_NVLINK_SYSTEMS rows) qualifies them on `system`; an unknown
+ * system, kind or case is not qualified. CmNvlinkQ35Qualified asks the
+ * compiled table, every bit 0 until a reading of task 45.18 passes it
+ * (item 8). */
+ULONG CmNvlinkQ35Bit(ULONG kind, ULONG kase);
+BOOLEAN CmNvlinkQ35QualifiedIn(const UCHAR *table, ULONG system, ULONG kind,
+                               ULONG kase);
+BOOLEAN CmNvlinkQ35Qualified(ULONG system, ULONG kind, ULONG kase);
+
+/* The USB4 profile's q35 condition (record 22 section 10.2 with record 34
+ * section 3.11): PathClosed, the member known by correspondence, the
+ * landing bridge's kind and whether the platform reads as the emulator's
+ * (QEMU's vendor id on it or on the bus-0 bridge whose range holds it),
+ * the case qualified on this system, the reading (XHCI_TBT_PORT_*) and
+ * the time left. The endpoint and bridge identity tests are per entry,
+ * at the mark. */
+ULONG CmNvlinkU4VerdictQ35(BOOLEAN pathClosed, BOOLEAN memberKnown,
+                           ULONG kind, BOOLEAN platform, BOOLEAN qualified,
+                           ULONG reading, ULONG remainingMs);
+
 /* The acknowledgement wait's bound: CM_NVLINK_ACK_MS on NT, else
  * CM_NVLINK_ACK_9X_MS. */
 ULONG CmNvlinkAckBoundMs(BOOLEAN nt);
@@ -503,6 +580,7 @@ typedef struct _CM_NV_SHADOW {
     ULONG Waiting;      /* DOWN_QUIESCED set, acknowledgement awaited    */
     ULONG MarkedAt;     /* the owner's clock at the mark, ms             */
     ULONG Id;           /* the function's ids when UP was published      */
+    ULONG BridgeId;     /* its bridge's ids then (record 34 3.11 item 6) */
 } CM_NV_SHADOW;
 
 /*

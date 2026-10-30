@@ -68,6 +68,7 @@ static CM_NV_SHADOW cmNvShadow[STOR98LS_ENTRIES];
 static ULONG cmNvTunnel[STOR98LS_ENTRIES];
 static BOOLEAN cmNvNt;
 static BOOLEAN cmNvOsQualified; /* 2000, XP x64, 98 SE, ME (21 7.2)      */
+static ULONG cmNvSystem;        /* CM_NVLINK_SYS_*, for the q35 table    */
 static PCALLBACK_OBJECT cmNvObject;
 static PVOID cmNvRegistration;
 static ULONG cmNvReloaded;      /* NT: an earlier load made the object    */
@@ -275,6 +276,36 @@ static BOOLEAN cmNvEmulator(ULONG bridge)
     return FALSE;
 }
 
+/* The q35 kind of `bridge` (CmNvlinkQ35Kind), from one reading of its
+ * PCI Express capability and its Slot Capabilities; CM_NVLINK_Q35_NONE
+ * for an SHPC bridge, a bridge with no PCI Express capability, or any
+ * read that fails. Reads only. */
+static ULONG cmNvQ35Kind(PCM_NHI nhi, ULONG bridge)
+{
+    XHCI_TBT_CFG io;
+    XHCI_TBT_PORT port;
+    ULONG verdict;
+    ULONG slotCap;
+
+    io.Read = cmNvCfgRead;
+    io.Write = NULL;
+    io.Context = nhi;
+    io.Reads = 0;
+    io.Writes = 0;
+    verdict = XhciTbtPortRead(&io, bridge, &port);
+    if (verdict == XHCI_TBT_PORT_ERROR || verdict == XHCI_TBT_PORT_GONE ||
+        port.PcieCap == 0 || port.ShpcCap != 0) {
+        return CM_NVLINK_Q35_NONE;
+    }
+    if (!cmNvCfg(XHCI_TBT_BDF_BUS(bridge),
+                 XHCI_TBT_BDF_DEV(bridge) | (XHCI_TBT_BDF_FN(bridge) << 5),
+                 port.PcieCap + XHCI_TBT_PCIE_SLOTCAP, &slotCap) ||
+        slotCap == 0xFFFFFFFFUL) {
+        return CM_NVLINK_Q35_NONE;
+    }
+    return CmNvlinkQ35Kind(port.PcieCaps, port.LinkCap, slotCap);
+}
+
 /* Whether `bridge` is this domain's own: a member of its set that no
  * other domain claims (CM_PORT_EXCLUSIVE). Not CM_PORT_ACTIVE: on NT a
  * bridge is exclusive before its filter's first BusRelations answer (the
@@ -362,6 +393,20 @@ VOID CmNvlinkInit(VOID)
                                     CmEjQualified9x(TRUE));
     }
 #endif
+    /* The q35 admission's system (record 34 section 3.11 item 8): on NT
+     * the shared data page's version, which tells Vista from 7 and 8 from
+     * 8.1 where the WDM version cannot; 98 SE and ME are not told apart
+     * yet, so no q35 bit applies there. */
+    cmNvSystem = CM_NVLINK_SYS_UNKNOWN;
+    if (cmNvNt) {
+#if defined(_WIN64)
+        cmNvSystem = CmNvlinkSystemNt(SharedUserData->NtMajorVersion,
+                                      SharedUserData->NtMinorVersion, TRUE);
+#else
+        cmNvSystem = CmNvlinkSystemNt(SharedUserData->NtMajorVersion,
+                                      SharedUserData->NtMinorVersion, FALSE);
+#endif
+    }
     cmNvTable = (PSTOR98LS_TABLE)CmAlloc(sizeof(STOR98LS_TABLE));
     if (cmNvTable == NULL) {
         return;
@@ -844,10 +889,20 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel,
     ULONG outcome;
     ULONG count;
     ULONG answering;
+    ULONG bridgeId;
     KIRQL irql;
 
     count = 0;
     answering = 0;
+    /* The bridge's own ids as the entries are published, which the q35
+     * admission compares with a reading at the statement (record 34
+     * section 3.11 item 6); 0 when unread, which never matches. */
+    if (!cmNvCfg(XHCI_TBT_BDF_BUS(bridge),
+                 XHCI_TBT_BDF_DEV(bridge) | (XHCI_TBT_BDF_FN(bridge) << 5),
+                 0, &bridgeId) ||
+        !CmNvlinkQ35IdValid(bridgeId)) {
+        bridgeId = 0;
+    }
     for (dev = 0; dev < 32UL; dev++) {
         for (fn = 0; fn < 8UL; fn++) {
             slot = dev | (fn << 5);
@@ -880,6 +935,7 @@ static ULONG cmNvScan(PCM_NHI nhi, ULONG bridge, ULONG bus, ULONG tunnel,
                     cmNvShadow[index].Bridge = bridge;
                     cmNvShadow[index].Waiting = 0;
                     cmNvShadow[index].Id = id;
+                    cmNvShadow[index].BridgeId = bridgeId;
                     count++;
                     if (outcome != CM_NVLINK_UP_ALREADY) {
                         cmNvUps++;
@@ -1021,24 +1077,34 @@ ULONG CmNvlinkExpose(PCM_NHI nhi, ULONG bridge, BOOLEAN fresh, ULONG tunnel)
  * many were marked DOWN_QUIESCED.
  */
 static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
-                        BOOLEAN confirmed);
+                        BOOLEAN confirmed, BOOLEAN q35, ULONG q35Id,
+                        ULONG q35Start, ULONG q35Budget);
 
 static ULONG cmNvMark(PCM_NHI nhi, ULONG bridge, ULONG verdict)
 {
-    return cmNvMarkEx(nhi, bridge, verdict, FALSE);
+    return cmNvMarkEx(nhi, bridge, verdict, FALSE, FALSE, 0, 0, 0);
 }
 
 /* cmNvMark; with `confirmed`, a withheld entry leaves UP only when its
  * function's identifier was read and read all-ones (a failed read proves
- * nothing). */
+ * nothing). With `q35`, a q35 statement (record 34 section 3.11 item 6)
+ * on a bridge reading `q35Id` now: an entry is stated only when that
+ * identity is valid, its function was QEMU's when its UP was published
+ * and its bridge read the same ids then; any other entry is withheld, as
+ * HARDWARE. Each entry so stated is also checked against the statement's
+ * deadline just before its table write - `q35Budget` ms from `q35Start`
+ * on the domain's clock, CM_NVLINK_DELIVERY_MS of it kept - and withheld
+ * as LATE past it (record 22 section 10.3). */
 static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
-                        BOOLEAN confirmed)
+                        BOOLEAN confirmed, BOOLEAN q35, ULONG q35Id,
+                        ULONG q35Start, ULONG q35Budget)
 {
     ULONG bus;
     ULONG i;
     ULONG id;
     ULONG marked;
     ULONG seen;
+    ULONG ev;
     BOOLEAN absent;
     ULONG now;
     KIRQL irql;
@@ -1058,8 +1124,20 @@ static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
             continue;
         }
         seen++;
+        ev = verdict;
+        if (ev == CM_NVLINK_SEND && q35 &&
+            (!CmNvlinkQ35IdValid(q35Id) ||
+             !CmNvlinkQ35Endpoint(cmNvShadow[i].Id) ||
+             cmNvShadow[i].BridgeId != q35Id)) {
+            ev = CM_NVLINK_HARDWARE;
+        }
+        if (ev == CM_NVLINK_SEND && q35 &&
+            CmNvlinkLeft(q35Start, cmNvNow(nhi), q35Budget) <
+                CM_NVLINK_DELIVERY_MS) {
+            ev = CM_NVLINK_LATE;
+        }
         absent = TRUE;
-        if (verdict != CM_NVLINK_SEND) {
+        if (ev != CM_NVLINK_SEND) {
             if (!cmNvCfg(cmNvTable->Entry[i].BusNumber,
                          cmNvTable->Entry[i].SlotNumber, 0, &id)) {
                 absent = (BOOLEAN)!confirmed;
@@ -1068,7 +1146,14 @@ static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
             }
         }
         KeAcquireSpinLock(&cmNvLock, &irql);
-        if (verdict == CM_NVLINK_SEND) {
+        if (ev == CM_NVLINK_SEND && q35 &&
+            CmNvlinkLeft(q35Start, cmNvNow(nhi), q35Budget) <
+                CM_NVLINK_DELIVERY_MS) {
+            /* The deadline again at the write itself, the thread having
+             * been free to wait since the check above: nothing written,
+             * the entry keeps its UP and the gone deadline stands. */
+            ev = CM_NVLINK_LATE;
+        } else if (ev == CM_NVLINK_SEND) {
             if (CmNvlinkSetDown(cmNvTable, i, TRUE)) {
                 cmNvShadow[i].Owner = nhi;
                 cmNvShadow[i].Bridge = bridge;
@@ -1080,9 +1165,9 @@ static ULONG cmNvMarkEx(PCM_NHI nhi, ULONG bridge, ULONG verdict,
             (VOID)CmNvlinkSetDown(cmNvTable, i, FALSE);
         }
         KeReleaseSpinLock(&cmNvLock, irql);
-        CmLogNote(nhi, verdict == CM_NVLINK_SEND ? "cm.nvlink.down"
-                                                 : "cm.nvlink.withheld",
-                  (verdict << 24) | (i << 16) |
+        CmLogNote(nhi, ev == CM_NVLINK_SEND ? "cm.nvlink.down"
+                                            : "cm.nvlink.withheld",
+                  (ev << 24) | (i << 16) |
                       (cmNvTable->Entry[i].LinkGeneration & 0xFFFFUL));
     }
     if (seen == 0) {
@@ -1204,10 +1289,16 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
     ULONG reading;
     ULONG start;
     ULONG left;
+    ULONG kind;
+    ULONG q35Id;
     BOOLEAN emulator;
+    BOOLEAN platform;
+    BOOLEAN qualified;
+    BOOLEAN q35;
 
     r = &nhi->Reenum;
     emulator = FALSE;
+    start = 0;
     if (cmNvTable == NULL) {
         return CM_NVLINK_NO_CHANNEL;
     }
@@ -1239,11 +1330,58 @@ ULONG CmNvlinkPortDown(PCM_NHI nhi, ULONG member, BOOLEAN pathClosed,
                            remainingMs - CM_NVLINK_DELIVERY_MS, &emulator);
         left = CmNvlinkLeft(start, cmNvNow(nhi), remainingMs);
     }
-    verdict = CmNvlinkU4Verdict(pathClosed, TRUE, r->Topo.Source[member],
-                                emulator, cmNvOsQualified, reading, left);
+    if (r->Topo.Source[member] != XHCI_TBT_SRC_SHPC) {
+        /*
+         * The q35 admission, depth 1 (record 34 section 3.11 items 5, 6, 8
+         * and 10): on NT only, a PCI Express port of the emulator's q35
+         * machine whose case is qualified on this system. Everything that
+         * can withhold without a wait is read first, so a port that cannot
+         * be admitted - every hardware port - costs no reading loop.
+         */
+        kind = CM_NVLINK_Q35_NONE;
+        platform = FALSE;
+        qualified = FALSE;
+        q35Id = 0;
+        /* One clock for the whole branch: the probes, the reading and the
+         * identity read all spend the time left of the 3 s. */
+        start = cmNvNow(nhi);
+        if (cmNvNt && pathClosed) {
+            kind = cmNvQ35Kind(nhi, bridge);
+            platform = (BOOLEAN)(kind != CM_NVLINK_Q35_NONE &&
+                                 cmNvEmulator(bridge));
+            qualified = CmNvlinkQ35Qualified(cmNvSystem, kind,
+                                             CM_NVLINK_CASE_D1);
+        }
+        left = CmNvlinkLeft(start, cmNvNow(nhi), remainingMs);
+        if (platform && qualified && left > CM_NVLINK_DELIVERY_MS) {
+            reading = cmNvRead(nhi, bridge, XHCI_TBT_PORT_DOWN,
+                               left - CM_NVLINK_DELIVERY_MS, &emulator);
+            if (!cmNvCfg(XHCI_TBT_BDF_BUS(bridge),
+                         XHCI_TBT_BDF_DEV(bridge) |
+                             (XHCI_TBT_BDF_FN(bridge) << 5),
+                         0, &q35Id) ||
+                !CmNvlinkQ35IdValid(q35Id)) {
+                q35Id = 0;
+                platform = FALSE;
+            }
+            left = CmNvlinkLeft(start, cmNvNow(nhi), remainingMs);
+        }
+        verdict = CmNvlinkU4VerdictQ35(pathClosed, TRUE, kind, platform,
+                                       qualified, reading, left);
+        CmLogNote(nhi, "cm.nvlink.u4-q35",
+                  (verdict << 16) | (kind << 12) | (cmNvSystem << 4) |
+                      (reading & 0xFUL));
+        q35 = TRUE;
+    } else {
+        verdict = CmNvlinkU4Verdict(pathClosed, TRUE, r->Topo.Source[member],
+                                    emulator, cmNvOsQualified, reading, left);
+        q35Id = 0;
+        q35 = FALSE;
+    }
     CmLogNote(nhi, "cm.nvlink.u4-down", (verdict << 16) | (left << 4) |
                                             (reading & 0xFUL));
-    if (cmNvMark(nhi, bridge, verdict) != 0) {
+    if (cmNvMarkEx(nhi, bridge, verdict, FALSE, q35, q35Id, start,
+                   remainingMs) != 0) {
         return CM_NVLINK_SEND;
     }
     return verdict == CM_NVLINK_SEND ? CM_NVLINK_NO_ENTRY : verdict;
@@ -1733,7 +1871,7 @@ ULONG CmNvlinkU4Down(PVOID context, const TBT_U4_LINKDOWN *info)
         for (k = 0; k < nhi->Reenum.Topo.Tunnels; k++) {
             if (!cmNvOtherPortLive(nhi, info->Port, k)) {
                 (VOID)cmNvMarkEx(nhi, nhi->Reenum.Topo.Set[k],
-                                 CM_NVLINK_SEVERAL, TRUE);
+                                 CM_NVLINK_SEVERAL, TRUE, FALSE, 0, 0, 0);
             }
         }
     }
@@ -1875,7 +2013,7 @@ VOID CmNvlinkRetireMember(PCM_NHI nhi, ULONG bridge)
         return;
     }
     CmLogNote(nhi, "cm.nvlink.retire", bridge);
-    (VOID)cmNvMarkEx(nhi, bridge, CM_NVLINK_LOST, TRUE);
+    (VOID)cmNvMarkEx(nhi, bridge, CM_NVLINK_LOST, TRUE, FALSE, 0, 0, 0);
 }
 
 ULONG CmNvlinkReleaseBus(PCM_NHI nhi, ULONG bridge, ULONG bus)
