@@ -4555,6 +4555,9 @@ each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
 | r2 | ME | adopted at power-on; the first install's restart taken, then E: and F:; the child unplugged and plugged again: connected again | clause 4: pass |
 | r1 | 2000 | the kid connected and the chain port classified (`cm.chain.class=00060408`); the chained NVMe on Stor98 at **Code 10** (no interrupt behind a hot-plugged chain on the Standard PC HAL, as 45.13 read); `XHCIINST /devices` lists the kid as a router "behind another device, approved, PCIe up" (the status record's kind 3 entry); the end unplug: `u4.kid.teardown`, the chain port invalidated (`cm.chain.invalidate=02020408`); plugged again: UP, invalidated again; the middle unplug: `u4.kid.dropped` first, then the port's link-down, Windows' "Unsafe Removal of Device" for the parent's tree | the child's hot plug behind a parent present at power-on (part of clause 1), 2, 3: pass for the connection manager and the PCI side; the chained drive's start: the platform limit already recorded |
 | r2 | 2000 | the chain at power-on: adopted; both NVMe on Stor98 **started**, each with its disk; the kid listed "behind another device" with no name (an adopted kid's name is not read) | the adoption (part of clause 4): pass; the child's unplug and re-plug after it not run |
+| r2c | 2000 | the r2 overlay started again with the chain: adopted (`u4.kid.adopted=00010808`); the child unplugged: `u4.kid.teardown`, `u4.linkdown.kid`, the chain port invalidated (`cm.chain.invalidate=02020408`); plugged again: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, invalidated again (`01020408`); `XHCIINST /devices`: the kid "behind another device, approved, PCIe up", the chained NVMe back on Stor98 at Code 10 (the hot plug's platform limit of r1) | clause 4: pass for the connection manager and the PCI side |
+| x3 | XP SP3 | the XP golden of "45.15 (continued)" (an earlier package) with this commit's qemu `xhcicm.sys` and `xhci98.sys` copied in and restarted; started with no dock; the parent and then its child plugged by QMP at the desktop: the parent's tunnel up and UP (`u4.pcie.up=00010809`), then the kid connected (`u4.kid.pcie.up=00010809`, UP), the tray's "QEMU USB4 NVMe Enclosure connected"; but on the PCI side nothing appeared behind the tunnel port (the member's `BusRelations` with no new child, `cm.chain.rel.new=00000000`; no chain port, `cm.chain.ports` 0, the chain action owed and expired; `XHCIINST /devices`: "nothing behind it now"); the cause is not established (on 7, r3, the dock's switch appeared at Code 31; here nothing appeared; a tunnel port numbered at power-on with no dock and no room for the switch is a hypothesis, not read) | clause 1: the connection manager's half (parent first, then the kid) pass; the PCI side failed, cause not established |
+| r3 | 98 SE | started with no dock; the parent and its child plugged at the desktop: the parent UP, then the kid UP; the 9x numbering and re-enumeration ran on both members (`cm.reenum.9x.reenumerate`), the numbering outcome NONE (`cm.brnum.9x.outcome` 0: no function and no bridge seen behind either member), and no drive appeared | clause 1: the connection manager's half pass; the PCI side failed (nothing answering behind the member), cause not established |
 | - | 10 x64 | not run: the package of this clone is unsigned and has no catalogs (10 x64 refuses such a package, 43.33); the in-guest throwaway signing was not run in this session | owed |
 
 ### Findings
@@ -4570,8 +4573,12 @@ each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
 ### Left
 
 - The 10 x64 leg (a signed package, or the in-guest throwaway signing).
-- Clause 1 with the parent hot-plugged at the desktop (on 7 not readable,
-  r3 above); on 2000, clause 4's unplug and re-plug after the adoption.
+- Clause 1's PCI side with the parent hot-plugged at the desktop: on 7
+  the dock's switch at Code 31 (r3 of "45.15 (continued)"), on XP and 98
+  SE nothing behind the tunnel port (x3, r3); the cause is not
+  established (bus room at the tunnel port numbered at power-on is a
+  hypothesis; a read of the tunnel port's and the switch's configuration
+  after the plug would settle it).
 - Deferred to the next release (owner, 2026-10-30; record 34 section
   3.10, "Deferred"): the chained unit's eject teardown, the chain port's
   correspondence and the per-tunnel ownership, names and generations.
