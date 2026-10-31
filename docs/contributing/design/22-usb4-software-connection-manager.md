@@ -5348,10 +5348,14 @@ design left to it (reviewed and revised):
   Thunderbolt host); the host's protocol ingress entry gets 7 credits and
   IFC, as a Thunderbolt router's ([linux] `tunnel.c` `tb_pci_init_credits`
   without credit allocation), the lanes section 8's 32 or 16.
-- **Lanes that do not bond** (Linux bonds only through the link
-  controller's attributes, generation 3 in practice): the link stays two
-  single lanes. Section 6.5 step 6.4's Lane Disable is a USB4 lane
-  adapter's and is not written on a Thunderbolt host; the discovery, the
+- **Lanes that do not bond** (Linux bonds a Thunderbolt link only through
+  the link controller's port attributes, so from generation 2, `lc.c`
+  `tb_lc_lane_bonding_possible`, and never on generation 1): the link
+  stays two single lanes. Section 6.5 step 6.4's Lane Disable is a USB4
+  lane adapter's and is not written on a Thunderbolt host, and neither is
+  step 6.3's TMU Off required there, which Guide 7.5 asks for only before
+  a lane is disabled (task 45.58: the TMUs of a generation 1 link that
+  came up running failed the connection until then); the discovery, the
   resume and the recovery accept that state as they accept a single lane
   on a USB4 link (one predicate).
 - **Item 6**: the host router's TMU is left as it is.

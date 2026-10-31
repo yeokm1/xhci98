@@ -5637,6 +5637,148 @@ then the kid, both NVMe started.
   which the launcher does not give 2000 and XP, or one within 4 GB); 2000,
   ME, XP x64 and Vista legs.
 
+## 45.58 the rest of 45.21's emulator legs: Falcon, Cactus and Light Ridge (2026-10-31)
+
+**Verdict: done here.** `usb4-emu` now has the PCIe switch of Apple's Falcon Ridge 4C,
+Cactus Ridge 4C and Light Ridge Thunderbolt hosts on q35. Their host profiles, from task
+45.21, already existed. With the switch on each model, the q35 legs pass on 7 x86 and
+10 x64: install, the enclosure at power-on on USB4 port A, a surprise unplug, and a
+re-plug on port B. The Cactus Ridge leg found a defect in this driver's Thunderbolt-host
+profile: a generation 1 link, which never bonds, failed for want of a TMU Off. It is
+fixed (`8d0167a1`). Every model and system passes on the fixed build, which was also run
+on `usb4-emu`'s new default (tunnel ports with no power controller), with the same
+results. Left as 45.21 leaves them: 98 SE to Vista on a Thunderbolt host, the Mac
+itself (45-E.11) and the release notes' "Not claimed: Apple machines". The USB-only NHIs
+`15DC`, `15DD` and `15DE` stay unclaimed.
+
+### The models (`usb4-emu`, branch `w45-apple`)
+
+`ef96164`, merged with `usb4-emu` `main` as `2a0de92` and `21ef267`. The q35 switch
+types are `usb4-fr-usp`/`-dsp`/`-tunnel-dsp` (Falcon Ridge 4C), `usb4-cr-*` (Cactus Ridge 4C) and
+`usb4-lr-*` (Light Ridge), switch ports only (`usb4-emu` `docs/TB-SWCM-HOSTS.md` section
+2a). The guests' composition is the gated root port `00:08.0`, then the upstream port,
+then a port at `0.0` for the NHI and tunnel ports at `1.0` (`tunnel-port`, port A's PCIe
+Down) and `2.0` (`tunnel-port2`, port B's). The host profiles `tb2-apple-falcon-ridge`
+(`apple-subsys-id=4660`), `tb1-apple-cactus-ridge` and `tb1-apple-light-ridge` are from
+45.21. A device router of the host's generation was used:
+`usb4-device dialect=tb3,tb3-router-id=0x156d` (Falcon Ridge) or `0x1549` (Port Ridge,
+generation 1). Facts, tagged as record 22 section 19 tags them:
+
+| Fact in the model | Source |
+|---|---|
+| Falcon Ridge 4C: NHI `156C`, host router and switch ports `156D` (2C `156A`/`156B`, not composed) | [linux] `pci_ids.h`, `nhi.h` |
+| Cactus Ridge 4C `1547` and Light Ridge `1513`: NHI, host router and switch ports one id; the bridges carry the NHI's subsystem `2222:1111` (in their Subsystem ID capability) | [linux] `pci.c` `nhi_ids[]` ("the TB bridges use the same device and vendor (sub)id on gen 1 and gen 2 controllers"), `switch.c` `tb_switch_get_generation` |
+| No integrated xHCI on these three controllers | [linux] `xhci-pci.c` names one from Alpine Ridge on only |
+| PCIe Down per port: Falcon Ridge 6/8, Cactus Ridge 6/7, Light Ridge any free | [linux] `tb.c` `tb_find_pcie_down` |
+| Generation 1: no link controller, identity from the DROM UID, never bonded; generation 2 bonds through the link controller | [linux] `lc.c`, `eeprom.c`, `switch.c` `tb_switch_set_uuid` |
+| Falcon Ridge's subsystem vendor `106B` on a Mac, and its subsystem device | [unread]: record 22 section 19.3's selection; the device is the emulator's `1234` |
+| Bridge revision 1, the Falcon Ridge bridges' subsystem `0:0`, interrupt pin A, no power controller on the tunnel ports, the number and order of the downstream ports | [unread]: emulator choices, as the captured Alpine Ridge |
+
+`qtest` `usb4-tbhost-test` gained `/usb4-tbhost/switch-q35` (ids, class, Subsystem ID
+capability, the tunnel ports hot-plug capable with no power controller, the NHI behind
+its port) and `/usb4-tbhost/no-xdomain` (`usb4-xdomain` refused on every
+`tb*-apple-*` profile: no inter-domain link on a host with no firmware CM). On the
+merged tree every usb4 suite ran complete against its TAP plan, 260 cases with no
+failure. Reviewed; no material findings.
+
+### The defect the Cactus Ridge leg found (`8d0167a1`)
+
+Leg `cr-w7x86` a, on the build of `9efe2115`. The NHI bound ("xHCI98 TB1 Controller (Intel
+Cactus Ridge)", "USB4 software connection manager") and the Port Ridge router was read.
+`XHCIINST /devices` then showed "connection held or failed" and "PCIe none". The qemu
+flavour of `xhcicm.sys` was swapped in to log on debugcon:
+`u4.bond.impossible=1`, `u4.bond.tmu-not-off=1`,
+`u4.port.state=00050107` (port 1 FAILED, reason BONDING). A generation 1 link never
+bonds, so `tbtU4BondSingle` runs. It asked for the link's TMU Off before reaching its
+Thunderbolt-host branch, which keeps two single lanes. The emulator's routers come up
+with their TMU running. Guide 7.5 asks for the TMU Off only before a Lane Disable, which a
+Thunderbolt host never writes, and record 22 section 19.4 item 6 leaves its TMU as it
+is. So the check is now made on a USB4 host alone. Falcon and Alpine Ridge never reached
+it, because their links bond. The vector is `test_u4cm` `test_tbt_host`: Cactus and
+Light Ridge with a Port Ridge device and both routers' TMU running (fake fabric
+`fabTbtTmuOn`). It fails without the fix (state FAILED). With the fix, `test_u4cm` runs
+1918 checks with no failure. Record 22 section 19.9's "Lanes that do not bond" says so,
+and that Linux bonds a Thunderbolt link from generation 2 through the link controller
+(`lc.c` `tb_lc_lane_bonding_possible`), not "generation 3 in practice". Reviewed; no
+material findings. No release-notes text: the profile is new in this release.
+
+### Builds and packages
+
+- The gated release x86 and amd64 builds of `9efe2115` and of `8d0167a1` all read
+  "BUILD + GATES PASSED (release)", and the host tests passed in each
+  (`E:\xhci98-scratch\p45-w45-apple\build-x86.log`, `build-amd64.log`,
+  `build-x86-2.log`, `build-amd64-2.log`). The qemu flavour x86 of `9efe2115`
+  (`build-qemu-x86.log`) was used only for the diagnosis.
+- The packages are `make-package.ps1 -Flavor release` x86 and amd64 of `8d0167a1`
+  (`xhcicm.sys` x86 `66cb7616...`, amd64 `7a6798fb...`; `xhci98.sys` x86 `c7c144d1...`,
+  amd64 `17290220...`). They were staged into the 3.3.0.0 release layout with this
+  tree's `INSTALL.BAT`, `SETUP.EXE` and `XHCIINST`/`XHCIIN64`, built by
+  `xhciinst\build.cmd` (its self-tests passed).
+- x64: the package is unsigned. Its five catalogs were made on the host by the
+  packager's `New-PackageCatalogFile`, unsigned. In each 10 x64 overlay (test mode on), a
+  throwaway certificate (`CN=w45apple`, MakeCert, valid 2026 to 2030) was put in Root and
+  TrustedPublisher, and the four `.sys` and five `.cat` files were signed and verified
+  there (`SIGN64.BAT`, serial logs). Nothing was signed on the host.
+
+### The legs (q35; kit `E:\xhci98-vm\p45\w45-apple`, `leg.ps1`)
+
+Each leg used a fresh overlay of the clean base. The install was `INSTALL.BAT /console
+/yes /nopause /thunderbolt /stor98` (7 x86: Windows' unsigned-driver prompts answered;
+10 x64: `SIGN64.BAT` first), then a restart and `R.BAT`: the PCI devnodes with their codes,
+the volumes and `XHCIINST /devices`. Then QMP `device_del` of the enclosure, `R.BAT`,
+`device_add` on USB4 port 2, and `R.BAT` again. Emulator: `usb4-emu` `w45-apple`
+`ef96164` (`qemu-system-x86_64.exe` `7012d8b2...`).
+
+| Leg | Build | Port A at power-on (after the install's restart) | Unplug | Port B |
+|---|---|---|---|---|
+| Falcon Ridge, 7 x86 (`fr-w7x86` a) | `9efe2115` | "xHCI98 TB2 Controller (Intel Falcon Ridge)" on `PCI\VEN_8086&DEV_156C&SUBSYS_1234106B`, the switch ports "xHCI98 Thunderbolt PCI Bridge" (`156D`), all Code 0; router `8086:156D` approved, two lanes bonded, PCIe up at `02:01.0`, Stor98 started, D: ORICO | "Nothing is connected", D: gone | PCIe Down 8 at `02:02.0`, Stor98, D: ORICO |
+| Cactus Ridge, 7 x86 (`cr-w7x86` b) | `8d0167a1` | "xHCI98 TB1 Controller (Intel Cactus Ridge)" on `DEV_1547&SUBSYS_11112222`, the bridges `DEV_1547&SUBSYS_11112222` "xHCI98 Thunderbolt PCI Bridge", all Code 0; router `8086:1549` approved, one lane (two single lanes), PCIe up at `02:01.0`, Stor98, D: ORICO | the same | PCIe Down 7 at `02:02.0`, D: ORICO |
+| Light Ridge, 7 x86 (`lr-w7x86` a) | `8d0167a1` | "xHCI98 TB1 Controller (Intel Light Ridge)" on `DEV_1513&SUBSYS_11112222`, all Code 0; the same as Cactus Ridge | the same | adapter 7 at `02:02.0`, D: ORICO |
+| Falcon Ridge, 10 x64 (`fr-w10x64` d) | `8d0167a1` | as on 7 x86, Code 0; Stor98, E: ORICO | the same | `02:02.0`, E: ORICO on Windows' `stornvme` (a new instance takes Windows' own driver, as 45.21's 10 x64 leg saw) |
+| Cactus Ridge, 10 x64 (`cr-w10x64` d) | `8d0167a1` | the same as 7 x86, Code 0, E: ORICO (read after a QMP re-plug on port A: the first run lost its report) | the same | `02:02.0`, `stornvme`, E: ORICO |
+| Light Ridge, 10 x64 (`lr-w10x64` d) | `8d0167a1` | the same (read after a re-plug on port A, likewise) | the same | `02:02.0`, `stornvme`, E: ORICO |
+
+The Falcon Ridge 7 x86 leg ran on `9efe2115` before the fix. The fix does not reach a
+link that bonds, which this one is; the run below installs `8d0167a1` fresh. Evidence:
+`<model>-<os>\` with `serial-<tag>.log`, `rep-*.txt`, `trace-<tag>.log` (the tunnel
+transitions), `cmdline-<tag>.txt`, screenshots; `cr-w7x86\debugcon-a.log` and
+`trace-a.log` (the diagnosis); `hashes.txt`, `pids.txt`.
+
+### Again on the new default (tunnel ports with no power controller)
+
+`usb4-emu` main moved to tunnel ports with no power controller by default during this
+task. The models follow it (`usb4-fr/cr/lr-tunnel-dsp`, as `usb4-tb3-tunnel-dsp`). The
+emulator is the merged tree (`qemu-system-x86_64.exe` `8fa353cb...`). The installed
+overlays above were started on it (tag e), and Falcon Ridge 7 x86 was installed fresh with
+`8d0167a1`:
+
+| Leg (tag e) | Port A at power-on | Unplug | Port B |
+|---|---|---|---|
+| Falcon Ridge, 7 x86, fresh install of `8d0167a1` | the same as above: 20 devnodes Code 0, bonded, PCIe up at `02:01.0`, Stor98, D: ORICO | "Nothing is connected" | `02:02.0`, Stor98, D: ORICO |
+| Cactus Ridge, 7 x86 (overlay b) | 20 devnodes Code 0, one lane, "PCIe up (found at start)", Stor98, D: ORICO | the same | `02:02.0`, Stor98, D: ORICO |
+| Light Ridge, 7 x86 (overlay a) | the same, "PCIe up (found at start)" | the same | `02:02.0`, Stor98, D: ORICO |
+| Falcon Ridge, 10 x64 (overlay d) | 14 devnodes Code 0, bonded, PCIe up at `02:01.0`, Stor98, E: ORICO | the same | `02:02.0`, `stornvme`, E: ORICO |
+| Cactus Ridge, 10 x64 (overlay d) | the same, one lane | the same | `02:02.0`, `stornvme`, E: ORICO |
+| Light Ridge, 10 x64 (overlay d) | the same, one lane | the same | `02:02.0`, `stornvme`, E: ORICO |
+
+No result changed. One reading differs. On the two 7 x86 overlays started cold, the
+connection at port A read "PCIe up (found at start)": `xhcicm` had been stopped and
+started once after it built the tunnel. The emulator's trace has the tunnel up once and
+never down, so the restart adopted it as found (record 22 section 9). The same overlays
+on the old default read "PCIe up" after the install's restart. That this is Windows
+rebalancing the switch once the endpoint answers at once is an inference, not read.
+Evidence: `<model>-<os>\` tag e (`serial-e.log`, `rep-e*.txt`, `trace-e.log`,
+`rerun-e.log`, `run7-e.log`).
+
+### Findings for others
+
+- `XHCIINST /devices` labels a generation 1 or 2 router "Thunderbolt 3" ("Thunderbolt 3,
+  port 1, depth 1" for a Port Ridge `8086:1549` and a Falcon Ridge `8086:156D`). It is
+  the tool's text, not the CM's.
+- The kit's `RINT.BAT` echoed `EXIT 0` where the installer had printed "Exit code 3"
+  (restart): `%ERRORLEVEL%` after `call INSTALL.BAT` in that script is not the
+  installer's. The kit read the screen.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
