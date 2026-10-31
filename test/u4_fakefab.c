@@ -1211,6 +1211,21 @@ static void fabTx(FAB *f, unsigned long pdf, const unsigned long *dw,
         break;
     case TBT_PDF_XDOMAIN_REQ:
     case TBT_PDF_XDOMAIN_RESP:
+        /* Routed as any control packet (Spec 6.4.3): one that cannot be
+         * delivered - a Locked lane adapter on its way among them (ERR_LOCK,
+         * as usb4-emu's host router answers) - is dropped with the
+         * notification, never handed to the far end. */
+        {
+            int er;
+            unsigned long code;
+            unsigned long ea;
+
+            if (fabResolve(f, dw[0] & 0x7FFFFFFFUL, dw[1], &er, &code, &ea) < 0) {
+                f->XdRefused++;
+                fabNotify(f, er, code, ea);
+                break;
+            }
+        }
         f->XdSent++;
         if (f->XdTx != NULL) {
             f->XdTx(f, pdf, dw, words);

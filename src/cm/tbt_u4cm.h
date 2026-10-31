@@ -862,15 +862,17 @@ typedef struct _TBT_U4_XD {
  * is proven invalid: where they are and where they send, so an entry is
  * invalidated only while it still reads as this service's (record 35
  * section 3.9). Kept across the containment, which allows no access. */
-/* An early UUID Request's answer not yet sent (tbtU4XdEarlyUuid): retried
- * at each take until sent, at most TBT_XDP_RESENDS times, whether or not a
- * record has started on the port since (that request never reaches its
- * engine). */
+/* An early UUID Request's answer not yet sent (tbtU4XdEarlyUuid): held
+ * while the port's lane 0 is Locked, then retried at each take until
+ * sent, at most TBT_XDP_RESENDS failed sends, whether or not a record has
+ * started on the port since (that request never reaches its engine). */
 typedef struct _TBT_U4_XD_EARLY {
     BOOLEAN Owed;
+    BOOLEAN NextConn;   /* taken still Locked or behind an unplug: for the next connection */
     ULONG Sn;
     ULONG Type;
     ULONG Tries;
+    ULONG Gen;          /* the port's Generation when it was taken */
 } TBT_U4_XD_EARLY, *PTBT_U4_XD_EARLY;
 
 typedef struct _TBT_U4_XD_OWED {

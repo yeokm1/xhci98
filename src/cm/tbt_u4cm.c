@@ -61,6 +61,10 @@ static VOID tbtU4XdEnd(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p, BOOLEAN gon
 static VOID tbtU4XdEndAll(struct _TBT_U4CM *cm, BOOLEAN gone);
 static VOID tbtU4XdPre(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p);
 
+static VOID tbtU4XdEarlyEnd(PTBT_U4CM cm, PTBT_U4_PORT p);
+static VOID tbtU4XdEarlyDrop(PTBT_U4CM cm, PTBT_U4_PORT p);
+static VOID tbtU4XdEarlyRetry(PTBT_U4CM cm);
+
 static VOID tbtU4Log(PTBT_U4CM cm, const char *label, ULONG value)
 {
     if (cm->Host != NULL && cm->Host->Log != NULL) {
@@ -5436,6 +5440,7 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
     p->SingleLane = FALSE;
     p->PcSetDev = FALSE;
     p->Unlocked = FALSE;
+    tbtU4XdEarlyEnd(cm, p);
     p->PcieFailed = FALSE;
     p->Usb3Failed = FALSE;
     p->Ejected = FALSE;
@@ -5578,8 +5583,16 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
     h = &cm->HostRouter;
     d = &p->Dev;
     *cls = TBT_U4_LANE_UNKNOWN;
-    if (tbtU4LaneRd(cm, h, p->Lane0, &lane) != TBT_OK ||
-        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4, &cs4) != TBT_OK) {
+    if (tbtU4LaneRd(cm, h, p->Lane0, &lane) != TBT_OK) {
+        return FALSE;
+    }
+    if (TbtU4LaneClass(TBT_LANE1_STATE(lane)) == TBT_U4_LANE_DISCONNECTED) {
+        /* Lane 0 read disconnected, whatever the port's state: an early
+         * UUID answer held for the link it came with is owed to nobody
+         * (a later connection brings its own request). */
+        tbtU4XdEarlyDrop(cm, p);
+    }
+    if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4, &cs4) != TBT_OK) {
         return FALSE;
     }
     *cls = TbtU4LaneClass(TBT_LANE1_STATE(lane));
@@ -7399,6 +7412,7 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
     p->Bonded = FALSE;
     p->SingleLane = FALSE;
     p->Unlocked = FALSE;
+    tbtU4XdEarlyEnd(cm, p);
     p->DpPreserved = FALSE;
     p->State = TBT_U4_EMPTY;
     p->Why = TBT_U4_WHY_NONE;
@@ -10721,6 +10735,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     TbtCtlService(&cm->Ctl);
     tbtU4TakeQueues(cm);
     tbtU4XdTake(cm);
+    tbtU4XdEarlyRetry(cm);
     if (cm->HostTmuTdOwed || !cm->HostTmuOk) {
         tbtU4HostTmu(cm);
     }
@@ -12269,6 +12284,7 @@ static VOID tbtU4RecoverEmpty(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN replaced)
     p->SingleLane = FALSE;
     p->PcSetDev = FALSE;
     p->Unlocked = FALSE;
+    tbtU4XdEarlyEnd(cm, p);
     p->PcieFailed = FALSE;
     p->Usb3Failed = FALSE;
     p->Ejected = FALSE;
@@ -13929,7 +13945,44 @@ static VOID tbtU4XdEarlySend(PTBT_U4CM cm, PTBT_U4_PORT p)
     ULONG buf[TBT_XDP_MAX_WORDS];
     TBT_ROUTE r;
     ULONG words;
+    ULONG cs4;
 
+    /* The request comes with the link, while lane 0 is still Locked: the
+     * host router refuses a packet out through a Locked adapter with
+     * ERR_LOCK (Spec 8.2.2.1, ADP_CS_4), and the answer would be lost
+     * though the ring took it (read on the emulator, run-45 "45.59 (legs,
+     * continued)"). One taken before this driver has cleared that Lock,
+     * or behind an unplug not yet checked (a quick re-plug leaves the last
+     * connection's Unlocked standing while the unplug set the Lock again),
+     * is for the port's next connection: it waits, owed and no try
+     * counted, until that connection is up with lane 0 unlocked
+     * (tbtU4Router) and no unplug pending, and is dropped if another
+     * connection has come since. */
+    if (p->Generation - e->Gen > 1UL) {
+        e->Owed = FALSE;
+        tbtU4Log(cm, "cm.xdp.uuid.early.stale", p->Index);
+        return;
+    }
+    /* Sent only on a port this driver has unlocked whose lane 0 reads
+     * unlocked now: the flags alone can describe a connection a
+     * quick re-plug has replaced, so the Lock is read before each try.
+     * Until then it waits; no try counted. At worst an answer held across
+     * a re-plug reaches the next connection, where it is a UUID Response
+     * to no request of that peer's, which a receiver drops ([linux]
+     * ctl.c takes a response only for a request outstanding), or one with this
+     * domain's same UUID for that peer's own pending request. */
+    if (!p->Unlocked ||
+        tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ADAPTER, p->Lane0, TBT_ADP_CS_4,
+                &cs4) != TBT_OK) {
+        return;
+    }
+    if ((cs4 & TBT_ADP4_LOCK) != 0) {
+        /* Locked again under a flag that still says unlocked: the
+         * connection the flag describes is gone, and the answer is the
+         * next one's (its teardown keeps it). */
+        e->NextConn = TRUE;
+        return;
+    }
     r.Hi = 0;
     r.Lo = p->Lane0;
     words = 0;
@@ -13965,17 +14018,47 @@ static BOOLEAN tbtU4XdEarlyUuid(PTBT_U4CM cm, PTBT_U4_PORT p, const TBT_FRAME *f
     e->Sn = k.Sn;
     e->Type = k.Type;
     e->Tries = 0;
+    e->Gen = p->Generation;
+    e->NextConn = (BOOLEAN)(!p->Unlocked || p->UnplugPending);
     tbtU4XdEarlySend(cm, p);
     return TRUE;
 }
 
-/* The early answers still owed, at each take, until sent or out of
- * tries: a record started on the port since never saw that request, so
- * its engine does not answer it. */
+static VOID tbtU4XdEarlyDrop(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    if (p->Index >= 1 && p->Index <= TBT_U4_MAX_PORTS) {
+        cm->XdEarly[p->Index - 1].Owed = FALSE;
+    }
+}
+
+/* At a teardown of the port's connection: an answer owed to that
+ * connection goes with it; one held for the next connection (taken after
+ * this one's unplug, before the check) stays. */
+static VOID tbtU4XdEarlyEnd(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_XD_EARLY e;
+
+    if (p->Index < 1 || p->Index > TBT_U4_MAX_PORTS) {
+        return;
+    }
+    e = &cm->XdEarly[p->Index - 1];
+    if (e->Owed && (!e->NextConn || p->Generation != e->Gen)) {
+        e->Owed = FALSE;
+    }
+}
+
+/* The early answers still owed, at each idle poll (TbtU4Poll), until sent
+ * or out of tries: a record started on the port since never saw that
+ * request, so its engine does not answer it. One held for the Lock waits
+ * for this driver's unlock of that port. Not at a ring wake: the Lock
+ * read of a held answer completes on the ring and would wake it again. */
 static VOID tbtU4XdEarlyRetry(PTBT_U4CM cm)
 {
     ULONG i;
 
+    if (tbtU4Off(cm) || cm->Suspended) {
+        return;
+    }
     for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
         if (cm->XdEarly[i].Owed) {
             tbtU4XdEarlySend(cm, &cm->Ports[i]);
@@ -13996,9 +14079,6 @@ static VOID tbtU4XdTake(PTBT_U4CM cm)
         return;
     }
     cm->XdTaking = TRUE;
-    if (!tbtU4Off(cm) && !cm->Suspended) {
-        tbtU4XdEarlyRetry(cm);
-    }
     while (cm->XdCount != 0) {
         f = cm->XdQ[cm->XdHead];
         cm->XdHead = (cm->XdHead + 1) % TBT_U4_XD_QUEUE;

@@ -238,6 +238,7 @@ typedef struct FAB {
     void *HookCtx;
     FAB_XDTX XdTx;
     unsigned long XdSent;           /* inter-domain packets sent */
+    unsigned long XdRefused;        /* ... refused on the way (ERR_LOCK, ...) */
 
     /* logs */
     unsigned long Requests;
