@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 52, 2026-10-31 (task 45.54, the owner's decisions of
+Status: draft 53, 2026-10-31 (task 45.60, the owner's decisions of
+that day: a Thunderbolt and USB4 page after the Components page,
+shown only when the Thunderbolt box is ticked, carrying XHCIPFW,
+Stor98, S98VSD and the approval choice, and the networking box's slot
+behind a gate, section 5.3.5); draft 52, 2026-10-31 (task 45.54, the owner's decisions of
 that day: on 98 SE and ME a controller the run installs counts for the
 settings, and the USB and Thunderbolt tabs' Advanced lists offer every
 user setting of `tuning.md` but the ones named left out, section
@@ -1751,6 +1755,204 @@ with no scroll bar.
 each with the rows that system shows (98 SE and ME with and without the
 Thunderbolt support's files in the download where the variant exists).
 
+#### 5.3.5 The Thunderbolt and USB4 page (task 45.60; draft 53)
+
+The owner, 2026-10-31: a page of its own after the Components page,
+shown only when the Thunderbolt 3 / USB4 box there is ticked, carrying
+what is Thunderbolt's alone. Before this draft those rows sat on the
+Components page under the Thunderbolt box, greyed whenever it was
+unticked, and the approval choice was the Thunderbolt tab's second row
+in the Settings dialog.
+
+*Where it sits.* `P_TBT`, titled "Thunderbolt and USB4", comes after
+`P_COMP` and before the two other-drivers pages (section 6.7.12): Welcome,
+Components, Thunderbolt and USB4, Free USB drivers, Non-free USB drivers,
+Summary. It is skipped, Next and Back alike, by the mechanism those
+pages use (`page_skipped`, a `PSN_SETACTIVE` answer of -1), on one test
+alone: the effective Thunderbolt choice the Components page's Next takes
+(`tbChoice`) is 0. A box ticked and disabled (the USB drivers unticked,
+not over Intel's driver: section 5.3's lock, `comp_usb_state`) is a
+choice of 1 and shows the page; a box greyed and unticked (a package
+without the Thunderbolt support) is 0 and skips it. The uninstall's pages
+are as before.
+
+*What moves to it, unchanged in meaning.* The three boxes of section
+5.3.1 that hang under the Thunderbolt box: XHCIPFW (`XHCIPFW.VXD` on 98
+SE and ME, `XHCIPFW.SYS` on 2000 to 32-bit 7, absent on the other
+systems), Stor98 and its child S98VSD (98 SE and ME; greyed with
+"Windows 98 SE and ME only" elsewhere). Each keeps its words, its
+default, its shown and greyed rules for the system and the package, its
+own remembered state (`pfwOwn`, `s98Own`, `vsdOwn`) and the
+parent-and-child rule between Stor98 and S98VSD (section 5.0, draft 35).
+The rule "open only while the Thunderbolt box is ticked" is now the
+page's: the page exists only while it is.
+
+*The state, captured.* The three choices live in the window's state, not
+in controls another page reads: `pfwChoice`, `s98Choice`, `vsdChoice`
+with the three remembered states. `comp_take` (the Components page's
+Next, and the Settings button's call) no longer reads those boxes; it
+sets each effective choice from the Thunderbolt choice: with it on, each
+is its remembered state (S98VSD only with Stor98, and each only where
+its box is open for the system and the package); with it off, each is 0
+and the remembered states are kept for a later tick. The page's fill
+sets its boxes from that state; its Next and its Back both read them back
+(the remembered states with them) and call the same re-plan `comp_take`
+calls when anything changed, so the Summary and the plan always hold
+what the page shows. The Components page's warnings
+(`inst_eng_comp_warn`) and the Secure Boot refusal stay in `comp_leave`,
+which passes the effective Stor98 choice from that state; the page's
+Next shows the warnings again only when its own change brings a new
+one (the same function, its result compared with the one already shown),
+and the Summary repeats them as before. The
+Components page keeps the Thunderbolt box and its sentence, cut to what
+was found ("A Thunderbolt 3 / USB4 controller was found: <name>."); the
+sentence on what a device can reach moves to the approval row below.
+The box keeps its words, "(experimental)" included: that is the
+owner's word for the support. Section 5.3.4's stacking takes the rows
+left on the Components page, and the new page is stacked by the same
+routine, rows of its own.
+
+*The approval choice.* `XhciCmApprove`, from the Thunderbolt tab of the
+Settings dialog to this page, so it is offered in one place: the tab
+keeps `XhciCmMode` and `XhciCmSafeEject`, and Advanced does not list it
+(it is an asked row, section 5.4.1). Two option buttons, under a
+heading "When a Thunderbolt or USB4 device is plugged in":
+
+- 1, the default: "Give it a PCI Express connection at once." Under it:
+  "A PCI Express device can read and write all of this computer's
+  memory: plug in only devices you trust. Some controllers' firmware
+  decides this itself."
+- 0: "Give it none." Under it: "No new PCI Express connection is made; a
+  device may still work over USB where it offers that. Connections
+  already made when Windows starts stay, unless XhciCmPreOsCleanup ends
+  them."
+
+What the value does, as records 21 and 22 have it: under a controller's
+firmware connection manager (record 21 section 5.4) 1 sends the approve
+for each device the firmware announces unapproved, and 0 sends none, so
+no new PCI Express tunnel comes up; a device the firmware approved
+itself, or an earlier start approved, keeps its tunnel; on the profiles
+whose firmware has no approve command (record 21's ICL row) the driver
+sends none at either value and the firmware alone decides, which the
+second sentence under 1 says. Under the driver's own USB4 connection
+manager (record 22) 0 builds no PCI Express tunnel for a device while
+its USB 3 tunnel is built as before; the tunnels found at the start are
+kept or torn down by `XhciCmPreOsCleanup` (0, the default, keeps them;
+2 tears them down, and with 0 here none is built again). A USB4 device
+whose PCI Express tunnel is refused under a firmware connection manager
+can fall back to USB, as read on the bench (record 21 section 5.4).
+The owner's short form for 0, "only those the BIOS connected at
+power-on", is that: nothing new, what is up stays (with the default
+cleanup). Preselected with the value in force, exactly as
+the tab's row was (`row_start`: the page's own choice, a `/set`
+preselection included, else the value in force); where the controllers
+hold different values and no machine-wide one is set, neither button is
+selected and "each controller keeps its own" is said beside them, and
+leaving them so writes nothing. The page's Next and Back take the
+choice into the same state the tab's row used (`choiceSet`,
+`choiceVal`), so the Summary, the write (machine-wide, only when it
+differs from the value in force, record 26 section 5.4) and the
+new-install note ("a new install starts with the default; a change
+applies from the next restart: unplug the dock until then if you choose
+0", shown under the buttons when the host interface is a new install)
+are as they were. On a system where the row does not apply the buttons
+are greyed with the value in force shown; the Thunderbolt support runs
+on every system the package covers, so this is the package-without-the-
+connection-manager's case only, where the page is never shown.
+
+*The networking box, its slot* (record 35 section 9.1; task 45.59). One
+box, "Thunderbolt networking", the page's last row, unticked by
+default. Until task 45.59's driver steps S5 to S7 are merged and its
+step S11 wires the installer, it is not shown on any system. The gate
+is one constant in the installer, `INST_TBNET_WIRED`, 0 in this draft:
+
+- 0: the box's controls are hidden and take no room in the page's
+  stacking; the console asks no networking question; `XhciCmNet` is
+  not in the values' table, so `/set XhciCmNet=` is refused as any
+  unknown name is; nothing reads or writes `XhciCmNet`. The two
+  switches are parsed already, as record 35 section 9.2 has them where
+  the package carries no network driver: `/tbnet` is refused ("this
+  package carries no Thunderbolt networking driver for this system"),
+  `/notbnet` is accepted and changes nothing, so a silent-install
+  command written for a later package does not fail here; both together
+  are refused, and either with `/uninstall`, `/devices` or `/eject`.
+- 1 (step S11, in the same change that stages `xhcinet.inf`): record 35
+  section 9.1 applies whole: the box shown, greyed and unticked where
+  the package carries no network driver for the system; its first state
+  on an update the value in force; `/tbnet` and `/notbnet`; `/set
+  XhciCmNet=` refused with "use /tbnet or /notbnet"; `XhciCmNet` not an
+  Advanced row; the console's question after the Thunderbolt question
+  and its children.
+
+What the box writes is decided by one pure function, written and
+host-tested in this task so that S11 only connects it,
+`inst_tbnet_decide` (`inst_core.c`):
+
+    void inst_tbnet_decide(int wired, int carried, int sw, int inForce,
+                           int box, int nhiPresent, int mwHas,
+                           INST_TBNET *d);
+
+- in: `wired` the gate; `carried` the package carries the network
+  driver for this system; `sw` -1 none, 0 `/notbnet`, 1 `/tbnet`;
+  `inForce` the `XhciCmNet` in force, 1 or 0, -1 when none is set
+  (every present host interface's key and `Services\USB` read as the
+  connection manager reads them: machine-wide first); `box` the box as
+  the user left it, -1 untouched; `nhiPresent` a host interface is
+  present; `mwHas` `Services\USB` holds an `XhciCmNet`.
+- out: `Shown` (`wired`), `Enabled` (`wired && carried`), `First` (the
+  box's first state: `sw` when given, else `inForce == 1`; 0 when not
+  enabled), `Write`, `Value`, `ToNhi` (every present host interface's
+  driver key), `ToMw` (`Services\USB`).
+- the rule: the final state is `box` when touched, else `First`.
+  `Write` when enabled and either a switch was given (it makes the box
+  changed, as `/faster` and `/nofaster` do) or the final state differs
+  from `inForce == 1`; `Value` the final state. `ToNhi` when
+  `nhiPresent`; `ToMw` when `mwHas` or no host interface is present.
+  Unticked where nothing is in force writes nothing (the INF's 0
+  stands). Not enabled: nothing is written whatever was asked (`/tbnet`
+  is refused before this, section 10; `/notbnet` is a no-op).
+
+The engine's write itself (after the network INF's install, setting the
+run's restart flag; record 35 section 9.1) and the uninstall's removal
+are step S11's, with the INF they follow.
+
+*The console and the silent install.* They already take the page's
+choices by the same means: the Thunderbolt question, then XHCIPFW's,
+Stor98's and S98VSD's (record 23 section 7.1; `/thunderbolt`,
+`/xhcipfw`, `/noxhcipfw`, `/stor98`, `/s98vsd`), and `XhciCmApprove`
+among the connection manager's questions or by `/set` (record 23 section
+8.1). Nothing changes there in this draft but the two switches above and
+the gate's networking question, which is not asked while it is 0.
+
+*Texts.* The page's heading: "Thunderbolt 3 and USB4: what is installed
+with the support, and how devices are approved." No page text gives a
+testing status (section 5.3.1). The Advanced dialog's heading, which
+read "For the release notes' advice and a tester's use.", now reads
+"For the release notes' advice. A value left as it is is not written;
+one you change is written machine-wide." Every new text is a row of
+`instPageTexts` with its control's width and height, so the window's
+`/selftest` holds it to its control as the others are.
+
+*The self-test and the host vectors.* The window's `/selftest` renders
+the new page's template with its fixed texts (`st_page`), the approval
+row in its three states (1, 0, neither), and the page hidden and shown
+by the Thunderbolt choice. `test_inst.c`: `inst_tbnet_decide` case by
+case (the gate off: nothing shown or written whatever is asked; on and
+not carried: greyed, nothing written; on and carried: the first state
+from the value in force and from each switch, a tick and an untick
+against each value in force, the targets with and without a host
+interface and with and without a machine-wide value, and record 35's
+sequence: staged-only `/tbnet`, then a host interface present,
+`/notbnet`, `/tbnet` again ends with 1 in both places); the
+Components sentence's cut; the new texts' presence.
+
+*The legs.* As task 45.54's: the window on 98 SE, XP and 7 x86 with
+the emulated ASM4242 and a first install: the page shown after
+Components with the Thunderbolt box ticked and skipped with it
+unticked, Next and Back; the three moved boxes' states; the approval
+choice preselected 1, set to 0, the value written machine-wide; the
+Settings dialog's Thunderbolt tab without it; no networking box.
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -1805,7 +2007,8 @@ decision the rest the console sets only with `/set`), each with its
 default, its range or list, the systems it applies to, and its warning
 (section 11's table carries all three), every one preselected with the
 value in force and written only when changed. The dialog says at its top
-that these are for the release notes' advice and a tester's use. The
+that these are for the release notes' advice (draft 53: "and a
+tester's use" dropped, no installer text naming testing). The
 fourteen Linux quirk values (record 20), the log values and the poll
 periods stay out, as record 23 section 8.1 keeps them out: a value nobody
 should set from an installer is not offered by one. (Draft 52, task
@@ -2109,7 +2312,8 @@ a present device, or the box is ticked with none present (the staged-only
 case of record 23 section 8.5, where the page says the values take effect
 when the controller appears and are written to the machine-wide key, which
 needs no device). The rows: `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject`
-as 8.1 asks them, with 8.4's new-install note for `XhciCmMode` and
+as 8.1 asks them (since draft 53 `XhciCmApprove` is on the Thunderbolt
+and USB4 page instead, section 5.3.5, and the tab keeps the other two), with 8.4's new-install note for `XhciCmMode` and
 `XhciCmApprove` (the connection manager runs with the INF's defaults until
 the restart; disconnect the dock until then when the answer is 0).
 "Advanced...": `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`,

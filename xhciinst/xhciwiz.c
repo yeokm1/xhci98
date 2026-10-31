@@ -108,7 +108,9 @@
 #define P_OTHER             10  /* the free set's page, after P_COMP (record
                                    26 sections 6.7.4 and 6.7.12)          */
 #define P_OTHERNF           11  /* the non-free set's page, after it       */
-#define P_COUNT             12
+#define P_TBT               12  /* the Thunderbolt and USB4 page, after
+                                   P_COMP (record 26 section 5.3.5)       */
+#define P_COUNT             13
 
 #define WIZ_PATH            520
 #define WIZ_ROWS            12
@@ -179,6 +181,10 @@ static int vsdChoice;
  * the table's default or the user's untick, kept while their parents are
  * unticked; the "Replace the stored build" box. */
 static int s98Own = 1;
+/* The Components page's warnings shown at its Next (inst_eng_comp_warn's
+ * bits): the Thunderbolt and USB4 page shows only new ones (record 26
+ * section 5.3.5). */
+static INST_U32 compWarned;
 static int vsdOwn = 1;
 static int restageSys;          /* Vista and later: the row is on the page */
 /* The box of XHCIPFW.VXD (98 SE, ME) or XHCIPFW.SYS (2000, XP and the
@@ -956,70 +962,43 @@ static void replan(void)
 
 /* ---- the Components page (record 26 section 5.3) ------------------------- */
 
-/* XHCIPFW's box, under the Thunderbolt one and above Stor98's (record 32
- * section 11.3, the owner, 2026-10-27): open only while that is ticked,
- * unticked and greyed without it. */
-static void comp_pfw_sync(HWND dlg)
+/* ---- the Thunderbolt and USB4 page's boxes (record 26 section 5.3.5) --- */
+
+/* XHCIPFW, Stor98 and S98VSD on the page that exists only while the
+ * Thunderbolt choice is on (task 45.60): each open by its system and the
+ * package alone. S98VSD.VXD, Stor98's child (record 30 section 7.1): open
+ * only while Stor98 is ticked, on 98 SE and ME; unticked and greyed
+ * otherwise. */
+static void tbt_sync(HWND dlg)
 {
-    int open = pfwShown && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
-
-    if (!open) {
-        CheckDlgButton(dlg, IDC_C_PFW, BST_UNCHECKED);
-    }
-    EnableWindow(GetDlgItem(dlg, IDC_C_PFW), open);
-}
-
-/* Its own state with its parent ticked, unticked without it. */
-static void comp_pfw_follow(HWND dlg)
-{
-    CheckDlgButton(dlg, IDC_C_PFW, IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                   BST_CHECKED && pfwOwn ? BST_CHECKED : BST_UNCHECKED);
-    comp_pfw_sync(dlg);
-}
-
-/* Stor98's box, under the Thunderbolt one: open only while that is
- * ticked; unticking it unticks Stor98 (owner, 2026-10-19). */
-static void comp_s98_sync(HWND dlg)
-{
-    int open = inst_s98_box_open(s98Have, tbHave,
-                                 IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                                 BST_CHECKED);
-
+    int open = inst_s98_box_open(s98Have, tbHave, 1);
     int sh;
     int vopen;
 
+    if (!pfwShown) {
+        CheckDlgButton(dlg, IDC_C_PFW, BST_UNCHECKED);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_C_PFW), pfwShown);
     if (!open) {
         CheckDlgButton(dlg, IDC_C_S98, BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_S98), open);
     EnableWindow(GetDlgItem(dlg, IDC_C_S98_T), open);
-    /* S98VSD.VXD, Stor98's child (record 30 section 7.1): open only while
-     * Stor98 is ticked, on 98 SE and ME; unticked and greyed otherwise. */
     inst_vsd_box(vsd9x, vsdShown, IsDlgButtonChecked(dlg, IDC_C_S98) ==
                  BST_CHECKED, 0, &sh, &vopen);
     if (!vopen) {
         CheckDlgButton(dlg, IDC_C_VSD, BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_VSD), vopen);
-    comp_pfw_sync(dlg);
 }
 
 /* Ticked whenever Stor98 is ticked (owner, 2026-10-22), unless the user
  * unticked it while Stor98 was (record 26 section 5.0). */
-static void comp_vsd_follow(HWND dlg)
+static void tbt_vsd_follow(HWND dlg)
 {
     CheckDlgButton(dlg, IDC_C_VSD, IsDlgButtonChecked(dlg, IDC_C_S98) ==
                    BST_CHECKED && vsdOwn ? BST_CHECKED : BST_UNCHECKED);
-    comp_s98_sync(dlg);
-}
-
-/* Stor98 with its parent: its own state while the Thunderbolt box is
- * ticked, unticked without it (record 26 section 5.0, draft 35). */
-static void comp_s98_follow(HWND dlg)
-{
-    CheckDlgButton(dlg, IDC_C_S98, IsDlgButtonChecked(dlg, IDC_C_TB) ==
-                   BST_CHECKED && s98Own ? BST_CHECKED : BST_UNCHECKED);
-    comp_vsd_follow(dlg);
+    tbt_sync(dlg);
 }
 
 static void comp_layout(HWND dlg);
@@ -1050,14 +1029,9 @@ static void comp_usb_state(HWND dlg)
          * Intel's Thunderbolt driver, where the box stays the user's
          * (record 23 section 8.5.1). */
         CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
-        CheckDlgButton(dlg, IDC_C_PFW, pfwOwn ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(dlg, IDC_C_S98, s98Own ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(dlg, IDC_C_VSD, s98Own && vsdOwn ? BST_CHECKED :
-                                                         BST_UNCHECKED);
     }
     EnableWindow(GetDlgItem(dlg, IDC_C_TB), (usb || inst_eng_tb_intel()) &&
                                             tbHave);
-    comp_s98_sync(dlg);
     /* Its sentence's words changed with the box: the page stacked
      * again (record 26 section 5.3.4). */
     comp_layout(dlg);
@@ -1138,10 +1112,57 @@ static int comp_stor_h(HWND dlg)
  * box and its sentence (0 for none). */
 static const int compRows[][2] = {
     { IDC_C_DRIVERS, IDC_C_DRIVERS_T }, { IDC_C_UAS, IDC_C_UAS_T },
-    { IDC_C_STOR, IDC_C_STOR_T }, { IDC_C_TB, IDC_C_TB_T }, { IDC_C_PFW, 0 },
-    { IDC_C_S98, IDC_C_S98_T }, { IDC_C_VSD, 0 }, { IDC_C_TRAY, 0 },
+    { IDC_C_STOR, IDC_C_STOR_T }, { IDC_C_TB, IDC_C_TB_T }, { IDC_C_TRAY, 0 },
     { IDC_C_FAST, 0 }, { IDC_C_RESTAGE, 0 }
 };
+
+/* The Thunderbolt and USB4 page's rows (record 26 section 5.3.5), stacked
+ * by the same routine. */
+static const int tbtRows[][2] = {
+    { IDC_C_PFW, 0 }, { IDC_C_S98, IDC_C_S98_T }, { IDC_C_VSD, 0 },
+    { IDC_T_APPR_H, 0 }, { IDC_T_APPR1, IDC_T_APPR1_T },
+    { IDC_T_APPR0, IDC_T_APPR0_T }, { IDC_T_APPR_NOTE, 0 }, { IDC_T_NET, 0 }
+};
+
+/* The approval's row in rows[] (XhciCmApprove, record 26 section 5.3.5),
+ * -1 when the plan has none. */
+static int tbt_approve_row(void)
+{
+    int v = inst_value_find("XhciCmApprove");
+    int i;
+
+    for (i = 0; v >= 0 && i < rowCount; i++) {
+        if (rows[i].Value == v) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* 1 when the Thunderbolt and USB4 page shows control id. */
+static int tbt_shown(int id)
+{
+    switch (id) {
+    case IDC_C_PFW:
+        return pfwShown;
+    case IDC_C_S98:
+    case IDC_C_S98_T:
+        return s98Have;
+    case IDC_C_VSD:
+        return s98Have && (vsdShown || !vsd9x);
+    case IDC_T_APPR_H:
+    case IDC_T_APPR1:
+    case IDC_T_APPR1_T:
+    case IDC_T_APPR0:
+    case IDC_T_APPR0_T:
+    case IDC_T_APPR_NOTE:
+        return tbt_approve_row() >= 0;
+    case IDC_T_NET:
+        return INST_TBNET_WIRED;
+    default:
+        return 1;
+    }
+}
 static int compGap;             /* the gap of the last layout, dialog units */
 
 /* Dialog units to pixels, vertically. */
@@ -1208,21 +1229,22 @@ static int comp_text_h(HWND dlg, int id)
     return h < one ? one : h;
 }
 
-/* The rows stacked from the page's top with gap dialog units between
- * them; placed when place. The pixel row under the last. */
-static int comp_stack(HWND dlg, int gap, int place)
+/* Rows stacked from y0 with gap dialog units between them; placed when
+ * place. The pixel row under the last. */
+static int rows_stack(HWND dlg, const int (*tab)[2], size_t n,
+                      int (*shown)(int), int y0, int gap, int place)
 {
-    int y = comp_du(dlg, 2);
+    int y = y0;
     int under = comp_du(dlg, 1);
     int g = comp_du(dlg, gap);
     int first = 1;
     size_t i;
 
-    for (i = 0; i < sizeof(compRows) / sizeof(compRows[0]); i++) {
+    for (i = 0; i < n; i++) {
         RECT r;
         POINT pt;
-        HWND box = GetDlgItem(dlg, compRows[i][0]);
-        if (!comp_shown(compRows[i][0])) {
+        HWND box = GetDlgItem(dlg, tab[i][0]);
+        if (!shown(tab[i][0])) {
             continue;
         }
         if (!first) {
@@ -1237,9 +1259,9 @@ static int comp_stack(HWND dlg, int gap, int place)
             SetWindowPos(box, NULL, pt.x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
         }
         y += r.bottom - r.top;
-        if (compRows[i][1] != 0 && comp_shown(compRows[i][1])) {
-            HWND t = GetDlgItem(dlg, compRows[i][1]);
-            int th = comp_text_h(dlg, compRows[i][1]);
+        if (tab[i][1] != 0 && shown(tab[i][1])) {
+            HWND t = GetDlgItem(dlg, tab[i][1]);
+            int th = comp_text_h(dlg, tab[i][1]);
             y += under;
             GetWindowRect(t, &r);
             pt.x = r.left;
@@ -1253,6 +1275,13 @@ static int comp_stack(HWND dlg, int gap, int place)
         }
     }
     return y;
+}
+
+/* The Components page's rows from its top (record 26 section 5.3.4). */
+static int comp_stack(HWND dlg, int gap, int place)
+{
+    return rows_stack(dlg, compRows, sizeof(compRows) / sizeof(compRows[0]),
+                      comp_shown, comp_du(dlg, 2), gap, place);
 }
 
 /* Record 26 section 5.3.4 (task 45.28): the page evenly spaced - each
@@ -1346,21 +1375,9 @@ static void comp_fill(HWND dlg)
     }
     CheckDlgButton(dlg, IDC_C_TB, tbChoice ? BST_CHECKED : BST_UNCHECKED);
     EnableWindow(GetDlgItem(dlg, IDC_C_TB_T), tbHave);
-    /* Named by its file, per system (the owner, 2026-10-27). */
-    SetDlgItemTextA(dlg, IDC_C_PFW, inst_page_text(pfwNt ? INST_PT_PFW_SYS :
-                                                   INST_PT_PFW));
-    CheckDlgButton(dlg, IDC_C_PFW, pfwChoice ? BST_CHECKED : BST_UNCHECKED);
+    /* XHCIPFW, Stor98 and S98VSD are the Thunderbolt and USB4 page's since
+     * task 45.60 (record 26 section 5.3.5): tbt_fill. */
     comp_usb_state(dlg);
-    SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
-    SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
-    CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
-    SetDlgItemTextA(dlg, IDC_C_VSD, inst_page_text(vsd9x ? INST_PT_VSD :
-                                                   INST_PT_VSD_OTHER));
-    CheckDlgButton(dlg, IDC_C_VSD, vsdChoice ? BST_CHECKED : BST_UNCHECKED);
-    /* Shown on 98 SE and ME where the package carries the file; greyed on
-     * every other system whatever the package carries (record 30 section
-     * 7.1): comp_shown. */
-    comp_s98_sync(dlg);
     SetDlgItemTextA(dlg, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(dlg, IDC_C_FAST, inst_page_text(INST_PT_FAST));
     CheckDlgButton(dlg, IDC_C_TRAY, trayChoice ? BST_CHECKED : BST_UNCHECKED);
@@ -1484,13 +1501,15 @@ static void comp_take(HWND dlg)
     if (usb || inst_eng_tb_intel()) {
         tbOwn = tb;
     }
-    s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
-          IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    /* XHCIPFW, Stor98 and S98VSD from the window's state, not from
+     * controls (record 26 section 5.3.5): each its remembered state with
+     * the Thunderbolt choice on, 0 with it off. */
+    s98 = inst_s98_box_open(s98Have, tbHave, tb) && s98Own;
     {
         int sh;
         int vopen;
         inst_vsd_box(vsd9x, vsdShown, s98, 0, &sh, &vopen);
-        vsd = vopen && IsDlgButtonChecked(dlg, IDC_C_VSD) == BST_CHECKED;
+        vsd = vopen && vsdOwn;
     }
     uas = inst_uas_decide(usb, IsDlgButtonChecked(dlg, IDC_C_UAS) !=
                                BST_CHECKED);
@@ -1500,8 +1519,7 @@ static void comp_take(HWND dlg)
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
     rs = restageHere && IsDlgButtonChecked(dlg, IDC_C_RESTAGE) == BST_CHECKED;
-    pfw = pfwShown && tb &&
-          IsDlgButtonChecked(dlg, IDC_C_PFW) == BST_CHECKED;
+    pfw = pfwShown && tb && pfwOwn;
     if (pfw != pfwChoice) {
         pfwChoice = pfw;
         inst_eng_pfw_choose(pfw);
@@ -1549,8 +1567,7 @@ static int comp_leave(HWND dlg)
                      : usbChoice;
     tb = tbHave && ((!usb && !inst_eng_tb_intel()) ||
                     IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
-    s98 = inst_s98_box_open(s98Have, tbHave, tb) &&
-          IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    s98 = inst_s98_box_open(s98Have, tbHave, tb) && s98Own;
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
     why = inst_eng_comp_refusal(usb, tb);
@@ -1561,15 +1578,19 @@ static int comp_leave(HWND dlg)
                     MB_ICONSTOP);
         return 0;
     }
-    if (inst_eng_comp_warn(usb, stor, s98, tb, checked, warn,
-                           sizeof(warn)) != 0) {
-        _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays "
-                  "on this page to change the choice.", warn);
-        box[sizeof(box) - 1] = '\0';
-        if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
-                        MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
-            return 0;
+    {
+        INST_U32 w = inst_eng_comp_warn(usb, stor, s98, tb, checked, warn,
+                                        sizeof(warn));
+        if (w != 0) {
+            _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel "
+                      "stays on this page to change the choice.", warn);
+            box[sizeof(box) - 1] = '\0';
+            if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                            MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+                return 0;
+            }
         }
+        compWarned = w;
     }
     comp_take(dlg);
     if (planCode >= 0) {
@@ -2427,6 +2448,9 @@ static int rows_for(int page, int advanced, int *idx, int cap)
     int inf = page == P_USB ? INST_INF_XHCI : INST_INF_CM;
 
     for (i = 0; i < rowCount && n < cap; i++) {
+        if (page == P_TBS && i == tbt_approve_row()) {
+            continue;   /* the Thunderbolt and USB4 page's (5.3.5) */
+        }
         if (instValues[rows[i].Value].Inf == inf &&
             (advanced ? !rows[i].Asked : rows[i].Asked)) {
             idx[n++] = i;
@@ -2563,6 +2587,186 @@ static INST_U32 row_start(const INST_ROW *r, int *mixed)
         return 0;
     }
     return r->InForce;
+}
+
+/* ---- the Thunderbolt and USB4 page (record 26 section 5.3.5) -------------- */
+
+static int choice_writes(const INST_ROW *r, int mixedPicked, INST_U32 v);
+
+/* The rows stacked under the heading, the largest gap the page holds. */
+static void tbt_layout(HWND dlg)
+{
+    static const int gaps[] = { 4, 3, 2, 1 };
+    size_t n = sizeof(tbtRows) / sizeof(tbtRows[0]);
+    RECT cli;
+    RECT h;
+    POINT pt;
+    size_t i;
+    int top;
+    int gap = 1;
+
+    GetClientRect(dlg, &cli);
+    GetWindowRect(GetDlgItem(dlg, IDC_T_HEAD), &h);
+    pt.x = h.left;
+    pt.y = h.bottom;
+    ScreenToClient(dlg, &pt);
+    top = pt.y + comp_du(dlg, 4);
+    for (i = 0; i < sizeof(gaps) / sizeof(gaps[0]); i++) {
+        if (rows_stack(dlg, tbtRows, n, tbt_shown, top, gaps[i], 0) <=
+            cli.bottom - comp_du(dlg, 2)) {
+            gap = gaps[i];
+            break;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        ShowWindow(GetDlgItem(dlg, tbtRows[i][0]),
+                   tbt_shown(tbtRows[i][0]) ? SW_SHOW : SW_HIDE);
+        if (tbtRows[i][1] != 0) {
+            ShowWindow(GetDlgItem(dlg, tbtRows[i][1]),
+                       tbt_shown(tbtRows[i][1]) ? SW_SHOW : SW_HIDE);
+        }
+    }
+    (void)rows_stack(dlg, tbtRows, n, tbt_shown, top, gap, 1);
+}
+
+/* The approval's buttons from the row: the value it starts with, neither
+ * where the controllers differ; greyed where the row is. */
+static void tbt_approve_fill(HWND dlg)
+{
+    int ri = tbt_approve_row();
+    const INST_ROW *r;
+    INST_U32 v;
+    int mixed;
+
+    CheckDlgButton(dlg, IDC_T_APPR1, BST_UNCHECKED);
+    CheckDlgButton(dlg, IDC_T_APPR0, BST_UNCHECKED);
+    SetDlgItemTextA(dlg, IDC_T_APPR_NOTE, "");
+    if (ri < 0) {
+        return;
+    }
+    r = &rows[ri];
+    v = row_start(r, &mixed);
+    if (!mixed) {
+        CheckDlgButton(dlg, v ? IDC_T_APPR1 : IDC_T_APPR0, BST_CHECKED);
+    }
+    /* Both notes where both hold: a controller of another value and a
+     * new install (its default until the restart), as the tab's row said
+     * both. */
+    {
+        char note[400];
+        note[0] = '\0';
+        if (mixed) {
+            inst_copy(note, inst_page_text(INST_PT_APPR_MIXED), sizeof(note));
+        }
+        if (r->CmNew) {
+            if (note[0] != '\0') {
+                strncat(note, " ", sizeof(note) - strlen(note) - 1);
+            }
+            strncat(note, inst_page_text(INST_PT_APPR_NEW),
+                    sizeof(note) - strlen(note) - 1);
+        }
+        SetDlgItemTextA(dlg, IDC_T_APPR_NOTE, note);
+    }
+    EnableWindow(GetDlgItem(dlg, IDC_T_APPR1), !r->Greyed);
+    EnableWindow(GetDlgItem(dlg, IDC_T_APPR0), !r->Greyed);
+}
+
+static void tbt_fill(HWND dlg)
+{
+    SetDlgItemTextA(dlg, IDC_T_HEAD, inst_page_text(INST_PT_TBT_HEAD));
+    /* Named by its file, per system (the owner, 2026-10-27). */
+    SetDlgItemTextA(dlg, IDC_C_PFW, inst_page_text(pfwNt ? INST_PT_PFW_SYS :
+                                                   INST_PT_PFW));
+    CheckDlgButton(dlg, IDC_C_PFW, pfwChoice ? BST_CHECKED : BST_UNCHECKED);
+    SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
+    SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
+    CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
+    /* Shown on 98 SE and ME where the package carries the file; greyed on
+     * every other system whatever the package carries (record 30 section
+     * 7.1): tbt_shown. */
+    SetDlgItemTextA(dlg, IDC_C_VSD, inst_page_text(vsd9x ? INST_PT_VSD :
+                                                   INST_PT_VSD_OTHER));
+    CheckDlgButton(dlg, IDC_C_VSD, vsdChoice ? BST_CHECKED : BST_UNCHECKED);
+    tbt_sync(dlg);
+    SetDlgItemTextA(dlg, IDC_T_APPR_H, inst_page_text(INST_PT_APPR_HEAD));
+    SetDlgItemTextA(dlg, IDC_T_APPR1, inst_page_text(INST_PT_APPR_1));
+    SetDlgItemTextA(dlg, IDC_T_APPR1_T, inst_page_text(INST_PT_APPR_1_T));
+    SetDlgItemTextA(dlg, IDC_T_APPR0, inst_page_text(INST_PT_APPR_0));
+    SetDlgItemTextA(dlg, IDC_T_APPR0_T, inst_page_text(INST_PT_APPR_0_T));
+    tbt_approve_fill(dlg);
+    /* Task 45.59's networking box: not shown until it is wired
+     * (INST_TBNET_WIRED, record 26 section 5.3.5). */
+    SetDlgItemTextA(dlg, IDC_T_NET, inst_page_text(INST_PT_TBNET));
+    CheckDlgButton(dlg, IDC_T_NET, BST_UNCHECKED);
+    tbt_layout(dlg);
+}
+
+/* Next (forward) or Back on the page: its choices taken into the window's
+ * state, the plan made again when they changed; on Next a warning the
+ * change brings that the Components page did not show is shown, Cancel
+ * staying here. 1 go on. */
+static int tbt_leave(HWND dlg, int forward)
+{
+    int ri = tbt_approve_row();
+    int open = inst_s98_box_open(s98Have, tbHave, 1);
+    int pfw = pfwShown && IsDlgButtonChecked(dlg, IDC_C_PFW) == BST_CHECKED;
+    int s98 = open && IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+    int vsd;
+    int sh;
+    int vopen;
+
+    inst_vsd_box(vsd9x, vsdShown, s98, 0, &sh, &vopen);
+    vsd = vopen && IsDlgButtonChecked(dlg, IDC_C_VSD) == BST_CHECKED;
+    if (pfwShown) {
+        pfwOwn = pfw;
+    }
+    if (open) {
+        s98Own = s98;
+    }
+    if (vopen) {
+        vsdOwn = vsd;
+    }
+    if (ri >= 0 && !rows[ri].Greyed) {
+        /* Taken as the tab's row was (choice_writes): a value left as
+         * the one in force is not a choice, so nothing is written for
+         * it. */
+        int v = rows[ri].Value;
+        int on = IsDlgButtonChecked(dlg, IDC_T_APPR1) == BST_CHECKED;
+        int off = IsDlgButtonChecked(dlg, IDC_T_APPR0) == BST_CHECKED;
+        if ((on || off) && choice_writes(&rows[ri], 0, on ? 1UL : 0UL)) {
+            choiceSet[v] = 1;
+            choiceVal[v] = on ? 1UL : 0UL;
+        } else {
+            choiceSet[v] = 0;
+        }
+    }
+    if (forward) {
+        char warn[2048];
+        char box[2200];
+        INST_U32 w = inst_eng_comp_warn(usbChoice, storShown && storChoice,
+                                        s98, tbChoice, dirChoice, warn,
+                                        sizeof(warn));
+        if ((w & ~compWarned) != 0) {
+            _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel "
+                      "stays on this page to change the choice.", warn);
+            box[sizeof(box) - 1] = '\0';
+            if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
+                            MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
+                return 0;
+            }
+        }
+        compWarned |= w;
+    }
+    if (pfw != pfwChoice) {
+        pfwChoice = pfw;
+        inst_eng_pfw_choose(pfw);
+    }
+    if (s98 != s98Choice || vsd != vsdChoice) {
+        s98Choice = s98;
+        vsdChoice = vsd;
+        replan();
+    }
+    return 1;
 }
 
 /* A combo box filled with a row's choices: the mixed state its own item
@@ -4432,6 +4636,10 @@ static int page_skipped(int page)
     int idx[WIZ_ROWS];
 
     switch (page) {
+    case P_TBT:
+        /* Record 26 section 5.3.5: on the effective Thunderbolt choice
+         * alone, Next and Back alike. */
+        return !tbChoice;
     case P_OTHER:
     case P_OTHERNF:
         /* Shown when the download carries the set's folder (record 26
@@ -4537,27 +4745,18 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             settings_open(dlg);
             return TRUE;
         case IDC_C_TB:
-            if (HIWORD(wp) == BN_CLICKED) {
-                /* Stor98 follows its parent (owner, 2026-10-19): its own
-                 * state with it, unticked without it (record 26 section
-                 * 5.0, draft 35). */
-                comp_s98_follow(dlg);
-                comp_pfw_follow(dlg);
-            }
+            /* The boxes it carried are on the Thunderbolt and USB4 page
+             * since task 45.60; the choice is taken by comp_take. */
             return TRUE;
         case IDC_C_PFW:
-            if (HIWORD(wp) == BN_CLICKED &&
-                IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED) {
+            if (HIWORD(wp) == BN_CLICKED) {
                 pfwOwn = IsDlgButtonChecked(dlg, IDC_C_PFW) == BST_CHECKED;
             }
             return TRUE;
         case IDC_C_S98:
             if (HIWORD(wp) == BN_CLICKED) {
-                if (IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED) {
-                    s98Own = IsDlgButtonChecked(dlg, IDC_C_S98) ==
-                             BST_CHECKED;
-                }
-                comp_vsd_follow(dlg);
+                s98Own = IsDlgButtonChecked(dlg, IDC_C_S98) == BST_CHECKED;
+                tbt_vsd_follow(dlg);
             }
             return TRUE;
         case IDC_C_VSD:
@@ -4639,6 +4838,10 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 comp_fill(dlg);
                 buttons(PSWIZB_BACK | PSWIZB_NEXT);
                 break;
+            case P_TBT:
+                tbt_fill(dlg);
+                buttons(PSWIZB_BACK | PSWIZB_NEXT);
+                break;
             case P_OTHER:
             case P_OTHERNF:
                 othPageSet = page == P_OTHER ? INST_SET_FREE :
@@ -4708,6 +4911,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 inst_eng_s98_file_ok(ok);
             }
             if ((page == P_COMP && !comp_leave(dlg)) ||
+                (page == P_TBT && !tbt_leave(dlg, 1)) ||
                 ((page == P_OTHER || page == P_OTHERNF) && !oth_leave(dlg)) ||
                 ((page == P_USB || page == P_TBS) &&
                  !settings_leave(dlg, page))) {
@@ -4726,6 +4930,9 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         case PSN_WIZBACK:
             if (page == P_S98) {
                 s98_page_leave(dlg);
+            }
+            if (page == P_TBT) {
+                (void)tbt_leave(dlg, 0);
             }
             if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
                 SET_RESULT(dlg, -1);
@@ -4874,20 +5081,20 @@ static int run_wizard(void)
     /* Record 26 section 5.0: Welcome, Components, Summary, Progress,
      * (Steps), Finish; the settings in the Settings dialog. */
     static const int order[] = {
-        P_WELCOME, P_COMP, P_OTHER, P_OTHERNF, P_SUMMARY, P_PROGRESS,
-        P_STEPS, P_FINISH
+        P_WELCOME, P_COMP, P_TBT, P_OTHER, P_OTHERNF, P_SUMMARY,
+        P_PROGRESS, P_STEPS, P_FINISH
     };
     static const int uorder[] = { P_WELCOME, P_SUMMARY, P_PROGRESS, P_FINISH };
     static const int tmpl[P_COUNT] = {
         IDD_WELCOME, IDD_FOUND, IDD_COMPONENTS, IDD_SETTINGS, IDD_SETTINGS,
         IDD_SETTINGS, IDD_SUMMARY, IDD_PROGRESS, IDD_STEPS, IDD_FINISH,
-        IDD_OTHER, IDD_OTHER
+        IDD_OTHER, IDD_OTHER, IDD_TBT
     };
     static const char *const title[P_COUNT] = {
         "Welcome", "What was found", "Components", "USB settings",
         "Thunderbolt settings", "Stor98 settings", "Summary", "Progress",
         "Steps left for you", "Finish", "Free USB drivers",
-        "Non-free USB drivers"
+        "Non-free USB drivers", "Thunderbolt and USB4"
     };
     PROPSHEETPAGEA pg[P_COUNT];
     HPROPSHEETPAGE hp[P_COUNT];
@@ -5225,10 +5432,6 @@ static void st_comp_words(HWND d, const char *note)
             SetWindowTextA(c, text);
         }
     }
-    SetDlgItemTextA(d, IDC_C_PFW, inst_page_text(INST_PT_PFW_SYS));
-    SetDlgItemTextA(d, IDC_C_S98, inst_page_text(INST_PT_S98));
-    SetDlgItemTextA(d, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
-    SetDlgItemTextA(d, IDC_C_VSD, inst_page_text(INST_PT_VSD_OTHER));
     SetDlgItemTextA(d, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(d, IDC_C_FAST, inst_page_text(INST_PT_FAST));
 }
@@ -5368,15 +5571,6 @@ static void st_comp_variant(HWND parent, const char *what, int stor, int pfw,
         printf("components (%s): the folder's line not beside the buttons\n",
                what);
         ok = 0;
-    }
-    if (pfw) {
-        RECT p = st_rect(d, GetDlgItem(d, IDC_C_PFW));
-        RECT t = st_rect(d, GetDlgItem(d, IDC_C_TB));
-        if (p.left <= t.left || p.right > page.right) {
-            printf("components (%s): XHCIPFW's box at %ld, the Thunderbolt "
-                   "box's at %ld\n", what, (long)p.left, (long)t.left);
-            ok = 0;
-        }
     }
     if (stor) {
         HWND box = GetDlgItem(d, IDC_C_STOR_T);
@@ -6006,6 +6200,90 @@ static void st_other_layout(HWND parent)
     DestroyWindow(d);
 }
 
+/* Record 26 section 5.3.5: the page skipped on the Thunderbolt choice
+ * alone; the approval's buttons from the row in their three states (1, 0,
+ * neither where the controllers differ); the networking box hidden while
+ * it is not wired; the rows above the page's foot. */
+static void st_tbt(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_TBT), parent,
+                                st_proc, 0);
+    int savedTb = tbChoice;
+    int savedCount = rowCount;
+    INST_ROW savedRow = rows[0];
+    int v = inst_value_find("XhciCmApprove");
+    RECT cli;
+    RECT last;
+    int ok;
+
+    st(d != NULL, "the Thunderbolt and USB4 page made");
+    tbChoice = 0;
+    st(page_skipped(P_TBT), "the page skipped with the Thunderbolt choice "
+       "off");
+    tbChoice = 1;
+    st(!page_skipped(P_TBT), "the page shown with it on");
+    tbChoice = savedTb;
+    if (d == NULL || v < 0) {
+        st(v >= 0, "XhciCmApprove in the table");
+        if (d != NULL) {
+            DestroyWindow(d);
+        }
+        return;
+    }
+    memset(&rows[0], 0, sizeof(rows[0]));
+    rows[0].Value = v;
+    rows[0].Def = 1;
+    rows[0].Same = 1;
+    rows[0].NowCount = 1;
+    rows[0].InForce = 1;
+    rowCount = 1;
+    choiceSet[v] = 0;
+    st(tbt_approve_row() == 0, "the approval's row found");
+    st(rows_for(P_TBS, 0, &ok, 1) == 0, "the approval not on the Settings "
+       "dialog's Thunderbolt tab");
+    tbt_fill(d);
+    st(IsDlgButtonChecked(d, IDC_T_APPR1) == BST_CHECKED &&
+       IsDlgButtonChecked(d, IDC_T_APPR0) != BST_CHECKED,
+       "the approval preselected 1 from the value in force");
+    /* The keyboard reaches both: one group, the arrow keys moving between
+     * the two buttons. */
+    st(GetNextDlgGroupItem(d, GetDlgItem(d, IDC_T_APPR1), FALSE) ==
+       GetDlgItem(d, IDC_T_APPR0) &&
+       GetNextDlgGroupItem(d, GetDlgItem(d, IDC_T_APPR0), FALSE) ==
+       GetDlgItem(d, IDC_T_APPR1), "the two approval buttons one group");
+    rows[0].InForce = 0;
+    tbt_fill(d);
+    st(IsDlgButtonChecked(d, IDC_T_APPR0) == BST_CHECKED &&
+       IsDlgButtonChecked(d, IDC_T_APPR1) != BST_CHECKED,
+       "the approval preselected 0 from the value in force");
+    rows[0].Same = 0;
+    rows[0].MwState = 0;
+    tbt_fill(d);
+    st(IsDlgButtonChecked(d, IDC_T_APPR0) != BST_CHECKED &&
+       IsDlgButtonChecked(d, IDC_T_APPR1) != BST_CHECKED,
+       "neither selected where the controllers differ");
+    rows[0].CmNew = 1;
+    tbt_fill(d);
+    {
+        char note[400];
+        GetDlgItemTextA(d, IDC_T_APPR_NOTE, note, sizeof(note));
+        st(strstr(note, "different values") != NULL &&
+           strstr(note, "new install") != NULL &&
+           fits(GetDlgItem(d, IDC_T_APPR_NOTE)),
+           "the mixed and the new-install notes both said, whole");
+    }
+    st((GetWindowLongA(GetDlgItem(d, IDC_T_NET), GWL_STYLE) & WS_VISIBLE) ==
+       (INST_TBNET_WIRED ? WS_VISIBLE : 0), "the networking box shown only "
+       "when wired");
+    GetClientRect(d, &cli);
+    last = st_rect(d, GetDlgItem(d, IDC_T_APPR_NOTE));
+    st(last.bottom <= cli.bottom, "the page's rows above its foot");
+    choiceSet[v] = 0;
+    rows[0] = savedRow;
+    rowCount = savedCount;
+    DestroyWindow(d);
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -6016,15 +6294,27 @@ static int selftest(void)
     static const int fIds[] = { IDC_C_DIR_L, IDC_C_DIR_T };
     static const int fTexts[] = { INST_PT_DIR, INST_PT_DIR_9X };
     static const int cIds[] = {
-        IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_S98,
-        IDC_C_S98_T, IDC_C_TRAY, IDC_C_FAST, IDC_C_UAS, IDC_C_UAS_T,
-        IDC_C_STOR, IDC_C_VSD
+        IDC_C_DRIVERS, IDC_C_DRIVERS_T, IDC_C_TB, IDC_C_TB_T, IDC_C_TRAY,
+        IDC_C_FAST, IDC_C_UAS, IDC_C_UAS_T, IDC_C_STOR
     };
     static const int cTexts[] = {
         INST_PT_DRIVERS, INST_PT_DRIVERS_T, INST_PT_TB, INST_PT_TB_T,
-        INST_PT_S98, INST_PT_S98_T, INST_PT_TRAY, INST_PT_FAST, INST_PT_UAS,
-        INST_PT_UAS_T, INST_PT_STOR, INST_PT_VSD_OTHER
+        INST_PT_TRAY, INST_PT_FAST, INST_PT_UAS, INST_PT_UAS_T, INST_PT_STOR
     };
+    /* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4
+     * page. */
+    static const int bIds[] = {
+        IDC_T_HEAD, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_T_APPR_H,
+        IDC_T_APPR1, IDC_T_APPR1_T, IDC_T_APPR0, IDC_T_APPR0_T,
+        IDC_T_APPR_NOTE, IDC_T_APPR_NOTE, IDC_T_NET
+    };
+    static const int bTexts[] = {
+        INST_PT_TBT_HEAD, INST_PT_S98, INST_PT_S98_T, INST_PT_VSD_OTHER,
+        INST_PT_APPR_HEAD, INST_PT_APPR_1, INST_PT_APPR_1_T, INST_PT_APPR_0,
+        INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW, INST_PT_TBNET
+    };
+    static const int b2Ids[] = { IDC_C_VSD };
+    static const int b2Texts[] = { INST_PT_VSD };
     static const int s3Ids[] = { IDC_S_HEAD };
     static const int s3Texts[] = { INST_PT_S98SET };
     static const int n2Ids[] = { IDC_F_NOW, IDC_F_LATER };
@@ -6094,7 +6384,12 @@ static int selftest(void)
         st_page(parent, IDD_UWELCOME, uIds, uTexts, 3, "the uninstall's "
                 "welcome");
         st_page(parent, IDD_FOLDER, fIds, fTexts, 2, "the install folder");
-        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 12, "the components");
+        st_page(parent, IDD_COMPONENTS, cIds, cTexts, 9, "the components");
+        st_page(parent, IDD_TBT, bIds, bTexts, 12, "the Thunderbolt and "
+                "USB4 page");
+        st_page(parent, IDD_TBT, b2Ids, b2Texts, 1, "the Thunderbolt and "
+                "USB4 page, 98 SE and ME");
+        st_tbt(parent);
         st_welcome_rows(parent);
         st_comp_layout(parent);
         st_comp_layout_nt(parent);
@@ -6106,8 +6401,8 @@ static int selftest(void)
                 "no controller");
         st_page(parent, IDD_COMPONENTS, c3Ids, c3Texts, 2, "the components, "
                 "the connection manager alone");
-        st_page(parent, IDD_COMPONENTS, c4Ids, c4Texts, 2, "the components, "
-                "XHCIPFW's box on each system");
+        st_page(parent, IDD_TBT, c4Ids, c4Texts, 2, "the Thunderbolt and "
+                "USB4 page, XHCIPFW's box on each system");
         st_page(parent, IDD_WELCOME, w2Ids, w2Texts, 1, "the welcome, the "
                 "connection manager alone");
         st_page(parent, IDD_UWELCOME, u2Ids, u2Texts, 3, "the uninstall's "
