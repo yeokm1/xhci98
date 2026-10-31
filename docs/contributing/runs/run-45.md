@@ -7952,6 +7952,79 @@ Seen on the way, outside this task:
   (`inst_eng_shutdown`); a first install gives the restart words, read
   above. Also in the self-test.
 
+## 45.44 the download by Windows family: the code, the gated builds and the test cut (2026-11-01, partial)
+
+Design record 36 (revision 4, the owner's answers of 2026-10-31) is the
+plan. This section records the code, its checks and what is owed.
+
+### What changed
+
+- **The installer engine** (`9466c571` to `3883a5a3`, reviewed and
+  revised): the source map `instPkgFiles` (`inst_core.c`, record 36
+  section 6.2), `/dir` taking `98-me`, `nt-x86` or `nt-x64` and refusing
+  `release-x86` and `release-x64`, the package check's family filter and
+  its refusal of a folder that is not this layout, `INSTALL.BAT`'s folder.
+- **Stor98's x86 INF made NT-only** (`a3716015`, the owner's Q3): no 9x
+  install section, `stor98.sys` its one file, `Signature="$Windows NT$"`;
+  `check-stor98-inf.ps1` holds it (81 self-test cases; a refusal case that
+  changes nothing now fails the self-test); `test_inst` checks the 9x
+  settings are gone; Stor98's `history.md` 3.4.0.0 entry, its shipped readme
+  and `BUILD.md`.
+- **The cut** (`b9e4ea2e`, `a88ce4bc`, `eca97e97`): `make-package.ps1` stays
+  flat. The cut re-lays each verified flat leg by `package-common.ps1`'s
+  `$script:FamilyLayout` (`ConvertTo-FamilyLayout`), checks the family
+  folders (`Test-FamilyLayout`, `PKG-FAMILY`) and compares every family file
+  by hash with its flat source (`Assert-FamilyFromLegs`) after the re-lay and
+  again before the swap; `-CheckOnly` re-lays nothing. `INTEGRATE.TXT` is
+  written at the root, and the readme names the family folders. The upload
+  set and `-UploadSetOnly` read a family tree through its flat view
+  (`ConvertFrom-FamilyLayout`) and the CM gate's `CM-INX` (`-FamilyDir`),
+  and a tree up to 3.3.0.0 at its flavour directories.
+- **The free set** (`7952372d`, `f8968fa5`; the coordinator, 2026-11-01):
+  usb-wdm-free v0.1.7 (`0f82674`) with the new `print/usbprn` on 98 SE and
+  ME, `INST_WDMFREE_SUMS` `BC2D0659...`, and its installer table row under
+  Other.
+
+### Checks
+
+- Host tests (`test_inst` 7950 checks) and the INF gates' self-tests
+  (`check-stor98-inf.ps1` 81 cases, `check-cm-inf.ps1` 180 mutations with
+  the `CM-INX` family cases) pass.
+- Gated x86 build (`all`) on `f8968fa5`, after the merge of the 3.4.0.0 tip
+  at `a4f07e99`: BUILD + GATES PASSED, the packager self-tests 1801 checks
+  (the family table's round trips and refusals, `PKG-FAMILY`'s cases, the
+  comparison with the legs, `INTEGRATE.TXT` held to the table, the engine's
+  source map held to the table, `-UploadSetOnly` of a family tree).
+  Gated amd64 build (`all`) on `eca97e97`: BUILD + GATES PASSED.
+- A full x86 TEST cut ("45.44 family layout", both driver sets,
+  `-SkipQualtool`) into a scratch releases folder: exit 0. `98-me\` holds
+  `xhci98.inf`, `xhci98.sys`, `xhciuas.inf`, `xhciuas.sys`,
+  `cm\xhcicm.inf`, `cm\xhcicm.sys`, `cm\XHCIPFW.VXD` and in `stor98\` the 9x
+  `stor98.inf` (`$CHICAGO$`), `stor98.mpd`, `S98VSD.VXD` and the three
+  texts; `nt-x86\` the same root pair plus `xhcihlpr.sys` and
+  `txtsetup.oem`, `cm\` with `xhcicmf.inx` and `XHCIPFW.SYS`, and in
+  `stor98\` the NT-only `stor98.inf` and `stor98.sys`; no `nt\`, no
+  `xhcicmf.inf`, no `stor98w9.inf`; `INTEGRATE.TXT` at the root. The three
+  downloads were written, and `-UploadSetOnly` rebuilt all three zips from
+  that family tree byte-identical.
+- The design's own reading of the 98 SE and ME `DevicePath` (record 36
+  section 9): the installed copy stays flat, so the install directory is one
+  entry (`C:\WINDOWS\INF;C:\XHCI98`, 24 characters with the default
+  directory), as in 3.3.0.0; the guest readings are owed with the legs.
+
+### Owed
+
+The legs of record 36 section 10, none run yet: L1 98 SE and L2 ME
+(`SETUP.EXE` with the Thunderbolt box, `DevicePath` read, the 9x
+`stor98.inf` in the install directory, the wizard's deepest path with a
+stand-in INF in `98-me\cm\tbnet\`), L3 2000 SP4 with its F6 option, L4 XP,
+L5 7 x86, L6 XP x64 with its F6 option, L7 10 x64 (signed in the guest
+with a throwaway certificate), L8 an nLite integration into XP SP3, L9 a
+DISM integration into a 7 x64 `boot.wim` and `install.wim`, L10 an update
+over 3.3.0.0's flat package on XP and 98 SE; each read for the registry
+defaults and for no CM filter bound before `SETUP.EXE`. The x64 legs take
+the unsigned flat amd64 package re-laid by `ConvertTo-FamilyLayout`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
