@@ -6731,3 +6731,9 @@ the version bump.
   firmware's own announcements, and its two paths are built and torn down
   by the firmware on this driver's request. One link carries the service
   at a time; a peer behind a dock or another router is not supported.""
+- 45.59 S7, draft for the networking entry (dae3b755): "Thunderbolt
+  networking on Windows 8, 8.1 and 10 (32-bit and 64-bit) uses a separate
+  network driver, xhcinet6.sys (NDIS 6.20), installed by the same INF as
+  xhcinet.sys. It has no offloads and its default MTU is 1500, settable up
+  to 65522 in the adapter's Advanced page. It is only present where
+  xHCI98's connection manager drives the Thunderbolt controller."
