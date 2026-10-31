@@ -5850,6 +5850,84 @@ QMP 49451, 49453 and 49454; every start and stop in
 - Legs on ME, 2000, Vista, 8 to 10 (the roadmap's "98 SE to 10"): the
   coordinator named 98 SE, XP and 7 for this task.
 
+## 45.59 step S6: xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking (2026-10-31)
+
+Design record 35 sections 6.3, 7.1 to 7.8 and 8.2 to 8.3, coded on branch
+`w45-tbndis` (`8fc26b5a` to `8febce8a`), each change reviewed and revised.
+The connection manager's half (S5) is not in this tree, so nothing here
+has run against it: this section records the code, its gates and the
+build. The legs (record 35 section 11.3) wait for S5.
+
+### What was made
+
+- `src\net\net_frame.c` / `.h`, the USB4NET framing core, pure, with no
+  NDIS type (shared unchanged with `xhcinet6.sys`, S7): the transmit split
+  into 4084-byte USB4 frames with their 12-byte header; one Frame ID a
+  packet, advanced only towards a peer whose `prtcstns` has bit 1, wrapping
+  at `0xFFFF`; the receive checks (CRC Error, Buffer Overflow, a frame of
+  12 bytes or fewer, Frame Size 0 or past the data, Count 0 or above 17,
+  Index not below Count) and the reassembly, every refused frame ending
+  the packet in progress, the SOF and EOF PDFs never read (a frame of one
+  tunnelled packet reads SOF PDF 0); and section 7.4's receive
+  segmentation of a TCP segment past the adapter's maximum, over IPv4 and
+  IPv6, both checksums checked before anything is split.
+- `test\test_net_frame.c`: 2,554 checks (the lengths 14, 60, 1514, 4084,
+  4085, 65536; the Frame ID rule; every drop; reassembly with gaps,
+  restarts and the 65550 cap; flagged and malformed frames between two
+  packets of Frame ID 0; the split over IPv4 and IPv6 with options, odd
+  maxima and wraps, and its eleven refusals).
+- `src\net\net_cmif.c` / `.h`, the glue to `src\xhci_cmnet.h` (WDM alone,
+  shared with S7): `IRP_MN_QUERY_INTERFACE` to the device object below,
+  the release, and the calls over the table.
+- `src\net\ndis5\`: the deserialized NDIS 5.0 WDM miniport (5.1 on amd64):
+  one sender at a time, every context completing sends counted so a reset
+  completes and a halt frees only after the last; the receive pool with
+  `NDIS_STATUS_RESOURCES` when low; the power OIDs on a thread of its own
+  (joined by its exit event on 98 SE and ME, by its thread object on NT);
+  `USE_KLOCKS` on x86, so the spin locks are the kernel's on 98 SE and ME
+  too; `XhciNetMtu` 1500 (1500 to 65522).
+- `src\net\xhcinet.inf` and `xhcinet-amd64.inf` (98 SE and ME, `.NTx86`,
+  `.NTamd64`; the `NTx86.6.2` and `NTamd64.6.2` models present and empty
+  until S7), `XhciNetMtu` written at `1500` with no-overwrite on every path;
+  `scripts\inf-gate\check-net-inf.ps1` (36 self-test mutations) on every
+  build.
+- The import gate's `-GateProfile net98` over `xhcinet-imports.allow`:
+  each `NTOSKRNL.EXE` and `HAL.DLL` pair also a row of
+  `xhci98-imports.allow`, each `NDIS.SYS` pair a prototype of the Windows
+  2000 DDK's `ndis.h` (`bc-header`) and a pair of the run record that
+  `net98-runtime.list` pins (`w98-runtime`); `xhcinet-imports-amd64.allow`
+  under the default amd64 rules. `build-driver.cmd :buildnet` on both
+  architectures.
+
+### The 98 SE and ME reading
+
+`NDIS.VXD` was not read: it is an LE image whose NT-style exports are
+built at run time, and the owner's rule of 2026-10-31 forbids reading a
+Microsoft binary. In its place: the 24 `NDIS.SYS` imports of the x86
+image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
+("so that we don't use functions that aren't available on Windows 9x"),
+and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` at
+`57ba809`, an NDIS 5.0 WDM miniport recorded loading and passing traffic
+on 98 SE and ME in QEMU (`docs/testing/2026-10-22-cdcnet-9x.md` there).
+`legal-provenance.md` section 4 has the row. This image's own load on 98
+SE and ME is a leg owed.
+
+### Builds
+
+| Build | Commit | Result | Log |
+|---|---|---|---|
+| gated x86 release (`build-driver.cmd release`) | `8febce8a` | BUILD + GATES PASSED; `xhcinet.sys` 15,198 bytes, SHA-256 `5e7e76774d81043f...`; `test_net_frame` 2,554 checks; `check-net-inf` 36 mutations; net98 import gate passed | development host A, `gated-x86.log` in the worker's scratch folder |
+| gated amd64 release (`-amd64`) | `35376983` (`8febce8a` and a header comment) | BUILD + GATES PASSED; `xhcinet.sys` 19,456 bytes, SHA-256 `b51c97f32adab371...`; the import gate passes with warnings, its `NDIS.SYS` rows having no staged NT 5.2 amd64 `ndis.sys` to check against | `gated-amd64.log` |
+
+### Owed
+
+- Every leg of record 35 section 11.3, after S5 (and the 98 SE and ME
+  load of this image, which closes the `w98-runtime` evidence).
+- The `NTx86.6.2` decoration read on 98 SE, ME, 2000 and XP (record 35
+  section 8.2), and the `$CHICAGO$` net INF read on 2000.
+- The package's carrying of `xhcinet.sys` (S10): the gated record and
+  the source stamp do not yet list it.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
