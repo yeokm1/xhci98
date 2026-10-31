@@ -16,6 +16,17 @@
 
 #define TBT_ICM_NO_SLOT 0xFFFFFFFFUL
 
+/* The host-to-host links (record 35 section 3.10), defined below. */
+static VOID tbtIcmXdEvent(PTBT_ICM icm, const TBT_FRAME *f, ULONG code);
+static VOID tbtIcmXdDeviceAt(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a);
+static VOID tbtIcmXdSink(PVOID context, const TBT_FRAME *frame);
+static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick);
+static VOID tbtIcmXdEndAll(PTBT_ICM icm, BOOLEAN gone, BOOLEAN quiet);
+static VOID tbtIcmXdApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e);
+static VOID tbtIcmXdGoneApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e);
+static VOID tbtIcmXdMarkStale(PTBT_ICM icm, BOOLEAN on);
+static VOID tbtIcmXdReconcile(PTBT_ICM icm);
+
 static VOID tbtIcmLog(PTBT_ICM icm, const char *label, ULONG value)
 {
     if (icm->Host != NULL && icm->Host->Log != NULL) {
@@ -349,6 +360,160 @@ static BOOLEAN tbtIcmIclReady(const ULONG *dw, ULONG words, PTBT_ICM_READY out)
     return TRUE;
 }
 
+/* ---- host-to-host messages (record 35 section 3.10) ------------------ */
+
+static VOID tbtIcmTakeUuid(PTBT_UUID u, const ULONG *dw)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++) {
+        u->Dw[i] = dw[i];
+    }
+}
+
+static VOID tbtIcmPutUuid(PULONG dw, const TBT_UUID *u)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++) {
+        dw[i] = u->Dw[i];
+    }
+}
+
+/* Linux tb_msgs.h struct icm_fr_event_xdomain_connected and
+ * icm_tr_event_xdomain_connected, the same 14 DWs: header; reserved and
+ * link_info (31:16); remote_uuid; local_uuid; local_route_hi, _lo;
+ * remote_route_hi, _lo. A local route of 0 names this host and is
+ * refused. */
+static BOOLEAN tbtIcmXdConnectedCommon(const ULONG *dw, ULONG words,
+                                       PTBT_ICM_XD_EVENT out)
+{
+    if (words < TBT_ICM_XD_CONNECTED_WORDS) {
+        return FALSE;
+    }
+    tbtIcmZero(out, sizeof(*out));
+    out->Kind = TBT_ICM_XE_CONNECTED;
+    tbtIcmTakeUuid(&out->Remote, &dw[2]);
+    tbtIcmTakeUuid(&out->Local, &dw[6]);
+    out->Route.Hi = dw[10] & ~TBT_ROUTE_HI_CM;
+    out->Route.Lo = dw[11];
+    out->RemoteRoute.Hi = dw[12] & ~TBT_ROUTE_HI_CM;
+    out->RemoteRoute.Lo = dw[13];
+    return (BOOLEAN)(out->Route.Hi != 0 || out->Route.Lo != 0);
+}
+
+/* Falcon and Alpine Ridge key the link by its link info; Linux icm.c
+ * icm_fr_xdomain_connected refuses a link above ICM_MAX_LINK or a depth
+ * above TB_SWITCH_MAX_DEPTH. Link 0 names no physical port for the
+ * mailbox teardown and is refused too. */
+static BOOLEAN tbtIcmFrXdConnected(const ULONG *dw, ULONG words,
+                                   PTBT_ICM_XD_EVENT out)
+{
+    ULONG li;
+
+    if (!tbtIcmXdConnectedCommon(dw, words, out)) {
+        return FALSE;
+    }
+    li = dw[1] >> 16;
+    out->Link = TBT_ICM_LI_LINK(li);
+    out->Depth = TBT_ICM_LI_DEPTH(li);
+    return (BOOLEAN)(out->Link != 0 && out->Link <= TBT_ICM_MAX_LINK &&
+                     out->Depth <= TBT_ICM_MAX_DEPTH);
+}
+
+/* Titan Ridge and Ice Lake key it by the route alone (Linux icm.c
+ * icm_tr_xdomain_connected passes link and depth 0). */
+static BOOLEAN tbtIcmTrXdConnected(const ULONG *dw, ULONG words,
+                                   PTBT_ICM_XD_EVENT out)
+{
+    return tbtIcmXdConnectedCommon(dw, words, out);
+}
+
+/* struct icm_fr_event_xdomain_disconnected: header, reserved and
+ * link_info, remote_uuid. */
+static BOOLEAN tbtIcmFrXdDisconnected(const ULONG *dw, ULONG words,
+                                      PTBT_ICM_XD_EVENT out)
+{
+    ULONG li;
+
+    if (words < TBT_ICM_FR_XD_GONE_WORDS) {
+        return FALSE;
+    }
+    tbtIcmZero(out, sizeof(*out));
+    out->Kind = TBT_ICM_XE_DISCONNECTED;
+    li = dw[1] >> 16;
+    out->Link = TBT_ICM_LI_LINK(li);
+    out->Depth = TBT_ICM_LI_DEPTH(li);
+    tbtIcmTakeUuid(&out->Remote, &dw[2]);
+    return TRUE;
+}
+
+/* struct icm_tr_event_xdomain_disconnected: header, route_hi, route_lo,
+ * remote_uuid. */
+static BOOLEAN tbtIcmTrXdDisconnected(const ULONG *dw, ULONG words,
+                                      PTBT_ICM_XD_EVENT out)
+{
+    if (words < TBT_ICM_TR_XD_GONE_WORDS) {
+        return FALSE;
+    }
+    tbtIcmZero(out, sizeof(*out));
+    out->Kind = TBT_ICM_XE_DISCONNECTED;
+    out->Route.Hi = dw[1] & ~TBT_ROUTE_HI_CM;
+    out->Route.Lo = dw[2];
+    tbtIcmTakeUuid(&out->Remote, &dw[3]);
+    return TRUE;
+}
+
+/* The path numbers as struct icm_*_pkg_approve_xdomain packs them: two
+ * u16 a DW, the first in bits 15:0. */
+static ULONG tbtIcmXdPair(ULONG hop, ULONG ring)
+{
+    return (hop & 0xFFFFUL) | ((ring & 0xFFFFUL) << 16);
+}
+
+/* struct icm_fr_pkg_approve_xdomain, 8 DWs: header; reserved and
+ * link_info (the record's link and depth, icm_fr_approve_xdomain_paths);
+ * remote_uuid; transmit_path, transmit_ring; receive_path, receive_ring. */
+static ULONG tbtIcmFrXdApprove(const TBT_ICM_XD_ADDR *addr, ULONG txHop,
+                               ULONG txRing, ULONG rxHop, ULONG rxRing,
+                               PULONG dw)
+{
+    dw[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_APPROVE_XD);
+    dw[1] = TBT_ICM_LI_MAKE(addr->Link, addr->Depth) << 16;
+    tbtIcmPutUuid(&dw[2], &addr->Remote);
+    dw[6] = tbtIcmXdPair(txHop, txRing);
+    dw[7] = tbtIcmXdPair(rxHop, rxRing);
+    return 8;
+}
+
+/* struct icm_tr_pkg_approve_xdomain, 9 DWs: header; route_hi, route_lo;
+ * remote_uuid; the four numbers. */
+static ULONG tbtIcmTrXdApprove(const TBT_ICM_XD_ADDR *addr, ULONG txHop,
+                               ULONG txRing, ULONG rxHop, ULONG rxRing,
+                               PULONG dw)
+{
+    dw[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_APPROVE_XD);
+    dw[1] = addr->Route.Hi;
+    dw[2] = addr->Route.Lo;
+    tbtIcmPutUuid(&dw[3], &addr->Remote);
+    dw[7] = tbtIcmXdPair(txHop, txRing);
+    dw[8] = tbtIcmXdPair(rxHop, rxRing);
+    return 9;
+}
+
+/* struct icm_tr_pkg_disconnect_xdomain, 8 DWs: header; stage (7:0) and
+ * reserved; route_hi, route_lo; remote_uuid. */
+static ULONG tbtIcmTrXdTeardown(const TBT_ICM_XD_ADDR *addr, ULONG stage,
+                                PULONG dw)
+{
+    dw[0] = TBT_ICM_REQUEST(TBT_ICM_CMD_DISCONNECT_XD);
+    dw[1] = stage & 0xFFUL;
+    dw[2] = addr->Route.Hi;
+    dw[3] = addr->Route.Lo;
+    tbtIcmPutUuid(&dw[4], &addr->Remote);
+    return 8;
+}
+
 /*
  * The rows. Capabilities follow Linux icm.c icm_probe's hooks per id and
  * the tb_cm_ops each one gets; driver ready's timing is each generation's
@@ -363,7 +528,8 @@ const TBT_ICM_PROFILE TbtIcmProfileFalconRidge = {
         TBT_ICM_CAP_SAVE_DEVICES | TBT_ICM_CAP_SUSPEND_UNLOAD |
         TBT_ICM_CAP_EXTRA_PACKETS,
     0, TBT_ICM_RETRIES, 2,
-    tbtIcmFrReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove
+    tbtIcmFrReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove,
+    tbtIcmFrXdConnected, tbtIcmFrXdDisconnected, tbtIcmFrXdApprove, NULL
 };
 
 const TBT_ICM_PROFILE TbtIcmProfileAlpineRidge = {
@@ -373,7 +539,8 @@ const TBT_ICM_PROFILE TbtIcmProfileAlpineRidge = {
         TBT_ICM_CAP_GET_MODE | TBT_ICM_CAP_SAVE_DEVICES |
         TBT_ICM_CAP_SUSPEND_UNLOAD | TBT_ICM_CAP_EXTRA_PACKETS,
     0, TBT_ICM_RETRIES, 2,
-    tbtIcmArReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove
+    tbtIcmArReady, tbtIcmFrConnected, tbtIcmFrDisconnected, tbtIcmFrApprove,
+    tbtIcmFrXdConnected, tbtIcmFrXdDisconnected, tbtIcmFrXdApprove, NULL
 };
 
 const TBT_ICM_PROFILE TbtIcmProfileTitanRidge = {
@@ -383,18 +550,23 @@ const TBT_ICM_PROFILE TbtIcmProfileTitanRidge = {
         TBT_ICM_CAP_GET_MODE | TBT_ICM_CAP_SUSPEND_UNLOAD |
         TBT_ICM_CAP_EXTRA_PACKETS,
     250UL, 10UL, 4,
-    tbtIcmTrReady, tbtIcmTrConnected, tbtIcmTrDisconnected, tbtIcmTrApprove
+    tbtIcmTrReady, tbtIcmTrConnected, tbtIcmTrDisconnected, tbtIcmTrApprove,
+    tbtIcmTrXdConnected, tbtIcmTrXdDisconnected, tbtIcmTrXdApprove,
+    tbtIcmTrXdTeardown
 };
 
 /* icm_icl_ops has no approve_switch and no suspend: the firmware decides
- * which devices it tunnels, and a system suspend sends no mailbox. */
+ * which devices it tunnels, and a system suspend sends no mailbox. It has
+ * Titan Ridge's approve_xdomain_paths and disconnect_xdomain_paths. */
 const TBT_ICM_PROFILE TbtIcmProfileIceLake = {
     "Ice Lake",
     TBT_ICM_GEN_ICE_LAKE,
     TBT_ICM_CAP_ROUTE_IN_EVENTS | TBT_ICM_CAP_FORCE_POWER |
         TBT_ICM_CAP_EXTRA_PACKETS,
     20000UL, TBT_ICM_RETRIES, 4,
-    tbtIcmIclReady, tbtIcmTrConnected, tbtIcmTrDisconnected, NULL
+    tbtIcmIclReady, tbtIcmTrConnected, tbtIcmTrDisconnected, NULL,
+    tbtIcmTrXdConnected, tbtIcmTrXdDisconnected, tbtIcmTrXdApprove,
+    tbtIcmTrXdTeardown
 };
 
 /* ====================================================================== */
@@ -422,6 +594,9 @@ VOID TbtIcmInit(PTBT_ICM icm,
     icm->WaitSlot = TBT_ICM_NO_SLOT;
     ring->Host = host;
     TbtRingSetUnsolicited(ring, tbtIcmUnsolicited, icm);
+    /* Record 35 section 3.10: every inter-domain packet, whoever reads the
+     * ring, is held for the records (or, with XhciCmNet 0, dropped). */
+    TbtRingSetXdomainSink(ring, tbtIcmXdSink, icm);
 }
 
 VOID TbtIcmSetLinkDown(PTBT_ICM icm, TBT_ICM_LINKDOWN fn, PVOID context)
@@ -770,9 +945,15 @@ static VOID tbtIcmEnqueue(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     /* The latest announcement of a device supersedes one still queued: the
      * earlier copy leaves the queue and the latest joins its tail, so the
      * events between them keep their order. */
-    for (i = 0; i < icm->QueueCount; i++) {
+    for (i = 0; i < icm->QueueCount && !a->IsXd; i++) {
         q = &icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE];
-        if (tbtIcmUuidEqual(q->Uuid, a->Uuid)) {
+        if (!q->IsXd && !q->ReplaceOnly && tbtIcmUuidEqual(q->Uuid, a->Uuid)) {
+            if (icm->NetOn) {
+                /* Its place-taking of a host there stays, in its turn
+                 * (record 35 section 3.10). */
+                q->ReplaceOnly = TRUE;
+                break;
+            }
             for (; i + 1 < icm->QueueCount; i++) {
                 icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE] =
                     icm->Queue[(icm->QueueHead + i + 1) % TBT_ICM_EVENT_QUEUE];
@@ -809,12 +990,19 @@ static VOID tbtIcmPurgeQueued(PTBT_ICM icm, const TBT_ICM_GONE *g)
     keep = 0;
     for (i = 0; i < n; i++) {
         a = &icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE];
-        if (!tbtIcmAtOrUnder(icm, a->RouteValid, &a->Route, a->Link, a->Depth, g)) {
-            if (keep != i) {
-                icm->Queue[(icm->QueueHead + keep) % TBT_ICM_EVENT_QUEUE] = *a;
+        if (!a->IsXd && !a->ReplaceOnly &&
+            tbtIcmAtOrUnder(icm, a->RouteValid, &a->Route, a->Link, a->Depth, g)) {
+            if (!icm->NetOn) {
+                continue;
             }
-            keep++;
+            /* Never acted on, but a host it took the place of is gone:
+             * kept, in its turn, for that alone (record 35 section 3.10). */
+            a->ReplaceOnly = TRUE;
         }
+        if (keep != i) {
+            icm->Queue[(icm->QueueHead + keep) % TBT_ICM_EVENT_QUEUE] = *a;
+        }
+        keep++;
     }
     icm->QueueCount = keep;
 }
@@ -944,7 +1132,9 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
             a.Raw[i] = f->Dw[i];
         }
         icm->SettleExtend = TRUE;
-        if (icm->InWait) {
+        /* One order for every announcement (record 35 section 3.10):
+         * acted on at once only with nothing older queued. */
+        if (icm->InWait || icm->XdTaking || icm->QueueCount != 0) {
             tbtIcmEnqueue(icm, &a);
         } else {
             tbtIcmConnected(icm, &a);
@@ -968,9 +1158,10 @@ static VOID tbtIcmEvent(PTBT_ICM icm, const TBT_FRAME *f)
         icm->VetoActive = (BOOLEAN)(f->Words > 1 && f->Dw[1] != 0);
         tbtIcmLog(icm, "tbt.icm.rtd3-veto", f->Words > 1 ? f->Dw[1] : 0);
     } else if (code == TBT_ICM_EV_XD_CONNECTED ||
-               code == TBT_ICM_EV_XD_DISCONNECTED ||
-               code == TBT_ICM_EV_DP_CHANGED) {
-        /* Host-to-host links and DisplayPort need nothing here. */
+               code == TBT_ICM_EV_XD_DISCONNECTED) {
+        tbtIcmXdEvent(icm, f, code);
+    } else if (code == TBT_ICM_EV_DP_CHANGED) {
+        /* DisplayPort needs nothing here. */
         icm->Counters.EventsIgnored++;
         tbtIcmLog(icm, "tbt.icm.event-ignored",
                   (code << 24) | (f->Words > 1 ? (f->Dw[1] & 0xFFFFFFUL) : 0));
@@ -1434,7 +1625,9 @@ static BOOLEAN tbtIcmQueuedFor(PTBT_ICM icm, const ULONG *uuid)
     ULONG i;
 
     for (i = 0; i < icm->QueueCount; i++) {
-        if (tbtIcmUuidEqual(icm->Queue[(icm->QueueHead + i) %
+        if (!icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE].IsXd &&
+            !icm->Queue[(icm->QueueHead + i) % TBT_ICM_EVENT_QUEUE].ReplaceOnly &&
+            tbtIcmUuidEqual(icm->Queue[(icm->QueueHead + i) %
                                        TBT_ICM_EVENT_QUEUE].Uuid, uuid)) {
             return TRUE;
         }
@@ -1702,6 +1895,7 @@ static VOID tbtIcmConnected(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
     PTBT_ICM_DEVICE d;
 
     byRoute = tbtIcmByRoute(icm);
+    tbtIcmXdDeviceAt(icm, a);
     if (a->Rejected) {
         /* "Topology limit exceeded" (Linux icm.c); nothing to do. */
         icm->Counters.Rejected++;
@@ -1829,7 +2023,15 @@ static VOID tbtIcmDrainQueue(PTBT_ICM icm, ULONG budget)
         a = icm->Queue[icm->QueueHead];
         icm->QueueHead = (icm->QueueHead + 1) % TBT_ICM_EVENT_QUEUE;
         icm->QueueCount--;
-        tbtIcmConnected(icm, &a);
+        if (a.ReplaceOnly) {
+            tbtIcmXdDeviceAt(icm, &a);
+        } else if (a.IsXd && a.Xd.Kind == TBT_ICM_XE_DISCONNECTED) {
+            tbtIcmXdGoneApply(icm, &a.Xd);
+        } else if (a.IsXd) {
+            tbtIcmXdApply(icm, &a.Xd);
+        } else {
+            tbtIcmConnected(icm, &a);
+        }
     }
 }
 
@@ -1904,6 +2106,7 @@ LONG TbtIcmMailbox(PTBT_ICM icm, ULONG code, ULONG data)
 static VOID tbtIcmRetirePending(PTBT_ICM icm)
 {
     icm->QueueCount = 0;
+    icm->XdCount = 0;
     icm->ActionCount = 0;
     icm->ResyncPending = FALSE;
     icm->ResyncWhy = 0;
@@ -1918,6 +2121,7 @@ static VOID tbtIcmRetirePending(PTBT_ICM icm)
  * sent. */
 static VOID tbtIcmFail(PTBT_ICM icm)
 {
+    tbtIcmXdEndAll(icm, TRUE, TRUE);
     if (icm->Started) {
         TbtRingStop(icm->Ring);
     }
@@ -1975,6 +2179,7 @@ static VOID tbtIcmReconcile(PTBT_ICM icm)
             tbtIcmDrop(icm, i, TBT_ICM_WHY_RECONCILED, FALSE);
         }
     }
+    tbtIcmXdReconcile(icm);
 }
 
 static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale);
@@ -2013,6 +2218,7 @@ static LONG tbtIcmBringUpEx(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes,
      * earlier router read. */
     icm->Ambiguous = FALSE;
     icm->VersionStopped = FALSE;
+    icm->XdFenced = FALSE;
 
     /* Linux icm.c icm_firmware_init sends allow-all only where it reads
      * the mode, and only at bind (ICM 6.5 [inf]: not on resume). */
@@ -2060,6 +2266,7 @@ static LONG tbtIcmAnnounceAll(PTBT_ICM icm, BOOLEAN markStale)
                 icm->Devices[i].Unconfirmed = TRUE;
             }
         }
+        tbtIcmXdMarkStale(icm, TRUE);
     }
     icm->HostPollOk = FALSE;
 
@@ -2139,6 +2346,11 @@ static VOID tbtIcmFinishAnnounce(PTBT_ICM icm, BOOLEAN reconcile)
             any = TRUE;
         }
     }
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->Xd[i].Used && icm->Xd[i].Stale) {
+            any = TRUE;
+        }
+    }
     if (reconcile && any) {
         tbtIcmReconcile(icm);
     }
@@ -2172,6 +2384,7 @@ static VOID tbtIcmRediscover(PTBT_ICM icm)
         for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
             icm->Devices[i].Stale = FALSE;
         }
+        tbtIcmXdMarkStale(icm, FALSE);
         return;
     }
     tbtIcmFinishAnnounce(icm, TRUE);
@@ -2192,6 +2405,7 @@ LONG TbtIcmResume(PTBT_ICM icm)
     if (icm->Ring->Va == NULL || icm->Started || icm->Failed) {
         return TBT_E_STOPPED;
     }
+    tbtIcmXdEndAll(icm, TRUE, TRUE);    /* none outlives the suspend */
     icm->BudgetOn = TRUE;
     icm->BudgetSpent = FALSE;
     icm->BudgetUsedMs = 0;
@@ -2225,6 +2439,10 @@ VOID TbtIcmSuspend(PTBT_ICM icm)
     if (!icm->Started) {
         return;
     }
+    /* Record 35 section 3.10: every link's record ends while ring 0 still
+     * runs (a Logout, the teardown); the firmware announces the link again
+     * after the resume. */
+    tbtIcmXdEndAll(icm, FALSE, FALSE);
     TbtRingStop(icm->Ring);
     icm->Started = FALSE;
     icm->Bound = FALSE;
@@ -2246,6 +2464,7 @@ VOID TbtIcmSuspend(PTBT_ICM icm)
 
 VOID TbtIcmUnbind(PTBT_ICM icm)
 {
+    tbtIcmXdEndAll(icm, FALSE, FALSE);
     tbtIcmTearDown(icm);
 }
 
@@ -2275,6 +2494,7 @@ VOID TbtIcmLost(PTBT_ICM icm)
     icm->RediscoverPending = FALSE;
     icm->RediscoverRun = 0;
     icm->InWait = FALSE;
+    tbtIcmXdEndAll(icm, TRUE, TRUE);
     for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
         if (icm->Devices[i].InUse) {
             tbtIcmDrop(icm, i, TBT_ICM_WHY_UNAVAILABLE, FALSE);
@@ -2294,6 +2514,7 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
     if (icm->Ring->Va == NULL) {
         return TBT_E_STOPPED;
     }
+    tbtIcmXdEndAll(icm, TRUE, TRUE);
     icm->Counters.Recoveries++;
     if (!full && icm->Ambiguous) {
         /* An unanswered command's answer could still arrive and pass for
@@ -2351,6 +2572,7 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full)
         for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
             icm->Devices[i].Stale = FALSE;
         }
+        tbtIcmXdMarkStale(icm, FALSE);
         return rc;
     }
     tbtIcmFinishAnnounce(icm, TRUE);
@@ -2469,6 +2691,1068 @@ static VOID tbtIcmReadVersion(PTBT_ICM icm)
 }
 
 /* ====================================================================== */
+/* Host-to-host links (design record 35 section 3.10; task 45.59 S4)      */
+/* ====================================================================== */
+
+/*
+ * With XhciCmNet 1 the firmware's inter-domain events start and end one
+ * TBT_XDP_PEER (tbt_xdp.c, the pure engine, in its FirmwareCm mode) per
+ * direct link; the firmware builds the two DMA paths on the approve and
+ * tears them down on the row's teardown. A connected event takes its turn
+ * among the device announcements (acted on at once outside a wait, else
+ * queued with them), so the two kinds keep their order; a disconnect acts
+ * on its record where it is decoded and the record ends at the next safe
+ * point. The engines run only outside a command wait (tbtIcmXdRun, from
+ * TbtIcmPoll and TbtIcmRingWake), so an engine call that sends a command
+ * (the approve, a teardown) always finds the client idle.
+ */
+
+#define TBT_ICM_XD_SLOT(i)  (0x100UL + (i))     /* a wait's slot: never a device's */
+
+static VOID tbtIcmXdEnd(PTBT_ICM icm, PTBT_ICM_XD x, BOOLEAN gone);
+static VOID tbtIcmXdPurge(PTBT_ICM icm, const TBT_ROUTE *route);
+
+/* Whether the records may touch the host interface: bound, the rings
+ * running, not lost. */
+static BOOLEAN tbtIcmXdAccess(const TBT_ICM *icm)
+{
+    return (BOOLEAN)(icm->Bound && icm->Started && !icm->XdQuiet &&
+                     (icm->Host->Cancelled == NULL ||
+                      !icm->Host->Cancelled(icm->Host->Context)));
+}
+
+static BOOLEAN tbtIcmXdFalcon(const TBT_ICM *icm)
+{
+    return (BOOLEAN)(icm->Profile->Generation == TBT_ICM_GEN_FALCON_RIDGE);
+}
+
+static ULONG tbtIcmXdNowMs(const TBT_ICM *icm)
+{
+    return icm->Host->NowMs(icm->Host->Context);
+}
+
+/*
+ * Record 35 section 4.4 under the firmware CM: the MAC from the NHI's
+ * 64-bit Device Serial Number where the driver read one, router id 0,
+ * port 0; else a value of this instance from the clock and ring 0's bus
+ * address [inf], logged. IDS 5.1.5.3's derivation makes either locally
+ * administered and unicast.
+ */
+static VOID tbtIcmXdIdentity(PTBT_ICM icm)
+{
+    ULONG lo;
+    ULONG hi;
+    ULONG t;
+
+    if (icm->NetMacValid) {
+        return;
+    }
+    if (icm->NetSerialValid) {
+        lo = icm->NetSerialLo;
+        hi = icm->NetSerialHi;
+    } else {
+        t = TbtClockUs(icm->Host);
+        lo = (t * 2654435761UL) ^ icm->Ring->Phys ^ 0x58484349UL;
+        hi = ~(t ^ (icm->Ring->Phys << 7)) ^ 0x39384E54UL;
+        tbtIcmLog(icm, "cm.xdp.mac.random", lo);
+    }
+    TbtNetMacFromUuid(lo, hi, 0, 0, icm->NetMac);
+    icm->NetMacValid = TRUE;
+}
+
+/* Whether a record other than `x` holds the service (record 35 section
+ * 13: one per NHI), from its rings' set-up until its paths are down. */
+static BOOLEAN tbtIcmXdOtherUp(const TBT_ICM *icm, const TBT_ICM_XD *x)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (&icm->Xd[i] != x && icm->Xd[i].Used &&
+            (icm->Xd[i].RingsUp || icm->Xd[i].Peer.PathsUp)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Record 35 section 4.2: the network driver's link goes down at the first
+ * logout of either side. The engine takes the paths down only when its
+ * Logout is answered or times out, so the link is lowered here, after each
+ * engine call, as soon as the service is no longer up; the paths, the
+ * rings and the NHI's one service stay held until ServiceDown. */
+static VOID tbtIcmXdSync(PTBT_ICM icm, PTBT_ICM_XD x)
+{
+    if (x->Used && x->LinkUp && x->Peer.NetState != TBT_NET_S_UP) {
+        x->LinkUp = FALSE;
+        tbtIcmLog(icm, "cm.net.link.down", x->Slot + 1);
+        if (icm->Net.Link != NULL) {
+            icm->Net.Link(icm->Net.Context, x->Slot + 1, FALSE, NULL);
+        }
+    }
+}
+
+/* Each record offered the service while the network driver holds it open
+ * and no other record's is up; a change rebuilds that block and tells the
+ * peer (TbtXdpPeerSetNetWanted). */
+static VOID tbtIcmXdOffer(PTBT_ICM icm)
+{
+    ULONG i;
+    BOOLEAN want;
+    PTBT_ICM_XD x;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        x = &icm->Xd[i];
+        if (!x->Used) {
+            continue;
+        }
+        want = (BOOLEAN)(icm->NetWanted && !tbtIcmXdOtherUp(icm, x));
+        if (want != x->Peer.NetWanted ||
+            (want && x->Peer.LocalProps.Prtcstns != icm->NetPrtcstns)) {
+            TbtXdpPeerSetNetWanted(&x->Peer, want, icm->NetPrtcstns);
+            tbtIcmXdSync(icm, x);
+        }
+    }
+}
+
+/* ---- the teardown ------------------------------------------------------ */
+
+/*
+ * An approve or teardown command through tbtIcmCommand, matched by its
+ * whole echo. `*left` TRUE when an answer to it may still come: an attempt
+ * timed out (even if a retry was then answered, which does not say which
+ * attempt it answered), or the request was published and the wait ended
+ * without an answer (TBT_E_HW, TBT_E_STOPPED). Such an answer would match
+ * a later command of the same words (record 35 section 3.10), so the
+ * fence holds every approve until the rings restart.
+ */
+static LONG tbtIcmXdCommand(PTBT_ICM icm, const ULONG *req, ULONG words,
+                            ULONG timeoutMs, ULONG slot, ULONG serial,
+                            BOOLEAN *left)
+{
+    ULONG resp[TBT_ICM_XD_MAX_WORDS];
+    ULONG n;
+    ULONG tx;
+    ULONG timeouts;
+    LONG rc;
+
+    tx = icm->Ring->Counters.Tx;
+    timeouts = icm->Counters.Timeouts;
+    rc = tbtIcmCommand(icm, req, words, words - 1, resp, TBT_ICM_XD_MAX_WORDS, &n,
+                       timeoutMs, icm->Retries, slot, serial, words, FALSE);
+    /* A wait a disconnect ended (TBT_E_GONE) leaves its answer to come
+     * too: the paths went with the link, the answer did not. */
+    *left = (BOOLEAN)(icm->Counters.Timeouts != timeouts ||
+                      (icm->Ring->Counters.Tx != tx && rc != TBT_OK &&
+                       rc != TBT_E_ERROR_FLAG));
+    if (*left && !icm->XdFenced) {
+        icm->XdFenced = TRUE;
+        icm->XdFenceMs = tbtIcmXdNowMs(icm);
+        tbtIcmLog(icm, "cm.net.fence", (ULONG)(-rc));
+    }
+    return rc;
+}
+
+/*
+ * The row's teardown of the paths at `addr`: Falcon and Alpine Ridge the
+ * NHI mailbox of the link's physical port, data 1 and then 2 (Linux icm.c
+ * icm_fr_disconnect_xdomain_paths sends both whatever the first answers);
+ * Titan Ridge and Ice Lake command 0x11, stage 1 and then 2, each matched
+ * by its whole echo, no stage 2 after a stage 1 that failed
+ * (icm_tr_disconnect_xdomain_paths). TBT_OK only when every step was
+ * answered without the error flag; anything else leaves the paths
+ * unproven gone (Linux takes the flag as a failure too).
+ */
+static LONG tbtIcmXdTeardownAt(PTBT_ICM icm, const TBT_ICM_XD_ADDR *addr,
+                               ULONG slot, ULONG serial)
+{
+    ULONG req[TBT_ICM_XD_MAX_WORDS];
+    ULONG words;
+    ULONG stage;
+    ULONG code;
+    LONG rc;
+    LONG rc2;
+    BOOLEAN left;
+
+    icm->XdCounters.Teardowns++;
+    if (icm->Profile->EncodeXdTeardown == NULL) {
+        code = tbtIcmPhyPort(addr->Link) == 0 ? TBT_ICM_MBOX_DISCONNECT_PA
+                                              : TBT_ICM_MBOX_DISCONNECT_PB;
+        rc = TbtIcmMailbox(icm, code, 1);
+        icm->Host->Stall(icm->Host->Context, TBT_ICM_XD_GAP_US);
+        rc2 = TbtIcmMailbox(icm, code, 2);
+        if (rc == TBT_OK || (rc == TBT_E_ERROR_FLAG && rc2 != TBT_OK)) {
+            rc = rc2;
+        }
+    } else {
+        rc = TBT_OK;
+        for (stage = 1; stage <= 2 && rc == TBT_OK; stage++) {
+            if (stage == 2) {
+                icm->Host->Stall(icm->Host->Context, TBT_ICM_XD_GAP_US);
+            }
+            words = icm->Profile->EncodeXdTeardown(addr, stage, req);
+            rc = tbtIcmXdCommand(icm, req, words, icm->CmdTimeoutMs, slot,
+                                 serial, &left);
+        }
+    }
+    if (rc == TBT_E_ERROR_FLAG) {
+        icm->XdCounters.TeardownsRefused++;
+    } else if (rc != TBT_OK) {
+        icm->XdCounters.TeardownsFailed++;
+    }
+    tbtIcmLog(icm, "cm.net.teardown", (addr->Link << 24) | (addr->Route.Lo & 0xFFFFUL) |
+                                      (((ULONG)(-rc) & 0xFFUL) << 16));
+    return rc;
+}
+
+/* A teardown not proven made (no answer, the error flag, not sent) is
+ * owed: the next approve sends it first. One identity is kept; a second
+ * replaces it, logged. */
+static VOID tbtIcmXdOwe(PTBT_ICM icm, const TBT_ICM_XD_ADDR *addr)
+{
+    if (icm->XdOwed) {
+        tbtIcmLog(icm, "cm.net.teardown.replaced", icm->XdOwedAddr.Link);
+    }
+    icm->XdOwed = TRUE;
+    icm->XdOwedAddr = *addr;
+    icm->XdCounters.TeardownsOwed++;
+    tbtIcmLog(icm, "cm.net.teardown.owe", (addr->Link << 24) | (addr->Route.Lo & 0xFFFFUL));
+}
+
+/* The teardown of record `x`'s paths, where the firmware may still hold
+ * them: approved or never answered, and no end of the link announced. */
+static VOID tbtIcmXdTeardown(PTBT_ICM icm, PTBT_ICM_XD x)
+{
+    BOOLEAN held;
+    LONG rc;
+
+    held = (BOOLEAN)((x->Approved || x->ApproveUnknown) && !x->FwGone);
+    x->Approved = FALSE;
+    x->ApproveUnknown = FALSE;
+    if (!held) {
+        return;
+    }
+    rc = TBT_E_STOPPED;
+    if (tbtIcmXdAccess(icm)) {
+        rc = tbtIcmXdTeardownAt(icm, &x->Addr, TBT_ICM_XD_SLOT(x->Slot), x->Serial);
+    }
+    if (rc != TBT_OK && !x->FwGone) {
+        tbtIcmXdOwe(icm, &x->Addr);
+    }
+}
+
+/* An owed teardown the firmware's own events settle: a disconnect of that
+ * link, another host or a device announced at its place, each of which
+ * takes its paths with it. `e` NULL: the device of `a`. */
+static VOID tbtIcmXdOwedSettle(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e,
+                               const TBT_ICM_ANNOUNCE *a)
+{
+    BOOLEAN hit;
+
+    if (!icm->XdOwed) {
+        return;
+    }
+    if (e == NULL) {
+        hit = tbtIcmByRoute(icm) ?
+              (BOOLEAN)(a->RouteValid && TbtRouteEqual(&icm->XdOwedAddr.Route, &a->Route)) :
+              (BOOLEAN)(a->Depth == 1 &&
+                        tbtIcmPhyPort(icm->XdOwedAddr.Link) == tbtIcmPhyPort(a->Link));
+    } else if (tbtIcmByRoute(icm)) {
+        hit = TbtRouteEqual(&icm->XdOwedAddr.Route, &e->Route);
+    } else if (e->Kind == TBT_ICM_XE_DISCONNECTED) {
+        hit = TbtUuidEqual(&icm->XdOwedAddr.Remote, &e->Remote);
+    } else {
+        hit = (BOOLEAN)(tbtIcmPhyPort(icm->XdOwedAddr.Link) == tbtIcmPhyPort(e->Link));
+    }
+    if (hit && (e == NULL || e->Kind == TBT_ICM_XE_DISCONNECTED ||
+                !TbtUuidEqual(&icm->XdOwedAddr.Remote, &e->Remote))) {
+        icm->XdOwed = FALSE;
+        icm->XdCounters.OwedRetired++;
+        tbtIcmLog(icm, "cm.net.teardown.settled", icm->XdOwedAddr.Link);
+    }
+}
+
+/* ---- the engine's operations (TBT_XDP_OPS; Context is the record) ------ */
+
+static LONG tbtIcmXdSend(PVOID context, ULONG pdf, const ULONG *dw, ULONG words)
+{
+    PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+
+    if (!tbtIcmXdAccess(x->Icm) || words == 0) {
+        return TBT_E_STOPPED;
+    }
+    return TbtRingSend(x->Icm->Ring, pdf, dw, words);
+}
+
+static ULONG tbtIcmXdNow(PVOID context)
+{
+    return tbtIcmXdNowMs(((PTBT_ICM_XD)context)->Icm);
+}
+
+static VOID tbtIcmXdLog(PVOID context, const char *label, ULONG value)
+{
+    PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+
+    tbtIcmLog(x->Icm, label, ((x->Slot + 1) << 24) | (value & 0x00FFFFFFUL));
+}
+
+/*
+ * Record 35 section 3.10's service up, once both logins are done: the
+ * rings (the driver's RingsUp), the approve 0x10 with the four numbers,
+ * then the link up. One service per NHI; none without the service's
+ * operations, while an owed teardown cannot be sent, or while an earlier
+ * unanswered command fences the approve. The approve is matched by its
+ * whole echo, as a device approve is (record 21 section 5.4).
+ */
+static LONG tbtIcmXdUp(PVOID context, ULONG txHop, ULONG rxHop)
+{
+    PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+    PTBT_ICM icm = x->Icm;
+    ULONG req[TBT_ICM_XD_MAX_WORDS];
+    ULONG words;
+    BOOLEAN e2e;
+    BOOLEAN left;
+    LONG rc;
+
+    if (!tbtIcmXdAccess(icm)) {
+        return TBT_E_STOPPED;
+    }
+    if (x->FwGone || x->EndPending) {
+        return TBT_E_GONE;
+    }
+    if (tbtIcmXdOtherUp(icm, x)) {
+        tbtIcmLog(icm, "cm.net.busy", x->Slot + 1);
+        return TBT_E_STATE;
+    }
+    if (icm->Net.RingsUp == NULL || icm->Net.RingsDown == NULL) {
+        tbtIcmLog(icm, "cm.net.noservice", x->Slot + 1);
+        return TBT_E_STATE;
+    }
+    if (icm->XdFenced) {
+        icm->XdCounters.ApprovesFenced++;
+        tbtIcmLog(icm, "cm.net.approve.fenced", x->Slot + 1);
+        return TBT_E_STATE;
+    }
+    if (icm->XdOwed) {
+        rc = tbtIcmXdTeardownAt(icm, &icm->XdOwedAddr, TBT_ICM_NO_SLOT, 0);
+        if (rc != TBT_OK) {
+            tbtIcmLog(icm, "cm.net.teardown.owed", icm->XdOwedAddr.Link);
+            return TBT_E_STATE;
+        }
+        icm->XdOwed = FALSE;
+        if (x->FwGone || x->EndPending || !x->Used) {
+            return TBT_E_GONE;      /* the link ended during that wait */
+        }
+        if (icm->XdFenced) {
+            /* That teardown left an answer to come. */
+            icm->XdCounters.ApprovesFenced++;
+            tbtIcmLog(icm, "cm.net.approve.fenced", x->Slot + 1);
+            return TBT_E_STATE;
+        }
+    }
+    e2e = (BOOLEAN)((icm->NetPrtcstns & x->Peer.RemoteInfo.Prtcstns &
+                     TBT_NET_STNS_E2E) != 0);
+    x->Ring = tbtIcmXdFalcon(icm) ? TBT_ICM_XD_RING_FR : TBT_ICM_XD_RING;
+    x->TxHop = txHop;
+    x->RxHop = rxHop;
+    if (icm->Net.RingsUp(icm->Net.Context, x->Slot + 1, x->Ring, e2e) != TBT_OK) {
+        tbtIcmLog(icm, "cm.net.rings", x->Slot + 1);
+        return TBT_E_STATE;
+    }
+    x->RingsUp = TRUE;
+
+    words = icm->Profile->EncodeXdApprove(&x->Addr, txHop, x->Ring, rxHop,
+                                           x->Ring, req);
+    icm->XdCounters.Approves++;
+    rc = tbtIcmXdCommand(icm, req, words, icm->ApproveTimeoutMs,
+                         TBT_ICM_XD_SLOT(x->Slot), x->Serial, &left);
+    if (rc == TBT_OK && !left) {
+        x->Approved = TRUE;
+        icm->XdCounters.ApprovesOk++;
+    } else {
+        /* An answer after a timed-out attempt does not say which attempt
+         * it answered: no service on it (record 35 section 3.10). */
+        if (rc == TBT_E_ERROR_FLAG) {
+            icm->XdCounters.ApprovesFailed++;
+            tbtIcmLog(icm, "cm.net.approve.fail", x->Slot + 1);
+        }
+        if (left) {
+            /* An attempt that may still be answered, or one published and
+             * never answered: the firmware builds the paths while it
+             * processes the request (as it builds a device's tunnel, ICM
+             * 4.3 [obs]), so they may stand. */
+            x->ApproveUnknown = TRUE;
+            icm->XdCounters.ApprovesUnknown++;
+            tbtIcmLog(icm, "cm.net.approve.unknown", x->Slot + 1);
+        }
+    }
+    if (rc != TBT_OK || left || x->FwGone || x->EndPending) {
+        tbtIcmXdTeardown(icm, x);
+        x->RingsUp = FALSE;
+        icm->Net.RingsDown(icm->Net.Context, x->Slot + 1, (BOOLEAN)!tbtIcmXdAccess(icm));
+        return (rc != TBT_OK || left) ? TBT_E_STATE : TBT_E_GONE;
+    }
+    tbtIcmLog(icm, "cm.net.paths", ((x->Slot + 1) << 24) | (txHop << 16) |
+                                   (rxHop << 8) | x->Ring);
+    x->LinkUp = TRUE;
+    if (icm->Net.Link != NULL) {
+        icm->Net.Link(icm->Net.Context, x->Slot + 1, TRUE, x->Peer.PeerMac);
+    }
+    tbtIcmXdOffer(icm);         /* withdrawn from every other peer */
+    return TBT_OK;
+}
+
+/* The service down: the link down where tbtIcmXdSync has not lowered it
+ * yet, the teardown where the firmware may hold the paths, the rings
+ * down. `peerGone` is the engine's; the teardown follows what the
+ * firmware said, not it. */
+static VOID tbtIcmXdDown(PVOID context, BOOLEAN peerGone)
+{
+    PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+    PTBT_ICM icm = x->Icm;
+
+    tbtIcmLog(icm, "cm.net.down", ((x->Slot + 1) << 8) | (peerGone ? 1UL : 0UL) |
+                                  (x->FwGone ? 2UL : 0UL));
+    if (x->LinkUp) {
+        x->LinkUp = FALSE;
+        if (icm->Net.Link != NULL) {
+            icm->Net.Link(icm->Net.Context, x->Slot + 1, FALSE, NULL);
+        }
+    }
+    tbtIcmXdTeardown(icm, x);
+    if (x->RingsUp) {
+        x->RingsUp = FALSE;
+        if (icm->Net.RingsDown != NULL) {
+            /* Lost too where the access closed during the teardown. */
+            icm->Net.RingsDown(icm->Net.Context, x->Slot + 1,
+                               (BOOLEAN)!tbtIcmXdAccess(icm));
+        }
+    }
+    tbtIcmXdOffer(icm);         /* offered again to the others */
+}
+
+static VOID tbtIcmXdReady(PVOID context, const TBT_XDP_REMOTE *remote)
+{
+    PTBT_ICM_XD x = (PTBT_ICM_XD)context;
+
+    tbtIcmLog(x->Icm, "cm.xdp.peer", ((x->Slot + 1) << 24) |
+                                     ((remote->VendorId & 0xFFFUL) << 12) |
+                                     (remote->DeviceId & 0xFFFUL));
+}
+
+/* ---- the records ------------------------------------------------------- */
+
+/* A direct link (record 35 section 13): a local route of one level; on
+ * Falcon and Alpine Ridge also depth 0, which names the host router as
+ * the router the far host hangs off (Linux icm_fr_xdomain_connected finds
+ * that router by the event's link and depth). */
+static BOOLEAN tbtIcmXdDirect(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    if ((e->Route.Hi & TBT_ROUTE_HI_TOPOLOGY) != 0 || (e->Route.Lo & ~0xFFUL) != 0 ||
+        (e->Route.Lo & 0xFFUL) == 0) {
+        return FALSE;
+    }
+    return (BOOLEAN)(tbtIcmByRoute(icm) || e->Depth == 0);
+}
+
+/* The same place as Linux keys it: Falcon and Alpine Ridge the depth and
+ * the physical port; Titan Ridge and Ice Lake the route. */
+static BOOLEAN tbtIcmXdSamePlace(PTBT_ICM icm, const TBT_ICM_XD *x,
+                                 const TBT_ICM_XD_EVENT *e)
+{
+    if (tbtIcmByRoute(icm)) {
+        return TbtRouteEqual(&x->Addr.Route, &e->Route);
+    }
+    return (BOOLEAN)(x->Addr.Depth == e->Depth &&
+                     tbtIcmPhyPort(x->Addr.Link) == tbtIcmPhyPort(e->Link));
+}
+
+/* The record a disconnected event names: Falcon and Alpine Ridge by its
+ * remote UUID (Linux icm_fr_xdomain_disconnected), Titan Ridge and Ice
+ * Lake by its route (icm_tr_xdomain_disconnected). */
+static BOOLEAN tbtIcmXdNamed(PTBT_ICM icm, const TBT_ICM_XD_ADDR *a,
+                             const TBT_ICM_XD_EVENT *e)
+{
+    return tbtIcmByRoute(icm) ? TbtRouteEqual(&a->Route, &e->Route)
+                              : TbtUuidEqual(&a->Remote, &e->Remote);
+}
+
+/* The firmware said the link at `x` ended: its paths are not torn down,
+ * a wait on its approve or teardown ends, and the record ends at the next
+ * safe point (tbtIcmXdRun) - a flag no queue can lose. */
+static VOID tbtIcmXdMarkGone(PTBT_ICM icm, PTBT_ICM_XD x)
+{
+    x->FwGone = TRUE;
+    x->EndPending = TRUE;
+    if (icm->WaitSerial != 0 && icm->WaitSlot == TBT_ICM_XD_SLOT(x->Slot) &&
+        icm->WaitSerial == x->Serial) {
+        icm->WaitGone = TRUE;
+    }
+}
+
+/* Whether the records may be changed now: not inside a command wait or a
+ * driver's wait, and no engine running. */
+static BOOLEAN tbtIcmXdNow2(const TBT_ICM *icm)
+{
+    return (BOOLEAN)(!icm->InWait && !icm->XdTaking);
+}
+
+/* The records whose end is pending, ended (peer gone: no Logout; the
+ * firmware said the link went: no teardown). */
+static VOID tbtIcmXdEndPending(PTBT_ICM icm)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->Xd[i].Used && icm->Xd[i].EndPending) {
+            tbtIcmXdEnd(icm, &icm->Xd[i], TRUE);
+        }
+    }
+}
+
+/*
+ * A record for a direct link's connected event (record 35 sections 3.4
+ * and 3.10): the engine given the event's local UUID as this domain's and
+ * its local route as the peer's, the block of section 3.7 (maxhopid 15:
+ * the firmware's lane adapter is not read), a Max Output HopID of 15 and
+ * no HopID known in use, and started at PROPS.
+ */
+static VOID tbtIcmXdBegin(PTBT_ICM icm, PTBT_ICM_XD x, ULONG slot,
+                          const TBT_ICM_XD_EVENT *e)
+{
+    TBT_XDP_OPS ops;
+    TBT_XDP_LOCAL props;
+
+    tbtIcmXdIdentity(icm);
+    tbtIcmZero(x, sizeof(*x));
+    x->Icm = icm;
+    x->Slot = slot;
+    icm->XdNextSerial++;
+    if (icm->XdNextSerial == 0) {
+        icm->XdNextSerial = 1;
+    }
+    x->Serial = icm->XdNextSerial;
+    x->Addr.Link = e->Link;
+    x->Addr.Depth = e->Depth;
+    x->Addr.Route = e->Route;
+    x->Addr.Remote = e->Remote;
+    x->RemoteRoute = e->RemoteRoute;
+    x->Local = e->Local;
+
+    tbtIcmZero(&ops, sizeof(ops));
+    ops.Context = x;
+    ops.Send = tbtIcmXdSend;
+    ops.NowMs = tbtIcmXdNow;
+    ops.Log = tbtIcmXdLog;
+    ops.ServiceUp = tbtIcmXdUp;
+    ops.ServiceDown = tbtIcmXdDown;
+    ops.PeerReady = tbtIcmXdReady;
+    tbtIcmZero(&props, sizeof(props));
+    props.VendorId = 0;
+    props.VendorText = "xHCI98";
+    props.DeviceId = 1;
+    props.DeviceText = "xhcicm";
+    props.DeviceRevision = icm->NetRevision;
+    props.MaxHopId = TBT_ICM_XD_MAXHOP;
+    props.Network = (BOOLEAN)(icm->NetWanted && !tbtIcmXdOtherUp(icm, x));
+    props.Prtcstns = icm->NetPrtcstns;
+    TbtXdpPeerInit(&x->Peer, &ops, &x->Addr.Route, &e->Local, &e->Remote, TRUE,
+                   FALSE, &props, icm->NetMac, TBT_ICM_XD_MAXHOP, NULL);
+    x->Used = TRUE;
+    TbtXdpPeerStart(&x->Peer);
+    tbtIcmLog(icm, "cm.xdp.begin", ((slot + 1) << 24) | (e->Link << 16) |
+                                   (e->Route.Lo & 0xFFFFUL));
+}
+
+/* A device in the table where a connected event puts a host (Linux
+ * icm_fr_xdomain_connected and icm_tr_xdomain_connected remove the switch
+ * at the route first): Titan Ridge and Ice Lake at the same route; Falcon
+ * and Alpine Ridge at depth 1 on the same physical port. It leaves with its
+ * subtree, each with its TUNNEL_DOWN. */
+static VOID tbtIcmXdDropDevice(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    ULONG i;
+    PTBT_ICM_DEVICE d;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = &icm->Devices[i];
+        if (!d->InUse) {
+            continue;
+        }
+        if (tbtIcmByRoute(icm) ? (d->RouteValid && TbtRouteEqual(&d->Route, &e->Route))
+                               : (d->Depth == 1 &&
+                                  tbtIcmPhyPort(d->Link) == tbtIcmPhyPort(e->Link))) {
+            icm->XdCounters.DevicesReplaced++;
+            tbtIcmLog(icm, "cm.xdp.device-replaced", i);
+            tbtIcmReplace(icm, i);
+            return;
+        }
+    }
+}
+
+/*
+ * Record 35 section 3.10's keying of a connected event (Linux icm.c
+ * icm_fr_xdomain_connected, icm_tr_xdomain_connected), in its turn among
+ * the device announcements. A link that is not direct gets no record.
+ */
+static VOID tbtIcmXdApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    ULONG i;
+    PTBT_ICM_XD x;
+
+    tbtIcmXdEndPending(icm);
+    if (!tbtIcmXdDirect(icm, e)) {
+        icm->XdCounters.Deep++;
+        tbtIcmLog(icm, "cm.xdp.deep", (e->Depth << 24) | (e->Route.Lo & 0xFFFFFFUL));
+        return;
+    }
+    tbtIcmXdOwedSettle(icm, e, NULL);
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        x = &icm->Xd[i];
+        if (!x->Used || !TbtUuidEqual(&x->Addr.Remote, &e->Remote)) {
+            continue;
+        }
+        if (tbtIcmXdSamePlace(icm, x, e)) {
+            /* Announced again (a driver ready): kept, its route and link
+             * as the event gives them. */
+            icm->XdCounters.Again++;
+            x->Stale = FALSE;
+            x->Addr.Link = e->Link;
+            x->Addr.Route = e->Route;
+            x->RemoteRoute = e->RemoteRoute;
+            x->Peer.Route = e->Route;
+            tbtIcmLog(icm, "cm.xdp.again", (i + 1) << 24);
+            return;
+        }
+        icm->XdCounters.Replaced++;
+        x->FwGone = TRUE;
+        tbtIcmXdEnd(icm, x, TRUE);
+    }
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        x = &icm->Xd[i];
+        if (x->Used &&
+            (tbtIcmByRoute(icm) ? TbtRouteEqual(&x->Addr.Route, &e->Route)
+                                : (x->Addr.Depth == e->Depth &&
+                                   (x->Addr.Link == e->Link ||
+                                    x->Addr.Link == tbtIcmDualLink(e->Link))))) {
+            icm->XdCounters.Replaced++;
+            x->FwGone = TRUE;
+            tbtIcmXdEnd(icm, x, TRUE);
+        }
+    }
+    tbtIcmXdDropDevice(icm, e);
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (!icm->Xd[i].Used) {
+            tbtIcmXdBegin(icm, &icm->Xd[i], i, e);
+            return;
+        }
+    }
+    icm->XdCounters.Full++;
+    tbtIcmLog(icm, "cm.xdp.full", e->Link);
+}
+
+/* A device announced where a record's host was (Linux icm_fr_device_
+ * connected and __icm_tr_device_connected remove the XDomain there):
+ * Titan Ridge and Ice Lake the same route, Falcon and Alpine Ridge depth 1
+ * on the same physical port. That record ends, the link gone. Called as
+ * the announcement is acted on, in its turn. */
+static VOID tbtIcmXdDeviceAt(PTBT_ICM icm, const TBT_ICM_ANNOUNCE *a)
+{
+    ULONG i;
+    PTBT_ICM_XD x;
+    BOOLEAN hit;
+
+    if (!icm->NetOn || a->Rejected) {
+        return;
+    }
+    tbtIcmXdOwedSettle(icm, NULL, a);
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        x = &icm->Xd[i];
+        if (!x->Used) {
+            continue;
+        }
+        if (tbtIcmByRoute(icm)) {
+            hit = (BOOLEAN)(a->RouteValid && TbtRouteEqual(&x->Addr.Route, &a->Route));
+        } else {
+            hit = (BOOLEAN)(a->Depth == 1 &&
+                            tbtIcmPhyPort(x->Addr.Link) == tbtIcmPhyPort(a->Link));
+        }
+        if (hit) {
+            icm->XdCounters.Replaced++;
+            tbtIcmXdMarkGone(icm, x);
+        }
+    }
+    if (tbtIcmXdNow2(icm)) {
+        tbtIcmXdEndPending(icm);
+    }
+}
+
+/* A disconnect, where it is decoded: the record it names marked ended (a
+ * flag no queue can lose; a wait on its approve or teardown ends), an owed
+ * teardown of that link settled. The event itself takes its turn among
+ * the announcements (tbtIcmXdGoneApply), so a connected event queued
+ * before it is acted on first, with everything that one replaces. */
+static VOID tbtIcmXdGone(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->Xd[i].Used && tbtIcmXdNamed(icm, &icm->Xd[i].Addr, e)) {
+            tbtIcmXdMarkGone(icm, &icm->Xd[i]);
+        }
+    }
+    tbtIcmXdOwedSettle(icm, e, NULL);
+}
+
+/* A disconnect in its turn: the record it names ends, the link gone. */
+static VOID tbtIcmXdGoneApply(PTBT_ICM icm, const TBT_ICM_XD_EVENT *e)
+{
+    tbtIcmXdGone(icm, e);
+    tbtIcmXdEndPending(icm);
+}
+
+/*
+ * An inter-domain event as it lands. XhciCmNet 0: logged and ignored, as
+ * before task 45.59. Else decoded by the row: a connected event acted on
+ * at once where the records may change, else queued in order with the
+ * device announcements; a disconnect handled by tbtIcmXdGone.
+ */
+static VOID tbtIcmXdEvent(PTBT_ICM icm, const TBT_FRAME *f, ULONG code)
+{
+    TBT_ICM_XD_EVENT e;
+    TBT_ICM_ANNOUNCE a;
+    BOOLEAN ok;
+
+    if (!icm->NetOn) {
+        icm->Counters.EventsIgnored++;
+        tbtIcmLog(icm, "tbt.icm.event-ignored",
+                  (code << 24) | (f->Words > 1 ? (f->Dw[1] & 0xFFFFFFUL) : 0));
+        return;
+    }
+    if (TBT_ICM_HDR_INDEX(f->Dw[0]) != 0) {
+        icm->Counters.EventsIgnored++;
+        return;
+    }
+    if (code == TBT_ICM_EV_XD_CONNECTED) {
+        ok = icm->Profile->DecodeXdConnected(f->Dw, f->Words, &e);
+    } else {
+        ok = icm->Profile->DecodeXdDisconnected(f->Dw, f->Words, &e);
+    }
+    if (!ok) {
+        icm->XdCounters.Malformed++;
+        icm->Counters.EventsMalformed++;
+        tbtIcmLog(icm, "tbt.icm.xd-malformed", (code << 24) | f->Words);
+        tbtIcmLogRaw(icm, f);
+        return;
+    }
+    if (code == TBT_ICM_EV_XD_DISCONNECTED) {
+        icm->XdCounters.Disconnected++;
+        tbtIcmLog(icm, "cm.xdp.disconnected", (e.Link << 24) | (e.Route.Lo & 0xFFFFUL));
+        tbtIcmXdGone(icm, &e);
+        if (tbtIcmXdNow2(icm) && icm->QueueCount == 0) {
+            tbtIcmXdEndPending(icm);
+            return;
+        }
+        tbtIcmZero(&a, sizeof(a));
+        a.IsXd = TRUE;
+        a.Xd = e;
+        tbtIcmEnqueue(icm, &a);
+        return;
+    }
+    icm->XdCounters.Connected++;
+    tbtIcmLog(icm, "cm.xdp.connected", (e.Link << 24) | (e.Depth << 16) |
+                                       (e.Route.Lo & 0xFFFFUL));
+    if (tbtIcmXdNow2(icm) && icm->QueueCount == 0) {
+        tbtIcmXdApply(icm, &e);     /* nothing older queued */
+        return;
+    }
+    tbtIcmZero(&a, sizeof(a));
+    a.IsXd = TRUE;
+    a.Xd = e;
+    tbtIcmEnqueue(icm, &a);
+}
+
+/* The packets held for a record's route, dropped as the record ends: they
+ * are its peer's, and a record started later at that route is another
+ * host's. */
+static VOID tbtIcmXdPurge(PTBT_ICM icm, const TBT_ROUTE *route)
+{
+    ULONG i;
+    ULONG n;
+    ULONG keep;
+    TBT_FRAME *f;
+    TBT_ROUTE r;
+
+    n = icm->XdCount;
+    keep = 0;
+    for (i = 0; i < n; i++) {
+        f = &icm->XdQ[(icm->XdHead + i) % TBT_ICM_XD_QUEUE];
+        if (f->Words >= 2) {
+            r.Hi = f->Dw[0] & ~TBT_ROUTE_HI_CM;
+            r.Lo = f->Dw[1];
+            if (TbtRouteEqual(&r, route)) {
+                continue;
+            }
+        }
+        if (keep != i) {
+            icm->XdQ[(icm->XdHead + keep) % TBT_ICM_XD_QUEUE] = *f;
+        }
+        keep++;
+    }
+    icm->XdCount = keep;
+}
+
+/*
+ * A record ends (record 35 section 3.8): with `gone` FALSE and the host
+ * interface there, one Logout sent where the service is up and not waited
+ * for (IDS 5.1.2 takes no answer as one); then the engine ended, which
+ * takes the service down (tbtIcmXdDown: the teardown where the firmware
+ * may hold the paths), and the record freed.
+ */
+static VOID tbtIcmXdEnd(PTBT_ICM icm, PTBT_ICM_XD x, BOOLEAN gone)
+{
+    ULONG slot;
+
+    if (!x->Used) {
+        return;
+    }
+    if (!tbtIcmXdAccess(icm)) {
+        gone = TRUE;
+    }
+    if (!gone) {
+        TbtXdpPeerEnd(&x->Peer, FALSE);
+        TbtXdpPeerTick(&x->Peer);
+        tbtIcmXdSync(icm, x);
+    }
+    TbtXdpPeerEnd(&x->Peer, TRUE);
+    if (x->LinkUp || x->Approved || x->ApproveUnknown || x->RingsUp) {
+        /* What the engine no longer counts as its paths. */
+        tbtIcmXdDown(x, gone);
+    }
+    tbtIcmXdPurge(icm, &x->Addr.Route);
+    slot = x->Slot;
+    tbtIcmLog(icm, "cm.xdp.end", ((slot + 1) << 8) | (gone ? 1UL : 0UL) |
+                                 (x->FwGone ? 2UL : 0UL));
+    tbtIcmZero(x, sizeof(*x));
+    tbtIcmXdOffer(icm);
+}
+
+/* Every record ended; `quiet`: the host interface is lost, nothing is
+ * sent, and an approved link's teardown is owed. Asked while the engines
+ * run, it is done when they return. The packets held go with them. */
+static VOID tbtIcmXdEndAll(PTBT_ICM icm, BOOLEAN gone, BOOLEAN quiet)
+{
+    ULONG i;
+    BOOLEAN saved;
+
+    if (icm->XdTaking) {
+        icm->XdEndOwed = TRUE;
+        icm->XdEndOwedGone = (BOOLEAN)(icm->XdEndOwedGone || gone || quiet);
+        return;
+    }
+    saved = icm->XdQuiet;
+    if (quiet) {
+        icm->XdQuiet = TRUE;
+    }
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        tbtIcmXdEnd(icm, &icm->Xd[i], gone);
+    }
+    icm->XdQuiet = saved;
+    icm->XdCount = 0;
+}
+
+/* A rediscovery's driver ready (record 35 section 3.10, as Linux icm.c
+ * marks XDomains unplugged and frees those not announced again): every
+ * record marked, an announcement clearing it; then those still marked
+ * after the reconciliation's window end, the link gone. */
+static VOID tbtIcmXdMarkStale(PTBT_ICM icm, BOOLEAN on)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        icm->Xd[i].Stale = (BOOLEAN)(on && icm->Xd[i].Used);
+    }
+}
+
+static VOID tbtIcmXdReconcile(PTBT_ICM icm)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+        if (icm->Xd[i].Used && icm->Xd[i].Stale) {
+            icm->XdCounters.Reconciled++;
+            tbtIcmXdMarkGone(icm, &icm->Xd[i]);
+        }
+    }
+    if (tbtIcmXdNow2(icm)) {
+        tbtIcmXdEndPending(icm);
+    }
+}
+
+/*
+ * The XDomain sink (tbt_ring.h TBT_XDOMAIN_SINK): called inside the ring's
+ * receive, whoever reads it, so it only records. XhciCmNet 0: counted and
+ * dropped unanswered (record 35 section 3.6), the first logged.
+ */
+static VOID tbtIcmXdSink(PVOID context, const TBT_FRAME *frame)
+{
+    PTBT_ICM icm = (PTBT_ICM)context;
+
+    if (!icm->NetOn) {
+        if (icm->XdCounters.PacketsIgnored++ == 0) {
+            tbtIcmLog(icm, "cm.xdp.ignored", frame->Pdf);
+        }
+        return;
+    }
+    if (icm->XdCount >= TBT_ICM_XD_QUEUE) {
+        icm->XdCounters.PacketOverflows++;
+        return;
+    }
+    icm->XdQ[(icm->XdHead + icm->XdCount) % TBT_ICM_XD_QUEUE] = *frame;
+    icm->XdCount++;
+    icm->XdCounters.Packets++;
+}
+
+/* A packet for no record: a discovery request answered Not Ready (record
+ * 35 section 3.1: no UUID of this domain's for that link yet), anything
+ * else dropped. */
+static VOID tbtIcmXdNoPeer(PTBT_ICM icm, const TBT_FRAME *f)
+{
+    TBT_XDP_PKT k;
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    ULONG words;
+
+    icm->XdCounters.NoPeer++;
+    if (TbtXdpDecode(f->Pdf, f->Dw, f->Words, &k) != TBT_XDP_K_DISCOVERY ||
+        k.Response || !tbtIcmXdAccess(icm)) {
+        return;
+    }
+    words = TbtXdpBuildError(buf, &k.Route, k.Sn, TBT_XDP_ERR_NOT_READY);
+    if (words != 0 && TbtRingSend(icm->Ring, TBT_PDF_XDOMAIN_RESP, buf, words) == TBT_OK) {
+        icm->XdCounters.NotReady++;
+    }
+}
+
+/*
+ * The records' share of the thread, after the read in progress: the ends
+ * pending, then the queued packets, each to the record at its route, then
+ * (`tick`, the idle poll) each engine's resends and timeouts. Never inside
+ * a wait.
+ */
+static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick)
+{
+    TBT_FRAME f;
+    TBT_ROUTE r;
+    PTBT_ICM_XD x;
+    ULONG i;
+
+    if (!icm->NetOn || !icm->Bound || !tbtIcmXdNow2(icm)) {
+        return;
+    }
+    tbtIcmXdEndPending(icm);
+    icm->XdTaking = TRUE;
+    while (icm->XdCount != 0 && !icm->XdEndOwed) {
+        f = icm->XdQ[icm->XdHead];
+        icm->XdHead = (icm->XdHead + 1) % TBT_ICM_XD_QUEUE;
+        icm->XdCount--;
+        if (f.Words < 2) {
+            continue;
+        }
+        r.Hi = f.Dw[0] & ~TBT_ROUTE_HI_CM;
+        r.Lo = f.Dw[1];
+        x = NULL;
+        for (i = 0; i < TBT_ICM_MAX_XD; i++) {
+            if (icm->Xd[i].Used && !icm->Xd[i].EndPending &&
+                TbtRouteEqual(&icm->Xd[i].Addr.Route, &r)) {
+                x = &icm->Xd[i];
+                break;
+            }
+        }
+        if (x == NULL) {
+            tbtIcmXdNoPeer(icm, &f);
+        } else {
+            (VOID)TbtXdpPeerOnPacket(&x->Peer, f.Pdf, f.Dw, f.Words);
+            tbtIcmXdSync(icm, x);
+        }
+    }
+    if (tick) {
+        for (i = 0; i < TBT_ICM_MAX_XD && !icm->XdEndOwed; i++) {
+            x = &icm->Xd[i];
+            if (x->Used && !x->EndPending) {
+                TbtXdpPeerTick(&x->Peer);
+                tbtIcmXdSync(icm, x);
+            }
+        }
+    }
+    icm->XdTaking = FALSE;
+    tbtIcmXdEndPending(icm);
+    if (icm->XdEndOwed) {
+        icm->XdEndOwed = FALSE;
+        tbtIcmXdEndAll(icm, icm->XdEndOwedGone, icm->XdEndOwedGone);
+        icm->XdEndOwedGone = FALSE;
+    }
+}
+
+/* ---- the driver's entry points ----------------------------------------- */
+
+VOID TbtIcmSetNetConfig(PTBT_ICM icm, BOOLEAN net, ULONG revision)
+{
+    icm->NetOn = net;
+    icm->NetRevision = revision;
+}
+
+VOID TbtIcmSetNet(PTBT_ICM icm, const TBT_ICM_NET *net)
+{
+    if (net != NULL) {
+        icm->Net = *net;
+    } else {
+        tbtIcmZero(&icm->Net, sizeof(icm->Net));
+    }
+}
+
+VOID TbtIcmSetNetSerial(PTBT_ICM icm, ULONG lo, ULONG hi)
+{
+    icm->NetSerialValid = TRUE;
+    icm->NetSerialLo = lo;
+    icm->NetSerialHi = hi;
+    icm->NetMacValid = FALSE;
+}
+
+/* On Falcon Ridge the E2E bit is withdrawn from the offer: its quirk's
+ * Transmit E2E HopID 1 (record 35 section 4.3) is not one the service's
+ * RingsUp is told. */
+VOID TbtIcmNetWanted(PTBT_ICM icm, BOOLEAN wanted, ULONG prtcstns)
+{
+    if (tbtIcmXdFalcon(icm)) {
+        prtcstns &= ~TBT_NET_STNS_E2E;
+    }
+    icm->NetWanted = wanted;
+    icm->NetPrtcstns = prtcstns;
+    tbtIcmXdOffer(icm);
+}
+
+BOOLEAN TbtIcmNetIdentity(PTBT_ICM icm, PUCHAR mac6)
+{
+    ULONG i;
+
+    if (!icm->NetOn || !icm->Bound) {
+        return FALSE;
+    }
+    tbtIcmXdIdentity(icm);
+    for (i = 0; i < 6; i++) {
+        mac6[i] = icm->NetMac[i];
+    }
+    return TRUE;
+}
+
+const TBT_XDP_PEER *TbtIcmPeer(const TBT_ICM *icm, ULONG slot)
+{
+    if (slot >= TBT_ICM_MAX_XD || !icm->Xd[slot].Used) {
+        return NULL;
+    }
+    return &icm->Xd[slot].Peer;
+}
+
+/* ====================================================================== */
 /* The idle poll                                                          */
 /* ====================================================================== */
 
@@ -2491,6 +3775,7 @@ VOID TbtIcmPoll(PTBT_ICM icm)
     if (icm->RediscoverPending && icm->Bound) {
         tbtIcmRediscover(icm);
     }
+    tbtIcmXdRun(icm, TRUE);
 }
 
 VOID TbtIcmRingWake(PTBT_ICM icm)
@@ -2507,6 +3792,7 @@ VOID TbtIcmRingWake(PTBT_ICM icm)
         tbtIcmFrame(icm, &f);
     }
     tbtIcmDrainQueue(icm, TBT_ICM_POLL_EVENTS);
+    tbtIcmXdRun(icm, FALSE);
 }
 
 VOID TbtIcmService(PTBT_ICM icm)

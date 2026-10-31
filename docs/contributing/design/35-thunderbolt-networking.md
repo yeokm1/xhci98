@@ -945,8 +945,10 @@ else runs inside the client's existing entry points.
   to a full queue asks for the rediscovery a lost device announcement
   asks for (driver ready again, at which the firmware announces every
   link that is up [emu] (`XDOMAIN.md` section 7); real firmware [inf]).
-  A disconnected event acts where it is decoded: the queued connected
-  events of that link are cancelled, and its record is marked ended - its
+  A disconnected event takes its turn the same way, so a connected event
+  queued before it is acted on first, with everything that one replaces,
+  and the packets held for a record's route go when the record ends; it
+  also acts where it is decoded: its record is marked ended - its
   firmware paths taken as gone (no teardown is sent for them), a wait on
   its approve or teardown ended as a device disconnect ends that
   device's approve wait - by a flag of the record's that no queue can
