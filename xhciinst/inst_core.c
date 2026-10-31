@@ -6088,7 +6088,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "This installs or updates the xHCI98 USB 3 drivers on this "
       "computer, puts the xHCI98 tools in a folder you choose, and asks "
       "you to restart Windows at the end. Nothing is changed until you "
-      "click Install on the Summary page. Help opens the readme.",
+      "click Install on the Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_WAIT, "Please wait: reading this computer's devices ...",
       284, 54 },
@@ -6153,7 +6153,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "next restart: unplug the dock until then if you choose none.",
       284, 18 },
     { INST_PT_TBNET, "Thunderbolt networking", 284, 10 },
-    { INST_PT_TRAY, "xHCI98 USB Tree, the tray tool, started at login", 270,
+    { INST_PT_TRAY, "Start the xHCI98 USB Tree (tray icon) at login", 270,
       10 },
     /* Task 43.27: a box of its own in the place of the tray box's
      * sentence (record 26 section 5.3, draft 33). */
@@ -6198,9 +6198,12 @@ const INST_PAGE_TEXT instPageTexts[] = {
       246, 10 },
     { INST_PT_VSD_OTHER,
       "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
-    { INST_PT_PFW, "Close PCI windows above 4 GB (XHCIPFW.VXD)", 272, 10 },
-    { INST_PT_PFW_SYS, "Close PCI windows above 4 GB (XHCIPFW.SYS)", 272,
-      10 },
+    /* What it does for the user, no file name (owner, 2026-10-31; record
+     * 26 draft 56): the Help window names XHCIPFW.VXD and XHCIPFW.SYS and
+     * the systems each runs on. Two ids kept, one per file, for the
+     * window's choice and its self-test. */
+    { INST_PT_PFW, "Find Thunderbolt and USB4 devices placed above 4 GB", 272, 10 },
+    { INST_PT_PFW_SYS, "Find Thunderbolt and USB4 devices placed above 4 GB", 272, 10 },
     { INST_PT_TB_INTEL,
       "Intel's Thunderbolt driver is in use; ticked, this replaces it. With "
       "this, a device plugged into its port can reach the computer's "
@@ -6218,14 +6221,14 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "manager on this computer, puts the xHCI98 tools in a folder you "
       "choose, and asks you to restart Windows at the end. Windows' own USB "
       "3 driver keeps running the USB controllers. Nothing is changed until "
-      "you click Install on the Summary page. Help opens the readme.",
+      "you click Install on the Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_WELCOME_TOOLS,
       "This puts the xHCI98 tools in a folder you choose, and installs the "
       "xHCI98 USB 3 drivers only if you tick them on the next page "
       "(on this Windows its own USB 3 driver runs the controllers). "
       "Nothing is changed until you click Install on the "
-      "Summary page. Help opens the readme.",
+      "Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "
@@ -6896,26 +6899,6 @@ int inst_cm_mode_off(const char *name, INST_U32 value)
 
 const char instCmOffText[] =
     "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)";
-
-void inst_tb_found_text(char *out, size_t cap, const char *name)
-{
-    char cut[INST_TB_NAME_SHOWN + 1];
-
-    if (cap == 0) {
-        return;
-    }
-    if (name == NULL || name[0] == '\0') {
-        inst_copy(out, inst_page_text(INST_PT_TB_T), cap);
-        return;
-    }
-    /* Since task 45.60 (record 26 section 5.3.5) the sentence says what
-     * was found alone; what a device can reach is the Thunderbolt and USB4
-     * page's approval row. */
-    inst_copy(cut, name, sizeof(cut));
-    inst_copy(out, "A Thunderbolt 3 / USB4 controller was found: ", cap);
-    inst_cat(out, cap, cut);
-    inst_cat(out, cap, ".");
-}
 
 void inst_tbnet_decide(int wired, int carried, int sw, int inForce, int box,
                        int nhiPresent, int mwHas, INST_TBNET *d)

@@ -6629,8 +6629,8 @@ What was done:
   `tbt_xdp.c`.
 
 Builds and tests on `d9420766`, development host A: the gated x86
-build (`scriptsuild-driver.cmd release`, its self-tests and every gate)
-passed; `testun-host-tests.cmd` passed whole (`test_tbt_icm` 1047
+build (`scripts\build-driver.cmd release`, its self-tests and every gate)
+passed; `test\run-host-tests.cmd` passed whole (`test_tbt_icm` 1047
 checks, `test_tbt_hw` 176, `test_tbt_select` 306, `test_u4xd` 175, all
 with 0 failures). The design was reviewed and revised in three rounds and
 the code in nine, until nothing material remained.
@@ -6879,7 +6879,7 @@ under the firmware connection manager and the software connection
 manager's link lowered at this host's own Logout, `b03d73e6` the 98 SE
 and ME fallback code in `xhci_cmnet.h` and the network drivers' use of
 it, `13c8c41a` `xhcinet.inf`'s `NTx86` models decoration; design record
-35 revision 8, each reviewed and revised). Development host A. Record 35
+35 revision 9, each reviewed and revised). Development host A. Record 35
 section 11.3's legs: an xHCI98 guest on `usb4-emu`'s host-to-host model
 (the `w45-xdomain` build, `qemu-system-x86_64.exe` SHA-256 `48f9f6a4...`,
 `docs/XDOMAIN.md`) joined by `usb4-xdomain` to an unmodified Alpine Linux
@@ -7000,7 +7000,313 @@ Windows 10 x86 leg with `xhcinet6.sys`, and the x64 legs (a throwaway
 certificate in the guest). Open: the firmware CM's cold start against a
 far end that gave up before this driver bound (above).
 
+## 45-E.15 (the bench capture): an Alpine Ridge firmware connection manager and a USB4 software one, host to host under Linux (2026-10-31)
+
+The owner's captures of 2026-10-31, read for record 35 (task 45.59) and
+for `usb4-emu`'s `usb4-xdomain` model. Nothing of this package ran. Both
+laptops booted Kubuntu 26.04.1 live (kernel `7.0.0-30-generic`,
+`thunderbolt.dyndbg=+p thunderbolt_net.dyndbg=+p` on every boot entry,
+Secure Boot on) and ran `tbcap.sh` (`E:\kubuntu-live\tbcap.sh`, its
+`README.txt` beside it). The script loads `thunderbolt_net`, turns the
+trace events `thunderbolt:*` on, and writes `dmesg -w` to `dmesg.txt` and
+`trace_pipe` to `tb-trace.txt`. It then runs the same steps per plug:
+wait for `thunderbolt0`, `nmcli ... managed no`, flush the address and set
+a static one, `ip link set up`, `ping -c 20 -W 2`. It also takes a sysfs
+snapshot at each step.
+
+### The material
+
+- The archives (SHA-256 in `E:\xhci98-vm\p45\bench-tbcap\SHA256-archives.txt`)
+  are extracted under `E:\xhci98-vm\p45\bench-tbcap\`. Below,
+  `F1` = `tbcap-framework-20261031-205619\tbcap-framework-20261031-205619\`,
+  `P1` = `tbcap-p14s-20261031-205628\...-205628\`,
+  `F2` = `tbcap-framework-20261031-210637\...-210637\` and
+  `P2` = `tbcap-p14s-20261031-210641\...-210641\`. "dmesg L" and
+  "trace L" are line numbers in that folder's `dmesg.txt` and `tb-trace.txt`.
+- "p14s": a ThinkPad P14s Gen 1. Its controller is an **Alpine Ridge LP**
+  (JHL6240, NHI `8086:15bf`, router `8086:15c0` "Thunderbolt 3 Switch",
+  NVM 23.0; `P1\lspci.txt`, `P1\dmesg-boot-tb.txt`). Linux runs it with
+  the firmware connection manager ("using firmware connection manager"),
+  security `user`, lane adapters Max HopID 15, domain UUID
+  `cd010000-0082-8088-a059-618a10a12002`. IP 10.9.9.1.
+- "framework": a Framework 13 with a 12th-generation Intel CPU, Alder
+  Lake-P NHIs `8086:463e` (`0000:00:0d.2`, the one cabled) and `8086:466d`
+  (`0d.3`, idle). Linux runs it with its software connection manager.
+  The lane adapters have Max HopID 19, and there is a retimer `8087:15ee`
+  in the path. Domain UUID `fb028780-e072-47df-ffff-ffffffffffff`.
+  IP 10.9.9.2.
+- Session 1 (20:56): the cable unplugged at the start, then plug, ping,
+  unplug for about 10 s, replug, ping. Session 2 (21:06): the P14s
+  rebooted with the cable in (step 4 of the script, a cold start); the
+  Framework kept running, so `F2\dmesg.txt` also holds the P14s's shutdown
+  and boot as the far side saw them. Then the same steps.
+- Clocks. Each machine's dmesg time maps to its wall clock through
+  audit's epoch (Framework: wall = dmesg + 1793480070.217, from
+  `F1\dmesg.txt`'s `audit(1793480119.687)` at 49.470; P14s session 1:
+  wall = dmesg + 1793480094.556). The two laptops' wall clocks differ by
+  about 10 s, so cross-machine order is taken from packets, not clocks.
+  The same packet appears in both traces: session 1 P14s trace time +
+  14.198 s = Framework trace time (the P14s's Login id 2 is sent at 112.9985 in
+  `P1` trace L34 and lands at 127.1969 in `F1` trace L647; the
+  Framework's Login id 1, 123.2141 in `F1` trace L644, lands at 109.0163
+  in `P1` trace L29). In session 2's cold start, P14s dmesg + 604.197 =
+  Framework dmesg (the P14s answers at 45.6877, `P2` dmesg L1302; the
+  Framework reads the answer at 649.8848, `F2` dmesg L1714). The trace clock
+  runs about 0.05 to 0.08 s ahead of dmesg on each machine.
+- The tool decoding the traces is file-only: each XDomain packet's protocol UUID,
+  type, SN, route and fields, and each properties block reassembled from
+  its two responses. Not tracked.
+
+### The exchange, plug from cold cable (session 1, both plugs alike)
+
+Times in the Framework's trace (`F1`, plug 1; plug 2 at trace L725 to
+L1346 is the same to within a few ms per step), with the Linux-side
+dmesg lines beside them.
+
+| Framework trace time | Direction | Packet | What it is |
+|---|---|---|---|
+| 119.4578, 119.4582 | from the link | hot plug on lanes 0:2 and 0:1 | link up (dmesg L1460 to L1465, "link is up (state: 2)") |
+| 119.4619 (L25), 119.4709 (L43) | ICM -> Framework | PDF 6, protocol UUID `819DF55E-4355-4A9E-8E65-6CC3FD4D68D7` (DW 4 to 7 `0x5ef59d81 0x9e4a5543 0xc36c658e 0xd7684dfd`), SN 0, Data Size 12, DW 8 `0x101`, DW 9 to 12 the ICM's domain UUID, DW 13 and 14 zero, DW 15 the lane (2, then 1) | the firmware's own packet, one per lane, routes 2 and 1. It is in no IDS table; Linux has no handler and drops it unanswered ("dropped=1") |
+| 119.4719 (L45) | ICM -> Framework | UUID Request type 12, SN 0, route 1 | sent by the firmware: the P14s host never sends one (no such `tb_tx` in `P1`) |
+| 119.8307 (L610) | Framework -> ICM | UUID Response, SN 0, the Framework's UUID, source route DW 13 = 0, DW 14 = 1 | Linux answers 359 ms later, at domain level, after its own hot-plug scan (dmesg L1472 "received XDomain UUID request" at 119.781). Linux writes the route high half first, against IDS Figure 2-3 (Lo at DW 13) |
+| (P14s 105.637, `P1` trace L1) | ICM -> P14s host | ICM event `0x06` (14 DWs) | 4 ms after the UUID Response reached the firmware (119.8307 - 14.198 = 105.633) |
+| 120.0382 (L611) | Framework -> ICM | UUID Request type 12, SN 2 | the Framework's own (state UUID, dmesg L1474); Linux's SN is its retry count 10 modulo 4 |
+| 120.0420 (L612) | ICM -> Framework | UUID Response, source route DW 13 = 1, DW 14 = 0 | answered by the firmware in 3.8 ms (no `tb_tx` of it in `P1`), with the route in the IDS order |
+| 120.0455 (L614) | P14s host -> Framework | Properties Changed Notification, SN 2 | the P14s Linux, 0.21 s after the event (`P1` dmesg L1319), passed through the firmware unchanged |
+| 120.1510 (L616) | Framework -> P14s | Properties Changed Notification | |
+| 120.9890 to 120.9897 (L619 to L622) | P14s -> Framework, and back | Properties Read at offsets 0 and 45; responses of 45 and 10 DWs, block 55 DWs | the P14s host in state PROPERTIES 0.94 s after INIT |
+| 121.1022 (L623) | Framework -> ICM | Link State Status Request (type 15) | state LINK_STATUS (dmesg L1481) |
+| 121.1047 (L624) | ICM -> Framework | Error Response, code 3 (Not Supported) | answered by the firmware in 2.6 ms; Linux skips bonding ("failed to receive remote link status", L1483) and disables lane 1 ("0:2: lane disabled", L1487): the link stays "symmetric, single lane", 20 Gb/s on both sides |
+| 122.0766 (L626) | P14s -> Framework | USB4NET Login id 1 (PDF 7, SN 0, revision 1, Service HopID 8) | lost: the Framework's service device does not exist yet (its PROPERTIES read is 50 ms later, its `thunderbolt0` opens at dmesg 122.111, L1495). The P14s logs "sending login request failed, ret=-110" 504 ms after sending (`P1` dmesg L1333) |
+| 122.1262 to 122.1274 (L628 to L632) | Framework -> P14s, and back | Properties Read 0 and 45 | 2.67 s after link up: the LINK_STATUS step and its 1 s wait come first |
+| 123.2141 (L644) | Framework -> P14s | Login id 1 | 1.05 s after its interface opened (dmesg L1496) |
+| 123.2146 (L645) | P14s -> Framework | Login Response id 1, status 0, MAC, length 6 | answered at once: the P14s interface was up |
+| 127.1969 (L647) | P14s -> Framework | Login id 2 | the P14s's retry, 5.12 s after its first try (`P1` dmesg L1330 and L1336) |
+| 127.1969 (L648) | Framework -> P14s | Login Response id 2 | both halves done on both sides: "login successful, enabling paths" (dmesg L1500; `P1` dmesg L1338) |
+| (P14s 113.0034, `P1` trace L38 and L39) | P14s host -> ICM | approve `0x10` | answered with the echo 4.6 ms later |
+
+The P14s side (`P1` dmesg L1316 to L1345) shows nothing of the UUID
+exchange or the link-state request. It shows the XDomain made from the event
+with both UUIDs (L1316 and L1317), INIT, the Properties Changed
+Notification, PROPERTIES, "current link width symmetric, single lane",
+"new host found, vendor=0x1d6b device=0x4", its interface opened at 106.780, its
+login, and its paths enabled at 112.922.
+
+From hot plug to "network traffic started" on the Framework: 7.7 s on
+both plugs of session 1 (119.41 to 127.15, 168.64 to 176.30) and 8.05 s on
+session 2's replug (`F2` dmesg 776.14 to 784.19). Nearly all of it is
+the first Login lost and the 5.12 s to the next.
+The cold boot of session 2 is not one of these: the link came up at
+`F2` dmesg 546.09 while the P14s was still in firmware, and traffic
+started at 650.81, paced by that host's boot and its interface opening.
+
+### The firmware's messages to its host (Alpine Ridge, `icm_fr` layouts)
+
+- Connected `0x06` (`P1` trace L1): `0x01000006, 0x00010000` (link info
+  1 in bits 31:16: link 1, depth 0), then DW 2 to 5 the remote UUID
+  (`0x808702fb 0xdf4772e0 0xffffffff 0xffffffff`), DW 6 to 9 the local
+  UUID, DW 10 and 11 `0, 1` (the local route), and DW 12 and 13 `1, 0` (the remote route in
+  the order the UUID Response uses).
+- Approve `0x10` (L38): `0x00000010, 0x00010000`, the remote UUID,
+  `0x00010008, 0x00010008` (transmit ring 1 and HopID 8, receive ring 1 and
+  HopID 8). The response (L39) is `0x01000010` followed by the request's
+  words unchanged.
+- Disconnected `0x07` (L42, 139.6354): 6 DWs, `0x01000007,
+  0x00010000` and the remote UUID.
+- **For every XDomain frame its host sends** the firmware returns one
+  1-DW ICM response `0x01000008` (code 8, flags 0, one packet), within
+  0.1 to 4 ms. That is 19 frames sent and 19 such responses in `P1`, and
+  10 and 10 in `P2`, including a Logout sent after the cable was out.
+  Linux drops each ("dropped=1"). Code 8 is not among Linux's ICM codes.
+- At unplug the host sends no `0x11` and no command of any kind. The
+  AR teardown is a mailbox write, which the trace cannot show, so whether
+  Linux wrote it is not read.
+- At the cold boot (`F2` dmesg L1655 to L1695, the far side's view):
+  - The link came up at 546.09, while the P14s was still in firmware.
+  - The ICM sent UUID Requests (two logged at 546.461) and answered the
+    Framework's Properties Read itself: "new host found, vendor=0x8086
+    device=0x1", L1683, a block with no `network` directory.
+  - At 606.19 (P14s dmesg 1.99, its driver ready) a new UUID Request
+    came. At 606.46 the host's Properties Changed Notification came, and
+    the Framework read the block again (L1687 to L1695): now Linux's, with
+    `network`.
+- The P14s host's own block, as the far side reassembled it (`F1`
+  trace L629 and L632): 55 DWs. The root holds `vendorid` `0x1d6b` "Linux",
+  `deviceid` 4 with the host name, `devicerv` `0x80000100`, `network` at
+  DW 35 (20 DWs: `prtcid` 1, `prtcvers` 1, `prtcrevs` 1, `prtcstns` 7) and
+  `maxhopid` 15. The Framework's block is the same except `maxhopid` 19
+  (its lane adapter's Max Input HopID). Both sysfs views agree
+  (`P1\sysfs-plug1.txt`, `F1\sysfs-plug1.txt`).
+
+### USB4NET, the paths and the rings (both machines, every plug)
+
+- Login and Logout go on PDF 7 with SN 0 on both sides, and discovery
+  requests on PDF 6. In every packet the sender's own UUID comes first:
+  the Login, the Login Response (`F1` trace L645 and L648) and the
+  Logout alike. Login: DW 16 type 0, DW 17 id, DW 18 revision 1, DW 19
+  Service HopID 8, four zero DWs (Data Size 20). Login Response: type 1,
+  the request's id, status 0, the MAC, length 6, four zero DWs (Data
+  Size 22).
+- The MAC is written as the bytes in memory order, each DW
+  read back little-endian. The P14s's `02:87:1c:d8:47:c3` is DW 19 `0xd81c8702`, DW 20
+  `0x0000c347`; the Framework's `02:c7:c1:03:b0:66` is `0x03c1c702`,
+  `0x000066b0` (`P1\ip-end.txt`, `F1\ip-end.txt`).
+- Linux's login timing on hardware:
+  - The first try goes out 1.02 to 1.06 s after the interface opens
+    (`P1` dmesg L1329 to L1330; `F1` L1495 to L1496).
+  - An unanswered try ends 504 ms later with -110.
+  - The next try starts about 5.12 s after the last (`F2` dmesg L1696 to
+    L1713: 608.668, 614.045, 619.164, 624.284, ...). The id advances per
+    try.
+  - Receiving the peer's Login resets the retry count ("retries=0" again,
+    `P1` L1336) but does not bring the next try forward.
+  - Linux answers a Login only while its interface is up. At the cold
+    boot the P14s's interface opened only at 45.58 s (`P2` dmesg L1298),
+    so the Framework's tries from 4.47 s on were received and not
+    answered (`P2` L1014 to L1289, `F2` L1696 to L1712, 8 tries),
+    until the one at 45.69.
+- The paths under the software CM (`F1` dmesg L1507 to L1523): the
+  receive path "In HopID: 8 => Out port: 7 Out HopID: 1" on the lane
+  adapter 0:1, and the transmit path "In HopID: 1 => Out port: 1 Out HopID:
+  8" on the NHI adapter 0:7. Both have weight 1, priority 5, credits 14,
+  "Flow Control (In/Eg)" 1/0 and 1/1 respectively, and no shared buffer.
+  At the end, "released 14 DMA path credits". The rings are ring 1 each
+  way, 256 descriptors ("allocating TX ring -1 of size 256").
+- **End-to-end flow control on both rings, both sides, both connection
+  managers, every plug**: "enabling E2E for TX ring 1" and "enabling E2E
+  for RX ring 1 with TX HopID 1" (`F1` dmesg L1502 and L1505; `P1` L1340
+  and L1343; `P2` L1310, L1313, L1384, L1387; `F2` L1719, L1722, L1890,
+  L1893). Each ring is started (TX, then RX) before the paths are activated.
+- Frame sizes. No packet capture was taken, so frame sizes and the split of TCP
+  segments are not read directly. Both interfaces have MTU 1500, `maxmtu
+  65522`, `gso_max_size 65536` and `tso_max_size 65536` (`ip-end.txt`).
+  During session 2, both kernels logged "TCP: thunderbolt0: Driver has
+  suspect GRO implementation, TCP performance may be compromised" at the
+  same moment (`P2` dmesg L1337 at 85.31, `F2` L1742 at 689.52). Linux
+  logs that when a received TCP segment is larger than the connection's
+  MSS. It is indirect evidence that Linux puts segments larger than the
+  MTU on the link whole, as record 35 section 2.4 point 6 reads.
+
+### Unplug and replug
+
+- At unplug, the Framework sees "acking hot unplug event on 0:1",
+  "xdomain unplugged", "login stopped" and "sending logout request"
+  (`F1` dmesg L1532 to L1549). One Logout goes into the dead link (trace
+  L673, id 2, unanswered). Then the rings are stopped and freed, lane 1 is
+  re-enabled ("0:2: lane enabled"), "host disconnected", the DMA paths
+  are deactivated and the credits released, all within 42 ms.
+- At unplug, the P14s gets event `0x07` (`P1` trace L42, 139.6354). The
+  same Logout goes out 0.5 ms later (id 3; the firmware answers it with
+  its code-8 response). The rings are freed, then "host disconnected"
+  (`P1` dmesg L1346 to L1356).
+- At the P14s's shutdown (`F2` dmesg L1634 to L1645) the Framework
+  answered the P14s's Logout ("remote logout request received", "remote
+  logout response sent") and tore its own half down without a Logout of its own.
+- On the replug, everything runs as on the first plug, with the same
+  UUIDs, HopIDs and rings. The netdev is new, so the script sets its
+  address again.
+- Runtime power management:
+  - The Framework's idle second NHI `0d.3` suspends and resumes on its
+    own, about 18 s after each touch. It is irrelevant to the link.
+  - In session 2 the cabled `0d.2` domain runtime-suspended 17.9 s after
+    the unplug (`F2` dmesg L1793 to L1799, "enabling wakeup: 0x3f",
+    "control channel stopped"). It resumed at the replug's wake (775.51,
+    L1807) and handled the hot plug 0.63 s later (L1848).
+  - The P14s's NHI stopped its control channel 39 ms after session 2's
+    unplug (`P2` dmesg L1350 to L1354) and was running again at 156.22,
+    before the replug at 172.33 (L1355 to L1360; the host sent driver
+    ready, ICM `0x03`, at trace 156.302).
+  - None of it delayed a link by more than that 0.6 s.
+
+### The "+3 errors" of each plug 2 ping
+
+Every plug 2 ping on both sides of both sessions shows the same thing:
+`icmp_seq` 1 to 3 report "Destination Host Unreachable" from the
+sender's own address, then replies follow, "pipe 3". That is ARP
+resolution failing for 3 s: three neighbour probes, 1 s apart, sent while the
+interface had no carrier. The script sets the address and starts the ping
+as soon as `thunderbolt0` exists. The carrier comes on only at "network
+traffic started", about 5 s after the netdev opens (the lost first Login
+above). Session 1 Framework, in wall time: netdev at 20:57:21.5, the ping
+from about 20:57:23.0, traffic at 20:57:26.5, `icmp_seq` 4 sent at about 20:57:26.0 and
+answered after 537 ms. P14s: netdev at 20:57:30.6, the ping from
+20:57:33, traffic at 20:57:36.6, `icmp_seq` 4 answered in 23.8 ms.
+On plug 1 the user pressed Enter later, about 1 s before the carrier
+came on, so only the first reply was slow (about 1 s) and none was lost.
+Session 2's plug 1 was the link already up since the cold boot. Nothing was lost once
+the carrier was up. This is Linux's login timing seen from a script,
+not a link fault.
+
+### Against record 35 (revision 7) and the emulator
+
+1. **The P14s is Alpine Ridge, not Titan Ridge**. Record 35 sections 3.10
+   and 11.4 already treat it as AR. The `icm_fr` layouts of section
+   3.10's table are confirmed word for word on connected, disconnected
+   and approve, and so is the approve's whole-echo rule.
+2. **Section 3.4's open point is read**: the AR firmware passes its
+   host's PDF 6 and 7 frames to the link unchanged (the CM bit is set on
+   arrival, route 1 kept), and the peer's Properties and USB4NET packets
+   to its host unchanged. But it is **not silent**:
+   - It sends its own type-12 UUID Request (SN 0) and an unknown-UUID
+     packet per lane at link up.
+   - It answers the peer's UUID Request and Link State Status Request
+     itself. The latter is answered Not Supported, so a software-CM peer
+     never bonds the link.
+   - It announces the peer to its host only once the peer has answered
+     its UUID Request.
+   - It returns a code-8 ICM response for every XDomain frame its host
+     sends.
+   - Before its host's driver runs, it serves a properties block of its
+     own.
+3. **Section 2.4 point 9 is that kernel's, not Linux's**: Linux 7.0
+   enables E2E on its transmit ring as well, as point 7 read from the
+   source. A receiver must therefore grant credits or the Linux sender
+   waits.
+4. **Section 2.4 point 1's timing is confirmed** on hardware: first try 1 s after open,
+   about 504 ms a try, about 5.12 s between tries, PDF 7, SN 0, a Login
+   answered only with the interface up. Section 2.3's priority 5, weight
+   1, 14 credits, HopID 8, ring 1 and the 55-DW Linux block are confirmed too.
+5. Section 3.6 and `tbt_xdp.c` already answer Link State requests with
+   Not Supported under the firmware CM and ignore other protocol UUIDs,
+   which matches the firmware.
+6. **A risk under the software CM** (not a code change here):
+   - The firmware's one UUID Request arrives 10 to 14 ms after link up.
+   - In these captures no second one followed within 374 ms.
+   - The firmware tells its host about the peer only after the answer.
+   - `tbt_u4cm.c` `tbtU4XdTake` drops an XDomain packet whose port is
+     not yet `TBT_U4_XDOMAIN` or UNSUPPORTED by the UUID step, and at
+     10 ms the port is still being read.
+   - If the firmware does not ask again, the far host would never see this
+     host. The leg against the P14s reads it.
+   - Linux answers at domain level, from the domain's UUID, whatever the
+     port's state.
+   Record 35 section 2.7 (revision 8) states it as a design question
+   for 45.59.
+7. **The emulator's E5 model differs** (record 35 section 10, `usb4-emu`
+   `docs/XDOMAIN.md` section 7). Its "no traffic of its own on the link;
+   every Inter-Domain Request and Response passes untouched", "it reports
+   its lanes as able to bond, so the far end's software CM may", and the
+   UUIDs taken from its own handshake are not what Alpine Ridge does. The
+   follow-up list is in record 35 section 2.7. Whether Titan Ridge or Ice
+   Lake firmware behaves the same is not read.
+
+### Left
+
+- A capture with a packet trace of the data path (frame sizes, the Frame
+  ID, TCP segments over 1500 bytes) and a TCP transfer. This bench took
+  pings only.
+- The AR mailbox teardown on unplug (not visible to the trace).
+- What the firmware does when its UUID Request is not answered (one
+  request, or retries).
+- Titan Ridge and Ice Lake firmware.
+- The legs of this package against both laptops (45.59's S9 and record
+  35 section 11.4).
+
 ## 45.final: the release-notes texts the tasks handed over
+
+Owner rule of 2026-10-31: user-facing text describes behaviour only, with
+no testing-status wording (emulator, QEMU or real-hardware remarks); the
+texts below were reworded to it in place (branch `w45-noemu`).
 
 Collected as each task merges, for `45.final` to place; the wording is the
 task's own, checked against its section above before it is used.
@@ -7091,8 +7397,9 @@ the version bump.
 - 45.18 (7b7a63a0): "- "From 3.4.0.0, `xhcicm.sys` also tells Stor98 at
   once that a tunnelled drive is gone when the drive sits directly behind
   a USB4 tunnel port that is a PCI Express port, on Windows 98 SE, ME,
-  2000, XP and XP x64, on systems whose tunnel ports have been read for
-  it. A drive behind a dock or behind another drive, Vista and later on
+  2000, XP and XP x64, on a tunnel port it identifies as QEMU's (vendor
+  id 1B36h); on a real computer's tunnel port it makes none. A drive
+  behind a dock or behind another drive, Vista and later on
   such a port, and every other system get no such statement; there Stor98
   keeps its own deadline of about 5 seconds." - "On Windows 98 SE and ME
   an NVMe drive that sits directly on a Thunderbolt or USB4 tunnel port,
@@ -7196,8 +7503,8 @@ the version bump.
 - 45.53 and 45.55 (8ab07b3e): "SUPERSEDES the 45.53 and 45.55 text above.
   A Thunderbolt or USB4 dock or device whose own switch has more than one
   downstream port, plugged in while Windows 2000 or XP runs, now gets
-  every port placed when its switch ports request their own interrupt, as
-  real enclosures' ports do; before, the second port stopped with Code 12
+  every port placed when its switch ports request their own interrupt;
+  before, the second port stopped with Code 12
   and nothing behind it started. The first time an NVMe enclosure is
   plugged in on Windows 2000 or XP, two Found New Hardware wizards appear:
   the first finds no driver (finish it either way), and after the
@@ -7207,3 +7514,7 @@ the version bump.
   if it reports a controller 'not reached in this run', restart Windows
   and run it again, or the Thunderbolt/USB4 router has no driver and no
   device behind it is found."
+- 45.18 (pending): "Coordinator note for the bump (owner, 2026-10-31):
+  leave 45.18 (the tunnel-down notice to Stor98) out of the user release
+  notes; it acts only on tunnel ports identified as QEMU's, so users see
+  no change. Its text above stays here for the record only."

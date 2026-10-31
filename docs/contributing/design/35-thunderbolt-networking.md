@@ -1,10 +1,14 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 8, 2026-10-31: the driver half joined to the firmware
+Status: revision 9, 2026-10-31: the driver half joined to the firmware
 connection manager (section 6.5, "The two connection managers"), the
 software connection manager's link lowered at this host's own Logout
-(section 3.9), reviewed and revised.
-Revision 7, 2026-10-31, step S5: the service's driver half in
+(section 3.9), the network INF's models decoration (section 8.2),
+reviewed and revised.
+Revision 8, 2026-10-31, task 45-E.15: the owner's bench capture
+of an Alpine Ridge firmware CM and a USB4 software CM, both Linux, read
+(section 2.7, with pointers in sections 2.4, 3.4 and 10), reviewed and
+revised. Revision 7, 2026-10-31, step S5: the service's driver half in
 `xhcicm.sys` as built (section 6.5), reviewed and revised.
 Revision 6, 2026-10-31, step S4: the firmware connection
 manager's half as built (section 3.10), reviewed and revised.
@@ -67,6 +71,8 @@ Tags:
   `1bfa0bb`; its host-to-host task, written as `9c5e88a` and withdrawn in
   `90aad1c`, read with `git show`).
 - **[code]** this tree's source at `9ca3cca1`.
+- **[bench]** the owner's hardware captures of 2026-10-31 (task 45-E.15,
+  section 2.7; `runs/run-45.md` section "45-E.15").
 - **[inf]** an inference: a hypothesis the design is written to tolerate
   being wrong, and that a named leg or reading settles.
 
@@ -499,7 +505,9 @@ answered:
    `0x7`. That peer therefore sends without end-to-end credits while it
    grants credits to this side's transmit ring; this side's receive ring
    must take frames from a peer sending with no credits while its own
-   E2E is enabled (section 5.3).
+   E2E is enabled (section 5.3). On hardware, Linux 7.0 enables E2E on
+   both rings, as point 7 reads (section 2.7 point 3) [bench]: that
+   kernel's sender waits for this side's grants.
 
 ### 2.5 Windows' own Thunderbolt networking
 
@@ -533,6 +541,134 @@ follows IDS chapter 5, and it is read on the owner's bench (section
 - `src\xhci_cmiso.h` is the precedent for an interface between this
   project's drivers: a GUID, a version and an `INTERFACE`-headed table
   asked for with `IRP_MN_QUERY_INTERFACE` (task 45.35).
+
+### 2.7 Read on hardware: an Alpine Ridge firmware CM and a USB4 software CM, both Linux (task 45-E.15) [bench]
+
+These are the owner's captures of 2026-10-31. A ThinkPad P14s Gen 1
+(Alpine Ridge LP, NHI `8086:15bf`, firmware CM) was joined by one cable
+to a 12th-generation Intel laptop (Alder Lake-P, Linux's software CM).
+Both ran Linux `7.0.0-30-generic` with `thunderbolt_net`, the driver's
+debug messages and its control-packet trace events on. There were two
+sessions: plug, ping, unplug, replug, ping; and a cold start of the P14s
+with the cable in. `runs/run-45.md` section "45-E.15" cites each point by
+file and line. The facts that change this record:
+
+1. **The P14s's firmware is Alpine Ridge's**, so the `icm_fr` row of
+   section 3.10 applies. The connected event (14 DWs, link info 1 in DW
+   1 bits 31:16, the remote then the local UUID, the local route, then
+   the remote route), the disconnected event (6 DWs) and the approve (8
+   DWs, `0x00010008` for ring 1 and HopID 8 both ways) read exactly as
+   that table has them. The approve's response repeats every word after
+   the header.
+2. **The firmware is not a pass-through on the link**, which section
+   3.4's open point and section 10's E5 assumed:
+   - About 10 to 14 ms after link-up it sends, by itself, one UUID
+     Request of type 12 (SN 0) on the lane-0 route. Before that, on
+     each lane's route, it sends a PDF 6 packet with protocol UUID
+     `819DF55E-4355-4A9E-8E65-6CC3FD4D68D7`, which no IDS table names
+     (DW 8 `0x101`, DW 9 to 12 its domain UUID, DW 15 the lane's
+     adapter). Linux has no handler for that packet and does not answer
+     it. This driver ignores other protocol UUIDs (section 3.6), which
+     fits.
+   - It sends its host the connected event about 4 ms after the far
+     side's UUID Response arrives, not before. In the captures it did
+     not repeat the request within the 374 ms that Linux took to answer.
+   - It answers the far side's UUID Request itself, within 4 ms. Its
+     Source Route has the low half in DW 13, IDS Figure 2-3's order,
+     where Linux's software CM puts the high half first. Its host never
+     sees the request.
+   - It answers a Link State Status Request itself with Error Response
+     Not Supported. A software-CM peer therefore never bonds a link to
+     it: Linux disables lane 1, and the link stays x1 at 20 Gb/s.
+   - It passes its host's Properties and USB4NET frames to the link
+     unchanged, and the far side's to its host, with the CM bit set and
+     the route kept.
+   - For every inter-domain frame its host sends, it gives the host one
+     1-DW ICM response `0x01000008` (code 8, not one of Linux's ICM
+     codes). Linux drops each one. The one-for-one count held for 29
+     frames, including one sent after the unplug. This driver's ICM
+     client takes them as strays (`tbt.icm.stray`, counted): that is
+     harmless, but it is log noise, and the code is not the approve's.
+   - Before its host's driver runs (a cold boot with the cable in), it
+     serves a properties block of its own: Linux read
+     `vendorid` `0x8086`, `deviceid` 1, with no `network` directory.
+     At the host's driver ready it sends a new UUID Request, and its
+     host then sends a Properties Changed Notification, after which the
+     far side reads the host's own block.
+   - At an unplug its host gets the disconnected event. Linux sends one
+     Logout into the dead link and no ICM command. The mailbox teardown
+     cannot be seen in a trace, so it is not read.
+3. **Linux 7.0 enables end-to-end flow control on its transmit ring as
+   well as its receive ring**, on both connection managers and every
+   plug ("enabling E2E for TX ring 1", "enabling E2E for RX ring 1 with
+   TX HopID 1"). This is section 2.4 point 7's reading of the source.
+   Point 9 (receive ring only) is the emulator leg's 6.18.52 kernel. A
+   current Linux sender therefore waits for this side's credit grants:
+   section 5.3's E2E on this side's receive ring is required whenever
+   both blocks advertise bit 0, not merely tolerated. This side's
+   receive ring must still take frames from an older kernel's sender
+   that uses no credits.
+4. **Login timing on hardware** confirms section 2.4 point 1:
+   - The first try goes out 1.02 to 1.06 s after the interface opens.
+   - A try that gets no answer ends after about 504 ms, and the next
+     starts about 5.12 s after the last.
+   - Logins go on PDF 7 with SN 0 and Service HopID 8.
+   - Linux answers a Login only while its interface is up. On the cold
+     boot the interface opened 45.58 s after boot, and the 8 Logins
+     before it got no answer.
+   - The peer's Login does not bring Linux's next try forward.
+   - On the three hot plugs, link-up to traffic took 7.7 to 8.1 s. Most
+     of it is the first Login lost because the far side's service was
+     not yet probed, plus the 5.12 s wait for the next try. The cold
+     boot is another case: the firmware brought the link up while the
+     P14s was still in firmware, and traffic started 104.7 s later,
+     paced by that host's boot and its interface opening.
+   Section 4.1's faster schedule therefore cannot shorten Linux's own
+   half. It only makes sure this side's half is done by the time Linux's
+   next try arrives.
+5. Linux's software CM side confirms the other section 2.3 points
+   (`tb_dma_init_*`): the paths have priority 5, weight 1 and 14
+   credits; the receive path runs from lane HopID 8 to NHI HopID 1 and
+   the transmit path back; rings are ring 1, 256 descriptors. The Linux
+   properties block is 55 DWs (45 and 10 per read), with `maxhopid` 19
+   on the Alder Lake host and 15 under the firmware CM.
+6. **A risk under this driver's software CM**: the firmware's one
+   early UUID Request arrives while record 22's port machine is still
+   reading the new port. `tbt_u4cm.c` `tbtU4XdTake` drops an
+   inter-domain packet for a port that is not yet `TBT_U4_XDOMAIN`, or
+   UNSUPPORTED by the UUID step. Linux answers a UUID Request at domain
+   level from the domain's UUID, whatever the port's state
+   (`xdomain.c` `tb_xdp_handle_request`). If the firmware never asks
+   again, this host's own UUID Request is answered by the firmware, but
+   the far host may never be told about this one. This is open for
+   task 45.59: answer a UUID Request on a lane-0 route whose link is up
+   before the port is classified, or show on the bench that the firmware
+   asks again (section 11.4).
+7. Not read: frame sizes on the wire and how TCP segments are split (no
+   packet capture). Both interfaces had MTU 1500 and `gso_max_size`
+   65536, and both kernels logged "Driver has suspect GRO
+   implementation" at the same moment. That is indirect evidence that
+   segments larger than the MSS crossed the link whole, as section 2.4
+   point 6 reads. Titan Ridge and Ice Lake firmware were not read.
+
+Requirements this gives `usb4-emu`'s E5 model, for its maintainer
+(section 10): on the Alpine Ridge profile,
+
+- the firmware's own type-12 UUID Request at link-up, and its
+  unknown-UUID packet per lane;
+- the connected event held until that request is answered;
+- the far side's UUID Request and Link State Status Request answered by
+  the firmware (UUID Response with the route low half first; Not
+  Supported), never passed to ring 0;
+- no bonding offered to the far software CM;
+- the 1-DW code-8 response to every inter-domain frame the host sends;
+- the firmware's own properties block before driver ready, and a new
+  UUID Request at driver ready;
+- a Linux guest kernel of 7.0 or later in the two-host legs, so the
+  transmit ring's E2E is exercised.
+
+Only the last item is needed for the E2E path. The rest decide whether
+this driver's software CM finds an Alpine Ridge peer at all (point 6).
 
 ## 3. Discovery, in the connection manager
 
@@ -671,9 +807,9 @@ The firmware builds the paths itself on approve (section 5.2); the
 discovery and login packets still go over ring 0 as PDF 6 and 7 frames
 beside the ICM's own, as Linux sends them through the same control
 channel in either mode [linux] (`domain.c` `tb_domain_event_cb`'s
-`TB_CFG_PKG_XDOMAIN_REQ` case). Whether Alpine Ridge firmware passes them
-through unchanged is unread on hardware [inf]; the P14s bench reads it
-(section 11.4).
+`TB_CFG_PKG_XDOMAIN_REQ` case). Alpine Ridge firmware passes them
+through unchanged, but answers UUID and Link State Status Requests
+itself and adds packets of its own (section 2.7 point 2) [bench].
 
 ### 3.5 The discovery state machine
 
@@ -2008,7 +2144,7 @@ decoration is the one decision the INF gate holds for every file here
 (`NTx86.6.2` beside the undecorated models, which Windows 98's engine must
 parse past): step S6 reads it on 98 SE, ME, 2000 and XP before it is
 taken, as task 22.5 read `NTx86.6.0` for `xhci98.inf` (`AGENTS.md`).
-Revision 8: the line is `%Mfg%=NetModels,NTx86,NTx86.6.2`, with
+Revision 9: the line is `%Mfg%=NetModels,NTx86,NTx86.6.2`, with
 `[NetModels.NTx86]` the undecorated section's model and install. Read on
 Windows 7 x86 (2026-10-31, `runs/run-45.md`, "45.59 S5 (legs)"): with
 `NetModels,NTx86.6.2` alone, `pnputil -a` staged into the driver store
@@ -2225,7 +2361,8 @@ for its maintainer (section 15 Q7):
   the two emulators' own link handshake, not from a UUID exchange of its
   own, and passes every PDF 6 and 7 between ring 0 and the link
   untouched. What real Alpine Ridge or Titan Ridge firmware sends here is
-  not public.
+  not public. Alpine Ridge's, read on the bench, differs: section 2.7
+  lists what the model needs [bench].
 - **E6, the receive interrupt**: the receive ring's Receive Data Buffer
   cause raised as ring 0's is (record 21 section 4.5's emulator support).
 - **E7, the harness**: a script that starts two q35 guests on one host,

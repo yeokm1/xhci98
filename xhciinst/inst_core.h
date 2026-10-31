@@ -1030,12 +1030,6 @@ const char *inst_summary_head(int runs, int writes, int other, int nt);
  * instCmOffText. */
 int inst_cm_mode_off(const char *name, INST_U32 value);
 
-/* The Thunderbolt row's note when a controller was found (owner,
- * 2026-10-19): "A Thunderbolt 3 / USB4 controller was found: <name>."
- * with the name cut to INST_TB_NAME_SHOWN characters, then the memory
- * sentence of INST_PT_TB_T; with no name, INST_PT_TB_T as it is. */
-#define INST_TB_NAME_SHOWN  36
-void inst_tb_found_text(char *out, size_t cap, const char *name);
 extern const char instCmOffText[];
 
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
@@ -1765,6 +1759,64 @@ extern const INST_PAGE_TEXT instPageTexts[];
 extern const int instPageTextCount;
 
 const char *inst_page_text(int id);
+
+/* ---- Help on every page (record 26 section 5.10, task 45.66) --------------- */
+
+/* The kind of page Help was pressed on. */
+#define INST_HK_WELCOME         0
+#define INST_HK_COMP            1
+#define INST_HK_TBT             2
+#define INST_HK_FREE            3
+#define INST_HK_NONFREE         4
+#define INST_HK_SET_USB         5
+#define INST_HK_SET_TB          6
+#define INST_HK_SET_S98         7
+#define INST_HK_ADV             8
+#define INST_HK_ADV_S98         9
+#define INST_HK_SUMMARY         10
+#define INST_HK_PROGRESS        11
+#define INST_HK_STEPS           12
+#define INST_HK_FINISH          13
+#define INST_HK_COUNT           14
+
+/* The Finish page's two buttons: the restart words, the shut-down words,
+ * or none shown (the run changed nothing, whatever the reason). */
+#define INST_FV_RESTART         0
+#define INST_FV_SHUT            1
+#define INST_FV_NONE            2
+
+/* The topics, one text each. */
+#define INST_HELP_WELCOME       0
+#define INST_HELP_UWELCOME      1
+#define INST_HELP_COMP          2
+#define INST_HELP_TBT           3
+#define INST_HELP_FREE          4
+#define INST_HELP_NONFREE       5
+#define INST_HELP_SET_USB       6
+#define INST_HELP_SET_TB        7
+#define INST_HELP_SET_S98       8
+#define INST_HELP_ADV           9
+#define INST_HELP_ADV_S98       10
+#define INST_HELP_SUMMARY       11
+#define INST_HELP_USUMMARY      12
+#define INST_HELP_PROGRESS      13
+#define INST_HELP_STEPS         14
+#define INST_HELP_FINISH        15
+#define INST_HELP_FINISH_SHUT   16
+#define INST_HELP_FINISH_NONE   17
+#define INST_HELP_UFINISH       18
+#define INST_HELP_COUNT         19
+
+/* The help window's text control, in dialog units (xhciwiz.rc IDD_HELP):
+ * every text fits it at inst_page_cols/inst_page_rows, read unscrolled. */
+#define INST_HELP_W             284
+#define INST_HELP_H             166
+
+/* The topic for a kind of page, the run's mode (1: the uninstall) and,
+ * for the Finish page, its INST_FV_*; -1 for a kind not known. */
+int inst_help_topic(int kind, int uninstall, int variant);
+const char *inst_help_text(int topic);
+const char *inst_help_title(int topic);
 
 /* The lines a text takes, word-wrapped at cols characters. */
 INST_U32 inst_text_lines(const char *text, INST_U32 cols);
