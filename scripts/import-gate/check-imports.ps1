@@ -497,9 +497,9 @@ function Get-ExportNames {
     # "ordinal hint RVA name" rows; no header or summary line has that shape.
     # A forwarded export ("ordinal hint name (forwarded to MODULE.NAME)",
     # no RVA) is an export too: the loader resolves an import of it
-    # through the forward. From Windows 8 the x86 HAL forwards its spin
+    # through the forward. The 8.1 and 10 x86 HALs forward their spin
     # lock routines to the kernel so (KfAcquireSpinLock and
-    # KfReleaseSpinLock in the 8.1 and 10 baselines of the net6 profile);
+    # KfReleaseSpinLock in the net6 profile's baselines);
     # the kernels and HALs of 2000 to 7 carry no forwarder this gate's
     # images import.
     $names = @()

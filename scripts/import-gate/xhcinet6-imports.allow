@@ -12,7 +12,7 @@
 # tables of the Windows 7 SP1 x86 kernel and HAL
 # (hlprx86-win7-baselines.expected), the oldest NT 6 set staged, and of
 # of the 8.1 and 10 x86 kernel and HAL (net6-win81-x86-baselines.expected,
-# net6-win10-x86-baselines.expected). From 8 the HAL forwards
+# net6-win10-x86-baselines.expected). The 8.1 and 10 HALs forward
 # KfAcquireSpinLock and KfReleaseSpinLock to the kernel; the gate takes a
 # forwarded export as one.
 #
@@ -49,8 +49,8 @@ ntoskrnl.exe!KeDelayExecutionThread          all   required  nt6-x86-export
 ntoskrnl.exe!MmMapLockedPagesSpecifyCache    all   required  nt6-x86-export; MmGetSystemAddressForMdlSafe
 
 # --- Spin locks ---
-HAL.dll!KfAcquireSpinLock                    all   required  nt6-x86-export; NdisAcquireSpinLock on x86; a forwarder to the kernel from 8
-HAL.dll!KfReleaseSpinLock                    all   required  nt6-x86-export; NdisReleaseSpinLock on x86; a forwarder to the kernel from 8
+HAL.dll!KfAcquireSpinLock                    all   required  nt6-x86-export; NdisAcquireSpinLock on x86; a forwarder to the kernel on 8.1 and 10
+HAL.dll!KfReleaseSpinLock                    all   required  nt6-x86-export; NdisReleaseSpinLock on x86; a forwarder to the kernel on 8.1 and 10
 
 # --- NDIS 6.20 ---
 NDIS.SYS!NdisMRegisterMiniportDriver         all   required  ndis620-header

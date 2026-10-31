@@ -447,7 +447,7 @@ The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly 
 | `ndis6\xhcinet6.h` | `xhcinet6.sys`'s adapter state (one lock over the send queue, the pause state, the link view and the receive pool's free list) and its cross-file entry points. |
 | `ndis6\n6_main.c` | `DriverEntry` (`NdisMRegisterMiniportDriver`, revision 2 characteristics), `MiniportInitializeEx` (the registration and revision 2 general attributes, `XhciNetMtu`, the interface, the receive pool, the power work item, `Open`), `MiniportHaltEx`, pause and restart, reset, the PnP event and shutdown. |
 | `ndis6\n6_data.c` | The data path: the net buffer list queue served by one sender at a time, cancel, the pause's drain, the receive callback's reassembly, segmentation and indication from the miniport's own pool, the link state's publication, the 64-bit byte counters by carry. |
-| `ndis6\n6_oid.c` | The OID requests, and `OID_PNP_SET_POWER` pended to an NDIS I/O work item that closes the service at D3 (after every send has completed) and opens it at D0. |
+| `ndis6\n6_oid.c` | The OID requests, and `OID_PNP_SET_POWER` pended to an NDIS I/O work item that closes the service at D3 and then waits until every send has completed before completing the request, and opens it at D0. |
 | `ndis6\n6_cm.c` | `Open`, `Close` and `Log` of the interface, over `net_cmif.c`. |
 | `ndis6\sources`, `makefile`, `xhcinet6.rc` | The build (WDK 7.1 `WIN7`, x86 and x64, `NDIS620_MINIPORT`) and the version resource. |
 | `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2): `xhcinet.sys` on 98 SE to 7 and XP x64 to 7 x64, `xhcinet6.sys` on 8, 8.1 and 10 through the `.6.2` models, gated by `scripts\inf-gate\check-net-inf.ps1`. |

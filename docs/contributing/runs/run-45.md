@@ -6193,8 +6193,8 @@ needed. Its legs (record 35 section 11.3, the "10 x86 (or 8.1 x86)" and "10 x64 
   and 10's `ndis.sys` and declared in WDK 7.1's `ndis.h`. The 8.1 and 10 x86 and x64
   `ntoskrnl.exe`, `hal.dll` and `ndis.sys` were extracted by the owner from the q35 base
   images (export names only; `net6-*-baselines.expected`, `legal-provenance.md`
-  section 4). They showed that from 8 the x86 HAL exports `KfAcquireSpinLock` and
-  `KfReleaseSpinLock` as forwarders to the kernel; the gate's export parser now takes
+  section 4). They showed that the 8.1 and 10 x86 HAL export `KfAcquireSpinLock` and
+  `KfReleaseSpinLock` as forwarders to the kernel (Windows 8 itself was not read); the gate's export parser now takes
   a forwarded export as one, as the loader does. `memset` and `memcpy` are denied:
   WDK 7.1's x86 compiler had turned a byte loop into `memset`, which S6 fixed in the
   shared files (`8febce8a`) and this driver in its own.
@@ -6228,9 +6228,9 @@ checked headers, imported `ntoskrnl.exe!RtlAssert`, a pair with no Windows 98 ev
 
 ### Reviews
 
-The miniport: two rounds (the D3 drain, the link publication's order, the 64-bit
-octet counters; then nothing material). The INFs, gates and build: two rounds (the
-net6 profile and `-Arch auto`, the header through `WDKROOT`; then nothing material).
+Reviewed and revised: the miniport (the D3 drain, the link publication's order, the
+64-bit octet counters), and the INFs, gates and build (the net6 profile under
+`-Arch auto`, the header through `WDKROOT`).
 
 ### Owed
 
