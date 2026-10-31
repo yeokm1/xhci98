@@ -51,7 +51,12 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmUsb3Tunnel",
     L"XhciCmLaneBonding",
     L"XhciCmPreOsCleanup",
-    L"XhciCmLogDebugView"
+    L"XhciCmLogDebugView",
+    L"XhciCmNet",
+    L"XhciCmNetPollMs",
+    L"XhciCmNetRxFrames",
+    L"XhciCmNetTxFrames",
+    L"XhciCmNetE2E"
 };
 
 /* Written as "auto" since task 45.50 (record 21 section 8.1): "auto",

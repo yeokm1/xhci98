@@ -115,6 +115,11 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciCmPreOsCleanup` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify, `1` cleans what it cannot verify, `2` cleans everything | `0` | `2` | `0` | `0` |
 | `XhciCmLogVerbosity` | The driver's log, on `xhci98.sys`'s `0` to `4` ladder, read by the xHCI98 USB Tree (the driver refuses no larger number; the Tree writes only `0` to `4`) | `0` | `4` | `2` | `2` |
 | `XhciCmLogDebugView` | The log sent to DebugView as well, in every build | `0` | `1` | `0` | `0` |
+| `XhciCmNet` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic to it; `0` answers no other computer. Read when the controller starts | `0` | `1` | `0` | `0` |
+| `XhciCmNetPollMs` | From `3.4.0.0`, Thunderbolt networking: how often, in ms, received network traffic is looked for without the controller's interrupt (rounded up to the system's clock tick); a value outside the range is refused and `1` stands, not held to the nearer bound | `1` | `100` | `1` | `1` |
+| `XhciCmNetRxFrames` | From `3.4.0.0`, Thunderbolt networking: receive buffers of 4 KB each | `32` | `1024` | `128` | `128` |
+| `XhciCmNetTxFrames` | From `3.4.0.0`, Thunderbolt networking: send buffers of 4 KB each | `32` | `1024` | `128` | `128` |
+| `XhciCmNetE2E` | From `3.4.0.0`, Thunderbolt networking: `1` uses end-to-end flow control where the other computer offers it; `0` for one that mishandles it | `0` | `1` | `1` | `1` |
 | `XhciCmBridgeNumbering` | 98 SE and ME: the set-up of PCI bridges behind a tunnel plugged in after start (see "The Thunderbolt driver: bridges behind a tunnel on 98 SE and ME" below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmNoIrqStart` | 98 SE and ME: an NVMe drive behind a tunnel whose interrupt cannot be routed started with none, for the bundled Stor98 to poll (see below) | `0` | `1` | `1` | `1` (98 SE and ME) |
 | `XhciCmTunnelBridge` | A `REG_SZ`, not a `DWORD`: `auto` (written by the install): the driver finds the tunnel ports itself; or a comma-separated `bb:dd.f` list of PCI bridges that replaces its finding. An empty value means `auto` too | - | - | `auto` (the driver's own finding) | `auto` |

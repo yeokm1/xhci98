@@ -232,12 +232,41 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "XhciCmUsb3Tunnel defaults to 1 (U3)");
     CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "XhciCmLaneBonding defaults to 1 (U4)");
     CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "XhciCmPreOsCleanup defaults to 0 (U2)");
+    CHECK_EQ(v.Value[CM_VAL_NET], 0, "XhciCmNet defaults to 0 (record 35 section 8.1)");
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs defaults to 1");
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 128, "XhciCmNetRxFrames defaults to 128");
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames defaults to 128");
+    CHECK_EQ(v.Value[CM_VAL_NET_E2E], 1, "XhciCmNetE2E defaults to 1");
     CHECK_EQ(v.Found | v.Refused | v.Clamped, 0, "nothing found yet");
     CHECK_EQ(v.TunnelBridgeChars, 0, "no bridge override");
     for (i = 0; i < CM_VAL_COUNT; i++) {
         CHECK_EQ(CmValueDefault(i), v.Value[i], "CmValueDefault matches the defaults");
     }
     CHECK_EQ(CmValueDefault(CM_VAL_COUNT), 0, "an index out of range");
+
+    /* Record 35 section 8.1: each refused out of its range, the default
+     * standing; the bounds taken. */
+    CmValuesTake(&v, CM_VAL_NET, 1, 1);
+    CHECK_EQ(v.Value[CM_VAL_NET], 1, "XhciCmNet 1 taken");
+    CmValuesTake(&v, CM_VAL_NET, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_NET], 0, "XhciCmNet 2 refused: 0 stands");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs 0 refused");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 100);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 100, "XhciCmNetPollMs 100 taken");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 101);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs 101 refused: 1 stands");
+    CmValuesTake(&v, CM_VAL_NET_RX_FRAMES, 1, 31);
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 128, "XhciCmNetRxFrames 31 refused");
+    CmValuesTake(&v, CM_VAL_NET_RX_FRAMES, 1, 32);
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 32, "XhciCmNetRxFrames 32 taken");
+    CmValuesTake(&v, CM_VAL_NET_TX_FRAMES, 1, 1024);
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 1024, "XhciCmNetTxFrames 1024 taken");
+    CmValuesTake(&v, CM_VAL_NET_TX_FRAMES, 1, 1025);
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames 1025 refused");
+    CmValuesTake(&v, CM_VAL_NET_E2E, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_NET_E2E], 0, "XhciCmNetE2E 0 taken");
+    CmValuesDefault(&v);
 
     CmValuesTake(&v, CM_VAL_MODE, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_MODE], 0, "mode 0 is taken");

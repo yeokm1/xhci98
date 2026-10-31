@@ -217,6 +217,13 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+; Thunderbolt networking (design record 35 section 8.1, task 45.59): off
+; until the installer's networking box or /tbnet writes XhciCmNet 1.
+HKR,,XhciCmNet,0x00010003,0
+HKR,,XhciCmNetPollMs,0x00010003,1
+HKR,,XhciCmNetRxFrames,0x00010003,128
+HKR,,XhciCmNetTxFrames,0x00010003,128
+HKR,,XhciCmNetE2E,0x00010003,1
 ; Written since task 45.50 (record 21 section 8.1), each at the driver's
 ; default: the tunnel ports' override, whose "auto" is the driver's own
 ; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
