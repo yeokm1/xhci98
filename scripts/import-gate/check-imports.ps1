@@ -1145,7 +1145,10 @@ function Test-Image {
 
         # net98: an NDIS.SYS row's own tags are its evidence, held by
         # Test-Net98Rows (bc-header against the DDK's ndis.h).
-        if ($GateProfile -eq "net98" -and $pair.Module -ieq "NDIS.SYS") {
+        # Read with Get-Variable: the gate's self-tests load Test-Image
+        # without the script's parameters, under strict mode.
+        $profileNow = Get-Variable -Name GateProfile -ValueOnly -ErrorAction SilentlyContinue
+        if ($profileNow -eq "net98" -and $pair.Module -ieq "NDIS.SYS") {
             if ($row.Notes -match '(^|[;\s])bc-header([;\s]|$)') { $evidence += "bc-header" }
             if ($row.Notes -match '(^|[;\s])w98-runtime\s+\S') { $evidence += "w98-runtime" }
         }
