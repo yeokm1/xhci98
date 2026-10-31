@@ -3881,7 +3881,7 @@ first, under the host's gated-build lock. Times are the steps' own
   suite) is the owner's answer.
 - Every build exit 0; logs `E:\xhci98-scratch\p45-w45-rvhcd\pkgskip\`.
 
-## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000, XP and XP x64 (2026-10-30)
+## 45.18 Stor98's statements on q35: the depth-1 admission and its gate-G3 readings on 2000, XP, XP x64, 98 SE and ME (2026-10-30 and 31)
 
 Task 45.18 of `roadmap-usb4.md`; design record 34 section 3.11 (reviewed
 and revised; the owner's answers Q7 (b), Q8 (a), Q9 (a), Q10 (a) and Q11
@@ -3904,8 +3904,9 @@ filter's `IRP_MN_SURPRISE_REMOVAL`, `0x1C3` argument `0x17`), the
 connection manager's wait ended acknowledged (`0x1C1` argument `0x100`)
 before it, and no request was completed by Stor98's gone deadline (no
 `0x83`). The 2000 bit of the root-port D1 column is set on this reading
-(record 34 section 3.11 item 8); XP and XP x64 the same, below. D2 and
-M wait for 45.13's per-tunnel keying and 45.15's kid.
+(record 34 section 3.11 item 8); XP and XP x64 the same, below; 98 SE
+and ME read, their bits the owner's choice, below. D2 and
+M are deferred to the next release with 45.15's keying (owner).
 
 ### The vehicle
 
@@ -4076,42 +4077,132 @@ above, on leg `y2` (a fresh child overlay of the same golden), unplugs
 while the start is held. The 2000 and XP bring-up runs were in STARTING
 at the unplug (`0x40` 1 to 7).
 
-### Windows 98 SE: the system identified, the reading not possible on q35
+### Windows 98 SE and ME, the same reading, after the interrupt fix
 
-98 SE and ME are told apart by the VMM's version since `af9e4c7d`
-(record 34 section 3.11 item 8). The first 98 SE boot of the trial
-build on q35 identified the system: `cm.nvlink.u4-q35=00001012` at an
-unplug (system 98 SE, SEND with the trial's bit, reading DOWN), and the
-statement was marked.
+**98 SE and ME, D1, root port: every injection point run passed but one
+form of one, which is the owner's choice below. Both bits stay 0 until
+then.** Since `af9e4c7d` the two systems are told apart by the VMM's
+version: the first unplug read `cm.nvlink.u4-q35=00001012` on 98 SE and
+`00001022` on ME (systems 98 SE and ME).
 
-The gate-G3 reading itself could not be taken. On the q35 base `w98se`
-(SHA-256 `ab1d4d65...`) with `-Usb4 adl`, the release package installed
-by `XHCIINST.EXE /dir release-x86 /yes /nopause /thunderbolt /stor98`
-(exit 3, a restart), the same trial `xhcicm.sys` (now with the 98 SE and
-ME bits and `0x1C2` at `CM_Query_Remove_SubTree`, SHA-256 `212e48fe...`)
-and Stor98's debug-port `stor98.mpd` (SHA-256 `dc61511d...`), and a cold
-start. The plain NVMe router plugged at the desktop was enumerated, given
-the tunnel id, and its wizard installed Stor98, but the drive never ran:
-- Device Manager showed "Stor98 Storage Controller for NVMe SSDs" at
-  Code 29: "the BIOS for the device did not give it an IRQ".
-- The connection manager's no-interrupt path (design record 28) excluded
-  the function (`cm.reenum.9x.noirq.refused=13000203`: 13:00.0,
-  EXCLUDED, why 3, the header rule).
-- After a cold start and a new plug, Stor98 traced no stage code at all.
-With no Stor98 instance on the drive, nothing receives the statement,
-so no 98 SE run can be counted and the 98 SE bit stays 0. ME was not
-tried: it has the same no-interrupt path. What a reading needs first is
-a tunnelled NVMe on q35 that 98 SE and ME give an interrupt, or that
-record 28's path admits. That is record 28's area, reported to the
-coordinator and not decided here.
+**First, the drive had no interrupt.** On the first 98 SE leg the plain
+NVMe router was enumerated and given the tunnel id, and its wizard
+installed Stor98. Then Device Manager showed Stor98 at Code 29 ("the
+BIOS for the device did not give it an IRQ"), and Stor98 traced no
+stage code. The NVMe sits at 01:00.0 directly on the tunnel root port's
+secondary bus, pin A, Interrupt Line 0 (`info pci`). The 9x numbering
+found no bridge (`cm.brnum.9x.outcome=00002800`, `NONE`), so its line
+stage did not run, and design record 28's rule 5 handed the routable
+function to that stage (`cm.reenum.9x.noirq.refused=01000205`,
+EXCLUDED, why 5). This driver's gap, not the emulator's. The fix,
+`99485b88` (record 28 section 13), runs the line stage on the port's own
+bus when there is no bridge. With it, `cm.brnum.9x.irq=00010A01` (DONE,
+line 10, pin A, one function set), the function started on IRQ 10, and
+Stor98 ran (`0x40` to RUNNING).
+
+- The vehicle: the q35 bases `w98se` (SHA-256 `ab1d4d65...`) and `me`
+  (`-smp 1 -m 512`), `-Usb4 adl` as above. The release package was
+  installed by `XHCIINST.EXE /dir release-x86 /yes /nopause /thunderbolt
+  /stor98` (exit 3, then a shutdown and a cold start), and the drive's
+  wizard installed Stor98 (`stor98w9.inf`'s class match). Then the trial
+  `xhcicm.sys` of `99485b88` (the same stage codes, `0x1C2` at
+  `CM_Query_Remove_SubTree`, the 98 SE and ME bits set, SHA-256
+  `e5ab5254...`), Stor98's debug-port `stor98.mpd` (SHA-256
+  `dc61511d...`) and `XhciCmLogVerbosity` 2. Goldens
+  `E:\xhci98-vm\p45\w45-s98chain\w98\golden2.qcow2` and
+  `...\me\golden.qcow2`. The drive is E:, the transfer disk D:.
+- The load: an MS-DOS `copy /b E:\TESTDATA.BIN NUL`, the first read
+  after a plug going to the drive. On 98 SE and ME the saturated point is
+  one held request (owner, 2026-10-22, `runs/run-43.md`, "43.18"). The
+  gate rules were armed only once the drive was running, and each run
+  but 98 SE's first two had a fresh boot of a child overlay (below). The
+  removal boundary is the worker's `CM_Query_Remove_SubTree` (`0x1C2`):
+  on these systems only this driver removes the function.
+- **The screen.** Where reads failed with the drive still listed, 98 SE
+  and ME put up their system-modal "Disk Write Error" screen. While it
+  stands nothing runs, this driver's thread included, as task 43.18
+  recorded on ME. In the `RequestComplete` and already-gone runs below
+  one Enter was sent 15 s after the unplug, so the removal could follow
+  and its boundary be read.
+- In every run there was no Slot Control write. Every counted run had no
+  `0x83`.
+
+| System, run | Injection | 0x1C0 statement | 0x124 seen | 0x125 ack | 0x1C1 wait end | 0x1C2 query-remove | Time left at the reading |
+|---|---|---|---|---|---|---|---|
+| 98 SE, idle | no I/O | +458.6 | +670.2 | +673.1 | +815.3, acknowledged | +7125.3 | 2794 ms |
+| 98 SE, held | one read held at its fetch | +213.6 | +367.3 | +373.0 | +509.5, acknowledged | +5653.8 | 2780 ms |
+| 98 SE, bring-up | `x-rdy-set-delay-ms` 20000, unplugged 1 s after Stor98's start entered its second step (`0x40` 1 to 7 at the unplug) | +207.6 | +363.0 | +364.5 | +391.8, acknowledged | +2368.6 | 2780 ms |
+| 98 SE, `RequestComplete` | `at=stage code=0x21 nth=2 act=gate` (fired 315.2 ms before the cutoff), then `device_del` | +29.6 | +38.5 | +39.9 | +47.8, acknowledged | +15652.9 (the screen, Enter at +15 s) | 2588 ms |
+| 98 SE, already gone | the same rule, Stor98 `gone` (`0x40` 2 to 7) first, `device_del` at once (fired 414.4 ms before the cutoff) | +184.4 | +192.5 | +193.4 | +199.5, acknowledged | +15604.6 (the screen) | 2382 ms |
+| 98 SE, already gone, 1 s | as above, `device_del` 1 s after (fired 1587.5 ms before the cutoff) | +495.2 | +950.7 | +952.3 | +958.9, acknowledged | not read: the screen, no Enter | (not emitted) |
+| 98 SE, re-plug | unplugged as soon as `cm.nvlink.up` reached the debug console | +377.1 | +1113.1 | +1115.3 | +1221.6, acknowledged | +6932.2 | 2794 ms |
+| ME, idle | no I/O | +117.2 | +188.2 | +189.6 | +193.4, acknowledged | +2271.7 | 2780 ms |
+| ME, held | one read held at its fetch | +202.0 | +224.5 | +226.0 | +233.5, acknowledged | +2493.4 | 2780 ms |
+| ME, bring-up | as 98 SE (`0x40` 1 to 7 at the unplug) | +234.1 | +363.3 | +364.8 | +428.3, acknowledged | +2398.5 | 2739 ms |
+| ME, `RequestComplete` | as 98 SE (fired 403.2 ms before the cutoff) | +149.8 | +198.8 | +200.0 | +218.8, acknowledged | +15896.2 (the screen) | 2381 ms |
+| ME, already gone | as 98 SE, `device_del` at once (fired 395.7 ms before the cutoff) | +201.7 | +204.6 | +205.8 | +222.7, acknowledged | +15551.4 (the screen) | 2382 ms |
+| ME, re-plug | as 98 SE | +19.0 | +192.1 | +194.0 | +255.9, acknowledged | +2185.5 | 2780 ms |
+
+Two earlier runs, ME's `RequestComplete` (+116.7, +140.7, +142.4,
++144.5) and an already-gone with the `device_del` at once (+32.3,
++145.3, +146.8, +180.3), were ordered the same way, but had no Enter, so
+the screen still stood when the leg ended and their removal boundary was
+not read. They are partial readings and are not counted.
+
+**The open case: ME, already gone, with the `device_del` 1 s after the
+gate.** On ME the screen came up before the unplug was handled, in both
+runs of this form (legs `mgone` and `pgone1`). It stopped the connection
+manager's thread. In the first run no statement was made at all. In the
+second, the unplug was handled only after the Enter, with no time left
+of the 3 s, and the statement was withheld
+(`cm.nvlink.u4-q35=00041020`). In both, Stor98's gone deadline completed
+the request (`0x83` at +3820.5 and +3756.7). Nothing was stated out of
+order; the statement was not delivered. On 98 SE the same form put the
+statement first (the table above). Record 34 section 3.11 item 8 says
+one failed run leaves a bit 0. Two readings of it:
+- (a) The screen freezes the whole system, this driver's thread
+  included, before the unplug is handled. What such a run shows is only
+  the MD-1 fallback, as task 43.18 accepted for ME's screen, not a fault
+  of the statement's ordering. Admit 98 SE and ME on the other runs.
+- (b) Item 8 as written: the ME bit stays 0, and 98 SE's too until
+  repeated runs never show the screen first.
+Recommended: (a). The bit can only ever produce a statement made after
+the endpoint's reset, as every run read. When the system freezes there
+is no statement at all, and Stor98's own deadline applies, as everywhere
+nothing is stated. The owner's choice: both bits stay 0 until it is
+made.
+
+Not counted:
+
+- **Gate rules armed before the plug** (98 SE, `RequestComplete` and
+  already gone, first attempts). They fired on Stor98's own start reads,
+  before the connection manager had learned the port's member, and the
+  statement was withheld (`cm.nvlink.u4-down=00020000`, SEVERAL), so
+  Stor98's gone deadline applied. A first already-gone rerun on a read
+  rule never fired, the file being cached.
+- **Re-plugs without an `UP` anchor.** In 98 SE leg `s3`, runs 3 to 6, in
+  the same boot after a held read's vetoed removal, no new `UP` was
+  published for the drive (`cm.nvlink.up.late-none`). There was no anchor
+  and no statement (`cm.nvlink.u4-q35=00041010`). Why the entry stayed
+  unpublished in that boot was not read further: the removal-request
+  rules of record 21 section 7.2 part 3 are the place to look. From
+  then on each run used a fresh boot. One fresh-boot re-plug (`ereplug`)
+  was unplugged at Stor98's find (`0x120`), which on 9x comes before the
+  late `UP`, so it had no anchor either. The re-plug above unplugs at
+  `cm.nvlink.up`.
+- **ME's stop at a cold start** (the first bring-up boot): "An error has
+  occurred ... Error: 0E : 019F : BFF62170", before any plug,
+  `E:\xhci98-vm\p45\w45-s98chain\me\ME0E-mbringup.png`. This is planned
+  item ME0E.1's stop (recorded there as "0E : 0197 : BFF62170"), here at
+  019F. The run was taken again on a fresh boot.
 
 ### What it changes
 
 The 2000, XP and XP x64 bits of the root-port D1 column
-(`cmNvQ35Table`): every NT system item 5 admits. D2 and M are deferred to
+(`cmNvQ35Table`); the 98 SE and ME bits stay 0 until the owner's choice
+above (a one-line change if (a)). D2 and M are deferred to
 the next release with 45.15's correspondence and per-tunnel keying
-(owner). The 98 SE and ME bits stay 0 until a drive behind a q35 tunnel
-port runs there (above). Vista and later stay at 0
+(owner). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
 MIXED and the statement withheld, is read with D2.
 
