@@ -8023,7 +8023,10 @@ with a throwaway certificate), L8 an nLite integration into XP SP3, L9 a
 DISM integration into a 7 x64 `boot.wim` and `install.wim`, L10 an update
 over 3.3.0.0's flat package on XP and 98 SE; each read for the registry
 defaults and for no CM filter bound before `SETUP.EXE`. The x64 legs take
-the unsigned flat amd64 package re-laid by `ConvertTo-FamilyLayout`.
+the unsigned flat amd64 package re-laid by `ConvertTo-FamilyLayout`. Apart from the legs, the
+owner's key-holding cut is owed: the x64 half published by
+`make-package.ps1 -TestSignPfx`, its signatures and catalogs read in
+`nt-x64\` (`xhcicmf.cat` beside `cm\xhcicmf.inx`).
 
 ## 45.final: the release-notes texts the tasks handed over
 
