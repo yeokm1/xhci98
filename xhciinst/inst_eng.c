@@ -2516,9 +2516,12 @@ static int check_package(void)
         /* Record 23 D20 (a): the x64 connection manager only with its
          * catalog (owner, 2026-10-22). */
         const char *why;
-        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm,
-                                  pkg_path("xhcicm.cat", path, sizeof(path)) &&
-                                  file_exists(path, NULL));
+        int cat = pkg_path("xhcicm.cat", path, sizeof(path)) &&
+                  file_exists(path, NULL);
+        if (cat) {
+            pkg_mark("xhcicm.cat");
+        }
+        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm, cat);
         if (why != NULL) {
             return refuse(why, " Nothing was changed.");
         }
