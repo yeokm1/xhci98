@@ -3448,7 +3448,8 @@ static LONG tbtU4BondTry(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, const TBT_U4_L
  * both lane 1 adapters in CLd or Disabled: single already. 6.3: else the
  * host's lane adapters at their defaults (Target Link Width single, no
  * Lane Bonding, no CLx enabled) and the link's TMU Off, as Guide 7.5 asks
- * before a lane is disabled. 6.4: two single-lane links - lane 1 in CL0
+ * before a lane is disabled (not on a Thunderbolt host, which disables
+ * none). 6.4: two single-lane links - lane 1 in CL0
  * and lane 0 x1 - so the host's lane 1 disabled (Guide 7.5: Lane Disable)
  * and read back Disabled within TBT_U4_LANE_DISABLE_US. TBT_OK single,
  * TBT_E_GONE, or TBT_E_STATE with the port's reason set.
@@ -3497,7 +3498,11 @@ static LONG tbtU4BondSingle(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, const TBT_U
             goto failed;
         }
     }
-    if (!tbtU4TmuOff(cm, p)) {
+    /* The TMU Off that Guide 7.5 asks for comes before a Lane Disable,
+     * which a Thunderbolt host never writes (below): there the TMU is left
+     * as it is (record 22 section 19.4 item 6), whatever mode the routers
+     * came up in. */
+    if (!cm->HostRouter.Tbt3 && !tbtU4TmuOff(cm, p)) {
         tbtU4Log(cm, "u4.bond.tmu-not-off", p->Index);
         goto failed;
     }

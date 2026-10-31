@@ -2615,6 +2615,10 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             opts->NoStor98Vxd = 1;
         } else if (inst_switch(a, "xhcipfw")) {
             opts->Pfw = 1;
+        } else if (inst_switch(a, "tbnet")) {
+            opts->TbNet = 1;
+        } else if (inst_switch(a, "notbnet")) {
+            opts->NoTbNet = 1;
         } else if (inst_switch(a, "noxhcipfw")) {
             opts->NoPfw = 1;
         } else if (inst_switch(a, "nouas")) {
@@ -2963,6 +2967,26 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
         (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, opts->Faster ? "/faster belongs to an install"
                  : "/nofaster belongs to an install", NULL);
+        return 1;
+    }
+    /* Record 26 section 5.3.5 (task 45.60): Thunderbolt networking's
+     * switches, as record 35 section 9.2 has them where the package
+     * carries no network driver; until task 45.59's installer step none
+     * does. */
+    if ((opts->TbNet || opts->NoTbNet) &&
+        (opts->Uninstall || opts->Devices || opts->Eject)) {
+        inst_err(err, errCap, opts->TbNet ? "/tbnet belongs to an install"
+                 : "/notbnet belongs to an install", NULL);
+        return 1;
+    }
+    if (opts->TbNet && opts->NoTbNet) {
+        inst_err(err, errCap, "/tbnet and /notbnet contradict each other",
+                 NULL);
+        return 1;
+    }
+    if (opts->TbNet && !INST_TBNET_WIRED) {
+        inst_err(err, errCap, "/tbnet: this package carries no Thunderbolt "
+                 "networking driver for this system", NULL);
         return 1;
     }
     if (opts->Faster && opts->NoFaster) {
@@ -6092,15 +6116,43 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_TB,
       "Thunderbolt 3 / USB4 support (experimental) (xhcicm.sys)", 270, 10 },
     { INST_PT_TB_T,
-      "A Thunderbolt 3 / USB4 controller was found. With this, a device "
-      "plugged into its port can reach the computer's memory: see "
-      "XhciCmApprove.",
-      272, 24 },
+      "A Thunderbolt 3 / USB4 controller was found.",
+      272, 16 },
     { INST_PT_TB_ABSENT,
       "No Thunderbolt 3 / USB4 controller was found (some laptops show it "
       "only with a device plugged in or a BIOS setting). Tick it only if "
       "this computer has such a port.",
       272, 24 },
+    /* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4
+     * page. */
+    { INST_PT_TBT_HEAD,
+      "Thunderbolt 3 and USB4: what is installed with the support, and "
+      "how devices are approved.",
+      284, 18 },
+    { INST_PT_APPR_HEAD,
+      "When a Thunderbolt or USB4 device is plugged in (XhciCmApprove):",
+      284, 10 },
+    { INST_PT_APPR_1, "Give it a PCI Express connection at once", 270, 10 },
+    { INST_PT_APPR_1_T,
+      "A PCI Express device can read and write all of this computer's "
+      "memory: plug in only devices you trust. Some controllers' firmware "
+      "decides this itself.",
+      272, 24 },
+    { INST_PT_APPR_0, "Give it none", 270, 10 },
+    { INST_PT_APPR_0_T,
+      "No new PCI Express connection is made; a device may still work over "
+      "USB where it offers that. Connections already made when Windows "
+      "starts stay, unless XhciCmPreOsCleanup ends them.",
+      272, 24 },
+    { INST_PT_APPR_MIXED,
+      "The controllers hold different values now: with neither chosen, "
+      "each keeps its own.",
+      284, 18 },
+    { INST_PT_APPR_NEW,
+      "A new install starts with the default; a change applies from the "
+      "next restart: unplug the dock until then if you choose none.",
+      284, 18 },
+    { INST_PT_TBNET, "Thunderbolt networking", 284, 10 },
     { INST_PT_TRAY, "xHCI98 USB Tree, the tray tool, started at login", 270,
       10 },
     /* Task 43.27: a box of its own in the place of the tray box's
@@ -6124,8 +6176,8 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "No controller is present now: these take effect when it appears.",
       218, 20 },
     { INST_PT_ADVANCED,
-      "For the release notes' advice and a tester's use. A value left as "
-      "it is is not written; one you change is written machine-wide.",
+      "For the release notes' advice. A value left as it is is not "
+      "written; one you change is written machine-wide.",
       304, 18 },
     { INST_PT_SUMMARY,
       "Nothing has been changed yet. Click Install to do the following.",
@@ -6847,21 +6899,44 @@ const char instCmOffText[] =
 
 void inst_tb_found_text(char *out, size_t cap, const char *name)
 {
-    const char *all = inst_page_text(INST_PT_TB_T);
-    const char *rest = strstr(all, ". ");
     char cut[INST_TB_NAME_SHOWN + 1];
 
     if (cap == 0) {
         return;
     }
-    if (name == NULL || name[0] == '\0' || rest == NULL) {
-        inst_copy(out, all, cap);
+    if (name == NULL || name[0] == '\0') {
+        inst_copy(out, inst_page_text(INST_PT_TB_T), cap);
         return;
     }
+    /* Since task 45.60 (record 26 section 5.3.5) the sentence says what
+     * was found alone; what a device can reach is the Thunderbolt and USB4
+     * page's approval row. */
     inst_copy(cut, name, sizeof(cut));
     inst_copy(out, "A Thunderbolt 3 / USB4 controller was found: ", cap);
     inst_cat(out, cap, cut);
-    inst_cat(out, cap, rest);
+    inst_cat(out, cap, ".");
+}
+
+void inst_tbnet_decide(int wired, int carried, int sw, int inForce, int box,
+                       int nhiPresent, int mwHas, INST_TBNET *d)
+{
+    int final;
+
+    memset(d, 0, sizeof(*d));
+    d->Shown = wired ? 1 : 0;
+    d->Enabled = (wired && carried) ? 1 : 0;
+    if (!d->Enabled) {
+        return;     /* nothing shown open, nothing written */
+    }
+    d->First = sw >= 0 ? (sw ? 1 : 0) : (inForce == 1 ? 1 : 0);
+    final = box >= 0 ? (box ? 1 : 0) : d->First;
+    /* A switch makes the box changed, as /faster and /nofaster do; else a
+     * box left as the value in force writes nothing (record 35 section
+     * 9.1). */
+    d->Write = (sw >= 0 || final != (inForce == 1 ? 1 : 0)) ? 1 : 0;
+    d->Value = (INST_U32)final;
+    d->ToNhi = d->Write && nhiPresent;
+    d->ToMw = d->Write && (mwHas || !nhiPresent);
 }
 
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked)
