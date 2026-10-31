@@ -5299,22 +5299,13 @@ static void test_s98(void)
           !inst_cm_mode_off(NULL, 0) &&
           strcmp(instCmOffText, "Thunderbolt 3 and USB4 will be turned off "
                  "(XhciCmMode 0)") == 0, "the XhciCmMode 0 warning");
-    /* The Thunderbolt row's note (owner, 2026-10-19). */
+    /* The Thunderbolt row's note (owner, 2026-10-19): since record 26
+     * draft 54 (owner, 2026-10-31) that one was found, with no name; what
+     * a device can reach is the approval row's (section 5.3.5). */
     {
-        char tt[400];
-        inst_tb_found_text(tt, sizeof(tt), "Thunderbolt Controller 15EB");
-        /* Since task 45.60 (record 26 section 5.3.5) what was found
-         * alone; what a device can reach is the approval row's. */
-        CHECK(strcmp(tt, "A Thunderbolt 3 / USB4 controller was found: "
-                     "Thunderbolt Controller 15EB.") == 0,
-              "found, with its name");
-        inst_tb_found_text(tt, sizeof(tt), "");
-        CHECK(strcmp(tt, inst_page_text(INST_PT_TB_T)) == 0,
-              "found, no name: the page's text");
-        inst_tb_found_text(tt, sizeof(tt),
-                           "0123456789012345678901234567890123456789XYZ");
-        CHECK(strstr(tt, "XYZ") == NULL && strstr(tt, "012345678901234567"
-                     "890123456789012345.") != NULL, "a long name cut");
+        CHECK(strcmp(inst_page_text(INST_PT_TB_T), "A Thunderbolt 3 / USB4 "
+                     "controller was found.") == 0,
+              "found: the short sentence, no controller's name");
         CHECK(strstr(inst_page_text(INST_PT_TB), "(experimental)") != NULL &&
               strstr(inst_page_text(INST_PT_TB_ABSENT), "No Thunderbolt 3 / "
                      "USB4 controller was found") != NULL,

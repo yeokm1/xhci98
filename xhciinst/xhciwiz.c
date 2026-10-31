@@ -1367,9 +1367,10 @@ static void comp_fill(HWND dlg)
     if (tbPresent && inst_eng_tb_intel()) {
         SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_INTEL));
     } else if (tbPresent) {
-        char found[300];
-        inst_tb_found_text(found, sizeof(found), inst_eng_tb_name());
-        SetDlgItemTextA(dlg, IDC_C_TB_T, found);
+        /* That one was found, without its name (owner, 2026-10-31;
+         * record 26 section 5.3.5, draft 54): a name cut to fit the row
+         * told the user nothing the box needs. */
+        SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_T));
     } else {
         SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_ABSENT));
     }
@@ -4332,9 +4333,12 @@ static void summary_fill(HWND dlg)
             }
         }
         if (trayHere) {
-            tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, started at login\n"
-                                  : "- the xHCI98 USB Tree, not started at "
-                                    "login\n");
+            /* The tool is copied either way; the box decides its start
+             * at login alone (owner, 2026-10-31; record 26 draft 54). */
+            tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, installed and "
+                                    "started at login\n"
+                                  : "- the xHCI98 USB Tree, installed, not "
+                                    "started at login\n");
             if (fastForced || fastChoice != fastNow) {
                 tb_add(&t, fastChoice ? "- its \"can run faster\" notice turned "
                                         "on for this computer\n"
@@ -5407,8 +5411,6 @@ static void st_comp_words(HWND d, const char *note)
         INST_PT_TB_T, INST_PT_TB_ABSENT, INST_PT_TB_INTEL
     };
     char text[1200];
-    char found[300];
-    char name[40];
 
     SetDlgItemTextA(d, IDC_C_DRIVERS, inst_page_text(INST_PT_DRIVERS));
     st_comp_longest(d, IDC_C_DRIVERS_T, drv, 3);
@@ -5419,19 +5421,6 @@ static void st_comp_words(HWND d, const char *note)
     SetDlgItemTextA(d, IDC_C_STOR_T, text);
     SetDlgItemTextA(d, IDC_C_TB, inst_page_text(INST_PT_TB));
     st_comp_longest(d, IDC_C_TB_T, tb, 3);
-    /* A found controller's name at its longest (36 characters). */
-    memset(name, 'W', 36);
-    name[36] = '\0';
-    inst_tb_found_text(found, sizeof(found), name);
-    {
-        HWND c = GetDlgItem(d, IDC_C_TB_T);
-        int h0 = comp_text_h(d, IDC_C_TB_T);
-        GetWindowTextA(c, text, sizeof(text));
-        SetWindowTextA(c, found);
-        if (comp_text_h(d, IDC_C_TB_T) < h0) {
-            SetWindowTextA(c, text);
-        }
-    }
     SetDlgItemTextA(d, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(d, IDC_C_FAST, inst_page_text(INST_PT_FAST));
 }

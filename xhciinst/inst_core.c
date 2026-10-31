@@ -6153,7 +6153,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "next restart: unplug the dock until then if you choose none.",
       284, 18 },
     { INST_PT_TBNET, "Thunderbolt networking", 284, 10 },
-    { INST_PT_TRAY, "xHCI98 USB Tree, the tray tool, started at login", 270,
+    { INST_PT_TRAY, "Start the xHCI98 USB Tree (tray icon) at login", 270,
       10 },
     /* Task 43.27: a box of its own in the place of the tray box's
      * sentence (record 26 section 5.3, draft 33). */
@@ -6896,26 +6896,6 @@ int inst_cm_mode_off(const char *name, INST_U32 value)
 
 const char instCmOffText[] =
     "Thunderbolt 3 and USB4 will be turned off (XhciCmMode 0)";
-
-void inst_tb_found_text(char *out, size_t cap, const char *name)
-{
-    char cut[INST_TB_NAME_SHOWN + 1];
-
-    if (cap == 0) {
-        return;
-    }
-    if (name == NULL || name[0] == '\0') {
-        inst_copy(out, inst_page_text(INST_PT_TB_T), cap);
-        return;
-    }
-    /* Since task 45.60 (record 26 section 5.3.5) the sentence says what
-     * was found alone; what a device can reach is the Thunderbolt and USB4
-     * page's approval row. */
-    inst_copy(cut, name, sizeof(cut));
-    inst_copy(out, "A Thunderbolt 3 / USB4 controller was found: ", cap);
-    inst_cat(out, cap, cut);
-    inst_cat(out, cap, ".");
-}
 
 void inst_tbnet_decide(int wired, int carried, int sw, int inForce, int box,
                        int nhiPresent, int mwHas, INST_TBNET *d)

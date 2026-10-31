@@ -1030,12 +1030,6 @@ const char *inst_summary_head(int runs, int writes, int other, int nt);
  * instCmOffText. */
 int inst_cm_mode_off(const char *name, INST_U32 value);
 
-/* The Thunderbolt row's note when a controller was found (owner,
- * 2026-10-19): "A Thunderbolt 3 / USB4 controller was found: <name>."
- * with the name cut to INST_TB_NAME_SHOWN characters, then the memory
- * sentence of INST_PT_TB_T; with no name, INST_PT_TB_T as it is. */
-#define INST_TB_NAME_SHOWN  36
-void inst_tb_found_text(char *out, size_t cap, const char *name);
 extern const char instCmOffText[];
 
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */

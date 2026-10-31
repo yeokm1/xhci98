@@ -396,9 +396,6 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text);
 int inst_eng_s98_file_update(void);
 void inst_eng_s98_file_ok(int ok);
 
-/* The Thunderbolt 3 / USB4 controller found ("" for none). */
-const char *inst_eng_tb_name(void);
-
 /* 1 when the finish offers a shutdown rather than a restart (98 SE and ME
  * after a Stor98 update); 1 when the uninstall left a Stor98 it did not
  * install (the finish page says so). */

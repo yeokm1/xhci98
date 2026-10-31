@@ -167,7 +167,8 @@ The window walks you through:
   Components       the USB drivers with the UAS disk driver under them,
                    Thunderbolt 3 / USB4 support, the USB storage
                    drivers (98 SE only, where the download carries them),
-                   the xHCI98 USB Tree started at login, and the install
+                   whether the xHCI98 USB Tree starts at login (it is
+                   installed either way), and the install
                    folder (Change folder...); a warning on Next for a box
                    that does not apply there. Settings... opens one
                    dialog with a tab each for USB, Thunderbolt and
