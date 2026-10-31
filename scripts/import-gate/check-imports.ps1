@@ -169,7 +169,24 @@ param(
     # image and the two Vista-only interrupt routines by name, and the
     # default profile keeps refusing every pair Windows 98 lacks in
     # xhci98.sys's x86 image as before.
-    [ValidateSet("default", "hlprx86")]
+    #
+    # **The net98 profile: xhcinet.sys x86, the NDIS 5 miniport of
+    # Thunderbolt networking** (design record 35 section 7.8, task 45.59
+    # step S6), one image for 98 SE, ME, 2000, XP, Vista and 7. The
+    # default x86 rules run unchanged over its own allowlist (-AllowPath
+    # must name it), so every NTOSKRNL.EXE and HAL.DLL pair keeps the
+    # Windows 98 rule and the Windows 2000 baselines; on top of them each
+    # such pair must be a row of xhci98-imports.allow too (its evidence),
+    # and each NDIS.SYS pair must carry "bc-header" - declared in the
+    # Windows 2000 DDK's ndis.h, whose BINARY_COMPATIBLE half is the set
+    # "available on Windows 9x" (its own words), checked against
+    # tools\ntddk\inc\ddk\ndis.h when it is there - and either
+    # "w98-runtime <record>" (a recorded load of an NDIS 5 WDM miniport
+    # importing the pair on 98 SE and ME) or "w98-owed" (a warning: the
+    # 98 SE and ME half is not shown). NDIS.VXD itself is never read: it
+    # is an LE image whose NT-style exports are built at run time, and
+    # the owner's rule of 2026-10-31 forbids reading a Microsoft binary.
+    [ValidateSet("default", "hlprx86", "net98")]
     [string]$GateProfile = "default",
 
     # The hlprx86 manifests and the directories their files are staged in.
@@ -913,6 +930,52 @@ function Test-ImportSites {
     Write-Ok "SITES rule: $($siteRows.Count) restricted pair(s), $checked object reference(s) checked across $($objects.Count) object file(s)"
 }
 
+#
+# The net98 profile's own rows (see -GateProfile): NT pairs also in
+# xhci98-imports.allow, NDIS.SYS pairs with bc-header and w98-runtime or
+# w98-owed. Reads only this repository's files and the DDK's header.
+#
+function Test-Net98Rows {
+    param([string]$AllowPath)
+    $rows = (Read-AllowFile -Path $AllowPath).Allow
+    $hcd = (Read-AllowFile -Path (Join-Path $PSScriptRoot "xhci98-imports.allow")).Allow
+    $header = Join-Path $repo "tools\ntddk\inc\ddk\ndis.h"
+    $headerText = $null
+    if (Test-Path -LiteralPath $header) {
+        $headerText = [IO.File]::ReadAllText($header)
+    } else {
+        Add-Warning "net98: tools\ntddk\inc\ddk\ndis.h is not staged, so no NDIS.SYS row's bc-header was checked."
+    }
+    $owed = 0
+    foreach ($row in $rows) {
+        if ($row.Module -ieq "ntoskrnl.exe" -or $row.Module -ieq "hal.dll") {
+            $twin = @($hcd | Where-Object { $_.Module -ieq $row.Module -and $_.Symbol -ceq $row.Symbol })
+            if ($twin.Count -eq 0) {
+                Add-Failure "net98: $($row.Module)!$($row.Symbol) is not a row of xhci98-imports.allow, so it has no Windows 98 evidence this tree holds (design record 35 section 7.8)."
+            }
+        } elseif ($row.Module -ieq "NDIS.SYS") {
+            if ($row.Notes -notmatch '(^|[;\s])bc-header([;\s]|$)') {
+                Add-Failure "net98: NDIS.SYS!$($row.Symbol) carries no bc-header tag."
+            } elseif ($null -ne $headerText -and
+                      $headerText -notmatch ('(?m)(\b' + [regex]::Escape($row.Symbol) + '\s*\(|#define\s+' + [regex]::Escape($row.Symbol) + '\b)')) {
+                Add-Failure "net98: NDIS.SYS!$($row.Symbol) is tagged bc-header but the Windows 2000 DDK's ndis.h declares no such routine."
+            }
+            if ($row.Notes -match '(^|[;\s])w98-runtime\s+\S') {
+            } elseif ($row.Notes -match '(^|[;\s])w98-owed([;\s]|$)') {
+                $owed++
+            } else {
+                Add-Failure "net98: NDIS.SYS!$($row.Symbol) carries neither w98-runtime <record> nor w98-owed."
+            }
+        } else {
+            Add-Failure "net98: $($row.Module)!$($row.Symbol): xhcinet.sys imports from NTOSKRNL.EXE, HAL.DLL and NDIS.SYS alone."
+        }
+    }
+    if ($owed -gt 0) {
+        Add-Warning "net98: $owed NDIS.SYS pair(s) are w98-owed - the 98 SE and ME half of xhcinet.sys is not shown for them."
+    }
+    Write-Ok ("net98 allowlist rows: {0} checked" -f $rows.Count)
+}
+
 function Test-Image {
     param(
         [string]$Path,
@@ -1034,6 +1097,13 @@ function Test-Image {
                     $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "hlprx86") { "w2k-export; xp-x86-export; nt6-x86-export" } else { "w2k-export" }
                 }
             }
+        }
+
+        # net98: an NDIS.SYS row's own tags are its evidence, held by
+        # Test-Net98Rows (bc-header against the DDK's ndis.h).
+        if ($GateProfile -eq "net98" -and $pair.Module -ieq "NDIS.SYS") {
+            if ($row.Notes -match '(^|[;\s])bc-header([;\s]|$)') { $evidence += "bc-header" }
+            if ($row.Notes -match '(^|[;\s])w98-runtime\s+\S') { $evidence += "w98-runtime" }
         }
 
         if ($null -ne $Precedent) {
@@ -1208,6 +1278,16 @@ try {
     $win2k = $null
     $precedent = $null
     $ntkernText = $null
+
+    if ($GateProfile -eq "net98") {
+        if (-not $script:allowPathPinned) {
+            throw "-GateProfile net98 needs -AllowPath: no default allowlist applies to xhcinet.sys (scripts\import-gate\xhcinet-imports.allow)."
+        }
+        if ($Arch -eq "amd64") {
+            throw "-GateProfile net98 is an x86 profile: xhcinet.sys x64 is gated by the default amd64 rules over xhcinet-imports-amd64.allow."
+        }
+        Test-Net98Rows -AllowPath $AllowPath
+    }
 
     if ($GateProfile -eq "hlprx86") {
         #
