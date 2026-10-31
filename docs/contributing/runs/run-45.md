@@ -4679,7 +4679,7 @@ giving it a fixed interface metric of 1 (its TCP/IP Advanced settings,
 "Automatic metric" off); the adapter left with the static settings shows
 under Device Manager's hidden devices.
 
-## 45.15 (legs) the minimal chain on 98 SE, ME and 2000; 10 x64 owed (2026-10-31)
+## 45.15 (legs) the minimal chain on 98 SE, ME, 2000 and 10 x64 (2026-10-31)
 
 Worker w45-u4chain2, development host A. Code at `d73e4b10` (`f1e9ec85`
 and record 34's revision 12, documentation only): the gated builds
@@ -4716,7 +4716,10 @@ each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
 | r2c | 2000 | the r2 overlay started again with the chain: adopted (`u4.kid.adopted=00010808`); the child unplugged: `u4.kid.teardown`, `u4.linkdown.kid`, the chain port invalidated (`cm.chain.invalidate=02020408`); plugged again: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, invalidated again (`01020408`); `XHCIINST /devices`: the kid "behind another device, approved, PCIe up", the chained NVMe back on Stor98 at Code 10 (the hot plug's platform limit of r1) | clause 4: pass for the connection manager and the PCI side |
 | x3 | XP SP3 | the XP golden of "45.15 (continued)" (an earlier package) with this commit's qemu `xhcicm.sys` and `xhci98.sys` copied in and restarted; started with no dock; the parent and then its child plugged by QMP at the desktop: the parent's tunnel up and UP (`u4.pcie.up=00010809`), then the kid connected (`u4.kid.pcie.up=00010809`, UP), the tray's "QEMU USB4 NVMe Enclosure connected"; but on the PCI side nothing appeared behind the tunnel port (the member's `BusRelations` with no new child, `cm.chain.rel.new=00000000`; no chain port, `cm.chain.ports` 0, the chain action owed and expired; `XHCIINST /devices`: "nothing behind it now"); the cause is not established (on 7, r3, the dock's switch appeared at Code 31; here nothing appeared; a tunnel port numbered at power-on with no dock and no room for the switch is a hypothesis, not read) | clause 1: the connection manager's half (parent first, then the kid) pass; the PCI side failed, cause not established |
 | r3 | 98 SE | started with no dock; the parent and its child plugged at the desktop: the parent UP, then the kid UP; the 9x numbering and re-enumeration ran on both members (`cm.reenum.9x.reenumerate`), the numbering outcome NONE (`cm.brnum.9x.outcome` 0: no function and no bridge seen behind either member), and no drive appeared | clause 1: the connection manager's half pass; the PCI side failed (nothing answering behind the member), cause not established |
-| - | 10 x64 | not run: the package of this clone is unsigned and has no catalogs (10 x64 refuses such a package, 43.33); the in-guest throwaway signing was not run in this session | owed |
+| g4 | 10 x64 (22H2) | the parent preserved at the start (`u4.preserved=00010808`); the child plugged: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, the chain port classified (`cm.chain.class=00060408`), the chained NVMe on Windows' `stornvme`, started, with its disk; the end unplug: `u4.kid.teardown`, `u4.linkdown.kid`, the chain port invalidated (`cm.chain.invalidate=02020408`), the parent's NVMe kept; plugged again: UP, started; the middle unplug: `u4.kid.dropped` first, then the port's link-down; the parent plugged again at the desktop with the child on it: the parent's tunnel up and UP, then the kid's, both NVMe on `stornvme`, started (`XHCIINST /devices`) | clauses 2, 3 and the approve order: pass; the child's hot plug behind a parent present at power-on (part of clause 1): pass; the parent plugged at the desktop here followed a power-on with it present, so it is not the start with no dock of x3 and r3 |
+| r2, r2b | 10 x64 (22H2) | the chain at power-on: adopted (`u4.kid.adopted=00010808`); `XHCIINST /devices`: both NVMe on `stornvme`, started, each with its disk, behind the tunnel port; the child unplugged: `u4.kid.teardown`, `u4.linkdown.kid`, the chain port invalidated, the parent's NVMe kept; plugged again: `u4.kid.connect`, `u4.kid.pcie.up=00010809`, UP, both NVMe started again | clause 4: pass |
+
+The 10 x64 legs (g4, r2, r2b): a fresh overlay of the q35 base `w10x64` (`-smp 2`, 4 GB), the amd64 packages of `d73e4b10` (release `xhcicm.sys` `f9fcb812...`, `xhci98.sys` `4886609f...`; qemu `xhcicm.sys` `ae044ce4...`, `xhci98.sys` `cb0135d4...`, all as built, unsigned). The owner ran the in-guest signing step (`E:\xhci98-vm\p45\w45-u4chain\xf64\SETUP64.BAT`, elevated, in the overlay): a throwaway certificate made in that guest (MakeCert, valid 2026 to 2030, in Root and TrustedPublisher), every image and catalog signed with it (SignTool "Successfully signed"), then `INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`, exit 4 ("Changes were made ... restart Windows"); the signed qemu-flavour images were copied over the installed ones and Windows restarted. Test mode on. Evidence `E:\xhci98-vm\p45\w45-u4chain\w10\` (`debugcon-g4.log`, `serial-g4.log`, `debugcon-r2.log`, `debugcon-r2b.log`, `serial-r2b.log`, `cmdline-*.txt`, screenshots). The legs ran the package of `d73e4b10`; the later `a31e0b25` changes only a kid behind a Thunderbolt 3 parent and a link-controller descriptor read that fails, neither on these legs' path (a USB4 parent).
 
 ### Findings
 
@@ -4730,7 +4733,6 @@ each leg a child overlay. Evidence: `E:\xhci98-vm\p45\w45-u4chain\w98\`,
 
 ### Left
 
-- The 10 x64 leg (a signed package, or the in-guest throwaway signing).
 - Clause 1's PCI side with the parent hot-plugged at the desktop: on 7
   the dock's switch at Code 31 (r3 of "45.15 (continued)"), on XP and 98
   SE nothing behind the tunnel port (x3, r3); the cause is not
