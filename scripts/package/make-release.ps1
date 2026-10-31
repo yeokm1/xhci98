@@ -411,7 +411,7 @@ which -UploadSetOnly rebuilds them.
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
 every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, and from 3.4.0.0
-it names v0.1.5.
+it names v0.1.6 (v0.1.5 until task 45.44).
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
