@@ -818,6 +818,9 @@ typedef struct _INST_OPTS {
                                with the Thunderbolt part (design record
                                32 sections 8 and 11)                   */
     int NoPfw;              /* /noxhcipfw: it unticked                */
+    int TbNet;              /* /tbnet: the networking box ticked (record
+                               26 section 5.3.5, record 35 section 9.2)  */
+    int NoTbNet;            /* /notbnet: it unticked                  */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -1740,6 +1743,16 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
  * the NT systems. */
 #define INST_PT_PFW             47
 #define INST_PT_PFW_SYS         48
+/* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4 page. */
+#define INST_PT_TBT_HEAD        49
+#define INST_PT_APPR_HEAD       50
+#define INST_PT_APPR_1          51
+#define INST_PT_APPR_1_T        52
+#define INST_PT_APPR_0          53
+#define INST_PT_APPR_0_T        54
+#define INST_PT_APPR_MIXED      55
+#define INST_PT_APPR_NEW        56
+#define INST_PT_TBNET           57
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1977,6 +1990,30 @@ extern const char instS98DisconnectText[];
 /* The window's Stor98 box (owner, 2026-10-19): under the Thunderbolt 3 /
  * USB4 box, and open only while that box can be and is ticked. */
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
+
+/* Thunderbolt networking's box (record 26 section 5.3.5, record 35
+ * section 9.1). INST_TBNET_WIRED is 0 until task 45.59's step S11 stages
+ * the network driver's INF: the box is not shown, /tbnet is refused,
+ * /notbnet changes nothing, and nothing reads or writes XhciCmNet. */
+#define INST_TBNET_WIRED        0
+
+typedef struct _INST_TBNET {
+    int Shown;              /* the box shown at all (the gate)          */
+    int Enabled;            /* open: the package carries the driver     */
+    int First;              /* its first state                          */
+    int Write;              /* XhciCmNet to be written                  */
+    INST_U32 Value;         /* the value to write                       */
+    int ToNhi;              /* into every present host interface's key  */
+    int ToMw;               /* into Services\USB                        */
+} INST_TBNET;
+
+/* wired the gate; carried the package carries the network driver for
+ * this system; sw -1 none, 0 /notbnet, 1 /tbnet; inForce the XhciCmNet in
+ * force, 1 or 0, -1 none set; box the box as left, -1 untouched;
+ * nhiPresent a host interface is present; mwHas Services\USB holds an
+ * XhciCmNet. */
+void inst_tbnet_decide(int wired, int carried, int sw, int inForce, int box,
+                       int nhiPresent, int mwHas, INST_TBNET *d);
 
 /* ---- S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design
  * record 30 section 7; owner, 2026-10-22) ---------------------------------- */

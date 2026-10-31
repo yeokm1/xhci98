@@ -29,9 +29,9 @@ A device the helper cannot install gets its Device Manager steps on a page
 of their own, which you can save to a text file; the rest of the install
 completes.
 
-On Windows 98 SE and ME the Components page also offers "Close PCI
-windows above 4 GB (XHCIPFW.VXD)", under the Thunderbolt 3 / USB4 box and
-above Stor98's: a small part Windows loads at each start, before it reads
+On Windows 98 SE and ME the Thunderbolt and USB4 page also offers "Close
+PCI windows above 4 GB (XHCIPFW.VXD)", above Stor98's: a small part
+Windows loads at each start, before it reads
 the PCI bridges, which closes every bridge's prefetchable memory window
 that lies wholly above 4 GB. Those systems cannot use such a window, and
 a board that leaves one there (a USB4 controller's ports with "Above 4G
@@ -165,8 +165,7 @@ The window walks you through:
                    found: each device of the package, what runs it now
                    and what will be done, and any warning
   Components       the USB drivers with the UAS disk driver under them,
-                   Thunderbolt 3 / USB4 support with Stor98 under it
-                   (where the package carries it), the USB storage
+                   Thunderbolt 3 / USB4 support, the USB storage
                    drivers (98 SE only, where the download carries them),
                    the xHCI98 USB Tree started at login, and the install
                    folder (Change folder...); a warning on Next for a box
@@ -174,6 +173,11 @@ The window walks you through:
                    dialog with a tab each for USB, Thunderbolt and
                    Stor98, the components ticked; Advanced... on a tab
                    holds the rest of its options
+  Thunderbolt and USB4
+                   (only with Thunderbolt 3 / USB4 support ticked)
+                   XHCIPFW where the system takes it, Stor98 with its
+                   large transfers (98 SE and ME), and how a device
+                   plugged in is approved (XhciCmApprove)
   Summary          everything that will happen, the warnings again;
                    nothing is changed before you click Install
   Progress         each step as it runs; Cancel stops at the next step
@@ -190,11 +194,12 @@ yours has the port. With it, a device plugged into
 that port is approved automatically and gets a PCI Express connection,
 which lets it read and write the computer's memory: these systems have no
 Thunderbolt control panel to ask first. On a computer whose port is within
-reach of people you do not trust, set XhciCmApprove to 0 on the
-Settings dialog's Thunderbolt tab; devices then get no connection unless
-the BIOS
-already gave them one. Unticked, a Thunderbolt driver already installed
-stays as it is, and this package's is kept out of Windows' reach.
+reach of people you do not trust, choose "Give it none" on the
+Thunderbolt and USB4 page (XhciCmApprove 0); a device plugged in then
+gets no new PCI Express connection, and one already made when Windows
+starts stays unless XhciCmPreOsCleanup ends it. Unticked, a Thunderbolt
+driver already installed stays as it is, and this package's is kept out
+of Windows' reach.
 
 Stor98 (hot-pluggable NVMe driver; its guide is stor98-readme.txt):
 ticked with the Thunderbolt 3 / USB4 box (on Windows 10 unticked), and you
