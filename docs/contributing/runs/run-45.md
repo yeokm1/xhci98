@@ -8299,3 +8299,7 @@ the version bump.
   page it is on: a short window says, one short paragraph per choice, what
   each choice does and when to change it, with the full readme one button
   away."
+- 45.63 part 1 (pending): "Windows 8, 8.1 and 10: xhci98.sys, xhciuas.sys
+  and xhcicm.sys take only non-executable memory for their own data, and
+  their 64-bit files keep their import table outside executable code, as
+  Windows' memory-integrity checks require."
