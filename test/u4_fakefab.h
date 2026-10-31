@@ -196,6 +196,11 @@ struct FAB;
 typedef int (*FAB_HOOK)(struct FAB *f, unsigned long pdf, int router,
                         unsigned long cs, unsigned long adp, unsigned long addr,
                         unsigned long n, const unsigned long *data);
+/* An inter-domain packet (PDF 6 or 7) the code under test sent, its words
+ * from the Route String High on, the CRC excluded (task 45.59): a test's
+ * model of the far host takes it there. */
+typedef void (*FAB_XDTX)(struct FAB *f, unsigned long pdf, const unsigned long *dw,
+                         unsigned long words);
 
 typedef struct FAB {
     TBT_HOST Host;                  /* Context = this */
@@ -231,6 +236,8 @@ typedef struct FAB {
     FAB_ROUTER R[FAB_MAX_ROUTERS];
     FAB_HOOK Hook;
     void *HookCtx;
+    FAB_XDTX XdTx;
+    unsigned long XdSent;           /* inter-domain packets sent */
 
     /* logs */
     unsigned long Requests;
@@ -364,6 +371,10 @@ long fabFindWrite(const FAB *f, long from, int router, unsigned long cs,
 
 /* A frame from the fabric, now (a notification, a hot plug event). */
 void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long words);
+/* A write to an adapter's configuration space as if a connection manager
+ * of the router's own domain made it (task 45.59: the far host's lanes in
+ * a host-to-host test), with every effect the model gives the write. */
+void fabAdapterPoke(FAB *f, int router, unsigned adp, unsigned long addr, unsigned long v);
 
 /* The DROM's CRC-32C (as the routers' DROMs carry it). */
 unsigned long fabCrcOf(const unsigned char *p, unsigned long n);

@@ -2112,7 +2112,7 @@ One state per host USB4 port, on the thread:
 | State | Meaning | Leaves on |
 |---|---|---|
 | EMPTY | lane 0 disconnected (CLd) | a check finding it connected: CONNECTING |
-| CONNECTING | section 6.4 (or section 8) running | enumerated: BONDING; an unplug: TEARDOWN; ERR_ENUM, ERR_NUA: UNSUPPORTED; enumeration failed 20 times: FAILED |
+| CONNECTING | section 6.4 (or section 8) running | enumerated: BONDING; an unplug: TEARDOWN; ERR_ENUM, ERR_NUA: UNSUPPORTED (XDOMAIN with `XhciCmNet` 1, design record 35 section 3.3); enumeration failed 20 times: FAILED |
 | BONDING | section 6.5 (section 8 item 3 for a Thunderbolt 3 router) | done or single: CONFIGURING for a USB4 router, TUNNELLING for a Thunderbolt 3 router, which has no Configuration Valid handshake (section 8 item 2); the verified fallback failing: FAILED |
 | CONFIGURING | section 6.6 | Configuration Ready: TUNNELLING; timeout: FAILED |
 | TUNNELLING | sections 6.8 and 6.9, then the PCI side (section 7.6) | the PCIe tunnel up and its tunnel ports re-enumerated, or approval 0 with USB3 handled: UP; failure: FAILED |
@@ -2120,6 +2120,7 @@ One state per host USB4 port, on the thread:
 | HELD | a port whose configuration did not verify and showed no removal evidence: found so at start (section 9.2), or a port holding a resume obligation at resume (section 7.6); left exactly as found; a live preserved tunnel on it remains an obligation | an unplug: TEARDOWN of whatever this driver can read of it, host side only |
 | FAILED | enumerated, but some step failed; whatever did succeed (a USB3 tunnel, say) stays | an unplug: TEARDOWN; only a re-plug retries |
 | UNSUPPORTED | a router this driver will not drive | an unplug: EMPTY |
+| XDOMAIN | another domain's router, perhaps another host: design record 35's inter-domain discovery and USB4NET service run on the port (task 45.59, `XhciCmNet` 1) | an unplug: TEARDOWN; no answer to the UUID Request, or a loop: UNSUPPORTED |
 | TEARDOWN | section 7.3 | done: EMPTY, then a check (the lane may already be connected again) |
 
 Each port has a **generation** incremented at every entry to CONNECTING;
