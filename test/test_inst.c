@@ -2021,7 +2021,7 @@ static int parse(int argc, const char **argv, INST_OPTS *o)
 static void test_args(void)
 {
     INST_OPTS o;
-    const char *a1[] = { "x", "/dir", "release-x86", "/list" };
+    const char *a1[] = { "x", "/dir", "nt-x86", "/list" };
     const char *a2[] = { "x", "-set", "XhciSelectiveSuspend=1", "/yes",
                          "/set", "XhciInterruptMode", "2" };
     const char *a3[] = { "x", "/frobnicate" };
@@ -2036,7 +2036,7 @@ static void test_args(void)
     const char *a12[] = { "x", "/clean" };
 
     CHECK_EQ(parse(4, a1, &o), 0, "/dir /list");
-    CHECK(o.List && inst_eq(o.Dir, "release-x86"), "fields");
+    CHECK(o.List && inst_eq(o.Dir, "nt-x86"), "fields");
     CHECK_EQ(parse(7, a2, &o), 0, "/set twice, one split by a batch file");
     CHECK_EQ(o.SetCount, 2, "two values");
     CHECK_EQ(o.SetValue[1], 2, "split form joined");
@@ -3201,7 +3201,7 @@ static void test_tb_eject(void)
     CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
              "/devices /eject refused");
     argv1[2] = "/dir";
-    argv1[3] = "release-x86";
+    argv1[3] = "98-me";
     CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0,
           "INSTALL.BAT's /dir is accepted");
     argv1[1] = "/eject";
@@ -3234,7 +3234,10 @@ static void test_cmf_place(void)
           "x86: the text names nt\\");
     CHECK(strstr(inst_cmf_where(INST_ARCH_AMD64), "nt\\") == NULL &&
           strstr(inst_cmf_where(INST_ARCH_AMD64), "x64") != NULL,
-          "x64: the text names the x64 directory, not nt\\");
+          "x64: the text names the x64 copy, not nt\\");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_X86), "copy") != NULL &&
+          strstr(inst_cmf_where(INST_ARCH_AMD64), "copy") != NULL,
+          "Have Disk names the local copy: no wizard takes cm\\xhcicmf.inx");
     for (a = INST_ARCH_X86; a <= INST_ARCH_AMD64; a++) {
         strcpy(pnf, inst_cmf_rel(a));
         n = strlen(pnf);
@@ -3244,6 +3247,89 @@ static void test_cmf_place(void)
               strlen("), then run INSTALL.BAT again.") <= 79,
               "the Have Disk line within 79 columns");
     }
+}
+
+/* The download by Windows family (record 36 sections 6.2 to 6.4). */
+static void test_family(void)
+{
+    int i;
+    int f;
+    int any;
+
+    CHECK_EQ(inst_family(0, INST_ARCH_X86), INST_FAM_9X, "98 SE and ME: 98-me");
+    CHECK_EQ(inst_family(1, INST_ARCH_X86), INST_FAM_NT86, "NT x86: nt-x86");
+    CHECK_EQ(inst_family(1, INST_ARCH_AMD64), INST_FAM_NT64, "x64: nt-x64");
+    CHECK(strcmp(inst_family_dir(INST_FAM_9X), "98-me") == 0 &&
+          strcmp(inst_family_dir(INST_FAM_NT86), "nt-x86") == 0 &&
+          strcmp(inst_family_dir(INST_FAM_NT64), "nt-x64") == 0 &&
+          inst_family_dir(3) == NULL, "the three folders' names");
+    CHECK_EQ(inst_family_of_dir("NT-X86"), INST_FAM_NT86, "any case");
+    CHECK_EQ(inst_family_of_dir("release-x86"), -1, "the flavour directory");
+    CHECK_EQ(inst_family_of_dir(NULL), -1, "NULL");
+    /* Every INF and image at its place. */
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "xhci98.inf"), "xhci98.inf") == 0,
+          "the controller's INF at the root");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcicm.inf"), "cm\\xhcicm.inf")
+          == 0, "the connection manager in cm\\");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, inst_cmf_rel(INST_ARCH_X86)),
+                 "cm\\xhcicmf.inx") == 0, "x86 filter: cm\\xhcicmf.inx");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT64, inst_cmf_rel(INST_ARCH_AMD64)),
+                 "cm\\xhcicmf.inx") == 0, "x64 filter: cm\\xhcicmf.inx");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "nt\\xhcicm.sys"),
+                 inst_pkg_rel(INST_FAM_NT86, "xhcicm.sys")) == 0,
+          "the filter's own xhcicm.sys is the one in cm\\");
+    CHECK(inst_pkg_rel(INST_FAM_9X, inst_cmf_rel(INST_ARCH_X86)) == NULL &&
+          inst_pkg_rel(INST_FAM_9X, "nt\\xhcicm.sys") == NULL,
+          "98-me: no filter");
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcihlpr.sys") == NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcihlpr.sys"), "xhcihlpr.sys")
+          == 0 && inst_pkg_rel(INST_FAM_NT64, "xhcihlpr.sys") == NULL,
+          "the helper in nt-x86 alone (record 36 section 3.1)");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "stor98.inf"),
+                 "stor98\\stor98.inf") == 0, "98-me: the 9x INF as stor98.inf");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "stor98.mpd"),
+                 "stor98\\stor98.mpd") == 0 &&
+          inst_pkg_rel(INST_FAM_NT64, "stor98.mpd") == NULL,
+          "stor98.mpd kept in nt-x86 (record 36 section 3.3)");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, INST_VSD_FILE),
+                 "stor98\\S98VSD.VXD") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_9X, INST_PFW_FILE),
+                 "cm\\XHCIPFW.VXD") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, INST_PFWSYS_FILE),
+                 "cm\\XHCIPFW.SYS") == 0 &&
+          inst_pkg_rel(INST_FAM_NT86, INST_VSD_FILE) == NULL &&
+          inst_pkg_rel(INST_FAM_NT64, INST_PFWSYS_FILE) == NULL,
+          "the images no INF names, each in its family");
+    CHECK(inst_pkg_rel(INST_FAM_NT86, "xhcicm.cat") == NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcicm.cat"), "cm\\xhcicm.cat")
+          == 0 && strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcicmf.cat"),
+                         "cm\\xhcicmf.cat") == 0,
+          "x64: each catalog beside its INF");
+    CHECK(inst_pkg_rel(INST_FAM_NT86, "unknown.inf") == NULL &&
+          inst_pkg_rel(-1, "xhci98.inf") == NULL &&
+          inst_pkg_rel(INST_FAM_9X, NULL) == NULL, "no such name or family");
+    /* Every engine INF slot has a place in each family that carries it,
+     * and no family path is in nt\ or names a filter as an INF. */
+    for (i = 0; i < instPkgFileCount; i++) {
+        any = 0;
+        for (f = 0; f < INST_FAM_COUNT; f++) {
+            const char *p = instPkgFiles[i].Fam[f];
+            if (p == NULL) {
+                continue;
+            }
+            any = 1;
+            CHECK(!inst_pkg_foreign(p), "no family path is 3.3.0.0's layout");
+            CHECK(strlen(p) < 40, "within pkgRel's room");
+        }
+        CHECK(any, "every local name is in some family");
+        CHECK(strlen(instPkgFiles[i].Local) < 32, "within infRel's room");
+    }
+    CHECK(inst_pkg_foreign("stor98w9.inf") &&
+          inst_pkg_foreign("stor98\\stor98w9.inf") &&
+          inst_pkg_foreign("nt\\xhcicmf.inf") &&
+          inst_pkg_foreign("cm\\xhcicmf.inf") &&
+          !inst_pkg_foreign("cm\\xhcicmf.inx") &&
+          !inst_pkg_foreign(NULL), "3.3.0.0's names refused");
 }
 
 /* XHCITR's "can run faster" notice (record 25 section 7.7 item 7; record 23
@@ -8884,6 +8970,7 @@ int main(void)
     test_tb_eject();
     test_tb_question();
     test_cmf_place();
+    test_family();
     test_tray();
     test_fast();
     test_wrap();

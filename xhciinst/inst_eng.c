@@ -79,13 +79,9 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 
 #ifdef _WIN64
 #define INST_MY_ARCH        INST_ARCH_AMD64
-#define INST_DIR_SUFFIX     "-x64"
-#define INST_DEFAULT_DIR    "release-x64"
 #define INST_PE_MINE        INST_PE_AMD64
 #else
 #define INST_MY_ARCH        INST_ARCH_X86
-#define INST_DIR_SUFFIX     "-x86"
-#define INST_DEFAULT_DIR    "release-x86"
 #define INST_PE_MINE        INST_PE_I386
 #endif
 
@@ -280,6 +276,10 @@ static char srcDir[INST_PATH_CHARS];
 /* Each INF relative to the flavour directory: the NT-only filter INF is in
  * nt\ (39-0.4), where Windows 98's search never meets it. */
 static char infRel[INST_INF_COUNT][32];
+/* Each INF's path in the family folder (record 36 section 6.2). */
+static char pkgRel[INST_INF_COUNT][40];
+/* The family folder this run reads (INST_FAM_*). */
+static int pkgFam;
 static int restagePending[INST_INF_COUNT];
 static int restageOk[INST_INF_COUNT];
 static int restage_listed(const char *id);
@@ -570,6 +570,7 @@ static void other_finish(char *text, size_t cap, const char *nl);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
+static int pkg_path(const char *local, char *path, size_t cap);
 static void own_variant(const char *path, const char *ext, char *out,
                         size_t cap);
 static void stor_read(void);
@@ -2197,7 +2198,10 @@ static int inf_source(int k, int i, const char *base, char *path, size_t cap,
     }
     slash = strrchr(rel, '\\');
     inst_copy(name, slash != NULL ? slash + 1 : rel, nameCap);
-    join(dir, sizeof(dir), base, infRel[k]);
+    /* The download keeps each INF in its family folder's place (record 36
+     * section 6.2); the local copy is flat. */
+    join(dir, sizeof(dir), base,
+         base == pkgDir && pkgRel[k][0] != '\0' ? pkgRel[k] : infRel[k]);
     slash = strrchr(dir, '\\');
     if (slash != NULL) {
         *slash = '\0';
@@ -2251,14 +2255,12 @@ static int s98_check_package(void)
     haveS98 = 0;
     free(s98Text);
     s98Text = NULL;
+    /* One name in every family folder (record 36 section 3.4): on 98-me\
+     * it is the 9x INF, stor98w9.inf up to 3.3.0.0. */
     s98InfName = "stor98.inf";
-    if (!envNow.Nt) {
-        join(path, sizeof(path), pkgDir, "stor98w9.inf");
-        if (file_exists(path, NULL)) {
-            s98InfName = "stor98w9.inf";
-        }
-    }
-    join(path, sizeof(path), pkgDir, s98InfName);
+    inst_copy(pkgRel[INST_INF_S98], inst_pkg_rel(pkgFam, s98InfName),
+              sizeof(pkgRel[0]));
+    join(path, sizeof(path), pkgDir, pkgRel[INST_INF_S98]);
     if (!file_exists(path, NULL)) {
         return 1;
     }
@@ -2288,7 +2290,7 @@ static int s98_check_package(void)
         }
         if (!cls) {
             return refuse("the bundled Stor98 INF for 98 SE and ME "
-                          "(stor98w9.inf) is missing or has no class "
+                          "(98-me\\stor98\\stor98.inf) has no class "
                           "match: ", path);
         }
     }
@@ -2381,32 +2383,53 @@ static int check_package(void)
     }
     inst_copy(root, self, sizeof(root));
     root[n - t] = '\0';
+    /* The download by Windows family (record 36 section 6.3): 98-me\ on
+     * 98 SE and ME, nt-x86\ or nt-x64\ on NT. */
+    pkgFam = inst_family(envNow.Nt, INST_MY_ARCH);
     if (opts.Dir[0] == '\0') {
-        /* The window takes no /dir: its own architecture's release-
-         * directory (record 26 section 2; the debug- one and /debug went
-         * with the debug flavour, task 45.45). */
-        inst_copy(opts.Dir, INST_DEFAULT_DIR, sizeof(opts.Dir));
+        /* The window takes no /dir: its own system's family folder. */
+        inst_copy(opts.Dir, inst_family_dir(pkgFam), sizeof(opts.Dir));
     }
     if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
         strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
         return refuse("/dir names a directory of the package: ", opts.Dir);
     }
-    n = strlen(opts.Dir);
-    if (n < 4 || !inst_eq(opts.Dir + n - 4, INST_DIR_SUFFIX)) {
-        out("%s is the %s build; %s is not its architecture's directory.\n",
+    if (inst_family_of_dir(opts.Dir) < 0) {
+        if (inst_starts(opts.Dir, "release-") ||
+            inst_starts(opts.Dir, "debug-")) {
+            out("This package has no %s: it is laid out by Windows family "
+                "(98-me, nt-x86, nt-x64).\n", opts.Dir);
+        }
+        return refuse("not a folder of the package: ", opts.Dir);
+    }
+    if (inst_family_of_dir(opts.Dir) != pkgFam) {
+        out("%s is the %s build on %s; %s is not its folder (%s is).\n",
             INST_MY_NAME, INST_MY_ARCH == INST_ARCH_X86 ? "32-bit" : "x64",
-            opts.Dir);
-        return refuse("mixing architectures. Run INSTALL.BAT, which picks "
-                      "the right program and directory.", NULL);
+            envNow.Nt ? "Windows NT" : "Windows 98 SE or ME", opts.Dir,
+            inst_family_dir(pkgFam));
+        return refuse("mixing systems or architectures. Run INSTALL.BAT, "
+                      "which picks the right program and folder.", NULL);
     }
-    if (inst_starts(opts.Dir, "release-")) {
-        wantFlavour = "RELEASE";
-    } else {
-        return refuse("not a flavour directory of the package: ", opts.Dir);
-    }
+    wantFlavour = "RELEASE";
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
+    {
+        /* Not this release's layout: a 3.3.0.0 flavour directory's files
+         * copied into a family folder (record 36 section 6.4). */
+        static const char *const foreign[] = {
+            "stor98w9.inf", "stor98\\stor98w9.inf", "xhcicmf.inf",
+            "cm\\xhcicmf.inf", "nt"
+        };
+        size_t f;
+        for (f = 0; f < sizeof(foreign) / sizeof(foreign[0]); f++) {
+            join(path, sizeof(path), pkgDir, foreign[f]);
+            if (GetFileAttributesA(path) != 0xFFFFFFFFUL) {
+                return refuse("this folder is not this release's layout: ",
+                              path);
+            }
+        }
+    }
     if (!s98_check_package() || !vxd_check_package(&vsdDesc) ||
         !vxd_check_package(&pfwDesc) || !pfwsys_check_package()) {
         return 0;
@@ -2414,28 +2437,35 @@ static int check_package(void)
 
     cmFiles = 0;
     for (k = 0; k < INST_INF_COUNT; k++) {
+        const char *pr;
         inst_copy(infRel[k], k == INST_INF_S98 ? s98InfName : instInfFile[k],
                   sizeof(infRel[k]));
+        if (k == INST_INF_CMF) {
+            /* The local copy's place: nt\ for x86, the copy's root for
+             * x64 (inst_cmf_rel); the download's cm\xhcicmf.inx. */
+            inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
+                      sizeof(infRel[k]));
+        }
         if (k == INST_INF_S98) {
             /* Checked by s98_check_package; in the run only when ticked. */
             infText[k] = NULL;
             continue;
         }
-        if (k == INST_INF_CMF) {
-            /* nt\ in the x86 package, the flavour directory in the x64
-             * one (inst_cmf_rel). */
-            join(path, sizeof(path), pkgDir, inst_cmf_rel(INST_MY_ARCH));
-            if (file_exists(path, NULL)) {
-                inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
-                          sizeof(infRel[k]));
-            }
-            if (!envNow.Nt) {
-                /* 98 and ME never read the NT filter INF. */
-                infText[k] = NULL;
+        pr = inst_pkg_rel(pkgFam, infRel[k]);
+        inst_copy(pkgRel[k], pr != NULL ? pr : "", sizeof(pkgRel[k]));
+        if (k == INST_INF_CMF && !envNow.Nt) {
+            /* 98 and ME never read the NT filter INF; 98-me\ has none. */
+            infText[k] = NULL;
+            continue;
+        }
+        if (pr == NULL) {
+            infText[k] = NULL;
+            if (k >= INST_INF_CM) {
                 continue;
             }
+            return refuse("this family folder has no place for ", infRel[k]);
         }
-        join(path, sizeof(path), pkgDir, infRel[k]);
+        join(path, sizeof(path), pkgDir, pr);
         infText[k] = read_file(path, NULL);
         if (k >= INST_INF_CM) {
             cmFiles += infText[k] != NULL;
@@ -2444,8 +2474,8 @@ static int check_package(void)
                           path);
         }
     }
-    join(path, sizeof(path), pkgDir, "xhcicm.sys");
-    cmFiles += file_exists(path, NULL);
+    cmFiles += pkg_path("xhcicm.sys", path, sizeof(path)) &&
+               file_exists(path, NULL);
     if (!envNow.Nt && cmFiles == 2) {
         cmFiles = 3;
     }
@@ -2459,8 +2489,8 @@ static int check_package(void)
         /* Record 23 D20 (a): the x64 connection manager only with its
          * catalog (owner, 2026-10-22). */
         const char *why;
-        join(path, sizeof(path), pkgDir, "xhcicm.cat");
         why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm,
+                                  pkg_path("xhcicm.cat", path, sizeof(path)) &&
                                   file_exists(path, NULL));
         if (why != NULL) {
             return refuse(why, " Nothing was changed.");
@@ -2496,6 +2526,16 @@ static int check_package(void)
             if (r < 0) {
                 return refuse("a file the INF names lies outside the package: ",
                               name);
+            }
+            /* A file the INF names for another family's sections, which
+             * this family folder does not carry (xhcihlpr.sys on 98 SE and
+             * ME, record 36 section 3.1). */
+            if (inst_pkg_rel(INST_FAM_9X, name) == NULL &&
+                inst_pkg_rel(INST_FAM_NT86, name) == NULL &&
+                inst_pkg_rel(INST_FAM_NT64, name) == NULL) {
+                /* Not a file of the table at all: required as before. */
+            } else if (inst_pkg_rel(pkgFam, name) == NULL) {
+                continue;
             }
             if (!file_exists(path, &size) || size == 0) {
                 return refuse("a file the INF names is missing or empty: ",
@@ -5103,102 +5143,79 @@ typedef int (*PKG_EACH)(const char *rel, void *ctx);
 
 static int package_files(PKG_EACH each, void *ctx)
 {
-    char pattern[INST_PATH_CHARS];
-    char rel[INST_PATH_CHARS];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
-    int pass;
+    char path[INST_PATH_CHARS];
+    const char *pr;
+    const char *base;
+    const char *rel;
+    int i;
 
-    for (pass = 0; pass < 2; pass++) {
-        if (pass == 1 && !envNow.Nt) {
-            break;
+    for (i = 0; i < instPkgFileCount; i++) {
+        rel = instPkgFiles[i].Local;
+        pr = instPkgFiles[i].Fam[pkgFam];
+        if (pr == NULL) {
+            continue;
         }
-        join(pattern, sizeof(pattern), pkgDir, pass == 0 ? "*.*" : "nt\\*.*");
-        h = FindFirstFileA(pattern, &fd);
-        if (h == INVALID_HANDLE_VALUE) {
-            /* Only an absent nt\ is "nothing there"; any other failure,
-             * and any failure of the flavour directory, is an error. */
+        join(path, sizeof(path), pkgDir, pr);
+        if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
             DWORD e = GetLastError();
-            /* nt\ may be absent only when the validated package has no
-             * INF there (the filter INF's place, 39-0.4). */
-            if (pass == 1 &&
-                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) &&
-                !(infText[INST_INF_CMF] != NULL &&
-                  inst_starts(infRel[INST_INF_CMF], "nt\\"))) {
+            /* Only an absent file is "not in this package"; any other
+             * failure is an error. */
+            if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) {
                 continue;
             }
-            out("%s could not be listed (error %lu).\n", pattern,
+            out("%s could not be read (error %lu).\n", path,
                 (unsigned long)e);
             return 0;
         }
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                continue;
+        base = strrchr(rel, '\\');
+        base = base != NULL ? base + 1 : rel;
+        /* 98 and ME never get an NT filter file (39-0.4); 98-me\ has none,
+         * and the table gives them no nt\ name. */
+        if (!envNow.Nt && (inst_eq(base, "xhcicmf.inf") ||
+                           inst_starts(rel, "nt\\"))) {
+            continue;
+        }
+        /* The bundled Stor98 driver goes into the copy only when ticked
+         * (record 26 section 6.3): a copy of its INF on DevicePath, or
+         * in the store, would install it unasked. */
+        if (inst_bundled_file(base) &&
+            (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
+            if (s98Include) {
+                /* Held for the whole run: a later reading that lifts
+                 * the hold finds no Stor98 in the copy. */
+                s98HoldRun = 1;
             }
-            if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
-                continue;
-            }
-            /* The 98 SE and ME Stor98 INF keeps the class match: never in
-             * an NT copy. */
-            if (envNow.Nt && inst_eq(fd.cFileName, "stor98w9.inf")) {
-                continue;
-            }
-            /* The bundled Stor98 driver goes into the copy only when ticked
-             * (record 26 section 6.3): a copy of its INF on DevicePath, or
-             * in the store, would install it unasked. */
-            if (inst_bundled_file(fd.cFileName) &&
-                (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
-                if (s98Include) {
-                    /* Held for the whole run: a later reading that lifts
-                     * the hold finds no Stor98 in the copy. */
-                    s98HoldRun = 1;
-                }
-                continue;
-            }
-            /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
-             * the copy is on DevicePath, where its INF would install it
-             * unasked; on NT it is simply not staged. */
-            if (!envNow.Nt && !uasInclude &&
-                (inst_eq(fd.cFileName, "xhciuas.inf") ||
-                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
-                continue;
-            }
-            /* The connection manager alone on 98 SE and ME (record 26
-             * section 5.3.1 case 2): no wizard may offer the USB drivers
-             * from the copy on DevicePath. */
-            if (!envNow.Nt && !usbInclude &&
-                (inst_eq(fd.cFileName, "xhci98.inf") ||
-                 inst_eq(fd.cFileName, "xhci98.sys") ||
-                 inst_eq(fd.cFileName, "xhciuas.inf") ||
-                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
-                continue;
-            }
-            /* A No to the Thunderbolt question: none of its files in the
-             * copy, so no wizard and no store offers them (section 8.5);
-             * the x64 package's two catalogs go with their INFs (design
-             * record 19 section 3a). The other catalogs ride along with
-             * the rest of the flavour directory, beside their INFs. */
-            if (!tbInclude && !tbTagAll &&
-                (inst_eq(fd.cFileName, "xhcicm.inf") ||
-                               inst_eq(fd.cFileName, "xhcicmf.inf") ||
-                               inst_eq(fd.cFileName, "xhcicm.sys") ||
-                               inst_eq(fd.cFileName, "xhcicm.cat") ||
-                               inst_eq(fd.cFileName, "xhcicmf.cat"))) {
-                continue;
-            }
-            inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
-            strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
-            if (!each(rel, ctx)) {
-                FindClose(h);
-                return 0;
-            }
-        } while (FindNextFileA(h, &fd));
-        if (GetLastError() != ERROR_NO_MORE_FILES) {
-            out("%s could not be listed to its end.\n", pattern);
-            FindClose(h);
+            continue;
+        }
+        /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
+         * the copy is on DevicePath, where its INF would install it
+         * unasked; on NT it is simply not staged. */
+        if (!envNow.Nt && !uasInclude &&
+            (inst_eq(base, "xhciuas.inf") || inst_eq(base, "xhciuas.sys"))) {
+            continue;
+        }
+        /* The connection manager alone on 98 SE and ME (record 26
+         * section 5.3.1 case 2): no wizard may offer the USB drivers
+         * from the copy on DevicePath. */
+        if (!envNow.Nt && !usbInclude &&
+            (inst_eq(base, "xhci98.inf") || inst_eq(base, "xhci98.sys") ||
+             inst_eq(base, "xhciuas.inf") || inst_eq(base, "xhciuas.sys"))) {
+            continue;
+        }
+        /* A No to the Thunderbolt question: none of its files in the
+         * copy, so no wizard and no store offers them (section 8.5);
+         * the x64 package's two catalogs go with their INFs (design
+         * record 19 section 3a). The other catalogs ride along with
+         * the rest of the folder, beside their INFs. */
+        if (!tbInclude && !tbTagAll &&
+            (inst_eq(base, "xhcicm.inf") || inst_eq(base, "xhcicmf.inf") ||
+             inst_eq(base, "xhcicm.sys") || inst_eq(base, "xhcicm.cat") ||
+             inst_eq(base, "xhcicmf.cat"))) {
+            continue;
+        }
+        if (!each(rel, ctx)) {
             return 0;
         }
-        FindClose(h);
     }
     /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
@@ -19437,9 +19454,19 @@ static int vxd_check_package(const VXDDESC *d)
 
     *d->Have = 0;
     d->Hash[0] = '\0';
-    join(path, sizeof(path), pkgDir, d->Name);
     if (envNow.Nt) {
-        *d->Have = file_exists(path, NULL);
+        /* Whether the download carries it, for the box a run warns about
+         * where it does not apply (record 26 section 5.3.1): in 98-me\,
+         * beside this NT folder (record 36 section 6.2). */
+        const char *pr = inst_pkg_rel(INST_FAM_9X, d->Name);
+        if (pr != NULL && INST_MY_ARCH == INST_ARCH_X86) {
+            join(path, sizeof(path), root, inst_family_dir(INST_FAM_9X));
+            join(path, sizeof(path), path, pr);
+            *d->Have = file_exists(path, NULL);
+        }
+        return 1;
+    }
+    if (!pkg_path(d->Name, path, sizeof(path))) {
         return 1;
     }
     if (!file_exists(path, NULL)) {
@@ -19538,7 +19565,7 @@ static int vsd_do(const VXDDESC *d, int op, const char *file,
         flagRestart = 1;
         return 1;
     case INST_VOP_START:
-        join(src, sizeof(src), pkgDir, d->Name);
+        pkg_path(d->Name, src, sizeof(src));
         if (!vsd_rec_set(d, "Pending", d->Hash)) {
             return 0;
         }
@@ -20572,8 +20599,8 @@ static int pfwsys_check_package(void)
     if (!envNow.Nt) {
         return 1;
     }
-    join(path, sizeof(path), pkgDir, INST_PFWSYS_FILE);
-    if (!file_exists(path, NULL)) {
+    if (!pkg_path(INST_PFWSYS_FILE, path, sizeof(path)) ||
+        !file_exists(path, NULL)) {
         return 1;
     }
     buf = read_file(path, &size);
@@ -21400,7 +21427,7 @@ static int pfwsys_run(int mode)
     }
     target = (img == 1 && inst_eq(cur, pfw_name_a())) ? pfw_name_b() :
              pfw_name_a();
-    join(src, sizeof(src), pkgDir, INST_PFWSYS_FILE);
+    pkg_path(INST_PFWSYS_FILE, src, sizeof(src));
     if (!pfwsys_path(target, newPath, sizeof(newPath))) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: the system folder unreadable");
@@ -22787,9 +22814,23 @@ static void pkg_src(const char *rel, char *path, size_t cap)
 {
     if (storCopyOk && inst_stor_index(rel) >= 0) {
         join(path, cap, storPackDir, rel);
-    } else {
+    } else if (!pkg_path(rel, path, cap)) {
         join(path, cap, pkgDir, rel);
     }
+}
+
+/* A local name's file in this run's family folder (record 36 section
+ * 6.2): 1 with its path, 0 when the family does not carry it. */
+static int pkg_path(const char *local, char *path, size_t cap)
+{
+    const char *pr = inst_pkg_rel(pkgFam, local);
+
+    if (pr == NULL) {
+        path[0] = '\0';
+        return 0;
+    }
+    join(path, cap, pkgDir, pr);
+    return 1;
 }
 
 /* ---- the run ------------------------------------------------------------ */
