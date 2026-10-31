@@ -15,11 +15,20 @@
  * than this version's, or another Version, is refused
  * (STATUS_NOT_SUPPORTED). The interface's InterfaceReference and
  * InterfaceDereference count the network driver's hold; the PDO is not
- * deleted while it is held. On 98 SE and ME the IRP between two WDM
- * drivers is unread there [inf]; if step S5's first 98 SE leg finds that
- * NTKERN does not carry it, the same table is returned by a private
- * IRP_MJ_INTERNAL_DEVICE_CONTROL code that a later version of this header
- * adds (record 35 section 6.3).
+ * deleted while it is held.
+ *
+ * THE 98 SE AND ME FALLBACK (record 35 sections 6.3 and 6.5). Whether
+ * NTKERN carries a query-interface IRP built by one WDM driver to another
+ * is unread there [inf], so the PDO also answers the same table to an
+ * IRP_MJ_INTERNAL_DEVICE_CONTROL with XHCI_CM_NET_IOCTL_INTERFACE, on
+ * every system. The caller sets Parameters.DeviceIoControl.IoControlCode
+ * to that code and Parameters.Others.Argument1 to its own
+ * XHCI_CM_NET_INTERFACE with Header.Size (sizeof(XHCI_CM_NET_INTERFACE))
+ * and Header.Version (XHCI_CM_NET_VERSION) set; the PDO fills the table in
+ * place and completes STATUS_SUCCESS with one reference held, as the query
+ * does, or STATUS_NOT_SUPPORTED for a NULL table, a smaller Size or
+ * another Version. The network drivers ask the query first and send this
+ * code only where the query is not answered.
  *
  * THE SERVICE. Open is the service's enable and Close its disable: only
  * between them does xhcicm.sys publish the USB4NET directory, log in and
@@ -60,6 +69,11 @@
     { 0xAD, 0xD1, 0x4C, 0x8A, 0x00, 0xE2, 0xE5, 0x03 }
 
 #define XHCI_CM_NET_VERSION     1
+
+/* The fallback's private code: CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59,
+ * METHOD_NEITHER, FILE_ANY_ACCESS), written out so the host build needs
+ * no CTL_CODE. */
+#define XHCI_CM_NET_IOCTL_INTERFACE     0x00222967UL
 
 /* Results. */
 #define XHCI_CM_NET_OK          0L

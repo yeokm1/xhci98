@@ -983,6 +983,12 @@ static const char *const cmNetCounterNames[] = {
     "cm.net.stop.unverified.n", "cm.net.mem.kept.n", "cm.net.nomem.n"
 };
 
+/* The shared header writes the fallback's code out (its host build has no
+ * CTL_CODE). */
+XHCI_C_ASSERT(cm_net_ioctl_code,
+              CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59, METHOD_NEITHER, FILE_ANY_ACCESS) ==
+                  XHCI_CM_NET_IOCTL_INTERFACE);
+
 XHCI_C_ASSERT(cm_net_counter_names,
               sizeof(cmNetCounterNames) / sizeof(cmNetCounterNames[0]) ==
                   sizeof(CM_NET_COUNTERS) / sizeof(ULONG));

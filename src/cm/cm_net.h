@@ -40,9 +40,9 @@
 
 #define CM_KIND_NETPDO 0x504D4358UL  /* 'XCMP': the network PDO */
 
-/* The 98 SE fallback's private code (record 35 section 6.3). */
-#define CM_NET_IOCTL_INTERFACE \
-    CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59, METHOD_NEITHER, FILE_ANY_ACCESS)
+/* The 98 SE fallback's private code (record 35 section 6.3), the shared
+ * header's; cm_net.c checks it against CTL_CODE. */
+#define CM_NET_IOCTL_INTERFACE XHCI_CM_NET_IOCTL_INTERFACE
 
 /* Bounds of the service's waits on the thread (record 35 sections 4.2,
  * 5.1 and 6.3). */

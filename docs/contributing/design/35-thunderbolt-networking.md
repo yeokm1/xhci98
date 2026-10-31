@@ -1547,10 +1547,16 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   private code `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59, METHOD_NEITHER,
   FILE_ANY_ACCESS)` (0x00222967), `Parameters.Others.Argument1` the
   caller's table with `Header.Size` and `Header.Version` set: section
-  6.3's 98 SE fallback, answered on every target so the header can name
-  it once the 98 SE leg has read which one NTKERN carries. Each answer
+  6.3's 98 SE fallback, answered on every target. Each answer
   holds one reference. Every call reaches the NHI through the PDO under
   the PDO's lock, counted, so the NHI's removal waits out a call inside.
+  The shared header names the code (`XHCI_CM_NET_IOCTL_INTERFACE`, the
+  coordinator's decision of 2026-10-31, before the 98 SE leg read which
+  of the two NTKERN carries), and both network drivers' shared glue
+  (`src\net\net_cmif.c`) asks the query first and sends the code only
+  where the query is not answered (a failure, or a success with no
+  table), logging which way the table came (`net.cm.route`, 1 the query,
+  2 the code) through the table's own `Log`.
 - **Open and Close** set the wish under the lock and queue
   `CM_WORK_NET`; the thread gives it to the engine (`TbtU4NetWanted`,
   with `prtcstns` bit 1 always, bit 0 unless `XhciCmNetE2E` is 0, bit 2

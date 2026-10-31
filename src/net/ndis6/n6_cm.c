@@ -13,7 +13,8 @@
 /* IRQL: PASSIVE_LEVEL (MiniportInitializeEx). */
 NDIS_STATUS Net6CmAcquire(PNET6_ADAPTER a)
 {
-    NTSTATUS status = NetCmIfAcquire(a->Lower, &a->Cm);
+    ULONG route;
+    NTSTATUS status = NetCmIfAcquire(a->Lower, &a->Cm, &route);
 
     if (status == STATUS_INSUFFICIENT_RESOURCES) {
         return NDIS_STATUS_RESOURCES;
@@ -22,6 +23,9 @@ NDIS_STATUS Net6CmAcquire(PNET6_ADAPTER a)
         return NDIS_STATUS_ADAPTER_NOT_FOUND;
     }
     a->CmHeld = 1;
+    /* Which way the table came (1 the query, 2 the 98 SE and ME
+     * fallback's code): record 35 section 6.3's reading. */
+    Net6CmLog(a, "net.cm.route", route);
     return NDIS_STATUS_SUCCESS;
 }
 

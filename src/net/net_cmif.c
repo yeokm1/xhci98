@@ -35,21 +35,21 @@ static NTSTATUS NTAPI netCmIfDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
-/* IRQL: PASSIVE_LEVEL. */
-NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface)
+/* One request for the table to the device object below, and its wait:
+ * IRP_MN_QUERY_INTERFACE, or with `ioctl` the 98 SE and ME fallback's
+ * IRP_MJ_INTERNAL_DEVICE_CONTROL (xhci_cmnet.h, "THE 98 SE AND ME
+ * FALLBACK"), whose table is the caller's own with Header.Size and
+ * Header.Version set. The request's status. IRQL: PASSIVE_LEVEL. */
+static NTSTATUS netCmIfAsk(PDEVICE_OBJECT Lower, BOOLEAN ioctl,
+                           PXHCI_CM_NET_INTERFACE got)
 {
-    XHCI_CM_NET_INTERFACE got;
     PIO_STACK_LOCATION next;
     LARGE_INTEGER ms;
     KEVENT done;
     PIRP irp;
     NTSTATUS status;
 
-    netCmIfZero(Iface, sizeof(*Iface));
-    netCmIfZero(&got, sizeof(got));
-    if (Lower == NULL) {
-        return STATUS_NO_SUCH_DEVICE;
-    }
+    netCmIfZero(got, sizeof(*got));
     irp = IoAllocateIrp(Lower->StackSize, FALSE);
     if (irp == NULL) {
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -57,13 +57,21 @@ NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface)
     irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
     irp->IoStatus.Information = 0;
     next = IoGetNextIrpStackLocation(irp);
-    next->MajorFunction = IRP_MJ_PNP;
-    next->MinorFunction = IRP_MN_QUERY_INTERFACE;
-    next->Parameters.QueryInterface.InterfaceType = &netCmGuid;
-    next->Parameters.QueryInterface.Size = (USHORT)sizeof(got);
-    next->Parameters.QueryInterface.Version = XHCI_CM_NET_VERSION;
-    next->Parameters.QueryInterface.Interface = (PINTERFACE)&got;
-    next->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+    if (ioctl) {
+        got->Header.Size = (USHORT)sizeof(*got);
+        got->Header.Version = XHCI_CM_NET_VERSION;
+        next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+        next->Parameters.DeviceIoControl.IoControlCode = XHCI_CM_NET_IOCTL_INTERFACE;
+        next->Parameters.Others.Argument1 = got;
+    } else {
+        next->MajorFunction = IRP_MJ_PNP;
+        next->MinorFunction = IRP_MN_QUERY_INTERFACE;
+        next->Parameters.QueryInterface.InterfaceType = &netCmGuid;
+        next->Parameters.QueryInterface.Size = (USHORT)sizeof(*got);
+        next->Parameters.QueryInterface.Version = XHCI_CM_NET_VERSION;
+        next->Parameters.QueryInterface.Interface = (PINTERFACE)got;
+        next->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+    }
     KeInitializeEvent(&done, NotificationEvent, FALSE);
     /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it
      * in, which would import RtlAssert into the qemu builds - a pair with
@@ -85,9 +93,40 @@ NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface)
     }
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);
+    return status;
+}
 
-    if (!NT_SUCCESS(status)) {
-        return status;
+/* The query first; where it is not answered (on 98 SE and ME NTKERN may
+ * not carry it between two WDM drivers, record 35 section 6.3), the
+ * fallback's code. *Route 1 for the query, 2 for the fallback, 0 for
+ * neither. IRQL: PASSIVE_LEVEL. */
+NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface,
+                        PULONG Route)
+{
+    XHCI_CM_NET_INTERFACE got;
+    NTSTATUS status;
+
+    netCmIfZero(Iface, sizeof(*Iface));
+    *Route = 0;
+    if (Lower == NULL) {
+        return STATUS_NO_SUCH_DEVICE;
+    }
+    status = netCmIfAsk(Lower, FALSE, &got);
+    if (NT_SUCCESS(status) && got.Header.InterfaceDereference != NULL) {
+        *Route = 1;
+    } else {
+        if (NT_SUCCESS(status)) {
+            /* Answered by something that filled no table: nothing held. */
+            status = STATUS_NOT_SUPPORTED;
+        }
+        if (status == STATUS_INSUFFICIENT_RESOURCES) {
+            return status;
+        }
+        status = netCmIfAsk(Lower, TRUE, &got);
+        if (!NT_SUCCESS(status)) {
+            return status;
+        }
+        *Route = 2;
     }
     if (got.Header.Version != XHCI_CM_NET_VERSION ||
         got.Header.Size < sizeof(got) ||
