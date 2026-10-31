@@ -5414,6 +5414,77 @@ screens in each leg's folder.
   the one the box shows for its own row. Seen on 98 SE with
   `XhciMaxTransferKB`. Not changed here.
 
+## 45.60 the installer's Thunderbolt and USB4 page: the code and the legs on 98 SE, XP and 7 (2026-10-31, partial)
+
+Branch `w45-adv`, fast-forwarded to `4dc11e98`, tree
+`E:\xhci98-wt\w45-adv` on development host A. Commits: `0643a6d9`
+(record 26 draft 53, section 5.3.5: the design), `8ccc8c0d` (the code
+and the host vectors), `31f7984c` (the two approval buttons one group);
+each reviewed and revised.
+
+### What changed
+
+- A page of its own, "Thunderbolt and USB4", after Components: shown
+  only while the effective Thunderbolt choice is on, skipped Next and
+  Back alike otherwise. It carries XHCIPFW, Stor98 and S98VSD, moved
+  off the Components page with their rules and remembered states, and
+  the approval choice (`XhciCmApprove`) as two option buttons, moved off
+  the Settings dialog's Thunderbolt tab so it is offered once, taken as
+  the tab's row was (written machine-wide only when it differs from the
+  value in force).
+- The Components page's Thunderbolt sentence says what was found alone;
+  what a device can reach is said under the approval choice. The box
+  keeps "(experimental)", the owner's word.
+- The Advanced dialog's heading no longer names testing.
+- Thunderbolt networking's box (task 45.59): its slot on the page,
+  hidden while `INST_TBNET_WIRED` is 0; `/tbnet` is refused ("this
+  package carries no Thunderbolt networking driver for this system"),
+  `/notbnet` changes nothing; `inst_tbnet_decide` holds record 35
+  section 9.1's rule (first state, writes, targets), host-tested.
+  Wiring it to the driver is task 45.59's step S11.
+
+### The builds and the self-tests
+
+- `XHCIINST.EXE /selftest` and `XHCIWIZ.EXE /selftest`, run in an XP
+  guest before the gated build: 11 checks and 743 checks, 0 failures
+  (745 after `31f7984c`).
+- The gated x86 build at `8ccc8c0d`: BUILD + GATES PASSED (release,
+  qemu), 22:27. At `31f7984c`: BUILD + GATES PASSED, 24:21. Host tests
+  passed (`test_inst` 7501 checks).
+- The test package: `make-release.ps1 -Arch x86 -TestLabel w45adv
+  -NoNonFree -NoWdmFree -SkipQualtool -SkipMarkTool` of `31f7984c`;
+  `XHCIWIZ.EXE` `39a80fb0...`, `XHCIINST.EXE` `6f2e046f...`.
+
+### The legs
+
+Each a first install on a fresh overlay of the q35 base through
+`launch-q35.ps1 -Usb4 asm4242 -EncAtBoot`, driven from the keyboard;
+QMP 49451, 49453 and 49454; every start and stop in
+`E:\xhci98-vm\p45\w45-adv\pids.txt`, the screens in each leg's folder.
+
+| System | What was done | Result | Evidence |
+|---|---|---|---|
+| 98 SE (`8ccc8c0d`) | `SETUP.EXE /tbnet` | refused in a message box: "/tbnet: this package carries no Thunderbolt networking driver for this system" | `w98t\a1-tbnet.png` |
+| 98 SE (`8ccc8c0d`) | Components with Thunderbolt unticked, Next; Back | the Summary next (the page skipped), Back to Components; the moved boxes gone from Components | `w98t\b1-comp.png`, `b2-next-untick.png`, `b3-back.png` |
+| 98 SE (`8ccc8c0d`) | Thunderbolt ticked; Settings, Thunderbolt tab; Next | the tab holds `XhciCmMode` and `XhciCmSafeEject` only; the page shows XHCIPFW.VXD, Stor98, S98VSD and the approval preselected 1 with the new-install note | `w98t\b8-settings-tb.png`, `c1-tbt.png` |
+| 98 SE (`8ccc8c0d`) | "Give it none" from the keyboard | not reachable: the arrow keys stayed on the first button (the sentence between ended the group). Fixed in `31f7984c` | `w98t\c2-none.png` |
+| 98 SE (`31f7984c`) | "Give it none" by the arrow keys, S98VSD unticked, Back and Next again, Install | the page kept both; the Summary listed `XhciCmApprove = 0` and no S98VSD; after the install `Services\USB` holds `XhciCmApprove`=0 alone, the host interface's key the INF's 1 | `w98t2\c2-none.png`, `c4-again.png`, `d1-summary.png`, `d2.png`, `serial-a.log` |
+| XP (`31f7984c`) | Thunderbolt ticked, "Give it none", Install, restart | the page shows XHCIPFW.SYS, Stor98, S98VSD greyed "(Windows 98 SE and ME only)"; `Services\USB` holds `XhciCmApprove`=0; `xhci98`, `xhcicm`, `xhcipfw` loaded | `xpt\c1-tbt.png`, `d11.png`, `serial-a.log` |
+| 7 x86 (`31f7984c`) | Thunderbolt ticked, the approval left at its preselected 1, Install, restart | no approval line on the Summary or the Finish page; the read of `Services\USB` printed no value; `xhci98`, `xhcicm`, `xhcipfw` loaded | `w7t\c1-tbt.png`, `d1-summary.png`, `d3.png`, `serial-a.log` |
+
+- 98 SE was not restarted (the known shutdown hang with `xhcicm`).
+- The networking box was never shown, as its gate says.
+
+### Left
+
+- The networking box's wiring (staging `xhcinet.inf`, the `XhciCmNet`
+  write after it, `/tbnet` accepted, the console's question, the
+  uninstall's removal) is task 45.59's step S11, after its driver steps
+  S5 to S7: `INST_TBNET_WIRED` 1 there, and `inst_tbnet_decide`
+  connected.
+- Legs on ME, 2000, Vista, 8 to 10 (the roadmap's "98 SE to 10"): the
+  coordinator named 98 SE, XP and 7 for this task.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
