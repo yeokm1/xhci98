@@ -35,6 +35,13 @@ rule named as the other gates name their families.
            xhcicm.sys, and no nt\ (from 3.1.0.0: 98 and ME never read the
            x64 package; -PublishedVersion before 3.1.0.0 reads a published
            x64 tree in the nt\ layout it was published with).
+  CM-INX   With -FamilyDir, a published family folder (design record 36,
+           from 3.4.0.0): in nt-x86\ and nt-x64\ the filter INF is
+           cm\xhcicmf.inx, its one copy, beside cm\xhcicm.sys and the bytes
+           of the gated filter INF (-InfPath), so no integration tool takes
+           it as an INF; no file anywhere in the folder is named
+           xhcicmf.inf; no family folder has an nt\; 98-me\ holds no
+           xhcicmf.* at all.
   CM-NOROUTER
            No device router's or device-side bridge's id, no USB-only NHI and
            no unclaimed generation's id in any INF (design record 22 section
@@ -139,6 +146,10 @@ param(
     # x64 directory of 3.0.0.0 is read in its nt\ layout (package-common.ps1's
     # Get-CmFilterRel is the same rule). Empty: the layout of this tree.
     [string]$PublishedVersion = "",
+    # A published family folder (98-me, nt-x86 or nt-x64, design record 36):
+    # CM-INX alone, with -InfPath the gated filter INF its cm\xhcicmf.inx must
+    # be the bytes of (not needed for 98-me).
+    [string]$FamilyDir = "",
     [switch]$SelfTest
 )
 
@@ -849,6 +860,57 @@ function Test-CmLayout {
     return $fail
 }
 
+# CM-INX (design record 36 sections 3.2 and 5.2): the published layout's
+# rule in place of nt\'s. In an NT family folder (nt-x86, nt-x64) the filter
+# INF is cm\xhcicmf.inx, its one copy, beside cm\xhcicm.sys and the bytes of
+# the gated filter INF; with the extension .inx no integration tool and no
+# hardware wizard takes it as an INF, so no file anywhere in the folder is
+# named xhcicmf.inf. No family folder has an nt\, and 98-me\ holds no
+# xhcicmf.* at all (98 SE and ME read every "$Windows NT$" INF beside the
+# one they are pointed at, runs/run-39.md, 39-0.4).
+function Test-CmFamily {
+    param([string]$Family, [string]$FilterInfPath = "")
+    $fail = New-Object System.Collections.ArrayList
+    if (-not (Test-Path -LiteralPath $Family -PathType Container)) { [void]$fail.Add("CM-INX '$Family' is not a family folder."); return $fail }
+    $root = (Resolve-Path -LiteralPath $Family).ProviderPath.TrimEnd('\')
+    $name = Split-Path -Leaf $root
+    foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory -Recurse -Force)) {
+        if ($d.Name -ieq "nt") { [void]$fail.Add("CM-INX $name\$($d.FullName.Substring($root.Length + 1)) is an nt\ directory; the family layout has none.") }
+    }
+    $files = @(Get-ChildItem -LiteralPath $root -File -Recurse -Force)
+    if ($name -ieq "98-me") {
+        foreach ($item in @($files | Where-Object { $_.Name -like "xhcicmf.*" })) {
+            [void]$fail.Add("CM-INX 98-me\$($item.FullName.Substring($root.Length + 1)) is the tunnel-port filter's; 98-me\ holds none.")
+        }
+        return $fail
+    }
+    if ($name -ine "nt-x86" -and $name -ine "nt-x64") { [void]$fail.Add("CM-INX '$name' is not 98-me, nt-x86 or nt-x64."); return $fail }
+    foreach ($item in @($files | Where-Object { $_.Name -ieq "xhcicmf.inf" })) {
+        [void]$fail.Add("CM-INX $name\$($item.FullName.Substring($root.Length + 1)) is named xhcicmf.inf; an integration tool would take it. The filter ships as cm\xhcicmf.inx alone.")
+    }
+    $inx = Join-Path $root "cm\xhcicmf.inx"
+    # A folder carrying no connection manager at all (no cm\xhcicm.inf and no
+    # filter) has nothing more to hold here; the package check's "all or
+    # none" judges whether it should have one.
+    if (-not (Test-Path -LiteralPath $inx) -and -not (Test-Path -LiteralPath (Join-Path $root "cm\xhcicm.inf"))) { return $fail }
+    foreach ($item in @($files | Where-Object { $_.Name -ieq "xhcicmf.inx" -and $_.FullName -ine $inx })) {
+        [void]$fail.Add("CM-INX $name\$($item.FullName.Substring($root.Length + 1)) is a second copy; the filter is cm\xhcicmf.inx alone.")
+    }
+    if (-not (Test-Path -LiteralPath $inx -PathType Leaf)) {
+        [void]$fail.Add("CM-INX $name\ has no cm\xhcicmf.inx.")
+        return $fail
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $root "cm\xhcicm.sys") -PathType Leaf)) {
+        [void]$fail.Add("CM-INX $name\cm\ has no xhcicm.sys beside xhcicmf.inx, the filter's source.")
+    }
+    if ($FilterInfPath -eq "" -or -not (Test-Path -LiteralPath $FilterInfPath -PathType Leaf)) {
+        [void]$fail.Add("CM-INX no gated filter INF to compare $name\cm\xhcicmf.inx with.")
+    } elseif ((Get-FileHash -LiteralPath $inx -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $FilterInfPath -Algorithm SHA256).Hash) {
+        [void]$fail.Add("CM-INX $name\cm\xhcicmf.inx is not the bytes of the gated filter INF '$FilterInfPath'.")
+    }
+    return $fail
+}
+
 function Test-CmTwin {
     param([string]$X86Text, [string]$Amd64Text, [string]$Kind)
     $fail = New-Object System.Collections.ArrayList
@@ -1157,6 +1219,50 @@ if ($SelfTest) {
             $bad++; Write-Err "layout '$($lc.Name)' was not refused by CM-NO9XBRIDGE."
         } else { Write-Ok "CM-NO9XBRIDGE package layout '$($lc.Name)'" }
     }
+    # CM-INX: the family folders' filter as cm\xhcicmf.inx alone.
+    $famCases = @(
+        @{ Name = "nt-x86 clean";   Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx"); Pass = $true },
+        @{ Name = "nt-x64 clean";   Fam = "nt-x64"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx", "cm\xhcicmf.cat"); Pass = $true },
+        @{ Name = "98-me clean";    Fam = "98-me"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys"); Pass = $true; NoFilter = $true },
+        @{ Name = "no inx";         Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys"); Pass = $false },
+        @{ Name = "no cm at all";   Fam = "nt-x86"; Files = @("xhci98.inf"); Pass = $true; NoFilter = $true },
+        @{ Name = "no cm, an inf";  Fam = "nt-x64"; Files = @("xhci98.inf", "xhcicmf.inf"); Pass = $false; NoFilter = $true },
+        @{ Name = "inx and inf";    Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx", "cm\xhcicmf.inf"); Pass = $false },
+        @{ Name = "inf at root";    Fam = "nt-x64"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx", "xhcicmf.inf"); Pass = $false },
+        @{ Name = "inx at root";    Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "xhcicmf.inx"); Pass = $false },
+        @{ Name = "second inx";     Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx", "stor98\xhcicmf.inx"); Pass = $false },
+        @{ Name = "no sys beside";  Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "xhcicm.sys", "cm\xhcicmf.inx"); Pass = $false },
+        @{ Name = "nt dir";         Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx", "nt\xhcicm.sys"); Pass = $false },
+        @{ Name = "inx differs";    Fam = "nt-x86"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx"); InxText = "another filter"; Pass = $false },
+        @{ Name = "98-me inx";      Fam = "98-me"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.inx"); Pass = $false; NoFilter = $true },
+        @{ Name = "98-me cat";      Fam = "98-me"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "cm\xhcicmf.cat"); Pass = $false; NoFilter = $true },
+        @{ Name = "98-me nt dir";   Fam = "98-me"; Files = @("cm\xhcicm.inf", "cm\xhcicm.sys", "nt\x.txt"); Pass = $false; NoFilter = $true }
+    )
+    foreach ($fc in $famCases) {
+        $total++
+        $base = Join-Path ([System.IO.Path]::GetTempPath()) ("xhcicm-family-" + [Guid]::NewGuid().ToString("N"))
+        try {
+            $famDir = Join-Path $base $fc.Fam
+            New-Item -ItemType Directory -Path $famDir -Force | Out-Null
+            $filterSrc = Join-Path $base "gated-filter.inf"
+            [System.IO.File]::WriteAllText($filterSrc, "the gated filter")
+            foreach ($f in $fc.Files) {
+                $x = Join-Path $famDir $f
+                New-Item -ItemType Directory -Path (Split-Path -Parent $x) -Force | Out-Null
+                $body = if ($f -like "*xhcicmf.inx") { if ($fc.ContainsKey("InxText")) { $fc.InxText } else { "the gated filter" } } else { "stand-in" }
+                [System.IO.File]::WriteAllText($x, $body)
+            }
+            $got = @(Test-CmFamily -Family $famDir -FilterInfPath $(if ($fc.ContainsKey("NoFilter")) { "" } else { $filterSrc }))
+        } finally {
+            Remove-Item -LiteralPath $base -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        $hit = @($got | Where-Object { $_.StartsWith("CM-INX ") }).Count
+        if ($fc.Pass -and $got.Count -ne 0) {
+            $bad++; Write-Err ("family '$($fc.Name)' was refused:`n  " + ($got -join "`n  "))
+        } elseif (-not $fc.Pass -and $hit -eq 0) {
+            $bad++; Write-Err "family '$($fc.Name)' was not refused by CM-INX."
+        } else { Write-Ok "CM-INX family '$($fc.Name)'" }
+    }
     # CM-TWIN, both kinds: the originals agree, a dropped id does not.
     foreach ($k in @("nhi", "filter")) {
         $total++
@@ -1170,6 +1276,18 @@ if ($SelfTest) {
     }
     if ($bad -ne 0) { exit 1 }
     Write-Ok "CM INF gate self-tests PASSED ($total mutations)"
+    exit 0
+}
+
+if ($FamilyDir -ne "") {
+    Write-Step "CM INF gate (CM-INX): $FamilyDir"
+    $fails = @(Test-CmFamily -Family $FamilyDir -FilterInfPath $InfPath)
+    if ($fails.Count -ne 0) {
+        foreach ($f in $fails) { Write-Err $f }
+        Write-Err "CM INF gate FAILED ($($fails.Count))"
+        exit 1
+    }
+    Write-Ok "CM INF gate PASSED (CM-INX)"
     exit 0
 }
 

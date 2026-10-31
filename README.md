@@ -141,7 +141,7 @@ Use Safely Remove before unplugging a drive, on every system.
 
 **Stor98 is only for NVMe drives behind a Thunderbolt or USB4 port, not internal ones.** `SETUP.EXE` puts it only on tunnel drives. On 2000 to 8 its INF matches only the id the connection manager gives a tunnel drive, so Windows never offers it for an internal one. On 8.1 and 10 Windows' own `stornvme` keeps an internal drive. On 98 SE and ME Windows may offer it for an internal NVMe drive with no driver: decline. An internal drive that already runs Stor98 keeps it, and the uninstall leaves it there.
 
-- `SETUP.EXE` installs Stor98 with the Thunderbolt 3 / USB4 support (its box, ticked with it) and updates an earlier Stor98. By hand: Update Driver on the drive's NVMe controller -> Have Disk -> `release-x86\` or `release-x64\`.
+- `SETUP.EXE` installs Stor98 with the Thunderbolt 3 / USB4 support (its box, ticked with it) and updates an earlier Stor98. By hand: Update Driver on the drive's NVMe controller -> Have Disk -> the `stor98\` folder of `98-me\`, `nt-x86\` or `nt-x64\`.
 - On 98 SE and ME, `S98VSD.VXD` lets reads and writes of up to 2 MiB reach Stor98 whole, for much faster transfers. `SETUP.EXE` installs it with Stor98.
 - Stor98's settings and limits: `stor98-readme.txt` beside it, and [the release notes](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
 
@@ -219,8 +219,8 @@ Details: [the release notes' installer section](docs/using/release-notes.md#inst
 
 1. Put the unzipped package where the machine can read it (floppy, CD, shared folder), and install the [prerequisites](#requirements). On a fresh 98 SE the order is NUSB, then xhci98, then the UAS disk.
 2. In Device Manager, find the unrecognised xHCI controller (yellow mark, usually under "Other devices").
-3. Properties -> Driver -> Update Driver -> Have Disk -> `release-x86\` or `release-x64\`. It installs as "xHCI98 USB 3 Controller" with "xHCI98 USB 3 Root Hub" beneath (only `SETUP.EXE` adds the chipset to the name). 98 SE may ask for its CD. Restart if asked.
-4. A Thunderbolt 3 or USB4 controller ("PCI System Peripheral" or "Base System Device") installs the same way. On 2000 to 7, then give each of its PCI ports the filter: Update Driver -> Have Disk -> `release-x86\nt\` (32-bit) or `release-x64\` (64-bit).
+3. Properties -> Driver -> Update Driver -> Have Disk -> `98-me\` (98 SE, ME), `nt-x86\` (32-bit 2000 to 10) or `nt-x64\` (64-bit). It installs as "xHCI98 USB 3 Controller" with "xHCI98 USB 3 Root Hub" beneath (only `SETUP.EXE` adds the chipset to the name). 98 SE may ask for its CD. Restart if asked.
+4. A Thunderbolt 3 or USB4 controller ("PCI System Peripheral" or "Base System Device") installs the same way, from the folder's `cm\`. Its PCI ports' filter, `cm\xhcicmf.inx`, is installed by `SETUP.EXE` alone.
 5. A UAS disk or an external hub asks for its driver when plugged in: give it the same directory. On XP every new hub brings the Found New Hardware wizard and the unsigned-driver warning (Continue Anyway).
 
 <img src="images/xhci98-driver-info.jpg" width="800">
@@ -245,7 +245,7 @@ The 64-bit drivers are test-signed, so Vista x64 to 10 x64 run them in test-sign
 
 For a machine whose keyboard or install medium is on the xHCI controller:
 
-1. Copy the files of `release-x86\` (`release-x64\` for XP x64) to the root of a floppy.
+1. Copy the files at the root of `nt-x86\` (`nt-x64\` for XP x64), without its subfolders, to the root of a floppy.
 2. **Windows 2000 only:** from the `I386` folder of your Windows 2000 CD, copy `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` to the floppy's root, unchanged (do not expand or rename). The package does not carry them.
 3. Press F6 when text-mode Setup offers it, then S, and pick "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)" (the x64 entry on XP x64), or on Windows 2000 the second entry, "xHCI98 USB 3 Controller (32-bit Windows 2000, files from CD)".
 
@@ -261,10 +261,10 @@ Details and limits: [the release notes' F6 section](docs/using/release-notes.md#
 
 ### Upgrading the driver
 
-Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on the controller ("xHCI98 USB 3 Controller", or "xHCI98 USB 3.x eXtensible Host Controller" while an older version is installed), then on the root hub ("xHCI98 USB 3 Root Hub", or "xHCI98 USB 3.x Root Hub" while a version before 3.3.0.0 is installed), pointed at `release-x86\` or `release-x64\`.
+Run `SETUP.EXE` (see [above](#install-with-setupexe)). By hand: Update Driver on the controller ("xHCI98 USB 3 Controller", or "xHCI98 USB 3.x eXtensible Host Controller" while an older version is installed), then on the root hub ("xHCI98 USB 3 Root Hub", or "xHCI98 USB 3.x Root Hub" while a version before 3.3.0.0 is installed), pointed at `98-me\`, `nt-x86\` or `nt-x64\`.
 
 - **98 SE and ME:** restart afterwards, although Windows does not ask. The old driver runs until then.
-- **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `release-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
+- **2000:** use Have Disk (Update Driver -> "Display a list of the known drivers" -> Have Disk -> `nt-x86\`) and pick the first model listed. Letting Windows search keeps the old driver.
 - **XP, Vista and 7:** the new driver runs at once, after the unsigned-driver warning; 32-bit Vista and 7 ask for a restart. Vista and 7 do not take a build with the same `DriverVer` as the installed one.
 - A device Windows finds again as new hardware loses its hidusbf setting. Set it again.
 - **From `2.3.x` or earlier:** update the controller only; the hubs and composite devices then install by themselves. On 98 SE, XP and XP x64 keep a PS/2 or built-in keyboard and mouse at hand. See [From 2.3.x or earlier](docs/using/release-notes.md#from-23x-or-earlier).
@@ -319,12 +319,12 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 
 ## The package
 
-Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
+The drivers are in one folder per Windows family: `98-me\` (98 SE, ME), `nt-x86\` (2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit) and `nt-x64\` (XP x64 and Server 2003 x64, Vista to 10, 64-bit). Each holds what its Windows installs, and nothing for another.
 
 | Path | Contents |
 |---|---|
-| `release-x86\`, `release-x64\` | The drivers to install (below) |
-| `debug-x86\`, `debug-x64\` | The same drivers built for troubleshooting; install only if asked |
+| `98-me\`, `nt-x86\`, `nt-x64\` | The drivers to install (below) |
+| `INTEGRATE.TXT` | Which folder to give nLite, NTLite or DISM, and the F6 disk |
 | `SETUP.EXE` | The installer: double-click it to install or update |
 | `USBDRV\` | Other USB drivers the download carries: `NUSB33\`, plus `FREE\` in the `-free` download, and `FREE\` and `NONFREE\` in the `-nonfree` one ([Downloads](#downloads)) |
 | `INSTALL.BAT`, `tools\xhciinst\` | For command-line and scripted installs (`tools\xhciinst\readme.txt` is the reference), and the programs both run (`XHCIWIZ.EXE`, `XHCIWZ64.EXE`, `XHCIINST.EXE`, `XHCIIN64.EXE`, and on 98 SE and ME the device install helper `XHCIDI.EXE`) |
@@ -335,15 +335,12 @@ Install from `release-x86\` (32-bit Windows) or `release-x64\` (64-bit Windows).
 | `tools\silent\` | 98 SE and ME: the silent install's list and switch |
 | `readme.txt` | The release notes in plain text |
 
-Each driver directory holds:
+Each family folder holds:
 
-- `xhci98.sys`/`.inf` (controller), `xhciuas.sys`/`.inf` (UAS storage), `xhcicm.sys`/`.inf` (Thunderbolt and USB4; its PCI-port filter for 2000 to 7, `xhcicmf.inf`, in `nt\` in the x86 directories and beside them in the x64 ones)
-- `xhcihlpr.sys` (32-bit only): a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt. 98 SE and ME ignore it.
-- `txtsetup.oem`: for F6 during Windows 2000 or XP Setup
-- `xhci98-test.cer` (64-bit only): the public half of the x64 drivers' test certificate; no need to import it
-- `*.cat` (64-bit only): a test-signed catalog for each driver, which 64-bit 8, 8.1 and 10 need
-- `stor98*` files (`release-` only): the bundled NVMe driver (see [NVMe drives](#nvme-drives)), with `stor98w9.inf`, its INF for 98 SE and ME, and `S98VSD.VXD` beside them in `release-x86\` for 98 SE and ME
-- `XHCIPFW.VXD` and `XHCIPFW.SYS` (32-bit only): XHCIPFW, which closes the USB4 ports' memory windows above 4 GB at Windows start, the `.VXD` for 98 SE and ME and the `.SYS` for 32-bit 2000 to 8.1 (see [the BIOS](#before-you-start-the-bios))
+- at its root, `xhci98.sys`/`.inf` (controller) and `xhciuas.sys`/`.inf` (UAS storage); in `nt-x86\` also `xhcihlpr.sys`, a helper 32-bit 2000, XP, Vista and 7 use for a finer timer while polling and, on Vista and 7, a message-signalled interrupt; in `nt-x86\` and `nt-x64\` `txtsetup.oem`, for F6 during Windows 2000 or XP Setup (the folder's root files are the F6 floppy)
+- `cm\`: `xhcicm.sys`/`.inf` (Thunderbolt and USB4); in `nt-x86\` and `nt-x64\` its PCI-port filter, `xhcicmf.inx`, which `SETUP.EXE` installs and no integration tool takes; and XHCIPFW, which closes the USB4 ports' memory windows above 4 GB at Windows start: `XHCIPFW.VXD` in `98-me\`, `XHCIPFW.SYS` in `nt-x86\` for 32-bit 2000 to 8.1 (see [the BIOS](#before-you-start-the-bios))
+- `stor98\`: the bundled NVMe driver (see [NVMe drives](#nvme-drives)), with `stor98.mpd` and `S98VSD.VXD` in `98-me\`
+- `xhci98-test.cer` and a test-signed catalog (`*.cat`) for each driver, in `nt-x64\` alone: the certificate is the public half of the x64 drivers' test certificate (no need to import it), and 64-bit 8, 8.1 and 10 need the catalogs
 
 ## Reporting a bug
 

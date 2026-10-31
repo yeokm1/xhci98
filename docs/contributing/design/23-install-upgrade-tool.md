@@ -633,6 +633,12 @@ the three present is refused.
 
 ### 4.2 "Unpacked correctly"
 
+From `3.4.0.0` the package's drivers are laid out by Windows family
+(`98-me\`, `nt-x86\`, `nt-x64\`): design record 36 sections 6.2 to 6.4
+amend this section's file reads and refusals, where the engine reads each
+file in the download (its source map) and which family folder it reads
+(`/dir`); the local copy keeps the flat shape described here.
+
 Before anything is read from the system, the tool refuses (exit 1) unless:
 
 1. its own path (`GetModuleFileName`) ends in `\tools\xhciinst\<its name>`,

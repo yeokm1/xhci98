@@ -3851,7 +3851,8 @@ the design, settled before the code and brought up to date with it
 
 #### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
 
-The release download's `release-x86\` and `release-x64\` carry Stor98, the
+The release download's `release-x86\` and `release-x64\` (from `3.4.0.0` the
+`stor98\` folder of `98-me\`, `nt-x86\` and `nt-x64\`) carry Stor98, the
 NVMe driver (BSD-3-Clause, `src\stor98\`). **Since `3.1.0.0` (roadmap-usb4
 task 42-A.30, owner 2026-10-19) it is the Stor98 `build-driver.cmd` built
 and gated from `src\stor98\`** ("Building Stor98" above), at the package's
@@ -7039,6 +7040,32 @@ reference copies of the two `usbd.sys` builds and Windows 98 SE's
 `usbhub.sys` are still staged under the git-ignored `tools\` by
 `scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98
 evidence and the Windows 2000 VM setup, and are packaged by nothing.
+
+**The download by Windows family (from `3.4.0.0`, roadmap-usb4 task 45.44,
+design record 36).** The staged packages stay flat, `out\pkg-<flavor>-<arch>\`
+as above, and so do every VM-matrix and leg-kit reader of them. The cut
+(`make-release.ps1`) publishes them by Windows family instead of as
+`release-x86\` and `release-x64\`: `98-me\` (98 SE, ME) and `nt-x86\` (32-bit 2000
+to 10) from the x86 package, `nt-x64\` (XP x64 and Server 2003 x64, Vista to 10
+x64) from the amd64 one, each with the controller's and UAS driver's INFs and
+images at its root (in `nt-x86\` with `xhcihlpr.sys`; in both NT folders with
+`txtsetup.oem`, so the root files are the F6 floppy), the connection manager
+in `cm\` (its tunnel-port filter as `cm\xhcicmf.inx` in the NT folders, which no
+integration tool or wizard takes as an INF; `SETUP.EXE` installs it) and Stor98
+in `stor98\` (`98-me\stor98\stor98.inf` the 9x INF, `stor98w9.inf` in the flat
+package), with `INTEGRATE.TXT` at the root saying which folder to give nLite,
+NTLite or DISM. One table, `package-common.ps1`'s `$script:FamilyLayout`, says
+where each flat file goes (`ConvertTo-FamilyLayout`) and rebuilds the flat view
+of a family tree (`ConvertFrom-FamilyLayout`) that the upload set's gates and
+`-UploadSetOnly` read; `Test-FamilyLayout` (`PKG-FAMILY`) and the CM gate's
+`-FamilyDir` (`CM-INX`) check the family folders themselves, and every family
+file is compared by hash with the verified flat file it came from, after the
+re-lay and again before the publication. The x64 catalogs are made and checked
+in the flat package, where the filter is `xhcicmf.inf`, the member name the
+installer stages. The installer reads `98-me\` on 98 SE and ME and `nt-x86\` or
+`nt-x64\` on NT (`/dir` takes those three) and keeps its flat local copy. A leg
+that needs a family folder without a cut (an x64 leg on a clone without the
+key) re-lays the flat package with `ConvertTo-FamilyLayout` on the host.
 
 Where each file goes is not the packager's decision. `[SourceDisksFiles]`
 may place a source file in a subdirectory, and a package staged at one path

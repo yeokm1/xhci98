@@ -644,7 +644,19 @@ directory is a flavour AND an architecture - `release-x86` and
 `release-x64` (and, up to `3.3.0.0`, `debug-x86` and `debug-x64`) - because
 both architectures' binaries are called
 `xhci98.sys` and `xhciuas.sys`; `make-release.ps1 -Arch` defaults to **both** since 2026-09-09,
-so an ordinary cut publishes two directories (four until task 45.45). It defaulted to `x86` alone
+so an ordinary cut publishes two directories (four until task 45.45). **From `3.4.0.0` the
+cut re-lays them by Windows family** (roadmap-usb4 task 45.44, design record 36):
+`98-me\` (98 SE, ME) and `nt-x86\` (32-bit 2000 to 10) from the x86 leg and `nt-x64\` from
+the x64 one, each holding only what its Windows installs - the controller's and UAS
+driver's INFs and images at its root (with `xhcihlpr.sys` and `txtsetup.oem` in
+`nt-x86\`, `txtsetup.oem` in `nt-x64\`, so each NT root is its F6 floppy), the
+connection manager in `cm\` (its NT filter shipped as `cm\xhcicmf.inx`, its one copy,
+so no integration tool takes it as an INF; the CM gate's `CM-INX`) and Stor98 in
+`stor98\` (the 9x INF as `98-me\stor98\stor98.inf`; the x86 Stor98 INF NT-only) - with
+`INTEGRATE.TXT` at the root. `make-package.ps1`'s staged packages, the VM matrix's
+and the leg kits' input, stay flat; `package-common.ps1`'s `$script:FamilyLayout` is
+the one table between the two, and every family file is compared by hash with the
+verified flat file it came from (`PKG-FAMILY`). It defaulted to `x86` alone
 until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
 release flavour installed and read separately on the same guest, because the
@@ -658,7 +670,7 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` of `release-x64` (and of `debug-x64` up to `3.3.0.0`; one copy each
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` (`nt-x64\` from `3.4.0.0`; and of `debug-x64` up to `3.3.0.0`; one copy each
 since 3.1.0.0, whose x64 directories keep the filter INF at the root and
 have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
 `release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own
