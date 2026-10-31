@@ -467,7 +467,8 @@ frequently just unexercised there. Never close a phase on a Win98-only
 observation.
 
 Pool is allocated at named sites only. The HCD's pair is
-`ExAllocatePoolWithTag` + `ExFreePool`, `NonPagedPool` only - with one
+`ExAllocatePoolWithTag` + `ExFreePool`, `NonPagedPool` only (`NonPagedPoolNx`
+from Windows 8 on, chosen at `DriverEntry`, roadmap-usb4 task 45.63) - with one
 exception, the replacement `IO_RESOURCE_REQUIREMENTS_LIST` of
 `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`, which that IRP's contract puts in
 `PagedPool` (`HcdPoolAllocRequirements`, design record 18 section 4.2;

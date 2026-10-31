@@ -248,6 +248,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     CmDriverObject = DriverObject;
+    CmPoolInit();
     /* The unload routine is set before CmNvlinkInit: on NT, the load that
      * publishes the link-state table takes the routine away there, before
      * its callback can answer (task 45.31), and nothing after gives it

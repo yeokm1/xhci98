@@ -959,6 +959,7 @@ VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */
+VOID CmPoolInit(VOID);
 PVOID CmAlloc(ULONG bytes);
 PVOID CmAllocPaged(ULONG bytes);
 VOID CmFree(PVOID p);
