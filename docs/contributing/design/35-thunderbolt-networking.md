@@ -1,6 +1,7 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 2, 2026-10-31, before code, reviewed and revised (the
+Status: revision 3, 2026-10-31, the owner's answers of the same day in
+section 15; revision 2, before code, reviewed and revised (the
 discovery and service, the paths and rings, the interface and the
 network drivers, the INFs, installer, emulator and test plan, each in
 turn), with the owner's `XhciCmNet` gate of 2026-10-31 (section 8.1).
@@ -1843,6 +1844,21 @@ least certain parts: the 98 SE NDIS 5 import surface and net INF (S6),
 the query interface on 98 SE (S5), and the emulator's data path (S8).
 
 ## 15. The owner's questions
+
+**Answered (owner, 2026-10-31).** Networking stays in `3.4.0.0`. Q3 (a):
+any peer that logs in gets the service. Q11 (a): a packager-made x64 leg
+kit, signed and catalogued with the project's test key; no worker signs:
+when the kit is staged, the worker reports the exact `make-package.ps1`
+command for the owner to run, and waits. Q1, Q2, Q4 to Q10 as
+recommended: Q1 (a), the software CM first; Q2 (a), one network PDO per
+NHI, `XHCICM\TBNET`; Q4 (a), `vendorid` 0 with the text "xHCI98"; Q5
+(a), MTU 1500 by default, up to 65522; Q6 (c), the data path follows
+`XhciCmRingInterrupt`, reconsidered after the q35 readings; Q7 (a), two
+QEMU instances with a Linux peer, the built-in peer optional; Q8 (a),
+lane bonding in both roles; Q9 (a), the tools list a peer read-only; Q10:
+98 SE and ME in this work if S6's reading finds every `NDIS.SYS` import
+the miniport needs among `NDIS.VXD`'s exports, else NT first. The
+questions as asked follow.
 
 - **Q1, which connection manager first.** (a) The software CM's half (S3)
   and its legs first, the firmware CM's (S4) after `usb4-emu`'s E5; (b)
