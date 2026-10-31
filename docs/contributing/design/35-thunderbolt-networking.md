@@ -157,8 +157,9 @@ receive service touch at DISPATCH_LEVEL under a lock of their own.
   DW offsets, every response but the last full-length, restarting from 0
   if the block's generation changes mid-read; a host whose block changes
   sends a Properties Changed Notification, and the peer reads again. A
-  disconnect (a hot-plug event with UPG 1 on lane 0), the domain going to
-  sleep, or a notification with a different source UUID ends every
+  disconnect (signalled by a hot-plug event with UPG 1 on lane 0, the
+  same event that ends a lane bonding, IDS 3.4.1, so section 3.8 confirms
+  it by the port's state), the domain going to sleep, or a notification with a different source UUID ends every
   service with that peer and resets the protocol's state.
 - **The properties block** (IDS chapter 4): a header DW `0x55584401`
   (version 1 under the fixed value `0x555844`), the root directory's
@@ -395,8 +396,9 @@ tolerant until then:
    (the frame header has no field to say otherwise, so a peer cannot know
    a checksum was left partial [inf]) and whether its receiver trusts the
    frame CRC in their place.
-6. **MTU**: its default and its maximum (IDS 5.1.5.2's 64 KB less the
-   14-byte Ethernet header is 65522 [inf]).
+6. **MTU**: its default and its maximum, against section 7.3's chosen
+   transmit limit of 65522 (a whole frame within 64 KiB; IDS 5.1.5.2's 64
+   KB is the payload's limit, not the frame's).
 7. **Its rings**: sizes, end-to-end flow control on or off, and the
    HopIDs and rings it asks for.
 8. **Its MAC address**: whether it uses IDS 5.1.5.3's algorithm, and
@@ -474,15 +476,23 @@ The discovery protocol identifies each domain by a 128-bit UUID (IDS
   SN (IDS Table 2-1: the target copies it) and the response type (2 for
   a UUID Request, 4 for a Properties Read Request, 6 for a Properties
   Changed Notification, 16 and 18 for the link-state requests) or an
-  Error Response (7); for a USB4NET request the Request ID (IDS Table
-  5-3: SN is "not used" there, the Request ID matches responses), the
-  response type (1 for a Login, 3 for a Logout), and the requester and
-  responder UUIDs swapped as the response carries them. A control request
+  Error Response (7), and for a Properties Read Response its Offset
+  equal to the request's (IDS Table 2-5; [linux]
+  `tb_xdp_properties_request` refuses a mismatch), so a late answer to
+  an earlier chunk is never assembled; for a USB4NET request the Request
+  ID (IDS Table 5-3: SN is "not used" there, the Request ID matches
+  responses), the response type (1 for a Login, 3 for a Logout), and the
+  Requester and Responder UUIDs as the request carried them, unchanged:
+  the two fields name the transaction's roles, which a response keeps
+  (IDS Table 5-3, Figures 5-2 and 5-3). A control request
   and an inter-domain request are never outstanding at once; the thread
   serialises them. The bound is IDS's: one second a try, ten resends,
   each discovery resend with the next SN (Linux uses the retry count
-  modulo 4, `tb_xdp_uuid_request`), each USB4NET resend with the same
-  Request ID, which identifies the request, not the try [inf].
+  modulo 4, `tb_xdp_uuid_request`), each USB4NET resend as a new Request
+  Packet with the next Request ID (IDS Table 5-3: "incremented per each
+  Request Packet sent"); a response matches any Request ID this login or
+  logout has used since it began, since a late answer to an earlier try
+  is the peer's answer to the same request.
 - **Requests the peer sends** (PDF 6) are decoded on the thread as they
   land - during a busy-poll too, as record 21 section 4.4 decodes events -
   and answered at once (section 3.6). A request is never answered from
@@ -671,9 +681,12 @@ removal or D3 (record 21 section 5.6 and record 22 section 11, before the
 rings stop); and a start of the NHI with `XhciCmNet` 0 (section 8.1). On the unplug the
 peer is gone, so its paths and rings are torn down without a logout; on
 every other end a logout is sent first where the peer is still there
-(section 4.2). Under the software CM the port then clears its
-Inter-Domain bit (Guide 3.3; [linux] `tb_port_unconfigure_xdomain`) and
-returns to record 22's port machine, where the next plug starts again.
+(section 4.2). Where only the service ends (the directory gone, the
+network driver's `Close`), the peer stays READY and the port keeps its
+Inter-Domain bit. Where the peer itself ends (every other case), under
+the software CM the port then clears its Inter-Domain bit (Guide 3.3;
+[linux] `tb_port_unconfigure_xdomain`) and returns to record 22's port
+machine, where the next plug starts again.
 
 ## 4. The USB4NET service
 
@@ -762,8 +775,13 @@ instance:
   serial on Alpine Ridge [emu] (`ICM-PROTOCOL.md` section 10.1); a
   function without the capability takes the 64 bits from its vendor,
   device and subsystem ids and its bus, device and function, which are
-  stable for one machine's slot [inf]. The local UUID of a connected
-  event is not used: it arrives only with a peer.
+  stable for one slot but may be the same on two machines of one model,
+  so they are not used; such a function takes a random locally
+  administered address at each start instead (from the tick count, the
+  performance counter where it exists and the NHI's BAR address, mixed
+  and logged), which a peer learns again by ARP after a restart [inf].
+  The local UUID of a connected event is not used: it arrives only with
+  a peer.
 
 Both are locally administered and unicast by construction.
 The peer's MAC from its Login Response is logged and handed to the
@@ -867,17 +885,25 @@ and the service DPC take it to post and reap.
 
 The receive service runs in one DPC (`KeInitializeDpc`), queued by:
 
-- **the poll timer**: a `KTIMER` with that DPC, periodic at
+- **the poll timer**: a one-shot `KTIMER` with that DPC, set for
   `XhciCmNetPollMs` (section 8.1, default 1, which on every target is the
   next clock tick: 10 to 15.6 ms on NT, 10 to 55 ms on 98 SE and ME,
-  record 22 section 5.3), armed while a service is up and cancelled at
-  its end;
+  record 22 section 5.3) and set again by the DPC at the end of each run
+  while the service is up - not periodic, so the kernel never queues it
+  behind the driver's back and every queueing is counted (below);
 - **the ring interrupt**, where record 21 section 4.5 has it connected
   and armed (`XhciCmRingInterrupt` 1 on NT; never on 98 SE and ME until
   their route is read): the receive ring's Receive Data Buffer cause is
-  opened beside ring 0's by the same arm, and the existing service
-  routine's DPC queues the receive DPC when that bit is among the causes
-  it read. The status protocol, the storm count, the self-test and the
+  opened beside ring 0's by the same arm. The existing service routine
+  reads and acknowledges every status DW and passes no cause to its DPC
+  ([code] `cm_rirqos.c`), and its classifier knows ring 0's receive bit
+  alone (`cm_rirq.c` `CmRirqClassify`), so two changes: the classifier
+  takes the data ring's receive bit as this device's too (the line may be
+  shared, and an unclaimed interrupt of ours would be another device's
+  to the system), and the DPC, on every claim while a service is up,
+  kicks the receive service unconditionally, which decides from the
+  descriptors' DD bits as the poll does. No cause bitmap crosses from the
+  routine to the DPC; a spurious kick costs one empty pass. The status protocol, the storm count, the self-test and the
   fall back to polling are record 21 section 4.5.2 to 4.5.6's, unchanged;
   the poll timer stays armed as the fallback, as the idle poll does for
   ring 0.
@@ -902,18 +928,39 @@ descriptors too; at most one ring's worth a pass, the rest left to the
 next. The callback copies (section 6.3), so a descriptor is never lent
 out.
 
-**The rundown** before a ring is freed (every end of section 3.8, the
-`Close` of section 6.3): first the producers stop - a "closing" flag set
-under the lock, which `TxReserve` and the service test; the receive
-cause masked through record 21 section 4.5's mask by contract, so the
-interrupt DPC queues nothing more for it; `KeCancelTimer` on the poll
-timer; `KeRemoveQueueDpc` on the receive KDPC - then the thread waits on
-an event the service signals when its in-flight count, raised at each
-DPC's entry and lowered at its exit, reaches zero, which covers a DPC
-already dequeued and running on another processor; and only then are the
-rings disabled and their memory released. The driver image stays
-resident while any count is held, as record 21 section 4.5.6 keeps it
-for the interrupt's own DPC.
+**The in-flight count** is raised **before** each queueing, never at the
+DPC's entry: before `KeSetTimer` (and lowered again when `KeCancelTimer`
+returns TRUE, the timer removed before it fired) and before the
+interrupt DPC's `KeInsertQueueDpc` (lowered again when that returns
+FALSE, already queued); the receive DPC lowers it as its last act. So a
+DPC dequeued on another processor but not yet running is already
+counted, and `KeRemoveQueueDpc` is not used (it has no Windows 98
+evidence, record 21 section 4.5.6, and is not needed).
+
+**The rundown**, at every end of a service (every end of section 3.8,
+the `Close` of section 6.3, a stop, a surprise removal): first the
+producers stop - a "closing" flag set under the lock, which `TxReserve`,
+the timer's re-arm, the interrupt DPC's kick and the service all test;
+the receive cause masked through record 21 section 4.5's mask by
+contract; `KeCancelTimer` - then the thread waits for the outstanding
+reservation, if any, to be committed or aborted (both run at
+DISPATCH_LEVEL with no wait inside, and a stale token's commit or abort
+still releases it, section 6.3), so no sender is still copying into a
+transmit buffer; then it waits on an event the last lowering of the
+in-flight count signals; and only then are the rings disabled, reset or
+reused. The instructions a DPC runs after its last lowering are covered
+as record 21 section 4.5.6 covers the interrupt's own DPC: the image and
+the NHI's device extension, which hold the KDPC and the timer, live
+until the NHI's removal, never freed by a service's end.
+
+**The memory** stays allocated across services (section 5.3) and is
+freed only at the NHI's stop or removal, and then only when the rings
+were proven stopped (Ring Valid read back clear on a live host
+interface). Where the host interface was lost - a surprise removal, all
+ones read back, record 21 section 5.6's "the host interface lost" - the
+data rings' common buffers and their adapter are retained exactly as
+ring 0's are (`cm_pool.c` and `CmDmaClose`'s rule), since no read can
+show that the NHI stopped writing into them.
 
 What the poll costs (section 15 Q6): with a 10 ms tick and 128 receive
 descriptors, the receive side holds at most 128 frames (about 512 KiB)
@@ -1029,14 +1076,13 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   removal reaches the CM (NDIS halts a miniport before its PDO is
   removed).
 - A surprise removal of the NHI: the CM ends the service without a
-  logout, raises `LinkChange` down, refuses further `TxReserve`, waits
-  for an outstanding reservation to be committed or aborted (both run at
-  DISPATCH_LEVEL with no wait inside, so the wait is short) and then runs
-  section 5.4's rundown, and only then frees the rings; the network
-  driver's own surprise-removal notification (section 7.6) follows. A
-  service's generation increments at every end, so a sender that
-  reserved before the end and commits after it is refused (section
-  6.3).
+  logout, raises `LinkChange` down and runs section 5.4's rundown (the
+  reservation wait included, as at every end), and the memory follows
+  section 5.4's rule for a lost host interface; the network driver's own
+  surprise-removal notification (section 7.6) follows. A service's
+  generation increments at every end, so a sender that reserved before
+  the end and commits after it is refused (section 6.3), its reservation
+  released.
 - The interface's reference (`InterfaceReference`,
   `InterfaceDereference`) counts the network driver's hold; the PDO
   is not deleted while it is held, as record 21 section 3.2's rundown
@@ -1111,16 +1157,19 @@ switch the step resolves, never a registry value.
   one more than the last (modulo `0x10000`) where [tbnet-owed] point 3
   confirms that rule, else only Index and Count are checked; a gap drops
   the packet (counted); the frame with Index Count-1 completes it.
-- An indicated frame shorter than 14 bytes is dropped. A frame longer
-  than the adapter's own maximum (its MTU plus 14, plus 4 where the peer
-  sends the FCS) is dropped and counted before any indication, since the
+- A trailing FCS, where S0 shows the peer sends one (tbnet-owed point
+  4), is removed before anything else, by the same compile-time switch
+  as the transmit side, so no indication carries it. An indicated frame
+  shorter than 14 bytes is dropped. A frame longer than the adapter's
+  own maximum (its MTU plus 14) is dropped and counted before any
+  indication, since the
   stack was told that maximum (NDIS 5 `OID_GEN_MAXIMUM_TOTAL_SIZE`, NDIS
   6 `MtuSize`): the reassembly takes every size IDS 5.1.5.2 requires a
   receiver to take, and the indication only what this adapter's MTU
   agreed. A frame within the maximum but longer than the payload its IP
-  or ARP header names reaches the stack as padding, which IP and ARP
-  ignore, so a peer that sends the FCS or pads is received correctly
-  either way [inf, by the protocols' own rules].
+  or ARP header names (a peer's padding to 60 bytes) reaches the stack
+  as padding, which IP and ARP ignore [inf, by the protocols' own
+  rules].
 
 ### 7.3 The MTU
 
@@ -1229,9 +1278,14 @@ not the peer's.
 
 ### 7.7 Power
 
-The miniports declare power management with no wake (NDIS 5
-`OID_PNP_CAPABILITIES` with every wake-up field unspecified; NDIS 6 the
-same in its attributes) [inf: that 98 SE's NDIS treats this as a
+The miniports declare power management with no wake: NDIS 5 answers
+`OID_PNP_CAPABILITIES` with every wake-up field `NdisDeviceStateUnspecified`;
+NDIS 6.20 sets general attributes of revision 2
+(`NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES_REVISION_2`) with
+`PowerManagementCapabilitiesEx` pointing at an `NDIS_PM_CAPABILITIES`
+whose wake-up and protocol-offload capabilities are all off and whose
+minimum device states are unspecified, the member NDIS 6.20 requires
+there [inf: that 98 SE's NDIS treats this as a
 power-managed miniport is read by the 98 SE standby leg]. On
 `OID_PNP_SET_POWER` D3 (or NDIS 6's `OID_PNP_SET_POWER` with
 `NDIS_STATUS_PENDING`): the request is pended and a work item
@@ -1411,7 +1465,8 @@ from it:
   rule of 2026-10-31), after the INF's install so its no-overwrite 0 does
   not stand; where no NHI is present yet (the staged-only case of record
   26 section 5.5), into `Services\USB`, the machine-wide key the CM reads
-  first, since no controller key exists to write. It takes effect at the
+  first, since no controller key exists to write, and there too whenever
+  it already holds an `XhciCmNet` (the next item's rule). It takes effect at the
   controller's next start (section 8.1); the Summary says the network
   adapter appears once the connection manager restarts, which the run
   brings about for a present NHI on NT by the restart of the device it
@@ -1419,10 +1474,16 @@ from it:
   restart.
 - **Unticked on a new install**: nothing of networking staged, `XhciCmNet`
   left at the INF's 0.
-- **The box is the setting.** `XhciCmNet` is written from the box alone:
-  ticking writes 1, unticking where the value in force is 1 writes 0 in
-  the same keys (each present NHI's, and machine-wide where the install
-  wrote it there), and a box left as it was writes nothing, as record 26
+- **The box is the setting.** `XhciCmNet` is written from the box alone,
+  to one set of places whichever way it goes: every present NHI's key,
+  and `Services\USB` whenever that key already holds an `XhciCmNet` (of
+  any value, the install's or a user's) or no NHI is present. Ticking
+  writes 1 there, unticking where the value in force is 1 writes 0 there,
+  so a machine-wide value can never outrank the box (the CM reads
+  `Services\USB` first, `cm_reg.c` `cmQuery`): staged-only `/tbnet`, then
+  an NHI attached, `/notbnet` and `/tbnet` again ends with 1 in both
+  places; `test_inst` carries that sequence and its mirror. A box left as
+  it was writes nothing, as record 26
   section 5.5's changed-value rule has it. It is therefore not an
   Advanced row, and `/set XhciCmNet=` is refused with "use /tbnet or
   /notbnet", so no second control can contradict the box. Unticking
@@ -1609,16 +1670,22 @@ no frame was lost at the default poll on an idle link.
 | 10 x86 (or 8.1 x86) | yes | - | - | the x86 NDIS 6 image |
 | 10 x64 (or 8.1 x64) | yes | - | - | the x64 NDIS 6 image and its catalog |
 
-Before task 45.44 the images are copied into each guest by hand (section
-9.4). The x64 ones are not yet signed by the packager then (S10), so
-their legs take the leg-only route of `runs/run-43-24.md` (task 43.36): a
-throwaway certificate made in the guest overlay, in its Root and
-TrustedPublisher stores, the copied image signed there with test signing
-on, never published and never leaving the overlay; the published images
-are signed by the packager alone (design record 19), from S10 on, and
-the x64 legs are read again on S10's package.
 | 98 SE to 2000 | one leg | - | - | two guests of this project's, no Linux: this driver against itself |
 | 2000 | one leg | - | - | `XhciCmNet` 0: the port stays UNSUPPORTED, no request answered, Linux gives up its discovery, no DMA path |
+
+Before task 45.44 the images are copied into each guest by hand (section
+9.4). The x86 ones need no signature. The x64 ones must carry the
+project's test signature, and the 8 to 10 x64 one its catalog too, and
+`AGENTS.md` gives signing to the packager alone (design record 19): so
+the x64 legs run on a **leg kit** the packager stages before 45.44 -
+`make-package.ps1` taught to put the network driver into a development
+package of today's layout, never published, signed and catalogued with
+`-TestSignPfx` where the key is held (S8a, section 14) - and where no
+such kit can be made on the leg host, the x64 legs are reported owed
+until S10's package. A clone without the key stages the kit unsigned
+and runs the x86 legs only. Whether the brief's in-guest throwaway
+signature (task 43.36, `runs/run-43-24.md`) may stand in is section 15
+Q11, not this record's to decide.
 
 ### 11.4 The bench (the owner's)
 
@@ -1710,7 +1777,8 @@ person who knows the code, in record 34 section 10.1's manner.
 | S6 | `xhcinet.sys`: `net_frame.c` and `test_net_frame`; the NDIS 5 miniport; the x86 (MSVC 6.0, 2000 DDK) and x64 (WDK 7.1) builds in `build-driver.cmd`; the `net98` import profile with the `NDIS.VXD` export reading and `legal-provenance.md` rows; `xhcinet.inf` (and x64), the 9x net keys read from the 98 DDK and CD, the `NTx86.6.2` decoration read on 98 SE, ME, 2000 and XP; `check-net-inf.ps1` | 2,000 to 2,500 lines; 8 to 10 days | after S5's interface header; S0 for framing |
 | S7 | `xhcinet6.sys`: the NDIS 6.20 miniport over the same core, x86 and x64, its INF sections, the import allowlists against 8.1's and 10's exports, the x64 catalog path | 1,500 to 2,000 lines; 6 to 8 days | after S6's core |
 | S8 | `usb4-emu`'s host-to-host model, E1 to E7 (E8 optional), in that repository | 1,500 to 2,500 lines there; 6 to 10 days | the owner's for that repository; S3's legs need E1 to E3, S4's E5 |
-| S9 | The legs of section 11.3, images copied into the guests by hand | 6 to 8 days | after S6 to S8; before 45.44 |
+| S8a | The x64 leg kit (section 11.3): `make-package.ps1` stages the network driver into a never-published development package of today's layout, signed and catalogued by `-TestSignPfx` where the key is held; the packaging regression fixture gains the case | 100 to 200 lines of scripts; 1 day | before S9's x64 legs; subject to Q11 |
+| S9 | The legs of section 11.3, images copied into the guests by hand | 6 to 8 days | after S6 to S8 (S8a for x64); before 45.44 |
 | S10 | **After 45.44 is merged.** The packaging of section 9.3: `cm\tbnet\` (or loose in `cm\` on `98-me\`), `make-package.ps1`, `PKG-*` rules, signing and the catalog, `make-release.ps1`, the download readme | 300 to 500 lines of scripts; 2 to 3 days | after 45.44 |
 | S11 | **After 45.44 and 45.60 are merged.** The installer of sections 9.1 and 9.2: the box on 45.60's page, `/tbnet` and `/notbnet`, the console question, `inst_tbnet_decide`, staging and installing `xhcinet.inf`, `XhciCmNet`'s write, update and uninstall, 45.54's Advanced rows; `test_inst`; the window's legs on 98 SE, XP and 7 | 600 to 900 lines; 3 to 5 days | after 45.44 and 45.60 |
 | S12 | Documents: `tuning.md`'s rows (S5, S6), `source-files.md`, `legal-provenance.md` section 3 and 4 rows, `build-and-test.md`'s network leg, the release notes' text (handed to the coordinator) | 1 to 2 days | with each step |
@@ -1782,6 +1850,13 @@ the query interface on 98 SE (S5), and the emulator's data path (S8).
   first, 98 SE and ME after their NDIS 5 import reading and net INF leg,
   with a release-notes line. Recommended: (a) if S6's 98 SE import reading
   finds every needed `NDIS.SYS` export, else (b) for that release.
+- **Q11, the x64 legs before 45.44** (section 11.3). (a) The packager's
+  leg kit (S8a), signed and catalogued with the project's test key where
+  it is held, the only route `AGENTS.md` and design record 19 name for a
+  signature; (b) the brief's in-guest throwaway signature of task 43.36
+  (`runs/run-43-24.md`), never published, which leaves the 8 to 10 x64
+  catalog unmade; (c) no x64 leg until S10's package. Recommended: (a);
+  (c) where the key is not on the leg host.
 
 ## 16. Open, and the risks
 
