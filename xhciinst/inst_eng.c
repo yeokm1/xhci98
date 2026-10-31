@@ -4002,11 +4002,13 @@ static int choose_dir(void)
     char from[INST_PATH_CHARS];
     char moveFrom[INST_PATH_CHARS];
     char text[2048];
+    char reason[512];
     const char *why;
     const char *defWhy;
     int toolHere;
     int setupHere;
     int k;
+    size_t n;
 
     toolDir[0] = '\0';
     moveFrom[0] = '\0';
@@ -4108,8 +4110,13 @@ static int choose_dir(void)
                 inst_copy(toolDir, checked, sizeof(toolDir));
                 break;
             }
-            _snprintf(text, sizeof(text) - 1, "  Not that one: %s.\n  Type "
-                      "another%s: ", why,
+            /* The reason shaped to the width here, as a value question
+             * is (inst_value_question_mw): the 98 SE and ME one is longer
+             * than a line. */
+            _snprintf(reason, sizeof(reason) - 1, "  Not that one: %s.", why);
+            reason[sizeof(reason) - 1] = '\0';
+            n = inst_wrap_text(reason, text, sizeof(text));
+            _snprintf(text + n, sizeof(text) - 1 - n, "\n  Type another%s: ",
                       defWhy == NULL ? ", or Enter for the one above" : "");
             text[sizeof(text) - 1] = '\0';
         }
@@ -30652,6 +30659,11 @@ static void st_screens_once(int longest)
     static const char *const nt1[] = {
         "y", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
+    /* 98: the Thunderbolt question, the storage row, the port switchover,
+     * XhciSilentInstall and the connection manager's three (asked on 98
+     * SE and ME too since task 45.54), then a long-named directory that
+     * is refused, Enter for the one above, the confirmation, and no to
+     * Device Manager. */
     static const char *const x9[] = {
         "y", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
         "y", "n", NULL
