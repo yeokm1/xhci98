@@ -1384,7 +1384,12 @@ there, at both depths, as today.
    cannot tell Vista from 7 or 8 from 8.1), major and minor exactly, and
    `_WIN64` for the architecture; an unrecognised system has no bit. A bit is set only when every run of item 11's set
    for that system, kind and case passed; one failure leaves it 0 and is
-   recorded with its trace.
+   recorded with its trace. The one exception (owner, 2026-10-31): on 98
+   SE and ME a run in which the system-modal "Disk Write Error" screen
+   stood before the unplug was handled is a system freeze outside this
+   driver - nothing runs, its thread included, so no statement is made and
+   Stor98's gone deadline applies - and does not count against the bit;
+   ME's two such runs are `runs/run-45.md`, "45.18".
 9. **The firmware connection manager** keeps MD-1 on q35 (section 3.5;
    section 4.3): its condition needs a set of exactly one member, which
    the `tb3-*` profiles' q35 layouts do not have, and it has no

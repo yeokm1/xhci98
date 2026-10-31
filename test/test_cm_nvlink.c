@@ -1515,9 +1515,10 @@ static void test_q35(void)
     /* The compiled table: the readings of runs/run-45.md "45.18" only. */
     for (i = 0; i < CM_NVLINK_SYSTEMS; i++) {
         CHECK(CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_ROOT, CM_NVLINK_CASE_D1) ==
-                  (i == CM_NVLINK_SYS_2000 || i == CM_NVLINK_SYS_XP ||
+                  (i == CM_NVLINK_SYS_98SE || i == CM_NVLINK_SYS_ME ||
+                   i == CM_NVLINK_SYS_2000 || i == CM_NVLINK_SYS_XP ||
                    i == CM_NVLINK_SYS_XP64),
-              "q35: the root port's D1 read on 2000, XP and XP x64 alone");
+              "q35: the root port's D1 read on 98 SE, ME, 2000, XP and XP x64 alone");
         CHECK(!CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D1) &&
               !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_D2) &&
               !CmNvlinkQ35Qualified(i, CM_NVLINK_Q35_DOWN, CM_NVLINK_CASE_M) &&

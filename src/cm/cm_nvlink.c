@@ -433,10 +433,12 @@ ULONG CmNvlinkSystem9x(ULONG vmmVersion)
  * system, a bit per kind and case (CmNvlinkQ35Bit). Every bit is 0 until
  * a reading of task 45.18 passes it, and each is set by a commit that
  * cites that reading (runs/run-45.md, "45.18"): Windows 2000, XP and XP
- * x64, the root port's D1, read 2026-10-30.
+ * x64, the root port's D1, read 2026-10-30; 98 SE and ME, read 2026-10-31
+ * and admitted by the owner's decision of that day (record 34 section 3.11
+ * item 8).
  */
 static const UCHAR cmNvQ35Table[CM_NVLINK_SYSTEMS] = {
-    0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 ULONG CmNvlinkQ35Bit(ULONG kind, ULONG kase)
