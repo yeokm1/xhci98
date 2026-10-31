@@ -101,6 +101,12 @@ ntoskrnl.exe!KeInitializeDpc               all    required  nt52-amd64-export; t
 ntoskrnl.exe!KeInsertQueueDpc              all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
 ntoskrnl.exe!KeSynchronizeExecution        all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
 
+# --- Thunderbolt networking (cm_net.c, design record 35, task 45.59) ---
+ntoskrnl.exe!KeInitializeTimer             all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!KeSetTimer                    all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!KeCancelTimer                 all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!ObfReferenceObject            all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag.

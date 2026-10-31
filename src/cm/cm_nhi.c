@@ -268,6 +268,7 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmLogInit(nhi);
     CmThrInit(nhi);
     CmRirqInit(nhi);
+    CmNetInit(nhi);
     nhi->Common.Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (nhi->Common.Lower == NULL) {
         IoDeleteDevice(self);
@@ -511,6 +512,17 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
     }
 }
 
+/* The thread's CM_WORK_NET (cm_net.c): the Open or Close given to the
+ * software connection manager where it runs, then the waiter released. */
+VOID CmNhiNetWork(PCM_NHI nhi)
+{
+    if (nhi->U4On && nhi->Stage == CM_STAGE_ACTIVE && !cmU4Contained(nhi) &&
+        nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended) {
+        CmNetPass(nhi);
+    }
+    CmNetAck(nhi);
+}
+
 VOID CmNhiPollPass(PCM_NHI nhi)
 {
     if (nhi->U4On) {
@@ -518,6 +530,9 @@ VOID CmNhiPollPass(PCM_NHI nhi)
             return;
         }
         CmNhiU4Barrier(nhi);
+        /* Record 35 (task 45.59): the network driver's Open or Close and
+         * this domain's MAC, before the tick that acts on them. */
+        CmNetPass(nhi);
         TbtU4Poll(&nhi->U4);
         CmNhiDrainActions(nhi);
         cmU4LearnPending(nhi);
@@ -2769,6 +2784,8 @@ static VOID cmU4Activate(PCM_NHI nhi)
      * start and the first tick, before any cold device is connected. */
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
+    /* Record 35 (task 45.59): the service's operations, before the start. */
+    CmNetBindOps(nhi);
     /* Section 9.4: the record of the earlier instance on this NHI, taken
      * at this start, given to the core only for the same ids. */
     if (nhi->U4CarryIds != nhi->LiveIds || nhi->U4CarrySub != nhi->SubVendor) {
@@ -3195,9 +3212,13 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         }
         CmNhiDrainActions(nhi);
     }
+    /* Record 35 (task 45.59): a service the unbind left running ended, its
+     * memory given back or kept, before the adapter goes. */
+    CmNetStopWork(nhi);
     cmLogTable(nhi);
     cmLogCounters(nhi);
     CmRirqLogCounters(nhi);
+    CmNetLogCounters(nhi);
     CmLogNote(nhi, "cm.live.final", (CmLiveEpisode(&nhi->Live) << 8) |
                                         nhi->Live.State);
     CmLogNote(nhi, "cm.live.refused",
@@ -3438,7 +3459,17 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
         if (NT_SUCCESS(status)) {
             status = cmNhiStart(nhi, irp);
         }
+        if (NT_SUCCESS(status)) {
+            /* Record 35 section 6.1: the network PDO, reported or not. */
+            CmNetStarted(nhi);
+        }
         return CmCompleteIrp(irp, status, 0);
+
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            return CmNetBusRelations(nhi, irp);
+        }
+        break;
 
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:
@@ -3453,6 +3484,7 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
             /* The function is gone: no access of any class from now, even
              * inside a sequence the thread is running (cm_live.h). */
             CmNhiRevoke(nhi);
+            CmNetGone(nhi);
         }
         cmNhiStop(nhi, stack->MinorFunction);
         if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
@@ -3470,6 +3502,9 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
          * holds finished (without the thread, cm_power.c): none may outlive
          * the device object. */
         CmPowerDrain(nhi);
+        /* Record 35 section 6.1: the network PDO orphaned, and deleted
+         * once the PnP manager has removed it. */
+        CmNetRemove(nhi);
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(nhi->Common.Lower, irp);

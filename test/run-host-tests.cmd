@@ -397,6 +397,10 @@ rem                  also built for amd64 (below)
 rem   test_cm_iso  - the isolation statement's decision (src\cm\cm_iso.c,
 rem                  task 45.35, design record 22 section 10.5): the one
 rem                  yes and every condition's refusal in order
+rem   test_cm_net  - the Thunderbolt networking data rings' pure half
+rem                  (src\cm\cm_netr.c, task 45.59, design record 35
+rem                  sections 5.3 and 6.3): descriptors, completion, reaping,
+rem                  the wrap and the reservation's tokens
 rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
 rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
 rem                  tool's pure half
@@ -741,6 +745,9 @@ rem test_cm_iso links the isolation statement's decision (src\cm\cm_iso.c,
 rem task 45.35, design record 22 section 10.5): the one yes, each
 rem condition refused alone, and all 1024 patterns' first failing one.
 call :run test_cm_iso "test_cm_iso.c ..\src\cm\cm_iso.c"
+rem test_cm_net links the Thunderbolt networking data rings' pure half
+rem (src\cm\cm_netr.c, task 45.59, design record 35 sections 5.3 and 6.3).
+call :run test_cm_net "test_cm_net.c ..\src\cm\cm_netr.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).
