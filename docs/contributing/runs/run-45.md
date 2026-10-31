@@ -5259,3 +5259,12 @@ the version bump.
   it. Behind a Thunderbolt 3 parent, a link that cannot be bonded is kept
   as two single lanes. On Windows 2000 with the Standard PC HAL, a drive
   in a chain plugged in after startup gets no interrupt (Code 10).""
+- 45.52 (HEAD): "- (45.52, UAS pass-through and SMART, 2026-10-31) "USB
+  Attached SCSI drives now answer the SCSI and ATA pass-through requests
+  and the SMART requests Windows 2000 to 7 send, so SMART and
+  drive-information tools can read a drive whose USB bridge passes ATA
+  commands through (SAT). The requests run in order with the drive's other
+  I/O, can be cancelled, and end cleanly when the drive is removed. 32-bit
+  tools work on 64-bit Windows. On Windows 98 SE and ME, ASPI tools reach
+  the same drives through the existing storage stack. A bridge without SAT
+  returns the standard refusal, as on Windows' own USB storage driver.""
