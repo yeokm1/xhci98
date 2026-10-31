@@ -13389,7 +13389,8 @@ reading behind a real SAT bridge stays on the bench list.
 Status: 2026-10-31, the reading done and the change designed, reviewed and
 revised. The change adds one notice on Windows 2000, so it went to the
 owner first (roadmap-usb4 task 45.61); the owner chose A (17.4) the same
-day, and 17.5 is the code.
+day. 17.5 is the code, `817dd191`, read on 2000, XP, Vista and 7
+(`runs/run-45.md`, "45.61", "The change and its legs").
 
 Tags in this section: [obs] read in this project's runs (`runs/run-45.md`,
 "45.61"); [hist] read in this repository's history; [hyp] not read.
@@ -13527,8 +13528,14 @@ on the drive's volume left the next copy blocked for good, the volume still
 mounted and `shutdown` hanging; the same with the package and with the
 variant, and the same with the Bulk-Only stick on `usbstor.sys`, so it is
 neither UAS's nor this change's [obs]. Without the Explorer window the same
-unplug failed the copies and did not hang. Handed to the coordinator; not
-read on real hardware, and Vista's own USB stack was not read beside it.
+unplug failed the copies and did not hang in that reading; the legs of the
+change saw it block once without the window too. Handed to the coordinator;
+not read on real hardware.
+
+Read beside it by task 45.65 (`runs/run-45.md` "45.65"): on Vista's own USB
+stack (EHCI, `usbehci.sys` and `usbstor.sys`, no xHCI98) the same unplug
+leaves the copy, dir and shutdown blocked, with and without the Explorer
+window; XP and 7 on the same EHCI are clean. The hang needs no xHCI98.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

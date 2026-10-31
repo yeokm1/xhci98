@@ -5495,12 +5495,14 @@ The bench reading on a real version 2 router with task 45-E.10 (the
 routers' recovery itself, what a real tunnelled PCIe and USB3 link reads
 right after one). 45.56 is otherwise done here.
 
-## 45.61 a UAS drive in Safely Remove Hardware: the reading (2026-10-31)
+## 45.61 a UAS drive in Safely Remove Hardware: the reading, the change and its legs (2026-10-31)
 
-**Verdict: the reading is done and the change designed (design record 13
-section 17); the code waits on the owner, because the change adds Windows
-2000's "Unsafe Removal of Device" notice for a UAS drive pulled without a
-stop (record 13 section 17.4: options A, B, C, A recommended).**
+**Verdict: done.** The reading (below) found the UAS FDO's
+`SurpriseRemovalOK` override to be the cause; the owner chose option A
+(record 13 section 17.4), and with `817dd191` a UAS drive is listed and
+stopped on its own on 2000, XP, Vista and 7, and on 2000 an unplug without
+a stop shows "Unsafe Removal of Device", as for a Bulk-Only stick (the
+legs, "The change and its legs", below).
 
 Branch `w45-uasrem` (from `b71199a9`), development host A. Kit
 `E:\xhci98-vm\p45\w45-uasrem\` (`l.ps1`): the q35 bases through
@@ -5551,12 +5553,48 @@ too; `9001ebd` turned the PDOs' answer FALSE the same day for the hot-plug
 applet and left the UAS FDO's override in place; no reason is recorded
 anywhere (record 13 section 17.2).
 
+### The change and its legs (the owner's option A, 2026-10-31)
+
+`817dd191`: `UasFdoPnp` (`src/uas/uas_fdo.c`) no longer handles
+`IRP_MN_QUERY_CAPABILITIES`; the query passes down and back unchanged, so
+the bus's `SurpriseRemovalOK` FALSE stands (record 13 section 17.5).
+Reviewed and revised. The gated x86 build of `817dd191` passed (`all`,
+release and qemu, 22:17; `E:\xhci98-scratch\p45-w45-uasrem\gated-x86.log`,
+release `xhciuas.sys` `A677A4CA...2486`, `xhci98.sys` `AD1BDD96...11C9`),
+and so did the host suites (`ht.log`). The legs ran on the package staged
+from that build by `make-release.ps1 -Arch x86` with a test label
+(`xf\PNEW`), on four fresh overlays each first given the previous package
+(`xf\PN`, the reading's, `xhciuas.sys` `944db682...`), with the same UAS
+drive and Bulk-Only stick as the reading.
+
+| Leg | 2000 (`w2kB`) | XP (`xpB`) | Vista x86 (`vx86B`) | 7 x86 (`w7x86B`) |
+|---|---|---|---|---|
+| the previous package installed, restarted | UAS devnode `0x94` | `0x94`, the stick alone listed | `0x94` | `0x94`; the controller and the stick listed (`b1`) |
+| the update | `INSTALL /console /yes /nopause /force`, exit 3 | the same | `/force /restage`, exit 3 | the same |
+| after the restart the installer asks for | shut down and cold start (this base's warm restart stops in real mode, `w2kB` tag d); the new `xhciuas.sys` in place (`fc`), `0x14`, the LUN `0x90` | warm restart; the new file, `0x14` | warm restart; the new file, `0x14` | the emulator's process ended during the warm restart (nothing in its output says why); read after a cold start: the new file, `0x14`. Again on a fresh overlay (`w7x86C`): the previous package, a warm restart (`0x94`), the update, a warm restart: the new file, `0x14`, the UAS drive listed beside the controller and the stick (`c1`) |
+| listing | the stick and "xHCI98 USB Attached SCSI Storage" (`e1`) | the same (`e1`) | the controller, the stick and the UAS drive (`c1`) | the same (`c2`) |
+| stop | the drive, "Generic volume (E:)" and its disk alone; "Safe To Remove Hardware" (`e2`, `e3`) | the same, D: (`e2`, `e3`) | the same (`c2`, `c3`) | the same (`c3`, `c4`) |
+| unplug after the stop | no notice (`e4`) | no notice (`e4`) | no notice (`c4`) | no notice (`c5`) |
+| plugged again | listed (`e5`) | listed (`e5`) | listed (`c5`) | listed (`c6`) |
+| unplug without a stop, idle | "Unsafe Removal of Device" naming "xHCI98 USB Attached SCSI Storage" (`e6`) | no notice (`f2`, after a cold start on the same overlay; the new file in place, `0x14`) | no notice (`c6`) | no notice (`c7`) |
+| unplug during a copy | an `xcopy` of `system32\*.dll` to the drive: "Delayed Write Failed" and "Unsafe Removal of Device", the copy ended, no hang (`e13`) | a copy loop: the copies fail ("The system cannot find the drive specified"), no hang, no notice (`e6`) | a copy loop with no Explorer window: the next copy blocked (`c8`, `c9`), the hang of record 13 section 17.6, which task 45.65 reads on Vista's own USB stack too | a copy loop: the copies fail, no hang, no notice (`c10`) |
+
+The update path: the reading build and this one carry the same version and
+`DriverVer`, so the installer read every device "current (this release)"
+and left the old `xhciuas.sys` in place until `/force` (2000, XP) and
+`/force /restage` (Vista, 7, whose driver store kept the stored copy of the
+same `DriverVer`) were given; that is the installer's documented behaviour
+for a development build of the same version, and a release carries a new
+version. Once the new file was in, each system read `0x14` after the
+installer's restart, a warm one on XP, Vista and 7 (`w7x86C`). The reading's XP devnode
+that kept `0x94` across a warm restart (above) had its file copied in by
+hand with no reinstall of the device; the installer reinstalls it
+("Updating xHCI98 USB Attached SCSI Storage ... done"), and after that
+the warm restart read `0x14` [the cause of the earlier reading not read].
+
 ### Owed
 
-- The owner's answer to record 13 section 17.4; then the code (17.5), its
-  review, the gated x86 build and host tests, and the legs on 2000, XP,
-  Vista and 7 that 17.5 lists.
-- The Vista hang (above): outside this task.
+- Nothing of this task. The Vista hang is task 45.65's.
 
 ## 45.final: the release-notes texts the tasks handed over
 
