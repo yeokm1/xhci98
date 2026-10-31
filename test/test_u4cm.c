@@ -1998,6 +1998,38 @@ static void test_tbt_host(void)
         tbtHostRun(&cases[i]);
     }
 
+    /* Task 45.58's Cactus Ridge leg: a generation 1 link, which never
+     * bonds, between a host and a device router whose TMUs run as they
+     * came up (usb4-emu's routers): two single lanes, the TMU left as it
+     * is, the PCIe tunnel up. Before the fix the link failed for want of
+     * the TMU Off a Lane Disable needs, which a Thunderbolt host never
+     * writes. */
+    for (k = 0; k < 2; k++) {
+        fabInit(&g_fab);
+        fabHostTbt(&g_fab, k == 0 ? 0x1547UL : 0x1513UL);
+        fabTbtTmuOn(&g_fab, 0, 0x3E8UL);
+        i = (ULONG)fabDevice(&g_fab, FAB_DEV_TBT1_PR);
+        fabTbtTmuOn(&g_fab, (int)i, 0x3E8UL);
+        fabPlug(&g_fab, 1, (int)i);
+        cfgDefault(&c);
+        c.TbtHostRouter = k == 0 ? 0x1547UL : 0x1513UL;
+        rc = start(&g_fab, &g_ring, &g_cm, &c);
+        CHECK_EQ(rc, TBT_OK, "generation 1, TMU running: started");
+        CHECK(g_cm.HostRouter.CapTmu != 0 && TbtU4Port(&g_cm, 1)->Dev.CapTmu != 0,
+              "generation 1, TMU running: both routers' TMU capabilities found");
+        CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "generation 1, TMU running: UP");
+        CHECK(!TbtU4Port(&g_cm, 1)->Bonded && TbtU4Port(&g_cm, 1)->SingleLane,
+              "generation 1, TMU running: two single lanes");
+        CHECK(TbtU4Port(&g_cm, 1)->Pcie.Up && fabPcieUp(&g_fab, 1),
+              "generation 1, TMU running: the PCIe tunnel up");
+        CHECK_EQ(fabRtr(&g_fab, (int)i, 0x23) >> 16, 0x3E8UL,
+                 "generation 1, TMU running: the device's TMU left as it was");
+        CHECK_EQ(fabRtr(&g_fab, 0, 0x23) >> 16, 0x3E8UL,
+                 "generation 1, TMU running: the host's TMU left as it was");
+        CHECK((fabAdp(&g_fab, 0, 2, FAB_CAP_LANE + 1) & 0x4000UL) == 0,
+              "generation 1, TMU running: no Lane Disable");
+    }
+
     /* Test (d): another controller's router, a USB4 host router, and a
      * Thunderbolt host where a USB4 one is expected. */
     fabInit(&g_fab);

@@ -281,6 +281,7 @@ int  fabHostAsm4242(FAB *f);        /* usb4-emu `asm4242`: ASMedia, public sourc
  * operations, Router CS 3 Valid clear at power-on and no hot plug event
  * until it is set. */
 int  fabHostTbt(FAB *f, unsigned long device);
+int  fabTbtTmuOn(FAB *f, int rt, unsigned long interval); /* a Thunderbolt router's TMU running (45.58) */
 int  fabHostV2(FAB *f);             /* `minimal` as a USB4 version 2 host router (45.20) */
 int  fabDevice(FAB *f, int kind);   /* a device router, unplugged; its index */
 int  fabChild(FAB *f, int dev);     /* a USB4 router behind a device's downstream port */

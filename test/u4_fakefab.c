@@ -1975,6 +1975,32 @@ int fabHostTbt(FAB *f, unsigned long device)
     return 0;
 }
 
+/* A Thunderbolt router whose TMU runs, as usb4-emu's routers come up on
+ * its tb*-apple-* hosts (task 45.58's Cactus Ridge leg): a router TMU
+ * capability, ahead of the others at 0x20, with a TSPacketInterval, and a
+ * TMU adapter capability on each lane adapter, uni-directional mode
+ * clear. A USB4 link's "TMU Off" reads false on it. */
+int fabTbtTmuOn(FAB *f, int rt, unsigned long interval)
+{
+    FAB_ROUTER *r = &f->R[rt];
+    FAB_ADP *ad;
+    unsigned a;
+
+    r->Rcs[0x20] = (r->Rcs[1] & 0xFFUL) | (0x03UL << 8);
+    r->Rcs[0x23] = interval << 16;
+    r->Rcs[1] = (r->Rcs[1] & ~0xFFUL) | 0x20UL;
+    for (a = 1; a <= r->MaxAdp; a++) {
+        ad = &r->Adp[a];
+        if (ad->Present && (ad->Cs[2] & 0xFFFFFFUL) == 1 &&
+            (ad->Cs[FAB_CAP_LANE] & 0xFFUL) == 0) {
+            ad->Cs[FAB_CAP_LANE] |= FAB_CAP_TMU_ADP;
+            ad->Cs[FAB_CAP_TMU_ADP] = 0x03UL << 8;
+            ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
+        }
+    }
+    return 0;
+}
+
 int fabChild(FAB *f, int dev)
 {
     (void)dev;
