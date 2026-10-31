@@ -202,7 +202,14 @@ static const struct {
       "Restart Windows now: Finish restarts Windows, so what was removed "
       "is gone from it.\n\n"
       "Restart Windows later: to save your work first, or to do what the "
-      "page says is left." }
+      "page says is left." },
+    { INST_HELP_PROGRESS_9X, "Progress",
+      "The steps as they run. Windows may open windows of its own, such as "
+      "the Add New Hardware Wizard: answer them (Next, then Finish); this "
+      "waits for them.\n\n"
+      "Cancel stops at the next step; what was done stays. While a "
+      "Thunderbolt drive's reconnection is awaited, Cancel skips that wait "
+      "alone and the run goes on." }
 };
 
 int inst_help_topic(int kind, int uninstall, int variant)
@@ -231,7 +238,10 @@ int inst_help_topic(int kind, int uninstall, int variant)
     case INST_HK_SUMMARY:
         return uninstall ? INST_HELP_USUMMARY : INST_HELP_SUMMARY;
     case INST_HK_PROGRESS:
-        return INST_HELP_PROGRESS;
+        /* Each system's own wizard named (98 SE and ME: the Add New
+         * Hardware Wizard). */
+        return variant == INST_PV_9X ? INST_HELP_PROGRESS_9X
+                                     : INST_HELP_PROGRESS;
     case INST_HK_STEPS:
         return INST_HELP_STEPS;
     case INST_HK_FINISH:

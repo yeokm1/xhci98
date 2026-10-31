@@ -187,9 +187,9 @@ The window walks you through:
   Steps            (98 SE and ME) a device the installer could not install
   Finish           the result, and Restart now or Restart later
 
-Help on every page opens a short window that says what each choice on
-that page does and when to change it; its "Open the readme" button opens
-this file.
+Help (or F1) on every page opens a short window that says what each
+choice on that page does and when to change it; its "Open the readme"
+button opens this file.
 
 Thunderbolt 3 / USB4 support (experimental): never ticked unless you
 tick it, whether or not a controller is found; the line under the box

@@ -8694,7 +8694,7 @@ static void test_help(void)
 {
     /* Each topic's paragraphs, in INST_HELP_* order. */
     static const size_t paras[INST_HELP_COUNT] = {
-        3, 3, 9, 6, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3
+        3, 3, 9, 6, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3, 2
     };
     static const char *const banned[] = {
         "tested", "testing", "emulat", "virtual machine", "experimental"
@@ -8718,8 +8718,10 @@ static void test_help(void)
         { INST_HK_ADV_S98, 0, 0, INST_HELP_ADV_S98 },
         { INST_HK_SUMMARY, 0, 0, INST_HELP_SUMMARY },
         { INST_HK_SUMMARY, 1, 0, INST_HELP_USUMMARY },
-        { INST_HK_PROGRESS, 0, 0, INST_HELP_PROGRESS },
-        { INST_HK_PROGRESS, 1, 0, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 0, INST_PV_NT, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 1, INST_PV_NT, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 0, INST_PV_9X, INST_HELP_PROGRESS_9X },
+        { INST_HK_PROGRESS, 1, INST_PV_9X, INST_HELP_PROGRESS_9X },
         { INST_HK_STEPS, 0, 0, INST_HELP_STEPS },
         { INST_HK_FINISH, 0, INST_FV_RESTART, INST_HELP_FINISH },
         { INST_HK_FINISH, 0, INST_FV_SHUT, INST_HELP_FINISH_SHUT },
@@ -8774,7 +8776,9 @@ static void test_help(void)
         { INST_HELP_STEPS, "Save as text file..." },
         { INST_HELP_STEPS, "Open Device Manager" },
         { INST_HELP_TBT, "XHCIPFW.VXD on 98 SE and ME" },
-        { INST_HELP_TBT, "XHCIPFW.SYS on 2000 to the 32-bit 8.1" }
+        { INST_HELP_TBT, "XHCIPFW.SYS on 2000 to the 32-bit 8.1" },
+        { INST_HELP_PROGRESS, "Found New Hardware" },
+        { INST_HELP_PROGRESS_9X, "Add New Hardware Wizard" }
     };
     int reached[INST_HELP_COUNT];
     char head[128];
@@ -8867,6 +8871,12 @@ static void test_help(void)
                  inst_page_text(INST_PT_PFW)) == 0 &&
           strstr(inst_page_text(INST_PT_PFW), "XHCIPFW") == NULL,
           "help: the XHCIPFW box's label, the same on every system");
+    /* Each system's Progress text names its own hardware wizard alone. */
+    CHECK(!help_has_ci(inst_help_text(INST_HELP_PROGRESS_9X), "Found New") &&
+          !help_has_ci(inst_help_text(INST_HELP_PROGRESS), "Add New") &&
+          strcmp(inst_help_title(INST_HELP_PROGRESS_9X),
+                 inst_help_title(INST_HELP_PROGRESS)) == 0,
+          "help: the Progress texts, one hardware wizard each");
     /* The Welcome page's three wordings point at Help, not the readme. */
     CHECK(strstr(inst_page_text(INST_PT_WELCOME), "Help explains each "
                  "page.") != NULL &&

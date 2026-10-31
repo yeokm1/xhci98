@@ -8127,6 +8127,119 @@ owner's key-holding cut is owed: the x64 half published by
 `make-package.ps1 -TestSignPfx`, its signatures and catalogs read in
 `nt-x64\` (`xhcicmf.cat` beside `cm\xhcicmf.inx`).
 
+## 45.66 (closed) the Progress Help per system, F1, Back from Components, and the two owed 98 SE readings (2026-11-01)
+
+Branch `w45-help3` from `a4f07e99`, tree `E:\xhci98-wt\w45-help3` on
+development host A. Commits: `d6538c51` (the three fixes, record 26 draft
+59), `5341122b` (Back keeps the boxes without making the plan),
+`8d02e9bc` (Welcome greys Next only under a refused reading or first
+plan); each reviewed and revised.
+
+### The fixes and their causes
+
+- **The Progress page's Help named the wrong wizard on 98 SE.** One text
+  served every system and said "such as Found New Hardware"; 98 SE's and
+  ME's wizard is the Add New Hardware Wizard. A second topic,
+  `INST_HELP_PROGRESS_9X`, says "such as the Add New Hardware Wizard:
+  answer them (Next, then Finish)"; the window picks it at run time from
+  the platform bit (`page_help_variant`, `INST_PV_9X`), 2000 and later
+  keep "Found New Hardware".
+- **Back from Components lost the user's clicks.** The page's fill sets
+  its boxes from the window's state at every entry (`PSN_SETACTIVE`), and
+  only its Next and the Settings button took the boxes into that state;
+  Back did not, so Back to Welcome and Next showed the boxes as they were
+  before the clicks (the Thunderbolt box on XP, 45.66 continued). Back
+  now keeps them (`page_back` -> `comp_keep`) and marks the change owed
+  (`compOwed`); the page's Next or the Settings button hands it to the
+  engine and makes the plan again (`comp_take`). No plan is made at the
+  Back: one refused for the boxes (the x64 signing gate with the
+  Thunderbolt box ticked) would grey Welcome's Next. Since `8d02e9bc`
+  Welcome greys Next only for a refused reading or the plan it made
+  before any page (`welcome_refused`, `planFirst`); a plan refused for the
+  boxes at the Components page's Next or its Settings button, a dead end
+  after Back before this change too, shows its text on Welcome with Next
+  open and is refused again at the Components page's Next. The other
+  pages already kept their choices (the Thunderbolt and USB4 page, the
+  settings pages, Stor98's; the other-driver pages hand each click to the
+  engine).
+- **F1 gave Windows' "No Help topic is associated with this item".**
+  `WM_HELP` goes from the focused control to its page and on to the sheet,
+  and from the sheet's own buttons to the sheet, which handed it to
+  WinHelp with no topic. The pages (`page_proc`, `tab_proc`) pass it to
+  their sheet; the wizard sheet (`sheet_sub`) and the Settings sheet (now
+  subclassed at `PSCB_INITIALIZED`, `set_sheet_sub`) send the current page
+  `PSN_HELP`, as the Help button does (`sheet_help`), and do nothing while
+  the sheet is disabled under a window of its own. The help window keeps
+  its F1; the Advanced dialogs take theirs as their Help button.
+
+### Checks and builds
+
+- `test_help`: the 9x routes, its paragraph count, each Progress text
+  naming one wizard. The window self-test: the Progress variant for the
+  system it runs on; Back from Components keeping four boxes with the
+  change owed; Welcome's Next under the three refusal cases. 852 checks
+  (841 before).
+- Gated x86 `all` of `8d02e9bc`: BUILD + GATES PASSED (release, qemu),
+  host tests passed (`test_inst` 7784 checks, 0 failures), the XHCIINST
+  self-test and the window self-test 852 checks, 0 failures (x86 and
+  x64 images). Gated amd64 release: BUILD + GATES PASSED. Logs
+  `E:\xhci98-scratch\p45-w45-help3\gated-x86.log`, `gated-amd64.log`.
+- The legs' package: `make-release.ps1 -Arch x86 -TestLabel w45help3`
+  with both driver sets into scratch, exit 0; the full download
+  (`upload-3.3.0.0-nonfree`) on the transfer disk. Hashes
+  `E:\xhci98-vm\p45\w45-help3\hashes-8d02e9bc.txt` (`XHCIWIZ.EXE`
+  `ce99e91f...`, `SETUP.EXE` `03409df5...`, `xhci98.sys` `c7957309...`,
+  `stor98.mpd` `48bd119c...`).
+
+### The legs
+
+Fresh overlays of the q35 bases through `launch-q35.ps1 -Usb4 asm4242
+-EncAtBoot`, driven from the keyboard, QMP 49660 to 49662; every start
+and stop in `E:\xhci98-vm\p45\w45-help3\pids.txt`, the screens in each
+leg's folder there. Each Help window below was read whole, nothing cut
+at either side, its words those of the page it was opened on.
+
+| System | What was read | Result |
+|---|---|---|
+| 98 SE, 640 by 480 (`h98`) | F1 with the focus on the sheet's Next (Welcome), on a box (Components), on Progress, Steps and Finish; F1 inside the help window; F1 over the Stor98 file-update message box | each opened that page's Help; nothing more opened inside the help window or over the message box, and no WinHelp box |
+| 98 SE | Back to Welcome and Next with the Thunderbolt box ticked and the tray box unticked | both kept |
+| 98 SE | Progress Help | "such as the Add New Hardware Wizard: answer them (Next, then Finish)" |
+| 98 SE | **the Steps page's Help** (owed since 45.66) | whole: its three paragraphs, "Save as text file..." and "Open Device Manager" as the page labels them (`h-steps.png`) |
+| 98 SE | **the Finish page's Help with the shut-down words** (owed since 45.66) | whole: "Shut down now, then start Windows again: ..." and "Shut down later: ...", the page showing those two buttons and "Changes were made. Please shut down and start Windows again." (`h-finish-shut.png`) |
+| 98 SE | the window self-test after a cold start | 852 checks, 0 failures |
+| XP (`hxp`) | F1 on Welcome (Next) and on Components (a box); Back and Next with the Thunderbolt box ticked; Progress Help | Help opened each time; the box kept, the Summary listing the Thunderbolt support; "such as Found New Hardware or a driver-signing question" |
+| XP | the window self-test | 852 checks, 0 failures |
+| 7 x86, 96 DPI (`h7`) | F1 on Welcome, Components (a box), the Settings sheet (its OK button: the USB tab's Help) and the Advanced dialog; Back and Next with the Thunderbolt box ticked | each opened its Help; the box kept |
+| 7 x86 | the window self-test (elevated prompt) | 852 checks, 0 failures |
+
+How the two owed pages were reached on 98 SE:
+
+- 3.2.0.0 first, by its console tool (`/yes /thunderbolt /stor98`, exit
+  4). Its log shows it placed no `stor98.mpd` on 98 SE ("the file
+  ...\IOSUBSYS\stor98.mpd (0) ... file update 0"), so a 3.2.0.0 update
+  alone does not give the Stor98 file update; nor does 3.3.0.0, whose
+  Stor98 carries the same version as this tip.
+- This tip's window, the Thunderbolt box ticked, Install, then Cancel
+  while Stor98's PCI device was installing: the run stopped at the next
+  step, and `S98VSD.VXD` and `XHCIPFW.VXD` were left "not changed: the run
+  was cancelled" on the **Steps page**, read above; Finish then gave the
+  restart words with "Restart Windows later" chosen.
+- 3.2.0.0's `stor98.mpd` (`b3305de4...`, FileVersion 3.2.0.0) copied over
+  the one the cancelled run had placed: an older Stor98 file in place, as
+  an earlier install would leave it. The window again: the Summary listed
+  "Stor98 Storage Controller for NVMe SSDs: update (an older release)",
+  Install asked "Please disconnect all external NVMe drives before
+  proceeding" (OK), and the run ended on the **Finish page with the
+  shut-down words**, read above; Finish shut Windows down.
+
+Seen on the way, outside this task: the XP install ended exit 2,
+"xhci98.inf could not be staged (error 0xE000022F)", after the keystroke
+driver's Enter landed on XP's driver-signing prompt, whose default is to
+stop the installation; the Help readings and the self-test there were
+not affected. The Steps page's Help says "Devices the installer could not
+install by itself", which is the page's own heading's wording; on this
+run the page listed two files.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with

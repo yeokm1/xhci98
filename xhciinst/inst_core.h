@@ -1825,6 +1825,12 @@ const char *inst_page_text(int id);
 #define INST_FV_SHUT            1
 #define INST_FV_NONE            2
 
+/* The Progress page's: the system, for the name its hardware wizard has
+ * (98 SE and ME: the Add New Hardware Wizard; 2000 and later: Found New
+ * Hardware). */
+#define INST_PV_NT              0
+#define INST_PV_9X              1
+
 /* The topics, one text each. */
 #define INST_HELP_WELCOME       0
 #define INST_HELP_UWELCOME      1
@@ -1845,7 +1851,8 @@ const char *inst_page_text(int id);
 #define INST_HELP_FINISH_SHUT   16
 #define INST_HELP_FINISH_NONE   17
 #define INST_HELP_UFINISH       18
-#define INST_HELP_COUNT         19
+#define INST_HELP_PROGRESS_9X   19
+#define INST_HELP_COUNT         20
 
 /* The help window's text control, in dialog units (xhciwiz.rc IDD_HELP):
  * every text is inst_page_cols wide; one longer than inst_page_rows
@@ -1853,8 +1860,9 @@ const char *inst_page_text(int id);
 #define INST_HELP_W             284
 #define INST_HELP_H             166
 
-/* The topic for a kind of page, the run's mode (1: the uninstall) and,
- * for the Finish page, its INST_FV_*; -1 for a kind not known. */
+/* The topic for a kind of page, the run's mode (1: the uninstall) and the
+ * page's variant: the Finish page's INST_FV_*, the Progress page's
+ * INST_PV_*; -1 for a kind not known. */
 int inst_help_topic(int kind, int uninstall, int variant);
 const char *inst_help_text(int topic);
 const char *inst_help_title(int topic);
