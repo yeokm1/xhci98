@@ -8195,3 +8195,8 @@ the version bump.
   rewritten the same way; the XhciCmBridgeReq row (about line 1486) to
   "the rewrite acts on 2000, XP and XP x64"; and drop XP x64 from that
   untested-ground row (about line 5386)."
+- 45.66 (continued) (b6e4d841): "SUPERSEDES the 45.66 sentence of the
+  45.60 and 45.66 text above: The installer's Help button now explains the
+  page it is on: a short window says, one short paragraph per choice, what
+  each choice does and when to change it, with the full readme one button
+  away."
