@@ -3904,8 +3904,8 @@ filter's `IRP_MN_SURPRISE_REMOVAL`, `0x1C3` argument `0x17`), the
 connection manager's wait ended acknowledged (`0x1C1` argument `0x100`)
 before it, and no request was completed by Stor98's gone deadline (no
 `0x83`). The 2000 bit of the root-port D1 column is set on this reading
-(record 34 section 3.11 item 8); XP and XP x64 the same, below; 98 SE
-and ME read, their bits the owner's choice, below. D2 and
+(record 34 section 3.11 item 8); XP, XP x64, 98 SE and ME the same,
+below (98 SE and ME on the owner's choice (a) of 2026-10-31). D2 and
 M are deferred to the next release with 45.15's keying (owner).
 
 ### The vehicle
@@ -4080,8 +4080,8 @@ at the unplug (`0x40` 1 to 7).
 ### Windows 98 SE and ME, the same reading, after the interrupt fix
 
 **98 SE and ME, D1, root port: every injection point run passed but one
-form of one, which is the owner's choice below. Both bits stay 0 until
-then.** Since `af9e4c7d` the two systems are told apart by the VMM's
+form of one, and the owner chose (a) below on 2026-10-31: both bits are
+set.** Since `af9e4c7d` the two systems are told apart by the VMM's
 version: the first unplug read `cm.nvlink.u4-q35=00001012` on 98 SE and
 `00001022` on ME (systems 98 SE and ME).
 
@@ -4169,8 +4169,8 @@ one failed run leaves a bit 0. Two readings of it:
 Recommended: (a). The bit can only ever produce a statement made after
 the endpoint's reset, as every run read. When the system freezes there
 is no statement at all, and Stor98's own deadline applies, as everywhere
-nothing is stated. The owner's choice: both bits stay 0 until it is
-made.
+nothing is stated. **The owner chose (a), 2026-10-31**: both bits set,
+record 34 section 3.11 item 8 noting the exception.
 
 Not counted:
 
@@ -4198,9 +4198,9 @@ Not counted:
 
 ### What it changes
 
-The 2000, XP and XP x64 bits of the root-port D1 column
-(`cmNvQ35Table`); the 98 SE and ME bits stay 0 until the owner's choice
-above (a one-line change if (a)). D2 and M are deferred to
+The 98 SE, ME, 2000, XP and XP x64 bits of the root-port D1 column
+(`cmNvQ35Table`): every system item 5 admits (98 SE and ME on the
+owner's choice (a)). D2 and M are deferred to
 the next release with 45.15's correspondence and per-tunnel keying
 (owner). Vista and later stay at 0
 (Q11 (a)). The chained unit's eject, where the reading is expected to be
