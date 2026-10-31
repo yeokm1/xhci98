@@ -8062,3 +8062,16 @@ the version bump.
   replugging the cable, even when the other computer was started first.
   The link keeps trying to connect until the other computer's network
   interface is brought up, instead of stopping after a minute."
+- 45.55 (the owed legs) (pending): "SUPERSEDES the first two sentences of
+  the 45.53 and 45.55 text above (keep the rest). A Thunderbolt or USB4
+  dock or device whose own switch has more than one downstream port,
+  plugged in while Windows 2000, XP or XP x64 runs, now gets every port
+  placed, also when its switch ports request their own interrupt; before,
+  the second port stopped with Code 12 and nothing behind it started. The
+  first time an NVMe enclosure is plugged in on Windows 2000, XP or XP
+  x64, two Found New Hardware wizards appear: ... Coordinator note for the
+  bump: in release-notes.md also change "XP x64's lists were not read, so
+  there the rewrite does not act yet" (about line 422) to say XP x64 is
+  rewritten the same way; the XhciCmBridgeReq row (about line 1486) to
+  "the rewrite acts on 2000, XP and XP x64"; and drop XP x64 from that
+  untested-ground row (about line 5386)."
