@@ -29,9 +29,9 @@ A device the helper cannot install gets its Device Manager steps on a page
 of their own, which you can save to a text file; the rest of the install
 completes.
 
-On Windows 98 SE and ME the Thunderbolt and USB4 page also offers "Close
-PCI windows above 4 GB (XHCIPFW.VXD)", above Stor98's: a small part
-Windows loads at each start, before it reads
+On Windows 98 SE and ME the Thunderbolt and USB4 page also offers "Find
+Thunderbolt and USB4 devices placed above 4 GB", above Stor98's:
+XHCIPFW.VXD, a small part Windows loads at each start, before it reads
 the PCI bridges, which closes every bridge's prefetchable memory window
 that lies wholly above 4 GB. Those systems cannot use such a window, and
 a board that leaves one there (a USB4 controller's ports with "Above 4G
@@ -43,11 +43,12 @@ HKLM\System\CurrentControlSet\Services\VxD\XHCIPFW, in values whose
 names begin with XhciPfw. Untick it, or uninstall, to remove it.
 
 On Windows 2000, XP and the 32-bit Vista, 7, 8 and 8.1 the same box,
-"Close PCI windows above 4 GB (XHCIPFW.SYS)", offers XHCIPFW.SYS. It is a
-small driver Windows loads at each start before its PCI driver, and it
-does the same. On 8 and 8.1 it is a filter of each PCI root bus (the
-"PCI Express Root Complex" or "PCI bus" in Device Manager), named in that
-device's UpperFilters as the service xhcipff, and it acts as that bus starts.
+"Find Thunderbolt and USB4 devices placed above 4 GB", offers
+XHCIPFW.SYS. It is a small driver Windows loads at each start before
+its PCI driver, and it does the same. On 8 and 8.1 it is a filter of
+each PCI root bus (the "PCI Express Root Complex" or "PCI bus" in
+Device Manager), named in that device's UpperFilters as the service
+xhcipff, and it acts as that bus starts.
 As on 98 SE and ME it is ticked whenever the Thunderbolt 3 /
 USB4 box is. Without that box it is unticked and greyed. You may untick
 it. A USB4 or Thunderbolt controller behind a bridge with such a window

@@ -8649,7 +8649,9 @@ static void test_help(void)
         { INST_HELP_ADV_S98, "The value" },
         { INST_HELP_ADV, "Setting" },
         { INST_HELP_STEPS, "Save as text file..." },
-        { INST_HELP_STEPS, "Open Device Manager" }
+        { INST_HELP_STEPS, "Open Device Manager" },
+        { INST_HELP_TBT, "XHCIPFW.VXD on 98 SE and ME" },
+        { INST_HELP_TBT, "XHCIPFW.SYS on 2000 to the 32-bit 8.1" }
     };
     int reached[INST_HELP_COUNT];
     char head[128];
@@ -8725,6 +8727,14 @@ static void test_help(void)
         CHECK(help_has_ci(inst_help_text(quotes[i].Topic), quotes[i].Words),
               msg);
     }
+    /* The XHCIPFW box says what it does, no file name (owner,
+     * 2026-10-31; record 26 draft 56); its Help names the files. */
+    CHECK(strcmp(inst_page_text(INST_PT_PFW), "Find Thunderbolt and USB4 "
+                 "devices placed above 4 GB") == 0 &&
+          strcmp(inst_page_text(INST_PT_PFW_SYS),
+                 inst_page_text(INST_PT_PFW)) == 0 &&
+          strstr(inst_page_text(INST_PT_PFW), "XHCIPFW") == NULL,
+          "help: the XHCIPFW box's label, the same on every system");
     /* The Welcome page's three wordings point at Help, not the readme. */
     CHECK(strstr(inst_page_text(INST_PT_WELCOME), "Help explains each "
                  "page.") != NULL &&

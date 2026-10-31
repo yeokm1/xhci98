@@ -6198,9 +6198,12 @@ const INST_PAGE_TEXT instPageTexts[] = {
       246, 10 },
     { INST_PT_VSD_OTHER,
       "Large transfers for Stor98 (Windows 98 SE and ME only)", 246, 10 },
-    { INST_PT_PFW, "Close PCI windows above 4 GB (XHCIPFW.VXD)", 272, 10 },
-    { INST_PT_PFW_SYS, "Close PCI windows above 4 GB (XHCIPFW.SYS)", 272,
-      10 },
+    /* What it does for the user, no file name (owner, 2026-10-31; record
+     * 26 draft 56): the Help window names XHCIPFW.VXD and XHCIPFW.SYS and
+     * the systems each runs on. Two ids kept, one per file, for the
+     * window's choice and its self-test. */
+    { INST_PT_PFW, "Find Thunderbolt and USB4 devices placed above 4 GB", 272, 10 },
+    { INST_PT_PFW_SYS, "Find Thunderbolt and USB4 devices placed above 4 GB", 272, 10 },
     { INST_PT_TB_INTEL,
       "Intel's Thunderbolt driver is in use; ticked, this replaces it. With "
       "this, a device plugged into its port can reach the computer's "

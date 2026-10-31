@@ -61,9 +61,11 @@ static const struct {
       "Settings...: the drivers' settings. Change folder...: where the "
       "tools and this installer go." },
     { INST_HELP_TBT, "Thunderbolt and USB4",
-      "Close PCI windows above 4 GB: at each start, closes PCI bridge "
-      "windows this Windows cannot use, so the devices behind them are "
-      "found; writes nothing where there are none. Leave it ticked.\n"
+      "Find Thunderbolt and USB4 devices placed above 4 GB: XHCIPFW.VXD on 98 SE and "
+      "ME, XHCIPFW.SYS on 2000 to the 32-bit 8.1. At each start it closes "
+      "the PCI bridge windows above 4 GB this Windows cannot use, so the "
+      "devices behind them are found; it writes nothing where there are "
+      "none. Leave it ticked.\n"
       "Stor98: the driver for NVMe drives behind a Thunderbolt or USB4 "
       "tunnel. Untick it only if another driver runs those drives.\n"
       "Large transfers for Stor98 (98 SE and ME): reads and writes of up "
