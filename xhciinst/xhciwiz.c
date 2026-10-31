@@ -687,6 +687,122 @@ static void open_help(HWND owner)
     }
 }
 
+/* ---- Help on every page (record 26 section 5.10, task 45.66) --------------- */
+
+static void wiz_fit(HWND h);
+
+/* Each page number's kind of help; the Settings sheet's tabs too. */
+static const int helpKind[P_COUNT] = {
+    INST_HK_WELCOME,    /* P_WELCOME                                    */
+    INST_HK_WELCOME,    /* P_FOUND: the Welcome page's list (draft 28)  */
+    INST_HK_COMP,       /* P_COMP                                       */
+    INST_HK_SET_USB,    /* P_USB                                        */
+    INST_HK_SET_TB,     /* P_TBS                                        */
+    INST_HK_SET_S98,    /* P_S98                                        */
+    INST_HK_SUMMARY,    /* P_SUMMARY                                    */
+    INST_HK_PROGRESS,   /* P_PROGRESS                                   */
+    INST_HK_STEPS,      /* P_STEPS                                      */
+    INST_HK_FINISH,     /* P_FINISH                                     */
+    INST_HK_FREE,       /* P_OTHER                                      */
+    INST_HK_NONFREE,    /* P_OTHERNF                                    */
+    INST_HK_TBT         /* P_TBT                                        */
+};
+
+/* The Advanced dialog's kind, as it was opened for a tab. */
+static int adv_help_kind(int page)
+{
+    return page == P_S98 ? INST_HK_ADV_S98 : INST_HK_ADV;
+}
+
+/* The Finish page's variant, from its two buttons as they are shown. */
+static int finish_variant(HWND dlg)
+{
+    char t[128];
+    HWND now = GetDlgItem(dlg, IDC_F_NOW);
+
+    if (now == NULL ||
+        (GetWindowLongA(now, GWL_STYLE) & WS_VISIBLE) == 0) {
+        return INST_FV_NONE;
+    }
+    GetWindowTextA(now, t, sizeof(t));
+    return strcmp(t, inst_page_text(INST_PT_SHUT_NOW)) == 0 ? INST_FV_SHUT
+                                                            : INST_FV_RESTART;
+}
+
+static HWND helpWnd;            /* the help window, while it is open    */
+static int helpDone;            /* the run's end, held while it is open */
+static WPARAM helpDoneWp;
+
+/* The topic's text into the help window, its lines as the edit control
+ * wants them (CR LF) and its caption "Help: <title>". */
+static void help_set(HWND dlg, int topic)
+{
+    const char *t = inst_help_text(topic);
+    char cap[96];
+    char *buf = (char *)malloc(strlen(t) * 2 + 1);
+    char *o = buf;
+
+    _snprintf(cap, sizeof(cap) - 1, "Help: %s", inst_help_title(topic));
+    cap[sizeof(cap) - 1] = '\0';
+    SetWindowTextA(dlg, cap);
+    if (buf == NULL) {
+        SetDlgItemTextA(dlg, IDC_H_TEXT, t);
+        return;
+    }
+    for (; *t != '\0'; t++) {
+        if (*t == '\n') {
+            *o++ = '\r';
+        }
+        *o++ = *t;
+    }
+    *o = '\0';
+    SetDlgItemTextA(dlg, IDC_H_TEXT, buf);
+    free(buf);
+}
+
+static WIZ_DLGRET CALLBACK help_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_INITDIALOG:
+        helpWnd = dlg;
+        help_set(dlg, (int)lp);
+        wiz_fit(dlg);
+        SetFocus(GetDlgItem(dlg, IDCANCEL));
+        return FALSE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDC_H_README) {
+            open_help(dlg);
+            return TRUE;
+        }
+        if (LOWORD(wp) == IDCANCEL || LOWORD(wp) == IDOK) {
+            EndDialog(dlg, IDCANCEL);
+            return TRUE;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* Help pressed: the topic's window, owned by the window it was pressed
+ * in; the readme where no topic is known. The run's end that came while
+ * it was open is posted once now (section 5.10's lifecycle). */
+static void help_show(HWND owner, int topic)
+{
+    if (topic < 0) {
+        open_help(owner);
+        return;
+    }
+    DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_HELP), owner, help_proc,
+                    (LPARAM)topic);
+    helpWnd = NULL;
+    if (helpDone) {
+        helpDone = 0;
+        PostMessageA(sheet, WM_APP_DONE, helpDoneWp, 0);
+    }
+}
+
 static void open_devmgr(HWND owner)
 {
     STARTUPINFOA si;
@@ -3541,6 +3657,11 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             adv_take(dlg);
             return TRUE;
         }
+        if (LOWORD(wp) == IDHELP) {
+            help_show(dlg, inst_help_topic(adv_help_kind(advPage), 0,
+                                           INST_FV_RESTART));
+            return TRUE;
+        }
         if (LOWORD(wp) == IDOK) {
             if (!adv_take(dlg)) {
                 return TRUE;
@@ -3901,6 +4022,11 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
         }
         break;
     case WM_COMMAND:
+        if (LOWORD(wp) == IDHELP) {
+            help_show(dlg, inst_help_topic(adv_help_kind(P_S98), 0,
+                                           INST_FV_RESTART));
+            return TRUE;
+        }
         if (LOWORD(wp) == IDOK) {
             if (!s98_adv_take(dlg)) {
                 return TRUE;
@@ -4051,6 +4177,11 @@ static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             setApplied = 1;
             SET_RESULT(dlg, PSNRET_NOERROR);
             return TRUE;
+        case PSN_HELP:
+            /* The tab's help, owned by the Settings sheet (section 5.10). */
+            help_show(GetParent(dlg),
+                      inst_help_topic(helpKind[page], 0, INST_FV_RESTART));
+            return TRUE;
         default:
             break;
         }
@@ -4090,7 +4221,7 @@ static void settings_open(HWND comp)
         }
         memset(&p[n], 0, sizeof(p[n]));
         p[n].dwSize = sizeof(p[n]);
-        p[n].dwFlags = PSP_USETITLE;
+        p[n].dwFlags = PSP_USETITLE | PSP_HASHELP;
         p[n].hInstance = hInst;
         p[n].pszTemplate = MAKEINTRESOURCEA(IDD_SETTINGS);
         p[n].pszTitle = title[i];
@@ -4117,7 +4248,7 @@ static void settings_open(HWND comp)
     memcpy(keepS98Val, s98WinVal, sizeof(keepS98Val));
     memset(&h, 0, sizeof(h));
     h.dwSize = sizeof(h);
-    h.dwFlags = PSH_NOAPPLYNOW;
+    h.dwFlags = PSH_NOAPPLYNOW | PSH_HASHELP;
     h.hwndParent = GetParent(comp);
     h.hInstance = hInst;
     h.pszCaption = "xHCI98 Settings";
@@ -4969,7 +5100,11 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, FALSE);
             return TRUE;
         case PSN_HELP:
-            open_help(dlg);
+            /* Record 26 section 5.10: the page's own help. */
+            help_show(GetParent(dlg), inst_help_topic(
+                      helpKind[page], uninstallMode,
+                      page == P_FINISH ? finish_variant(dlg)
+                                       : INST_FV_RESTART));
             return TRUE;
         default:
             break;
@@ -5025,6 +5160,15 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     }
     if (msg == WM_APP_FIT) {
         wiz_fit(h);
+        return 0;
+    }
+    if (msg == WM_APP_DONE && (int)wp != JOB_READ && helpWnd != NULL) {
+        /* The run ended under a help window (record 26 section 5.10):
+         * held, the help window closed, and posted once again by
+         * help_show when its DialogBoxParamA returns. */
+        helpDone = 1;
+        helpDoneWp = wp;
+        EndDialog(helpWnd, IDCANCEL);
         return 0;
     }
     if (msg == WM_APP_DONE) {
@@ -6273,6 +6417,104 @@ static void st_tbt(HWND parent)
     DestroyWindow(d);
 }
 
+/* Record 26 section 5.10: the help windows' routing, and each topic's text
+ * in the help window's text control, whole, the window inside 640 by 452
+ * (480 less a taskbar) at this system's DPI. */
+static void st_help(HWND parent)
+{
+    static const int kinds[P_COUNT] = {
+        INST_HK_WELCOME, INST_HK_WELCOME, INST_HK_COMP, INST_HK_SET_USB,
+        INST_HK_SET_TB, INST_HK_SET_S98, INST_HK_SUMMARY, INST_HK_PROGRESS,
+        INST_HK_STEPS, INST_HK_FINISH, INST_HK_FREE, INST_HK_NONFREE,
+        INST_HK_TBT
+    };
+    char msg[160];
+    HWND d;
+    int i;
+
+    for (i = 0; i < P_COUNT; i++) {
+        _snprintf(msg, sizeof(msg) - 1, "help: page %d's kind", i);
+        msg[sizeof(msg) - 1] = '\0';
+        st(helpKind[i] == kinds[i], msg);
+    }
+    st(adv_help_kind(P_USB) == INST_HK_ADV &&
+       adv_help_kind(P_TBS) == INST_HK_ADV &&
+       adv_help_kind(P_S98) == INST_HK_ADV_S98,
+       "help: the Advanced dialog's kind for each tab");
+    /* The Finish page's variant follows its buttons. */
+    d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_FINISH), parent,
+                           st_proc, 0);
+    st(d != NULL, "help: the finish page made");
+    if (d != NULL) {
+        SetDlgItemTextA(d, IDC_F_NOW, inst_page_text(INST_PT_NOW));
+        ShowWindow(GetDlgItem(d, IDC_F_NOW), SW_SHOW);
+        st(finish_variant(d) == INST_FV_RESTART, "help: finish, restart");
+        SetDlgItemTextA(d, IDC_F_NOW, inst_page_text(INST_PT_SHUT_NOW));
+        st(finish_variant(d) == INST_FV_SHUT, "help: finish, shut down");
+        ShowWindow(GetDlgItem(d, IDC_F_NOW), SW_HIDE);
+        st(finish_variant(d) == INST_FV_NONE, "help: finish, none shown");
+        DestroyWindow(d);
+    }
+    for (i = 0; i < INST_HELP_COUNT; i++) {
+        HWND e;
+        HFONT f;
+        HFONT old;
+        HDC dc;
+        RECT fmt;
+        RECT need;
+        RECT w;
+        RECT cli;
+        RECT b1;
+        RECT b2;
+        RECT x;
+        char text[4096];
+
+        d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_HELP), NULL,
+                               st_proc, 0);
+        _snprintf(msg, sizeof(msg) - 1, "help: topic %d's window made", i);
+        msg[sizeof(msg) - 1] = '\0';
+        st(d != NULL, msg);
+        if (d == NULL) {
+            continue;
+        }
+        help_set(d, i);
+        e = GetDlgItem(d, IDC_H_TEXT);
+        GetWindowTextA(e, text, sizeof(text));
+        SendMessageA(e, EM_GETRECT, 0, (LPARAM)&fmt);
+        need = fmt;
+        dc = GetDC(e);
+        f = (HFONT)SendMessageA(e, WM_GETFONT, 0, 0);
+        old = f != NULL ? (HFONT)SelectObject(dc, f) : NULL;
+        DrawTextA(dc, text, -1, &need, DT_CALCRECT | DT_WORDBREAK |
+                  DT_EDITCONTROL | DT_NOPREFIX);
+        if (old != NULL) {
+            SelectObject(dc, old);
+        }
+        ReleaseDC(e, dc);
+        _snprintf(msg, sizeof(msg) - 1, "help: topic %d (%s) fits its text "
+                  "unscrolled (%ld of %ld pixels)", i, inst_help_title(i),
+                  (long)(need.bottom - need.top),
+                  (long)(fmt.bottom - fmt.top));
+        msg[sizeof(msg) - 1] = '\0';
+        st(need.bottom - need.top <= fmt.bottom - fmt.top &&
+           need.right - need.left <= fmt.right - fmt.left + 1, msg);
+        GetWindowRect(d, &w);
+        _snprintf(msg, sizeof(msg) - 1, "help: topic %d's window inside 640 "
+                  "by 452 (%ld by %ld)", i, (long)(w.right - w.left),
+                  (long)(w.bottom - w.top));
+        msg[sizeof(msg) - 1] = '\0';
+        st(w.right - w.left <= 640 && w.bottom - w.top <= 452, msg);
+        GetClientRect(d, &cli);
+        b1 = st_rect(d, GetDlgItem(d, IDC_H_README));
+        b2 = st_rect(d, GetDlgItem(d, IDCANCEL));
+        st(b1.left >= 0 && b2.right <= cli.right && b1.bottom <= cli.bottom &&
+           b2.bottom <= cli.bottom && !IntersectRect(&x, &b1, &b2) &&
+           b1.top >= st_rect(d, e).bottom && b2.top >= st_rect(d, e).bottom,
+           "help: its buttons inside it, apart, under the text");
+        DestroyWindow(d);
+    }
+}
+
 static int selftest(void)
 {
     static const int wIds[] = { IDC_TEXT };
@@ -6407,6 +6649,7 @@ static int selftest(void)
         st_page(parent, IDD_FINISH, nIds, nTexts, 2, "the finish");
         st_page(parent, IDD_ADVANCED, aIds, aTexts, 1, "the Advanced dialog");
         st_settings_layout(parent);
+        st_help(parent);
         DestroyWindow(parent);
     }
     printf("%d checks, %d failures\n", stChecks, stFailures);

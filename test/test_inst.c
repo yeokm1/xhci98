@@ -8529,6 +8529,212 @@ static void test_other_pkgs(void)
 
 /* Task 45.60 (record 26 section 5.3.5): the Thunderbolt and USB4 page's
  * texts, the networking box's rule and its switches. */
+/* Record 26 section 5.10 (task 45.66): Help on every page. */
+static int help_has_ci(const char *text, const char *word)
+{
+    size_t n = strlen(word);
+    const char *p;
+
+    for (p = text; *p != '\0'; p++) {
+        size_t i;
+        for (i = 0; i < n; i++) {
+            char a = p[i];
+            char b = word[i];
+            if (a >= 'A' && a <= 'Z') {
+                a = (char)(a - 'A' + 'a');
+            }
+            if (b >= 'A' && b <= 'Z') {
+                b = (char)(b - 'A' + 'a');
+            }
+            if (a == '\0' || a != b) {
+                break;
+            }
+        }
+        if (i == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The label's words before its first " (", the way a help line quotes a
+ * label that goes on with a file name. */
+static void help_label_head(const char *label, char *out, size_t cap)
+{
+    const char *par = strstr(label, " (");
+    size_t n = par != NULL ? (size_t)(par - label) : strlen(label);
+
+    if (n >= cap) {
+        n = cap - 1;
+    }
+    memcpy(out, label, n);
+    out[n] = '\0';
+}
+
+static void test_help(void)
+{
+    static const char *const banned[] = {
+        "tested", "testing", "emulat", "virtual machine", "experimental"
+    };
+    static const struct {
+        int Kind;
+        int Un;
+        int Var;
+        int Topic;
+    } routes[] = {
+        { INST_HK_WELCOME, 0, 0, INST_HELP_WELCOME },
+        { INST_HK_WELCOME, 1, 0, INST_HELP_UWELCOME },
+        { INST_HK_COMP, 0, 0, INST_HELP_COMP },
+        { INST_HK_TBT, 0, 0, INST_HELP_TBT },
+        { INST_HK_FREE, 0, 0, INST_HELP_FREE },
+        { INST_HK_NONFREE, 0, 0, INST_HELP_NONFREE },
+        { INST_HK_SET_USB, 0, 0, INST_HELP_SET_USB },
+        { INST_HK_SET_TB, 0, 0, INST_HELP_SET_TB },
+        { INST_HK_SET_S98, 0, 0, INST_HELP_SET_S98 },
+        { INST_HK_ADV, 0, 0, INST_HELP_ADV },
+        { INST_HK_ADV_S98, 0, 0, INST_HELP_ADV_S98 },
+        { INST_HK_SUMMARY, 0, 0, INST_HELP_SUMMARY },
+        { INST_HK_SUMMARY, 1, 0, INST_HELP_USUMMARY },
+        { INST_HK_PROGRESS, 0, 0, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 1, 0, INST_HELP_PROGRESS },
+        { INST_HK_STEPS, 0, 0, INST_HELP_STEPS },
+        { INST_HK_FINISH, 0, INST_FV_RESTART, INST_HELP_FINISH },
+        { INST_HK_FINISH, 0, INST_FV_SHUT, INST_HELP_FINISH_SHUT },
+        { INST_HK_FINISH, 0, INST_FV_NONE, INST_HELP_FINISH_NONE },
+        { INST_HK_FINISH, 1, INST_FV_RESTART, INST_HELP_UFINISH },
+        { INST_HK_FINISH, 1, INST_FV_NONE, INST_HELP_FINISH_NONE }
+    };
+    /* Each topic quotes the page's own labels: whole, or (Whole 0) their
+     * words before the first parenthesis. */
+    static const struct {
+        int Topic;
+        int Pt;
+        int Whole;
+    } labels[] = {
+        { INST_HELP_COMP, INST_PT_DRIVERS, 0 },
+        { INST_HELP_COMP, INST_PT_UAS, 0 },
+        { INST_HELP_COMP, INST_PT_STOR, 0 },
+        { INST_HELP_COMP, INST_PT_TB, 0 },
+        { INST_HELP_COMP, INST_PT_TRAY, 1 },
+        { INST_HELP_COMP, INST_PT_FAST, 1 },
+        { INST_HELP_TBT, INST_PT_PFW, 0 },
+        { INST_HELP_TBT, INST_PT_S98, 0 },
+        { INST_HELP_TBT, INST_PT_APPR_1, 1 },
+        { INST_HELP_TBT, INST_PT_APPR_0, 1 },
+        { INST_HELP_FINISH, INST_PT_NOW, 1 },
+        { INST_HELP_FINISH, INST_PT_LATER, 1 },
+        { INST_HELP_UFINISH, INST_PT_NOW, 1 },
+        { INST_HELP_UFINISH, INST_PT_LATER, 1 },
+        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_NOW, 1 },
+        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_LATER, 0 }
+    };
+    static const struct {
+        int Topic;
+        const char *Words;
+    } quotes[] = {
+        { INST_HELP_COMP, "Replace the stored build of this package's "
+                          "drivers" },
+        { INST_HELP_COMP, "Settings..." },
+        { INST_HELP_COMP, "Change folder..." },
+        { INST_HELP_FREE, "Trust usb-wdm-free's test certificate on this "
+                          "computer" },
+        { INST_HELP_SET_USB, "XhciSilentInstall" },
+        { INST_HELP_SET_USB, "XhciIntelPortSwitch" },
+        { INST_HELP_SET_USB, "More >" },
+        { INST_HELP_SET_USB, "Advanced..." },
+        { INST_HELP_SET_TB, "XhciCmMode" },
+        { INST_HELP_SET_TB, "XhciCmSafeEject" },
+        { INST_HELP_SET_S98, "storwritethrough" },
+        { INST_HELP_SET_S98, "storpollmode" },
+        { INST_HELP_ADV_S98, "The value" },
+        { INST_HELP_ADV, "Setting" },
+        { INST_HELP_STEPS, "Save as text file..." },
+        { INST_HELP_STEPS, "Open Device Manager" }
+    };
+    int reached[INST_HELP_COUNT];
+    char head[128];
+    char msg[160];
+    int i;
+
+    memset(reached, 0, sizeof(reached));
+    for (i = 0; i < INST_HELP_COUNT; i++) {
+        const char *t = inst_help_text(i);
+        const unsigned char *p;
+        size_t b;
+        int ascii = 1;
+        sprintf(msg, "help topic %d: a title and a text", i);
+        CHECK(inst_help_title(i)[0] != '\0' && t[0] != '\0', msg);
+        for (p = (const unsigned char *)t; *p != '\0'; p++) {
+            if (*p > 126 || (*p < 32 && *p != '\n')) {
+                ascii = 0;
+            }
+        }
+        sprintf(msg, "help topic %d: ASCII, lines by \\n alone", i);
+        CHECK(ascii, msg);
+        sprintf(msg, "help topic %d: %lu lines at %lu columns, room for %lu",
+                i, (unsigned long)inst_text_lines(t,
+                                                  inst_page_cols(INST_HELP_W)),
+                (unsigned long)inst_page_cols(INST_HELP_W),
+                (unsigned long)inst_page_rows(INST_HELP_H));
+        CHECK(inst_text_lines(t, inst_page_cols(INST_HELP_W)) <=
+              inst_page_rows(INST_HELP_H), msg);
+        for (b = 0; b < sizeof(banned) / sizeof(banned[0]); b++) {
+            sprintf(msg, "help topic %d: no \"%s\"", i, banned[b]);
+            CHECK(!help_has_ci(t, banned[b]), msg);
+        }
+    }
+    CHECK(inst_help_text(-1)[0] == '\0' &&
+          inst_help_text(INST_HELP_COUNT)[0] == '\0' &&
+          inst_help_title(INST_HELP_COUNT)[0] == '\0',
+          "help: no text out of range");
+    CHECK(strcmp(inst_help_title(INST_HELP_TBT), "Thunderbolt and USB4") ==
+          0 && strcmp(inst_help_title(INST_HELP_COMP), "Components") == 0 &&
+          strcmp(inst_help_title(INST_HELP_UWELCOME), "Uninstall") == 0,
+          "help: titles in topic order");
+    for (i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
+        int t = inst_help_topic(routes[i].Kind, routes[i].Un, routes[i].Var);
+        sprintf(msg, "help route %d: kind %d mode %d variant %d -> %d", i,
+                routes[i].Kind, routes[i].Un, routes[i].Var, routes[i].Topic);
+        CHECK(t == routes[i].Topic, msg);
+        if (t >= 0 && t < INST_HELP_COUNT) {
+            reached[t] = 1;
+        }
+    }
+    CHECK(inst_help_topic(INST_HK_COUNT, 0, 0) == -1 &&
+          inst_help_topic(-1, 0, 0) == -1, "help: an unknown kind, none");
+    for (i = 0; i < INST_HELP_COUNT; i++) {
+        sprintf(msg, "help topic %d reached by a page", i);
+        CHECK(reached[i], msg);
+    }
+    for (i = 0; i < (int)(sizeof(labels) / sizeof(labels[0])); i++) {
+        const char *l = inst_page_text(labels[i].Pt);
+        if (labels[i].Whole) {
+            strncpy(head, l, sizeof(head) - 1);
+            head[sizeof(head) - 1] = '\0';
+        } else {
+            help_label_head(l, head, sizeof(head));
+        }
+        sprintf(msg, "help topic %d quotes page text %d", labels[i].Topic,
+                labels[i].Pt);
+        CHECK(head[0] != '\0' &&
+              strstr(inst_help_text(labels[i].Topic), head) != NULL, msg);
+    }
+    for (i = 0; i < (int)(sizeof(quotes) / sizeof(quotes[0])); i++) {
+        sprintf(msg, "help topic %d quotes \"%.60s\"", quotes[i].Topic,
+                quotes[i].Words);
+        CHECK(help_has_ci(inst_help_text(quotes[i].Topic), quotes[i].Words),
+              msg);
+    }
+    /* The Welcome page's three wordings point at Help, not the readme. */
+    CHECK(strstr(inst_page_text(INST_PT_WELCOME), "Help explains each "
+                 "page.") != NULL &&
+          strstr(inst_page_text(INST_PT_WELCOME_CM), "Help explains each "
+                 "page.") != NULL &&
+          strstr(inst_page_text(INST_PT_WELCOME_TOOLS), "Help explains "
+                 "each page.") != NULL,
+          "help: the Welcome page says what Help does");
+}
+
 static void test_tbt_page(void)
 {
     INST_TBNET d;
@@ -8644,6 +8850,7 @@ static void test_tbt_page(void)
 int main(void)
 {
     test_tbt_page();
+    test_help();
     test_versions();
     test_models_rule();
     test_cm_only();

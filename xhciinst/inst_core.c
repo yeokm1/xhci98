@@ -6088,7 +6088,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "This installs or updates the xHCI98 USB 3 drivers on this "
       "computer, puts the xHCI98 tools in a folder you choose, and asks "
       "you to restart Windows at the end. Nothing is changed until you "
-      "click Install on the Summary page. Help opens the readme.",
+      "click Install on the Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_WAIT, "Please wait: reading this computer's devices ...",
       284, 54 },
@@ -6218,14 +6218,14 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "manager on this computer, puts the xHCI98 tools in a folder you "
       "choose, and asks you to restart Windows at the end. Windows' own USB "
       "3 driver keeps running the USB controllers. Nothing is changed until "
-      "you click Install on the Summary page. Help opens the readme.",
+      "you click Install on the Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_WELCOME_TOOLS,
       "This puts the xHCI98 tools in a folder you choose, and installs the "
       "xHCI98 USB 3 drivers only if you tick them on the next page "
       "(on this Windows its own USB 3 driver runs the controllers). "
       "Nothing is changed until you click Install on the "
-      "Summary page. Help opens the readme.",
+      "Summary page. Help explains each page.",
       284, 42 },
     { INST_PT_DRIVERS_T8,
       "Windows' own USB 3 driver runs the controllers here; ticked, this "

@@ -682,8 +682,10 @@ rem test_cm_eject links the transaction's pure half and, for the vanished
 rem child's held re-enumeration, the channel's pure hold (43.18, 43.47).
 call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
-rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
-call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+rem 40.6, design record 23 section 10), with the window's Help texts
+rem (xhciinst\inst_help.c, task 45.66, record 26 section 5.10), and reads
+rem the package's INFs in src\.
+call :run test_inst "test_inst.c ..\xhciinst\inst_core.c ..\xhciinst\inst_help.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check,
 rem and the mark service's pure half (its self-test; task 44.52).

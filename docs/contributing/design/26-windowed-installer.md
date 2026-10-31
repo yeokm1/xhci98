@@ -2553,7 +2553,10 @@ pin; the self-test checks it (below).
 
 *The texts.* In the pure half, `inst_help_text(topic)` and
 `inst_help_title(topic)` over one table, `instHelpTexts[]`, one entry a
-topic; each choice a line of its own starting with the control's own
+topic, in a file of their own (`xhciinst\inst_help.c`) that the window
+and `test	est_inst.c` link and the tools that link `inst_core.c` for
+other reasons (the tray tool, the mark service, the other host suites)
+do not; each choice a line of its own starting with the control's own
 label (its first words where the label goes on with a file name or a
 parenthesis), then what it does, then when to change it; plain, short,
 and no word on testing status. The topics and their texts (" / " stands
