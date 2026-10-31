@@ -280,6 +280,10 @@ static char infRel[INST_INF_COUNT][32];
 static char pkgRel[INST_INF_COUNT][40];
 /* The family folder this run reads (INST_FAM_*). */
 static int pkgFam;
+/* Each row of instPkgFiles present when the package check passed: every
+ * later walk requires it still (record 36 section 6.2). */
+#define INST_PKG_MAX 48
+static unsigned char pkgHave[INST_PKG_MAX];
 static int restagePending[INST_INF_COUNT];
 static int restageOk[INST_INF_COUNT];
 static int restage_listed(const char *id);
@@ -2586,6 +2590,19 @@ static int check_package(void)
                                   "version differs): ", path);
                 }
             }
+        }
+    }
+    /* The validated set: a file present now must be there at every walk
+     * of the package (package_files), so a copy never lacks one. */
+    if (instPkgFileCount > INST_PKG_MAX) {
+        return refuse("the package table is larger than the tool's.", NULL);
+    }
+    for (i = 0; i < instPkgFileCount; i++) {
+        const char *pr = instPkgFiles[i].Fam[pkgFam];
+        pkgHave[i] = 0;
+        if (pr != NULL) {
+            join(path, sizeof(path), pkgDir, pr);
+            pkgHave[i] = (unsigned char)file_exists(path, NULL);
         }
     }
     return 1;
@@ -5178,9 +5195,10 @@ static int package_files(PKG_EACH each, void *ctx)
         join(path, sizeof(path), pkgDir, pr);
         if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
             DWORD e = GetLastError();
-            /* A file the package check read (an INF it loaded, the
-             * controller's image) must still be there. */
-            need = inst_eq(rel, "xhci98.sys");
+            /* A file present when the package check passed, an INF it
+             * loaded or the controller's image must still be there. */
+            need = (i < INST_PKG_MAX && pkgHave[i]) ||
+                   inst_eq(rel, "xhci98.sys");
             for (k = 0; k < INST_INF_COUNT; k++) {
                 if (infText[k] != NULL && inst_eq(rel, infRel[k])) {
                     need = 1;

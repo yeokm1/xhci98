@@ -3323,6 +3323,7 @@ static void test_family(void)
             CHECK(strlen(p) < 40, "within pkgRel's room");
         }
         CHECK(any, "every local name is in some family");
+        CHECK(instPkgFileCount <= 48, "within the engine's INST_PKG_MAX");
         CHECK(strlen(instPkgFiles[i].Local) < 32, "within infRel's room");
     }
     CHECK(inst_pkg_foreign("stor98w9.inf") &&
