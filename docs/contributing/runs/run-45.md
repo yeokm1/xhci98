@@ -6441,6 +6441,7 @@ of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
 (`w45-tbnet`, not merged into `3.4.0.0` when this was written) wired to
 the calls above; a discovery-only leg (the peer's properties read both
 ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
@@ -6621,3 +6622,10 @@ the version bump.
   Vista and 7 and can be stopped on its own, as a Bulk-Only stick can; on
   Windows 2000, pulling it without stopping it first shows Windows'
   'Unsafe Removal of Device' notice, as it does for a stick.""
+- 45.59 (HEAD): "- (45.59 S4, draft for the networking entry, 2026-10-31)
+  "Thunderbolt networking also runs through the Thunderbolt 3 firmware
+  connection manager (Falcon, Alpine and Titan Ridge, and Ice Lake's
+  integrated controllers): the host-to-host link is found from the
+  firmware's own announcements, and its two paths are built and torn down
+  by the firmware on this driver's request. One link carries the service
+  at a time; a peer behind a dock or another router is not supported.""
