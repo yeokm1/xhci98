@@ -11,9 +11,11 @@
 # exports as for xhci98.sys.
 #
 # NDIS.SYS rows: on 98 SE and ME NDIS.VXD resolves them. It is an LE image
-# with no PE export table; its NT-style exports are not read (the owner's
-# rule of 2026-10-31: no Microsoft binary's code or headers are read). The
-# evidence is two kinds, both required by the net98 profile:
+# with no PE export table; its export names are read, nothing else (the
+# owner's rule of 2026-10-31, 14:40): ndisvxd-name, each pair a
+# NUL-delimited name of 98 SE's and of ME's NDIS.VXD
+# (ndisvxd-baselines.expected), checked where they are staged. The other
+# evidence, both kinds required by the net98 profile:
 #   bc-header    the routine is declared in the Windows 2000 DDK's ndis.h,
 #                which an x86 miniport compiles BINARY_COMPATIBLE "so that
 #                we don't use functions that aren't available on Windows 9x"
@@ -53,27 +55,27 @@ HAL.dll!KfLowerIrql                          all  required  w2k-export; win98-pr
 HAL.dll!KfRaiseIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfRaiseIrql, hint 8) (+8 other 98 SE)
 HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
 HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
-NDIS.SYS!NdisReadConfiguration               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisCloseConfiguration              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisMSetAttributesEx                all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisMGetDeviceProperty              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisOpenConfiguration               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisInitializeWrapper               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisMRegisterMiniport               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisTerminateWrapper                all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAdjustBufferLength              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisUnchainBufferAtFront            all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisFreePacket                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisMSleep                          all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisQueryBuffer                     all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES           all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisQueryBufferOffset               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAllocateBuffer                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAllocatePacket                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAllocateBufferPool              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAllocatePacketPool              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisAllocateMemory                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisFreePacketPool                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisFreeBufferPool                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisFreeMemory                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
-NDIS.SYS!NdisFreeBuffer                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisReadConfiguration               all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisCloseConfiguration              all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMSetAttributesEx                all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMGetDeviceProperty              all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisOpenConfiguration               all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisInitializeWrapper               all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMRegisterMiniport               all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisTerminateWrapper                all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAdjustBufferLength              all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisUnchainBufferAtFront            all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreePacket                      all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMSleep                          all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisQueryBuffer                     all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES           all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisQueryBufferOffset               all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateBuffer                  all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocatePacket                  all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateBufferPool              all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocatePacketPool              all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateMemory                  all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreePacketPool                  all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeBufferPool                  all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeMemory                      all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeBuffer                      all  required  bc-header; ndisvxd-name 98SE ME; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed

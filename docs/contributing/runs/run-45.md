@@ -5956,10 +5956,18 @@ build. The legs (record 35 section 11.3) wait for S5.
 
 ### The 98 SE and ME reading
 
-`NDIS.VXD` was not read: it is an LE image whose NT-style exports are
-built at run time, and the owner's rule of 2026-10-31 forbids reading a
-Microsoft binary. In its place: the 24 `NDIS.SYS` imports of the x86
-image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
+Revised the same day, after the owner admitted a Microsoft binary's export
+names for the import gate's baselines (2026-10-31, 14:40): `NDIS.VXD` was
+taken read-only from the q35 98 SE and ME base images (`7z e`, nothing
+booted) and only its names read. Every one of the 24 `NDIS.SYS` imports of
+the x86 image is a NUL-delimited name in both files (98 SE 166,029 bytes,
+ME 157,397 bytes; their SHA-256 in `scripts/import-gate/
+ndisvxd-baselines.expected`); the reading tells names apart (98 SE's file
+lacks `NdisQueryBufferSafe`, which ME's has), and the net98 profile now
+fails a pair absent from either where the files are staged. So the owner's
+condition for 98 SE and ME (record 35 section 15, Q10) is met by the
+reading the record asked for. Before it, and kept beside it: the 24
+`NDIS.SYS` imports of the x86 image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
 ("so that we don't use functions that aren't available on Windows 9x"),
 and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` at
 `57ba809`, an NDIS 5.0 WDM miniport recorded loading and passing traffic
