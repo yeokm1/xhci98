@@ -966,6 +966,13 @@ xHCI mirrors above:
 - Linux `drivers/thunderbolt` (40 files) and `include/linux/thunderbolt.h`,
   at the pinned Linux commit `c6859eed755df351a3978b33cb92365f9b3e8f06`.
   Every file carries a `GPL-2.0` or `GPL-2.0-only` SPDX identifier.
+- Linux `drivers/net/thunderbolt` (5 files: `main.c`, `trace.c`,
+  `trace.h`, `Kconfig`, `Makefile`), at the same pinned commit, added
+  2026-10-31 for roadmap-usb4 task 45.59 (design record 35 section 2.4):
+  `main.c` carries the SPDX identifier `GPL-2.0`. Read for facts about
+  the USB4NET peer the legs run against; nothing of it is adapted,
+  quoted or paraphrased into `src/` (`AGENTS.md`, "Reference
+  Implementations": a `GPL-2.0` file is read for facts only).
 - FreeBSD `sys/dev/thunderbolt` (21 files), at
   `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` (2026-10-14). Every file
   carries a `BSD-2-Clause` or `BSD-2-Clause-FreeBSD` SPDX identifier and
