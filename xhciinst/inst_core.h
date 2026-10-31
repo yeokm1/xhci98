@@ -2457,7 +2457,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "8AF8F638FA1616AEBEF02AED41F4BB3EE27B89D555A0289E51B3516F19DF0F05"
+#define INST_WDMFREE_SUMS       "C169A241B4D8B7E2D50066B269A450313F307FB5EFB313331F57727C01B54755"
 #define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
