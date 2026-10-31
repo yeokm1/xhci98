@@ -767,6 +767,65 @@ ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
     return XHCI_FUNC_DEFER_NO;
 }
 
+PXHCI_ID_PLACE XhciFuncIdPlaceFind(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key)
+{
+    ULONG i;
+
+    if (table == NULL || key == 0) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        if (table[i].Key == key) {
+            return &table[i];
+        }
+    }
+    return NULL;
+}
+
+PXHCI_ID_PLACE XhciFuncIdPlaceTake(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key, PULONG clock)
+{
+    PXHCI_ID_PLACE e;
+    ULONG oldest;
+    ULONG age;
+    ULONG i;
+
+    if (table == NULL || count == 0 || key == 0 || clock == NULL) {
+        return NULL;
+    }
+    e = XhciFuncIdPlaceFind(table, count, key);
+    if (e == NULL) {
+        for (i = 0; i < count && e == NULL; i++) {
+            if (table[i].Key == 0) {
+                e = &table[i];
+            }
+        }
+    }
+    if (e == NULL) {
+        oldest = 0;
+        e = &table[0];
+        for (i = 0; i < count; i++) {
+            age = *clock - table[i].Stamp;
+            if (age > oldest) {
+                oldest = age;
+                e = &table[i];
+            }
+        }
+    }
+    if (e->Key != key) {
+        e->Key = key;
+        e->VidPid = 0;
+        e->Serial = 0;
+        e->Latch = XHCI_FUNC_LATCH_NONE;
+        e->Deferrals = 0;
+        e->Fails = 0;
+    }
+    e->Stamp = *clock;
+    *clock = *clock + 1UL;
+    return e;
+}
+
 ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,
                             ULONG oldParent, ULONG newKey, ULONG newParent)
 {

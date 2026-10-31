@@ -1139,6 +1139,54 @@ static void test_serial_defer(void)
              XHCI_FUNC_DEFER_NO, "bypass");
 }
 
+/* Task 45.40, behind hubs: the place table. */
+static void test_id_places(void)
+{
+    XHCI_ID_PLACE t[3];
+    PXHCI_ID_PLACE e;
+    PXHCI_ID_PLACE f;
+    ULONG clock;
+    ULONG i;
+
+    for (i = 0; i < 3; i++) {
+        t[i].Key = 0;
+        t[i].VidPid = 0;
+        t[i].Serial = 0;
+        t[i].Latch = 0;
+        t[i].Deferrals = 0;
+        t[i].Fails = 0;
+        t[i].Stamp = 0;
+    }
+    clock = 0xFFFFFFFEUL;   /* the clock wraps on the way */
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == NULL, "empty: not found");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0, &clock) == NULL, "key 0 taken never");
+    e = XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock);
+    CHECK(e == &t[0], "a free entry first");
+    e->VidPid = 0x0BDA8157UL;
+    e->Serial = 1;
+    e->Latch = XHCI_FUNC_LATCH_FAILED;
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == e, "found by its key");
+    f = XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock);
+    CHECK(f == e && f->VidPid == 0x0BDA8157UL && f->Serial == 1 &&
+              f->Latch == XHCI_FUNC_LATCH_FAILED,
+          "taken again: the same entry, kept");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x2203UL, &clock) == &t[1], "second");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x3203UL, &clock) == &t[2], "third");
+    /* Full: entry 0, written before 1 and 2, would be reused - but take
+     * it again first, so entry 1 is now the oldest. */
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock) == &t[0], "refresh");
+    f = XhciFuncIdPlaceTake(t, 3, 0x4203UL, &clock);
+    CHECK(f == &t[1], "full: the least recently written reused");
+    CHECK(f->Key == 0x4203UL && f->VidPid == 0 && f->Serial == 0 &&
+              f->Latch == 0 && f->Deferrals == 0 && f->Fails == 0,
+          "reused: zeroed and named");
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x2203UL) == NULL, "the evicted gone");
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == &t[0] &&
+              t[0].VidPid == 0x0BDA8157UL,
+          "the refreshed one kept");
+    CHECK(XhciFuncIdPlaceFind(NULL, 3, 0x1203UL) == NULL, "no table");
+}
+
 static void check_picks(const UCHAR *device, const XHCI_FUNC *func,
                         const UCHAR *cfg, ULONG length, ULONG n, ULONG a,
                         ULONG b, ULONG c, const char *what, int line)
@@ -1640,6 +1688,7 @@ int main(void)
     test_instance_ids();
     test_revive();
     test_serial_defer();
+    test_id_places();
     test_text_picks();
     test_text();
     test_firsts();

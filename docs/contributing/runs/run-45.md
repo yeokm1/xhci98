@@ -4468,7 +4468,7 @@ for the first time on XP and XP x64 under the Warn policy waits on
 Windows' wizard, at a cold start as at a plug. Owed: 45.42's 8 GB case
 and its replug (above).
 
-## 45.40 an RTL8157 on XP losing its static settings and taking the default route: read, reproduced, and the identity kept (2026-10-30)
+## 45.40 an RTL8157 on XP losing its static settings and taking the default route: read, reproduced, and the identity kept, behind hubs too (2026-10-30 and 31)
 
 **Verdict: the report's symptom is what a new instance id gives, and a
 failed serial read at a re-enumeration is a way the bus gives one;
@@ -4598,14 +4598,81 @@ run's trace counts exactly its STALLs (`ev\a*.jsonl`, `ev\b*.jsonl`).
 Evidence: `E:\xhci98-vm\p45\w45-rtl\` (`shots\`, `ev\`, `pids.txt`), not
 tracked.
 
+### The owner's decisions (2026-10-30 and 31)
+
+- Q1: a device whose reads are all spent stays invisible - no devnode, no
+  Device Manager entry - until its next connection, as built; recorded in
+  record 13 section 10.7.
+- Q2: the protection extended to hub ports in this task (below).
+- Q3: no shared key for a serial-less device across a USB 3 port and its
+  USB 2.0 companion.
+
+### Behind hubs (2026-10-31)
+
+Design `cf96d6b6`, code `0bcb2b41`, and `f7f20e1a` (record 13 section
+10.7, "Behind a hub"; reviewed and revised): a controller table of 32
+places behind hubs, each named by its instance key (root port and Route
+String), kept across the hub's own departure and re-enumeration; the
+deferral's path check reads every hub port above the device and the root
+port; a latched hub port is left enabled; the places are a block appended
+to the HCD region's header (792 words), printed by `XHCITR` under
+"identity behind hubs". `f7f20e1a` came from the first USB 2.0 hub leg:
+QEMU's `usb-hub` raises C_PORT_ENABLE at every port reset with the port
+enabled, and the first rule cancelled every deferral on it (the device
+kept its devnode only because the next connection's reads passed), so
+C_PORT_ENABLE alone no longer cancels; PORT_ENABLE clear still does.
+Host vectors: `test_func`'s `test_id_places` (13 checks; the suite
+913), `test_snap` (454 in all), `XHCITR`'s `-selftest-idplace` (one of the
+snapshot self-test's 34 cases). The simulator gained
+`--serial-skip K` (usb-wdm-free `253f5a0`): the first K serial reads
+answer, so the first enumeration names the device and the re-enumeration
+after a link drop fails.
+
+Builds: the gated x86 build of `0bcb2b41` and of `f7f20e1a`, each "BUILD +
+GATES PASSED (release qemu)" with the host suites passed; release
+`xhci98.sys` of `f7f20e1a` `e1c5c00b...`, 328352 bytes; `XHCITR.EXE`
+`0dae38ee...`.
+
+The vehicle: 45.41's QEMU build with `usb-ss-hub` and its `link-drop`
+(copied, not changed), a SuperSpeed hub on root port 1 and QEMU's USB
+2.0 hub (`usb-hub`, Full Speed) on root port 3, the simulated RTL8157 on
+port 1 of either; `-netdev hubport` for the second adapter (that build has
+no user networking). Each guest an overlay with `3.3.0.0` installed, this
+tree's `xhci98.sys` copied over and the guest restarted, the file read
+back (328352 bytes).
+
+| Leg | XP SP3 (`xp3`) | 7 SP1 x86 (`w7b`) |
+|---|---|---|
+| SuperSpeed hub port, static set; link dropped (`link-drop 1`), the re-enumeration's first 3 reads STALL | same devnode `...\000334C8D6B113C7`, static kept; `serial.defer=01000004` then `01000102`, `SsHubWarmResets` 1 (`h27`, `h28`, `g5`) | the same (`s23`, `s24`) |
+| the same with 12 STALLs | no adapter, no new instance; "root port 1, route 00001: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; failed, waits for a new connection" (`h29`, `h30`) | the same (`s27`) |
+| clean replug after it | the first devnode, static (`h31`) | the same (`s28`) |
+| USB 2.0 hub port, replug, 3 STALLs | same devnode, static; `serial.defer=010E0004`, `010E0102`, "root port 7, route 00001: ... 1 deferred, 0 spent" (`g2`, `g3`) | the same (`s25`, `s26`) |
+
+(Root port 7 is the USB 2.0 half of QEMU's connector 3; `0x010E` is that
+hub port's location number.)
+
+### 98 SE and 2000 (regression, 2026-10-31)
+
+- 2000 SP4 (`w2k1`, scoop QEMU 11.1.0, 1 vCPU): `3.3.0.0` installed,
+  `f7f20e1a`'s `xhci98.sys` copied, cold start; the simulated RTL8157 at
+  Full Speed behind QEMU's USB 2.0 hub installed from `RTL815X.INF`
+  (DevicePath), set static; a replug with 3 STALLs kept
+  `USB\VID_0BDA&PID_8157\000334C8D6B113C7` alone and the static address,
+  ping answered (`k31` to `k35`).
+- 98 SE (`w98`, the q35 base emulator: the scoop and hub-model QEMU builds
+  stop at 98 SE's logo on q35, not read further): `3.3.0.0` installed
+  (`XHCIINST`, exit 3), `f7f20e1a`'s `xhci98.sys` copied, cold start; a
+  QEMU USB 2.0 hub and a tablet behind it installed, the tablet unplugged
+  and plugged again, no wizard, the pointer moved by it (`n12` to `n15`).
+  No RTL8157 leg on 98 SE: that emulator has no usb-redir.
+
 ### Not read
 
 - The user's own event and their adapter's serial behaviour.
-- A device behind a hub (hub ports are not covered), and a serial-less
-  device back on its USB 2.0 companion port (still a new devnode).
-- 98 SE, ME and 2000: the change is common code; no leg ran there.
-- A link drop or a recovery as the trigger (the legs replug); the
-  emulator cannot fail a SuperSpeed link.
+- A serial-less device back on its USB 2.0 companion port (still a new
+  devnode; owner, Q3).
+- ME; a hub's own SuperSpeed link loss above a device (the legs drop the
+  device's hub port); 98 SE with the simulated adapter.
 
 A user who meets this before the fix can keep the VPN adapter ahead by
 giving it a fixed interface metric of 1 (its TCP/IP Advanced settings,

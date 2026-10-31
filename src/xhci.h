@@ -9246,7 +9246,27 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
                                              * protocol 23:16               */
 #define XHCI_SNAPSHOT_HCD_X_COUNT       9   /* storage interfaces decided   */
 #define XHCI_SNAPSHOT_HCD_X_RECORD_WORDS 10UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    629UL /* the records end the header */
+/*
+ * Appended by roadmap-usb4 task 45.40, version unchanged, after 44.35's
+ * records (design record 13 section 10.7, "Identity across a
+ * re-enumeration", behind a hub): the controller's identity records of
+ * places behind hubs (XHCI_ID_PLACE, xhci_func.h), each the words below,
+ * a free entry all 0. The entry count, the words of one and the first
+ * entry's word index come first. A header shorter than this is an
+ * earlier driver's, which kept none.
+ */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS 629 /* entries                  */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_WORDS   630 /* one entry, in words      */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_FIRST   631 /* the first entry's word   */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_AT      632
+#define XHCI_SNAPSHOT_HCD_IDPLACE_COUNT   32UL
+#define XHCI_SNAPSHOT_HCD_IP_KEY          0 /* XhciHubInstanceKey, 0 free */
+#define XHCI_SNAPSHOT_HCD_IP_IDMEM        1 /* (idVendor << 16) | idProduct */
+#define XHCI_SNAPSHOT_HCD_IP_IDSTATE      2 /* serial form | (latch << 8) */
+#define XHCI_SNAPSHOT_HCD_IP_IDDEFERS     3 /* arrivals deferred there    */
+#define XHCI_SNAPSHOT_HCD_IP_IDFAILS      4 /* deferrals spent there      */
+#define XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS 5UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    792UL /* the entries end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in

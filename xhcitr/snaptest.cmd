@@ -440,6 +440,22 @@ for %%S in ("XhciWideMap                 206" "DNCTRL                     0x00EE
     )
 )
 
+rem Task 45.40: the identity records behind hubs, from a canned 792-word
+rem header: a latched place, a bypass and a location form, then a header
+rem from before 45.40 and a count past the header refused.
+"%~dp0XHCITR.EXE" /snaptest -selftest-idplace > "%BASE%.idplace.log"
+if not "%errorlevel%"=="0" (
+    echo FAIL: -selftest-idplace exited %errorlevel%, expected 0
+    set FAILED=1
+)
+for %%S in ("root port 1, route 00001: last listed 0BDA:8157 on the serial form; 2 deferred, 1 spent; failed, waits for a new connection" "root port 3, route 00021: last listed 0BDA:8157 on the serial form; 1 deferred, 1 spent; bypass for this connection" "root port 2, route 00003: last listed 0781:5567 on the location form; 0 deferred, 0 spent" "not kept by this driver (a 2516-byte header" "places: 40 of 5 words at 632 - not a shape") do (
+    findstr /C:%%S "%BASE%.idplace.log" > nul
+    if errorlevel 1 (
+        echo FAIL: the identity-place decode does not say %%S
+        set FAILED=1
+    )
+)
+
 rem Task 44.35: the storage transport records, from a canned 629-word
 rem header: each case's words, a header from before 44.35 and a count
 rem past the header refused.
@@ -979,5 +995,5 @@ if "%FAILED%"=="1" (
     echo xhcitr snapshot selftest FAILED
     exit /b 1
 )
-echo xhcitr snapshot selftest: 33 cases, all passed
+echo xhcitr snapshot selftest: 34 cases, all passed
 exit /b 0

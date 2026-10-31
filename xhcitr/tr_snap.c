@@ -5743,6 +5743,66 @@ static void print_xport(const unsigned char *image, unsigned long bytes)
 }
 
 /*
+ * Task 45.40's identity records of places behind hubs (design record 13
+ * section 10.7): an appended header block of the entry count, the words
+ * of one and the first entry's word, then each entry's instance key (0
+ * free), ids, serial-form flag and latch, deferrals made and spent. A
+ * header shorter than it is an earlier driver's, which kept none.
+ */
+#define SNAP_HCD_IDPLACE_HEAD       629UL
+#define SNAP_HCD_IDPLACE_HEAD_WORDS 792UL
+static void print_idplace(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long key;
+    unsigned long latch;
+    unsigned long i;
+    unsigned long shown = 0;
+    const unsigned char *r;
+
+    headBytes = get32(image, 4);
+    comp("\nidentity behind hubs (task 45.40):\n");
+    if (headBytes < SNAP_HCD_IDPLACE_HEAD_WORDS * 4 || bytes < headBytes) {
+        comp("  not kept by this driver (a %lu-byte header; from 3.4.0.0 "
+             "on).\n", headBytes);
+        return;
+    }
+    records = get32(image, SNAP_HCD_IDPLACE_HEAD * 4);
+    words = get32(image, (SNAP_HCD_IDPLACE_HEAD + 1) * 4);
+    at = get32(image, (SNAP_HCD_IDPLACE_HEAD + 2) * 4);
+    if (words < 5 || words > 64 || records > 255 ||
+        at < SNAP_HCD_IDPLACE_HEAD + 3 || at > headBytes / 4 ||
+        records > (headBytes / 4 - at) / words) {
+        comp("  places: %lu of %lu words at %lu - not a shape this build "
+             "reads\n", records, words, at);
+        return;
+    }
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        key = get32(r, 0);
+        if (key == 0) {
+            continue;
+        }
+        latch = (get32(r, 8) >> 8) & 0xFFUL;
+        comp("  root port %lu, route %05lX: last listed %04lX:%04lX on the "
+             "%s form; %lu deferred, %lu spent%s\n",
+             key & 0xFFUL, (key >> 8) & 0xFFFFFUL,
+             (get32(r, 4) >> 16) & 0xFFFFUL, get32(r, 4) & 0xFFFFUL,
+             (get32(r, 8) & 1UL) != 0 ? "serial" : "location",
+             get32(r, 12), get32(r, 16),
+             latch == 1UL ? "; failed, waits for a new connection"
+                          : latch == 2UL ? "; bypass for this connection" : "");
+        shown++;
+    }
+    if (shown == 0) {
+        comp("  no place behind a hub recorded.\n");
+    }
+}
+
+/*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
  * says so and nothing else is decoded from it (task 36.9),
@@ -5776,6 +5836,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     print_ssusp(hcd, bytes);
     /* 44.35: the storage transport records, from the header alone. */
     print_xport(hcd, bytes);
+    /* 45.40: the identity records behind hubs, from the header alone. */
+    print_idplace(hcd, bytes);
 }
 
 /*
@@ -6287,6 +6349,47 @@ static int selftest_xport(void)
     put32(hcd, 4, SNAP_HCD_XPORT_HEAD_WORDS * 4);
     put32(hcd, SNAP_HCD_XPORT_HEAD * 4, 33);
     print_xport(hcd, sizeof(hcd));
+    return 0;
+}
+
+/*
+ * `-selftest-idplace`: task 45.40's decode over canned headers: a place
+ * behind a hub on root port 1 latched after a spent deferral, one with a
+ * bypass, a location form one, then a header from before 45.40 and one
+ * whose count it cannot hold.
+ */
+static int selftest_idplace(void)
+{
+    static unsigned char hcd[SNAP_HCD_IDPLACE_HEAD_WORDS * 4];
+    unsigned char *r;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_IDPLACE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_IDPLACE_HEAD * 4, 32);
+    put32(hcd, (SNAP_HCD_IDPLACE_HEAD + 1) * 4, 5);
+    put32(hcd, (SNAP_HCD_IDPLACE_HEAD + 2) * 4, SNAP_HCD_IDPLACE_HEAD + 3);
+    r = hcd + (SNAP_HCD_IDPLACE_HEAD + 3) * 4;
+    put32(r, 0, 0x101UL);
+    put32(r, 4, 0x0BDA8157UL);
+    put32(r, 8, 0x101UL);
+    put32(r, 12, 2);
+    put32(r, 16, 1);
+    r += 20 * 2;
+    put32(r, 0, 0x2103UL);
+    put32(r, 4, 0x0BDA8157UL);
+    put32(r, 8, 0x201UL);
+    put32(r, 12, 1);
+    put32(r, 16, 1);
+    r += 20;
+    put32(r, 0, 0x302UL);
+    put32(r, 4, 0x07815567UL);
+    print_idplace(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    print_idplace(hcd, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    put32(hcd, 4, SNAP_HCD_IDPLACE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_IDPLACE_HEAD * 4, 40);
+    print_idplace(hcd, sizeof(hcd));
     return 0;
 }
 
@@ -10709,6 +10812,8 @@ int tr_snap_main(int argc, char **argv)
             return selftest_ssusp();
         } else if (strcmp(argv[i], "-selftest-xport") == 0) {
             return selftest_xport();
+        } else if (strcmp(argv[i], "-selftest-idplace") == 0) {
+            return selftest_idplace();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write

@@ -248,6 +248,37 @@ ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
                           ULONG memVidPid, ULONG memSerial, ULONG latch);
 
 /*
+ * A place's identity record (task 45.40; design record 13 section 10.7):
+ * a root port's own, or an entry of the controller's table for a place
+ * behind a hub, named by its instance key (XhciHubInstanceKey, nonzero;
+ * 0 a free entry). VidPid and Serial: the last non-hub group listed there,
+ * (idVendor << 16) | idProduct and whether it answered the serial form;
+ * Latch: XHCI_FUNC_LATCH_*; the deferrals made and spent there; Stamp:
+ * the table's clock at the entry's last write.
+ */
+typedef struct _XHCI_ID_PLACE {
+    ULONG Key;
+    ULONG VidPid;
+    ULONG Serial;
+    ULONG Latch;
+    ULONG Deferrals;
+    ULONG Fails;
+    ULONG Stamp;
+} XHCI_ID_PLACE, *PXHCI_ID_PLACE;
+
+/* The entry of `key` in `table` (`count` entries), or NULL; key 0 finds
+ * nothing. */
+PXHCI_ID_PLACE XhciFuncIdPlaceFind(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key);
+
+/* The entry of `key`, its Stamp set from *clock, which moves on one: the
+ * one already there, else a free entry, else the one written least
+ * recently (by the clock's distance, so a wrap does not matter) - a new
+ * or reused entry zeroed and named `key`. NULL for key 0 or no table. */
+PXHCI_ID_PLACE XhciFuncIdPlaceTake(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key, PULONG clock);
+
+/*
  * Whether a dormant group the device just listed did not revive is retired
  * for that device's place (Windows 98 SE and ME): named by its place (its
  * `oldSerial` empty), at the same instance key (XhciHubInstanceKey) and

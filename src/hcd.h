@@ -1058,17 +1058,13 @@ typedef struct _HCD_PORT {
      * the device is left refused with no PDO. */
     ULONG HoldRecoverFails;
     /* Task 45.40 (design record 13 section 10.7, "Identity across a
-     * re-enumeration"), a root port's: the last non-hub group listed for a
-     * device attached directly to it - (idVendor << 16) | idProduct, 0
-     * none, and whether its first PDO answered the serial form - written
-     * once it is listed or revived (hcdIdRemember); and the deferral's
-     * latch (XHCI_FUNC_LATCH_*). Zero at AddDevice, kept for the
-     * controller's life. Thread only. */
-    ULONG IdMemVidPid;
-    ULONG IdMemSerial;
-    ULONG IdDeferLatch;
-    ULONG IdDeferrals;      /* arrivals deferred here, and those whose     */
-    ULONG IdDeferFails;     /* reads were all spent (the snapshot's record) */
+     * re-enumeration"): a root port's identity record (XHCI_ID_PLACE) -
+     * the last non-hub group listed for a device attached directly to it,
+     * written once it is listed or revived (hcdIdRemember), the deferral's
+     * latch, and the deferrals made and spent here; a place behind a hub
+     * has its record in the controller's IdPlaces instead. Zero at
+     * AddDevice, kept for the controller's life. Thread only. */
+    XHCI_ID_PLACE Id;
     /* Root port: inspections in a row that read PORTSC as all ones. The
      * inspection is owed again at every pass until one reads it, and at
      * HCD_PORT_UNREADABLE_PASSES the controller goes to recovery
@@ -1140,6 +1136,9 @@ typedef struct _HCD_PORT {
 #define HCD_MAX_HUBS        ((ULONG)XHCI_TOPO_NODES)
 #define HCD_HUB_MAX_PORTS   XHCI_HUB_MAX_PORTS
 #define HCD_PORT_COUNT      (XHCI_MAX_ROOT_PORTS + HCD_MAX_HUBS * HCD_HUB_MAX_PORTS)
+/* Task 45.40: the places behind hubs whose identity is kept, the snapshot
+ * header's entry count (xhci.h). */
+#define HCD_ID_PLACES       XHCI_SNAPSHOT_HCD_IDPLACE_COUNT
 #define HCD_PORT_WORDS      ((HCD_PORT_COUNT + 31UL) / 32UL)
 
 typedef struct _HCD_HUB {
@@ -1914,6 +1913,12 @@ typedef struct _HCD_CONTROLLER {
     ULONG SerialDeferrals;
     ULONG SerialDeferOk;
     ULONG SerialDeferFailed;
+    /* Task 45.40, behind hubs: each place's identity record, by its
+     * instance key (XhciFuncIdPlaceTake), and the table's clock. Kept for
+     * the controller's life, across a hub's removal and re-enumeration.
+     * Thread only; the door reads it under the controller lock. */
+    XHCI_ID_PLACE IdPlaces[HCD_ID_PLACES];
+    ULONG IdPlaceClock;
     /* Fast polling (33.8; hcd_cfg.c, XhciPipeFastPoll): the
      * XhciFastPollFsLs mode read at each start (XHCI_PIPE_FAST_*), the
      * endpoints a select opened below Table 6-12's FS/LS range, and the
@@ -2371,6 +2376,11 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
 #define HCD_SDEFER_FAIL     1UL
 #define HCD_SDEFER_CANCEL   2UL
 ULONG HcdDeviceSerialDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev);
+/* The identity record of port p's place (task 45.40): a root port's own,
+ * or for a hub's port the IdPlaces entry of its place's instance key -
+ * found, or with `take` taken (XhciFuncIdPlaceTake). NULL when a hub
+ * port's place is not known, or not found without `take`. Thread only. */
+PXHCI_ID_PLACE HcdIdPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG take);
 /* (idVendor << 16) | idProduct from the device descriptor. IRQL: any. */
 ULONG HcdDeviceVidPid(PHCD_USB_DEVICE dev);
 /* What one enumeration's text reads (33.6) carry from PDO to PDO: the
