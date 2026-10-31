@@ -1060,14 +1060,18 @@ function Test-Net98Rows {
 function Test-Net6Rows {
     param([string]$AllowPath)
     $rows = (Read-AllowFile -Path $AllowPath).Allow
-    $header = Join-Path $repo "tools\WinDDK71\inc\ddk\ndis.h"
+    # The kit the build used: WDKROOT when set, as build-driver.cmd
+    # :buildnet6 takes it, else tools\WinDDK71.
+    $wdk = Join-Path $repo "tools\WinDDK71"
+    if (-not [string]::IsNullOrEmpty($env:WDKROOT)) { $wdk = $env:WDKROOT }
+    $header = Join-Path $wdk "inc\ddk\ndis.h"
     $headerText = $null
     if (Test-Path -LiteralPath $header) {
         $headerText = [IO.File]::ReadAllText($header)
         $headerText = [regex]::Replace($headerText, '(?s)/\*.*?\*/', ' ')
         $headerText = [regex]::Replace($headerText, '//[^\r\n]*', ' ')
     } else {
-        Add-Failure "net6: tools\WinDDK71\inc\ddk\ndis.h is not staged, so no NDIS.SYS row's ndis620-header can be checked; xhcinet6.sys is built with that kit, so it must be there."
+        Add-Failure "net6: '$header' is not there, so no NDIS.SYS row's ndis620-header can be checked; xhcinet6.sys is built with that kit (WDKROOT or tools\WinDDK71), so it must be."
     }
     foreach ($row in $rows) {
         if ($row.Module -ieq "ntoskrnl.exe" -or $row.Module -ieq "hal.dll") {
@@ -1441,7 +1445,27 @@ try {
         Test-Net6Rows -AllowPath $AllowPath
     }
 
-    if ($GateProfile -eq "net6" -and $Arch -ne "amd64") {
+    # The net6 run's x86 images, each image's architecture settled as the
+    # loop below settles it (-Arch, else the parent directory); its amd64
+    # images stay for the amd64 path below.
+    $net6X86 = @()
+    if ($GateProfile -eq "net6") {
+        $rest = @()
+        foreach ($path in $images) {
+            $ia = $Arch
+            if ($ia -eq "auto") {
+                switch (Split-Path -Leaf (Split-Path -Parent $path)) {
+                    "i386"  { $ia = "x86" }
+                    "amd64" { $ia = "amd64" }
+                    default { throw "cannot infer the architecture of '$path': pass -Arch x86 or -Arch amd64." }
+                }
+            }
+            if ($ia -eq "amd64") { $rest += $path } else { $net6X86 += $path }
+        }
+        $images = $rest
+    }
+
+    if ($net6X86.Count -gt 0) {
         #
         # xhcinet6.sys x86 (record 35 section 7.9): its own allowlist, the
         # Windows 7 SP1 x86 kernel and HAL required, every committed 8.1
@@ -1466,7 +1490,7 @@ try {
         } else {
             Add-Warning "-NoTargetEvidence: only the committed allowlist was enforced for the net6 image - no target evidence was checked."
         }
-        foreach ($path in $images) {
+        foreach ($path in $net6X86) {
             $imageFlavor = $Flavor
             if ($imageFlavor -eq "auto") {
                 $objDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $path))
@@ -1483,7 +1507,6 @@ try {
                 -Win2k $net6Base -BaselineLabel "Windows 7 SP1 / 8.1 / 10 x86" `
                 -Precedent $null -NtkernText $null -ImageArch "net6x86"
         }
-        $images = @()
     }
 
     if ($GateProfile -eq "hlprx86") {
