@@ -731,6 +731,7 @@ static int finish_variant(HWND dlg)
 
 static HWND helpWnd;            /* the help window, while it is open    */
 static int helpDone;            /* the run's end, held while it is open */
+static int helpNested;          /* the readme's message box over it     */
 static WPARAM helpDoneWp;
 
 /* The topic's text into the help window, its lines as the edit control
@@ -771,7 +772,15 @@ static WIZ_DLGRET CALLBACK help_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         return FALSE;
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_H_README) {
+            /* A message box of open_help's is a modal loop over this
+             * one: the run's end that comes then is only held, and this
+             * window closes once that box is closed (section 5.10). */
+            helpNested = 1;
             open_help(dlg);
+            helpNested = 0;
+            if (helpDone) {
+                EndDialog(dlg, IDCANCEL);
+            }
             return TRUE;
         }
         if (LOWORD(wp) == IDCANCEL || LOWORD(wp) == IDOK) {
@@ -5168,7 +5177,9 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
          * help_show when its DialogBoxParamA returns. */
         helpDone = 1;
         helpDoneWp = wp;
-        EndDialog(helpWnd, IDCANCEL);
+        if (!helpNested) {
+            EndDialog(helpWnd, IDCANCEL);
+        }
         return 0;
     }
     if (msg == WM_APP_DONE) {

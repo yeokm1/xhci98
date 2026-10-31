@@ -2522,9 +2522,10 @@ help function, when `DialogBoxParamA` returns, posts the pending
 `WM_APP_DONE` once and clears it; the sheet, enabled again, takes it
 with no help window open and moves on. A readme message box open over
 the help window (the readme missing, or Notepad not started) is its own
-modal loop: the end waits in `helpDone` until the person closes that box
-and the help window's loop then closes too, with no message repeated in
-between. A help window never describes a page that is no
+modal loop: while it is open (`helpNested`) the end is only held, the
+help window not ended, so its owner stays disabled; when that box is
+closed the help window ends itself, and the end is posted once after its
+`DialogBoxParamA` returns, with no message repeated in between. A help window never describes a page that is no
 longer shown. The read's end (`JOB_READ`) only refreshes the Welcome
 page under it and needs nothing.
 
