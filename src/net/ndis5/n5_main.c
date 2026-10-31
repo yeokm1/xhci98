@@ -236,12 +236,13 @@ static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
     }
     (VOID)ZwClose(h);
     if (!NT_SUCCESS(status)) {
-        /* NT without the object: no join that proves the thread has left
-         * the image, so the initialisation fails; the thread is told to
-         * leave, its event waited for, and its last instructions given
-         * 100 ms before the image can be unloaded. */
+        /* NT without the object: the residual src\cm\cm_thr.c keeps from
+         * hcd_ctl.c (CmThrStart): the initialisation fails, the thread is
+         * told to leave and its exit event waited for. The event precedes
+         * PsTerminateSystemThread by a few instructions, the one window
+         * this path leaves; an unload follows the failed start only after
+         * NDIS has torn the adapter down. */
         netStopWorker(a);
-        NdisMSleep(100000);
         return NDIS_STATUS_RESOURCES;
     }
     return NDIS_STATUS_SUCCESS;
