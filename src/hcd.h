@@ -1357,6 +1357,11 @@ typedef struct _HCD_CONTROLLER {
     WORK_QUEUE_ITEM PowerWorkD0;
     PIRP PowerWorkD0Irp;
     PIRP PendingSystemIrp;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* Record 15 section 8.1 (task 45.27, qemu only): power work items
+     * deferred and whose work routine has not begun (interlocked). */
+    LONG QemuPowerDeferred;
+#endif
 
     /* The DMA adapter and the common buffer (hcd_dma.c). */
     PDMA_ADAPTER Dma;

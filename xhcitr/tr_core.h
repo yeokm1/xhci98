@@ -1369,13 +1369,15 @@ const char *tr_level_restart_question(void);
  * revision 3, "The viewer") ------------------------------------------- */
 
 /* A Thunderbolt unit's mark, from the marks answer (cm_query.h CM_QM_*)
- * and its devnode's LowerFilters. */
+ * and its devnode's LowerFilters: what the driver answered, not what
+ * Windows recorded (record 21 section 7.7). */
 #define TR_MK_OLD       0   /* this xhcicm.sys does not answer the request */
 #define TR_MK_FAILED    1   /* the request failed                          */
-#define TR_MK_LISTED    2   /* Removable read set: Windows lists it        */
+#define TR_MK_LISTED    2   /* the driver has answered Removable at least
+                               once for this attachment                    */
 #define TR_MK_WRITTEN   3   /* the value present, no attachment yet        */
-#define TR_MK_NOTLISTED 4   /* the value present and attached, yet Windows
-                               does not list it                            */
+#define TR_MK_NOTLISTED 4   /* the value present and attached, Removable
+                               not answered                                */
 #define TR_MK_NOT       5   /* no value, no attachment                     */
 
 /* 1 when the multi-string msz (bytes long, possibly unterminated at the
@@ -1396,6 +1398,10 @@ int tr_mark_find(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
 int tr_mark_state(int answered, const MK_MARKS *m, int entry,
                   int filterPresent);
 const char *tr_mark_text(int state);
+/* The line after tr_mark_text's (record 21 section 7.7): for TR_MK_LISTED
+ * with the devnode's capabilities read (hasCaps) and CM_DEVCAP_REMOVABLE
+ * clear in caps, "Windows has not recorded it as removable."; "" otherwise. */
+const char *tr_mark_clause(int state, int hasCaps, INST_U32 caps);
 
 /* The mark service's state, as QueryServiceStatus read it. */
 #define TR_SV_UNREAD    0

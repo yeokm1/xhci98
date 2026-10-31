@@ -6288,7 +6288,9 @@ No event log source (a message file and a registry source are more than
 the service needs).
 
 *The viewer.* XHCITR shows per unit, from the marks answer and the
-devnode's `LowerFilters`: "listed by Windows" (`Removable` read set),
+devnode's `LowerFilters`: "listed by Windows" (`Removable` read set;
+since task 45.62 "the Thunderbolt driver has answered it as removable",
+section 7.7),
 "mark written; takes effect at the next start of the device" (the value
 present, no attachment), "not marked" (no value, no attachment), and
 whether the service is running (`QueryServiceStatus`); 42-A.5's tool-side
@@ -7168,6 +7170,196 @@ not configured correctly (Code 1)' until Windows is restarted once. Restart
 Windows; the dock works from then on, also when plugged in again." With
 this change on a machine with the Thunderbolt 3 / USB4 component (and
 safe eject on, which installs the mark service), no restart is needed.
+
+### 7.7 A unit attached through a start of Windows, and XHCITR's mark line (task 45.62, 2026-10-31)
+
+#### 7.7.1 The reading
+
+45.27's second session (`runs/run-45.md`, "45.27") read it on q35 XP SP3
+and 2000 SP4 (Standard PC HAL) with the ASM4242 model and the ORICO
+enclosure attached through the install:
+
+- The mark service wrote the unit's mark at its first poll after the
+  install ("mark written: ... (member 0200, unit 03:00.0, serial 1)") and
+  logged no restart of the unit.
+- After a restart of Windows (XP warm, 2000 cold) the unit's devnode read
+  Status `0x0180200A`, without `DN_REMOVABLE` (`0x4000`), and
+  `CM_Request_Device_EjectA` refused it as not removable. In the same
+  report the driver's marks answer held the unit's entry with the
+  attachment and "`Removable` answered" (XHCITR: "Safe-removal mark:
+  listed by Windows").
+- After a re-plug the devnode read `0x0180600A`, `DN_REMOVABLE` set, and
+  Safely Remove Hardware listed it.
+- The driver's log at that start has the members listed only after the
+  NHI started (`cm.reenum.member`, after `u4.start`). The tunnel port and
+  the unit are enumerated and started before it, as the boot order of
+  section 7.4 ("a child attached before it could be associated") expects.
+
+#### 7.7.2 The cause
+
+The PnP manager records a device's capabilities from its own queries: at
+the enumeration and again after the start (the "Removable" Device
+Manager shows and `DN_REMOVABLE` come from those). At a start of Windows
+both come before the NHI lists its set, so the child passes them through
+(section 7.4, revision 3: "passive until associated"), and the unit is
+not listed. That much the design expects, and its remedy is the mark
+service's gated restart of the unit, which rebuilds the stack with the
+set listed.
+
+The restart was not made because the entry's "`Removable` answered" flag
+(`CM_QM_EF_REMOVABLE`, set by `CmRegAttAnswered`) was set. The flag says
+that the child answered `Removable` to some
+`IRP_MN_QUERY_CAPABILITIES`, not that Windows recorded the answer. Once
+the set is listed, the child also answers queries the PnP manager does
+not record: the ones `IoGetDeviceProperty` makes for a caller's property
+read (this driver's own `cmChildReqQuery` on 2000, once the child is
+located and associated, and any other driver's or component's on the
+unit's stack). Which query set it in the
+reading was not read; any of them sets it (a driver's own
+`IRP_MN_QUERY_CAPABILITIES` to the stack, or an `IoGetDeviceProperty`
+read of a property the PnP manager answers by asking the stack, such as
+`DevicePropertyAddress`). `mk_restart_wanted`
+(`xhcimark\mark_core.c`) reads the flag as "listed", so the service left
+the unit as it was, and XHCITR said "listed by Windows" beside Windows'
+own "Not marked removable".
+
+So the defect is the service's and the tool's reading of the flag, not
+the child's answer: the driver cannot know which of the queries it
+answers Windows keeps.
+
+#### 7.7.3 The change
+
+**The service reads what Windows recorded.** For a candidate it reads the
+unit's capabilities as Windows recorded them
+(`CM_Get_DevNode_Registry_Property` with `CM_DRP_CAPABILITIES`;
+`CM_DEVCAP_REMOVABLE` `0x4`, `CM_DEVCAP_SURPRISEREMOVALOK` `0x80`), beside
+the status it already reads. `winRecorded` is 0 for the value read with
+`Removable` clear **and** `SurpriseRemovalOK` clear ("Windows has not
+recorded it"), 1 with `Removable` set, and -1 when the read fails or
+`SurpriseRemovalOK` is set (a device whose removability Windows or a
+driver above decided otherwise, which a restart cannot change).
+`DN_REMOVABLE` is not used: the recorded capability is the narrower fact,
+and the applet's own `SurpriseRemovalOK` rule is not this service's to
+judge.
+
+- `mk_restart_wanted(e, valuePresent, winRecorded)`: as before, and an
+  entry with an attachment and "`Removable` answered" is also a candidate
+  when `winRecorded` is 0. -1 keeps the old answer, so a failed read never
+  makes a restart.
+- **Only on Windows 2000 and XP (NT 5.0 to 5.2)**, where it was read: the
+  service passes -1 on Vista and later, which keep today's behaviour until
+  a leg there reads the same order.
+- The reset after a restart ("restarted, now listed") also needs
+  `winRecorded` 1 on 2000 and XP (not -1: a failed read never frees a
+  spent restart), so the log says "now listed" only when Windows recorded
+  it; otherwise the spent restart stays spent. Elsewhere the reset reads
+  the flags alone, as before.
+- `mk_restart`'s fresh reads, just before the call, also refuse an entry
+  with "`Removable` answered" unless `winRecorded`, read again then, is
+  still 0: "Windows has recorded it as removable now" for 1, "its
+  recorded capabilities could not be read, or say SurpriseRemovalOK" for
+  -1. Windows' recorded capabilities can change with no change in the
+  driver's flags or generation, which `mk_fresh_same` compares. `mk_fresh_same` keeps its
+  exact flags comparison: a flag changed since the sample defers the
+  attempt to a fresh poll.
+- Nothing else changes: the restart's gates (no installation pending, the
+  same epoch and marks generation, the unit's identity and mark, the
+  eject mutex), one restart per arrival of a serial, a veto standing and
+  logged, the tool-side fallback until then.
+
+What it costs: on a 2000 or XP machine where the set is listed after the
+unit starts, every start of Windows with the unit attached makes this one
+restart. It is the restart section 7.4 already describes for a child
+attached before its association, which the flag kept from running. A
+restart that a busy volume vetoes is logged and leaves the unit as now.
+
+**The legs read that the restart cannot do it alone** (2026-10-31, the
+gated build of `0301f107`, XP and 2000): the service chose the unit and
+logged "restart not made: ... a disk or volume below the unit is in use".
+That is record 33 section 4.3's gate for a unit the bridge marks follow,
+and an enclosure's unit always holds a volume. So the driver answers at
+the start itself.
+
+**The `AddDevice` child's answer before any domain is listed.** In
+`CmRegAttMayMark`, an `AddDevice` child (`CM_KIND_CHILD`, `AddDev`)
+answers `Removable` **while the start-up window is open** - no domain has
+been listed since the driver loaded (`cmRegEverListed`, set at the first
+listing and never cleared, so a domain's stop or an NHI that never starts
+or stays inert reopens nothing), no `AddDevice` child of this driver has
+failed to be made (`CmRegChildAddFailed`: a mark would then sit on a PDO
+with no attachment showing it, so the walk below could not tell a marked
+bridge from an unmarked one), and less than `CM_PRETRUST_MS` (300 s) have
+passed since `CmRegInit` - **and** its PDO is a unit by the filters
+alone (`cmRegUnitOfFilter`): a function a published bridge filter
+(`CM_KIND_FILTER`) last reported in its `BusRelations` snapshot, where
+neither that bridge nor any bridge filter above it (each reported by the
+next, up to `CM_TUNNEL_DEPTH_MAX`) carries a mark of the service's (an
+`AddDevice` child of this driver on its PDO). The service never marks a
+tunnel port or the host's own switch ports (protected), and marks every
+unit and every bridge below a unit, so a switch port inside a dock or an
+enclosure never counts, whether or not the host's upstream port above the
+tunnel ports is itself filtered (record 33 section 4.4). The bridge marks
+deeper in a dock or enclosure (record 33 section 4.3), `AddDevice`
+children too, therefore never answer what their steady state does not.
+
+The residual risk, stated: a value the service left on a unit (its last
+reconciliation could not verify the owner, so it kept the mark, decision
+M2) is honoured inside the window before the current owner and its
+`XhciCmSafeEject` are known, and an answer Windows recorded is not taken
+back when the domain later lists and would refuse it; it lasts until the
+unit's next rebuild or re-plug. The answer only lists the unit in Safely
+Remove Hardware: an eject still posts nothing without the identity-checked
+confirmation (section 7.4).
+The `LowerFilters` value is the evidence: the mark service writes it only
+on a unit it verified behind an active member with safe eject on, and
+removes it when the unit leaves or safe eject is off. The PnP manager's
+query after the start then records `Removable`, and the unit is listed
+from the start of Windows with no restart. Once a domain is listed, the
+rule of revision 3 decides every later answer, as before. Such answers
+are counted (`cmRegPreTrust`) and logged when a domain lists its set and
+at its stop (`cm.reenum.child.pretrust`), since no domain's log exists
+when they are made.
+
+The child's flag keeps its meaning, now written down: "the driver
+answered `Removable` to at least one capabilities query of this
+attachment". The service's change above stays: it covers a unit whose
+start came with a domain listed and whose answer Windows still did not
+record, and a unit with no volume in use.
+
+**XHCITR's mark line says what it reads** (record 25 section 6.6, the
+owner's wording of 2026-10-31). The states come from the driver's marks
+answer and the `LowerFilters` value as before. The texts name the driver,
+not Windows:
+
+| State | Before | Now |
+|---|---|---|
+| attachment, `Removable` answered | "listed by Windows" | "the Thunderbolt driver has answered it as removable" |
+| value, no attachment | "mark written; takes effect at the next start of the device" | the same |
+| value, attachment, not answered | "mark written, but Windows does not list it" | "mark written; the Thunderbolt driver has not answered it as removable" |
+| none | "not marked" | the same |
+
+When the first state meets a devnode whose capabilities XHCITR read
+without `Removable` (a line above says "Not marked removable"), a line
+follows it: "Windows has not recorded it as removable." The window then
+shows both readings, each named for its source, not two that disagree.
+The flag is historical (at least one answer), so the text says "has
+answered", not "answers".
+
+#### 7.7.4 The pure half and the legs
+
+- `xhcimark\mark_core.c`'s self-test and `test\test_mark.c`:
+  `mk_restart_wanted` with `winRecorded` 1, 0 and -1 for each entry shape
+  (no attachment, attachment not answered, attachment answered, safe
+  eject off, not reported, no value).
+- `test\test_tr.c`: the four texts, and the added clause only for the
+  answered state with the capabilities read and `Removable` clear.
+- Legs, the gated x86 build: XP and 2000 (Standard PC HAL), a fresh
+  overlay, the enclosure attached through the install and a restart. Read:
+  `cm.reenum.child.pretrust`, the unit's recorded capabilities ("Removable:
+  yes"), Safely Remove Hardware listing the unit and not the bridge below
+  it, XHCITR's mark line, and an eject from the applet. Then a second
+  restart: the same.
+- The release notes' text is the coordinator's (45.final).
 
 ## 8. Registry values, counters, the log and the snapshot
 

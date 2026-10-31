@@ -225,7 +225,7 @@ const char *mk_w_text(int w)
     }
 }
 
-int mk_restart_wanted(const MK_ENTRY *e, int valuePresent)
+int mk_restart_wanted(const MK_ENTRY *e, int valuePresent, int winRecorded)
 {
     INST_U32 att;
 
@@ -237,7 +237,29 @@ int mk_restart_wanted(const MK_ENTRY *e, int valuePresent)
     if (att == 0) {
         return 1;
     }
-    return (e->Flags & MK_EF_REMOVABLE) == 0;
+    if ((e->Flags & MK_EF_REMOVABLE) == 0) {
+        return 1;
+    }
+    /* Answered, yet Windows recorded no Removable: the answer went to a
+     * query Windows does not keep (record 21 section 7.7). */
+    return winRecorded == 0;
+}
+
+#define MK_DEVCAP_REMOVABLE         0x00000004UL
+#define MK_DEVCAP_SURPRISEREMOVALOK 0x00000080UL
+
+int mk_win_recorded(int have, unsigned long caps)
+{
+    if (!have) {
+        return -1;
+    }
+    if ((caps & MK_DEVCAP_REMOVABLE) != 0) {
+        return 1;
+    }
+    if ((caps & MK_DEVCAP_SURPRISEREMOVALOK) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
@@ -968,19 +990,35 @@ int mk_selftest(void (*report)(int ok, const char *what))
 
     memset(&e, 0, sizeof(e));
     e.Flags = MK_EF_LOCATED | MK_EF_REPORTED;
-    mk_check(mk_restart_wanted(&e, 1), "no attachment with the value: restart");
-    mk_check(!mk_restart_wanted(&e, 0), "no value: none");
+    mk_check(mk_restart_wanted(&e, 1, -1), "no attachment with the value: restart");
+    mk_check(!mk_restart_wanted(&e, 0, -1), "no value: none");
+    mk_check(!mk_restart_wanted(&e, 0, 0), "no value, not recorded: none");
     e.Flags |= MK_EF_ADD_ATT;
-    mk_check(mk_restart_wanted(&e, 1), "attached, Removable not answered: restart");
+    mk_check(mk_restart_wanted(&e, 1, -1), "attached, Removable not answered: restart");
+    mk_check(mk_restart_wanted(&e, 1, 1),
+             "attached, not answered, recorded: restart as before");
     e.Flags |= MK_EF_REMOVABLE;
-    mk_check(!mk_restart_wanted(&e, 1), "attached and answered: none");
+    mk_check(!mk_restart_wanted(&e, 1, -1), "attached and answered: none");
+    mk_check(!mk_restart_wanted(&e, 1, 1), "answered and recorded: none");
+    mk_check(mk_restart_wanted(&e, 1, 0),
+             "answered, Windows recorded no Removable: restart (45.62)");
+    e.Flags |= MK_EF_SAFE_OFF;
+    mk_check(!mk_restart_wanted(&e, 1, 0), "safe eject off, not recorded: none");
+    e.Flags = MK_EF_LOCATED | MK_EF_BUS_ATT | MK_EF_REMOVABLE;
+    mk_check(!mk_restart_wanted(&e, 1, 0), "not reported, not recorded: none");
+    mk_check(mk_win_recorded(0, 0x4) == -1, "capabilities not read: -1");
+    mk_check(mk_win_recorded(1, 0x4) == 1, "Removable recorded: 1");
+    mk_check(mk_win_recorded(1, 0x84) == 1, "Removable and SurpriseRemovalOK: 1");
+    mk_check(mk_win_recorded(1, 0x80) == -1, "SurpriseRemovalOK alone: -1");
+    mk_check(mk_win_recorded(1, 0x0) == 0, "neither: 0");
+    mk_check(mk_win_recorded(1, 0x3) == 0, "lock and eject bits alone: 0");
     e.Flags = MK_EF_LOCATED | MK_EF_REPORTED;
     e.Pending = 5;
-    mk_check(mk_restart_wanted(&e, 1),
+    mk_check(mk_restart_wanted(&e, 1, -1),
              "a departure pending (a first plug's install) does not stop it");
     e.Pending = 0;
     e.Flags |= MK_EF_SAFE_OFF;
-    mk_check(!mk_restart_wanted(&e, 1), "safe eject off: none");
+    mk_check(!mk_restart_wanted(&e, 1, -1), "safe eject off: none");
 
     mk_check(mk_reconcile(MK_P_ABSENT, 1, 1, 0, 1, 1, 0, 0, 0) == MK_R_REMOVE,
              "absent, its domain verifiable: removed");

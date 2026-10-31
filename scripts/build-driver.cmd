@@ -81,6 +81,17 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  14b. the fourth binary, xhcinet.sys - the NDIS 5 miniport of
+rem      Thunderbolt networking (roadmap-usb4.md task 45.59 step S6, design
+rem      record 35), built from src\net\ndis5 after xhcicm.sys for each
+rem      flavour and architecture: its import gate (-GateProfile net98 over
+rem      scripts\import-gate\xhcinet-imports.allow on x86, the default amd64
+rem      rules over xhcinet-imports-amd64.allow), the frame-pointer check and
+rem      the flavour marker check, and its two INFs' own gate
+rem      (scripts\inf-gate\check-net-inf.ps1, self-tested first, over
+rem      src\net\xhcinet.inf and xhcinet-amd64.inf on every build). It is not
+rem      yet in the gated record or the source stamp: the package carries it
+rem      from step S10 (record 35 section 9.3), which adds both
 rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
 rem      bundles from this build since 3.1.0.0: its two INFs held to
 rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
@@ -724,6 +735,9 @@ if errorlevel 1 goto uasfail
 call :buildcm %FLAVOR%
 if errorlevel 1 goto cmfail
 
+call :buildnet %FLAVOR%
+if errorlevel 1 goto netfail
+
 rem xhcihlpr.sys, the x86 helper (design record 18, section 15), with every
 rem x86 flavour and never with -amd64: the amd64 HCD has no helper.
 if /i "%ARCH%"=="amd64" goto skiphlpr
@@ -1091,6 +1105,64 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
+rem :buildnet <release|qemu>
+rem
+rem xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking
+rem (roadmap-usb4.md task 45.59 step S6, design record 35 section 7.1):
+rem the same toolchain, flavour and BUILD_ALT_DIR as xhcicm.sys, in
+rem src\net\ndis5, then the import gate (net98 on x86), the frame-pointer
+rem check and the flavour marker check.
+rem ------------------------------------------------------------------
+:buildnet
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "NETALLOW=%REPO%\scripts\import-gate\xhcinet-imports.allow"
+set "NETPROFILE=-GateProfile net98"
+if /i "%ARCH%"=="amd64" set "NETALLOW=%REPO%\scripts\import-gate\xhcinet-imports-amd64.allow"
+if /i "%ARCH%"=="amd64" set "NETPROFILE="
+set "NETSYS=%REPO%\src\net\ndis5\%OBJDIR%\%ARCHDIR%\xhcinet.sys"
+set "NETLOG=%REPO%\src\net\ndis5\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcinet.sys ===
+if exist "%NETSYS%" del "%NETSYS%"
+if exist "%NETLOG%.err" del "%NETLOG%.err"
+cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\net\ndis5" && build -cZ"
+if errorlevel 1 goto netbuildfail
+if exist "%NETLOG%.err" goto netbuildfail
+if not exist "%NETSYS%" goto netbuildfail
+call :checkfpo "%NETLOG%.log"
+if errorlevel 1 goto netbuildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcinet.sys) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NETSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NETALLOW%" %NETPROFILE% %GATEOPT%
+if errorlevel 1 goto netgatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%NETSYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto netgatefail
+endlocal
+exit /b 0
+
+:netbuildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcinet.sys failed. See "%NETLOG%.log" and
+echo "%NETLOG%.err".
+endlocal
+exit /b 1
+
+:netgatefail
+echo.
+echo ERROR: the %FLAVOR% xhcinet.sys failed the import gate or carries the
+echo wrong flavour marker - see above. Do not deploy it.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
 rem :checkfpo "<build log>" - on the x86 release build of xhci98.sys,
 rem xhciuas.sys and xhcicm.sys (MSVC 6.0), every compile kept frame
 rem pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
@@ -1207,6 +1279,12 @@ exit /b 1
 :cmfail
 echo.
 echo ERROR: the %FLAVOR% xhcicm.sys did not build or did not pass its gates.
+endlocal
+exit /b 1
+
+:netfail
+echo.
+echo ERROR: the %FLAVOR% xhcinet.sys did not build or did not pass its gates.
 endlocal
 exit /b 1
 

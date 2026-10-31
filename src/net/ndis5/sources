@@ -1,0 +1,76 @@
+#
+# sources - Windows 2000 DDK (x86) and WDK 7.1 (amd64) build description
+# for xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking (design
+# record 35 section 7.1, roadmap-usb4.md task 45.59 step S6): NDIS 5.0
+# with a WDM lower edge on x86 (98 SE, ME, 2000, XP, Vista, 7), NDIS 5.1
+# on amd64 (XP x64 to 7 x64), above xhcicm.sys's network PDO
+# XHCICM\TBNET, with its INFs src\net\xhcinet.inf and xhcinet-amd64.inf.
+#
+# Build with scripts\build-driver.cmd, which builds this directory after
+# src\cm for every flavour and runs the import gate on the result against
+# scripts\import-gate\xhcinet-imports.allow (x86, -GateProfile net98) or
+# xhcinet-imports-amd64.allow (amd64). Output: src\net\ndis5\objfre\<arch>\
+# xhcinet.sys (release) and objchk_qemu (qemu).
+#
+# SHARED WITH xhcinet6.sys (step S7), with no NDIS type in either: the
+# pure framing core ..\net_frame.c (test\test_net_frame.c) and the
+# interface glue ..\net_cmif.c (WDM alone), compiled in by path; a change
+# to either is made for both drivers. n5_cm.c is this miniport's use of
+# the interface; n5_data.c the data path; n5_main.c the rest. No file
+# allocates pool through the kernel: every allocation is NdisAllocateMemory
+# at initialisation, freed at the halt.
+#
+# ADDING A FILE. A new .c is one more line in SOURCES below;
+# scripts\source-stamp.ps1 reads this list, so the stamp follows.
+#
+
+TARGETNAME=xhcinet
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(BASEDIR)\inc;$(BASEDIR)\inc\ddk
+
+TARGETLIBS=$(DDK_LIB_PATH)\ndis.lib
+
+C_DEFINES=$(C_DEFINES) -DNDIS_MINIPORT_DRIVER=1 -DNDIS_WDM=1
+!IF "$(_BUILDARCH)" == "AMD64"
+C_DEFINES=$(C_DEFINES) -DNDIS51_MINIPORT=1
+!ELSE
+# USE_KLOCKS: a deserialized BINARY_COMPATIBLE miniport takes the
+# kernel's spin locks (ndis.h maps NdisAcquireSpinLock and the rest to
+# KeAcquireSpinLock and its siblings), since on 98 SE and ME NDIS's own
+# NdisAcquireSpinLock serves a serialized miniport, whose calls NDIS
+# already serialises, and gives a deserialized one no exclusion.
+C_DEFINES=$(C_DEFINES) -DNDIS50_MINIPORT=1 -DUSE_KLOCKS=1
+!ENDIF
+
+SOURCES=..\net_frame.c \
+        ..\net_cmif.c  \
+        n5_cm.c        \
+        n5_data.c      \
+        n5_main.c      \
+        xhcinet.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhcinet.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The flavours, derived from BUILD_ALT_DIR exactly as src\cm\sources
+# derives them for xhcicm.sys (design record 08), so the same flavour
+# marker check and packaging refusals apply: release and qemu. The qemu
+# flavour is a checked build; this driver has no port-0xE9 mirror (its log
+# lines go through the connection manager's Log, record 35 section 8.4).
+#
+# NTNOFPO: the release flavour keeps frame pointers on the MSVC 6.0 x86
+# build, as every x86 driver here does (task 45.45).
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+NTNOFPO=1
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+LINKER_FLAGS=-merge:.rdata=.text

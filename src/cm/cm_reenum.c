@@ -119,6 +119,20 @@ static ULONG cmRegPassed;
  * "The marks"), and the LowerFilters children no active member owned. */
 static LIST_ENTRY cmRegAtts;
 static ULONG cmRegStray;
+/* Record 21 section 7.7: AddDevice children that answered Removable while
+ * no domain was listed (a start of Windows before the NHI's), under the
+ * lock. */
+static ULONG cmRegPreTrust;
+/* The window for those answers: open from CmRegInit until the first domain
+ * lists (cmRegEverListed, never cleared) or CM_PRETRUST_MS pass, so an NHI
+ * stopped, inert or never started opens nothing. Under the lock. */
+static ULONG cmRegEverListed;
+/* An AddDevice child that could not be made: a mark of the service's may
+ * then sit on a PDO with no attachment showing it, so the window closes
+ * (cmRegUnitOfFilter could take a marked bridge for an unmarked one). */
+static ULONG cmRegChildFailed;
+static LARGE_INTEGER cmRegInitTicks;
+#define CM_PRETRUST_MS 300000UL
 /* The tunnel id's chain (design record 31 sections 4.2 and 4.3), under
  * the lock: ids given, rewrites refused for want of pool and over the
  * size bound, bridges past the depth bound, and re-attaches. */
@@ -188,6 +202,7 @@ static VOID cmSleep(PCM_NHI nhi, ULONG ms)
 
 VOID CmRegInit(VOID)
 {
+    KeQueryTickCount(&cmRegInitTicks);
     KeInitializeSpinLock(&cmRegLock);
     InitializeListHead(&cmRegFilters);
     InitializeListHead(&cmRegDomains);
@@ -2542,6 +2557,98 @@ VOID CmRegAttLocateCaps(PCM_FILTER filter, ULONG address)
     }
 }
 
+/* Record 21 section 7.7: the published bridge filter whose last
+ * BusRelations snapshot holds `pdo`, or NULL. Under the lock. */
+static PCM_FILTER cmRegSnapOwner(PVOID pdo)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    ULONG i;
+
+    for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (!f->Published || f->Gone || f->Common.Kind != CM_KIND_FILTER) {
+            continue;
+        }
+        for (i = 0; i < f->SnapCount && i < CM_SNAP_MAX; i++) {
+            if (f->Snap[i] == pdo) {
+                return f;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Record 21 section 7.7: whether the mark service's value is on `pdo` (an
+ * AddDevice child of this driver attached to it: a unit's mark, or a bridge
+ * mark of record 33 section 4.3). Under the lock. */
+static BOOLEAN cmRegMarkedPdo(PVOID pdo)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER g;
+
+    for (e = cmRegAtts.Flink; e != &cmRegAtts; e = e->Flink) {
+        g = CONTAINING_RECORD(e, CM_FILTER, AttLink);
+        if ((PVOID)g->Common.Pdo == pdo && g->Common.Kind == CM_KIND_CHILD &&
+            g->AddDev) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Record 21 section 7.7: whether `pdo` is a unit by the filters alone: a
+ * function a published bridge filter last reported, where neither that
+ * bridge nor any bridge filter above it (each reported by the next, up to
+ * CM_TUNNEL_DEPTH_MAX) carries a mark of the service's. The service never
+ * marks a tunnel port or the host's own switch ports (protected), and marks
+ * every unit and every bridge below one, so a switch port inside a dock or
+ * an enclosure never counts, whether or not the host's upstream port above
+ * the tunnel ports is filtered (record 33 section 4.4). Under the lock. */
+static BOOLEAN cmRegUnitOfFilter(PVOID pdo)
+{
+    PCM_FILTER f;
+    ULONG depth;
+
+    f = cmRegSnapOwner(pdo);
+    if (f == NULL) {
+        return FALSE;
+    }
+    for (depth = 0; depth <= CM_TUNNEL_DEPTH_MAX; depth++) {
+        if (cmRegMarkedPdo((PVOID)f->Common.Pdo)) {
+            return FALSE;
+        }
+        f = cmRegSnapOwner((PVOID)f->Common.Pdo);
+        if (f == NULL) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Record 21 section 7.7: the window for an answer before association is
+ * still open. Under the lock. */
+static BOOLEAN cmRegPreTrustOpen(VOID)
+{
+    LARGE_INTEGER now;
+    ULONG ticks;
+    ULONG incr;
+
+    if (cmRegEverListed || cmRegChildFailed ||
+        !IsListEmpty(&cmRegDomains)) {
+        return FALSE;
+    }
+    KeQueryTickCount(&now);
+    ticks = now.LowPart - cmRegInitTicks.LowPart;
+    /* KeQueryTimeIncrement is in 100 ns units; CM_PRETRUST_MS * 10000
+     * stays below 2^32, so no 64-bit division is needed. */
+    incr = KeQueryTimeIncrement();
+    if (incr == 0) {
+        incr = 1;
+    }
+    return (BOOLEAN)(ticks < (CM_PRETRUST_MS * 10000UL) / incr);
+}
+
 BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
 {
     PLIST_ENTRY e;
@@ -2608,6 +2715,23 @@ BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
             }
         }
     }
+    if (!may && filter->Common.Kind == CM_KIND_CHILD && filter->AddDev &&
+        cmRegPreTrustOpen() &&
+        cmRegUnitOfFilter((PVOID)filter->Common.Pdo)) {
+        /* Record 21 section 7.7: no domain has listed yet since this
+         * driver loaded, within CM_PRETRUST_MS - a start of Windows, the
+         * unit's stack built before its NHI's start - and the
+         * PDO is a function a published bridge filter reported, so a unit
+         * and not a bridge mark deeper in it. The mark service wrote this
+         * value only on a unit it verified behind an active member with
+         * safe eject on, and removes it otherwise, so the value stands for
+         * the association until a domain lists; the PnP manager records
+         * this answer, which it would not ask for again before the next
+         * rebuild. */
+        may = TRUE;
+        seen = TRUE;
+        cmRegPreTrust++;
+    }
     if (!seen && filter->Common.Kind == CM_KIND_CHILD && filter->AddDev &&
         !filter->Stray) {
         /* A value on a device outside every set: attached and passive. A
@@ -2618,6 +2742,15 @@ BOOLEAN CmRegAttMayMark(PCM_FILTER filter)
     }
     KeReleaseSpinLock(&cmRegLock, irql);
     return may;
+}
+
+VOID CmRegChildAddFailed(VOID)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    cmRegChildFailed = 1;
+    KeReleaseSpinLock(&cmRegLock, irql);
 }
 
 VOID CmRegAttAnswered(PCM_FILTER filter)
@@ -3749,6 +3882,7 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     KIRQL irql;
     ULONG i;
     ULONG active;
+    ULONG pre;
 
     r = &nhi->Reenum;
     cmDiscover(nhi);
@@ -3789,8 +3923,11 @@ static VOID cmDiscoverAndList(PCM_NHI nhi)
     KeAcquireSpinLock(&cmRegLock, &irql);
     InsertTailList(&cmRegDomains, &r->Link);
     r->Listed = 1;
+    cmRegEverListed = 1;
     cmRegRecompute();
+    pre = cmRegPreTrust;
     KeReleaseSpinLock(&cmRegLock, irql);
+    CmLogNote(nhi, "cm.reenum.child.pretrust", pre);
 
     active = 0;
     for (i = 0; i < r->Members; i++) {
@@ -4919,6 +5056,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     CmLogNote(nhi, "cm.reenum.child.refused", refused);
     CmLogNote(nhi, "cm.reenum.hold.passed", passed);
     CmLogNote(nhi, "cm.reenum.child.stray", cmRegStray);
+    CmLogNote(nhi, "cm.reenum.child.pretrust", cmRegPreTrust);
     CmRegIdCounters(&attached, &over, &skipped, &refused, &passed);
     CmLogNote(nhi, "cm.reenum.id.given", attached);
     CmLogNote(nhi, "cm.reenum.id.nomem", over);
