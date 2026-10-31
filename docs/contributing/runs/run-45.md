@@ -5720,7 +5720,10 @@ Stor98 and E: ORICO came up. XP's first wizard defaults to "Don't prompt
 me again" (the same flag), with the same outcome (`xpD\mark-tail.txt`).
 w45-pcie's `w2C` stopped at the first wizard and ran the installer again;
 nothing here is this driver's to fix. A drive's first plug thus shows two
-wizards on 2000 and XP; the release-notes text below says so.
+wizards on 2000 and XP. The release-notes text for 45.53 and 45.55 is
+handed over again with this work and replaces the one in "45.final" (no
+driver change there, the installer run again on 2000, the XP chain port
+unresolved), which these readings supersede.
 
 ### 98 SE: the connection manager was not running
 
@@ -5754,8 +5757,12 @@ copy of the same disk image, shows no letter, as on 7 x86). Pass.
 
 - 45.55 on ME (`asm4242`, the boot after the install) and on XP x64 (a
   signed or prompt-free install on the ASM4242 layout).
-- 2000 on the ASM4242 layout (`w2B`'s transfer-disk problem) not run
-  again; 2000's chain is covered by record 33's same rewriter.
+- 2000 on the ASM4242 layout with the parent and child (`w2B`'s
+  transfer-disk problem): not run again, so 2000's chain is not verified;
+  record 33 revision 4 takes 2000's trailing interrupt to be XP's form,
+  not read, and a 2000 list that differs is still refused. The leg owes
+  the bridges' lists (`BasicConfigVector`), the `cm.breq` outcome and both
+  drives after the mark service's restart.
 
 ## 45.final: the release-notes texts the tasks handed over
 
