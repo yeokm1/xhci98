@@ -1,6 +1,8 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 56, 2026-10-31 (task 45.60, the owner's request of that
+Status: draft 57, 2026-10-31 (a cut of both pinned driver sets with no
+earlier record under its releases directory, a TEST or dry cut, proves
+the installer's lifted rows by themselves, section 6.7.14); draft 56, 2026-10-31 (task 45.60, the owner's request of that
 day: the XHCIPFW box on the Thunderbolt and USB4 page says what it does,
 "Find Thunderbolt and USB4 devices placed above 4 GB", with no file name, section 5.3.1;
 its Help names the files); draft 55, 2026-10-31 (task 45.66, the owner's request of that
@@ -5534,6 +5536,28 @@ such a cut records the pair's `COEXISTS` lines on the row's systems,
 the table's and the carried pack's, as `EXCLUDES` (`Get-OtherHeldLifts`;
 the rest of each line as it is), and neither the history nor the
 table is held to a lift there.
+
+**A cut with no history** (draft 57, 2026-10-31). The previous record
+is the newest `otherpkgs.txt` below the cut's version under the cut's
+`-ReleasesDir`. A TEST build (`-TestLabel`) or a dry cut writes into
+another directory, which holds none, so before this draft such a cut of
+both pinned sets lifted nothing and `Test-OtherTableLifts` refused the
+table's lifted `rtl815x` row ("the installer's table marks
+free:net/rtl815x and nonfree:ethernet/rtl815x lifted on WXP ... W7X64,
+and this cut lifts no EXCLUDES of the pair there"), though the table,
+both sets' `STAGE.TXT` and a cut into `releases\` agreed (read at the
+free set's `v0.1.5` and `v0.1.6`). Where no earlier record is found, the
+cut now takes each lifted row of the table (kind 2, left only where both
+of its sets are carried) as an `EXCLUDES` on its own systems and lifts it
+as above (`Get-OtherTableOwnLifts`, through `Get-OtherLifted`): a
+`COEXISTS` of this cut's lines on every one of those systems, both
+packages answering and no device key in common, or the cut refuses
+("... excluded on <system> by the installer's lifted row (no earlier
+otherpkgs.txt) ..."). The record then carries the `LIFTED` line a cut
+into `releases\` writes. The history itself is not borrowed from
+`releases\`: until the version is raised, a cut reads its version from
+the INF, and the record below that one is an older release's, whose rows
+a cut leaving a set out does not match.
 
 **The pair this is for.** Read at the pins of `3.3.0.0` (free `v0.1.4`
 at `c28fce8`, non-free `v1.1.0` at `565d11b`) with the cut's own

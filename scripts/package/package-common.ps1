@@ -4741,6 +4741,25 @@ function Test-OtherPkgsTransition {
     }
 }
 
+function Get-OtherTableOwnLifts {
+    # Record 26 section 6.7.14 (draft 57): a cut with no earlier record
+    # under its -ReleasesDir (a TEST build or a dry cut writes into another
+    # directory) has no EXCLUDES to lift, yet the installer's table marks a
+    # pair lifted (kind 2) on some systems. Each such row is proved as a lift
+    # of an EXCLUDES on its own systems would be: Get-OtherLifted over the
+    # carried sets (-Sets) against this cut's lines (-Now), throwing where
+    # the two are not read apart. Returns the lifts, @() for no such row.
+    param($Table, $Now, $Sets)
+    $own = @()
+    foreach ($r in @($Table.Rels)) {
+        if (-not ($r.PSObject.Properties.Name -contains "Lifted" -and $r.Lifted)) { continue }
+        $own += [pscustomobject]@{ Kind = "EXCLUDES"; A = $r.A; B = $r.B; Systems = @($r.Systems); Desc = $r.Desc }
+    }
+    if ($own.Count -eq 0) { return @() }
+    $p = [pscustomobject]@{ Version = "the installer's lifted row (no earlier $($script:OtherPkgsRecordName))"; Rows = @(); Rels = $own; Lifted = @() }
+    return @(Get-OtherLifted -Prev $p -Now $Now -Sets $Sets)
+}
+
 function Get-OtherHeldLifts {
     # Record 26 section 6.7.14 (draft 51): in a cut that leaves out a set of
     # a pair the installer's table marks lifted (kind 2), the installer holds
@@ -4865,6 +4884,12 @@ function Invoke-OtherSetChecks {
         # earlier lift proved again (record 26 section 6.7.14).
         $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
         Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
+    } else {
+        # No history here: the table's lifted rows are proved by themselves
+        # (draft 57). After Get-OtherHeldLifts a row of kind 2 is left only
+        # where both of its sets are carried.
+        $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
+        $lifted = @(Get-OtherTableOwnLifts -Table $table -Now $n -Sets $sets)
     }
     Test-OtherTableLifts -Table $table -Lifted $lifted -Carried $carried
     if ($lifted.Count -gt 0) { $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta -Lifted $lifted }
