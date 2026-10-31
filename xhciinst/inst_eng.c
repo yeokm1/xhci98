@@ -2309,6 +2309,14 @@ static int s98_check_package(void)
             return refuse("a file stor98.inf names lies outside the package: ",
                           name);
         }
+        /* A file of another family's half (stor98.mpd in an x86 INF that
+         * still names it on NT, record 36 section 3.3) is not required. */
+        if (inst_pkg_rel(pkgFam, name) == NULL &&
+            (inst_pkg_rel(INST_FAM_9X, name) != NULL ||
+             inst_pkg_rel(INST_FAM_NT86, name) != NULL ||
+             inst_pkg_rel(INST_FAM_NT64, name) != NULL)) {
+            continue;
+        }
         n = strlen(name);
         if (!file_exists(path, &size) || size == 0) {
             infText[INST_INF_S98] = NULL;

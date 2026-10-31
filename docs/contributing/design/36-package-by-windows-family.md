@@ -1,6 +1,8 @@
 # Design Record 36 - The Download by Windows Family
 
-Status: revision 3, 2026-10-31, before code (revision 1 of the same
+Status: revision 4, 2026-10-31 (the owner's answers of that day, section
+12: `stor98.mpd` dropped from `nt-x86\` with an NT-only x86 Stor98 INF,
+section 3.3); revision 3, 2026-10-31, before code (revision 1 of the same
 day reviewed and revised: the cut re-lays the flat package, the engine's
 reads that bypass its source copy, the family filter of each INF's file
 list, the catalogs across the re-lay, Stor98's copies by their record,
@@ -63,7 +65,7 @@ task 45.59's step S10, after this task (section 9).
     txtsetup.oem
     cm\      xhcicm.inf  xhcicm.sys  xhcicmf.inx  XHCIPFW.SYS
              tbnet\       (45.59 S10)
-    stor98\  stor98.inf  stor98.sys  stor98.mpd  stor98-readme.txt
+    stor98\  stor98.inf (NT only)  stor98.sys  stor98-readme.txt
              stor98-LICENSE.txt  stor98-NOTICE.txt
   nt-x64\
     xhci98.inf  xhci98.cat  xhci98.sys  xhciuas.inf  xhciuas.cat
@@ -93,8 +95,7 @@ same bytes of `xhci98.inf`, `xhciuas.inf`, `xhcicm.inf`, `xhci98.sys`,
 `release-x64\`. A family folder holds only what its systems install: so
 `98-me\` holds no NT-only file (`xhcihlpr.sys`, `XHCIPFW.SYS`,
 `stor98.sys`, the filter, `txtsetup.oem`) and `nt-x86\` no 9x-only file
-(`XHCIPFW.VXD`, `S98VSD.VXD`, the 9x Stor98 INF). The one exception is
-`stor98.mpd` in `nt-x86\stor98\` (section 3.3).
+(`XHCIPFW.VXD`, `S98VSD.VXD`, `stor98.mpd`, the 9x Stor98 INF).
 
 **`USBDRV\`, `tools\` and the root as in `3.3.0.0`**, with `INTEGRATE.TXT`
 new (section 8.2). The cut's records stay in `releases\<version>\` and
@@ -170,22 +171,35 @@ it stages (SetupCopyOEMInf 0xA1): in the download the filter sits beside
 the one `xhcicm.sys` in `cm\`. (The local copy keeps its own second copy,
 section 6.2.)
 
-### 3.3 Stor98's `.mpd` on NT
+### 3.3 Stor98's `.mpd` on NT (the owner, 2026-10-31: dropped)
 
-`stor98.inf` for x86 (`src\stor98\inf\stor98-x86.inf`) names both
-`stor98.mpd` and `stor98.sys` in its `[SourceDisksFiles]`, under its own
-`AGENTS.md`; the x64 one names `stor98.sys` alone. No NT install copies
-or stores `stor98.mpd` (the engine's store comparison skips it,
-`inst_store_verdict`, `runs/run-43-24.md`), but the package is held to
-the INF's whole list: the engine's package check (`s98_check_package`
-walks every named file), the cut's family check (`Test-FamilyLayout`,
-section 5.2, which reads each INF's named files beside it; Stor98's own
-gate, `check-stor98-inf.ps1`, reads the source INFs alone and is
-unchanged) and a by-hand Have Disk expect it beside the INF. So `nt-x86\stor98\` keeps `stor98.mpd`
-for the package's completeness, as `release-x86\` did. Removing the line
-from Stor98's INF is Stor98's change, not this task's (section 12, Q3).
-`98-me\stor98\` carries `stor98.mpd` because its INF installs it;
-`nt-x64\stor98\` none.
+`stor98.inf` for x86 (`src\stor98\inf\stor98-x86.inf`) served every
+32-bit system up to `3.3.0.0`: its undecorated install section put
+`stor98.mpd` into `SYSTEM\IOSUBSYS` as the IOS port driver on 98 SE and
+ME, and its `.NTx86` sections copy `stor98.sys` alone. No NT install
+copies or stores `stor98.mpd` (the engine's store comparison skips it,
+`inst_store_verdict`, `runs/run-43-24.md`). Since record 31 section 5.2
+98 SE and ME install from the 9x INF, and from this layout that INF is
+`98-me\stor98\stor98.inf`, so the x86 INF's 9x half has no reader. The
+owner (2026-10-31, on Q3: "Is the MPD used in NT? If not, just drop
+it"): `nt-x86\stor98\` carries no `stor98.mpd`, and the INF shipped
+there names none.
+
+So the x86 Stor98 INF becomes NT-only, a Stor98 change under its own
+`AGENTS.md` (its version is the package's, its `releases/history.md`
+gets the entry): `[SourceDisksFiles]` names `stor98.sys` alone, the
+undecorated install section and its 9x copy, `DevLoader`/`PortDriver`
+and 9x settings sections go, its `Signature` is `"$Windows NT$"`, and
+its models stay as they are (the undecorated one for 2000, which reads no
+decoration and takes `[Stor98_Inst.NTx86]` from it; `NTx86.6.3` for 8.1
+and 10), so every NT system installs exactly what it installed before.
+`check-stor98-inf.ps1`'s rules for the x86 file follow (no 9x section,
+one file), with its self-test cases; the 9x INF (`stor98-9x.inf`) and the
+x64 INF are unchanged. `98-me\stor98\` carries `stor98.mpd` because its
+INF installs it; `nt-x86\stor98\` and `nt-x64\stor98\` none. The legs
+read Stor98's NT install from `nt-x86\stor98\` on 2000, XP and 7 and
+the 98 SE and ME install from `98-me\` alone (section 10), and the
+nLite and DISM integrations take the NT-only INF.
 
 ### 3.4 The 9x Stor98 INF under its new name
 
@@ -436,7 +450,7 @@ becomes a map from the local name to the download's path, one table
 | `xhcicmf.inf` (x64), `xhcicmf.cat` | - | - | `cm\xhcicmf.inx`, `cm\xhcicmf.cat` |
 | `XHCIPFW.VXD` / `XHCIPFW.SYS` | `cm\` | `cm\` | - |
 | `stor98.inf` | `stor98\stor98.inf` (9x) | `stor98\` | `stor98\` |
-| `stor98.mpd`, `S98VSD.VXD` | `stor98\` | `stor98.mpd` `stor98\` | - |
+| `stor98.mpd`, `S98VSD.VXD` | `stor98\` | - | - |
 | `stor98.sys`, `stor98.cat`, `stor98-*.txt` | texts | `stor98\` | `stor98\` |
 
 `package_files` walks the map, not a directory listing, so a file the map
@@ -684,39 +698,21 @@ in the driver store or `INF`, `Services\xhcicm\Enum` naming no bridge):
 - `test-package.ps1`: section 5.3's cases; `INTEGRATE.TXT` held to the
   layout table; the download readme naming the three folders.
 
-## 12. The owner's questions
+## 12. The owner's questions, answered (2026-10-31)
 
-- **Q1. The installed copy on 98 SE and ME: flat, or one folder a
-  download folder?** (a) Flat, as today: one `DevicePath` entry, the
-  install directory the user types into the wizard (the owner's rule of
-  2026-10-16), S10's networking files in it beside `xhcicm.inf`, no
-  budget spent. (b) Mirror the download: one entry per folder, 73
-  characters with the default directory, about one staged package fewer.
-  Recommended: (a).
+- **Q1. The installed copy on 98 SE and ME:** (a) flat, one `DevicePath`
+  entry, as today (owner).
 - **Q2. `cm\tbnet\` before S10:** (a) a place in the tables, no folder
-  published until S10 fills it; (b) an empty folder in the download now
-  (it cannot be tracked in `releases\` by git; the zip would carry it).
-  Recommended: (a).
-- **Q3. `stor98.mpd` in `nt-x86\stor98\`:** (a) kept, because the x86
-  `stor98.inf` names it and the package is held to every named file
-  (section 3.3), though no NT install copies it; (b)
-  removed with its line in Stor98's x86 INF, a Stor98 change with its own
-  legs on Vista to 10 x86. Recommended: (a) for `3.4.0.0`.
+  published until S10 fills it (owner).
+- **Q3. `stor98.mpd` in `nt-x86\stor98\`:** dropped, with the x86 Stor98
+  INF made NT-only (owner; section 3.3).
 - **Q4. Stor98's INF comments naming `stor98w9.inf`:** (a) left for
-  Stor98's next change (no byte of its INFs changes here); (b) refreshed
-  now, which changes the INFs' bytes and their gate's recorded digests.
-  Recommended: (a).
-- **Q6. The helper on 8 to 10 x86:** `xhci98.inf` would install it
-  there when the USB drivers are ticked past the installer's warning
-  (section 3.1). (a) leave the INF as it is, as `3.3.0.0` has it; (b)
-  bound the INF's NT 6 path to Vista and 7, an INF change with its own
-  legs. Recommended: (a).
-- **Q5. `INTEGRATE.TXT` and `cm\`:** the connection manager's INF is
-  integrated with the rest unless `cm\` is left out (section 4). (a) say
-  so, leave it to the user; (b) move `xhcicm.inf` out of the integrated
-  set too (as `.inx`), so only `SETUP.EXE` installs the connection
-  manager. Recommended: (a), the owner's layout puts it there to be
-  integrated.
+  Stor98's next change (coordinator, at the recommendation); the x86 INF's
+  own comments are rewritten with its change of section 3.3.
+- **Q5. `INTEGRATE.TXT` and `cm\`:** (a) it says that leaving `cm\` out
+  leaves the connection manager out (owner).
+- **Q6. The helper on 8 to 10 x86:** (a) the INF as in `3.3.0.0`
+  (coordinator, at the recommendation).
 
 ## 13. Files
 

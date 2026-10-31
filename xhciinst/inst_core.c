@@ -4623,7 +4623,7 @@ const INST_PKG_FILE instPkgFiles[] = {
     { "XHCIPFW.SYS",  { NULL, "cm\\XHCIPFW.SYS", NULL } },
     { "stor98.inf",   { "stor98\\stor98.inf", "stor98\\stor98.inf",
                         "stor98\\stor98.inf" } },
-    { "stor98.mpd",   { "stor98\\stor98.mpd", "stor98\\stor98.mpd", NULL } },
+    { "stor98.mpd",   { "stor98\\stor98.mpd", NULL, NULL } },
     { "stor98.sys",   { NULL, "stor98\\stor98.sys", "stor98\\stor98.sys" } },
     { "stor98.cat",   { NULL, NULL, "stor98\\stor98.cat" } },
     { "S98VSD.VXD",   { "stor98\\S98VSD.VXD", NULL, NULL } },

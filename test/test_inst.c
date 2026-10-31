@@ -3287,10 +3287,11 @@ static void test_family(void)
           "the helper in nt-x86 alone (record 36 section 3.1)");
     CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "stor98.inf"),
                  "stor98\\stor98.inf") == 0, "98-me: the 9x INF as stor98.inf");
-    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "stor98.mpd"),
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "stor98.mpd"),
                  "stor98\\stor98.mpd") == 0 &&
+          inst_pkg_rel(INST_FAM_NT86, "stor98.mpd") == NULL &&
           inst_pkg_rel(INST_FAM_NT64, "stor98.mpd") == NULL,
-          "stor98.mpd kept in nt-x86 (record 36 section 3.3)");
+          "stor98.mpd in 98-me alone (record 36 section 3.3)");
     CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, INST_VSD_FILE),
                  "stor98\\S98VSD.VXD") == 0 &&
           strcmp(inst_pkg_rel(INST_FAM_9X, INST_PFW_FILE),
