@@ -15,26 +15,34 @@
 #define NET_NEXT(p) (*(PNDIS_PACKET *)&(p)->MiniportReserved[0])
 
 /* IRQL: any. */
+/* The destination volatile: an optimising compiler (WDK 7.1's cl 15 at
+ * /Oxs) otherwise turns the loop into a call to the C runtime's memcpy, an
+ * import no driver here may carry. */
 VOID NetCopy(PUCHAR dst, const UCHAR *src, ULONG n)
 {
-    while (n >= 4 && (((ULONG_PTR)dst | (ULONG_PTR)src) & 3) == 0) {
-        *(ULONG UNALIGNED *)dst = *(const ULONG UNALIGNED *)src;
-        dst += 4;
+    volatile UCHAR *d = (volatile UCHAR *)dst;
+
+    while (n >= 4 && (((ULONG_PTR)d | (ULONG_PTR)src) & 3) == 0) {
+        *(volatile ULONG *)d = *(const ULONG *)src;
+        d += 4;
         src += 4;
         n -= 4;
     }
     while (n != 0) {
-        *dst = *src;
-        dst++;
+        *d = *src;
+        d++;
         src++;
         n--;
     }
 }
 
 /* IRQL: any. */
+/* The destination volatile: an optimising compiler (WDK 7.1's cl 15 at
+ * /Oxs) otherwise turns the loop into a call to the C runtime's memset, an
+ * import no driver here may carry. */
 VOID NetZero(PVOID dst, ULONG n)
 {
-    PUCHAR p = (PUCHAR)dst;
+    volatile UCHAR *p = (volatile UCHAR *)dst;
 
     while (n != 0) {
         *p = 0;

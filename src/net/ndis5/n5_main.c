@@ -346,7 +346,7 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
     }
     NetCmQuery(a, &info);
     for (i = 0; i < 6; i++) {
-        a->Mac[i] = info.Mac[i];
+        ((volatile UCHAR *)a->Mac)[i] = info.Mac[i];
     }
 
     status = NetRxAlloc(a);

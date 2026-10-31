@@ -58,11 +58,16 @@ static void netPut32le(UCHAR *p, ULONG v)
     p[3] = (UCHAR)((v >> 24) & 0xFFUL);
 }
 
+/* The destination volatile: an optimising compiler (WDK 7.1's cl 15 at
+ * /Oxs) otherwise turns the loop into a call to the C runtime's memcpy, an
+ * import no driver here may carry. */
 static void netCopy(UCHAR *dst, const UCHAR *src, ULONG n)
 {
+    volatile UCHAR *d = (volatile UCHAR *)dst;
+
     while (n != 0) {
-        *dst = *src;
-        dst++;
+        *d = *src;
+        d++;
         src++;
         n--;
     }
@@ -168,12 +173,13 @@ ULONG NetTxPacketId(NET_TX *Tx, ULONG PeerStns)
 
 void NetRxInit(NET_RX *Rx, UCHAR *Buffer, ULONG Capacity)
 {
+    volatile ULONG *drops = Rx->Drops;
     ULONG i;
 
     Rx->Buffer = Buffer;
     Rx->Capacity = Capacity;
     for (i = 0; i < NET_RXDROP_REASONS; i++) {
-        Rx->Drops[i] = 0;
+        drops[i] = 0;
     }
     NetRxReset(Rx);
 }

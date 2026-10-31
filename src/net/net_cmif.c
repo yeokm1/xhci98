@@ -11,9 +11,12 @@
 
 static const GUID netCmGuid = XHCI_CM_NET_GUID_INIT;
 
+/* The destination volatile: an optimising compiler (WDK 7.1's cl 15 at
+ * /Oxs) otherwise turns the loop into a call to the C runtime's memset, an
+ * import no driver here may carry. */
 static VOID netCmIfZero(PVOID p, ULONG n)
 {
-    PUCHAR b = (PUCHAR)p;
+    volatile UCHAR *b = (volatile UCHAR *)p;
 
     while (n != 0) {
         *b = 0;
@@ -144,7 +147,7 @@ ULONG NetCmIfReserve(const XHCI_CM_NET_INTERFACE *Iface, ULONG Count,
         return 0;
     }
     for (k = 0; k < Count; k++) {
-        Buffers[k] = (PUCHAR)va[k];
+        ((PUCHAR volatile *)Buffers)[k] = (PUCHAR)va[k];
     }
     return 1;
 }
