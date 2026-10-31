@@ -6221,3 +6221,11 @@ the version bump.
   PCI Express connection and may still work over USB, and connections
   already made when Windows starts stay unless XhciCmPreOsCleanup ends
   them." (The networking box joins the page with 45.59.)"
+- 45.62 (HEAD): "- (45.62, SUPERSEDES the 45.62 coordinator note above,
+  2026-10-31) With 45.62 merged, on 2000 and XP the known limitation "a
+  drive attached during the install is not listed ... until Windows
+  restarts or the drive is plugged in again" holds as written (a restart
+  lists it): keep the text, do not narrow it. Vista and later were not
+  read. XHCITR's mark line now reads "the Thunderbolt driver has answered
+  it as removable", with "Windows has not recorded it as removable."
+  beside it when Windows has not."
