@@ -206,6 +206,17 @@ static void netRxAbandon(NET_RX *Rx, ULONG reason)
     NetRxReset(Rx);
 }
 
+/* A frame refused before its header could be trusted: it ends the packet
+ * in progress too (counted as a sequence drop), so a lost middle frame
+ * cannot let a later packet's frame of the same Count and Frame ID - 0 for
+ * every packet towards a peer without prtcstns bit 1 - complete it with
+ * another packet's bytes. */
+static ULONG netRxBad(NET_RX *Rx, ULONG reason, ULONG *Why)
+{
+    netRxAbandon(Rx, NET_RXDROP_SEQUENCE);
+    return netRxDrop(Rx, reason, Why);
+}
+
 ULONG NetRxFrame(NET_RX *Rx, const UCHAR *Frame, ULONG FrameLength,
                  ULONG Flags, const UCHAR **Packet, ULONG *PacketLength,
                  ULONG *Why)
@@ -221,20 +232,15 @@ ULONG NetRxFrame(NET_RX *Rx, const UCHAR *Frame, ULONG FrameLength,
     *Why = 0;
 
     /* A frame the host interface flagged is not trusted at all: its Data
-     * Length is not to be believed (Spec 12.3.2.1). It also ends the
-     * packet in progress (counted as a sequence drop): a lost middle frame
-     * would otherwise let a later packet's frame of the same Count and
-     * Frame ID - every packet's ID is 0 towards a peer without prtcstns
-     * bit 1 - complete it with another packet's bytes. */
-    if ((Flags & (NET_RXF_CRC_ERROR | NET_RXF_OVERFLOW)) != 0) {
-        netRxAbandon(Rx, NET_RXDROP_SEQUENCE);
-        if ((Flags & NET_RXF_CRC_ERROR) != 0) {
-            return netRxDrop(Rx, NET_RXDROP_CRC, Why);
-        }
-        return netRxDrop(Rx, NET_RXDROP_OVERFLOW, Why);
+     * Length is not to be believed (Spec 12.3.2.1). */
+    if ((Flags & NET_RXF_CRC_ERROR) != 0) {
+        return netRxBad(Rx, NET_RXDROP_CRC, Why);
+    }
+    if ((Flags & NET_RXF_OVERFLOW) != 0) {
+        return netRxBad(Rx, NET_RXDROP_OVERFLOW, Why);
     }
     if (FrameLength <= NET_HDR_LEN || FrameLength > NET_BUF_LEN) {
-        return netRxDrop(Rx, NET_RXDROP_SHORT, Why);
+        return netRxBad(Rx, NET_RXDROP_SHORT, Why);
     }
 
     size = netGet32le(Frame);
@@ -243,13 +249,13 @@ ULONG NetRxFrame(NET_RX *Rx, const UCHAR *Frame, ULONG FrameLength,
     count = netGet32le(Frame + 8);
 
     if (size == 0 || size > FrameLength - NET_HDR_LEN) {
-        return netRxDrop(Rx, NET_RXDROP_SIZE, Why);
+        return netRxBad(Rx, NET_RXDROP_SIZE, Why);
     }
     if (count == 0 || count > NET_FRAMES_MAX) {
-        return netRxDrop(Rx, NET_RXDROP_COUNT, Why);
+        return netRxBad(Rx, NET_RXDROP_COUNT, Why);
     }
     if (index >= count) {
-        return netRxDrop(Rx, NET_RXDROP_INDEX, Why);
+        return netRxBad(Rx, NET_RXDROP_INDEX, Why);
     }
 
     if (index == 0) {

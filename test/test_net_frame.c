@@ -417,6 +417,32 @@ static void testRxDrops(void)
              "B[1] completes nothing");
     CHECK_EQ(why, NET_RXDROP_ORPHAN, "as orphan");
 
+    /* Every malformed frame ends the packet in progress too: A[0], a
+     * malformed frame, B[0] malformed, then B[1] (same Count, ID 0). */
+    {
+        static const ULONG bad[4][4] = {
+            /* size, index, count, length */
+            { 100, 1, 2, 12 },      /* a header and no data  */
+            { 0, 1, 2, 112 },       /* Frame Size 0          */
+            { 100, 1, 18, 112 },    /* Frame Count 18        */
+            { 100, 2, 2, 112 }      /* Index not below Count */
+        };
+        ULONG i;
+
+        for (i = 0; i < 4; i++) {
+            hdr(f, 4084, 0, 0, 2);
+            CHECK_EQ(rxOne(&rx, f, 4096, 0, &why), NET_RX_HELD, "A[0]");
+            hdr(f, bad[i][0], bad[i][1], 0, bad[i][2]);
+            CHECK_EQ(rxOne(&rx, f, bad[i][3], 0, &why), NET_RX_DROPPED,
+                     "a malformed frame");
+            CHECK_EQ(rx.Active, 0UL, "A abandoned by it");
+            hdr(f, 1, 1, 0, 2);
+            CHECK_EQ(rxOne(&rx, f, 13, 0, &why), NET_RX_DROPPED,
+                     "B[1] completes nothing");
+            CHECK_EQ(why, NET_RXDROP_ORPHAN, "as orphan");
+        }
+    }
+
     /* A two-frame packet whose whole is below 14 bytes. */
     hdr(f, 5, 0, 1, 2);
     (void)rxOne(&rx, f, 17, 0, &why);

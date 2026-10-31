@@ -148,7 +148,8 @@ function Get-RegLines($inf, [string[]]$names) {
         foreach ($l in $sec) {
             $f = $l -split ',', 5
             while ($f.Count -lt 5) { $f += "" }
-            $rows += ,@($f[0].Trim(), $f[1].Trim(), $f[2].Trim(), $f[3].Trim(), $f[4].Trim().Trim('"'))
+            # Every field unquoted: Setup reads "XhciNetMtu" as XhciNetMtu.
+            $rows += ,@($f[0].Trim().Trim('"'), $f[1].Trim().Trim('"'), $f[2].Trim().Trim('"'), $f[3].Trim().Trim('"'), $f[4].Trim().Trim('"'))
         }
     }
     return ,$rows
@@ -421,6 +422,7 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "VAL-PARAM"; From = 'XhciNetMtu,max,,"65522"'; To = 'XhciNetMtu,max,,"65535"' },
         @{ A = "amd64"; Rule = "VAL-PARAM"; From = 'XhciNetMtu,type,,dword'; To = 'XhciNetMtu,type,,int' },
         @{ A = "x86"; Rule = "BOTH-DUPREG"; From = 'HKR,,XhciNetMtu,0x00000002,"1500"'; To = "HKR,,XhciNetMtu,0x00000002,`"1500`"`r`nHKR,,XhciNetMtu,0,`"9000`"" },
+        @{ A = "amd64"; Rule = "BOTH-DUPREG"; From = 'HKR,,XhciNetMtu,0x00000002,"1500"'; To = "HKR,,XhciNetMtu,0x00000002,`"1500`"`r`nHKR,,`"XhciNetMtu`",0,`"9000`"" },
         @{ A = "amd64"; Rule = "BOTH-REGFLAGS"; From = "HKR,Ndi,Service,,xhcinet"; To = "HKR,Ndi,Service,0x00000004,xhcinet" },
         @{ A = "x86"; Rule = "BOTH-REGFLAGS"; From = "HKR,NDIS,MajorNdisVersion,1,05"; To = "HKR,NDIS,MajorNdisVersion,0,05" },
         @{ A = "x86"; Rule = "BOTH-REGFLAGS"; From = "HKR,,DevLoader,,*ndis"; To = "HKR,,DevLoader,0x00010001,*ndis" },

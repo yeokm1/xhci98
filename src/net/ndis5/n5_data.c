@@ -75,26 +75,27 @@ static VOID netResetDone(PNET_ADAPTER a);
 /*
  * The end of one context's completion work (TxActive raised under TxLock
  * when it took its packets): TxLock held on entry, released here. When
- * it was the last and a reset waits, the reset completes, once. Returns
- * 1 when the adapter is halting, so the caller touches it no more.
- * IRQL: <= DISPATCH_LEVEL.
+ * it is the last and a reset waits, the reset completes, once, while this
+ * context still counts in TxActive, so a halt cannot free the adapter
+ * under it; a reset NDIS issues meanwhile is completed the same way. The
+ * release of TxLock is the context's last access to the adapter here.
+ * Returns 1 when the adapter is halting, so the caller touches it no
+ * more. IRQL: <= DISPATCH_LEVEL.
  */
 static ULONG netTxEnd(PNET_ADAPTER a)
 {
-    ULONG resetDone = 0;
     ULONG halting;
 
-    a->TxActive--;
-    if (a->TxActive == 0 && a->ResetPending) {
+    while (a->TxActive == 1 && a->ResetPending) {
         a->ResetPending = 0;
         a->ResetGate = 0;
-        resetDone = 1;
+        NdisReleaseSpinLock(&a->TxLock);
+        netResetDone(a);
+        NdisAcquireSpinLock(&a->TxLock);
     }
+    a->TxActive--;
     halting = a->Halting;
     NdisReleaseSpinLock(&a->TxLock);
-    if (resetDone) {
-        netResetDone(a);
-    }
     return halting;
 }
 
@@ -113,7 +114,9 @@ VOID NetFlushSends(PNET_ADAPTER a, NDIS_STATUS status)
 }
 
 /* The reset's completion, from the last context completing sends: at
- * DISPATCH_LEVEL with no spin lock held (record 35 section 7.5). */
+ * DISPATCH_LEVEL with no spin lock held (record 35 section 7.5). The
+ * queue that gathered behind the gate is served by that context's own
+ * loop (NetServe) once it is done. */
 static VOID netResetDone(PNET_ADAPTER a)
 {
     KIRQL old;
@@ -122,7 +125,6 @@ static VOID netResetDone(PNET_ADAPTER a)
     NdisMResetComplete(a->Handle, NDIS_STATUS_SUCCESS, FALSE);
     KeLowerIrql(old);
     NetCmLog(a, "net.reset.done", 0);
-    NetServe(a);
 }
 
 #define NET_SENT        0UL

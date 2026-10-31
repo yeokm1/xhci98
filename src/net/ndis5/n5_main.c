@@ -205,6 +205,8 @@ static VOID netWorker(PVOID ctx)
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
+static VOID netStopWorker(PNET_ADAPTER a);
+
 /* IRQL: PASSIVE_LEVEL. */
 static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
 {
@@ -233,6 +235,15 @@ static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
         }
     }
     (VOID)ZwClose(h);
+    if (!NT_SUCCESS(status)) {
+        /* NT without the object: no join that proves the thread has left
+         * the image, so the initialisation fails; the thread is told to
+         * leave, its event waited for, and its last instructions given
+         * 100 ms before the image can be unloaded. */
+        netStopWorker(a);
+        NdisMSleep(100000);
+        return NDIS_STATUS_RESOURCES;
+    }
     return NDIS_STATUS_SUCCESS;
 }
 
