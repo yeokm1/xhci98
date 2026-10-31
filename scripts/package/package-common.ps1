@@ -516,9 +516,10 @@ TEXT-MODE SETUP (F6): WINDOWS 2000, XP AND XP X64
 
 Copy the files at the root of nt-x86\ (nt-x64\ for XP x64 and Server 2003
 x64), without its subfolders, to a floppy disk, and press F6 when Setup
-asks for additional drivers. txtsetup.oem on it lists the options; the
-Windows 2000 one also needs usbd.sys, hidclass.sys and hidparse.sys from
-your Windows 2000 CD on the same floppy.
+asks for additional drivers. txtsetup.oem on it lists the options. For
+the Windows 2000 option "files from CD", also copy USBD.SY_, HIDCLASS.SY_
+and HIDPARSE.SY_ from the I386 folder of your Windows 2000 CD to the
+floppy's root, unchanged: do not expand or rename them.
 
 AFTER AN INTEGRATED INSTALL, RUN SETUP.EXE
 

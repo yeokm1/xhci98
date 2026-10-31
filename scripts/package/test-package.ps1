@@ -2015,7 +2015,7 @@ try {
     $itLines = @($it -split "`r`n")
     Assert-True (@($itLines | Where-Object { $_.Length -gt 78 -or $_ -match '[^\x20-\x7E]' }).Count -eq 0) "INTEGRATE.TXT has a line over 78 columns or a character outside printable ASCII."
     foreach ($fam in $script:FamilyNames) { Assert-True ($it -match ('(?m)^  ' + [regex]::Escape($fam) + '\\')) "INTEGRATE.TXT does not name $fam\ in its table." }
-    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "9.9.9.9")) {
+    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_")) {
         Assert-True ($it.Contains($need)) "INTEGRATE.TXT does not say '$need'."
     }
     Assert-True ($it -notmatch '(?i)emulat|virtual machine|untested|not tested|qemu') "INTEGRATE.TXT carries testing-status wording."

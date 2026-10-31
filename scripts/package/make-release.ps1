@@ -3461,6 +3461,13 @@ To cut one, run this script without it.
         # 0.4.0.0) added it to the upload set only, never to releases\, so
         # its published tree cannot rebuild that asset (task 42-A.30).
         $pubReadme = Join-Path $finalRoot "readme.txt"
+        # A family tree (from 3.4.0.0) whose readme declares Stor98 holds
+        # it in a family folder's stor98\ (design record 36 section 2).
+        if ($pubLayout -eq "family" -and (Test-Path -LiteralPath $pubReadme) -and
+            ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
+            @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $finalRoot "$_\stor98\stor98.inf") -PathType Leaf }).Count -eq 0) {
+            throw "'$finalRoot''s readme declares the bundled Stor98, and no family folder holds stor98\stor98.inf: the download would not carry what its readme says."
+        }
         if ($pubLayout -ne "family" -and (Test-Path -LiteralPath $pubReadme) -and
             ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
             @($legDirs | Where-Object { $_ -like "release-*" -and (Test-Path -LiteralPath (Join-Path (Join-Path $finalRoot $_) "stor98.inf")) }).Count -eq 0) {
@@ -4307,8 +4314,11 @@ invalidate readings already taken on these exact bytes - say so:
     # the publication.
     $legWorkRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-legs-" + [System.IO.Path]::GetRandomFileName())
     $script:FlatViewDirs += $legWorkRoot
+    # -CheckOnly stages nothing: its legs' directories are the build
+    # outputs themselves, read in place, so nothing is moved or re-laid.
     $familyFlat = @{}
     foreach ($leg in $legs) {
+        if ($CheckOnly) { break }
         if (-not $staged.ContainsKey($leg.Id)) { continue }
         if ($familyFlat.ContainsKey($leg.PkgArch)) { throw "two legs of architecture $($leg.PkgArch): the family layout publishes one package an architecture." }
         New-Item -ItemType Directory -Force -Path $legWorkRoot | Out-Null
