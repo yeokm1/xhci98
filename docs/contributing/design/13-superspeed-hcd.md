@@ -1302,7 +1302,10 @@ where the bus left it, and ends what the bus holds as the shutdown does:
    `STATUS_UNSUCCESSFUL`;
 2. the resume's state (`ResumePhase`, design record 20 section 4.3.3) set
    FAILED if it is still PENDING, with `MarkGen` moved, so `xhciuas.sys`'s
-   wake check fails at once instead of waiting out its bound;
+   wake check fails at once instead of waiting out its bound. A later
+   resume begins PENDING again (`hcdResume`) and ends as any resume does,
+   and a PnP start publishes RUNNING, so a refused D0 leaves no FAILED on a
+   controller that serves;
 3. the commands flushed (`HcdCfgShutFlush`);
 4. the transfers flushed (`HcdIoShutFlush`) on the halt's proof. The
    function cannot be read now, so the proof is the one the suspend took:

@@ -143,8 +143,14 @@ static VOID hcdResume(PHCD_CONTROLLER hc)
     ULONG restores;
 
     restores = hc->Hc.Quirk.Restores;
-    /* Task 45.63: the controller runs again, so the suspend's proof ends. */
+    /* Task 45.63: the controller runs again, so the suspend's proof ends;
+     * and this resume begins PENDING, whatever a D0 the bus failed before
+     * it left (hcdD0Refused): it ends RUNNING or FAILED below or at the
+     * thread's pass (design record 20 section 4.3.3). */
     hc->SuspendHaltProven = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->ResumePhase = XHCI98_RESUME_PENDING;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
     /* Task 45.23 (design record 20 section 4.3.2): the invalidation this
      * resume's re-initialization raises is marked, and the devices may be
      * kept only once it has succeeded - its HCRST done. */
