@@ -367,6 +367,7 @@ typedef struct _UAS_PCMD {
 extern PDRIVER_OBJECT UasDriverObject;
 
 /* uas_mem.c - every pool and MDL call in the driver. PASSIVE or DISPATCH. */
+VOID UasPoolInit(VOID);
 PVOID UasAlloc(ULONG bytes);
 VOID UasFree(PVOID p);
 PMDL UasDataMdl(PIRP request, PSCSI_REQUEST_BLOCK srb);

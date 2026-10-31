@@ -1797,6 +1797,33 @@ it to that), so an amd64 image keeps a `.rdata` section, read-only and
 not executable, holding the IAT, as Stor98's does. The x86 images do not
 change. No import changes, so neither import gate does.
 
+### The nonpaged pool type - read 2026-10-31 (roadmap-usb4 task 45.63)
+
+With the import address table out of `.text` (above), the next start
+under the same Verifier flags on a fresh 10 x64 guest (the Alpine Ridge
+profile) stopped with bug check 0xC4 (0x2000, `0xFFFFF80884F3BF69`, 0,
+`0x6D436858`): an allocation of pool type 0, `NonPagedPool`, which is
+executable, tagged `XhCm`, `xhcicm.sys`'s `CM_POOL_TAG`. Every nonpaged
+allocation of the three drivers was of that type (`hcd_pool.c`,
+`cm_pool.c`, `uas_mem.c`), as design record 13 section 7.5 rule 2 asked:
+the only nonpaged type Windows 98, ME and 2000 to 7 have.
+
+The fix: each driver chooses its nonpaged type once in `DriverEntry`
+(`HcdPoolInit`, `CmPoolInit`, `UasPoolInit`, before any allocation):
+`NonPagedPoolNx` (512, Windows 8's no-execute nonpaged pool; the Windows
+2000 DDK and WDK 7.1 predate the name) on NT 6.2 and later, otherwise
+`NonPagedPool`. NT is told by `IoIsWdmVersionAvailable(1, 0x10)` first,
+then the version is read from the kernel's shared data page
+(`SharedUserData->NtMajorVersion`, `NtMinorVersion`), as `cm_filt.c`
+already reads it: Windows 98 and ME have no such page, and
+`IoIsWdmVersionAvailable` does not tell Windows 8 from 8.1. One binary
+per architecture still: the x86 image picks `NonPagedPool` on Windows 98,
+ME and 2000 to 7 and `NonPagedPoolNx` on 32-bit 8, 8.1 and 10. `xhciuas.sys`
+gains the `IoIsWdmVersionAvailable` import (a row in each of its
+allowlists, with the evidence `xhci98.sys`'s rows carry); the other two
+already import it. The paged allocations (`HcdPoolAllocRequirements`,
+`CmAllocPaged`) are unchanged: paged pool is never executable.
+
 ---
 
 ## 9. The code changes

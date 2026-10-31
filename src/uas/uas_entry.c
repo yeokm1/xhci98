@@ -223,6 +223,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     UasDriverObject = DriverObject;
+    UasPoolInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = uasDispatchOther;
     }
