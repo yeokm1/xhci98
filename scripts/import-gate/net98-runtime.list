@@ -1,0 +1,49 @@
+# net98-runtime.list - recorded loads on Windows 98 SE and ME of NDIS 5
+# WDM miniports, the "w98-runtime <record>" evidence of
+# xhcinet-imports.allow's NDIS.SYS rows (check-imports.ps1 -GateProfile
+# net98; design record 35 section 7.8, task 45.59 step S6). A row names a
+# record here, and the gate requires the record to list both systems and
+# the row's pair among the imports the observed image carried.
+#
+# Each record: "[record <key>]", then "repository", "commit",
+# "observation" (the run record), "imports" (the image's declared import
+# list, the source of the pairs below), "systems" (the systems the
+# observation loaded and ran it on), and the NDIS.SYS pairs, one a line,
+# transcribed from that import list at that commit. Runtime evidence,
+# QEMU only; nothing of NDIS.VXD is read.
+
+[record cdcnet-9x]
+repository usb-wdm-free
+commit 57ba809
+observation docs/testing/2026-10-22-cdcnet-9x.md
+imports src/net/cdcnet/imports-ndis5.txt
+systems 98SE ME
+NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES
+NDIS.SYS!NdisAcquireSpinLock
+NDIS.SYS!NdisAdjustBufferLength
+NDIS.SYS!NdisAllocateBuffer
+NDIS.SYS!NdisAllocateBufferPool
+NDIS.SYS!NdisAllocateMemory
+NDIS.SYS!NdisAllocatePacket
+NDIS.SYS!NdisAllocatePacketPool
+NDIS.SYS!NdisAllocateSpinLock
+NDIS.SYS!NdisCloseConfiguration
+NDIS.SYS!NdisFreeBuffer
+NDIS.SYS!NdisFreeBufferPool
+NDIS.SYS!NdisFreeMemory
+NDIS.SYS!NdisFreePacket
+NDIS.SYS!NdisFreePacketPool
+NDIS.SYS!NdisFreeSpinLock
+NDIS.SYS!NdisInitializeWrapper
+NDIS.SYS!NdisMGetDeviceProperty
+NDIS.SYS!NdisMRegisterMiniport
+NDIS.SYS!NdisMSetAttributesEx
+NDIS.SYS!NdisMSleep
+NDIS.SYS!NdisOpenConfiguration
+NDIS.SYS!NdisQueryBuffer
+NDIS.SYS!NdisQueryBufferOffset
+NDIS.SYS!NdisReadConfiguration
+NDIS.SYS!NdisReleaseSpinLock
+NDIS.SYS!NdisTerminateWrapper
+NDIS.SYS!NdisUnchainBufferAtFront
+NDIS.SYS!NdisWriteErrorLogEntry

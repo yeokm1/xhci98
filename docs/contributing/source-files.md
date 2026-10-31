@@ -427,6 +427,23 @@ The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly 
 | `src\pfw\nt\check-pfwsys.ps1`, `pfw-sys-imports.allow` | The gate on the driver image: PE32 for i386, native subsystem, a driver; every import a row of the list and no module but `ntoskrnl.exe` and `HAL.dll`; the stamp `XHCIPFW.SYS <version>`; exactly one flavour marker; no `HAL.dll!WRITE_PORT_UCHAR` (the qemu image's debug-console writer) in the release image. |
 | `scripts\import-gate\xhcipfw-imports.allow` | `XHCIPFW.SYS`'s import allowlist for the import gate's `hlprx86` profile: every row an export of every authenticated kernel and HAL of 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86; `KeIpiGenericCall` denied. |
 
+## Thunderbolt networking - `src\net\`
+
+`xhcinet.sys`, the NDIS 5 miniport of Thunderbolt networking (design record 35 section 7, `roadmap-usb4.md` task 45.59 step S6): NDIS 5.0 on x86 (98 SE to 7), 5.1 on amd64 (XP x64 to 7 x64), above `xhcicm.sys`'s network PDO `XHCICM\TBNET`, built by `scripts\build-driver.cmd :buildnet` after `xhcicm.sys` in every x86 and amd64 run, from `src\net\ndis5\sources`.
+
+| File | What it is |
+|---|---|
+| `net_frame.c` / `net_frame.h` | The pure USB4NET framing core (record 35 sections 7.2 to 7.4): the transmit split into 4084-byte USB4 frames and their 12-byte header, the Frame ID rule, the receive checks and reassembly, and the receive segmentation of a TCP segment longer than the adapter's maximum over IPv4 and IPv6. DDK-free; host suite `test_net_frame`. |
+| `net_cm.h` | The network driver's view of the interface `xhcicm.sys` gives the network PDO (record 35 section 6.3), until `src\xhci_cmnet.h` (step S5) is in the tree; only `ndis5\n5_cm.c` includes it. |
+| `ndis5\xhcinet.h` | The adapter's state and the miniport's cross-file entry points. |
+| `ndis5\n5_main.c` | `DriverEntry`, the initialisation (`XhciNetMtu`, the interface, the receive pool, the power thread) and the halt, the OIDs, the power OIDs' thread and, on amd64, the shutdown and PnP event handlers. |
+| `ndis5\n5_data.c` | The data path: the send queue served by one sender at a time, the reset, the receive callback's reassembly, segmentation and indication, and the link. |
+| `ndis5\n5_cm.c` | The interface glue: `IRP_MN_QUERY_INTERFACE` to the device object below, `Open`, `Close`, `QueryInfo`, `Log`. |
+| `ndis5\sources`, `makefile`, `xhcinet.rc` | The build and the version resource. |
+| `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2), gated by `scripts\inf-gate\check-net-inf.ps1`. |
+
+The import gate holds the x86 image with `-GateProfile net98` over `scripts\import-gate\xhcinet-imports.allow` and the amd64 one over `xhcinet-imports-amd64.allow`. `test\test_net_frame.c` is the host suite.
+
 ## The user-mode tools
 
 Each tool is a tree at the repository root, built by its own `build.cmd` and published under `releases\<version>\tools\`; `scripts\build-driver.cmd` runs a tool's self-test when its executable has been built.

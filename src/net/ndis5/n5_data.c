@@ -70,6 +70,34 @@ static PNDIS_PACKET netDetach(PNET_ADAPTER a)
     return list;
 }
 
+static VOID netResetDone(PNET_ADAPTER a);
+
+/*
+ * The end of one context's completion work (TxActive raised under TxLock
+ * when it took its packets): TxLock held on entry, released here. When
+ * it was the last and a reset waits, the reset completes, once. Returns
+ * 1 when the adapter is halting, so the caller touches it no more.
+ * IRQL: <= DISPATCH_LEVEL.
+ */
+static ULONG netTxEnd(PNET_ADAPTER a)
+{
+    ULONG resetDone = 0;
+    ULONG halting;
+
+    a->TxActive--;
+    if (a->TxActive == 0 && a->ResetPending) {
+        a->ResetPending = 0;
+        a->ResetGate = 0;
+        resetDone = 1;
+    }
+    halting = a->Halting;
+    NdisReleaseSpinLock(&a->TxLock);
+    if (resetDone) {
+        netResetDone(a);
+    }
+    return halting;
+}
+
 /* Completes every queued send with status. IRQL: <= DISPATCH_LEVEL. */
 VOID NetFlushSends(PNET_ADAPTER a, NDIS_STATUS status)
 {
@@ -77,11 +105,14 @@ VOID NetFlushSends(PNET_ADAPTER a, NDIS_STATUS status)
 
     NdisAcquireSpinLock(&a->TxLock);
     list = netDetach(a);
+    a->TxActive++;
     NdisReleaseSpinLock(&a->TxLock);
     netCompleteList(a, list, status);
+    NdisAcquireSpinLock(&a->TxLock);
+    (VOID)netTxEnd(a);
 }
 
-/* The reset's completion, from the sender that held it up: at
+/* The reset's completion, from the last context completing sends: at
  * DISPATCH_LEVEL with no spin lock held (record 35 section 7.5). */
 static VOID netResetDone(PNET_ADAPTER a)
 {
@@ -91,6 +122,7 @@ static VOID netResetDone(PNET_ADAPTER a)
     NdisMResetComplete(a->Handle, NDIS_STATUS_SUCCESS, FALSE);
     KeLowerIrql(old);
     NetCmLog(a, "net.reset.done", 0);
+    NetServe(a);
 }
 
 #define NET_SENT        0UL
@@ -172,11 +204,14 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
 }
 
 /*
- * Serves the queue: one sender at a time (TxServing), the head packet
- * framed and committed with TxLock released and completed with no lock
- * held. A full ring leaves the packet at the head until TxDone serves
- * again; work that arrives while a sender serves sets TxKick, which the
- * sender reads under the lock before it stops.
+ * Serves the queue: one sender at a time (TxServing, held until its
+ * packet is completed), the head packet framed and committed with TxLock
+ * released and completed with no lock held. Every context that completes
+ * sends counts itself in TxActive from the moment it takes them until
+ * they are completed, so a reset completes, and a halt frees, only after
+ * the last of them. A full ring leaves the packet at the head until
+ * TxDone serves again; work that arrives while a sender serves sets
+ * TxKick, which the sender reads under the lock before it stops.
  * IRQL: <= DISPATCH_LEVEL.
  */
 VOID NetServe(PNET_ADAPTER a)
@@ -185,7 +220,6 @@ VOID NetServe(PNET_ADAPTER a)
     PNDIS_PACKET list;
     ULONG stns;
     ULONG r;
-    ULONG resetDone;
     NDIS_STATUS status;
 
     for (;;) {
@@ -203,8 +237,13 @@ VOID NetServe(PNET_ADAPTER a)
         if (!a->LinkUp || !a->CmOpen || a->Halting) {
             list = netDetach(a);
             a->TxDown++;
+            a->TxActive++;
             NdisReleaseSpinLock(&a->TxLock);
             netCompleteList(a, list, NET_STATUS_DOWN);
+            NdisAcquireSpinLock(&a->TxLock);
+            if (netTxEnd(a)) {
+                return;
+            }
             continue;
         }
         a->TxHead = NET_NEXT(p);
@@ -213,21 +252,22 @@ VOID NetServe(PNET_ADAPTER a)
         }
         NET_NEXT(p) = NULL;
         a->TxServing = 1;
+        a->TxActive++;
         a->TxKick = 0;
         stns = a->PeerStns;
         NdisReleaseSpinLock(&a->TxLock);
 
         r = netSendOne(a, p, stns);
 
-        resetDone = 0;
         NdisAcquireSpinLock(&a->TxLock);
-        if (r == NET_FULL && !a->ResetGate) {
+        if (r == NET_FULL && !a->ResetGate && !a->Halting) {
             NET_NEXT(p) = a->TxHead;
             a->TxHead = p;
             if (a->TxTail == NULL) {
                 a->TxTail = p;
             }
             a->TxServing = 0;
+            a->TxActive--;
             if (a->TxKick) {
                 a->TxKick = 0;
                 NdisReleaseSpinLock(&a->TxLock);
@@ -236,12 +276,6 @@ VOID NetServe(PNET_ADAPTER a)
             a->TxFullWaits++;
             NdisReleaseSpinLock(&a->TxLock);
             return;
-        }
-        a->TxServing = 0;
-        if (a->ResetPending) {
-            a->ResetPending = 0;
-            a->ResetGate = 0;
-            resetDone = 1;
         }
         NdisReleaseSpinLock(&a->TxLock);
 
@@ -253,8 +287,11 @@ VOID NetServe(PNET_ADAPTER a)
             status = NDIS_STATUS_FAILURE;
         }
         NdisMSendComplete(a->Handle, p, status);
-        if (resetDone) {
-            netResetDone(a);
+
+        NdisAcquireSpinLock(&a->TxLock);
+        a->TxServing = 0;
+        if (netTxEnd(a)) {
+            return;
         }
     }
 }
@@ -283,33 +320,42 @@ VOID NetSendPackets(NDIS_HANDLE ctx, PPNDIS_PACKET packets, UINT count)
 }
 
 /*
- * MiniportReset (record 35 section 7.5): nothing below is reset; the
- * queue is completed with NDIS_STATUS_RESET_IN_PROGRESS and the reset
- * completes once no sender is inside a send, so no packet sent before
- * the reset is completed after it. IRQL: <= DISPATCH_LEVEL.
+ * MiniportReset (record 35 section 7.5): nothing below is reset. The gate
+ * closes (no sender starts), the queue is completed with
+ * NDIS_STATUS_RESET_IN_PROGRESS, counted in TxActive like any completion,
+ * and the reset completes when the last context completing sends is done:
+ * here, returning success, when that is this drain, else by
+ * NdisMResetComplete from that last context. So no packet sent before the
+ * reset is completed after it. IRQL: <= DISPATCH_LEVEL.
  */
 NDIS_STATUS NetReset(PBOOLEAN addressingReset, NDIS_HANDLE ctx)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     PNDIS_PACKET list;
-    ULONG serving;
+    ULONG pending;
 
     *addressingReset = FALSE;
     NdisAcquireSpinLock(&a->TxLock);
     a->ResetGate = 1;
     list = netDetach(a);
-    serving = a->TxServing;
-    if (serving) {
+    a->TxActive++;
+    NdisReleaseSpinLock(&a->TxLock);
+    netCompleteList(a, list, NDIS_STATUS_RESET_IN_PROGRESS);
+
+    NdisAcquireSpinLock(&a->TxLock);
+    a->TxActive--;
+    pending = (a->TxActive != 0) ? 1UL : 0UL;
+    if (pending) {
         a->ResetPending = 1;
     } else {
         a->ResetGate = 0;
     }
     NdisReleaseSpinLock(&a->TxLock);
-    netCompleteList(a, list, NDIS_STATUS_RESET_IN_PROGRESS);
-    NetCmLog(a, "net.reset", serving);
-    if (serving) {
+    NetCmLog(a, "net.reset", pending);
+    if (pending) {
         return NDIS_STATUS_PENDING;
     }
+    NetServe(a);
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -461,21 +507,20 @@ VOID NetReturnPacket(NDIS_HANDLE ctx, PNDIS_PACKET packet)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     PNDIS_BUFFER b;
-    ULONG drained = 0;
 
     NdisQueryPacket(packet, NULL, NULL, &b, NULL);
     NdisAdjustBufferLength(b, a->MaxFrame);
     NdisRecalculatePacketCounts(packet);
+    /* The halt waits for RxDrained and then takes RxLock once, so the
+     * event is set with the lock held and nothing of the adapter is
+     * touched after its release. */
     NdisAcquireSpinLock(&a->RxLock);
     a->RxFree[a->RxFreeCount++] = packet;
     a->RxOut--;
     if (a->RxOut == 0 && a->Halting) {
-        drained = 1;
-    }
-    NdisReleaseSpinLock(&a->RxLock);
-    if (drained) {
         (VOID)KeSetEvent(&a->RxDrained, IO_NO_INCREMENT, FALSE);
     }
+    NdisReleaseSpinLock(&a->RxLock);
 }
 
 /* An assembled frame: passed up within the maximum, else split (section

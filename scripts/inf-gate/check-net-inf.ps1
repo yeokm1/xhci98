@@ -35,6 +35,9 @@ The rule families, each named as the other INF gates name theirs:
             ServiceType 1, StartType 3, ServiceBinary %12%\xhcinet.sys and
             the NDIS load order group, Ndi\Service xhcinet, UpperRange ndis5
             and LowerRange ethernet.
+  BOTH-DUPREG, BOTH-REGFLAGS
+            One write a registry target on each path, and each a plain
+            string write but the binary NDIS version and the values below.
   VAL-*     The owner's rule of 2026-10-30: every value the driver reads
             written by every install path at its default with no-overwrite
             (0x00000002, a string), and its Ndi\params entry (ParamDesc,
@@ -158,6 +161,12 @@ function Find-Reg($rows, [string]$sub, [string]$value) {
     return $null
 }
 
+# A string value's flags: empty, 0 or 0x00000000 (FLG_ADDREG_TYPE_SZ, no
+# operation bit); anything else changes the type or deletes (0x4).
+function Test-StrFlags([string]$f) {
+    return ($f -eq "" -or $f -match '^(0|0x0+)$')
+}
+
 function Test-NetInf {
     param([string]$Text, [byte[]]$Bytes, [string]$A, [string]$Label)
     $fails = New-Object System.Collections.ArrayList
@@ -262,6 +271,26 @@ function Test-NetInf {
             if ($null -eq (Get-Section $inf $n)) { Fail "BOTH-SECTION" "[$($p.Name)] names [$n], which is missing" }
         }
         $rows = Get-RegLines $inf $addReg
+
+        # One write a target: a second row for the same value would undo
+        # the first (an overwrite after the no-overwrite default, say).
+        $seen = @{}
+        foreach ($r in $rows) {
+            $t = ($r[0] + "," + $r[1] + "," + $r[2]).ToLowerInvariant()
+            if ($seen.ContainsKey($t)) { Fail "BOTH-DUPREG" "[$($p.Name)] writes $($r[0]),$($r[1]),$($r[2]) twice" }
+            $seen[$t] = $true
+        }
+        # Every row but the driver's values and the binary NDIS version a
+        # plain string write.
+        foreach ($r in $rows) {
+            $isValue = ($r[1] -eq "" -and $r[2] -like "XhciNet*")
+            $isBin = ($r[1] -ieq "NDIS" -and ($r[2] -ieq "MajorNdisVersion" -or $r[2] -ieq "MinorNdisVersion"))
+            if ($isBin) {
+                if ($r[3] -ne "1") { Fail "BOTH-REGFLAGS" "[$($p.Name)] HKR,$($r[1]),$($r[2]) flags '$($r[3])' are not 1 (binary)" }
+            } elseif (-not $isValue -and -not (Test-StrFlags $r[3])) {
+                Fail "BOTH-REGFLAGS" "[$($p.Name)] HKR,$($r[1]),$($r[2]) flags '$($r[3])' are not a plain string write"
+            }
+        }
         $dirs = Get-Section $inf "DestinationDirs"
         $copiesImage = $false
         $dirOk = $true
@@ -391,6 +420,10 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "VAL-WRITTEN"; From = "AddReg=Net.RegNt,Net.Values,Net.Params"; To = "AddReg=Net.RegNt,Net.Params" },
         @{ A = "x86"; Rule = "VAL-PARAM"; From = 'XhciNetMtu,max,,"65522"'; To = 'XhciNetMtu,max,,"65535"' },
         @{ A = "amd64"; Rule = "VAL-PARAM"; From = 'XhciNetMtu,type,,dword'; To = 'XhciNetMtu,type,,int' },
+        @{ A = "x86"; Rule = "BOTH-DUPREG"; From = 'HKR,,XhciNetMtu,0x00000002,"1500"'; To = "HKR,,XhciNetMtu,0x00000002,`"1500`"`r`nHKR,,XhciNetMtu,0,`"9000`"" },
+        @{ A = "amd64"; Rule = "BOTH-REGFLAGS"; From = "HKR,Ndi,Service,,xhcinet"; To = "HKR,Ndi,Service,0x00000004,xhcinet" },
+        @{ A = "x86"; Rule = "BOTH-REGFLAGS"; From = "HKR,NDIS,MajorNdisVersion,1,05"; To = "HKR,NDIS,MajorNdisVersion,0,05" },
+        @{ A = "x86"; Rule = "BOTH-REGFLAGS"; From = "HKR,,DevLoader,,*ndis"; To = "HKR,,DevLoader,0x00010001,*ndis" },
         @{ A = "x86"; Rule = "VAL-UNKNOWN"; From = 'HKR,,XhciNetMtu,0x00000002,"1500"'; To = "HKR,,XhciNetMtu,0x00000002,`"1500`"`r`nHKR,,XhciNetPoll,0x00000002,`"1`"" }
     )
     foreach ($a in @("x86", "amd64")) {

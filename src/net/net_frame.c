@@ -221,12 +221,16 @@ ULONG NetRxFrame(NET_RX *Rx, const UCHAR *Frame, ULONG FrameLength,
     *Why = 0;
 
     /* A frame the host interface flagged is not trusted at all: its Data
-     * Length is not to be believed (Spec 12.3.2.1), so it does not end or
-     * continue the packet in progress either; the next frame decides. */
-    if ((Flags & NET_RXF_CRC_ERROR) != 0) {
-        return netRxDrop(Rx, NET_RXDROP_CRC, Why);
-    }
-    if ((Flags & NET_RXF_OVERFLOW) != 0) {
+     * Length is not to be believed (Spec 12.3.2.1). It also ends the
+     * packet in progress (counted as a sequence drop): a lost middle frame
+     * would otherwise let a later packet's frame of the same Count and
+     * Frame ID - every packet's ID is 0 towards a peer without prtcstns
+     * bit 1 - complete it with another packet's bytes. */
+    if ((Flags & (NET_RXF_CRC_ERROR | NET_RXF_OVERFLOW)) != 0) {
+        netRxAbandon(Rx, NET_RXDROP_SEQUENCE);
+        if ((Flags & NET_RXF_CRC_ERROR) != 0) {
+            return netRxDrop(Rx, NET_RXDROP_CRC, Why);
+        }
         return netRxDrop(Rx, NET_RXDROP_OVERFLOW, Why);
     }
     if (FrameLength <= NET_HDR_LEN || FrameLength > NET_BUF_LEN) {

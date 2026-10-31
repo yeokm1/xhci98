@@ -193,11 +193,15 @@ static VOID netWorker(PVOID ctx)
             NetFlushSends(a, NET_STATUS_DOWN);
             NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
         } else if (req == NET_WORK_D0) {
-            a->PowerD3 = 0;
-            (VOID)NetCmOpen(a);
-            NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
+            NDIS_STATUS status = NetCmOpen(a);
+
+            if (status == NDIS_STATUS_SUCCESS) {
+                a->PowerD3 = 0;
+            }
+            NdisMSetInformationComplete(a->Handle, status);
         }
     }
+    (VOID)KeSetEvent(&a->WorkExited, IO_NO_INCREMENT, FALSE);
     (VOID)PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
@@ -208,17 +212,27 @@ static NDIS_STATUS netStartWorker(PNET_ADAPTER a)
     NTSTATUS status;
 
     KeInitializeEvent(&a->WorkEvent, NotificationEvent, FALSE);
+    KeInitializeEvent(&a->WorkExited, NotificationEvent, FALSE);
+    a->WorkThread = NULL;
     status = PsCreateSystemThread(&h, THREAD_ALL_ACCESS, NULL, NULL, NULL,
                                   netWorker, a);
     if (!NT_SUCCESS(status)) {
         return NDIS_STATUS_RESOURCES;
     }
-    status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, NULL,
-                                       KernelMode, &a->WorkThread, NULL);
-    (VOID)ZwClose(h);
-    if (!NT_SUCCESS(status)) {
-        a->WorkThread = NULL;
+    /* The join differs by target, as src\cm\cm_thr.c's: the thread
+     * object on NT (WDM 1.10 and later), whose signal alone says the
+     * thread has left the image; the exit event on Windows 98 and ME,
+     * where a wait on a thread object faults (win98-wdm.md). */
+    status = STATUS_SUCCESS;
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        status = ObReferenceObjectByHandle(h, THREAD_ALL_ACCESS, NULL,
+                                           KernelMode, &a->WorkThread,
+                                           NULL);
+        if (!NT_SUCCESS(status)) {
+            a->WorkThread = NULL;
+        }
     }
+    (VOID)ZwClose(h);
     return NDIS_STATUS_SUCCESS;
 }
 
@@ -233,6 +247,8 @@ static VOID netStopWorker(PNET_ADAPTER a)
         netWait(a->WorkThread);
         ObDereferenceObject(a->WorkThread);
         a->WorkThread = NULL;
+    } else {
+        netWait(&a->WorkExited);
     }
 }
 
@@ -353,7 +369,7 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
 static VOID netHalt(NDIS_HANDLE ctx)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
-    ULONG serving;
+    ULONG busy;
     ULONG out;
 
     netLiveSet(a, NULL);
@@ -367,20 +383,33 @@ static VOID netHalt(NDIS_HANDLE ctx)
     NetFlushSends(a, NDIS_STATUS_FAILURE);
     for (;;) {
         NdisAcquireSpinLock(&a->TxLock);
-        serving = a->TxServing;
+        busy = a->TxServing | a->TxActive;
         NdisReleaseSpinLock(&a->TxLock);
-        if (!serving) {
+        if (!busy) {
             break;
         }
         NdisMSleep(1000);
     }
     NetFlushSends(a, NDIS_STATUS_FAILURE);
+    for (;;) {
+        NdisAcquireSpinLock(&a->TxLock);
+        busy = a->TxActive;
+        NdisReleaseSpinLock(&a->TxLock);
+        if (!busy) {
+            break;
+        }
+        NdisMSleep(1000);
+    }
 
     NdisAcquireSpinLock(&a->RxLock);
     out = a->RxOut;
     NdisReleaseSpinLock(&a->RxLock);
     if (out != 0) {
         netWait(&a->RxDrained);
+        /* The last return set the event under RxLock: taking it once
+         * more waits that return out. */
+        NdisAcquireSpinLock(&a->RxLock);
+        NdisReleaseSpinLock(&a->RxLock);
     }
     netFreeAdapter(a);
 }

@@ -34,7 +34,12 @@ C_DEFINES=$(C_DEFINES) -DNDIS_MINIPORT_DRIVER=1 -DNDIS_WDM=1
 !IF "$(_BUILDARCH)" == "AMD64"
 C_DEFINES=$(C_DEFINES) -DNDIS51_MINIPORT=1
 !ELSE
-C_DEFINES=$(C_DEFINES) -DNDIS50_MINIPORT=1
+# USE_KLOCKS: a deserialized BINARY_COMPATIBLE miniport takes the
+# kernel's spin locks (ndis.h maps NdisAcquireSpinLock and the rest to
+# KeAcquireSpinLock and its siblings), since on 98 SE and ME NDIS's own
+# NdisAcquireSpinLock serves a serialized miniport, whose calls NDIS
+# already serialises, and gives a deserialized one no exclusion.
+C_DEFINES=$(C_DEFINES) -DNDIS50_MINIPORT=1 -DUSE_KLOCKS=1
 !ENDIF
 
 SOURCES=..\net_frame.c \

@@ -942,9 +942,42 @@ function Test-Net98Rows {
     $header = Join-Path $repo "tools\ntddk\inc\ddk\ndis.h"
     $headerText = $null
     if (Test-Path -LiteralPath $header) {
+        # Comments out, so a prototype in a comment block (the header writes
+        # its macros' signatures as /*++ ... --*/ blocks) is no declaration.
         $headerText = [IO.File]::ReadAllText($header)
+        $headerText = [regex]::Replace($headerText, '(?s)/\*.*?\*/', ' ')
+        $headerText = [regex]::Replace($headerText, '//[^\r\n]*', ' ')
     } else {
         Add-Warning "net98: tools\ntddk\inc\ddk\ndis.h is not staged, so no NDIS.SYS row's bc-header was checked."
+    }
+    $records = @{}
+    $manifest = Join-Path $PSScriptRoot "net98-runtime.list"
+    $cur = $null
+    foreach ($raw in [IO.File]::ReadAllLines($manifest)) {
+        $line = $raw.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { continue }
+        if ($line -match '^\[record\s+(\S+)\]$') {
+            $cur = @{ Systems = @(); Pairs = @{}; Fields = @{} }
+            $records[$Matches[1]] = $cur
+            continue
+        }
+        if ($null -eq $cur) { throw "$manifest`: '$line' before any [record]" }
+        if ($line -match '^(repository|commit|observation|imports)\s+(\S+)$') {
+            $cur.Fields[$Matches[1]] = $Matches[2]
+        } elseif ($line -match '^systems\s+(.+)$') {
+            $cur.Systems = @($Matches[1] -split '\s+')
+        } elseif ($line -match '^NDIS\.SYS!(\S+)$') {
+            $cur.Pairs[$Matches[1]] = $true
+        } else {
+            throw "$manifest`: '$line' is not a record line"
+        }
+    }
+    foreach ($k in $records.Keys) {
+        foreach ($f in @("repository", "commit", "observation", "imports")) {
+            if (-not $records[$k].Fields.ContainsKey($f)) {
+                Add-Failure "net98: net98-runtime.list record $k has no $f line."
+            }
+        }
     }
     $owed = 0
     foreach ($row in $rows) {
@@ -957,10 +990,21 @@ function Test-Net98Rows {
             if ($row.Notes -notmatch '(^|[;\s])bc-header([;\s]|$)') {
                 Add-Failure "net98: NDIS.SYS!$($row.Symbol) carries no bc-header tag."
             } elseif ($null -ne $headerText -and
-                      $headerText -notmatch ('(?m)(\b' + [regex]::Escape($row.Symbol) + '\s*\(|#define\s+' + [regex]::Escape($row.Symbol) + '\b)')) {
-                Add-Failure "net98: NDIS.SYS!$($row.Symbol) is tagged bc-header but the Windows 2000 DDK's ndis.h declares no such routine."
+                      $headerText -notmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
+                # A prototype as the header writes them: the return type on
+                # its own line, the name at the head of the next. A macro
+                # (#define NAME) or a commented signature is not one.
+                Add-Failure "net98: NDIS.SYS!$($row.Symbol) is tagged bc-header but the Windows 2000 DDK's ndis.h declares no routine of that name."
             }
-            if ($row.Notes -match '(^|[;\s])w98-runtime\s+\S') {
+            if ($row.Notes -match '(^|[;\s])w98-runtime\s+(\S+)') {
+                $key = $Matches[2]
+                if (-not $records.ContainsKey($key)) {
+                    Add-Failure "net98: NDIS.SYS!$($row.Symbol) names w98-runtime record '$key', which net98-runtime.list does not hold."
+                } elseif (-not ($records[$key].Systems -contains "98SE" -and $records[$key].Systems -contains "ME")) {
+                    Add-Failure "net98: record '$key' does not list both 98SE and ME."
+                } elseif (-not $records[$key].Pairs.ContainsKey($row.Symbol)) {
+                    Add-Failure "net98: NDIS.SYS!$($row.Symbol) is not among record '$key''s imports, so its load says nothing of this pair."
+                }
             } elseif ($row.Notes -match '(^|[;\s])w98-owed([;\s]|$)') {
                 $owed++
             } else {

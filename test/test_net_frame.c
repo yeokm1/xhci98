@@ -396,14 +396,26 @@ static void testRxDrops(void)
         }
     }
 
-    /* A flagged frame mid-packet leaves the packet as it was. */
-    hdr(f, 4084, 0, 3, 2);
-    (void)rxOne(&rx, f, 4096, 0, &why);
-    CHECK_EQ(rxOne(&rx, f, 4096, NET_RXF_CRC_ERROR, &why), NET_RX_DROPPED,
-             "CRC mid-packet");
-    hdr(f, 1, 1, 3, 2);
-    CHECK_EQ(rxOne(&rx, f, 13, 0, &why), NET_RX_PACKET,
-             "the next good frame completes it");
+    /* A flagged frame mid-packet ends the packet: A[0], A[1] lost to a
+     * CRC Error, B[0] lost to an overflow, then B[1] with the same Count
+     * and Frame ID must not complete A with B's bytes. */
+    k = rx.Drops[NET_RXDROP_SEQUENCE];
+    hdr(f, 4084, 0, 0, 2);
+    CHECK_EQ(rxOne(&rx, f, 4096, 0, &why), NET_RX_HELD, "A[0]");
+    hdr(f, 100, 1, 0, 2);
+    CHECK_EQ(rxOne(&rx, f, 112, NET_RXF_CRC_ERROR, &why), NET_RX_DROPPED,
+             "A[1] with CRC Error");
+    CHECK_EQ(why, NET_RXDROP_CRC, "as CRC");
+    CHECK_EQ(rx.Active, 0UL, "A abandoned");
+    CHECK_EQ(rx.Drops[NET_RXDROP_SEQUENCE], k + 1, "A counted");
+    hdr(f, 4084, 0, 0, 2);
+    CHECK_EQ(rxOne(&rx, f, 4096, NET_RXF_OVERFLOW, &why), NET_RX_DROPPED,
+             "B[0] with Buffer Overflow");
+    CHECK_EQ(why, NET_RXDROP_OVERFLOW, "as overflow");
+    hdr(f, 1, 1, 0, 2);
+    CHECK_EQ(rxOne(&rx, f, 13, 0, &why), NET_RX_DROPPED,
+             "B[1] completes nothing");
+    CHECK_EQ(why, NET_RXDROP_ORPHAN, "as orphan");
 
     /* A two-frame packet whose whole is below 14 bytes. */
     hdr(f, 5, 0, 1, 2);

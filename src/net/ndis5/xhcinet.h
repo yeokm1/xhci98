@@ -62,7 +62,9 @@ typedef struct _NET_ADAPTER {
     NDIS_SPIN_LOCK TxLock;
     PNDIS_PACKET TxHead;
     PNDIS_PACKET TxTail;
-    ULONG TxServing;
+    ULONG TxServing;        /* the one sender, until its completion      */
+    ULONG TxActive;         /* contexts completing sends (the sender, a
+                               flush, a reset's drain), under TxLock       */
     ULONG TxKick;           /* work arrived while a sender served         */
     ULONG ResetGate;        /* a reset is in progress: no sender starts   */
     ULONG ResetPending;     /* the reset waits for the sender to finish   */
@@ -87,7 +89,8 @@ typedef struct _NET_ADAPTER {
 
     /* The PASSIVE_LEVEL thread for the power OIDs. */
     KEVENT WorkEvent;
-    PVOID WorkThread;
+    KEVENT WorkExited;      /* the join on 98 SE and ME                   */
+    PVOID WorkThread;       /* the join on NT (WDM 1.10 and later)        */
     ULONG WorkStop;
     ULONG WorkReq;          /* NET_WORK_*, under TxLock                   */
 
