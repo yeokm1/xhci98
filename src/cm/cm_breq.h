@@ -46,7 +46,7 @@
 
 /* The templates (section 6.1). */
 #define CM_BREQ_SHAPE_NONE      0UL
-#define CM_BREQ_SHAPE_XP        1UL     /* XP closed, minor version 1     */
+#define CM_BREQ_SHAPE_XP        1UL     /* XP closed, minor version 1 or 2 */
 #define CM_BREQ_SHAPE_2000      2UL     /* 2000 closed, minor version 0   */
 
 /* The outcomes (section 9.2, dword 6 bits 15:12). */
@@ -140,8 +140,8 @@ typedef struct _CM_BREQ_PLAN {
  * IO_RESOURCE_REQUIREMENTS_LIST, NULL allowed) matches that template field
  * by field, alone or followed by exactly one interrupt descriptor of the
  * form section 6.1 gives (a bridge whose Interrupt Pin is set), and
- * `minor` is its system's NT minor version (1 XP, 0 2000);
- * CM_BREQ_SHAPE_NONE for anything else, XP x64's lists (minor 2) included.
+ * `minor` is its system's NT minor version (0 2000; 1 XP and 2 XP x64,
+ * both XP's template); CM_BREQ_SHAPE_NONE for anything else.
  * The header's interface type, bus and slot are not compared.
  */
 ULONG CmBreqShape(const UCHAR *list, ULONG minor);

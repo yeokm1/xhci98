@@ -7,7 +7,13 @@ the bridge inventory in the marks answer (`cm_query.h` `CM_QB_*`), the
 mark service's bridge marks, restart and wait (`xhcimark\`), and
 `XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; the installer's
 "Advanced..." row for `XhciCmBridgeReq` (section 9.1) since `9d6a8290`.
-Section 7.1 states what the bound covers. Revision 4, 2026-10-31
+Section 7.1 states what the bound covers. Revision 5, 2026-10-31
+(task 45.55, reviewed and revised): XP x64's closed lists read (leg R4's
+reading, section 7.7): XP's byte for byte, the bridge's interrupt last,
+so XP x64 takes XP's template and the rewrite runs there too (it left
+the chain port at Code 12); and 2000's lists for the same switch read:
+2000's template alone, with no interrupt descriptor although the ports'
+Interrupt Pin is A (sections 6.1 and 13.2). Revision 4, 2026-10-31
 (task 45.55, reviewed and revised): a closed list followed by the
 bridge's own interrupt descriptor matches its template too, and the
 interrupt goes into the rewritten list unchanged as its last descriptor
@@ -327,8 +333,9 @@ So on 2000 the memory windows fail as well as the I/O (a 1 MB upstream
 window cannot hold two 1 MB downstream windows); on XP memory has a
 ladder and it is I/O, and a small prefetchable parent window, that fail.
 
-XP x64 (NT 5.2) is not read: its PCI driver is Server 2003's, not XP's
-[inf: the same family; its closed list may differ, section 7.7].
+XP x64 (NT 5.2): its PCI driver is Server 2003's, not XP's, but its
+closed list for a hot-added switch port is XP's byte for byte (task
+45.55, revision 5, section 7.7) [run].
 
 ### 2.6 What Windows 7 does, and Linux [run, linux]
 
@@ -817,9 +824,11 @@ switch port of a USB4 device router hot-added below the ASM4242 tunnel
 port (task 45.55's XP reading, `runs/run-45.md`; the bridges' Interrupt
 Pin is A, as the captured ASM2464 enclosure's switch ports' are,
 `usb4-emu` `tests/captures/framework13-12th/linux-orico`), where the dock
-of section 2.1 had none. 2000's form is not read; it is taken to be the
-same, and a 2000 list whose last descriptor differs in any byte is left
-as before. The rewriter keeps that descriptor unchanged as the new list's
+of section 2.1 had none. 2000 gave none on the same switch's ports
+(revision 5: its closed lists there were the 2000 template alone, task
+45.55's 2000 reading); a 2000 list ending with that descriptor matches as
+XP's does, and one whose last descriptor differs in any byte is left as
+before. XP x64 gave XP's form exactly (section 7.7). The rewriter keeps that descriptor unchanged as the new list's
 last one (it is the PCI driver's request for the bridge's own interrupt,
 not a window), and the diagnostic marks it (section 9.2, dword 6 bit
 24).
@@ -829,9 +838,8 @@ template is tied to its system: an XP list on 2000 or the reverse is
 left. Anything else is left as it came and counted by reason
 (`cm.breq.shape`): a configured list, an interrupt anywhere but last or
 of another form, any other descriptor, two alternative lists, a field
-that differs, an oversize list. XP x64's closed list is not read; until
-leg R4 reads it and adds its template, every XP x64 list is left
-(section 7.7).
+that differs, an oversize list. XP x64 (minor version 2) takes XP's
+template, its lists being XP's (section 7.7).
 
 A stack can hold two filters of this driver (a kernel-attached child and
 a registered one, record 21 section 7.4 revision 3), and the rewriter's
@@ -1131,14 +1139,18 @@ and hibernation on XP with the dock placed by the rewrite.
 ### 7.7 XP x64
 
 NT 5.2, the same driver family and the same code: the amd64 build of
-`xhcicm.sys` and the amd64 service. Its PCI driver's lists for a
-hot-added bridge are not read, and the shape test has no template for
-it, so until leg R4 reads its closed list (and the template is added
-with that reading as its source) every XP x64 list is left: XP x64 then
-gets the registered attachment and the diagnostic, and today's
-placement. The structures are the same size on amd64
-(`IO_RESOURCE_DESCRIPTOR` 32 bytes, asserted in `cm_filt.c` for both
-builds today [code]).
+`xhcicm.sys` and the amd64 service. Its PCI driver's closed lists for
+the ports of a hot-added switch were read in task 45.55 (leg R4,
+revision 5; `runs/run-45.md`, "45.55 (the owed legs)"): the upstream
+port's and both downstream ports' `BasicConfigVector` were XP's lists
+byte for byte, 288h bytes and 19 descriptors with the bridge's interrupt
+last, the header's bus and slot included. Before revision 5 every XP
+x64 list was left (`XhciCmBridgeReqDiag`: shape 0, system 2, outcome 4,
+for all three ports) and the chain port stopped at Code 12, as XP's did
+before revision 4. So the shape test gives minor version 2 XP's template
+(`CmBreqShape`), and XP x64 is planned and written as XP. The structures
+are the same size on amd64 (`IO_RESOURCE_DESCRIPTOR` 32 bytes, asserted
+in `cm_filt.c` for both builds [code]).
 
 ### 7.8 Vista and later: not touched
 
@@ -1277,7 +1289,7 @@ dock's four bridges and a chained switch fit together:
 | 3 | allocation failures (15:0), children with no active member above (31:16) |
 | 4 + 8n | entry n: its sequence (0: empty) |
 | 5 + 8n | the bridge's location (bus 15:8, device and function 7:0) and its tunnel port's (31:16, the same packing) |
-| 6 + 8n | role 3:0 (1 upstream, 2 downstream, 3 other), shape 7:4 (0 no template, 1 XP closed, 2 2000 closed), system 11:8 (the minor version), outcome 15:12 (0 left, 1 rewritten, 2 off, 3 record only, 4 shape refused, 5 parent unread, 6 not alone, 7 no memory, 8 lower status, 9 no window), groups dropped 18:16 (bit 16 I/O, 17 memory, 18 prefetchable), unmet needs 21:19 (the same order), the start 23:22 (0 not seen, 1 started, 2 failed), the list ends with the bridge's interrupt 24 (section 6.1, revision 4), reserved 31:25 (0) |
+| 6 + 8n | role 3:0 (1 upstream, 2 downstream, 3 other), shape 7:4 (0 no template, 1 XP closed, on XP and XP x64, 2 2000 closed), system 11:8 (the minor version), outcome 15:12 (0 left, 1 rewritten, 2 off, 3 record only, 4 shape refused, 5 parent unread, 6 not alone, 7 no memory, 8 lower status, 9 no window), groups dropped 18:16 (bit 16 I/O, 17 memory, 18 prefetchable), unmet needs 21:19 (the same order), the start 23:22 (0 not seen, 1 started, 2 failed), the list ends with the bridge's interrupt 24 (section 6.1, revision 4), reserved 31:25 (0) |
 | 7 + 8n | N or the sibling count 7:0, this port's index 15:8, flags 19:16 (bit 16 alone, 17 secondary numbered, 18 hot-plug capable, 19 a nested bridge behind), this port's claims 25:20 (2 bits a kind, I/O 21:20, memory 23:22, prefetchable 25:24: 0 no, 1 yes, 2 unknown, 3 granule only), reserved 31:26 (0) |
 | 8 + 8n | the parent's I/O window in bytes |
 | 9 + 8n | the parent's memory (15:0) and prefetchable (31:16) windows in MiB, saturating at FFFFh |
@@ -1431,7 +1443,9 @@ Then, on the reviewed build:
 - **R4.** XP x64 (the amd64 package, test-signed inside the guest as
   task 43.36 did, or unsigned; XP x64 loads either): the closed list
   read (the template's source), the bridge marks; then, with the
-  template added, R3 on XP x64.
+  template added, R3 on XP x64. Read in task 45.55 (revision 5): XP's
+  lists byte for byte, so XP's template (the leg with it:
+  `runs/run-45.md`, "45.55 (the owed legs)").
 - **R6. A cold start** with the dock attached (`preboot=on`) on XP and
   2000: the lists in the configured shape, left; all ports placed.
 - **R7. Unplug and plug in again** on XP and 2000, hot, twice: once
@@ -1579,9 +1593,13 @@ diagnostic (section 9.2) is not counted.
 - **The private descriptors** are kept by position and pairing, read on
   every list here; a system or service pack whose closed list differs by
   any field is left alone by the templates.
-- **The bridge's interrupt on 2000** (section 6.1, revision 4): XP's form
-  is read; 2000's is taken to be the same and not read, so a 2000 list
-  whose interrupt differs stays left as before revision 4.
+- **The bridge's interrupt on 2000** (section 6.1, revision 4): read in
+  revision 5 on the Standard PC HAL: 2000 gave the hot-added switch's
+  ports no interrupt descriptor (the template alone), while the bridges
+  the firmware had numbered carried one with their Line as a fixed
+  vector. Whether 2000 on an ACPI HAL adds one to a hot-added bridge is
+  not read; a 2000 list ending with XP's form matches, and any other
+  interrupt is left as before revision 4.
 - **The restart** of section 4.3: its gate, its timing against the
   bridges' installs (`MK_BRIDGE_WAIT`), its trigger's reading of the
   bridge inventory, and a restart Windows vetoes (left, and the re-plug
