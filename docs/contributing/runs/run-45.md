@@ -4498,6 +4498,61 @@ Recommendation: (a) for this release; (b) as a task. Separately, XHCITR's
 "Safe-removal mark: listed by Windows" should not show beside "Not marked
 removable": the mark line could read Windows' capabilities too.
 
+### The third session: the D0 overlap's trace, ME's standby and 98 SE (2026-10-31)
+
+**Verdict: the D0 overlap's trace is in the `qemu` flavour (`845481d4`,
+record 15 section 8.1). Two XP hibernations under a write loop resumed
+with no overlap line. The ME standby cannot be made on the q35 ME base.
+The 98 SE connection manager's legs were not reached.**
+
+Builds: the gated x86 build of `0ccb991d` (`BUILD + GATES PASSED (release
+qemu)`, host tests passed), and of `0301f107` before it. Evidence:
+`E:\xhci98-vm\p45\w45-owed27\xpe\`, `mea\`.
+
+#### A D0 overlapping a system power IRP (XP)
+
+`xpe`: a fresh q35 XP overlay without the USB4 model (`-vga cirrus`,
+`-global ICH9-LPC.disable_s4=0`), a Bulk-Only stick on `qemu-xhci` (a
+VVFAT folder), the release package of `0301f107` installed
+(`INSTALL.BAT /console /yes /nopause`, exit 3), and then the `qemu`
+flavour's `xhci98.sys` (`eda14070...`) copied over the installed one and a
+restart. The installer takes no `qemu-x86` directory ("REFUSED: not a
+flavour directory of the package"), so the swap is the way. Port `0xE9`
+printed the driver's lines from that start on. `W.BAT D:` ran, and
+`H.BAT` hibernated twice; each resume came back with the loop running
+("H back"). No `hcd: power defer overlap` line was printed in the three
+port logs (`debugcon-a`, `-b`, `-c`). After the first resume the loop read
+one `CMPFAIL` and some `COPYFAIL` lines, then OK again: each start of the
+emulator presents the VVFAT stick fresh, so the files the hibernated
+Windows remembered were gone. That is the vehicle, not the driver. So the
+case was not met on XP in two transitions. It stays owed on 2000 and 7,
+and to hardware.
+
+#### The power gate's wait under an ME standby: not makeable on q35
+
+`mea`: a fresh q35 ME overlay with the package of `e8db6905` installed
+(`I9.BAT`, exit 3) and a stick. "Stand by" from the Shut Down dialog
+returned at once, and QMP's `query-status` stayed `running`, never
+`suspended`, in three attempts. ME refuses a standby while an MS-DOS
+window runs ("This program is not responding" for the copy loop), and
+`rundll32 powrprof.dll,SetSuspendState` crashes `rundll32` on ME. Run-36
+read ME's standby on the i440FX machine. The q35 ME base offers none, so
+the leg is owed to a vehicle that sleeps. Also on this overlay: once,
+after a shutdown that pressing `s` had turned into "Shut down", the next
+start's shell never drew and `Cmdninst` was "not responding". A cold
+start with ScanDisk then came up normally. That is not this package's,
+as far as it was read.
+
+#### Still owed
+
+- The 98 SE connection manager's no-IRQ clock and retry wait, and a failed
+  D0 during a re-enumeration on 98 SE: not reached.
+- The power gate's wait under an ME standby (above).
+- The D0 overlap on 2000 and 7 (hibernation there), and hardware.
+- The BUSY that keeps its length, on a Stor98 debug-port build.
+- The resume with a lane adapter gone (the ASM4242 model takes S4 from XP).
+- The UAS STOP and START, and the hardware readings, as above.
+
 ## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
 
 Design record 22 section 6.2 coded, as the design half above left it
@@ -5779,6 +5834,234 @@ Evidence: `<model>-<os>\` tag e (`serial-e.log`, `rep-e*.txt`, `trace-e.log`,
   (restart): `%ERRORLEVEL%` after `call INSTALL.BAT` in that script is not the
   installer's. The kit read the screen.
 
+## 45.60 the installer's Thunderbolt and USB4 page: the code and the legs on 98 SE, XP and 7 (2026-10-31, partial)
+
+Branch `w45-adv`, fast-forwarded to `4dc11e98`, tree
+`E:\xhci98-wt\w45-adv` on development host A. Commits: `0643a6d9`
+(record 26 draft 53, section 5.3.5: the design), `8ccc8c0d` (the code
+and the host vectors), `31f7984c` (the two approval buttons one group);
+each reviewed and revised.
+
+### What changed
+
+- A page of its own, "Thunderbolt and USB4", after Components: shown
+  only while the effective Thunderbolt choice is on, skipped Next and
+  Back alike otherwise. It carries XHCIPFW, Stor98 and S98VSD, moved
+  off the Components page with their rules and remembered states, and
+  the approval choice (`XhciCmApprove`) as two option buttons, moved off
+  the Settings dialog's Thunderbolt tab so it is offered once, taken as
+  the tab's row was (written machine-wide only when it differs from the
+  value in force).
+- The Components page's Thunderbolt sentence says what was found alone;
+  what a device can reach is said under the approval choice. The box
+  keeps "(experimental)", the owner's word.
+- The Advanced dialog's heading no longer names testing.
+- Thunderbolt networking's box (task 45.59): its slot on the page,
+  hidden while `INST_TBNET_WIRED` is 0; `/tbnet` is refused ("this
+  package carries no Thunderbolt networking driver for this system"),
+  `/notbnet` changes nothing; `inst_tbnet_decide` holds record 35
+  section 9.1's rule (first state, writes, targets), host-tested.
+  Wiring it to the driver is task 45.59's step S11.
+
+### The builds and the self-tests
+
+- `XHCIINST.EXE /selftest` and `XHCIWIZ.EXE /selftest`, run in an XP
+  guest before the gated build: 11 checks and 743 checks, 0 failures
+  (745 after `31f7984c`).
+- The gated x86 build at `8ccc8c0d`: BUILD + GATES PASSED (release,
+  qemu), 22:27. At `31f7984c`: BUILD + GATES PASSED, 24:21. Host tests
+  passed (`test_inst` 7501 checks).
+- The test package: `make-release.ps1 -Arch x86 -TestLabel w45adv
+  -NoNonFree -NoWdmFree -SkipQualtool -SkipMarkTool` of `31f7984c`;
+  `XHCIWIZ.EXE` `39a80fb0...`, `XHCIINST.EXE` `6f2e046f...`.
+
+### The legs
+
+Each a first install on a fresh overlay of the q35 base through
+`launch-q35.ps1 -Usb4 asm4242 -EncAtBoot`, driven from the keyboard;
+QMP 49451, 49453 and 49454; every start and stop in
+`E:\xhci98-vm\p45\w45-adv\pids.txt`, the screens in each leg's folder.
+
+| System | What was done | Result | Evidence |
+|---|---|---|---|
+| 98 SE (`8ccc8c0d`) | `SETUP.EXE /tbnet` | refused in a message box: "/tbnet: this package carries no Thunderbolt networking driver for this system" | `w98t\a1-tbnet.png` |
+| 98 SE (`8ccc8c0d`) | Components with Thunderbolt unticked, Next; Back | the Summary next (the page skipped), Back to Components; the moved boxes gone from Components | `w98t\b1-comp.png`, `b2-next-untick.png`, `b3-back.png` |
+| 98 SE (`8ccc8c0d`) | Thunderbolt ticked; Settings, Thunderbolt tab; Next | the tab holds `XhciCmMode` and `XhciCmSafeEject` only; the page shows XHCIPFW.VXD, Stor98, S98VSD and the approval preselected 1 with the new-install note | `w98t\b8-settings-tb.png`, `c1-tbt.png` |
+| 98 SE (`8ccc8c0d`) | "Give it none" from the keyboard | not reachable: the arrow keys stayed on the first button (the sentence between ended the group). Fixed in `31f7984c` | `w98t\c2-none.png` |
+| 98 SE (`31f7984c`) | "Give it none" by the arrow keys, S98VSD unticked, Back and Next again, Install | the page kept both; the Summary listed `XhciCmApprove = 0` and no S98VSD; after the install `Services\USB` holds `XhciCmApprove`=0 alone, the host interface's key the INF's 1 | `w98t2\c2-none.png`, `c4-again.png`, `d1-summary.png`, `d2.png`, `serial-a.log` |
+| XP (`31f7984c`) | Thunderbolt ticked, "Give it none", Install, restart | the page shows XHCIPFW.SYS, Stor98, S98VSD greyed "(Windows 98 SE and ME only)"; `Services\USB` holds `XhciCmApprove`=0; `xhci98`, `xhcicm`, `xhcipfw` loaded | `xpt\c1-tbt.png`, `d11.png`, `serial-a.log` |
+| 7 x86 (`31f7984c`) | Thunderbolt ticked, the approval left at its preselected 1, Install, restart | no approval line on the Summary or the Finish page; the read of `Services\USB` printed no value; `xhci98`, `xhcicm`, `xhcipfw` loaded | `w7t\c1-tbt.png`, `d1-summary.png`, `d3.png`, `serial-a.log` |
+
+- 98 SE was not restarted (the known shutdown hang with `xhcicm`).
+- The networking box was never shown, as its gate says.
+
+### Left
+
+- The networking box's wiring (staging `xhcinet.inf`, the `XhciCmNet`
+  write after it, `/tbnet` accepted, the console's question, the
+  uninstall's removal) is task 45.59's step S11, after its driver steps
+  S5 to S7: `INST_TBNET_WIRED` 1 there, and `inst_tbnet_decide`
+  connected.
+- Legs on ME, 2000, Vista, 8 to 10 (the roadmap's "98 SE to 10"): the
+  coordinator named 98 SE, XP and 7 for this task.
+
+## 45.59 step S6: xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking (2026-10-31)
+
+Design record 35 sections 6.3, 7.1 to 7.8 and 8.2 to 8.3, coded on branch
+`w45-tbndis` (`8fc26b5a` to `8febce8a`), each change reviewed and revised.
+The connection manager's half (S5) is not in this tree, so nothing here
+has run against it: this section records the code, its gates and the
+build. The legs (record 35 section 11.3) wait for S5.
+
+### What was made
+
+- `src\net\net_frame.c` / `.h`, the USB4NET framing core, pure, with no
+  NDIS type (shared unchanged with `xhcinet6.sys`, S7): the transmit split
+  into 4084-byte USB4 frames with their 12-byte header; one Frame ID a
+  packet, advanced only towards a peer whose `prtcstns` has bit 1, wrapping
+  at `0xFFFF`; the receive checks (CRC Error, Buffer Overflow, a frame of
+  12 bytes or fewer, Frame Size 0 or past the data, Count 0 or above 17,
+  Index not below Count) and the reassembly, every refused frame ending
+  the packet in progress, the SOF and EOF PDFs never read (a frame of one
+  tunnelled packet reads SOF PDF 0); and section 7.4's receive
+  segmentation of a TCP segment past the adapter's maximum, over IPv4 and
+  IPv6, both checksums checked before anything is split.
+- `test\test_net_frame.c`: 2,554 checks (the lengths 14, 60, 1514, 4084,
+  4085, 65536; the Frame ID rule; every drop; reassembly with gaps,
+  restarts and the 65550 cap; flagged and malformed frames between two
+  packets of Frame ID 0; the split over IPv4 and IPv6 with options, odd
+  maxima and wraps, and its eleven refusals).
+- `src\net\net_cmif.c` / `.h`, the glue to `src\xhci_cmnet.h` (WDM alone,
+  shared with S7): `IRP_MN_QUERY_INTERFACE` to the device object below,
+  the release, and the calls over the table.
+- `src\net\ndis5\`: the deserialized NDIS 5.0 WDM miniport (5.1 on amd64):
+  one sender at a time, every context completing sends counted so a reset
+  completes and a halt frees only after the last; the receive pool with
+  `NDIS_STATUS_RESOURCES` when low; the power OIDs on a thread of its own
+  (joined by its exit event on 98 SE and ME, by its thread object on NT);
+  `USE_KLOCKS` on x86, so the spin locks are the kernel's on 98 SE and ME
+  too; `XhciNetMtu` 1500 (1500 to 65522).
+- `src\net\xhcinet.inf` and `xhcinet-amd64.inf` (98 SE and ME, `.NTx86`,
+  `.NTamd64`; the `NTx86.6.2` and `NTamd64.6.2` models present and empty
+  until S7), `XhciNetMtu` written at `1500` with no-overwrite on every path;
+  `scripts\inf-gate\check-net-inf.ps1` (36 self-test mutations) on every
+  build.
+- The import gate's `-GateProfile net98` over `xhcinet-imports.allow`:
+  each `NTOSKRNL.EXE` and `HAL.DLL` pair also a row of
+  `xhci98-imports.allow`, each `NDIS.SYS` pair a prototype of the Windows
+  2000 DDK's `ndis.h` (`bc-header`) and a pair of the run record that
+  `net98-runtime.list` pins (`w98-runtime`); `xhcinet-imports-amd64.allow`
+  under the default amd64 rules. `build-driver.cmd :buildnet` on both
+  architectures.
+
+### The 98 SE and ME reading
+
+Revised the same day, after the owner admitted a Microsoft binary's export
+names for the import gate's baselines (2026-10-31, 14:40): `NDIS.VXD` was
+taken read-only from the q35 98 SE and ME base images (`7z e`, nothing
+booted) and only its names read. Every one of the 24 `NDIS.SYS` imports of
+the x86 image is a NUL-delimited name in both files (98 SE 166,029 bytes,
+ME 157,397 bytes; their SHA-256 in `scripts/import-gate/
+ndisvxd-baselines.expected`); the reading tells names apart (98 SE's file
+lacks `NdisQueryBufferSafe`, which ME's has), and the net98 profile now
+fails a pair absent from either where the files are staged. So the owner's
+condition for 98 SE and ME (record 35 section 15, Q10) is met by the
+reading the record asked for. Before it, and kept beside it: the 24
+`NDIS.SYS` imports of the x86 image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
+("so that we don't use functions that aren't available on Windows 9x"),
+and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` at
+`57ba809`, an NDIS 5.0 WDM miniport recorded loading and passing traffic
+on 98 SE and ME in QEMU (`docs/testing/2026-10-22-cdcnet-9x.md` there).
+`legal-provenance.md` section 4 has the row. This image's own load on 98
+SE and ME is a leg owed.
+
+### Builds
+
+| Build | Commit | Result | Log |
+|---|---|---|---|
+| gated x86 release (`build-driver.cmd release`) | `8febce8a` | BUILD + GATES PASSED; `xhcinet.sys` 15,198 bytes, SHA-256 `5e7e76774d81043f...`; `test_net_frame` 2,554 checks; `check-net-inf` 36 mutations; net98 import gate passed | development host A, `gated-x86.log` in the worker's scratch folder |
+| gated amd64 release (`-amd64`) | `35376983` (`8febce8a` and a header comment) | BUILD + GATES PASSED; `xhcinet.sys` 19,456 bytes, SHA-256 `b51c97f32adab371...`; the import gate passes with warnings, its `NDIS.SYS` rows having no staged NT 5.2 amd64 `ndis.sys` to check against | `gated-amd64.log` |
+
+### Owed
+
+- Every leg of record 35 section 11.3, after S5 (and the 98 SE and ME
+  load of this image, which closes the `w98-runtime` evidence).
+- The `NTx86.6.2` decoration read on 98 SE, ME, 2000 and XP (record 35
+  section 8.2), and the `$CHICAGO$` net INF read on 2000.
+- The package's carrying of `xhcinet.sys` (S10): the gated record and
+  the source stamp do not yet list it.
+
+## 45.62 a tunnelled unit attached during the install listed after a restart, and XHCITR's mark line (2026-10-31)
+
+**Verdict: done.** On XP and 2000 (Standard PC HAL) a unit attached
+through the install is now listed in Safely Remove Hardware after a
+restart, with no re-plug. XHCITR's mark line names the driver's answer.
+Record 21 section 7.7; commits `0301f107` and `0ccb991d`, each reviewed
+and revised.
+
+**The cause.** At a start of Windows the PnP manager asks for the unit's
+capabilities, at the enumeration and after the start, before the NHI
+lists its set. The connection manager's child then passes the request
+through (passive until associated), so Windows records no `Removable`.
+The design's remedy was the mark service's restart of the unit. The
+service never made it, because the entry's "`Removable` answered" flag
+was set by a later query that Windows does not record (record 21 section
+7.7.2).
+
+**The first change** (`0301f107`): on 2000 and XP the service reads the
+capabilities Windows recorded (`CM_DRP_CAPABILITIES`), and an answered
+unit whose recorded capabilities lack `Removable` (and
+`SurpriseRemovalOK`) is a restart candidate. XHCITR says "Safe-removal
+mark: the Thunderbolt driver has answered it as removable." and, beneath
+it when Windows' capabilities lack `Removable`, "Windows has not recorded
+it as removable."
+
+Its legs (the gated build of `0301f107`; fresh q35 XP and 2000 overlays,
+`xpd` and `w2b`, the ASM4242 model with the ORICO enclosure at power-on,
+`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`, a restart): the
+service chose the unit and logged "restart not made: ... a disk or volume
+below the unit is in use. Unplug the dock safely and plug it in again".
+That is record 33 section 4.3's gate, which refuses a restart of any unit
+with a volume in use, and an enclosure's unit always has one. XHCITR's new
+lines read as designed.
+
+**The second change** (`0ccb991d`): the `AddDevice` child (the service's
+`LowerFilters` mark) answers `Removable` before association, inside a
+start-up window: no domain listed since the driver loaded, no `AddDevice`
+child failed, 300 s. It does so only for a unit that a bridge filter
+reported with no marked bridge filter above it, so the bridge marks inside
+an enclosure or a dock do not answer. The answers are counted and logged
+as `cm.reenum.child.pretrust`.
+
+**The legs** (the gated build of `0ccb991d`: `xhcicm.sys` `2114e117...`,
+`xhci98.sys` `6ca31af9...`, `XHCIMARK.EXE` `0309fa93...`, `XHCITR.EXE`
+`d5ff1929...`; fresh overlays `xpf` and `w2c`, the same model and
+enclosure, the same install, then a restart: XP warm, 2000 a cold start):
+
+| Read | XP | 2000 |
+|---|---|---|
+| `cm.reenum.child.pretrust` | `0000000B` | `0000000A` |
+| the unit (`1B21:2463` at `03:00.0`) | "Removable: yes"; "Windows lists it in Safely Remove Hardware too." | the same |
+| the bridge below it (the enclosure's downstream port) | "Removable: no" | "Removable: no" |
+| XHCITR's mark line | "the Thunderbolt driver has answered it as removable." | the same |
+| Safely Remove Hardware (2000: Unplug or Eject Hardware) | lists "PCI standard PCI-to-PCI bridge at PCI Slot 2" alone; Stop lists the bridge, "Generic volume - (D:)", the disk, Stor98 and the bridge below; OK: "Safe To Remove Hardware" | after the second cold start: the same list and stop ("Generic volume - (E:)"), "Safe To Remove Hardware" |
+| a second restart | the same: `pretrust` `0000000B`, the unit "Removable: yes" | a second cold start: the unit listed (above) |
+
+The service's log at that start held no restart (none was needed). Its
+candidate rule stays for a unit whose start came with a domain listed.
+The host's own xHCI behind the tunnel (the ASM4242's, protected) reads
+"Not marked removable" with "Windows has not recorded it as removable.",
+which is right: it is never offered for removal. Evidence:
+`E:\xhci98-vm\p45\w45-owed27\xpd\`, `w2b\`, `xpf\` (`tr-b1.txt`,
+`tr-b2.txt`, `b3.png` to `b5.png`), `w2c\` (`tr-b1.txt`, `c2.png` to
+`c4.png`).
+
+**For 45.final** (the coordinator's): the known limitation "a drive
+attached during the install is not listed ... until Windows restarts or
+the drive is plugged in again" now holds as written on 2000 and XP: a
+restart lists it. Vista and later were not read; the service's new rule
+is off there.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
@@ -5934,3 +6217,23 @@ the version bump.
   (45.55): "On Windows XP, a USB4 device that has its own downstream port
   (a dock or a daisy-chainable enclosure), plugged in while Windows runs,
   may not show its own drive or the device chained behind it.""
+- 45.60 (HEAD): "- (45.60, the installer's Thunderbolt and USB4 page,
+  2026-10-31) "The installer has a Thunderbolt and USB4 page after the
+  Components page, shown when Thunderbolt 3 / USB4 support is ticked. It
+  holds the parts that come with that support: closing PCI windows above 4
+  GB (XHCIPFW), Stor98 and its large transfers on Windows 98 SE and ME. It
+  also holds the choice of what happens when a device is plugged in: give
+  it a PCI Express connection at once (the default), or give it none
+  (XhciCmApprove 0). That choice used to be on the Settings dialog's
+  Thunderbolt tab. With "Give it none", a device plugged in gets no new
+  PCI Express connection and may still work over USB, and connections
+  already made when Windows starts stay unless XhciCmPreOsCleanup ends
+  them." (The networking box joins the page with 45.59.)"
+- 45.62 (HEAD): "- (45.62, SUPERSEDES the 45.62 coordinator note above,
+  2026-10-31) With 45.62 merged, on 2000 and XP the known limitation "a
+  drive attached during the install is not listed ... until Windows
+  restarts or the drive is plugged in again" holds as written (a restart
+  lists it): keep the text, do not narrow it. Vista and later were not
+  read. XHCITR's mark line now reads "the Thunderbolt driver has answered
+  it as removable", with "Windows has not recorded it as removable."
+  beside it when Windows has not."

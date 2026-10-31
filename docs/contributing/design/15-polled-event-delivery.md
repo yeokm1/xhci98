@@ -2285,6 +2285,50 @@ as for every other diagnostic.
 The tear detector (`hcd_door.c:836`) needs no change: `DpcCount` counts
 every drain, polled or not (`xhci_evt.c:774`).
 
+
+### 8.1 The D0 overlap's trace (task 45.27, the `qemu` flavour)
+
+Since `2f57cad2` a D0 that `hcdD0Done` defers from DISPATCH_LEVEL has its
+own work item and slot (`PowerWorkD0`, `PowerWorkD0Irp`), apart from the
+one the system IRP's deferrals share (`PowerWork`, `PowerWorkIrp`, kinds
+SYSTEM, DIRECT and SHUT; `src/hcd_power.c`, `hcdPowerDefer`). The fix is
+for a deferral of one kind made while the other's is still waiting, and a
+resume that completes does not show whether that ever happened
+(`runs/run-45.md`, "45.27"). 45.27 owes a reading of it on 2000, XP and 7.
+
+The reading is one trace line, in the `qemu` flavour alone
+(`XHCI_FLAVOUR_QEMU`; the line is `XHCI_DBG_VALUE`, port `0xE9` and
+`DbgPrint`). The release image is unchanged, so no registry value,
+counter, INF row or tuning row comes with it.
+
+- **The count.** A `qemu`-only field, `QemuPowerDeferred`, is raised
+  with `InterlockedIncrement` in `hcdPowerDefer` before the item is
+  queued and lowered with `InterlockedDecrement` as the first act of
+  each work routine (`hcdPowerWork`, `hcdPowerWorkD0`). Each kind has at
+  most one deferral outstanding (the power manager's serialization, as
+  the slots already assume), so the count is 0 to 2.
+- **When.** The increment's own result is 2: this deferral was made while
+  the other kind's work routine had not begun. The value comes from one
+  interlocked operation, so it neither misses nor invents that case; the
+  two items' queueing order is not changed. The line says "deferred
+  together", the case the separate slots are for, not that both items
+  sat in the queue at one instant.
+- **What.** `"hcd: power defer overlap"` with the value
+  `(kind << 16) | count`, `kind` being the deferral just made
+  (`HCD_POWER_WORK_D0` 1, `SYSTEM` 2, `DIRECT` 3, `SHUT` 4). The other is
+  the other class (the D0 item when `kind` is 2 to 4, a system item when
+  it is 1). `XHCI_DBG_VALUE` is not bounded, which is right here: power
+  IRPs come a few per transition.
+- **IRQL.** `hcdPowerDefer` runs at DISPATCH_LEVEL or below; the
+  interlocked routines and the trace channel accept that
+  (`src/xhci_dbg.h`), and both routines are in the import allowlist for
+  every flavour.
+- **The leg.** The `qemu` flavour on 2000, XP and 7, hibernations and
+  standbys repeated under load, the port `0xE9` log searched for the line.
+  A line read with the resume completing and the devices back proves the
+  case was met and survived. No line in many transitions says only that
+  it was not met there; the leg then stays owed to hardware.
+
 ## 9. `XHCISNAP` (task POLL.4)
 
 - The companion reports the three values as it does `XhciImodInterval250ns`

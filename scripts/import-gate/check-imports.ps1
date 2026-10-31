@@ -183,9 +183,10 @@ param(
     # tools\ntddk\inc\ddk\ndis.h when it is there - and either
     # "w98-runtime <record>" (a recorded load of an NDIS 5 WDM miniport
     # importing the pair on 98 SE and ME) or "w98-owed" (a warning: the
-    # 98 SE and ME half is not shown). NDIS.VXD itself is never read: it
-    # is an LE image whose NT-style exports are built at run time, and
-    # the owner's rule of 2026-10-31 forbids reading a Microsoft binary.
+    # 98 SE and ME half is not shown); and, where 98 SE's and ME's NDIS.VXD
+    # are staged (-Ndis98Dir, -NdisMeDir), each NDIS.SYS pair among its
+    # export names (ndisvxd-baselines.expected; export names alone are read,
+    # the owner's rule of 2026-10-31, 14:40).
     #
     # **The net6 profile: xhcinet6.sys, the NDIS 6.20 miniport of
     # Thunderbolt networking for 8, 8.1 and 10** (design record 35 section
@@ -217,7 +218,13 @@ param(
     [string]$Nt6VistaManifestPath = "",
     [string]$Nt6Win7ManifestPath = "",
     [string]$Nt6VistaDir = "",
-    [string]$Nt6Win7Dir = ""
+    [string]$Nt6Win7Dir = "",
+
+    # The net98 profile's NDIS.VXD of 98 SE and ME: the directories holding
+    # each (defaults tools\win98se-extracted and tools\winme-extracted), read
+    # for export names alone against ndisvxd-baselines.expected.
+    [string]$Ndis98Dir = "",
+    [string]$NdisMeDir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -1010,8 +1017,64 @@ function Test-Net98Rows {
             }
         }
     }
+    # NDIS.VXD's export names (the owner's rule of 2026-10-31, 14:40:
+    # export names alone may be read for the gate's baselines). The file is
+    # authenticated by size and SHA-256 against ndisvxd-baselines.expected,
+    # and a name counts when it is a NUL-delimited string of the file, the
+    # form the NT-style names NTKERN binds an NDIS.SYS import against take
+    # there (the same reading as the ntkern-name evidence). A set not staged
+    # is a warning; a staged file that does not match, or a name absent, a
+    # failure.
+    $vxdNames = @{}
+    $vxdManifest = Join-Path $PSScriptRoot "ndisvxd-baselines.expected"
+    $vxdDirs = @{ "98SE" = $Ndis98Dir; "ME" = $NdisMeDir }
+    if ($vxdDirs["98SE"] -eq "") { $vxdDirs["98SE"] = Join-Path $repo "tools\win98se-extracted" }
+    if ($vxdDirs["ME"] -eq "") { $vxdDirs["ME"] = Join-Path $repo "tools\winme-extracted" }
+    # The whole manifest first: one row for each of 98SE and ME, no other.
+    $vxdRows = @()
+    $vxdSeen = @{}
+    foreach ($raw in [IO.File]::ReadAllLines($vxdManifest)) {
+        $line = $raw.Trim()
+        if ($line -eq "" -or $line.StartsWith("#")) { continue }
+        $f = $line -split '\s+'
+        if ($f.Count -ne 4 -or -not $vxdDirs.ContainsKey($f[0]) -or
+            $f[2] -notmatch '^[0-9]+$' -or $f[3] -notmatch '^[0-9A-Fa-f]{64}$') {
+            throw "$vxdManifest`: '$line' is not 'SYSTEM FILE LENGTH SHA256' for 98SE or ME"
+        }
+        if ($vxdSeen.ContainsKey($f[0])) {
+            throw "$vxdManifest`: $($f[0]) has more than one row"
+        }
+        $vxdSeen[$f[0]] = $true
+        $vxdRows += ,$f
+    }
+    foreach ($sys in @("98SE", "ME")) {
+        if (-not $vxdSeen.ContainsKey($sys)) {
+            throw "$vxdManifest`: no $sys row"
+        }
+    }
+    foreach ($f in $vxdRows) {
+        $path = Join-Path $vxdDirs[$f[0]] $f[1]
+        if (-not (Test-Path -LiteralPath $path)) {
+            Add-Warning "net98: $($f[0])'s $($f[1]) is not staged at $path, so no NDIS.SYS row was checked against its export names."
+            continue
+        }
+        $bytes = [IO.File]::ReadAllBytes($path)
+        $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+        if ($bytes.Length -ne [int]$f[2] -or $hash -ne $f[3].ToUpperInvariant()) {
+            Add-Failure "net98: $path is not the $($f[0]) $($f[1]) ndisvxd-baselines.expected names (length $($bytes.Length), SHA-256 $hash)."
+            continue
+        }
+        $vxdNames[$f[0]] = [Text.Encoding]::ASCII.GetString($bytes)
+    }
     $owed = 0
     foreach ($row in $rows) {
+        if ($row.Module -ieq "NDIS.SYS") {
+            foreach ($sys in @($vxdNames.Keys)) {
+                if (-not $vxdNames[$sys].Contains([string][char]0 + $row.Symbol + [string][char]0)) {
+                    Add-Failure "net98: NDIS.SYS!$($row.Symbol) is not among $sys's NDIS.VXD export names: the image would not load there."
+                }
+            }
+        }
         if ($row.Module -ieq "ntoskrnl.exe" -or $row.Module -ieq "hal.dll") {
             $twin = @($hcd | Where-Object { $_.Module -ieq $row.Module -and $_.Symbol -ceq $row.Symbol })
             if ($twin.Count -eq 0) {

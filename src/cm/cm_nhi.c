@@ -66,6 +66,7 @@
  * connection-manager thread.
  */
 
+#include "../xhci_version.h"
 #include "cm.h"
 #include "cm_nvlink.h"
 #include "cm_pwrr.h"
@@ -386,6 +387,34 @@ static VOID cmU4BindRest(PCM_NHI nhi);
 static VOID cmU4Drain(PCM_NHI nhi);
 static VOID cmU4LearnPending(PCM_NHI nhi);
 static BOOLEAN cmU4Contained(PCM_NHI nhi);
+
+/* The package version, XHCI_VER_STR's four dot-separated parts, one byte
+ * each (the properties block's devicerv, design record 35 section 3.7). */
+static ULONG cmNetRevision(void)
+{
+    const char *s = XHCI_VER_STR;
+    ULONG rev = 0;
+    ULONG part = 0;
+    ULONG parts = 0;
+
+    for (;; s++) {
+        if (*s >= '0' && *s <= '9') {
+            part = part * 10 + (ULONG)(*s - '0');
+            continue;
+        }
+        rev = (rev << 8) | (part & 0xFFUL);
+        part = 0;
+        parts++;
+        if (*s != '.' || parts == 4) {
+            break;
+        }
+    }
+    while (parts < 4) {
+        rev <<= 8;
+        parts++;
+    }
+    return rev;
+}
 
 static VOID cmLogCounters(PCM_NHI nhi)
 {
@@ -2724,6 +2753,10 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.LaneBonding =
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
+    /* Design record 35 section 8.1 (task 45.59): read at this start alone.
+     * The properties block's devicerv, the package version a byte a part. */
+    nhi->U4Cfg.Net = (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0);
+    nhi->U4Cfg.NetRevision = cmNetRevision();
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
     nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.Gen4LinkRecovery = (BOOLEAN)(nhi->Values.Gen4Elr != 0);

@@ -1174,7 +1174,12 @@ not yet in effect), and the window shows the mark's state beside the
 unit as that revision says. As built (42-A.5's tool part, 2026-10-19): on NT a unit's
 details read "Safe-removal mark: listed by Windows", "mark written; takes
 effect at the next start of the device", "mark written, but Windows does
-not list it", "not marked", or "not read" with the reason, from its NHI's
+not list it", "not marked", or "not read" with the reason (since task
+45.62 the first and third read "the Thunderbolt driver has answered it as
+removable" and "mark written; the Thunderbolt driver has not answered it
+as removable", and the first is followed by "Windows has not recorded it
+as removable." when the unit's recorded capabilities lack `Removable`:
+record 21 section 7.7), from its NHI's
 marks answer (`IOCTL_XHCICM_MARKS`, read at each refresh with the query and
 held to its epoch) and the unit's `LowerFilters`; the NHI's details add
 "Mark service: running", "stopped", "not installed" or "not read"

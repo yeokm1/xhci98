@@ -5303,9 +5303,11 @@ static void test_s98(void)
     {
         char tt[400];
         inst_tb_found_text(tt, sizeof(tt), "Thunderbolt Controller 15EB");
-        CHECK(strncmp(tt, "A Thunderbolt 3 / USB4 controller was found: "
-                      "Thunderbolt Controller 15EB. ", 74) == 0 &&
-              strstr(tt, "XhciCmApprove") != NULL, "found, with its name");
+        /* Since task 45.60 (record 26 section 5.3.5) what was found
+         * alone; what a device can reach is the approval row's. */
+        CHECK(strcmp(tt, "A Thunderbolt 3 / USB4 controller was found: "
+                     "Thunderbolt Controller 15EB.") == 0,
+              "found, with its name");
         inst_tb_found_text(tt, sizeof(tt), "");
         CHECK(strcmp(tt, inst_page_text(INST_PT_TB_T)) == 0,
               "found, no name: the page's text");
@@ -8534,8 +8536,123 @@ static void test_other_pkgs(void)
           "the certificate left out said");
 }
 
+/* Task 45.60 (record 26 section 5.3.5): the Thunderbolt and USB4 page's
+ * texts, the networking box's rule and its switches. */
+static void test_tbt_page(void)
+{
+    INST_TBNET d;
+    INST_OPTS o;
+    char err[256];
+    const char *a1[] = { "x", "/tbnet" };
+    const char *a2[] = { "x", "/notbnet", "/yes" };
+    const char *a3[] = { "x", "/tbnet", "/notbnet" };
+    const char *a4[] = { "x", "/notbnet", "/uninstall" };
+    const char *a5[] = { "x", "/notbnet", "/devices" };
+    static const int ids[] = {
+        INST_PT_TBT_HEAD, INST_PT_APPR_HEAD, INST_PT_APPR_1, INST_PT_APPR_1_T,
+        INST_PT_APPR_0, INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW,
+        INST_PT_TBNET
+    };
+    int i;
+    int sw;
+    int inForce;
+
+    for (i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
+        const char *s = inst_page_text(ids[i]);
+        CHECK(s != NULL && s[0] != '\0', "a 45.60 page text is there");
+        CHECK(s != NULL && strstr(s, "test") == NULL &&
+              strstr(s, "experimental") == NULL, "no testing status");
+    }
+    CHECK(strstr(inst_page_text(INST_PT_ADVANCED), "tester") == NULL,
+          "the Advanced heading names no testing");
+    CHECK(strstr(inst_page_text(INST_PT_TB), "(experimental)") != NULL,
+          "the Components box keeps the owner's word");
+    CHECK(strstr(inst_page_text(INST_PT_TB_T), "memory") == NULL &&
+          strstr(inst_page_text(INST_PT_APPR_1_T), "memory") != NULL,
+          "what a device can reach moved to the approval row");
+    CHECK(strcmp(inst_page_text(INST_PT_TBNET), "Thunderbolt networking") == 0,
+          "the networking box's words");
+    CHECK_EQ(INST_TBNET_WIRED, 0, "networking not wired until task 45.59");
+    CHECK(inst_value_find("XhciCmNet") < 0, "XhciCmNet not in the table yet");
+
+    /* The gate off: nothing shown, open or written, whatever is asked. */
+    for (sw = -1; sw <= 1; sw++) {
+        for (inForce = -1; inForce <= 1; inForce++) {
+            inst_tbnet_decide(0, 1, sw, inForce, 1, 1, 1, &d);
+            CHECK(!d.Shown && !d.Enabled && !d.First && !d.Write && !d.ToNhi &&
+                  !d.ToMw, "the gate off: nothing");
+        }
+    }
+    /* Wired, no driver for this system: shown greyed, nothing written. */
+    inst_tbnet_decide(1, 0, 1, 1, 1, 1, 1, &d);
+    CHECK(d.Shown && !d.Enabled && !d.First && !d.Write,
+          "no driver: greyed, nothing written");
+    /* Wired and carried: the first state. */
+    inst_tbnet_decide(1, 1, -1, -1, -1, 1, 0, &d);
+    CHECK(d.Shown && d.Enabled && !d.First && !d.Write,
+          "a new install: unticked, nothing written (the INF's 0)");
+    inst_tbnet_decide(1, 1, -1, 1, -1, 1, 0, &d);
+    CHECK(d.First && !d.Write, "1 in force: ticked, left as it is");
+    inst_tbnet_decide(1, 1, -1, 0, -1, 1, 0, &d);
+    CHECK(!d.First && !d.Write, "0 in force: unticked, left as it is");
+    inst_tbnet_decide(1, 1, 1, 0, -1, 1, 0, &d);
+    CHECK(d.First && d.Write && d.Value == 1 && d.ToNhi && !d.ToMw,
+          "/tbnet over 0: ticked and written to the controller's key");
+    inst_tbnet_decide(1, 1, 0, -1, -1, 1, 0, &d);
+    CHECK(!d.First && d.Write && d.Value == 0 && d.ToNhi,
+          "/notbnet makes the box changed: 0 written");
+    /* A tick and an untick against each value in force. */
+    inst_tbnet_decide(1, 1, -1, -1, 1, 1, 0, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && !d.ToMw, "ticked over none");
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 0, &d);
+    CHECK(d.Write && d.Value == 1, "ticked over 0");
+    inst_tbnet_decide(1, 1, -1, 1, 1, 1, 0, &d);
+    CHECK(!d.Write, "ticked over 1: nothing");
+    inst_tbnet_decide(1, 1, -1, 1, 0, 1, 0, &d);
+    CHECK(d.Write && d.Value == 0 && d.ToNhi, "unticked over 1: 0 written");
+    inst_tbnet_decide(1, 1, -1, 0, 0, 1, 0, &d);
+    CHECK(!d.Write, "unticked over 0: nothing");
+    inst_tbnet_decide(1, 1, -1, -1, 0, 1, 0, &d);
+    CHECK(!d.Write, "unticked over none: nothing");
+    /* The targets. */
+    inst_tbnet_decide(1, 1, -1, -1, 1, 0, 0, &d);
+    CHECK(d.Write && !d.ToNhi && d.ToMw, "no host interface: machine-wide");
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 1, &d);
+    CHECK(d.Write && d.ToNhi && d.ToMw,
+          "a machine-wide value there: both places");
+    /* Record 35's sequence: staged-only /tbnet, then a host interface,
+     * /notbnet, /tbnet again: 1 in both places at the end. */
+    inst_tbnet_decide(1, 1, 1, -1, -1, 0, 0, &d);
+    CHECK(d.Write && d.Value == 1 && !d.ToNhi && d.ToMw, "staged-only /tbnet");
+    inst_tbnet_decide(1, 1, 0, 1, -1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 0 && d.ToNhi && d.ToMw,
+          "then /notbnet with a host interface: 0 in both");
+    inst_tbnet_decide(1, 1, 1, 0, -1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && d.ToMw,
+          "then /tbnet again: 1 in both");
+    /* Its mirror: ticked on the page over a machine-wide 0. */
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && d.ToMw,
+          "the box over a machine-wide 0: 1 in both");
+
+    /* The switches while networking is not wired. */
+    CHECK(inst_parse_args(2, (char **)a1, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "no Thunderbolt networking driver") != NULL,
+          "/tbnet refused: no driver in this package");
+    CHECK(inst_parse_args(3, (char **)a2, &o, err, sizeof(err)) == 0 &&
+              o.NoTbNet && !o.TbNet, "/notbnet accepted (it changes nothing)");
+    CHECK(inst_parse_args(3, (char **)a3, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "contradict") != NULL, "both: refused");
+    CHECK(inst_parse_args(3, (char **)a4, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/notbnet belongs to an install") != NULL,
+          "with /uninstall: refused");
+    CHECK(inst_parse_args(3, (char **)a5, &o, err, sizeof(err)) != 0,
+          "with /devices: refused");
+}
+
 int main(void)
 {
+    test_tbt_page();
     test_versions();
     test_models_rule();
     test_cm_only();

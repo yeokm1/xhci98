@@ -98,6 +98,7 @@
 #define MK_CM_DRP_COMPATIBLEIDS     0x00000003UL
 #define MK_CM_DRP_SERVICE           0x00000005UL
 #define MK_CM_DRP_DRIVER            0x0000000AUL
+#define MK_CM_DRP_CAPABILITIES      0x00000010UL
 #define MK_CM_DRP_CONFIGFLAGS       0x0000000BUL
 #define MK_CM_DRP_LOWERFILTERS      0x00000013UL
 #define MK_CM_DRP_BUSNUMBER         0x00000016UL
@@ -430,6 +431,21 @@ static int mk_prop_dword(DWORD dn, ULONG prop, ULONG *v)
 
     return api.GetProp(dn, prop, &type, v, &n, 0) == MK_CR_SUCCESS &&
            n == sizeof(*v);
+}
+
+/* Record 21 section 7.7: what Windows recorded of the unit's capabilities,
+ * as mk_win_recorded reads it, on 2000 and XP (NT 5.x) alone; -1 elsewhere
+ * and when the read fails. */
+static int mk_unit_recorded(DWORD dn)
+{
+    ULONG caps = 0;
+    int have;
+
+    if (osv.dwMajorVersion != 5) {
+        return -1;
+    }
+    have = mk_prop_dword(dn, MK_CM_DRP_CAPABILITIES, &caps);
+    return mk_win_recorded(have, (unsigned long)caps);
 }
 
 static void mk_walk_from(DWORD dn, int parent, int depth)
@@ -1296,6 +1312,7 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
     BOOL called;
     HANDLE sm = NULL;
     const char *why = NULL;
+    int rec;
     char unitKeep[INST_ID_CHARS];
 
     t = mk_tried(h, e->Serial, 1);
@@ -1377,6 +1394,15 @@ static void mk_restart(const MK_NHI *h, const MK_ENTRY *e, int unit)
         (api.Status(&st, &pr, dn, 0) != MK_CR_SUCCESS ||
          (st & MK_DN_STARTED) == 0 || (st & MK_DN_HAS_PROBLEM) != 0)) {
         why = "the unit is not started (held for eject, disabled or installing)";
+        api.Destroy(set);
+    } else if (why == NULL && (e->Flags & MK_EF_REMOVABLE) != 0 &&
+               (rec = mk_unit_recorded(dn)) != 0) {
+        /* Record 21 section 7.7: an answered unit is restarted only while
+         * Windows' recorded capabilities, read again now, still lack
+         * Removable (and SurpriseRemovalOK). */
+        why = rec == 1 ? "Windows has recorded it as removable now"
+                       : "its recorded capabilities could not be read, or "
+                         "say SurpriseRemovalOK";
         api.Destroy(set);
     }
     if (why != NULL) {
@@ -1523,6 +1549,7 @@ static void mk_entries(const int *prot)
     int unit;
     int c;
     int k;
+    int rec;
     int nCand = 0;
 
     for (i = 0; i < nhiCount; i++) {
@@ -1564,10 +1591,12 @@ static void mk_entries(const int *prot)
                 continue;
             }
             /* The mark is there. */
+            rec = mk_unit_recorded(nodes[unit].Dn);
             t = mk_tried(h, e->Serial, 0);
             if (t != NULL && t->Restarted &&
                 (e->Flags & (MK_EF_BUS_ATT | MK_EF_ADD_ATT)) != 0 &&
-                (e->Flags & MK_EF_REMOVABLE) != 0) {
+                (e->Flags & MK_EF_REMOVABLE) != 0 &&
+                (osv.dwMajorVersion != 5 || rec == 1)) {
                 /* Listed after the restart: the restart worked, so a later
                  * loss of the mark is a new event and may have its own one
                  * restart. Windows' driver installation deletes a device's
@@ -1582,7 +1611,7 @@ static void mk_entries(const int *prot)
                 t->Outcome = 0;
                 t->Gated = 0;
             }
-            if (mk_restart_wanted(e, 1) &&
+            if (mk_restart_wanted(e, 1, rec) &&
                 (nodes[unit].Status & MK_DN_STARTED) != 0 &&
                 (nodes[unit].Status & MK_DN_HAS_PROBLEM) == 0 &&
                 !mk_br_waiting(nodes[unit].Id) &&

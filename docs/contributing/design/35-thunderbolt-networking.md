@@ -1,6 +1,11 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 4, 2026-10-31, step S0: Linux's `thunderbolt-net` read
+Status: revision 5, 2026-10-31, step S3: the software connection
+manager's half as built (section 3.9), reviewed and revised; an
+emulator observation of Linux's end-to-end flow control (section 2.4
+point 9), the emulator's firmware-CM model choice (section 10, E5) and
+its SOF PDF on a short frame (section 5.3).
+Revision 4, 2026-10-31, step S0: Linux's `thunderbolt-net` read
 (section 2.4) and the record amended to it (sections 3.2, 4.1, 4.4, 7.2
 to 7.4, receive segmentation). Revision 3, the owner's answers of the
 same day in section 15; revision 2, before code, reviewed and revised (the
@@ -12,7 +17,9 @@ Revision 1, 2026-10-31, before code. Written for
 release `3.4.0.0` after its withdrawal of 2026-10-30, when it was task
 45.43), with the owner's decisions of 2026-10-31 on its installer box
 (task 45.60), its packaging and its order folded in (sections 9 and 14).
-Nothing in `src\` implements it. Section 15 lists the owner's questions;
+Steps S1 to S3 are in `src\cm\` (`tbt_xdp.c`, ring 0's XDomain sink
+in `tbt_ring.c`, and `tbt_u4cm.c`'s inter-domain section); the rest is
+not yet written. Section 15 lists the owner's questions;
 section 16 what is open and what is a risk; section 14 the steps a later
 worker codes it in.
 
@@ -476,6 +483,15 @@ answered:
    shifted left by 4 with the locally-administered bit, the rest two
    hashes of the local UUID (`tbnet_generate_mac`); it puts its MAC in
    its Login Response and never reads the peer's.
+9. **Observed, not read** ([emu] with [linux]: a leg of `usb4-emu`'s
+   two-host model, step S8, 2026-10-31): Alpine Linux 3.24.2's kernel
+   (6.18.52) `thunderbolt_net` logged "enabling E2E for RX ring 1 with TX
+   HopID 1" and enabled end-to-end flow control on its receive ring
+   alone, not on its transmit ring, though both blocks' `prtcstns` read
+   `0x7`. That peer therefore sends without end-to-end credits while it
+   grants credits to this side's transmit ring; this side's receive ring
+   must take frames from a peer sending with no credits while its own
+   E2E is enabled (section 5.3).
 
 ### 2.5 Windows' own Thunderbolt networking
 
@@ -778,6 +794,114 @@ under the software CM the port then clears its Inter-Domain bit (Guide
 3.3; [linux] `tb_port_unconfigure_xdomain`) and returns to record 22's
 port machine, where the next plug starts again.
 
+### 3.9 As built under the software CM (step S3)
+
+`tbt_u4cm.c`'s section "Inter-domain links", reached by narrow hooks in
+the port machine; `test_u4xd` drives it (section 11.1).
+
+- **The port.** `tbtU4Router`'s ERR_ENUM or ERR_NUA branch leaves the
+  port `TBT_U4_XDOMAIN` with `TBT_U4_WHY_XDOMAIN` when `XhciCmNet` is 1
+  (`TBT_U4_CONFIG.Net`). The idle tick, after the port's check, starts a
+  `TBT_XDP_PEER` for it, ticks it, and takes the port's state from the
+  engine's: LOOP is UNSUPPORTED with `TBT_U4_WHY_LOOP` and Disable Time
+  Sync set on lane 0 (Guide 3.3); ERROR before any UUID answer is
+  UNSUPPORTED with `TBT_U4_WHY_ENUM_ERROR` as today, the record kept so
+  that the peer's own request restarts it (section 3.3 step 2);
+  anything else XDOMAIN. Its check ends the peer on record 22 section
+  7.1's evidence (lane 0 in CLd, Lock set again) and then runs record
+  22's teardown; a lane 0 hot plug event alone only asks for that check.
+  One record per host port, kept outside the port records that the
+  snapshots and the resume copy whole, and tagged with the port's
+  connection generation: a record of an earlier connection (a teardown
+  nested at a safe point, record 22 section 7.4, ends a connection
+  without this section) is ended as gone before anything else touches
+  it. A recovery (record 22 section 7.7) puts an XDOMAIN port back to
+  EMPTY, so the ordinary check connects it afresh after the commit.
+- **The packets.** Ring 0's XDomain sink (step S2) copies each packet
+  into a queue of 8 that the thread empties after the read in progress
+  (`TbtU4Poll`, `TbtU4RingWake`), each to the peer of the port whose
+  lane 0 its depth-1 route names; a full queue drops the packet,
+  counted (the peer resends). With `XhciCmNet` 0 the sink counts and
+  drops every packet (`cm.xdp.ignored`, logged at the first).
+- **One service per NHI** (section 13). While one port's service is up,
+  every other peer's block carries no `network` directory and its
+  logins are refused (the engine's `TbtXdpPeerSetNetWanted`); the
+  directory is offered again when that service ends. A second service
+  racing the first to its paths is refused there, and the engine logs
+  out.
+- **The link.** Bonding is offered to the engine when `XhciCmLaneBonding`
+  is 1, the link is Gen 2 or 3 at x1 and both host lane adapters list
+  x2; the peer's side is the Link State exchange's. Target Link Width and
+  Lane Bonding are written on the host's lanes only, kept in the port's
+  `LaneSaved` and `LaneWritten`, so record 22's host restore puts them
+  back at the teardown. A Gen 2 or 3 link that does not bond has its
+  lane 1 disabled once the peer's UUID is known (`Lane1Disabled`, put
+  back the same way), not before, so a far end that never answers keeps
+  today's state. That disable is record 22 section 6.5 step 6 on the
+  host's side: what a failed bonding wrote put back and read back first,
+  then, with both host lane adapters at their defaults (Target Link
+  Width single, no Lane Bonding, no CL state enabled) and Disable Time
+  Sync set on lane 0 (the link's TMU, which this driver never enables
+  here, off), lane 1 in CL0 beside a lane 0 at x1 disabled and read back
+  Disabled (a lane 1 already in CLd or Disabled, or a lane 0 at x2, is
+  left as it is). A link that cannot be verified so is served but gets
+  no path until a re-plug (`cm.xdp.lane1`). The engine polls the width
+  while it waits for a bonding, so a lane 0 hot plug event is not handed
+  to it.
+- **PORT_CS_19's Inter-Domain bit** (bit 4, the Spec's PORT_CS_19
+  table) is set once the peer's UUID is known and cleared, and read
+  back, at the peer's end, the service waiting until the set is
+  answered (tried again at each tick); a clear not read back stays owed
+  to the port
+  and is retried by the idle tick while no peer runs there (a new
+  record on the port takes the obligation over).
+- **The paths** of section 5.1, on ring 1: the receive entry first, at
+  lane 0, then the transmit entry at the host interface adapter, each
+  one read of two DWs and one write of both, priority 4, weight 1. The
+  receive entry's credits are the lesser of what the lane has left
+  (record 22 section 6.8's accounting) and the host router's `baMaxHI`,
+  which the Buffer Allocation Request now keeps beside `baMaxPCIe` and
+  `baMaxUSB3`, else 14. Before either is written, both HopIDs and the
+  ring are checked free on their adapters, live or quarantined (record
+  22 section 6.8's scan); one in use refuses the service
+  (`cm.net.hop.busy`). Down: both entries are handed, with where they
+  send, to a record of their own that outlives the service's; then the
+  transmit entry, then the receive entry, each read first and
+  invalidated through record 22's `tbtU4Invalidate` (Pending Packets
+  waited for; an entry that never drains is quarantined) only while it
+  still reads valid with that output. One that reads invalid, or valid
+  with another output (left untouched, record 22 section 7.7's rule for
+  what is not established as one's own), is owed no more; one that
+  cannot be read stays owed to the idle tick, which takes it down at the
+  top of the port's share, before any host restore or connection, and no
+  new service starts on the port while any is owed. One that a
+  quarantine record holds instead (its drain failed, or the access
+  closed during the invalidation) is the quarantine's from then on, the
+  record given this service's output identity where it has none, so its
+  retry knows the entry as this driver's.
+- **The driver's share** (step S5), `TBT_U4_NET`: `RingsUp` before the
+  entries, `Link` up after them and down before they go (after which the
+  driver accepts no send and drains its transmit ring, at most 500 ms),
+  `RingsDown` after the entries are invalid. `TbtU4NetWanted` is the
+  network driver's `Open` and `Close`; `TbtU4NetIdentity` gives the MAC
+  of section 4.4 before any peer.
+- **The stop and the suspend** end every peer with one Logout sent and
+  not waited for (IDS 5.1.2 takes no answer as one), then its paths and
+  rings down; the containment ends them with nothing written, the two
+  entries left owed by identity to the idle tick. Any teardown of the
+  port (record 22's, nested at a safe point included) ends its peer
+  first, before the lanes are restored.
+- **This domain's UUID**: DW 0 is ROUTER_CS_7 and DW 1 ROUTER_CS_8 (the
+  Spec names them the UUID's high and low halves; Linux reads the two
+  DWs as one little-endian 64-bit value whose low half is ROUTER_CS_7),
+  DW 2 and 3 all ones; the MAC from the same two DWs, router id 0, port
+  0. One that reads all zero or all ones is replaced by a value made from
+  the clock and the ring's bus address, logged (`cm.xdp.uuid.random`).
+- **Not on a Thunderbolt host router** (record 22 section 19): its link
+  controller's inter-domain setting ([linux] `lc.c`
+  `tb_lc_configure_xdomain`) is not designed here, so such a port stays
+  UNSUPPORTED.
+
 ## 4. The USB4NET service
 
 ### 4.1 Who logs in
@@ -949,7 +1073,12 @@ common buffer:
 - **Receive**: Data Buffer Size 0 (4096 bytes), every descriptor posted
   with RS 1 and IE 1 (IE is harmless while the interrupt is masked, and
   record 21 section 4.5's arm opens it); the PDF masks SOF bit 17 (PDF 1)
-  and EOF bit 2 (PDF 2) (IDS 5.1.5; Spec Table 12-27).
+  and EOF bit 2 (PDF 2) (IDS 5.1.5; Spec Table 12-27). A completed
+  descriptor is taken by its EOF PDF and its length, never by the SOF PDF
+  it reports: `usb4-emu`'s model writes back SOF PDF 0 for a frame small
+  enough for one tunnelled packet [emu] (the model's reading of Spec
+  12.4.2.1, an inference of its own), so the receiver does not require
+  SOF PDF 1 on a short frame.
 - **Transmit**: each descriptor SOF PDF 1 and EOF PDF 2 for a frame in one
   descriptor (every USB4 frame here fits one 4 KiB buffer), RS 1, IE 0.
 - **End-to-end flow control**: enabled on both rings when both blocks
@@ -960,7 +1089,13 @@ common buffer:
   (Table 12-21's note), so the transmit ring takes all its bits in one
   write and the receive ring's E2E bits go in a second write, which the
   Spec does not forbid for a receive ring [inf]. This driver advertises
-  bit 0 on every host; `XhciCmNetE2E` 0 (section 8.1) withdraws it.
+  bit 0 on every host; `XhciCmNetE2E` 0 (section 8.1) withdraws it. A peer may enable it on
+  its receive ring alone (section 2.4 point 9, as observed of Linux):
+  its frames then arrive with no credits used, which a receive ring with
+  E2E enabled is taken to accept as any frame while it has a descriptor
+  posted, the credits only pacing a sender that waits for them [inf]; a
+  frame that finds no descriptor is that sender's loss, counted, and the
+  S5 and S9 legs read both.
 - **Sizes**: `XhciCmNetRxFrames` and `XhciCmNetTxFrames` descriptors
   (section 8.1, 128 each by default, 32 to 1024: the floor leaves room
   for the 17 frames of the largest packet, section 7.2, beside the one
@@ -1617,8 +1752,10 @@ from it:
   system, whatever is found, and never ticked but by the user or a
   switch (the owner); on an update its first state is the value in force
   (`XhciCmNet` 1 in a present NHI's key, or machine-wide), so a computer
-  that has networking shows the box ticked; greyed and unticked when the package carries no
-  network driver for the system. The sentence under it, without testing
+  that has networking shows the box ticked. The box is hidden while
+  `INST_TBNET_WIRED` (`xhciinst\inst_core.h`) is 0, with this section's
+  rule (greyed and unticked when the package carries no network driver
+  for the system) applying once step S11 wires it. The sentence under it, without testing
   status (record 26 section 5.3.1): that it makes a network connection to
   another computer over a Thunderbolt or USB4 cable, that the other
   computer then reaches this one as over any network (file sharing
@@ -1761,7 +1898,12 @@ for its maintainer (section 15 Q7):
   layout (section 3.4) when the link comes and goes; approve `0x10`
   building the two paths from the four numbers; mailbox `0x10` and `0x11`
   (AR) and command `0x11` in two stages (TR) tearing them down; PDF 6
-  and 7 frames passed between ring 0 and the link.
+  and 7 frames passed between ring 0 and the link. In the model the
+  emulated ICM takes the far host's UUID and its route to the link from
+  the two emulators' own link handshake, not from a UUID exchange of its
+  own, and passes every PDF 6 and 7 between ring 0 and the link
+  untouched. What real Alpine Ridge or Titan Ridge firmware sends here is
+  not public.
 - **E6, the receive interrupt**: the receive ring's Receive Data Buffer
   cause raised as ring 0's is (record 21 section 4.5's emulator support).
 - **E7, the harness**: a script that starts two q35 guests on one host,
@@ -1791,10 +1933,15 @@ for its maintainer (section 15 Q7):
   PROPS, ERROR and its restart); the responder's answers of section 3.6
   case by case; USB4NET login and logout both ways, crossing logins, a
   second requester refused, a bad Service HopID, the minute of resends.
-- `test_u4cm` and the fake fabric (`u4_fakefab.c`, which already holds two
-  domains): two hosts joined port to port, ERR_ENUM at the far router,
-  the Inter-Domain bit, the two path entries and their credits read back,
-  the order up and down, an unplug mid-login, mid-service and mid-teardown.
+- `test_u4xd` (new, step S3) over `test_u4cm`'s fake fabric
+  (`u4_fakefab.c`): a device router standing for the far host's, every
+  request to it answered ERR_ENUM, and a second engine of `tbt_xdp.c`'s
+  as the far host's connection manager; both bonding roles and none, the
+  Inter-Domain bit, the two path entries and their credits read back,
+  the order up and down, an unplug at each stage before the service and
+  during it, the stop's Logout, no answer and the peer's restart, a
+  loop, the network driver's close and open, one service per NHI, rings
+  refused, and `XhciCmNet` 0.
 - `test_tbt_icm`: events `0x06` and `0x07` and the approve and teardown
   per row, synthesised from `tb_msgs.h`'s structures, as the other non-AR
   vectors are (record 21 section 5.2), and the AR mailbox pair.

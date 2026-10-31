@@ -348,6 +348,13 @@ rem                  (src\cm\tbt_hw.c, task 40-A.2): every row of its table,
 rem                  every NVM_AUTH_DONE/ICM_EN combination, test (d)'s
 rem                  interface and router versions, and each negative case
 rem                  inert, never the other profile
+rem   test_u4xd    - the software connection manager's inter-domain links
+rem                  (src\cm\tbt_u4cm.c with tbt_xdp.c, task 45.59 step S3,
+rem                  design record 35 sections 3.3 to 5.1): a far host over the
+rem                  fake fabric, both bonding roles and none, the two path
+rem                  entries and their credits, the unplug, the stop's
+rem                  Logout, no answer, a loop, one service per NHI and
+rem                  XhciCmNet 0
 rem   test_u4cm    - the USB4 software connection manager (src\cm\tbt_u4cm.c,
 rem                  tasks 40-A.3 and 40-A.8, design record 22 section 14.1)
 rem                  over the fake fabric of u4_fakefab.c: both emulator host
@@ -698,10 +705,13 @@ rem test_u4cm links the USB4 software connection manager (src\cm\tbt_u4cm.c,
 rem tasks 40-A.3 and 40-A.8, design record 22 section 14.1) over the fake
 rem fabric of u4_fakefab.c, with the router-version helper of tbt_hw.c and
 rem the ring it drives (and tbt_icm.c, which tbt_hw.c links against).
-call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_u4v2 links the same files: the version 2 vectors (task 45.20), a
 rem suite of their own over the same fabric.
-call :run test_u4v2 "test_u4v2.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4v2 "test_u4v2.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_u4xd links the same files: the inter-domain links (task 45.59 step
+rem S3), the far host an engine of tbt_xdp.c's own over the same fabric.
+call :run test_u4xd "test_u4xd.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,
 rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the

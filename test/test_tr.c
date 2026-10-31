@@ -4176,8 +4176,20 @@ static void test_marks(void)
              "the value and an attachment, Removable not set");
     CHECK_EQ(tr_mark_state(1, &markSet, 7, 1), TR_MK_WRITTEN,
              "an entry index past the count is none");
-    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "listed by Windows") == 0,
-          "listed text");
+    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "the Thunderbolt driver has "
+                 "answered it as removable") == 0, "answered text");
+    CHECK(strcmp(tr_mark_text(TR_MK_NOTLISTED), "mark written; the "
+                 "Thunderbolt driver has not answered it as removable") == 0,
+          "not answered text");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 1, 0x00000000UL),
+                 "Windows has not recorded it as removable.") == 0,
+          "answered, Windows recorded no Removable: the clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 1, 0x00000004UL), "") == 0,
+          "answered and recorded: no clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 0, 0x00000000UL), "") == 0,
+          "capabilities not read: no clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_WRITTEN, 1, 0x00000000UL), "") == 0,
+          "another state: no clause");
     CHECK(strcmp(tr_mark_text(TR_MK_WRITTEN), "mark written; takes effect at "
                  "the next start of the device") == 0, "written text");
     CHECK(strcmp(tr_mark_text(TR_MK_NOT), "not marked") == 0, "not text");
