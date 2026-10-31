@@ -1,6 +1,10 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 7, 2026-10-31, step S5: the service's driver half in
+Status: revision 8, 2026-10-31: the driver half joined to the firmware
+connection manager (section 6.5, "The two connection managers"), the
+software connection manager's link lowered at this host's own Logout
+(section 3.9), reviewed and revised.
+Revision 7, 2026-10-31, step S5: the service's driver half in
 `xhcicm.sys` as built (section 6.5), reviewed and revised.
 Revision 6, 2026-10-31, step S4: the firmware connection
 manager's half as built (section 3.10), reviewed and revised.
@@ -883,6 +887,16 @@ the port machine; `test_u4xd` drives it (section 11.1).
   closed during the invalidation) is the quarantine's from then on, the
   record given this service's output identity where it has none, so its
   retry knows the entry as this driver's.
+- **The link at a logout** (section 4.2). The network driver's link goes
+  down at the first logout of either side, as under the firmware
+  connection manager (section 3.10): a Logout from the peer takes the
+  paths down inside the engine (`ServiceDown`, which lowers the link
+  first); this host's own Logout (the network driver's `Close`, or the
+  service withdrawn from a peer) takes them down only when it is answered
+  or times out, so after each engine call (a tick, a packet, a change of
+  the offer) the link is lowered as soon as the engine's service is no
+  longer up, the paths, the rings and the NHI's one service held until
+  `ServiceDown`. `test_u4xd`'s unanswered close holds it.
 - **The driver's share** (step S5), `TBT_U4_NET`: `RingsUp` before the
   entries, `Link` up after them and down before they go (after which the
   driver accepts no send and drains its transmit ring, at most 500 ms),
@@ -1514,12 +1528,12 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
 ### 6.5 As built (step S5)
 
 `cm_net.c` is the driver half, `cm_netr.c` the rings' pure half
-(`test_cm_net`, section 11.1); the engine's calls are section 3.9's.
+(`test_cm_net`, section 11.1); the engine's calls are section 3.9's and
+3.10's.
 
 - **The PDO** is created at the NHI's first start that has `XhciCmNet`
-  1 under the software connection manager, and reported in BusRelations
-  at every such start. The firmware connection manager's starts report
-  it no more until step S4 gives that path a service. Its removal while
+  1 under either connection manager, and reported in BusRelations at
+  every such start. Its removal while
   the NHI still reports it (a disable) keeps it; a removal once it is
   reported no more retires it from the NHI, so a later start that wants
   one makes a fresh PDO. It is deleted at the NHI's removal once the PnP
@@ -1607,6 +1621,24 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
 - **Imports**: `KeInitializeTimer`, `KeSetTimer`, `KeCancelTimer` and
   `ObfReferenceObject` join `xhcicm.sys`'s allowlists, each
   `xhci98.sys`'s own row with its Windows 98 evidence.
+- **The two connection managers.** The three operations are given to
+  the one the start activates, before its start (`CmNetBindOps`): to the
+  software one by `TbtU4SetNet`, to the firmware one by `TbtIcmSetNet`
+  after its `TbtIcmSetNetConfig`, `port` then being the peer record's
+  slot + 1 (section 3.10). The thread's pass applies `Open` and `Close`
+  and reads the MAC through the same profile (`TbtIcmNetWanted`,
+  `TbtIcmNetIdentity` once the firmware connection manager is bound,
+  before each idle poll and at each `CM_WORK_NET`). The NHI's serial for
+  the firmware connection manager's MAC (section 3.10, "The identity") is
+  its PCI Express Device Serial Number, read at that activation from the
+  Device Serial Number Extended Capability (id 0003h) in the extended
+  list from 100h, through the same configuration path as every read of
+  the NHI's own; a list that cannot be read there (all ones, 0, or 100h
+  reading as offset 0's DW, as a path that reaches only the first 256
+  bytes may), or a serial of zero or all ones, gives none
+  (`cm.net.dsn.none`) and the engine's own value. Under the firmware
+  connection manager the link's rate and lanes are the firmware's and
+  unread: `QueryInfo` reports both 0, unknown.
 
 ## 7. The network drivers
 

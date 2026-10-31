@@ -3,13 +3,14 @@
  * xhcicm.sys (design record 35 sections 5 and 6; roadmap-usb4.md task
  * 45.59, step S5): the network PDO, its interface (src\xhci_cmnet.h), the
  * data rings' memory, lock, poll timer and service DPC, and the operations
- * the software connection manager's inter-domain links call (TBT_U4_NET,
- * tbt_u4cm.h). Included by cm.h; the pure ring half is cm_netr.h.
+ * either connection manager's inter-domain links call (TBT_U4_NET,
+ * tbt_u4cm.h; TBT_ICM_NET, tbt_icm.h, the same signatures). Included by
+ * cm.h; the pure ring half is cm_netr.h.
  *
  * THE PDO (record 35 sections 6.1 and 6.2). A fourth kind of device object
  * (CM_KIND_NETPDO), the child of the NHI's FDO: created at the NHI's first
- * start whose XhciCmNet is 1 under the USB4 software connection manager and
- * reported in its BusRelations at every such start; kept across an orderly
+ * start whose XhciCmNet is 1 under either connection manager and reported
+ * in its BusRelations at every such start; kept across an orderly
  * stop; reported no more by a start with XhciCmNet 0 or after a surprise
  * removal. Deleted at the NHI's removal once the PnP manager has removed
  * it, or at its own removal once the NHI has orphaned it (Windows 2000 and
@@ -106,8 +107,13 @@ typedef struct _CM_NET {
     ULONG MaxFrame;
     LONG CbActive;          /* callbacks running                           */
 
-    /* What the thread applies (TbtU4NetWanted), and its acknowledgement.
-     * Applied is reset at each activation. */
+    /* Which connection manager this start's operations were given to
+     * (CmNetBindOps): 0 the software one (TbtU4SetNet), 1 the firmware
+     * one (TbtIcmSetNet). */
+    ULONG Fw;
+
+    /* What the thread applies (TbtU4NetWanted or TbtIcmNetWanted), and its
+     * acknowledgement. Applied is reset at each activation. */
     volatile ULONG Wanted;
     volatile ULONG WantedStns;
     ULONG Applied;

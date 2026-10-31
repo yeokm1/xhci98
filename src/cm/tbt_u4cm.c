@@ -13128,6 +13128,26 @@ static BOOLEAN tbtU4XdOtherUp(const TBT_U4CM *cm, const TBT_U4_XD *x)
     return FALSE;
 }
 
+/* Record 35 section 4.2: the network driver's link goes down at the first
+ * logout of either side. A Logout from the peer takes the paths down
+ * inside the engine (ServiceDown, which lowers the link first); this
+ * host's own Logout takes them down only when it is answered or times
+ * out, so after each engine call the link is lowered as soon as the
+ * engine's service is no longer up, the paths, the rings and the NHI's one
+ * service held until ServiceDown. PathsUp guards the service's own build:
+ * inside ServiceUp the link is raised before the engine marks the service
+ * up. */
+static VOID tbtU4XdLinkSync(PTBT_U4CM cm, PTBT_U4_XD x)
+{
+    if (x->Used && x->LinkUp && x->Peer.PathsUp && x->Peer.NetState != TBT_NET_S_UP) {
+        x->LinkUp = FALSE;
+        tbtU4Log(cm, "cm.net.link.down", x->Port);
+        if (cm->Net.Link != NULL) {
+            cm->Net.Link(cm->Net.Context, x->Port, FALSE, NULL);
+        }
+    }
+}
+
 /* Each peer offered the service (its block's network directory, its
  * logins accepted) while the network driver holds it open and no other
  * port's is up (section 13); a change rebuilds that peer's block and tells
@@ -13151,6 +13171,7 @@ static VOID tbtU4XdOffer(PTBT_U4CM cm)
             cm->XdIn = x->Port;
             TbtXdpPeerSetNetWanted(&x->Peer, want, cm->NetPrtcstns);
             cm->XdIn = in;
+            tbtU4XdLinkSync(cm, x);
         }
     }
 }
@@ -13739,6 +13760,7 @@ static VOID tbtU4XdSync(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
 {
     ULONG st;
 
+    tbtU4XdLinkSync(cm, x);
     st = x->Peer.State;
     if (st == TBT_XDP_S_LOOP) {
         if (p->State != TBT_U4_UNSUPPORTED || p->Why != TBT_U4_WHY_LOOP) {

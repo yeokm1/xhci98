@@ -2,8 +2,9 @@
  * cm_net.c - the Thunderbolt networking service's driver half (design
  * record 35 sections 5 and 6; roadmap-usb4.md task 45.59, step S5). See
  * cm_net.h for the PDO, the interface and the locks; the rings' pure half
- * is cm_netr.c, the login and the paths the software connection manager's
- * (tbt_u4cm.c, record 35 section 3.9), which calls this file's three
+ * is cm_netr.c, the login and the paths the connection manager's: the
+ * software one's (tbt_u4cm.c, record 35 section 3.9) or the firmware
+ * one's (tbt_icm.c, section 3.10), either of which calls this file's three
  * operations on the connection-manager thread:
  *
  *   RingsUp    before either path entry: the rings' memory (cm_pool.c, at
@@ -21,8 +22,8 @@
  *              interface was lost.
  *
  * Open and Close reach the engine on the thread (CM_WORK_NET, then
- * CmNhiNetWork), which applies TbtU4NetWanted and reads this domain's MAC;
- * both wait for that pass.
+ * CmNhiNetWork), which applies TbtU4NetWanted or TbtIcmNetWanted and reads
+ * this domain's MAC; both wait for that pass.
  *
  * THE POLL (record 35 section 5.4). The receive service runs in one DPC,
  * queued only by the kick; the kick comes from the one-shot poll timer's
@@ -554,7 +555,9 @@ static LONG cmNetRingsUp(PVOID context, ULONG port, ULONG ring, BOOLEAN e2e)
 }
 
 /* Record 22's link: the whole rate in Mb/s and the lanes, from the host
- * lane 0's LANE_ADP_CS_1 as the engine last read it in this connection. */
+ * lane 0's LANE_ADP_CS_1 as the engine last read it in this connection.
+ * Under the firmware connection manager the lanes are the firmware's and
+ * unread (record 35 section 3.10): unknown, 0. */
 static VOID cmNetLinkRate(PCM_NHI nhi, ULONG port, PULONG mbps, PULONG lanes)
 {
     const TBT_U4_PORT *p;
@@ -563,6 +566,9 @@ static VOID cmNetLinkRate(PCM_NHI nhi, ULONG port, PULONG mbps, PULONG lanes)
 
     *mbps = 0;
     *lanes = 0;
+    if (nhi->Net.Fw) {
+        return;
+    }
     p = TbtU4Port(&nhi->U4, port);
     if (p == NULL || !p->LinkSeen || p->LinkGeneration != p->Generation) {
         return;
@@ -645,7 +651,9 @@ static VOID cmNetLink(PVOID context, ULONG port, BOOLEAN up, const UCHAR *peerMa
     nhi = (PCM_NHI)context;
     net = &nhi->Net;
     if (up) {
-        peer = TbtU4Peer(&nhi->U4, port);
+        /* `port` is the software connection manager's port, or the
+         * firmware connection manager's peer record's slot + 1. */
+        peer = net->Fw ? TbtIcmPeer(&nhi->Icm, port - 1) : TbtU4Peer(&nhi->U4, port);
         stns = peer != NULL ? peer->RemoteInfo.Prtcstns : 0;
         cmNetLinkRate(nhi, port, &mbps, &lanes);
         if (!net->Pinned) {
@@ -794,19 +802,84 @@ VOID CmNetInit(PCM_NHI nhi)
     KeInitializeTimer(&net->Timer);
 }
 
-/* At the activation of the USB4 profile (cmU4Activate), after TbtU4Init:
- * the operations given to the engine, the client's wish to apply again. */
-VOID CmNetBindOps(PCM_NHI nhi)
+/*
+ * The NHI's PCI Express Device Serial Number, for its MAC under the
+ * firmware connection manager (record 35 sections 3.10 and 4.4): the PCI
+ * Express Base Specification's Device Serial Number Extended Capability
+ * (id 0003h), its serial's low DW at +4 and high DW at +8, found in the
+ * extended capability list from 100h (each header's next offset in bits
+ * 31:20, dword aligned, 0 at the end). At most 64 entries are read. None
+ * where the list cannot be read: a 100h that reads all ones, 0, or the
+ * same DW as offset 0 (a configuration path that reaches only the first
+ * 256 bytes and wraps, or ignores the high offset bits), a next offset
+ * below 100h, or a serial of all ones or of zero. PASSIVE_LEVEL.
+ */
+static BOOLEAN cmNetDsn(PCM_NHI nhi, PULONG lo, PULONG hi)
+{
+    ULONG id;
+    ULONG off;
+    ULONG hdr;
+    ULONG n;
+
+    id = CmCfgRead32(nhi, 0);
+    off = 0x100UL;
+    for (n = 0; n < 64; n++) {
+        hdr = CmCfgRead32(nhi, off);
+        if (hdr == 0 || hdr == 0xFFFFFFFFUL || (off == 0x100UL && hdr == id)) {
+            return FALSE;
+        }
+        if ((hdr & 0xFFFFUL) == 0x0003UL) {
+            *lo = CmCfgRead32(nhi, off + 4);
+            *hi = CmCfgRead32(nhi, off + 8);
+            return (BOOLEAN)(!(*lo == 0xFFFFFFFFUL && *hi == 0xFFFFFFFFUL) &&
+                             !(*lo == 0 && *hi == 0));
+        }
+        off = (hdr >> 20) & 0xFFCUL;
+        if (off < 0x100UL) {
+            return FALSE;
+        }
+    }
+    return FALSE;
+}
+
+/* At the activation of a connection manager, after its init and before
+ * its start: the operations given to the engine (cmU4Activate's
+ * TbtU4SetNet, `fw` FALSE; the firmware connection manager's TbtIcmSetNet
+ * and the NHI's serial, `fw` TRUE), the client's wish to apply again.
+ * PASSIVE_LEVEL. */
+VOID CmNetBindOps(PCM_NHI nhi, BOOLEAN fw)
 {
     TBT_U4_NET ops;
+    TBT_ICM_NET iops;
+    ULONG lo;
+    ULONG hi;
 
     nhi->Net.Applied = 0;
     nhi->Net.AppliedStns = 0;
+    nhi->Net.Fw = fw ? 1UL : 0UL;
     /* This start's identity: a router whose UUID read unusable gets a new
      * one at each start (tbtU4XdIdentity), and its MAC with it. */
     nhi->Net.MacValid = 0;
     if (nhi->Values.Value[CM_VAL_NET] == 0) {
-        TbtU4SetNet(&nhi->U4, NULL);
+        if (fw) {
+            TbtIcmSetNet(&nhi->Icm, NULL);
+        } else {
+            TbtU4SetNet(&nhi->U4, NULL);
+        }
+        return;
+    }
+    if (fw) {
+        iops.Context = nhi;
+        iops.RingsUp = cmNetRingsUp;
+        iops.RingsDown = cmNetRingsDown;
+        iops.Link = cmNetLink;
+        TbtIcmSetNet(&nhi->Icm, &iops);
+        if (cmNetDsn(nhi, &lo, &hi)) {
+            TbtIcmSetNetSerial(&nhi->Icm, lo, hi);
+            CmLogNote(nhi, "cm.net.dsn", hi);
+        } else {
+            CmLogNote(nhi, "cm.net.dsn.none", 0);
+        }
         return;
     }
     ops.Context = nhi;
@@ -816,9 +889,10 @@ VOID CmNetBindOps(PCM_NHI nhi)
     TbtU4SetNet(&nhi->U4, &ops);
 }
 
-/* On the thread, with the software connection manager running: this
- * domain's MAC read once, and the network driver's Open or Close given to
- * the engine. */
+/* On the thread, with a connection manager running: this domain's MAC
+ * read once, and the network driver's Open or Close given to the engine
+ * (the firmware connection manager's where CmNetBindOps gave it the
+ * operations, else the software one's). */
 VOID CmNetPass(PCM_NHI nhi)
 {
     PCM_NET net;
@@ -832,7 +906,8 @@ VOID CmNetPass(PCM_NHI nhi)
     if (nhi->Values.Value[CM_VAL_NET] == 0) {
         return;
     }
-    if (!net->MacValid && TbtU4NetIdentity(&nhi->U4, mac)) {
+    if (!net->MacValid && (net->Fw ? TbtIcmNetIdentity(&nhi->Icm, mac)
+                                   : TbtU4NetIdentity(&nhi->U4, mac))) {
         KeAcquireSpinLock(&net->Lock, &irql);
         for (i = 0; i < 6; i++) {
             net->Mac[i] = mac[i];
@@ -851,7 +926,11 @@ VOID CmNetPass(PCM_NHI nhi)
         net->Applied = wanted;
         net->AppliedStns = stns;
         CmLogNote(nhi, "cm.net.wanted", (wanted << 16) | stns);
-        TbtU4NetWanted(&nhi->U4, (BOOLEAN)(wanted != 0), stns);
+        if (net->Fw) {
+            TbtIcmNetWanted(&nhi->Icm, (BOOLEAN)(wanted != 0), stns);
+        } else {
+            TbtU4NetWanted(&nhi->U4, (BOOLEAN)(wanted != 0), stns);
+        }
     }
 }
 
@@ -1294,7 +1373,7 @@ static VOID cmNetName(PWCHAR buffer, ULONG serial)
 }
 
 /* After a start's PnP half returned: the PDO created at the first start
- * that wants it, and reported while XhciCmNet is 1 under the software
+ * that wants it, and reported while XhciCmNet is 1 under either
  * connection manager (record 35 section 6.1); the PnP manager asked again
  * when that changes. PASSIVE_LEVEL. */
 VOID CmNetStarted(PCM_NHI nhi)
@@ -1308,7 +1387,7 @@ VOID CmNetStarted(PCM_NHI nhi)
     ULONG n;
     NTSTATUS status;
 
-    want = (ULONG)(nhi->Values.Value[CM_VAL_NET] != 0 && nhi->U4On &&
+    want = (ULONG)(nhi->Values.Value[CM_VAL_NET] != 0 && (nhi->U4On || nhi->Net.Fw) &&
                    nhi->Stage == CM_STAGE_ACTIVE);
     if (want && nhi->Net.Pdo == NULL) {
         serial = (ULONG)InterlockedIncrement(&cmNetSerial);

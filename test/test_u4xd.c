@@ -683,6 +683,45 @@ static void test_close_open(void)
     pump(2);
 }
 
+/* Section 4.2: the link goes down at this host's own Logout, not when the
+ * Logout is answered. The far host goes silent once the service is up, so
+ * the Logout of the network driver's Close is never answered: the link is
+ * down at once, the paths and the rings held until the Logout times out,
+ * and only then the entries invalid and the rings down. */
+static void test_close_unanswered(void)
+{
+    LP *lp = &g_lp[0];
+    const TBT_XDP_PEER *ours;
+    int lane;
+    int i;
+
+    setup(1, 1);
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    lane = fabPortLane0(&g_fab, 1);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "the service came up");
+    lp->Live = 0;
+    TbtU4NetWanted(&g_cm, FALSE, 0);
+    ours = TbtU4Peer(&g_cm, 1);
+    CHECK(ours != NULL && ours->NetState == TBT_NET_S_LOGOUT, "our Logout due");
+    CHECK_EQ(g_linkDown, 1, "the link down at the Logout");
+    CHECK_EQ(g_ringsDown, 0, "the rings held");
+    pump(1);
+    CHECK_EQ(g_linkDown, 1, "the link down once");
+    CHECK_EQ(g_ringsDown, 0, "the rings held while the Logout is out");
+    CHECK(entry(lane, (int)lp->TxHop, 0) & 0x80000000UL, "the receive entry kept");
+    CHECK(entry(HI_ADP, 1, 0) & 0x80000000UL, "the transmit entry kept");
+    for (i = 0; i < 300 && g_ringsDown == 0; i++) {
+        pump(1);
+    }
+    CHECK_EQ(g_ringsDown, 1, "the rings down once the Logout timed out");
+    CHECK_EQ(g_linkDown, 1, "no second link down");
+    CHECK(!(entry(lane, (int)lp->TxHop, 0) & 0x80000000UL), "the receive entry invalid");
+    CHECK(!(entry(HI_ADP, 1, 0) & 0x80000000UL), "the transmit entry invalid");
+    unplug(lp);
+    pump(2);
+}
+
 /* Section 13: one service per NHI - a second peer on port 2 is discovered
  * and READY, its service refused while port 1's is up. */
 static void test_one_service(void)
@@ -852,6 +891,7 @@ int main(void)
     RUN_VEC(test_stop_logout);
     RUN_VEC(test_contain);
     RUN_VEC(test_close_open);
+    RUN_VEC(test_close_unanswered);
     RUN_VEC(test_one_service);
     RUN_VEC(test_rings_refused);
     RUN_VEC(test_unplug_midway);
