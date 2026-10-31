@@ -5180,9 +5180,15 @@ then the kid, both NVMe started.
 
 ### Findings
 
-- The emulator's half of both tasks is fixed by its new default: the
-  `adl` endpoint answers with no slot power-on, and an ASM4242 tunnel port
-  has the board's bus and window room.
+- 45.53's cause is the emulator's, fixed by its new default: the `adl`
+  endpoint answers with no slot power-on. For 45.55 the default asks the
+  board's padding (48 buses, 12 KB I/O, 384 MB a tunnel port), which
+  shrinks to what the launcher's root port reserves (`bus-reserve=100,
+  mem-reserve=64M`, no I/O): tunnel port 0 got buses 3-50, 30 MB of memory
+  and no I/O window (`xpB\infopci-1.txt`); with `io-reserve=24K` it got an
+  I/O window and still 30 MB (`xpB2\infopci-1.txt`). These legs do not give
+  the board's resources, so whether XP's remaining Code 12 is the
+  launcher's limit or this driver's is not settled.
 - A tunnel port that appears after the install (here: the layout
   changed under an installed system) gets Windows' own bridge driver: on
   XP a hot-added switch behind it is never enumerated, on 7 the drives
@@ -5192,9 +5198,10 @@ then the kid, both NVMe started.
 - On 2000 (`adl`) and on XP behind a device router's switch, a hot-added
   NVMe enumerates without the tunnel id Stor98's INF matches on NT 5, so
   Windows' wizard offers no driver; the installer's run puts Stor98 on it.
-- XP behind a device router: a bridge whose window the parent cannot give
-  (I/O) stops at Code 12; with the root port's I/O reservation the switch
-  numbers, and its chain port still stops at Code 12.
+- XP behind a device router: with no I/O window on the tunnel port the
+  parent's switch stops at Code 12; with the root port's I/O reservation
+  the switch numbers, and its chain port still stops at Code 12 (cause not
+  settled, above).
 
 ### Left
 
@@ -5203,7 +5210,9 @@ then the kid, both NVMe started.
   plug.
 - 45.55: the XP chain port's Code 12 and the parent's NVMe without the
   tunnel id; 98 SE's reading with the connection manager confirmed
-  running; 2000, ME, XP x64, Vista and 7 x86 legs.
+  running; a leg with the board's root port reservation (`-AsmReserve`,
+  which the launcher does not give 2000 and XP, or one within 4 GB); 2000,
+  ME, XP x64 and Vista legs.
 
 ## 45.final: the release-notes texts the tasks handed over
 
