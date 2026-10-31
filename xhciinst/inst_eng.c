@@ -5148,7 +5148,19 @@ static int package_files(PKG_EACH each, void *ctx)
     const char *base;
     const char *rel;
     int i;
+    int k;
+    int need;
+    DWORD a;
 
+    /* The folder the package check validated must still be there: an
+     * absent one would read as a package of no files, and on 98 SE and ME
+     * an empty copy would replace the install directory's. */
+    a = GetFileAttributesA(pkgDir);
+    if (a == 0xFFFFFFFFUL || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
+        out("%s can no longer be read (error %lu): the package is gone.\n",
+            pkgDir, (unsigned long)GetLastError());
+        return 0;
+    }
     for (i = 0; i < instPkgFileCount; i++) {
         rel = instPkgFiles[i].Local;
         pr = instPkgFiles[i].Fam[pkgFam];
@@ -5158,9 +5170,18 @@ static int package_files(PKG_EACH each, void *ctx)
         join(path, sizeof(path), pkgDir, pr);
         if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
             DWORD e = GetLastError();
-            /* Only an absent file is "not in this package"; any other
-             * failure is an error. */
-            if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) {
+            /* A file the package check read (an INF it loaded, the
+             * controller's image) must still be there. */
+            need = inst_eq(rel, "xhci98.sys");
+            for (k = 0; k < INST_INF_COUNT; k++) {
+                if (infText[k] != NULL && inst_eq(rel, infRel[k])) {
+                    need = 1;
+                }
+            }
+            /* Otherwise only an absent file is "not in this package"; any
+             * other failure is an error. */
+            if (!need &&
+                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)) {
                 continue;
             }
             out("%s could not be read (error %lu).\n", path,
