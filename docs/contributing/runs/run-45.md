@@ -6572,3 +6572,8 @@ the version bump.
   read. XHCITR's mark line now reads "the Thunderbolt driver has answered
   it as removable", with "Windows has not recorded it as removable."
   beside it when Windows has not."
+- 45.61 (HEAD): "- (45.61, a UAS drive in Safely Remove, 2026-10-31) "A
+  UAS drive is now listed in Safely Remove Hardware on Windows 2000, XP,
+  Vista and 7 and can be stopped on its own, as a Bulk-Only stick can; on
+  Windows 2000, pulling it without stopping it first shows Windows'
+  'Unsafe Removal of Device' notice, as it does for a stick.""
