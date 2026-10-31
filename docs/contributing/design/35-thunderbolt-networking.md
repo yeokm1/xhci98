@@ -347,8 +347,9 @@ receive service touch at DISPATCH_LEVEL under a lock of their own.
   5 and weight 1 (`TB_DMA_PRIORITY`, `TB_DMA_WEIGHT`), 14 credits a hop
   by default bounded by the router's `baMaxHI` (`TB_DMA_CREDITS`,
   `usb4.c` `max_dma_credits`), at least 1; the receive path's first hop
-  takes all the lane's usable credits, since nothing else is tunnelled
-  over an inter-domain link; CL states are disabled while the tunnel is
+  takes the lesser of the lane's usable credits and that bound (its
+  comment: nothing else is tunnelled over an inter-domain link, so it
+  "can use all the credits"); CL states are disabled while the tunnel is
   up. Linux's priority 5 differs from the Guide's recommended 4.
 - **Ring start in frame mode** (`nhi.c` `tb_ring_start`): Data Buffer
   Size 0 (4096); the receive ring's PDF masks from the service's SOF and
@@ -467,12 +468,21 @@ The discovery protocol identifies each domain by a 128-bit UUID (IDS
   outstanding, record 22 section 5.1) with their own matching: a PDF 7
   frame matches the outstanding inter-domain request when its route
   string equals the request's with the CM bit (route string high bit 31)
-  ignored, as Linux matches ([linux] `xdomain.c` `tb_xdomain_match`),
-  its protocol UUID is the request's, and its SN is the request's. A
-  control request and an inter-domain request are never outstanding at
-  once; the thread serialises them. The bound is IDS's: one second a try,
-  ten resends, each with the next SN (Linux uses the retry count modulo 4,
-  `tb_xdp_uuid_request`).
+  ignored and its protocol UUID the request's, as Linux matches ([linux]
+  `xdomain.c` `tb_xdomain_match`, which checks neither SN nor type), and,
+  beyond Linux, by the protocol's own fields: for a discovery request the
+  SN (IDS Table 2-1: the target copies it) and the response type (2 for
+  a UUID Request, 4 for a Properties Read Request, 6 for a Properties
+  Changed Notification, 16 and 18 for the link-state requests) or an
+  Error Response (7); for a USB4NET request the Request ID (IDS Table
+  5-3: SN is "not used" there, the Request ID matches responses), the
+  response type (1 for a Login, 3 for a Logout), and the requester and
+  responder UUIDs swapped as the response carries them. A control request
+  and an inter-domain request are never outstanding at once; the thread
+  serialises them. The bound is IDS's: one second a try, ten resends,
+  each discovery resend with the next SN (Linux uses the retry count
+  modulo 4, `tb_xdp_uuid_request`), each USB4NET resend with the same
+  Request ID, which identifies the request, not the try [inf].
 - **Requests the peer sends** (PDF 6) are decoded on the thread as they
   land - during a busy-poll too, as record 21 section 4.4 decodes events -
   and answered at once (section 3.6). A request is never answered from
@@ -542,7 +552,7 @@ inter-domain requests are not answered (section 8.1).
 The firmware builds the paths itself on approve (section 5.2); the
 discovery and login packets still go over ring 0 as PDF 6 and 7 frames
 beside the ICM's own, as Linux sends them through the same control
-channel in either mode [linux] (`domain.c` `tb_domain_handle_rx`'s
+channel in either mode [linux] (`domain.c` `tb_domain_event_cb`'s
 `TB_CFG_PKG_XDOMAIN_REQ` case). Whether Alpine Ridge firmware passes them
 through unchanged is unread on hardware [inf]; the P14s bench reads it
 (section 11.4).
@@ -556,11 +566,11 @@ and their bounds, each try one second, ten resends, as IDS chapter 3:
 | State | Sends | On success | On failure |
 |---|---|---|---|
 | UUID (software CM only) | UUID Request (type 12) | LINK (or PROPS where bonding is not possible) | the port as section 3.3 step 2 |
-| LINK | Link State Status Request | BOND_LOW or BOND_HIGH by the UUID comparison | PROPS (bonding skipped), lane 1 disabled (Guide 7.5.2) |
+| LINK | Link State Status Request | the peer's Supported Link Width dual: BOND_LOW or BOND_HIGH by the UUID comparison; x1: PROPS, lane 1 disabled (IDS 3.4.1; [linux] `tb_xdomain_get_link_status`) | PROPS (bonding skipped), lane 1 disabled (Guide 7.5.2) |
 | BOND_LOW | Link State Change Request (TLW 3), then Link State Status Requests until the peer's TLW reads 3; own lanes' Target Link Width set, Lane Bonding set, lane 0 back in CL0; the Negotiated Link Width x2 within record 22 section 5.2's 500 ms | PROPS | PROPS, lane 1 disabled |
 | BOND_HIGH | nothing: waits for the peer's Change Request (section 3.6), sets both lanes' Target Link Width, waits for the UPG 1 hot-plug event or 3 s of Negotiated Link Width polling (IDS 3.4.1) | PROPS | PROPS, lane 1 disabled |
 | PROPS | Properties Read Requests from offset 0 up, 45 DWs at most a response, the whole block at most 500 DWs (section 3.7), restart from 0 if the generation changes | READY, and the service step of section 4 | ERROR |
-| READY | nothing; a Properties Changed Notification from the peer returns to PROPS | - | - |
+| READY | nothing; a Properties Changed Notification from the peer returns to PROPS, and a block read again without a USB4NET directory ends the service (section 3.8, IDS 3.3) | - | - |
 | ERROR | nothing; a UUID Request from the peer restarts at UUID (or PROPS under the firmware CM) | - | - |
 
 Bonding (LINK to BOND_HIGH) runs only under the software CM, only at Gen
@@ -621,11 +631,13 @@ Notification to a peer in READY and the generation incremented):
 | `deviceid` | `t` | "xhcicm" |
 | `devicerv` | `v` | the package version's four parts, one byte each |
 | `maxhopid` | `v` | the facing lane adapter's Max Input HopID (ADP_CS_5 bits 6:0, record 22 section 6.8) under the software CM; under the firmware CM 15 unless a control read of the host router's lane adapter at route 0 answers (record 21 section 5.1 step 9 already reads router space at route 0) |
-| `network` | `D` | only while `XhciCmNet` is 1: directory UUID `C66189CA-1CCE-4195-BDB8-49592E5F5A4F` (section 2.1), `prtcid` 1, `prtcvers` 1, `prtcrevs` 1, `prtcstns` per section 5.3 (bit 1 always; bit 0 when E2E is used; bit 2 when `XhciNetMtu` is above 1500) |
+| `network` | `D` | only while `XhciCmNet` is 1 and the network driver holds the service open (section 6.3's `Open`): directory UUID `C66189CA-1CCE-4195-BDB8-49592E5F5A4F` (section 2.1), `prtcid` 1, `prtcvers` 1, `prtcrevs` 1, `prtcstns` per section 5.3 (bit 1 always; bit 0 when E2E is used; bit 2 when the frame size `Open` passed is above 1514) |
 
 No `timesync` entry (section 13). The generation starts from the clock at
 each bind (IDS 2.5's recommendation of a fresh pseudo-random value) and
-increments on every change. The block is about 40 DWs, one response.
+increments on every change. The block is 54 DWs (the header 2, seven root
+entries 28, the two texts 4, the directory 20), so two responses of 45
+and 9 DWs.
 
 The parser (pure, `tbt_xdp.c`) takes a block of at most 500 DWs, as
 Linux does; refuses a header other than `0x55584401` and a root length
@@ -637,23 +649,29 @@ its length, and nesting deeper than 8; ignores keys it does not know and
 vendor types (IDS 4.2); and stops at the first fault with the block
 refused (`cm.xdp.props.bad`, the offending DW offset logged). From a
 valid block it takes `vendorid`, `deviceid` (and their texts, for the log
-and the query device), `maxhopid` (15 when absent, IDS 6.3.1.1.1), and
+and the query device), `maxhopid` (absent: section 4.3's HopID 15, IDS
+6.3.1.1.1), and
 the first `network` directory whose `prtcid` is 1 and `prtcvers` 1, with
 its `prtcstns`. A block without one is a peer offering no USB4NET: the
 peer stays in READY, logged, no login.
 
 ### 3.8 The end of a peer
 
-A peer ends, and every service with it (section 4.4), on: the port's
-unplug under the software CM (CLd, a re-lock, ERR_CONN or ERR_LOCK, or
-the UPG 1 hot-plug event on lane 0, record 22 section 7.1, IDS 3.7);
-the disconnected event under the firmware CM; a Properties Changed
-Notification from a different UUID; the NHI's stop, surprise removal,
+A peer ends, and every service with it (section 4.2), on: the port's
+unplug under the software CM, by record 22 section 7.1's evidence (lane
+0 in CLd, a re-lock, ERR_CONN or ERR_LOCK); a hot-plug event with UPG 1
+on lane 0 is a hint that queues that port check, as record 22 treats
+every hot-plug packet, never an unplug by itself, because the same event
+ends a lane bonding (IDS 3.4.1) and the check then finds the port in CL0
+bonded (IDS 3.7's disconnect is the one the check confirms); the
+disconnected event under the firmware CM; a Properties Changed
+Notification from a different UUID; a block read again whose USB4NET
+directory is gone (the service only; the peer stays READY, IDS 3.3); the NHI's stop, surprise removal,
 removal or D3 (record 21 section 5.6 and record 22 section 11, before the
 rings stop); and a start of the NHI with `XhciCmNet` 0 (section 8.1). On the unplug the
 peer is gone, so its paths and rings are torn down without a logout; on
 every other end a logout is sent first where the peer is still there
-(section 4.4). Under the software CM the port then clears its
+(section 4.2). Under the software CM the port then clears its
 Inter-Domain bit (Guide 3.3; [linux] `tb_port_unconfigure_xdomain`) and
 returns to record 22's port machine, where the next plug starts again.
 
@@ -662,7 +680,8 @@ returns to record 22's port machine, where the next plug starts again.
 ### 4.1 Who logs in
 
 IDS 5.1.1 has each CM log in to the other. This driver does both halves:
-as **requester** it sends a Login once the peer is READY with a USB4NET
+as **requester**, while the network driver holds the service open
+(section 6.3), it sends a Login once the peer is READY with a USB4NET
 directory and its own block offers one; as **responder** it answers the
 peer's Login. The service is up when this driver has both sent a
 successful Login Response and received one (IDS 5.1.1's last paragraph),
@@ -703,7 +722,11 @@ service built afresh.
   lane adapter's Max Output HopID (ADP_CS_5 bits 17:11) and not in use on
   that adapter (record 22 section 6.8's allocation rule). On an empty
   link that is 8, as Linux's allocation gives ([linux]
-  `tb_xdomain_alloc_out_hopid`).
+  `tb_xdomain_alloc_out_hopid`). A peer whose block has no `maxhopid`
+  (a Thunderbolt 3 peer) gets exactly HopID 15, not the lowest free one
+  (IDS 6.3.1.1.1, Table 6-2: the Router "shall use HopID=15"); 15 in use
+  or above the lane's Max Output HopID: no login, logged
+  (`cm.net.login.badhop`).
 - **The receive HopID** is the peer's Service HopID from its Login. It
   must be from 8 up to this driver's published `maxhopid` and free as an
   input HopID on the lane adapter; one that is not gets a failure Login
@@ -717,17 +740,32 @@ service built afresh.
   Falcon Ridge.
 - Under the firmware CM the four numbers go into the approve (section 5.2)
   and the firmware owns the HopIDs on the lane adapter; this driver still
-  takes the transmit HopID as above from 8, bounded by the peer's
-  `maxhopid`, since it cannot read the firmware's allocations.
+  takes the transmit HopID as above (from 8, bounded by the peer's
+  `maxhopid`, or exactly 15 without one), since it cannot read the
+  firmware's allocations.
 
 ### 4.4 The MAC address
 
-The adapter's permanent address is IDS 5.1.5.3's derivation from the
-host router's UUID, router id and port number, under the software CM;
-under the firmware CM, where the host router's 64-bit UUID is not read,
-from the low 64 bits of the local UUID of the connected event, which
-Linux and Intel's firmware build from the same 64-bit value (section
-3.1) [inf]. Both are locally administered and unicast by construction.
+The adapter's permanent address must exist before any peer, since the
+network PDO and its miniport start without one (section 6.1), and must
+not change with the port a later peer uses. It is therefore taken once
+at the NHI's start, from what that start already reads, and kept for the
+instance:
+
+- under the software CM, IDS 5.1.5.3's derivation from the host
+  router's 64-bit UUID (ROUTER_CS_7 and 8, section 3.1) and its router
+  id, with the USB4 port number taken as 0 for every port, since the
+  adapter belongs to the NHI, not to a port (section 6.1);
+- under the firmware CM, where the host router's UUID is not read, the
+  same derivation over the NHI's PCI Express Device Serial Number, which
+  `usb4-emu`'s Windows 11 capture reads as the controller's 64-bit
+  serial on Alpine Ridge [emu] (`ICM-PROTOCOL.md` section 10.1); a
+  function without the capability takes the 64 bits from its vendor,
+  device and subsystem ids and its bus, device and function, which are
+  stable for one machine's slot [inf]. The local UUID of a connected
+  event is not used: it arrives only with a peer.
+
+Both are locally administered and unicast by construction.
 The peer's MAC from its Login Response is logged and handed to the
 network driver for the log and the query device; the network stack
 learns it by ARP as on any Ethernet. Whether `thunderbolt-net` uses the
@@ -744,18 +782,17 @@ record 22 section 6.8's discipline):
 
 | Path | Ingress | Output | Attributes |
 |---|---|---|---|
-| transmit | host interface adapter, HopID = the transmit ring number | the port's lane 0 adapter, HopID = this driver's Service HopID | priority 4 (Guide Table 6-1; Linux uses 5, section 2.3), weight 1, IFC 1, EFC 1, ISE 0, ESE 0; credits as below |
+| transmit | host interface adapter, HopID = the transmit ring number | the port's lane 0 adapter, HopID = this driver's Service HopID | priority 4 (Guide Table 6-1; Linux uses 5, section 2.3), weight 1, EFC 1, ESE 0; the entry's credits, IFC and ISE kept as read, since a host interface adapter's path entry has the protocol adapter's layout, in which those fields are vendor-defined (Spec 8.2.3.3, Table 8-23 and its note; Guide 5.2.1; record 22 section 6.8 keeps them the same way at a PCIe adapter) |
 | receive | the port's lane 0 adapter, HopID = the peer's Service HopID | host interface adapter, HopID = the receive ring number | priority 4, weight 1, IFC 1, EFC 0, ISE 0, ESE 0 (Guide 5.7 step 7's segment rule) |
 
-**Credits** by record 22 section 6.8's accounting, the inter-domain lane
-carrying nothing but this service: the receive path's entry takes what
-the lane has left after the control path and the flow-control-disabled
-pool, as Linux takes "all the credits" there ([linux]
-`tb_dma_init_rx_path`); the transmit path's entry at the host interface
-adapter takes the host router's `baMaxHI` from its Buffer Allocation
-Request (record 22 section 6.7), else 14, at least 1 ([linux]
+**Credits** by record 22 section 6.8's accounting, for the receive
+path's entry, the one at a lane adapter: the lesser of what the lane has
+left after the control path and the flow-control-disabled pool, and the
+host router's `baMaxHI` from its Buffer Allocation Request (record 22
+section 6.7), else 14; at least 1 ([linux] `tb_dma_init_rx_path`,
 `TB_DMA_CREDITS`, `TB_MIN_DMA_CREDITS`). Below 1: no service, logged
-(`cm.net.credits`). Total Buffers is re-read after bonding (record 22
+(`cm.net.credits`). The transmit entry's credits are the host interface
+adapter's own, kept as read (above). Total Buffers is re-read after bonding (record 22
 section 6.8).
 
 **Order up**: both rings set up (section 5.3) with Ring Valid, then the
@@ -804,8 +841,9 @@ common buffer:
   Spec does not forbid for a receive ring [inf]. This driver advertises
   bit 0 on every host; `XhciCmNetE2E` 0 (section 8.1) withdraws it.
 - **Sizes**: `XhciCmNetRxFrames` and `XhciCmNetTxFrames` descriptors
-  (section 8.1, 128 each by default, 16 to 1024), each with a 4096-byte
-  buffer, so 512 KiB and 2 KiB of descriptors a ring by default; one
+  (section 8.1, 128 each by default, 32 to 1024: the floor leaves room
+  for the 17 frames of the largest packet, section 7.2, beside the one
+  empty slot), each with a 4096-byte buffer, so 512 KiB and 2 KiB of descriptors a ring by default; one
   slot of each ring is kept empty (Spec Tables 12-19 and 12-24).
 - **Memory**: below 4 GB, cached, from `cm_pool.c`, as ring 0's (record
   21 section 4.2). The buffers are allocated as page-sized common buffers
@@ -844,14 +882,38 @@ The receive service runs in one DPC (`KeInitializeDpc`), queued by:
   the poll timer stays armed as the fallback, as the idle poll does for
   ring 0.
 
-The DPC, under the lock: reaps every receive descriptor with DD set
+**One consumer at a time.** The timer's DPC and the interrupt DPC's
+`KeInsertQueueDpc` can run the receive service on two processors at once
+(a periodic timer's DPC may be queued again while it runs), so the
+service is serialised by an owner word of its own, not by the KDPC:
+entering, it sets the word's "pending" bit interlocked; if the "owner"
+bit was already set it returns, else it takes ownership and loops,
+clearing "pending" before each pass and leaving only when a pass ends
+with "pending" still clear, then releasing ownership and testing
+"pending" once more. So exactly one processor delivers frames, in ring
+order, and a reassembly (section 7.2) is never entered twice.
+
+A pass, under the spin lock: reaps every receive descriptor with DD set
 (each a USB4 frame: its length, CRC Error, Buffer Overflow), releases the
 lock, hands the frames to the network driver's receive callback in ring
 order, takes the lock again, reposts each descriptor (RS 1, IE, DD 0) and
 advances the consumer index; it reaps the transmit ring's completed
-descriptors too; at most one ring's worth a run, the rest left to the
+descriptors too; at most one ring's worth a pass, the rest left to the
 next. The callback copies (section 6.3), so a descriptor is never lent
 out.
+
+**The rundown** before a ring is freed (every end of section 3.8, the
+`Close` of section 6.3): first the producers stop - a "closing" flag set
+under the lock, which `TxReserve` and the service test; the receive
+cause masked through record 21 section 4.5's mask by contract, so the
+interrupt DPC queues nothing more for it; `KeCancelTimer` on the poll
+timer; `KeRemoveQueueDpc` on the receive KDPC - then the thread waits on
+an event the service signals when its in-flight count, raised at each
+DPC's entry and lowered at its exit, reaches zero, which covers a DPC
+already dequeued and running on another processor; and only then are the
+rings disabled and their memory released. The driver image stays
+resident while any count is held, as record 21 section 4.5.6 keeps it
+for the interrupt's own DPC.
 
 What the poll costs (section 15 Q6): with a 10 ms tick and 128 receive
 descriptors, the receive side holds at most 128 frames (about 512 KiB)
@@ -873,8 +935,13 @@ calls `IoInvalidateDeviceRelations` once after the start so the PnP
 manager asks. One PDO per NHI, present whether or not a peer is plugged
 (section 15 Q2): the adapter then behaves as a NIC whose cable is out
 when no peer is logged in, which on 98 SE avoids a devnode created and
-destroyed at every plug [inf]. The PDO goes at the NHI's stop, surprise
-removal and removal, as the root hub goes with `xhci98.sys`'s controller.
+destroyed at every plug [inf]. An orderly stop of the NHI (a rebalance,
+or on 98 SE and ME a Device Manager disable) ends the service and keeps
+the PDO, which the FDO reports again at its restart, as `xhci98.sys`
+keeps its children across a stop (`src\hcd_pnp.c`, the stop path); a
+surprise removal or a removal of the NHI reports it no more, and it is
+deleted once the PnP manager has removed it, the bus-driver rule. A
+start with `XhciCmNet` 0 reports it no more either (section 8.1).
 
 The PDO answers, and nothing else:
 
@@ -932,12 +999,12 @@ PDO's):
 
 | Function | IRQL | What it does |
 |---|---|---|
-| `Open(Context, Callbacks, ClientContext)` | PASSIVE | registers the network driver's callbacks (below) and its context; fails if one is open; the CM then may raise `LinkChange` at once if a service is up |
-| `Close(Context)` | PASSIVE | ends any service with a logout (section 4.2), waits until no callback is running or can start, drops the callbacks |
+| `Open(Context, Callbacks, ClientContext, Config)` | PASSIVE | registers the network driver's callbacks (below), its context and its configuration: the largest Ethernet frame it will send and accept (its MTU plus 14, section 7.3); fails if one is open. Open is the service's enable: only between `Open` and `Close` does the CM publish its `network` directory (built with `prtcstns` bit 2 set when the frame above is larger than 1514), log in and accept logins; `Open` adds the directory with a Properties Changed Notification to a peer in READY (section 3.7) |
+| `Close(Context)` | PASSIVE | the service's disable: ends any service with a logout (section 4.2), withdraws the `network` directory with a Properties Changed Notification, refuses logins until the next `Open` (the vendor failure of section 4.1), runs section 5.4's rundown, waits until no callback is running or can start, and drops the callbacks; the CM keeps the rings' memory for the next `Open` |
 | `QueryInfo(Context, Info)` | <= DISPATCH | this adapter's MAC (section 4.4), the link state, the peer's MAC and its `prtcstns`, the link's rate and width (record 22's query-device extensions), the service's maximum frame (section 7.3) |
-| `TxReserve(Context, Count, Buffers)` | <= DISPATCH | reserves up to `Count` transmit descriptors and returns their buffers' virtual addresses, or fewer when the ring is fuller; 0 when no service is up |
-| `TxCommit(Context, Count, Lengths)` | <= DISPATCH | posts the reserved descriptors with those lengths (each at most 4096) and writes the producer index once |
-| `TxAbort(Context)` | <= DISPATCH | releases a reservation not committed |
+| `TxReserve(Context, Count, Buffers, Token)` | <= DISPATCH | all or nothing: reserves `Count` consecutive transmit descriptors and returns their buffers' virtual addresses and a token (the service's generation and the first index), or reserves nothing and returns 0 when fewer are free, when another reservation is outstanding (one at a time: the caller serialises its sends, section 7.5), when the service is closing or when none is up |
+| `TxCommit(Context, Token, Count, Lengths)` | <= DISPATCH | posts the reservation with those lengths (each at most 4096) and writes the producer index once; a token of an earlier generation (the service ended and perhaps came back in between) is refused and nothing is posted |
+| `TxAbort(Context, Token)` | <= DISPATCH | releases the reservation; a stale token is ignored |
 | `Log(Context, Label, Value)` | <= DISPATCH | records a line in `xhcicm.sys`'s log ring (record 21 section 8), so the network driver needs no log of its own |
 
 Callbacks the network driver gives `Open`:
@@ -962,10 +1029,14 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   removal reaches the CM (NDIS halts a miniport before its PDO is
   removed).
 - A surprise removal of the NHI: the CM ends the service without a
-  logout, raises `LinkChange` down, refuses further `TxReserve`, waits for
-  a running DPC and callback to finish, and only then frees the rings;
-  the network driver's own surprise-removal notification (section 7.6)
-  follows.
+  logout, raises `LinkChange` down, refuses further `TxReserve`, waits
+  for an outstanding reservation to be committed or aborted (both run at
+  DISPATCH_LEVEL with no wait inside, so the wait is short) and then runs
+  section 5.4's rundown, and only then frees the rings; the network
+  driver's own surprise-removal notification (section 7.6) follows. A
+  service's generation increments at every end, so a sender that
+  reserved before the end and commits after it is refused (section
+  6.3).
 - The interface's reference (`InterfaceReference`,
   `InterfaceDereference`) counts the network driver's hold; the PDO
   is not deleted while it is held, as record 21 section 3.2's rundown
@@ -1005,8 +1076,10 @@ type and payload, as NDIS hands it, with no FCS):
    last the rest. IDS 5.1.5.2 says "4KB USB4 Frames", which this reads as
    the 4096-byte host-interface frame including its header [inf]; the
    alternative, 4096 bytes of data a frame, cannot fit one descriptor.
-3. `TxReserve(m)`; fewer than m: the frame waits (NDIS 6 queues it,
-   NDIS 5 returns it as resources; section 7.5).
+3. `TxReserve(m)`, all or nothing; refused, the frame stays at the head
+   of the miniport's own send queue until `TxDone` (section 7.5). The
+   ring's floor of 32 (section 5.3) holds the largest packet's 17 frames,
+   so a refusal is always a ring that will drain.
 4. Each buffer: Frame Size = this frame's data bytes, Frame Index = k
    (0 to m-1), Frame ID = the adapter's transmit counter, incremented
    after every USB4 frame and wrapping at `0xFFFF` (IDS Table 5-7's text;
@@ -1024,26 +1097,39 @@ switch the step resolves, never a registry value.
 
 - Dropped and counted: CRC Error or Buffer Overflow set; a length below
   12; a Frame Size of 0 or above the frame's length less 12; Frame Count
-  0 or above 17 (65536 bytes at 4084 a frame, IDS 5.1.5.2's 64 KB); Frame
-  Index not below Count; a packet whose summed Frame Size passes 65536.
+  0 or above 17; Frame Index not below Count; a packet whose summed Frame
+  Size passes 65554. That capacity is IDS 5.1.5.2's: a payload "of up to
+  64KB", so a frame of 65536 bytes of payload, the 14-byte header and,
+  where the peer sends it (tbnet-owed point 4), a 4-byte FCS; 17 frames
+  of 4084 bytes hold it.
 - A frame with Count 1 and Index 0: one Ethernet frame of Frame Size
   bytes, indicated to the stack at once.
-- Count above 1: reassembled in a per-adapter 64 KiB buffer: Index 0
+- Count above 1: reassembled in a per-adapter buffer of 65554 bytes
+  (68 KiB allocated): Index 0
   starts a packet (dropping any one in progress, counted); each next
   frame must carry the next Index and the same Count, and the Frame ID
   one more than the last (modulo `0x10000`) where [tbnet-owed] point 3
   confirms that rule, else only Index and Count are checked; a gap drops
   the packet (counted); the frame with Index Count-1 completes it.
-- An indicated frame shorter than 14 bytes is dropped. One longer than
-  the payload its IP or ARP header names reaches the stack as padding,
-  which IP and ARP ignore, so a peer that sends the FCS or pads is
-  received correctly either way [inf, by the protocols' own rules].
+- An indicated frame shorter than 14 bytes is dropped. A frame longer
+  than the adapter's own maximum (its MTU plus 14, plus 4 where the peer
+  sends the FCS) is dropped and counted before any indication, since the
+  stack was told that maximum (NDIS 5 `OID_GEN_MAXIMUM_TOTAL_SIZE`, NDIS
+  6 `MtuSize`): the reassembly takes every size IDS 5.1.5.2 requires a
+  receiver to take, and the indication only what this adapter's MTU
+  agreed. A frame within the maximum but longer than the payload its IP
+  or ARP header names reaches the stack as padding, which IP and ARP
+  ignore, so a peer that sends the FCS or pads is received correctly
+  either way [inf, by the protocols' own rules].
 
 ### 7.3 The MTU
 
 `XhciNetMtu` (section 8.3), the IP payload, default 1500, from 1500 to
-65522 (IDS 5.1.5.2's 64 KB less the Ethernet header; [tbnet-owed] point 6
-checks Linux's maximum against it). The adapter reports a maximum frame
+65522. The ceiling is a chosen transmit limit, not the spec's: IDS
+5.1.5.2 lets a payload reach 64 KB, and 65522 keeps the whole frame,
+header included, within 64 KiB, which is Linux's figure as
+[tbnet-owed] point 6 will confirm or correct; the receive side takes the
+spec's full size regardless (section 7.2). The adapter reports a maximum frame
 of the MTU plus 14 (NDIS 5 `OID_GEN_MAXIMUM_FRAME_SIZE` is the MTU,
 `OID_GEN_MAXIMUM_TOTAL_SIZE` the MTU plus 14; NDIS 6
 `MtuSize` in its general attributes). Above 1500 the frames go out as
@@ -1089,19 +1175,38 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
   multicast list (32 entries) is kept for the OID and not used.
 - **Statistics**: frames and bytes each way, receive errors (the drops of
   section 7.2 by reason), transmit errors and the waits on a full ring.
-- **Send**: NDIS 5 `MiniportSendPackets` at DISPATCH_LEVEL; a packet that
-  does not get its descriptors returns `NDIS_STATUS_RESOURCES` so NDIS
-  queues it and sends it again after `NdisMSendResourcesAvailable`, which
-  the `TxDone` callback raises; NDIS 6 `MiniportSendNetBufferLists` keeps
-  its own queue, served by `TxDone`. With the link down every send
-  completes with `NDIS_STATUS_MEDIA_DISCONNECTED` (NDIS 5) or
-  `NDIS_STATUS_MEDIA_DISCONNECTED` in the list (NDIS 6).
+- **Send**: both miniports are deserialized, as an NDIS 5 miniport with
+  a WDM lower edge must be (`NDIS_ATTRIBUTE_DESERIALIZE`; NDIS 6
+  miniports are deserialized by definition). NDIS 5
+  `MiniportSendPackets` (at or below DISPATCH_LEVEL, on any processor)
+  queues each packet on the miniport's own send queue under its own spin
+  lock, marks it `NDIS_STATUS_PENDING`, and serves the queue: the head
+  packet is framed into a reservation (section 7.2) and completed with
+  `NdisMSendComplete` once committed; a refused reservation leaves it at
+  the head until `TxDone` serves the queue again.
+  `NdisMSendResourcesAvailable` is a serialized miniport's call and is
+  not used. NDIS 6 `MiniportSendNetBufferLists` does the same with its
+  net buffer lists and `NdisMSendNetBufferListsComplete`. One sender at a
+  time serves the queue (the queue lock's owner), which is the
+  one-reservation-at-a-time rule of section 6.3. With the link down, or
+  the adapter paused (NDIS 6), every queued and new send completes with
+  `NDIS_STATUS_MEDIA_DISCONNECTED` (NDIS 6 `NDIS_STATUS_PAUSED` while
+  paused).
 - **Receive**: copied from the callback into a packet (NDIS 5
   `NdisMIndicateReceivePacket` from the miniport's own pool, the packet
   returned through `MiniportReturnPacket`) or a net buffer list (NDIS 6,
   its own pool, `NdisMIndicateReceiveNetBufferLists`, returned through
   `MiniportReturnNetBufferLists`), at DISPATCH_LEVEL; with the pool empty
   the frame is dropped and counted.
+- **NDIS 6 pause and restart**: `MiniportInitializeEx` leaves the adapter
+  Paused, and it indicates nothing until `MiniportRestart` makes it
+  Running; `MiniportPause` stops indications (frames from the `Receive`
+  callback dropped and counted while not Running), completes every
+  queued send with `NDIS_STATUS_PAUSED`, and completes (or returns
+  `NDIS_STATUS_PENDING` and later `NdisMPauseComplete`) only once every
+  indicated net buffer list has come back; `Open` stays in force across a
+  pause, so a pause does not log out [inf: a pause is short and the peer
+  would only see a stall].
 - **Reset**: nothing to reset below; `MiniportReset` completes at once.
 - **Check for hang**: never reports a hang.
 
@@ -1112,7 +1217,7 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
 | a peer plugged, both logins done | the adapter connected | `LinkChange` up; NDIS 5 `NdisMIndicateStatus(NDIS_STATUS_MEDIA_CONNECT)` and complete; NDIS 6 `NDIS_STATUS_LINK_STATE` with the state and speed |
 | the cable pulled, the peer's sleep or shutdown | the cable unplugged | section 3.8, `LinkChange` down; `NDIS_STATUS_MEDIA_DISCONNECT`, or the NDIS 6 link state |
 | the peer logs out (its adapter disabled, its driver stopped) | the cable unplugged | section 4.2; the same |
-| this adapter disabled in Device Manager or Network Connections | the adapter disabled | the miniport's halt: `Close` (a logout first), then the PDO stopped; the CM keeps answering discovery, so the peer sees a host with no logged-in service |
+| this adapter disabled in Device Manager or Network Connections | the adapter disabled | the miniport's halt: `Close` (a logout, the `network` directory withdrawn), then the PDO stopped; the CM keeps answering discovery, so the peer sees a host offering no USB4NET |
 | this adapter enabled again | connected once the logins redo | `Open`; the CM logs in again |
 | the NHI disabled, stopped or removed (an update, the connection manager uninstalled) | the adapter removed | the NHI's PnP order: its children first, so the miniport halts and closes, then the NHI's own end of section 3.8 |
 | a safe eject from `XHCITR` or `XHCIINST /eject` | not offered for a peer (section 15 Q9) | disabling the adapter is the eject; nothing of a peer's lives behind a PCI bridge |
@@ -1128,8 +1233,11 @@ The miniports declare power management with no wake (NDIS 5
 `OID_PNP_CAPABILITIES` with every wake-up field unspecified; NDIS 6 the
 same in its attributes) [inf: that 98 SE's NDIS treats this as a
 power-managed miniport is read by the 98 SE standby leg]. On
-`OID_PNP_SET_POWER` D3 (or NDIS 6's set power): `Close`, the link down.
-On D0: `Open`, and the CM logs in again when the peer is there. The CM's
+`OID_PNP_SET_POWER` D3 (or NDIS 6's `OID_PNP_SET_POWER` with
+`NDIS_STATUS_PENDING`): the request is pended and a work item
+(`NdisScheduleWorkItem`; NDIS 6 `NdisQueueIoWorkItem`) calls `Close` at
+PASSIVE_LEVEL, then completes it; the link goes down. On D0 the same
+route calls `Open`, and the CM logs in again when the peer is there. The CM's
 own D3 (the NHI's quiescence, record 21 section 5.6) ends the service
 first anyway (IDS 5.1.2: a CM ends its USB4NET services before its
 domain sleeps), so a system sleep reaches the peer as a logout, and a
@@ -1189,8 +1297,8 @@ row and a `tuning.md` row in the connection manager's table:
 |---|---|---|---|
 | `XhciCmNet` | 0 | 0 to 1 | the gate of everything in this record (the owner, 2026-10-31): 1 runs the inter-domain discovery as section 3 says, publishes USB4NET, logs in, builds the DMA paths and reports the network PDO; 0 answers no inter-domain request, sends none, advertises no host-to-host service, builds no DMA path to another host and reports no network PDO: a peer host is treated as today (UNSUPPORTED under the software CM, the events logged and nothing approved under the firmware CM). The installer's networking box and `/tbnet` write 1 (section 9) |
 | `XhciCmNetPollMs` | 1 | 1 to 100 | the receive poll's period in ms while a service is up, rounded up to the clock tick (section 5.4) |
-| `XhciCmNetRxFrames` | 128 | 16 to 1024 | receive descriptors (4 KiB each) a service |
-| `XhciCmNetTxFrames` | 128 | 16 to 1024 | transmit descriptors a service |
+| `XhciCmNetRxFrames` | 128 | 32 to 1024 | receive descriptors (4 KiB each) a service; the floor holds the largest packet (section 5.3) |
+| `XhciCmNetTxFrames` | 128 | 32 to 1024 | transmit descriptors a service; the same floor |
 | `XhciCmNetE2E` | 1 | 0 to 1 | advertise and use end-to-end flow control (section 5.3); 0 for a peer whose host interface mishandles it |
 
 A value outside its range is refused and the default stands, logged
@@ -1284,7 +1392,9 @@ from it:
 
 - **One box**, "Thunderbolt networking", **unticked by default** on every
   system, whatever is found, and never ticked but by the user or a
-  switch (the owner); greyed and unticked when the package carries no
+  switch (the owner); on an update its first state is the value in force
+  (`XhciCmNet` 1 in a present NHI's key, or machine-wide), so a computer
+  that has networking shows the box ticked; greyed and unticked when the package carries no
   network driver for the system. The sentence under it, without testing
   status (record 26 section 5.3.1): that it makes a network connection to
   another computer over a Thunderbolt or USB4 cable, that the other
@@ -1309,16 +1419,22 @@ from it:
   restart.
 - **Unticked on a new install**: nothing of networking staged, `XhciCmNet`
   left at the INF's 0.
-- **Unticked on an update over an install that has it** (`xhcinet`
-  installed, or `XhciCmNet` 1): kept as it is, as every component's
-  unticking is "not now" (record 26 section 5.3); the Advanced list's
-  `XhciCmNet` row (45.54's) is how a user turns it off. Ticked on such an
-  update: the network driver updated with the others.
+- **The box is the setting.** `XhciCmNet` is written from the box alone:
+  ticking writes 1, unticking where the value in force is 1 writes 0 in
+  the same keys (each present NHI's, and machine-wide where the install
+  wrote it there), and a box left as it was writes nothing, as record 26
+  section 5.5's changed-value rule has it. It is therefore not an
+  Advanced row, and `/set XhciCmNet=` is refused with "use /tbnet or
+  /notbnet", so no second control can contradict the box. Unticking
+  removes nothing: `xhcinet` stays installed as every component's
+  unticking is "not now" (record 26 section 5.3), and with the value at 0
+  its PDO is no longer reported at the next start (section 8.1). Ticked
+  on an update: the network driver updated with the others.
 - **The uninstall** (record 23 section 9, record 26 section 9) removes
   `xhcinet` with the connection manager: the adapter's devnodes, the
   service, the staged INF, and `XhciCmNet` from `Services\USB` when its
   value is the one this installer wrote.
-- **The Advanced list** (task 45.54): `XhciCmNet`, `XhciCmNetPollMs`,
+- **The Advanced list** (task 45.54): `XhciCmNetPollMs`,
   `XhciCmNetRxFrames`, `XhciCmNetTxFrames`, `XhciCmNetE2E` on the
   Thunderbolt tab with their ranges and "Asked when" (shown when the
   networking box is ticked); `XhciNetMtu` is the adapter's own and lives
@@ -1327,7 +1443,9 @@ from it:
 ### 9.2 The console and the silent install
 
 - `/tbnet` preselects the box ticked (needs `/thunderbolt` or `/cmonly`,
-  as `/stor98` does, record 23 section 7.1); `/notbnet` unticked; refused
+  as `/stor98` does, record 23 section 7.1) and `/notbnet` unticked, each
+  making the box changed so its value is written (as `/faster` and
+  `/nofaster` do, record 26 section 10); refused
   together, with `/uninstall`, `/devices` and `/eject`, and `/tbnet` where
   the package carries no network driver for the system.
 - The console asks "Install Thunderbolt networking?" after the
@@ -1395,10 +1513,14 @@ for its maintainer (section 15 Q7):
   the frame CRC; a wrong HopID, a missing path or a disabled ring drops
   the frame (counted in the trace), so a defect in this record's paths
   shows as no traffic, not as traffic.
-- **E4, end-to-end flow control**, or a documented absence: credits
-  granted per posted receive descriptor and a transmit ring held at zero
-  credits; without it, a full receive ring drops, which the legs then
-  read as loss.
+- **E4, end-to-end flow control** (required: both peers advertise it by
+  default, section 5.3, and IDS 5.1.5.4 then requires it on): Credit
+  Grant and Sync packets per Spec 12.2, credits granted per posted
+  receive descriptor, a transmit ring held at zero credits, the Transmit
+  E2E HopID honoured, and Falcon Ridge's credit target where that model
+  exists. The legs' default runs with it; one leg per profile runs with
+  `XhciCmNetE2E` 0 on this side, where IDS 5.1.5.4 has both sides run
+  without it.
 - **E5, the firmware CM.** On the `tb3-alpine-ridge` and
   `tb3-titan-ridge` profiles, events `0x06` and `0x07` in each row's
   layout (section 3.4) when the link comes and goes; approve `0x10`
@@ -1475,17 +1597,28 @@ standby and a resume. Read: the CM's log (`cm.xdp.*`, `cm.net.*`), the
 Linux side's `dmesg` with `thunderbolt.dyndbg=+p`, the counters, and that
 no frame was lost at the default poll on an idle link.
 
-| System | Software CM (`usb4-generic`) | Firmware CM (`tb3-alpine-ridge`) | Notes |
-|---|---|---|---|
-| 98 SE | yes | yes | the 9x net INF, the first-install TCP/IP binding, file sharing to Samba; polled only |
-| ME | yes | - | as 98 SE |
-| 2000 SP4 | yes | yes | polled and, with `XhciCmRingInterrupt` 1, interrupt |
-| XP SP3 | yes | yes | as 2000; SMB to Samba |
-| 7 x86 | yes | - | the NDIS 5 image under NDIS 6.x's wrapper |
-| XP x64 or 7 x64 | yes | - | the x64 NDIS 5 image, test-signed in the guest (the brief's MakeCert route) |
-| 8.1 or 10 x64 | yes | - | the NDIS 6 image, catalog, test-signing |
-| 98 SE to 2000 | one leg | - | two guests of this project's, no Linux: this driver against itself |
-| 2000 | one leg | - | `XhciCmNet` 0: the port stays UNSUPPORTED, no request answered, Linux gives up its discovery, no DMA path |
+| System | Software CM (`usb4-generic`) | Firmware CM (`tb3-alpine-ridge`, AR row) | Firmware CM (`tb3-titan-ridge`, TR row) | Notes |
+|---|---|---|---|---|
+| 98 SE | yes | yes | - | the 9x net INF, the first-install TCP/IP binding, file sharing to Samba; polled only |
+| ME | yes | - | - | as 98 SE |
+| 2000 SP4 | yes | yes | yes | polled and, with `XhciCmRingInterrupt` 1, interrupt; the TR row's staged teardown |
+| XP SP3 | yes | yes | - | as 2000; SMB to Samba |
+| 7 x86 | yes | - | - | the NDIS 5 image under NDIS 6.x's wrapper |
+| XP x64 | yes | - | - | the x64 NDIS 5 image on NT 5.2 |
+| 7 x64 | yes | - | - | the x64 NDIS 5 image on NT 6.1 |
+| 10 x86 (or 8.1 x86) | yes | - | - | the x86 NDIS 6 image |
+| 10 x64 (or 8.1 x64) | yes | - | - | the x64 NDIS 6 image and its catalog |
+
+Before task 45.44 the images are copied into each guest by hand (section
+9.4). The x64 ones are not yet signed by the packager then (S10), so
+their legs take the leg-only route of `runs/run-43-24.md` (task 43.36): a
+throwaway certificate made in the guest overlay, in its Root and
+TrustedPublisher stores, the copied image signed there with test signing
+on, never published and never leaving the overlay; the published images
+are signed by the packager alone (design record 19), from S10 on, and
+the x64 legs are read again on S10's package.
+| 98 SE to 2000 | one leg | - | - | two guests of this project's, no Linux: this driver against itself |
+| 2000 | one leg | - | - | `XhciCmNet` 0: the port stays UNSUPPORTED, no request answered, Linux gives up its discovery, no DMA path |
 
 ### 11.4 The bench (the owner's)
 
