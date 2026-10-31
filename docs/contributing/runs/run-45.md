@@ -7569,3 +7569,10 @@ the version bump.
   leave 45.18 (the tunnel-down notice to Stor98) out of the user release
   notes; it acts only on tunnel ports identified as QEMU's, so users see
   no change. Its text above stays here for the record only."
+- 45.60 and 45.66 (9c52c51a): "The installer's Help button now explains
+  the page it is on: a short window says what each choice does and when to
+  change it, with the full readme one button away. On the Thunderbolt and
+  USB4 page the PCI-window box now reads 'Find Thunderbolt and USB4
+  devices placed above 4 GB'. The USB Tree box now says that it decides
+  only whether the tool starts at login; the tool is installed either
+  way."
