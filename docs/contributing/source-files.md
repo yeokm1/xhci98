@@ -94,6 +94,7 @@ These need `ntddk.h`, take a lock, wait, or dereference BAR0. None may move into
 | `xhci.h` | xHCI types, register and TRB bit definitions, the common-buffer layout, the extension `hcd.h` embeds, the snapshot's layout, and the declarations of most of the pure core. Bit positions are transcribed from [xhci-data-structures.md](../usb-xhci-info/xhci-data-structures.md), never from memory. | yes |
 | `xhci_hw.h` | The driver-only side of the split: MMIO accessors, PCI configuration access and bounded waits (`xhci_pci.c`), and the core's call-outs that `hcd_dev.c` implements. | no |
 | `xhci_cmiso.h` | The isolation statement `xhcicm.sys` gives `xhci98.sys` (task 45.35; design record 17 section 4.13.6, record 22 section 10.5): the interface's shape, version and `GUID_XHCI_CM_ISOLATION`, shared by both drivers; `xhci98.sys` takes it at its controller's start and asks it only where Bus Master Enable gives no proof. | yes |
+| `xhci_cmnet.h` | The Thunderbolt networking service `xhcicm.sys`'s network PDO (`XHCICM\TBNET`) gives this project's network drivers (task 45.59; design record 35 section 6.3): `GUID_XHCI_CM_NET` at version 1, asked with `IRP_MN_QUERY_INTERFACE`; `Open`, `Close`, `QueryInfo`, `TxReserve`, `TxCommit`, `TxAbort` and `Log`, the `LinkChange`, `Receive` and `TxDone` callbacks, all `NTAPI`; the frame buffer, reservation and frame sizes, the receive flags and the transmit token. The interface's shape only. |
 | `xhci_compat.h` | Two jobs: the Windows 98 and 2000 DDK shims, chiefly undoing the DDK's `ExAllocatePool` rewrite so a stray untagged call reaches the name the import gate refuses; and, under `XHCI_HOST_TEST`, the DDK-free types the host suites compile the pure core with. Included by every driver of the tree. | yes, under `XHCI_HOST_TEST` |
 | `xhci_counters.h` | The counter block `XHCIHC_COUNTERS` (roadmap-hcd.md 26-A.10), measured by `scripts\vm-matrix\gen-offsets.ps1` under `XHCI_HOST_TEST`, which is why it is a header of its own; `scripts\check-counter-names.ps1` and `xhcitr\tr_hcctr.h` follow it name by name. | yes |
 | `xhci_log.h` | The log ring's contract: the verbosity ladder, the sinks, and the rule that recording is not emission. | yes |
@@ -428,6 +429,22 @@ The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly 
 | `src\pfw\nt\build.cmd` | `build.cmd [qemu]`: `objfre\i386\xhcipfw.sys` or `objfre_qemu\i386\xhcipfw.sys` with the Windows 2000 DDK in `tools\ntddk` (`DDKROOT` overrides it), then the import gate's `hlprx86` profile and `check-pfwsys.ps1`; exit 2 "not built" without the DDK. |
 | `src\pfw\nt\check-pfwsys.ps1`, `pfw-sys-imports.allow` | The gate on the driver image: PE32 for i386, native subsystem, a driver; every import a row of the list and no module but `ntoskrnl.exe` and `HAL.dll`; the stamp `XHCIPFW.SYS <version>`; exactly one flavour marker; no `HAL.dll!WRITE_PORT_UCHAR` (the qemu image's debug-console writer) in the release image. |
 | `scripts\import-gate\xhcipfw-imports.allow` | `XHCIPFW.SYS`'s import allowlist for the import gate's `hlprx86` profile: every row an export of every authenticated kernel and HAL of 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86; `KeIpiGenericCall` denied. |
+
+## Thunderbolt networking - `src\net\`
+
+`xhcinet.sys`, the NDIS 5 miniport of Thunderbolt networking (design record 35 section 7, `roadmap-usb4.md` task 45.59 step S6): NDIS 5.0 on x86 (98 SE to 7), 5.1 on amd64 (XP x64 to 7 x64), above `xhcicm.sys`'s network PDO `XHCICM\TBNET`, built by `scripts\build-driver.cmd :buildnet` after `xhcicm.sys` in every x86 and amd64 run, from `src\net\ndis5\sources`.
+
+| File | What it is |
+|---|---|
+| `net_frame.c` / `net_frame.h` | The pure USB4NET framing core (record 35 sections 7.2 to 7.4): the transmit split into 4084-byte USB4 frames and their 12-byte header, the Frame ID rule, the receive checks and reassembly, and the receive segmentation of a TCP segment longer than the adapter's maximum over IPv4 and IPv6. DDK-free; host suite `test_net_frame`. |
+| `ndis5\xhcinet.h` | The adapter's state and the miniport's cross-file entry points. |
+| `ndis5\n5_main.c` | `DriverEntry`, the initialisation (`XhciNetMtu`, the interface, the receive pool, the power thread) and the halt, the OIDs, the power OIDs' thread and, on amd64, the shutdown and PnP event handlers. |
+| `ndis5\n5_data.c` | The data path: the send queue served by one sender at a time, the reset, the receive callback's reassembly, segmentation and indication, and the link. |
+| `ndis5\n5_cm.c` | The interface glue, the one file that calls `src\xhci_cmnet.h`s table: `IRP_MN_QUERY_INTERFACE` to the device object below, `Open`, `Close`, `QueryInfo`, `Log`. |
+| `ndis5\sources`, `makefile`, `xhcinet.rc` | The build and the version resource. |
+| `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2), gated by `scripts\inf-gate\check-net-inf.ps1`. |
+
+The import gate holds the x86 image with `-GateProfile net98` over `scripts\import-gate\xhcinet-imports.allow` and the amd64 one over `xhcinet-imports-amd64.allow`. `test\test_net_frame.c` is the host suite.
 
 ## The user-mode tools
 

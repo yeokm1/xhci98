@@ -103,6 +103,9 @@ function Get-BuildSteps {
     $s += New-Step "cm-inf-amd64" "CM INF gate (NHI, amd64)" (Get-PsRun "scripts\inf-gate\check-cm-inf.ps1" "-Arch amd64") ("src\cm\xhcicm-amd64.inf " + $infFail) @("cm-inf-selftest")
     $s += New-Step "cmf-inf-x86" "CM INF gate (filter, x86)" (Get-PsRun "scripts\inf-gate\check-cm-inf.ps1" "-Filter -Arch x86") ("src\cm\xhcicmf.inf " + $infFail) @("cm-inf-selftest")
     $s += New-Step "cmf-inf-amd64" "CM INF gate (filter, amd64)" (Get-PsRun "scripts\inf-gate\check-cm-inf.ps1" "-Filter -Arch amd64") ("src\cm\xhcicmf-amd64.inf " + $infFail) @("cm-inf-selftest")
+    $s += New-Step "net-inf-selftest" "Thunderbolt networking INF gate self-tests" (Get-PsRun "scripts\inf-gate\check-net-inf.ps1" "-SelfTest") $infTest
+    $s += New-Step "net-inf-x86" "Thunderbolt networking INF gate (x86)" (Get-PsRun "scripts\inf-gate\check-net-inf.ps1" "-Arch x86") ("src\net\xhcinet.inf " + $infFail) @("net-inf-selftest")
+    $s += New-Step "net-inf-amd64" "Thunderbolt networking INF gate (amd64)" (Get-PsRun "scripts\inf-gate\check-net-inf.ps1" "-Arch amd64") ("src\net\xhcinet-amd64.inf " + $infFail) @("net-inf-selftest")
     $s += New-Step "stor98-inf-selftest" "Stor98 INF gate self-tests" (Get-PsRun "scripts\inf-gate\check-stor98-inf.ps1" "-SelfTest") $infTest
     $s += New-Step "stor98-inf" "Stor98 INF gate" (Get-PsRun "scripts\inf-gate\check-stor98-inf.ps1") ("src\stor98\inf\stor98-x86.inf and stor98-x64.inf " + $infFail) @("stor98-inf-selftest")
     $s += New-Step "oem-selftest" "txtsetup.oem gate self-tests" (Get-PsRun "scripts\inf-gate\check-txtsetup-oem.ps1" "-SelfTest") $infTest

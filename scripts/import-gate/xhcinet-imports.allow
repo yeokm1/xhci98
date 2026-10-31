@@ -1,0 +1,79 @@
+# xhcinet.sys import allowlist (x86) - the NDIS 5.0 miniport of Thunderbolt
+# networking (design record 35 sections 7.1 and 7.8, roadmap-usb4.md task
+# 45.59 step S6), one image for 98 SE, ME, 2000, XP, Vista and 7.
+# scripts\import-gate\check-imports.ps1 -GateProfile net98 enforces it after
+# every link (scripts\build-driver.cmd :buildnet); the format and the
+# FLAVORS and REQUIREMENT columns are xhci98-imports.allow's.
+#
+# NTOSKRNL.EXE and HAL.DLL rows: each is also a row of xhci98-imports.allow,
+# whose Windows 98 evidence it carries (the net98 profile refuses one that is
+# not), and the gate re-derives that evidence and the Windows 2000 SP4
+# exports as for xhci98.sys.
+#
+# NDIS.SYS rows: on 98 SE and ME NDIS.VXD resolves them. It is an LE image
+# with no PE export table; its NT-style exports are not read (the owner's
+# rule of 2026-10-31: no Microsoft binary's code or headers are read). The
+# evidence is two kinds, both required by the net98 profile:
+#   bc-header    the routine is declared in the Windows 2000 DDK's ndis.h,
+#                which an x86 miniport compiles BINARY_COMPATIBLE "so that
+#                we don't use functions that aren't available on Windows 9x"
+#                (its own comment, line 27); the gate checks the name in
+#                tools\ntddk\inc\ddk\ndis.h.
+#   w98-runtime  a record of net98-runtime.list: a recorded load on 98 SE
+#                and ME of an NDIS 5 WDM miniport importing the same pair
+#                (runtime evidence; the image's own load is the leg that
+#                confirms it).
+# The x86 build defines USE_KLOCKS (src\net\ndis5\sources), so the spin
+# locks are the kernel's (HAL.DLL and NTOSKRNL.EXE rows), not NDIS.SYS's.
+# NDIS.SYS on 2000 to 7 exports a superset of what 9x resolves; the
+# Windows 2000 legs read the load (record 35 section 11.3).
+#
+# Nothing else: no pool through the kernel (NdisAllocateMemory alone), no
+# C runtime (the miniport's own copy loops), no DbgPrint (the log goes
+# through the connection manager's Log).
+
+[imports]
+
+ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!IoIsWdmVersionAvailable         all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Chooses the thread-stop wait: (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
+ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
+ntoskrnl.exe!ObfDereferenceObject            all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro, called on every target, not on NT alone: a relations list's references given back when this driver fails the IRP (HcdRelationsGiveBack), the hub PDO referenced for an invalidation (hcd_pdo.c) and the door's connection PDO (hcd_door.c); on NT also the thread objects the stop joins and the file objects of the MSI helper and the device-name check
+ntoskrnl.exe!KeClearEvent                    all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeClearEvent, hint 6E) (+5 other 98 SE); ntkern-name
+ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
+ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)
+ntoskrnl.exe!ObReferenceObjectByHandle       all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
+ntoskrnl.exe!ZwClose                         all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ZwClose, hint EF) (+29 other 98 SE); ntkern-name
+ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetEvent, hint 8E) (+42 other 98 SE); ntkern-name
+ntoskrnl.exe!IoAllocateIrp                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAllocateIrp, hint 2D) (+30 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeEvent               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeEvent, hint 74) (+48 other 98 SE); ntkern-name
+ntoskrnl.exe!IofCallDriver                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IofCallDriver, hint 68) (+49 other 98 SE); ntkern-name
+ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
+ntoskrnl.exe!IoFreeIrp                       all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoFreeIrp, hint 42) (+31 other 98 SE); ntkern-name
+HAL.dll!KfLowerIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfLowerIrql, hint 7) (+9 other 98 SE)
+HAL.dll!KfRaiseIrql                          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfRaiseIrql, hint 8) (+8 other 98 SE)
+HAL.dll!KfAcquireSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfAcquireSpinLock, hint 6) (+31 other 98 SE); ntkern-name
+HAL.dll!KfReleaseSpinLock                    all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KfReleaseSpinLock, hint 9) (+31 other 98 SE); ntkern-name
+NDIS.SYS!NdisReadConfiguration               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisCloseConfiguration              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMSetAttributesEx                all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMGetDeviceProperty              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisOpenConfiguration               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisInitializeWrapper               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMRegisterMiniport               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisTerminateWrapper                all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAdjustBufferLength              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisUnchainBufferAtFront            all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreePacket                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisMSleep                          all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisQueryBuffer                     all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NDIS_BUFFER_TO_SPAN_PAGES           all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisQueryBufferOffset               all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateBuffer                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocatePacket                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateBufferPool              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocatePacketPool              all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisAllocateMemory                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreePacketPool                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeBufferPool                  all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeMemory                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
+NDIS.SYS!NdisFreeBuffer                      all  required  bc-header; w98-runtime cdcnet-9x (net98-runtime.list); this image's own 98 SE and ME load is a leg owed
