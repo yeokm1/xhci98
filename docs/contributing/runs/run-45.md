@@ -5460,3 +5460,8 @@ the version bump.
   tools work on 64-bit Windows. On Windows 98 SE and ME, ASPI tools reach
   the same drives through the existing storage stack. A bridge without SAT
   returns the standard refusal, as on Windows' own USB storage driver.""
+- 45.62 (pending): "- (45.62, coordinator note for the bump; owner,
+  2026-10-31) The release notes' "Known limitation: a drive attached
+  during the install" text: narrow "until Windows restarts or the drive is
+  plugged in again" to the re-plug alone (on XP and 2000 a restart did not
+  list it, 45.27's second session), unless 45.62's fix lands first."
