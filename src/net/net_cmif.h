@@ -27,7 +27,7 @@ VOID NetCmIfRelease(PXHCI_CM_NET_INTERFACE Iface);
 VOID NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
                   PXHCI_CM_NET_INFO Info);
 
-/* The link's rate times its lanes in Mbit/s, 0 when unknown. IRQL: any. */
+/* The link's total rate in Mbit/s (LinkMbps), 0 when unknown. IRQL: any. */
 ULONG NetCmIfRateMbps(const XHCI_CM_NET_INFO *Info);
 
 /* All or nothing: 1 with Count buffers and the token, else 0.

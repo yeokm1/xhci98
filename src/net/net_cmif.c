@@ -118,18 +118,16 @@ VOID NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
     }
 }
 
-/* IRQL: any. */
+/* LinkMbps is the total over every lane in use (40000 for a bonded Gen 3
+ * link); Lanes is informational. A rate past 400 Gbit/s is taken as
+ * unknown, which also keeps OID_GEN_LINK_SPEED's LinkMbps * 10000 within
+ * a ULONG. IRQL: any. */
 ULONG NetCmIfRateMbps(const XHCI_CM_NET_INFO *Info)
 {
-    ULONG lanes = Info->Lanes;
-
-    if (lanes == 0) {
-        lanes = 1;
-    }
-    if (lanes > 2 || Info->LinkMbps > 200000UL) {
+    if (Info->LinkMbps > 400000UL) {
         return 0;
     }
-    return Info->LinkMbps * lanes;
+    return Info->LinkMbps;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
