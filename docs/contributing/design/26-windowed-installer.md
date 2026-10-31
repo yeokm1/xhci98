@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 56, 2026-10-31 (task 45.60, the owner's request of that
+Status: draft 58, 2026-10-31 (the owner's request of that day: the Help
+texts' paragraphs, one a choice, apart by an empty line; a text taller
+than the window scrolls, section 5.10); draft 57, 2026-10-31 (a cut of both pinned driver sets with no
+earlier record under its releases directory, a TEST or dry cut, proves
+the installer's lifted rows by themselves, section 6.7.14); draft 56, 2026-10-31 (task 45.60, the owner's request of that
 day: the XHCIPFW box on the Thunderbolt and USB4 page says what it does,
 "Find Thunderbolt and USB4 devices placed above 4 GB", with no file name, section 5.3.1;
 its Help names the files); draft 55, 2026-10-31 (task 45.66, the owner's request of that
@@ -2497,8 +2501,8 @@ itself uses, with a button to the full readme.
 
 *The window.* One dialog template, `IDD_HELP`, 300 by 200 dialog units
 in the pages' font (MS Sans Serif 8, as every page): a read-only
-multi-line text (`IDC_H_TEXT`, 284 by 166, with a vertical scroll bar
-that the texts below never need), and two buttons on its last row:
+multi-line text (`IDC_H_TEXT`, 284 by 166, with a vertical scroll bar,
+which the longer texts use since draft 58), and two buttons on its last row:
 "Open the &readme" (`IDC_H_README`, the readme in Notepad exactly as Help
 opened it before: `open_help`, its message box where the file is
 missing) and "Close" (`IDCANCEL`, the default button; Esc and the
@@ -2565,11 +2569,18 @@ pin; the self-test checks it (below).
 topic, in a file of their own (`xhciinst\inst_help.c`) that the window
 and `test	est_inst.c` link and the tools that link `inst_core.c` for
 other reasons (the tray tool, the mark service, the other host suites)
-do not; each choice a line of its own starting with the control's own
+do not; each choice a paragraph of its own starting with the control's own
 label (its first words where the label goes on with a file name or a
 parenthesis), then what it does, then when to change it; plain, short,
-and no word on testing status. The topics and their texts (" / " stands
-for a line break; the host suite holds the final words):
+and no word on testing status. Since draft 58 (owner, 2026-10-31: the
+lines ran together) the paragraphs, an intro among them, are apart by
+one empty line, and a paragraph that held two choices is split, one a
+choice ("Settings..." and "Change folder...", "More >" and
+"Advanced...", "Back" and "Install", "Remove" and "Cancel", "Save as
+text file..." and "Open Device Manager", each Finish topic's "now" and
+"later", and the OK line of each Settings tab). The topics and their
+texts (" / " stands for a paragraph break; the host suite holds the
+final words and paragraphs):
 
 | Topic | Shown for | Text |
 |---|---|---|
@@ -2594,9 +2605,12 @@ for a line break; the host suite holds the final words):
 | `INST_HELP_UFINISH` | Finish (uninstall), Restart choices | What was removed and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, so what was removed is gone from it. Restart Windows later: to save your work first, or to do what the page says is left. |
 
 *What pins them.* The host suite (section 11): every topic has a title
-and a text; each text is ASCII, at most `inst_page_rows(166)` (20)
-lines at `inst_page_cols(284)` (68) characters (`inst_text_lines`), so
-it is read without scrolling; no text contains "tested", "testing",
+and a text; each text is ASCII, its paragraphs apart by exactly one
+empty line with none at either end, as many paragraphs as the suite
+pins for the topic, and at most twice `inst_page_rows(166)` (40) lines
+at `inst_page_cols(284)` (68) characters (`inst_text_lines`); one past
+20 lines scrolls in the window (draft 58; Components and the
+Thunderbolt and USB4 page's, at 26 and 22); no text contains "tested", "testing",
 "emulat", "virtual machine" or "experimental" (a certificate's and
 Windows' "test-signing" names are words of the page, not a testing
 status); value names are compared without regard to case (98 SE and
@@ -2620,7 +2634,10 @@ with the restart words, with the shut-down words, none shown). Then it
 opens `IDD_HELP` for every topic, sets the text, and measures it in the
 edit control's formatting rectangle (`EM_GETRECT`) at the control's
 font (`DrawTextA` with `DT_WORDBREAK | DT_EDITCONTROL | DT_CALCRECT`),
-failing a text taller than the rectangle; it checks the two buttons
+failing a text wider than the rectangle or not held whole (its length,
+CR LF for each line break); since draft 58 a text taller than the
+rectangle must have the vertical scroll bar and scroll past its first
+line (`EM_LINESCROLL`, `EM_GETFIRSTVISIBLELINE`); it checks the two buttons
 inside the dialog and apart, and the dialog's window rectangle within
 640 by 452 (480 less a taskbar) at the DPI it runs at; a failure names
 the topic. The self-test measures at the DPI of the system it runs on,
@@ -5539,6 +5556,28 @@ such a cut records the pair's `COEXISTS` lines on the row's systems,
 the table's and the carried pack's, as `EXCLUDES` (`Get-OtherHeldLifts`;
 the rest of each line as it is), and neither the history nor the
 table is held to a lift there.
+
+**A cut with no history** (draft 57, 2026-10-31). The previous record
+is the newest `otherpkgs.txt` below the cut's version under the cut's
+`-ReleasesDir`. A TEST build (`-TestLabel`) or a dry cut writes into
+another directory, which holds none, so before this draft such a cut of
+both pinned sets lifted nothing and `Test-OtherTableLifts` refused the
+table's lifted `rtl815x` row ("the installer's table marks
+free:net/rtl815x and nonfree:ethernet/rtl815x lifted on WXP ... W7X64,
+and this cut lifts no EXCLUDES of the pair there"), though the table,
+both sets' `STAGE.TXT` and a cut into `releases\` agreed (read at the
+free set's `v0.1.5` and `v0.1.6`). Where no earlier record is found, the
+cut now takes each lifted row of the table (kind 2, left only where both
+of its sets are carried) as an `EXCLUDES` on its own systems and lifts it
+as above (`Get-OtherTableOwnLifts`, through `Get-OtherLifted`): a
+`COEXISTS` of this cut's lines on every one of those systems, both
+packages answering and no device key in common, or the cut refuses
+("... excluded on <system> by the installer's lifted row (no earlier
+otherpkgs.txt) ..."). The record then carries the `LIFTED` line a cut
+into `releases\` writes. The history itself is not borrowed from
+`releases\`: until the version is raised, a cut reads its version from
+the INF, and the record below that one is an older release's, whose rows
+a cut leaving a set out does not match.
 
 **The pair this is for.** Read at the pins of `3.3.0.0` (free `v0.1.4`
 at `c28fce8`, non-free `v1.1.0` at `565d11b`) with the cut's own

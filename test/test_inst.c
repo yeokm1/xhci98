@@ -8664,8 +8664,38 @@ static void help_label_head(const char *label, char *out, size_t cap)
     out[n] = '\0';
 }
 
+/* A "\n" with no other beside it: a paragraph break that is no empty
+ * line. */
+static int help_lone_nl(const char *t)
+{
+    const char *p;
+
+    for (p = t; *p != '\0'; p++) {
+        if (*p == '\n' && p[1] != '\n' && (p == t || p[-1] != '\n')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static size_t help_paras(const char *t)
+{
+    size_t n = 1;
+    const char *p = t;
+
+    while ((p = strstr(p, "\n\n")) != NULL) {
+        n++;
+        p += 2;
+    }
+    return n;
+}
+
 static void test_help(void)
 {
+    /* Each topic's paragraphs, in INST_HELP_* order. */
+    static const size_t paras[INST_HELP_COUNT] = {
+        3, 3, 9, 6, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3
+    };
     static const char *const banned[] = {
         "tested", "testing", "emulat", "virtual machine", "experimental"
     };
@@ -8766,13 +8796,22 @@ static void test_help(void)
         }
         sprintf(msg, "help topic %d: ASCII, lines by \\n alone", i);
         CHECK(ascii, msg);
-        sprintf(msg, "help topic %d: %lu lines at %lu columns, room for %lu",
+        /* A paragraph a choice, one empty line between paragraphs, none
+         * at either end (owner, 2026-10-31); a text past the window's
+         * rows scrolls there, and stays within two windows. */
+        sprintf(msg, "help topic %d: paragraphs apart by one empty line", i);
+        CHECK(t[0] != '\n' && t[strlen(t) - 1] != '\n' &&
+              strstr(t, "\n\n\n") == NULL && help_lone_nl(t) == 0, msg);
+        sprintf(msg, "help topic %d: %lu paragraphs, %lu pinned", i,
+                (unsigned long)help_paras(t), (unsigned long)paras[i]);
+        CHECK(help_paras(t) == paras[i], msg);
+        sprintf(msg, "help topic %d: %lu lines at %lu columns, at most %lu",
                 i, (unsigned long)inst_text_lines(t,
                                                   inst_page_cols(INST_HELP_W)),
                 (unsigned long)inst_page_cols(INST_HELP_W),
-                (unsigned long)inst_page_rows(INST_HELP_H));
+                (unsigned long)(2 * inst_page_rows(INST_HELP_H)));
         CHECK(inst_text_lines(t, inst_page_cols(INST_HELP_W)) <=
-              inst_page_rows(INST_HELP_H), msg);
+              2 * inst_page_rows(INST_HELP_H), msg);
         for (b = 0; b < sizeof(banned) / sizeof(banned[0]); b++) {
             sprintf(msg, "help topic %d: no \"%s\"", i, banned[b]);
             CHECK(!help_has_ci(t, banned[b]), msg);

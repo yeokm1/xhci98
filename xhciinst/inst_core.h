@@ -1848,7 +1848,8 @@ const char *inst_page_text(int id);
 #define INST_HELP_COUNT         19
 
 /* The help window's text control, in dialog units (xhciwiz.rc IDD_HELP):
- * every text fits it at inst_page_cols/inst_page_rows, read unscrolled. */
+ * every text is inst_page_cols wide; one longer than inst_page_rows
+ * scrolls there (owner, 2026-10-31: a blank line between paragraphs). */
 #define INST_HELP_W             284
 #define INST_HELP_H             166
 

@@ -3076,6 +3076,21 @@ try {
         $msg = ""
         try { Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free", "nonfree") } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("lifted on WXP W7")) ("a lifted table row with both sets carried and no lift was not refused: '" + $msg + "'")
+        # With no earlier record (a TEST or dry cut into another releases
+        # directory, draft 57) the table's lifted rows are proved by
+        # themselves: apart on WXP, the same device on W7.
+        $ownNow = [pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP", "W7"))); Lifted = @() }
+        $ownRow = [pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }
+        $own = @(Get-OtherTableOwnLifts -Table $ownRow -Now $ownNow -Sets $setLift)
+        Assert-True ($own.Count -eq 1 -and ($own[0].Systems -join " ") -eq "WXP") "a lifted table row with no history, its sets read apart, was not lifted."
+        Test-OtherTableLifts -Table $ownRow -Lifted $own -Carried @("free", "nonfree")
+        $msg = ""
+        try { Get-OtherTableOwnLifts -Table $liftRow -Now $ownNow -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("both match VID_1111&PID_0002") -and $msg.Contains("lifted row")) ("a lifted table row with no history on a system both packages match was not refused: '" + $msg + "'")
+        $msg = ""
+        try { Get-OtherTableOwnLifts -Table $ownRow -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True (@(Get-OtherTableOwnLifts -Table $ownRow -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Sets $setLift).Count -eq 0) "a lifted table row with this cut's EXCLUDES on its system was read as a lift."
+        Assert-True (@(Get-OtherTableOwnLifts -Table ([pscustomobject]@{ Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Now $ownNow -Sets $setLift).Count -eq 0) "a table with no lifted row gave a lift."
         # Such a cut records the pair's COEXISTS on the row's systems as an
         # EXCLUDES (the installer's hold there), the rest of a line as it is,
         # so the history check asks no proof of the absent set; with both
@@ -3233,6 +3248,12 @@ try {
                 $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $repo "releases") -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
                 Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned sets wrote no record."
                 Assert-True ($realLifted.Count -eq 0 -or @($realChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0) "the installer's table lifts a pair and the cut's checks over the pinned sets record no LIFTED line."
+                # A TEST or dry cut into a releases directory with no earlier
+                # record (draft 57): the lifted rows proved by themselves.
+                $realElse = Join-Path $script:work "oth-real-else"
+                Ensure-Directory $realElse
+                $elseChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $realElse -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
+                Assert-True ($null -eq $elseChk.Previous -and ($realLifted.Count -eq 0 -or @($elseChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0)) "the cut's checks over the pinned sets into a releases directory with no history did not prove the installer's lifted rows."
             } else {
                 # The pack alone: a lifted row is not held to a lift there.
                 $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf

@@ -7832,6 +7832,126 @@ built from this tree (`XHCIINST.EXE` `ddd0edd9...`, `XHCIMARK.EXE`
 Nothing of 45.55 on these systems. Not read: 2000 on an ACPI HAL (record
 33 section 13.2), a real dock or enclosure.
 
+## 45.66 (continued) the cut with both driver sets, the Help texts' paragraphs, and the owed readings (2026-11-01, partial)
+
+Branch `w45-cutfix` from `9190b226`, tree `E:\xhci98-wt\w45-cutfix` on
+development host A. Commits: `5c2027b2` (a TEST or dry cut with both
+driver sets proves the installer's lifted rows; record 26 draft 57),
+`603ccb3a` (the Help texts a paragraph a choice, an empty line between;
+record 26 draft 58); each reviewed and revised.
+
+### The cut with both driver sets
+
+A full x86 cut with the free and the non-free set was refused before
+staging: "the installer's table marks free:net/rtl815x and
+nonfree:ethernet/rtl815x lifted on WXP WXP64 WVISTA WVISTA64 W7 W7X64,
+and this cut lifts no EXCLUDES of the pair there". Read with the cut's
+own functions (`Invoke-OtherSetChecks` over the exported sets):
+
+- The installer's table (`instOtherRels`: `EXCLUDES` on 98 SE, ME, 2000
+  and 8 to 10 x64, lifted on XP to 7 x64), the free set's `STAGE.TXT`
+  (the same split, at `v0.1.5`, `v0.1.6` and `v0.1.7`) and the non-free
+  set's agree. Against the repository's `releases\` the check passes and
+  records `LIFTED | free:net/rtl815x | nonfree:ethernet/rtl815x | W7 W7X64
+  WVISTA WVISTA64 WXP WXP64`.
+- A TEST cut must write into another `-ReleasesDir`, which holds no
+  earlier `otherpkgs.txt`. There the cut computed no lift, and
+  `Test-OtherTableLifts` refused the table's lifted row. The stale side
+  was the cut's reading of the history, not the table or the pin.
+- A first fix (the repository's `releases\` as a second history) was
+  dropped: until the version is raised the cut reads 3.3.0.0 from the
+  INF and would compare with 3.2.0.0's record, which a cut leaving a set
+  out does not match. The fix kept (`5c2027b2`): with no earlier record,
+  `Get-OtherTableOwnLifts` proves each lifted row of the table by itself
+  through `Get-OtherLifted` (record 26 section 6.7.14, "A cut with no
+  history"). Host vectors cover a row read apart, a row whose packages
+  share a device key, a row against an `EXCLUDES` of this cut, and the
+  pinned sets into an empty releases directory.
+- The packaging regression fixtures: the packager self-tests in the
+  gated build, 1756 checks passed, with the pinned sets' branch run
+  through `scripts\local\usb-wdm-free` and `usb-wdm-nonfree` (junctions
+  to the two checkouts; with no free-set checkout that branch is skipped,
+  which is why the self-tests never met the refusal).
+- The cut: `make-release.ps1 -Arch x86 -TestLabel w45cutfix -SkipQualtool
+  -SkipMarkTool -DriverPackRoot <usb-wdm-nonfree> -WdmFreeRoot
+  <usb-wdm-free> -ReleasesDir <scratch>\relfull -UploadDir
+  <scratch>\upfull` of `603ccb3a`: exit 0, three downloads
+  (`xhci98-3.3.0.0.zip`, `-free.zip`, `-nonfree.zip`), "the other USB
+  drivers' sets: ... hold (no earlier otherpkgs.txt)", the `LIFTED` line
+  in `otherpkgs.txt`. The same with `-WdmFreePin` at `v0.1.6`
+  (`bc036ce`): exit 0, the same `LIFTED` line. Hashes:
+  `E:\xhci98-vm\p45\w45-cutfix\hashes-x86-603ccb3a.txt`.
+- `v0.1.7` (`0f82674`, adding `print/usbprn`, a CLASS package staged on
+  98 SE and ME): the cut's checks pass with no table row, and the
+  installer then takes the pack's own words under "Other". A current
+  table row for it is refused at the `v0.1.5` pin ("the installer's table
+  has a current row for free:print/usbprn, which the carried free set
+  does not have"), so a row, if wanted, goes in with the `v0.1.7` pin.
+
+### The Help texts' paragraphs (owner, 2026-10-31)
+
+Every Help text is a short paragraph a choice, the paragraphs (an intro
+among them) apart by one empty line; a paragraph that held two choices
+is split ("Settings..." and "Change folder...", "More >" and
+"Advanced...", "Back" and "Install", "Remove" and "Cancel", "Save as
+text file..." and "Open Device Manager", each Finish topic's "now" and
+"later", the OK line of each Settings tab). The window keeps its size;
+a text taller than the edit scrolls there. At 68 columns Components is
+26 lines and the Thunderbolt and USB4 page 22, against 20 rows.
+`test_help` pins each topic's paragraph count, the empty-line structure
+and at most 40 lines; `st_help` holds each text whole by length and as
+wide as the edit, and a taller one to its scroll bar and a scroll past
+the first line. No screenshots for the owner (owner, 2026-10-31).
+
+### Builds
+
+- Gated x86 `all` of `603ccb3a`: BUILD + GATES PASSED (release, qemu);
+  host tests passed (`test_inst` 7768 checks); packager self-tests 1756
+  checks passed. Gated amd64 release: BUILD + GATES PASSED. A second
+  gated x86 release run with the tools built: PASSED, the xhciinst
+  self-test passed, the window's self-test 841 checks, 0 failures (839
+  before, and the two scroll checks). Logs
+  `E:\xhci98-scratch\p45-w45-cutfix\gated-x86.log`, `gated-amd64.log`,
+  `gated-x86-2.log`.
+
+### The legs (the package of `603ccb3a` with both driver sets)
+
+Fresh overlays of the q35 bases through `launch-q35.ps1 -Usb4 asm4242
+-EncAtBoot`, the full download (`upload-3.3.0.0-nonfree`) on the
+transfer disk, driven from the keyboard; QMP 49660 to 49663; every start
+and stop in `E:\xhci98-vm\p45\w45-cutfix\pids.txt`, the screens in each
+leg's folder there. Each Help window below was read whole, nothing cut
+at either side, its words those of the page or dialog it was opened on.
+
+| System | Help read through the installer | Notes |
+|---|---|---|
+| 98 SE, 640 by 480 (`h98`) | Components (26 lines, scrolled to its last line), the Settings Thunderbolt and Stor98 tabs, Stor98's Advanced, Free USB drivers, Non-free USB drivers, Progress, Finish (the restart words), and the uninstall's first page, Summary and Finish | install exit code 3; after a cold start the window self-test 841 checks, 0 failures; the uninstall ran to its Finish |
+| XP (`hxp`) | Free USB drivers, Non-free USB drivers, the uninstall's first page, Summary and Finish, then a second install's Progress and Finish (the restart words) | install exit code 3; the window self-test 841 checks, 0 failures |
+| 7 x86 at 120 DPI (`h7`) | Welcome, the Thunderbolt and USB4 page (all six paragraphs shown), the Settings USB, Thunderbolt and Stor98 tabs, the Advanced dialog and Stor98's Advanced, Free USB drivers, Non-free USB drivers, the install's Summary | the window self-test 840 checks, 0 failures (at 120 DPI only Components scrolls) |
+
+Seen on the way, outside this task:
+
+- 98 SE's Progress Help says "such as Found New Hardware"; 98 SE's own
+  wizard is titled "Add New Hardware Wizard".
+- XP: Back from Components to Welcome and Next again left the
+  Thunderbolt box unticked (the Summary said "left out").
+- F1 on a page gives Windows' "No Help topic is associated with this
+  item", not the page's Help.
+
+### Left
+
+- The Steps page's Help (98 SE). The page needs a device left for the
+  user. Two tries did not give one: a New Hardware wizard cancelled at
+  boot leaves no device ("No device of this package is present"), and
+  Cancel during the install's Progress (twice, on fresh overlays) came
+  after both controllers had been installed and the run went to Finish.
+  The routing and the text in the help window are in the self-test.
+- The Finish page's Help with the shut-down words (98 SE). Those words
+  are shown only where the run updated Stor98's file on 98 SE or ME, or
+  copied the storage drivers while a UAS disk waits for them
+  (`inst_eng_shutdown`); a first install gives the restart words, read
+  above. Also in the self-test.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
@@ -8075,3 +8195,8 @@ the version bump.
   rewritten the same way; the XhciCmBridgeReq row (about line 1486) to
   "the rewrite acts on 2000, XP and XP x64"; and drop XP x64 from that
   untested-ground row (about line 5386)."
+- 45.66 (continued) (b6e4d841): "SUPERSEDES the 45.66 sentence of the
+  45.60 and 45.66 text above: The installer's Help button now explains the
+  page it is on: a short window says, one short paragraph per choice, what
+  each choice does and when to change it, with the full readme one button
+  away."
