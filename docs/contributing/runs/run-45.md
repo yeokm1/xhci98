@@ -5537,3 +5537,15 @@ the version bump.
   during the install" text: narrow "until Windows restarts or the drive is
   plugged in again" to the re-plug alone (on XP and 2000 a restart did not
   list it, 45.27's second session), unless 45.62's fix lands first."
+- 45.54 (HEAD): "- (45.54, installer Advanced lists, 2026-10-31) "The
+  installer's Advanced lists now offer every setting a user may change.
+  The USB tab adds XhciLinkKeep, XhciResumeKeep, XhciUsb2Bos, the
+  interrupt moderation interval (XhciImodInterval250ns), the driver's log
+  (XhciLogVerbosity, XhciLogDebugView), the polling periods
+  (XhciPollIdleMs, XhciPollActiveMs), the hub first-report waits
+  (XhciFirstEnumWaitMs, XhciFirstEnumPortMs), the largest UAS command
+  (XhciMaxTransferKB, a multiple of 4) and XhciWideMap (Windows 2000 to
+  7). The Thunderbolt tab adds XhciCmRingInterrupt (Windows 2000 to 10)
+  and XhciCmUsb4V2. A value is written machine-wide only when you change
+  it. On Windows 98 SE and ME a first install now lists the USB settings
+  and asks XhciSilentInstall, where it showed one greyed row before.""
