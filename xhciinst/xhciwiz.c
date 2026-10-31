@@ -6479,6 +6479,9 @@ static void st_help(HWND parent)
         RECT b2;
         RECT x;
         char text[4096];
+        size_t want;
+        const char *s;
+        int scrolls;
 
         d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_HELP), NULL,
                                st_proc, 0);
@@ -6502,13 +6505,31 @@ static void st_help(HWND parent)
             SelectObject(dc, old);
         }
         ReleaseDC(e, dc);
-        _snprintf(msg, sizeof(msg) - 1, "help: topic %d (%s) fits its text "
-                  "unscrolled (%ld of %ld pixels)", i, inst_help_title(i),
+        /* Whole, as wide as the edit; a text taller than it scrolls
+         * there, to its last line (owner, 2026-10-31). */
+        want = 0;
+        for (s = inst_help_text(i); *s != '\0'; s++) {
+            want += *s == '\n' ? 2 : 1;
+        }
+        scrolls = need.bottom - need.top > fmt.bottom - fmt.top;
+        _snprintf(msg, sizeof(msg) - 1, "help: topic %d (%s) holds its text "
+                  "whole (%ld of %ld pixels%s)", i, inst_help_title(i),
                   (long)(need.bottom - need.top),
-                  (long)(fmt.bottom - fmt.top));
+                  (long)(fmt.bottom - fmt.top), scrolls ? ", scrolled" : "");
         msg[sizeof(msg) - 1] = '\0';
-        st(need.bottom - need.top <= fmt.bottom - fmt.top &&
-           need.right - need.left <= fmt.right - fmt.left + 1, msg);
+        st(strlen(text) == want &&
+           need.right - need.left <= fmt.right - fmt.left + 1 &&
+           (!scrolls || (GetWindowLongA(e, GWL_STYLE) & WS_VSCROLL) != 0),
+           msg);
+        if (scrolls) {
+            LRESULT n = SendMessageA(e, EM_GETLINECOUNT, 0, 0);
+            SendMessageA(e, EM_LINESCROLL, 0, (LPARAM)n);
+            _snprintf(msg, sizeof(msg) - 1, "help: topic %d (%s) scrolls "
+                      "past its first line (%ld lines)", i,
+                      inst_help_title(i), (long)n);
+            msg[sizeof(msg) - 1] = '\0';
+            st(SendMessageA(e, EM_GETFIRSTVISIBLELINE, 0, 0) > 0, msg);
+        }
         GetWindowRect(d, &w);
         _snprintf(msg, sizeof(msg) - 1, "help: topic %d's window inside 640 "
                   "by 452 (%ld by %ld)", i, (long)(w.right - w.left),
