@@ -6873,6 +6873,10 @@ copy of the same disk image, shows no letter, as on 7 x86). Pass.
 
 ## 45.final: the release-notes texts the tasks handed over
 
+Owner rule of 2026-10-31: user-facing text describes behaviour only, with
+no testing-status wording (emulator, QEMU or real-hardware remarks); the
+texts below were reworded to it in place (branch `w45-noemu`).
+
 Collected as each task merges, for `45.final` to place; the wording is the
 task's own, checked against its section above before it is used.
 
@@ -6962,8 +6966,9 @@ the version bump.
 - 45.18 (7b7a63a0): "- "From 3.4.0.0, `xhcicm.sys` also tells Stor98 at
   once that a tunnelled drive is gone when the drive sits directly behind
   a USB4 tunnel port that is a PCI Express port, on Windows 98 SE, ME,
-  2000, XP and XP x64, on systems whose tunnel ports have been read for
-  it. A drive behind a dock or behind another drive, Vista and later on
+  2000, XP and XP x64, on a tunnel port it identifies as QEMU's (vendor
+  id 1B36h); on a real computer's tunnel port it makes none. A drive
+  behind a dock or behind another drive, Vista and later on
   such a port, and every other system get no such statement; there Stor98
   keeps its own deadline of about 5 seconds." - "On Windows 98 SE and ME
   an NVMe drive that sits directly on a Thunderbolt or USB4 tunnel port,
@@ -7067,8 +7072,8 @@ the version bump.
 - 45.53 and 45.55 (8ab07b3e): "SUPERSEDES the 45.53 and 45.55 text above.
   A Thunderbolt or USB4 dock or device whose own switch has more than one
   downstream port, plugged in while Windows 2000 or XP runs, now gets
-  every port placed when its switch ports request their own interrupt, as
-  real enclosures' ports do; before, the second port stopped with Code 12
+  every port placed when its switch ports request their own interrupt;
+  before, the second port stopped with Code 12
   and nothing behind it started. The first time an NVMe enclosure is
   plugged in on Windows 2000 or XP, two Found New Hardware wizards appear:
   the first finds no driver (finish it either way), and after the
