@@ -7273,9 +7273,58 @@ restart. It is the restart section 7.4 already describes for a child
 attached before its association, which the flag kept from running. A
 restart that a busy volume vetoes is logged and leaves the unit as now.
 
-**The driver is unchanged.** The child's answer and the flag keep their
-meaning, now written down: "the driver answered `Removable` to at least
-one capabilities query of this attachment".
+**The legs read that the restart cannot do it alone** (2026-10-31, the
+gated build of `0301f107`, XP and 2000): the service chose the unit and
+logged "restart not made: ... a disk or volume below the unit is in use".
+That is record 33 section 4.3's gate for a unit the bridge marks follow,
+and an enclosure's unit always holds a volume. So the driver answers at
+the start itself.
+
+**The `AddDevice` child's answer before any domain is listed.** In
+`CmRegAttMayMark`, an `AddDevice` child (`CM_KIND_CHILD`, `AddDev`)
+answers `Removable` **while the start-up window is open** - no domain has
+been listed since the driver loaded (`cmRegEverListed`, set at the first
+listing and never cleared, so a domain's stop or an NHI that never starts
+or stays inert reopens nothing), no `AddDevice` child of this driver has
+failed to be made (`CmRegChildAddFailed`: a mark would then sit on a PDO
+with no attachment showing it, so the walk below could not tell a marked
+bridge from an unmarked one), and less than `CM_PRETRUST_MS` (300 s) have
+passed since `CmRegInit` - **and** its PDO is a unit by the filters
+alone (`cmRegUnitOfFilter`): a function a published bridge filter
+(`CM_KIND_FILTER`) last reported in its `BusRelations` snapshot, where
+neither that bridge nor any bridge filter above it (each reported by the
+next, up to `CM_TUNNEL_DEPTH_MAX`) carries a mark of the service's (an
+`AddDevice` child of this driver on its PDO). The service never marks a
+tunnel port or the host's own switch ports (protected), and marks every
+unit and every bridge below a unit, so a switch port inside a dock or an
+enclosure never counts, whether or not the host's upstream port above the
+tunnel ports is itself filtered (record 33 section 4.4). The bridge marks
+deeper in a dock or enclosure (record 33 section 4.3), `AddDevice`
+children too, therefore never answer what their steady state does not.
+
+The residual risk, stated: a value the service left on a unit (its last
+reconciliation could not verify the owner, so it kept the mark, decision
+M2) is honoured inside the window before the current owner and its
+`XhciCmSafeEject` are known, and an answer Windows recorded is not taken
+back when the domain later lists and would refuse it; it lasts until the
+unit's next rebuild or re-plug. The answer only lists the unit in Safely
+Remove Hardware: an eject still posts nothing without the identity-checked
+confirmation (section 7.4).
+The `LowerFilters` value is the evidence: the mark service writes it only
+on a unit it verified behind an active member with safe eject on, and
+removes it when the unit leaves or safe eject is off. The PnP manager's
+query after the start then records `Removable`, and the unit is listed
+from the start of Windows with no restart. Once a domain is listed, the
+rule of revision 3 decides every later answer, as before. Such answers
+are counted (`cmRegPreTrust`) and logged when a domain lists its set and
+at its stop (`cm.reenum.child.pretrust`), since no domain's log exists
+when they are made.
+
+The child's flag keeps its meaning, now written down: "the driver
+answered `Removable` to at least one capabilities query of this
+attachment". The service's change above stays: it covers a unit whose
+start came with a domain listed and whose answer Windows still did not
+record, and a unit with no volume in use.
 
 **XHCITR's mark line says what it reads** (record 25 section 6.6, the
 owner's wording of 2026-10-31). The states come from the driver's marks
@@ -7306,9 +7355,10 @@ answered", not "answers".
   answered state with the capabilities read and `Removable` clear.
 - Legs, the gated x86 build: XP and 2000 (Standard PC HAL), a fresh
   overlay, the enclosure attached through the install and a restart. Read:
-  the service's log ("restarted, now listed"), the devnode `DN_REMOVABLE`,
-  Safely Remove Hardware listing the unit, XHCITR's mark line, and an
-  eject from the applet. Then a second restart: the same, once.
+  `cm.reenum.child.pretrust`, the unit's recorded capabilities ("Removable:
+  yes"), Safely Remove Hardware listing the unit and not the bridge below
+  it, XHCITR's mark line, and an eject from the applet. Then a second
+  restart: the same.
 - The release notes' text is the coordinator's (45.final).
 
 ## 8. Registry values, counters, the log and the snapshot

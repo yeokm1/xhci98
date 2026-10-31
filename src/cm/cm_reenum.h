@@ -864,6 +864,10 @@ VOID CmRegPassD0(struct _CM_FILTER *filter);
  *                  departure recorded as pending. PASSIVE_LEVEL.
  */
 VOID CmRegAttLink(struct _CM_FILTER *filter);
+/* Record 21 section 7.7: an AddDevice child that could not be made (its
+ * device object or its attachment failed); closes the start-up window for
+ * answers before association for good. Any IRQL at or below DISPATCH. */
+VOID CmRegChildAddFailed(VOID);
 VOID CmRegAttLocate(struct _CM_FILTER *filter);
 VOID CmRegAttLocateCaps(struct _CM_FILTER *filter, ULONG address);
 BOOLEAN CmRegAttMayMark(struct _CM_FILTER *filter);
