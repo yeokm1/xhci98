@@ -13253,11 +13253,12 @@ Captive self-tests (`D4h` subcommands `81h`, `82h`) run under 16.6's
   `USBMPHLP.PDR`). If an ASPI request reaches `xhciuas.sys` at all, it
   arrives as an `SRB_FUNCTION_EXECUTE_SCSI` through `UasPdoScsi`, which
   already carries any CDB and resolves an unspecified direction from T_DIR.
-  Whether ASPI lists that adapter and passes the request is not read
-  [hyp]. One leg reads it (R3), with Stor98's 9x test client's ASPI mode
-  (`src/stor98/tests/int9x`), and records the answer. A gap found there is
-  NUSB's mapping layer's or ASPI's and not this driver's, and is reported,
-  not fixed here.
+  Whether ASPI lists that adapter and passes the request was a hypothesis;
+  it was read on 98 SE (R3, 2026-10-31, `runs/run-45.md` "45.52") with
+  this task's own ASPI probe (`test/atatest/aspi9x.c`) in place of
+  Stor98's client: ASPI lists the UAS LUN's adapter and passes INQUIRY and
+  ATA PASS-THROUGH (12) and (16) to it, and the data and the CK_COND
+  registers come back. No 9x code was needed.
 - The new imports are on both 32-bit routes (16.5's evidence), so the one
   binary still loads on 98 SE and ME. The code there is reached by no one.
 

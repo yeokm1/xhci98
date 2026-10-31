@@ -4968,20 +4968,23 @@ itself (45-E.11). The release notes keep Apple machines not claimed.
 
 ## 45.52 a UAS drive's pass-through and SMART (2026-10-31)
 
-**Verdict: done but the x64 leg and two readings.** `xhciuas.sys`'s LUN PDO now serves SCSI and ATA
-pass-through, buffered and direct, and the SMART requests `disk.sys` sends, through the engine
-(design record 13 section 16). On q35 2000, XP and 7 x86, with a UAS LUN answering ATA PASS-THROUGH
-(the emulator's new test-only `x-sat`), every route reaches the drive and returns its data and
-registers. A free SMART reader (smartctl 7.4, Windows 7) reads identity, health and attributes through
-both its SAT and its ATA route. A Users member cannot open any disk on 2000, XP or 7 (error 5), so
-the owner's access choice B rests on the same check as Windows' own ports. `xhciuas.sys` loads on
-stock ME with its new imports. Owed: the 7 x64 leg (WOW64 layouts; needs an amd64 gated build and
-in-guest signing), R3 (98 SE ASPI) and a drive behind a real SAT bridge (bench).
+**Verdict: done here; a real SAT bridge is the bench's.** `xhciuas.sys`'s LUN PDO now serves SCSI and
+ATA pass-through, buffered and direct, and the SMART requests `disk.sys` sends, through the engine
+(design record 13 section 16). On q35 2000, XP, 7 x86 and 7 x64, with a UAS LUN answering ATA
+PASS-THROUGH (the emulator's new test-only `x-sat`), every route reaches the drive and returns its data
+and registers; on 7 x64 the 32-bit client (WOW64) and a native 64-bit one read the same lines. A free
+SMART reader (smartctl 7.4, Windows 7) reads identity, health and attributes through both its SAT and
+its ATA route. A Users member cannot open any disk on 2000, XP or 7 (error 5), so the owner's access
+choice B rests on the same check as Windows' own ports. On 98 SE, ASPI lists the UAS LUN and passes
+ATA PASS-THROUGH to it (R3), with no 9x code. A program's cancel and exit, and a surprise removal
+under load, end every request with no hang (XP, 7 x86). `xhciuas.sys` loads on stock ME with its new
+imports. Owed: a drive behind a real SAT bridge (bench).
 
 Commits (branch `w45-pass`): `e948c36d` (design, merged as `75669ee7`), `44cf435b` (the owner's
 answers, reading R1, a `legal-provenance.md` row), `f0ad326c`, `f4fe63a4`, `6738c96d` (the pure core
 and `test_uas`, 594 checks), `571873d5` (the PDO, the engine, the imports), `230c47cd` (ATATEST's new
-lines, the record aligned). Each reviewed and revised until no material finding was left.
+lines, the record aligned); on branch `w45-pass2`, `d84b3ce9` (ASPI9X and PTCANCEL) and `675e87e4`
+(ATATEST64). Each reviewed and revised until no material finding was left.
 Emulator: `usb4-emu` branch `w45-pass` `1050071` (fork commit `4e94c3f`, scsi-hd `x-sat`).
 
 Vehicle: the gated x86 build of `230c47cd` (`out\gated-x86-release.txt`; `xhciuas.sys`
@@ -5057,20 +5060,75 @@ smartctl stops at "Unable to read USB device ID", as for any USB disk it cannot 
 Stock ME (no USB 2.0 stack), the package installed by `INSTALL /console /yes /nopause` (exit 3), two
 cold starts. The UAS LUN, here an overlay of the FAT test image, mounted as E: (ORICO,
 `TESTDATA.BIN`); the Bulk-Only stick is blank. So `xhciuas.sys` loads on ME with `_except_handler3`,
-`MmProbeAndLockPages` and the cancel imports. 98 SE was not read: the same imports have their 98 SE
-evidence in the allowlist (NUSB's `USBSTOR.SYS`, which a 98 SE UAS disk needs anyway, imports
-`_except_handler3`).
+`MmProbeAndLockPages` and the cancel imports. On 98 SE the same build
+loads and mounts the UAS LUN (R3 below).
+
+### 7 x64: WOW64 and a native caller (`w7x64\`)
+
+Vehicle: the amd64 gated build of `d84b3ce9` (`gated64.log`; `src/uas` as at `230c47cd`;
+`release-x64` `xhciuas.sys` 8c4352a6de474e17..., `xhci98.sys` 7b41266ddcb8d0a6...), staged by
+`make-package.ps1 -Arch amd64` without the key, so unsigned and with no catalogs. The installer refuses
+such a package ("REFUSED: this 64-bit package carries the Thunderbolt driver without its catalog,
+xhcicm.cat"), as designed. The five catalogs were made on the host by the packager's own
+`New-PackageCatalogFile` (WDK 7.1 MakeCat) and left unsigned. In the guest's overlay (test signing
+on), a throwaway certificate made there with WDK 7.1 MakeCert (`CN=w45throwaway`, valid 2026 to 2030,
+the guest's clock being 2026-09-20) was put in Root and TrustedPublisher, and the four `.sys` and five
+`.cat` files were signed with it there (`sign-w7x64.txt`, `serial-c.log`). Nothing was signed on the
+host and the project's key was not used. `INSTALL.BAT /console /yes /nopause`: exit 3, "xHCI98 USB
+Attached SCSI Storage: xhciuas 3.3.0.0, started"; after the restart `driverquery` lists `xhci98` and
+`xhciuas` running (`driverquery-w7x64.txt`). q35 `w7x64`, `-cpu qemu64 -smp 2 -m 2048`, the same UAS
+and Bulk-Only devices, `x-sat=on`.
+
+`ATATEST.EXE` (32-bit, of `675e87e4`, 25a35b90e6e3650c...) and `ATATEST64.EXE` (`675e87e4`,
+e398a3680ab21400...) on `\\.\PhysicalDrive0` to `3` (`atatest-w7x64-wow64.txt`,
+`atatest-w7x64-native.txt`). The two outputs are identical, line for line:
+- the UAS LUN (drive 3): every line as on the 32-bit systems above, S1 to T3, through the `_32`
+  layouts under WOW64 and the natural ones natively, `IOCTL_ATA_PASS_THROUGH_DIRECT` (A6) included;
+  M4 reads 4Fh/C2h, Status 40h, healthy;
+- the Bulk-Only stick under 7's own `usbstor.sys` (drive 2): error 87 for an unspecified direction,
+  5/20/00 for the ATA CDBs, error 50 for the ATA and SMART IOCTLs;
+- the two AHCI disks (drives 0 and 1, Windows' own port): the ATA PASS-THROUGH CDBs fail with error 1,
+  the ATA and SMART IOCTLs succeed. Read only as a reference.
+
+### R3: 98 SE's ASPI (`w98se\aspi9x-98se.txt`)
+
+98 SE with NUSB 3.3's mass-storage stack and the x86 package of `230c47cd`, one vCPU, cold starts.
+`ASPI9X.EXE` is this branch's 98 SE and ME ASPI probe, built from `d84b3ce9`'s source before its last
+review fix, which does not touch these lines. The UAS LUN, an overlay of the FAT test image, mounted
+as E:.
+- ASPI lists two host adapters, both "USBMPHLP": adapter 0 is the Bulk-Only stick, adapter 1 the UAS
+  LUN.
+- The UAS LUN: INQUIRY completes ("QEMU HARDDISK"); ATA PASS-THROUGH (16) IDENTIFY completes with the
+  model; ATA PASS-THROUGH (12) SMART READ DATA completes, checksum ok; RETURN STATUS (CK_COND) ends in
+  CHECK CONDITION, RECOVERED ERROR 00h/1Dh, with the registers 4Fh/C2h, Status 40h in the descriptor
+  sense, as SAT returns them.
+- The Bulk-Only stick, which has no SAT: the ATA CDBs end in CHECK CONDITION 5/20/00.
+
+So the 9x route that section 16 left as a hypothesis exists: ASPI passes any CDB through NUSB's
+mapping layer to `UasPdoScsi`, and T_DIR resolves the direction. No 9x code was needed.
+
+### Cancel and removal (`xp\`, `w7x86\`)
+
+`PTCANCEL.EXE` is this branch's cancel and removal client, built from `d84b3ce9`'s source before its
+last review fix. It sends N overlapped `IOCTL_SCSI_PASS_THROUGH` READ(10)s of 64 KiB to the UAS LUN,
+then cancels them (`CancelIo`), exits with them outstanding, or waits. The LUN's reads were throttled
+to 64 KiB/s (`throttling.bps-read=65536`) so that requests queue in the driver.
+
+| Run | XP (`ptcancel-xp.txt`) | 7 x86 (`ptcancel-w7x86.txt`) |
+|---|---|---|
+| 16 reads, then `CancelIo` | 15 of 16 pending; all 16 done (all were started, one per stream) | - |
+| 64 reads, then `CancelIo` | 63 of 64 pending; 16 done (in flight), 48 cancelled (error 995) | the same |
+| 64 reads, the program exits with them pending, then `ATATEST` | the exit completes; every `ATATEST` line as before | the same |
+| 64 reads, then a surprise removal (QMP `device_del` of the UAS device) | 24 done, 15 error 1117, 25 error 2; no hang | the same |
+
+So a queued request is cancelled, one already started on the device ends normally, a closing process
+leaves nothing behind, and a removal ends every request. Unthrottled (XP, 32 reads,
+`ptcancel-xp-unthrottled.txt`), all 32 completed before the cancel reached one. Safely Remove during a
+loop was not read separately; the surprise removal is the harder case.
 
 ### Owed
 
-- 7 x64 with the 32-bit ATATEST (the WOW64 `_32` layouts) and a native 64-bit caller. The amd64
-  binary compiles with the layout asserts and its import gate passes (a compile-only build). The leg
-  needs the amd64 gated build and the in-guest signing route.
-- R3: 98 SE's ASPI to a UAS LUN. No ASPI client is in this tree (Stor98's `t9x` is not), and no code
-  changed for 9x.
 - A drive behind a real SAT bridge, and a SMART reading of a real drive: the bench list.
-- The cancel path's leg (a program ended while its request waits queued) and removal during an
-  ATATEST loop: not run; the path rests on review.
 
 ## 45.final: the release-notes texts the tasks handed over
 
