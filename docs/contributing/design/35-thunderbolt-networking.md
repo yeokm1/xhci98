@@ -1,6 +1,8 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 5, 2026-10-31, step S3: the software connection
+Status: revision 6, 2026-10-31, step S4: the firmware connection
+manager's half as built (section 3.10), reviewed and revised.
+Revision 5, 2026-10-31, step S3: the software connection
 manager's half as built (section 3.9), reviewed and revised; an
 emulator observation of Linux's end-to-end flow control (section 2.4
 point 9), the emulator's firmware-CM model choice (section 10, E5) and
@@ -17,9 +19,9 @@ Revision 1, 2026-10-31, before code. Written for
 release `3.4.0.0` after its withdrawal of 2026-10-30, when it was task
 45.43), with the owner's decisions of 2026-10-31 on its installer box
 (task 45.60), its packaging and its order folded in (sections 9 and 14).
-Steps S1 to S3 are in `src\cm\` (`tbt_xdp.c`, ring 0's XDomain sink
-in `tbt_ring.c`, and `tbt_u4cm.c`'s inter-domain section); the rest is
-not yet written. Section 15 lists the owner's questions;
+Steps S1 to S4 are in `src\cm\` (`tbt_xdp.c`, ring 0's XDomain sink
+in `tbt_ring.c`, `tbt_u4cm.c`'s inter-domain section and `tbt_icm.c`'s);
+the rest is not yet written. Section 15 lists the owner's questions;
 section 16 what is open and what is a risk; section 14 the steps a later
 worker codes it in.
 
@@ -901,6 +903,173 @@ the port machine; `test_u4xd` drives it (section 11.1).
   controller's inter-domain setting ([linux] `lc.c`
   `tb_lc_configure_xdomain`) is not designed here, so such a port stays
   UNSUPPORTED.
+
+### 3.10 As built under the firmware CM (step S4)
+
+`tbt_icm.c`'s section "Inter-domain links" and its row entries; the
+engine is S1's (`tbt_xdp.c`, `FirmwareCm` TRUE: no UUID step, no
+bonding), unchanged. `test_tbt_icm` drives it (section 11.1). The
+driver reaches it through `TbtIcmSetNetConfig` (`XhciCmNet` and the
+package version, set after `TbtIcmInit`), `TbtIcmSetNet` (the service's
+three operations, `TBT_ICM_NET`, the same signatures as S3's
+`TBT_U4_NET`, so one set serves both profiles), `TbtIcmNetWanted`,
+`TbtIcmNetIdentity`, `TbtIcmSetNetSerial` and `TbtIcmPeer`; everything
+else runs inside the client's existing entry points.
+
+- **The rows.** Every row gains the two events, the approve and its
+  teardown, in Linux's layouts ([linux] `tb_msgs.h`; `icm.c` `icm_probe`:
+  Falcon and Alpine Ridge take the `icm_fr_*` set, Titan Ridge and Ice
+  Lake the `icm_tr_*` set, Ice Lake included although it has no device
+  approve), as DWs with the header in DW 0 (record 21 section 1.4):
+
+  | Message | Falcon and Alpine Ridge | Titan Ridge and Ice Lake |
+  |---|---|---|
+  | connected `0x06`, 14 DWs | DW 1 bits 31:16 link info (link 2:0, depth 7:4; a link above 4 or a depth above 6 refused, as Linux); DW 2 to 5 the remote UUID; DW 6 to 9 the local UUID; DW 10 and 11 the local route high and low; DW 12 and 13 the remote route | the same words; the link info read and not used, the record keyed by the route alone (Linux passes link and depth 0) |
+  | disconnected `0x07` | 6 DWs: DW 1 bits 31:16 link info, DW 2 to 5 the remote UUID | 7 DWs: DW 1 and 2 the route, DW 3 to 6 the remote UUID |
+  | approve `0x10` | 8 DWs: DW 1 bits 31:16 the record's link and depth as link info; DW 2 to 5 the remote UUID; DW 6 the transmit HopID (15:0) and ring (31:16); DW 7 the receive HopID and ring | 9 DWs: DW 1 and 2 the route; DW 3 to 6 the remote UUID; DW 7 and 8 as DW 6 and 7 |
+  | teardown | NHI mailbox `0x10` for links 1 and 2 (port A), `0x11` for 3 and 4 (port B) ([linux] `tb_phy_port_from_link`), data 1, 20 us, data 2, both sent whatever the first answers | command `0x11`, 8 DWs: DW 1 bits 7:0 the stage; DW 2 and 3 the route; DW 4 to 7 the remote UUID; stage 1, 20 us, stage 2, no stage 2 after a stage 1 that failed ([linux] `icm_tr_disconnect_xdomain_paths`) |
+
+  A response is the request's echo: every word after the header must
+  match, as a device approve's must (record 21 section 5.4), so stage
+  1's late answer is never taken for stage 2's; a shorter one is
+  logged whole and not taken. The approve waits
+  `XhciCmApproveTimeoutMs`, the teardown `XhciCmCmdTimeoutMs`, each
+  with the client's retries.
+- **The events.** With `XhciCmNet` 0 both are counted and logged as
+  ignored, as before this step. With 1 each is decoded where it lands, a
+  command wait included. A connected event takes its turn among the
+  device announcements, both kinds under one rule: acted on at once only
+  where no wait and no engine runs and nothing older is queued, else
+  queued in the devices' own queue, so a host and a device announced at
+  one place are acted on in the order the firmware sent them; one lost
+  to a full queue asks for the rediscovery a lost device announcement
+  asks for (driver ready again, at which the firmware announces every
+  link that is up [emu] (`XDOMAIN.md` section 7); real firmware [inf]).
+  A disconnected event acts where it is decoded: the queued connected
+  events of that link are cancelled, and its record is marked ended - its
+  firmware paths taken as gone (no teardown is sent for them), a wait on
+  its approve or teardown ended as a device disconnect ends that
+  device's approve wait - by a flag of the record's that no queue can
+  lose; the record ends at the next point where no wait and no engine
+  runs.
+- **The keying** ([linux] `icm_fr_xdomain_connected`,
+  `icm_tr_xdomain_connected`, `icm_*_xdomain_disconnected`). Only a
+  direct link gets a record (section 13): a local route of one level and,
+  on Falcon and Alpine Ridge, a link info depth of 0, which names the
+  router the far host hangs off (Linux finds that router by the event's
+  link and depth; the emulator sends 0 for a direct link [emu]); any
+  other is logged (`cm.xdp.deep`) and its packets get no record. A
+  connected event whose remote UUID a record already has, at the same
+  place (Falcon and Alpine Ridge: the same depth and physical port; Titan
+  Ridge and Ice Lake: the same route), keeps that record, its route and
+  link taken from the event (the engine's route too), the engine
+  untouched; at another place, that record ends. Then a record at the
+  event's link and depth or its dual link's (Falcon and Alpine Ridge) or
+  at its route (Titan Ridge and Ice Lake) ends; a device in the table
+  where the host now is (Titan Ridge and Ice Lake: the same route; Falcon
+  and Alpine Ridge: depth 1 on the same physical port) leaves with its
+  subtree, each with its TUNNEL_DOWN of why REPLACED, as Linux removes the
+  switch there; and the new record starts. A device announced where a
+  record's host is (the same route, or depth 1 on the same physical port)
+  ends that record ([linux] `icm_fr_device_connected`,
+  `__icm_tr_device_connected`; Linux looks the XDomain up by the device's
+  own link and depth, which never names a direct link's depth 0, so the
+  port is taken here instead). A disconnected event ends the record of
+  its remote UUID (Falcon and Alpine Ridge) or route (Titan Ridge and Ice
+  Lake). A rediscovery's driver ready marks every record and the
+  reconciliation ends those not announced again within its window, as it
+  drops devices ([linux] `icm_unplug_children` and
+  `remove_unplugged_switch` mark and free XDomains the same way). Two
+  records per NHI (`TBT_ICM_MAX_XD`, a two-port controller's two links);
+  a third connection is refused, logged (`cm.xdp.full`). Each of these
+  ends is the peer gone: no Logout and no teardown, since the firmware
+  has said something at that place [inf].
+- **The record.** The engine is given the event's local UUID as this
+  domain's (section 3.1), its remote UUID, and its local route, the CM
+  bit clear, as the peer's route (section 3.2), and starts at PROPS. The
+  block: `vendorid` 0 "xHCI98", `deviceid` 1 "xhcicm", `devicerv` the
+  package version, `maxhopid` 15 (the control read of section 3.7 is not
+  made: which adapter faces the link is the firmware's), the `network`
+  directory as the service offers it (below). The lane's Max Output
+  HopID is taken as 15 and no HopID as in use, the firmware's own
+  allocations being unreadable (section 4.3), so the transmit HopID is 8
+  for a peer whose `maxhopid` is 8 or more and exactly 15 for one with
+  none. The engine is ticked at each idle poll, after the frames and the
+  events.
+- **The packets.** `TbtIcmInit` installs ring 0's XDomain sink (step
+  S2): each packet is copied into a queue of 8 that the thread empties
+  after the events, each to the record whose route it carries (the CM
+  bit cleared); a full queue drops it, counted. With no record at its
+  route, a discovery request is answered Error Response Not Ready
+  (section 3.1: this domain has no UUID for that link yet) and anything
+  else is dropped and counted. With `XhciCmNet` 0 the sink counts and
+  drops every packet (`cm.xdp.ignored`, logged at the first), so the
+  peer sees no answer, as before this step.
+- **The identity** (section 4.4): the MAC from the 64-bit serial the
+  driver hands `TbtIcmSetNetSerial` (the NHI's PCI Express Device Serial
+  Number, the driver's read), router id 0, port 0; without one a
+  locally administered unicast address made from the clock and ring 0's
+  bus address, logged (`cm.xdp.mac.random`). Taken once per instance;
+  `TbtIcmNetIdentity` is FALSE with `XhciCmNet` 0 or before the bind.
+- **The offer** (section 13: one service per NHI). While one record's
+  service is up, every other record's block carries no `network`
+  directory and its logins are refused, as under the software CM (S3).
+  On Falcon Ridge the E2E bit is withdrawn from what this host offers:
+  its quirk's Transmit E2E HopID 1 (section 4.3) is not one the service's
+  ring operation is told, so neither side enables E2E there.
+- **The service up**, called by the engine once both logins are done:
+  refused while another record's service is up, without the service's
+  operations, while an owed teardown (below) cannot be sent, or while
+  the fence (below) holds. The ring
+  is 1 (2 on Falcon Ridge, section 4.3); E2E when both blocks advertise
+  it. In order: the service's `RingsUp` (port = the physical port + 1,
+  that ring, E2E), the approve (section 5.2), then `Link` up with the
+  peer's MAC. An approve answered with the error flag: the rings down,
+  no service (`cm.net.approve.fail`), and the engine logs out. One that
+  may still be answered (the fence, below): the firmware may have built
+  the paths, so the teardown is sent, then the rings down, no service.
+  One ended by a disconnect: the rings down.
+- **The service down.** The network driver's link goes down at the
+  first logout of either side (section 4.2). A Logout from the peer
+  takes the paths down inside the engine's packet handling (its
+  `ServiceDown`, which lowers the link first); this host's own Logout
+  takes them down only when it is answered or times out, so after every
+  engine call the link is lowered as soon as the engine's service is no
+  longer up, the paths, the rings and the NHI's one service held until
+  `ServiceDown`. That lowers the link where it is still up, sends the
+  teardown where the approve was answered (or may still be) and no end
+  of the link has been announced, then `RingsDown` (`lost` when the host
+  interface is). A teardown not proven made - not answered, answered with
+  the error flag (Linux takes the flag as a failure too, and nothing says
+  the paths are gone), or that cannot be sent - is owed (one owed
+  identity per NHI: the row's address and the remote UUID) and sent again
+  before the next approve; until it is answered without the flag the new
+  service is refused (`cm.net.teardown.owed`). An owed one is retired by
+  the firmware's own evidence: a disconnect of its link, or another host
+  or a device announced at its place, each of which takes its paths with
+  it.
+- **The fence.** An approve or teardown command any attempt of which
+  may still be answered - an attempt that timed out, even when a retry
+  was answered (which does not say which attempt it answered), or a
+  request published whose wait ended with no answer - leaves an answer
+  that would match a later command of the same words (the same UUID,
+  place, HopIDs and ring), as record 21 section 5.4 treats a stale
+  answer. So no approve is sent from then until the rings restart (a
+  resume, a recovery, a rebind); the service is refused meanwhile
+  (`cm.net.approve.fenced`). An approve left so is also taken as having
+  perhaps built the paths: the teardown follows.
+- **The lifecycle.** `TbtIcmSuspend` and `TbtIcmUnbind` end every record
+  before the rings stop: one Logout sent and not waited for where the
+  service is up (IDS 5.1.2 takes no answer as one), the teardown, the
+  rings down, the record freed; after a resume the firmware's
+  announcement starts a record afresh. `TbtIcmLost`, a failure after
+  activation, and the entries of `TbtIcmResume` and `TbtIcmRecover` end
+  every record as gone with nothing sent, the teardown left owed where
+  the paths were approved. The packets held go with the records at each
+  of these ends, and the queued connected events with the devices'
+  queue, which every session boundary retires. A rediscovery's driver
+  ready keeps the records; the re-announcement is keyed and reconciled as
+  above.
 
 ## 4. The USB4NET service
 
@@ -1942,9 +2111,21 @@ for its maintainer (section 15 Q7):
   during it, the stop's Logout, no answer and the peer's restart, a
   loop, the network driver's close and open, one service per NHI, rings
   refused, and `XhciCmNet` 0.
-- `test_tbt_icm`: events `0x06` and `0x07` and the approve and teardown
-  per row, synthesised from `tb_msgs.h`'s structures, as the other non-AR
-  vectors are (record 21 section 5.2), and the AR mailbox pair.
+- `test_tbt_icm` (step S4): events `0x06` and `0x07` and the approve and
+  teardown per row, synthesised from `tb_msgs.h`'s structures, as the
+  other non-AR vectors are (record 21 section 5.2), and the AR mailbox
+  pair (port A and B, data 1 and 2); a far host of `tbt_xdp.c`'s engine
+  in the software CM's mode, the firmware passing its packets, to the
+  service up (rings, approve, link, in that order) and down (the link at
+  the close, the teardown, then the rings) on every row, Falcon Ridge's
+  ring 2 without E2E; the unplug (no Logout, no teardown); the approve's
+  error flag, no answer (the teardown, the fence) and a disconnect in its
+  wait; Not Ready before a record; the keying (announced again, another
+  host at the port, a device there, a link not direct, a host where a
+  device was); the order of a host's and a device's announcement in one
+  wait; Lost and the owed teardown, sent before the next approve and
+  settled by a disconnect; the rediscovery's reconciliation; the MAC
+  from the serial; and `XhciCmNet` 0.
 - `test_tbt_ring`: PDF 6 and 7 in the dispatch, the matching rule with the
   CM bit, a stray response.
 - The data rings (`test_cm_net`, new, against `tbt_fake.h`): frame-mode
@@ -2063,8 +2244,10 @@ PDF 6 and 7 (section 3.4).
 - A peer behind a device router (an inter-domain link at depth 2 or more,
   through a dock or a hub): the depth-2 child read keeps its ERR_ENUM
   branch as today (record 34's minimal chain does not reach other
-  domains); under the firmware CM a connected event at depth above 1 is
-  logged and not approved.
+  domains); under the firmware CM a connected event whose local route
+  has more than one level, or on Falcon and Alpine Ridge whose link info
+  depth is not 0 (the depth of the router the far host hangs off), is
+  logged and gets no record (section 3.10).
 - Time synchronisation across the link (IDS 3.5): no `timesync` entry, so
   every peer disables it.
 - Initiating an asymmetric link, Gen 4 link changes, CL states on the
