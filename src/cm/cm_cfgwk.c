@@ -3489,6 +3489,12 @@ static VOID cmWkThread(PVOID context)
     ULONG waitMs;
     ULONG since;
     LARGE_INTEGER tick;
+#if defined(XHCI_FLAVOUR_QEMU)
+    BOOLEAN retryOnly;
+    ULONG retryMask;
+    ULONG waitFrom;
+    NTSTATUS waitStatus;
+#endif
 
     w = (PCM_CFGWK)context;
     for (;;) {
@@ -3861,10 +3867,18 @@ static VOID cmWkThread(PVOID context)
         /* A retry hold alone has nothing to do until it ends: the wait is
          * what is left of it, not a tick at a time. */
         waitMs = CM_WK_TICK_MS;
+#if defined(XHCI_FLAVOUR_QEMU)
+        retryOnly = FALSE;
+        retryMask = w->Retry;
+        waitFrom = 0;
+#endif
         if (!timed && w->Retry != 0) {
             timed = TRUE;
             since = cmWkSince(w->RetryAt);
             waitMs = since < CM_WK_RETRY_MS ? CM_WK_RETRY_MS - since : 1UL;
+#if defined(XHCI_FLAVOUR_QEMU)
+            retryOnly = TRUE;
+#endif
         }
         if (w->Exit) {
             KeReleaseSpinLock(&w->Lock, irql);
@@ -3872,14 +3886,36 @@ static VOID cmWkThread(PVOID context)
         }
         KeReleaseSpinLock(&w->Lock, irql);
 
+#if defined(XHCI_FLAVOUR_QEMU)
+        /* The qemu flavour's reading of the retry-only wait (task 45.27):
+         * the members owed (bits 24 up) and the wait chosen in ms, then at
+         * the wake the wait's status (bits 20 up: 0 the event, 102h the
+         * timeout) and the ms it lasted. Never in the published flavour. */
+        if (retryOnly) {
+            cmWkLog(w, "cm.wk.retry.wait",
+                    ((retryMask & 0xFFUL) << 24) | (waitMs & 0xFFFFFFUL));
+            waitFrom = cmWkNowTicks();
+        }
+#endif
         if (timed) {
             /* waitMs relative, in 100 ns units (at most CM_WK_RETRY_MS, so
              * the negated count fits the low word): CM_WK_TICK_MS is
              * -2,000,000. */
             tick.LowPart = 0UL - waitMs * 10000UL;
             tick.HighPart = -1;
+#if defined(XHCI_FLAVOUR_QEMU)
+            waitStatus = KeWaitForSingleObject(&w->Wake, Executive,
+                                               KernelMode, FALSE, &tick);
+            if (retryOnly) {
+                since = cmWkSince(waitFrom);
+                cmWkLog(w, "cm.wk.retry.woke",
+                        (((ULONG)waitStatus & 0xFFFUL) << 20) |
+                            (since < 0xFFFFFUL ? since : 0xFFFFFUL));
+            }
+#else
             (VOID)KeWaitForSingleObject(&w->Wake, Executive, KernelMode,
                                         FALSE, &tick);
+#endif
         } else {
             (VOID)KeWaitForSingleObject(&w->Wake, Executive, KernelMode,
                                         FALSE, NULL);
