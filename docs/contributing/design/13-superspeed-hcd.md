@@ -16,8 +16,9 @@ the gates (25.5), and hubs and composite devices inside the bus (25.6);
 section 11 is the transfer-buffer policy (25.7) and section 12 the index of
 what Phase 25 leaves open; section 14 is a cancelled TD behind the head
 (task 43.64), section 15 a device kept across its SuperSpeed link's
-recovery (task 45.41), and section 16 a UAS drive's pass-through and SMART
-(task 45.52). Appendix A is the full Windows 98 export table.
+recovery (task 45.41), section 16 a UAS drive's pass-through and SMART
+(task 45.52), and section 17 a UAS drive in Safely Remove Hardware (task
+45.61). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -13382,6 +13383,150 @@ It is test-only, says so in its help text, and is reviewed and committed
 in `usb4-emu` on its own branch. The legs of 16.11 name the fork commit
 and the command line. It makes no claim about any real bridge: the
 reading behind a real SAT bridge stays on the bench list.
+
+## 17. A UAS drive in Safely Remove Hardware (task 45.61, 2026-10-31)
+
+Status: 2026-10-31, the reading done and the change designed, reviewed and
+revised; the code waits on the owner's answer to 17.4, because the change
+adds one notice on Windows 2000 (roadmap-usb4 task 45.61: a change of
+behaviour beyond the listing goes to the owner first).
+
+Tags in this section: [obs] read in this project's runs (`runs/run-45.md`,
+"45.61"); [hist] read in this repository's history; [hyp] not read.
+
+### 17.1 The report
+
+45.52's Windows 7 x64 leg (`runs/run-45.md`, "45.52", the Safely Remove
+reading) found that Windows' Safely Remove Hardware applet lists a
+Bulk-Only stick but not a UAS drive, and that with "Display device
+components" on, stopping "xHCI98 USB Attached SCSI Storage" offers to stop
+the whole controller, its root hub and every device on it [obs]. The roadmap
+line names the likely cause: `UasFdoPnp` (`src/uas/uas_fdo.c`) completes
+`IRP_MN_QUERY_CAPABILITIES` with `SurpriseRemovalOK` TRUE on top of the
+bus's answer.
+
+### 17.2 Why the bit is set
+
+`4e66702` (roadmap-hcd task 31-A.2, 2026-10-04 01:21 +0800), the UAS class
+driver's first commit, wrote `SurpriseRemovalOK = TRUE` in two places: the
+FDO's completion of the capabilities query and the LUN PDO's own answer
+(`uasCapabilities`, `src/uas/uas_pdo.c`). No comment, commit text, run
+record, design section or `lessons.md` entry gives a reason [hist]. At that
+hour the bus's device PDOs answered TRUE as well; `9001ebd` (14:38 the same
+day) turned the device PDO's answer to FALSE, as Windows 2000's `usbhub.sys`
+answers, so that the hot-plug applet lists a USB stick again (`runs/run-28.md`,
+the upgrade report's finding 1; `roadmap-hcd.md`, decisions table, "Device
+PDOs and `SurpriseRemovalOK`"), and `8993884` kept TRUE for a split function
+of a composite device. The UAS FDO's override was left as written, so since
+`2.0.0.0` the UAS drive's devnode has said TRUE where the bus answers
+FALSE [hist].
+
+### 17.3 What the bit changes, read
+
+Read on q35 guests of 2000 SP4, XP SP3, Vista SP2 x86 and 7 SP1 x86, each
+with a UAS drive (QEMU `usb-uas`, a FAT volume) at root port 3 and a
+Bulk-Only stick on the system's own `usbstor.sys` at root port 4: first with
+the package as built (`xhciuas.sys` as at `b71199a9`), then with that one
+binary rebuilt with the override written FALSE and nothing else changed
+(the variant), each read after a cold start [obs]:
+
+| | 2000 | XP | Vista | 7 |
+|---|---|---|---|---|
+| UAS devnode's capabilities, package / variant | `0x94` / `0x14` | `0x94` / `0x14` | `0x94` / `0x14` | `0x94` / `0x14` |
+| The stick's `usbstor` devnode | `0x14` | `0x14` | `0x54` | `0xD4` |
+| Listed, package | the stick alone; the UAS drive not even among the components | the same | the controller and the stick; the UAS drive only under the controller | the same |
+| Listed, variant | the stick and "xHCI98 USB Attached SCSI Storage", its disk and volume beneath | the same | the controller, the stick and the UAS drive | the same |
+| Stop of the UAS drive, variant | the drive, its volume and its disk alone; "Safe To Remove Hardware" | the same | the same | the same |
+| Unplug without a stop, package | no notice | no notice | no notice | no notice |
+| Unplug without a stop, variant | "Unsafe Removal of Device" naming "xHCI98 USB Attached SCSI Storage" | no notice | no notice (read during the copy loop of 17.6) | no notice |
+| The stick unplugged without a stop | "Unsafe Removal of Device" naming the stick and its disk | no notice | not read | not read |
+
+(`0x04` Removable, `0x10` UniqueID, `0x40` RawDeviceOK, `0x80`
+SurpriseRemovalOK; the UAS LUN's devnode read `0x90` in both builds, the
+stick's disk `0x10`.) The controller is listed on Vista and 7 only because
+the emulator places it behind a hot-pluggable PCI Express root port, which
+those systems mark removable; 2000 and XP read its capabilities `0x0`. On a
+board whose USB 3 controller is part of the chipset nothing is above the
+UAS drive to stop, so today the applet cannot stop it on any of the four
+systems [hyp: no real board read].
+
+Further readings with the variant [obs]: the stop followed by an unplug
+gave no notice on any of the four; the disk's removal policy read "Quick
+removal (default)" on 7 with the package and with the variant, and
+"Optimize for quick removal" on XP with the variant, so the write-cache
+policy does not move; a surprise unplug during a copy loop failed the copies
+("The system cannot find the drive specified") with no hang on XP and 7.
+
+What the bit does not touch: on 98 SE and ME the applet lists the UAS drive
+through `USBNTMAP.SYS`'s device interface on its parent and reads no
+capability (`runs/run-43.md`, 43.62), so neither system changes. In the USB
+Tree the one line that moves is the raw capability line of the drive's
+"Device Manager entry" details (`details_devnode`, `xhcitr/xhcitr.c`):
+"surprise removal OK: yes" becomes "no". Its USB Safely Remove
+(`details_usb_eject`, `tr_usb_rule`) reads no capability, and the
+Thunderbolt unit's lines that do (`details_unit`) read a tunnelled unit's
+devnode, not a USB device's, so both are unchanged.
+
+### 17.4 The owner's question
+
+The change lists the UAS drive and stops it alone on every NT system read,
+and on Windows 2000 it brings one new notice: a UAS drive pulled without a
+stop shows "Unsafe Removal of Device", as a Bulk-Only stick does there
+today. XP, Vista and 7 show no notice either way.
+
+- **A (recommended): drop the override on every NT system.** The UAS drive
+  behaves as a Bulk-Only stick on all of them: listed, stopped alone, and on
+  2000 the same notice when it is pulled without a stop. The notice is
+  Windows 2000's own and true (cached writes are lost as on a stick), and
+  the drive becomes stoppable on a real board, where today it is not.
+- **B: drop it on XP and later, keep it on 2000.** No new notice on 2000,
+  but there the UAS drive stays out of the applet and can be stopped only
+  from the USB Tree. Chosen at run time (`IoIsWdmVersionAvailable(1, 0x20)`,
+  FALSE on 2000 alone among the NT targets [hyp: the WDM version numbers,
+  checked against the DDK header in the code step]); one more branch to
+  test.
+- **C: no change.** A release-notes line instead: Windows does not list a
+  UAS drive in Safely Remove Hardware; stop it from the USB Tree.
+
+### 17.5 The change (for A)
+
+`UasFdoPnp` stops overriding the capabilities: its
+`IRP_MN_QUERY_CAPABILITIES` case is removed, and the query passes down and
+back unchanged, as every other minor code the FDO does not handle. The
+bus's answer then stands: FALSE for a whole device, TRUE for a function of a
+composite device (`8993884`), so a UAS function inside a composite device
+stays out of the applet like every split function. The LUN PDO keeps its
+answer (`Removable` FALSE, `SurpriseRemovalOK` TRUE): the applet lists the
+drive by its USB devnode whichever way the LUN answers, and with TRUE
+Windows 2000's notice names the drive alone where `usbstor`'s names the
+stick and its disk. Nothing else moves: no registry value, INF line, import
+or installer text. For B, the case stays and sets TRUE only when
+`IoIsWdmVersionAvailable(1, 0x20)` is FALSE.
+
+An update path to read: on XP, after the variant was copied over the
+running driver and Windows restarted with `shutdown -r`, the devnode still
+read `0x94` and the drive stayed unlisted, through two replugs; a shut down
+and cold start read `0x14` [obs; the cause not read]. The legs therefore
+include an update over the previous package followed by the restart the
+installer asks for.
+
+The legs, on the gated x86 build, on 2000, XP, Vista and 7 (each a fresh
+overlay; a Bulk-Only stick beside the UAS drive throughout): the listing
+with and without components; the stop, its confirmation and "Safe To Remove
+Hardware"; the unplug after the stop; a surprise unplug without a stop (no
+hang; on 2000 the notice, beside the stick's); a surprise unplug during a
+copy loop (the copies fail, no hang); and the update over the package of
+`b71199a9` with its restart, then the listing.
+
+### 17.6 Found on the way
+
+On Vista, a surprise unplug during a copy loop with an Explorer window open
+on the drive's volume left the next copy blocked for good, the volume still
+mounted and `shutdown` hanging; the same with the package and with the
+variant, and the same with the Bulk-Only stick on `usbstor.sys`, so it is
+neither UAS's nor this change's [obs]. Without the Explorer window the same
+unplug failed the copies and did not hang. Handed to the coordinator; not
+read on real hardware, and Vista's own USB stack was not read beside it.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 
