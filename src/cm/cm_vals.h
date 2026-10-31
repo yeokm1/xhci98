@@ -298,6 +298,20 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_USB4_V2_DEFAULT 1UL
 
 /*
+ * XhciCmGen4LinkRecovery, REG_DWORD (design record 22 sections 6.2.3 item
+ * 4 and 12, decision U33, task 45.56): a bench switch. 1 sets Enable Gen
+ * 4 Link Recovery on both ends of a depth-1 Gen 4 link between two USB4
+ * version 2 routers, with the recovery check after each LINK_RECOVERY;
+ * 0 never sets it, an uncorrectable error on such a link being a
+ * disconnect as in task 45.20 (tbt_u4cm.h, TBT_U4_CONFIG
+ * Gen4LinkRecovery). XhciCmUsb4V2 0 never sets it either. The INFs
+ * write it at 1 and the installer does not ask for it; absent reads as
+ * 1, and any other value is refused and 1 stands. Read once per start,
+ * machine-wide key first, as every value.
+ */
+#define CM_GEN4_ELR_DEFAULT 1UL
+
+/*
  * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
  * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
  * a hot-added bridge below an active tunnel port (record 33 section 6)
@@ -354,6 +368,10 @@ typedef struct _CM_VALUES {
     ULONG Usb4V2Found;
     ULONG Usb4V2Raw;
     ULONG Usb4V2Refused;
+    ULONG Gen4Elr;              /* XhciCmGen4LinkRecovery as run with       */
+    ULONG Gen4ElrFound;
+    ULONG Gen4ElrRaw;
+    ULONG Gen4ElrRefused;
     ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
     ULONG BridgeReqFound;
     ULONG BridgeReqRaw;
@@ -401,6 +419,9 @@ VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmUsb4V2: 0 or 1, anything else refused (1 stands). */
 VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmGen4LinkRecovery: 0 or 1, anything else refused (1 stands). */
+VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
 VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);

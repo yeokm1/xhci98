@@ -74,7 +74,8 @@ rule named as the other gates name their families.
            table) as a REG_DWORD under FLG_ADDREG_NOCLOBBER, and no other
            Xhci* value (VAL-MISSING, VAL-DEFAULT, VAL-FLAG, VAL-EXTRA; the
            2026-10-11 rule). Since task 45.50 (owner, 2026-10-30) every
-           path also writes XhciCmAsmediaPcie7Credits and XhciCmUsb4V2 at
+           path also writes XhciCmAsmediaPcie7Credits, XhciCmUsb4V2 and
+           (since task 45.56) XhciCmGen4LinkRecovery at
            src\cm\cm_vals.h's defaults and XhciCmTunnelBridge as the
            REG_SZ "auto" (flag 0x00000002), the driver's own finding; the
            NT paths XhciCmRingInterrupt, and the NT 5.x paths (2000, XP,
@@ -288,8 +289,9 @@ function Get-CmNineXTable {
 
 # Task 45.50 (owner, 2026-10-30: every value a released driver reads is
 # written by the install): the values outside the rule table, each with
-# the systems that read it. Every path writes XhciCmAsmediaPcie7Credits
-# and XhciCmUsb4V2 at src\cm\cm_vals.h's defaults, and XhciCmTunnelBridge
+# the systems that read it. Every path writes XhciCmAsmediaPcie7Credits,
+# XhciCmUsb4V2 and (task 45.56) XhciCmGen4LinkRecovery at
+# src\cm\cm_vals.h's defaults, and XhciCmTunnelBridge
 # as the REG_SZ "auto", which the driver takes as its absence, its own
 # finding (cm_vals.c CmValuesTakeBridge); the NT paths (2000 to 10)
 # XhciCmRingInterrupt; the NT 5.x paths (2000, XP, XP x64) XhciCmBridgeReq,
@@ -297,6 +299,7 @@ function Get-CmNineXTable {
 $cmAllValues = [ordered]@{
     "XhciCmAsmediaPcie7Credits" = "CM_ASM_PCIE7_DEFAULT"
     "XhciCmUsb4V2"              = "CM_USB4_V2_DEFAULT"
+    "XhciCmGen4LinkRecovery"    = "CM_GEN4_ELR_DEFAULT"
 }
 $cmNtValues = [ordered]@{ "XhciCmRingInterrupt" = "CM_RING_IRQ_DEFAULT" }
 $cmNt5Values = [ordered]@{ "XhciCmBridgeReq" = "CM_BRIDGE_REQ_DEFAULT" }
@@ -927,6 +930,9 @@ if ($SelfTest) {
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0`r`n", "") },
                     @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmUsb4V2,0x00010003,1", "HKR,,XhciCmUsb4V2,0x00010003,0") },
                     @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmUsb4V2,0x00010003,1", "HKR,,XhciCmUsb4V2,0x00010001,1") },
+                    @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1`r`n", "") },
+                    @{ Rule = "VAL-DEFAULT";    Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1", "HKR,,XhciCmGen4LinkRecovery,0x00010003,0") },
+                    @{ Rule = "VAL-FLAG";       Text = $t.Replace("HKR,,XhciCmGen4LinkRecovery,0x00010003,1", "HKR,,XhciCmGen4LinkRecovery,0x00010001,1") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5", "[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values") },
                     @{ Rule = "VAL-EXTRA";      Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5") },

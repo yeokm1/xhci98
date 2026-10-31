@@ -168,6 +168,13 @@ typedef struct _TBT_U4_CONFIG {
      * Recovery clear hold either way. A bench switch, written at 1 by the
      * INFs since task 45.50. */
     BOOLEAN Usb4V2;
+    /* XhciCmGen4LinkRecovery, default 1 (record 22 section 6.2.3 item 4,
+     * decision U33, task 45.56): Enable Gen 4 Link Recovery set on both
+     * ends of a depth-1 Gen 4 link between two version 2 routers, with
+     * the recovery check after each LINK_RECOVERY. FALSE never sets it
+     * (the task 45.20 run); the recovery check and the adoption's clear
+     * hold either way. Usb4V2 FALSE never sets it either. */
+    BOOLEAN Gen4LinkRecovery;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -433,6 +440,26 @@ typedef struct _TBT_U4_PORT {
      * on a link that read disconnected; the link is read again before any
      * of it is made (tbtU4RecCleanupGate). */
     BOOLEAN RecCleanup;
+    /* Record 22 section 6.2.3 item 4 (task 45.56). ElrSet: Enable Gen 4
+     * Link Recovery set and read back on both ends, counted as not set
+     * again after a stop, a suspend or a recovery's commit. ElrDev and
+     * ElrHost (part 3): that end may hold this driver's 1, from its write
+     * until a read-back shows 0 - the device's forgotten at a teardown
+     * (its router reset), the host's cleared at section 7.3 step 5 (Spec
+     * 4.4.5.2 keeps it across a disconnect). ElrRefused: a set refused or
+     * failed, not tried again on this connection. ElrCheckOwed: a
+     * LINK_RECOVERY's recovery check owed, ElrCheckSinceUs its first try
+     * once ElrCheckTried. */
+    BOOLEAN ElrSet;
+    BOOLEAN ElrDev;
+    BOOLEAN ElrHost;
+    BOOLEAN ElrRefused;
+    BOOLEAN ElrCheckOwed;
+    BOOLEAN ElrCheckTried;
+    ULONG ElrCheckSinceUs;
+    ULONG ElrNoteSeq;       /* LINK_RECOVERY (or a lost notification) owing the
+                             * check, counted: one drained during a check (at a
+                             * safe point) keeps the check owed afresh */
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -756,6 +783,17 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG ElrCleared;       /* a predecessor's Enable Gen 4 Link Recovery cleared */
     ULONG LinkRecoveries;   /* LINK_RECOVERY notifications, each a port check */
     ULONG CvFound;          /* preserved routers found with CV set, not reconfigured */
+    /* Record 22 section 6.2.3 item 4 (task 45.56). */
+    ULONG ElrEnabled;       /* Enable Gen 4 Link Recovery set on both ends */
+    ULONG ElrRefused;       /* a set refused or failed */
+    ULONG ElrOwnCleared;    /* this driver's set cleared on an end */
+    ULONG ElrClearFailed;   /* a clear of it that failed */
+    ULONG ElrChecks;        /* recovery checks made */
+    ULONG ElrKept;          /* of them, every tunnel read whole and kept */
+    ULONG ElrPcieLost;      /* a PCIe tunnel lost to a recovery check */
+    ULONG ElrUsb3Lost;      /* a USB3 tunnel torn down by one */
+    ULONG ElrUsb3Down;      /* a USB3 link not operational 2 s on, kept */
+    ULONG ElrUnread;        /* a check given up, its registers unread for 2 s */
 } TBT_U4_COUNTERS;
 
 /* The start stages (section 3.5's two inert forms). */

@@ -426,6 +426,24 @@ static void test_values(void)
     CHECK_EQ(v.Usb4V2, 1, "all-ones is refused");
     CmValuesTakeUsb4V2(&v, 0, 0);
     CHECK_EQ(v.Usb4V2Found | v.Usb4V2Refused, 0, "a later absent read clears both");
+    /* XhciCmGen4LinkRecovery (task 45.56, decision U33): the same rule. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_GEN4_ELR_DEFAULT, 1, "XhciCmGen4LinkRecovery defaults to 1");
+    CHECK_EQ(v.Gen4Elr, 1, "1 after CmValuesDefault");
+    CmValuesTakeGen4Elr(&v, 0, 0);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrFound == 0 && v.Gen4ElrRefused == 0,
+          "absent: 1, nothing found");
+    CmValuesTakeGen4Elr(&v, 1, 0);
+    CHECK(v.Gen4Elr == 0 && v.Gen4ElrFound == 1 && v.Gen4ElrRefused == 0, "0 is taken");
+    CmValuesTakeGen4Elr(&v, 1, 1);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrFound == 1, "1 is taken");
+    CmValuesTakeGen4Elr(&v, 1, 2);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrRefused == 1 && v.Gen4ElrRaw == 2,
+          "2 is refused: 1 stands, the value recorded");
+    CmValuesTakeGen4Elr(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.Gen4Elr, 1, "all-ones is refused");
+    CmValuesTakeGen4Elr(&v, 0, 0);
+    CHECK_EQ(v.Gen4ElrFound | v.Gen4ElrRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

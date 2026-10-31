@@ -13,6 +13,10 @@
  * a LINK_RECOVERY delivered as a port check; PCIe Extended Encapsulation;
  * Gen 4 links symmetric and asymmetric, and the unusable readings; the
  * USB3 allocation's link bound; and XhciCmUsb4V2 0, the version 1 run.
+ * Task 45.56 (record 22 section 6.2.5): Enable Gen 4 Link Recovery set on
+ * both ends of a depth-1 Gen 4 link and where it is not, the recovery
+ * check after a LINK_RECOVERY, and the clears at a teardown, a stop, a
+ * suspend and where it is no longer admitted.
  * A suite of its own beside test_u4cm, with the same fabric. Expected
  * values are worked from record 22 and the specification, not from the
  * code under test.
@@ -857,8 +861,12 @@ static void elrPreserved(int v2)
     (void)start(&c);
     CHECK_EQ(port(1)->State, TBT_U4_UP, "ELR: preserved, UP");
     CHECK_EQ(g_cm.Counters.LinksDiscovered, 1, "ELR: the depth-2 link discovered");
-    CHECK_EQ(fabAdp(&g_fab, 0, 1, P19) & 0x80000000UL, 0, "host port: ELR cleared");
-    CHECK_EQ(fabAdp(&g_fab, d, 1, P19) & 0x80000000UL, 0, "device upstream: cleared");
+    /* Task 45.56: cleared at the adoption, then set again by the tick on
+     * the depth-1 Gen 4 link where XhciCmUsb4V2 is 1 (test_elr_adopted). */
+    CHECK_EQ(fabAdp(&g_fab, 0, 1, P19) & 0x80000000UL, v2 ? 0x80000000UL : 0,
+             "host port: ELR cleared (and set again under v2)");
+    CHECK_EQ(fabAdp(&g_fab, d, 1, P19) & 0x80000000UL, v2 ? 0x80000000UL : 0,
+             "device upstream: cleared (and set again under v2)");
     CHECK_EQ(fabAdp(&g_fab, d, 3, P19) & 0x80000000UL, 0, "depth 1 downstream: cleared");
     CHECK_EQ(fabAdp(&g_fab, ch, 1, P19) & 0x80000000UL, 0, "depth 2 upstream: cleared");
     CHECK_EQ(g_cm.Counters.ElrCleared, 4, "four cleared");
@@ -911,6 +919,664 @@ static void test_elr_and_recovery(void)
     CHECK_EQ(g_cm.Counters.LinkRecoveries, 2, "from the host router too");
     CHECK_EQ(g_fab.AcksPlain + g_fab.AcksEnh, acks, "never acknowledged");
     (void)d;
+}
+
+/* ------------------------------------------------------------------ */
+/* Gen 4 Link Recovery enabled (section 6.2.3 item 4, task 45.56)      */
+/* ------------------------------------------------------------------ */
+
+#define ELR         0x80000000UL
+#define ILR         0x40000000UL
+#define SAF         0x01000000UL
+#define TIP         0x01000000UL    /* PORT_CS_18 bit 24 */
+#define P18         (FAB_CAP_PORT + 18)
+#define USB3CS4     (FAB_CAP_ADP + 4)
+
+/* The device router's USB3 Up adapter. */
+static int devUsb3(int d)
+{
+    unsigned a;
+
+    for (a = 1; a <= g_fab.R[d].MaxAdp; a++) {
+        if ((g_fab.R[d].Adp[a].Cs[2] & 0xFFFFFFUL) == 0x200102UL) {
+            return (int)a;
+        }
+    }
+    return 0;
+}
+
+static unsigned long elrOf(int r)
+{
+    return fabAdp(&g_fab, r, 1, P19) & ELR;
+}
+
+static void drainActions(void)
+{
+    TBT_U4_ACTION a;
+
+    while (TbtU4NextAction(&g_cm, &a)) {
+    }
+}
+
+/* A LINK_RECOVERY from the host router for its lane adapter 1. */
+static void linkRecovery(void)
+{
+    unsigned long dw[3];
+
+    dw[0] = 0x80000000UL;
+    dw[1] = 0;
+    dw[2] = TBT_EV_LINK_RECOVERY | (1UL << 8);
+    fabInject(&g_fab, TBT_PDF_NOTIFY, dw, 3);
+}
+
+/* gen4() with a configuration of its own: v2 host, v2 device on port 1. */
+static int elrStart(int elr, int v2, unsigned long hostW, unsigned long devW)
+{
+    TBT_U4_CONFIG c;
+    int d;
+
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    g_fab.R[d].Gen4HostW = hostW;
+    g_fab.R[d].Gen4DevW = devW;
+    fabPlug(&g_fab, 1, d);
+    cfgDefault(&c);
+    c.Gen4LinkRecovery = (BOOLEAN)(elr != 0);
+    c.Usb4V2 = (BOOLEAN)(v2 != 0);
+    (void)start(&c);
+    return d;
+}
+
+static void test_elr_set(void)
+{
+    TBT_U4_CONFIG c;
+    long wd;
+    long wh;
+    int d;
+
+    /* Part 2: both ends, device end first, each write bit 30 and 24 0. */
+    d = elrStart(1, 1, 0, 0);
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "ELR: UP");
+    CHECK(elrOf(0) && elrOf(d), "set on both ends");
+    CHECK(port(1)->ElrSet && port(1)->ElrDev && port(1)->ElrHost, "recorded");
+    CHECK_EQ(g_cm.Counters.ElrEnabled, 1, "counted once");
+    wd = writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ELR, 1);
+    wh = writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1);
+    CHECK(wd >= 0 && wh > wd, "device end first");
+    CHECK_EQ(writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ILR | SAF, 1), -1, "device: no ILR, no SAF");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ILR | SAF, 1), -1, "host: no ILR, no SAF");
+    CHECK(fabAdp(&g_fab, 0, 1, P19) & 8UL, "written as read: PC kept");
+    poll(3);
+    CHECK_EQ(g_cm.Counters.ElrEnabled, 1, "never written again while set");
+    CHECK(fabPcieUp(&g_fab, 1) && fabUsb3Up(&g_fab, 1), "both tunnels up");
+
+    d = elrStart(1, 1, 0x04, 0x08);
+    CHECK(port(1)->Asym && elrOf(0) && elrOf(d), "asymmetric: set on both ends");
+
+    /* Part 1: never with either value 0, on a v2-v1 link, a Gen 3 link. */
+    d = elrStart(0, 1, 0, 0);
+    poll(2);
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1,
+             "XhciCmGen4LinkRecovery 0: never on the host");
+    CHECK_EQ(writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "nor on the device");
+    CHECK(port(1)->State == TBT_U4_UP && port(1)->Gen4, "the Gen 4 link used as before");
+    d = elrStart(1, 0, 0, 0);
+    poll(2);
+    CHECK(!elrOf(0) && !elrOf(d) && g_cm.Counters.ElrEnabled == 0, "XhciCmUsb4V2 0: never");
+    d = domain(1, FAB_DEV_USB4);
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(2);
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "v2-v1: UP");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "v2-v1: never");
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    g_fab.R[d].Gen4 = 0;
+    fabPlug(&g_fab, 1, d);
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(2);
+    CHECK(port(1)->State == TBT_U4_UP && !port(1)->Gen4, "two v2 routers at Gen 3: UP");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "Gen 3: never");
+
+    /* Part 2's gate: TIP, StartAsymmetricFlow, a lane short of CL0 -
+     * nothing written; set at a later tick once they clear. */
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    fabPlug(&g_fab, 1, d);
+    g_fab.R[d].Adp[1].Cs[P18] |= TIP;
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(2);
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "TIP at the device: UP");
+    CHECK(!elrOf(0) && !elrOf(d), "TIP: nothing written");
+    g_fab.R[d].Adp[1].Cs[P18] &= ~TIP;
+    g_fab.R[0].Adp[1].Cs[P19] |= SAF;
+    poll(2);
+    CHECK(!elrOf(0) && !elrOf(d), "StartAsymmetricFlow at the host: nothing written");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1,
+             "no ELR write while StartAsymmetricFlow reads 1");
+    g_fab.R[0].Adp[1].Cs[P19] &= ~SAF;
+    g_fab.R[d].Adp[1].Cs[FAB_CAP_LANE + 1] =
+        (g_fab.R[d].Adp[1].Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 26)) | (5UL << 26);
+    poll(2);
+    CHECK(!elrOf(0) && !elrOf(d), "device lane 0 in CL1: nothing written");
+    g_fab.R[d].Adp[1].Cs[FAB_CAP_LANE + 1] =
+        (g_fab.R[d].Adp[1].Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 26)) | (2UL << 26);
+    poll(1);
+    CHECK(elrOf(0) && elrOf(d), "all clear: set at the next tick");
+
+    /* A router that keeps the bit 0: refused, both ends 0 again, no retry
+     * on this connection; tried again after a re-plug. */
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    g_fab.R[d].ElrStuck = 1;
+    fabPlug(&g_fab, 1, d);
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK_EQ(g_cm.Counters.ElrRefused, 1, "refused");
+    CHECK(port(1)->ElrRefused && !port(1)->ElrSet, "recorded refused");
+    CHECK(!elrOf(0) && !elrOf(d), "both ends 0");
+    CHECK(!port(1)->ElrDev && !port(1)->ElrHost, "nothing owned");
+    wd = (long)writesTo(d, TBT_CS_ADAPTER, 1, P19);
+    poll(4);
+    CHECK_EQ((long)writesTo(d, TBT_CS_ADAPTER, 1, P19), wd, "not tried again");
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "the port stays UP");
+    fabUnplug(&g_fab, 1);
+    poll(3);
+    g_fab.R[d].ElrStuck = 0;
+    fabPlug(&g_fab, 1, d);
+    poll(3);
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "re-plugged: UP");
+    CHECK(elrOf(0) && elrOf(d) && port(1)->ElrSet, "set on the new connection");
+
+    /* The host refusing after the device took it: the device end written
+     * 0 again and read back, nothing owned, no retry on the connection. */
+    fabInit(&g_fab);
+    fabHostV2(&g_fab);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    g_fab.R[0].ElrStuck = 1;
+    fabPlug(&g_fab, 1, d);
+    cfgDefault(&c);
+    (void)start(&c);
+    wd = writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ELR, 1);
+    wh = writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1);
+    CHECK(wd >= 0 && wh > wd, "host refusing: the device end enabled, then the host tried");
+    CHECK(writeWith(wh, d, TBT_CS_ADAPTER, 1, P19, ELR, 0) > wh,
+          "the device end then written 0");
+    CHECK(!elrOf(0) && !elrOf(d), "both ends read 0");
+    CHECK(port(1)->ElrRefused && !port(1)->ElrDev && !port(1)->ElrHost,
+          "refused, nothing owned");
+    CHECK_EQ(g_cm.Counters.ElrRefused, 1, "counted");
+    wd = (long)writesTo(d, TBT_CS_ADAPTER, 1, P19);
+    poll(4);
+    CHECK_EQ((long)writesTo(d, TBT_CS_ADAPTER, 1, P19), wd, "no retry on the connection");
+
+    /* A preserved DisplayPort tunnel on a v2-v2 Gen 4 link: never set. */
+    fabInit(&g_fab);
+    fabHostAdl(&g_fab);
+    g_fab.R[0].Rcs[4] = (g_fab.R[0].Rcs[4] & 0x00FFFFFFUL) | (0x40UL << 24);
+    g_fab.R[0].CapsData = 1UL << 4;
+    g_fab.R[0].Gen4 = 1;
+    g_fab.Caps = (g_fab.Caps & ~(0xFFUL << 16)) | (0x40UL << 16);
+    d = fabDevice(&g_fab, FAB_DEV_USB4V2);
+    fabPlug(&g_fab, 1, d);
+    fabPreos(&g_fab, 1, 0);
+    memset(g_fab.R[0].Adp[8].Path + 16, 0, 8);
+    memset(g_fab.R[0].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[d].Adp[1].Path + 16, 0, 8 * 4);
+    memset(g_fab.R[d].Adp[5].Path + 16, 0, 8);
+    g_fab.R[0].Adp[8].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    g_fab.R[d].Adp[5].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    fabAddDpOut(&g_fab, d, 8);
+    g_fab.R[0].Adp[5].Path[2 * 9] = 0x80000000UL | 12UL | (1UL << 11);
+    g_fab.R[0].Adp[5].Path[2 * 8] = 0x80000000UL | 13UL | (1UL << 11);
+    g_fab.R[d].Adp[1].Path[2 * 12] = 0x80000000UL | 9UL | (8UL << 11);
+    g_fab.R[d].Adp[1].Path[2 * 13] = 0x80000000UL | 8UL | (8UL << 11);
+    g_fab.R[d].Adp[8].Path[2 * 8] = 0x80000000UL | 14UL | (1UL << 11);
+    g_fab.R[0].Adp[1].Path[2 * 14] = 0x80000000UL | 8UL | (5UL << 11);
+    g_fab.R[0].Adp[1].Cs[5] |= TBT_ADP5_DHP;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&c);
+    poll(4);
+    CHECK(port(1)->DpPreserved, "DP: the DisplayPort tunnel preserved");
+    CHECK(port(1)->State == TBT_U4_UP && port(1)->Gen4, "DP: UP on a Gen 4 link");
+    CHECK(c.Usb4V2 && c.Gen4LinkRecovery, "DP: both values 1");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "DP: never on the host");
+    CHECK_EQ(writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "DP: nor on the device");
+    CHECK(g_fab.R[0].Adp[5].Path[2 * 9] & 0x80000000UL, "DP: the main path kept");
+    CHECK(g_fab.R[d].Adp[8].Path[2 * 8] & 0x80000000UL, "DP: the AUX return kept");
+
+    /* A HELD port (a preserved router with CV set and PTO clear). */
+    d = cvFound(FAB_DEV_USB4V2, 0, 1, 1);
+    CHECK_EQ(port(1)->State, TBT_U4_HELD, "HELD");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "HELD: never set");
+    (void)d;
+}
+
+/* Part 4: the recovery check. */
+static void test_elr_check(void)
+{
+    unsigned long torn;
+    unsigned long built;
+    int d;
+    int u;
+
+    /* Whole: both tunnels kept, nothing written but no removal. */
+    d = elrStart(1, 1, 0, 0);
+    drainActions();
+    torn = g_cm.Counters.PcieTornDown + g_cm.Counters.Usb3TornDown;
+    g_fab.WrCount = 0;
+    linkRecovery();
+    poll(2);
+    CHECK_EQ(g_cm.Counters.LinkRecoveries, 1, "delivered");
+    CHECK_EQ(g_cm.Counters.ElrChecks, 1, "a recovery check");
+    CHECK_EQ(g_cm.Counters.ElrKept, 1, "every tunnel whole: kept");
+    CHECK(port(1)->Pcie.Up && port(1)->Usb3.Up && port(1)->State == TBT_U4_UP, "both kept");
+    CHECK_EQ(g_cm.Counters.PcieTornDown + g_cm.Counters.Usb3TornDown, torn, "nothing torn down");
+    CHECK_EQ(g_fab.WrCount, 0, "the check writes nothing");
+    CHECK_EQ(g_cm.ActionCount, 0, "no removal queued");
+
+    /* A PCIe entry gone (the LTSSM still L0): the loss sequence. */
+    d = elrStart(1, 1, 0, 0);
+    drainActions();
+    g_fab.R[0].Adp[HOST_PCIE].LtssmForce = 7;
+    g_fab.R[d].Adp[DEV_PCIE].Path[2 * 8] &= ~0x80000000UL;
+    linkRecovery();
+    poll(2);
+    CHECK_EQ(g_cm.Counters.ElrPcieLost, 1, "PCIe lost to the check");
+    CHECK_EQ(port(1)->State, TBT_U4_FAILED, "FAILED");
+    CHECK(port(1)->PcieFailed && !port(1)->Pcie.Up, "for PCIe");
+    CHECK(port(1)->Usb3.Up, "its USB3 tunnel kept");
+    CHECK(g_cm.ActionCount >= 1, "the removal queued");
+
+    /* A USB3 Path Enable clear: the USB3 tunnel alone, not rebuilt. */
+    d = elrStart(1, 1, 0, 0);
+    u = devUsb3(d);
+    built = g_cm.Counters.Usb3Built;
+    g_fab.R[d].Adp[u].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+    linkRecovery();
+    poll(2);
+    CHECK_EQ(g_cm.Counters.ElrUsb3Lost, 1, "USB3 torn down by the check");
+    CHECK(!port(1)->Usb3.Up && port(1)->Usb3Failed, "down, not built again");
+    CHECK(!fabUsb3Up(&g_fab, 1), "host side down too");
+    CHECK(port(1)->Pcie.Up && port(1)->State == TBT_U4_UP, "PCIe kept, UP");
+    poll(4);
+    CHECK_EQ(g_cm.Counters.Usb3Built, built, "no rebuild");
+
+    /* USB3 Recovery then U0: watched, then kept. */
+    d = elrStart(1, 1, 0, 0);
+    u = fabPortUsb3(&g_fab, 1);
+    g_fab.R[0].Adp[u].Usb3Ls = 0x880UL + 1;   /* Link Valid, Recovery */
+    linkRecovery();
+    poll(2);
+    CHECK_EQ(g_cm.Counters.ElrChecks, 0, "USB3 in Recovery: the check owed");
+    CHECK(port(1)->ElrCheckOwed, "owed");
+    g_fab.R[0].Adp[u].Usb3Ls = 0;
+    poll(1);
+    CHECK_EQ(g_cm.Counters.ElrKept, 1, "U0: kept");
+    CHECK(!port(1)->ElrCheckOwed, "done");
+
+    /* Inactive for 2 s: recorded, the tunnel kept. */
+    d = elrStart(1, 1, 0, 0);
+    g_fab.R[0].Adp[u].Usb3Ls = 0x680UL + 1;   /* Link Valid, Inactive */
+    linkRecovery();
+    poll(16);
+    CHECK_EQ(g_cm.Counters.ElrUsb3Down, 1, "Inactive 2 s on: recorded");
+    CHECK(port(1)->Usb3.Up && fabUsb3Up(&g_fab, 1), "the tunnel kept");
+    CHECK_EQ(g_cm.Counters.ElrUsb3Lost, 0, "not torn down");
+
+    /* Part 5: a lost notification owes the check. */
+    d = elrStart(1, 1, 0, 0);
+    g_cm.Ctl.NotesLost = TRUE;
+    poll(2);
+    CHECK_EQ(g_cm.Counters.ElrChecks, 1, "NotesLost: checked");
+
+    /* XhciCmGen4LinkRecovery 0: a LINK_RECOVERY still has its check. */
+    d = elrStart(0, 1, 0, 0);
+    linkRecovery();
+    poll(2);
+    CHECK_EQ(g_cm.Counters.ElrChecks, 1, "value 0: still checked");
+    CHECK_EQ(g_cm.Counters.ElrKept, 1, "and kept");
+    (void)d;
+}
+
+static int g_secondArmed;
+static int g_secondDev;
+
+/* At the PCIe loss sequence's first host write (Path Enable 0 on the
+ * host's PCIe Down), a second LINK_RECOVERY arrives and the USB3 tunnel's
+ * device Path Enable reads clear: drained at the sequence's safe point. */
+static int secondHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                      unsigned long adp, unsigned long addr, unsigned long n,
+                      const unsigned long *data)
+{
+    unsigned long dw[3];
+
+    (void)n;
+    if (g_secondArmed && pdf == TBT_PDF_WRITE && router == 0 && cs == TBT_CS_ADAPTER &&
+        adp == HOST_PCIE && addr == PCIE0 && data != NULL &&
+        (data[0] & 0x80000000UL) == 0) {
+        g_secondArmed = 0;
+        f->R[g_secondDev].Adp[devUsb3(g_secondDev)].Cs[FAB_CAP_ADP] &= ~0x80000000UL;
+        dw[0] = 0x80000000UL;
+        dw[1] = 0;
+        dw[2] = TBT_EV_LINK_RECOVERY | (1UL << 8);
+        fabInject(f, TBT_PDF_NOTIFY, dw, 3);
+    }
+    return FAB_HOOK_GO;
+}
+
+/* Part 4: a second LINK_RECOVERY drained during the first check keeps the
+ * check owed; the next one finds the USB3 tunnel it broke. */
+static void test_elr_second(void)
+{
+    int d;
+
+    d = elrStart(1, 1, 0, 0);
+    g_fab.R[0].Adp[HOST_PCIE].LtssmForce = 7;
+    g_fab.R[d].Adp[DEV_PCIE].Path[2 * 8] &= ~0x80000000UL;
+    g_secondDev = d;
+    g_secondArmed = 1;
+    g_fab.Hook = secondHook;
+    linkRecovery();
+    poll(4);
+    g_fab.Hook = NULL;
+    CHECK_EQ(g_secondArmed, 0, "the second LINK_RECOVERY sent during the loss sequence");
+    CHECK_EQ(g_cm.Counters.LinkRecoveries, 2, "both delivered");
+    CHECK_EQ(g_cm.Counters.ElrPcieLost, 1, "PCIe lost to the first check");
+    CHECK_EQ(g_cm.Counters.ElrUsb3Lost, 1, "the USB3 tunnel to the second");
+    CHECK(!port(1)->Usb3.Up && !port(1)->ElrCheckOwed, "torn down, nothing owed");
+}
+
+static int g_pathReadSwallow;
+
+/* Device-side path reads swallowed: a register that does not read. */
+static int pathReadHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                        unsigned long adp, unsigned long addr, unsigned long n,
+                        const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)addr;
+    (void)n;
+    (void)data;
+    if (g_pathReadSwallow != 0 && pdf == TBT_PDF_READ &&
+        (router == g_pathReadSwallow || (g_pathReadSwallow < 0 && router == 0)) &&
+        cs == TBT_CS_PATH) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+static int g_hop20Dev;
+
+/* The device's lane 1 entry at HopID 20 does not read. */
+static int hop20Hook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                     unsigned long adp, unsigned long addr, unsigned long n,
+                     const unsigned long *data)
+{
+    (void)f;
+    (void)n;
+    (void)data;
+    if (g_hop20Dev != 0 && pdf == TBT_PDF_READ && router == g_hop20Dev &&
+        cs == TBT_CS_PATH && adp == 1 && addr == 2 * 20) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* The host's PCIe entry now leading to lane HopID 20, whose device entry
+ * does not read: still a mismatch with the recorded HopIDs, lost. */
+static void test_elr_moved(void)
+{
+    int d;
+
+    d = elrStart(1, 1, 0, 0);
+    CHECK(port(1)->Pcie.Hd != 20, "the tunnel not at HopID 20");
+    g_fab.R[0].Adp[HOST_PCIE].LtssmForce = 7;
+    g_fab.R[0].Adp[HOST_PCIE].Path[2 * 8] =
+        (g_fab.R[0].Adp[HOST_PCIE].Path[2 * 8] & ~0x7FFUL) | 20UL;
+    g_hop20Dev = d;
+    g_fab.Hook = hop20Hook;
+    linkRecovery();
+    poll(3);
+    g_fab.Hook = NULL;
+    g_hop20Dev = 0;
+    CHECK_EQ(g_cm.Counters.ElrPcieLost, 1, "moved HopID: PCIe lost to the check");
+    CHECK_EQ(g_cm.Counters.ElrUnread, 0, "not taken as unread");
+    CHECK(port(1)->PcieFailed, "FAILED for PCIe");
+}
+
+static int g_p19Swallow;
+
+/* A write clearing the host's lane 1 Enable Gen 4 Link Recovery
+ * swallowed: a clear that fails (its other writes go through). */
+static int p19Hook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                   unsigned long adp, unsigned long addr, unsigned long n,
+                   const unsigned long *data)
+{
+    (void)n;
+    if (g_p19Swallow && pdf == TBT_PDF_WRITE && router == 0 && cs == TBT_CS_ADAPTER &&
+        adp == 1 && addr == P19 && data != NULL && (data[0] & ELR) == 0 &&
+        (f->R[0].Adp[1].Cs[P19] & ELR) != 0) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_elr_unread(void)
+{
+    unsigned long torn;
+    int d;
+
+    d = elrStart(1, 1, 0, 0);
+    torn = g_cm.Counters.PcieTornDown + g_cm.Counters.Usb3TornDown;
+    g_fab.Hook = pathReadHook;
+    g_pathReadSwallow = d;
+    linkRecovery();
+    poll(17);
+    g_fab.Hook = NULL;
+    g_pathReadSwallow = 0;
+    CHECK_EQ(g_cm.Counters.ElrUnread, 1, "given up after 2 s");
+    CHECK_EQ(g_cm.Counters.PcieTornDown + g_cm.Counters.Usb3TornDown, torn, "nothing torn down");
+    CHECK(port(1)->Pcie.Up && port(1)->Usb3.Up, "both kept");
+
+    /* The host's path reads unanswered: each tick's check bounded (one
+     * unanswered request a tunnel, no HopID scan). */
+    d = elrStart(1, 1, 0, 0);
+    g_fab.Hook = pathReadHook;
+    g_pathReadSwallow = -1;
+    linkRecovery();
+    {
+        unsigned long t0;
+        unsigned long worst;
+        int i;
+
+        worst = 0;
+        for (i = 0; i < 12; i++) {
+            t0 = g_fab.NowUs;
+            TbtU4Poll(&g_cm);
+            if (g_fab.NowUs - t0 > worst) {
+                worst = g_fab.NowUs - t0;
+            }
+            g_fab.Host.Sleep(g_fab.Host.Context, 200);
+        }
+        CHECK(worst < 2500000UL, "host reads unanswered: a tick's check bounded");
+    }
+    g_fab.Hook = NULL;
+    g_pathReadSwallow = 0;
+    CHECK_EQ(g_cm.Counters.ElrUnread, 1, "given up, nothing torn down");
+    CHECK(port(1)->Pcie.Up && port(1)->Usb3.Up, "both kept");
+}
+
+/* Parts 3 and 6: the clears. */
+static void test_elr_clears(void)
+{
+    TBT_U4_CONFIG c;
+    unsigned long deferred;
+    LONG rc;
+    int d;
+
+    /* An unplug: the host's end cleared at step 5. */
+    d = elrStart(1, 1, 0, 0);
+    fabUnplug(&g_fab, 1);
+    poll(3);
+    CHECK_EQ(port(1)->State, TBT_U4_EMPTY, "unplugged: EMPTY");
+    CHECK(!elrOf(0) && !port(1)->ElrHost && !port(1)->ElrDev, "host end cleared");
+
+    /* A clear that fails: retried at the EMPTY tick, never deferring a
+     * new connection; one withheld while StartAsymmetricFlow reads 1. */
+    d = elrStart(1, 1, 0, 0);
+    g_fab.Hook = p19Hook;
+    g_p19Swallow = 1;
+    fabUnplug(&g_fab, 1);
+    poll(3);
+    CHECK(elrOf(0) && port(1)->ElrHost, "clear failing: still owned");
+    CHECK(g_cm.Counters.ElrClearFailed >= 1, "counted");
+    g_p19Swallow = 0;
+    g_fab.Hook = NULL;
+    g_fab.R[0].Adp[1].Cs[P19] |= SAF;
+    poll(2);
+    CHECK(elrOf(0) && port(1)->ElrHost, "StartAsymmetricFlow: withheld");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, SAF, 1), -1, "no write of SAF");
+    g_fab.R[0].Adp[1].Cs[P19] &= ~SAF;
+    poll(1);
+    CHECK(!elrOf(0) && !port(1)->ElrHost, "then cleared at the EMPTY tick");
+    d = elrStart(1, 1, 0, 0);
+    g_fab.Hook = p19Hook;
+    g_p19Swallow = 1;
+    fabUnplug(&g_fab, 1);
+    poll(3);
+    deferred = g_cm.Counters.ConnectsDeferred;
+    fabPlug(&g_fab, 1, d);
+    poll(3);
+    g_p19Swallow = 0;
+    g_fab.Hook = NULL;
+    CHECK_EQ(port(1)->State, TBT_U4_UP, "re-plug with the clear owed: UP");
+    CHECK_EQ(g_cm.Counters.ConnectsDeferred, deferred, "not deferred by it");
+    poll(2);
+    CHECK(elrOf(0) && elrOf(d) && port(1)->ElrSet, "and set again on it");
+
+    /* Stop and suspend: both ends 0 first; a resume sets it again. */
+    d = elrStart(1, 1, 0, 0);
+    TbtU4Stop(&g_cm);
+    CHECK(!elrOf(0) && !elrOf(d), "stop: both ends cleared");
+    d = elrStart(1, 1, 0, 0);
+    TbtU4Suspend(&g_cm);
+    CHECK(!elrOf(0) && !elrOf(d), "suspend: both ends cleared");
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(rc, TBT_OK, "resumed");
+    poll(2);
+    CHECK(elrOf(0) && elrOf(d) && port(1)->ElrSet, "set again after the resume");
+    CHECK_EQ(g_cm.Counters.ElrEnabled, 2, "twice");
+
+    /* A contained instance writes nothing. */
+    d = elrStart(1, 1, 0, 0);
+    TbtU4Contain(&g_cm);
+    g_fab.WrCount = 0;
+    TbtU4Stop(&g_cm);
+    CHECK(elrOf(0) && elrOf(d), "contained stop: left");
+    CHECK_EQ(g_fab.WrCount, 0, "nothing written");
+
+    /* A recovery's commit: counted as not set, set again by the tick. */
+    d = elrStart(1, 1, 0, 0);
+    recoverWith();
+    TbtU4RecoverCommit(&g_cm);
+    CHECK(!port(1)->ElrSet && port(1)->ElrDev && port(1)->ElrHost, "commit: owned, not set");
+    poll(2);
+    CHECK(port(1)->ElrSet && elrOf(0) && elrOf(d), "set again");
+
+    /* Owned on a port that is no longer admitted: cleared at the tick. */
+    d = elrStart(1, 1, 0, 0);
+    g_cm.Config.Gen4LinkRecovery = FALSE;
+    g_cm.Ports[0].ElrSet = FALSE;
+    poll(2);
+    CHECK(!elrOf(0) && !elrOf(d), "not admitted: both ends cleared");
+    CHECK(!port(1)->ElrDev && !port(1)->ElrHost, "nothing owned");
+
+    /* Owned on a port left HELD (its router not identified): the host's
+     * end alone cleared, the device end's ownership kept. */
+    d = elrStart(1, 1, 0, 0);
+    g_cm.Ports[0].State = TBT_U4_HELD;
+    g_cm.Ports[0].ElrSet = FALSE;
+    g_fab.WrCount = 0;
+    poll(2);
+    CHECK(!elrOf(0) && !port(1)->ElrHost, "HELD: the host end cleared");
+    CHECK(elrOf(d) && port(1)->ElrDev, "the device end left, still owned");
+    CHECK_EQ(writesTo(d, TBT_CS_ADAPTER, 1, P19), 0, "nothing written to the device");
+
+    /* HELD with its classification unresolved: the host's end still
+     * cleared, nothing written to the device. */
+    d = elrStart(1, 1, 0, 0);
+    g_cm.Ports[0].State = TBT_U4_HELD;
+    g_cm.Ports[0].ClassifyPending = TRUE;
+    g_cm.Ports[0].ElrSet = FALSE;
+    g_fab.WrCount = 0;
+    poll(1);
+    CHECK(!elrOf(0) && !port(1)->ElrHost, "HELD, unclassified: the host end cleared");
+    CHECK(elrOf(d) && port(1)->ElrDev, "the device end left, owned");
+    CHECK_EQ(writesTo(d, TBT_CS_ADAPTER, 1, P19), 0, "nothing written to the device");
+
+    /* A stop with a HELD port owning both ends: the host's end alone. */
+    d = elrStart(1, 1, 0, 0);
+    g_cm.Ports[0].State = TBT_U4_HELD;
+    g_cm.Ports[0].ElrSet = FALSE;
+    g_fab.WrCount = 0;
+    TbtU4Stop(&g_cm);
+    CHECK(!elrOf(0), "stop, HELD: the host end cleared");
+    CHECK(elrOf(d) && port(1)->ElrDev, "the device end left, owned");
+    CHECK_EQ(writesTo(d, TBT_CS_ADAPTER, 1, P19), 0, "nothing written to the device");
+    (void)c;
+}
+
+/* Part 7: a predecessor's bit at the adoption, the depth-1 link set again. */
+static void test_elr_adopted(void)
+{
+    TBT_U4_CONFIG c;
+    int d;
+    int ch;
+    int elr;
+
+    for (elr = 1; elr >= 0; elr--) {
+        d = domain(1, FAB_DEV_USB4V2);
+        ch = fabDevice(&g_fab, FAB_DEV_USB4V2);
+        fabPreos(&g_fab, 1, 0);
+        fabPlugChild(&g_fab, d, ch, 1);
+        g_fab.R[0].Adp[1].Cs[P19] |= ELR;
+        g_fab.R[d].Adp[1].Cs[P19] |= ELR;
+        g_fab.R[d].Adp[3].Cs[P19] |= ELR;
+        g_fab.R[ch].Adp[1].Cs[P19] |= ELR;
+        g_fab.RxQCount = 0;
+        cfgDefault(&c);
+        c.Gen4LinkRecovery = (BOOLEAN)(elr != 0);
+        (void)start(&c);
+        poll(2);
+        CHECK_EQ(port(1)->State, TBT_U4_UP, "adopted: UP");
+        CHECK_EQ(g_cm.Counters.ElrCleared, 4, "the four cleared");
+        CHECK_EQ(fabAdp(&g_fab, d, 3, P19) & ELR, 0, "depth 1 downstream: stays 0");
+        CHECK_EQ(fabAdp(&g_fab, ch, 1, P19) & ELR, 0, "depth 2 upstream: stays 0");
+        if (elr) {
+            CHECK(elrOf(0) && elrOf(d), "value 1: the depth-1 link set again");
+        } else {
+            CHECK(!elrOf(0) && !elrOf(d), "value 0: left cleared");
+        }
+    }
+
+    /* StartAsymmetricFlow 1 at the adoption: the clear withheld, held. */
+    d = domain(1, FAB_DEV_USB4V2);
+    fabPreos(&g_fab, 1, 0);
+    g_fab.R[0].Adp[1].Cs[P19] |= ELR | SAF;
+    g_fab.RxQCount = 0;
+    cfgDefault(&c);
+    (void)start(&c);
+    CHECK_EQ(port(1)->State, TBT_U4_HELD, "a withheld clear holds the port");
+    CHECK_EQ(writeWith(0, 0, TBT_CS_ADAPTER, 1, P19, ELR, 0), -1, "nothing written");
 }
 
 /* ------------------------------------------------------------------ */
@@ -1593,6 +2259,19 @@ static void test_kid_cv_found(void)
     CHECK(!fabChainPcieUp(&g_fab, d), "no chained tunnel");
 }
 
+/* Section 6.2.3 item 4 part 1: never at depth 2 (record 34's kids). */
+static void test_elr_kid(void)
+{
+    int d;
+
+    d = kidV2(FAB_DEV_USB4V2, 0, 0, 0);
+    CHECK(kid() != NULL && kid()->State == TBT_U4_UP, "a v2 kid UP");
+    CHECK_EQ(writeWith(0, g_kidParent, TBT_CS_ADAPTER, 3, P19, ELR, 1), -1,
+             "never on the parent's downstream port");
+    CHECK_EQ(writeWith(0, d, TBT_CS_ADAPTER, 1, P19, ELR, 1), -1, "nor on the kid's");
+    CHECK(elrOf(0) && elrOf(g_kidParent), "the depth-1 link still set");
+}
+
 int main(void)
 {
     RUN_VEC(test_cmuv);
@@ -1605,6 +2284,14 @@ int main(void)
     RUN_VEC(test_tmu_enhanced);
     RUN_VEC(test_cv_found);
     RUN_VEC(test_elr_and_recovery);
+    RUN_VEC(test_elr_set);
+    RUN_VEC(test_elr_check);
+    RUN_VEC(test_elr_unread);
+    RUN_VEC(test_elr_second);
+    RUN_VEC(test_elr_moved);
+    RUN_VEC(test_elr_clears);
+    RUN_VEC(test_elr_adopted);
+    RUN_VEC(test_elr_kid);
     RUN_VEC(test_ee);
     RUN_VEC(test_gen4);
     RUN_VEC(test_gen4_training);

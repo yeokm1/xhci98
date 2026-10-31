@@ -358,7 +358,9 @@ rem                  over the same fabric's USB4 version 2 routers: CMUV by
 rem                  version and as found, Set Capabilities and its
 rem                  read-back, two-DW path writes, the enhanced TMU, CV
 rem                  found, Gen 4 Link Recovery, Extended Encapsulation, Gen
-rem                  4 links symmetric and asymmetric, XhciCmUsb4V2 0
+rem                  4 links symmetric and asymmetric, XhciCmUsb4V2 0; Gen 4
+rem                  Link Recovery enabled, its recovery check and its
+rem                  clears (task 45.56, section 6.2.5)
 rem   test_cm_live - the host interface's liveness monitor (src\cm\cm_live.c,
 rem                  design record 21 sections 5.5 and 5.6): its states,
 rem                  cadence, recovery and gate

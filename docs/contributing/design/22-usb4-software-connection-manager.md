@@ -1285,7 +1285,10 @@ link clears itself (Spec 8.2.2.3, Table 8-12).
       with its bandwidth released) and not built again on this
       connection. A register that does not read leaves the check owed
       for the same 2 s; after that it is given up (`u4.elr.unread`) with
-      nothing torn down, section 7.1's checks standing. A kid's PCIe
+      nothing torn down, section 7.1's checks standing. A LINK_RECOVERY
+      drained during the check itself (at a safe point of a loss
+      sequence it runs) keeps the check owed afresh, so that a recovery
+      after the check's readings is checked too. A kid's PCIe
       tunnel through the recovered link has its own check at every tick
       (record 34 section 6.3), unchanged.
    5. **A lost notification.** Where the transport dropped notifications
