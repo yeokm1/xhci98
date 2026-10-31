@@ -441,6 +441,25 @@ ULONG TbtU4LaneClass(ULONG adapterState)
     return TBT_U4_LANE_UNKNOWN;
 }
 
+/*
+ * A link not bonded is a single-lane one this driver accepts (section 6.5
+ * step 6) when its lane 1 adapter `lane1` (LANE_ADP_CS_1 as read) is in
+ * CLd or Disabled - or, on a Thunderbolt host, also connected: such a link
+ * stays two single lanes, never disabled (record 22 section 19.9). One
+ * predicate for the connection, the discovery, the resume and the
+ * recovery.
+ */
+static BOOLEAN tbtU4SingleOk(PTBT_U4CM cm, ULONG lane1)
+{
+    ULONG cls;
+
+    cls = TbtU4LaneClass(TBT_LANE1_STATE(lane1));
+    if (cls == TBT_U4_LANE_DISCONNECTED || cls == TBT_U4_LANE_DISABLED) {
+        return TRUE;
+    }
+    return (BOOLEAN)(cm->HostRouter.Tbt3 && cls == TBT_U4_LANE_CONNECTED);
+}
+
 /* ---------------------------------------------------------------------- */
 /* The quirk table, record 22 section 6.10 ([linux]: ids and flags)        */
 /* ---------------------------------------------------------------------- */
@@ -512,6 +531,8 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested);
 static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p);
 static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls);
+static LONG tbtU4Tbt3Setup(PTBT_U4CM cm, PTBT_U4_ROUTER rt);
+static ULONG tbtU4Ltssm(PTBT_U4CM cm, ULONG v);
 static BOOLEAN tbtU4Departed(PTBT_U4CM cm, PTBT_U4_PORT p, const BOOLEAN *ob);
 static BOOLEAN tbtU4RecCleanupGate(PTBT_U4CM cm, PTBT_U4_PORT p);
 static VOID tbtU4KidsDrop(PTBT_U4CM cm, PTBT_U4_PORT p);
@@ -969,6 +990,26 @@ static VOID tbtU4NameCopy(char *dst, const UCHAR *src, ULONG n)
  * Enable, bit 5 Invalid Flash Memory; bit 7 reads 1 when a part is
  * present (ICM-PROTOCOL.md 5.4). Every write goes to that one DW.
  */
+/* The EEPROM's release (deselect, bit-banging off): a spent resume budget
+ * does not refuse it - a part left selected would hold the router's
+ * EEPROM - only a contained or cancelled instance does. */
+static LONG tbtU4EeRelease(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl)
+{
+    LONG rc;
+
+    if (tbtU4Off(cm)) {
+        cm->Counters.ContainedRefused++;
+        return TBT_E_STOPPED;
+    }
+    rc = TbtCtlWrite(&cm->Ctl, &rt->Route, TBT_CS_ROUTER, 0,
+                     rt->CapPlugEvents + TBT_PLUG_EVENTS_EE_CTL, 1, &ctl);
+    if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL ||
+        rc == TBT_E_TIMEOUT) {
+        cm->HwErrors++;
+    }
+    return rc;
+}
+
 static LONG tbtU4EeWr(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG ctl)
 {
     return tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0,
@@ -1086,8 +1127,8 @@ static LONG tbtU4EepromRead(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG offset,
         rc = tbtU4EeRecv(cm, rt, ctl, &out[i]);
     }
     ctl = (ctl | TBT_EE_CS) & ~TBT_EE_SK;
-    rcEnd = tbtU4EeWr(cm, rt, ctl);
-    if (tbtU4EeWr(cm, rt, ctl & ~TBT_EE_ENABLE) != TBT_OK) {
+    rcEnd = tbtU4EeRelease(cm, rt, ctl);
+    if (tbtU4EeRelease(cm, rt, ctl & ~TBT_EE_ENABLE) != TBT_OK) {
         rcEnd = TBT_E_STATE;
     }
     if (rcEnd != TBT_OK) {
@@ -1295,6 +1336,27 @@ static LONG tbtU4RouterCaps(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG first)
  * other lane adapter's are taken as 2 ([linux], record 22 section 8 item
  * 5).
  */
+/*
+ * Light Ridge and Eagle Ridge (record 22 section 19.4 item 2, [linux] cap.c
+ * tb_port_enable_tmu and tb_port_dummy_read): TMU access enabled around a
+ * walk of an adapter's capabilities, then one read of the adapter's DW 0,
+ * since the next-capability read returns stale data there. 0 for every
+ * other router.
+ */
+static ULONG tbtU4TmuAccessDw(const TBT_U4_ROUTER *rt)
+{
+    if (!rt->Tbt3 || rt->Vendor != 0x8086) {
+        return 0;
+    }
+    if (rt->Device == 0x1513) {
+        return TBT_LR_TMU_ACCESS_DW;
+    }
+    if (rt->Device == 0x151A) {
+        return TBT_ER_TMU_ACCESS_DW;
+    }
+    return 0;
+}
+
 static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
 {
     ULONG a;
@@ -1303,7 +1365,9 @@ static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     ULONG e[2];
     ULONG ptr;
     ULONG n;
+    ULONG tmu;
     LONG rc;
+    LONG rcTmu;
     PTBT_U4_ADP ad;
 
     for (a = 1; a < TBT_U4_MAX_ADP; a++) {
@@ -1333,9 +1397,20 @@ static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
         ad->MaxInHop = (UCHAR)TBT_ADP5_MAX_IN_HOP(v[TBT_ADP_CS_5]);
         ad->MaxOutHop = (UCHAR)TBT_ADP5_MAX_OUT_HOP(v[TBT_ADP_CS_5]);
         ptr = TBT_ADP1_NEXT_CAP(v[TBT_ADP_CS_1]);
+        tmu = tbtU4TmuAccessDw(rt);
+        if (tmu != 0) {
+            rc = tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, tmu, 0, TBT_TMU_ACCESS_EN);
+            if (rc != TBT_OK) {
+                return rc;
+            }
+        }
         for (n = 0; ptr != 0 && n < TBT_CAP_WALK_LIMIT; n++) {
             rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, a, ptr, &h);
             if (rc != TBT_OK) {
+                if (tmu != 0) {
+                    (void)tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, tmu,
+                                   TBT_TMU_ACCESS_EN, 0);
+                }
                 return rc;
             }
             switch (TBT_CAP_ID(h)) {
@@ -1353,6 +1428,15 @@ static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
                 break;
             }
             ptr = TBT_CAP_NEXT(h);
+        }
+        if (tmu != 0) {
+            rcTmu = tbtU4Rmw(cm, &rt->Route, TBT_CS_ROUTER, 0, tmu, TBT_TMU_ACCESS_EN, 0);
+            if (rcTmu == TBT_OK) {
+                rcTmu = tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, a, TBT_ADP_CS_0, &h);
+            }
+            if (rcTmu != TBT_OK) {
+                return rcTmu;
+            }
         }
         if (ad->Type == TBT_ADP_TYPE_LANE) {
             ad->CtlCredits = (UCHAR)TBT_TBT3_CTL_CREDITS;
@@ -2333,6 +2417,7 @@ static VOID tbtU4TakeHeader(PTBT_U4_ROUTER rt, const ULONG *v)
     rt->Depth = TBT_RTR1_DEPTH(v[1]);
     rt->Usb4Version = TBT_RTR4_VERSION(v[4]);
     rt->Tbt3 = (BOOLEAN)(TbtHwRouterVersion(rt->Usb4Version) == TBT_HW_ROUTER_TBT3);
+    rt->TbtGen = rt->Tbt3 ? TbtHwTbtGeneration(rt->Vendor, rt->Device) : 0;
 }
 
 /* TopologyID Valid set, at `depth`, with the TopologyID its route gives. */
@@ -2486,6 +2571,54 @@ static VOID tbtU4MapPcie(PTBT_U4CM cm)
 }
 
 /*
+ * A Thunderbolt host router's PCIe Down adapter for the port of lane 0
+ * adapter `lane0` (record 22 section 19.4 item 4, [linux] tb.c
+ * tb_find_pcie_down): by the port's physical index (lane0 - 1) / 2, 6 or
+ * 7 on Cactus Ridge and Alpine Ridge, 6 or 8 on Falcon Ridge, 8 or 9 on
+ * Titan Ridge, if that adapter is a PCIe Down adapter; 0 - the pairing in
+ * increasing adapter number, as on a USB4 host - for Light Ridge, which
+ * Linux maps to no fixed adapter (its first free one), and for an
+ * adapter the map names that is not one (Linux's WARN_ON path).
+ */
+static ULONG tbtU4TbtPcieDown(const TBT_U4_ROUTER *h, ULONG lane0)
+{
+    ULONG phys;
+    ULONG a;
+
+    phys = lane0 >= 1 ? (lane0 - 1) / 2 : 0;
+    if (phys > 1 || h->Vendor != 0x8086) {
+        return 0;
+    }
+    switch (h->Device) {
+    case 0x1547:    /* Cactus Ridge 4C */
+    case 0x1548:
+    case 0x1576:    /* Alpine Ridge */
+    case 0x1578:
+    case 0x15C0:
+    case 0x15D3:
+    case 0x15DA:
+        a = phys == 0 ? 6 : 7;
+        break;
+    case 0x156B:    /* Falcon Ridge */
+    case 0x156D:
+        a = phys == 0 ? 6 : 8;
+        break;
+    case 0x15E7:    /* Titan Ridge */
+    case 0x15EA:
+    case 0x15EF:
+        a = phys == 0 ? 8 : 9;
+        break;
+    default:
+        return 0;
+    }
+    if (a > h->MaxAdp || a >= TBT_U4_MAX_ADP || !h->Adp[a].Present ||
+        h->Adp[a].Type != TBT_ADP_TYPE_PCIE_DOWN || h->Adp[a].CapAdp == 0) {
+        return 0;
+    }
+    return a;
+}
+
+/*
  * Test (d)'s router half and section 6.1: ROUTER_CS_0 to 4 at route 0
  * answered, USB4 Version 20h or 40h; enumerated if TopologyID Valid is
  * clear, else verified and left unwritten (Guide 3.2.1 note); adapters;
@@ -2519,7 +2652,20 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
     }
     tbtU4TakeHeader(h, v);
     tbtU4Log(cm, "u4.host.id", (h->Vendor << 16) | h->Device);
-    if (TbtHwRouterVersion(h->Usb4Version) != TBT_HW_ROUTER_USB4) {
+    if (cm->Config.TbtHostRouter != 0) {
+        /* Record 22 section 19.3 test (d): a Thunderbolt router (USB4
+         * Version major 0), and the host router the bound NHI pairs with. */
+        if (!h->Tbt3) {
+            cm->InertReason = TBT_INERT_ROUTER_VERSION;
+            tbtU4Log(cm, "u4.host.version", h->Usb4Version);
+            return TBT_E_REFUSED;
+        }
+        if (h->Vendor != TBT_HW_VENDOR_INTEL || h->Device != cm->Config.TbtHostRouter) {
+            cm->InertReason = TBT_INERT_HOST_ID;
+            return TBT_E_REFUSED;
+        }
+        tbtU4Log(cm, "u4.tbt.host-gen", h->TbtGen);
+    } else if (TbtHwRouterVersion(h->Usb4Version) != TBT_HW_ROUTER_USB4) {
         cm->InertReason = TBT_INERT_ROUTER_VERSION;
         tbtU4Log(cm, "u4.host.version", h->Usb4Version);
         return TBT_E_REFUSED;
@@ -2563,8 +2709,13 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
         if (!h->Adp[a].Present) {
             continue;
         }
-        if (t == TBT_ADP_TYPE_LANE && h->Adp[a].CapPort != 0 &&
-            h->Adp[a].CapLane != 0 && a != h->UpAdp &&
+        /* A Thunderbolt router's lane adapters have no USB4 Port
+         * Capability: its ports are the lane pairs (a, a + 1) from adapter
+         * 1, each lane adapter a null-type adapter with the lane (PHY)
+         * capability (record 22 section 19.4 item 0; [linux] switch.c
+         * tb_init_port, tb_switch_default_link_ports). */
+        if (t == TBT_ADP_TYPE_LANE && h->Adp[a].CapLane != 0 && a != h->UpAdp &&
+            (h->Tbt3 ? (a & 1UL) != 0 : h->Adp[a].CapPort != 0) &&
             cm->PortCount < TBT_U4_MAX_PORTS) {
             p = &cm->Ports[cm->PortCount];
             tbtU4Zero(p, sizeof(*p));
@@ -2573,7 +2724,9 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
         }
     }
     /* The Nth PCIe Down and the Nth USB3 Down adapter, in increasing
-     * adapter number, belong to the Nth USB4 port. */
+     * adapter number, belong to the Nth USB4 port; on a Thunderbolt host,
+     * whose PCIe Down adapters are fixed per controller, the one of
+     * tbtU4TbtPcieDown. */
     npcie = 0;
     nusb3 = 0;
     for (a = 1; a <= h->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
@@ -2592,6 +2745,37 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
             nusb3++;
         }
     }
+    if (h->Tbt3) {
+        /* The controller's fixed map first, every adapter it names
+         * reserved; then a port it names none for (Light Ridge, or a map
+         * entry that is not a PCIe Down adapter) takes the first PCIe Down
+         * adapter no other port holds, or none. Never one adapter for two
+         * ports. */
+        for (i = 0; i < cm->PortCount; i++) {
+            cm->Ports[i].PcieDown = tbtU4TbtPcieDown(h, cm->Ports[i].Lane0);
+            cm->Ports[i].Usb3Down = 0;
+        }
+        for (i = 0; i < cm->PortCount; i++) {
+            if (cm->Ports[i].PcieDown != 0) {
+                continue;
+            }
+            for (a = 1; a <= h->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
+                if (!h->Adp[a].Present || h->Adp[a].CapAdp == 0 ||
+                    h->Adp[a].Type != TBT_ADP_TYPE_PCIE_DOWN) {
+                    continue;
+                }
+                for (t = 0; t < cm->PortCount; t++) {
+                    if (cm->Ports[t].PcieDown == a) {
+                        break;
+                    }
+                }
+                if (t == cm->PortCount) {
+                    cm->Ports[i].PcieDown = a;
+                    break;
+                }
+            }
+        }
+    }
     for (i = 0; i < cm->PortCount; i++) {
         tbtU4Log(cm, "u4.host.port", (cm->Ports[i].Lane0 << 16) |
                  (cm->Ports[i].PcieDown << 8) | cm->Ports[i].Usb3Down);
@@ -2602,6 +2786,22 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
         return TBT_E_STATE;
     }
     tbtU4ApplyQuirks(cm, h);
+    if (h->Tbt3) {
+        /* Section 19.4 item 1: no router operations, no Buffer Allocation;
+         * the Plug Events active and the identity as on a Thunderbolt
+         * device router (section 8 items 2 and 3, 19.4 item 3a). */
+        h->CapsState = TBT_U4_CAPS_DEFAULT;
+        if (tbtU4Tbt3Setup(cm, h) != TBT_OK) {
+            cm->InertReason = TBT_INERT_PROTOCOL;
+            tbtU4Log(cm, "u4.tbt.host-plug-events", h->CapPlugEvents);
+            return TBT_E_STATE;
+        }
+        for (i = 0; i < cm->PortCount; i++) {
+            cm->Ports[i].HostBaPcie = 0;
+            cm->Ports[i].HostBaUsb3 = 0;
+        }
+        return TBT_OK;
+    }
     tbtU4MapPcie(cm);
     tbtU4GetCapabilities(cm, h);
     /* With Buffer Allocation Per USB4 Port enabled, one request per lane 0
@@ -2662,7 +2862,9 @@ static VOID tbtU4HostTmu(PTBT_U4CM cm)
     LONG rc;
 
     h = &cm->HostRouter;
-    if (h->CapTmu == 0) {
+    if (h->CapTmu == 0 || h->Tbt3) {
+        /* A Thunderbolt host router's TMU is not configured (record 22
+         * section 19.4 item 6, as section 8 item 6). */
         cm->HostTmuOk = TRUE;
         return;
     }
@@ -2720,6 +2922,15 @@ static BOOLEAN tbtU4AlpineRidge(const TBT_U4_ROUTER *rt)
     return FALSE;
 }
 
+/* Light Ridge, Eagle Ridge and Port Ridge keep the USB plug event too
+ * ([linux] switch.c tb_plug_events_active, record 22 section 19.4 item 1). */
+static BOOLEAN tbtU4UsbEventKept(const TBT_U4_ROUTER *rt)
+{
+    return (BOOLEAN)(rt->Vendor == 0x8086 &&
+                     (rt->Device == 0x1513 || rt->Device == 0x151A ||
+                      rt->Device == 0x1549));
+}
+
 /* An adapter's USB4 Port Region in the Vendor Specific Extended 6
  * Capability (record 22 section 8 item 3; Spec 13.6.1.5, Table 13-18):
  * the regions follow the Common Region, whose CAP_STRUCT gives the Common
@@ -2740,6 +2951,78 @@ static ULONG tbtU4LcPort(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
     }
     port = (adp - 1) / 2;
     return rt->CapLc + TBT_LC_DESC_SIZE(desc) + port * TBT_LC_DESC_PORT_SIZE(desc);
+}
+
+/* tbtU4LcPort for the host router's own marks: TBT_OK with *region 0 when
+ * it has no link controller (nothing to mark), an error when it has one
+ * whose descriptor cannot be read - a mark then never counts as made nor
+ * as undone. */
+static LONG tbtU4HostLcPort(PTBT_U4CM cm, ULONG adp, PULONG region)
+{
+    *region = 0;
+    if (cm->HostRouter.CapLc == 0) {
+        return TBT_OK;
+    }
+    *region = tbtU4LcPort(cm, &cm->HostRouter, adp);
+    return *region != 0 ? TBT_OK : TBT_E_STATE;
+}
+
+/*
+ * A Thunderbolt router's identity, chosen by what it has (record 22
+ * section 19.4 item 3a): its link controller's fused UUID, four DWs from
+ * DW 3 of the capability; with no link controller capability (generation
+ * 1), the DROM's UID alone through the EEPROM - CRC-8 over bytes 1 to 8 in
+ * byte 0 - as two DWs then two of all ones ([linux] eeprom.c
+ * tb_drom_read_uid_only, switch.c tb_switch_set_uuid). A read that fails
+ * where the capability exists is a failed identity, never a reason to fall
+ * back to the DROM. The source is the router's UidFromDrom.
+ */
+static UCHAR tbtU4Crc8(const UCHAR *p, ULONG n)
+{
+    UCHAR c;
+    ULONG b;
+
+    c = 0xFF;
+    while (n-- != 0) {
+        c = (UCHAR)(c ^ *p++);
+        for (b = 0; b < 8; b++) {
+            c = (UCHAR)((c & 0x80) != 0 ? (UCHAR)((c << 1) ^ 0x07) : (UCHAR)(c << 1));
+        }
+    }
+    return c;
+}
+
+static LONG tbtU4TbtUuid(PTBT_U4CM cm, PTBT_U4_ROUTER rt, PULONG u)
+{
+    UCHAR b[9];
+    ULONG i;
+    LONG rc;
+
+    if (!rt->UidFromDrom) {
+        if (rt->CapLc == 0) {
+            return TBT_E_UNSUPPORTED;
+        }
+        return tbtU4RdN(cm, &rt->Route, TBT_CS_ROUTER, 0, rt->CapLc + TBT_LC_FUSE, 4, u);
+    }
+    /* Under a resume budget too: the read stops when it is spent, and its
+     * release is not refused (tbtU4EeRelease). */
+    rc = tbtU4EepromRead(cm, rt, 0, 9, b);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    if (tbtU4Crc8(b + 1, 8) != b[0]) {
+        tbtU4Log(cm, "u4.tbt.uid-crc", b[0]);
+        return TBT_E_STATE;
+    }
+    u[0] = 0;
+    u[1] = 0;
+    for (i = 0; i < 4; i++) {
+        u[0] |= (ULONG)b[1 + i] << (8 * i);
+        u[1] |= (ULONG)b[5 + i] << (8 * i);
+    }
+    u[2] = 0xFFFFFFFFUL;
+    u[3] = 0xFFFFFFFFUL;
+    return TBT_OK;
 }
 
 /*
@@ -2766,7 +3049,7 @@ static LONG tbtU4Tbt3Setup(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ROUTER, 0, at, &pe);
     if (rc == TBT_OK) {
         pe &= ~TBT_PLUG_EVENTS_MASK;
-        if (!tbtU4AlpineRidge(rt)) {
+        if (!tbtU4AlpineRidge(rt) && !tbtU4UsbEventKept(rt)) {
             pe |= TBT_PLUG_EVENTS_USB_DISABLE;
         }
         rc = tbtU4Wr(cm, &rt->Route, TBT_CS_ROUTER, 0, at, pe);
@@ -2774,9 +3057,10 @@ static LONG tbtU4Tbt3Setup(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     if (rc != TBT_OK) {
         return rc;
     }
-    if (rt->CapLc != 0) {
-        rc = tbtU4RdN(cm, &rt->Route, TBT_CS_ROUTER, 0, rt->CapLc + TBT_LC_FUSE, 4, rt->Uuid);
-        rt->UuidValid = (BOOLEAN)(rc == TBT_OK);
+    rt->UidFromDrom = (BOOLEAN)(rt->CapLc == 0 && rt->TbtGen == 1);
+    rt->UuidValid = (BOOLEAN)(tbtU4TbtUuid(cm, rt, rt->Uuid) == TBT_OK);
+    if (!rt->UuidValid) {
+        tbtU4Log(cm, "u4.tbt.noid", (rt->Route.Lo << 8) | rt->TbtGen);
     }
     return TBT_OK;
 }
@@ -2924,8 +3208,21 @@ static LONG tbtU4Configured(PTBT_U4CM cm, PTBT_U4_PORT p)
     h = &cm->HostRouter;
     d = &p->Dev;
     p->PcSetHost = TRUE;
-    rc = tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
-                  h->Adp[p->Lane0].CapPort + TBT_PORT_CS_19, 0, TBT_PORT19_PC);
+    if (h->Tbt3) {
+        /* A Thunderbolt host router marks its downstream port in its link
+         * controller from generation 2 ([linux] lc.c tb_lc_configure_port,
+         * record 22 section 19.4 item 0); with none, nothing to mark. */
+        rc = tbtU4HostLcPort(cm, p->Lane0, &region);
+        if (rc == TBT_OK && region != 0) {
+            mark = (p->Lane0 & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C;
+            rc = tbtU4Rmw(cm, &h->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, 0, mark);
+        } else if (rc == TBT_OK) {
+            p->PcSetHost = FALSE;
+        }
+    } else {
+        rc = tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                      h->Adp[p->Lane0].CapPort + TBT_PORT_CS_19, 0, TBT_PORT19_PC);
+    }
     if (rc != TBT_OK) {
         return rc;
     }
@@ -3097,6 +3394,7 @@ static LONG tbtU4BondSingle(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, const TBT_U
             break;
         }
     }
+    (void)st;
     if (k > 2) {
         cm->Counters.BondSingle++;
         p->SingleLane = TRUE;
@@ -3119,6 +3417,14 @@ static LONG tbtU4BondSingle(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, const TBT_U
     if (TBT_LANE1_STATE(lane[1]) != TBT_LANE_STATE_CL0 ||
         TBT_LANE1_NLW(lane[0]) != TBT_LANE_WIDTH_X1) {
         goto failed;
+    }
+    if (cm->HostRouter.Tbt3) {
+        /* A Thunderbolt host's link that does not bond stays two single
+         * lanes, as Linux leaves it: no Lane Disable there, which is a
+         * USB4 lane adapter's (record 22 section 19.4 item 0). */
+        cm->Counters.BondSingle++;
+        p->SingleLane = TRUE;
+        return TBT_OK;
     }
     p->Lane1Disabled = TRUE;    /* owned before the write */
     if (tbtU4LaneRmw(cm, ln->Rt[1], ln->Adp[1], 0, TBT_LANE1_LD) != TBT_OK) {
@@ -3806,7 +4112,9 @@ static BOOLEAN tbtU4LinkUsb4(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
     ULONG v;
 
-    if (p->Dev.Tbt3) {
+    if (p->Dev.Tbt3 || cm->HostRouter.Tbt3) {
+        /* Every link of a Thunderbolt host is a Thunderbolt link: no USB3
+         * tunnel, ever (record 22 section 19.4 item 5). */
         return FALSE;
     }
     if (tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ADAPTER, p->Lane0,
@@ -4242,7 +4550,8 @@ static LONG tbtU4Paths(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PTBT_U4_TUNNEL t
      * may still have been applied, and its teardown must cover it. */
     t->Written |= TBT_U4_E_HOST_PROTO;
     rc = tbtU4WriteEntry(cm, &h->Route, hp, TBT_HOP_PROTOCOL, p->Lane0, t->Hd,
-                         0, weight, FALSE, FALSE, asm7, "u4.asm7.host");
+                         h->Tbt3 ? TBT_TBT3_PROTO_CREDITS : 0, weight, FALSE,
+                         h->Tbt3, asm7, "u4.asm7.host");
     if (rc == TBT_OK) {
         t->Written |= TBT_U4_E_DEV_LANE;
         rc = tbtU4WriteEntry(cm, &d->Route, d->UpAdp, t->Hd, dp, TBT_HOP_PROTOCOL,
@@ -4363,7 +4672,7 @@ static LONG tbtU4PcieTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen)
         TbtWaitStart(&w, cm->Host, TBT_U4_L0_US, FALSE);
         while ((rc = tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->PcieDown,
                              h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &cs0)) == TBT_OK &&
-               TBT_PCIE0_LTSSM(cs0) != TBT_LTSSM_L0) {
+               tbtU4Ltssm(cm, cs0) != TBT_LTSSM_L0) {
             if (!TBT_U4_LIVE(p, gen)) {
                 rc = TBT_E_GONE;
                 break;
@@ -5044,15 +5353,51 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
  * (section 7.3 step 5): each change it made stays owned until a read-back
  * proves it undone, and is retried by the next teardown, the next
  * connection and the idle tick. TRUE when nothing is left owed. */
+/* A Thunderbolt host's link controller port reset released (PORT_MODE bit
+ * 0 cleared) and read back clear; TRUE when nothing is owed. */
+static BOOLEAN tbtU4LcDprRelease(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    ULONG region;
+    ULONG v;
+
+    if (!p->LcDprOwed) {
+        return TRUE;
+    }
+    if (tbtU4HostLcPort(cm, p->Lane0, &region) != TBT_OK) {
+        return FALSE;
+    }
+    if (region == 0 ||
+        (tbtU4Rmw(cm, &cm->HostRouter.Route, TBT_CS_ROUTER, 0, region + TBT_LC_PORT_MODE,
+                  TBT_LC_PORT_MODE_DPR, 0) == TBT_OK &&
+         tbtU4Rd(cm, &cm->HostRouter.Route, TBT_CS_ROUTER, 0, region + TBT_LC_PORT_MODE,
+                 &v) == TBT_OK && (v & TBT_LC_PORT_MODE_DPR) == 0)) {
+        p->LcDprOwed = FALSE;
+    }
+    return (BOOLEAN)!p->LcDprOwed;
+}
+
 static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
     PTBT_U4_ROUTER h;
     ULONG v;
     ULONG k;
+    ULONG region;
+    ULONG mark;
     BOOLEAN ok;
 
     h = &cm->HostRouter;
-    if (p->PcSetHost && h->Adp[p->Lane0].CapPort != 0 &&
+    if (p->PcSetHost && h->Tbt3) {
+        mark = (p->Lane0 & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C;
+        if (tbtU4HostLcPort(cm, p->Lane0, &region) != TBT_OK) {
+            /* still owed: retried by the next teardown or tick */
+        } else if (region == 0 ||
+            (tbtU4Rmw(cm, &h->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, mark, 0) ==
+                 TBT_OK &&
+             tbtU4Rd(cm, &h->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, &v) == TBT_OK &&
+             (v & mark) == 0)) {
+            p->PcSetHost = FALSE;
+        }
+    } else if (p->PcSetHost && h->Adp[p->Lane0].CapPort != 0 &&
         tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
                  h->Adp[p->Lane0].CapPort + TBT_PORT_CS_19, TBT_PORT19_PC, 0) == TBT_OK &&
         tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
@@ -5079,7 +5424,9 @@ static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p)
         tbtU4LaneRd(cm, h, p->Lane0 + 1, &v) == TBT_OK && (v & TBT_LANE1_LD) == 0) {
         p->Lane1Disabled = FALSE;
     }
-    return (BOOLEAN)(!p->PcSetHost && !p->LaneWritten && !p->Lane1Disabled);
+    (void)tbtU4LcDprRelease(cm, p);
+    return (BOOLEAN)(!p->PcSetHost && !p->LaneWritten && !p->Lane1Disabled &&
+                     !p->LcDprOwed);
 }
 
 static VOID tbtU4Teardown(PTBT_U4CM cm, PTBT_U4_PORT p)
@@ -5158,8 +5505,8 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
                 rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u);
                 u[2] = d->Uuid[2];
                 u[3] = d->Uuid[3];
-            } else if (d->CapLc != 0) {
-                rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapLc + TBT_LC_FUSE, 4, u);
+            } else if (d->CapLc != 0 || d->UidFromDrom) {
+                rc = tbtU4TbtUuid(cm, d, u);
             } else {
                 return FALSE;
             }
@@ -5199,6 +5546,10 @@ static BOOLEAN tbtU4Evidence(PTBT_U4CM cm, PTBT_U4_PORT p, PULONG cls)
         u[3] = 0;
     } else if (d->Tbt3 && rc == TBT_OK && d->CapLc != 0) {
         rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapLc + TBT_LC_FUSE, 4, u);
+    } else if (d->Tbt3 && rc == TBT_OK && d->UidFromDrom) {
+        /* Generation 1: its DROM UID, the recorded source (record 22
+         * section 19.4 item 3a). */
+        rc = tbtU4TbtUuid(cm, d, u);
     } else {
         return FALSE;
     }
@@ -5579,6 +5930,26 @@ static BOOLEAN tbtU4Follow(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3,
                      !t->Incomplete);
 }
 
+/*
+ * The host's PCIe Down adapter's LTSSM from ADP_PCIE_CS_0 `v`. On a
+ * Thunderbolt host (record 22 section 19.4) the field is not the USB4
+ * encoding - usb4-emu's captured Thunderbolt 3 adapter reads 3 with its
+ * tunnel up, 0 idle - and Linux reads it on USB4 routers only (usb4.c
+ * usb4_pci_port_check_ltssm_state; tunnel.c activates a Thunderbolt
+ * router's PCIe path by Path Enable alone): there, Path Enable set and
+ * not Detect is taken as L0.
+ */
+static ULONG tbtU4Ltssm(PTBT_U4CM cm, ULONG v)
+{
+    ULONG s;
+
+    s = TBT_PCIE0_LTSSM(v);
+    if (cm->HostRouter.Tbt3 && (v & TBT_PCIE0_PE) != 0 && s != TBT_LTSSM_DETECT) {
+        return TBT_LTSSM_L0;
+    }
+    return s;
+}
+
 /* A PCIe Down adapter's LTSSM live (L0, L1, Recovery, Recovery.Idle), a
  * transitional state re-read up to 2 s, Detect failing (section 7.1 item
  * 4, 9.2 step 4). */
@@ -5596,7 +5967,7 @@ static BOOLEAN tbtU4PcieLive(PTBT_U4CM cm, PTBT_U4_PORT p)
                     h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
             return FALSE;
         }
-        s = TBT_PCIE0_LTSSM(v);
+        s = tbtU4Ltssm(cm, v);
         if ((v & TBT_PCIE0_PE) == 0 || s == TBT_LTSSM_DETECT) {
             return FALSE;
         }
@@ -6177,10 +6548,8 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
                                           d->Uuid) == TBT_OK);
     } else {
         d->CapsState = TBT_U4_CAPS_DEFAULT;
-        if (d->CapLc != 0) {
-            d->UuidValid = (BOOLEAN)(tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0,
-                                              d->CapLc + TBT_LC_FUSE, 4, d->Uuid) == TBT_OK);
-        }
+        d->UidFromDrom = (BOOLEAN)(d->CapLc == 0 && d->TbtGen == 1);
+        d->UuidValid = (BOOLEAN)(tbtU4TbtUuid(cm, d, d->Uuid) == TBT_OK);
         /* Adopted with no connection sequence of this driver's: its
          * names are read on a later pass (TbtU4Poll, tbtU4DromLate), its
          * adapters as found here. */
@@ -6219,8 +6588,7 @@ static VOID tbtU4DiscoverRead(PTBT_U4CM cm, PTBT_U4_PORT p)
     } else if (TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X2) {
         p->Bonded = TRUE;
         p->Gen4 = (BOOLEAN)(TBT_LANE1_SPEED(lane) == TBT_LANE_SPEED_GEN4);
-    } else if (TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_CLD ||
-               TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_DISABLED) {
+    } else if (tbtU4SingleOk(cm, lane1)) {
         p->SingleLane = TRUE;
     } else {
         cfgOk = FALSE;
@@ -6825,6 +7193,7 @@ static VOID tbtU4CleanAdapter(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG adp)
 static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
 {
     PTBT_U4_ROUTER h;
+    ULONG region;
     BOOLEAN closed;
     BOOLEAN hadPcie;
     TBT_WAIT w;
@@ -6864,7 +7233,25 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
         cm->ActivePort = prev;
         return;
     }
-    if (h->Adp[p->Lane0].CapPort != 0 &&
+    if (h->Tbt3) {
+        /* Step 3 on a Thunderbolt host: the link controller's port reset,
+         * generations 2 and 3 ([linux] lc.c tb_lc_reset_port: set, 10 ms,
+         * clear); generation 1 has none, so the port's paths are torn
+         * down alone (record 22 section 19.4 item 7). */
+        region = h->TbtGen >= 2 ? tbtU4LcPort(cm, h, p->Lane0) : 0;
+        if (region != 0) {
+            /* Owned before the write, whose answer may be lost; released
+             * and read back clear here, else by tbtU4HostRestore before
+             * the port connects again. */
+            p->LcDprOwed = TRUE;
+            if (tbtU4Rmw(cm, &h->Route, TBT_CS_ROUTER, 0, region + TBT_LC_PORT_MODE, 0,
+                         TBT_LC_PORT_MODE_DPR) == TBT_OK) {
+                cm->Counters.DownstreamPortResets++;
+                tbtU4WaitMin(cm, TBT_U4_DPR_HOLD_US);
+            }
+            (void)tbtU4LcDprRelease(cm, p);
+        }
+    } else if (h->Adp[p->Lane0].CapPort != 0 &&
         tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
                  h->Adp[p->Lane0].CapPort + TBT_PORT_CS_19, 0, TBT_PORT19_DPR) == TBT_OK) {
         cm->Counters.DownstreamPortResets++;
@@ -6928,7 +7315,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
     }
     prev = cm->ActivePort;
     cm->ActivePort = p->Index;
-    s = TBT_PCIE0_LTSSM(v);
+    s = tbtU4Ltssm(cm, v);
     if (watch && !(p->Transitional &&
                    tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US)) {
         /* No later tick will look again (a resume): a transitional state
@@ -6954,7 +7341,7 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
                         h->Adp[p->PcieDown].CapAdp + TBT_PCIE_CS_0, &v) != TBT_OK) {
                 goto done;
             }
-            s = TBT_PCIE0_LTSSM(v);
+            s = tbtU4Ltssm(cm, v);
         }
     }
     lost = FALSE;
@@ -9918,7 +10305,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
             (void)tbtU4ReleaseBw(cm, p);
         }
         if (p->State == TBT_U4_EMPTY &&
-            (p->PcSetHost || p->LaneWritten || p->Lane1Disabled) &&
+            (p->PcSetHost || p->LaneWritten || p->Lane1Disabled || p->LcDprOwed) &&
             tbtU4RecCleanupGate(cm, p)) {
             (void)tbtU4HostRestore(cm, p);
         }
@@ -10280,8 +10667,10 @@ static ULONG tbtU4ResumeClass(PTBT_U4CM cm, PTBT_U4_PORT p)
         if (v[7] != d->Uuid[0] || v[8] != d->Uuid[1]) {
             return TBT_U4_RES_REMOVED;
         }
-    } else if (d->CapLc != 0) {
-        rc = tbtU4RdN(cm, &d->Route, TBT_CS_ROUTER, 0, d->CapLc + TBT_LC_FUSE, 4, u);
+    } else {
+        /* The identity's recorded source (record 22 section 19.4 item
+         * 3a); one that cannot be confirmed leaves the port held. */
+        rc = tbtU4TbtUuid(cm, d, u);
         if (rc != TBT_OK) {
             return tbtU4Gone(cm, rc) ? TBT_U4_RES_REMOVED : TBT_U4_RES_UNKNOWN;
         }
@@ -10380,9 +10769,7 @@ static BOOLEAN tbtU4Verify(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3)
         tbtU4LaneRd(cm, h, p->Lane0 + 1, &lane1) != TBT_OK) {
         return FALSE;
     }
-    if (!tbtU4WidthBonded(lane) &&
-        TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
-        TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED) {
+    if (!tbtU4WidthBonded(lane) && !tbtU4SingleOk(cm, lane1)) {
         return FALSE;
     }
     if (!tbtU4Follow(cm, p, usb3, &t)) {
@@ -11300,8 +11687,7 @@ static BOOLEAN tbtU4LanesAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p)
         return tbtU4WidthBonded(lane);
     }
     return (BOOLEAN)(!tbtU4WidthBonded(lane) &&
-                     (TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_CLD ||
-                      TBT_LANE1_STATE(lane1) == TBT_LANE_STATE_DISABLED));
+                     tbtU4SingleOk(cm, lane1));
 }
 
 /* The port reset to EMPTY by a recovery after a departed router (part 3

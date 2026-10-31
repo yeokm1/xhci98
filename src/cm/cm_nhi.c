@@ -936,7 +936,7 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
         CmLogNote(nhi, "cm.live.rings-changed", 1);
         return FALSE;
     }
-    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, nhi->Subsystem,
                 FALSE, &sel);
     nhi->AccessClass = CM_ACCESS_ORDINARY;
     CmLogNote(nhi, "cm.live.select", sel.Outcome);
@@ -1145,7 +1145,7 @@ static BOOLEAN cmU4Prepare(PCM_NHI nhi, ULONG cmd, BOOLEAN *ones)
     }
     step = 3;
     nhi->AccessClass = CM_ACCESS_PROBE;
-    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, nhi->Subsystem,
                 nhi->Sel.Forced, &sel);
     CmLogNote(nhi, "u4.recover.select",
               (sel.Outcome << 16) | (sel.Reason & 0xFFFFUL));
@@ -2723,6 +2723,9 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
+    /* Record 22 section 19: a Mac's Thunderbolt host, its router's id. */
+    nhi->U4Cfg.TbtHostRouter = nhi->Sel.Route == TBT_SW_ROUTE_TBT_HOST ?
+                               nhi->Sel.TbtHostRouter : 0;
     /* The bind takes the tunnel ports' learning baseline between the
      * start and the first tick, before any cold device is connected. */
     nhi->U4Cfg.DeferFirstPoll = TRUE;
@@ -2958,6 +2961,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
     nhi->SubVendor = v & 0xFFFFUL;
+    nhi->Subsystem = v;
     CmLogNote(nhi, "cm.cfg.class", nhi->ClassCode);
     CmLogNote(nhi, "cm.cfg.subsystem", v);
     nhi->Hw = TbtHwMatch(nhi->Vendor, nhi->Device, nhi->ClassCode,
@@ -2991,7 +2995,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
 
     /* (c), (d) */
-    TbtHwSelect(nhi->Hw, &nhi->Host, ready, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, ready, nhi->Subsystem,
                 (BOOLEAN)(mode == CM_MODE_FORCE_SW), &nhi->Sel);
     CmLogNote(nhi, "cm.select.outcome", nhi->Sel.Outcome);
     CmLogNote(nhi, "cm.select.reason", nhi->Sel.Reason);

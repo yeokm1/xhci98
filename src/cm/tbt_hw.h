@@ -55,7 +55,16 @@
  * (NVM_AUTH_DONE 1 with ICM_EN 0 marked experimental, not Linux's normal
  * rule), with XhciCmMode 3 marked forced; the router half of test (d), the
  * host router's USB4 Version, needs the ring and is TbtHwRouterVersion's,
- * which tbt_u4cm.c applies after activation. And per the orchestrator's
+ * which tbt_u4cm.c applies after activation. Record 22 section 19 (task
+ * 45.21) adds a third software route, the Thunderbolt-host profile of an
+ * Apple machine's Thunderbolt 1 to 3 host, which runs no firmware CM:
+ * Falcon, Alpine and Titan Ridge with PCI subsystem vendor 106B and a
+ * valid firmware status with the ICM enable clear (set, it is the ICM's,
+ * as on any other machine), and Light Ridge and Cactus Ridge 4C, which
+ * have no ICM, with Linux's subsystem 2222:1111 (pci.c nhi_ids[]); its
+ * test (d) is the host router's, after activation (a Thunderbolt router,
+ * the router id the NHI's pair), the host interface version only logged.
+ * And per the orchestrator's
  * settlement of 2026-10-15 (record 22 section 4.2 over record 21 section
  * 1.4.2): an inert instance never clears force power it set, not even
  * after its own FW_READY poll failed.
@@ -95,6 +104,13 @@
 #define TBT_HW_CAPTURED         0x0008UL    /* a capture of this id exists (8086:15BF) */
 #define TBT_HW_FORCED           0x0010UL    /* an unlisted Intel id taken by XhciCmMode 2 */
 #define TBT_HW_CLASS_MATCH      0x0020UL    /* matched by class 0C0340 alone */
+/* Record 22 section 19.3: on an Apple machine (subsystem vendor 106B) with
+ * the ICM enable clear, the Thunderbolt-host profile (Falcon, Alpine and
+ * Titan Ridge). */
+#define TBT_HW_MAC_HOST         0x0040UL
+/* The same profile, only with subsystem 2222:1111 (Light Ridge, Cactus
+ * Ridge 4C: Linux pci.c nhi_ids[], class 0880); started inert otherwise. */
+#define TBT_HW_MAC_ONLY         0x0080UL
 
 /* Ownership predicates, each one of Linux icm.c's is_supported hooks for
  * the ids icm_probe gives it. Apple machines are excluded for this
@@ -208,6 +224,17 @@ LONG TbtHwPlatformShutdown(const TBT_HW_PROFILE *hw, const TBT_CFG *cfg,
 /* The Apple platform policy's mark (record 21 section 1.4.2 test 1): the
  * NHI's subsystem vendor 106B. Any IRQL. */
 #define TBT_HW_VENDOR_APPLE     0x106BUL
+/* PCI dword 2Ch of a Mac's Light Ridge or Cactus Ridge 4C NHI: subsystem
+ * vendor 2222, device 1111 (Linux pci.c nhi_ids[]). */
+#define TBT_HW_SUBSYS_TBT1      0x11112222UL
+/* The host router a Thunderbolt NHI belongs to (record 22 section 19.1's
+ * table; Linux pci_ids.h and nhi.h, switch.c tb_switch_get_generation),
+ * 0 for none; any IRQL. */
+ULONG TbtHwTbtHostRouter(ULONG nhiDevice);
+/* An Intel Thunderbolt router's generation, 1 to 3, by its router id
+ * (Linux switch.c tb_switch_get_generation: an unknown id is 1); 0 for a
+ * vendor that is not Intel. Any IRQL. */
+ULONG TbtHwTbtGeneration(ULONG vendor, ULONG device);
 BOOLEAN TbtHwIsApple(ULONG subsystemVendorId);
 
 /* The LC mailbox (Linux pci.c icl_nhi_lc_mailbox_cmd and _complete):
@@ -246,11 +273,14 @@ BOOLEAN TbtHwReadHostUuid(const TBT_HW_PROFILE *hw,
 #define TBT_INERT_ROUTER_VERSION    11UL    /* after activation: host router USB4 Version refused */
 #define TBT_INERT_HOST_ROUTER       12UL    /* after activation: host router unanswered */
 #define TBT_INERT_PROTOCOL          13UL    /* after activation: a fault later in the start */
+#define TBT_INERT_NOT_MAC           14UL    /* Light or Cactus Ridge without 2222:1111 */
+#define TBT_INERT_HOST_ID           15UL    /* after activation: not the NHI's host router */
 
 /* The ground of a software admission (record 22 section 3.4). */
 #define TBT_SW_ROUTE_NONE           0UL
 #define TBT_SW_ROUTE_IDENTITY       1UL     /* no firmware CM by identity */
 #define TBT_SW_ROUTE_ICM_DISABLED   2UL     /* Tiger Lake class, Maple Ridge: a valid ICM_EN 0 */
+#define TBT_SW_ROUTE_TBT_HOST       3UL     /* record 22 section 19: a Mac's Thunderbolt host */
 
 typedef struct _TBT_HW_SELECTION {
     ULONG Outcome;      /* TBT_SEL_* */
@@ -261,11 +291,14 @@ typedef struct _TBT_HW_SELECTION {
     ULONG Route;        /* TBT_SW_ROUTE_*, when SOFTWARE */
     BOOLEAN Experimental;   /* route 2 with NVM_AUTH_DONE set (record 22 section 3.3) */
     BOOLEAN Forced;         /* XhciCmMode 3 was set when it was admitted */
+    ULONG TbtHostRouter;    /* route 3: the host router id test (d) wants */
 } TBT_HW_SELECTION, *PTBT_HW_SELECTION;
 
 /*
- * Decide, after (a) and (b): `platformReady` is (b)'s result, `apple` the
- * driver's platform policy, `forceSoftware` XhciCmMode 3. Reads Host
+ * Decide, after (a) and (b): `platformReady` is (b)'s result, `subsystem`
+ * the NHI's PCI dword 2Ch (subsystem vendor 15:0, device 31:16), which the
+ * Apple policy and record 22 section 19.3's row read, `forceSoftware`
+ * XhciCmMode 3. Reads Host
  * Interface Capabilities, then on an Intel ICM row the firmware status by
  * the row's predicate, the interface version for the ICM (record 21
  * section 1.4.2 test 4: 0 on Alpine Ridge, below 0x40 on the other rows;
@@ -279,7 +312,7 @@ typedef struct _TBT_HW_SELECTION {
 VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
                  const TBT_HOST *host,
                  BOOLEAN platformReady,
-                 BOOLEAN apple,
+                 ULONG subsystem,
                  BOOLEAN forceSoftware,
                  PTBT_HW_SELECTION out);
 

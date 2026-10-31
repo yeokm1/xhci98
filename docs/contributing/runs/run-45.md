@@ -4815,6 +4815,90 @@ same repository made for the proof (`tools\` linked), removed after it.
 - Logs: `E:\xhci98-scratch\p45-w45-share\proof-*.log` and `pkg*.log`,
   `inf*.log`.
 
+## 45.21 (code) Thunderbolt 1, 2 and 3 on Apple Macs: the emulator model, the connection manager's Thunderbolt-host profile and its legs (2026-10-30)
+
+Record 22 section 19, with the owner's decisions of 2026-10-29 (Q1 all
+three generations, Q2 the systems Apple supports first, Q3 no
+DisplayPort, Q4 the emulator model first) and of 2026-10-30 (Q5 (a): the
+profile active from this release; the release notes keep "Apple machines
+are not claimed" until 45-E.11 reads one).
+
+### The emulator model (`usb4-emu`, merged to its `main`: `da68171`)
+
+- Profiles `tb3-apple-alpine-ridge`, `tb3-apple-titan-ridge`,
+  `tb2-apple-falcon-ridge`, `tb1-apple-cactus-ridge`,
+  `tb1-apple-light-ridge` (its `docs/TB-SWCM-HOSTS.md`): the Thunderbolt 3
+  profile's Intel register set with no emulated ICM, firmware status 0,
+  PCI subsystem `106B:<apple-subsys-id>` or `2222:1111`, a host router the
+  guest configures, the PCIe Down adapters of Linux's `tb_find_pcie_down`,
+  the link controller from generation 2 with its Downstream Port Reset,
+  generation 1 with the Thunderbolt 1 reset packet instead, Light Ridge's
+  TMU access bit and any-port PCIe Down; `usb4-device tb3-router-id` for
+  generation 1 and 2 device routers. Inferred from Linux alone.
+- Checks there: qtest `usb4-tbhost-test` 9/9, the other usb4 qtests
+  unchanged, the fabric harness 50178 checks with no failure, the tb3,
+  chain and AR conformance replays as before, `checkpatch` clean.
+  Reviewed and revised.
+
+### The code (xHCI98)
+
+- `af42096a`: what record 22 section 19.9 lists - the selection by
+  subsystem and firmware status (`tbt_hw.c`) and the host router run as a
+  Thunderbolt router (`tbt_u4cm.c`: test (d), ports from the lane pairs,
+  the PCIe Down map, no router operations, Plug Events, Light Ridge's TMU
+  access, the identity by its recorded source, the link controller's marks
+  and port reset, no USB3, two single lanes where a link does not bond).
+- `d3e0114e`: 3.4.0.0 (45.20's USB4 version 2 code) merged in.
+- `9913d7b0`: the Thunderbolt 1 hosts' INF lines (class form, NT 6.x
+  sections only; CM-TB1 in the CM INF gate; the installer's names, its
+  guard against installing over a PC's driver, and its class-form install
+  calls).
+- `cb510b62`: found by the 7 x86 leg below - a Thunderbolt 3 PCIe
+  adapter's LTSSM field reads 3 with its tunnel up, not USB4's L0, and the
+  tunnel was torn down waiting for L0; a Thunderbolt host's PCIe Down
+  adapter is now live by Path Enable (as Linux treats a Thunderbolt
+  router's), the fake fabric reporting 3 there too.
+
+Host suites passed at each commit (`test_u4cm` 1648 checks at
+`cb510b62`); the gated x86 build passed at `9913d7b0` and `cb510b62`.
+Reviewed and revised.
+
+### Legs (q35, `usb4-emu` `main` `230bed5`, built on development host A)
+
+Machine: `launch-q35.ps1` `-Os w7x86` with the tb3ar switch topology
+(gated root port 00:08.0, `usb4-tb3-usp`, NHI on DSP 0, tunnel port on
+DSP 1) and `usb4-host profile=tb3-apple-alpine-ridge,apple-subsys-id=4660`
+(NHI `8086:1577`, subsystem `1234:106B`), a Thunderbolt 3 enclosure with
+the FAT NVMe disk on port 1 at power-on; kit `E:\xhci98-vm\p45\w45-mac`
+(`leg.ps1`), a fresh overlay of the clean q35 base each time. Package: a
+3.3.0.0 release cut of the branch as of `1a2a72ca` (the one 45.16's legs
+used; `RINT.BAT`: `/thunderbolt /stor98`, exit 3, restart owed), then the
+gated release `xhcicm.sys` copied over the installed one and Windows
+restarted.
+
+| Leg | `xhcicm.sys` (SHA-256) | Result |
+|---|---|---|
+| 7 x86 a | `aab0a80f...` (`9913d7b0`) | NHI "xHCI98 TB3 Controller (Intel Alpine Ridge)", Code 0, "USB4 software connection manager"; the enclosure enumerated, two lanes bonded; **PCIe failed** - the L0 wait above |
+| 7 x86 b | `e519d25f...` (`cb510b62`) | PASS: PCIe up, "Stor98 Storage Controller for NVMe SSDs" started, D: ORICO mounted; hot unplug and re-plug: surprise down, up again, D: back |
+| 10 x64 c | `644646f4...` (`cb510b62`, amd64; signed in the guest with a throwaway certificate) | PASS: NHI "xHCI98 TB3 Controller (Intel Alpine Ridge)", `xhcicm`, "USB4 software connection manager"; the enclosure two lanes bonded, PCIe up, the NVMe on Windows' `stornvme`, E: ORICO mounted |
+
+The 10 x64 leg installed the 3.2.0.0 x64 release (project test
+signature, valid at that guest's date) and then put the gated amd64
+`xhcicm.sys` in its place: the loaded image could not be overwritten
+("used by another process"), so it was renamed first (`xf10\SWAP64.BAT`).
+3.2.0.0's own `xhcicm.sys` starts inert on an Apple subsystem, so the
+tunnel shows the gated build ran.
+
+Evidence: `w7\serial-a.log`, `serial-b.log` (`XHCIINST /devices`, the
+PCI devices and volumes), `w7\trace-b.log` (the emulator's tunnel
+transitions), `a1.png` to `a4.png`, `b1.png`; `w10\serial-c.log`
+(`R.BAT`, `XHCIIN64 /devices`), `c1.png` to `c8.png`.
+
+Not done here: the Falcon Ridge, Cactus Ridge and Light Ridge models'
+legs (their code paths are the host vectors'), 98 SE to Vista on a
+Thunderbolt host (none is Apple-supported; section 19.2), and the Mac
+itself (45-E.11). The release notes keep Apple machines not claimed.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the

@@ -828,6 +828,16 @@
 #define TBT_LC_SX_CTRL_L1C          0x00010000UL    /* 16 odd adapter configured */
 #define TBT_LC_SX_CTRL_L2C          0x00100000UL    /* 20 even adapter configured */
 #define TBT_LC_SX_CTRL_UPSTREAM     0x40000000UL    /* 30 */
+/* A port block's PORT_MODE (Linux TB_LC_PORT_MODE): bit 0 Downstream Port
+ * Reset (lc.c tb_lc_reset_port, generations 2 and 3). */
+#define TBT_LC_PORT_MODE            0x26UL
+#define TBT_LC_PORT_MODE_DPR        0x00000001UL
+/* Light Ridge's and Eagle Ridge's TMU access enable, bit 20 of router DW
+ * 26h and 2Ah, set around a walk of an adapter's capabilities (Linux
+ * cap.c tb_port_enable_tmu, TMU_ACCESS_EN). */
+#define TBT_LR_TMU_ACCESS_DW        0x26UL
+#define TBT_ER_TMU_ACCESS_DW        0x2AUL
+#define TBT_TMU_ACCESS_EN           0x00100000UL
 /* Linux switch.c tb_init_port: a Thunderbolt 3 lane adapter's control path
  * credits when its HopID 0 entry does not report them. */
 #define TBT_TBT3_CTL_CREDITS        2UL

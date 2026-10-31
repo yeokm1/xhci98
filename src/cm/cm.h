@@ -231,6 +231,7 @@ typedef struct _CM_NHI {
     ULONG Device;
     ULONG ClassCode;
     ULONG SubVendor;
+    ULONG Subsystem;        /* PCI dword 2Ch whole: TbtHwSelect's subsystem */
     const TBT_HW_PROFILE *Hw;
     TBT_HW_SELECTION Sel;
 

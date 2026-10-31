@@ -56,7 +56,10 @@ static void test_families(void)
     CHECK(CmPortsFamily(CM_PORTS_ID(0x1234, 0x15BF)) == NULL, "the vendor counts");
 
     n = CmPortsFamilyCount();
-    CHECK_EQ(n, 17, "seventeen families: ten of record 21, seven of record 22");
+    CHECK_EQ(n, 19, "nineteen families: ten of record 21, nine of record 22 (section 19: Light and Cactus Ridge)");
+    f = CmPortsFamily(ID(0x1513));
+    CHECK(f != NULL && f->SwitchPortIdCount == 1 && f->SwitchPortIds[0] == ID(0x1513),
+          "Light Ridge: its switch ports carry the NHI's id (record 22 section 19.4 item 4)");
     f = CmPortsFamily(CM_PORTS_ID(0x1022, 0x1669));
     CHECK(f != NULL && f->RootPortIdCount == 3 && f->NhiIdCount == 2,
           "AMD's two routers share their root ports (ambiguous: the override assigns them)");
@@ -220,7 +223,7 @@ static void test_infs(void)
     CHECK(!CmPortsFilterId(CM_PORTS_ID(0x1B21, 0x2421)),
           "and not the emulator's chained upstream port, which the INF does not name");
     CHECK(!CmPortsFilterId(CM_PORTS_ID(0x8086, 0x15BF)), "nor an NHI");
-    CHECK_EQ(seenCount, 38, "38 bridge ids: record 21's 30, record 22's 6, the emulator's 2");
+    CHECK_EQ(seenCount, 40, "40 bridge ids: record 21's 30, record 22's 8, the emulator's 2");
 
     CHECK(readInf("..\\src\\cm\\xhcicm.inf") != 0, "xhcicm.inf read");
     seenCount = 0;

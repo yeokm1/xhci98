@@ -2624,6 +2624,27 @@ static void test_tb_question(void)
     CHECK(inst_tb_intel("nhi") && inst_tb_intel("NHI") &&
           !inst_tb_intel("xhcicm") && !inst_tb_intel("") &&
           !inst_tb_intel(NULL), "Intel's Thunderbolt driver by its service");
+    CHECK(inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513&SUBSYS_00001234&REV_01\\3&1&0") &&
+          inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1547&SUBSYS_22B017AA&REV_00") &&
+          inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513&SUBSYS_11112222&REV_01\\3&1&0") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1547&SUBSYS_11112222&REV_00") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1577&SUBSYS_0000106B&REV_02") &&
+          !inst_cm_tb1_foreign(NULL),
+          "a PC's Light or Cactus Ridge: its driver never installed over (record 22 section 19.3)");
+    {
+        char cid[64];
+
+        CHECK(inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1513&SUBSYS_11112222&REV_01", 1, cid,
+                                  sizeof(cid)) &&
+              strcmp(cid, "PCI\\VEN_8086&DEV_1513&CC_0880") == 0 &&
+              inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1547&SUBSYS_11112222&REV_00", 0, cid,
+                                  sizeof(cid)) &&
+              strcmp(cid, "PCI\\VEN_8086&DEV_1547&CC_0604") == 0 &&
+              !inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1577&SUBSYS_0000106B&REV_02", 1, cid,
+                                   sizeof(cid)),
+              "a Thunderbolt 1 NHI's and bridge's install calls name their class forms");
+    }
 
     /* The answers. */
     CHECK_EQ(inst_tb_answer("", 1), 1, "Enter: the default yes");
@@ -7632,6 +7653,14 @@ static void names_table(const INST_NAMEROW *t, int n, int nhi)
 /* The model lines of one NHI INF against the table: every line's string is
  * the table's name for its id (the class line the plain name), and every
  * row of the table is a line of each models section. */
+/* The Thunderbolt 1 rows (design record 22 section 19.9): bound by their
+ * class form in the NT 6.x sections alone, never in a section Windows 98
+ * SE, ME, 2000 or XP reads. */
+static int names_tb1(INST_U32 ven, INST_U32 dev)
+{
+    return ven == 0x8086UL && (dev == 0x1513UL || dev == 0x1547UL);
+}
+
 static void names_inf(const char *text, const char *section, const char *label)
 {
     const char *p = inst_inf_section(text, section);
@@ -7644,6 +7673,8 @@ static void names_inf(const char *text, const char *section, const char *label)
     char what[256];
     int seen[256];
     int lines = 0;
+    int nt6;
+    int tb1;
     int i;
 
     memset(seen, 0, sizeof(seen));
@@ -7674,12 +7705,22 @@ static void names_inf(const char *text, const char *section, const char *label)
             }
         }
     }
-    CHECK_EQ(lines, instNhiNameCount + 1, "one line per row, and the class line");
+    nt6 = strstr(section, ".6.0") != NULL;
+    tb1 = 0;
+    for (i = 0; i < instNhiNameCount; i++) {
+        tb1 += names_tb1(instNhiNames[i].Ven, instNhiNames[i].Dev);
+    }
+    CHECK_EQ(lines, instNhiNameCount + 1 - (nt6 ? 0 : tb1),
+             "one line per row, and the class line");
     for (i = 0; i < instNhiNameCount; i++) {
         sprintf(what, "%s binds %04lX:%04lX", label,
                 (unsigned long)instNhiNames[i].Ven,
                 (unsigned long)instNhiNames[i].Dev);
-        CHECK(seen[i], what);
+        if (names_tb1(instNhiNames[i].Ven, instNhiNames[i].Dev) && !nt6) {
+            CHECK(!seen[i], "a Thunderbolt 1 row: no line before NT 6.x");
+        } else {
+            CHECK(seen[i], what);
+        }
     }
 }
 

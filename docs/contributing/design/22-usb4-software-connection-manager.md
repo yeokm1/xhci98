@@ -393,8 +393,9 @@ class match as a generic host, as Linux takes it. Router-side ids
 the quirk table of section 6.10, never to the NHI INF. **Apple** machines
 are excluded by platform, not by id ([linux] `icm.c` `icm_fr_is_supported`
 uses `x86_apple_machine`): at start, the PCI subsystem vendor `106B` of the
-NHI makes the start inert with a log line, since none of this project's
-targets runs on a Mac and the firmware there differs.
+NHI makes the start inert with a log line, since the firmware there
+differs - except on the Falcon, Alpine and Titan Ridge rows, which section
+19 (task 45.21) gives its Thunderbolt-host profile.
 
 ### 3.2 Test (b): platform readiness, after `IRP_MN_START_DEVICE`
 
@@ -4780,11 +4781,13 @@ invalid for PCIe, and 7 is no USB4 requirement.
 Added 2026-10-29 for `roadmap-usb4.md` task 45.21 (the owner, the
 decisions table's "Phase 45 additions"): this driver as the connection
 manager of the Thunderbolt hosts Apple's Intel Macs carry, which run no
-connection manager in firmware. **A reading and a design only; nothing
-in `src\` changes with it**, and section 3.1's rule that a host with PCI
-subsystem vendor `106B` starts inert stays until this section's code is
-written and read on hardware (45-E.11). The release notes' "Not claimed:
-Apple machines" stays as it is until then.
+connection manager in firmware. Written first as a reading and a design;
+coded on 2026-10-30 (section 19.9), after the `usb4-emu` model the owner
+asked for first (Q4). Section 3.1's rule that a host with PCI subsystem
+vendor `106B` starts inert now holds for every row but this section's;
+the owner decided on 2026-10-30 that the code is active on a Mac from
+this release, before the hardware reading (45-E.11; section 19.9, Q5). The release notes' "Not
+claimed: Apple machines" stays as it is until that reading.
 
 Tags, beside this record's own: **[linux]** Linux `drivers/thunderbolt`
 at the pinned `c6859eed` (`external/README.md`), GPL-2.0-only, read for
@@ -5032,12 +5035,12 @@ tunnel survives (owner question Q3).
   router's configuration without the USB4 registers, the Light Ridge
   quirks, the PCIe down adapter map, generation 1 and 2 device routers
   behind each host.
-- **The emulator**: `usb4-emu` has no Thunderbolt 1 or 2 router model and
-  no Apple host profile; its `tb3-alpine-ridge` and `tb3-titan-ridge`
-  hosts are firmware connection managers. A Thunderbolt-host profile there
-  (Alpine Ridge with `ICM_EN` clear and subsystem `106B`, then Falcon
-  Ridge, then Light Ridge) is that repository's own work, the owner's to
-  open, and each q35 leg (7 x86 and 10 x64) waits for it.
+- **The emulator**: `usb4-emu`'s Thunderbolt-host profiles (its
+  `docs/TB-SWCM-HOSTS.md`, added 2026-10-30 for this task):
+  `tb3-apple-alpine-ridge`, `tb3-apple-titan-ridge`,
+  `tb2-apple-falcon-ridge`, `tb1-apple-cactus-ridge` and
+  `tb1-apple-light-ridge`, with `usb4-device tb3-router-id` for generation 1
+  and 2 device routers; the q35 legs (7 x86 and 10 x64) run on them.
 - **The bench**, 45-E.11: on each Mac at hand, which of 98 SE to 10
   starts, the NHI's ids and its host interface's version field, whether
   the host is on the PCI bus when nothing is attached at power-on, a
@@ -5077,6 +5080,94 @@ profile in `usb4-emu` before any code. The options as they were put:
 - **Q4, the emulator model.** A Thunderbolt-host profile in `usb4-emu`
   (section 19.6) before any code here. Recommended: yes, Alpine Ridge
   first.
+
+### 19.9 The code (2026-10-30)
+
+What the code does, section by section, and where it settles what the
+design left to it (reviewed and revised):
+
+- **Selection** (section 19.3): `TbtHwSelect` takes the NHI's subsystem
+  dword whole. Falcon, Alpine and Titan Ridge rows carry `TBT_HW_MAC_HOST`:
+  with subsystem vendor `106B` and a valid firmware status, `ICM_EN` clear
+  is the software route `TBT_SW_ROUTE_TBT_HOST` with the host router id the
+  NHI pairs with (`TbtHwTbtHostRouter`, section 19.1's table), `ICM_EN` set
+  is record 21's admission as on any machine. Light Ridge and Cactus Ridge
+  4C are rows of `tbt_hw.c`'s table (`TBT_HW_MAC_ONLY`) admitted only with
+  subsystem `2222:1111`, inert (`TBT_INERT_NOT_MAC`) on any other, and no
+  firmware status read. `XhciCmMode` 3 is refused on every row of the
+  profile. Test (d)'s interface version is logged, not checked.
+- **Their INF lines**: the class form section 19.3 names
+  (`PCI\VEN_8086&DEV_1513&CC_0880` and `DEV_1547`), in the NT 6.x models
+  sections alone (`xhcicm.inf`'s `.NTx86.6.0`, `xhcicm-amd64.inf`'s
+  `.NTamd64.6.0`): the undecorated section is Windows 98 SE's, ME's,
+  2000's and XP's, whose ids for them are unread, and none of those runs
+  on these Macs (section 19.2). Their bridges are the filter INFs'
+  (`&CC_0604`, every section) and `cm_ports.c`'s `light-ridge` and
+  `cactus-ridge` families, the discrete-switch source taking type 1
+  siblings only, so the NHI that shares the id is never a member. The CM
+  INF gate's CM-TB1 rule holds this; the names are `xHCI98 TB1
+  Controller (Intel Light Ridge)` and `(Intel Cactus Ridge)`, in the
+  installer's table too. Falcon, Alpine and Titan Ridge are bound by their
+  existing lines.
+- **Test (d), the router half** (`tbtU4HostRouter`): a Thunderbolt router
+  (USB4 Version major 0) whose id is the selection's, else inert
+  (`TBT_INERT_ROUTER_VERSION`, `TBT_INERT_HOST_ID`); a Thunderbolt host
+  router without the profile stays refused as before.
+- **Item 0**: the ports are the odd lane adapters with the lane capability,
+  each with the next one; the host's "port configured" mark is its link
+  controller's lane bit (no UPSTREAM) from generation 2, none below.
+- **Item 1**: configured by `tbtU4Enumerate`'s one write of ROUTER_CS_1 to
+  4 (Valid, Notification Timeout 255, no CMUV, no Router Ready); no router
+  operation and no Buffer Allocation on the host; its Plug Events made
+  active by section 8's own setup, the USB event kept on Alpine Ridge and,
+  as Linux keeps it, on Light Ridge, Eagle Ridge and Port Ridge.
+- **Item 2**: around each adapter's capability walk on Light Ridge (router
+  DW 26h) and Eagle Ridge (2Ah), TMU access set and cleared, then one read
+  of the adapter's DW 0.
+- **Item 3a**: one helper, `tbtU4TbtUuid`, reads the identity from its
+  recorded source (`UidFromDrom` when a generation 1 router has no link
+  controller); the start, the adoption, the resume's verification and a
+  resume's held classification and the ordinary replacement check all use
+  it. A resume that cannot confirm a Thunderbolt router's identity leaves
+  the port held. The DROM UID is read under a resume budget too: the
+  EEPROM's release writes are refused only by a contained or cancelled
+  instance, never by a spent budget.
+- **Item 4**: the PCIe Down map by the host router's id, the port's
+  physical index from its lane 0 adapter; an adapter the map names that
+  is not a PCIe Down adapter falls back to the pairing in increasing
+  adapter number. **Light Ridge**, which Linux maps to its first free PCIe
+  Down adapter, takes that pairing too (6 for the first port, 7 for the
+  second): always free for its own port, and each port's devices stay
+  behind one bridge, the consistency `tb_find_pcie_down`'s own comment
+  asks for. `usb4-emu`'s Light Ridge accepts either.
+- **Item 5**: no USB3 tunnel (`tbtU4LinkUsb4` is false on every link of a
+  Thunderbolt host); the host's protocol ingress entry gets 7 credits and
+  IFC, as a Thunderbolt router's ([linux] `tunnel.c` `tb_pci_init_credits`
+  without credit allocation), the lanes section 8's 32 or 16.
+- **Lanes that do not bond** (Linux bonds only through the link
+  controller's attributes, generation 3 in practice): the link stays two
+  single lanes. Section 6.5 step 6.4's Lane Disable is a USB4 lane
+  adapter's and is not written on a Thunderbolt host; the discovery, the
+  resume and the recovery accept that state as they accept a single lane
+  on a USB4 link (one predicate).
+- **Item 6**: the host router's TMU is left as it is.
+- **Item 7**: the cleaning's step 3 is the link controller's PORT_MODE
+  Downstream Port Reset on generations 2 and 3 and nothing on 1; the
+  whole-router reset (and generation 1's reset packet) is never sent. The
+  reset is owned before its write and released and read back clear before
+  the port connects again; the host's port-configured mark likewise counts
+  neither as made nor as undone while its link controller cannot be read.
+- **Vectors** (section 19.6): `test_tbt_select` (`test_mac`: every pair,
+  each refusal), `test_tbt_hw`, and `test_u4cm`'s `test_tbt_host` against
+  the fake fabric's `fabHostTbt` (Alpine, Titan, Falcon, Cactus and Light
+  Ridge; a Port Ridge device router with its DROM UID; the cleaning).
+
+Q5, put to the owner with this code (answered 2026-10-30: (a)): (a) the profile active on a Mac from
+this release, the release notes still not claiming Apple machines; (b)
+active only with a registry value set (an INF default 0) until 45-E.11 has
+read a Mac. Recommended: (a) - inert, a Mac's Thunderbolt does nothing at
+all, the profile is reached only on the ids and subsystems above, and (b)
+adds a value every INF path must write.
 
 ## Sources
 

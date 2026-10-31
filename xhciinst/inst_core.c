@@ -3284,6 +3284,7 @@ int inst_remove_rank_nt(const char *instanceId, const char *service)
 
 /* src\cm\xhcicmf.inf's model ids, in its order; test_inst compares them. */
 const char *const instTbPortIds[] = {
+    "PCI\\VEN_8086&DEV_1513&CC_0604", "PCI\\VEN_8086&DEV_1547&CC_0604",
     "PCI\\VEN_8086&DEV_15C0&CC_0604", "PCI\\VEN_8086&DEV_156B&CC_0604",
     "PCI\\VEN_8086&DEV_156D&CC_0604", "PCI\\VEN_8086&DEV_1576&CC_0604",
     "PCI\\VEN_8086&DEV_1578&CC_0604", "PCI\\VEN_8086&DEV_15D3&CC_0604",
@@ -4306,6 +4307,34 @@ size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
 int inst_tb_intel(const char *service)
 {
     return service != NULL && inst_eq(service, "nhi");
+}
+
+int inst_cm_tb1_foreign(const char *instanceId)
+{
+    INST_U32 vd;
+    const char *s;
+
+    if (instanceId == NULL || !inst_pci_vendev(instanceId, &vd) ||
+        (vd != ((0x1513UL << 16) | 0x8086UL) && vd != ((0x1547UL << 16) | 0x8086UL))) {
+        return 0;
+    }
+    s = instanceId + 21;
+    return !inst_eqn(s, "&SUBSYS_11112222", 16);
+}
+
+int inst_cm_tb1_classid(const char *instanceId, int nhi, char *out, size_t cap)
+{
+    INST_U32 vd;
+
+    if (instanceId == NULL || out == NULL || cap < 30 ||
+        !inst_pci_vendev(instanceId, &vd) ||
+        (vd != ((0x1513UL << 16) | 0x8086UL) && vd != ((0x1547UL << 16) | 0x8086UL))) {
+        return 0;
+    }
+    memcpy(out, instanceId, 21);
+    out[21] = '\0';
+    strcat(out, nhi ? "&CC_0880" : "&CC_0604");
+    return 1;
 }
 
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
@@ -8596,6 +8625,8 @@ const INST_NAMEROW instNhiNames[] = {
     { 0x1B21UL, 0x2425UL, INST_NB_USB4, "ASMedia ASM4242" },
     { 0x8086UL, 0x1134UL, INST_NB_USB4, "Intel Maple Ridge" },
     { 0x8086UL, 0x1137UL, INST_NB_USB4, "Intel Maple Ridge" },
+    { 0x8086UL, 0x1513UL, INST_NB_TB1, "Intel Light Ridge" },
+    { 0x8086UL, 0x1547UL, INST_NB_TB1, "Intel Cactus Ridge" },
     { 0x8086UL, 0x156AUL, INST_NB_TB2, "Intel Falcon Ridge" },
     { 0x8086UL, 0x156CUL, INST_NB_TB2, "Intel Falcon Ridge" },
     { 0x8086UL, 0x1575UL, INST_NB_TB3, "Intel Alpine Ridge" },
@@ -8634,6 +8665,8 @@ const int instNhiNameCount =
 const char *inst_name_base(int base)
 {
     switch (base) {
+    case INST_NB_TB1:
+        return INST_NAME_TB1;
     case INST_NB_TB2:
         return INST_NAME_TB2;
     case INST_NB_TB3:

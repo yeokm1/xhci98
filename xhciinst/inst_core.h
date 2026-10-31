@@ -1352,6 +1352,19 @@ int inst_tb_box_default(int haveCm, int nhiPresent, int optThunderbolt,
 /* 1 when a controller's service is Intel's Thunderbolt driver's, nhi (its
  * older package and its DCH driver alike; record 21 section 3.6). */
 int inst_tb_intel(const char *service);
+/* 1 when a device instance id names a Light Ridge or Cactus Ridge 4C NHI
+ * (8086:1513, 8086:1547) that is not an Apple machine's - subsystem other
+ * than 2222:1111, or none in the id: xhcicm starts inert there (design
+ * record 22 section 19.3), so a driver already running it is never
+ * installed over. */
+int inst_cm_tb1_foreign(const char *instanceId);
+/* The id an install call names for a Light Ridge or Cactus Ridge 4C
+ * device (`instanceId` 8086:1513 or 1547): its class form, the NHI's
+ * PCI\VEN_8086&DEV_xxxx&CC_0880 (`nhi` 1) or a bridge's &CC_0604 (0), the
+ * forms the INFs bind (design record 22 section 19.9) - the NHI and its
+ * bridges share their hardware ids, which no call may name. 1 with `out`
+ * set; 0 for any other device, `out` untouched. */
+int inst_cm_tb1_classid(const char *instanceId, int nhi, char *out, size_t cap);
 
 /* The answer to the question: 1 yes, 0 no (Enter: the default), -1 not an
  * answer (asked again). */
@@ -2836,6 +2849,7 @@ const char *inst_stor_remove_text(int why);
  * in all three (task 43.73's reading); the table holds every name below. */
 #define INST_NAME_MAX       46
 #define INST_NAME_USB3      "xHCI98 USB 3 Controller"
+#define INST_NAME_TB1       "xHCI98 TB1 Controller"
 #define INST_NAME_TB2       "xHCI98 TB2 Controller"
 #define INST_NAME_TB3       "xHCI98 TB3 Controller"
 #define INST_NAME_USB4      "xHCI98 USB4 Router"
@@ -2846,6 +2860,7 @@ const char *inst_stor_remove_text(int why);
 #define INST_NB_TB2         1
 #define INST_NB_TB3         2
 #define INST_NB_USB4        3
+#define INST_NB_TB1         4
 typedef struct _INST_NAMEROW {
     INST_U32 Ven;
     INST_U32 Dev;

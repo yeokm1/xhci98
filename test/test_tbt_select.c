@@ -31,13 +31,25 @@
 #define FW_ICM_EN   0x00000001UL
 #define FW_AUTH     0x80000000UL
 
-static void sel(ULONG ven, ULONG dev, ULONG cls, BOOLEAN ready, BOOLEAN apple,
-                BOOLEAN force, TBT_HW_SELECTION *s)
+/* PCI dword 2Ch: a PC's (Lenovo's), Apple's, and the Light Ridge and
+ * Cactus Ridge subsystem Linux matches (pci.c nhi_ids[]). */
+#define SUB_PC      0x22B017AAUL
+#define SUB_APPLE   0x0000106BUL
+#define SUB_TBT1    0x11112222UL
+
+static void selSub(ULONG ven, ULONG dev, ULONG cls, BOOLEAN ready, ULONG sub,
+                   BOOLEAN force, TBT_HW_SELECTION *s)
 {
     const TBT_HW_PROFILE *hw;
 
     hw = TbtHwMatch(ven, dev, cls, FALSE);
-    TbtHwSelect(hw, &g_fakeHost, ready, apple, force, s);
+    TbtHwSelect(hw, &g_fakeHost, ready, sub, force, s);
+}
+
+static void sel(ULONG ven, ULONG dev, ULONG cls, BOOLEAN ready, BOOLEAN apple,
+                BOOLEAN force, TBT_HW_SELECTION *s)
+{
+    selSub(ven, dev, cls, ready, apple ? SUB_APPLE : SUB_PC, force, s);
 }
 
 /* Record 22 section 3.1: each row of the table. */
@@ -54,7 +66,9 @@ static void test_rows(void)
     static const ULONG usb4Only[] = {
         0xA833, 0xA834, 0xE333, 0xE334, 0xE433, 0xE434, 0x4D33, 0x5781, 0x5784
     };
-    static const ULONG unclaimed[] = { 0x15DC, 0x15DD, 0x15DE, 0x1513, 0x1547, 0x157D };
+    /* Light Ridge and Cactus Ridge 4C are candidates since record 22
+     * section 19 (test_mac), inert on a PC. */
+    static const ULONG unclaimed[] = { 0x15DC, 0x15DD, 0x15DE, 0x157D };
     TBT_HW_SELECTION s;
     ULONG i;
 
@@ -270,10 +284,12 @@ static void test_negatives(void)
     sel(0x1022, 0x1668, 0x0C0340, TRUE, FALSE, TRUE, &s);
     CHECK_EQ(s.Reason, TBT_INERT_NHI_VERSION, "mode 3, version 10h: inert");
 
-    /* An Apple subsystem, on every kind of row. */
+    /* An Apple subsystem, on every kind of row: Falcon, Alpine and Titan
+     * Ridge by the firmware status (record 22 section 19.3), the rest
+     * inert. */
     fakeReset();
     sel(0x8086, 0x15BF, 0x088000, TRUE, TRUE, FALSE, &s);
-    CHECK_EQ(s.Reason, TBT_INERT_APPLE, "Apple, Alpine Ridge: inert");
+    CHECK_EQ(s.Outcome, TBT_SEL_ICM, "Apple, Alpine Ridge, ICM running: the ICM's");
     fakeReset();
     g_fake.FwStatus = 0;
     sel(0x8086, 0x463E, 0x0C0340, TRUE, TRUE, FALSE, &s);
@@ -284,10 +300,96 @@ static void test_negatives(void)
     CHECK_EQ(g_fake.Writes, 0, "nothing written");
 }
 
+/*
+ * Record 22 section 19.3: the Thunderbolt-host profile's row. Falcon,
+ * Alpine and Titan Ridge on an Apple machine: a valid firmware status with
+ * the ICM enable clear admits it with the NHI's host router id, set keeps
+ * the ICM, all ones is inert, XhciCmMode 3 is refused; Light Ridge and
+ * Cactus Ridge 4C need 2222:1111, read no firmware status and are inert
+ * on any other subsystem. Nothing is written.
+ */
+static void test_mac(void)
+{
+    static const ULONG pairs[][2] = {
+        { 0x156A, 0x156B }, { 0x156C, 0x156D }, { 0x1575, 0x1576 },
+        { 0x1577, 0x1578 }, { 0x15BF, 0x15C0 }, { 0x15D2, 0x15D3 },
+        { 0x15D9, 0x15DA }, { 0x15E8, 0x15E7 }, { 0x15EB, 0x15EA }
+    };
+    TBT_HW_SELECTION s;
+    ULONG i;
+
+    for (i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {
+        fakeReset();
+        g_fake.FwStatus = 0;
+        selSub(0x8086, pairs[i][0], 0x088000, TRUE, SUB_APPLE | 0x01230000UL, FALSE, &s);
+        CHECK_EQ(s.Outcome, TBT_SEL_SOFTWARE, "Apple, ICM enable clear: software");
+        CHECK_EQ(s.Route, TBT_SW_ROUTE_TBT_HOST, "the Thunderbolt-host route");
+        CHECK_EQ(s.TbtHostRouter, pairs[i][1], "the NHI's host router");
+        CHECK_EQ(TbtHwTbtHostRouter(pairs[i][0]), pairs[i][1], "the pair table");
+        fakeReset();
+        g_fake.FwStatus = 0;
+        selSub(0x8086, pairs[i][0], 0x088000, TRUE, SUB_PC, FALSE, &s);
+        CHECK(s.Route != TBT_SW_ROUTE_TBT_HOST, "a PC's: never the Mac profile");
+        fakeReset();
+        g_fake.FwStatus = 0xFFFFFFFFUL;
+        selSub(0x8086, pairs[i][0], 0x088000, TRUE, SUB_APPLE, FALSE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_NOT_DECODING, "Apple, status all ones: inert");
+        fakeReset();
+        g_fake.FwStatus = 0;
+        selSub(0x8086, pairs[i][0], 0x088000, TRUE, SUB_APPLE, TRUE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_FORCED_UNSUPPORTED, "Apple, mode 3: refused");
+    }
+    fakeReset();
+    g_fake.FwStatus = FW_AUTH | FW_ICM_EN;
+    selSub(0x8086, 0x15EB, 0x088000, TRUE, SUB_APPLE, FALSE, &s);
+    CHECK(s.Outcome != TBT_SEL_SOFTWARE, "Apple, Titan Ridge, ICM running: not software");
+
+    for (i = 0; i < 2; i++) {
+        ULONG dev = i == 0 ? 0x1513 : 0x1547;
+
+        fakeReset();
+        selSub(0x8086, dev, 0x088000, TRUE, SUB_TBT1, FALSE, &s);
+        CHECK_EQ(s.Outcome, TBT_SEL_SOFTWARE, "Light or Cactus Ridge on a Mac");
+        CHECK_EQ(s.Route, TBT_SW_ROUTE_TBT_HOST, "the Thunderbolt-host route");
+        CHECK_EQ(s.TbtHostRouter, dev, "the NHI's id is the router's");
+        CHECK_EQ(g_fake.FwStatusReads, 0, "no ICM there: no firmware status read");
+        fakeReset();
+        selSub(0x8086, dev, 0x088000, TRUE, SUB_PC, FALSE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_NOT_MAC, "on a PC: inert");
+        fakeReset();
+        selSub(0x8086, dev, 0x088000, TRUE, SUB_APPLE, FALSE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_NOT_MAC, "Apple's 106B is not their subsystem");
+        fakeReset();
+        selSub(0x8086, dev, 0x088000, TRUE, SUB_TBT1, TRUE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_FORCED_UNSUPPORTED, "mode 3: refused");
+        fakeReset();
+        g_fake.Caps = 0xFFFFFFFFUL;
+        selSub(0x8086, dev, 0x088000, TRUE, SUB_TBT1, FALSE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_NOT_DECODING, "BAR0 dead: inert");
+        fakeReset();
+        selSub(0x8086, dev, 0x088000, FALSE, SUB_TBT1, FALSE, &s);
+        CHECK_EQ(s.Reason, TBT_INERT_PLATFORM, "platform not ready: inert");
+    }
+    CHECK_EQ(g_fake.Writes, 0, "nothing written");
+
+    /* Linux switch.c tb_switch_get_generation */
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x1513), 1, "Light Ridge: 1");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x1547), 1, "Cactus Ridge: 1");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x1549), 1, "Port Ridge: 1");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x156D), 2, "Falcon Ridge: 2");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x157E), 2, "Win Ridge: 2");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x1578), 3, "Alpine Ridge: 3");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x15EA), 3, "Titan Ridge: 3");
+    CHECK_EQ(TbtHwTbtGeneration(0x8086, 0x1234), 1, "unknown: 1");
+    CHECK_EQ(TbtHwTbtGeneration(0x1B36, 0x1578), 0, "not Intel: 0");
+    CHECK_EQ(TbtHwTbtHostRouter(0x15DC), 0, "a USB-only NHI: no pair");
+}
+
 int main(void)
 {
     test_rows();
     test_combinations();
+    test_mac();
     test_negatives();
     printf("test_tbt_select: %d checks, %d failures\n", checks, failures);
     return failures;

@@ -1775,6 +1775,339 @@ static void test_tbt3(void)
 }
 
 /*
+ * Record 22 section 19: a Mac's Thunderbolt host (TBT_U4_CONFIG
+ * TbtHostRouter), against the fake fabric's fabHostTbt as usb4-emu's
+ * tb*-apple-* profiles present one. One host per generation with a device
+ * router on port 2 (Light and Cactus Ridge also on port 1): the host
+ * router configured by one write of ROUTER_CS_1 to 4 with Valid and no
+ * CMUV, no router operation, its Plug Events active (the USB event kept on
+ * Alpine Ridge and Light Ridge, disabled on Falcon Ridge), its port marked
+ * configured in its link controller from generation 2, the PCIe Down
+ * adapter by its controller's map, protocol ingress credits 7, no USB3,
+ * the link left as two single lanes where it does not bond; test (d)'s
+ * refusals; Light Ridge's TMU access around each capability walk and the
+ * identity from the DROM's UID where there is no link controller; and
+ * the cleaning's port reset through the link controller, none on
+ * generation 1.
+ */
+typedef struct _TBT_HOST_CASE {
+    unsigned long Device;
+    int Port;
+    unsigned long PcieDown;
+    int Gen;
+    int DevKind;
+} TBT_HOST_CASE;
+
+static void tbtHostRun(const TBT_HOST_CASE *tc)
+{
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+    int dev;
+    int d2;
+    LONG rc;
+    ULONG k;
+    ULONG gen;
+    ULONG writes;
+    unsigned long region;
+    unsigned long pe;
+    unsigned long hp;
+    char what[64];
+
+    sprintf(what, "TB host %04lX port %d", tc->Device, tc->Port);
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, tc->Device);
+    dev = fabDevice(&g_fab, tc->DevKind);
+    fabPlug(&g_fab, tc->Port, dev);
+    CHECK_EQ(g_fab.RxQCount, 0, "no hot plug event from an unconfigured host router");
+    cfgDefault(&c);
+    c.TbtHostRouter = tc->Device;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(rc, TBT_OK, what);
+    p = TbtU4Port(&g_cm, tc->Port);
+    CHECK(p != NULL, "the port found from the lane pairs");
+    if (p == NULL) {
+        return;
+    }
+    CHECK_EQ(g_cm.PortCount, 2, "two ports from lanes 1-4, no USB4 Port Capability");
+    CHECK(g_cm.HostRouter.Tbt3 && (ULONG)g_cm.HostRouter.TbtGen == (ULONG)tc->Gen,
+          "the host router run as a Thunderbolt router of its generation");
+    CHECK(fabRtr(&g_fab, 0, 3) & 0x80000000UL, "the host router configured");
+    CHECK_EQ(fabRtr(&g_fab, 0, 4) & 0xFF00UL, 0, "no CMUV on the host router");
+    CHECK_EQ(fabRtr(&g_fab, 0, 4) & 0xFFUL, 0xFFUL, "Notification Timeout 255");
+    CHECK_EQ(fabRtr(&g_fab, 0, 26), 0, "no router operation on the host");
+    pe = fabRtr(&g_fab, 0, FAB_RCAP_PLUG + 1) & 0x7CUL;
+    CHECK_EQ(pe, (tc->Device == 0x1578 || tc->Device == 0x1513) ? 0 : 0x04UL,
+             "host plug events active, the USB event by controller");
+    CHECK_EQ(p->PcieDown, tc->PcieDown, "the controller's PCIe Down adapter");
+    CHECK_EQ(p->Usb3Down, 0, "no USB3 Down adapter");
+    CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, what);
+    CHECK(p->Pcie.Up && !p->Usb3.Up, "PCIe, no USB3");
+    CHECK(fabPcieUp(&g_fab, tc->Port), "the fabric's tunnel up");
+    CHECK_EQ((fabPath0(&g_fab, 0, (int)tc->PcieDown, 8) >> 17) & 0x7F, 7,
+             "host protocol ingress: 7 credits");
+    CHECK(fabPath1(&g_fab, 0, (int)tc->PcieDown, 8) & 0x01000000UL, "with IFC");
+    region = FAB_RCAP_LC + FAB_LC_START + (unsigned long)(tc->Port - 1) * FAB_LC_PORT_SIZE;
+    if (tc->Gen >= 2) {
+        CHECK_EQ(fabRtr(&g_fab, 0, region + 0x96) & 0x40010000UL, 0x00010000UL,
+                 "host LC: L1C, not UPSTREAM");
+    } else {
+        CHECK_EQ(fabRtr(&g_fab, 0, FAB_RCAP_PLUG) & 0xFFUL, 0, "generation 1: no LC");
+        CHECK(g_cm.HostRouter.UidFromDrom && g_cm.HostRouter.UuidValid &&
+              g_cm.HostRouter.Uuid[0] == 0x00C0FFEEUL &&
+              g_cm.HostRouter.Uuid[1] == 0x8086D00DUL &&
+              g_cm.HostRouter.Uuid[2] == 0xFFFFFFFFUL,
+              "generation 1: the host's identity is its DROM's UID");
+    }
+    if (tc->Gen < 3 || tc->DevKind == FAB_DEV_TBT1_PR) {
+        CHECK(!p->Bonded && p->SingleLane, "not bonded: two single lanes");
+        CHECK(fabFindWrite(&g_fab, 0, 0, 1, (unsigned long)(2 * tc->Port),
+                           FAB_CAP_LANE + 1) < 0 ||
+              (fabAdp(&g_fab, 0, 2 * tc->Port, FAB_CAP_LANE + 1) & 0x4000UL) == 0,
+              "no Lane Disable on a Thunderbolt host");
+    }
+    if (tc->DevKind == FAB_DEV_TBT1_PR) {
+        CHECK(p->Dev.UidFromDrom && p->Dev.UuidValid &&
+              p->Dev.Uuid[0] == 0x51DE0000UL + (unsigned long)dev,
+              "a generation 1 device router: identity from its DROM UID");
+    }
+    if (tc->Device == 0x1513) {
+        CHECK(g_fab.TmuAccessOn >= 4, "Light Ridge: TMU access around each walk");
+        CHECK_EQ(fabRtr(&g_fab, 0, 0x26) & 0x00100000UL, 0, "and cleared after it");
+    }
+    hp = g_fab.HpAcks;
+    (void)hp;
+
+    /* Teardown and the cleaning's port reset (XhciCmPreOsCleanup 2 on a
+     * domain with a tunnel built: the start's cleaning of a fresh one). */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, tc->Device);
+    dev = fabDevice(&g_fab, tc->DevKind);
+    fabPlug(&g_fab, tc->Port, dev);
+    cfgDefault(&c);
+    c.TbtHostRouter = tc->Device;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "up before the restart");
+    TbtU4Stop(&g_cm);
+    c.PreOsCleanup = 2;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(g_fab.LcResets, tc->Gen >= 2 ? 1UL : 0UL,
+             "the cleaning's port reset: through the LC from generation 2, none on 1");
+    CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "up again after the cleaning");
+
+    /* A restart with nothing to clean (XhciCmPreOsCleanup 0 and 1): the
+     * tunnel discovered and kept as found, two single lanes included. */
+    for (k = 0; k < 2; k++) {
+        TbtU4Stop(&g_cm);
+        c.PreOsCleanup = k;
+        writes = pathWrites(&g_fab);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        p = TbtU4Port(&g_cm, tc->Port);
+        CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "a restart: UP as found");
+        CHECK(p->Pcie.Up && p->Pcie.Preserved, "the tunnel preserved");
+        CHECK_EQ(pathWrites(&g_fab), writes, "nothing rewritten");
+    }
+
+    /* A generation 1 router swapped for another between two checks: only
+     * its DROM UID tells (record 22 section 19.4 item 3a). */
+    if (tc->DevKind == FAB_DEV_TBT1_PR) {
+        gen = p->Generation;
+        d2 = fabDevice(&g_fab, FAB_DEV_TBT1_PR);
+        fabSwapQuiet(&g_fab, tc->Port, d2);
+        poll(&g_cm, &g_fab, 2);
+        CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "another DROM UID: UP again");
+        CHECK(p->Generation > gen, "as another router");
+        CHECK(p->Dev.Uuid[0] == 0x51DE0000UL + (unsigned long)d2, "its identity");
+
+        /* A sleep with the configuration kept, then one that lost it: the
+         * resume confirms the DROM UID under its budget either way and
+         * keeps, or rebuilds, the tunnel; the EEPROM left released. */
+        TbtU4Suspend(&g_cm);
+        CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "generation 1 resume, kept: done");
+        CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "generation 1 resume, kept: UP");
+        CHECK(p->Pcie.Up, "its tunnel up");
+        TbtU4Suspend(&g_cm);
+        fabPowerCycle(&g_fab);
+        CHECK_EQ(TbtU4Resume(&g_cm), TBT_OK, "generation 1 resume, lost: done");
+        poll(&g_cm, &g_fab, 4);
+        CHECK_EQ(state(&g_cm, tc->Port), TBT_U4_UP, "generation 1 resume, lost: UP");
+        CHECK(p->Pcie.Up && fabPcieUp(&g_fab, tc->Port), "rebuilt");
+        CHECK_EQ(fabRtr(&g_fab, d2, FAB_RCAP_PLUG + 4) & 0x12UL, 0x02UL,
+                 "the EEPROM deselected and bit-banging off");
+    }
+}
+
+/* The cleaning's LC port reset with its answers lost: the reset is owned
+ * before the write, released and read back clear before the port
+ * connects again. */
+static int g_dprDrops;
+
+static int dprHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                   unsigned long adp, unsigned long addr, unsigned long n,
+                   const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)n;
+    if (g_dprDrops > 0 && router == 0 && pdf == TBT_PDF_WRITE && cs == TBT_CS_ROUTER &&
+        addr == FAB_RCAP_LC + FAB_LC_START + 0x26) {
+        g_dprDrops--;
+        /* the set applied, its answer lost; the first release refused */
+        return (data[0] & 1UL) != 0 ? FAB_HOOK_DROP_ANSWER : FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/* The host's link controller descriptor unreadable while the port is
+ * marked configured: no mark counts as made, the connection fails, and
+ * nothing is left owed that cannot be retried. */
+static int g_lcDescFail;
+
+static int lcDescHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                      unsigned long adp, unsigned long addr, unsigned long n,
+                      const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)n;
+    (void)data;
+    if (g_lcDescFail > 0 && router == 0 && pdf == TBT_PDF_READ && cs == TBT_CS_ROUTER &&
+        addr == FAB_RCAP_LC + 2) {
+        g_lcDescFail--;
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+static void test_tbt_host(void)
+{
+    static const TBT_HOST_CASE cases[] = {
+        { 0x1578, 2, 7, 3, FAB_DEV_TBT3_AR },
+        { 0x15EA, 2, 9, 3, FAB_DEV_TBT3_TR },
+        { 0x156D, 2, 8, 2, FAB_DEV_TBT3_AR },
+        { 0x1547, 1, 6, 1, FAB_DEV_TBT1_PR },
+        { 0x1547, 2, 7, 1, FAB_DEV_TBT3_AR },
+        { 0x1513, 1, 6, 1, FAB_DEV_TBT3_AR },
+        { 0x1513, 2, 7, 1, FAB_DEV_TBT1_PR }
+    };
+    TBT_U4_CONFIG c;
+    LONG rc;
+    ULONG i;
+    ULONG k;
+
+    for (i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        tbtHostRun(&cases[i]);
+    }
+
+    /* Test (d): another controller's router, a USB4 host router, and a
+     * Thunderbolt host where a USB4 one is expected. */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x156D);
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x1578;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_HOST_ID,
+          "not the NHI's host router: inert");
+    CHECK_EQ(fabRtr(&g_fab, 0, 3) & 0x80000000UL, 0, "and never configured");
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x1578;
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a USB4 host router under the Thunderbolt-host profile: inert");
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x1578);
+    cfgDefault(&c);
+    rc = start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(rc != TBT_OK && g_cm.InertReason == TBT_INERT_ROUTER_VERSION,
+          "a Thunderbolt host router without the profile: inert, as before");
+
+    /* The cleaning's LC port reset, its set's answer lost and its first
+     * release refused (Falcon Ridge). */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x156D);
+    fabPlug(&g_fab, 1, fabDevice(&g_fab, FAB_DEV_TBT3_AR));
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x156D;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "Falcon Ridge: UP before the restart");
+    TbtU4Stop(&g_cm);
+    c.PreOsCleanup = 2;
+    g_dprDrops = 2;
+    g_fab.Hook = dprHook;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 20);
+    CHECK_EQ(g_dprDrops, 0, "the set's answer lost, the first release refused");
+    CHECK_EQ(fabRtr(&g_fab, 0, FAB_RCAP_LC + FAB_LC_START + 0x26) & 1UL, 0,
+             "the port reset released in the end");
+    CHECK(!TbtU4Port(&g_cm, 1)->LcDprOwed, "nothing owed");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "and the port UP again");
+
+    /* The same with a router whose link stays down while the reset is
+     * held (back only after its release): the port empty, the idle tick
+     * still releases the reset, and the port connects. */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x156D);
+    k = (ULONG)fabDevice(&g_fab, FAB_DEV_TBT3_AR);
+    fabPlug(&g_fab, 1, (int)k);
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x156D;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    TbtU4Stop(&g_cm);
+    g_fab.R[k].LinkDelayUs = 100000UL;
+    c.PreOsCleanup = 2;
+    g_dprDrops = 2;
+    g_fab.Hook = dprHook;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 20);
+    CHECK_EQ(fabRtr(&g_fab, 0, FAB_RCAP_LC + FAB_LC_START + 0x26) & 1UL, 0,
+             "empty port: the reset released by the idle tick");
+    CHECK(!TbtU4Port(&g_cm, 1)->LcDprOwed, "empty port: nothing owed");
+    CHECK_EQ(g_dprDrops, 0, "empty port: the reset was set and its release refused once");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "and the port connected after it");
+
+    /* Alpine Ridge with its adapter 6 missing: port 1 maps to nothing
+     * (never to port 2's adapter 7), and port 2's tunnel survives a
+     * restart's discovery and cleaning. */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x1578);
+    g_fab.R[0].Adp[6].Present = 0;
+    fabPlug(&g_fab, 2, fabDevice(&g_fab, FAB_DEV_TBT3_AR));
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x1578;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(TbtU4Port(&g_cm, 1)->PcieDown, 0, "no adapter 6: port 1 has no PCIe Down");
+    CHECK_EQ(TbtU4Port(&g_cm, 2)->PcieDown, 7, "port 2 keeps 7");
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "port 2 UP");
+    for (k = 0; k < 2; k++) {
+        TbtU4Stop(&g_cm);
+        c.PreOsCleanup = k;
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+        CHECK(TbtU4Port(&g_cm, 2)->Pcie.Up && TbtU4Port(&g_cm, 2)->Pcie.Preserved,
+              "port 2's tunnel preserved through the restart");
+    }
+
+    /* An unreadable host LC descriptor at the configured mark. */
+    fabInit(&g_fab);
+    fabHostTbt(&g_fab, 0x1578);
+    fabPlug(&g_fab, 1, fabDevice(&g_fab, FAB_DEV_TBT3_AR));
+    cfgDefault(&c);
+    c.TbtHostRouter = 0x1578;
+    g_lcDescFail = 1;
+    g_fab.Hook = lcDescHook;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(g_lcDescFail, 0, "the host LC descriptor read failed once");
+    CHECK(g_cm.Counters.PortChecks >= 1, "and the port checked again");
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 20);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the LC readable again: UP");
+    CHECK_EQ(fabRtr(&g_fab, 0, FAB_RCAP_LC + FAB_LC_START + 0x96) & 0x00010000UL,
+             0x00010000UL, "and the host's port marked");
+}
+
+/*
  * A half-built path on a depth-1 router's downstream link (its PCIe Down 7
  * HopID 8 into lane 3, lane 3's HopID 9 back, Path Enable set; nothing on
  * the child): a depth-2 link with something on it, which record 34
@@ -6902,6 +7235,7 @@ int main(void)
     RUN_VEC(test_adl);
     RUN_VEC(test_tbt3);
     RUN_VEC(test_tbt3_adopted);
+    RUN_VEC(test_tbt_host);
     RUN_VEC(test_links);
     RUN_VEC(test_loss_and_eject);
     RUN_VEC(test_suspend_resume);

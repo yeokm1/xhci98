@@ -154,6 +154,8 @@ DriverVer=10/28/2026,3.3.0.0
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
 %U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425
+%Tb1LrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1513&CC_0880
+%Tb1CrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1547&CC_0880
 %U4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
@@ -272,6 +274,8 @@ CopyFiles=Cm.CopyFiles
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
+Tb1LrDesc="xHCI98 TB1 Controller (Intel Light Ridge)"
+Tb1CrDesc="xHCI98 TB1 Controller (Intel Cactus Ridge)"
 Tb2FrDesc="xHCI98 TB2 Controller (Intel Falcon Ridge)"
 Tb3ArDesc="xHCI98 TB3 Controller (Intel Alpine Ridge)"
 Tb3TrDesc="xHCI98 TB3 Controller (Intel Titan Ridge)"
