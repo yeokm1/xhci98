@@ -7083,3 +7083,7 @@ the version bump.
   if it reports a controller 'not reached in this run', restart Windows
   and run it again, or the Thunderbolt/USB4 router has no driver and no
   device behind it is found."
+- 45.18 (pending): "Coordinator note for the bump (owner, 2026-10-31):
+  leave 45.18 (the tunnel-down notice to Stor98) out of the user release
+  notes; it acts only on tunnel ports identified as QEMU's, so users see
+  no change. Its text above stays here for the record only."
