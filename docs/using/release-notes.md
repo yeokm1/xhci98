@@ -5117,7 +5117,7 @@ or says it was found by reading the code.
   sleep is lost, and cached writes with it.
 - **Windows 98 SE: a device that holds a shared IRQ with no working
   driver makes Windows crawl or freeze once this driver is installed**
-  (task 45.33; ME is expected to behave the same, not read). Windows 98
+  (task 45.33; ME is expected to behave the same). Windows 98
   keeps such a line masked while no driver uses it; once any driver
   connects to it, Windows unmasks it and the holder's interrupt storms,
   which xHCI98's interrupt routine rightly declines. Seen on a desktop
@@ -5252,7 +5252,7 @@ or says it was found by reading the code.
   state across the hibernation, as QEMU's does, is started afresh, and up
   to `3.3.0.0` the driver then found every device again as on a recovery;
   from `3.4.0.0` a device on a root port is kept where "XhciResumeKeep"
-  allows (not read on 2000). Each time, a
+  allows. Each time, a
   restart of the drive's own device cleared it (read with a command-line
   device restart, not in Device Manager).
 - **Windows 98 SE and ME: a device name with characters outside plain ASCII
@@ -5360,7 +5360,7 @@ information.
 | Area | State |
 |---|---|
 | Stor98 on 32-bit Windows 8.1, and Stor98 x64 on 8, 8.1 and 10 | 32-bit Windows 8.1 ran Stor98 through the installer from the owner's medium of 2026-10-23 (task 43.24, `runs/run-43-24.md`); 32-bit Windows 10 was run on 22H2 only. On 8 x64, 8.1 x64 and 10 x64 the `3.1.0.0` x64 package, which has no catalogs, was refused ("The third-party INF does not contain digital signature information"; read in test-signing mode; roadmap-usb4 task 43.23, `runs/run-43.md`). From `3.2.0.0` `stor98.inf` names `stor98.cat`, and on 8.1 x64 and 10 x64 in test-signing mode the package with it was taken into the driver store after the publisher prompt (task 43.36, the catalogs signed in the guest with a certificate of its own); no drive was bound to it there. In task 43.59 (`runs/run-43.md`), signed in the guest and trusted, Stor98 x64 ran tunnelled drives on 8.1 x64 and, without `DmaRemappingCompatible` (task 43.59s, as the INF ships), on 10 x64, a surprise unplug failing the transfer at once on both; the owner-signed package's leg is owed with the bench candidate, and 8 x64 with the catalogs ran it through the installer, with the owner-signed package (task 43.24) |
-| A device kept across a resume that starts the controller afresh (`XhciResumeKeep`, new in `3.4.0.0`) | Not run on a real computer, a VIA controller such as the user's VL805 included ("XhciResumeKeep"). Not run either: Windows 2000, 98 SE and ME, standby on any system, a drive with more than one unit, a swapped disk that the identification pages cannot tell apart (a bridge that describes itself there), and the timeouts of the sleep's drain and flush, of the wake's check and of a slow keep pass, whose decisions only host tests cover |
+| A device kept across a resume that starts the controller afresh (`XhciResumeKeep`, new in `3.4.0.0`) | Not run on a real computer, a VIA controller such as the user's VL805 included ("XhciResumeKeep"). Not run either: Windows 2000, 98 SE and ME, standby on any system, a drive with more than one unit, a swapped disk that the identification pages cannot tell apart (a bridge that describes itself there), and the timeouts of the sleep's drain and flush, of the wake's check and of a slow keep pass |
 | Docks and enclosures with a switch hot-plugged on Windows 2000 and XP (`XhciCmBridgeReq`, new in `3.4.0.0`) | Not run on a real computer or with a real dock. Not run either: 2000 with the ACPI HAL, a cold start with the dock attached on 2000, a single enclosure on 7, standby and hibernation, and the uninstall and the update over `3.3.0.0`. On XP x64 the rewrite does not act |
 | XHCIPFW.SYS as a root-bus filter on 32-bit 8 and 8.1 (new in `3.4.0.0`) | Not run on a real computer. Not run either: the manual recovery route of `tools\xhciinst\readme.txt`, and an update from one release's image to another's |
 | SuperSpeed isochronous transfers | Built from the specification against host tests. No SuperSpeed isochronous device has been held and QEMU models none |
