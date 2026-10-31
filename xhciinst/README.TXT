@@ -331,6 +331,8 @@ unticked; /s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw
 (98 SE, ME, 2000, XP and the 32-bit Vista to 8.1: XHCIPFW.VXD or
 XHCIPFW.SYS, PCI windows above 4 GB closed at each start, ticked or
 unticked; /xhcipfw only with /thunderbolt or /cmonly),
+/tbnet and /notbnet (Thunderbolt networking ticked or unticked; /tbnet
+only with /thunderbolt or /cmonly),
 /faster and /nofaster
 (the USB Tree's "can run faster" notice on or off for this computer),
 /notray,
@@ -380,6 +382,16 @@ The console tool
                                 every system
   INSTALL /console /thunderbolt /nostor98
                                 the Thunderbolt support without Stor98
+  INSTALL /console /thunderbolt /tbnet
+                                turns Thunderbolt networking on without
+                                asking: a network connection to another
+                                computer over a Thunderbolt or USB4 cable,
+                                the adapter there after the restart;
+                                without /tbnet the console asks, Enter
+                                and /yes for N on a new install and for
+                                the choice in force on an update
+  INSTALL /console /notbnet     turns it off (the adapter goes after the
+                                restart); the driver stays installed
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); one already installed
                                 stays as it is

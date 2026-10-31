@@ -71,7 +71,8 @@
 #define IDC_T_APPR0             1114
 #define IDC_T_APPR0_T           1115
 #define IDC_T_APPR_NOTE         1116
-#define IDC_T_NET               1117    /* networking: hidden until wired */
+#define IDC_T_NET               1117    /* networking (record 35 s. 9.5) */
+#define IDC_T_NET_T             1118
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

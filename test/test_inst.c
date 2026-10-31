@@ -8694,7 +8694,7 @@ static void test_help(void)
 {
     /* Each topic's paragraphs, in INST_HELP_* order. */
     static const size_t paras[INST_HELP_COUNT] = {
-        3, 3, 9, 6, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3, 2
+        3, 3, 9, 7, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3, 2
     };
     static const char *const banned[] = {
         "tested", "testing", "emulat", "virtual machine", "experimental"
@@ -8897,10 +8897,13 @@ static void test_tbt_page(void)
     const char *a3[] = { "x", "/tbnet", "/notbnet" };
     const char *a4[] = { "x", "/notbnet", "/uninstall" };
     const char *a5[] = { "x", "/notbnet", "/devices" };
+    const char *a6[] = { "x", "/tbnet", "/thunderbolt", "/yes" };
+    const char *a7[] = { "x", "/tbnet", "/cmonly" };
+    const char *a8[] = { "x", "/set", "XhciCmNet=1" };
     static const int ids[] = {
         INST_PT_TBT_HEAD, INST_PT_APPR_HEAD, INST_PT_APPR_1, INST_PT_APPR_1_T,
         INST_PT_APPR_0, INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW,
-        INST_PT_TBNET
+        INST_PT_TBNET, INST_PT_TBNET_T
     };
     int i;
     int sw;
@@ -8921,8 +8924,53 @@ static void test_tbt_page(void)
           "what a device can reach moved to the approval row");
     CHECK(strcmp(inst_page_text(INST_PT_TBNET), "Thunderbolt networking") == 0,
           "the networking box's words");
-    CHECK_EQ(INST_TBNET_WIRED, 0, "networking not wired until task 45.59");
-    CHECK(inst_value_find("XhciCmNet") < 0, "XhciCmNet not in the table yet");
+    CHECK_EQ(INST_TBNET_WIRED, 1, "networking wired (task 45.59 step S11)");
+    CHECK(inst_value_find("XhciCmNet") < 0,
+          "XhciCmNet not in the values table: the box is the setting");
+    {
+        /* Record 35 section 9.1: what it does, nothing of testing. */
+        const char *s = inst_page_text(INST_PT_TBNET_T);
+        CHECK(s != NULL && strstr(s, "another computer") != NULL &&
+              strstr(s, "file sharing") != NULL &&
+              strstr(s, "turn it off") != NULL,
+              "the networking sentence says what it does and how to undo it");
+    }
+    /* The network driver's own slot, after Stor98's (record 35 section
+     * 9.5): an interrupted run's slot numbers keep their meaning. */
+    CHECK(INST_INF_NET == 5 && INST_INF_COUNT == 6 && INST_INF_S98 == 4,
+          "the network INF slot appended");
+    CHECK(inst_own_service("xhcinet"), "xhcinet is a service of the package");
+    CHECK_EQ(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "xhcinet", 0), 0,
+             "the network adapter removed first, before the NHI");
+    CHECK(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "xhcinet", 0) <
+              inst_remove_rank("PCI\\VEN_8086&DEV_15EB\\3&1", "xhcicm", 0),
+          "the adapter before its NHI");
+    CHECK_EQ(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "", 0), 0,
+             "an adapter whose install failed is removed too");
+    CHECK(inst_cm_child_id("XHCICM\\TBNET\\1&2&3") &&
+          !inst_cm_child_id("PCI\\VEN_8086&DEV_15EB\\3&1"),
+          "the connection manager's children by their enumerator");
+    {
+        static const char netInf[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\nProvider=%Provider%\r\n"
+            "[Net.Dev.NTx86.Services]\r\nAddService=xhcinet,0x00000002,"
+            "Net.Service\r\n[Strings]\r\nProvider=\"Yeo Kheng Meng\"\r\n";
+        CHECK(inst_inf_is_ours(netInf), "xhcinet.inf is this package's INF");
+    }
+    /* The source map's rows (record 35 section 9.5): cm\tbnet\ in each
+     * family, 98-me\ without xhcinet6.sys, the catalog on x64 alone. */
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcinet.inf") != NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_9X, "xhcinet.inf"),
+                 "cm\\tbnet\\xhcinet.inf") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcinet.sys"),
+                 "cm\\tbnet\\xhcinet.sys") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcinet.cat"),
+                 "cm\\tbnet\\xhcinet.cat") == 0,
+          "the network driver's places in the download");
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcinet6.sys") == NULL &&
+          inst_pkg_rel(INST_FAM_NT86, "xhcinet6.sys") != NULL &&
+          inst_pkg_rel(INST_FAM_NT86, "xhcinet.cat") == NULL,
+          "98-me without xhcinet6.sys, nt-x86 without a catalog");
 
     /* The gate off: nothing shown, open or written, whatever is asked. */
     for (sw = -1; sw <= 1; sw++) {
@@ -8984,12 +9032,20 @@ static void test_tbt_page(void)
     CHECK(d.Write && d.Value == 1 && d.ToNhi && d.ToMw,
           "the box over a machine-wide 0: 1 in both");
 
-    /* The switches while networking is not wired. */
+    /* The switches, wired (record 35 section 9.2): /tbnet needs the
+     * Thunderbolt support, as /stor98 does; /notbnet stands alone. */
     CHECK(inst_parse_args(2, (char **)a1, &o, err, sizeof(err)) != 0 &&
-              strstr(err, "no Thunderbolt networking driver") != NULL,
-          "/tbnet refused: no driver in this package");
+              strstr(err, "/tbnet needs /thunderbolt") != NULL,
+          "/tbnet alone refused: it needs the Thunderbolt support");
+    CHECK(inst_parse_args(4, (char **)a6, &o, err, sizeof(err)) == 0 &&
+              o.TbNet && !o.NoTbNet, "/tbnet with /thunderbolt accepted");
+    CHECK(inst_parse_args(3, (char **)a7, &o, err, sizeof(err)) == 0 &&
+              o.TbNet, "/tbnet with /cmonly accepted");
     CHECK(inst_parse_args(3, (char **)a2, &o, err, sizeof(err)) == 0 &&
-              o.NoTbNet && !o.TbNet, "/notbnet accepted (it changes nothing)");
+              o.NoTbNet && !o.TbNet, "/notbnet accepted");
+    CHECK(inst_parse_args(3, (char **)a8, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "use /tbnet or /notbnet") != NULL,
+          "/set XhciCmNet= refused: the box is the setting");
     CHECK(inst_parse_args(3, (char **)a3, &o, err, sizeof(err)) != 0 &&
               strstr(err, "contradict") != NULL, "both: refused");
     CHECK(inst_parse_args(3, (char **)a4, &o, err, sizeof(err)) != 0 &&

@@ -79,7 +79,13 @@ static const struct {
       "work over USB. Connections made before Windows starts stay, unless "
       "XhciCmPreOsCleanup ends them.\n\n"
       "The choice applies from the next restart; on a new install unplug "
-      "the dock until then if you choose none." },
+      "the dock until then if you choose none.\n\n"
+      "Thunderbolt networking: a network connection to another computer "
+      "joined by a Thunderbolt or USB4 cable, which then reaches this one "
+      "as over any network, file sharing included. Ticked, the network "
+      "adapter appears after the restart; unticked later, it goes after "
+      "the next one. Greyed where this package has no network driver for "
+      "this Windows." },
     { INST_HELP_FREE, "Free USB drivers",
       "The box: copies the free USB class drivers (usb-wdm-free) to the "
       "install folder, for USB devices this Windows has no driver for.\n\n"

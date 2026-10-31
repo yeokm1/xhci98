@@ -475,7 +475,11 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_INF_CM         2
 #define INST_INF_CMF        3
 #define INST_INF_S98        4   /* the bundled Stor98, when ticked */
-#define INST_INF_COUNT      5
+#define INST_INF_NET        5   /* Thunderbolt networking, when ticked
+                                   (record 35 section 9.5); appended, so an
+                                   interrupted run's slot numbers keep
+                                   their meaning */
+#define INST_INF_COUNT      6
 
 #define INST_APPLY_ANY_XHCI 0
 #define INST_APPLY_PSW      1
@@ -1047,6 +1051,9 @@ int inst_bundled_file(const char *name);
 int inst_bundled_service(const char *service);
 
 /* The removal rank: lower goes first. -1 when the devnode is not removed. */
+/* 1 for an instance id under the connection manager's own enumerator,
+ * XHCICM\ (the network adapter, record 35 sections 6.1 and 9.5). */
+int inst_cm_child_id(const char *instanceId);
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent);
 
@@ -1787,6 +1794,7 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_APPR_MIXED      55
 #define INST_PT_APPR_NEW        56
 #define INST_PT_TBNET           57
+#define INST_PT_TBNET_T         58
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -2093,10 +2101,12 @@ extern const char instS98DisconnectText[];
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
 
 /* Thunderbolt networking's box (record 26 section 5.3.5, record 35
- * section 9.1). INST_TBNET_WIRED is 0 until task 45.59's step S11 stages
- * the network driver's INF: the box is not shown, /tbnet is refused,
- * /notbnet changes nothing, and nothing reads or writes XhciCmNet. */
-#define INST_TBNET_WIRED        0
+ * sections 9.1 and 9.5). INST_TBNET_WIRED is 1 since task 45.59's step S11
+ * stages the network driver's INF (INST_INF_NET): the box is shown, /tbnet
+ * and /notbnet set it, and the run writes XhciCmNet as inst_tbnet_decide
+ * says. At 0 the box is hidden, /tbnet is refused, /notbnet changes
+ * nothing, and nothing reads or writes XhciCmNet. */
+#define INST_TBNET_WIRED        1
 
 typedef struct _INST_TBNET {
     int Shown;              /* the box shown at all (the gate)          */

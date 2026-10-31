@@ -197,6 +197,11 @@ static int restageSys;          /* Vista and later: the row is on the page */
 static int pfwShown;
 static int pfwNt;
 static int pfwChoice;
+/* Thunderbolt networking's box (record 35 section 9.5). */
+static int netShown;            /* the gate                                */
+static int netOpen;             /* the package carries the network driver  */
+static int netChoice;           /* ticked                                  */
+static int netChanged;          /* changed on the page, the plan owed       */
 static int pfwOwn;
 static int restageHere;         /* the store trap found: the row open      */
 static int restageChoice;
@@ -494,6 +499,14 @@ static unsigned __stdcall job_main(void *arg)
             pfwOwn = inst_eng_pfw_default(&pfwShown, &pfwNt);
             pfwChoice = pfwShown && tbChoice && pfwOwn;
             inst_eng_pfw_choose(pfwChoice);
+            {
+                /* Thunderbolt networking (record 35 section 9.5): its
+                 * first state the engine's (/tbnet, /notbnet, else the
+                 * XhciCmNet in force), unticked on a new install. */
+                int first;
+                inst_eng_net_state(&netShown, &netOpen, &first);
+                netChoice = netOpen && first;
+            }
             storShown = inst_eng_stor_state(&storOffered, &storChoice,
                                             storNote, sizeof(storNote));
             inst_eng_stor_short(storShort, sizeof(storShort));
@@ -1141,6 +1154,9 @@ static void replan(void)
     inst_eng_uas_choose(uasChoice);
     inst_eng_usb_choose(usbChoice);
     inst_eng_tb_choose(tbChoice);
+    if (netOpen) {
+        inst_eng_net_choose(netChoice);
+    }
     inst_eng_s98_choose(s98Choice);
     inst_eng_vsd_choose(vsdChoice);
     inst_eng_pfw_choose(pfwChoice);
@@ -1323,7 +1339,8 @@ static const int compRows[][2] = {
 static const int tbtRows[][2] = {
     { IDC_C_PFW, 0 }, { IDC_C_S98, IDC_C_S98_T }, { IDC_C_VSD, 0 },
     { IDC_T_APPR_H, 0 }, { IDC_T_APPR1, IDC_T_APPR1_T },
-    { IDC_T_APPR0, IDC_T_APPR0_T }, { IDC_T_APPR_NOTE, 0 }, { IDC_T_NET, 0 }
+    { IDC_T_APPR0, IDC_T_APPR0_T }, { IDC_T_APPR_NOTE, 0 },
+    { IDC_T_NET, IDC_T_NET_T }
 };
 
 /* The approval's row in rows[] (XhciCmApprove, record 26 section 5.3.5),
@@ -1360,7 +1377,8 @@ static int tbt_shown(int id)
     case IDC_T_APPR_NOTE:
         return tbt_approve_row() >= 0;
     case IDC_T_NET:
-        return INST_TBNET_WIRED;
+    case IDC_T_NET_T:
+        return INST_TBNET_WIRED && netShown;
     default:
         return 1;
     }
@@ -2917,10 +2935,15 @@ static void tbt_fill(HWND dlg)
     SetDlgItemTextA(dlg, IDC_T_APPR0, inst_page_text(INST_PT_APPR_0));
     SetDlgItemTextA(dlg, IDC_T_APPR0_T, inst_page_text(INST_PT_APPR_0_T));
     tbt_approve_fill(dlg);
-    /* Task 45.59's networking box: not shown until it is wired
-     * (INST_TBNET_WIRED, record 26 section 5.3.5). */
+    /* Task 45.59's networking box (record 35 section 9.5): greyed and
+     * unticked where the package carries no network driver for the
+     * system; else the window's choice, first the engine's. */
     SetDlgItemTextA(dlg, IDC_T_NET, inst_page_text(INST_PT_TBNET));
-    CheckDlgButton(dlg, IDC_T_NET, BST_UNCHECKED);
+    SetDlgItemTextA(dlg, IDC_T_NET_T, inst_page_text(INST_PT_TBNET_T));
+    CheckDlgButton(dlg, IDC_T_NET, netOpen && netChoice ? BST_CHECKED :
+                   BST_UNCHECKED);
+    EnableWindow(GetDlgItem(dlg, IDC_T_NET), netOpen);
+    EnableWindow(GetDlgItem(dlg, IDC_T_NET_T), netOpen);
     tbt_layout(dlg);
 }
 
@@ -2984,9 +3007,19 @@ static int tbt_leave(HWND dlg, int forward)
         pfwChoice = pfw;
         inst_eng_pfw_choose(pfw);
     }
-    if (s98 != s98Choice || vsd != vsdChoice) {
+    if (netOpen) {
+        int net = IsDlgButtonChecked(dlg, IDC_T_NET) == BST_CHECKED;
+        if (net != netChoice) {
+            /* The whole plan made again, the store's checks with it: the
+             * network INF enters the run or leaves it. */
+            netChoice = net;
+            netChanged = 1;
+        }
+    }
+    if (s98 != s98Choice || vsd != vsdChoice || netChanged) {
         s98Choice = s98;
         vsdChoice = vsd;
+        netChanged = 0;
         replan();
     }
     return 1;
@@ -4550,6 +4583,14 @@ static void summary_fill(HWND dlg)
             const char *pl = inst_eng_pfw_plan();
             if (pl != NULL) {
                 _snprintf(line, sizeof(line) - 1, "- %s\n", pl);
+                line[sizeof(line) - 1] = '\0';
+                tb_add(&t, line);
+            }
+        }
+        if (tbChoice && netShown) {
+            const char *nl = inst_eng_net_plan();
+            if (nl != NULL) {
+                _snprintf(line, sizeof(line) - 1, "- %s\n", nl);
                 line[sizeof(line) - 1] = '\0';
                 tb_add(&t, line);
             }
@@ -6484,8 +6525,9 @@ static void st_other_layout(HWND parent)
 
 /* Record 26 section 5.3.5: the page skipped on the Thunderbolt choice
  * alone; the approval's buttons from the row in their three states (1, 0,
- * neither where the controllers differ); the networking box hidden while
- * it is not wired; the rows above the page's foot. */
+ * neither where the controllers differ); the networking box and its
+ * sentence shown when wired, open or greyed (record 35 section 9.5); the
+ * rows above the page's foot. */
 static void st_tbt(HWND parent)
 {
     HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_TBT), parent,
@@ -6554,12 +6596,47 @@ static void st_tbt(HWND parent)
            fits(GetDlgItem(d, IDC_T_APPR_NOTE)),
            "the mixed and the new-install notes both said, whole");
     }
-    st((GetWindowLongA(GetDlgItem(d, IDC_T_NET), GWL_STYLE) & WS_VISIBLE) ==
-       (INST_TBNET_WIRED ? WS_VISIBLE : 0), "the networking box shown only "
-       "when wired");
-    GetClientRect(d, &cli);
-    last = st_rect(d, GetDlgItem(d, IDC_T_APPR_NOTE));
-    st(last.bottom <= cli.bottom, "the page's rows above its foot");
+    {
+        /* Task 45.59 (record 35 section 9.5): the networking box and its
+         * sentence, every other row shown too and both notes said, the
+         * page's tallest form; then greyed where the package carries no
+         * network driver. */
+        int sNetShown = netShown;
+        int sNetOpen = netOpen;
+        int sNetChoice = netChoice;
+        int sS98 = s98Have;
+        int sPfw = pfwShown;
+        netShown = 1;
+        netOpen = 1;
+        netChoice = 1;
+        s98Have = 1;
+        pfwShown = 1;
+        tbt_fill(d);
+        st((GetWindowLongA(GetDlgItem(d, IDC_T_NET), GWL_STYLE) &
+            WS_VISIBLE) == (INST_TBNET_WIRED ? WS_VISIBLE : 0) &&
+           (GetWindowLongA(GetDlgItem(d, IDC_T_NET_T), GWL_STYLE) &
+            WS_VISIBLE) == (INST_TBNET_WIRED ? WS_VISIBLE : 0),
+           "the networking box and its sentence shown when wired");
+        st(IsDlgButtonChecked(d, IDC_T_NET) == BST_CHECKED &&
+           IsWindowEnabled(GetDlgItem(d, IDC_T_NET)),
+           "the networking box open and ticked as chosen");
+        st(fits(GetDlgItem(d, IDC_T_NET_T)), "the networking sentence whole");
+        GetClientRect(d, &cli);
+        last = st_rect(d, GetDlgItem(d, INST_TBNET_WIRED ? IDC_T_NET_T :
+                                        IDC_T_APPR_NOTE));
+        st(last.bottom <= cli.bottom, "the page's rows above its foot, "
+           "every row shown");
+        netOpen = 0;
+        tbt_fill(d);
+        st(IsDlgButtonChecked(d, IDC_T_NET) != BST_CHECKED &&
+           !IsWindowEnabled(GetDlgItem(d, IDC_T_NET)),
+           "the networking box greyed and unticked without the driver");
+        netShown = sNetShown;
+        netOpen = sNetOpen;
+        netChoice = sNetChoice;
+        s98Have = sS98;
+        pfwShown = sPfw;
+    }
     choiceSet[v] = 0;
     rows[0] = savedRow;
     rowCount = savedCount;
@@ -6835,12 +6912,13 @@ static int selftest(void)
     static const int bIds[] = {
         IDC_T_HEAD, IDC_C_S98, IDC_C_S98_T, IDC_C_VSD, IDC_T_APPR_H,
         IDC_T_APPR1, IDC_T_APPR1_T, IDC_T_APPR0, IDC_T_APPR0_T,
-        IDC_T_APPR_NOTE, IDC_T_APPR_NOTE, IDC_T_NET
+        IDC_T_APPR_NOTE, IDC_T_APPR_NOTE, IDC_T_NET, IDC_T_NET_T
     };
     static const int bTexts[] = {
         INST_PT_TBT_HEAD, INST_PT_S98, INST_PT_S98_T, INST_PT_VSD_OTHER,
         INST_PT_APPR_HEAD, INST_PT_APPR_1, INST_PT_APPR_1_T, INST_PT_APPR_0,
-        INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW, INST_PT_TBNET
+        INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW, INST_PT_TBNET,
+        INST_PT_TBNET_T
     };
     static const int b2Ids[] = { IDC_C_VSD };
     static const int b2Texts[] = { INST_PT_VSD };
