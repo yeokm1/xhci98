@@ -120,6 +120,7 @@ NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     status = IoCreateDevice(driver, sizeof(CM_FILTER), NULL,
                             FILE_DEVICE_UNKNOWN, 0, FALSE, &self);
     if (!NT_SUCCESS(status)) {
+        CmRegChildAddFailed();
         return STATUS_SUCCESS;
     }
     child = (PCM_FILTER)self->DeviceExtension;
@@ -137,6 +138,7 @@ NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (lower == NULL) {
         IoDeleteDevice(self);
+        CmRegChildAddFailed();
         return STATUS_SUCCESS;
     }
     child->Common.Lower = lower;

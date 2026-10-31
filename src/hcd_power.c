@@ -384,6 +384,9 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     ULONG kind;
 
     hc = (PHCD_CONTROLLER)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    (VOID)InterlockedDecrement(&hc->QemuPowerDeferred);
+#endif
     irp = hc->PowerWorkIrp;
     kind = hc->PowerWorkKind;
     hc->PowerWorkIrp = NULL;
@@ -409,6 +412,9 @@ static VOID NTAPI hcdPowerWorkD0(PVOID Context)
     PIRP irp;
 
     hc = (PHCD_CONTROLLER)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    (VOID)InterlockedDecrement(&hc->QemuPowerDeferred);
+#endif
     irp = hc->PowerWorkD0Irp;
     hc->PowerWorkD0Irp = NULL;
     hcdD0Finish(hc, irp);
@@ -422,6 +428,21 @@ static VOID NTAPI hcdPowerWorkD0(PVOID Context)
  * IRP being in flight at a time. IRQL: <= DISPATCH_LEVEL. */
 static VOID hcdPowerDefer(PHCD_CONTROLLER hc, PIRP irp, ULONG kind)
 {
+#if defined(XHCI_FLAVOUR_QEMU)
+    {
+        /* Task 45.27 (record 15 section 8.1): counted before the item is
+         * queued and uncounted when its work routine begins, so 2 here is
+         * this deferral made while the other kind's routine had not yet
+         * begun. The qemu flavour alone. */
+        LONG pending;
+
+        pending = InterlockedIncrement(&hc->QemuPowerDeferred);
+        if (pending >= 2) {
+            XHCI_DBG_VALUE("hcd: power defer overlap",
+                           (kind << 16) | ((ULONG)pending & 0xFFUL));
+        }
+    }
+#endif
     if (kind == HCD_POWER_WORK_D0) {
         hc->PowerWorkD0Irp = irp;
         ExInitializeWorkItem(&hc->PowerWorkD0, hcdPowerWorkD0, hc);

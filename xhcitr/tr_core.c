@@ -4519,14 +4519,24 @@ const char *tr_mark_text(int state)
     case TR_MK_FAILED:
         return "not read: the Thunderbolt driver did not answer";
     case TR_MK_LISTED:
-        return "listed by Windows";
+        return "the Thunderbolt driver has answered it as removable";
     case TR_MK_WRITTEN:
         return "mark written; takes effect at the next start of the device";
     case TR_MK_NOTLISTED:
-        return "mark written, but Windows does not list it";
+        return "mark written; the Thunderbolt driver has not answered it as "
+               "removable";
     default:
         return "not marked";
     }
+}
+
+const char *tr_mark_clause(int state, int hasCaps, INST_U32 caps)
+{
+    if (state == TR_MK_LISTED && hasCaps && (caps & 0x00000004UL) == 0) {
+        /* CM_DEVCAP_REMOVABLE clear in what Windows recorded. */
+        return "Windows has not recorded it as removable.";
+    }
+    return "";
 }
 
 const char *tr_mksvc_text(int state)
