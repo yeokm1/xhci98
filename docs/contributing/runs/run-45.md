@@ -4306,6 +4306,198 @@ Recommendation: (b), behind a design record section reviewed first. SMART
 tools on these systems send SCSI pass-through to USB bridges, and (c) adds
 a translation layer of the driver's own.
 
+### The second session: Stor98's BUSY and the connection manager's legs (2026-10-31)
+
+**Verdict: the eject with an unplug during its teardown passes on 2000,
+and the PCIe loss with an unplug during it passes on XP. A BUSY that keeps
+its length was not provoked on the release build. On XP the eject of the
+enclosure, whose PCI bridge keeps ACPI's bus filter, leaves the tunnel up:
+the known limitation of record 21 section 7.4. On XP and 2000 a unit attached through the install is not
+listed by Windows after a restart, only after a re-plug, where the release
+notes say a restart lists it (a question below). The resume with a lane
+adapter gone cannot be made on the ASM4242 model on XP: the guest offers
+no hibernation. The 98 SE and ME legs were not reached.**
+
+Vehicle: the package of `e8db6905` as above, plus `XHCIMARK.EXE` built
+from `a2f703f2` (`xhcimark\build.cmd x86`, SHA-256 `2c7acbeb...`), which
+the test package does not carry. The emulator is the q35 bases' ASM4242
+build (`qemu-system-x86_64.exe` `da60139f...`), the ORICO enclosure model
+(ASM2464, its NVMe as Stor98's drive) on tunnel port `02:00.0`. The tunnel
+port, the cable and the reply-fault rules were driven by QMP (`tp0`
+`tunnel`, `enc0` `x-cable`, `u4` `x-reply-faults` and
+`x-reply-fault-state`). Evidence: `E:\xhci98-vm\p45\w45-owed27\xpb\`
+(the XP overlay of the first session, tags b to h), `w2a\` (a fresh 2000
+overlay) and `xpc\` (the hibernation controls).
+
+#### A BUSY that keeps its length (XP)
+
+QEMU's NVMe model reports `CAP.TO` 7.5 s. Stor98's hold bound for a disk
+request with a 10 s timeout is 5 s. Each run was `XHCIPERF /size 32
+/verify` with `seq,256,4,1` on D: (`busy-run1.txt`, `busy-controls.txt`):
+
+| Run | Result |
+|---|---|
+| Control | write 62.3 MB/s, read 136.9 MB/s, no failure |
+| A write dropped at the tunnel port (`x-faults` `at=fetch op=write nth=200 act=drop`) | "Errors: fast fails 0, busy 0, resets 1"; one request failed; the verify passed |
+| The same, and the port's ready delay (`x-rdy-set-delay-ms`) 6.5 s | busy 0, resets 1, the verify passed (also with an ATATEST loop beside it). The pause after the port's reset appears to cover the hold window, so no BUSY is answered |
+| Ready delay 15 s, past `CAP.TO` | the bring-up failed, as Stor98's design says it does past `CAP.TO`: Disk event 11 many times, "Delayed Write Failed" on D:, later writes failed until a restart |
+| A start with the ready delay 6.5 s from power-on | D: found, `StorInterrupt` "interrupt", a copy and `fc /b` clean; consistent with a hold and then BUSY at the bus scan, but the release build counts BUSY only inside an XHCIPERF interval |
+
+Owed: the BUSY and its re-issue read on a Stor98 build with its debug
+port, which logs the hold and the BUSY.
+
+#### The eject confirmation on XP: why none came
+
+The first session's XHCITR eject on XP ended with "The Thunderbolt driver
+has not confirmed that the PCIe tunnel was closed", and the tunnel stayed
+up. The account is an administrator (`net localgroup administrators`), so
+XHCITR confirms an eject itself when Windows lists the unit. Two causes:
+
+- The test package carries no `tools\xhcimark\XHCIMARK.EXE`, so the
+  installer said "This package has no tools\xhcimark\XHCIMARK.EXE: the
+  safe-removal mark service is not installed" (`C:\XHCIINST.LOG`). It is
+  the test cut's limit, not a defect. With the file added, `INSTALL.BAT
+  /console /yes /nopause /thunderbolt /stor98` again: "The Thunderbolt
+  safe-removal mark service xhcimark is installed and running", exit 3;
+  its log: the unit's mark written at once.
+- After that install and a restart, Windows still did not take the unit
+  as removable: Status `0x0180200A`, "Removable: no". XHCITR's eject took
+  the route for a unit not marked removable (Windows' removal of the
+  subtree, which confirms nothing): "Until you unplug it, Windows may
+  start it again when it next looks for new hardware. The Thunderbolt
+  driver has not confirmed that the PCIe tunnel was closed." That is the
+  route's documented text (record 24 section 7.2). After a re-plug
+  (`x-cable` false, then true) the unit read `0x0180600A`, "Removable:
+  yes", and Safely Remove Hardware listed it ("PCI standard PCI-to-PCI
+  bridge at PCI Slot 2"). 2000 read the same after a cold start (below).
+
+For the whole time before the re-plug, XHCITR showed "Safe-removal mark:
+listed by Windows" beside "Not marked removable". The mark line reads the
+driver's own marks answer (its filter answered `Removable`), not Windows'
+capabilities, so the two lines disagree.
+
+#### The eject on XP once listed
+
+With the unit listed, XHCITR's eject (as administrator) said "Windows has
+stopped QEMU NVMe Ctrl SCSI Disk Device (D:). The eject was confirmed to
+the Thunderbolt driver. The Thunderbolt driver has not confirmed that the
+PCIe tunnel was closed." The tunnel was still up 40 s later. The driver's
+log: `cm.reenum.confirm=00000200`, then `cm.reenum.eject.stale=00000200`
+with `cm.reenum.eject.stale.why=00020208` (bit 3: a function behind the
+bridge still reads as having a stack; the generations equal). A second
+eject after another re-plug, with no fault rule armed, read the same
+(`00030308`). The enclosure's bridges sit below ACPI's bus filter
+(`cm.reenum.child.under` `ACPI`), and that filter stays on the ejected
+bridge, so the connection manager withholds the teardown. That is record
+21 section 7.4's open limitation and the release notes' "Known
+limitation: the eject under the USB4 connection manager on 2000 to 7",
+now read on XP too. So the reply-drop rule armed for the teardown
+(`pdf=write act=drop+unplug dev=enc0`) never matched on XP, and the leg
+was run on 2000's Standard PC HAL (no ACPI) instead.
+
+One unplanned reading: the first re-plug was made with that rule still
+armed. It matched 28 write answers of the re-enumeration and fired once, on
+the first (that answer dropped, the enclosure pulled). The enclosure came back on its own, D: was
+there, and the unit was listed.
+
+#### The PCIe loss with an unplug during it (XP)
+
+`W.BAT D:` (a 16 MiB copy and `fc /b`, looped) ran. `tp0` `tunnel` was
+set to `surprise`, and `enc0` `x-cable` to `false` 3 s later. Copy 22
+completed, then each copy failed at once (`COPYFAIL`). XP showed "Windows -
+Delayed Write Failed ... D:\W21.BIN". There was no hang. XHCITR's tray
+showed "A Thunderbolt or USB4 device was removed unexpectedly." Its report
+read "Unexpected removals: 1 since this start; the last on tunnel port
+02:00.0", Liveness "answering" and Stage "active". The log held
+`u4.linkdown`, `cm.reenum.departure=00000200` and
+`cm.reenum.unexpected=00000200`. After `x-cable` true, D: was back, and a
+16 MiB copy compared clean. PASS (`tr-loss-g.txt`, `g13.png`).
+
+An unplug 0.8 s after OK in XHCITR's eject dialog landed before the
+tool's own check. The answer was "The device list changed since it was
+shown; nothing was stopped. Look at the tree again." After a re-plug,
+`fc` was clean (`g15.png`).
+
+#### The eject with an unplug during its teardown (2000)
+
+`w2a`: a fresh q35 2000 SP4 overlay (Standard PC HAL), ASM4242 with the
+enclosure at power-on, the package with `XHCIMARK.EXE` installed
+(`INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`, the signature
+prompts and Windows' wizards answered; exit 3; the mark service installed;
+Stor98 started), then a cold start. As on XP, the unit read "Removable: no"
+until a re-plug. After the re-plug it read "Removable: yes" (an Unsafe
+Removal dialog for the re-plug's unplug, as expected). Then:
+
+- armed `u4` `x-reply-faults` `pdf=write act=drop+unplug dev=enc0`;
+- XHCITR (administrator) `/eject` of the unit, OK.
+
+The rule read `rule0=7/1` within 6 s: seven write answers matched, and
+the first of them (the rule has no `nth`) was dropped with the enclosure
+pulled in the same moment, so the tunnel was down and the cable out. A
+later teardown step's lost answer (`nth=7`, say) was not read. XHCITR: "Windows has stopped PCI standard
+PCI-to-PCI bridge. The eject was confirmed to the Thunderbolt driver. The
+PCIe tunnel was closed." The driver's log, in order:
+`cm.reenum.confirm=00000200`, `cm.reenum.eject=00000200`,
+`u4.eject.bridge=00000200`, `tbt.ring.ctl-no-answer`, three
+`u4.quarantine` entries (the path's adapter entries left unconfirmed set
+aside), `u4.eject=0000010E` (port 1, `TBT_E_STATE`: the teardown not read
+back closed), then `cm.reenum.departure=00000200`. Liveness "answering",
+Stage "active", counters `u4.ejects 1`, `u4.quarantined 3`. After
+`x-cable` true the PCIe tunnel was built again (`u4.pcie.built 2`).
+PASS: the dropped answer and the unplug left neither a hang nor a stuck
+tunnel (`tr-b3-eject.txt`, `b6.png`).
+
+After that re-plug, as after the first one, the NVMe sat at Code 10 with
+no resources allocated ("Asked for: Memory 16384 bytes"), like the
+hot-added functions of 45.13's 2000 legs on the Standard PC HAL ("Why
+Code 10 on 2000"). It was not followed further here (`tr-b4-replug.txt`).
+
+#### A resume with a lane adapter gone: not makeable on XP
+
+The leg needs a hibernation with the enclosure attached and a start of
+the emulator without it. On `xpb` with `-vga cirrus` and
+`-global ICH9-LPC.disable_s4=0`, QMP read `disable_s4` 0 and `s4_val` 2.
+`SetSuspendState` returned at once, and `powercfg /hibernate on` answered
+"System does not support hibernation". A fresh XP overlay with no package
+and the same machine answered the same. The same overlay without the
+ASM4242 model (`xpc` tag b) accepted it. So the emulator's ASM4242 layout
+takes S4 away from XP, not this package. The leg is owed to a vehicle
+that hibernates with the model present (7 x86, or 2000 on its ACPI base).
+
+#### Not readable in a guest
+
+- A UAS STOP and START with a LUN gone, and a short REPORT LUNS answer:
+  the LUN list is read again only after an `IRP_MN_STOP_DEVICE`, which
+  takes a resource rebalance, and no guest makes one for a USB function
+  (run-36, L2). Owed to a host test of the start's presence logic.
+- A D0 overlapping a system power IRP: a completed resume does not show
+  the overlap. Only a trace at `hcdPowerDefer` with both items queued
+  would, and that is a code change (a question for the coordinator).
+
+#### Owed after this session
+
+- The BUSY that keeps its length, on a Stor98 debug-port build.
+- The resume with a lane adapter gone (see above for the vehicle).
+- The power gate's wait under an ME standby; the connection manager's
+  no-IRQ clock and retry wait on 98 SE; a failed D0 during a
+  re-enumeration on 98 SE.
+- The D0 overlap's trace, after the coordinator's answer.
+- The hardware readings, to the bench, as listed above.
+
+#### Question: a unit attached through the install, after a restart
+
+On XP (a warm restart) and on 2000 (a cold start), a unit attached during
+the install still read "Removable: no" after the restart, and Windows did
+not list it. A re-plug listed it. The release notes' known limitation
+says such a drive is not listed "until Windows restarts or the drive is
+plugged in again". Options: (a) narrow that text to the re-plug ("until
+the drive is plugged in again"); (b) read why the restart does not list
+it here (the filter's `Removable` answer against the capabilities query
+Windows makes at the start) and fix it in `xhcicm.sys` if it is ours.
+Recommendation: (a) for this release; (b) as a task. Separately, XHCITR's
+"Safe-removal mark: listed by Windows" should not show beside "Not marked
+removable": the mark line could read Windows' capabilities too.
+
 ## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
 
 Design record 22 section 6.2 coded, as the design half above left it
