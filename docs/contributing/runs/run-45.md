@@ -6671,6 +6671,174 @@ copy of the same disk image, shows no letter, as on 7 x86). Pass.
   the bridges' lists (`BasicConfigVector`), the `cm.breq` outcome and both
   drives after the mark service's restart.
 
+## 45.55 (the owed legs): 2000, ME and XP x64 on the ASM4242 layout (2026-10-31)
+
+Worker w45-pcie3, development host A, continuing "45.53 and 45.55
+(continued)". One driver change: `2c319f06` (design record 33 revision
+5, reviewed and revised). Emulator `bin-55cadf9` as above. The parent
+`usb4-device ... dialect=usb4,downstream-ports=1,chain-power-controller=off`
+and its child (`parent=enc0,port=1`) plugged by QMP at the desktop four
+seconds apart, as in `xpC`. Layouts: `asmboard` (the board's root-port
+reservation and the firmware's split, as `xpD`) for 2000 and XP x64;
+`asm4242` for ME, as `mB`. Evidence: `E:\xhci98-vm\p45\w45-pcie3\` (one
+folder a leg: `cmdline-<tag>.txt`, `steps.txt`, `debugcon-<tag>.log`,
+`serial-<tag>.log`, `reg-*.txt` and their decodes `reqs-*.txt`,
+screenshots; `pids.txt`; `hashes-*.txt`).
+
+### The readings first, on the package before the change
+
+The first three legs ran w45-pcie2's packages of `4b44bda2` (`xfA`, `xfB`:
+copies of its `xf4` and `xf5`, hashes in `hashes-xfA.txt` and
+`hashes-xfB.txt`), to read what each system does before anything was
+changed.
+
+**2000 (`w2F`, overlay of the 2000 golden `g2k`).** First boot on the
+layout: the Found New Hardware wizards cancelled; `INSTALL.BAT /console
+/yes /nopause /thunderbolt /stor98` ("On Windows 2000 a tunnel port's
+first filter install shows Code 12 ... Restart Windows, then run
+INSTALL.BAT again"), the qemu flavour copied in, cold start, the
+installer again (every bridge, the router and both xHCIs started). The
+parent and child plugged: `cm.breq.how` `00001021` for the upstream port
+03:00 and `00051022`, `00001022` for the downstream ports 04:00 and the
+chain port 04:08: shape 2 (2000's closed template), outcome 1
+(rewritten), bit 24 clear. The lists (`regedit /a` of `Enum\PCI`,
+`w2F\reg-1.txt`, decoded `w2F\reqs-1.txt`): the hot-added ports'
+`BasicConfigVector` is 2000's closed list of record 33 section 2.1
+exactly, `ListSize` E8h and 6 descriptors, **with no interrupt
+descriptor** although the ports' Interrupt Pin is A; the board's own
+ASM4242 ports, numbered by the firmware, carry one (`ShareDisposition`
+3, the Line as a fixed vector). So 2000's form is not XP's, and the
+rewrite runs on it with the template alone; no change was needed for
+2000. Every start status 0; the chain port started. Two wizards for each
+drive, as `w2E` (the first finds no driver, finished with its default;
+after the mark service's restart the second offers Stor98, `oem4.inf`,
+"Digital Signature Not Found" answered Yes). The parent's drive: Stor98,
+started, E: ORICO, `F.BAT` (`fc /b`): no differences. The chained drive:
+Stor98, **Code 10**: `cm.chain.irq.no=00041400`, why 4: its interrupt
+arrives on another pin of the tunnel port (the chain port is device 1),
+the Standard PC HAL limit of record 21 section 6.2.1 that "45.15 (legs)"
+r1 recorded (the release-notes text of 45.15 has it). Windows then asked
+for a restart; the warm restart stopped in real mode (black text screen,
+CS 2000h, EIP D4Fh unchanged, also after a QMP `system_reset`). That is
+the q35 2000 base's own warm-reboot hang (`q35-bases\w2k\README.txt`):
+three controls on the same overlay stopped at the same address - a
+restart with the chain attached at power-on (tag d), with no USB4 device
+(tag e) and with no USB4 layout at all (tag f). A cold start with the
+chain attached (tag c): both drives on Stor98, started, E: and F: ORICO,
+`fc /b` on each: no differences.
+
+**ME (`mC`, a fresh overlay of the ME base, `asm4242`).** The retry of
+`mB`: `RI9.BAT` (exit 3, "xHCI98 USB4 Router (ASMedia ASM4242): xhcicm
+3.3.0.0, started"), `SWAPQ9.BAT`, Shut Down, cold start: **the desktop**,
+the debug log ending at `cm.callwk.open` as `mB`'s did (that line is the
+idle state; `mB`'s black screen did not reproduce on a fresh overlay, and
+nothing in this driver's log separates the two boots). The parent and
+child plugged: `cm.brnum.9x` numbered both members (buses 4 to 0Eh, the
+chain port 6 to 0Eh), the Add New Hardware wizards installed the bridges
+and Stor98 (the staged INF chosen, as in "45.15 (legs)"). The parent's
+drive: E: ORICO, `fc /b`: no differences. The chained drive: Code 29 at
+the first plug (`cm.brnum.9x.irq-counts=02000305`: 5 functions, 3 lines
+set, 2 arriving on another pin; `cm.reenum.9x.noirq.refused`, its Stor98
+not yet installed); the child unplugged and plugged again:
+`cm.reenum.9x.noirq.after`, started with no interrupt (Stor98 polling,
+record 28 section 12, as the release notes say for ME: "the drive
+started at the re-plug after the first plug's Stor98 wizard"), F: ORICO,
+`fc /b`: no differences.
+
+**XP x64 (`x6B`, a fresh overlay of the XP x64 base, `asmboard` from the
+first boot).** The install finishes in about 15 minutes when (1) the
+first boot's Found New Hardware wizards are cancelled before the run
+(the one `x6A`'s run waited behind), (2) the wizards that appear during
+the run are answered, and (3) both of XP x64's prompts are answered:
+"Software Installation" (Continue Anyway) for each INF and, for each
+driver, "Security Alert - Driver Installation" ("Authenticode signature
+not found", default No; a No fails that install with `0x800B0100`). The
+packages here were unsigned (a clone without the key, catalogs made
+unsigned by `mkcat.ps1`); no certificate was made or used. Exit 3,
+restarted (XP x64 restarts warm). The parent and child plugged: the
+parent's NVMe at code 18 (the first wizard, as on XP) and the **chain
+port at Code 12** ("System Settings Change" asked for a restart). The
+lists (`reg query`, `x6B\reg-1.txt`, decoded `x6B\reqs-1.txt`): the
+upstream port's and both downstream ports' `BasicConfigVector` are **XP's
+closed lists byte for byte** (compared with `xpC\reg-1.txt`: 1296 hex
+digits each, no byte different, the header's bus and slot included):
+288h bytes, 19 descriptors, the bridge's interrupt last.
+`XhciCmBridgeReqDiag` (the release flavour's record): six attempts, each
+shape 0, system 2, outcome 4 (`00004201`, `00004202`): record 33 had no
+template for NT 5.2 (section 7.7), so the lists were left and the chain
+port met XP's Code 12 of before revision 4.
+
+### The change (`2c319f06`)
+
+`CmBreqShape` gives NT minor version 2 XP's template; XP x64 is planned,
+written and recorded as XP (the diagnostic's system field 2). Record 33
+revision 5 records both readings (sections 2.5, 6.1, 7.7, 9.2, 10.2 R4,
+13.2); `test_cm_breq` gains `test_xp64` (XP x64's list as read, planned
+and written as XP's byte for byte, the tail kept, the diagnostic) and the
+old "XP x64 has no template" checks now hold 2000's list on XP x64 left.
+Reviewed and revised.
+
+### The legs on `2c319f06`
+
+Gated builds of `2c319f06`: `all` (x86) and `all -amd64`, "BUILD + GATES
+PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-pcie3\build-all.log`,
+`build-amd64-all.log`; the base `e0d373fa` passed both as well,
+`build-all-e0d373fa.log`, `build-amd64-all-e0d373fa.log`); host tests
+passed (`htest1.log`, `test_cm_breq` and `test_cm_breq_amd64` 17188
+checks each). Packages (`make-package.ps1`): release x86 `xhcicm.sys`
+`bb2ed5c1...`, `xhci98.sys` `bf8d7c66...`, `stor98.sys` `43885f89...`;
+qemu x86 `xhcicm.sys` `c68f081d...`, `xhci98.sys` `4effb492...`; release
+x64 `xhcicm.sys` `4a622c9c...`, `xhci98.sys` `5968ad34...`, `stor98.sys`
+`740b6dd3...` (unsigned, catalogs made unsigned); qemu x64 `xhcicm.sys`
+`c13aeafb...`, `xhci98.sys` `3757acc7...`; the installer and `xhcimark`
+built from this tree (`XHCIINST.EXE` `ddd0edd9...`, `XHCIMARK.EXE`
+`e65ba401...`, `XHCIIN64.EXE` `50c6f94b...`, `XHCIMK64.EXE`
+`c50dee44...`). Transfer folders `xfC` (x86) and `xfD` (x86 and x64,
+`SWAPQ64.BAT` for the qemu flavour on XP x64); `hashes-xfC.txt`,
+`hashes-xfD.txt`.
+
+| Leg | System | Layout | Read | Verdict |
+|---|---|---|---|---|
+| `w2G` | 2000 | `asmboard`, parent + child | as `w2F`: `cm.breq.how` `00001021`, `00051022`, `00001022`, every start 0, the chain port started; two wizards a drive (one second-wizard signature prompt was answered No by the operator, leaving the parent's drive at code 28; `INSTALL.BAT` run again put Stor98 on it); the parent's drive E: ORICO, `fc /b` no differences; the chained drive Code 10 (`cm.chain.irq.no=00041400`, another pin); tag c, a cold start with the chain attached: both drives on Stor98, started, E: and F: ORICO, `fc /b` on each: no differences | pass (the chained drive starts after a start with it attached, the 45.15 limit) |
+| `mD` | ME | `asm4242`, parent + child | fresh overlay; `RI9.BAT`, `SWAPQ9.BAT`, cold start: the desktop (the second ME boot after the install here; no black screen); the plug: the bridges' and the chained drive's wizards, the chained drive at Code 29; the parent's drive enumerated with no wizard (problem 1; `XHCIINST /devices` listed it with no driver until the parent's re-plug); the child unplugged and plugged again: the chained drive started with no interrupt (`cm.reenum.9x.noirq.after`); the parent unplugged and plugged again: its Stor98 wizard, the staged INF chosen; both on Stor98, started, E: and F: ORICO, `fc /b` on each: no differences | pass after the parent's re-plug; the missing first wizard read again in `mE` |
+| `mE` | ME | `asm4242`, parent + child | `mD` again on a third fresh overlay (`RI9.BAT`, `SWAPQ9.BAT`, cold start: the desktop): the first plug gave three bridge wizards and both drives' Stor98 wizards (the second with the staged INF chosen); the parent's drive on Stor98, started, E: ORICO; the chained drive at Code 29, started with no interrupt at the child's re-plug, F: ORICO; `fc /b` on each: no differences. `mD`'s missing wizard did not recur (`mC` had it too) | pass |
+| `x6C` | XP x64 | `asmboard`, parent + child | fresh overlay, `asmboard` from the first boot; the first boot's wizards cancelled, `INSTALL.BAT` with both prompts answered (one run, exit 3), `SWAPQ64.BAT`, restarted; the plug: `cm.breq.how` `01001211` for 03:00 and `01051212`, `01001212` for 04:00 and 04:08 (shape 1, system 2, rewritten, the interrupt kept), every start 0; the rewritten lists (`x6C\reqs-2.txt`): the upstream port the parent's whole windows, each downstream port a memory ladder from 192 MB, the interrupt last; the chain port started; the first wizard for each drive ("Cannot Install this Hardware"), then after the mark service's restart the second, "Stor98 Storage Controller for NVMe SSDs" (Continue Anyway); both on Stor98, started, D: and F: ORICO, `fc /b` on each: no differences | pass |
+
+### Findings
+
+- 2000's closed list of a hot-added switch port is its template alone,
+  with no interrupt descriptor, on the Standard PC HAL; XP x64's is XP's
+  byte for byte. With `2c319f06` the rewrite runs on 2000, XP and XP x64
+  for the same switch, and on all three the chain port starts.
+- On 2000 (the Standard PC HAL), 98 SE and ME a drive behind the chain
+  port gets no interrupt when the chain is plugged at the desktop (it
+  arrives on the tunnel port's second pin): 2000 leaves it at Code 10
+  until Windows starts with it attached (45.15's recorded limit); on ME
+  it starts with no interrupt at the next plug of the child (record 28
+  section 12). XP and XP x64 route it.
+- `mB`'s black screen did not reproduce on three fresh ME overlays (`mC`,
+  `mD`, `mE`), each the same steps; nothing in this driver's log of `mB` points
+  at a cause (it ends where a healthy boot's idles). Not chased further.
+- ME, `mD`: Windows showed no Add New Hardware wizard for the parent's
+  drive at its first plug (its devnode at problem 1, no driver); the
+  re-plug of the parent raised it. `mC` and `mE`, the same steps on fresh
+  overlays, both had it at the first plug; the connection manager's log
+  of `mD` shows the same numbering and re-enumeration as theirs, so
+  nothing read separates the runs. Seen once in three; not chased
+  further.
+- The XP x64 install on this layout needs the first boot's Found New
+  Hardware wizards closed before the run, and its "Security Alert -
+  Driver Installation" (an unsigned package) answered Yes as well as
+  "Software Installation"; `x6A`'s run waited behind an open wizard.
+- 2000's warm restart on these q35 guests stops in real mode (CS 2000h,
+  EIP D4Fh) with or without the USB4 layout: the base's own, recorded
+  in its README; cold-start instead.
+
+### Left
+
+Nothing of 45.55 on these systems. Not read: 2000 on an ACPI HAL (record
+33 section 13.2), a real dock or enclosure.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
