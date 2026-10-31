@@ -5637,6 +5637,166 @@ then the kid, both NVMe started.
   which the launcher does not give 2000 and XP, or one within 4 GB); 2000,
   ME, XP x64 and Vista legs.
 
+## 45.64 the emulator read against Linux's and Windows 11's own USB4 stacks (2026-10-31)
+
+Reference connection managers, with nothing of this package installed,
+on `usb4-emu`'s emulated hardware: Linux's `thunderbolt` driver on a
+Kubuntu 26.04.1 live guest and Windows 11's in-box USB4 stack on a
+Windows 11 x64 guest, each on q35 under WHPX on development host A.
+Every difference was read either as the model's (fixed in `usb4-emu`
+with a qtest) or as a platform piece the emulator lacks. No Windows 11
+support is claimed by this task.
+
+### Setup
+
+- `usb4-emu` branch `w45-u4ref` from main `6fbfb08`, main `dc6d437`
+  (the Falcon, Cactus and Light Ridge switches) merged in before the
+  Apple legs; QEMU from the fork at `af059ed`, then `8956e35`, then the
+  two fixes below (`a1bb50a`). The first five Linux legs (generic,
+  ASM4242, version 2, chain, Alder Lake) ran on `af059ed`, the rest on `8956e35`; the two
+  fixed points were re-read on `a1bb50a`.
+- Linux: the stock `kubuntu-26.04.1-desktop-amd64.iso` (read-only CD,
+  kernel 7.0.0-30-generic and its initrd booted directly), command line
+  `boot=casper console=ttyS0,115200 systemd.unit=multi-user.target
+  thunderbolt.dyndbg=+p`; the trace events `thunderbolt:tb_tx`, `tb_rx`
+  and `tb_event` enabled after login (`trace_event=thunderbolt:*` on the
+  command line does not reach the module: "Failed to enable trace
+  event"); 2 vCPUs, 4 GB, no network. Each leg: authorise every router,
+  write and read back 16 to 32 MiB on every NVMe disk (O_DIRECT, SHA-256
+  equal), unplug a device router (`device_del`) and plug it back
+  (`device_add`), then dmesg, the trace buffer, `lspci -vvv`, sysfs and
+  debugfs copied to a disk.
+- Windows: a fresh unattended install of
+  `Windows11_Client_x64_en-us_26300_9457.iso` (build 26300.9457, in-box
+  `usb4hostrouter.inf` and `usb4devicerouter.inf` 10.0.26100.9278) with
+  the LabConfig TPM, Secure Boot, RAM, CPU and storage bypasses, OVMF
+  without Secure Boot, 2 vCPUs, 4 GB, user networking restricted to the
+  guest agent's forward; its own base under the worker's VM folder,
+  overlays per leg. Read from `Get-PnpDevice` (status, problem code and
+  problem status), the disks (8 MiB written and read back per disk),
+  `setupapi.dev.log`, the System and Kernel-PnP logs, and the
+  TraceLogging rundown of the USB4 host and device router providers
+  (`usb4-emu`'s `guest-usb4-trace.ps1`).
+
+### Linux, per model
+
+| Leg | Host | Devices | What Linux did |
+|---|---|---|---|
+| gen1 | generic USB4 host (`host-model=minimal`), USB3 xHCI wired | USB4 router with an NVMe and a USB disk behind its USB3 Up adapter | software CM, security user; the USB3 tunnel at enumeration, before authorisation (the disk read back); the PCIe tunnel on authorisation; deauthorise, re-authorise, unplug and plug all followed |
+| asm | ASM4242, captured board preset, its PCIe switch | USB4 router; ASM2464 | the firmware CM's tunnel at power-on, then "0: resetting" and both routers enumerated again; both tunnels on authorisation; the ASM2464 unplugged and plugged |
+| v2 | version 2 host | version 2 router; version 1 router | Gen 4 40 Gb/s x2 and Gen 3 20 Gb/s x2; enhanced uni-directional TMU (MedRes) on the version 2 router; Extended Encapsulation on the version 2 tunnel only; an asymmetric transition and LINK_RECOVERY ignored; Enable Gen 4 Link Recovery never set, so an uncorrectable error was a disconnect, a re-enumeration and a fresh authorisation; with the bit preset by the emulator, a recovery with no event and the disk readable |
+| chain | generic | USB4 router with a chained USB4 router (route 301); a Thunderbolt 3 router on port 2 | all three enumerated (the Thunderbolt 3 one as generation 3, "Thunderbolt 3 Switch: 8086:15d3"), bonded and tunnelled; the chained router, then its parent, unplugged and plugged |
+| adl | `host-model=intel-adl` | the TS3 Plus model with a chained ASM2464 (routes 3, 303) | as the Framework capture: both tunnels, both disks; the dock's unplug took both |
+| amd | `host-model=amd` | the dock model (`dock=on`: PCIe switch, NVMe, e1000e, xHCI with a USB disk); Thunderbolt 3 router | "USB4 Switch: 438:208", "USB4 Host Router (amd preset)"; the dock's switch, NIC (link up), xHCI and USB disk and both NVMe disks; the dock unplugged and plugged |
+| fr, cr, lr | `tb2-apple-falcon-ridge`, `tb1-apple-cactus-ridge`, `tb1-apple-light-ridge` with their switches | Thunderbolt 3 router with the generation's router ID; USB4 router or Thunderbolt 3 router | software CM, both tunnels, unplug and plug; Falcon Ridge only with the Apple SMBIOS vendor (below) |
+| aar, atr | `tb3-apple-alpine-ridge`, `tb3-apple-titan-ridge` with their switches | Thunderbolt 3 router; ASM2464 or USB4 router | software CM, both tunnels, unplug and plug |
+| icmar, icmtr | `tb3-alpine-ridge`, `tb3-titan-ridge`, switch and TB xHCI | Alpine Ridge: TS3 Plus model with a chained USB4 router; Titan Ridge: a Thunderbolt 3 router on each port, an ASM2464 chained to the second | firmware CM (`icm.c`): the chained router announced at depth 2 (routes 301, 303), approvals, both or all three tunnels, unplug and plug |
+| icl | `tb3-ice-lake` | Thunderbolt 3 router; ASM2464 | firmware CM, security none, both disks from the first scan; the unplug while the NHI was runtime suspended was not reported until the next driver ready, as `usb4-emu`'s ICM-ICE-LAKE.md 5 records |
+
+### Windows 11, per model
+
+| Host | Test-signing | What Windows did |
+|---|---|---|
+| generic (`minimal`) | off | "USB4(TM) Host Router (Microsoft)" bound (`PCI\USB4_MS_CM` from the ACPI `_OSC` grants), then Code 31, problem status `0xC00000BB`, before any access to the host router's BAR; the same with an emulated IOMMU (`intel-iommu`, no tunnel ports) |
+| `intel-adl`, `amd` | off | the same Code 31; the tunnel root port behind it Code 51 (waiting on a dependency) |
+| ASM4242 | off | host router, root router and device router started; the NVMe tunnelled and listed as a disk |
+| generic with the USB3 xHCI | on | both device routers, both PCIe tunnels and the USB3 tunnel up with no user action; the USB disk and both NVMe disks read back; the router with the USB disk unplugged and plugged, all back |
+| ASM4242 with an ASM2464 | on | both routers and disks; the ASM2464 unplugged and plugged |
+| version 2 | on | "USB4 Root Router (2.0)" and "USB4 Router (2.0)" at Gen 4, the version 1 router "(1.0)" at Gen 3, both disks; Enable Gen 4 Link Recovery left clear; an uncorrectable error: router removed and enumerated again, its disk back; with the bit preset by the emulator: recovered, no removal |
+| `amd` with the dock model and a Thunderbolt 3 router | on | both routers ("USB4 Dock", "Thunderbolt 3(TM) Router"), the dock's xHCI with its USB disk, its e1000e and both NVMe disks; the three disks read back (the dock's NIC on a user network of its own, 10.0.3.0/24: on the guest's own subnet the guest's replies left through it and the agent went silent, a launch error, not the model's) |
+| `intel-adl` with the TS3 Plus model and a chained ASM2464 | on | "Thunderbolt 3(TM) Router" and the chained "USB4 Router (1.0), ASMedia - 246x", both disks read back |
+| generic, chain and a Thunderbolt 3 router | on | the chained USB4 router and "Thunderbolt 3(TM) Router" on port 2, three disks; the chained router and the Thunderbolt 3 router unplugged and plugged |
+| `tb3-alpine-ridge`, `tb3-titan-ridge`, `tb3-ice-lake` | on | the NHI is "Base System Device", Code 28: no in-box INF names `8086:15bf`, `15eb`, `8a17` or the Thunderbolt 1 and 2 NHIs; on Ice Lake (security none) the firmware CM's tunnel still brought the NVMe up |
+
+The Apple Thunderbolt 1, 2 and 3 profiles were not run on Windows 11:
+nothing in it binds them.
+
+### Differences and how each was read
+
+- Model, fixed: a spec-derived host router's lane adapters read Target
+  Link Speed 0 and no RS-FEC request after the power-on reset, because
+  the reset that keeps a connection manager's values across a Host Router
+  Reset (Spec 6.10) kept the still-empty adapters the first time.
+  Windows' rundown showed `TargetLinkSpeed=0x0` on the generic host's
+  ports and `0xC` on the device routers'; the captured Alder Lake host
+  reads `0xC`. Fork `f5a3138`, qtest `/usb4-tb3dev/host-lane-defaults`
+  (fails without the fix); Windows re-read on the fixed build:
+  `0xC` on both. Side effect: the generic host's PORT_CS_18 RS-FEC
+  Enabled (bit 12) now reads 1 on a linked port, as the device side
+  already did.
+- Model, fixed: the Thunderbolt controller switches' NHI and xHCI ports
+  were hot-plug slots (QEMU's XIO3130 default), where the captured Alpine
+  Ridge has `HotPlug-`. Linux on the Apple Thunderbolt 1 and 2 hosts
+  logged "device link creation from 0000:02:00.0 failed"
+  (`tb.c` `tb_apple_add_links` walks every hot-plug downstream port of
+  the switch, the NHI's own included). Fork `a1bb50a`, qtest
+  `/usb4-tbhost/switch-dsp-slots` (fails without the fix); Falcon Ridge
+  re-read: links from the two tunnel ports only.
+- Platform: Linux takes its software CM on Falcon Ridge only on an Apple
+  machine (`icm.c` `icm_fr_is_supported` reads the DMI system vendor);
+  without `-smbios type=1,manufacturer="Apple Inc."` it took the firmware
+  CM and logged "could not start ICM firmware", as `usb4-emu`'s
+  TB-SWCM-HOSTS.md already says.
+- Platform: Windows 11's Code 31 on the generic host is not a missing
+  ACPI or DMA-remapping piece: the same machine, ACPI `_OSC` and `_DSD`
+  start the ASM4242 preset, also at the same address on the root bus with
+  the same tunnel ports (so not the topology), and an IOMMU did not lift
+  it. Test-signing lifts it, as `usb4-emu`'s WINDOWS-DEBUG.md recorded in
+  October. What remains different between the presets at the PCI level
+  is the host router's IDs (`1b36:00f4` refused, `1b21:2425` started),
+  BAR0's width, the ASM4242's BAR2 and its MSI capability; the IDs are
+  the leading reading [inferred: no run isolated them, as the model has
+  no property that changes the IDs alone]. Left open in `usb4-emu`.
+- Read as the Specification's, not changed: a host router that is not yet
+  enumerated when the connection manager starts reports its linked lanes
+  once enumerated (Spec 6.8.1.2). Linux queues those plug events, resets
+  the router, and so enumerates each device router twice about 100 ms
+  apart ("switch unplugged" for the reset's stale unplug); the end state
+  is right. The captured hosts were already enumerated by their firmware
+  when Linux bound, so no capture shows this case.
+- By design: with the PCIe tunnel down and the router still attached,
+  Presence Detect stays set (`usb4-emu` ARCHITECTURE.md 4.4, link
+  retrain), so Linux's pciehp logs "Card present" and "No link" after a
+  deauthorisation.
+- Not a model difference: "pciehp: Timeout on hotplug command 0x0000" on
+  a dock's or chained router's switch port after its parent was
+  unplugged: Linux waited for a completion interrupt from a switch behind
+  a closed gate, as from a switch that has gone.
+
+### Where this package's CM and the reference stacks differ
+
+- Enable Gen 4 Link Recovery: neither Linux nor Windows 11 set it on a
+  Gen 4 link, so to both an uncorrectable Gen 4 error was a disconnect;
+  this package's CM sets it (45.56), so to it the same error is a
+  recovery.
+- USB3 tunnels: Linux built the USB3 tunnel at enumeration under
+  security level user, before the router was authorised; Windows built
+  every tunnel with no user action.
+- Version 2: both stacks wrote Connection Manager USB4 Version 1.0 on
+  every router; neither started an asymmetric transition.
+
+### Evidence
+
+- Linux, per leg: `E:\xhci98-vm\p45\w45-u4ref\legs\<leg>\out\<leg>\`
+  (`dmesg.txt`, `trace.txt`, `lspci.txt`, `sysfs.txt`, `debugfs.txt`)
+  and `legs\<leg>\usb4-trace.log` (the emulator's trace); `fr-nosmbios`
+  is the Falcon Ridge leg without the SMBIOS vendor, `fr2` the re-read
+  on the fixed build. The v2, chain and adl dmesg files hold only what
+  followed a `dmesg -C`; their boot lines were read on the console.
+- Windows: `E:\xhci98-vm\p45\w45-u4ref\vms\w-gate\` (not test-signed:
+  `tr\`, the gate's ETW zip, and `usb4-trace-*.log`) and `vms\w-ts\`
+  (test-signed: `trace-gen-hotplug.zip`, `trace-v2.zip`,
+  `trace-gen-fixed.zip` and `usb4-trace-<leg>.log`).
+- qtests: every `usb4-emu` suite against its TAP plan on `a1bb50a`:
+  host 43, tunnel 31, icm 40, icm-tr 16, icm-icl 5, harness 25, fault 9,
+  asm4242 16, asm2464 4, tb3dev 13, tbhost 12, root-hotplug 22, usb3 9,
+  retrain 11, xdomain 6, all passed; the fabric harness 51794 checks, 0
+  failures (`E:\xhci98-scratch\p45-w45-u4ref\qt\`).
+- `usb4-emu` commits `48b7813` (the patch series re-exported at
+  `a1bb50a`, LINUX-TEST.md and WINDOWS-DEBUG.md "Reference read") and
+  `5d73560` and `ca8a7ed` (the amd and dock rows, the gate's reading
+  qualified), reviewed and revised.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
