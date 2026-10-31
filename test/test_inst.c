@@ -8375,7 +8375,7 @@ static void test_other_pkgs(void)
     static const char *const freeReadme[] = {
         "video/uvc98", "audio/uac2", "audio/usbmidi", "net/cdcnet",
         "net/rtl815x", "net/ax88179", "serial/usbcom", "hid/xpad98",
-        "storage/usbflop", "generic/libusb0"
+        "storage/usbflop", "generic/libusb0", "print/usbprn"
     };
     char ids[INST_PKG_MAX * INST_PKG_ID_CHARS];
     char pkg[INST_PKG_ID_CHARS];

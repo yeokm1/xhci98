@@ -9471,6 +9471,11 @@ const INST_OTHER_PKG instOtherPkgs[] = {
       "USB serial (usbcom): CDC ACM serial ports and modems", 0 },
     { INST_SET_FREE, "storage/usbflop", INST_PKG_CLASS, "Storage",
       "USB floppy (usbflop): UFI floppy drives", 0 },
+    /* print/usbprn: new with usb-wdm-free v0.1.7 (task 45.44), under the
+     * existing Other heading. */
+    { INST_SET_FREE, "print/usbprn", INST_PKG_CLASS, "Other",
+      "Printers (usbprn): USB printers and USB-to-parallel printer cables",
+      0 },
     { INST_SET_FREE, "generic/libusb0", INST_PKG_CLASS, "Other",
       "libusb (libusb0): libusb-win32 0.1, for programs that talk to a "
       "device", 0 },
