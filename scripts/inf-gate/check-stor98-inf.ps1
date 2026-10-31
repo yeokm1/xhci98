@@ -10,8 +10,11 @@ check-uas-inf.ps1 and check-cm-inf.ps1; this holds Stor98's two,
 src\stor98\inf\stor98-x86.inf and stor98-x64.inf, which the package stages as
 stor98.inf. Each must have exactly one DriverVer line, zero-padded
 MM/DD/YYYY, equal to the header's date and version; its Signature must be
-$CHICAGO$ for the x86 INF (98 SE and ME read it) and $Windows NT$ for the x64
-one. The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
+$Windows NT$ for both. The x86 INF is NT-only since 3.4.0.0 (design record 36
+section 3.3, owner 2026-10-31): 98 SE and ME install from the 9x INF, so it
+names stor98.sys alone in [SourceDisksFiles], has no undecorated install
+section and writes nothing only 98 SE and ME read (no DevLoader, PortDriver,
+stor98.mpd or 9x settings). The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
 packager makes and test-signs (design record 19, owner 2026-10-22: Windows
 8 to 10 x64 refuse a package without one in test-signing mode), and writes
 no DmaRemappingCompatible (with it 1, Windows 10 x64 does not start Stor98:
@@ -29,7 +32,8 @@ empty, below stornvme on an internal drive (roadmap-usb4 43.59; record 31
 section 4.8, owner 2026-10-25: those systems restart a device with its ids
 read again, which loses the tunnel id). No PCI\CC_ id may appear in any
 other model line. The third INF, src\stor98\inf\stor98-9x.inf (staged as stor98w9.inf
-and installed on 98 SE and ME alone), keeps the class match beside the id
+in the flat package, published as 98-me\stor98\stor98.inf, and installed
+on 98 SE and ME alone), keeps the class match beside the id
 (design record 31 section 5.2, owner 2026-10-25): one undecorated models
 section with the tunnel id and PCI\CC_010802 as its compatible id, no
 decoration, no NT section, stor98.mpd its one file, no catalog. The
@@ -44,8 +48,9 @@ other the x86 INF's.
 
 .PARAMETER SelfTest
 Check that the gate refuses a wrong date, a wrong version, an unpadded date,
-a second DriverVer line and a wrong model shape, and accepts the committed
-INFs.
+a second DriverVer line, a wrong model shape and a 9x part in the x86 INF,
+and accepts the committed INFs. A refusal case that leaves its INF unchanged
+fails the self-test.
 #>
 
 [CmdletBinding()]
@@ -69,8 +74,10 @@ function Get-Want {
 
 function Get-InfFault {
     # "" when the INF is right, else why not.
-    param([string]$File, [string]$Signature, [string]$Want)
+    param([string]$File, [string]$Arch, [string]$Want)
     $t = [System.IO.File]::ReadAllText($File)
+    $x64 = ($Arch -eq 'x64')
+    $Signature = '$Windows NT$'
     $dv = [regex]::Matches($t, '(?im)^[ \t]*DriverVer[ \t]*=[ \t]*([^\r\n;]*?)[ \t]*(;[^\r\n]*)?\r?$')
     if ($dv.Count -ne 1) { return "it has $($dv.Count) DriverVer lines, not one" }
     $got = ($dv[0].Groups[1].Value -replace '\s', '')
@@ -81,7 +88,7 @@ function Get-InfFault {
     # section writes MSISupported 0, so a drive stornvme ran (MSISupported
     # 1) starts on Stor98, which the SCSI port driver serves with no
     # message-signaled interrupt.
-    $hwName = if ($Signature -eq '$Windows NT$') { 'Stor98_Inst.NTamd64.HW' } else { 'Stor98_Inst.NTx86.HW' }
+    $hwName = if ($x64) { 'Stor98_Inst.NTamd64.HW' } else { 'Stor98_Inst.NTx86.HW' }
     $hw = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($hwName) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
     $hwl = @()
     if ($hw.Success) { $hwl = @([regex]::Matches($hw.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value -replace '[ \t]', '' }) }
@@ -94,7 +101,7 @@ function Get-InfFault {
     # of its name.
     if ($hrl.Count -ne 1 -or $hrl[0] -cnotmatch '^HKR[ \t]*,[ \t]*"Interrupt Management\\MessageSignaledInterruptProperties"[ \t]*,[ \t]*MSISupported[ \t]*,[ \t]*%REG_DWORD%[ \t]*,[ \t]*0$') { return "its [$hrName] section is not the one line writing MSISupported 0 (task 45.31)" }
     $cat = @([regex]::Matches($t, '(?im)^[ \t]*CatalogFile(\.[^ \t=]*)?[ \t]*=[ \t]*([^\r\n;]*?)[ \t]*(;[^\r\n]*)?\r?$'))
-    if ($Signature -eq '$Windows NT$') {
+    if ($x64) {
         if ($cat.Count -ne 1 -or $cat[0].Groups[1].Value -ne "" -or $cat[0].Groups[2].Value -cne "stor98.cat") {
             return "it does not name its catalog once as CatalogFile=stor98.cat (design record 19: the packager makes and signs it)"
         }
@@ -145,13 +152,13 @@ function Get-InfFault {
     $mlines = @([regex]::Matches($mfgSec.Groups[1].Value, '(?m)^[ \t]*([^;\s\r\n][^\r\n]*?)[ \t]*(;[^\r\n]*)?\r?$') | ForEach-Object { $_.Groups[1].Value })
     if ($mlines.Count -ne 1 -or $mlines[0] -notmatch '^%Mfg%[ \t]*=[ \t]*(.+)$') { return "its [Manufacturer] section does not hold exactly one %Mfg% line" }
     $parts = @($Matches[1].Split(',') | ForEach-Object { $_.Trim() })
-    $want = if ($Signature -eq '$Windows NT$') { 'Stor98_Models,NTamd64,NTamd64.6.3' } else { 'Stor98_Models,NTx86.6.3' }
+    $want = if ($x64) { 'Stor98_Models,NTamd64,NTamd64.6.3' } else { 'Stor98_Models,NTx86.6.3' }
     if (($parts -join ',') -cne $want) { return "its [Manufacturer] line is '$($parts -join ',')', not '$want' (record 31 section 4.7)" }
-    $sec63 = if ($Signature -eq '$Windows NT$') { 'Stor98_Models.NTamd64.6.3' } else { 'Stor98_Models.NTx86.6.3' }
+    $sec63 = if ($x64) { 'Stor98_Models.NTamd64.6.3' } else { 'Stor98_Models.NTx86.6.3' }
     foreach ($h in [regex]::Matches($t, '(?ims)^[ \t]*\[([^\]\r\n]+)\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')) {
         if ($h.Groups[1].Value.Trim() -ne $sec63 -and [regex]::IsMatch($h.Groups[2].Value, '(?im)^[ \t]*%Stor98\.DeviceDesc%[^\r\n;]*PCI\\CC_')) { return "a model line outside [$sec63] matches a PCI class id, which would offer Stor98 for an internal drive" }
     }
-    $sections = if ($Signature -eq '$Windows NT$') { @(@('Stor98_Models.NTamd64', 0), @('Stor98_Models.NTamd64.6.3', 3)) } else { @(@('Stor98_Models', 0), @('Stor98_Models.NTx86.6.3', 3)) }
+    $sections = if ($x64) { @(@('Stor98_Models.NTamd64', 0), @('Stor98_Models.NTamd64.6.3', 3)) } else { @(@('Stor98_Models', 0), @('Stor98_Models.NTx86.6.3', 3)) }
     foreach ($s in $sections) {
         $sm = [regex]::Match($t, '(?ims)^[ \t]*\[' + [regex]::Escape($s[0]) + '\][ \t]*\r?$(.*?)(?=^[ \t]*\[|\z)')
         if (-not $sm.Success) { return "it has no [$($s[0])] section" }
@@ -159,7 +166,7 @@ function Get-InfFault {
         $line = switch ($s[1]) { 3 { '%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802' } default { '%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802' } }
         if ($ml.Count -ne 1 -or $ml[0] -cne $line) { return "its [$($s[0])] section is not the one line '$line'" }
     }
-    if ($Signature -eq '$Windows NT$') {
+    if ($x64) {
         # The 64-bit INF: no undecorated models section, empty or not, for one
         # the [Manufacturer] line names - xhci98's installer refuses such an
         # INF (inst_inf_arch_ok), and with it every x64 install (2026-10-19).
@@ -172,7 +179,22 @@ function Get-InfFault {
             }
         }
     }
-    return (Get-SettingsFault $t ($Signature -ne '$Windows NT$') $true)
+    if (-not $x64) {
+        # NT-only (design record 36 section 3.3): stor98.sys its one file, no
+        # undecorated install section (98 SE and ME install from the 9x INF),
+        # and nothing only their engine reads, outside comments.
+        $sf = Get-SectionLines $t 'SourceDisksFiles'
+        if ($null -eq $sf -or @($sf).Count -ne 1 -or ($sf[0] -replace '[ \t]', '') -cne 'stor98.sys=1') { return "its [SourceDisksFiles] is not stor98.sys alone (the x86 INF is NT-only, design record 36 section 3.3)" }
+        foreach ($h in [regex]::Matches($t, '(?m)^[ \t]*\[([^\]\r\n]+)\]')) {
+            $name = $h.Groups[1].Value.Trim()
+            if ($name -match '^(?i)Stor98_Inst(\.|$)' -and $name -notmatch '^(?i)Stor98_Inst\.NTx86(\.|$)') { return "it has the install section [$name], which is not an NTx86 one (the x86 INF is NT-only, design record 36 section 3.3)" }
+        }
+        foreach ($raw in ($t -split '\r?\n')) {
+            $line = ($raw -replace ';.*$', '')
+            if ($line -match '(?i)(stor98\.mpd|DevLoader|PortDriver|IOSUBSYS|HKLM[ \t]*,[ \t]*"?System\\CurrentControlSet\\Services\\stor98)') { return "it names '$($Matches[1])', which only 98 SE and ME read (the x86 INF is NT-only, design record 36 section 3.3)" }
+        }
+    }
+    return (Get-SettingsFault $t $false $true)
 }
 
 # The settings (xhci98 roadmap-usb4 45.50, owner 2026-10-30: every value a
@@ -260,8 +282,8 @@ function Get-Inf9xFault {
 try {
     $want = Get-Want
     $infs = @(
-        @{ File = (Join-Path $repo "src\stor98\inf\stor98-x86.inf"); Sig = '$CHICAGO$' },
-        @{ File = (Join-Path $repo "src\stor98\inf\stor98-x64.inf"); Sig = '$Windows NT$' }
+        @{ File = (Join-Path $repo "src\stor98\inf\stor98-x86.inf"); Arch = 'x86' },
+        @{ File = (Join-Path $repo "src\stor98\inf\stor98-x64.inf"); Arch = 'x64' }
     )
     $inf9x = Join-Path $repo "src\stor98\inf\stor98-9x.inf"
     if ($SelfTest) {
@@ -274,11 +296,14 @@ try {
             $unpadded = "{0}/{1}/{2}" -f [int]$d[0], [int]$d[1], $d[2]
             $cases = @(
                 @{ T = $base; Ok = $true; Why = "the committed x86 INF" },
-                @{ T = $base.Replace("AddReg=Stor98_IOS,Stor98_AddReg_9x,Stor98_Settings_9x", "AddReg=Stor98_IOS,Stor98_AddReg_9x"); Ok = $false; Why = "the 98 SE and ME settings not written (45.50)" },
-                @{ T = $base.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0", "HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,1"); Ok = $false; Why = "a 98 SE and ME setting off its default (45.50)" },
-                @{ T = $base.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0", "HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010001,0"); Ok = $false; Why = "a 98 SE and ME setting written over a user's (45.50)" },
-                @{ T = $base.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0`r`n", ""); Ok = $false; Why = "a 98 SE and ME setting missing (45.50)" },
-                @{ T = $base.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorWriteThrough,0x00000002,`"auto`"", "HKLM,`"System\CurrentControlSet\Services\stor98`",StorWriteThrough,0x00000002,`"off`""); Ok = $false; Why = "write-through off its default auto (45.50)" },
+                @{ T = $base.Replace("[SourceDisksFiles]`r`nstor98.sys=1", "[SourceDisksFiles]`r`nstor98.mpd=1`r`nstor98.sys=1"); Ok = $false; Why = "stor98.mpd back in the x86 INF's file list (record 36 section 3.3)" },
+                @{ T = $base.Replace("[SourceDisksFiles]`r`nstor98.sys=1", "[SourceDisksFiles]`r`nstor98.sys=1`r`nother.sys=1"); Ok = $false; Why = "a second file in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Inst.NTx86]", "[Stor98_Inst]`r`nCopyFiles=Stor98_Files_NT`r`n`r`n[Stor98_Inst.NTx86]"); Ok = $false; Why = "an undecorated install section back in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_Inst.NTx86]", "[Stor98_Inst.NT]`r`nCopyFiles=Stor98_Files_NT`r`n`r`n[Stor98_Inst.NTx86]"); Ok = $false; Why = "an .NT install section in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_HwReg]", "[Stor98_IOS]`r`nHKR,,DevLoader,,*IOS`r`n`r`n[Stor98_HwReg]"); Ok = $false; Why = "a DevLoader line in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_HwReg]", "[Stor98_AddReg_9x]`r`nHKR,,PortDriver,,stor98.mpd`r`n`r`n[Stor98_HwReg]"); Ok = $false; Why = "a PortDriver line in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_HwReg]", "[Stor98_Settings_9x]`r`nHKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0`r`n`r`n[Stor98_HwReg]"); Ok = $false; Why = "a 98 SE and ME setting in the x86 INF" },
+                @{ T = $base.Replace("[Stor98_HwReg]", "; stor98.mpd, DevLoader and PortDriver in a comment`r`n[Stor98_HwReg]"); Ok = $true; Why = "the 9x names in a comment of the x86 INF" },
                 @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000000,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter written over a user's (45.50)" },
                 @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter missing a key (45.50)" },
                 @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"`r`n", ""); Ok = $false; Why = "no DriverParameter (45.50)" },
@@ -287,7 +312,7 @@ try {
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=" + $parts[0] + ",0.4.0.0"); Ok = $false; Why = "another version" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$unpadded," + $parts[1]); Ok = ($unpadded -eq $parts[0]); Why = "an unpadded date" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nDriverVer=$want"); Ok = $false; Why = "two DriverVer lines" },
-                @{ T = $base.Replace('"$CHICAGO$"', '"$Windows NT$"'); Ok = $false; Why = "the wrong Signature" },
+                @{ T = $base.Replace('"$Windows NT$"', '"$CHICAGO$"'); Ok = $false; Why = "the 9x Signature in the x86 INF" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$want`r`nCatalogFile=stor98.cat"); Ok = $false; Why = "a catalog in the x86 INF" },
                 @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models"); Ok = $false; Why = "no NT 6.3 models in the x86 INF" },
                 @{ T = $base.Replace("%Mfg%=Stor98_Models,NTx86.6.3", "%Mfg%=Stor98_Models,NTx86.6.3,NTx86.10.0"); Ok = $false; Why = "a later decoration in the x86 INF" },
@@ -308,9 +333,10 @@ try {
             )
             $i = 0
             foreach ($c in $cases) {
+                if (-not $c.Ok -and $c.T -ceq $base) { throw "self-test: $($c.Why) changes nothing in the x86 INF." }
                 $f = Join-Path $tmp ("m{0}.inf" -f $i); $i++
                 [System.IO.File]::WriteAllText($f, $c.T, (New-Object System.Text.ASCIIEncoding))
-                $why = Get-InfFault -File $f -Signature '$CHICAGO$' -Want $want
+                $why = Get-InfFault -File $f -Arch 'x86' -Want $want
                 if (($why -eq "") -ne $c.Ok) { throw "self-test: $($c.Why) was $(if ($c.Ok) { 'refused: ' + $why } else { 'accepted' })." }
             }
         } finally {
@@ -355,9 +381,10 @@ try {
         try {
             $i = 0
             foreach ($c in $c64) {
+                if (-not $c.Ok -and $c.T -ceq $b64) { throw "self-test: $($c.Why) changes nothing in the x64 INF." }
                 $f = Join-Path $tmp ("x{0}.inf" -f $i); $i++
                 [System.IO.File]::WriteAllText($f, $c.T, (New-Object System.Text.ASCIIEncoding))
-                $why = Get-InfFault -File $f -Signature '$Windows NT$' -Want $want
+                $why = Get-InfFault -File $f -Arch 'x64' -Want $want
                 if (($why -eq "") -ne $c.Ok) { throw "self-test: $($c.Why) was $(if ($c.Ok) { 'refused: ' + $why } else { 'accepted' })." }
             }
         } finally {
@@ -386,6 +413,7 @@ try {
         try {
             $i = 0
             foreach ($c in $c9) {
+                if (-not $c.Ok -and $c.T -ceq $b9) { throw "self-test: $($c.Why) changes nothing in the 9x INF." }
                 $f = Join-Path $tmp ("n{0}.inf" -f $i); $i++
                 [System.IO.File]::WriteAllText($f, $c.T, (New-Object System.Text.ASCIIEncoding))
                 $why = Get-Inf9xFault -File $f -Want $want
@@ -405,14 +433,14 @@ try {
             $inf9x = $Path
             $infs = @()
         } elseif ($leaf -match '(-x64|amd64)') {
-            $infs = @(@{ File = $Path; Sig = '$Windows NT$' })
+            $infs = @(@{ File = $Path; Arch = 'x64' })
         } else {
-            $infs = @(@{ File = $Path; Sig = '$CHICAGO$' })
+            $infs = @(@{ File = $Path; Arch = 'x86' })
         }
     }
     $bad = 0
     foreach ($inf in $infs) {
-        $why = Get-InfFault -File $inf.File -Signature $inf.Sig -Want $want
+        $why = Get-InfFault -File $inf.File -Arch $inf.Arch -Want $want
         if ($why -ne "") { Write-Host ("  {0}: {1}" -f $inf.File, $why); $bad++ }
         else { Write-Host ("  {0}: DriverVer={1}" -f (Split-Path -Leaf $inf.File), $want) }
     }

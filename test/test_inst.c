@@ -4833,7 +4833,12 @@ static void test_s98_inf_defaults(void)
     infs[1] = x86;
     infs[2] = x64;
     CHECK(nine != NULL && x86 != NULL && x64 != NULL, "Stor98's three INFs read");
-    for (f = 0; f < 2; f++) {
+    /* The x86 INF is NT-only (record 36 section 3.3): no 98 SE and ME
+     * setting, no stor98.mpd. */
+    CHECK(x86 != NULL && !has_text(x86, "System\\CurrentControlSet\\Services\\stor98\",") &&
+          !has_text(x86, "stor98.mpd=") && !has_text(x86, "PortDriver"),
+          "stor98-x86.inf writes no 98 SE and ME setting and names no stor98.mpd");
+    for (f = 0; f < 1; f++) {
         for (i = 0; infs[f] != NULL && i < INST_S98_COUNT; i++) {
             const INST_S98_VALUE *v = &instS98Values[i];
             if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
@@ -4845,7 +4850,7 @@ static void test_s98_inf_defaults(void)
                     v->Kind == INST_S98_WORDS ? "\"" : "", v->Def9x,
                     v->Kind == INST_S98_WORDS ? "\"" : "");
             sprintf(what, "%s writes %s at the table's 98 SE and ME default",
-                    f == 0 ? "stor98-9x.inf" : "stor98-x86.inf", v->Name9x);
+                    "stor98-9x.inf", v->Name9x);
             CHECK(has_text(infs[f], line), what);
         }
     }

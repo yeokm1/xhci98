@@ -675,7 +675,7 @@ try {
             "out\free\win9x\stor98.mpd" = "stand-in mpd"
             "out\free\x86\stor98.sys"   = "stand-in x86 sys"
             "out\free\amd64\stor98.sys" = "stand-in amd64 sys"
-            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
+            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "inf\stor98-x64.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`nCatalogFile=stor98.cat`r`n"
             "inf\stor98-9x.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "include\stor98cm.h" = [System.IO.File]::ReadAllText($nvHeader4)
@@ -740,7 +740,7 @@ try {
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")
-    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
+    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
     $nvNoReadme = New-Stor98Tree -Name "nv-noreadme" -Omit @("docs\package-readme.txt")
     foreach ($bad in @(
         @{ Arch = "x86";   Args = (Get-NvArgs $nvRoot $nvHeaderNone); Says = "is not byte for byte" },
