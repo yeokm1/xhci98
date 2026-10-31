@@ -3080,6 +3080,10 @@ VOID CmNhiStartWork(PCM_NHI nhi)
      * Version is read - the generation is the router's, whatever the
      * host (the ORICO behind Alpine Ridge reads 20h). */
     TbtIcmSetReadVersion(&nhi->Icm, TRUE);
+    /* Design record 35 section 3.10: XhciCmNet gates the host-to-host
+     * links under the firmware connection manager too. */
+    TbtIcmSetNetConfig(&nhi->Icm, (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0),
+                       cmNetRevision());
     CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;

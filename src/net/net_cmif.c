@@ -65,7 +65,14 @@ NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface)
     next->Parameters.QueryInterface.Interface = (PINTERFACE)&got;
     next->Parameters.QueryInterface.InterfaceSpecificData = NULL;
     KeInitializeEvent(&done, NotificationEvent, FALSE);
-    IoSetCompletionRoutine(irp, netCmIfDone, &done, TRUE, TRUE, TRUE);
+    /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it
+     * in, which would import RtlAssert into the qemu builds - a pair with
+     * no Windows 98 evidence (as src\hcd.h's HCD_SET_COMPLETION_ALWAYS).
+     * The same three fields. */
+    next->CompletionRoutine = netCmIfDone;
+    next->Context = &done;
+    next->Control = SL_INVOKE_ON_SUCCESS | SL_INVOKE_ON_ERROR |
+                    SL_INVOKE_ON_CANCEL;
     status = IoCallDriver(Lower, irp);
     if (status == STATUS_PENDING) {
         /* Windows 98 can return from the wait unsatisfied

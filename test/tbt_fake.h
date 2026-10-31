@@ -71,6 +71,7 @@ typedef struct FAKE {
     unsigned long InmailCmd;
     int MboxMode;
     unsigned long MboxLog[FAKE_MBOX_LOG];
+    unsigned long MboxDataLog[FAKE_MBOX_LOG];  /* the data register at each command */
     unsigned long MboxCount;
     unsigned long Imr[4];
     unsigned long ImrWrites;
@@ -483,6 +484,7 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
         if (v & 0x80000000UL) {
             if (g_fake.MboxCount < FAKE_MBOX_LOG) {
                 g_fake.MboxLog[g_fake.MboxCount] = v & 0xFFUL;
+                g_fake.MboxDataLog[g_fake.MboxCount] = g_fake.InmailData;
             }
             g_fake.MboxCount++;
             if (g_fake.MboxMode == FAKE_MBOX_COMPLETE) {

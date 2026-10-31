@@ -327,7 +327,13 @@ rem                  task 39-A.3): every Alpine Ridge frame ICM-PROTOCOL.md
 rem                  quotes as observed, the bind, plug, approve, unplug,
 rem                  resume and reconciliation sequences, a disconnect inside
 rem                  a 10 s approve, timeouts, retries, the error flag, and
-rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
+rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows;
+rem                  and the host-to-host links (task 45.59 step S4, design
+rem                  record 35 section 3.10): each row's 0x06, 0x07, 0x10 and
+rem                  teardown in Linux's layouts, a far host of tbt_xdp.c's
+rem                  engine to the service up and down, the unplug, the
+rem                  approve's failures, the keying, Lost and the owed
+rem                  teardown, the rediscovery and XhciCmNet 0
 rem   test_tbt_xdp - the inter-domain discovery and the USB4NET service
 rem                  (src\cm\tbt_xdp.c, task 45.59 step S1, design record 35
 rem                  sections 3 and 4): the IDS 2.0 UUID examples, its Table
@@ -645,9 +651,9 @@ rem the ring alone; the ICM client over the ring it drives; the hardware
 rem profiles and the selection over both, since each profile names its
 rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
-call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_xdp "test_tbt_xdp.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
-call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
@@ -700,7 +706,7 @@ call :run test_trlog "test_trlog.c ..\xhcitr\tr_log.c ..\xhcitr\tr_core.c ..\src
 rem test_tbt_select links the hardware profiles' selection (src\cm\tbt_hw.c,
 rem task 40-A.2, design record 22 section 3) and the ICM client and ring
 rem tbt_hw.c links against, without cm_vals.c.
-call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 rem test_u4cm links the USB4 software connection manager (src\cm\tbt_u4cm.c,
 rem tasks 40-A.3 and 40-A.8, design record 22 section 14.1) over the fake
 rem fabric of u4_fakefab.c, with the router-version helper of tbt_hw.c and

@@ -5956,10 +5956,18 @@ build. The legs (record 35 section 11.3) wait for S5.
 
 ### The 98 SE and ME reading
 
-`NDIS.VXD` was not read: it is an LE image whose NT-style exports are
-built at run time, and the owner's rule of 2026-10-31 forbids reading a
-Microsoft binary. In its place: the 24 `NDIS.SYS` imports of the x86
-image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
+Revised the same day, after the owner admitted a Microsoft binary's export
+names for the import gate's baselines (2026-10-31, 14:40): `NDIS.VXD` was
+taken read-only from the q35 98 SE and ME base images (`7z e`, nothing
+booted) and only its names read. Every one of the 24 `NDIS.SYS` imports of
+the x86 image is a NUL-delimited name in both files (98 SE 166,029 bytes,
+ME 157,397 bytes; their SHA-256 in `scripts/import-gate/
+ndisvxd-baselines.expected`); the reading tells names apart (98 SE's file
+lacks `NdisQueryBufferSafe`, which ME's has), and the net98 profile now
+fails a pair absent from either where the files are staged. So the owner's
+condition for 98 SE and ME (record 35 section 15, Q10) is met by the
+reading the record asked for. Before it, and kept beside it: the 24
+`NDIS.SYS` imports of the x86 image are each declared in the 2000 DDK's `BINARY_COMPATIBLE` `ndis.h`
 ("so that we don't use functions that aren't available on Windows 9x"),
 and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` at
 `57ba809`, an NDIS 5.0 WDM miniport recorded loading and passing traffic
@@ -6053,6 +6061,386 @@ attached during the install is not listed ... until Windows restarts or
 the drive is plugged in again" now holds as written on 2000 and XP: a
 restart lists it. Vista and later were not read; the service's new rule
 is off there.
+
+## 45.65 a copy that never ends on Vista x86 after an unplug: Vista's own USB stack first (2026-10-31)
+
+**Verdict: the hang comes without xHCI98; no code.** 45.61's reading (record 13 section
+17.6, `runs/run-45.md` "45.61") found that on Vista x86 a drive pulled during
+a copy loop, with an Explorer window open on its volume, leaves the next copy
+blocked for good, the volume mounted and `shutdown` hanging, for a UAS drive
+and for a Bulk-Only stick on `usbstor.sys` alike, on xHCI98. The same leg on
+Vista's own USB stack, with no xHCI98 installed (the emulator's EHCI,
+`usbehci.sys`, the same kind of stick on `usbstor.sys`), shows the same hang,
+twice, and once without the Explorer window as well. XP and 7 on the same
+emulator and the same EHCI fail the copies cleanly. By the task's own rule
+(the same setup on Vista's own stack first) the hang is Vista's or the
+emulator's, and the task stops here with no code. That rule is what decides:
+no xHCI98-specific cause was found, but none was looked for either (no
+request was read on the xHCI98 runs), so the reading does not prove that
+45.61's runs had the same cause, only that the visible failure needs no
+xHCI98. Not read on real hardware.
+
+### The machine
+
+Development host A; the q35 bases' pinned emulator (`bin\asm4242-20261025-2230`,
+`qemu-system-x86_64.exe` SHA-256 `da60139f...0c93`); fresh overlays of the q35
+bases `vx86` (`4d1aa775...2890`), `xp` (`64ada103...d5f0`) and `w7x86`
+(`95893177...2a7d`), nothing of xHCI98 on them. No `qemu-xhci`: an
+`ich9-usb-ehci1` with the stick on its port 1:
+
+```
+-device ich9-usb-ehci1,id=eh
+-drive if=none,id=bd0,format=qcow2,file=<dir>\bot.qcow2
+-device usb-storage,id=bot0,bus=eh.0,port=1,drive=bd0,serial=W45VISTACPB
+```
+
+`bot.qcow2` is an overlay of the q35 bases' FAT test disk
+(`shared\nvme-fat.qcow2`, volume "ORICO"), drive `D:` in each guest. Vista
+and 7 x86 at 2 vCPU and 2 GB, XP at 2 vCPU and 1 GB (the q35 launcher's
+defaults). In each guest `sc query xhci98` answered 1060 (not installed) and
+`usbehci` was running; after the unplug `usbstor` read STOPPED (its only
+device gone), so the stick ran on `usbehci.sys` and `usbstor.sys`.
+
+### The leg
+
+A command prompt runs `for /l %i in (1,1,100000) do copy /y
+C:\Windows\system32\shell32.dll D:\x.bin`; where the table says so, the
+volume is first opened in Explorer (`start D:\`; on 7 AutoPlay's "Open
+folder"). After about 25 copies the stick is pulled by QMP `device_del bot0`.
+
+| System | Explorer on `D:` | Result |
+|---|---|---|
+| Vista x86 (`vx86e\b1` to `b12`) | yes | "The system cannot find the file specified", "0 file(s) copied", then the next copy blocked for good (over 6 min); `D:` still shown in Explorer; a second prompt's `wmic logicaldisk` and `dir D:\` blocked; the Run dialog no longer opened; the ACPI power button did nothing in 4 min; QEMU stopped |
+| Vista x86 (`vx86r\b1` to `b4`), a repeat | yes (opened by AutoPlay on its own before the loop) | the same: the next copy blocked (over 5 min), a second prompt's `dir D:\` blocked; QEMU stopped |
+| Vista x86 (`vx86n\b1` to `b7`) | no | the same: the next copy blocked (over 4 min), `dir D:\` blocked, `shutdown -s -t 0` from the Run dialog never shut down (4 min); QEMU stopped |
+| XP (`xpe\b1` to `b4`) | yes | every copy after the unplug fails "The system cannot find the drive specified"; Explorer's window closed; `shutdown -s` powered off |
+| 7 x86 (`w7e\b1` to `b5`) | yes | the copies fail "The system cannot find the drive specified"; Explorer went to "Computer"; `shutdown -s` powered off |
+
+Evidence: `E:\xhci98-vm\p45\w45-vistacp\` (`vx86e`, `vx86r`, `vx86n`, `xpe`, `w7e`:
+the screenshots and `cmdline-a.txt`; `pids.txt`).
+
+### What it means
+
+On xHCI98 the hang came with the Explorer window (45.61: one run without it
+failed the copies cleanly); on Vista's own stack it came with the window
+twice and without it once, so the window looks like it widens a timing
+window rather than causing the hang (a few runs each; not read further).
+The stick's devnode is gone (`usbstor` stopped) while the volume stays
+mounted, so the copy most likely waits above the USB host controller and the
+hub (not read). The emulator is not ruled out: XP and 7 on the same EHCI
+model are clean, but no real Vista machine was read.
+
+### Owed
+
+- Nothing in this driver by the task's rule. A real-hardware read on Vista
+  (any USB stack) would tell Vista from the emulator; not required for the
+  release.
+
+## 45.64 the emulator read against Linux's and Windows 11's own USB4 stacks (2026-10-31)
+
+Reference connection managers, with nothing of this package installed,
+on `usb4-emu`'s emulated hardware: Linux's `thunderbolt` driver on a
+Kubuntu 26.04.1 live guest and Windows 11's in-box USB4 stack on a
+Windows 11 x64 guest, each on q35 under WHPX on development host A.
+Every difference was read either as the model's (fixed in `usb4-emu`
+with a qtest) or as a platform piece the emulator lacks. No Windows 11
+support is claimed by this task.
+
+### Setup
+
+- `usb4-emu` branch `w45-u4ref` from main `6fbfb08`, main `dc6d437`
+  (the Falcon, Cactus and Light Ridge switches) merged in before the
+  Apple legs; QEMU from the fork at `af059ed`, then `8956e35`, then the
+  two fixes below (`a1bb50a`). The first five Linux legs (generic,
+  ASM4242, version 2, chain, Alder Lake) ran on `af059ed`, the rest on `8956e35`; the two
+  fixed points were re-read on `a1bb50a`.
+- Linux: the stock `kubuntu-26.04.1-desktop-amd64.iso` (read-only CD,
+  kernel 7.0.0-30-generic and its initrd booted directly), command line
+  `boot=casper console=ttyS0,115200 systemd.unit=multi-user.target
+  thunderbolt.dyndbg=+p`; the trace events `thunderbolt:tb_tx`, `tb_rx`
+  and `tb_event` enabled after login (`trace_event=thunderbolt:*` on the
+  command line does not reach the module: "Failed to enable trace
+  event"); 2 vCPUs, 4 GB, no network. Each leg: authorise every router,
+  write and read back 16 to 32 MiB on every NVMe disk (O_DIRECT, SHA-256
+  equal), unplug a device router (`device_del`) and plug it back
+  (`device_add`), then dmesg, the trace buffer, `lspci -vvv`, sysfs and
+  debugfs copied to a disk.
+- Windows: a fresh unattended install of
+  `Windows11_Client_x64_en-us_26300_9457.iso` (build 26300.9457, in-box
+  `usb4hostrouter.inf` and `usb4devicerouter.inf` 10.0.26100.9278) with
+  the LabConfig TPM, Secure Boot, RAM, CPU and storage bypasses, OVMF
+  without Secure Boot, 2 vCPUs, 4 GB, user networking restricted to the
+  guest agent's forward; its own base under the worker's VM folder,
+  overlays per leg. Read from `Get-PnpDevice` (status, problem code and
+  problem status), the disks (8 MiB written and read back per disk),
+  `setupapi.dev.log`, the System and Kernel-PnP logs, and the
+  TraceLogging rundown of the USB4 host and device router providers
+  (`usb4-emu`'s `guest-usb4-trace.ps1`).
+
+### Linux, per model
+
+| Leg | Host | Devices | What Linux did |
+|---|---|---|---|
+| gen1 | generic USB4 host (`host-model=minimal`), USB3 xHCI wired | USB4 router with an NVMe and a USB disk behind its USB3 Up adapter | software CM, security user; the USB3 tunnel at enumeration, before authorisation (the disk read back); the PCIe tunnel on authorisation; deauthorise, re-authorise, unplug and plug all followed |
+| asm | ASM4242, captured board preset, its PCIe switch | USB4 router; ASM2464 | the firmware CM's tunnel at power-on, then "0: resetting" and both routers enumerated again; both tunnels on authorisation; the ASM2464 unplugged and plugged |
+| v2 | version 2 host | version 2 router; version 1 router | Gen 4 40 Gb/s x2 and Gen 3 20 Gb/s x2; enhanced uni-directional TMU (MedRes) on the version 2 router; Extended Encapsulation on the version 2 tunnel only; an asymmetric transition and LINK_RECOVERY ignored; Enable Gen 4 Link Recovery never set, so an uncorrectable error was a disconnect, a re-enumeration and a fresh authorisation; with the bit preset by the emulator, a recovery with no event and the disk readable |
+| chain | generic | USB4 router with a chained USB4 router (route 301); a Thunderbolt 3 router on port 2 | all three enumerated (the Thunderbolt 3 one as generation 3, "Thunderbolt 3 Switch: 8086:15d3"), bonded and tunnelled; the chained router, then its parent, unplugged and plugged |
+| adl | `host-model=intel-adl` | the TS3 Plus model with a chained ASM2464 (routes 3, 303) | as the Framework capture: both tunnels, both disks; the dock's unplug took both |
+| amd | `host-model=amd` | the dock model (`dock=on`: PCIe switch, NVMe, e1000e, xHCI with a USB disk); Thunderbolt 3 router | "USB4 Switch: 438:208", "USB4 Host Router (amd preset)"; the dock's switch, NIC (link up), xHCI and USB disk and both NVMe disks; the dock unplugged and plugged |
+| fr, cr, lr | `tb2-apple-falcon-ridge`, `tb1-apple-cactus-ridge`, `tb1-apple-light-ridge` with their switches | Thunderbolt 3 router with the generation's router ID; USB4 router or Thunderbolt 3 router | software CM, both tunnels, unplug and plug; Falcon Ridge only with the Apple SMBIOS vendor (below) |
+| aar, atr | `tb3-apple-alpine-ridge`, `tb3-apple-titan-ridge` with their switches | Thunderbolt 3 router; ASM2464 or USB4 router | software CM, both tunnels, unplug and plug |
+| icmar, icmtr | `tb3-alpine-ridge`, `tb3-titan-ridge`, switch and TB xHCI | Alpine Ridge: TS3 Plus model with a chained USB4 router; Titan Ridge: a Thunderbolt 3 router on each port, an ASM2464 chained to the second | firmware CM (`icm.c`): the chained router announced at depth 2 (routes 301, 303), approvals, both or all three tunnels, unplug and plug |
+| icl | `tb3-ice-lake` | Thunderbolt 3 router; ASM2464 | firmware CM, security none, both disks from the first scan; the unplug while the NHI was runtime suspended was not reported until the next driver ready, as `usb4-emu`'s ICM-ICE-LAKE.md 5 records |
+
+### Windows 11, per model
+
+| Host | Test-signing | What Windows did |
+|---|---|---|
+| generic (`minimal`) | off | "USB4(TM) Host Router (Microsoft)" bound (`PCI\USB4_MS_CM` from the ACPI `_OSC` grants), then Code 31, problem status `0xC00000BB`, before any access to the host router's BAR; the same with an emulated IOMMU (`intel-iommu`, no tunnel ports) |
+| `intel-adl`, `amd` | off | the same Code 31; the tunnel root port behind it Code 51 (waiting on a dependency) |
+| ASM4242 | off | host router, root router and device router started; the NVMe tunnelled and listed as a disk |
+| generic with the USB3 xHCI | on | both device routers, both PCIe tunnels and the USB3 tunnel up with no user action; the USB disk and both NVMe disks read back; the router with the USB disk unplugged and plugged, all back |
+| ASM4242 with an ASM2464 | on | both routers and disks; the ASM2464 unplugged and plugged |
+| version 2 | on | "USB4 Root Router (2.0)" and "USB4 Router (2.0)" at Gen 4, the version 1 router "(1.0)" at Gen 3, both disks; Enable Gen 4 Link Recovery left clear; an uncorrectable error: router removed and enumerated again, its disk back; with the bit preset by the emulator: recovered, no removal |
+| `amd` with the dock model and a Thunderbolt 3 router | on | both routers ("USB4 Dock", "Thunderbolt 3(TM) Router"), the dock's xHCI with its USB disk, its e1000e and both NVMe disks; the three disks read back (the dock's NIC on a user network of its own, 10.0.3.0/24: on the guest's own subnet the guest's replies left through it and the agent went silent, a launch error, not the model's) |
+| `intel-adl` with the TS3 Plus model and a chained ASM2464 | on | "Thunderbolt 3(TM) Router" and the chained "USB4 Router (1.0), ASMedia - 246x", both disks read back |
+| generic, chain and a Thunderbolt 3 router | on | the chained USB4 router and "Thunderbolt 3(TM) Router" on port 2, three disks; the chained router and the Thunderbolt 3 router unplugged and plugged |
+| `tb3-alpine-ridge`, `tb3-titan-ridge`, `tb3-ice-lake` | on | the NHI is "Base System Device", Code 28: no in-box INF names `8086:15bf`, `15eb`, `8a17` or the Thunderbolt 1 and 2 NHIs; on Ice Lake (security none) the firmware CM's tunnel still brought the NVMe up |
+
+The Apple Thunderbolt 1, 2 and 3 profiles were not run on Windows 11:
+nothing in it binds them.
+
+### Differences and how each was read
+
+- Model, fixed: a spec-derived host router's lane adapters read Target
+  Link Speed 0 and no RS-FEC request after the power-on reset, because
+  the reset that keeps a connection manager's values across a Host Router
+  Reset (Spec 6.10) kept the still-empty adapters the first time.
+  Windows' rundown showed `TargetLinkSpeed=0x0` on the generic host's
+  ports and `0xC` on the device routers'; the captured Alder Lake host
+  reads `0xC`. Fork `f5a3138`, qtest `/usb4-tb3dev/host-lane-defaults`
+  (fails without the fix); Windows re-read on the fixed build:
+  `0xC` on both. Side effect: the generic host's PORT_CS_18 RS-FEC
+  Enabled (bit 12) now reads 1 on a linked port, as the device side
+  already did.
+- Model, fixed: the Thunderbolt controller switches' NHI and xHCI ports
+  were hot-plug slots (QEMU's XIO3130 default), where the captured Alpine
+  Ridge has `HotPlug-`. Linux on the Apple Thunderbolt 1 and 2 hosts
+  logged "device link creation from 0000:02:00.0 failed"
+  (`tb.c` `tb_apple_add_links` walks every hot-plug downstream port of
+  the switch, the NHI's own included). Fork `a1bb50a`, qtest
+  `/usb4-tbhost/switch-dsp-slots` (fails without the fix); Falcon Ridge
+  re-read: links from the two tunnel ports only.
+- Platform: Linux takes its software CM on Falcon Ridge only on an Apple
+  machine (`icm.c` `icm_fr_is_supported` reads the DMI system vendor);
+  without `-smbios type=1,manufacturer="Apple Inc."` it took the firmware
+  CM and logged "could not start ICM firmware", as `usb4-emu`'s
+  TB-SWCM-HOSTS.md already says.
+- Platform: Windows 11's Code 31 on the generic host is not a missing
+  ACPI or DMA-remapping piece: the same machine, ACPI `_OSC` and `_DSD`
+  start the ASM4242 preset, also at the same address on the root bus with
+  the same tunnel ports (so not the topology), and an IOMMU did not lift
+  it. Test-signing lifts it, as `usb4-emu`'s WINDOWS-DEBUG.md recorded in
+  October. What remains different between the presets at the PCI level
+  is the host router's IDs (`1b36:00f4` refused, `1b21:2425` started),
+  BAR0's width, the ASM4242's BAR2 and its MSI capability; the IDs are
+  the leading reading [inferred: no run isolated them, as the model has
+  no property that changes the IDs alone]. Left open in `usb4-emu`.
+- Read as the Specification's, not changed: a host router that is not yet
+  enumerated when the connection manager starts reports its linked lanes
+  once enumerated (Spec 6.8.1.2). Linux queues those plug events, resets
+  the router, and so enumerates each device router twice about 100 ms
+  apart ("switch unplugged" for the reset's stale unplug); the end state
+  is right. The captured hosts were already enumerated by their firmware
+  when Linux bound, so no capture shows this case.
+- By design: with the PCIe tunnel down and the router still attached,
+  Presence Detect stays set (`usb4-emu` ARCHITECTURE.md 4.4, link
+  retrain), so Linux's pciehp logs "Card present" and "No link" after a
+  deauthorisation.
+- Not a model difference: "pciehp: Timeout on hotplug command 0x0000" on
+  a dock's or chained router's switch port after its parent was
+  unplugged: Linux waited for a completion interrupt from a switch behind
+  a closed gate, as from a switch that has gone.
+
+### Where this package's CM and the reference stacks differ
+
+- Enable Gen 4 Link Recovery: neither Linux nor Windows 11 set it on a
+  Gen 4 link, so to both an uncorrectable Gen 4 error was a disconnect;
+  this package's CM sets it (45.56), so to it the same error is a
+  recovery.
+- USB3 tunnels: Linux built the USB3 tunnel at enumeration under
+  security level user, before the router was authorised; Windows built
+  every tunnel with no user action.
+- Version 2: both stacks wrote Connection Manager USB4 Version 1.0 on
+  every router; neither started an asymmetric transition.
+
+### Evidence
+
+- Linux, per leg: `E:\xhci98-vm\p45\w45-u4ref\legs\<leg>\out\<leg>\`
+  (`dmesg.txt`, `trace.txt`, `lspci.txt`, `sysfs.txt`, `debugfs.txt`)
+  and `legs\<leg>\usb4-trace.log` (the emulator's trace); `fr-nosmbios`
+  is the Falcon Ridge leg without the SMBIOS vendor, `fr2` the re-read
+  on the fixed build. The v2, chain and adl dmesg files hold only what
+  followed a `dmesg -C`; their boot lines were read on the console.
+- Windows: `E:\xhci98-vm\p45\w45-u4ref\vms\w-gate\` (not test-signed:
+  `tr\`, the gate's ETW zip, and `usb4-trace-*.log`) and `vms\w-ts\`
+  (test-signed: `trace-gen-hotplug.zip`, `trace-v2.zip`,
+  `trace-gen-fixed.zip` and `usb4-trace-<leg>.log`).
+- qtests: every `usb4-emu` suite against its TAP plan on `a1bb50a`:
+  host 43, tunnel 31, icm 40, icm-tr 16, icm-icl 5, harness 25, fault 9,
+  asm4242 16, asm2464 4, tb3dev 13, tbhost 12, root-hotplug 22, usb3 9,
+  retrain 11, xdomain 6, all passed; the fabric harness 51794 checks, 0
+  failures (`E:\xhci98-scratch\p45-w45-u4ref\qt\`).
+- `usb4-emu` commits `48b7813` (the patch series re-exported at
+  `a1bb50a`, LINUX-TEST.md and WINDOWS-DEBUG.md "Reference read") and
+  `5d73560` and `ca8a7ed` (the amd and dock rows, the gate's reading
+  qualified), reviewed and revised.
+
+## 45.61 a UAS drive in Safely Remove Hardware: the reading, the change and its legs (2026-10-31)
+
+**Verdict: done.** The reading (below) found the UAS FDO's
+`SurpriseRemovalOK` override to be the cause; the owner chose option A
+(record 13 section 17.4), and with `817dd191` a UAS drive is listed and
+stopped on its own on 2000, XP, Vista and 7, and on 2000 an unplug without
+a stop shows "Unsafe Removal of Device", as for a Bulk-Only stick (the
+legs, "The change and its legs", below).
+
+Branch `w45-uasrem` (from `b71199a9`), development host A. Kit
+`E:\xhci98-vm\p45\w45-uasrem\` (`l.ps1`): the q35 bases through
+`launch-q35.ps1` (its pinned emulator), `usb-uas` with one `scsi-hd` LUN (an
+overlay of the FAT test disk, serial `W45UASREMU`) on `qemu-xhci` port 3, a
+blank 64 MiB `usb-storage` stick (`W45UASREMB`) on port 4, a `usb-tablet` on
+port 2; the controller behind the launcher's hot-pluggable PCI Express root
+port. Unplugs by QMP `device_del`; a hot-plugged `usb-uas` is not attached
+until `qom-set /machine/peripheral/uas0 attached true`, after its `scsi-hd`
+is added.
+
+Binaries: the staged x86 package of `w45-adv` (2026-10-31; `src/uas` and
+`src/hcd_pdo.c` identical to `b71199a9`'s), `xhci98.sys` `a8593f4f...`,
+`xhciuas.sys` `944db682...`; the variant, `xhciuas.sys` built from
+`b71199a9` with `uas_fdo.c`'s `SurpriseRemovalOK = TRUE` written FALSE and
+nothing else, by the DDK alone outside the gated build (a reading aid,
+never packaged), `f84866b4...`, copied over the installed file and read
+after a cold start. Capabilities read from each devnode's Enum key
+(`regedit /e` or `reg query`); screenshots by QMP.
+
+| Leg | System | Result |
+|---|---|---|
+| install | 2000 (1 vCPU), XP, Vista x86, 7 x86 (2 vCPU each), fresh overlays | `INSTALL.BAT /console /yes /nopause`, exit 3, restart; `xhciuas` and `xhci98` started |
+| capabilities, package | all four | UAS devnode `0x94` (Removable, UniqueID, SurpriseRemovalOK), its LUN `0x90`; the stick's devnode `0x14` on 2000 and XP, `0x54` on Vista, `0xD4` on 7, its disk `0x10`; the controller `0x0` on 2000 and XP |
+| listing, package | 2000, XP (`w2k\b3`, `b4`, `xp\b3`, `b4b`) | the stick alone, with and without components; the UAS drive absent |
+| listing, package | Vista, 7 (`vx86\b2`, `b3`, `w7x86\b2`, `b3`) | the controller and the stick; with components, the UAS drive under the controller only (as 45.52 read on 7 x64) |
+| unplug without a stop, package | all four (`w2k\b5`, `vx86\b4`, `w7x86\b4`) | no notice for the UAS drive |
+| the stick unplugged without a stop | 2000 (`w2k\b6`), XP (`xp\b6`) | 2000: "Unsafe Removal of Device" naming "USB Mass Storage Device" and "QEMU QEMU HARDDISK USB Device"; XP: none |
+| capabilities, variant | all four | UAS devnode `0x14`; the rest as before |
+| listing, variant | 2000, XP (`w2k\c2`, `xp\d1`) | the stick and "xHCI98 USB Attached SCSI Storage" with its disk and volume |
+| listing, variant | Vista, 7 (`vx86\c3`, `w7x86\c3`) | the controller, the stick and "xHCI98 USB Attached SCSI Storage" |
+| stop, variant | all four (`w2k\c4`, `c5`, `xp\d2`, `d3`, `vx86\c4`, `c5`, `w7x86\c4`, `c5`) | the confirmation lists the drive, its volume and its disk alone; "Safe To Remove Hardware: The 'xHCI98 USB Attached SCSI Storage' device can now be safely removed" (Vista: "This device can now be safely removed") |
+| unplug after the stop, variant | all four (`w2k\c6`, `xp\d4`, `vx86\c6`, `w7x86\c6`) | no notice; plugged again, listed again |
+| unplug without a stop, variant | 2000 (`w2k\c8`), XP (`xp\d6`), 7 (`w7x86\c9`) | 2000: "Unsafe Removal of Device" naming "xHCI98 USB Attached SCSI Storage" alone; XP and 7: none |
+| unplug during a copy loop, variant | XP (`xp\e7`), 7 (`w7x86\c9`) | the copies fail ("The system cannot find the drive specified"), no hang, no notice |
+| removal policy | 7 package and variant (`w7x86\e4`, `d4`), XP variant (`xp\e6`) | "Quick removal (default)" / "Optimize for quick removal" in each: unchanged |
+| unplug during a copy loop, Explorer open on the volume | Vista: variant (`vx86\c9` to `c18`), package (`vx86\d5`, `d6`), the stick on `usbstor` (`vx86\e3` to `e5`) | the next copy blocked for good in all three, the volume still mounted, `shutdown` hanging (QEMU stopped); with no Explorer window, package, the copies failed with no hang (`vx86\d3`) |
+
+Two side readings. On XP the first restart after the variant was copied in
+(`shutdown -r`) left the devnode at `0x94` and the drive unlisted through
+two replugs; a shut down and cold start read `0x14`: the update leg of the
+code step reads the listing after the installer's own restart (record 13
+section 17.5). And the Vista hang above is not UAS's and not this change's
+(the stick shows it on `usbstor.sys`); it is handed to the coordinator.
+
+Why TRUE: `4e66702` (31-A.2) set it when the bus's device PDOs said TRUE
+too; `9001ebd` turned the PDOs' answer FALSE the same day for the hot-plug
+applet and left the UAS FDO's override in place; no reason is recorded
+anywhere (record 13 section 17.2).
+
+### The change and its legs (the owner's option A, 2026-10-31)
+
+`817dd191`: `UasFdoPnp` (`src/uas/uas_fdo.c`) no longer handles
+`IRP_MN_QUERY_CAPABILITIES`; the query passes down and back unchanged, so
+the bus's `SurpriseRemovalOK` FALSE stands (record 13 section 17.5).
+Reviewed and revised. The gated x86 build of `817dd191` passed (`all`,
+release and qemu, 22:17; `E:\xhci98-scratch\p45-w45-uasrem\gated-x86.log`,
+release `xhciuas.sys` `A677A4CA...2486`, `xhci98.sys` `AD1BDD96...11C9`),
+and so did the host suites (`ht.log`). The legs ran on the package staged
+from that build by `make-release.ps1 -Arch x86` with a test label
+(`xf\PNEW`), on four fresh overlays each first given the previous package
+(`xf\PN`, the reading's, `xhciuas.sys` `944db682...`), with the same UAS
+drive and Bulk-Only stick as the reading.
+
+| Leg | 2000 (`w2kB`) | XP (`xpB`) | Vista x86 (`vx86B`) | 7 x86 (`w7x86B`) |
+|---|---|---|---|---|
+| the previous package installed, restarted | UAS devnode `0x94` | `0x94`, the stick alone listed | `0x94` | `0x94`; the controller and the stick listed (`b1`) |
+| the update | `INSTALL /console /yes /nopause /force`, exit 3 | the same | `/force /restage`, exit 3 | the same |
+| after the restart the installer asks for | shut down and cold start (this base's warm restart stops in real mode, `w2kB` tag d); the new `xhciuas.sys` in place (`fc`), `0x14`, the LUN `0x90` | warm restart; the new file, `0x14` | warm restart; the new file, `0x14` | the emulator's process ended during the warm restart (nothing in its output says why); read after a cold start: the new file, `0x14`. Again on a fresh overlay (`w7x86C`): the previous package, a warm restart (`0x94`), the update, a warm restart: the new file, `0x14`, the UAS drive listed beside the controller and the stick (`c1`) |
+| listing | the stick and "xHCI98 USB Attached SCSI Storage" (`e1`) | the same (`e1`) | the controller, the stick and the UAS drive (`c1`) | the same (`c2`) |
+| stop | the drive, "Generic volume (E:)" and its disk alone; "Safe To Remove Hardware" (`e2`, `e3`) | the same, D: (`e2`, `e3`) | the same (`c2`, `c3`) | the same (`c3`, `c4`) |
+| unplug after the stop | no notice (`e4`) | no notice (`e4`) | no notice (`c4`) | no notice (`c5`) |
+| plugged again | listed (`e5`) | listed (`e5`) | listed (`c5`) | listed (`c6`) |
+| unplug without a stop, idle | "Unsafe Removal of Device" naming "xHCI98 USB Attached SCSI Storage" (`e6`) | no notice (`f2`, after a cold start on the same overlay; the new file in place, `0x14`) | no notice (`c6`) | no notice (`c7`) |
+| unplug during a copy | an `xcopy` of `system32\*.dll` to the drive: "Delayed Write Failed" and "Unsafe Removal of Device", the copy ended, no hang (`e13`) | a copy loop: the copies fail ("The system cannot find the drive specified"), no hang, no notice (`e6`) | a copy loop with no Explorer window: the next copy blocked (`c8`, `c9`), the hang of record 13 section 17.6, which task 45.65 reads on Vista's own USB stack too | a copy loop: the copies fail, no hang, no notice (`c10`) |
+
+The update path: the reading build and this one carry the same version and
+`DriverVer`, so the installer read every device "current (this release)"
+and left the old `xhciuas.sys` in place until `/force` (2000, XP) and
+`/force /restage` (Vista, 7, whose driver store kept the stored copy of the
+same `DriverVer`) were given; that is the installer's documented behaviour
+for a development build of the same version, and a release carries a new
+version. Once the new file was in, each system read `0x14` after the
+installer's restart, a warm one on XP, Vista and 7 (`w7x86C`). The reading's XP devnode
+that kept `0x94` across a warm restart (above) had its file copied in by
+hand with no reinstall of the device; the installer reinstalls it
+("Updating xHCI98 USB Attached SCSI Storage ... done"), and after that
+the warm restart read `0x14` [the cause of the earlier reading not read].
+
+### Owed
+
+- Nothing of this task. The Vista hang is task 45.65's.
+
+## 45.59 step S4: the firmware connection manager's host-to-host links (2026-10-31, code; legs owed)
+
+Worker `w45-tbicm`, branch `w45-tbicm` from `1a54b1a3`. Design record 35
+section 3.10 (as built, reviewed and revised before the code, three
+rounds), sections 11.1 and 13 amended.
+
+What was done:
+
+- `src\cm\tbt_icm.c` and `tbt_icm.h`, section "Host-to-host links": each
+  row's events `0x06` and `0x07`, the approve `0x10` and its teardown in
+  Linux's `tb_msgs.h` layouts (Falcon and Alpine Ridge `icm_fr_*` and NHI
+  mailbox `0x10` or `0x11` with data 1 then 2; Titan Ridge and Ice Lake
+  `icm_tr_*` and command `0x11` in two stages); one `tbt_xdp.c` engine
+  (S1, its firmware-CM mode, unchanged) per direct link, fed by ring 0's
+  XDomain sink (S2); the service's operations `TBT_ICM_NET`, the same
+  three signatures as S3's `TBT_U4_NET`; `TbtIcmSetNetConfig`,
+  `TbtIcmSetNet`, `TbtIcmNetWanted`, `TbtIcmNetIdentity`,
+  `TbtIcmSetNetSerial`, `TbtIcmPeer`.
+- `src\cm\cm_nhi.c`: `TbtIcmSetNetConfig` after `TbtIcmInit` (`XhciCmNet`
+  and the package version). The service's wiring under the firmware CM
+  (`TbtIcmSetNet` beside S5's `TbtU4SetNet`, `TbtIcmNetWanted` and
+  `TbtIcmNetIdentity` beside `CmNetPass`'s, and the NHI's Device Serial
+  Number for `TbtIcmSetNetSerial` where the driver reads one) is S5's
+  `cm_net.c`, not in this branch.
+- `test\test_tbt_icm.c`: the `test_xd_*` vectors of record 35 section
+  11.1 (a far host of `tbt_xdp.c`'s engine in the software CM's mode, the
+  firmware model passing its packets), every row; `test\tbt_fake.h` logs
+  the mailbox data. `test_tbt_icm`, `test_tbt_hw` and `test_tbt_select`
+  (and `scripts\usb4-trace\u4-trace.ps1`'s `test_tbt_icm`) link
+  `tbt_xdp.c`.
+
+Builds and tests on `d9420766`, development host A: the gated x86
+build (`scriptsuild-driver.cmd release`, its self-tests and every gate)
+passed; `testun-host-tests.cmd` passed whole (`test_tbt_icm` 1047
+checks, `test_tbt_hw` 176, `test_tbt_select` 306, `test_u4xd` 175, all
+with 0 failures). The design was reviewed and revised in three rounds and
+the code in nine, until nothing material remained.
+
+Legs (record 35 section 11.3): owed. An xHCI98 guest on the emulator's
+`tb3-alpine-ridge` and `tb3-titan-ridge` profiles against the Linux peer
+of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
+(`w45-tbnet`, not merged into `3.4.0.0` when this was written) wired to
+the calls above; a discovery-only leg (the peer's properties read both
+ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
 
 ## 45.final: the release-notes texts the tasks handed over
 
@@ -6229,3 +6617,15 @@ the version bump.
   read. XHCITR's mark line now reads "the Thunderbolt driver has answered
   it as removable", with "Windows has not recorded it as removable."
   beside it when Windows has not."
+- 45.61 (HEAD): "- (45.61, a UAS drive in Safely Remove, 2026-10-31) "A
+  UAS drive is now listed in Safely Remove Hardware on Windows 2000, XP,
+  Vista and 7 and can be stopped on its own, as a Bulk-Only stick can; on
+  Windows 2000, pulling it without stopping it first shows Windows'
+  'Unsafe Removal of Device' notice, as it does for a stick.""
+- 45.59 (HEAD): "- (45.59 S4, draft for the networking entry, 2026-10-31)
+  "Thunderbolt networking also runs through the Thunderbolt 3 firmware
+  connection manager (Falcon, Alpine and Titan Ridge, and Ice Lake's
+  integrated controllers): the host-to-host link is found from the
+  firmware's own announcements, and its two paths are built and torn down
+  by the firmware on this driver's request. One link carries the service
+  at a time; a peer behind a dock or another router is not supported.""
