@@ -2971,6 +2971,7 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * (reviewed and revised after 4de0f999). Before the start
      * admits anything, so no lock is needed against an admission. */
     hc->ShutLatched = 0;
+    hc->SuspendHaltProven = 0;
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);

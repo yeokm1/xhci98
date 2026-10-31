@@ -258,7 +258,9 @@ ask, and perform the one step asked. What it decides:
   what this reads as when the link is ACTIVE, the revived PDO's case.
 - **The admission of a D-IRP** at dispatch (4.2 to 4.4): complete at once or
   pend, and the `PwrState` written. Closed (`PwrClosed`, the controller
-  released): complete at once. The switch at 0, a hub or a SuperSpeed PDO:
+  released; or the controller's latch set, at a shutdown or after a D0 the
+  bus failed, record 13 sections 5.8 and 5.8.1, task 45.63): complete at
+  once. The switch at 0, a hub or a SuperSpeed PDO:
   today's (record, complete). A Dx while `PowerDown`, while a sibling is
   D0, or while the link is not ACTIVE (the PDO is already Dx there, 4.3's
   D2->D3): complete at once; otherwise pend, the last to leave D0. A D0:

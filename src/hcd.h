@@ -2067,8 +2067,16 @@ typedef struct _HCD_CONTROLLER {
      * set in the controller-lock hold that sets PowerDown at a D3 whose
      * system state is PowerSystemShutdown, before the halt, and cleared by
      * a D0; read under the controller lock by every admission that would
-     * otherwise leave a request waiting for a D0 (hcd_io.c, hcd_cfg.c). */
+     * otherwise leave a request waiting for a D0 (hcd_io.c, hcd_cfg.c).
+     * Task 45.63 (record 13 section 5.8.1): set too by a D0 the bus below
+     * failed (hcd_power.c, hcdD0Refused), and cleared by the next D0. */
     ULONG ShutLatched;
+    /* Task 45.63: USBSTS read HCHalted on a decoding window right after a
+     * suspend's halt, with the function still in D0 (hcdSuspendSettled);
+     * cleared by every resume. The transfer flush's proof when a D0 the
+     * bus fails leaves the function unreadable. Power gate. */
+    ULONG SuspendHaltProven;
+    ULONG D0Refusals;               /* D0s the bus below failed            */
     /* The Windows 98 SE and ME silent install (task 38.2; design record 13
      * section 6.11.3): the gate XhciSilentInstall (0 or 1), the
      * SilentClasses table and the query's status, written by each start's

@@ -2872,7 +2872,10 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
-    in.Closed = (pdo->PwrClosed || dev == NULL) ? 1UL : 0UL;
+    /* Task 45.63: past the latch (record 13 sections 5.8 and 5.8.1) no
+     * powered pass comes to serve a pended D0. */
+    in.Closed = (pdo->PwrClosed || dev == NULL || hc->ShutLatched) ? 1UL
+                                                                   : 0UL;
     in.PowerDown = hc->PowerDown;
     in.Link = (dev != NULL) ? dev->Susp.State : XHCI_SUSP_GONE;
     in.SiblingD0 = (dev != NULL) ? hcdSuspSiblingD0(dev, pdo) : 0;

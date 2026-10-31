@@ -1266,6 +1266,68 @@ requests already parked on a PDO for a departed device (`HcdIoPark`),
 whose rule is usbport's. It changes nothing at S1 to S4, at a stop or a
 removal, or with the latch clear.
 
+### 5.8.1 A D0 the bus fails (task 45.63, 2026-11-01)
+
+**The gap.** S1 to S4 hold what the bus has until the D0 that follows
+(section 5.8). That D0 can fail: the bus driver below completes it with an
+error and the function stays out of D0. Windows 10's PCI driver does so with
+`STATUS_NO_SUCH_DEVICE` when the function is no longer there after a sleep
+(a dock's controller unplugged while asleep), and then reports it gone so
+PnP removes the stack. Until `3.4.0.0` the FDO's completion routine
+(`hcdD0Done`) let a failed D0 go with nothing done: no resume, no latch, and
+every request held, or sent afterwards, waited for a D0 that never came. The
+device PDOs complete their own D-IRPs at once (selective suspend off, the
+default), so each function driver's D0 succeeded; Windows 10's HID stack
+then sends a request to its PDO before it finishes its D0 (a class URB),
+and holds that D0 until the request ends. The request waited on the
+suspended bus, the HID stack's D0 waited on it, and PnP's removal of the
+controller waited on the D0: bug check 0x9F (3) about five minutes later,
+with the HID D0 named (`runs/run-45.md`, "45.63", stop 3, and "45.63 (the
+S3 wake)"). Read on QEMU, where the guest's PCI driver fails the D0 of the
+`qemu-xhci` function after every S3 wake (QEMU resets its devices at the
+wake), under this driver and under Windows' own `USBXHCI` alike; Windows'
+own stack completes its requests, the removal runs, and the controller is
+found again within seconds.
+
+**The answer** (`hcd_power.c`, `hcdD0Refused`): a failed D0 takes the same
+route as one that succeeded, to `hcdD0Finish` at PASSIVE_LEVEL (inline or
+through the D0 work item). There, under the power gate, when the controller
+is suspended (out of D0, or suspended in D0 by the direct transition), the
+D0 resumes nothing, touches no register, leaves the recorded device state
+where the bus left it, and ends what the bus holds as the shutdown does:
+
+1. the latch (`ShutLatched`) set under the controller lock, so every
+   admission of section 5.8 refuses from here on - a transfer or command
+   URB `DEVICE_NOT_RESPONDING` at the next tick, a request without a URB
+   `STATUS_UNSUCCESSFUL`;
+2. the resume's state (`ResumePhase`, design record 20 section 4.3.3) set
+   FAILED if it is still PENDING, with `MarkGen` moved, so `xhciuas.sys`'s
+   wake check fails at once instead of waiting out its bound;
+3. the commands flushed (`HcdCfgShutFlush`);
+4. the transfers flushed (`HcdIoShutFlush`) on the halt's proof. The
+   function cannot be read now, so the proof is the one the suspend took:
+   `USBSTS` read `HCHalted` on a decoding window by `hcdSuspendSettled`
+   right after `XhciSuspendController`, while the function was still in
+   D0 (`SuspendHaltProven`), which only a resume (`hcdResume`) or a start
+   clears; nothing sets Run/Stop in between. No proof, a pinned buffer or a
+   contained controller: the transfers stay, as at the shutdown
+   (`XhciTolShutFlush`).
+
+Then the IRP completes with the bus's status. A selectively suspended
+PDO's D0 admitted while the latch stands completes at once, as a closed
+PDO's does (design record 14, the admission of a D-IRP): no powered pass
+comes to serve a pended one. The function driver's request fails, its D0
+ends, and PnP's surprise removal and removal of the controller run; the
+stack is rebuilt and the devices enumerated again, as under `USBXHCI`. A
+later D0 that succeeds clears the latch before its resume, as after a
+shutdown (`hcdShutClear`), and that resume re-initializes (the flush
+dropped the saved image). A failed D0 for a function already running in D0
+changes nothing.
+
+The log ring notes `power.d0.refused` (the bus's status) and
+`power.d0.flush` (bits 1-0 the decision, bits 31-8 the commands
+completed); `D0Refusals` counts them.
+
 ## 6. The function-driver contract (task 25.2)
 
 What each target's class drivers send a USB device PDO, read out of the
