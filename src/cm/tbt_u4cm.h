@@ -64,6 +64,7 @@
 #include "../xhci_compat.h"
 #include "tbt_regs.h"
 #include "tbt_ring.h"
+#include "tbt_xdp.h"
 
 /* ---------------------------------------------------------------------- */
 /* Limits and bounds (record 22 section 5.2)                              */
@@ -168,6 +169,15 @@ typedef struct _TBT_U4_CONFIG {
      * Recovery clear hold either way. A bench switch, written at 1 by the
      * INFs since task 45.50. */
     BOOLEAN Usb4V2;
+    /* XhciCmNet, default 0 (design record 35 section 8.1, task 45.59): TRUE
+     * runs the inter-domain discovery on a depth-1 port whose router read
+     * answers ERR_ENUM or ERR_NUA (TBT_U4_XDOMAIN), answers the peer and
+     * builds the USB4NET paths; FALSE leaves such a port UNSUPPORTED and
+     * every inter-domain packet unanswered. NetRevision: the deviceid's
+     * revision the properties block publishes (the package version's four
+     * parts, one byte each). */
+    BOOLEAN Net;
+    ULONG NetRevision;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -219,6 +229,7 @@ typedef struct _TBT_U4_ROUTER {
     BOOLEAN BaValid;
     ULONG BaMaxPcie;        /* Buffer Allocation answer, 0 when none */
     ULONG BaMaxUsb3;
+    ULONG BaMaxHi;          /* baMaxHI (task 45.59, record 35 section 5.1), 0 when none */
     ULONG Uuid[4];          /* USB4: ROUTER_CS_7, 8; Thunderbolt 3: the LC fuse */
     BOOLEAN UuidValid;      /* read successfully: compared, never a failed sample */
     ULONG Quirks;           /* TBT_U4_QUIRK_* */
@@ -279,6 +290,7 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_FAILED           7UL
 #define TBT_U4_UNSUPPORTED      8UL
 #define TBT_U4_TEARDOWN         9UL
+#define TBT_U4_XDOMAIN          10UL    /* another domain's router: record 35 section 3.3 */
 
 /* Why a port is FAILED, HELD or UNSUPPORTED (the log). */
 #define TBT_U4_WHY_NONE             0UL
@@ -309,6 +321,8 @@ typedef struct _TBT_U4_TUNNEL {
                                                without PTO (section 6.2.2 item 5) */
 #define TBT_U4_WHY_LINK             23UL    /* FAILED: a Gen 4 link not usable
                                                (section 6.2.3 item 1) */
+#define TBT_U4_WHY_XDOMAIN          24UL    /* XDOMAIN: the inter-domain discovery (task 45.59) */
+#define TBT_U4_WHY_LOOP             25UL    /* UNSUPPORTED: a loop in this domain (Guide 3.3) */
 
 /* TBT_U4CM.IsoWord (record 22 section 10.5). */
 #define TBT_U4_ISO_VALID        0x80000000UL
@@ -335,6 +349,7 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN DpPreserved;    /* a DisplayPort tunnel found at start */
     ULONG HostBaPcie;       /* the host router's Buffer Allocation for this port */
     ULONG HostBaUsb3;
+    ULONG HostBaHi;         /* baMaxHI for this port (record 35 section 5.1) */
     BOOLEAN RemovalOwed;    /* a PCIe teardown's step 6 is owed */
     BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
                              * before the port connects again */
@@ -758,6 +773,66 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG CvFound;          /* preserved routers found with CV set, not reconfigured */
 } TBT_U4_COUNTERS;
 
+/*
+ * Record 35 (task 45.59): an inter-domain link's peer, one record per host
+ * port (one service per NHI at a time, section 13), and what the driver
+ * gives the service. RingsUp sets up and enables ring `ring` both ways
+ * (record 35 section 5.3), E2E as `e2e` says; TBT_OK or the service does
+ * not start. Link(up) once both paths are built; Link(down) before they
+ * are torn down, after which the driver accepts no send and drains its
+ * transmit ring (at most 500 ms, section 5.1). RingsDown after the
+ * entries are invalid: the rings disabled (`lost`: the host interface
+ * lost, nothing to disable). All on the connection-manager thread, from
+ * TbtU4Poll, TbtU4RingWake, TbtU4Suspend, TbtU4Stop or TbtU4Contain; none
+ * may call back into this file.
+ */
+#define TBT_U4_XD_QUEUE             8UL     /* inter-domain packets held for the thread */
+#define TBT_U4_XD_RING              1UL     /* the service's ring (record 35 section 4.3) */
+#define TBT_U4_XD_CREDITS           14UL    /* without baMaxHI ([linux] TB_DMA_CREDITS) */
+#define TBT_U4_XD_PRIORITY          4UL     /* Guide Table 6-1 */
+
+typedef struct _TBT_U4_NET {
+    PVOID Context;
+    LONG (*RingsUp)(PVOID context, ULONG port, ULONG ring, BOOLEAN e2e);
+    VOID (*RingsDown)(PVOID context, ULONG port, BOOLEAN lost);
+    VOID (*Link)(PVOID context, ULONG port, BOOLEAN up, const UCHAR *peerMac6);
+} TBT_U4_NET;
+
+struct _TBT_U4CM;
+typedef struct _TBT_U4_XD {
+    BOOLEAN Used;
+    BOOLEAN PidSet;         /* PORT_CS_19 Inter-Domain owned (written or tried) */
+    BOOLEAN PidOk;          /* and its write answered: set */
+    BOOLEAN Lane1Owed;      /* lane 1 to disable once the peer is known */
+    BOOLEAN RingsUp;
+    BOOLEAN LinkUp;
+    BOOLEAN TxWritten;      /* the transmit entry owned (host interface, Ring) */
+    BOOLEAN RxWritten;      /* the receive entry owned (lane 0, RxHop) */
+    BOOLEAN LinkBad;        /* lane 1 not verified off on a link left single:
+                               no service until a re-plug (record 22 6.5 step 6) */
+    struct _TBT_U4CM *Cm;
+    ULONG Port;             /* 1-based */
+    ULONG Gen;              /* the port's connection generation it began in */
+    ULONG Hi;               /* the host interface adapter */
+    ULONG Ring;
+    ULONG TxHop;
+    ULONG RxHop;
+    TBT_XDP_PEER Peer;
+} TBT_U4_XD, *PTBT_U4_XD;
+
+/* A service's two path entries from the start of their teardown until each
+ * is proven invalid: where they are and where they send, so an entry is
+ * invalidated only while it still reads as this service's (record 35
+ * section 3.9). Kept across the containment, which allows no access. */
+typedef struct _TBT_U4_XD_OWED {
+    BOOLEAN Tx;             /* the host interface adapter's entry at Ring */
+    BOOLEAN Rx;             /* lane 0's entry at RxHop */
+    ULONG Hi;
+    ULONG Ring;
+    ULONG TxHop;            /* the transmit entry sends to lane 0 at TxHop */
+    ULONG RxHop;            /* the receive entry sends to Hi at Ring */
+} TBT_U4_XD_OWED;
+
 /* The start stages (section 3.5's two inert forms). */
 #define TBT_U4_STAGE_NONE           0UL
 #define TBT_U4_STAGE_RINGS          1UL     /* rings run: activation */
@@ -881,6 +956,33 @@ typedef struct _TBT_U4CM {
                                discovers the port again                     */
 
     TBT_U4_COUNTERS Counters;
+
+    /* Record 35 (task 45.59): the inter-domain links. Kept apart from
+     * Ports, which the snapshots and the resume copy whole. */
+    TBT_U4_NET Net;
+    BOOLEAN NetWanted;      /* the network driver holds the service open */
+    ULONG NetPrtcstns;
+    BOOLEAN XdLocalValid;
+    TBT_UUID XdLocal;       /* this domain's UUID (record 35 section 3.1) */
+    UCHAR XdMac[6];         /* the adapter's MAC (section 4.4) */
+    BOOLEAN XdClockValid;
+    BOOLEAN XdTaking;
+    ULONG XdIn;             /* the port whose engine is running, 0 for none */
+    ULONG XdLastUs;
+    ULONG XdRemUs;
+    ULONG XdMs;
+    ULONG XdHead;
+    ULONG XdCount;
+    ULONG XdQueued;
+    ULONG XdOverflow;       /* the queue full: a packet dropped (the peer resends) */
+    ULONG XdIgnored;        /* XhciCmNet 0: dropped unanswered (cm.xdp.ignored) */
+    ULONG XdNoPeer;         /* no port of this domain's for its route */
+    ULONG XdLoops;
+    ULONG XdPidOwed;        /* bit port - 1: PORT_CS_19 Inter-Domain set by this
+                               driver, its clear not yet read back */
+    TBT_FRAME XdQ[TBT_U4_XD_QUEUE];
+    TBT_U4_XD Xd[TBT_U4_MAX_PORTS];
+    TBT_U4_XD_OWED XdOwed[TBT_U4_MAX_PORTS];
 } TBT_U4CM, *PTBT_U4CM;
 
 /* Bind `cm` to its ring, the accessor and the configuration. */
@@ -1066,6 +1168,22 @@ BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm);
 
 /* A port by its 1-based index, for the log and the snapshot. */
 const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
+
+/*
+ * Record 35 (task 45.59). TbtU4SetNet: the service's operations (NULL:
+ * none), before TbtU4Start. TbtU4NetWanted: the network driver opened
+ * (TRUE, with the prtcstns it offers) or closed the service; every peer's
+ * block rebuilt and the peer told, a Login started or a Logout sent.
+ * TbtU4NetIdentity: this domain's MAC (section 4.4), read once from the
+ * host router's UUID; FALSE with XhciCmNet 0, before the running stage or
+ * when the read fails. TbtU4Peer: port `port`'s peer, NULL for none, for
+ * the log and the query device. All on the connection-manager thread but
+ * TbtU4Peer (no access).
+ */
+VOID TbtU4SetNet(PTBT_U4CM cm, const TBT_U4_NET *net);
+VOID TbtU4NetWanted(PTBT_U4CM cm, BOOLEAN wanted, ULONG prtcstns);
+BOOLEAN TbtU4NetIdentity(PTBT_U4CM cm, PUCHAR mac6);
+const TBT_XDP_PEER *TbtU4Peer(const TBT_U4CM *cm, ULONG port);
 
 #ifdef XHCI_HOST_TEST
 /* The USB3 bandwidth conversions, for the host suite's exhaustive vectors

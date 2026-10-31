@@ -719,6 +719,7 @@
 #define TBT_PORT_CS_19              19UL
 #define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
 #define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
+#define TBT_PORT19_PID              0x00000010UL    /* 4 USB4 Port is Inter-Domain (task 45.59) */
 #define TBT_PORT19_ILR              0x40000000UL    /* 30 Initiate Gen 4 Link Recovery, never written */
 #define TBT_PORT19_ELR              0x80000000UL    /* 31 Enable Gen 4 Link Recovery */
 

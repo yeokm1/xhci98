@@ -37,7 +37,7 @@ echo "xhci98:   $repo ($(git -C "$repo" rev-parse --short HEAD 2>/dev/null))"
 # xhci_compat.h's _WIN64 branch names the pointer-sized type __int64.
 c89="-std=c89 -pedantic -Wall -Wextra -Werror -Wdeclaration-after-statement \
      -Wno-unused-parameter -Wno-long-long -D__int64=__INT64_TYPE__ -DXHCI_HOST_TEST -O1"
-for f in tbt_ring tbt_hw tbt_icm tbt_u4cm; do
+for f in tbt_ring tbt_hw tbt_icm tbt_u4cm tbt_xdp; do
     gcc $c89 -c "$repo/src/cm/$f.c" -o "$out/$f.o"
 done
 gcc $c89 -c "$here/u4cm-glue.c" -o "$out/u4cm-glue.o"
@@ -75,6 +75,7 @@ gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter \
     "$here/u4cm-crosscheck.c" \
     "$out/u4cm-glue.o" \
     "$out/tbt_ring.o" "$out/tbt_hw.o" "$out/tbt_icm.o" "$out/tbt_u4cm.o" \
+    "$out/tbt_xdp.o" \
     "$qemu/hw/usb4/usb4-ctl.c" "$qemu/hw/usb4/usb4-fabric.c" \
     "$qemu/hw/usb4/usb4-router.c" "$qemu/hw/usb4/usb4-router-tb3.c" \
     "$qemu/hw/usb4/usb4-router-adl.c" "$qemu/hw/usb4/usb4-preos.c" \

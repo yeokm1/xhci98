@@ -53,6 +53,14 @@ static BOOLEAN tbtU4Live(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p, ULONG gen
 
 static const TBT_ROUTE tbtU4Root = { 0, 0 };
 
+/* Record 35's inter-domain links (task 45.59), at the end of this file. */
+static VOID tbtU4XdSink(PVOID context, const TBT_FRAME *frame);
+static VOID tbtU4XdTake(struct _TBT_U4CM *cm);
+static VOID tbtU4XdService(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p);
+static VOID tbtU4XdEnd(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p, BOOLEAN gone);
+static VOID tbtU4XdEndAll(struct _TBT_U4CM *cm, BOOLEAN gone);
+static VOID tbtU4XdPre(struct _TBT_U4CM *cm, struct _TBT_U4_PORT *p);
+
 static VOID tbtU4Log(PTBT_U4CM cm, const char *label, ULONG value)
 {
     if (cm->Host != NULL && cm->Host->Log != NULL) {
@@ -1648,6 +1656,7 @@ static VOID tbtU4BufferAllocation(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG lane0)
     rt->BaValid = FALSE;
     rt->BaMaxPcie = 0;
     rt->BaMaxUsb3 = 0;
+    rt->BaMaxHi = 0;
     switch (rt->CapsState) {
     case TBT_U4_CAPS_UNKNOWN:
     case TBT_U4_CAPS_PENDING:
@@ -1668,6 +1677,9 @@ static VOID tbtU4BufferAllocation(PTBT_U4CM cm, PTBT_U4_ROUTER rt, ULONG lane0)
             break;
         case TBT_BA_MAX_USB3:
             rt->BaMaxUsb3 = TBT_ROP_BA_VALUE(param[i]);
+            break;
+        case TBT_BA_MAX_HI:
+            rt->BaMaxHi = TBT_ROP_BA_VALUE(param[i]);
             break;
         }
     }
@@ -2813,6 +2825,7 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
         for (i = 0; i < cm->PortCount; i++) {
             cm->Ports[i].HostBaPcie = 0;
             cm->Ports[i].HostBaUsb3 = 0;
+            cm->Ports[i].HostBaHi = 0;
         }
         return TBT_OK;
     }
@@ -2826,12 +2839,14 @@ static LONG tbtU4HostRouter(PTBT_U4CM cm)
             tbtU4BufferAllocation(cm, h, cm->Ports[i].Lane0);
             cm->Ports[i].HostBaPcie = h->BaMaxPcie;
             cm->Ports[i].HostBaUsb3 = h->BaMaxUsb3;
+            cm->Ports[i].HostBaHi = h->BaMaxHi;
         }
     } else {
         tbtU4BufferAllocation(cm, h, 0);
         for (i = 0; i < cm->PortCount; i++) {
             cm->Ports[i].HostBaPcie = h->BaMaxPcie;
             cm->Ports[i].HostBaUsb3 = h->BaMaxUsb3;
+            cm->Ports[i].HostBaHi = h->BaMaxHi;
         }
     }
     return TBT_OK;
@@ -3991,9 +4006,11 @@ static LONG tbtU4Router(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG gen, PULONG next)
         if (rc == TBT_E_NOTIFY && (cm->Ring->LastEvent == TBT_EV_ERR_ENUM ||
                                    cm->Ring->LastEvent == TBT_EV_ERR_NUA)) {
             /* Someone else's, or uninitialised behind its own downstream
-             * port (Guide 3.2.1 step 1): left alone. */
-            *next = TBT_U4_UNSUPPORTED;
-            p->Why = TBT_U4_WHY_ENUM_ERROR;
+             * port (Guide 3.2.1 step 1): left alone - or, with XhciCmNet 1,
+             * perhaps another host, which the inter-domain discovery
+             * decides (record 35 section 3.3; tbtU4XdService). */
+            *next = cm->Config.Net ? TBT_U4_XDOMAIN : TBT_U4_UNSUPPORTED;
+            p->Why = cm->Config.Net ? TBT_U4_WHY_XDOMAIN : TBT_U4_WHY_ENUM_ERROR;
             return rc;
         }
         if (tbtU4Gone(cm, rc)) {
@@ -5244,6 +5261,13 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested)
     BOOLEAN hadPcie;
     BOOLEAN closed;
 
+    /* Record 35 section 3.8: an inter-domain peer ends before anything of
+     * the port is restored (its paths before its lanes) - unless its own
+     * engine is running, whose record is then ended by the generation
+     * check (tbtU4XdStale) before the tick touches the port again. */
+    if (cm->XdIn != p->Index) {
+        tbtU4XdEnd(cm, p, TRUE);
+    }
     /* Record 34 section 6.8: the kids below go first, with no register
      * work - their paths lived on the routers that left. */
     tbtU4KidsDrop(cm, p);
@@ -7430,9 +7454,23 @@ static VOID tbtU4Check(PTBT_U4CM cm, PTBT_U4_PORT p)
             tbtU4Connect(cm, p, FALSE);
         }
         break;
+    case TBT_U4_XDOMAIN:
+        /* Record 35 section 3.8: the peer ends on the port's removal
+         * evidence; a lane 0 hot plug event alone (a bonding's end, IDS
+         * 3.4.1) is only the hint that asked for this check. */
+        gone = tbtU4Evidence(cm, p, &cls);
+        if (gone || cls == TBT_U4_LANE_DISCONNECTED) {
+            tbtU4XdEnd(cm, p, TRUE);
+            tbtU4DropLinks(cm, p);
+            tbtU4Teardown(cm, p);
+            break;
+        }
+        p->UnplugPending = FALSE;
+        break;
     case TBT_U4_UNSUPPORTED:
         gone = tbtU4Evidence(cm, p, &cls);
         if (gone || cls == TBT_U4_LANE_DISCONNECTED) {
+            tbtU4XdEnd(cm, p, TRUE);
             tbtU4DropLinks(cm, p);
             tbtU4Teardown(cm, p);
         }
@@ -9877,6 +9915,9 @@ VOID TbtU4Init(PTBT_U4CM cm, PTBT_RING ring, const TBT_HOST *host,
     if (cm->Config.PreOsCleanup > 2) {
         cm->Config.PreOsCleanup = 0;
     }
+    if (ring != NULL) {
+        TbtRingSetXdomainSink(ring, tbtU4XdSink, cm);
+    }
 }
 
 /* Record 22 section 10.5: every port's isolation statement withdrawn, one
@@ -10237,6 +10278,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     rebuilt = FALSE;
     TbtCtlService(&cm->Ctl);
     tbtU4TakeQueues(cm);
+    tbtU4XdTake(cm);
     if (cm->HostTmuTdOwed || !cm->HostTmuOk) {
         tbtU4HostTmu(cm);
     }
@@ -10281,6 +10323,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
     tbtU4RetryQuarantine(cm);
     for (i = 0; i < cm->PortCount; i++) {
         p = &cm->Ports[i];
+        tbtU4XdPre(cm, p);
         if (p->RecDeparted) {
             /* Section 7.7 step 5: a departed router's recorded host-side
              * drain, owed - retried alone at each tick (its removal debt
@@ -10351,6 +10394,7 @@ VOID TbtU4Poll(PTBT_U4CM cm)
         }
         tbtU4DromLate(cm, p);
         tbtU4Check(cm, p);
+        tbtU4XdService(cm, p);
         /* Record 34 Part 3: the kids behind it, after its own check. */
         tbtU4KidService(cm, p);
         if ((p->RebuildPcie || p->RebuildUsb3) && !p->Barred && !rebuilt) {
@@ -10394,6 +10438,7 @@ VOID TbtU4RingWake(PTBT_U4CM cm)
     }
     TbtCtlService(&cm->Ctl);
     tbtU4TakeQueues(cm);
+    tbtU4XdTake(cm);
     for (i = 0; i < cm->PortCount && i < 32; i++) {
         p = &cm->Ports[i];
         if (!p->CheckPending || (owed & (1UL << i)) != 0 || p->RecDeparted ||
@@ -10527,6 +10572,9 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
         cm->Suspended = TRUE;
         return;
     }
+    /* Record 35 section 3.8: every peer ends, a Logout first, before the
+     * domain sleeps (IDS 5.1.2). */
+    tbtU4XdEndAll(cm, FALSE);
     tbtU4Zero(cm->Obligations, sizeof(cm->Obligations));
     k = 0;
     for (i = 0; i < cm->PortCount; i++) {
@@ -10917,6 +10965,7 @@ LONG TbtU4Resume(PTBT_U4CM cm)
                 saved[k].MapValid = p->MapValid;
                 saved[k].MapRid = p->MapRid;
                 saved[k].HostBaPcie = p->HostBaPcie;
+                saved[k].HostBaHi = p->HostBaHi;
                 saved[k].HostBaUsb3 = p->HostBaUsb3;
                 saved[k].Index = p->Index;
                 *p = saved[k];
@@ -11157,6 +11206,10 @@ VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out)
 
 VOID TbtU4Stop(PTBT_U4CM cm)
 {
+    /* Record 35 section 3.8: every peer ends before the rings stop. */
+    if (cm->Stage == TBT_U4_STAGE_RUNNING) {
+        tbtU4XdEndAll(cm, FALSE);
+    }
     tbtU4IsoRevokeAll(cm);
     if (!cm->Contained) {
         TbtRingStop(cm->Ring);
@@ -11174,6 +11227,8 @@ VOID TbtU4Contain(PTBT_U4CM cm)
     tbtU4IsoRevokeAll(cm);
     cm->Contained = TRUE;
     cm->Disturbed = TRUE;
+    /* Record 35: every peer gone, nothing written (tbtU4Off). */
+    tbtU4XdEndAll(cm, TRUE);
     cm->Counters.ContainedRetired += cm->ActionCount;
     cm->ActionCount = 0;
     cm->ActionHead = 0;
@@ -11907,6 +11962,15 @@ static VOID tbtU4RecoverPort(PTBT_U4CM cm, PTBT_U4_PORT p)
     p->Transitional = FALSE;
     p->AnchorValid = FALSE;
     p->LinkSeen = FALSE;
+    if (!ob[0] && !ob[1] && p->State == TBT_U4_XDOMAIN) {
+        /* Record 35: an inter-domain link, its peer ended by the
+         * containment - connected afresh after the commit (the ordinary
+         * check of an EMPTY port), its quarantine kept, its lanes and its
+         * Inter-Domain bit put back by the tick's host restore. */
+        p->State = TBT_U4_EMPTY;
+        p->Why = TBT_U4_WHY_NONE;
+        return;
+    }
     if (!ob[0] && !ob[1]) {
         /* No tunnel at the loss: found again by the ordinary check after
          * the commit (an EMPTY port's connect, a HELD or FAILED port's
@@ -12186,6 +12250,7 @@ LONG TbtU4Recover(PTBT_U4CM cm, BOOLEAN *final)
                 saved[k].MapValid = p->MapValid;
                 saved[k].MapRid = p->MapRid;
                 saved[k].HostBaPcie = p->HostBaPcie;
+                saved[k].HostBaHi = p->HostBaHi;
                 saved[k].HostBaUsb3 = p->HostBaUsb3;
                 saved[k].Index = p->Index;
                 *p = saved[k];
@@ -12417,4 +12482,1018 @@ const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port)
         return NULL;
     }
     return &cm->Ports[port - 1];
+}
+
+/* ---------------------------------------------------------------------- */
+/* Inter-domain links (design record 35 sections 3.3, 3.5, 3.8, 4, 5.1;   */
+/* task 45.59 step S3)                                                    */
+/* ---------------------------------------------------------------------- */
+
+/*
+ * A depth-1 port whose router read answered ERR_ENUM or ERR_NUA leads, with
+ * XhciCmNet 1 (TBT_U4_CONFIG.Net), perhaps to another host: the port is
+ * TBT_U4_XDOMAIN and one TBT_XDP_PEER (tbt_xdp.c, the pure engine) runs on
+ * it from the idle tick, which also feeds it the inter-domain packets the
+ * ring's XDomain sink queued (tbt_ring.h TbtRingSetXdomainSink, step S2).
+ * Everything here acts on the host router alone: its lane adapters of the
+ * port, its PORT_CS_19 and the two path entries of section 5.1. The
+ * peer's own router is the peer's connection manager's.
+ */
+
+static PTBT_U4_XD tbtU4XdOf(PTBT_U4CM cm, const TBT_U4_PORT *p)
+{
+    if (p == NULL || p->Index == 0 || p->Index > TBT_U4_MAX_PORTS) {
+        return NULL;
+    }
+    return &cm->Xd[p->Index - 1];
+}
+
+/* The engine's clock: milliseconds that never wrap with the microsecond
+ * clock (TbtClockUs wraps every 71 minutes; the engine compares deadlines
+ * by unsigned difference). */
+static ULONG tbtU4XdMs(PTBT_U4CM cm)
+{
+    ULONG now;
+    ULONG d;
+
+    now = TbtClockUs(cm->Host);
+    if (!cm->XdClockValid) {
+        cm->XdClockValid = TRUE;
+        cm->XdLastUs = now;
+        cm->XdMs = 0;
+        cm->XdRemUs = 0;
+    }
+    d = (now - cm->XdLastUs) + cm->XdRemUs;
+    cm->XdLastUs = now;
+    cm->XdMs += d / 1000UL;
+    cm->XdRemUs = d % 1000UL;
+    return cm->XdMs;
+}
+
+/*
+ * Section 3.1: this domain's UUID, read once from the host router's
+ * ROUTER_CS_7 and 8 and laid out as Linux and the firmware lay it (DW 0
+ * ROUTER_CS_7, DW 1 ROUTER_CS_8, DW 2 and 3 all ones, [linux] switch.c
+ * tb_switch_set_uuid); one that reads all zero or all ones is replaced by
+ * a value of this start, from the clock and the ring's bus address [inf],
+ * logged. The adapter's MAC (section 4.4) is derived from the same two
+ * DWs, port number 0. FALSE when the read fails (tried again later).
+ */
+static BOOLEAN tbtU4XdIdentity(PTBT_U4CM cm)
+{
+    ULONG u[2];
+    ULONG t;
+
+    if (cm->XdLocalValid) {
+        return TRUE;
+    }
+    if (tbtU4RdN(cm, &cm->HostRouter.Route, TBT_CS_ROUTER, 0, TBT_ROUTER_CS_7, 2, u) !=
+        TBT_OK) {
+        return FALSE;
+    }
+    if ((u[0] == 0 && u[1] == 0) || (u[0] == 0xFFFFFFFFUL && u[1] == 0xFFFFFFFFUL)) {
+        t = TbtClockUs(cm->Host);
+        u[0] = (t * 2654435761UL) ^ cm->Phys ^ 0x58484349UL;
+        u[1] = ~(t ^ (cm->Phys << 7)) ^ 0x39384E54UL;
+        tbtU4Log(cm, "cm.xdp.uuid.random", u[0]);
+    }
+    cm->XdLocal.Dw[0] = u[0];
+    cm->XdLocal.Dw[1] = u[1];
+    cm->XdLocal.Dw[2] = 0xFFFFFFFFUL;
+    cm->XdLocal.Dw[3] = 0xFFFFFFFFUL;
+    TbtNetMacFromUuid(u[0], u[1], 0, 0, cm->XdMac);
+    cm->XdLocalValid = TRUE;
+    return TRUE;
+}
+
+/* The host router's host interface adapter, 0 for none. */
+static ULONG tbtU4XdHi(const TBT_U4CM *cm)
+{
+    ULONG a;
+
+    for (a = 1; a <= cm->HostRouter.MaxAdp && a < TBT_U4_MAX_ADP; a++) {
+        if (cm->HostRouter.Adp[a].Present &&
+            cm->HostRouter.Adp[a].Type == TBT_ADP_TYPE_HI) {
+            return a;
+        }
+    }
+    return 0;
+}
+
+/* PORT_CS_19's USB4 Port is Inter-Domain bit (Guide 3.3; Spec PORT_CS_19
+ * bit 4) cleared and read back clear; TRUE when it is. */
+static BOOLEAN tbtU4XdPidClear(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_ROUTER h;
+    ULONG cap;
+    ULONG v;
+
+    h = &cm->HostRouter;
+    cap = h->Adp[p->Lane0].CapPort;
+    if (cap == 0) {
+        return TRUE;
+    }
+    return (BOOLEAN)(tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, cap + TBT_PORT_CS_19,
+                              TBT_PORT19_PID, 0) == TBT_OK &&
+                     tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, cap + TBT_PORT_CS_19,
+                             &v) == TBT_OK &&
+                     (v & TBT_PORT19_PID) == 0);
+}
+
+/* The bit set once the peer is known, owned before the write; cleared at
+ * the peer's end. A clear not read back stays owed to the port
+ * (TBT_U4CM.XdPidOwed), retried by the idle tick while no peer runs there
+ * (tbtU4XdService). */
+static VOID tbtU4XdPid(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x, BOOLEAN on)
+{
+    PTBT_U4_ROUTER h;
+    ULONG cap;
+
+    h = &cm->HostRouter;
+    cap = h->Adp[p->Lane0].CapPort;
+    if (cap == 0) {
+        x->PidOk = on;      /* no PORT_CS_19 to write */
+        return;
+    }
+    if (on) {
+        x->PidSet = TRUE;
+        if (tbtU4Rmw(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0, cap + TBT_PORT_CS_19, 0,
+                     TBT_PORT19_PID) == TBT_OK) {
+            x->PidOk = TRUE;
+        } else {
+            tbtU4Log(cm, "cm.xdp.pid.fail", p->Index);
+        }
+        return;
+    }
+    x->PidOk = FALSE;
+    if (x->PidSet && tbtU4XdPidClear(cm, p)) {
+        x->PidSet = FALSE;
+    }
+    if (x->PidSet) {
+        tbtU4Log(cm, "cm.xdp.pid.owed", p->Index);
+    }
+}
+
+/* Whether a port other than `x`'s holds the service (section 13: one per
+ * NHI); its link up counts from the moment its paths are built. */
+static BOOLEAN tbtU4XdOtherUp(const TBT_U4CM *cm, const TBT_U4_XD *x)
+{
+    ULONG i;
+
+    for (i = 0; i < TBT_U4_MAX_PORTS; i++) {
+        if (&cm->Xd[i] != x && cm->Xd[i].Used &&
+            (cm->Xd[i].LinkUp || cm->Xd[i].Peer.PathsUp)) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Each peer offered the service (its block's network directory, its
+ * logins accepted) while the network driver holds it open and no other
+ * port's is up (section 13); a change rebuilds that peer's block and tells
+ * it (TbtXdpPeerSetNetWanted). */
+static VOID tbtU4XdOffer(PTBT_U4CM cm)
+{
+    ULONG i;
+    ULONG in;
+    BOOLEAN want;
+    PTBT_U4_XD x;
+
+    for (i = 0; i < TBT_U4_MAX_PORTS; i++) {
+        x = &cm->Xd[i];
+        if (!x->Used) {
+            continue;
+        }
+        want = (BOOLEAN)(cm->NetWanted && !tbtU4XdOtherUp(cm, x));
+        if (want != x->Peer.NetWanted ||
+            (want && x->Peer.LocalProps.Prtcstns != cm->NetPrtcstns)) {
+            in = cm->XdIn;
+            cm->XdIn = x->Port;
+            TbtXdpPeerSetNetWanted(&x->Peer, want, cm->NetPrtcstns);
+            cm->XdIn = in;
+        }
+    }
+}
+
+/* ---- the engine's operations (TBT_XDP_OPS; Context is the TBT_U4_XD) -- */
+
+static PTBT_U4_PORT tbtU4XdPort(PTBT_U4_XD x)
+{
+    return &x->Cm->Ports[x->Port - 1];
+}
+
+static LONG tbtU4XdSend(PVOID context, ULONG pdf, const ULONG *dw, ULONG words)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+
+    if (tbtU4Off(x->Cm) || words == 0) {
+        return TBT_E_STOPPED;
+    }
+    return TbtRingSend(x->Cm->Ring, pdf, dw, words);
+}
+
+static ULONG tbtU4XdNow(PVOID context)
+{
+    return tbtU4XdMs(((PTBT_U4_XD)context)->Cm);
+}
+
+static VOID tbtU4XdLog(PVOID context, const char *label, ULONG value)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+
+    tbtU4Log(x->Cm, label, (x->Port << 24) | (value & 0x00FFFFFFUL));
+}
+
+/* IDS Table 2-7's widths from the host's lane 0: Supported Link Widths
+ * (LANE_ADP_CS_0 21:20), Target Link Width (LANE_ADP_CS_1 5:4) and the
+ * Negotiated Link Width as a lane count. */
+static LONG tbtU4XdLinkRead(PVOID context, PULONG slw, PULONG tlw, PULONG lanes)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4CM cm = x->Cm;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+    PTBT_U4_ROUTER h = &cm->HostRouter;
+    ULONG cs0;
+    ULONG cs1;
+    LONG rc;
+
+    rc = tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                 h->Adp[p->Lane0].CapLane + TBT_LANE_CS_0, &cs0);
+    if (rc == TBT_OK) {
+        rc = tbtU4LaneRd(cm, h, p->Lane0, &cs1);
+    }
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    *slw = (cs0 >> 20) & 0x3UL;
+    *tlw = (cs1 & TBT_LANE1_TLW_MASK) >> 4;
+    *lanes = TBT_LANE1_NLW(cs1) == TBT_LANE_WIDTH_X2 ? 2UL : 1UL;
+    return TBT_OK;
+}
+
+/* Target Link Width on both host lane adapters of the port, each value
+ * read and kept first so the teardown's host restore puts it back
+ * (TBT_U4_PORT.LaneSaved, LaneWritten; record 22 section 6.5 step 6.1). */
+static LONG tbtU4XdLinkSetTarget(PVOID context, ULONG tlw)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4CM cm = x->Cm;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+    PTBT_U4_ROUTER h = &cm->HostRouter;
+    ULONG k;
+
+    if (!p->LaneWritten) {
+        for (k = 0; k < 2; k++) {
+            if (tbtU4LaneRd(cm, h, p->Lane0 + k, &p->LaneSaved[k]) != TBT_OK) {
+                return TBT_E_STATE;
+            }
+        }
+        p->LaneWritten = TRUE;      /* owned before the writes */
+    }
+    for (k = 0; k < 2; k++) {
+        if (tbtU4LaneRmw(cm, h, p->Lane0 + k, TBT_LANE1_TLW_MASK,
+                         (tlw << 4) & TBT_LANE1_TLW_MASK) != TBT_OK) {
+            return TBT_E_STATE;
+        }
+    }
+    return TBT_OK;
+}
+
+/* Lane Bonding on the host's lane 0 (Guide 7.1 step 4). */
+static LONG tbtU4XdLinkBond(PVOID context)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+
+    x->Cm->Counters.BondAttempts++;
+    return tbtU4LaneRmw(x->Cm, &x->Cm->HostRouter, p->Lane0, 0, TBT_LANE1_LB);
+}
+
+/*
+ * A link that stays single (Guide 7.5.2), as record 22 section 6.5 step 6
+ * verifies one on the host's side: 6.1, the Target Link Width and Lane
+ * Bonding a bonding wrote put back and read back; 6.2, lane 1 in CLd or
+ * Disabled is single already, and a lane 0 that reads x2 bonded after
+ * all; 6.4, otherwise lane 1 in CL0 beside a lane 0 at x1, its Lane
+ * Disable set (owned before the write, put back by the teardown's host
+ * restore) and read back Disabled. Anything short of that leaves the link
+ * unverified (TBT_U4_XD.LinkBad): the peer is served, but no path is
+ * built on it until a re-plug.
+ */
+static VOID tbtU4XdLane1Off(PVOID context)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4CM cm = x->Cm;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+    PTBT_U4_ROUTER h = &cm->HostRouter;
+    ULONG v[2];
+    ULONG k;
+    ULONG st;
+
+    if (h->Tbt3 || p->Lane0 + 1 >= TBT_U4_MAX_ADP || h->Adp[p->Lane0 + 1].CapLane == 0) {
+        return;
+    }
+    if (p->LaneWritten) {
+        for (k = 0; k < 2; k++) {
+            if (tbtU4LaneRmw(cm, h, p->Lane0 + k, TBT_LANE1_TLW_MASK | TBT_LANE1_LB,
+                             p->LaneSaved[k] & (TBT_LANE1_TLW_MASK | TBT_LANE1_LB)) != TBT_OK ||
+                tbtU4LaneRd(cm, h, p->Lane0 + k, &v[k]) != TBT_OK ||
+                (v[k] & TBT_LANE1_TLW_MASK) != (p->LaneSaved[k] & TBT_LANE1_TLW_MASK)) {
+                goto bad;
+            }
+        }
+        p->LaneWritten = FALSE;
+    }
+    if (tbtU4LaneRd(cm, h, p->Lane0, &v[0]) != TBT_OK ||
+        tbtU4LaneRd(cm, h, p->Lane0 + 1, &v[1]) != TBT_OK) {
+        goto bad;
+    }
+    st = TBT_LANE1_STATE(v[1]);
+    if (st == TBT_LANE_STATE_CLD || st == TBT_LANE_STATE_DISABLED ||
+        TBT_LANE1_NLW(v[0]) == TBT_LANE_WIDTH_X2) {
+        return;
+    }
+    if (st != TBT_LANE_STATE_CL0 || TBT_LANE1_NLW(v[0]) != TBT_LANE_WIDTH_X1) {
+        goto bad;
+    }
+    for (k = 0; k < 2; k++) {
+        /* 6.3: the host's lane adapters at their defaults - Target Link
+         * Width single, no Lane Bonding, no CL state enabled. */
+        if ((v[k] & TBT_LANE1_TLW_MASK) != TBT_LANE1_TLW_SINGLE ||
+            (v[k] & (TBT_LANE1_LB | TBT_LANE1_CLX_EN)) != 0) {
+            tbtU4Log(cm, "u4.bond.not-default", (k << 31) | v[k]);
+            goto bad;
+        }
+    }
+    /* 6.3: the link's TMU off (Guide 7.5) - this driver never enables it
+     * on an inter-domain link (no timesync entry, section 13), and Disable
+     * Time Sync on the host's lane 0 makes it so whatever was found. */
+    if (tbtU4TmuAdp(cm, h, p->Lane0, TBT_TMU_ADP_CS_6, 0, TBT_TMU_ADP6_DTS) != TBT_OK) {
+        goto bad;
+    }
+    p->Lane1Disabled = TRUE;
+    if (tbtU4LaneRmw(cm, h, p->Lane0 + 1, 0, TBT_LANE1_LD) != TBT_OK ||
+        !tbtU4WaitLane(cm, p, p->Generation, h, p->Lane0 + 1, TBT_LANE_STATE_DISABLED,
+                       TBT_U4_LANE_DISABLE_US)) {
+        goto bad;
+    }
+    cm->Counters.Lane1Disabled++;
+    return;
+
+bad:
+    x->LinkBad = TRUE;
+    tbtU4Log(cm, "cm.xdp.lane1", p->Index);
+}
+
+/*
+ * One path entry of section 5.1, one read of its two DWs and one write of
+ * both (record 22 sections 6.2.2 item 4 and 6.8): output adapter and
+ * HopID, Valid, priority 4 (Guide Table 6-1), weight 1, ESE 0. A lane
+ * adapter's ingress (`lane`) gets `credits`, IFC 1, EFC 0, ISE 0; the host
+ * interface adapter's keeps its credits, IFC and ISE as read (Spec Table
+ * 8-23 and its note) and gets EFC 1.
+ */
+static LONG tbtU4XdEntry(PTBT_U4CM cm, ULONG adp, ULONG hop, ULONG outAdp, ULONG outHop,
+                         ULONG credits, BOOLEAN lane)
+{
+    const TBT_ROUTE *r = &cm->HostRouter.Route;
+    ULONG e[2];
+    LONG rc;
+
+    rc = tbtU4RdN(cm, r, TBT_CS_PATH, adp, 2 * hop, 2, e);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    e[0] &= ~(TBT_PATH0_OUT_HOP_MASK | TBT_PATH0_OUT_ADP_MASK | 0x01000000UL |
+              TBT_PATH0_VALID);
+    e[0] |= (outHop & TBT_PATH0_OUT_HOP_MASK) |
+            ((outAdp << TBT_PATH0_OUT_ADP_SHIFT) & TBT_PATH0_OUT_ADP_MASK) |
+            TBT_PATH0_VALID;
+    e[1] &= ~(TBT_PATH1_WEIGHT_MASK | TBT_PATH1_PRIO_MASK | TBT_PATH1_EFC |
+              TBT_PATH1_ESE | TBT_PATH1_RSVDZ29);
+    e[1] |= 1UL | (TBT_U4_XD_PRIORITY << TBT_PATH1_PRIO_SHIFT);
+    if (lane) {
+        e[0] = (e[0] & ~TBT_PATH0_CREDITS_MASK) |
+               ((credits << TBT_PATH0_CREDITS_SHIFT) & TBT_PATH0_CREDITS_MASK);
+        e[1] = (e[1] & ~TBT_PATH1_ISE) | TBT_PATH1_IFC;
+    } else {
+        e[1] |= TBT_PATH1_EFC;
+    }
+    return tbtU4WrN(cm, r, TBT_CS_PATH, adp, 2 * hop, 2, e);
+}
+
+/*
+ * One owed entry at `adp`, HopID `hop`, of the service that sent it to
+ * `outAdp` at `outHop`: read first, and invalidated (tbtU4Invalidate, its
+ * Pending Packets waited for, quarantined if they never drain) only while
+ * it still reads Valid with that output; one that reads invalid, or valid
+ * with another output (no longer this service's: left untouched, record
+ * 22 section 7.7's rule for what is not established as one's own), is owed
+ * no more. TRUE when it is owed no more; FALSE when it could not be read,
+ * or the access closed during the invalidation: still owed.
+ */
+static BOOLEAN tbtU4XdOwedOne(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG adp, ULONG hop,
+                              ULONG outAdp, ULONG outHop)
+{
+    ULONG e[2];
+    ULONG i;
+    PTBT_U4_QENTRY q;
+
+    if (tbtU4RdN(cm, &cm->HostRouter.Route, TBT_CS_PATH, adp, 2 * hop, 2, e) != TBT_OK) {
+        return FALSE;
+    }
+    if ((e[0] & TBT_PATH0_VALID) == 0) {
+        return TRUE;
+    }
+    if (!tbtU4EntryGoes(e, outAdp, outHop)) {
+        tbtU4Log(cm, "cm.net.owed.other", (adp << 8) | hop);
+        return TRUE;
+    }
+    if (tbtU4Invalidate(cm, p->Index, &cm->HostRouter.Route, adp, hop)) {
+        return TRUE;
+    }
+    /* Not invalidated: a quarantine record holds the entry now (its drain
+     * failed, or the access closed before the entry could be read, or one
+     * was already held). The read above established it as this service's,
+     * so a record without an output identity is given this one: its retry
+     * then knows the entry as this driver wrote it (record 22 section 7.7,
+     * TBT_U4_QENTRY.Reserve), and the quarantine owns it from here. No
+     * record: still owed. */
+    for (i = 0; i < TBT_U4_QUARANTINE; i++) {
+        q = &cm->Quarantine[i];
+        if (q->Used && !q->Enable && q->Adapter == adp && q->Hop == hop &&
+            TbtRouteEqual(&q->Route, &cm->HostRouter.Route)) {
+            if (q->OutAdapter == 0 && q->OutHop == 0) {
+                q->OutAdapter = outAdp;
+                q->OutHop = outHop;
+            }
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* Section 5.1's order down for the owed entries: the transmit entry, then
+ * the receive entry. Nothing while there is no access. */
+static VOID tbtU4XdOwedDown(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    TBT_U4_XD_OWED *o = &cm->XdOwed[p->Index - 1];
+
+    if (tbtU4Off(cm)) {
+        return;
+    }
+    if (o->Tx && tbtU4XdOwedOne(cm, p, o->Hi, o->Ring, p->Lane0, o->TxHop)) {
+        o->Tx = FALSE;
+    }
+    if (o->Rx && !o->Tx && tbtU4XdOwedOne(cm, p, p->Lane0, o->RxHop, o->Hi, o->Ring)) {
+        o->Rx = FALSE;
+    }
+}
+
+/* The two entries handed to the owed record with their identities, then
+ * taken down from it (at once, or by the idle tick where that cannot be
+ * done now: no access, an unread entry). */
+static VOID tbtU4XdPathsDown(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
+{
+    TBT_U4_XD_OWED *o = &cm->XdOwed[p->Index - 1];
+
+    if (x->TxWritten) {
+        o->Tx = TRUE;
+        o->Hi = x->Hi;
+        o->Ring = x->Ring;
+        o->TxHop = x->TxHop;
+        x->TxWritten = FALSE;
+    }
+    if (x->RxWritten) {
+        o->Rx = TRUE;
+        o->Hi = x->Hi;
+        o->Ring = x->Ring;
+        o->RxHop = x->RxHop;
+        x->RxWritten = FALSE;
+    }
+    tbtU4XdOwedDown(cm, p);
+}
+
+/*
+ * Section 5.1's order up: the rings (the driver's, TBT_U4_NET.RingsUp),
+ * the receive path, the transmit path, then the link up. One service per
+ * NHI (section 13): refused while another port's is up. Credits for the
+ * receive entry at the lane: the lesser of what the lane has left and the
+ * host router's baMaxHI (14 without one), at least 1 (record 22 section
+ * 6.8's accounting; [linux] tb_dma_init_rx_path).
+ */
+static LONG tbtU4XdUp(PVOID context, ULONG txHop, ULONG rxHop)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4CM cm = x->Cm;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+    TBT_U4_USAGE u;
+    TBT_U4_USAGE uh;
+    ULONG avail;
+    ULONG want;
+    ULONG credits;
+    BOOLEAN e2e;
+    LONG rc;
+
+    if (tbtU4XdOtherUp(cm, x)) {
+        tbtU4Log(cm, "cm.net.busy", p->Index);
+        return TBT_E_STATE;
+    }
+    if (cm->XdOwed[p->Index - 1].Tx || cm->XdOwed[p->Index - 1].Rx) {
+        tbtU4Log(cm, "cm.net.owed", p->Index);   /* an earlier service's entries */
+        return TBT_E_STATE;
+    }
+    if (x->LinkBad || !x->PidOk) {
+        tbtU4Log(cm, "cm.net.link", (p->Index << 8) | (x->PidOk ? 0UL : 1UL));
+        return TBT_E_STATE;
+    }
+    /* Every HopID and the ring free, live or quarantined (tbtU4ScanLane
+     * counts both): the receive entry's input HopID on lane 0 and its
+     * output at the host interface, the transmit entry's input there and
+     * its output HopID on lane 0. */
+    if (rxHop < TBT_HOP_FIRST || rxHop > TBT_HOP_MAX || txHop < TBT_HOP_FIRST ||
+        txHop > TBT_HOP_MAX ||
+        tbtU4ScanLane(cm, &cm->HostRouter, p->Lane0, &u) != TBT_OK ||
+        tbtU4ScanLane(cm, &cm->HostRouter, x->Hi, &uh) != TBT_OK ||
+        tbtU4LaneAvail(cm, &cm->HostRouter, p->Lane0, &u, &avail) != TBT_OK) {
+        return TBT_E_STATE;
+    }
+    if (TBT_U4_BIT_GET(u.InUse, rxHop) || TBT_U4_BIT_GET(u.OutUse, txHop) ||
+        TBT_U4_BIT_GET(uh.InUse, TBT_U4_XD_RING) || TBT_U4_BIT_GET(uh.OutUse, TBT_U4_XD_RING)) {
+        tbtU4Log(cm, "cm.net.hop.busy", (p->Index << 16) | (txHop << 8) | rxHop);
+        return TBT_E_STATE;
+    }
+    want = p->HostBaHi != 0 ? p->HostBaHi : TBT_U4_XD_CREDITS;
+    credits = avail < want ? avail : want;
+    if (credits < 1) {
+        tbtU4Log(cm, "cm.net.credits", (p->Index << 16) | avail);
+        return TBT_E_STATE;
+    }
+    e2e = (BOOLEAN)((cm->NetPrtcstns & x->Peer.RemoteInfo.Prtcstns &
+                     TBT_NET_STNS_E2E) != 0);
+    x->Ring = TBT_U4_XD_RING;
+    x->TxHop = txHop;
+    x->RxHop = rxHop;
+    if (cm->Net.RingsUp != NULL &&
+        cm->Net.RingsUp(cm->Net.Context, p->Index, x->Ring, e2e) != TBT_OK) {
+        tbtU4Log(cm, "cm.net.rings", p->Index);
+        return TBT_E_STATE;
+    }
+    x->RingsUp = TRUE;
+    x->RxWritten = TRUE;        /* owned before the write */
+    rc = tbtU4XdEntry(cm, p->Lane0, rxHop, x->Hi, x->Ring, credits, TRUE);
+    if (rc == TBT_OK) {
+        x->TxWritten = TRUE;
+        rc = tbtU4XdEntry(cm, x->Hi, x->Ring, p->Lane0, txHop, 0, FALSE);
+    }
+    if (rc != TBT_OK) {
+        tbtU4Log(cm, "cm.net.path", (ULONG)rc);
+        tbtU4XdPathsDown(cm, p, x);
+        x->RingsUp = FALSE;
+        if (cm->Net.RingsDown != NULL) {
+            cm->Net.RingsDown(cm->Net.Context, p->Index, (BOOLEAN)tbtU4Off(cm));
+        }
+        return TBT_E_STATE;
+    }
+    tbtU4Log(cm, "cm.net.paths", (p->Index << 24) | (txHop << 16) | (rxHop << 8) | credits);
+    x->LinkUp = TRUE;
+    if (cm->Net.Link != NULL) {
+        cm->Net.Link(cm->Net.Context, p->Index, TRUE, x->Peer.PeerMac);
+    }
+    tbtU4XdOffer(cm);           /* withdrawn from every other peer */
+    return TBT_OK;
+}
+
+/* Section 5.1's order down: the link down (the driver stops its sends and
+ * drains its transmit ring, at most 500 ms), the entries, the rings. */
+static VOID tbtU4XdDown(PVOID context, BOOLEAN peerGone)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+    PTBT_U4CM cm = x->Cm;
+    PTBT_U4_PORT p = tbtU4XdPort(x);
+
+    tbtU4Log(cm, "cm.net.down", (p->Index << 8) | (peerGone ? 1UL : 0UL));
+    if (x->LinkUp) {
+        x->LinkUp = FALSE;
+        if (cm->Net.Link != NULL) {
+            cm->Net.Link(cm->Net.Context, p->Index, FALSE, NULL);
+        }
+    }
+    tbtU4XdPathsDown(cm, p, x);
+    if (x->RingsUp) {
+        x->RingsUp = FALSE;
+        if (cm->Net.RingsDown != NULL) {
+            cm->Net.RingsDown(cm->Net.Context, p->Index, (BOOLEAN)tbtU4Off(cm));
+        }
+    }
+    tbtU4XdOffer(cm);           /* offered again to the others */
+}
+
+static VOID tbtU4XdReady(PVOID context, const TBT_XDP_REMOTE *remote)
+{
+    PTBT_U4_XD x = (PTBT_U4_XD)context;
+
+    tbtU4Log(x->Cm, "cm.xdp.peer", (x->Port << 24) | ((remote->VendorId & 0xFFFUL) << 12) |
+                                   (remote->DeviceId & 0xFFFUL));
+}
+
+/* ---- the port's peer --------------------------------------------------- */
+
+/*
+ * Section 3.3 step 4 and 3.5: the peer record of a port, its engine given
+ * this domain's UUID, the published block (vendorid 0 "xHCI98", deviceid 1
+ * "xhcicm", the package version, maxhopid the lane's Max Input HopID, the
+ * network directory while the network driver holds it open), the lane's
+ * Max Output HopID and the HopIDs in use on it, and whether bonding is
+ * possible: XhciCmLaneBonding 1, a Gen 2 or 3 link at x1 and both host
+ * lane adapters listing x2 (the peer's side the Link State exchange
+ * reads). A link that cannot bond keeps lane 1 disabled once the peer is
+ * known (tbtU4XdSync). FALSE when it cannot start: not on a Thunderbolt
+ * host router (its link controller's inter-domain setting is not
+ * designed here), or a read failing.
+ */
+static BOOLEAN tbtU4XdBegin(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
+{
+    PTBT_U4_ROUTER h;
+    TBT_XDP_OPS ops;
+    TBT_XDP_LOCAL props;
+    TBT_ROUTE route;
+    TBT_U4_USAGE u;
+    ULONG inUse[4];
+    ULONG v[2];
+    ULONG lane;
+    ULONG speed;
+    ULONG i;
+    BOOLEAN gen23;
+    BOOLEAN bond;
+
+    h = &cm->HostRouter;
+    if (h->Tbt3 || p->Lane0 == 0 || p->Lane0 + 1 >= TBT_U4_MAX_ADP ||
+        h->Adp[p->Lane0].CapLane == 0) {
+        tbtU4Log(cm, "cm.xdp.host", p->Index);
+        return FALSE;
+    }
+    tbtU4Zero(x, sizeof(*x));
+    x->Cm = cm;
+    x->Port = p->Index;
+    x->Gen = p->Generation;
+    x->Hi = tbtU4XdHi(cm);
+    if (x->Hi == 0 || !tbtU4XdIdentity(cm) ||
+        tbtU4ScanLane(cm, h, p->Lane0, &u) != TBT_OK ||
+        tbtU4LaneRd(cm, h, p->Lane0, &lane) != TBT_OK) {
+        tbtU4Log(cm, "cm.xdp.begin.fail", p->Index);
+        return FALSE;
+    }
+    for (i = 0; i < 4; i++) {
+        inUse[i] = u.InUse[i] | u.OutUse[i];
+    }
+    speed = TBT_LANE1_SPEED(lane);
+    gen23 = (BOOLEAN)((speed == TBT_LANE_SPEED_GEN2 || speed == TBT_LANE_SPEED_GEN3) &&
+                      TBT_LANE1_NLW(lane) == TBT_LANE_WIDTH_X1 &&
+                      h->Adp[p->Lane0 + 1].CapLane != 0);
+    bond = FALSE;
+    if (gen23 && cm->Config.LaneBonding &&
+        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                h->Adp[p->Lane0].CapLane + TBT_LANE_CS_0, &v[0]) == TBT_OK &&
+        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0 + 1,
+                h->Adp[p->Lane0 + 1].CapLane + TBT_LANE_CS_0, &v[1]) == TBT_OK &&
+        (v[0] & TBT_LANE0_SLW_X2) != 0 && (v[1] & TBT_LANE0_SLW_X2) != 0) {
+        bond = TRUE;
+    }
+    x->Lane1Owed = (BOOLEAN)(gen23 && !bond);
+
+    tbtU4Zero(&ops, sizeof(ops));
+    ops.Context = x;
+    ops.Send = tbtU4XdSend;
+    ops.NowMs = tbtU4XdNow;
+    ops.Log = tbtU4XdLog;
+    ops.LinkRead = tbtU4XdLinkRead;
+    ops.LinkSetTarget = tbtU4XdLinkSetTarget;
+    ops.LinkBond = tbtU4XdLinkBond;
+    ops.LinkLane1Off = tbtU4XdLane1Off;
+    ops.ServiceUp = tbtU4XdUp;
+    ops.ServiceDown = tbtU4XdDown;
+    ops.PeerReady = tbtU4XdReady;
+    tbtU4Zero(&props, sizeof(props));
+    props.VendorId = 0;
+    props.VendorText = "xHCI98";
+    props.DeviceId = 1;
+    props.DeviceText = "xhcicm";
+    props.DeviceRevision = cm->Config.NetRevision;
+    props.MaxHopId = h->Adp[p->Lane0].MaxInHop;
+    props.Network = (BOOLEAN)(cm->NetWanted && !tbtU4XdOtherUp(cm, x));
+    props.Prtcstns = cm->NetPrtcstns;
+    route.Hi = 0;
+    route.Lo = p->Lane0;
+    TbtXdpPeerInit(&x->Peer, &ops, &route, &cm->XdLocal, NULL, FALSE, bond, &props,
+                   cm->XdMac, h->Adp[p->Lane0].MaxOutHop, inUse);
+    x->Used = TRUE;
+    if (p->Index <= 32 && (cm->XdPidOwed & (1UL << (p->Index - 1))) != 0) {
+        /* An earlier record's clear still owed: this record owns it. */
+        cm->XdPidOwed &= ~(1UL << (p->Index - 1));
+        x->PidSet = TRUE;
+    }
+    TbtXdpPeerStart(&x->Peer);
+    tbtU4Log(cm, "cm.xdp.begin", (p->Index << 8) | (bond ? 1UL : 0UL));
+    return TRUE;
+}
+
+/*
+ * Section 3.8 for the port's peer: the engine ended (with a Logout first
+ * where `gone` is FALSE and the service is up: sent once, not waited for,
+ * since IDS 5.1.2 takes no answer as one), its paths and rings down, the
+ * Inter-Domain bit cleared, the record freed. The lanes the bonding or the
+ * lane 1 disable changed are the teardown's host restore's.
+ */
+static VOID tbtU4XdEnd(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN gone)
+{
+    PTBT_U4_XD x;
+    ULONG prev;
+    ULONG in;
+
+    x = tbtU4XdOf(cm, p);
+    if (x == NULL || !x->Used) {
+        return;
+    }
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
+    if (tbtU4Off(cm)) {
+        gone = TRUE;
+    }
+    in = cm->XdIn;
+    cm->XdIn = p->Index;
+    if (!gone) {
+        TbtXdpPeerEnd(&x->Peer, FALSE);
+        TbtXdpPeerTick(&x->Peer);
+    }
+    TbtXdpPeerEnd(&x->Peer, TRUE);
+    cm->XdIn = in;
+    if (!tbtU4Off(cm)) {
+        tbtU4XdPid(cm, p, x, FALSE);
+    }
+    if (x->PidSet && p->Index <= 32) {
+        cm->XdPidOwed |= 1UL << (p->Index - 1);
+    }
+    tbtU4Log(cm, "cm.xdp.end", (p->Index << 8) | (gone ? 1UL : 0UL));
+    tbtU4Zero(x, sizeof(*x));
+    cm->ActivePort = prev;
+}
+
+static VOID tbtU4XdEndAll(PTBT_U4CM cm, BOOLEAN gone)
+{
+    ULONG i;
+
+    for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
+        tbtU4XdEnd(cm, &cm->Ports[i], gone);
+    }
+}
+
+/* The engine's state as the port's (record 22 section 7.2's table with
+ * record 35's row): a loop UNSUPPORTED with WHY_LOOP and Disable Time Sync
+ * on the port's lane 0 (Guide 3.3); no answer to the UUID Request
+ * UNSUPPORTED with WHY_ENUM_ERROR as before the feature (section 3.3 step
+ * 2), the record kept so the peer's own request restarts it; anything else
+ * TBT_U4_XDOMAIN, the Inter-Domain bit set once the peer is known, and
+ * lane 1 disabled where the link stays single. */
+static VOID tbtU4XdSync(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
+{
+    ULONG st;
+
+    st = x->Peer.State;
+    if (st == TBT_XDP_S_LOOP) {
+        if (p->State != TBT_U4_UNSUPPORTED || p->Why != TBT_U4_WHY_LOOP) {
+            p->State = TBT_U4_UNSUPPORTED;
+            p->Why = TBT_U4_WHY_LOOP;
+            cm->XdLoops++;
+            (void)tbtU4TmuAdp(cm, &cm->HostRouter, p->Lane0, TBT_TMU_ADP_CS_6, 0,
+                              TBT_TMU_ADP6_DTS);
+            tbtU4XdPid(cm, p, x, FALSE);
+            tbtU4Log(cm, "u4.port.state", (p->Index << 8) | p->State | (p->Why << 16));
+        }
+        return;
+    }
+    if (st == TBT_XDP_S_ERROR && !x->Peer.HaveRemote) {
+        if (p->State != TBT_U4_UNSUPPORTED) {
+            p->State = TBT_U4_UNSUPPORTED;
+            p->Why = TBT_U4_WHY_ENUM_ERROR;
+            tbtU4Log(cm, "cm.xdp.uuid.none", p->Index);
+        }
+        return;
+    }
+    if (p->State != TBT_U4_XDOMAIN) {
+        p->State = TBT_U4_XDOMAIN;
+        p->Why = TBT_U4_WHY_XDOMAIN;
+        tbtU4Log(cm, "u4.port.state", (p->Index << 8) | p->State | (p->Why << 16));
+    }
+    if (!x->Peer.HaveRemote) {
+        return;
+    }
+    if (!x->PidOk) {
+        tbtU4XdPid(cm, p, x, TRUE);     /* again at each tick until answered */
+    }
+    if (x->Lane1Owed && st != TBT_XDP_S_UUID && st != TBT_XDP_S_LINK &&
+        st != TBT_XDP_S_BOND_LOW && st != TBT_XDP_S_BOND_HIGH) {
+        x->Lane1Owed = FALSE;
+        tbtU4XdLane1Off(x);
+    }
+}
+
+/* Whether a port may carry a peer: XDOMAIN, or UNSUPPORTED by the UUID
+ * step or the loop rule (its record kept), on a running instance. */
+static BOOLEAN tbtU4XdPortOk(const TBT_U4CM *cm, const TBT_U4_PORT *p)
+{
+    return (BOOLEAN)(cm->Config.Net &&
+                     (p->State == TBT_U4_XDOMAIN ||
+                      (p->State == TBT_U4_UNSUPPORTED &&
+                       (p->Why == TBT_U4_WHY_ENUM_ERROR || p->Why == TBT_U4_WHY_LOOP))));
+}
+
+/* A record of an earlier connection of its port: a teardown nested at a
+ * safe point (record 22 section 7.4) ended that connection without this
+ * section, and the port may already be connected again. Ended as gone. */
+static VOID tbtU4XdStale(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
+{
+    if (x->Used && x->Gen != p->Generation) {
+        tbtU4XdEnd(cm, p, TRUE);
+    }
+}
+
+/* At the top of each port's share of the idle tick, before its host
+ * restore and its check: a stale record ended, and the entries owed by a
+ * service with no record left taken down, so no lane is restored and no
+ * connection made while this service's paths stand. */
+static VOID tbtU4XdPre(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_XD x;
+
+    x = tbtU4XdOf(cm, p);
+    if (x == NULL || tbtU4Off(cm)) {
+        return;
+    }
+    tbtU4XdStale(cm, p, x);
+    tbtU4XdOwedDown(cm, p);     /* a downed service's, whether or not its
+                                 * peer's record lives on */
+}
+
+/* The idle tick's share, after the port's check: an owed Inter-Domain
+ * clear retried while no peer runs on the port; the record started for a
+ * port that has just become XDOMAIN, the engine's resends and timeouts,
+ * the port's state from the engine's. A record whose port has left those
+ * states (a teardown elsewhere) is ended as gone. */
+static VOID tbtU4XdService(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_XD x;
+    ULONG prev;
+    ULONG bit;
+
+    x = tbtU4XdOf(cm, p);
+    if (x == NULL || tbtU4Off(cm)) {
+        return;
+    }
+    tbtU4XdPre(cm, p);
+    bit = p->Index <= 32 ? 1UL << (p->Index - 1) : 0;
+    if ((cm->XdPidOwed & bit) != 0 && !x->Used && tbtU4XdPidClear(cm, p)) {
+        cm->XdPidOwed &= ~bit;
+    }
+    if (!tbtU4XdPortOk(cm, p)) {
+        tbtU4XdEnd(cm, p, TRUE);
+        return;
+    }
+    if (!x->Used && p->State != TBT_U4_XDOMAIN) {
+        return;     /* left UNSUPPORTED: only the peer's own packet restarts it */
+    }
+    prev = cm->ActivePort;
+    cm->ActivePort = p->Index;
+    if (!x->Used && !tbtU4XdBegin(cm, p, x)) {
+        tbtU4Zero(x, sizeof(*x));
+        p->State = TBT_U4_UNSUPPORTED;
+        p->Why = TBT_U4_WHY_ENUM_ERROR;
+        tbtU4Log(cm, "u4.port.state", (p->Index << 8) | p->State | (p->Why << 16));
+    } else {
+        cm->XdIn = p->Index;
+        TbtXdpPeerTick(&x->Peer);
+        cm->XdIn = 0;
+        tbtU4XdSync(cm, p, x);
+    }
+    cm->ActivePort = prev;
+}
+
+/*
+ * The XDomain sink (tbt_ring.h TBT_XDOMAIN_SINK): called inside the ring's
+ * receive, whoever reads it, so it only records - a small queue the thread
+ * empties after the read in progress (tbtU4XdTake). With XhciCmNet 0 the
+ * packet is counted and dropped unanswered (section 3.6).
+ */
+static VOID tbtU4XdSink(PVOID context, const TBT_FRAME *frame)
+{
+    PTBT_U4CM cm = (PTBT_U4CM)context;
+
+    if (!cm->Config.Net) {
+        if (cm->XdIgnored++ == 0) {
+            tbtU4Log(cm, "cm.xdp.ignored", frame->Pdf);    /* the first only */
+        }
+        return;
+    }
+    if (cm->XdCount >= TBT_U4_XD_QUEUE) {
+        cm->XdOverflow++;
+        return;
+    }
+    cm->XdQ[(cm->XdHead + cm->XdCount) % TBT_U4_XD_QUEUE] = *frame;
+    cm->XdCount++;
+    cm->XdQueued++;
+}
+
+/* The queue emptied, oldest first: each packet to the peer of the port
+ * whose lane 0 its route names (depth 1), a record started for a port
+ * left UNSUPPORTED by the UUID step (the peer's request restarts it,
+ * section 3.3 step 2); any other route counted. Packets queued while one
+ * is answered are taken in the same pass. */
+static VOID tbtU4XdTake(PTBT_U4CM cm)
+{
+    TBT_FRAME f;
+    TBT_ROUTE r;
+    PTBT_U4_PORT p;
+    PTBT_U4_XD x;
+    BOOLEAN lane1;
+    ULONG prev;
+
+    if (cm->XdTaking) {
+        return;
+    }
+    cm->XdTaking = TRUE;
+    while (cm->XdCount != 0) {
+        f = cm->XdQ[cm->XdHead];
+        cm->XdHead = (cm->XdHead + 1) % TBT_U4_XD_QUEUE;
+        cm->XdCount--;
+        if (tbtU4Off(cm) || cm->Suspended || f.Words < 2) {
+            continue;
+        }
+        r.Hi = f.Dw[0] & 0x7FFFFFFFUL;
+        r.Lo = f.Dw[1];
+        p = NULL;
+        if (r.Hi == 0 && r.Lo != 0 && r.Lo < TBT_U4_MAX_ADP) {
+            p = tbtU4PortByLane(cm, r.Lo, &lane1);
+            if (p != NULL && lane1) {
+                p = NULL;
+            }
+        }
+        x = tbtU4XdOf(cm, p);
+        if (p == NULL || x == NULL || !tbtU4XdPortOk(cm, p)) {
+            cm->XdNoPeer++;
+            continue;
+        }
+        tbtU4XdStale(cm, p, x);
+        prev = cm->ActivePort;
+        cm->ActivePort = p->Index;
+        if (x->Used || tbtU4XdBegin(cm, p, x)) {
+            cm->XdIn = p->Index;
+            (void)TbtXdpPeerOnPacket(&x->Peer, f.Pdf, f.Dw, f.Words);
+            cm->XdIn = 0;
+            tbtU4XdSync(cm, p, x);
+        } else {
+            tbtU4Zero(x, sizeof(*x));
+            cm->XdNoPeer++;
+        }
+        cm->ActivePort = prev;
+    }
+    cm->XdTaking = FALSE;
+}
+
+VOID TbtU4SetNet(PTBT_U4CM cm, const TBT_U4_NET *net)
+{
+    if (net != NULL) {
+        cm->Net = *net;
+    } else {
+        tbtU4Zero(&cm->Net, sizeof(cm->Net));
+    }
+}
+
+VOID TbtU4NetWanted(PTBT_U4CM cm, BOOLEAN wanted, ULONG prtcstns)
+{
+    cm->NetWanted = wanted;
+    cm->NetPrtcstns = prtcstns;
+    tbtU4XdOffer(cm);
+}
+
+BOOLEAN TbtU4NetIdentity(PTBT_U4CM cm, PUCHAR mac6)
+{
+    ULONG i;
+
+    if (!cm->Config.Net || cm->Stage != TBT_U4_STAGE_RUNNING || tbtU4Off(cm) ||
+        !tbtU4XdIdentity(cm)) {
+        return FALSE;
+    }
+    for (i = 0; i < 6; i++) {
+        mac6[i] = cm->XdMac[i];
+    }
+    return TRUE;
+}
+
+const TBT_XDP_PEER *TbtU4Peer(const TBT_U4CM *cm, ULONG port)
+{
+    if (port == 0 || port > TBT_U4_MAX_PORTS || !cm->Xd[port - 1].Used) {
+        return NULL;
+    }
+    return &cm->Xd[port - 1].Peer;
 }

@@ -168,7 +168,9 @@ static void fabQueue(FAB *f, unsigned long pdf, const unsigned long *dw,
     unsigned long at;
     unsigned long pos;
 
-    if (f->RxQCount >= FAB_RXQ || words > 62) {
+    /* 63 words and the CRC fill a 256-byte ring 0 buffer (TBT_RING_BUF_BYTES):
+     * a Properties Read Response of 45 DWs is that long (task 45.59). */
+    if (f->RxQCount >= FAB_RXQ || words > 63) {
         f->RxDropped++;
         return;
     }
@@ -1196,7 +1198,19 @@ static void fabTx(FAB *f, unsigned long pdf, const unsigned long *dw,
     case TBT_PDF_NOTIFY_ACK_ENH:
         f->AcksEnh++;
         break;
+    case TBT_PDF_XDOMAIN_REQ:
+    case TBT_PDF_XDOMAIN_RESP:
+        f->XdSent++;
+        if (f->XdTx != NULL) {
+            f->XdTx(f, pdf, dw, words);
+        }
+        break;
     }
+}
+
+void fabAdapterPoke(FAB *f, int router, unsigned adp, unsigned long addr, unsigned long v)
+{
+    fabAdapterWrite(f, router, adp, addr, v);
 }
 
 static void fabProcessTx(FAB *f)
