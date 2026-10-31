@@ -6005,3 +6005,15 @@ the version bump.
   (45.55): "On Windows XP, a USB4 device that has its own downstream port
   (a dock or a daisy-chainable enclosure), plugged in while Windows runs,
   may not show its own drive or the device chained behind it.""
+- 45.60 (HEAD): "- (45.60, the installer's Thunderbolt and USB4 page,
+  2026-10-31) "The installer has a Thunderbolt and USB4 page after the
+  Components page, shown when Thunderbolt 3 / USB4 support is ticked. It
+  holds the parts that come with that support: closing PCI windows above 4
+  GB (XHCIPFW), Stor98 and its large transfers on Windows 98 SE and ME. It
+  also holds the choice of what happens when a device is plugged in: give
+  it a PCI Express connection at once (the default), or give it none
+  (XhciCmApprove 0). That choice used to be on the Settings dialog's
+  Thunderbolt tab. With "Give it none", a device plugged in gets no new
+  PCI Express connection and may still work over USB, and connections
+  already made when Windows starts stay unless XhciCmPreOsCleanup ends
+  them." (The networking box joins the page with 45.59.)"
