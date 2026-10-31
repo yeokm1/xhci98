@@ -6245,6 +6245,12 @@ static void st_tbt(HWND parent)
     st(IsDlgButtonChecked(d, IDC_T_APPR1) == BST_CHECKED &&
        IsDlgButtonChecked(d, IDC_T_APPR0) != BST_CHECKED,
        "the approval preselected 1 from the value in force");
+    /* The keyboard reaches both: one group, the arrow keys moving between
+     * the two buttons. */
+    st(GetNextDlgGroupItem(d, GetDlgItem(d, IDC_T_APPR1), FALSE) ==
+       GetDlgItem(d, IDC_T_APPR0) &&
+       GetNextDlgGroupItem(d, GetDlgItem(d, IDC_T_APPR0), FALSE) ==
+       GetDlgItem(d, IDC_T_APPR1), "the two approval buttons one group");
     rows[0].InForce = 0;
     tbt_fill(d);
     st(IsDlgButtonChecked(d, IDC_T_APPR0) == BST_CHECKED &&

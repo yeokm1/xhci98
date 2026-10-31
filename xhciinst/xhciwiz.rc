@@ -127,9 +127,12 @@ BEGIN
     LTEXT           "", IDC_C_S98_T, 20, 49, 272, 16
     AUTOCHECKBOX    "", IDC_C_VSD, 20, 67, 272, 10, WS_TABSTOP
     LTEXT           "", IDC_T_APPR_H, 8, 82, 284, 10
+    /* The two buttons next to each other: an LTEXT starts a group of its
+     * own, so a sentence between them would end the buttons' group and
+     * leave the second out of reach of the arrow keys. */
     AUTORADIOBUTTON "", IDC_T_APPR1, 8, 94, 284, 10, WS_GROUP | WS_TABSTOP
-    LTEXT           "", IDC_T_APPR1_T, 20, 105, 272, 24
     AUTORADIOBUTTON "", IDC_T_APPR0, 8, 131, 284, 10
+    LTEXT           "", IDC_T_APPR1_T, 20, 105, 272, 24
     LTEXT           "", IDC_T_APPR0_T, 20, 142, 272, 24
     LTEXT           "", IDC_T_APPR_NOTE, 8, 168, 284, 34
     AUTOCHECKBOX    "", IDC_T_NET, 8, 196, 284, 10, WS_GROUP | WS_TABSTOP |
