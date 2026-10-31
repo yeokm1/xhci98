@@ -1070,6 +1070,16 @@ static void test_odd_frames(void)
     CHECK_EQ(g_icm.Counters.EventsUnknown, 1, "unknown event code counted");
     CHECK_EQ(g_icm.Counters.Strays, 1, "a response nobody waited for");
     CHECK_EQ(g_icm.Counters.EventsMalformed, 1, "short event counted");
+    /* Run-45 45-E.15: the one-DW code-8 acknowledgement Alpine Ridge sends
+     * for each inter-domain frame - counted, logged once, nothing else. */
+    CHECK(!g_icm.XdAckLogged, "no acknowledgement yet");
+    dw[0] = 0x01000008UL;
+    fakeQueue(TBT_PDF_ICM_RESP, dw, 1, 0, 0);
+    fakeQueue(TBT_PDF_ICM_RESP, dw, 1, 0, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.Strays, 3, "both acknowledgements counted");
+    CHECK(g_icm.XdAckLogged, "logged once");
+    CHECK_EQ(g_icm.Counters.EventsUnknown, 1, "not taken for an event");
 
     /* Rejected: ignored. */
     {

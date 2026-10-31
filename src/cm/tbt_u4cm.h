@@ -862,6 +862,17 @@ typedef struct _TBT_U4_XD {
  * is proven invalid: where they are and where they send, so an entry is
  * invalidated only while it still reads as this service's (record 35
  * section 3.9). Kept across the containment, which allows no access. */
+/* An early UUID Request's answer not yet sent (tbtU4XdEarlyUuid): retried
+ * at each take until sent, at most TBT_XDP_RESENDS times, whether or not a
+ * record has started on the port since (that request never reaches its
+ * engine). */
+typedef struct _TBT_U4_XD_EARLY {
+    BOOLEAN Owed;
+    ULONG Sn;
+    ULONG Type;
+    ULONG Tries;
+} TBT_U4_XD_EARLY, *PTBT_U4_XD_EARLY;
+
 typedef struct _TBT_U4_XD_OWED {
     BOOLEAN Tx;             /* the host interface adapter's entry at Ring */
     BOOLEAN Rx;             /* lane 0's entry at RxHop */
@@ -1021,6 +1032,7 @@ typedef struct _TBT_U4CM {
     TBT_FRAME XdQ[TBT_U4_XD_QUEUE];
     TBT_U4_XD Xd[TBT_U4_MAX_PORTS];
     TBT_U4_XD_OWED XdOwed[TBT_U4_MAX_PORTS];
+    TBT_U4_XD_EARLY XdEarly[TBT_U4_MAX_PORTS];
 } TBT_U4CM, *PTBT_U4CM;
 
 /* Bind `cm` to its ring, the accessor and the configuration. */

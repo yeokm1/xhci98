@@ -1181,6 +1181,18 @@ static VOID tbtIcmFrame(PTBT_ICM icm, const TBT_FRAME *f)
         return;
     }
     icm->Counters.Strays++;
+    if (f->Pdf == TBT_PDF_ICM_RESP && f->Words == 1 &&
+        TBT_ICM_HDR_CODE(f->Dw[0]) == TBT_ICM_XD_ACK_CODE) {
+        /* Run-45 45-E.15 [obs]: Alpine Ridge firmware answers every
+         * inter-domain frame its host sends with one such DW; no command
+         * of this driver's has code 8, so none waits for it. Counted, and
+         * logged once a session. */
+        if (!icm->XdAckLogged) {
+            icm->XdAckLogged = TRUE;
+            tbtIcmLog(icm, "tbt.icm.xd-ack", f->Dw[0]);
+        }
+        return;
+    }
     tbtIcmLog(icm, "tbt.icm.stray", (f->Pdf << 24) | (f->Dw[0] & 0xFFFFFFUL));
 }
 

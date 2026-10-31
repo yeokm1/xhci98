@@ -1,6 +1,8 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 9, 2026-10-31: the driver half joined to the firmware
+Status: revision 10, 2026-10-31: the bench capture (section 2.7) weighed
+against the code (section 3.11), reviewed and revised.
+Revision 9, 2026-10-31: the driver half joined to the firmware
 connection manager (section 6.5, "The two connection managers"), the
 software connection manager's link lowered at this host's own Logout
 (section 3.9), the network INF's models decoration (section 8.2),
@@ -1225,6 +1227,75 @@ else runs inside the client's existing entry points.
   ready keeps the records; the re-announcement is keyed and reconciled as
   above.
 
+### 3.11 The bench capture weighed (revision 10)
+
+The facts are section 2.7's (task 45-E.15, the owner's bench: an Alpine
+Ridge LP host under its firmware CM and a 12th-generation Intel host
+under Linux's software CM, both on Linux 7.0; `runs/run-45.md`, "45-E.15
+(the bench capture)", [bench]). What changed:
+
+- **The firmware CM sends a UUID Request at a record's start.** The
+  firmware answers the far end's UUID Request itself, so this host never
+  sees it; a far software CM that gave up before this driver bound
+  (Linux stops after about 20 s, "discovery failed", read on the
+  emulator, run-45 "45.59 S5 (legs)") restarts only at a UUID Request.
+  `TbtXdpPeerStart` in the firmware CM's mode sends one beside the
+  discovery (`cm.xdp.uuid.nudge`), resent each second, at most ten more
+  times, until a UUID Response comes; `test_tbt_xdp`'s
+  `test_firmware_nudge`, its first request lost.
+- **The software CM answers an early UUID Request.** An Alpine Ridge
+  firmware at the far end sends one UUID Request about 10 to 14 ms after
+  the link is up, with no retry seen, and tells its host of this one only
+  once it is answered - before the port machine has read ERR_ENUM and
+  classified the port, and perhaps with the hot plug event itself. With
+  `XhciCmNet` 1 a UUID Request on a port's lane 0 that no record serves
+  and that is not yet XDOMAIN is answered at once with this domain's
+  UUID, whatever the port's state (`cm.xdp.uuid.early`); the
+  classification then starts the discovery as before. An answer that
+  cannot be sent at once (this domain's UUID unreadable, the ring
+  refusing it) is owed to the next takes, at most ten more tries, until
+  sent, a record started on the port since included (that request never
+  reaches its engine). With this answer the link no longer depends
+  on the Alpine Ridge firmware retrying its UUID Request, which section
+  2.7 leaves unread. `test_u4xd`'s `test_early_uuid`, the request also
+  queued with the plug before the first poll, and once with the first
+  answer failing.
+- **Logins never give up.** Linux answers a Login only while its
+  interface is up (43 s after a cold start on the bench, and only after
+  `ip link set up` on the emulator), and itself retries every 5.12 s for
+  ever. After a minute unanswered this host's Logins go on every 5 s
+  (`TBT_NET_LOGIN_IDLE_MS`, `cm.net.login.none` logged once) for as long
+  as the service is wanted, instead of stopping; a peer's Login is
+  answered whenever it comes, as before. `test_tbt_xdp`'s
+  `test_login_idle`. `TBT_NET_S_ABANDONED` now means only that no HopID
+  is left to log in with.
+- **The code-8 acknowledgement.** Alpine Ridge firmware answers every
+  inter-domain frame its host sends with one one-DW ICM response,
+  `0x01000008`. No command of this driver's has code 8, so none waits
+  for it, and a command wait matches only its own code with the whole
+  echo (an approve or teardown is never satisfied or disturbed by it);
+  it is counted with the strays and logged once a start
+  (`tbt.icm.xd-ack`) rather than once a frame. `test_tbt_icm`'s stray
+  vector.
+
+What needs no change:
+
+- **E2E both ways.** Linux 7.0 enables E2E on its transmit ring as well
+  as its receive ring (the emulator's Linux 6.18 only on receive, section
+  2.4). With `XhciCmNetE2E` 1 and the peer's `prtcstns` bit 0, `RingsUp`
+  enables E2E on this host's receive ring with the Transmit E2E HopID
+  (section 5.3, step S5), and the host interface grants the credits from
+  the descriptors posted (Spec 12.2.2.3): nothing in software waits for
+  or grants a credit. With 0 the bit is withdrawn and Linux turns E2E off
+  on both rings. Not yet read against a Linux 7 sender (the emulator's
+  Alpine does not send with E2E): owed to a leg with a Linux 7 peer.
+- The firmware's Error Response 3 to Link State Status (a far software
+  CM then keeps the link single lane, 20 Gb/s), its own properties block
+  before driver ready and its new UUID Request after it, event `0x07` at
+  an unplug with one Logout from Linux into the dead link, the Falcon and
+  Alpine Ridge layouts (section 3.10's row, matched), and Linux's runtime
+  suspend 18 s after an unplug: this driver waits on none of them.
+
 ## 4. The USB4NET service
 
 ### 4.1 Who logs in
@@ -1240,9 +1311,11 @@ step on the thread, and the network driver's link goes up (section 7.6).
 
 Login: the next request id, revision 1, the Service HopID of section 4.3.
 The resend schedule: every 100 ms for the first 2 s, then every second,
-for at least a minute (IDS 5.1.1), then the login is abandoned, logged
-(`cm.net.login.none`), and the peer stays READY; a Login from the peer
-later restarts it (IDS 5.1.1's second paragraph).
+for at least a minute (IDS 5.1.1), then (revision 10, section 3.11) every
+5 s for as long as the service is wanted, the minute logged once
+(`cm.net.login.none`); a Login from the peer is answered whenever it
+comes (IDS 5.1.1's second paragraph). Revision 9 and before abandoned
+the login after the minute.
 
 Login Response this driver sends: Status 0 and its MAC (section 4.4),
 length 6, when the requester is the peer of this link and no other login
@@ -2683,11 +2756,10 @@ questions as asked follow.
   the emulator's Alpine Ridge model, `runs/run-45.md`, "45.59 S5
   (legs)"): Linux sends its UUID Requests from the moment the link is up
   and gives up after about 20 s; a far end that gave up before this
-  driver bound is not restarted, since the firmware CM's discovery sends
-  no UUID Request, and the service waits for a re-plug. Whether real
-  firmware answers or sends one is task 45-E.15's capture; a UUID
-  Request sent once at the record's start, as the software CM's
-  discovery sends one, would restart Linux's handshake.
+  driver bound was not restarted, the service waiting for a re-plug.
+  Revision 10 sends a UUID Request at the record's start (section
+  3.11, from task 45-E.15's capture: the firmware answers the far end's
+  request itself); to be read again on a leg.
 - **The index-register write** (section 5.3): as for ring 0, unverified on
   hardware.
 - **Polling's throughput** (section 5.4): a ceiling of tens of MB/s at a
