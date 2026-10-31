@@ -575,6 +575,7 @@ static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
 static int pkg_path(const char *local, char *path, size_t cap);
+static void pkg_mark(const char *name);
 static void own_variant(const char *path, const char *ext, char *out,
                         size_t cap);
 static void stor_read(void);
@@ -2424,6 +2425,19 @@ static int check_package(void)
     }
     wantFlavour = "RELEASE";
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
+    if (instPkgFileCount > INST_PKG_MAX) {
+        return refuse("the package table is larger than the tool's.", NULL);
+    }
+    /* The present set before any check: a file there now is required at
+     * every later walk (package_files), whatever happens between. */
+    for (i = 0; i < instPkgFileCount; i++) {
+        const char *pr0 = instPkgFiles[i].Fam[pkgFam];
+        pkgHave[i] = 0;
+        if (pr0 != NULL) {
+            join(path, sizeof(path), pkgDir, pr0);
+            pkgHave[i] = (unsigned char)file_exists(path, NULL);
+        }
+    }
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
     {
@@ -2553,6 +2567,7 @@ static int check_package(void)
                 return refuse("a file the INF names is missing or empty: ",
                               path);
             }
+            pkg_mark(name);
             n = strlen(name);
             if (n > 4 && inst_eq(name + n - 4, ".sys")) {
                 buf = read_file(path, &size);
@@ -2592,15 +2607,10 @@ static int check_package(void)
             }
         }
     }
-    /* The validated set: a file present now must be there at every walk
-     * of the package (package_files), so a copy never lacks one. */
-    if (instPkgFileCount > INST_PKG_MAX) {
-        return refuse("the package table is larger than the tool's.", NULL);
-    }
+    /* Present now too: added to the set, never taken out of it. */
     for (i = 0; i < instPkgFileCount; i++) {
         const char *pr = instPkgFiles[i].Fam[pkgFam];
-        pkgHave[i] = 0;
-        if (pr != NULL) {
+        if (pr != NULL && !pkgHave[i]) {
             join(path, sizeof(path), pkgDir, pr);
             pkgHave[i] = (unsigned char)file_exists(path, NULL);
         }
@@ -22863,6 +22873,26 @@ static void pkg_src(const char *rel, char *path, size_t cap)
         join(path, cap, storPackDir, rel);
     } else if (!pkg_path(rel, path, cap)) {
         join(path, cap, pkgDir, rel);
+    }
+}
+
+/* Every row whose local name is name, or ends in \name, marked as
+ * validated: package_files requires it from then on. */
+static void pkg_mark(const char *name)
+{
+    int i;
+    size_t n;
+    size_t m = strlen(name);
+    const char *l;
+
+    for (i = 0; i < instPkgFileCount && i < INST_PKG_MAX; i++) {
+        l = instPkgFiles[i].Local;
+        n = strlen(l);
+        if (instPkgFiles[i].Fam[pkgFam] != NULL &&
+            (inst_eq(l, name) ||
+             (n > m && l[n - m - 1] == '\\' && inst_eq(l + n - m, name)))) {
+            pkgHave[i] = 1;
+        }
     }
 }
 
