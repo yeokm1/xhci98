@@ -5495,6 +5495,148 @@ The bench reading on a real version 2 router with task 45-E.10 (the
 routers' recovery itself, what a real tunnelled PCIe and USB3 link reads
 right after one). 45.56 is otherwise done here.
 
+## 45.53 and 45.55: a tunnel port with no power controller, and the legs on the emulator's new default (2026-10-31, partial)
+
+Worker w45-pcie, development host A. Code at `a2f703f2` (no driver
+change in these tasks): the gated build `all` (x86), "BUILD + GATES
+PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-pcie\build-all.log`),
+and `all -amd64`, passed (`build-amd64-all.log`). Packages
+(`make-package.ps1`): release x86 `xhci98.sys` `bdc4b851...`,
+`xhcicm.sys` `fd8e3958...`, `stor98.sys` `202d6249...`; qemu x86
+`xhcicm.sys` `867c9b83...`, `xhci98.sys` `d7b77130...`. The installer,
+`xhcimark` and `xhcitr` built from this tree (`XHCIINST.EXE`
+`41f89e51...`, `XHCIMARK.EXE` `8248088b...`) in `3.3.0.0`'s package
+layout. Evidence: `E:\xhci98-vm\p45\w45-pcie\` (one folder a leg:
+`cmdline-<tag>.txt`, `steps.txt`, `debugcon-<tag>.log`, `serial-<tag>.log`,
+`infopci-*.txt`, screenshots; hashes in `hashes-xf3.txt`, the goldens in
+`goldens-sha.txt`).
+
+### The cause
+
+**45.53 (XP, `adl`).** With the emulator's default of the time the
+`adl` tunnel root port (`usb4-tunnel-port`) reported a Power Controller,
+as QEMU's `pcie-root-port` does: an empty slot came out of reset powered
+off (Slot Control PCC set) and the enclosure the tunnel brought up read
+all ones until the guest powered the slot, which 98 SE, ME, 2000 and XP
+never do. Read on XP (r1, the default): the tunnel up in the connection
+manager, the root port's PCC off and the endpoint all ones; r2, the same
+with `-global usb4-tunnel-port.power_controller_present=off`: the chain
+enumerated and the ORICO drive mounted. The captured Alder Lake-P
+Thunderbolt 4 root ports have none ("PwrCtrl-",
+`tests/captures/framework13-12th/linux-orico`, `pci/tb-complex`), so the
+emulator was wrong, not the driver.
+
+**45.55 (`asm4242-desktop`).** With the emulator's default of the time the
+ASM4242 switch's tunnel ports had neither a power controller of the
+board's kind nor its padding: SeaBIOS left each tunnel port one bus and
+its minimum windows, so a device router plugged later had no bus numbers
+for its own switch (XP r3: the parent's switch upstream port at bus 3
+with secondary bus 0). The board's firmware gives each tunnel port 48
+buses, 12 KB I/O and 384 MB (ASM4242-USB4.md 11.1, USB4-HOSTS.md 5.2 in
+`usb4-emu`).
+
+### The emulator's new default (owner's option (a), 2026-10-31)
+
+In `usb4-emu` (branch `w45-pcie`, merged with main `ede6308`; QEMU fork
+`5c91aaa`, patch exported in `src/patches`):
+
+| Commit | What |
+|---|---|
+| `c83a0ea` (fork `d6c8136`) | `usb4-tunnel-port` and `usb4-asm-tunnel-dsp` with no power controller by default; `usb4-asm-usp` pads its tunnel ports by default (`fw-bus-pad=48,fw-io-pad=12K,fw-mem-pad=384M`, a pad that does not fit shrinking) |
+| `a77e7fa` (fork `ffcaa8c`, `b0d1ea6`) | reviewed and revised: a Slot Control write cannot power off a slot with no power controller at any offset (QEMU's slot code reads PCC from the value written); the ASM4242 pads act on SeaBIOS's numbering only |
+| `5c140b5` (fork `34c6a5e`, `55cadf9`) | `usb4-tb3-tunnel-dsp` (Alpine Ridge: the P14s's tunnel port 04:01.0 reports "PwrCtrl-") and, by analogy, `usb4-tr-tunnel-dsp` (Titan Ridge is not captured) with no power controller by default; `power-controller` is on, off or auto, auto following QEMU's `power_controller_present`, so either spelling gives the controller back |
+| `048a9e5`, `1c3a050` | the docs reviewed and revised (what removes an endpoint behind a port with no power controller; the padding no longer opt-in); the merge of main |
+
+The launchers' explicit `-global ...power_controller_present=off` (45.14,
+w45-small's `launch-q35.ps1` change) is left: it gives the same slot. Every
+`usb4-emu` qtest suite on `5c91aaa`: host 43, tunnel 31, icm 40, icm-tr
+16, icm-icl 5, harness 25, fault 9, asm4242 16, asm2464 4, tb3dev 12,
+tbhost 9, root-hotplug 22, usb3 9, retrain 5, xdomain 6 (252 ok, none
+failed).
+
+**Earlier legs this default can change.** Read with a power controller on
+the tunnel port; on the new default a guest's slot power-off removes
+nothing, and on the ASM4242 layout the bus numbers below the switch
+move (a 98 SE instance that names `BUS_xx` there is found anew):
+- every `adl` leg on NT (45.20's version 2 legs, 45.49's `adl` reading):
+  the endpoint now answers with no slot power-on from the guest;
+- every `asm4242` leg (45.12 R1/R5, 45.15, 45.18, 45.22, 45.31, 45.35,
+  45.37, 45.46/45.50): the tunnel ports had no power controller already
+  where the leg asked for it; the padding is new;
+- the Thunderbolt 3 legs on 2000, XP, Vista, 7 and 10 (`-Usb4 tb3ar` /
+  `tb3tr`, which passed no global on NT): 45.13, 45.17, 45.21 (the Apple
+  models), 45.22, 45.37, 45.47, 45.49; and `usb4-emu`'s GUEST-EXITS
+  reading of Windows 7's Safely Remove (the endpoint was removed by the
+  slot power-off; now it stays until the tunnel goes down or the router is
+  unplugged). The 98 SE and ME Thunderbolt 3 legs already ran with
+  `power_controller_present=off`.
+
+### The legs on the new default
+
+Emulator: the fork `55cadf9` build (`bin-55cadf9`, `qemu-system-x86_64.exe`
+`93b47a05...`; the merge with main changes no tunnel-port code). Goldens
+(fresh overlays of the q35 bases, this tree's release package installed,
+the qemu flavour's `xhcicm.sys` and `xhci98.sys` copied over): XP and 98 SE
+installed with the `asm4242` layout present, 2000 with no USB4 hardware
+(`-NoXhci`), 7 x86 with `adl` present. Leg A (45.53): `-Usb4 adl`, the
+ORICO enclosure plugged by QMP at the desktop. Leg B (45.55):
+`-Usb4 asm4242`, the parent `usb4-device ... downstream-ports=1,
+chain-power-controller=off` and its child plugged by QMP at the desktop
+two seconds apart.
+
+| Leg | System | Read | Verdict |
+|---|---|---|---|
+| A | 98 SE | the enclosure plugged: the switch's bridges by the Add New Hardware wizard (a restart offered, declined), then Stor98's wizard for the NVMe; Orico (E:) in My Computer (`w9A\b-vol-E.png`) | pass |
+| A | XP | first plug with the tunnel root ports on Windows' own bridge driver (they appeared after the install, through Found New Hardware): nothing enumerated behind 00:05.0 (the switch's bus registers 0, `xpA\infopci-1.txt`); the installer run again with the layout present (the root ports then "xHCI98 PCI Bridge"), restarted: the plug gave Found New Hardware for "Stor98 Storage Controller for NVMe SSDs", D: ORICO, `fc /b` of a copied file no differences | pass once the root ports carry the package's bridge driver |
+| A | 2000 | (fresh overlay `w2C`, installer run with the layout present, cold start) the plug: the switch numbered, the NVMe enumerated (`cm.chain.id` for it at 02:00, depth 3) as "PCI Device", the wizard found no driver (code 18, `w2C\b-wizard-no-driver.png`); `INSTALL.BAT` run again put Stor98 on it: E: ORICO | the PCI side passes; the driver match on a desktop plug does not (owed) |
+| A | 7 x86 | the plug: Stor98 started, D: ORICO | pass (control) |
+| B | XP | the tunnel port 48 buses (3-50) and its windows (new default), but the parent's switch upstream port `104C:8232` at Code 12: the tunnel port has no I/O window (the launcher's root port reserves no I/O, so the switch's I/O pad shrinks to none) | fails |
+| B | XP, root ports `io-reserve=24K` (as the board) | the parent's switch and its downstream ports numbered (`cm.breq` for 03:00, 04:00, 04:08); the parent's NVMe enumerated as "PCI Device" (code 18, no `PCI\XHCI98_TUNNEL` id, so the wizard finds no driver); the chain port `104C:8233` at Code 12, the child not reached | fails (driver side, owed) |
+| B | 98 SE | both tunnels up in the model (the kid's too), but no connection-manager line in the debug log even with the qemu flavour copied in; the parent's switch left unnumbered | not read (the golden's NHI driver to check) |
+| B | 2000 | the transfer disk not visible to 2000 on this layout after its first-boot wizards; not run | owed |
+| B | 7 x86 | (golden installed with `adl`; the ASM4242 switch's ports first on Windows' own drivers: both NVMe "PCI Device" code 28; the installer run again with the layout present, restarted) the plug: the kid UP (`u4.kid.pcie.up=00010809`), both NVMe on Stor98, started; D: ORICO (the second drive, a copy of the same disk image, shows no letter) | pass (control) |
+| A, B | ME, XP x64, Vista x86 | not run in this session | owed |
+
+10 x64 (w45-u4chain2, `E:\xhci98-vm\p45\w45-u4chain\STATE.md`): a USB4
+parent plugged again at the desktop with its child attached, parent UP
+then the kid, both NVMe started.
+
+### Findings
+
+- 45.53's cause is the emulator's, fixed by its new default: the `adl`
+  endpoint answers with no slot power-on. For 45.55 the default asks the
+  board's padding (48 buses, 12 KB I/O, 384 MB a tunnel port), which
+  shrinks to what the launcher's root port reserves (`bus-reserve=100,
+  mem-reserve=64M`, no I/O): tunnel port 0 got buses 3-50, 30 MB of memory
+  and no I/O window (`xpB\infopci-1.txt`); with `io-reserve=24K` it got an
+  I/O window and still 30 MB (`xpB2\infopci-1.txt`). These legs do not give
+  the board's resources, so whether XP's remaining Code 12 is the
+  launcher's limit or this driver's is not settled.
+- A tunnel port that appears after the install (here: the layout
+  changed under an installed system) gets Windows' own bridge driver: on
+  XP a hot-added switch behind it is never enumerated, on 7 the drives
+  behind it get no tunnel id and no driver; with the package's bridge
+  driver on it (the installer run again) the plug works. On a real Alder Lake system the
+  ports exist at install time.
+- On 2000 (`adl`) and on XP behind a device router's switch, a hot-added
+  NVMe enumerates without the tunnel id Stor98's INF matches on NT 5, so
+  Windows' wizard offers no driver; the installer's run puts Stor98 on it.
+- XP behind a device router: with no I/O window on the tunnel port the
+  parent's switch stops at Code 12; with the root port's I/O reservation
+  the switch numbers, and its chain port still stops at Code 12 (cause not
+  settled, above).
+
+### Left
+
+- 45.53: ME, XP x64 (the amd64 packages are unsigned; the in-guest
+  throwaway signing) and Vista x86 legs; 2000's driver match on a desktop
+  plug.
+- 45.55: the XP chain port's Code 12 and the parent's NVMe without the
+  tunnel id; 98 SE's reading with the connection manager confirmed
+  running; a leg with the board's root port reservation (`-AsmReserve`,
+  which the launcher does not give 2000 and XP, or one within 4 GB); 2000,
+  ME, XP x64 and Vista legs.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
