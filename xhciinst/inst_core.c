@@ -4558,8 +4558,114 @@ const char *inst_cmf_pnf(int arch)
 
 const char *inst_cmf_where(int arch)
 {
-    return arch == INST_ARCH_AMD64 ? "the package's x64 directory" :
-                                     "the package's nt\\ directory";
+    return arch == INST_ARCH_AMD64 ? "the x64 package copy" :
+                                     "the package copy's nt\\";
+}
+
+/* ======================================================================== */
+/* The download by Windows family (record 36)                               */
+/* ======================================================================== */
+
+int inst_family(int nt, int arch)
+{
+    if (arch == INST_ARCH_AMD64) {
+        return INST_FAM_NT64;
+    }
+    return nt ? INST_FAM_NT86 : INST_FAM_9X;
+}
+
+const char *inst_family_dir(int fam)
+{
+    switch (fam) {
+    case INST_FAM_9X:   return "98-me";
+    case INST_FAM_NT86: return "nt-x86";
+    case INST_FAM_NT64: return "nt-x64";
+    default:            return NULL;
+    }
+}
+
+int inst_family_of_dir(const char *name)
+{
+    int f;
+
+    if (name == NULL) {
+        return -1;
+    }
+    for (f = 0; f < INST_FAM_COUNT; f++) {
+        if (inst_eq(name, inst_family_dir(f))) {
+            return f;
+        }
+    }
+    return -1;
+}
+
+/* Record 36 section 6.2's table. Local names are 3.3.0.0's flavour
+ * directories' (x86 filter in nt\ with its own xhcicm.sys, x64 filter at
+ * the root); the download's paths are 3.4.0.0's family folders. */
+const INST_PKG_FILE instPkgFiles[] = {
+    { "xhci98.inf",   { "xhci98.inf", "xhci98.inf", "xhci98.inf" } },
+    { "xhci98.sys",   { "xhci98.sys", "xhci98.sys", "xhci98.sys" } },
+    { "xhci98.cat",   { NULL, NULL, "xhci98.cat" } },
+    { "xhcihlpr.sys", { NULL, "xhcihlpr.sys", NULL } },
+    { "xhciuas.inf",  { "xhciuas.inf", "xhciuas.inf", "xhciuas.inf" } },
+    { "xhciuas.sys",  { "xhciuas.sys", "xhciuas.sys", "xhciuas.sys" } },
+    { "xhciuas.cat",  { NULL, NULL, "xhciuas.cat" } },
+    { "txtsetup.oem", { NULL, "txtsetup.oem", "txtsetup.oem" } },
+    { "xhci98-test.cer", { NULL, NULL, "xhci98-test.cer" } },
+    { "xhcicm.inf",   { "cm\\xhcicm.inf", "cm\\xhcicm.inf", "cm\\xhcicm.inf" } },
+    { "xhcicm.sys",   { "cm\\xhcicm.sys", "cm\\xhcicm.sys", "cm\\xhcicm.sys" } },
+    { "xhcicm.cat",   { NULL, NULL, "cm\\xhcicm.cat" } },
+    { "nt\\xhcicmf.inf", { NULL, "cm\\xhcicmf.inx", NULL } },
+    { "nt\\xhcicm.sys",  { NULL, "cm\\xhcicm.sys", NULL } },
+    { "xhcicmf.inf",  { NULL, NULL, "cm\\xhcicmf.inx" } },
+    { "xhcicmf.cat",  { NULL, NULL, "cm\\xhcicmf.cat" } },
+    { "XHCIPFW.VXD",  { "cm\\XHCIPFW.VXD", NULL, NULL } },
+    { "XHCIPFW.SYS",  { NULL, "cm\\XHCIPFW.SYS", NULL } },
+    { "stor98.inf",   { "stor98\\stor98.inf", "stor98\\stor98.inf",
+                        "stor98\\stor98.inf" } },
+    { "stor98.mpd",   { "stor98\\stor98.mpd", NULL, NULL } },
+    { "stor98.sys",   { NULL, "stor98\\stor98.sys", "stor98\\stor98.sys" } },
+    { "stor98.cat",   { NULL, NULL, "stor98\\stor98.cat" } },
+    { "S98VSD.VXD",   { "stor98\\S98VSD.VXD", NULL, NULL } },
+    { "stor98-readme.txt",  { "stor98\\stor98-readme.txt",
+                              "stor98\\stor98-readme.txt",
+                              "stor98\\stor98-readme.txt" } },
+    { "stor98-LICENSE.txt", { "stor98\\stor98-LICENSE.txt",
+                              "stor98\\stor98-LICENSE.txt",
+                              "stor98\\stor98-LICENSE.txt" } },
+    { "stor98-NOTICE.txt",  { "stor98\\stor98-NOTICE.txt",
+                              "stor98\\stor98-NOTICE.txt",
+                              "stor98\\stor98-NOTICE.txt" } }
+};
+const int instPkgFileCount =
+    (int)(sizeof(instPkgFiles) / sizeof(instPkgFiles[0]));
+
+const char *inst_pkg_rel(int fam, const char *local)
+{
+    int i;
+
+    if (fam < 0 || fam >= INST_FAM_COUNT || local == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < instPkgFileCount; i++) {
+        if (inst_eq(instPkgFiles[i].Local, local)) {
+            return instPkgFiles[i].Fam[fam];
+        }
+    }
+    return NULL;
+}
+
+int inst_pkg_foreign(const char *rel)
+{
+    const char *base;
+
+    if (rel == NULL) {
+        return 0;
+    }
+    base = strrchr(rel, '\\');
+    base = base != NULL ? base + 1 : rel;
+    return inst_eqn(rel, "nt\\", 3) || inst_eq(base, "stor98w9.inf") ||
+           inst_eq(base, "xhcicmf.inf");
 }
 
 /* ======================================================================== */
@@ -9365,6 +9471,11 @@ const INST_OTHER_PKG instOtherPkgs[] = {
       "USB serial (usbcom): CDC ACM serial ports and modems", 0 },
     { INST_SET_FREE, "storage/usbflop", INST_PKG_CLASS, "Storage",
       "USB floppy (usbflop): UFI floppy drives", 0 },
+    /* print/usbprn: new with usb-wdm-free v0.1.7 (task 45.44), under the
+     * existing Other heading. */
+    { INST_SET_FREE, "print/usbprn", INST_PKG_CLASS, "Other",
+      "Printers (usbprn): USB printers and USB-to-parallel printer cables",
+      0 },
     { INST_SET_FREE, "generic/libusb0", INST_PKG_CLASS, "Other",
       "libusb (libusb0): libusb-win32 0.1, for programs that talk to a "
       "device", 0 },

@@ -84,9 +84,12 @@ out\free\amd64\stor98.sys     out\checked\amd64\stor98.sys
 ```
 
 These build folders are not the package layout: xhci98's `make-package.ps1` puts
-`win9x\stor98.mpd`, `x86\stor98.sys` and `inf\stor98-x86.inf` (as `stor98.inf`) at the root
-of its x86 package and `amd64\stor98.sys` with `inf\stor98-x64.inf` at the root of its amd64
-package (see "INFs and version" and "Releases").
+`win9x\stor98.mpd`, `x86\stor98.sys`, `inf\stor98-x86.inf` (as `stor98.inf`) and
+`inf\stor98-9x.inf` (as `stor98w9.inf`) at the root of its flat x86 package and
+`amd64\stor98.sys` with `inf\stor98-x64.inf` at the root of its amd64 package; since xhci98
+3.4.0.0 its release cut publishes them by Windows family, `98-me\stor98\` (the 9x INF as
+`stor98.inf`, `stor98.mpd`), `nt-x86\stor98\` and `nt-x64\stor98\` (xhci98's design record
+36; see "INFs and version" and "Releases").
 
 `build.cmd` fails if `build.exe` fails, writes a `build*.err`, or produces no image, and prints
 any `build*.wrn`. Sources compile at `/W3 /WX`.
@@ -105,15 +108,15 @@ helper are built separately with `tests\cm9x\build.cmd` (`out\cm9x\cm9x.sys`, `c
 
 ## INFs and version
 
-Two INFs, one per release folder, each shipped as `stor98.inf`:
+Three INFs, one per family folder, each shipped as `stor98.inf`:
 
 | Source | Release | Signature | Sections |
 |---|---|---|---|
-| `inf\stor98-x86.inf` | `x86\stor98.inf`, next to `stor98.mpd` and `stor98.sys` | `$CHICAGO$` | undecorated models `PCI\CC_010802`; Windows 98 SE / ME: `[Stor98_Inst]` copies `stor98.mpd` (`[Stor98_Files_9x]`) to DIRID 12 (`SYSTEM\IOSUBSYS`) and sets `DevLoader=*IOS`, `PortDriver=stor98.mpd`; Windows 2000 to 7: `[Stor98_Inst.NTx86]` copies `stor98.sys` (`[Stor98_Files_NT]`) to DIRID 12 (`system32\drivers`), `[Stor98_Inst.NTx86.Services]` adds the service |
-| `inf\stor98-x64.inf` | `x64\stor98.inf`, next to the amd64 `stor98.sys` | `$Windows NT$` | `NTamd64` models only; `[Stor98_Inst.NTamd64]` and `.Services` |
+| `inf\stor98-x86.inf` | `nt-x86\stor98\stor98.inf`, next to `stor98.sys` | `$Windows NT$` | undecorated models (the tunnel id; Windows 2000 reads no decoration) and `NTx86.6.3`; Windows 2000 to 10: `[Stor98_Inst.NTx86]` copies `stor98.sys` (`[Stor98_Files_NT]`) to DIRID 12 (`system32\drivers`), `[Stor98_Inst.NTx86.Services]` adds the service. NT-only since xhci98 3.4.0.0: up to 3.3.0.0 it also carried a 98 SE / ME install section and `stor98.mpd` |
+| `inf\stor98-9x.inf` | `98-me\stor98\stor98.inf` (`stor98w9.inf` up to xhci98 3.3.0.0), next to `stor98.mpd` | `$CHICAGO$` | Windows 98 SE / ME: `[Stor98_Inst]` copies `stor98.mpd` to DIRID 12 (`SYSTEM\IOSUBSYS`) and sets `DevLoader=*IOS`, `PortDriver=stor98.mpd` |
+| `inf\stor98-x64.inf` | `nt-x64\stor98\stor98.inf`, next to the amd64 `stor98.sys` | `$Windows NT$` | `NTamd64` models only; `[Stor98_Inst.NTamd64]` and `.Services` |
 
-Windows 9x reads only undecorated sections and NT prefers the `.NTx86` ones, so each system
-copies only its own image; both files are listed in `[SourceDisksFiles]`. 64-bit Windows
+Each INF names only its own image in `[SourceDisksFiles]`. 64-bit Windows
 ignores undecorated models, so it does not offer the x86 INF, and 32-bit Windows finds no
 models in the x64 INF. The unpublished builds 0.1.0.0 and 0.1.1.0 (under the former name) had a
 separate 9x INF in `win9x\` and one NT INF (undecorated, `NTx86` and `NTamd64` models) in

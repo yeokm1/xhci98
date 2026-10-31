@@ -71,10 +71,12 @@ A package staging an amd64 binary under the 32-bit INF would install on a
 moves all three rather than three switches that can disagree.
 
 The two architectures' binaries share a filename, so they cannot share a
-directory: the default output is out\pkg-<flavor>-<arch>, and a release cuts
-them into release-x86 and release-x64 (roadmap task 21.3, design record 11
-section 8; the debug-x86 and debug-x64 of the cuts before 3.4.0.0 went with
-the debug flavour, task 45.45).
+directory: the default output is out\pkg-<flavor>-<arch>, and a release cut
+up to 3.3.0.0 published them as release-x86 and release-x64 (roadmap task
+21.3, design record 11 section 8; the debug-x86 and debug-x64 of the cuts
+before 3.4.0.0 went with the debug flavour, task 45.45). From 3.4.0.0 the cut
+re-lays this flat package by Windows family (98-me, nt-x86, nt-x64; task
+45.44, design record 36) and this script's output stays flat.
 
 .PARAMETER Flavor
 release (default) or qemu - which src\obj*\<arch>\xhci98.sys to package.

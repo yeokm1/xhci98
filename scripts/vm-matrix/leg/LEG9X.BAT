@@ -68,7 +68,7 @@ echo XHLEG PHASE 2 check>COM1
 echo XHLEG CHECK driver-file PASS>COM1
 %XC%:
 cd \PKG
-TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 /list>C:\XHLEG\LIST2.TXT
+TOOLS\XHCIINST\XHCIINST.EXE /dir 98-me /list>C:\XHLEG\LIST2.TXT
 call %XC%:\XHEXIT.BAT list
 C:
 cd \
@@ -130,7 +130,7 @@ echo x>C:\XHLEG\PH4.ON
 echo XHLEG PHASE 3 removed>COM1
 %XC%:
 cd \PKG
-TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 /list>C:\XHLEG\LIST3.TXT
+TOOLS\XHCIINST\XHCIINST.EXE /dir 98-me /list>C:\XHLEG\LIST3.TXT
 call %XC%:\XHEXIT.BAT list-final
 C:
 cd \

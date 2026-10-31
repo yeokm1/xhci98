@@ -170,7 +170,7 @@ call :refused %1 /console
 if errorlevel 1 exit /b 1
 call :refused %1 /devices
 if errorlevel 1 exit /b 1
-call :refused %1 /dir release-x86
+call :refused %1 /dir nt-x86
 if errorlevel 1 exit /b 1
 call :refused %1 /from C:\XHCI98
 if errorlevel 1 exit /b 1

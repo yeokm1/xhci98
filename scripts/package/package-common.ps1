@@ -150,6 +150,393 @@ function Get-CmPublishable {
     return @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
 }
 
+# ------------------------------------------------------------------
+# Task 45.44, design record 36: the download by Windows family.
+# ------------------------------------------------------------------
+#
+# make-package.ps1 stages one flat package per architecture, as before
+# (record 36 section 5.1); the cut re-lays each into its family folders by
+# this one table, and every later check of a published tree reads it back
+# through the flat view ConvertFrom-FamilyLayout rebuilds. Per flat name of
+# each architecture's package, its places, each "<family>\<path>": the x86
+# package fills 98-me\ and nt-x86\, the amd64 one nt-x64\. A family holds
+# only what its systems install (section 2). The renames: the filter INF to
+# cm\xhcicmf.inx, so no integration tool or wizard takes it as an INF
+# (section 3.2), and the 9x Stor98 INF stor98w9.inf to
+# 98-me\stor98\stor98.inf (section 3.4). One flat file has no place:
+# nt\xhcicm.sys, the filter INF's copy of xhcicm.sys (the same bytes,
+# which CM-NO9XBRIDGE compares), rebuilt in the flat view from
+# nt-x86\cm\xhcicm.sys whenever nt-x86\cm\xhcicmf.inx is there.
+# xhciinst\inst_core.c's instPkgFiles is the same table's local-name side
+# (section 6.2), held to this one by test-package.ps1.
+$script:FamilyNames = @("98-me", "nt-x86", "nt-x64")
+$script:FamilyArch = @{ "98-me" = "x86"; "nt-x86" = "x86"; "nt-x64" = "amd64" }
+$script:FamilyFlatDir = @{ "x86" = "release-x86"; "amd64" = "release-x64" }
+# cm\tbnet\ (task 45.59 step S10, record 36 section 9): a place with no
+# files until S10 lists them, so no file may sit there yet.
+$script:FamilyTbnetDir = "cm\tbnet"
+$script:FamilyLayout = @{
+    "x86" = [ordered]@{
+        "xhci98.inf"         = @("98-me\xhci98.inf", "nt-x86\xhci98.inf")
+        "xhci98.sys"         = @("98-me\xhci98.sys", "nt-x86\xhci98.sys")
+        "xhcihlpr.sys"       = @("nt-x86\xhcihlpr.sys")
+        "xhciuas.inf"        = @("98-me\xhciuas.inf", "nt-x86\xhciuas.inf")
+        "xhciuas.sys"        = @("98-me\xhciuas.sys", "nt-x86\xhciuas.sys")
+        "txtsetup.oem"       = @("nt-x86\txtsetup.oem")
+        "xhcicm.inf"         = @("98-me\cm\xhcicm.inf", "nt-x86\cm\xhcicm.inf")
+        "xhcicm.sys"         = @("98-me\cm\xhcicm.sys", "nt-x86\cm\xhcicm.sys")
+        "nt\xhcicmf.inf"     = @("nt-x86\cm\xhcicmf.inx")
+        "nt\xhcicm.sys"      = @()
+        "XHCIPFW.VXD"        = @("98-me\cm\XHCIPFW.VXD")
+        "XHCIPFW.SYS"        = @("nt-x86\cm\XHCIPFW.SYS")
+        "stor98.inf"         = @("nt-x86\stor98\stor98.inf")
+        "stor98w9.inf"       = @("98-me\stor98\stor98.inf")
+        "stor98.mpd"         = @("98-me\stor98\stor98.mpd")
+        "S98VSD.VXD"         = @("98-me\stor98\S98VSD.VXD")
+        "stor98.sys"         = @("nt-x86\stor98\stor98.sys")
+        "stor98-readme.txt"  = @("98-me\stor98\stor98-readme.txt", "nt-x86\stor98\stor98-readme.txt")
+        "stor98-LICENSE.txt" = @("98-me\stor98\stor98-LICENSE.txt", "nt-x86\stor98\stor98-LICENSE.txt")
+        "stor98-NOTICE.txt"  = @("98-me\stor98\stor98-NOTICE.txt", "nt-x86\stor98\stor98-NOTICE.txt")
+    }
+    "amd64" = [ordered]@{
+        "xhci98.inf"         = @("nt-x64\xhci98.inf")
+        "xhci98.cat"         = @("nt-x64\xhci98.cat")
+        "xhci98.sys"         = @("nt-x64\xhci98.sys")
+        "xhciuas.inf"        = @("nt-x64\xhciuas.inf")
+        "xhciuas.cat"        = @("nt-x64\xhciuas.cat")
+        "xhciuas.sys"        = @("nt-x64\xhciuas.sys")
+        "txtsetup.oem"       = @("nt-x64\txtsetup.oem")
+        "xhci98-test.cer"    = @("nt-x64\xhci98-test.cer")
+        "xhcicm.inf"         = @("nt-x64\cm\xhcicm.inf")
+        "xhcicm.cat"         = @("nt-x64\cm\xhcicm.cat")
+        "xhcicm.sys"         = @("nt-x64\cm\xhcicm.sys")
+        "xhcicmf.inf"        = @("nt-x64\cm\xhcicmf.inx")
+        "xhcicmf.cat"        = @("nt-x64\cm\xhcicmf.cat")
+        "stor98.inf"         = @("nt-x64\stor98\stor98.inf")
+        "stor98.cat"         = @("nt-x64\stor98\stor98.cat")
+        "stor98.sys"         = @("nt-x64\stor98\stor98.sys")
+        "stor98-readme.txt"  = @("nt-x64\stor98\stor98-readme.txt")
+        "stor98-LICENSE.txt" = @("nt-x64\stor98\stor98-LICENSE.txt")
+        "stor98-NOTICE.txt"  = @("nt-x64\stor98\stor98-NOTICE.txt")
+    }
+}
+# The flat file with no place, and where the flat view takes it from.
+$script:FamilyRebuilt = @{
+    "x86" = @{ "nt\xhcicm.sys" = @{ From = "nt-x86\cm\xhcicm.sys"; When = "nt-x86\cm\xhcicmf.inx"; Same = "xhcicm.sys" } }
+    "amd64" = @{}
+}
+
+function Get-FamilyArchOf {
+    # The package architecture ("x86" or "amd64") whose table fills a family.
+    param([string]$Family)
+    if (-not $script:FamilyArch.ContainsKey($Family)) { throw "'$Family' is not a family folder ($($script:FamilyNames -join ', '))." }
+    return $script:FamilyArch[$Family]
+}
+
+function Get-FamilyRelFiles {
+    # Every file under $Dir, as paths relative to it, in a fixed order.
+    param([string]$Dir)
+    $full = (Get-Item -LiteralPath $Dir).FullName.TrimEnd('\')
+    return @(Get-ChildItem -LiteralPath $full -File -Recurse -Force | Sort-Object FullName |
+             ForEach-Object { $_.FullName.Substring($full.Length + 1) })
+}
+
+function Get-FamilyPlaceMap {
+    # Place ("<family>\<path>", lower case) -> flat name, for one architecture.
+    param([string]$Arch)
+    $map = @{}
+    foreach ($flat in $script:FamilyLayout[$Arch].Keys) {
+        foreach ($place in @($script:FamilyLayout[$Arch][$flat])) { $map[$place.ToLowerInvariant()] = $flat }
+    }
+    return $map
+}
+
+function Get-FamilyLayoutKind {
+    # "family" when $Root holds family folders, "flavour" when it holds the
+    # flavour directories of a version up to 3.3.0.0 (any directory carrying
+    # xhci98.inf at its root), refused when it holds both or neither
+    # (record 36 section 7.2).
+    param([string]$Root, [string]$What)
+    $fam = @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })
+    $flv = @(Get-ChildItem -LiteralPath $Root -Directory -Force | Where-Object {
+                 $script:FamilyNames -notcontains $_.Name -and (Test-Path -LiteralPath (Join-Path $_.FullName "xhci98.inf") -PathType Leaf) })
+    if ($fam.Count -gt 0 -and $flv.Count -gt 0) {
+        throw "$What holds both family folders ($($fam -join ', ')) and flavour directories ($(@($flv | ForEach-Object { $_.Name }) -join ', ')): it is neither layout (design record 36 section 7.2)."
+    }
+    if ($fam.Count -gt 0) { return "family" }
+    if ($flv.Count -gt 0) { return "flavour" }
+    throw "$What holds neither family folders ($($script:FamilyNames -join ', ')) nor flavour directories."
+}
+
+function ConvertTo-FamilyLayout {
+    # Writes one flat package's files into their family folders under $Dest
+    # (record 36 section 5.1). Every flat file is placed or is the one with
+    # no place (compared with the file it copies); a flat file the table does
+    # not know, or a place already taken, is a refusal. Returns one row per
+    # copy: Flat, Place, Sha256.
+    param([string]$FlatDir, [string]$Arch, [string]$Dest)
+    if (-not $script:FamilyLayout.ContainsKey($Arch)) { throw "no family table for architecture '$Arch'." }
+    $table = $script:FamilyLayout[$Arch]
+    $byLower = @{}
+    foreach ($k in $table.Keys) { $byLower[$k.ToLowerInvariant()] = $k }
+    $rows = @()
+    $files = @(Get-FamilyRelFiles -Dir $FlatDir)
+    foreach ($rel in $files) {
+        if (-not $byLower.ContainsKey($rel.ToLowerInvariant())) {
+            throw "PKG-FAMILY: the flat $Arch package '$FlatDir' holds '$rel', which the family table (package-common.ps1, `$script:FamilyLayout) does not place: a new file is a layout decision (design record 36 section 5.1)."
+        }
+        $flat = $byLower[$rel.ToLowerInvariant()]
+        $hash = (Get-FileHash -LiteralPath (Join-Path $FlatDir $rel) -Algorithm SHA256).Hash
+        $places = @($table[$flat])
+        if ($places.Count -eq 0) {
+            $rb = $script:FamilyRebuilt[$Arch][$flat]
+            $same = Join-Path $FlatDir $rb.Same
+            if (-not (Test-Path -LiteralPath $same -PathType Leaf) -or (Get-FileHash -LiteralPath $same -Algorithm SHA256).Hash -ne $hash) {
+                throw "PKG-FAMILY: the flat $Arch package's $flat is not the same bytes as its $($rb.Same), which the family layout carries in its place."
+            }
+            continue
+        }
+        foreach ($place in $places) {
+            $target = Join-Path $Dest $place
+            if (Test-Path -LiteralPath $target) { throw "PKG-FAMILY: '$target' is already there; the family folders are written once, from one flat package each." }
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $FlatDir $rel) -Destination $target
+            $rows += [pscustomobject]@{ Flat = $flat; Place = $place; Sha256 = $hash }
+        }
+    }
+    return $rows
+}
+
+function ConvertFrom-FamilyLayout {
+    # Rebuilds under $Dest the flat view of the family folders under $Root
+    # (record 36 sections 3.5 and 7.2): release-x86\ from 98-me\ and nt-x86\,
+    # release-x64\ from nt-x64\, each file under its flat name, a file two
+    # families carry required to be present in both and the same bytes, and
+    # nt\xhcicm.sys rebuilt from nt-x86\cm\xhcicm.sys. A file the table does
+    # not place is a refusal (Test-FamilyLayout names every fault). Returns a
+    # map from the architecture to its flat directory.
+    param([string]$Root, [string]$Dest)
+    $out = @{}
+    foreach ($arch in @("x86", "amd64")) {
+        $fams = @($script:FamilyNames | Where-Object { $script:FamilyArch[$_] -eq $arch -and (Test-Path -LiteralPath (Join-Path $Root $_)) })
+        if ($fams.Count -eq 0) { continue }
+        $placeMap = Get-FamilyPlaceMap -Arch $arch
+        foreach ($fam in $fams) {
+            foreach ($rel in @(Get-FamilyRelFiles -Dir (Join-Path $Root $fam))) {
+                if (-not $placeMap.ContainsKey(("$fam\$rel").ToLowerInvariant())) {
+                    throw "PKG-FAMILY: $fam\$rel is not a file of the family layout (design record 36 section 2)."
+                }
+            }
+        }
+        $flatDir = Join-Path $Dest $script:FamilyFlatDir[$arch]
+        New-Item -ItemType Directory -Force -Path $flatDir | Out-Null
+        $table = $script:FamilyLayout[$arch]
+        foreach ($flat in $table.Keys) {
+            $places = @($table[$flat])
+            if ($places.Count -eq 0) { continue }
+            $present = @($places | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf })
+            $famsOf = @($places | ForEach-Object { ($_ -split '\\')[0] } | Where-Object { $fams -contains $_ })
+            if ($present.Count -eq 0) { continue }
+            if ($present.Count -ne $famsOf.Count) {
+                $gone = @($places | Where-Object { $present -notcontains $_ -and $fams -contains (($_ -split '\\')[0]) })
+                throw "PKG-FAMILY: $($present -join ' and ') is there and $($gone -join ' and ') is not: a shared file goes in every family folder of its architecture."
+            }
+            $hashes = @($present | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $Root $_) -Algorithm SHA256).Hash } | Sort-Object -Unique)
+            if ($hashes.Count -ne 1) { throw "PKG-FAMILY: $($present -join ' and ') are not the same bytes; they are one file of the flat package ($flat)." }
+            $target = Join-Path $flatDir $flat
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $Root $present[0]) -Destination $target
+        }
+        foreach ($flat in $script:FamilyRebuilt[$arch].Keys) {
+            $rb = $script:FamilyRebuilt[$arch][$flat]
+            if ((Test-Path -LiteralPath (Join-Path $Root $rb.When) -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $Root $rb.From) -PathType Leaf)) {
+                $target = Join-Path $flatDir $flat
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $Root $rb.From) -Destination $target
+            }
+        }
+        $out[$arch] = $flatDir
+    }
+    return $out
+}
+
+function Get-FamilyInfSources {
+    # The source names of an INF's [SourceDisksFiles] (and its decorated
+    # forms), lower case.
+    param([string]$Path)
+    $inf = Read-InfText -Path $Path
+    $names = @()
+    foreach ($k in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksfiles(\..+)?$' })) {
+        foreach ($e in @(Get-InfEntries -Inf $inf -Section $k)) {
+            $n = if ($e.Key -ne "") { $e.Key } else { $e.Value.Trim().Trim('"').ToLowerInvariant() }
+            if ($n -ne "") { $names += $n }
+        }
+    }
+    return @($names | Sort-Object -Unique)
+}
+
+function Test-FamilyLayout {
+    # PKG-FAMILY (record 36 section 5.2): "" when the family folders under
+    # $Root are this layout, else every fault, one a line. Every file where
+    # the table puts it and nothing else; no nt\, xhcicmf.inf or
+    # stor98w9.inf; 98-me\ and nt-x86\ together; a file two families carry
+    # in both and the same bytes; cm\tbnet\ holding no file until S10 lists
+    # its files; and each INF's [SourceDisksFiles] beside it, filtered by the
+    # family: a name the family carries nowhere (xhcihlpr.sys in 98-me\,
+    # section 3.1) skipped, every other required in the INF's folder.
+    param([string]$Root)
+    $faults = @()
+    $fams = @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })
+    if ($fams.Count -eq 0) { return "PKG-FAMILY: no family folder ($($script:FamilyNames -join ', '))" }
+    if (($fams -contains "98-me") -ne ($fams -contains "nt-x86")) { $faults += "PKG-FAMILY: 98-me\ and nt-x86\ are the x86 package's two folders and go together" }
+    foreach ($fam in $fams) {
+        $famDir = Join-Path $Root $fam
+        if (-not (Test-Path -LiteralPath $famDir -PathType Container)) { $faults += "PKG-FAMILY: $fam is not a directory"; continue }
+        $arch = Get-FamilyArchOf -Family $fam
+        $placeMap = Get-FamilyPlaceMap -Arch $arch
+        $famFull = (Get-Item -LiteralPath $famDir).FullName.TrimEnd('\')
+        foreach ($d in @(Get-ChildItem -LiteralPath $famFull -Directory -Recurse -Force)) {
+            $drel = $d.FullName.Substring($famFull.Length + 1)
+            if ($d.Name -ieq "nt") { $faults += "PKG-FAMILY: $fam\$drel is an nt\ directory, which this layout has none of (section 3.2)" }
+        }
+        $here = @{}
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir)) {
+            $leaf = Split-Path -Leaf $rel
+            $here[$leaf.ToLowerInvariant()] = 1
+            if ($leaf -ieq "xhcicmf.inf") { $faults += "PKG-FAMILY: $fam\$rel is named xhcicmf.inf; the filter ships as cm\xhcicmf.inx (section 3.2)" }
+            elseif ($leaf -ieq "stor98w9.inf") { $faults += "PKG-FAMILY: $fam\$rel is named stor98w9.inf; the 9x Stor98 INF ships as 98-me\stor98\stor98.inf (section 3.4)" }
+            elseif ($rel.ToLowerInvariant().StartsWith($script:FamilyTbnetDir.ToLowerInvariant() + "\")) { $faults += "PKG-FAMILY: $fam\$rel is in $($script:FamilyTbnetDir)\, which holds no file until task 45.59 lists them (section 9)" }
+            elseif (-not $placeMap.ContainsKey(("$fam\$rel").ToLowerInvariant())) { $faults += "PKG-FAMILY: $fam\$rel is not a file of $fam\ (section 2)" }
+        }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir | Where-Object { $_ -match '\.(inf|inx)$' })) {
+            $infDir = Split-Path -Parent (Join-Path $famDir $rel)
+            foreach ($n in @(Get-FamilyInfSources -Path (Join-Path $famDir $rel))) {
+                $carried = @($placeMap.Keys | Where-Object { $_.StartsWith($fam.ToLowerInvariant() + "\") -and (Split-Path -Leaf $_) -eq $n }).Count -gt 0
+                if (-not $carried) { continue }
+                if (-not (Test-Path -LiteralPath (Join-Path $infDir $n) -PathType Leaf)) {
+                    $faults += "PKG-FAMILY: $fam\$rel names $n in [SourceDisksFiles], and its folder does not hold it"
+                }
+            }
+        }
+    }
+    foreach ($arch in @("x86", "amd64")) {
+        foreach ($flat in $script:FamilyLayout[$arch].Keys) {
+            $places = @($script:FamilyLayout[$arch][$flat] | Where-Object { $fams -contains (($_ -split '\\')[0]) })
+            if ($places.Count -lt 2) { continue }
+            $present = @($places | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf })
+            if ($present.Count -ne 0 -and $present.Count -ne $places.Count) {
+                $faults += "PKG-FAMILY: $($present -join ' and ') is there and $(@($places | Where-Object { $present -notcontains $_ }) -join ' and ') is not"
+            } elseif ($present.Count -gt 1 -and @($present | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $Root $_) -Algorithm SHA256).Hash } | Sort-Object -Unique).Count -ne 1) {
+                $faults += "PKG-FAMILY: $($present -join ' and ') are not the same bytes"
+            }
+        }
+    }
+    return ($faults -join "`n")
+}
+
+function Assert-FamilyFromLegs {
+    # Every file of the family folders under $Root compared by hash with the
+    # verified flat file it came from (record 36 section 7.1), and nothing
+    # else there: $FlatDirs maps an architecture ("x86", "amd64") to the
+    # verified flat package that fills its families. Run after the
+    # conversion and again just before the publication, so a file changed in
+    # between is a refusal.
+    param([string]$Root, [hashtable]$FlatDirs, [string]$What)
+    $faults = @()
+    $want = @{}
+    foreach ($arch in $FlatDirs.Keys) {
+        $table = $script:FamilyLayout[$arch]
+        $byLower = @{}
+        foreach ($k in $table.Keys) { $byLower[$k.ToLowerInvariant()] = $k }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $FlatDirs[$arch])) {
+            if (-not $byLower.ContainsKey($rel.ToLowerInvariant())) { $faults += "the flat $arch package holds $rel, which no family carries"; continue }
+            $flat = $byLower[$rel.ToLowerInvariant()]
+            $hash = (Get-FileHash -LiteralPath (Join-Path $FlatDirs[$arch] $rel) -Algorithm SHA256).Hash
+            foreach ($place in @($table[$flat])) { $want[$place.ToLowerInvariant()] = @($place, $hash, $flat) }
+        }
+    }
+    foreach ($w in $want.Values) {
+        $p = Join-Path $Root $w[0]
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { $faults += "$($w[0]) is missing (the flat $($w[2]))" }
+        elseif ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $w[1]) { $faults += "$($w[0]) is not the bytes of the verified flat $($w[2])" }
+    }
+    foreach ($fam in $script:FamilyNames) {
+        $famDir = Join-Path $Root $fam
+        if (-not (Test-Path -LiteralPath $famDir)) { continue }
+        if (-not $FlatDirs.ContainsKey($script:FamilyArch[$fam])) { $faults += "$fam\ is there, and this cut built no $($script:FamilyArch[$fam]) package for it"; continue }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir)) {
+            if (-not $want.ContainsKey(("$fam\$rel").ToLowerInvariant())) { $faults += "$fam\$rel is not a file of the verified flat package" }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("PKG-FAMILY: {0}'s family folders are not the verified flat packages (design record 36 section 7.1):`n  - {1}" -f $What, ($faults -join "`n  - "))
+    }
+}
+
+function Get-IntegrateText {
+    # INTEGRATE.TXT (record 36 section 8.2): plain text, 78 columns, which
+    # make-release.ps1 writes at the download's root and test-package.ps1
+    # holds to the table above.
+    param([string]$Version)
+    $t = @'
+xHCI98 {VERSION}: adding the drivers to a Windows setup
+=======================================================
+
+WHICH FOLDER
+
+  98-me\    Windows 98 SE and ME. They have no integration route: install
+            with SETUP.EXE, or point the hardware wizard at this folder.
+  nt-x86\   Windows 2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit
+  nt-x64\   Windows XP x64 and Server 2003 x64, Vista to 10, 64-bit
+
+Each folder holds the drivers its Windows installs: the USB controller and
+UAS drivers at its root, the Thunderbolt 3 / USB4 connection manager in
+cm\, and Stor98, the driver for NVMe drives behind a Thunderbolt or USB4
+port, in stor98\.
+
+NLITE, NTLITE AND DISM
+
+Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
+
+  nLite, NTLite  add the folder as a driver folder, with its subfolders.
+  DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
+                 /Recurse, and for nt-x64\ also /ForceUnsigned.
+
+The 64-bit drivers carry this project's test signature, which Vista x64 to
+10 x64 load only in test-signing mode (readme.txt, section 2).
+
+Leave cm\ out to leave out the Thunderbolt 3 / USB4 connection manager,
+and stor98\ to leave out Stor98.
+
+cm\xhcicmf.inx is the connection manager's filter for Thunderbolt and USB4
+PCIe ports. It is not for integration and is not named .inf on purpose:
+SETUP.EXE installs it. Do not rename it.
+
+TEXT-MODE SETUP (F6): WINDOWS 2000, XP AND XP X64
+
+Copy the files at the root of nt-x86\ (nt-x64\ for XP x64 and Server 2003
+x64), without its subfolders, to a floppy disk, and press F6 when Setup
+asks for additional drivers. txtsetup.oem on it lists the options. For
+the Windows 2000 option "files from CD", also copy USBD.SY_, HIDCLASS.SY_
+and HIDPARSE.SY_ from the I386 folder of your Windows 2000 CD to the
+floppy's root, unchanged: do not expand or rename them.
+
+AFTER AN INTEGRATED INSTALL, RUN SETUP.EXE
+
+SETUP.EXE then finds the drivers already in place and adds what an
+integration leaves out:
+
+  - XHCIPFW, which keeps PCI bridges' prefetchable windows above 4 GB
+    from stopping Windows (32-bit 2000 to 8.1);
+  - the connection manager's tunnel-port filter, and the start type of
+    the connection manager put back;
+  - the safe-removal mark service for Thunderbolt and USB4 devices;
+  - the xHCI98 USB Tree (XHCITR) with its icon by the clock, the entry in
+    Add/Remove Programs, and the settings it asks for.
+'@
+    return ($t.Replace("{VERSION}", $Version) -replace "`r?`n", "`r`n")
+}
+
 function Test-DriverVersionMatches {
     param(
         [string]$Reported,      # the binary's VersionInfo.FileVersion

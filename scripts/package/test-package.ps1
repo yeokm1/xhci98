@@ -675,7 +675,7 @@ try {
             "out\free\win9x\stor98.mpd" = "stand-in mpd"
             "out\free\x86\stor98.sys"   = "stand-in x86 sys"
             "out\free\amd64\stor98.sys" = "stand-in amd64 sys"
-            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
+            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "inf\stor98-x64.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`nCatalogFile=stor98.cat`r`n"
             "inf\stor98-9x.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "include\stor98cm.h" = [System.IO.File]::ReadAllText($nvHeader4)
@@ -740,7 +740,7 @@ try {
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")
-    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
+    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
     $nvNoReadme = New-Stor98Tree -Name "nv-noreadme" -Omit @("docs\package-readme.txt")
     foreach ($bad in @(
         @{ Arch = "x86";   Args = (Get-NvArgs $nvRoot $nvHeaderNone); Says = "is not byte for byte" },
@@ -1886,6 +1886,176 @@ try {
     # tree already on disk instead of building anything - and it is the same
     # code path the tail of a real cut uses.
     #
+    # The download by Windows family (roadmap-usb4 task 45.44, design record 36
+    # sections 5.3 and 11): the table, both conversions, PKG-FAMILY, the
+    # comparison with the verified flat packages, INTEGRATE.TXT and the
+    # installer engine's source map, on stand-in flat packages.
+    Write-Step "the family layout: the table, the conversions, PKG-FAMILY and INTEGRATE.TXT"
+    $famWork = Join-Path $script:work "family"
+    function New-FlatStandIn {
+        # Every flat file the table knows for $Arch, each a stand-in text; the
+        # INFs name their files in [SourceDisksFiles] as the real ones do.
+        param([string]$Dir, [string]$Arch, [string[]]$Omit = @())
+        $infs = @{
+            "xhci98.inf"     = "[SourceDisksFiles]`r`nxhci98.sys=1`r`nxhcihlpr.sys=1`r`n"
+            "xhciuas.inf"    = "[SourceDisksFiles]`r`nxhciuas.sys=1`r`n"
+            "xhcicm.inf"     = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "nt\xhcicmf.inf" = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "xhcicmf.inf"    = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "stor98.inf"     = "[SourceDisksFiles]`r`nstor98.sys=1`r`n"
+            "stor98w9.inf"   = "[SourceDisksFiles]`r`nstor98.mpd=1`r`n"
+        }
+        foreach ($flat in $script:FamilyLayout[$Arch].Keys) {
+            if ($Omit -contains $flat) { continue }
+            $full = Join-Path $Dir $flat
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $full) | Out-Null
+            $text = if ($infs.ContainsKey($flat)) { $infs[$flat] } elseif ($flat -eq "nt\xhcicm.sys") { "stand-in $Arch xhcicm.sys" } else { "stand-in $Arch $flat" }
+            if ($Arch -eq "amd64" -and $flat -eq "xhci98.inf") { $text = "[SourceDisksFiles]`r`nxhci98.sys=1`r`n" }
+            [System.IO.File]::WriteAllText($full, $text, (New-Object System.Text.ASCIIEncoding))
+        }
+    }
+    function Get-TreeHashes {
+        param([string]$Dir)
+        $h = @{}
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $Dir)) { $h[$rel.ToLowerInvariant()] = (Get-FileHash -LiteralPath (Join-Path $Dir $rel) -Algorithm SHA256).Hash }
+        return $h
+    }
+    $flat86 = Join-Path $famWork "flat\release-x86"
+    $flat64 = Join-Path $famWork "flat\release-x64"
+    New-FlatStandIn -Dir $flat86 -Arch "x86"
+    New-FlatStandIn -Dir $flat64 -Arch "amd64"
+    $famGood = Join-Path $famWork "good"
+    [void](ConvertTo-FamilyLayout -FlatDir $flat86 -Arch "x86" -Dest $famGood)
+    [void](ConvertTo-FamilyLayout -FlatDir $flat64 -Arch "amd64" -Dest $famGood)
+    $why = Test-FamilyLayout -Root $famGood
+    Assert-True ($why -eq "") "PKG-FAMILY refused the converted stand-in packages:`n$why"
+    Assert-True ((Get-FamilyLayoutKind -Root $famGood -What "the stand-in") -eq "family") "the converted tree was not read as the family layout."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $famGood "98-me\nt")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\nt")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\cm\xhcicmf.inx")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\cm\xhcicmf.inx")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "98-me\stor98\stor98.inf")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\stor98\stor98.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\stor98\stor98.mpd")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\xhcihlpr.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\txtsetup.oem")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\txtsetup.oem"))) `
+        "the converted tree is not record 36 section 2's layout (the filter as cm\xhcicmf.inx, no nt\, the 9x Stor98 INF in 98-me\stor98, each family only its own files)."
+    $ok = $true
+    try { Assert-FamilyFromLegs -Root $famGood -FlatDirs @{ "x86" = $flat86; "amd64" = $flat64 } -What "the stand-in" } catch { $ok = $false; Write-Host $_.Exception.Message }
+    Assert-True $ok "Assert-FamilyFromLegs refused the tree converted from the same flat packages."
+    $view = Join-Path $famWork "view"
+    $viewDirs = ConvertFrom-FamilyLayout -Root $famGood -Dest $view
+    foreach ($pair in @(@("x86", $flat86), @("amd64", $flat64))) {
+        $a = Get-TreeHashes -Dir $pair[1]; $b = Get-TreeHashes -Dir $viewDirs[$pair[0]]
+        $diff = @($a.Keys | Where-Object { -not $b.ContainsKey($_) -or $b[$_] -ne $a[$_] }) + @($b.Keys | Where-Object { -not $a.ContainsKey($_) })
+        Assert-True ($diff.Count -eq 0) "the $($pair[0]) flat view is not the flat package it was converted from: $($diff -join ', ')."
+    }
+
+    # A flat file the table does not know, and nt\xhcicm.sys not the same
+    # bytes as xhcicm.sys, are refused by the conversion.
+    foreach ($bad in @(
+        @{ Rel = "notes.txt"; Text = "a stray"; Says = "does not place" },
+        @{ Rel = "nt\xhcicm.sys"; Text = "another build"; Says = "not the same bytes" })) {
+        $bf = Join-Path $famWork ("flat-bad-" + [Guid]::NewGuid().ToString("N"))
+        New-FlatStandIn -Dir $bf -Arch "x86"
+        [System.IO.File]::WriteAllText((Join-Path $bf $bad.Rel), $bad.Text)
+        $msg = ""
+        try { [void](ConvertTo-FamilyLayout -FlatDir $bf -Arch "x86" -Dest (Join-Path $famWork ("out-" + [Guid]::NewGuid().ToString("N")))) } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -like "*$($bad.Says)*") "the conversion took a flat package with $($bad.Rel) ($($bad.Text)): '$msg'."
+    }
+
+    # PKG-FAMILY's refusals, each on a copy of the good tree.
+    $famCases = @(
+        @{ Why = "a file outside the family's list"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "98-me\notes.txt"), "x") } },
+        @{ Why = "an nt\ directory"; Do = { param($r) New-Item -ItemType Directory -Force -Path (Join-Path $r "nt-x86\nt") | Out-Null; Copy-Item (Join-Path $r "nt-x86\cm\xhcicm.sys") (Join-Path $r "nt-x86\nt\xhcicm.sys") } },
+        @{ Why = "an xhcicmf.inf"; Do = { param($r) Copy-Item (Join-Path $r "nt-x64\cm\xhcicmf.inx") (Join-Path $r "nt-x64\cm\xhcicmf.inf") } },
+        @{ Why = "a stor98w9.inf"; Do = { param($r) Copy-Item (Join-Path $r "98-me\stor98\stor98.inf") (Join-Path $r "98-me\stor98\stor98w9.inf") } },
+        @{ Why = "an NT-only file in 98-me"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\txtsetup.oem") (Join-Path $r "98-me\txtsetup.oem") } },
+        @{ Why = "nt-x86 without the helper"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\xhcihlpr.sys") } },
+        @{ Why = "98-me without the image its Stor98 INF names"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98.mpd") } },
+        @{ Why = "a shared file differing"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\xhci98.sys"), "another build") } },
+        @{ Why = "a shared file in one family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98-readme.txt") } },
+        @{ Why = "a file under cm\tbnet\ before 45.59 lists it"; Do = { param($r) New-Item -ItemType Directory -Force -Path (Join-Path $r "nt-x86\cm\tbnet") | Out-Null; [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\cm\tbnet\xhcinet.inf"), "x") } },
+        @{ Why = "98-me without nt-x86"; Do = { param($r) Remove-Item -Recurse -Force (Join-Path $r "nt-x86") } }
+    )
+    foreach ($c in $famCases) {
+        $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+        Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+        & $c.Do $copy
+        $why = Test-FamilyLayout -Root $copy
+        Assert-True ($why -ne "") "PKG-FAMILY accepted $($c.Why)."
+    }
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    New-Item -ItemType Directory -Force -Path (Join-Path $copy "98-me\cm\tbnet") | Out-Null
+    $why = Test-FamilyLayout -Root $copy
+    Assert-True ($why -eq "") "PKG-FAMILY refused an empty cm\tbnet\ (task 45.59 fills it): $why"
+
+    # A family file changed after the conversion is refused by the
+    # comparison with the verified flat package.
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    [System.IO.File]::WriteAllText((Join-Path $copy "nt-x64\cm\xhcicmf.inx"), "changed after the conversion")
+    $msg = ""
+    try { Assert-FamilyFromLegs -Root $copy -FlatDirs @{ "x86" = $flat86; "amd64" = $flat64 } -What "the stand-in" } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*xhcicmf.inx*") "Assert-FamilyFromLegs accepted a family file changed after the conversion: '$msg'."
+    $msg = ""
+    try { Assert-FamilyFromLegs -Root $famGood -FlatDirs @{ "x86" = $flat86 } -What "the stand-in" } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*nt-x64*") "Assert-FamilyFromLegs accepted a family folder no flat package of the cut fills: '$msg'."
+
+    # A tree with family folders and a flavour directory is neither layout.
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    Copy-Item -LiteralPath $flat86 -Destination (Join-Path $copy "release-x86") -Recurse
+    $msg = ""
+    try { [void](Get-FamilyLayoutKind -Root $copy -What "the stand-in") } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*neither layout*") "a tree with both family folders and a flavour directory was taken: '$msg'."
+
+    # INTEGRATE.TXT (record 36 section 8.2), held to the table: plain text
+    # within 78 columns, each family folder named, the filter's .inx named as
+    # not for integration, DISM's /Recurse and /ForceUnsigned, and no
+    # testing-status wording.
+    $it = Get-IntegrateText -Version "9.9.9.9"
+    $itLines = @($it -split "`r`n")
+    Assert-True (@($itLines | Where-Object { $_.Length -gt 78 -or $_ -match '[^\x20-\x7E]' }).Count -eq 0) "INTEGRATE.TXT has a line over 78 columns or a character outside printable ASCII."
+    foreach ($fam in $script:FamilyNames) { Assert-True ($it -match ('(?m)^  ' + [regex]::Escape($fam) + '\\')) "INTEGRATE.TXT does not name $fam\ in its table." }
+    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_")) {
+        Assert-True ($it.Contains($need)) "INTEGRATE.TXT does not say '$need'."
+    }
+    Assert-True ($it -notmatch '(?i)emulat|virtual machine|untested|not tested|qemu') "INTEGRATE.TXT carries testing-status wording."
+
+    # The installer engine's source map (xhciinst\inst_core.c, instPkgFiles;
+    # record 36 section 6.2) is the table's local-name side: the 9x Stor98
+    # INF's local name is stor98.inf, and nt\xhcicm.sys the copy rebuilt
+    # from nt-x86\cm\xhcicm.sys.
+    $core = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.c"))
+    $mapAt = $core.IndexOf("const INST_PKG_FILE instPkgFiles[] = {")
+    Assert-True ($mapAt -ge 0) "xhciinst\inst_core.c has no instPkgFiles table."
+    if ($mapAt -ge 0) {
+        $mapText = $core.Substring($mapAt, $core.IndexOf("};", $mapAt) - $mapAt)
+        $engine = @{}
+        foreach ($m in [regex]::Matches($mapText, '\{\s*"([^"]+)"\s*,\s*\{\s*(NULL|"[^"]*")\s*,\s*(NULL|"[^"]*")\s*,\s*(NULL|"[^"]*")\s*\}\s*\}')) {
+            for ($i = 0; $i -lt 3; $i++) {
+                $v = $m.Groups[$i + 2].Value
+                if ($v -ne "NULL") { $engine[("{0}|{1}" -f $script:FamilyNames[$i], $m.Groups[1].Value.Replace('\\', '\')).ToLowerInvariant()] = $v.Trim('"').Replace('\\', '\') }
+            }
+        }
+        $want = @{}
+        foreach ($arch in @("x86", "amd64")) {
+            foreach ($flat in $script:FamilyLayout[$arch].Keys) {
+                $local = if ($flat -eq "stor98w9.inf") { "stor98.inf" } else { $flat }
+                foreach ($place in @($script:FamilyLayout[$arch][$flat])) {
+                    $fam = ($place -split '\\')[0]
+                    $want[("{0}|{1}" -f $fam, $local).ToLowerInvariant()] = $place.Substring($fam.Length + 1)
+                }
+            }
+            foreach ($flat in $script:FamilyRebuilt[$arch].Keys) {
+                $from = $script:FamilyRebuilt[$arch][$flat].From
+                $fam = ($from -split '\\')[0]
+                $want[("{0}|{1}" -f $fam, $flat).ToLowerInvariant()] = $from.Substring($fam.Length + 1)
+            }
+        }
+        $diff = @($want.Keys | Where-Object { -not $engine.ContainsKey($_) -or $engine[$_] -ine $want[$_] } | ForEach-Object { "$_ -> $($want[$_]) (engine: $(if ($engine.ContainsKey($_)) { $engine[$_] } else { 'none' }))" }) +
+                @($engine.Keys | Where-Object { -not $want.ContainsKey($_) } | ForEach-Object { "$_ -> $($engine[$_]) (not in the table)" })
+        Assert-True ($engine.Count -gt 0 -and $diff.Count -eq 0) ("the installer engine's source map is not package-common.ps1's family table:`n  " + ($diff -join "`n  "))
+    }
+
     Write-Step "the upload set is complete install media in every flavour directory"
 
     $infText = [System.IO.File]::ReadAllText($fxInf)
@@ -2059,6 +2229,61 @@ try {
         # one, and an otherpkgs.txt there is parsed as the previous record.
         Remove-Item -LiteralPath (Join-Path $pubRoot "otherpkgs.txt") -Force
         Remove-Item -LiteralPath (Join-Path $pubRoot "wdmfree-pin.txt") -Force
+
+        # --- a tree published by Windows family (task 45.44) -----------------
+        #
+        # Design record 36 section 7.2: -UploadSetOnly rebuilds a version
+        # published from 3.4.0.0 at its family folders, through the flat view
+        # ConvertFrom-FamilyLayout rebuilds, and the set carries the family
+        # folders. The same stand-in release, its release\ re-laid: the INF
+        # and image in 98-me\ and nt-x86\, the helper in nt-x86\ alone.
+        Write-Step "-UploadSetOnly rebuilds a tree published by Windows family"
+        $famRelRoot = Join-Path $script:work "releases-family"
+        $famPub = Join-Path $famRelRoot $relVersion
+        Copy-Item -LiteralPath $pubRoot -Destination $famPub -Recurse
+        foreach ($fam in @("98-me", "nt-x86")) {
+            Ensure-Directory (Join-Path $famPub $fam)
+            foreach ($name in @("xhci98.inf", "xhci98.sys")) {
+                Copy-Item -LiteralPath (Join-Path $famPub "release\$name") -Destination (Join-Path $famPub "$fam\$name")
+            }
+        }
+        Copy-Item -LiteralPath (Join-Path $famPub "release\xhcihlpr.sys") -Destination (Join-Path $famPub "nt-x86\xhcihlpr.sys")
+        Remove-Item -LiteralPath (Join-Path $famPub "release") -Recurse -Force
+        $famUp = Join-Path $script:work "upload-family"
+        Ensure-Directory $famUp
+        $famArgs = @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $famRelRoot,
+                     "-PackageRoot", $pkgRoot, "-UploadDir", $famUp)
+        $r = Invoke-Releaser $famArgs
+        Assert-True ($r.ExitCode -eq 0) ("the upload set of a family tree was not assembled:`n" + $r.Output)
+        $famSet = Join-Path $famUp ("upload-" + $relVersion)
+        foreach ($name in @("98-me\xhci98.inf", "98-me\xhci98.sys", "nt-x86\xhci98.inf", "nt-x86\xhci98.sys", "nt-x86\xhcihlpr.sys", "readme.txt")) {
+            Assert-True (Test-Path -LiteralPath (Join-Path $famSet $name)) "the family tree's upload set has no $name."
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $famSet "release")) -and -not (Test-Path -LiteralPath (Join-Path $famSet "release-x86")) -and
+                     -not (Test-Path -LiteralPath (Join-Path $famSet "98-me\xhcihlpr.sys"))) `
+            "the family tree's upload set carries a flavour directory or the helper in 98-me\: the flat view is the checks' alone."
+        $famZip = Join-Path $famUp ("xhci98-" + $relVersion + ".zip")
+        if (Test-Path -LiteralPath $famZip) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($famZip)
+            try { $famEntries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
+            Assert-True (($famEntries -contains "98-me/xhci98.sys") -and ($famEntries -contains "nt-x86/xhcihlpr.sys") -and
+                         @($famEntries | Where-Object { $_ -like "release*/*" }).Count -eq 0) "the family tree's archive does not carry the family folders alone."
+        } else {
+            Assert-True $false "the family tree's upload set wrote no archive."
+        }
+        # Refused: an nt\ in a family folder (PKG-FAMILY), and a tree with
+        # family folders and a flavour directory both.
+        foreach ($bad in @(
+            @{ Why = "an nt\ in nt-x86\"; Do = { param($p) Ensure-Directory (Join-Path $p "nt-x86\nt"); Copy-Item (Join-Path $p "nt-x86\xhci98.sys") (Join-Path $p "nt-x86\nt\xhcicm.sys") }; Says = "PKG-FAMILY" },
+            @{ Why = "a flavour directory beside the family folders"; Do = { param($p) Ensure-Directory (Join-Path $p "release-x86"); Copy-Item (Join-Path $p "nt-x86\xhci98.inf") (Join-Path $p "release-x86\xhci98.inf") }; Says = "neither layout" })) {
+            $badRel = Join-Path $script:work ("releases-family-bad-" + [Guid]::NewGuid().ToString("N"))
+            Copy-Item -LiteralPath $famRelRoot -Destination $badRel -Recurse
+            & $bad.Do (Join-Path $badRel $relVersion)
+            $badUp = Join-Path $script:work ("upload-family-bad-" + [Guid]::NewGuid().ToString("N"))
+            Ensure-Directory $badUp
+            $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $badRel, "-PackageRoot", $pkgRoot, "-UploadDir", $badUp)
+            Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) ("-UploadSetOnly took a family tree with $($bad.Why):`n" + $r.Output)
+        }
 
         # --- assembled from the tracked directory alone ---------------------
         #
