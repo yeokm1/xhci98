@@ -247,11 +247,14 @@ scripts/vm-matrix/release.config.psd1
 
 # build.exe's warning logs, for the HCD (src), the UAS class driver
 # (src\uas, task 31-A.2), the connection manager (src\cm) and the MSI helper
-# (src\hlpr): written only when a flavour warns, and never source.
+# (src\hlpr) and the network drivers (src\net\ndis5, src\net\ndis6, task 45.59):
+# written only when a flavour warns, and never source.
 src/build*.wrn
 src/uas/build*.wrn
 src/cm/build*.wrn
 src/hlpr/build*.wrn
+src/net/ndis5/build*.wrn
+src/net/ndis6/build*.wrn
 
 # src/stor98 is Stor98 (roadmap-usb4 task 42-A.20), with its own .gitignore for
 # its build output (out/, obj*/, build*.log and the rest). Two of the generic
