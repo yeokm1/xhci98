@@ -8503,3 +8503,5 @@ the version bump.
   INF is now 98-me\stor98\stor98.inf (was stor98w9.inf); the 32-bit
   stor98.inf is for Windows 2000 to 10 only. The free-driver download adds
   print/usbprn: USB printers and USB-to-parallel cables on 98 SE and ME."
+- 45.66 (closed) (pending): "F1 now opens the Help of the page in the
+  installer's window, the same as the Help button."
