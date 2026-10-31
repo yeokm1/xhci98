@@ -14,10 +14,14 @@
 
 #include "../xhci_cmnet.h"
 
-/* Asks the device object below for the table (the network PDO answers).
- * STATUS_SUCCESS with *Iface held (InterfaceReference taken by the PDO),
- * else an error and *Iface zeroed. IRQL: PASSIVE_LEVEL. */
-NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface);
+/* Asks the device object below for the table (the network PDO answers):
+ * IRP_MN_QUERY_INTERFACE, then, where that is not answered, the 98 SE and
+ * ME fallback's XHCI_CM_NET_IOCTL_INTERFACE (xhci_cmnet.h). STATUS_SUCCESS
+ * with *Iface held (InterfaceReference taken by the PDO) and *Route 1
+ * (the query) or 2 (the fallback), else an error, *Iface zeroed and
+ * *Route 0. IRQL: PASSIVE_LEVEL. */
+NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface,
+                        PULONG Route);
 
 /* Drops the hold; *Iface zeroed. IRQL: PASSIVE_LEVEL. */
 VOID NetCmIfRelease(PXHCI_CM_NET_INTERFACE Iface);

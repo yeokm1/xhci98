@@ -122,6 +122,9 @@
 #define TBT_ICM_EV_XD_CONNECTED     0x06UL  /* host-to-host (XhciCmNet 1) */
 #define TBT_ICM_EV_XD_DISCONNECTED  0x07UL  /* host-to-host (XhciCmNet 1) */
 #define TBT_ICM_EV_DP_CHANGED       0x08UL  /* DisplayPort; ignored */
+/* A one-DW response of this code follows every inter-domain frame the
+ * host sends, on Alpine Ridge (run-45 45-E.15 [obs]); answers no command. */
+#define TBT_ICM_XD_ACK_CODE         0x08UL
 #define TBT_ICM_EV_RTD3_VETO        0x0AUL  /* Ice Lake family; logged, ignored */
 
 /* Driver-ready flags: RTD3 is bit 6 on every generation that reports it
@@ -660,6 +663,7 @@ typedef struct _TBT_ICM {
     BOOLEAN Session;            /* driver ready was sent: 0x07 ends it */
     BOOLEAN VetoActive;         /* Ice Lake's RTD3 veto, for the log */
     BOOLEAN InWait;             /* a command or a poll is outstanding */
+    BOOLEAN XdAckLogged;        /* the first code-8 acknowledgement logged */
     ULONG WaitSlot;             /* the entry the outstanding command is for */
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */

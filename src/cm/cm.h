@@ -972,7 +972,7 @@ VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va);
 
 /* cm_net.c (design record 35 sections 5 and 6, task 45.59). */
 VOID CmNetInit(PCM_NHI nhi);
-VOID CmNetBindOps(PCM_NHI nhi);
+VOID CmNetBindOps(PCM_NHI nhi, BOOLEAN fw);
 VOID CmNetPass(PCM_NHI nhi);
 VOID CmNetAck(PCM_NHI nhi);
 VOID CmNetStopWork(PCM_NHI nhi);
@@ -985,7 +985,7 @@ NTSTATUS CmNetPdoPnp(PCM_NETPDO pdo, PIRP irp);
 NTSTATUS CmNetPdoPower(PCM_NETPDO pdo, PIRP irp);
 NTSTATUS CmNetPdoOther(PCM_NETPDO pdo, PIRP irp);
 /* The thread's CM_WORK_NET and its poll pass (cm_nhi.c): CmNetPass where
- * the software connection manager runs, then the acknowledgement. */
+ * a connection manager runs, then the acknowledgement. */
 VOID CmNhiNetWork(PCM_NHI nhi);
 
 /* The completion routine of a forwarded IRP is called on success, error

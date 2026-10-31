@@ -1,6 +1,13 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 8, 2026-10-31, task 45-E.15: the owner's bench capture
+Status: revision 10, 2026-10-31: the bench capture (section 2.7) weighed
+against the code (section 3.11), reviewed and revised.
+Revision 9, 2026-10-31: the driver half joined to the firmware
+connection manager (section 6.5, "The two connection managers"), the
+software connection manager's link lowered at this host's own Logout
+(section 3.9), the network INF's models decoration (section 8.2),
+reviewed and revised.
+Revision 8, 2026-10-31, task 45-E.15: the owner's bench capture
 of an Alpine Ridge firmware CM and a USB4 software CM, both Linux, read
 (section 2.7, with pointers in sections 2.4, 3.4 and 10), reviewed and
 revised. Revision 7, 2026-10-31, step S5: the service's driver half in
@@ -1018,6 +1025,16 @@ the port machine; `test_u4xd` drives it (section 11.1).
   closed during the invalidation) is the quarantine's from then on, the
   record given this service's output identity where it has none, so its
   retry knows the entry as this driver's.
+- **The link at a logout** (section 4.2). The network driver's link goes
+  down at the first logout of either side, as under the firmware
+  connection manager (section 3.10): a Logout from the peer takes the
+  paths down inside the engine (`ServiceDown`, which lowers the link
+  first); this host's own Logout (the network driver's `Close`, or the
+  service withdrawn from a peer) takes them down only when it is answered
+  or times out, so after each engine call (a tick, a packet, a change of
+  the offer) the link is lowered as soon as the engine's service is no
+  longer up, the paths, the rings and the NHI's one service held until
+  `ServiceDown`. `test_u4xd`'s unanswered close holds it.
 - **The driver's share** (step S5), `TBT_U4_NET`: `RingsUp` before the
   entries, `Link` up after them and down before they go (after which the
   driver accepts no send and drains its transmit ring, at most 500 ms),
@@ -1210,6 +1227,76 @@ else runs inside the client's existing entry points.
   ready keeps the records; the re-announcement is keyed and reconciled as
   above.
 
+### 3.11 The bench capture weighed (revision 10)
+
+The facts are section 2.7's (task 45-E.15, the owner's bench: an Alpine
+Ridge LP host under its firmware CM and a 12th-generation Intel host
+under Linux's software CM, both on Linux 7.0; `runs/run-45.md`, "45-E.15
+(the bench capture)", [bench]). What changed:
+
+- **The firmware CM sends a UUID Request at a record's start.** The
+  firmware answers the far end's UUID Request itself, so this host never
+  sees it; a far software CM that gave up before this driver bound
+  (Linux stops after about 20 s, "discovery failed", read on the
+  emulator, run-45 "45.59 S5 (legs)") restarts only at a UUID Request.
+  `TbtXdpPeerStart` in the firmware CM's mode sends one beside the
+  discovery (`cm.xdp.uuid.nudge`), resent each second, at most ten more
+  times, until a UUID Response comes; `test_tbt_xdp`'s
+  `test_firmware_nudge`, its first request lost.
+- **The software CM answers an early UUID Request.** An Alpine Ridge
+  firmware at the far end sends one UUID Request about 10 to 14 ms after
+  the link is up, with no retry seen, and tells its host of this one only
+  once it is answered - before the port machine has read ERR_ENUM and
+  classified the port, and perhaps with the hot plug event itself. With
+  `XhciCmNet` 1 a UUID Request on a port's lane 0 that no record serves
+  and that is not yet XDOMAIN is answered at once with this domain's
+  UUID, whatever the port's state (`cm.xdp.uuid.early`); the
+  classification then starts the discovery as before. An answer that
+  cannot be sent at once (this domain's UUID unreadable, the ring
+  refusing it) is owed to the next takes, at most ten more tries, until
+  sent, a record started on the port since included (that request never
+  reaches its engine). With this answer the link no longer depends
+  on the Alpine Ridge firmware retrying its UUID Request, which section
+  2.7 leaves unread. `test_u4xd`'s `test_early_uuid`, the request also
+  queued with the plug before the first poll, and once with the first
+  answer failing.
+- **Logins never give up.** Linux answers a Login only while its
+  interface is up (43 s after a cold start on the bench, and only after
+  `ip link set up` on the emulator), and itself retries every 5.12 s for
+  ever. After a minute unanswered this host's Logins go on every 5 s
+  (`TBT_NET_LOGIN_IDLE_MS`, `cm.net.login.none` logged once) for as long
+  as the service is wanted, instead of stopping; a peer's Login is
+  answered whenever it comes, as before. `test_tbt_xdp`'s
+  `test_login_idle`. `TBT_NET_S_ABANDONED` now means only that no HopID
+  is left to log in with.
+- **The code-8 acknowledgement.** Alpine Ridge firmware answers every
+  inter-domain frame its host sends with one one-DW ICM response,
+  `0x01000008`. No command of this driver's has code 8, so none waits
+  for it, and a command wait matches only its own code with the whole
+  echo (an approve or teardown is never satisfied or disturbed by it);
+  it is counted with the strays and logged once a start
+  (`tbt.icm.xd-ack`) rather than once a frame. `test_tbt_icm`'s stray
+  vector.
+
+What needs no change:
+
+- **E2E both ways.** Linux 7.0 enables E2E on its transmit ring as well
+  as its receive ring (the emulator's Linux 6.18 only on receive, section
+  2.4). With `XhciCmNetE2E` 1 and the peer's `prtcstns` bit 0, `RingsUp`
+  enables E2E on this host's receive ring with the Transmit E2E HopID
+  (section 5.3, step S5), and the host interface grants the credits from
+  the descriptors posted (Spec 12.2.2.3): nothing in software waits for
+  or grants a credit. With 0 the bit is withdrawn and Linux turns E2E off
+  on both rings. Read on the emulator against Linux 7.0 sending with E2E
+  (run-45 "45.59 S5 (legs)", the fifth leg): no loss up to 30000-byte
+  packets, the credits granted by the host interface.
+- The firmware's Error Response 3 to Link State Status (a far software
+  CM then keeps the link single lane, 20 Gb/s), its own properties block
+  before driver ready and its new UUID Request after it, event `0x07` at
+  an unplug with one Logout from Linux into the dead link, the Falcon and
+  Alpine Ridge layouts (section 3.10's row, matched), and Linux's runtime
+  suspend 18 s after an unplug: this driver waits on none of them.
+
 ## 4. The USB4NET service
 
 ### 4.1 Who logs in
@@ -1225,9 +1312,11 @@ step on the thread, and the network driver's link goes up (section 7.6).
 
 Login: the next request id, revision 1, the Service HopID of section 4.3.
 The resend schedule: every 100 ms for the first 2 s, then every second,
-for at least a minute (IDS 5.1.1), then the login is abandoned, logged
-(`cm.net.login.none`), and the peer stays READY; a Login from the peer
-later restarts it (IDS 5.1.1's second paragraph).
+for at least a minute (IDS 5.1.1), then (revision 10, section 3.11) every
+5 s for as long as the service is wanted, the minute logged once
+(`cm.net.login.none`); a Login from the peer is answered whenever it
+comes (IDS 5.1.1's second paragraph). Revision 9 and before abandoned
+the login after the minute.
 
 Login Response this driver sends: Status 0 and its MAC (section 4.4),
 length 6, when the requester is the peer of this link and no other login
@@ -1649,12 +1738,12 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
 ### 6.5 As built (step S5)
 
 `cm_net.c` is the driver half, `cm_netr.c` the rings' pure half
-(`test_cm_net`, section 11.1); the engine's calls are section 3.9's.
+(`test_cm_net`, section 11.1); the engine's calls are section 3.9's and
+3.10's.
 
 - **The PDO** is created at the NHI's first start that has `XhciCmNet`
-  1 under the software connection manager, and reported in BusRelations
-  at every such start. The firmware connection manager's starts report
-  it no more until step S4 gives that path a service. Its removal while
+  1 under either connection manager, and reported in BusRelations at
+  every such start. Its removal while
   the NHI still reports it (a disable) keeps it; a removal once it is
   reported no more retires it from the NHI, so a later start that wants
   one makes a fresh PDO. It is deleted at the NHI's removal once the PnP
@@ -1668,10 +1757,16 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   private code `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59, METHOD_NEITHER,
   FILE_ANY_ACCESS)` (0x00222967), `Parameters.Others.Argument1` the
   caller's table with `Header.Size` and `Header.Version` set: section
-  6.3's 98 SE fallback, answered on every target so the header can name
-  it once the 98 SE leg has read which one NTKERN carries. Each answer
+  6.3's 98 SE fallback, answered on every target. Each answer
   holds one reference. Every call reaches the NHI through the PDO under
   the PDO's lock, counted, so the NHI's removal waits out a call inside.
+  The shared header names the code (`XHCI_CM_NET_IOCTL_INTERFACE`, the
+  coordinator's decision of 2026-10-31, before the 98 SE leg read which
+  of the two NTKERN carries), and both network drivers' shared glue
+  (`src\net\net_cmif.c`) asks the query first and sends the code only
+  where the query is not answered (a failure, or a success with no
+  table), logging which way the table came (`net.cm.route`, 1 the query,
+  2 the code) through the table's own `Log`.
 - **Open and Close** set the wish under the lock and queue
   `CM_WORK_NET`; the thread gives it to the engine (`TbtU4NetWanted`,
   with `prtcstns` bit 1 always, bit 0 unless `XhciCmNetE2E` is 0, bit 2
@@ -1742,6 +1837,24 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
 - **Imports**: `KeInitializeTimer`, `KeSetTimer`, `KeCancelTimer` and
   `ObfReferenceObject` join `xhcicm.sys`'s allowlists, each
   `xhci98.sys`'s own row with its Windows 98 evidence.
+- **The two connection managers.** The three operations are given to
+  the one the start activates, before its start (`CmNetBindOps`): to the
+  software one by `TbtU4SetNet`, to the firmware one by `TbtIcmSetNet`
+  after its `TbtIcmSetNetConfig`, `port` then being the peer record's
+  slot + 1 (section 3.10). The thread's pass applies `Open` and `Close`
+  and reads the MAC through the same profile (`TbtIcmNetWanted`,
+  `TbtIcmNetIdentity` once the firmware connection manager is bound,
+  before each idle poll and at each `CM_WORK_NET`). The NHI's serial for
+  the firmware connection manager's MAC (section 3.10, "The identity") is
+  its PCI Express Device Serial Number, read at that activation from the
+  Device Serial Number Extended Capability (id 0003h) in the extended
+  list from 100h, through the same configuration path as every read of
+  the NHI's own; a list that cannot be read there (all ones, 0, or 100h
+  reading as offset 0's DW, as a path that reaches only the first 256
+  bytes may), or a serial of zero or all ones, gives none
+  (`cm.net.dsn.none`) and the engine's own value. Under the firmware
+  connection manager the link's rate and lanes are the firmware's and
+  unread: `QueryInfo` reports both 0, unknown.
 
 ## 7. The network drivers
 
@@ -2105,6 +2218,20 @@ decoration is the one decision the INF gate holds for every file here
 (`NTx86.6.2` beside the undecorated models, which Windows 98's engine must
 parse past): step S6 reads it on 98 SE, ME, 2000 and XP before it is
 taken, as task 22.5 read `NTx86.6.0` for `xhci98.inf` (`AGENTS.md`).
+Revision 9: the line is `%Mfg%=NetModels,NTx86,NTx86.6.2`, with
+`[NetModels.NTx86]` the undecorated section's model and install. Read on
+Windows 7 x86 (2026-10-31, `runs/run-45.md`, "45.59 S5 (legs)"): with
+`NetModels,NTx86.6.2` alone, `pnputil -a` staged into the driver store
+only the files of the `.6.2` models' install (`xhcinet6.sys`, or nothing
+while that section was empty), not the undecorated section's that 7
+then installs, so the NDIS 5 install's copy failed (Error 2, Code 1);
+the line with `NTx86` beside it staged both images, and with no
+decoration at all `xhcinet.sys` alone; `Signature` (`$Windows NT$`),
+the `Compatible` line and a `[SourceDisksFiles.x86]` changed nothing.
+2000 reads no models decoration and takes the undecorated section as 98
+SE and ME do. The three-field line is still to be read on 98 SE, ME,
+2000 and XP (`AGENTS.md`'s rule for `xhci98.inf`'s line); the run sheet
+records each.
 A new gate script, `scripts\inf-gate\check-net-inf.ps1`, holds both files
 (the paths, the image per path, the service, the value table per path,
 the footprint, the 98 section's net keys, no undecorated section in the
@@ -2626,6 +2753,14 @@ questions as asked follow.
   missing export stops the miniport loading with no message.
 - **`IRP_MN_QUERY_INTERFACE` between two WDM drivers on 98 SE** (section
   6.3): unread; the fallback is designed.
+- **The firmware CM's cold start against Linux** (section 3.10; read on
+  the emulator's Alpine Ridge model, `runs/run-45.md`, "45.59 S5
+  (legs)"): Linux sends its UUID Requests from the moment the link is up
+  and gives up after about 20 s; a far end that gave up before this
+  driver bound was not restarted, the service waiting for a re-plug.
+  Revision 10 sends a UUID Request at the record's start (section
+  3.11, from task 45-E.15's capture: the firmware answers the far end's
+  request itself); to be read again on a leg.
 - **The index-register write** (section 5.3): as for ring 0, unverified on
   hardware.
 - **Polling's throughput** (section 5.4): a ceiling of tens of MB/s at a

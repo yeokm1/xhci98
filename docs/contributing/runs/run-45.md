@@ -7018,6 +7018,170 @@ copy of the same disk image, shows no letter, as on 7 x86). Pass.
   the bridges' lists (`BasicConfigVector`), the `cm.breq` outcome and both
   drives after the mark service's restart.
 
+## 45.59 S5 (legs): Thunderbolt networking against Linux, software and firmware connection managers (2026-10-31)
+
+Workers `w45-tbnet3` (the first leg, on `3f5b798e`) and `w45-tbnet4`
+(branch `w45-tbnet4` from `bf0974ab`: commits `3e9bfa34` the service
+under the firmware connection manager and the software connection
+manager's link lowered at this host's own Logout, `b03d73e6` the 98 SE
+and ME fallback code in `xhci_cmnet.h` and the network drivers' use of
+it, `13c8c41a` `xhcinet.inf`'s `NTx86` models decoration; design record
+35 revision 9, each reviewed and revised). Development host A. Record 35
+section 11.3's legs: an xHCI98 guest on `usb4-emu`'s host-to-host model
+(the `w45-xdomain` build, `qemu-system-x86_64.exe` SHA-256 `48f9f6a4...`,
+`docs/XDOMAIN.md`) joined by `usb4-xdomain` to an unmodified Alpine Linux
+3.24.2 guest (kernel 6.18.52-0-lts, its stock `thunderbolt` and
+`thunderbolt_net`, `scripts/run-xdomain-linux.sh` as the server end, a
+`usb4-generic` host), the Windows guests on fresh overlays of the q35
+bases (`launch-q35.ps1 -Os w7x86`, `-smp 2`, `-m 2048`, guest date
+2026-09-20). `XhciCmNet` 1 set by hand in each NHI driver key (the
+installer's box is step S11); the qemu flavour of `xhcicm.sys` copied
+over the installed one for its log. Evidence:
+`E:\xhci98-vm\p45\w45-tbnet\` (first leg) and `E:\xhci98-vm\p45\w45-tbnet4\`
+(`w7\`, `w7ar\`, `w7e\`, `hashes.txt`, `pids.txt`).
+
+Builds on `13c8c41a`: the gated x86 build (`build-driver.cmd all`,
+release and qemu, every gate, the host tests: `test_u4xd` 187 checks,
+`test_cm_net` 55, all passed) and the gated amd64 build (`all -amd64`)
+passed. Images of the legs below: `xhcicm.sys` (qemu) `8656fb5f...`,
+`xhcinet.sys` `fc16fcc0...`, `xhcinet6.sys` `4cb286cf...`, `xhcinet.inf`
+`87fcaedd...` (`hashes.txt`).
+
+The Linux end needs its runtime power management off on the host
+interface and its domain (`echo on >
+/sys/bus/pci/devices/0000:00:04.0/power/control` and the same for
+`/sys/bus/thunderbolt/devices/0-0`): otherwise its domain suspends about
+25 s after the start and this host's UUID Request goes unanswered
+(`cm.xdp.uuid.none`), until a re-plug. Linux's `thunderbolt0` answers
+and sends a Login only while it is up, and it is a new interface at each
+appearance of the service (a re-plug, or this host's directory withdrawn
+and offered again), so `ip link set thunderbolt0 up` (and its address) is
+repeated each time; this host's own Logins meanwhile go unanswered for a
+minute and stop (`cm.net.login.none`), and Linux's Login then brings the
+service up.
+
+**First leg, Windows 7 x86, software connection manager (`w45-tbnet3`,
+`3f5b798e`).** `-Usb4 adl` (Intel Alder Lake host, software CM).
+The network PDO `XHCICM\TBNET` enumerated as "Thunderbolt networking"
+(`cm.net.pdo`), this domain's MAC read (`cm.net.mac=81874FB0`), the
+discovery to READY (`cm.xdp.state` 1, 2, 3, 5; `cm.xdp.bonded=01000002`;
+`cm.xdp.peer=01D6B004`, Linux's vendor id 1D6Bh). Login, paths and ping
+not reached: `pnputil -a` of `xhcinet.inf` as committed then staged the
+package without `xhcinet.sys` (the store folder held the INF and its PNF
+alone), and the device stayed at Code 1 (`setupapi.dev.log`: the copy of
+`xhcinet.sys` from the store, Error 2). Windows once moved the NHI to a
+new driver key (`...\0038` to `...\0040`) at a restart, where `XhciCmNet`
+read 0 again; the leg's batch sets the value in every key that has it.
+
+**The staging, read (Windows 7 x86, `w45-tbnet4`, `w7e\serial-e.log`).**
+Six variants of `xhcinet.inf` staged with `pnputil -a` on a plain guest,
+the driver store's folder listed after each: with `%Mfg%=NetModels,
+NTx86.6.2` the store took only `xhcinet6.sys`, the `.6.2` models'
+install's file (nothing while that section was empty, the first leg's
+case), whatever the signature (`$Windows NT$` too), with or without the
+`Compatible` line or a `[SourceDisksFiles.x86]`; with
+`%Mfg%=NetModels,NTx86,NTx86.6.2` and `[NetModels.NTx86]` both images;
+with no decoration `xhcinet.sys` alone. `13c8c41a` takes the second form
+(record 35 section 8.2; `check-net-inf.ps1`'s `PATH-MFGDEC` and
+`PATH-NTSTAGE`). Its parse by 98 SE's, ME's, 2000's and XP's setup
+engines is owed.
+
+**Second leg, Windows 7 x86, software connection manager (`w45-tbnet4`,
+`13c8c41a`, `w7\`): pass.** `-Usb4 adl`, the cable at power-on. `RINT.BAT`:
+`pnputil -i -a` of the package's `xhcicm.inf`, the qemu image over it,
+`XhciCmNet` 1, `pnputil -i -a` of `xhcinet.inf`; one restart. Then:
+"xHCI98 Thunderbolt Networking: Device driver software installed
+successfully"; `Win32_PnPEntity`: `XHCICM\TBNET\4&379EC3B5&0&0`,
+ConfigManagerErrorCode 0, Service `xhcinet`. The CM log: `cm.net.pdo`,
+`cm.net.mac=81874FB0`, the discovery and bonding to READY
+(`cm.xdp.bonded=01000002`, `cm.xdp.peer=01D6B004`), `net.cm.route=1`
+(the table by `IRP_MN_QUERY_INTERFACE`), `cm.net.open=5EA`; once Linux's
+interface was up, `cm.net.rings=01018000`, `cm.net.paths=0108080E` (port
+1, HopIDs 8 and 8, 14 credits), `cm.net.link.up=01070028` (prtcstns 7, 40
+Gb/s: Gen 3, two lanes), `net.link.up`. Linux: "lane bonding enabled",
+"current link speed 20.0 Gb/s", "current link width symmetric, dual
+lanes", "new host found, vendor=0x0 device=0x1", "xHCI98 xhcicm", both
+DMA paths activated, `thunderbolt0` LOWER_UP. `ipconfig`: "xHCI98
+Thunderbolt Networking", physical address EA-C6-81-87-4F-B0, 10.99.0.2.
+Ping from Windows to 10.99.0.1: 10 sent, 10 received. From Linux to
+10.99.0.2 (Windows Firewall off, as it refuses echo by default): 5 of 5
+at 56 bytes, 5 of 5 at 1472, 3 of 3 at 8000 (fragmented), no loss. The
+cable pulled and put back from the Windows side (`qom-set xd0 plugged`):
+`cm.net.down=00000101` (the peer gone), `cm.net.link.down`,
+`cm.net.rings.down`, `cm.xdp.end`; the discovery again to READY, the
+service up again once Linux's new interface was raised, ping 5 of 5. The
+adapter disabled in Windows (`netsh interface set interface ... admin=
+disabled`, the network driver's `Close`): `cm.net.wanted=00000003`, then
+`cm.net.link.down` at once, before `cm.net.down=00000100` (the Logout
+answered) and `cm.net.rings.down` - the link lowered at this host's own
+Logout (`3e9bfa34`, record 35 section 3.9); enabled again: `cm.net.open`,
+the service up after Linux's Login, ping 4 of 4.
+
+**Third leg, Windows 7 x86, firmware connection manager (`w45-tbnet4`,
+`13c8c41a`, `w7ar\`): pass after a re-plug.** `-Usb4 tb3ar` (Alpine
+Ridge, the firmware CM, `docs/XDOMAIN.md` section 7), the same steps.
+The CM log: `cm.net.pdo` (the PDO under the firmware CM, `3e9bfa34`),
+`cm.xdp.connected=01000001`, `cm.xdp.ready`, `cm.xdp.peer=01D6B004`,
+`cm.net.dsn=8E6C8485` (the NHI's Device Serial Number read from its
+extended capability), `cm.net.mac=9E924B20`, `net.cm.route=1`,
+`cm.net.open`. Linux had sent its UUID Requests from the moment the
+cable was up, during Windows' start, before this driver bound; they went
+unanswered ("failed to request UUID, retrying", then "discovery failed,
+stopping handshake"), and since the firmware CM's discovery sends no UUID
+Request of its own, Linux's handshake did not restart. A re-plug from the
+Windows side (`qom-set`): `cm.xdp.disconnected`, `cm.xdp.end=00000103`,
+`cm.xdp.connected`, Linux "new host found", the service:
+`cm.net.paths=01080801` (the approve answered), `cm.net.link.up=01070000`
+(the rate unknown under the firmware CM: 0), `net.link.up`. Ping from
+Windows 6 of 6; from Linux 4 of 4 at 56 bytes and 3 of 3 at 8000. Linux
+logged "failed to receive remote link status" (this host answered no
+Link State Status Request under the firmware CM) and ran the link single
+lane. The adapter disabled: `cm.net.link.down` at once,
+`cm.net.down=00000100`, `cm.net.teardown=01000001` (the teardown
+answered), `cm.net.rings.down`.
+
+**Fourth leg, Windows 7 x86, firmware connection manager, cold start
+(`w45-tbnet4`, `d0b5db85`, record 35 revision 10, `w7arb\`): pass with
+no re-plug.** As the third leg, the package of `d0b5db85` (gated x86 and
+amd64 builds passed, the host tests among them: `test_tbt_xdp` 190
+checks, `test_tbt_icm` 1051, `test_u4xd` 201, no failure; images in
+`hashes2.txt`), the cable in from power-on through the restart. Linux
+had given up again before this driver bound ("discovery failed,
+stopping handshake"); at the record's start `cm.xdp.connected`,
+`cm.xdp.uuid.nudge=01000001`, and Linux then logged "received XDomain
+UUID request", "restarting handshake", "new host found", "xHCI98
+xhcicm". This host's Logins went unanswered for a minute
+(`cm.net.login.none=01000042`) and went on at the idle rate; once
+Linux's interface was raised, `cm.net.paths=01080801`,
+`cm.net.link.up=01070000`, `net.link.up`. Ping from Windows 6 of 6, from
+Linux 4 of 4 at 56 bytes and 3 of 3 at 8000.
+
+**Fifth leg, Windows 7 x86 against Linux 7.0, software connection
+manager (`w45-tbnet4`, `d0b5db85`, `w7k\`): pass.** `usb4-emu`'s
+`w45-emuar` build (`a7239ea`, `qemu-system-x86_64.exe` SHA-256
+`83474795...`) on both ends; the far end Kubuntu 26.04.1 live, kernel
+7.0.0-30-generic (task 45-E.15's kernel), its stock `thunderbolt_net`,
+under WHPX. `-Usb4 adl`, the same steps. Linux: "login successful,
+enabling paths", "enabling E2E for TX ring 1", "enabling E2E for RX ring
+1 with TX HopID 1", "network traffic started" - Linux sending with E2E
+into this host's receive ring, which runs with E2E and the Transmit E2E
+HopID (`cm.net.rings=01018000`). The CM log: `cm.net.paths=0108080E`,
+`cm.net.link.up=01070028` (prtcstns 7, 40 Gb/s). Ping from Windows 6 of
+6 at 1472 bytes; from Linux 20 of 20 at 56 bytes (0.2 s apart), 10 of 10
+at 1472 and 10 of 10 at 30000 (21 IP fragments each way at MTU 1500),
+no loss. The emulator's trace: 6,038 E2E credit lines on the Windows
+end and 6,305 on the Linux end (`usb4_host_e2e`, "E2E grant ring 1
+credits ...").
+
+Owed: the 98 SE leg with `xhcinet.sys` (`net.cm.route` there says which
+of the query and the fallback code NTKERN carries), the three-field
+models line read on 98 SE, ME, 2000 and XP, the Titan Ridge leg, the
+Windows 10 x86 leg with `xhcinet6.sys`, the x64 legs (a throwaway
+certificate in the guest), and, on the `w45-emuar` Alpine Ridge model
+(its firmware's own UUID Request and code-8 acknowledgements), a leg of
+this host's software CM against a far firmware CM with
+`xd-fw-uuid-retry-ms=0`, for `test_u4xd`'s early UUID answer.
+
 ## 45-E.15 (the bench capture): an Alpine Ridge firmware connection manager and a USB4 software one, host to host under Linux (2026-10-31)
 
 The owner's captures of 2026-10-31, read for record 35 (task 45.59) and

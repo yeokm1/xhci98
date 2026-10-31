@@ -350,6 +350,7 @@ typedef struct SIDE {
     ULONG UpRx;
     BOOLEAN Drop;       /* lose what this side sends */
     ULONG DropOnce;     /* lose the first discovery packet of this type */
+    BOOLEAN DropNet;    /* lose its USB4NET packets: an interface down */
     BOOLEAN SendFail;   /* the ring refuses every send */
     BOOLEAN Dual;       /* report a dual Supported Link Width */
 } SIDE;
@@ -370,6 +371,10 @@ static LONG fSend(PVOID c, ULONG pdf, const ULONG *dw, ULONG words)
         dw[TBT_XDP_W_PROTO] == TbtXdpProtocolUuid.Dw[0] &&
         dw[TBT_XDP_W_TYPE] == s->DropOnce) {
         s->DropOnce = 0;
+        return TBT_OK;
+    }
+    if (s->DropNet && words > TBT_XDP_W_PROTO &&
+        dw[TBT_XDP_W_PROTO] != TbtXdpProtocolUuid.Dw[0]) {
         return TBT_OK;
     }
     if (s->Drop || s->Out.Count >= QMAX) {
@@ -577,6 +582,62 @@ static void test_firmware_pair(void)
     CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "firmware CM: straight to PROPS, READY");
     CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "service up");
     CHECK(gA.BondCalls == 0 && gA.Lane1Off == 0, "no link work");
+}
+
+/* Run-45 45-E.15: a far software CM (B) whose UUID Requests went
+ * unanswered before this host's driver bound has given up (ERROR); the
+ * firmware CM's record start (A) sends one UUID Request, which restarts
+ * B's handshake, and both reach READY and the service. */
+static void test_firmware_nudge(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+
+    uuids(&lo, &hi);
+    gNow = 300000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, FALSE, FALSE, &hi, NULL);
+    gA.Drop = TRUE;             /* A not bound yet: nothing of A's leaves */
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 400, 100);
+    CHECK_EQ(gB.Peer.State, TBT_XDP_S_ERROR, "B gave up");
+    gA.Drop = FALSE;
+    gA.DropOnce = TBT_XDP_UUID_REQ;     /* the first nudge lost */
+    TbtXdpPeerStart(&gA.Peer);  /* the connected event's record */
+    run(&gA, &gB, 200, 50);
+    CHECK(gA.Peer.NudgeTries >= 2 && gA.Peer.NudgeDone, "resent and answered");
+    CHECK_EQ(gB.Peer.State, TBT_XDP_S_READY, "B restarted by A's UUID Request");
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "the service up");
+}
+
+/* Record 35 section 4.1, revision 8: Logins unanswered for a minute go on
+ * every 5 s (a Linux peer answers only once its interface is up), and the
+ * service comes up when the peer at last answers. */
+static void test_login_idle(void)
+{
+    TBT_UUID lo;
+    TBT_UUID hi;
+    ULONG before;
+
+    uuids(&lo, &hi);
+    gNow = 400000;
+    sideInit(&gA, 1, TRUE, FALSE, &lo, &hi);
+    sideInit(&gB, 2, TRUE, FALSE, &hi, &lo);
+    gB.DropNet = TRUE;          /* the peer's interface down: no Login answered */
+    TbtXdpPeerStart(&gA.Peer);
+    TbtXdpPeerStart(&gB.Peer);
+    run(&gA, &gB, 1300, 100);   /* 130 s */
+    CHECK_EQ(gA.Peer.State, TBT_XDP_S_READY, "A READY");
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_LOGIN, "still logging in after two minutes");
+    CHECK(gA.Peer.LoginIdle, "at the idle rate");
+    before = gA.Peer.Counters.LoginsSent;
+    run(&gA, &gB, 100, 100);    /* 10 s */
+    CHECK(gA.Peer.Counters.LoginsSent - before >= 1 &&
+          gA.Peer.Counters.LoginsSent - before <= 3, "about one Login each 5 s");
+    gB.DropNet = FALSE;
+    run(&gA, &gB, 200, 100);
+    CHECK_EQ(gA.Peer.NetState, TBT_NET_S_UP, "up once the peer answers");
 }
 
 static void test_single_lane(void)
@@ -865,6 +926,8 @@ int main(void)
     test_mac_hop();
     test_software_pair();
     test_firmware_pair();
+    test_firmware_nudge();
+    test_login_idle();
     test_single_lane();
     test_no_answer();
     test_linux_shapes();

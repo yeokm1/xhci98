@@ -300,7 +300,7 @@ ULONG TbtNetChooseTxHop(BOOLEAN peerHasMax, ULONG peerMax, ULONG laneMaxOut,
 #define TBT_NET_S_LOGIN             1UL     /* our Login outstanding or due */
 #define TBT_NET_S_UP                2UL     /* both logins done, paths built */
 #define TBT_NET_S_LOGOUT            3UL     /* our Logout outstanding */
-#define TBT_NET_S_ABANDONED         4UL     /* a minute of Logins unanswered */
+#define TBT_NET_S_ABANDONED         4UL     /* no HopID to log in with */
 
 /* Timing (IDS 3.1 to 3.4.1, 5.1.1, 5.1.2; record 35 sections 3.5, 4.1). */
 #define TBT_XDP_TRY_MS              1000UL
@@ -310,6 +310,11 @@ ULONG TbtNetChooseTxHop(BOOLEAN peerHasMax, ULONG peerMax, ULONG laneMaxOut,
 #define TBT_NET_LOGIN_FAST_FOR_MS   2000UL
 #define TBT_NET_LOGIN_SLOW_MS       1000UL
 #define TBT_NET_LOGIN_FOR_MS        60000UL
+/* After TBT_NET_LOGIN_FOR_MS unanswered, a Login every 5 s for as long as
+ * the service is wanted: a Linux peer answers a Login only while its
+ * interface is up, which may come much later (run-45 45-E.15: Linux
+ * itself retries every 5.12 s and never stops). */
+#define TBT_NET_LOGIN_IDLE_MS       5000UL
 #define TBT_XDP_BOND_WAIT_MS        10000UL /* BOND_HIGH: the peer's Change Request */
 #define TBT_XDP_WIDTH_WAIT_MS       3000UL  /* BOND_HIGH: the width after it (IDS 3.4.1) */
 #define TBT_XDP_WIDTH_LOW_MS        500UL   /* BOND_LOW: record 22 section 5.2 */
@@ -427,6 +432,13 @@ typedef struct _TBT_XDP_PEER {
                                  * for when it ends */
     ULONG PendingHop;
     BOOLEAN LoginSlow;          /* a failure answered: the slow rate now */
+    BOOLEAN LoginIdle;          /* a minute unanswered: the idle rate now */
+    /* The firmware CM's UUID Request at a start (record 35 section 3.11):
+     * resent each TBT_XDP_TRY_MS, at most TBT_XDP_RESENDS times, until a
+     * UUID Response comes. */
+    BOOLEAN NudgeDone;
+    ULONG NudgeTries;
+    ULONG NudgeDueMs;
     ULONG PeerTlw;              /* BOND_HIGH: the TLW the peer asked for */
     ULONG NextRequestId;
     ULONG TxHop;
