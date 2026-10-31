@@ -1,8 +1,9 @@
 /*
  * atatest.c - ATATEST.EXE, the pass-through test client (roadmap-usb4.md
  * task 45.27). A Win32 console program, built with MSVC 6.0 (build.cmd),
- * for Windows 2000, XP, Vista and 7 (the 64-bit ones under WOW64). In no
- * package.
+ * for Windows 2000, XP, Vista and 7 (the 64-bit ones under WOW64), and
+ * ATATEST64.EXE, the same source built with WDK 7.1's amd64 compiler, a
+ * native caller on 64-bit Windows (task 45.52). In no package.
  *
  * It sends a disk the requests a SMART or ATA tool sends, through each
  * route Windows gives a program, and prints what came back, so a leg can
@@ -71,7 +72,16 @@
 #define AT_SENSE_LEN        32
 #define AT_DATA_LEN         512
 
-#pragma pack(push, 1)
+/* A pointer-sized integer: MSVC 6.0's headers have no ULONG_PTR. */
+#if defined(_WIN64)
+typedef unsigned __int64 AT_UPTR;
+#else
+typedef unsigned long AT_UPTR;
+#endif
+
+/* The pass-through headers in their natural layout, as ntddscsi.h
+ * declares them: 44 and 40 bytes in a 32-bit build (a 32-bit program,
+ * natively or under WOW64), 56 and 48 in a 64-bit one (ATATEST64). */
 typedef struct {
     USHORT Length;
     UCHAR  ScsiStatus;
@@ -84,7 +94,7 @@ typedef struct {
     UCHAR  Pad[3];
     ULONG  DataTransferLength;
     ULONG  TimeOutValue;
-    ULONG  DataBufferOffset;     /* ULONG_PTR: a 32-bit program */
+    AT_UPTR DataBufferOffset;
     ULONG  SenseInfoOffset;
     UCHAR  Cdb[16];
 } AT_SPT;
@@ -116,7 +126,7 @@ typedef struct {
     ULONG  DataTransferLength;
     ULONG  TimeOutValue;
     ULONG  ReservedAsUlong;
-    ULONG  DataBufferOffset;     /* ULONG_PTR: a 32-bit program */
+    AT_UPTR DataBufferOffset;
     UCHAR  PreviousTaskFile[8];
     UCHAR  CurrentTaskFile[8];
 } AT_APT;
@@ -131,11 +141,24 @@ typedef struct {
     ULONG  DataTransferLength;
     ULONG  TimeOutValue;
     ULONG  ReservedAsUlong;
-    PVOID  DataBuffer;           /* a 32-bit program */
+    PVOID  DataBuffer;
     UCHAR  PreviousTaskFile[8];
     UCHAR  CurrentTaskFile[8];
 } AT_APTD;
 
+#if defined(_WIN64)
+#define AT_SPT_SIZE 56
+#define AT_APT_SIZE 48
+#else
+#define AT_SPT_SIZE 44
+#define AT_APT_SIZE 40
+#endif
+typedef char at_spt_size[(sizeof(AT_SPT) == AT_SPT_SIZE) ? 1 : -1];
+typedef char at_sptd_size[(sizeof(AT_SPTD) == AT_SPT_SIZE) ? 1 : -1];
+typedef char at_apt_size[(sizeof(AT_APT) == AT_APT_SIZE) ? 1 : -1];
+typedef char at_aptd_size[(sizeof(AT_APTD) == AT_APT_SIZE) ? 1 : -1];
+
+#pragma pack(push, 1)
 typedef struct {
     UCHAR bFeaturesReg;
     UCHAR bSectorCountReg;
@@ -303,7 +326,7 @@ static void spt_run(HANDLE h, const char *tag, const char *what,
     b.spt.DataIn = dataIn;
     b.spt.DataTransferLength = length;
     b.spt.TimeOutValue = 10;
-    b.spt.DataBufferOffset = (ULONG)((PUCHAR)b.data - (PUCHAR)&b);
+    b.spt.DataBufferOffset = (AT_UPTR)((PUCHAR)b.data - (PUCHAR)&b);
     b.spt.SenseInfoOffset = (ULONG)((PUCHAR)b.sense - (PUCHAR)&b);
     memcpy(b.spt.Cdb, cdb, cdbLen);
     got = 0;
@@ -378,7 +401,7 @@ static void apt_run(HANDLE h, const char *tag, const char *what,
     b.apt.AtaFlags = flags;
     b.apt.DataTransferLength = length;
     b.apt.TimeOutValue = 10;
-    b.apt.DataBufferOffset = (ULONG)((PUCHAR)b.data - (PUCHAR)&b);
+    b.apt.DataBufferOffset = (AT_UPTR)((PUCHAR)b.data - (PUCHAR)&b);
     b.apt.CurrentTaskFile[1] = (UCHAR)(length != 0 ? 1 : 0);
     b.apt.CurrentTaskFile[5] = 0xA0;
     b.apt.CurrentTaskFile[6] = command;
@@ -410,7 +433,7 @@ static void apt_smart_run(HANDLE h)
     b.apt.AtaFlags = 1 | 2;
     b.apt.DataTransferLength = AT_DATA_LEN;
     b.apt.TimeOutValue = 10;
-    b.apt.DataBufferOffset = (ULONG)((PUCHAR)b.data - (PUCHAR)&b);
+    b.apt.DataBufferOffset = (AT_UPTR)((PUCHAR)b.data - (PUCHAR)&b);
     b.apt.CurrentTaskFile[0] = 0xD0;
     b.apt.CurrentTaskFile[1] = 1;
     b.apt.CurrentTaskFile[3] = 0x4F;
