@@ -512,9 +512,9 @@ goes on instead of stopping:
    step S3 takes the bit from the Spec's PORT_CS_19 table), the peer
    record of section 3.5 is made, and the discovery of section 3.5 runs.
 
-With `XhciCmNet` 0 the branch is today's: the port is UNSUPPORTED and the
-peer's requests are answered as section 3.6 says for a host offering no
-service. Everything else about the port - its hot-plug handling, its
+With `XhciCmNet` 0 the branch is today's: the port is UNSUPPORTED, no
+UUID Request is sent, and a peer's inter-domain requests are not
+answered (section 8.1, the owner's rule of 2026-10-31). Everything else about the port - its hot-plug handling, its
 lock, its teardown on CLd - stays record 22 section 7's, with section
 3.8's additions.
 
@@ -536,8 +536,8 @@ UUID; an existing record at the same link and depth, or its dual link,
 replaced, [linux] `icm_fr_xdomain_connected`), and the discovery of
 section 3.5 starts at its properties step, the UUIDs being known. A
 disconnected event ends the peer (section 3.8). With `XhciCmNet` 0 the
-events are logged as today and nothing is approved; the peer's
-Properties Read Requests are still answered (section 3.6).
+events are logged as today, nothing is approved, and a peer's
+inter-domain requests are not answered (section 8.1).
 
 The firmware builds the paths itself on approve (section 5.2); the
 discovery and login packets still go over ring 0 as PDF 6 and 7 frames
@@ -575,9 +575,12 @@ with IDS 1.2's DW rule that is DW 0's low byte first.
 
 ### 3.6 Answering the peer
 
-Requests are answered whatever this driver's own machine is doing, as
-IDS chapter 3 requires and as Linux answers ([linux] `xdomain.c`
-`tb_xdp_handle_request`):
+With `XhciCmNet` 1, requests are answered whatever this driver's own
+machine is doing, as IDS chapter 3 requires and as Linux answers ([linux]
+`xdomain.c` `tb_xdp_handle_request`); with `XhciCmNet` 0 a PDF 6 frame is
+counted (`cm.xdp.ignored`) and dropped unanswered, so the peer sees this
+port as it does today, a host that never answers, and gives up after its
+own retries (IDS 3.1):
 
 - **UUID Request** (type 12 or 1): the UUID Response with this domain's
   UUID and, to type 12 only, the request's route as the source route (IDS
@@ -647,7 +650,7 @@ the UPG 1 hot-plug event on lane 0, record 22 section 7.1, IDS 3.7);
 the disconnected event under the firmware CM; a Properties Changed
 Notification from a different UUID; the NHI's stop, surprise removal,
 removal or D3 (record 21 section 5.6 and record 22 section 11, before the
-rings stop); and `XhciCmNet` going to 0 at a restart. On the unplug the
+rings stop); and a start of the NHI with `XhciCmNet` 0 (section 8.1). On the unplug the
 peer is gone, so its paths and rings are torn down without a logout; on
 every other end a logout is sent first where the peer is still there
 (section 4.4). Under the software CM the port then clears its
@@ -1184,14 +1187,30 @@ row and a `tuning.md` row in the connection manager's table:
 
 | Value | Default | Range | Meaning |
 |---|---|---|---|
-| `XhciCmNet` | 0 | 0 to 1 | 1 runs the inter-domain discovery as section 3 says, publishes USB4NET, logs in and reports the network PDO; 0 leaves an inter-domain port as today (UNSUPPORTED under the software CM, the events logged under the firmware CM) while still answering a peer's discovery requests for a host with no service. The installer's networking box writes 1 (section 9) |
+| `XhciCmNet` | 0 | 0 to 1 | the gate of everything in this record (the owner, 2026-10-31): 1 runs the inter-domain discovery as section 3 says, publishes USB4NET, logs in, builds the DMA paths and reports the network PDO; 0 answers no inter-domain request, sends none, advertises no host-to-host service, builds no DMA path to another host and reports no network PDO: a peer host is treated as today (UNSUPPORTED under the software CM, the events logged and nothing approved under the firmware CM). The installer's networking box and `/tbnet` write 1 (section 9) |
 | `XhciCmNetPollMs` | 1 | 1 to 100 | the receive poll's period in ms while a service is up, rounded up to the clock tick (section 5.4) |
 | `XhciCmNetRxFrames` | 128 | 16 to 1024 | receive descriptors (4 KiB each) a service |
 | `XhciCmNetTxFrames` | 128 | 16 to 1024 | transmit descriptors a service |
 | `XhciCmNetE2E` | 1 | 0 to 1 | advertise and use end-to-end flow control (section 5.3); 0 for a peer whose host interface mishandles it |
 
 A value outside its range is refused and the default stands, logged
-(`cm.reg.range`), as for every `XhciCm*` value. `XhciCmLaneBonding`,
+(`cm.reg.range`), as for every `XhciCm*` value.
+
+**When `XhciCmNet` takes effect** (the owner's question of 2026-10-31).
+Like every `XhciCm*` value it is read once, at the NHI's start (record 21
+section 8), never live: a change made by the installer, `XHCIINST /set`
+or a hand edit applies at the controller's next start (a restart, the
+NHI disabled and enabled, an update of `xhcicm.sys`). A link that is up
+when the value is set to 0 therefore stays up, its service running,
+until that start; at that start the stop of the old instance ends the
+service in section 3.8's order (a logout, the paths and rings torn down,
+the network adapter's link down and the network PDO removed with the
+NHI's other children), and the new instance, reading 0, answers no
+request, so the peer sees the cable as a port that never answers. Read
+live, the value would let a registry write tear DMA paths down outside
+the PnP order section 6.4's teardown relies on; the next start is the
+one point where all of that order already runs. Set from 0 to 1, the
+same start brings the network PDO and the discovery up. `XhciCmLaneBonding`,
 `XhciCmApproveTimeoutMs` and `XhciCmRingInterrupt` keep their meanings
 and now also govern sections 3.5, 5.2 and 5.4.
 
@@ -1277,10 +1296,17 @@ from it:
   the other INFs are (NT: `SetupCopyOEMInf`, and
   `UpdateDriverForPlugAndPlayDevices` when `XHCICM\TBNET` is present; 98
   SE and ME: the INF in the local copy `DevicePath` names, record 23
-  section 6.2), and `XhciCmNet` 1 written machine-wide in `Services\USB`
-  (record 26 section 5.5's changed-value rule), so the CM reports the
-  network PDO at its next start; the Summary says the network adapter
-  appears once the connection manager restarts or the computer does.
+  section 6.2), and `XhciCmNet` 1 written into each controller's own key
+  (the driver key of every NHI `xhcicm.inf` is installed on, the owner's
+  rule of 2026-10-31), after the INF's install so its no-overwrite 0 does
+  not stand; where no NHI is present yet (the staged-only case of record
+  26 section 5.5), into `Services\USB`, the machine-wide key the CM reads
+  first, since no controller key exists to write. It takes effect at the
+  controller's next start (section 8.1); the Summary says the network
+  adapter appears once the connection manager restarts, which the run
+  brings about for a present NHI on NT by the restart of the device it
+  already does for an updated driver, and otherwise at the computer's
+  restart.
 - **Unticked on a new install**: nothing of networking staged, `XhciCmNet`
   left at the INF's 0.
 - **Unticked on an update over an install that has it** (`xhcinet`
@@ -1459,7 +1485,7 @@ no frame was lost at the default poll on an idle link.
 | XP x64 or 7 x64 | yes | - | the x64 NDIS 5 image, test-signed in the guest (the brief's MakeCert route) |
 | 8.1 or 10 x64 | yes | - | the NDIS 6 image, catalog, test-signing |
 | 98 SE to 2000 | one leg | - | two guests of this project's, no Linux: this driver against itself |
-| 2000 | one leg | - | `XhciCmNet` 0: the port stays UNSUPPORTED and Linux sees a host with no service |
+| 2000 | one leg | - | `XhciCmNet` 0: the port stays UNSUPPORTED, no request answered, Linux gives up its discovery, no DMA path |
 
 ### 11.4 The bench (the owner's)
 
