@@ -7664,7 +7664,7 @@ The owner's screenshots and their index:
 - Both are in the self-test (routing, and each text in the help
   window), so what is owed is the reading through the installer.
 
-## 45.59 (legs, continued): 98 SE, ME, 2000 and XP, and the rings' memory on 2000 and XP (2026-11-01)
+## 45.59 (legs, continued): x86 networking legs, the rings' memory on 2000 and XP, and the early UUID answer (2026-11-01)
 
 Worker `w45-tbnet5`, branch `w45-tbnet5` from `3.4.0.0` `5fd8b6fd`.
 Development host A. The legs `w45-tbnet4` left owed (section "45.59 S5
@@ -7715,8 +7715,9 @@ once (Code 22; `cm.net.pnp` 5 then 4, a query-stop and a stop,
 `cm.net.close`, the link down at this host's Logout, `cm.net.rings.down`);
 cleared again: `net.cm.route=00000001`, the service up, ping 5 of 5
 (Linux's first pings went unanswered while 98 SE waited out DHCP).
-Device Manager shows the adapter's General and Driver pages; its MTU
-is in the Network control panel's Advanced page.
+Device Manager shows the adapter's General and Driver pages (the
+Network control panel's Advanced page, where 98 SE lists the MTU, was
+not opened).
 
 **Windows ME (`5fd8b6fd`): pass.** The same steps. The wizard found
 `D:\N\XHCINET.INF` with no disk prompt. The driver key
@@ -7767,6 +7768,97 @@ The three-field `[Manufacturer]` line is therefore read on 98 SE, ME,
 2000 and XP, each installing `xhcinet.sys` (98 SE and ME through
 `Net.Dev`, 2000 and XP under service `xhcinet`), as well as on 7
 (section "45.59 S5 (legs)").
+
+**Windows 10 x86 (22H2, 19045), `xhcinet6.sys`: pass.** The installer
+with the edited `xhcicm.inf`, then `pnputil -i -a xhcinet.inf` (the
+gated `aa3bf7dc` images, `hashes-aa3bf7dc-x86.txt`): "Successfully
+installed the driver"; `Enum\XHCICM\TBNET\...` `Service` `xhcinet`,
+`ImagePath` `\SystemRoot\System32\drivers\xhcinet6.sys` - 10 took the
+`NTx86.6.2` models of the same three-field line. The connection manager
+on this guest stayed the `5fd8b6fd` release image (the qemu image copied
+over it was not the one loaded: `driverquery` gave its link date), so
+there is no connection-manager log for this leg. Ping from 10 to Linux
+6 of 6; from Linux 4 of 4 at 56 bytes, 3 of 3 at 1472 with DF and 3 of
+3 at 8000. `XhciNetMtu` "9000" in the adapter's driver key, the adapter
+disabled and enabled with `netsh` (the network driver's `Close` and
+`Open`; Linux "login successful", "network traffic started" again):
+`netsh interface ipv4 show subinterfaces` gave MTU 9000; with Linux's
+MTU 9000 too, ping from Linux 4 of 4 at 8972 bytes with DF (9000-byte
+packets whole) and 3 of 3 at 30000, from 10 4 of 4 at 8972 with
+`-f`. The cable out and back: the service again, ping 4 of 4 and 3 of 3
+at 8972 with DF.
+
+**Windows 7 x86, Titan Ridge, the firmware connection manager
+(`aa3bf7dc`): pass.** `-Usb4 tb3tr`, the same kit (`pnputil` for both
+INFs, the gated qemu image of `xhcicm.sys`), one restart. The log:
+`cm.net.dsn`, the ICM's ready, `cm.xdp.connected=00000001`,
+`cm.xdp.uuid.nudge=01000001`, `cm.xdp.ready`, `cm.xdp.peer=01D6B004`,
+`net.cm.route=00000001`, `cm.net.paths=01080801` (the Titan Ridge
+approve answered), `cm.net.link.up=01070000`, `net.link.up`. Linux:
+"new host found", "current link width symmetric, single lane", E2E on
+both rings. Ping from 7 6 of 6; from Linux 4 of 4 and 3 of 3 at 8000.
+The adapter disabled (`wmic ... call disable`): `cm.net.link.down` at
+once, `cm.net.down=00000100`, `cm.net.teardown=00000001` (the staged
+teardown answered), `cm.net.rings.down`; enabled again: the service up,
+ping 4 of 4. The cable out and back: `cm.xdp.disconnected`,
+`cm.xdp.end=00000103`, `cm.xdp.connected`, the nudge, the service, ping
+4 of 4.
+
+**Windows 7 x86, this host's software connection manager against a far
+Alpine Ridge firmware connection manager: fixed, then pass.** The far end
+the same Kubuntu with `usb4-host ...,profile=tb3-alpine-ridge` (Linux
+"using firmware connection manager", NHI `8086:15bf`), first with
+`xd-fw-uuid-retry-ms=0` (the firmware's one UUID Request at link-up and
+none after, the strict case of record 35 section 2.7 point 6); this host
+`-Usb4 adl` (an overlay copied from the Titan Ridge leg's, `w7ar0\`).
+
+- At the cold start the firmware's request came before this driver ran,
+  and with no retry its host never got the connected event: Linux
+  logged "received XDomain properties request" for each of this host's
+  Properties Reads and did not answer them (`cm.xdp.fail`). That is the
+  case the firmware's own retry covers, below.
+- The cable out and back with this driver running (`aa3bf7dc`):
+  `cm.xdp.uuid.early=00000100` (the answer sent at once), yet no UUID
+  Response reached the far firmware and its host still got no connected
+  event. The emulator's trace with every `usb4_*` event (`w7ar0\
+  trace-a.log`, line 6863): the request on ring 0 with the hot
+  plug event, this host's UUID Response on ring 0's transmit ring to
+  route 1, then at once a notification ERR_LOCK (15) for adapter 1 from
+  the host router: the answer went out while lane 0 was still Locked
+  (this driver clears that Lock only when its check connects the port,
+  milliseconds later) and was refused, though the ring took it.
+- `d0813ef5` holds the answer until this driver has cleared lane 0's
+  Lock and a read of ADP_CS_4 shows it clear, retried at the idle poll
+  (record 35 revision 12, section 3.11); the host tests' fabric now
+  refuses an inter-domain packet through a Locked adapter as the emulator
+  does, and `test_early_uuid` takes the request at the ring wake before
+  the port's check (it failed without the change: four checks).
+- On a scratch build of the first form of the change and then on the
+  gated `d0813ef5` qemu image (`71d4bb64...`, `hashes-d0813ef5-x86.txt`):
+  the cable out and back, `cm.xdp.uuid.early=0000010A` (sent once the
+  port was unlocked), `cm.xdp.ready`, `cm.xdp.peer=01D6B004`,
+  `cm.net.paths=0108080E`, `cm.net.link.up=01070014` (20 Gb/s: the
+  firmware offers no bonding), `net.link.up`; Linux "new host found",
+  "login successful", E2E on both rings, "network traffic started". Ping
+  from 7 4 of 4 and 6 of 6; from Linux 4 of 4 and 3 of 3 at 8000.
+- The far end restarted with the model's defaults (the firmware's
+  request repeated every second while unanswered), this host cold-started
+  with the cable in, no re-plug (`d0813ef5`): `cm.xdp.ready`,
+  `cm.net.link.up=01070014`, `net.link.up`; Linux "new host found",
+  "network traffic started"; ping 4 of 4 each way.
+
+Builds on `d0813ef5`: the gated x86 (`build-driver.cmd all`, the host
+tests among them: `test_u4xd` 216 checks, `test_u4cm` 1918, no failure)
+and amd64 (`all -amd64`) builds passed.
+
+Owed: the x64 legs (Windows 7 x64 with `xhcinet.sys` x64 and 10 x64
+with `xhcinet6.sys` x64: either signed in the guest with a throwaway
+certificate, catalogs included on 10 x64 - the route this task's brief
+names - or record 35 section 15 Q11 (a)'s kit made by the packager and
+signed with the project's test key by the owner), and with them Driver Verifier on
+`xhcinet6.sys` and `xhcicm.sys` (task 45.63's head start); 98 SE and ME
+on the `d0813ef5` images (their legs above ran on `5fd8b6fd`, before the
+two connection-manager changes).
 
 ## 45.final: the release-notes texts the tasks handed over
 
