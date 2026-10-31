@@ -2328,6 +2328,7 @@ static int s98_check_package(void)
             return refuse("a file stor98.inf names is missing or empty: ",
                           path);
         }
+        pkg_mark(name);
         if (n > 4 && inst_eq(name + n - 4, ".sys")) {
             buf = read_file(path, &size);
             if (buf == NULL ||
@@ -19533,6 +19534,7 @@ static int vxd_check_package(const VXDDESC *d)
     if (buf == NULL) {
         return refuse("a file of the package is unreadable: ", path);
     }
+    pkg_mark(d->Name);
     _snprintf(stamp, sizeof(stamp) - 1, "%s %s", d->Name, XHCIINST_VERSION);
     stamp[sizeof(stamp) - 1] = '\0';
     sl = strlen(stamp);
@@ -20660,6 +20662,7 @@ static int pfwsys_check_package(void)
         !file_exists(path, NULL)) {
         return 1;
     }
+    pkg_mark(INST_PFWSYS_FILE);
     buf = read_file(path, &size);
     if (buf == NULL) {
         return refuse("a file of the package is unreadable: ", path);
