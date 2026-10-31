@@ -6864,3 +6864,17 @@ the version bump.
   xhcinet.sys. It has no offloads and its default MTU is 1500, settable up
   to 65522 in the adapter's Advanced page. It is only present where
   xHCI98's connection manager drives the Thunderbolt controller."
+- 45.53 and 45.55 (8ab07b3e): "SUPERSEDES the 45.53 and 45.55 text above.
+  A Thunderbolt or USB4 dock or device whose own switch has more than one
+  downstream port, plugged in while Windows 2000 or XP runs, now gets
+  every port placed when its switch ports request their own interrupt, as
+  real enclosures' ports do; before, the second port stopped with Code 12
+  and nothing behind it started. The first time an NVMe enclosure is
+  plugged in on Windows 2000 or XP, two Found New Hardware wizards appear:
+  the first finds no driver (finish it either way), and after the
+  safe-removal service restarts the enclosure's bridges a second one
+  offers 'Stor98 Storage Controller for NVMe SSDs'; follow it to the end.
+  On Windows 98 SE and ME the installer installs one controller per run:
+  if it reports a controller 'not reached in this run', restart Windows
+  and run it again, or the Thunderbolt/USB4 router has no driver and no
+  device behind it is found."
