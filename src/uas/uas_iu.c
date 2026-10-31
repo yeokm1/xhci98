@@ -948,3 +948,696 @@ ULONG UasWakeDecide(ULONG busKnown, ULONG withdrawOk, ULONG declareTried,
     }
     return (epoch == verified) ? UAS_WAKE_SAME : UAS_WAKE_CHECK;
 }
+
+/* ------------------------------------------------------------------ */
+/* Task 45.52: pass-through and SMART (design record 13 section 16)   */
+/* ------------------------------------------------------------------ */
+
+static ULONG uasRd16(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8);
+}
+
+static ULONG uasRd32(const UCHAR *p)
+{
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+static VOID uasWr32(PUCHAR p, ULONG v)
+{
+    p[0] = (UCHAR)v;
+    p[1] = (UCHAR)(v >> 8);
+    p[2] = (UCHAR)(v >> 16);
+    p[3] = (UCHAR)(v >> 24);
+}
+
+static VOID uasBytes(PUCHAR dst, const UCHAR *src, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = src[i];
+    }
+}
+
+static VOID uasClear(PUCHAR dst, ULONG n)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        dst[i] = 0;
+    }
+}
+
+/* offset + length lies within limit, with no sum formed first. */
+static ULONG uasFits(ULONG offset, ULONG length, ULONG limit)
+{
+    return offset <= limit && length <= limit - offset;
+}
+
+ULONG UasPtHeaderSize(ULONG kind, ULONG layout)
+{
+    if (layout != UAS_PT_LAYOUT_32 && layout != UAS_PT_LAYOUT_64) {
+        return 0;
+    }
+    switch (kind) {
+    case UAS_PT_SCSI:
+    case UAS_PT_SCSI_DIRECT:
+        return (layout == UAS_PT_LAYOUT_64) ? 56 : 44;
+    case UAS_PT_ATA:
+    case UAS_PT_ATA_DIRECT:
+        return (layout == UAS_PT_LAYOUT_64) ? 48 : 40;
+    default:
+        return 0;
+    }
+}
+
+ULONG UasPtTimeout(ULONG seconds)
+{
+    if (seconds == 0) {
+        return UAS_PT_TIMEOUT_DEFAULT;
+    }
+    return (seconds > UAS_PT_TIMEOUT_MAX) ? UAS_PT_TIMEOUT_MAX : seconds;
+}
+
+ULONG UasPtMultiTarget(UCHAR opcode)
+{
+    /* COPY, COMPARE, COPY AND VERIFY, and every service action of 83h
+     * (EXTENDED COPY, POPULATE TOKEN, WRITE USING TOKEN): SPC-4. */
+    return opcode == 0x18 || opcode == 0x39 || opcode == 0x3A ||
+           opcode == 0x83;
+}
+
+/* A 28-bit command whose count ACS marks not applicable and which moves
+ * one 512-byte block: IDENTIFY DEVICE, IDENTIFY PACKET DEVICE, SMART READ
+ * DATA and READ ATTRIBUTE THRESHOLDS. */
+static ULONG uasAtaCountNa(const UCHAR *cur)
+{
+    return cur[6] == 0xEC || cur[6] == 0xA1 ||
+           (cur[6] == 0xB0 && (cur[0] == 0xD0 || cur[0] == 0xD1));
+}
+
+/*
+ * SAT-3, ATA PASS-THROUGH (16): byte 1 PROTOCOL (4:1) and EXTEND (0);
+ * byte 2 CK_COND (5), T_DIR (3), BYTE_BLOCK (2), T_LENGTH (1:0); then
+ * FEATURES, COUNT, LBA in high/low byte pairs, DEVICE, COMMAND, CONTROL.
+ * With data, T_LENGTH 2 and BYTE_BLOCK 1: the length is the count field
+ * in 512-byte blocks, so the count must agree with the buffer.
+ */
+ULONG UasAtaCdb(ULONG flags, const UCHAR *prev, const UCHAR *cur,
+                ULONG length, ULONG ckCond, PUCHAR cdb)
+{
+    ULONG ext;
+    ULONG data;
+    ULONG count;
+    ULONG protocol;
+
+    ext = (flags & UAS_ATA_48BIT) != 0;
+    data = length != 0;
+    count = (ULONG)cur[1] | (ext ? ((ULONG)prev[1] << 8) : 0);
+    if (data) {
+        if ((length & 511) != 0) {
+            return UAS_PT_INVALID;
+        }
+        if (!ext && uasAtaCountNa(cur)) {
+            /* One block, whatever the count register held. */
+            if (length != 512) {
+                return UAS_PT_INVALID;
+            }
+            count = 1;
+        } else if (count * 512UL != length) {
+            return UAS_PT_INVALID;
+        }
+        if ((flags & UAS_ATA_USE_DMA) != 0) {
+            protocol = 6;
+        } else {
+            protocol = ((flags & UAS_ATA_DATA_IN) != 0) ? 4 : 5;
+        }
+    } else {
+        protocol = 3;
+    }
+    uasClear(cdb, 16);
+    cdb[0] = 0x85;
+    cdb[1] = (UCHAR)((protocol << 1) | (ext ? 1 : 0));
+    cdb[2] = (UCHAR)(((!data && ckCond) ? 0x20 : 0) |
+                     (((flags & UAS_ATA_DATA_IN) != 0 && data) ? 0x08 : 0) |
+                     (data ? 0x06 : 0));
+    cdb[3] = ext ? prev[0] : 0;
+    cdb[4] = cur[0];
+    cdb[5] = (UCHAR)(ext ? (count >> 8) : 0);
+    cdb[6] = (UCHAR)count;
+    cdb[7] = ext ? prev[2] : 0;
+    cdb[8] = cur[2];
+    cdb[9] = ext ? prev[3] : 0;
+    cdb[10] = cur[3];
+    cdb[11] = ext ? prev[4] : 0;
+    cdb[12] = cur[4];
+    cdb[13] = cur[5];
+    cdb[14] = cur[6];
+    return UAS_PT_OK;
+}
+
+ULONG UasPtPlan(ULONG kind, ULONG layout, const UCHAR *buf, ULONG inLength,
+                ULONG outLength, ULONG maxTransfer, PUAS_PT_PLAN plan)
+{
+    ULONG hs;
+    ULONG at;
+    ULONG length;
+    ULONG limit;
+    ULONG dataIn;
+    ULONG flags;
+    ULONG direct;
+    ULONG timeout;
+
+    uasClear((PUCHAR)plan, sizeof(*plan));
+    hs = UasPtHeaderSize(kind, layout);
+    if (hs == 0 || inLength < hs || uasRd16(buf) != hs) {
+        return UAS_PT_INVALID;
+    }
+    if (outLength < hs) {
+        return UAS_PT_TOO_SMALL;
+    }
+    plan->Kind = kind;
+    plan->Layout = layout;
+    plan->HeaderSize = hs;
+    at = (layout == UAS_PT_LAYOUT_64) ? 24 : 20;
+    plan->DataPtrLo = uasRd32(buf + at);
+    plan->DataPtrHi = (layout == UAS_PT_LAYOUT_64) ? uasRd32(buf + at + 4)
+                                                   : 0;
+    direct = kind == UAS_PT_SCSI_DIRECT || kind == UAS_PT_ATA_DIRECT;
+
+    if (kind == UAS_PT_SCSI || kind == UAS_PT_SCSI_DIRECT) {
+        plan->CdbLength = buf[6];
+        plan->SenseLength = buf[7];
+        dataIn = buf[8];
+        length = uasRd32(buf + 12);
+        timeout = uasRd32(buf + 16);
+        plan->SenseOffset = uasRd32(buf + ((layout == UAS_PT_LAYOUT_64) ? 32
+                                                                       : 24));
+        if (plan->CdbLength < 1 || plan->CdbLength > 16 || dataIn > 2 ||
+            plan->SenseLength > UAS_PT_SENSE_MAX || length > maxTransfer) {
+            return UAS_PT_INVALID;
+        }
+        uasBytes(plan->Cdb, buf + ((layout == UAS_PT_LAYOUT_64) ? 36 : 28),
+                 plan->CdbLength);
+        if (UasPtMultiTarget(plan->Cdb[0])) {
+            return UAS_PT_INVALID;
+        }
+        if (length == 0) {
+            plan->Dir = UAS_DIR_NONE;
+        } else if (dataIn == 1) {
+            plan->Dir = UAS_DIR_IN;
+        } else if (dataIn == 0) {
+            plan->Dir = UAS_DIR_OUT;
+        } else {
+            plan->Dir = UasCdbDataDirection(plan->Cdb, plan->CdbLength);
+            if (plan->Dir == UAS_DIR_NONE) {
+                return UAS_PT_INVALID;
+            }
+        }
+        /* A SAT CDB is whole or refused: the IU pads a short one with
+         * zeros into a command the device would run. Asking for the
+         * registers with data is refused (16.8), at any length. */
+        if ((plan->Cdb[0] == 0x85 && plan->CdbLength != 16) ||
+            (plan->Cdb[0] == 0xA1 && plan->CdbLength < 12)) {
+            return UAS_PT_INVALID;
+        }
+        if (length != 0 && (plan->Cdb[2] & 0x20) != 0 &&
+            (plan->Cdb[0] == 0x85 || plan->Cdb[0] == 0xA1)) {
+            return UAS_PT_INVALID;
+        }
+    } else {
+        flags = uasRd16(buf + 2);
+        length = uasRd32(buf + 8);
+        timeout = uasRd32(buf + 12);
+        uasBytes(plan->Prev, buf + ((layout == UAS_PT_LAYOUT_64) ? 32 : 24),
+                 8);
+        uasBytes(plan->Cur, buf + ((layout == UAS_PT_LAYOUT_64) ? 40 : 32), 8);
+        if ((flags & ~0x1FUL) != 0 ||
+            ((flags & UAS_ATA_DATA_IN) != 0 &&
+             (flags & UAS_ATA_DATA_OUT) != 0) ||
+            length > maxTransfer ||
+            (length != 0) !=
+                ((flags & (UAS_ATA_DATA_IN | UAS_ATA_DATA_OUT)) != 0)) {
+            return UAS_PT_INVALID;
+        }
+        if (UasAtaCdb(flags, plan->Prev, plan->Cur, length, 1, plan->Cdb) !=
+            UAS_PT_OK) {
+            return UAS_PT_INVALID;
+        }
+        plan->CdbLength = 16;
+        plan->Extend = (flags & UAS_ATA_48BIT) != 0;
+        if (length == 0) {
+            plan->Dir = UAS_DIR_NONE;
+        } else {
+            plan->Dir = ((flags & UAS_ATA_DATA_IN) != 0) ? UAS_DIR_IN
+                                                          : UAS_DIR_OUT;
+        }
+    }
+    plan->DataLength = length;
+    plan->Timeout = UasPtTimeout(timeout);
+
+    if (length != 0) {
+        if (direct) {
+            if (plan->DataPtrLo == 0 && plan->DataPtrHi == 0) {
+                return UAS_PT_INVALID;
+            }
+        } else {
+            if (plan->DataPtrHi != 0) {
+                return UAS_PT_INVALID;
+            }
+            plan->DataOffset = plan->DataPtrLo;
+            limit = (plan->Dir == UAS_DIR_IN) ? outLength : inLength;
+            if (plan->DataOffset < hs ||
+                !uasFits(plan->DataOffset, length, limit)) {
+                return UAS_PT_INVALID;
+            }
+        }
+    }
+    if (plan->SenseLength != 0) {
+        if (plan->SenseOffset < hs ||
+            !uasFits(plan->SenseOffset, plan->SenseLength, outLength)) {
+            return UAS_PT_INVALID;
+        }
+        if (length != 0 && !direct &&
+            plan->SenseOffset < plan->DataOffset + length &&
+            plan->DataOffset < plan->SenseOffset + plan->SenseLength) {
+            return UAS_PT_INVALID;
+        }
+    }
+    return UAS_PT_OK;
+}
+
+static ULONG uasSenseKey(const UCHAR *sense, ULONG length)
+{
+    if (length >= 3 && (sense[0] & 0x7E) == 0x70) {
+        return sense[2] & 0x0F;
+    }
+    if (length >= 2 && (sense[0] & 0x7E) == 0x72) {
+        return sense[1] & 0x0F;
+    }
+    return 0;
+}
+
+ULONG UasAtaRegsFromSense(const UCHAR *sense, ULONG length, PUCHAR prev,
+                          PUCHAR cur)
+{
+    ULONG end;
+    ULONG p;
+    ULONG dlen;
+    const UCHAR *d;
+
+    uasClear(prev, 8);
+    uasClear(cur, 8);
+    if (sense == NULL || length < 8) {
+        return UAS_ATAREG_NONE;
+    }
+    if ((sense[0] & 0x7F) == 0x72) {
+        /* The ATA Status Return descriptor (SAT-3): EXTEND, ERROR, then
+         * COUNT and LBA as high/low pairs, DEVICE, STATUS. */
+        end = 8 + (ULONG)sense[7];
+        if (end > length) {
+            end = length;
+        }
+        for (p = 8; p + 2 <= end; p += 2 + dlen) {
+            dlen = sense[p + 1];
+            if (sense[p] == 0x09 && dlen >= 12 && p + 14 <= end) {
+                d = sense + p;
+                cur[0] = d[3];
+                cur[1] = d[5];
+                cur[2] = d[7];
+                cur[3] = d[9];
+                cur[4] = d[11];
+                cur[5] = d[12];
+                cur[6] = d[13];
+                if ((d[2] & 1) != 0) {
+                    prev[1] = d[4];
+                    prev[2] = d[6];
+                    prev[3] = d[8];
+                    prev[4] = d[10];
+                }
+                return UAS_ATAREG_OK;
+            }
+        }
+        return UAS_ATAREG_NONE;
+    }
+    if ((sense[0] & 0x7F) == 0x70) {
+        /* Fixed format (SAT-3): ERROR, STATUS, DEVICE, COUNT 7:0 in
+         * INFORMATION; EXTEND, the upper-non-zero flags and LBA 23:0 in
+         * COMMAND-SPECIFIC INFORMATION; ASC/ASCQ 00h/1Dh. */
+        if (length < 14 || sense[12] != 0x00 || sense[13] != 0x1D) {
+            return UAS_ATAREG_NONE;
+        }
+        cur[0] = sense[3];
+        cur[6] = sense[4];
+        cur[5] = sense[5];
+        cur[1] = sense[6];
+        cur[2] = sense[9];
+        cur[3] = sense[10];
+        cur[4] = sense[11];
+        return ((sense[8] & 0x60) != 0) ? UAS_ATAREG_PARTIAL : UAS_ATAREG_OK;
+    }
+    return UAS_ATAREG_NONE;
+}
+
+/* A request the drive answered: done, short, or ended with a SCSI status. */
+static ULONG uasAnswered(ULONG srbStatus, ULONG scsiStatus)
+{
+    if (srbStatus == UAS_SRB_SUCCESS || srbStatus == UAS_SRB_DATA_OVERRUN) {
+        return 1;
+    }
+    return (srbStatus == UAS_SRB_ERROR || srbStatus == UAS_SRB_BUSY) &&
+           scsiStatus != UAS_SCSI_GOOD;
+}
+
+static ULONG uasTransportResult(ULONG srbStatus)
+{
+    switch (srbStatus) {
+    case UAS_SRB_TIMEOUT:
+        return UAS_PTR_TIMEOUT;
+    case UAS_SRB_NO_DEVICE:
+        return UAS_PTR_NO_DEVICE;
+    case UAS_SRB_BUSY:
+        return UAS_PTR_BUSY;
+    case UAS_SRB_INVALID_REQUEST:
+        return UAS_PTR_INVALID;
+    default:
+        return UAS_PTR_IO_ERROR;
+    }
+}
+
+static ULONG uasBusyStatus(ULONG scsiStatus)
+{
+    return scsiStatus == UAS_SCSI_BUSY || scsiStatus == UAS_SCSI_TASK_SET_FULL;
+}
+
+ULONG UasPtResult(const UAS_PT_PLAN *plan, PUCHAR buf, ULONG outLength,
+                  ULONG srbStatus, ULONG scsiStatus, ULONG moved,
+                  const UCHAR *sense, ULONG senseLength,
+                  PULONG information)
+{
+    ULONG info;
+    ULONG sl;
+    ULONG r;
+    ULONG at;
+    UCHAR prev[8];
+    UCHAR cur[8];
+
+    *information = 0;
+    if (!uasAnswered(srbStatus, scsiStatus)) {
+        return uasTransportResult(srbStatus);
+    }
+    if (moved > plan->DataLength) {
+        moved = plan->DataLength;
+    }
+    if (sense == NULL) {
+        senseLength = 0;
+    }
+    info = plan->HeaderSize;
+    if (plan->Kind == UAS_PT_SCSI || plan->Kind == UAS_PT_SCSI_DIRECT) {
+        sl = (senseLength < plan->SenseLength) ? senseLength
+                                               : plan->SenseLength;
+        buf[2] = (UCHAR)scsiStatus;
+        if (sl != 0) {
+            uasBytes(buf + plan->SenseOffset, sense, sl);
+            if (plan->SenseOffset + sl > info) {
+                info = plan->SenseOffset + sl;
+            }
+        }
+        buf[7] = (UCHAR)sl;
+        uasWr32(buf + 12, moved);
+        if (plan->Kind == UAS_PT_SCSI && plan->Dir == UAS_DIR_IN &&
+            moved != 0 && plan->DataOffset + moved > info) {
+            info = plan->DataOffset + moved;
+        }
+    } else {
+        /* ATA_PASS_THROUGH_EX has no SCSI status to carry these. */
+        if (uasBusyStatus(scsiStatus)) {
+            return UAS_PTR_BUSY;
+        }
+        if (scsiStatus == UAS_SCSI_GOOD) {
+            /* A non-data command asked for its registers (CK_COND); GOOD
+             * brought none, and an echo of the sent ones would read as the
+             * drive's answer (SMART RETURN STATUS's 4Fh/C2h). */
+            if (plan->DataLength == 0) {
+                return UAS_PTR_IO_ERROR;
+            }
+            /* Written by this driver, not read from the drive. */
+            uasBytes(prev, plan->Prev, 8);
+            uasBytes(cur, plan->Cur, 8);
+            cur[0] = 0x00;
+            cur[6] = 0x50;
+        } else {
+            r = UasAtaRegsFromSense(sense, senseLength, prev, cur);
+            if (r == UAS_ATAREG_PARTIAL && plan->Extend) {
+                return UAS_PTR_IO_ERROR;
+            }
+            if (r == UAS_ATAREG_NONE) {
+                uasBytes(prev, plan->Prev, 8);
+                uasBytes(cur, plan->Cur, 8);
+                cur[0] = 0x04;
+                cur[6] = 0x51;
+            }
+        }
+        cur[7] = 0;
+        prev[7] = 0;
+        at = (plan->Layout == UAS_PT_LAYOUT_64) ? 32 : 24;
+        uasBytes(buf + at, prev, 8);
+        uasBytes(buf + at + 8, cur, 8);
+        uasWr32(buf + 8, moved);
+        if (plan->Kind == UAS_PT_ATA && plan->Dir == UAS_DIR_IN &&
+            moved != 0 && plan->DataOffset + moved > info) {
+            info = plan->DataOffset + moved;
+        }
+    }
+    if (info > outLength) {
+        info = outLength;
+    }
+    *information = info;
+    return UAS_PTR_SUCCESS;
+}
+
+ULONG UasSiocCheck(const UCHAR *buf, ULONG inLength, ULONG outLength,
+                   PULONG control, PULONG timeout, PULONG capacity)
+{
+    static const UCHAR signature[8] = { 'S', 'C', 'S', 'I', 'D', 'I', 'S',
+                                        'K' };
+    ULONG room;
+    ULONG i;
+
+    *control = 0;
+    *timeout = 0;
+    *capacity = 0;
+    if (inLength < UAS_SIOC_LENGTH) {
+        return UAS_PT_UNKNOWN;
+    }
+    for (i = 0; i < 8; i++) {
+        if (buf[4 + i] != signature[i]) {
+            return UAS_PT_UNKNOWN;
+        }
+    }
+    *control = uasRd32(buf + 16);
+    if (*control < UAS_SIOC_SMART_VERSION || *control > UAS_SIOC_WRITE_LOG) {
+        return UAS_PT_UNKNOWN;
+    }
+    if (outLength < UAS_SIOC_LENGTH) {
+        return UAS_PT_TOO_SMALL;
+    }
+    room = ((inLength > outLength) ? inLength : outLength) - UAS_SIOC_LENGTH;
+    if (uasRd32(buf) != UAS_SIOC_LENGTH || uasRd32(buf + 24) > room) {
+        return UAS_PT_INVALID;
+    }
+    *timeout = uasRd32(buf + 12);
+    *capacity = uasRd32(buf + 24);
+    return UAS_PT_OK;
+}
+
+VOID UasSmartVersion(PUCHAR out)
+{
+    uasClear(out, UAS_SMART_VERSION_LENGTH);
+    out[0] = 1;     /* bVersion */
+    out[1] = 1;     /* bRevision */
+    out[3] = 1;     /* bIDEDeviceMap */
+    out[4] = 1 | 4; /* CAP_ATA_ID_CMD | CAP_SMART_CMD */
+}
+
+ULONG UasSmartPlan(ULONG control, const UCHAR *payload, ULONG payloadIn,
+                   ULONG replyRoom, PUAS_SMART_PLAN plan)
+{
+    static const UCHAR none[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    const UCHAR *regs;
+    UCHAR feature;
+    ULONG smart;
+    ULONG count;
+
+    uasClear((PUCHAR)plan, sizeof(*plan));
+    plan->Control = control;
+    if (payloadIn < UAS_SMART_IN_LENGTH) {
+        return UAS_SMART_INVALID_BUFFER;
+    }
+    /* SENDCMDINPARAMS: cBufferSize, then IDEREGS - Features, SectorCount,
+     * SectorNumber, CylLow, CylHigh, DriveHead, Command, Reserved. */
+    regs = payload + 4;
+    count = 0;
+    smart = 1;
+    switch (control) {
+    case UAS_SIOC_IDENTIFY:
+        if (regs[6] != 0xEC) {
+            return UAS_SMART_INVALID_COMMAND;
+        }
+        smart = 0;
+        count = 1;
+        break;
+    case UAS_SIOC_READ_ATTRIBS:
+        feature = 0xD0;
+        count = 1;
+        break;
+    case UAS_SIOC_READ_THRESHOLDS:
+        feature = 0xD1;
+        count = 1;
+        break;
+    case UAS_SIOC_READ_LOG:
+        feature = 0xD5;
+        count = regs[1];
+        if (count == 0) {
+            return UAS_SMART_INVALID_COMMAND;
+        }
+        break;
+    case UAS_SIOC_ENABLE_SMART:
+        feature = 0xD8;
+        break;
+    case UAS_SIOC_DISABLE_SMART:
+        feature = 0xD9;
+        break;
+    case UAS_SIOC_RETURN_STATUS:
+        feature = 0xDA;
+        plan->ReturnRegs = 1;
+        break;
+    case UAS_SIOC_AUTOSAVE:
+        feature = 0xD2;
+        break;
+    case UAS_SIOC_SAVE_ATTRIBS:
+        feature = 0xD3;
+        break;
+    case UAS_SIOC_OFFLINE_DIAGS:
+        feature = 0xD4;
+        break;
+    case UAS_SIOC_AUTO_OFFLINE:
+        feature = 0xDB;
+        break;
+    default:
+        /* SMART_VERSION is answered by the caller; WRITE LOG is refused. */
+        return UAS_SMART_INVALID_COMMAND;
+    }
+    if (smart && (regs[6] != 0xB0 || regs[0] != feature)) {
+        return UAS_SMART_INVALID_COMMAND;
+    }
+    plan->Cur[0] = regs[0];
+    plan->Cur[1] = (count != 0) ? (UCHAR)count : regs[1];
+    plan->Cur[2] = regs[2];
+    plan->Cur[3] = smart ? 0x4F : regs[3];
+    plan->Cur[4] = smart ? 0xC2 : regs[4];
+    plan->Cur[5] = regs[5];
+    plan->Cur[6] = regs[6];
+    plan->DataLength = count * 512UL;
+    plan->OutLength = UAS_SMART_OUT_HEADER + plan->DataLength +
+                      (plan->ReturnRegs ? 8 : 0);
+    if (replyRoom < plan->OutLength) {
+        return UAS_SMART_INVALID_BUFFER;
+    }
+    if (UasAtaCdb((count != 0) ? UAS_ATA_DATA_IN : 0, none, plan->Cur,
+                  plan->DataLength, count == 0, plan->Cdb) != UAS_PT_OK) {
+        return UAS_SMART_INVALID_COMMAND;
+    }
+    return UAS_SMART_NO_ERROR;
+}
+
+ULONG UasSmartResult(const UAS_SMART_PLAN *plan, PUCHAR out, ULONG room,
+                     ULONG srbStatus, ULONG scsiStatus, ULONG moved,
+                     const UCHAR *data, const UCHAR *sense,
+                     ULONG senseLength, PULONG outBytes,
+                     PULONG driverError)
+{
+    UCHAR prev[8];
+    UCHAR cur[8];
+    ULONG result;
+    ULONG r;
+    ULONG size;
+    UCHAR ideError;
+
+    *outBytes = 0;
+    *driverError = UAS_SMART_NO_ERROR;
+    ideError = 0;
+    size = 0;
+    if (sense == NULL) {
+        senseLength = 0;
+    }
+    if (!uasAnswered(srbStatus, scsiStatus)) {
+        result = uasTransportResult(srbStatus);
+    } else if (uasBusyStatus(scsiStatus)) {
+        result = UAS_PTR_BUSY;
+    } else if (scsiStatus == UAS_SCSI_GOOD) {
+        /* A data command's success; a register command that came back
+         * GOOD returned no registers, and RETURN STATUS has no answer
+         * without them. */
+        if (plan->ReturnRegs || moved < plan->DataLength) {
+            *driverError = UAS_SMART_IDE_ERROR;
+            ideError = 0x04;
+            result = UAS_PTR_IO_ERROR;
+        } else {
+            size = plan->DataLength;
+            result = UAS_PTR_SUCCESS;
+        }
+    } else {
+        r = UasAtaRegsFromSense(sense, senseLength, prev, cur);
+        if (r == UAS_ATAREG_NONE) {
+            if (uasSenseKey(sense, senseLength) == 0x05) {
+                *driverError = UAS_SMART_NOT_SUPPORTED;
+                result = UAS_PTR_NOT_SUPPORTED;
+            } else {
+                *driverError = UAS_SMART_IDE_ERROR;
+                ideError = 0x04;
+                result = UAS_PTR_IO_ERROR;
+            }
+        } else if ((cur[6] & 0x21) != 0 || plan->DataLength != 0) {
+            /* ERR or DF; or a data command that did not end GOOD. */
+            *driverError = UAS_SMART_IDE_ERROR;
+            ideError = ((cur[6] & 0x21) != 0) ? cur[0] : 0x04;
+            result = UAS_PTR_IO_ERROR;
+        } else {
+            if (plan->ReturnRegs) {
+                size = 8;
+            }
+            result = UAS_PTR_SUCCESS;
+        }
+    }
+    if (room < UAS_SMART_OUT_HEADER) {
+        return (result == UAS_PTR_SUCCESS) ? UAS_PTR_INVALID : result;
+    }
+    if (result == UAS_PTR_SUCCESS &&
+        (plan->ReturnRegs ? 8 : size) > room - UAS_SMART_OUT_HEADER) {
+        /* The plan checked the room it was given; this is the output's. */
+        *driverError = UAS_SMART_INVALID_BUFFER;
+        ideError = 0;
+        size = 0;
+        result = UAS_PTR_INVALID;
+    }
+    uasClear(out, UAS_SMART_OUT_HEADER);
+    uasWr32(out, size);
+    out[4] = (UCHAR)*driverError;
+    out[5] = ideError;
+    if (result == UAS_PTR_SUCCESS) {
+        if (plan->ReturnRegs) {
+            /* IDEREGS: Error, Count, LBA low, mid, high, Device, Status. */
+            uasBytes(out + UAS_SMART_OUT_HEADER, cur, 7);
+            out[UAS_SMART_OUT_HEADER + 7] = 0;
+        } else if (size != 0) {
+            uasBytes(out + UAS_SMART_OUT_HEADER, data, size);
+        }
+        *outBytes = UAS_SMART_OUT_HEADER + size;
+    } else {
+        *outBytes = UAS_SMART_OUT_HEADER;
+    }
+    return result;
+}

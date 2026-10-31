@@ -4,7 +4,8 @@
  * (scripts\import-gate\xhciuas-imports.allow, SITES=uas_mem.obj; the HCD's
  * rule of design record 13 section 7.5 applied to the second binary).
  *
- * IRQL: <= DISPATCH_LEVEL throughout (nonpaged pool only).
+ * IRQL: <= DISPATCH_LEVEL throughout (nonpaged pool only), but for
+ * UasLockBuffer, PASSIVE_LEVEL.
  */
 
 #include "uas.h"
@@ -56,6 +57,50 @@ PMDL UasDataMdl(PIRP request, PSCSI_REQUEST_BLOCK srb)
 VOID UasFreeMdl(PMDL mdl)
 {
     if (mdl != NULL) {
+        IoFreeMdl(mdl);
+    }
+}
+
+/*
+ * Task 45.52 (design record 13 section 16.5): the caller's buffer of a
+ * direct pass-through, described and locked here so the engine can build
+ * its partial MDL over it as over a class driver's. PASSIVE_LEVEL, in the
+ * thread that issued the request (for a UserMode one; the dispatch checks
+ * that), with the request's mode: the lock raises on an address the mode
+ * may not use, which is caught and returned as STATUS_INVALID_USER_BUFFER.
+ * deviceWrites: data in, the pages are written.
+ */
+NTSTATUS UasLockBuffer(PVOID address, ULONG length, KPROCESSOR_MODE mode,
+                       BOOLEAN deviceWrites, PMDL *mdl)
+{
+    PMDL m;
+    NTSTATUS status;
+
+    *mdl = NULL;
+    m = IoAllocateMdl(address, length, FALSE, FALSE, NULL);
+    if (m == NULL) {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    status = STATUS_SUCCESS;
+    __try {
+        MmProbeAndLockPages(m, mode, deviceWrites ? IoWriteAccess
+                                                  : IoReadAccess);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        status = STATUS_INVALID_USER_BUFFER;
+    }
+    if (!NT_SUCCESS(status)) {
+        IoFreeMdl(m);
+        return status;
+    }
+    *mdl = m;
+    return STATUS_SUCCESS;
+}
+
+/* <= DISPATCH_LEVEL. */
+VOID UasUnlockBuffer(PMDL mdl)
+{
+    if (mdl != NULL) {
+        MmUnlockPages(mdl);
         IoFreeMdl(mdl);
     }
 }

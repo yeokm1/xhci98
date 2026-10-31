@@ -35,6 +35,16 @@
  *      it; earlier systems answer it as unknown).
  *   T2 IOCTL_ATA_PASS_THROUGH, CHECK POWER MODE, no data.
  *
+ * Added for task 45.52 (design record 13 section 16.11):
+ *   A6 IOCTL_ATA_PASS_THROUGH_DIRECT, IDENTIFY DEVICE, from a page.
+ *   T3 IOCTL_ATA_PASS_THROUGH, SMART READ DATA.
+ *   M3 SMART_RCV_DRIVE_DATA, SMART READ ATTRIBUTE THRESHOLDS.
+ *   M4 SMART_SEND_DRIVE_COMMAND, SMART RETURN STATUS (the drive's health:
+ *      LBA Mid/High 4Fh/C2h, or F4h/2Ch when a threshold is exceeded).
+ * and for SMART data (A3, M2, T3) a decode: the revision, the checksum
+ * (the 512 bytes sum to 0), and each attribute's id, current value and raw
+ * low word; for thresholds each id and its threshold.
+ *
  * Output, ASCII: per request whether the call succeeded and its error,
  * the SCSI status, the length returned, the sense key, ASC and ASCQ, and
  * for data a short decode (INQUIRY's vendor and product, IDENTIFY's model).
@@ -51,6 +61,8 @@
 #define AT_IOCTL_STORAGE_QUERY_PROPERTY     0x002D1400UL
 #define AT_SMART_GET_VERSION                0x00074080UL
 #define AT_SMART_RCV_DRIVE_DATA             0x0007C088UL
+#define AT_IOCTL_ATA_PASS_THROUGH_DIRECT    0x0004D030UL
+#define AT_SMART_SEND_DRIVE_COMMAND         0x0007C084UL
 
 #define AT_DATA_OUT         0
 #define AT_DATA_IN          1
@@ -108,6 +120,21 @@ typedef struct {
     UCHAR  PreviousTaskFile[8];
     UCHAR  CurrentTaskFile[8];
 } AT_APT;
+
+typedef struct {
+    USHORT Length;
+    USHORT AtaFlags;
+    UCHAR  PathId;
+    UCHAR  TargetId;
+    UCHAR  Lun;
+    UCHAR  ReservedAsUchar;
+    ULONG  DataTransferLength;
+    ULONG  TimeOutValue;
+    ULONG  ReservedAsUlong;
+    PVOID  DataBuffer;           /* a 32-bit program */
+    UCHAR  PreviousTaskFile[8];
+    UCHAR  CurrentTaskFile[8];
+} AT_APTD;
 
 typedef struct {
     UCHAR bFeaturesReg;
@@ -231,6 +258,36 @@ static void put_sense(const UCHAR *s, ULONG n)
     printf(" sense=short(%lu)", n);
 }
 
+/* SMART READ DATA or READ ATTRIBUTE THRESHOLDS (ACS-3): revision, checksum
+ * over all 512 bytes, then 30 entries of 12 bytes from offset 2. */
+static void put_smart(const UCHAR *d, int thresholds)
+{
+    UCHAR sum;
+    int i;
+    int shown;
+    const UCHAR *e;
+
+    sum = 0;
+    for (i = 0; i < 512; i++) {
+        sum = (UCHAR)(sum + d[i]);
+    }
+    printf(" smart-rev=%u checksum=%s", d[0] | (d[1] << 8),
+           sum == 0 ? "ok" : "BAD");
+    shown = 0;
+    for (i = 0; i < 30 && shown < 8; i++) {
+        e = d + 2 + i * 12;
+        if (e[0] == 0) {
+            continue;
+        }
+        if (thresholds) {
+            printf(" %02X:thr=%u", e[0], e[1]);
+        } else {
+            printf(" %02X:val=%u,raw=%u", e[0], e[3], e[5] | (e[6] << 8));
+        }
+        shown++;
+    }
+}
+
 static void spt_run(HANDLE h, const char *tag, const char *what,
                     const UCHAR *cdb, UCHAR cdbLen, UCHAR dataIn,
                     ULONG length, int decode)
@@ -266,6 +323,10 @@ static void spt_run(HANDLE h, const char *tag, const char *what,
         if (b.spt.ScsiStatus == 0 && b.spt.DataTransferLength >= 94 &&
             decode == 2) {
             put_model(b.data);
+        }
+        if (b.spt.ScsiStatus == 0 &&
+            b.spt.DataTransferLength == AT_DATA_LEN && decode == 3) {
+            put_smart(b.data, 0);
         }
     }
     printf("\n");
@@ -332,6 +393,73 @@ static void apt_run(HANDLE h, const char *tag, const char *what,
                b.apt.CurrentTaskFile[6], b.apt.CurrentTaskFile[1]);
         if (length != 0 && b.apt.DataTransferLength >= 94) {
             put_model(b.data);
+        }
+    }
+    printf("\n");
+}
+
+/* IOCTL_ATA_PASS_THROUGH SMART READ DATA (B0h, D0h, LBA Mid/High 4Fh/C2h). */
+static void apt_smart_run(HANDLE h)
+{
+    AT_APT_BUF b;
+    DWORD got;
+    BOOL ok;
+
+    memset(&b, 0, sizeof(b));
+    b.apt.Length = (USHORT)sizeof(AT_APT);
+    b.apt.AtaFlags = 1 | 2;
+    b.apt.DataTransferLength = AT_DATA_LEN;
+    b.apt.TimeOutValue = 10;
+    b.apt.DataBufferOffset = (ULONG)((PUCHAR)b.data - (PUCHAR)&b);
+    b.apt.CurrentTaskFile[0] = 0xD0;
+    b.apt.CurrentTaskFile[1] = 1;
+    b.apt.CurrentTaskFile[3] = 0x4F;
+    b.apt.CurrentTaskFile[4] = 0xC2;
+    b.apt.CurrentTaskFile[5] = 0xA0;
+    b.apt.CurrentTaskFile[6] = 0xB0;
+    got = 0;
+    ok = DeviceIoControl(h, AT_IOCTL_ATA_PASS_THROUGH, &b, sizeof(b), &b,
+                         sizeof(b), &got, NULL);
+    printf("ATATEST T3 ATA SMART READ DATA: ioctl=%d err=%lu", ok ? 1 : 0,
+           ok ? 0UL : (unsigned long)GetLastError());
+    if (ok) {
+        printf(" len=%lu ata-err=%02X ata-status=%02X",
+               b.apt.DataTransferLength, b.apt.CurrentTaskFile[0],
+               b.apt.CurrentTaskFile[6]);
+        if (b.apt.DataTransferLength == AT_DATA_LEN) {
+            put_smart(b.data, 0);
+        }
+    }
+    printf("\n");
+}
+
+/* IOCTL_ATA_PASS_THROUGH_DIRECT IDENTIFY DEVICE into the caller's page. */
+static void aptd_run(HANDLE h, PUCHAR data)
+{
+    AT_APTD b;
+    DWORD got;
+    BOOL ok;
+
+    memset(&b, 0, sizeof(b));
+    memset(data, 0, AT_DATA_LEN);
+    b.Length = (USHORT)sizeof(AT_APTD);
+    b.AtaFlags = 1 | 2;
+    b.DataTransferLength = AT_DATA_LEN;
+    b.TimeOutValue = 10;
+    b.DataBuffer = data;
+    b.CurrentTaskFile[1] = 1;
+    b.CurrentTaskFile[5] = 0xA0;
+    b.CurrentTaskFile[6] = 0xEC;
+    got = 0;
+    ok = DeviceIoControl(h, AT_IOCTL_ATA_PASS_THROUGH_DIRECT, &b, sizeof(b),
+                         &b, sizeof(b), &got, NULL);
+    printf("ATATEST A6 ATA_PASS_THROUGH_DIRECT IDENTIFY: ioctl=%d err=%lu",
+           ok ? 1 : 0, ok ? 0UL : (unsigned long)GetLastError());
+    if (ok) {
+        printf(" len=%lu ata-err=%02X ata-status=%02X", b.DataTransferLength,
+               b.CurrentTaskFile[0], b.CurrentTaskFile[6]);
+        if (b.DataTransferLength >= 94) {
+            put_model(data);
         }
     }
     printf("\n");
@@ -431,6 +559,53 @@ static void smart_run(HANDLE h)
         printf(" got=%lu size=%lu driver-err=%02X ide-err=%02X", got,
                out.cBufferSize, out.DriverStatus.bDriverError,
                out.DriverStatus.bIDEError);
+        if (out.cBufferSize == AT_DATA_LEN) {
+            put_smart(out.bBuffer, 0);
+        }
+    }
+    printf("\n");
+
+    c->irDriveRegs.bFeaturesReg = 0xD1;
+    memset(&out, 0, sizeof(out));
+    got = 0;
+    ok = DeviceIoControl(h, AT_SMART_RCV_DRIVE_DATA, in,
+                         sizeof(AT_SENDCMDIN) - 1, &out, sizeof(out), &got,
+                         NULL);
+    printf("ATATEST M3 SMART_RCV_DRIVE_DATA READ THRESHOLDS: ioctl=%d err=%lu",
+           ok ? 1 : 0, ok ? 0UL : (unsigned long)GetLastError());
+    if (ok) {
+        printf(" got=%lu size=%lu driver-err=%02X", got, out.cBufferSize,
+               out.DriverStatus.bDriverError);
+        if (out.cBufferSize == AT_DATA_LEN) {
+            put_smart(out.bBuffer, 1);
+        }
+    }
+    printf("\n");
+
+    /* RETURN STATUS: SENDCMDOUTPARAMS with an IDEREGS (8 bytes) after it. */
+    c->cBufferSize = 0;
+    c->irDriveRegs.bFeaturesReg = 0xDA;
+    c->irDriveRegs.bSectorCountReg = 0;
+    memset(&out, 0, sizeof(out));
+    got = 0;
+    ok = DeviceIoControl(h, AT_SMART_SEND_DRIVE_COMMAND, in,
+                         sizeof(AT_SENDCMDIN) - 1, &out,
+                         sizeof(ULONG) + sizeof(AT_DRIVERSTATUS) +
+                             sizeof(AT_IDEREGS),
+                         &got, NULL);
+    printf("ATATEST M4 SMART_SEND_DRIVE_COMMAND RETURN STATUS: ioctl=%d "
+           "err=%lu", ok ? 1 : 0, ok ? 0UL : (unsigned long)GetLastError());
+    if (ok) {
+        printf(" got=%lu size=%lu driver-err=%02X", got, out.cBufferSize,
+               out.DriverStatus.bDriverError);
+        if (out.cBufferSize >= 8) {
+            printf(" lba-mid=%02X lba-high=%02X status=%02X %s",
+                   out.bBuffer[3], out.bBuffer[4], out.bBuffer[6],
+                   (out.bBuffer[3] == 0x4F && out.bBuffer[4] == 0xC2)
+                       ? "healthy"
+                       : (out.bBuffer[3] == 0xF4 && out.bBuffer[4] == 0x2C)
+                             ? "THRESHOLD EXCEEDED" : "unknown");
+        }
     }
     printf("\n");
 }
@@ -497,7 +672,7 @@ int main(int argc, char **argv)
     cdb[8] = 0xA0;
     cdb[9] = 0xB0;
     spt_run(h, "A3", "ATA12 SMART READ DATA unspecified", cdb, 12,
-            AT_DATA_UNSPECIFIED, AT_DATA_LEN, 0);
+            AT_DATA_UNSPECIFIED, AT_DATA_LEN, 3);
 
     /* ATA PASS-THROUGH (16): SMART RETURN STATUS (B0h, feature DAh),
      * non-data (protocol 3), CK_COND so the registers come back. */
@@ -527,6 +702,7 @@ int main(int argc, char **argv)
         cdb[14] = 0xEC;
         sptd_run(h, "A5", "ATA16 IDENTIFY direct in", cdb, 16, AT_DATA_IN,
                  direct, AT_DATA_LEN);
+        aptd_run(h, direct);
         VirtualFree(directRaw, 0, MEM_RELEASE);
     }
 
@@ -535,6 +711,7 @@ int main(int argc, char **argv)
     /* ATA_FLAGS_DRDY_REQUIRED 1, ATA_FLAGS_DATA_IN 2. */
     apt_run(h, "T1", "ATA IDENTIFY", 0xEC, 1 | 2, AT_DATA_LEN);
     apt_run(h, "T2", "ATA CHECK POWER MODE", 0xE5, 1, 0);
+    apt_smart_run(h);
 
     CloseHandle(h);
     printf("ATATEST done\n");

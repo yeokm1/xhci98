@@ -384,14 +384,32 @@ static VOID uasActRun(PUAS_FDO fdo, PUAS_ACT a)
  * so a short INQUIRY must not become a failure there.
  * The LUN's request count is dropped after the completion, under the lock.
  */
+/* A LUN's request has completed: its count drops, under the lock. */
+static VOID uasRequestDone(PUAS_FDO fdo, PUAS_PDO pdo)
+{
+    KIRQL irql;
+
+    if (pdo == NULL) {
+        return;
+    }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    if (pdo->Requests != 0) {
+        pdo->Requests--;
+    }
+    if (pdo->Requests == 0) {
+        KeSetEvent(&pdo->RequestsIdle, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
 static VOID uasCompleteRequest(PUAS_FDO fdo, PIRP irp,
                                PSCSI_REQUEST_BLOCK srb)
 {
     PUAS_ICMD ic;
+    PUAS_PCMD pc;
     PUAS_PDO pdo;
     NTSTATUS status;
     ULONG s;
-    KIRQL irql;
 
     ic = (PUAS_ICMD)irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT];
     if (ic != NULL) {
@@ -399,6 +417,13 @@ static VOID uasCompleteRequest(PUAS_FDO fdo, PIRP irp,
         return;
     }
     pdo = (PUAS_PDO)irp->Tail.Overlay.DriverContext[UAS_CTX_PDO];
+    pc = (PUAS_PCMD)irp->Tail.Overlay.DriverContext[UAS_CTX_PASS];
+    if (pc != NULL) {
+        /* Task 45.52: an IOCTL's outcome is the PDO's to write back. */
+        UasPdoPassFinish(pc, srb);
+        uasRequestDone(fdo, pdo);
+        return;
+    }
     s = SRB_STATUS(srb->SrbStatus);
     switch (s) {
     case SRB_STATUS_SUCCESS:
@@ -430,16 +455,7 @@ static VOID uasCompleteRequest(PUAS_FDO fdo, PIRP irp,
     irp->IoStatus.Status = status;
     irp->IoStatus.Information = srb->DataTransferLength;
     IoCompleteRequest(irp, IO_NO_INCREMENT);
-    if (pdo != NULL) {
-        KeAcquireSpinLock(&fdo->Lock, &irql);
-        if (pdo->Requests != 0) {
-            pdo->Requests--;
-        }
-        if (pdo->Requests == 0) {
-            KeSetEvent(&pdo->RequestsIdle, IO_NO_INCREMENT, FALSE);
-        }
-        KeReleaseSpinLock(&fdo->Lock, irql);
-    }
+    uasRequestDone(fdo, pdo);
 }
 
 /* A request that never reached a slot, or a recovery SRB. */
@@ -456,9 +472,72 @@ static VOID uasFailRequest(PUAS_FDO fdo, PIRP irp, UCHAR srbStatus)
     uasCompleteRequest(fdo, irp, srb);
 }
 
-/* Lock held. Admits one request of a LUN: counted, its context set. */
+/*
+ * Task 45.52 (design record 13 section 16.5): a program's pass-through IRP
+ * carries a cancel routine while it is on the queue and not claimed. The
+ * routine is cleared exactly once, under the lock, by the path that takes
+ * the IRP off the queue, before it unlinks it: every such path asks
+ * uasClaimQueued first. FALSE means the cancel routine has the IRP; the
+ * path leaves it on the queue, where the routine finds it.
+ */
+
+/* Lock held. TRUE: the caller may unlink the IRP and owns it. */
+static BOOLEAN uasClaimQueued(PIRP irp)
+{
+    PUAS_PCMD pc;
+
+    pc = (PUAS_PCMD)irp->Tail.Overlay.DriverContext[UAS_CTX_PASS];
+    if (pc == NULL || pc->Claimed) {
+        return TRUE;
+    }
+    if (IoSetCancelRoutine(irp, NULL) == NULL) {
+        return FALSE;
+    }
+    pc->Claimed = TRUE;
+    return TRUE;
+}
+
+/* Lock held. A queued pass-through whose cancel routine has been taken:
+ * not to be chosen. */
+static BOOLEAN uasCancelling(PIRP irp)
+{
+    PUAS_PCMD pc;
+
+    pc = (PUAS_PCMD)irp->Tail.Overlay.DriverContext[UAS_CTX_PASS];
+    return (BOOLEAN)(pc != NULL && !pc->Claimed &&
+                     irp->CancelRoutine == NULL);
+}
+
+/*
+ * DISPATCH_LEVEL, the cancel spin lock held on entry. Only a queued,
+ * unclaimed pass-through IRP has this routine, and no claim can succeed
+ * once it has been taken, so the IRP is still on the queue: it is
+ * unlinked and ended cancelled, its count dropped by the finish. The FDO
+ * is there: the LUN's close waits for its counted requests.
+ */
+static VOID uasPassCancel(PDEVICE_OBJECT device, PIRP irp)
+{
+    PUAS_PCMD pc;
+    PUAS_FDO fdo;
+    KIRQL irql;
+
+    UNREFERENCED_PARAMETER(device);
+    IoReleaseCancelSpinLock(irp->CancelIrql);
+    pc = (PUAS_PCMD)irp->Tail.Overlay.DriverContext[UAS_CTX_PASS];
+    fdo = pc->Fdo;
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+    pc->Claimed = TRUE;
+    pc->Cancelled = TRUE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    uasFailRequest(fdo, irp, SRB_STATUS_ABORTED);
+}
+
+/* Lock held. Admits one request of a LUN: counted, its context set. Every
+ * slot is written, the pass-through one too (NULL but for a program's
+ * pass-through), so a value an upper driver left there is never read. */
 static BOOLEAN uasAdmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
-                        PSCSI_REQUEST_BLOCK srb)
+                        PSCSI_REQUEST_BLOCK srb, PUAS_PCMD pass)
 {
     if (!fdo->Started || fdo->Gone || fdo->Dead ||
         (pdo != NULL && !pdo->Admit)) {
@@ -467,6 +546,7 @@ static BOOLEAN uasAdmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
     irp->Tail.Overlay.DriverContext[UAS_CTX_PDO] = pdo;
     irp->Tail.Overlay.DriverContext[UAS_CTX_SRB] = srb;
     irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = NULL;
+    irp->Tail.Overlay.DriverContext[UAS_CTX_PASS] = pass;
     if (pdo != NULL) {
         if (pdo->Requests == 0) {
             KeClearEvent(&pdo->RequestsIdle);
@@ -692,15 +772,21 @@ static VOID uasPump(PUAS_FDO fdo)
             return;
         }
         if (fdo->Dead || fdo->Gone) {
-            if (IsListEmpty(&fdo->Queue)) {
+            irp = NULL;
+            for (e = fdo->Queue.Flink; e != &fdo->Queue; e = e->Flink) {
+                if (uasClaimQueued(CONTAINING_RECORD(e, IRP,
+                                                     Tail.Overlay.ListEntry))) {
+                    irp = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
+                    break;
+                }
+            }
+            if (irp == NULL) {
                 KeReleaseSpinLock(&fdo->Lock, irql);
                 return;
             }
-            e = RemoveHeadList(&fdo->Queue);
+            RemoveEntryList(&irp->Tail.Overlay.ListEntry);
             KeReleaseSpinLock(&fdo->Lock, irql);
-            uasFailRequest(fdo,
-                           CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry),
-                           SRB_STATUS_NO_DEVICE);
+            uasFailRequest(fdo, irp, SRB_STATUS_NO_DEVICE);
             continue;
         }
         if (fdo->Active >= fdo->QueueDepth) {
@@ -716,7 +802,8 @@ static VOID uasPump(PUAS_FDO fdo)
             if ((!fdo->Holding ||
                  irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] != NULL) &&
                 (pdo == NULL || !pdo->QueueLocked ||
-                 (srb->SrbFlags & SRB_FLAGS_BYPASS_LOCKED_QUEUE) != 0)) {
+                 (srb->SrbFlags & SRB_FLAGS_BYPASS_LOCKED_QUEUE) != 0) &&
+                !uasCancelling(irp)) {
                 break;
             }
             irp = NULL;
@@ -729,6 +816,12 @@ static VOID uasPump(PUAS_FDO fdo)
         if (tag == 0) {
             KeReleaseSpinLock(&fdo->Lock, irql);
             return;
+        }
+        if (!uasClaimQueued(irp)) {
+            /* Its cancel routine took it just now: the next pass skips it. */
+            (VOID)UasTagFree(&fdo->Tags, tag);
+            KeReleaseSpinLock(&fdo->Lock, irql);
+            continue;
         }
         RemoveEntryList(&irp->Tail.Overlay.ListEntry);
         pdo = (PUAS_PDO)irp->Tail.Overlay.DriverContext[UAS_CTX_PDO];
@@ -1878,6 +1971,7 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
 {
     LIST_ENTRY drain;
     PLIST_ENTRY e;
+    PLIST_ENTRY next;
     BOOLEAN wasStarted;
     BOOLEAN teleBusy;
     BOOLEAN teleSubmitting;
@@ -1919,9 +2013,13 @@ VOID UasEngineStop(PUAS_FDO fdo, UCHAR srbStatus)
         uasAbortAll(fdo, srbStatus);
     }
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    while (!IsListEmpty(&fdo->Queue)) {
-        e = RemoveHeadList(&fdo->Queue);
-        InsertTailList(&drain, e);
+    for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
+        next = e->Flink;
+        if (uasClaimQueued(CONTAINING_RECORD(e, IRP,
+                                             Tail.Overlay.ListEntry))) {
+            RemoveEntryList(e);
+            InsertTailList(&drain, e);
+        }
     }
     while (!IsListEmpty(&fdo->RecoveryRequests)) {
         e = RemoveHeadList(&fdo->RecoveryRequests);
@@ -1951,7 +2049,7 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 
     srb->SrbStatus = SRB_STATUS_PENDING;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    admitted = uasAdmit(fdo, pdo, irp, srb);
+    admitted = uasAdmit(fdo, pdo, irp, srb, NULL);
     if (admitted) {
         IoMarkIrpPending(irp);
         InsertTailList(&fdo->Queue, &irp->Tail.Overlay.ListEntry);
@@ -1963,6 +2061,51 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
     }
     uasPump(fdo);
     return STATUS_PENDING;
+}
+
+/*
+ * Task 45.52 (design record 13 section 16.5): <= DISPATCH_LEVEL. A
+ * program's pass-through, the caller's own IRP with the record's SRB:
+ * admitted and counted as a class request is, queued with a cancel
+ * routine, and then, if the IRP was cancelled already, claimed back at
+ * once and ended cancelled through the finish. Either way the count drops
+ * once, in the finish. FALSE: admission refused it; nothing was counted
+ * and the IRP is the caller's.
+ */
+BOOLEAN UasEngineSubmitPass(PUAS_FDO fdo, PUAS_PDO pdo, PUAS_PCMD pc)
+{
+    PIRP irp;
+    PSCSI_REQUEST_BLOCK srb;
+    BOOLEAN admitted;
+    BOOLEAN cancelled;
+    KIRQL irql;
+
+    irp = pc->Irp;
+    srb = &pc->Srb;
+    cancelled = FALSE;
+    srb->SrbStatus = SRB_STATUS_PENDING;
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    admitted = uasAdmit(fdo, pdo, irp, srb, pc);
+    if (admitted) {
+        IoMarkIrpPending(irp);
+        InsertTailList(&fdo->Queue, &irp->Tail.Overlay.ListEntry);
+        (VOID)IoSetCancelRoutine(irp, uasPassCancel);
+        if (irp->Cancel && uasClaimQueued(irp)) {
+            RemoveEntryList(&irp->Tail.Overlay.ListEntry);
+            pc->Cancelled = TRUE;
+            cancelled = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    if (!admitted) {
+        return FALSE;
+    }
+    if (cancelled) {
+        uasFailRequest(fdo, irp, SRB_STATUS_ABORTED);
+        return TRUE;
+    }
+    uasPump(fdo);
+    return TRUE;
 }
 
 /*
@@ -1988,14 +2131,18 @@ NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
     queue = FALSE;
     st = SRB_STATUS_ABORT_FAILED;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    admitted = uasAdmit(fdo, pdo, irp, srb);
+    admitted = uasAdmit(fdo, pdo, irp, srb, NULL);
     if (admitted && victim != NULL) {
         for (e = fdo->Queue.Flink; e != &fdo->Queue; e = e->Flink) {
             if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
                     ->Tail.Overlay.DriverContext[UAS_CTX_SRB] == victim) {
-                victimIrp = CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry);
-                RemoveEntryList(e);
-                st = SRB_STATUS_SUCCESS;
+                if (uasClaimQueued(CONTAINING_RECORD(
+                        e, IRP, Tail.Overlay.ListEntry))) {
+                    victimIrp = CONTAINING_RECORD(e, IRP,
+                                                  Tail.Overlay.ListEntry);
+                    RemoveEntryList(e);
+                    st = SRB_STATUS_SUCCESS;
+                }
                 break;
             }
         }
@@ -2040,7 +2187,7 @@ NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 
     queue = FALSE;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    admitted = uasAdmit(fdo, pdo, irp, srb);
+    admitted = uasAdmit(fdo, pdo, irp, srb, NULL);
     if (admitted) {
         IoMarkIrpPending(irp);
         InsertTailList(&fdo->RecoveryRequests, &irp->Tail.Overlay.ListEntry);
@@ -2070,12 +2217,14 @@ NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 
     InitializeListHead(&drain);
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    admitted = uasAdmit(fdo, pdo, irp, srb);
+    admitted = uasAdmit(fdo, pdo, irp, srb, NULL);
     if (admitted) {
         for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
             next = e->Flink;
             if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
-                    ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo) {
+                    ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo &&
+                uasClaimQueued(CONTAINING_RECORD(e, IRP,
+                                                 Tail.Overlay.ListEntry))) {
                 RemoveEntryList(e);
                 InsertTailList(&drain, e);
             }
@@ -2135,7 +2284,9 @@ VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus)
     for (e = fdo->Queue.Flink; e != &fdo->Queue; e = next) {
         next = e->Flink;
         if (CONTAINING_RECORD(e, IRP, Tail.Overlay.ListEntry)
-                ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo) {
+                ->Tail.Overlay.DriverContext[UAS_CTX_PDO] == pdo &&
+            uasClaimQueued(CONTAINING_RECORD(e, IRP,
+                                             Tail.Overlay.ListEntry))) {
             RemoveEntryList(e);
             InsertTailList(&drain, e);
         }
@@ -2318,7 +2469,7 @@ NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
     srb->SrbStatus = SRB_STATUS_PENDING;
 
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    queued = uasAdmit(fdo, NULL, ic->Irp, srb);
+    queued = uasAdmit(fdo, NULL, ic->Irp, srb, NULL);
     if (queued) {
         ic->Irp->Tail.Overlay.DriverContext[UAS_CTX_EVENT] = ic;
         InsertTailList(&fdo->Queue, &ic->Irp->Tail.Overlay.ListEntry);

@@ -63,6 +63,13 @@ ntoskrnl.exe!MmBuildMdlForNonPagedPool     all    required  SITES=uas_mem.obj nt
 ntoskrnl.exe!IoBuildPartialMdl             all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoInitializeIrp               all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
 
+# --- Task 45.52: a program's pass-through and SMART (design record 13 section 16) ---
+ntoskrnl.exe!MmProbeAndLockPages           all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!MmUnlockPages                 all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!__C_specific_handler          all    required  SITES=uas_mem.obj nt52-amd64-export; the amd64 __try frame, in place of x86's _except_handler3
+ntoskrnl.exe!IoIs32bitProcess              all    required  SITES=uas_pdo.obj nt52-amd64-export; a WOW64 caller's pass-through layout
+ntoskrnl.exe!IoReleaseCancelSpinLock       all    required  SITES=uas_xport.obj nt52-amd64-export; twin of the x86 row
+
 [deny]
 
 ExAllocatePool              Not the HCD's spelling (xhci98-imports.allow; task 25.3). Allocate with ExAllocatePoolWithTag once its row exists.

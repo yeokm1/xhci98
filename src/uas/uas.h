@@ -332,6 +332,37 @@ typedef struct _UAS_FDO {
 #define UAS_CTX_SRB             1
 #define UAS_CTX_EVENT           2   /* internal requests: their UAS_ICMD
                                      * (uas_xport.c), told at the finish  */
+#define UAS_CTX_PASS            3   /* a program's pass-through or SMART
+                                     * request: its UAS_PCMD (uas_pdo.c);
+                                     * NULL for every other request       */
+
+/*
+ * Task 45.52 (design record 13 section 16): one pass-through or SMART
+ * request. The caller's own IRP is the engine's request, with this
+ * record's SRB; the finish (UasPdoPassFinish) writes the outcome back and
+ * completes the IRP. Claimed and Cancelled are the FDO lock's: Claimed once
+ * a path has taken the IRP off the queue with its cancel routine cleared
+ * (uasClaimQueued), Cancelled when the cancel routine took it.
+ */
+#define UAS_PCMD_PT             0   /* SCSI or ATA pass-through           */
+#define UAS_PCMD_SMART          1   /* IOCTL_SCSI_MINIPORT, SCSIDISK      */
+
+typedef struct _UAS_PCMD {
+    struct _UAS_FDO *Fdo;
+    PUAS_PDO Pdo;
+    PIRP Irp;
+    ULONG Form;
+    ULONG OutLength;                /* the IRP's output length            */
+    ULONG Room;                     /* SMART: the reply's room            */
+    UAS_PT_PLAN Plan;
+    UAS_SMART_PLAN Smart;
+    PMDL UserMdl;                   /* direct forms: the caller's buffer  */
+    PUCHAR Data;                    /* SMART: its data-in buffer          */
+    BOOLEAN Claimed;
+    BOOLEAN Cancelled;
+    SCSI_REQUEST_BLOCK Srb;
+    UCHAR Sense[UAS_PT_SENSE_MAX];
+} UAS_PCMD, *PUAS_PCMD;
 
 extern PDRIVER_OBJECT UasDriverObject;
 
@@ -340,6 +371,11 @@ PVOID UasAlloc(ULONG bytes);
 VOID UasFree(PVOID p);
 PMDL UasDataMdl(PIRP request, PSCSI_REQUEST_BLOCK srb);
 VOID UasFreeMdl(PMDL mdl);
+/* Task 45.52: the direct forms' buffer, locked in the caller's context
+ * with its requestor mode (PASSIVE_LEVEL), and its release. */
+NTSTATUS UasLockBuffer(PVOID address, ULONG length, KPROCESSOR_MODE mode,
+                       BOOLEAN deviceWrites, PMDL *mdl);
+VOID UasUnlockBuffer(PMDL mdl);
 PIRP UasIrpAlloc(CCHAR stackSize, PUSHORT size);
 VOID UasIrpReset(PIRP irp, USHORT size, CCHAR stackSize);
 
@@ -363,6 +399,9 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoPower(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp);
+/* <= DISPATCH_LEVEL, no lock held: a pass-through request's end, from the
+ * engine's completion of it (uasCompleteRequest). Completes the IRP. */
+VOID UasPdoPassFinish(PUAS_PCMD pc, PSCSI_REQUEST_BLOCK srb);
 
 /* uas_xport.c - the engine. Init/Start/Stop/Internal/CloseLun at PASSIVE;
  * Submit, Abort, Reset, Flush, OpenLun and UnlockQueue at <= DISPATCH;
@@ -397,5 +436,9 @@ NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 VOID UasEngineUnlockQueue(PUAS_FDO fdo);
 VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo);
 VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus);
+/* Task 45.52: <= DISPATCH_LEVEL. Admits and queues a pass-through request
+ * (its IRP marked pending, with a cancel routine while queued); FALSE when
+ * admission refused it, nothing counted and the IRP left to the caller. */
+BOOLEAN UasEngineSubmitPass(PUAS_FDO fdo, PUAS_PDO pdo, PUAS_PCMD pc);
 
 #endif /* UAS_H */
