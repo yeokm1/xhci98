@@ -432,6 +432,9 @@ typedef struct _CM_NHI {
      * counted from 1 (0: none), and the D0s counted so far. */
     ULONG QemuFailD0;
     LONG QemuD0Seen;
+    /* XhciCmQemuFailReenum (cm_cfgwk.c, task 45.27): how many of the 9x
+     * worker's member calls are taken as failed before they are made. */
+    ULONG QemuFailReenum;
 #endif
 
     CM_COUNTERS Counters;

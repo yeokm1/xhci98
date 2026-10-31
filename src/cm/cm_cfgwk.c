@@ -318,6 +318,11 @@ typedef struct _CM_CFGWK {
     char TagList[CM_WK_TAG_LIST + 2];
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciCmQemuFailReenum (task 45.27): member calls still to be taken as
+     * failed before they are made. The worker thread's own. */
+    ULONG QemuFailReenum;
+#endif
 } CM_CFGWK, *PCM_CFGWK;
 
 /* Workers alive, for the driver's unload (CmCfgwkDrain). */
@@ -3772,6 +3777,17 @@ static VOID cmWkThread(PVOID context)
                     go = FALSE;
                     break;
                 }
+#if defined(XHCI_FLAVOUR_QEMU)
+                if (w->QemuFailReenum != 0) {
+                    /* The qemu flavour's failed member call (task 45.27),
+                     * so the retry hold and its wait can be read. */
+                    w->QemuFailReenum--;
+                    cmWkLog(w, "cm.qemu.reenum.failed", w->Port[i].Bdf);
+                    failed |= 1UL << i;
+                    failedVanish |= vanish & (1UL << i);
+                    continue;
+                }
+#endif
                 if (!cmWkMember(w, i, (BOOLEAN)((vanish >> i) & 1UL),
                                 gen[i])) {
                     failed |= 1UL << i;
@@ -3977,6 +3993,9 @@ PCM_CFGWK CmCfgwkStart(struct _CM_NHI *nhi, const ULONG *bdf, ULONG members,
     w->NiRest = 0;
     w->OpenState = CM_CFGWK_OPEN_PENDING;
     w->OpMember = CM_WK_NO_OP;
+#if defined(XHCI_FLAVOUR_QEMU)
+    w->QemuFailReenum = nhi->QemuFailReenum;
+#endif
     /* A worker the stop cannot wait for (inside a CONFIGMG call) runs this
      * image's code after its NHI is gone, for as long as CONFIGMG blocks:
      * no timeout makes an unload safe then, so a driver that has run one
