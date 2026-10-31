@@ -5173,3 +5173,13 @@ the version bump.
   with no PCIe switch of its own in between, is now given the port's
   interrupt and starts, where it used to stay at Code 29 ('the BIOS for
   the device did not give it an IRQ').""
+- 45.15 (HEAD): "- (45.15, daisy chains, 2026-10-31) "Daisy chains behind
+  a USB4 host using the software connection manager: a device plugged into
+  the downstream port of a USB4 device is connected through its parent.
+  Its own PCIe tunnel comes up after the parent's, and a drive in it
+  appears beside the parent's. Unplugging the end device closes its tunnel
+  and keeps the parent's drive. Unplugging the parent removes the chained
+  device first. A chain present at startup is kept as the firmware built
+  it. Behind a Thunderbolt 3 parent, a link that cannot be bonded is kept
+  as two single lanes. On Windows 2000 with the Standard PC HAL, a drive
+  in a chain plugged in after startup gets no interrupt (Code 10).""
