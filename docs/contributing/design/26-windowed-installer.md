@@ -296,6 +296,11 @@ asks for the restart.
 
 ## 2. Where it lives in the package
 
+From `3.4.0.0` the drivers beside it are in one folder per Windows family,
+`98-me\`, `nt-x86\` and `nt-x64\`, in place of the flavour directories
+named below (design record 36 section 2); the installer's own place, the
+root's `SETUP.EXE` and `INSTALL.BAT` and `tools\xhciinst\`, is unchanged.
+
 ```
 <package>\SETUP.EXE                     the entry point for people (draft 15)
 <package>\INSTALL.BAT                   the command line's entry point, kept

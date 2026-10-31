@@ -4857,6 +4857,11 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
 2. **`NonPagedPool` only**, at `PASSIVE_LEVEL` or `DISPATCH_LEVEL`, never in
    the ISR and never in a `KeSynchronizeExecution` callback. No `PagedPool`:
    Windows 98's pager and its `DO_POWER_PAGABLE` interactions are unread.
+   From NT 6.2 (Windows 8) on the nonpaged type is `NonPagedPoolNx`
+   (512), chosen once at `DriverEntry` (`HcdPoolInit`; `xhcicm.sys` and
+   `xhciuas.sys` likewise, `CmPoolInit` and `UasPoolInit`), so Driver
+   Verifier's code integrity checks find no executable pool (roadmap-usb4
+   task 45.63; record 11 section 8, "The nonpaged pool type").
 3. **Lifetime-scoped sites, not the transfer path.** Allowed: device objects
    and their extensions (which `IoCreateDevice` allocates for the HCD),
    per-controller state at `START_DEVICE`, per-device, per-endpoint, per-hub

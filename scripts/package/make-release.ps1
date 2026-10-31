@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-Publish a built driver into releases\<version>\<flavour>-<arch>\ - two
-directories for an ordinary cut (release-x86, release-x64); the cuts before
-3.4.0.0 also published debug-x86 and debug-x64, until roadmap-usb4 task 45.45
-retired the debug flavour.
+Publish a built driver into releases\<version>\, laid out by Windows family
+from 3.4.0.0 (98-me\, nt-x86\, nt-x64\; roadmap-usb4 task 45.44, design
+record 36); the cuts up to 3.3.0.0 published one directory per flavour and
+architecture (release-x86, release-x64, and debug-x86, debug-x64 until task
+45.45 retired the debug flavour).
 
 .DESCRIPTION
 `releases\` is the tracked, published half of packaging. It carries the two
@@ -106,6 +107,18 @@ gate reads to tell `0x014C` from `0x8664` - both need a tool.
 This script checks the flag on each staged binary rather than
 trusting which obj directory it came out of - packaging objfre twice is a
 silent mistake otherwise, and it is silent on the target too.
+
+**From 3.4.0.0 the version directory is laid out by Windows family**
+(roadmap-usb4 task 45.44, design record 36): each leg below is still staged,
+gated and checked as one flat flavour-and-architecture package, in a work
+folder outside the version directory, and is then re-laid by
+package-common.ps1's `$script:FamilyLayout` into `98-me\` and `nt-x86\` (the
+x86 leg) and `nt-x64\` (the x64 leg), every family file compared by hash with
+the verified flat file it came from, after the conversion and again before
+the publication. The upload set and `-UploadSetOnly` read a family tree
+through the flat view `ConvertFrom-FamilyLayout` rebuilds, and a version up
+to 3.3.0.0 at the flavour directories it was published with. The paragraph
+below describes those directories.
 
 **A published directory is a flavour AND an architecture** (roadmap task 21.3):
 `release-x86\` and `release-x64\` (and `debug-x86\`, `debug-x64\` in the cuts up
@@ -354,7 +367,8 @@ task 42-A.30, owner 2026-10-19) every release leg's package carries the
 Stor98 that scripts\build-driver.cmd built and gated from src\stor98, at
 the package's version and date (make-package.ps1, -NoStor98); the debug
 legs, until task 45.45 retired them, carried none. Its files are published like this project's own:
-releases\<version>\release-x86\ and release-x64\ hold them (the x64
+releases\<version>\98-me\stor98\, nt-x86\stor98\ and nt-x64\stor98\ hold
+them (release-x86\ and release-x64\ up to 3.3.0.0; the x64
 stor98.sys signed with the other x64 drivers, by the same key), so the
 upload set and -UploadSetOnly take them from the published tree. Its
 readme's SETTINGS table is held to test\stor98-settings.txt, and the
@@ -411,7 +425,7 @@ which -UploadSetOnly rebuilds them.
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
 every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, and from 3.4.0.0
-it names v0.1.5.
+it names v0.1.7 (v0.1.5 until task 45.44).
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -2412,6 +2426,46 @@ function New-UploadSet {
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
+    # **A tree laid out by Windows family (3.4.0.0 on, design record 36) is
+    # checked through its flat view.** Every check below reads a flavour
+    # directory; for a family tree they read release-x86\ and release-x64\
+    # as ConvertFrom-FamilyLayout rebuilds them from the family folders, in
+    # a work folder outside the set, and the set itself carries the family
+    # folders. Test-FamilyLayout (PKG-FAMILY) and the CM gate's CM-INX read
+    # the family folders themselves. A tree of a version up to 3.3.0.0 is
+    # its flavour directories, read as before (section 7.2).
+    $checkRoot = $uploadRoot
+    if ((Get-FamilyLayoutKind -Root $uploadRoot -What "'$PublishedRoot'") -eq "family") {
+        $famWhy = Test-FamilyLayout -Root $uploadRoot
+        if ($famWhy -ne "") {
+            throw "the assembled upload set's family folders are not the layout of design record 36. Do not upload it:`n$famWhy"
+        }
+        $flatView = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-flatview-" + [System.IO.Path]::GetRandomFileName())
+        $script:FlatViewDirs += $flatView
+        $viewDirs = ConvertFrom-FamilyLayout -Root $uploadRoot -Dest $flatView
+        $checkRoot = $flatView
+        $cmGateFam = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        foreach ($fam in $script:FamilyNames) {
+            $famDir = Join-Path $uploadRoot $fam
+            if (-not (Test-Path -LiteralPath $famDir)) { continue }
+            $famArch = $script:FamilyArch[$fam]
+            $famArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmGateFam, "-FamilyDir", $famDir)
+            $viewFilter = Join-Path $viewDirs[$famArch] (Get-CmFilterRel -Arch $famArch -PublishedVersion $Version)
+            if ($fam -ne "98-me" -and (Test-Path -LiteralPath $viewFilter -PathType Leaf)) { $famArgs += @("-InfPath", $viewFilter) }
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe $famArgs 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "the assembled upload set's $fam\ failed scripts\inf-gate\check-cm-inf.ps1's CM-INX. Do not upload it.`n`n$gateOut"
+            }
+        }
+        Write-Ok ("the family folders are design record 36's layout ({0}); checked below through their flat view" -f (@($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $uploadRoot $_) }) -join ", "))
+    }
+
     # **Which directories have to be completed is read off the tree, not taken
     # from -Flavor.** The published tree is copied whole, so a release holding
     # both flavours brings both into the upload set - but only the flavours
@@ -2437,7 +2491,7 @@ function New-UploadSet {
         # whole media/not-media distinction below would silently invert.
         throw "the publishable set names no .inf file, so nothing here can tell a flavour directory from any other."
     }
-    $mediaDirs = @(Get-ChildItem -LiteralPath $uploadRoot -Directory | Where-Object {
+    $mediaDirs = @(Get-ChildItem -LiteralPath $checkRoot -Directory | Where-Object {
         Test-Path -LiteralPath (Join-Path $_.FullName $infName)
     } | ForEach-Object { $_.Name })
 
@@ -2484,7 +2538,7 @@ their defaults.
     $legLayouts = @{}
     foreach ($legDir in $Flavors) {
         $legLayouts[$legDir] = Get-DeclaredMediaLayout `
-            -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
+            -InfPath (Join-Path $(if ($checkRoot -ne $uploadRoot) { $checkRoot } else { $PublishedRoot }) (Join-Path $legDir $infName)) `
             -Arch $LegArches[$legDir] `
             -Label "the published $legDir\$infName" -PublishedVersion $Version
     }
@@ -2514,7 +2568,7 @@ their defaults.
             }
         }
         foreach ($name in $legKeys) {
-            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $uploadRoot $f) $name))) {
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $checkRoot $f) $name))) {
                 throw "'$f' in the published tree has no '$name', which its own $infName declares."
             }
         }
@@ -2529,7 +2583,7 @@ their defaults.
 
         $pkgDir = $null
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
-        $uploadFlavorDir = Join-Path $uploadRoot $f
+        $uploadFlavorDir = Join-Path $checkRoot $f
         $mediaPaths = @{}
         if ($null -ne $pkgDir) {
             # The ordinary cut: the backstop for the check the build loop
@@ -2882,6 +2936,10 @@ $gateOut
 # failure path at the bottom: a cut that throws with this set still staged
 # removes it and leaves any previous asset as it was.
 $stagedUpload = $null
+# Work folders outside releases\ (the legs' flat packages, the flat views of
+# family trees, design record 36), removed at the end whatever happens.
+$script:FlatViewDirs = @()
+$familyFlat = @{}
 # Set the moment the publish swap has succeeded. From then on the cut is
 # published whatever happens after, and the failure path below must say so
 # rather than call it a failed cut or touch what was published.
@@ -3324,7 +3382,22 @@ To cut one, run this script without it.
         # held to exactly - a missing directory is then the error it looks like.
         #
         $wantedArches = $Arch
-        if (-not $PSBoundParameters.ContainsKey("Arch")) {
+        # A tree published by Windows family (from 3.4.0.0, design record 36
+        # section 7.2): its architectures are its family folders', and
+        # New-UploadSet reads its legs through the flat view it rebuilds.
+        $pubLayout = Get-FamilyLayoutKind -Root $finalRoot -What "'$finalRoot'"
+        if ($pubLayout -eq "family") {
+            $present = @()
+            if ((Test-Path -LiteralPath (Join-Path $finalRoot "98-me")) -or (Test-Path -LiteralPath (Join-Path $finalRoot "nt-x86"))) { $present += "x86" }
+            if (Test-Path -LiteralPath (Join-Path $finalRoot "nt-x64")) { $present += "x64" }
+            if ($PSBoundParameters.ContainsKey("Arch")) {
+                $missingFam = @($Arch | Where-Object { $present -notcontains $_ })
+                if ($missingFam.Count -gt 0) { throw "'$finalRoot' has no family folder of $($missingFam -join ', '), so $Version was not published with that architecture." }
+                $extraFam = @($present | Where-Object { $Arch -notcontains $_ })
+                if ($extraFam.Count -gt 0) { throw "'$finalRoot' publishes $($extraFam -join ', ') as well, and the download carries every family folder: leave -Arch at its default or name them all." }
+            }
+            $wantedArches = $present
+        } elseif (-not $PSBoundParameters.ContainsKey("Arch")) {
             $present = @()
             foreach ($a in $Arch) {
                 foreach ($leg in (New-ReleaseLegs -Flavors $Flavor -Arches @($a))) {
@@ -3355,6 +3428,12 @@ To cut one, run this script without it.
         # carried rather than re-derived.
         $legArches = @{}
         foreach ($leg in $legs) {
+            if ($pubLayout -eq "family") {
+                $legDirs += $leg.Dir
+                $legArches[$leg.Dir] = $leg.PkgArch
+                Write-Ok ("{0}\: rebuilt from the family folders by the upload set's flat view" -f $leg.Dir)
+                continue
+            }
             $pubDir = Join-Path $finalRoot $leg.Dir
             $dirName = $leg.Dir
             if (-not (Test-Path -LiteralPath $pubDir)) {
@@ -3382,7 +3461,14 @@ To cut one, run this script without it.
         # 0.4.0.0) added it to the upload set only, never to releases\, so
         # its published tree cannot rebuild that asset (task 42-A.30).
         $pubReadme = Join-Path $finalRoot "readme.txt"
-        if ((Test-Path -LiteralPath $pubReadme) -and
+        # A family tree (from 3.4.0.0) whose readme declares Stor98 holds
+        # it in a family folder's stor98\ (design record 36 section 2).
+        if ($pubLayout -eq "family" -and (Test-Path -LiteralPath $pubReadme) -and
+            ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
+            @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $finalRoot "$_\stor98\stor98.inf") -PathType Leaf }).Count -eq 0) {
+            throw "'$finalRoot''s readme declares the bundled Stor98, and no family folder holds stor98\stor98.inf: the download would not carry what its readme says."
+        }
+        if ($pubLayout -ne "family" -and (Test-Path -LiteralPath $pubReadme) -and
             ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
             @($legDirs | Where-Object { $_ -like "release-*" -and (Test-Path -LiteralPath (Join-Path (Join-Path $finalRoot $_) "stor98.inf")) }).Count -eq 0) {
             throw "'$finalRoot' was cut with a pinned Stor98 that its published tree does not hold (before 3.1.0.0, the upload set alone carried it). Re-assemble it with the make-release.ps1 of its own cut (git checkout of that release), which takes the pins."
@@ -4217,6 +4303,40 @@ invalidate readings already taken on these exact bytes - say so:
     # own sources rather than trusting that someone ran build.cmd - a qualifier
     # older than the code it was built from would be answering for a different
     # tool than the one the docs describe.
+    # --- the family folders (task 45.44, design record 36 sections 5.1, 7.1) --
+    #
+    # Each leg above is a flat package, staged, gated and checked as before.
+    # It moves to a work folder outside the version directory, and the
+    # version directory gets the family folders instead: 98-me\ and nt-x86\
+    # from the x86 leg, nt-x64\ from the x64 one, by package-common.ps1's
+    # one table. Every file of the family folders is then compared by hash
+    # with the verified flat file it came from, here and again just before
+    # the publication.
+    $legWorkRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-legs-" + [System.IO.Path]::GetRandomFileName())
+    $script:FlatViewDirs += $legWorkRoot
+    # -CheckOnly stages nothing: its legs' directories are the build
+    # outputs themselves, read in place, so nothing is moved or re-laid.
+    $familyFlat = @{}
+    foreach ($leg in $legs) {
+        if ($CheckOnly) { break }
+        if (-not $staged.ContainsKey($leg.Id)) { continue }
+        if ($familyFlat.ContainsKey($leg.PkgArch)) { throw "two legs of architecture $($leg.PkgArch): the family layout publishes one package an architecture." }
+        New-Item -ItemType Directory -Force -Path $legWorkRoot | Out-Null
+        $work = Join-Path $legWorkRoot $leg.Dir
+        Copy-Item -LiteralPath $staged[$leg.Id].Dir -Destination $work -Recurse
+        Remove-Item -LiteralPath $staged[$leg.Id].Dir -Recurse -Force
+        $staged[$leg.Id].Dir = $work
+        [void](ConvertTo-FamilyLayout -FlatDir $work -Arch $leg.PkgArch -Dest $destRoot)
+        $familyFlat[$leg.PkgArch] = $work
+    }
+    if ($familyFlat.Count -gt 0) {
+        $famWhy = Test-FamilyLayout -Root $destRoot
+        if ($famWhy -ne "") { throw "the staged release's family folders are not the layout of design record 36:`n$famWhy" }
+        Assert-FamilyFromLegs -Root $destRoot -FlatDirs $familyFlat -What "the staged release '$destRoot'"
+        Write-Ok ("the legs re-laid by Windows family: {0}, every file the bytes of its verified flat file" -f `
+            (@($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $destRoot $_) }) -join ", "))
+    }
+
     $qualtoolStaged = $null
     if (-not $SkipQualtool) {
         Write-Step "DOS qualifier"
@@ -4711,70 +4831,65 @@ helper (xhciinst\di\build.cmd).
     #
     $multiArch = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique).Count -gt 1
     $contents = @()
+    # One block per family folder (task 45.44, design record 36): the x86
+    # leg fills 98-ME and NT-X86, the x64 leg NT-X64. The files are the
+    # verified flat package's, compared by hash with the family copies.
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
     foreach ($leg in $legs) {
         if (-not $staged.ContainsKey($leg.Id)) { continue }
         $s = $staged[$leg.Id]
-        $which = if ($leg.Arch -eq "x64") { "64-bit Windows" } else { "32-bit Windows" }
-        if ($leg.Flavor -eq "release") {
-            if ($multiArch) {
-                $contents += ("  {0}\  - INSTALL THIS ONE, on {1}" -f $s.Published.ToUpper(), $which)
-            } else {
-                $contents += ("  {0}\  - INSTALL THIS ONE" -f $s.Published.ToUpper())
+        $fams = if ($leg.Arch -eq "x64") { @("nt-x64") } else { @("98-me", "nt-x86") }
+        foreach ($fam in $fams) {
+            $which = switch ($fam) { "98-me" { "Windows 98 SE and ME" } "nt-x86" { "32-bit Windows 2000, XP, Vista, 7, 8, 8.1 and 10" } default { "64-bit Windows: XP x64, Server 2003 x64, Vista to 10" } }
+            $contents += ("  {0}\  - {1}" -f $fam.ToUpper(), $which)
+            $contents += ""
+            $contents += "      xhci98.inf"
+            # Every byte count in the published readme is formatted in the
+            # invariant culture (1,234,567): -f takes the host's, which writes
+            # 1.234.567 on de-DE and a U+202F on fr-FR, and a cut on another host
+            # must be the same bytes (2026-10-29).
+            $contents += [string]::Format($inv, "      xhci98.sys   {0:N0} bytes", $s.Length)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.Sha256)
+            $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
+            $contents += [string]::Format($inv, "      xhciuas.sys  {0:N0} bytes", $s.UasLength)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.UasSha256)
+            if ($fam -eq "nt-x86") {
+                $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7)"
+            }
+            if ($fam -ne "98-me") {
+                $contents += "      txtsetup.oem (Setup's F6 disk: this folder's root files)"
+            }
+            if ($fam -eq "nt-x64") {
+                $contents += "      xhci98-test.cer (the test certificate every .sys file here is"
+                $contents += "                   signed with; you need not import it; section 2)"
+                $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
+                $contents += "                   it: Windows 8, 8.1 and 10 x64 need them)"
+            }
+            $contents += "      CM\xhcicm.inf  (the Thunderbolt 3 / USB4 connection manager's INF)"
+            $contents += [string]::Format($inv, "      CM\xhcicm.sys  {0:N0} bytes", $s.CmLength)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.CmSha256)
+            if ($fam -ne "98-me") {
+                $contents += "      CM\xhcicmf.inx (its tunnel-port filter, which SETUP.EXE installs;"
+                $contents += "                   not an INF for integration: INTEGRATE.TXT)"
+            }
+            if ($fam -ne "nt-x64") {
+                $contents += ("      CM\{0} (which SETUP.EXE places)" -f $(if ($fam -eq "98-me") { "XHCIPFW.VXD" } else { "XHCIPFW.SYS" }))
+            }
+            if ($null -ne $stor98) {
+                $contents += "      STOR98\      Stor98, the NVMe driver (below)"
             }
             $contents += ""
-            $contents += "  The normal driver. This is the one you want."
-        } else {
-            $contents += ("  {0}\  - only when diagnosing a problem" -f $s.Published.ToUpper())
-            $contents += ""
-            $contents += "  The same driver, built so that a crash on it can be traced"
-            $contents += ("  further back. It records nothing more than {0}\ does, and" -f ("release-" + $leg.Arch).ToUpper())
-            $contents += "  it prints nothing as it runs. It is here only so that it can be"
-            $contents += "  installed at this exact version if something goes wrong. Do not"
-            $contents += "  install it otherwise - and note that BOTH builds answer"
-            $contents += "  XHCITR's report, so you do not need this one to send one."
         }
-        $contents += ""
-        $contents += "      xhci98.inf"
-        # Every byte count in the published readme is formatted in the
-        # invariant culture (1,234,567): -f takes the host's, which writes
-        # 1.234.567 on de-DE and a U+202F on fr-FR, and a cut on another host
-        # must be the same bytes (2026-10-29).
-        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhci98.sys   {0:N0} bytes", $s.Length)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.Sha256)
-        $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
-        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhciuas.sys  {0:N0} bytes", $s.UasLength)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.UasSha256)
-        $contents += "      xhcicm.inf   (the Thunderbolt 3 / USB4 connection manager's INF)"
-        if ($leg.Arch -eq "x86") {
-            $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
-            $contents += "                   later only: never point Windows 98 or ME at nt\;"
-            $contents += "                   nt\xhcicm.sys beside it is the same xhcicm.sys)"
-        } else {
-            $contents += "      xhcicmf.inf  (its tunnel-port filter's INF)"
-        }
-        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      xhcicm.sys   {0:N0} bytes", $s.CmLength)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.CmSha256)
-        $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
-        if ($leg.Arch -eq "x86") {
-            $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7)"
-        } else {
-            $contents += "      xhci98-test.cer (the test certificate every .sys file here is"
-            $contents += "                   signed with; you need not import it; section 2)"
-            $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
-            $contents += "                   it: Windows 8, 8.1 and 10 x64 need them)"
-        }
-        $contents += ""
     }
-    if ($multiArch) {
-        $contents += "  Which pair: the -X86 directories are for 32-bit Windows and the"
-        $contents += "  -X64 ones for 64-bit Windows. If you pick the wrong one nothing"
-        $contents += "  breaks - Windows simply finds no driver in it and says so - so"
-        $contents += "  try the other."
-        $contents += ""
-    }
+    $contents += "  Which folder: 98-ME for Windows 98 SE and ME, NT-X86 for 32-bit"
+    $contents += "  Windows 2000 to 10$(if ($multiArch) { ', NT-X64 for 64-bit Windows' } else { '' }). If you pick the wrong"
+    $contents += "  one nothing breaks - Windows simply finds no driver in it and says"
+    $contents += "  so - so try another. INTEGRATE.TXT says which folder to give nLite,"
+    $contents += "  NTLite or DISM."
+    $contents += ""
     if ($driverPackIncluded) {
         $contents += "  USBDRV\NUSB33\  - NUSB 3.3's Windows 98 SE storage files (section 3)"
         $contents += ""
@@ -4934,9 +5049,9 @@ helper (xhciinst\di\build.cmd).
         $stor98X86 = @($legs | Where-Object { $_.Arch -eq "x86" }).Count -gt 0
         $stor98X64 = @($legs | Where-Object { $_.Arch -eq "x64" }).Count -gt 0
         $stor98Dirs = @()
-        if ($stor98X86) { $stor98Dirs += "RELEASE-X86" }
-        if ($stor98X64) { $stor98Dirs += "RELEASE-X64" }
-        $contents += @(Format-Wrapped -Text (($stor98Dirs -join " and ") + $(if ($stor98Dirs.Count -gt 1) { " hold" } else { " holds" }) +
+        if ($stor98X86) { $stor98Dirs += @("98-ME\STOR98", "NT-X86\STOR98") }
+        if ($stor98X64) { $stor98Dirs += "NT-X64\STOR98" }
+        $contents += @(Format-Wrapped -Text ((($stor98Dirs | Select-Object -First ($stor98Dirs.Count - 1)) -join ", ") + " and " + $stor98Dirs[$stor98Dirs.Count - 1] + " hold" +
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It carries this release's version" +
             " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
@@ -4946,19 +5061,18 @@ helper (xhciinst\di\build.cmd).
             " of its own, PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 stor98.inf matches that id alone, so Windows never offers Stor98 for an internal" +
             " drive there. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only, which Windows' own NVMe driver (stornvme) outranks, so there Stor98 goes" +
             " only on a drive the installer, its safe-removal mark service or you put it on. On 98 SE and ME, which have no NVMe driver of their own, Stor98 installs" +
-            " from stor98w9.inf, which matches every NVMe controller, so Windows may offer it for an internal NVMe drive that has no driver: decline it there." +
-            " To install it by hand on a tunnel drive, in the hardware wizard (Have Disk), point at " +
-            $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
+            " from 98-ME\STOR98's stor98.inf, which matches every NVMe controller, so Windows may offer it for an internal NVMe drive that has no driver: decline it there." +
+            " To install it by hand on a tunnel drive, in the hardware wizard (Have Disk), point at the STOR98 folder of your Windows' folder.") `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
         if ($stor98X64) {
             $contents += ""
-            $contents += "  RELEASE-X64's stor98.sys is signed with the same test certificate as"
+            $contents += "  NT-X64\STOR98's stor98.sys is signed with the same test certificate as"
             $contents += "  this project's other x64 drivers (xhci98-test.cer), in the same"
             $contents += "  step: test-signing mode loads them all."
         }
         if ($stor98X86) {
             $contents += ""
-            $contents += "  RELEASE-X86's S98VSD.VXD is for Windows 98 SE and ME: it lets reads"
+            $contents += "  98-ME\STOR98's S98VSD.VXD is for Windows 98 SE and ME: it lets reads"
             $contents += "  and writes of up to 2 MiB reach Stor98 whole. SETUP.EXE installs it"
             $contents += "  with Stor98 there (its own box, ticked with Stor98's)."
         }
@@ -4979,9 +5093,16 @@ helper (xhciinst\di\build.cmd).
     # from a directory the download does not contain.
     #
     $readmeArches = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique)
+    # The folders by Windows family (task 45.44, design record 36).
+    $readmeReleaseDir = "      98-ME\    on Windows 98 SE and ME`r`n      NT-X86\   on 32-bit Windows 2000 to 10"
+    if ($readmeArches -contains "x64") { $readmeReleaseDir += "`r`n      NT-X64\   on 64-bit Windows" }
     if ($readmeArches.Count -eq 1) {
-        $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
-        $readmeArchNote   = ""
+        $readmeArchNote   = @"
+
+
+If you pick the wrong one nothing breaks - Windows finds no driver in it
+and says so - so try another.
+"@
         # Where the INF says its two files live, and what tells two copies of
         # xhci98.sys apart. Both were hardcoded in the template as "release\
         # and debug\" and "the debug flag on the Version tab", which a
@@ -4996,13 +5117,11 @@ helper (xhciinst\di\build.cmd).
         $readmeArchFiles  = ""
         $readmeArchInstall = ""
     } else {
-        $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
         $readmeArchNote   = @"
 
 
-There is one per architecture: the -X86 directory is for 32-bit Windows
-and the -X64 one for 64-bit Windows. If you pick the wrong one nothing
-breaks - Windows finds no driver in it and says so - so try the other.
+If you pick the wrong one nothing breaks - Windows finds no driver in it
+and says so - so try another.
 "@
         $readmeArchOs = @"
 
@@ -5014,7 +5133,7 @@ breaks - Windows finds no driver in it and says so - so try the other.
         $readmeArchInstall = @"
 
 
-64-BIT WINDOWS: the same steps, pointed at RELEASE-X64\. The 64-bit
+64-BIT WINDOWS: the same steps, pointed at NT-X64\. The 64-bit
 drivers are test-signed, so Vista x64 to 10 x64 run them in test-signing
 mode (on 8, 8.1 and 10 turn Secure Boot off in the firmware setup first):
 in a Command Prompt run as administrator type
@@ -5128,15 +5247,18 @@ adds to XHCIINST.LOG at the root of the system drive.
 
 BY HAND, without SETUP.EXE: in Device Manager find the unrecognised xHCI
 controller (a yellow mark, usually under "Other devices"), then
-Properties, Driver, Update Driver, Have Disk, and point it at:
+Properties, Driver, Update Driver, Have Disk, and point it at the folder
+for your Windows:
 
-      {RELEASEDIR}\
+{RELEASEDIR}
 
-Point Windows at that directory, never at a loose .sys file.{ARCHNOTE}
+Point Windows at that folder, never at a loose .sys file.{ARCHNOTE}
 
 A UAS disk or an external hub asks for its driver when plugged in: give
-it the same directory. The release notes' "Installing" sections have
-every system's steps, Windows 2000 and XP Setup's F6 disk among them.{ARCHINSTALL}
+it the same folder; a Thunderbolt or USB4 controller its CM folder. The
+release notes' "Installing" sections have every system's steps, and
+INTEGRATE.TXT the F6 disk of Windows 2000 and XP Setup and how to add
+the drivers to a Windows setup with nLite, NTLite or DISM.{ARCHINSTALL}
 
 
 ==============================================================================
@@ -6102,6 +6224,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Copy-Item -LiteralPath $licenseSrc -Destination (Join-Path $destRoot "LICENSE") -Force
     Write-Ok "LICENSE copied into the release root, CRLF throughout"
 
+    # INTEGRATE.TXT (record 36 section 8.2): which family folder for which
+    # Windows, and how to point an integration tool at it.
+    if ($familyFlat.Count -gt 0) {
+        Write-GeneratedText -Path (Join-Path $destRoot "INTEGRATE.TXT") -Lines ((Get-IntegrateText -Version $Version) -split "`r`n")
+        Write-Ok "INTEGRATE.TXT written at the release root"
+    }
+
     # The driver pack's record (task 43.3): tracked, plain text, and the one
     # thing -UploadSetOnly rebuilds the download's pack from. Written by
     # every cut, so a release without the pack says so rather than leaving
@@ -6247,6 +6376,12 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Host "            packages' checks, the x64 test signatures and the upload set."
         exit 0
     }
+    # The second comparison (record 36 section 7.1): a family file changed
+    # since the first is a refusal before anything is published.
+    if ($familyFlat.Count -gt 0) {
+        Assert-FamilyFromLegs -Root $destRoot -FlatDirs $familyFlat -What "the staged release '$destRoot'"
+    }
+
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
         Write-Warn ("-Force: replacing the existing {0}" -f $finalRoot)
@@ -6350,8 +6485,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host "            Each published directory holds this project's own files only: its"
     Write-Host "            drivers, their INFs, txtsetup.oem, in an x86 directory nt\ beside"
     Write-Host "            them, and in an x64 directory the test certificate; tools\,"
-    Write-Host "            SETUP.EXE and INSTALL.BAT at the root; in each release- directory"
-    Write-Host "            the Stor98 built with them. No Microsoft file. Commit this."
+    Write-Host "            SETUP.EXE, INSTALL.BAT and INTEGRATE.TXT at the root; in each"
+    Write-Host "            family folder's stor98\ the Stor98 built with them. No Microsoft"
+    Write-Host "            file. Commit this."
     Write-Host ("            {0} records whether the download carries the driver pack." -f $script:DriverPackRecordName)
     if ($null -ne $uploadRoot) {
         Write-Host ""
@@ -6400,6 +6536,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     exit 1
 } finally {
+    foreach ($d in @($script:FlatViewDirs)) {
+        if ($d -ne "" -and (Test-Path -LiteralPath $d)) {
+            Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
     if ($checkOnlyRoot -ne "" -and (Test-Path -LiteralPath $checkOnlyRoot)) {
         Remove-Item -LiteralPath $checkOnlyRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

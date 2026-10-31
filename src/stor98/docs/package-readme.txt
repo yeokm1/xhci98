@@ -5,17 +5,16 @@ Stor98 is a storage controller driver for NVMe SSDs on old versions
 of Windows, for use with xhci98. It runs a PCI NVMe controller, such as
 the drive in a Thunderbolt or USB4 enclosure, as a SCSI adapter on:
 
-  - Windows 98 SE and Windows ME                 the 32-bit package
-  - Windows 2000 SP4, XP, Vista, 7, 8, 8.1      the 32-bit package
+  - Windows 98 SE and Windows ME                 98-me\stor98\
+  - Windows 2000 SP4, XP, Vista, 7, 8, 8.1      nt-x86\stor98\
     and 10 (32-bit; 10 below build 22000)
-  - Windows XP x64, Vista x64 and 7 x64          the 64-bit package
+  - Windows XP x64, Vista x64 and 7 x64          nt-x64\stor98\
     (8.1 x64 and 10 x64: read in virtual machines only; 8 x64:
     untested; see WINDOWS 8, 8.1 AND 10)
 
-In the 32-bit package stor98.inf serves every 32-bit system, with
-stor98.mpd for Windows 98 SE and ME and stor98.sys for Windows 2000 to
-10; each system copies only its own file. In the 64-bit package
-stor98.inf and stor98.sys are the 64-bit driver.
+Each folder holds its own stor98.inf: in 98-me\stor98\ the Windows 98
+SE and ME driver, stor98.mpd; in nt-x86\stor98\ the 32-bit stor98.sys
+for Windows 2000 to 10; in nt-x64\stor98\ the 64-bit stor98.sys.
 
 Stor98 is built with xhci98 and carries the xhci98 package's version
 and date: its files and its INF say the same version as xhci98.sys.
@@ -67,14 +66,14 @@ Stor98 the same way. Stor98 is not for internal NVMe drives: do not
 install it on one, and decline it if Windows offers it for one. On
 Windows 2000 to 8 stor98.inf matches only the id xhci98 gives a drive
 behind a tunnel (PCI\XHCI98_TUNNEL&CC_010802), so Windows does not offer
-it for an internal drive; on 98 SE and ME stor98w9.inf matches every
+it for an internal drive; on 98 SE and ME its stor98.inf matches every
 NVMe controller. By hand, for a drive behind a tunnel:
 
 Windows 98 SE / ME
   Device Manager lists the NVMe controller as a PCI device without a
   driver. Open it, choose Update Driver (or Reinstall Driver), pick
   'Display a list of all the drivers in a specific location', then Have
-  Disk, and point it at the 32-bit package's folder (stor98w9.inf).
+  Disk, and point it at the 98-me\stor98 folder.
   stor98.mpd is copied to WINDOWS\SYSTEM\IOSUBSYS. Restart when asked.
   The Found New Hardware wizard works the same way: search a specific
   location, that folder.
@@ -83,10 +82,10 @@ Windows 2000, XP, Vista, 7, 8, 8.1, 10 (32-bit)
   In Device Manager open the controller (often shown as 'Mass Storage
   Controller' or 'PCI Device' with a yellow mark), choose Update Driver,
   install from a specific location, Have Disk, and point it at the
-  32-bit package's folder. Restart when asked.
+  nt-x86\stor98 folder. Restart when asked.
 
 Windows XP x64, Vista x64, 7 x64
-  As above, using the 64-bit package's folder. On Vista x64 and 7 x64
+  As above, using the nt-x64\stor98 folder. On Vista x64 and 7 x64
   turn on test-signing mode first, as for xhci98's own drivers; see
   the next section.
 

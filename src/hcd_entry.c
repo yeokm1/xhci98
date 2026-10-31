@@ -85,6 +85,7 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     }
 
     HcdDriverObject = DriverObject;
+    HcdPoolInit();
     HcdUrbInit();
     HcdPdoRetireInit();
     HcdSuspDriverInit();

@@ -22,6 +22,7 @@ ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /
 ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
 
 # --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoIsWdmVersionAvailable      all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoCreateDevice                all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoDeleteDevice                all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoAttachDeviceToDeviceStack   all    required  nt52-amd64-export; twin of the x86 row

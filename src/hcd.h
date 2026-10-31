@@ -2906,6 +2906,7 @@ VOID HcdCfgFlushPdoDeferred(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                             struct _HCD_DEVICE_PDO *pdo);
 
 /* hcd_pool.c */
+VOID HcdPoolInit(VOID);
 PVOID HcdPoolAlloc(ULONG bytes);
 PVOID HcdPoolAllocRequirements(ULONG bytes);
 VOID HcdPoolFree(PVOID p);

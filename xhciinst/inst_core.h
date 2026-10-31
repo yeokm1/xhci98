@@ -846,7 +846,7 @@ typedef struct _INST_OPTS {
     "Too many arguments for INSTALL.BAT on this Windows (eight at most, " \
     "seven\nafter /console; /set Name=Value counts as three, and a " \
     "/wdmfree:stage=\nlist one more than its packages). Run\n" \
-    "TOOLS\\XHCIINST\\XHCIINST.EXE /dir release-x86 with the same " \
+    "TOOLS\\XHCIINST\\XHCIINST.EXE /dir 98-me with the same " \
     "arguments\ninstead, or use fewer arguments.\n"
 
 /* Returns 0 with opts filled, 1 refused with why in err. */
@@ -1323,15 +1323,55 @@ const char *inst_eject_remind_text(void);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
-/* Where a flavour directory keeps the tunnel-port filter's INF, relative to
- * it: nt\xhcicmf.inf in the x86 package, out of the way of Windows 98 and
- * ME, which read a $Windows NT$ INF (task 39-0.4); xhcicmf.inf, beside
- * xhcicm.inf and xhcicm.sys, in the x64 package, which 98 and ME never
- * read. inst_cmf_pnf is the device installer's precompiled copy of it, and
- * inst_cmf_where the place as the run's text names it for Have Disk. */
+/* Where the local copy keeps the tunnel-port filter's INF, relative to it
+ * (the shape of 3.3.0.0's flavour directories, kept by record 36 section
+ * 6.1): nt\xhcicmf.inf for x86, xhcicmf.inf, beside xhcicm.inf and
+ * xhcicm.sys, for x64. The download ships it as cm\xhcicmf.inx (record 36
+ * section 3.2). inst_cmf_pnf is the device installer's precompiled copy of
+ * it, and inst_cmf_where the place as the run's text names it for Have
+ * Disk: the local copy's, since no wizard takes an .inx. */
 const char *inst_cmf_rel(int arch);
 const char *inst_cmf_pnf(int arch);
 const char *inst_cmf_where(int arch);
+
+/* ---- the download by Windows family (record 36) ------------------------- */
+
+/* The three family folders of the download: 98-me (98 SE and ME), nt-x86
+ * (32-bit 2000 to 10) and nt-x64 (XP x64 and Server 2003 x64, Vista to 10
+ * x64). */
+#define INST_FAM_9X         0
+#define INST_FAM_NT86       1
+#define INST_FAM_NT64       2
+#define INST_FAM_COUNT      3
+
+/* The family of a system: nt 0 on 98 SE and ME (x86 only). */
+int inst_family(int nt, int arch);
+/* Its folder's name, "98-me", "nt-x86" or "nt-x64"; NULL for another fam. */
+const char *inst_family_dir(int fam);
+/* The family whose folder name is name (without case), or -1. */
+int inst_family_of_dir(const char *name);
+
+/* One file of the local copy (record 36 section 6.2): its name there,
+ * relative to the copy (Local, the shape of 3.3.0.0's flavour
+ * directories), and its path in each family folder of the download, NULL
+ * where that family does not carry it. The table is held against
+ * package-common.ps1's $script:FamilyLayout by the packager's self-test. */
+typedef struct _INST_PKG_FILE {
+    const char *Local;
+    const char *Fam[INST_FAM_COUNT];
+} INST_PKG_FILE;
+
+extern const INST_PKG_FILE instPkgFiles[];
+extern const int instPkgFileCount;
+
+/* The path in family fam's folder of the local name local (without case),
+ * or NULL when the family does not carry it or the table has no such
+ * name. */
+const char *inst_pkg_rel(int fam, const char *local);
+/* 1 when a family folder holding a file of this path (relative to it, any
+ * case) is not this release's layout: a stor98w9.inf, an nt\ file, or a
+ * filter INF under its installed name (record 36 section 6.4). */
+int inst_pkg_foreign(const char *rel);
 
 /* Whether the run installs and stages the Thunderbolt driver (xhcicm.inf,
  * the filter INF, xhcicm.sys). haveCm: the package carries it; nhiPresent:
@@ -2466,7 +2506,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "8AF8F638FA1616AEBEF02AED41F4BB3EE27B89D555A0289E51B3516F19DF0F05"
+#define INST_WDMFREE_SUMS       "BC2D0659340D4C23CE32886CF5BA265791AFBD98AA437B553B35B07E86F66101"
 #define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */

@@ -132,4 +132,12 @@ NTNOFPO=1
 !ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu). The debug flavour (chk) was retired with roadmap-usb4 task 45.45 (design record 08 section 14). Build through scripts\build-driver.cmd.
 !ENDIF
 
+#
+# x86 only. The amd64 images (WDK 7.1) keep .rdata a section of its own,
+# so the import address table is not in the executable .text: with it
+# there, Driver Verifier's code integrity checks on 10 x64 stop the
+# driver as it loads (bug check 0xC4, 0x2005; roadmap-usb4 task 45.63).
+#
+!IF "$(_BUILDARCH)" != "AMD64"
 LINKER_FLAGS=-merge:.rdata=.text
+!ENDIF

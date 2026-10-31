@@ -30,6 +30,7 @@
 [imports]
 
 # --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Tells NT from 98 and ME for the nonpaged pool type (uas_mem.c, UasPoolInit; roadmap-usb4 task 45.63): (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
 ntoskrnl.exe!IoCreateDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateDevice, hint 38) (+43 other 98 SE); ntkern-name
 ntoskrnl.exe!IoDeleteDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteDevice, hint 3D) (+41 other 98 SE); ntkern-name
 ntoskrnl.exe!IoAttachDeviceToDeviceStack     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAttachDeviceToDeviceStack, hint 30) (+36 other 98 SE); ntkern-name

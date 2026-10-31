@@ -136,8 +136,9 @@ Which file
                  driver on a device; run by the other two, never by hand
 
 SETUP.EXE, at the top of the package, starts the right window and ends at
-once; INSTALL.BAT picks the right one and the right directory (release-x86
-or release-x64) and waits for it. Either passes its arguments on (SETUP
+once; INSTALL.BAT picks the right one and the right folder (98-me on 98
+SE and ME, nt-x86 on 32-bit 2000 to 10, nt-x64 on 64-bit Windows) and
+waits for it. Either passes its arguments on (SETUP
 /uninstall, INSTALL /console /list).
 
 The installer's window
@@ -353,6 +354,12 @@ The console tool
   INSTALL /console /yes         asks nothing: goes on, and keeps every
                                 option /set does not name
   INSTALL /console /uninstall   removes the drivers (see below)
+  XHCIINST.EXE /dir 98-me       the console tool run directly names its
+                                package folder: 98-me on 98 SE and ME,
+                                nt-x86 on 32-bit 2000 to 10, nt-x64 for
+                                XHCIIN64.EXE; another Windows' folder is
+                                refused; without /dir it takes its own
+                                Windows' folder
   INSTALL /console /thunderbolt installs the Thunderbolt 3 / USB4 support
                                 (experimental) without asking; without
                                 it the console asks, Enter for N, and
@@ -417,7 +424,7 @@ ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
 COMMAND.COM splits them at = and at commas: /set Name=Value counts as
 three. It refuses more rather than run a shortened command, and ends
 with exit code 1 (a refusal).
-Run TOOLS\XHCIINST\XHCIINST.EXE /dir release-x86 with the same arguments
+Run TOOLS\XHCIINST\XHCIINST.EXE /dir 98-me with the same arguments
 instead for a longer one. On 98 SE and ME the console tool installs each
 device through the helper too; a Windows dialog may open (the Windows CD
 for usbd.sys): answer it as below.
