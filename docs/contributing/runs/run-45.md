@@ -6296,6 +6296,105 @@ nothing in it binds them.
   `5d73560` and `ca8a7ed` (the amd and dock rows, the gate's reading
   qualified), reviewed and revised.
 
+## 45.63 a Driver Verifier pass on Windows 10 x64, part 1: `xhcicm.sys` and its filter, Stor98, `xhci98.sys` and `xhciuas.sys` (2026-10-31 and 11-01, partial)
+
+Worker w45-verif, development host A. Part 1 of the task: the drivers
+that exist now; the network drivers (`xhcinet.sys`, `xhcinet6.sys`) are
+part 2, once 45.59's step S5 binds them.
+
+### The vehicle
+
+- QEMU v11.1.2 with `usb4-emu` main `4287e70`'s patch (QEMU fork
+  `a1bb50a`: the NHI's and the xHCI's switch ports no hot-plug slots),
+  built for this task (`qemu-system-x86_64.exe` `46104db9...`).
+- Fresh overlays of the q35 base `w10x64` (22H2, 19045.2965, SeaBIOS,
+  test-signing mode), `-smp 2`, 4 GB, `-vga virtio` with the virtio-win
+  0.1.302 display driver (`viogpudo`, added by `pnputil` from the ISO, not
+  this project's), since Windows' Basic Display driver disables S3;
+  `ICH9-LPC.disable_s3=0` and `disable_s4=0`. On `qemu-xhci`: the tablet
+  (port 2), a `usb-uas` disk (port 3) and a `usb-storage` stick (port 4),
+  overlays of the FAT test disk. A guest agent on COM2 (a socket chardev)
+  ran the commands; the evidence is under `E:\xhci98-vm\p45\w45-verif\`
+  (`<leg>\serial-*.log`, `trace-*.log`, `cmdline-*.txt`, screenshots,
+  `pids.txt`, `STATE.md`, `hashes*.txt`).
+- The amd64 package staged unsigned by `make-package.ps1` with its five
+  catalogs made unsigned by the packager's `New-PackageCatalogFile`; in
+  each guest a throwaway certificate made there (MakeCert, valid 2026 to
+  2030, Root and TrustedPublisher), every image and catalog signed with it
+  (SignTool "Successfully signed" / "Successfully verified"); nothing
+  signed on the host. Then `INSTALL.BAT /console /yes /nopause
+  /thunderbolt /stor98 /usb` (exit 3), the crash settings (kernel dump, no
+  automatic restart), `powercfg /h on`, and Driver Verifier:
+  `verifier /flags 0x020209BB /driver xhci98.sys xhciuas.sys xhcicm.sys
+  stor98.sys` (the standard checks - special pool, IRQL checking, pool
+  tracking, I/O verification, deadlock detection, DMA verification,
+  security, miscellaneous, DDI compliance - plus the code integrity
+  checks, `0x02000000`), `verifier /bootmode resetonbootfail`.
+- Topologies: `-Usb4 asm4242` with a USB4 enclosure at power-on that has
+  a downstream port (`dialect=usb4,downstream-ports=1,
+  chain-power-controller=off`) and a second enclosure chained behind it
+  by QMP (`parent=enc0,port=1`); the version 2 host and device (`-Usb4 v2`
+  of task 45.20's kit); `-Usb4 tb3ar` (Alpine Ridge, the firmware
+  connection manager) with the Thunderbolt 3 dock (`dock=on`: switch,
+  NVMe, e1000e, an xHCI with a USB disk) plugged at the desktop.
+
+Every bug check was read from the STOP screen, the bug check parameters
+(event 1001), the dump's stack data and the module list, and for the
+0x9F the blocked IRP's stack locations and its devices' driver names
+(the public IRP, IO_STACK_LOCATION, DEVICE_OBJECT and DRIVER_OBJECT
+layouts), from the dump exported over COM1 and parsed on the host. No
+Microsoft code was read.
+
+### What Verifier found
+
+| # | Build | Stop | Read | Whose | Fix |
+|---|---|---|---|---|---|
+| 1 | `b68b3b64` | 0xC4 (0x2005, `0xFFFF8B05A8783428`, `0xFFFFF8029EB601D8`, `0xFFFF878951C30310`) at the first start after the install, on two guests (ASM4242, version 2) | argument 3 is `xhcicm.sys` + `0x1D8` (module list), that image's data directory entry 12, the import address table's, whose RVA `0x1000` lies in `.text`: the IAT in an executable section, from `LINKER_FLAGS=-merge:.rdata=.text` | this package's (`xhci98.sys`, `xhciuas.sys` the same layout) | `251172fb`: the merge x86's alone; the amd64 images keep a read-only `.rdata` with the IAT (design record 11 section 8) |
+| 2 | `251172fb` | 0xC4 (0x2000, `0xFFFFF80884F3BF69`, 0, `0x6D436858`) at the first start (Alpine Ridge guest) | pool type 0 (`NonPagedPool`, executable), tag `XhCm` (`CM_POOL_TAG`) | this package's (every nonpaged allocation of the three drivers) | `76bbdb83`: `NonPagedPoolNx` from NT 6.2 on, chosen once in `DriverEntry` (design record 11 section 8, record 13 section 7.5) |
+| 3 | `b68b3b64`, `76bbdb83` | 0x9F (3, PDO, `nt!TRIAGE_9F_POWER`, IRP) after a wake from S3, four times on two layouts: ASM4242 after `SetSuspendState` and `system_wakeup`, and once more with the idle sleep timer on; Alpine Ridge on `76bbdb83` within 5 minutes of `system_wakeup` (0x9F (3, `0xFFFFA90733DDC0A0`, `0xFFFFF8020CE7EBA0`, `0xFFFFA90743986CF0`)); and on `76bbdb83` **with Verifier off** (`verifier /reset`, a restart, S3, `system_wakeup`) | the blocked IRP (the second ASM4242 dump): `IRP_MJ_POWER` / `IRP_MN_SET_POWER`, `DevicePowerState` D0, action Sleep, on the tablet's stack, `\Driver\HidUsb` over `\Driver\xhci98`; bug check argument 2 is `xhci98.sys`'s device PDO of the tablet; the IRP's current location is `HidUsb`'s, with completion routines set in both used locations, so the D0 had been through the PDO (which answers a D-IRP at once with selective suspend off, the default `XhciSelectiveSuspend` 0) and is held above it | not read (the HID stack waits on something; the package's or Windows') | owed (below); not a Verifier finding: it stops without Verifier |
+
+Builds: the gated amd64 (`all -amd64`) and x86 (`all`) builds of
+`251172fb` and of `76bbdb83` each "BUILD + GATES PASSED (release qemu)",
+host tests passed (`E:\xhci98-scratch\p45-w45-verif\gb-amd64-2.log`,
+`gb-x86-2.log`, `gb-amd64-3.log`, `gb-x86-3.log`). Release amd64 of
+`76bbdb83`: `xhci98.sys` `e5ffbfb3...`, `xhcicm.sys` `61531a18...`,
+`xhciuas.sys` `a4d1062e...`, `stor98.sys` `48612267...`.
+
+With `76bbdb83` the first start under `0x020209BB` passed on two fresh
+guests (ASM4242, Alpine Ridge): `verifier /query` lists `xhci98.sys`,
+`xhciuas.sys`, `xhcicm.sys` and `stor98.sys` loaded and verified.
+
+### The legs
+
+| Leg | Build, flags | Steps | Result |
+|---|---|---|---|
+| a | `b68b3b64`, `0x209BB` (no code integrity, after stop 1) | ASM4242, enclosure with a chain port at power-on; copy loops (16 MiB written, compared, deleted) on the stick, the UAS disk and the NVMe drive (Stor98); each surprise-removed during a copy loop (QMP `device_del`) and plugged again; the enclosure ejected with `XHCIIN64 /eject id=... /yes`, unplugged, plugged again, then surprise-removed during copies; the chained enclosure plugged behind it (`u4.kid` path, PCIe tunnel `0x301` up, its NVMe on `stornvme`), copies on both, the child unplugged and plugged again, the parent pulled with the child attached, the parent plugged again with the child; the `qemu-xhci` controller and the NHI disabled and enabled (`pnputil`); hibernation (`SetSuspendState` with hibernation on) and the resume, copies after it | no stop; every copy before a removal `OK`, `COPYFAIL` after it, `OK` again after each plug; the resume kept the volumes. The eject printed "The Thunderbolt driver has not confirmed that the PCIe tunnel was closed" and the emulator logged no eject transition (45.11 read the same on 8.1) |
+| a | the same | S3 (`SetSuspendState` with hibernation off), `system_wakeup` | stop 3 |
+| b | `b68b3b64`, `0x209BB` | version 2 host and device at power-on | the guest stopped answering about 10 minutes after the start (clock frozen, COM2 agent silent) with no bug check; an NMI gave 0x80; after a reset the steps it was running (the report: PnP listing, volumes, `driverquery`, `verifier /query`, `XHCIIN64 /devices`, `Get-Disk`) ran one by one with no hang. Not reproduced; cause unknown |
+| c | `251172fb`, `0x209BB` | Alpine Ridge (firmware connection manager); the dock plugged at the desktop (its switch, NVMe on `stornvme`, e1000e and xHCI on Windows' own drivers), ejected (`XHCIIN64 /eject`), unplugged, plugged again, surprise-removed | no stop |
+| d | `76bbdb83`, `0x020209BB` | ASM4242 as leg a: the start; the chained enclosure plugged; the stick and the UAS disk surprise-removed; the child unplugged and plugged again; the stick plugged again; the parent pulled with the child, plugged again (both tunnels up) | no stop |
+| e | `76bbdb83`, `0x020209BB` | Alpine Ridge: the start; the dock plugged, unplugged, plugged again, surprise-removed | no stop |
+| e | the same | S3, `system_wakeup` | stop 3 |
+
+### What is left (part 1)
+
+- Stop 3, Sleep (S3) on 10 x64 with the USB drivers installed: the wake
+  stops with 0x9F, with Verifier and without it, on the ASM4242 and the
+  Alpine Ridge layouts. The tablet's D0 is held above `xhci98.sys`'s
+  device PDO; what the HID stack waits for (a request to the PDO that the
+  resumed controller does not complete is the likely shape, not read) is
+  to be read with the `qemu` flavour's log across the wake, then fixed.
+  The release notes record Sleep on 10 x64 as not read (task 44.24 read
+  it on 10 x86). Hibernation and its resume did not stop.
+- Leg b's hang (no bug check, not reproduced).
+- Under the code integrity checks on `76bbdb83`: the copy loops, the eject
+  and the disable and enable of leg a's list, hibernation, and the version
+  2 router's legs (its chain, Gen 4 link recovery with
+  `x-link-event=error`), which no leg here reached.
+- Part 2: `xhcinet.sys` and `xhcinet6.sys` with the NDIS checks.
+
+The installer still refuses Windows 11 (unchanged; not read here).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
