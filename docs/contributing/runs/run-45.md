@@ -5782,3 +5782,13 @@ the version bump.
   previous behaviour when set to 0." The release notes' value table also
   gets a row for XhciCmGen4LinkRecovery: written as 1; "leave it at 1; 0
   takes a link error as an unplug and fresh plug, as before"."
+- 45.53 (HEAD): "- (45.53 and 45.55, 2026-10-31; no driver changed, so
+  whether the first sentence belongs in the notes at all is the bump's
+  call) "A drive behind a USB4 host's own PCIe tunnel port, plugged in
+  while Windows 98 SE, XP or 7 runs, gets its drive letter without a
+  restart." - Known issue (45.53): "On Windows 2000, an NVMe drive plugged
+  into a USB4 or Thunderbolt port while Windows runs can be left without a
+  driver; run INSTALL.BAT again to install Stor98 on it." - Known issue
+  (45.55): "On Windows XP, a USB4 device that has its own downstream port
+  (a dock or a daisy-chainable enclosure), plugged in while Windows runs,
+  may not show its own drive or the device chained behind it.""
