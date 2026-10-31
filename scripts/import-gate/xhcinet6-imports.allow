@@ -1,0 +1,85 @@
+# xhcinet6.sys import allowlist (x86) - the NDIS 6.20 miniport of
+# Thunderbolt networking for 32-bit Windows 8, 8.1 and 10 (design record 35
+# sections 7.1 and 7.9, roadmap-usb4.md task 45.59 step S7), WDK 7.1 WIN7
+# x86. scripts\import-gate\check-imports.ps1 -GateProfile net6 enforces it
+# after every link (scripts\build-driver.cmd :buildnet6); the format and the
+# FLAVORS and REQUIREMENT columns are xhci98-imports.allow's.
+#
+# The image never loads on 98 SE, ME, 2000, XP, Vista or 7 (the INF
+# installs it on 8 to 10 alone), so no Windows 98 rule applies.
+#
+# NTOSKRNL.EXE and HAL.DLL rows: each is re-derived against the export
+# tables of the Windows 7 SP1 x86 kernel and HAL
+# (hlprx86-win7-baselines.expected), the oldest NT 6 set staged, and of
+# of the 8.1 and 10 x86 kernel and HAL (net6-win81-x86-baselines.expected,
+# net6-win10-x86-baselines.expected). From 8 the HAL forwards
+# KfAcquireSpinLock and KfReleaseSpinLock to the kernel; the gate takes a
+# forwarded export as one.
+#
+# NDIS.SYS rows: re-derived against the 8.1 and 10 x86 ndis.sys export
+# tables (the same two manifests), and "ndis620-header", declared as a
+# routine in WDK 7.1's ndis.h (tools\WinDDK71\inc\ddk\ndis.h, checked
+# by the net6 profile), which defines NDIS 6.20 for this build
+# (NDIS620_MINIPORT, sources). The 8.1 and 10 legs read the load (record
+# 35 section 11.3).
+#
+# The spin locks are NDIS's on x86 in this kit (NdisAcquireSpinLock is the
+# HAL's KfAcquireSpinLock, ndis.h's mapping), and MmGetSystemAddressForMdlSafe
+# is MmMapLockedPagesSpecifyCache (wdm.h's macro). The /GS support of the
+# kit's default (GsDriverEntry, BufferOverflowK.lib) adds KeTickCount and
+# KeBugCheckEx; WDK 7.1's checked headers add RtlAssert (qemu only).
+
+[imports]
+
+# --- /GS and the checked headers, compiler- and library-added ---
+ntoskrnl.exe!KeTickCount                     all   required  nt6-x86-export; the /GS cookie's seed (a data import)
+ntoskrnl.exe!KeBugCheckEx                    all   required  nt6-x86-export; __report_gsfailure only, bugcheck 0xF7
+ntoskrnl.exe!RtlAssert                       qemu  required  nt6-x86-export; WDK 7.1 checked-header ASSERTs only
+
+# --- The interface's query (..\net_cmif.c) ---
+ntoskrnl.exe!IoAllocateIrp                   all   required  nt6-x86-export
+ntoskrnl.exe!IoFreeIrp                       all   required  nt6-x86-export
+ntoskrnl.exe!IofCallDriver                   all   required  nt6-x86-export
+ntoskrnl.exe!KeInitializeEvent               all   required  nt6-x86-export
+ntoskrnl.exe!KeSetEvent                      all   required  nt6-x86-export
+ntoskrnl.exe!KeWaitForSingleObject           all   required  nt6-x86-export
+ntoskrnl.exe!KeDelayExecutionThread          all   required  nt6-x86-export
+
+# --- The send path's MDL mapping ---
+ntoskrnl.exe!MmMapLockedPagesSpecifyCache    all   required  nt6-x86-export; MmGetSystemAddressForMdlSafe
+
+# --- Spin locks ---
+HAL.dll!KfAcquireSpinLock                    all   required  nt6-x86-export; NdisAcquireSpinLock on x86; a forwarder to the kernel from 8
+HAL.dll!KfReleaseSpinLock                    all   required  nt6-x86-export; NdisReleaseSpinLock on x86; a forwarder to the kernel from 8
+
+# --- NDIS 6.20 ---
+NDIS.SYS!NdisMRegisterMiniportDriver         all   required  ndis620-header
+NDIS.SYS!NdisMDeregisterMiniportDriver       all   required  ndis620-header
+NDIS.SYS!NdisMSetMiniportAttributes          all   required  ndis620-header
+NDIS.SYS!NdisMGetDeviceProperty              all   required  ndis620-header
+NDIS.SYS!NdisOpenConfigurationEx             all   required  ndis620-header
+NDIS.SYS!NdisReadConfiguration               all   required  ndis620-header
+NDIS.SYS!NdisCloseConfiguration              all   required  ndis620-header
+NDIS.SYS!NdisAllocateMemoryWithTagPriority   all   required  ndis620-header
+NDIS.SYS!NdisFreeMemory                      all   required  ndis620-header
+NDIS.SYS!NdisAllocateNetBufferListPool       all   required  ndis620-header
+NDIS.SYS!NdisFreeNetBufferListPool           all   required  ndis620-header
+NDIS.SYS!NdisAllocateNetBufferAndNetBufferList all required  ndis620-header
+NDIS.SYS!NdisFreeNetBufferList               all   required  ndis620-header
+NDIS.SYS!NdisAllocateMdl                     all   required  ndis620-header
+NDIS.SYS!NdisFreeMdl                         all   required  ndis620-header
+NDIS.SYS!NdisMIndicateReceiveNetBufferLists  all   required  ndis620-header
+NDIS.SYS!NdisMSendNetBufferListsComplete     all   required  ndis620-header
+NDIS.SYS!NdisMIndicateStatusEx               all   required  ndis620-header
+NDIS.SYS!NdisMPauseComplete                  all   required  ndis620-header
+NDIS.SYS!NdisMOidRequestComplete             all   required  ndis620-header
+NDIS.SYS!NdisAllocateIoWorkItem              all   required  ndis620-header
+NDIS.SYS!NdisFreeIoWorkItem                  all   required  ndis620-header
+NDIS.SYS!NdisQueueIoWorkItem                 all   required  ndis620-header
+NDIS.SYS!NdisMSleep                          all   required  ndis620-header
+
+[deny]
+
+memset          a C runtime import: no runtime library functions (AGENTS.md); a byte loop needs a volatile destination
+memcpy          a C runtime import, as memset
+NdisMRegisterMiniport   NDIS 5's registration: 8 to 10 load no NDIS 5 miniport (record 35 section 7.1)
