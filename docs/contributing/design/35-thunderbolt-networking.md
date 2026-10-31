@@ -683,10 +683,16 @@ peer is gone, so its paths and rings are torn down without a logout; on
 every other end a logout is sent first where the peer is still there
 (section 4.2). Where only the service ends (the directory gone, the
 network driver's `Close`), the peer stays READY and the port keeps its
-Inter-Domain bit. Where the peer itself ends (every other case), under
-the software CM the port then clears its Inter-Domain bit (Guide 3.3;
-[linux] `tb_port_unconfigure_xdomain`) and returns to record 22's port
-machine, where the next plug starts again.
+Inter-Domain bit. Where a Properties Changed Notification brings a
+different source UUID, the link is still there: the old peer's record
+ends (its service without a logout, the old peer being gone) and the
+discovery restarts at once on the same link, from UUID under the
+software CM and from PROPS under the firmware CM (IDS 3.7's last
+paragraph; section 3.6), the port keeping its Inter-Domain bit and its
+`TBT_U4_XDOMAIN` state. Where the peer itself ends (every other case),
+under the software CM the port then clears its Inter-Domain bit (Guide
+3.3; [linux] `tb_port_unconfigure_xdomain`) and returns to record 22's
+port machine, where the next plug starts again.
 
 ## 4. The USB4NET service
 
@@ -724,9 +730,15 @@ when the network driver closes the service (section 6.3, a halt or a
 disable). Resent once a second, ten times; no answer is taken as an
 answer (IDS 5.1.2). On the response: the transmit path and ring torn
 down. A Logout from the peer: Logout Response Status 0, then the receive
-path and ring torn down; the network driver's link goes down at the
-first of the two. A peer that logs out and logs in again gets the
-service built afresh.
+path and ring torn down, and this driver logs out in turn (its own
+Logout, which tears its transmit half down), so the two halves never
+outlive each other: the service is one unit here, as the firmware's one
+tunnel per peer is ([linux] `icm_fr_approve_xdomain_paths`,
+`icm_tr_approve_xdomain_paths`), and under the firmware CM the teardown
+command of section 3.4 follows once both halves are down. The network
+driver's link goes down at the first logout of either side. A peer that
+logs out and later logs in again gets the service built afresh, both
+logins redone (section 4.1), on rings and HopIDs chosen again.
 
 ### 4.3 HopIDs and rings
 
@@ -885,12 +897,14 @@ and the service DPC take it to post and reap.
 
 The receive service runs in one DPC (`KeInitializeDpc`), queued by:
 
-- **the poll timer**: a one-shot `KTIMER` with that DPC, set for
-  `XhciCmNetPollMs` (section 8.1, default 1, which on every target is the
-  next clock tick: 10 to 15.6 ms on NT, 10 to 55 ms on 98 SE and ME,
-  record 22 section 5.3) and set again by the DPC at the end of each run
-  while the service is up - not periodic, so the kernel never queues it
-  behind the driver's back and every queueing is counted (below);
+- **the poll timer**: a one-shot `KTIMER` with a KDPC of its own (not
+  the receive service's), set for `XhciCmNetPollMs` (section 8.1, default
+  1, which on every target is the next clock tick: 10 to 15.6 ms on NT,
+  10 to 55 ms on 98 SE and ME, record 22 section 5.3) by the thread when
+  a service comes up and thereafter only by its own DPC, at that DPC's
+  end, while the service is up; so `KeSetTimer` is never called on a
+  timer still pending and never cancels an earlier expiry implicitly.
+  Its DPC does one thing, the kick below;
 - **the ring interrupt**, where record 21 section 4.5 has it connected
   and armed (`XhciCmRingInterrupt` 1 on NT; never on 98 SE and ME until
   their route is read): the receive ring's Receive Data Buffer cause is
@@ -928,14 +942,19 @@ descriptors too; at most one ring's worth a pass, the rest left to the
 next. The callback copies (section 6.3), so a descriptor is never lent
 out.
 
-**The in-flight count** is raised **before** each queueing, never at the
-DPC's entry: before `KeSetTimer` (and lowered again when `KeCancelTimer`
-returns TRUE, the timer removed before it fired) and before the
-interrupt DPC's `KeInsertQueueDpc` (lowered again when that returns
-FALSE, already queued); the receive DPC lowers it as its last act. So a
-DPC dequeued on another processor but not yet running is already
-counted, and `KeRemoveQueueDpc` is not used (it has no Windows 98
-evidence, record 21 section 4.5.6, and is not needed).
+**The kick**, the one way the receive service is queued, from the timer
+DPC and from the interrupt DPC: it raises the in-flight count, then
+`KeInsertQueueDpc` on the service's KDPC, and lowers the count again
+when that returns FALSE (already queued: the queued run will see the
+frames, so two kicks coalesce into one counted run). **The in-flight
+count** covers each object separately and is raised **before** each
+queueing, never at a DPC's entry: the timer's share before each
+`KeSetTimer`, lowered at the timer DPC's end or when `KeCancelTimer`
+returns TRUE (removed before it fired); the service's share at the
+kick, lowered as the service DPC's last act. So a DPC dequeued on
+another processor but not yet running is already counted, and
+`KeRemoveQueueDpc` is not used (it has no Windows 98 evidence, record
+21 section 4.5.6, and is not needed).
 
 **The rundown**, at every end of a service (every end of section 3.8,
 the `Close` of section 6.3, a stop, a surprise removal): first the
@@ -948,10 +967,15 @@ DISPATCH_LEVEL with no wait inside, and a stale token's commit or abort
 still releases it, section 6.3), so no sender is still copying into a
 transmit buffer; then it waits on an event the last lowering of the
 in-flight count signals; and only then are the rings disabled, reset or
-reused. The instructions a DPC runs after its last lowering are covered
-as record 21 section 4.5.6 covers the interrupt's own DPC: the image and
-the NHI's device extension, which hold the KDPC and the timer, live
-until the NHI's removal, never freed by a service's end.
+reused. The KDPCs and the timer live in the NHI's device extension,
+never freed by a service's end. The instructions a DPC runs after its
+last lowering need the image itself: as record 21 section 4.5.6 pins
+the image until the restart once an interrupt was connected, the first
+arming of a network poll timer pins it the same way (an extra
+reference on the driver's own object, taken then and never released),
+whether or not an interrupt or any other publication succeeded, so a
+removal that sees the count at zero cannot unload code a DPC is still
+returning through.
 
 **The memory** stays allocated across services (section 5.3) and is
 freed only at the NHI's stop or removal, and then only when the rings
@@ -1050,8 +1074,8 @@ PDO's):
 | `Close(Context)` | PASSIVE | the service's disable: ends any service with a logout (section 4.2), withdraws the `network` directory with a Properties Changed Notification, refuses logins until the next `Open` (the vendor failure of section 4.1), runs section 5.4's rundown, waits until no callback is running or can start, and drops the callbacks; the CM keeps the rings' memory for the next `Open` |
 | `QueryInfo(Context, Info)` | <= DISPATCH | this adapter's MAC (section 4.4), the link state, the peer's MAC and its `prtcstns`, the link's rate and width (record 22's query-device extensions), the service's maximum frame (section 7.3) |
 | `TxReserve(Context, Count, Buffers, Token)` | <= DISPATCH | all or nothing: reserves `Count` consecutive transmit descriptors and returns their buffers' virtual addresses and a token (the service's generation and the first index), or reserves nothing and returns 0 when fewer are free, when another reservation is outstanding (one at a time: the caller serialises its sends, section 7.5), when the service is closing or when none is up |
-| `TxCommit(Context, Token, Count, Lengths)` | <= DISPATCH | posts the reservation with those lengths (each at most 4096) and writes the producer index once; a token of an earlier generation (the service ended and perhaps came back in between) is refused and nothing is posted |
-| `TxAbort(Context, Token)` | <= DISPATCH | releases the reservation; a stale token is ignored |
+| `TxCommit(Context, Token, Count, Lengths)` | <= DISPATCH | posts the reservation with those lengths (each at most 4096) and writes the producer index once; with a token of an earlier generation (the service ended and perhaps came back in between) it posts nothing but still releases the outstanding reservation that token names, which the rundown of section 5.4 is waiting for, and returns a refusal so the sender completes its frame as not sent |
+| `TxAbort(Context, Token)` | <= DISPATCH | releases the reservation, of the current generation or an earlier one alike; nothing is posted |
 | `Log(Context, Label, Value)` | <= DISPATCH | records a line in `xhcicm.sys`'s log ring (record 21 section 8), so the network driver needs no log of its own |
 
 Callbacks the network driver gives `Open`:
@@ -1266,7 +1290,7 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
 | a peer plugged, both logins done | the adapter connected | `LinkChange` up; NDIS 5 `NdisMIndicateStatus(NDIS_STATUS_MEDIA_CONNECT)` and complete; NDIS 6 `NDIS_STATUS_LINK_STATE` with the state and speed |
 | the cable pulled, the peer's sleep or shutdown | the cable unplugged | section 3.8, `LinkChange` down; `NDIS_STATUS_MEDIA_DISCONNECT`, or the NDIS 6 link state |
 | the peer logs out (its adapter disabled, its driver stopped) | the cable unplugged | section 4.2; the same |
-| this adapter disabled in Device Manager or Network Connections | the adapter disabled | the miniport's halt: `Close` (a logout, the `network` directory withdrawn), then the PDO stopped; the CM keeps answering discovery, so the peer sees a host offering no USB4NET |
+| this adapter disabled in Device Manager or Network Connections | the adapter disabled | the miniport's halt: `Close` (a logout, the `network` directory withdrawn); then, NDIS 5, the halt waits until every packet it indicated has come back through `MiniportReturnPacket` (an outstanding count, its buffers and pool kept until then), as `MiniportHalt` must, and NDIS 6 has already had its pause drain them (section 7.5); then the PDO stopped. The CM keeps answering discovery, so the peer sees a host offering no USB4NET |
 | this adapter enabled again | connected once the logins redo | `Open`; the CM logs in again |
 | the NHI disabled, stopped or removed (an update, the connection manager uninstalled) | the adapter removed | the NHI's PnP order: its children first, so the miniport halts and closes, then the NHI's own end of section 3.8 |
 | a safe eject from `XHCITR` or `XHCIINST /eject` | not offered for a peer (section 15 Q9) | disabling the adapter is the eject; nothing of a peer's lives behind a PCI bridge |
@@ -1467,11 +1491,16 @@ from it:
   26 section 5.5), into `Services\USB`, the machine-wide key the CM reads
   first, since no controller key exists to write, and there too whenever
   it already holds an `XhciCmNet` (the next item's rule). It takes effect at the
-  controller's next start (section 8.1); the Summary says the network
-  adapter appears once the connection manager restarts, which the run
-  brings about for a present NHI on NT by the restart of the device it
-  already does for an updated driver, and otherwise at the computer's
-  restart.
+  controller's next start (section 8.1). Record 23 section 5.1 updates
+  the NHI before it writes values (steps 8 and 9), so the restart an
+  update brings comes too early, and a same-version run restarts nothing:
+  a write of `XhciCmNet`, either way, follows record 23 section 8.4's
+  rule for every value it writes: it sets the run's restart flag
+  (record 23 section 5.9), so the run ends asking for a restart, with
+  the exit code that goes with it, and the Summary says the network
+  adapter appears, or goes, after that restart. Restarting the NHI from
+  the engine instead is not designed: it would drop every tunnel the
+  NHI carries mid-install.
 - **Unticked on a new install**: nothing of networking staged, `XhciCmNet`
   left at the INF's 0.
 - **The box is the setting.** `XhciCmNet` is written from the box alone,
