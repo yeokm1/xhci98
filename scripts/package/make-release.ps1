@@ -4867,16 +4867,16 @@ helper (xhciinst\di\build.cmd).
                 $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
                 $contents += "                   it: Windows 8, 8.1 and 10 x64 need them)"
             }
-            $contents += "      CM\          the Thunderbolt 3 / USB4 connection manager:"
-            $contents += "                   xhcicm.inf, and"
-            $contents += [string]::Format($inv, "                   xhcicm.sys {0:N0} bytes, SHA-256", $s.CmLength)
-            $contents += ("                   {0}" -f $s.CmSha256)
+            $contents += "      CM\xhcicm.inf  (the Thunderbolt 3 / USB4 connection manager's INF)"
+            $contents += [string]::Format($inv, "      CM\xhcicm.sys  {0:N0} bytes", $s.CmLength)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.CmSha256)
             if ($fam -ne "98-me") {
-                $contents += "                   xhcicmf.inx, its tunnel-port filter, which"
-                $contents += "                   SETUP.EXE installs (INTEGRATE.TXT)"
+                $contents += "      CM\xhcicmf.inx (its tunnel-port filter, which SETUP.EXE installs;"
+                $contents += "                   not an INF for integration: INTEGRATE.TXT)"
             }
             if ($fam -ne "nt-x64") {
-                $contents += ("                   {0}, which SETUP.EXE places (section 2)" -f $(if ($fam -eq "98-me") { "XHCIPFW.VXD" } else { "XHCIPFW.SYS" }))
+                $contents += ("      CM\{0} (which SETUP.EXE places)" -f $(if ($fam -eq "98-me") { "XHCIPFW.VXD" } else { "XHCIPFW.SYS" }))
             }
             if ($null -ne $stor98) {
                 $contents += "      STOR98\      Stor98, the NVMe driver (below)"
