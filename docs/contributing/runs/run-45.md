@@ -5072,6 +5072,77 @@ evidence in the allowlist (NUSB's `USBSTOR.SYS`, which a 98 SE UAS disk needs an
 - The cancel path's leg (a program ended while its request waits queued) and removal during an
   ATATEST loop: not run; the path rests on review.
 
+## 45.54 the installer's Advanced lists offer every user setting: the code and the legs on 98 SE, XP and 7 (2026-10-31)
+
+Branch `w45-adv` (from `a2f703f2`), tree `E:\xhci98-wt\w45-adv` on
+development host A. Commits: `50d9c2a9` (record 26 draft 52, record 23
+revision 51: the design), `b7b570c1` (the code and the host vectors),
+`56a3cd0e` (the console's 98 SE and ME directory refusal shaped to the
+width); each reviewed and revised.
+
+### The cause of the one row
+
+On 98 SE and ME a controller counted for the settings only once it ran
+`xhci98` (`value_target`, record 23 section 8.2, from 3.0.0.0, when the
+console asked its questions after the restart). On a first install no
+controller is bound yet, so `inst_eng_rows` dropped every USB row that
+was not greyed, and only the greyed `XhciPollFineTimer` was left. A
+controller the run installs now counts there too, as on NT
+(`inst_value_target_9x`), so the 98 SE and ME console also asks
+`XhciSilentInstall` and a new host interface's three Thunderbolt
+questions on a first install. A cancelled 98 SE or ME run writes no
+value, as the NT run's stop.
+
+### The gated build and the host tests
+
+The first gated x86 build, of `b7b570c1`, stopped at the console tool's
+self-test: "every screen within 79 columns" failed, "screens, ordinary:
+1 lines needed the console's wrap". `XHCIINST.EXE /selftest` with
+`XHCIINST_SCREENS` set, run in an XP guest (an instrumented build marked
+the wrap), showed the line: the 98 SE and ME directory refusal ("Not
+that one: Windows 98 SE and ME: each folder name 8 characters at most
+(and a 3-character extension), ..."). Since the 98 pass now asks the
+three Thunderbolt questions, the self-test's script puts its long-named
+directory on the directory question, as the script was written to do,
+and that reason is longer than a line. `56a3cd0e` shapes the refusal
+with `inst_wrap_text`, as a value question is shaped; the screen printed
+is the same, and the guest run gave "11 checks, 0 failures".
+
+The gated x86 build at `56a3cd0e` (`scripts\build-driver.cmd all`,
+`XHCI98_SELFTEST_SKIP_OK=1`, after `src\pfw\build.cmd`): BUILD + GATES
+PASSED (release, qemu), 20:07. Host tests passed (`test_inst` 7409
+checks). The test package: `make-release.ps1 -Arch x86 -TestLabel
+w45adv -NoNonFree -NoWdmFree -SkipQualtool -SkipMarkTool` of `56a3cd0e`
+(its version still `3.3.0.0`); `XHCIWIZ.EXE` `28def4d0...`,
+`XHCIINST.EXE` `ea1e2736...`, `xhci98.sys` `a8593f4f...`, `xhcicm.sys`
+`a9162d04...`.
+
+### The legs
+
+Each on a fresh overlay of the q35 base through `launch-q35.ps1 -Usb4
+asm4242 -EncAtBoot` (the emulated ASM4242 with the ORICO enclosure at
+power-on), a first install of the test package, QMP 49450 to 49454;
+every start and stop in `E:\xhci98-vm\p45\w45-adv\pids.txt`, the
+screens in each leg's folder.
+
+| System | What was done | Result | Evidence |
+|---|---|---|---|
+| 98 SE, the window | SETUP.EXE, Thunderbolt 3 / USB4 ticked, Settings | The USB tab shows `XhciSilentInstall` (it was missing on a first install); its Advanced lists 17 rows in the owner's order, `XhciInterruptMode` first, `XhciPollFineTimer` and `XhciWideMap` greyed "(Windows 2000 to 7 only)"; the Thunderbolt tab's Advanced starts with `XhciCmRingInterrupt`, greyed "(Windows 2000 to 10 only)", and lists `XhciCmUsb4V2` | `w98w\b1-settings-usb.png`, `b2-adv-usb-top.png`, `b3-adv-usb-end.png`, `c2-adv-tb-top.png`, `c3-adv-tb-end.png` |
+| 98 SE, the window | `XhciImodInterval250ns` 200, `XhciLinkKeep` 0, `XhciMaxTransferKB` 130, OK | 130 refused: "64 to 2048, a multiple of 4."; the two others "(to be written)", on the Summary as "The settings written machine-wide", and after the install `Services\USB` holds `XhciLinkKeep`=0 and `XhciImodInterval250ns`=0xc8 alone (the drivers' keys keep the INF defaults 1 and 0xa0) | `b9.png`, `b12-adv-usb-reopen.png`, `d7.png`, `d9.png`, `serial-a.log` |
+| 98 SE, the console | `INSTALL /console`, Y to Thunderbolt, Enter elsewhere | `XhciSilentInstall` asked ("now: new install, the default 0" for each controller), then `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` with the new-install note; answered 1: `Services\USB` holds `XhciSilentInstall`=1 and the `SilentClasses` list; exit 3 | `w98c\t3.txt`, `t4.txt`, `t6.txt`, `serial-a.log` |
+| XP, the window | `XhciWideMap` 1 (USB), `XhciCmRingInterrupt` 1 (Thunderbolt) | Both rows live on XP; after the install and a restart `Services\USB` holds `XhciWideMap`=1 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded | `xpw2\b3-widemap.png`, `c2-ring.png`, `d13.png`, `serial-a.log` |
+| XP, a run cancelled | the first XP overlay's run, cancelled at the Progress page after the package was staged | no `Services\USB` key: no value written | `xpw\d4.png`, `serial-a.log` |
+| 7 x86, the window | `XhciInterruptMode` 2 (the row offers 0 to 3), `XhciCmRingInterrupt` 1 | after the install and a restart `Services\USB` holds `XhciInterruptMode`=2 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded; the tunnelled NVMe drive mounted during the install | `w7w\b1-adv-usb-top.png`, `c1-adv-tb-top.png`, `d9.png`, `serial-a.log` |
+
+- 98 SE was not restarted after its installs (98 SE's known shutdown hang
+  with `xhcicm` installed, `q35-bases\STATE.md`); the legs read the
+  installer, and the values it writes are read from the registry.
+- In the Advanced dialog, a refused number keeps its row selected while
+  the list's grey highlight can move to another row when a key is
+  pressed in the list before the box is corrected. The value written is
+  the one the box shows for its own row. Seen on 98 SE with
+  `XhciMaxTransferKB`. Not changed here.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
