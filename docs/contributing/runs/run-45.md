@@ -5034,15 +5034,20 @@ Windows 2000 forwards `IOCTL_ATA_PASS_THROUGH` and its direct form too: R1 had l
 `driverquery` on XP and 7, and `dir` of `system32\drivers` on 2000, show `xhciuas.sys` of this build
 (40,790 bytes, linked 01:56) running.
 
-### ATATEST, `x-sat` off (XP, `atatest-xp-nosat.txt`)
+### ATATEST, `x-sat` off (all four systems)
 
-The refusal shape a drive with no SAT gives, as designed (16.8, 16.9):
+XP (`atatest-xp-nosat.txt`); 2000 (`w2k\atatest-w2k-nosat.txt`) and 7 x86
+(`w7x86\atatest-w7x86-nosat.txt`), the same overlays and `ATATEST.EXE` as the `x-sat=on` runs; 7 x64
+(`w7x64\atatest-w7x64-nosat-wow64.txt`, `atatest-w7x64-nosat-native.txt`), the 32-bit `ATATEST.EXE`
+under WOW64 and `ATATEST64.EXE`, their outputs identical. The UAS LUN's lines are the same on all four,
+the refusal shape a drive with no SAT gives, as designed (16.8, 16.9):
 - the SCSI forms return CHECK CONDITION 5/20/00 to the program, the call succeeding;
 - the ATA forms return Error 04h, Status 51h;
 - `SMART_GET_VERSION` is answered, and RCV and SEND fail with error 50 (`STATUS_NOT_SUPPORTED`).
+- the INQUIRY lines (S1, S2) and `IOCTL_STORAGE_QUERY_PROPERTY` are served as with `x-sat=on`.
 
-The Bulk-Only stick under XP's own `usbstor.sys`, beside it, is unchanged from 45.27: error 87 for an
-unspecified direction, error 50 for the ATA and SMART IOCTLs.
+The Bulk-Only stick under each system's own `usbstor.sys`, beside it, is unchanged from 45.27: error 87
+for an unspecified direction, error 50 for the ATA and SMART IOCTLs.
 
 ### A SMART reader (Windows 7 x86, `smartctl-w7x86.txt`)
 
