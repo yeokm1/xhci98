@@ -5160,3 +5160,14 @@ the version bump.
   ports itself). Stor98's install writes its settings too: each value on
   98 SE and ME, and one DriverParameter on 2000 to 10, kept whole where
   you wrote one."
+- 45.18 (7b7a63a0): "- "From 3.4.0.0, `xhcicm.sys` also tells Stor98 at
+  once that a tunnelled drive is gone when the drive sits directly behind
+  a USB4 tunnel port that is a PCI Express port, on Windows 98 SE, ME,
+  2000, XP and XP x64, on systems whose tunnel ports have been read for
+  it. A drive behind a dock or behind another drive, Vista and later on
+  such a port, and every other system get no such statement; there Stor98
+  keeps its own deadline of about 5 seconds." - "On Windows 98 SE and ME
+  an NVMe drive that sits directly on a Thunderbolt or USB4 tunnel port,
+  with no PCIe switch of its own in between, is now given the port's
+  interrupt and starts, where it used to stay at Code 29 ('the BIOS for
+  the device did not give it an IRQ').""
