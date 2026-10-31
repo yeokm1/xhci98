@@ -328,6 +328,14 @@ rem                  quotes as observed, the bind, plug, approve, unplug,
 rem                  resume and reconciliation sequences, a disconnect inside
 rem                  a 10 s approve, timeouts, retries, the error flag, and
 rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
+rem   test_tbt_xdp - the inter-domain discovery and the USB4NET service
+rem                  (src\cm\tbt_xdp.c, task 45.59 step S1, design record 35
+rem                  sections 3 and 4): the IDS 2.0 UUID examples, its Table
+rem                  4-10 sample block word for word and the parser's
+rem                  refusals, every packet's layout, the MAC and HopID rules,
+rem                  two engines over a modelled link (bonding, the firmware
+rem                  CM, a single lane, no answer) and packets shaped as
+rem                  record 35 section 2.4 says thunderbolt-net shapes them
 rem                  against Linux's structure layouts
 rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
 rem                  sequence and the connection manager's selection
@@ -629,6 +637,7 @@ rem profiles and the selection over both, since each profile names its
 rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_xdp "test_tbt_xdp.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
