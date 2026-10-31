@@ -131,16 +131,26 @@ typedef struct _CM_BREQ_PLAN {
     ULONG Steps[CM_BREQ_KINDS];
     ULONG Len[CM_BREQ_KINDS][CM_BREQ_STEPS_MAX];
     ULONG Bytes;        /* the new list's size, Outcome REWRITTEN        */
+    ULONG Tail;         /* 1: the OS list ends with the bridge's interrupt,
+                           kept as the new list's last descriptor        */
 } CM_BREQ_PLAN, *PCM_BREQ_PLAN;
 
 /*
  * The shape test (section 6.1): CM_BREQ_SHAPE_XP or _2000 when `list` (an
  * IO_RESOURCE_REQUIREMENTS_LIST, NULL allowed) matches that template field
- * by field and `minor` is its system's NT minor version (1 XP, 0 2000);
+ * by field, alone or followed by exactly one interrupt descriptor of the
+ * form section 6.1 gives (a bridge whose Interrupt Pin is set), and
+ * `minor` is its system's NT minor version (1 XP, 0 2000);
  * CM_BREQ_SHAPE_NONE for anything else, XP x64's lists (minor 2) included.
  * The header's interface type, bus and slot are not compared.
  */
 ULONG CmBreqShape(const UCHAR *list, ULONG minor);
+
+/*
+ * For a list CmBreqShape matched: 1 when it ends with the interrupt
+ * descriptor, 0 when it is the template alone (or `list` is NULL).
+ */
+ULONG CmBreqTail(const UCHAR *list);
 
 /*
  * The parent's windows (section 6's arithmetic) from its 1Ch, 20h, 24h,

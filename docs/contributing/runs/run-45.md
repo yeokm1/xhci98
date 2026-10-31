@@ -6544,6 +6544,133 @@ Reviewed and revised: the miniport (the D3 drain, the link publication's order, 
   the leg kit (S8a).
 - Packaging (S10) and the installer (S11).
 
+## 45.53 and 45.55 (continued): the chain port's Code 12, the first wizard on 2000 and XP, the remaining systems (2026-10-31, partial)
+
+Worker w45-pcie2, development host A, continuing the section above. Code
+at `4b44bda2` (the one driver change below): the gated build `all`
+(x86), "BUILD + GATES PASSED (release qemu)"
+(`E:\xhci98-scratch\p45-w45-pcie2\build-all.log`), and `all -amd64`,
+passed (`build-amd64-all.log`); host tests passed (`htest1.log`,
+`test_cm_breq` 17170 checks). Packages (`make-package.ps1`): release x86
+`xhcicm.sys` `430e939f...`, `xhci98.sys` `1e46cee6...`, `stor98.sys`
+`5d75bec5...`; qemu x86 `xhcicm.sys` `47f527be...`, `xhci98.sys`
+`4805fb8e...`; release x64 `xhcicm.sys` `4d220403...`, `stor98.sys`
+`781b464c...` (unsigned; its catalogs made unsigned for the leg); the
+installer and `xhcimark` built from this tree (`XHCIINST.EXE`
+`6ec2ee97...`, `XHCIMARK.EXE` `7a4a46ce...`). Emulator: `bin-55cadf9` as
+above. Evidence: `E:\xhci98-vm\p45\w45-pcie\` (leg folders below;
+`hashes-xf4.txt`, `hashes-xf5.txt`).
+
+### `usb4-emu`: the retrain qtest on the new default
+
+With the tunnel ports' new default (no Power Controller),
+`/usb4-retrain/guest-off`'s Slot Control power-off has no effect, as the
+PCI Express Base Specification 4.0 section 7.5.3.10 has it, and the case
+waited for a removal that never came; on Windows the qtest socket's 50 s
+receive timeout ended the binary ("Broken pipe"), so cases 6 to 10 never
+ran (the section above's "retrain 5" was that truncation). The model is
+right; the case now runs with `power-controller=on`, and
+`/usb4-retrain/guest-off-no-pc` writes the same power-off on the default
+port and checks that the held endpoint stays and is retrained with the
+same generation (`usb4-emu` branch `w45-pcie2` `23c831e`, fork
+`af059ed`; reviewed and revised). Every suite counted against its TAP
+plan: host 43, tunnel 31, icm 40, icm-tr 16, icm-icl 5, harness 25,
+fault 9, asm4242 16, asm2464 4, tb3dev 12, tbhost 9, root-hotplug 22,
+usb3 9, retrain 11, xdomain 6: 258 of 258.
+
+### 45.55 on XP: the chain port's Code 12 (this driver's, fixed)
+
+Leg `xpC` (XP golden, `-Usb4 asmboard`: the board's root-port
+reservation, bus 103, 776 MB, 24 KB I/O, 4 MB prefetchable, and the
+firmware's split, so tunnel port 0 got buses 3-50, 12 KB I/O and 384 MB,
+`infopci-0.txt`). The parent and its child plugged at the desktop: the
+parent's switch upstream port `104C:8232` and its first downstream port
+started, the second (the chain port, 04:08) stopped at Code 12 as before
+(`setupapi`: "required reboot: Device has problem: 0x0c"). The connection
+manager's log had `cm.breq.how=00004102` for both downstream ports:
+outcome 4, the shape test refused the lists. Their `BasicConfigVector`
+(`reg-1.txt`, decoded) was XP's closed list of record 33 section 2.1
+followed by one more descriptor, the bridge's own interrupt
+(`ShareDisposition` 3, vectors 0 to FFh; `ListSize` 288h, 19
+descriptors): the switch ports' Interrupt Pin is A, as the captured
+ASM2464 enclosure's switch ports' are, where 44.63's dock had none.
+Revision 3 refused any interrupt, so the rewriter never ran on such a
+switch. Record 33 revision 4 (`4b44bda2`, reviewed and revised) admits
+exactly that descriptor after either template and keeps it last in the
+rewritten list.
+
+Leg `xpD` (the same golden, the package of `4b44bda2` installed over it
+with the layout present, the qemu flavour copied in, restarted): the
+parent and child plugged; `cm.breq.how=0100111x` (rewritten, the
+interrupt kept, bit 24) for 03:00, 04:00 and 04:08, every start status
+0; after the mark service's restart the two downstream ports had windows
+of their own (`infopci-2.txt`: 192 MB each), the chain port started
+(code 0), both NVMe on Stor98, D: and F: ORICO, `fc /b` of a copied file
+on each: no differences.
+
+### The first wizard (2000 and XP): why the drive had no driver at first
+
+Read on `xpC`, `w2D` and `w2E` (2000, `-Usb4 adl`, installed with the
+layout present, cold start). A drive behind a never-seen enclosure is
+enumerated before the connection manager's filter chain reaches it (the
+bridges' first-time installs take the kernel-attached filter away,
+record 33 section 4.1), so its first ids lack `PCI\XHCI98_TUNNEL`, and
+Windows' wizard finds no driver for "PCI Device". The mark service then
+writes the bridges' marks, waits while that installation is pending, sets
+the drive's install to run again (`flags 00000040 -> 00000020`) and
+restarts the enclosure's bridges; the drive comes back with the tunnel id
+and a second wizard offers "Stor98 Storage Controller for NVMe SSDs"
+(`oem*.inf`). On 2000 this holds even when the first wizard is finished
+with its default, "Disable the device" (`w2E`: ConfigFlags 40h, not a
+disabled device; `w2E\mark-tail.txt`): the second wizard installed
+Stor98 and E: ORICO came up. XP's first wizard defaults to "Don't prompt
+me again" (the same flag), with the same outcome (`xpD\mark-tail.txt`).
+w45-pcie's `w2C` stopped at the first wizard and ran the installer again;
+nothing here is this driver's to fix. A drive's first plug thus shows two
+wizards on 2000 and XP. The release-notes text for 45.53 and 45.55 is
+handed over again with this work and replaces the one in "45.final" (no
+driver change there, the installer run again on 2000, the XP chain port
+unresolved), which these readings supersede.
+
+### 98 SE: the connection manager was not running
+
+The 98 SE golden's install had not reached the ASM4242 router (`w9C`,
+the golden's `C:\XHCIINST.LOG`: "PCI Universal Serial Bus - The helper
+could not install it: not reached in this run"; Enum: no driver,
+ConfigFlags 40h), so `w9B` had no connection manager. The installer run
+again ("xHCI98 USB4 Router (ASMedia ASM4242): xhcicm ... started"), the
+qemu flavour copied in, cold start, the parent and child plugged: the
+connection manager numbered the parent's switch (`cm.brnum.9x`, buses
+4-14, the chain port 6-14), the Add New Hardware wizards installed the
+bridges and Stor98 for both drives (Enum: both `Stor98 Storage
+Controller for NVMe SSDs`, `SCSIAdapter`), E: Orico (the second drive, a
+copy of the same disk image, shows no letter, as on 7 x86). Pass.
+
+### The other systems
+
+| Leg | System | Layout | Read | Verdict |
+|---|---|---|---|---|
+| `xpD` | XP | `asmboard`, parent + child | above | pass |
+| `w2E` | 2000 | `adl`, ORICO | two wizards, Stor98, E: ORICO | pass |
+| `w9C` | 98 SE | `asm4242`, parent + child | above | pass |
+| `vA` | Vista x86 | `adl`, ORICO | fresh overlay, installed with the layout present: Stor98, D: ORICO, `fc` no differences | pass |
+| `vB` | Vista x86 | `asmboard`, parent + child | both switches' ports code 0, both NVMe on Stor98, D: and F: ORICO, `fc` on both | pass |
+| `mA` | ME | `adl`, ORICO | fresh overlay; the installer reached the router through Windows' wizard after the restart; the plug: bridges and Stor98 by the wizards, E: ORICO | pass |
+| `mB` | ME | `asm4242`, parent + child | installed (the router's xhcicm started), qemu flavour copied in; the cold start stopped at a black text screen (the debug log's last line `cm.callwk.open`), the next start went to Safe mode after ScanDisk and reached no desktop in 20 min | not read (owed; rule out the emulator on a fresh overlay first) |
+| `x6A` | XP x64 | `adl`, ORICO | fresh overlay, the x64 package with unsigned catalogs, every unsigned-driver prompt answered: "ASMedia 246x connected", Stor98, D: ORICO, `fc` no differences | pass |
+| `x6A` (c) | XP x64 | `asmboard`, parent + child | the same overlay restarted on the ASM4242 layout; the installer's run under the unsigned-driver prompts did not finish in 20 min | not read (owed) |
+
+### Left
+
+- 45.55 on ME (`asm4242`, the boot after the install) and on XP x64 (a
+  signed or prompt-free install on the ASM4242 layout).
+- 2000 on the ASM4242 layout with the parent and child (`w2B`'s
+  transfer-disk problem): not run again, so 2000's chain is not verified;
+  record 33 revision 4 takes 2000's trailing interrupt to be XP's form,
+  not read, and a 2000 list that differs is still refused. The leg owes
+  the bridges' lists (`BasicConfigVector`), the `cm.breq` outcome and both
+  drives after the mark service's restart.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the

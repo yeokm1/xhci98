@@ -7,8 +7,15 @@ the bridge inventory in the marks answer (`cm_query.h` `CM_QB_*`), the
 mark service's bridge marks, restart and wait (`xhcimark\`), and
 `XhciCmBridgeReq` and `XhciCmBridgeReqDiag`; the installer's
 "Advanced..." row for `XhciCmBridgeReq` (section 9.1) since `9d6a8290`.
-Section 7.1 states what the bound covers. Revision 3, 2026-10-27, before
-code, reviewed and revised: the
+Section 7.1 states what the bound covers. Revision 4, 2026-10-31
+(task 45.55, reviewed and revised): a closed list followed by the
+bridge's own interrupt descriptor matches its template too, and the
+interrupt goes into the rewritten list unchanged as its last descriptor
+(section 6.1); XP gave that descriptor on the switch ports of a USB4
+device router hot-added below the ASM4242 tunnel port, whose Interrupt
+Pin is set, as the captured ASM2464 enclosure's ports are, so revision
+3's refusal of it left the second downstream port at Code 12.
+Revision 3, 2026-10-27, before code, reviewed and revised: the
 owner's answers to section 12's questions folded in; the NHI's role
 decided before the position rule; a registered child's immediate
 ancestor in `Parent`, the chain's root kept in `Bridge`; the restart
@@ -800,13 +807,31 @@ exactly, field by field, read from section 2.1:
   minimum 0, maximum FFFFFFFFh, prefetchable the same with `Flags` 4 and
   maximum FFFFFFFFFFFFFFFFh; the same privates.
 
+**The bridge's interrupt** (revision 4). A template matches too when
+exactly one more descriptor follows it, the last of the list: `Option` 0,
+`Type` 2 (`CmResourceTypeInterrupt`), `ShareDisposition` 3 (shared),
+`Flags` 0 (level), `MinimumVector` 0, `MaximumVector` FFh, every other
+byte 0; `ListSize` and `Count` then one descriptor more than the
+template's (XP 288h and 19). XP wrote it after the closed list of every
+switch port of a USB4 device router hot-added below the ASM4242 tunnel
+port (task 45.55's XP reading, `runs/run-45.md`; the bridges' Interrupt
+Pin is A, as the captured ASM2464 enclosure's switch ports' are,
+`usb4-emu` `tests/captures/framework13-12th/linux-orico`), where the dock
+of section 2.1 had none. 2000's form is not read; it is taken to be the
+same, and a 2000 list whose last descriptor differs in any byte is left
+as before. The rewriter keeps that descriptor unchanged as the new list's
+last one (it is the PCI driver's request for the bridge's own interrupt,
+not a window), and the diagnostic marks it (section 9.2, dword 6 bit
+24).
+
 The header's interface type, bus and slot fields are not compared. A
 template is tied to its system: an XP list on 2000 or the reverse is
 left. Anything else is left as it came and counted by reason
-(`cm.breq.shape`): a configured list, an interrupt or any other
-descriptor, two alternative lists, a field that differs, an oversize
-list. XP x64's closed list is not read; until leg R4 reads it and adds
-its template, every XP x64 list is left (section 7.7).
+(`cm.breq.shape`): a configured list, an interrupt anywhere but last or
+of another form, any other descriptor, two alternative lists, a field
+that differs, an oversize list. XP x64's closed list is not read; until
+leg R4 reads it and adds its template, every XP x64 list is left
+(section 7.7).
 
 A stack can hold two filters of this driver (a kernel-attached child and
 a registered one, record 21 section 7.4 revision 3), and the rewriter's
@@ -1168,8 +1193,9 @@ Record 28 is 98 SE and ME only and does not meet this record. Its NT
 relative, the interrupt the child gives a function on 2000's Standard PC
 HAL (task 44.53), acts on type 0 functions only: `CmRegIrqWire` refuses a
 type 1 header [code], so it never adds an interrupt to a bridge and never
-meets a rewritten list; the shape test refuses a list with an interrupt
-in any case. The two are independent: the rewrite places the bridges,
+meets a rewritten list; the bridge's own interrupt descriptor that the
+shape test admits last (section 6.1, revision 4) is the PCI driver's,
+copied unchanged. The two are independent: the rewrite places the bridges,
 and whether a function behind them gets an interrupt on that HAL is
 44.53's rule (the function's pin, swizzled through each bridge, must
 arrive on the tunnel port's own pin). In example 1 the NIC behind the
@@ -1251,7 +1277,7 @@ dock's four bridges and a chained switch fit together:
 | 3 | allocation failures (15:0), children with no active member above (31:16) |
 | 4 + 8n | entry n: its sequence (0: empty) |
 | 5 + 8n | the bridge's location (bus 15:8, device and function 7:0) and its tunnel port's (31:16, the same packing) |
-| 6 + 8n | role 3:0 (1 upstream, 2 downstream, 3 other), shape 7:4 (0 no template, 1 XP closed, 2 2000 closed), system 11:8 (the minor version), outcome 15:12 (0 left, 1 rewritten, 2 off, 3 record only, 4 shape refused, 5 parent unread, 6 not alone, 7 no memory, 8 lower status, 9 no window), groups dropped 18:16 (bit 16 I/O, 17 memory, 18 prefetchable), unmet needs 21:19 (the same order), the start 23:22 (0 not seen, 1 started, 2 failed), reserved 31:24 (0) |
+| 6 + 8n | role 3:0 (1 upstream, 2 downstream, 3 other), shape 7:4 (0 no template, 1 XP closed, 2 2000 closed), system 11:8 (the minor version), outcome 15:12 (0 left, 1 rewritten, 2 off, 3 record only, 4 shape refused, 5 parent unread, 6 not alone, 7 no memory, 8 lower status, 9 no window), groups dropped 18:16 (bit 16 I/O, 17 memory, 18 prefetchable), unmet needs 21:19 (the same order), the start 23:22 (0 not seen, 1 started, 2 failed), the list ends with the bridge's interrupt 24 (section 6.1, revision 4), reserved 31:25 (0) |
 | 7 + 8n | N or the sibling count 7:0, this port's index 15:8, flags 19:16 (bit 16 alone, 17 secondary numbered, 18 hot-plug capable, 19 a nested bridge behind), this port's claims 25:20 (2 bits a kind, I/O 21:20, memory 23:22, prefetchable 25:24: 0 no, 1 yes, 2 unknown, 3 granule only), reserved 31:26 (0) |
 | 8 + 8n | the parent's I/O window in bytes |
 | 9 + 8n | the parent's memory (15:0) and prefetchable (31:16) windows in MiB, saturating at FFFFh |
@@ -1299,6 +1325,13 @@ caller passes the list's bytes, the snapshot and the room.
   the template compares (each length, alignment, minimum, maximum,
   share, flag, option, the private data, the order of groups, `Count`,
   `ListSize`, `AlternativeLists`, `Version`, an extra interrupt).
+- **The bridge's interrupt** (revision 4, `test_irq_tail`): each closed
+  list with the interrupt descriptor XP gave in task 45.55 appended
+  matches its own system's template; every byte of that descriptor
+  compared; `ListSize` or `Count` without it, two of it, or it first
+  refused; a rewrite of example 1's NIC port with it equals the rewrite
+  without it plus that descriptor last, on both systems; a plan and a
+  list that disagree on it write nothing; the diagnostic's bit 24.
 - **The examples** of section 6.5, inputs as snapshots and the OS lists
   as captured, the outputs compared byte for byte with expected lists
   written out in the test, on both systems' inputs.
@@ -1546,6 +1579,9 @@ diagnostic (section 9.2) is not counted.
 - **The private descriptors** are kept by position and pairing, read on
   every list here; a system or service pack whose closed list differs by
   any field is left alone by the templates.
+- **The bridge's interrupt on 2000** (section 6.1, revision 4): XP's form
+  is read; 2000's is taken to be the same and not read, so a 2000 list
+  whose interrupt differs stays left as before revision 4.
 - **The restart** of section 4.3: its gate, its timing against the
   bridges' installs (`MK_BRIDGE_WAIT`), its trigger's reading of the
   bridge inventory, and a restart Windows vetoes (left, and the re-plug
