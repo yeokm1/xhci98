@@ -93,6 +93,16 @@ code settles what the section left open; `usb4-emu` has no version 2
 router model yet, so the q35 legs of a version 2 link are owed with it
 (section 16).
 
+Revised 2026-10-31 (task 45.56, the design): section 6.2.3 item 4
+rewritten - Gen 4 Link Recovery is enabled on a depth-1 Gen 4 link
+between two version 2 routers, behind a new value
+`XhciCmGen4LinkRecovery` (1 by default), with the recovery check Guide
+7.6 asks of a connection manager after each LINK_RECOVERY, and the bit
+cleared again at the host's end at a teardown and on both ends before
+this instance stops or suspends; a new section 6.2.5 names the code and
+the vectors. Sections 1.3, 5.1, 6.2.2, 7.1, 7.3, 11, 12, 15 (U33) and
+16 follow it.
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
@@ -208,11 +218,13 @@ Out, each with where it goes:
   The Time Management Unit is configured only as far as a USB3 tunnel
   needs (section 6.6).
 - Inter-domain (host-to-host) links and the DMA port: never set up.
-- Initiating an asymmetric link, Gen 4 link recovery, USB3 Gen T
+- Initiating an asymmetric link or a Gen 4 link recovery, USB3 Gen T
   tunnels and the other USB4 version 2 features section 6.2.2 item 11
   lists. A version 2 router is run as a version 2 one since task 45.20:
   CMUV 2.0, the Sequence bit capability set, Gen 4 links symmetric or
-  asymmetric used as found (section 6.2).
+  asymmetric used as found (section 6.2); since task 45.56 a depth-1
+  Gen 4 link between two version 2 routers also recovers from an
+  uncorrectable error (section 6.2.3 item 4).
 - MSI and MSI-X, and any interrupt on 98 SE and ME: polling (the line
   interrupt of section 5.4 runs on NT behind `XhciCmRingInterrupt`, task
   45.22).
@@ -738,7 +750,7 @@ size, configuration space and sequence number but not on the adapter field
   | ERR_LINK 1, ERR_HEC 12, ERR_FC 13, ERR_PLUG 14 | an event: counted, logged, acknowledged with a Notification Acknowledgement (Spec 6.4.2.8), or the Enhanced one (6.4.2.9) where the router has the sequence bit enabled (section 6.4), never fails a request |
   | DP_BW 32, PCIE_WAKE 35, DP_CON_CHANGE 36, DPTX_DISCOVERY 37 | acknowledged and ignored |
   | ROP_CMPLT 33, POP_CMPLT 34, ASYM_LINK 39 | consumed silently: the Guide forbids an acknowledgement (7.7.2) |
-  | LINK_RECOVERY 38 | never acknowledged, as above; since task 45.20 it queues a port check (section 6.2.3 item 4) |
+  | LINK_RECOVERY 38 | never acknowledged, as above; since task 45.20 it queues a port check, and since task 45.56 that port's recovery check too (section 6.2.3 item 4 part 4) |
 
   Linux acknowledges only PCIE_WAKE, DP_CON_CHANGE, DPTX_DISCOVERY and
   DP_BW and ignores the link and flow-control errors ([linux] `tb.c`
@@ -969,8 +981,8 @@ one does:
    operation** (Guide 9.1, Event Info `00h`; Spec 8.3.1 step 6)
    likewise: polled. ROP_CMPLT, POP_CMPLT, LINK_RECOVERY and ASYM_LINK
    need no acknowledgement (Spec 6.6) and are counted by code (section
-   5.1's silent class; LINK_RECOVERY also delivered, section 6.2.3 item
-   4); a version 2 router sends many more of
+   5.1's silent class; LINK_RECOVERY also delivered and acted on,
+   section 6.2.3 item 4); a version 2 router sends many more of
    them, which the per-code counter shows and nothing else reads.
 2. **Notification acknowledgements** (Spec 6.6): a Ver. 2 Connection
    Manager acknowledges PCIE_WAKE, DP_CON_CHANGE and DPTX_DISCOVERY as
@@ -1108,10 +1120,11 @@ one does:
     prefers Gen T may then expose both its PCIe Up and Gen T adapters
     (Guide 3.2.1's note on path preference); this driver builds the PCIe
     tunnel, as for any device.
-11. **Not used**, as before: Gen 4 Link Recovery (section 6.2.3 item 4),
-    the asymmetric link transitions (section 6.2.3 item 3), CLx,
-    DisplayPort, inter-domain links, the version 2 sleep flow (section
-    11).
+11. **Not used**, as before: the asymmetric link transitions (section
+    6.2.3 item 3), Initiate Gen 4 Link Recovery (section 6.2.3 item 4
+    part 8), CLx, DisplayPort, inter-domain links, the version 2 sleep
+    flow (section 11). Gen 4 Link Recovery itself is enabled since task
+    45.56 (section 6.2.3 item 4).
 
 #### 6.2.3 Gen 4 and asymmetric links
 
@@ -1164,44 +1177,152 @@ link clears itself (Spec 8.2.2.3, Table 8-12).
    counted and changes nothing; a later width reading that differs from
    the one taken when the port came up is section 7.1's re-check, not a
    teardown by itself.
-4. **Gen 4 Link Recovery** (Spec 4.4.7; Guide 7.6): PORT_CS_19 Enable Gen
-   4 Link Recovery (bit 31) is never set, so an uncorrectable error on a
-   Gen 4 link is a disconnect (Spec 4.4.7), handled as section 7 handles
-   any. On a preserved link a predecessor may have set it; a recovery
-   obliges the connection manager to verify every tunnelled protocol on
-   the link afterwards (Guide 7.6), whatever the connection manager's
-   version. Two parts:
-   1. **No new recovery.** At the adoption (section 9.2), before its
-      tunnels are verified, the bit is read on both USB4 ports of every
-      preserved link this driver walks - the host's port and each link
-      of a preserved chain down to section 9.2's depth - on each end
-      that is a version 2 router (the bit is version 2's), and cleared
-      by a read-modify-write of that bit alone wherever it reads 1,
-      logged `u4.elr.cleared`, whatever `XhciCmUsb4V2` says. From then
-      an uncorrectable error on that link is a disconnect, which
-      section 7 handles in full. A write that fails holds the port
-      (section 9.2).
-   2. **A recovery already run or in flight.** LINK_RECOVERY leaves
-      section 5.1's silent class: still never acknowledged (Spec 6.6
-      lists no acknowledgement for it), it is now delivered to the
-      connection manager like a hot plug event (`TbtCtlClassify` and the
-      note queue in `tbt_ring.c` change with it) and queues a port check
-      (section 7.1) of the port whose path holds the router that sent
-      it. That check is section 7.1's as it stands, nothing new: the
-      router's identity, and for a depth 1 port with a PCIe tunnel up
-      item 4's predicate (Path Enable, and the LTSSM live in L0, L1,
-      Recovery or Recovery.Idle) with item 4's full loss sequence,
-      fabric, statement and PCI removal, when it fails. Section 9.2's
-      adoption is unchanged: it verifies what it verifies today and
-      holds what it cannot, and runs no teardown of its own.
-   What a recovery leaves unverified: a USB3 tunnel's state, a PCIe
-   tunnel between routers below depth 1 (whose adapters section 7.1
-   does not poll) and a preserved DisplayPort tunnel, which this driver
-   has no means to check. That is the limitation Guide 7.6's duty meets
-   here, recorded in section 16; it applies only to a link a predecessor
-   left with the bit set, and only until part 1's clear, since this
-   driver never sets it.
-   Initiate Gen 4 Link Recovery (bit 30) is never written.
+4. **Gen 4 Link Recovery** (Spec 4.4.7; Guide 7.6; task 45.56). With
+   PORT_CS_19 Enable Gen 4 Link Recovery (ELR, bit 31) set on both ends
+   of a Gen 4 link, an uncorrectable error on it is recovered by the two
+   routers with their configuration and states preserved, and the router
+   with the Downstream Facing Port sends LINK_RECOVERY once the link is
+   back; with the bit clear at either end it is a disconnect (Spec
+   4.4.7), handled as section 7 handles any. Guide 7.6 lets a connection
+   manager set the bit "at both ends of the Link when the Link is in
+   CL0", and after each LINK_RECOVERY obliges it to verify "that all
+   tunneled protocols using the recovered Link are in an operational
+   state". Since task 45.56 this driver sets it, behind
+   `XhciCmGen4LinkRecovery` (section 12, 1 by default). Eight parts:
+   1. **Where.** Only on a depth-1 link this driver runs: the port UP or
+      FAILED with its device router present, the link classified Gen 4
+      (item 1, symmetric or asymmetric), both routers of USB4 major
+      version 2 and neither a Thunderbolt 3 router, no preserved
+      DisplayPort tunnel on the port (section 9.2's `DpPreserved`: a
+      tunnelled protocol this driver cannot verify after a recovery),
+      `XhciCmUsb4V2` 1 and `XhciCmGen4LinkRecovery` 1. Never on a HELD,
+      UNSUPPORTED or barred port, a port whose departed router's drain
+      is owed (section 7.7), or a link below depth 1 (record 34's kids):
+      those links keep the bit clear, a disconnect on an error, as
+      before.
+   2. **When and how.** At the idle tick, after the port's own check
+      (section 7.1) has found it unchanged, and as the port's own
+      sequence (section 7.4, as the owed Set of section 6.2.2 item 3 is
+      made): wanted, not yet set on this connection, and not refused on
+      it. At both ends lane 0 LANE_ADP_CS_1 must read Adapter State CL0
+      (Guide 7.6), the host's also Current Link Speed Gen 4 (the link
+      classified again); PORT_CS_18 AsymmetricTransitionInProgress (bit
+      24) 0, since Spec 4.2.2.5 and 4.2.2.6 have Gen 4 Link Recovery
+      enabled only once a transition completes; and PORT_CS_19
+      StartAsymmetricFlow (bit 24) 0, since Table 8-13 forbids a write
+      of PORT_CS_19 while it is 1. A reading short of that writes
+      nothing, and the next tick tries again. Then PORT_CS_19 is written
+      as read with ELR 1, ILR (bit 30) 0 and StartAsymmetricFlow 0, on
+      the device router's upstream port first and then on the host's
+      port, and each is read back. Both reading ELR 1: set
+      (`u4.elr.set`). A write or read that fails, or a read-back of 0 (a
+      router that keeps the bit clear): refused on this connection
+      (`u4.elr.refused`) - the bit written 0 again on each end written,
+      nothing tried again until a new connection (a re-plug, or the
+      reconnect after a disconnect).
+   3. **What is owned.** Per end, from its write on, the driver records
+      that the end may hold its 1, until a read-back shows the bit 0
+      there: the device router's end is forgotten at a teardown, since
+      the router's reset returns it to its default (Spec 4.4.5.2); the
+      host's is not, since Spec 4.4.5.2 does not reset the Downstream
+      Facing Port's bit at a disconnect, and is cleared by section 7.3
+      step 5 (part 6). Set (both ends read back 1) and refused are per
+      connection, cleared at every entry to CONNECTING, and set counts as
+      not set again after a stop, a suspend or a recovery's commit
+      (section 7.7). At the tick a port whose ends may hold the bit but
+      that does not hold it as set has it set again where part 1 still
+      admits the port and the connection has not refused it (part 2:
+      a refusal is never followed by another set on that connection),
+      and written 0 where it does not: on both ends of an UP or FAILED
+      port, whose router this driver has identified; on a HELD one (a
+      port a recovery or a resume left HELD, whose router may not be the
+      one recorded) on the host's end alone, the device end's ownership
+      kept until the router is identified again (the port UP or FAILED)
+      or its departure confirmed (the teardown). The bit is thus never
+      left set on the host's end where this driver would not verify a
+      recovery, and with the host's end clear an error on that link is
+      a disconnect (Spec 4.4.7).
+   4. **LINK_RECOVERY** is delivered to the connection manager, never
+      acknowledged (Spec 6.6), and queues a port check of the port whose
+      path holds the router that sent it (section 7.1; task 45.20), and
+      now also that port's recovery check, made at the tick after the
+      check, while the port is UP or FAILED with its router present, as
+      the port's own sequence, whether or not this driver set the bit (a
+      predecessor's below depth 1, part 7). The check reads only:
+      1. The link: the host's lane 0 LANE_ADP_CS_1 read, Current Link
+         Speed and Negotiated Link Width logged (`u4.elr.link`); a width
+         or speed other than the one taken at the connection is section
+         7.1's re-check, logged, never a teardown by itself (item 3).
+      2. Each tunnel this driver has up on the port, by section 9.2's
+         reading (`tbtU4Follow`): both protocol adapters' Path Enable and
+         the four path entries of the tunnel, at the lane HopIDs
+         recorded for it. The PCIe tunnel then has section 7.1 item 4's
+         predicate at every tick as before (Path Enable, the LTSSM live
+         in L0, L1, Recovery or Recovery.Idle, a transitional state
+         watched for 2 s), Guide 7.6's ADP_PCIE_CS_0 reading.
+      3. A USB3 tunnel's operational state, Guide 7.6's
+         ADP_USB3_GX_CS_4 Port Link State, on the host's USB3 Down
+         adapter: operational with USB3 Link Valid 1 and the state U0,
+         U2 or U3; anything else (Polling, Recovery, Hot Reset, Resume,
+         RxDetect, Inactive, Disabled, a reserved state, or Link Valid 0)
+         keeps the check owed and is read again at the ticks for up to 2
+         s from the check's first try. Still not operational then, it is
+         recorded (`u4.elr.usb3.down`, its state) and the tunnel kept:
+         that state is the USB3 link's own, which the USB3 link layer and
+         the host's xHCI driver recover (an Inactive link by a warm
+         reset, a disabled port by its own port reset), and which a
+         teardown of the tunnel would not mend.
+      4. The TMU, on a link whose TMU this driver configured: section
+         7.7's as-left reading (`tbtU4TmuAsLeft`), logged only
+         (`u4.elr.tmu`).
+      Every tunnel whole and operational: kept (`u4.elr.ok`). A PCIe
+      tunnel whose reading is not whole - an entry invalid or leading
+      elsewhere, a Path Enable clear - is section 7.1 item 4's lost
+      tunnel, with its full loss sequence (the fabric, the statement, the
+      PCI removal; the port FAILED for PCIe until a re-plug, its USB3
+      tunnel kept). A USB3 tunnel whose paths are not whole is torn down
+      alone in the orderly form (Guide 5.5.2, section 7.3's USB3 steps
+      with its bandwidth released) and not built again on this
+      connection. A register that does not read leaves the check owed
+      for the same 2 s; after that it is given up (`u4.elr.unread`) with
+      nothing torn down, section 7.1's checks standing. A kid's PCIe
+      tunnel through the recovered link has its own check at every tick
+      (record 34 section 6.3), unchanged.
+   5. **A lost notification.** Where the transport dropped notifications
+      (`NotesLost`), every port with the bit set owes the recovery
+      check, since a LINK_RECOVERY may have been among them.
+   6. **The clears.** The bit is written 0 (PORT_CS_19 as read with
+      bits 31, 30 and 24 0, then read back) on the host's port at
+      section 7.3 step 5 where this driver may have set it, retried at
+      the tick of an EMPTY port while it fails, never in the way of a new
+      connection; where part 3 finds it no longer admitted; and on every
+      link where it may be set before this instance stops (section 11:
+      stop, remove, disable, and the operating system's suspend, Guide
+      8.2.1), since no connection manager then runs to verify a recovery
+      - not on a contained instance (section 7.7), which writes nothing;
+      the ownership it keeps is reconciled by part 3 after the
+      recovery's commit. Each of these clears follows part 3's identity
+      rule: both ends, device end first, of an UP or FAILED port; the
+      host's end alone of a HELD one, its device end's ownership kept
+      across the stop or the suspend until the router is identified
+      again or its departure confirmed. Every write of PORT_CS_19 this item makes, the clears
+      included, is withheld while StartAsymmetricFlow reads 1 (Table
+      8-13): a clear so withheld or failing stays owed where a tick
+      retries it, and is logged (`u4.elr.clear.failed`) where the stop
+      goes on without it.
+   7. **A predecessor's bit.** Section 9.2's adoption clears it on both
+      ends of every preserved link it walks, at any depth, whatever
+      `XhciCmUsb4V2` and `XhciCmGen4LinkRecovery` say (task 45.20; a
+      failing clear, one withheld for StartAsymmetricFlow included, holds
+      the port); on a depth-1 link that qualifies, the tick then sets it
+      again under this driver's own rule. A link below depth 1 whose
+      clear failed stays as the predecessor left it, and its
+      LINK_RECOVERY reaches the depth-1 port's check and recovery check,
+      its kid's own check standing.
+   8. **Never** written: Initiate Gen 4 Link Recovery (bit 30), which
+      would start a recovery; StartAsymmetricFlow 1 (item 3). Guide
+      8.3.2.4's margining and 8.3.2.5's CLx notes do not apply, since this
+      driver runs neither.
 5. **The raw bandwidth** of the link (Guide Table 6-2), used by section
    6.9 step 2: Gen 2 x1 10, x2 20; Gen 3 x1 20, x2 40; Gen 4 symmetric 80
    Gb/s each way; Gen 4 asymmetric 120 one way and 40 the other, of
@@ -1317,6 +1438,66 @@ What the code settled that this section left open (task 45.20's code,
 - **The USB3 link bound** is one function (`tbtU4LinkBound`), exposed to
   the host suite, since no fabric router reports a USB3 rate the Gen 4
   bound would limit.
+
+#### 6.2.5 Gen 4 Link Recovery: the code and the vectors (task 45.56)
+
+For the code task after section 6.2.3 item 4 converges, in
+`src/cm/tbt_u4cm.c` unless named: a new `tbtU4ElrWanted`, `tbtU4ElrSet`
+and `tbtU4ElrCheck`, made from `TbtU4Poll` after the port's check and its
+kids' service (part 2, part 4); the LINK_RECOVERY branch of
+`tbtU4TakeQueues` and its `NotesLost` loop (parts 4 and 5); the loss
+sequence of `tbtU4PcieLoss` factored out so that the recovery check runs
+the same one (part 4); `tbtU4HostRestore` and the EMPTY tick's condition
+beside it (part 6, the host's end, never part of the restore's verdict
+that gates a connection); `TbtU4Stop` and `TbtU4Suspend` (part 6, before
+`TbtRingStop`, on an instance that is not contained); `TbtU4RecoverCommit`
+and the resume's end (the bit counted as not set); per port in
+`tbt_u4cm.h` the flags set (both ends read back), each end that may
+hold this driver's 1 (part 3), refused, the recovery check owed and its
+first try's time; one guarded write of PORT_CS_19 for every set and
+clear of this item, the adoption's `tbtU4ElrClearAt` included (part 6);
+`TBT_PORT19_SAF`, PORT_CS_18's AsymmetricTransitionInProgress and the
+USB3 Link Valid and Port Link State fields of ADP_USB3_GX_CS_4 in
+`tbt_regs.h`; `TBT_U4_CONFIG.Gen4LinkRecovery`; the value
+`XhciCmGen4LinkRecovery` beside `XhciCmUsb4V2` in `cm_vals.c`,
+`cm_vals.h`, `cm_reg.c` and `cm_nhi.c` (its start note and the counters),
+both `xhcicm` INFs (`HKR,,XhciCmGen4LinkRecovery,0x00010003,1`), the INF
+gate's value table and self-test rows, `docs/using/tuning.md` and record
+21 section 8.1's table. Counters: enabled, refused, cleared at a stop or
+suspend or teardown (and its failures), recovery checks, tunnels kept,
+PCIe and USB3 tunnels lost to a check, checks given up.
+
+Host vectors in `test/test_u4v2.c` against the fake fabric's version 2
+routers: the bit set on both ends of a Gen 4 link, symmetric and
+asymmetric, device end first, each write PORT_CS_19 as read with bit 30
+0, only once lane 0 reads CL0 at both ends and StartAsymmetricFlow 0;
+none while lane 0 reads short of CL0, AsymmetricTransitionInProgress or
+StartAsymmetricFlow reads 1 at either end (then set at a later tick);
+never with `XhciCmGen4LinkRecovery` 0, with `XhciCmUsb4V2` 0, on a v2-v1
+link, a Gen 3 link of two version 2 routers, a HELD port, a port with a
+preserved DisplayPort tunnel, or at depth 2; a port left HELD with the
+bit owned: its host end cleared at the tick, its device end left owned;
+an owned port no longer admitted: both ends cleared;
+a read-back of 0 refused, both ends written 0 again, no retry on that
+connection and a retry after a re-plug; a LINK_RECOVERY with every
+tunnel whole keeping both (no write, no removal); one with a PCIe entry
+gone running the loss sequence (FAILED, the removal queued, the USB3
+tunnel kept); one with a USB3 Path Enable clear tearing the USB3 tunnel
+down alone, the bandwidth released, not rebuilt; a USB3 Port Link State
+of Recovery read again until U0 (kept, `ok`) and one left Inactive for 2
+s recorded with the tunnel kept; an unread register
+retried and then given up after 2 s with nothing torn down; `NotesLost`
+owing the check; the host's end cleared at an unplug, its failure
+retried at the EMPTY tick, a new connection not deferred by it, and a
+clear withheld while StartAsymmetricFlow reads 1; both
+ends cleared at `TbtU4Stop` and `TbtU4Suspend` (a HELD port's host end
+alone) and set again after the resume; nothing written by a contained instance; the 45.20 discovery
+clear of a predecessor's bit unchanged, the bit then set again on a
+qualifying depth-1 link. The value's own vectors in `test/test_cm.c`
+beside `XhciCmUsb4V2`'s. `usb4-emu`'s version 2 model already recovers
+a link with the bit set at both ends (LINK_RECOVERY, configuration
+kept) and disconnects one with it clear at either end (its
+`docs/USB4-V2.md`, `x-link-event=error`); the q35 legs use that.
 
 ### 6.3 Ports and protocol adapters: the fabric mapping
 
@@ -1858,7 +2039,9 @@ from this driver), the `usb4-emu` cross-check links the model itself
 
 1. A hot plug event (section 5.1), from the host router for a lane adapter
    of one of its ports; since task 45.20 also a LINK_RECOVERY
-   notification from a router on the port's path (section 6.2.3 item 4).
+   notification from a router on the port's path (section 6.2.3 item 4),
+   which since task 45.56 also queues that port's recovery check (part
+   4 there) after its port check.
 2. The idle poll's port scan: each tick reads lane 0's LANE_ADP_CS_1 and
    ADP_CS_4 for every host port, two reads per port (Guide 3.1.1 and 3.4.1
    allow periodic scanning in place of events); for a port with a PCIe
@@ -1989,7 +2172,10 @@ in this one order, everything the `nvme98` statement depends on first
 5. **The port's lane adapters back to their defaults** where this driver
    changed them (Guide 3.4.1: the TMU disabled on the host's port as
    section 6.6's TMU item 6 says for an unplug; USB4
-   Port is Configured, cleared on the host's port; Link Credits, which the
+   Port is Configured, cleared on the host's port; Enable Gen 4 Link
+   Recovery, cleared on the host's port where this driver set it, since
+   Spec 4.4.5.2 does not return it to its default at a disconnect
+   (section 6.2.3 item 4 part 6, task 45.56); Link Credits, which the
    router reloads itself, Spec 4.4.5.2): Target Link Width and Lane Bonding
    restored, and lane 1's Lane Disable cleared if section 6.5 set it
    ([linux] `switch.c` `tb_switch_unconfigure_link`,
@@ -3888,7 +4074,12 @@ yes. Its controller keeps record 17's limitation.
 
 - **Stop, remove, disable**: the rings stopped (TX and RX ring control
   cleared [ref] `u4cm_stop`), queued work drained, the thread ended, the
-  common buffer freed. Nothing on the fabric is changed: tunnels stay up
+  common buffer freed. Nothing on the fabric is changed but one bit:
+  before the rings stop, Enable Gen 4 Link Recovery is cleared where
+  this driver may have set it - both ends of an UP or FAILED port, the
+  host's end alone of a HELD one (section 6.2.3 item 4 parts 3 and 6) -
+  since no connection manager then runs to verify a recovery; not on a
+  contained instance, which writes nothing. Tunnels stay up
   and the devices behind them keep working, as under the ICM client (record
   21 section 5.6) and as Linux leaves non-DMA tunnels at unload ([linux]
   `tb.c` `tb_stop`). Force power follows section 4.2's ownership record.
@@ -3900,7 +4091,10 @@ yes. Its controller keeps record 17's limitation.
   across a sleep. Decision U7.
 - **Shutdown**: the same.
 - **System suspend** (D3 for S3 or S4): the NHI marks its tunnel-port
-  set's active members held (section 7.6), then the same as stop. The
+  set's active members held (section 7.6), then the same as stop, the
+  Enable Gen 4 Link Recovery clear included (Guide 8.2.1 clears it before
+  a sleep); after the resume the tick sets it again on each port that
+  qualifies (section 6.2.3 item 4 parts 2 and 6). The
   Guide's sleep entry (chapter 8.2: Enter Sleep, Sleep Ready, the wake configuration) is
   not in the first cut; a domain that loses power across the sleep comes
   back with its device routers uninitialised.
@@ -3948,6 +4142,7 @@ at its default under the don't-overwrite flag, each read once at start
 | `XhciCmPreOsCleanup` | 0 | 0 discover and preserve, hold what does not verify (section 9.2); 1 clean what does not verify; 2 clean everything (section 9.3) (decision U2) |
 | `XhciCmAsmediaPcie7Credits` | 0 (written by the INFs since task 45.50) | a bench experiment, not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
 | `XhciCmUsb4V2` | 1 (written by the INFs since task 45.50) | a bench switch, not asked by the installer: 1 runs a USB4 version 2 router this driver enumerates as version 2 (section 6.2); 0 makes this driver a version 1 connection manager again, the `3.3.0.0` behaviour: CMUV 1.0 to every router it enumerates and none of section 6.2.2's version 2 obligations, on enumerated and adopted routers alike; at 1 those obligations follow each router's own version and the capabilities it reports, whatever CMUV a predecessor wrote, which is only read and logged; the two-dword path writes and the Gen 4 Link Recovery clear of section 6.2.3 item 4 hold either way; any other value refused, 1 standing (section 6.2.1 item 5, decision U30) |
+| `XhciCmGen4LinkRecovery` | 1 (written by the INFs, task 45.56) | a bench switch, not asked by the installer: 1 enables Gen 4 Link Recovery on a depth-1 Gen 4 link between two version 2 routers this driver runs, with the recovery check after each LINK_RECOVERY (section 6.2.3 item 4); 0 never enables it, the task 45.20 behaviour: an uncorrectable error on a Gen 4 link is a disconnect; either way a predecessor's bit is cleared at the adoption (part 7) and a LINK_RECOVERY has its port check and recovery check (part 4); `XhciCmUsb4V2` 0 never enables it; any other value refused, 1 standing |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
 
 `XhciCmCmdTimeoutMs` and `XhciCmApproveTimeoutMs` are the ICM profile's
@@ -3966,7 +4161,9 @@ Configuration Ready timeouts; PCIe and USB3 tunnels built, failed (and at
 which step), torn down; Pending Packets timeouts; Detect-gate timeouts; HCA
 timeouts; ports preserved, held and cleaned at start; Downstream Port
 Resets; quirks fired; tunnel ports associated by source; statements sent
-and withheld by reason. Re-enumeration counters are record 21's `cm.*`. The
+and withheld by reason; Gen 4 Link Recovery enabled, refused, cleared
+and failed clears, the recovery checks and their outcomes (section 6.2.3
+item 4). Re-enumeration counters are record 21's `cm.*`. The
 log's emission is record 21's decision D12, unchanged.
 
 ## 13. Provenance and licence
@@ -4245,6 +4442,7 @@ from their first form, as each row says.
 | U30 | USB4 version 2 routers (task 45.20) | run as version 2 by default: CMUV 2.0 written to a major 2 router this driver enumerates; the version 2 obligations keyed on the routers' own version (the Sequence bit capability enabled with a read-back, Extended Encapsulation on a PCIe tunnel between two version 2 routers, HiFi Enhanced Uni-Directional TMU on their links, a preserved CV never reconfigured, a preserved Gen 4 Link Recovery enable cleared); path entries written as two dwords on every router; `XhciCmUsb4V2` 0, a bench switch written by no INF, restores the version 1 run; confirmed by the owner, 2026-10-29, over making version 1 the default, because the Guide ties the CMUV to the router's version and Linux does the same | 6.2, 6.6, 12 |
 | U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; confirmed by the owner, 2026-10-29, over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
 | U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; the owner chose (a), 2026-10-29: (a) build it, as now, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
+| U33 | Gen 4 Link Recovery (task 45.56) | enabled by default (`XhciCmGen4LinkRecovery` 1, the owner's task of 2026-10-31, with a value to switch it off) on a depth-1 Gen 4 link between two version 2 routers, set at an idle tick once both lane 0 adapters read CL0, cleared at the host's end at a teardown and on both ends before a stop or a suspend; each LINK_RECOVERY a port check and then a read-only recovery check, whose failing PCIe tunnel goes as section 7.1 item 4 takes a lost one and whose failing USB3 tunnel is torn down alone; never below depth 1, never initiated | 6.2.3, 11, 12 |
 
 ## 16. What is open, and what is a risk
 
@@ -4278,9 +4476,12 @@ from their first form, as each row says.
   accuracy for a USB3 tunnel, never measured here; a version 2 router
   that a version 1 predecessor enumerated (CMUV `10h`) and that this
   driver then treats as a version 2 router (section 6.2.1 item 4);
-  after a Gen 4 link recovery a predecessor's enable allowed, the USB3,
-  deeper PCIe and DisplayPort tunnels left unverified (section 6.2.3
-  item 4). The code (task 45.20, 2026-10-30) has met only the host
+  Gen 4 Link Recovery (task 45.56): the routers' recovery itself, which
+  the emulator models only by its outcome, a preserved DisplayPort
+  tunnel left unverified after one, a link below depth 1 a predecessor
+  left recovering where its clear failed, and what a real tunnelled USB3
+  or PCIe link reports right after a recovery, owed to the hardware
+  bench, task 45-E.10 (section 6.2.3 item 4 parts 4 and 7). The code (task 45.20, 2026-10-30) has met only the host
   suite's fake fabric: `usb4-emu`'s routers are version 1 routers (USB4
   Version `20h`, no Gen 4 link), so no q35 leg has run a version 2 link.
   What such a leg needs of `usb4-emu`: a host and a device router
