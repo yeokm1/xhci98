@@ -449,6 +449,12 @@ VOID CmPowerD0Work(PCM_NHI nhi, PIRP irp)
          * release owed through the failure path made here, on the thread,
          * never beside its own re-enumeration calls (cm_reenum.h's
          * contract). The IRP completes as it came back. */
+#if defined(XHCI_FLAVOUR_QEMU)
+        CmLogNote(nhi, "cm.qemu.d0.failed.thread",
+                  ((ULONG)irp->IoStatus.Status & 0xFFFFFFUL) |
+                      (nhi->Suspended ? 0x01000000UL : 0) |
+                      (nhi->ReenumOn ? 0x02000000UL : 0));
+#endif
         if (nhi->Suspended || nhi->ReenumOn) {
             CmReenumResumeFailed(nhi);
         }
@@ -517,6 +523,16 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     UNREFERENCED_PARAMETER(DeviceObject);
 
     nhi = (PCM_NHI)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciCmQemuFailD0 (task 45.27): no guest's bus fails a D0, so the
+     * qemu flavour takes the one it names as failed below, once, for
+     * the failure path's legs. Never in the published flavour. */
+    if (NT_SUCCESS(Irp->IoStatus.Status) && nhi->QemuFailD0 != 0 &&
+        (ULONG)InterlockedIncrement(&nhi->QemuD0Seen) == nhi->QemuFailD0) {
+        Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+        CmLogNote(nhi, "cm.qemu.d0.failed", nhi->QemuFailD0);
+    }
+#endif
     if (NT_SUCCESS(Irp->IoStatus.Status)) {
         if (CmThrQueueOrRecord(nhi, CM_WORK_D0, Irp, PowerDeviceD0)) {
             return STATUS_MORE_PROCESSING_REQUIRED;

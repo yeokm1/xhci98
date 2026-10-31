@@ -4753,6 +4753,153 @@ COM1 blocked, so the second hibernation's loop wrote no COM1 lines.
 - The BUSY that keeps its length (a Stor98 debug-port build), the UAS
   STOP and START, and the bench readings, as before.
 
+### The fifth session: the retry wait, a failed D0 and a lane adapter gone (2026-10-31)
+
+**Verdict: the three legs the fourth session left are read, each on a
+`qemu`-flavour aid or an emulator property made for it. On 98 SE the
+CONFIGMG worker's retry-only wait is the rest of the hold, with one wake
+at its end and the retry made then. A failed D0 at a 98 SE wake runs the
+failure path on the connection manager's thread and the desktop
+returns, though at a wake with no re-enumeration in flight, so the
+overlap the fix serialises was not made. A resume that finds a host router lane adapter gone (7 x86)
+keeps the saved port table, holds the obligation and releases the
+bridges by the failure path, and Windows works after it. What these
+legs cannot show is said below. The D0 overlap (hardware), the BUSY that
+keeps its length, the UAS STOP and START and the bench readings stay
+owed.**
+
+Code: `29dc7496` (the retry-only wait logged, `cm.wk.retry.wait` and
+`cm.wk.retry.woke`; `XhciCmQemuFailD0`) and `9248cb4e`
+(`XhciCmQemuFailReenum`), both under `XHCI_FLAVOUR_QEMU` only, so the
+release flavour neither reads the values nor logs the lines; design
+record 21 section 8.1 lists them among the exempt test-only values.
+Reviewed and revised. Gated builds: `29dc7496` x86 and amd64 `all`
+(`BUILD + GATES PASSED (release qemu)` each, host tests passed), and
+`9248cb4e` the same. The emulator: `usb4-emu` `495568b`, the
+`usb4-host` property `x-adapter-gone` (default off; fork commits
+`67ba5df` and `a94d115`; qtest `/usb4-asm4242/adapter-gone`, 17 of 17 in
+that suite; `usb4-host` 43, `usb4-tunnel` 31, `usb4-fault` 9,
+`usb4-asm2464` 4, unchanged), built on development host A
+(`qemu-system-x86_64.exe` `aa7448ab...`). Evidence:
+`E:\xhci98-vm\p45\w45-owed27c\` (`s98\`, `b98\`, `w7\`, `hashes.txt`).
+
+Vehicles: copies of the fourth session's overlays (its package of
+`3cbca48a` installed), and on i440FX a fresh overlay of a copy of
+`vm\t26`'s 98 SE base with that package installed (`XHCIINST /dir
+release-x86 /yes /nopause /thunderbolt /stor98`, exit 3; the Windows 98
+CD's `usbd.sys` and `usbui.dll` skipped). Over each, this session's
+`qemu` `xhci98.sys` and `xhcicm.sys` were copied. Between `3cbca48a` and
+this branch `xhci98.sys`'s sources are unchanged, and `xhcicm.sys`
+changed only in its Thunderbolt 3 firmware client and the NT bridge
+request.
+
+#### 98 SE: the retry-only wait
+
+`s98`, q35, the ASM4242 model with the ORICO enclosure at power-on. A
+plain re-plug and quick re-plugs (gaps of 0.6 to 1.9 s) never put a
+member call's failure on the worker: the connection-manager thread holds
+the re-enumeration itself while the departed function's sweep runs
+(`cm.reenum.held`, `cm.reenum.held.run`) and posts it once the sweep has
+ended, about 13 to 19 s later, so no `cm.wk.*` line was logged. With
+`XhciCmQemuFailReenum` 3 in the NHI's driver key
+(`Class\System\0052`) and a re-plug (`x-cable` false, true 20 s later)
+the stamped debug console read (`stamped-f.txt`):
+
+| Host time | Line | Reading |
+|---|---|---|
+| 22:05:59.901 | `cm.qemu.reenum.failed=00000208`, `=00000210` | two member calls taken as failed |
+| 22:05:59.901 | `cm.wk.retry.wait=06001388`, `cm.wk.retry.woke=00000000` | members 1 and 2 owed, 5000 ms chosen; woken by a post at once |
+| 22:06:00.092 | `cm.wk.retry.woke=000000B2`, `cm.wk.retry.wait=060012D6` | woken by a post after 178 ms; the wait is what is left, 4822 ms |
+| 22:06:00.259 | `cm.wk.retry.woke=00000000`, `cm.qemu.reenum.failed=00000200`, `cm.wk.retry.wait=07001388` | the third failure restarts the hold: members 0 to 2, 5000 ms |
+| 22:06:05.175 | `cm.wk.retry.woke=10201393` | the timeout (102h) after 5011 ms, the only wake of that wait |
+| 22:06:05.175 | `cm.reenum.9x.reenumerate=00020000`, `00020800`, `00021000` | the retry, the same pass |
+
+So in the retry-only case the worker waits the rest of the hold, wakes
+early only for a post, and makes the retry at the end of the hold, with
+no 200 ms tick between. The re-plug's own re-enumeration then ran to
+DONE (`noirq.after=05000500` at 22:06:24.958).
+
+#### A failed D0 at a 98 SE wake
+
+98 SE's q35 base offers no Stand by (its Shut Down dialog has Shut
+down, Restart and MS-DOS mode only, `s98\a4.png`). On i440FX it does:
+`b98`, `-machine pc,smm=off`, Pentium III, 256 MB (run-36's 36.28
+vehicle), the usb4-emu generic host (`host-model=intel-adl`) behind a
+`usb4-tunnel-bridge` with the ORICO model at power-on, as the earlier 98
+SE legs ran it, on this session's emulator. A stock Stand by before the
+install reached QMP `suspended` and `system_wakeup` brought the desktop
+back. After the install the drive was E: and a 4 MiB copy compared clean
+(`b98\d2.png`). With `XhciCmQemuFailD0` 1 in the NHI's driver key
+(`Class\System\0030`), no D0 came at the start (no `cm.qemu` line), and
+at the first Stand by and wake (`stamped-d.txt`, and again
+`stamped-f.txt`):
+
+- `cm.suspend=00000004`, `u4.suspend.obligations=00000001`, then QMP
+  `suspended`;
+- at the wake `xhci98.sys` took its D0 and reinitialised, then
+  `cm.qemu.d0.failed=00000001` (the completion routine),
+  `cm.qemu.d0.failed.thread=03000001` (the thread's failure path, with
+  the client suspended and the re-enumeration on) and
+  `cm.reenum.resume-failed=00000001`, in the same 65 ms;
+- the desktop came back (`d4.png`, `f3.png`), with no hang.
+
+PASS for the failure path on the thread. `03000001` shows the client
+suspended and the domain's re-enumeration route on (`ReenumOn`, set
+for as long as the domain is started), not a re-enumeration in flight:
+nothing was being re-enumerated at the wake, so the case the fix of
+`2f57cad2` serialises - the failure path beside the thread's own
+`CmReenumStart` or `CmReenumStop`, or a worker's CONFIGMG call, on the
+same domain - was not made, and stays owed. Nor could it be read
+whether a later D0 brings the domain back. QEMU resets the tunnel bridge at the wake
+(`tb0` read secondary bus 0 and endpoint `none gen=1 gate=closed
+awaiting-ack`), and the failed D0 runs no resume, so the drive stays
+gone until one does. The next program started after the wake stopped
+with "A fatal exception 0E has occurred at 0187:BFF9DFFF" (a console
+prompt in `d`, Explorer's E:\ in `f`), the post-standby fault of run-36's
+36.28 part 2 that needs no USB controller, which took the shell with it,
+so no second Stand by could be made. In a third start (`e`, after a
+return from MS-DOS mode) the resume stopped after `xhci98.sys`'s D0,
+before any D0 reached the connection manager, the VMM idle
+(`c00036f2`, `c000a881`), as 36.28 read with a disk attached. So the
+domain's recovery after a failed D0 stays owed to hardware.
+
+#### A resume with a host router lane adapter gone (7 x86)
+
+`w7`: q35 7 x86, the ASM4242 model with the ORICO enclosure at power-on,
+a stick on `qemu-xhci`, `-global ICH9-LPC.disable_s4=0`, this session's
+emulator. After the start the walk read `u4.host.port=00010608` and
+`00030709` (lane 0 adapters 1 and 3, two ports). `H.BAT` hibernated
+(`cm.suspend=00000005`, `u4.suspend.obligations=00000001`). The emulator
+was then started with `usb4-host` `x-adapter-gone=3`, port 2's lane 0
+adapter, which the guest's requests now find not to exist. The resume
+(`debugcon-b.log`):
+
+- the walk read `u4.host.port=00010608` alone, with two
+  `tbt.ring.ctl-notify=00000002` (ERR_ADDR for adapter 3);
+- `u4.resume.port=00000002`: the saved port 2 not found, so
+  `TbtU4Resume` kept the table saved before the sleep;
+- `u4.resume.held=00000001`, `cm.reenum.resumed=00000000` and
+  `cm.reenum.hold.released-failed=00000200`, `=00000208`: the
+  obligation held unjudged and the bridges released by the failure
+  path;
+- after it, only the relations reads of the chain (`cm.chain.rel`)
+  while the guest ran.
+
+Windows resumed to its lock screen and the desktop. A 4 MiB copy to D:
+compared clean (`FC 0`). A cold start without the property read both
+ports again and listed D:. PASS: no hang, no port record judged
+against another's, and the system usable.
+
+#### Still owed after this session
+
+- A failed D0 while a re-enumeration of the domain is in flight (the
+  overlap itself), and the domain's recovery by a later D0 after a
+  failed one: hardware, or a vehicle that resumes 98 SE with a disk and
+  runs programs after the wake (98 SE on QEMU does neither).
+- The D0 overlap: hardware, as the fourth session left it.
+- The BUSY that keeps its length (a Stor98 debug-port build), the UAS
+  STOP and START, and the bench readings, as before.
+
 ## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
 
 Design record 22 section 6.2 coded, as the design half above left it
