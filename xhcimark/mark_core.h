@@ -127,8 +127,17 @@ const char *mk_w_text(int w);
  * attachment of this driver on the stack now or one that did not answer
  * Removable. A pending departure does not stop it (a first plug's install
  * leaves one); the unit's fresh status decides. 1 when a restart is to be
- * considered. */
-int mk_restart_wanted(const MK_ENTRY *e, int valuePresent);
+ * considered. winRecorded (record 21 section 7.7): 0 when Windows'
+ * recorded capabilities of the unit hold neither Removable nor
+ * SurpriseRemovalOK, which also makes an attachment that answered
+ * Removable a candidate; 1 or -1 (recorded, or not read, or not 2000/XP)
+ * keep the answer of the flags alone. */
+int mk_restart_wanted(const MK_ENTRY *e, int valuePresent, int winRecorded);
+
+/* Record 21 section 7.7: the unit's CM_DRP_CAPABILITIES as Windows recorded
+ * them, read (have 1) or not, to the winRecorded of mk_restart_wanted:
+ * 1 Removable set, 0 Removable and SurpriseRemovalOK clear, -1 otherwise. */
+int mk_win_recorded(int have, unsigned long caps);
 
 /* The reconciliation of one record (section 7.4, "Departures and
  * reconciliation"): MK_R_KEEP, MK_R_REMOVE (the mark taken off and the
