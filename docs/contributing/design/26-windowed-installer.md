@@ -586,16 +586,24 @@ engine (`compOwed`) and handed over, with the plan made again, by the
 page's Next or the Settings button (`comp_take`, which keeps the boxes
 the same way first). A plan made at the Back could be refused for the
 boxes (the x64 signing gate with the Thunderbolt box ticked, section
-5.3.3), and Welcome greys Next under a refused plan, so the page could
-not be reached again to change the box; at the page's Next the refusal
-is said on the page, which stays. Welcome after a Back shows the plan of
-the last Next, as before. The Thunderbolt and USB4 page, the settings pages and
+5.3.3), and Welcome greyed Next under any refused plan, so the page
+could not be reached again to change the box; at the page's Next the
+refusal is said on the page, which stays. Welcome after a Back shows the
+plan of the last Next, as before. Since draft 59 Welcome greys Next only
+where the reading, or the plan it made before any page (`planFirst`),
+refused the run (`welcome_refused`); a plan the boxes made at the
+Components page's Next or its Settings button and refused for them (the
+same gate, before draft 59 a dead end after Back as well) shows its text
+on Welcome with Next open, and the Components page refuses it again at
+its Next until a box is changed. The Thunderbolt and USB4 page, the settings pages and
 Stor98's already did; the other USB drivers' pages hand each click to
 the engine as it comes; Welcome, the Summary, Progress, Steps and Finish
 hold no choice a Back leaves (the uninstall's box is on its first page,
 which no page goes Back to). The self-test ticks and unticks the
 Components page's boxes, goes Back through `page_back`, fills the page
-again, and finds them as left and the change owed.
+again, and finds them as left and the change owed; and Welcome's Next
+open under a refused plan of the boxes, greyed under a refused reading or
+first plan.
 Every text a page shows comes from the pure half (section 11), so the host
 suite renders every page once at its longest and the self-test renders them
 through the built binary, as record 23 section 10 does for the console's

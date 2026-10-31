@@ -130,6 +130,7 @@ static LONG busy;               /* a job runs on the worker thread */
 static LONG cancelAsked;
 static int readCode = -1;       /* begin and read: -1 went on */
 static int planCode = -1;
+static int planFirst = -1;      /* the reading's own plan, before any page */
 static int runCode = INST_EXIT_REFUSED;
 static int ran;                 /* Install or Remove was pressed */
 static int ended;               /* inst_eng_end was called */
@@ -503,6 +504,7 @@ static unsigned __stdcall job_main(void *arg)
             sink = &planText;
             LeaveCriticalSection(&textLock);
             planCode = inst_eng_plan();
+            planFirst = planCode;
             {
                 OSVERSIONINFOA v;
                 os_version(&v);
@@ -1008,6 +1010,15 @@ static void welcome_texts(HWND dlg)
     welcome_flow(dlg);
 }
 
+/* Welcome's Next greyed: the reading, or the plan it made before any
+ * page, refused the run. A plan the Components page's boxes made and that
+ * was refused for them leaves Next: that page says so again at its Next,
+ * where the box is changed (record 26 section 5). */
+static int welcome_refused(void)
+{
+    return readCode >= 0 || planFirst >= 0;
+}
+
 static void welcome_state(HWND dlg)
 {
     welcome_texts(dlg);
@@ -1039,12 +1050,12 @@ static void welcome_state(HWND dlg)
             LeaveCriticalSection(&textLock);
         }
     }
-    if (readCode >= 0 || planCode >= 0) {
-        if (planCode >= 0) {
-            EnterCriticalSection(&textLock);
-            set_edit(dlg, IDC_STATUS, planText.Buf != NULL ? planText.Buf : "");
-            LeaveCriticalSection(&textLock);
-        }
+    if (planCode >= 0) {
+        EnterCriticalSection(&textLock);
+        set_edit(dlg, IDC_STATUS, planText.Buf != NULL ? planText.Buf : "");
+        LeaveCriticalSection(&textLock);
+    }
+    if (welcome_refused()) {
         buttons(0);
         return;
     }
@@ -6748,6 +6759,26 @@ static void st_comp_back(HWND parent)
                            st_proc, 0);
     if (d != NULL) {
         comp_fill(d);
+    }
+    {
+        int savedRead = readCode;
+        int savedPlan = planCode;
+        int savedFirst = planFirst;
+        readCode = -1;
+        planFirst = -1;
+        planCode = INST_EXIT_REFUSED;
+        st(!welcome_refused(), "back: a plan refused for the boxes keeps "
+           "Welcome's Next");
+        planFirst = INST_EXIT_REFUSED;
+        st(welcome_refused(), "back: the reading's plan refused greys "
+           "Welcome's Next");
+        planFirst = -1;
+        readCode = INST_EXIT_REFUSED;
+        st(welcome_refused(), "back: the reading refused greys Welcome's "
+           "Next");
+        readCode = savedRead;
+        planCode = savedPlan;
+        planFirst = savedFirst;
     }
     st(ok && d != NULL && tbChoice && (compOwed & 2) != 0 &&
        IsDlgButtonChecked(d, IDC_C_TB) == BST_CHECKED &&
