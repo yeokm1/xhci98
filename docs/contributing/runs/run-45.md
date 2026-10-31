@@ -6642,7 +6642,6 @@ of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
 the calls above; a discovery-only leg (the peer's properties read both
 ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
 
-<<<<<<< HEAD
 ## 45.59 S7 xhcinet6.sys, the NDIS 6.20 miniport for 8, 8.1 and 10 (2026-10-31, partial)
 
 **Verdict: the code, its INF sections, its gates and its gated builds are done here;
@@ -7173,7 +7172,7 @@ not a link fault.
 - Titan Ridge and Ice Lake firmware.
 - The legs of this package against both laptops (45.59's S9 and record
   35 section 11.4).
-=======
+
 ## 45.60 (continued) the legs on ME, 2000, Vista, 8, 8.1 and 10 x86, 7 x64 and 10 x64, and the owner's wording changes (2026-10-31, partial)
 
 Branch `w45-tbpage` from `a027f88e`, tree `E:\xhci98-wt\w45-tbpage` on
@@ -7353,7 +7352,6 @@ The owner's screenshots and their index:
   left for the user to install, which these legs did not produce.
 - Both are in the self-test (routing, and each text in the help
   window), so what is owed is the reading through the installer.
->>>>>>> 70464c5f
 
 ## 45.final: the release-notes texts the tasks handed over
 
