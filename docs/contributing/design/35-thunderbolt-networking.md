@@ -1280,7 +1280,17 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
   indicated net buffer list has come back; `Open` stays in force across a
   pause, so a pause does not log out [inf: a pause is short and the peer
   would only see a stall].
-- **Reset**: nothing to reset below; `MiniportReset` completes at once.
+- **Reset**: nothing below is reset (the CM's service and rings are
+  untouched), but the send side is: NDIS 5 `MiniportReset` takes the send
+  queue's lock, waits out an active sender (the queue owner of the Send
+  item above, which holds the lock only across one reservation, its copy
+  and its commit, so the wait is short and never at a lower IRQL than the
+  sender's), completes every queued packet with `NDIS_STATUS_RESET_IN_PROGRESS`
+  through `NdisMSendComplete`, and only then completes, so no packet sent
+  before the reset is completed after it, as a deserialized miniport's
+  reset must; a frame already committed to the ring was completed at its
+  commit. NDIS 6 has no such reset of sends (`MiniportResetEx` completes
+  at once, its queue drained only by a pause).
 - **Check for hang**: never reports a hang.
 
 ### 7.6 Link up and down
