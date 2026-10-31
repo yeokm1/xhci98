@@ -118,9 +118,9 @@ gate's `MSI-*` rules stay as they are.
 **The task's "2000 to 7 alone" and the INF.** `xhci98.inf`'s
 `NTx86.6.0` decoration has no upper bound: 32-bit 8 to 10, which read it
 too, would take `[Xhci.Dev6.NTx86]` and the helper with it. They are not
-targets of the USB drivers - the installer offers them the connection
+targets of the USB drivers - the installer offers the USB
 drivers on 8 to 10 unticked by default, and ticking them (or `/usb`)
-selects them with a warning that they are not supported there (record 26
+selects them with a warning that they replace Windows' own USB stack (record 26
 sections 5.3.1 and 5.3.2; `inst_core.c`'s case 3) - so "2000 to 7" is the
 helper's supported range, not a bound the INF enforces: a user who ticks
 the USB drivers on 8 to 10 x86 past the warning gets the helper too, as
