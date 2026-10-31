@@ -579,7 +579,11 @@ static const char *const cmU4CounterNames[] = {
     "u4.kid.dropped", "u4.kid.lost", "u4.kid.full",
     "u4.gen4.links", "u4.gen4.asym", "u4.gen4.unusable", "u4.caps.seq-enabled",
     "u4.caps.seq-refused", "u4.caps.seq-unknown", "u4.ee.set", "u4.ee.cleared",
-    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found"
+    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found",
+    "u4.elr.enabled", "u4.elr.refused", "u4.elr.own-cleared",
+    "u4.elr.clear-failed", "u4.elr.checks", "u4.elr.kept",
+    "u4.elr.pcie-lost", "u4.elr.usb3-lost", "u4.elr.usb3-down",
+    "u4.elr.unread"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -2722,6 +2726,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
     nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
+    nhi->U4Cfg.Gen4LinkRecovery = (BOOLEAN)(nhi->Values.Gen4Elr != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
     /* Record 22 section 19: a Mac's Thunderbolt host, its router's id. */
@@ -3278,6 +3283,15 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
                   (nhi->Values.Usb4V2Refused << 9));
     if (nhi->Values.Usb4V2Refused) {
         CmLogNote(nhi, "cm.usb4.v2.raw", nhi->Values.Usb4V2Raw);
+    }
+    /* XhciCmGen4LinkRecovery as run with (record 22 section 6.2.3 item
+     * 4); bit 8 found, bit 9 refused (the value read is then the next
+     * note's). */
+    CmLogNote(nhi, "cm.usb4.elr",
+              nhi->Values.Gen4Elr | (nhi->Values.Gen4ElrFound << 8) |
+                  (nhi->Values.Gen4ElrRefused << 9));
+    if (nhi->Values.Gen4ElrRefused) {
+        CmLogNote(nhi, "cm.usb4.elr.raw", nhi->Values.Gen4ElrRaw);
     }
 
     cmFindBar(nhi, irp);

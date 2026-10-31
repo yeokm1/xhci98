@@ -1,6 +1,10 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 50, 2026-10-30 (roadmap-usb4 task 45.46, the owner's
+Status: revision 51, 2026-10-31 (roadmap-usb4 task 45.54, the owner's
+decisions of that day: fourteen more never-asked values in section 8.1's
+table, and on 98 SE and ME a controller the run installs a target of
+the values, section 8.2);
+revision 50, 2026-10-30 (roadmap-usb4 task 45.46, the owner's
 decision of that day: the ASM4242's USB4 router named by an id line of its
 own in both NHI INFs and by no FriendlyName, the one 3.3.0.0 wrote cleared
 at an update, section 5.13.9);
@@ -3125,6 +3129,20 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciCmUsb3Tunnel` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: build USB3 tunnels |
 | `XhciCmLaneBonding` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: bond the two lanes of a link |
 | `XhciCmPreOsCleanup` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1, 2 | USB4: tunnels found at start kept (0), cleaned where they do not verify (1), or all cleaned (2) |
+| `XhciImodInterval250ns` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
+| `XhciLinkKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a UAS drive as it was when its SuperSpeed link drops and recovers |
+| `XhciResumeKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a root-port device as it was after a resume that started the controller afresh |
+| `XhciUsb2Bos` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | ask a USB 2.1 device at High or Full Speed for its BOS descriptor |
+| `XhciLogVerbosity` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 4 | the driver's log |
+| `XhciLogDebugView` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | the driver's log also to DebugView |
+| `XhciPollIdleMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 1 to 5000 | while polling, the idle period, in ms |
+| `XhciPollActiveMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 1 to 5000 | while polling, the shortest period, in ms (held to `XhciPollIdleMs`) |
+| `XhciFirstEnumWaitMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 30000 | the longest wait for a hub's first report, in ms |
+| `XhciFirstEnumPortMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 30000 | the longest one port may hold it, in ms (held to `XhciFirstEnumWaitMs`) |
+| `XhciMaxTransferKB` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
+| `XhciWideMap` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 (read on 2000 and later; the window shows it greyed on 98 SE and ME, as `XhciPollFineTimer`) | two pieces of a large bulk transfer at once |
+| `XhciCmRingInterrupt` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 on 2000 and later; refused on 98 SE and ME, where the window shows it greyed | the controller's interrupt for a plug or removal |
+| `XhciCmUsb4V2` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | USB4: a version 2 router run as one (a bench switch: leave it at 1) |
 
 Not asked: the log values (`SNAPON.BAT` and `SNAPOFF.BAT` own them, with a
 restart the user is told about), the fourteen Linux quirk values (record
@@ -3144,6 +3162,16 @@ Name=Value` only; and, by the owner's decision of 2026-10-19,
 `XhciFastPollFsLs` (tuning for hidusbf, outside the specification at Low
 and Full Speed), settable with `/set Name=Value` and the window's
 "Advanced..." only. Any of them stays settable by hand, as today.
+
+Revision 51 (roadmap-usb4 task 45.54, the owner's decision of
+2026-10-31): the log values, the poll periods, the moderation interval,
+`XhciMaxTransferKB`, `XhciWideMap` and `XhciFirstEnum*` join the table
+above as never-asked rows, with `XhciLinkKeep`, `XhciResumeKeep`,
+`XhciUsb2Bos`, `XhciCmRingInterrupt` and `XhciCmUsb4V2`, settable with
+`/set Name=Value` and the window's "Advanced..." (record 26 section
+5.4.1). The Linux quirk values, `XhciTolerance` and the other hardware
+quirks, `XhciCommandCheck`, `XhciCmTunnelBridge` and
+`XhciCmAsmediaPcie7Credits` stay out of it.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -3174,8 +3202,12 @@ there; `/set` may still set any value, within the system's allowed set:
   service is not a target; an `xhcicm.inf` value belongs to the NHIs'
   keys, never a filtered port's. A target is a device that will be bound
   to the value's driver after the run - installed or updated by it, or
-  already current or newer. On 98 and ME that is only a device already
-  bound (section 6.5).
+  already current or newer. On 98 and ME that was only a device already
+  bound (section 6.5) until revision 51 (roadmap-usb4 task 45.54, the
+  owner 2026-10-31): a controller with no driver that the run installs
+  is a target there too, as on NT, since every value is written
+  machine-wide (record 26 section 5.4) and needs no bound device; a 98 SE
+  or ME first install so asks `XhciSilentInstall`.
 
 The applicability rule is a pure function of the value, the system and the
 present ids, and is host-tested row by row (section 10).

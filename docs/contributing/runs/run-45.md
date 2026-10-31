@@ -5342,6 +5342,301 @@ leaves nothing behind, and a removal ends every request. Unthrottled (XP, 32 rea
 
 - A drive behind a real SAT bridge, and a SMART reading of a real drive: the bench list.
 
+## 45.54 the installer's Advanced lists offer every user setting: the code and the legs on 98 SE, XP and 7 (2026-10-31)
+
+Branch `w45-adv` (from `a2f703f2`), tree `E:\xhci98-wt\w45-adv` on
+development host A. Commits: `50d9c2a9` (record 26 draft 52, record 23
+revision 51: the design), `b7b570c1` (the code and the host vectors),
+`56a3cd0e` (the console's 98 SE and ME directory refusal shaped to the
+width); each reviewed and revised.
+
+### The cause of the one row
+
+On 98 SE and ME a controller counted for the settings only once it ran
+`xhci98` (`value_target`, record 23 section 8.2, from 3.0.0.0, when the
+console asked its questions after the restart). On a first install no
+controller is bound yet, so `inst_eng_rows` dropped every USB row that
+was not greyed, and only the greyed `XhciPollFineTimer` was left. A
+controller the run installs now counts there too, as on NT
+(`inst_value_target_9x`), so the 98 SE and ME console also asks
+`XhciSilentInstall` and a new host interface's three Thunderbolt
+questions on a first install. A 98 SE or ME run cancelled before its
+values are written skips them, as the NT run's stop; a cancel recorded
+after that stage keeps what was already written.
+
+### The gated build and the host tests
+
+The first gated x86 build, of `b7b570c1`, stopped at the console tool's
+self-test: "every screen within 79 columns" failed, "screens, ordinary:
+1 lines needed the console's wrap". `XHCIINST.EXE /selftest` with
+`XHCIINST_SCREENS` set, run in an XP guest (an instrumented build marked
+the wrap), showed the line: the 98 SE and ME directory refusal ("Not
+that one: Windows 98 SE and ME: each folder name 8 characters at most
+(and a 3-character extension), ..."). Since the 98 pass now asks the
+three Thunderbolt questions, the self-test's script puts its long-named
+directory on the directory question, as the script was written to do,
+and that reason is longer than a line. `56a3cd0e` shapes the refusal
+with `inst_wrap_text`, as a value question is shaped; the screen printed
+is the same, and the guest run gave "11 checks, 0 failures".
+
+The gated x86 build at `56a3cd0e` (`scripts\build-driver.cmd all`,
+`XHCI98_SELFTEST_SKIP_OK=1`, after `src\pfw\build.cmd`): BUILD + GATES
+PASSED (release, qemu), 20:07. Host tests passed (`test_inst` 7409
+checks). The test package: `make-release.ps1 -Arch x86 -TestLabel
+w45adv -NoNonFree -NoWdmFree -SkipQualtool -SkipMarkTool` of `56a3cd0e`
+(its version still `3.3.0.0`); `XHCIWIZ.EXE` `28def4d0...`,
+`XHCIINST.EXE` `ea1e2736...`, `xhci98.sys` `a8593f4f...`, `xhcicm.sys`
+`a9162d04...`.
+
+### The legs
+
+Each on a fresh overlay of the q35 base through `launch-q35.ps1 -Usb4
+asm4242 -EncAtBoot` (the emulated ASM4242 with the ORICO enclosure at
+power-on), a first install of the test package, QMP 49450 to 49454;
+every start and stop in `E:\xhci98-vm\p45\w45-adv\pids.txt`, the
+screens in each leg's folder.
+
+| System | What was done | Result | Evidence |
+|---|---|---|---|
+| 98 SE, the window | SETUP.EXE, Thunderbolt 3 / USB4 ticked, Settings | The USB tab shows `XhciSilentInstall` (it was missing on a first install); its Advanced lists 17 rows in the owner's order, `XhciInterruptMode` first, `XhciPollFineTimer` and `XhciWideMap` greyed "(Windows 2000 to 7 only)"; the Thunderbolt tab's Advanced starts with `XhciCmRingInterrupt`, greyed "(Windows 2000 to 10 only)", and lists `XhciCmUsb4V2` | `w98w\b1-settings-usb.png`, `b2-adv-usb-top.png`, `b3-adv-usb-end.png`, `c2-adv-tb-top.png`, `c3-adv-tb-end.png` |
+| 98 SE, the window | `XhciImodInterval250ns` 200, `XhciLinkKeep` 0, `XhciMaxTransferKB` 130, OK | 130 refused: "64 to 2048, a multiple of 4."; the two others "(to be written)", on the Summary as "The settings written machine-wide", and after the install `Services\USB` holds `XhciLinkKeep`=0 and `XhciImodInterval250ns`=0xc8 alone (the drivers' keys keep the INF defaults 1 and 0xa0) | `b9.png`, `b12-adv-usb-reopen.png`, `d7.png`, `d9.png`, `serial-a.log` |
+| 98 SE, the console | `INSTALL /console`, Y to Thunderbolt, Enter elsewhere | `XhciSilentInstall` asked ("now: new install, the default 0" for each controller), then `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` with the new-install note; answered 1: `Services\USB` holds `XhciSilentInstall`=1 and the `SilentClasses` list; exit 3 | `w98c\t3.txt`, `t4.txt`, `t6.txt`, `serial-a.log` |
+| XP, the window | `XhciWideMap` 1 (USB), `XhciCmRingInterrupt` 1 (Thunderbolt) | Both rows live on XP; after the install and a restart `Services\USB` holds `XhciWideMap`=1 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded | `xpw2\b3-widemap.png`, `c2-ring.png`, `d13.png`, `serial-a.log` |
+| XP, a run cancelled | the first XP overlay's run, cancelled at the Progress page after the package was staged | no `Services\USB` key: no value written (the cancel came before the values' stage) | `xpw\d4.png`, `serial-a.log` |
+| 7 x86, the window | `XhciInterruptMode` 2 (the row offers 0 to 3), `XhciCmRingInterrupt` 1 | after the install and a restart `Services\USB` holds `XhciInterruptMode`=2 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded; the tunnelled NVMe drive mounted during the install | `w7w\b1-adv-usb-top.png`, `c1-adv-tb-top.png`, `d9.png`, `serial-a.log` |
+
+- 98 SE was not restarted after its installs (98 SE's known shutdown hang
+  with `xhcicm` installed, `q35-bases\STATE.md`); the legs read the
+  installer, and the values it writes are read from the registry.
+- In the Advanced dialog, a refused number keeps its row selected while
+  the list's grey highlight can move to another row when a key is
+  pressed in the list before the box is corrected. The value written is
+  the one the box shows for its own row. Seen on 98 SE with
+  `XhciMaxTransferKB`. Not changed here.
+
+## 45.56 Gen 4 Link Recovery on USB4 version 2 links (2026-10-31)
+
+Design record 22 section 6.2.3 item 4 rewritten and section 6.2.5 added
+(`506d2af3`), then coded (`e2c38d30`, branch `w45-gen4`), each reviewed
+and revised. 45.57 was dropped by the owner the same day (`4feac7f8`);
+nothing of it was done here.
+
+### What the code does
+
+- Enable Gen 4 Link Recovery (PORT_CS_19 bit 31) set on both ends of a
+  depth-1 Gen 4 link, symmetric or asymmetric, between two USB4 version 2
+  routers, at the idle tick once the port is UP or FAILED: device end
+  first, each written as read with bits 30 and 24 0 and read back, only
+  with both lane 0 adapters in CL0, the host's at Gen 4, no asymmetric
+  transition in progress (PORT_CS_18 bit 24) and StartAsymmetricFlow 0
+  at both ends. A router that keeps it 0 refuses it for that connection,
+  both ends written 0 again. Never on a HELD port, a port with a
+  preserved DisplayPort tunnel, or below depth 1.
+- `XhciCmGen4LinkRecovery`, written at 1 by both NHI INFs: 0 never sets
+  it; `XhciCmUsb4V2` 0 never sets it either.
+- Each LINK_RECOVERY (and a lost notification on a port with the bit set)
+  owes the port's recovery check after its port check: the link logged;
+  each tunnel's six parts read at its recorded lane HopIDs (a PCIe
+  tunnel not whole goes as a lost one, a USB3 tunnel not whole is torn
+  down alone); the USB3 Port Link State watched up to 2 s for U0, U2 or
+  U3 and recorded, the tunnel kept, if it does not get there; the TMU
+  logged; a request unanswered retried for 2 s, then the check given up
+  with nothing torn down; a LINK_RECOVERY drained during the check keeps
+  it owed.
+- The bit cleared again: the host's end at an unplug's teardown (retried
+  at the EMPTY tick, never deferring a new connection); both ends before
+  a stop or a suspend, a HELD port's host end alone; set again by the
+  tick after a resume or a recovery's commit; an owned bit on a port no
+  longer admitted cleared at the tick. No write of PORT_CS_19 while
+  StartAsymmetricFlow reads 1, the adoption's clear of a predecessor's
+  bit included (which then holds the port).
+
+Host vectors: `test_u4v2` 510 checks (the `test_elr_*` vectors; the fake
+fabric gained ADP_USB3_GX_CS_4's USB3 Link Valid and Port Link State and
+a router that keeps the bit 0), `test_cm` 252, `test_u4cm` 1889
+unchanged; the whole host run passed. The gated builds of `e2c38d30` in
+this worktree passed: x86 "BUILD + GATES PASSED (release qemu)" at
+11:06, amd64 at 11:41 (development host A).
+
+### The legs (2026-10-31)
+
+`usb4-emu` main `230bed5` (QEMU fork `674ff08`, version 2 router model
+`cb36497`; the snapshot task 45.20 used, unchanged: its
+`x-link-event=error` recovers a Gen 4 link whose two ends have the bit
+set, sending LINK_RECOVERY with the configuration kept, and disconnects
+it otherwise, docs/USB4-V2.md). q35, `usb4-host host-model=minimal
+usb4-version=2` in the `adl` layout with `usb4-device dialect=usb4
+usb4-version=2` and the NVMe test disk at power-on; the version 1 leg on
+the `asm4242` model with the ORICO enclosure at power-on (pre-OS
+tunnel). The release package of `e2c38d30` installed (`INSTALL.BAT
+/console /yes /nopause /thunderbolt /stor98`, the installer built from
+the same tree), then its `qemu` `xhcicm.sys` copied over the installed
+one and the guest restarted, so the connection manager's log reads on
+the debug console: x86 release `xhcicm.sys` `780f1708...`, qemu
+`358aabda...`; amd64 staged unsigned with unsigned catalogs (release
+`ea73e693...`, qemu `9c3df75c...`), signed in the guest with a
+throwaway certificate made there, nothing signed on the host. Fresh
+overlays; evidence under `E:\xhci98-vm\p45\w45-gen4\<leg>\`
+(`steps.txt`, `debugcon-a.log`, `trace-a.log`, screenshots).
+
+| System | Configuration | Result |
+|---|---|---|
+| 7 x86 (`w7`) | v2 host and device at power-on | `cm.usb4.elr=00000101` (the value as written by the INF), Gen 4 x2, PCIe and USB3 tunnels, `u4.elr.set=00000001`; the emulator reads `elr=1/1` |
+| 7 x86 | `x-link-event=error` | the emulator's recovery ("uncorrectable error: recovered"), LINK_RECOVERY, the recovery check: `u4.elr.link=00010202`, `u4.elr.usb3=00010100` (Link Valid, U0), `u4.elr.tmu=00000101`, `u4.elr.ok`; both tunnels kept, no teardown; D: ORICO listed and TESTDATA.BIN copied after it |
+| 7 x86 | unplug, plug again | the trace at the plug reads `ELR dfp 0 ufp 0` (the host's end cleared at the teardown; task 45.20's run read `dfp 1` there), then `u4.elr.set` again |
+| 7 x86 | `XhciCmGen4LinkRecovery` 0 (machine-wide value), restart, `error` | `cm.usb4.elr=00000100`, no set (`elr=0/0`); the error a disconnect: teardown, the router back, tunnels rebuilt |
+| XP (`wxp`) | v2 host and device at power-on; `error`; unplug and plug `asym-tx`; `error` | `u4.elr.set`; both errors recovered with `u4.elr.ok` (`u4.elr.link=00010204` on the asymmetric link), tunnels kept; `ELR dfp 0 ufp 0` at the re-plug; the emulator `width=0x4/0x8 elr=1/1 recoveries=1`. The volume not read: 45.20's XP reading (no NVMe volume on this layout) stands |
+| 10 x64 (`w10`) | v2 host and device at power-on; `error`; `asym-tx` transition then `error`; unplug and plug; the value 0 and restart, `error` | as on 7 x86: `u4.elr.set`, two recoveries `u4.elr.ok` (`recoveries=2`), E: ORICO listed after them, `dfp 0` at the re-plug, and with the value 0 the error a disconnect |
+| 7 x86 (`w7r`) | the version 1 regression: `asm4242`, ORICO at power-on | the tunnel preserved (`u4.preserved=00010808`), no `u4.elr` line, D: ORICO; hot unplug and plug rebuilt, D: back, still no `u4.elr` line |
+
+### What is left
+
+The bench reading on a real version 2 router with task 45-E.10 (the
+routers' recovery itself, what a real tunnelled PCIe and USB3 link reads
+right after one). 45.56 is otherwise done here.
+
+## 45.53 and 45.55: a tunnel port with no power controller, and the legs on the emulator's new default (2026-10-31, partial)
+
+Worker w45-pcie, development host A. Code at `a2f703f2` (no driver
+change in these tasks): the gated build `all` (x86), "BUILD + GATES
+PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-pcie\build-all.log`),
+and `all -amd64`, passed (`build-amd64-all.log`). Packages
+(`make-package.ps1`): release x86 `xhci98.sys` `bdc4b851...`,
+`xhcicm.sys` `fd8e3958...`, `stor98.sys` `202d6249...`; qemu x86
+`xhcicm.sys` `867c9b83...`, `xhci98.sys` `d7b77130...`. The installer,
+`xhcimark` and `xhcitr` built from this tree (`XHCIINST.EXE`
+`41f89e51...`, `XHCIMARK.EXE` `8248088b...`) in `3.3.0.0`'s package
+layout. Evidence: `E:\xhci98-vm\p45\w45-pcie\` (one folder a leg:
+`cmdline-<tag>.txt`, `steps.txt`, `debugcon-<tag>.log`, `serial-<tag>.log`,
+`infopci-*.txt`, screenshots; hashes in `hashes-xf3.txt`, the goldens in
+`goldens-sha.txt`).
+
+### The cause
+
+**45.53 (XP, `adl`).** With the emulator's default of the time the
+`adl` tunnel root port (`usb4-tunnel-port`) reported a Power Controller,
+as QEMU's `pcie-root-port` does: an empty slot came out of reset powered
+off (Slot Control PCC set) and the enclosure the tunnel brought up read
+all ones until the guest powered the slot, which 98 SE, ME, 2000 and XP
+never do. Read on XP (r1, the default): the tunnel up in the connection
+manager, the root port's PCC off and the endpoint all ones; r2, the same
+with `-global usb4-tunnel-port.power_controller_present=off`: the chain
+enumerated and the ORICO drive mounted. The captured Alder Lake-P
+Thunderbolt 4 root ports have none ("PwrCtrl-",
+`tests/captures/framework13-12th/linux-orico`, `pci/tb-complex`), so the
+emulator was wrong, not the driver.
+
+**45.55 (`asm4242-desktop`).** With the emulator's default of the time the
+ASM4242 switch's tunnel ports had neither a power controller of the
+board's kind nor its padding: SeaBIOS left each tunnel port one bus and
+its minimum windows, so a device router plugged later had no bus numbers
+for its own switch (XP r3: the parent's switch upstream port at bus 3
+with secondary bus 0). The board's firmware gives each tunnel port 48
+buses, 12 KB I/O and 384 MB (ASM4242-USB4.md 11.1, USB4-HOSTS.md 5.2 in
+`usb4-emu`).
+
+### The emulator's new default (owner's option (a), 2026-10-31)
+
+In `usb4-emu` (branch `w45-pcie`, merged with main `ede6308`; QEMU fork
+`5c91aaa`, patch exported in `src/patches`):
+
+| Commit | What |
+|---|---|
+| `c83a0ea` (fork `d6c8136`) | `usb4-tunnel-port` and `usb4-asm-tunnel-dsp` with no power controller by default; `usb4-asm-usp` pads its tunnel ports by default (`fw-bus-pad=48,fw-io-pad=12K,fw-mem-pad=384M`, a pad that does not fit shrinking) |
+| `a77e7fa` (fork `ffcaa8c`, `b0d1ea6`) | reviewed and revised: a Slot Control write cannot power off a slot with no power controller at any offset (QEMU's slot code reads PCC from the value written); the ASM4242 pads act on SeaBIOS's numbering only |
+| `5c140b5` (fork `34c6a5e`, `55cadf9`) | `usb4-tb3-tunnel-dsp` (Alpine Ridge: the P14s's tunnel port 04:01.0 reports "PwrCtrl-") and, by analogy, `usb4-tr-tunnel-dsp` (Titan Ridge is not captured) with no power controller by default; `power-controller` is on, off or auto, auto following QEMU's `power_controller_present`, so either spelling gives the controller back |
+| `048a9e5`, `1c3a050` | the docs reviewed and revised (what removes an endpoint behind a port with no power controller; the padding no longer opt-in); the merge of main |
+
+The launchers' explicit `-global ...power_controller_present=off` (45.14,
+w45-small's `launch-q35.ps1` change) is left: it gives the same slot. Every
+`usb4-emu` qtest suite on `5c91aaa`: host 43, tunnel 31, icm 40, icm-tr
+16, icm-icl 5, harness 25, fault 9, asm4242 16, asm2464 4, tb3dev 12,
+tbhost 9, root-hotplug 22, usb3 9, retrain 5, xdomain 6 (252 ok, none
+failed).
+
+**Earlier legs this default can change.** Read with a power controller on
+the tunnel port; on the new default a guest's slot power-off removes
+nothing, and on the ASM4242 layout the bus numbers below the switch
+move (a 98 SE instance that names `BUS_xx` there is found anew):
+- every `adl` leg on NT (45.20's version 2 legs, 45.49's `adl` reading):
+  the endpoint now answers with no slot power-on from the guest;
+- every `asm4242` leg (45.12 R1/R5, 45.15, 45.18, 45.22, 45.31, 45.35,
+  45.37, 45.46/45.50): the tunnel ports had no power controller already
+  where the leg asked for it; the padding is new;
+- the Thunderbolt 3 legs on 2000, XP, Vista, 7 and 10 (`-Usb4 tb3ar` /
+  `tb3tr`, which passed no global on NT): 45.13, 45.17, 45.21 (the Apple
+  models), 45.22, 45.37, 45.47, 45.49; and `usb4-emu`'s GUEST-EXITS
+  reading of Windows 7's Safely Remove (the endpoint was removed by the
+  slot power-off; now it stays until the tunnel goes down or the router is
+  unplugged). The 98 SE and ME Thunderbolt 3 legs already ran with
+  `power_controller_present=off`.
+
+### The legs on the new default
+
+Emulator: the fork `55cadf9` build (`bin-55cadf9`, `qemu-system-x86_64.exe`
+`93b47a05...`; the merge with main changes no tunnel-port code). Goldens
+(fresh overlays of the q35 bases, this tree's release package installed,
+the qemu flavour's `xhcicm.sys` and `xhci98.sys` copied over): XP and 98 SE
+installed with the `asm4242` layout present, 2000 with no USB4 hardware
+(`-NoXhci`), 7 x86 with `adl` present. Leg A (45.53): `-Usb4 adl`, the
+ORICO enclosure plugged by QMP at the desktop. Leg B (45.55):
+`-Usb4 asm4242`, the parent `usb4-device ... downstream-ports=1,
+chain-power-controller=off` and its child plugged by QMP at the desktop
+two seconds apart.
+
+| Leg | System | Read | Verdict |
+|---|---|---|---|
+| A | 98 SE | the enclosure plugged: the switch's bridges by the Add New Hardware wizard (a restart offered, declined), then Stor98's wizard for the NVMe; Orico (E:) in My Computer (`w9A\b-vol-E.png`) | pass |
+| A | XP | first plug with the tunnel root ports on Windows' own bridge driver (they appeared after the install, through Found New Hardware): nothing enumerated behind 00:05.0 (the switch's bus registers 0, `xpA\infopci-1.txt`); the installer run again with the layout present (the root ports then "xHCI98 PCI Bridge"), restarted: the plug gave Found New Hardware for "Stor98 Storage Controller for NVMe SSDs", D: ORICO, `fc /b` of a copied file no differences | pass once the root ports carry the package's bridge driver |
+| A | 2000 | (fresh overlay `w2C`, installer run with the layout present, cold start) the plug: the switch numbered, the NVMe enumerated (`cm.chain.id` for it at 02:00, depth 3) as "PCI Device", the wizard found no driver (code 18, `w2C\b-wizard-no-driver.png`); `INSTALL.BAT` run again put Stor98 on it: E: ORICO | the PCI side passes; the driver match on a desktop plug does not (owed) |
+| A | 7 x86 | the plug: Stor98 started, D: ORICO | pass (control) |
+| B | XP | the tunnel port 48 buses (3-50) and its windows (new default), but the parent's switch upstream port `104C:8232` at Code 12: the tunnel port has no I/O window (the launcher's root port reserves no I/O, so the switch's I/O pad shrinks to none) | fails |
+| B | XP, root ports `io-reserve=24K` (as the board) | the parent's switch and its downstream ports numbered (`cm.breq` for 03:00, 04:00, 04:08); the parent's NVMe enumerated as "PCI Device" (code 18, no `PCI\XHCI98_TUNNEL` id, so the wizard finds no driver); the chain port `104C:8233` at Code 12, the child not reached | fails (driver side, owed) |
+| B | 98 SE | both tunnels up in the model (the kid's too), but no connection-manager line in the debug log even with the qemu flavour copied in; the parent's switch left unnumbered | not read (the golden's NHI driver to check) |
+| B | 2000 | the transfer disk not visible to 2000 on this layout after its first-boot wizards; not run | owed |
+| B | 7 x86 | (golden installed with `adl`; the ASM4242 switch's ports first on Windows' own drivers: both NVMe "PCI Device" code 28; the installer run again with the layout present, restarted) the plug: the kid UP (`u4.kid.pcie.up=00010809`), both NVMe on Stor98, started; D: ORICO (the second drive, a copy of the same disk image, shows no letter) | pass (control) |
+| A, B | ME, XP x64, Vista x86 | not run in this session | owed |
+
+10 x64 (w45-u4chain2, `E:\xhci98-vm\p45\w45-u4chain\STATE.md`): a USB4
+parent plugged again at the desktop with its child attached, parent UP
+then the kid, both NVMe started.
+
+### Findings
+
+- 45.53's cause is the emulator's, fixed by its new default: the `adl`
+  endpoint answers with no slot power-on. For 45.55 the default asks the
+  board's padding (48 buses, 12 KB I/O, 384 MB a tunnel port), which
+  shrinks to what the launcher's root port reserves (`bus-reserve=100,
+  mem-reserve=64M`, no I/O): tunnel port 0 got buses 3-50, 30 MB of memory
+  and no I/O window (`xpB\infopci-1.txt`); with `io-reserve=24K` it got an
+  I/O window and still 30 MB (`xpB2\infopci-1.txt`). These legs do not give
+  the board's resources, so whether XP's remaining Code 12 is the
+  launcher's limit or this driver's is not settled.
+- A tunnel port that appears after the install (here: the layout
+  changed under an installed system) gets Windows' own bridge driver: on
+  XP a hot-added switch behind it is never enumerated, on 7 the drives
+  behind it get no tunnel id and no driver; with the package's bridge
+  driver on it (the installer run again) the plug works. On a real Alder Lake system the
+  ports exist at install time.
+- On 2000 (`adl`) and on XP behind a device router's switch, a hot-added
+  NVMe enumerates without the tunnel id Stor98's INF matches on NT 5, so
+  Windows' wizard offers no driver; the installer's run puts Stor98 on it.
+- XP behind a device router: with no I/O window on the tunnel port the
+  parent's switch stops at Code 12; with the root port's I/O reservation
+  the switch numbers, and its chain port still stops at Code 12 (cause not
+  settled, above).
+
+### Left
+
+- 45.53: ME, XP x64 (the amd64 packages are unsigned; the in-guest
+  throwaway signing) and Vista x86 legs; 2000's driver match on a desktop
+  plug.
+- 45.55: the XP chain port's Code 12 and the parent's NVMe without the
+  tunnel id; 98 SE's reading with the connection manager confirmed
+  running; a leg with the board's root port reservation (`-AsmReserve`,
+  which the launcher does not give 2000 and XP, or one within 4 GB); 2000,
+  ME, XP x64 and Vista legs.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
@@ -5460,3 +5755,40 @@ the version bump.
   tools work on 64-bit Windows. On Windows 98 SE and ME, ASPI tools reach
   the same drives through the existing storage stack. A bridge without SAT
   returns the standard refusal, as on Windows' own USB storage driver.""
+- 45.62 (pending): "- (45.62, coordinator note for the bump; owner,
+  2026-10-31) The release notes' "Known limitation: a drive attached
+  during the install" text: narrow "until Windows restarts or the drive is
+  plugged in again" to the re-plug alone (on XP and 2000 a restart did not
+  list it, 45.27's second session), unless 45.62's fix lands first."
+- 45.54 (HEAD): "- (45.54, installer Advanced lists, 2026-10-31) "The
+  installer's Advanced lists now offer every setting a user may change.
+  The USB tab adds XhciLinkKeep, XhciResumeKeep, XhciUsb2Bos, the
+  interrupt moderation interval (XhciImodInterval250ns), the driver's log
+  (XhciLogVerbosity, XhciLogDebugView), the polling periods
+  (XhciPollIdleMs, XhciPollActiveMs), the hub first-report waits
+  (XhciFirstEnumWaitMs, XhciFirstEnumPortMs), the largest UAS command
+  (XhciMaxTransferKB, a multiple of 4) and XhciWideMap (Windows 2000 to
+  7). The Thunderbolt tab adds XhciCmRingInterrupt (Windows 2000 to 10)
+  and XhciCmUsb4V2. A value is written machine-wide only when you change
+  it. On Windows 98 SE and ME a first install now lists the USB settings
+  and asks XhciSilentInstall, where it showed one greyed row before.""
+- 45.56 (HEAD): "- (45.56, Gen 4 Link Recovery, 2026-10-31) "USB4 version
+  2 links: a Gen 4 link between the computer's USB4 controller and a USB4
+  version 2 device now recovers from a link error in place, with the
+  devices behind it kept, instead of being dropped and connected again.
+  After each recovery the driver checks the device's PCI Express and USB
+  connections and removes only one that did not come back. The new value
+  XhciCmGen4LinkRecovery, written at 1 by the install, restores the
+  previous behaviour when set to 0." The release notes' value table also
+  gets a row for XhciCmGen4LinkRecovery: written as 1; "leave it at 1; 0
+  takes a link error as an unplug and fresh plug, as before"."
+- 45.53 (HEAD): "- (45.53 and 45.55, 2026-10-31; no driver changed, so
+  whether the first sentence belongs in the notes at all is the bump's
+  call) "A drive behind a USB4 host's own PCIe tunnel port, plugged in
+  while Windows 98 SE, XP or 7 runs, gets its drive letter without a
+  restart." - Known issue (45.53): "On Windows 2000, an NVMe drive plugged
+  into a USB4 or Thunderbolt port while Windows runs can be left without a
+  driver; run INSTALL.BAT again to install Stor98 on it." - Known issue
+  (45.55): "On Windows XP, a USB4 device that has its own downstream port
+  (a dock or a daisy-chainable enclosure), plugged in while Windows runs,
+  may not show its own drive or the device chained behind it.""

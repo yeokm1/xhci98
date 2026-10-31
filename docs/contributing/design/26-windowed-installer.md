@@ -1,6 +1,10 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 51, 2026-10-30 (task 45.6: a lifted row of the
+Status: draft 52, 2026-10-31 (task 45.54, the owner's decisions of
+that day: on 98 SE and ME a controller the run installs counts for the
+settings, and the USB and Thunderbolt tabs' Advanced lists offer every
+user setting of `tuning.md` but the ones named left out, section
+5.4.1); draft 51, 2026-10-30 (task 45.6: a lifted row of the
 installer's table held to a lift only in a cut carrying both sets of
 its pair, section 6.7.14); draft 50, 2026-10-29 (task 45.7's ME leg: ME's `DevicePath`
 limit 259, not 98 SE's 280, section 6.7.13); draft 49, 2026-10-29
@@ -1804,7 +1808,9 @@ value in force and written only when changed. The dialog says at its top
 that these are for the release notes' advice and a tester's use. The
 fourteen Linux quirk values (record 20), the log values and the poll
 periods stay out, as record 23 section 8.1 keeps them out: a value nobody
-should set from an installer is not offered by one.
+should set from an installer is not offered by one. (Draft 52, task
+45.54: the log values, the poll periods and the other values of
+section 5.4.1 join the dialog; the quirk values stay out.)
 
 **The layout** (draft 21, roadmap-usb4 task 43.10; the owner, 2026-10-20:
 "some drop-down text is longer than the menu, and the description at the
@@ -1955,6 +1961,147 @@ under the rows 20 dialog units tall, two lines.
   every advanced value of the table shown in turn, its list's entries
   within its closed box and its open list at least as wide.
 
+#### 5.4.1 Every user setting behind Advanced (task 45.54; draft 52)
+
+The owner, 2026-10-31: "we should add more advanced settings in
+installer for usb and thunderbolt, especially the interrupt mode". On a
+98 SE first install the USB tab's Advanced showed one row,
+`XhciPollFineTimer`, greyed, where section 5.4 names five.
+
+*The cause.* A row is listed only where a device takes the value after
+the run (`value_targets`, `inst_eng_rows`), or where it is a Thunderbolt
+row or a greyed one. On NT a target is a controller whose action is
+install, update, current or newer. On 98 SE and ME it was only a
+controller already bound to `xhci98` (record 23 section 8.2, from
+`3.0.0.0`, when the console asked its questions after the restart). On a
+first install no controller is bound yet, so every USB row that is not
+greyed was dropped, `XhciInterruptMode` and the asked
+`XhciSilentInstall` among them. The greyed `XhciPollFineTimer` was the
+only row left. *The fix:* on 98 SE and ME a controller this run
+installs (action install, no driver now) is a target as well, as on NT.
+Since task 42-A.17 every value is written machine-wide in
+`Services\USB` with no device needed, which the driver reads first at
+its start. What changes is what is shown and asked, and one write
+decision. The console takes the same rule: a 98 SE or ME first install
+now asks `XhciSilentInstall`, as record 23 section 8.1's "Asked when"
+says (the owner, 2026-10-31), and a newly installed NHI's three
+Thunderbolt questions, as on NT. Before the restart such a controller's
+"now" is its default, as a new install's on NT is. The write decision
+is this: a value chosen equal to its INF default, with no machine-wide
+value set, is no longer written on a first install. The controller the
+run installs gets that default from its INF (`inst_mw_write_needed`),
+as on NT; until now it had no target there, so the value was written
+machine-wide. The steps page's last sentence asked for the installer to
+be run again "to check the result and set the driver's options". It
+now says "to check the result; the driver's options can be changed
+there too", since the first run sets them.
+
+*The rows added* (the owner, 2026-10-31: the list below, no other). Each
+is never asked and is an Advanced row only. Each is preselected with the
+value in force and written machine-wide only when changed, as section
+5.4 says. Each default is its INF's `AddReg` line (task 45.50 writes
+every one), and the choices and ranges are `tuning.md`'s:
+
+| Value | Tab | Systems (greyed elsewhere) | Allowed | Meaning shown |
+|---|---|---|---|---|
+| `XhciImodInterval250ns` | USB | every | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
+| `XhciLinkKeep` | USB | every | 0, 1 | keep a UAS drive with a serial number as it was when its SuperSpeed link drops and recovers |
+| `XhciResumeKeep` | USB | every | 0, 1 | keep a device on a root port as it was after a standby or hibernation that started the controller afresh |
+| `XhciUsb2Bos` | USB | every | 0, 1 | ask a USB 2.1 device at High or Full Speed whether it can run at SuperSpeed (its BOS descriptor) |
+| `XhciLogVerbosity` | USB | every | 0 to 4 | the driver's log (the 0 to 4 meanings of the connection manager's row, 4 with its caution) |
+| `XhciLogDebugView` | USB | every | 0, 1 | the driver's log also to a debugger or DebugView |
+| `XhciPollIdleMs` | USB | every | 1 to 5000 | while polling, the period with nothing outstanding, in ms |
+| `XhciPollActiveMs` | USB | every | 1 to 5000 | while polling, the shortest period with transfers outstanding, in ms; the driver holds it to `XhciPollIdleMs` |
+| `XhciFirstEnumWaitMs` | USB | every | 0 to 30000 | the longest wait, in ms, for a hub's first report |
+| `XhciFirstEnumPortMs` | USB | every | 0 to 30000 | the longest one port may hold that wait, in ms; the driver holds it to `XhciFirstEnumWaitMs` |
+| `XhciMaxTransferKB` | USB | every | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
+| `XhciWideMap` | USB | 2000 and later (`INST_APPLY_NT_XHCI`; greyed as "Windows 2000 to 7 only", as `XhciPollFineTimer` is) | 0, 1 | two pieces of a large bulk transfer on the controller at once |
+| `XhciCmRingInterrupt` | Thunderbolt | 2000 to 10 (`INST_APPLY_NT_CM`, new) | 0, 1 | let the controller's interrupt tell the driver at once that a device was plugged in or removed |
+| `XhciCmUsb4V2` | Thunderbolt | every | 0, 1 | USB4: run a version 2 router as a version 2 one, with a caution on 0 (a bench switch: leave it at 1) |
+
+In record 23 section 8.1's terms each row's "Asked when" is "never
+(task 45.54; the window's Advanced)". With the five rows the USB tab
+already had, it lists seventeen values; on 98 SE and ME two of them,
+`XhciPollFineTimer` and `XhciWideMap`, are greyed. The
+Thunderbolt tab gains two. The values the driver takes as "anything
+but 0 is on" are offered as 0 and 1, as `XhciPollFineTimer` is. The
+rows come in the owner's order. On the USB tab:
+- `XhciInterruptMode`;
+- `XhciLinkKeep`, `XhciResumeKeep` and `XhciUsb2Bos`;
+- the moderation interval;
+- the two log values;
+- then the poll periods with `XhciPollFineTimer`, and the rest in the
+  table's order.
+
+On the Thunderbolt tab `XhciCmRingInterrupt` comes first, with
+`XhciCmUsb4V2` before the period, the timeouts and the log.
+
+*Left out* (the owner, 2026-10-31):
+
+- `XhciCommandCheck`: the owner's ruling of task 45.45.
+- `XhciCmTunnelBridge`: a string, for a hand edit (section 5.5).
+- `XhciCmAsmediaPcie7Credits`: a bench experiment, to be left at 0.
+- `XhciTolerance`, the hardware quirks (`XhciIntelPortSwitch` aside,
+  which is asked) and the fourteen Linux quirk values: their
+  per-controller defaults are the point.
+
+`/set` still refuses each of these by name, as before.
+
+*A range with a step.* `XhciMaxTransferKB` is a multiple of 4: the
+driver takes any other number as its default (task 36.22,
+`XhciXpolValue`). So the table gains a `Step` field (0 for none). One
+check, `inst_value_in_range`, holds a range row's number to Lo, Hi and
+the step, and one text, `inst_value_range_text` ("64 to 2048, a
+multiple of 4"), says it. `/set`, the console, the pages' number box,
+the Advanced dialog's box, its message and the row's note all use the
+two.
+
+*A new system rule.* `XhciCmRingInterrupt` is read on 2000 to 10 and
+ignored on 98 SE and ME (`tuning.md`). The x86 NHI INF writes it on its
+NT paths alone. Its rule, `INST_APPLY_NT_CM`, makes it a Thunderbolt
+row: it is on `inst_eng_rows`' list of Thunderbolt rules (`cmRow`), so
+it is shown with no NHI present too (the staged-only case of section
+5.5), and it is greyed on 98 SE and ME with "(Windows 2000 to 10
+only)". The rule is taken by `inst_value_relevant`,
+`inst_value_greyed`, `inst_value_only`, `inst_value_set_mask` and the
+engine's two write guards (`value_needs_write`, `write_values`), so
+`/set`, the page and the run refuse it there, as they refuse
+`XhciCmBridgeReq` outside 2000 and XP. `XhciWideMap` keeps its existing
+rule's behaviour: greyed on 98 SE and ME and accepted there by `/set`,
+as `XhciPollFineTimer` is; the driver ignores it there.
+
+*The dialog with many rows.* The Advanced dialog is a report-style list
+over the selected row's note and choice. The list scrolls by itself, so
+no template grows; seventeen rows take the USB tab's list past its
+height, about eight rows, and the list scrolls. Its arrays were sized
+for twelve rows (`WIZ_ROWS`, the pages' bound) and are sized for the
+whole table now (`INST_MAX_VALUES`, raised from 32 to 48 for the
+table's 37 rows). The window's `/selftest` already shows every advanced
+row of the table in turn, in its mixed, machine-wide and greyed forms,
+so it covers the new rows.
+
+*The uninstall.* It deletes from `Services\USB` every value the table
+names (section 9.3), so the new rows' machine-wide values go with it,
+as the five old rows' did.
+
+*Host vectors* (`test\test_inst.c`). The table-wide INF checks are
+rewritten first. They held every `xhci98.inf` row's default at 0 and
+checked it through the `/set` mask. They now check a range row's
+default with `inst_value_in_range` and a list row's through its mask.
+Then:
+
+- every new row is found, never asked, and has its tab;
+- its default is its INF's and is allowed;
+- `/set` takes its bounds, refuses one past each, and refuses a
+  `XhciMaxTransferKB` off its step;
+- `XhciCmRingInterrupt` is greyed and refused on 98 SE, taken on XP, and
+  relevant only with an NHI;
+- `XhciWideMap` is greyed on 98 SE;
+- each left-out value is not in the table;
+- the 98 SE target rule (`inst_value_target_9x`, the pure form of the
+  rule above): a controller with no driver, one already bound and one
+  bound elsewhere.
+
 ### 5.5 The Thunderbolt settings
 
 Shown when Thunderbolt 3 / USB4 support is ticked and `xhcicm.inf` matches
@@ -1982,7 +2129,11 @@ caution that 0 can leave a dock hot-plugged while Windows runs with one
 port and that 2 records and changes nothing; `/set` refuses it on
 another system. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
-a diagnostic the release notes describe for a hand edit.
+a diagnostic the release notes describe for a hand edit. Since draft 52
+(task 45.54, section 5.4.1) two more rows join Advanced:
+`XhciCmRingInterrupt` (2000 to 10, greyed on 98 SE and ME) and
+`XhciCmUsb4V2`. `XhciCmAsmediaPcie7Credits`, a bench experiment, is not
+offered.
 
 ### 5.6 Stor98's settings
 
@@ -2034,7 +2185,10 @@ suite checks every row against that readme's table
 `src\stor98\docs\package-readme.txt`'s table to it), so a Stor98 change
 that renames or retypes a value fails the build rather than the user. Every Stor98 value the installer writes is
 recorded by name under the `Stor98` key of section 6.3, for the uninstall.
-The page is not shown when Stor98 is unticked.
+The page is not shown when Stor98 is unticked. Task 45.54 (draft 52)
+checked the page against the readme's table: every one of its nine
+settings is already a row, two on the page and seven behind Advanced,
+so the page is unchanged.
 
 ### 5.7 The summary
 
@@ -5542,6 +5696,10 @@ greyed by the window on 2000 to 7).
 Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 (the connection manager alone), 4.3 (Windows 8 and 8.1, `RtlGetVersion`),
 5.10, 7.1 (`/cmonly`), 8.5, 9.1, 9.5, 10 and 13 (D17 to D19).
+
+Draft 52 (task 45.54) changes record 23 by its revision 51: section
+8.1 (fourteen more never-asked rows, and the values left out) and 8.2
+(on 98 SE and ME a controller the run installs is a target).
 
 ## 13. Decisions taken in writing this (the orchestrator's, owner to confirm)
 

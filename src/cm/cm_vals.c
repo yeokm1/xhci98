@@ -330,6 +330,7 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
     v->Usb4V2 = CM_USB4_V2_DEFAULT;
+    v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
     v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
     v->RingIrq = CM_RING_IRQ_DEFAULT;
 }
@@ -404,6 +405,24 @@ VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw)
         return;
     }
     v->Usb4V2 = raw;
+}
+
+VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
+    v->Gen4ElrFound = 0;
+    v->Gen4ElrRaw = 0;
+    v->Gen4ElrRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->Gen4ElrFound = 1;
+    v->Gen4ElrRaw = raw;
+    if (raw > 1) {
+        v->Gen4ElrRefused = 1;
+        return;
+    }
+    v->Gen4Elr = raw;
 }
 
 VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw)

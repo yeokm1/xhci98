@@ -556,12 +556,20 @@ tools\silent\silent-on.bat does), and XhciCmMode, XhciCmApprove and
 XhciCmSafeEject (with the Thunderbolt support). The release notes,
 "Registry settings", say what each does. An answer applies from the
 driver's next start. Advanced... on each tab holds the values for the
-release notes' advice and a tester's use (XhciInterruptMode,
-XhciForceBulkOnly, XhciPollFineTimer, XhciSelectiveSuspend, XhciCmReenum,
-XhciCmUsb3Tunnel, XhciCmLaneBonding, XhciCmPreOsCleanup, the connection
-manager's waits and its log, XhciCmBridgeNumbering and XhciCmNoIrqStart
-on 98 SE and ME, XhciCmBridgeReq on 2000 and XP, and the mark service's
-Restart on 2000 to 10); the console sets them only with /set Name=Value.
+release notes' advice and a tester's use. On the USB tab:
+XhciInterruptMode, XhciLinkKeep, XhciResumeKeep, XhciUsb2Bos,
+XhciImodInterval250ns, the driver's log (XhciLogVerbosity,
+XhciLogDebugView), the polling periods (XhciPollIdleMs, XhciPollActiveMs)
+and XhciPollFineTimer on 2000 to 7, XhciSelectiveSuspend,
+XhciForceBulkOnly, XhciFastPollFsLs, XhciMaxTransferKB, XhciWideMap on
+2000 to 7, and the first report's waits (XhciFirstEnumWaitMs,
+XhciFirstEnumPortMs). On the Thunderbolt tab: XhciCmRingInterrupt on
+2000 to 10, XhciCmReenum, XhciCmUsb3Tunnel, XhciCmLaneBonding,
+XhciCmPreOsCleanup, XhciCmUsb4V2, the connection manager's period, its
+waits and its log, XhciCmBridgeNumbering and XhciCmNoIrqStart on 98 SE
+and ME, XhciCmBridgeReq on 2000 and XP, and the mark service's Restart
+on 2000 to 10. A value of another system is shown greyed. The console
+sets them only with /set Name=Value.
 The drivers' own install writes each value of the release notes'
 "Registry settings" and "The connection manager's registry values" at
 its default where it is missing, so it is already in the controller's

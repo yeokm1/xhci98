@@ -95,6 +95,10 @@ typedef struct FAB_ADP {
     int Lane1;                      /* a lane 1 adapter (every fixture: even numbers) */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
     int EeStuck;                    /* PCIe: Extended Encapsulation never sets (task 45.20) */
+    /* USB3 (task 45.56): ADP_USB3_GX_CS_4 bits 11:0 (USB3 Link Valid, Port
+     * Link State) read Usb3Ls - 1 when nonzero; else Link Valid and U0
+     * while the adapter's Path Enable is set, 0 otherwise (usb4-emu). */
+    unsigned long Usb3Ls;
 } FAB_ADP;
 
 typedef struct FAB_ROUTER {
@@ -171,6 +175,8 @@ typedef struct FAB_ROUTER {
     int CapsFailAfterSet;
     unsigned long SetCapsOps;
     unsigned long SetCapsLastMeta;
+    int ElrStuck;                   /* PORT_CS_19 Enable Gen 4 Link Recovery never
+                                     * sets (task 45.56): a router that keeps it 0 */
 } FAB_ROUTER;
 
 typedef struct FAB_FRAME {

@@ -7322,6 +7322,7 @@ no INF before this task:
 | `xhcicm.sys` | `XhciCmTunnelBridge` | every system | no override (absent or empty) | `auto` (REG_SZ), every path of both NHI INFs |
 | `xhcicm.sys` | `XhciCmAsmediaPcie7Credits` | every system | 0 | 0, every path of both NHI INFs |
 | `xhcicm.sys` | `XhciCmUsb4V2` | every system | 1 | 1, every path of both NHI INFs |
+| `xhcicm.sys` | `XhciCmGen4LinkRecovery` | every system | 1 | 1, every path of both NHI INFs (task 45.56) |
 | `xhcicm.sys` | `XhciCmRingInterrupt` | 2000 to 10 (98 SE and ME read it and poll whatever it says) | 0 | 0, the NT paths (`.NTx86`, `.NTx86.6.0`, `.NTamd64`, `.NTamd64.6.0`) |
 | `xhcicm.sys` | `XhciCmBridgeReq` | NT 5.x alone (2000, XP, XP x64; `CmBreqGate`) | 1 | 1, the NT 5.x paths (`.NTx86`, `.NTamd64`) |
 

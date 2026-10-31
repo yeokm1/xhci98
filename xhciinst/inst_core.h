@@ -486,6 +486,8 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
 #define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
                                    manager (record 33 section 9.1) */
+#define INST_APPLY_NT_CM    8   /* 2000 to 10 with the connection manager
+                                   (task 45.54: XhciCmRingInterrupt) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -519,10 +521,12 @@ typedef struct _INST_VALUE {
     int NoInf;
     INST_U32 Def;
     int Loc;                /* INST_LOC_*: 0 for every Services\USB value */
+    INST_U32 Step;          /* a range's number a multiple of it (0: any;
+                               task 45.54, XhciMaxTransferKB's 4) */
 } INST_VALUE;
 
 /* The most values the table holds (the answers' arrays). */
-#define INST_MAX_VALUES     32
+#define INST_MAX_VALUES     48
 
 /* Where the installer writes a value (record 26 section 5.4, task 42-A.17;
  * owner, 2026-10-18): the machine-wide key both drivers read first, under
@@ -581,6 +585,19 @@ const char *inst_value_only(int index);
  * writes (NoInf) and for a 98 SE and ME Thunderbolt value the INF does
  * not write (the amd64 xhcicm.inf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
+
+/* A range value's number (Hi nonzero) within Lo to Hi and on its Step
+ * (record 26 section 5.4.1): 1 when it is, 0 otherwise or for a list. */
+int inst_value_in_range(int index, INST_U32 v);
+
+/* A range value's allowed numbers as text, "64 to 2048, a multiple of 4"
+ * or "1 to 5000"; "" for a list. */
+void inst_value_range_text(int index, char *out, size_t cap);
+
+/* 98 SE and ME (record 23 section 8.2, revision 51): 1 when a controller
+ * takes the values after the run - bound to the INF's service now, or a
+ * device with no driver that the run installs (INST_ACT_INSTALL). */
+int inst_value_target_9x(int serviceIsOurs, int action);
 
 /* An answer: 0 keep (empty line), 1 *value set, -1 not an allowed value. */
 int inst_value_answer(const char *line, INST_U32 mask, INST_U32 *value);

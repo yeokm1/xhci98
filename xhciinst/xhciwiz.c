@@ -2455,12 +2455,13 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
                   r->InForce == r->Def ? " (the default)" : "");
     }
     out[cap - 1] = '\0';
-    if (v->Hi != 0 && strlen(out) + 24 < cap) {
-        char range[48];
-        _snprintf(range, sizeof(range) - 1, "; %lu to %lu",
-                  (unsigned long)v->Lo, (unsigned long)v->Hi);
-        range[sizeof(range) - 1] = '\0';
-        strcat(out, range);
+    if (v->Hi != 0) {
+        char range[64];
+        inst_value_range_text(r->Value, range, sizeof(range));
+        if (strlen(out) + strlen(range) + 3 < cap) {
+            strcat(out, "; ");
+            strcat(out, range);
+        }
     }
 }
 
@@ -2514,8 +2515,9 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
         }
     }
     if (v->Hi != 0) {
-        _snprintf(line, sizeof(line) - 1, " Allowed: %lu to %lu.",
-                  (unsigned long)v->Lo, (unsigned long)v->Hi);
+        char range[64];
+        inst_value_range_text(r->Value, range, sizeof(range));
+        _snprintf(line, sizeof(line) - 1, " Allowed: %s.", range);
         line[sizeof(line) - 1] = '\0';
         strncat(out, line, cap - strlen(out) - 1);
     } else {
@@ -3072,7 +3074,7 @@ static int row_read(const ROWCTL *rc, INST_U32 *v)
             return 0;
         }
         *v = (INST_U32)strtoul(text, NULL, 10);
-        if (*v < instValues[r->Value].Lo || *v > instValues[r->Value].Hi) {
+        if (!inst_value_in_range(r->Value, *v)) {
             return 0;
         }
         return choice_writes(r, 0, *v);
@@ -3148,13 +3150,12 @@ static int settings_leave(HWND dlg, int page)
             choiceSet[r->Value] = 1;
             choiceVal[r->Value] = v;
         } else if (instValues[r->Value].Hi != 0 && typed[0] != '\0' &&
-                   (v < instValues[r->Value].Lo ||
-                    v > instValues[r->Value].Hi)) {
+                   !inst_value_in_range(r->Value, v)) {
             char text[256];
-            _snprintf(text, sizeof(text) - 1, "%s takes %lu to %lu.",
-                      instValues[r->Value].Name,
-                      (unsigned long)instValues[r->Value].Lo,
-                      (unsigned long)instValues[r->Value].Hi);
+            char range[64];
+            inst_value_range_text(r->Value, range, sizeof(range));
+            _snprintf(text, sizeof(text) - 1, "%s takes %s.",
+                      instValues[r->Value].Name, range);
             text[sizeof(text) - 1] = '\0';
             MessageBoxA(dlg, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
             return 0;
@@ -3170,11 +3171,11 @@ static int settings_leave(HWND dlg, int page)
 /* A list of the page's never-asked values; the one selected shown whole
  * below it with its choice. The choices are kept apart and taken at OK. */
 static int advPage;
-static int advIdx[WIZ_ROWS];
+static int advIdx[INST_MAX_VALUES];
 static int advCount;
 static int advCur = -1;
-static int advSet[WIZ_ROWS];
-static INST_U32 advVal[WIZ_ROWS];
+static int advSet[INST_MAX_VALUES];
+static INST_U32 advVal[INST_MAX_VALUES];
 
 static void adv_cell(HWND lv, int i)
 {
@@ -3198,7 +3199,7 @@ static void adv_cell(HWND lv, int i)
 static int adv_take(HWND dlg)
 {
     const INST_ROW *r;
-    char text[32];
+    char text[80];
     INST_U32 v;
 
     if (advCur < 0) {
@@ -3219,10 +3220,10 @@ static int adv_take(HWND dlg)
             return 1;
         }
         v = (INST_U32)strtoul(text, NULL, 10);
-        if (v < instValues[r->Value].Lo || v > instValues[r->Value].Hi) {
-            _snprintf(text, sizeof(text) - 1, "%lu to %lu.",
-                      (unsigned long)instValues[r->Value].Lo,
-                      (unsigned long)instValues[r->Value].Hi);
+        if (!inst_value_in_range(r->Value, v)) {
+            char range[64];
+            inst_value_range_text(r->Value, range, sizeof(range));
+            _snprintf(text, sizeof(text) - 1, "%s.", range);
             text[sizeof(text) - 1] = '\0';
             MessageBoxA(dlg, text, instValues[r->Value].Name, MB_OK |
                         MB_ICONWARNING);
@@ -3297,7 +3298,7 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         c.cx = dlu_x(dlg, 150);
         c.pszText = "Setting";
         ListView_InsertColumn(lv, 1, &c);
-        advCount = rows_for(advPage, 1, advIdx, WIZ_ROWS);
+        advCount = rows_for(advPage, 1, advIdx, INST_MAX_VALUES);
         for (i = 0; i < advCount; i++) {
             const INST_ROW *r = &rows[advIdx[i]];
             int mixed;
