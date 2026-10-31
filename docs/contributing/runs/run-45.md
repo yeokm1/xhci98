@@ -8379,3 +8379,14 @@ the version bump.
   and xhcicm.sys take only non-executable memory for their own data, and
   their 64-bit files keep their import table outside executable code, as
   Windows' memory-integrity checks require."
+- 45.44 (d7869b08): "The download has one folder per Windows family:
+  98-me\ (98 SE, ME), nt-x86\ (32-bit 2000 to 10) and nt-x64\ (64-bit).
+  Each holds only the drivers its Windows installs: the controller and UAS
+  drivers at its root, the Thunderbolt 3 / USB4 connection manager in cm\,
+  and Stor98 in stor98\. The root of nt-x86\ or nt-x64\ is the F6 floppy.
+  INTEGRATE.TXT says which folder to give nLite, NTLite or DISM; the
+  connection manager's port filter ships as cm\xhcicmf.inx, which
+  integration tools skip, and SETUP.EXE installs it. The 98 SE / ME Stor98
+  INF is now 98-me\stor98\stor98.inf (was stor98w9.inf); the 32-bit
+  stor98.inf is for Windows 2000 to 10 only. The free-driver download adds
+  print/usbprn: USB printers and USB-to-parallel cables on 98 SE and ME."
