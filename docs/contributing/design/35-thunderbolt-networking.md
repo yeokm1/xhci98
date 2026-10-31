@@ -1,6 +1,8 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 6, 2026-10-31, step S4: the firmware connection
+Status: revision 7, 2026-10-31, step S5: the service's driver half in
+`xhcicm.sys` as built (section 6.5), reviewed and revised.
+Revision 6, 2026-10-31, step S4: the firmware connection
 manager's half as built (section 3.10), reviewed and revised.
 Revision 5, 2026-10-31, step S3: the software connection
 manager's half as built (section 3.9), reviewed and revised; an
@@ -1508,6 +1510,103 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   `InterfaceDereference`) counts the network driver's hold; the PDO
   is not deleted while it is held, as record 21 section 3.2's rundown
   protects the filters' entries.
+
+### 6.5 As built (step S5)
+
+`cm_net.c` is the driver half, `cm_netr.c` the rings' pure half
+(`test_cm_net`, section 11.1); the engine's calls are section 3.9's.
+
+- **The PDO** is created at the NHI's first start that has `XhciCmNet`
+  1 under the software connection manager, and reported in BusRelations
+  at every such start. The firmware connection manager's starts report
+  it no more until step S4 gives that path a service. Its removal while
+  the NHI still reports it (a disable) keeps it; a removal once it is
+  reported no more retires it from the NHI, so a later start that wants
+  one makes a fresh PDO. It is deleted at the NHI's removal once the PnP
+  manager has removed it, or at its own removal once orphaned or retired
+  (2000 and later; on 98 SE and ME such a PDO stays allocated, as more
+  IRPs may follow a removal there). Its answers are
+  section 6.1's, built in non-paged pool as `xhci98.sys`'s root hub
+  builds its own.
+- **The interface.** `IRP_MN_QUERY_INTERFACE` for `GUID_XHCI_CM_NET`,
+  and the same table from `IRP_MJ_INTERNAL_DEVICE_CONTROL` with the
+  private code `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA59, METHOD_NEITHER,
+  FILE_ANY_ACCESS)` (0x00222967), `Parameters.Others.Argument1` the
+  caller's table with `Header.Size` and `Header.Version` set: section
+  6.3's 98 SE fallback, answered on every target so the header can name
+  it once the 98 SE leg has read which one NTKERN carries. Each answer
+  holds one reference. Every call reaches the NHI through the PDO under
+  the PDO's lock, counted, so the NHI's removal waits out a call inside.
+- **Open and Close** set the wish under the lock and queue
+  `CM_WORK_NET`; the thread gives it to the engine (`TbtU4NetWanted`,
+  with `prtcstns` bit 1 always, bit 0 unless `XhciCmNetE2E` is 0, bit 2
+  for a frame above 1514) and reads this domain's MAC
+  (`TbtU4NetIdentity`, read afresh at each start), and both calls wait
+  for that pass (at most 5 s); the client and its wish change together
+  under the lock. A wish made while the NHI is stopped is applied at its
+  next start, the client staying open across the stop. Close drops the
+  client first (no callback or reservation starts after it, and a token
+  of an earlier one is refused by a new generation), then waits, however
+  long, for an outstanding reservation's commit or abort and for every
+  callback running to end (logged after 1 s and 5 s); the engine's logout
+  runs as section 4.2 has it and the rings come down when it ends.
+  `QueryInfo` answers `XHCI_CM_NET_E_STATE` until this start's MAC is
+  read.
+- **The rings** are set up by `RingsUp` on ring 1 as section 5.3 says:
+  the transmit ring's base and size, then its control in one write (Valid,
+  E2E where used); the receive ring's base, size (Data Buffer Size 0),
+  PDF masks `0x00020004`, its Producer Index read (a non-zero one is where
+  the first frame lands), Valid, then Valid, E2E and the Transmit E2E
+  HopID in bits 22:12 in a second write, then the Consumer Index one slot
+  behind; the transmit indexes read back equal. The memory is allocated
+  there at the first service after a start (each descriptor block and
+  each 4 KiB buffer its own common buffer) and freed at the stop, or kept
+  with its adapter where a ring was not read back stopped, and forgotten
+  then, so no later start frees or reuses it. A service whose earlier ring
+  of this start was not read back stopped is refused (`cm.net.mem.busy`),
+  and `RingsUp` disables the ring and reads it back before it writes any
+  descriptor.
+- **The poll** is the service's only clock in this step: the data ring's
+  receive cause is never opened (section 5.4's interrupt share waits for
+  a leg that measures it), so its descriptors' IE raises nothing. The
+  one-shot timer is armed at Link up, re-armed by its own DPC while the
+  rings are on and not closing, and its DPC kicks the service DPC; the
+  owner word, the in-flight count (the rings' own share while they are
+  on, the timer's while it is set, the service's while queued or
+  running) and the rundown are section 5.4's. The image is pinned at the
+  first Link up.
+- **A pass** counts the receive ring's completed descriptors from Head
+  under the lock, reaps the transmit ring, takes the client for the
+  pass, releases the lock, hands each frame on in ring order (an EOF PDF
+  other than 2 dropped and counted, the first logged with its length and
+  flags, `cm.net.rx.pdf`; frames with no client or no link dropped and
+  counted), calls `TxDone` with the count reaped, then reposts the
+  descriptors and writes the Consumer Index under the lock. A peer that
+  sends with no credits while this host's receive ring has E2E on (Linux,
+  section 2.4 point 9) is served the same way: nothing in software waits
+  for a credit.
+- **Link down** stops sends (Up 0, a new generation), calls
+  `LinkChange(FALSE)`, waits for the outstanding reservation to be
+  committed or aborted (its sender may still be copying into the buffers,
+  so it is never taken back; logged after 1 s, `cm.net.res.slow`), then for
+  the transmit ring to drain (500 ms, `cm.net.tx.left`). **RingsDown**
+  runs the rundown, then disables both rings and reads Ring Valid back
+  (`cm.net.stop-unverified` and the memory kept where it does not read
+  clear); with the host interface lost it writes nothing.
+- **TxCommit** checks every length (12 to 4096) and the count against
+  the token before posting; a bad one releases the reservation and
+  answers `XHCI_CM_NET_E_PARAM`. `TxReserve` reaps the transmit ring
+  first, so a sender does not wait a tick for descriptors already done.
+- **Counters and the log**: the `cm.net.*` lines at the NHI's stop
+  (opens, services, frames each way, drops by cause, passes, kicks,
+  timers, the rundown's outcomes), and at each event `cm.net.open`,
+  `cm.net.close`, `cm.net.wanted`, `cm.net.mac`, `cm.net.rings`,
+  `cm.net.link.up` (port, the peer's `prtcstns`, Gb/s),
+  `cm.net.peer.mac`, `cm.net.link.down`, `cm.net.rings.down`,
+  `cm.net.pdo` and `cm.net.pnp`.
+- **Imports**: `KeInitializeTimer`, `KeSetTimer`, `KeCancelTimer` and
+  `ObfReferenceObject` join `xhcicm.sys`'s allowlists, each
+  `xhci98.sys`'s own row with its Windows 98 evidence.
 
 ## 7. The network drivers
 

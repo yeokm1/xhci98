@@ -904,6 +904,10 @@ static VOID NTAPI cmThread(PVOID context)
         if (bits & CM_WORK_D3) {
             CmPowerD3Work(nhi, d3Irp);
         }
+        if (bits & CM_WORK_NET) {
+            /* The network driver's Open or Close (cm_net.c, task 45.59). */
+            CmNhiNetWork(nhi);
+        }
         if (bits & CM_WORK_STOP) {
             CmNhiStopWork(nhi);
             CmStatusStopped(nhi);

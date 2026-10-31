@@ -105,6 +105,50 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
     return STATUS_SUCCESS;
 }
 
+/*
+ * The Thunderbolt networking rings' common buffers (design record 35
+ * section 5.3; cm_net.c): each descriptor block and each 4 KiB buffer its
+ * own allocation on the ring block's adapter, cached, below 4 GB and 16-byte
+ * aligned as the ring block is. PASSIVE_LEVEL, on the thread.
+ */
+PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa)
+{
+    PHYSICAL_ADDRESS phys;
+    PVOID va;
+
+    *pa = 0;
+    if (nhi->Dma == NULL || bytes == 0) {
+        return NULL;
+    }
+    phys.LowPart = 0;
+    phys.HighPart = 0;
+    va = nhi->Dma->DmaOperations->AllocateCommonBuffer(nhi->Dma, bytes, &phys, TRUE);
+    if (va != NULL &&
+        (phys.HighPart != 0 || (phys.LowPart & (TBT_RING_DMA_ALIGN - 1)) != 0 ||
+         ((ULONG_PTR)va & (TBT_RING_DMA_ALIGN - 1)) != 0)) {
+        nhi->Dma->DmaOperations->FreeCommonBuffer(nhi->Dma, bytes, phys, va, TRUE);
+        va = NULL;
+    }
+    if (va == NULL) {
+        return NULL;
+    }
+    CmZero(va, bytes);
+    *pa = phys.LowPart;
+    return va;
+}
+
+VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va)
+{
+    PHYSICAL_ADDRESS phys;
+
+    if (nhi->Dma == NULL || va == NULL) {
+        return;
+    }
+    phys.LowPart = pa;
+    phys.HighPart = 0;
+    nhi->Dma->DmaOperations->FreeCommonBuffer(nhi->Dma, bytes, phys, va, TRUE);
+}
+
 /* The block given back, unless the host interface may still DMA into it:
  * a ring enabled and no verified stop since (TBT_RING.DmaMayRun - a
  * partial start counts, and an unanswered or refused read-back never
@@ -121,11 +165,19 @@ VOID CmDmaClose(PCM_NHI nhi)
             CmLogNote(nhi, "cm.buffer-kept", 1);
             nhi->CommonVa = NULL;
             nhi->Dma = NULL;
+            nhi->Net.MemKept = 0;
             return;
         }
         nhi->Dma->DmaOperations->FreeCommonBuffer(
             nhi->Dma, nhi->DmaBytes, nhi->CommonPa, nhi->CommonVa, TRUE);
         nhi->CommonVa = NULL;
+    }
+    if (nhi->Net.MemKept) {
+        /* The networking rings' memory kept (CmNetStopWork): its adapter
+         * stays with it until the next boot, as the block's would. */
+        nhi->Net.MemKept = 0;
+        nhi->Dma = NULL;
+        return;
     }
     nhi->Dma->DmaOperations->PutDmaAdapter(nhi->Dma);
     nhi->Dma = NULL;

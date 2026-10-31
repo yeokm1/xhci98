@@ -76,6 +76,7 @@ SOURCES=cm_vals.c      \
         cm_irq.c       \
         cm_breq.c      \
         cm_iso.c               cm_rirq.c      \
+        cm_netr.c      \
         cm_marks.c     \
         cm_tagid.c     \
         cm_nvlink.c    \
@@ -93,6 +94,7 @@ SOURCES=cm_vals.c      \
         cm_cfgwk.c     \
         cm_filt.c      \
         cm_live.c              cm_rirqos.c    \
+        cm_net.c       \
         cm_pwrr.c      \
         cm_nvlinkos.c  \
         cm_call.c      \

@@ -194,6 +194,9 @@ static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
     }
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NETPDO) {
+        return CmNetPdoPnp((PCM_NETPDO)device->DeviceExtension, irp);
+    }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPnp((PCM_NHI)device->DeviceExtension, irp);
     }
@@ -204,6 +207,9 @@ static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
 {
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
+    }
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NETPDO) {
+        return CmNetPdoPower((PCM_NETPDO)device->DeviceExtension, irp);
     }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPower((PCM_NHI)device->DeviceExtension, irp);
@@ -223,6 +229,10 @@ static NTSTATUS cmDispatchOther(PDEVICE_OBJECT device, PIRP irp)
     common = (PCM_COMMON)device->DeviceExtension;
     if (common->Kind == CM_KIND_QUERY) {
         return CmQueryDispatch(device, irp);
+    }
+    if (common->Kind == CM_KIND_NETPDO) {
+        /* The network PDO has no lower object (cm_net.c). */
+        return CmNetPdoOther((PCM_NETPDO)common, irp);
     }
     IoSkipCurrentIrpStackLocation(irp);
     return IoCallDriver(common->Lower, irp);

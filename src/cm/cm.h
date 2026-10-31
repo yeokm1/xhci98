@@ -43,6 +43,8 @@
  * query device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record
  * 25 section 4), a named control device the dispatch routines tell apart
  * by its Kind before anything else; its answer is built by cm_query.c.
+ * And a fifth, the network PDO (CM_KIND_NETPDO; cm_net.c, design record 35
+ * section 6): the NHI FDO's one child while XhciCmNet is 1, a bus role.
  *
  * IRQL: as each file's header says; every PnP object this driver creates
  * is DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -104,6 +106,8 @@
                                   IRP not retained for it (CM_PWR_DETACH)  */
 #define CM_WORK_RING   0x100UL /* the ring interrupt's DPC: RX ring 0 may
                                   hold a frame (cm_rirqos.c, task 45.22)   */
+#define CM_WORK_NET    0x200UL /* the network driver's Open or Close to give
+                                  the engine (cm_net.c, task 45.59)        */
 
 /* BAR0's extent this driver reads up to: the firmware status at 39944h
  * is the highest register touched (tbt_regs.h). A smaller window is
@@ -141,6 +145,10 @@ typedef struct _CM_COMMON {
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT Lower;
 } CM_COMMON, *PCM_COMMON;
+
+/* The Thunderbolt networking service (design record 35, task 45.59): the
+ * network PDO's extension and the NHI's share, cm_net.c. */
+#include "cm_net.h"
 
 /* Counters of the NHI driver's own (record 21 section 8), beside the
  * ring's and the client's, emitted at stop as cm.* lines. */
@@ -491,6 +499,9 @@ typedef struct _CM_NHI {
      * (cm_ejectos.c, task 43.18): this start's share; the transactions
      * themselves are that file's image-static records. */
     CM_EJ_DOM Ej;
+    /* The Thunderbolt networking service (cm_net.h): the network PDO, kept
+     * across a stop, and the data rings' state, memory, timer and DPCs. */
+    CM_NET Net;
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock
@@ -943,6 +954,29 @@ PVOID CmAllocPaged(ULONG bytes);
 VOID CmFree(PVOID p);
 NTSTATUS CmDmaOpen(PCM_NHI nhi);
 VOID CmDmaClose(PCM_NHI nhi);
+/* One common buffer of `bytes` on the NHI's adapter, cached, below 4 GB and
+ * 16-byte aligned, zeroed; its bus address in *pa. NULL on a failure. The
+ * Thunderbolt networking rings' (cm_net.c). PASSIVE_LEVEL. */
+PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa);
+VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va);
+
+/* cm_net.c (design record 35 sections 5 and 6, task 45.59). */
+VOID CmNetInit(PCM_NHI nhi);
+VOID CmNetBindOps(PCM_NHI nhi);
+VOID CmNetPass(PCM_NHI nhi);
+VOID CmNetAck(PCM_NHI nhi);
+VOID CmNetStopWork(PCM_NHI nhi);
+VOID CmNetLogCounters(PCM_NHI nhi);
+VOID CmNetStarted(PCM_NHI nhi);
+VOID CmNetGone(PCM_NHI nhi);
+VOID CmNetRemove(PCM_NHI nhi);
+NTSTATUS CmNetBusRelations(PCM_NHI nhi, PIRP irp);
+NTSTATUS CmNetPdoPnp(PCM_NETPDO pdo, PIRP irp);
+NTSTATUS CmNetPdoPower(PCM_NETPDO pdo, PIRP irp);
+NTSTATUS CmNetPdoOther(PCM_NETPDO pdo, PIRP irp);
+/* The thread's CM_WORK_NET and its poll pass (cm_nhi.c): CmNetPass where
+ * the software connection manager runs, then the acknowledgement. */
+VOID CmNhiNetWork(PCM_NHI nhi);
 
 /* The completion routine of a forwarded IRP is called on success, error
  * and cancel alike; IoSetCompletionRoutine's macro spelled out, as uas.h

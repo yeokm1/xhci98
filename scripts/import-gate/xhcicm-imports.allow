@@ -150,6 +150,17 @@ ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-pr
 ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
 ntoskrnl.exe!KeSynchronizeExecution        all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSynchronizeExecution, hint 92) (+openhci.sys); task 36.7, the dead line's retirement under the ISR's lock (design record 15 section 4.2)
 
+# --- Thunderbolt networking (cm_net.c, design record 35 sections 5.4 and
+# 6.1, task 45.59): the data rings' one-shot poll timer, whose DPC queues
+# the receive service's (KeInitializeDpc and KeInsertQueueDpc above), and
+# the network PDO's references (the BusRelations and TargetDeviceRelation
+# answers, and the image pinned at the first timer arming). xhci98.sys's
+# own pairs, its evidence verbatim. ---
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
+
 [deny]
 
 # xhci98-imports.allow's deny set, unchanged: each reason is a fact about a

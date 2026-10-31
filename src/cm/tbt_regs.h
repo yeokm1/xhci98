@@ -151,6 +151,16 @@
 #define TBT_RX_PDF(n)               (0x29804UL + 0x20UL * (ULONG)(n))
 #define TBT_RX_PDF_ALL_ONES         0xFFFFFFFFUL
 #define TBT_RX_PDF_SPEC             0x7FFE7FFEUL
+/* A data ring in Frame Mode (record 35 section 5.3; IDS 5.1.5): USB4NET's
+ * frame start PDF 1 in the SOF half (bit 16 + 1) and its frame end PDF 2
+ * in the EOF half (bit 2). The receive ring's Transmit E2E HopID, Ring
+ * Control 22:12 (Spec Table 12-26), the transmit ring whose credits its
+ * E2E flow control returns. */
+#define TBT_NET_PDF_SOF             0x1UL
+#define TBT_NET_PDF_EOF             0x2UL
+#define TBT_RX_PDF_NET              0x00020004UL
+#define TBT_RX_CTRL_E2E_HOP_SHIFT   12
+#define TBT_RX_CTRL_E2E_HOP_MASK    0x007FF000UL
 
 /*
  * Interrupt Mask, Spec 12.6.3.4.4, Table 12-31: R/W, 1 = the cause raises
