@@ -19,8 +19,13 @@ The rule families, each named as the other INF gates name theirs:
             and xhcinet6.sys;
             CatalogFile on the amd64 file and on no other (record 19
             section 3a).
-  PATH-*    [Manufacturer] exactly NetModels,NTx86.6.2 (x86) or
-            NetModels,NTamd64,NTamd64.6.2 (amd64) (PATH-MFGDEC); the one
+  PATH-*    [Manufacturer] exactly NetModels,NTx86,NTx86.6.2 (x86) or
+            NetModels,NTamd64,NTamd64.6.2 (amd64) (PATH-MFGDEC); on x86
+            [NetModels.NTx86] holding the undecorated section's one model
+            and install, since Vista's and 7's driver store stages only
+            the files of the decorated models sections once the line has
+            a decoration, which left 7 without xhcinet.sys (PATH-NTSTAGE,
+            record 35 section 8.2); the one
             model XHCICM\TBNET (record 35 section 6.2), in the undecorated
             section on x86 and in NetModels.NTamd64 on amd64 (PATH-ID); the
             .6.2 models section holding the one model XHCICM\TBNET too,
@@ -248,7 +253,7 @@ function Test-NetInf {
 
     # PATH-*
     $mfg = Get-Section $inf "Manufacturer"
-    $want = "NetModels,NTx86.6.2"
+    $want = "NetModels,NTx86,NTx86.6.2"
     if ($A -eq "amd64") { $want = "NetModels,NTamd64,NTamd64.6.2" }
     $got = ""
     if ($null -ne $mfg -and $mfg.Count -eq 1 -and $mfg[0] -match '^%Mfg%\s*=\s*(.*)$') { $got = ($Matches[1] -replace '\s', '') }
@@ -267,6 +272,13 @@ function Test-NetInf {
             Fail "PATH-ID" "[$modelSec]'s model is not %NetDesc%=<install>,XHCICM\TBNET"
         } else {
             $installs += $Matches[1]
+        }
+    }
+    if ($A -eq "x86") {
+        $stage = Get-Section $inf "NetModels.NTx86"
+        if ($null -eq $stage -or $stage.Count -ne 1 -or $null -eq $models -or $models.Count -ne 1 -or
+            ($stage[0] -replace '\s', '') -ne ($models[0] -replace '\s', '')) {
+            Fail "PATH-NTSTAGE" "[NetModels.NTx86] does not hold [NetModels]'s one model and install"
         }
     }
     $six = Get-Section $inf $sixTwo
@@ -464,7 +476,9 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "BOTH-FILES"; From = "xhcinet.sys=1"; To = "xhcinet.sys=1`r`nxhcicm.sys=1" },
         @{ A = "amd64"; Rule = "BOTH-FILES"; From = "xhcinet6.sys=1`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-SECTION"; From = "AddReg=Net.Reg9x,Net.Values,Net.Params"; To = "AddReg=Net.Reg9x,Net.Values,Net.Params,Net.Missing" },
-        @{ A = "x86"; Rule = "PATH-MFGDEC"; From = "NetModels,NTx86.6.2"; To = "NetModels,NTx86,NTx86.6.2" },
+        @{ A = "x86"; Rule = "PATH-MFGDEC"; From = "NetModels,NTx86,NTx86.6.2"; To = "NetModels,NTx86.6.2" },
+        @{ A = "x86"; Rule = "PATH-NTSTAGE"; From = "[NetModels.NTx86]`r`n%NetDesc%=Net.Dev,XHCICM\TBNET`r`n"; To = "[NetModels.NTx86]`r`n" },
+        @{ A = "x86"; Rule = "PATH-NTSTAGE"; From = "[NetModels.NTx86]`r`n%NetDesc%=Net.Dev,"; To = "[NetModels.NTx86]`r`n%NetDesc%=Net6.Dev," },
         @{ A = "amd64"; Rule = "PATH-MFGDEC"; From = "NetModels,NTamd64,NTamd64.6.2"; To = "NetModels,NTamd64" },
         @{ A = "x86"; Rule = "PATH-ID"; From = "Net.Dev,XHCICM\TBNET"; To = "Net.Dev,XHCI98\TBNET" },
         @{ A = "x86"; Rule = "PATH-NT62"; From = "%NetDesc%=Net6.Dev,XHCICM\TBNET"; To = "%NetDesc%=Net.Dev,XHCICM\TBNET" },

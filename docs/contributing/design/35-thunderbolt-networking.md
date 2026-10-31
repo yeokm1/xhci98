@@ -2008,6 +2008,20 @@ decoration is the one decision the INF gate holds for every file here
 (`NTx86.6.2` beside the undecorated models, which Windows 98's engine must
 parse past): step S6 reads it on 98 SE, ME, 2000 and XP before it is
 taken, as task 22.5 read `NTx86.6.0` for `xhci98.inf` (`AGENTS.md`).
+Revision 8: the line is `%Mfg%=NetModels,NTx86,NTx86.6.2`, with
+`[NetModels.NTx86]` the undecorated section's model and install. Read on
+Windows 7 x86 (2026-10-31, `runs/run-45.md`, "45.59 S5 (legs)"): with
+`NetModels,NTx86.6.2` alone, `pnputil -a` staged into the driver store
+only the files of the `.6.2` models' install (`xhcinet6.sys`, or nothing
+while that section was empty), not the undecorated section's that 7
+then installs, so the NDIS 5 install's copy failed (Error 2, Code 1);
+the line with `NTx86` beside it staged both images, and with no
+decoration at all `xhcinet.sys` alone; `Signature` (`$Windows NT$`),
+the `Compatible` line and a `[SourceDisksFiles.x86]` changed nothing.
+2000 reads no models decoration and takes the undecorated section as 98
+SE and ME do. The three-field line is still to be read on 98 SE, ME,
+2000 and XP (`AGENTS.md`'s rule for `xhci98.inf`'s line); the run sheet
+records each.
 A new gate script, `scripts\inf-gate\check-net-inf.ps1`, holds both files
 (the paths, the image per path, the service, the value table per path,
 the footprint, the 98 section's net keys, no undecorated section in the
