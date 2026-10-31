@@ -434,6 +434,16 @@ typedef struct _CM_NHI {
     /* IoIsWdmVersionAvailable(1, 0x10), read by the power dispatch at
      * PASSIVE_LEVEL for its completion routine (cm_pwrr.h, task 43.65). */
     BOOLEAN PowerOnNt;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciCmQemuFailD0, the qemu flavour's alone (cm_power.c, task
+     * 45.27): which D0 the bus completes successfully is taken as failed,
+     * counted from 1 (0: none), and the D0s counted so far. */
+    ULONG QemuFailD0;
+    LONG QemuD0Seen;
+    /* XhciCmQemuFailReenum (cm_cfgwk.c, task 45.27): how many of the 9x
+     * worker's member calls are taken as failed before they are made. */
+    ULONG QemuFailReenum;
+#endif
 
     CM_COUNTERS Counters;
 
@@ -962,7 +972,7 @@ VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va);
 
 /* cm_net.c (design record 35 sections 5 and 6, task 45.59). */
 VOID CmNetInit(PCM_NHI nhi);
-VOID CmNetBindOps(PCM_NHI nhi);
+VOID CmNetBindOps(PCM_NHI nhi, BOOLEAN fw);
 VOID CmNetPass(PCM_NHI nhi);
 VOID CmNetAck(PCM_NHI nhi);
 VOID CmNetStopWork(PCM_NHI nhi);
@@ -975,7 +985,7 @@ NTSTATUS CmNetPdoPnp(PCM_NETPDO pdo, PIRP irp);
 NTSTATUS CmNetPdoPower(PCM_NETPDO pdo, PIRP irp);
 NTSTATUS CmNetPdoOther(PCM_NETPDO pdo, PIRP irp);
 /* The thread's CM_WORK_NET and its poll pass (cm_nhi.c): CmNetPass where
- * the software connection manager runs, then the acknowledgement. */
+ * a connection manager runs, then the acknowledgement. */
 VOID CmNhiNetWork(PCM_NHI nhi);
 
 /* The completion routine of a forwarded IRP is called on success, error

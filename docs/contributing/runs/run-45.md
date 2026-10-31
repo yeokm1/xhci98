@@ -4753,6 +4753,153 @@ COM1 blocked, so the second hibernation's loop wrote no COM1 lines.
 - The BUSY that keeps its length (a Stor98 debug-port build), the UAS
   STOP and START, and the bench readings, as before.
 
+### The fifth session: the retry wait, a failed D0 and a lane adapter gone (2026-10-31)
+
+**Verdict: the three legs the fourth session left are read, each on a
+`qemu`-flavour aid or an emulator property made for it. On 98 SE the
+CONFIGMG worker's retry-only wait is the rest of the hold, with one wake
+at its end and the retry made then. A failed D0 at a 98 SE wake runs the
+failure path on the connection manager's thread and the desktop
+returns, though at a wake with no re-enumeration in flight, so the
+overlap the fix serialises was not made. A resume that finds a host router lane adapter gone (7 x86)
+keeps the saved port table, holds the obligation and releases the
+bridges by the failure path, and Windows works after it. What these
+legs cannot show is said below. The D0 overlap (hardware), the BUSY that
+keeps its length, the UAS STOP and START and the bench readings stay
+owed.**
+
+Code: `29dc7496` (the retry-only wait logged, `cm.wk.retry.wait` and
+`cm.wk.retry.woke`; `XhciCmQemuFailD0`) and `9248cb4e`
+(`XhciCmQemuFailReenum`), both under `XHCI_FLAVOUR_QEMU` only, so the
+release flavour neither reads the values nor logs the lines; design
+record 21 section 8.1 lists them among the exempt test-only values.
+Reviewed and revised. Gated builds: `29dc7496` x86 and amd64 `all`
+(`BUILD + GATES PASSED (release qemu)` each, host tests passed), and
+`9248cb4e` the same. The emulator: `usb4-emu` `495568b`, the
+`usb4-host` property `x-adapter-gone` (default off; fork commits
+`67ba5df` and `a94d115`; qtest `/usb4-asm4242/adapter-gone`, 17 of 17 in
+that suite; `usb4-host` 43, `usb4-tunnel` 31, `usb4-fault` 9,
+`usb4-asm2464` 4, unchanged), built on development host A
+(`qemu-system-x86_64.exe` `aa7448ab...`). Evidence:
+`E:\xhci98-vm\p45\w45-owed27c\` (`s98\`, `b98\`, `w7\`, `hashes.txt`).
+
+Vehicles: copies of the fourth session's overlays (its package of
+`3cbca48a` installed), and on i440FX a fresh overlay of a copy of
+`vm\t26`'s 98 SE base with that package installed (`XHCIINST /dir
+release-x86 /yes /nopause /thunderbolt /stor98`, exit 3; the Windows 98
+CD's `usbd.sys` and `usbui.dll` skipped). Over each, this session's
+`qemu` `xhci98.sys` and `xhcicm.sys` were copied. Between `3cbca48a` and
+this branch `xhci98.sys`'s sources are unchanged, and `xhcicm.sys`
+changed only in its Thunderbolt 3 firmware client and the NT bridge
+request.
+
+#### 98 SE: the retry-only wait
+
+`s98`, q35, the ASM4242 model with the ORICO enclosure at power-on. A
+plain re-plug and quick re-plugs (gaps of 0.6 to 1.9 s) never put a
+member call's failure on the worker: the connection-manager thread holds
+the re-enumeration itself while the departed function's sweep runs
+(`cm.reenum.held`, `cm.reenum.held.run`) and posts it once the sweep has
+ended, about 13 to 19 s later, so no `cm.wk.*` line was logged. With
+`XhciCmQemuFailReenum` 3 in the NHI's driver key
+(`Class\System\0052`) and a re-plug (`x-cable` false, true 20 s later)
+the stamped debug console read (`stamped-f.txt`):
+
+| Host time | Line | Reading |
+|---|---|---|
+| 22:05:59.901 | `cm.qemu.reenum.failed=00000208`, `=00000210` | two member calls taken as failed |
+| 22:05:59.901 | `cm.wk.retry.wait=06001388`, `cm.wk.retry.woke=00000000` | members 1 and 2 owed, 5000 ms chosen; woken by a post at once |
+| 22:06:00.092 | `cm.wk.retry.woke=000000B2`, `cm.wk.retry.wait=060012D6` | woken by a post after 178 ms; the wait is what is left, 4822 ms |
+| 22:06:00.259 | `cm.wk.retry.woke=00000000`, `cm.qemu.reenum.failed=00000200`, `cm.wk.retry.wait=07001388` | the third failure restarts the hold: members 0 to 2, 5000 ms |
+| 22:06:05.175 | `cm.wk.retry.woke=10201393` | the timeout (102h) after 5011 ms, the only wake of that wait |
+| 22:06:05.175 | `cm.reenum.9x.reenumerate=00020000`, `00020800`, `00021000` | the retry, the same pass |
+
+So in the retry-only case the worker waits the rest of the hold, wakes
+early only for a post, and makes the retry at the end of the hold, with
+no 200 ms tick between. The re-plug's own re-enumeration then ran to
+DONE (`noirq.after=05000500` at 22:06:24.958).
+
+#### A failed D0 at a 98 SE wake
+
+98 SE's q35 base offers no Stand by (its Shut Down dialog has Shut
+down, Restart and MS-DOS mode only, `s98\a4.png`). On i440FX it does:
+`b98`, `-machine pc,smm=off`, Pentium III, 256 MB (run-36's 36.28
+vehicle), the usb4-emu generic host (`host-model=intel-adl`) behind a
+`usb4-tunnel-bridge` with the ORICO model at power-on, as the earlier 98
+SE legs ran it, on this session's emulator. A stock Stand by before the
+install reached QMP `suspended` and `system_wakeup` brought the desktop
+back. After the install the drive was E: and a 4 MiB copy compared clean
+(`b98\d2.png`). With `XhciCmQemuFailD0` 1 in the NHI's driver key
+(`Class\System\0030`), no D0 came at the start (no `cm.qemu` line), and
+at the first Stand by and wake (`stamped-d.txt`, and again
+`stamped-f.txt`):
+
+- `cm.suspend=00000004`, `u4.suspend.obligations=00000001`, then QMP
+  `suspended`;
+- at the wake `xhci98.sys` took its D0 and reinitialised, then
+  `cm.qemu.d0.failed=00000001` (the completion routine),
+  `cm.qemu.d0.failed.thread=03000001` (the thread's failure path, with
+  the client suspended and the re-enumeration on) and
+  `cm.reenum.resume-failed=00000001`, in the same 65 ms;
+- the desktop came back (`d4.png`, `f3.png`), with no hang.
+
+PASS for the failure path on the thread. `03000001` shows the client
+suspended and the domain's re-enumeration route on (`ReenumOn`, set
+for as long as the domain is started), not a re-enumeration in flight:
+nothing was being re-enumerated at the wake, so the case the fix of
+`2f57cad2` serialises - the failure path beside the thread's own
+`CmReenumStart` or `CmReenumStop`, or a worker's CONFIGMG call, on the
+same domain - was not made, and stays owed. Nor could it be read
+whether a later D0 brings the domain back. QEMU resets the tunnel bridge at the wake
+(`tb0` read secondary bus 0 and endpoint `none gen=1 gate=closed
+awaiting-ack`), and the failed D0 runs no resume, so the drive stays
+gone until one does. The next program started after the wake stopped
+with "A fatal exception 0E has occurred at 0187:BFF9DFFF" (a console
+prompt in `d`, Explorer's E:\ in `f`), the post-standby fault of run-36's
+36.28 part 2 that needs no USB controller, which took the shell with it,
+so no second Stand by could be made. In a third start (`e`, after a
+return from MS-DOS mode) the resume stopped after `xhci98.sys`'s D0,
+before any D0 reached the connection manager, the VMM idle
+(`c00036f2`, `c000a881`), as 36.28 read with a disk attached. So the
+domain's recovery after a failed D0 stays owed to hardware.
+
+#### A resume with a host router lane adapter gone (7 x86)
+
+`w7`: q35 7 x86, the ASM4242 model with the ORICO enclosure at power-on,
+a stick on `qemu-xhci`, `-global ICH9-LPC.disable_s4=0`, this session's
+emulator. After the start the walk read `u4.host.port=00010608` and
+`00030709` (lane 0 adapters 1 and 3, two ports). `H.BAT` hibernated
+(`cm.suspend=00000005`, `u4.suspend.obligations=00000001`). The emulator
+was then started with `usb4-host` `x-adapter-gone=3`, port 2's lane 0
+adapter, which the guest's requests now find not to exist. The resume
+(`debugcon-b.log`):
+
+- the walk read `u4.host.port=00010608` alone, with two
+  `tbt.ring.ctl-notify=00000002` (ERR_ADDR for adapter 3);
+- `u4.resume.port=00000002`: the saved port 2 not found, so
+  `TbtU4Resume` kept the table saved before the sleep;
+- `u4.resume.held=00000001`, `cm.reenum.resumed=00000000` and
+  `cm.reenum.hold.released-failed=00000200`, `=00000208`: the
+  obligation held unjudged and the bridges released by the failure
+  path;
+- after it, only the relations reads of the chain (`cm.chain.rel`)
+  while the guest ran.
+
+Windows resumed to its lock screen and the desktop. A 4 MiB copy to D:
+compared clean (`FC 0`). A cold start without the property read both
+ports again and listed D:. PASS: no hang, no port record judged
+against another's, and the system usable.
+
+#### Still owed after this session
+
+- A failed D0 while a re-enumeration of the domain is in flight (the
+  overlap itself), and the domain's recovery by a later D0 after a
+  failed one: hardware, or a vehicle that resumes 98 SE with a disk and
+  runs programs after the wake (98 SE on QEMU does neither).
+- The D0 overlap: hardware, as the fourth session left it.
+- The BUSY that keeps its length (a Stor98 debug-port build), the UAS
+  STOP and START, and the bench readings, as before.
+
 ## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
 
 Design record 22 section 6.2 coded, as the design half above left it
@@ -6871,6 +7018,170 @@ copy of the same disk image, shows no letter, as on 7 x86). Pass.
   the bridges' lists (`BasicConfigVector`), the `cm.breq` outcome and both
   drives after the mark service's restart.
 
+## 45.59 S5 (legs): Thunderbolt networking against Linux, software and firmware connection managers (2026-10-31)
+
+Workers `w45-tbnet3` (the first leg, on `3f5b798e`) and `w45-tbnet4`
+(branch `w45-tbnet4` from `bf0974ab`: commits `3e9bfa34` the service
+under the firmware connection manager and the software connection
+manager's link lowered at this host's own Logout, `b03d73e6` the 98 SE
+and ME fallback code in `xhci_cmnet.h` and the network drivers' use of
+it, `13c8c41a` `xhcinet.inf`'s `NTx86` models decoration; design record
+35 revision 9, each reviewed and revised). Development host A. Record 35
+section 11.3's legs: an xHCI98 guest on `usb4-emu`'s host-to-host model
+(the `w45-xdomain` build, `qemu-system-x86_64.exe` SHA-256 `48f9f6a4...`,
+`docs/XDOMAIN.md`) joined by `usb4-xdomain` to an unmodified Alpine Linux
+3.24.2 guest (kernel 6.18.52-0-lts, its stock `thunderbolt` and
+`thunderbolt_net`, `scripts/run-xdomain-linux.sh` as the server end, a
+`usb4-generic` host), the Windows guests on fresh overlays of the q35
+bases (`launch-q35.ps1 -Os w7x86`, `-smp 2`, `-m 2048`, guest date
+2026-09-20). `XhciCmNet` 1 set by hand in each NHI driver key (the
+installer's box is step S11); the qemu flavour of `xhcicm.sys` copied
+over the installed one for its log. Evidence:
+`E:\xhci98-vm\p45\w45-tbnet\` (first leg) and `E:\xhci98-vm\p45\w45-tbnet4\`
+(`w7\`, `w7ar\`, `w7e\`, `hashes.txt`, `pids.txt`).
+
+Builds on `13c8c41a`: the gated x86 build (`build-driver.cmd all`,
+release and qemu, every gate, the host tests: `test_u4xd` 187 checks,
+`test_cm_net` 55, all passed) and the gated amd64 build (`all -amd64`)
+passed. Images of the legs below: `xhcicm.sys` (qemu) `8656fb5f...`,
+`xhcinet.sys` `fc16fcc0...`, `xhcinet6.sys` `4cb286cf...`, `xhcinet.inf`
+`87fcaedd...` (`hashes.txt`).
+
+The Linux end needs its runtime power management off on the host
+interface and its domain (`echo on >
+/sys/bus/pci/devices/0000:00:04.0/power/control` and the same for
+`/sys/bus/thunderbolt/devices/0-0`): otherwise its domain suspends about
+25 s after the start and this host's UUID Request goes unanswered
+(`cm.xdp.uuid.none`), until a re-plug. Linux's `thunderbolt0` answers
+and sends a Login only while it is up, and it is a new interface at each
+appearance of the service (a re-plug, or this host's directory withdrawn
+and offered again), so `ip link set thunderbolt0 up` (and its address) is
+repeated each time; this host's own Logins meanwhile go unanswered for a
+minute and stop (`cm.net.login.none`), and Linux's Login then brings the
+service up.
+
+**First leg, Windows 7 x86, software connection manager (`w45-tbnet3`,
+`3f5b798e`).** `-Usb4 adl` (Intel Alder Lake host, software CM).
+The network PDO `XHCICM\TBNET` enumerated as "Thunderbolt networking"
+(`cm.net.pdo`), this domain's MAC read (`cm.net.mac=81874FB0`), the
+discovery to READY (`cm.xdp.state` 1, 2, 3, 5; `cm.xdp.bonded=01000002`;
+`cm.xdp.peer=01D6B004`, Linux's vendor id 1D6Bh). Login, paths and ping
+not reached: `pnputil -a` of `xhcinet.inf` as committed then staged the
+package without `xhcinet.sys` (the store folder held the INF and its PNF
+alone), and the device stayed at Code 1 (`setupapi.dev.log`: the copy of
+`xhcinet.sys` from the store, Error 2). Windows once moved the NHI to a
+new driver key (`...\0038` to `...\0040`) at a restart, where `XhciCmNet`
+read 0 again; the leg's batch sets the value in every key that has it.
+
+**The staging, read (Windows 7 x86, `w45-tbnet4`, `w7e\serial-e.log`).**
+Six variants of `xhcinet.inf` staged with `pnputil -a` on a plain guest,
+the driver store's folder listed after each: with `%Mfg%=NetModels,
+NTx86.6.2` the store took only `xhcinet6.sys`, the `.6.2` models'
+install's file (nothing while that section was empty, the first leg's
+case), whatever the signature (`$Windows NT$` too), with or without the
+`Compatible` line or a `[SourceDisksFiles.x86]`; with
+`%Mfg%=NetModels,NTx86,NTx86.6.2` and `[NetModels.NTx86]` both images;
+with no decoration `xhcinet.sys` alone. `13c8c41a` takes the second form
+(record 35 section 8.2; `check-net-inf.ps1`'s `PATH-MFGDEC` and
+`PATH-NTSTAGE`). Its parse by 98 SE's, ME's, 2000's and XP's setup
+engines is owed.
+
+**Second leg, Windows 7 x86, software connection manager (`w45-tbnet4`,
+`13c8c41a`, `w7\`): pass.** `-Usb4 adl`, the cable at power-on. `RINT.BAT`:
+`pnputil -i -a` of the package's `xhcicm.inf`, the qemu image over it,
+`XhciCmNet` 1, `pnputil -i -a` of `xhcinet.inf`; one restart. Then:
+"xHCI98 Thunderbolt Networking: Device driver software installed
+successfully"; `Win32_PnPEntity`: `XHCICM\TBNET\4&379EC3B5&0&0`,
+ConfigManagerErrorCode 0, Service `xhcinet`. The CM log: `cm.net.pdo`,
+`cm.net.mac=81874FB0`, the discovery and bonding to READY
+(`cm.xdp.bonded=01000002`, `cm.xdp.peer=01D6B004`), `net.cm.route=1`
+(the table by `IRP_MN_QUERY_INTERFACE`), `cm.net.open=5EA`; once Linux's
+interface was up, `cm.net.rings=01018000`, `cm.net.paths=0108080E` (port
+1, HopIDs 8 and 8, 14 credits), `cm.net.link.up=01070028` (prtcstns 7, 40
+Gb/s: Gen 3, two lanes), `net.link.up`. Linux: "lane bonding enabled",
+"current link speed 20.0 Gb/s", "current link width symmetric, dual
+lanes", "new host found, vendor=0x0 device=0x1", "xHCI98 xhcicm", both
+DMA paths activated, `thunderbolt0` LOWER_UP. `ipconfig`: "xHCI98
+Thunderbolt Networking", physical address EA-C6-81-87-4F-B0, 10.99.0.2.
+Ping from Windows to 10.99.0.1: 10 sent, 10 received. From Linux to
+10.99.0.2 (Windows Firewall off, as it refuses echo by default): 5 of 5
+at 56 bytes, 5 of 5 at 1472, 3 of 3 at 8000 (fragmented), no loss. The
+cable pulled and put back from the Windows side (`qom-set xd0 plugged`):
+`cm.net.down=00000101` (the peer gone), `cm.net.link.down`,
+`cm.net.rings.down`, `cm.xdp.end`; the discovery again to READY, the
+service up again once Linux's new interface was raised, ping 5 of 5. The
+adapter disabled in Windows (`netsh interface set interface ... admin=
+disabled`, the network driver's `Close`): `cm.net.wanted=00000003`, then
+`cm.net.link.down` at once, before `cm.net.down=00000100` (the Logout
+answered) and `cm.net.rings.down` - the link lowered at this host's own
+Logout (`3e9bfa34`, record 35 section 3.9); enabled again: `cm.net.open`,
+the service up after Linux's Login, ping 4 of 4.
+
+**Third leg, Windows 7 x86, firmware connection manager (`w45-tbnet4`,
+`13c8c41a`, `w7ar\`): pass after a re-plug.** `-Usb4 tb3ar` (Alpine
+Ridge, the firmware CM, `docs/XDOMAIN.md` section 7), the same steps.
+The CM log: `cm.net.pdo` (the PDO under the firmware CM, `3e9bfa34`),
+`cm.xdp.connected=01000001`, `cm.xdp.ready`, `cm.xdp.peer=01D6B004`,
+`cm.net.dsn=8E6C8485` (the NHI's Device Serial Number read from its
+extended capability), `cm.net.mac=9E924B20`, `net.cm.route=1`,
+`cm.net.open`. Linux had sent its UUID Requests from the moment the
+cable was up, during Windows' start, before this driver bound; they went
+unanswered ("failed to request UUID, retrying", then "discovery failed,
+stopping handshake"), and since the firmware CM's discovery sends no UUID
+Request of its own, Linux's handshake did not restart. A re-plug from the
+Windows side (`qom-set`): `cm.xdp.disconnected`, `cm.xdp.end=00000103`,
+`cm.xdp.connected`, Linux "new host found", the service:
+`cm.net.paths=01080801` (the approve answered), `cm.net.link.up=01070000`
+(the rate unknown under the firmware CM: 0), `net.link.up`. Ping from
+Windows 6 of 6; from Linux 4 of 4 at 56 bytes and 3 of 3 at 8000. Linux
+logged "failed to receive remote link status" (this host answered no
+Link State Status Request under the firmware CM) and ran the link single
+lane. The adapter disabled: `cm.net.link.down` at once,
+`cm.net.down=00000100`, `cm.net.teardown=01000001` (the teardown
+answered), `cm.net.rings.down`.
+
+**Fourth leg, Windows 7 x86, firmware connection manager, cold start
+(`w45-tbnet4`, `d0b5db85`, record 35 revision 10, `w7arb\`): pass with
+no re-plug.** As the third leg, the package of `d0b5db85` (gated x86 and
+amd64 builds passed, the host tests among them: `test_tbt_xdp` 190
+checks, `test_tbt_icm` 1051, `test_u4xd` 201, no failure; images in
+`hashes2.txt`), the cable in from power-on through the restart. Linux
+had given up again before this driver bound ("discovery failed,
+stopping handshake"); at the record's start `cm.xdp.connected`,
+`cm.xdp.uuid.nudge=01000001`, and Linux then logged "received XDomain
+UUID request", "restarting handshake", "new host found", "xHCI98
+xhcicm". This host's Logins went unanswered for a minute
+(`cm.net.login.none=01000042`) and went on at the idle rate; once
+Linux's interface was raised, `cm.net.paths=01080801`,
+`cm.net.link.up=01070000`, `net.link.up`. Ping from Windows 6 of 6, from
+Linux 4 of 4 at 56 bytes and 3 of 3 at 8000.
+
+**Fifth leg, Windows 7 x86 against Linux 7.0, software connection
+manager (`w45-tbnet4`, `d0b5db85`, `w7k\`): pass.** `usb4-emu`'s
+`w45-emuar` build (`a7239ea`, `qemu-system-x86_64.exe` SHA-256
+`83474795...`) on both ends; the far end Kubuntu 26.04.1 live, kernel
+7.0.0-30-generic (task 45-E.15's kernel), its stock `thunderbolt_net`,
+under WHPX. `-Usb4 adl`, the same steps. Linux: "login successful,
+enabling paths", "enabling E2E for TX ring 1", "enabling E2E for RX ring
+1 with TX HopID 1", "network traffic started" - Linux sending with E2E
+into this host's receive ring, which runs with E2E and the Transmit E2E
+HopID (`cm.net.rings=01018000`). The CM log: `cm.net.paths=0108080E`,
+`cm.net.link.up=01070028` (prtcstns 7, 40 Gb/s). Ping from Windows 6 of
+6 at 1472 bytes; from Linux 20 of 20 at 56 bytes (0.2 s apart), 10 of 10
+at 1472 and 10 of 10 at 30000 (21 IP fragments each way at MTU 1500),
+no loss. The emulator's trace: 6,038 E2E credit lines on the Windows
+end and 6,305 on the Linux end (`usb4_host_e2e`, "E2E grant ring 1
+credits ...").
+
+Owed: the 98 SE leg with `xhcinet.sys` (`net.cm.route` there says which
+of the query and the fallback code NTKERN carries), the three-field
+models line read on 98 SE, ME, 2000 and XP, the Titan Ridge leg, the
+Windows 10 x86 leg with `xhcinet6.sys`, the x64 legs (a throwaway
+certificate in the guest), and, on the `w45-emuar` Alpine Ridge model
+(its firmware's own UUID Request and code-8 acknowledgements), a leg of
+this host's software CM against a far firmware CM with
+`xd-fw-uuid-retry-ms=0`, for `test_u4xd`'s early UUID answer.
+
 ## 45-E.15 (the bench capture): an Alpine Ridge firmware connection manager and a USB4 software one, host to host under Linux (2026-10-31)
 
 The owner's captures of 2026-10-31, read for record 35 (task 45.59) and
@@ -7173,6 +7484,354 @@ not a link fault.
 - The legs of this package against both laptops (45.59's S9 and record
   35 section 11.4).
 
+## 45.60 (continued) the legs on ME, 2000, Vista, 8, 8.1 and 10 x86, 7 x64 and 10 x64, and the owner's wording changes (2026-10-31, partial)
+
+Branch `w45-tbpage` from `a027f88e`, tree `E:\xhci98-wt\w45-tbpage` on
+development host A; the 3.4.0.0 tip `49f7418e` merged in at `aa121e98`.
+Commits: `1c584e66` (the Components page's Thunderbolt sentence without
+the controller's name; the USB Tree box worded as its start at login),
+`18222ecc` (the XHCIPFW box "Find Thunderbolt and USB4 devices placed
+above 4 GB"); each reviewed and revised. Record 26 drafts 54 and 56.
+
+### The owner's wording changes (2026-10-31)
+
+- Components, the Thunderbolt box's note: "A Thunderbolt 3 / USB4
+  controller was found." with no controller name, which the row's width
+  cut off ("... Universal Serial Bus (USB) Controlle."). The not-found and
+  Intel sentences are unchanged, and so is the console, whose question
+  puts a long name on a line of its own. The USB drivers box had no
+  found-hardware sentence: it says what it installs, and stays.
+- The tray box: "Start the xHCI98 USB Tree (tray icon) at login". The
+  tool is copied either way (`inst_eng.c`'s tray step, `/notray`, decides
+  the Run value alone). The Summary says "the xHCI98 USB Tree, installed
+  and started at login" or "installed, not started at login".
+- The XHCIPFW box on the Thunderbolt and USB4 page: "Find Thunderbolt and
+  USB4 devices placed above 4 GB" on every system, with no file name. It
+  is ticked and greyed as before. The page's Help (task 45.66) names
+  XHCIPFW.VXD (98 SE and ME) and XHCIPFW.SYS (2000 to the 32-bit 8.1).
+  The Summary's component line keeps the file name ("PCI windows above
+  4 GB closed at start (XHCIPFW.SYS)").
+
+### Builds
+
+- The gated build of `a027f88e`, release flavour, x86 then amd64: BUILD +
+  GATES PASSED both (`gated-x86.a027f88e.log`, `gated-amd64.a027f88e.log`
+  in `E:\xhci98-scratch\p45-w45-tbpage`).
+- `1c584e66`, gated x86 `all`: failed at the qemu `xhcinet.sys` import gate
+  (`ntoskrnl.exe!RtlAssert` not allowlisted). That was the base's
+  defect, fixed in 3.4.0.0 by `2af48299`. After the merge (`aa121e98`),
+  gated x86 `all`: BUILD + GATES PASSED (release, qemu). Then amd64
+  release of `d8227fc7`: BUILD + GATES PASSED.
+- The tip `18bd9369`, gated x86 `all`: BUILD + GATES PASSED (release,
+  qemu); host tests passed (`test_inst` 7730 checks); the window's
+  self-test 839 checks, 0 failures.
+- Packages: `make-release.ps1 -Arch x86 -TestLabel w45tbpage -NoNonFree
+  -NoWdmFree -SkipQualtool -SkipMarkTool` of `a027f88e` (`XHCIWIZ.EXE`
+  `368396772261...`), of `d8227fc7` (`098188bef9ec...`) and of
+  `18bd9369` (`9c362839f39d...`). The x64 package of `d8227fc7` came from
+  `make-package.ps1 -Arch amd64`, unsigned (this clone holds no
+  test-signing key), with its five catalogs made on the host by the
+  packager's `New-PackageCatalogFile`, and signed in each guest's own
+  overlay by the route task 43.36 used (`runs/run-43-24.md`), never on
+  the host and never with the project's key. It was signed in
+  each x64 guest with a throwaway certificate (MakeCert, `-b 01/01/2026
+  -e 01/01/2030`, Root and TrustedPublisher, SignTool on the `.sys` and
+  `.cat` files; all 9 verified, test signing on). Hashes:
+  `E:\xhci98-vm\p45\w45-tbpage\hashes-*.txt`.
+
+### The legs
+
+Each is a first install on a fresh overlay of the q35 base through
+`launch-q35.ps1 -Usb4 asm4242 -EncAtBoot`, driven from the keyboard
+(Windows 8 to 10 with `-Tablet`). QMP 49600 to 49605. Every start and
+stop is in `E:\xhci98-vm\p45\w45-tbpage\pids.txt`, and the screens are in
+each leg's folder there. W is the window (`SETUP.EXE`), C the console
+(`INSTALL.BAT /console`). "Skip" means Next with the Thunderbolt box
+unticked went to the Summary, and Back from there to Components. The
+read after the restart (W) or the install (C) printed `Services\USB`, the
+drivers' `Enum` keys and `driverquery` to COM1 (`XQ.CMD`), or
+`regedit /a` exports (`X2.CMD` on 2000, `EXP.BAT` on ME).
+
+| System (package) | `/tbnet`, `/notbnet` | Skip | The page | Approval and the read | After the restart |
+|---|---|---|---|---|---|
+| ME W (`a027f88e`) | refused, "/tbnet: this package carries no Thunderbolt networking driver for this system"; `/notbnet` opens the window | yes | XHCIPFW.VXD, Stor98 and S98VSD open and ticked; Back and Next keep "Give it none" | "Give it none": `Services\USB` holds `XhciCmApprove`=0 alone; the host interface's key the INF's 1 | Shut Down powered off (no hang); after a cold start `XhciPfwResult` 1, "XHCIPFW.VXD 3.3.0.0", the USB4 Router and both xHCIs in Device Manager |
+| ME C (`a027f88e`) | - | - | asked Thunderbolt (Y), then Stor98, S98VSD and XHCIPFW, all at their defaults | Enter for every value: `Services\USB` empty | installed: `xhci98` on both xHCIs, `xhcicm` on the NHI with its INF's `XhciCmApprove` 1 |
+| 2000 W (`a027f88e`) | as ME | yes | XHCIPFW.SYS open and ticked; Stor98 and S98VSD greyed "(Windows 98 SE and ME only)" | "Give it none": `XhciCmApprove`=0 before and after the restart | cold start: `xhci98` (4 devices), `xhcicm` (7), `xhcipfw` (`XhciPfwResult` 1, "XHCIPFW.SYS 3.3.0.0"), `stor98` on the NVMe |
+| 2000 C (`a027f88e`) | - | - | asked Thunderbolt (Y), Stor98 and XHCIPFW at their defaults | defaults: `Services\USB` empty | exit 3 |
+| Vista x86 W (`a027f88e`) | as ME | yes | as 2000 | "Give it none": `XhciCmApprove`=0 | `stor98`, `xhci98`, `xhcicm`, `xhcihlpr`, `xhcipfw` running |
+| Vista x86 C (`a027f88e`) | - | - | asked Thunderbolt (Y) | defaults: `Services\USB` has no `XhciCmApprove` | installed |
+| 8 x86 W (`d8227fc7`) | as ME | yes, with the USB box ticked (the 8-to-10 warning first); with it unticked the connection manager alone, the page shown | the rows this system offers; XHCIPFW.SYS installed as the root-bus filter | "Give it none": `XhciCmApprove`=0 | `xhcicm`, `xhcipff`, `stor98` running |
+| 8 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | `xhcicm`, `stor98` running |
+| 8.1 x86 W (`d8227fc7`) | as ME | yes | as 8 | "Give it none": `XhciCmApprove`=0 | `xhcicm`, `xhcipff`, `stor98` running |
+| 8.1 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | installed |
+| 10 x86 W (`d8227fc7`) | as ME | yes | Stor98, S98VSD greyed, no XHCIPFW row | "Give it none": `XhciCmApprove`=0 | `xhcicm` running |
+| 10 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | exit 3 |
+| 7 x64 W (`d8227fc7`, signed in the guest) | as ME | yes | Stor98 open, S98VSD greyed, no XHCIPFW (x64) | "Give it none": `XhciCmApprove`=0 | `stor98`, `xhci98`, `xhcicm` running |
+| 7 x64 C (same) | - | - | asked Thunderbolt (Y) | defaults: nothing in `Services\USB` | `xhci98`, `xhcicm`, `stor98` running, ORICO (D:) mounted |
+| 10 x64 W (same) | as ME | yes | as 10 x86 | left at its default: nothing in `Services\USB` | `xhcicm` running |
+| 10 x64 C (same) | - | - | - | `0` answered to `XhciCmApprove`: written, `XhciCmApprove`=0 | `xhcicm` running |
+
+Each NT console asks `XhciCmApprove` among the Thunderbolt values, with
+the new-install note, as the page shows it. On 98 SE and ME the console
+asks the Thunderbolt question and its children. The Settings dialog's
+Thunderbolt tab holds `XhciCmMode` and `XhciCmSafeEject` alone on every
+system read.
+
+The Components recheck after the wording changes (package `18bd9369`;
+98 SE at 640 by 480, XP, and 7 x86 at 96 and at 120 DPI) is in 45.66's
+legs below. Nothing is clipped. The XHCIPFW label fits one line on all
+three.
+
+### Left
+
+- The networking box's wiring, task 45.59's step S11: `INST_TBNET_WIRED`
+  1, `xhcinet.inf` staged, `/tbnet` accepted. 45.60 stays open for it.
+
+## 45.66 the installer's Help button explains its page (2026-10-31, partial)
+
+Branch `w45-tbpage`. Commits: `d8227fc7` (record 26 draft 55, section
+5.10: the design), `e32fe18d` (the code, the host vectors and the
+self-test), `18bd9369` (the run's end held, not the help window ended,
+under the readme's message box); each reviewed and revised.
+
+### What changed
+
+- Help on every page of the window opens `IDD_HELP`. That is a small
+  modal window owned by the window Help was pressed in: the sheet for
+  its pages, the Settings sheet for its tabs (now `PSH_HASHELP`), and
+  the Advanced dialog, which gains a Help button. The window holds the
+  page's text and two buttons, "Open the readme" (Notepad, as Help did
+  before) and Close.
+- Nineteen texts, one for each page and variant: Welcome, the
+  uninstall's first page, Components, Thunderbolt and USB4, the two
+  other-driver pages, the three Settings tabs, the two Advanced dialogs,
+  the two Summaries, Progress, Steps, and four Finish variants (restart,
+  shut down, nothing changed, uninstall). Each says, in the page's own
+  labels, what each choice does and when to change it, with no testing
+  status. They live in `xhciinst\inst_help.c`, linked by the window and
+  `test_inst` only. In `inst_core.c` they made Defender flag the
+  `test_xhq` host binary (a false positive, `Trojan:Win32/Killav!pz`),
+  and the host suite then failed with exit 9020.
+- When the run ends while a help window is open, the end is held. The
+  help window closes, and the sheet then moves to Finish. Under the
+  readme's message box only the hold happens.
+- The Welcome page's three wordings end "Help explains each page.".
+
+### The checks
+
+- `test_help` (host): every text ASCII, within 20 lines at 68 columns,
+  no testing-status words; every route and topic reached; each page's
+  labels quoted.
+- `st_help` (the window's self-test): the routing tables, the Finish
+  variants, each text in the edit's formatting rectangle, the window
+  within 640 by 452, the buttons apart under the text. 839 checks, 0
+  failures on the host, on 98 SE at 640 by 480, on XP, and on 7 x86 at
+  120 DPI.
+
+### The legs (package of `18bd9369`)
+
+| System | What was read | Result | Evidence |
+|---|---|---|---|
+| 98 SE, 640 by 480 | Help on Welcome, Components, the Thunderbolt and USB4 page, Settings (USB), Advanced, Summary; "Open the readme" | each fits the screen, text whole; the Advanced dialog's Help button in its row; Notepad opened over the help window | `h98\`, `shots-owner\98se-*.png` |
+| XP | the same, and the Thunderbolt and Stor98 tabs and Stor98's Advanced | each whole | `hxp\`, `shots-owner\xp-*.png` |
+| 7 x86 | Help on Progress left open through the install's end; Help on Finish; at 120 DPI the self-test, Components and its Help, the Thunderbolt page | the run ended under the help window: it closed and Finish showed; at 120 DPI nothing clipped | `h7\`, `shots-owner\7-*.png` |
+| 7 x86, 120 DPI | the uninstall (`C:\XHCI98\XHCIWIZ.EXE /uninstall`): Help on its first page, its Summary and its Finish | each whole; the Summary's Help names no Back, which that page does not offer | `shots-owner\7-120dpi-help-uninstall-*.png` |
+
+The owner's screenshots and their index:
+`E:\xhci98-vm\p45\w45-tbpage\shots-owner\index.txt`.
+
+### Left
+
+- The Help readings not yet made through the installer, per system
+  (each is in the self-test already, routing and rendering):
+  - 98 SE: the Settings Thunderbolt and Stor98 tabs, Stor98's
+    Advanced, Progress, Finish (restart and shut-down words), the
+    uninstall's three pages;
+  - XP: Progress (the shot taken there shows the page, not its Help),
+    Finish, the uninstall's three pages;
+  - 7 x86: Welcome, the Thunderbolt and USB4 page, the three Settings
+    tabs, both Advanced dialogs, the install's Summary (Components at
+    120 DPI is read).
+- The Help of the two other-driver pages (Free and Non-free USB
+  drivers): the test cut here carries neither set (`-NoNonFree
+  -NoWdmFree`). A cut with both is refused before staging by the
+  lifted-exclusion check of record 26 section 6.7.14 ("the installer's
+  table marks free:net/rtl815x and nonfree:ethernet/rtl815x lifted ...
+  and this cut lifts no EXCLUDES of the pair there"), which is outside
+  this task's area and is reported to the coordinator.
+- The Help of the Steps page: shown only where a 98 SE or ME device is
+  left for the user to install, which these legs did not produce.
+- Both are in the self-test (routing, and each text in the help
+  window), so what is owed is the reading through the installer.
+
+## 45.55 (the owed legs): 2000, ME and XP x64 on the ASM4242 layout (2026-10-31)
+
+Worker w45-pcie3, development host A, continuing "45.53 and 45.55
+(continued)". One driver change: `2c319f06` (design record 33 revision
+5, reviewed and revised). Emulator `bin-55cadf9` as above. The parent
+`usb4-device ... dialect=usb4,downstream-ports=1,chain-power-controller=off`
+and its child (`parent=enc0,port=1`) plugged by QMP at the desktop four
+seconds apart, as in `xpC`. Layouts: `asmboard` (the board's root-port
+reservation and the firmware's split, as `xpD`) for 2000 and XP x64;
+`asm4242` for ME, as `mB`. Evidence: `E:\xhci98-vm\p45\w45-pcie3\` (one
+folder a leg: `cmdline-<tag>.txt`, `steps.txt`, `debugcon-<tag>.log`,
+`serial-<tag>.log`, `reg-*.txt` and their decodes `reqs-*.txt`,
+screenshots; `pids.txt`; `hashes-*.txt`).
+
+### The readings first, on the package before the change
+
+The first three legs ran w45-pcie2's packages of `4b44bda2` (`xfA`, `xfB`:
+copies of its `xf4` and `xf5`, hashes in `hashes-xfA.txt` and
+`hashes-xfB.txt`), to read what each system does before anything was
+changed.
+
+**2000 (`w2F`, overlay of the 2000 golden `g2k`).** First boot on the
+layout: the Found New Hardware wizards cancelled; `INSTALL.BAT /console
+/yes /nopause /thunderbolt /stor98` ("On Windows 2000 a tunnel port's
+first filter install shows Code 12 ... Restart Windows, then run
+INSTALL.BAT again"), the qemu flavour copied in, cold start, the
+installer again (every bridge, the router and both xHCIs started). The
+parent and child plugged: `cm.breq.how` `00001021` for the upstream port
+03:00 and `00051022`, `00001022` for the downstream ports 04:00 and the
+chain port 04:08: shape 2 (2000's closed template), outcome 1
+(rewritten), bit 24 clear. The lists (`regedit /a` of `Enum\PCI`,
+`w2F\reg-1.txt`, decoded `w2F\reqs-1.txt`): the hot-added ports'
+`BasicConfigVector` is 2000's closed list of record 33 section 2.1
+exactly, `ListSize` E8h and 6 descriptors, **with no interrupt
+descriptor** although the ports' Interrupt Pin is A; the board's own
+ASM4242 ports, numbered by the firmware, carry one (`ShareDisposition`
+3, the Line as a fixed vector). So 2000's form is not XP's, and the
+rewrite runs on it with the template alone; no change was needed for
+2000. Every start status 0; the chain port started. Two wizards for each
+drive, as `w2E` (the first finds no driver, finished with its default;
+after the mark service's restart the second offers Stor98, `oem4.inf`,
+"Digital Signature Not Found" answered Yes). The parent's drive: Stor98,
+started, E: ORICO, `F.BAT` (`fc /b`): no differences. The chained drive:
+Stor98, **Code 10**: `cm.chain.irq.no=00041400`, why 4: its interrupt
+arrives on another pin of the tunnel port (the chain port is device 1),
+the Standard PC HAL limit of record 21 section 6.2.1 that "45.15 (legs)"
+r1 recorded (the release-notes text of 45.15 has it). Windows then asked
+for a restart; the warm restart stopped in real mode (black text screen,
+CS 2000h, EIP D4Fh unchanged, also after a QMP `system_reset`). That is
+the q35 2000 base's own warm-reboot hang (`q35-bases\w2k\README.txt`):
+three controls on the same overlay stopped at the same address - a
+restart with the chain attached at power-on (tag d), with no USB4 device
+(tag e) and with no USB4 layout at all (tag f). A cold start with the
+chain attached (tag c): both drives on Stor98, started, E: and F: ORICO,
+`fc /b` on each: no differences.
+
+**ME (`mC`, a fresh overlay of the ME base, `asm4242`).** The retry of
+`mB`: `RI9.BAT` (exit 3, "xHCI98 USB4 Router (ASMedia ASM4242): xhcicm
+3.3.0.0, started"), `SWAPQ9.BAT`, Shut Down, cold start: **the desktop**,
+the debug log ending at `cm.callwk.open` as `mB`'s did (that line is the
+idle state; `mB`'s black screen did not reproduce on a fresh overlay, and
+nothing in this driver's log separates the two boots). The parent and
+child plugged: `cm.brnum.9x` numbered both members (buses 4 to 0Eh, the
+chain port 6 to 0Eh), the Add New Hardware wizards installed the bridges
+and Stor98 (the staged INF chosen, as in "45.15 (legs)"). The parent's
+drive: E: ORICO, `fc /b`: no differences. The chained drive: Code 29 at
+the first plug (`cm.brnum.9x.irq-counts=02000305`: 5 functions, 3 lines
+set, 2 arriving on another pin; `cm.reenum.9x.noirq.refused`, its Stor98
+not yet installed); the child unplugged and plugged again:
+`cm.reenum.9x.noirq.after`, started with no interrupt (Stor98 polling,
+record 28 section 12, as the release notes say for ME: "the drive
+started at the re-plug after the first plug's Stor98 wizard"), F: ORICO,
+`fc /b`: no differences.
+
+**XP x64 (`x6B`, a fresh overlay of the XP x64 base, `asmboard` from the
+first boot).** The install finishes in about 15 minutes when (1) the
+first boot's Found New Hardware wizards are cancelled before the run
+(the one `x6A`'s run waited behind), (2) the wizards that appear during
+the run are answered, and (3) both of XP x64's prompts are answered:
+"Software Installation" (Continue Anyway) for each INF and, for each
+driver, "Security Alert - Driver Installation" ("Authenticode signature
+not found", default No; a No fails that install with `0x800B0100`). The
+packages here were unsigned (a clone without the key, catalogs made
+unsigned by `mkcat.ps1`); no certificate was made or used. Exit 3,
+restarted (XP x64 restarts warm). The parent and child plugged: the
+parent's NVMe at code 18 (the first wizard, as on XP) and the **chain
+port at Code 12** ("System Settings Change" asked for a restart). The
+lists (`reg query`, `x6B\reg-1.txt`, decoded `x6B\reqs-1.txt`): the
+upstream port's and both downstream ports' `BasicConfigVector` are **XP's
+closed lists byte for byte** (compared with `xpC\reg-1.txt`: 1296 hex
+digits each, no byte different, the header's bus and slot included):
+288h bytes, 19 descriptors, the bridge's interrupt last.
+`XhciCmBridgeReqDiag` (the release flavour's record): six attempts, each
+shape 0, system 2, outcome 4 (`00004201`, `00004202`): record 33 had no
+template for NT 5.2 (section 7.7), so the lists were left and the chain
+port met XP's Code 12 of before revision 4.
+
+### The change (`2c319f06`)
+
+`CmBreqShape` gives NT minor version 2 XP's template; XP x64 is planned,
+written and recorded as XP (the diagnostic's system field 2). Record 33
+revision 5 records both readings (sections 2.5, 6.1, 7.7, 9.2, 10.2 R4,
+13.2); `test_cm_breq` gains `test_xp64` (XP x64's list as read, planned
+and written as XP's byte for byte, the tail kept, the diagnostic) and the
+old "XP x64 has no template" checks now hold 2000's list on XP x64 left.
+Reviewed and revised.
+
+### The legs on `2c319f06`
+
+Gated builds of `2c319f06`: `all` (x86) and `all -amd64`, "BUILD + GATES
+PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-pcie3\build-all.log`,
+`build-amd64-all.log`; the base `e0d373fa` passed both as well,
+`build-all-e0d373fa.log`, `build-amd64-all-e0d373fa.log`); host tests
+passed (`htest1.log`, `test_cm_breq` and `test_cm_breq_amd64` 17188
+checks each). Packages (`make-package.ps1`): release x86 `xhcicm.sys`
+`bb2ed5c1...`, `xhci98.sys` `bf8d7c66...`, `stor98.sys` `43885f89...`;
+qemu x86 `xhcicm.sys` `c68f081d...`, `xhci98.sys` `4effb492...`; release
+x64 `xhcicm.sys` `4a622c9c...`, `xhci98.sys` `5968ad34...`, `stor98.sys`
+`740b6dd3...` (unsigned, catalogs made unsigned); qemu x64 `xhcicm.sys`
+`c13aeafb...`, `xhci98.sys` `3757acc7...`; the installer and `xhcimark`
+built from this tree (`XHCIINST.EXE` `ddd0edd9...`, `XHCIMARK.EXE`
+`e65ba401...`, `XHCIIN64.EXE` `50c6f94b...`, `XHCIMK64.EXE`
+`c50dee44...`). Transfer folders `xfC` (x86) and `xfD` (x86 and x64,
+`SWAPQ64.BAT` for the qemu flavour on XP x64); `hashes-xfC.txt`,
+`hashes-xfD.txt`.
+
+| Leg | System | Layout | Read | Verdict |
+|---|---|---|---|---|
+| `w2G` | 2000 | `asmboard`, parent + child | as `w2F`: `cm.breq.how` `00001021`, `00051022`, `00001022`, every start 0, the chain port started; two wizards a drive (one second-wizard signature prompt was answered No by the operator, leaving the parent's drive at code 28; `INSTALL.BAT` run again put Stor98 on it); the parent's drive E: ORICO, `fc /b` no differences; the chained drive Code 10 (`cm.chain.irq.no=00041400`, another pin); tag c, a cold start with the chain attached: both drives on Stor98, started, E: and F: ORICO, `fc /b` on each: no differences | pass (the chained drive starts after a start with it attached, the 45.15 limit) |
+| `mD` | ME | `asm4242`, parent + child | fresh overlay; `RI9.BAT`, `SWAPQ9.BAT`, cold start: the desktop (the second ME boot after the install here; no black screen); the plug: the bridges' and the chained drive's wizards, the chained drive at Code 29; the parent's drive enumerated with no wizard (problem 1; `XHCIINST /devices` listed it with no driver until the parent's re-plug); the child unplugged and plugged again: the chained drive started with no interrupt (`cm.reenum.9x.noirq.after`); the parent unplugged and plugged again: its Stor98 wizard, the staged INF chosen; both on Stor98, started, E: and F: ORICO, `fc /b` on each: no differences | pass after the parent's re-plug; the missing first wizard read again in `mE` |
+| `mE` | ME | `asm4242`, parent + child | `mD` again on a third fresh overlay (`RI9.BAT`, `SWAPQ9.BAT`, cold start: the desktop): the first plug gave three bridge wizards and both drives' Stor98 wizards (the second with the staged INF chosen); the parent's drive on Stor98, started, E: ORICO; the chained drive at Code 29, started with no interrupt at the child's re-plug, F: ORICO; `fc /b` on each: no differences. `mD`'s missing wizard did not recur (`mC` had it too) | pass |
+| `x6C` | XP x64 | `asmboard`, parent + child | fresh overlay, `asmboard` from the first boot; the first boot's wizards cancelled, `INSTALL.BAT` with both prompts answered (one run, exit 3), `SWAPQ64.BAT`, restarted; the plug: `cm.breq.how` `01001211` for 03:00 and `01051212`, `01001212` for 04:00 and 04:08 (shape 1, system 2, rewritten, the interrupt kept), every start 0; the rewritten lists (`x6C\reqs-2.txt`): the upstream port the parent's whole windows, each downstream port a memory ladder from 192 MB, the interrupt last; the chain port started; the first wizard for each drive ("Cannot Install this Hardware"), then after the mark service's restart the second, "Stor98 Storage Controller for NVMe SSDs" (Continue Anyway); both on Stor98, started, D: and F: ORICO, `fc /b` on each: no differences | pass |
+
+### Findings
+
+- 2000's closed list of a hot-added switch port is its template alone,
+  with no interrupt descriptor, on the Standard PC HAL; XP x64's is XP's
+  byte for byte. With `2c319f06` the rewrite runs on 2000, XP and XP x64
+  for the same switch, and on all three the chain port starts.
+- On 2000 (the Standard PC HAL), 98 SE and ME a drive behind the chain
+  port gets no interrupt when the chain is plugged at the desktop (it
+  arrives on the tunnel port's second pin): 2000 leaves it at Code 10
+  until Windows starts with it attached (45.15's recorded limit); on ME
+  it starts with no interrupt at the next plug of the child (record 28
+  section 12). XP and XP x64 route it.
+- `mB`'s black screen did not reproduce on three fresh ME overlays (`mC`,
+  `mD`, `mE`), each the same steps; nothing in this driver's log of `mB` points
+  at a cause (it ends where a healthy boot's idles). Not chased further.
+- ME, `mD`: Windows showed no Add New Hardware wizard for the parent's
+  drive at its first plug (its devnode at problem 1, no driver); the
+  re-plug of the parent raised it. `mC` and `mE`, the same steps on fresh
+  overlays, both had it at the first plug; the connection manager's log
+  of `mD` shows the same numbering and re-enumeration as theirs, so
+  nothing read separates the runs. Seen once in three; not chased
+  further.
+- The XP x64 install on this layout needs the first boot's Found New
+  Hardware wizards closed before the run, and its "Security Alert -
+  Driver Installation" (an unsigned package) answered Yes as well as
+  "Software Installation"; `x6A`'s run waited behind an open wizard.
+- 2000's warm restart on these q35 guests stops in real mode (CS 2000h,
+  EIP D4Fh) with or without the USB4 layout: the base's own, recorded
+  in its README; cold-start instead.
+
+### Left
+
+Nothing of 45.55 on these systems. Not read: 2000 on an ACPI HAL (record
+33 section 13.2), a real dock or enclosure.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
@@ -7389,3 +8048,30 @@ the version bump.
   leave 45.18 (the tunnel-down notice to Stor98) out of the user release
   notes; it acts only on tunnel ports identified as QEMU's, so users see
   no change. Its text above stays here for the record only."
+- 45.60 and 45.66 (9c52c51a): "The installer's Help button now explains
+  the page it is on: a short window says what each choice does and when to
+  change it, with the full readme one button away. On the Thunderbolt and
+  USB4 page the PCI-window box now reads 'Find Thunderbolt and USB4
+  devices placed above 4 GB'. The USB Tree box now says that it decides
+  only whether the tool starts at login; the tool is installed either
+  way."
+- 45.59 S5 and the bench findings, draft for the networking entry
+  (134bde5f): "Thunderbolt networking: the network adapter installs on
+  32-bit Windows Vista and 7. With Thunderbolt 3 controllers run by their
+  own firmware, a link to another computer comes up without unplugging and
+  replugging the cable, even when the other computer was started first.
+  The link keeps trying to connect until the other computer's network
+  interface is brought up, instead of stopping after a minute."
+- 45.55 (the owed legs) (pending): "SUPERSEDES the first two sentences of
+  the 45.53 and 45.55 text above (keep the rest). A Thunderbolt or USB4
+  dock or device whose own switch has more than one downstream port,
+  plugged in while Windows 2000, XP or XP x64 runs, now gets every port
+  placed, also when its switch ports request their own interrupt; before,
+  the second port stopped with Code 12 and nothing behind it started. The
+  first time an NVMe enclosure is plugged in on Windows 2000, XP or XP
+  x64, two Found New Hardware wizards appear: ... Coordinator note for the
+  bump: in release-notes.md also change "XP x64's lists were not read, so
+  there the rewrite does not act yet" (about line 422) to say XP x64 is
+  rewritten the same way; the XhciCmBridgeReq row (about line 1486) to
+  "the rewrite acts on 2000, XP and XP x64"; and drop XP x64 from that
+  untested-ground row (about line 5386)."

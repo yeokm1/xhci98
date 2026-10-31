@@ -7519,7 +7519,8 @@ no INF before this task:
 | `xhcicm.sys` | `XhciCmBridgeReq` | NT 5.x alone (2000, XP, XP x64; `CmBreqGate`) | 1 | 1, the NT 5.x paths (`.NTx86`, `.NTamd64`) |
 
 Exempt, as the owner's rule says: the `qemu` flavour's test-only values
-(`XhciQemu*`, `XhciCmQemuIrqDead`, `XhciMsi86NoStrip`,
+(`XhciQemu*`, `XhciCmQemuIrqDead`, `XhciCmQemuFailD0`,
+`XhciCmQemuFailReenum`, `XhciMsi86NoStrip`,
 `XhciMsi86InjNoLine`, the helper's `XhciHlprInject`); values Windows owns
 (`MaximumTransferLength`, which `xhciuas.sys` reads from a device's key as
 Microsoft's per-device convention; `SilentClasses` and
@@ -7532,6 +7533,20 @@ mailboxes and records the drivers write or the tools write for them
 The install's existing defaults stay where they differ from an absent
 value's: `XhciForceBulkOnly` 0 (absent is 1, for text-mode Setup) and
 `XhciImodInterval250ns` 160 (absent is 4000).
+
+`XhciCmQemuFailD0` (task 45.27) is the failure path's test value: no
+guest's bus fails the NHI's D0, so the `qemu` flavour alone takes the D0
+of that number (from 1, counted from the NHI's device object's
+creation) that the bus completed successfully as failed, once, in the D0's completion routine
+(`cm.qemu.d0.failed`), and its thread's failure path logs what it found
+(`cm.qemu.d0.failed.thread`); 0 or absent fails none. The same flavour
+logs the 9x worker's retry-only wait (`cm.wk.retry.wait`, the members
+owed and the wait chosen; `cm.wk.retry.woke`, the wait's status and its
+length), and reads `XhciCmQemuFailReenum`: that many of the worker's
+member calls are taken as failed before they are made
+(`cm.qemu.reenum.failed`, the member's bus, device and function), so
+the retry hold and its wait can be read where no guest fails one. The
+published flavour reads and logs none of these.
 
 **`XhciCmTunnelBridge`'s written form.** Absent and an empty string both
 mean "no override, the driver's own finding" today; anything else is

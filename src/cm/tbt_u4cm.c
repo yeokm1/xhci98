@@ -13128,6 +13128,26 @@ static BOOLEAN tbtU4XdOtherUp(const TBT_U4CM *cm, const TBT_U4_XD *x)
     return FALSE;
 }
 
+/* Record 35 section 4.2: the network driver's link goes down at the first
+ * logout of either side. A Logout from the peer takes the paths down
+ * inside the engine (ServiceDown, which lowers the link first); this
+ * host's own Logout takes them down only when it is answered or times
+ * out, so after each engine call the link is lowered as soon as the
+ * engine's service is no longer up, the paths, the rings and the NHI's one
+ * service held until ServiceDown. PathsUp guards the service's own build:
+ * inside ServiceUp the link is raised before the engine marks the service
+ * up. */
+static VOID tbtU4XdLinkSync(PTBT_U4CM cm, PTBT_U4_XD x)
+{
+    if (x->Used && x->LinkUp && x->Peer.PathsUp && x->Peer.NetState != TBT_NET_S_UP) {
+        x->LinkUp = FALSE;
+        tbtU4Log(cm, "cm.net.link.down", x->Port);
+        if (cm->Net.Link != NULL) {
+            cm->Net.Link(cm->Net.Context, x->Port, FALSE, NULL);
+        }
+    }
+}
+
 /* Each peer offered the service (its block's network directory, its
  * logins accepted) while the network driver holds it open and no other
  * port's is up (section 13); a change rebuilds that peer's block and tells
@@ -13151,6 +13171,7 @@ static VOID tbtU4XdOffer(PTBT_U4CM cm)
             cm->XdIn = x->Port;
             TbtXdpPeerSetNetWanted(&x->Peer, want, cm->NetPrtcstns);
             cm->XdIn = in;
+            tbtU4XdLinkSync(cm, x);
         }
     }
 }
@@ -13739,6 +13760,7 @@ static VOID tbtU4XdSync(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
 {
     ULONG st;
 
+    tbtU4XdLinkSync(cm, x);
     st = x->Peer.State;
     if (st == TBT_XDP_S_LOOP) {
         if (p->State != TBT_U4_UNSUPPORTED || p->Why != TBT_U4_WHY_LOOP) {
@@ -13888,6 +13910,79 @@ static VOID tbtU4XdSink(PVOID context, const TBT_FRAME *frame)
  * left UNSUPPORTED by the UUID step (the peer's request restarts it,
  * section 3.3 step 2); any other route counted. Packets queued while one
  * is answered are taken in the same pass. */
+/*
+ * Run-45 45-E.15 [obs]: an Alpine Ridge firmware CM at the far end sends
+ * one UUID Request about 10 ms after the link is up, with no retry seen,
+ * and tells its host of this one only once that is answered - before this
+ * side's port machine has read ERR_ENUM and classified the port. With
+ * XhciCmNet 1, a UUID Request on a port's lane 0 that no record serves is
+ * answered here with this domain's UUID, no record started, whatever the
+ * port's state - it may arrive with the hot plug event, before the port
+ * machine has seen the connection; the classification then starts the
+ * discovery as before. TRUE when it is taken: answered, or owed to the
+ * next takes when this domain's UUID cannot be read or the ring refuses
+ * the answer (the far firmware does not resend it).
+ */
+static VOID tbtU4XdEarlySend(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_XD_EARLY e = &cm->XdEarly[p->Index - 1];
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG words;
+
+    r.Hi = 0;
+    r.Lo = p->Lane0;
+    words = 0;
+    if (tbtU4XdIdentity(cm)) {
+        words = TbtXdpBuildUuidResponse(buf, &r, e->Sn, &cm->XdLocal,
+                                        (BOOLEAN)(e->Type == TBT_XDP_UUID_REQ));
+    }
+    if (words != 0 && TbtRingSend(cm->Ring, TBT_PDF_XDOMAIN_RESP, buf, words) == TBT_OK) {
+        e->Owed = FALSE;
+        tbtU4Log(cm, "cm.xdp.uuid.early", (p->Index << 8) | p->State);
+        return;
+    }
+    e->Tries++;
+    if (e->Tries > TBT_XDP_RESENDS) {
+        e->Owed = FALSE;
+        tbtU4Log(cm, "cm.xdp.uuid.early.fail", p->Index);
+    }
+}
+
+static BOOLEAN tbtU4XdEarlyUuid(PTBT_U4CM cm, PTBT_U4_PORT p, const TBT_FRAME *f)
+{
+    PTBT_U4_XD_EARLY e;
+    TBT_XDP_PKT k;
+
+    if (!cm->Config.Net || f->Pdf != TBT_PDF_XDOMAIN_REQ || p->Index < 1 ||
+        p->Index > TBT_U4_MAX_PORTS ||
+        TbtXdpDecode(f->Pdf, f->Dw, f->Words, &k) != TBT_XDP_K_DISCOVERY || k.Response ||
+        (k.Type != TBT_XDP_UUID_REQ && k.Type != TBT_XDP_UUID_REQ_TBT3)) {
+        return FALSE;
+    }
+    e = &cm->XdEarly[p->Index - 1];
+    e->Owed = TRUE;
+    e->Sn = k.Sn;
+    e->Type = k.Type;
+    e->Tries = 0;
+    tbtU4XdEarlySend(cm, p);
+    return TRUE;
+}
+
+/* The early answers still owed, at each take, until sent or out of
+ * tries: a record started on the port since never saw that request, so
+ * its engine does not answer it. */
+static VOID tbtU4XdEarlyRetry(PTBT_U4CM cm)
+{
+    ULONG i;
+
+    for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
+        if (cm->XdEarly[i].Owed) {
+            tbtU4XdEarlySend(cm, &cm->Ports[i]);
+        }
+    }
+}
+
 static VOID tbtU4XdTake(PTBT_U4CM cm)
 {
     TBT_FRAME f;
@@ -13901,6 +13996,9 @@ static VOID tbtU4XdTake(PTBT_U4CM cm)
         return;
     }
     cm->XdTaking = TRUE;
+    if (!tbtU4Off(cm) && !cm->Suspended) {
+        tbtU4XdEarlyRetry(cm);
+    }
     while (cm->XdCount != 0) {
         f = cm->XdQ[cm->XdHead];
         cm->XdHead = (cm->XdHead + 1) % TBT_U4_XD_QUEUE;
@@ -13918,6 +14016,10 @@ static VOID tbtU4XdTake(PTBT_U4CM cm)
             }
         }
         x = tbtU4XdOf(cm, p);
+        if (p != NULL && x != NULL && !x->Used && !tbtU4XdPortOk(cm, p) &&
+            tbtU4XdEarlyUuid(cm, p, &f)) {
+            continue;
+        }
         if (p == NULL || x == NULL || !tbtU4XdPortOk(cm, p)) {
             cm->XdNoPeer++;
             continue;

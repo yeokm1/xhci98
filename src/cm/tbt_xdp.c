@@ -1049,6 +1049,7 @@ static VOID tbtStartLogin(PTBT_XDP_PEER p)
     p->NetState = TBT_NET_S_LOGIN;
     p->LoginSentOk = FALSE;
     p->LoginSlow = FALSE;
+    p->LoginIdle = FALSE;
     tbtSlotReset(&p->Net, now);
     p->Net.Type = TBT_XDP_NET_TYPE(TBT_NET_LOGIN);
     p->Net.FirstId = p->NextRequestId;
@@ -1133,6 +1134,25 @@ VOID TbtXdpPeerInit(PTBT_XDP_PEER peer, const TBT_XDP_OPS *ops,
     tbtBuildLocal(peer);
 }
 
+/* The firmware CM's UUID Request (record 35 section 3.11), sent or
+ * resent; its answer is taken by tbtOnPacket. A send the ring refuses is
+ * a try spent, resent at the next deadline. */
+static VOID tbtNudge(PTBT_XDP_PEER p, ULONG now)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    ULONG words;
+
+    p->NudgeTries++;
+    p->NudgeDueMs = now + TBT_XDP_TRY_MS;
+    words = TbtXdpBuildUuidRequest(buf, &p->Route, tbtNextSn(p), TBT_XDP_UUID_REQ);
+    if (words != 0) {
+        (VOID)tbtSend(p, TBT_PDF_XDOMAIN_REQ, buf, words);
+    }
+    if (p->NudgeTries == 1) {
+        tbtLog(p, "cm.xdp.uuid.nudge", p->Route.Lo);
+    }
+}
+
 VOID TbtXdpPeerStart(PTBT_XDP_PEER p)
 {
     p->Counters.Restarts++;
@@ -1140,6 +1160,13 @@ VOID TbtXdpPeerStart(PTBT_XDP_PEER p)
     p->WaitPeer = FALSE;
     p->RemoteValid = FALSE;
     if (p->FirmwareCm && p->HaveRemote) {
+        /* Run-45 45-E.15: the firmware answers the far end's UUID Request
+         * itself, and a far software CM that gave up before this host's
+         * driver bound restarts its handshake only at a UUID Request. One
+         * is sent beside the discovery, resent until answered. */
+        p->NudgeDone = FALSE;
+        p->NudgeTries = 0;
+        tbtNudge(p, tbtNow(p));
         tbtStartProps(p);
     } else {
         p->HaveRemote = FALSE;
@@ -1303,13 +1330,12 @@ static VOID tbtNetTick(PTBT_XDP_PEER p, ULONG now)
         if (!p->Net.Armed || !tbtReached(now, p->Net.DueMs)) {
             return;
         }
-        if (tbtReached(now, p->Net.StartMs + TBT_NET_LOGIN_FOR_MS) &&
-            p->Net.Tries != 0) {
+        if (!p->LoginIdle && p->Net.Tries != 0 &&
+            tbtReached(now, p->Net.StartMs + TBT_NET_LOGIN_FOR_MS)) {
+            /* Not given up (record 35 section 4.1, revision 8): the
+             * idle rate from here, logged once. */
             tbtLog(p, "cm.net.login.none", p->Net.Tries);
-            p->NetState = TBT_NET_S_ABANDONED;
-            p->Net.Active = FALSE;
-            p->Net.Armed = FALSE;
-            return;
+            p->LoginIdle = TRUE;
         }
         p->Net.LastId = p->NextRequestId;
         words = TbtNetBuildLogin(buf, &p->Route, &p->Local, &p->Remote,
@@ -1321,10 +1347,11 @@ static VOID tbtNetTick(PTBT_XDP_PEER p, ULONG now)
         p->Net.Tries++;
         p->Net.Active = TRUE;
         p->Counters.LoginsSent++;
-        tbtSlotArm(&p->Net, now + ((!p->LoginSlow &&
-                                   (ULONG)(now - p->Net.StartMs) <
-                                   TBT_NET_LOGIN_FAST_FOR_MS) ?
-                                  TBT_NET_LOGIN_FAST_MS : TBT_NET_LOGIN_SLOW_MS));
+        tbtSlotArm(&p->Net, now + (p->LoginIdle ? TBT_NET_LOGIN_IDLE_MS :
+                                   (!p->LoginSlow &&
+                                    (ULONG)(now - p->Net.StartMs) <
+                                    TBT_NET_LOGIN_FAST_FOR_MS) ?
+                                   TBT_NET_LOGIN_FAST_MS : TBT_NET_LOGIN_SLOW_MS));
         (VOID)tbtSend(p, TBT_PDF_XDOMAIN_REQ, buf, words);
         return;
     }
@@ -1358,6 +1385,10 @@ VOID TbtXdpPeerTick(PTBT_XDP_PEER p)
     ULONG now = tbtNow(p);
 
     tbtDiscTick(p, now);
+    if (p->FirmwareCm && !p->NudgeDone && p->NudgeTries != 0 &&
+        p->NudgeTries <= TBT_XDP_RESENDS && tbtReached(now, p->NudgeDueMs)) {
+        tbtNudge(p, now);
+    }
     tbtNetPoll(p);
     tbtNetTick(p, now);
 }
@@ -1812,7 +1843,11 @@ BOOLEAN TbtXdpPeerOnPacket(PTBT_XDP_PEER p, ULONG pdf, const ULONG *dw,
     }
     if (kind == TBT_XDP_K_DISCOVERY) {
         if (k.Response) {
-            tbtOnDiscResponse(p, &k);
+            if (p->FirmwareCm && k.Type == TBT_XDP_UUID_RESP) {
+                p->NudgeDone = TRUE;    /* the nudge's answer, not the discovery's */
+            } else {
+                tbtOnDiscResponse(p, &k);
+            }
         } else {
             tbtOnDiscRequest(p, &k);
         }

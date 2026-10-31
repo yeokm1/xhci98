@@ -513,11 +513,14 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
 }
 
 /* The thread's CM_WORK_NET (cm_net.c): the Open or Close given to the
- * software connection manager where it runs, then the waiter released. */
+ * connection manager where one runs (the software one, or the firmware
+ * one once bound), then the waiter released. */
 VOID CmNhiNetWork(PCM_NHI nhi)
 {
-    if (nhi->U4On && nhi->Stage == CM_STAGE_ACTIVE && !cmU4Contained(nhi) &&
-        nhi->DevicePower == PowerDeviceD0 && !nhi->Suspended) {
+    if (nhi->Stage == CM_STAGE_ACTIVE && nhi->DevicePower == PowerDeviceD0 &&
+        !nhi->Suspended &&
+        (nhi->U4On ? !cmU4Contained(nhi)
+                   : (nhi->Net.Fw && nhi->Icm.Bound && !nhi->Icm.Failed))) {
         CmNetPass(nhi);
     }
     CmNetAck(nhi);
@@ -543,6 +546,11 @@ VOID CmNhiPollPass(PCM_NHI nhi)
             CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
         }
         return;
+    }
+    /* Record 35 section 3.10: the same pass under the firmware connection
+     * manager, before the poll whose engine ticks act on it. */
+    if (nhi->Net.Fw && nhi->Icm.Bound && !nhi->Icm.Failed) {
+        CmNetPass(nhi);
     }
     TbtIcmPoll(&nhi->Icm);
     CmNhiDrainActions(nhi);
@@ -2785,7 +2793,7 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
     /* Record 35 (task 45.59): the service's operations, before the start. */
-    CmNetBindOps(nhi);
+    CmNetBindOps(nhi, FALSE);
     /* Section 9.4: the record of the earlier instance on this NHI, taken
      * at this start, given to the core only for the same ids. */
     if (nhi->U4CarryIds != nhi->LiveIds || nhi->U4CarrySub != nhi->SubVendor) {
@@ -3101,6 +3109,9 @@ VOID CmNhiStartWork(PCM_NHI nhi)
      * links under the firmware connection manager too. */
     TbtIcmSetNetConfig(&nhi->Icm, (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0),
                        cmNetRevision());
+    /* The service's operations and the NHI's serial for the MAC, before
+     * the start (record 35 section 3.10). */
+    CmNetBindOps(nhi, TRUE);
     CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;

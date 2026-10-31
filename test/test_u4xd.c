@@ -58,6 +58,8 @@ static long g_linkUpAt;
 static long g_linkDownAt;
 static int g_lastE2e;
 static LONG g_ringsAnswer;
+static unsigned long g_uuidResp;    /* UUID Responses this domain sent */
+static int g_failCs7;               /* ROUTER_CS_7 reads of this domain left unanswered */
 
 static LONG netRingsUp(PVOID c, ULONG port, ULONG ring, BOOLEAN e2e)
 {
@@ -109,6 +111,10 @@ static int lpHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs
     int i;
 
     (void)pdf; (void)cs; (void)adp; (void)addr; (void)n; (void)data;
+    if (g_failCs7 > 0 && router == 0 && cs == TBT_CS_ROUTER && addr == TBT_ROUTER_CS_7) {
+        g_failCs7--;
+        return FAB_HOOK_SWALLOW;
+    }
     for (i = 0; i < 2; i++) {
         if (g_lp[i].On && router == g_lp[i].Dev) {
             dw[0] = 0x80000000UL;
@@ -127,10 +133,18 @@ static void lpTx(struct FAB *f, unsigned long pdf, const unsigned long *dw,
     LP *lp;
     ULONG w[64];
     unsigned long i;
+    TBT_XDP_PKT k;
 
     (void)f;
     if (words < 2) {
         return;
+    }
+    for (i = 0; i < words && i < 64; i++) {
+        w[i] = dw[i];
+    }
+    if (TbtXdpDecode(pdf, w, words, &k) == TBT_XDP_K_DISCOVERY && k.Response &&
+        k.Type == TBT_XDP_UUID_RESP) {
+        g_uuidResp++;
     }
     lp = lpOfLane(dw[1]);
     if (lp == NULL || !lp->Live) {
@@ -683,6 +697,123 @@ static void test_close_open(void)
     pump(2);
 }
 
+/* Section 4.2: the link goes down at this host's own Logout, not when the
+ * Logout is answered. The far host goes silent once the service is up, so
+ * the Logout of the network driver's Close is never answered: the link is
+ * down at once, the paths and the rings held until the Logout times out,
+ * and only then the entries invalid and the rings down. */
+static void test_close_unanswered(void)
+{
+    LP *lp = &g_lp[0];
+    const TBT_XDP_PEER *ours;
+    int lane;
+    int i;
+
+    setup(1, 1);
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    lane = fabPortLane0(&g_fab, 1);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "the service came up");
+    lp->Live = 0;
+    TbtU4NetWanted(&g_cm, FALSE, 0);
+    ours = TbtU4Peer(&g_cm, 1);
+    CHECK(ours != NULL && ours->NetState == TBT_NET_S_LOGOUT, "our Logout due");
+    CHECK_EQ(g_linkDown, 1, "the link down at the Logout");
+    CHECK_EQ(g_ringsDown, 0, "the rings held");
+    pump(1);
+    CHECK_EQ(g_linkDown, 1, "the link down once");
+    CHECK_EQ(g_ringsDown, 0, "the rings held while the Logout is out");
+    CHECK(entry(lane, (int)lp->TxHop, 0) & 0x80000000UL, "the receive entry kept");
+    CHECK(entry(HI_ADP, 1, 0) & 0x80000000UL, "the transmit entry kept");
+    for (i = 0; i < 300 && g_ringsDown == 0; i++) {
+        pump(1);
+    }
+    CHECK_EQ(g_ringsDown, 1, "the rings down once the Logout timed out");
+    CHECK_EQ(g_linkDown, 1, "no second link down");
+    CHECK(!(entry(lane, (int)lp->TxHop, 0) & 0x80000000UL), "the receive entry invalid");
+    CHECK(!(entry(HI_ADP, 1, 0) & 0x80000000UL), "the transmit entry invalid");
+    unplug(lp);
+    pump(2);
+}
+
+/* Run-45 45-E.15: a far firmware CM's single early UUID Request, on a
+ * port this domain has not classified as XDOMAIN, is answered at once
+ * with this domain's UUID (no record started); with XhciCmNet 0 it is
+ * dropped as before. The far router here is left a plain device router,
+ * so the port is connected and not XDOMAIN when the request lands. */
+static void test_early_uuid(void)
+{
+    LP *lp = &g_lp[0];
+    ULONG w[TBT_XDP_MAX_WORDS];
+    ULONG n;
+    TBT_ROUTE r;
+    int net;
+
+    /* With the plug, before the first poll: the port still EMPTY. */
+    setup(1, 1);
+    r.Hi = 0;
+    r.Lo = (ULONG)fabPortLane0(&g_fab, 1);
+    n = TbtXdpBuildUuidRequest(w, &r, 1, TBT_XDP_UUID_REQ);
+    g_uuidResp = 0;
+    fabPlug(&g_fab, 1, lp->Dev);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    TbtU4Poll(&g_cm);
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_uuidResp, 1, "answered with the plug");
+    fabUnplug(&g_fab, 1);
+    pump(2);
+    /* This domain's UUID unreadable at first: the answer owed, sent at a
+     * later take with no second request. */
+    setup(1, 1);
+    g_cm.XdLocalValid = FALSE;
+    g_failCs7 = 1;
+    g_uuidResp = 0;
+    fabPlug(&g_fab, 1, lp->Dev);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    TbtU4Poll(&g_cm);
+    TbtU4Poll(&g_cm);
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_failCs7, 0, "the first read went unanswered");
+    CHECK_EQ(g_uuidResp, 1, "answered at a later take");
+    CHECK(!g_cm.XdEarly[0].Owed, "nothing owed");
+    fabUnplug(&g_fab, 1);
+    pump(2);
+    /* The same, the far end another domain's router: the port becomes
+     * XDOMAIN and its record starts before the retry, which still sends
+     * the owed answer (the record's engine never saw that request). */
+    setup(1, 1);
+    g_cm.XdLocalValid = FALSE;
+    g_failCs7 = 1;
+    g_uuidResp = 0;
+    plug(lp, 0x00002222UL, 0);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    pump(10);
+    CHECK_EQ(portState(1), TBT_U4_XDOMAIN, "XDOMAIN");
+    CHECK(TbtU4Peer(&g_cm, 1) != NULL, "its record started");
+    CHECK_EQ(g_uuidResp, 1, "the owed answer sent all the same");
+    CHECK(!g_cm.XdEarly[0].Owed, "nothing owed");
+    unplug(lp);
+    pump(2);
+    for (net = 1; net >= 0; net--) {
+        setup(net, 1);
+        fabPlug(&g_fab, 1, lp->Dev);
+        pump(20);
+        CHECK(portState(1) != TBT_U4_EMPTY && portState(1) != TBT_U4_XDOMAIN,
+              "connected, not XDOMAIN");
+        r.Hi = 0;
+        r.Lo = (ULONG)fabPortLane0(&g_fab, 1);
+        n = TbtXdpBuildUuidRequest(w, &r, 0, TBT_XDP_UUID_REQ);
+        g_uuidResp = 0;
+        fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+        TbtU4Poll(&g_cm);
+        TbtU4Poll(&g_cm);
+        CHECK_EQ(g_uuidResp, (unsigned long)net, net ? "answered at once" : "XhciCmNet 0: dropped");
+        CHECK(TbtU4Peer(&g_cm, 1) == NULL, "no record started");
+        fabUnplug(&g_fab, 1);
+        pump(2);
+    }
+}
+
 /* Section 13: one service per NHI - a second peer on port 2 is discovered
  * and READY, its service refused while port 1's is up. */
 static void test_one_service(void)
@@ -852,10 +983,12 @@ int main(void)
     RUN_VEC(test_stop_logout);
     RUN_VEC(test_contain);
     RUN_VEC(test_close_open);
+    RUN_VEC(test_close_unanswered);
     RUN_VEC(test_one_service);
     RUN_VEC(test_rings_refused);
     RUN_VEC(test_unplug_midway);
     RUN_VEC(test_identity);
+    RUN_VEC(test_early_uuid);
     fabTraceMark("end");
     printf("test_u4xd: %d checks, %d failures\n", checks, failures);
     return failures;

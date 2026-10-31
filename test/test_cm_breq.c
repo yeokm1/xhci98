@@ -408,10 +408,10 @@ static void test_templates(void)
              "XP's list on 2000 is left");
     CHECK_EQ(CmBreqShape(bq2kClosed, 1), CM_BREQ_SHAPE_NONE,
              "2000's list on XP is left");
-    CHECK_EQ(CmBreqShape(bqXpClosed, 2), CM_BREQ_SHAPE_NONE,
-             "XP x64 has no template");
+    CHECK_EQ(CmBreqShape(bqXpClosed, 2), CM_BREQ_SHAPE_XP,
+             "XP x64's closed list is XP's template (task 45.55)");
     CHECK_EQ(CmBreqShape(bq2kClosed, 2), CM_BREQ_SHAPE_NONE,
-             "XP x64 has no template (2000's list)");
+             "2000's list on XP x64 is left");
     CHECK_EQ(CmBreqShape(bq2kConfigured, 0), CM_BREQ_SHAPE_NONE,
              "2000's configured list is left");
     CHECK_EQ(CmBreqShape(bqXpConfigured, 1), CM_BREQ_SHAPE_NONE,
@@ -903,8 +903,8 @@ static void test_edges(void)
     snap_up(&s, 3);
     CHECK_EQ(CmBreqPlan(bq2kConfigured, 0, &s, &p), CM_BREQ_OUT_SHAPE,
              "a configured list: shape refused");
-    CHECK_EQ(CmBreqPlan(bqXpClosed, 2, &s, &p), CM_BREQ_OUT_SHAPE,
-             "XP x64: shape refused");
+    CHECK_EQ(CmBreqPlan(bq2kClosed, 2, &s, &p), CM_BREQ_OUT_SHAPE,
+             "2000's list on XP x64: shape refused");
     /* A prefetchable claim moved to memory where the upstream port has no
      * prefetchable window. */
     snap_down(&s, 1);
@@ -1308,8 +1308,10 @@ static void test_irq_tail(void)
              "2000's closed list and the bridge's interrupt: 2000's");
     CHECK_EQ(CmBreqShape(xp, 0), CM_BREQ_SHAPE_NONE,
              "XP's with the interrupt on 2000: left");
-    CHECK_EQ(CmBreqShape(xp, 2), CM_BREQ_SHAPE_NONE,
-             "XP x64 still has no template");
+    CHECK_EQ(CmBreqShape(xp, 2), CM_BREQ_SHAPE_XP,
+             "XP x64: XP's template, the interrupt after");
+    CHECK_EQ(CmBreqShape(w2k, 2), CM_BREQ_SHAPE_NONE,
+             "2000's with the interrupt on XP x64: left");
     CHECK_EQ(CmBreqTail(xp), 1, "the tail seen (XP)");
     CHECK_EQ(CmBreqTail(w2k), 1, "the tail seen (2000)");
     CHECK_EQ(CmBreqTail(bqXpClosed), 0, "no tail (XP)");
@@ -1410,11 +1412,66 @@ static void test_irq_tail(void)
     CHECK_EQ(p.Tail, 0, "a refused list has no tail");
 }
 
+/* XP x64 (NT minor version 2): task 45.55 read its closed lists of the
+ * hot-added switch's ports byte for byte equal to XP's, the bridge's
+ * interrupt last (record 33 section 7.7, revision 5), so it takes XP's
+ * template and is planned and written exactly as XP. */
+static void test_xp64(void)
+{
+    UCHAR xp[sizeof(bqXpClosed) + 64];
+    UCHAR a[2048];
+    UCHAR b[2048];
+    CM_BREQ_SNAP s;
+    CM_BREQ_PLAN p;
+    CM_BREQ_PLAN q;
+    ULONG nx;
+    ULONG e[7];
+    ULONG f[7];
+
+    nx = with_irq(bqXpClosed, sizeof(bqXpClosed), xp);
+    CHECK_EQ(nx, 0x288UL, "XP x64's list as read: 288h");
+    CHECK_EQ(CmBreqShape(xp, 2), CM_BREQ_SHAPE_XP,
+             "XP x64's list as read: XP's template");
+    CHECK_EQ(CmBreqShape(bqXpConfigured, 2), CM_BREQ_SHAPE_NONE,
+             "XP's configured list on XP x64: left");
+    CHECK_EQ(CmBreqShape(bqXpClosed, 3), CM_BREQ_SHAPE_NONE,
+             "an NT 5.x minor version no template names: left");
+    CHECK_EQ(CmBreqShape(xp, 3), CM_BREQ_SHAPE_NONE,
+             "the same with the interrupt: left");
+
+    /* Planned and written as on XP, the tail kept. */
+    dock3(&s, 1);
+    CHECK_EQ(CmBreqPlan(xp, 1, &s, &q), CM_BREQ_OUT_REWRITTEN,
+             "XP: ex1's NIC port with the interrupt, rewritten");
+    CHECK_EQ(CmBreqPlan(xp, 2, &s, &p), CM_BREQ_OUT_REWRITTEN,
+             "XP x64: the same port, rewritten");
+    CHECK_EQ(p.Bytes, q.Bytes, "the same size as on XP");
+    CHECK_EQ(p.Tail, 1, "XP x64: the tail kept");
+    memset(a, 0x5A, sizeof(a));
+    memset(b, 0x5A, sizeof(b));
+    CHECK_EQ(CmBreqWrite(xp, &q, a, q.Bytes), q.Bytes, "XP written");
+    CHECK_EQ(CmBreqWrite(xp, &p, b, p.Bytes), p.Bytes, "XP x64 written");
+    CHECK(memcmp(a, b, p.Bytes) == 0, "XP x64 writes XP's list");
+    CHECK(b[p.Bytes] == 0x5A, "nothing past the list");
+    /* The diagnostic: XP's shape, the system 2. */
+    CmBreqEntry(&q, 0x0408UL, 0x0218UL, 1, q.Outcome, 1, e);
+    CmBreqEntry(&p, 0x0408UL, 0x0218UL, 2, p.Outcome, 1, f);
+    CHECK_EQ((f[1] >> 4) & 0xFUL, CM_BREQ_SHAPE_XP, "entry: XP's shape");
+    CHECK_EQ((f[1] >> 8) & 0xFUL, 2, "entry: the system 2");
+    CHECK_EQ(f[1] & ~0xF00UL, e[1] & ~0xF00UL,
+             "entry: as XP's but the system");
+    /* A single enclosure's upstream port stays as it came, as on XP. */
+    snap_up(&s, 1);
+    CHECK_EQ(CmBreqPlan(xp, 2, &s, &p), CM_BREQ_OUT_LEFT,
+             "XP x64: a single port's upstream port, left as on XP");
+}
+
 int main(void)
 {
     test_templates();
     test_example1();
     test_irq_tail();
+    test_xp64();
     test_example2();
     test_example3();
     test_example4();

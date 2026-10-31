@@ -26,10 +26,19 @@ ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 DriverVer=10/28/2026,3.3.0.0
 
+; NTx86 for XP, Vista and 7 beside NTx86.6.2: Vista's and 7's driver store
+; stages only the files of the decorated models sections once the line
+; has a decoration, so without an NTx86 one it staged xhcinet6.sys alone
+; and 7's NDIS 5 install failed its copy (record 35 section 8.2). 2000
+; reads no decoration and takes the undecorated models, as 98 SE and ME.
 [Manufacturer]
-%Mfg%=NetModels,NTx86.6.2
+%Mfg%=NetModels,NTx86,NTx86.6.2
 
 [NetModels]
+%NetDesc%=Net.Dev,XHCICM\TBNET
+
+; XP, Vista and 7: the same model and install as the undecorated line.
+[NetModels.NTx86]
 %NetDesc%=Net.Dev,XHCICM\TBNET
 
 ; 8, 8.1 and 10: xhcinet6.sys.

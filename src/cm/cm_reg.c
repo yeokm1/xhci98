@@ -300,6 +300,10 @@ VOID CmReadValues(PCM_NHI nhi)
 #if defined(XHCI_FLAVOUR_QEMU)
     cmQuery(key, L"XhciCmQemuIrqDead", &take, 0);
     nhi->Values.QemuIrqDead = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuFailD0", &take, 0);
+    nhi->QemuFailD0 = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuFailReenum", &take, 0);
+    nhi->QemuFailReenum = take.Found ? take.Dword : 0;
 #endif
     cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
     CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
