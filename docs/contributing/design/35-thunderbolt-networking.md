@@ -1,6 +1,9 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 10, 2026-10-31: the bench capture (section 2.7) weighed
+Status: revision 11, 2026-11-01: the rings' common buffers asked for in
+whole pages, read on Windows 2000 (section 6.5, "The rings"), reviewed and
+revised.
+Revision 10, 2026-10-31: the bench capture (section 2.7) weighed
 against the code (section 3.11), reviewed and revised.
 Revision 9, 2026-10-31: the driver half joined to the firmware
 connection manager (section 6.5, "The two connection managers"), the
@@ -1790,7 +1793,12 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   HopID in bits 22:12 in a second write, then the Consumer Index one slot
   behind; the transmit indexes read back equal. The memory is allocated
   there at the first service after a start (each descriptor block and
-  each 4 KiB buffer its own common buffer) and freed at the stop, or kept
+  each 4 KiB buffer its own common buffer, each asked for in whole pages:
+  Windows 2000 serves a common buffer of less than a page from pool,
+  8-byte aligned - a 2 KiB descriptor block at an address ending 008h,
+  runtime, read through this driver's log on 2026-11-01, run-45 "45.59
+  (legs, continued)" - which the 16-byte check refuses, so no service
+  started there before revision 11) and freed at the stop, or kept
   with its adapter where a ring was not read back stopped, and forgotten
   then, so no later start frees or reuses it. A service whose earlier ring
   of this start was not read back stopped is refused (`cm.net.mem.busy`),
