@@ -4757,6 +4757,64 @@ the update run (`/force`), then a restart:
   (45.14's finding; the pinned emulator has QEMU's property, not
   usb4-emu's newer `power-controller` alias); noted in its `STATE.md`.
 
+## 45.51 the self-tests' skip across worktrees: one shared record per suite, the narrowed digests, the three-part proof (2026-10-31)
+
+Task 45.51 of `roadmap-usb4.md`; design `build-and-test.md`, "The
+self-tests' skip across worktrees" (reviewed and revised, brought up to
+date with the code). Branch `w45-selftest-share`, code at `308379b9`:
+the shared store (`5b6bbca8`, `c261826b`), the INF gate's digest
+(`165ad584`), the suites' git policy (`29e56d67`, `30ac7d88`,
+`400788ef`, `281531fe`), the behaviour cases on fixture repository P
+(`ba67bf77`, `214f5c9d`), the stamp and the input rules on fixture tree
+S (`4c7afe34`), the sign-only cases on P's HEAD and status (`7e18f01a`),
+the packager's digest (`d001b39e`, `34204558`, `5fd1fb0f`, `308379b9`)
+and each set's guard (`967de8f1`).
+
+Each proof build is `scripts\build-driver.cmd all` (x86) with
+`XHCI98_SELFTEST_SKIP_OK=1` (a pre-merge build), `src\pfw\build.cmd`
+first, under one of the host's gated-build slots, on development host A;
+the store is the default, `%LOCALAPPDATA%\xhci98\selftest-pass`, empty
+before run (a). Times are the steps' own (`--- ...: passed (exit 0,
+m:ss)`) and the build's start to end. Trees 2 to 5 are worktrees of the
+same repository made for the proof (`tools\` linked), removed after it.
+
+| Run | Tree | Commit | What changed from `308379b9` | Build | Packager self-tests | INF gate self-tests |
+|---|---|---|---|---|---|---|
+| (a) 1 | tree 1, the branch's own | `308379b9` | - | 46 min | 15:25, whole, record | 43:01, whole, record |
+| (a) 2 | tree 2, a fresh worktree, its first build | `308379b9` | - | 5 min | 0:27, skipped on tree 1's record | 0:01, skipped on tree 1's record |
+| (b) | tree 3, its first build | `f1088540` | a comment in `src\xhci_ring.c` | 5 min | 0:27, skipped | 0:01, skipped |
+| (c) packager | tree 4, its first build | `2807d732` | a comment in `scripts\package\make-release.ps1` | 20 min | 16:51, whole, record | 0:01, skipped |
+| (c) both | tree 5, its first build | `e7ab1cc6` | a comment in `scripts\inf-gate\check-uas-inf.ps1` | 41 min | 16:49, whole, record | 37:43, whole, record |
+
+- Every build exit 0 (`BUILD + GATES PASSED (release qemu)`). The skip
+  lines name the run they rest on, for example "INF gate self-tests
+  skipped: nothing they or the gate read has changed since the run that
+  passed at 2026-10-30T16:54:07Z (1622 checks; digest ce463514c36a0b9c; in
+  E:\xhci98-wt\w45-selftest-share)".
+- (a) The record a tree's first build writes is found by another tree's
+  first build of the same commit: tree 1's packager record was written
+  while the build's parallel steps ran (its end digest matched its
+  start), and tree 2 skipped both suites. 45.48's per-tree records never
+  allowed this, and its INF record never held even within a tree.
+- (b) A driver source's content is in neither digest: a branch that
+  changes only `src\xhci_ring.c` skips both. (A change to
+  `src\cm\cm_vals.c` or `cm_vals.h` would not: the CM INF gate the upload
+  cases run holds the INFs to them, so they are in the packager's set.)
+- (c) A file one suite reads makes that suite run whole and records the
+  new digest: `make-release.ps1` is the packager's alone (the INF gate's
+  skip held); `check-uas-inf.ps1` is under `scripts\inf-gate\`, which
+  both suites read.
+- The packager's suite takes 15 to 17 minutes whole, against 20 to 27 in
+  45.48's builds: its binary gates' case runs fixture P's host runner,
+  not the real host suite.
+- Before the proof, at `29e56d67` (the store, the INF digest, the git
+  policy): the INF gate's self-tests passed whole (1619 checks), the
+  packager's failed one check (the git policy's child reading, fixed in
+  `30ac7d88`); on the steps 4 to 6 before their last review fixes: both
+  passed whole (packager 1745 checks, INF gate 1622).
+- Logs: `E:\xhci98-scratch\p45-w45-share\proof-*.log` and `pkg*.log`,
+  `inf*.log`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the

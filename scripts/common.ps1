@@ -315,3 +315,222 @@ function Assert-Win2KUsbdFile {
         throw "Expected Win2000 SP4 USBD.SYS 5.00.2195.6658 (20688 bytes); found version '$version' ($($file.Length) bytes) at: $Path"
     }
 }
+
+#
+# The self-tests' shared pass records (roadmap-usb4 task 45.51;
+# build-and-test.md, "The self-tests' skip across worktrees"). One store per
+# user and host, outside every worktree: a folder per suite and one file per
+# passing digest, so a pass in one tree is found by every tree whose inputs
+# hash the same. Nothing here deletes a record: one whose digest no tree
+# has any more is never asked for.
+#
+function Get-SelfTestPassDir {
+    # XHCI98_SELFTEST_PASS_DIR when set, else %LOCALAPPDATA%\xhci98\selftest-pass;
+    # "" when neither can be named (no store: every run runs whole).
+    if ("$env:XHCI98_SELFTEST_PASS_DIR" -ne "") { return [System.IO.Path]::GetFullPath("$env:XHCI98_SELFTEST_PASS_DIR") }
+    if ("$env:LOCALAPPDATA" -eq "") { return "" }
+    return (Join-Path $env:LOCALAPPDATA "xhci98\selftest-pass")
+}
+
+function Test-SelfTestPassRecordLines {
+    # A record counts only whole: exactly six lines in order - the digest and
+    # the suite asked, its time, a count of one check or more, the tree that
+    # passed (for the reader only, never compared), then the end line.
+    param([string[]]$Lines, [string]$Suite, [string]$Digest)
+    return ($Lines.Count -eq 6 -and $Lines[0] -ceq ("digest=" + $Digest) -and $Lines[1] -ceq ("suite=" + $Suite) -and
+            $Lines[2] -cmatch '^time=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$' -and $Lines[3] -cmatch '^checks=[1-9]\d*$' -and
+            $Lines[4] -cmatch '^tree=.+$' -and $Lines[5] -ceq "end")
+}
+
+function Read-SelfTestPassRecord {
+    # The record of a pass of -Suite on -Digest, as @{ Time; Checks; Tree;
+    # Path }, or $null when there is none or it is not whole.
+    param([string]$Suite, [string]$Digest, [string]$Dir = "")
+    if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$') { return $null }
+    # A store that cannot be named or reached is no record: the suite runs.
+    try {
+        if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+        if ($Dir -eq "") { return $null }
+        $file = Join-Path (Join-Path $Dir $Suite) ($Digest + ".txt")
+        if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { return $null }
+        $lines = @([System.IO.File]::ReadAllLines($file))
+    } catch {
+        return $null
+    }
+    if (-not (Test-SelfTestPassRecordLines -Lines $lines -Suite $Suite -Digest $Digest)) { return $null }
+    return @{ Time = $lines[2].Substring(5); Checks = $lines[3].Substring(7); Tree = $lines[4].Substring(5); Path = $file }
+}
+
+function Write-SelfTestPassRecord {
+    # Records a pass of -Suite on -Digest: the suite's folder made if it is
+    # not there, the record written whole to a temporary name beside its
+    # place and moved into it, so it is whole or absent. When the name is
+    # taken, a whole record for this digest is left as it is (another tree
+    # passed the same inputs) and anything else is replaced from the fresh
+    # temporary. Any other failure is a warning and records nothing: the
+    # pass stands and the next run runs whole. $true when a whole record is
+    # in place afterwards.
+    param([string]$Suite, [string]$Digest, [int]$Checks, [string]$Tree, [string]$Dir = "")
+    if ($Suite -cnotmatch '^[a-z]+$' -or $Digest -cnotmatch '^[0-9a-f]{64}$' -or $Checks -lt 1) { return $false }
+    $tmp = ""
+    try {
+        if ($Dir -eq "") { $Dir = Get-SelfTestPassDir }
+        if ($Dir -eq "") {
+            Write-Warn ("the {0} self-tests' pass was not recorded: neither XHCI98_SELFTEST_PASS_DIR nor LOCALAPPDATA is set." -f $Suite)
+            return $false
+        }
+        $folder = Join-Path $Dir $Suite
+        [void][System.IO.Directory]::CreateDirectory($folder)
+        $dest = Join-Path $folder ($Digest + ".txt")
+        $tmp = Join-Path $folder ($Digest + "." + [System.IO.Path]::GetRandomFileName() + ".tmp")
+        $text = ("digest={0}`r`nsuite={1}`r`ntime={2}`r`nchecks={3}`r`ntree={4}`r`nend`r`n" -f $Digest, $Suite,
+                 [DateTime]::UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"), $Checks, $Tree)
+        [System.IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+        try {
+            [System.IO.File]::Move($tmp, $dest)
+        } catch {
+            # Taken by another run's record, or failed for another reason.
+            if (-not [System.IO.File]::Exists($dest)) { throw }
+            if ($null -ne (Read-SelfTestPassRecord -Suite $Suite -Digest $Digest -Dir $Dir)) { return $true }
+            [System.IO.File]::Replace($tmp, $dest, [NullString]::Value)
+        }
+        return ($null -ne (Read-SelfTestPassRecord -Suite $Suite -Digest $Digest -Dir $Dir))
+    } catch {
+        Write-Warn ("the {0} self-tests' pass was not recorded ({1}); the next run runs them whole." -f $Suite, $_.Exception.Message)
+        return $false
+    } finally {
+        if ($tmp -ne "" -and [System.IO.File]::Exists($tmp)) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+#
+# The self-tests' git (roadmap-usb4 task 45.51): one policy, set in the
+# suite's own environment at its start, so the fixtures it builds and every
+# production git call it reaches - in this process and in every child it
+# starts - see the same git on every host, whatever the caller's system and
+# global configuration, hooks, templates, replacement refs or injected
+# variables. The digest's inherited rows are taken before this is set, and
+# leave out the names this sets or clears (Get-SelfTestGitPolicyNames).
+#
+function Get-SelfTestGitPolicyNames {
+    # Every variable the policy sets or clears: a caller's value of one of
+    # them is overridden here, so it cannot change an outcome and is no
+    # input. GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n> are cleared too.
+    return @("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_ATTR_NOSYSTEM", "GIT_TEMPLATE_DIR", "GIT_NO_REPLACE_OBJECTS",
+             "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG", "GIT_CONFIG_COUNT",
+             "GIT_CONFIG_PARAMETERS", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_REPLACE_REF_BASE",
+             "GIT_GRAFT_FILE", "GIT_SHALLOW_FILE", "GIT_ATTR_SOURCE", "GIT_LITERAL_PATHSPECS", "GIT_GLOB_PATHSPECS",
+             "GIT_NOGLOB_PATHSPECS", "GIT_ICASE_PATHSPECS", "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_EXEC_PATH",
+             "GIT_SSH", "GIT_SSH_COMMAND", "GIT_ASKPASS", "GIT_EDITOR", "GIT_PAGER", "GIT_SEQUENCE_EDITOR",
+             "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+             "GIT_COMMITTER_DATE", "GIT_TERMINAL_PROMPT", "GIT_OPTIONAL_LOCKS", "GIT_TRACE", "GIT_FLUSH",
+             "GIT_DEFAULT_HASH", "GIT_DEFAULT_REF_FORMAT")
+}
+
+function Test-SelfTestGitPolicyName {
+    param([string]$Name)
+    $n = $Name.ToUpperInvariant()
+    return ((Get-SelfTestGitPolicyNames) -contains $n -or $n -match '^GIT_CONFIG_(KEY|VALUE)_\d+$')
+}
+
+function Set-SelfTestGitPolicy {
+    # Sets the policy in this process's environment and returns it as
+    # @{ Root; Saved }: -ScratchRoot, which holds its files, and every
+    # variable it changes (and those -Keep names) as they were, for
+    # Restore-SelfTestGitPolicy to put back, since a suite run in a caller's
+    # session shares that session's environment. The policy:
+    # no system configuration (GIT_CONFIG_NOSYSTEM, GIT_ATTR_NOSYSTEM); a
+    # global configuration of the suite's own (GIT_CONFIG_GLOBAL) holding
+    # only empty core.excludesFile and core.attributesFile, an empty
+    # core.hooksPath and init.templateDir, and signing off; an empty
+    # GIT_TEMPLATE_DIR; replacement objects off (GIT_NO_REPLACE_OBJECTS);
+    # no prompt; and every injection variable cleared (GIT_DIR, GIT_WORK_TREE,
+    # GIT_INDEX_FILE, GIT_CONFIG_COUNT and its pairs, GIT_CONFIG_PARAMETERS,
+    # the object directories, GIT_DEFAULT_HASH and the rest of
+    # Get-SelfTestGitPolicyNames), so a fixture is SHA-1 with files refs.
+    # A repository's own configuration still applies: it is the tree's.
+    param([string]$ScratchRoot, [string[]]$Keep = @())
+    $saved = @{}
+    foreach ($n in @(@(Get-SelfTestGitPolicyNames) + @($Keep))) { $saved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    foreach ($v in @(Get-ChildItem Env:)) {
+        if (Test-SelfTestGitPolicyName -Name $v.Name) { $saved[$v.Name] = $v.Value }
+    }
+    # Set whole or not at all: an error or Ctrl+C before the caller holds the
+    # policy puts back what was changed.
+    $policy = @{ Root = $ScratchRoot; Saved = $saved; Restored = $false }
+    $held = $false
+    try {
+        $dir = Join-Path $ScratchRoot "git-policy"
+        foreach ($d in @($dir, (Join-Path $dir "hooks"), (Join-Path $dir "template"))) { [void][System.IO.Directory]::CreateDirectory($d) }
+        $ignore = Join-Path $dir "ignore"
+        $attributes = Join-Path $dir "attributes"
+        foreach ($f in @($ignore, $attributes)) { [System.IO.File]::WriteAllText($f, "") }
+        $fwd = { param($p) $p.Replace('\', '/') }
+        $config = Join-Path $dir "config"
+        [System.IO.File]::WriteAllText($config, (("[core]`n`texcludesFile = ""{0}""`n`tattributesFile = ""{1}""`n`thooksPath = ""{2}""`n" +
+            "[init]`n`ttemplateDir = ""{3}""`n[commit]`n`tgpgSign = false`n[tag]`n`tgpgSign = false`n") -f
+            (& $fwd $ignore), (& $fwd $attributes), (& $fwd (Join-Path $dir "hooks")), (& $fwd (Join-Path $dir "template"))))
+        foreach ($v in @(Get-ChildItem Env:)) {
+            if (Test-SelfTestGitPolicyName -Name $v.Name) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+        }
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "1")
+        [Environment]::SetEnvironmentVariable("GIT_ATTR_NOSYSTEM", "1")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_GLOBAL", $config)
+        [Environment]::SetEnvironmentVariable("GIT_TEMPLATE_DIR", (Join-Path $dir "template"))
+        [Environment]::SetEnvironmentVariable("GIT_NO_REPLACE_OBJECTS", "1")
+        [Environment]::SetEnvironmentVariable("GIT_TERMINAL_PROMPT", "0")
+        $held = $true
+        return $policy
+    } finally {
+        if (-not $held) { Restore-SelfTestGitPolicy -Policy $policy }
+    }
+}
+
+function Restore-SelfTestGitPolicy {
+    # Puts back every variable Set-SelfTestGitPolicy changed, as it was, and
+    # removes its folder; once, whichever way the suite ends.
+    param($Policy)
+    if ($null -eq $Policy -or $Policy.Restored) { return }
+    $Policy.Restored = $true
+    foreach ($v in @(Get-ChildItem Env:)) {
+        if ((Test-SelfTestGitPolicyName -Name $v.Name) -and -not $Policy.Saved.ContainsKey($v.Name)) { [Environment]::SetEnvironmentVariable($v.Name, $null) }
+    }
+    foreach ($n in $Policy.Saved.Keys) { [Environment]::SetEnvironmentVariable($n, $Policy.Saved[$n]) }
+    Remove-Item -LiteralPath $Policy.Root -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+function Get-SelfTestUnlistedPaths {
+    # The guard on a self-test's set (task 45.51; build-and-test.md, "The
+    # self-tests' skip across worktrees", "Each set guarded"): every
+    # repository-relative path literal in -Scripts (paths under -Root) that
+    # names a file git tracks there and is neither in -Set nor a key of
+    # -NotInput (a path the scripts name that no case reads as an input,
+    # each with its reason), as "path (script:line)". It catches a new read
+    # by name, not every read: a path built from parts, a folder scanned, a
+    # runtime read by a child and git's own reads are the set's entries by
+    # hand. One entry naming git's failure when git cannot list -Root.
+    param([string]$Root, [string[]]$Scripts, [string[]]$Set, [hashtable]$NotInput = @{})
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $tracked = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $listed = & git -C $Root -c core.quotePath=false ls-files 2>$null
+    if ($LASTEXITCODE -ne 0) { return @("git could not list '$Root'") }
+    foreach ($n in @($listed)) { if ("$n" -ne "") { [void]$tracked.Add(([string]$n).Replace('/', '\')) } }
+    $in = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($n in @($Set)) { [void]$in.Add([string]$n) }
+    # Either separator, the path taken back to backslashes.
+    $rx = '["'']((?:src|docs|releases|scripts|xhciinst|xhcimark|xhciqual|xhcitr|xhciperf|test|tools)[\\/][^"''$*?\s]+|LICENSE|README\.md)["'']'
+    $out = @()
+    foreach ($sc in $Scripts) {
+        $lines = [System.IO.File]::ReadAllLines((Join-Path $Root $sc))
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            foreach ($m in [regex]::Matches($lines[$i], $rx)) {
+                $lit = $m.Groups[1].Value.Replace('/', '\').TrimEnd('\')
+                if ($tracked.Contains($lit) -and -not $in.Contains($lit) -and -not $NotInput.ContainsKey($lit)) {
+                    $out += ("{0} ({1}:{2})" -f $lit, $sc, ($i + 1))
+                }
+            }
+        }
+    }
+    return $out
+}
