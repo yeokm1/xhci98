@@ -110,10 +110,12 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
  * section 5.3; cm_net.c): each descriptor block and each 4 KiB buffer its
  * own allocation on the ring block's adapter, cached, below 4 GB and 16-byte
  * aligned as the ring block is. Each is asked for in whole pages: Windows
- * 2000 serves a common buffer of less than a page from pool, 8-byte aligned
- * (a 2 KiB descriptor block came back at an address ending 008h, run-45
- * "45.59 (legs, continued)"), which the alignment check refuses, so no
- * service could start there. The free takes the same rounded length.
+ * 2000 served a common buffer of less than a page from pool, 8-byte
+ * aligned (a 2 KiB descriptor block came back at an address ending 008h,
+ * run-45 "45.59 (legs, continued)"; XP's refusal there is taken to be the
+ * same), which the alignment check
+ * refuses, and a start that met one had no service. The free takes the
+ * same rounded length.
  * PASSIVE_LEVEL, on the thread.
  */
 static ULONG cmDmaCommonBytes(ULONG bytes)

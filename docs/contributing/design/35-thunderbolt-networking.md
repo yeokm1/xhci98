@@ -1,8 +1,8 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
 Status: revision 11, 2026-11-01: the rings' common buffers asked for in
-whole pages, read on Windows 2000 (section 6.5, "The rings"), reviewed and
-revised.
+whole pages, read on Windows 2000 and XP (section 6.5, "The rings"),
+reviewed and revised.
 Revision 10, 2026-10-31: the bench capture (section 2.7) weighed
 against the code (section 3.11), reviewed and revised.
 Revision 9, 2026-10-31: the driver half joined to the firmware
@@ -1794,11 +1794,14 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   behind; the transmit indexes read back equal. The memory is allocated
   there at the first service after a start (each descriptor block and
   each 4 KiB buffer its own common buffer, each asked for in whole pages:
-  Windows 2000 serves a common buffer of less than a page from pool,
-  8-byte aligned - a 2 KiB descriptor block at an address ending 008h,
-  runtime, read through this driver's log on 2026-11-01, run-45 "45.59
-  (legs, continued)" - which the 16-byte check refuses, so no service
-  started there before revision 11) and freed at the stop, or kept
+  Windows 2000 and XP can serve a common buffer of less than a page from
+  pool, 8-byte aligned - a 2 KiB descriptor block at an address ending
+  008h on 2000, runtime, read through this driver's log on 2026-11-01,
+  run-45 "45.59 (legs, continued)"; on XP the rings' memory refused at
+  one start and not at another, its addresses not logged, the same cause
+  inferred - which the 16-byte check refuses, so before
+  revision 11 a start that met such a block had no service) and freed at
+  the stop, or kept
   with its adapter where a ring was not read back stopped, and forgotten
   then, so no later start frees or reuses it. A service whose earlier ring
   of this start was not read back stopped is refused (`cm.net.mem.busy`),
@@ -2237,9 +2240,10 @@ the line with `NTx86` beside it staged both images, and with no
 decoration at all `xhcinet.sys` alone; `Signature` (`$Windows NT$`),
 the `Compatible` line and a `[SourceDisksFiles.x86]` changed nothing.
 2000 reads no models decoration and takes the undecorated section as 98
-SE and ME do. The three-field line is still to be read on 98 SE, ME,
-2000 and XP (`AGENTS.md`'s rule for `xhci98.inf`'s line); the run sheet
-records each.
+SE and ME do. The three-field line was then read on 98 SE, ME, 2000 and
+XP (`AGENTS.md`'s rule for `xhci98.inf`'s line; 2026-11-01, `runs/run-45.md`,
+"45.59 (legs, continued)"): each engine matched the model and installed
+`xhcinet.sys`.
 A new gate script, `scripts\inf-gate\check-net-inf.ps1`, holds both files
 (the paths, the image per path, the service, the value table per path,
 the footprint, the 98 section's net keys, no undecorated section in the

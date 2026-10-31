@@ -7664,6 +7664,110 @@ The owner's screenshots and their index:
 - Both are in the self-test (routing, and each text in the help
   window), so what is owed is the reading through the installer.
 
+## 45.59 (legs, continued): 98 SE, ME, 2000 and XP, and the rings' memory on 2000 and XP (2026-11-01)
+
+Worker `w45-tbnet5`, branch `w45-tbnet5` from `3.4.0.0` `5fd8b6fd`.
+Development host A. The legs `w45-tbnet4` left owed (section "45.59 S5
+(legs)" above), on `usb4-emu`'s `w45-emuar` build (`a7239ea`, the
+Alpine Ridge firmware model as its default; `qemu-system-x86_64.exe`
+SHA-256 `83474795...`, the build of the fifth leg there). The far end of
+every leg here is Kubuntu 26.04.1 live, kernel `7.0.0-30-generic`, its
+stock `thunderbolt_net`, a `usb4-generic` host, the server end of
+`usb4-xdomain` (`-smp 2`, WHPX), its runtime power management off on
+`0000:00:04.0` and `0-0`. Each Windows guest is a fresh overlay of its
+q35 base, `-Usb4 adl` (this host's software connection manager), the
+cable in from power-on. The package: the x86 release layout of the
+branch (`make-release.ps1 -TestLabel`), installed with `XHCIINST /dir
+release-x86 /yes /nopause /thunderbolt`, its `xhcicm.inf` edited in the
+leg's copy so that `XhciCmNet` is written as 1 (the installer's box is
+step S11), then the qemu flavour of `xhcicm.sys` copied over the
+installed one for its log; `xhcinet.inf` and `xhcinet.sys` from a folder
+of their own through the system's own new-hardware wizard. Linux's
+interface took a link-local address (NetworkManager), and so did each
+Windows guest (no DHCP server on the link), so the pings below are
+between 169.254.0.0/16 addresses. Evidence: `E:\xhci98-vm\p45\w45-tbnet5\`
+(`w98\`, `me\`, `w2k\`, `xp\`, `hashes98.txt`,
+`hashes-aa3bf7dc-x86.txt`, `pids.txt`).
+
+Builds: the gated x86 (`build-driver.cmd all`) and amd64 (`all
+-amd64`) builds passed on `5fd8b6fd` and again on `aa3bf7dc` (below),
+the host tests among them.
+
+**Windows 98 SE (`5fd8b6fd`): pass.** The wizard for "Thunderbolt
+networking" pointed at the folder found `D:\N\XHCINET.INF` and named the
+model "xHCI98 Thunderbolt Networking": 98 SE's setup engine reads the
+three-field line `%Mfg%=NetModels,NTx86,NTx86.6.2` and takes the
+undecorated models. The file copy then asked once for "xhci98 xHCI
+Host Controller Disk" with `C:\WINDOWS\CATROOT` as the path offered;
+given the folder, it copied `xhcinet.sys` and took the network
+components from `C:\WIN98` by itself, then asked for a restart. The
+log: `net.cm.route=00000001` - NTKERN carried `IRP_MN_QUERY_INTERFACE`
+between the two WDM drivers, so the fallback code was not needed -
+then `cm.net.open`, `net.init=000005DC`, `cm.net.rings=01018000`,
+`cm.net.paths=0108080E`, `cm.net.link.up=01070028`, `net.link.up`.
+`ipconfig`: "xHCI98 Thunderbolt networking", EA-C6-81-87-4F-B0,
+169.254.211.195. Ping from 98 SE to Linux 6 of 6; from Linux 5 of 5 at
+56 bytes, 3 of 3 at 1472 and 3 of 3 at 8000. The cable out and back
+(`qom-set xd0 plugged`): `cm.net.down=00000101`, `net.link.down`,
+`cm.xdp.end`, the discovery and the service again, ping 5 of 5. Device
+Manager, "Disable in this hardware profile": the adapter stopped at
+once (Code 22; `cm.net.pnp` 5 then 4, a query-stop and a stop,
+`cm.net.close`, the link down at this host's Logout, `cm.net.rings.down`);
+cleared again: `net.cm.route=00000001`, the service up, ping 5 of 5
+(Linux's first pings went unanswered while 98 SE waited out DHCP).
+Device Manager shows the adapter's General and Driver pages; its MTU
+is in the Network control panel's Advanced page.
+
+**Windows ME (`5fd8b6fd`): pass.** The same steps. The wizard found
+`D:\N\XHCINET.INF` with no disk prompt. The driver key
+(`Class\Net\0001`): `InfSection` `Net.Dev`, `DeviceVxDs` and
+`NTMPDriver` `xhcinet.sys`, `MatchingDeviceId` `XHCICM\TBNET`,
+`XhciNetMtu` "1500". `net.cm.route=00000001`, the service up; ping from
+ME 6 of 6, from Linux 4 of 4 at 56 bytes and 3 of 3 at 8000.
+
+**Windows 2000 SP4: the three-field line read; no service on
+`5fd8b6fd`; pass on `aa3bf7dc`.** The upgrade wizard (Device Manager,
+"Reinstall Driver", the folder) found `d:\n\xhcinet.inf`; after the
+unsigned-driver question the adapter installed under service `xhcinet`
+(`Enum\XHCICM\TBNET\...`: `Service` and `ActiveService` `xhcinet`; the
+image `xhcinet.sys`). The first wizard for the device had ended with no
+driver while the installer's own questions were answered (ConfigFlags
+40h, Code 28), hence the reinstall. `net.cm.route=00000001`, then
+`cm.net.nomem=00800080`, `cm.net.rings=00000001` and
+`cm.net.up.fail=01FFFFF2`: the rings' memory refused, no service, and
+the same at 32 descriptors a ring. A scratch build that logged each
+`AllocateCommonBuffer` of the rings showed the first, the 2 KiB receive
+descriptor block, returned at VA `81E62008h`, PA `01E62008h`: 8-byte
+aligned, from pool, which `CmDmaCommonAlloc`'s 16-byte check refused
+(a scratch build with the adapter's `MaximumLength` at `FFFFFFFFh`, as
+`xhci98.sys` opens its own, changed nothing). `aa3bf7dc` asks for every
+ring buffer in whole pages (record 35 revision 11, section 6.5): on
+the scratch build of that change and then on the gated `aa3bf7dc` qemu
+image (`0910392f...`), `cm.net.rings=01018000`, `cm.net.paths`,
+`cm.net.link.up=01070028`, `net.link.up`; ping from 2000 6 of 6, from
+Linux 4 of 4 and 3 of 3 at 8000 bytes. A restart from 2000's own menu
+stopped in real mode (EIP 0D4Fh) on this machine; each restart here
+was a shutdown and a cold start.
+
+**Windows XP SP3: the three-field line read; pass on `aa3bf7dc`.** The
+installer (its unsigned-driver questions answered Continue Anyway),
+then the Found New Hardware wizard for "Thunderbolt networking", "Install
+from a specific location", the folder: "xHCI98 Thunderbolt Networking"
+matched, installed under service `xhcinet` (`xhcinet.sys`). On that
+first start (the release flavour of `5fd8b6fd`) the service came up and
+XP pinged Linux 6 of 6; after a restart, with the qemu flavour of the
+same commit, `cm.net.nomem=00800080`: the rings' memory refused at one
+start and not at another. That count says an allocation failed, not
+why; the addresses were not logged on XP, so that it is 2000's
+alignment is an inference. On the gated `aa3bf7dc` qemu
+image the service came up after a restart; ping from XP 4 of 4, from
+Linux (Windows Firewall off) 4 of 4 and 3 of 3 at 8000 bytes.
+
+The three-field `[Manufacturer]` line is therefore read on 98 SE, ME,
+2000 and XP, each installing `xhcinet.sys` (98 SE and ME through
+`Net.Dev`, 2000 and XP under service `xhcinet`), as well as on 7
+(section "45.59 S5 (legs)").
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
