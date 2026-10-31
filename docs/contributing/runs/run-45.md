@@ -5090,8 +5090,9 @@ was not greyed, and only the greyed `XhciPollFineTimer` was left. A
 controller the run installs now counts there too, as on NT
 (`inst_value_target_9x`), so the 98 SE and ME console also asks
 `XhciSilentInstall` and a new host interface's three Thunderbolt
-questions on a first install. A cancelled 98 SE or ME run writes no
-value, as the NT run's stop.
+questions on a first install. A 98 SE or ME run cancelled before its
+values are written skips them, as the NT run's stop; a cancel recorded
+after that stage keeps what was already written.
 
 ### The gated build and the host tests
 
@@ -5131,7 +5132,7 @@ screens in each leg's folder.
 | 98 SE, the window | `XhciImodInterval250ns` 200, `XhciLinkKeep` 0, `XhciMaxTransferKB` 130, OK | 130 refused: "64 to 2048, a multiple of 4."; the two others "(to be written)", on the Summary as "The settings written machine-wide", and after the install `Services\USB` holds `XhciLinkKeep`=0 and `XhciImodInterval250ns`=0xc8 alone (the drivers' keys keep the INF defaults 1 and 0xa0) | `b9.png`, `b12-adv-usb-reopen.png`, `d7.png`, `d9.png`, `serial-a.log` |
 | 98 SE, the console | `INSTALL /console`, Y to Thunderbolt, Enter elsewhere | `XhciSilentInstall` asked ("now: new install, the default 0" for each controller), then `XhciCmMode`, `XhciCmApprove` and `XhciCmSafeEject` with the new-install note; answered 1: `Services\USB` holds `XhciSilentInstall`=1 and the `SilentClasses` list; exit 3 | `w98c\t3.txt`, `t4.txt`, `t6.txt`, `serial-a.log` |
 | XP, the window | `XhciWideMap` 1 (USB), `XhciCmRingInterrupt` 1 (Thunderbolt) | Both rows live on XP; after the install and a restart `Services\USB` holds `XhciWideMap`=1 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded | `xpw2\b3-widemap.png`, `c2-ring.png`, `d13.png`, `serial-a.log` |
-| XP, a run cancelled | the first XP overlay's run, cancelled at the Progress page after the package was staged | no `Services\USB` key: no value written | `xpw\d4.png`, `serial-a.log` |
+| XP, a run cancelled | the first XP overlay's run, cancelled at the Progress page after the package was staged | no `Services\USB` key: no value written (the cancel came before the values' stage) | `xpw\d4.png`, `serial-a.log` |
 | 7 x86, the window | `XhciInterruptMode` 2 (the row offers 0 to 3), `XhciCmRingInterrupt` 1 | after the install and a restart `Services\USB` holds `XhciInterruptMode`=2 and `XhciCmRingInterrupt`=1; `xhci98`, `xhcicm`, `xhcipfw` loaded; the tunnelled NVMe drive mounted during the install | `w7w\b1-adv-usb-top.png`, `c1-adv-tb-top.png`, `d9.png`, `serial-a.log` |
 
 - 98 SE was not restarted after its installs (98 SE's known shutdown hang
