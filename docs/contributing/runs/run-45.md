@@ -5630,3 +5630,13 @@ the version bump.
   and XhciCmUsb4V2. A value is written machine-wide only when you change
   it. On Windows 98 SE and ME a first install now lists the USB settings
   and asks XhciSilentInstall, where it showed one greyed row before.""
+- 45.56 (HEAD): "- (45.56, Gen 4 Link Recovery, 2026-10-31) "USB4 version
+  2 links: a Gen 4 link between the computer's USB4 controller and a USB4
+  version 2 device now recovers from a link error in place, with the
+  devices behind it kept, instead of being dropped and connected again.
+  After each recovery the driver checks the device's PCI Express and USB
+  connections and removes only one that did not come back. The new value
+  XhciCmGen4LinkRecovery, written at 1 by the install, restores the
+  previous behaviour when set to 0." The release notes' value table also
+  gets a row for XhciCmGen4LinkRecovery: written as 1; "leave it at 1; 0
+  takes a link error as an unplug and fresh plug, as before"."
