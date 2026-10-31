@@ -72,6 +72,26 @@ VOID Net6Bps(ULONG mbps, ULONG64 *bps)
     ((PULARGE_INTEGER)bps)->HighPart = r.HighPart;
 }
 
+/* A 64-bit counter as a low and a high ULONG, by carry (the arithmetic
+ * rule). Lock held, as by Net6Read64, so a reader never sees half a
+ * carry. IRQL: <= DISPATCH_LEVEL. */
+VOID Net6Count64(PULONG lo, PULONG hi, ULONG n)
+{
+    ULONG v = *lo + n;
+
+    if (v < n) {
+        *hi = *hi + 1;
+    }
+    *lo = v;
+}
+
+/* The pair into a ULONG64 field; Lock held. IRQL: <= DISPATCH_LEVEL. */
+VOID Net6Read64(const ULONG *lo, const ULONG *hi, ULONG64 *out)
+{
+    ((PULARGE_INTEGER)out)->LowPart = *lo;
+    ((PULARGE_INTEGER)out)->HighPart = *hi;
+}
+
 /* ------------------------------------------------------------------ */
 /* The pause's drain                                                   */
 /* ------------------------------------------------------------------ */
@@ -251,7 +271,9 @@ static ULONG net6SendOne(PNET6_ADAPTER a, PNET_BUFFER nb, ULONG stns)
         return NET6_FAILED;
     }
     a->TxOk++;
-    a->TxBytes += total;
+    NdisAcquireSpinLock(&a->Lock);
+    Net6Count64(&a->TxBytes, &a->TxBytesHi, total);
+    NdisReleaseSpinLock(&a->Lock);
     return NET6_SENT;
 }
 
@@ -622,8 +644,10 @@ static VOID net6RxUp(PNET6_ADAPTER a, PNET_BUFFER_LIST l, ULONG len,
     if (low) {
         flags |= NDIS_RECEIVE_FLAGS_RESOURCES;
     }
+    NdisAcquireSpinLock(&a->Lock);
     a->RxOk++;
-    a->RxBytes += len;
+    Net6Count64(&a->RxBytes, &a->RxBytesHi, len);
+    NdisReleaseSpinLock(&a->Lock);
     NdisMIndicateReceiveNetBufferLists(a->Handle, l,
                                        NDIS_DEFAULT_PORT_NUMBER, 1, flags);
     if (low) {
@@ -724,21 +748,11 @@ VOID NTAPI Net6CbReceive(PVOID ctx, const VOID *frame, ULONG length,
 /* Link                                                                */
 /* ------------------------------------------------------------------ */
 
-/* NDIS_STATUS_LINK_STATE with the adapter's view (section 7.6). Called
- * only once the adapter has been restarted at least once (the status
- * indication's contract excludes MiniportInitializeEx).
- * IRQL: <= DISPATCH_LEVEL. */
-VOID Net6IndicateLink(PNET6_ADAPTER a)
+/* One NDIS_STATUS_LINK_STATE of the given view. IRQL: <= DISPATCH. */
+static VOID net6IndicateOne(PNET6_ADAPTER a, ULONG up, ULONG mbps)
 {
     NDIS_STATUS_INDICATION ind;
     NDIS_LINK_STATE ls;
-    ULONG up;
-    ULONG mbps;
-
-    NdisAcquireSpinLock(&a->Lock);
-    up = a->LinkUp;
-    mbps = a->RateMbps;
-    NdisReleaseSpinLock(&a->Lock);
 
     Net6Zero(&ls, sizeof(ls));
     ls.Header.Type = NDIS_OBJECT_TYPE_DEFAULT;
@@ -765,6 +779,68 @@ VOID Net6IndicateLink(PNET6_ADAPTER a)
     ind.StatusBuffer = &ls;
     ind.StatusBufferSize = sizeof(ls);
     NdisMIndicateStatusEx(a->Handle, &ind);
+}
+
+/*
+ * NDIS_STATUS_LINK_STATE with the adapter's view (section 7.6), called
+ * only once the adapter has been restarted at least once (the status
+ * indication's contract excludes MiniportInitializeEx). One context
+ * publishes at a time: a caller that finds another publishing marks the
+ * view changed and leaves, and the publisher indicates again until the
+ * view it indicated is the latest, so a stale view never lands last.
+ * IRQL: <= DISPATCH_LEVEL.
+ */
+VOID Net6IndicateLink(PNET6_ADAPTER a)
+{
+    ULONG up;
+    ULONG mbps;
+
+    NdisAcquireSpinLock(&a->Lock);
+    if (a->Indicating) {
+        a->IndicateAgain = 1;
+        NdisReleaseSpinLock(&a->Lock);
+        return;
+    }
+    a->Indicating = 1;
+    for (;;) {
+        a->IndicateAgain = 0;
+        up = a->LinkUp;
+        mbps = a->RateMbps;
+        NdisReleaseSpinLock(&a->Lock);
+
+        net6IndicateOne(a, up, mbps);
+
+        NdisAcquireSpinLock(&a->Lock);
+        if (!a->IndicateAgain) {
+            break;
+        }
+    }
+    a->Indicating = 0;
+    NdisReleaseSpinLock(&a->Lock);
+}
+
+/*
+ * Waits until no send is queued and no context is completing sends (the
+ * D3 path, record 35 section 7.7: NDIS 6.20 may set D3 on a Running
+ * adapter, so a sender may still hold a list between its commit and its
+ * completion). The link is down by then, so every list queued meanwhile
+ * completes at once. IRQL: PASSIVE_LEVEL.
+ */
+VOID Net6DrainSends(PNET6_ADAPTER a)
+{
+    ULONG busy;
+
+    for (;;) {
+        Net6Serve(a);
+        NdisAcquireSpinLock(&a->Lock);
+        busy = (a->TxServing || a->TxActive != 0 || a->TxHead != NULL) ?
+               1UL : 0UL;
+        NdisReleaseSpinLock(&a->Lock);
+        if (!busy) {
+            return;
+        }
+        NdisMSleep(1000);
+    }
 }
 
 /* The link taken down by this side (a Close at D3, a surprise removal):

@@ -65,6 +65,8 @@ typedef struct _NET6_ADAPTER {
     ULONG State;            /* NET6_*                                     */
     ULONG PausePending;     /* Pause returned PENDING; the drain completes */
     ULONG Restarted;        /* Restart has run once: status may be indicated */
+    ULONG Indicating;       /* a context is publishing the link state     */
+    ULONG IndicateAgain;    /* the state changed while it published       */
     ULONG LinkUp;
     ULONG LinkGen;          /* advanced at every link change              */
     ULONG PeerStns;
@@ -115,13 +117,15 @@ typedef struct _NET6_ADAPTER {
 
     /* Counters (record 35 section 7.5). */
     ULONG TxOk;
-    ULONG TxBytes;
+    ULONG TxBytes;          /* with TxBytesHi, a 64-bit count by carry  */
+    ULONG TxBytesHi;
     ULONG TxErrors;
     ULONG TxDrops[NET_TXDROP_REASONS];
     ULONG TxFullWaits;
     ULONG TxDown;           /* completed as disconnected or paused        */
     ULONG RxOk;
-    ULONG RxBytes;
+    ULONG RxBytes;          /* with RxBytesHi, a 64-bit count by carry  */
+    ULONG RxBytesHi;
     ULONG RxNoBuffer;
     ULONG RxNotUp;          /* frames while the link was down or paused   */
     ULONG RxSplit;          /* large segments split                       */
@@ -151,6 +155,9 @@ VOID NTAPI Net6CbTxDone(PVOID ctx, ULONG count);              /* DISPATCH */
 NDIS_STATUS Net6RxAlloc(PNET6_ADAPTER a);             /* PASSIVE */
 VOID Net6RxFree(PNET6_ADAPTER a);                     /* PASSIVE */
 VOID Net6Bps(ULONG mbps, ULONG64 *bps);               /* any */
+VOID Net6Count64(PULONG lo, PULONG hi, ULONG n);     /* the counter's one writer */
+VOID Net6Read64(const ULONG *lo, const ULONG *hi, ULONG64 *out); /* any */
+VOID Net6DrainSends(PNET6_ADAPTER a);                 /* PASSIVE */
 
 /* n6_oid.c - the OID requests and the power work item. */
 MINIPORT_OID_REQUEST Net6OidRequest;

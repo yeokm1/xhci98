@@ -202,9 +202,11 @@ static NDIS_STATUS net6Query(PNET6_ADAPTER a, PNDIS_OID_REQUEST r)
         /* ULONG counters widened, not summed in 64 bits. */
         st.ifInDiscards = a->RxNoBuffer + a->RxNotUp;
         st.ifInErrors = net6RxErrors(a);
-        st.ifHCInOctets = a->RxBytes;
+        NdisAcquireSpinLock(&a->Lock);
+        Net6Read64(&a->RxBytes, &a->RxBytesHi, &st.ifHCInOctets);
         st.ifHCInUcastPkts = a->RxOk;
-        st.ifHCOutOctets = a->TxBytes;
+        Net6Read64(&a->TxBytes, &a->TxBytesHi, &st.ifHCOutOctets);
+        NdisReleaseSpinLock(&a->Lock);
         st.ifHCOutUcastPkts = a->TxOk;
         st.ifOutErrors = net6TxErrors(a);
         st.ifOutDiscards = a->TxDown;
@@ -258,10 +260,11 @@ static NDIS_STATUS net6Query(PNET6_ADAPTER a, PNDIS_OID_REQUEST r)
 /* Power (record 35 section 7.7)                                       */
 /* ------------------------------------------------------------------ */
 
-/* The pended OID_PNP_SET_POWER: Close at D3 (the link down), Open at D0
- * (the connection manager logs in again when the peer is there), then
- * the request completed. NDIS has paused the adapter before a D3 and
- * sends no other request until this one completes. IRQL: PASSIVE_LEVEL. */
+/* The pended OID_PNP_SET_POWER: Close at D3 (the link down, and every
+ * send, queued or held by a sender, completed before the request is),
+ * Open at D0 (the connection manager logs in again when the peer is
+ * there), then the request completed. NDIS sends no other OID request
+ * until this one completes. IRQL: PASSIVE_LEVEL. */
 static VOID net6PowerWork(PVOID ctx, NDIS_HANDLE workItem)
 {
     PNET6_ADAPTER a = (PNET6_ADAPTER)ctx;
@@ -281,6 +284,7 @@ static VOID net6PowerWork(PVOID ctx, NDIS_HANDLE workItem)
     if (req == NET6_WORK_D3) {
         Net6CmClose(a);
         Net6LinkDown(a);
+        Net6DrainSends(a);
         Net6IndicateLink(a);
         Net6CmLog(a, "net.power.d3", 0);
     } else if (req == NET6_WORK_D0) {
