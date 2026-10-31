@@ -4977,7 +4977,8 @@ SMART reader (smartctl 7.4, Windows 7) reads identity, health and attributes thr
 its ATA route. A Users member cannot open any disk on 2000, XP or 7 (error 5), so the owner's access
 choice B rests on the same check as Windows' own ports. On 98 SE, ASPI lists the UAS LUN and passes
 ATA PASS-THROUGH to it (R3), with no 9x code. A program's cancel and exit, and a surprise removal
-under load, end every request with no hang (XP, 7 x86). `xhciuas.sys` loads on stock ME with its new
+under load, end every request with no hang (XP, 7 x86); Safely Remove is refused while a program holds
+the disk and completes once it has ended (7 x64). `xhciuas.sys` loads on stock ME with its new
 imports. Owed: a drive behind a real SAT bridge (bench).
 
 Commits (branch `w45-pass`): `e948c36d` (design, merged as `75669ee7`), `44cf435b` (the owner's
@@ -5123,8 +5124,20 @@ to 64 KiB/s (`throttling.bps-read=65536`) so that requests queue in the driver.
 
 So a queued request is cancelled, one already started on the device ends normally, a closing process
 leaves nothing behind, and a removal ends every request. Unthrottled (XP, 32 reads,
-`ptcancel-xp-unthrottled.txt`), all 32 completed before the cancel reached one. Safely Remove during a
-loop was not read separately; the surprise removal is the harder case.
+`ptcancel-xp-unthrottled.txt`), all 32 completed before the cancel reached one.
+
+**Safely Remove during a loop (7 x64, `w7x64\saferemove-w7x64.txt`, screenshots `d6.png` to
+`d19.png`).** The same overlay as above, relaunched with the throttle; `PTCANCEL.EXE` of `d84b3ce9`
+(524daceeb65f7679...), `\\.\PhysicalDrive3 64 wait`, while Safely Remove Hardware (`hotplug.dll`,
+"Display device components") stopped "xHCI98 USB Attached SCSI Storage":
+- Windows offers no Stop of the UAS drive alone: its confirmation lists the whole controller ("xHCI98
+  USB 3 Controller", the root hub, both drives and the Bulk-Only stick's device). Stopping the
+  Bulk-Only stick lists the stick alone. A finding outside this task, handed over in the report.
+- With the program's handle open and 63 of 64 reads pending, the stop was refused: "Problem Ejecting
+  xHCI98 USB 3 Controller ... This device is currently in use". The requests ran on: all 64 done,
+  none failed (GOOD, 64 KiB each).
+- Once the program had ended, the same stop completed: the list emptied, and `sc query` read
+  `xhciuas` and `xhci98` STOPPED (unloaded). No hang at either step.
 
 ### Owed
 
