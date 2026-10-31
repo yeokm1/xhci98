@@ -5072,6 +5072,87 @@ evidence in the allowlist (NUSB's `USBSTOR.SYS`, which a 98 SE UAS disk needs an
 - The cancel path's leg (a program ended while its request waits queued) and removal during an
   ATATEST loop: not run; the path rests on review.
 
+## 45.56 Gen 4 Link Recovery on USB4 version 2 links (2026-10-31)
+
+Design record 22 section 6.2.3 item 4 rewritten and section 6.2.5 added
+(`506d2af3`), then coded (`e2c38d30`, branch `w45-gen4`), each reviewed
+and revised. 45.57 was dropped by the owner the same day (`4feac7f8`);
+nothing of it was done here.
+
+### What the code does
+
+- Enable Gen 4 Link Recovery (PORT_CS_19 bit 31) set on both ends of a
+  depth-1 Gen 4 link, symmetric or asymmetric, between two USB4 version 2
+  routers, at the idle tick once the port is UP or FAILED: device end
+  first, each written as read with bits 30 and 24 0 and read back, only
+  with both lane 0 adapters in CL0, the host's at Gen 4, no asymmetric
+  transition in progress (PORT_CS_18 bit 24) and StartAsymmetricFlow 0
+  at both ends. A router that keeps it 0 refuses it for that connection,
+  both ends written 0 again. Never on a HELD port, a port with a
+  preserved DisplayPort tunnel, or below depth 1.
+- `XhciCmGen4LinkRecovery`, written at 1 by both NHI INFs: 0 never sets
+  it; `XhciCmUsb4V2` 0 never sets it either.
+- Each LINK_RECOVERY (and a lost notification on a port with the bit set)
+  owes the port's recovery check after its port check: the link logged;
+  each tunnel's six parts read at its recorded lane HopIDs (a PCIe
+  tunnel not whole goes as a lost one, a USB3 tunnel not whole is torn
+  down alone); the USB3 Port Link State watched up to 2 s for U0, U2 or
+  U3 and recorded, the tunnel kept, if it does not get there; the TMU
+  logged; a request unanswered retried for 2 s, then the check given up
+  with nothing torn down; a LINK_RECOVERY drained during the check keeps
+  it owed.
+- The bit cleared again: the host's end at an unplug's teardown (retried
+  at the EMPTY tick, never deferring a new connection); both ends before
+  a stop or a suspend, a HELD port's host end alone; set again by the
+  tick after a resume or a recovery's commit; an owned bit on a port no
+  longer admitted cleared at the tick. No write of PORT_CS_19 while
+  StartAsymmetricFlow reads 1, the adoption's clear of a predecessor's
+  bit included (which then holds the port).
+
+Host vectors: `test_u4v2` 510 checks (the `test_elr_*` vectors; the fake
+fabric gained ADP_USB3_GX_CS_4's USB3 Link Valid and Port Link State and
+a router that keeps the bit 0), `test_cm` 252, `test_u4cm` 1889
+unchanged; the whole host run passed. The gated builds of `e2c38d30` in
+this worktree passed: x86 "BUILD + GATES PASSED (release qemu)" at
+11:06, amd64 at 11:41 (development host A).
+
+### The legs (2026-10-31)
+
+`usb4-emu` main `230bed5` (QEMU fork `674ff08`, version 2 router model
+`cb36497`; the snapshot task 45.20 used, unchanged: its
+`x-link-event=error` recovers a Gen 4 link whose two ends have the bit
+set, sending LINK_RECOVERY with the configuration kept, and disconnects
+it otherwise, docs/USB4-V2.md). q35, `usb4-host host-model=minimal
+usb4-version=2` in the `adl` layout with `usb4-device dialect=usb4
+usb4-version=2` and the NVMe test disk at power-on; the version 1 leg on
+the `asm4242` model with the ORICO enclosure at power-on (pre-OS
+tunnel). The release package of `e2c38d30` installed (`INSTALL.BAT
+/console /yes /nopause /thunderbolt /stor98`, the installer built from
+the same tree), then its `qemu` `xhcicm.sys` copied over the installed
+one and the guest restarted, so the connection manager's log reads on
+the debug console: x86 release `xhcicm.sys` `780f1708...`, qemu
+`358aabda...`; amd64 staged unsigned with unsigned catalogs (release
+`ea73e693...`, qemu `9c3df75c...`), signed in the guest with a
+throwaway certificate made there, nothing signed on the host. Fresh
+overlays; evidence under `E:\xhci98-vm\p45\w45-gen4\<leg>\`
+(`steps.txt`, `debugcon-a.log`, `trace-a.log`, screenshots).
+
+| System | Configuration | Result |
+|---|---|---|
+| 7 x86 (`w7`) | v2 host and device at power-on | `cm.usb4.elr=00000101` (the value as written by the INF), Gen 4 x2, PCIe and USB3 tunnels, `u4.elr.set=00000001`; the emulator reads `elr=1/1` |
+| 7 x86 | `x-link-event=error` | the emulator's recovery ("uncorrectable error: recovered"), LINK_RECOVERY, the recovery check: `u4.elr.link=00010202`, `u4.elr.usb3=00010100` (Link Valid, U0), `u4.elr.tmu=00000101`, `u4.elr.ok`; both tunnels kept, no teardown; D: ORICO listed and TESTDATA.BIN copied after it |
+| 7 x86 | unplug, plug again | the trace at the plug reads `ELR dfp 0 ufp 0` (the host's end cleared at the teardown; task 45.20's run read `dfp 1` there), then `u4.elr.set` again |
+| 7 x86 | `XhciCmGen4LinkRecovery` 0 (machine-wide value), restart, `error` | `cm.usb4.elr=00000100`, no set (`elr=0/0`); the error a disconnect: teardown, the router back, tunnels rebuilt |
+| XP (`wxp`) | v2 host and device at power-on; `error`; unplug and plug `asym-tx`; `error` | `u4.elr.set`; both errors recovered with `u4.elr.ok` (`u4.elr.link=00010204` on the asymmetric link), tunnels kept; `ELR dfp 0 ufp 0` at the re-plug; the emulator `width=0x4/0x8 elr=1/1 recoveries=1`. The volume not read: 45.20's XP reading (no NVMe volume on this layout) stands |
+| 10 x64 (`w10`) | v2 host and device at power-on; `error`; `asym-tx` transition then `error`; unplug and plug; the value 0 and restart, `error` | as on 7 x86: `u4.elr.set`, two recoveries `u4.elr.ok` (`recoveries=2`), E: ORICO listed after them, `dfp 0` at the re-plug, and with the value 0 the error a disconnect |
+| 7 x86 (`w7r`) | the version 1 regression: `asm4242`, ORICO at power-on | the tunnel preserved (`u4.preserved=00010808`), no `u4.elr` line, D: ORICO; hot unplug and plug rebuilt, D: back, still no `u4.elr` line |
+
+### What is left
+
+The bench reading on a real version 2 router with task 45-E.10 (the
+routers' recovery itself, what a real tunnelled PCIe and USB3 link reads
+right after one). 45.56 is otherwise done here.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
