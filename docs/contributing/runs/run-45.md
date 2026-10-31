@@ -6629,8 +6629,8 @@ What was done:
   `tbt_xdp.c`.
 
 Builds and tests on `d9420766`, development host A: the gated x86
-build (`scriptsuild-driver.cmd release`, its self-tests and every gate)
-passed; `testun-host-tests.cmd` passed whole (`test_tbt_icm` 1047
+build (`scripts\build-driver.cmd release`, its self-tests and every gate)
+passed; `test\run-host-tests.cmd` passed whole (`test_tbt_icm` 1047
 checks, `test_tbt_hw` 176, `test_tbt_select` 306, `test_u4xd` 175, all
 with 0 failures). The design was reviewed and revised in three rounds and
 the code in nine, until nothing material remained.
