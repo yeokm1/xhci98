@@ -2897,6 +2897,7 @@ VOID HcdSuspQemuStopNote(PHCD_CONTROLLER hc);
 #endif
 VOID HcdSuspControllerUp(PHCD_CONTROLLER hc);
 VOID HcdSuspSettleStale(PHCD_CONTROLLER hc);
+VOID HcdSuspSettleLatched(PHCD_CONTROLLER hc);
 /* 36.32, the idle notification (design record 14 sections 4.4, 6, 3.12) */
 ULONG HcdSuspIdleSubmit(struct _HCD_DEVICE_PDO *pdo, PHCD_CONTROLLER hc,
                         PIRP irp, PVOID callback, PVOID context,

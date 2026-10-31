@@ -3503,6 +3503,52 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
     (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
 }
 
+/*
+ * Task 45.63 (record 13 section 5.8.1): the latch set by a D0 the bus
+ * failed - the controller stays out of D0, so no powered pass serves a
+ * D0 already pended (4.4) - settles every pended D0 SUCCESS, as the
+ * PDO's teardown does, by the same workers; admission completes later
+ * ones at once (HcdSuspPdoSetPower). PwrState is left for the thread,
+ * as a closed slot's. A pended Dx was settled at the suspend
+ * (HcdSuspSettleStale). IRQL: PASSIVE_LEVEL, the power gate held.
+ */
+VOID HcdSuspSettleLatched(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
+    HCD_SUSP_TAKEN taken;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    ULONG slot;
+
+    if (hc->SuspDoneList.Flink == NULL) {
+        return;                 /* never initialized: no start ran */
+    }
+    (VOID)InterlockedIncrement((PLONG)&hc->SuspDoneHolds);
+    if (hc->SuspDoneClosed != 0) {
+        (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
+        return;
+    }
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        taken.Count = 0;
+        KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        dev = hc->SlotDevice[slot];
+        for (pdo = (dev != NULL) ? hcdSuspPdo(dev->Pdo) : NULL; pdo != NULL;
+             pdo = pdo->Sibling) {
+            if (pdo->PwrIrp != NULL && pdo->PwrWanted == XHCI_SUSP_D0 &&
+                hc->ShutLatched) {
+                hcdSuspTake(&taken, pdo, pdo->PwrIrp, HCD_SUSP_TAKE_D0);
+                pdo->PwrIrp = NULL;
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
+        hcdSuspFinishT(hc, &taken);
+    }
+    (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
+}
+
 /* ------------------------------------------------------------------ */
 /* The idle notification (36.32; design record 14 sections 4.4, 6, 3.12) */
 /* ------------------------------------------------------------------ */

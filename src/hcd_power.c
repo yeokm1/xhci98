@@ -281,8 +281,9 @@ static VOID hcdResumeKeepWait(PHCD_CONTROLLER hc)
  * it, or a later D0 clears the latch, every request held or sent is ended
  * as at the shutdown (section 5.8): the latch set, the resume's state
  * FAILED for the UAS driver's wake check (design record 20 section 4.3.3),
- * the commands completed, and the transfers on the suspend's proof of the
- * halt (hcdSuspendSettled), the window itself being unreadable now. A
+ * the commands completed, the transfers on the suspend's proof of the
+ * halt (hcdSuspendSettled), the window itself being unreadable now, and
+ * a selectively suspended PDO's pended D0 settled (HcdSuspSettleLatched). A
  * function driver whose D0 waits on a request to its PDO (Windows 10's
  * HID stack) then sees it fail, its D0 ends, and PnP's removal of the
  * controller can run. The power gate held; IRQL: PASSIVE_LEVEL.
@@ -314,6 +315,9 @@ static VOID hcdD0Refused(PHCD_CONTROLLER hc, NTSTATUS status)
     if (mask & XHCI_TOL_SHUT_XFERS) {
         HcdIoShutFlush(hc);
     }
+    /* A selectively suspended PDO's D0 pended before the latch: no
+     * powered pass comes for it (record 14 section 4.4). */
+    HcdSuspSettleLatched(hc);
     if (cmds > 0x00FFFFFFUL) {
         cmds = 0x00FFFFFFUL;
     }

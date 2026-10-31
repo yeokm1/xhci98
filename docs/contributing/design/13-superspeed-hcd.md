@@ -1313,10 +1313,13 @@ where the bus left it, and ends what the bus holds as the shutdown does:
    contained controller: the transfers stay, as at the shutdown
    (`XhciTolShutFlush`).
 
+5. a selectively suspended PDO's D0 already pended (design record 14
+   section 4.4) settled SUCCESS by the completion workers, as at the PDO's
+   teardown (`HcdSuspSettleLatched`): no powered pass comes to serve it.
+
 Then the IRP completes with the bus's status. A selectively suspended
 PDO's D0 admitted while the latch stands completes at once, as a closed
-PDO's does (design record 14, the admission of a D-IRP): no powered pass
-comes to serve a pended one. The function driver's request fails, its D0
+PDO's does (design record 14, the admission of a D-IRP). The function driver's request fails, its D0
 ends, and PnP's surprise removal and removal of the controller run; the
 stack is rebuilt and the devices enumerated again, as under `USBXHCI`. A
 later D0 that succeeds clears the latch before its resume, as after a
