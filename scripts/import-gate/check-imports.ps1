@@ -999,13 +999,29 @@ function Test-Net98Rows {
     $vxdDirs = @{ "98SE" = $Ndis98Dir; "ME" = $NdisMeDir }
     if ($vxdDirs["98SE"] -eq "") { $vxdDirs["98SE"] = Join-Path $repo "tools\win98se-extracted" }
     if ($vxdDirs["ME"] -eq "") { $vxdDirs["ME"] = Join-Path $repo "tools\winme-extracted" }
+    # The whole manifest first: one row for each of 98SE and ME, no other.
+    $vxdRows = @()
+    $vxdSeen = @{}
     foreach ($raw in [IO.File]::ReadAllLines($vxdManifest)) {
         $line = $raw.Trim()
         if ($line -eq "" -or $line.StartsWith("#")) { continue }
         $f = $line -split '\s+'
-        if ($f.Count -ne 4 -or -not $vxdDirs.ContainsKey($f[0])) {
-            throw "$vxdManifest`: '$line' is not 'SYSTEM FILE LENGTH SHA256'"
+        if ($f.Count -ne 4 -or -not $vxdDirs.ContainsKey($f[0]) -or
+            $f[2] -notmatch '^[0-9]+$' -or $f[3] -notmatch '^[0-9A-Fa-f]{64}$') {
+            throw "$vxdManifest`: '$line' is not 'SYSTEM FILE LENGTH SHA256' for 98SE or ME"
         }
+        if ($vxdSeen.ContainsKey($f[0])) {
+            throw "$vxdManifest`: $($f[0]) has more than one row"
+        }
+        $vxdSeen[$f[0]] = $true
+        $vxdRows += ,$f
+    }
+    foreach ($sys in @("98SE", "ME")) {
+        if (-not $vxdSeen.ContainsKey($sys)) {
+            throw "$vxdManifest`: no $sys row"
+        }
+    }
+    foreach ($f in $vxdRows) {
         $path = Join-Path $vxdDirs[$f[0]] $f[1]
         if (-not (Test-Path -LiteralPath $path)) {
             Add-Warning "net98: $($f[0])'s $($f[1]) is not staged at $path, so no NDIS.SYS row was checked against its export names."
