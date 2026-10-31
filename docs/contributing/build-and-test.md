@@ -366,8 +366,12 @@ SOURCES=xhci_mem.c    \
         hcd_msi86.c   \
         xhci98.rc
 
+!IF "$(_BUILDARCH)" != "AMD64"
 LINKER_FLAGS=-merge:.rdata=.text
+!ENDIF
 ```
+
+The merge is x86's alone: on amd64 it would put the import address table in the executable `.text`, which Driver Verifier's code integrity checks refuse on 10 x64 (design record 11 section 8, "The import address table's section"; roadmap-usb4 task 45.63).
 
 There is no `TARGETLIBS` line: the HCD links no import library beyond the
 kit's defaults and imports nothing from `usbport.sys` (the miniport's
@@ -375,7 +379,7 @@ kit's defaults and imports nothing from `usbport.sys` (the miniport's
 
 `build` appends the flavour to `TARGETPATH`, so the release output lands in `src\objfre\i386\` and the qemu output in `src\objchk_qemu\i386\`, not `src\obj\` (`src\objchk\` was the debug flavour's, retired with roadmap-usb4 task 45.45).
 
-`SOURCES` also carries one non-C entry, `xhci98.rc`, the file version resource. The DDK's build engine runs `rc.exe` on a `.rc` in `SOURCES` like any other input. It adds no import (a resource is data in its own `.rsrc` section rather than code), so the post-link allowlist is unaffected, and it does not interact with `LINKER_FLAGS=-merge:.rdata=.text`, which merges `.rdata` and says nothing about `.rsrc`. Both were checked with the import gate; see "Versioning the driver" below.
+`SOURCES` also carries one non-C entry, `xhci98.rc`, the file version resource. The DDK's build engine runs `rc.exe` on a `.rc` in `SOURCES` like any other input. It adds no import (a resource is data in its own `.rsrc` section rather than code), so the post-link allowlist is unaffected, and it does not interact with the x86 build's `LINKER_FLAGS=-merge:.rdata=.text`, which merges `.rdata` and says nothing about `.rsrc`. Both were checked with the import gate; see "Versioning the driver" below.
 
 ### Versioning the driver
 

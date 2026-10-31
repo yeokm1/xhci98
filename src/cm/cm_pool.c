@@ -31,11 +31,41 @@
 
 #include "cm.h"
 
+/*
+ * The nonpaged pool type: NonPagedPoolNx (512), Windows 8's no-execute
+ * nonpaged pool, which the Windows 2000 DDK and WDK 7.1 predate, from
+ * NT 6.2 on, so Driver Verifier's code integrity checks, and the memory
+ * integrity they test for, find no executable pool (roadmap-usb4 task
+ * 45.63); NonPagedPool, the only nonpaged type they have, on Windows 98,
+ * ME and 2000 to 7. NT is told by IoIsWdmVersionAvailable(1, 0x10)
+ * before the kernel's shared data page is read, as cm_filt.c reads it:
+ * Windows 98 and ME have no such page.
+ */
+#define CM_POOL_NX ((POOL_TYPE)512)
+
+static POOL_TYPE CmPoolNonPaged = NonPagedPool;
+
+/* DriverEntry, before the first allocation. PASSIVE_LEVEL. */
+VOID CmPoolInit(VOID)
+{
+    ULONG major;
+    ULONG minor;
+
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+    major = SharedUserData->NtMajorVersion;
+    minor = SharedUserData->NtMinorVersion;
+    if (major > 6 || (major == 6 && minor >= 2)) {
+        CmPoolNonPaged = CM_POOL_NX;
+    }
+}
+
 PVOID CmAlloc(ULONG bytes)
 {
     PVOID p;
 
-    p = ExAllocatePoolWithTag(NonPagedPool, bytes, CM_POOL_TAG);
+    p = ExAllocatePoolWithTag(CmPoolNonPaged, bytes, CM_POOL_TAG);
     if (p != NULL) {
         CmZero(p, bytes);
     }

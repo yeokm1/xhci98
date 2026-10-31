@@ -1762,6 +1762,68 @@ file itself, refusing to proceed unless it matches the architecture the run was
 told it is gating. WDK 7.1 ships no `dumpbin.exe` at all, which is why the
 dumper is `link /dump`; they are the same tool.
 
+### The import address table's section - read 2026-10-31 (roadmap-usb4 task 45.63)
+
+Until `3.4.0.0` the three `sources` files of this project's WDM drivers
+(`src\sources`, `src\cm\sources`, `src\uas\sources`) linked both
+architectures with `LINKER_FLAGS=-merge:.rdata=.text`, the x86 layout
+of the shipping NUSB and SP4 drivers. On amd64 that merge puts the
+import address table inside `.text`, the one executable section: in the
+amd64 images of `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` built at
+`b68b3b64` the IAT directory points at the start of `.text`
+(`xhcicm.sys`: RVA `0x1000`, `0x1B0` bytes; `.text` `0x1000` to `0x5D0F8`, characteristics
+`0x68000020`). Stor98, built by its own `sources` with no merge, keeps
+its IAT in a `.rdata` section of its own.
+
+Read on 10 x64 (22H2, q35, test-signing mode) under Driver Verifier's
+standard checks with the code integrity checks (`verifier /flags
+0x020209BB`), every driver of the package verified: the first start
+after the install stopped with bug check 0xC4 (0x2005,
+`0xFFFF8B05A8783428`, `0xFFFFF8029EB601D8`, `0xFFFF878951C30310`),
+"DRIVER_VERIFIER_DETECTED_VIOLATION"; the module list of the minidump
+puts the third argument at `xhcicm.sys` + `0x1D8`, which is that image's
+own data directory entry 12, the IAT's. A second guest stopped the same
+way. Without the code integrity checks (`0x209BB`) the same images
+started. Verifier's code integrity checks test what memory integrity
+asks of a driver (record 23 section 5.12 reads the HLK page's list:
+no section both writable and executable, no executable pool); whether
+memory integrity itself refuses this layout is not read here, since no
+guest runs the hypervisor under TCG.
+
+The fix: the merge is kept for x86 alone (`!IF "$(_BUILDARCH)" !=
+"AMD64"` in each of the three files; WDK 7.1's `setenv` sets
+`_BUILDARCH=AMD64` for the amd64 build, the Windows 2000 DDK never sets
+it to that), so an amd64 image keeps a `.rdata` section, read-only and
+not executable, holding the IAT, as Stor98's does. The x86 images do not
+change. No import changes, so neither import gate does.
+
+### The nonpaged pool type - read 2026-10-31 (roadmap-usb4 task 45.63)
+
+With the import address table out of `.text` (above), the next start
+under the same Verifier flags on a fresh 10 x64 guest (the Alpine Ridge
+profile) stopped with bug check 0xC4 (0x2000, `0xFFFFF80884F3BF69`, 0,
+`0x6D436858`): an allocation of pool type 0, `NonPagedPool`, which is
+executable, tagged `XhCm`, `xhcicm.sys`'s `CM_POOL_TAG`. Every nonpaged
+allocation of the three drivers was of that type (`hcd_pool.c`,
+`cm_pool.c`, `uas_mem.c`), as design record 13 section 7.5 rule 2 asked:
+the only nonpaged type Windows 98, ME and 2000 to 7 have.
+
+The fix: each driver chooses its nonpaged type once in `DriverEntry`
+(`HcdPoolInit`, `CmPoolInit`, `UasPoolInit`, before any allocation):
+`NonPagedPoolNx` (512, Windows 8's no-execute nonpaged pool; the Windows
+2000 DDK and WDK 7.1 predate the name) on NT 6.2 and later, otherwise
+`NonPagedPool`. NT is told by `IoIsWdmVersionAvailable(1, 0x10)` first,
+then the version is read from the kernel's shared data page
+(`SharedUserData->NtMajorVersion`, `NtMinorVersion`), as `cm_filt.c`
+already reads it: Windows 98 and ME have no such page, and
+`IoIsWdmVersionAvailable` does not tell Windows 8 from 8.1. One binary
+per architecture still: the x86 image picks `NonPagedPool` on Windows 98,
+ME and 2000 to 7 and `NonPagedPoolNx` on 32-bit 8, 8.1 and 10. `xhciuas.sys`
+gains the `IoIsWdmVersionAvailable` import (a row in each of its
+allowlists, with the evidence `xhci98.sys`'s rows carry); the other two
+already import it. The paged allocations (`HcdPoolAllocRequirements`,
+`CmAllocPaged`) are unchanged: paged pool is never executable.
+
 ---
 
 ## 9. The code changes
