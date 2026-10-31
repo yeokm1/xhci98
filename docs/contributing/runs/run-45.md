@@ -4553,6 +4553,206 @@ as far as it was read.
 - The resume with a lane adapter gone (the ASM4242 model takes S4 from XP).
 - The UAS STOP and START, and the hardware readings, as above.
 
+### The fourth session: 98 SE's no-IRQ clock and retry wait, ME's standby, and the resumes on 2000 and 7 (2026-10-31)
+
+**Verdict: two of the owed legs are read here. On 98 SE the no-IRQ
+form ran to DONE on the ASM4242 model, on the new clock. ME's standby
+works on the i440FX machine, and three standbys with a stick resumed
+with nothing left in the power gate. Three stay owed: the retry wait (a
+held re-enumeration was made about 4 s later, but the log cannot show
+which wait the worker took), the resume with a lane adapter gone (no
+emulator model loses a host router adapter across a sleep; an enclosure
+pulled at the resume's first D0 passed on 2000 with ACPI) and a failed
+D0 during a re-enumeration on 98 SE. Five resumes from hibernation on
+2000 and 7 showed no D0 overlap.**
+
+Vehicle: a test cut of `3cbca48a` (`make-release.ps1 -TestLabel
+w45owed27b -NoNonFree -NoWdmFree -SkipQualtool`, stamped `3.3.0.0`)
+from this session's gated x86 build. Release `xhci98.sys` `502036d4...`,
+`xhcicm.sys` `50163d25...`, `stor98.mpd` `122fb15e...`, `stor98.sys`
+`0b5ae206...`, `XHCIMARK.EXE` `9bde8760...`, `XHCITR.EXE` `503b31fd...`.
+The cut has `XHCIMARK.EXE` once `xhcimark\build.cmd` builds both
+architectures. The `qemu` flavour's `xhci98.sys` (`9e16519f...`) and
+`xhcicm.sys` (`65aca7f1...`) were copied over the installed ones where
+port `0xE9` was read. The installer takes only a `release-` directory.
+The emulator is the q35 bases' ASM4242 build (`da60139f...`). Evidence:
+`E:\xhci98-vm\p45\w45-owed27b\` (`w98\`, `mepc\`, `w2h\`, `w7\`).
+
+The gated build's `qemu` half failed one gate of another task's driver:
+the `qemu` `xhcinet.sys` imports `ntoskrnl.exe!RtlAssert`, which the x86
+import allowlist does not hold (`BUILD + GATES FAILED`, after the
+release half and the `qemu` `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
+had passed theirs). It was handed to the coordinator, not fixed here.
+
+#### 98 SE: the no-IRQ clock
+
+`w98`: a fresh q35 98 SE overlay with the ASM4242 model, the package
+installed with `XHCIINST /dir release-x86 /yes /nopause /thunderbolt
+/stor98` (exit 3), the `qemu` `xhcicm.sys` copied in, and a cold start.
+A host script stamped each line of the debug console with the host's
+time as it arrived (`stamped-*.txt`). The connection manager prints once
+per pass of its thread, about every 200 ms, so the times are good to
+about 0.2 s.
+
+- **Hot plug with no enclosure at power-on:** the firmware gave tunnel
+  port `tp0` one bus, so the enclosure's switch could not be numbered
+  (`cm.brnum.9x.held`, `info pci`: `tp0-sw1` with secondary bus 0).
+  This is the limit 44.20 recorded, not this leg's.
+- **Enclosure at power-on:** the firmware numbered the switch, and the
+  NVMe started on IRQ 11 with Stor98. Drive E: listed `TESTDATA.BIN`.
+- **Re-plug** (`enc0` `x-cable` false, then true 20 s later): the
+  ASM4242 model's tunnel ports have no interrupt pin, so the line stage
+  read `cm.brnum.9x.irq=00000002` (`XHCI_TBT_BRIRQ_PORT_NONE`). The NVMe
+  came back at 05:00.0 with line 0. Record 28's machine admitted it:
+  `cm.reenum.9x.noirq.lc=01003000`, one memory descriptor of 28h bytes
+  (`.rd=01012800`), `.after=05000300` (ACTIVE), `Reprocess_DevNode`
+  `CR_SUCCESS` (`.noirq=0B000000`), the line read (`0D000000`) and DONE
+  (`.after=05000500`) 0.4 s later. Stor98's `StorInterrupt 5.0.0` read
+  `pin 1 line 0 msi no msix yes port 0/0 polling (interrupt line not
+  set)`. A 4 MiB file written to E: compared clean with `fc /b`. The two
+  switch bridges were refused as before (`.refused=03000203`,
+  `04000203`), and so was a function at 07:00.0 with its line set
+  (`.refused=07000203`).
+
+So the machine's window, its attempt and its deadlines ran on the new
+clock (`cmWkNiNow`) to DONE. The wrap itself, after 2^31 ticks, can only
+be shown by the host vectors.
+
+#### 98 SE: the retry wait
+
+On the same start, a quick re-plug (`x-cable` false, true 1.9 s later)
+reached the worker while the departed function's sweep still held the
+member. Each of the three bridges read `cm.reenum.held` and
+`cm.nvlink.up.held` (host time 17:52:21.1). The vanish sweep ended, and
+the held re-enumeration ran, in one pass 4.2 s later (17:52:25.3):
+`cm.vanish.sweep.end`, `cm.vanish.retired`, `cm.reenum.9x.reenumerate`,
+then the no-IRQ form again to DONE (`.after=05000500` at 17:52:25.7).
+What this shows is the held re-enumeration made late and made right.
+It does not show the fix. The worker never makes a retry before
+`CM_WK_RETRY_MS` (`cm_cfgwk.c`, the pass that takes `Retry`), whether it
+wakes every 200 ms or once at the end of the hold. The longer wait
+applies only when nothing else of the worker is timed, and the log
+records neither the wait chosen nor the worker's wakes (an emission
+drains what was recorded; it is no heartbeat). So the retry wait stays
+owed: a `qemu`-flavour line with the wait chosen and each wake, in the
+retry-only case, would show it.
+
+#### A failed D0 during a re-enumeration (98 SE): not made
+
+The connection manager's D0 fails only when the bus below fails the
+NHI's D0 IRP. No 98 SE guest does that, and 98 SE's standby does not
+resume on QEMU (run-36, 36.28 part 2). The leg needs a test hook in the
+`qemu` flavour that fails the D0, which is a code change. It stays
+owed: the hook, or hardware that fails a D0.
+
+#### The power gate's wait under an ME standby (i440FX)
+
+`mepc`: an overlay of a copy of run-36's ME base (`winme-sl-base.qcow2`,
+SweetLow's stack, i440FX `pc` machine, `-cpu pentium3 -m 256`, the same
+emulator), started by this kit's `lme.ps1`. Stock, before any install,
+"Stand by" from the Shut Down dialog brought QMP's `query-status` to
+`suspended`, and `system_wakeup` brought the desktop back. So this
+vehicle sleeps where the q35 ME base does not.
+
+Then the package was installed with `XHCIINST /dir release-x86 /yes
+/nopause` (exit 4, because a cancelled New Hardware wizard had left the
+controller unstarted). After a restart the wizard found the driver
+itself. The `qemu` `xhci98.sys` went over the installed one before a cold
+start. A stick (`usb-storage` on the xHCI, plugged after the start) was
+installed silently as F:.
+
+Three standbys followed, each with the stick idle. Each time QMP read
+`suspended`, and the controller went to D3 through the halt (`hcd: power
+minor, type, state=00020104`, "quiesce: halted"). After `system_wakeup`
+it took the D0 (`00020101`) and the reinitialisation ("slots invalidated
+by a resume, keeping devices"). The desktop returned, and on F: a 4 MiB
+copy compared clean after each wake. `XHCITR /dump` (from `start /w`)
+read `resume.keep` 1, 2 and 3 with the stick kept each time, and no
+`gate.power.missed` or `gate.door.missed` (`snap1-serial.txt`). PASS.
+
+Two stops on the way are the known ME issue (45.36): before any install,
+the first start stopped with "Error: 0E : 016F : BFF62170"
+(`b-0E-stock.png`, so with no xHCI98 at all), and its shell never drew
+after Enter. A later start showed a black text screen and needed a cold
+start.
+
+#### An enclosure gone at the resume (2000 with ACPI), and the lane adapter leg
+
+`w2h`: the q35 `w2kacpi` base (ACPI PC HAL; hibernation enabled), the
+ASM4242 model with the ORICO enclosure at power-on, and a stick on
+`qemu-xhci` port 1. `INSTALL.BAT /console /yes /nopause /thunderbolt
+/stor98` ended with exit 3, the mark service installed. The signature
+prompts and wizards were answered. The `qemu` `xhci98.sys` and
+`xhcicm.sys` went over the installed ones before a cold start. E: is
+the enclosure's NVMe (Stor98) and F: the stick. `W2.BAT` (a 4 MiB copy,
+`fc /b`, delete, in a loop) ran on F:, and from the third hibernation on
+E: as well.
+
+- **The enclosure missing at power-on:** after a hibernation with it
+  attached, QEMU was started without it. 2000's loader answered "The
+  last attempt to restart the system from its previous location failed"
+  every time. Nothing reached the debug console, so no driver ran. The
+  same image, started with the enclosure, restored ("Resuming
+  Windows"). So this form is not makeable on 2000: Windows' loader
+  refuses the restore before any driver code runs.
+- **The enclosure pulled at the resume's first D0:** a script started
+  QEMU with the enclosure, waited for the first `hcd: power minor` line
+  of the resume, and set `enc0` `x-cable` false 0.3 s later. The
+  connection manager resumed (`cm.resume`, `cm.reenum.resumed`, the
+  bridges' holds released), then found the link down: `u4.linkdown=01000101`,
+  `cm.reenum.departure=00000200`, `cm.reenum.unexpected=00000200`, and
+  the chain's departed functions removed. The E: loop failed at once
+  (`COPYFAIL`), with no hang. The F: loop went on, and 2000 showed Unsafe
+  Removal and Delayed Write Failed for the NVMe. With `x-cable` true 57 s
+  later, the tunnel came back (`u4.pcie.up=00010809`,
+  `cm.nvlink.u4-up`), and the E: loop read OK again (`pullres-g.txt`,
+  `g1.png`). PASS, for an unplug at the resume.
+
+Neither form is the owed leg. "A lane adapter gone" is the host router's
+own lane adapter missing from the resume's walk, or found at another
+index: `TbtU4Resume` then keeps the port table saved before the sleep
+(`tbt_u4cm.c`, the check before the ports are matched, logging
+`u4.resume.port`). Unplugging the enclosure leaves the host router's
+adapters where they were, and no `u4.resume.port` was logged. No
+emulator model removes or renumbers a host router adapter across a
+sleep, so the leg stays owed to such a model, or to hardware.
+
+#### A D0 overlapping a system power IRP (2000, 7)
+
+On 2000 (`w2h`, above): two hibernations with the F: loop running, and
+the third with the cable pulled at the resume. Each resume brought the
+stick back: about 16 s of `COPYFAIL` and an Unsafe Removal notice for
+the stick, as XP's run-36 resumes read, then OK. On 7 x86 (`w7`, q35
+base, ASM4242 with the enclosure, a stick, `-global
+ICH9-LPC.disable_s4=0`, the package installed with exit 3, the `qemu`
+`xhci98.sys` copied in): `powercfg /a` offered Hibernate, and two
+hibernations resumed. The second ran a copy loop on the stick, and the
+loop's writes went on after the resume (`info blockstats`). A copy and
+`fc /b` were clean after the first. No `hcd: power defer overlap` line
+was printed in any of the seven debug-console logs (`w2h\debugcon-c`
+to `-g`, `w7\debugcon-a` to `-c`). The case stays unmet in a guest. It
+is owed to hardware, where a D0 IRP and a system IRP's completion can
+both be deferred to DISPATCH_LEVEL work items at once.
+
+Two vehicle notes: on 7 the stick and the NVMe disk, both overlays of
+the same FAT image, share a disk signature, so Windows mounted only one
+of them (D:, the stick). After the first resume the loop's `echo` to
+COM1 blocked, so the second hibernation's loop wrote no COM1 lines.
+
+#### Still owed after this session
+
+- A failed D0 during a re-enumeration on 98 SE: a `qemu`-flavour hook
+  that fails the D0 (a code change), or hardware.
+- The D0 overlap: not met in seven guest resumes (XP 2, 2000 3, 7 2).
+  Owed to hardware.
+- The retry wait: a `qemu`-flavour line with the worker's chosen wait
+  and its wakes, read in the retry-only case.
+- The resume with a lane adapter gone (`TbtU4Resume`'s table check): an
+  emulator model that drops or renumbers a host router adapter across a
+  sleep, or hardware.
+- The BUSY that keeps its length (a Stor98 debug-port build), the UAS
+  STOP and START, and the bench readings, as before.
+
 ## 45.20 USB4 version 2 links: the code and the q35 legs (2026-10-30)
 
 Design record 22 section 6.2 coded, as the design half above left it
