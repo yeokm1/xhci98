@@ -442,9 +442,18 @@ The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly 
 | `ndis5\n5_data.c` | The data path: the send queue served by one sender at a time, the reset, the receive callback's reassembly, segmentation and indication, and the link. |
 | `ndis5\n5_cm.c` | The interface glue, the one file that calls `src\xhci_cmnet.h`s table: `IRP_MN_QUERY_INTERFACE` to the device object below, `Open`, `Close`, `QueryInfo`, `Log`. |
 | `ndis5\sources`, `makefile`, `xhcinet.rc` | The build and the version resource. |
-| `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2), gated by `scripts\inf-gate\check-net-inf.ps1`. |
+| `net_cmif.c` / `net_cmif.h` | The network drivers' shared glue to the connection manager's interface (record 35 sections 6.3 and 6.4): the table asked for with `IRP_MN_QUERY_INTERFACE` and released, and the thin calls over `QueryInfo`, `TxReserve`, `TxCommit` and `TxAbort`. WDM alone, no NDIS type, so both miniports compile it unchanged. |
+| `ndis6\xhcinet6.h` | `xhcinet6.sys`'s adapter state (one lock over the send queue, the pause state, the link view and the receive pool's free list) and its cross-file entry points. |
+| `ndis6\n6_main.c` | `DriverEntry` (`NdisMRegisterMiniportDriver`, revision 2 characteristics), `MiniportInitializeEx` (the registration and revision 2 general attributes, `XhciNetMtu`, the interface, the receive pool, the power work item, `Open`), `MiniportHaltEx`, pause and restart, reset, the PnP event and shutdown. |
+| `ndis6\n6_data.c` | The data path: the net buffer list queue served by one sender at a time, cancel, the pause's drain, the receive callback's reassembly, segmentation and indication from the miniport's own pool, the link state's publication, the 64-bit byte counters by carry. |
+| `ndis6\n6_oid.c` | The OID requests, and `OID_PNP_SET_POWER` pended to an NDIS I/O work item that closes the service at D3 (after every send has completed) and opens it at D0. |
+| `ndis6\n6_cm.c` | `Open`, `Close` and `Log` of the interface, over `net_cmif.c`. |
+| `ndis6\sources`, `makefile`, `xhcinet6.rc` | The build (WDK 7.1 `WIN7`, x86 and x64, `NDIS620_MINIPORT`) and the version resource. |
+| `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2): `xhcinet.sys` on 98 SE to 7 and XP x64 to 7 x64, `xhcinet6.sys` on 8, 8.1 and 10 through the `.6.2` models, gated by `scripts\inf-gate\check-net-inf.ps1`. |
 
-The import gate holds the x86 image with `-GateProfile net98` over `scripts\import-gate\xhcinet-imports.allow` and the amd64 one over `xhcinet-imports-amd64.allow`. `test\test_net_frame.c` is the host suite.
+`xhcinet6.sys`, the NDIS 6.20 miniport of the same design for 8, 8.1 and 10 (task 45.59 step S7, record 35 section 7.9), x86 and x64, is built by `scripts\build-driver.cmd :buildnet6` after `xhcinet.sys` in every run, from `src\net\ndis6\sources`, with WDK 7.1's `WIN7` environment; it shares `net_frame.c` and `net_cmif.c` with `xhcinet.sys` and nothing else.
+
+The import gate holds `xhcinet.sys` x86 with `-GateProfile net98` over `scripts\import-gate\xhcinet-imports.allow` and its amd64 image over `xhcinet-imports-amd64.allow`, and `xhcinet6.sys` with `-GateProfile net6` over `xhcinet6-imports.allow` and `xhcinet6-imports-amd64.allow`, against the 7, 8.1 and 10 baselines (`net6-*-baselines.expected`). `test\test_net_frame.c` is the host suite.
 
 ## The user-mode tools
 
