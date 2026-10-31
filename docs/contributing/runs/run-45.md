@@ -6487,8 +6487,11 @@ above 4 GB"); each reviewed and revised. Record 26 drafts 54 and 56.
   -NoWdmFree -SkipQualtool -SkipMarkTool` of `a027f88e` (`XHCIWIZ.EXE`
   `368396772261...`), of `d8227fc7` (`098188bef9ec...`) and of
   `18bd9369` (`9c362839f39d...`). The x64 package of `d8227fc7` came from
-  `make-package.ps1 -Arch amd64`, unsigned, with its five catalogs made
-  on the host by the packager's `New-PackageCatalogFile`. It was signed in
+  `make-package.ps1 -Arch amd64`, unsigned (this clone holds no
+  test-signing key), with its five catalogs made on the host by the
+  packager's `New-PackageCatalogFile`, and signed in each guest's own
+  overlay by the route task 43.36 used (`runs/run-43-24.md`), never on
+  the host and never with the project's key. It was signed in
   each x64 guest with a throwaway certificate (MakeCert, `-b 01/01/2026
   -e 01/01/2030`, Root and TrustedPublisher, SignTool on the `.sys` and
   `.cat` files; all 9 verified, test signing on). Hashes:
@@ -6597,6 +6600,16 @@ The owner's screenshots and their index:
 
 ### Left
 
+- The Help readings not yet made through the installer, per system
+  (each is in the self-test already, routing and rendering):
+  - 98 SE: the Settings Thunderbolt and Stor98 tabs, Stor98's
+    Advanced, Progress, Finish (restart and shut-down words), the
+    uninstall's three pages;
+  - XP: Progress (the shot taken there shows the page, not its Help),
+    Finish, the uninstall's three pages;
+  - 7 x86: Welcome, the Thunderbolt and USB4 page, the three Settings
+    tabs, both Advanced dialogs, the install's Summary (Components at
+    120 DPI is read).
 - The Help of the two other-driver pages (Free and Non-free USB
   drivers): the test cut here carries neither set (`-NoNonFree
   -NoWdmFree`). A cut with both is refused before staging by the
