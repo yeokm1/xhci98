@@ -4,7 +4,8 @@
  * split of an Ethernet frame into USB4 frames, the receive checks and
  * reassembly, and the receive segmentation of a TCP segment longer than
  * the adapter's maximum (section 7.4). Pure and DDK-free, host-tested by
- * test\test_net_frame.c; no NDIS type, no allocation, no lock.
+ * test\test_net_frame.c; no NDIS type, no allocation, no lock: shared
+ * unchanged by xhcinet.sys (NDIS 5) and xhcinet6.sys (NDIS 6).
  *
  * Wire facts: IDS 5.1.5 (the 12-byte little-endian header: Frame Size,
  * Frame Index, Frame ID, Frame Count) and Linux's thunderbolt-net read for
@@ -20,9 +21,7 @@
 #ifndef NET_FRAME_H
 #define NET_FRAME_H
 
-#ifdef XHCI_HOST_TEST
 #include "../xhci_compat.h"
-#endif
 
 #define NET_HDR_LEN         12UL     /* the USB4NET frame header         */
 #define NET_BUF_LEN         4096UL   /* one host-interface frame         */

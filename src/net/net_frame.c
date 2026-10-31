@@ -6,9 +6,6 @@
  * and NET_RX (the miniport's send queue owner and its receive DPC).
  */
 
-#ifndef XHCI_HOST_TEST
-#include <ndis.h>
-#endif
 #include "net_frame.h"
 
 static ULONG netGet16be(const UCHAR *p)

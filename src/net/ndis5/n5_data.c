@@ -162,7 +162,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
         }
         return NET_FAILED;
     }
-    if (!NetCmReserve(a, m, bufs, &token)) {
+    if (!NetCmIfReserve(&a->Cm, m, bufs, &token)) {
         return NET_FULL;
     }
     id = NetTxPacketId(&a->Tx, stns);
@@ -176,7 +176,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
         while (left != 0) {
             while (have == 0) {
                 if (b == NULL) {
-                    NetCmAbort(a, &token);
+                    NetCmIfAbort(&a->Cm, &token);
                     a->TxErrors++;
                     return NET_FAILED;
                 }
@@ -196,7 +196,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
             left -= take;
         }
     }
-    if (!NetCmCommit(a, &token, m, lens)) {
+    if (!NetCmIfCommit(&a->Cm, &token, m, lens)) {
         a->TxErrors++;
         return NET_FAILED;
     }
@@ -622,7 +622,7 @@ VOID NTAPI NetCbLinkChange(PVOID ctx, BOOLEAN up)
     NdisAcquireSpinLock(&a->TxLock);
     a->LinkGen++;
     a->PeerStns = info.PeerPrtcstns;
-    a->RateMbps = NetCmRateMbps(&info);
+    a->RateMbps = NetCmIfRateMbps(&info);
     a->LinkUp = up ? 1UL : 0UL;
     a->BigLogged = 0;
     NdisReleaseSpinLock(&a->TxLock);

@@ -16,7 +16,7 @@
 
 #include <ndis.h>
 #include "..\net_frame.h"
-#include "..\..\xhci_cmnet.h"
+#include "..\net_cmif.h"
 
 typedef XHCI_CM_NET_INFO NET_CM_INFO, *PNET_CM_INFO;
 
@@ -124,12 +124,6 @@ VOID NetCmRelease(PNET_ADAPTER a);                /* PASSIVE */
 NDIS_STATUS NetCmOpen(PNET_ADAPTER a);            /* PASSIVE */
 VOID NetCmClose(PNET_ADAPTER a);                  /* PASSIVE */
 VOID NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i);  /* <= DISPATCH */
-ULONG NetCmRateMbps(const NET_CM_INFO *i);        /* any */
-ULONG NetCmReserve(PNET_ADAPTER a, ULONG count, PUCHAR *bufs,
-                   PXHCI_CM_NET_TOKEN token);     /* <= DISPATCH */
-ULONG NetCmCommit(PNET_ADAPTER a, const XHCI_CM_NET_TOKEN *token,
-                  ULONG count, const ULONG *lens); /* <= DISPATCH */
-VOID NetCmAbort(PNET_ADAPTER a, const XHCI_CM_NET_TOKEN *token);
 VOID NetCmLog(PNET_ADAPTER a, const char *label, ULONG value);
 
 /* n5_data.c - the data path. */

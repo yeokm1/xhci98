@@ -9,6 +9,7 @@
 
 [imports]
 
+ntoskrnl.exe!KeDelayExecutionThread          all  required  nt52-amd64-export
 ntoskrnl.exe!IoIsWdmVersionAvailable         all  required  nt52-amd64-export
 ntoskrnl.exe!KeBugCheckEx                    all  required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
 ntoskrnl.exe!ObfDereferenceObject            all  required  nt52-amd64-export

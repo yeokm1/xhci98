@@ -506,7 +506,7 @@ static NDIS_STATUS netQuery(NDIS_HANDLE ctx, NDIS_OID oid, PVOID buf,
         /* In units of 100 bit/s; 10 Gbit/s when unknown (section 7.5),
          * which is 100,000,000 units, within a ULONG. */
         NetCmQuery(a, &info);
-        v = NetCmRateMbps(&info);
+        v = NetCmIfRateMbps(&info);
         if (v == 0 || v > 400000UL) {
             v = 10000UL;
         }

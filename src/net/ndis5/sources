@@ -12,9 +12,11 @@
 # xhcinet-imports-amd64.allow (amd64). Output: src\net\ndis5\objfre\<arch>\
 # xhcinet.sys (release) and objchk_qemu (qemu).
 #
-# THE PURE CORE: ..\net_frame.c (test\test_net_frame.c), compiled in by
-# path. n5_cm.c is the one file that knows the connection manager's
-# interface; n5_data.c the data path; n5_main.c the rest. No file
+# SHARED WITH xhcinet6.sys (step S7), with no NDIS type in either: the
+# pure framing core ..\net_frame.c (test\test_net_frame.c) and the
+# interface glue ..\net_cmif.c (WDM alone), compiled in by path; a change
+# to either is made for both drivers. n5_cm.c is this miniport's use of
+# the interface; n5_data.c the data path; n5_main.c the rest. No file
 # allocates pool through the kernel: every allocation is NdisAllocateMemory
 # at initialisation, freed at the halt.
 #
@@ -43,6 +45,7 @@ C_DEFINES=$(C_DEFINES) -DNDIS50_MINIPORT=1 -DUSE_KLOCKS=1
 !ENDIF
 
 SOURCES=..\net_frame.c \
+        ..\net_cmif.c  \
         n5_cm.c        \
         n5_data.c      \
         n5_main.c      \

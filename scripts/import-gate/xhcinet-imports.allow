@@ -34,6 +34,7 @@
 
 [imports]
 
+ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
 ntoskrnl.exe!IoIsWdmVersionAvailable         all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Chooses the thread-stop wait: (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
 ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
 ntoskrnl.exe!ObfDereferenceObject            all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro, called on every target, not on NT alone: a relations list's references given back when this driver fails the IRP (HcdRelationsGiveBack), the hub PDO referenced for an invalidation (hcd_pdo.c) and the door's connection PDO (hcd_door.c); on NT also the thread objects the stop joins and the file objects of the MSI helper and the device-name check
