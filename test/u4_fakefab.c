@@ -935,6 +935,9 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         return;
     }
     if (t == 1 && addr == FAB_CAP_PORT + 19) {
+        if (r->ElrStuck) {
+            v &= ~0x80000000UL;
+        }
         ad->Cs[addr] = v;
         if ((v & 1UL) == 0 && ad->Peer >= 0 && f->R[ad->Peer].ReconnectPending &&
             !f->R[ad->Peer].ReconnectArmed) {
@@ -1060,6 +1063,14 @@ static unsigned long fabRead(FAB *f, int ri, unsigned long cs, unsigned a,
     if (cs == TBT_CS_ADAPTER) {
         if (fabPcieAdp(r, a) && addr == FAB_CAP_ADP) {
             fabPcieUpdate(f, ri, a);
+        }
+        if (fabUsb3Adp(r, a) && addr == FAB_CAP_ADP + 4) {
+            /* Task 45.56: USB3 Link Valid and the Port Link State. */
+            if (r->Adp[a].Usb3Ls != 0) {
+                return (r->Adp[a].Cs[addr] & ~0xFFFUL) | ((r->Adp[a].Usb3Ls - 1) & 0xFFFUL);
+            }
+            return (r->Adp[a].Cs[addr] & ~0xFFFUL) |
+                   ((r->Adp[a].Cs[FAB_CAP_ADP] & 0x80000000UL) ? 0x80UL : 0UL);
         }
         return r->Adp[a].Cs[addr];
     }

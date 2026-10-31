@@ -67,6 +67,7 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
 /* Record 22 section 12, decision U30: absent is 1, as written since task
  * 45.50. */
 #define CM_VALUE_USB4_V2 L"XhciCmUsb4V2"
+#define CM_VALUE_GEN4_ELR L"XhciCmGen4LinkRecovery"
 /* Record 33 section 9.1: absent is 1, as the NT 5.x install paths write it
  * since task 45.50; read on NT 5.x alone. XhciCmRingInterrupt: absent is
  * 0, as the NT install paths write it. */
@@ -297,6 +298,8 @@ VOID CmReadValues(PCM_NHI nhi)
 #endif
     cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
     CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_GEN4_ELR, &take, 0);
+    CmValuesTakeGen4Elr(&nhi->Values, take.Found, take.Dword);
     if (CmBreqGate != 0) {
         cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
         CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);

@@ -284,6 +284,45 @@ static BOOLEAN tbtU4V2Link(PTBT_U4CM cm, const TBT_U4_PORT *p)
 }
 
 /*
+ * Section 6.2.3 item 4 (task 45.56): one end's PORT_CS_19 written as read
+ * with Enable Gen 4 Link Recovery `on`, Initiate Gen 4 Link Recovery and
+ * StartAsymmetricFlow 0, and read back. TBT_OK when the read-back has the
+ * bit as asked; TBT_E_STATE when the router keeps it otherwise.
+ */
+static LONG tbtU4ElrEnd(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp, BOOLEAN on)
+{
+    ULONG v;
+    ULONG want;
+    LONG rc;
+
+    if (adp == 0 || adp >= TBT_U4_MAX_ADP || rt->Adp[adp].CapPort == 0) {
+        return TBT_E_STATE;
+    }
+    want = on ? TBT_PORT19_ELR : 0;
+    rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, rt->Adp[adp].CapPort + TBT_PORT_CS_19,
+                 &v);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    if ((v & TBT_PORT19_SAF) != 0) {
+        /* Table 8-13: no write of PORT_CS_19 while StartAsymmetricFlow
+         * reads 1 (part 6); whatever is owed stays owed. */
+        return TBT_E_STATE;
+    }
+    rc = tbtU4Wr(cm, &rt->Route, TBT_CS_ADAPTER, adp, rt->Adp[adp].CapPort + TBT_PORT_CS_19,
+                 (v & ~(TBT_PORT19_ELR | TBT_PORT19_ILR | TBT_PORT19_SAF)) | want);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    rc = tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, rt->Adp[adp].CapPort + TBT_PORT_CS_19,
+                 &v);
+    if (rc != TBT_OK) {
+        return rc;
+    }
+    return (v & TBT_PORT19_ELR) == want ? TBT_OK : TBT_E_STATE;
+}
+
+/*
  * Section 6.2.3 item 1: a link classified from the host's lane 0
  * LANE_ADP_CS_1 (Current Link Speed, Negotiated Link Width) and, for the
  * asymmetric pairing, the far end's. Both fields are valid only with the
@@ -800,7 +839,12 @@ static VOID tbtU4TakeQueues(PTBT_U4CM cm)
             p = tbtU4PortByLane(cm, TbtRouteDepth(&n.Route) == 0 ? n.Info :
                                 TbtRouteLevel(&n.Route, 0), &lane1);
             if (p != NULL) {
+                /* Task 45.56: and that port's recovery check, after the
+                 * check (section 6.2.3 item 4 part 4), its 2 s anew. */
                 p->CheckPending = TRUE;
+                p->ElrCheckOwed = TRUE;
+                p->ElrCheckTried = FALSE;
+                p->ElrNoteSeq++;
             }
             continue;
         }
@@ -826,6 +870,12 @@ static VOID tbtU4TakeQueues(PTBT_U4CM cm)
         cm->Ctl.NotesLost = FALSE;
         for (i = 0; i < cm->PortCount; i++) {
             cm->Ports[i].CheckPending = TRUE;
+            /* Part 5: a LINK_RECOVERY may have been among them. */
+            if (cm->Ports[i].ElrSet) {
+                cm->Ports[i].ElrCheckOwed = TRUE;
+                cm->Ports[i].ElrCheckTried = FALSE;
+                cm->Ports[i].ElrNoteSeq++;
+            }
         }
     }
 }
@@ -5249,6 +5299,11 @@ static VOID tbtU4TeardownHead(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN nested)
     tbtU4KidsDrop(cm, p);
     p->State = TBT_U4_TEARDOWN;
     cm->Counters.Unplugs++;
+    /* Section 6.2.3 item 4 part 3: the device router's end goes with its
+     * reset; the host's (ElrHost) is section 7.3 step 5's. */
+    p->ElrSet = FALSE;
+    p->ElrDev = FALSE;
+    p->ElrCheckOwed = FALSE;
     hadPcie = (BOOLEAN)(p->Pcie.Up || p->Pcie.Written != 0);
     /* A removal already owed (an earlier head whose tail has not run)
      * stays owed: only the tail consumes it. */
@@ -5447,6 +5502,17 @@ static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p)
         p->Lane1Disabled = FALSE;
     }
     (void)tbtU4LcDprRelease(cm, p);
+    /* Section 6.2.3 item 4 part 6: the host's Enable Gen 4 Link Recovery,
+     * which a disconnect leaves (Spec 4.4.5.2); retried at the EMPTY tick
+     * while it fails, never part of the verdict that gates a connection. */
+    if (p->ElrHost && !p->ElrSet) {
+        if (tbtU4ElrEnd(cm, h, p->Lane0, FALSE) == TBT_OK) {
+            p->ElrHost = FALSE;
+            cm->Counters.ElrOwnCleared++;
+        } else {
+            cm->Counters.ElrClearFailed++;
+        }
+    }
     return (BOOLEAN)(!p->PcSetHost && !p->LaneWritten && !p->Lane1Disabled &&
                      !p->LcDprOwed);
 }
@@ -5670,6 +5736,11 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     p->Gen4 = FALSE;
     p->Asym = FALSE;
     p->UtoOff = FALSE;
+    /* Section 6.2.3 item 4 part 3: per connection; ElrHost outlives it. */
+    p->ElrSet = FALSE;
+    p->ElrRefused = FALSE;
+    p->ElrCheckOwed = FALSE;
+    p->ElrCheckTried = FALSE;
     p->State = TBT_U4_CONNECTING;
     p->Why = TBT_U4_WHY_NONE;
     p->AnchorValid = FALSE;
@@ -6380,8 +6451,14 @@ static BOOLEAN tbtU4ElrClearAt(PTBT_U4CM cm, const TBT_ROUTE *route, ULONG adp, 
     if ((v & TBT_PORT19_ELR) == 0) {
         return TRUE;
     }
+    if ((v & TBT_PORT19_SAF) != 0) {
+        /* Table 8-13: no write while StartAsymmetricFlow reads 1 - a clear
+         * withheld, which holds the port as a failing one does (section
+         * 6.2.3 item 4 part 7). */
+        return FALSE;
+    }
     if (tbtU4Wr(cm, route, TBT_CS_ADAPTER, adp, cap + TBT_PORT_CS_19,
-                v & ~(TBT_PORT19_ELR | TBT_PORT19_ILR)) != TBT_OK) {
+                v & ~(TBT_PORT19_ELR | TBT_PORT19_ILR | TBT_PORT19_SAF)) != TBT_OK) {
         return FALSE;
     }
     cm->Counters.ElrCleared++;
@@ -7319,6 +7396,35 @@ static VOID tbtU4Clean(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN portReset)
  * Only that tunnel is torn down, in the orderly form; the port is FAILED
  * for PCIe until a re-plug, its USB3 tunnel kept. The port's own sequence,
  * as an eject is (TbtU4Eject). */
+/* The loss sequence itself, run as the port's own sequence by its caller
+ * (ActivePort): the kids' tunnels, then the port's, in the orderly form;
+ * the statement and the removal; FAILED for PCIe. `s` the LTSSM logged.
+ * Also a recovery check's lost tunnel (section 6.2.3 item 4 part 4). */
+static VOID tbtU4PcieLost(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG s)
+{
+    PTBT_U4_ROUTER h;
+    BOOLEAN closed;
+
+    h = &cm->HostRouter;
+    cm->Counters.PcieLost++;
+    tbtU4Log(cm, "u4.pcie.lost", (p->Index << 8) | s);
+    /* Record 34 section 6.3: both routers there, so each kid's tunnel is
+     * torn down in the orderly form first, then the parent's. */
+    tbtU4KidsDown(cm, p, TBT_U4_WHY_LOST);
+    p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
+    closed = tbtU4TunnelDown(cm, p, &p->Pcie, FALSE);
+    if (closed) {
+        closed = tbtU4WaitDetect(cm, NULL, 0, h, p->PcieDown, TBT_U4_DETECT_US);
+    }
+    cm->Counters.PcieTornDown++;
+    tbtU4LinkDownUpcall(cm, p, closed, FALSE);
+    tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
+    p->Transitional = FALSE;
+    p->PcieFailed = TRUE;
+    p->State = TBT_U4_FAILED;
+    p->Why = TBT_U4_WHY_LOST;
+}
+
 static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
 {
     PTBT_U4_ROUTER h;
@@ -7326,7 +7432,6 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
     ULONG s;
     ULONG prev;
     BOOLEAN lost;
-    BOOLEAN closed;
     TBT_WAIT w;
 
     h = &cm->HostRouter;
@@ -7378,26 +7483,9 @@ static VOID tbtU4PcieLoss(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN watch)
     } else if (tbtU4Now(cm) - p->TransitionalSinceUs >= TBT_U4_TRANSITIONAL_US) {
         lost = TRUE;
     }
-    if (!lost) {
-        goto done;
+    if (lost) {
+        tbtU4PcieLost(cm, p, s);
     }
-    cm->Counters.PcieLost++;
-    tbtU4Log(cm, "u4.pcie.lost", (p->Index << 8) | s);
-    /* Record 34 section 6.3: both routers there, so each kid's tunnel is
-     * torn down in the orderly form first, then the parent's. */
-    tbtU4KidsDown(cm, p, TBT_U4_WHY_LOST);
-    p->Pcie.Written |= TBT_U4_E_HOST_ENABLE | TBT_U4_E_DEV_ENABLE;
-    closed = tbtU4TunnelDown(cm, p, &p->Pcie, FALSE);
-    if (closed) {
-        closed = tbtU4WaitDetect(cm, NULL, 0, h, p->PcieDown, TBT_U4_DETECT_US);
-    }
-    cm->Counters.PcieTornDown++;
-    tbtU4LinkDownUpcall(cm, p, closed, FALSE);
-    tbtU4Queue(cm, TBT_U4_ACT_TUNNEL_DOWN, p);
-    p->Transitional = FALSE;
-    p->PcieFailed = TRUE;
-    p->State = TBT_U4_FAILED;
-    p->Why = TBT_U4_WHY_LOST;
 done:
     cm->ActivePort = prev;
 }
@@ -9859,6 +9947,7 @@ VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg)
     cfg->LaneBonding = TRUE;
     cfg->PreOsCleanup = 0;
     cfg->Usb4V2 = TRUE;
+    cfg->Gen4LinkRecovery = TRUE;
 }
 
 VOID TbtU4Init(PTBT_U4CM cm, PTBT_RING ring, const TBT_HOST *host,
@@ -10222,6 +10311,354 @@ static BOOLEAN tbtU4Rebuild(PTBT_U4CM cm, PTBT_U4_PORT p)
     return tried;
 }
 
+/* ---------------------------------------------------------------------- */
+/* Gen 4 Link Recovery (record 22 section 6.2.3 item 4, task 45.56)       */
+/* ---------------------------------------------------------------------- */
+
+static BOOLEAN tbtU4TmuAsLeft(PTBT_U4CM cm, PTBT_U4_PORT p);
+
+/* The port is UP or FAILED with its router, and nothing else owed on it
+ * that a tick serves first (parts 1, 2 and 4). */
+static BOOLEAN tbtU4ElrIdle(PTBT_U4CM cm, const TBT_U4_PORT *p)
+{
+    return (BOOLEAN)((p->State == TBT_U4_UP || p->State == TBT_U4_FAILED) &&
+                     p->Dev.Present && !p->Barred && !p->RecDeparted &&
+                     !p->UnplugPending && !p->CheckPending && !p->ClassifyPending &&
+                     !p->DiscoverOwed && !p->AsFoundOwed &&
+                     !cm->DeferredTail[p->Index - 1]);
+}
+
+static VOID tbtU4ElrOff(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN dev);
+
+/* Part 1: a depth-1 Gen 4 link of two version 2 routers, both values 1. */
+static BOOLEAN tbtU4ElrWanted(PTBT_U4CM cm, const TBT_U4_PORT *p)
+{
+    return (BOOLEAN)(cm->Config.Gen4LinkRecovery && tbtU4V2Link(cm, p) && p->Gen4 &&
+                     !p->DpPreserved && cm->HostRouter.Adp[p->Lane0].CapPort != 0 &&
+                     p->Dev.UpAdp != 0 && p->Dev.Adp[p->Dev.UpAdp].CapPort != 0);
+}
+
+/* Part 2: set on both ends, device end first, each read back; a reading
+ * short of CL0 at both lane 0s or with StartAsymmetricFlow set writes
+ * nothing (the next tick tries again); a refusal or a failure writes the
+ * bit 0 again where it was written and is not tried again on this
+ * connection. The port's own sequence. */
+static VOID tbtU4ElrSet(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_ROUTER d;
+    ULONG gen;
+    ULONG hl;
+    ULONG dl;
+    ULONG h18;
+    ULONG d18;
+    ULONG hv;
+    ULONG dv;
+    LONG rc;
+
+    h = &cm->HostRouter;
+    d = &p->Dev;
+    gen = p->Generation;
+    if (tbtU4LaneRd(cm, h, p->Lane0, &hl) != TBT_OK ||
+        tbtU4LaneRd(cm, d, d->UpAdp, &dl) != TBT_OK ||
+        TBT_LANE1_STATE(hl) != TBT_LANE_STATE_CL0 ||
+        TBT_LANE1_STATE(dl) != TBT_LANE_STATE_CL0 ||
+        TBT_LANE1_SPEED(hl) != TBT_LANE_SPEED_GEN4 ||
+        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                h->Adp[p->Lane0].CapPort + TBT_PORT_CS_18, &h18) != TBT_OK ||
+        tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, d->UpAdp,
+                d->Adp[d->UpAdp].CapPort + TBT_PORT_CS_18, &d18) != TBT_OK ||
+        ((h18 | d18) & TBT_PORT18_TIP) != 0 ||
+        tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Lane0,
+                h->Adp[p->Lane0].CapPort + TBT_PORT_CS_19, &hv) != TBT_OK ||
+        tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, d->UpAdp,
+                d->Adp[d->UpAdp].CapPort + TBT_PORT_CS_19, &dv) != TBT_OK ||
+        ((hv | dv) & TBT_PORT19_SAF) != 0) {
+        return;
+    }
+    if (!TBT_U4_LIVE(p, gen)) {
+        p->CheckPending = TRUE;
+        return;
+    }
+    /* Part 3: each end owned from its write on. */
+    p->ElrDev = TRUE;
+    rc = tbtU4ElrEnd(cm, d, d->UpAdp, TRUE);
+    if (rc == TBT_OK && TBT_U4_LIVE(p, gen)) {
+        /* Owed to section 7.3 step 5 from the write on, whatever the
+         * read-back says. */
+        p->ElrHost = TRUE;
+        rc = tbtU4ElrEnd(cm, h, p->Lane0, TRUE);
+        if (rc == TBT_OK && TBT_U4_LIVE(p, gen)) {
+            p->ElrSet = TRUE;
+            cm->Counters.ElrEnabled++;
+            tbtU4Log(cm, "u4.elr.set", p->Index);
+            return;
+        }
+    }
+    if (p->Generation != gen) {
+        return;
+    }
+    p->ElrRefused = TRUE;
+    cm->Counters.ElrRefused++;
+    tbtU4Log(cm, "u4.elr.refused", (p->Index << 16) | ((ULONG)(-rc) & 0xFFFFUL));
+    /* Both ends written 0 again; what does not clear stays owned and
+     * the tick's reconciliation retries it (part 3). */
+    tbtU4ElrOff(cm, p, TRUE);
+    if (!TBT_U4_LIVE(p, gen)) {
+        p->CheckPending = TRUE;
+    }
+}
+
+/* Part 6: the ends of a link where this driver may have set the bit
+ * written 0, device end first (`dev`: only where its router is
+ * identified, part 3), before this instance stops or suspends and where
+ * part 3 finds it no longer admitted; the bit then counts as not set. */
+static VOID tbtU4ElrOff(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN dev)
+{
+    PTBT_U4_ROUTER d;
+
+    d = &p->Dev;
+    if (dev && p->ElrDev && d->Present) {
+        if (tbtU4ElrEnd(cm, d, d->UpAdp, FALSE) == TBT_OK) {
+            p->ElrDev = FALSE;
+            cm->Counters.ElrOwnCleared++;
+        } else {
+            cm->Counters.ElrClearFailed++;
+            tbtU4Log(cm, "u4.elr.clear.failed", (p->Index << 8) | 1UL);
+        }
+    }
+    p->ElrSet = FALSE;
+    p->ElrCheckOwed = FALSE;
+    if (p->ElrHost) {
+        if (tbtU4ElrEnd(cm, &cm->HostRouter, p->Lane0, FALSE) == TBT_OK) {
+            p->ElrHost = FALSE;
+            cm->Counters.ElrOwnCleared++;
+        } else {
+            cm->Counters.ElrClearFailed++;
+            tbtU4Log(cm, "u4.elr.clear.failed", p->Index << 8);
+        }
+    }
+}
+
+static VOID tbtU4ElrAllOff(PTBT_U4CM cm)
+{
+    ULONG i;
+
+    for (i = 0; i < cm->PortCount; i++) {
+        if (cm->Ports[i].ElrSet || cm->Ports[i].ElrDev || cm->Ports[i].ElrHost) {
+            cm->ActivePort = cm->Ports[i].Index;
+            tbtU4ElrOff(cm, &cm->Ports[i], (BOOLEAN)(cm->Ports[i].State != TBT_U4_HELD));
+            cm->ActivePort = 0;
+        }
+    }
+}
+
+/* One tunnel's part of the recovery check: 1 whole and the same, 0 not,
+ * -1 a register unread. */
+static int tbtU4ElrTunnel(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN usb3)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_ROUTER d;
+    const TBT_U4_TUNNEL *t;
+    ULONG hp;
+    ULONG dp;
+    ULONG pe;
+    ULONG v;
+    ULONG e[2];
+
+    /* Section 9.2's six parts read at the tunnel's recorded lane HopIDs
+     * alone, the host's first (no HopID scan: at most six requests), each
+     * answered at once: a part read and wrong is a mismatch, a request
+     * unanswered leaves the rest unread. */
+    h = &cm->HostRouter;
+    d = &p->Dev;
+    t = usb3 ? &p->Usb3 : &p->Pcie;
+    hp = usb3 ? p->Usb3Down : p->PcieDown;
+    pe = usb3 ? TBT_USB3_0_PE : TBT_PCIE0_PE;
+    dp = tbtU4FirstOf(d, usb3 ? TBT_ADP_TYPE_USB3_UP : TBT_ADP_TYPE_PCIE_UP);
+    if (hp == 0 || h->Adp[hp].CapAdp == 0 || dp == 0 || d->Adp[dp].CapAdp == 0 ||
+        t->Hd == 0 || t->Hu == 0) {
+        return 0;
+    }
+    if (tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, hp, h->Adp[hp].CapAdp, &v) != TBT_OK) {
+        return -1;
+    }
+    if ((v & pe) == 0) {
+        return 0;
+    }
+    if (tbtU4Entry(cm, &h->Route, hp, TBT_HOP_PROTOCOL, e) != TBT_OK) {
+        return -1;
+    }
+    if (!tbtU4EntryGoes(e, p->Lane0, t->Hd)) {
+        return 0;
+    }
+    if (tbtU4Entry(cm, &h->Route, p->Lane0, t->Hu, e) != TBT_OK) {
+        return -1;
+    }
+    if (!tbtU4EntryGoes(e, hp, TBT_HOP_PROTOCOL)) {
+        return 0;
+    }
+    if (tbtU4Entry(cm, &d->Route, d->UpAdp, t->Hd, e) != TBT_OK) {
+        return -1;
+    }
+    if (!tbtU4EntryGoes(e, dp, TBT_HOP_PROTOCOL)) {
+        return 0;
+    }
+    if (tbtU4Entry(cm, &d->Route, dp, TBT_HOP_PROTOCOL, e) != TBT_OK) {
+        return -1;
+    }
+    if (!tbtU4EntryGoes(e, d->UpAdp, t->Hu)) {
+        return 0;
+    }
+    if (tbtU4Rd(cm, &d->Route, TBT_CS_ADAPTER, dp, d->Adp[dp].CapAdp, &v) != TBT_OK) {
+        return -1;
+    }
+    return (v & pe) != 0 ? 1 : 0;
+}
+
+/*
+ * Part 4: the recovery check after a LINK_RECOVERY, reads only: the link
+ * logged; each tunnel up on the port read whole at its lane HopIDs; a
+ * USB3 tunnel's Port Link State and the TMU as left logged. A PCIe tunnel
+ * not whole is section 7.1 item 4's lost one; a USB3 one is torn down
+ * alone. A register unread leaves the check owed for 2 s from its first
+ * try, then it is given up with nothing torn down. The port's own
+ * sequence (ActivePort set by the caller).
+ */
+static VOID tbtU4ElrCheck(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_ROUTER h;
+    ULONG gen;
+    ULONG seq;
+    ULONG v;
+    ULONG pls;
+    int pcie;
+    int usb3;
+    int op;
+
+    h = &cm->HostRouter;
+    gen = p->Generation;
+    seq = p->ElrNoteSeq;
+    if (!p->ElrCheckTried) {
+        p->ElrCheckTried = TRUE;
+        p->ElrCheckSinceUs = tbtU4Now(cm);
+    }
+    if (tbtU4LaneRd(cm, h, p->Lane0, &v) == TBT_OK) {
+        tbtU4Log(cm, "u4.elr.link",
+                 (p->Index << 16) | (TBT_LANE1_SPEED(v) << 8) | TBT_LANE1_NLW(v));
+    }
+    pcie = 1;
+    if (p->Pcie.Up) {
+        pcie = tbtU4ElrTunnel(cm, p, FALSE);
+    }
+    usb3 = 1;
+    op = 1;
+    pls = 0;
+    if (p->Usb3.Up && TBT_U4_LIVE(p, gen)) {
+        usb3 = tbtU4ElrTunnel(cm, p, TRUE);
+        /* Part 4.3: operational with USB3 Link Valid and U0, U2 or U3;
+         * anything else watched for 2 s, the USB3 link's own to recover. */
+        op = -1;
+        if (p->Usb3Down != 0 && h->Adp[p->Usb3Down].CapAdp != 0 &&
+            tbtU4Rd(cm, &h->Route, TBT_CS_ADAPTER, p->Usb3Down,
+                    h->Adp[p->Usb3Down].CapAdp + TBT_USB3_CS_4, &v) == TBT_OK) {
+            pls = ((v & TBT_USB3_4_ULV) != 0 ? 0x100UL : 0) | TBT_USB3_4_PLS(v);
+            tbtU4Log(cm, "u4.elr.usb3", (p->Index << 16) | pls);
+            op = (pls == 0x100UL || pls == 0x102UL || pls == 0x103UL) ? 1 : 0;
+        }
+    }
+    if (!TBT_U4_LIVE(p, gen)) {
+        /* Removal evidence, or a new connection: the check's own. */
+        p->CheckPending = TRUE;
+        return;
+    }
+    if (p->TmuConfigured) {
+        tbtU4Log(cm, "u4.elr.tmu", (p->Index << 8) | (tbtU4TmuAsLeft(cm, p) ? 1UL : 0));
+    }
+    if (pcie == 0 && p->Pcie.Up) {
+        cm->Counters.ElrPcieLost++;
+        tbtU4PcieLost(cm, p, 0xFFUL);
+    }
+    if (usb3 == 0 && p->Usb3.Up && TBT_U4_LIVE(p, gen)) {
+        cm->Counters.ElrUsb3Lost++;
+        tbtU4Log(cm, "u4.elr.usb3.lost", p->Index);
+        (void)tbtU4Usb3Down(cm, p);
+        p->Usb3.Up = FALSE;
+        p->Usb3Failed = TRUE;
+        cm->Counters.Usb3TornDown++;
+    }
+    if (!p->Usb3.Up) {
+        op = 1;
+    }
+    if (pcie < 0 || usb3 < 0 || op != 1) {
+        if (tbtU4Now(cm) - p->ElrCheckSinceUs < TBT_U4_TRANSITIONAL_US) {
+            return;
+        }
+        if (pcie < 0 || usb3 < 0 || op < 0) {
+            cm->Counters.ElrUnread++;
+            tbtU4Log(cm, "u4.elr.unread", p->Index);
+        } else {
+            cm->Counters.ElrUsb3Down++;
+            tbtU4Log(cm, "u4.elr.usb3.down", (p->Index << 16) | pls);
+        }
+    } else if (pcie == 1 && usb3 == 1) {
+        cm->Counters.ElrKept++;
+        tbtU4Log(cm, "u4.elr.ok", p->Index);
+    }
+    cm->Counters.ElrChecks++;
+    p->ElrCheckTried = FALSE;
+    if (p->ElrNoteSeq == seq) {
+        p->ElrCheckOwed = FALSE;
+    }
+    /* Else a LINK_RECOVERY drained during this check (a loss sequence's
+     * safe point): the check stays owed, its 2 s anew, for that one. */
+    if (!TBT_U4_LIVE(p, gen)) {
+        p->CheckPending = TRUE;
+    }
+}
+
+/* The tick's part, after the port's check and its kids' service. */
+static VOID tbtU4ElrTick(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    if (p->ElrCheckOwed) {
+        if (!(p->State == TBT_U4_UP || p->State == TBT_U4_FAILED) || !p->Dev.Present) {
+            p->ElrCheckOwed = FALSE;
+            p->ElrCheckTried = FALSE;
+        } else if (tbtU4ElrIdle(cm, p)) {
+            cm->ActivePort = p->Index;
+            tbtU4ElrCheck(cm, p);
+            cm->ActivePort = 0;
+        }
+    }
+    if (p->ElrSet || p->ElrCheckOwed) {
+        return;
+    }
+    if (!p->ElrRefused && tbtU4ElrIdle(cm, p) && tbtU4ElrWanted(cm, p)) {
+        cm->ActivePort = p->Index;
+        tbtU4ElrSet(cm, p);
+        cm->ActivePort = 0;
+    } else if (p->State == TBT_U4_HELD) {
+        /* Part 3: a HELD port's host end alone, whatever its router's
+         * classification (a write to the host router only), retried at
+         * each tick while it fails; the device end's ownership kept. */
+        if (p->ElrHost && !p->RecDeparted && !cm->DeferredTail[p->Index - 1]) {
+            cm->ActivePort = p->Index;
+            tbtU4ElrOff(cm, p, FALSE);
+            cm->ActivePort = 0;
+        }
+    } else if ((p->ElrDev || p->ElrHost) && p->Dev.Present &&
+               (p->State == TBT_U4_UP || p->State == TBT_U4_FAILED) &&
+               !p->Barred && !p->RecDeparted && !p->UnplugPending && !p->CheckPending &&
+               !p->ClassifyPending && !cm->DeferredTail[p->Index - 1]) {
+        /* Part 3: owned but not set, and not admitted (or refused): both
+         * ends written 0, its router identified, retried at each tick
+         * while one fails. */
+        cm->ActivePort = p->Index;
+        tbtU4ElrOff(cm, p, TRUE);
+        cm->ActivePort = 0;
+    }
+}
+
 VOID TbtU4Poll(PTBT_U4CM cm)
 {
     ULONG i;
@@ -10332,7 +10769,8 @@ VOID TbtU4Poll(PTBT_U4CM cm)
             (void)tbtU4ReleaseBw(cm, p);
         }
         if (p->State == TBT_U4_EMPTY &&
-            (p->PcSetHost || p->LaneWritten || p->Lane1Disabled || p->LcDprOwed) &&
+            (p->PcSetHost || p->LaneWritten || p->Lane1Disabled || p->LcDprOwed ||
+             p->ElrHost) &&
             tbtU4RecCleanupGate(cm, p)) {
             (void)tbtU4HostRestore(cm, p);
         }
@@ -10358,6 +10796,8 @@ VOID TbtU4Poll(PTBT_U4CM cm)
              * unattributed one is learned before the next (U29). */
             rebuilt = tbtU4Rebuild(cm, p);
         }
+        /* Section 6.2.3 item 4: the recovery check, then the set. */
+        tbtU4ElrTick(cm, p);
     }
     tbtU4CheckLinks(cm);
     if (cm->ResyncPending && cm->ActionCount == 0) {
@@ -10567,6 +11007,11 @@ VOID TbtU4Suspend(PTBT_U4CM cm)
             o->Hd = kd->Pcie.Hd;
             o->Hu = kd->Pcie.Hu;
         }
+    }
+    /* Section 6.2.3 item 4 part 6 (Guide 8.2.1): the bit cleared before
+     * the sleep, set again by the tick after the resume. */
+    if (cm->Stage == TBT_U4_STAGE_RUNNING && !cm->Failed) {
+        tbtU4ElrAllOff(cm);
     }
     TbtRingStop(cm->Ring);
     cm->Suspended = TRUE;
@@ -11158,6 +11603,12 @@ VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out)
 VOID TbtU4Stop(PTBT_U4CM cm)
 {
     tbtU4IsoRevokeAll(cm);
+    /* Section 6.2.3 item 4 part 6: no connection manager will verify a
+     * recovery once this one stops; a contained one writes nothing. */
+    if (!cm->Contained && !cm->Suspended && !cm->Failed &&
+        cm->Stage == TBT_U4_STAGE_RUNNING) {
+        tbtU4ElrAllOff(cm);
+    }
     if (!cm->Contained) {
         TbtRingStop(cm->Ring);
     }
@@ -12301,6 +12752,9 @@ VOID TbtU4RecoverCommit(PTBT_U4CM cm)
     cm->Counters.RecoverOk++;
     for (i = 0; i < cm->PortCount; i++) {
         cm->Ports[i].CheckPending = TRUE;
+        /* Section 6.2.3 item 4 part 6: counted as not set; the tick sets
+         * it again where the port qualifies. */
+        cm->Ports[i].ElrSet = FALSE;
     }
 }
 

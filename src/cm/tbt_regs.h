@@ -712,9 +712,11 @@
 #define TBT_PORT_CS_18              18UL
 #define TBT_PORT18_BE               0x00000100UL    /* 8 Bonding Enabled */
 #define TBT_PORT18_TCM              0x00000200UL    /* 9 TBT3-Compatible Mode */
+#define TBT_PORT18_TIP              0x01000000UL    /* 24 AsymmetricTransitionInProgress */
 #define TBT_PORT_CS_19              19UL
 #define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
 #define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
+#define TBT_PORT19_SAF              0x01000000UL    /* 24 StartAsymmetricFlow, never written 1 */
 #define TBT_PORT19_ILR              0x40000000UL    /* 30 Initiate Gen 4 Link Recovery, never written */
 #define TBT_PORT19_ELR              0x80000000UL    /* 31 Enable Gen 4 Link Recovery */
 
@@ -748,6 +750,8 @@
 #define TBT_USB3_CS_3               3UL
 #define TBT_USB3_3_SCALE(v)         ((ULONG)(v) & 0x3FUL)           /* 5:0 */
 #define TBT_USB3_CS_4               4UL
+#define TBT_USB3_4_ULV              0x00000080UL    /* 7 USB3 Link Valid */
+#define TBT_USB3_4_PLS(v)           (((ULONG)(v) >> 8) & 0xFUL)     /* 11:8 Port Link State */
 #define TBT_USB3_4_MSLR(v)          (((ULONG)(v) >> 12) & 0x7FUL)   /* 18:12 Maximum Supported Link Rate */
 #define TBT_USB3_MSLR_20G           0x1UL   /* Linux ADP_USB3_CS_4_MSLR_20G; anything else 10 Gb/s */
 
