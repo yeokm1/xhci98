@@ -5850,6 +5850,80 @@ QMP 49451, 49453 and 49454; every start and stop in
 - Legs on ME, 2000, Vista, 8 to 10 (the roadmap's "98 SE to 10"): the
   coordinator named 98 SE, XP and 7 for this task.
 
+## 45.65 a copy that never ends on Vista x86 after an unplug: Vista's own USB stack first (2026-10-31)
+
+**Verdict: the hang comes without xHCI98; no code.** 45.61's reading (record 13 section
+17.6, `runs/run-45.md` "45.61") found that on Vista x86 a drive pulled during
+a copy loop, with an Explorer window open on its volume, leaves the next copy
+blocked for good, the volume mounted and `shutdown` hanging, for a UAS drive
+and for a Bulk-Only stick on `usbstor.sys` alike, on xHCI98. The same leg on
+Vista's own USB stack, with no xHCI98 installed (the emulator's EHCI,
+`usbehci.sys`, the same kind of stick on `usbstor.sys`), shows the same hang,
+twice, and once without the Explorer window as well. XP and 7 on the same
+emulator and the same EHCI fail the copies cleanly. By the task's own rule
+(the same setup on Vista's own stack first) the hang is Vista's or the
+emulator's, and the task stops here with no code. That rule is what decides:
+no xHCI98-specific cause was found, but none was looked for either (no
+request was read on the xHCI98 runs), so the reading does not prove that
+45.61's runs had the same cause, only that the visible failure needs no
+xHCI98. Not read on real hardware.
+
+### The machine
+
+Development host A; the q35 bases' pinned emulator (`bin\asm4242-20261025-2230`,
+`qemu-system-x86_64.exe` SHA-256 `da60139f...0c93`); fresh overlays of the q35
+bases `vx86` (`4d1aa775...2890`), `xp` (`64ada103...d5f0`) and `w7x86`
+(`95893177...2a7d`), nothing of xHCI98 on them. No `qemu-xhci`: an
+`ich9-usb-ehci1` with the stick on its port 1:
+
+```
+-device ich9-usb-ehci1,id=eh
+-drive if=none,id=bd0,format=qcow2,file=<dir>\bot.qcow2
+-device usb-storage,id=bot0,bus=eh.0,port=1,drive=bd0,serial=W45VISTACPB
+```
+
+`bot.qcow2` is an overlay of the q35 bases' FAT test disk
+(`shared\nvme-fat.qcow2`, volume "ORICO"), drive `D:` in each guest. Vista
+and 7 x86 at 2 vCPU and 2 GB, XP at 2 vCPU and 1 GB (the q35 launcher's
+defaults). In each guest `sc query xhci98` answered 1060 (not installed) and
+`usbehci` was running; after the unplug `usbstor` read STOPPED (its only
+device gone), so the stick ran on `usbehci.sys` and `usbstor.sys`.
+
+### The leg
+
+A command prompt runs `for /l %i in (1,1,100000) do copy /y
+C:\Windows\system32\shell32.dll D:\x.bin`; where the table says so, the
+volume is first opened in Explorer (`start D:\`; on 7 AutoPlay's "Open
+folder"). After about 25 copies the stick is pulled by QMP `device_del bot0`.
+
+| System | Explorer on `D:` | Result |
+|---|---|---|
+| Vista x86 (`vx86e\b1` to `b12`) | yes | "The system cannot find the file specified", "0 file(s) copied", then the next copy blocked for good (over 6 min); `D:` still shown in Explorer; a second prompt's `wmic logicaldisk` and `dir D:\` blocked; the Run dialog no longer opened; the ACPI power button did nothing in 4 min; QEMU stopped |
+| Vista x86 (`vx86r\b1` to `b4`), a repeat | yes (opened by AutoPlay on its own before the loop) | the same: the next copy blocked (over 5 min), a second prompt's `dir D:\` blocked; QEMU stopped |
+| Vista x86 (`vx86n\b1` to `b7`) | no | the same: the next copy blocked (over 4 min), `dir D:\` blocked, `shutdown -s -t 0` from the Run dialog never shut down (4 min); QEMU stopped |
+| XP (`xpe\b1` to `b4`) | yes | every copy after the unplug fails "The system cannot find the drive specified"; Explorer's window closed; `shutdown -s` powered off |
+| 7 x86 (`w7e\b1` to `b5`) | yes | the copies fail "The system cannot find the drive specified"; Explorer went to "Computer"; `shutdown -s` powered off |
+
+Evidence: `E:\xhci98-vm\p45\w45-vistacp\` (`vx86e`, `vx86r`, `vx86n`, `xpe`, `w7e`:
+the screenshots and `cmdline-a.txt`; `pids.txt`).
+
+### What it means
+
+On xHCI98 the hang came with the Explorer window (45.61: one run without it
+failed the copies cleanly); on Vista's own stack it came with the window
+twice and without it once, so the window looks like it widens a timing
+window rather than causing the hang (a few runs each; not read further).
+The stick's devnode is gone (`usbstor` stopped) while the volume stays
+mounted, so the copy most likely waits above the USB host controller and the
+hub (not read). The emulator is not ruled out: XP and 7 on the same EHCI
+model are clean, but no real Vista machine was read.
+
+### Owed
+
+- Nothing in this driver by the task's rule. A real-hardware read on Vista
+  (any USB stack) would tell Vista from the emulator; not required for the
+  release.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the
