@@ -30,7 +30,12 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmUsb3Tunnel       */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLaneBonding      */
     { 0,     0,    2,           CM_RULE_SWITCH }, /* XhciCmPreOsCleanup     */
-    { 0,     0,    1,           CM_RULE_SWITCH }  /* XhciCmLogDebugView     */
+    { 0,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLogDebugView     */
+    { 0,     0,    1,           CM_RULE_SWITCH }, /* XhciCmNet              */
+    { 1,     1,    100,         CM_RULE_SWITCH }, /* XhciCmNetPollMs        */
+    { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetRxFrames      */
+    { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetTxFrames      */
+    { 1,     0,    1,           CM_RULE_SWITCH }  /* XhciCmNetE2E           */
 };
 
 static WCHAR cmUpper(WCHAR c)

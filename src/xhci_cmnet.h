@@ -126,7 +126,9 @@ typedef struct _XHCI_CM_NET_INFO {
     UCHAR Mac[6];                       /* this adapter's (record 35 section 4.4) */
     UCHAR PeerMac[6];                   /* the peer's Login Response's; 0 while down */
     ULONG PeerPrtcstns;                 /* XHCI_CM_NET_STNS_*; 0 while down */
-    ULONG LinkMbps;                     /* the USB4 link's rate, 0 when unknown */
+    /* The USB4 link's whole rate in Mb/s, every lane in use counted (40000
+     * for a bonded Gen 3 link), not per lane; 0 when unknown. */
+    ULONG LinkMbps;
     ULONG Lanes;                        /* 1 or 2; 0 when unknown */
     ULONG MaxFrame;                     /* the service's largest Ethernet frame */
     ULONG TxDescriptors;                /* the transmit ring's size, 0 while down */

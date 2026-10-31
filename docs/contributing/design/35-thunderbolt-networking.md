@@ -1752,8 +1752,10 @@ from it:
   system, whatever is found, and never ticked but by the user or a
   switch (the owner); on an update its first state is the value in force
   (`XhciCmNet` 1 in a present NHI's key, or machine-wide), so a computer
-  that has networking shows the box ticked; greyed and unticked when the package carries no
-  network driver for the system. The sentence under it, without testing
+  that has networking shows the box ticked. The box is hidden while
+  `INST_TBNET_WIRED` (`xhciinst\inst_core.h`) is 0, with this section's
+  rule (greyed and unticked when the package carries no network driver
+  for the system) applying once step S11 wires it. The sentence under it, without testing
   status (record 26 section 5.3.1): that it makes a network connection to
   another computer over a Thunderbolt or USB4 cable, that the other
   computer then reaches this one as over any network (file sharing

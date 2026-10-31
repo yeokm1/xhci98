@@ -221,7 +221,16 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 /* The log's emission (record 21 section 8, the owner's decision of
  * 2026-10-16): 1 hands the ring to DbgPrint in every flavour. */
 #define CM_VAL_LOG_DEBUGVIEW     11  /* XhciCmLogDebugView                  */
-#define CM_VAL_COUNT             12
+/* Thunderbolt networking (design record 35 section 8.1, task 45.59):
+ * XhciCmNet gates every inter-domain answer, path and the network PDO;
+ * the others size and pace the service's rings (record 35 sections 5.3,
+ * 5.4). Each refused out of range, the default standing. */
+#define CM_VAL_NET               12  /* XhciCmNet                           */
+#define CM_VAL_NET_POLL_MS       13  /* XhciCmNetPollMs                     */
+#define CM_VAL_NET_RX_FRAMES     14  /* XhciCmNetRxFrames                   */
+#define CM_VAL_NET_TX_FRAMES     15  /* XhciCmNetTxFrames                   */
+#define CM_VAL_NET_E2E           16  /* XhciCmNetE2E                        */
+#define CM_VAL_COUNT             17
 
 
 /* XhciCmMode (record 21 section 8, decision D11). */
