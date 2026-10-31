@@ -770,6 +770,10 @@ static WIZ_DLGRET CALLBACK help_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         wiz_fit(dlg);
         SetFocus(GetDlgItem(dlg, IDCANCEL));
         return FALSE;
+    case WM_HELP:
+        /* F1 in the help window: it is the help, and nothing goes on to
+         * its owner (record 26 section 5.10). */
+        return TRUE;
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_H_README) {
             /* A message box of open_help's is a modal loop over this
@@ -810,6 +814,68 @@ static void help_show(HWND owner, int topic)
         helpDone = 0;
         PostMessageA(sheet, WM_APP_DONE, helpDoneWp, 0);
     }
+}
+
+/* A wizard page's variant of its topic: the Finish page's buttons, the
+ * Progress page's system (its hardware wizard's name). */
+static int page_help_variant(HWND dlg, int page)
+{
+    if (page == P_FINISH) {
+        return finish_variant(dlg);
+    }
+    if (page == P_PROGRESS) {
+        return is_9x() ? INST_PV_9X : INST_PV_NT;
+    }
+    return INST_FV_RESTART;
+}
+
+/* A wizard page's help: its Help button (PSN_HELP) and F1 (WM_HELP). */
+static void page_help(HWND dlg, int page)
+{
+    help_show(GetParent(dlg), inst_help_topic(helpKind[page], uninstallMode,
+                                              page_help_variant(dlg, page)));
+}
+
+/* F1 (WM_HELP) at a sheet: from its own controls (its buttons, its tabs),
+ * or passed up by a page. Left to the sheet, it goes to WinHelp ("No Help
+ * topic is associated with this item"); here the current page is told as
+ * its Help button tells it. Nothing while the sheet is disabled under a
+ * window of its own (a help window, a message box, a dialog), whose F1
+ * comes to the sheet as their owner. */
+static void sheet_help(HWND h)
+{
+    HWND pg = PropSheet_GetCurrentPageHwnd(h);
+    PSHNOTIFY n;
+
+    if (pg == NULL || !IsWindowEnabled(h)) {
+        return;
+    }
+    memset(&n, 0, sizeof(n));
+    n.hdr.hwndFrom = h;
+    n.hdr.code = PSN_HELP;
+    SendMessageA(pg, WM_NOTIFY, 0, (LPARAM)&n);
+}
+
+/* The Settings sheet's own messages: F1 on its buttons and tabs. */
+static WNDPROC setSheetProc;
+
+static LRESULT CALLBACK set_sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_HELP) {
+        sheet_help(h);
+        return TRUE;
+    }
+    return CallWindowProcA(setSheetProc, h, msg, wp, lp);
+}
+
+static int CALLBACK set_sheet_cb(HWND h, UINT msg, LPARAM lp)
+{
+    (void)lp;
+    if (msg == PSCB_INITIALIZED) {
+        setSheetProc = GET_PROC(h);
+        SET_PROC(h, set_sheet_sub);
+    }
+    return 0;
 }
 
 static void open_devmgr(HWND owner)
@@ -3661,6 +3727,13 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             }
         }
         break;
+    case WM_HELP:
+        /* F1: as the Help button (record 26 section 5.10); nothing under
+         * a message box of this dialog's, which leaves it disabled. */
+        if (IsWindowEnabled(dlg)) {
+            SendMessageA(dlg, WM_COMMAND, IDHELP, 0);
+        }
+        return TRUE;
     case WM_COMMAND:
         if (LOWORD(wp) == IDC_A_CHOICE && HIWORD(wp) == CBN_SELCHANGE) {
             adv_take(dlg);
@@ -4030,6 +4103,13 @@ static WIZ_DLGRET CALLBACK s98_adv_proc(HWND dlg, UINT msg, WPARAM wp,
             }
         }
         break;
+    case WM_HELP:
+        /* F1: as the Help button (record 26 section 5.10); nothing under
+         * a message box of this dialog's, which leaves it disabled. */
+        if (IsWindowEnabled(dlg)) {
+            SendMessageA(dlg, WM_COMMAND, IDHELP, 0);
+        }
+        return TRUE;
     case WM_COMMAND:
         if (LOWORD(wp) == IDHELP) {
             help_show(dlg, inst_help_topic(adv_help_kind(P_S98), 0,
@@ -4195,6 +4275,10 @@ static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             break;
         }
         break;
+    case WM_HELP:
+        /* F1 on the tab's controls: the sheet's, as on its buttons. */
+        sheet_help(GetParent(dlg));
+        return TRUE;
     default:
         break;
     }
@@ -4257,7 +4341,8 @@ static void settings_open(HWND comp)
     memcpy(keepS98Val, s98WinVal, sizeof(keepS98Val));
     memset(&h, 0, sizeof(h));
     h.dwSize = sizeof(h);
-    h.dwFlags = PSH_NOAPPLYNOW | PSH_HASHELP;
+    h.dwFlags = PSH_NOAPPLYNOW | PSH_HASHELP | PSH_USECALLBACK;
+    h.pfnCallback = set_sheet_cb;
     h.hwndParent = GetParent(comp);
     h.hInstance = hInst;
     h.pszCaption = "xHCI98 Settings";
@@ -4841,6 +4926,28 @@ static int part_step(HWND dlg, int page, int step)
     return 1;
 }
 
+/* Back from a page: its choices taken into the window's state as Next
+ * takes them, so the page shows them again when it is entered (Next on
+ * Welcome after Back from Components showed the boxes as they were before
+ * the user's clicks, 2026-11-01). 0 stays on the page (a settings value out
+ * of its range). */
+static int page_back(HWND dlg, int page)
+{
+    if (page == P_S98) {
+        s98_page_leave(dlg);
+    }
+    if (page == P_TBT) {
+        (void)tbt_leave(dlg, 0);
+    }
+    if (page == P_COMP) {
+        comp_take(dlg);
+    }
+    if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
+        return 0;
+    }
+    return 1;
+}
+
 static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     int page = GET_PAGE(dlg);
@@ -5072,13 +5179,7 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             SET_RESULT(dlg, 0);
             return TRUE;
         case PSN_WIZBACK:
-            if (page == P_S98) {
-                s98_page_leave(dlg);
-            }
-            if (page == P_TBT) {
-                (void)tbt_leave(dlg, 0);
-            }
-            if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
+            if (!page_back(dlg, page)) {
                 SET_RESULT(dlg, -1);
                 return TRUE;
             }
@@ -5110,15 +5211,16 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             return TRUE;
         case PSN_HELP:
             /* Record 26 section 5.10: the page's own help. */
-            help_show(GetParent(dlg), inst_help_topic(
-                      helpKind[page], uninstallMode,
-                      page == P_FINISH ? finish_variant(dlg)
-                                       : INST_FV_RESTART));
+            page_help(dlg, page);
             return TRUE;
         default:
             break;
         }
         break;
+    case WM_HELP:
+        /* F1 on the page's controls: as on the sheet's buttons. */
+        sheet_help(GetParent(dlg));
+        return TRUE;
     default:
         break;
     }
@@ -5170,6 +5272,11 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
     if (msg == WM_APP_FIT) {
         wiz_fit(h);
         return 0;
+    }
+    if (msg == WM_HELP) {
+        /* F1 (record 26 section 5.10): the page's help, as Help gives. */
+        sheet_help(h);
+        return TRUE;
     }
     if (msg == WM_APP_DONE && (int)wp != JOB_READ && helpWnd != NULL) {
         /* The run ended under a help window (record 26 section 5.10):
@@ -6466,6 +6573,13 @@ static void st_help(HWND parent)
         st(finish_variant(d) == INST_FV_NONE, "help: finish, none shown");
         DestroyWindow(d);
     }
+    /* The Progress page's topic names this system's hardware wizard. */
+    st(page_help_variant(NULL, P_PROGRESS) == (is_9x() ? INST_PV_9X
+                                                       : INST_PV_NT) &&
+       inst_help_topic(INST_HK_PROGRESS, 0,
+                       page_help_variant(NULL, P_PROGRESS)) ==
+       (is_9x() ? INST_HELP_PROGRESS_9X : INST_HELP_PROGRESS),
+       "help: the Progress page's topic for this system's hardware wizard");
     for (i = 0; i < INST_HELP_COUNT; i++) {
         HWND e;
         HFONT f;
@@ -6545,6 +6659,99 @@ static void st_help(HWND parent)
            "help: its buttons inside it, apart, under the text");
         DestroyWindow(d);
     }
+}
+
+/* Back from the Components page keeps the boxes as the user left them,
+ * so they show so again at the next entry (2026-11-01: on XP the
+ * Thunderbolt box, ticked, came back unticked after Back to Welcome and
+ * Next). The plan is not made again here (busy), only the state kept. */
+static void st_comp_back(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                parent, st_proc, 0);
+    int saved[16];
+    LONG savedBusy = busy;
+    int ok;
+
+    st(d != NULL, "back: the components made");
+    if (d == NULL) {
+        return;
+    }
+    saved[0] = tbHave;
+    saved[1] = tbPresent;
+    saved[2] = tbChoice;
+    saved[3] = tbOwn;
+    saved[4] = usbChoice;
+    saved[5] = usbOffered;
+    saved[6] = usbNotHere;
+    saved[7] = trayChoice;
+    saved[8] = fastChoice;
+    saved[9] = storShown;
+    saved[10] = pfwShown;
+    saved[11] = restageHere;
+    saved[12] = restageChoice;
+    saved[13] = s98Have;
+    saved[14] = uasChoice;
+    saved[15] = uasOwn;
+    tbHave = 1;
+    tbPresent = 1;
+    tbChoice = 0;
+    tbOwn = 0;
+    usbChoice = 1;
+    usbOffered = 1;
+    usbNotHere = 0;
+    trayChoice = 1;
+    fastChoice = 1;
+    storShown = 0;
+    pfwShown = 0;
+    restageHere = 0;
+    restageChoice = 0;
+    s98Have = 0;
+    uasChoice = 1;
+    uasOwn = 1;
+    busy = 1;
+    comp_fill(d);
+    st(IsDlgButtonChecked(d, IDC_C_TB) == BST_UNCHECKED &&
+       IsDlgButtonChecked(d, IDC_C_TRAY) == BST_CHECKED,
+       "back: the components filled from the state");
+    CheckDlgButton(d, IDC_C_TB, BST_CHECKED);
+    CheckDlgButton(d, IDC_C_TRAY, BST_UNCHECKED);
+    CheckDlgButton(d, IDC_C_FAST, BST_UNCHECKED);
+    CheckDlgButton(d, IDC_C_UAS, BST_UNCHECKED);
+    ok = page_back(d, P_COMP);
+    DestroyWindow(d);
+    d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS), parent,
+                           st_proc, 0);
+    if (d != NULL) {
+        comp_fill(d);
+    }
+    st(ok && d != NULL && tbChoice &&
+       IsDlgButtonChecked(d, IDC_C_TB) == BST_CHECKED &&
+       IsDlgButtonChecked(d, IDC_C_TRAY) == BST_UNCHECKED &&
+       IsDlgButtonChecked(d, IDC_C_FAST) == BST_UNCHECKED &&
+       IsDlgButtonChecked(d, IDC_C_UAS) == BST_UNCHECKED,
+       "back: Back from the components keeps their boxes for the next "
+       "entry");
+    if (d != NULL) {
+        DestroyWindow(d);
+    }
+    busy = savedBusy;
+    tbHave = saved[0];
+    tbPresent = saved[1];
+    tbChoice = saved[2];
+    tbOwn = saved[3];
+    usbChoice = saved[4];
+    usbOffered = saved[5];
+    usbNotHere = saved[6];
+    trayChoice = saved[7];
+    fastChoice = saved[8];
+    storShown = saved[9];
+    pfwShown = saved[10];
+    restageHere = saved[11];
+    restageChoice = saved[12];
+    s98Have = saved[13];
+    uasChoice = saved[14];
+    uasOwn = saved[15];
 }
 
 static int selftest(void)
@@ -6682,6 +6889,7 @@ static int selftest(void)
         st_page(parent, IDD_ADVANCED, aIds, aTexts, 1, "the Advanced dialog");
         st_settings_layout(parent);
         st_help(parent);
+        st_comp_back(parent);
         DestroyWindow(parent);
     }
     printf("%d checks, %d failures\n", stChecks, stFailures);

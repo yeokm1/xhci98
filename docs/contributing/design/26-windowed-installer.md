@@ -1,6 +1,9 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 58, 2026-10-31 (the owner's request of that day: the Help
+Status: draft 59, 2026-11-01 (three readings of task 45.66's legs: the
+Progress page's Help names each system's own hardware wizard, F1 opens
+the page's Help as the Help button does, and Back from the Components
+page keeps its boxes, sections 5 and 5.10); draft 58, 2026-10-31 (the owner's request of that day: the Help
 texts' paragraphs, one a choice, apart by an empty line; a text taller
 than the window scrolls, section 5.10); draft 57, 2026-10-31 (a cut of both pinned driver sets with no
 earlier record under its releases directory, a TEST or dry cut, proves
@@ -569,6 +572,23 @@ Install, or Finish), Cancel and a Help button that opened the package's
 `CreateProcessA notepad.exe` where that is simpler; looked up at run time);
 since draft 55 it opens the page's own help, with the readme one button
 away (section 5.10).
+
+Every page keeps its choices across Back and Next (draft 59,
+2026-11-01): Back from a page takes its choices into the window's state
+as its Next does (`page_back`), so its fill at the next entry shows them
+as the user left them. Until draft 59 the Components page's Back did not:
+its fill, which sets the boxes from the window's state at every entry,
+showed them as they stood before the clicks (read on XP: the Thunderbolt
+box ticked, Back to Welcome, Next, and the box unticked again, the
+Summary saying "left out"). Its Back now does what its Next and the
+Settings button do (`comp_take`: the boxes kept, the plan made again when
+a choice changed). The Thunderbolt and USB4 page, the settings pages and
+Stor98's already did; the other USB drivers' pages hand each click to
+the engine as it comes; Welcome, the Summary, Progress, Steps and Finish
+hold no choice a Back leaves (the uninstall's box is on its first page,
+which no page goes Back to). The self-test ticks and unticks the
+Components page's boxes, goes Back through `page_back`, fills the page
+again, and finds them as left.
 Every text a page shows comes from the pure half (section 11), so the host
 suite renders every page once at its longest and the self-test renders them
 through the built binary, as record 23 section 10 does for the console's
@@ -2551,7 +2571,11 @@ page (`INST_HK_WELCOME`, `_COMP`, `_TBT`, `_FREE`, `_NONFREE`,
 `_SET_USB`, `_SET_TB`, `_SET_S98`, `_ADV`, `_ADV_S98`, `_SUMMARY`,
 `_PROGRESS`, `_STEPS`, `_FINISH`), `uninstall` the run's mode, `variant`
 for the Finish page what its two buttons are (restart, shut down, or
-none shown: the run changed nothing, whatever the reason). The window maps its page numbers to kinds in one table
+none shown: the run changed nothing, whatever the reason), and for the
+Progress page the system (draft 59: `INST_PV_9X` on 98 SE and ME, whose
+hardware wizard is the Add New Hardware Wizard, `INST_PV_NT` on 2000 and
+later, whose is Found New Hardware; `page_help_variant`, from
+`GetVersion`'s platform bit, as `is_9x`). The window maps its page numbers to kinds in one table
 (`helpKind[]`, which holds the Settings sheet's tabs `P_USB`, `P_TBS`
 and `P_S98` too) and calls it; `tab_proc` takes its tab's kind from the
 same table, and the two Advanced procedures take theirs from one
@@ -2592,7 +2616,8 @@ final words and paragraphs):
 | `INST_HELP_ADV_S98` | Advanced, for the Stor98 tab | Stor98's settings not on the tab, one row each. Select a row to read what it does, then give its value under The value. / A row left as it is keeps Stor98's current setting; where nothing is set, its built-in default applies. Change one only when Stor98's readme or a problem report advises it. / OK keeps your choices for Install; Cancel drops them. |
 | `INST_HELP_SUMMARY` | Summary (install) | What Install will do: the devices, the components, the settings written and the install folder, and what to know before going on. Nothing has been changed yet. / Back: to change a choice. Install: goes on. / The USB keyboard and mouse on a controller whose driver changes stop for a moment: have a keyboard and mouse that do not go through it. |
 | `INST_HELP_USUMMARY` | Summary (uninstall) | What Remove will take away: each driver of this package, its tools and its records. Nothing has been changed yet. / Remove: goes on. Cancel: leaves with nothing changed. |
-| `INST_HELP_PROGRESS` | Progress, both | The steps as they run. Windows may open windows of its own, such as Found New Hardware or a driver-signing question: answer them (Next, Yes or Continue, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
+| `INST_HELP_PROGRESS` | Progress, both, 2000 and later | The steps as they run. Windows may open windows of its own, such as Found New Hardware or a driver-signing question: answer them (Next, Yes or Continue, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
+| `INST_HELP_PROGRESS_9X` | Progress, both, 98 SE and ME (draft 59; until then the topic above on every system) | The steps as they run. Windows may open windows of its own, such as the Add New Hardware Wizard: answer them (Next, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
 | `INST_HELP_STEPS` | Steps left for you | Devices the installer could not install by itself, each with the steps to do after the restart. / Save as text file...: keeps the steps to read after the restart. Open Device Manager: where the steps are done. |
 | `INST_HELP_FINISH` | Finish (install), Restart choices | What was done and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, and what was installed starts. Restart Windows later: to save your work, or to do the steps first; restart before using the devices. |
 | `INST_HELP_FINISH_SHUT` | Finish (install), Shut down choices | What was done and what is left, and the log's place. / Shut down now, then start Windows again: Finish shuts Windows down; start it again yourself. Stor98's update, or the USB storage drivers' copy, needs a fresh start rather than a restart. Shut down later: to save your work first. |
@@ -2611,7 +2636,9 @@ Windows' "test-signing" names are words of the page, not a testing
 status); value names are compared without regard to case (98 SE and
 ME show `StorWriteThrough` where 2000 to 10 show `storwritethrough`);
 `inst_help_topic` gives, for every kind, mode and variant, the
-topic of the table above, and every topic is reached; and a fixed list
+topic of the table above, and every topic is reached; the two Progress
+texts name one hardware wizard each, "Found New Hardware" and "Add New
+Hardware Wizard" (draft 59); and a fixed list
 of (topic, label) pairs holds that each topic's text quotes the page's
 own labels: the Components labels from `INST_PT_DRIVERS`, `INST_PT_UAS`,
 `INST_PT_STOR`, `INST_PT_TB` and `INST_PT_FAST` (their words before the
@@ -2625,7 +2652,8 @@ and the uninstall sheet and for the Settings sheet's three tabs,
 `helpKind[]` gives the kind the page is; `adv_help_kind` gives
 `INST_HK_ADV` for `P_USB` and `P_TBS` and `INST_HK_ADV_S98` for
 `P_S98`; and the Finish page's variant follows its buttons (both shown
-with the restart words, with the shut-down words, none shown). Then it
+with the restart words, with the shut-down words, none shown), and the
+Progress page's is this system's (draft 59). Then it
 opens `IDD_HELP` for every topic, sets the text, and measures it in the
 edit control's formatting rectangle (`EM_GETRECT`) at the control's
 font (`DrawTextA` with `DT_WORDBREAK | DT_EDITCONTROL | DT_CALCRECT`),
@@ -2653,7 +2681,27 @@ pages paragraph (`README.TXT`) says that Help explains the page and
 opens the readme from there. The console is unchanged: its questions
 carry their own explanations.
 
-*Not done.* No context help ("?" in the title bar, `WM_HELP` per
+*F1* (draft 59, 2026-11-01). Until draft 59, F1 on a page gave
+Windows' "No Help topic is associated with this item": `WM_HELP` went
+from the focused control to its page, and from the page or the sheet's
+own buttons to the sheet, which handed it to WinHelp with no topic. Now
+F1 opens the page's help, the same window as the Help button. The page
+procedures (`page_proc`, `tab_proc`) answer `WM_HELP` by passing it to
+their sheet, and the wizard sheet (`sheet_sub`) and the Settings sheet
+(`set_sheet_sub`, a subclass set at its `PSCB_INITIALIZED`, as the
+wizard's is) answer it in `sheet_help`: the current page
+(`PropSheet_GetCurrentPageHwnd`) is sent `PSN_HELP`, as the Help button
+sends it, so one route serves both. Nothing is done while the sheet is
+disabled: a help window, a message box or a dialog of its own is open,
+and their F1 comes to the sheet as their owner. The help window answers
+F1 itself and passes nothing on. The Advanced dialogs answer `WM_HELP` as
+their Help button, unless a message box of theirs has disabled them. The
+install folder's dialog has no Help, and its F1 comes to the disabled
+sheet and does nothing. Read on 98 SE, XP and 7 with the focus on a
+page's box and on the sheet's Next button (`runs/run-45.md`, "45.66
+(closed)").
+
+*Not done.* No context help ("?" in the title bar, a topic per
 control): the page's own sentences already sit under each box; one
 window a page is what was asked. No help file (`.HLP`/`.CHM`): a
 dialog with text works the same on 98 SE and on 10.
