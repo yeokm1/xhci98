@@ -7,6 +7,8 @@
  * section 2.1, the evidence `xp\reqs-a.txt` and `w2k\reqs-w.txt`): every
  * field the PCI driver wrote is compared but the header's interface type,
  * bus and slot, so a list that differs by one field is left as it came.
+ * XP x64's closed lists, read in task 45.55 (record 33 section 7.7), are
+ * XP's byte for byte, so XP x64 takes XP's template.
  * The device-private descriptors are the PCI driver's own and are never
  * invented, changed or reordered: each follows its window group and goes
  * with it, kept or dropped whole.
@@ -167,7 +169,9 @@ ULONG CmBreqShape(const UCHAR *list, ULONG minor)
     if (list == NULL) {
         return CM_BREQ_SHAPE_NONE;
     }
-    if (minor == 1) {
+    if (minor == 1 || minor == 2) {
+        /* XP x64 (NT 5.2) answered XP's list byte for byte (task 45.55,
+         * record 33 section 7.7, revision 5). */
         shape = CM_BREQ_SHAPE_XP;
         bytes = BQ_XP_BYTES;
         count = BQ_XP_COUNT;
