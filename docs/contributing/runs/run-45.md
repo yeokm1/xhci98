@@ -6397,6 +6397,50 @@ the warm restart read `0x14` [the cause of the earlier reading not read].
 
 - Nothing of this task. The Vista hang is task 45.65's.
 
+## 45.59 step S4: the firmware connection manager's host-to-host links (2026-10-31, code; legs owed)
+
+Worker `w45-tbicm`, branch `w45-tbicm` from `1a54b1a3`. Design record 35
+section 3.10 (as built, reviewed and revised before the code, three
+rounds), sections 11.1 and 13 amended.
+
+What was done:
+
+- `src\cm\tbt_icm.c` and `tbt_icm.h`, section "Host-to-host links": each
+  row's events `0x06` and `0x07`, the approve `0x10` and its teardown in
+  Linux's `tb_msgs.h` layouts (Falcon and Alpine Ridge `icm_fr_*` and NHI
+  mailbox `0x10` or `0x11` with data 1 then 2; Titan Ridge and Ice Lake
+  `icm_tr_*` and command `0x11` in two stages); one `tbt_xdp.c` engine
+  (S1, its firmware-CM mode, unchanged) per direct link, fed by ring 0's
+  XDomain sink (S2); the service's operations `TBT_ICM_NET`, the same
+  three signatures as S3's `TBT_U4_NET`; `TbtIcmSetNetConfig`,
+  `TbtIcmSetNet`, `TbtIcmNetWanted`, `TbtIcmNetIdentity`,
+  `TbtIcmSetNetSerial`, `TbtIcmPeer`.
+- `src\cm\cm_nhi.c`: `TbtIcmSetNetConfig` after `TbtIcmInit` (`XhciCmNet`
+  and the package version). The service's wiring under the firmware CM
+  (`TbtIcmSetNet` beside S5's `TbtU4SetNet`, `TbtIcmNetWanted` and
+  `TbtIcmNetIdentity` beside `CmNetPass`'s, and the NHI's Device Serial
+  Number for `TbtIcmSetNetSerial` where the driver reads one) is S5's
+  `cm_net.c`, not in this branch.
+- `test\test_tbt_icm.c`: the `test_xd_*` vectors of record 35 section
+  11.1 (a far host of `tbt_xdp.c`'s engine in the software CM's mode, the
+  firmware model passing its packets), every row; `test\tbt_fake.h` logs
+  the mailbox data. `test_tbt_icm`, `test_tbt_hw` and `test_tbt_select`
+  (and `scripts\usb4-trace\u4-trace.ps1`'s `test_tbt_icm`) link
+  `tbt_xdp.c`.
+
+Builds and tests on `d9420766`, development host A: the gated x86
+build (`scriptsuild-driver.cmd release`, its self-tests and every gate)
+passed; `testun-host-tests.cmd` passed whole (`test_tbt_icm` 1047
+checks, `test_tbt_hw` 176, `test_tbt_select` 306, `test_u4xd` 175, all
+with 0 failures). The design was reviewed and revised in three rounds and
+the code in nine, until nothing material remained.
+
+Legs (record 35 section 11.3): owed. An xHCI98 guest on the emulator's
+`tb3-alpine-ridge` and `tb3-titan-ridge` profiles against the Linux peer
+of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
+(`w45-tbnet`, not merged into `3.4.0.0` when this was written) wired to
+the calls above; a discovery-only leg (the peer's properties read both
+ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the

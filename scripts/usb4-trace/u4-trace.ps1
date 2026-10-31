@@ -54,7 +54,7 @@ $suites = @(
     @{ Name = 'test_u4cm'; Var = 'U4_TRACE';
        Src = 'test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c' },
     @{ Name = 'test_tbt_ring'; Var = 'TBT_TRACE'; Src = 'test_tbt_ring.c ..\src\cm\tbt_ring.c' },
-    @{ Name = 'test_tbt_icm'; Var = 'TBT_TRACE'; Src = 'test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c' }
+    @{ Name = 'test_tbt_icm'; Var = 'TBT_TRACE'; Src = 'test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c' }
 )
 
 # A trace counts only when this run wrote it whole: removed first, and its
