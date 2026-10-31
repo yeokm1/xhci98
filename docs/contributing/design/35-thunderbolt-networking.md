@@ -1,6 +1,10 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 1, 2026-10-31, before code. Written for
+Status: revision 2, 2026-10-31, before code, reviewed and revised (the
+discovery and service, the paths and rings, the interface and the
+network drivers, the INFs, installer, emulator and test plan, each in
+turn), with the owner's `XhciCmNet` gate of 2026-10-31 (section 8.1).
+Revision 1, 2026-10-31, before code. Written for
 `roadmap-usb4.md` task 45.59 (the owner, 2026-10-31: reinstated whole in
 release `3.4.0.0` after its withdrawal of 2026-10-30, when it was task
 45.43), with the owner's decisions of 2026-10-31 on its installer box
@@ -1281,16 +1285,26 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
   pause, so a pause does not log out [inf: a pause is short and the peer
   would only see a stall].
 - **Reset**: nothing below is reset (the CM's service and rings are
-  untouched), but the send side is: NDIS 5 `MiniportReset` takes the send
-  queue's lock, waits out an active sender (the queue owner of the Send
-  item above, which holds the lock only across one reservation, its copy
-  and its commit, so the wait is short and never at a lower IRQL than the
-  sender's), completes every queued packet with `NDIS_STATUS_RESET_IN_PROGRESS`
-  through `NdisMSendComplete`, and only then completes, so no packet sent
-  before the reset is completed after it, as a deserialized miniport's
-  reset must; a frame already committed to the ring was completed at its
-  commit. NDIS 6 has no such reset of sends (`MiniportResetEx` completes
-  at once, its queue drained only by a pause).
+  untouched), but the send side is, by a gate and a sender count that
+  cover completion, not only commit. Every sender (the queue owner of the
+  Send item above) raises a sender count under the queue lock before it
+  takes a packet off the queue, detaches the packet, releases the lock,
+  frames and commits it, calls `NdisMSendComplete` with no spin lock held
+  (as that call requires), and lowers the count, completing the reset if
+  it was the last sender and a reset is waiting. NDIS 5 `MiniportReset`
+  sets the reset gate under the lock (no sender starts while it is set),
+  detaches the whole remaining queue, releases the lock, completes the
+  detached packets with `NDIS_STATUS_RESET_IN_PROGRESS` outside it, and
+  then either returns success at once when the sender count is zero or
+  returns `NDIS_STATUS_PENDING` and lets the last sender's decrement call
+  `NdisMResetComplete`, raised to DISPATCH_LEVEL for the call
+  (`KeRaiseIrql`, then `KeLowerIrql`, no spin lock held), since a sender
+  may run below DISPATCH_LEVEL and that call is a DISPATCH_LEVEL one; the
+  gate clears with the completion. So no packet
+  sent before the reset is completed after it, as a deserialized
+  miniport's reset must. NDIS 6.20 has no such duty
+  (`MiniportResetEx` completes at once; pending sends may survive a reset
+  below NDIS 6.30), its queue drained only by a pause.
 - **Check for hang**: never reports a hang.
 
 ### 7.6 Link up and down
