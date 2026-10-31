@@ -30484,11 +30484,6 @@ void inst_eng_s98_file_ok(int ok)
     logonly("stor98: file update confirmed %d\n", s98FileOk);
 }
 
-const char *inst_eng_tb_name(void)
-{
-    return tbNhiPresent ? tbNhiName : "";
-}
-
 int inst_eng_shutdown(void)
 {
     return (inst_s98_cold_start(envNow.Nt) && s98Cold) || stor_cold();

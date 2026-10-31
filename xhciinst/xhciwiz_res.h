@@ -26,6 +26,9 @@
 #define IDD_FOLDER              112
 /* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4 page. */
 #define IDD_TBT                 114
+#define IDD_HELP                115     /* Help (record 26 section 5.10)  */
+#define IDC_H_TEXT              1120
+#define IDC_H_README            1121
 
 /* The controls. */
 #define IDC_TITLE               1001
