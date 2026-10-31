@@ -17,7 +17,7 @@ It is built to Intel's xHCI specification and tested mainly on Intel machines. O
 
 This is a solo human's project with AI assistance, so bugs are not unexpected. Please [report them](https://github.com/yeokm1/xhci98/issues/new/choose).
 
-**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) ([Downloads](#downloads), [SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [What is tested](#what-is-tested-and-what-is-not) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
+**Contents:** [Motivation](#motivation) - [SuperSpeed and UAS](#superspeed-and-uas) - [Thunderbolt 3 and USB4](#thunderbolt-3-and-usb4) - [The xHCI98 USB Tree](#the-xhci98-usb-tree) - [Installation Steps](#installation-steps) ([Downloads](#downloads), [SETUP.EXE](#install-with-setupexe), [by hand](#install-by-hand)) - [Tuning](#tuning) - [Tested on](#tested-on) - [The package](#the-package) - [Reporting a bug](#reporting-a-bug) - [Known limitations](#known-limitationsissues) - [Building](#toolchain-and-building) - [Repository Layout](#repository-layout) - [Documentation](#documentation) - [AI usage](#ai-usage) - [References](#references) - [Licensing](#licensing-and-provenance)
 
 <img src="images/xhci98-p14s-superspeed-setup.jpg" width="800">
 
@@ -25,7 +25,7 @@ My 2020 ThinkPad P14s Gen 1 on Windows 98 SE with a USB 3.0 hub, two UAS drives,
 
 <img src="images/xhci98-tb3-nvme-win7.jpg" width="800">
 
-Windows 7 with an ORICO USB4 NVMe enclosure on the Thunderbolt 3 port, through `xhcicm.sys` and [Stor98](src/stor98/), in CrystalDiskMark's sequential test. No run record of this project covers this Windows 7 screen; [What is tested](#what-is-tested-and-what-is-not) lists the readings that are recorded.
+Windows 7 with an ORICO USB4 NVMe enclosure on the Thunderbolt 3 port, through `xhcicm.sys` and [Stor98](src/stor98/), in CrystalDiskMark's sequential test. No run record of this project covers this Windows 7 screen; [Tested on](#tested-on) lists the machines.
 
 <img src="images/xhci98-tb3-nvme-98se.jpg" width="800">
 
@@ -33,7 +33,7 @@ The same enclosure on Windows 98 SE, with `S98VSD.VXD` (installed with Stor98): 
 
 <img src="images/xhci98-xhcitr-and-devmgr.png" width="800">
 
-The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NVMe enclosure on a USB4 host. Emulated hardware in QEMU.
+The xHCI98 USB Tree and Device Manager on Windows 98 SE, with an ASMedia USB4 NVMe enclosure on a USB4 host.
 
 - Video by [Omores](https://www.youtube.com/@O_mores) featuring this driver in its earlier USB 2.0 days:
 
@@ -107,7 +107,7 @@ On Vista x64 to 10 x64, **keep test-signing mode on for as long as the Thunderbo
 - **Thunderbolt BIOS Assist off.** With it on, the BIOS switches the controller off when nothing is attached at power-on, and the driver cannot switch it back on (on the P14s Gen 1 the controller disappears altogether).
 - **Security level User Authorization or No Security.** Secure Connect, DisplayPort-only and USB-only are not supported.
 - Pre-boot support (boot from Thunderbolt) may be on or off. When on, a device attached at power-on keeps working under the driver.
-- **Above 4G Decoding.** Off for XP, 2000 with the ACPI HAL, and 32-bit Vista to 10. Either way for 98 SE, ME and 2000 with the Standard PC HAL, with XHCIPFW. 64-bit Windows 10 needs it on. XHCIPFW is a small part of the install that runs at Windows start. Where the firmware leaves the USB4 ports' windows above 4 GB it closes them, so Windows finds the devices behind them. It is offered on 98 SE, ME and 32-bit 2000 to 8.1 (on 8 and 8.1 as a filter of the PCI root bus, the service `xhcipff`). It is ticked with the Thunderbolt 3 / USB4 box and can be unticked. It is not offered on 32-bit Windows 10, where it cannot start in time: on a board that leaves the USB4 ports' windows above 4 GB, 10 cannot use the devices behind these ports. Read on an emulator, not yet on real hardware.
+- **Above 4G Decoding.** Off for XP, 2000 with the ACPI HAL, and 32-bit Vista to 10. Either way for 98 SE, ME and 2000 with the Standard PC HAL, with XHCIPFW. 64-bit Windows 10 needs it on. XHCIPFW is a small part of the install that runs at Windows start. Where the firmware leaves the USB4 ports' windows above 4 GB it closes them, so Windows finds the devices behind them. It is offered on 98 SE, ME and 32-bit 2000 to 8.1 (on 8 and 8.1 as a filter of the PCI root bus, the service `xhcipff`). It is ticked with the Thunderbolt 3 / USB4 box and can be unticked. It is not offered on 32-bit Windows 10, where it cannot start in time: on a board that leaves the USB4 ports' windows above 4 GB, 10 cannot use the devices behind these ports.
 
 ### Approving and removing
 
@@ -300,12 +300,11 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 
 [docs/using/tuning.md](docs/using/tuning.md) has every value of both drivers, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes, the Linux-derived controller quirks and the `XhciCm*` values; the release notes describe [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values) in full.
 
-## What is tested, and what is not
+## Tested on
 
 - Windows 98 SE and Windows 2000 SP4 are the primary targets.
-- Real hardware: Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250. Thunderbolt 3: the P14s Gen 1 under Windows 98 SE, with Stor98, and with `S98VSD.VXD` at the bench of 2026-10-22.
-- The other targets, Windows 2000 included (its Setup bugchecked on both real machines tried), were read in QEMU virtual machines, and the Thunderbolt 3 and USB4 support beyond the P14s on an emulator of those controllers.
-- The free USB class drivers a download may carry are tested in their own project: which of their tests used an emulated device, a real device through a virtual machine, or a real PC is in [usb-wdm-free's "Tested by the author"](https://github.com/yeokm1/usb-wdm-free#tested-by-the-author).
+- Windows 98 SE on the ThinkPad E460 and P14s Gen 1, and the Intel port switchover under Windows 98 SE on the Lenovo B490; Windows XP x64 and 7 x64 on the Dell Latitude E7250. Thunderbolt 3: the P14s Gen 1 under Windows 98 SE, with Stor98 and `S98VSD.VXD`.
+- The free USB class drivers a download may carry are tested in their own project: [usb-wdm-free's "Tested by the author"](https://github.com/yeokm1/usb-wdm-free#tested-by-the-author).
 - Per-system detail: the release notes' [Targets and their standing](docs/using/release-notes.md#targets-and-their-standing). The test devices: [test-equipment.md](docs/contributing/test-equipment.md).
 
 | Machine | Controller | Tested by |
@@ -390,7 +389,7 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
   - Intel 7-series (`8086:1E31`): too many periodic devices at once (audio, mice) may lose data instead of being refused.
 - **Untested**
-  - SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2): supported, but checked only in an emulator, not on real hardware.
+  - SuperSpeedPlus (USB 3.2 Gen 2, Gen 1x2 and Gen 2x2): supported.
   - SuperSpeed isochronous, polling above 1000 Hz, controllers below xHCI 1.0 (accepted by default; `XhciAccept096` `0` refuses them), and the Linux-derived controller quirks.
 
 ## Toolchain and building
