@@ -221,6 +221,10 @@
 #define TBT_PDF_NOTIFY              0x3UL   /* Notification Packet */
 #define TBT_PDF_NOTIFY_ACK          0x4UL
 #define TBT_PDF_HOTPLUG             0x5UL
+/* Inter-Domain Request and Response (Spec 6.4.2.11 and 6.4.2.12; IDS
+ * Table 2-1), task 45.59. */
+#define TBT_PDF_XDOMAIN_REQ         0x6UL
+#define TBT_PDF_XDOMAIN_RESP        0x7UL
 /* ICM frames on ring 0, ICM 2.4 and 3 [inf] (observed by name as ICM_EVENT,
  * ICM_CMD and ICM_RESP in the trace, ICM 3 [obs]). */
 #define TBT_PDF_ICM_EVENT           0xAUL

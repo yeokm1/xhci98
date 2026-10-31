@@ -1350,9 +1350,87 @@ static void test_u4_safe_point_and_routes(void)
 /* Each vector named in the request trace (tbt_fake.h, task 44.38). */
 #define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
 
+/* Task 45.59 step S2 (design record 35 section 3.2): an intact
+ * inter-domain packet goes to the XDomain sink before any reader acts on
+ * it - the receive call and a control read's wait alike - and a reader
+ * sees it as nothing; with no sink it is delivered as before; a bad
+ * trailer drops it as any control packet. */
+static ULONG g_sinkCount;
+static ULONG g_sinkPdf;
+static ULONG g_sinkWord;
+
+static void onSink(PVOID context, const TBT_FRAME *f)
+{
+    (void)context;
+    g_sinkCount++;
+    g_sinkPdf = f->Pdf;
+    g_sinkWord = f->Words > 7 ? f->Dw[7] : 0xFFFFFFFFUL;
+}
+
+static void test_xdomain_sink(void)
+{
+    ULONG dw[8];
+    TBT_FRAME f;
+    TBT_ROUTE root = { 0, 0 };
+    ULONG out[2];
+    ULONG i;
+
+    for (i = 0; i < 8; i++) {
+        dw[i] = 0;
+    }
+    dw[1] = 1;
+    dw[2] = 5;              /* Data Size 5 */
+    dw[7] = 12;             /* a UUID Request's type */
+
+    fakeReset();
+    CHECK_EQ(startRing(0), TBT_OK, "start");
+    TbtRingSetXdomainSink(&g_ring, onSink, NULL);
+    g_sinkCount = 0;
+    fakeQueue(6, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(g_sinkCount, 1UL, "to the sink");
+    CHECK_EQ(g_sinkPdf, 6UL, "PDF 6");
+    CHECK_EQ(g_sinkWord, 12UL, "its words");
+    CHECK_EQ(f.Words, 0UL, "the reader sees nothing");
+    CHECK((f.Flags & TBT_FRAME_DIVERTED) != 0, "marked diverted");
+    CHECK_EQ(g_ring.Counters.Xdomain, 1UL, "counted");
+
+    fakeQueue(7, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "PDF 7 taken");
+    CHECK_EQ(g_sinkCount, 2UL, "to the sink too");
+
+    fakeQueue(6, dw, 8, 0, FAKE_FLAG_BAD_CRC);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "bad trailer taken");
+    CHECK_EQ(g_sinkCount, 2UL, "not to the sink");
+    CHECK_EQ(f.Words, 0UL, "dropped as a control packet");
+
+    TbtRingSetXdomainSink(&g_ring, NULL, NULL);
+    fakeQueue(6, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "with no sink");
+    CHECK_EQ(f.Words, 8UL, "delivered to the reader");
+    CHECK_EQ(g_ring.Counters.XdomainUnclaimed, 1UL, "counted unclaimed");
+
+    /* Inside a control read's wait: the sink, not the unsolicited
+     * receiver, and the read completes. */
+    readSetup(0);
+    TbtRingSetXdomainSink(&g_ring, onSink, NULL);
+    g_sinkCount = 0;
+    g_answerDelayUs = 200;
+    fakeQueue(7, dw, 8, 50, 0);
+    CHECK_EQ(TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 5, 0, 2, out, 100, 0),
+             TBT_OK, "the read completes");
+    CHECK_EQ(g_sinkCount, 1UL, "the packet reached the sink during the wait");
+    CHECK_EQ(g_unsolicited, 0, "not the unsolicited receiver");
+}
+
 int main(void)
 {
     RUN_VEC(test_crc_vectors);
+    test_xdomain_sink();
     RUN_VEC(test_start);
     RUN_VEC(test_start_refusals);
     RUN_VEC(test_rx_index_kept);

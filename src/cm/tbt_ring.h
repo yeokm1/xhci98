@@ -171,6 +171,9 @@ typedef struct _TBT_HOST {
 #define TBT_FRAME_CRC_BAD       0x00000001UL    /* the trailer did not match */
 #define TBT_FRAME_OVERFLOW      0x00000002UL    /* BO set, or a length past the buffer */
 #define TBT_FRAME_MALFORMED     0x00000004UL    /* shorter than 8 bytes or not whole DWs */
+/* An inter-domain packet (PDF 6 or 7) taken by the XDomain sink
+ * (TbtRingSetXdomainSink): Words is 0, so no other reader acts on it. */
+#define TBT_FRAME_DIVERTED      0x00000008UL
 
 typedef struct _TBT_FRAME {
     ULONG Pdf;          /* EOF PDF of the RX descriptor */
@@ -185,6 +188,14 @@ typedef struct _TBT_FRAME {
  * transport's (TbtCtlInit) sends acknowledgements, which are not requests
  * (Guide 4.2 limits outstanding requests, not acknowledgements). */
 typedef VOID (*TBT_UNSOLICITED)(PVOID context, const TBT_FRAME *frame);
+
+/* Called with every intact inter-domain packet (PDF 6 or 7, its trailer
+ * good) that TbtRingReceive takes, whoever is reading the ring at the
+ * time - a control transfer's busy-poll, the ICM client's wait, the idle
+ * drain - before that reader sees it (design record 35 section 3.2, task
+ * 45.59 step S2). It must not send on the ring: it records, and the
+ * connection-manager thread answers once the reader is done. */
+typedef VOID (*TBT_XDOMAIN_SINK)(PVOID context, const TBT_FRAME *frame);
 
 /* ---------------------------------------------------------------------- */
 /* The ring                                                               */
@@ -210,12 +221,16 @@ typedef struct _TBT_RING_COUNTERS {
     ULONG OtherRingsEnabled;/* takeover: rings 1 and up read enabled, left alone */
     ULONG StopUnverified;   /* a stop whose read-back did not show both
                                controls disabled: DmaMayRun kept */
+    ULONG Xdomain;          /* inter-domain packets handed to the sink */
+    ULONG XdomainUnclaimed; /* inter-domain packets with no sink set */
 } TBT_RING_COUNTERS;
 
 typedef struct _TBT_RING {
     const TBT_HOST *Host;
     TBT_UNSOLICITED Unsolicited;
     PVOID UnsolicitedContext;
+    TBT_XDOMAIN_SINK XdomainSink;
+    PVOID XdomainContext;
 
     volatile UCHAR *Va;     /* the common buffer, TBT_RING_DMA_BYTES_N(Entries) */
     ULONG Phys;             /* its bus address, below 4 GB */
@@ -373,6 +388,10 @@ BOOLEAN TbtRingIntact(PTBT_RING ring);
 
 /* The receiver of frames a control transfer does not want. */
 VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context);
+/* Install (or, with NULL, remove) the XDomain sink. With none set an
+ * inter-domain packet is delivered as before, to whoever reads it, which
+ * treats it as a stray. */
+VOID TbtRingSetXdomainSink(PTBT_RING ring, TBT_XDOMAIN_SINK fn, PVOID context);
 
 /*
  * Post one buffer of `words` DWs with PDF `pdf`, its CRC-32C trailer

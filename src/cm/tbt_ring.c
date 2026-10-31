@@ -380,6 +380,12 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context)
     ring->UnsolicitedContext = context;
 }
 
+VOID TbtRingSetXdomainSink(PTBT_RING ring, TBT_XDOMAIN_SINK fn, PVOID context)
+{
+    ring->XdomainSink = fn;
+    ring->XdomainContext = context;
+}
+
 /*
  * Record 22 section 4.4 step 2: ring 0 disabled whatever state a
  * predecessor left it in, before any descriptor address is written, then
@@ -829,6 +835,23 @@ BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame)
         }
     }
 
+    /* An inter-domain packet goes to its sink before any reader sees it
+     * (record 35 section 3.2): whoever is draining, the packet reaches
+     * the discovery engine, and the reader gets Words 0, which every
+     * reader already treats as nothing to act on. */
+    if (frame->Words != 0 &&
+        (frame->Pdf == TBT_PDF_XDOMAIN_REQ ||
+         frame->Pdf == TBT_PDF_XDOMAIN_RESP)) {
+        if (ring->XdomainSink != NULL) {
+            ring->Counters.Xdomain++;
+            ring->XdomainSink(ring->XdomainContext, frame);
+            frame->Words = 0;
+            frame->Flags |= TBT_FRAME_DIVERTED;
+        } else {
+            ring->Counters.XdomainUnclaimed++;
+        }
+    }
+
     /* Give the descriptor back: the Consumer Index names the one just
      * taken, which leaves exactly one vacant (Spec 12.4.2.2, Table 12-24). */
     tbtRxPost(ring, i);
@@ -865,6 +888,9 @@ static ULONG tbtReqDw3(ULONG address, ULONG count, ULONG adapter, ULONG cs,
 
 static VOID tbtHandOff(PTBT_RING ring, const TBT_FRAME *f)
 {
+    if ((f->Flags & TBT_FRAME_DIVERTED) != 0) {
+        return;     /* the XDomain sink's already */
+    }
     ring->Counters.Unsolicited++;
     if (ring->Unsolicited != NULL) {
         ring->Unsolicited(ring->UnsolicitedContext, f);
