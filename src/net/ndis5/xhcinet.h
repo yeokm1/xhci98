@@ -4,7 +4,7 @@
  * adapter per NHI, above xhcicm.sys's network PDO XHCICM\TBNET,
  * deserialized, with a WDM lower edge (NDIS_WDM) and no hardware of its
  * own: every frame goes through the connection manager's interface
- * (net_cm.h, record 35 section 6.3), framed by the pure core
+ * (src\xhci_cmnet.h, record 35 section 6.3), framed by the pure core
  * (..\net_frame.c).
  *
  * The x86 image is NDIS 5.0 (98 SE to 7), the x64 one NDIS 5.1 (XP x64
@@ -16,7 +16,9 @@
 
 #include <ndis.h>
 #include "..\net_frame.h"
-#include "..\net_cm.h"
+#include "..\..\xhci_cmnet.h"
+
+typedef XHCI_CM_NET_INFO NET_CM_INFO, *PNET_CM_INFO;
 
 #define NET_TAG                 'tNhX'
 
@@ -44,7 +46,7 @@ typedef struct _NET_ADAPTER {
     PDEVICE_OBJECT Lower;
 
     /* The connection manager's interface (n5_cm.c). */
-    NET_CM_INTERFACE Cm;
+    XHCI_CM_NET_INTERFACE Cm;
     ULONG CmHeld;           /* the interface is referenced                */
     ULONG CmOpen;           /* between a successful Open and its Close    */
 
@@ -122,6 +124,12 @@ VOID NetCmRelease(PNET_ADAPTER a);                /* PASSIVE */
 NDIS_STATUS NetCmOpen(PNET_ADAPTER a);            /* PASSIVE */
 VOID NetCmClose(PNET_ADAPTER a);                  /* PASSIVE */
 VOID NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i);  /* <= DISPATCH */
+ULONG NetCmRateMbps(const NET_CM_INFO *i);        /* any */
+ULONG NetCmReserve(PNET_ADAPTER a, ULONG count, PUCHAR *bufs,
+                   PXHCI_CM_NET_TOKEN token);     /* <= DISPATCH */
+ULONG NetCmCommit(PNET_ADAPTER a, const XHCI_CM_NET_TOKEN *token,
+                  ULONG count, const ULONG *lens); /* <= DISPATCH */
+VOID NetCmAbort(PNET_ADAPTER a, const XHCI_CM_NET_TOKEN *token);
 VOID NetCmLog(PNET_ADAPTER a, const char *label, ULONG value);
 
 /* n5_data.c - the data path. */
@@ -130,10 +138,10 @@ VOID NetReturnPacket(NDIS_HANDLE ctx, PNDIS_PACKET packet);
 NDIS_STATUS NetReset(PBOOLEAN addressingReset, NDIS_HANDLE ctx);
 VOID NetServe(PNET_ADAPTER a);                    /* <= DISPATCH */
 VOID NetFlushSends(PNET_ADAPTER a, NDIS_STATUS status);
-VOID NetCbLinkChange(PVOID ctx, ULONG up);        /* PASSIVE */
-VOID NetCbReceive(PVOID ctx, const UCHAR *frame, ULONG length,
-                  ULONG flags);                   /* DISPATCH */
-VOID NetCbTxDone(PVOID ctx, ULONG count);         /* DISPATCH */
+VOID NTAPI NetCbLinkChange(PVOID ctx, BOOLEAN up);           /* PASSIVE */
+VOID NTAPI NetCbReceive(PVOID ctx, const VOID *frame, ULONG length,
+                        ULONG flags);                        /* DISPATCH */
+VOID NTAPI NetCbTxDone(PVOID ctx, ULONG count);              /* DISPATCH */
 NDIS_STATUS NetRxAlloc(PNET_ADAPTER a);           /* PASSIVE */
 VOID NetRxFree(PNET_ADAPTER a);                   /* PASSIVE */
 

@@ -435,11 +435,10 @@ The step that closes every PCI-to-PCI bridge's prefetchable window lying wholly 
 | File | What it is |
 |---|---|
 | `net_frame.c` / `net_frame.h` | The pure USB4NET framing core (record 35 sections 7.2 to 7.4): the transmit split into 4084-byte USB4 frames and their 12-byte header, the Frame ID rule, the receive checks and reassembly, and the receive segmentation of a TCP segment longer than the adapter's maximum over IPv4 and IPv6. DDK-free; host suite `test_net_frame`. |
-| `net_cm.h` | The network driver's view of the interface `xhcicm.sys` gives the network PDO (record 35 section 6.3), until `src\xhci_cmnet.h` (step S5) is in the tree; only `ndis5\n5_cm.c` includes it. |
 | `ndis5\xhcinet.h` | The adapter's state and the miniport's cross-file entry points. |
 | `ndis5\n5_main.c` | `DriverEntry`, the initialisation (`XhciNetMtu`, the interface, the receive pool, the power thread) and the halt, the OIDs, the power OIDs' thread and, on amd64, the shutdown and PnP event handlers. |
 | `ndis5\n5_data.c` | The data path: the send queue served by one sender at a time, the reset, the receive callback's reassembly, segmentation and indication, and the link. |
-| `ndis5\n5_cm.c` | The interface glue: `IRP_MN_QUERY_INTERFACE` to the device object below, `Open`, `Close`, `QueryInfo`, `Log`. |
+| `ndis5\n5_cm.c` | The interface glue, the one file that calls `src\xhci_cmnet.h`s table: `IRP_MN_QUERY_INTERFACE` to the device object below, `Open`, `Close`, `QueryInfo`, `Log`. |
 | `ndis5\sources`, `makefile`, `xhcinet.rc` | The build and the version resource. |
 | `xhcinet.inf` / `xhcinet-amd64.inf` | The INFs (record 35 section 8.2), gated by `scripts\inf-gate\check-net-inf.ps1`. |
 

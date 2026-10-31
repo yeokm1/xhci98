@@ -137,6 +137,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
 {
     PUCHAR bufs[NET_FRAMES_MAX];
     ULONG lens[NET_FRAMES_MAX];
+    XHCI_CM_NET_TOKEN token;
     PNDIS_BUFFER b;
     PVOID va;
     UINT total;
@@ -144,7 +145,6 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
     ULONG m;
     ULONG k;
     ULONG id;
-    ULONG token;
     ULONG why;
     ULONG left;
     ULONG take;
@@ -162,7 +162,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
         }
         return NET_FAILED;
     }
-    if (!a->Cm.TxReserve(a->Cm.Header.Context, m, bufs, &token)) {
+    if (!NetCmReserve(a, m, bufs, &token)) {
         return NET_FULL;
     }
     id = NetTxPacketId(&a->Tx, stns);
@@ -176,7 +176,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
         while (left != 0) {
             while (have == 0) {
                 if (b == NULL) {
-                    a->Cm.TxAbort(a->Cm.Header.Context, token);
+                    NetCmAbort(a, &token);
                     a->TxErrors++;
                     return NET_FAILED;
                 }
@@ -196,7 +196,7 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
             left -= take;
         }
     }
-    if (!a->Cm.TxCommit(a->Cm.Header.Context, token, m, lens)) {
+    if (!NetCmCommit(a, &token, m, lens)) {
         a->TxErrors++;
         return NET_FAILED;
     }
@@ -362,7 +362,7 @@ NDIS_STATUS NetReset(PBOOLEAN addressingReset, NDIS_HANDLE ctx)
 }
 
 /* The connection manager's TxDone. IRQL: DISPATCH_LEVEL. */
-VOID NetCbTxDone(PVOID ctx, ULONG count)
+VOID NTAPI NetCbTxDone(PVOID ctx, ULONG count)
 {
     UNREFERENCED_PARAMETER(count);
     NetServe((PNET_ADAPTER)ctx);
@@ -581,7 +581,8 @@ static VOID netDeliver(PNET_ADAPTER a, const UCHAR *pkt, ULONG len)
 
 /* The connection manager's Receive: one USB4 frame, valid until this
  * returns. IRQL: DISPATCH_LEVEL, one at a time. */
-VOID NetCbReceive(PVOID ctx, const UCHAR *frame, ULONG length, ULONG flags)
+VOID NTAPI NetCbReceive(PVOID ctx, const VOID *frame, ULONG length,
+                        ULONG flags)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     const UCHAR *pkt;
@@ -597,7 +598,10 @@ VOID NetCbReceive(PVOID ctx, const UCHAR *frame, ULONG length, ULONG flags)
         a->RxNotUp++;
         return;
     }
-    if (NetRxFrame(&a->Rx, frame, length, flags, &pkt, &len, &why) ==
+    /* XHCI_CM_NET_RX_CRC_ERROR and _OVERFLOW are the core's bits. */
+    if (NetRxFrame(&a->Rx, (const UCHAR *)frame, length,
+                   flags & (NET_RXF_CRC_ERROR | NET_RXF_OVERFLOW), &pkt,
+                   &len, &why) ==
         NET_RX_PACKET) {
         netDeliver(a, pkt, len);
     }
@@ -609,7 +613,7 @@ VOID NetCbReceive(PVOID ctx, const UCHAR *frame, ULONG length, ULONG flags)
 
 /* The connection manager's LinkChange (section 7.6). IRQL: PASSIVE_LEVEL,
  * on the connection manager's thread. */
-VOID NetCbLinkChange(PVOID ctx, ULONG up)
+VOID NTAPI NetCbLinkChange(PVOID ctx, BOOLEAN up)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     NET_CM_INFO info;
@@ -617,12 +621,12 @@ VOID NetCbLinkChange(PVOID ctx, ULONG up)
     NetCmQuery(a, &info);
     NdisAcquireSpinLock(&a->TxLock);
     a->LinkGen++;
-    a->PeerStns = info.PeerStns;
-    a->RateMbps = info.RateMbps;
+    a->PeerStns = info.PeerPrtcstns;
+    a->RateMbps = NetCmRateMbps(&info);
     a->LinkUp = up ? 1UL : 0UL;
     a->BigLogged = 0;
     NdisReleaseSpinLock(&a->TxLock);
-    NetCmLog(a, up ? "net.link.up" : "net.link.down", info.PeerStns);
+    NetCmLog(a, up ? "net.link.up" : "net.link.down", info.PeerPrtcstns);
     if (!up) {
         NetServe(a);
     }
