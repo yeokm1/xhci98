@@ -172,9 +172,10 @@ function Get-CmPublishable {
 $script:FamilyNames = @("98-me", "nt-x86", "nt-x64")
 $script:FamilyArch = @{ "98-me" = "x86"; "nt-x86" = "x86"; "nt-x64" = "amd64" }
 $script:FamilyFlatDir = @{ "x86" = "release-x86"; "amd64" = "release-x64" }
-# cm\tbnet\ (task 45.59 step S10, record 36 section 9): a place with no
-# files until S10 lists them, so no file may sit there yet.
-$script:FamilyTbnetDir = "cm\tbnet"
+# cm\tbnet\ (task 45.59 step S10, record 36 section 9, record 35 section
+# 9.5): Thunderbolt networking's INF and images, apart from xhcicm's, so an
+# integration leaves it out by one folder. 98-me\ carries no xhcinet6.sys:
+# 98 SE and ME install xhcinet.sys alone ([Net.CopyFiles9x]).
 $script:FamilyLayout = @{
     "x86" = [ordered]@{
         "xhci98.inf"         = @("98-me\xhci98.inf", "nt-x86\xhci98.inf")
@@ -197,6 +198,9 @@ $script:FamilyLayout = @{
         "stor98-readme.txt"  = @("98-me\stor98\stor98-readme.txt", "nt-x86\stor98\stor98-readme.txt")
         "stor98-LICENSE.txt" = @("98-me\stor98\stor98-LICENSE.txt", "nt-x86\stor98\stor98-LICENSE.txt")
         "stor98-NOTICE.txt"  = @("98-me\stor98\stor98-NOTICE.txt", "nt-x86\stor98\stor98-NOTICE.txt")
+        "xhcinet.inf"        = @("98-me\cm\tbnet\xhcinet.inf", "nt-x86\cm\tbnet\xhcinet.inf")
+        "xhcinet.sys"        = @("98-me\cm\tbnet\xhcinet.sys", "nt-x86\cm\tbnet\xhcinet.sys")
+        "xhcinet6.sys"       = @("nt-x86\cm\tbnet\xhcinet6.sys")
     }
     "amd64" = [ordered]@{
         "xhci98.inf"         = @("nt-x64\xhci98.inf")
@@ -218,6 +222,10 @@ $script:FamilyLayout = @{
         "stor98-readme.txt"  = @("nt-x64\stor98\stor98-readme.txt")
         "stor98-LICENSE.txt" = @("nt-x64\stor98\stor98-LICENSE.txt")
         "stor98-NOTICE.txt"  = @("nt-x64\stor98\stor98-NOTICE.txt")
+        "xhcinet.inf"        = @("nt-x64\cm\tbnet\xhcinet.inf")
+        "xhcinet.cat"        = @("nt-x64\cm\tbnet\xhcinet.cat")
+        "xhcinet.sys"        = @("nt-x64\cm\tbnet\xhcinet.sys")
+        "xhcinet6.sys"       = @("nt-x64\cm\tbnet\xhcinet6.sys")
     }
 }
 # The flat file with no place, and where the flat view takes it from.
@@ -380,9 +388,9 @@ function Test-FamilyLayout {
     # $Root are this layout, else every fault, one a line. Every file where
     # the table puts it and nothing else; no nt\, xhcicmf.inf or
     # stor98w9.inf; 98-me\ and nt-x86\ together; a file two families carry
-    # in both and the same bytes; cm\tbnet\ holding no file until S10 lists
-    # its files; and each INF's [SourceDisksFiles] beside it, filtered by the
-    # family: a name the family carries nowhere (xhcihlpr.sys in 98-me\,
+    # in both and the same bytes; and each INF's [SourceDisksFiles] beside it,
+    # filtered by the family: a name the family carries nowhere
+    # (xhcihlpr.sys and xhcinet6.sys in 98-me\,
     # section 3.1) skipped, every other required in the INF's folder.
     param([string]$Root)
     $faults = @()
@@ -405,7 +413,6 @@ function Test-FamilyLayout {
             $here[$leaf.ToLowerInvariant()] = 1
             if ($leaf -ieq "xhcicmf.inf") { $faults += "PKG-FAMILY: $fam\$rel is named xhcicmf.inf; the filter ships as cm\xhcicmf.inx (section 3.2)" }
             elseif ($leaf -ieq "stor98w9.inf") { $faults += "PKG-FAMILY: $fam\$rel is named stor98w9.inf; the 9x Stor98 INF ships as 98-me\stor98\stor98.inf (section 3.4)" }
-            elseif ($rel.ToLowerInvariant().StartsWith($script:FamilyTbnetDir.ToLowerInvariant() + "\")) { $faults += "PKG-FAMILY: $fam\$rel is in $($script:FamilyTbnetDir)\, which holds no file until task 45.59 lists them (section 9)" }
             elseif (-not $placeMap.ContainsKey(("$fam\$rel").ToLowerInvariant())) { $faults += "PKG-FAMILY: $fam\$rel is not a file of $fam\ (section 2)" }
         }
         foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir | Where-Object { $_ -match '\.(inf|inx)$' })) {
@@ -491,8 +498,9 @@ WHICH FOLDER
 
 Each folder holds the drivers its Windows installs: the USB controller and
 UAS drivers at its root, the Thunderbolt 3 / USB4 connection manager in
-cm\, and Stor98, the driver for NVMe drives behind a Thunderbolt or USB4
-port, in stor98\.
+cm\, Thunderbolt networking (a network connection to another computer
+over a Thunderbolt or USB4 cable) in cm\tbnet\, and Stor98, the driver for
+NVMe drives behind a Thunderbolt or USB4 port, in stor98\.
 
 NLITE, NTLITE AND DISM
 
@@ -505,8 +513,9 @@ Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
 The 64-bit drivers carry this project's test signature, which Vista x64 to
 10 x64 load only in test-signing mode (readme.txt, section 2).
 
-Leave cm\ out to leave out the Thunderbolt 3 / USB4 connection manager,
-and stor98\ to leave out Stor98.
+Leave cm\ out to leave out the Thunderbolt 3 / USB4 connection manager
+and Thunderbolt networking, cm\tbnet\ alone to leave out Thunderbolt
+networking, and stor98\ to leave out Stor98.
 
 cm\xhcicmf.inx is the connection manager's filter for Thunderbolt and USB4
 PCIe ports. It is not for integration and is not named .inf on purpose:
@@ -531,6 +540,8 @@ integration leaves out:
   - the connection manager's tunnel-port filter, and the start type of
     the connection manager put back;
   - the safe-removal mark service for Thunderbolt and USB4 devices;
+  - Thunderbolt networking turned on, when its box is ticked: it stays off
+    until then;
   - the xHCI98 USB Tree (XHCITR) with its icon by the clock, the entry in
     Add/Remove Programs, and the settings it asks for.
 '@
@@ -981,6 +992,7 @@ $script:PackageCatalogs = [ordered]@{
     "xhcicm.cat"  = @{ Inf = "xhcicm.inf";  Files = @("xhcicm.inf", "xhcicm.sys") }
     "xhcicmf.cat" = @{ Inf = "xhcicmf.inf"; Files = @("xhcicmf.inf", "xhcicm.sys") }
     "stor98.cat"  = @{ Inf = "stor98.inf";  Files = @("stor98.inf", "stor98.sys") }
+    "xhcinet.cat" = @{ Inf = "xhcinet.inf"; Files = @("xhcinet.inf", "xhcinet.sys", "xhcinet6.sys") }
 }
 # The systems the catalogs are made for, as the catalog's OSAttr attribute
 # (major version 2 = NT; 5.2 XP x64 and Server 2003 x64, 6.0 Vista, 6.1 7,
@@ -2355,6 +2367,11 @@ $script:BuildInputPrefixes = @(
     "src\stor98\tests\",
     "src\stor98\third_party\"
 )
+# xhcinet.sys and xhcinet6.sys (record 35 section 9.5) have no source stamp
+# of their own: their three directories are build-input directories whole,
+# so every build-kind file there counts (their INFs, read again by every
+# staging's gate, do not).
+$script:BuildInputDirs = @("src\net", "src\net\ndis5", "src\net\ndis6")
 $script:BuildInputScripts = @(
     "scripts\build-driver.cmd",
     "scripts\build-steps.ps1",
@@ -2384,6 +2401,7 @@ function Get-BuildInputRules {
             [void]$dirs.Add((Split-Path -Parent ([string]$p)))
         }
     }
+    foreach ($d in $script:BuildInputDirs) { [void]$dirs.Add($d) }
     $root = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\') + '\'
     $hostSuite = Join-Path $Repo "test\run-host-tests.cmd"
     # The host suite's files by name, then every quoted #include of them
@@ -2508,7 +2526,8 @@ function Get-GatedImportDirs {
     # reads, relative to a tree's root.
     param([string]$Flavor)
     $obj = $script:ImportObjDirs[$Flavor]
-    return @(("src\{0}\amd64" -f $obj), ("src\uas\{0}\amd64" -f $obj), ("src\cm\{0}\amd64" -f $obj))
+    return @(("src\{0}\amd64" -f $obj), ("src\uas\{0}\amd64" -f $obj), ("src\cm\{0}\amd64" -f $obj),
+             ("src\net\ndis5\{0}\amd64" -f $obj), ("src\net\ndis6\{0}\amd64" -f $obj))
 }
 
 function Get-GatedImportBinaries {
@@ -2521,6 +2540,9 @@ function Get-GatedImportBinaries {
         "xhciuas.sys" = (Join-Path $Root ("src\uas\{0}\amd64\xhciuas.sys" -f $obj))
         "xhcicm.sys"  = (Join-Path $Root ("src\cm\{0}\amd64\xhcicm.sys" -f $obj))
         "stor98.sys"  = (Join-Path $Root ($script:ImportStor98Dir + "\stor98.sys"))
+        # Thunderbolt networking's two images (record 35 section 9.5).
+        "xhcinet.sys"  = (Join-Path $Root ("src\net\ndis5\{0}\amd64\xhcinet.sys" -f $obj))
+        "xhcinet6.sys" = (Join-Path $Root ("src\net\ndis6\{0}\amd64\xhcinet6.sys" -f $obj))
     }
 }
 

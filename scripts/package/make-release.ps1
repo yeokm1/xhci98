@@ -893,6 +893,15 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
 
+# Thunderbolt networking (roadmap-usb4.md task 45.59, design record 35
+# section 9.5): its INF and its two images, at the flat leg's root, re-laid
+# into each family's cm\tbnet\ (98-me\ without xhcinet6.sys). Its own INF
+# declares them, its own gate (scripts\inf-gate\check-net-inf.ps1) holds the
+# INF, and each image is held to the refusals xhcicm.sys is
+# (Assert-NetPublished). A version published before 3.4.0.0 has none, so
+# -UploadSetOnly does not require them.
+$netPublishable = @("xhcinet.inf", "xhcinet.sys", "xhcinet6.sys")
+
 # The port switchover's user script (roadmap-hcd task 36.42) and its two
 # batch files (task 36.56), which set 1 or 0 through it in one double-click.
 # Not INF-declared files: text files the user runs, the same for every
@@ -2138,6 +2147,68 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
+function Assert-NetPublished {
+    # xhcinet.sys and xhcinet6.sys, Thunderbolt networking's two images
+    # (roadmap-usb4.md task 45.59, design record 35 section 9.5), held to the
+    # refusals Assert-CmPublished makes of xhcicm.sys: the release
+    # FileVersion, VS_FF_DEBUG, the flavour marker and the staged bytes being
+    # the built ones (signed, on a signed leg). They have no source stamp of
+    # their own: src\net\'s three directories are build inputs of the gated
+    # record whole (package-common.ps1's BuildInputDirs), each build is held
+    # newer than every source it is made of, and the cut's packaging
+    # runs their gates again.
+    param([string]$Dir, [object]$Leg, [string]$Flavor, [string]$Version, [hashtable]$Built, [switch]$Signed)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    foreach ($name in @("xhcinet.sys", "xhcinet6.sys")) {
+        # -Dir "": a -CheckOnly run, whose images are the builds themselves.
+        $sys = if ($Dir -eq "") { $Built[$name] } else { Join-Path $Dir $name }
+        if (-not (Test-Path -LiteralPath $sys)) {
+            throw "the $($Leg.Id) leg has no $name to publish. Rebuild: $rebuild"
+        }
+        $info = (Get-Item -LiteralPath $sys).VersionInfo
+        if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+            Stop-CutCheck "the $name for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        }
+        if ($info.IsDebug) {
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ has VS_FF_DEBUG set; that is the wrong obj directory. Rebuild: $rebuild"
+        }
+        $marker = Get-ImageFlavourMarker -Path $sys
+        if ($marker -ne $Flavor) {
+            $found = if ($marker -eq "") { "none" } else { $marker }
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
+        }
+        $builtSys = $Built[$name]
+        if (-not (Test-Path -LiteralPath $builtSys)) {
+            throw "the $($Leg.Id) $name about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\net. Rebuild: $rebuild"
+        }
+        # No source stamp: the build is held newer than every source it is
+        # made of, as XHCIPFW.SYS is - src\net's three directories and the
+        # headers they include from src\ (xhci_cmnet.h, xhci_compat.h,
+        # xhci_version.h).
+        $netInputs = @()
+        foreach ($d in @("src\net", "src\net\ndis5", "src\net\ndis6")) {
+            $netInputs += @(Get-ChildItem -LiteralPath (Join-Path $repo $d) -File |
+                Where-Object { @(".c", ".h", ".rc") -contains $_.Extension.ToLowerInvariant() -or @("sources", "makefile") -contains $_.Name.ToLowerInvariant() })
+        }
+        foreach ($h in @("src\xhci_cmnet.h", "src\xhci_compat.h", "src\xhci_version.h")) {
+            if (Test-Path -LiteralPath (Join-Path $repo $h)) { $netInputs += Get-Item -LiteralPath (Join-Path $repo $h) }
+        }
+        $builtTime = (Get-Item -LiteralPath $builtSys).LastWriteTimeUtc
+        $netNewer = @($netInputs | Where-Object { $_.LastWriteTimeUtc -gt $builtTime })
+        if ($netNewer.Count -gt 0) {
+            Stop-CutCheck ("the {0} at {1} is older than {2}: rebuild it ({3})." -f $name, $builtSys, (($netNewer | ForEach-Object { $_.Name }) -join ", "), $rebuild)
+        }
+        if ($Signed) {
+            Assert-TestSigned -Sys $sys -BuiltSys $builtSys -Label "$($Leg.Dir)\$name"
+        } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash) {
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ is not the one in $builtSys. Rebuild: $rebuild"
+        }
+    }
+    Write-Ok "$($Leg.Id) Thunderbolt networking images are the builds in src\net"
+}
+
 function Assert-HelperPublished {
     # xhcihlpr.sys, the x86 helper (design record 18; tasks 36.15 and 38.3),
     # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
@@ -2591,7 +2662,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }) + @("XHCIPFW.VXD", "XHCIPFW.SYS"))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $netPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }) + @("XHCIPFW.VXD", "XHCIPFW.SYS"))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2774,6 +2845,40 @@ $gateOut
             } elseif ($null -ne $pkgDir) {
                 throw "the assembled upload set's $f\ directory has no $($cmInf.Name), and this cut built it with one."
             }
+        }
+
+        # Thunderbolt networking (task 45.59, record 35 section 9.5): the INF
+        # and its two images go together, and the INF passes its own gate.
+        # Required of a directory this cut built; gated where present in one
+        # -UploadSetOnly reads, since a version published before 3.4.0.0 has
+        # none.
+        $netHave = @($netPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
+        if ($netHave.Count -ne 0 -and $netHave.Count -ne $netPublishable.Count) {
+            $netMissing = @($netPublishable | Where-Object { $netHave -notcontains $_ })
+            throw "the assembled upload set's $f\ directory carries $($netHave -join ', ') of Thunderbolt networking but not $($netMissing -join ', '): the $($netPublishable.Count) files go together."
+        }
+        if ($netHave.Count -ne 0) {
+            $netGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-net-inf.ps1"
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $netGate,
+                                              "-InfPath", (Join-Path $uploadFlavorDir "xhcinet.inf"),
+                                              "-Arch", $LegArches[$f]) 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-net-inf.ps1.
+Do not upload it: Thunderbolt networking's INF is not the one the build gated.
+
+$gateOut
+"@
+            }
+            Write-Ok ("{0}\ carries Thunderbolt networking, by its own gate" -f $f)
+        } elseif ($null -ne $pkgDir) {
+            throw "the assembled upload set's $f\ directory has no xhcinet.inf, and this cut built it with one."
         }
 
         # The text-mode Setup description, by its own gate against the INF
@@ -3985,7 +4090,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Ensure-Directory $destDir
 
             $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
-            $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
+            $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $netPublishable + $legStor98
             if ($legSigned) {
                 $legCopy += $certPublishable
                 $legCopy += @($catPublishable | Where-Object { $legCopy -contains $script:PackageCatalogs[$_].Inf })
@@ -4016,7 +4121,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                                -PublishedPaths $declaredPublished[$leg.Arch] `
                                                -InfName "xhci98.inf" -Flavor $leg.Id `
-                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
+                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $netPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
             Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
             # The published Stor98 images carry this release's version, like
             # xhci98.sys below (task 42-A.30).
@@ -4255,6 +4360,14 @@ invalidate readings already taken on these exact bytes - say so:
                            -ObjRoot (Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                            -Signed:$legSigned
 
+        # Thunderbolt networking's two images, held the same way (task 45.59).
+        $netBuilt = @{
+            "xhcinet.sys"  = (Join-Path $repo ("src\net\ndis5\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhcinet.sys"))
+            "xhcinet6.sys" = (Join-Path $repo ("src\net\ndis6\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhcinet6.sys"))
+        }
+        Assert-NetPublished -Dir $(if ($null -eq $pkgDir) { "" } else { Split-Path -Parent $sys }) -Leg $leg -Flavor $f -Version $Version -Built $netBuilt `
+                            -Signed:$legSigned
+
         # The x86 helper, where this leg's INF declares it (design record
         # 18), held to the same refusals; and the 2.3.x helper's name never
         # published (section 15.11).
@@ -4266,7 +4379,9 @@ invalidate readings already taken on these exact bytes - say so:
             throw "the $($leg.Id) leg holds $retiredHelper, the 2.3.x helper this release retires (design record 18 section 15.11). Rebuild the package: scripts\package\make-package.ps1 -Flavor $f"
         }
         if ($CheckOnly) {
-            $gatedBins = @{ "xhci98.sys" = $sys; "xhciuas.sys" = $uasSys; "xhcicm.sys" = $cmSys }
+            $gatedBins = @{ "xhci98.sys" = $sys; "xhciuas.sys" = $uasSys; "xhcicm.sys" = $cmSys;
+                            "xhcinet.sys" = $netBuilt["xhcinet.sys"];
+                            "xhcinet6.sys" = $netBuilt["xhcinet6.sys"] }
             if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") { $gatedBins["xhcihlpr.sys"] = $hlprSys }
             if ($null -ne $stor98 -and $f -eq "release") {
                 foreach ($nf in @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch)) {
@@ -4877,6 +4992,10 @@ helper (xhciinst\di\build.cmd).
             }
             if ($fam -ne "nt-x64") {
                 $contents += ("      CM\{0} (which SETUP.EXE places)" -f $(if ($fam -eq "98-me") { "XHCIPFW.VXD" } else { "XHCIPFW.SYS" }))
+            }
+            $contents += ("      CM\TBNET\    Thunderbolt networking: xhcinet.inf, xhcinet.sys{0}" -f $(if ($fam -eq "98-me") { "" } else { "," }))
+            if ($fam -ne "98-me") {
+                $contents += ("                   xhcinet6.sys (for 8, 8.1 and 10){0}" -f $(if ($fam -eq "nt-x64") { ", xhcinet.cat" } else { "" }))
             }
             if ($null -ne $stor98) {
                 $contents += "      STOR98\      Stor98, the NVMe driver (below)"
