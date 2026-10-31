@@ -1,7 +1,9 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 3, 2026-10-31, the owner's answers of the same day in
-section 15; revision 2, before code, reviewed and revised (the
+Status: revision 4, 2026-10-31, step S0: Linux's `thunderbolt-net` read
+(section 2.4) and the record amended to it (sections 3.2, 4.1, 4.4, 7.2
+to 7.4, receive segmentation). Revision 3, the owner's answers of the
+same day in section 15; revision 2, before code, reviewed and revised (the
 discovery and service, the paths and rings, the interface and the
 network drivers, the INFs, installer, emulator and test plan, each in
 turn), with the owner's `XhciCmNet` gate of 2026-10-31 (section 8.1).
@@ -41,10 +43,11 @@ Tags:
   thunderbolt.rst` as `usb4-emu` carries it (`docs/references/
   linux-thunderbolt/`, its `COMMIT.txt`). Unconfirmed until a capture of
   this project's own shows it.
-- **[tbnet-owed]** a fact that only Linux's `drivers/net/thunderbolt`
-  settles. That driver is **not on hand** (section 2.4); every such point
-  is listed in section 2.4 and closed by step S0 before the code that
-  depends on it.
+- **[tbnet]** Linux's `drivers/net/thunderbolt` at the same pinned
+  commit, fetched by step S0 (section 2.4), read for facts only, cited by
+  file and symbol; nothing adapted. Unconfirmed until a capture of this
+  project's own shows it, as every [linux] fact. Revision 2 marked these
+  points `[tbnet-owed]`; revision 4 settles each.
 - **[emu]** `usb4-emu`, read in place and never modified (`main` at
   `1bfa0bb`; its host-to-host task, written as `9c5e88a` and withdrawn in
   `90aad1c`, read with `git show`).
@@ -369,45 +372,110 @@ receive service touch at DISPATCH_LEVEL under a lock of their own.
   module load on the other host automatically"; one interface per
   Thunderbolt port. The document calls the service "USB4NET".
 
-### 2.4 Linux's `thunderbolt-net`: not on hand, and what is needed from it [tbnet-owed]
+### 2.4 Linux's `thunderbolt-net`, read (step S0) [tbnet]
 
-The pinned mirror (`external/README.md`) holds `drivers/thunderbolt` and
-`include/linux/thunderbolt.h`; it does not hold `drivers/net/thunderbolt/`
-(`main.c`, `trace.c`, `trace.h`, `Kconfig`, `Makefile`), and `usb4-emu`'s
-reference copy holds the same set. Nothing of that driver is quoted or
-paraphrased here. Step S0 fetches it at the same pinned commit
-(`c6859eed`) into `external/linux/net-thunderbolt/` with a row in
-`external/README.md`'s table and its fetch script (the same sparse
-checkout of `torvalds/linux`, `git sparse-checkout set
-drivers/net/thunderbolt`), read for facts only as `drivers/thunderbolt`
-is, and amends this record where the reading differs. What the reading
-must settle, each a point the design below leaves configurable or
-tolerant until then:
+Fetched on 2026-10-31 at the pinned commit (`c6859eed`) into
+`external/linux/net-thunderbolt/` (`external/README.md`, its row and
+fetch lines with each file's SHA-256), and read for facts only:
+`drivers/net/thunderbolt/main.c` is SPDX `GPL-2.0`, so nothing of it is
+adapted, quoted or paraphrased into `src\`; each fact below is cited by
+symbol and tagged **[tbnet]**, and is Linux's behaviour, unconfirmed on
+hardware like every [linux] fact. The eight points revision 2 left open,
+answered:
 
-1. **Login role**: whether it logs in from both sides at once, as IDS
-   5.1.1 reads, and how it handles a crossing login, a repeated one, and
-   a Login Response with a failure status.
-2. **Its `network` directory**: its `prtcstns`, `prtcvers` and `prtcrevs`
-   values, and whether it publishes the directory at load or only on a
-   peer (the documentation's "load on one host triggers the other").
-3. **Frame ID**: whether it increments per USB4 frame, as IDS Table 5-7's
-   text and Figure 5-7 read (section 7.2), or per Ethernet packet; and
-   what its receiver checks among Index, ID and Count.
-4. **The Ethernet frame on the wire**: whether the 4-byte FCS and the
-   padding to 60 bytes that IDS Figure 5-6 draws are sent, and whether
-   its receiver strips four bytes. The receive side below tolerates
-   either for IP and ARP (section 7.2); the transmit side cannot.
-5. **Checksums**: whether it sends complete IP, TCP and UDP checksums
-   (the frame header has no field to say otherwise, so a peer cannot know
-   a checksum was left partial [inf]) and whether its receiver trusts the
-   frame CRC in their place.
-6. **MTU**: its default and its maximum, against section 7.3's chosen
-   transmit limit of 65522 (a whole frame within 64 KiB; IDS 5.1.5.2's 64
-   KB is the payload's limit, not the frame's).
-7. **Its rings**: sizes, end-to-end flow control on or off, and the
-   HopIDs and rings it asks for.
-8. **Its MAC address**: whether it uses IDS 5.1.5.3's algorithm, and
-   whether it reads the Login Response's MAC.
+1. **Login.** Both sides log in: the driver starts its login 1 s after
+   its interface opens; each try waits up to 500 ms for an answer, and an
+   unanswered one is followed by the next 4.5 s later, so tries are about
+   5 s apart, 61 in all (the first and 60 more) (`start_login`,
+   `tbnet_login_work`, `TBNET_LOGIN_DELAY`, `TBNET_LOGIN_TIMEOUT`,
+   `TBNET_LOGIN_RETRIES`). **It sends its Login and Logout requests as
+   PDF 7**, the response PDF, not 6 (`tbnet_login_request`,
+   `tbnet_logout_request` pass `TB_CFG_PKG_XDOMAIN_RESP` as the
+   request's type), and it takes USB4NET packets of either PDF itself
+   (`domain.c` `tb_domain_event_cb` hands both to
+   `tb_xdomain_handle_request`), so a USB4NET packet is classified by its
+   type, never by its PDF (section 3.2). It answers a Login only while
+   its interface is up, and then always with status 0 - it never sends a
+   failure (`tbnet_handle_packet`, `tbnet_login_response`, whose status
+   field stays zero). Every Login it answers overwrites the HopID it
+   records for the peer's transmit path (`remote_transmit_path`), while a
+   Login answered with its carrier already on builds nothing new
+   (`tbnet_connected_work` returns at once): so a repeated Login with a
+   different HopID would leave its paths as they are and its teardown
+   bookkeeping wrong, and this driver never sends one (section 4.1). It
+   accepts a Login only when the packet's first UUID field is the peer's
+   and the second its own, and its route is the peer's
+   (`tbnet_handle_packet`), and it matches its own requests' responses by
+   route and protocol UUID alone (`tb_xdomain_request`, `xdomain.c`
+   `tb_xdomain_match`): neither the type, the request id nor the UUID
+   fields of a response are checked. In every packet it sends, requests
+   and responses alike, the first UUID field is its own and the second the
+   peer's (`tbnet_fill_header` with `local_uuid`, `remote_uuid`). Its
+   Login Response copies the request's id (`tbnet_login_response`); its
+   **Logout Response** is the type it calls `TBIP_STATUS` (3, IDS Table
+   5-4's Logout Response) with status 0 and a **new** id from its own
+   counter, not the request's (`tbnet_logout_response`), and its Logout is
+   sent with SN 0 (`tbnet_logout_request`), resent on timeout ten times
+   1 s apart (`TBNET_LOGOUT_RETRIES`, `TBNET_LOGOUT_TIMEOUT`). On the
+   peer's Logout it answers and tears its service down without a Logout
+   of its own (`tbnet_disconnect_work`, `tbnet_tear_down` with
+   `send_logout` false); it sends one when its own interface stops, the
+   host shuts down or sleeps (`tbnet_stop`, `tbnet_shutdown`,
+   `tbnet_suspend`).
+2. **Its `network` directory**: registered at module load for every
+   XDomain (`tbnet_init`, `tb_register_property_dir`), `prtcid` 1,
+   `prtcvers` 1, `prtcrevs` 1 and `prtcstns` bits 1 and 2 always with bit
+   0 while end-to-end flow control is on (its `e2e` parameter, default
+   on): `0x7` by default (`TBNET_E2E`, `TBNET_MATCH_FRAGS_ID`,
+   `TBNET_64K_FRAMES`). It binds to a peer's service of key `network`
+   with `prtcid` 1 (`tbnet_ids`, `TB_SERVICE("network", 1)`).
+3. **Frame ID is per Ethernet packet**, not per USB4 frame: every frame of
+   one packet carries the same Frame ID, and the counter advances once
+   per packet, and only when the peer's `prtcstns` has bit 1; it starts
+   at 0 and stays 0 towards a peer without bit 1 (`tbnet_start_xmit`,
+   `frame_id`, and the comment on `struct
+   thunderbolt_ip_frame_header`). Its
+   receiver takes a packet's first frame with Index 0 and a Count from 1
+   to `MAX_SKB_FRAGS` + 1, and each later frame only with the same Count,
+   the Index one more and the same Frame ID; a frame whose Frame Size is
+   0 or larger than the data it carries, or that holds no more than the
+   header, is dropped, and so is a frame with CRC Error or Buffer
+   Overflow (`tbnet_check_frame`). IDS Table 5-7's text and Figure 5-7
+   read the other way (section 2.1); this record follows Linux, the peer
+   the roadmap line names.
+4. **The wire carries no FCS and no padding**: the frame's data is the
+   socket buffer from its destination address on (`tbnet_start_xmit`),
+   which holds no FCS and is not padded to 60 bytes, and the receiver
+   hands the data as it came to `eth_type_trans` (`tbnet_poll`). IDS
+   Figure 5-6's "Network CRC" is not sent by Linux.
+5. **Checksums are complete on the wire**: it offers the stack checksum
+   offload and segmentation offload and then computes the IPv4 header,
+   TCP and UDP checksums in software over the frames before posting them
+   (`tbnet_probe`'s features, `tbnet_xmit_csum_and_map`); its receiver
+   leaves the stack to verify them (`tbnet_poll` sets no checksum state).
+6. **MTU and large frames**: its MTU ranges from 68 to 65522
+   (`TBNET_MAX_MTU` 64 KiB less the Ethernet header, `tbnet_probe`), and
+   its default is the Ethernet one, 1500. **It sends TCP segments of up
+   to 64 KiB whatever the peer's MTU**: it offers segmentation offload to
+   its stack and puts each large segment on the wire whole, split only
+   into 4084-byte USB4 frames, leaving the receiving host to re-segment
+   it where that host's stack cannot take it whole (`tbnet_probe`, its
+   features and the comment above them); nothing in its transmit path
+   reads the peer's `prtcstns` bit 2. Its receiver refuses a packet longer than 64 KiB
+   (`tbnet_check_frame`, `TBNET_MAX_MTU`). Section 7.4 designs the split
+   this record's receiver therefore needs.
+7. **Its rings**: 256 descriptors each way (`TBNET_RING_SIZE`), the
+   transmit ring and HopID allocated as the first free ones (ring from 1,
+   HopID from 8, `tbnet_open`), the receive ring's Transmit E2E HopID the
+   transmit ring's, end-to-end flow control on both rings when its
+   parameter is on and the peer's `prtcstns` has bit 0, the SOF and EOF
+   PDFs 1 and 2 (`TBIP_PDF_FRAME_START`, `_END`), interrupt throttling
+   128000 ns (`TBNET_THROTTLING`); the rings are started and the receive
+   ring primed before the paths are enabled (`tbnet_connected_work`).
+8. **Its MAC** is not IDS 5.1.5.3's: the first byte is the physical port
+   shifted left by 4 with the locally-administered bit, the rest two
+   hashes of the local UUID (`tbnet_generate_mac`); it puts its MAC in
+   its Login Response and never reads the peer's.
 
 ### 2.5 Windows' own Thunderbolt networking
 
@@ -487,9 +555,17 @@ The discovery protocol identifies each domain by a 128-bit UUID (IDS
   an earlier chunk is never assembled; for a USB4NET request the Request
   ID (IDS Table 5-3: SN is "not used" there, the Request ID matches
   responses), the response type (1 for a Login, 3 for a Logout), and the
-  Requester and Responder UUIDs as the request carried them, unchanged:
-  the two fields name the transaction's roles, which a response keeps
-  (IDS Table 5-3, Figures 5-2 and 5-3). A control request
+  two UUID fields holding this domain's UUID and the peer's. IDS Table
+  5-3 reads the fields as the transaction's roles, which a response
+  keeps, and this driver's own responses follow it; `thunderbolt-net`
+  puts the sender's UUID first in every packet, responses included, and
+  sends its Logout Response with a new id of its own rather than the
+  request's ([tbnet] section 2.4 point 1). So a response is accepted with
+  the two UUIDs in either order, and a Logout Response is matched by its
+  type, route, protocol UUID and UUID pair while a Logout is
+  outstanding, its Request ID not checked; a Login Response keeps the
+  Request ID check, which Linux's copy of the request's id meets. A
+  control request
   and an inter-domain request are never outstanding at once; the thread
   serialises them. The bound is IDS's: one second a try, ten resends,
   each discovery resend with the next SN (Linux uses the retry count
@@ -498,7 +574,10 @@ The discovery protocol identifies each domain by a 128-bit UUID (IDS
   Request Packet sent"); a response matches any Request ID this login or
   logout has used since it began, since a late answer to an earlier try
   is the peer's answer to the same request.
-- **Requests the peer sends** (PDF 6) are decoded on the thread as they
+- **Requests the peer sends** - a discovery request on PDF 6, a USB4NET
+  Login or Logout on PDF 6 or 7, taken by its type, since
+  `thunderbolt-net` sends them on PDF 7 ([tbnet] section 2.4 point 1) -
+  are decoded on the thread as they
   land - during a busy-poll too, as record 21 section 4.4 decodes events -
   and answered at once (section 3.6). A request is never answered from
   the drain of an interrupt wake (record 21 section 4.5.1): the wake
@@ -722,8 +801,13 @@ Login Response this driver sends: Status 0 and its MAC (section 4.4),
 length 6, when the requester is the peer of this link and no other login
 is up; otherwise the failure status `0x80000001` (vendor failure, IDS
 Table 5-6), logged. A repeated Login from the same peer while the service
-is up is answered with success again and changes nothing [inf]; whether a
-peer resends after success is [tbnet-owed] point 1.
+is up is answered with success again and changes nothing here. This
+driver itself never sends a Login once its own has been answered, and
+never one with another Service HopID while the service is up, since
+`thunderbolt-net` would record the new HopID without rebuilding its
+paths ([tbnet] section 2.4 point 1, whose tries come about 5 s apart).
+That peer never sends a failure status, so a failure is this driver's
+own case only.
 
 A Login Response this driver receives with a failure: logged with its
 status, the login retried at the slow rate until the minute ends.
@@ -803,8 +887,10 @@ instance:
 Both are locally administered and unicast by construction.
 The peer's MAC from its Login Response is logged and handed to the
 network driver for the log and the query device; the network stack
-learns it by ARP as on any Ethernet. Whether `thunderbolt-net` uses the
-same derivation is [tbnet-owed] point 8; nothing depends on it.
+learns it by ARP as on any Ethernet. `thunderbolt-net` uses a
+derivation of its own, not IDS 5.1.5.3's, and never reads the Login
+Response's MAC ([tbnet] section 2.4 point 8); nothing depends on either
+side's choice.
 
 ## 5. The DMA paths and rings
 
@@ -1148,75 +1234,76 @@ type and payload, as NDIS hands it, with no FCS):
    maximum.
 2. Frames needed: m = 1 when L fits one buffer (L + 12 <= 4096), else
    ceil(L / (4096 - 12)); each USB4 frame's data at most 4084 bytes, the
-   last the rest. IDS 5.1.5.2 says "4KB USB4 Frames", which this reads as
-   the 4096-byte host-interface frame including its header [inf]; the
-   alternative, 4096 bytes of data a frame, cannot fit one descriptor.
+   last the rest. IDS 5.1.5.2 says "4KB USB4 Frames"; this reads it as
+   the 4096-byte host-interface frame including its header, which is
+   `thunderbolt-net`'s split, 4084 bytes of data a frame ([tbnet]
+   `TBNET_MAX_PAYLOAD_SIZE`, `tbnet_probe`'s comment).
 3. `TxReserve(m)`, all or nothing; refused, the frame stays at the head
    of the miniport's own send queue until `TxDone` (section 7.5). The
    ring's floor of 32 (section 5.3) holds the largest packet's 17 frames,
    so a refusal is always a ring that will drain.
 4. Each buffer: Frame Size = this frame's data bytes, Frame Index = k
-   (0 to m-1), Frame ID = the adapter's transmit counter, incremented
-   after every USB4 frame and wrapping at `0xFFFF` (IDS Table 5-7's text;
-   [tbnet-owed] point 3), Frame Count = m; all little-endian; then the
-   data bytes copied from the stack's buffers.
+   (0 to m-1), Frame ID = the adapter's packet counter, **the same in all
+   m frames of the packet**, Frame Count = m; all little-endian; then the
+   data bytes copied from the stack's buffers. The counter starts at 0
+   and advances by one (wrapping at `0xFFFF`) after each packet, and only
+   while the peer's `prtcstns` has bit 1; with bit 1 clear it stays 0
+   ([tbnet] section 2.4 point 3; IDS Table 5-7's text reads as per USB4
+   frame, which Linux, the reference peer, does not follow).
 5. `TxCommit(m)`, and the stack's frame is completed at once: its bytes
    are in the ring.
 
-Whether the FCS and the 60-byte padding IDS Figure 5-6 draws go on the
-wire is [tbnet-owed] point 4; until S0 settles it the transmit side
-sends neither (what NDIS hands a miniport) behind a compile-time
-switch the step resolves, never a registry value.
+No FCS and no padding go on the wire: the frame is what NDIS hands the
+miniport, as `thunderbolt-net` sends its socket buffer ([tbnet] section
+2.4 point 4; IDS Figure 5-6 draws a "Network CRC" Linux does not send).
 
 **Receive**, from the `Receive` callback, one USB4 frame at a time:
 
-- Dropped and counted: CRC Error or Buffer Overflow set; a length below
-  12; a Frame Size of 0 or above the frame's length less 12; Frame Count
-  0 or above 17; Frame Index not below Count; a packet whose summed Frame
-  Size passes 65554. That capacity is IDS 5.1.5.2's: a payload "of up to
-  64KB", so a frame of 65536 bytes of payload, the 14-byte header and,
-  where the peer sends it (tbnet-owed point 4), a 4-byte FCS; 17 frames
-  of 4084 bytes hold it.
+- Dropped and counted: CRC Error or Buffer Overflow set; a length of 12
+  or less (a header and no data, as Linux drops it); a Frame Size of 0 or
+  above the frame's length less 12; Frame Count 0 or above 17; Frame
+  Index not below Count; a packet whose summed Frame Size passes 65550.
+  That capacity is IDS 5.1.5.2's, a payload "of up to 64KB" (65536 bytes)
+  and the 14-byte Ethernet header, no FCS being sent ([tbnet] point 4);
+  17 frames of 4084 bytes hold it. `thunderbolt-net` itself sends at most
+  64 KiB a packet ([tbnet] point 6).
 - A frame with Count 1 and Index 0: one Ethernet frame of Frame Size
   bytes, indicated to the stack at once.
-- Count above 1: reassembled in a per-adapter buffer of 65554 bytes
-  (68 KiB allocated): Index 0
-  starts a packet (dropping any one in progress, counted); each next
-  frame must carry the next Index and the same Count, and the Frame ID
-  one more than the last (modulo `0x10000`) where [tbnet-owed] point 3
-  confirms that rule, else only Index and Count are checked; a gap drops
-  the packet (counted); the frame with Index Count-1 completes it.
-- A trailing FCS, where S0 shows the peer sends one (tbnet-owed point
-  4), is removed before anything else, by the same compile-time switch
-  as the transmit side, so no indication carries it. An indicated frame
-  shorter than 14 bytes is dropped. A frame longer than the adapter's
-  own maximum (its MTU plus 14) is dropped and counted before any
-  indication, since the
-  stack was told that maximum (NDIS 5 `OID_GEN_MAXIMUM_TOTAL_SIZE`, NDIS
-  6 `MtuSize`): the reassembly takes every size IDS 5.1.5.2 requires a
-  receiver to take, and the indication only what this adapter's MTU
-  agreed. A frame within the maximum but longer than the payload its IP
-  or ARP header names (a peer's padding to 60 bytes) reaches the stack
-  as padding, which IP and ARP ignore [inf, by the protocols' own
-  rules].
+- Count above 1: reassembled in a per-adapter buffer of 65550 bytes
+  (68 KiB allocated): Index 0 starts a packet (dropping any one in
+  progress, counted); each next frame must carry the next Index, the
+  same Count and the same Frame ID as the packet's first frame, as
+  `thunderbolt-net`'s receiver checks ([tbnet] point 3); a gap or a
+  mismatch drops the packet (counted); the frame with Index Count-1
+  completes it.
+- An assembled frame shorter than 14 bytes is dropped. One within the
+  adapter's own maximum (its MTU plus 14) is indicated. **One longer** is
+  the normal case against Linux, which sends TCP segments of up to 64 KiB
+  whatever this side's MTU ([tbnet] point 6): it is split by section
+  7.4's receive segmentation into frames within the maximum before any
+  indication, since the stack was told that maximum (NDIS 5
+  `OID_GEN_MAXIMUM_TOTAL_SIZE`, NDIS 6 `MtuSize`) and no indication may
+  exceed it; a longer frame that is not TCP over IPv4 or IPv6 is dropped
+  and counted. Short frames are not padded by Linux ([tbnet] point 4);
+  the stack takes them as they are.
 
 ### 7.3 The MTU
 
 `XhciNetMtu` (section 8.3), the IP payload, default 1500, from 1500 to
 65522. The ceiling is a chosen transmit limit, not the spec's: IDS
 5.1.5.2 lets a payload reach 64 KB, and 65522 keeps the whole frame,
-header included, within 64 KiB, which is Linux's figure as
-[tbnet-owed] point 6 will confirm or correct; the receive side takes the
-spec's full size regardless (section 7.2). The adapter reports a maximum frame
+header included, within 64 KiB, which is `thunderbolt-net`'s own maximum
+([tbnet] point 6: 68 to 65522, its receiver refusing more than 64 KiB);
+the receive side takes the spec's full size regardless (section 7.2). The adapter reports a maximum frame
 of the MTU plus 14 (NDIS 5 `OID_GEN_MAXIMUM_FRAME_SIZE` is the MTU,
 `OID_GEN_MAXIMUM_TOTAL_SIZE` the MTU plus 14; NDIS 6
 `MtuSize` in its general attributes). Above 1500 the frames go out as
 section 7.2's multi-frame packets, and only to a peer whose `prtcstns`
-bit 2 is 1 (IDS 5.1.5.2's recommendation): to a peer without it a frame
-longer than 1514 bytes is dropped and counted, and the log says once per
-service that the peer takes no large frames. Both ends must agree on the
-MTU at the IP layer, as on any Ethernet; that is the user's (section
-15 Q5).
+bit 2 is 1 (IDS 5.1.5.2's recommendation; `thunderbolt-net` sets it,
+[tbnet] point 2): to a peer without it a frame longer than 1514 bytes is
+dropped and counted, and the log says once per service that the peer
+takes no large frames. On the IP layer the peer may send more than this
+side's MTU: `thunderbolt-net` does (section 7.4).
 
 ### 7.4 Checksums, segmentation and other offloads
 
@@ -1224,16 +1311,49 @@ MTU at the IP layer, as on any Ethernet; that is the user's (section
   IP, TCP or UDP checksum; a miniport that advertised the offload would
   compute it in software, which the stack already does, and the USB4NET
   header has no field to mark a checksum partial, so every frame on the
-  wire must carry complete checksums [inf; tbnet-owed point 5]. On
-  receive the frame CRC (Spec 12.3.2.1) covers the fabric from host
-  interface to host interface, not either host's memory, so the stack
-  keeps verifying.
+  wire carries complete checksums, as `thunderbolt-net` computes them in
+  software before posting ([tbnet] point 5). On receive the frame CRC
+  (Spec 12.3.2.1) covers the fabric from host interface to host
+  interface, not either host's memory, so the stack keeps verifying, as
+  Linux's receiver leaves its stack to verify.
 - **Segmentation**: the fabric's segmentation (a frame into tunnelled
   packets) is the host interface's, below everything here; USB4NET's
   (a large Ethernet frame into 4 KB frames) is section 7.2's, in
   software. No large-send offload (NDIS 5 `TCP_TASK_TCP_LARGE_SEND`,
   NDIS 6 LSO): with the MTU raised and a peer taking large frames the
   stack already sends up to 64 KB a frame.
+- **Receive segmentation** (S0's finding, [tbnet] point 6):
+  `thunderbolt-net` hands its stack's TCP segmentation to the wire whole,
+  up to 64 KiB a packet, and leaves a receiver with no large-receive
+  path to re-segment it, and none of these systems' stacks offers a
+  miniport one. So `net_frame.c` splits, in software and before
+  indication, an assembled frame longer than the adapter's maximum when
+  it is TCP over IPv4 (not a fragment) or over IPv6 (no extension
+  header), in this order:
+  1. **Checked first, nothing rewritten yet**: the IPv4 header checksum
+     and the TCP checksum over the whole original segment (with the IPv4
+     or IPv6 pseudo-header), and the lengths the headers state against
+     the frame's; a frame that fails is dropped and counted, so a
+     corrupted frame never comes out as valid-looking pieces the stack
+     can no longer refuse (RFC 791 section 3.1, RFC 9293 section 3.1).
+  2. **Not split**: a segment with SYN, RST or URG set is dropped and
+     counted rather than split - SYN takes one sequence number only
+     once, RST ends the connection, and the urgent pointer is relative to
+     the original segment's sequence number - none of which a peer's
+     segmentation offload produces in a large segment [inf].
+  3. **The pieces**: each takes the Ethernet, IP and TCP headers of the
+     original (TCP options copied to every piece) and up to MTU less the
+     IP and TCP header lengths of the payload; the IPv4 total length,
+     identification (incremented per piece) and header checksum, or the
+     IPv6 payload length, and the TCP sequence number are rewritten per
+     piece; FIN and PSH are kept on the last piece only and CWR on the
+     first only (RFC 3168); and the TCP checksum is computed again per
+     piece.
+  Every other frame longer than the maximum (UDP, other protocols, a
+  malformed header) is dropped and counted.
+  The rules are RFC 791, 9293, 3168 (CWR) and 8200's, written for this
+  code from those RFCs, not from any implementation. The cost is one
+  checksum pass over the payload, beside section 6.3's copy.
 - **Receive side scaling, VLAN tags, priority, interrupt moderation,
   wake-on-LAN, header-data split**: none (section 13).
 - **The cost**: one copy each way per USB4 frame (section 6.3).
