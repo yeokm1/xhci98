@@ -2542,6 +2542,15 @@ questions as asked follow.
   missing export stops the miniport loading with no message.
 - **`IRP_MN_QUERY_INTERFACE` between two WDM drivers on 98 SE** (section
   6.3): unread; the fallback is designed.
+- **The firmware CM's cold start against Linux** (section 3.10; read on
+  the emulator's Alpine Ridge model, `runs/run-45.md`, "45.59 S5
+  (legs)"): Linux sends its UUID Requests from the moment the link is up
+  and gives up after about 20 s; a far end that gave up before this
+  driver bound is not restarted, since the firmware CM's discovery sends
+  no UUID Request, and the service waits for a re-plug. Whether real
+  firmware answers or sends one is task 45-E.15's capture; a UUID
+  Request sent once at the record's start, as the software CM's
+  discovery sends one, would restart Linux's handshake.
 - **The index-register write** (section 5.3): as for ring 0, unverified on
   hardware.
 - **Polling's throughput** (section 5.4): a ceiling of tens of MB/s at a
