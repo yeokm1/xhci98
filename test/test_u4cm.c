@@ -7208,6 +7208,109 @@ static void test_kid_cleanup_gates(void)
         CHECK_EQ(fabTriedTo(&g_fab, tried, c2), 0, "no write sent to the replacement child");
     }
 }
+
+/* The Thunderbolt 3 dock's link controller descriptor reads fail while
+ * armed (the read swallowed: no answer). */
+static int g_lcFail;
+static int g_lcDev;
+static int lcFailHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
+                      unsigned long adp, unsigned long addr, unsigned long n,
+                      const unsigned long *data)
+{
+    (void)f;
+    (void)adp;
+    (void)data;
+    if (g_lcFail && pdf == TBT_PDF_READ && router == g_lcDev && cs == TBT_CS_ROUTER &&
+        addr <= FAB_RCAP_LC + TBT_LC_DESC && FAB_RCAP_LC + TBT_LC_DESC < addr + n) {
+        return FAB_HOOK_SWALLOW;
+    }
+    return FAB_HOOK_GO;
+}
+
+/*
+ * Behind a Thunderbolt 3 parent (record 22 section 19.4 item 0, record 34
+ * section 6.4 step 5): a link that does not bond stays two single lanes,
+ * no Lane Disable written, and the kid is UP. The parent's
+ * link-controller mark is kept
+ * owed when its descriptor cannot be read at the teardown, the slot
+ * TEARDOWN until it is proven undone.
+ */
+static void test_kid_tbt3_single(void)
+{
+    const TBT_U4_KID *k;
+    unsigned long region;
+    int dev;
+    int child;
+    int a;
+    ULONG i;
+
+    dev = setupParent(FAB_DEV_TBT3_DOCK, NULL);
+    child = fabChild(&g_fab, dev);
+    g_fab.R[child].BondPossible = 0;
+    g_fab.R[child].Adp[1].Cs[FAB_CAP_PORT + 18] = 0;
+    a = fabDownLane0(&g_fab, dev);
+    g_fab.WrCount = 0;
+    fabHotPlugChild(&g_fab, dev, child);
+    poll(&g_cm, &g_fab, 3);
+    k = kidOf(&g_cm, 1);
+    CHECK(k != NULL && k->State == TBT_U4_UP, "behind the dock, not bonded: the kid UP");
+    CHECK(k != NULL && k->SingleLane && !k->Bonded && !k->Lane1Disabled,
+          "two single lanes, lane 1 not disabled");
+    CHECK(fabFindWrite(&g_fab, 0, dev, 1, (unsigned long)(a + 1), FAB_CAP_LANE + 1) < 0 ||
+              (fabAdp(&g_fab, dev, a + 1, FAB_CAP_LANE + 1) & 0x4000UL) == 0,
+          "no Lane Disable on the Thunderbolt 3 parent's lane 1");
+    CHECK(fabChainPcieUp(&g_fab, dev), "the chained tunnel up");
+    region = FAB_RCAP_LC + FAB_LC_START + (unsigned long)((a - 1) / 2) * FAB_LC_PORT_SIZE;
+    CHECK(fabRtr(&g_fab, dev, region + TBT_LC_SX_CTRL) & TBT_LC_SX_CTRL_L1C,
+          "the parent's link controller marks the port configured");
+
+    /* The child unplugged while the parent's descriptor cannot be read:
+     * the mark is neither proven undone nor forgotten. */
+    g_lcDev = dev;
+    g_lcFail = 1;
+    g_fab.Hook = lcFailHook;
+    fabHotUnplugChild(&g_fab, dev);
+    poll(&g_cm, &g_fab, 2);
+    k = NULL;
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        if (g_cm.Kids[i].Used) {
+            k = &g_cm.Kids[i];
+        }
+    }
+    CHECK(k != NULL && k->State == TBT_U4_TEARDOWN && k->SweepOwed && k->PcSetParent,
+          "the descriptor unread: the mark kept owed, the slot TEARDOWN");
+    CHECK(fabRtr(&g_fab, dev, region + TBT_LC_SX_CTRL) & TBT_LC_SX_CTRL_L1C,
+          "the mark still set");
+    g_lcFail = 0;
+    g_fab.Hook = NULL;
+    poll(&g_cm, &g_fab, 2);
+    CHECK(kidOf(&g_cm, 1) == NULL, "read again: the slot freed");
+    CHECK_EQ(fabRtr(&g_fab, dev, region + TBT_LC_SX_CTRL) & TBT_LC_SX_CTRL_L1C, 0,
+             "the mark undone");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "the dock kept");
+
+    /* At depth 1 the same: a Thunderbolt 3 device whose link controller
+     * descriptor does not read is never taken as configured, and no
+     * tunnel is built over its link. */
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_DOCK);
+    g_lcDev = dev;
+    g_lcFail = 1;
+    g_fab.Hook = lcFailHook;
+    fabPlug(&g_fab, 1, dev);
+    {
+        TBT_U4_CONFIG c;
+        cfgDefault(&c);
+        (void)start(&g_fab, &g_ring, &g_cm, &c);
+    }
+    poll(&g_cm, &g_fab, 2);
+    g_lcFail = 0;
+    g_fab.Hook = NULL;
+    CHECK(state(&g_cm, 1) != TBT_U4_UP, "depth 1, the descriptor unread: not UP");
+    CHECK(!TbtU4Port(&g_cm, 1)->PcSetDev, "the device's mark not counted as made");
+    CHECK(!fabPcieUp(&g_fab, 1), "no PCIe tunnel");
+}
 #endif /* TBT_U4_MAX_KIDS */
 
 int main(void)
@@ -7281,6 +7384,7 @@ int main(void)
     RUN_VEC(test_kid_resume);
     RUN_VEC(test_kid_foreign_and_held);
     RUN_VEC(test_kid_cleanup_gates);
+    RUN_VEC(test_kid_tbt3_single);
 #endif
     fabTraceMark("end");
     printf("test_u4cm: %d checks, %d failures\n", checks, failures);

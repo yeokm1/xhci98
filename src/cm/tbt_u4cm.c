@@ -460,6 +460,20 @@ static BOOLEAN tbtU4SingleOk(PTBT_U4CM cm, ULONG lane1)
     return (BOOLEAN)(cm->HostRouter.Tbt3 && cls == TBT_U4_LANE_CONNECTED);
 }
 
+/* The same through the link view, for a kid's link: lane 1 disconnected
+ * or disabled, or, behind a Thunderbolt 3 parent (whose lane 1 is never
+ * disabled, tbtU4KidBond), connected as a second single lane. */
+static BOOLEAN tbtU4KidSingleOk(const TBT_U4_ROUTER *pr, ULONG lane1)
+{
+    ULONG cls;
+
+    cls = TbtU4LaneClass(TBT_LANE1_STATE(lane1));
+    if (cls == TBT_U4_LANE_DISCONNECTED || cls == TBT_U4_LANE_DISABLED) {
+        return TRUE;
+    }
+    return (BOOLEAN)(pr->Tbt3 && cls == TBT_U4_LANE_CONNECTED);
+}
+
 /* ---------------------------------------------------------------------- */
 /* The quirk table, record 22 section 6.10 ([linux]: ids and flags)        */
 /* ---------------------------------------------------------------------- */
@@ -2953,18 +2967,24 @@ static ULONG tbtU4LcPort(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp)
     return rt->CapLc + TBT_LC_DESC_SIZE(desc) + port * TBT_LC_DESC_PORT_SIZE(desc);
 }
 
-/* tbtU4LcPort for the host router's own marks: TBT_OK with *region 0 when
- * it has no link controller (nothing to mark), an error when it has one
- * whose descriptor cannot be read - a mark then never counts as made nor
- * as undone. */
-static LONG tbtU4HostLcPort(PTBT_U4CM cm, ULONG adp, PULONG region)
+/* tbtU4LcPort for a router's own marks (the host router's, a kid's
+ * Thunderbolt 3 parent's): TBT_OK with *region 0 when it has no link
+ * controller (nothing to mark), an error when it has one whose descriptor
+ * cannot be read - a mark then never counts as made nor as undone. */
+static LONG tbtU4RouterLcPort(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp,
+                              PULONG region)
 {
     *region = 0;
-    if (cm->HostRouter.CapLc == 0) {
+    if (rt->CapLc == 0) {
         return TBT_OK;
     }
-    *region = tbtU4LcPort(cm, &cm->HostRouter, adp);
+    *region = tbtU4LcPort(cm, rt, adp);
     return *region != 0 ? TBT_OK : TBT_E_STATE;
+}
+
+static LONG tbtU4HostLcPort(PTBT_U4CM cm, ULONG adp, PULONG region)
+{
+    return tbtU4RouterLcPort(cm, &cm->HostRouter, adp, region);
 }
 
 /*
@@ -3227,8 +3247,10 @@ static LONG tbtU4Configured(PTBT_U4CM cm, PTBT_U4_PORT p)
         return rc;
     }
     if (d->Tbt3) {
-        region = tbtU4LcPort(cm, d, d->UpAdp);
-        if (region != 0) {
+        /* A link controller whose descriptor does not read fails the
+         * step: the link is never taken as configured unmarked. */
+        rc = tbtU4RouterLcPort(cm, d, d->UpAdp, &region);
+        if (rc == TBT_OK && region != 0) {
             mark = (d->UpAdp & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C;
             rc = tbtU4Rmw(cm, &d->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, 0,
                           mark | TBT_LC_SX_CTRL_UPSTREAM);
@@ -7893,8 +7915,8 @@ static LONG tbtU4KidConfigured(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     k->PcSetParent = TRUE;
     rc = TBT_OK;
     if (pr->Tbt3) {
-        region = tbtU4LcPort(cm, pr, a);
-        if (region != 0) {
+        rc = tbtU4RouterLcPort(cm, pr, a, &region);
+        if (rc == TBT_OK && region != 0) {
             rc = tbtU4Rmw(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, 0,
                           (a & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C);
         }
@@ -8098,13 +8120,19 @@ static LONG tbtU4KidBond(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k, ULONG gen)
                 TBT_LANE1_NLW(lane[0]) != TBT_LANE_WIDTH_X1) {
                 return TBT_E_STATE;
             }
-            k->Lane1Disabled = TRUE;    /* owned before the write */
-            if (tbtU4LaneRmw(cm, ln.Rt[1], ln.Adp[1], 0, TBT_LANE1_LD) != TBT_OK ||
-                !tbtU4KidWaitLane(cm, p, k, gen, ln.Rt[1], ln.Adp[1],
-                                  TBT_LANE_STATE_DISABLED, TBT_U4_LANE_DISABLE_US)) {
-                return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
+            if (!pr->Tbt3) {
+                /* Behind a Thunderbolt 3 parent the link stays two single
+                 * lanes, as a Thunderbolt host's does (tbtU4Bond): Lane
+                 * Disable is a USB4 lane adapter's (record 22 section
+                 * 19.4 item 0). */
+                k->Lane1Disabled = TRUE;    /* owned before the write */
+                if (tbtU4LaneRmw(cm, ln.Rt[1], ln.Adp[1], 0, TBT_LANE1_LD) != TBT_OK ||
+                    !tbtU4KidWaitLane(cm, p, k, gen, ln.Rt[1], ln.Adp[1],
+                                      TBT_LANE_STATE_DISABLED, TBT_U4_LANE_DISABLE_US)) {
+                    return tbtU4KidLive(cm, p, k, gen) ? TBT_E_STATE : TBT_E_GONE;
+                }
+                cm->Counters.Lane1Disabled++;
             }
-            cm->Counters.Lane1Disabled++;
         }
         k->SingleLane = TRUE;
         cm->Counters.BondSingle++;
@@ -8631,9 +8659,11 @@ static BOOLEAN tbtU4KidLanesBack(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     a = k->ParentLane0;
     if (k->PcSetParent) {
         if (pr->Tbt3) {
-            region = tbtU4LcPort(cm, pr, a);
             mark = (a & 1UL) != 0 ? TBT_LC_SX_CTRL_L1C : TBT_LC_SX_CTRL_L2C;
-            if (region == 0 ||
+            if (tbtU4RouterLcPort(cm, pr, a, &region) != TBT_OK) {
+                /* A link controller whose descriptor did not read: the
+                 * mark is neither proven undone nor forgotten. */
+            } else if (region == 0 ||
                 (tbtU4Rmw(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, mark, 0) ==
                      TBT_OK &&
                  tbtU4Rd(cm, &pr->Route, TBT_CS_ROUTER, 0, region + TBT_LC_SX_CTRL, &v) ==
@@ -9198,8 +9228,7 @@ static VOID tbtU4KidAdopt(PTBT_U4CM cm, PTBT_U4_PORT p, ULONG li)
         bonded = TRUE;
         asym = TRUE;
     }
-    if (!bonded && TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
-        TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED) {
+    if (!bonded && !tbtU4KidSingleOk(pr, lane1)) {
         goto watched;
     }
     if (!tbtU4KidChained(cm, pr, a, hp, d, &hd, &hu) ||
@@ -9642,9 +9671,7 @@ static BOOLEAN tbtU4KidVerify(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_KID k)
     }
     if (tbtU4LaneRd(cm, pr, k->ParentLane0, &lane0) != TBT_OK ||
         tbtU4LaneRd(cm, pr, k->ParentLane0 + 1, &lane1) != TBT_OK ||
-        (!tbtU4WidthBonded(lane0) &&
-         TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_CLD &&
-         TBT_LANE1_STATE(lane1) != TBT_LANE_STATE_DISABLED)) {
+        (!tbtU4WidthBonded(lane0) && !tbtU4KidSingleOk(pr, lane1))) {
         return FALSE;
     }
     return (BOOLEAN)(tbtU4KidChained(cm, pr, k->ParentLane0, k->ParentPcieDown, d, &hd, &hu) &&

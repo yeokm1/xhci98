@@ -2317,6 +2317,19 @@ differs from them, this section is the record.
   `u4.kid.no-pcie-down`, `u4.kid.version`, `u4.kid.adopted`,
   `u4.kid.fresh`, `u4.kid.watched`, `u4.kid.teardown`, `u4.kid.down`,
   `u4.kid.lost`, `u4.kid.sweep-owed`, `u4.kid.dropped`, `u4.kid.full`.
+- **Behind a Thunderbolt 3 parent.** A kid's link that does not bond
+  stays two single lanes, as a Thunderbolt host's does: no Lane Disable is
+  written on the parent (a USB4 lane adapter's, record 22 section 19.4
+  item 0), and the adoption and the resume's verification accept lane 1
+  connected there (`tbtU4KidSingleOk`). The parent's link-controller mark
+  of the port (its descriptor read through `tbtU4RouterLcPort`, which
+  tells a link controller whose descriptor did not read from none) fails
+  the connect when the descriptor does not read, and at the teardown is
+  kept owed, the slot TEARDOWN, until it is proven undone. The same
+  lookup now serves a Thunderbolt 3 device's own mark at depth 1
+  (`tbtU4Configured`): a descriptor that does not read fails the step,
+  so no tunnel is built over a link never marked. Vector: `test_u4cm`'s
+  `test_kid_tbt3_single`.
 - **Version 2 routers** (record 22 section 6.2, task 45.20, through the
   link view; at the merge of both). A kid's Gen 4 link is classified as a
   port's is: symmetric, or a paired asymmetric width used as found,
