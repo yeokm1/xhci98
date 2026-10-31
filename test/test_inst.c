@@ -761,24 +761,60 @@ static void test_real_infs(void)
     CHECK(inst_inf_is_ours(u64), "xhciuas-amd64.inf is ours");
 
     /* Every xhci98 row of the value table is written by both INFs, at the
-     * default the table's meaning assumes. */
-    for (i = 0; i < instValueCount; i++) {
-        INST_U32 d86;
-        INST_U32 d64;
-        if (instValues[i].Inf != INST_INF_XHCI) {
-            continue;
+     * default the table's meaning assumes (task 45.54: docs\using\
+     * tuning.md's "Written by the install" column, a range row's within
+     * its range and on its step). */
+    {
+        static const struct {
+            const char *Name;
+            INST_U32 Def;
+        } want[] = {
+            { "XhciIntelPortSwitch", 0 }, { "XhciInterruptMode", 0 },
+            { "XhciLinkKeep", 1 }, { "XhciResumeKeep", 1 },
+            { "XhciUsb2Bos", 1 }, { "XhciImodInterval250ns", 160 },
+            { "XhciLogVerbosity", 2 }, { "XhciLogDebugView", 0 },
+            { "XhciPollIdleMs", 50 }, { "XhciPollActiveMs", 1 },
+            { "XhciPollFineTimer", 0 }, { "XhciSelectiveSuspend", 0 },
+            { "XhciSilentInstall", 0 }, { "XhciForceBulkOnly", 0 },
+            { "XhciFastPollFsLs", 0 }, { "XhciMaxTransferKB", 1024 },
+            { "XhciWideMap", 0 }, { "XhciFirstEnumWaitMs", 5000 },
+            { "XhciFirstEnumPortMs", 2000 }
+        };
+        int rowsSeen = 0;
+        for (i = 0; i < instValueCount; i++) {
+            INST_U32 d86;
+            INST_U32 d64;
+            int w;
+            if (instValues[i].Inf != INST_INF_XHCI) {
+                continue;
+            }
+            rowsSeen++;
+            CHECK(inst_inf_addreg_default(x86, instValues[i].Name, &d86),
+                  instValues[i].Name);
+            CHECK(inst_inf_addreg_default(a64, instValues[i].Name, &d64),
+                  instValues[i].Name);
+            CHECK_EQ(d86, d64, instValues[i].Name);
+            for (w = 0; w < (int)(sizeof(want) / sizeof(want[0])); w++) {
+                if (inst_eq(want[w].Name, instValues[i].Name)) {
+                    break;
+                }
+            }
+            CHECK(w < (int)(sizeof(want) / sizeof(want[0])) &&
+                  want[w].Def == d86, instValues[i].Name);
+            if (instValues[i].Hi != 0) {
+                CHECK(instValues[i].Asked == 0 && instValues[i].Settable == 0 &&
+                      inst_value_in_range(i, d86),
+                      "a range row's default is in its range");
+                continue;
+            }
+            CHECK(d86 < 32 && (instValues[i].Asked == 0 ||
+                               (instValues[i].Asked & (1UL << d86)) != 0),
+                  "the default is an offered answer");
+            CHECK(d86 < 32 && (instValues[i].Settable & (1UL << d86)) != 0,
+                  "the default is a value /set takes");
         }
-        CHECK(inst_inf_addreg_default(x86, instValues[i].Name, &d86),
-              instValues[i].Name);
-        CHECK(inst_inf_addreg_default(a64, instValues[i].Name, &d64),
-              instValues[i].Name);
-        CHECK_EQ(d86, d64, instValues[i].Name);
-        CHECK_EQ(d86, 0, instValues[i].Name);
-        CHECK(instValues[i].Asked == 0 ||
-              (instValues[i].Asked & (1UL << d86)) != 0,
-              "the default is an offered answer");
-        CHECK((instValues[i].Settable & (1UL << d86)) != 0,
-              "the default is a value /set takes");
+        CHECK_EQ(rowsSeen, (int)(sizeof(want) / sizeof(want[0])),
+                 "every xhci98 row has its expected default");
     }
 
     free(x86);
@@ -1531,7 +1567,27 @@ static void test_values(void)
 
     CHECK(psw >= 0 && im >= 0 && ft >= 0 && ss >= 0 && cm >= 0, "rows found");
     CHECK_EQ(inst_value_find("XhciTolerance"), -1, "a quirk value is not asked");
-    CHECK_EQ(inst_value_find("XhciLogVerbosity"), -1, "the log is SNAPON's");
+    /* Task 45.54 (the owner, 2026-10-31): the log is an Advanced row now;
+     * these stay out of the table. */
+    {
+        static const char *const out[] = {
+            "XhciCommandCheck", "XhciCmTunnelBridge",
+            "XhciCmAsmediaPcie7Credits", "XhciIntelIrqRoute",
+            "XhciIntervalCap", "XhciAvgTrbEsit", "XhciUsb2HubSpeedFallback",
+            "XhciAccept096", "XhciMsiAvoid", "XhciStreamsOff",
+            "XhciResumeReinit", "XhciIntelShutdownToEhci",
+            "XhciShutdownReset", "XhciSuspendHaltDelay",
+            "XhciSuspendHaltTimeout", "XhciAsmediaFlowControl",
+            "XhciTiIntervalCap", "XhciStuckLinkReset", "XhciStreamRingPad",
+            "XhciControlLinkNoOp", "XhciIsochSpuriousSuccess",
+            "XhciAmdSuspendBitClear"
+        };
+        int k;
+        for (k = 0; k < (int)(sizeof(out) / sizeof(out[0])); k++) {
+            CHECK_EQ(inst_value_find(out[k]), -1, out[k]);
+        }
+        CHECK(instValueCount <= INST_MAX_VALUES, "the table fits its arrays");
+    }
 
     /* 98 SE with a QEMU controller: no switchover, no fine timer, no NHI. */
     e = env(0, 4, 10, INST_ARCH_X86);
@@ -1798,6 +1854,155 @@ static void test_values(void)
                   "choice 2 listed");
             CHECK(strstr(q, "\n    1") == NULL, "1 not listed");
         }
+    }
+
+    /* Task 45.54 (record 26 section 5.4.1; the owner, 2026-10-31): the
+     * Advanced rows added, each never asked, on its tab, with its range or
+     * list, its systems and its /set bounds. */
+    {
+        static const struct {
+            const char *Name;
+            int Inf;
+            int Apply;
+            INST_U32 Settable;  /* a list's /set mask, 0 for a range */
+            INST_U32 Lo;
+            INST_U32 Hi;
+            INST_U32 Step;
+        } add[] = {
+            { "XhciLinkKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
+            { "XhciResumeKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0,
+              0 },
+            { "XhciUsb2Bos", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
+            { "XhciImodInterval250ns", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0,
+              10, 4000, 0 },
+            { "XhciLogVerbosity", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x1F, 0,
+              0, 0 },
+            { "XhciLogDebugView", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0,
+              0, 0 },
+            { "XhciPollIdleMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 1, 5000,
+              0 },
+            { "XhciPollActiveMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 1,
+              5000, 0 },
+            { "XhciMaxTransferKB", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 64,
+              2048, 4 },
+            { "XhciWideMap", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x3, 0, 0, 0 },
+            { "XhciFirstEnumWaitMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
+              30000, 0 },
+            { "XhciFirstEnumPortMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
+              30000, 0 },
+            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_NT_CM, 0x3, 0, 0,
+              0 },
+            { "XhciCmUsb4V2", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0, 0 }
+        };
+        INST_ENV e98 = env(0, 4, 10, INST_ARCH_X86);
+        INST_ENV exp = env(1, 5, 1, INST_ARCH_X86);
+        char arg[64];
+        char range[64];
+        int k;
+        e98.AnyXhci = 1;
+        e98.CmNhi = 1;
+        exp.AnyXhci = 1;
+        exp.CmNhi = 1;
+        for (k = 0; k < (int)(sizeof(add) / sizeof(add[0])); k++) {
+            int ix = inst_value_find(add[k].Name);
+            const INST_VALUE *x;
+            CHECK(ix >= 0, add[k].Name);
+            if (ix < 0) {
+                continue;
+            }
+            x = &instValues[ix];
+            CHECK(x->Inf == add[k].Inf && x->Apply == add[k].Apply &&
+                  x->Asked == 0 && x->Loc == INST_LOC_MW && !x->NoInf,
+                  "a 45.54 row: its tab and system, never asked");
+            CHECK(!inst_value_applies(ix, &exp) && inst_value_relevant(ix, &exp),
+                  "a 45.54 row: an Advanced row on XP");
+            if (add[k].Hi != 0) {
+                CHECK(x->Settable == 0 && x->Lo == add[k].Lo &&
+                      x->Hi == add[k].Hi && x->Step == add[k].Step,
+                      "a 45.54 range row's bounds and step");
+                sprintf(arg, "%s=%lu", add[k].Name, (unsigned long)add[k].Lo);
+                CHECK(inst_value_set(arg, &idx, &v) == 1 && idx == ix &&
+                      v == add[k].Lo, "/set takes the range's lowest");
+                sprintf(arg, "%s=%lu", add[k].Name, (unsigned long)add[k].Hi);
+                CHECK(inst_value_set(arg, &idx, &v) == 1 && v == add[k].Hi,
+                      "/set takes the range's highest");
+                sprintf(arg, "%s=%lu", add[k].Name,
+                        (unsigned long)(add[k].Hi + 1));
+                CHECK_EQ(inst_value_set(arg, &idx, &v), -1,
+                         "/set refuses one past the highest");
+                if (add[k].Lo > 0) {
+                    sprintf(arg, "%s=%lu", add[k].Name,
+                            (unsigned long)(add[k].Lo - 1));
+                    CHECK_EQ(inst_value_set(arg, &idx, &v), -1,
+                             "/set refuses one under the lowest");
+                }
+                CHECK(inst_value_allowed(ix, &e98, add[k].Hi) &&
+                      inst_value_allowed(ix, &exp, add[k].Lo) &&
+                      !inst_value_allowed(ix, &exp, add[k].Hi + 1),
+                      "a range row allowed on every system");
+                inst_value_range_text(ix, range, sizeof(range));
+                CHECK(strstr(range, " to ") != NULL &&
+                      (add[k].Step == 0) == (strstr(range, "multiple") == NULL),
+                      "a range row's text");
+            } else {
+                CHECK(x->Settable == add[k].Settable && x->Hi == 0,
+                      "a 45.54 list row's choices");
+                inst_value_range_text(ix, range, sizeof(range));
+                CHECK(range[0] == '\0', "a list row has no range text");
+            }
+        }
+        {
+            int mt = inst_value_find("XhciMaxTransferKB");
+            int ri = inst_value_find("XhciCmRingInterrupt");
+            int wm = inst_value_find("XhciWideMap");
+            int lv = inst_value_find("XhciLogVerbosity");
+            INST_ENV ex = env(1, 5, 1, INST_ARCH_X86);
+            CHECK_EQ(inst_value_set("XhciMaxTransferKB=1026", &idx, &v), -1,
+                     "/set refuses a command size off its step of 4");
+            CHECK(inst_value_set("XhciMaxTransferKB=1028", &idx, &v) == 1 &&
+                  idx == mt && v == 1028, "/set takes one on its step");
+            CHECK(!inst_value_in_range(mt, 1026) && inst_value_in_range(mt, 64),
+                  "the step held by the range check");
+            inst_value_range_text(mt, range, sizeof(range));
+            CHECK(inst_eq(range, "64 to 2048, a multiple of 4"),
+                  "the command size's range text");
+            inst_value_range_text(inst_value_find("XhciPollIdleMs"), range,
+                                  sizeof(range));
+            CHECK(inst_eq(range, "1 to 5000"), "a range text with no step");
+            CHECK(!inst_value_in_range(wm, 0), "a list row is no range");
+            /* The ring interrupt: 2000 to 10 alone. */
+            CHECK(inst_value_greyed(ri, &e98) && inst_value_set_mask(ri, &e98) == 0
+                  && !inst_value_allowed(ri, &e98, 1) &&
+                  inst_eq(inst_value_only(ri), "Windows 2000 to 10 only"),
+                  "XhciCmRingInterrupt on 98 SE: greyed, refused");
+            CHECK(!inst_value_greyed(ri, &exp) && inst_value_set_mask(ri, &exp)
+                  == 0x3 && inst_value_allowed(ri, &exp, 1),
+                  "XhciCmRingInterrupt on XP: taken");
+            ex.Major = 10;
+            ex.Minor = 0;
+            ex.CmNhi = 1;
+            CHECK(!inst_value_greyed(ri, &ex) && inst_value_relevant(ri, &ex),
+                  "XhciCmRingInterrupt on 10: shown");
+            ex.CmNhi = 0;
+            CHECK(!inst_value_relevant(ri, &ex) && !inst_value_greyed(ri, &ex),
+                  "XhciCmRingInterrupt with no NHI: neither relevant nor "
+                  "greyed (the engine's Thunderbolt rows show it)");
+            /* The wide map: greyed on 98 SE, as the fine timer. */
+            CHECK(inst_value_greyed(wm, &e98) && !inst_value_greyed(wm, &exp),
+                  "XhciWideMap greyed on 98 SE, shown on XP");
+            CHECK(instValues[lv].Choice[4] != NULL &&
+                  instValues[lv].Caution != NULL &&
+                  instValues[lv].CautionMask == 0x10,
+                  "the log's level 4 named, with its caution");
+        }
+        /* Record 23 section 8.2, revision 51: the 98 SE target rule. */
+        CHECK(inst_value_target_9x(0, INST_ACT_INSTALL),
+              "98 SE: a controller with no driver the run installs");
+        CHECK(inst_value_target_9x(1, INST_ACT_UPDATE) &&
+              inst_value_target_9x(1, INST_ACT_CURRENT),
+              "98 SE: a controller already bound");
+        CHECK(!inst_value_target_9x(0, INST_ACT_FOREIGN),
+              "98 SE: a controller another driver holds");
     }
 
     inst_mask_text(0x7, text, sizeof(text));
