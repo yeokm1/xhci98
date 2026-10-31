@@ -6993,12 +6993,47 @@ lane. The adapter disabled: `cm.net.link.down` at once,
 `cm.net.down=00000100`, `cm.net.teardown=01000001` (the teardown
 answered), `cm.net.rings.down`.
 
+**Fourth leg, Windows 7 x86, firmware connection manager, cold start
+(`w45-tbnet4`, `d0b5db85`, record 35 revision 10, `w7arb\`): pass with
+no re-plug.** As the third leg, the package of `d0b5db85` (gated x86 and
+amd64 builds passed, the host tests among them: `test_tbt_xdp` 190
+checks, `test_tbt_icm` 1051, `test_u4xd` 201, no failure; images in
+`hashes2.txt`), the cable in from power-on through the restart. Linux
+had given up again before this driver bound ("discovery failed,
+stopping handshake"); at the record's start `cm.xdp.connected`,
+`cm.xdp.uuid.nudge=01000001`, and Linux then logged "received XDomain
+UUID request", "restarting handshake", "new host found", "xHCI98
+xhcicm". This host's Logins went unanswered for a minute
+(`cm.net.login.none=01000042`) and went on at the idle rate; once
+Linux's interface was raised, `cm.net.paths=01080801`,
+`cm.net.link.up=01070000`, `net.link.up`. Ping from Windows 6 of 6, from
+Linux 4 of 4 at 56 bytes and 3 of 3 at 8000.
+
+**Fifth leg, Windows 7 x86 against Linux 7.0, software connection
+manager (`w45-tbnet4`, `d0b5db85`, `w7k\`): pass.** `usb4-emu`'s
+`w45-emuar` build (`a7239ea`, `qemu-system-x86_64.exe` SHA-256
+`83474795...`) on both ends; the far end Kubuntu 26.04.1 live, kernel
+7.0.0-30-generic (task 45-E.15's kernel), its stock `thunderbolt_net`,
+under WHPX. `-Usb4 adl`, the same steps. Linux: "login successful,
+enabling paths", "enabling E2E for TX ring 1", "enabling E2E for RX ring
+1 with TX HopID 1", "network traffic started" - Linux sending with E2E
+into this host's receive ring, which runs with E2E and the Transmit E2E
+HopID (`cm.net.rings=01018000`). The CM log: `cm.net.paths=0108080E`,
+`cm.net.link.up=01070028` (prtcstns 7, 40 Gb/s). Ping from Windows 6 of
+6 at 1472 bytes; from Linux 20 of 20 at 56 bytes (0.2 s apart), 10 of 10
+at 1472 and 10 of 10 at 30000 (21 IP fragments each way at MTU 1500),
+no loss. The emulator's trace: 6,038 E2E credit lines on the Windows
+end and 6,305 on the Linux end (`usb4_host_e2e`, "E2E grant ring 1
+credits ...").
+
 Owed: the 98 SE leg with `xhcinet.sys` (`net.cm.route` there says which
 of the query and the fallback code NTKERN carries), the three-field
 models line read on 98 SE, ME, 2000 and XP, the Titan Ridge leg, the
-Windows 10 x86 leg with `xhcinet6.sys`, and the x64 legs (a throwaway
-certificate in the guest). Open: the firmware CM's cold start against a
-far end that gave up before this driver bound (above).
+Windows 10 x86 leg with `xhcinet6.sys`, the x64 legs (a throwaway
+certificate in the guest), and, on the `w45-emuar` Alpine Ridge model
+(its firmware's own UUID Request and code-8 acknowledgements), a leg of
+this host's software CM against a far firmware CM with
+`xd-fw-uuid-retry-ms=0`, for `test_u4xd`'s early UUID answer.
 
 ## 45-E.15 (the bench capture): an Alpine Ridge firmware connection manager and a USB4 software one, host to host under Linux (2026-10-31)
 

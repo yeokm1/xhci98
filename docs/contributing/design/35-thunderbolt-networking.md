@@ -1287,8 +1287,9 @@ What needs no change:
   (section 5.3, step S5), and the host interface grants the credits from
   the descriptors posted (Spec 12.2.2.3): nothing in software waits for
   or grants a credit. With 0 the bit is withdrawn and Linux turns E2E off
-  on both rings. Not yet read against a Linux 7 sender (the emulator's
-  Alpine does not send with E2E): owed to a leg with a Linux 7 peer.
+  on both rings. Read on the emulator against Linux 7.0 sending with E2E
+  (run-45 "45.59 S5 (legs)", the fifth leg): no loss up to 30000-byte
+  packets, the credits granted by the host interface.
 - The firmware's Error Response 3 to Link State Status (a far software
   CM then keeps the link single lane, 20 Gb/s), its own properties block
   before driver ready and its new UUID Request after it, event `0x07` at
