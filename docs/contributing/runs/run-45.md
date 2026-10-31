@@ -6542,7 +6542,7 @@ three.
 - The networking box's wiring, task 45.59's step S11: `INST_TBNET_WIRED`
   1, `xhcinet.inf` staged, `/tbnet` accepted. 45.60 stays open for it.
 
-## 45.66 the installer's Help button explains its page (2026-10-31)
+## 45.66 the installer's Help button explains its page (2026-10-31, partial)
 
 Branch `w45-tbpage`. Commits: `d8227fc7` (record 26 draft 55, section
 5.10: the design), `e32fe18d` (the code, the host vectors and the
@@ -6590,9 +6590,24 @@ under the readme's message box); each reviewed and revised.
 | 98 SE, 640 by 480 | Help on Welcome, Components, the Thunderbolt and USB4 page, Settings (USB), Advanced, Summary; "Open the readme" | each fits the screen, text whole; the Advanced dialog's Help button in its row; Notepad opened over the help window | `h98\`, `shots-owner\98se-*.png` |
 | XP | the same, and the Thunderbolt and Stor98 tabs and Stor98's Advanced | each whole | `hxp\`, `shots-owner\xp-*.png` |
 | 7 x86 | Help on Progress left open through the install's end; Help on Finish; at 120 DPI the self-test, Components and its Help, the Thunderbolt page | the run ended under the help window: it closed and Finish showed; at 120 DPI nothing clipped | `h7\`, `shots-owner\7-*.png` |
+| 7 x86, 120 DPI | the uninstall (`C:\XHCI98\XHCIWIZ.EXE /uninstall`): Help on its first page, its Summary and its Finish | each whole; the Summary's Help names no Back, which that page does not offer | `shots-owner\7-120dpi-help-uninstall-*.png` |
 
 The owner's screenshots and their index:
 `E:\xhci98-vm\p45\w45-tbpage\shots-owner\index.txt`.
+
+### Left
+
+- The Help of the two other-driver pages (Free and Non-free USB
+  drivers): the test cut here carries neither set (`-NoNonFree
+  -NoWdmFree`). A cut with both is refused before staging by the
+  lifted-exclusion check of record 26 section 6.7.14 ("the installer's
+  table marks free:net/rtl815x and nonfree:ethernet/rtl815x lifted ...
+  and this cut lifts no EXCLUDES of the pair there"), which is outside
+  this task's area and is reported to the coordinator.
+- The Help of the Steps page: shown only where a 98 SE or ME device is
+  left for the user to install, which these legs did not produce.
+- Both are in the self-test (routing, and each text in the help
+  window), so what is owed is the reading through the installer.
 
 ## 45.final: the release-notes texts the tasks handed over
 
