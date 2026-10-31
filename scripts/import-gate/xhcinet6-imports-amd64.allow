@@ -1,0 +1,66 @@
+# xhcinet6.sys import allowlist (amd64) - the NDIS 6.20 miniport of
+# Thunderbolt networking for 64-bit Windows 8, 8.1 and 10 (design record 35
+# sections 7.1 and 7.9, roadmap-usb4.md task 45.59 step S7), WDK 7.1 WIN7
+# x64. scripts\import-gate\check-imports.ps1 -GateProfile net6 -Arch amd64
+# enforces it after every link (scripts\build-driver.cmd :buildnet6); the
+# format is xhci98-imports.allow's.
+#
+# NTOSKRNL.EXE rows: the default amd64 rules, every pair re-derived against
+# NT 5.2 amd64's export tables (xhci98-imports-amd64.allow's header), as
+# for every x64 image here, and against the 8.1 and 10 x64 kernels
+# (net6-win81-x64-baselines.expected, net6-win10-x64-baselines.expected).
+#
+# NDIS.SYS rows: re-derived against the 8.1 and 10 x64 ndis.sys export
+# tables (the same two manifests), and "ndis620-header", as in
+# xhcinet6-imports.allow.
+#
+# On amd64 NdisAcquireSpinLock and NdisReleaseSpinLock are the kernel's
+# KeAcquireSpinLockRaiseToDpc and KeReleaseSpinLock; /GS adds KeBugCheckEx;
+# WDK 7.1's checked headers add RtlAssert (qemu only).
+
+[imports]
+
+ntoskrnl.exe!KeBugCheckEx                    all   required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
+ntoskrnl.exe!RtlAssert                       qemu  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
+
+ntoskrnl.exe!IoAllocateIrp                   all   required  nt52-amd64-export
+ntoskrnl.exe!IoFreeIrp                       all   required  nt52-amd64-export
+ntoskrnl.exe!IofCallDriver                   all   required  nt52-amd64-export
+ntoskrnl.exe!KeInitializeEvent               all   required  nt52-amd64-export
+ntoskrnl.exe!KeSetEvent                      all   required  nt52-amd64-export
+ntoskrnl.exe!KeWaitForSingleObject           all   required  nt52-amd64-export
+ntoskrnl.exe!KeDelayExecutionThread          all   required  nt52-amd64-export
+ntoskrnl.exe!MmMapLockedPagesSpecifyCache    all   required  nt52-amd64-export; MmGetSystemAddressForMdlSafe
+ntoskrnl.exe!KeAcquireSpinLockRaiseToDpc     all   required  nt52-amd64-export; NdisAcquireSpinLock on amd64
+ntoskrnl.exe!KeReleaseSpinLock               all   required  nt52-amd64-export; NdisReleaseSpinLock on amd64
+
+NDIS.SYS!NdisMRegisterMiniportDriver         all   required  ndis620-header
+NDIS.SYS!NdisMDeregisterMiniportDriver       all   required  ndis620-header
+NDIS.SYS!NdisMSetMiniportAttributes          all   required  ndis620-header
+NDIS.SYS!NdisMGetDeviceProperty              all   required  ndis620-header
+NDIS.SYS!NdisOpenConfigurationEx             all   required  ndis620-header
+NDIS.SYS!NdisReadConfiguration               all   required  ndis620-header
+NDIS.SYS!NdisCloseConfiguration              all   required  ndis620-header
+NDIS.SYS!NdisAllocateMemoryWithTagPriority   all   required  ndis620-header
+NDIS.SYS!NdisFreeMemory                      all   required  ndis620-header
+NDIS.SYS!NdisAllocateNetBufferListPool       all   required  ndis620-header
+NDIS.SYS!NdisFreeNetBufferListPool           all   required  ndis620-header
+NDIS.SYS!NdisAllocateNetBufferAndNetBufferList all required  ndis620-header
+NDIS.SYS!NdisFreeNetBufferList               all   required  ndis620-header
+NDIS.SYS!NdisAllocateMdl                     all   required  ndis620-header
+NDIS.SYS!NdisFreeMdl                         all   required  ndis620-header
+NDIS.SYS!NdisMIndicateReceiveNetBufferLists  all   required  ndis620-header
+NDIS.SYS!NdisMSendNetBufferListsComplete     all   required  ndis620-header
+NDIS.SYS!NdisMIndicateStatusEx               all   required  ndis620-header
+NDIS.SYS!NdisMPauseComplete                  all   required  ndis620-header
+NDIS.SYS!NdisMOidRequestComplete             all   required  ndis620-header
+NDIS.SYS!NdisAllocateIoWorkItem              all   required  ndis620-header
+NDIS.SYS!NdisFreeIoWorkItem                  all   required  ndis620-header
+NDIS.SYS!NdisQueueIoWorkItem                 all   required  ndis620-header
+NDIS.SYS!NdisMSleep                          all   required  ndis620-header
+
+[deny]
+
+memset          a C runtime import: no runtime library functions (AGENTS.md); a byte loop needs a volatile destination
+memcpy          a C runtime import, as memset
+NdisMRegisterMiniport   NDIS 5's registration: 8 to 10 load no NDIS 5 miniport (record 35 section 7.1)

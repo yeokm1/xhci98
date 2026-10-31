@@ -1,12 +1,13 @@
 ;
-; xhcinet.inf - xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking
-; (design record 35 sections 7.8 and 8.2, roadmap-usb4.md task 45.59 step
-; S6), on the network PDO XHCICM\TBNET that xhcicm.sys reports while
-; XhciCmNet is 1 (record 35 section 6). The 32-bit file: the undecorated
-; models and install section for 98 SE and ME, .NTx86 for 2000, XP,
-; Vista and 7, and the NTx86.6.2 models for 8, 8.1 and 10, which carry
-; xhcinet6.sys (step S7) and are empty until it exists, so those systems
-; match nothing rather than take the NDIS 5 image they cannot load.
+; xhcinet.inf - Thunderbolt networking (design record 35 sections 7.8, 7.9
+; and 8.2, roadmap-usb4.md task 45.59 steps S6 and S7), on the network PDO
+; XHCICM\TBNET that xhcicm.sys reports while XhciCmNet is 1 (record 35
+; section 6). The 32-bit file: the undecorated models and install section
+; for 98 SE and ME and .NTx86 for 2000, XP, Vista and 7, both installing
+; xhcinet.sys, the NDIS 5 miniport; and the NTx86.6.2 models for 8, 8.1
+; and 10, installing xhcinet6.sys, the NDIS 6.20 miniport, since those
+; systems load no NDIS 5 miniport. Both images run as the one service
+; xhcinet, never both on one system.
 ; scripts\inf-gate\check-net-inf.ps1 holds this file and its 64-bit twin
 ; on every build.
 ;
@@ -31,8 +32,9 @@ DriverVer=10/28/2026,3.3.0.0
 [NetModels]
 %NetDesc%=Net.Dev,XHCICM\TBNET
 
-; 8, 8.1 and 10: xhcinet6.sys, step S7. Empty until then.
+; 8, 8.1 and 10: xhcinet6.sys.
 [NetModels.NTx86.6.2]
+%NetDesc%=Net6.Dev,XHCICM\TBNET
 
 [ControlFlags]
 ExcludeFromSelect=*
@@ -42,11 +44,13 @@ ExcludeFromSelect=*
 
 [SourceDisksFiles]
 xhcinet.sys=1
+xhcinet6.sys=1
 
 [DestinationDirs]
 DefaultDestDir=12
 Net.CopyFiles9x=11
 Net.CopyFiles=12
+Net6.CopyFiles=12
 
 ; ---- 98 SE and ME: NDIS.VXD loads the WDM miniport ----
 [Net.Dev]
@@ -102,6 +106,34 @@ LoadOrderGroup=NDIS
 
 [Net.CopyFiles]
 xhcinet.sys
+
+; ---- Windows 8, 8.1 and 10: the NDIS 6.20 image (record 35 section 7.9) ----
+; As the NT install above, the image xhcinet6.sys, and the three NDIS 6
+; media keywords, which Setup writes to the driver key and NDIS itself
+; reads: *IfType 6 (ethernetCsmacd), *MediaType 0 (NdisMedium802_3),
+; *PhysicalMediaType 0 (NdisPhysicalMediumUnspecified).
+[Net6.Dev.NTx86]
+Characteristics=0x84
+BusType=15
+*IfType=6
+*MediaType=0
+*PhysicalMediaType=0
+AddReg=Net.RegNt,Net.Values,Net.Params
+CopyFiles=Net6.CopyFiles
+
+[Net6.Dev.NTx86.Services]
+AddService=xhcinet,0x00000002,Net6.Service
+
+[Net6.Service]
+DisplayName=%SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\xhcinet6.sys
+LoadOrderGroup=NDIS
+
+[Net6.CopyFiles]
+xhcinet6.sys
 
 ; ---- The driver's values (record 35 section 8.3), each written at its
 ; default with no-overwrite (FLG_ADDREG_NOCLOBBER, a string, the form the

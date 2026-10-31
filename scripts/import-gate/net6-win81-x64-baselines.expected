@@ -1,0 +1,19 @@
+# Authenticated Windows 8.1 Update x64 kernel, HAL and NDIS export baselines, for the
+# import gate's net6 profile (xhcinet6.sys, the NDIS 6.20 miniport of
+# Thunderbolt networking, design record 35 section 7.9, roadmap-usb4.md
+# task 45.59 step S7). Only the files' export names are read (dumpbin
+# /exports), as for hlprx86-win7-baselines.expected; the files stay
+# untracked in tools\win81-x64-extracted.
+#
+# Source: the project's q35 base image w81x64 (read-only, never booted for
+# this): Windows\System32\ntoskrnl.exe, hal.dll and drivers\ndis.sys, extracted
+# by the owner with 7-Zip on 2026-10-31 on development host A; measured
+# the same day. Any staging whose files match these rows satisfies the
+# gate.
+#
+# Format:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+
+ntoskrnl.exe ntoskrnl.exe ntoskrnl.exe 6.3.9600.17415 7474496 2676BD81B52E8E35D149D8753EB0C438F04C3BBBC11348F9F34758DBEE26C843
+hal.dll hal.dll hal.dll 6.3.9600.17196 423768 898637660689DC5CF91E3536109EB439A21F6F65BFD22E6F857FB75605FC22A8
+ndis.sys ndis.sys ndis.sys 6.3.9600.17399 1114432 6558F2BC10E6B09F7EE5264722FCF572B861EDB60A1433B58A4F4625EC0ABF63

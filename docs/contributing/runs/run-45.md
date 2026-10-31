@@ -6442,6 +6442,108 @@ of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
 the calls above; a discovery-only leg (the peer's properties read both
 ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
 
+## 45.59 S7 xhcinet6.sys, the NDIS 6.20 miniport for 8, 8.1 and 10 (2026-10-31, partial)
+
+**Verdict: the code, its INF sections, its gates and its gated builds are done here;
+the legs are owed.** `xhcinet6.sys` (`src\net\ndis6\`) is the NDIS 6.20 miniport of
+design record 35 section 7.9 for 32-bit and 64-bit Windows 8, 8.1 and 10, over the
+same framing core (`src\net\net_frame.c`) and interface glue (`src\net\net_cmif.c`)
+as step S6's `xhcinet.sys`, both taken unchanged from S6's branch (`w45-tbndis`
+`8febce8a`, merged). It builds with WDK 7.1's `WIN7` environment, x86 and x64, whose
+`ndis.h` and `lib\win7\<arch>\ndis.lib` carry NDIS 6.20; no other kit in `tools\` was
+needed. Its legs (record 35 section 11.3, the "10 x86 (or 8.1 x86)" and "10 x64 (or
+8.1 x64)" rows) wait for step S5's network PDO in `xhcicm.sys` and the x64 leg kit
+(S8a); nothing here has been loaded in a guest.
+
+### The driver
+
+- Registration: `NdisMRegisterMiniportDriver`, characteristics revision 2, NDIS 6.20.
+  `MiniportInitializeEx` sets the registration attributes first (surprise removal
+  accepted, internal interface, no check for hang), reads `XhciNetMtu` (1500, 1500 to
+  65522), asks for the interface, sets the revision 2 general attributes (802.3, no
+  offload, `MtuSize` the MTU, every packet filter, `PowerManagementCapabilitiesEx` with
+  every wake-up and protocol-offload capability off and the minimum states
+  unspecified), allocates the receive pool of net buffer lists and the power work item,
+  then `Open`; the adapter stays Paused until `MiniportRestart`.
+- Send: net buffer lists queued under one lock and served by one sender at a time,
+  each net buffer framed into a reservation and committed, the list completed after
+  its last net buffer; a full ring leaves it at the head until `TxDone`. Not Running,
+  link down, service closed, D3 or removed: the queue completes `NDIS_STATUS_PAUSED`
+  or `NDIS_STATUS_MEDIA_DISCONNECTED`. Cancel by id.
+- Pause completes the queue paused and completes at once, or returns pending and the
+  last sender or the last returned list calls `NdisMPauseComplete`. Reset touches
+  nothing. A surprise removal ends sends at once.
+- Receive: frames are reassembled whatever the state; a whole frame is indicated only
+  while Running, from the pool, `NDIS_RECEIVE_FLAGS_RESOURCES` when it runs low; one past
+  the maximum goes through the core's receive segmentation.
+- Link: `NDIS_STATUS_LINK_STATE` from `Restart` on, one publisher at a time so the
+  last view wins; 10 Gbit/s when the link's rate is unknown (record 35 section 7.5),
+  `NDIS_LINK_SPEED_UNKNOWN` while disconnected.
+- Power: `OID_PNP_SET_POWER` pended to an NDIS I/O work item: `Close` at D3, after which
+  it waits until every send has completed, `Open` at D0.
+- `OID_GEN_STATISTICS`' octet counters are 64-bit by carry under the lock (no 64-bit
+  arithmetic).
+
+### The INFs and gates
+
+- `xhcinet.inf` and `xhcinet-amd64.inf`: the `.6.2` models hold `XHCICM\TBNET` with the
+  install `Net6.Dev`: `xhcinet6.sys` as the one service `xhcinet`, `Characteristics`
+  0x84, `BusType` 15, `*IfType` 6, `*MediaType` 0, `*PhysicalMediaType` 0, and the same
+  `XhciNetMtu` value and Advanced entry as the NDIS 5 path. `check-net-inf.ps1`:
+  `PATH-NT62` rewritten, `NETNT-IMAGE`, `NET6-KEYWORD` (the keyword table beside the
+  value table); 51 self-test mutations, both INFs pass. `tuning.md`: rows for the three
+  keywords.
+- The import gate's `-GateProfile net6` (`xhcinet6-imports.allow`, `-amd64.allow`):
+  x86 kernel and HAL pairs against Windows 7 SP1 x86's and 8.1's and 10's; amd64 kernel
+  pairs against NT 5.2 amd64's and 8.1's and 10's; every `NDIS.SYS` pair against 8.1's
+  and 10's `ndis.sys` and declared in WDK 7.1's `ndis.h`. The 8.1 and 10 x86 and x64
+  `ntoskrnl.exe`, `hal.dll` and `ndis.sys` were extracted by the owner from the q35 base
+  images (export names only; `net6-*-baselines.expected`, `legal-provenance.md`
+  section 4). They showed that the 8.1 and 10 x86 HAL export `KfAcquireSpinLock` and
+  `KfReleaseSpinLock` as forwarders to the kernel (Windows 8 itself was not read); the gate's export parser now takes
+  a forwarded export as one, as the loader does. `memset` and `memcpy` are denied:
+  WDK 7.1's x86 compiler had turned a byte loop into `memset`, which S6 fixed in the
+  shared files (`8febce8a`) and this driver in its own.
+- `build-driver.cmd :buildnet6` builds and gates it after `xhcinet.sys` in every x86
+  and amd64 run. Not in the gated record or the source stamp, and not in the package:
+  step S10.
+
+### Builds
+
+`scripts\build-driver.cmd all`, then `all -amd64`, on development host A at
+`542b1812` (this branch with 3.4.0.0 `965f4642` merged), 2026-10-31: both **BUILD +
+GATES PASSED (release qemu)**, every self-test and the host tests included
+(`test_net_frame`: 2554 checks, 0 failures). `xhcinet6.sys` passed the net6 import
+gate in all four images, against the 7 SP1, 8.1 and 10 x86 sets and the NT 5.2 amd64,
+8.1 and 10 x64 sets, with no warning:
+
+| Image | SHA-256 |
+|---|---|
+| `objfre\i386\xhcinet6.sys` | `a3ccc71c2351f28f53743b27cea6ba80301e68a9d8a14572c04a5f4fb4c9c103` |
+| `objchk_qemu\i386\xhcinet6.sys` | `87721bff356791f7fc825bd1322f55186d0b404c365f54e087b3ce0869b948f0` |
+| `objfre\amd64\xhcinet6.sys` | `2e578deb2d17b1aa91befeeec6dbe2d85ef2af8d1abac995fe07f7ef36a53b21` |
+| `objchk_qemu\amd64\xhcinet6.sys` | `08631534b87451a609d7fd482c4076e04bc2f641d4cffb3b5c439673d12d5dbe` |
+
+The first x86 run, at `cd314d75`, stopped at the qemu flavour of S6's `xhcinet.sys`
+x86: `net_cmif.c`'s `IoSetCompletionRoutine`, an ASSERT in the Windows 2000 DDK's
+checked headers, imported `ntoskrnl.exe!RtlAssert`, a pair with no Windows 98 evidence.
+`net_cmif.c` now sets the three completion fields itself, as `src\hcd.h`'s
+`HCD_SET_COMPLETION_ALWAYS` does (`2af48299`, reviewed, merged into 3.4.0.0 as
+`965f4642`). The WDK 7.1 images keep the RtlAssert of WDK 7.1's checked
+`IoGetNextIrpStackLocation`, which their allowlists admit for the qemu flavour.
+
+### Reviews
+
+Reviewed and revised: the miniport (the D3 drain, the link publication's order, the
+64-bit octet counters), and the INFs, gates and build (the net6 profile under
+`-Arch auto`, the header through `WDKROOT`).
+
+### Owed
+
+- The legs on 8.1 or 10, x86 and x64 (record 35 section 11.3), after S5 and, for x64,
+  the leg kit (S8a).
+- Packaging (S10) and the installer (S11).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Collected as each task merges, for `45.final` to place; the wording is the

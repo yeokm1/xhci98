@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-Setup-engine gate for the two INFs of xhcinet.sys, the NDIS 5 miniport of
-Thunderbolt networking (design record 35 sections 7.8, 8.2 and 8.3;
-roadmap-usb4.md task 45.59 step S6): src\net\xhcinet.inf (x86) and
+Setup-engine gate for the two INFs of Thunderbolt networking, which install
+xhcinet.sys, the NDIS 5 miniport, and xhcinet6.sys, the NDIS 6.20 one
+(design record 35 sections 7.8, 7.9, 8.2 and 8.3; roadmap-usb4.md task
+45.59 steps S6 and S7): src\net\xhcinet.inf (x86) and
 src\net\xhcinet-amd64.inf (amd64).
 
 .DESCRIPTION
@@ -14,27 +15,39 @@ The rule families, each named as the other INF gates name theirs:
   BOTH-*    Class Net and its GUID; one DriverVer equal to
             src\xhci_version.h's date and version; every %string% defined;
             every section named by AddReg, CopyFiles, AddService and a
-            model line present; [SourceDisksFiles] exactly xhcinet.sys;
+            model line present; [SourceDisksFiles] exactly xhcinet.sys
+            and xhcinet6.sys;
             CatalogFile on the amd64 file and on no other (record 19
             section 3a).
   PATH-*    [Manufacturer] exactly NetModels,NTx86.6.2 (x86) or
             NetModels,NTamd64,NTamd64.6.2 (amd64) (PATH-MFGDEC); the one
             model XHCICM\TBNET (record 35 section 6.2), in the undecorated
             section on x86 and in NetModels.NTamd64 on amd64 (PATH-ID); the
-            .6.2 models section present and empty until xhcinet6.sys exists
-            (step S7, PATH-NT62); no undecorated models or install section
-            in the amd64 file (PATH-NO9X).
+            .6.2 models section holding the one model XHCICM\TBNET too,
+            with an install section of its own, not the NDIS 5 one
+            (PATH-NT62); no undecorated models or install section in the
+            amd64 file, and no undecorated twin of the NDIS 6 install in
+            either (PATH-NO9X).
   NET9X-*   The x86 file's 98 SE and ME install: DevLoader *ndis,
             DeviceVxDs xhcinet.sys, EnumPropPages netdi.dll, the NDIS
             version 5.0, Ndi\DeviceID the hardware id, the Interfaces and
             Install keys, the image copied to dirid 11 (record 35 section
             7.8).
-  NETNT-*   Each .NT install: Characteristics 0x84 (NCF_PHYSICAL and
-            NCF_HAS_UI), a BusType, the image copied to dirid 12, the
-            xhcinet service as the function driver (AddService flag 2) with
-            ServiceType 1, StartType 3, ServiceBinary %12%\xhcinet.sys and
-            the NDIS load order group, Ndi\Service xhcinet, UpperRange ndis5
-            and LowerRange ethernet.
+  NETNT-*   Each .NT install, the NDIS 5 one and the NDIS 6 one alike:
+            Characteristics 0x84 (NCF_PHYSICAL and NCF_HAS_UI), a BusType,
+            its image copied to dirid 12 (xhcinet.sys on the NDIS 5 path,
+            xhcinet6.sys on the 6.2 one), the xhcinet service as the
+            function driver (AddService flag 2) with ServiceType 1,
+            StartType 3, ServiceBinary %12%\<that image> and the NDIS load
+            order group, Ndi\Service xhcinet, UpperRange ndis5 and
+            LowerRange ethernet. NETNT-IMAGE: no path copies the other
+            path's image (the 98 SE and ME path's is xhcinet.sys).
+  NET6-*    The NDIS 6 install's media keywords (record 35 section 7.9):
+            *IfType 6, *MediaType 0 and *PhysicalMediaType 0, each once,
+            at those values, on the 6.2 path and on no other
+            (NET6-KEYWORD); the keyword table below is the one place they
+            are listed. Values Windows owns, which NDIS reads itself; the
+            install writes each at its one value.
   BOTH-DUPREG, BOTH-REGFLAGS
             One write a registry target on each path, and each a plain
             string write but the binary NDIS version and the values below.
@@ -64,6 +77,15 @@ $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 # The driver's values (record 35 section 8.3): name, default, min, max.
 $script:Values = @(
     @{ Name = "XhciNetMtu"; Default = "1500"; Min = "1500"; Max = "65522" }
+)
+
+# The NDIS 6 install's media keywords (record 35 section 7.9): directives
+# of the 6.2 install section, which Setup writes to the driver key and
+# NDIS reads; name and the one value written.
+$script:Keywords = @(
+    @{ Name = "*IfType"; Value = "6" },
+    @{ Name = "*MediaType"; Value = "0" },
+    @{ Name = "*PhysicalMediaType"; Value = "0" }
 )
 
 function Get-InfFor([string]$a) {
@@ -222,7 +244,7 @@ function Test-NetInf {
     $sdf = Get-Section $inf "SourceDisksFiles"
     $files = @()
     if ($null -ne $sdf) { foreach ($l in $sdf) { $files += ($l -split '=')[0].Trim().ToLowerInvariant() } }
-    if (($files -join ",") -ne "xhcinet.sys") { Fail "BOTH-FILES" "[SourceDisksFiles] is '$($files -join ",")', not xhcinet.sys alone" }
+    if (($files -join ",") -ne "xhcinet.sys,xhcinet6.sys") { Fail "BOTH-FILES" "[SourceDisksFiles] is '$($files -join ",")', not xhcinet.sys and xhcinet6.sys" }
 
     # PATH-*
     $mfg = Get-Section $inf "Manufacturer"
@@ -248,8 +270,19 @@ function Test-NetInf {
         }
     }
     $six = Get-Section $inf $sixTwo
+    $installs6 = @()
     if ($null -eq $six) { Fail "PATH-NT62" "no [$sixTwo]" }
-    elseif ($six.Count -ne 0) { Fail "PATH-NT62" "[$sixTwo] is not empty: it carries xhcinet6.sys from step S7, which does not exist yet" }
+    elseif ($six.Count -ne 1) { Fail "PATH-NT62" "[$sixTwo] does not hold exactly one model" }
+    elseif ($six[0] -notmatch '^%NetDesc%\s*=\s*([^,\s]+)\s*,\s*XHCICM\\TBNET$') {
+        Fail "PATH-NT62" "[$sixTwo]'s model is not %NetDesc%=<install>,XHCICM\TBNET"
+    } elseif ($installs -contains $Matches[1]) {
+        Fail "PATH-NT62" "[$sixTwo] names the NDIS 5 install [$($Matches[1])]: 8 to 10 need an install of xhcinet6.sys of its own"
+    } else {
+        $installs6 += $Matches[1]
+    }
+    foreach ($i in $installs6) {
+        if ($null -ne (Get-Section $inf $i)) { Fail "PATH-NO9X" "an undecorated twin [$i] of the NDIS 6 install" }
+    }
     if ($A -eq "amd64") {
         if ($null -ne (Get-Section $inf "NetModels")) { Fail "PATH-NO9X" "an undecorated [NetModels] in the 64-bit file" }
         foreach ($i in $installs) {
@@ -259,8 +292,11 @@ function Test-NetInf {
 
     $paths = @()
     foreach ($i in $installs) {
-        if ($A -eq "x86") { $paths += @{ Kind = "9x"; Name = $i } }
-        $paths += @{ Kind = "nt"; Name = ($i + $ntSuffix) }
+        if ($A -eq "x86") { $paths += @{ Kind = "9x"; Name = $i; Image = "xhcinet.sys" } }
+        $paths += @{ Kind = "nt"; Name = ($i + $ntSuffix); Image = "xhcinet.sys" }
+    }
+    foreach ($i in $installs6) {
+        $paths += @{ Kind = "nt6"; Name = ($i + $ntSuffix); Image = "xhcinet6.sys" }
     }
 
     foreach ($p in $paths) {
@@ -295,9 +331,14 @@ function Test-NetInf {
         $dirs = Get-Section $inf "DestinationDirs"
         $copiesImage = $false
         $dirOk = $true
+        $other = "xhcinet6.sys"
+        if ($p.Image -eq "xhcinet6.sys") { $other = "xhcinet.sys" }
         foreach ($c in $copy) {
             $cs = Get-Section $inf $c
-            if ($null -ne $cs -and ($cs -contains "xhcinet.sys")) {
+            if ($null -ne $cs -and ($cs -contains $other)) {
+                Fail "NETNT-IMAGE" "[$($p.Name)] copies $other, the other path's image"
+            }
+            if ($null -ne $cs -and ($cs -contains $p.Image)) {
                 $copiesImage = $true
                 $d = Get-Key $dirs $c
                 if ($null -eq $d) { $d = Get-Key $dirs "DefaultDestDir" }
@@ -329,7 +370,7 @@ function Test-NetInf {
         } else {
             if ((Get-Key $sec "Characteristics") -ne "0x84") { Fail "NETNT-CHAR" "[$($p.Name)] Characteristics is not 0x84" }
             if ($null -eq (Get-Key $sec "BusType")) { Fail "NETNT-BUSTYPE" "[$($p.Name)] has no BusType" }
-            if (-not $copiesImage -or -not $dirOk) { Fail "NETNT-COPY" "[$($p.Name)] does not copy xhcinet.sys to dirid 12" }
+            if (-not $copiesImage -or -not $dirOk) { Fail "NETNT-COPY" "[$($p.Name)] does not copy $($p.Image) to dirid 12" }
             if ($null -ne (Find-Reg $rows "" "DevLoader")) { Fail "NETNT-NO9XKEY" "[$($p.Name)] writes the 9x DevLoader" }
             $svcSec = Get-Section $inf ($p.Name + ".Services")
             $svcOk = $false
@@ -338,19 +379,38 @@ function Test-NetInf {
                     if ($l -match '^AddService\s*=\s*xhcinet\s*,\s*0x0*2\s*,\s*([^,\s]+)$') {
                         $svc = Get-Section $inf $Matches[1]
                         if ($null -ne $svc -and (Get-Key $svc "ServiceType") -eq "1" -and (Get-Key $svc "StartType") -eq "3" -and
-                            (Get-Key $svc "ServiceBinary") -eq '%12%\xhcinet.sys' -and (Get-Key $svc "LoadOrderGroup") -eq "NDIS") {
+                            (Get-Key $svc "ServiceBinary") -eq ('%12%\' + $p.Image) -and (Get-Key $svc "LoadOrderGroup") -eq "NDIS") {
                             $svcOk = $true
                         }
                     }
                 }
             }
-            if (-not $svcOk) { Fail "NETNT-SERVICE" "[$($p.Name).Services] does not add the xhcinet service as the function driver (flag 2, kernel driver, demand start, %12%\xhcinet.sys, group NDIS)" }
+            if (-not $svcOk) { Fail "NETNT-SERVICE" "[$($p.Name).Services] does not add the xhcinet service as the function driver (flag 2, kernel driver, demand start, %12%\$($p.Image), group NDIS)" }
             $r = Find-Reg $rows "Ndi" "Service"
             if ($null -eq $r -or $r[4] -ne "xhcinet") { Fail "NETNT-NDI" "[$($p.Name)] does not write Ndi,Service xhcinet" }
             $r = Find-Reg $rows "Ndi\Interfaces" "UpperRange"
             if ($null -eq $r -or $r[4] -ne "ndis5") { Fail "NETNT-NDI" "[$($p.Name)] UpperRange is not ndis5" }
             $r = Find-Reg $rows "Ndi\Interfaces" "LowerRange"
             if ($null -eq $r -or $r[4] -ne "ethernet") { Fail "NETNT-NDI" "[$($p.Name)] LowerRange is not ethernet" }
+        }
+
+        # NET6-*
+        foreach ($kw in $script:Keywords) {
+            $lines = @($sec | Where-Object { $_ -match ('^' + [regex]::Escape($kw.Name) + '\s*=') })
+            if ($p.Kind -ne "nt6") {
+                if ($lines.Count -ne 0) { Fail "NET6-KEYWORD" "[$($p.Name)] carries $($kw.Name), an NDIS 6 keyword, off the 6.2 path" }
+                continue
+            }
+            if ($lines.Count -ne 1) { Fail "NET6-KEYWORD" "[$($p.Name)] carries $($kw.Name) $($lines.Count) times, not once"; continue }
+            $got = (Get-Key $sec $kw.Name)
+            if ($got -ne $kw.Value) { Fail "NET6-KEYWORD" "[$($p.Name)] $($kw.Name) is '$got', not $($kw.Value)" }
+        }
+        foreach ($l in $sec) {
+            if ($l -match '^(\*[A-Za-z]+)\s*=') {
+                $known = $false
+                foreach ($kw in $script:Keywords) { if ($Matches[1] -ieq $kw.Name) { $known = $true } }
+                if (-not $known) { Fail "NET6-KEYWORD" "[$($p.Name)] carries $($Matches[1]), which is not in the keyword table" }
+            }
         }
 
         # VAL-*
@@ -402,11 +462,26 @@ if ($SelfTest) {
         @{ A = "amd64"; Rule = "BOTH-CATALOG"; From = "CatalogFile=xhcinet.cat`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-STRING"; From = 'MtuDesc="MTU"'; To = 'MtuDescX="MTU"' },
         @{ A = "x86"; Rule = "BOTH-FILES"; From = "xhcinet.sys=1"; To = "xhcinet.sys=1`r`nxhcicm.sys=1" },
+        @{ A = "amd64"; Rule = "BOTH-FILES"; From = "xhcinet6.sys=1`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-SECTION"; From = "AddReg=Net.Reg9x,Net.Values,Net.Params"; To = "AddReg=Net.Reg9x,Net.Values,Net.Params,Net.Missing" },
         @{ A = "x86"; Rule = "PATH-MFGDEC"; From = "NetModels,NTx86.6.2"; To = "NetModels,NTx86,NTx86.6.2" },
         @{ A = "amd64"; Rule = "PATH-MFGDEC"; From = "NetModels,NTamd64,NTamd64.6.2"; To = "NetModels,NTamd64" },
         @{ A = "x86"; Rule = "PATH-ID"; From = "Net.Dev,XHCICM\TBNET"; To = "Net.Dev,XHCI98\TBNET" },
-        @{ A = "x86"; Rule = "PATH-NT62"; From = "[NetModels.NTx86.6.2]`r`n"; To = "[NetModels.NTx86.6.2]`r`n%NetDesc%=Net.Dev,XHCICM\TBNET`r`n" },
+        @{ A = "x86"; Rule = "PATH-NT62"; From = "%NetDesc%=Net6.Dev,XHCICM\TBNET"; To = "%NetDesc%=Net.Dev,XHCICM\TBNET" },
+        @{ A = "amd64"; Rule = "PATH-NT62"; From = "%NetDesc%=Net6.Dev,XHCICM\TBNET`r`n"; To = "" },
+        @{ A = "x86"; Rule = "PATH-NT62"; From = "%NetDesc%=Net6.Dev,XHCICM\TBNET"; To = "%NetDesc%=Net6.Dev,XHCICM\TBNET6" },
+        @{ A = "x86"; Rule = "PATH-NO9X"; From = "[Net6.Dev.NTx86]"; To = "[Net6.Dev]`r`nCopyFiles=Net6.CopyFiles`r`n[Net6.Dev.NTx86]" },
+        @{ A = "x86"; Rule = "NETNT-IMAGE"; From = "[Net6.CopyFiles]`r`nxhcinet6.sys"; To = "[Net6.CopyFiles]`r`nxhcinet6.sys`r`nxhcinet.sys" },
+        @{ A = "amd64"; Rule = "NETNT-IMAGE"; From = "[Net.CopyFiles]`r`nxhcinet.sys"; To = "[Net.CopyFiles]`r`nxhcinet.sys`r`nxhcinet6.sys" },
+        @{ A = "x86"; Rule = "NETNT-COPY"; From = "Net6.CopyFiles=12"; To = "Net6.CopyFiles=11" },
+        @{ A = "amd64"; Rule = "NETNT-SERVICE"; From = "ServiceBinary=%12%\xhcinet6.sys"; To = "ServiceBinary=%12%\xhcinet.sys" },
+        @{ A = "x86"; Rule = "NETNT-CHAR"; From = "[Net6.Dev.NTx86]`r`nCharacteristics=0x84"; To = "[Net6.Dev.NTx86]`r`nCharacteristics=0x4" },
+        @{ A = "x86"; Rule = "NET6-KEYWORD"; From = "*IfType=6"; To = "*IfType=71" },
+        @{ A = "amd64"; Rule = "NET6-KEYWORD"; From = "*MediaType=0`r`n"; To = "" },
+        @{ A = "x86"; Rule = "NET6-KEYWORD"; From = "*PhysicalMediaType=0"; To = "*PhysicalMediaType=0`r`n*PhysicalMediaType=14" },
+        @{ A = "amd64"; Rule = "NET6-KEYWORD"; From = "*PhysicalMediaType=0"; To = "*PhysicalMediaType=0`r`n*IfConnectorPresent=1" },
+        @{ A = "x86"; Rule = "NET6-KEYWORD"; From = "[Net.Dev.NTx86]`r`nCharacteristics=0x84"; To = "[Net.Dev.NTx86]`r`nCharacteristics=0x84`r`n*IfType=6" },
+        @{ A = "amd64"; Rule = "VAL-WRITTEN"; From = "[Net6.Dev.NTamd64]`r`nCharacteristics=0x84`r`nBusType=15`r`n*IfType=6`r`n*MediaType=0`r`n*PhysicalMediaType=0`r`nAddReg=Net.RegNt,Net.Values,Net.Params"; To = "[Net6.Dev.NTamd64]`r`nCharacteristics=0x84`r`nBusType=15`r`n*IfType=6`r`n*MediaType=0`r`n*PhysicalMediaType=0`r`nAddReg=Net.RegNt,Net.Params" },
         @{ A = "amd64"; Rule = "PATH-NO9X"; From = "[ControlFlags]"; To = "[NetModels]`r`n%NetDesc%=Net.Dev,XHCICM\TBNET`r`n[ControlFlags]" },
         @{ A = "x86"; Rule = "NET9X-KEY"; From = "HKR,,DevLoader,,*ndis"; To = "HKR,,DevLoader,,*ntkern" },
         @{ A = "x86"; Rule = "NET9X-KEY"; From = "HKR,NDIS,MajorNdisVersion,1,05"; To = "HKR,NDIS,MajorNdisVersion,1,04" },

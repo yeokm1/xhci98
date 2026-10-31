@@ -92,6 +92,17 @@ rem      (scripts\inf-gate\check-net-inf.ps1, self-tested first, over
 rem      src\net\xhcinet.inf and xhcinet-amd64.inf on every build). It is not
 rem      yet in the gated record or the source stamp: the package carries it
 rem      from step S10 (record 35 section 9.3), which adds both
+rem  14c. the fifth binary, xhcinet6.sys - the NDIS 6.20 miniport of
+rem      Thunderbolt networking for 8, 8.1 and 10 (task 45.59 step S7,
+rem      record 35 section 7.9), built from src\net\ndis6 after xhcinet.sys
+rem      for each flavour and architecture with WDK 7.1's WIN7 environment
+rem      (setenv <WDK> <flavor> x86 WIN7 no_oacr, or x64 WIN7 no_oacr; the
+rem      one kit here with NDIS 6.20), so every build needs tools\WinDDK71
+rem      (or WDKROOT): its import gate (-GateProfile net6 over
+rem      scripts\import-gate\xhcinet6-imports.allow or
+rem      xhcinet6-imports-amd64.allow) and the flavour marker check. Its INF
+rem      sections are 14b's two INFs'. Not yet in the gated record or the
+rem      source stamp, as 14b
 rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
 rem      bundles from this build since 3.1.0.0: its two INFs held to
 rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
@@ -738,6 +749,9 @@ if errorlevel 1 goto cmfail
 call :buildnet %FLAVOR%
 if errorlevel 1 goto netfail
 
+call :buildnet6 %FLAVOR%
+if errorlevel 1 goto net6fail
+
 rem xhcihlpr.sys, the x86 helper (design record 18, section 15), with every
 rem x86 flavour and never with -amd64: the amd64 HCD has no helper.
 if /i "%ARCH%"=="amd64" goto skiphlpr
@@ -1163,6 +1177,75 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
+rem :buildnet6 <release|qemu>
+rem
+rem xhcinet6.sys, the NDIS 6.20 miniport of Thunderbolt networking for 8,
+rem 8.1 and 10 (roadmap-usb4.md task 45.59 step S7, design record 35
+rem sections 7.1 and 7.9): WDK 7.1's WIN7 environment for the run's
+rem architecture, the same BUILD_ALT_DIR as every binary of the run, in
+rem src\net\ndis6; then the import gate's net6 profile and the flavour
+rem marker check. No frame-pointer check: that rule is MSVC 6.0's, and
+rem this image is WDK 7.1's on both architectures.
+rem ------------------------------------------------------------------
+:buildnet6
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "NET6WDK=%REPO%\tools\WinDDK71"
+if not "%WDKROOT%"=="" set "NET6WDK=%WDKROOT%"
+if not exist "%NET6WDK%\bin\setenv.bat" goto net6nowdk
+set "NET6ENV=x86 WIN7 no_oacr"
+set "NET6ALLOW=%REPO%\scripts\import-gate\xhcinet6-imports.allow"
+if /i "%ARCH%"=="amd64" set "NET6ENV=x64 WIN7 no_oacr"
+if /i "%ARCH%"=="amd64" set "NET6ALLOW=%REPO%\scripts\import-gate\xhcinet6-imports-amd64.allow"
+set "NET6SYS=%REPO%\src\net\ndis6\%OBJDIR%\%ARCHDIR%\xhcinet6.sys"
+set "NET6LOG=%REPO%\src\net\ndis6\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcinet6.sys (WDK 7.1 %NET6ENV%) ===
+if exist "%NET6SYS%" del "%NET6SYS%"
+if exist "%NET6LOG%.err" del "%NET6LOG%.err"
+if exist "%NET6LOG%.log" del "%NET6LOG%.log"
+cmd /c "call "%NET6WDK%\bin\setenv.bat" %NET6WDK% %DDKFLAVOR% %NET6ENV% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\net\ndis6" && build -cZ"
+if errorlevel 1 goto net6buildfail
+if exist "%NET6LOG%.err" goto net6buildfail
+if not exist "%NET6SYS%" goto net6buildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcinet6.sys) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NET6SYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NET6ALLOW%" -GateProfile net6 %GATEOPT%
+if errorlevel 1 goto net6gatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%NET6SYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto net6gatefail
+endlocal
+exit /b 0
+
+:net6nowdk
+echo.
+echo ERROR: xhcinet6.sys needs WDK 7.1 (its WIN7 environment), which was not
+echo found at "%NET6WDK%". Unpack it into tools\WinDDK71 or set WDKROOT.
+endlocal
+exit /b 1
+
+:net6buildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcinet6.sys failed. See "%NET6LOG%.log" and
+echo "%NET6LOG%.err".
+endlocal
+exit /b 1
+
+:net6gatefail
+echo.
+echo ERROR: the %FLAVOR% xhcinet6.sys failed the import gate or carries the
+echo wrong flavour marker - see above. Do not deploy it.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
 rem :checkfpo "<build log>" - on the x86 release build of xhci98.sys,
 rem xhciuas.sys and xhcicm.sys (MSVC 6.0), every compile kept frame
 rem pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
@@ -1285,6 +1368,12 @@ exit /b 1
 :netfail
 echo.
 echo ERROR: the %FLAVOR% xhcinet.sys did not build or did not pass its gates.
+endlocal
+exit /b 1
+
+:net6fail
+echo.
+echo ERROR: the %FLAVOR% xhcinet6.sys did not build or did not pass its gates.
 endlocal
 exit /b 1
 

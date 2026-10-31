@@ -90,7 +90,13 @@ function Assert-ManifestIdentityFields {
 # ------------------------------------------- Windows 2000 kernel/HAL images ---
 
 function Read-Win2kBaselineManifest {
-    param([string]$Path)
+    param(
+        [string]$Path,
+        # The net6 profile's 8.1 and 10 sets name ndis.sys too (design
+        # record 35 section 7.9); every other manifest names the kernel and
+        # HAL alone, and is read without this switch.
+        [switch]$AllowNdis
+    )
 
     if (-not (Test-Path -LiteralPath $Path)) {
         throw "Windows 2000 baseline manifest not found: $Path"
@@ -117,8 +123,10 @@ function Read-Win2kBaselineManifest {
         }
 
         $provider = $fields[2].ToLower()
-        if ($provider -notin @("ntoskrnl.exe", "hal.dll")) {
-            throw "$Path line ${lineNo}: PROVIDER must be ntoskrnl.exe or hal.dll"
+        $providers = @("ntoskrnl.exe", "hal.dll")
+        if ($AllowNdis) { $providers += "ndis.sys" }
+        if ($provider -notin $providers) {
+            throw "$Path line ${lineNo}: PROVIDER must be $($providers -join ' or ')"
         }
 
         $length = Assert-ManifestIdentityFields -Path $Path -LineNo $lineNo `

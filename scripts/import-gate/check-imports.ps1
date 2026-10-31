@@ -187,7 +187,26 @@ param(
     # are staged (-Ndis98Dir, -NdisMeDir), each NDIS.SYS pair among its
     # export names (ndisvxd-baselines.expected; export names alone are read,
     # the owner's rule of 2026-10-31, 14:40).
-    [ValidateSet("default", "hlprx86", "net98")]
+    #
+    # **The net6 profile: xhcinet6.sys, the NDIS 6.20 miniport of
+    # Thunderbolt networking for 8, 8.1 and 10** (design record 35 section
+    # 7.9, task 45.59 step S7), x86 and amd64, over its own allowlist
+    # (-AllowPath must name it: xhcinet6-imports.allow or its -amd64
+    # sibling). No Windows 98 rule: the image never loads there. Every
+    # pair's module is NTOSKRNL.EXE, HAL.DLL or NDIS.SYS. On x86 each
+    # NTOSKRNL.EXE and HAL.DLL pair is held to the export tables of the
+    # Windows 7 SP1 x86 kernel and HAL (hlprx86-win7-baselines.expected,
+    # required), the oldest NT 6 set staged; on amd64 the default amd64
+    # rules (NT 5.2 amd64) hold them. On top of either, each 8.1 or 10 set
+    # whose manifest is committed (net6-win81-x86-baselines.expected,
+    # net6-win10-x86-, net6-win81-x64-, net6-win10-x64-) is required too,
+    # its files staged in tools\win81-x86-extracted and the rest; a set
+    # with no manifest yet is reported owed. Those manifests name ndis.sys
+    # too, so each NDIS.SYS pair resolves against the 8.1 and 10 ndis.sys
+    # export tables as well; and each must carry "ndis620-header" -
+    # declared in WDK 7.1's ndis.h - checked against
+    # tools\WinDDK71\inc\ddk\ndis.h.
+    [ValidateSet("default", "hlprx86", "net98", "net6")]
     [string]$GateProfile = "default",
 
     # The hlprx86 manifests and the directories their files are staged in.
@@ -476,9 +495,18 @@ function Get-ExportNames {
     param([string[]]$DumpLines)
 
     # "ordinal hint RVA name" rows; no header or summary line has that shape.
+    # A forwarded export ("ordinal hint name (forwarded to MODULE.NAME)",
+    # no RVA) is an export too: the loader resolves an import of it
+    # through the forward. The 8.1 and 10 x86 HALs forward their spin
+    # lock routines to the kernel so (KfAcquireSpinLock and
+    # KfReleaseSpinLock in the net6 profile's baselines);
+    # the kernels and HALs of 2000 to 7 carry no forwarder this gate's
+    # images import.
     $names = @()
     foreach ($line in $DumpLines) {
         if ($line -match "^\s*\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)") {
+            $names += $Matches[1]
+        } elseif ($line -match "^\s*\d+\s+[0-9A-Fa-f]+\s+(\S+)\s+\(forwarded to \S+\)") {
             $names += $Matches[1]
         }
     }
@@ -642,6 +670,7 @@ $manifestFiles
     $baseline = @{
         "ntoskrnl.exe" = @{}
         "hal.dll"      = @{}
+        "ndis.sys"     = @{}
     }
     foreach ($row in $ManifestRows) {
         $path = Join-Path $Dir $row.Out
@@ -666,17 +695,19 @@ function Get-HlprBaseline {
         [string]$Dumpbin
     )
 
-    $merged = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{} }
+    # A set with AllowNdis (the net6 profile's 8.1 and 10 sets) may name
+    # ndis.sys as well; its exports land under "ndis.sys".
+    $merged = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{}; "ndis.sys" = @{} }
     $missing = @()
     foreach ($set in $Sets) {
-        $rows = @(Read-Win2kBaselineManifest -Path $set.Manifest)
+        $rows = @(Read-Win2kBaselineManifest -Path $set.Manifest -AllowNdis:($set.ContainsKey("AllowNdis") -and $set["AllowNdis"] -eq $true))
         $one = Get-Win2kBaseline -Dir $set.Dir -Dumpbin $Dumpbin -ManifestRows $rows `
             -Label $set.Label -ExtractSwitch $set.Extract
         if ($null -eq $one) {
             $missing += $set.Label
             continue
         }
-        foreach ($provider in @("ntoskrnl.exe", "hal.dll")) {
+        foreach ($provider in @("ntoskrnl.exe", "hal.dll", "ndis.sys")) {
             foreach ($binary in $one[$provider].Keys) {
                 $merged[$provider]["$($set.Tag) $binary"] = $one[$provider][$binary]
             }
@@ -1083,6 +1114,69 @@ function Test-Net98Rows {
     Write-Ok ("net98 allowlist rows: {0} checked" -f $rows.Count)
 }
 
+#
+# The net6 profile's own rows (see -GateProfile): the three modules, and
+# every NDIS.SYS pair tagged ndis620-header and declared as a routine in
+# WDK 7.1's ndis.h. Reads only this repository's files and the WDK's
+# header.
+#
+function Test-Net6Rows {
+    param([string]$AllowPath)
+    $rows = (Read-AllowFile -Path $AllowPath).Allow
+    # The kit the build used: WDKROOT when set, as build-driver.cmd
+    # :buildnet6 takes it, else tools\WinDDK71.
+    $wdk = Join-Path $repo "tools\WinDDK71"
+    if (-not [string]::IsNullOrEmpty($env:WDKROOT)) { $wdk = $env:WDKROOT }
+    $header = Join-Path $wdk "inc\ddk\ndis.h"
+    $headerText = $null
+    if (Test-Path -LiteralPath $header) {
+        $headerText = [IO.File]::ReadAllText($header)
+        $headerText = [regex]::Replace($headerText, '(?s)/\*.*?\*/', ' ')
+        $headerText = [regex]::Replace($headerText, '//[^\r\n]*', ' ')
+    } else {
+        Add-Failure "net6: '$header' is not there, so no NDIS.SYS row's ndis620-header can be checked; xhcinet6.sys is built with that kit (WDKROOT or tools\WinDDK71), so it must be."
+    }
+    foreach ($row in $rows) {
+        if ($row.Module -ieq "ntoskrnl.exe" -or $row.Module -ieq "hal.dll") {
+            continue
+        }
+        if ($row.Module -ieq "NDIS.SYS") {
+            if ($row.Notes -notmatch '(^|[;\s])ndis620-header([;\s]|$)') {
+                Add-Failure "net6: NDIS.SYS!$($row.Symbol) carries no ndis620-header tag."
+            } elseif ($null -ne $headerText -and
+                      $headerText -notmatch ('(?m)^[ \t]*[A-Za-z_][\w \t\*]*\r?\n[ \t]*' + [regex]::Escape($row.Symbol) + '\s*\(')) {
+                Add-Failure "net6: NDIS.SYS!$($row.Symbol) is tagged ndis620-header but WDK 7.1's ndis.h declares no routine of that name."
+            }
+            continue
+        }
+        Add-Failure "net6: $($row.Module)!$($row.Symbol): xhcinet6.sys imports from NTOSKRNL.EXE, HAL.DLL and NDIS.SYS alone."
+    }
+    Write-Ok ("net6 allowlist rows: {0} checked" -f $rows.Count)
+}
+
+#
+# The net6 profile's 8.1 and 10 sets for one architecture: each set whose
+# manifest is committed, its files required; the others reported owed.
+# Returns the sets in Get-HlprBaseline's form.
+#
+function Get-Net6Sets {
+    param([string]$ForArch)
+    $tag = if ($ForArch -eq "amd64") { "x64" } else { "x86" }
+    $sets = @()
+    foreach ($os in @(@{ Name = "win81"; Label = "Windows 8.1" }, @{ Name = "win10"; Label = "Windows 10" })) {
+        $manifest = Join-Path $PSScriptRoot ("net6-{0}-{1}-baselines.expected" -f $os.Name, $tag)
+        $dir = Join-Path $repo ("tools\{0}-{1}-extracted" -f $os.Name, $tag)
+        if (-not (Test-Path -LiteralPath $manifest)) {
+            Add-Warning ("net6: no $($os.Label) $tag baseline manifest ('$manifest') is committed yet, so " +
+                "nothing checked this image's kernel and HAL imports against $($os.Label) $tag (owed).")
+            continue
+        }
+        $sets += @{ Label = "$($os.Label) $tag"; Dir = $dir; Manifest = $manifest; Tag = "$($os.Name)$tag";
+                    Extract = "(stage the files the manifest names)"; AllowNdis = $true }
+    }
+    return $sets
+}
+
 function Test-Image {
     param(
         [string]$Path,
@@ -1190,6 +1284,10 @@ function Test-Image {
             $moduleKey = ""
             if ($pair.Module -ieq "ntoskrnl.exe") { $moduleKey = "ntoskrnl.exe" }
             if ($pair.Module -ieq "hal.dll") { $moduleKey = "hal.dll" }
+            # The net6 profile's 8.1 and 10 sets carry ndis.sys: its NDIS.SYS
+            # pairs resolve against them when they are staged.
+            if ($pair.Module -ieq "ndis.sys" -and $Win2k.ContainsKey("ndis.sys") -and
+                $Win2k["ndis.sys"].Count -gt 0) { $moduleKey = "ndis.sys" }
 
             if ($moduleKey -ne "") {
                 $absent = @()
@@ -1201,7 +1299,7 @@ function Test-Image {
                 if ($absent.Count -gt 0) {
                     Add-Failure "$($pair.Module)!$($pair.Symbol) is not exported by $BaselineLabel $($absent -join ', ') - the driver cannot load on that target."
                 } else {
-                    $evidence += if ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "hlprx86") { "w2k-export; xp-x86-export; nt6-x86-export" } else { "w2k-export" }
+                    $evidence += if ($moduleKey -eq "ndis.sys") { "nt6-ndis-export" } elseif ($ImageArch -eq "amd64") { "nt52-amd64-export" } elseif ($ImageArch -eq "hlprx86") { "w2k-export; xp-x86-export; nt6-x86-export" } elseif ($ImageArch -eq "net6x86") { "nt6-x86-export" } else { "w2k-export" }
                 }
             }
         }
@@ -1214,6 +1312,10 @@ function Test-Image {
         if ($profileNow -eq "net98" -and $pair.Module -ieq "NDIS.SYS") {
             if ($row.Notes -match '(^|[;\s])bc-header([;\s]|$)') { $evidence += "bc-header" }
             if ($row.Notes -match '(^|[;\s])w98-runtime\s+\S') { $evidence += "w98-runtime" }
+        }
+        # net6: an NDIS.SYS row's ndis620-header tag, held by Test-Net6Rows.
+        if ($profileNow -eq "net6" -and $pair.Module -ieq "NDIS.SYS") {
+            if ($row.Notes -match '(^|[;\s])ndis620-header([;\s]|$)') { $evidence += "ndis620-header" }
         }
 
         if ($null -ne $Precedent) {
@@ -1259,7 +1361,7 @@ function Test-Image {
         # the refusal above has already failed it.)
         #
         if ($pair.Module -ieq "ntoskrnl.exe" -or $pair.Module -ieq "hal.dll") {
-            if ($ImageArch -eq "amd64" -or $ImageArch -eq "hlprx86") {
+            if ($ImageArch -eq "amd64" -or $ImageArch -eq "hlprx86" -or $ImageArch -eq "net6x86") {
                 #
                 # **THE amd64 RULE, AND IT IS STRONGER THAN THE WINDOWS 98 ONE
                 # RATHER THAN A RELAXATION OF IT** (the owner's decision,
@@ -1276,7 +1378,7 @@ function Test-Image {
                 # pair evidenced when the baselines were never loaded.
                 #
                 if ($null -eq $Win2k) {
-                    if ($ImageArch -eq "hlprx86") {
+                    if ($ImageArch -eq "hlprx86" -or $ImageArch -eq "net6x86") {
                         # Reached only under -NoTargetEvidence: without it a
                         # missing set has already failed the run.
                         Add-Warning ("$($pair.Module)!$($pair.Symbol): -NoTargetEvidence - nothing " +
@@ -1399,6 +1501,77 @@ try {
         Test-Net98Rows -AllowPath $AllowPath
     }
 
+    if ($GateProfile -eq "net6") {
+        if (-not $script:allowPathPinned) {
+            throw "-GateProfile net6 needs -AllowPath: no default allowlist applies to xhcinet6.sys (scripts\import-gate\xhcinet6-imports.allow or xhcinet6-imports-amd64.allow)."
+        }
+        Test-Net6Rows -AllowPath $AllowPath
+    }
+
+    # The net6 run's x86 images, each image's architecture settled as the
+    # loop below settles it (-Arch, else the parent directory); its amd64
+    # images stay for the amd64 path below.
+    $net6X86 = @()
+    if ($GateProfile -eq "net6") {
+        $rest = @()
+        foreach ($path in $images) {
+            $ia = $Arch
+            if ($ia -eq "auto") {
+                switch (Split-Path -Leaf (Split-Path -Parent $path)) {
+                    "i386"  { $ia = "x86" }
+                    "amd64" { $ia = "amd64" }
+                    default { throw "cannot infer the architecture of '$path': pass -Arch x86 or -Arch amd64." }
+                }
+            }
+            if ($ia -eq "amd64") { $rest += $path } else { $net6X86 += $path }
+        }
+        $images = $rest
+    }
+
+    if ($net6X86.Count -gt 0) {
+        #
+        # xhcinet6.sys x86 (record 35 section 7.9): its own allowlist, the
+        # Windows 7 SP1 x86 kernel and HAL required, every committed 8.1
+        # and 10 x86 set required too, no Windows 98 evidence asked.
+        #
+        $net6Rules = Read-AllowFile -Path $AllowPath
+        Write-Ok ("net6 x86 allowlist: {0} pairs, {1} denied symbols" -f $net6Rules.Allow.Count, $net6Rules.Deny.Count)
+        $net6Dumpbin = Initialize-Dumpbin -ForArch "x86"
+        $net6Base = $null
+        if (-not $NoTargetEvidence) {
+            $sets = @(@{ Label = "Windows 7 SP1 x86"; Dir = $Nt6Win7Dir; Manifest = $Nt6Win7ManifestPath; Tag = "win7";
+                         Extract = "(stage the files the manifest names)" }) + @(Get-Net6Sets -ForArch "x86")
+            $loaded = Get-HlprBaseline -Dumpbin $net6Dumpbin -Sets $sets
+            foreach ($label in $loaded.Missing) {
+                Add-Failure ("none of the authenticated $label kernel/HAL baselines are staged - the net6 " +
+                    "profile requires every set it names (design record 35 section 7.9). Stage them " +
+                    "(the manifests' headers), or pass -NoTargetEvidence for an allowlist-only developer run.")
+            }
+            $net6Base = $loaded.Baseline
+            Write-Ok ("net6 x86 baseline: {0} (versions, lengths and SHA256 authenticated)" -f `
+                ((@($net6Base["ntoskrnl.exe"].Keys) + @($net6Base["hal.dll"].Keys) + @($net6Base["ndis.sys"].Keys) | Sort-Object) -join ", "))
+        } else {
+            Add-Warning "-NoTargetEvidence: only the committed allowlist was enforced for the net6 image - no target evidence was checked."
+        }
+        foreach ($path in $net6X86) {
+            $imageFlavor = $Flavor
+            if ($imageFlavor -eq "auto") {
+                $objDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $path))
+                switch ($objDir) {
+                    "objfre"      { $imageFlavor = "release" }
+                    "objchk_qemu" { $imageFlavor = "qemu" }
+                    default {
+                        throw "cannot infer the build flavor of '$path'. Pass -Flavor release or -Flavor qemu."
+                    }
+                }
+            }
+            Test-DumperMachine -Path $path -ExpectedArch "x86"
+            Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $net6Rules -Dumpbin $net6Dumpbin `
+                -Win2k $net6Base -BaselineLabel "Windows 7 SP1 / 8.1 / 10 x86" `
+                -Precedent $null -NtkernText $null -ImageArch "net6x86"
+        }
+    }
+
     if ($GateProfile -eq "hlprx86") {
         #
         # The helper's run (design record 18 section 15.11): its own allowlist,
@@ -1457,6 +1630,9 @@ try {
                 -Precedent $null -NtkernText $null -ImageArch "hlprx86"
         }
         $images = @()
+    } elseif ($GateProfile -eq "net6") {
+        # Nothing of the x86 default's evidence: the x86 image was gated
+        # above, and an amd64 one takes the amd64 path below.
     } elseif ($NoTargetEvidence) {
         # The evidence manifests are not even read here: -NoTargetEvidence must
         # work on a host that has no target files at all, and this switch is the
@@ -1613,6 +1789,28 @@ Fix it one of these ways:
                     $script:nt52 = Get-Win2kBaseline -Dir $Amd64Dir -Dumpbin $imageDumpbin `
                         -ManifestRows $amd64Manifest -Label "NT 5.2 amd64" `
                         -ExtractSwitch "-Force -Amd64Iso <path>"
+                    if ($GateProfile -eq "net6") {
+                        # xhcinet6.sys x64 (record 35 section 7.9): every
+                        # committed 8.1 and 10 x64 set required on top of
+                        # NT 5.2 amd64's.
+                        $sets = @(Get-Net6Sets -ForArch "amd64")
+                        if ($sets.Count -gt 0) {
+                            $extra = Get-HlprBaseline -Dumpbin $imageDumpbin -Sets $sets
+                            foreach ($label in $extra.Missing) {
+                                Add-Failure ("none of the authenticated $label kernel/HAL baselines are staged - the net6 " +
+                                    "profile requires every set whose manifest is committed (design record 35 section 7.9).")
+                            }
+                            if ($null -eq $script:nt52) {
+                                $script:nt52 = @{ "ntoskrnl.exe" = @{}; "hal.dll" = @{}; "ndis.sys" = @{} }
+                            }
+                            if (-not $script:nt52.ContainsKey("ndis.sys")) { $script:nt52["ndis.sys"] = @{} }
+                            foreach ($provider in @("ntoskrnl.exe", "hal.dll", "ndis.sys")) {
+                                foreach ($binary in $extra.Baseline[$provider].Keys) {
+                                    $script:nt52[$provider][$binary] = $extra.Baseline[$provider][$binary]
+                                }
+                            }
+                        }
+                    }
                     if ($null -eq $script:nt52) {
                         Add-Warning "none of the authenticated NT 5.2 amd64 kernel/HAL baselines are present in '$Amd64Dir' - the resolution half of the amd64 gate did not run."
                     } else {
@@ -1623,7 +1821,7 @@ Fix it one of these ways:
                 }
             }
             Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rulesByArch["amd64"] -Dumpbin $imageDumpbin `
-                -Win2k $script:nt52 -BaselineLabel "NT 5.2 amd64" `
+                -Win2k $script:nt52 -BaselineLabel $(if ($GateProfile -eq "net6") { "NT 5.2 amd64 / 8.1 / 10 x64" } else { "NT 5.2 amd64" }) `
                 -Precedent $null -NtkernText $null -ImageArch "amd64"
         } else {
             Test-Image -Path $path -ImageFlavor $imageFlavor -Rules $rules -Dumpbin $imageDumpbin `
