@@ -8701,3 +8701,11 @@ the version bump.
   print/usbprn: USB printers and USB-to-parallel cables on 98 SE and ME."
 - 45.66 (closed) (pending): "F1 now opens the Help of the page in the
   installer's window, the same as the Help button."
+- 45.59 legs (tbnet5), draft for the networking entry (pending):
+  "Thunderbolt networking installs from one xhcinet.inf: xhcinet.sys on
+  Windows 98 SE, ME, 2000, XP, Vista and 7, xhcinet6.sys on 8, 8.1 and 10.
+  On 98 SE the first install may ask once for the driver disk: point it at
+  the folder holding xhcinet.inf. With no DHCP server on the link both
+  computers take a 169.254.x.x address by themselves; set fixed addresses
+  for a lasting setup. The MTU is set in the adapter's Advanced settings,
+  1500 to 65522, the same on both ends."
