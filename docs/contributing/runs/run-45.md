@@ -7887,3 +7887,10 @@ the version bump.
   devices placed above 4 GB'. The USB Tree box now says that it decides
   only whether the tool starts at login; the tool is installed either
   way."
+- 45.59 S5 and the bench findings, draft for the networking entry
+  (134bde5f): "Thunderbolt networking: the network adapter installs on
+  32-bit Windows Vista and 7. With Thunderbolt 3 controllers run by their
+  own firmware, a link to another computer comes up without unplugging and
+  replugging the cable, even when the other computer was started first.
+  The link keeps trying to connect until the other computer's network
+  interface is brought up, instead of stopping after a minute."
