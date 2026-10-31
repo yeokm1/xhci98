@@ -764,6 +764,7 @@ the sections of the records its items name.
 - [ ] 45-E.12 a UAS drive under write load across standby and resume on a real VIA VL805 (45.23), on the reporter's system or one like it, with the fix's build
 - [ ] 45-E.13 the Realtek ALC4080 under `uac2` on a real board that carries one (45.25): playback and recording on each output and input, 98 SE, XP and 7 x64, from `3.4.0.0`'s asset
 - [ ] 45-E.14 the USB serial bridges of 45.26 on real chips under `usbcom`, 98 SE and ME, from `3.4.0.0`'s asset
+- [ ] 45-E.15 the inter-domain exchange of an Intel firmware connection manager, captured from the far side (owner, 2026-10-31, for 45.59's record 35 sections 3 and 10 and `usb4-emu`'s E5): an owner's Thunderbolt 3 laptop with a firmware connection manager and a 12th-generation Intel laptop whose Linux runs the software connection manager, both on Linux with `thunderbolt_net` loaded, the thunderbolt driver's debug messages on and its control-packet trace events where the kernel has them, joined by a Thunderbolt or USB4 cable: what the firmware sends to learn the far host's UUID (the standard UUID Request or not, its fields, timing and retries), whether the firmware's host sees the far host's requests or only the connected event, the USB4NET login and the E2E settings both ways; plug, re-plug, both up first, and a cold start with the cable in; the readings correct record 35 and the emulator's model where they differ
 
 Checkpoint: 45.2 before the first gated build; 45.7 before 45.8; 45.9's
 reading before its design and its design decided before any code;
