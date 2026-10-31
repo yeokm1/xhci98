@@ -139,8 +139,20 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
  * The Thunderbolt networking rings' common buffers (design record 35
  * section 5.3; cm_net.c): each descriptor block and each 4 KiB buffer its
  * own allocation on the ring block's adapter, cached, below 4 GB and 16-byte
- * aligned as the ring block is. PASSIVE_LEVEL, on the thread.
+ * aligned as the ring block is. Each is asked for in whole pages: Windows
+ * 2000 served a common buffer of less than a page from pool, 8-byte
+ * aligned (a 2 KiB descriptor block came back at an address ending 008h,
+ * run-45 "45.59 (legs, continued)"; XP's refusal there is taken to be the
+ * same), which the alignment check
+ * refuses, and a start that met one had no service. The free takes the
+ * same rounded length.
+ * PASSIVE_LEVEL, on the thread.
  */
+static ULONG cmDmaCommonBytes(ULONG bytes)
+{
+    return (bytes + (PAGE_SIZE - 1)) & ~(ULONG)(PAGE_SIZE - 1);
+}
+
 PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa)
 {
     PHYSICAL_ADDRESS phys;
@@ -150,6 +162,7 @@ PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa)
     if (nhi->Dma == NULL || bytes == 0) {
         return NULL;
     }
+    bytes = cmDmaCommonBytes(bytes);
     phys.LowPart = 0;
     phys.HighPart = 0;
     va = nhi->Dma->DmaOperations->AllocateCommonBuffer(nhi->Dma, bytes, &phys, TRUE);
@@ -174,6 +187,7 @@ VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va)
     if (nhi->Dma == NULL || va == NULL) {
         return;
     }
+    bytes = cmDmaCommonBytes(bytes);
     phys.LowPart = pa;
     phys.HighPart = 0;
     nhi->Dma->DmaOperations->FreeCommonBuffer(nhi->Dma, bytes, phys, va, TRUE);

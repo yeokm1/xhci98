@@ -1,6 +1,11 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 10, 2026-10-31: the bench capture (section 2.7) weighed
+Status: revision 12, 2026-11-01: the early UUID answer held until this
+driver has cleared lane 0's Lock (section 3.11), reviewed and revised.
+Revision 11, 2026-11-01: the rings' common buffers asked for in
+whole pages, read on Windows 2000 and XP (section 6.5, "The rings"),
+reviewed and revised.
+Revision 10, 2026-10-31: the bench capture (section 2.7) weighed
 against the code (section 3.11), reviewed and revised.
 Revision 9, 2026-10-31: the driver half joined to the firmware
 connection manager (section 6.5, "The two connection managers"), the
@@ -1260,6 +1265,33 @@ under Linux's software CM, both on Linux 7.0; `runs/run-45.md`, "45-E.15
   2.7 leaves unread. `test_u4xd`'s `test_early_uuid`, the request also
   queued with the plug before the first poll, and once with the first
   answer failing.
+  Revision 12: the request arrives with the link, while the host
+  router's lane 0 adapter is still Locked, and a host router refuses a
+  control packet out through a Locked adapter (ERR_LOCK, Spec 8.2.2.1,
+  ADP_CS_4); the ring takes the answer and the far end never sees it.
+  Read on the emulator (run-45 "45.59 (legs, continued)", the Alpine
+  Ridge leg with `xd-fw-uuid-retry-ms=0`): `cm.xdp.uuid.early` logged,
+  the host router's ERR_LOCK at once, no UUID Response at the far
+  firmware and no connected event at its host. The answer is therefore
+  held, owed and no try counted, until this driver has cleared lane 0's
+  Lock (`tbtU4Router`, the port's `Unlocked`) and lane 0's ADP_CS_4,
+  read before each try, shows the Lock clear - the flag alone can
+  describe a connection a quick re-plug has replaced; a Lock read set
+  marks the answer as the next connection's - and goes at the next idle
+  poll (retried there only: at a ring wake the Lock read's own
+  completion would wake the ring again). It is dropped when lane 0 reads disconnected (the evidence
+  read of any check), at the teardown of the connection it was taken on,
+  and when the port's connection generation has moved on by more than
+  one. At worst an answer held across a re-plug reaches the next
+  connection: a UUID Response to no request of that peer's, which a
+  receiver drops, or one carrying this domain's same UUID for the
+  peer's own pending request. The host tests' fabric routes an
+  inter-domain packet as any control packet now (a Locked adapter on
+  the way refuses it, counted), and `test_early_uuid` takes the request
+  at the ring wake that brings the hot plug event, before the port's
+  check, as the emulator did; also behind a quick re-plug of a port this
+  driver had unlocked, and with the cable out again before the port was
+  connected.
 - **Logins never give up.** Linux answers a Login only while its
   interface is up (43 s after a cold start on the bench, and only after
   `ip link set up` on the emulator), and itself retries every 5.12 s for
@@ -1790,7 +1822,15 @@ A 4 KiB copy per USB4 frame is the cost (section 7.4).
   HopID in bits 22:12 in a second write, then the Consumer Index one slot
   behind; the transmit indexes read back equal. The memory is allocated
   there at the first service after a start (each descriptor block and
-  each 4 KiB buffer its own common buffer) and freed at the stop, or kept
+  each 4 KiB buffer its own common buffer, each asked for in whole pages:
+  Windows 2000 and XP can serve a common buffer of less than a page from
+  pool, 8-byte aligned - a 2 KiB descriptor block at an address ending
+  008h on 2000, runtime, read through this driver's log on 2026-11-01,
+  run-45 "45.59 (legs, continued)"; on XP the rings' memory refused at
+  one start and not at another, its addresses not logged, the same cause
+  inferred - which the 16-byte check refuses, so before
+  revision 11 a start that met such a block had no service) and freed at
+  the stop, or kept
   with its adapter where a ring was not read back stopped, and forgotten
   then, so no later start frees or reuses it. A service whose earlier ring
   of this start was not read back stopped is refused (`cm.net.mem.busy`),
@@ -2229,9 +2269,10 @@ the line with `NTx86` beside it staged both images, and with no
 decoration at all `xhcinet.sys` alone; `Signature` (`$Windows NT$`),
 the `Compatible` line and a `[SourceDisksFiles.x86]` changed nothing.
 2000 reads no models decoration and takes the undecorated section as 98
-SE and ME do. The three-field line is still to be read on 98 SE, ME,
-2000 and XP (`AGENTS.md`'s rule for `xhci98.inf`'s line); the run sheet
-records each.
+SE and ME do. The three-field line was then read on 98 SE, ME, 2000 and
+XP (`AGENTS.md`'s rule for `xhci98.inf`'s line; 2026-11-01, `runs/run-45.md`,
+"45.59 (legs, continued)"): each engine matched the model and installed
+`xhcinet.sys`.
 A new gate script, `scripts\inf-gate\check-net-inf.ps1`, holds both files
 (the paths, the image per path, the service, the value table per path,
 the footprint, the 98 section's net keys, no undecorated section in the

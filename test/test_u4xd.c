@@ -737,10 +737,12 @@ static void test_close_unanswered(void)
 }
 
 /* Run-45 45-E.15: a far firmware CM's single early UUID Request, on a
- * port this domain has not classified as XDOMAIN, is answered at once
- * with this domain's UUID (no record started); with XhciCmNet 0 it is
- * dropped as before. The far router here is left a plain device router,
- * so the port is connected and not XDOMAIN when the request lands. */
+ * port this domain has not classified as XDOMAIN, is answered with this
+ * domain's UUID (no record started) once this driver has cleared lane 0's
+ * Lock - never into the Lock, which the host router refuses (ERR_LOCK);
+ * with XhciCmNet 0 it is dropped as before. The far router here is left a
+ * plain device router, so the port is connected and not XDOMAIN when the
+ * request lands. */
 static void test_early_uuid(void)
 {
     LP *lp = &g_lp[0];
@@ -748,6 +750,7 @@ static void test_early_uuid(void)
     ULONG n;
     TBT_ROUTE r;
     int net;
+    unsigned long refused;
 
     /* With the plug, before the first poll: the port still EMPTY. */
     setup(1, 1);
@@ -760,6 +763,68 @@ static void test_early_uuid(void)
     TbtU4Poll(&g_cm);
     TbtU4Poll(&g_cm);
     CHECK_EQ(g_uuidResp, 1, "answered with the plug");
+    CHECK_EQ(g_fab.XdRefused, 0, "nothing sent into the Lock");
+    fabUnplug(&g_fab, 1);
+    pump(2);
+    /* The emulator's order (run-45 "45.59 (legs, continued)"): the
+     * request read by the ring wake that brings the hot plug event, taken
+     * before the port's check has cleared lane 0's Lock. The answer is
+     * held, not sent into the Lock, and goes once the check has run. */
+    setup(1, 1);
+    g_uuidResp = 0;
+    fabPlug(&g_fab, 1, lp->Dev);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    g_fab.Host.Sleep(g_fab.Host.Context, 100UL);
+    TbtU4RingWake(&g_cm);
+    CHECK(g_cm.XdEarly[0].Owed, "the answer held at the wake");
+    CHECK_EQ(g_fab.XdRefused, 0, "nothing sent into the Lock at the wake");
+    TbtU4Poll(&g_cm);
+    TbtU4Poll(&g_cm);
+    CHECK_EQ(g_uuidResp, 1, "answered after the unlock");
+    CHECK_EQ(g_fab.XdRefused, 0, "nothing refused");
+    CHECK(!g_cm.XdEarly[0].Owed, "nothing owed");
+    fabUnplug(&g_fab, 1);
+    pump(2);
+    /* A quick re-plug of a port this driver had connected and unlocked:
+     * the unplug and the plug read with the request, before the check,
+     * while the port still shows the last connection's Unlocked. The
+     * answer waits for the new connection's unlock, not sent into the
+     * Lock the unplug set again. */
+    setup(1, 1);
+    fabPlug(&g_fab, 1, lp->Dev);
+    pump(10);
+    CHECK(g_cm.Ports[0].Unlocked, "the first connection unlocked");
+    g_uuidResp = 0;
+    refused = g_fab.XdRefused;
+    fabUnplug(&g_fab, 1);
+    fabPlug(&g_fab, 1, lp->Dev);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    g_fab.Host.Sleep(g_fab.Host.Context, 100UL);
+    TbtU4RingWake(&g_cm);
+    CHECK(g_cm.XdEarly[0].Owed, "held at the re-plug");
+    CHECK_EQ(g_fab.XdRefused, refused, "nothing sent into the re-locked lane");
+    pump(10);
+    CHECK_EQ(g_uuidResp, 1, "answered on the new connection");
+    CHECK_EQ(g_fab.XdRefused, refused, "nothing refused");
+    CHECK(!g_cm.XdEarly[0].Owed, "nothing owed");
+    fabUnplug(&g_fab, 1);
+    pump(2);
+    /* The cable out again before this driver connected the port: the
+     * held answer is owed to nobody, and a later connection that sends no
+     * request of its own gets none. */
+    setup(1, 1);
+    g_uuidResp = 0;
+    fabPlug(&g_fab, 1, lp->Dev);
+    fabInject(&g_fab, TBT_PDF_XDOMAIN_REQ, w, n);
+    g_fab.Host.Sleep(g_fab.Host.Context, 100UL);
+    TbtU4RingWake(&g_cm);
+    CHECK(g_cm.XdEarly[0].Owed, "held at the plug");
+    fabUnplug(&g_fab, 1);
+    pump(5);
+    CHECK(!g_cm.XdEarly[0].Owed, "dropped with the connection");
+    fabPlug(&g_fab, 1, lp->Dev);
+    pump(10);
+    CHECK_EQ(g_uuidResp, 0, "no stale answer on the later connection");
     fabUnplug(&g_fab, 1);
     pump(2);
     /* This domain's UUID unreadable at first: the answer owed, sent at a
