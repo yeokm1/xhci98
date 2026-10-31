@@ -6642,6 +6642,7 @@ of `scripts/run-xdomain-linux.sh` needs S5's service and network PDO
 the calls above; a discovery-only leg (the peer's properties read both
 ways, no login) needs only this branch and `XhciCmNet` 1 set by hand.
 
+<<<<<<< HEAD
 ## 45.59 S7 xhcinet6.sys, the NDIS 6.20 miniport for 8, 8.1 and 10 (2026-10-31, partial)
 
 **Verdict: the code, its INF sections, its gates and its gated builds are done here;
@@ -7172,6 +7173,187 @@ not a link fault.
 - Titan Ridge and Ice Lake firmware.
 - The legs of this package against both laptops (45.59's S9 and record
   35 section 11.4).
+=======
+## 45.60 (continued) the legs on ME, 2000, Vista, 8, 8.1 and 10 x86, 7 x64 and 10 x64, and the owner's wording changes (2026-10-31, partial)
+
+Branch `w45-tbpage` from `a027f88e`, tree `E:\xhci98-wt\w45-tbpage` on
+development host A; the 3.4.0.0 tip `49f7418e` merged in at `aa121e98`.
+Commits: `1c584e66` (the Components page's Thunderbolt sentence without
+the controller's name; the USB Tree box worded as its start at login),
+`18222ecc` (the XHCIPFW box "Find Thunderbolt and USB4 devices placed
+above 4 GB"); each reviewed and revised. Record 26 drafts 54 and 56.
+
+### The owner's wording changes (2026-10-31)
+
+- Components, the Thunderbolt box's note: "A Thunderbolt 3 / USB4
+  controller was found." with no controller name, which the row's width
+  cut off ("... Universal Serial Bus (USB) Controlle."). The not-found and
+  Intel sentences are unchanged, and so is the console, whose question
+  puts a long name on a line of its own. The USB drivers box had no
+  found-hardware sentence: it says what it installs, and stays.
+- The tray box: "Start the xHCI98 USB Tree (tray icon) at login". The
+  tool is copied either way (`inst_eng.c`'s tray step, `/notray`, decides
+  the Run value alone). The Summary says "the xHCI98 USB Tree, installed
+  and started at login" or "installed, not started at login".
+- The XHCIPFW box on the Thunderbolt and USB4 page: "Find Thunderbolt and
+  USB4 devices placed above 4 GB" on every system, with no file name. It
+  is ticked and greyed as before. The page's Help (task 45.66) names
+  XHCIPFW.VXD (98 SE and ME) and XHCIPFW.SYS (2000 to the 32-bit 8.1).
+  The Summary's component line keeps the file name ("PCI windows above
+  4 GB closed at start (XHCIPFW.SYS)").
+
+### Builds
+
+- The gated build of `a027f88e`, release flavour, x86 then amd64: BUILD +
+  GATES PASSED both (`gated-x86.a027f88e.log`, `gated-amd64.a027f88e.log`
+  in `E:\xhci98-scratch\p45-w45-tbpage`).
+- `1c584e66`, gated x86 `all`: failed at the qemu `xhcinet.sys` import gate
+  (`ntoskrnl.exe!RtlAssert` not allowlisted). That was the base's
+  defect, fixed in 3.4.0.0 by `2af48299`. After the merge (`aa121e98`),
+  gated x86 `all`: BUILD + GATES PASSED (release, qemu). Then amd64
+  release of `d8227fc7`: BUILD + GATES PASSED.
+- The tip `18bd9369`, gated x86 `all`: BUILD + GATES PASSED (release,
+  qemu); host tests passed (`test_inst` 7730 checks); the window's
+  self-test 839 checks, 0 failures.
+- Packages: `make-release.ps1 -Arch x86 -TestLabel w45tbpage -NoNonFree
+  -NoWdmFree -SkipQualtool -SkipMarkTool` of `a027f88e` (`XHCIWIZ.EXE`
+  `368396772261...`), of `d8227fc7` (`098188bef9ec...`) and of
+  `18bd9369` (`9c362839f39d...`). The x64 package of `d8227fc7` came from
+  `make-package.ps1 -Arch amd64`, unsigned (this clone holds no
+  test-signing key), with its five catalogs made on the host by the
+  packager's `New-PackageCatalogFile`, and signed in each guest's own
+  overlay by the route task 43.36 used (`runs/run-43-24.md`), never on
+  the host and never with the project's key. It was signed in
+  each x64 guest with a throwaway certificate (MakeCert, `-b 01/01/2026
+  -e 01/01/2030`, Root and TrustedPublisher, SignTool on the `.sys` and
+  `.cat` files; all 9 verified, test signing on). Hashes:
+  `E:\xhci98-vm\p45\w45-tbpage\hashes-*.txt`.
+
+### The legs
+
+Each is a first install on a fresh overlay of the q35 base through
+`launch-q35.ps1 -Usb4 asm4242 -EncAtBoot`, driven from the keyboard
+(Windows 8 to 10 with `-Tablet`). QMP 49600 to 49605. Every start and
+stop is in `E:\xhci98-vm\p45\w45-tbpage\pids.txt`, and the screens are in
+each leg's folder there. W is the window (`SETUP.EXE`), C the console
+(`INSTALL.BAT /console`). "Skip" means Next with the Thunderbolt box
+unticked went to the Summary, and Back from there to Components. The
+read after the restart (W) or the install (C) printed `Services\USB`, the
+drivers' `Enum` keys and `driverquery` to COM1 (`XQ.CMD`), or
+`regedit /a` exports (`X2.CMD` on 2000, `EXP.BAT` on ME).
+
+| System (package) | `/tbnet`, `/notbnet` | Skip | The page | Approval and the read | After the restart |
+|---|---|---|---|---|---|
+| ME W (`a027f88e`) | refused, "/tbnet: this package carries no Thunderbolt networking driver for this system"; `/notbnet` opens the window | yes | XHCIPFW.VXD, Stor98 and S98VSD open and ticked; Back and Next keep "Give it none" | "Give it none": `Services\USB` holds `XhciCmApprove`=0 alone; the host interface's key the INF's 1 | Shut Down powered off (no hang); after a cold start `XhciPfwResult` 1, "XHCIPFW.VXD 3.3.0.0", the USB4 Router and both xHCIs in Device Manager |
+| ME C (`a027f88e`) | - | - | asked Thunderbolt (Y), then Stor98, S98VSD and XHCIPFW, all at their defaults | Enter for every value: `Services\USB` empty | installed: `xhci98` on both xHCIs, `xhcicm` on the NHI with its INF's `XhciCmApprove` 1 |
+| 2000 W (`a027f88e`) | as ME | yes | XHCIPFW.SYS open and ticked; Stor98 and S98VSD greyed "(Windows 98 SE and ME only)" | "Give it none": `XhciCmApprove`=0 before and after the restart | cold start: `xhci98` (4 devices), `xhcicm` (7), `xhcipfw` (`XhciPfwResult` 1, "XHCIPFW.SYS 3.3.0.0"), `stor98` on the NVMe |
+| 2000 C (`a027f88e`) | - | - | asked Thunderbolt (Y), Stor98 and XHCIPFW at their defaults | defaults: `Services\USB` empty | exit 3 |
+| Vista x86 W (`a027f88e`) | as ME | yes | as 2000 | "Give it none": `XhciCmApprove`=0 | `stor98`, `xhci98`, `xhcicm`, `xhcihlpr`, `xhcipfw` running |
+| Vista x86 C (`a027f88e`) | - | - | asked Thunderbolt (Y) | defaults: `Services\USB` has no `XhciCmApprove` | installed |
+| 8 x86 W (`d8227fc7`) | as ME | yes, with the USB box ticked (the 8-to-10 warning first); with it unticked the connection manager alone, the page shown | the rows this system offers; XHCIPFW.SYS installed as the root-bus filter | "Give it none": `XhciCmApprove`=0 | `xhcicm`, `xhcipff`, `stor98` running |
+| 8 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | `xhcicm`, `stor98` running |
+| 8.1 x86 W (`d8227fc7`) | as ME | yes | as 8 | "Give it none": `XhciCmApprove`=0 | `xhcicm`, `xhcipff`, `stor98` running |
+| 8.1 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | installed |
+| 10 x86 W (`d8227fc7`) | as ME | yes | Stor98, S98VSD greyed, no XHCIPFW row | "Give it none": `XhciCmApprove`=0 | `xhcicm` running |
+| 10 x86 C (`d8227fc7`) | - | - | - | defaults: no `Services\USB` | exit 3 |
+| 7 x64 W (`d8227fc7`, signed in the guest) | as ME | yes | Stor98 open, S98VSD greyed, no XHCIPFW (x64) | "Give it none": `XhciCmApprove`=0 | `stor98`, `xhci98`, `xhcicm` running |
+| 7 x64 C (same) | - | - | asked Thunderbolt (Y) | defaults: nothing in `Services\USB` | `xhci98`, `xhcicm`, `stor98` running, ORICO (D:) mounted |
+| 10 x64 W (same) | as ME | yes | as 10 x86 | left at its default: nothing in `Services\USB` | `xhcicm` running |
+| 10 x64 C (same) | - | - | - | `0` answered to `XhciCmApprove`: written, `XhciCmApprove`=0 | `xhcicm` running |
+
+Each NT console asks `XhciCmApprove` among the Thunderbolt values, with
+the new-install note, as the page shows it. On 98 SE and ME the console
+asks the Thunderbolt question and its children. The Settings dialog's
+Thunderbolt tab holds `XhciCmMode` and `XhciCmSafeEject` alone on every
+system read.
+
+The Components recheck after the wording changes (package `18bd9369`;
+98 SE at 640 by 480, XP, and 7 x86 at 96 and at 120 DPI) is in 45.66's
+legs below. Nothing is clipped. The XHCIPFW label fits one line on all
+three.
+
+### Left
+
+- The networking box's wiring, task 45.59's step S11: `INST_TBNET_WIRED`
+  1, `xhcinet.inf` staged, `/tbnet` accepted. 45.60 stays open for it.
+
+## 45.66 the installer's Help button explains its page (2026-10-31, partial)
+
+Branch `w45-tbpage`. Commits: `d8227fc7` (record 26 draft 55, section
+5.10: the design), `e32fe18d` (the code, the host vectors and the
+self-test), `18bd9369` (the run's end held, not the help window ended,
+under the readme's message box); each reviewed and revised.
+
+### What changed
+
+- Help on every page of the window opens `IDD_HELP`. That is a small
+  modal window owned by the window Help was pressed in: the sheet for
+  its pages, the Settings sheet for its tabs (now `PSH_HASHELP`), and
+  the Advanced dialog, which gains a Help button. The window holds the
+  page's text and two buttons, "Open the readme" (Notepad, as Help did
+  before) and Close.
+- Nineteen texts, one for each page and variant: Welcome, the
+  uninstall's first page, Components, Thunderbolt and USB4, the two
+  other-driver pages, the three Settings tabs, the two Advanced dialogs,
+  the two Summaries, Progress, Steps, and four Finish variants (restart,
+  shut down, nothing changed, uninstall). Each says, in the page's own
+  labels, what each choice does and when to change it, with no testing
+  status. They live in `xhciinst\inst_help.c`, linked by the window and
+  `test_inst` only. In `inst_core.c` they made Defender flag the
+  `test_xhq` host binary (a false positive, `Trojan:Win32/Killav!pz`),
+  and the host suite then failed with exit 9020.
+- When the run ends while a help window is open, the end is held. The
+  help window closes, and the sheet then moves to Finish. Under the
+  readme's message box only the hold happens.
+- The Welcome page's three wordings end "Help explains each page.".
+
+### The checks
+
+- `test_help` (host): every text ASCII, within 20 lines at 68 columns,
+  no testing-status words; every route and topic reached; each page's
+  labels quoted.
+- `st_help` (the window's self-test): the routing tables, the Finish
+  variants, each text in the edit's formatting rectangle, the window
+  within 640 by 452, the buttons apart under the text. 839 checks, 0
+  failures on the host, on 98 SE at 640 by 480, on XP, and on 7 x86 at
+  120 DPI.
+
+### The legs (package of `18bd9369`)
+
+| System | What was read | Result | Evidence |
+|---|---|---|---|
+| 98 SE, 640 by 480 | Help on Welcome, Components, the Thunderbolt and USB4 page, Settings (USB), Advanced, Summary; "Open the readme" | each fits the screen, text whole; the Advanced dialog's Help button in its row; Notepad opened over the help window | `h98\`, `shots-owner\98se-*.png` |
+| XP | the same, and the Thunderbolt and Stor98 tabs and Stor98's Advanced | each whole | `hxp\`, `shots-owner\xp-*.png` |
+| 7 x86 | Help on Progress left open through the install's end; Help on Finish; at 120 DPI the self-test, Components and its Help, the Thunderbolt page | the run ended under the help window: it closed and Finish showed; at 120 DPI nothing clipped | `h7\`, `shots-owner\7-*.png` |
+| 7 x86, 120 DPI | the uninstall (`C:\XHCI98\XHCIWIZ.EXE /uninstall`): Help on its first page, its Summary and its Finish | each whole; the Summary's Help names no Back, which that page does not offer | `shots-owner\7-120dpi-help-uninstall-*.png` |
+
+The owner's screenshots and their index:
+`E:\xhci98-vm\p45\w45-tbpage\shots-owner\index.txt`.
+
+### Left
+
+- The Help readings not yet made through the installer, per system
+  (each is in the self-test already, routing and rendering):
+  - 98 SE: the Settings Thunderbolt and Stor98 tabs, Stor98's
+    Advanced, Progress, Finish (restart and shut-down words), the
+    uninstall's three pages;
+  - XP: Progress (the shot taken there shows the page, not its Help),
+    Finish, the uninstall's three pages;
+  - 7 x86: Welcome, the Thunderbolt and USB4 page, the three Settings
+    tabs, both Advanced dialogs, the install's Summary (Components at
+    120 DPI is read).
+- The Help of the two other-driver pages (Free and Non-free USB
+  drivers): the test cut here carries neither set (`-NoNonFree
+  -NoWdmFree`). A cut with both is refused before staging by the
+  lifted-exclusion check of record 26 section 6.7.14 ("the installer's
+  table marks free:net/rtl815x and nonfree:ethernet/rtl815x lifted ...
+  and this cut lifts no EXCLUDES of the pair there"), which is outside
+  this task's area and is reported to the coordinator.
+- The Help of the Steps page: shown only where a 98 SE or ME device is
+  left for the user to install, which these legs did not produce.
+- Both are in the self-test (routing, and each text in the help
+  window), so what is owed is the reading through the installer.
+>>>>>>> 70464c5f
 
 ## 45.final: the release-notes texts the tasks handed over
 
