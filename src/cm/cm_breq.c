@@ -57,6 +57,7 @@ static VOID bqCopy(UCHAR *to, const UCHAR *from, ULONG n)
 
 #define BQ_OPT_ALT      0x08UL          /* IO_RESOURCE_ALTERNATIVE        */
 #define BQ_TYPE_PORT    1UL             /* CmResourceTypePort             */
+#define BQ_TYPE_INTR    2UL             /* CmResourceTypeInterrupt        */
 #define BQ_TYPE_MEM     3UL             /* CmResourceTypeMemory           */
 #define BQ_TYPE_PRIV    0x81UL          /* CmResourceTypeDevicePrivate    */
 
@@ -66,6 +67,11 @@ static VOID bqCopy(UCHAR *to, const UCHAR *from, ULONG n)
 #define BQ_2K_BYTES     0xE8UL
 #define BQ_2K_COUNT     6UL
 #define BQ_LADDER_XP    7UL             /* 64 MB down to 1 MB             */
+/* The bridge's own interrupt, after the template on a bridge whose
+ * Interrupt Pin is set (a hot-plug capable switch port), as read on XP in
+ * task 45.55: one descriptor, kept unchanged at the end. */
+#define BQ_IRQ_SHARE    3UL             /* CmResourceShareShared          */
+#define BQ_IRQ_MAXV     0xFFUL          /* MinimumVector 0, MaximumVector */
 
 /* One expected descriptor, as 32 bytes. */
 static VOID bqDesc(UCHAR *d, ULONG option, ULONG type, ULONG share,
@@ -129,6 +135,24 @@ static VOID bqTemplate(ULONG shape, ULONG i, UCHAR *d)
            0x100000UL, 0xFFFFFFFFUL, maxHi);
 }
 
+/* The trailing interrupt descriptor (BQ_IRQ_*): Option 0, level, shared,
+ * vectors 0 to FFh, every other byte 0. */
+static VOID bqIrq(UCHAR *d)
+{
+    bqDesc(d, 0, BQ_TYPE_INTR, BQ_IRQ_SHARE, 0, 0, BQ_IRQ_MAXV, 0, 0);
+}
+
+ULONG CmBreqTail(const UCHAR *list)
+{
+    if (list == NULL) {
+        return 0;
+    }
+    return bqGet32(list) == BQ_XP_BYTES + CM_IRQ_IOD_SIZE ||
+                   bqGet32(list) == BQ_2K_BYTES + CM_IRQ_IOD_SIZE
+               ? 1UL
+               : 0UL;
+}
+
 ULONG CmBreqShape(const UCHAR *list, ULONG minor)
 {
     UCHAR want[CM_IRQ_IOD_SIZE];
@@ -136,6 +160,7 @@ ULONG CmBreqShape(const UCHAR *list, ULONG minor)
     ULONG shape;
     ULONG bytes;
     ULONG count;
+    ULONG tail;
     ULONG i;
     ULONG b;
 
@@ -153,7 +178,15 @@ ULONG CmBreqShape(const UCHAR *list, ULONG minor)
     } else {
         return CM_BREQ_SHAPE_NONE;
     }
-    if (bqGet32(list) != bytes || bqGet32(list + CM_IRQ_REQ_ALTS_AT) != 1) {
+    /* The template alone, or followed by the bridge's interrupt. */
+    if (bqGet32(list) == bytes) {
+        tail = 0;
+    } else if (bqGet32(list) == bytes + CM_IRQ_IOD_SIZE) {
+        tail = 1;
+    } else {
+        return CM_BREQ_SHAPE_NONE;
+    }
+    if (bqGet32(list + CM_IRQ_REQ_ALTS_AT) != 1) {
         return CM_BREQ_SHAPE_NONE;
     }
     /* Reserved[3], between the slot and the alternatives' count. */
@@ -164,12 +197,16 @@ ULONG CmBreqShape(const UCHAR *list, ULONG minor)
     }
     at = list + CM_IRQ_REQ_HDR;
     if (at[0] != 1 || at[1] != 0 || at[2] != 1 || at[3] != 0 ||
-        bqGet32(at + CM_IRQ_IOL_COUNT_AT) != count) {
+        bqGet32(at + CM_IRQ_IOL_COUNT_AT) != count + tail) {
         return CM_BREQ_SHAPE_NONE;
     }
     at += CM_IRQ_IOL_HDR;
-    for (i = 0; i < count; i++) {
-        bqTemplate(shape, i, want);
+    for (i = 0; i < count + tail; i++) {
+        if (i < count) {
+            bqTemplate(shape, i, want);
+        } else {
+            bqIrq(want);
+        }
         for (b = 0; b < CM_IRQ_IOD_SIZE; b++) {
             if (at[b] != want[b]) {
                 return CM_BREQ_SHAPE_NONE;
@@ -538,6 +575,9 @@ ULONG CmBreqPlan(const UCHAR *list, ULONG minor, const CM_BREQ_SNAP *s,
     }
     p->Role = s->Role;
     p->Shape = CmBreqShape(list, minor);
+    if (p->Shape != CM_BREQ_SHAPE_NONE) {
+        p->Tail = CmBreqTail(list);
+    }
     /* The siblings read whole and within the snapshot's room; anything
      * else is no inventory to divide by. */
     sibsOk = (ULONG)(s->SibsRead && s->Sibs <= CM_BREQ_SIBS_MAX &&
@@ -660,6 +700,7 @@ ULONG CmBreqPlan(const UCHAR *list, ULONG minor, const CM_BREQ_SNAP *s,
         bqGroup(p->Shape, k, &first, &n);
         count += (p->Sized[k] ? p->Steps[k] : n) + 1UL;
     }
+    count += p->Tail;
     p->Bytes = CM_IRQ_REQ_HDR + CM_IRQ_IOL_HDR + count * CM_IRQ_IOD_SIZE;
     p->Outcome = CM_BREQ_OUT_REWRITTEN;
     return p->Outcome;
@@ -675,10 +716,12 @@ ULONG CmBreqWrite(const UCHAR *list, const CM_BREQ_PLAN *p, UCHAR *out,
     ULONG n;
     ULONG j;
     ULONG count;
+    ULONG total;
 
     if (p->Outcome != CM_BREQ_OUT_REWRITTEN || p->Bytes > room ||
         CmBreqShape(list, p->Shape == CM_BREQ_SHAPE_XP ? 1UL : 0UL) !=
-            p->Shape) {
+            p->Shape ||
+        CmBreqTail(list) != p->Tail) {
         return 0;
     }
     src = list + CM_IRQ_REQ_HDR + CM_IRQ_IOL_HDR;
@@ -712,6 +755,14 @@ ULONG CmBreqWrite(const UCHAR *list, const CM_BREQ_PLAN *p, UCHAR *out,
         at += CM_IRQ_IOD_SIZE;
         count++;
     }
+    if (p->Tail != 0) {
+        /* The bridge's interrupt, the OS list's last descriptor, as it
+         * came. */
+        total = bqGet32(list + CM_IRQ_REQ_HDR + CM_IRQ_IOL_COUNT_AT);
+        bqCopy(at, src + (total - 1UL) * CM_IRQ_IOD_SIZE, CM_IRQ_IOD_SIZE);
+        at += CM_IRQ_IOD_SIZE;
+        count++;
+    }
     bqCopy(out, list, CM_IRQ_REQ_HDR + CM_IRQ_IOL_HDR);
     bqPut32(out, p->Bytes);
     bqPut32(out + CM_IRQ_REQ_HDR + CM_IRQ_IOL_COUNT_AT, count);
@@ -739,7 +790,8 @@ VOID CmBreqEntry(const CM_BREQ_PLAN *p, ULONG bdf, ULONG portBdf,
     e[0] = (bdf & 0xFFFFUL) | ((portBdf & 0xFFFFUL) << 16);
     e[1] = (p->Role & 0xFUL) | ((p->Shape & 0xFUL) << 4) |
            ((minor & 0xFUL) << 8) | ((outcome & 0xFUL) << 12) |
-           ((p->Dropped & 7UL) << 16) | ((p->Unmet & 7UL) << 19);
+           ((p->Dropped & 7UL) << 16) | ((p->Unmet & 7UL) << 19) |
+           ((p->Tail & 1UL) << 24);
     e[2] = (p->Count & 0xFFUL) | ((p->Index & 0xFFUL) << 8) |
            ((p->Flags & 0xFUL) << 16) | ((p->Claims & 0x3FUL) << 20);
     e[3] = p->P[CM_BREQ_K_IO];

@@ -1261,10 +1261,160 @@ static void test_sweep(void)
     CHECK(lists > 1000, "sweep: enough lists written");
 }
 
+/* ---- the bridge's interrupt after the template (task 45.55) ----------- */
+
+/* The interrupt descriptor XP gave after its closed list on a switch port
+ * whose Interrupt Pin is set (task 45.55's XP reading, LogConf of the
+ * parent's 104C:8232 and 104C:8233): Option 0, CmResourceTypeInterrupt,
+ * shared, level, vectors 0 to FFh. */
+static const UCHAR bqIrqDesc[32] = {
+    0x00, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+/* `list` of `n` bytes with the interrupt descriptor appended, into out. */
+static ULONG with_irq(const UCHAR *list, ULONG n, UCHAR *out)
+{
+    memcpy(out, list, n);
+    memcpy(out + n, bqIrqDesc, 32);
+    put32(out, n + 32UL);
+    put32(out + 36, (ULONG)list[36] + 1UL);
+    return n + 32UL;
+}
+
+static void test_irq_tail(void)
+{
+    UCHAR xp[sizeof(bqXpClosed) + 64];
+    UCHAR w2k[sizeof(bq2kClosed) + 64];
+    UCHAR m[sizeof(bqXpClosed) + 64];
+    UCHAR a[2048];
+    UCHAR b[2048];
+    CM_BREQ_SNAP s;
+    CM_BREQ_PLAN p;
+    CM_BREQ_PLAN q;
+    ULONG nx;
+    ULONG n2;
+    ULONG i;
+    ULONG bad;
+    ULONG e[7];
+
+    nx = with_irq(bqXpClosed, sizeof(bqXpClosed), xp);
+    n2 = with_irq(bq2kClosed, sizeof(bq2kClosed), w2k);
+    CHECK_EQ(nx, 0x288UL, "XP's list with the interrupt: 288h, as read");
+    CHECK_EQ(CmBreqShape(xp, 1), CM_BREQ_SHAPE_XP,
+             "XP's closed list and the bridge's interrupt: XP's template");
+    CHECK_EQ(CmBreqShape(w2k, 0), CM_BREQ_SHAPE_2000,
+             "2000's closed list and the bridge's interrupt: 2000's");
+    CHECK_EQ(CmBreqShape(xp, 0), CM_BREQ_SHAPE_NONE,
+             "XP's with the interrupt on 2000: left");
+    CHECK_EQ(CmBreqShape(xp, 2), CM_BREQ_SHAPE_NONE,
+             "XP x64 still has no template");
+    CHECK_EQ(CmBreqTail(xp), 1, "the tail seen (XP)");
+    CHECK_EQ(CmBreqTail(w2k), 1, "the tail seen (2000)");
+    CHECK_EQ(CmBreqTail(bqXpClosed), 0, "no tail (XP)");
+    CHECK_EQ(CmBreqTail(bq2kClosed), 0, "no tail (2000)");
+    CHECK_EQ(CmBreqTail(NULL), 0, "no list, no tail");
+
+    /* Every byte of the interrupt descriptor compared. */
+    bad = 0;
+    for (i = 0; i < 32; i++) {
+        memcpy(m, xp, nx);
+        m[sizeof(bqXpClosed) + i] ^= 0x01;
+        if (CmBreqShape(m, 1) != CM_BREQ_SHAPE_NONE) {
+            bad++;
+            printf("  interrupt byte %lu accepted when changed\n", i);
+        }
+    }
+    CHECK_EQ(bad, 0, "every field of the interrupt compared");
+    /* The size and the count must agree with one trailing descriptor. */
+    memcpy(m, xp, nx);
+    put32(m, sizeof(bqXpClosed));
+    CHECK_EQ(CmBreqShape(m, 1), CM_BREQ_SHAPE_NONE,
+             "the interrupt counted but ListSize the template's: left");
+    memcpy(m, xp, nx);
+    put32(m + 36, 18);
+    CHECK_EQ(CmBreqShape(m, 1), CM_BREQ_SHAPE_NONE,
+             "ListSize with the interrupt but Count the template's: left");
+    memcpy(m, xp, nx);
+    memcpy(m + nx, bqIrqDesc, 32);
+    put32(m, nx + 32UL);
+    put32(m + 36, 20);
+    CHECK_EQ(CmBreqShape(m, 1), CM_BREQ_SHAPE_NONE,
+             "two interrupts: left");
+    /* The interrupt in the I/O descriptor's place, the I/O last. */
+    memcpy(m, xp, nx);
+    memcpy(m + 40, bqIrqDesc, 32);
+    memcpy(m + sizeof(bqXpClosed), bqXpClosed + 40, 32);
+    CHECK_EQ(CmBreqShape(m, 1), CM_BREQ_SHAPE_NONE,
+             "the interrupt first: left");
+    CHECK_EQ(CmBreqShape(bq2kIrq, 0), CM_BREQ_SHAPE_NONE,
+             "2000's configured list with an interrupt is still left");
+
+    /* A rewrite keeps the interrupt last, unchanged: the list is the one
+     * written without it, ListSize and Count one descriptor more. */
+    dock3(&s, 1);
+    CHECK_EQ(CmBreqPlan(bqXpClosed, 1, &s, &q), CM_BREQ_OUT_REWRITTEN,
+             "ex1's NIC port, no interrupt: rewritten");
+    CHECK_EQ(CmBreqPlan(xp, 1, &s, &p), CM_BREQ_OUT_REWRITTEN,
+             "ex1's NIC port, the interrupt after: rewritten");
+    CHECK_EQ(p.Tail, 1, "the plan keeps the tail");
+    CHECK_EQ(q.Tail, 0, "no tail planned without one");
+    CHECK_EQ(p.Bytes, q.Bytes + 32UL, "one descriptor more");
+    memset(a, 0x5A, sizeof(a));
+    memset(b, 0x5A, sizeof(b));
+    CHECK_EQ(CmBreqWrite(bqXpClosed, &q, a, q.Bytes), q.Bytes,
+             "written without the interrupt");
+    CHECK_EQ(CmBreqWrite(xp, &p, b, p.Bytes), p.Bytes,
+             "written with the interrupt");
+    CHECK_EQ(get32(b), p.Bytes, "ListSize");
+    CHECK_EQ(get32(b + 36), get32(a + 36) + 1UL, "Count one more");
+    CHECK(memcmp(a + 4, b + 4, 32) == 0 &&
+              memcmp(a + 40, b + 40, q.Bytes - 40UL) == 0,
+          "the windows as written without the interrupt");
+    CHECK(memcmp(b + q.Bytes, bqIrqDesc, 32) == 0,
+          "the interrupt last, as it came");
+    CHECK(b[p.Bytes] == 0x5A, "nothing past the list");
+    CHECK_EQ(CmBreqWrite(bqXpClosed, &p, b, sizeof(b)), 0,
+             "a plan with the tail refuses a list without it");
+    CHECK_EQ(CmBreqWrite(xp, &q, b, sizeof(b)), 0,
+             "a plan without the tail refuses a list with it");
+    /* 2000, the same. */
+    CHECK_EQ(CmBreqPlan(bq2kClosed, 0, &s, &q), CM_BREQ_OUT_REWRITTEN,
+             "2000: no interrupt, rewritten");
+    CHECK_EQ(CmBreqPlan(w2k, 0, &s, &p), CM_BREQ_OUT_REWRITTEN,
+             "2000: the interrupt after, rewritten");
+    CHECK_EQ(CmBreqWrite(bq2kClosed, &q, a, q.Bytes), q.Bytes,
+             "2000 written without");
+    CHECK_EQ(CmBreqWrite(w2k, &p, b, p.Bytes), p.Bytes, "2000 written with");
+    CHECK(memcmp(a + 40, b + 40, q.Bytes - 40UL) == 0 &&
+              memcmp(b + q.Bytes, bqIrqDesc, 32) == 0,
+          "2000: the windows the same, the interrupt last");
+    /* An upstream port that is left keeps the list as it came. */
+    snap_up(&s, 1);
+    CHECK_EQ(CmBreqPlan(xp, 1, &s, &p), CM_BREQ_OUT_LEFT,
+             "a single enclosure's upstream port with an interrupt: left");
+    /* The diagnostic marks the tail (dword 6 bit 24). */
+    dock3(&s, 1);
+    (VOID)CmBreqPlan(xp, 1, &s, &p);
+    CmBreqEntry(&p, 0x0408UL, 0x0218UL, 1, p.Outcome, 1, e);
+    CHECK_EQ(e[1], 2UL | (1UL << 4) | (1UL << 8) | (1UL << 12) |
+                       (4UL << 16) | (1UL << 24),
+             "entry: as ex1's NIC port, the tail kept");
+    (VOID)CmBreqPlan(bqXpClosed, 1, &s, &p);
+    CmBreqEntry(&p, 0x0408UL, 0x0218UL, 1, p.Outcome, 1, e);
+    CHECK_EQ(e[1] >> 24, 0, "entry: no tail, bit 24 clear");
+    /* Refused lists do not claim a tail. */
+    CHECK_EQ(CmBreqPlan(bq2kIrq, 0, &s, &p), CM_BREQ_OUT_SHAPE,
+             "the configured list: refused");
+    CHECK_EQ(p.Tail, 0, "a refused list has no tail");
+}
+
 int main(void)
 {
     test_templates();
     test_example1();
+    test_irq_tail();
     test_example2();
     test_example3();
     test_example4();
