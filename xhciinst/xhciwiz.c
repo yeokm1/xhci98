@@ -1671,9 +1671,14 @@ static WIZ_DLGRET CALLBACK folder_proc(HWND dlg, UINT msg, WPARAM wp,
     return FALSE;
 }
 
-/* The page's boxes handed to the engine, the plan made again when they
- * changed (Next, and the Settings dialog's opening). */
-static void comp_take(HWND dlg)
+/* The page's boxes kept in the window's state (Back, record 26 section
+ * 5): what changed is owed to the engine, handed over by comp_take. No
+ * plan is made here: one refused for the boxes (the x64 signing gate, say)
+ * would leave Welcome with Next greyed, and the page could not be reached
+ * again to change the box. */
+static int compOwed;            /* 1: XHCIPFW's choice, 2: the others' */
+
+static void comp_keep(HWND dlg)
 {
     int tb;
     int s98;
@@ -1714,7 +1719,7 @@ static void comp_take(HWND dlg)
     pfw = pfwShown && tb && pfwOwn;
     if (pfw != pfwChoice) {
         pfwChoice = pfw;
-        inst_eng_pfw_choose(pfw);
+        compOwed |= 1;
     }
     if (usb != usbChoice || tb != tbChoice || s98 != s98Choice ||
         uas != uasChoice || stor != storChoice || vsd != vsdChoice ||
@@ -1726,9 +1731,24 @@ static void comp_take(HWND dlg)
         storChoice = stor;
         vsdChoice = vsd;
         restageChoice = rs;
-        inst_eng_restage_choose(rs);
+        compOwed |= 2;
+    }
+}
+
+/* The page's boxes handed to the engine, the plan made again when they
+ * changed, here or at a Back before (Next, and the Settings dialog's
+ * opening). */
+static void comp_take(HWND dlg)
+{
+    comp_keep(dlg);
+    if (compOwed & 1) {
+        inst_eng_pfw_choose(pfwChoice);
+    }
+    if (compOwed & 2) {
+        inst_eng_restage_choose(restageChoice);
         replan();
     }
+    compOwed = 0;
 }
 
 /* Next on the Components page: the folder checked again, the warnings of
@@ -4940,7 +4960,7 @@ static int page_back(HWND dlg, int page)
         (void)tbt_leave(dlg, 0);
     }
     if (page == P_COMP) {
-        comp_take(dlg);
+        comp_keep(dlg);
     }
     if ((page == P_USB || page == P_TBS) && !settings_leave(dlg, page)) {
         return 0;
@@ -6664,13 +6684,12 @@ static void st_help(HWND parent)
 /* Back from the Components page keeps the boxes as the user left them,
  * so they show so again at the next entry (2026-11-01: on XP the
  * Thunderbolt box, ticked, came back unticked after Back to Welcome and
- * Next). The plan is not made again here (busy), only the state kept. */
+ * Next); the engine is not called, the change owed to the page's Next. */
 static void st_comp_back(HWND parent)
 {
     HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
                                 parent, st_proc, 0);
-    int saved[16];
-    LONG savedBusy = busy;
+    int saved[21];
     int ok;
 
     st(d != NULL, "back: the components made");
@@ -6693,6 +6712,11 @@ static void st_comp_back(HWND parent)
     saved[13] = s98Have;
     saved[14] = uasChoice;
     saved[15] = uasOwn;
+    saved[16] = s98Choice;
+    saved[17] = vsdChoice;
+    saved[18] = storChoice;
+    saved[19] = pfwChoice;
+    saved[20] = compOwed;
     tbHave = 1;
     tbPresent = 1;
     tbChoice = 0;
@@ -6709,7 +6733,7 @@ static void st_comp_back(HWND parent)
     s98Have = 0;
     uasChoice = 1;
     uasOwn = 1;
-    busy = 1;
+    compOwed = 0;
     comp_fill(d);
     st(IsDlgButtonChecked(d, IDC_C_TB) == BST_UNCHECKED &&
        IsDlgButtonChecked(d, IDC_C_TRAY) == BST_CHECKED,
@@ -6725,17 +6749,16 @@ static void st_comp_back(HWND parent)
     if (d != NULL) {
         comp_fill(d);
     }
-    st(ok && d != NULL && tbChoice &&
+    st(ok && d != NULL && tbChoice && (compOwed & 2) != 0 &&
        IsDlgButtonChecked(d, IDC_C_TB) == BST_CHECKED &&
        IsDlgButtonChecked(d, IDC_C_TRAY) == BST_UNCHECKED &&
        IsDlgButtonChecked(d, IDC_C_FAST) == BST_UNCHECKED &&
        IsDlgButtonChecked(d, IDC_C_UAS) == BST_UNCHECKED,
        "back: Back from the components keeps their boxes for the next "
-       "entry");
+       "entry, the plan owed to its Next");
     if (d != NULL) {
         DestroyWindow(d);
     }
-    busy = savedBusy;
     tbHave = saved[0];
     tbPresent = saved[1];
     tbChoice = saved[2];
@@ -6752,6 +6775,11 @@ static void st_comp_back(HWND parent)
     s98Have = saved[13];
     uasChoice = saved[14];
     uasOwn = saved[15];
+    s98Choice = saved[16];
+    vsdChoice = saved[17];
+    storChoice = saved[18];
+    pfwChoice = saved[19];
+    compOwed = saved[20];
 }
 
 static int selftest(void)
