@@ -1961,6 +1961,43 @@ const INST_VALUE instValues[] = {
       "start (Code 10).", 0xAUL,
       { "automatic", "the interrupt line only", "polling always",
         "a message-signalled interrupt only" } },
+    /* Task 45.54 (the owner, 2026-10-31; record 26 section 5.4.1): never
+     * asked, the USB page's Advanced rows and /set, in the owner's order,
+     * the interrupt mode first; the ranges are docs\using\tuning.md's.
+     * Where the driver takes any value but 0 as on, 0 and 1 are offered,
+     * as for XhciPollFineTimer. */
+    { "XhciLinkKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "keep a UAS drive with a serial number, its drive letter and open "
+      "files, when its SuperSpeed link drops and recovers",
+      NULL, 0, { "off", "on", NULL, NULL } },
+    { "XhciResumeKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "keep a device on a root port as it was after a standby or "
+      "hibernation that started the controller afresh",
+      NULL, 0, { "off", "on", NULL, NULL } },
+    { "XhciUsb2Bos", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "ask a USB 2.1 device at High or Full Speed for its BOS descriptor, "
+      "which says whether it can run at SuperSpeed",
+      NULL, 0, { "off", "on", NULL, NULL } },
+    { "XhciImodInterval250ns", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x0UL, "the interrupt moderation interval, in 250 ns units", NULL, 0,
+      { NULL, NULL, NULL, NULL }, 10UL, 4000UL, 0, 0 },
+    { "XhciLogVerbosity", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x1FUL,
+      "the driver's log",
+      "4 adds memory addresses to the log: for a developer's report.", 0x10UL,
+      { "off", "counters only", "the log", "adds port status",
+        "adds memory addresses" } },
+    { "XhciLogDebugView", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "the driver's log also to a debugger or DebugView", NULL, 0,
+      { "no", "yes", NULL, NULL } },
+    /* Task 45.54: the driver holds the active period to the idle one
+     * (XhciPollValues). */
+    { "XhciPollIdleMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "while the controller is polled, the period with nothing outstanding, "
+      "in ms", NULL, 0, { NULL, NULL, NULL, NULL }, 1UL, 5000UL, 0, 0 },
+    { "XhciPollActiveMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "while the controller is polled, the shortest period with transfers "
+      "outstanding, in ms, no longer than XhciPollIdleMs", NULL, 0,
+      { NULL, NULL, NULL, NULL }, 1UL, 5000UL, 0, 0 },
     /* Owner, 2026-10-15: never asked (Asked 0); /set Name=Value only. */
     { "XhciPollFineTimer", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x0UL, 0x3UL,
       "a finer system clock while the controller is polled",
@@ -1997,6 +2034,22 @@ const INST_VALUE instValues[] = {
         "a root-port mouse set to 31/62 Hz in hidusbf runs at 2000/4000 Hz",
         "a root-port mouse set to 31/62 Hz in hidusbf runs at 4000/8000 Hz",
         "the rate the client chooses, codes 128 to 143" } },
+    /* Task 45.54: XhciMaxTransferKB off its step of 4 is the driver's
+     * default (XhciXpolValue), so the step is held here too; the driver
+     * holds the port's wait to the total one. */
+    { "XhciMaxTransferKB", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x0UL,
+      "the largest UAS command, in KiB", NULL, 0,
+      { NULL, NULL, NULL, NULL }, 64UL, 2048UL, 0, 0, 0, 4UL },
+    { "XhciWideMap", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x0UL, 0x3UL,
+      "two pieces of a large bulk transfer on the controller at once",
+      NULL, 0, { "off", "on", NULL, NULL } },
+    { "XhciFirstEnumWaitMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x0UL, "the longest wait, in ms, for a hub's first report", NULL, 0,
+      { NULL, NULL, NULL, NULL }, 0UL, 30000UL, 0, 0 },
+    { "XhciFirstEnumPortMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
+      0x0UL, "the longest, in ms, one port may hold that wait, no longer "
+      "than XhciFirstEnumWaitMs", NULL, 0,
+      { NULL, NULL, NULL, NULL }, 0UL, 30000UL, 0, 0 },
     { "XhciCmMode", INST_INF_CM, INST_APPLY_CM, 0x3UL, 0xFUL,
       "the Thunderbolt and USB4 connection manager",
       "2 and 3 force one connection manager whatever the controller "
@@ -2012,6 +2065,16 @@ const INST_VALUE instValues[] = {
       "no also leaves out the safe-removal mark service, and removes it "
       "with its marks where it is installed.", 0x1UL,
       { "no", "yes", NULL, NULL } },
+    /* Task 45.54 (the owner, 2026-10-31; record 26 section 5.4.1): the
+     * Thunderbolt page's first Advanced row, read on 2000 to 10 alone and
+     * written there by the x86 INF's NT paths; never asked. */
+    { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_NT_CM, 0x0UL, 0x3UL,
+      "let the controller's interrupt tell the driver at once that a device "
+      "was plugged in or removed",
+      "1 is used only where Windows gives the controller an interrupt and "
+      "the driver's own test of it passes; the driver still looks every "
+      "XhciCmPollIdleMs as well.", 0x2UL,
+      { "no: look every XhciCmPollIdleMs", "yes", NULL, NULL } },
     /* Owner, 2026-10-15: never asked, /set Name=Value only (record 23
      * section 8.1, record 24 section 11). */
     { "XhciCmReenum", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
@@ -2031,6 +2094,13 @@ const INST_VALUE instValues[] = {
       "1 and 2 may drop a device the firmware connected before Windows "
       "started.", 0x6UL,
       { "kept", "cleaned where they do not verify", "all cleaned", NULL } },
+    /* Task 45.54: a bench switch tuning.md says to leave at 1. */
+    { "XhciCmUsb4V2", INST_INF_CM, INST_APPLY_CM, 0x0UL, 0x3UL,
+      "USB4: run a version 2 router, with its Gen 4 links, as a version 2 "
+      "one",
+      "a bench switch: leave it at 1. 0 runs every router as version 1, as "
+      "3.3.0.0 did.", 0x1UL,
+      { "no: every router as version 1", "yes", NULL, NULL } },
     /* Record 26 section 5.5 (task 42-A.2): the Thunderbolt page's
      * "Advanced..." rows from the release notes' table, never asked by
      * the console; the ranges are cm_vals.c's. */
@@ -2206,6 +2276,8 @@ int inst_value_relevant(int index, const INST_ENV *env)
         return inst_mk_system(env);
     case INST_APPLY_NT5_CM:
         return (env->Nt && env->Major == 5 && env->CmNhi) ? 1 : 0;
+    case INST_APPLY_NT_CM:
+        return (env->Nt && env->CmNhi) ? 1 : 0;
     default:
         return 0;
     }
@@ -2229,6 +2301,10 @@ int inst_value_greyed(int index, const INST_ENV *env)
         return inst_mk_system(env) ? 0 : 1;
     case INST_APPLY_NT5_CM:
         return (env->Nt && env->Major == 5) ? 0 : 1;
+    case INST_APPLY_NT_CM:
+        /* As the 98 SE and ME Thunderbolt rows: shown with no host
+         * interface present too (record 26 section 5.5). */
+        return env->Nt ? 0 : 1;
     default:
         return 0;
     }
@@ -2249,6 +2325,8 @@ const char *inst_value_only(int index)
         return "Windows 2000 to 10 only";
     case INST_APPLY_NT5_CM:
         return "Windows 2000 and XP only";
+    case INST_APPLY_NT_CM:
+        return "Windows 2000 to 10 only";
     default:
         return NULL;
     }
@@ -2285,9 +2363,49 @@ int inst_value_allowed(int index, const INST_ENV *env, INST_U32 v)
         return 0;
     }
     if (instValues[index].Hi != 0) {
-        return v >= instValues[index].Lo && v <= instValues[index].Hi;
+        return inst_value_in_range(index, v);
     }
     return v <= 31UL && (inst_value_set_mask(index, env) & (1UL << v)) != 0;
+}
+
+static void inst_cat(char *out, size_t cap, const char *s);
+static void inst_cat_number(char *out, size_t cap, INST_U32 v);
+
+int inst_value_in_range(int index, INST_U32 v)
+{
+    const INST_VALUE *x;
+
+    if (index < 0 || index >= instValueCount || instValues[index].Hi == 0) {
+        return 0;
+    }
+    x = &instValues[index];
+    return v >= x->Lo && v <= x->Hi && (x->Step <= 1UL || v % x->Step == 0);
+}
+
+void inst_value_range_text(int index, char *out, size_t cap)
+{
+    const INST_VALUE *x;
+
+    if (cap == 0) {
+        return;
+    }
+    out[0] = '\0';
+    if (index < 0 || index >= instValueCount || instValues[index].Hi == 0) {
+        return;
+    }
+    x = &instValues[index];
+    inst_cat_number(out, cap, x->Lo);
+    inst_cat(out, cap, " to ");
+    inst_cat_number(out, cap, x->Hi);
+    if (x->Step > 1UL) {
+        inst_cat(out, cap, ", a multiple of ");
+        inst_cat_number(out, cap, x->Step);
+    }
+}
+
+int inst_value_target_9x(int serviceIsOurs, int action)
+{
+    return serviceIsOurs || action == INST_ACT_INSTALL;
 }
 
 INST_U32 inst_value_asked_mask(int index, const INST_ENV *env)
@@ -2323,6 +2441,9 @@ INST_U32 inst_value_set_mask(int index, const INST_ENV *env)
     if (instValues[index].Apply == INST_APPLY_NT5_CM &&
         !(env->Nt && env->Major == 5)) {
         return 0;   /* read by the driver on 2000 and XP alone */
+    }
+    if (instValues[index].Apply == INST_APPLY_NT_CM && !env->Nt) {
+        return 0;   /* read by the driver on 2000 to 10 alone */
     }
     if (inst_eq(instValues[index].Name, "XhciInterruptMode") &&
         !(env->Nt && env->Major >= 6)) {
@@ -2380,7 +2501,7 @@ int inst_value_set(const char *arg, int *index, INST_U32 *value)
         return -1;
     }
     if (!inst_number(sep + 1, &v) ||
-        (instValues[i].Hi != 0 ? (v < instValues[i].Lo || v > instValues[i].Hi)
+        (instValues[i].Hi != 0 ? !inst_value_in_range(i, v)
                                : (v > 31UL ||
                                   (instValues[i].Settable & (1UL << v)) == 0))) {
         return -1;

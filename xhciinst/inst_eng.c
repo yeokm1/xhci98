@@ -2571,7 +2571,12 @@ static int value_target(const DEVREC *d, int v)
         return 0;
     }
     if (!envNow.Nt) {
-        return inst_eq(d->Service, instInfService[inf]);
+        /* Revision 51 of record 23 (task 45.54): a controller with no
+         * driver that this run installs takes the machine-wide values too,
+         * as on NT; until then only one already bound did, and a first
+         * install listed no row but the greyed ones. */
+        return inst_value_target_9x(inst_eq(d->Service, instInfService[inf]),
+                                    d->Action);
     }
     return d->Action == INST_ACT_INSTALL || d->Action == INST_ACT_UPDATE ||
            d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_NEWER;
@@ -2873,6 +2878,7 @@ int inst_eng_rows(INST_ROW *rows, int cap)
                 (instValues[v].Apply == INST_APPLY_CM ||
                  instValues[v].Apply == INST_APPLY_9X_CM ||
                  instValues[v].Apply == INST_APPLY_NT5_CM ||
+                 instValues[v].Apply == INST_APPLY_NT_CM ||
                  instValues[v].Apply == INST_APPLY_MARK);
         asked = inst_value_applies(v, &envNow) ||
                 (cmRow && !greyed && instValues[v].Asked != 0) ||
@@ -3040,6 +3046,7 @@ static int value_needs_write(int v)
                        instValues[v].Apply == INST_APPLY_9X_CM)) ||
         (instValues[v].Apply == INST_APPLY_NT5_CM &&
          !(envNow.Nt && envNow.Major == 5)) ||
+        (instValues[v].Apply == INST_APPLY_NT_CM && !envNow.Nt) ||
         value_inf(v) == NULL) {
         return 0;
     }
@@ -3102,6 +3109,9 @@ static void write_values(void)
         }
         if (instValues[v].Apply == INST_APPLY_NT5_CM &&
             !(envNow.Nt && envNow.Major == 5)) {
+            continue;
+        }
+        if (instValues[v].Apply == INST_APPLY_NT_CM && !envNow.Nt) {
             continue;
         }
         if (!value_needs_write(v)) {
@@ -9068,8 +9078,8 @@ static int steps_9x(const char *dir)
         }
     }
     /* The Thunderbolt half only when this run copied its INF (section 8.5). */
-    out("\nThen run INSTALL.BAT again, to check the result and set the "
-        "driver's options.\n");
+    out("\nThen run INSTALL.BAT again, to check the result; the driver's "
+        "options can be\nchanged there too.\n");
     if (usbInclude && uasInclude) {
         out("A UAS disk plugged in later opens Windows' New Hardware wizard "
             "(again at\nanother port); Next until Finish installs it, no "
@@ -10443,8 +10453,16 @@ static int run_install_9x(void)
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     pfw_run(pfw_mode(0));
-    write_values();
-    s98_write_values();
+    /* A run cancelled before here writes no value, as the NT run's stop
+     * skips them: since task 45.54 a first install's controller takes the
+     * answers (XhciSilentInstall's list merge among them), and a stop
+     * before its install must not leave them for a later one. */
+    if (runCancelled) {
+        logonly("cancelled: no registry value written\n");
+    } else {
+        write_values();
+        s98_write_values();
+    }
     tray_install();
     own_install();
     stor_tools_copy();
