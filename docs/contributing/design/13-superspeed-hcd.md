@@ -13387,9 +13387,9 @@ reading behind a real SAT bridge stays on the bench list.
 ## 17. A UAS drive in Safely Remove Hardware (task 45.61, 2026-10-31)
 
 Status: 2026-10-31, the reading done and the change designed, reviewed and
-revised; the code waits on the owner's answer to 17.4, because the change
-adds one notice on Windows 2000 (roadmap-usb4 task 45.61: a change of
-behaviour beyond the listing goes to the owner first).
+revised. The change adds one notice on Windows 2000, so it went to the
+owner first (roadmap-usb4 task 45.61); the owner chose A (17.4) the same
+day, and 17.5 is the code.
 
 Tags in this section: [obs] read in this project's runs (`runs/run-45.md`,
 "45.61"); [hist] read in this repository's history; [hyp] not read.
@@ -13487,6 +13487,8 @@ today. XP, Vista and 7 show no notice either way.
   test.
 - **C: no change.** A release-notes line instead: Windows does not list a
   UAS drive in Safely Remove Hardware; stop it from the USB Tree.
+
+**The owner's answer (2026-10-31): A.**
 
 ### 17.5 The change (for A)
 

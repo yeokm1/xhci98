@@ -724,7 +724,6 @@ static VOID uasFdoRemove(PUAS_FDO fdo)
 NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
-    PDEVICE_CAPABILITIES caps;
     NTSTATUS status;
     KIRQL irql;
 
@@ -739,14 +738,6 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
             }
         }
         return UasCompleteIrp(irp, status, 0);
-
-    case IRP_MN_QUERY_CAPABILITIES:
-        status = uasForwardSync(fdo, irp);
-        if (NT_SUCCESS(status)) {
-            caps = stack->Parameters.DeviceCapabilities.Capabilities;
-            caps->SurpriseRemovalOK = TRUE;
-        }
-        return UasCompleteIrp(irp, status, irp->IoStatus.Information);
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:
         if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
@@ -791,6 +782,10 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
         IoDeleteDevice(fdo->Self);
         return status;
 
+    /* IRP_MN_QUERY_CAPABILITIES passes here unchanged: the bus's
+     * SurpriseRemovalOK (FALSE for a whole device, as for a Bulk-Only
+     * stick) is what lets Safely Remove Hardware list and stop the drive
+     * on its own (task 45.61, design record 13 section 17). */
     default:
         break;
     }
