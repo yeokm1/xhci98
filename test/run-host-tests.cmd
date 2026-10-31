@@ -731,6 +731,12 @@ rem test_cm_iso links the isolation statement's decision (src\cm\cm_iso.c,
 rem task 45.35, design record 22 section 10.5): the one yes, each
 rem condition refused alone, and all 1024 patterns' first failing one.
 call :run test_cm_iso "test_cm_iso.c ..\src\cm\cm_iso.c"
+rem test_net_frame links the USB4NET framing core of Thunderbolt
+rem networking (src\net\net_frame.c, task 45.59 step S6, design record
+rem 35 sections 7.2 to 7.4): the transmit split, the Frame ID rule, every
+rem receive drop and the reassembly, a short frame whose SOF PDF reads 0,
+rem and the receive segmentation over IPv4 and IPv6 with its refusals.
+call :run test_net_frame "test_net_frame.c ..\src\net\net_frame.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).
