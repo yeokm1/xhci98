@@ -1,6 +1,9 @@
 # Design Record 36 - The Download by Windows Family
 
-Status: revision 4, 2026-10-31 (the owner's answers of that day, section
+Status: revision 5, 2026-11-01 (sections 4 and 8.2: a Setup image takes
+the same folder, the 64-bit INF's NT 5.2 device install copying
+`usbd.sys` alone, record 11 decision 13 revised); revision 4, 2026-10-31
+(the owner's answers of that day, section
 12: `stor98.mpd` dropped from `nt-x86\` with an NT-only x86 Stor98 INF,
 section 3.3); revision 3, 2026-10-31, before code (revision 1 of the same
 day reviewed and revised: the cut re-lays the flat package, the engine's
@@ -324,6 +327,26 @@ connection manager and Stor98's model lines in its driver store or
   boot of an internal-drive system.
 - `xhcicmf.inx`: never.
 
+**A Setup image takes the same folder** (revision 5, 2026-11-01, task
+45.44's leg L9). DISM adds `nt-x86\` or `nt-x64\` to `install.wim`, the
+installed Windows, and to both images of `boot.wim`, Windows PE and
+Setup, which is what gives Setup itself a keyboard, a mouse and the
+install stick on a computer whose only USB ports are its xHCI
+controller's. Until that revision `nt-x64\xhci98.inf` went into
+`install.wim` and not into `boot.wim` (Error 2): the driver store reads
+every models section of the image's architecture, XP x64's included, and
+refuses a copy file that neither the package nor the image holds, and
+Windows PE has no `usbui.dll`. The 64-bit INF's NT 5.2 device install
+copies `usbd.sys` alone since then (record 11, decision 13 revised
+2026-11-01; the readings are `runs/run-45.md`, "45.44 (the boot.wim
+INF)"); the 32-bit INF, whose NT 5.x models section is the undecorated
+one that the store leaves out on 6.x, went into both images unchanged.
+For Setup from a 64-bit `boot.wim` the test signature asks for test
+signing in that medium's boot configuration as on the installed system
+(record 19). Kept for later (roadmap-usb4, "Planned - The XP x64
+Property Pages"): XP x64 and Server 2003 x64 in a folder of their own,
+which would give back the tabs `usbui.dll` draws there.
+
 What `SETUP.EXE` still does after an integrated install (the text of
 `INTEGRATE.TXT`, section 8.2): XHCIPFW, placed by the installer alone
 (record 32): `XHCIPFW.VXD` on 98 SE and ME, `XHCIPFW.SYS` on 32-bit 2000
@@ -604,7 +627,8 @@ table: which folder for which Windows (the table of section 1); point
 nLite, NTLite or DISM at that folder with recursion (DISM: `/Add-Driver
 /Driver:<folder> /Recurse`, and on x64 `/ForceUnsigned`, since the x64
 drivers carry the project's test signature, which loads only in
-test-signing mode, record 19); for 2000 and XP's text mode, the F6
+test-signing mode, record 19), DISM into `boot.wim`'s two images as well
+as `install.wim` (section 4, revision 5); for 2000 and XP's text mode, the F6
 floppy from the folder's root (`txtsetup.oem`); that `cm\xhcicmf.inx` is
 not an INF for integration and is installed by `SETUP.EXE` alone; that
 leaving `cm\` out leaves the Thunderbolt and USB4 connection manager out,

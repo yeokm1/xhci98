@@ -2018,13 +2018,14 @@ try {
 
     # INTEGRATE.TXT (record 36 section 8.2), held to the table: plain text
     # within 78 columns, each family folder named, the filter's .inx named as
-    # not for integration, DISM's /Recurse and /ForceUnsigned, and no
+    # not for integration, DISM's /Recurse and /ForceUnsigned, boot.wim
+    # beside install.wim (record 36 section 4, revision 5), and no
     # testing-status wording.
     $it = Get-IntegrateText -Version "9.9.9.9"
     $itLines = @($it -split "`r`n")
     Assert-True (@($itLines | Where-Object { $_.Length -gt 78 -or $_ -match '[^\x20-\x7E]' }).Count -eq 0) "INTEGRATE.TXT has a line over 78 columns or a character outside printable ASCII."
     foreach ($fam in $script:FamilyNames) { Assert-True ($it -match ('(?m)^  ' + [regex]::Escape($fam) + '\\')) "INTEGRATE.TXT does not name $fam\ in its table." }
-    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "cm\tbnet\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_")) {
+    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "cm\tbnet\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_", "boot.wim", "install.wim", "testsigning on", "efi\microsoft\boot\bcd")) {
         Assert-True ($it.Contains($need)) "INTEGRATE.TXT does not say '$need'."
     }
     Assert-True ($it -notmatch '(?i)emulat|virtual machine|untested|not tested|qemu') "INTEGRATE.TXT carries testing-status wording."

@@ -510,6 +510,21 @@ Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
   DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
                  /Recurse, and for nt-x64\ also /ForceUnsigned.
 
+For Windows Vista to 10, add the folder to install.wim and to both images
+of boot.wim (Windows PE and Setup). The drivers in boot.wim let Setup use
+a USB keyboard, mouse and install stick on a computer whose only USB ports
+are USB 3; those in install.wim are the installed Windows' own. Setup from
+a 64-bit boot.wim also needs test signing on in the medium's boot
+configuration, in efi\microsoft\boot\bcd as well on a medium that also
+starts on UEFI:
+
+  bcdedit /store <medium>\boot\bcd /set {default} testsigning on
+
+and the installed Windows its own: on Vista or 7 x64, press F8 at each of
+its starts, Setup's own restarts included, and choose Disable Driver
+Signature Enforcement, until test signing is on as readme.txt, section 2,
+says (8 to 10 start with their own USB 3 driver).
+
 The 64-bit drivers carry this project's test signature, which Vista x64 to
 10 x64 load only in test-signing mode (readme.txt, section 2).
 

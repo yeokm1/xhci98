@@ -55,6 +55,12 @@ What it checks, grouped by the failure each rule prevents:
            The 64-bit file's NT 6.x path is the exception and must name none
            of the four (OS-ONNT6): its file queue aborts on a LayoutFile copy,
            and all four are on disk after any Vista or Windows 7 install.
+           And since 3.4.0.0 the 64-bit file's NT 5.2 DEVICE install must not
+           copy usbui.dll (OS-UINT52), while it still copies usbd.sys and its
+           right-click route still copies both: the driver store of Vista to
+           10 reads that section too, and Windows PE has no usbui.dll, so
+           DISM refused the package for a boot.wim (design record 11,
+           decision 13 revised 2026-11-01).
   SUSP-*   Idle suspend is the driver's job, not this file's, since 1.1.0.0:
            no section may write the machine-wide
            Services\USB\DisableSelectiveSuspend (SUSP-GLOBAL) or a
@@ -2231,7 +2237,11 @@ $osSupplied = @(
        Why = "the class drivers bound to the HCD's device PDOs import its helper exports (USBD_CreateConfigurationRequestEx, USBD_ParseConfigurationDescriptorEx, USBD_ParseDescriptors; design record 13 section 6), and nothing else on an xHCI-only machine places it" },
     @{ File = "usbhub.sys";  On = @(); Off = @("Win98", "Win2000", "WinXP64"); OffRule = "OS-HCDREPLACED"; Dest = $driversDest;
        Why = ""; OffWhy = $hcdReplacedWhy },
+    # DeviceOff: the paths whose DEVICE install must not copy the file while
+    # their right-click route still must (OS-UINT52).
     @{ File = "usbui.dll";   On = @("Win98", "Win2000", "WinXP64"); Off = @();
+       DeviceOff = @("WinXP64"); DeviceOffRule = "OS-UINT52";
+       DeviceOffWhy = "the driver store of Vista to 10 reads XP x64's models section too and refuses a copy file that neither the package nor the image holds, and Windows PE has no usbui.dll, so DISM refused the package for a boot.wim (design record 11, decision 13 revised 2026-11-01; runs\run-45.md, '45.44 (the boot.wim INF)'); the right-click [DefaultInstall.NTamd64], which that store does not read, still copies it";
        Dest = @{ Dirid = "11"; Subdir = ""; Spelling = "11";
                  Why = "dirid 11 is the system directory, where all four operating systems' own USB INFs put it; System32\Drivers is for drivers and this is a user-mode property-page DLL" };
        Why = "the NT targets' own INF has already registered it against the root hub usbport creates (Windows 2000's USB.INF [ROOTHUB2.NT] and Windows XP's usbport.inf [ROOTHUB.Dev.NT] both write EnumPropPages32 = 'usbui.dll,USBHubPropPageProvider'), and on an xHCI-only machine the file was never placed, so the page is dropped silently: measured 2026-09-07 in both NT guests, the USB Root Hub gains a working Power tab as soon as the file is present, with no registry change. On the 9x paths it places what Windows 98 SE's and Windows ME's own USB.INF place (USBUI.CopyFiles=11); the 9x controller tab comes from sysclass.dll instead, and the Bandwidth Usage dialog behind its button and the root hub's Power properties dialog are usbui.dll's (Data Access Error without it, roadmap task 23.1 leg A4, 2026-09-20)" }
@@ -2543,9 +2553,9 @@ foreach ($m in $models) {
         foreach ($p in $paths) {
             # Both routes into a target: the device install, and the
             # right-click Install that pre-stages with no device present.
-            $routes = @(@{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Sections = $p.Sections })
+            $routes = @(@{ Label = ("the {0} device install ([{1}])" -f $p.Name, $p.Install); Sections = $p.Sections; Device = $true })
             if ($p.Default -ne "" -and (Test-SectionExists $inf $p.Default)) {
-                $routes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Sections = @(Get-Directive $inf $p.Default "CopyFiles") }
+                $routes += @{ Label = ("the {0} right-click Install ([{1}])" -f $p.Name, $p.Default); Sections = @(Get-Directive $inf $p.Default "CopyFiles"); Device = $false }
             }
             foreach ($route in $routes) {
                 $entries = @(Get-CopyEntriesFor $inf $route.Sections $file)
@@ -2572,6 +2582,15 @@ foreach ($m in $models) {
                 if ($os.Off -contains $p.Name) {
                     if ($entries.Count -gt 0) {
                         Add-Failure $os.OffRule ("{0} copies '{1}' (line {2}). That is deliberate to NOT do: {3}. The asymmetry is intended - do not make the two paths symmetrical." -f $route.Label, $file, $entries[0].Line, $os.OffWhy)
+                    }
+                    continue
+                }
+                # **OS-UINT52: the NT 5.2 device install without usbui.dll.**
+                # The device install alone; the right-click route falls
+                # through to the On checks below and must still copy it.
+                if ($route.Device -and $os.ContainsKey("DeviceOff") -and ($os.DeviceOff -contains $p.Name)) {
+                    if ($entries.Count -gt 0) {
+                        Add-Failure $os.DeviceOffRule ("{0} copies '{1}' (line {2}). That is deliberate to NOT do: {3}." -f $route.Label, $file, $entries[0].Line, $os.DeviceOffWhy)
                     }
                     continue
                 }
@@ -2614,6 +2633,51 @@ foreach ($m in $models) {
                         $want = $os.Dest
                         if ($dd.Dirid -ne $want.Dirid -or $dd.Subdir -ine $want.Subdir) {
                             Add-Failure "OS-DEST" ("[{0}] delivers '{1}' to '{2},{3}'. {4}; spell it '{5}'." -f $entry.Section, $file, $dd.Dirid, $dd.Subdir, $want.Why, $want.Spelling)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#
+# OS-UINT52 past the install section's own CopyFiles. The loop above reads
+# the CopyFiles of the device install section alone; the driver store of
+# Vista to 10 reads further, into every section the engine runs beside it
+# ([<install>.CoInstallers] and the rest) and through Include= and Needs=,
+# even to a section of this same file (variants A1, A5 and A12, runs\run-45.md
+# '45.44 (the boot.wim INF)'). So on the 64-bit file no controller install
+# section, on either path, may carry Include= or Needs=, which this gate does
+# not follow, and no section beside XP x64's controller install may copy
+# usbui.dll.
+#
+if ($Arch -eq "amd64") {
+    foreach ($m in @($models | Where-Object { $_.Role -eq "controller" })) {
+        foreach ($p in @(Get-ModelPaths $m)) {
+            $install = $m.Section + $p.Suffix
+            if (-not (Test-SectionExists $inf $install)) { continue }  # PATH-* said so
+            foreach ($cs in @(Get-InstallSections $inf $install $p.Suffix)) {
+                foreach ($d in @("Include", "Needs")) {
+                    if (@(Get-Directive $inf $cs $d).Count -gt 0) {
+                        Add-Failure "OS-UINT52" ("the {0} controller install's [{1}] carries {2}=. The driver store of Vista to 10 follows it, even into this file, and this gate does not, so a usbui.dll copy behind it would go unseen and DISM would refuse the package for a boot.wim again (design record 11, decision 13 revised 2026-11-01)." -f $p.Os, $cs, $d)
+                    }
+                }
+                if ($cs -ieq $install) { continue }
+                $besideCopy = @(Get-Directive $inf $cs "CopyFiles")
+                if ($p.Key -eq "WinXP64") {
+                    $ui = @(Get-CopyEntriesFor $inf $besideCopy "usbui.dll")
+                    if ($ui.Count -gt 0) {
+                        Add-Failure "OS-UINT52" ("[{0}], beside the {1} controller install, copies 'usbui.dll' (line {2}). The driver store of Vista to 10 reads it with the install section, and Windows PE has no usbui.dll, so DISM would refuse the package for a boot.wim (design record 11, decision 13 revised 2026-11-01)." -f $cs, $p.Os, $ui[0].Line)
+                    }
+                } elseif (-not $p.OsFiles) {
+                    # The NT 6.x path names none of the four in any section
+                    # beside its install either (OS-ONNT6's reason, and the
+                    # store reads them).
+                    foreach ($os in $osSupplied) {
+                        $hit = @(Get-CopyEntriesFor $inf $besideCopy $os.File)
+                        if ($hit.Count -gt 0) {
+                            Add-Failure "OS-ONNT6" ("[{0}], beside the {1} controller install, copies '{2}' (line {3}). The NT 6.x path copies xhci98.sys and nothing else, in its install section and in every section beside it: the driver store reads them all, and a copy of an OS file aborts the queue or, in Windows PE, refuses the package (roadmap task 21.8; design record 11, decision 13 revised 2026-11-01)." -f $cs, $p.Os, $os.File, $hit[0].Line)
                         }
                     }
                 }

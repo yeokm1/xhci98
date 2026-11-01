@@ -840,6 +840,21 @@ Status: not opened, unnumbered and unversioned. Planned by the owner on
 - [ ] SETUPKBD.1 first a reading: what 2000 and XP text-mode setup loads for USB input (`TXTSETUP.SIF`'s keyboard and USB sections, `hidusb`, `kbdhid`), whether an F6 disk can bring `xhci98.sys` early enough with a keyboard path above it, and what Intel 7-series and later offer instead (EHCI routing, BIOS legacy USB); code only if the reading shows a way, its design put to the owner first
 - [ ] BOOTUSB.1 first a reading: 2000 and XP started from a USB disk behind the xHCI controller - the BIOS's legacy USB loads the boot files, then the boot-start `xhci98.sys` and the disk's storage driver (`xhciuas.sys`, or `usbstor.sys` for Bulk-Only) must take the disk over from the BIOS without losing it: the Boot group and its order, the CriticalDeviceDatabase entries a boot device needs, the hand-off from the BIOS's legacy USB, the hub and the disk enumerated before the system volume is wanted, and the page file and hibernation on such a disk; code only if the reading shows a way, its design put to the owner first
 
+## Planned - The XP x64 Property Pages
+
+Goal: the controller's Advanced tab and the root hub's Power tab back on
+an XP x64 or Server 2003 x64 machine where nothing else placed
+`usbui.dll`, which the 64-bit INF's NT 5.2 device install no longer
+copies so that DISM can add `nt-x64\` to a Windows PE or Setup image
+(design record 11, decision 13 revised 2026-11-01; record 36 section 4,
+revision 5).
+
+Status: not opened, unnumbered and unversioned. Planned by the owner on
+2026-11-01 (task 45.44's L9 fix), for the next release, tested first.
+
+- [ ] XP64UI.1 XP x64 and Server 2003 x64 in a folder of their own (for example `xp-x64\`, its root the F6 floppy), with an INF that copies `usbui.dll` again, and `nt-x64\xhci98.inf` for Vista to 10 x64 alone; a change to record 36's three-family layout, so the installer's source map and `/dir`, the family table, `INTEGRATE.TXT`, the F6 text and the gates move with it; the legs: DISM into 7 and 10 x64 `boot.wim` and `install.wim`, XP x64 with F6, with nLite and with `SETUP.EXE`, the tabs read
+- [ ] XP64UI.2 the lighter alternative, if XP64UI.1 is not taken: `SETUP.EXE` places `usbui.dll` from the system's own install source on NT 5.2 when it is missing (never from the package, which carries no Microsoft file); the tabs read after an F6, nLite and wizard install followed by `SETUP.EXE`
+
 ## Planned - A Larger Event Ring
 
 Goal: more isochronous budget than one 256-entry event ring allows

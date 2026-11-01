@@ -9128,6 +9128,176 @@ x86 `553ad5b7...`.
 - 8.1 x64 not read here; the change is the same on every NT target.
 - Part 1's other items (leg b's hang, the code integrity legs, part 2).
 
+## 45.44 (the boot.wim INF): the 64-bit controller INF into a Windows PE and Setup image (2026-11-01)
+
+45.44's leg L9 (`Dism /Add-Driver /Driver:nt-x64 /Recurse /ForceUnsigned`
+into a 7 SP1 x64 image) put all four INFs into `install.wim` and refused
+`xhci98.inf` for `boot.wim` index 1 (Windows PE) and index 2 (Setup) with
+Error 2; the image's `setupapi.offline.log`: `Could not find include INF
+file "layout.inf". Error = 0x00000002`, then `sto: Failed to get driver
+package copy files. Error = 0x00000002`. On a computer with only USB 3
+ports that leaves 7's Setup without a keyboard, mouse or install stick.
+
+### The reading: which part of the INF the driver store refuses
+
+Scratch copies of `src/xhci98-amd64.inf` (A) and `src/xhci98.inf` (X), each
+with one change, each with the 3.4.0.0 `xhci98.sys` (and on x64 the
+host-made `xhci98.cat`) beside it, added one by one with `Dism /Image:C:\M
+/Add-Driver /Driver:<variant>\xhci98.inf /ForceUnsigned` to an image
+mounted from a copy of the medium's WIM, the offline log's import lines
+read after each, the mount discarded. 7 SP1's DISM (6.1.7600.16385) in a
+7 x64 guest (q35 base `w7x64`, overlays `E1` to `E3`) on 7 SP1 x64 and x86
+`boot.wim` and `install.wim` (Professional SP1 VL media); 10 22H2's DISM
+(10.0.19041.844) in a 10 x64 guest (overlay `E4`) on 10 22H2 x64 and x86
+`boot.wim` index 2. Neither PE image holds `layout.inf`, nor does 7 SP1's
+`install.wim`.
+
+| Variant | the change | 7 x64 PE (1, 2) | 7 x64 `install.wim` | 10 x64 PE (2) |
+|---|---|---|---|---|
+| A0 | none (the shipping file) | Error 2 | pass | Error 2 |
+| A1 | no `LayoutFile`; `Include=layout.inf` in `[Xhci.Dev.NTamd64]` and `[DefaultInstall.NTamd64]` | Error 2 | pass | - |
+| A2 | no `LayoutFile` | Error 2 | pass | - |
+| A3 | no `LayoutFile`; no OS file copied on any route | pass | pass | - |
+| A4 | `[DefaultInstall.NTamd64]` copies `xhci98.sys` alone | Error 2 (2) | pass | - |
+| A5 | A4, no `LayoutFile`, `Include=layout.inf` in `[Xhci.Dev.NTamd64]` | Error 2 (2) | pass | - |
+| A6 | A4, no `LayoutFile` | Error 2 (2) | pass | - |
+| A7 | no `CatalogFile` | Error 2 (2) | pass | - |
+| A8 | `[Manufacturer]` `%Mfg%=XhciModels,NTamd64.6.0` (the NT 5.2 models section unreferenced; its sections and the right-click route still copy both files) | pass (2) | pass | pass |
+| A9 | no `CatalogFile`, no `LayoutFile` | Error 2 (2) | pass | - |
+| A10 | the NT 5.2 models section decorated `NTamd64.5.2` | Error 2 (2) | - | Error 2 |
+| A12 | the NT 5.2 OS copies behind `Needs=` of a section of the same file | Error 2 (2) | - | Error 2 |
+| A13 | `[Xhci.Dev.NTamd64]` and `[DefaultInstall.NTamd64]` copy `usbd.sys`, not `usbui.dll` | pass (2) | - | pass |
+| A15 | the same two copy `usbui.dll`, not `usbd.sys` | Error 2 (2) | - | Error 2 |
+
+| Variant | the change | 7 x86 PE (1, 2) | 7 x86 `install.wim` | 10 x86 PE (2) |
+|---|---|---|---|---|
+| X0 | none (the shipping file) | pass | pass | pass |
+| X1 | no `LayoutFile`; `Include=layout.inf` in the NT 5.x install and right-click sections | pass | pass | - |
+| X2 | no `LayoutFile` | pass | pass | - |
+| X3 | no `LayoutFile`; no OS file copied on any route | pass | pass | pass |
+
+The amd64 file went into a 32-bit PE image at A0 to A3 (the store reads
+no section of another architecture). What the readings say:
+
+- The store collects the copy files of every models section whose
+  decoration matches the image's architecture, NT 5.2's
+  `[XhciModels.NTamd64]` with the `.6.0` one (A8 against A0, A10), and it
+  follows `Include=` (A1, A5: the "include INF" line is then the
+  `Include=` itself) and `Needs=` (A12). For the 32-bit file the NT 5.x
+  models section is the undecorated one, which it leaves out when
+  `NTx86.6.0` matches (X0).
+- A copy file with no source in the package passes when the image
+  holds it, and `layout.inf`'s absence is a warning (A6 and A9 into
+  `install.wim`). Windows PE holds `usbd.sys` and not `usbui.dll` on 7
+  and 10 (A13 against A15). On `install.wim` the store's second pass
+  queued `usbd.sys` (A0 to A2, A4 to A7, A9), which the no-overwrite flag
+  skips; with A8 it did not.
+- 10 x86 PE logged, for X0 and X3 alike, "Found legacy DelFiles
+  operation for 'xhcimsi.sys'" and "Driver package 'xhci98.inf' is NOT
+  configurable" (the Vista and 7 helper's update clean-up, record 18), and
+  imported the package.
+
+Evidence: `E:\xhci98-vm\p45\w45-pe\E1\serial-a.log` (A0 to A3, X0 to X3;
+`serial-a1.log` a first run that took the x86 medium for both),
+`E2\serial-a.log` (A0, A4 to A9), `E3\serial-a.log` (A10, A12, A13,
+A15), `E4\serial-a.log` (10: A0, A8, A10, A12, A13, A15, X0, X3); the
+variants under each `xf\V\`; the generators
+`E:\xhci98-scratch\p45-w45-pe\py\mkvar*.py`; VM starts and stops in
+`E:\xhci98-vm\p45\w45-pe\pids.txt`.
+
+### The fix (the owner's choice, 2026-11-01)
+
+`[Xhci.Dev.NTamd64]` copies `Xhci.CopyFiles,Xhci.CopyOS`: XP x64's and
+Server 2003 x64's device install still fetches `usbd.sys` from the
+Windows media through `LayoutFile`, and no longer `usbui.dll`. Nothing
+else in either INF changes; the 32-bit file, `98-me\` and `nt-x86\` are
+as they were. Design record 11 decision 13 (revised 2026-11-01) and
+record 36 section 4 (revision 5) carry the reasoning; `INTEGRATE.TXT`
+says that `boot.wim`'s two images and `install.wim` both take the folder.
+The cost: on XP x64 or Server 2003 x64 with no other USB driver ever
+installed, the controller has no Advanced tab and the root hub no Power
+tab. A separate XP x64 folder that would keep them is planned
+(roadmap-usb4, "Planned - The XP x64 Property Pages").
+
+### Checks and the cut
+
+- INF gates: both files PASSED; the self-tests (`-Force`, the gate
+  changed) 1684 checks, with the new `OS-UINT52` cases (the NT 5.2
+  device install copying `usbui.dll` directly, by a section of its own,
+  through `Needs=`, beside it in `.CoInstallers`; `Include=` on the NT 6
+  install; `.CoInstallers` beside the NT 6 install copying it, `OS-ONNT6`;
+  the right-click route without it and the device install without
+  `usbd.sys`, `OS-MISSING`). The 64-bit footprint loses the one row.
+- Gated builds on `9bb0d10e`: x86 `all` BUILD + GATES PASSED (packager
+  self-tests 1805 checks, `INTEGRATE.TXT`'s new strings held), amd64
+  `all` BUILD + GATES PASSED, host tests PASSED
+  (`E:\xhci98-scratch\p45-w45-pe\build-x86.log`, `build-amd64.log`,
+  `host-tests.log`).
+- Test cut (`make-release.ps1 -Arch x86 -TestLabel "45.44 boot.wim INF"`,
+  both driver sets, `-SkipQualtool`): exit 0; `INTEGRATE.TXT` carries the
+  new paragraph. The x64 leg kit: `make-package.ps1 -Arch amd64`
+  (unsigned), catalogs made on the host, `ConvertTo-FamilyLayout` into
+  `nt-x64\`, every `.sys` and `.cat` signed in each guest with a throwaway
+  certificate. `nt-x64\xhci98.inf` `feae1c16...`, `xhci98.sys`
+  `43427bca...`; `nt-x86\xhci98.inf` is the shipping file, unchanged.
+
+### The legs
+
+- **7 x64, DISM** (q35 base `w7x64`, overlay `D7`, 7 SP1 DISM): the 7 SP1
+  x64 VL medium copied to a second disk, `Dism /Add-Driver
+  /Driver:C:\PKG\nt-x64 /Recurse /ForceUnsigned` into `boot.wim` index 1
+  (Windows PE), index 2 (Setup) and `install.wim` index 1: "Installing 4
+  of 4", each of `cm\xhcicm.inf`, `stor98\stor98.inf`, `xhci98.inf` and
+  `xhciuas.inf` "successfully installed" in all three images, every import
+  `Exit status: SUCCESS` in the offline log; commits completed; `bcdedit
+  /store S:\boot\bcd /set {default} testsigning on` (`testsigning Yes`),
+  `bootsect /nt60 S: /mbr`. **Pass.** (`D7\serial-a.log`.) This is L9's
+  rerun on the fix.
+- **7 x64, Setup from that `boot.wim`** (overlay `S7`): q35 with
+  `i8042=off` (no PS/2 controller) and no USB controller but `qemu-xhci`,
+  carrying a `usb-kbd`, a `usb-tablet` and a `usb-storage` stick; booted
+  from the setup disk. Setup's first page came up; Shift+F10 opened a
+  Command Prompt and every typed command arrived (the USB keyboard),
+  a tablet click pressed Next (the language page gave way to "Install
+  now"), `diskpart` listed the stick (`QEMU VVFAT`, D:) and `type
+  D:\STICK.TXT` read it, and `Services\xhci98` (`ImagePath
+  \SystemRoot\system32\drivers\xhci98.sys`) was the controller's
+  `Service` and `ActiveService`. Windows PE kept no class key for the
+  controller (no `Driver` value under `Enum\PCI`, no values to read), so
+  the registry defaults were read on XP x64 below, not in Setup.
+  **Pass.** (`S7\s1.png` to `s11.png`.)
+- **XP x64, F6** (i440FX `pc`, PS/2, `qemu-xhci` with a stick and tablet,
+  a fresh 16 GB disk; the floppy is `nt-x64\`'s root of this build plus a
+  `WINNT.SIF`; F6 sent from power-on over QMP): text mode listed and took
+  "xHCI98 USB 3 Controller (Windows XP x64)" (`F6\a-1.png`, `a-2.png`) and
+  copied the files; GUI setup installed the devices and stopped at the
+  product key page (`a-keypage.png`; no key, by the owner's instruction).
+  Offline (`F6\kp\`): `setupapi.log` - the controller found in `oem0.inf`,
+  "Actual install section: [Xhci.Dev.NTAMD64]", full install finished
+  successfully, the root hub likewise; `system32\drivers\usbd.sys` placed
+  (the medium's, dated 2005), no `system32\usbui.dll`; the hive: both
+  keys 41/41 and 1/1 at the INF's defaults (`regdef-F6key.txt`), the
+  controller's and the root hub's `EnumPropPages32` written. **Pass.**
+- **XP x64, `SETUP.EXE`** (q35 base `xpx64`, overlay `X6`, the leg kit's
+  `INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`): exit 3
+  (restart), "xHCI98 USB 3 Controller: xhci98 3.3.0.0, started", the root
+  hub started; `usbd.sys` present, `usbui.dll` "File Not Found"; after the
+  restart `xhci98` and `xhcicm` loaded (driverquery), the controller key
+  41/41 and the root hub's 1/1 at default (`X6\regdef-X6-post.txt`). The
+  controller's property sheet shows General and Driver, no Advanced tab
+  (`X6\tabs-ctrl.png`): the cost the fix accepts. The stick was not
+  read: its Found New Hardware wizard was cancelled in this leg.
+  **Pass.**
+- Not run, by the owner's trim of 2026-11-01: DISM into 10 x64's
+  `boot.wim` and `install.wim` and a Setup boot from them (the variant
+  reading A13 on 10 x64 PE stands for the INF form); a 10 x64 install
+  from `nt-x64\`; a 7 x86 install (the x86 package is byte-identical);
+  the unattended 7 x64 install from the integrated `install.wim`
+  (started, stopped before its first boot); 2000, XP and 98 SE installs.
+
+VM starts and stops: `E:\xhci98-vm\p45\w45-pe\pids.txt` (all mine
+stopped).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
