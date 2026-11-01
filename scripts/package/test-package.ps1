@@ -1904,6 +1904,7 @@ try {
             "xhcicmf.inf"    = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
             "stor98.inf"     = "[SourceDisksFiles]`r`nstor98.sys=1`r`n"
             "stor98w9.inf"   = "[SourceDisksFiles]`r`nstor98.mpd=1`r`n"
+            "xhcinet.inf"    = "[SourceDisksFiles]`r`nxhcinet.sys=1`r`nxhcinet6.sys=1`r`n"
         }
         foreach ($flat in $script:FamilyLayout[$Arch].Keys) {
             if ($Omit -contains $flat) { continue }
@@ -1971,7 +1972,11 @@ try {
         @{ Why = "98-me without the image its Stor98 INF names"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98.mpd") } },
         @{ Why = "a shared file differing"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\xhci98.sys"), "another build") } },
         @{ Why = "a shared file in one family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98-readme.txt") } },
-        @{ Why = "a file under cm\tbnet\ before 45.59 lists it"; Do = { param($r) New-Item -ItemType Directory -Force -Path (Join-Path $r "nt-x86\cm\tbnet") | Out-Null; [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\cm\tbnet\xhcinet.inf"), "x") } },
+        @{ Why = "an xhcinet6.sys in 98-me (record 35 section 9.5)"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\cm\tbnet\xhcinet6.sys") (Join-Path $r "98-me\cm\tbnet\xhcinet6.sys") } },
+        @{ Why = "nt-x86\cm\tbnet\ without the xhcinet6.sys its INF names"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\cm\tbnet\xhcinet6.sys") } },
+        @{ Why = "the network driver loose in cm\ rather than cm\tbnet\"; Do = { param($r) Move-Item (Join-Path $r "nt-x64\cm\tbnet\xhcinet.inf") (Join-Path $r "nt-x64\cm\xhcinet.inf") } },
+        @{ Why = "the network INF in one x86 family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\cm\tbnet\xhcinet.inf") } },
+        @{ Why = "a stray file under cm\tbnet\"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\cm\tbnet\notes.txt"), "x") } },
         @{ Why = "98-me without nt-x86"; Do = { param($r) Remove-Item -Recurse -Force (Join-Path $r "nt-x86") } }
     )
     foreach ($c in $famCases) {
@@ -1983,9 +1988,13 @@ try {
     }
     $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
     Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
-    New-Item -ItemType Directory -Force -Path (Join-Path $copy "98-me\cm\tbnet") | Out-Null
+    foreach ($fam in @("98-me", "nt-x86", "nt-x64")) { Remove-Item -Recurse -Force (Join-Path $copy "$fam\cm\tbnet") }
     $why = Test-FamilyLayout -Root $copy
-    Assert-True ($why -eq "") "PKG-FAMILY refused an empty cm\tbnet\ (task 45.59 fills it): $why"
+    Assert-True ($why -eq "") "PKG-FAMILY refused a package without the network driver (no cm\tbnet\ in any family): $why"
+    Assert-True ((Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet.inf")) -and (Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet6.sys")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\cm\tbnet\xhcinet6.sys")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\cm\tbnet\xhcinet.cat")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\xhcinet.inf"))) `
+        "the network driver is not where record 35 section 9.5 places it in the converted stand-in."
 
     # A family file changed after the conversion is refused by the
     # comparison with the verified flat package.
@@ -2009,13 +2018,14 @@ try {
 
     # INTEGRATE.TXT (record 36 section 8.2), held to the table: plain text
     # within 78 columns, each family folder named, the filter's .inx named as
-    # not for integration, DISM's /Recurse and /ForceUnsigned, and no
+    # not for integration, DISM's /Recurse and /ForceUnsigned, boot.wim
+    # beside install.wim (record 36 section 4, revision 5), and no
     # testing-status wording.
     $it = Get-IntegrateText -Version "9.9.9.9"
     $itLines = @($it -split "`r`n")
     Assert-True (@($itLines | Where-Object { $_.Length -gt 78 -or $_ -match '[^\x20-\x7E]' }).Count -eq 0) "INTEGRATE.TXT has a line over 78 columns or a character outside printable ASCII."
     foreach ($fam in $script:FamilyNames) { Assert-True ($it -match ('(?m)^  ' + [regex]::Escape($fam) + '\\')) "INTEGRATE.TXT does not name $fam\ in its table." }
-    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_")) {
+    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "cm\tbnet\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_", "boot.wim", "install.wim", "testsigning on", "efi\microsoft\boot\bcd")) {
         Assert-True ($it.Contains($need)) "INTEGRATE.TXT does not say '$need'."
     }
     Assert-True ($it -notmatch '(?i)emulat|virtual machine|untested|not tested|qemu') "INTEGRATE.TXT carries testing-status wording."
@@ -6147,7 +6157,7 @@ try {
     # amd64 INF names it (the gates' BOTH-CATALOG holds the line itself).
     foreach ($pair in @(@("xhci98.cat", "src\xhci98-amd64.inf"), @("xhciuas.cat", "src\uas\xhciuas-amd64.inf"),
                         @("xhcicm.cat", "src\cm\xhcicm-amd64.inf"), @("xhcicmf.cat", "src\cm\xhcicmf-amd64.inf"),
-                        @("stor98.cat", "src\stor98\inf\stor98-x64.inf"))) {
+                        @("stor98.cat", "src\stor98\inf\stor98-x64.inf"), @("xhcinet.cat", "src\net\xhcinet-amd64.inf"))) {
         Assert-True ($script:PackageCatalogs.Contains($pair[0])) "package-common.ps1's catalog table has no $($pair[0])."
         $catInfText = [System.IO.File]::ReadAllText((Join-Path $repo $pair[1]))
         Assert-True ($catInfText -match ('(?m)^CatalogFile=' + [regex]::Escape($pair[0]) + '\r?$')) "$($pair[1]) does not name $($pair[0])."
@@ -7141,8 +7151,8 @@ try {
         "make-package.ps1 no longer reads each binary once and checks the gated build record before its gates and its signing."
     Assert-True ($soPkgText.Contains('$DriverPath = $snapBinaries["xhci98.sys"]')) `
         "make-package.ps1 -SignOnly no longer stages and signs the copy it hashed."
-    Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 4) `
-        "make-package.ps1 no longer guards exactly its four binary gates (host suite, import gates, helper) by `$runBinaryGates."
+    Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 5) `
+        "make-package.ps1 no longer guards exactly its five binary gates (host suite, import gates, the network images', helper) by `$runBinaryGates."
     $soBuildText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\build-driver.cmd"))
     $soLockAt = $soBuildText.IndexOf('mkdir "%GATEDLOCK%" 2>nul')
     $soMainAt = $soBuildText.IndexOf('call :mainbody')
@@ -7157,7 +7167,9 @@ try {
         @{ Gate = '-Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhci98.sys -Image "%OUTSYS%"' },
         @{ Gate = '-AllowPath "%UASALLOW%" %GATEOPT%';  Cap = 'call :gated -Capture -Name xhciuas.sys -Image "%UASSYS%"' },
         @{ Gate = '-AllowPath "%CMALLOW%" %GATEOPT%';   Cap = 'call :gated -Capture -Name xhcicm.sys -Image "%CMSYS%"' },
-        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' }
+        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' },
+        @{ Gate = '-AllowPath "%NETALLOW%" %NETPROFILE% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcinet.sys -Image "%NETSYS%"' },
+        @{ Gate = '-AllowPath "%NET6ALLOW%" -GateProfile net6 %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcinet6.sys -Image "%NET6SYS%"' }
     )) {
         $g = $soBuildText.IndexOf($cap.Gate)
         $k = $soBuildText.IndexOf($cap.Cap)
@@ -7375,6 +7387,8 @@ try {
     $gdNotInput = @{
         "src\xhci_psw.c" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
         "src\xhci_psw.h" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\xhci_cmnet.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
+        "src\xhci_compat.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
         "src\xhci_ring.c" = "a path the input rules' vectors and the import's fixtures classify or write in a fixture, never read here"
         "docs\contributing\build-and-test.md" = "a path the input rules' vectors classify, never read here"
         "src\stor98\tests\unit\build.cmd" = "a path the input rules' vectors classify, never read here"

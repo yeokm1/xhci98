@@ -114,8 +114,8 @@ END
 
 /* Record 26 section 5.3.5 (task 45.60): what is Thunderbolt's alone,
  * shown only while the Thunderbolt 3 / USB4 box is ticked. The rows are
- * stacked by the Components page's routine; the networking box is hidden
- * until task 45.59 wires it. */
+ * stacked by the Components page's routine; the networking box and its
+ * sentence are shown while INST_TBNET_WIRED is 1 (task 45.59). */
 IDD_TBT DIALOG 0, 0, 300, 210
 STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
 CAPTION "Thunderbolt and USB4"
@@ -135,8 +135,9 @@ BEGIN
     LTEXT           "", IDC_T_APPR1_T, 20, 105, 272, 24
     LTEXT           "", IDC_T_APPR0_T, 20, 142, 272, 24
     LTEXT           "", IDC_T_APPR_NOTE, 8, 168, 284, 34
-    AUTOCHECKBOX    "", IDC_T_NET, 8, 196, 284, 10, WS_GROUP | WS_TABSTOP |
+    AUTOCHECKBOX    "", IDC_T_NET, 8, 180, 284, 10, WS_GROUP | WS_TABSTOP |
                     NOT WS_VISIBLE
+    LTEXT           "", IDC_T_NET_T, 20, 191, 272, 16, NOT WS_VISIBLE
 END
 
 /* Record 26 section 5.10 (task 45.66): Help on every page, a modal

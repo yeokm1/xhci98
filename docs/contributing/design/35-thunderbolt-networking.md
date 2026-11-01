@@ -1,6 +1,9 @@
 # Design Record 35 - Thunderbolt Networking: a Host-to-Host Link
 
-Status: revision 12, 2026-11-01: the early UUID answer held until this
+Status: revision 13, 2026-11-01: the packaging and the installer as
+built, steps S10 and S11 (section 9.5, with section 9.3 amended),
+reviewed and revised.
+Revision 12, 2026-11-01: the early UUID answer held until this
 driver has cleared lane 0's Lock (section 3.11), reviewed and revised.
 Revision 11, 2026-11-01: the rings' common buffers asked for in
 whole pages, read on Windows 2000 and XP (section 6.5, "The rings"),
@@ -2416,6 +2419,10 @@ existing entry finds them. `make-package.ps1` stages them from the build
 (never by hand), its `PKG-*` rules gain the files per folder, the x64
 image is test-signed and catalogued with the others (record 19), and
 `make-release.ps1`'s list and the download readme name the folder.
+Revision 13: the installed copy stays flat (record 36 section 6.1, its
+Q1 (a)), so `cm\tbnet\` adds no `DevicePath` entry: one entry, the
+install directory, as before, and the fallback is not needed (section
+9.5).
 
 ### 9.4 Order (the owner, 2026-10-31)
 
@@ -2425,6 +2432,174 @@ the guest by hand and installed through Device Manager's "Have Disk" from
 that folder, as the earlier connection-manager legs were. Only the
 packaging (S10) waits for 45.44's merge, and the installer wiring (S11)
 for 45.44's and 45.60's.
+
+### 9.5 As built: the packaging and the installer (steps S10 and S11; revision 13)
+
+Revision 13 (2026-11-01), after task 45.44's family layout (record 36)
+and task 45.60's page (record 26 section 5.3.5) were merged. Section 9.3
+said where the files go in the download; this section says how they get
+there and what the installer does with them.
+
+**The flat staging (S10).** `make-package.ps1` stages the network
+driver at the root of the flat package, as it stages the connection
+manager: `xhcinet.inf` (from `src\net\xhcinet.inf`, or
+`src\net\xhcinet-amd64.inf` under the name `xhcinet.inf`, as each
+amd64 INF is staged), `xhcinet.sys` and `xhcinet6.sys`, the images from
+`src\net\ndis5\` and `src\net\ndis6\`'s build trees of the flavour
+(`-NetInfPath`, `-NetDriverPath`, `-Net6DriverPath` override them; a
+stand-in package that names `-DriverPath` carries the network driver
+only when it names `-NetDriverPath` too, the `-CmDriverPath` rule). The
+root, because the INF's `SourceDisksNames` finds both images beside
+it and the installer's local copy is that flat package (record 36
+section 6.1). Each image is held to the gates `build-driver.cmd` runs
+on it: its flavour marker, and the import gate (x86 `xhcinet.sys` by
+the `net98` profile over `xhcinet-imports.allow`, x86 `xhcinet6.sys`
+by `net6` over `xhcinet6-imports.allow`; amd64 `xhcinet.sys` by the
+default amd64 rules over `xhcinet-imports-amd64.allow` and
+`xhcinet6.sys` by `net6` over `xhcinet6-imports-amd64.allow`); the INF
+by `check-net-inf.ps1`. `build-driver.cmd`'s gated record (record 19,
+`write-gated-manifest.ps1`) hashes and captures both images around
+their import gates in every flavour and both architectures, so a
+`-SignOnly` staging signs the gated bytes. On amd64 `-TestSignPfx` signs
+both images with the other drivers, and `xhcinet.cat`, covering
+`xhcinet.inf`, `xhcinet.sys` and `xhcinet6.sys`, is one more row of
+`package-common.ps1`'s `$script:PackageCatalogs`, made and signed in the
+flat staging with the others; an unsigned amd64 package carries no
+catalog, as for every other INF (record 19 section 3a).
+
+**The family table (S10).** `$script:FamilyLayout` places them, and the
+"`cm\tbnet\` holds no file" rule of record 36 section 9 gives way to
+the table:
+
+| Flat name | `98-me\` | `nt-x86\` | `nt-x64\` |
+|---|---|---|---|
+| `xhcinet.inf` | `cm\tbnet\` | `cm\tbnet\` | `cm\tbnet\` (the amd64 INF) |
+| `xhcinet.sys` | `cm\tbnet\` | `cm\tbnet\` | `cm\tbnet\` (x64) |
+| `xhcinet6.sys` | - | `cm\tbnet\` | `cm\tbnet\` (x64) |
+| `xhcinet.cat` | - | - | `cm\tbnet\` |
+
+`98-me\` carries no `xhcinet6.sys`: 98 SE and ME install
+`[Net.Dev]`, whose one copy is `xhcinet.sys`
+(`[Net.CopyFiles9x]`), and a family holds only what its systems
+install (record 36 section 2). The INF still names `xhcinet6.sys` in
+its `[SourceDisksFiles]`, for the `.NTx86.6.2` models; a name the
+family carries nowhere is skipped by `PKG-FAMILY`'s family filter and
+by the installer's package check, record 36 section 3.1's rule for
+`xhcihlpr.sys` in `98-me\`. The legs read the wizard on 98 SE and ME
+pointed at `98-me\cm\tbnet\` and installing from it. The installer's
+source map (`instPkgFiles`) gains the same four rows, local names at
+the copy's root. `make-release.ps1` publishes the images only as the
+gated build's (an `Assert-CmPublished` of their own, x64 signed), lists
+the folder in the download readme, and `INTEGRATE.TXT` says that
+leaving `cm\tbnet\` out leaves Thunderbolt networking out, and leaving
+`cm\` out leaves both the connection manager and networking out.
+
+**`DevicePath`** (section 9.3 amended). The installed copy is flat
+(record 36 section 6.1, its Q1 (a)): `xhcinet.inf` and `xhcinet.sys`
+sit at the install directory's root beside `xhci98.inf`, and the
+install directory is `DevicePath`'s one entry, as in `3.3.0.0`. So
+`cm\tbnet\` costs `DevicePath` nothing; the owner's fallback (the
+files loose in `98-me\cm\`) is not needed.
+
+**The installer (S11).** `INST_TBNET_WIRED` is 1, and section 9.1's
+rules apply whole, with the amendments below. The engine carries the
+network driver as a sixth INF slot, `INST_INF_NET` (`xhcinet.inf`,
+service `xhcinet`), appended after Stor98's so the slot numbers of an
+interrupted run's records keep their meaning; the copy, the staging,
+the store trap, the installs of present devices, the update and the
+uninstall are the code every slot runs, with these places made the
+network driver's own:
+
+- *Carried* (`inst_tbnet_decide`'s `carried`): the family folder holds
+  `cm\tbnet\xhcinet.inf`, a `DriverVer` of this release and of this
+  architecture, and the images this system installs from it
+  (`xhcinet.sys`; on NT `xhcinet6.sys` too). Part of it without the
+  rest is a refusal, counted apart from the connection manager's own
+  three files (`cmFiles` counts the CM and filter slots by name, no
+  longer every slot from `INST_INF_CM` up).
+- *In the run* (`net_set`, beside `s98_set`, called by `tb_apply` and
+  by the box): only while the Thunderbolt support is in the run and the
+  box's final state is 1; else the slot is empty and `package_files`
+  leaves `xhcinet.*` out of the local copy, so no wizard and no store
+  offers the driver unasked (the rule Stor98 follows, record 26
+  section 6.3).
+- *A version group of its own* (`INST_GROUP_NET`, service `xhcinet`),
+  whose binary is the one this system loads: `System32\Drivers\
+  xhcinet6.sys` on 8 to 10, `System32\Drivers\xhcinet.sys` on 2000 to 7
+  (dirid 12), `SYSTEM\xhcinet.sys` on 98 SE and ME (dirid 11). A newer
+  or unreadable one refuses the slot as every group's does; with the
+  box unticked the group has no verdict (an installed adapter is not
+  part of the run). On 98 SE and ME a devnode whose driver key names no
+  `NTMPDriver` or `PortDriver` is read for its `DeviceVxDs` (the NDIS
+  miniport NDIS.VXD loads, `xhcinet.sys`), so the adapter's service
+  reads `xhcinet`, an unreadable value being unknown ownership as for
+  the others.
+- *Ticked:* NT stages the local copy's `xhcinet.inf` through
+  `SetupCopyOEMInf`, so the `XHCICM\TBNET` device the connection
+  manager reports after the restart finds it in the driver store, and a
+  present one (an update over a ticked install) is installed as every
+  slot's device is. On 98 SE and ME the INF and `xhcinet.sys` are in
+  the local copy on `DevicePath`, where the hardware wizard finds them
+  when the adapter appears, and a present adapter goes through the
+  helper as every 98 slot's device does (the helper's "anything to do"
+  test names the slot).
+- *`XhciCmNet`*: after the installs and the table's values, the write
+  `inst_tbnet_decide` decides: a `REG_DWORD` into each present NHI's
+  driver key (the `xhcicm.inf` devices, read again after the installs)
+  and, where it says so, `Services\USB`. A 1 is written only when the
+  network driver is ready for the adapter: on NT staged by this run
+  (the slot not skipped by the store trap, an unknown store, a newer
+  version or a failed `SetupCopyOEMInf`), on 98 SE and ME in the local
+  copy; else nothing is written and the run says why, so a restart
+  never brings the adapter up over an older stored package. A 0 is
+  always written where decided. The value in force it reads, as the
+  connection manager reads it: `Services\USB` first (a `DWORD` 1 is 1,
+  any other `DWORD` 0, the CM's refusal leaving its default; a value of
+  another type or unreadable counts as 0, with `mwHas` set so the box's
+  write replaces it); else 1 when any present NHI's key holds 1, 0 when
+  one holds another value, -1 when none holds it. A write sets the
+  run's restart flag, and the Summary and the console say that the
+  network adapter appears, or goes, after the restart. `/list` writes
+  nothing. `XhciCmNet` stays out of the values table, so `/set
+  XhciCmNet=` is refused with "use /tbnet or /notbnet".
+- *Unticked:* nothing of networking is copied or staged, and on a
+  new install nothing is written (the INF's 0 stands); where the value
+  in force is 1, 0 is written to the same places. An installed adapter
+  stays installed (section 9.1).
+- *The uninstall:* `xhcinet` is one of the package's services
+  (`inst_own_service`), so the adapter's devnodes (removal rank 0,
+  before the NHI) and the staged or copied INF (it carries
+  `AddService=xhcinet`) go with the rest. Its service is deleted with
+  both its images on NT (`xhcinet.sys` and `xhcinet6.sys` in
+  `System32\Drivers`, each deleted only once the service is gone or
+  absent, as every service's file is), and on 98 SE and ME
+  `SYSTEM\xhcinet.sys` goes with the files of `SYSTEM32\DRIVERS`.
+  `XhciCmNet` is deleted from `Services\USB` by name, beside the
+  table's machine-wide values (this replaces section 9.1's "when its
+  value is the one this installer wrote": the uninstall removes the
+  package, and the value means nothing without it). An NHI's own
+  values go with its devnode.
+- *The console and the silent install* (section 9.2 amended): "Install
+  Thunderbolt networking?" after the Thunderbolt question and its
+  children; Enter and `/yes` give the box's first state, which is N on
+  a new install and the value in force on an update, so an update keeps
+  the earlier choice; `/list` shows it. A silent install turns
+  networking on only with `/tbnet`, and a silent update keeps it as it
+  is unless `/tbnet` or `/notbnet` says otherwise.
+- *The window:* the box is the Thunderbolt and USB4 page's last row,
+  shown, greyed and unticked where not carried, its first state the
+  decision's; the page's Next and Back take it into the window's state,
+  and the Summary lists "Thunderbolt networking: on" or "off" when it
+  writes.
+
+**Not done.** The four connection-manager values of section 8.1 beside
+`XhciCmNet` (`XhciCmNetPollMs`, `XhciCmNetRxFrames`,
+`XhciCmNetTxFrames`, `XhciCmNetE2E`) are written at their defaults by
+both NHI INFs (task 45.50's rule) and have `tuning.md` rows, but are not
+Advanced rows of the Settings dialog: record 26 section 5.4.1 is the
+owner's list of those rows ("no other", 2026-10-31), and section 9.1's
+line naming them is an owner question (section 15, Q12). `XhciNetMtu`
+is the adapter's own, in its Advanced page, as section 9.1 has it.
 
 ## 10. The host-to-host model in `usb4-emu`
 
@@ -2781,6 +2956,15 @@ questions as asked follow.
   (`runs/run-43-24.md`), never published, which leaves the 8 to 10 x64
   catalog unmade; (c) no x64 leg until S10's package. Recommended: (a);
   (c) where the key is not on the leg host.
+
+- **Q12, the networking values in the Settings dialog** (revision 13,
+  section 9.5). (a) As record 26 section 5.4.1's list stands: the four
+  connection-manager values written at their defaults by the INFs, in
+  `tuning.md`, no Advanced row; (b) four Advanced rows on the
+  Thunderbolt tab, shown while the networking box is ticked, as section
+  9.1 first said. Recommended: (a) for `3.4.0.0`: the defaults are what
+  the legs read, and the owner's list of 2026-10-31 named no other rows;
+  (b) is a small later change if the bench asks for a tuning.
 
 ## 16. Open, and the risks
 

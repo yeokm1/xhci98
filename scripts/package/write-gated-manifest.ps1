@@ -42,7 +42,7 @@ release or qemu (debug was retired with task 45.45); every mode but -RunStart.
 
 .PARAMETER Name
 -Hash and -Capture: the binary's file name (xhci98.sys, xhciuas.sys,
-xhcicm.sys, xhcihlpr.sys, stor98.sys, stor98.mpd).
+xhcicm.sys, xhcihlpr.sys, stor98.sys, stor98.mpd, xhcinet.sys, xhcinet6.sys).
 
 .PARAMETER Image
 -Hash and -Capture: the path of the binary the import gate reads.
@@ -136,7 +136,7 @@ try {
 
     if ($Hash -or $Capture) {
         $key = $Name.ToLowerInvariant()
-        if ($key -notmatch '^((xhci98|xhciuas|xhcicm|xhcihlpr|stor98)\.sys|stor98\.mpd)$') { throw "-Name '$Name' is not a binary this build gates." }
+        if ($key -notmatch '^((xhci98|xhciuas|xhcicm|xhcihlpr|stor98|xhcinet|xhcinet6)\.sys|stor98\.mpd)$') { throw "-Name '$Name' is not a binary this build gates." }
         if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) { throw "no $key at '$Image'." }
         $full = (Resolve-Path -LiteralPath $Image).ProviderPath
         $now = Get-FileSha256 -Path $full
@@ -158,8 +158,9 @@ try {
     # -Finish: every expected binary captured, and each still its capture.
     # Stor98's images (task 42-A.30): stor98.mpd and the x86 stor98.sys on
     # x86, the amd64 stor98.sys on amd64, built once per run from src\stor98
-    # and gated in every flavour's record.
-    $expected = @("xhci98.sys", "xhciuas.sys", "xhcicm.sys", "stor98.sys")
+    # and gated in every flavour's record. Thunderbolt networking's two images
+    # on both architectures (task 45.59, record 35 section 9.5).
+    $expected = @("xhci98.sys", "xhciuas.sys", "xhcicm.sys", "stor98.sys", "xhcinet.sys", "xhcinet6.sys")
     if ($Arch -eq "x86") { $expected += @("xhcihlpr.sys", "stor98.mpd") }
     $sha = @{}
     foreach ($n in $expected) {

@@ -7639,7 +7639,11 @@ every value of this package).
   reinstalls the device through the INF, and the uninstall that removes
   Stor98 deletes its service key with `DriverParameter` in it.
 - *Exempt*: `StorInterrupt <b>.<d>.<f>`, a report the driver writes; the
-  test-build keys.
+  test-build keys. On 98 SE and ME the uninstall that removes Stor98
+  takes those reports too, with the settings (`inst_s98_run_report_9x`):
+  any of them left reads as a Stor98 there before, and a reinstall after
+  the uninstall on 98 SE read "found before 1" with one left (task 45.50,
+  2026-11-01).
 - *The gate*: `check-stor98-inf.ps1` holds each 9x half to the nine values
   at those defaults and flags, and each NT install to the one
   `DriverParameter` line, its string exactly the defaults above, with

@@ -8733,6 +8733,711 @@ product key for the volume-licence medium); `boot.wim` with w45-pe's INF
 change, read by that work. The owner's key-holding x64 cut stays owed, as
 above.
 
+## 45.41 (the owed legs): the soak after the change, the hub model's two variants, and a hub unplug under load (2026-11-01)
+
+**Verdict: all three legs pass on XP and XP x64; no defect, no code
+change.** The three legs design record 13 section 15's L9 listed and
+section "45.41" above left owed: twenty link failures forty seconds apart
+after the change; the hub model's 0x100 variant (the connection bit
+dropped too) and 0x200 variant (a failure the hub never reports); and an
+unplug of the hub itself under load. What is left of 45.41 is the
+reporter's: the VL805 and the Realtek hub.
+
+### The vehicle
+
+As section "45.41": development host A, the same test-only QEMU 11.1.0
+build with `usb-ss-hub` and `link-drop` (used as built, not rebuilt or
+changed), the q35 XP base (`-Os xp`, 2 processors, 1 GiB, `-vga cirrus`)
+and the q35 XP x64 base (2 processors, 2 GiB), a `usb-ss-hub` on
+`qemu-xhci` root port 3 with a `usb-uas` (serial `W45UAS41`, one
+`scsi-hd` LUN on an overlay of the 128 MiB FAT test disk) on its port 1,
+the drive D:. The guests are overlays of section "45.41"'s `3.3.0.0`
+installs with this tree's two files copied over the installed ones and
+the guest restarted (`UPD.BAT`), then booted once with the hub and the
+disk to install them (Found New Hardware: "xHCI98 USB 3 Hub", "xHCI98 USB
+Attached SCSI Storage"), each leg an overlay of that.
+
+The binaries: the gated release build of `208552f9` (x86 all and amd64
+release passed), whose sources are those of `3.4.0.0` at `0a35067f`
+(the two differ in `run-45.md` and the roadmap only). x86 `xhci98.sys`
+`bfb4b953...`, `xhciuas.sys` `8c18df76...`; amd64 `xhci98.sys`
+`7fdbd9f6...`, `xhciuas.sys` `8f805866...`; `XHCITR` of the same build.
+Each guest's `XHCITR /snapshot` showed the installed hashes (x86) and
+`link.keep.on=00000001` (both) before the legs.
+
+Load, as section "45.41": `W.BAT D:` (a 16 MiB file copied, compared
+byte for byte and deleted in a loop, one COM1 line a pass with the
+guest's time) and `L.BAT D:` (a file held open on D:, a line a second).
+Both guests ran at once, with the same schedule; every leg below ran on
+both.
+
+### The soak: twenty failures forty seconds apart
+
+`qom-set sshub link-drop 1` every 40 s, twenty times (host times in
+`soak.log`), under the copy loop and the held file.
+
+| | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| keeps | 20 `link.keep=01000000`, 20 `link.keep.done=01000001` | 20 and 20; then a second soak of twenty on the same guest: 40 and 40 |
+| copies failed or compared unequal | 0 of 185 passes | 0 of about 1650 passes (both soaks) |
+| the pass spanning each failure, against the median of the five before | +0.3 s on average (the largest +2.5 s; normal spacing 3.2 to 6.0 s) | +0.2 s on average in the first soak, 0.0 s in the second (the largest +0.7 s; normal 0.9 to 1.5 s) |
+| `SsHubWarmResets` | 20 | 20, then 40 |
+| `SlotsEnabled`, `DevicesAddressed`, `PoolRingsInUse` (before, after) | 3, 3, 6 / 3, 3, 6 | 3, 3, 6 / 3, 3, 6 |
+| UAS telemetry | one record, "its device present", 916 sends; port resets 15, no timeout, abort or LUN reset | one record, present; port resets 10 after the first twenty |
+| the held file | grew on (535 lines) | grew on (880 lines) |
+
+The pass spacing of both guests rose by about half from 10:30 to 10:38 and
+again at 10:44, in step, and the second rise came while the x86 guest had
+no link failure at all (only the XP x64 guest's second soak was running):
+the host's load, not the keep. Against `3.3.0.0` (section "45.41"): each
+failure there dropped the drive for 11.3 to 31.2 s and failed every copy
+meanwhile, and the old volume's handles failed for good; here no copy
+failed, the held file's handle stayed valid, and nothing of the bus grew
+over 20 (x86) and 40 (x64) keeps.
+
+### The hub model's variants
+
+| Leg | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| 0x100: `link-drop 0x101`, SS.Inactive with the connection bit 0 and C_PORT_CONNECTION | kept: the 21st `link.keep=01000000` and `link.keep.done=01000001`; `SsHubWarmResets` 21; the spanning pass 3.5 s against 3.6 s; no copy failed; the same telemetry record | kept: the 41st keep, restored; `SsHubWarmResets` 41; the spanning pass 1.0 s against 0.9 s; no copy failed; the same record |
+| 0x200: `link-drop 0x201`, SS.Inactive with no change bit (the hub reports nothing; the transfers in flight are forgotten) | no keep (none is due: the hub reported no change), and no drop: the UAS driver's timeout path recovered it - telemetry timeouts 2, aborts 1, LUN resets 1, port resets +1 - and its RESET_PORT warm-reset the hub port (`SsHubWarmResets` 22); one pass took 19.0 s against about 3.5 s; no copy failed; the same record; the held file grew on | the same: timeouts 3, aborts 1, LUN resets 1, port resets +1, `SsHubWarmResets` 42; one pass took 16.6 s against about 1 s; no copy failed; the same record |
+
+### A hub unplug under load
+
+`device_del sshub` under the copy loop and the held file: the hub and the
+disk behind it leave together.
+
+| | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| the unplug | the copy in flight failed at once (its COPYFAIL line within a second of the unplug), and every copy after it failed at once (1854 COPYFAIL lines in 4 min 23 s) - no hang, the guest responsive | the same: the first COPYFAIL 0.1 s after the last good pass |
+| the held file | "Windows - Delayed Write Failed ... D:\LONG.TXT" and "The volume for a file has been externally altered so that the opened file is no longer valid" - a removal's own symptom, as with `3.3.0.0` | the same |
+| the keep | no `link.keep` note: a departure is not a link failure | the same |
+| the snapshot during the unplug | record 1 "its device departed, slot 3" | the same |
+| the replug (`device_add` of the hub, the `usb-uas` and its LUN, then `qom-set uas0 attached true`: a hot-plugged `usb-uas` waits for it) | the disk back as D: and every copy passing from the first pass after the attach; record 2 "its device present"; `SlotsEnabled` 5 (the hub and the disk addressed afresh) | the same: record 2 present, `SlotsEnabled` 5, copies passing |
+
+On XP x64 the Found New Hardware wizard came up at each boot for three
+devices of the q35 board with no driver in the base - the ICH9 AHCI
+controller (`8086:2922`, the base runs the system disk on PIIX IDE), the
+ICH9 SMBus controller (`8086:2930`) and `ACPI\QEMU0002` - the only devices
+with a problem code (`Win32_PnPEntity`, ConfigManagerErrorCode 1); none
+is USB.
+
+Evidence: `E:\xhci98-vm\p45\w45-hub41\` (`soak86\`, `soak64\` and
+`soak64\b\`: `serial-a.log`, `soak.log`, `soakan.txt`, `span.txt`,
+`hubunplug.txt`, `qemu-a.out`, screenshots `u1.png` onwards;
+`pids.txt`).
+
+What is left of 45.41: the reporter's VL805 and Realtek hub. Not run, and
+not among the owed legs: the refusals on a guest (a UAS disk with no serial
+number, which QEMU's `usb-uas` cannot present; a Bulk-Only disk) and
+Windows 98 SE, ME and 2000, as section "45.41" says.
+
+## 45.59 S10 and S11: the network driver in the package, and the installer's networking box (2026-11-01)
+
+Worker `w45-tbnet6`, branch `w45-tbnet6` from `3.4.0.0` `208552f9`,
+development host A. Design record 35 revision 13 (section 9.5, section
+9.3 amended, Q12) and record 26 draft 60 are the plan. Commits:
+`ca90ab5a` (the design), `c57f5164` (S10), `7f5e34ec` (S11),
+`dccce821` (the networking row fitted to its page); each reviewed and
+revised.
+
+### What changed
+
+- **The package (S10).** `make-package.ps1` stages `xhcinet.inf`,
+  `xhcinet.sys` and `xhcinet6.sys` at the flat package root, each image
+  held to its flavour marker and import gate (x86 `net98` and `net6`,
+  amd64 the default rules and `net6`), the INF to `check-net-inf.ps1`;
+  on amd64 both images are signed with the others and `xhcinet.cat` is
+  made with the other catalogs (`$script:PackageCatalogs`).
+  `$script:FamilyLayout` re-lays them into `98-me\cm\tbnet\`
+  (`xhcinet.inf`, `xhcinet.sys`), `nt-x86\cm\tbnet\` (and
+  `xhcinet6.sys`) and `nt-x64\cm\tbnet\` (and `xhcinet.cat`).
+  `build-driver.cmd`'s gated record hashes and captures both images,
+  and the two-worktree import carries them. `make-release.ps1` publishes
+  them only as the gated builds, newer than every source they are made of
+  (`Assert-NetPublished`), gates the INF in the upload set and lists the
+  folder in the readme; `INTEGRATE.TXT` says that leaving `cm\tbnet\` out
+  leaves Thunderbolt networking out. The installed copy stays flat, so
+  98 SE's and ME's `DevicePath` keeps one entry.
+- **The installer (S11).** `INST_TBNET_WIRED` 1. The network driver is
+  the engine's sixth INF slot (`INST_INF_NET`) with a version group of
+  its own; it is copied, staged and installed only while the Thunderbolt
+  support is in the run and the box is ticked. `XhciCmNet` is written as
+  `inst_tbnet_decide` says, into each present NHI's key or, with none
+  present, `Services\USB`; a 1 only once the driver is staged (NT) or in
+  the copy (98 SE, ME). The uninstall removes the adapter, its INF, the
+  service with both images and the machine-wide `XhciCmNet`. The window's
+  Thunderbolt and USB4 page carries the box and its sentence, the
+  Summary a line, Help a paragraph; the console asks after the
+  Thunderbolt question; `/tbnet` needs `/thunderbolt` or `/cmonly`;
+  `/set XhciCmNet=` is refused.
+- Not changed: `XhciCmNetPollMs`, `XhciCmNetRxFrames`,
+  `XhciCmNetTxFrames` and `XhciCmNetE2E` were already written at their
+  defaults by both NHI INFs (read on XP below) and have `tuning.md` rows;
+  they are not Advanced rows (record 35 Q12, the owner's).
+
+### Checks and builds
+
+- `test_inst` 8015 checks, 0 failures; `xhciinst\build.cmd` RC 0.
+- Gated x86 `all` on `7f5e34ec`: the window self-test failed one check
+  ("the page's rows above its foot, every row shown"): fixed in
+  `dccce821`. Gated x86 `all` on `dccce821`: BUILD + GATES PASSED, the
+  host tests, the packager self-tests (1817 checks) and the window
+  self-test with them. Gated amd64 `all` on `dccce821`: BUILD + GATES
+  PASSED. Logs `E:\xhci98-scratch\p45-w45-tbnet6\logs\gated-x86-2.log`,
+  `gated-amd64-1.log`.
+- The legs' package: `make-release.ps1 -Arch x86 -TestLabel w45tbnet6`
+  with both driver sets, `-SkipQualtool -SkipMarkTool`, exit 0; the
+  nonfree download on the transfer disk. `98-me\cm\tbnet\` holds
+  `xhcinet.inf` and `xhcinet.sys`, `nt-x86\cm\tbnet\` those and
+  `xhcinet6.sys`. Hashes
+  `E:\xhci98-vm\p45\w45-tbnet6\hashes-dccce821.txt` (`SETUP.EXE`
+  `495da4f1...`, `xhcicm.sys` `b2f4fc6f...`, `xhcinet.sys`
+  `5b93e89d...`, `xhcinet6.sys` `48402fe3...`, `xhcinet.inf`
+  `87fcaedd...`).
+
+### The legs
+
+The far end: Kubuntu 26.04.1 live, kernel `7.0.0-30-generic`, its stock
+`thunderbolt_net`, the server end of `usb4-xdomain` on `usb4-emu`'s
+`w45-emuar` build (as `w45-tbnet5`), runtime power management off on
+`0000:00:04.0` and `0-0`. Each Windows guest a fresh q35 overlay,
+`-Usb4 adl`, the cable in from power-on. Evidence and screens:
+`E:\xhci98-vm\p45\w45-tbnet6\` (`w98\`, `w7\`, `xp\`, `pids.txt`).
+
+| System | What | Result |
+|---|---|---|
+| 98 SE | `INSTALL /console /thunderbolt /tbnet /yes /nopause` | pass: "Thunderbolt networking turned on (XhciCmNet 1): the network adapter appears after the restart"; no NHI bound yet, so `Services\USB` `XhciCmNet` 1 |
+| 98 SE | cold start | the NHI installed by itself; the hardware wizard for "xHCI98 Thunderbolt Networking" found the INF in `C:\XHCI98` on `DevicePath`, asked twice for `xhcinet.sys` (its default `C:\WIN98`; `C:\XHCI98` typed), took the 98 CD's network files by itself, asked for a restart |
+| 98 SE | after the restart | 169.254.211.195 to Linux 169.254.211.7: ping 4/4; Linux to 98: 4/4 and 1472 bytes DF 3/3; driver key `DeviceVxDs` and `NTMPDriver` `xhcinet.sys` |
+| 98 SE | `INSTALL /console /uninstall /yes /nopause` | pass: the adapter removed, `INF\OTHER`'s `xhcinet.inf`, `SYSTEM\xhcinet.sys` and the machine-wide `XhciCmNet` deleted; `Enum\XHCICM` left as an empty key |
+| 7 x86 | `SETUP.EXE /thunderbolt /tbnet` | pass: the box ticked with its sentence, the page whole (`w7\s4.png`); Summary "Thunderbolt networking: turned on (the network adapter appears after the restart)" (`w7\n3.png`) |
+| 7 x86 | after the restart | the adapter installed from the store by itself; `XhciCmNet` 1 in the NHI's key, none in `Services\USB`; 169.254.33.2 to Linux 4/4, Linux to 7 4/4 and 1472 DF 3/3 (firewall off) |
+| 7 x86 | update: `INSTALL /console /yes /nopause /thunderbolt` | pass: "/yes: Y, as it is now", "Thunderbolt networking stays on." |
+| 7 x86 | `INSTALL /console /uninstall /yes /nopause` | pass: `XHCICM\TBNET\...` removed, service `xhcinet` and `xhcinet.sys` deleted, its `oem7.inf` removed; no INF of this package left |
+| XP | `INSTALL /console /yes /nopause /thunderbolt` (no `/tbnet`) | pass: "/yes: N", "Thunderbolt networking stays off."; the NHI's key `XhciCmNet` 0 with `XhciCmNetPollMs` 1, `RxFrames` and `TxFrames` 0x80, `E2E` 1; no `Services\USB` value; no `Enum\XHCICM`. The first run ended with exit 4 behind a hardware wizard; the run after a restart, exit 3 |
+
+Not run (the owner's trim, 2026-11-01): Windows 10 x86 with the box
+ticked (`xhcinet6.sys` was read there by `w45-tbnet5`; this guest was
+stopped mid-install) and the ME recheck (98 SE passed from the same
+`98-me\` folder). Owed: the x64 legs, on the owner-signed kit (record 35
+Q11): stage it with `scripts\package\make-package.ps1 -Flavor release
+-Arch amd64 -TestSignPfx <pfx> -SignOnly` (or the cut's `make-release.ps1
+-Arch both ... -TestSignPfx <pfx>`), which now signs `xhcinet.sys` and
+`xhcinet6.sys` and makes `xhcinet.cat`.
+
+## 45.15 (the desktop plug): a USB4 parent plugged at the desktop after a start without it (2026-11-01)
+
+Worker w45-dock, development host A. No driver change. Code at
+`208552f9` (the `3.4.0.0` tip): the gated build `all` (x86), "BUILD +
+GATES PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-dock\build-all.log`,
+`src\pfw\build.cmd` first). Packages (`make-package.ps1`) laid into the
+family layout (`ConvertTo-FamilyLayout`), the installer and tools built
+from the same tree: release `nt-x86\xhci98.sys` `7f99e21f...`,
+`nt-x86\cm\xhcicm.sys` `b2548e31...`, `nt-x86\stor98\stor98.sys`
+`24b32e93...`; qemu `xhci98.sys` `0e01cb9a...`, `xhcicm.sys` `5ca32e53...`
+(`E:\xhci98-vm\p45\w45-dock\hashes-xf1.txt`). Emulator: the build of
+`usb4-emu` `f48fa30`'s patch (`qemu-system-x86_64.exe` `83474795...`);
+`main` `2129536` adds only the test-only `x-adapter-gone`, default off,
+unused here. Each leg a fresh overlay of the q35 base, the release
+package installed with the layout present (`RINT.BAT`, `RI9.BAT`: `INSTALL
+/console /yes /nopause /thunderbolt /stor98`), the qemu flavour's
+`xhcicm.sys` and `xhci98.sys` copied over, restarted, then started with
+no USB4 device. The parent `usb4-device ... dialect=usb4,downstream-ports=1,
+chain-power-controller=off` and its child (`parent=enc0,port=1`) plugged
+by QMP at the desktop a few seconds apart, as in "45.15 (legs)" x3 and r3.
+Evidence: `E:\xhci98-vm\p45\w45-dock\` (`w7a\`, `w9a\`, `xpa\`:
+`cmdline-<tag>.txt`, `debugcon-<tag>.log`, `serial-<tag>.log`,
+`steps.txt`, `infopci-*.txt`, screenshots; `pids.txt`).
+
+### The cause
+
+On 7 x86, not this driver's: the platform's bus numbering, the cause
+45.37 read for the Thunderbolt 3 tunnel port and 45.55 for the ASM4242
+one. A switch hot-added below a tunnel port that the firmware numbered
+with no spare buses gets secondary and subordinate bus 0, and Windows
+does not renumber the bridges above it: 7 stops the switch's upstream
+port at Code 31 (reproduced below with only the padding changed). For
+XP the same numbering was read by 45.55 on the old layout (its section's
+"The cause": the parent's switch at bus 3 with secondary bus 0); for 98
+SE it is an inference, not read. XP and 98 SE were read again here only
+on the current layout and package (XP's with 45.55's root-port
+reservation and record 33's revisions 4 and 5), where both pass.
+"45.15 (legs)" x3 and r3 ran on the emulator's layout before 2026-10-30,
+whose ASM4242 tunnel ports had no padding; on the current default
+(`usb4-asm-usp` `fw-bus-pad=48,fw-io-pad=12K,fw-mem-pad=384M`, as the
+board's firmware gives) the same plug works. The A/B is one 7 x86
+overlay with only the padding changed:
+
+| Leg | System | Layout | Read | Verdict |
+|---|---|---|---|---|
+| `w7a` a | 7 SP1 x86 | `-Usb4 asm4242`, the default padding | the parent UP, then the kid (`u4.kid.pcie.up=00010809`, UP); `info pci`: tunnel port `02:00.0` buses 4 to 20, the parent's switch `104C:8232` secondary 4, subordinate 20; the chain port classified (`cm.chain.class=00140408`), its child attached (`cm.chain.attach=01050408`); every PCI device Code 0, both NVMe on Stor98, started; D: ORICO, `fc /b` of a copied file: no differences (the second drive, a copy of the same disk image, shows no letter) | pass |
+| `w7a` b | 7 SP1 x86 | the same overlay, `-global usb4-asm-usp.fw-bus-pad=0` (and `fw-io-pad=0`, `fw-mem-pad=0`): the layout before 2026-10-30 | the same plug: the connection manager's half as in a; `info pci`: tunnel port `02:00.0` bus 3 only, `104C:8232` at bus 3 with secondary and subordinate bus 0; the upstream port at **Code 31** | the failure of "45.15 (continued)" r3 reproduced; the platform's |
+| `w9a` c | 98 SE | `-Usb4 asm4242`, the default | the 9x numbering found both members' functions (`cm.brnum.9x.outcome=00020800`); the Add New Hardware wizards installed the bridges (each offered a restart, declined) and Stor98 for both NVMe; the parent's drive E: ORICO, `fc /b`: no differences; the chained drive without an interrupt at its first plug (`cm.reenum.9x.noirq.refused`), started at the child's re-plug (`cm.reenum.9x.noirq.after=06000500`), F: ORICO (`w9a\c-F-chained.png`) | pass (the chained drive's first plug as 45.55 read on ME) |
+| `xpa` b | XP SP3 | `-Usb4 asmboard` (the board's root-port reservation, 45.55's `xpD`) | started with no dock after the install; the plug: the bridges' lists rewritten (`cm.breq.how=01001111`, `01051112`, `01001112`), the chain port classified and started; every bridge and both NVMe Code 0 on Stor98; D: and F: ORICO, `fc /b` on each: no differences | pass |
+
+XP's first plug on that overlay (tag a, the first time Windows saw the
+dock) took 45.55's two-wizard path (the drive first as "PCI Device", then
+Stor98 after the mark service's restart); the downstream ports' first
+bridge installs read Code 12 once in `setupapi.log` ("required reboot:
+Device has problem: 0x0c") before the rewrite, and the restart Windows
+then asked for was taken by mistake, so tag b is the clean reading. On
+the launcher's `asm4242` root port XP has no I/O window to give the
+switch (45.55's `xpB`); that and the 98 SE wizards' restart offers are
+as recorded there.
+
+What a real system needs is what boards do: a tunnel port the firmware
+pads (the ASM4242 board 48 buses, the P14s's Alpine Ridge port 37). On a
+firmware that numbers a tunnel port with no spare buses, a dock plugged
+while Windows runs stops at Code 31 on 7 (and the like on the other
+systems) until a restart with the dock attached; 45.53 and 45.55 (the
+emulator's padding, record 33 revisions 4 and 5) are what this leg rests
+on; no defect of this tree's was found on the three systems read.
+
+## 45.17 (the owed legs): the PCI side of a chain hot-plugged under the firmware connection manager, 7 x86 (2026-11-01)
+
+Worker w45-dock, the same build, packages and emulator as "45.15 (the
+desktop plug)". The emulator's Thunderbolt 3 tunnel ports are now padded
+(`usb4-emu` `d73479a`, in `2129536`: `fw-bus-pad=37`, 192 MB, 4 KB), which
+removes 45.37's Code 31 (the same cause as above). Leg `w7t`: a fresh 7
+SP1 x86 overlay, `-Usb4 tb3ar` (Alpine Ridge, `profile=tb3-alpine-ridge`,
+security user, pre-boot off), the release package installed with the
+layout present, the qemu flavour copied over, restarted; `info pci`: the
+tunnel port `02:01.0` buses 4 to 40. The dock `usb4-device ... dialect=tb3,
+downstream-ports=1,chain-power-controller=off` with its NVMe, and a USB4
+device router chained behind it (`parent=enc0,port=1`) with its own, both
+plugged at the desktop. Record 34 section 9.3's clauses:
+
+| Clause | Read | Verdict |
+|---|---|---|
+| 1 | `tbt.icm.connected=00000811`, approved; the child `tbt.icm.connected=00010821`, approved after its parent; the dock's switch `104C:8232` (secondary 5, its downstream ports 6 and 17) and both downstream ports Code 0, both NVMe on Stor98, started; `XHCIINST /devices`: "Thunderbolt 3, link 1, depth 1, approved" and "USB4 (version 1.0), link 1, depth 2, approved", both "PCIe up"; the chained disk put online (`diskpart`, the duplicate image), D: and F: ORICO, `fc /b` on each: no differences | pass |
+| 2 | the child unplugged: `tbt.icm.device-gone=00000301`, the chain port invalidated (`cm.chain.invalidate=02020508`), F: gone, D: kept; plugged again: approved, invalidated (`01020508`), its child attached, F: and D: `fc /b`: no differences | pass |
+| 3 | the dock unplugged with the child attached: `tbt.icm.device-gone=00000301` (the child) first, then `00000300`; both drives gone; no hang; shutdown in 15 s | pass |
+| 5 | Windows' Safely Remove Hardware lists both of the dock's downstream switch ports, each with its NVMe disk; Stop on the chain port lists its port, the volume F:, the disk and Stor98, then fails: "The 'PCI Express standard Downstream Switch Port' device is not removable and cannot be ejected or unplugged"; the parent's downstream port gives the same answer; F: and its files stay (`w7t\c5-*.png`). `XHCIINST /devices` offers the dock alone for `/eject` (the chained unit's own eject is section 3.10's, deferred with 45.15's correspondence) | the chained unit cannot be stopped on its own from the applet on 7 under the firmware connection manager, as its sibling port cannot; the whole dock's removal is unchanged; not chased |
+| 8 | at the child's plug the chain action's invalidation (`cm.chain.invalidate=01020508`) came before the chain port's new child in its `BusRelations` (`cm.chain.rel.new=00000001`): the invalidation found it, not native hot plug | read |
+
+Not run (the owner's trim, 2026-11-01): 98 SE (clause 6) and XP (clause
+7) on `tb3ar`, 10 x64, 2000 and ME, and Titan Ridge with its tunnel ports
+installed. Of clause 4, "45.17" leg b read the adoption only; the
+child's unplug and re-plug after it is not read under the firmware
+connection manager.
+
+## 45.63 (the S3 wake): a D0 the bus fails ends what the bus holds (2026-11-01)
+
+Worker w45-s3, development host A. Part 1 of 45.63 (above) left Sleep
+on 10 x64 stopping at the wake with 0x9F (3), the tablet's D0 held
+above `xhci98.sys`'s device PDO. This section reads the cause and fixes
+it. Evidence: `E:\xhci98-vm\p45\w45-s3\` (`a\`, `b\`, `c\`: serial,
+debugcon and screenshots per leg, `pids.txt`, `STATE.md`,
+`hashes.txt`); builds and reviews in `E:\xhci98-scratch\p45-w45-s3\`.
+
+### The vehicle
+
+Part 1's: QEMU v11.1.2 with `usb4-emu` `4287e70`'s patch, q35, the
+`w10x64` base (22H2, 19045.2965), `-smp 2`, 4 GB, `-vga virtio` with
+virtio-win 0.1.302's `viogpudo`, `ICH9-LPC.disable_s3=0`. The layout
+was simplified to `qemu-xhci` behind a PCIe root port (`addr 1c.0`)
+with no USB4 model: the tablet (port 2), a `usb-uas` disk (port 3) and a
+`usb-storage` stick (port 4), overlays of the FAT test disk. Sleep is
+`rundll32 powrprof.dll,SetSuspendState 0,1,0` with hibernation off
+(with it on, the same call hibernates), the wake QMP `system_wakeup`. A
+guest agent on COM2 ran the commands. The x64 images were signed in each
+guest with a throwaway certificate made there; nothing was signed on the
+host.
+
+### Reading the cause
+
+| Step | Build | Result |
+|---|---|---|
+| Part 1's overlay (leg d, `76bbdb83`, Verifier off), the simplified layout | release | S3, wake: 0x9F within two minutes (`a\w2.png`) |
+| The same | `qemu` | the same stop (`a\w3.png`). Port `0xE9` carries the power dispatches but not the log ring; the ring read from the guest's kernel dump (our own extension's text, found by its labels) ends with `power.suspend.first` and two `uas.resume` notes: no `power.resume.first`, so the controller was never re-initialized after the wake |
+| A local `qemu` build with the log ring mirrored to port `0xE9` and the device PDOs' power, IOCTL and URB dispatches traced (diagnostics only, not committed) | `qemu` + traces | the controller FDO's D0 completed from the bus driver below with `STATUS_NO_SUCH_DEVICE` (`0xC000000E`) at DISPATCH_LEVEL; `hcdD0Done` let it go with nothing done. The device PDOs then completed their own D0s at once, the tablet's HID stack sent a class URB (function `0x1B`) to its PDO, which waited on the suspended bus, and 0x9F (3) followed (`a\w4.png`, `a\debugcon-d1.log`) |
+| The controller moved to `pcie.0` (`addr 5.0`, no root port) | `qemu` + traces | the same `0xC000000E`: not the root port's |
+| `XhciInterruptMode` 1 (the interrupt line, no message) | `qemu` + traces | the same: not the message interrupt's |
+| Windows' own `USBXHCI` on `pcie.0` (`addr 6.0`, a new instance), the same S3 | Windows' | no stop; the controller's `DEVPKEY_Device_LastArrivalDate` moved from before the sleep to 22 s after the wake, and the tablet's and stick's with it (`a\arr-u6-before.txt`, `a\arr-u6-after.txt`): Windows removed the controller after the wake and found it again. That the bus failed this stack's D0 too, as it fails this driver's, is inferred from the removal, not read (nothing traces Windows' stack here) |
+
+So the failed D0 comes from the vehicle's wake (the controller is removed
+after it under Windows' own driver too, which the inference above ties
+to the same failure), as a dock's controller unplugged while the machine
+sleeps fails it on real hardware, and the hang is this driver's:
+with the D0 failed, every request the bus held or was sent afterwards
+waited for a D0 that never came; the HID stack's D0 waited on its
+request, and PnP's removal of the controller waited on that D0. Without
+the tablet (removed by QMP before the sleep) the same wake did not stop,
+and the guest's next shutdown did not finish.
+
+### The fix
+
+Design record 13 section 5.8.1, record 14's admission line; commits
+`aed67242`, `2f94a9a9`, `ac0788ad` (reviewed and revised). A failed D0
+takes the successful D0's route to PASSIVE_LEVEL (`hcdD0Finish`), and on
+a suspended controller `hcdD0Refused` latches the bus refusing as the
+shutdown does (`ShutLatched`, section 5.8): the resume state FAILED for
+`xhciuas.sys`'s wake check, the commands completed, the transfers
+completed on the halt's proof the suspend took while the function was
+still in D0 (`SuspendHaltProven`), and a selectively suspended PDO's D0
+settled (`HcdSuspSettleLatched`); a later resume begins PENDING and a
+start publishes RUNNING. Log notes `power.d0.refused` (the bus's status)
+and `power.d0.flush`.
+
+Read with the fix (a `qemu` build of `aed67242` with the same traces, the
+`addr 5.0` layout): `power.d0.refused=C000000E`, `power.d0.flush=00000003`
+(commands and transfers), the tablet's class URB ended, then PnP's
+surprise removal and removal of the controller, a new start, and the
+three devices enumerated again (`a\arr-f2-after.txt`); no stop. A second
+sleep on the same guest, with 16 MiB copies on the stick and the UAS
+disk before and after: every copy `OK`, the stack again rebuilt.
+
+### The legs, on the gated build
+
+The package of `ac0788ad` (below) on fresh overlays, installed with
+`INSTALL.BAT /console /yes /nopause /usb` (exit 3, a restart).
+
+| Leg | System, build | Steps | Result |
+|---|---|---|---|
+| c | 10 x64, release (`xhci98.sys` `f2399033...`, signed in the guest), the root-port layout above | a hibernation (made by mistake: with hibernation on, `SetSuspendState 0,1,0` hibernates) and its resume | no stop; the controller, the tablet and the UAS disk kept (their arrival times unchanged), the stick enumerated again (a Bulk-Only drive is not kept, design record 20 section 4.3.2) |
+| c | the same, hibernation off | Sleep and wake six times to the end (`s1`, `v1` to `v5`), 16 MiB copied, compared and deleted twice on the stick and twice on the UAS disk before and after each (`c\cycles-rel.txt`, `c\cycles-v.txt`) | no stop; after each wake the controller, its root hub, the stick and the UAS disk "Started" (`pnputil /enum-devices /connected /class USB`, read after `v1` to `v5`), and every copy `OK` |
+| c | the same | a seventh, `s2`: the copies before it `OK`, the wake with no stop | incomplete, cause unknown: the copies after it never answered, the console then stopped taking keys (the display off, both processors busy in user mode) and the guest was reset (below) |
+| c | the same, Driver Verifier `0x020209BB` on `xhci98.sys` and `xhciuas.sys` (`verifier /query`: both loaded and verified) | Sleep and wake once, the copies before and after (`c\cycles-w.txt`) | no stop, the guest watched for 25 minutes after the wake; the four devices "Started"; every copy `OK`; `verifier /query` after it: `xhci98.sys` and `xhciuas.sys` still verified (load 1, unload 0) |
+| b | 7 x64 SP1, release (`xhci98.sys` signed in the guest), `-vga std`, the same USB devices | `powercfg -a`: Standby is refused by the base's display driver ("The VGAPNP.SYS display driver does not support standby"), so hibernation stands in: three hibernations and resumes, copies (`W.BAT`, 16 MiB twice) on the stick and the UAS disk before and after each (`b\serial-h1.log` to `h3.log`) | no stop; every copy `OK`; `XHCIIN64 /devices`: "xHCI98 USB 3 Controller - xhci98, started" |
+| - | 98 SE, ME, XP standby | not run (owner, 2026-11-01). 98 SE's standby does not resume on QEMU (run-36, 36.28 part 2) and XP's is vetoed by its display driver (45.23 above); an ME standby on the i440FX machine was tried on a copy of 45.27's ME overlay, which did not reach the desktop in 25 minutes with a tablet and a stick present at boot, before this build was put on it | - |
+
+The guest agent's serial port does not survive a sleep (its reads stop),
+so after each wake the agent was started again from the keyboard; under
+the host's load the first command after it often waited several minutes
+(PnP rebuilding the stack), and a run of keystrokes was sometimes lost.
+Cycles `s1` and `s2` were made before the display and idle-sleep timeouts
+were turned off (`powercfg -change ... 0`). After `s2` the copy client
+timed out, the console stopped taking keys (the display off, both
+processors busy in user mode, the guest running) and the guest was reset
+before its copies were read; why was not read. No cycle stopped with a
+bug check.
+
+### Builds and reviews
+
+Gated builds of `ac0788ad`: x86 `all` with the host tests and amd64 `all`,
+each "BUILD + GATES PASSED (release qemu)"
+(`E:\xhci98-scratch\p45-w45-s3\gb-x86.log`, `gb-amd64.log`). Release
+amd64 `xhci98.sys` `f2399033...`, `qemu` amd64 `1c5b6c8f...`, release
+x86 `553ad5b7...`.
+
+### What is left
+
+- 98 SE, ME and XP standby, and 7 x64 Sleep (not offered by the
+  vehicle): not run.
+- 8.1 x64 not read here; the change is the same on every NT target.
+- Part 1's other items (leg b's hang, the code integrity legs, part 2).
+
+## 45.44 (the boot.wim INF): the 64-bit controller INF into a Windows PE and Setup image (2026-11-01)
+
+45.44's leg L9 (`Dism /Add-Driver /Driver:nt-x64 /Recurse /ForceUnsigned`
+into a 7 SP1 x64 image) put all four INFs into `install.wim` and refused
+`xhci98.inf` for `boot.wim` index 1 (Windows PE) and index 2 (Setup) with
+Error 2; the image's `setupapi.offline.log`: `Could not find include INF
+file "layout.inf". Error = 0x00000002`, then `sto: Failed to get driver
+package copy files. Error = 0x00000002`. On a computer with only USB 3
+ports that leaves 7's Setup without a keyboard, mouse or install stick.
+
+### The reading: which part of the INF the driver store refuses
+
+Scratch copies of `src/xhci98-amd64.inf` (A) and `src/xhci98.inf` (X), each
+with one change, each with the 3.4.0.0 `xhci98.sys` (and on x64 the
+host-made `xhci98.cat`) beside it, added one by one with `Dism /Image:C:\M
+/Add-Driver /Driver:<variant>\xhci98.inf /ForceUnsigned` to an image
+mounted from a copy of the medium's WIM, the offline log's import lines
+read after each, the mount discarded. 7 SP1's DISM (6.1.7600.16385) in a
+7 x64 guest (q35 base `w7x64`, overlays `E1` to `E3`) on 7 SP1 x64 and x86
+`boot.wim` and `install.wim` (Professional SP1 VL media); 10 22H2's DISM
+(10.0.19041.844) in a 10 x64 guest (overlay `E4`) on 10 22H2 x64 and x86
+`boot.wim` index 2. Neither PE image holds `layout.inf`, nor does 7 SP1's
+`install.wim`.
+
+| Variant | the change | 7 x64 PE (1, 2) | 7 x64 `install.wim` | 10 x64 PE (2) |
+|---|---|---|---|---|
+| A0 | none (the shipping file) | Error 2 | pass | Error 2 |
+| A1 | no `LayoutFile`; `Include=layout.inf` in `[Xhci.Dev.NTamd64]` and `[DefaultInstall.NTamd64]` | Error 2 | pass | - |
+| A2 | no `LayoutFile` | Error 2 | pass | - |
+| A3 | no `LayoutFile`; no OS file copied on any route | pass | pass | - |
+| A4 | `[DefaultInstall.NTamd64]` copies `xhci98.sys` alone | Error 2 (2) | pass | - |
+| A5 | A4, no `LayoutFile`, `Include=layout.inf` in `[Xhci.Dev.NTamd64]` | Error 2 (2) | pass | - |
+| A6 | A4, no `LayoutFile` | Error 2 (2) | pass | - |
+| A7 | no `CatalogFile` | Error 2 (2) | pass | - |
+| A8 | `[Manufacturer]` `%Mfg%=XhciModels,NTamd64.6.0` (the NT 5.2 models section unreferenced; its sections and the right-click route still copy both files) | pass (2) | pass | pass |
+| A9 | no `CatalogFile`, no `LayoutFile` | Error 2 (2) | pass | - |
+| A10 | the NT 5.2 models section decorated `NTamd64.5.2` | Error 2 (2) | - | Error 2 |
+| A12 | the NT 5.2 OS copies behind `Needs=` of a section of the same file | Error 2 (2) | - | Error 2 |
+| A13 | `[Xhci.Dev.NTamd64]` and `[DefaultInstall.NTamd64]` copy `usbd.sys`, not `usbui.dll` | pass (2) | - | pass |
+| A15 | the same two copy `usbui.dll`, not `usbd.sys` | Error 2 (2) | - | Error 2 |
+
+| Variant | the change | 7 x86 PE (1, 2) | 7 x86 `install.wim` | 10 x86 PE (2) |
+|---|---|---|---|---|
+| X0 | none (the shipping file) | pass | pass | pass |
+| X1 | no `LayoutFile`; `Include=layout.inf` in the NT 5.x install and right-click sections | pass | pass | - |
+| X2 | no `LayoutFile` | pass | pass | - |
+| X3 | no `LayoutFile`; no OS file copied on any route | pass | pass | pass |
+
+The amd64 file went into a 32-bit PE image at A0 to A3 (the store reads
+no section of another architecture). What the readings say:
+
+- The store collects the copy files of every models section whose
+  decoration matches the image's architecture, NT 5.2's
+  `[XhciModels.NTamd64]` with the `.6.0` one (A8 against A0, A10), and it
+  follows `Include=` (A1, A5: the "include INF" line is then the
+  `Include=` itself) and `Needs=` (A12). For the 32-bit file the NT 5.x
+  models section is the undecorated one, which it leaves out when
+  `NTx86.6.0` matches (X0).
+- A copy file with no source in the package passes when the image
+  holds it, and `layout.inf`'s absence is a warning (A6 and A9 into
+  `install.wim`). Windows PE holds `usbd.sys` and not `usbui.dll` on 7
+  and 10 (A13 against A15). On `install.wim` the store's second pass
+  queued `usbd.sys` (A0 to A2, A4 to A7, A9), which the no-overwrite flag
+  skips; with A8 it did not.
+- 10 x86 PE logged, for X0 and X3 alike, "Found legacy DelFiles
+  operation for 'xhcimsi.sys'" and "Driver package 'xhci98.inf' is NOT
+  configurable" (the Vista and 7 helper's update clean-up, record 18), and
+  imported the package.
+
+Evidence: `E:\xhci98-vm\p45\w45-pe\E1\serial-a.log` (A0 to A3, X0 to X3;
+`serial-a1.log` a first run that took the x86 medium for both),
+`E2\serial-a.log` (A0, A4 to A9), `E3\serial-a.log` (A10, A12, A13,
+A15), `E4\serial-a.log` (10: A0, A8, A10, A12, A13, A15, X0, X3); the
+variants under each `xf\V\`; the generators
+`E:\xhci98-scratch\p45-w45-pe\py\mkvar*.py`; VM starts and stops in
+`E:\xhci98-vm\p45\w45-pe\pids.txt`.
+
+### The fix (the owner's choice, 2026-11-01)
+
+`[Xhci.Dev.NTamd64]` copies `Xhci.CopyFiles,Xhci.CopyOS`: XP x64's and
+Server 2003 x64's device install still fetches `usbd.sys` from the
+Windows media through `LayoutFile`, and no longer `usbui.dll`. Nothing
+else in either INF changes; the 32-bit file, `98-me\` and `nt-x86\` are
+as they were. Design record 11 decision 13 (revised 2026-11-01) and
+record 36 section 4 (revision 5) carry the reasoning; `INTEGRATE.TXT`
+says that `boot.wim`'s two images and `install.wim` both take the folder.
+The cost: on XP x64 or Server 2003 x64 with no other USB driver ever
+installed, the controller has no Advanced tab and the root hub no Power
+tab. A separate XP x64 folder that would keep them is planned
+(roadmap-usb4, "Planned - The XP x64 Property Pages").
+
+### Checks and the cut
+
+- INF gates: both files PASSED; the self-tests (`-Force`, the gate
+  changed) 1684 checks, with the new `OS-UINT52` cases (the NT 5.2
+  device install copying `usbui.dll` directly, by a section of its own,
+  through `Needs=`, beside it in `.CoInstallers`; `Include=` on the NT 6
+  install; `.CoInstallers` beside the NT 6 install copying it, `OS-ONNT6`;
+  the right-click route without it and the device install without
+  `usbd.sys`, `OS-MISSING`). The 64-bit footprint loses the one row.
+- Gated builds on `9bb0d10e`: x86 `all` BUILD + GATES PASSED (packager
+  self-tests 1805 checks, `INTEGRATE.TXT`'s new strings held), amd64
+  `all` BUILD + GATES PASSED, host tests PASSED
+  (`E:\xhci98-scratch\p45-w45-pe\build-x86.log`, `build-amd64.log`,
+  `host-tests.log`).
+- Test cut (`make-release.ps1 -Arch x86 -TestLabel "45.44 boot.wim INF"`,
+  both driver sets, `-SkipQualtool`): exit 0; `INTEGRATE.TXT` carries the
+  new paragraph. The x64 leg kit: `make-package.ps1 -Arch amd64`
+  (unsigned), catalogs made on the host, `ConvertTo-FamilyLayout` into
+  `nt-x64\`, every `.sys` and `.cat` signed in each guest with a throwaway
+  certificate. `nt-x64\xhci98.inf` `feae1c16...`, `xhci98.sys`
+  `43427bca...`; `nt-x86\xhci98.inf` is the shipping file, unchanged.
+
+### The legs
+
+- **7 x64, DISM** (q35 base `w7x64`, overlay `D7`, 7 SP1 DISM): the 7 SP1
+  x64 VL medium copied to a second disk, `Dism /Add-Driver
+  /Driver:C:\PKG\nt-x64 /Recurse /ForceUnsigned` into `boot.wim` index 1
+  (Windows PE), index 2 (Setup) and `install.wim` index 1: "Installing 4
+  of 4", each of `cm\xhcicm.inf`, `stor98\stor98.inf`, `xhci98.inf` and
+  `xhciuas.inf` "successfully installed" in all three images, every import
+  `Exit status: SUCCESS` in the offline log; commits completed; `bcdedit
+  /store S:\boot\bcd /set {default} testsigning on` (`testsigning Yes`),
+  `bootsect /nt60 S: /mbr`. **Pass.** (`D7\serial-a.log`.) This is L9's
+  rerun on the fix.
+- **7 x64, Setup from that `boot.wim`** (overlay `S7`): q35 with
+  `i8042=off` (no PS/2 controller) and no USB controller but `qemu-xhci`,
+  carrying a `usb-kbd`, a `usb-tablet` and a `usb-storage` stick; booted
+  from the setup disk. Setup's first page came up; Shift+F10 opened a
+  Command Prompt and every typed command arrived (the USB keyboard),
+  a tablet click pressed Next (the language page gave way to "Install
+  now"), `diskpart` listed the stick (`QEMU VVFAT`, D:) and `type
+  D:\STICK.TXT` read it, and `Services\xhci98` (`ImagePath
+  \SystemRoot\system32\drivers\xhci98.sys`) was the controller's
+  `Service` and `ActiveService`. Windows PE kept no class key for the
+  controller (no `Driver` value under `Enum\PCI`, no values to read), so
+  the registry defaults were read on XP x64 below, not in Setup.
+  **Pass.** (`S7\s1.png` to `s11.png`.)
+- **XP x64, F6** (i440FX `pc`, PS/2, `qemu-xhci` with a stick and tablet,
+  a fresh 16 GB disk; the floppy is `nt-x64\`'s root of this build plus a
+  `WINNT.SIF`; F6 sent from power-on over QMP): text mode listed and took
+  "xHCI98 USB 3 Controller (Windows XP x64)" (`F6\a-1.png`, `a-2.png`) and
+  copied the files; GUI setup installed the devices and stopped at the
+  product key page (`a-keypage.png`; no key, by the owner's instruction).
+  Offline (`F6\kp\`): `setupapi.log` - the controller found in `oem0.inf`,
+  "Actual install section: [Xhci.Dev.NTAMD64]", full install finished
+  successfully, the root hub likewise; `system32\drivers\usbd.sys` placed
+  (the medium's, dated 2005), no `system32\usbui.dll`; the hive: both
+  keys 41/41 and 1/1 at the INF's defaults (`regdef-F6key.txt`), the
+  controller's and the root hub's `EnumPropPages32` written. **Pass.**
+- **XP x64, `SETUP.EXE`** (q35 base `xpx64`, overlay `X6`, the leg kit's
+  `INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`): exit 3
+  (restart), "xHCI98 USB 3 Controller: xhci98 3.3.0.0, started", the root
+  hub started; `usbd.sys` present, `usbui.dll` "File Not Found"; after the
+  restart `xhci98` and `xhcicm` loaded (driverquery), the controller key
+  41/41 and the root hub's 1/1 at default (`X6\regdef-X6-post.txt`). The
+  controller's property sheet shows General and Driver, no Advanced tab
+  (`X6\tabs-ctrl.png`): the cost the fix accepts. The stick was not
+  read: its Found New Hardware wizard was cancelled in this leg.
+  **Pass.**
+- Not run, by the owner's trim of 2026-11-01: DISM into 10 x64's
+  `boot.wim` and `install.wim` and a Setup boot from them (the variant
+  reading A13 on 10 x64 PE stands for the INF form); a 10 x64 install
+  from `nt-x64\`; a 7 x86 install (the x86 package is byte-identical);
+  the unattended 7 x64 install from the integrated `install.wim`
+  (started, stopped before its first boot); 2000, XP and 98 SE installs.
+
+VM starts and stops: `E:\xhci98-vm\p45\w45-pe\pids.txt` (all mine
+stopped).
+
+## 45.4, 45.9 and 45.50 (closed) (2026-11-01)
+
+Branch `w45-tidy` from `208552f9`, tree `E:\xhci98-wt\w45-tidy` on
+development host A. Commits: `a8f9e56b` (45.50: the 98 SE and ME
+uninstall takes Stor98's interrupt reports), `2d179cdb` (45.9: the
+readme's recovery route as read), and the roadmap's bookkeeping
+(`21f706d3`, `3472eef1`, `15370700`, owner 2026-11-01); each reviewed and
+revised. The gated build at `a8f9e56b` (`scripts\build-driver.cmd all`,
+then `release -amd64`, after `src\pfw\build.cmd`): BUILD + GATES PASSED
+(release, qemu) and (release); the host suites passed (`test_inst` with
+the new vectors among them); the tools rebuilt. Evidence:
+`E:\xhci98-vm\p45\w45-tidy\` (one folder per guest: `serial-<tag>.log`,
+screenshots, `pids.txt`), the builds' logs in
+`E:\xhci98-scratch\p45-w45-tidy\`.
+
+The vehicles:
+
+- **A**: the family-layout test cut of 45.44's legs (`6e6e68af`, w45-pkgA,
+  `xhci98-3.3.0.0.zip` `75157f6e...`): `XHCITR.EXE` `6cfa8917...`,
+  `XHCIINST.EXE` `6ea8a5cc...`, `nt-x86\cm\XHCIPFW.SYS` `fb51d88c...`.
+- **B**: a family-layout test cut of this branch at `a8f9e56b`
+  (`make-release.ps1 -Arch x86 -TestLabel "45.50 legs, w45-tidy"`, both
+  driver sets; `xhci98-3.3.0.0.zip` `df89b6f3...`): `XHCIINST.EXE`
+  `0430b2f0...`, `98-me\stor98\stor98.mpd` `97f7f523...`,
+  `98-me\stor98\stor98.inf` `1825e442...`.
+- **The older filter image**: 45.9's own test cut of `1c0a48d9`
+  (`XHCIPFW.SYS` `c38e2e02...`, flat `release-x86\`, its own installer).
+- **XHCITR at 3.4.0.0**: `xhcitr\build.cmd x86` at `208552f9` with
+  `src\xhci_version.h` set to `3,4,0,0` / `"3.4.0.0"` in the tree for
+  that build alone and restored after it (`XHCITR.EXE` `1b3d5b0a...`),
+  since the version is bumped only at the cut.
+
+Every guest a fresh overlay of the q35 bases through `launch-q35.ps1`
+(the 4G-off layout through 45.9's copy of it), QMP 49560 to 49564.
+
+### 45.4: the USB Tree's window title
+
+| System | XHCITR | Title read |
+|---|---|---|
+| 98 SE (`sa`) | A's, installed in `C:\XHCI98` | `xHCI98 USB Tree 3.3.0.0` (`tr1.png`) |
+| 98 SE | at 3.4.0.0 | `xHCI98 USB Tree 3.4.0.0` (`tr34.png`) |
+| ME (`ma`) | A's / at 3.4.0.0 | `... 3.3.0.0` / `... 3.4.0.0` |
+| 7 x86 (`s7`) | A's, from the package / at 3.4.0.0 | `... 3.3.0.0` (`tr1.png`) / `... 3.4.0.0` (`tr34c.png`) |
+
+The main window carries the version the build was made at; the right
+pane's heading the same string. On 98 SE and ME the tree showed the
+ASM4242 router, the tunnelled NVMe drive as E: under Stor98 and both
+controllers.
+
+### 45.50: Stor98's 98 SE and ME defaults, read
+
+On the ASM4242 layout with the ORICO at power-on (Stor98 binding the
+tunnelled drive), `XHCIINST.EXE /dir 98-me /yes /nopause /thunderbolt
+/stor98`, `Services\stor98` read by `regedit /e`:
+
+| Step | 98 SE | ME |
+|---|---|---|
+| Install (A; again with B) | the device installed from `stor98.inf` ("Stor98 now runs ..."), the nine settings at their defaults: `StorMaxTransferKB` 2048, `StorWriteThrough` `auto`, `StorPollMode` 0, `StorPollBusyUs` 1000, `StorPollIdleMs` 1000, `StorPollSpinUs` 0, `StorGoneMs` 5000, `StorWriteIdleMs` 1000, `StorHold9xMs` 4000 | the same nine at the same defaults |
+| Uninstall with A | the nine removed ("at its default, removed"), but `StorInterrupt 5.0.0` left (the report Stor98 writes at each controller start) | the same |
+| Install again with A | "stor98: found before 1, PreExisting 1": the Stor98 this installer had put there now taken for one there before, so its next uninstall would keep it | - |
+| Uninstall with B | the nine and "StorInterrupt 5.0.0, the driver's report, removed"; the key left empty | the same |
+| Install again with B | "found before 0, PreExisting 0"; the nine at their defaults again (ME) | the same |
+| The file-only update (B) | - | below |
+
+**The defect and its fix (`a8f9e56b`).** The baseline takes any value of
+`Services\stor98` but xhcicm's `LinkState` for a Stor98 there before
+(`s98_svc_key_stor98_9x`), and 45.50's uninstall removed only the
+settings at their defaults, so Stor98's own interrupt report kept the key
+looking like a Stor98 installed before. `s98_defaults_drop_9x` now also
+removes every `StorInterrupt <b>.<d>.<f>` value
+(`inst_s98_run_report_9x`, with host vectors), on the same path, the
+uninstall that removes this installer's Stor98; record 21 section 8.1
+says so. Read on both systems with B as above.
+
+**The file-only update.** It runs when the installed `stor98.mpd` is
+older than the bundled one, so it cannot be read between two builds of
+one version, and `3.2.0.0` cannot place Stor98 on this layout (its run
+read "where it sits could not be read", and a Stor98 installed by hand
+is held as another's, "Stor98 is LEFT"). The arrangement on ME, after B's
+install: `3.2.0.0`'s `stor98.mpd` (`b3305de4...`, 54,749 bytes) put in
+place through `WININIT.INI` and the nine settings deleted (WSH
+`RegDelete`); after a cold start the older file ran the drive and the key
+held only its `StorInterrupt` report. Then B's console installer without
+`/yes` (with `/yes` the update is declined, "/yes: Stor98's driver file
+is not updated", as designed), answered Y to "Please disconnect all
+external NVMe drives before proceeding": "stor98: file update confirmed
+1", `WININIT.INI [rename] ...STOR98.MPD=...STOR98.TMP`, and each of the
+nine "written at its default" (`s98_defaults_put_9x`), read in the key
+at the same defaults beside the report. After a cold start the bundled
+`stor98.mpd` (55,342 bytes) was in place and the nine values stayed.
+The run's exit code 4 came from an unrelated stale "PCI Universal Serial
+Bus" entry the Enter rounds had left in that guest.
+
+Not run (coordinator, 2026-11-01, for time): the same arrangement on
+98 SE (the code path is the one ME read) and the uninstall after this
+update on ME (the uninstall with B was read on both systems above).
+
+Seen in passing (not this task's): on one ME start after a `/yes` update
+the desktop stayed without a taskbar for 20 minutes; a cold start was
+normal (45.36's area).
+
+### 45.9: an update between two images, and the readme's route
+
+On 32-bit 8 and 8.1, two processors, 2 GB:
+
+| Step | 8 x86 (`h8`) | 8.1 x86 (`h81`) |
+|---|---|---|
+| Install of the older image on the plain board (`1c0a48d9`'s installer, `/dir release-x86 /yes /thunderbolt`) | exit 3; `xhcipff`, `ImagePath` `System32\DRIVERS\xhcipff.sys`, record `File` `C38E2E02...`, `UpperFilters` `xhcipff` on `ACPI\PNP0A08\0` | the same |
+| Cold start, 4G-off layout, ORICO at power-on | `XhciPfwClosed` 9, `XhciPfwSkipped` 0; only `fw_cfg` at 28 | `XhciPfwClosed` 9 |
+| Update with A's installer (`/dir nt-x86`), the 4G-off layout | exit 3; the new image written as `xhcipff2.sys` (`fb51d88c...`), `ImagePath` moved to it, the record's `File` `FB51D88C...`, the entry kept; `xhcipff.sys` gone | the same |
+| Cold start, 4G-off | `XhciPfwClosed` 9 and the new image's own values (`XhciPfwClosedAll` 9, `XhciPfwSkippedAny` 0) | the same |
+| Both images deleted by hand, the entry left; a start on the plain board | Automatic Repair: "Windows couldn't load correctly", Restore and Cancel only; Cancel restarted to the logo and stayed there | Automatic Repair: "Your PC did not start correctly", Restart and Advanced options |
+| The readme's route | from the Windows 8 setup DVD: Next, Repair your computer, Troubleshoot, Advanced options, Command Prompt | Advanced options, Troubleshoot, Advanced options, Command Prompt (an administrator's account and password asked) |
+| | the system on C:; regedit's Load Hive greyed until `HKEY_LOCAL_MACHINE` was selected, then a key name asked; `Select\Default` 1; Find (Values and Data) from `ControlSet001\Enum`: `ACPI\PNP0A08\0` `UpperFilters` `xhcipff`, edited to no line and accepted; Find Next stopped at `Services\xhcipff` (`ImagePath`); Unload Hive | the same |
+| The start after it, plain board | the desktop (after one more Automatic Repair, which followed a forced stop below); `UpperFilters` empty | the desktop at the first start; `UpperFilters` empty |
+| The same, 4G-off layout | the start did not finish in 20 minutes (the windows above 4 GB no longer closed) | - |
+| The installer again (A, plain board), then a 4G-off start | exit 3; `xhcipff.sys` written, `ImagePath` and the entry back; `XhciPfwClosed` 9 | - |
+
+So the update between two images keeps the entries and moves the
+service to the other image name, and each image closed the windows at
+its start, on both systems. The readme's route works as written in its
+registry part. What it did not say, and now does (`2d179cdb`, record 32
+section 11.5.2): how to reach the recovery environment when Automatic
+Repair offers only Restore (the setup medium's Repair your computer),
+that `HKEY_LOCAL_MACHINE` must be selected for Load Hive and the hive
+named, that the drive need not be C:, where to search from and when the
+search is done, that an `UpperFilters` left with no line is fine, and
+that on a board with windows above 4 GB the start then needs Above 4G
+Decoding off until the installer is run again.
+
+### Roadmap bookkeeping (owner, 2026-11-01)
+
+45.18 ticked; the rest of 45.14, what 45.22 left (the 98 SE and ME
+connection and its leg and the other legs), 45.25 and 45.26 deferred
+to the next release, 45-E.13 and 45-E.14 with them; 45.11 confirmed
+and 45.21 deferred (45-E.11 with it, `3.4.0.0` keeping "Not claimed:
+Apple machines"); 45.27 left unticked, its rest owed to real hardware.
+The checkpoint names 45-E.1 to 45-E.10 and 45-E.12 for the published
+asset.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with

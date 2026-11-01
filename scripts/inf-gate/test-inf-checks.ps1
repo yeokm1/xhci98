@@ -2567,9 +2567,43 @@ try {
     # counterpart is: a root hub that will not load, a property page that is
     # dropped without a word, a controller that idle-suspends and stops seeing
     # hot-plugs, or a log channel that cannot be turned on.
+    # usbui.dll on XP x64: the right-click route still copies it, the device
+    # install no longer does (OS-UINT52, design record 11 decision 13 revised
+    # 2026-11-01: DISM refused the package for a boot.wim while it did), by
+    # any section, and the device install still copies usbd.sys.
     Assert-RuleFires "amd64-no-usbui" "OS-MISSING" {
-        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
-                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
+        param($t) $t.Replace("[DefaultInstall.NTamd64]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI",
+                             "[DefaultInstall.NTamd64]`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt52-device-copies-usbui" "OS-UINT52" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt52-device-usbui-own-section" "OS-UINT52" {
+        param($t) Add-CopySection $t "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS" "usbui.dll,,,16"
+    } -Source $prodInfAmd64 -Arch amd64
+    # The store follows Needs= and Include= and reads the sections beside the
+    # install (variants A1, A5, A12), so the gate refuses the first two on any
+    # 64-bit controller install and usbui.dll in the third on XP x64's.
+    Assert-RuleFires "amd64-nt52-device-needs-usbui" "OS-UINT52" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`nNeeds=Xhci.UiStage`r`n`r`n[Xhci.UiStage]`r`nCopyFiles=Xhci.CopyUI`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-device-include" "OS-UINT52" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n",
+                             "[Xhci.Dev6.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`nInclude=usbport.inf`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt52-coinstallers-usbui" "OS-UINT52" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64.Services]`r`n",
+                             "[Xhci.Dev.NTamd64.CoInstallers]`r`nCopyFiles=Xhci.CopyUI`r`n`r`n[Xhci.Dev.NTamd64.Services]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt6-coinstallers-usbui" "OS-ONNT6" {
+        param($t) $t.Replace("[Xhci.Dev6.NTamd64.Services]`r`n",
+                             "[Xhci.Dev6.NTamd64.CoInstallers]`r`nCopyFiles=Xhci.CopyUI`r`n`r`n[Xhci.Dev6.NTamd64.Services]`r`n")
+    } -Source $prodInfAmd64 -Arch amd64
+    Assert-RuleFires "amd64-nt52-device-no-usbd" "OS-MISSING" {
+        param($t) $t.Replace("[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles,Xhci.CopyOS`r`n",
+                             "[Xhci.Dev.NTamd64]`r`nAddReg=Xhci.AddReg.NT`r`nCopyFiles=Xhci.CopyFiles`r`n")
     } -Source $prodInfAmd64 -Arch amd64
     Assert-RuleFires "amd64-no-usbd" "OS-MISSING" {
         param($t) $t.Replace("[Xhci.CopyOS]`r`nusbd.sys,,,16`r`n", "[Xhci.CopyOS]`r`n")

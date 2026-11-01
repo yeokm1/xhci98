@@ -782,7 +782,8 @@ int inst_inf_addreg_default(const char *text, const char *name,
 static int inst_own_file(const char *file)
 {
     return inst_eq(file, "xhci98.sys") || inst_eq(file, "xhciuas.sys") ||
-           inst_eq(file, "xhcicm.sys");
+           inst_eq(file, "xhcicm.sys") || inst_eq(file, "xhcinet.sys") ||
+           inst_eq(file, "xhcinet6.sys");
 }
 
 int inst_bundled_file(const char *name)
@@ -798,7 +799,7 @@ int inst_bundled_service(const char *service)
 int inst_own_service(const char *service)
 {
     return inst_eq(service, "xhci98") || inst_eq(service, "xhciuas") ||
-           inst_eq(service, "xhcicm");
+           inst_eq(service, "xhcicm") || inst_eq(service, "xhcinet");
 }
 
 /* The fields of one INF line inst_inf_is_ours reads for the bundled
@@ -2818,6 +2819,14 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                 inst_copy(joined, argv[i], sizeof(joined));
             }
             r = inst_value_set(joined, &index, &value);
+            if (r == 0 && INST_TBNET_WIRED &&
+                inst_eqn(joined, "XhciCmNet=", 10)) {
+                /* The box is the setting (record 35 section 9.1): no second
+                 * control can contradict it. */
+                inst_err(err, errCap, "/set XhciCmNet: use /tbnet or "
+                         "/notbnet", NULL);
+                return 1;
+            }
             if (r == 0) {
                 inst_err(err, errCap, "/set: not a value this tool sets: ", joined);
                 return 1;
@@ -2969,10 +2978,11 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
                  : "/nofaster belongs to an install", NULL);
         return 1;
     }
-    /* Record 26 section 5.3.5 (task 45.60): Thunderbolt networking's
-     * switches, as record 35 section 9.2 has them where the package
-     * carries no network driver; until task 45.59's installer step none
-     * does. */
+    /* Thunderbolt networking's switches (record 35 sections 9.2 and 9.5;
+     * record 26 section 5.3.5). /tbnet needs the Thunderbolt support, as
+     * /stor98 does; /notbnet does not, so a silent update can turn
+     * networking off whatever else it names. Where the package carries no
+     * network driver for the system the engine refuses /tbnet. */
     if ((opts->TbNet || opts->NoTbNet) &&
         (opts->Uninstall || opts->Devices || opts->Eject)) {
         inst_err(err, errCap, opts->TbNet ? "/tbnet belongs to an install"
@@ -2987,6 +2997,12 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
     if (opts->TbNet && !INST_TBNET_WIRED) {
         inst_err(err, errCap, "/tbnet: this package carries no Thunderbolt "
                  "networking driver for this system", NULL);
+        return 1;
+    }
+    if (opts->TbNet && !opts->Thunderbolt && !opts->CmOnly) {
+        inst_err(err, errCap, "/tbnet needs /thunderbolt (or /cmonly): "
+                 "Thunderbolt networking is part of the Thunderbolt 3 / USB4 "
+                 "support", NULL);
         return 1;
     }
     if (opts->Faster && opts->NoFaster) {
@@ -3354,6 +3370,11 @@ const char *inst_summary_head(int runs, int writes, int other, int nt)
 /* The uninstall's selection and order                                       */
 /* ======================================================================== */
 
+int inst_cm_child_id(const char *instanceId)
+{
+    return instanceId != NULL && inst_starts(instanceId, "XHCICM\\");
+}
+
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent)
 {
@@ -3361,6 +3382,12 @@ int inst_remove_rank(const char *instanceId, const char *service,
     int base = inst_bus_base(instanceId, &old);
     int own = (service != NULL && inst_own_service(service));
 
+    /* The connection manager's own children (the network adapter,
+     * XHCICM\TBNET, record 35 section 6.1), bound or not: before the NHI,
+     * so one whose install failed is not left behind (section 9.5). */
+    if (inst_cm_child_id(instanceId)) {
+        return 0;
+    }
     if (base == 4) {
         return 1;
     }
@@ -3374,7 +3401,9 @@ int inst_remove_rank(const char *instanceId, const char *service,
         (void)filterPresent;
         return -1;
     }
-    if (inst_eq(service, "xhciuas")) {
+    /* The network adapter is a child of the NHI (record 35 section 6.1):
+     * removed before it, as a UAS disk before its parent. */
+    if (inst_eq(service, "xhciuas") || inst_eq(service, "xhcinet")) {
         return 0;
     }
     if (inst_eq(service, "xhcicm")) {
@@ -4635,7 +4664,17 @@ const INST_PKG_FILE instPkgFiles[] = {
                               "stor98\\stor98-LICENSE.txt" } },
     { "stor98-NOTICE.txt",  { "stor98\\stor98-NOTICE.txt",
                               "stor98\\stor98-NOTICE.txt",
-                              "stor98\\stor98-NOTICE.txt" } }
+                              "stor98\\stor98-NOTICE.txt" } },
+    /* Thunderbolt networking (record 35 section 9.5): cm\tbnet\ in the
+     * download, the copy's root locally; 98 SE and ME install xhcinet.sys
+     * alone. */
+    { "xhcinet.inf",  { "cm\\tbnet\\xhcinet.inf", "cm\\tbnet\\xhcinet.inf",
+                        "cm\\tbnet\\xhcinet.inf" } },
+    { "xhcinet.sys",  { "cm\\tbnet\\xhcinet.sys", "cm\\tbnet\\xhcinet.sys",
+                        "cm\\tbnet\\xhcinet.sys" } },
+    { "xhcinet6.sys", { NULL, "cm\\tbnet\\xhcinet6.sys",
+                        "cm\\tbnet\\xhcinet6.sys" } },
+    { "xhcinet.cat",  { NULL, NULL, "cm\\tbnet\\xhcinet.cat" } }
 };
 const int instPkgFileCount =
     (int)(sizeof(instPkgFiles) / sizeof(instPkgFiles[0]));
@@ -6259,6 +6298,11 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "next restart: unplug the dock until then if you choose none.",
       284, 18 },
     { INST_PT_TBNET, "Thunderbolt networking", 284, 10 },
+    /* Record 35 section 9.1: what it does, with no testing status. */
+    { INST_PT_TBNET_T,
+      "A network link to another computer over a Thunderbolt or USB4 "
+      "cable, file sharing included. Run Setup again to turn it off.",
+      272, 16 },
     { INST_PT_TRAY, "Start the xHCI98 USB Tree (tray icon) at login", 270,
       10 },
     /* Task 43.27: a box of its own in the place of the tray box's
@@ -7777,6 +7821,11 @@ int inst_s98_adoptable(int preExisting, int present, int place)
 int inst_s98_svc_value_stor98(const char *name)
 {
     return !inst_eq(name, "LinkState");
+}
+
+int inst_s98_run_report_9x(const char *name)
+{
+    return inst_starts(name, "StorInterrupt ");
 }
 
 int inst_s98_stray_inf_ours(int preExisting, int namesStor98)

@@ -62,17 +62,28 @@ in BOOT.INI if they need this. It records what it did under
 HKLM\SYSTEM\CurrentControlSet\Services\xhcipfw\Parameters (on 8 and
 8.1 under Services\xhcipff\Parameters). No 64-bit Windows is offered it.
 
-If Windows 8 or 8.1 stops at start with INACCESSIBLE_BOOT_DEVICE after
-XHCIPFW.SYS was installed (its file gone or damaged while a PCI root bus
-still names it), start Windows' recovery environment and open the
-registry editor (regedit) from its command prompt. Load the system's
-SYSTEM hive (Windows\System32\config\SYSTEM, File, Load Hive), read
-Select\Default in it for the control set the next start uses
-(ControlSet00n), search that set's Enum key for xhcipff (Find, values and
-data), and remove the line xhcipff from every UpperFilters that has it,
-keeping any other line. Then unload the hive and restart. Do not set the
-xhcipff service to disabled while a root bus names it: that stops the
-start the same way.
+If Windows 8 or 8.1 stops at start after XHCIPFW.SYS was installed (its
+file gone or damaged while a PCI root bus still names it), Automatic
+Repair shows "Windows couldn't load correctly" (or the stop reads
+INACCESSIBLE_BOOT_DEVICE). Its Restore (System Restore) may give a
+working start back. Otherwise start the computer from the Windows 8 or
+8.1 setup DVD or USB stick and choose Next, Repair your computer,
+Troubleshoot, Advanced options, Command Prompt (where Automatic Repair
+offers Advanced options, the same path is there). Type regedit. Select
+HKEY_LOCAL_MACHINE, then File, Load Hive, open the system's
+Windows\System32\config\SYSTEM and give it any name; its drive there
+need not be C: (dir C:\Windows shows whether it is). In that hive read
+Select\Default for the control set the next start uses (ControlSet00n),
+select that set's Enum key and search from it for xhcipff (Edit, Find,
+Values and Data ticked), and remove the line xhcipff from every
+UpperFilters that has it, keeping any other line (an UpperFilters left
+with no line is fine). Find Next (F3) reaching the xhcipff service's own
+key, outside Enum, means none is left. Then select the hive, choose File,
+Unload Hive, and restart. Do not set the xhcipff service to disabled
+while a root bus names it: that stops the start the same way. Without
+the filter the windows above 4 GB are no longer closed: on a board that
+leaves them there, set "Above 4G Decoding" off in the firmware setup for
+Windows to start, then run the installer again with the box ticked.
 
 The 32-bit Windows 10 is not offered XHCIPFW.SYS: there it cannot start
 in time. On a board that leaves the USB4 ports' windows above 4 GB, 10
@@ -331,6 +342,8 @@ unticked; /s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw
 (98 SE, ME, 2000, XP and the 32-bit Vista to 8.1: XHCIPFW.VXD or
 XHCIPFW.SYS, PCI windows above 4 GB closed at each start, ticked or
 unticked; /xhcipfw only with /thunderbolt or /cmonly),
+/tbnet and /notbnet (Thunderbolt networking ticked or unticked; /tbnet
+only with /thunderbolt or /cmonly),
 /faster and /nofaster
 (the USB Tree's "can run faster" notice on or off for this computer),
 /notray,
@@ -380,6 +393,16 @@ The console tool
                                 every system
   INSTALL /console /thunderbolt /nostor98
                                 the Thunderbolt support without Stor98
+  INSTALL /console /thunderbolt /tbnet
+                                turns Thunderbolt networking on without
+                                asking: a network connection to another
+                                computer over a Thunderbolt or USB4 cable,
+                                the adapter there after the restart;
+                                without /tbnet the console asks, Enter
+                                and /yes for N on a new install and for
+                                the choice in force on an update
+  INSTALL /console /notbnet     turns it off (the adapter goes after the
+                                restart); the driver stays installed
   INSTALL /console /nouas       installs without the UAS disk driver
                                 (xhciuas.sys); one already installed
                                 stays as it is

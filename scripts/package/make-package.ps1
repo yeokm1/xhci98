@@ -34,6 +34,12 @@ is this project's two files and nothing else:
                    xhcicm.sys: 98 and ME never read the x64 package, and no
                    other INF there binds a PCI bridge, so it needs no
                    subdirectory and no second copy (3.1.0.0)
+    xhcinet.inf    Thunderbolt networking's INF (roadmap-usb4.md task 45.59,
+                   design record 35 section 9.5; src\net\xhcinet-amd64.inf
+                   under this name for amd64), at the root, where its
+                   SourceDisksNames entry finds both images
+    xhcinet.sys    its NDIS 5 miniport, the same flavour
+    xhcinet6.sys   its NDIS 6.20 miniport for 8, 8.1 and 10, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -142,6 +148,23 @@ The connection manager to stage, overriding
 -UasDriverPath: both packages carry it, with both its INFs, whenever they
 are built from the default paths, and a stand-in package (one naming
 -DriverPath) carries it only when it names -CmDriverPath too.
+
+.PARAMETER NetInfPath
+Thunderbolt networking's INF to stage (task 45.59, design record 35 section
+9.5), overriding `src\net\xhcinet.inf` (x86) or `src\net\xhcinet-amd64.inf`
+(amd64). Staged as `xhcinet.inf` at the root and gated by
+scripts\inf-gate\check-net-inf.ps1 under -Arch.
+
+.PARAMETER NetDriverPath
+xhcinet.sys, the NDIS 5 miniport, overriding
+`src\net\ndis5\obj<flavour>\<archdir>\xhcinet.sys`, with -CmDriverPath's
+rule: both packages carry the network driver whenever they are built from
+the default paths, and a stand-in package (one naming -DriverPath) carries
+it only when it names -NetDriverPath too (and then -Net6DriverPath).
+
+.PARAMETER Net6DriverPath
+xhcinet6.sys, the NDIS 6.20 miniport, overriding
+`src\net\ndis6\obj<flavour>\<archdir>\xhcinet6.sys`.
 
 .PARAMETER HlprDriverPath
 The x86 helper to stage (design record 18; tasks 36.15 and 38.3), overriding
@@ -387,6 +410,9 @@ param(
     [string]$CmInfPath = "",
     [string]$CmFilterInfPath = "",
     [string]$CmDriverPath = "",
+    [string]$NetInfPath = "",
+    [string]$NetDriverPath = "",
+    [string]$Net6DriverPath = "",
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
     [string]$PfwVxdPath = "",
@@ -434,6 +460,11 @@ $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
 # The Thunderbolt 3 connection manager (roadmap-usb4.md task 39-A.1),
 # decided the same way.
 $stageCm = ($DriverPath -eq "") -or ($CmDriverPath -ne "")
+# Thunderbolt networking (task 45.59, record 35 section 9.5), the same way.
+$stageNet = ($DriverPath -eq "") -or ($NetDriverPath -ne "")
+if ($DriverPath -ne "" -and (($NetDriverPath -ne "") -ne ($Net6DriverPath -ne ""))) {
+    throw "-NetDriverPath and -Net6DriverPath go together: xhcinet.inf names both images."
+}
 # The text-mode Setup description (task 33.3), decided the same way.
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 # The bundled Stor98 (task 42-A.30): by default with the default paths;
@@ -500,6 +531,17 @@ if ($CmDriverPath -eq "") {
     }
     $CmDriverPath = Join-Path $repo "src\cm\$cmObjDir\$archDir\xhcicm.sys"
 }
+$netAllow = if ($Arch -eq "amd64") { "xhcinet-imports-amd64.allow" } else { "xhcinet-imports.allow" }
+$net6Allow = if ($Arch -eq "amd64") { "xhcinet6-imports-amd64.allow" } else { "xhcinet6-imports.allow" }
+if ($NetInfPath -eq "") {
+    $NetInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\net\xhcinet-amd64.inf" } else { "src\net\xhcinet.inf" })
+}
+$netObjDir = switch ($Flavor) {
+    "qemu"    { "objchk_qemu" }
+    default   { "objfre" }
+}
+if ($NetDriverPath -eq "") { $NetDriverPath = Join-Path $repo "src\net\ndis5\$netObjDir\$archDir\xhcinet.sys" }
+if ($Net6DriverPath -eq "") { $Net6DriverPath = Join-Path $repo "src\net\ndis6\$netObjDir\$archDir\xhcinet6.sys" }
 if ($DriverPath -eq "") {
     # Two flavours since task 45.45; qemu, the checked one, has a tree of its
     # own (scripts\build-driver.cmd :flavordirs).
@@ -937,6 +979,7 @@ and deletes it when that flavour's build starts. Build and gate it first:
         $gatedBinaries = @{ "xhci98.sys" = $DriverPath }
         if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
         if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
+        if ($stageNet)  { $gatedBinaries["xhcinet.sys"] = $NetDriverPath; $gatedBinaries["xhcinet6.sys"] = $Net6DriverPath }
         if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
         # Stor98's images, in the record since task 42-A.30.
         foreach ($nf in $stor98Files) {
@@ -1006,6 +1049,8 @@ committed tree, or run this without -SignOnly to run every gate here.
         $DriverPath = $snapBinaries["xhci98.sys"]
         if ($snapBinaries.ContainsKey("xhciuas.sys"))  { $UasDriverPath = $snapBinaries["xhciuas.sys"] }
         if ($snapBinaries.ContainsKey("xhcicm.sys"))   { $CmDriverPath = $snapBinaries["xhcicm.sys"] }
+        if ($snapBinaries.ContainsKey("xhcinet.sys"))  { $NetDriverPath = $snapBinaries["xhcinet.sys"] }
+        if ($snapBinaries.ContainsKey("xhcinet6.sys")) { $Net6DriverPath = $snapBinaries["xhcinet6.sys"] }
         if ($snapBinaries.ContainsKey("xhcihlpr.sys")) { $HlprDriverPath = $snapBinaries["xhcihlpr.sys"] }
         foreach ($nf in $stor98Files) {
             if ($snapBinaries.ContainsKey($nf.Dest)) { $nf.FullPath = $snapBinaries[$nf.Dest] }
@@ -1361,6 +1406,59 @@ The package carries the Thunderbolt 3 connection manager. Build it first:
         Write-Warn "no connection manager staged: -DriverPath was named without -CmDriverPath (a stand-in package)."
     }
 
+    # --- Thunderbolt networking, held to the gates build-driver.cmd runs ----
+    # (task 45.59, design record 35 section 9.5): each image to its flavour
+    # marker and its import gate (x86 xhcinet.sys by the net98 profile,
+    # amd64 xhcinet.sys by the default amd64 rules, xhcinet6.sys by net6 on
+    # both), the INF to check-net-inf.ps1.
+    if ($stageNet) {
+        Write-Step ("Thunderbolt networking ({0}, {1})" -f $Flavor, $Arch)
+        $netImages = @(
+            @{ Name = "xhcinet.sys"; Path = $NetDriverPath; Allow = $netAllow; Profile = $(if ($Arch -eq "x86") { "net98" } else { "" }) },
+            @{ Name = "xhcinet6.sys"; Path = $Net6DriverPath; Allow = $net6Allow; Profile = "net6" })
+        foreach ($ni in $netImages) {
+            if (-not (Test-Path -LiteralPath $ni.Path)) {
+                throw @"
+no $Flavor $($ni.Name) at '$($ni.Path)'.
+The package carries Thunderbolt networking. Build it first:
+  scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })
+"@
+            }
+            $niFlavour = Get-ImageFlavourMarker -Path $ni.Path
+            if ($niFlavour -ne $Flavor) {
+                throw "'$($ni.Path)' carries the flavour marker '$niFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+            }
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if ($runBinaryGates) {
+                foreach ($ni in $netImages) {
+                    $niArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                "-Image", $ni.Path, "-Flavor", $Flavor, "-Arch", $Arch,
+                                "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $ni.Allow))
+                    if ($ni.Profile -ne "") { $niArgs += @("-GateProfile", $ni.Profile) }
+                    if ($NoTargetEvidence) { $niArgs += "-NoTargetEvidence" }
+                    & powershell.exe @niArgs
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "'$($ni.Path)' failed the import-compatibility gate against $($ni.Allow)."
+                    }
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-net-inf.ps1") `
+                -InfPath $NetInfPath -Arch $Arch
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$NetInfPath' failed scripts\inf-gate\check-net-inf.ps1 - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } else {
+        Write-Warn "no network driver staged: -DriverPath was named without -NetDriverPath (a stand-in package)."
+    }
+
     # --- the x86 helper, held to its own gates (design record 18) ---------
     if ($stageHlpr) {
         Write-Step ("x86 helper ({0})" -f $Flavor)
@@ -1469,6 +1567,16 @@ The x86 package carries the x86 helper its INF names. Build it first
                             -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhcicm.sys"] } else { "" })
             $CmDriverPath = $signedCm
         }
+        if ($stageNet) {
+            foreach ($nn in @("xhcinet.sys", "xhcinet6.sys")) {
+                $signedNet = Join-Path $signDir $nn
+                $srcNet = if ($nn -eq "xhcinet.sys") { $NetDriverPath } else { $Net6DriverPath }
+                Invoke-TestSign -Source $srcNet -Dest $signedNet -Pfx $TestSignPfx -Password $testSignPassword `
+                                -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label $nn `
+                                -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256[$nn] } else { "" })
+                if ($nn -eq "xhcinet.sys") { $NetDriverPath = $signedNet } else { $Net6DriverPath = $signedNet }
+            }
+        }
         # The bundled stor98.sys, by the same key in the same step (task
         # 42-A.30, owner 2026-10-19: one signature signs everything).
         foreach ($nf in $stor98Files) {
@@ -1563,6 +1671,15 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             # signed) bytes, which CM-NO9XBRIDGE compares.
             Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
         }
+    }
+    # Thunderbolt networking at the root (record 35 section 9.5): the
+    # installer's local copy is this flat package, and the INF's
+    # SourceDisksNames finds both images beside it; the cut re-lays the three
+    # into each family's cm\tbnet\.
+    if ($stageNet) {
+        Copy-Item -LiteralPath $NetInfPath -Destination (Join-Path $stageDir "xhcinet.inf") -Force
+        Copy-Item -LiteralPath $NetDriverPath -Destination (Join-Path $stageDir "xhcinet.sys") -Force
+        Copy-Item -LiteralPath $Net6DriverPath -Destination (Join-Path $stageDir "xhcinet6.sys") -Force
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.
