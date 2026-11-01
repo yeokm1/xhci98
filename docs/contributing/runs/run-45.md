@@ -8605,6 +8605,105 @@ build was made for this section.
 
 Nothing of 45.63 but Sleep (S3) on 10 x64 (part 1's stop 3, task w45-s3).
 
+## 45.41 (the owed legs): the soak after the change, the hub model's two variants, and a hub unplug under load (2026-11-01)
+
+**Verdict: all three legs pass on XP and XP x64; no defect, no code
+change.** The three legs design record 13 section 15's L9 listed and
+section "45.41" above left owed: twenty link failures forty seconds apart
+after the change; the hub model's 0x100 variant (the connection bit
+dropped too) and 0x200 variant (a failure the hub never reports); and an
+unplug of the hub itself under load. What is left of 45.41 is the
+reporter's: the VL805 and the Realtek hub.
+
+### The vehicle
+
+As section "45.41": development host A, the same test-only QEMU 11.1.0
+build with `usb-ss-hub` and `link-drop` (used as built, not rebuilt or
+changed), the q35 XP base (`-Os xp`, 2 processors, 1 GiB, `-vga cirrus`)
+and the q35 XP x64 base (2 processors, 2 GiB), a `usb-ss-hub` on
+`qemu-xhci` root port 3 with a `usb-uas` (serial `W45UAS41`, one
+`scsi-hd` LUN on an overlay of the 128 MiB FAT test disk) on its port 1,
+the drive D:. The guests are overlays of section "45.41"'s `3.3.0.0`
+installs with this tree's two files copied over the installed ones and
+the guest restarted (`UPD.BAT`), then booted once with the hub and the
+disk to install them (Found New Hardware: "xHCI98 USB 3 Hub", "xHCI98 USB
+Attached SCSI Storage"), each leg an overlay of that.
+
+The binaries: the gated release build of `208552f9` (x86 all and amd64
+release passed), whose sources are those of `3.4.0.0` at `0a35067f`
+(the two differ in `run-45.md` and the roadmap only). x86 `xhci98.sys`
+`bfb4b953...`, `xhciuas.sys` `8c18df76...`; amd64 `xhci98.sys`
+`7fdbd9f6...`, `xhciuas.sys` `8f805866...`; `XHCITR` of the same build.
+Each guest's `XHCITR /snapshot` showed the installed hashes (x86) and
+`link.keep.on=00000001` (both) before the legs.
+
+Load, as section "45.41": `W.BAT D:` (a 16 MiB file copied, compared
+byte for byte and deleted in a loop, one COM1 line a pass with the
+guest's time) and `L.BAT D:` (a file held open on D:, a line a second).
+Both guests ran at once, with the same schedule; every leg below ran on
+both.
+
+### The soak: twenty failures forty seconds apart
+
+`qom-set sshub link-drop 1` every 40 s, twenty times (host times in
+`soak.log`), under the copy loop and the held file.
+
+| | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| keeps | 20 `link.keep=01000000`, 20 `link.keep.done=01000001` | 20 and 20; then a second soak of twenty on the same guest: 40 and 40 |
+| copies failed or compared unequal | 0 of 185 passes | 0 of about 1650 passes (both soaks) |
+| the pass spanning each failure, against the median of the five before | +0.3 s on average (the largest +2.5 s; normal spacing 3.2 to 6.0 s) | +0.2 s on average in the first soak, 0.0 s in the second (the largest +0.7 s; normal 0.9 to 1.5 s) |
+| `SsHubWarmResets` | 20 | 20, then 40 |
+| `SlotsEnabled`, `DevicesAddressed`, `PoolRingsInUse` (before, after) | 3, 3, 6 / 3, 3, 6 | 3, 3, 6 / 3, 3, 6 |
+| UAS telemetry | one record, "its device present", 916 sends; port resets 15, no timeout, abort or LUN reset | one record, present; port resets 10 after the first twenty |
+| the held file | grew on (535 lines) | grew on (880 lines) |
+
+The pass spacing of both guests rose by about half from 10:30 to 10:38 and
+again at 10:44, in step, and the second rise came while the x86 guest had
+no link failure at all (only the XP x64 guest's second soak was running):
+the host's load, not the keep. Against `3.3.0.0` (section "45.41"): each
+failure there dropped the drive for 11.3 to 31.2 s and failed every copy
+meanwhile, and the old volume's handles failed for good; here no copy
+failed, the held file's handle stayed valid, and nothing of the bus grew
+over 20 (x86) and 40 (x64) keeps.
+
+### The hub model's variants
+
+| Leg | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| 0x100: `link-drop 0x101`, SS.Inactive with the connection bit 0 and C_PORT_CONNECTION | kept: the 21st `link.keep=01000000` and `link.keep.done=01000001`; `SsHubWarmResets` 21; the spanning pass 3.5 s against 3.6 s; no copy failed; the same telemetry record | kept: the 41st keep, restored; `SsHubWarmResets` 41; the spanning pass 1.0 s against 0.9 s; no copy failed; the same record |
+| 0x200: `link-drop 0x201`, SS.Inactive with no change bit (the hub reports nothing; the transfers in flight are forgotten) | no keep (none is due: the hub reported no change), and no drop: the UAS driver's timeout path recovered it - telemetry timeouts 2, aborts 1, LUN resets 1, port resets +1 - and its RESET_PORT warm-reset the hub port (`SsHubWarmResets` 22); one pass took 19.0 s against about 3.5 s; no copy failed; the same record; the held file grew on | the same: timeouts 3, aborts 1, LUN resets 1, port resets +1, `SsHubWarmResets` 42; one pass took 16.6 s against about 1 s; no copy failed; the same record |
+
+### A hub unplug under load
+
+`device_del sshub` under the copy loop and the held file: the hub and the
+disk behind it leave together.
+
+| | XP, x86 release | XP x64, amd64 release |
+|---|---|---|
+| the unplug | the copy in flight failed at once (its COPYFAIL line within a second of the unplug), and every copy after it failed at once (1854 COPYFAIL lines in 4 min 23 s) - no hang, the guest responsive | the same: the first COPYFAIL 0.1 s after the last good pass |
+| the held file | "Windows - Delayed Write Failed ... D:\LONG.TXT" and "The volume for a file has been externally altered so that the opened file is no longer valid" - a removal's own symptom, as with `3.3.0.0` | the same |
+| the keep | no `link.keep` note: a departure is not a link failure | the same |
+| the snapshot during the unplug | record 1 "its device departed, slot 3" | the same |
+| the replug (`device_add` of the hub, the `usb-uas` and its LUN, then `qom-set uas0 attached true`: a hot-plugged `usb-uas` waits for it) | the disk back as D: and every copy passing from the first pass after the attach; record 2 "its device present"; `SlotsEnabled` 5 (the hub and the disk addressed afresh) | the same: record 2 present, `SlotsEnabled` 5, copies passing |
+
+On XP x64 the Found New Hardware wizard came up at each boot for three
+devices of the q35 board with no driver in the base - the ICH9 AHCI
+controller (`8086:2922`, the base runs the system disk on PIIX IDE), the
+ICH9 SMBus controller (`8086:2930`) and `ACPI\QEMU0002` - the only devices
+with a problem code (`Win32_PnPEntity`, ConfigManagerErrorCode 1); none
+is USB.
+
+Evidence: `E:\xhci98-vm\p45\w45-hub41\` (`soak86\`, `soak64\` and
+`soak64\b\`: `serial-a.log`, `soak.log`, `soakan.txt`, `span.txt`,
+`hubunplug.txt`, `qemu-a.out`, screenshots `u1.png` onwards;
+`pids.txt`).
+
+What is left of 45.41: the reporter's VL805 and Realtek hub. Not run, and
+not among the owed legs: the refusals on a guest (a UAS disk with no serial
+number, which QEMU's `usb-uas` cannot present; a Bulk-Only disk) and
+Windows 98 SE, ME and 2000, as section "45.41" says.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
