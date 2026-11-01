@@ -233,8 +233,10 @@ function Invoke-LegWindow {
             # The window an elevation started can open without the keyboard
             # focus (7 on q35, read 2026-10-26: its Welcome page took no key
             # while its taskbar button was lit): Alt+Tab once, and the key
-            # again.
-            if ($page -eq 1 -and $consent.Count) {
+            # again. XP with no elevation too (read 2026-11-01, w45-matrix86
+            # xp-window: the Welcome page took six Alt+N while its taskbar
+            # button flashed orange, the leg's console window behind it).
+            if ($page -eq 1) {
                 Send-QmpChord -Port $QmpPort -Chord 'alt-tab'; Start-Sleep -Seconds 3
                 $shot = "$Tag-w-{0:D2}-page{1}-{2}-alttab" -f $n, $page, ($k -replace '[^a-z0-9]', '')
                 if (Send-LegPageKey -QmpPort $QmpPort -Dir $Dir -Chord $k -Layout $layout -Shot $shot -Process $Process -Tries 3) { $focusTab = 1; continue }

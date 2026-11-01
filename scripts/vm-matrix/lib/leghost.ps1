@@ -377,6 +377,21 @@ function Get-LegNavyCount {
 # One named host step. Returns a line for the leg's record. The key
 # sequences are the ones the 43.5 legs walked by hand on 98 SE with this
 # package (Enter takes each wizard page's default button).
+# Waits up to $Seconds for QEMU to end ('exit') or the guest's poller to say
+# BOOT on COM1 ('boot'); '' when neither came. A host step that answers a box
+# it took for a restart question uses it, so that a guest which goes on with
+# no restart is handed back to the leg's own loop at once.
+function Wait-LegExitOrBoot {
+    param($Process, [string]$SerialPath, [int]$Seconds)
+    $deadline = (Get-Date).AddSeconds($Seconds)
+    while ((Get-Date) -lt $deadline) {
+        if ($Process.WaitForExit(2000)) { return 'exit' }
+        if ((Get-LegSerialLines $SerialPath) -match '^XHLEG BOOT') { return 'boot' }
+    }
+    if ($Process.HasExited) { return 'exit' }
+    return ''
+}
+
 function Invoke-LegHostStep {
     param([string]$Step, [int]$QmpPort, [string]$Dir, [datetime]$Since, $Process, [string]$SerialPath, [string]$Tag,
         [string]$InstallDir = 'C:\XHCI98', [string]$Layout = 'qwerty')
@@ -572,14 +587,25 @@ function Invoke-LegHostStep {
                     # is lost (read 2026-10-25: Enter changed nothing for
                     # five minutes): Yes again, by its accelerator, while
                     # the question stays.
+                    # What looked like the question can be ME's "New Hardware
+                    # Found ... installing" box (read 2026-11-01, w45-matrix86:
+                    # me-window boot 2), after which ME asks nothing and the
+                    # poller starts the next phase. So every wait here ends
+                    # as soon as the poller is up too: the leg's own loop
+                    # must read its lines (a WANT plug-stick unread for 300 s
+                    # failed that leg's stick check).
                     for ($k = 1; $k -le 6; $k++) {
                         if ($k -eq 1) { Send-QmpChord -Port $QmpPort -Chord 'ret' } else { Send-QmpChord -Port $QmpPort -Chord 'alt-y' }
-                        if ($Process.WaitForExit(30000)) { return "${Step}: restart question answered Yes ($k keys), QEMU ended at the restart" }
+                        $w = Wait-LegExitOrBoot -Process $Process -SerialPath $SerialPath -Seconds 30
+                        if ($w -eq 'exit') { return "${Step}: restart question answered Yes ($k keys), QEMU ended at the restart" }
+                        if ($w -eq 'boot') { return "${Step}: poller up after $k keys (the box was no restart question)" }
                         if ((Get-Leg98Dialog -QmpPort $QmpPort -Dir $Dir) -ne 'question') { break }
                     }
-                    if ($Process.WaitForExit(300000)) { return "${Step}: restart question answered Yes, QEMU ended at the restart" }
+                    $w = Wait-LegExitOrBoot -Process $Process -SerialPath $SerialPath -Seconds 300
+                    if ($w -eq 'exit') { return "${Step}: restart question answered Yes, QEMU ended at the restart" }
+                    if ($w -eq 'boot') { return "${Step}: poller up after the box was answered (no restart)" }
                     Save-LegShot $QmpPort $Dir "$Tag-restart-end"
-                    return "${Step}: FAILED, QEMU still running 300 s after Yes"
+                    return "${Step}: FAILED, QEMU still running 300 s after Yes and no poller"
                 }
                 Start-Sleep -Seconds 5
             }
