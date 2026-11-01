@@ -94,7 +94,7 @@ Device Manager names each controller by its generation, then its maker and produ
 | Lunar Lake, Panther Lake, Wildcat Lake | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | xHCI98 USB4 Router (Intel Lunar Lake), (Intel Panther Lake), (Intel Wildcat Lake) |
 | Barlow Ridge | `5781`, `5784` | xHCI98 USB4 Router (Intel Barlow Ridge) |
 | AMD Pink Sardine | `1022:1668`, `1022:1669` | xHCI98 USB4 Router (AMD Pink Sardine) |
-| ASMedia ASM4242 | `1B21:2425` (by class `0C0340`) | xHCI98 USB4 Router (ASMedia ASM4242) |
+| ASMedia ASM4242 | `1B21:2425` | xHCI98 USB4 Router (ASMedia ASM4242) |
 | Any other USB4 host | PCI class `0C0340` | xHCI98 USB4 Router |
 
 ### Before you start: 64-bit Windows
@@ -147,7 +147,7 @@ Use Safely Remove before unplugging a drive, on every system.
 
 ### Thunderbolt networking
 
-Two computers joined by one Thunderbolt or USB4 cable can share a network connection, file sharing included, in the frame format Linux's Thunderbolt networking uses. It is off unless you tick "Thunderbolt networking" on the installer's Thunderbolt and USB4 page (`XhciCmNet` `1`). One `xhcinet.inf` installs `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. With no DHCP server on the link both computers take a 169.254.x.x address; set fixed addresses for a lasting setup. The MTU (1500 to 65522, the same on both ends) is in the adapter's Advanced settings. One link at a time; a computer behind a dock or another router is not reached.
+Two computers joined by one Thunderbolt or USB4 cable can share a network connection, file sharing included, in the frame format Linux's Thunderbolt networking uses. [PLACEHOLDER w45-tbnet6 S11: It is off unless you tick "Thunderbolt networking" on the installer's Thunderbolt and USB4 page.] One `xhcinet.inf` installs `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. With no DHCP server on the link both computers take a 169.254.x.x address; set fixed addresses for a lasting setup. The MTU (1500 to 65522, the same on both ends) is in the adapter's Advanced settings. One link at a time; a computer behind a dock or another router is not reached.
 
 ### Things to know
 
@@ -301,7 +301,7 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
-| `XhciCmNet` | `1` turns on [Thunderbolt networking](#thunderbolt-networking) (the installer's box) | `0` |
+| `XhciCmNet` | `1` turns on [Thunderbolt networking](#thunderbolt-networking) | `0` |
 
 [docs/using/tuning.md](docs/using/tuning.md) has every value of both drivers, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes, the Linux-derived controller quirks and the `XhciCm*` values; the release notes describe [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values) in full.
 

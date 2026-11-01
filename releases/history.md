@@ -23,12 +23,10 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **Thunderbolt networking:** a network connection between two computers
   joined by one Thunderbolt or USB4 cable, in the frame format Linux's
   Thunderbolt networking uses, on every system from 98 SE to 10, 32-bit
-  and 64-bit. Off unless you tick "Thunderbolt networking" on the
-  installer's Thunderbolt and USB4 page. With no DHCP server on the link
-  both computers take a 169.254.x.x address; set fixed addresses for a
-  lasting setup.
-  [PLACEHOLDER w45-tbnet6, S10/S11: check against the merged box and
-  cm\tbnet\.]
+  and 64-bit. With no DHCP server on the link both computers take a
+  169.254.x.x address; set fixed addresses for a lasting setup.
+  [PLACEHOLDER w45-tbnet6, S10/S11: off unless you tick "Thunderbolt
+  networking" on the installer's Thunderbolt and USB4 page; cm\tbnet\.]
 - **Windows 2000, XP and XP x64: Thunderbolt 3 and USB4 docks plugged in
   while Windows runs.** A dock, or an enclosure with a PCI Express switch
   of its own, now gets every port in it placed, so the devices behind
@@ -59,8 +57,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   page; the Advanced lists offer every setting a user may change; Help
   (and F1) explains the page it is on.
 - **USB devices with more than one configuration** are set up in their
-  first configuration, so a USB Audio 3.0 device's USB Audio 2.0 part gets
-  the free `uac2`, where before the device had no driver.
+  first configuration and split into their parts where a device with
+  one configuration would be, so a USB Audio 3.0 device's USB Audio 2.0
+  part gets the free `uac2`, where before the device had no driver.
 - [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit Windows 8 and 8.1, as a
   filter of the PCI root bus (the service `xhcipff`); not on Windows 10.]
 - [PLACEHOLDER w45-tidy, 45.4: the USB Tree's title shows its version, as
@@ -129,9 +128,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **Windows 98 SE and ME:** the free and non-free drivers are copied to
   `C:\XHCI98\USBDRV\`; the ones you tick are also added to Windows' driver
   search path. When Windows asks for a driver for another such device,
-  point it at that device's folder there. The installer installs one
-  controller per run: if it reports a controller "not reached in this
-  run", restart Windows and run it again.
+  point it at that device's folder there. If the installer reports a
+  controller "not reached in this run", restart Windows and run it
+  again.
 
 ### Known limitations
 
@@ -254,6 +253,8 @@ Each zip holds everything in the one before it.
     replayed after a seek; a restart asked for when it is installed on
     2000; a co-installer, installed by hand, that keeps Windows' USB Audio
     1.0 driver off a UAC 2.0 device on 2000 to 7.
+  - `usbcom`: the FTDI FT-X, FT232H and FT4232H, Prolific PL2303 and
+    Silicon Labs CP2105 and CP2108 serial bridges on 98 SE and ME.
   - `rtl815x`: may be staged beside the non-free one on XP to 7, where
     their INFs list different chips.
 - **`xhci98-3.4.0.0-nonfree.zip`:** also adds a pack of other
