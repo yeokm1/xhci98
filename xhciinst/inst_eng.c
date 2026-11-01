@@ -19476,10 +19476,12 @@ static void s98_defaults_put_9x(void)
 
 /* Task 45.50: at the uninstall that removes Stor98 on 98 SE and ME, each
  * setting at its default goes too - the INF's or s98_defaults_put_9x's,
- * reading as its absence - so the key holds nothing of Stor98's that a
+ * reading as its absence - and each interrupt report the driver wrote
+ * (inst_s98_run_report_9x), so the key holds nothing of Stor98's that a
  * later first run would take for a Stor98 there before (record 26 section
- * 6.3, s98_svc_key_stor98_9x). A value of another number stays. 0 when a
- * value could not be read or removed. */
+ * 6.3, s98_svc_key_stor98_9x; with the reports left, a reinstall on 98 SE
+ * read "found before 1", 2026-11-01). A value of another number stays. 0
+ * when a value could not be read or removed. */
 static int s98_defaults_drop_9x(void)
 {
     HKEY k;
@@ -19542,6 +19544,45 @@ static int s98_defaults_drop_9x(void)
         }
         logonly("stor98: %s, at its default, removed\n", v->Name9x);
         flagChanged = 1;
+    }
+    /* The reports, read again from the first value after each removal. */
+    for (;;) {
+        char name[128];
+        DWORD idx;
+        int gone = 0;
+        for (idx = 0;; idx++) {
+            n = sizeof(name);
+            w = RegEnumValueA(k, idx, name, &n, NULL, NULL, NULL, NULL);
+            if (w == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (w == ERROR_MORE_DATA) {
+                continue;
+            }
+            if (w != ERROR_SUCCESS) {
+                out("%s could not be read (error %ld): Stor98's interrupt "
+                    "reports stay.\n", INST_S98_SVC_9X, (long)w);
+                ok = 0;
+                break;
+            }
+            if (!inst_s98_run_report_9x(name)) {
+                continue;
+            }
+            w = RegDeleteValueA(k, name);
+            if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+                out("Stor98's %s could not be removed (error %ld).\n", name,
+                    (long)w);
+                ok = 0;
+                continue;
+            }
+            logonly("stor98: %s, the driver's report, removed\n", name);
+            flagChanged = 1;
+            gone = 1;
+            break;
+        }
+        if (!gone) {
+            break;
+        }
     }
     RegCloseKey(k);
     return ok;

@@ -1214,7 +1214,17 @@ and the console's question as on Vista and 7, `INST_PFW_SYS_SEEN`):
   set's `Enum` key for `xhcipff` (Find, values and data), and remove the
   line `xhcipff` from every `UpperFilters` that has it, keeping any other
   line; do not set the `xhcipff` service to disabled while an entry is
-  there, which stops the start the same way.
+  there, which stops the start the same way. Read on 8 x86 on
+  2026-11-01 (task 45.9, `runs/run-45.md` "45.4, 45.9 and 45.50
+  (closed)"): Automatic Repair offered only Restore and Cancel there,
+  so the readme names the setup medium's Repair your computer as the
+  way in; the registry editor's Load Hive is offered only with
+  `HKEY_LOCAL_MACHINE` selected; Find from the loaded set's `Enum` key
+  stops next at the `xhcipff` service's own key; an `UpperFilters` left
+  with no line starts; and on a board that leaves windows above 4 GB
+  a start without the filter did not finish in 20 minutes, so the
+  readme also says to start with Above 4G Decoding off and run the
+  installer again, which put the filter back.
 - **Fast startup** on 8 and 8.1 resumes the kernel without a root bus
   start, as section 11.2 already says for the boot driver: the step does
   not run then, and the windows are those Windows assigned at the full

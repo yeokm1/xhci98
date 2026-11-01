@@ -9298,6 +9298,146 @@ tab. A separate XP x64 folder that would keep them is planned
 VM starts and stops: `E:\xhci98-vm\p45\w45-pe\pids.txt` (all mine
 stopped).
 
+## 45.4, 45.9 and 45.50 (closed) (2026-11-01)
+
+Branch `w45-tidy` from `208552f9`, tree `E:\xhci98-wt\w45-tidy` on
+development host A. Commits: `a8f9e56b` (45.50: the 98 SE and ME
+uninstall takes Stor98's interrupt reports), `2d179cdb` (45.9: the
+readme's recovery route as read), and the roadmap's bookkeeping
+(`21f706d3`, `3472eef1`, `15370700`, owner 2026-11-01); each reviewed and
+revised. The gated build at `a8f9e56b` (`scripts\build-driver.cmd all`,
+then `release -amd64`, after `src\pfw\build.cmd`): BUILD + GATES PASSED
+(release, qemu) and (release); the host suites passed (`test_inst` with
+the new vectors among them); the tools rebuilt. Evidence:
+`E:\xhci98-vm\p45\w45-tidy\` (one folder per guest: `serial-<tag>.log`,
+screenshots, `pids.txt`), the builds' logs in
+`E:\xhci98-scratch\p45-w45-tidy\`.
+
+The vehicles:
+
+- **A**: the family-layout test cut of 45.44's legs (`6e6e68af`, w45-pkgA,
+  `xhci98-3.3.0.0.zip` `75157f6e...`): `XHCITR.EXE` `6cfa8917...`,
+  `XHCIINST.EXE` `6ea8a5cc...`, `nt-x86\cm\XHCIPFW.SYS` `fb51d88c...`.
+- **B**: a family-layout test cut of this branch at `a8f9e56b`
+  (`make-release.ps1 -Arch x86 -TestLabel "45.50 legs, w45-tidy"`, both
+  driver sets; `xhci98-3.3.0.0.zip` `df89b6f3...`): `XHCIINST.EXE`
+  `0430b2f0...`, `98-me\stor98\stor98.mpd` `97f7f523...`,
+  `98-me\stor98\stor98.inf` `1825e442...`.
+- **The older filter image**: 45.9's own test cut of `1c0a48d9`
+  (`XHCIPFW.SYS` `c38e2e02...`, flat `release-x86\`, its own installer).
+- **XHCITR at 3.4.0.0**: `xhcitr\build.cmd x86` at `208552f9` with
+  `src\xhci_version.h` set to `3,4,0,0` / `"3.4.0.0"` in the tree for
+  that build alone and restored after it (`XHCITR.EXE` `1b3d5b0a...`),
+  since the version is bumped only at the cut.
+
+Every guest a fresh overlay of the q35 bases through `launch-q35.ps1`
+(the 4G-off layout through 45.9's copy of it), QMP 49560 to 49564.
+
+### 45.4: the USB Tree's window title
+
+| System | XHCITR | Title read |
+|---|---|---|
+| 98 SE (`sa`) | A's, installed in `C:\XHCI98` | `xHCI98 USB Tree 3.3.0.0` (`tr1.png`) |
+| 98 SE | at 3.4.0.0 | `xHCI98 USB Tree 3.4.0.0` (`tr34.png`) |
+| ME (`ma`) | A's / at 3.4.0.0 | `... 3.3.0.0` / `... 3.4.0.0` |
+| 7 x86 (`s7`) | A's, from the package / at 3.4.0.0 | `... 3.3.0.0` (`tr1.png`) / `... 3.4.0.0` (`tr34c.png`) |
+
+The main window carries the version the build was made at; the right
+pane's heading the same string. On 98 SE and ME the tree showed the
+ASM4242 router, the tunnelled NVMe drive as E: under Stor98 and both
+controllers.
+
+### 45.50: Stor98's 98 SE and ME defaults, read
+
+On the ASM4242 layout with the ORICO at power-on (Stor98 binding the
+tunnelled drive), `XHCIINST.EXE /dir 98-me /yes /nopause /thunderbolt
+/stor98`, `Services\stor98` read by `regedit /e`:
+
+| Step | 98 SE | ME |
+|---|---|---|
+| Install (A; again with B) | the device installed from `stor98.inf` ("Stor98 now runs ..."), the nine settings at their defaults: `StorMaxTransferKB` 2048, `StorWriteThrough` `auto`, `StorPollMode` 0, `StorPollBusyUs` 1000, `StorPollIdleMs` 1000, `StorPollSpinUs` 0, `StorGoneMs` 5000, `StorWriteIdleMs` 1000, `StorHold9xMs` 4000 | the same nine at the same defaults |
+| Uninstall with A | the nine removed ("at its default, removed"), but `StorInterrupt 5.0.0` left (the report Stor98 writes at each controller start) | the same |
+| Install again with A | "stor98: found before 1, PreExisting 1": the Stor98 this installer had put there now taken for one there before, so its next uninstall would keep it | - |
+| Uninstall with B | the nine and "StorInterrupt 5.0.0, the driver's report, removed"; the key left empty | the same |
+| Install again with B | "found before 0, PreExisting 0"; the nine at their defaults again (ME) | the same |
+| The file-only update (B) | - | below |
+
+**The defect and its fix (`a8f9e56b`).** The baseline takes any value of
+`Services\stor98` but xhcicm's `LinkState` for a Stor98 there before
+(`s98_svc_key_stor98_9x`), and 45.50's uninstall removed only the
+settings at their defaults, so Stor98's own interrupt report kept the key
+looking like a Stor98 installed before. `s98_defaults_drop_9x` now also
+removes every `StorInterrupt <b>.<d>.<f>` value
+(`inst_s98_run_report_9x`, with host vectors), on the same path, the
+uninstall that removes this installer's Stor98; record 21 section 8.1
+says so. Read on both systems with B as above.
+
+**The file-only update.** It runs when the installed `stor98.mpd` is
+older than the bundled one, so it cannot be read between two builds of
+one version, and `3.2.0.0` cannot place Stor98 on this layout (its run
+read "where it sits could not be read", and a Stor98 installed by hand
+is held as another's, "Stor98 is LEFT"). The arrangement on ME, after B's
+install: `3.2.0.0`'s `stor98.mpd` (`b3305de4...`, 54,749 bytes) put in
+place through `WININIT.INI` and the nine settings deleted (WSH
+`RegDelete`); after a cold start the older file ran the drive and the key
+held only its `StorInterrupt` report. Then B's console installer without
+`/yes` (with `/yes` the update is declined, "/yes: Stor98's driver file
+is not updated", as designed), answered Y to "Please disconnect all
+external NVMe drives before proceeding": "stor98: file update confirmed
+1", `WININIT.INI [rename] ...STOR98.MPD=...STOR98.TMP`, and each of the
+nine "written at its default" (`s98_defaults_put_9x`), read in the key
+at the same defaults beside the report. After a cold start the bundled
+`stor98.mpd` (55,342 bytes) was in place and the nine values stayed.
+The run's exit code 4 came from an unrelated stale "PCI Universal Serial
+Bus" entry the Enter rounds had left in that guest.
+
+Not run (coordinator, 2026-11-01, for time): the same arrangement on
+98 SE (the code path is the one ME read) and the uninstall after this
+update on ME (the uninstall with B was read on both systems above).
+
+Seen in passing (not this task's): on one ME start after a `/yes` update
+the desktop stayed without a taskbar for 20 minutes; a cold start was
+normal (45.36's area).
+
+### 45.9: an update between two images, and the readme's route
+
+On 32-bit 8 and 8.1, two processors, 2 GB:
+
+| Step | 8 x86 (`h8`) | 8.1 x86 (`h81`) |
+|---|---|---|
+| Install of the older image on the plain board (`1c0a48d9`'s installer, `/dir release-x86 /yes /thunderbolt`) | exit 3; `xhcipff`, `ImagePath` `System32\DRIVERS\xhcipff.sys`, record `File` `C38E2E02...`, `UpperFilters` `xhcipff` on `ACPI\PNP0A08\0` | the same |
+| Cold start, 4G-off layout, ORICO at power-on | `XhciPfwClosed` 9, `XhciPfwSkipped` 0; only `fw_cfg` at 28 | `XhciPfwClosed` 9 |
+| Update with A's installer (`/dir nt-x86`), the 4G-off layout | exit 3; the new image written as `xhcipff2.sys` (`fb51d88c...`), `ImagePath` moved to it, the record's `File` `FB51D88C...`, the entry kept; `xhcipff.sys` gone | the same |
+| Cold start, 4G-off | `XhciPfwClosed` 9 and the new image's own values (`XhciPfwClosedAll` 9, `XhciPfwSkippedAny` 0) | the same |
+| Both images deleted by hand, the entry left; a start on the plain board | Automatic Repair: "Windows couldn't load correctly", Restore and Cancel only; Cancel restarted to the logo and stayed there | Automatic Repair: "Your PC did not start correctly", Restart and Advanced options |
+| The readme's route | from the Windows 8 setup DVD: Next, Repair your computer, Troubleshoot, Advanced options, Command Prompt | Advanced options, Troubleshoot, Advanced options, Command Prompt (an administrator's account and password asked) |
+| | the system on C:; regedit's Load Hive greyed until `HKEY_LOCAL_MACHINE` was selected, then a key name asked; `Select\Default` 1; Find (Values and Data) from `ControlSet001\Enum`: `ACPI\PNP0A08\0` `UpperFilters` `xhcipff`, edited to no line and accepted; Find Next stopped at `Services\xhcipff` (`ImagePath`); Unload Hive | the same |
+| The start after it, plain board | the desktop (after one more Automatic Repair, which followed a forced stop below); `UpperFilters` empty | the desktop at the first start; `UpperFilters` empty |
+| The same, 4G-off layout | the start did not finish in 20 minutes (the windows above 4 GB no longer closed) | - |
+| The installer again (A, plain board), then a 4G-off start | exit 3; `xhcipff.sys` written, `ImagePath` and the entry back; `XhciPfwClosed` 9 | - |
+
+So the update between two images keeps the entries and moves the
+service to the other image name, and each image closed the windows at
+its start, on both systems. The readme's route works as written in its
+registry part. What it did not say, and now does (`2d179cdb`, record 32
+section 11.5.2): how to reach the recovery environment when Automatic
+Repair offers only Restore (the setup medium's Repair your computer),
+that `HKEY_LOCAL_MACHINE` must be selected for Load Hive and the hive
+named, that the drive need not be C:, where to search from and when the
+search is done, that an `UpperFilters` left with no line is fine, and
+that on a board with windows above 4 GB the start then needs Above 4G
+Decoding off until the installer is run again.
+
+### Roadmap bookkeeping (owner, 2026-11-01)
+
+45.18 ticked; the rest of 45.14, what 45.22 left (the 98 SE and ME
+connection and its leg and the other legs), 45.25 and 45.26 deferred
+to the next release, 45-E.13 and 45-E.14 with them; 45.11 confirmed
+and 45.21 deferred (45-E.11 with it, `3.4.0.0` keeping "Not claimed:
+Apple machines"); 45.27 left unticked, its rest owed to real hardware.
+The checkpoint names 45-E.1 to 45-E.10 and 45-E.12 for the published
+asset.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
