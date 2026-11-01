@@ -39,8 +39,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   [PLACEHOLDER w45-dock: 45.15's Code 31, 45.17 chains under the
   Thunderbolt 3 firmware connection manager.]
 - **USB4 version 2 routers** (Barlow Ridge, say) run as version 2, Gen 4
-  links at 80 Gbit/s (120/40 asymmetric) included; a Gen 4 link that has
-  an error recovers in place, with the devices behind it kept.
+  links at 80 Gbit/s (120/40 asymmetric) included. An error on the Gen 4
+  link to the device plugged into the computer is recovered in place,
+  with the devices behind it kept.
 - **Devices kept across standby and hibernation:** where the USB
   controller has to be started afresh at the resume (every VIA controller,
   and any controller that cannot save its state), a device on one of the
@@ -236,7 +237,7 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
 Each zip holds everything in the one before it.
 - **`xhci98-3.4.0.0.zip`:** the xHCI98 drivers (USB 3, UAS, Thunderbolt 3 /
-  USB4, Thunderbolt networking), Stor98, the installer and the tools. It
+  USB4), Stor98, the installer and the tools. It
   also has NUSB 3.3's seven Windows 98 SE storage files in
   `USBDRV\NUSB33\`, offered by the installer on 98 SE if you don't already
   have NUSB. If you have NUSB already installed, it will be kept.

@@ -410,8 +410,8 @@ each task's number.
 - **A device that comes back is no longer taken for a new one** when
   its serial number cannot be read at that moment (after a link drop, a
   recovery or a replug, at a root port or behind a hub): the driver
-  tries again for a few seconds, then leaves the device out until it is
-  plugged in again. Before, a network adapter came back as a new
+  tries again for a few seconds and, if it still cannot, leaves the
+  device out until it is plugged in again. Before, a network adapter came back as a new
   connection with automatic (DHCP) settings, losing its fixed address.
 - **USB Audio 2.0 and 3.0 devices (Windows 2000 to 8.1)** are no longer
   offered to Windows' own USB Audio 1.0 driver ("USB Audio Device"),
@@ -466,8 +466,9 @@ each task's number.
   under the Thunderbolt 3 firmware connection manager.]**
 - **USB4 version 2 routers** (Barlow Ridge, say) are run as version 2:
   Gen 4 links at 80 Gbit/s, symmetric or asymmetric (120/40), with
-  Extended Encapsulation and the enhanced time sync. A Gen 4 link error
-  is now recovered in place, with the devices behind it kept
+  Extended Encapsulation and the enhanced time sync. An error on the
+  Gen 4 link between the computer's USB4 controller and the device
+  plugged into it is now recovered in place, the devices behind it kept
   (`XhciCmUsb4V2` and `XhciCmGen4LinkRecovery` `0` go back to
   `3.3.0.0`'s behaviour).
 - **Windows Vista and 7, 32-bit:** a dock's own USB controller, plugged
@@ -492,15 +493,10 @@ each task's number.
 
 - **Thunderbolt networking** (new): a network connection between two
   computers joined by one Thunderbolt or USB4 cable, in the frame
-  format Linux's Thunderbolt networking uses, under a USB4 host's
-  connection manager or a Thunderbolt 3 controller's firmware one
-  (Falcon, Alpine and Titan Ridge, Ice Lake). `xhcinet.inf` installs
-  `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. The
-  link comes up without a replug, whichever computer started first.
-  With no DHCP server both computers take a 169.254.x.x address. The
-  MTU is 1500, up to 65522 in the adapter's Advanced settings, the same
-  on both ends. One link at a time; a peer behind a dock or another
-  router is not reached.
+  format Linux's Thunderbolt networking uses (`xhcinet.sys` on 98 SE to
+  7, `xhcinet6.sys` on 8 to 10). With no DHCP server both computers
+  take a 169.254.x.x address; the MTU, the same on both ends, is in the
+  adapter's Advanced settings. One link at a time, not through a dock.
 - **[PLACEHOLDER w45-tbnet6, S10/S11: off unless the "Thunderbolt
   networking" box on the installer's Thunderbolt and USB4 page is
   ticked (`INSTALL /tbnet`); the files in `cm\tbnet\` of each family
@@ -1510,9 +1506,9 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
 | `XhciCmBridgeReq` | `1` | From `3.4.0.0`: Windows 2000, XP and XP x64 only. `1` rewrites the resource lists of the PCI bridges a dock or an enclosure with a switch brings, below an active tunnel port, so every port behind it is placed, and has the safe-removal mark service keep the filter on those bridges; `0` neither; `2` computes and records each list without changing it. Any other value is refused and `1` stands. The installer offers it under the Thunderbolt page's "Advanced..." on those systems, and `INSTALL /set XhciCmBridgeReq=0..2` sets it there. What it did is recorded in `XhciCmBridgeReqDiag`, a binary value in the controller's hardware key |
 | `XhciCmUsb4V2` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` runs a USB4 version 2 router (Barlow Ridge, say) as version 2, Gen 4 links included; `0` runs every router as version 1, as `3.3.0.0` did |
-| `XhciCmGen4LinkRecovery` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` lets a Gen 4 link recover from a link error in place, the devices behind it kept; `0` takes such an error as an unplug and a fresh plug, as before |
+| `XhciCmGen4LinkRecovery` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` lets the Gen 4 link between the controller and the device plugged into it recover from a link error in place, the devices behind it kept; `0` takes such an error as an unplug and a fresh plug, as before |
 | `XhciCmRingInterrupt` | `0` | From `3.4.0.0`, Windows 2000 to 10: `1` lets the controller's interrupt tell the driver at once that a device was plugged in or removed, the driver still looking every `XhciCmPollIdleMs` and going back to that alone if the interrupt fails; `0` looks every `XhciCmPollIdleMs` alone. 98 SE and ME look as with `0` |
-| `XhciCmNet` | `0` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic; `0` answers no other computer. The installer's "Thunderbolt networking" box sets it. Its buffer and polling values are in `docs/using/tuning.md` |
+| `XhciCmNet` | `0` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic; `0` answers no other computer. [PLACEHOLDER w45-tbnet6 S11: the installer's "Thunderbolt networking" box sets it.] Its buffer and polling values are in `docs/using/tuning.md` |
 | `XhciCmTunnelBridge` | `auto` (`REG_SZ`) | `auto`, written by the install (or empty): the driver finds the tunnel ports itself. A comma-separated list of `bb:dd.f` PCI bridges replaces that finding, for a machine whose ports it does not find (its log says so) |
 | `XhciCmAsmediaPcie7Credits` | `0` | From `3.3.0.0` (roadmap-usb4 task 44.41): a bench experiment for the ASMedia ASM4242, leave it at `0`. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the USB4 connection manager builds between an ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands. Written as `0` by the install from `3.4.0.0`; the installer does not ask for it |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
