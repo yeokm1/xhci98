@@ -9022,6 +9022,112 @@ installed. Of clause 4, "45.17" leg b read the adoption only; the
 child's unplug and re-plug after it is not read under the firmware
 connection manager.
 
+## 45.63 (the S3 wake): a D0 the bus fails ends what the bus holds (2026-11-01)
+
+Worker w45-s3, development host A. Part 1 of 45.63 (above) left Sleep
+on 10 x64 stopping at the wake with 0x9F (3), the tablet's D0 held
+above `xhci98.sys`'s device PDO. This section reads the cause and fixes
+it. Evidence: `E:\xhci98-vm\p45\w45-s3\` (`a\`, `b\`, `c\`: serial,
+debugcon and screenshots per leg, `pids.txt`, `STATE.md`,
+`hashes.txt`); builds and reviews in `E:\xhci98-scratch\p45-w45-s3\`.
+
+### The vehicle
+
+Part 1's: QEMU v11.1.2 with `usb4-emu` `4287e70`'s patch, q35, the
+`w10x64` base (22H2, 19045.2965), `-smp 2`, 4 GB, `-vga virtio` with
+virtio-win 0.1.302's `viogpudo`, `ICH9-LPC.disable_s3=0`. The layout
+was simplified to `qemu-xhci` behind a PCIe root port (`addr 1c.0`)
+with no USB4 model: the tablet (port 2), a `usb-uas` disk (port 3) and a
+`usb-storage` stick (port 4), overlays of the FAT test disk. Sleep is
+`rundll32 powrprof.dll,SetSuspendState 0,1,0` with hibernation off
+(with it on, the same call hibernates), the wake QMP `system_wakeup`. A
+guest agent on COM2 ran the commands. The x64 images were signed in each
+guest with a throwaway certificate made there; nothing was signed on the
+host.
+
+### Reading the cause
+
+| Step | Build | Result |
+|---|---|---|
+| Part 1's overlay (leg d, `76bbdb83`, Verifier off), the simplified layout | release | S3, wake: 0x9F within two minutes (`a\w2.png`) |
+| The same | `qemu` | the same stop (`a\w3.png`). Port `0xE9` carries the power dispatches but not the log ring; the ring read from the guest's kernel dump (our own extension's text, found by its labels) ends with `power.suspend.first` and two `uas.resume` notes: no `power.resume.first`, so the controller was never re-initialized after the wake |
+| A local `qemu` build with the log ring mirrored to port `0xE9` and the device PDOs' power, IOCTL and URB dispatches traced (diagnostics only, not committed) | `qemu` + traces | the controller FDO's D0 completed from the bus driver below with `STATUS_NO_SUCH_DEVICE` (`0xC000000E`) at DISPATCH_LEVEL; `hcdD0Done` let it go with nothing done. The device PDOs then completed their own D0s at once, the tablet's HID stack sent a class URB (function `0x1B`) to its PDO, which waited on the suspended bus, and 0x9F (3) followed (`a\w4.png`, `a\debugcon-d1.log`) |
+| The controller moved to `pcie.0` (`addr 5.0`, no root port) | `qemu` + traces | the same `0xC000000E`: not the root port's |
+| `XhciInterruptMode` 1 (the interrupt line, no message) | `qemu` + traces | the same: not the message interrupt's |
+| Windows' own `USBXHCI` on `pcie.0` (`addr 6.0`, a new instance), the same S3 | Windows' | no stop; the controller's `DEVPKEY_Device_LastArrivalDate` moved from before the sleep to 22 s after the wake, and the tablet's and stick's with it (`a\arr-u6-before.txt`, `a\arr-u6-after.txt`): Windows removed the controller after the wake and found it again. That the bus failed this stack's D0 too, as it fails this driver's, is inferred from the removal, not read (nothing traces Windows' stack here) |
+
+So the failed D0 comes from the vehicle's wake (the controller is removed
+after it under Windows' own driver too, which the inference above ties
+to the same failure), as a dock's controller unplugged while the machine
+sleeps fails it on real hardware, and the hang is this driver's:
+with the D0 failed, every request the bus held or was sent afterwards
+waited for a D0 that never came; the HID stack's D0 waited on its
+request, and PnP's removal of the controller waited on that D0. Without
+the tablet (removed by QMP before the sleep) the same wake did not stop,
+and the guest's next shutdown did not finish.
+
+### The fix
+
+Design record 13 section 5.8.1, record 14's admission line; commits
+`aed67242`, `2f94a9a9`, `ac0788ad` (reviewed and revised). A failed D0
+takes the successful D0's route to PASSIVE_LEVEL (`hcdD0Finish`), and on
+a suspended controller `hcdD0Refused` latches the bus refusing as the
+shutdown does (`ShutLatched`, section 5.8): the resume state FAILED for
+`xhciuas.sys`'s wake check, the commands completed, the transfers
+completed on the halt's proof the suspend took while the function was
+still in D0 (`SuspendHaltProven`), and a selectively suspended PDO's D0
+settled (`HcdSuspSettleLatched`); a later resume begins PENDING and a
+start publishes RUNNING. Log notes `power.d0.refused` (the bus's status)
+and `power.d0.flush`.
+
+Read with the fix (a `qemu` build of `aed67242` with the same traces, the
+`addr 5.0` layout): `power.d0.refused=C000000E`, `power.d0.flush=00000003`
+(commands and transfers), the tablet's class URB ended, then PnP's
+surprise removal and removal of the controller, a new start, and the
+three devices enumerated again (`a\arr-f2-after.txt`); no stop. A second
+sleep on the same guest, with 16 MiB copies on the stick and the UAS
+disk before and after: every copy `OK`, the stack again rebuilt.
+
+### The legs, on the gated build
+
+The package of `ac0788ad` (below) on fresh overlays, installed with
+`INSTALL.BAT /console /yes /nopause /usb` (exit 3, a restart).
+
+| Leg | System, build | Steps | Result |
+|---|---|---|---|
+| c | 10 x64, release (`xhci98.sys` `f2399033...`, signed in the guest), the root-port layout above | a hibernation (made by mistake: with hibernation on, `SetSuspendState 0,1,0` hibernates) and its resume | no stop; the controller, the tablet and the UAS disk kept (their arrival times unchanged), the stick enumerated again (a Bulk-Only drive is not kept, design record 20 section 4.3.2) |
+| c | the same, hibernation off | Sleep and wake six times to the end (`s1`, `v1` to `v5`), 16 MiB copied, compared and deleted twice on the stick and twice on the UAS disk before and after each (`c\cycles-rel.txt`, `c\cycles-v.txt`) | no stop; after each wake the controller, its root hub, the stick and the UAS disk "Started" (`pnputil /enum-devices /connected /class USB`, read after `v1` to `v5`), and every copy `OK` |
+| c | the same | a seventh, `s2`: the copies before it `OK`, the wake with no stop | incomplete, cause unknown: the copies after it never answered, the console then stopped taking keys (the display off, both processors busy in user mode) and the guest was reset (below) |
+| c | the same, Driver Verifier `0x020209BB` on `xhci98.sys` and `xhciuas.sys` (`verifier /query`: both loaded and verified) | Sleep and wake once, the copies before and after (`c\cycles-w.txt`) | no stop, the guest watched for 25 minutes after the wake; the four devices "Started"; every copy `OK`; `verifier /query` after it: `xhci98.sys` and `xhciuas.sys` still verified (load 1, unload 0) |
+| b | 7 x64 SP1, release (`xhci98.sys` signed in the guest), `-vga std`, the same USB devices | `powercfg -a`: Standby is refused by the base's display driver ("The VGAPNP.SYS display driver does not support standby"), so hibernation stands in: three hibernations and resumes, copies (`W.BAT`, 16 MiB twice) on the stick and the UAS disk before and after each (`b\serial-h1.log` to `h3.log`) | no stop; every copy `OK`; `XHCIIN64 /devices`: "xHCI98 USB 3 Controller - xhci98, started" |
+| - | 98 SE, ME, XP standby | not run (owner, 2026-11-01). 98 SE's standby does not resume on QEMU (run-36, 36.28 part 2) and XP's is vetoed by its display driver (45.23 above); an ME standby on the i440FX machine was tried on a copy of 45.27's ME overlay, which did not reach the desktop in 25 minutes with a tablet and a stick present at boot, before this build was put on it | - |
+
+The guest agent's serial port does not survive a sleep (its reads stop),
+so after each wake the agent was started again from the keyboard; under
+the host's load the first command after it often waited several minutes
+(PnP rebuilding the stack), and a run of keystrokes was sometimes lost.
+Cycles `s1` and `s2` were made before the display and idle-sleep timeouts
+were turned off (`powercfg -change ... 0`). After `s2` the copy client
+timed out, the console stopped taking keys (the display off, both
+processors busy in user mode, the guest running) and the guest was reset
+before its copies were read; why was not read. No cycle stopped with a
+bug check.
+
+### Builds and reviews
+
+Gated builds of `ac0788ad`: x86 `all` with the host tests and amd64 `all`,
+each "BUILD + GATES PASSED (release qemu)"
+(`E:\xhci98-scratch\p45-w45-s3\gb-x86.log`, `gb-amd64.log`). Release
+amd64 `xhci98.sys` `f2399033...`, `qemu` amd64 `1c5b6c8f...`, release
+x86 `553ad5b7...`.
+
+### What is left
+
+- 98 SE, ME and XP standby, and 7 x64 Sleep (not offered by the
+  vehicle): not run.
+- 8.1 x64 not read here; the change is the same on every NT target.
+- Part 1's other items (leg b's hang, the code integrity legs, part 2).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
