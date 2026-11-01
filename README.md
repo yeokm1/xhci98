@@ -94,7 +94,7 @@ Device Manager names each controller by its generation, then its maker and produ
 | Lunar Lake, Panther Lake, Wildcat Lake | `A833`, `A834`; `E333`, `E334`, `E433`, `E434`; `4D33` | xHCI98 USB4 Router (Intel Lunar Lake), (Intel Panther Lake), (Intel Wildcat Lake) |
 | Barlow Ridge | `5781`, `5784` | xHCI98 USB4 Router (Intel Barlow Ridge) |
 | AMD Pink Sardine | `1022:1668`, `1022:1669` | xHCI98 USB4 Router (AMD Pink Sardine) |
-| ASMedia ASM4242 | `1B21:2425` (by class `0C0340`) | xHCI98 USB4 Router (ASMedia ASM4242), the name `SETUP.EXE` gives it |
+| ASMedia ASM4242 | `1B21:2425` | xHCI98 USB4 Router (ASMedia ASM4242) |
 | Any other USB4 host | PCI class `0C0340` | xHCI98 USB4 Router |
 
 ### Before you start: 64-bit Windows
@@ -145,6 +145,10 @@ Use Safely Remove before unplugging a drive, on every system.
 - On 98 SE and ME, `S98VSD.VXD` lets reads and writes of up to 2 MiB reach Stor98 whole, for much faster transfers. `SETUP.EXE` installs it with Stor98.
 - Stor98's settings and limits: `stor98-readme.txt` beside it, and [the release notes](docs/using/release-notes.md#nvme-drives-behind-thunderbolt-or-usb4-new-in-3000).
 
+### Thunderbolt networking
+
+Two computers joined by one Thunderbolt or USB4 cable can share a network connection, file sharing included, in the frame format Linux's Thunderbolt networking uses. It is off unless you tick "Thunderbolt networking" on the installer's Thunderbolt and USB4 page. One `xhcinet.inf` installs `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. With no DHCP server on the link both computers take a 169.254.x.x address; set fixed addresses for a lasting setup. The MTU (1500 to 65522, the same on both ends) is in the adapter's Advanced settings. One link at a time; a computer behind a dock or another router is not reached.
+
 ### Things to know
 
 - Before standby or hibernation, stop and unplug every Thunderbolt or USB4 device. Standby with one attached, or with an Ice Lake or later controller, is not supported.
@@ -175,7 +179,7 @@ Each release has three zips. Each holds everything in the one before it, so pick
 | Download | What it holds |
 |---|---|
 | `xhci98-<version>.zip` | The xHCI98 drivers (USB 3, UAS, Thunderbolt 3 / USB4), Stor98, the installer and the tools. Also NUSB 3.3's seven Windows 98 SE storage files in `USBDRV\NUSB33\`, which the installer offers on 98 SE when NUSB is not installed (an installed NUSB is kept). |
-| `xhci98-<version>-free.zip` | Adds the free USB class drivers (audio, webcam, Ethernet and more) from [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) in `USBDRV\FREE\`. Experimental: they may not work with every device and can make Windows unstable. It includes the CamCheck webcam preview tool in `USBDRV\FREE\tools\camcheck\`. |
+| `xhci98-<version>-free.zip` | Adds the free USB class drivers (audio, webcam, Ethernet, printing and more) from [usb-wdm-free](https://github.com/yeokm1/usb-wdm-free) in `USBDRV\FREE\`. Experimental: they may not work with every device and can make Windows unstable. It includes the CamCheck webcam preview tool in `USBDRV\FREE\tools\camcheck\`. |
 | `xhci98-<version>-nonfree.zip` | Adds the makers' Ethernet, HID and serial drivers from [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) in `USBDRV\NONFREE\`, not this project's work. Wi-Fi drivers are not in this download. Get them from the [usb-wdm-nonfree](https://github.com/yeokm1/usb-wdm-nonfree) release. |
 
 Nothing from `USBDRV\` is installed unless you tick it on the installer's Free USB drivers or Non-free USB drivers page (each shown when the download carries that set). On Windows 98 SE and ME the free and non-free drivers are copied to the install directory, and the ones ticked are also added to the hardware wizard's search path, so Windows finds them at the first plug. That path must stay within 280 characters on 98 SE and 259 on ME, so the page greys a box that would pass it, and lists the drivers that are only copied. For those, when the hardware wizard asks for a driver, point it at the package's folder, `USBDRV\FREE\<class>\<package>\<folder>` (or `USBDRV\NONFREE\...`) in the install directory.
@@ -200,7 +204,7 @@ You can also install by hand from Device Manager ([Install by hand](#install-by-
 
 1. Unzip the whole package.
 2. Double-click `SETUP.EXE` in its top directory (on 2000 and XP as an administrator; on Vista and later answer Yes when Windows asks).
-3. Go through the pages: Welcome, Components, Free USB drivers and Non-free USB drivers (when the download carries them) and Summary. The driver's options are under Settings; the tools go to `C:\XHCI98`. Nothing changes until you click Install.
+3. Go through the pages: Welcome, Components, Thunderbolt and USB4 (when that support is ticked), Free USB drivers and Non-free USB drivers (when the download carries them) and Summary. Help, or F1, explains the page you are on. The driver's options are under Settings; the tools go to `C:\XHCI98`. Nothing changes until you click Install.
 4. Answer Windows' unsigned-driver questions. If the Finish page lists steps left for you (a Found New Hardware window, for instance), do them and run `SETUP.EXE` again. Restart if it offers.
 
 What it does:
@@ -297,6 +301,7 @@ Each value is a `DWORD` in a driver (software) key, and also in the machine-wide
 | `XhciCmBridgeNumbering` | 98 SE and ME: `1` sets up PCI bridges behind a tunnel plugged in after start (else Code 29 until restart) | `1` |
 | `XhciCmLogVerbosity` | The Thunderbolt driver's log level, read by the USB Tree (`0` to `4`) | `2` |
 | `XhciCmLogDebugView` | The Thunderbolt driver's log sent to DebugView as well | `0` |
+| `XhciCmNet` | `1` turns on [Thunderbolt networking](#thunderbolt-networking) | `0` |
 
 [docs/using/tuning.md](docs/using/tuning.md) has every value of both drivers, its range and its effect, including polling periods, interrupt moderation, controller-fault handling, the per-controller fixes, the Linux-derived controller quirks and the `XhciCm*` values; the release notes describe [the `XhciCm*` values](docs/using/release-notes.md#the-connection-managers-registry-values) in full.
 
@@ -379,8 +384,8 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - A drive attached during the install or update appears in Safely Remove Hardware only after a restart or a replug.
   - Windows 2000 to 7 with a USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
   - A dual-mode NVMe enclosure (USB4 or Thunderbolt, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
-  - Windows 2000 and XP: the first time a dock or an enclosure with a switch is plugged in, its devices may stop and start again once, a few seconds after it is plugged in (after its Found New Hardware windows are answered), while xHCI98 sets up its PCI Express ports. If a drive behind it is already in use, unplug it safely and plug it in again instead.
-  - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller (on 98 SE and ME, and on 2000 and XP unless xHCI98 builds the computer's USB4 tunnels itself, where the unplug is normally handled). Otherwise Windows may never finish removing the dock: it is not found again when plugged back, and Windows does not shut down.
+  - Windows 2000, XP and XP x64: the first time a dock or an enclosure with a switch is plugged in, its devices may stop and start again once, a few seconds after it is plugged in (after its Found New Hardware windows are answered), while xHCI98 sets up its PCI Express ports. If a drive behind it is already in use, unplug it safely and plug it in again instead. The first NVMe enclosure plugged in brings two Found New Hardware wizards: finish the first (it finds no driver), then follow the second, "Stor98 Storage Controller for NVMe SSDs", to the end.
+  - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller (on 98 SE and ME, on Vista and 7 with a Thunderbolt 3 controller, and on 2000 and XP unless xHCI98 builds the computer's USB4 tunnels itself, where the unplug is normally handled). Otherwise Windows may never finish removing the dock: it is not found again when plugged back, and Windows does not shut down.
   - Windows 2000 with the "Standard PC" computer type: an NVMe drive plugged in behind the tunnel after the start works, but runs polled. Drives attached at power-on are not affected; other non-ACPI computer types are untested ([issue 19](docs/issues/19-w2k-standard-pc-hot-plug-interrupt.md)).
 - **Controllers**
   - Disabling a controller the driver had to close off hangs (very rare). Restart instead.
