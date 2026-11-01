@@ -6300,10 +6300,9 @@ const INST_PAGE_TEXT instPageTexts[] = {
     { INST_PT_TBNET, "Thunderbolt networking", 284, 10 },
     /* Record 35 section 9.1: what it does, with no testing status. */
     { INST_PT_TBNET_T,
-      "A network connection to another computer over a Thunderbolt or "
-      "USB4 cable: it reaches this one as over any network, file sharing "
-      "included. Run Setup again to turn it off.",
-      272, 24 },
+      "A network link to another computer over a Thunderbolt or USB4 "
+      "cable, file sharing included. Run Setup again to turn it off.",
+      272, 16 },
     { INST_PT_TRAY, "Start the xHCI98 USB Tree (tray icon) at login", 270,
       10 },
     /* Task 43.27: a box of its own in the place of the tray box's

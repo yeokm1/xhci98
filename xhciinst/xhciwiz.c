@@ -202,6 +202,7 @@ static int netShown;            /* the gate                                */
 static int netOpen;             /* the package carries the network driver  */
 static int netChoice;           /* ticked                                  */
 static int netChanged;          /* changed on the page, the plan owed       */
+static int tbtNoteEmpty = 1;    /* the approval's note says nothing         */
 static int pfwOwn;
 static int restageHere;         /* the store trap found: the row open      */
 static int restageChoice;
@@ -1374,8 +1375,11 @@ static int tbt_shown(int id)
     case IDC_T_APPR1_T:
     case IDC_T_APPR0:
     case IDC_T_APPR0_T:
-    case IDC_T_APPR_NOTE:
         return tbt_approve_row() >= 0;
+    case IDC_T_APPR_NOTE:
+        /* No room taken when it says nothing (the networking row below
+         * needs it). */
+        return tbt_approve_row() >= 0 && !tbtNoteEmpty;
     case IDC_T_NET:
     case IDC_T_NET_T:
         return INST_TBNET_WIRED && netShown;
@@ -2907,6 +2911,7 @@ static void tbt_approve_fill(HWND dlg)
                     sizeof(note) - strlen(note) - 1);
         }
         SetDlgItemTextA(dlg, IDC_T_APPR_NOTE, note);
+        tbtNoteEmpty = note[0] == '\0';
     }
     EnableWindow(GetDlgItem(dlg, IDC_T_APPR1), !r->Greyed);
     EnableWindow(GetDlgItem(dlg, IDC_T_APPR0), !r->Greyed);
@@ -6598,9 +6603,10 @@ static void st_tbt(HWND parent)
     }
     {
         /* Task 45.59 (record 35 section 9.5): the networking box and its
-         * sentence, every other row shown too and both notes said, the
-         * page's tallest form; then greyed where the package carries no
-         * network driver. */
+         * sentence, every other row shown too and the new-install note
+         * said, the page's tallest common form (the two notes together
+         * need controllers that differ as well); then greyed where the
+         * package carries no network driver. */
         int sNetShown = netShown;
         int sNetOpen = netOpen;
         int sNetChoice = netChoice;
@@ -6611,6 +6617,7 @@ static void st_tbt(HWND parent)
         netChoice = 1;
         s98Have = 1;
         pfwShown = 1;
+        rows[0].Same = 1;
         tbt_fill(d);
         st((GetWindowLongA(GetDlgItem(d, IDC_T_NET), GWL_STYLE) &
             WS_VISIBLE) == (INST_TBNET_WIRED ? WS_VISIBLE : 0) &&

@@ -1947,10 +1947,10 @@ is one constant in the installer, `INST_TBNET_WIRED`, 0 in this draft:
 *Wired* (draft 60, task 45.59 step S11; record 35 section 9.5, which is
 the authority for what the engine does). `INST_TBNET_WIRED` is 1. The
 row is the box and a sentence under it (`IDC_T_NET`, `IDC_T_NET_T`;
-`INST_PT_TBNET_T`: "A network connection to another computer over a
-Thunderbolt or USB4 cable: it reaches this one as over any network, file
-sharing included. Run Setup again to turn it off."), stacked with the
-page's other rows. The window reads its first state from the engine
+`INST_PT_TBNET_T`: "A network link to another computer over a Thunderbolt
+or USB4 cable, file sharing included. Run Setup again to turn it off."),
+stacked with the page's other rows; the approval's note takes no room
+when it says nothing. The window reads its first state from the engine
 (`inst_eng_net_state`: shown, open where the family folder carries
 `cm\tbnet\`'s driver for this system, first a switch's or the value in
 force's), and the page's Next and Back hand a changed box to the engine
@@ -1962,8 +1962,8 @@ restart)", "on, as it is" or "left out". `/tbnet` needs `/thunderbolt`
 or `/cmonly`, as `/stor98` does, and is refused where the package
 carries no network driver for the system; `/notbnet` stands alone. The
 page's Help gains a paragraph for the box. The window's `/selftest`
-shows the row in the page's tallest form (every row shown, both notes
-said) and holds the sentence whole and the rows above the page's foot,
+shows the row in the page's tallest common form (every row shown, the
+new-install note said) and holds the sentence whole and the rows above the page's foot,
 then greys the box for a package without the driver.
 
 What the box writes is decided by one pure function, written and
