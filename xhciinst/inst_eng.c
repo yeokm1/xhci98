@@ -127,10 +127,11 @@ static INST_FRONT front;
 
 /* The INF slots: file, service, systems. */
 static const char *const instInfFile[INST_INF_COUNT] = {
-    "xhci98.inf", "xhciuas.inf", "xhcicm.inf", "xhcicmf.inf", "stor98.inf"
+    "xhci98.inf", "xhciuas.inf", "xhcicm.inf", "xhcicmf.inf", "stor98.inf",
+    "xhcinet.inf"
 };
 static const char *const instInfService[INST_INF_COUNT] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcicm", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "xhcicm", "stor98", "xhcinet"
 };
 
 /* ---- the routines, looked up at run time ------------------------------------- */
@@ -233,11 +234,12 @@ static int is_controller(const DEVREC *d);
 static const char *first_hw(const DEVREC *d);
 
 /* The service groups of record 23 section 5.4. */
-#define INST_GROUPS 4
+#define INST_GROUPS 5
 static const char *const groupService[INST_GROUPS] = {
-    "xhci98", "xhciuas", "xhcicm", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "stor98", "xhcinet"
 };
 #define INST_GROUP_S98 3
+#define INST_GROUP_NET 4    /* Thunderbolt networking (record 35 s. 9.5) */
 static int groupVerdict[INST_GROUPS];
 
 /* The devices a step changed, by instance id, for the results check. */
@@ -358,6 +360,19 @@ static char s98StagedInf[INST_PATH_CHARS]; /* NT: the staged stor98.inf,
 static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
                                component in the run                       */
 static int s98Want;         /* ticked, or /stor98                          */
+/* Thunderbolt networking (design record 35 section 9.5): an INF slot of
+ * its own, in the run only while the Thunderbolt support is and the box's
+ * final state is 1 (netInclude). */
+static char *netText;       /* xhcinet.inf, read when the package has it  */
+static int haveNet;         /* the family folder carries it for this system */
+static int netInclude;      /* in the run                                  */
+static int netBox = -1;     /* the box as the user left it, -1 untouched   */
+static int netStaged;       /* NT: xhcinet.inf staged by this run          */
+static void net_set(void);
+static void net_write(void);
+static void net_question(void);
+static void net_decide(INST_TBNET *d);
+static const char *net_plan_text(void);
 /* S98VSD.VXD (design record 30 section 7). */
 static int haveVsd;         /* the flavour directory carries S98VSD.VXD   */
 static char vsdHash[65];    /* its SHA-256 (98 SE and ME)                 */
@@ -1191,6 +1206,22 @@ static void dev_driver_values(DEVREC *d)
                 *dot = '\0';
             }
             inst_copy(d->Service, text, sizeof(d->Service));
+        } else {
+            /* Thunderbolt networking's adapter, which NDIS.VXD loads
+             * (DevLoader *ndis): its miniport is the driver key's
+             * DeviceVxDs, xhcinet.sys (record 35 section 9.5). Read for
+             * that name alone, so another network adapter's VxD names no
+             * service here; unreadable on the adapter's own id is unknown
+             * ownership, as above. */
+            r = reg_text3(HKEY_LOCAL_MACHINE, path, "DeviceVxDs", text,
+                          sizeof(text));
+            if (r > 0 && inst_eq(text, "xhcinet.sys")) {
+                inst_copy(d->Service, "xhcinet", sizeof(d->Service));
+            } else if (r < 0 &&
+                       inst_msz_has(d->Hw, d->HwBytes, "XHCICM\\TBNET")) {
+                out("  unreadable: the driver of %s\n", d->Id);
+                walkErrors++;
+            }
         }
     }
 }
@@ -1715,7 +1746,8 @@ static int group_of(const DEVREC *d)
 static int group_of_inf(int inf)
 {
     return inf == INST_INF_XHCI ? 0 : inf == INST_INF_UAS ? 1 :
-           inf == INST_INF_S98 ? INST_GROUP_S98 : 2;
+           inf == INST_INF_S98 ? INST_GROUP_S98 :
+           inf == INST_INF_NET ? INST_GROUP_NET : 2;
 }
 
 /* The version an INF's devices are measured against: the package's for
@@ -1750,6 +1782,24 @@ static void group_binary(int g, char *path, size_t cap)
         join(path, cap, win, "IOSUBSYS\\stor98.mpd");
         return;
     }
+    if (g == INST_GROUP_NET) {
+        /* The image this system loads (record 35 section 9.5): on 98 SE
+         * and ME xhcinet.inf's dirid 11, System; on 8 to 10 the NDIS 6.20
+         * one. */
+        if (!envNow.Nt) {
+            if (GetSystemDirectoryA(win, sizeof(win)) == 0) {
+                path[0] = '\0';
+                return;
+            }
+            join(path, cap, win, "xhcinet.sys");
+            return;
+        }
+        join(path, cap, win, "System32\\Drivers");
+        join(path, cap, path, (envNow.Major > 6 ||
+                               (envNow.Major == 6 && envNow.Minor >= 2)) ?
+                              "xhcinet6.sys" : "xhcinet.sys");
+        return;
+    }
     inst_copy(name, groupService[g], sizeof(name));
     strcat(name, ".sys");
     join(path, cap, win, "System32\\Drivers");
@@ -1773,6 +1823,12 @@ static void group_verdicts(void)
         repair = 0;
         newer = 0;
         unknown = 0;
+        if (g == INST_GROUP_NET && !netInclude) {
+            /* The box unticked: an installed adapter is not part of the
+             * run (record 35 section 9.5). */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         if (g == 2 && haveCm && !tbInclude) {
             /* A No to the Thunderbolt question: the installed xhcicm is
              * not part of the run, so no verdict on it (section 8.5). */
@@ -2478,6 +2534,10 @@ static int check_package(void)
             infText[k] = NULL;
             continue;
         }
+        if (k == INST_INF_NET && !INST_TBNET_WIRED) {
+            infText[k] = NULL;
+            continue;
+        }
         pr = inst_pkg_rel(pkgFam, infRel[k]);
         inst_copy(pkgRel[k], pr != NULL ? pr : "", sizeof(pkgRel[k]));
         if (k == INST_INF_CMF && !envNow.Nt) {
@@ -2494,8 +2554,10 @@ static int check_package(void)
         }
         join(path, sizeof(path), pkgDir, pr);
         infText[k] = read_file(path, NULL);
-        if (k >= INST_INF_CM) {
+        if (k == INST_INF_CM || k == INST_INF_CMF) {
             cmFiles += infText[k] != NULL;
+        } else if (k == INST_INF_NET) {
+            /* Counted apart from the connection manager's (below). */
         } else if (infText[k] == NULL) {
             return refuse("a file of the package is missing or unreadable: ",
                           path);
@@ -2529,6 +2591,40 @@ static int check_package(void)
     if (!haveCm) {
         out("This package carries no Thunderbolt or USB4 driver "
             "(xhcicm.sys); going on without it.\n\n");
+    }
+    {
+        /* Thunderbolt networking (record 35 section 9.5): cm\tbnet\'s INF
+         * and the images this system installs from it (xhcinet.sys; on NT
+         * xhcinet6.sys too; on x64 its catalog), all or none. */
+        int netFiles = infText[INST_INF_NET] != NULL;
+        int netWant = 2 + (envNow.Nt ? 1 : 0) +
+                      (INST_MY_ARCH == INST_ARCH_AMD64 ? 1 : 0);
+        netFiles += pkg_path("xhcinet.sys", path, sizeof(path)) &&
+                    file_exists(path, NULL);
+        if (envNow.Nt) {
+            netFiles += pkg_path("xhcinet6.sys", path, sizeof(path)) &&
+                        file_exists(path, NULL);
+        }
+        if (INST_MY_ARCH == INST_ARCH_AMD64 &&
+            pkg_path("xhcinet.cat", path, sizeof(path)) &&
+            file_exists(path, NULL)) {
+            netFiles++;
+            pkg_mark("xhcinet.cat");
+        }
+        if (netFiles != 0 && netFiles != netWant) {
+            return refuse("the package holds part of Thunderbolt "
+                          "networking (cm\\tbnet\\xhcinet.inf and the images "
+                          "it names go together).", NULL);
+        }
+        haveNet = INST_TBNET_WIRED && haveCm && netFiles == netWant;
+        netText = haveNet ? infText[INST_INF_NET] : NULL;
+        if (!haveNet) {
+            infText[INST_INF_NET] = NULL;
+        }
+        if (opts.TbNet && !haveNet) {
+            return refuse("/tbnet: this package carries no Thunderbolt "
+                          "networking driver for this system.", NULL);
+        }
     }
     if (!inst_ver_parse(XHCIINST_VERSION, pkgVersion)) {
         return refuse("the tool's own version does not parse.", NULL);
@@ -5274,6 +5370,13 @@ static int package_files(PKG_EACH each, void *ctx)
              inst_eq(base, "xhcicmf.cat"))) {
             continue;
         }
+        /* Thunderbolt networking only when in the run (record 35 section
+         * 9.5): a copy of its INF on DevicePath or in the store would
+         * install it unasked. */
+        if ((!netInclude || groupVerdict[INST_GROUP_NET] != INST_GROUP_OK) &&
+            !tbTagAll && inst_starts(base, "xhcinet")) {
+            continue;
+        }
         if (!each(rel, ctx)) {
             return 0;
         }
@@ -6642,6 +6745,9 @@ static int stage_nt(void)
         }
         if (k == INST_INF_CM) {
             tbStaged = 1;
+        }
+        if (k == INST_INF_NET) {
+            netStaged = 1;
         }
         if (k == INST_INF_S98) {
             inst_copy(s98StagedInf, dest, sizeof(s98StagedInf));
@@ -8722,6 +8828,7 @@ static int run_install_nt(void)
     }
     write_values();
     s98_write_values();
+    net_write();
     /* Design record 32 section 11: XHCIPFW.SYS on 2000 and the 32-bit Vista
      * and 7; on 8 to 10 an earlier one of this installer's removed. */
     pfw_run(pfw_mode(0));
@@ -10003,6 +10110,7 @@ static void helper_installs(void)
 
     if (!pass_any(INST_INF_XHCI, -1) && !pass_any(INST_INF_UAS, -1) &&
         !pass_any(INST_INF_CM, -1) && !pass_any(INST_INF_S98, -1) &&
+        !pass_any(INST_INF_NET, -1) &&
         !(storCopyOk && (stor_any(INST_STOR_KIND_BULK) ||
                          stor_any(INST_STOR_KIND_UNIT)))) {
         return;
@@ -10547,6 +10655,7 @@ static int run_install_9x(void)
     } else {
         write_values();
         s98_write_values();
+        net_write();
     }
     tray_install();
     own_install();
@@ -11495,7 +11604,7 @@ static int remove_own_infs(void)
     return ok;
 }
 static const char *const instServices[] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi"
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "xhcinet"
 };
 
 /* The package's services this run removed or found absent (the
@@ -11503,7 +11612,7 @@ static const char *const instServices[] = {
 static const char *svcGone[8];
 static int svcGoneCount;
 static const char *const cddbOwn[] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98", "xhcinet"
 };
 static int svc_state(const char *name);
 
@@ -11646,9 +11755,16 @@ static int cddb_service_scrub(void)
     return ok;
 }
 static const char *const instFiles[] = {
-    "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys"
+    "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys",
+    "xhcinet.sys"
 };
-#define INST_SVC_COUNT 5
+/* A service's second image, deleted on the same terms: xhcinet's NDIS
+ * 6.20 one, which 8 to 10 load under the one service (record 35 section
+ * 9.5). */
+static const char *const instFiles2[] = {
+    NULL, NULL, NULL, NULL, NULL, "xhcinet6.sys"
+};
+#define INST_SVC_COUNT 6
 
 /* Section 9.2 steps 5 and 6. */
 static void remove_services_and_files(void)
@@ -11659,6 +11775,7 @@ static void remove_services_and_files(void)
     char sys[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     int i;
+    int f;
     int fileOk;
     PFN_MOVEEX moveEx = move_ex();
 
@@ -11729,27 +11846,33 @@ static void remove_services_and_files(void)
         if (!fileOk || sys[0] == '\0') {
             continue;
         }
-        join(path, sizeof(path), sys, "drivers");
-        join(path, sizeof(path), path, instFiles[i]);
-        if (!file_exists(path, NULL)) {
-            continue;
-        }
-        out("Deleting %s ... ", path);
-        if (opts.List) {
-            out("(/list)\n");
-            continue;
-        }
-        if (DeleteFileA(path)) {
-            out("done.\n");
-            flagChanged = 1;
-        } else if (moveEx != NULL &&
-                   moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
-            out("in use; deleted at the restart.\n");
-            flagRestart = 1;
-            flagChanged = 1;
-        } else {
-            out("FAILED (error %lu).\n", (unsigned long)GetLastError());
-            flagFailed = 1;
+        for (f = 0; f < 2; f++) {
+            const char *fn = f == 0 ? instFiles[i] : instFiles2[i];
+            if (fn == NULL) {
+                continue;
+            }
+            join(path, sizeof(path), sys, "drivers");
+            join(path, sizeof(path), path, fn);
+            if (!file_exists(path, NULL)) {
+                continue;
+            }
+            out("Deleting %s ... ", path);
+            if (opts.List) {
+                out("(/list)\n");
+                continue;
+            }
+            if (DeleteFileA(path)) {
+                out("done.\n");
+                flagChanged = 1;
+            } else if (moveEx != NULL &&
+                       moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+                out("in use; deleted at the restart.\n");
+                flagRestart = 1;
+                flagChanged = 1;
+            } else {
+                out("FAILED (error %lu).\n", (unsigned long)GetLastError());
+                flagFailed = 1;
+            }
         }
     }
     if (scm != NULL) {
@@ -13445,7 +13568,8 @@ static void un9x_consider(const char *id)
         return;
     }
     dev_driver_values(&d);
-    if (!inst_own_service(d.Service) && inst_bus_id(id) == 0) {
+    if (!inst_own_service(d.Service) && inst_bus_id(id) == 0 &&
+        !inst_cm_child_id(id)) {
         return;
     }
     if (un9xCount >= INST_MAX_UN9X) {
@@ -13861,9 +13985,13 @@ static void files_9x(int list)
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return;
     }
-    for (i = 0; i < INST_SVC_COUNT; i++) {
-        join(path, sizeof(path), win, "SYSTEM32\\DRIVERS");
-        join(path, sizeof(path), path, instFiles[i]);
+    for (i = 0; i <= INST_SVC_COUNT; i++) {
+        /* The last: xhcinet.inf's 98 SE and ME copy goes to dirid 11,
+         * SYSTEM, not SYSTEM32\DRIVERS (record 35 section 9.5). */
+        const char *fn = i < INST_SVC_COUNT ? instFiles[i] : "xhcinet.sys";
+        join(path, sizeof(path), win, i < INST_SVC_COUNT ?
+             "SYSTEM32\\DRIVERS" : "SYSTEM");
+        join(path, sizeof(path), path, fn);
         if (!file_exists(path, NULL)) {
             continue;
         }
@@ -13875,8 +14003,9 @@ static void files_9x(int list)
         if (DeleteFileA(path)) {
             char rec[80];
             DWORD t;
-            int placed = reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY,
-                                  instFiles[i], rec, sizeof(rec), &t);
+            int placed = i < INST_SVC_COUNT &&
+                         reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY,
+                                  fn, rec, sizeof(rec), &t);
             flagChanged = 1;
             out("Deleted %s%s.\n", path,
                 placed ? " (placed there by this installer)" : "");
@@ -13884,7 +14013,7 @@ static void files_9x(int list)
                 HKEY pk;
                 if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0,
                                   KEY_SET_VALUE, &pk) == ERROR_SUCCESS) {
-                    RegDeleteValueA(pk, instFiles[i]);
+                    RegDeleteValueA(pk, fn);
                     RegCloseKey(pk);
                 }
             }
@@ -16068,6 +16197,334 @@ static void s98_set(void)
     }
 }
 
+/* ---- Thunderbolt networking (design record 35 sections 9.1, 9.2, 9.5) -- */
+
+/* A present NHI this package's connection manager runs: its driver key is
+ * where XhciCmNet goes (record 35 section 9.1). */
+static int net_nhi(const DEVREC *d)
+{
+    return d->Present && inst_eq(d->Service, "xhcicm") && d->Driver[0] != '\0';
+}
+
+/* XhciCmNet in force, as the connection manager reads it (cm_reg.c
+ * cmQuery): Services\USB first, then the NHIs' own keys. A DWORD 1 is 1,
+ * any other value 0 (the CM refuses it and its default 0 stands). *mwHas:
+ * Services\USB holds one, in any type (a zero-length REG_NONE is absent,
+ * inst_mw_reading). Returns 1, 0, or -1 when none is set. */
+static int net_in_force(int *mwHas)
+{
+    HKEY k;
+    DWORD t = REG_NONE;
+    BYTE data[16];
+    DWORD n = sizeof(data);
+    DWORD v;
+    INST_U32 in;
+    char path[INST_PATH_CHARS];
+    LONG r;
+    int got;
+    int any = -1;
+    int i;
+
+    *mwHas = 0;
+    if (stScreens) {
+        return -1;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, KEY_QUERY_VALUE, &k);
+    if (r == ERROR_SUCCESS) {
+        memset(data, 0, sizeof(data));
+        r = RegQueryValueExA(k, "XhciCmNet", NULL, &t, data, &n);
+        RegCloseKey(k);
+        if (r == ERROR_MORE_DATA) {
+            *mwHas = 1;
+            return 0;
+        }
+        if (r == ERROR_SUCCESS) {
+            got = inst_mw_reading(1, (INST_U32)t, (INST_U32)n,
+                                  inst_get32(data, 0), 0, &in);
+            if (got != 0) {
+                *mwHas = 1;
+                return (got == 1 && in == 1UL) ? 1 : 0;
+            }
+        } else if (r != ERROR_FILE_NOT_FOUND) {
+            *mwHas = 1;
+            return 0;
+        }
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        *mwHas = 1;
+        return 0;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (!net_nhi(&devs[i])) {
+            continue;
+        }
+        driver_key_path(&devs[i], path, sizeof(path));
+        if (reg_dword(HKEY_LOCAL_MACHINE, path, "XhciCmNet", &v)) {
+            if (v == 1UL) {
+                return 1;
+            }
+            any = 0;
+        }
+    }
+    return any;
+}
+
+static int net_nhi_count(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < devCount; i++) {
+        n += net_nhi(&devs[i]);
+    }
+    return n;
+}
+
+/* The box's decision as things stand (inst_tbnet_decide; record 26
+ * section 5.3.5). A host interface counts as present when one is found,
+ * bound yet or not (tbNhiPresent), so a first install writes to its key
+ * once the run has installed it. */
+static void net_decide(INST_TBNET *d)
+{
+    int mwHas;
+    int inForce = net_in_force(&mwHas);
+    int sw = opts.TbNet ? 1 : opts.NoTbNet ? 0 : -1;
+
+    inst_tbnet_decide(INST_TBNET_WIRED, haveNet, sw, inForce, netBox,
+                      tbNhiPresent || net_nhi_count() > 0, mwHas, d);
+}
+
+/* Networking in the run or out of it: in only while the Thunderbolt
+ * support is and the box's final state is 1. */
+static void net_set(void)
+{
+    INST_TBNET d;
+
+    netInclude = 0;
+    if (haveNet && tbInclude) {
+        net_decide(&d);
+        netInclude = d.Enabled && d.Value == 1UL;
+    }
+    infText[INST_INF_NET] = netInclude ? netText : NULL;
+    infIds[INST_INF_NET].Count = 0;
+    if (netInclude) {
+        inst_inf_models(netText, &envNow, &infIds[INST_INF_NET]);
+    }
+}
+
+/* What the run does with XhciCmNet, for the Summary; NULL when the box is
+ * not shown or the Thunderbolt support is left out. */
+static const char *net_plan_text(void)
+{
+    INST_TBNET d;
+
+    if (!INST_TBNET_WIRED || !haveCm || !tbInclude) {
+        return NULL;
+    }
+    net_decide(&d);
+    if (!d.Enabled) {
+        return NULL;
+    }
+    if (d.Write) {
+        return d.Value == 1UL ?
+               "Thunderbolt networking: turned on (the network adapter "
+               "appears after the restart)" :
+               "Thunderbolt networking: turned off (the network adapter "
+               "goes after the restart)";
+    }
+    return d.Value == 1UL ? "Thunderbolt networking: on, as it is" :
+                            "Thunderbolt networking: left out";
+}
+
+/* Ready for the adapter: on NT staged by this run; on 98 SE and ME in the
+ * local copy on DevicePath (record 35 section 9.5). */
+static int net_ready(const char **why)
+{
+    char path[INST_PATH_CHARS];
+
+    *why = NULL;
+    if (groupVerdict[INST_GROUP_NET] != INST_GROUP_OK) {
+        /* An installed xhcinet.sys newer or unreadable: refused as its
+         * group is, so no new adapter binds from this package. */
+        *why = "the network driver installed now is newer or unreadable";
+        return 0;
+    }
+    if (envNow.Nt) {
+        if (!netStaged) {
+            *why = "its driver was not staged (see above)";
+        }
+        return netStaged;
+    }
+    join(path, sizeof(path), srcDir, "xhcinet.inf");
+    if (!file_exists(path, NULL)) {
+        *why = "its driver is not in the install directory";
+        return 0;
+    }
+    join(path, sizeof(path), srcDir, "xhcinet.sys");
+    if (!file_exists(path, NULL)) {
+        *why = "its driver is not in the install directory";
+        return 0;
+    }
+    return 1;
+}
+
+static int net_write_one(const char *path, DWORD val)
+{
+    HKEY k;
+    LONG w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, path, 0, NULL, 0,
+                             KEY_SET_VALUE, NULL, &k, NULL);
+
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, "XhciCmNet", 0, REG_DWORD, (const BYTE *)&val,
+                           sizeof(val));
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("XhciCmNet could not be written to HKLM\\%s (error %ld).\n", path,
+            (long)w);
+        flagFailed = 1;
+        return 0;
+    }
+    logonly("  wrote HKLM\\%s\\XhciCmNet = %lu\n", path, (unsigned long)val);
+    return 1;
+}
+
+/* After the installs and the table's values (record 35 section 9.5): the
+ * box's XhciCmNet into each present NHI's driver key and, where decided,
+ * Services\USB; a 1 only once the driver is ready for the adapter. */
+static void net_write(void)
+{
+    INST_TBNET d;
+    const char *why;
+    char path[INST_PATH_CHARS];
+    int nhi = net_nhi_count();
+    int wrote = 0;
+    int mwHas;
+    int inForce;
+    int sw = opts.TbNet ? 1 : opts.NoTbNet ? 0 : -1;
+    int i;
+    DWORD val;
+
+    if (!INST_TBNET_WIRED || opts.List) {
+        return;
+    }
+    inForce = net_in_force(&mwHas);
+    if (!haveNet || !tbInclude) {
+        /* Networking not in the run: /notbnet still turns off a 1 in
+         * force (a silent update without /thunderbolt, record 35 section
+         * 9.5), and nothing else is written. */
+        if (!opts.NoTbNet || inForce != 1) {
+            return;
+        }
+        sw = 0;
+    }
+    inst_tbnet_decide(1, 1, sw, inForce, netBox, nhi > 0, mwHas, &d);
+    logonly("tbnet: in force %d, mw %d, nhi %d, box %d, write %d value %lu "
+            "nhi %d mw %d\n", inForce, mwHas, nhi, netBox, d.Write,
+            (unsigned long)d.Value, d.ToNhi, d.ToMw);
+    if (!d.Write) {
+        out("Thunderbolt networking stays %s.\n", d.Value ? "on" : "off");
+        return;
+    }
+    if (d.Value == 1UL && !net_ready(&why)) {
+        out("Thunderbolt networking was not turned on: %s. Run the installer "
+            "again.\n", why);
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "Thunderbolt networking not turned on");
+        return;
+    }
+    val = (DWORD)d.Value;
+    if (d.ToNhi) {
+        for (i = 0; i < devCount; i++) {
+            if (net_nhi(&devs[i])) {
+                driver_key_path(&devs[i], path, sizeof(path));
+                wrote += net_write_one(path, val);
+            }
+        }
+    }
+    /* No NHI key to write after all (an install left for a wizard): the
+     * machine-wide key, which the CM reads first. */
+    if (d.ToMw || (d.ToNhi && wrote == 0)) {
+        wrote += net_write_one(INST_MW_KEY, val);
+    }
+    if (wrote == 0) {
+        return;
+    }
+    flagChanged = 1;
+    flagRestart = 1;
+    step(INST_STEP_DONE, "Thunderbolt networking turned %s",
+         val ? "on" : "off");
+    out("Thunderbolt networking turned %s (XhciCmNet %lu): the network "
+        "adapter %s after the restart.\n", val ? "on" : "off",
+        (unsigned long)val, val ? "appears" : "goes");
+}
+
+/* The console's question (record 35 sections 9.2 and 9.5): after the
+ * Thunderbolt question and its children. Enter and /yes give the box's
+ * first state: N on a new install, the value in force on an update. */
+static void net_question(void)
+{
+    INST_TBNET d;
+    int asked;
+    int r;
+    int k;
+    char line[16];
+    char text[1024];
+
+    if (!INST_TBNET_WIRED || !haveCm || !tbInclude) {
+        net_set();
+        return;
+    }
+    net_decide(&d);
+    if (!d.Enabled) {
+        out("Thunderbolt networking: this package carries no network driver "
+            "for this system.\n\n");
+        net_set();
+        return;
+    }
+    out("Thunderbolt networking\n");
+    out("  A network connection to another computer over a Thunderbolt or "
+        "USB4 cable:\n  the other computer then reaches this one as over any "
+        "network, file sharing\n  included. Run the installer again to turn "
+        "it off.\n");
+    asked = !opts.Yes && !opts.List && !opts.TbNet && !opts.NoTbNet;
+    r = d.First;
+    if (asked) {
+        inst_yesno_question(text, sizeof(text),
+                            "Install Thunderbolt networking?", "turn it on",
+                            "leave it off", d.First);
+        for (k = 0;; k++) {
+            if (!ask(INST_Q_TBNET, k == 0 ? text : d.First ? "  Type Y or N, "
+                     "or Enter for [Y]: " : "  Type Y or N, or Enter for "
+                     "[N]: ", k > 0, 0, d.First, NULL, line, sizeof(line))) {
+                r = d.First;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, d.First);
+            if (r >= 0) {
+                break;
+            }
+        }
+    } else if (opts.TbNet) {
+        out("  /tbnet: turned on without asking.\n");
+    } else if (opts.NoTbNet) {
+        out("  /notbnet: left off without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked:\n    Y  turn it on\n"
+            "    N  leave it off\n  Enter would give [%s].\n",
+            d.First ? "Y" : "N");
+    } else {
+        out("  /yes: %s (/tbnet turns it on, /notbnet off).\n",
+            d.First ? "Y, as it is now" : "N");
+    }
+    out("\n");
+    netBox = r ? 1 : 0;
+    net_set();
+    plan();
+    logonly("tbnet: asked %d, chosen %d, include %d\n", asked, netBox,
+            netInclude);
+}
+
 static void s98_apply(int include)
 {
     s98Want = include;
@@ -16109,6 +16566,7 @@ static void tb_apply(int include)
     }
     tbInclude = include && haveCm;
     s98_set();
+    net_set();
     plan();
 }
 
@@ -30649,7 +31107,10 @@ void inst_eng_usage(void)
 "  /xhcipfw      98 SE to 32-bit 7, with /thunderbolt or /cmonly: install\n"
 "                XHCIPFW (PCI windows above 4 GB closed at each start) unasked\n"
 "  /noxhcipfw    leave XHCIPFW out\n"
-"  /nouas      leave the UAS disk driver (xhciuas.sys) out of this run\n"
+"  /tbnet        with /thunderbolt or /cmonly: turn Thunderbolt networking\n"
+"                on unasked (a network connection to another computer)\n"
+"  /notbnet      turn Thunderbolt networking off\n"
+"  /nouas     leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the install folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
@@ -31746,6 +32207,28 @@ static int mw_values_remove(void)
         flagFailed = 1;
         return 0;
     }
+    /* XhciCmNet, written by the networking box and not a row of the table
+     * (record 35 section 9.5), by name. */
+    if (INST_TBNET_WIRED) {
+        if (opts.List) {
+            DWORD t;
+            if (RegQueryValueExA(k, "XhciCmNet", NULL, &t, NULL, NULL) ==
+                ERROR_SUCCESS) {
+                out("(/list) the machine-wide XhciCmNet would be deleted.\n");
+            }
+        } else {
+            r = RegDeleteValueA(k, "XhciCmNet");
+            if (r == ERROR_SUCCESS) {
+                flagChanged = 1;
+                out("The machine-wide XhciCmNet was deleted.\n");
+            } else if (r != ERROR_FILE_NOT_FOUND) {
+                out("The machine-wide XhciCmNet could not be deleted (error "
+                    "%ld).\n", (long)r);
+                flagFailed = 1;
+                ok = 0;
+            }
+        }
+    }
     for (v = 0; v < instValueCount; v++) {
         if (instValues[v].Loc != INST_LOC_MW) {
             continue;   /* goes with the mark service's key */
@@ -32181,6 +32664,7 @@ void inst_eng_tb_question(void)
     pfw_question();
     s98_question();
     vsd_question();
+    net_question();
     stor_question();
     other_question();
 }
@@ -32229,6 +32713,29 @@ void inst_eng_tb_choose(int include)
 {
     tb_apply(include);
     logonly("thunderbolt: chosen %d (present %d)\n", tbInclude, tbNhiPresent);
+}
+
+void inst_eng_net_state(int *shown, int *enabled, int *first)
+{
+    INST_TBNET d;
+
+    net_decide(&d);
+    *shown = d.Shown;
+    *enabled = d.Enabled;
+    *first = d.First;
+}
+
+void inst_eng_net_choose(int ticked)
+{
+    netBox = ticked ? 1 : 0;
+    net_set();
+    plan();
+    logonly("tbnet: chosen %d, include %d\n", netBox, netInclude);
+}
+
+const char *inst_eng_net_plan(void)
+{
+    return net_plan_text();
 }
 
 static int planResult = -1;

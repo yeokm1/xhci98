@@ -1152,8 +1152,12 @@ if errorlevel 1 goto netbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhcinet.sys) ===
+call :gated -Hash -Name xhcinet.sys -Image "%NETSYS%"
+if errorlevel 1 goto netgatefail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NETSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NETALLOW%" %NETPROFILE% %GATEOPT%
+if errorlevel 1 goto netgatefail
+call :gated -Capture -Name xhcinet.sys -Image "%NETSYS%"
 if errorlevel 1 goto netgatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
@@ -1214,8 +1218,12 @@ if not exist "%NET6SYS%" goto net6buildfail
 
 echo.
 echo === import gate (%FLAVOR% xhcinet6.sys) ===
+call :gated -Hash -Name xhcinet6.sys -Image "%NET6SYS%"
+if errorlevel 1 goto net6gatefail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NET6SYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NET6ALLOW%" -GateProfile net6 %GATEOPT%
+if errorlevel 1 goto net6gatefail
+call :gated -Capture -Name xhcinet6.sys -Image "%NET6SYS%"
 if errorlevel 1 goto net6gatefail
 
 powershell -NoProfile -ExecutionPolicy Bypass -File ^

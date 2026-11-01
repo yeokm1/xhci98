@@ -40,6 +40,7 @@
 #define INST_Q_VSD          14  /* 98 SE and ME: S98VSD.VXD?               */
 #define INST_Q_OTHER        15  /* a free or non-free set: copy it, stage it? */
 #define INST_Q_PFW          16  /* XHCIPFW.VXD or XHCIPFW.SYS?             */
+#define INST_Q_TBNET        17  /* Thunderbolt networking?                 */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -136,6 +137,14 @@ void inst_eng_tb_question(void);
 int inst_eng_tb_state(int *haveCm, int *present, int *defaultYes,
                       int *installed);
 void inst_eng_tb_choose(int include);
+/* Thunderbolt networking's box (design record 35 section 9.5): *shown the
+ * gate (INST_TBNET_WIRED), *enabled the package carries the network driver
+ * for this system, *first the box's first state (a switch, else the
+ * XhciCmNet in force); the box as left, planned again; the Summary's line
+ * (NULL: none). */
+void inst_eng_net_state(int *shown, int *enabled, int *first);
+void inst_eng_net_choose(int ticked);
+const char *inst_eng_net_plan(void);
 /* 1 when Intel's Thunderbolt driver runs a controller (record 23 section
  * 8.5.1): the Thunderbolt box is then the user's, unticked until ticked. */
 int inst_eng_tb_intel(void);
