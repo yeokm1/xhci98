@@ -680,7 +680,8 @@ title; the users' reports on `3.3.0.0` read and fixed where they are
 this package's; a Driver Verifier pass on 10 x64; released as `3.4.0.0`,
 with the bench after the cut.
 
-Status: the `3.4.0.0` release, on branch `3.4.0.0`. Opened 2026-10-29 by
+Status: closed on the `3.4.0.0` cut of 2026-11-01, on branch `3.4.0.0`
+(the release commit `75b3db38`). Opened 2026-10-29 by
 the owner from "Planned work", going through every planned item one by
 one; the decisions table ("Phase 45" and "Phase 45 additions") maps the
 planned ids to its tasks and records what was kept. The tasks ran in
@@ -693,8 +694,9 @@ real-hardware bench, 45-E.1 to 45-E.15, moved to "Planned - Left by
 `3.4.0.0`" with their ids (owner, 2026-11-01); 45.1 and 45.57 were
 dropped. The owner ticked 45.15, 45.17, 45.27, 45.39, 45.40, 45.41 and
 45.56 on 2026-11-01 with their hardware (for 45.40 the user's) reading
-owed; 45.59 and 45.final stay open. The install legs are read after the
-cut on the published asset (as decision D13), a failure there a re-cut.
+owed, and 45.59 after its x64 leg on the signed release, the bench owed.
+The install legs were read on the cut's downloads (45.final), one 98 SE
+shut-down hang after the update not reproduced and released by the owner.
 Its records are `runs/run-45.md`, design records 33, 34, 35 and 36, and
 the sections of records 08, 13, 17, 20, 21, 22, 23, 26, 27, 28, 30, 31
 and 32 its items name.
