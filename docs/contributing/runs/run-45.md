@@ -8436,6 +8436,102 @@ signed with the project's test key by the owner), and with them Driver Verifier 
 on the `d0813ef5` images (their legs above ran on `5fd8b6fd`, before the
 two connection-manager changes).
 
+## 45.15 (the desktop plug): a USB4 parent plugged at the desktop after a start without it (2026-11-01)
+
+Worker w45-dock, development host A. No driver change. Code at
+`208552f9` (the `3.4.0.0` tip): the gated build `all` (x86), "BUILD +
+GATES PASSED (release qemu)" (`E:\xhci98-scratch\p45-w45-dock\build-all.log`,
+`src\pfw\build.cmd` first). Packages (`make-package.ps1`) laid into the
+family layout (`ConvertTo-FamilyLayout`), the installer and tools built
+from the same tree: release `nt-x86\xhci98.sys` `7f99e21f...`,
+`nt-x86\cm\xhcicm.sys` `b2548e31...`, `nt-x86\stor98\stor98.sys`
+`24b32e93...`; qemu `xhci98.sys` `0e01cb9a...`, `xhcicm.sys` `5ca32e53...`
+(`E:\xhci98-vm\p45\w45-dock\hashes-xf1.txt`). Emulator: the build of
+`usb4-emu` `f48fa30`'s patch (`qemu-system-x86_64.exe` `83474795...`);
+`main` `2129536` adds only the test-only `x-adapter-gone`, default off,
+unused here. Each leg a fresh overlay of the q35 base, the release
+package installed with the layout present (`RINT.BAT`, `RI9.BAT`: `INSTALL
+/console /yes /nopause /thunderbolt /stor98`), the qemu flavour's
+`xhcicm.sys` and `xhci98.sys` copied over, restarted, then started with
+no USB4 device. The parent `usb4-device ... dialect=usb4,downstream-ports=1,
+chain-power-controller=off` and its child (`parent=enc0,port=1`) plugged
+by QMP at the desktop a few seconds apart, as in "45.15 (legs)" x3 and r3.
+Evidence: `E:\xhci98-vm\p45\w45-dock\` (`w7a\`, `w9a\`, `xpa\`:
+`cmdline-<tag>.txt`, `debugcon-<tag>.log`, `serial-<tag>.log`,
+`steps.txt`, `infopci-*.txt`, screenshots; `pids.txt`).
+
+### The cause
+
+On 7 x86, not this driver's: the platform's bus numbering, the cause
+45.37 read for the Thunderbolt 3 tunnel port and 45.55 for the ASM4242
+one. A switch hot-added below a tunnel port that the firmware numbered
+with no spare buses gets secondary and subordinate bus 0, and Windows
+does not renumber the bridges above it: 7 stops the switch's upstream
+port at Code 31 (reproduced below with only the padding changed). For
+XP the same numbering was read by 45.55 on the old layout (its section's
+"The cause": the parent's switch at bus 3 with secondary bus 0); for 98
+SE it is an inference, not read. XP and 98 SE were read again here only
+on the current layout and package (XP's with 45.55's root-port
+reservation and record 33's revisions 4 and 5), where both pass.
+"45.15 (legs)" x3 and r3 ran on the emulator's layout before 2026-10-30,
+whose ASM4242 tunnel ports had no padding; on the current default
+(`usb4-asm-usp` `fw-bus-pad=48,fw-io-pad=12K,fw-mem-pad=384M`, as the
+board's firmware gives) the same plug works. The A/B is one 7 x86
+overlay with only the padding changed:
+
+| Leg | System | Layout | Read | Verdict |
+|---|---|---|---|---|
+| `w7a` a | 7 SP1 x86 | `-Usb4 asm4242`, the default padding | the parent UP, then the kid (`u4.kid.pcie.up=00010809`, UP); `info pci`: tunnel port `02:00.0` buses 4 to 20, the parent's switch `104C:8232` secondary 4, subordinate 20; the chain port classified (`cm.chain.class=00140408`), its child attached (`cm.chain.attach=01050408`); every PCI device Code 0, both NVMe on Stor98, started; D: ORICO, `fc /b` of a copied file: no differences (the second drive, a copy of the same disk image, shows no letter) | pass |
+| `w7a` b | 7 SP1 x86 | the same overlay, `-global usb4-asm-usp.fw-bus-pad=0` (and `fw-io-pad=0`, `fw-mem-pad=0`): the layout before 2026-10-30 | the same plug: the connection manager's half as in a; `info pci`: tunnel port `02:00.0` bus 3 only, `104C:8232` at bus 3 with secondary and subordinate bus 0; the upstream port at **Code 31** | the failure of "45.15 (continued)" r3 reproduced; the platform's |
+| `w9a` c | 98 SE | `-Usb4 asm4242`, the default | the 9x numbering found both members' functions (`cm.brnum.9x.outcome=00020800`); the Add New Hardware wizards installed the bridges (each offered a restart, declined) and Stor98 for both NVMe; the parent's drive E: ORICO, `fc /b`: no differences; the chained drive without an interrupt at its first plug (`cm.reenum.9x.noirq.refused`), started at the child's re-plug (`cm.reenum.9x.noirq.after=06000500`), F: ORICO (`w9a\c-F-chained.png`) | pass (the chained drive's first plug as 45.55 read on ME) |
+| `xpa` b | XP SP3 | `-Usb4 asmboard` (the board's root-port reservation, 45.55's `xpD`) | started with no dock after the install; the plug: the bridges' lists rewritten (`cm.breq.how=01001111`, `01051112`, `01001112`), the chain port classified and started; every bridge and both NVMe Code 0 on Stor98; D: and F: ORICO, `fc /b` on each: no differences | pass |
+
+XP's first plug on that overlay (tag a, the first time Windows saw the
+dock) took 45.55's two-wizard path (the drive first as "PCI Device", then
+Stor98 after the mark service's restart); the downstream ports' first
+bridge installs read Code 12 once in `setupapi.log` ("required reboot:
+Device has problem: 0x0c") before the rewrite, and the restart Windows
+then asked for was taken by mistake, so tag b is the clean reading. On
+the launcher's `asm4242` root port XP has no I/O window to give the
+switch (45.55's `xpB`); that and the 98 SE wizards' restart offers are
+as recorded there.
+
+What a real system needs is what boards do: a tunnel port the firmware
+pads (the ASM4242 board 48 buses, the P14s's Alpine Ridge port 37). On a
+firmware that numbers a tunnel port with no spare buses, a dock plugged
+while Windows runs stops at Code 31 on 7 (and the like on the other
+systems) until a restart with the dock attached; 45.53 and 45.55 (the
+emulator's padding, record 33 revisions 4 and 5) are what this leg rests
+on; no defect of this tree's was found on the three systems read.
+
+## 45.17 (the owed legs): the PCI side of a chain hot-plugged under the firmware connection manager, 7 x86 (2026-11-01)
+
+Worker w45-dock, the same build, packages and emulator as "45.15 (the
+desktop plug)". The emulator's Thunderbolt 3 tunnel ports are now padded
+(`usb4-emu` `d73479a`, in `2129536`: `fw-bus-pad=37`, 192 MB, 4 KB), which
+removes 45.37's Code 31 (the same cause as above). Leg `w7t`: a fresh 7
+SP1 x86 overlay, `-Usb4 tb3ar` (Alpine Ridge, `profile=tb3-alpine-ridge`,
+security user, pre-boot off), the release package installed with the
+layout present, the qemu flavour copied over, restarted; `info pci`: the
+tunnel port `02:01.0` buses 4 to 40. The dock `usb4-device ... dialect=tb3,
+downstream-ports=1,chain-power-controller=off` with its NVMe, and a USB4
+device router chained behind it (`parent=enc0,port=1`) with its own, both
+plugged at the desktop. Record 34 section 9.3's clauses:
+
+| Clause | Read | Verdict |
+|---|---|---|
+| 1 | `tbt.icm.connected=00000811`, approved; the child `tbt.icm.connected=00010821`, approved after its parent; the dock's switch `104C:8232` (secondary 5, its downstream ports 6 and 17) and both downstream ports Code 0, both NVMe on Stor98, started; `XHCIINST /devices`: "Thunderbolt 3, link 1, depth 1, approved" and "USB4 (version 1.0), link 1, depth 2, approved", both "PCIe up"; the chained disk put online (`diskpart`, the duplicate image), D: and F: ORICO, `fc /b` on each: no differences | pass |
+| 2 | the child unplugged: `tbt.icm.device-gone=00000301`, the chain port invalidated (`cm.chain.invalidate=02020508`), F: gone, D: kept; plugged again: approved, invalidated (`01020508`), its child attached, F: and D: `fc /b`: no differences | pass |
+| 3 | the dock unplugged with the child attached: `tbt.icm.device-gone=00000301` (the child) first, then `00000300`; both drives gone; no hang; shutdown in 15 s | pass |
+| 5 | Windows' Safely Remove Hardware lists both of the dock's downstream switch ports, each with its NVMe disk; Stop on the chain port lists its port, the volume F:, the disk and Stor98, then fails: "The 'PCI Express standard Downstream Switch Port' device is not removable and cannot be ejected or unplugged"; the parent's downstream port gives the same answer; F: and its files stay (`w7t\c5-*.png`). `XHCIINST /devices` offers the dock alone for `/eject` (the chained unit's own eject is section 3.10's, deferred with 45.15's correspondence) | the chained unit cannot be stopped on its own from the applet on 7 under the firmware connection manager, as its sibling port cannot; the whole dock's removal is unchanged; not chased |
+| 8 | at the child's plug the chain action's invalidation (`cm.chain.invalidate=01020508`) came before the chain port's new child in its `BusRelations` (`cm.chain.rel.new=00000001`): the invalidation found it, not native hot plug | read |
+
+Not run (the owner's trim, 2026-11-01): 98 SE (clause 6) and XP (clause
+7) on `tb3ar`, 10 x64, 2000 and ME, and Titan Ridge with its tunnel ports
+installed. Of clause 4, "45.17" leg b read the adoption only; the
+child's unplug and re-plug after it is not read under the firmware
+connection manager.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
