@@ -8127,6 +8127,134 @@ owner's key-holding cut is owed: the x64 half published by
 `make-package.ps1 -TestSignPfx`, its signatures and catalogs read in
 `nt-x64\` (`xhcicmf.cat` beside `cm\xhcicmf.inx`).
 
+### 45.44 legs, group B (2026-11-01)
+
+Record 36 section 10's L5 to L9, run on development host A from worktree
+`w45-pkgB` at `6e6e68af` (the 3.4.0.0 tip with 45.44 merged). Evidence
+is under `E:\xhci98-vm\p45\w45-pkgB\` (one folder per leg, `pids.txt`,
+`hashes-pkg86.txt`, `hashes-pkg64.txt`); scripts are in its `kit\`.
+
+**The package.** One gated build of `6e6e68af`: `src\pfw\build.cmd`, the
+tools, `build-driver.cmd all` (x86) and `all -amd64`, each BUILD + GATES
+PASSED, packager self-tests 1801 checks; the host tests passed. The x86
+download is a TEST cut, `make-release.ps1 -Arch x86 -TestLabel "45.44
+legs B"` with both driver sets and `-SkipQualtool`, into a scratch
+releases folder (exit 0); its base download `xhci98-3.3.0.0.zip` is
+SHA-256 `1360B922...`. A cut cannot publish an x64 half without the key,
+so the x64 kit is the staged flat `pkg-release-amd64` with its five
+catalogs made unsigned on the host (`New-PackageCatalogFile`), re-laid
+into `nt-x64\` by `ConvertTo-FamilyLayout` and added to the x86
+download's root. In each x64 guest a throwaway certificate (`MakeCert -r
+-b 01/01/2026 -e 01/01/2030`) is made, put in Root and Trusted
+Publishers, and every `.sys` and `.cat` under `nt-x64\` is signed with
+it (`SignTool verify /pa` passes for all nine). Images: `nt-x86\`
+`xhci98.sys` `DB6B586D...`, `xhciuas.sys` `25E78933...`,
+`cm\xhcicm.sys` `23A645FA...`, `xhcihlpr.sys` `9E9ECC67...`,
+`cm\XHCIPFW.SYS` `BC2ADE98...`, `stor98\stor98.sys` `9B8E8F2F...`;
+`nt-x64\` (unsigned, before the guest signature) `xhci98.sys`
+`0C397ABC...`, `xhciuas.sys` `87A5AFE9...`, `cm\xhcicm.sys`
+`DDF1C049...`, `stor98\stor98.sys` `0036A487...`.
+
+**What each leg reads.** Every guest is a q35 overlay of the base (or a
+blank disk for an installing leg), with the ASM4242 model (`-Usb4
+asm4242`: its xHCI, the NHI and the tunnel switch ports, no enclosure)
+and a usb-storage stick on qemu-xhci. The install is the download's
+installer in its console form (`INSTALL.BAT /console /yes /thunderbolt
+/stor98`, `/usb` on 10). `CHK.BAT` writes to COM1 the USB, System and
+SCSIAdapter class keys, every `Enum\PCI` filter, `Services\USB`,
+`Services\xhcicm\Enum`, the services' `Start`, the `oem*.inf` and the
+driver store; `regdef.py` compares each controller's, root hub's and NHI's
+class key with its INF's `AddReg` for the install section it records
+(`InfSection` + `InfSectionExt`). `DEV.BAT` reads `TESTDATA.BIN` off the
+stick, writes `shell32.dll` and a copy back, and compares both with `fc
+/b`.
+
+| Leg | System | Result |
+|---|---|---|
+| L5 | 7 SP1 x86 | **Pass.** Before: no filter, no `xhci*` service, no package INF. Install exit 3, restart. After: both controllers' keys 41/41 values at the INF default (`Xhci.Dev6.NTx86`), the root hubs 1/1, the NHI 22/22 (`Cm.Dev6.NTx86`); `Services\USB` absent; `xhcicm` the upper filter of the six PCIe ports (two q35 root ports, four ASM4242 switch ports) by the installer, the driver store holding `xhci98`, `xhciuas`, `xhcicm`, `xhcicmf` and `stor98`; `XHCIPFW` and `xhcihlpr` boot-start; the mark service running. Stick: `fc` no differences, both copies |
+| L6 | XP x64 SP2 | **Pass** (`SETUP.EXE`). Signed in the guest; first run exit 4 (the two root hubs' Found New Hardware wizards, answered with their unsigned-driver prompts, as the installer's own message asks), second run exit 3, restart. After: controllers 41/41 (`Xhci.Dev.NTAMD64`), root hubs 1/1, NHI 23/23; the six ports filtered; stick `fc` no differences. **The F6 option is owed**: a floppy of `nt-x64\`'s root (`txtsetup.oem` `B031D509...` and the six controller and UAS files) on an `isa-fdc` of the q35 machine, `Win XP SP2 VL x64.iso`; text-mode Setup showed "Press F6 ..." and went on to the Welcome page in five tries (PS/2 `send-key` every 0.25 s, a USB keyboard, F6 held down from reset). Setup never took the key, so nothing about the floppy was read |
+| L7 | 10 x64 22H2 | **Pass.** Test mode on (the base). Signed in the guest; install with `/usb`, exit 3, restart. After: controllers 41/41 (`Xhci.Dev6.NTamd64`), root hubs 1/1, NHI 22/22; the six ports filtered; the store holds the five packages beside `usbxhci`; stick `fc` no differences |
+| L8 | XP SP3 nLite | **Partial** (below) |
+| L9 | 7 SP1 x64 DISM | **Pass for `install.wim`; `boot.wim` refuses `xhci98.inf`** (below) |
+
+**L8, nLite into XP SP3.** nLite 1.4.9.3, installed and run in a 7 x86
+guest; source `WinXP_pro_SP3_vl_x86.iso` copied to the guest's disk; tasks
+"Drivers" and "Bootable ISO"; Insert, "Multiple driver folder", `nt-x86\`
+with its three folders (root, `cm`, `stor98`) all ticked. nLite read the
+root's `txtsetup.oem` and offered its text-mode entries for each folder
+(the 2000 option, the XP option); the record's route is PnP, so each was
+set to "Regular PNP driver". Its session file lists exactly
+`cm\xhcicm.inf`, `stor98\stor98.inf` and `xhci98.inf`, each PnP. It
+copied the three folders to `I386\NLDRV\001` to `003`. `cm\xhcicmf.inx`
+and `XHCIPFW.SYS` went into `TXTSETUP.SIF`'s file list as plain files, but
+no INF names `xhcicmf.inx` and no service was made for it.
+`xhciuas.inf` came in with the root folder. The ISO (SHA-256 `5A66BCE1...`)
+was installed on a blank disk under q35 through text mode (no key
+pressed for drivers) and GUI mode. GUI mode's Installing Devices installed,
+without a prompt (`Policy=Ignore` in `setupapi.log`), `xhci98` on qemu-xhci
+and on the ASM4242 xHCI, both root hubs, and `xhcicm` on the NHI. Behind
+them it installed the stick on `USBSTOR` and its volume, so the stick
+enumerated under the integrated driver during setup. The key page was
+reached and read there. A point-in-time copy of the disk, read offline:
+both controllers 41/41 at the INF default, root hubs 1/1, NHI 23/23
+(`Cm.Dev.NTx86`); no `UpperFilters` or `LowerFilters` on any PCI device,
+no `Services\xhcicmf`, no `Services\USB`; services `xhci98` and `xhcicm`
+`Start` 3, `xhcihlpr` 0, no `XHCIPFW`, no `xhcimark`; `oem0.inf`
+(`xhci98`) and `oem1.inf` (`xhcicm`) the only package INFs. **Owed**: the
+volume-licence medium refused the product key available here, so GUI
+setup stops at the key page. The first desktop, the stick copy and
+`SETUP.EXE` after the integrated install are not run.
+
+**L9, DISM into 7 x64.** In a 7 x64 guest: the medium
+(`en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso`)
+copied to an 8 GB NTFS disk made bootable (`bootsect /nt60`), the
+`nt-x64\` kit signed in the guest, then `Dism /Mount-Wim`, `/Add-Driver
+/Driver:<nt-x64> /Recurse /ForceUnsigned`, `/Unmount-Wim /Commit` for
+`install.wim` index 1 and for `boot.wim` indexes 1 and 2.
+
+- `install.wim`: "Found 4 driver package(s)": `cm\xhcicm.inf`,
+  `stor98\stor98.inf`, `xhci98.inf`, `xhciuas.inf`, each "successfully
+  installed"; `/Get-Drivers` lists them as `oem2.inf` to `oem5.inf`,
+  3.3.0.0; no `xhcicmf` in the store.
+- `boot.wim` (both indexes): `xhcicm`, `stor98` and `xhciuas` added;
+  **`xhci98.inf` refused**, Error 2. The image's `setupapi.offline.log`
+  says `Could not find include INF file "layout.inf"` and `Failed to get
+  driver package copy files`. Windows PE carries no `layout.inf`, and
+  `xhci98-amd64.inf` names `LayoutFile=layout.inf` for the NT 5.2 path's
+  OS files. Found here and handed to w45-pe, which owns the INF change for
+  both architectures; that work's own DISM tests cover `boot.wim` again
+  (the coordinator, 2026-11-01).
+- Setup was booted from that disk onto a blank 32 GB disk, with the
+  answers typed. The Setup environment's driver store held `xhcicm` and
+  `xhciuas`. First boot of the installed system with F8 "Disable Driver
+  Signature Enforcement": no test mode on a fresh install, and the
+  package is signed with a throwaway certificate. Before `SETUP.EXE`:
+  both controllers 41/41 (`Xhci.Dev6.NTAMD64`), root hubs 1/1, NHI 22/22;
+  **no filter**: no `UpperFilters` on any PCI device, `Services\xhcicm\Enum`
+  naming only the NHI, no `xhcicmf` in the store or among the services;
+  services `xhci98`, `xhciuas`, `xhcicm`, `stor98` `Start` 3; the stick on
+  the integrated `xhci98`, `fc` no differences.
+- `SETUP.EXE` (console) then refused the connection manager outside
+  test-signing mode, as designed ("REFUSED: on this 64-bit Windows the
+  connection manager is installed only in test-signing mode ... Nothing
+  was changed", exit 1). With `bcdedit /set testsigning on` and a restart
+  it found every driver current ("current (this release)"), staged the
+  five INFs, added the filter to the six ports, installed the mark
+  service, the USB Tree and the Add/Remove Programs entry (exit 3).
+  After the restart: values unchanged (41/41, 1/1, 22/22), the six ports
+  filtered, `xhcicmf` in the store, `xhcimark` `Start` 2; stick `fc` no
+  differences. What `INTEGRATE.TXT` says `SETUP.EXE` adds on a 64-bit 7
+  (the filter, the mark service, the tools) it added; XHCIPFW is 32-bit
+  only.
+- Setup put the installed system's boot files on the setup disk, the
+  first BIOS disk, as Windows Setup does; nothing of the package's.
+
+**Left (group B).** L6's F6 option (the floppy is ready); L8's first
+desktop, stick copy and `SETUP.EXE` after the integrated install (a
+product key for the volume-licence medium); `boot.wim` with w45-pe's INF
+change, read by that work. The owner's key-holding x64 cut stays owed, as
+above.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
