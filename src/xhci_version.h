@@ -3,8 +3,8 @@
  * (roadmap task 14.1.10).
  *
  * **This file is the single editable source of the version.** Bump it here and
- * in the eleven literals listed below, and nowhere else. These take their value
- * from it by including it:
+ * in the seventeen literals listed below, and nowhere else. These take their
+ * value from it by including it:
  *
  *   - the four drivers: `src\xhci98.rc`'s four resource fields and
  *     `src\hcd_entry.c` and `src\hcd_msi86.c`; `src\uas\xhciuas.rc` and
@@ -16,19 +16,22 @@
  *     `XHCISNAP_VERSION`, `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and
  *     `xhcitr\xhcitr.rc`
  *
- * Eleven cannot include it, because an INF and a manifest are not compiled, and
- * keep a literal that a gate **checks** against this file on every build
- * (`build-driver.cmd` runs each gate):
+ * Seventeen cannot include it, because an INF and a manifest are not
+ * compiled, and keep a literal:
  *
- *   - the `DriverVer` of all ten INFs: `src\xhci98.inf` and
+ *   - the `DriverVer` of all thirteen INFs, each checked against this file on
+ *     every build (`build-driver.cmd` runs each gate): `src\xhci98.inf` and
  *     `src\xhci98-amd64.inf` (`scripts\inf-gate\check-inf.ps1`),
  *     `src\uas\xhciuas.inf` and `xhciuas-amd64.inf` (`check-uas-inf.ps1`),
- *     and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and
- *     `xhcicmf-amd64.inf` (`check-cm-inf.ps1`), and Stor98's
- *     `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf`
+ *     `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and
+ *     `xhcicmf-amd64.inf` (`check-cm-inf.ps1`), `src\net\xhcinet.inf` and
+ *     `xhcinet-amd64.inf` (`check-net-inf.ps1`), and Stor98's
+ *     `src\stor98\inf\stor98-9x.inf`, `stor98-x86.inf` and `stor98-x64.inf`
  *     (`check-stor98-inf.ps1`)
- *   - the `assemblyIdentity` version in `xhcitr\xhcitr.manifest`
- *     (`check-inf.ps1`, since 2026-10-18)
+ *   - the `assemblyIdentity` version of four manifests:
+ *     `xhcitr\xhcitr.manifest` (`check-inf.ps1`, since 2026-10-18), and
+ *     `xhciinst\setup.manifest`, `xhciinst\xhciwiz.manifest` and
+ *     `xhciperf\xhciperf.manifest`, which no gate reads: bump them by hand
  *
  * **Three toolchains include this**: the Win2000 DDK's `rc.exe` (the driver
  * resource), MSVC 6.0's `cl.exe` (the snapshot reader and the host test suite)
@@ -69,12 +72,12 @@
 
 /* The four-part package version, as four integers - what FILEVERSION and
  * PRODUCTVERSION take, and what the Windows shell sorts by. */
-#define XHCI_VER_CSV            3,3,0,0
+#define XHCI_VER_CSV            3,4,0,0
 
 /* The same number as a string - the resource's two version strings, the DOS
  * qualifier's banner, and the snapshot reader's report header. Must agree with
  * XHCI_VER_CSV above; the INF gate refuses a build where it does not. */
-#define XHCI_VER_STR            "3.3.0.0"
+#define XHCI_VER_STR            "3.4.0.0"
 
 /* The release date, in the MM/DD/YYYY form `DriverVer` takes, zero-padded -
  * the INF gate refuses an unpadded one, because Windows 98's 16-bit parser is

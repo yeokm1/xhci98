@@ -1,11 +1,13 @@
 # xhci98 - Release Notes
 
-This file describes package version `3.3.0.0`, the eighteenth release and
-the eleventh of the host controller driver, dated 2026-10-28 (`DriverVer`
-`10/28/2026,3.3.0.0`, in all ten INFs: the eight of `xhci98.sys`, the UAS
-driver and the connection manager, and Stor98's two). What it changes from
-`3.2.0.0` is "What `3.3.0.0` changes", below, and is marked "new in
-`3.3.0.0`" or "from `3.3.0.0`" where it applies below. What `3.2.0.0` added
+This file describes package version `3.4.0.0`, the nineteenth release and
+the twelfth of the host controller driver, dated 2026-10-28 (`DriverVer`
+`10/28/2026,3.4.0.0` in every INF of the package: those of `xhci98.sys`,
+the UAS driver and the connection manager, and Stor98's). What it changes
+from `3.3.0.0` is "What `3.4.0.0` changes", below, and is marked "new in
+`3.4.0.0`" or "from `3.4.0.0`" where it applies below. What `3.3.0.0`
+changed from `3.2.0.0` is "What `3.3.0.0` changes", below, and is marked
+"new in `3.3.0.0`" or "from `3.3.0.0`" where it applies. What `3.2.0.0` added
 to `3.1.0.0` is its entry in `releases/history.md` and is marked "new in
 `3.2.0.0`" or "from `3.2.0.0`" where it applies; what `3.1.0.0`
 changed from `3.0.0.0` is "What `3.1.0.0` changes", below. What `3.0.0.0`
@@ -18,10 +20,6 @@ the sections below say where each change was read. Where this file and
 `docs/contributing/roadmap-hcd.md`, `docs/contributing/build-and-test.md` or
 `xhciqual/README.md` disagree, the other document wins and this one is the
 copy to fix.
-
-The next release, `3.4.0.0`, is being prepared: what it changes from
-`3.3.0.0` so far is "What `3.4.0.0` changes", below, and is marked "new
-in `3.4.0.0`" or "from `3.4.0.0`" where it applies below.
 
 `2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
 tests where QEMU models no such device or controller. The owner's bench of
