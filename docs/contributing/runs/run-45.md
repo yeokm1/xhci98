@@ -8527,6 +8527,85 @@ installed, the controller has no Advanced tab and the root hub no Power
 tab. A separate XP x64 folder that would keep them is planned
 (roadmap-usb4, "Planned - The XP x64 Property Pages").
 
+### Checks and the cut
+
+- INF gates: both files PASSED; the self-tests (`-Force`, the gate
+  changed) 1684 checks, with the new `OS-UINT52` cases (the NT 5.2
+  device install copying `usbui.dll` directly, by a section of its own,
+  through `Needs=`, beside it in `.CoInstallers`; `Include=` on the NT 6
+  install; `.CoInstallers` beside the NT 6 install copying it, `OS-ONNT6`;
+  the right-click route without it and the device install without
+  `usbd.sys`, `OS-MISSING`). The 64-bit footprint loses the one row.
+- Gated builds on `9bb0d10e`: x86 `all` BUILD + GATES PASSED (packager
+  self-tests 1805 checks, `INTEGRATE.TXT`'s new strings held), amd64
+  `all` BUILD + GATES PASSED, host tests PASSED
+  (`E:\xhci98-scratch\p45-w45-pe\build-x86.log`, `build-amd64.log`,
+  `host-tests.log`).
+- Test cut (`make-release.ps1 -Arch x86 -TestLabel "45.44 boot.wim INF"`,
+  both driver sets, `-SkipQualtool`): exit 0; `INTEGRATE.TXT` carries the
+  new paragraph. The x64 leg kit: `make-package.ps1 -Arch amd64`
+  (unsigned), catalogs made on the host, `ConvertTo-FamilyLayout` into
+  `nt-x64\`, every `.sys` and `.cat` signed in each guest with a throwaway
+  certificate. `nt-x64\xhci98.inf` `feae1c16...`, `xhci98.sys`
+  `43427bca...`; `nt-x86\xhci98.inf` is the shipping file, unchanged.
+
+### The legs
+
+- **7 x64, DISM** (q35 base `w7x64`, overlay `D7`, 7 SP1 DISM): the 7 SP1
+  x64 VL medium copied to a second disk, `Dism /Add-Driver
+  /Driver:C:\PKG\nt-x64 /Recurse /ForceUnsigned` into `boot.wim` index 1
+  (Windows PE), index 2 (Setup) and `install.wim` index 1: "Installing 4
+  of 4", each of `cm\xhcicm.inf`, `stor98\stor98.inf`, `xhci98.inf` and
+  `xhciuas.inf` "successfully installed" in all three images, every import
+  `Exit status: SUCCESS` in the offline log; commits completed; `bcdedit
+  /store S:\boot\bcd /set {default} testsigning on` (`testsigning Yes`),
+  `bootsect /nt60 S: /mbr`. **Pass.** (`D7\serial-a.log`.) This is L9's
+  rerun on the fix.
+- **7 x64, Setup from that `boot.wim`** (overlay `S7`): q35 with
+  `i8042=off` (no PS/2 controller) and no USB controller but `qemu-xhci`,
+  carrying a `usb-kbd`, a `usb-tablet` and a `usb-storage` stick; booted
+  from the setup disk. Setup's first page came up; Shift+F10 opened a
+  Command Prompt and every typed command arrived (the USB keyboard),
+  a tablet click pressed Next (the language page gave way to "Install
+  now"), `diskpart` listed the stick (`QEMU VVFAT`, D:) and `type
+  D:\STICK.TXT` read it, and `Services\xhci98` (`ImagePath
+  \SystemRoot\system32\drivers\xhci98.sys`) was the controller's
+  `Service` and `ActiveService`. Windows PE kept no class key for the
+  controller (no `Driver` value under `Enum\PCI`, no values to read), so
+  the registry defaults were read on XP x64 below, not in Setup.
+  **Pass.** (`S7\s1.png` to `s11.png`.)
+- **XP x64, F6** (i440FX `pc`, PS/2, `qemu-xhci` with a stick and tablet,
+  a fresh 16 GB disk; the floppy is `nt-x64\`'s root of this build plus a
+  `WINNT.SIF`; F6 sent from power-on over QMP): text mode listed and took
+  "xHCI98 USB 3 Controller (Windows XP x64)" (`F6\a-1.png`, `a-2.png`) and
+  copied the files; GUI setup installed the devices and stopped at the
+  product key page (`a-keypage.png`; no key, by the owner's instruction).
+  Offline (`F6\kp\`): `setupapi.log` - the controller found in `oem0.inf`,
+  "Actual install section: [Xhci.Dev.NTAMD64]", full install finished
+  successfully, the root hub likewise; `system32\drivers\usbd.sys` placed
+  (the medium's, dated 2005), no `system32\usbui.dll`; the hive: both
+  keys 41/41 and 1/1 at the INF's defaults (`regdef-F6key.txt`), the
+  controller's and the root hub's `EnumPropPages32` written. **Pass.**
+- **XP x64, `SETUP.EXE`** (q35 base `xpx64`, overlay `X6`, the leg kit's
+  `INSTALL.BAT /console /yes /nopause /thunderbolt /stor98`): exit 3
+  (restart), "xHCI98 USB 3 Controller: xhci98 3.3.0.0, started", the root
+  hub started; `usbd.sys` present, `usbui.dll` "File Not Found"; after the
+  restart `xhci98` and `xhcicm` loaded (driverquery), the controller key
+  41/41 and the root hub's 1/1 at default (`X6\regdef-X6-post.txt`). The
+  controller's property sheet shows General and Driver, no Advanced tab
+  (`X6\tabs-ctrl.png`): the cost the fix accepts. The stick was not
+  read: its Found New Hardware wizard was cancelled in this leg.
+  **Pass.**
+- Not run, by the owner's trim of 2026-11-01: DISM into 10 x64's
+  `boot.wim` and `install.wim` and a Setup boot from them (the variant
+  reading A13 on 10 x64 PE stands for the INF form); a 10 x64 install
+  from `nt-x64\`; a 7 x86 install (the x86 package is byte-identical);
+  the unattended 7 x64 install from the integrated `install.wim`
+  (started, stopped before its first boot); 2000, XP and 98 SE installs.
+
+VM starts and stops: `E:\xhci98-vm\p45\w45-pe\pids.txt` (all mine
+stopped).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
