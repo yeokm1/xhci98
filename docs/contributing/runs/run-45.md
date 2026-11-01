@@ -8127,6 +8127,72 @@ owner's key-holding cut is owed: the x64 half published by
 `make-package.ps1 -TestSignPfx`, its signatures and catalogs read in
 `nt-x64\` (`xhcicmf.cat` beside `cm\xhcicmf.inx`).
 
+### 45.44 legs, group A (2026-11-01)
+
+Record 36 section 10's legs L1 (98 SE), L2 (ME), L3 (2000 SP4 with the F6
+option), L4 (XP SP3) and L10 (an update over 3.3.0.0's flat package, on
+98 SE and on XP). Development host A, branch `w45-pkgA` at the 3.4.0.0 tip
+`6e6e68af`.
+
+**The package.** Gated x86 build (`all`) on `6e6e68af`: BUILD + GATES
+PASSED, the packager self-tests 1801 checks; xhciinst, xhcitr and xhcimark
+built after it. Then a full x86 TEST cut ("45.44 legs A", both driver sets,
+`-SkipQualtool`) into a scratch releases folder: exit 0, `98-me\`,
+`nt-x86\`, the root and `tools\` as in the 45.44 checks above. The legs
+take its non-free download (`xhci98-3.3.0.0-nonfree.zip`, SHA-256
+`a8ae2085...`), unzipped under the name the release will carry,
+`xhci98-3.4.0.0-nonfree`, because the 98 SE and ME path readings depend on
+it. `xhci98.sys` `23a6a28a...` in both x86 families, `xhcicm.sys`
+`a743ddc0...`, `xhcihlpr.sys` `36b9052e...`, the 9x `stor98.inf`
+`1825e442...`, the NT `stor98.inf` `25829b02...`, `txtsetup.oem`
+`785a9196...`, `SETUP.EXE` `eefaa2a8...`, `XHCIWIZ.EXE` `bb397333...`.
+The tree is still at version 3.3.0.0, so the TEST cut is a 3.3.0.0 too
+(see L10).
+
+**Machines.** Fresh overlays of the q35 bases (`launch-q35.ps1`, `-Usb4
+asm4242`: the ASM4242 NHI, its xHCI and the tunnel ports; L10 also with the
+ORICO enclosure and its NVMe at power-on), the download on the transfer
+disk; the stick for the device check an overlay of the bases' FAT test
+disk, plugged into the QEMU xHCI's port 3 after the install. The F6 leg on
+i440FX as the earlier F6 legs (`runs/run-38.md`): a blank 8 GB disk,
+`win2ksp4.ISO`, a USB stick at root port 1 and a hub with an audio device,
+PS/2 input. Each leg read for the registry defaults (every value the INF
+writes with no-clobber, per install path, compared in each controller's and
+the NHI's key), `Services\USB`, the bridges' `UpperFilters` before
+`SETUP.EXE`, and a device check: a 4 MB file copied to the stick and
+compared with `fc /b`.
+
+| Leg | Result | Evidence |
+|---|---|---|
+| L1 98 SE | **pass**. Before: no xHCI98 key, no `Services\USB`, `DevicePath` `C:\WINDOWS\INF`. The download copied to `C:\WINDOWS\DESKTOP\xhci98-3.4.0.0-nonfree`; `SETUP.EXE /thunderbolt /stor98` from there: the engine read `98-me\`, both xHCI controllers and the NHI installed, the NUSB 3.3 storage files installed, no disk prompt; the Summary's "settings written machine-wide: none". After the cold start: both controller keys 40 of 40 at default, the NHI's 23 of 23 (the 9x path's values); `Services\USB` holds no value (its `SilentClasses` subkey is the USB storage drivers'); `DevicePath` `C:\WINDOWS\INF;C:\XHCI98`, **24 characters**, one install-directory entry; `C:\XHCI98` holds `stor98.inf` (3,565 bytes, the 9x INF, `$CHICAGO$`) and no `stor98w9.inf`; `XHCIPFW.VXD` in `SYSTEM` (its `XhciPfwResult` 1), `S98VSD.VXD` and `stor98.mpd` in `IOSUBSYS`. Stick: USB Mass Storage wizard (`USBSTOR.INF`), E:, copy and `fc /b` no differences. The wizard's deepest path: `xhcicm.inf` and `xhcicm.sys` copied into the desktop copy's `98-me\cm\tbnet\`; the NHI's Update Driver wizard, "Display a list", Have Disk, `C:\WINDOWS\DESKTOP\xhci98-3.4.0.0-nonfree\98-me\cm\tbnet` (56 characters) typed: its models listed, "Location of driver: C:\WINDOWS\DESKTOP\XHCI98~1.0-N\98..." (cancelled there). By "Specify a location" with the same path 98 SE listed only the `C:\XHCI98` copies of the same driver | `l1\` b01-b02, s01-s10, d01-d06, w01-w16, `serial-a.log` (pre), `serial-c.log` (post, DC l1) |
+| L2 ME | **pass**. Before as L1. The stand-in in the desktop copy's `98-me\cm\tbnet\` before `SETUP.EXE`: the package check passed with it there (the engine reads no file in `cm\tbnet\`). `SETUP.EXE /thunderbolt /stor98`: "Copied 13 files to C:\XHCI98", installed; after the cold start the keys 40/40, 40/40, 23/23 at default, `Services\USB` absent, **`DevicePath` `C:\WINDOWS\INF;C:\XHCI98`, 24 characters** (235 of ME's 259 left); the same files as L1 but the NUSB set. Stick E:, `fc /b` no differences. Deepest path: the NHI's Update Driver wizard, "Specify the location", `C:\WINDOWS\DESKTOP\xhci98-3.4.0.0-nonfree\98-me\cm\tbnet` typed (56 characters): "other drivers" listed from `C:\WINDOWS\DESKTOP\XHCI98~1...` beside `C:\XHCI98\XHCICM.INF`, the location page "C:\WINDOWS\DESKTOP\XHCI98~1.0-N\9..."; control: the stand-in renamed `XHCICM.TXT`, the same search lists `C:\XHCI98` alone. Then record 36 section 9's 120-character location, `C:\WINDOWS\DESKTOP\Drivers for this computer\USB 3 and Thunderbolt\Downloaded 2026\xhci98-3.4.0.0-nonfree\98-me\cm\tbnet`, typed in full: listed from `C:\WINDOWS\DESKTOP\DRIVER~...`. Shut Down powered off with xhcicm installed | `l2\` b01, s01-s08, d01, w01-w15, x01-x03, y00-y10, `serial-a.log`, `serial-c.log` |
+| L3 2000 SP4, `SETUP.EXE` | **pass**. Before: no xHCI98 key, no `xhcicm` service; the Welcome page lists the six bridges on "pci 5.0.2195 ... add the tunnel-port filter". `SETUP.EXE /thunderbolt /stor98` from `D:\xhci98-3.4.0.0-nonfree`: the local copy `%windir%\XHCI98\D9388A31` flat with `nt\xhcicmf.inf` and `nt\xhcicm.sys` and no 9x file; staged as `oem0` to `oem4`; "Changes were made". The warm restart hung in real mode (EIP `0x0d4f`, the base's documented hang); cold start. After: both controller keys 40/40, the NHI's 23/23 at default; `Services\USB` holds nothing; the filter on the six bridges (`UpperFilters` `xhcicm`); `xhci98.sys` in `system32\drivers` the local copy's bytes (`fc /b`). Stick E:, `fc /b` no differences | `l3\` b01-b03, s01-s09, r01-r04, w1-w9, d01, `serial-a.log`, `serial-c.log` |
+| L3 2000 SP4, F6 | **pass to the product key page**. The floppy: `nt-x86\`'s root (`txtsetup.oem`, `xhci98.inf`, `xhci98.sys`, `xhcihlpr.sys`, `xhciuas.inf`, `xhciuas.sys`, 461,812 bytes with the CD files) plus `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` from the 2000 CD's `I386`. F6 caught (sent from power-on), S, the list "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)" and "... (32-bit Windows 2000, files from CD)", the second chosen, "Setup will load support for" it; the partition screen lists "504 MB Disk on unknown adapter C: FAT (QEMU VVFAT)" (the stick through `xhci98.sys` and `usbstor`); NTFS, copy, restart; the first GUI-mode boot with no STOP, Installing Devices, Regional Settings, Personalize, the Product Key page (no key typed). Offline read of the disk at that page: `setupapi.log` installs the controller from `oemscs01.inf`, copying `xhci98.sys` and `xhcihlpr.sys` from `OemDir`; "Device install finished successfully" for the controller, `XHCI98_ROOT_HUB`, `XHCI98_HUB`, `XHCI98_COMPOSITE`, the audio function and the stick's `USBSTOR\DISK`; `usbd.sys` and `hidclass.sys` in `drivers`; `xhci98.sys` and `xhcihlpr.sys` there the floppy's bytes | `f6\` b-now, c01-c09, g01-g04, `kp\setupapi.log`, `flop-hashes.txt` |
+| L4 XP SP3 | **pass**. Before: no xHCI98 key, no `Services\USB`, no `UpperFilters` on any PCI device (`Enum\PCI` exported whole), no `oem*.inf`; the Welcome page lists the bridges "add the tunnel-port filter". `SETUP.EXE /thunderbolt /stor98` from the transfer disk: the two root-hub Found New Hardware windows answered, "Changes were made"; after the restart the keys 40/40, 40/40, 23/23 at default; `Services\USB` empty; the filter on the six bridges; driverquery: `xhci98`, `xhcicm`, `xhcihlpr`, `xhcipfw` running, linked by this build. Stick D:, `fc /b` no differences | `l4\` b01, s01-s14, r01, `serial-a.log` |
+| L10 XP | **pass, with `/force`**. 3.3.0.0 (the released non-free download, SHA-256 `74d7a182...`, its `release-x86\` and `SETUP.EXE` the tracked `releases\3.3.0.0` bytes) installed by its console, ORICO at power-on; then user values set: the QEMU controller's `XhciLogVerbosity` 3 and `XhciCommandCheck` 0, the NHI's `XhciCmPollIdleMs` 300. The new `SETUP.EXE`: the engine read `nt-x86\`, made the new local copy `D9388A31` (flat, `nt\` with the filter and its `xhcicm.sys`, no `stor98.mpd`, `S98VSD.VXD` or `XHCIPFW.VXD`), staged `oem5` to `oem8` and updated XHCIPFW.SYS by hash, but listed every device "current (this release)" and reinstalled none: the TEST cut carries 3.3.0.0, the same version and `DriverVer` as the release under it, so the controller keys kept 3.3.0.0's set (`XhciUsb2Bos`, `XhciResumeKeep`, `XhciLinkKeep` and `XhciCommandCheck` absent where the user had not set them, the NHI's values new since 3.3.0.0 absent). Run again with `/force` (each device "reinstall (/force)", the drive replugged when asked): every value at the INF's default but the three user values, which were kept (QEMU controller 38 of 40 with 3 and 0; the NHI's 22 of 23 with 300; the ASM4242 controller 40 of 40); the filter kept; the loaded `xhci98.sys` the new copy's bytes. Stick F: and the NVMe D: (Stor98), `fc /b` no differences. The 3.3.0.0 local copy `D70B48BE` stays beside the new one | `l10x\` i01-i08, u00-u10, f01-f09, d01-d02, `log-upd.txt`, `serial-a.log`, `serial-b.log` |
+| L10 98 SE | **pass, with `/force`**. 3.3.0.0 by its console (`/thunderbolt /stor98 /storage`; the documented "xhci98 xHCI Host Controller Disk" answered `C:\XHCI98`); after the cold start the tunnelled NVMe's wizard took Stor98 from `C:\XHCI98\STOR98W9.INF`: `INF\OTHER\Yeo Kheng Mengstor98w9.inf` (2,455 bytes), its `OEM Name` value `="stor98w9.inf"`, the Stor98 key's `InfPath` `YEOKHE~3.INF`; `C:\XHCI98` held `stor98w9.inf` and the NT `stor98.inf`. The same three user values set. The new `SETUP.EXE /force /thunderbolt /stor98` from the transfer disk: the engine read `98-me\`; the controllers, root hubs and NHI "reinstall (/force)", Stor98's drive "current (this release)"; `DevicePath` taken off and put back (`C:\WINDOWS\INF;C:\XHCI98`, 24 characters), "Copied 20 files to C:\XHCI98"; "INF\OTHER\Yeo Kheng Mengstor98w9.inf is now this release's stor98.inf". After the cold start: every value at default but the three user values, kept; `C:\XHCI98\stor98.inf` 3,565 bytes (the 9x text), no `stor98w9.inf`; the `INF\OTHER` copy 3,565 bytes under its old name with its `OEM Name` record and `InfPath` unchanged. `IOSUBSYS\stor98.mpd` stays 3.3.0.0's (55,275 bytes; "stor98.mpd not placed (file state 1 ...)": the same version). Two ORICO volumes (the stick and the drive behind the tunnel), `fc /b` no differences on both | `l10\` b01-b03, i01-i10, j01-j06, k01-k03, n01-n13, o01, d01-d04, `v33.txt`, `upd.txt`, `log-upd.txt`, `serial-*.log` |
+
+Evidence: `E:\xhci98-vm\p45\w45-pkgA\` (per leg folder, `pids.txt`,
+`hashes-family.txt`, `hashes-zips.txt`, the checker `tools\chk.py`). Every
+VM started and stopped is in `pids.txt`.
+
+**Findings.** No defect in the package, the installer or the INFs. Three
+readings for the record:
+
+- The update legs ran over the same version: the tree is not yet 3.4.0.0,
+  so the TEST cut is a 3.3.0.0 and the engine takes the installed 3.3.0.0
+  for this release. `/force` exercised the device update path; the update
+  by version, and on 98 SE Stor98's `stor98.mpd` replaced by a newer one,
+  are read again on the release cut.
+- On 98 SE "Specify a location" lists only one copy of drivers that are the
+  same, so the reading at the deepest path was taken with Have Disk, which
+  reads the typed folder alone; ME lists both copies.
+- 2000's warm restart after the install hung once in real mode at the
+  base's known address; the cold start was clean.
+
+Owed from group A: L10 again on the release cut (version 3.4.0.0 over
+3.3.0.0, without `/force`).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
