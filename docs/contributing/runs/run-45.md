@@ -9711,3 +9711,78 @@ the version bump.
   computers take a 169.254.x.x address by themselves; set fixed addresses
   for a lasting setup. The MTU is set in the adapter's Advanced settings,
   1500 to 65522, the same on both ends."
+
+## 45.final: the cut and its legs (2026-11-01)
+
+The builds, the owner's signed cut of `3.4.0.0` and the install legs on
+its downloads. Kit and runbook: `E:\xhci98-vm\p45\w45-cutprep\`
+(`CUT-RUNBOOK.txt`).
+
+**Build.** `cut-build.cmd` on `4f6c7f19` in `E:\xhci98-wt\cut340`, the x86
+and amd64 `all` builds at once: both "BUILD + GATES PASSED (release qemu)"
+(x86 0:39, amd64 0:37), the tools built. Everything merged after
+`4f6c7f19` up to the cut was documentation only. `make-release -CheckOnly`
+exit 0, its one warning the expected "no key".
+
+**x86 cut.** `make-release -Arch x86` into scratch
+(`E:\xhci98-scratch\cut340\x86\`), exit 0, no warning: base
+`469e992e...`, free `16cdd13f...`, nonfree `1e88e86b...`.
+
+**The owner's signed cut.** `make-release -TestSignPfx`, the password at
+the prompt: exit 0; twelve x64 files signed by the project certificate
+`A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF` (SHA-1, no timestamp) - the
+images `xhci98.sys`, `xhciuas.sys`, `cm\xhcicm.sys`, `stor98\stor98.sys`,
+`cm\tbnet\xhcinet.sys` and `xhcinet6.sys`, and the catalogs `xhci98.cat`,
+`xhciuas.cat`, `cm\xhcicm.cat`, `cm\xhcicmf.cat`, `stor98\stor98.cat`,
+`cm\tbnet\xhcinet.cat`. SignTool left one key-container file per signed
+file, listed by the run for the owner to delete (design record 19 section
+5). The 63 x86 files of the release equal the x86 cut's by SHA-256 (only
+`readme.txt` differs, naming `nt-x64\`), so the x86 legs stand for the
+release. `releases\3.4.0.0` committed as `75b3db38` ("Release 3.4.0.0").
+The downloads: `xhci98-3.4.0.0.zip` `0b96a2c8...`, `-free.zip`
+`70675679...`, `-nonfree.zip` `ac2db4b2...`
+(`E:\xhci98-scratch\cut340\SHA256SUMS-final.txt`).
+
+**x86 release matrix** (`release-matrix.ps1` on the x86 cut's nonfree
+download; run `release-matrix\runs\20261101-145545\`, evidence and record
+`E:\xhci98-vm\p45\w45-matrix86\`): 13 legs pass - 98 SE console and window,
+XP console and nonfree, 2000 console, window and nonfree, Vista console and
+window, 7 console, window and nonfree, ME nonfree. Three failed on the
+harness and were rerun on its fix (`w45-harness`):
+- xp-window: the Welcome page took no key without the focus; rerun pass.
+- me-window: the restart step took ME's "New Hardware Found ... xHCI98 USB
+  3 Root Hub" box for the restart question and stopped reading COM1, so
+  the stick was never plugged. The rerun froze once at the first start
+  after the install (ring 0, the guest clock stopped, nothing on COM1);
+  three more window installs on fresh overlays passed, one through the
+  same box. One freeze in four, not reproduced.
+- me-console: the guest's shut down request was lost at an idle desktop;
+  the rerun passed every check, then ME stalled in its own shut down after
+  the uninstall, with no xHCI98 driver loaded.
+
+**The update from `3.3.0.0`, without `/force`** (the released `3.3.0.0`
+installed on 98 SE and XP, `upd\`):
+- XP: exit 3, every device "update", `stor98.sys` the release's (`fc /b`),
+  the NVMe drive and a stick read clean.
+- 98 SE: `/yes` leaves Stor98's file update out (exit 4, "the file update
+  not confirmed": `/yes` does not confirm the disconnect question, by
+  design); run again without `/yes`, the enclosure unplugged and the
+  question answered: exit 3, `stor98.mpd` the release's, the NVMe drive
+  and a stick read clean. The runbook's command for this leg needs that
+  second run.
+- After that update, 98 SE hung once at "Windows is shutting down" (ring
+  0, VMM addresses, interrupts taken; evidence `s98-hang-evidence.txt`).
+  The hung run's own disk, started again with the NVMe drive and the
+  stick, the same copies and Shut Down, powered off in 20 s. Three repeats
+  of the update gave no result (the repeat script did not get through the
+  installer's questions), and the fresh-install repeats were not run. Not
+  reproduced; the owner released with it recorded here (2026-11-01).
+
+**x64 legs** on the signed nonfree download (`E:\xhci98-vm\p45\w45-matrix64\`):
+XP x64, Vista x64 and 7 x64 (the certificate trusted, test signing on) and
+10 x64 (the opt-in install): exit 3, every device Code 0, a stick read
+clean before and after the restart; 7 x64 with test signing off: the
+controller at Code 52, as documented. Thunderbolt networking on 7 x64
+against Linux 7.0's `thunderbolt_net`: the adapter installed signed with
+no prompt, pings both ways, 1472 bytes with don't-fragment. Not run: the
+networking uninstall and 10 x64's networking.
