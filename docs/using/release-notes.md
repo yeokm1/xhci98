@@ -379,9 +379,10 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
 - Devices on the computer's own ports kept across a resume that restarts
   the controller (`XhciResumeKeep`).
 - A device that comes back with its serial number unreadable is no
-  longer taken for a new one.
+  longer taken for a new one: if retries fail, it stays out until
+  plugged in again.
 - USB Audio 2.0 and 3.0 kept from Windows' USB Audio 1.0 driver (2000 to
-  8.1); devices with several configurations split.
+  8.1); devices with several configurations split where eligible.
 - Memory integrity's rules met on 8 to 10; smaller fixes throughout.
 - 98 SE: a device with no working driver holding a shared IRQ slows or
   freezes Windows ("Known limitations").
@@ -407,7 +408,7 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
   without a restart; `XhciCmRingInterrupt`; the ASM4242 named by its
   INF.
 - A drive attached during the install is listed in Safely Remove after a
-  restart or replug ("Thunderbolt and USB4: known limitations").
+  restart or replug ("What `3.3.0.0` changes").
 - [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit 8 and 8.1.]
 - [PLACEHOLDER w45-s3: the Sleep (S3) wake on 10 x64.]
 
@@ -1589,8 +1590,9 @@ have every leg.
   restart a program refused, until its next start, and while the service
   is stopped.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
-  support, or connected while the driver was installed) is offered for
-  safe removal only after a re-plug, on Windows 2000 to 7; the xHCI98 USB
+  support) is offered for safe removal only after a re-plug, on Windows
+  2000 to 7 (one connected while the package was installed, after a
+  restart or a re-plug: "What `3.3.0.0` changes"); the xHCI98 USB
   Tree and `INSTALL /console /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing

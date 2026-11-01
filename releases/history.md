@@ -87,7 +87,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   names that device by its ids.
 - **A device that comes back** after a link drop, a recovery or a replug
   is no longer taken for a new one when its serial number cannot be read
-  at that moment, so a network adapter keeps its fixed address.
+  at that moment, so a network adapter keeps its fixed address; if the
+  driver's retries fail, the device stays out until plugged in again.
 - **Windows Vista and 7, 32-bit:** a dock's own USB controller starts at
   its first plug without a restart.
 - **Windows 98 SE and ME: more of the free and non-free drivers can be
