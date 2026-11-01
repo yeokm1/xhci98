@@ -6704,7 +6704,9 @@ that does (`OS-ONWIN98`).
 not a driver: it is the user-mode USB property-page DLL, and it goes to dirid
 11 (the system directory) rather than `System32\Drivers`, so it has its own
 `[Xhci.CopyUI]` section and its own `[DestinationDirs]` row. It is copied on
-all four install paths.
+all four install paths, but for the 64-bit file's XP x64 and Server 2003 x64
+device install since 3.4.0.0 (design record 11, decision 13 revised
+2026-11-01: with it there DISM refused the file for a `boot.wim`).
 
 The reason is an NT one. Both NT targets' own INFs have **already registered**
 `usbui.dll` against the root hub that this driver's `usbport.sys` creates:

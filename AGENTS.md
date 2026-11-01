@@ -543,7 +543,11 @@ reports as nothing at all.
 **There are two INFs, and they are two packages rather than one file with a
 third path.** `src/xhci98-amd64.inf` is the 64-bit package's, carrying no
 Windows 98 path and a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`:
-NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches the OS-supplied files, and
+NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches `usbd.sys` from the OS
+(since 3.4.0.0 not `usbui.dll`: the driver store reads that section on
+Vista to 10 too, and Windows PE has no `usbui.dll` to satisfy it, so DISM
+refused the file for a `boot.wim`; record 11 decision 13, revised
+2026-11-01, and the gate's `OS-UINT52`), and
 Vista and Windows 7 x64 get `[Xhci.Dev6.NTamd64]`, which copies `xhci98.sys`
 alone because their file queue aborts on a `LayoutFile` copy (design record 11
 section 12, decision 13; the gate refuses an OS file there as `OS-ONNT6`).
@@ -606,7 +610,9 @@ drivers above the HCD's PDOs import) to dirid 10 (`System32\Drivers`) and
 `usbui.dll` (the property-page provider, and on 9x the drawer of the tabs'
 dialogs) alone to dirid 11 (`System32`), from the OS's own install source
 through `LayoutFile=layout.inf`, never overwriting a file already there,
-because nothing on an xHCI-only machine ever placed them. On an xHCI-only
+because nothing on an xHCI-only machine ever placed them - except
+`usbui.dll` on the 64-bit file's XP x64 and Server 2003 x64 device install
+since 3.4.0.0 (above). On an xHCI-only
 Windows 98 machine that means the Windows 98 CD may be asked for; the NT
 targets take them from their driver cache with no prompt; and Vista's and 7's
 `Xhci.Dev6` path copies `xhci98.sys` alone, since every install of those

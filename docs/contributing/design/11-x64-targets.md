@@ -2283,6 +2283,63 @@ publishes:
       the line the same evening**, `PATH-MFGDEC` now requires that field on
       the 32-bit file and still refuses any other, and roadmap task 22.5 has
       the readings.
+    - **Revised 2026-11-01 (roadmap-usb4 task 45.44, the owner's choice
+      of that day): the 64-bit file's NT 5.2 device install copies
+      `usbd.sys` and no longer `usbui.dll`**, so that `DISM /Add-Driver`
+      can add `nt-x64\xhci98.inf` to a Windows PE or Setup image
+      (`boot.wim`). 45.44's leg L9 found the shipping file refused there
+      with Error 2 (`setupapi.offline.log`: "Could not find include INF
+      file "layout.inf"", then "Failed to get driver package copy files"),
+      while `install.wim` took it. The cause was read by adding variants
+      of the file to the images: 7 SP1's DISM (6.1.7600) on 7 SP1 x64 and
+      x86 `boot.wim` (indexes 1 and 2) and `install.wim`, and 10 22H2's
+      DISM (10.0.19041) on 10 22H2 x64 and x86 `boot.wim` index 2
+      (`runs/run-45.md`, "45.44 (the boot.wim INF)"). Three facts:
+      - **The driver store collects the copy files of every models section
+        whose decoration matches the image's architecture**, not only the
+        one the image would install from. `[XhciModels.NTamd64]`, NT 5.2's,
+        is read on a 6.x image beside `[XhciModels.NTamd64.6.0]`: with the
+        `NTamd64` field taken off `[Manufacturer]` the file goes in (variant
+        A8); renamed `.NTamd64.5.2` it does not (A10, 5.2 being below 6.1);
+        and a copy moved behind `Include=layout.inf` (A1, A5) or `Needs=`
+        (A12) is followed. On 7 SP1's `install.wim` the store also queues
+        `usbd.sys` from the NT 5.2 path, which `COPYFLG_NO_OVERWRITE`
+        skips there.
+      - **A copy file with no source in the package passes when the image
+        already holds it; the missing `layout.inf` is a warning.** 7 SP1's
+        `install.wim` has no `layout.inf` either and takes every variant,
+        even one with no `LayoutFile` at all (A6, A9). 7's and 10's Windows
+        PE carry `usbd.sys` but not `usbui.dll`: the NT 5.2 path copying
+        `usbd.sys` alone goes in (A13, on 7 and 10), `usbui.dll` alone does
+        not (A15), and dropping `LayoutFile` (A2, A6) or the catalog (A7)
+        changes nothing. The right-click `[DefaultInstall.NTamd64]` is not
+        read (A8 passes with it copying both). A13 dropped `usbui.dll` from
+        that route too; the shipped form, which drops it from the device
+        install alone, is read by the same run section's legs.
+      - **The 32-bit file is not affected.** Its NT 5.x path is the
+        undecorated models section, which the store leaves out when
+        `NTx86.6.0` matches: the shipping `src/xhci98.inf` goes into 7 SP1
+        x86 `boot.wim` (indexes 1 and 2) and `install.wim` and 10 22H2 x86
+        `boot.wim` unchanged (X0). It, and so `98-me\`, are not changed.
+
+      So `[Xhci.Dev.NTamd64]` copies `Xhci.CopyFiles,Xhci.CopyOS`.
+      `LayoutFile`, `usbd.sys` from the Windows media and
+      `[DefaultInstall.NTamd64]` stay as they were; F6 and nLite take the
+      same file. **What it costs**: an XP x64 or Server 2003 x64 machine
+      where nothing else ever placed `usbui.dll` (an xHCI-only machine with
+      no other USB driver installed) shows no Advanced tab on the
+      controller and no Power tab on the root hub; the registration stays,
+      so the tabs appear once the file is there, as the 32-bit NT readings
+      of 2026-09-07 found for the root hub. The gate holds the new shape
+      (`OS-UINT52`: the NT 5.2 device install copies `usbd.sys` and not
+      `usbui.dll`; its right-click route still copies both). Options set
+      aside: a separate XP x64 and Server 2003 x64 INF in a folder of its
+      own outside `nt-x64\`, which keeps the tabs but changes record 36's
+      three-family layout (planned, roadmap-usb4 "Planned - The XP x64
+      Property Pages"); `Include=`, `Needs=` and an `.NTamd64.5.2`
+      decoration, refused by the store as above; and `usbui.dll` named in
+      `[SourceDisksFiles]`, which ships a Microsoft file or sends the
+      engine to this disk for one (`OS-MEDIA`).
 
 ---
 
