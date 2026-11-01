@@ -888,7 +888,8 @@ BOOLEAN CmEjClaimEnd(CM_EJ_TX *t, ULONG queryCr, ULONG removeCr,
     if (queryCr != CM_EJ_CR_SUCCESS) {
         /* A vanished child's refusal (or its query not made) owes its
          * retries (R12 S4), backed off from 2 s after this one
-         * (CmEjVanishRetryMs; a query not made 2 s): the transaction's, or,
+         * (CmEjVanishRetryMs; a query not made counts no attempt and is
+         * asked again at once): the transaction's, or,
          * with no call worker, its parked claim's (CmEjClaimRetry). */
         t->Flags &= ~(CM_EJ_F_QUERIED | CM_EJ_F_AUTH);
         t->QueryCr = queryCr;

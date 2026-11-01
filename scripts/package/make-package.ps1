@@ -8,7 +8,7 @@ CD - holding everything [SourceDisksFiles] names, which since release 1.0.0.1
 is this project's two files and nothing else:
 
     xhci98.inf     the dual-path INF
-    xhci98.sys     the built miniport (debug or release)
+    xhci98.sys     the built driver (release, or qemu for a guest)
     xhciuas.inf    the UAS class driver's INF (roadmap task 31-A.2;
                    src\uas\xhciuas-amd64.inf under this name for amd64)
     xhciuas.sys    the UAS class driver, the same flavour
@@ -34,6 +34,12 @@ is this project's two files and nothing else:
                    xhcicm.sys: 98 and ME never read the x64 package, and no
                    other INF there binds a PCI bridge, so it needs no
                    subdirectory and no second copy (3.1.0.0)
+    xhcinet.inf    Thunderbolt networking's INF (roadmap-usb4.md task 45.59,
+                   design record 35 section 9.5; src\net\xhcinet-amd64.inf
+                   under this name for amd64), at the root, where its
+                   SourceDisksNames entry finds both images
+    xhcinet.sys    its NDIS 5 miniport, the same flavour
+    xhcinet6.sys   its NDIS 6.20 miniport for 8, 8.1 and 10, the same flavour
 
 The Intel port switchover's scripts, src\portsw.vbs, portsw-on.bat and
 portsw-off.bat (roadmap-hcd tasks 36.42 and 36.56), are not staged here
@@ -71,14 +77,19 @@ A package staging an amd64 binary under the 32-bit INF would install on a
 moves all three rather than three switches that can disagree.
 
 The two architectures' binaries share a filename, so they cannot share a
-directory: the default output is out\pkg-<flavor>-<arch>, and a release cuts
-them into release-x86, debug-x86, release-x64 and debug-x64 (roadmap task
-21.3, design record 11 section 8).
+directory: the default output is out\pkg-<flavor>-<arch>, and a release cut
+up to 3.3.0.0 published them as release-x86 and release-x64 (roadmap task
+21.3, design record 11 section 8; the debug-x86 and debug-x64 of the cuts
+before 3.4.0.0 went with the debug flavour, task 45.45). From 3.4.0.0 the cut
+re-lays this flat package by Windows family (98-me, nt-x86, nt-x64; task
+45.44, design record 36) and this script's output stays flat.
 
 .PARAMETER Flavor
-debug (default), release or qemu - which src\obj*\<arch>\xhci98.sys to package.
-The DDK's own words for the two *checked* builds are both "checked" and for the
-free one "free", and they survive only in the obj directory names it writes.
+release (default) or qemu - which src\obj*\<arch>\xhci98.sys to package.
+The debug flavour was retired with roadmap-usb4 task 45.45 (design record 08
+section 14). The DDK's own words for the checked qemu build and the free
+release one are "checked" and "free", and they survive only in the obj
+directory names it writes.
 
 qemu is a first-class flavour and this script stages it, because that is how it
 reaches a guest at all - it is the emulator and bench build, carrying the
@@ -138,6 +149,23 @@ The connection manager to stage, overriding
 are built from the default paths, and a stand-in package (one naming
 -DriverPath) carries it only when it names -CmDriverPath too.
 
+.PARAMETER NetInfPath
+Thunderbolt networking's INF to stage (task 45.59, design record 35 section
+9.5), overriding `src\net\xhcinet.inf` (x86) or `src\net\xhcinet-amd64.inf`
+(amd64). Staged as `xhcinet.inf` at the root and gated by
+scripts\inf-gate\check-net-inf.ps1 under -Arch.
+
+.PARAMETER NetDriverPath
+xhcinet.sys, the NDIS 5 miniport, overriding
+`src\net\ndis5\obj<flavour>\<archdir>\xhcinet.sys`, with -CmDriverPath's
+rule: both packages carry the network driver whenever they are built from
+the default paths, and a stand-in package (one naming -DriverPath) carries
+it only when it names -NetDriverPath too (and then -Net6DriverPath).
+
+.PARAMETER Net6DriverPath
+xhcinet6.sys, the NDIS 6.20 miniport, overriding
+`src\net\ndis6\obj<flavour>\<archdir>\xhcinet6.sys`.
+
 .PARAMETER HlprDriverPath
 The x86 helper to stage (design record 18; tasks 36.15 and 38.3), overriding
 `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`. The 32-bit INF names it in
@@ -156,6 +184,23 @@ scripts\inf-gate\check-txtsetup-oem.ps1 against the staged INF and package.
 Staged whenever the package is built from the default paths; a caller that
 names -DriverPath (the self-tests' stand-ins) stages it only when it names
 -OemPath too, as for the UAS pair.
+
+.PARAMETER PfwVxdPath
+XHCIPFW.VXD to stage at the root of the x86 package, overriding
+`src\pfw\obj\XHCIPFW.VXD` (`src\pfw\obj\qemu\` for qemu). Staged from the
+default path whenever the package is built from the default paths; a caller
+that names -DriverPath (the self-tests' stand-ins) stages it only when it
+names -PfwVxdPath too, as for -OemPath, so no self-test reads an image an
+earlier build left in the tree (roadmap-usb4 task 45.3). x86 only.
+
+.PARAMETER PfwSysPath
+XHCIPFW.SYS, the same way: overriding
+`src\pfw\nt\objfre\i386\xhcipfw.sys` (`objfre_qemu` for qemu). x86 only.
+
+.PARAMETER VsdPath
+S98VSD.VXD, the same way, beside stor98.mpd in an x86 package that carries
+Stor98: overriding `src\vsd\obj\S98VSD.VXD` (`src\vsd\obj\qemu\` for qemu).
+x86 only.
 
 .PARAMETER TestSignPfx
 The project test certificate's .pfx (design record 19; owner, 2026-10-11):
@@ -248,8 +293,8 @@ package's DriverVer (scripts\inf-gate\check-stor98-inf.ps1), and Stor98's
 interface header byte for byte to src\cm\stor98cm.h. With -TestSignPfx the
 amd64 stor98.sys is signed with the other x64 drivers, by the same key;
 with -SignOnly its bytes are held to the gated build's record like theirs.
-make-release.ps1 passes this to its debug legs, so a cut's debug
-directories carry no Stor98. A caller that names -DriverPath (the
+make-release.ps1 passed this to its debug legs until the debug flavour was
+retired (task 45.45). A caller that names -DriverPath (the
 self-tests' stand-ins) stages Stor98 only when it names -Stor98Root too.
 
 .PARAMETER Stor98Root
@@ -294,7 +339,7 @@ Stage roadmap task 12.3's failed-start artifact: a package that installs,
 neither target has ever exercised. Build it first with
 
     set XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER
-    scripts\build-driver.cmd debug
+    scripts\build-driver.cmd release
 
 This is the **only** exception to the do-not-deploy rule above, and it is narrow
 by construction rather than by intention: the image must carry a *second*
@@ -353,8 +398,8 @@ powershell -File scripts\package\make-package.ps1 -Flavor release -OutDir E:\xhc
 
 [CmdletBinding()]
 param(
-    [ValidateSet("debug", "release", "qemu")]
-    [string]$Flavor = "debug",
+    [ValidateSet("release", "qemu")]
+    [string]$Flavor = "release",
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
     [string]$OutDir = "",
@@ -365,8 +410,14 @@ param(
     [string]$CmInfPath = "",
     [string]$CmFilterInfPath = "",
     [string]$CmDriverPath = "",
+    [string]$NetInfPath = "",
+    [string]$NetDriverPath = "",
+    [string]$Net6DriverPath = "",
     [string]$HlprDriverPath = "",
     [string]$OemPath = "",
+    [string]$PfwVxdPath = "",
+    [string]$PfwSysPath = "",
+    [string]$VsdPath = "",
     [string]$TestSignPfx = "",
     [switch]$SignOnly,
     [string]$GatedManifestPath = "",
@@ -409,11 +460,38 @@ $stageUas = ($DriverPath -eq "") -or ($UasDriverPath -ne "")
 # The Thunderbolt 3 connection manager (roadmap-usb4.md task 39-A.1),
 # decided the same way.
 $stageCm = ($DriverPath -eq "") -or ($CmDriverPath -ne "")
+# Thunderbolt networking (task 45.59, record 35 section 9.5), the same way.
+$stageNet = ($DriverPath -eq "") -or ($NetDriverPath -ne "")
+if ($DriverPath -ne "" -and (($NetDriverPath -ne "") -ne ($Net6DriverPath -ne ""))) {
+    throw "-NetDriverPath and -Net6DriverPath go together: xhcinet.inf names both images."
+}
 # The text-mode Setup description (task 33.3), decided the same way.
 $stageOem = ($DriverPath -eq "") -or ($OemPath -ne "")
 # The bundled Stor98 (task 42-A.30): by default with the default paths;
 # a caller naming -DriverPath stages it only with -Stor98Root.
 $stor98ByDefault = ($DriverPath -eq "")
+# XHCIPFW.VXD, XHCIPFW.SYS and S98VSD.VXD (task 45.3), decided as the
+# text-mode Setup description is: the tree's images with the default paths,
+# a stand-in caller's own or none.
+# PowerShell names are not case-sensitive, so the staging blocks below
+# keep their paths in $pfwImage, $pfwSysImage and $vsdImage, and whether
+# each was named in these.
+$namedPfwVxd = ($PfwVxdPath -ne "")
+$namedPfwSys = ($PfwSysPath -ne "")
+$namedVsd = ($VsdPath -ne "")
+$stagePfwVxd = ($DriverPath -eq "") -or $namedPfwVxd
+$stagePfwSys = ($DriverPath -eq "") -or $namedPfwSys
+$stageVsd = ($DriverPath -eq "") -or $namedVsd
+function Resolve-NamedImage {
+    # A named image's full path, a relative one taken against PowerShell's
+    # location (not the process's directory, which Set-Location does not move).
+    param([string]$Path)
+    if (-not [System.IO.Path]::IsPathRooted($Path)) { $Path = Join-Path $PWD.ProviderPath $Path }
+    return [System.IO.Path]::GetFullPath($Path)
+}
+if ($Arch -ne "x86" -and ($PfwVxdPath -ne "" -or $PfwSysPath -ne "" -or $VsdPath -ne "")) {
+    throw "-PfwVxdPath, -PfwSysPath and -VsdPath name images of the x86 package alone; the amd64 package carries none of them."
+}
 if ($OemPath -eq "") {
     $OemPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\txtsetup-amd64.oem" } else { "src\txtsetup.oem" })
 }
@@ -424,7 +502,6 @@ if ($Arch -eq "amd64" -and $HlprDriverPath -ne "") {
 $stageHlpr = ($Arch -eq "x86") -and (($DriverPath -eq "") -or ($HlprDriverPath -ne ""))
 if ($Arch -eq "x86" -and $HlprDriverPath -eq "") {
     $hlprObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -435,7 +512,6 @@ $uasAllow = if ($Arch -eq "amd64") { "xhciuas-imports-amd64.allow" } else { "xhc
 if ($UasInfPath -eq "") { $UasInfPath = Join-Path $repo "src\uas\$uasInfName" }
 if ($UasDriverPath -eq "") {
     $uasObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -450,18 +526,26 @@ if ($CmFilterInfPath -eq "") {
 }
 if ($CmDriverPath -eq "") {
     $cmObjDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
     $CmDriverPath = Join-Path $repo "src\cm\$cmObjDir\$archDir\xhcicm.sys"
 }
+$netAllow = if ($Arch -eq "amd64") { "xhcinet-imports-amd64.allow" } else { "xhcinet-imports.allow" }
+$net6Allow = if ($Arch -eq "amd64") { "xhcinet6-imports-amd64.allow" } else { "xhcinet6-imports.allow" }
+if ($NetInfPath -eq "") {
+    $NetInfPath = Join-Path $repo $(if ($Arch -eq "amd64") { "src\net\xhcinet-amd64.inf" } else { "src\net\xhcinet.inf" })
+}
+$netObjDir = switch ($Flavor) {
+    "qemu"    { "objchk_qemu" }
+    default   { "objfre" }
+}
+if ($NetDriverPath -eq "") { $NetDriverPath = Join-Path $repo "src\net\ndis5\$netObjDir\$archDir\xhcinet.sys" }
+if ($Net6DriverPath -eq "") { $Net6DriverPath = Join-Path $repo "src\net\ndis6\$netObjDir\$archDir\xhcinet6.sys" }
 if ($DriverPath -eq "") {
-    # Three flavours, two of them checked: "objchk" alone stopped identifying a
-    # build when task 13-L.1 added qemu, which is exactly why it has a tree of
-    # its own (scripts\build-driver.cmd :flavordirs).
+    # Two flavours since task 45.45; qemu, the checked one, has a tree of its
+    # own (scripts\build-driver.cmd :flavordirs).
     $objDir = switch ($Flavor) {
-        "debug"   { "objchk" }
         "qemu"    { "objchk_qemu" }
         default   { "objfre" }
     }
@@ -496,7 +580,7 @@ $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 #
 # Strip a trailing separator, which GetFullPath preserves. The staging
 # directory below is named by appending a suffix to this string, so with
-# `-OutDir out\pkg-debug\` it would be `out\pkg-debug\.staging-xxx` - a *child*
+# `-OutDir out\pkg-qemu\` it would be `out\pkg-qemu\.staging-xxx` - a *child*
 # of the destination rather than a sibling, and the swap would then delete its
 # own source. A path root keeps its separator: "E:\"
 # trimmed is "E:", which names the current directory on that drive.
@@ -753,6 +837,9 @@ time; they land in different directories on purpose.
     if ($Stor98HeaderPath -eq "") { $Stor98HeaderPath = Join-Path $repo "src\cm\stor98cm.h" }
     $stor98 = $null
     $stor98Files = @()
+    if ($namedVsd -and ($NoStor98 -or -not ($stor98ByDefault -or $Stor98Root -ne ""))) {
+        throw "-VsdPath: S98VSD.VXD goes beside stor98.mpd, and this package carries no Stor98."
+    }
     if (-not $NoStor98 -and ($stor98ByDefault -or $Stor98Root -ne "")) {
         $stor98 = Resolve-Stor98Build -Repo $repo -Root $Stor98Root -Arch @($Arch) -HeaderPath $Stor98HeaderPath `
                                       -SkipBinaryGates:$SkipBinaryGates
@@ -768,19 +855,20 @@ time; they land in different directories on purpose.
         # flavour's image in the qemu package; held to src\vsd\check-vsd.ps1
         # again here. A package built where src\vsd\build.cmd could not build
         # it goes without it (make-release.ps1 refuses that for a cut).
-        if ($Arch -eq "x86") {
-            $vsdPath = Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD")
-            if (Test-Path -LiteralPath $vsdPath -PathType Leaf) {
+        if ($Arch -eq "x86" -and $stageVsd) {
+            $vsdImage = if ($namedVsd) { Resolve-NamedImage $VsdPath } else {
+                Join-Path $repo ("src\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD") }
+            if (Test-Path -LiteralPath $vsdImage -PathType Leaf) {
                 if (-not $SkipBinaryGates) {
-                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdPath)
+                    $vsdArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\vsd\check-vsd.ps1"), $vsdImage)
                     if ($Flavor -eq "qemu") { $vsdArgs += "-Qemu" }
                     $out = & powershell.exe @vsdArgs 2>&1
                     if ($LASTEXITCODE -ne 0) { throw ("S98VSD.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
                 }
                 $stor98Files += [pscustomobject]@{ Source = "..\vsd\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "S98VSD.VXD"
-                                                   FullPath = $vsdPath; Dest = "S98VSD.VXD"
-                                                   Sha256 = (Get-FileHash -LiteralPath $vsdPath -Algorithm SHA256).Hash }
-                Write-Ok ("S98VSD.VXD from {0}" -f $vsdPath)
+                                                   FullPath = $vsdImage; Dest = "S98VSD.VXD"
+                                                   Sha256 = (Get-FileHash -LiteralPath $vsdImage -Algorithm SHA256).Hash }
+                Write-Ok ("S98VSD.VXD from {0}" -f $vsdImage)
                 # Windows loads an IOSUBSYS driver by its base name: a layer
                 # named STOR98.VXD beside stor98.mpd stopped Stor98's start
                 # (Code 10; design record 30 section 3.1, runs/run-43.md).
@@ -791,8 +879,10 @@ time; they land in different directories on purpose.
                 if ($dupNames.Count -ne 0) {
                     throw ("drivers staged for IOSUBSYS share a base name ({0}): Windows would load only one of them." -f ($dupNames -join ", "))
                 }
+            } elseif ($namedVsd) {
+                throw "-VsdPath: there is no file '$vsdImage'."
             } else {
-                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdPath)
+                Write-Warn ("no S98VSD.VXD at {0}: this package goes without it (src\vsd\build.cmd builds it)" -f $vsdImage)
             }
         }
     }
@@ -805,20 +895,23 @@ time; they land in different directories on purpose.
     # src\pfw\build.cmd could not build it goes without it (make-release.ps1
     # refuses that for a cut).
     $pfwFile = $null
-    if ($Arch -eq "x86") {
-        $pfwPath = Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD")
-        if (Test-Path -LiteralPath $pfwPath -PathType Leaf) {
+    if ($Arch -eq "x86" -and $stagePfwVxd) {
+        $pfwImage = if ($namedPfwVxd) { Resolve-NamedImage $PfwVxdPath } else {
+            Join-Path $repo ("src\pfw\obj\" + $(if ($Flavor -eq "qemu") { "qemu\" } else { "" }) + "XHCIPFW.VXD") }
+        if (Test-Path -LiteralPath $pfwImage -PathType Leaf) {
             if (-not $SkipBinaryGates) {
-                $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwPath)
+                $pfwArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\check-pfw.ps1"), $pfwImage)
                 if ($Flavor -eq "qemu") { $pfwArgs += "-Qemu" }
                 $out = & powershell.exe @pfwArgs 2>&1
                 if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             }
-            $pfwFile = [pscustomobject]@{ FullPath = $pfwPath; Dest = "XHCIPFW.VXD"
-                                          Sha256 = (Get-FileHash -LiteralPath $pfwPath -Algorithm SHA256).Hash }
-            Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwPath)
+            $pfwFile = [pscustomobject]@{ FullPath = $pfwImage; Dest = "XHCIPFW.VXD"
+                                          Sha256 = (Get-FileHash -LiteralPath $pfwImage -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.VXD from {0}" -f $pfwImage)
+        } elseif ($namedPfwVxd) {
+            throw "-PfwVxdPath: there is no file '$pfwImage'."
         } else {
-            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwPath)
+            Write-Warn ("no XHCIPFW.VXD at {0}: this package goes without it (src\pfw\build.cmd builds it)" -f $pfwImage)
         }
     }
     # XHCIPFW.SYS (task 44.49, design record 32 section 11): the same step for
@@ -826,20 +919,23 @@ time; they land in different directories on purpose.
     # qemu image in the qemu package; held to src\pfw\nt\check-pfwsys.ps1
     # again here and staged under the hash it had then.
     $pfwSysFile = $null
-    if ($Arch -eq "x86") {
-        $pfwSysPath = Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys")
-        if (Test-Path -LiteralPath $pfwSysPath -PathType Leaf) {
+    if ($Arch -eq "x86" -and $stagePfwSys) {
+        $pfwSysImage = if ($namedPfwSys) { Resolve-NamedImage $PfwSysPath } else {
+            Join-Path $repo ("src\pfw\nt\" + $(if ($Flavor -eq "qemu") { "objfre_qemu" } else { "objfre" }) + "\i386\xhcipfw.sys") }
+        if (Test-Path -LiteralPath $pfwSysImage -PathType Leaf) {
             if (-not $SkipBinaryGates) {
-                $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysPath)
+                $pfwSysArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1"), $pfwSysImage)
                 if ($Flavor -eq "qemu") { $pfwSysArgs += "-Qemu" }
                 $out = & powershell.exe @pfwSysArgs 2>&1
                 if ($LASTEXITCODE -ne 0) { throw ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             }
-            $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysPath; Dest = "XHCIPFW.SYS"
-                                             Sha256 = (Get-FileHash -LiteralPath $pfwSysPath -Algorithm SHA256).Hash }
-            Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysPath)
+            $pfwSysFile = [pscustomobject]@{ FullPath = $pfwSysImage; Dest = "XHCIPFW.SYS"
+                                             Sha256 = (Get-FileHash -LiteralPath $pfwSysImage -Algorithm SHA256).Hash }
+            Write-Ok ("XHCIPFW.SYS from {0}" -f $pfwSysImage)
+        } elseif ($namedPfwSys) {
+            throw "-PfwSysPath: there is no file '$pfwSysImage'."
         } else {
-            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysPath)
+            Write-Warn ("no XHCIPFW.SYS at {0}: this package goes without it (src\pfw\nt\build.cmd builds it)" -f $pfwSysImage)
         }
     }
 
@@ -883,6 +979,7 @@ and deletes it when that flavour's build starts. Build and gate it first:
         $gatedBinaries = @{ "xhci98.sys" = $DriverPath }
         if ($stageUas)  { $gatedBinaries["xhciuas.sys"] = $UasDriverPath }
         if ($stageCm)   { $gatedBinaries["xhcicm.sys"] = $CmDriverPath }
+        if ($stageNet)  { $gatedBinaries["xhcinet.sys"] = $NetDriverPath; $gatedBinaries["xhcinet6.sys"] = $Net6DriverPath }
         if ($stageHlpr) { $gatedBinaries["xhcihlpr.sys"] = $HlprDriverPath }
         # Stor98's images, in the record since task 42-A.30.
         foreach ($nf in $stor98Files) {
@@ -952,6 +1049,8 @@ committed tree, or run this without -SignOnly to run every gate here.
         $DriverPath = $snapBinaries["xhci98.sys"]
         if ($snapBinaries.ContainsKey("xhciuas.sys"))  { $UasDriverPath = $snapBinaries["xhciuas.sys"] }
         if ($snapBinaries.ContainsKey("xhcicm.sys"))   { $CmDriverPath = $snapBinaries["xhcicm.sys"] }
+        if ($snapBinaries.ContainsKey("xhcinet.sys"))  { $NetDriverPath = $snapBinaries["xhcinet.sys"] }
+        if ($snapBinaries.ContainsKey("xhcinet6.sys")) { $Net6DriverPath = $snapBinaries["xhcinet6.sys"] }
         if ($snapBinaries.ContainsKey("xhcihlpr.sys")) { $HlprDriverPath = $snapBinaries["xhcihlpr.sys"] }
         foreach ($nf in $stor98Files) {
             if ($snapBinaries.ContainsKey($nf.Dest)) { $nf.FullPath = $snapBinaries[$nf.Dest] }
@@ -1083,7 +1182,8 @@ is a stale binary from before that. Rebuild:
 '$DriverPath' is the $imageFlavour build, but -Flavor $Flavor was asked for.
 Staging one flavour under another's name is how a qemu binary - which carries
 the port-0xE9 mirror and must never be published - reaches media labelled
-debug. Rebuild the flavour you meant:
+release, or how an old image of the retired debug flavour (task 45.45) does.
+Rebuild the flavour you meant:
   scripts\build-driver.cmd $Flavor
 "@
     }
@@ -1306,6 +1406,59 @@ The package carries the Thunderbolt 3 connection manager. Build it first:
         Write-Warn "no connection manager staged: -DriverPath was named without -CmDriverPath (a stand-in package)."
     }
 
+    # --- Thunderbolt networking, held to the gates build-driver.cmd runs ----
+    # (task 45.59, design record 35 section 9.5): each image to its flavour
+    # marker and its import gate (x86 xhcinet.sys by the net98 profile,
+    # amd64 xhcinet.sys by the default amd64 rules, xhcinet6.sys by net6 on
+    # both), the INF to check-net-inf.ps1.
+    if ($stageNet) {
+        Write-Step ("Thunderbolt networking ({0}, {1})" -f $Flavor, $Arch)
+        $netImages = @(
+            @{ Name = "xhcinet.sys"; Path = $NetDriverPath; Allow = $netAllow; Profile = $(if ($Arch -eq "x86") { "net98" } else { "" }) },
+            @{ Name = "xhcinet6.sys"; Path = $Net6DriverPath; Allow = $net6Allow; Profile = "net6" })
+        foreach ($ni in $netImages) {
+            if (-not (Test-Path -LiteralPath $ni.Path)) {
+                throw @"
+no $Flavor $($ni.Name) at '$($ni.Path)'.
+The package carries Thunderbolt networking. Build it first:
+  scripts\build-driver.cmd $Flavor$(if ($Arch -eq "amd64") { " -amd64" })
+"@
+            }
+            $niFlavour = Get-ImageFlavourMarker -Path $ni.Path
+            if ($niFlavour -ne $Flavor) {
+                throw "'$($ni.Path)' carries the flavour marker '$niFlavour', not $Flavor's. Rebuild: scripts\build-driver.cmd $Flavor"
+            }
+        }
+        $savedEap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            if ($runBinaryGates) {
+                foreach ($ni in $netImages) {
+                    $niArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") "check-imports.ps1"),
+                                "-Image", $ni.Path, "-Flavor", $Flavor, "-Arch", $Arch,
+                                "-AllowPath", (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "import-gate") $ni.Allow))
+                    if ($ni.Profile -ne "") { $niArgs += @("-GateProfile", $ni.Profile) }
+                    if ($NoTargetEvidence) { $niArgs += "-NoTargetEvidence" }
+                    & powershell.exe @niArgs
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "'$($ni.Path)' failed the import-compatibility gate against $($ni.Allow)."
+                    }
+                }
+            }
+            & powershell -NoProfile -ExecutionPolicy Bypass -File `
+                (Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-net-inf.ps1") `
+                -InfPath $NetInfPath -Arch $Arch
+            if ($LASTEXITCODE -ne 0) {
+                throw "'$NetInfPath' failed scripts\inf-gate\check-net-inf.ps1 - fix it before packaging."
+            }
+        } finally {
+            $ErrorActionPreference = $savedEap
+        }
+    } else {
+        Write-Warn "no network driver staged: -DriverPath was named without -NetDriverPath (a stand-in package)."
+    }
+
     # --- the x86 helper, held to its own gates (design record 18) ---------
     if ($stageHlpr) {
         Write-Step ("x86 helper ({0})" -f $Flavor)
@@ -1414,6 +1567,16 @@ The x86 package carries the x86 helper its INF names. Build it first
                             -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256["xhcicm.sys"] } else { "" })
             $CmDriverPath = $signedCm
         }
+        if ($stageNet) {
+            foreach ($nn in @("xhcinet.sys", "xhcinet6.sys")) {
+                $signedNet = Join-Path $signDir $nn
+                $srcNet = if ($nn -eq "xhcinet.sys") { $NetDriverPath } else { $Net6DriverPath }
+                Invoke-TestSign -Source $srcNet -Dest $signedNet -Pfx $TestSignPfx -Password $testSignPassword `
+                                -Thumbprint $testSignCert.Thumbprint -SignTool $signTool -Label $nn `
+                                -ExpectSha256 $(if ($null -ne $gated) { $gated.Sha256[$nn] } else { "" })
+                if ($nn -eq "xhcinet.sys") { $NetDriverPath = $signedNet } else { $Net6DriverPath = $signedNet }
+            }
+        }
         # The bundled stor98.sys, by the same key in the same step (task
         # 42-A.30, owner 2026-10-19: one signature signs everything).
         foreach ($nf in $stor98Files) {
@@ -1508,6 +1671,15 @@ usbhub.sys through the INF's LayoutFile, and the gate refuses them here.
             # signed) bytes, which CM-NO9XBRIDGE compares.
             Copy-Item -LiteralPath $CmDriverPath -Destination (Join-Path $stageDir "nt\xhcicm.sys") -Force
         }
+    }
+    # Thunderbolt networking at the root (record 35 section 9.5): the
+    # installer's local copy is this flat package, and the INF's
+    # SourceDisksNames finds both images beside it; the cut re-lays the three
+    # into each family's cm\tbnet\.
+    if ($stageNet) {
+        Copy-Item -LiteralPath $NetInfPath -Destination (Join-Path $stageDir "xhcinet.inf") -Force
+        Copy-Item -LiteralPath $NetDriverPath -Destination (Join-Path $stageDir "xhcinet.sys") -Force
+        Copy-Item -LiteralPath $Net6DriverPath -Destination (Join-Path $stageDir "xhcinet6.sys") -Force
     }
     # txtsetup.oem at the root: text-mode Setup reads it from A:\ and its
     # [Disks] entry finds xhci98.sys and xhci98.inf beside it.

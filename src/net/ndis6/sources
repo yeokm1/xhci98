@@ -1,0 +1,70 @@
+#
+# sources - WDK 7.1 build description for xhcinet6.sys, the NDIS 6.20
+# miniport of Thunderbolt networking for Windows 8, 8.1 and 10 (design
+# record 35 sections 7.1 and 7.9, roadmap-usb4.md task 45.59 step S7),
+# above xhcicm.sys's network PDO XHCICM\TBNET, with the NDIS 6 sections of
+# src\net\xhcinet.inf and xhcinet-amd64.inf.
+#
+# TOOLCHAIN: WDK 7.1's WIN7 environment on both architectures
+# (setenv <WDK> <flavor> x86 WIN7 no_oacr, and x64 WIN7 no_oacr), the
+# one kit here whose ndis.h and lib\win7\<arch>\ndis.lib carry NDIS 6.20;
+# no MSVC 6.0 or Windows 2000 DDK build exists of this image. NDIS 6.20 is
+# Windows 7's NDIS; 8, 8.1 and 10 load an NDIS 6.20 miniport as they load
+# every 6.x one.
+#
+# Build with scripts\build-driver.cmd, which builds this directory after
+# src\net\ndis5 for every flavour and runs the import gate on the result.
+# Output: src\net\ndis6\objfre\<i386|amd64>\xhcinet6.sys (release) and
+# objchk_qemu (qemu), build-driver.cmd setting BUILD_ALT_DIR as it does
+# for every driver.
+#
+# THE SHARED FILES: ..\net_frame.c (the USB4NET framing core,
+# test\test_net_frame.c) and ..\net_cmif.c (the glue to the connection
+# manager's interface), compiled in by path, the same files xhcinet.sys
+# compiles. n6_cm.c is Open, Close and Log; n6_data.c the data path;
+# n6_oid.c the OIDs and power; n6_main.c the rest. Every allocation is
+# NDIS's, at MiniportInitializeEx, freed at MiniportHaltEx.
+#
+# ADDING A FILE. A new .c is one more line in SOURCES below;
+# scripts\source-stamp.ps1 reads this list, so the stamp follows.
+#
+
+TARGETNAME=xhcinet6
+TARGETTYPE=DRIVER
+TARGETPATH=obj
+
+INCLUDES=$(DDK_INC_PATH)
+
+TARGETLIBS=$(DDK_LIB_PATH)\ndis.lib
+
+C_DEFINES=$(C_DEFINES) -DNDIS_MINIPORT_DRIVER=1 -DNDIS620_MINIPORT=1
+
+SOURCES=..\net_frame.c \
+        ..\net_cmif.c  \
+        n6_cm.c        \
+        n6_data.c      \
+        n6_oid.c       \
+        n6_main.c      \
+        xhcinet6.rc
+
+!IF "$(XHCI_EXTRA_DEFINES)" != ""
+!ERROR XHCI_EXTRA_DEFINES is set, and xhcinet6.sys has no diagnostic builds. Clear it before building.
+!ENDIF
+
+#
+# The flavours, derived from BUILD_ALT_DIR as src\net\ndis5\sources
+# derives them (design record 08): release and qemu. The qemu flavour is
+# a checked build; this driver has no port-0xE9 mirror (its log lines go
+# through the connection manager's Log, record 35 section 8.4).
+#
+!IF "$(BUILD_ALT_DIR)" == "chk_qemu"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
+!ELSEIF "$(BUILD_ALT_DIR)" == "fre"
+C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+!ELSE
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ENDIF
+
+!IF "$(DDK_TARGET_OS)" != "Win7"
+!ERROR xhcinet6.sys builds in WDK 7.1's WIN7 environment alone (NDIS 6.20): DDK_TARGET_OS is "$(DDK_TARGET_OS)".
+!ENDIF

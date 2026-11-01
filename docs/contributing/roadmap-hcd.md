@@ -196,7 +196,7 @@ phase leaves to later tasks. **Closed 2026-10-03:** reviewed and revised
 over `3c1d7f2..86cc59a` (the last clean), then merged into the
 `2.0.0.0` branch, on the owner's instruction of 2026-10-02 to merge once the
 review was clean - taken as the owner's acceptance
-of the checkpoint below.
+of the checkpoint below. Released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)").
 
 Why a phase: the miniport's Phase 3 spike and every `-0` batch since exist
 because a body written against an assumed contract cost a rewrite. The HCD
@@ -240,7 +240,7 @@ Status: opened 2026-10-03 on the owner's go, on branch `phase-26` (the
 owner's rule of 2026-10-02: one branch per phase, merged into `2.0.0.0` when
 its checkpoint closes); the owner has pre-authorized closing its checkpoint
 when its written clauses pass. Worked in four batches: 26-A.1, A.2 and
-26-V.0; A.3 and A.4; A.5 and A.6; A.7 to A.10, then 26-V.1 to V.3. Batches (a), (b) and (c) are closed, and batch (d) closed on 2026-10-04: 26-A.7 to A.10 done and 26-V.1 to V.3 read (`runs/run-26.md`). Every clause of the checkpoint below has been read - round 12's root-port rows at parity in 26-A.10's first matrix run; the disable, enable, remove and rescan sequence on Windows 2000 in 26-V.2; the Windows 98 door sequence - disable, enable, remove and rescan with a mouse attached - on Windows 98 SE under NUSB 3.3 and under SweetLow's stack on `a7ddbfa` (`runs/run-26.md`, "The Windows 98 door sequence"); Driver Verifier on Windows 2000 in 26-V.2; the root hub with every device beneath it, the Advanced tab, the Power tab and an `XHCISNAP` report on both in c17, 26-V.1 and 26-V.2; and 26-V.3 - and the checkpoint closes on `a7ddbfa`, the build of 26-V.1's and 26-V.2's last rows (`ac25e4e`'s fix for the ASIX adapter's Windows 98 driver over `40efd31`).
+26-V.0; A.3 and A.4; A.5 and A.6; A.7 to A.10, then 26-V.1 to V.3. Batches (a), (b) and (c) are closed, and batch (d) closed on 2026-10-04: 26-A.7 to A.10 done and 26-V.1 to V.3 read (`runs/run-26.md`). Every clause of the checkpoint below has been read - round 12's root-port rows at parity in 26-A.10's first matrix run; the disable, enable, remove and rescan sequence on Windows 2000 in 26-V.2; the Windows 98 door sequence - disable, enable, remove and rescan with a mouse attached - on Windows 98 SE under NUSB 3.3 and under SweetLow's stack on `a7ddbfa` (`runs/run-26.md`, "The Windows 98 door sequence"); Driver Verifier on Windows 2000 in 26-V.2; the root hub with every device beneath it, the Advanced tab, the Power tab and an `XHCISNAP` report on both in c17, 26-V.1 and 26-V.2; and 26-V.3 - and the checkpoint closes on `a7ddbfa`, the build of 26-V.1's and 26-V.2's last rows (`ac25e4e`'s fix for the ASIX adapter's Windows 98 driver over `40efd31`). Released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)").
 
 Why a phase: it is the "be usbport" step the architecture record always
 named as the large one, and it is where the HCD either matches the miniport
@@ -285,7 +285,7 @@ Goal: USB 2.0 hubs driven by the bus itself - High-Speed single-TT and
 multi-TT, Full and Low Speed devices behind them, hubs behind hubs to the
 depth xHCI allows - with the device matrix at full parity on both primaries.
 
-Status: **complete** at this checkpoint, 2026-10-04, on the owner's pre-approval of the close; opened the same day and worked on the integration branch `p27-int` for the phase branch `phase-27`. The tasks and their records:
+Status: **complete** at this checkpoint, 2026-10-04, on the owner's pre-approval of the close; opened the same day and worked on the integration branch `p27-int` for the phase branch `phase-27`, and released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)"). The tasks and their records:
 - 27-A.1, A.2 and A.4, and 28-A.2, which the owner moved here: done in parallel and merged.
 - 27-A.3: done, reviewed and revised on the batch.
 - The Windows 98 SE HID-unplug stall: 27-V.1 found it and `18ecc83` closed it.
@@ -401,7 +401,7 @@ device on the same connector unchanged.
 Status: closed 2026-10-04. Worked on `p28-31-int`, merged into `2.0.0.0` at
 `c9fcbde`. 29-A.1's SuperSpeedPlus refusal value was dropped from `2.0.0.0`
 by the owner's ruling, 29-E.1 was read after the cut, and 29-E.2 is recorded
-as not taken.
+as not taken. Released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)").
 
 Why a phase: this is the reason the successor exists. The port class the
 miniport left unpowered is powered for the first time, the link has a state
@@ -448,7 +448,7 @@ Status: closed 2026-10-04. Worked on `p28-31-int`, merged into `2.0.0.0` at
 `c9fcbde`. Built and reviewed on host vectors; the owner's bench after the
 cut was its first execution. The Windows 2000 half was released untested,
 built from the specification (decisions table, "SuperSpeed hubs on Windows
-2000, revisited").
+2000, revisited"). Released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)").
 
 Why a phase: a USB 3 hub is two hubs on two ports with their own descriptor,
 their own port status format and their own depth and link-state requests, and
@@ -481,7 +481,7 @@ Bulk-Only still selectable.
 
 Status: closed 2026-10-04. Worked on `p28-31-int`, merged into `2.0.0.0` at
 `c9fcbde`. 31-0's unread sources were dropped from `2.0.0.0` by the owner's
-ruling, and 31-E.1 was read after the cut.
+ruling, and 31-E.1 was read after the cut. Released on `main` as the squash commit `4038447f` ("2.0.0.0 (#13)").
 
 Why a phase: streams are a transfer model the bus has never had, UAS is a
 class driver with a storage-stack contract of its own on each target, and
@@ -560,7 +560,7 @@ Status: closed 2026-10-05 on the cut. Opened 2026-10-04 on branch
 `2.0.1.0` from `main` at `3eb2d2b`, renamed `2.1.0.0` by the owner the same
 day when external hubs joined the release; worked on `p33-*` branches merged
 into `2.1.0.0`, with a whole-branch review (`4b6fa60`) and the legs in
-`out\phase33\`.
+`out\phase33\`. Released on `main` as the squash commit `47d1e8cf` ("2.1.0.0 (#14)").
 
 Why a phase: four of these change how Windows sees devices, one adds an
 install path the project has never had, and the cut changes every
@@ -607,7 +607,7 @@ Phase 35's). A first task 34.3,
 the controller's Advanced tab bandwidth on Windows Vista and 7, was removed
 by the owner the same day (its limitation stays in the release notes), and
 the tasks after it were renumbered: commits before `8a8514d` name the
-switchover 34.4, the docs 34.5 and the cut 34.6.
+switchover 34.4, the docs 34.5 and the cut 34.6. Released on `main` as the squash commit `c6f17ba3` ("2.1.1.0 (#15)").
 
 Why a phase: 34.1 changes what every install writes, 34.3 writes chipset
 registers the project had left alone since Phase 4, and the phase ends in a
@@ -648,7 +648,7 @@ Intel's SSIC IDs 1 to 3, and the driver read a published table as
 replacing the default IDs, so speed ID 4 decoded as unknown and the device
 was dropped before Enable Slot. The tolerance work followed a tester's AMD
 AM5 report of a mouse that stops at random. The bench was read after the
-cut, as for `2.0.0.0` (decisions table, "`2.2.0.0`: cut before the bench").
+cut, as for `2.0.0.0` (decisions table, "`2.2.0.0`: cut before the bench"). Released on `main` as the squash commit `db5b5584` ("2.2.0.0 (#16)").
 
 Why a phase: it changes how every root port's speed is decoded, lets a user
 send chipset register writes to Intel controllers nobody has read, adds
@@ -707,7 +707,7 @@ then re-cut with a later `DriverVer` for 36.56 and 36.57 (decisions table,
 work that could not be read moved to "Planned - bench follow-up after
 `2.3.0.0`". The task text as it stood at the close, with every reading,
 decision and review pointer, is `runs/run-36.md`, "Moved from the roadmap
-at the phase's close".
+at the phase's close". Released on `main` as the squash commit `00a3b9e7` ("v2.3.0.0 (#19)").
 
 Why a phase: the fix writes a chipset register on one machine nobody here
 had until the owner reproduced the report; polling and MSI change how every
@@ -810,7 +810,7 @@ moved to "Planned work", and the tasks left were numbered in order (the
 decisions table's Phase 37 row maps old to new). Stamped `2.3.1.0`,
 `DriverVer` `10/13/2026` (`905ccf53`). The task text before it was
 condensed, with every reading, decision and review pointer, is
-`runs/run-37.md`, "The roadmap entry before it was condensed".
+`runs/run-37.md`, "The roadmap entry before it was condensed". Released on `main` as the squash commit `84ae4e0c` ("v2.3.1.0 (#20)").
 
 Why a phase: the Windows ME reading changes a documented requirement, the
 setup fix changes how every root port's reset is handled, and it ends in a
@@ -852,7 +852,7 @@ renumbered each time; the decisions table's Phase 38 rows map the old
 numbers to the new. Every task is done; the VM matrix read the dry cuts,
 and the install legs the signed asset, on 2026-10-14. The task text as it stood on 2026-10-14, with
 every reading, decision and review pointer, is `runs/run-38.md`, "Moved
-from the roadmap before the close".
+from the roadmap before the close". Released on `main` as the squash commit `7698701c` ("2.4.0.0 (#21)").
 
 Why a phase: the bus's ids move every root hub, hub and composite devnode;
 the helper loads on Windows 2000 and XP for the first time; the quirks and

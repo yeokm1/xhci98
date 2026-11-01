@@ -62,7 +62,7 @@ Useful narrowings:
 | `lib/verdict.ps1` | Parsing and evaluating expectations; deciding a row's outcome. |
 | `lib/fresh.ps1` | The post-release run's own rules: the image stamp and its refusals, the replug verdict, `ExpectNoDriver`, the report header. Every refusal in it has a self-test case. |
 | `release-matrix.ps1` | The release matrix (roadmap-usb4 43.12; build-and-test.md, "Faster emulator legs"): every standard leg of `release-legs.psd1` started in parallel within the vCPU budget, one results table (`results.md`, `results.csv`). |
-| `run-leg.ps1` | One release leg: the guest restored from its starting point, the package installed from a CD by the guest's own leg script (`INSTALL /console ... /yes`), the results read over COM1; `-Cold` for the same leg from a cold start; the `*-window` legs for the installer's window with an operator at VNC. |
+| `run-leg.ps1` | One release leg: the guest restored from its starting point, the package installed from a CD by the guest's own leg script (`INSTALL /console ... /yes`), the results read over COM1; `-Cold` for the same leg from a cold start; the `*-window` legs for the installer's window with an operator at VNC. A passing leg removes its disk and stick overlays (`-KeepDisk` keeps them); the leg's CD goes whatever the verdict. |
 | `make-start.ps1` | A guest's starting point: the poller set up from a CD, then the machine state saved at the desktop after a shut down and a cold start. |
 | `release-legs.psd1` | The standard legs, their allowed exit codes and the host's steps (the 98 SE wizards). |
 | `release.config.sample.psd1` | Per-host settings of the three above; copy to `release.config.psd1` (git-ignored). |

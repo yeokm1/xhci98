@@ -3,15 +3,19 @@
  * start from the NHI's driver (software) key: the key every install path
  * of xhcicm.inf and xhcicm-amd64.inf writes them to (HKR in the install
  * section's AddReg) at the defaults cm_vals.c holds, under
- * FLG_ADDREG_NOCLOBBER. The one file that opens a registry key, so the
- * import allowlists hold those imports to it (SITES=cm_reg.obj).
+ * FLG_ADDREG_NOCLOBBER. One of the two files that open a registry key
+ * through the kernel's imports, with cm_statos.c (the status record and
+ * the eject's values), so the import allowlists hold those imports to
+ * them (SITES=cm_reg.obj,cm_statos.obj); cm_nvlinkos.c's 9x keys go
+ * through the VMM's registry services, which are no import.
  *
  * The rules each value is held to are cm_vals.c's; this file only fetches.
  * A value absent, unreadable or of another type is "not found" and its
  * default stands, which is also what the written default reads as.
- * XhciCmTunnelBridge, which no INF writes, and the two values only the
- * 98 SE and ME install writes, XhciCmBridgeNumbering and XhciCmNoIrqStart
- * (task 44.46), are read from the same key.
+ * XhciCmTunnelBridge (written as "auto" since task 45.50), the two values
+ * only the 98 SE and ME install writes, XhciCmBridgeNumbering and
+ * XhciCmNoIrqStart (task 44.46), and the values outside the rule table
+ * below are read from the same key.
  *
  * From 3.1.0.0 every value is read first from the machine-wide key
  * HKLM\System\CurrentControlSet\Services\USB, the one xhci98.sys reads
@@ -21,7 +25,9 @@
  *
  * Since task 44.53 it also reads, once in DriverEntry on the NT role, the
  * gate of design record 21 section 6.2.1 (CmReadIrqGate): the HAL's
- * hardware id, from the machine's enumeration key.
+ * hardware id, from the machine's enumeration key. Since task 45.12 the
+ * gate of design record 33 (CmReadBreqGate, NT 5.x alone from the shared
+ * data page) and, where it is open, XhciCmBridgeReq.
  *
  * IRQL: PASSIVE_LEVEL, in the system thread PnP's start runs in, as
  * IoOpenDeviceRegistryKey needs (DriverEntry's thread for the gate).
@@ -45,18 +51,33 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
     L"XhciCmUsb3Tunnel",
     L"XhciCmLaneBonding",
     L"XhciCmPreOsCleanup",
-    L"XhciCmLogDebugView"
+    L"XhciCmLogDebugView",
+    L"XhciCmNet",
+    L"XhciCmNetPollMs",
+    L"XhciCmNetRxFrames",
+    L"XhciCmNetTxFrames",
+    L"XhciCmNetE2E"
 };
 
-/* Not written by any INF (record 21 section 8): absent is no override. */
+/* Written as "auto" since task 45.50 (record 21 section 8.1): "auto",
+ * absent and empty are no override. */
 #define CM_VALUE_TUNNEL_BRIDGE L"XhciCmTunnelBridge"
 /* Written by the 98 SE and ME install alone (record 21 section 6.1.1,
  * task 44.46): absent is the default, CM_BRIDGE_NUMBERING_DEFAULT, as is
  * XhciCmNoIrqStart's absence CM_NOIRQ_START_DEFAULT. */
 #define CM_VALUE_BRIDGE_NUMBERING L"XhciCmBridgeNumbering"
 #define CM_VALUE_NOIRQ_START L"XhciCmNoIrqStart"
-/* Not written by any INF (record 22 section 18.8): absent is 0. */
+/* Record 22 section 18.8: absent is 0, as written since task 45.50. */
 #define CM_VALUE_ASM_PCIE7 L"XhciCmAsmediaPcie7Credits"
+/* Record 22 section 12, decision U30: absent is 1, as written since task
+ * 45.50. */
+#define CM_VALUE_USB4_V2 L"XhciCmUsb4V2"
+#define CM_VALUE_GEN4_ELR L"XhciCmGen4LinkRecovery"
+/* Record 33 section 9.1: absent is 1, as the NT 5.x install paths write it
+ * since task 45.50; read on NT 5.x alone. XhciCmRingInterrupt: absent is
+ * 0, as the NT install paths write it. */
+#define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
+#define CM_VALUE_RING_IRQ L"XhciCmRingInterrupt"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -212,6 +233,20 @@ static NTSTATUS NTAPI cmTakeHal(PWSTR ValueName, ULONG ValueType,
     return STATUS_SUCCESS;
 }
 
+/* ---- The bridge requirements' gate (design record 33 section 4.4) ---- */
+
+ULONG CmBreqGate;
+
+VOID CmReadBreqGate(VOID)
+{
+    CmBreqGate = 0;
+    if (SharedUserData->NtMajorVersion == 5) {
+        /* The minor version plus one: 1 on 2000, 2 on XP, 3 on XP x64 and
+         * Server 2003. */
+        CmBreqGate = SharedUserData->NtMinorVersion + 1UL;
+    }
+}
+
 VOID CmReadIrqGate(VOID)
 {
     RTL_QUERY_REGISTRY_TABLE table[2];
@@ -260,6 +295,24 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeNoIrqStart(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_ASM_PCIE7, &take, 0);
     CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_RING_IRQ, &take, 0);
+    CmValuesTakeRingIrq(&nhi->Values, take.Found, take.Dword);
+#if defined(XHCI_FLAVOUR_QEMU)
+    cmQuery(key, L"XhciCmQemuIrqDead", &take, 0);
+    nhi->Values.QemuIrqDead = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuFailD0", &take, 0);
+    nhi->QemuFailD0 = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuFailReenum", &take, 0);
+    nhi->QemuFailReenum = take.Found ? take.Dword : 0;
+#endif
+    cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
+    CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_GEN4_ELR, &take, 0);
+    CmValuesTakeGen4Elr(&nhi->Values, take.Found, take.Dword);
+    if (CmBreqGate != 0) {
+        cmQuery(key, CM_VALUE_BRIDGE_REQ, &take, 0);
+        CmValuesTakeBridgeReq(&nhi->Values, take.Found, take.Dword);
+    }
     if (key != NULL) {
         ZwClose(key);
     }

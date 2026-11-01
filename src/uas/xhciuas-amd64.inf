@@ -23,7 +23,7 @@ Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/28/2026,3.3.0.0
+DriverVer=11/01/2026,3.4.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhciuas.cat
 
@@ -58,8 +58,10 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhciuas.sys
 LoadOrderGroup=Base
 
+; No temporary-file field, as in xhciuas.inf: that field is the 9x engine's
+; replace-a-loaded-file route through WININIT.INI, which no NT install takes.
 [Uas.CopyFiles]
-xhciuas.sys,,xhciuas.tmp
+xhciuas.sys
 
 ; Right-click Install pre-stages the driver with no device present.
 [DefaultInstall.NTamd64]

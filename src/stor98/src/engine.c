@@ -285,12 +285,14 @@ UCHAR EngBusyOrFail(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
     b->Cdb0 = Srb->Cdb[0];
     b->DataBuffer = Srb->DataBuffer;
     b->Last = now;
-    Srb->DataTransferLength = 0;
+    // A BUSY keeps its DataTransferLength: the port re-issues the same SRB,
+    // and one it gave back zeroed would fail this driver's length checks.
     if (b->Count >= ENG_BUSY_LIMIT) {
         // NOT READY, LOGICAL UNIT IS IN PROCESS OF BECOMING READY
         DBGSTAGE(STG_BUSY_LIMIT, STG_SRB_ARG(Srb, DevExt->State));
         b->Srb = NULL;
         b->Count = 0;
+        Srb->DataTransferLength = 0;
         Srb->SrbStatus = SRB_STATUS_ERROR;
         Srb->ScsiStatus = SCSISTAT_CHECK_CONDITION;
         ScsiSetSense(DevExt, Srb, SCSI_SENSE_NOT_READY, SCSI_ADSENSE_LUN_NOT_READY, 0x01);
@@ -1723,7 +1725,9 @@ VOID EngChildCompleted(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Admin, IN USHO
     }
     if (p != NULL && p->Srb != NULL && p->Kind == ENG_K_LOG && c->PrpPage != ENG_NONE &&
         p->Cancel == ENG_CANCEL_NONE) {
-        NvmeCompleteLogPage(DevExt, p->Srb, (USHORT)(Status & 0xFF), EngPrpVa(DevExt, c->PrpPage));
+        // SCT and SC both (bits 10:0): SC alone reads SCT != 0, SC 0 as a
+        // success.
+        NvmeCompleteLogPage(DevExt, p->Srb, (USHORT)(Status & 0x7FF), EngPrpVa(DevExt, c->PrpPage));
         p->Flags |= ENG_PF_PRESET;
     }
 

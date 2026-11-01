@@ -10,7 +10,8 @@
 # the architecture changes the pair: the Interlocked and Kf* spin-lock pairs
 # and KeInitializeSpinLock are intrinsics or inlines on amd64, which imports
 # KeAcquireSpinLockRaiseToDpc / KeReleaseSpinLock instead; WDK 7.1's checked
-# headers import RtlAssert (debug and qemu only); and /GS imports
+# headers import RtlAssert (qemu only, debug having been retired with task
+# 45.45); and /GS imports
 # KeBugCheckEx, exactly as in xhci98-imports-amd64.allow, whose comments say
 # why each is accepted. The pool rule holds: SITES=uas_mem.obj.
 
@@ -18,10 +19,10 @@
 
 # --- Compiler- and header-added pairs, as in xhci98-imports-amd64.allow ---
 ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
-ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
 ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
 
 # --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoIsWdmVersionAvailable      all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoCreateDevice                all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoDeleteDevice                all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoAttachDeviceToDeviceStack   all    required  nt52-amd64-export; twin of the x86 row
@@ -62,6 +63,13 @@ ntoskrnl.exe!IoFreeMdl                     all    required  SITES=uas_mem.obj nt
 ntoskrnl.exe!MmBuildMdlForNonPagedPool     all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoBuildPartialMdl             all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoInitializeIrp               all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+
+# --- Task 45.52: a program's pass-through and SMART (design record 13 section 16) ---
+ntoskrnl.exe!MmProbeAndLockPages           all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!MmUnlockPages                 all    required  SITES=uas_mem.obj nt52-amd64-export; twin of the x86 row
+ntoskrnl.exe!__C_specific_handler          all    required  SITES=uas_mem.obj nt52-amd64-export; the amd64 __try frame, in place of x86's _except_handler3
+ntoskrnl.exe!IoIs32bitProcess              all    required  SITES=uas_pdo.obj nt52-amd64-export; a WOW64 caller's pass-through layout
+ntoskrnl.exe!IoReleaseCancelSpinLock       all    required  SITES=uas_xport.obj nt52-amd64-export; twin of the x86 row
 
 [deny]
 

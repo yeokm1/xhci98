@@ -59,6 +59,9 @@ typedef struct _NODE {
     ULONG Sizing;           /* BARs read as all-ones-masked while set        */
     ULONG Intr;             /* 3Ch: line 7:0, pin 15:8 (read-only), and on a
                                bridge Bridge Control 31:16                   */
+    ULONG PcieCaps;         /* a PCI Express capability at 40h: its
+                               capabilities register (31:16), 0 for none    */
+    ULONG SlotCap;          /* ... and Slot Capabilities (40h + 14h)        */
 } NODE;
 
 typedef struct _MODEL {
@@ -165,7 +168,8 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
         *value = m.N[i].Id;
         break;
     case XHCI_TBT_CFG_COMMAND:
-        *value = m.N[i].Cmd;
+        *value = m.N[i].Cmd |
+                 (m.N[i].PcieCaps != 0 ? XHCI_TBT_CFG_STATUS_CAPLIST : 0UL);
         break;
     case XHCI_TBT_CFG_HEADER:
         *value = m.N[i].Header;
@@ -174,6 +178,18 @@ static ULONG mread(PVOID context, ULONG bdf, ULONG offset, PULONG value)
         *value = m.N[i].Intr;
         break;
     default:
+        if (m.N[i].PcieCaps != 0 && offset == XHCI_TBT_CFG_CAPPTR) {
+            *value = 0x40UL;
+            break;
+        }
+        if (m.N[i].PcieCaps != 0 && offset == 0x40UL) {
+            *value = XHCI_TBT_CAP_PCIE | (m.N[i].PcieCaps << 16);
+            break;
+        }
+        if (m.N[i].PcieCaps != 0 && offset == 0x40UL + XHCI_TBT_PCIE_SLOTCAP) {
+            *value = m.N[i].SlotCap;
+            break;
+        }
         if (offset == XHCI_TBT_CFG_BUSES && m.N[i].Bridge) {
             *value = m.N[i].Buses;
             break;
@@ -826,6 +842,32 @@ static VOID test_windows(VOID)
     CHECK_EQ(m.N[usp].Mem, 0, "no window written");
     CHECK_EQ(m.N[usp].Buses, 0x00080706UL, "the numbering stands");
 
+    /* A port window ending at 4 GiB is open, not closed: 1 MiB of it is
+     * no room once its top unit is left out; 16 MiB is room, the windows
+     * below FFF00000. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xFFF0FFF0UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NO_ROOM, "a 1 MiB window at 4 GiB: no room");
+    CHECK_EQ(m.N[usp].Mem, 0, "no window written at 4 GiB");
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xFFF0FF00UL;
+    masm(port, &usp, &dsp, &nvme);
+    mnvmebars(nvme);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "a 16 MiB window at 4 GiB: windowed");
+    CHECK((m.N[usp].Mem & 0xFFF0UL) >= 0xFF00UL &&
+          ((m.N[usp].Mem >> 16) & 0xFFF0UL) < 0xFFF0UL,
+          "the upstream port's window inside it, below FFF00000");
+
     /* Too small: a 1 MiB port window, the chain plus a sibling endpoint. */
     mreset();
     ioreset(TRUE);
@@ -1126,6 +1168,137 @@ static VOID test_irq(VOID)
     CHECK_EQ(r.IrqSet, 2, "the two bridges set");
     CHECK_EQ(r.IrqFnCount, 3, "three outcomes");
     CHECK_EQ(r.IrqFnOut[2], XHCI_TBT_BRFN_NOT_READ, "the NVMe not read");
+}
+
+/* Design record 28 section 13: no bridge below the port (the emulator's
+ * plain enclosure on a q35 root port): the functions on the port's own
+ * bus get its line; the outcome stays NONE. */
+static VOID test_irq_nobridge(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, nvme, sib;
+
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    mnvmebars(nvme);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS | XHCI_TBT_BRNUM_F_IRQ,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_NONE, "no bridge: NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_DONE, "the line stage ran");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010AUL, "the NVMe given line 10");
+    CHECK_EQ(r.IrqSet, 1, "one set");
+    CHECK_EQ(r.IrqFnCount, 1, "one outcome");
+    CHECK_EQ(r.IrqFnBdf[0], XHCI_TBT_BDF(0x06, 0, 0), "the NVMe's");
+    CHECK_EQ(r.IrqFnOut[0], XHCI_TBT_BRFN_WRITTEN, "written");
+    CHECK_EQ(m.N[port].Buses, (0x2AUL << 16) | (0x06UL << 8) | 0x04UL,
+             "the port's buses untouched");
+    CHECK_EQ(r.Writes, 1, "the line its one write: no bus, BAR, command or window");
+    CHECK_EQ(m.N[nvme].Cmd, 0, "the command register untouched");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_NONE, "no window stage");
+
+    /* A refusal after a line was written: two functions on the port's pin
+     * (device 0 INTA, device 1 INTD), the second refused: the first put
+     * back. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].Intr = 0x00000400UL;
+    goCalls = 0;
+    goRefuseAt = 2;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_STALE, "stale after a write");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "the written line put back");
+    CHECK_EQ(m.N[sib].Intr, 0x00000400UL, "the second never written");
+    CHECK_EQ(r.Undone, 1, "one undone");
+    goRefuseAt = 0;
+
+    /* A line write not held: ACCESS, recorded NOT_HELD. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    m.FailWriteBdf = XHCI_TBT_BDF(0x06, 0, 0);
+    m.FailWriteOff = 0x3CUL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_ACCESS, "a write not held");
+    CHECK_EQ(r.IrqFnOut[0], XHCI_TBT_BRFN_NOT_HELD, "recorded not held");
+
+    /* A second function on device 1, INTA: arrives on INTB, left. A line
+     * already set is kept. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x0000010BUL;
+    sib = madd(port, 1, 0, ID_EMU, 0, 0);
+    m.N[sib].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(m.N[nvme].Intr, 0x0000010BUL, "a line already set kept");
+    CHECK_EQ(m.N[sib].Intr, 0x00000100UL, "device 1 on INTB left");
+    CHECK_EQ(r.IrqKept, 1, "kept");
+    CHECK_EQ(r.IrqOther, 1, "another pin");
+
+    /* The port with no line: nothing written. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x000001FFUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_PORT_NONE, "the port has no line");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* F_IRQ not asked: nothing written, no stage. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "no stage");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing written");
+
+    /* Nothing on the bus: no stage, nothing written. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_NONE, "an empty bus: no stage");
+
+    /* The go callback refusing at the line's write: put back. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Intr = 0x0000010AUL;
+    nvme = madd(port, 0, 0, ID_EMU, 0, 0);
+    m.N[nvme].Intr = 0x00000100UL;
+    goCalls = 0;
+    goRefuseAt = 1;
+    goReplace = ROOT;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_IRQ, gocb, NULL, &r),
+             XHCI_TBT_BRNUM_NONE, "NONE");
+    CHECK_EQ(r.IrqOutcome, XHCI_TBT_BRIRQ_STALE, "stale");
+    CHECK_EQ(m.N[nvme].Intr, 0x00000100UL, "nothing left written");
 }
 
 /* A 64-bit prefetchable window is closed through 28h and 2Ch as well as
@@ -1647,6 +1820,289 @@ static VOID test_reopen(VOID)
     CHECK_EQ(m.Writes, 0, "nothing written");
 }
 
+/* ---- the padding (record 34 section 3.3.6) ---------------------------- */
+
+#define PCIE_DOWN_SLOT  ((XHCI_TBT_PCIE_TYPE_DOWN << 4) | XHCI_TBT_PCIE_SLOT_IMPL | 2UL)
+#define PCIE_DOWN_FIXED ((XHCI_TBT_PCIE_TYPE_DOWN << 4) | 2UL)
+#define PCIE_UP         ((0x5UL << 4) | 2UL)
+
+/* A chain-port candidate: a downstream port with a hot-plug slot. */
+static VOID mcand(ULONG i)
+{
+    m.N[i].PcieCaps = PCIE_DOWN_SLOT;
+    m.N[i].SlotCap = XHCI_TBT_SLOTCAP_HPC;
+}
+
+/* The emulator's dock: its upstream port, a fixed port to its NVMe, the
+ * chain port; optionally a device chained behind it. */
+static VOID mdock(ULONG port, ULONG chained, PULONG usp, PULONG fix,
+                  PULONG cp, PULONG nv, PULONG cnv)
+{
+    *usp = madd(port, 0, 0, 0x8232104CUL, 1, 0);
+    m.N[*usp].PcieCaps = PCIE_UP;
+    *fix = madd(*usp, 0, 0, 0x8233104CUL, 1, 0);
+    m.N[*fix].PcieCaps = PCIE_DOWN_FIXED;
+    *cp = madd(*usp, 1, 0, 0x8233104CUL, 1, 0);
+    mcand(*cp);
+    *nv = madd(*fix, 0, 0, ID_NVME, 0, 0);
+    *cnv = chained ? madd(*cp, 0, 0, ID_NVME, 0, 0) : ROOT;
+}
+
+static VOID test_pad_buses(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, fix, cp, nv, cnv, cp2, fix2, a, b, c2;
+
+    /* The dock in a wide port (06 to 2A): the chain port 08, padded 8. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "pad: the dock numbered");
+    CHECK_EQ(m.N[usp].Buses, 0x00110706UL, "pad: upstream port 06/07/11");
+    CHECK_EQ(m.N[fix].Buses, 0x00080807UL, "pad: fixed port 07/08/08, not padded");
+    CHECK_EQ(m.N[cp].Buses, 0x00110907UL, "pad: chain port 07/09/11 (8 past its secondary)");
+    CHECK_EQ(r.Padded, 1, "pad: one candidate padded");
+    CHECK_EQ(r.Pad[2], 8, "pad: its pad 8");
+    CHECK_EQ(r.Last, 0x11, "pad: last bus 11");
+    CHECK_EQ(r.PadNoBus, 0, "pad: none short");
+
+    /* Without the flag: as today. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, 0, NULL, NULL, &r), XHCI_TBT_BRNUM_DONE,
+             "no pad: numbered");
+    CHECK_EQ(m.N[cp].Buses, 0x00090907UL, "no pad: chain port 07/09/09");
+    CHECK_EQ(r.Padded, 0, "no pad: nothing padded");
+
+    /* A narrow port (06 to 0D): 4 buses left at the chain port, pad 2. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x0D);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "narrow: numbered");
+    CHECK_EQ(m.N[cp].Buses, 0x000B0907UL, "narrow: chain port 07/09/0B (pad 2)");
+    CHECK_EQ(r.Pad[2], 2, "narrow: pad 2");
+
+    /* Too narrow (06 to 0B): 2 left, pad 1 is below 2: none. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x0B);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "too narrow: numbered");
+    CHECK_EQ(m.N[cp].Buses, 0x00090907UL, "too narrow: chain port 07/09/09");
+    CHECK_EQ(r.Padded, 0, "too narrow: not padded");
+    CHECK_EQ(r.PadNoBus, 1, "too narrow: counted");
+
+    /* A device behind the chain port at the first numbering: padded past
+     * its subtree (an ASM2464 there: 0A and 0B, then 8 more). */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    masm(cp, &a, &b, &c2);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "behind: numbered");
+    CHECK_EQ(m.N[a].Buses, 0x000B0A09UL, "behind: its upstream port 09/0A/0B");
+    CHECK_EQ(m.N[cp].Buses, 0x00130907UL, "behind: chain port 07/09/13 (0B + 8)");
+    CHECK_EQ(mbus(c2), 0x0B, "behind: the chained NVMe on 0B");
+
+    /* Two candidates: the second gets half of what the first left. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x16);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    cp2 = madd(usp, 2, 0, 0x8233104CUL, 1, 0);
+    mcand(cp2);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "two: numbered");
+    CHECK_EQ(m.N[cp].Buses, 0x000F0907UL, "two: first 07/09/0F (13 left, pad 6)");
+    CHECK_EQ(m.N[cp2].Buses, 0x00131007UL, "two: second 07/10/13 (6 left, pad 3)");
+    CHECK_EQ(r.Padded, 2, "two: both padded");
+
+    /* Not candidates: a downstream port without a slot (the fixed one),
+     * a slot without Hot-Plug Capable. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    m.N[cp].SlotCap = 0;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "no hpc: numbered");
+    CHECK_EQ(m.N[cp].Buses, 0x00090907UL, "no hpc: not padded");
+
+    /* A failed capability read: undone. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    m.FailReadBdf = XHCI_TBT_BDF(7, 1, 0);
+    m.FailReadOff = 0x40UL;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_ACCESS, "cap read failed: refused");
+    CHECK_EQ(m.N[usp].Buses, 0UL, "cap read failed: undone");
+    m.FailReadBdf = 0;
+    m.FailReadOff = 0;
+
+    /* A dock that fits only without padding: the port 06 to 0C, the
+     * chain port first (08, pad 2 of 4 left), then three fixed ports, the
+     * last of which finds no bus: NO_ROOM, numbered again without. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x0C);
+    usp = madd(port, 0, 0, 0x8232104CUL, 1, 0);
+    cp = madd(usp, 0, 0, 0x8233104CUL, 1, 0);
+    mcand(cp);
+    fix = madd(usp, 1, 0, 0x8233104CUL, 1, 0);
+    fix2 = madd(usp, 2, 0, 0x8233104CUL, 1, 0);
+    a = madd(usp, 3, 0, 0x8233104CUL, 1, 0);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "dropped: numbered without padding");
+    CHECK_EQ(r.PadDropped, 1, "dropped: counted");
+    CHECK_EQ(r.Padded, 0, "dropped: nothing padded");
+    CHECK_EQ(m.N[cp].Buses, 0x00080807UL, "dropped: chain port 07/08/08");
+    CHECK_EQ(m.N[a].Buses, 0x000B0B07UL, "dropped: the last fixed port 07/0B/0B");
+    CHECK_EQ(m.N[fix].Buses, 0x00090907UL, "dropped: 07/09/09");
+    CHECK_EQ(m.N[fix2].Buses, 0x000A0A07UL, "dropped: 07/0A/0A");
+
+    /* ... and with the undo failing (its first write, the eighth): not
+     * numbered again. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x0C);
+    usp = madd(port, 0, 0, 0x8232104CUL, 1, 0);
+    cp = madd(usp, 0, 0, 0x8233104CUL, 1, 0);
+    mcand(cp);
+    fix = madd(usp, 1, 0, 0x8233104CUL, 1, 0);
+    fix2 = madd(usp, 2, 0, 0x8233104CUL, 1, 0);
+    a = madd(usp, 3, 0, 0x8233104CUL, 1, 0);
+    m.FailWriteAt = 8;
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_NO_ROOM, "undo failed: NO_ROOM");
+    CHECK_EQ(r.PadDropped, 0, "undo failed: not made again");
+    CHECK(r.UndoFailed != 0, "undo failed: counted");
+    m.FailWriteAt = 0;
+}
+
+static VOID test_pad_memory(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, fix, cp, nv, cnv, cp2;
+
+    /* The dock in a 192 MiB port window (C0000000-CBFFFFFF): one 1 MiB
+     * window for the fixed port's NVMe, the slack shared: 64 MiB (cap). */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xCBF0C000UL;
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    mnvmebars(nv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD | XHCI_TBT_BRNUM_F_WINDOWS,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "mem: numbered");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mem: windows written");
+    CHECK_EQ(r.PadMem, 0x04000000UL, "mem: 64 MiB (the cap)");
+    CHECK_EQ(r.Need[2], 0x04000000UL, "mem: the chain port's window 64 MiB");
+    CHECK(wbase(m.N[cp].Mem) <= wlimit(m.N[cp].Mem), "mem: the chain port's window open");
+    CHECK_EQ(r.Need[1], 0x00100000UL, "mem: the fixed port 1 MiB");
+
+    /* Without the flag: the chain port's window closed, as today. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xCBF0C000UL;
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    mnvmebars(nv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_WINDOWS, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "no mem pad: numbered");
+    CHECK_EQ(r.Need[2], 0UL, "no mem pad: the chain port needs nothing");
+    CHECK(wbase(m.N[cp].Mem) > wlimit(m.N[cp].Mem), "no mem pad: its window closed");
+
+    /* A 16 MiB port window: 1 MiB used, 15 left: 8 MiB. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xC0F0C000UL;
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    mnvmebars(nv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD | XHCI_TBT_BRNUM_F_WINDOWS,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "mem 16: numbered");
+    CHECK_EQ(r.PadMem, 0x00800000UL, "mem 16: 8 MiB");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mem 16: written");
+
+    /* Two candidates share it: 15 MiB / 2 = 7.5, rounded down to 4 MiB. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xC0F0C000UL;
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    cp2 = madd(usp, 2, 0, 0x8233104CUL, 1, 0);
+    mcand(cp2);
+    mnvmebars(nv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD | XHCI_TBT_BRNUM_F_WINDOWS,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "mem two: numbered");
+    CHECK_EQ(r.PadMem, 0x00400000UL, "mem two: 4 MiB each");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mem two: written");
+
+    /* A 2 MiB port window: 1 MiB left, below 2 MiB: no memory padding. */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xC010C000UL;
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    mnvmebars(nv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD | XHCI_TBT_BRNUM_F_WINDOWS,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "mem small: numbered");
+    CHECK_EQ(r.PadMem, 0UL, "mem small: none");
+    CHECK_EQ(r.PadNoMem, 1, "mem small: counted");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mem small: the rest written");
+    CHECK_EQ(r.Need[2], 0UL, "mem small: the chain port's need unpadded");
+
+    /* A device behind the candidate: its need + M (a 16 KiB BAR, 1 MiB,
+     * + 8 MiB = 9 MiB). */
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x2A);
+    m.N[port].Mem = 0xC1F0C000UL;
+    mdock(port, 1, &usp, &fix, &cp, &nv, &cnv);
+    mnvmebars(nv);
+    mnvmebars(cnv);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD | XHCI_TBT_BRNUM_F_WINDOWS,
+                                  NULL, NULL, &r), XHCI_TBT_BRNUM_DONE, "mem behind: numbered");
+    CHECK_EQ(r.PadMem, 0x01000000UL, "mem behind: 16 MiB (30 MiB left)");
+    CHECK_EQ(r.Need[2], 0x01100000UL, "mem behind: its 1 MiB need + 16 MiB");
+    CHECK_EQ(r.WinOutcome, XHCI_TBT_BRWIN_DONE, "mem behind: written");
+}
+
+/* One level: a dock chained behind a chain port at the first numbering
+ * has its own chain port, which is not padded; a later first-level chain
+ * port still is. */
+static VOID test_pad_nested(VOID)
+{
+    XHCI_TBT_BRNUM r;
+    ULONG port, usp, fix, cp, nv, cnv, cusp, ccp, cp2;
+
+    mreset();
+    ioreset(TRUE);
+    port = mport(0x06, 0x16);
+    mdock(port, 0, &usp, &fix, &cp, &nv, &cnv);
+    cusp = madd(cp, 0, 0, 0x8232104CUL, 1, 0);
+    ccp = madd(cusp, 1, 0, 0x8233104CUL, 1, 0);
+    mcand(ccp);
+    cp2 = madd(usp, 2, 0, 0x8233104CUL, 1, 0);
+    mcand(cp2);
+    CHECK_EQ(XhciTbtNumberBridges(&io, PORT, XHCI_TBT_BRNUM_F_PAD, NULL, NULL, &r),
+             XHCI_TBT_BRNUM_DONE, "nested: numbered");
+    CHECK_EQ(m.N[ccp].Buses, 0x000B0B0AUL, "nested: the chained dock's chain port 0A/0B/0B, not padded");
+    CHECK_EQ(m.N[cp].Buses, 0x00100907UL, "nested: the first chain port 07/09/10 (11 left, pad 5)");
+    CHECK_EQ(m.N[cp2].Buses, 0x00131107UL, "nested: the second 07/11/13 (5 left, pad 2)");
+    CHECK_EQ(r.Padded, 2, "nested: two padded, the nested one not");
+}
+
 int main(void)
 {
     test_p14s_orico();
@@ -1663,11 +2119,15 @@ int main(void)
     test_windows();
     test_windows_more();
     test_irq();
+    test_irq_nobridge();
     test_pf64();
     test_windows_order_and_stale();
     test_irq_stale();
     test_empty_bus_and_alignment();
     test_reopen();
+    test_pad_buses();
+    test_pad_memory();
+    test_pad_nested();
     printf("test_tbt_brnum: %d checks, %d failures\n", checks, failures);
     return failures;
 }

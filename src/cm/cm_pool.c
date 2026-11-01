@@ -31,11 +31,41 @@
 
 #include "cm.h"
 
+/*
+ * The nonpaged pool type: NonPagedPoolNx (512), Windows 8's no-execute
+ * nonpaged pool, which the Windows 2000 DDK and WDK 7.1 predate, from
+ * NT 6.2 on, so Driver Verifier's code integrity checks, and the memory
+ * integrity they test for, find no executable pool (roadmap-usb4 task
+ * 45.63); NonPagedPool, the only nonpaged type they have, on Windows 98,
+ * ME and 2000 to 7. NT is told by IoIsWdmVersionAvailable(1, 0x10)
+ * before the kernel's shared data page is read, as cm_filt.c reads it:
+ * Windows 98 and ME have no such page.
+ */
+#define CM_POOL_NX ((POOL_TYPE)512)
+
+static POOL_TYPE CmPoolNonPaged = NonPagedPool;
+
+/* DriverEntry, before the first allocation. PASSIVE_LEVEL. */
+VOID CmPoolInit(VOID)
+{
+    ULONG major;
+    ULONG minor;
+
+    if (!IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+    major = SharedUserData->NtMajorVersion;
+    minor = SharedUserData->NtMinorVersion;
+    if (major > 6 || (major == 6 && minor >= 2)) {
+        CmPoolNonPaged = CM_POOL_NX;
+    }
+}
+
 PVOID CmAlloc(ULONG bytes)
 {
     PVOID p;
 
-    p = ExAllocatePoolWithTag(NonPagedPool, bytes, CM_POOL_TAG);
+    p = ExAllocatePoolWithTag(CmPoolNonPaged, bytes, CM_POOL_TAG);
     if (p != NULL) {
         CmZero(p, bytes);
     }
@@ -105,6 +135,64 @@ NTSTATUS CmDmaOpen(PCM_NHI nhi)
     return STATUS_SUCCESS;
 }
 
+/*
+ * The Thunderbolt networking rings' common buffers (design record 35
+ * section 5.3; cm_net.c): each descriptor block and each 4 KiB buffer its
+ * own allocation on the ring block's adapter, cached, below 4 GB and 16-byte
+ * aligned as the ring block is. Each is asked for in whole pages: Windows
+ * 2000 served a common buffer of less than a page from pool, 8-byte
+ * aligned (a 2 KiB descriptor block came back at an address ending 008h,
+ * run-45 "45.59 (legs, continued)"; XP's refusal there is taken to be the
+ * same), which the alignment check
+ * refuses, and a start that met one had no service. The free takes the
+ * same rounded length.
+ * PASSIVE_LEVEL, on the thread.
+ */
+static ULONG cmDmaCommonBytes(ULONG bytes)
+{
+    return (bytes + (PAGE_SIZE - 1)) & ~(ULONG)(PAGE_SIZE - 1);
+}
+
+PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa)
+{
+    PHYSICAL_ADDRESS phys;
+    PVOID va;
+
+    *pa = 0;
+    if (nhi->Dma == NULL || bytes == 0) {
+        return NULL;
+    }
+    bytes = cmDmaCommonBytes(bytes);
+    phys.LowPart = 0;
+    phys.HighPart = 0;
+    va = nhi->Dma->DmaOperations->AllocateCommonBuffer(nhi->Dma, bytes, &phys, TRUE);
+    if (va != NULL &&
+        (phys.HighPart != 0 || (phys.LowPart & (TBT_RING_DMA_ALIGN - 1)) != 0 ||
+         ((ULONG_PTR)va & (TBT_RING_DMA_ALIGN - 1)) != 0)) {
+        nhi->Dma->DmaOperations->FreeCommonBuffer(nhi->Dma, bytes, phys, va, TRUE);
+        va = NULL;
+    }
+    if (va == NULL) {
+        return NULL;
+    }
+    CmZero(va, bytes);
+    *pa = phys.LowPart;
+    return va;
+}
+
+VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va)
+{
+    PHYSICAL_ADDRESS phys;
+
+    if (nhi->Dma == NULL || va == NULL) {
+        return;
+    }
+    bytes = cmDmaCommonBytes(bytes);
+    phys.LowPart = pa;
+    phys.HighPart = 0;
+    nhi->Dma->DmaOperations->FreeCommonBuffer(nhi->Dma, bytes, phys, va, TRUE);
+}
+
 /* The block given back, unless the host interface may still DMA into it:
  * a ring enabled and no verified stop since (TBT_RING.DmaMayRun - a
  * partial start counts, and an unanswered or refused read-back never
@@ -121,11 +209,19 @@ VOID CmDmaClose(PCM_NHI nhi)
             CmLogNote(nhi, "cm.buffer-kept", 1);
             nhi->CommonVa = NULL;
             nhi->Dma = NULL;
+            nhi->Net.MemKept = 0;
             return;
         }
         nhi->Dma->DmaOperations->FreeCommonBuffer(
             nhi->Dma, nhi->DmaBytes, nhi->CommonPa, nhi->CommonVa, TRUE);
         nhi->CommonVa = NULL;
+    }
+    if (nhi->Net.MemKept) {
+        /* The networking rings' memory kept (CmNetStopWork): its adapter
+         * stays with it until the next boot, as the block's would. */
+        nhi->Net.MemKept = 0;
+        nhi->Dma = NULL;
+        return;
     }
     nhi->Dma->DmaOperations->PutDmaAdapter(nhi->Dma);
     nhi->Dma = NULL;

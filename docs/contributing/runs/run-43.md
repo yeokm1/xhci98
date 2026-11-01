@@ -5639,9 +5639,9 @@ that took it; they are not files a clone has.
 **Verdict: done** (2026-10-23). The elevated `XHCIINST /eject` closes the
 PCIe tunnel on a native hot-plug tunnel port, three times out of three.
 Before the change it left the tunnel up three times out of three
-(`run-43-52.md`, leg b).
+(this sheet's "43.52 the legs", leg b).
 
-**Machine.** The kit of `run-43-52.md`: Windows 7 SP1 x86, q35, TCG, 2
+**Machine.** The kit of this sheet's "43.52 the legs": Windows 7 SP1 x86, q35, TCG, 2
 vCPUs, usb4-emu at QEMU `46d96fb`, `usb4-generic` `host-model=amd` with
 its PCIe tunnel on the q35 `usb4-tunnel-port`. The enclosure is the
 ASM2464 model with a FAT volume (`E:`) on Stor98. Each check copies a
@@ -5666,7 +5666,7 @@ removal. Under native hot-plug the departure therefore races the tool's
 confirmation, which the tool writes as soon as Windows answers, and
 either order refused the eject. The mark service's confirmation, a few
 seconds later, came after the departure every time it was read, and
-worked (`run-43-52.md`, leg a). On the i440FX emulator's SHPC bridge
+worked (this sheet's "43.52 the legs", leg a). On the i440FX emulator's SHPC bridge
 Windows does not drive the slot, and the eject has worked there since
 43.45.
 

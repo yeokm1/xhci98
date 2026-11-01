@@ -4,7 +4,9 @@ Status: draft 2, 2026-10-15, before code, reviewed and revised the same
 day. Written for Phase 40 of
 `roadmap-usb4.md` ("USB4: the Software Connection Manager", planned as
 `U4CM` until the owner numbered it on 2026-10-15), task 40.1. Nothing in
-`src\` implements it yet. The owner's decision D7 of 2026-10-15 puts this
+`src\` implemented it when it was written; Phase 40 implemented it and it
+shipped in `3.0.0.0` (cut 2026-10-17), and the record is revised since as
+the paragraphs below say (the latest 2026-10-25). The owner's decision D7 of 2026-10-15 puts this
 work in `3.0.0.0` beside the Thunderbolt 3 ICM client of design record 21,
 in the same binary `xhcicm.sys`, with the profile chosen per host interface
 (record 21 sections 1.4 and 13). The owner also decided that day that
@@ -44,6 +46,19 @@ record of the tunnels it built, so that a tunnel found preserved after a
 PnP stop and start of the NHI is still rebuilt across a sleep that lost
 the domain's configuration (section 7.6); sections 7.6 and 11 point to it.
 
+Revised 2026-10-29 (task 45.22, the owner's "Phase 45 additions"; a
+design, reviewed and revised, no code): section 5.4, new - the ring
+interrupt for this profile, designed with the ICM client's in record 21
+section 4.5; section 1.3's "polling only" stands until it is coded.
+Coded 2026-10-30 behind `XhciCmRingInterrupt` 0 (record 21 sections
+4.5.10 and 4.5.11), reviewed and revised: polling stays the default.
+
+Revised 2026-10-29 (task 45.21, the owner's "Phase 45 additions"; a
+design, reviewed and revised, no code): section 19, new - Thunderbolt 1, 2 and 3 hosts on
+Apple Macs run by this connection manager, from Linux's facts and Apple's
+public support pages. Section 3.1's inert start for subsystem vendor
+`106B` stands until section 19's code.
+
 Revised 2026-10-25 (task 44.39, planned as U4HW.1): section 18, new - the
 ASMedia ASM4242, a USB4 host whose firmware can boot a CSM, as
 `usb4-emu`'s asm4242 model and data record it: the firmware's
@@ -57,13 +72,44 @@ again that day: the credits question answered with an opt-in bench
 switch, `XhciCmAsmediaPcie7Credits` (task 44.41, section 18.8; sections
 6.8 and 12 point to it).
 
+Revised 2026-10-29 (task 45.20, the design half, reviewed and revised
+the same day; no code with it; decisions U30 to U32 confirmed by the
+owner on 2026-10-29, each as recommended): section 6.2 rewritten - a USB4
+version 2 router, Barlow Ridge among them, is run as a version 2 one:
+CMUV 2.0, the Sequence bit capability set by Set Capabilities, path
+entries written as two dwords, PCIe Extended Encapsulation, the HiFi
+Enhanced Uni-Directional TMU between two such routers, and Gen 4 links,
+symmetric or asymmetric, classified and used as found; sections 1.3,
+5.1, 6.1, 6.4, 6.5, 6.6, 6.7, 6.8, 7.1, 7.3, 9.2, 9.3, 12, 15 (U6,
+U16, the new U30 to U32) and 16 follow it.
+
+Revised 2026-10-30 (task 45.20, the code; reviewed and revised): section
+6.2 is coded in `src/cm/tbt_u4cm.c` (with `tbt_regs.h`, `tbt_ring.c`'s
+LINK_RECOVERY delivery and `XhciCmUsb4V2` in `cm_vals.c`, `cm_reg.c` and
+`cm_nhi.c`), its host vectors in a suite of their own, `test_u4v2`
+(sections 6.2.4 and 14.1), over a version 2 host and device router added
+to the fake fabric. Section 6.2.4's last paragraph records where the
+code settles what the section left open; `usb4-emu` has no version 2
+router model yet, so the q35 legs of a version 2 link are owed with it
+(section 16).
+
+Revised 2026-10-31 (task 45.56, the design): section 6.2.3 item 4
+rewritten - Gen 4 Link Recovery is enabled on a depth-1 Gen 4 link
+between two version 2 routers, behind a new value
+`XhciCmGen4LinkRecovery` (1 by default), with the recovery check Guide
+7.6 asks of a connection manager after each LINK_RECOVERY, and the bit
+cleared again at the host's end at a teardown and on both ends before
+this instance stops or suspends; a new section 6.2.5 names the code and
+the vectors. Sections 1.3, 5.1, 6.2.2, 7.1, 7.3, 11, 12, 15 (U33) and
+16 follow it.
+
 The sources, and the tag each fact carries below:
 
 - **[spec]** the USB4 Specification 2.0 ("Spec") and the USB4 Connection
   Manager Guide 2.0 ("Guide"), November 2025 bundle, fetched per machine
   into `docs/references/usb4_202511/` (`docs/references/README.md`), cited
   by section and table.
-- **[model]** the `usb4-emu` repository (`D:\OneDrive\git-projects\usb4-emu`,
+- **[model]** the `usb4-emu` repository (the `usb4-emu` checkout beside this repository,
   branch `main`, commit `a68bc74`; the documents and `tools/usb4cm` read
   here are unchanged since `eba0cf1`, the commit record 21 cites), read and
   never modified: `docs/XHCI98-HANDOFF.md`, `docs/ARCHITECTURE.md` sections
@@ -136,8 +182,10 @@ In:
 - The USB4 software connection manager on the hosts section 3.4 admits, on
   Windows 98 SE and Windows 2000 SP4 (the primary targets) and the
   virtual-machine tiers under the standing rule for those tiers.
-- Polling only: no interrupt is connected, as record 21 section 4.3
-  decided for the ICM client (decision D3).
+- Polling by default, as record 21 section 4.3 decided for the ICM client
+  (decision D3); the ring interrupt beside the idle poll of section 5.4
+  and record 21 section 4.5 (task 45.22) is coded behind
+  `XhciCmRingInterrupt`, 0 by default, the line on NT only.
 - The Intel integrated hosts' platform preparation through PCI
   configuration space (section 4), shared with record 21's ICM rows.
 - The host router, its adapters discovered from their capability chains,
@@ -170,9 +218,16 @@ Out, each with where it goes:
   The Time Management Unit is configured only as far as a USB3 tunnel
   needs (section 6.6).
 - Inter-domain (host-to-host) links and the DMA port: never set up.
-- Asymmetric links and USB4 version 2 features: a version 2 router is run
-  as a version 1 one (section 6.2).
-- Interrupts, MSI and MSI-X: polling only.
+- Initiating an asymmetric link or a Gen 4 link recovery, USB3 Gen T
+  tunnels and the other USB4 version 2 features section 6.2.2 item 11
+  lists. A version 2 router is run as a version 2 one since task 45.20:
+  CMUV 2.0, the Sequence bit capability set, Gen 4 links symmetric or
+  asymmetric used as found (section 6.2); since task 45.56 a depth-1
+  Gen 4 link between two version 2 routers also recovers from an
+  uncorrectable error (section 6.2.3 item 4).
+- MSI and MSI-X, and any interrupt on 98 SE and ME: polling (the line
+  interrupt of section 5.4 runs on NT behind `XhciCmRingInterrupt`, task
+  45.22).
 - Firmware upgrade (NVM operations), retimers, and the firmware start or
   CIO reset of a stopped Intel firmware: never touched.
 - ACPI: no `_OSC`, no WMI force power of an absent discrete controller, no
@@ -350,8 +405,9 @@ class match as a generic host, as Linux takes it. Router-side ids
 the quirk table of section 6.10, never to the NHI INF. **Apple** machines
 are excluded by platform, not by id ([linux] `icm.c` `icm_fr_is_supported`
 uses `x86_apple_machine`): at start, the PCI subsystem vendor `106B` of the
-NHI makes the start inert with a log line, since none of this project's
-targets runs on a Mac and the firmware there differs.
+NHI makes the start inert with a log line, since the firmware there
+differs - except on the Falcon, Alpine and Titan Ridge rows, which section
+19 (task 45.21) gives its Thunderbolt-host profile.
 
 ### 3.2 Test (b): platform readiness, after `IRP_MN_START_DEVICE`
 
@@ -693,7 +749,8 @@ size, configuration space and sequence number but not on the adapter field
   | ERR_LOCK 15 | fails the request; the adapter was reconnected since it was unlocked: a port check is queued |
   | ERR_LINK 1, ERR_HEC 12, ERR_FC 13, ERR_PLUG 14 | an event: counted, logged, acknowledged with a Notification Acknowledgement (Spec 6.4.2.8), or the Enhanced one (6.4.2.9) where the router has the sequence bit enabled (section 6.4), never fails a request |
   | DP_BW 32, PCIE_WAKE 35, DP_CON_CHANGE 36, DPTX_DISCOVERY 37 | acknowledged and ignored |
-  | ROP_CMPLT 33, POP_CMPLT 34, LINK_RECOVERY 38, ASYM_LINK 39 | consumed silently: the Guide forbids an acknowledgement (7.7.2) |
+  | ROP_CMPLT 33, POP_CMPLT 34, ASYM_LINK 39 | consumed silently: the Guide forbids an acknowledgement (7.7.2) |
+  | LINK_RECOVERY 38 | never acknowledged, as above; since task 45.20 it queues a port check, and since task 45.56 that port's recovery check too (section 6.2.3 item 4 part 4) |
 
   Linux acknowledges only PCIE_WAKE, DP_CON_CHANGE, DPTX_DISCOVERY and
   DP_BW and ignores the link and flow-control errors ([linux] `tb.c`
@@ -767,6 +824,63 @@ the HCD already imports, is not used: system time can be set backwards. Waits
 under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
 21 section 4.3 allows on this thread only.
 
+### 5.4 Ring interrupts (task 45.22)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.22. The idle wait of this
+profile is the ICM client's (record 21 section 4.4), and the task designs
+one interrupt for both in record 21 section 4.5: RX ring 0's Receive Data
+Buffer cause ends the thread's idle wait early, the timed wait stays at
+its period, requests stay busy-polled (section 5.2), and every failure
+returns to polling. Designed as that section's companion; **coded on
+2026-10-30**, off by default (record 21 sections 4.5.10 and 4.5.11), the
+wake of this profile being `TbtU4RingWake`. What this profile adds:
+
+- **One cause covers its events.** A hot-plug packet and a notification
+  arrive on RX ring 0 (section 5.1), so the interrupt wakes the thread for
+  each, and the wake runs only the RX ring 0 drain (record 21 section
+  4.5.1): a hot-plug packet's port check of section 7.1 is queued and runs
+  on the thread as today, and so do the router operations and every wait
+  of section 5.2. The idle tick's port scan is not run by an interrupt
+  wake: its control reads' responses would raise the interrupt again and
+  the scan would never stop. A chain is
+  enumerated hop by hop, each router's own hot-plug packet waited for, so
+  the gain on this profile is up to one idle period per hop.
+- **The maintenance pass keeps its deadline, because this profile hangs
+  work on it.** The idle tick's port scan (section 7.1 item 2) and the
+  presence sample that anchors Stor98's latency budget (section 10.3,
+  "normally no older than one idle period") run on the maintenance pass
+  only, when its deadline is due (record 21 section 4.5.3), never on an
+  interrupt wake; the wait is computed to that deadline, so no scan or
+  sample comes later than today's, and an interrupt wake neither runs nor
+  postpones them.
+- **A USB4 host need not wire INTx**: a PCIe host router shall support MSI
+  or MSI-X, and INTx emulation is optional (Spec 12.5). Whether the
+  ASM4242, the AMD hosts and the Intel integrated hosts wire it is not
+  read here (`usb4-emu`'s `CONTROLLER-CATALOG.md` records INTx pin A on
+  the captured Alpine Ridge LP and Alder Lake functions [obs there], and
+  nothing for the others). On 98 SE, ME, 2000 and XP, which have no MSI, a
+  host without INTx has no interrupt resource and polls as today; a host
+  whose pin is advertised but not delivered fails record 21 section
+  4.5.5's self-test and polls.
+- **The status contract is the host's**: the cause is opened through
+  Interrupt Mask Set and closed through Interrupt Mask Clear, and the
+  status is cleared by the service routine's read of every status dword
+  or, where Disable ISR Auto-Clear is set, by Interrupt Status Clear
+  (record 21 section 4.5.2). The Intel integrated hosts (vendor `8086`)
+  take Intel's contract, the mask register written directly, as the
+  ring code already masks them (`TBT_HW_INTEL_INTERRUPTS`, `tbt_hw.h`;
+  record 21 section 4.3). The arm also writes ITR[0], which section 4.4
+  step 1 leaves untouched while polling.
+- **The emulator**: `usb4-host`'s generic and ASM4242 profiles implement
+  every register record 21 section 4.5.2 names, INTx level-triggered
+  while any unmasked status bit is set, one MSI, and an `intx=off`
+  property that removes the pin (`usb4-host.c` [emu]), which is what the
+  q35 legs of record 21 section 4.5.9 use; a lost-interrupt injection for
+  the NHI does not exist there yet.
+- **Containment** (section 7.7) takes the interrupt down on entry (record
+  21 section 4.5.6) and up only on the recovery's return to ACTIVE; the
+  probing passes of CONTAINED keep their own once-a-second period.
+
 ## 6. The connection manager
 
 ### 6.1 The host router
@@ -775,7 +889,8 @@ under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
   device, Upstream Adapter, Max Adapter (refused at 64 or more), depth,
   TopologyID Valid (ROUTER_CS_3 bit 31), USB4 Version.
 - **TopologyID Valid clear**: enumerate it in one write of ROUTER_CS_1 to 4
-  (depth 0, TopologyID 0, Valid, Notification Timeout 255, CMUV 1.0), then
+  (depth 0, TopologyID 0, Valid, Notification Timeout 255, CMUV by the
+  router's version, section 6.2.1), then
   wait for Router Ready [ref] `enumerate_router`; Router Ready not seen is
   logged and not fatal for the host router, which Linux never waits on
   ([linux] `usb4.c` `usb4_switch_setup` returns at once for route 0).
@@ -797,16 +912,595 @@ under a millisecond stay `KeStallExecutionProcessor` busy-polls, as record
 
 ### 6.2 What version this connection manager claims
 
-It writes CMUV 1.0 to every router it enumerates, version 2 routers
-included, and enables none of version 2's features (no Set Capabilities
-enabling the sequence bit, no extended encapsulation, no asymmetric link,
-no Gen 4 link recovery). A preserved router may carry capabilities a
-predecessor enabled; section 6.4 says which of those this driver honours
-and how it learns of them. Linux writes CMUV 2.0 to a
-version 2 router ([linux] `switch.c` `tb_switch_configure`); the Guide's
-3.2.1 step 4 says the CMUV written follows the router's version. Whether a
-version 2 router run by a version 1 connection manager tunnels PCIe is
-untested anywhere this project can reach, and is open (section 16).
+Until `3.3.0.0` it wrote CMUV 1.0 to every router, version 2 routers
+included, and enabled none of version 2's features. From task 45.20 a
+USB4 version 2 router - Barlow Ridge as a host or in a device, or any
+router whose USB4 Version has major 2 - is run as a version 2 one, and
+this connection manager is a Ver. 2 Connection Manager towards it (Spec
+section 1's terms). This section is the whole of what that means; the
+sections it names carry the detail. Every router is decided on its own:
+a domain may mix a version 2 host with version 1 or Thunderbolt 3 device
+routers, and a feature that needs both ends of a link (section 6.2.2
+items 6 and 7) is used only where both are version 2 routers.
+
+#### 6.2.1 The router's version, and the CMUV written or found
+
+1. **The router's own version** is ROUTER_CS_4 USB4 Version bits 31:29,
+   the major alone (section 3.5; section 6.4 step 3): 0 a Thunderbolt 3
+   router, 1 version 1, 2 version 2, 3 to 7 reserved (UNSUPPORTED).
+2. **Enumerated here.** The one enumerating write of ROUTER_CS_1 to 4
+   (Spec 6.7 and 8.2.1.1, the enumeration rules; Guide 3.2.1
+   step 4) carries CMUV (ROUTER_CS_4 bits 15:8) 2.0 (`20h`) on a
+   major 2 router and 1.0 (`10h`) on a major 1 one, as the Guide's step 4
+   says and as [linux] `switch.c` `tb_switch_configure` does
+   (`ROUTER_CS_4_CMUV_V2`). A Thunderbolt 3 router keeps the field as
+   read (section 8). Nothing else in that write changes, and CMUV is
+   never written again while TopologyID Valid is set (Spec 8.2.1.1: a
+   connection manager "shall not change" it; Guide 3.2.1 note).
+3. **Preserved** (TopologyID Valid found set, section 9.2): CMUV is read
+   and kept, never written. `10h` on a major 2 router (a version 1
+   predecessor enumerated it) is logged `u4.cmuv.v1`; any value other
+   than `10h` or `20h` on a USB4 router is logged `u4.cmuv.odd`. Neither
+   changes section 9.2's adoption.
+4. **What keys the version 2 obligations.** This driver is a Ver. 2
+   Connection Manager for the whole domain while `XhciCmUsb4V2` (item 5)
+   is 1. Section 6.2.2's obligations then key on the router's own
+   version (item 1), as the Specification and the Guide state them
+   (Spec 6.6, 7.3.1.3 and 11.1.1.1's notes and Guide 5.3.1 step 4 and
+   7.7.1 step 1 all name the routers' version or the capability's
+   support, never the CMUV): a router is a **version 2 router** here
+   when its USB4 Version has major 2, whether this driver enumerated it
+   or adopted it and whatever CMUV a predecessor wrote. The CMUV of a
+   preserved router decides only how that router itself behaves (Spec
+   8.2.1.1); a version 2 router a version 1 predecessor enumerated
+   (`10h`) is open on the bench (section 16). Reading a version 2
+   register stays keyed on the USB4 Version, as section 6.6's TMU-Off
+   predicate is now.
+5. **`XhciCmUsb4V2`** (REG_DWORD, section 12), absent meaning 1, written
+   at 1 by the INFs since task 45.50 (record 21 section 8.1), a bench switch
+   like `XhciCmAsmediaPcie7Credits`. 0 makes
+   this driver a version 1 connection manager again, the `3.3.0.0`
+   behaviour: CMUV 1.0 to every router it enumerates and none of section
+   6.2.2's version 2 obligations (items 3, 5's adoption rule, 6 and
+   7), for a bench comparison or a
+   router that misbehaves as version 2; item 4's two-dword path writes
+   and section 6.2.3 item 4 stay, being right for both. A preserved router keeps its CMUV
+   whatever the value. (Section 15, U30, confirmed by the owner on 2026-10-29.)
+
+#### 6.2.2 What a Ver. 2 Connection Manager owes, router by router
+
+Every obligation the Spec and the Guide put on a Ver. 2 Connection
+Manager, or on a connection manager of a version 2 router, and what this
+one does:
+
+1. **Router Ready** (Guide 3.2.1, after the enumeration): a version 2
+   router announces it with a ROP_CMPLT notification, Event Info `01h`;
+   the Guide allows polling ROUTER_CS_6 Router Ready instead, which this
+   driver does, as for version 1 (section 6.4 step 4). **Configuration
+   Ready** (Guide 3.2.3 step 3, Event Info `02h`) and every **router
+   operation** (Guide 9.1, Event Info `00h`; Spec 8.3.1 step 6)
+   likewise: polled. ROP_CMPLT, POP_CMPLT, LINK_RECOVERY and ASYM_LINK
+   need no acknowledgement (Spec 6.6) and are counted by code (section
+   5.1's silent class; LINK_RECOVERY also delivered and acted on,
+   section 6.2.3 item 4); a version 2 router sends many more of
+   them, which the per-code counter shows and nothing else reads.
+2. **Notification acknowledgements** (Spec 6.6): a Ver. 2 Connection
+   Manager acknowledges PCIE_WAKE, DP_CON_CHANGE and DPTX_DISCOVERY as
+   well as the version 1 list. Section 5.1 already acknowledges all
+   three and then ignores them (`TbtCtlClassify`, `TBT_NOTE_ACK_IGNORE`),
+   on every router; nothing changes.
+3. **The Sequence bit in Notification Packet capability** (Spec 6.6's
+   note: a Ver. 2 Connection Manager "shall enable" it when the router
+   supports it; Guide 7.7.1 step 1; Spec 8.3.1.3.2.2, 8.3.1.3.3). On a
+   USB4 router (version 1 or 2: the duty is the connection manager's and
+   is conditioned on the capability's support, not on the router's
+   version), after section 6.4 step 8's Get Capabilities and
+   before its Buffer Allocation Request:
+   1. Get Capabilities answered successfully and reporting the
+      capability (index 2) supported and not enabled: **Set
+      Capabilities** (opcode `32h`, Spec Tables 8-53 to 8-55: Capability
+      Index 2 in Metadata bits 7:0, Enable Capability bit 8 set, no data
+      dwords), then Get Capabilities again as the read-back. The
+      read-back's enabled bit is the router's capability state; until
+      it is read, the state is PENDING, so the router's notifications
+      wait exactly as section 6.4 says of one whose first answer has not
+      come (no acknowledgement in either form; each is acknowledged
+      once the state settles, in the form it settles). A Set answering
+      Status 1 or Not Supported, with a read-back showing the capability
+      still disabled: plain acknowledgements, logged `u4.caps.seq-refused`.
+      A Set or read-back that fails, times out or finds the router
+      operation-blocked: the state is UNKNOWN, with section 6.4's
+      consequences (no acknowledgement in either form, no Buffer
+      Allocation Request), logged.
+   2. Already enabled (a preserved router): adopted, as now.
+   3. Not supported, or Get Capabilities answering Not Supported:
+      plain acknowledgements, as now.
+   4. A preserved router with the capability supported and
+      disabled gets the same Set, read-back and PENDING hold: the
+      obligation is the connection manager's, whoever enumerated the
+      router.
+   A Thunderbolt 3 router is never sent one (section 8 runs it
+   without Get Capabilities), nor any router while
+   `XhciCmUsb4V2` is 0.
+   **The other capabilities** of Table 8-51 are left as found and never
+   enabled: Hot Plug Failure Indication (index 1; the Guide's "if
+   desired"; an ERR_PLUG from a router where a predecessor enabled it
+   is handled as now), Buffer Allocation Per USB4 Port (index 3;
+   honoured where found enabled, section 6.4), Notification Retry Limit
+   (index 4) and CLx Latency Tolerance (index 5, no CLx here).
+4. **Path entries written as both doublewords** (Spec 8.2.3.4: a
+   connection manager writing a path "shall issue a single Write
+   Request" of both; only a Version 1 Connection Manager "may" tear a
+   path down by writing the first alone; Spec 6.6's note points the
+   Sequence bit at Set Capabilities, 8.3.1.3.3). Every PATH_CS write this
+   driver makes - building (section 6.8), the teardown's invalidation
+   (section 7.3 step 1.2) and the explicit cleaning (section 9.3) - is a
+   single two-dword write, on every router whatever its version: the
+   invalidation writes PATH_CS_0 with Valid cleared and PATH_CS_1 as it
+   was just read, bit 29 (RsvdZ) written 0 and bit 28 (Pending Packets,
+   RO) as read. The single-dword form, which section 7.3 used, is
+   retired; for a version 1 router the two forms are equivalent.
+5. **ROUTER_CS_5 after Configuration Valid** (Spec 8.2.1.1, the rules
+   after the Router Configuration Space fields: a Ver. 2 Connection
+   Manager "shall not change" CNS, PTO, UTO, HSGT and HCO once CV is
+   set). On a router this driver enumerates, section 6.6 step 1 writes
+   them once before CV and nothing writes them after it; the teardown
+   (section 7.3) leaves ROUTER_CS_5 alone. **A preserved USB4 router
+   found with CV set** (version 1 or 2: the rule binds the connection
+   manager) is not configured again: today a
+   preserved router reading CV 1 without PTO goes through section
+   6.6's sequence again (`tbtU4ConfigValid` from the CONFIGURING state,
+   whose read-modify-write would set PTO and UTO and clear HCO under
+   CV), which a Ver. 2 Connection Manager may not do. On such a router
+   ROUTER_CS_5 is read and never written: PTO clear means no PCIe
+   tunnel can be built, so the port is HELD (section 9.2, logged
+   `u4.cv.found`), which `XhciCmPreOsCleanup` 1 then cleans; UTO clear
+   means no USB3 tunnel on that port, the PCIe tunnel unaffected. With
+   `XhciCmUsb4V2` 0 today's path stands. Enumerated State PCIe Wake
+   (Guide 3.2.3, a version 2 router) stays 0: this driver arms no wake
+   (section 11).
+6. **The TMU** (Spec 7.3.1.3's note: when both routers of a link are
+   version 2 and support the TMU, a Ver. 2 Connection Manager "shall
+   enable" Enhanced Uni-Directional Time Sync; Guide 7.4.3): on a link
+   whose two ends are both version 2 routers with a TMU (neither
+   reporting Time Synchronization Protocol Not Supported), the TMU is
+   configured in **HiFi Enhanced Uni-Directional** mode whenever this
+   driver enumerates the device router, whether or not a USB3 tunnel
+   follows: the note sets no tunnel condition, so decision U16's
+   USB3-only rule is for the other links. It is configured before CV
+   (Guide 7.4.3: a version 2 connection manager sets the upstream
+   facing port's TMU fields before CV), after Disable Time Sync at
+   connection (section 6.6 TMU item 1), and stays for the life of the
+   connection: section 6.6 TMU item 6's disable runs at unplug, not
+   when a USB3 tunnel goes. A failure is section 6.6 TMU item 5's (the
+   TMU quarantine, logged, no USB3 tunnel, the PCIe tunnel
+   proceeding). A preserved link is left as found (section 6.6 TMU item
+   2). On every other link HiFi-Bi, only for a USB3 tunnel, as now.
+7. **PCIe Extended Encapsulation** (Spec 11.1.1.1's note: if the routers
+   on both ends of a link support version 2, a Ver. 2 Connection
+   Manager "shall" set ADP_PCIE_CS_1 Extended Encapsulation, bit 0, to
+   1, otherwise to 0; Guide 5.3.1 step 4: when both routers' USB4
+   Version is 2.0 or higher). On a PCIe tunnel whose host PCIe Down and
+   device PCIe Up adapters are both on version 2 routers, EE is set to 1
+   on both adapters before either Path Enable (Spec 8.2.2.7: before the
+   Path Enable bit is set), as the step after the four path entries in
+   section 6.8; read back, and a read-back of 0 or a failure leaves the
+   tunnel FAILED with section 6.8's unwinding. Every teardown of a PCIe
+   tunnel (sections 7.3 step 1, 9.3 step 1, 10.4), Guide 5.3.2 step 3:
+   after the Path Enables are 0 and before the paths are invalidated,
+   the EE of each PCIe adapter still reachable on a router whose USB4
+   Version has major 2 is read, and written 0 if it reads 1 - a
+   predecessor's tunnel included, since a predecessor may have set it.
+   On a tunnel this driver builds with either end a version 1 router, EE is not
+   written; a router this driver enumerated starts with EE 0 (Spec
+   8.2.2.7, its default). A preserved tunnel keeps EE as found while it
+   stands, and section 9.2's checks do not read it. [linux] `tunnel.c` `tb_pci_set_ext_encapsulation` sets EE
+   only when the link is also Gen 4; this record follows the
+   Specification and the Guide, which set no speed condition, and
+   section 16 keeps the difference open for the bench.
+8. **Bandwidth** (Spec 5.3.3.1's note; Guide 6.2.4: at least 1.5 Gb/s to
+   each PCIe and USB3 path): with one PCIe path at weight 1 and one USB3
+   path at weight 2 in priority 3 (sections 6.8 and 6.9), and section
+   6.9 step 2 keeping 1.5 Gb/s off the USB3 allocation for PCIe, it is
+   met on every link speed for the tunnels this driver accounts. Not
+   for a port carrying a preserved DisplayPort tunnel: DP paths sit in
+   a higher priority group (Spec 5.3.3.1, strict precedence over
+   priority 3), their consumption is not accounted here (section 6.9
+   step 2 already builds no USB3 tunnel beside one), and on a 10 Gb/s
+   single-lane link they could leave a new PCIe path less than 1.5
+   Gb/s. A new PCIe tunnel beside a preserved DP tunnel is still built,
+   as today, logged `u4.bw.dp-unaccounted`, and the floor there is not
+   verified: decision U32, (a), the owner's on 2026-10-29.
+9. **No Host Interface Reset** of a version 2 host router (Spec Table
+   12-14's recommendation): already so (section 2.2, section 4.4).
+10. **USB3 Gen T** is not supported: a USB3 Gen T adapter (Spec Table
+    8-10) is never used, so the Guide 3.2.1 duty to read a device's
+    Preferred Single Data Path DROM entry, which binds a connection
+    manager that supports Gen T, does not apply. A version 2 device that
+    prefers Gen T may then expose both its PCIe Up and Gen T adapters
+    (Guide 3.2.1's note on path preference); this driver builds the PCIe
+    tunnel, as for any device.
+11. **Not used**, as before: the asymmetric link transitions (section
+    6.2.3 item 3), Initiate Gen 4 Link Recovery (section 6.2.3 item 4
+    part 8), CLx, DisplayPort, inter-domain links, the version 2 sleep
+    flow (section 11). Gen 4 Link Recovery itself is enabled since task
+    45.56 (section 6.2.3 item 4).
+
+#### 6.2.3 Gen 4 and asymmetric links
+
+A version 2 router's USB4 port comes up (Guide 7; Spec 4.2.2) as a Gen 4
+link, symmetric (x2) or asymmetric; or as Gen 2 or Gen 3 one- or
+two-lane links exactly as a version 1 one. Gen 4 has no single-lane form
+and no lane bonding: its two lanes are aggregated by link
+initialisation (Spec 4.2.2), Target Link Width and Supported Link Widths
+are valid for Gen 2 and Gen 3 only, and Lane Bonding written on a Gen 4
+link clears itself (Spec 8.2.2.3, Table 8-12).
+
+1. **The link is classified** from the host's lane 0 LANE_ADP_CS_1:
+   Current Link Speed (bits 19:16: `8h` Gen 2, `4h` Gen 3, `2h` Gen 4)
+   and Negotiated Link Width (bits 25:20: `01h` x1, `02h` symmetric x2,
+   `04h` asymmetric with 3 transmitters, `08h` asymmetric with 3
+   receivers), both valid only with the link active (Spec 8.2.2.3), and
+   the far end's lane 0 for the asymmetric pairing:
+
+   | Speed | Width | Class |
+   |---|---|---|
+   | Gen 2, Gen 3 | x1, x2 | section 6.5 as now |
+   | Gen 4 | x2 | **Gen 4 symmetric**: bonded; no bonding, no lane write |
+   | Gen 4 | 3 Tx at one end, 3 Rx at the other | **Gen 4 asymmetric**: bonded for paths; item 3 |
+   | Gen 4 | x1, the two ends not a Tx/Rx pair, or a reserved width | not usable: the port FAILED, no lane write |
+   | reserved speed, or a read failing | unknown: no action, re-read at the next check |
+
+2. **Section 6.5 on a Gen 4 link.** Step 1's "already bonded" reads the
+   width as above, so a Gen 4 link of either form is bonded without a
+   bonding. Lane 0 still Training or Lane Bonding (Adapter State 1):
+   waited as step 5 waits (500 ms), with no write. Steps 2 to 6 never
+   run on a Gen 4 link: no Target Link Width, Lane Bonding or Lane
+   Disable is written, and `XhciCmLaneBonding` 0 has no single-lane
+   route to take (logged `u4.bond.gen4`, the link used as bonded); a
+   user who wants a single lane has no Gen 4 equivalent here. Step 7
+   (USB4 Port is Configured) as now. A version 2 router's Gen 2 or Gen
+   3 link is bonded as a version 1 one's (Guide 7.1 is titled Gen 2 or
+   Gen 3 only).
+3. **Asymmetric links are never initiated.** The Guide leaves the
+   stimulus to the connection manager (7.2's note); Linux transitions a
+   link only for DisplayPort bandwidth above a threshold ([linux] `tb.c`
+   `tb_configure_asym`, `asym_threshold`), and this driver tunnels no
+   DisplayPort; a PCIe and a USB3 tunnel fit a symmetric 80 Gb/s link.
+   PORT_CS_19 StartAsymmetricFlow and LANE_ADP_CS_1 Target Asymmetric
+   Link are never written. A link found asymmetric - a preserved one, or
+   one a router brought up that way - is used as found: paths are built
+   over lane 0's path configuration space as on any bonded link (Guide
+   7.1), and it is not transitioned back to symmetric, which would need
+   CLx disabled and Guide 7.2.2's flow on a link that may carry a
+   preserved tunnel (section 15, U31). An ASYM_LINK notification is
+   counted and changes nothing; a later width reading that differs from
+   the one taken when the port came up is section 7.1's re-check, not a
+   teardown by itself.
+4. **Gen 4 Link Recovery** (Spec 4.4.7; Guide 7.6; task 45.56). With
+   PORT_CS_19 Enable Gen 4 Link Recovery (ELR, bit 31) set on both ends
+   of a Gen 4 link, an uncorrectable error on it is recovered by the two
+   routers with their configuration and states preserved, and the router
+   with the Downstream Facing Port sends LINK_RECOVERY once the link is
+   back; with the bit clear at either end it is a disconnect (Spec
+   4.4.7), handled as section 7 handles any. Guide 7.6 lets a connection
+   manager set the bit "at both ends of the Link when the Link is in
+   CL0", and after each LINK_RECOVERY obliges it to verify "that all
+   tunneled protocols using the recovered Link are in an operational
+   state". Since task 45.56 this driver sets it, behind
+   `XhciCmGen4LinkRecovery` (section 12, 1 by default). Eight parts:
+   1. **Where.** Only on a depth-1 link this driver runs: the port UP or
+      FAILED with its device router present, the link classified Gen 4
+      (item 1, symmetric or asymmetric), both routers of USB4 major
+      version 2 and neither a Thunderbolt 3 router, no preserved
+      DisplayPort tunnel on the port (section 9.2's `DpPreserved`: a
+      tunnelled protocol this driver cannot verify after a recovery),
+      `XhciCmUsb4V2` 1 and `XhciCmGen4LinkRecovery` 1. Never on a HELD,
+      UNSUPPORTED or barred port, a port whose departed router's drain
+      is owed (section 7.7), or a link below depth 1 (record 34's kids):
+      those links keep the bit clear, a disconnect on an error, as
+      before.
+   2. **When and how.** At the idle tick, after the port's own check
+      (section 7.1) has found it unchanged, and as the port's own
+      sequence (section 7.4, as the owed Set of section 6.2.2 item 3 is
+      made): wanted, not yet set on this connection, and not refused on
+      it. At both ends lane 0 LANE_ADP_CS_1 must read Adapter State CL0
+      (Guide 7.6), the host's also Current Link Speed Gen 4 (the link
+      classified again); PORT_CS_18 AsymmetricTransitionInProgress (bit
+      24) 0, since Spec 4.2.2.5 and 4.2.2.6 have Gen 4 Link Recovery
+      enabled only once a transition completes; and PORT_CS_19
+      StartAsymmetricFlow (bit 24) 0, since Table 8-13 forbids a write
+      of PORT_CS_19 while it is 1. A reading short of that writes
+      nothing, and the next tick tries again. Then PORT_CS_19 is written
+      as read with ELR 1, ILR (bit 30) 0 and StartAsymmetricFlow 0, on
+      the device router's upstream port first and then on the host's
+      port, and each is read back. Both reading ELR 1: set
+      (`u4.elr.set`). A write or read that fails, or a read-back of 0 (a
+      router that keeps the bit clear): refused on this connection
+      (`u4.elr.refused`) - the bit written 0 again on each end written,
+      nothing tried again until a new connection (a re-plug, or the
+      reconnect after a disconnect).
+   3. **What is owned.** Per end, from its write on, the driver records
+      that the end may hold its 1, until a read-back shows the bit 0
+      there: the device router's end is forgotten at a teardown, since
+      the router's reset returns it to its default (Spec 4.4.5.2); the
+      host's is not, since Spec 4.4.5.2 does not reset the Downstream
+      Facing Port's bit at a disconnect, and is cleared by section 7.3
+      step 5 (part 6). Set (both ends read back 1) and refused are per
+      connection, cleared at every entry to CONNECTING, and set counts as
+      not set again after a stop, a suspend or a recovery's commit
+      (section 7.7). At the tick a port whose ends may hold the bit but
+      that does not hold it as set has it set again where part 1 still
+      admits the port and the connection has not refused it (part 2:
+      a refusal is never followed by another set on that connection),
+      and written 0 where it does not: on both ends of an UP or FAILED
+      port, whose router this driver has identified; on a HELD one (a
+      port a recovery or a resume left HELD, whose router may not be the
+      one recorded) on the host's end alone, the device end's ownership
+      kept until the router is identified again (the port UP or FAILED)
+      or its departure confirmed (the teardown). The bit is thus never
+      left set on the host's end where this driver would not verify a
+      recovery, and with the host's end clear an error on that link is
+      a disconnect (Spec 4.4.7).
+   4. **LINK_RECOVERY** is delivered to the connection manager, never
+      acknowledged (Spec 6.6), and queues a port check of the port whose
+      path holds the router that sent it (section 7.1; task 45.20), and
+      now also that port's recovery check, made at the tick after the
+      check, while the port is UP or FAILED with its router present, as
+      the port's own sequence, whether or not this driver set the bit (a
+      predecessor's below depth 1, part 7). The check reads only:
+      1. The link: the host's lane 0 LANE_ADP_CS_1 read, Current Link
+         Speed and Negotiated Link Width logged (`u4.elr.link`); a width
+         or speed other than the one taken at the connection is section
+         7.1's re-check, logged, never a teardown by itself (item 3).
+      2. Each tunnel this driver has up on the port, by section 9.2's
+         reading (`tbtU4Follow`): both protocol adapters' Path Enable and
+         the four path entries of the tunnel, at the lane HopIDs
+         recorded for it. The PCIe tunnel then has section 7.1 item 4's
+         predicate at every tick as before (Path Enable, the LTSSM live
+         in L0, L1, Recovery or Recovery.Idle, a transitional state
+         watched for 2 s), Guide 7.6's ADP_PCIE_CS_0 reading.
+      3. A USB3 tunnel's operational state, Guide 7.6's
+         ADP_USB3_GX_CS_4 Port Link State, on the host's USB3 Down
+         adapter: operational with USB3 Link Valid 1 and the state U0,
+         U2 or U3; anything else (Polling, Recovery, Hot Reset, Resume,
+         RxDetect, Inactive, Disabled, a reserved state, or Link Valid 0)
+         keeps the check owed and is read again at the ticks for up to 2
+         s from the check's first try. Still not operational then, it is
+         recorded (`u4.elr.usb3.down`, its state) and the tunnel kept:
+         that state is the USB3 link's own, which the USB3 link layer and
+         the host's xHCI driver recover (an Inactive link by a warm
+         reset, a disabled port by its own port reset), and which a
+         teardown of the tunnel would not mend.
+      4. The TMU, on a link whose TMU this driver configured: section
+         7.7's as-left reading (`tbtU4TmuAsLeft`), logged only
+         (`u4.elr.tmu`).
+      Every tunnel whole and operational: kept (`u4.elr.ok`). A PCIe
+      tunnel whose reading is not whole - an entry invalid or leading
+      elsewhere, a Path Enable clear - is section 7.1 item 4's lost
+      tunnel, with its full loss sequence (the fabric, the statement, the
+      PCI removal; the port FAILED for PCIe until a re-plug, its USB3
+      tunnel kept). A USB3 tunnel whose paths are not whole is torn down
+      alone in the orderly form (Guide 5.5.2, section 7.3's USB3 steps
+      with its bandwidth released) and not built again on this
+      connection. A register that does not read leaves the check owed
+      for the same 2 s; after that it is given up (`u4.elr.unread`) with
+      nothing torn down, section 7.1's checks standing. A LINK_RECOVERY
+      drained during the check itself (at a safe point of a loss
+      sequence it runs) keeps the check owed afresh, so that a recovery
+      after the check's readings is checked too. A kid's PCIe
+      tunnel through the recovered link has its own check at every tick
+      (record 34 section 6.3), unchanged.
+   5. **A lost notification.** Where the transport dropped notifications
+      (`NotesLost`), every port with the bit set owes the recovery
+      check, since a LINK_RECOVERY may have been among them.
+   6. **The clears.** The bit is written 0 (PORT_CS_19 as read with
+      bits 31, 30 and 24 0, then read back) on the host's port at
+      section 7.3 step 5 where this driver may have set it, retried at
+      the tick of an EMPTY port while it fails, never in the way of a new
+      connection; where part 3 finds it no longer admitted; and on every
+      link where it may be set before this instance stops (section 11:
+      stop, remove, disable, and the operating system's suspend, Guide
+      8.2.1), since no connection manager then runs to verify a recovery
+      - not on a contained instance (section 7.7), which writes nothing;
+      the ownership it keeps is reconciled by part 3 after the
+      recovery's commit. Each of these clears follows part 3's identity
+      rule: both ends, device end first, of an UP or FAILED port; the
+      host's end alone of a HELD one, its device end's ownership kept
+      across the stop or the suspend until the router is identified
+      again or its departure confirmed. Every write of PORT_CS_19 this item makes, the clears
+      included, is withheld while StartAsymmetricFlow reads 1 (Table
+      8-13): a clear so withheld or failing stays owed where a tick
+      retries it, and is logged (`u4.elr.clear.failed`) where the stop
+      goes on without it.
+   7. **A predecessor's bit.** Section 9.2's adoption clears it on both
+      ends of every preserved link it walks, at any depth, whatever
+      `XhciCmUsb4V2` and `XhciCmGen4LinkRecovery` say (task 45.20; a
+      failing clear, one withheld for StartAsymmetricFlow included, holds
+      the port); on a depth-1 link that qualifies, the tick then sets it
+      again under this driver's own rule. A link below depth 1 whose
+      clear failed stays as the predecessor left it, and its
+      LINK_RECOVERY reaches the depth-1 port's check and recovery check,
+      its kid's own check standing.
+   8. **Never** written: Initiate Gen 4 Link Recovery (bit 30), which
+      would start a recovery; StartAsymmetricFlow 1 (item 3). Guide
+      8.3.2.4's margining and 8.3.2.5's CLx notes do not apply, since this
+      driver runs neither.
+5. **The raw bandwidth** of the link (Guide Table 6-2), used by section
+   6.9 step 2: Gen 2 x1 10, x2 20; Gen 3 x1 20, x2 40; Gen 4 symmetric 80
+   Gb/s each way; Gen 4 asymmetric 120 one way and 40 the other, of
+   which section 6.9 takes the lower, 40, since a USB3 tunnel's
+   allocation is both ways. Computed per lane and doubled for x2 (Gen 4
+   at 40 per lane), the asymmetric widths taken as one lane's 40.
+6. **Credits.** A lane adapter's Total Buffers (ADP_CS_4) is read when
+   section 6.8 builds a path, after the link's width is final, as now;
+   a Gen 4 link's counts are whatever the router reports there ([linux]
+   `switch.c` `tb_port_update_credits` re-reads them after a width
+   change for the same reason).
+
+#### 6.2.4 What the code changes, and the vectors
+
+For the code task after this section converges (none is written with
+it), in `src/cm/tbt_u4cm.c` unless named: `tbtU4Enumerate` (item 6.2.1
+2), the adoption path (CMUV read and logged, item 6.2.1 3; the CV-found
+rule of 6.2.2 item 5 beside the `TBT_RTR5_CV | TBT_RTR5_PTO` test that
+now calls `tbtU4ConfigValid`; the Enable Gen 4 Link Recovery clear of
+6.2.3 item 4), `tbtU4ConfigValid` (the enhanced TMU on a v2-v2 link
+whatever the USB3 decision),
+`tbtU4GetCapabilities` and a new `tbtU4SetSequenceBit` (6.2.2 item 3),
+`tbtU4Invalidate` and the preserved-path invalidation beside it (6.2.2
+item 4), the TMU enable and disable and `tbtU4TmuAtConnect` (6.2.2 item
+6, section 6.6), the PCIe tunnel's build and teardown (6.2.2 item 7),
+`tbtU4Bond`, the adoption's lane step and `tbtU4LanesAsLeft` and the
+UP check that reads the width (6.2.3 items 1 and 2), the LINK_RECOVERY
+class and delivery in `tbt_ring.c` and the port check it queues (6.2.3
+item 4), `tbt_regs.h` for CMUV
+2.0, Set Capabilities, EE, Current Link Speed and the asymmetric widths,
+and the registry value beside `XhciCmLaneBonding` in `cm_reg.c` and
+`cm_vals.c` (section 12). Host vectors in
+`test/test_u4v2.c`, a suite of its own beside `test_u4cm` over the same
+fabric (section 14.1), against a version 2 router in the fake
+fabric: CMUV `20h` written to a major 2 router and `10h` to a major 1
+one in the same domain, and `10h` everywhere with `XhciCmUsb4V2` 0; a
+preserved router's CMUV read and never written, each of item 6.2.1 3's
+cases; the Set Capabilities and read-back on a version 2 and on a
+version 1 router reporting the capability (a router a predecessor
+enumerated with CMUV `10h` included), none with `XhciCmUsb4V2` 0 nor on a
+Thunderbolt 3 one, and each refusal and failure of item 6.2.2 3 with its
+acknowledgement form (PENDING then enhanced, plain, UNKNOWN); every
+PATH_CS write two dwords long; HiFi Enhanced Uni-Directional on a
+v2-v2 link with a USB3 tunnel, HiFi-Bi on a v2-v1 one, and the
+disable's order, the enhanced TMU on a PCIe-only v2-v2 link and with
+`XhciCmUsb3Tunnel` 0; a preserved v2 router with CV 1 and PTO 0 HELD and
+ROUTER_CS_5 never written, a version 1 one too; Enable Gen 4 Link
+Recovery cleared on every preserved link at any depth whatever
+`XhciCmUsb4V2`, and a LINK_RECOVERY delivered as a port check, never
+acknowledged; EE set before Path Enable on a v2-v2 PCIe tunnel and
+cleared after it at teardown, never written on a v2-v1 one; a Gen 4 x2
+link bonded with no lane write, a Gen 4 asymmetric pair used and never
+transitioned, a Gen 4 x1 or unpaired asymmetric reading FAILED; the
+USB3 allocation's link bound at 72 and 36 Gb/s less 1.5 for Gen 4
+symmetric and asymmetric. `usb4-emu`'s version 2 router model for the
+q35 legs is that repository's work (roadmap task 45.20); a Barlow Ridge
+on the bench is task 45-E.10.
+
+What the code settled that this section left open (task 45.20's code,
+2026-10-30):
+
+- **Get Capabilities on a router enumerated here** is read for the Set's
+  decision while `XhciCmUsb4V2` is 1: the router stays at its default
+  (plain acknowledgements) unless the answer reports the Sequence bit
+  capability supported, when the Set and its read-back decide the state.
+  A recovery (section 7.7) classifies by reading alone, so it sends no
+  Set: a router this driver ever sent the Set (recorded apart from the
+  capability state, since a Set may have applied though its read-back
+  failed) has the recovery's answer adopted, and a failing answer leaves
+  it unknown rather than at its default; one found with the capability
+  supported and disabled is owed the Set, made at the first tick after
+  the commit as that port's own sequence (no nested teardown of it, and
+  no Set once the port shows removal evidence or a new generation).
+- **A Gen 4 link is recognised** from the host's lane 0 Current Link
+  Speed (`2h`); the far end's lane 0 is read only for an asymmetric
+  width. On a link of two version 2 routers lane 0 must read connected
+  before it is classified: one in Training or Lane Bonding is waited for
+  up to 2 s with no write, and one that does not come back connected
+  leaves the port FAILED with no lane written (`Why` 19, the lane state);
+  a reserved speed on an active link goes to section 6.5 as before (no
+  evidence of Gen 4). A Gen 4 x1 reading, an unpaired asymmetric one
+  or a reserved width leaves the port FAILED with no lane write (`Why`
+  23, the link). The read-only checks of an existing link (the resume's
+  verification and the recovery's lanes as left) count a Gen 4
+  asymmetric width as bonded.
+- **CV found** (section 6.2.2 item 5) is read in two places: section
+  9.2's discovery, where a router with no tunnel state found with CV set
+  and PTO clear is HELD at once (`Why` 22, so `XhciCmPreOsCleanup` 1
+  cleans it at start), and the connection of an adopted router, where CV
+  set skips section 6.6 (PTO clear: HELD; UTO clear: no USB3 tunnel) and
+  section 6.6 runs only once CV is read clear - a read that fails holds
+  the port. A discovery whose Enable Gen 4 Link Recovery clear fails
+  holds the port too, even with no tunnel state.
+- **Enable Gen 4 Link Recovery** is cleared by a write of PORT_CS_19 as
+  read with bits 31 and 30 written 0; the discovered links below depth 1
+  are cleared on both ends as the walk finds them (the child's USB4 Port
+  Capability found by its upstream adapter's own capability chain), a
+  failure there logged and the link left as a predecessor's.
+- **LINK_RECOVERY** is its own class in `tbt_ring.c` (delivered, never
+  acknowledged); the connection manager takes the port from the host's
+  Event Info when the host router sent it, else from the route's first
+  level.
+- **Extended Encapsulation** is cleared on an adapter only once its own
+  Path Enable reads 0: where the disable failed, the adapter's enable
+  quarantine (section 7.3) clears EE when its retry lifts it. A PCIe
+  tunnel built with either end a version 1 router reads EE on each
+  version 2 end first and clears it where it reads 1 (an earlier
+  teardown's clear that failed, or a predecessor's), building no tunnel
+  where it will not clear. It is not
+  touched by section 7.7's recovery drains, which section 6.2.2 item 7
+  does not list; a rebuilt tunnel sets it again before its Path Enable. A
+  clear that fails is logged and the teardown goes on.
+- **The USB3 link bound** is one function (`tbtU4LinkBound`), exposed to
+  the host suite, since no fabric router reports a USB3 rate the Gen 4
+  bound would limit.
+
+#### 6.2.5 Gen 4 Link Recovery: the code and the vectors (task 45.56)
+
+For the code task after section 6.2.3 item 4 converges, in
+`src/cm/tbt_u4cm.c` unless named: a new `tbtU4ElrWanted`, `tbtU4ElrSet`
+and `tbtU4ElrCheck`, made from `TbtU4Poll` after the port's check and its
+kids' service (part 2, part 4); the LINK_RECOVERY branch of
+`tbtU4TakeQueues` and its `NotesLost` loop (parts 4 and 5); the loss
+sequence of `tbtU4PcieLoss` factored out so that the recovery check runs
+the same one (part 4); `tbtU4HostRestore` and the EMPTY tick's condition
+beside it (part 6, the host's end, never part of the restore's verdict
+that gates a connection); `TbtU4Stop` and `TbtU4Suspend` (part 6, before
+`TbtRingStop`, on an instance that is not contained); `TbtU4RecoverCommit`
+and the resume's end (the bit counted as not set); per port in
+`tbt_u4cm.h` the flags set (both ends read back), each end that may
+hold this driver's 1 (part 3), refused, the recovery check owed and its
+first try's time; one guarded write of PORT_CS_19 for every set and
+clear of this item, the adoption's `tbtU4ElrClearAt` included (part 6);
+`TBT_PORT19_SAF`, PORT_CS_18's AsymmetricTransitionInProgress and the
+USB3 Link Valid and Port Link State fields of ADP_USB3_GX_CS_4 in
+`tbt_regs.h`; `TBT_U4_CONFIG.Gen4LinkRecovery`; the value
+`XhciCmGen4LinkRecovery` beside `XhciCmUsb4V2` in `cm_vals.c`,
+`cm_vals.h`, `cm_reg.c` and `cm_nhi.c` (its start note and the counters),
+both `xhcicm` INFs (`HKR,,XhciCmGen4LinkRecovery,0x00010003,1`), the INF
+gate's value table and self-test rows, `docs/using/tuning.md` and record
+21 section 8.1's table. Counters: enabled, refused, cleared at a stop or
+suspend or teardown (and its failures), recovery checks, tunnels kept,
+PCIe and USB3 tunnels lost to a check, checks given up.
+
+Host vectors in `test/test_u4v2.c` against the fake fabric's version 2
+routers: the bit set on both ends of a Gen 4 link, symmetric and
+asymmetric, device end first, each write PORT_CS_19 as read with bit 30
+0, only once lane 0 reads CL0 at both ends and StartAsymmetricFlow 0;
+none while lane 0 reads short of CL0, AsymmetricTransitionInProgress or
+StartAsymmetricFlow reads 1 at either end (then set at a later tick);
+never with `XhciCmGen4LinkRecovery` 0, with `XhciCmUsb4V2` 0, on a v2-v1
+link, a Gen 3 link of two version 2 routers, a HELD port, a port with a
+preserved DisplayPort tunnel, or at depth 2; a port left HELD with the
+bit owned: its host end cleared at the tick, its device end left owned;
+an owned port no longer admitted: both ends cleared;
+a read-back of 0 refused, both ends written 0 again, no retry on that
+connection and a retry after a re-plug; a LINK_RECOVERY with every
+tunnel whole keeping both (no write, no removal); one with a PCIe entry
+gone running the loss sequence (FAILED, the removal queued, the USB3
+tunnel kept); one with a USB3 Path Enable clear tearing the USB3 tunnel
+down alone, the bandwidth released, not rebuilt; a USB3 Port Link State
+of Recovery read again until U0 (kept, `ok`) and one left Inactive for 2
+s recorded with the tunnel kept; an unread register
+retried and then given up after 2 s with nothing torn down; `NotesLost`
+owing the check; the host's end cleared at an unplug, its failure
+retried at the EMPTY tick, a new connection not deferred by it, and a
+clear withheld while StartAsymmetricFlow reads 1; both
+ends cleared at `TbtU4Stop` and `TbtU4Suspend` (a HELD port's host end
+alone) and set again after the resume; nothing written by a contained instance; the 45.20 discovery
+clear of a predecessor's bit unchanged, the bit then set again on a
+qualifying depth-1 link. The value's own vectors in `test/test_cm.c`
+beside `XhciCmUsb4V2`'s. `usb4-emu`'s version 2 model already recovers
+a link with the bit set at both ends (LINK_RECOVERY, configuration
+kept) and disconnects one with it clear at either end (its
+`docs/USB4-V2.md`, `x-link-event=error`); the q35 legs use that.
 
 ### 6.3 Ports and protocol adapters: the fabric mapping
 
@@ -859,7 +1553,8 @@ the PCI mapping apart.
    Thunderbolt 3 router (section 8); majors 1 and 2 proceed; majors 3 to
    7 are reserved: UNSUPPORTED (section 3.5).
 4. **Enumerate**: one write of ROUTER_CS_1 to 4 (depth 1, TopologyID = the
-   route, Valid, Notification Timeout 255, CMUV 1.0); Router Ready within
+   route, Valid, Notification Timeout 255, CMUV by the router's version,
+   section 6.2.1); Router Ready within
    500 ms; retried up to 20 times 50 ms apart while the router is still
    coming up [ref] `u4cm_connect`.
 5. **Adapters** as for the host; the Upstream Adapter (ROUTER_CS_1) is the
@@ -904,7 +1599,10 @@ What the answer establishes, and what it does not:
 
 - **A router this driver enumerated itself** has every capability at its
   default, disabled, because enumeration starts from the uninitialised
-  state; the operation's answer, or its absence, changes nothing.
+  state; the operation's answer, or its absence, changes nothing - except
+  that, while `XhciCmUsb4V2` is 1, the answer decides section 6.2.2
+  item 3's Set Capabilities on any USB4 router, whose read-back then
+  sets the state.
 - **A preserved router answering Not Supported** (ONS set): it has no such
   capabilities, so none is enabled.
 - **A preserved router answering successfully** (ONS clear, Status 0): the
@@ -925,7 +1623,9 @@ Following Guide 7.1, with Linux's preconditions ([linux] `switch.c`
 `tb_switch_lane_bonding_enable`):
 
 1. Already bonded (Negotiated Link Width in lane 0's LANE_ADP_CS_1, bits
-   25:20, reads x2): nothing to do.
+   25:20, reads x2): nothing to do. A Gen 4 link is never bonded or made
+   single-lane: section 6.2.3 classifies it, and steps 2 to 6 do not run
+   on it.
 2. Possible: PORT_CS_18 Bonding Enabled (bit 8) on the device's upstream
    port, and both lane 0 adapters list dual width as supported. Otherwise
    single.
@@ -987,7 +1687,8 @@ The sequence on a device router, after bonding (section 6.5):
    whatever `XhciCmUsb3Tunnel` says when the router supports it, because
    the Guide says the connection manager "must" (3.2.3); with the value at
    0 the USB3 adapters are then disconnected (section 6.9).
-2. **The TMU**, where a USB3 tunnel will be built (below).
+2. **The TMU**, where a USB3 tunnel will be built, and on every link of
+   two version 2 routers (below; section 6.2.2 item 6).
 3. **CV** (bit 31) in a second write, then Configuration Ready (ROUTER_CS_6
    bit 25) within 500 ms (Guide 3.2.3; [linux] `usb4.c`
    `usb4_switch_setup`, `usb4_switch_configuration_valid`). The TMU comes
@@ -1000,8 +1701,10 @@ The sequence on a device router, after bonding (section 6.5):
 tunnels USB3 needs accuracy level 1 or more (Guide 7.4.2), since a USB3
 adapter that supports the TMU corrects its timestamps with the domain's
 time (Spec 9.1.1.7). So the TMU is configured on a link exactly when this
-driver will build a USB3 tunnel over it and finds it Off, and never on a
-link it preserves:
+driver will build a USB3 tunnel over it and finds it Off - or, whatever
+the tunnels, when both its routers are version 2 routers and this driver
+enumerated the device (section 6.2.2 item 6) - and never on a link it
+preserves:
 
 1. **At connection** (Guide 7.4.3.1): Disable Time Sync (TMU_ADP_CS_6) set
    on the host's lane 0 adapter and the device's upstream lane 0 adapter,
@@ -1034,11 +1737,17 @@ link it preserves:
    partial, consistent or not - is left exactly as found and gets no new
    USB3 tunnel: whether an inherited configuration really gives accuracy
    level 1 is not judged. A reading that cannot be taken: the same.
-3. **The mode** (Guide 7.4.3), from Off: HiFi-Bi, since this connection
-   manager is a version 1 one and never enables CLx; Linux makes the same
-   choice on a version 1 link without CL1 ([linux] `tb.c` `tb_enable_tmu`).
-   Never on two single-lane links (Guide 7.4.3.1): after bonding, or over
-   lane 0 alone once lane 1 is disabled.
+3. **The mode** (Guide 7.4.3), from Off: on a link whose two routers are
+   both version 2 routers (section 6.2.1 item 4), HiFi Enhanced
+   Uni-Directional, configured whatever the tunnels (section 6.2.2 item
+   6, the exception to this section's USB3-only rule)
+   (Spec 7.3.1.3's note: "shall"; [linux] `tb.c` `tb_enable_tmu` tries
+   the enhanced mode first on every link and falls back where a router
+   lacks it); on any other link HiFi-Bi, since CLx is never enabled;
+   Linux makes the same choice on a version 1 link without CL1 ([linux]
+   `tb.c` `tb_enable_tmu`). Never on two single-lane links (Guide
+   7.4.3.1): after bonding, or over lane 0 alone once lane 1 is
+   disabled.
 4. **Enable, inside a time disruption** (Spec 8.2.1.2 TMU_RTR_CS_0 Time
    Disruption; Guide 7.4.3.4 steps 2 and 7; [linux] `tmu.c`
    `tb_switch_tmu_post_time`, `tb_switch_tmu_enable`): set the device
@@ -1054,7 +1763,23 @@ link it preserves:
    an order from Linux ([linux]), where Guide 7.4.3.4.1 steps 3c and 3d
    name the host router first; the USB4 Specification sets no order
    between the routers, and the owner kept this order for `3.3.0.0` on
-   2026-10-26, to be read on the hardware bench, roadmap 44-E.6); clear the Time Disruption bit; then 50 ms
+   2026-10-26, to be read on the hardware bench, roadmap 44-E.6); or, for
+   HiFi Enhanced Uni-Directional, Guide 7.4.3.4.1 step 2 with Table 7-3
+   and Spec 8.2.2.2's note: the same downstream parameters, and on both
+   lane 0 adapters of the link (Table 7-3 names the downstream facing
+   port for the replenish values; Spec 8.2.2.2 Table 8-11 requires
+   DirSwitchN above 1 on a port whose enhanced mode is enabled, and
+   [linux] `tmu.c` `tb_switch_tmu_enable_enhanced` writes the port
+   parameters on both) Replenish Timeout 3125, Replenish Threshold 0
+   (TMU_ADP_CS_8), ReplenishN 30 and DirSwitchN 255 (TMU_ADP_CS_9) -
+   the HiFi values of Spec 8.2.2.2's note, where Linux uses its MedRes
+   set (averaging constant 4, threshold 25, ReplenishN 128) - then
+   AdapterTimeSyncInterval 16 and
+   Enable Enhanced Uni-Directional Mode 1 on the device's upstream lane
+   0 adapter and then on the host's, then Disable Time Sync 0 on the
+   device's and then on the host's (steps 2b to 2e, the Guide's own
+   order); TSPacketInterval is not written for it (Spec 7.3.1.3: ignored
+   in that mode); clear the Time Disruption bit; then 50 ms
    before any USB3 path (Guide 7.4.3.1 step 4). The host router's own TMU
    is enabled once at start, inside its own time disruption, as Linux's
    `tb_start` does for the root ([linux] `tb.c` `tb_start`, `tmu.c`
@@ -1066,12 +1791,18 @@ link it preserves:
    reason is logged, and a step that cannot be undone is recorded as the
    port's TMU quarantine (no USB3 on that port until it clears, re-tried
    each idle tick).
-6. **Disable** on a link this driver configured, when its last USB3 tunnel
-   is torn down with both routers present: Guide 7.4.3.4.2's HiFi-Bi branch
-   (the downstream router's TSPacketInterval 0) and then Disable Time Sync
-   1 on both lane 0 adapters, inside a time disruption. **At unplug**,
+6. **Disable** on a link this driver configured (a HiFi Enhanced
+   Uni-Directional link only at unplug, section 6.2.2 item 6), when its last USB3 tunnel
+   is torn down with both routers present: Guide 7.4.3.4.2's branch for
+   the mode it configured - HiFi-Bi, the downstream router's
+   TSPacketInterval 0; HiFi Enhanced Uni-Directional,
+   AdapterTimeSyncInterval 0 and Enable Enhanced Uni-Directional Mode 0
+   on both lane 0 adapters - and then Disable Time Sync 1 on both lane 0
+   adapters, inside a time disruption. **At unplug**,
    with the downstream router gone, only the host's port remains: its lane
-   0 adapter gets EnableUniDirectionalMode 0 and Disable Time Sync 1, and
+   0 adapter gets EnableUniDirectionalMode 0, on a version 2 host router
+   AdapterTimeSyncInterval 0 and Enable Enhanced Uni-Directional Mode 0,
+   and Disable Time Sync 1, and
    the host router's own rate is left alone ([linux] `tmu.c`
    `tb_switch_tmu_disable` disables time sync on the parent's downstream
    port the same way); a failure there is the port's TMU quarantine.
@@ -1106,9 +1837,10 @@ Since every operation is optional, a blocked router still tunnels.
 | DROM Read | `24h` | names for the log | proceed unnamed ([linux] `usb4.c`: a host router may have no DROM) |
 | Buffer Allocation Request | `33h` | baMaxPCIe, baMaxUSB3 (data dwords: index bits 15:0, value bits 31:16; index 1 USB3, 4 PCIe, 5 host interface; [linux] `usb4.c` `usb4_switch_credits_init`) | the preference defaults to 32 credits on a bonded lane, 16 on a single lane ([linux] `tunnel.c` `tb_pci_init_credits`); either way the credits written are bounded by section 6.8's accounting |
 | Get PCIe Downstream Entry Mapping | `30h` | the tunnel port's routing id (section 6.3) | the pairing rule and section 7.6's other sources |
-| Get Capabilities | `31h` | the inherited capability state of section 6.4 (Capability Index 0) | routers this driver enumerated: all disabled, whatever the answer; a preserved router: adopted on success, none enabled on Not Supported, unknown on any failure, with section 6.4's consequences |
+| Get Capabilities | `31h` | the inherited capability state of section 6.4 (Capability Index 0); also section 6.2.2 item 3's read-back | routers this driver enumerated: all disabled, whatever the first answer, until a Set Capabilities, after which the read-back sets the state (enabled, plain, or unknown when the Set or the read-back is uncertain, section 6.2.2 item 3); a preserved router: adopted on success, none enabled on Not Supported, unknown on any failure, with section 6.4's consequences |
+| Set Capabilities | `32h` | nothing: Status only (Spec Table 8-55); since task 45.20 it enables the Sequence bit capability (section 6.2.2 item 3) | plain acknowledgements; a failure leaves the capability state unknown, as section 6.2.2 item 3 says |
 
-Nothing else is issued, and none of the four is needed for a tunnel.
+Nothing else is issued, and none of the five is needed for a tunnel.
 
 ### 6.8 Paths and the PCIe tunnel
 
@@ -1169,7 +1901,8 @@ The sequence:
 1. Both PCIe adapters' LTSSM (ADP_PCIE_CS_0 bits 28:25) in Detect (0)
    within 500 ms (Guide 5.3.1 step 1). Not reached: no path is written,
    the port's PCIe tunnel has failed, logged. This is section 10.1's gate.
-2. The downstream path, then the upstream path.
+2. The downstream path, then the upstream path; then, where both routers
+   are version 2 routers, Extended Encapsulation (section 6.2.2 item 7).
 3. Path Enable (ADP_PCIE_CS_0 bit 31): the device's PCIe Up first, then
    the host's PCIe Down (Guide 5.3.1 steps 5 and 6; [linux] `tunnel.c`
    `tb_pci_activate`).
@@ -1308,7 +2041,10 @@ from this driver), the `usb4-emu` cross-check links the model itself
 ### 7.1 Four ways a change is noticed, and one truth
 
 1. A hot plug event (section 5.1), from the host router for a lane adapter
-   of one of its ports.
+   of one of its ports; since task 45.20 also a LINK_RECOVERY
+   notification from a router on the port's path (section 6.2.3 item 4),
+   which since task 45.56 also queues that port's recovery check (part
+   4 there) after its port check.
 2. The idle poll's port scan: each tick reads lane 0's LANE_ADP_CS_1 and
    ADP_CS_4 for every host port, two reads per port (Guide 3.1.1 and 3.4.1
    allow periodic scanning in place of events); for a port with a PCIe
@@ -1376,7 +2112,7 @@ One state per host USB4 port, on the thread:
 | State | Meaning | Leaves on |
 |---|---|---|
 | EMPTY | lane 0 disconnected (CLd) | a check finding it connected: CONNECTING |
-| CONNECTING | section 6.4 (or section 8) running | enumerated: BONDING; an unplug: TEARDOWN; ERR_ENUM, ERR_NUA: UNSUPPORTED; enumeration failed 20 times: FAILED |
+| CONNECTING | section 6.4 (or section 8) running | enumerated: BONDING; an unplug: TEARDOWN; ERR_ENUM, ERR_NUA: UNSUPPORTED (XDOMAIN with `XhciCmNet` 1, design record 35 section 3.3); enumeration failed 20 times: FAILED |
 | BONDING | section 6.5 (section 8 item 3 for a Thunderbolt 3 router) | done or single: CONFIGURING for a USB4 router, TUNNELLING for a Thunderbolt 3 router, which has no Configuration Valid handshake (section 8 item 2); the verified fallback failing: FAILED |
 | CONFIGURING | section 6.6 | Configuration Ready: TUNNELLING; timeout: FAILED |
 | TUNNELLING | sections 6.8 and 6.9, then the PCI side (section 7.6) | the PCIe tunnel up and its tunnel ports re-enumerated, or approval 0 with USB3 handled: UP; failure: FAILED |
@@ -1384,6 +2120,7 @@ One state per host USB4 port, on the thread:
 | HELD | a port whose configuration did not verify and showed no removal evidence: found so at start (section 9.2), or a port holding a resume obligation at resume (section 7.6); left exactly as found; a live preserved tunnel on it remains an obligation | an unplug: TEARDOWN of whatever this driver can read of it, host side only |
 | FAILED | enumerated, but some step failed; whatever did succeed (a USB3 tunnel, say) stays | an unplug: TEARDOWN; only a re-plug retries |
 | UNSUPPORTED | a router this driver will not drive | an unplug: EMPTY |
+| XDOMAIN | another domain's router, perhaps another host: design record 35's inter-domain discovery and USB4NET service run on the port (task 45.59, `XhciCmNet` 1) | an unplug: TEARDOWN; no answer to the UUID Request, or a loop: UNSUPPORTED |
 | TEARDOWN | section 7.3 | done: EMPTY, then a check (the lane may already be connected again) |
 
 Each port has a **generation** incremented at every entry to CONNECTING;
@@ -1402,10 +2139,12 @@ in this one order, everything the `nvme98` statement depends on first
    relevant steps that target the removed Router" skipped; Guide 5.2.2):
    1. The host's PCIe Down adapter's Path Enable read, and written 0 if
       set. The host router resets it to its default itself when the port
-      disconnects (Spec 4.4.5.2), so normally this is a read.
+      disconnects (Spec 4.4.5.2), so normally this is a read. On a version
+      2 host router its Extended Encapsulation is then read and written 0
+      if set (section 6.2.2 item 7).
    2. PATH_CS_0 Valid cleared on the host PCIe Down adapter's HopID 8 entry
       and on the host lane 0 adapter's `hu` entry, nothing else changed,
-      then PATH_CS_1 Pending Packets (bit 28) polled to 0 on each within
+      each in one two-dword write (section 6.2.2 item 4), then PATH_CS_1 Pending Packets (bit 28) polled to 0 on each within
       500 ms, then at least 2 us (Guide 5.2.2; Spec 5.4.2: an ingress
       adapter drops every packet for a path once its Valid is 0 and
       dequeues what it holds; Table 5-16 tTeardown).
@@ -1437,7 +2176,10 @@ in this one order, everything the `nvme98` statement depends on first
 5. **The port's lane adapters back to their defaults** where this driver
    changed them (Guide 3.4.1: the TMU disabled on the host's port as
    section 6.6's TMU item 6 says for an unplug; USB4
-   Port is Configured, cleared on the host's port; Link Credits, which the
+   Port is Configured, cleared on the host's port; Enable Gen 4 Link
+   Recovery, cleared on the host's port where this driver set it, since
+   Spec 4.4.5.2 does not return it to its default at a disconnect
+   (section 6.2.3 item 4 part 6, task 45.56); Link Credits, which the
    router reloads itself, Spec 4.4.5.2): Target Link Width and Lane Bonding
    restored, and lane 1's Lane Disable cleared if section 6.5 set it
    ([linux] `switch.c` `tb_switch_unconfigure_link`,
@@ -2736,7 +3478,9 @@ confirm):
   each enabled protocol adapter - before any new path is allocated. A
   DisplayPort tunnel this driver will never build is still reserved, never
   touched.
-- **Discovery only reads.** No write during discovery changes an existing
+- **Discovery only reads**, but for one write since task 45.20: the
+  Enable Gen 4 Link Recovery bit cleared where it reads set (section
+  6.2.3 item 4). No other write during discovery changes an existing
   link's configuration: no lane bonding, Lane Disable, Target Link Width,
   CLx enable, TMU mode, USB4 Port is Configured, credit or path write, and
   no reset of any kind.
@@ -2850,7 +3594,8 @@ Cleaning one port, the Linux and Windows 11 sequence restricted to it:
 
 1. The orderly PCIe teardown of Guide 5.3.2, both ends reachable: Path
    Enable 0 on the host's PCIe Down adapter, then on the device's PCIe Up;
-   every Valid entry on the port's path (host PCIe Down HopID 8, host lane
+   Extended Encapsulation cleared where section 6.2.2 item 7 says; every
+   Valid entry on the port's path (host PCIe Down HopID 8, host lane
    0 `hu`, device lane 0 `hd`, device PCIe Up HopID 8, as far as each
    could be read) invalidated and drained (Guide 5.2.2). The same for a
    USB3 tunnel (Guide 5.5.2).
@@ -3230,11 +3975,115 @@ tears down the PCIe tunnel alone: a USB3 tunnel on the same port carries
 devices of the host's own xHCI tree, which the eject never asked to stop,
 so it stays up, as on a port FAILED for PCIe (section 7.2).
 
+### 10.5 The isolation statement to xHCI98 (task 45.35)
+
+This is a second consumer of section 7.3 step 1's read-back, beside
+Stor98's statement. Its purpose and the owner's decision are in record 17
+section 4.13.6: a USB4 port whose PCIe path this connection manager closed
+and read back closed proves that no function behind that port's tunnel
+port can reach host memory. xHCI98 takes that as the proof that lets a
+contained controller's transfers complete.
+
+**The word it reads.** The domain's driver fields are written by the
+connection manager's thread without a lock, and the path is enabled
+(`tbtU4PcieTunnel`) before any `TUNNEL_UP` reaches the seam. So the
+statement is one word per USB4 port, kept in the core:
+`TBT_U4CM.IsoWord[port - 1]`, either 0, or `TBT_U4_ISO_VALID` together
+with the low 24 bits of the connection generation. It is kept apart from
+the port records, which the snapshots and the resume copy whole, so no
+copy can bring an old word back.
+- **Set.** The core sets it in `tbtU4LinkDownUpcall` when step 1 read
+  back closed (`PathClosed`), before the driver's upcall.
+- **Revoked.** It is written 0, by a single aligned store, before
+  anything that can enable a PCIe path or reinitialize the core: at the
+  top of `tbtU4PcieTunnel`, the only writer of a PCIe Path Enable set
+  (`tbtU4UndoEnable` and `tbtU4Reserve` only clear or hold one). For every
+  port it is cleared by `TbtU4Init`,
+  `TbtU4Start`, `TbtU4Resume`, `TbtU4Recover`, `TbtU4Stop` and
+  `TbtU4Contain`.
+
+The reader reads the word once. A yes answered just before a revocation
+stays true. The revocations other than `tbtU4PcieTunnel`'s open nothing.
+That one opens a new tunnel, which reaches only an endpoint reset since
+the closure: the port reconnected through Detect, the gate of section
+10.1 (MD-2's obligation 4). Section 10.1's reset is what keeps a granted
+proof true after a path reopens.
+
+**The binding.** The binding is taken when the interface is asked, at the
+controller's start. It records:
+- the domain, by its NHI object and `Reenum.Starts`;
+- the member, by its tunnel port's location;
+- for every USB4 port whose PCIe tunnel is up at that moment, its
+  connection generation (`Pcie.Up`). The generation is read on both sides
+  of `Up` (`TbtU4PortPcieGen`), so an `Up` and a generation of two
+  connections are never paired.
+
+The port itself is not named at the binding. The member's correspondence
+may be learned only after the controller's start: a 2000 leg on the gated
+release bound nothing for that reason. So the port is named at each ask,
+by the correspondence then (`XhciTbtPortMember`, the same source the
+Stor98 statement uses). The proof then holds only for the generation that
+port carried at the controller's start.
+
+A domain restart changes `Reenum.Starts`, and a reconnect changes the
+generation. Either makes every later answer no. The binding is immutable
+while xHCI98 holds a reference, and it is retired when the last reference
+is released, so the next start binds afresh.
+
+**The answerer.** It is `xhcicm`'s kernel-attached child filter on the
+controller's PDO (record 31 section 4.3), linked below a member of a
+domain's tunnel-port set (`CmRegAttLink`). It answers
+`IRP_MN_QUERY_INTERFACE` for `GUID_XHCI_CM_ISOLATION` (`src/xhci_cmiso.h`,
+shared by both drivers) on NT 5.x only, when the binding can be taken;
+otherwise the IRP passes down untouched. `InterfaceReference` and
+`InterfaceDereference` count on the filter (`IsoRefs`); no object
+reference is taken, because xHCI98 releases the interface before its own
+`REMOVE_DEVICE` goes down to this filter, so the filter outlives every
+call (record 17 section 4.13.6). The binding marks the filter gone at its
+`SURPRISE_REMOVAL` and `REMOVE_DEVICE`, and a call after that answers no.
+
+**The answer.** `Isolated(Context)` is called at `PASSIVE_LEVEL`. Under
+`cmRegLock` it finds the bound domain in the domain list, with the same
+NHI object and the same `Reenum.Starts`. It returns 1 only when every one
+of these holds; the pure decision is `CmIsoDecide` (`cm_iso.c`, host suite
+`test_cm_iso.c`):
+1. the child is not removed;
+2. the domain is listed and unchanged, runs this connection manager, is
+   started, and its host interface is not lost (`Live.State` active, no
+   `LossDrain`);
+3. exactly one USB4 port corresponds to the bound member, read now
+   (`XhciTbtPortMember`; none, several, or a conflicting correspondence
+   refuses);
+4. that port carried a PCIe tunnel at the binding, and its `IsoWord` is
+   `TBT_U4_ISO_VALID` with that tunnel's generation.
+
+No spin lock is held across a transport call or a PnP call. Each call is
+counted (`cm.iso.asked`, then `cm.iso.yes` or `cm.iso.no`), and the
+verdict with the first condition that failed is logged (`cm.iso`). The firmware connection manager's client answers nothing,
+because it has no read-back (section 7.3 is this connection manager's).
+98 SE and ME have no such interface.
+
+**What it is not.** It is not Stor98's statement:
+- it waits for no acknowledgement;
+- it is withheld for no deadline (section 10.3's 3 s is Stor98's
+  latency budget, not a condition of isolation);
+- it is not qualified per OS ordering (section 10.2), because what it
+  proves is the closed path, not the endpoint's reset or the order of
+  events.
+
+A port whose step 1 did not read back (`PathClosed` clear) never answers
+yes. Its controller keeps record 17's limitation.
+
 ## 11. Stop, remove, disable, suspend, resume
 
 - **Stop, remove, disable**: the rings stopped (TX and RX ring control
   cleared [ref] `u4cm_stop`), queued work drained, the thread ended, the
-  common buffer freed. Nothing on the fabric is changed: tunnels stay up
+  common buffer freed. Nothing on the fabric is changed but one bit:
+  before the rings stop, Enable Gen 4 Link Recovery is cleared where
+  this driver may have set it - both ends of an UP or FAILED port, the
+  host's end alone of a HELD one (section 6.2.3 item 4 parts 3 and 6) -
+  since no connection manager then runs to verify a recovery; not on a
+  contained instance, which writes nothing. Tunnels stay up
   and the devices behind them keep working, as under the ICM client (record
   21 section 5.6) and as Linux leaves non-DMA tunnels at unload ([linux]
   `tb.c` `tb_stop`). Force power follows section 4.2's ownership record.
@@ -3246,7 +4095,10 @@ so it stays up, as on a port FAILED for PCIe (section 7.2).
   across a sleep. Decision U7.
 - **Shutdown**: the same.
 - **System suspend** (D3 for S3 or S4): the NHI marks its tunnel-port
-  set's active members held (section 7.6), then the same as stop. The
+  set's active members held (section 7.6), then the same as stop, the
+  Enable Gen 4 Link Recovery clear included (Guide 8.2.1 clears it before
+  a sleep); after the resume the tick sets it again on each port that
+  qualifies (section 6.2.3 item 4 parts 2 and 6). The
   Guide's sleep entry (chapter 8.2: Enter Sleep, Sleep Ready, the wake configuration) is
   not in the first cut; a domain that loses power across the sleep comes
   back with its device routers uninitialised.
@@ -3292,7 +4144,9 @@ at its default under the don't-overwrite flag, each read once at start
 | `XhciCmUsb3Tunnel` | 1 | 1 build USB3 tunnels (section 6.9); 0 disconnect the USB3 adapters of routers this driver configures (Guide 5.5.3); a preserved USB3 tunnel is left as found either way (decision U3) |
 | `XhciCmLaneBonding` | 1 | 1 bond (section 6.5); 0 never bond, disable lane 1 where section 6.5 step 6 can verify it, and run single-lane; a preserved link keeps its configuration either way (decision U4) |
 | `XhciCmPreOsCleanup` | 0 | 0 discover and preserve, hold what does not verify (section 9.2); 1 clean what does not verify; 2 clean everything (section 9.3) (decision U2) |
-| `XhciCmAsmediaPcie7Credits` | absent (0) | a bench experiment, not written by any INF and not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
+| `XhciCmAsmediaPcie7Credits` | 0 (written by the INFs since task 45.50) | a bench experiment, not asked by the installer: 1 writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCIe tunnel this driver builds between an ASM4242 host router and an ASM2464 device router; 0 keeps them as read; any other value refused, 0 standing (section 18.8, task 44.41) |
+| `XhciCmUsb4V2` | 1 (written by the INFs since task 45.50) | a bench switch, not asked by the installer: 1 runs a USB4 version 2 router this driver enumerates as version 2 (section 6.2); 0 makes this driver a version 1 connection manager again, the `3.3.0.0` behaviour: CMUV 1.0 to every router it enumerates and none of section 6.2.2's version 2 obligations, on enumerated and adopted routers alike; at 1 those obligations follow each router's own version and the capabilities it reports, whatever CMUV a predecessor wrote, which is only read and logged; the two-dword path writes and the Gen 4 Link Recovery clear of section 6.2.3 item 4 hold either way; any other value refused, 1 standing (section 6.2.1 item 5, decision U30) |
+| `XhciCmGen4LinkRecovery` | 1 (written by the INFs, task 45.56) | a bench switch, not asked by the installer: 1 enables Gen 4 Link Recovery on a depth-1 Gen 4 link between two version 2 routers this driver runs, with the recovery check after each LINK_RECOVERY (section 6.2.3 item 4); 0 never enables it, the task 45.20 behaviour: an uncorrectable error on a Gen 4 link is a disconnect; either way a predecessor's bit is cleared at the adoption (part 7) and a LINK_RECOVERY has its port check and recovery check (part 4); `XhciCmUsb4V2` 0 never enables it; any other value refused, 1 standing |
 | `XhciLogVerbosity` | as `xhci98.sys` | the shared log rule |
 
 `XhciCmCmdTimeoutMs` and `XhciCmApproveTimeoutMs` are the ICM profile's
@@ -3311,7 +4165,9 @@ Configuration Ready timeouts; PCIe and USB3 tunnels built, failed (and at
 which step), torn down; Pending Packets timeouts; Detect-gate timeouts; HCA
 timeouts; ports preserved, held and cleaned at start; Downstream Port
 Resets; quirks fired; tunnel ports associated by source; statements sent
-and withheld by reason. Re-enumeration counters are record 21's `cm.*`. The
+and withheld by reason; Gen 4 Link Recovery enabled, refused, cleared
+and failed clears, the recovery checks and their outcomes (section 6.2.3
+item 4). Re-enumeration counters are record 21's `cm.*`. The
 log's emission is record 21's decision D12, unchanged.
 
 ## 13. Provenance and licence
@@ -3431,6 +4287,32 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   (verified, nothing written to the router), never set, the budget spent
   inside its wait, and another router (another UUID) in its place during
   it (never verified as the first).
+- **`test_u4v2`**, task 45.20: section 6.2.4's vectors over the fake
+  fabric's USB4 version 2 host and device routers (USB4 Version `40h`,
+  Set Capabilities, Gen 4 links symmetric or asymmetric between two such
+  routers, Extended Encapsulation, the enhanced TMU fields): CMUV by each
+  router's version in one domain, with `XhciCmUsb4V2` 0 and on a
+  Thunderbolt 3 router; a preserved router's CMUV `10h`, `20h` and `30h`;
+  the Set and its read-back on version 2 and version 1 routers, the host
+  router included, refused (Not Supported, Status 1, nothing enabled),
+  failing (never completing, a read-back failing) and with a notification
+  held across it, none with `XhciCmUsb4V2` 0 or to a Thunderbolt 3
+  router, a preserved router's Set and its adoption; every path entry
+  write two DWs (an invalidation, a quarantine's retry) on version 2 and
+  version 1 domains; HiFi Enhanced Uni-Directional with and without a
+  USB3 tunnel, its order, kept past an eject and cleared on the host's
+  port at unplug, HiFi-Bi beside a version 1 router and with
+  `XhciCmUsb4V2` 0; CV found with PTO clear (HELD, ROUTER_CS_5 never
+  written) and with UTO clear (no USB3 tunnel); Enable Gen 4 Link
+  Recovery cleared at depths 1 and 2 with either `XhciCmUsb4V2` value,
+  left on a version 1 router; LINK_RECOVERY from the device and the host
+  routers; Extended Encapsulation before Path Enable and cleared after it,
+  at an eject, an unplug and a preserved tunnel's teardown, never on a
+  version 1 end or with `XhciCmUsb4V2` 0, and one that will not set; Gen
+  4 symmetric, with `XhciCmLaneBonding` 0, asymmetric both ways and
+  preserved asymmetric, never a lane write, and x1, unpaired and reserved
+  widths FAILED; a resume on an asymmetric link, verified and rebuilt
+  after a power loss; the USB3 allocation's link bound.
 - **`test_u4cm`, an earlier instance's tunnels** (section 9.4): an
   instance builds a tunnel, stops and hands its record; a second
   instance on the same fabric finds it preserved and its own, and a sleep
@@ -3465,7 +4347,8 @@ GPL-2.0-or-later (2026-10-25); `usb4-emu` itself stays GPL-2.0-only.
   later) it also links `usb4-router-img.c` and `usb4-router-asm2464.c`
   and runs section 6.11's device on `intel-adl`: cold, hot plug, unplug,
   re-plug, the pre-OS tunnel preserved and cleaned. Since task 44.42 it
-  needs QEMU fork `02dda40` or later and builds the `asm4242` host as
+  needs QEMU fork `2e063be` (on `usb4-emu` `main` after its merge of the
+  asm4242 model; `02dda40` before the 2026-10-29 squash) or later and builds the `asm4242` host as
   that fork's `usb4-host` does by default, the emulator's asm4242 preset, the
   ASM4242 host router of section 18.2 (lanes 1-4, the host
   interface 5 with 21 paths, PCIe Down 6-7, USB3 Down 8-9, DP IN 10-11,
@@ -3548,7 +4431,7 @@ from their first form, as each row says.
 | U3 | USB3 tunnels | `XhciCmUsb3Tunnel` 1, built with the bandwidth handshake, since the Guide says "must"; 0 disconnects the adapters of routers this driver configures; preserved tunnels are left as found | 6.9 |
 | U4 | Lane bonding | `XhciCmLaneBonding` 1; on failure or at 0, lane 1 disabled per the Guide, verified, before paths over lane 0, else no paths (Linux does not disable it); preserved links untouched | 6.5 |
 | U5 | Approval under the software connection manager | record 21's `XhciCmApprove` carried over: 1 builds PCIe for every device router; 0 builds none for a router this driver enumerated, preserves preserved tunnels, and leaves USB3 alone | 6.8 |
-| U6 | What is driven | device routers at depth 1; USB4 version 2 routers run as version 1. Changed: Thunderbolt 3 device routers at depth 1 behind a USB4 host, router by router, PCIe first, are in the phase (task 40-A.8), by the owner's no-cuts decision | 6.2, 8 |
+| U6 | What is driven | device routers at depth 1; USB4 version 2 routers run as version 1 (until task 45.20, which runs them as version 2: decisions U30 and U31). Changed: Thunderbolt 3 device routers at depth 1 behind a USB4 host, router by router, PCIe first, are in the phase (task 40-A.8), by the owner's no-cuts decision | 6.2, 8 |
 | U7 | The driver's own stop | tunnels left up, force power per section 4.2's ownership record, the fabric discovered at the next start; no Guide chapter 8 sleep flow in the first cut | 11 |
 | U8 | The NT filter's ids for USB4 tunnel ports | Changed (first form: the emulator's id only): the ids the mirrors name, ids read from a public PCI id listing by task 40-0.2 with their provenance, and the emulator's two, every flavour; a user line in a copy of the INF for anything else; a matched port acts only once associated (section 7.6) | 3.7, 7.6 |
 | U9 | Safe eject under the software connection manager | an orderly per-port teardown that 39-A.8's mechanism calls, for the children of associated tunnel ports only | 10.4 |
@@ -3558,8 +4441,12 @@ from their first form, as each row says.
 | U13 | `XhciCmTunnelBridge` with more than one tunnel port | Changed (first form: a list indexed by USB4 port): record 21 section 6.3's per-domain override, an unordered set; the port-to-bridge correspondence is router-named or learned (section 7.6), never taken from list order | 7.6, 12 |
 | U14 | The selection | section 3's four tests, the inert start in its two forms, the three positive admissions of section 3.4, and the hardware-profile table apart from the CM table (owner's coverage plan, 2026-10-15) | 3, 4 |
 | U15 | A resume that fails to restore every tunnel | an exception to the coverage plan's "tunnels restored before dependent PCI devices resume": since task 43.24h the NT bridge's D0 is not held at all, because a held D0 deadlocks the NT resume (a bug check on 8 to 10, the five-minute watchdog's release on 2000 to 7), and after any resume each member still marked is released and, with re-enumeration on, invalidated, which is record 21's old failure path taken every time; system suspend with a tunnelled device attached is unsupported in this release on every target and the release notes say so; on 9x there is no hold at all | 7.6, 11 |
-| U16 | The TMU | configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
+| U16 | The TMU | since task 45.20, on a link of two version 2 routers that this driver enumerates, HiFi Enhanced Uni-Directional whatever the tunnels (section 6.2.2 item 6, the Specification's "shall"); otherwise configured (HiFi-Bi) only on links that will carry a USB3 tunnel, as the Guide's accuracy rule requires, never on a preserved link; other PCIe-only links and Thunderbolt 3 links left with the TMU off; CLx never enabled | 6.6, 8 |
 | U17 | A host interface lost under this profile | the owner's decision of 2026-10-15, not an orchestrator one: containment only, automatic recovery a later item of the roadmap's planned work; a terminal CONTAINED state on the monitor's first sign of loss, a surprise removal or a resume that finds the host interface gone, refusing transport, ejects, deferred teardown, UP actions, suspend and resume until a PnP stop and start or a reboot; force power and an unproven DMA buffer kept; no recovery in `3.0.0.0`. **Revised 2026-10-18** by the owner's opening of Phase 42, which promoted the planned recovery (`U4REC.1`) into `3.1.0.0` as tasks 42-0.5 and 42-A.10: CONTAINED is no longer terminal, the recovery of section 7.7's revision following on its precondition (decisions U18 to U29 there, the orchestrator's) | 7.7 |
+| U30 | USB4 version 2 routers (task 45.20) | run as version 2 by default: CMUV 2.0 written to a major 2 router this driver enumerates; the version 2 obligations keyed on the routers' own version (the Sequence bit capability enabled with a read-back, Extended Encapsulation on a PCIe tunnel between two version 2 routers, HiFi Enhanced Uni-Directional TMU on their links, a preserved CV never reconfigured, a preserved Gen 4 Link Recovery enable cleared); path entries written as two dwords on every router; `XhciCmUsb4V2` 0, a bench switch written by no INF, restores the version 1 run; confirmed by the owner, 2026-10-29, over making version 1 the default, because the Guide ties the CMUV to the router's version and Linux does the same | 6.2, 6.6, 12 |
+| U31 | Asymmetric Gen 4 links (task 45.20) | never initiated (no DisplayPort tunnel needs one) and, found, used as found, never transitioned back to symmetric; confirmed by the owner, 2026-10-29, over a transition to symmetric before the first path, which would touch a link that may carry a preserved tunnel | 6.2.3 |
+| U32 | A new PCIe tunnel beside a preserved DisplayPort tunnel (task 45.20) | built as before, its 1.5 Gb/s floor (Spec 5.3.3.1, Guide 6.2.4) not verified, logged; the owner chose (a), 2026-10-29: (a) build it, as now, since a dock a predecessor left with DP alone would otherwise lose its PCIe devices, and a single-lane 10 Gb/s link with a DP stream large enough to starve PCIe is the rare case; (b) build none until the DP tunnel goes, which meets the floor and costs those devices; (c) read the DP adapters' allocated bandwidth (DP bandwidth allocation mode, out of scope here, section 1.3) | 6.2.2, 9.2 |
+| U33 | Gen 4 Link Recovery (task 45.56) | enabled by default (`XhciCmGen4LinkRecovery` 1, the owner's task of 2026-10-31, with a value to switch it off) on a depth-1 Gen 4 link between two version 2 routers, set at an idle tick once both lane 0 adapters read CL0, cleared at the host's end at a teardown and on both ends before a stop or a suspend; each LINK_RECOVERY a port check and then a read-only recovery check, whose failing PCIe tunnel goes as section 7.1 item 4 takes a lost one and whose failing USB3 tunnel is torn down alone; never below depth 1, never initiated | 6.2.3, 11, 12 |
 
 ## 16. What is open, and what is a risk
 
@@ -3577,11 +4464,37 @@ from their first form, as each row says.
   hang).
 - **Below-4-GB DMA** on hosts whose driver Linux runs with a 64-bit mask:
   expected to work, qualified per host.
-- **TMU** is configured only for USB3 tunnels (section 6.6). A router that
+- **TMU** is configured only for USB3 tunnels (section 6.6), and on
+  every link of two version 2 routers (section 6.2.2 item 6). A router that
   withholds Configuration Ready or a PCIe tunnel on a link without it, or a
   Thunderbolt 3 router that will not carry a tunnel without it, would need
   the TMU on every link first, as Linux does (section 8 item 6).
-- **Version 2 routers run as version 1** (section 6.2): untested.
+- **Version 2 routers run as version 2** (section 6.2, task 45.20):
+  designed from the Specification and the Guide, run nowhere yet;
+  `usb4-emu`'s version 2 router model and the Barlow Ridge bench (task
+  45-E.10) are the first readings. Open with it: Extended Encapsulation
+  on a Gen 2 or Gen 3 link between two version 2 routers, which the
+  Specification asks for and [linux] `tunnel.c` does not set; whether a
+  real router's Sequence bit Set Capabilities and read-back behave as
+  Spec 8.3.1.3.3 says; the HiFi Enhanced Uni-Directional TMU's
+  accuracy for a USB3 tunnel, never measured here; a version 2 router
+  that a version 1 predecessor enumerated (CMUV `10h`) and that this
+  driver then treats as a version 2 router (section 6.2.1 item 4);
+  Gen 4 Link Recovery (task 45.56): the routers' recovery itself, which
+  the emulator models only by its outcome, a preserved DisplayPort
+  tunnel left unverified after one, a link below depth 1 a predecessor
+  left recovering where its clear failed, and what a real tunnelled USB3
+  or PCIe link reports right after a recovery, owed to the hardware
+  bench, task 45-E.10 (section 6.2.3 item 4 parts 4 and 7). The code (task 45.20, 2026-10-30) has met only the host
+  suite's fake fabric: `usb4-emu`'s routers are version 1 routers (USB4
+  Version `20h`, no Gen 4 link), so no q35 leg has run a version 2 link.
+  What such a leg needs of `usb4-emu`: a host and a device router
+  reporting USB4 Version `40h` and a host interface version `40h`; Get
+  and Set Capabilities with the Sequence bit capability (the model has
+  them); Gen 4 links, symmetric and asymmetric, in LANE_ADP_CS_1 with
+  Lane Bonding clearing itself there; ADP_PCIE_CS_1 Extended
+  Encapsulation; TMU_ADP_CS_8 and 9; PORT_CS_19 Enable Gen 4 Link
+  Recovery; and a way to send ASYM_LINK and LINK_RECOVERY.
 - **The tunnel-port set on integrated and USB4-only hosts** rests on
   record 21 section 6.3's sources and this record's router-named one
   (section 7.6): a host whose ports no list names, whose router does not
@@ -3625,8 +4538,9 @@ from their first form, as each row says.
   written in its HopID 8 entry (it resets to none; this driver keeps them
   as read, as Linux does), what its unused adapter 4 answers if read, and
   the PCIe switch in front of the NVMe under Windows 98 SE and 2000 are
-  unread; planned task U4HW.1 (40.4 until 2026-10-16) waits on a USB4 host that boots them
-  (section 18; the hardware bench, task 44-E.6).
+  unread; task U4HW.1 (40.4 until 2026-10-16; 44.39 and 44-E.6 from
+  2026-10-25; its bench task 45-E.5 from 2026-10-29) waits on a USB4 host
+  that boots them (section 18).
 
 ## 17. What this record needs record 21 to say differently
 
@@ -3681,7 +4595,9 @@ and the hardware bench's steps (task 44-E.6). Nothing in `src\` changes
 with it.
 
 Tags: **[hw]** the ASM4242's own state as `usb4-emu`'s asm4242 model
-and data record it (`usb4-emu` `7ec3865`, `5d7345a` and `9f333f3`, read
+and data record it (`usb4-emu` `a0b6749` and `376e2aa` on its `main`
+after the merge, the capture archives kept outside that repository;
+`7ec3865`, `5d7345a` and `9f333f3` before the 2026-10-29 squash), read
 there and never modified from here, `usb4-emu`'s asm4242 research note
 being that repository's own reading); where that data came from is
 recorded in `usb4-emu`; nothing of it is in this repository. **[inf]** an
@@ -4038,7 +4954,8 @@ invalid for PCIe, and 7 is no USB4 requirement.
   interface's driver key); absent or 0 is today's behaviour, 1 the
   experiment; any other value is refused, 0 stands, and the log says so
   (`cm.asm.pcie7`, bit 8 found, bit 9 refused, then `cm.asm.pcie7.raw`).
-  No INF writes it; the installer neither asks for it nor writes it.
+  The INFs write it at 0 since task 45.50 (record 21 section 8.1), never
+  over a user's value; the installer neither asks for it nor writes it.
 - **Where it acts**: only on a PCIe tunnel this driver builds (a plug, a
   re-plug, a rebuild after a resume of a tunnel it built), only when the
   host router reads `174C:2428` and the connected device router
@@ -4063,6 +4980,403 @@ invalid for PCIe, and 7 is no USB4 requirement.
   EFC, ISE 0 on both protocol entries with the lane entries unchanged,
   the thirteen log lines; on with an Intel host or another device: the
   gate closed; on with a pre-OS tunnel: preserved, nothing written).
+
+## 19. Thunderbolt 1, 2 and 3 hosts on Apple Macs (task 45.21)
+
+Added 2026-10-29 for `roadmap-usb4.md` task 45.21 (the owner, the
+decisions table's "Phase 45 additions"): this driver as the connection
+manager of the Thunderbolt hosts Apple's Intel Macs carry, which run no
+connection manager in firmware. Written first as a reading and a design;
+coded on 2026-10-30 (section 19.9), after the `usb4-emu` model the owner
+asked for first (Q4). Section 3.1's rule that a host with PCI subsystem
+vendor `106B` starts inert now holds for every row but this section's;
+the owner decided on 2026-10-30 that the code is active on a Mac from
+this release, before the hardware reading (45-E.11; section 19.9, Q5). The release notes' "Not
+claimed: Apple machines" stays as it is until that reading.
+
+Tags, beside this record's own: **[linux]** Linux `drivers/thunderbolt`
+at the pinned `c6859eed` (`external/README.md`), GPL-2.0-only, read for
+facts only and cited by file and symbol, nothing adapted (AGENTS.md,
+"Reference Implementations"); **[pub]** Apple's public support pages, as
+listed under "Sources"; **[unread]** a question no source here answers,
+for the bench.
+
+### 19.1 The hosts, and who runs them on a Mac
+
+| Host NHI | Its host router (switch id) | Generation | Linux on a Mac | Source |
+|---|---|---|---|---|
+| Light Ridge `8086:1513`, class `0880h`, subsystem `2222:1111` | `1513` | 1 | software connection manager: no `icm_probe` row | [linux] `pci.c` `nhi_ids[]` (the Thunderbolt 1 rows match class `PCI_CLASS_SYSTEM_OTHER` and that subsystem only, "the TB bridges use the same device and vendor (sub)id on gen 1 and gen 2 controllers"), `switch.c` `tb_switch_get_generation`, `icm.c` `icm_probe` |
+| Cactus Ridge 4C `8086:1547`, class `0880h`, subsystem `2222:1111` | `1547` | 1 | the same | the same |
+| Falcon Ridge 2C `156A`, 4C `156C` | `156B`, `156D` | 2 | software: `icm_fr_is_supported` is false on an Apple machine | [linux] `icm.c` `icm_fr_is_supported`; `pci_ids.h` |
+| Alpine Ridge 2C `1575`, 4C `1577`, LP `15BF`, C 4C `15D2`, C 2C `15D9`; Titan Ridge 2C `15E8`, 4C `15EB` | `1576`, `1578`, `15C0`, `15D3`, `15DA`; `15E7`, `15EA` | 3 | software unless the ICM firmware already runs or the `start_icm` module option asks Linux to reset and start it (off by default) | [linux] `icm.c` `icm_ar_is_supported` (`icm_firmware_running`, `start_icm`); `nhi.h`, `pci_ids.h` |
+
+The host router's device id is not the NHI's from Falcon Ridge on; the
+second column is the mapping test (d) uses (section 19.3).
+
+Linux recognises an Apple machine by its firmware's vendor string
+(`x86_apple_machine`, from `linux/platform_data/x86/apple.h`, not
+mirrored here) [linux]; this driver has no such reading and uses the
+NHI's PCI subsystem ids instead (section 19.3). The other Thunderbolt 1
+and 2 parts in Linux's tables - Eagle Ridge `151A`, Light Peak `151B`,
+Port Ridge `1549`, Redwood Ridge (`1566` to `1569`), Cactus Ridge 2C
+`1548`, Win Ridge `157D` `157E` - are switches Linux meets as **device
+routers** (`tb_switch_get_generation`); none is in `nhi_ids[]` as a host
+but Light Ridge and Cactus Ridge 4C [linux]. So the hosts this task
+claims are the five rows above, and Thunderbolt 1 and 2 hosts on PCs
+stay not claimed (the decisions table, "Phase 45 additions").
+
+### 19.2 Which Windows the Macs run, as far as public facts say
+
+- Apple supplied Windows support software for Windows 7 only on the
+  first Thunderbolt Macs of 2011, 32-bit and 64-bit, with no Windows XP
+  or Vista drivers ("Windows XP and Vista drivers are not supplied for
+  these computers and are not supported"), and Boot Camp 4 ran Windows 7
+  only [pub].
+- Boot Camp Support Software 5.0 and 5.1 (the Macs of 2011 to 2014,
+  Light Ridge to Falcon Ridge) are for the 64-bit Windows 7, 8 and 8.1
+  [pub].
+- Windows 10 is installed 64-bit only, from Mac models of 2012 on [pub];
+  Apple's page does not say whether it starts there through the firmware's
+  BIOS emulation or through UEFI, and this record does not say either
+  [unread].
+- Apple lists **no** 98 SE, ME, 2000, XP or Vista for any Thunderbolt
+  Mac [pub]. Whether any of them starts at all through the firmware's
+  BIOS emulation on these Macs, and with what of the machine working
+  (storage, the keyboard, the xHCI controller), is not in any public
+  source read here [unread]; the Macs of 2018 on, with Apple's T2 chip
+  (Titan Ridge among them), are commonly described as starting Windows
+  through UEFI only, which is not confirmed here [unread].
+
+So the systems this work can reach on a Mac are, by Apple's own support,
+the 32-bit and 64-bit Windows 7 and the 64-bit 8, 8.1 and 10, all run
+from this project's x64 package in test-signing mode where 64-bit
+(design record 19); 98 SE to Vista are owed to the bench, which reads
+first whether each starts (45-E.11), and nothing in this design depends
+on them starting.
+
+### 19.3 Selection: a third CM-table row, by subsystem and firmware status
+
+Section 3.1's table gains one row, kept apart from the others:
+
+| Matched | Hardware profile | CM candidates |
+|---|---|---|
+| Light Ridge `1513` and Cactus Ridge 4C `1547` with subsystem `2222:1111`; Falcon Ridge `156A` `156C`, Alpine Ridge and Titan Ridge NHIs with PCI subsystem vendor `106B` | discrete Thunderbolt, Apple | the software connection manager's Thunderbolt-host profile (section 19.4), or record 21's ICM client where its firmware runs |
+
+- Light Ridge and Cactus Ridge take the row by class **and** subsystem,
+  as Linux's table does [linux]: their PCI bridges carry the same vendor,
+  device and subsystem ids, so an INF line of id and subsystem alone
+  would bind this driver as a bridge's function driver and leave nothing
+  enumerated behind it. A Windows PCI hardware id carries the subsystem
+  or the class, never both, so the INF line is the class form
+  (`PCI\VEN_8086&DEV_1513&CC_0880` and the `1547` twin, which no bridge,
+  class `0604h`, ever presents), and the start checks the subsystem pair
+  and is inert on any other (a PC's Light Ridge or Cactus Ridge then sits
+  started and inert, as section 3.5's start does). The ids Windows 98 SE
+  and ME build for such a function are read before any 9x INF line is
+  written [unread].
+- Falcon, Alpine and Titan Ridge are already this driver's (record 21);
+  at start, subsystem vendor `106B` moves them from "inert" (section 3.1)
+  to this row.
+- **Test (c)** for the row: on Falcon, Alpine and Titan Ridge a valid read
+  of the firmware status register (`0x39944`) with `ICM_EN` set keeps
+  record 21's ICM client, unchanged; `ICM_EN` clear on a valid read admits
+  the Thunderbolt-host profile; no valid read is inert. This driver never
+  resets or starts the ICM itself (Linux's `start_icm` path is not taken).
+  On Light Ridge and Cactus Ridge, which have no ICM [linux], the profile
+  is admitted once section 3.2's readiness passes.
+- **Test (d)** for the row is not section 3.5's: the host interface's
+  version field is read and logged, not checked, since a Thunderbolt 1, 2
+  or 3 host interface predates the USB4 versions [unread: the value these
+  hosts report]; the host router must answer ROUTER_CS_0 to 4 at route 0
+  and report a USB4 Version of major 0 (section 3.5: a Thunderbolt router),
+  and its device id (ROUTER_CS_0) must be the host router section 19.1's
+  table pairs with the bound NHI (`tb_switch_get_generation` [linux] gives
+  the generation); anything else is inert.
+- `XhciCmMode` 3 is refused on the row, as it is on the discrete
+  Thunderbolt rows today (decision U1).
+
+Whether a Mac's firmware leaves a Thunderbolt host powered and on the PCI
+bus at all when nothing was attached at power-on is [unread]: Linux
+carries PCI quirks for the Macs' Thunderbolt power (in
+`drivers/pci/quirks.c`, not mirrored here and not read); a host the
+firmware powered off is simply absent from the PCI bus, and this design
+does nothing about it (non-goal, section 19.7).
+
+### 19.4 The Thunderbolt-host profile: what differs from section 6
+
+The profile is the USB4 software connection manager's own code (transport,
+ports, paths, the PCIe tunnel, hot plug, the PCI side, Stor98's contract)
+with section 8's Thunderbolt 3 device-router handling **applied to the
+host router at route 0 as well**, and extended to generations 1 and 2.
+What a Thunderbolt host router needs that a USB4 host router does not
+[linux unless marked]:
+
+0. **Its ports are not USB4 ports.** Section 6.3's host-port discovery
+   requires the USB4 Port Capability and takes a port's state and its
+   configured marking from it; a Thunderbolt router's lane adapters have
+   none (today's discovery refuses such a lane adapter, `tbt_u4cm.c`).
+   The profile's discovery instead: a lane adapter is an adapter of the
+   null ("port") type with the PHY capability (`switch.c` `tb_init_port`,
+   `TB_PORT_CAP_PHY`), its link state read there; lanes 0 and 1 are paired
+   as two consecutive null adapters (`switch.c`
+   `tb_switch_default_link_ports`: adapter i and i + 1, unless the DROM
+   pairs them); and the host side's "port configured" marking is the link
+   controller's (`lc.c` `tb_lc_configure_port`, generation 2 and later),
+   not PORT_CS_19 PC, on the host as on the device (section 8 item 3).
+
+1. **No USB4 router registers.** No CMUV, no ROUTER_CS_5, no
+   Configuration Valid handshake, no router operations, no Buffer
+   Allocation Request: the host router is configured by the one write of
+   ROUTER_CS_1 to 4 with Valid, as section 8 item 2 does for a device
+   router (`switch.c` `tb_switch_configure`, the non-USB4 branch); its
+   Plug Events capability is required and written active (bits 2 to 6 of
+   its second dword cleared; the USB-disable bit set except on Light
+   Ridge, Eagle Ridge, Port Ridge and Alpine Ridge, `tb_plug_events_active`).
+2. **Light Ridge's two port-space quirks** (`cap.c`): TMU access enabled
+   (bit 20, `TMU_ACCESS_EN`, of switch dword `26h` on Light Ridge, `2Ah` on
+   Eagle Ridge) around a walk of a port's capabilities, and one dummy read
+   of port dword 0 after the walk, because the next-capability read
+   returns stale data on Light Ridge.
+3. **The link controller** (`lc.c`): present from generation 2 (every
+   `tb_lc_*` returns early below it), so on Light Ridge and Cactus Ridge
+   there is no port-configured marking, no UUID from the fuses and no
+   lane bonding through it; Falcon Ridge and later as section 8 item 3.
+   The DROM through the Plug Events EEPROM bit-bang (section 8 item 4)
+   applies to every generation.
+3a. **Identity without the fuses**: the identity's source is chosen once
+   per router, at its first connect, and recorded with it: the link
+   controller's fused UUID where the router has a link controller
+   capability, and only where it has **none** (generation 1) the UID read
+   from its DROM alone (`eeprom.c` `tb_drom_read_uid_only`), the UUID
+   formed as Linux forms it (the UID's two halves, then two dwords of
+   ones). A link-controller read that fails on a router that has the
+   capability is a failed identity read, never a reason to fall back to
+   the DROM, as Linux falls back only when the capability is missing
+   (`switch.c` `tb_switch_set_uuid`, which propagates every other error);
+   every later comparison (the replacement check, the resume) reads the
+   recorded source. Here the DROM read is **not** optional as section 8
+   item 4 makes it for naming: identity is what preservation (section 9),
+   the replacement check and the resume (section 11) compare. A router
+   whose identity cannot be read is driven for this connection only and
+   never matched to a record; after a resume a router whose identity
+   cannot be confirmed is treated as section 11 treats a failed
+   verification - its port held, never rebuilt on that ground alone, as
+   Linux refuses such a router at resume (`switch.c` `tb_switch_resume`)
+   - and the log says so (`u4.tbt.noid`).
+4. **The host's PCIe down adapter for each Thunderbolt port** is fixed per
+   controller (`tb.c` `tb_find_pcie_down`): adapter 6 or 7 on Cactus Ridge
+   and Alpine Ridge, 6 or 8 on Falcon Ridge, 8 or 9 on Titan Ridge, by the
+   port's physical index; Light Ridge has no fixed map and takes the first
+   free PCIe down adapter. Section 7.6's tunnel-port set (the PCI bridge
+   behind each adapter) is then read through record 21 section 6.3's
+   discrete-switch source, which needs two additions: that source's
+   family table gains Light Ridge and Cactus Ridge (their switches'
+   downstream ports, with Hot-Plug Capable set, as the tunnel ports;
+   their bridges are `1513` and `1547` like their NHIs, so the bridge
+   side is told apart by class `0604h`), and the tunnel-port filter's INF
+   line for them is the class form too (`PCI\VEN_8086&DEV_1513&CC_0604`,
+   with the NHI's `CC_0880` never matching it). Falcon, Alpine and Titan
+   Ridge are in that table already.
+5. **No USB3 tunnel, ever** (every link is Thunderbolt); and the credits
+   are chosen per router, by what the router reports, as Linux chooses
+   them (`switch.c` `tb_switch_credits_init`): section 8 item 5's
+   defaults, with no USB4 credit negotiation, on every router of
+   generation 1 to 3, the host included; a USB4 child (item 8) keeps
+   section 6.8's own capability and credit rules.
+6. **TMU**: not configured, as section 8 item 6; if a host or device
+   router of generation 1 or 2 carries no PCIe tunnel without it, Linux's
+   sequence (`tb.c` `tb_enable_tmu`) is the second pass (section 16).
+7. **Reset**: a Thunderbolt host is never reset by default (section 9's
+   discover-and-preserve holds), and `XhciCmPreOsCleanup` keeps section
+   9.3's meaning, port by port: value 1 cleans only the ports that do not
+   verify, value 2 every port with tunnel state, each by section 9.3's
+   one-port sequence. Its step 3, the Downstream Port Reset, is the link
+   controller's port reset on generations 2 and 3 (`lc.c`
+   `tb_lc_reset_port`, which refuses below generation 2); on generation 1
+   there is no per-port reset, so step 3 is skipped there and the port's
+   paths are torn down alone. Linux's whole-router reset
+   (`switch.c` `tb_switch_reset_host`: every lane adapter reset and every
+   protocol adapter's paths cleared, DisplayPort included; the "reset"
+   configuration packet on generation 1) is never used, since it would
+   destroy the verified tunnels of the other ports. At a resume, Linux resets
+   a non-USB4 host root router before rebuilding its tunnels
+   (`tb.c` `tb_resume_noirq`, "remove any PCIe devices the firmware might
+   have setup"); this profile follows section 11's resume as it is and
+   reads on the bench whether the Mac's firmware rebuilt tunnels at the
+   resume (45-E.11) before deciding that.
+8. **Device routers behind the host**: generations 1 to 3, section 8 as
+   it stands for generation 3, plus items 0 to 3a above for generations 1
+   and 2. A router is programmed by what it reports, not by the link:
+   one whose USB4 Version has major 1 or 2 is a USB4 router and is driven
+   by section 6.4 (CMUV, Configuration Valid, its USB4 ports), with no
+   USB3 tunnel because its upstream link runs in Thunderbolt mode
+   ([linux] `tb.h` `tb_switch_is_usb4` classifies the router from its
+   version; `usb4.c` `usb4_switch_setup` reads the link's mode through
+   `link_is_usb4` and withholds USB3 on a Thunderbolt link).
+9. **Paths** use the same hop-table entries on every generation
+   (`path.c` makes no generation distinction) [linux]; the path entry
+   layout this driver writes (section 6.8) is unchanged.
+
+### 19.5 DisplayPort
+
+Thunderbolt 1 and 2 displays (Apple's Thunderbolt Display among them) are
+DisplayPort tunnels from the host's DP IN adapters, which carry the
+Mac's graphics output. This driver builds no DisplayPort tunnel today
+(section 8's "Left out", section 16); the Mac's firmware may have built
+one before Windows started (preserved by section 9 like any tunnel).
+Building them is not in this design: a DP tunnel needs, from generation 2,
+the DP IN to DP OUT capability exchange and its connection-manager
+handshake (`tunnel.c` `tb_dp_xchg_caps`, skipped below generation 2), the
+sink allocation from generation 3 (`lc.c`), bandwidth accounting, and a
+GPU driver on the Windows side that sees the display, none of which is
+read here. A Thunderbolt display plugged while Windows runs then shows
+nothing; one present at power-on works only as far as the firmware's
+tunnel survives (owner question Q3).
+
+### 19.6 Verification (when it is coded)
+
+- **Host vectors** in `test_u4cm`: the row's selection (each id and
+  subsystem, `ICM_EN` set and clear, a refused router id), the host
+  router's configuration without the USB4 registers, the Light Ridge
+  quirks, the PCIe down adapter map, generation 1 and 2 device routers
+  behind each host.
+- **The emulator**: `usb4-emu`'s Thunderbolt-host profiles (its
+  `docs/TB-SWCM-HOSTS.md`, added 2026-10-30 for this task):
+  `tb3-apple-alpine-ridge`, `tb3-apple-titan-ridge`,
+  `tb2-apple-falcon-ridge`, `tb1-apple-cactus-ridge` and
+  `tb1-apple-light-ridge`, with `usb4-device tb3-router-id` for generation 1
+  and 2 device routers; the q35 legs (7 x86 and 10 x64) run on them.
+- **The bench**, 45-E.11: on each Mac at hand, which of 98 SE to 10
+  starts, the NHI's ids and its host interface's version field, whether
+  the host is on the PCI bus when nothing is attached at power-on, a
+  PCIe device (an NVMe enclosure, a dock) plugged before power-on and
+  while Windows runs, a resume, and a display.
+
+### 19.7 Non-goals
+
+DisplayPort tunnels (section 19.5); powering a host the firmware switched
+off (section 19.3); starting or resetting the ICM on Alpine and Titan
+Ridge; NVM upgrade; XDomain (Mac to Mac); Thunderbolt 1 and 2 hosts on
+PCs and the Thunderbolt 2 hosts other than Falcon Ridge (the decisions
+table, "Phase 45 additions"); Apple Silicon Macs, which run no x86
+Windows.
+
+### 19.8 Open, and the owner's
+
+Decided by the owner on 2026-10-29: Q1, all three generations in this
+task - Alpine and Titan Ridge, Falcon Ridge, Light and Cactus Ridge -
+each after its emulator model (Q4); Q2 (a), the systems Apple supports
+there first; Q3 (a), DisplayPort out; Q4 yes, a Thunderbolt-host
+profile in `usb4-emu` before any code. The options as they were put:
+
+- **Q1, the first host.** Which Mac comes to the bench first decides the
+  order of the code: (a) an Alpine or Titan Ridge Mac (Thunderbolt 3:
+  section 8 already drives such routers as device routers, so the host
+  profile is the smallest step), (b) a Falcon Ridge Mac, (c) a Light
+  Ridge or Cactus Ridge Mac (both generation 1 quirks and no link
+  controller). Recommended: (a), then (b), then (c), each after its
+  emulator model.
+- **Q2, the systems.** (a) the systems Apple supports there (7, 8, 8.1,
+  10; section 19.2) first and 98 SE to Vista only if the bench shows them
+  starting; (b) 98 SE and XP read first. Recommended: (a).
+- **Q3, DisplayPort.** (a) out, as section 19.5 says, the release notes
+  saying a Thunderbolt display is not driven; (b) a later task of its
+  own. Recommended: (a) now, (b) if the owner wants displays.
+- **Q4, the emulator model.** A Thunderbolt-host profile in `usb4-emu`
+  (section 19.6) before any code here. Recommended: yes, Alpine Ridge
+  first.
+
+### 19.9 The code (2026-10-30)
+
+What the code does, section by section, and where it settles what the
+design left to it (reviewed and revised):
+
+- **Selection** (section 19.3): `TbtHwSelect` takes the NHI's subsystem
+  dword whole. Falcon, Alpine and Titan Ridge rows carry `TBT_HW_MAC_HOST`:
+  with subsystem vendor `106B` and a valid firmware status, `ICM_EN` clear
+  is the software route `TBT_SW_ROUTE_TBT_HOST` with the host router id the
+  NHI pairs with (`TbtHwTbtHostRouter`, section 19.1's table), `ICM_EN` set
+  is record 21's admission as on any machine. Light Ridge and Cactus Ridge
+  4C are rows of `tbt_hw.c`'s table (`TBT_HW_MAC_ONLY`) admitted only with
+  subsystem `2222:1111`, inert (`TBT_INERT_NOT_MAC`) on any other, and no
+  firmware status read. `XhciCmMode` 3 is refused on every row of the
+  profile. Test (d)'s interface version is logged, not checked.
+- **Their INF lines**: the class form section 19.3 names
+  (`PCI\VEN_8086&DEV_1513&CC_0880` and `DEV_1547`), in the NT 6.x models
+  sections alone (`xhcicm.inf`'s `.NTx86.6.0`, `xhcicm-amd64.inf`'s
+  `.NTamd64.6.0`): the undecorated section is Windows 98 SE's, ME's,
+  2000's and XP's, whose ids for them are unread, and none of those runs
+  on these Macs (section 19.2). Their bridges are the filter INFs'
+  (`&CC_0604`, every section) and `cm_ports.c`'s `light-ridge` and
+  `cactus-ridge` families, the discrete-switch source taking type 1
+  siblings only, so the NHI that shares the id is never a member. The CM
+  INF gate's CM-TB1 rule holds this; the names are `xHCI98 TB1
+  Controller (Intel Light Ridge)` and `(Intel Cactus Ridge)`, in the
+  installer's table too. Falcon, Alpine and Titan Ridge are bound by their
+  existing lines.
+- **Test (d), the router half** (`tbtU4HostRouter`): a Thunderbolt router
+  (USB4 Version major 0) whose id is the selection's, else inert
+  (`TBT_INERT_ROUTER_VERSION`, `TBT_INERT_HOST_ID`); a Thunderbolt host
+  router without the profile stays refused as before.
+- **Item 0**: the ports are the odd lane adapters with the lane capability,
+  each with the next one; the host's "port configured" mark is its link
+  controller's lane bit (no UPSTREAM) from generation 2, none below.
+- **Item 1**: configured by `tbtU4Enumerate`'s one write of ROUTER_CS_1 to
+  4 (Valid, Notification Timeout 255, no CMUV, no Router Ready); no router
+  operation and no Buffer Allocation on the host; its Plug Events made
+  active by section 8's own setup, the USB event kept on Alpine Ridge and,
+  as Linux keeps it, on Light Ridge, Eagle Ridge and Port Ridge.
+- **Item 2**: around each adapter's capability walk on Light Ridge (router
+  DW 26h) and Eagle Ridge (2Ah), TMU access set and cleared, then one read
+  of the adapter's DW 0.
+- **Item 3a**: one helper, `tbtU4TbtUuid`, reads the identity from its
+  recorded source (`UidFromDrom` when a generation 1 router has no link
+  controller); the start, the adoption, the resume's verification and a
+  resume's held classification and the ordinary replacement check all use
+  it. A resume that cannot confirm a Thunderbolt router's identity leaves
+  the port held. The DROM UID is read under a resume budget too: the
+  EEPROM's release writes are refused only by a contained or cancelled
+  instance, never by a spent budget.
+- **Item 4**: the PCIe Down map by the host router's id, the port's
+  physical index from its lane 0 adapter; an adapter the map names that
+  is not a PCIe Down adapter falls back to the pairing in increasing
+  adapter number. **Light Ridge**, which Linux maps to its first free PCIe
+  Down adapter, takes that pairing too (6 for the first port, 7 for the
+  second): always free for its own port, and each port's devices stay
+  behind one bridge, the consistency `tb_find_pcie_down`'s own comment
+  asks for. `usb4-emu`'s Light Ridge accepts either.
+- **Item 5**: no USB3 tunnel (`tbtU4LinkUsb4` is false on every link of a
+  Thunderbolt host); the host's protocol ingress entry gets 7 credits and
+  IFC, as a Thunderbolt router's ([linux] `tunnel.c` `tb_pci_init_credits`
+  without credit allocation), the lanes section 8's 32 or 16.
+- **Lanes that do not bond** (Linux bonds a Thunderbolt link only through
+  the link controller's port attributes, so from generation 2, `lc.c`
+  `tb_lc_lane_bonding_possible`, and never on generation 1): the link
+  stays two single lanes. Section 6.5 step 6.4's Lane Disable is a USB4
+  lane adapter's and is not written on a Thunderbolt host, and neither is
+  step 6.3's TMU Off required there, which Guide 7.5 asks for only before
+  a lane is disabled (task 45.58: the TMUs of a generation 1 link that
+  came up running failed the connection until then); the discovery, the
+  resume and the recovery accept that state as they accept a single lane
+  on a USB4 link (one predicate).
+- **Item 6**: the host router's TMU is left as it is.
+- **Item 7**: the cleaning's step 3 is the link controller's PORT_MODE
+  Downstream Port Reset on generations 2 and 3 and nothing on 1; the
+  whole-router reset (and generation 1's reset packet) is never sent. The
+  reset is owned before its write and released and read back clear before
+  the port connects again; the host's port-configured mark likewise counts
+  neither as made nor as undone while its link controller cannot be read.
+- **Vectors** (section 19.6): `test_tbt_select` (`test_mac`: every pair,
+  each refusal), `test_tbt_hw`, and `test_u4cm`'s `test_tbt_host` against
+  the fake fabric's `fabHostTbt` (Alpine, Titan, Falcon, Cactus and Light
+  Ridge; a Port Ridge device router with its DROM UID; the cleaning).
+
+Q5, put to the owner with this code (answered 2026-10-30: (a)): (a) the profile active on a Mac from
+this release, the release notes still not claiming Apple machines; (b)
+active only with a registry value set (an INF default 0) until 45-E.11 has
+read a Mac. Recommended: (a) - inert, a Mac's Thunderbolt does nothing at
+all, the profile is reached only on the ids and subsystems above, and (b)
+adds a value every INF path must write.
 
 ## Sources
 
@@ -4092,9 +5406,27 @@ invalid for PCIe, and 7 is no USB4 requirement.
   record 21 read them.
 - This repository: design record 21; `AGENTS.md`; `src\xhci98.inf`.
 - For section 18 (read 2026-10-25): `usb4-emu`'s asm4242 model and data
-  (`7ec3865`, `5d7345a`, `9f333f3`) and its asm4242 research note
-  (`3090d19`), where that data came from is recorded in `usb4-emu`;
+  (`a0b6749` and `376e2aa` on `usb4-emu` `main` after the merge;
+  `7ec3865`, `5d7345a`, `9f333f3` before the 2026-10-29 squash) and its
+  asm4242 research note (section 11 at `a0b6749`; `3090d19` before the
+  squash), where that data came from is recorded in `usb4-emu`;
   nothing of it is in this repository; `docs/captures/P14S-ORICO-2026-10-15.md`
   section 2.2;
   design records 21, 28 and 31; `src\cm\cm_ports.c`, `cm_reenum.c`,
   `tbt_topo.c`.
+- For section 19 (read 2026-10-29): Linux `drivers/thunderbolt` at
+  `c6859eed` (`pci.c` `nhi_ids[]`, `icm.c` `icm_probe`,
+  `icm_fr_is_supported`, `icm_ar_is_supported`, `tb.c`
+  `tb_apple_add_links`, `tb_find_pcie_down`, `tb_resume_noirq`,
+  `switch.c` `tb_switch_get_generation`, `tb_switch_configure`,
+  `tb_plug_events_active`, `tb_switch_reset_host`,
+  `tb_switch_default_link_ports`, `tb_init_port`, `tb_switch_set_uuid`,
+  `cap.c`, `lc.c`, `eeprom.c` `tb_drom_read_uid_only`, `tunnel.c`
+  `tb_dp_xchg_caps`, `usb4.c` `link_is_usb4`, `usb4_switch_setup`) and
+  `include/linux/pci_ids.h`; Apple Support, "Boot Camp Support Software
+  5.0.5033" (support.apple.com/en-us/106404), "Download Boot Camp Support
+  Software 5.1.5769" (106378), "Install Windows 10 on your Mac with Boot
+  Camp Assistant" (102622), "System requirements to install Windows using
+  Boot Camp for macOS" (HT204048), and the Windows 7-only statement for
+  the Early 2011 MacBook Pro as press reports of February and August 2011
+  quote it (Apple's HT1461, not read directly).

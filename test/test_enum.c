@@ -1329,8 +1329,166 @@ static void test_busy(void)
              "busy note: type and answer held to a byte each");
 }
 
+/* Task 45.41: the link keep of design record 13 section 15, L2. */
+static void test_link_keep(void)
+{
+    ULONG uas;
+    ULONG wrap;
+
+    uas = XHCI_RKEEP_F_STARTED | XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+          XHCI_RKEEP_F_SERIAL | XHCI_RKEEP_F_ONE_IFACE;
+    CHECK_EQ(XhciEnumLinkKeep(1, uas, 0), XHCI_LKEEP_KEEP,
+             "UAS storage with a serial kept");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_ROOT, 0),
+             XHCI_LKEEP_KEEP, "on a root port too");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_BUSY, 0),
+             XHCI_LKEEP_KEEP, "URBs outstanding do not refuse it");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas, XHCI_LINK_KEEP_MAX - 1),
+             XHCI_LKEEP_KEEP, "the last keep inside the budget");
+    CHECK_EQ(XhciEnumLinkKeep(0, uas, 0), XHCI_LKEEP_WHY_OFF, "switch off");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_FAULTED, 0),
+             XHCI_LKEEP_WHY_FAULTED, "faulted dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_HUB, 0),
+             XHCI_LKEEP_WHY_HUB, "a hub dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_OTHER_CFG, 0),
+             XHCI_LKEEP_WHY_OTHER_CFG, "another configuration dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_STARTED, 0),
+             XHCI_LKEEP_WHY_NOT_STARTED, "a PDO not started dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_SUSPENDED, 0),
+             XHCI_LKEEP_WHY_SUSPENDED, "selective suspend's dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_ISOCH, 0),
+             XHCI_LKEEP_WHY_ISOCH, "an isochronous pipe dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, XHCI_RKEEP_F_STARTED, 0),
+             XHCI_LKEEP_WHY_NOT_UAS, "a HID dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_UAS, 0),
+             XHCI_LKEEP_WHY_NOT_UAS, "Bulk-Only storage dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_STORAGE, 0),
+             XHCI_LKEEP_WHY_NOT_UAS, "UAS without storage dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_ONE_IFACE, 0),
+             XHCI_LKEEP_WHY_NOT_UAS, "a composite with a UAS function dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas & ~XHCI_RKEEP_F_SERIAL, 0),
+             XHCI_LKEEP_WHY_NO_SERIAL, "no serial dropped");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas, XHCI_LINK_KEEP_MAX),
+             XHCI_LKEEP_WHY_BUDGET, "the budget spent");
+    CHECK_EQ(XhciEnumLinkKeep(1, uas | XHCI_RKEEP_F_HUB |
+                                     XHCI_RKEEP_F_FAULTED, 9),
+             XHCI_LKEEP_WHY_FAULTED, "the first reason wins");
+
+    CHECK_EQ(XhciEnumLinkKeepRecent(0, 100, 101), 0, "none kept");
+    CHECK_EQ(XhciEnumLinkKeepRecent(2, 100, 100), 2, "at the window's start");
+    CHECK_EQ(XhciEnumLinkKeepRecent(2, 100, 100 + XHCI_LINK_KEEP_WINDOW - 1),
+             2, "the window's last tick");
+    CHECK_EQ(XhciEnumLinkKeepRecent(2, 100, 100 + XHCI_LINK_KEEP_WINDOW), 0,
+             "the window passed");
+    wrap = 0xFFFFFF00UL;
+    CHECK_EQ(XhciEnumLinkKeepRecent(3, wrap, 0x10UL), 3,
+             "the clock wrapped inside the window");
+    CHECK_EQ(XhciEnumLinkKeepRecent(3, wrap, wrap + XHCI_LINK_KEEP_WINDOW),
+             0, "the clock wrapped past the window");
+}
+
+/* Task 45.23: the keep decision of design record 20 sections 4.3.2 and
+ * 4.3.3. */
+static void test_resume_keep(void)
+{
+    ULONG base;
+    ULONG flags;
+    ULONG mark;
+    ULONG gen;
+
+    base = XHCI_RKEEP_F_ROOT | XHCI_RKEEP_F_STARTED;
+    CHECK_EQ(XhciEnumResumeKeep(1, base), XHCI_RKEEP_KEEP, "a HID kept");
+    CHECK_EQ(XhciEnumResumeKeep(0, base), XHCI_RKEEP_WHY_OFF, "switch off");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_FAULTED),
+             XHCI_RKEEP_WHY_FAULTED, "a faulted device dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_STARTED),
+             XHCI_RKEEP_WHY_NOT_ROOT, "behind a hub dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_HUB),
+             XHCI_RKEEP_WHY_HUB, "a hub dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, XHCI_RKEEP_F_ROOT),
+             XHCI_RKEEP_WHY_NOT_STARTED, "a PDO not started dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_SUSPENDED),
+             XHCI_RKEEP_WHY_SUSPENDED, "a suspended device dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_ISOCH),
+             XHCI_RKEEP_WHY_ISOCH, "isochronous dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_OTHER_CFG),
+             XHCI_RKEEP_WHY_OTHER_CFG,
+             "another configuration than index 0 dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_OTHER_CFG |
+                                       XHCI_RKEEP_F_SUSPENDED),
+             XHCI_RKEEP_WHY_OTHER_CFG,
+             "another configuration: the first reason after the PDOs");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_KEEP, "a HID with a poll outstanding kept");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_SERIAL),
+             XHCI_RKEEP_WHY_BULK_ONLY, "Bulk-Only storage dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS),
+             XHCI_RKEEP_WHY_NO_SERIAL, "UAS storage with no serial dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_QUIET | XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_WHY_BUSY, "UAS storage with a URB outstanding dropped");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL),
+             XHCI_RKEEP_WHY_NOT_QUIET,
+             "UAS storage with no quiet declaration dropped (4.3.3)");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_BUSY),
+             XHCI_RKEEP_WHY_NOT_QUIET,
+             "busy and undeclared: the declaration is the first reason");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_STORAGE |
+                                       XHCI_RKEEP_F_UAS | XHCI_RKEEP_F_SERIAL |
+                                       XHCI_RKEEP_F_QUIET),
+             XHCI_RKEEP_KEEP, "a declared quiet UAS drive with a serial kept");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_QUIET),
+             XHCI_RKEEP_KEEP, "the mark changes nothing for a HID");
+
+    /* The mark's life (section 4.3.3, B3 and B4), as hcd_urb.c, hcd_io.c,
+     * hcd_power.c and hcd_enum.c drive it: declared at a sleep, the resume
+     * restores without re-initializing (its end counts), the drive idles,
+     * the next sleep withdraws and its declaration fails, and the
+     * re-initializing resume that follows must not keep the drive. */
+    gen = 7;
+    mark = XhciEnumQuietMark(gen);
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 1, "declared: valid");
+    gen++;
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0,
+             "a resume's end voids it, re-initializing or not");
+    mark = 0;
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0, "withdrawn");
+    flags = base | XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+            XHCI_RKEEP_F_SERIAL;
+    if (XhciEnumQuietValid(mark, gen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    CHECK_EQ(XhciEnumResumeKeep(1, flags), XHCI_RKEEP_WHY_NOT_QUIET,
+             "a failed declaration after a restored resume: not kept");
+    mark = XhciEnumQuietMark(gen);
+    gen++;
+    flags = base | XHCI_RKEEP_F_STORAGE | XHCI_RKEEP_F_UAS |
+            XHCI_RKEEP_F_SERIAL;
+    if (XhciEnumQuietValid(mark, gen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    CHECK_EQ(XhciEnumResumeKeep(1, flags), XHCI_RKEEP_WHY_NOT_QUIET,
+             "an earlier sleep's mark: not kept");
+    gen = 0xFFFFFFFFUL;
+    mark = XhciEnumQuietMark(gen);
+    CHECK_EQ(XhciEnumQuietValid(mark, gen), 0,
+             "the wrap's mark is none: not kept, never wrongly");
+    CHECK_EQ(XhciEnumQuietValid(0, 0xFFFFFFFFUL), 0, "0 is never a mark");
+    CHECK_EQ(XhciEnumResumeKeep(1, base | XHCI_RKEEP_F_HUB |
+                                       XHCI_RKEEP_F_FAULTED),
+             XHCI_RKEEP_WHY_FAULTED, "the fault is the first reason");
+}
+
 int main(void)
 {
+    test_link_keep();
+    test_resume_keep();
     test_clean_paths();
     test_bad_sizes();
     test_failures_and_retry();

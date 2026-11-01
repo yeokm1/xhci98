@@ -227,6 +227,16 @@ src/stor98/     Stor98, the NVMe SCSI miniport the packages bundle, a
                 BSD-3-Clause driver with its own AGENTS.md and build,
                 built and versioned with this package since 3.1.0.0; see
                 "Stor98 (src/stor98/)" below
+src/vsd/        S98VSD.VXD, the Windows 98 SE and ME IOS vendor-supplied
+                driver that lets large requests reach Stor98 whole, staged
+                beside stor98.mpd from 3.2.0.0 (roadmap-usb4 task 43.46,
+                design record 30); Open Watcom 2.0 and the 98 SE DDK's
+                linker, built by build-driver.cmd on the x86 run
+src/pfw/        XHCIPFW, which closes PCI bridges' prefetchable windows
+                lying wholly above 4 GB before the system reads them:
+                XHCIPFW.VXD for 98 SE and ME and, under src/pfw/nt/,
+                XHCIPFW.SYS for the 32-bit 2000 to 7, from 3.3.0.0
+                (roadmap-usb4 task 44.49, design record 32)
 test/           Host-side unit tests for the DDK-free core (test\run-host-tests.cmd)
 scripts/        The build wrapper, host setup helpers, and the import/INF/
                 packaging gates. `scripts/local/` is git-ignored per-host
@@ -324,15 +334,14 @@ never modified, with design record 21 as Phase 39's plan (the Thunderbolt
 firmware connection manager client) and design record 22 as Phase 40's
 (the USB4 software connection manager); both phases opened 2026-10-15 and
 shipped together as `3.0.0.0`, cut on 2026-10-17 with Phase 41 (XHCITR,
-design record 25). **The open phase is that file's Phase 44**, opened by
-the owner on 2026-10-25 for release `3.3.0.0` (Stor98 for tunnelled
-drives only, the connection manager off the boot path, the hibernate
-resume, the installer's pages, and what `3.2.0.0` owed), on branch
-`3.3.0.0`;
+design record 25). **The open phase is that file's Phase 45**, opened by
+the owner on 2026-10-29 for release `3.4.0.0` (hot-added docks on 2000
+and XP and daisy chains, the kept child, and what `3.3.0.0` left), on
+branch `3.4.0.0`;
 the file's status line and decisions table are the current state. The miniport is
 frozen (owner, 2026-10-02): `1.2.0.0` is its last release, and its sources
 are on branch `1.2.0.0`. The build constraints - C89, the arithmetic rules,
-ASCII and CRLF, the three flavours, the import and INF gates - bind the HCD
+ASCII and CRLF, the build flavours, the import and INF gates - bind the HCD
 and `xhciuas.sys` as they bound the miniport; where the HCD departs from the
 miniport's rules (pool, the INFs' file set, SuperSpeed), the sections below
 say so, and `roadmap-hcd.md`'s decisions table and design record 13 are the
@@ -458,7 +467,8 @@ frequently just unexercised there. Never close a phase on a Win98-only
 observation.
 
 Pool is allocated at named sites only. The HCD's pair is
-`ExAllocatePoolWithTag` + `ExFreePool`, `NonPagedPool` only - with one
+`ExAllocatePoolWithTag` + `ExFreePool`, `NonPagedPool` only (`NonPagedPoolNx`
+from Windows 8 on, chosen at `DriverEntry`, roadmap-usb4 task 45.63) - with one
 exception, the replacement `IO_RESOURCE_REQUIREMENTS_LIST` of
 `IRP_MN_FILTER_RESOURCE_REQUIREMENTS`, which that IRP's contract puts in
 `PagedPool` (`HcdPoolAllocRequirements`, design record 18 section 4.2;
@@ -478,24 +488,29 @@ and "Windows 2000 as a co-primary target") and
 
 ### Build flavours
 
-There are three build flavours and only two are ever published. `release` and
-`debug` are the shipping pair: what `make-package.ps1 -Flavor` stages and what
-every document here means by "both flavours". `qemu` is `debug` plus the
-port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR` import, and **must
-never be published**: that import is the sole delta between the two binaries
-of the development package whose debug build gave the E460 a `Code 2`, and
-since why is not established (defect 2b) the safe configuration is the
-default and the emulator-only one is opt-in.
+There are two build flavours and only one is ever published (since
+roadmap-usb4 task 45.45, owner 2026-10-30: "one build for everyone").
+`release` ships: it is what `make-package.ps1 -Flavor` stages by default and
+the one directory per architecture a cut publishes. Its MSVC 6.0 x86 builds
+keep frame pointers (`/Oy-`, `NTNOFPO` in each driver's `sources`, held by
+`scripts\check-frame-pointers.ps1`), and it carries the command-state
+checker (`hcd_strict.c`), on unless `XhciCommandCheck` is 0. `qemu` is a
+checked build with the port-`0xE9` mirror and its `HAL.dll!WRITE_PORT_UCHAR`
+import, and **must never be published**: that import is the sole delta
+between the two binaries of the development package whose debug build gave
+the E460 a `Code 2`, and since why is not established (defect 2b) the safe
+configuration is the default and the emulator-only one is opt-in. The third,
+`debug` (checked, the diagnostic download, `debug-x86\` and `debug-x64\` up
+to `3.3.0.0`), was retired with task 45.45: every tool refuses the word.
 `docs/contributing/design/08-build-flavours-and-the-log-channel.md` is the
-source.
+source, section 14 for the retirement.
 
-Two vocabularies cover "all of them", and they are not interchangeable.
-`build-driver.cmd`'s `both` means the two shipping flavours and is its
-default; `all` means the three and is what a release cut uses. In the import
-allowlist's `FLAVORS` column the word is `all`, and `both` is refused. The
-DDK's own words, `free` and `checked`, survive only where the DDK itself
-requires them; `build-driver.cmd` makes that mapping in one place
-(`docs/contributing/build-and-test.md`).
+`build-driver.cmd`'s default is `release`; `all` means the two and is what a
+release cut uses; `both` and `debug` are refused by name. In the import
+allowlist's `FLAVORS` column the word for every flavour is `all`, and `both`
+and `debug` are refused. The DDK's own words, `free` and `checked`, survive
+only where the DDK itself requires them; `build-driver.cmd` makes that
+mapping in one place (`docs/contributing/build-and-test.md`).
 
 ### DMA memory
 
@@ -528,7 +543,11 @@ reports as nothing at all.
 **There are two INFs, and they are two packages rather than one file with a
 third path.** `src/xhci98-amd64.inf` is the 64-bit package's, carrying no
 Windows 98 path and a `[Manufacturer]` line decorated `NTamd64,NTamd64.6.0`:
-NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches the OS-supplied files, and
+NT 5.2 gets `[Xhci.Dev.NTamd64]`, which fetches `usbd.sys` from the OS
+(since 3.4.0.0 not `usbui.dll`: the driver store reads that section on
+Vista to 10 too, and Windows PE has no `usbui.dll` to satisfy it, so DISM
+refused the file for a `boot.wim`; record 11 decision 13, revised
+2026-11-01, and the gate's `OS-UINT52`), and
 Vista and Windows 7 x64 get `[Xhci.Dev6.NTamd64]`, which copies `xhci98.sys`
 alone because their file queue aborts on a `LayoutFile` copy (design record 11
 section 12, decision 13; the gate refuses an OS file there as `OS-ONNT6`).
@@ -575,13 +594,25 @@ gated by the import gate's `-GateProfile hlprx86` against
 Windows 98 rules,
 because it is never installed on Windows 98 or ME.
 
+The x86 package carries two more images of this project's own, neither
+bound by the INF: `S98VSD.VXD` (`src/vsd/`, design record 30), staged
+beside `stor98.mpd` since 3.2.0.0, and since 3.3.0.0 `XHCIPFW.VXD` and
+`XHCIPFW.SYS` (`src/pfw/`, design record 32) at its root, each placed or
+removed by the installer alone. Each has a gate of its own
+(`src/vsd/check-vsd.ps1`, `src/pfw/check-pfw.ps1`,
+`src/pfw/nt/check-pfwsys.ps1`, and the import gate's `hlprx86` profile
+with `xhcipfw-imports.allow` for `XHCIPFW.SYS`), run by its build and again
+by the packager; the 64-bit package carries none of them.
+
 The media carries no Microsoft file, but for the one exception below. The HCD's INFs have the setup engine
 copy two of the OS's own files, `usbd.sys` (whose helper exports the class
 drivers above the HCD's PDOs import) to dirid 10 (`System32\Drivers`) and
 `usbui.dll` (the property-page provider, and on 9x the drawer of the tabs'
 dialogs) alone to dirid 11 (`System32`), from the OS's own install source
 through `LayoutFile=layout.inf`, never overwriting a file already there,
-because nothing on an xHCI-only machine ever placed them. On an xHCI-only
+because nothing on an xHCI-only machine ever placed them - except
+`usbui.dll` on the 64-bit file's XP x64 and Server 2003 x64 device install
+since 3.4.0.0 (above). On an xHCI-only
 Windows 98 machine that means the Windows 98 CD may be asked for; the NT
 targets take them from their driver cache with no prompt; and Vista's and 7's
 `Xhci.Dev6` path copies `xhci98.sys` alone, since every install of those
@@ -616,10 +647,23 @@ files"). Build install media with `scripts\package\make-package.ps1`, never by
 hand-copying the `.sys` and `.inf`. Its `-Arch` moves three things together
 and they are not separable: the obj subdirectory, which of the two INFs is
 staged for each driver, and the architecture both gates run under. A published release
-directory is a flavour AND an architecture - `release-x86`, `debug-x86`,
-`release-x64`, `debug-x64` - because both architectures' binaries are called
+directory is a flavour AND an architecture - `release-x86` and
+`release-x64` (and, up to `3.3.0.0`, `debug-x86` and `debug-x64`) - because
+both architectures' binaries are called
 `xhci98.sys` and `xhciuas.sys`; `make-release.ps1 -Arch` defaults to **both** since 2026-09-09,
-so an ordinary cut publishes four directories. It defaulted to `x86` alone
+so an ordinary cut publishes two directories (four until task 45.45). **From `3.4.0.0` the
+cut re-lays them by Windows family** (roadmap-usb4 task 45.44, design record 36):
+`98-me\` (98 SE, ME) and `nt-x86\` (32-bit 2000 to 10) from the x86 leg and `nt-x64\` from
+the x64 one, each holding only what its Windows installs - the controller's and UAS
+driver's INFs and images at its root (with `xhcihlpr.sys` and `txtsetup.oem` in
+`nt-x86\`, `txtsetup.oem` in `nt-x64\`, so each NT root is its F6 floppy), the
+connection manager in `cm\` (its NT filter shipped as `cm\xhcicmf.inx`, its one copy,
+so no integration tool takes it as an INF; the CM gate's `CM-INX`) and Stor98 in
+`stor98\` (the 9x INF as `98-me\stor98\stor98.inf`; the x86 Stor98 INF NT-only) - with
+`INTEGRATE.TXT` at the root. `make-package.ps1`'s staged packages, the VM matrix's
+and the leg kits' input, stay flat; `package-common.ps1`'s `$script:FamilyLayout` is
+the one table between the two, and every family file is compared by hash with the
+verified flat file it came from (`PKG-FAMILY`). It defaulted to `x86` alone
 until roadmap task 21.5 passed - an amd64 binary installing and running
 through every checkpoint clause on a Windows XP x64 guest, and then the
 release flavour installed and read separately on the same guest, because the
@@ -633,7 +677,7 @@ published tree, since every version published before `1.1.0.0` is x86-only.
 
 **Every published x64 directory is test-signed, and only by the packager**
 (owner, 2026-10-11; design record 19 is the authority). `xhci98.sys`,
-`xhciuas.sys` and `xhcicm.sys` of `release-x64` and `debug-x64` (one copy each
+`xhciuas.sys` and `xhcicm.sys` of `release-x64` (`nt-x64\` from `3.4.0.0`; and of `debug-x64` up to `3.3.0.0`; one copy each
 since 3.1.0.0, whose x64 directories keep the filter INF at the root and
 have no `nt\`), and from `3.1.0.0` the bundled `stor98.sys` of
 `release-x64` (one key signs every driver, owner 2026-10-19; Stor98's own

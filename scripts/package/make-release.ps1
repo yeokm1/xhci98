@@ -1,8 +1,10 @@
 <#
 .SYNOPSIS
-Publish a built driver into releases\<version>\<flavour>-<arch>\ - four
-directories for an ordinary cut (release-x86, debug-x86, release-x64,
-debug-x64).
+Publish a built driver into releases\<version>\, laid out by Windows family
+from 3.4.0.0 (98-me\, nt-x86\, nt-x64\; roadmap-usb4 task 45.44, design
+record 36); the cuts up to 3.3.0.0 published one directory per flavour and
+architecture (release-x86, release-x64, and debug-x86, debug-x64 until task
+45.45 retired the debug flavour).
 
 .DESCRIPTION
 `releases\` is the tracked, published half of packaging. It carries the two
@@ -97,23 +99,37 @@ text, 78 columns, CRLF.
 Every published binary is at one version, in a directory of its own. They are
 byte-different builds sharing a file name and a `DriverVer`, so **nothing a
 user can SEE identifies one**: the `VS_FF_DEBUG` flag `src\xhci98.rc` sets under
-`#if DBG` separates release from debug and says nothing about the
-architecture, and Explorer shows nothing that separates the two architectures
+`#if DBG` marks a checked build (the qemu flavour's, and until task 45.45
+the debug one's) and says nothing about the architecture, and Explorer shows nothing that separates the two architectures
 at all. What IS in the file is the in-image `XHCI98_FLAVOUR_*` marker, which
-names all three flavours, and the PE header's Machine field, which the import
+names every flavour, and the PE header's Machine field, which the import
 gate reads to tell `0x014C` from `0x8664` - both need a tool.
 This script checks the flag on each staged binary rather than
 trusting which obj directory it came out of - packaging objfre twice is a
 silent mistake otherwise, and it is silent on the target too.
 
+**From 3.4.0.0 the version directory is laid out by Windows family**
+(roadmap-usb4 task 45.44, design record 36): each leg below is still staged,
+gated and checked as one flat flavour-and-architecture package, in a work
+folder outside the version directory, and is then re-laid by
+package-common.ps1's `$script:FamilyLayout` into `98-me\` and `nt-x86\` (the
+x86 leg) and `nt-x64\` (the x64 leg), every family file compared by hash with
+the verified flat file it came from, after the conversion and again before
+the publication. The upload set and `-UploadSetOnly` read a family tree
+through the flat view `ConvertFrom-FamilyLayout` rebuilds, and a version up
+to 3.3.0.0 at the flavour directories it was published with. The paragraph
+below describes those directories.
+
 **A published directory is a flavour AND an architecture** (roadmap task 21.3):
-`release-x86\`, `debug-x86\`, `release-x64\`, `debug-x64\`. The flavour half is
-the vocabulary this project uses everywhere - `-Flavor release|debug`,
+`release-x86\` and `release-x64\` (and `debug-x86\`, `debug-x64\` in the cuts up
+to `3.3.0.0`, before task 45.45 retired the debug flavour). The flavour half is
+the vocabulary this project uses everywhere - `-Flavor release`,
 `out\pkg-<flavour>-<arch>\` on the build side, and the same two words
 throughout `docs\contributing\`. The DDK's own words are "free" and "checked" -
 "free" reads as *free of charge* to anyone who has not met that convention -
 and they survive only where the DDK itself requires them: `setenv.bat`'s
-flavour argument and the `src\objfre` / `src\objchk` trees it writes into.
+flavour argument and the `src\objfre` / `src\objchk_qemu` trees it writes into
+(`src\objchk` was the debug flavour's, retired with task 45.45).
 **These names are NOT 8.3-clean**, and that is a deliberate change from the
 bare `release\` and `debug\` that were: `release-x86` is eleven characters, so
 a Win98 setup engine reading this directory off media sees a short-name alias
@@ -137,30 +153,33 @@ given, it must match the INF - this parameter is a statement of intent to be
 checked, not an override.
 
 .PARAMETER Flavor
-Which flavours to publish - `release` or `debug`, matching
-`make-package.ps1`, and each is published under its own name. Defaults to both.
-Publishing one at a time is supported, but a version directory holding only
-`debug\` is not something to release.
+Which flavours to publish: `release`, the default and since roadmap-usb4 task
+45.45 the only one (design record 08 section 14).
+
+**`debug` is accepted by this parameter and then REFUSED**, as `qemu` is
+below: the flavour was retired, and the refusal says so where a
+parameter-binding error would say only that the word is unknown.
 
 **`qemu` is accepted by this parameter and then REFUSED**, which is deliberate:
-there are three build flavours since task 13-L.1 and a parameter-binding error
+the flavour is built beside release (task 13-L.1) and a parameter-binding error
 would say only that the word is unknown, when the fact worth reading is that the
 flavour exists and must never be published. It carries the port-0xE9 mirror -
 `HAL.dll!WRITE_PORT_UCHAR`, the sole import delta between 0.0.0.4's two
 published binaries, of which the debug one gave the ThinkPad E460 a Code 2
 under Windows 98 SE - and it is built and
-gated like the other two so the instrument keeps working in the emulator.
+gated like release so the instrument keeps working in the emulator.
 `scripts\package\make-package.ps1 -Flavor qemu` stages it for a guest; nothing
 publishes it.
 
 That refusal is not the only guard, because a flavour name is not evidence: the
 binary staged for each published flavour is checked against the
 `XHCI98_FLAVOUR_*` marker in its own image, below. `VS_FF_DEBUG` cannot do that
-job - `debug` and `qemu` are both checked builds and both set it.
+job - it marks the checked `qemu` build, and marked the retired `debug` one too.
 
 This script does not build; it publishes what is already built and gated. Run
-`scripts\build-driver.cmd all` first, which builds and gates all three flavours,
-so that the one that is never published has still been through every gate.
+`scripts\build-driver.cmd all` first, which builds and gates both flavours,
+release and qemu, so that the one that is never published has still been
+through every gate.
 
 .PARAMETER Arch
 Which architectures to publish - `x86` or `x64`, which are `make-package.ps1`'s
@@ -287,7 +306,7 @@ release.** The upload set is assembled after the publish, so without this mode
 the only scripted way to produce it again is `-Force`, which rewrites a
 written-once version directory - the one thing `releases\README.md` says never
 to do. (`-Force` does not rebuild anything: it stages from the existing
-`src\objfre` / `src\objchk` trees and every gate still runs, so the binaries
+`src\objfre` trees and every gate still runs, so the binaries
 come through byte-identical. What it skips is the single "this version
 directory already exists" refusal.) That trap fired for real: the
 first cut's asset was malformed and there was no way to rebuild it in place.
@@ -346,9 +365,10 @@ the key is held and how it was made: design record 19.
 Cut without the bundled Stor98. By default (since 3.1.0.0, roadmap-usb4
 task 42-A.30, owner 2026-10-19) every release leg's package carries the
 Stor98 that scripts\build-driver.cmd built and gated from src\stor98, at
-the package's version and date (make-package.ps1, -NoStor98), and the
-debug legs carry none. Its files are published like this project's own:
-releases\<version>\release-x86\ and release-x64\ hold them (the x64
+the package's version and date (make-package.ps1, -NoStor98); the debug
+legs, until task 45.45 retired them, carried none. Its files are published like this project's own:
+releases\<version>\98-me\stor98\, nt-x86\stor98\ and nt-x64\stor98\ hold
+them (release-x86\ and release-x64\ up to 3.3.0.0; the x64
 stor98.sys signed with the other x64 drivers, by the same key), so the
 upload set and -UploadSetOnly take them from the published tree. Its
 readme's SETTINGS table is held to test\stor98-settings.txt, and the
@@ -404,7 +424,8 @@ which -UploadSetOnly rebuilds them.
 .PARAMETER NoWdmFree
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
-every cut does; 3.2.0.0's named v0.1.0, and from 3.3.0.0 it names v0.1.4.
+every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, and from 3.4.0.0
+it names v0.1.7 (v0.1.5 until task 45.44).
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -480,7 +501,7 @@ powershell -File scripts\package\make-release.ps1 -UploadSetOnly
 param(
     [string]$Version = "",
     [ValidateSet("release", "debug", "qemu")]
-    [string[]]$Flavor = @("release", "debug"),
+    [string[]]$Flavor = @("release"),
     [ValidateSet("x86", "x64")]
     [string[]]$Arch = @("x86", "x64"),
     [string]$ReleasesDir = "",
@@ -546,8 +567,16 @@ may carry it, and
 scripts\import-gate\xhci98-imports.allow enforces that as "qemu required".
 To put it on a guest, stage it without publishing:
   scripts\package\make-package.ps1 -Flavor qemu
-A release publishes the release and debug directories of each architecture it
-was asked for, and nothing else.
+A release publishes the release directory of each architecture it was asked
+for, and nothing else.
+"@
+}
+if ($Flavor -contains "debug") {
+    throw @"
+the debug flavour was retired with roadmap-usb4 task 45.45 (design record 08
+section 14): it is neither built nor published. The release flavour keeps what
+it gave - frame pointers on the 32-bit MSVC 6.0 builds and the command-state
+checker, on unless XhciCommandCheck is 0. Publish -Flavor release, the default.
 "@
 }
 #
@@ -610,8 +639,8 @@ function Write-GeneratedText {
     nine characters on the day it was written.
 
     ASCII.  `Write-AsciiFile` turns any non-ASCII byte into a question mark
-    SILENTLY, and the top-level readme embeds `history.md`, which is
-    markdown a person edits.  One typographic dash in a release entry would
+    SILENTLY, and the top-level readme embeds the version's `history.md`
+    entry, markdown a person edits.  One typographic dash in it would
     ship as `?` in a file nobody re-reads after generating it.
     `make-11v-media.ps1` already refuses non-ASCII for its INF rewrite; this
     is the same rule for the same reason.
@@ -767,7 +796,8 @@ $reportBatches = @{
 
 #
 # **A published directory is a flavour AND an architecture, and both are in its
-# name** - `release-x86`, `debug-x86`, `release-x64`, `debug-x64` (roadmap task
+# name** - `release-x86` and `release-x64` (with `debug-x86` and `debug-x64` up
+# to 3.3.0.0, before task 45.45 retired the debug flavour; roadmap task
 # 21.3, design record 11 section 8). The two architectures' binaries are both
 # called xhci98.sys, so they cannot share a directory; and the x86 pair is
 # renamed rather than left bare, because the moment a second set exists an
@@ -862,6 +892,15 @@ $uasPublishable = @("xhciuas.inf", "xhciuas.sys")
 # the INF beside it. A version published before 2.1.0.0 has none, so
 # -UploadSetOnly gates it where it is present and does not require it.
 $oemPublishable = @("txtsetup.oem")
+
+# Thunderbolt networking (roadmap-usb4.md task 45.59, design record 35
+# section 9.5): its INF and its two images, at the flat leg's root, re-laid
+# into each family's cm\tbnet\ (98-me\ without xhcinet6.sys). Its own INF
+# declares them, its own gate (scripts\inf-gate\check-net-inf.ps1) holds the
+# INF, and each image is held to the refusals xhcicm.sys is
+# (Assert-NetPublished). A version published before 3.4.0.0 has none, so
+# -UploadSetOnly does not require them.
+$netPublishable = @("xhcinet.inf", "xhcinet.sys", "xhcinet6.sys")
 
 # The port switchover's user script (roadmap-hcd task 36.42) and its two
 # batch files (task 36.56), which set 1 or 0 through it in one double-click.
@@ -1298,14 +1337,13 @@ $catPublishable = @($script:PackageCatalogs.Keys)
 # published directory name is built from the flavour and the architecture
 # together by New-ReleaseLegs below, so the flavour word is no longer a
 # directory name on its own.
-$objDirName = @{ "release" = "objfre"; "debug" = "objchk" }
+$objDirName = @{ "release" = "objfre" }
 
 function New-ReleaseLegs {
     #
     # Every (flavour, architecture) pair this cut publishes, in a fixed order -
-    # architecture outermost, so a four-directory cut reads release-x86,
-    # debug-x86, release-x64, debug-x64 and the readme's contents list comes
-    # out in that order too.
+    # architecture outermost, so a two-architecture cut reads release-x86,
+    # release-x64 and the readme's contents list comes out in that order too.
     #
     # One object per published directory, and everything that used to be
     # derived from the flavour word alone hangs off it: which obj tree the
@@ -1331,7 +1369,7 @@ function New-ReleaseLegs {
 }
 
 # Format-Wrapped and ConvertFrom-MarkdownBlocks, which render the embedded
-# release history, are package-common.ps1's since task 43.61, so the gated
+# history entry, are package-common.ps1's since task 43.61, so the gated
 # build's readme check renders history.md exactly as the cut does.
 
 function Get-InfDriverVersion {
@@ -1991,7 +2029,7 @@ function Assert-UasPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhciuas.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2062,7 +2100,7 @@ function Assert-CmPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcicm.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2109,6 +2147,68 @@ writes the stamp as it goes; or, for a binary that must ship unstamped, pass
     }
 }
 
+function Assert-NetPublished {
+    # xhcinet.sys and xhcinet6.sys, Thunderbolt networking's two images
+    # (roadmap-usb4.md task 45.59, design record 35 section 9.5), held to the
+    # refusals Assert-CmPublished makes of xhcicm.sys: the release
+    # FileVersion, VS_FF_DEBUG, the flavour marker and the staged bytes being
+    # the built ones (signed, on a signed leg). They have no source stamp of
+    # their own: src\net\'s three directories are build inputs of the gated
+    # record whole (package-common.ps1's BuildInputDirs), each build is held
+    # newer than every source it is made of, and the cut's packaging
+    # runs their gates again.
+    param([string]$Dir, [object]$Leg, [string]$Flavor, [string]$Version, [hashtable]$Built, [switch]$Signed)
+
+    $rebuild = "scripts\build-driver.cmd $Flavor" + $(if ($Leg.Arch -eq "x64") { " -amd64" } else { "" })
+    foreach ($name in @("xhcinet.sys", "xhcinet6.sys")) {
+        # -Dir "": a -CheckOnly run, whose images are the builds themselves.
+        $sys = if ($Dir -eq "") { $Built[$name] } else { Join-Path $Dir $name }
+        if (-not (Test-Path -LiteralPath $sys)) {
+            throw "the $($Leg.Id) leg has no $name to publish. Rebuild: $rebuild"
+        }
+        $info = (Get-Item -LiteralPath $sys).VersionInfo
+        if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
+            Stop-CutCheck "the $name for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
+        }
+        if ($info.IsDebug) {
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ has VS_FF_DEBUG set; that is the wrong obj directory. Rebuild: $rebuild"
+        }
+        $marker = Get-ImageFlavourMarker -Path $sys
+        if ($marker -ne $Flavor) {
+            $found = if ($marker -eq "") { "none" } else { $marker }
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
+        }
+        $builtSys = $Built[$name]
+        if (-not (Test-Path -LiteralPath $builtSys)) {
+            throw "the $($Leg.Id) $name about to be published has no counterpart at $builtSys, so nothing ties it to the sources in src\net. Rebuild: $rebuild"
+        }
+        # No source stamp: the build is held newer than every source it is
+        # made of, as XHCIPFW.SYS is - src\net's three directories and the
+        # headers they include from src\ (xhci_cmnet.h, xhci_compat.h,
+        # xhci_version.h).
+        $netInputs = @()
+        foreach ($d in @("src\net", "src\net\ndis5", "src\net\ndis6")) {
+            $netInputs += @(Get-ChildItem -LiteralPath (Join-Path $repo $d) -File |
+                Where-Object { @(".c", ".h", ".rc") -contains $_.Extension.ToLowerInvariant() -or @("sources", "makefile") -contains $_.Name.ToLowerInvariant() })
+        }
+        foreach ($h in @("src\xhci_cmnet.h", "src\xhci_compat.h", "src\xhci_version.h")) {
+            if (Test-Path -LiteralPath (Join-Path $repo $h)) { $netInputs += Get-Item -LiteralPath (Join-Path $repo $h) }
+        }
+        $builtTime = (Get-Item -LiteralPath $builtSys).LastWriteTimeUtc
+        $netNewer = @($netInputs | Where-Object { $_.LastWriteTimeUtc -gt $builtTime })
+        if ($netNewer.Count -gt 0) {
+            Stop-CutCheck ("the {0} at {1} is older than {2}: rebuild it ({3})." -f $name, $builtSys, (($netNewer | ForEach-Object { $_.Name }) -join ", "), $rebuild)
+        }
+        if ($Signed) {
+            Assert-TestSigned -Sys $sys -BuiltSys $builtSys -Label "$($Leg.Dir)\$name"
+        } elseif ((Get-FileHash -LiteralPath $builtSys -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sys -Algorithm SHA256).Hash) {
+            Stop-CutCheck "the $name about to be published as $($Leg.Dir)\ is not the one in $builtSys. Rebuild: $rebuild"
+        }
+    }
+    Write-Ok "$($Leg.Id) Thunderbolt networking images are the builds in src\net"
+}
+
 function Assert-HelperPublished {
     # xhcihlpr.sys, the x86 helper (design record 18; tasks 36.15 and 38.3),
     # held to the refusals Assert-UasPublished makes of xhciuas.sys, which are
@@ -2133,7 +2233,7 @@ function Assert-HelperPublished {
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
         $found = if ($marker -eq "") { "none" } else { $marker }
-        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release and debug are published. Rebuild: $rebuild"
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ carries the '$found' flavour marker. Only release is published. Rebuild: $rebuild"
     }
     $builtSys = Join-Path $ObjRoot "xhcihlpr.sys"
     if (-not (Test-Path -LiteralPath $builtSys)) {
@@ -2397,6 +2497,46 @@ function New-UploadSet {
     $publishableKeys = @($Publishable | ForEach-Object { $_.ToLowerInvariant() })
     $gate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-inf.ps1"
 
+    # **A tree laid out by Windows family (3.4.0.0 on, design record 36) is
+    # checked through its flat view.** Every check below reads a flavour
+    # directory; for a family tree they read release-x86\ and release-x64\
+    # as ConvertFrom-FamilyLayout rebuilds them from the family folders, in
+    # a work folder outside the set, and the set itself carries the family
+    # folders. Test-FamilyLayout (PKG-FAMILY) and the CM gate's CM-INX read
+    # the family folders themselves. A tree of a version up to 3.3.0.0 is
+    # its flavour directories, read as before (section 7.2).
+    $checkRoot = $uploadRoot
+    if ((Get-FamilyLayoutKind -Root $uploadRoot -What "'$PublishedRoot'") -eq "family") {
+        $famWhy = Test-FamilyLayout -Root $uploadRoot
+        if ($famWhy -ne "") {
+            throw "the assembled upload set's family folders are not the layout of design record 36. Do not upload it:`n$famWhy"
+        }
+        $flatView = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-flatview-" + [System.IO.Path]::GetRandomFileName())
+        $script:FlatViewDirs += $flatView
+        $viewDirs = ConvertFrom-FamilyLayout -Root $uploadRoot -Dest $flatView
+        $checkRoot = $flatView
+        $cmGateFam = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-cm-inf.ps1"
+        foreach ($fam in $script:FamilyNames) {
+            $famDir = Join-Path $uploadRoot $fam
+            if (-not (Test-Path -LiteralPath $famDir)) { continue }
+            $famArch = $script:FamilyArch[$fam]
+            $famArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $cmGateFam, "-FamilyDir", $famDir)
+            $viewFilter = Join-Path $viewDirs[$famArch] (Get-CmFilterRel -Arch $famArch -PublishedVersion $Version)
+            if ($fam -ne "98-me" -and (Test-Path -LiteralPath $viewFilter -PathType Leaf)) { $famArgs += @("-InfPath", $viewFilter) }
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe $famArgs 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "the assembled upload set's $fam\ failed scripts\inf-gate\check-cm-inf.ps1's CM-INX. Do not upload it.`n`n$gateOut"
+            }
+        }
+        Write-Ok ("the family folders are design record 36's layout ({0}); checked below through their flat view" -f (@($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $uploadRoot $_) }) -join ", "))
+    }
+
     # **Which directories have to be completed is read off the tree, not taken
     # from -Flavor.** The published tree is copied whole, so a release holding
     # both flavours brings both into the upload set - but only the flavours
@@ -2422,7 +2562,7 @@ function New-UploadSet {
         # whole media/not-media distinction below would silently invert.
         throw "the publishable set names no .inf file, so nothing here can tell a flavour directory from any other."
     }
-    $mediaDirs = @(Get-ChildItem -LiteralPath $uploadRoot -Directory | Where-Object {
+    $mediaDirs = @(Get-ChildItem -LiteralPath $checkRoot -Directory | Where-Object {
         Test-Path -LiteralPath (Join-Path $_.FullName $infName)
     } | ForEach-Object { $_.Name })
 
@@ -2469,7 +2609,7 @@ their defaults.
     $legLayouts = @{}
     foreach ($legDir in $Flavors) {
         $legLayouts[$legDir] = Get-DeclaredMediaLayout `
-            -InfPath (Join-Path $PublishedRoot (Join-Path $legDir $infName)) `
+            -InfPath (Join-Path $(if ($checkRoot -ne $uploadRoot) { $checkRoot } else { $PublishedRoot }) (Join-Path $legDir $infName)) `
             -Arch $LegArches[$legDir] `
             -Label "the published $legDir\$infName" -PublishedVersion $Version
     }
@@ -2499,7 +2639,7 @@ their defaults.
             }
         }
         foreach ($name in $legKeys) {
-            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $uploadRoot $f) $name))) {
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $checkRoot $f) $name))) {
                 throw "'$f' in the published tree has no '$name', which its own $infName declares."
             }
         }
@@ -2514,7 +2654,7 @@ their defaults.
 
         $pkgDir = $null
         if ($null -ne $PkgDirs -and $PkgDirs.ContainsKey($f)) { $pkgDir = $PkgDirs[$f] }
-        $uploadFlavorDir = Join-Path $uploadRoot $f
+        $uploadFlavorDir = Join-Path $checkRoot $f
         $mediaPaths = @{}
         if ($null -ne $pkgDir) {
             # The ordinary cut: the backstop for the check the build loop
@@ -2522,7 +2662,7 @@ their defaults.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $expected `
                                                -PublishedPaths $publishedPaths `
                                                -InfName $infName -Flavor $f `
-                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }) + @("XHCIPFW.VXD", "XHCIPFW.SYS"))
+                                               -Also ($uasPublishable + (Get-CmPublishable -Arch $LegArches[$f] -PublishedVersion $Version) + $oemPublishable + $netPublishable + $(if ($LegArches[$f] -eq "amd64") { $certPublishable + $catPublishable } else { @() }) + @(if ($f -like "release-*") { Get-ChildItem -LiteralPath $uploadFlavorDir -File | Where-Object { $_.Name -like "stor98*" -or $_.Name -eq "S98VSD.VXD" } | ForEach-Object { $_.Name } }) + @("XHCIPFW.VXD", "XHCIPFW.SYS"))
 
             # Copied at the path the INF declares, which is where the check
             # below will look for it. Taking the layout from the gate's parse
@@ -2707,6 +2847,40 @@ $gateOut
             }
         }
 
+        # Thunderbolt networking (task 45.59, record 35 section 9.5): the INF
+        # and its two images go together, and the INF passes its own gate.
+        # Required of a directory this cut built; gated where present in one
+        # -UploadSetOnly reads, since a version published before 3.4.0.0 has
+        # none.
+        $netHave = @($netPublishable | Where-Object { Test-Path -LiteralPath (Join-Path $uploadFlavorDir $_) })
+        if ($netHave.Count -ne 0 -and $netHave.Count -ne $netPublishable.Count) {
+            $netMissing = @($netPublishable | Where-Object { $netHave -notcontains $_ })
+            throw "the assembled upload set's $f\ directory carries $($netHave -join ', ') of Thunderbolt networking but not $($netMissing -join ', '): the $($netPublishable.Count) files go together."
+        }
+        if ($netHave.Count -ne 0) {
+            $netGate = Join-Path (Join-Path (Split-Path -Parent $PSScriptRoot) "inf-gate") "check-net-inf.ps1"
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $netGate,
+                                              "-InfPath", (Join-Path $uploadFlavorDir "xhcinet.inf"),
+                                              "-Arch", $LegArches[$f]) 2>&1 | Out-String
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw @"
+the assembled upload set's $f\ directory failed scripts\inf-gate\check-net-inf.ps1.
+Do not upload it: Thunderbolt networking's INF is not the one the build gated.
+
+$gateOut
+"@
+            }
+            Write-Ok ("{0}\ carries Thunderbolt networking, by its own gate" -f $f)
+        } elseif ($null -ne $pkgDir) {
+            throw "the assembled upload set's $f\ directory has no xhcinet.inf, and this cut built it with one."
+        }
+
         # The text-mode Setup description, by its own gate against the INF
         # beside it. Required of a directory this cut built; gated where
         # present in one -UploadSetOnly reads, since a version published
@@ -2867,6 +3041,10 @@ $gateOut
 # failure path at the bottom: a cut that throws with this set still staged
 # removes it and leaves any previous asset as it was.
 $stagedUpload = $null
+# Work folders outside releases\ (the legs' flat packages, the flat views of
+# family trees, design record 36), removed at the end whatever happens.
+$script:FlatViewDirs = @()
+$familyFlat = @{}
 # Set the moment the publish swap has succeeded. From then on the cut is
 # published whatever happens after, and the failure path below must say so
 # rather than call it a failed cut or touch what was published.
@@ -3309,7 +3487,22 @@ To cut one, run this script without it.
         # held to exactly - a missing directory is then the error it looks like.
         #
         $wantedArches = $Arch
-        if (-not $PSBoundParameters.ContainsKey("Arch")) {
+        # A tree published by Windows family (from 3.4.0.0, design record 36
+        # section 7.2): its architectures are its family folders', and
+        # New-UploadSet reads its legs through the flat view it rebuilds.
+        $pubLayout = Get-FamilyLayoutKind -Root $finalRoot -What "'$finalRoot'"
+        if ($pubLayout -eq "family") {
+            $present = @()
+            if ((Test-Path -LiteralPath (Join-Path $finalRoot "98-me")) -or (Test-Path -LiteralPath (Join-Path $finalRoot "nt-x86"))) { $present += "x86" }
+            if (Test-Path -LiteralPath (Join-Path $finalRoot "nt-x64")) { $present += "x64" }
+            if ($PSBoundParameters.ContainsKey("Arch")) {
+                $missingFam = @($Arch | Where-Object { $present -notcontains $_ })
+                if ($missingFam.Count -gt 0) { throw "'$finalRoot' has no family folder of $($missingFam -join ', '), so $Version was not published with that architecture." }
+                $extraFam = @($present | Where-Object { $Arch -notcontains $_ })
+                if ($extraFam.Count -gt 0) { throw "'$finalRoot' publishes $($extraFam -join ', ') as well, and the download carries every family folder: leave -Arch at its default or name them all." }
+            }
+            $wantedArches = $present
+        } elseif (-not $PSBoundParameters.ContainsKey("Arch")) {
             $present = @()
             foreach ($a in $Arch) {
                 foreach ($leg in (New-ReleaseLegs -Flavors $Flavor -Arches @($a))) {
@@ -3340,6 +3533,12 @@ To cut one, run this script without it.
         # carried rather than re-derived.
         $legArches = @{}
         foreach ($leg in $legs) {
+            if ($pubLayout -eq "family") {
+                $legDirs += $leg.Dir
+                $legArches[$leg.Dir] = $leg.PkgArch
+                Write-Ok ("{0}\: rebuilt from the family folders by the upload set's flat view" -f $leg.Dir)
+                continue
+            }
             $pubDir = Join-Path $finalRoot $leg.Dir
             $dirName = $leg.Dir
             if (-not (Test-Path -LiteralPath $pubDir)) {
@@ -3367,7 +3566,14 @@ To cut one, run this script without it.
         # 0.4.0.0) added it to the upload set only, never to releases\, so
         # its published tree cannot rebuild that asset (task 42-A.30).
         $pubReadme = Join-Path $finalRoot "readme.txt"
-        if ((Test-Path -LiteralPath $pubReadme) -and
+        # A family tree (from 3.4.0.0) whose readme declares Stor98 holds
+        # it in a family folder's stor98\ (design record 36 section 2).
+        if ($pubLayout -eq "family" -and (Test-Path -LiteralPath $pubReadme) -and
+            ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
+            @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $finalRoot "$_\stor98\stor98.inf") -PathType Leaf }).Count -eq 0) {
+            throw "'$finalRoot''s readme declares the bundled Stor98, and no family folder holds stor98\stor98.inf: the download would not carry what its readme says."
+        }
+        if ($pubLayout -ne "family" -and (Test-Path -LiteralPath $pubReadme) -and
             ([System.IO.File]::ReadAllText($pubReadme) -match '(?m)^  Bundled in this download: Stor98 ') -and
             @($legDirs | Where-Object { $_ -like "release-*" -and (Test-Path -LiteralPath (Join-Path (Join-Path $finalRoot $_) "stor98.inf")) }).Count -eq 0) {
             throw "'$finalRoot' was cut with a pinned Stor98 that its published tree does not hold (before 3.1.0.0, the upload set alone carried it). Re-assemble it with the make-release.ps1 of its own cut (git checkout of that release), which takes the pins."
@@ -3718,8 +3924,8 @@ the result in place of the marker, then cut again. The first:
 
     # --- XHCIPFW.VXD (task 44.49, design record 32 section 8) ---------------
     #
-    # Every x86 package carries it, release and debug, with or without
-    # Stor98; make-package.ps1 stages it and holds it to
+    # Every x86 package carries it (release; debug too up to 3.3.0.0),
+    # with or without Stor98; make-package.ps1 stages it and holds it to
     # src\pfw\check-pfw.ps1, and goes without it only on a host that could
     # not build it, which a cut is not. Checked here, after the cut's
     # inputs and before anything is built.
@@ -3829,7 +4035,8 @@ the result in place of the marker, then cut again. The first:
                 $pkgArgs += @("-TestSignPfx", $TestSignPfx)
             }
             # The bundled Stor98 build, in the release legs only (make-package.ps1
-            # bundles it by default; the debug legs pass -NoStor98); its files
+            # bundles it by default; any other leg - the debug ones until task
+            # 45.45 retired them - passes -NoStor98); its files
             # are accepted beside the declared set by exactly the paths it lands
             # at, and published with this project's own (task 42-A.30).
             $legStor98 = @()
@@ -3842,7 +4049,7 @@ the result in place of the marker, then cut again. The first:
                 $pkgArgs += "-NoStor98"
             }
             # XHCIPFW.VXD (task 44.49): make-package.ps1 stages it in every x86
-            # package, release and debug alike, as the gated build's bytes; it
+            # package, as the gated build's bytes (debug legs too until 45.45); it
             # is accepted and published with the bundled files.
             if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.VXD" }
             if ($leg.PkgArch -eq "x86") { $legStor98 += "XHCIPFW.SYS" }
@@ -3883,7 +4090,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Ensure-Directory $destDir
 
             $legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)
-            $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $legStor98
+            $legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable + $netPublishable + $legStor98
             if ($legSigned) {
                 $legCopy += $certPublishable
                 $legCopy += @($catPublishable | Where-Object { $legCopy -contains $script:PackageCatalogs[$_].Inf })
@@ -3914,7 +4121,7 @@ runs are what stand between a broken binary and a guest that cannot boot.
             Assert-PackageMatchesDeclaredMedia -PkgDir $pkgDir -Expected $declaredExpected[$leg.Arch] `
                                                -PublishedPaths $declaredPublished[$leg.Arch] `
                                                -InfName "xhci98.inf" -Flavor $leg.Id `
-                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
+                                               -Also ($uasPublishable + $legCmPublishable + $oemPublishable + $netPublishable + $(if ($legSigned) { $certPublishable + $catPublishable } else { @() }) + $legStor98)
             Assert-NoTestClient -Root $pkgDir -What "the package '$pkgDir'"
             # The published Stor98 images carry this release's version, like
             # xhci98.sys below (task 42-A.30).
@@ -3989,22 +4196,22 @@ Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }
         # **Which build this actually is, read from the binary.** VS_FF_DEBUG is
         # set by src\xhci98.rc under #if DBG, so it is the one field that
         # distinguishes two files that are otherwise the same name at the same
-        # version. Trusting the obj directory instead would let a release build be
-        # published as the debug one - and the person who later asks a user for a
-        # trace would get silence and blame the machine.
+        # version. Trusting the obj directory instead would let a checked build be
+        # published as the release (or, before task 45.45 retired the debug
+        # flavour, a release build as the debug one).
         $expectDebug = ($f -eq "debug")
         if ($info.IsDebug -ne $expectDebug) {
             Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
-That is the wrong obj directory: src\objchk\$($archDirName[$leg.Arch]) is the debug build and
-src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour you meant.
+That is the wrong obj directory: src\objfre\$($archDirName[$leg.Arch]) is the release build;
+a checked image is the qemu flavour's or one of the debug flavour task 45.45 retired.
+Rebuild the release flavour.
 "@
         }
 
-        # **And which of the three it is, which VS_FF_DEBUG cannot say.** Task
-        # 13-L.1 made `debug` and `qemu` both checked builds, so the field above
-        # is TRUE for either and would publish a qemu binary as the diagnostic
-        # download without a word. The marker in the image is the discriminator,
+        # **And which flavour it is, which VS_FF_DEBUG cannot say.** Task
+        # 13-L.1 made `debug` and `qemu` both checked builds (debug retired with
+        # task 45.45), so the field above alone could not tell them apart. The marker in the image is the discriminator,
         # and it is read here rather than inferred from a directory because
         # "objchk_qemu" contains "objchk" - a path match is wrong in exactly the
         # direction that matters.
@@ -4022,7 +4229,7 @@ src\objfre\$($archDirName[$leg.Arch]) is the release one. Rebuild the flavour yo
             $found = if ($publishedFlavour -eq "") { "none" } else { $publishedFlavour }
             Stop-CutCheck @"
 the binary about to be published as $($leg.Dir)\ carries the '$found' flavour marker.
-Only release and debug may be published; qemu carries the port-0xE9 mirror
+Only release is published; qemu carries the port-0xE9 mirror
 (HAL.dll!WRITE_PORT_UCHAR), the sole import delta of the build that gave the
 ThinkPad E460 a Code 2 under Windows 98 SE, and it is never shipped. Rebuild the flavour you
 meant: scripts\build-driver.cmd $f
@@ -4153,6 +4360,14 @@ invalidate readings already taken on these exact bytes - say so:
                            -ObjRoot (Join-Path $repo ("src\cm\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch])) `
                            -Signed:$legSigned
 
+        # Thunderbolt networking's two images, held the same way (task 45.59).
+        $netBuilt = @{
+            "xhcinet.sys"  = (Join-Path $repo ("src\net\ndis5\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhcinet.sys"))
+            "xhcinet6.sys" = (Join-Path $repo ("src\net\ndis6\" + $objDirName[$f] + "\" + $archDirName[$leg.Arch] + "\xhcinet6.sys"))
+        }
+        Assert-NetPublished -Dir $(if ($null -eq $pkgDir) { "" } else { Split-Path -Parent $sys }) -Leg $leg -Flavor $f -Version $Version -Built $netBuilt `
+                            -Signed:$legSigned
+
         # The x86 helper, where this leg's INF declares it (design record
         # 18), held to the same refusals; and the 2.3.x helper's name never
         # published (section 15.11).
@@ -4164,7 +4379,9 @@ invalidate readings already taken on these exact bytes - say so:
             throw "the $($leg.Id) leg holds $retiredHelper, the 2.3.x helper this release retires (design record 18 section 15.11). Rebuild the package: scripts\package\make-package.ps1 -Flavor $f"
         }
         if ($CheckOnly) {
-            $gatedBins = @{ "xhci98.sys" = $sys; "xhciuas.sys" = $uasSys; "xhcicm.sys" = $cmSys }
+            $gatedBins = @{ "xhci98.sys" = $sys; "xhciuas.sys" = $uasSys; "xhcicm.sys" = $cmSys;
+                            "xhcinet.sys" = $netBuilt["xhcinet.sys"];
+                            "xhcinet6.sys" = $netBuilt["xhcinet6.sys"] }
             if ($declaredPublishable[$leg.Arch] -contains "xhcihlpr.sys") { $gatedBins["xhcihlpr.sys"] = $hlprSys }
             if ($null -ne $stor98 -and $f -eq "release") {
                 foreach ($nf in @(Get-Stor98PackageFiles -Release $stor98 -Arch $leg.PkgArch)) {
@@ -4201,6 +4418,40 @@ invalidate readings already taken on these exact bytes - say so:
     # own sources rather than trusting that someone ran build.cmd - a qualifier
     # older than the code it was built from would be answering for a different
     # tool than the one the docs describe.
+    # --- the family folders (task 45.44, design record 36 sections 5.1, 7.1) --
+    #
+    # Each leg above is a flat package, staged, gated and checked as before.
+    # It moves to a work folder outside the version directory, and the
+    # version directory gets the family folders instead: 98-me\ and nt-x86\
+    # from the x86 leg, nt-x64\ from the x64 one, by package-common.ps1's
+    # one table. Every file of the family folders is then compared by hash
+    # with the verified flat file it came from, here and again just before
+    # the publication.
+    $legWorkRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("xhci98-legs-" + [System.IO.Path]::GetRandomFileName())
+    $script:FlatViewDirs += $legWorkRoot
+    # -CheckOnly stages nothing: its legs' directories are the build
+    # outputs themselves, read in place, so nothing is moved or re-laid.
+    $familyFlat = @{}
+    foreach ($leg in $legs) {
+        if ($CheckOnly) { break }
+        if (-not $staged.ContainsKey($leg.Id)) { continue }
+        if ($familyFlat.ContainsKey($leg.PkgArch)) { throw "two legs of architecture $($leg.PkgArch): the family layout publishes one package an architecture." }
+        New-Item -ItemType Directory -Force -Path $legWorkRoot | Out-Null
+        $work = Join-Path $legWorkRoot $leg.Dir
+        Copy-Item -LiteralPath $staged[$leg.Id].Dir -Destination $work -Recurse
+        Remove-Item -LiteralPath $staged[$leg.Id].Dir -Recurse -Force
+        $staged[$leg.Id].Dir = $work
+        [void](ConvertTo-FamilyLayout -FlatDir $work -Arch $leg.PkgArch -Dest $destRoot)
+        $familyFlat[$leg.PkgArch] = $work
+    }
+    if ($familyFlat.Count -gt 0) {
+        $famWhy = Test-FamilyLayout -Root $destRoot
+        if ($famWhy -ne "") { throw "the staged release's family folders are not the layout of design record 36:`n$famWhy" }
+        Assert-FamilyFromLegs -Root $destRoot -FlatDirs $familyFlat -What "the staged release '$destRoot'"
+        Write-Ok ("the legs re-laid by Windows family: {0}, every file the bytes of its verified flat file" -f `
+            (@($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $destRoot $_) }) -join ", "))
+    }
+
     $qualtoolStaged = $null
     if (-not $SkipQualtool) {
         Write-Step "DOS qualifier"
@@ -4608,8 +4859,8 @@ helper (xhciinst\di\build.cmd).
     # tasks 37.5 and 38.9), from src\ rather than from a package: the packages no longer
     # carry them, and the four flavour directories once held four
     # byte-identical copies of files that are neither architecture- nor
-    # flavour-specific. No readme.txt of their own: section 9 of the
-    # top-level readme is where they are explained, and each script says
+    # flavour-specific. No readme.txt of their own: the release notes'
+    # XhciIntelPortSwitch is where they are explained, and each script says
     # what it does when run.
     Write-Step "port switchover scripts"
     $pswStaged = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Names $pswPublishable -DirName (Get-ToolDirName -Name "portsw")
@@ -4632,9 +4883,9 @@ helper (xhciinst\di\build.cmd).
     # binaries of the same flavour are different builds of different machine
     # code and could never hash alike, so a flat comparison across four staged
     # files would find every pair distinct and say nothing - while the pair
-    # this check exists for, release and debug of one architecture, would be
-    # buried among them. Two comparisons, each of the pair that could actually
-    # collide.
+    # this check existed for, release and debug of one architecture, would be
+    # buried among them. Since task 45.45 retired debug there is no pair to
+    # compare and the check passes over; it stays for a cut naming two.
     #
     foreach ($a in $Arch) {
         $rel = "release-$a"
@@ -4649,13 +4900,15 @@ helper (xhciinst\di\build.cmd).
     #
     # Generated rather than hand-written: every release says the same thing, and
     # the parts that vary (version, date, sizes, hashes) are exactly what a human
-    # copy gets wrong. It has to stand on its own - someone who downloaded a
-    # release directory has no repository to read - so the install and usage
-    # procedure is transcribed here rather than linked to. Everything below is
-    # from docs\using\release-notes.md; when that file changes, change this too.
-    # Rewritten for the host controller driver and its two drivers per
-    # directory by roadmap task 32.1. Its TODO(...) lines are readings the
-    # cut (task 32.3) owes; a readme still carrying one is not ready to cut.
+    # copy gets wrong. Since roadmap-usb4 task 45.29 (the owner, 2026-10-29:
+    # it was too long-winded) it is the short guide: this version's history
+    # entry, in the shape of the notes the owner publishes on GitHub, a short
+    # install, how to report a problem, the directory's files and the earlier
+    # releases, with the full release notes (docs\using\release-notes.md:
+    # each system's standing, the registry settings, every file) linked
+    # rather than transcribed. When the install or the report steps there
+    # change, change this too. A TODO(...) line here is a reading a cut owes;
+    # a readme still carrying one is not ready to cut.
     #
     # **A literal here-string, not a double-quoted one.** Backtick is PowerShell's
     # escape character, so in @"..."@ every markdown `code span` would lose its
@@ -4670,11 +4923,13 @@ helper (xhciinst\di\build.cmd).
     # at the changelog gate, before anything was built.
     $today = $releaseDate
 
-    # Embed from the first '##' heading down, so history.md's own title and
-    # maintenance note stay out of the user-facing file, and demote each entry
-    # heading by one level to sit under this README's "Release history" section.
-    # The *check* that an entry exists ran before anything was built.
-    $history = @(Get-HistoryEmbedLines -Lines $historyLines)
+    # This version's entry alone, without its heading, which section 1's
+    # title says, and a one-line list of the earlier releases (roadmap-usb4
+    # task 45.29; the owner, 2026-10-29: the readme was too long-winded).
+    # Up to 3.3.0.0 the readme embedded the whole history. The *check* that
+    # an entry exists ran before anything was built.
+    $history = @(Get-HistoryEntryLines -Lines $historyLines -Version $Version)
+    $earlierText = @(Get-HistoryEarlierText -Lines $historyLines -Version $Version -Width $script:PlainTextColumns)
 
     #
     # One block per published directory, in leg order. The architecture is named
@@ -4691,66 +4946,69 @@ helper (xhciinst\di\build.cmd).
     #
     $multiArch = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique).Count -gt 1
     $contents = @()
+    # One block per family folder (task 45.44, design record 36): the x86
+    # leg fills 98-ME and NT-X86, the x64 leg NT-X64. The files are the
+    # verified flat package's, compared by hash with the family copies.
+    $inv = [System.Globalization.CultureInfo]::InvariantCulture
     foreach ($leg in $legs) {
         if (-not $staged.ContainsKey($leg.Id)) { continue }
         $s = $staged[$leg.Id]
-        $which = if ($leg.Arch -eq "x64") { "64-bit Windows" } else { "32-bit Windows" }
-        if ($leg.Flavor -eq "release") {
-            if ($multiArch) {
-                $contents += ("  {0}\  - INSTALL THIS ONE, on {1}" -f $s.Published.ToUpper(), $which)
-            } else {
-                $contents += ("  {0}\  - INSTALL THIS ONE" -f $s.Published.ToUpper())
+        $fams = if ($leg.Arch -eq "x64") { @("nt-x64") } else { @("98-me", "nt-x86") }
+        foreach ($fam in $fams) {
+            $which = switch ($fam) { "98-me" { "Windows 98 SE and ME" } "nt-x86" { "32-bit Windows 2000, XP, Vista, 7, 8, 8.1 and 10" } default { "64-bit Windows: XP x64, Server 2003 x64, Vista to 10" } }
+            $contents += ("  {0}\  - {1}" -f $fam.ToUpper(), $which)
+            $contents += ""
+            $contents += "      xhci98.inf"
+            # Every byte count in the published readme is formatted in the
+            # invariant culture (1,234,567): -f takes the host's, which writes
+            # 1.234.567 on de-DE and a U+202F on fr-FR, and a cut on another host
+            # must be the same bytes (2026-10-29).
+            $contents += [string]::Format($inv, "      xhci98.sys   {0:N0} bytes", $s.Length)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.Sha256)
+            $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
+            $contents += [string]::Format($inv, "      xhciuas.sys  {0:N0} bytes", $s.UasLength)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.UasSha256)
+            if ($fam -eq "nt-x86") {
+                $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7)"
+            }
+            if ($fam -ne "98-me") {
+                $contents += "      txtsetup.oem (Setup's F6 disk: this folder's root files)"
+            }
+            if ($fam -eq "nt-x64") {
+                $contents += "      xhci98-test.cer (the test certificate every .sys file here is"
+                $contents += "                   signed with; you need not import it; section 2)"
+                $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
+                $contents += "                   it: Windows 8, 8.1 and 10 x64 need them)"
+            }
+            $contents += "      CM\xhcicm.inf  (the Thunderbolt 3 / USB4 connection manager's INF)"
+            $contents += [string]::Format($inv, "      CM\xhcicm.sys  {0:N0} bytes", $s.CmLength)
+            $contents += "      SHA-256"
+            $contents += ("      {0}" -f $s.CmSha256)
+            if ($fam -ne "98-me") {
+                $contents += "      CM\xhcicmf.inx (its tunnel-port filter, which SETUP.EXE installs;"
+                $contents += "                   not an INF for integration: INTEGRATE.TXT)"
+            }
+            if ($fam -ne "nt-x64") {
+                $contents += ("      CM\{0} (which SETUP.EXE places)" -f $(if ($fam -eq "98-me") { "XHCIPFW.VXD" } else { "XHCIPFW.SYS" }))
+            }
+            $contents += ("      CM\TBNET\    Thunderbolt networking: xhcinet.inf, xhcinet.sys{0}" -f $(if ($fam -eq "98-me") { "" } else { "," }))
+            if ($fam -ne "98-me") {
+                $contents += ("                   xhcinet6.sys (for 8, 8.1 and 10){0}" -f $(if ($fam -eq "nt-x64") { ", xhcinet.cat" } else { "" }))
+            }
+            if ($null -ne $stor98) {
+                $contents += "      STOR98\      Stor98, the NVMe driver (below)"
             }
             $contents += ""
-            $contents += "  The normal driver. This is the one you want."
-        } else {
-            $contents += ("  {0}\  - only when diagnosing a problem" -f $s.Published.ToUpper())
-            $contents += ""
-            $contents += "  The same driver, built so that a crash on it can be traced"
-            $contents += ("  further back. It records nothing more than {0}\ does, and" -f ("release-" + $leg.Arch).ToUpper())
-            $contents += "  it prints nothing as it runs. It is here only so that it can be"
-            $contents += "  installed at this exact version if something goes wrong. Do not"
-            $contents += "  install it otherwise - and note that BOTH builds answer"
-            $contents += "  XHCITR's report, so you do not need this one to send one."
         }
-        $contents += ""
-        $contents += "      xhci98.inf"
-        $contents += ("      xhci98.sys   {0:N0} bytes" -f $s.Length)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.Sha256)
-        $contents += "      xhciuas.inf  (the UAS storage class driver's INF)"
-        $contents += ("      xhciuas.sys  {0:N0} bytes" -f $s.UasLength)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.UasSha256)
-        $contents += "      xhcicm.inf   (the Thunderbolt 3 / USB4 connection manager's INF)"
-        if ($leg.Arch -eq "x86") {
-            $contents += "      nt\xhcicmf.inf  (its tunnel-port filter's INF, Windows 2000 and"
-            $contents += "                   later only: never point Windows 98 or ME at nt\;"
-            $contents += "                   nt\xhcicm.sys beside it is the same xhcicm.sys)"
-        } else {
-            $contents += "      xhcicmf.inf  (its tunnel-port filter's INF)"
-        }
-        $contents += ("      xhcicm.sys   {0:N0} bytes" -f $s.CmLength)
-        $contents += "      SHA-256"
-        $contents += ("      {0}" -f $s.CmSha256)
-        $contents += "      txtsetup.oem (for Windows 2000 and XP Setup's F6 prompt)"
-        if ($leg.Arch -eq "x86") {
-            $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7; section 4)"
-        } else {
-            $contents += "      xhci98-test.cer (the test certificate every .sys file here is"
-            $contents += "                   signed with; you need not import it; section 4)"
-            $contents += "      xhci98.cat and the other .cat files (one per INF, signed with"
-            $contents += "                   it: Windows 8, 8.1 and 10 x64 need them; section 4)"
-        }
-        $contents += ""
     }
-    if ($multiArch) {
-        $contents += "  Which pair: the -X86 directories are for 32-bit Windows and the"
-        $contents += "  -X64 ones for 64-bit Windows. If you pick the wrong one nothing"
-        $contents += "  breaks - Windows simply finds no driver in it and says so - so"
-        $contents += "  try the other."
-        $contents += ""
-    }
+    $contents += "  Which folder: 98-ME for Windows 98 SE and ME, NT-X86 for 32-bit"
+    $contents += "  Windows 2000 to 10$(if ($multiArch) { ', NT-X64 for 64-bit Windows' } else { '' }). If you pick the wrong"
+    $contents += "  one nothing breaks - Windows simply finds no driver in it and says"
+    $contents += "  so - so try another. INTEGRATE.TXT says which folder to give nLite,"
+    $contents += "  NTLite or DISM."
+    $contents += ""
     if ($driverPackIncluded) {
         $contents += "  USBDRV\NUSB33\  - NUSB 3.3's Windows 98 SE storage files (section 3)"
         $contents += ""
@@ -4765,9 +5023,9 @@ helper (xhciinst\di\build.cmd).
     $contents += ""
     if ($null -ne $qualtoolStaged) {
         $qexe = Get-Item -LiteralPath (Join-Path $qualtoolStaged "XHCIQUAL.EXE")
-        $contents += "  TOOLS\XHCIQUAL\  - the DOS machine checker from step 1"
+        $contents += "  TOOLS\XHCIQUAL\  - the DOS report tool, when a maintainer asks (section 4)"
         $contents += ""
-        $contents += ("      XHCIQUAL.EXE {0:N0} bytes" -f $qexe.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIQUAL.EXE {0:N0} bytes", $qexe.Length)
         $contents += "      XHCIQUAL.MAP keep it beside the EXE; see TOOLS\XHCIQUAL\readme.txt"
         $contents += "      QUALREP.BAT  the read-only probe a bug report asks for, saved"
         $contents += "                   to a new .LOG named from the date and time"
@@ -4780,8 +5038,8 @@ helper (xhciinst\di\build.cmd).
         $m64 = Get-Item -LiteralPath (Join-Path $marktoolStaged "XHCIMK64.EXE")
         $contents += "  TOOLS\XHCIMARK\ - the Thunderbolt safe-removal mark service"
         $contents += ""
-        $contents += ("      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 10" -f $m32.Length)
-        $contents += ("      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows" -f $m64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIMARK.EXE {0:N0} bytes, for 32-bit Windows 2000 to 10", $m32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIMK64.EXE {0:N0} bytes, for 64-bit Windows", $m64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
@@ -4799,17 +5057,17 @@ helper (xhciinst\di\build.cmd).
         $i64 = Get-Item -LiteralPath (Join-Path $insttoolStaged "XHCIIN64.EXE")
         $s32 = Get-Item -LiteralPath (Join-Path $destRoot "SETUP.EXE")
         $contents += ("  SETUP.EXE       - installs or updates the drivers: double-click")
-        $contents += ("                    it ({0:N0} bytes); Remove in Add/Remove" -f $s32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "                    it ({0:N0} bytes); Remove in Add/Remove", $s32.Length)
         $contents += "                    Programs uninstalls them"
         $contents += "  INSTALL.BAT     - for command-line and scripted installs:"
         $contents += "                    TOOLS\XHCIINST\readme.txt is the reference"
         $contents += ""
         $contents += "  TOOLS\XHCIINST\ - the programs SETUP.EXE and INSTALL.BAT run"
         $contents += ""
-        $contents += ("      XHCIWIZ.EXE  {0:N0} bytes, the installer's window" -f $w32.Length)
-        $contents += ("      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $w64.Length)
-        $contents += ("      XHCIINST.EXE {0:N0} bytes, the console tool" -f $i32.Length)
-        $contents += ("      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows" -f $i64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIWIZ.EXE  {0:N0} bytes, the installer's window", $w32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIWZ64.EXE {0:N0} bytes, the same for 64-bit Windows", $w64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIINST.EXE {0:N0} bytes, the console tool", $i32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIIN64.EXE {0:N0} bytes, the same for 64-bit Windows", $i64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
@@ -4819,7 +5077,7 @@ helper (xhciinst\di\build.cmd).
     }
     if ($null -ne $ditoolStaged) {
         $dih = Get-Item -LiteralPath (Join-Path $ditoolStaged "XHCIDI.EXE")
-        $contents += ("      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit" -f $dih.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCIDI.EXE   {0:N0} bytes, beside them: the 16-bit", $dih.Length)
         $contents += "      helper that installs the drivers on Windows 98 SE"
         $contents += "      and ME devices; the install tool starts it"
         $contents += ""
@@ -4829,20 +5087,20 @@ helper (xhciinst\di\build.cmd).
         $t64 = Get-Item -LiteralPath (Join-Path $traytoolStaged "XHCITR64.EXE")
         $contents += "  TOOLS\XHCITR\   - the xHCI98 USB Tree"
         $contents += ""
-        $contents += ("      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows" -f $t32.Length)
-        $contents += ("      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows" -f $t64.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCITR.EXE   {0:N0} bytes, for 32-bit Windows", $t32.Length)
+        $contents += [string]::Format([System.Globalization.CultureInfo]::InvariantCulture, "      XHCITR64.EXE {0:N0} bytes, for 64-bit Windows", $t64.Length)
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
         $contents += "      SETUP.EXE copies the one for your Windows into the"
         $contents += "      install directory it asks for (C:\XHCI98 unless you"
         $contents += "      choose another) and starts it at each login"
-        $contents += "      (section 4). Its File > Save Report writes what a"
-        $contents += "      bug report asks for (section 6)."
+        $contents += "      (section 2). Its File > Save Report writes what a"
+        $contents += "      bug report asks for (section 4)."
         $contents += ""
     }
     if ($null -ne $pswStaged) {
-        $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (section 9)"
+        $contents += "  TOOLS\PORTSW\  - the Intel port switchover's switch (the release notes)"
         $contents += ""
         $contents += "      portsw.vbs     shows XhciIntelPortSwitch, and sets it on or off"
         $contents += "      portsw-on.bat  turns it on in one double-click"
@@ -4910,9 +5168,9 @@ helper (xhciinst\di\build.cmd).
         $stor98X86 = @($legs | Where-Object { $_.Arch -eq "x86" }).Count -gt 0
         $stor98X64 = @($legs | Where-Object { $_.Arch -eq "x64" }).Count -gt 0
         $stor98Dirs = @()
-        if ($stor98X86) { $stor98Dirs += "RELEASE-X86" }
-        if ($stor98X64) { $stor98Dirs += "RELEASE-X64" }
-        $contents += @(Format-Wrapped -Text (($stor98Dirs -join " and ") + $(if ($stor98Dirs.Count -gt 1) { " hold" } else { " holds" }) +
+        if ($stor98X86) { $stor98Dirs += @("98-ME\STOR98", "NT-X86\STOR98") }
+        if ($stor98X64) { $stor98Dirs += "NT-X64\STOR98" }
+        $contents += @(Format-Wrapped -Text ((($stor98Dirs | Select-Object -First ($stor98Dirs.Count - 1)) -join ", ") + " and " + $stor98Dirs[$stor98Dirs.Count - 1] + " hold" +
             " Stor98, an NVMe storage driver for NVMe drives such as one in a Thunderbolt or USB4 enclosure:" +
             " stor98.inf and the files beside it whose names start with stor98. It carries this release's version" +
             " and date, and its own licence (BSD-3-Clause): stor98-LICENSE.txt and stor98-NOTICE.txt are beside it," +
@@ -4922,19 +5180,18 @@ helper (xhciinst\di\build.cmd).
             " of its own, PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 stor98.inf matches that id alone, so Windows never offers Stor98 for an internal" +
             " drive there. On 8.1 and 10 it names PCI\CC_010802 as a compatible id only, which Windows' own NVMe driver (stornvme) outranks, so there Stor98 goes" +
             " only on a drive the installer, its safe-removal mark service or you put it on. On 98 SE and ME, which have no NVMe driver of their own, Stor98 installs" +
-            " from stor98w9.inf, which matches every NVMe controller, so Windows may offer it for an internal NVMe drive that has no driver: decline it there." +
-            " To install it by hand on a tunnel drive, in the hardware wizard (Have Disk), point at " +
-            $(if ($stor98Dirs.Count -gt 1) { "RELEASE-X86 on 32-bit Windows and RELEASE-X64 on 64-bit Windows." } else { $stor98Dirs[0] + "." })) `
+            " from 98-ME\STOR98's stor98.inf, which matches every NVMe controller, so Windows may offer it for an internal NVMe drive that has no driver: decline it there." +
+            " To install it by hand on a tunnel drive, in the hardware wizard (Have Disk), point at the STOR98 folder of your Windows' folder.") `
             -Width 78 -FirstPrefix "  " -RestPrefix "  ")
         if ($stor98X64) {
             $contents += ""
-            $contents += "  RELEASE-X64's stor98.sys is signed with the same test certificate as"
+            $contents += "  NT-X64\STOR98's stor98.sys is signed with the same test certificate as"
             $contents += "  this project's other x64 drivers (xhci98-test.cer), in the same"
             $contents += "  step: test-signing mode loads them all."
         }
         if ($stor98X86) {
             $contents += ""
-            $contents += "  RELEASE-X86's S98VSD.VXD is for Windows 98 SE and ME: it lets reads"
+            $contents += "  98-ME\STOR98's S98VSD.VXD is for Windows 98 SE and ME: it lets reads"
             $contents += "  and writes of up to 2 MiB reach Stor98 whole. SETUP.EXE installs it"
             $contents += "  with Stor98 there (its own box, ticked with Stor98's)."
         }
@@ -4943,8 +5200,9 @@ helper (xhciinst\di\build.cmd).
 
     #
     # **The install section names the directories this cut actually wrote.**
-    # Since roadmap task 21.3 those are RELEASE-X86 and DEBUG-X86, and a cut
-    # carrying both architectures has four. A one-architecture cut names its
+    # Since roadmap task 21.3 those are RELEASE-X86 and, until task 45.45
+    # retired the debug flavour, DEBUG-X86; a cut carrying both
+    # architectures has RELEASE-X64 too. A one-architecture cut names its
     # pair outright, which is what a reader wants; a two-architecture one names
     # the pair for the architecture-neutral case and adds a paragraph saying
     # how to choose, because there is then no single directory to point at.
@@ -4954,118 +5212,66 @@ helper (xhciinst\di\build.cmd).
     # from a directory the download does not contain.
     #
     $readmeArches = @($legs | ForEach-Object { $_.Arch } | Sort-Object -Unique)
+    # The folders by Windows family (task 45.44, design record 36).
+    $readmeReleaseDir = "      98-ME\    on Windows 98 SE and ME`r`n      NT-X86\   on 32-bit Windows 2000 to 10"
+    if ($readmeArches -contains "x64") { $readmeReleaseDir += "`r`n      NT-X64\   on 64-bit Windows" }
     if ($readmeArches.Count -eq 1) {
-        $readmeReleaseDir = ("release-" + $readmeArches[0]).ToUpper()
-        $readmeDebugDir   = ("debug-" + $readmeArches[0]).ToUpper()
-        $readmeArchNote   = ""
+        $readmeArchNote   = @"
+
+
+If you pick the wrong one nothing breaks - Windows finds no driver in it
+and says so - so try another.
+"@
         # Where the INF says its two files live, and what tells two copies of
         # xhci98.sys apart. Both were hardcoded in the template as "release\
         # and debug\" and "the debug flag on the Version tab", which a
         # four-directory cut makes false twice over: there are four
         # directories, and the debug flag does not separate x86 from x64 (the
         # audit of 2026-09-16).
-        $readmeDirList    = ("{0}\ and in {1}\" -f $readmeReleaseDir, $readmeDebugDir)
-        $readmeTellApart  = @"
-The one thing that tells them apart is the "debug" flag shown on the Version
-tab of the file's properties.
-"@
         # An x86-only cut carries no 64-bit driver, so its readme may not name
         # a 64-bit target. This is not hypothetical: -UploadSetOnly re-renders
         # the readme of an already-published version, and every version
         # published before 1.1.0.0 is x86-only.
         $readmeArchOs     = ""
-        $readmeArchOsReq  = ""
         $readmeArchFiles  = ""
         $readmeArchInstall = ""
     } else {
-        $readmeReleaseDir = "RELEASE-X86 or RELEASE-X64"
-        $readmeDebugDir   = "DEBUG-X86 or DEBUG-X64"
-        $readmeDirList    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
-        $readmeTellApart  = @"
-Nothing you can see in Explorer tells the two architectures apart: the "debug"
-flag on the Version tab separates RELEASE from DEBUG, and there is no
-equivalent for 32-bit against 64-bit. (The architecture IS in the file, in
-the PE header, but reading it takes a tool.) So the directory a copy came out
-of is what identifies it.
-"@
         $readmeArchNote   = @"
 
 
-There are two of each, one per architecture: the -X86 directories are for
-32-bit Windows and the -X64 ones for 64-bit Windows. If you pick the wrong
-one nothing breaks - Windows finds no driver in it and says so - so try the
-other.
+If you pick the wrong one nothing breaks - Windows finds no driver in it
+and says so - so try another.
 "@
         $readmeArchOs = @"
 
   - Windows XP, Vista and 7, x64, through separate 64-bit drivers, which
     also serve 8, 8.1 and 10 x64 (below). From Vista x64 on they carry a
     test signature only, so Windows must be in test-signing mode, or driver
-    signature enforcement disabled (section 4).
-"@
-        $readmeArchOsReq = @"
-
-                     64-bit: Windows XP x64 (SP2), Windows Vista x64 (SP2)
-                     or Windows 7 x64 (SP1), in
-                     virtual machines; XP x64 and 7 x64 also on one real
-                     machine, a Dell Latitude E7250.
+    signature enforcement disabled (section 2).
 "@
         $readmeArchInstall = @"
 
 
-  64-BIT WINDOWS
-      The same route as the 32-bit edition of the same Windows, pointed at
-      RELEASE-X64\. Windows XP x64 needs nothing more.
+64-BIT WINDOWS: the same steps, pointed at NT-X64\. The 64-bit
+drivers are test-signed, so Vista x64 to 10 x64 run them in test-signing
+mode (on 8, 8.1 and 10 turn Secure Boot off in the firmware setup first):
+in a Command Prompt run as administrator type
 
-      WINDOWS VISTA X64 TO 10 X64: TEST-SIGNING MODE
-      The 64-bit drivers are test-signed, so on these systems they can
-      run in test-signing mode instead of disabling driver signature
-      enforcement with F8 at every start. On 8, 8.1 and 10, first turn
-      Secure Boot off in the computer's firmware setup: test-signing mode
-      cannot be turned on while it is on. Then, once:
+      bcdedit /set testsigning on
 
-        1. Open an elevated Command Prompt: Start, type cmd, right-click
-           it, Run as administrator.
-        2. Type:   bcdedit /set testsigning on
-           This is a boot setting of the current Windows entry, so it stays
-           on for every start until it is turned off; no F8 is needed.
-        3. Restart. "Test Mode" shows on the desktop while it is on:
-           at the bottom right on 7 and later, with the version and build,
-           and in the corners on Vista.
-        4. Install the driver as above. Windows still says it cannot
-           verify the publisher; choose "Install this driver software
-           anyway". Afterwards the Driver tab says "Not digitally
-           signed". Both are expected: the driver is test-signed, not
-           signed by Microsoft.
-
-      To check: bcdedit /enum {current} shows "testsigning Yes".
-      To turn it off: bcdedit /set testsigning off, and restart. The
-      driver then needs F8 again, or it does not load and the controller
-      shows Code 39 on Vista, Code 52 on 7.
-
-      - With BitLocker on the system drive, suspend BitLocker before
-        changing the boot setting, or the next start asks for the
-        recovery key.
-      - This is not Microsoft signing: the certificate is this project's
-        own test certificate, which no Windows trusts by itself.
-      - The X64 directories carry xhci98-test.cer, its public half.
-        Importing it is not needed: test-signing mode works without it,
-        and it does not remove the install prompt either. It is not
-        recommended.
-      - Each INF of an X64 directory has a catalog beside it (xhci98.cat
-        and the others), signed with the same certificate. Windows 8, 8.1
-        and 10 x64 install no driver package without one in test-signing
-        mode; keep the .cat files with the INFs.
-      - F8 -> Disable Driver Signature Enforcement still works as before,
-        for one start, without test mode.
-      - 32-bit Vista and 7, and XP x64, need neither. 32-bit 8, 8.1 and
-        10 need Secure Boot off, and no test-signing mode.
+and restart; "Test Mode" then shows on the desktop. Windows still says it
+cannot verify the publisher: choose "Install this driver software anyway".
+To check: bcdedit /enum {current} shows "testsigning Yes". Keep it on while
+the Thunderbolt 3 / USB4 driver is installed. With BitLocker on the system
+drive, suspend it before changing the boot setting. This is not Microsoft
+signing: the certificate is this project's own test certificate
+(xhci98-test.cer, beside the drivers; you need not import it). F8, Disable
+Driver Signature Enforcement, also works for one start.
 "@
         $readmeArchFiles = @"
 
-  WINDOWS XP x64  Nothing to do either: both come from Driver Cache\amd64.
-                  The machine tried (a virtual one, which had never had a
-                  USB controller) asked for no file.
+  XP X64          Nothing to do either: both come from Driver
+                  Cache\amd64.
 "@
     }
 
@@ -5086,17 +5292,21 @@ controllers, which older Windows cannot use. This package drives them on:
   - Windows 98 SE, ME, 2000 SP4, XP, Vista and 7, 32-bit{ARCHOS}
   - Windows 8, 8.1 and 10, for the Thunderbolt 3 / USB4 connection
     manager: Windows' own USB 3 driver stays there unless you tick this
-    package's USB drivers. Secure Boot must be off (section 4).
+    package's USB drivers. Secure Boot must be off (section 2).
 
-xhci98.sys is a whole USB host controller driver. It runs the controller,
-the root hub, every hub behind it and the splitting of composite devices
-itself, and Windows' own drivers for keyboards, mice, storage, audio and
-network adapters sit on top of it unchanged. It drives SuperSpeed (USB 3.x)
-devices and hubs as well as High, Full and Low Speed ones. The second driver
-beside it, xhciuas.sys, runs UAS (USB Attached SCSI) storage, which none of
-these systems has a driver of its own for. A third, xhcicm.sys, is the
-Thunderbolt 3 and USB4 connection manager, and the bundled Stor98 drives an
-NVMe drive behind a Thunderbolt or USB4 port (section 8).
+xhci98.sys is a whole USB host controller driver: it runs the controller,
+the root hub, every hub and the splitting of composite devices itself, and
+Windows' own drivers for keyboards, mice, storage, audio and network
+adapters sit on top of it unchanged. xhciuas.sys runs UAS (USB Attached
+SCSI) storage, xhcicm.sys is the Thunderbolt 3 and USB4 connection manager,
+and the bundled Stor98 drives an NVMe drive behind a Thunderbolt or USB4
+port.
+
+This file is the short guide. The full release notes - each system's
+standing, every registry setting, every file and every known limitation -
+are online:
+
+      https://github.com/yeokm1/xhci98/blob/main/docs/using/release-notes.md
 
 
 THIS DOWNLOAD
@@ -5105,1690 +5315,147 @@ THIS DOWNLOAD
 {DOWNLOAD}
 
 
-ISSUE REPORTING
-------------------------------------------------------------------------------
-
-This is a hobby driver for operating systems that left support two decades
-ago, it has run on a small number of machines, and BUGS ARE NOT UNEXPECTED.
-
-Please report what you find, on the project's GitHub page:
-
-      https://github.com/yeokm1/xhci98/issues
-
-The form there asks for what a report needs.
-
-
 CONTENTS OF THIS FILE
 ------------------------------------------------------------------------------
 
-  1. Check the machine first (optional, but recommended)
-  2. What you need
+  1. What is new in {VERSION}
+  2. Install
   3. The files Windows supplies, and USB storage on Windows 98 SE
-  4. Install
-  5. Using it
-  6. If something goes wrong
-  7. Known limitations
-  8. What is in this directory
-  9. Registry settings
- 10. Release history
+  4. Reporting a problem
+  5. What is in this directory
+  6. Earlier releases
 
 
 ==============================================================================
- 1. CHECK THE MACHINE FIRST        (optional, but recommended)
+ 1. WHAT IS NEW IN {VERSION}
 ==============================================================================
 
-You can skip to step 2 and simply try the driver. Nothing here is required,
-and a machine that cannot run it fails visibly rather than dangerously.
-
-It is recommended because not every xHCI controller can be driven, and ONE OF
-THE WAYS IT CAN FAIL CANNOT BE FIXED IN SOFTWARE. Finding that out in thirty
-seconds is cheaper than finding it out after installing an operating system.
-
-The checker is in the TOOLS\XHCIQUAL\ subdirectory. Copy XHCIQUAL.EXE to a DOS
-boot disk, and run ONE command:
-
-      XHCIQUAL
-
-That is it - no arguments. It is read-only: it takes ownership of nothing and
-writes no PCI configuration register. It prints one of four verdicts:
-
-  LOOKS QUALIFIED   nothing a read-only pass can see disqualifies this
-                    machine. Go ahead and install.
-
-  LOOKS QUALIFIED WITH CAVEATS
-                    the same, but the controller has no interrupt pin. The
-                    driver reads its events on a timer instead (polling),
-                    or on Vista and 7 may take a message-signalled
-                    interrupt; the line says whether the controller offers
-                    one. Go ahead and install.
-
-  DISQUALIFIED      something it can see rules the machine out: no xHCI
-                    controller, the controller's memory window is unusable
-                    or sits above 4 GB, or there are no USB 2.0 ports.
-
-  CANNOT SAY        something it is not allowed to change is in the way -
-                    the controller is powered down, or its memory access is
-                    switched off. Check the BIOS and try again.
-
-The tool takes options too, and you need none of them to answer the question
-above. The whole command line is below so that a log someone asks you for can
-be produced without guesswork; TOOLS\XHCIQUAL\readme.txt carries the same list
-with the safety notes spelled out.
-
-      XHCIQUAL                          the read-only quick scan, one screen
-      XHCIQUAL [xhci|ehci|ohci|all] [options]
-      XHCIQUAL --scan TYPE [--scan TYPE ...] [options]
-      XHCIQUAL --help
-
-  Options may be written in any order, before or after a family word.
-
-  WHICH CONTROLLERS IT LOOKS AT. With no family word it looks at all three.
-  The driver only cares about xHCI; the other two are there because a
-  machine's other controllers are part of the picture when something does
-  not add up.
-
-      xhci | ehci | ohci     one family only
-      all                    all three - the default
-      --xhci --ehci --ohci   the same three selectors, written as options
-      --scan TYPE            the same again; repeat it to combine families
-
-  READ-ONLY MODES - these change nothing on the machine.
-
-      --quick           the no-argument quick scan, asked for explicitly
-      --probe-only      read-only discovery, fuller than --quick. It reads
-                        the controller's memory window only if the firmware
-                        has already switched it on, and switches nothing on
-                        itself
-      --no-active       another name for --probe-only
-      --gsi N           (also --gsi=N, N decimal 0-255) compare an Intel
-                        chipset's interrupt routing against N, the IRQ
-                        Device Manager shows for the controller under the
-                        system in question. Accepted only beside --quick or
-                        --probe-only; alone it is a usage error
-
-  MODIFIERS - these say what to do with the report, not what to run.
-  ON THEIR OWN THEY DO NOT MAKE THE RUN READ-ONLY. Any argument at all
-  turns off the no-argument quick scan, so XHCIQUAL --log FILE performs
-  the FULL ACTIVE run below. Pair one with --quick or --probe-only when a
-  read-only run is what you want.
-
-      --no-page         do not stop at the end of each screenful
-      --serial          mirror the output to COM1, 115200 8N1
-      --log [FILE]      also write the report to a file, default
-                        XHCIQUAL.LOG. A family word after --log is read as a
-                        selector, so name the file explicitly if you pass
-                        both
-      --log-stamp       write the report to a NEW file in the current
-                        directory named from the DOS date and time,
-                        mDDhhmmS.LOG; it never overwrites a file, and not
-                        with --log. QUALREP.BAT uses it (section 6)
-      --done-flag FILE  create FILE only if the run finishes normally, so a
-                        batch file can tell a crash apart from a bad verdict
-      --no-sysinfo      do not read the machine's description (SMBIOS,
-                        processor, memory, DOS version) for the report's
-                        header; the header then says it was skipped
-      --help, -h, /?    a longer help text, printed by the program itself
-
-  ACTIVE OPTIONS - THESE TAKE OVER THE CONTROLLER, reset it, and reset its
-  ports. They are development instrumentation; installing this driver never
-  requires them, and TOOLS\XHCIQUAL\readme.txt carries the precautions they
-  need.
-
-      --full            the full active run, across all three families
-      --poll-only       active bring-up with no interrupt handler installed.
-                        The mildest of these, and the one to try first
-      --irq-selftest    xHCI only: an isolated, one-shot interrupt test
-      --set-intel-ports try to route the Intel USB2 ports to xHCI and read
-                        the result back. This one writes PCI configuration
-                        space
-      --no-wait         do not wait 15 seconds for a device to be plugged in
-      --no-devid        skip the xHCI device identification step
-
-FOR A BUG REPORT, run TOOLS\XHCIQUAL\QUALREP.BAT from its own directory under
-real DOS: the read-only probe, saved to a new .LOG named from the date and
-time. Attach the .LOG it names (section 6).
-
-IF YOU ARE ASKED FOR LOGS, run these two in order. The first reads everything
-the read-only path can see, writes nothing to the machine, and leaves
-PROBE.LOG beside it:
-
-      XHCIQUAL --probe-only --log PROBE.LOG
-
-If that does not crash the machine, continue with the full run, which leaves
-FULL.LOG. THIS ONE TAKES OVER THE CONTROLLER, resets it and resets its ports;
-use a PS/2 keyboard, and do not write the log to a drive on the controller
-being tested:
-
-      XHCIQUAL --log FULL.LOG
-
-Send FULL.LOG if the full run finished; only if it did not, send PROBE.LOG.
-The report's header names the machine it ran on - make, model and BIOS,
-processor, memory and DOS version - and never a serial number, a UUID or an
-asset tag, so a log can be posted publicly as it is.
-
-It returns 0 if the active tests passed, 1 if the machine is not qualified or
-the run was read-only - which cannot pass tests it does not run, so 1 is the
-normal result of every read-only command above - 2 if the command line was
-wrong or no controller of that kind is here, and 3 if the full run passed a
-controller only WITH CAVEATS (no working interrupt, so the driver polls
-it), and 4 if --log-stamp could not name or create its log, before reading
-anything. The verdict on screen is what to read; those codes are for batch
-files.
-
->> IT MUST BE RUN FROM REAL DOS, NOT A DOS WINDOW INSIDE WINDOWS. <<
-
-   Boot the machine to a plain MS-DOS or FreeDOS floppy, CD or USB key. Do
-   not run it from a "MS-DOS Prompt" in Windows 98, and not from CMD.EXE on
-   Windows 2000 or later. The tool talks to the controller directly and needs
-   memory it can address one-to-one, which a DOS box inside Windows does not
-   give it - there, the answers would be wrong or it would simply fail.
-   For the same reason, boot without EMM386 or any other memory manager.
-
-   HIMEM.SYS IS THE EXCEPTION, AND ON SOME MACHINES IT IS NEEDED. It is not
-   a memory manager in the sense above - it does not put the processor into
-   the mode that breaks this tool - and XHCIQUAL runs in 32-bit mode, so it
-   needs the extended memory HIMEM provides. If the program will not run at
-   all on a boot that loads nothing, add this one line to CONFIG.SYS and try
-   again:
-
-         DEVICE=C:\WINDOWS\HIMEM.SYS /M:1 /V
-
-   Use whatever path HIMEM.SYS is actually at - C:\WINDOWS\ on a Windows 98
-   machine, the root of the disk on a boot floppy. The /V makes it say at
-   boot whether it loaded.
-
-   Two more things, only if you go on to run the deeper tests listed in
-   TOOLS\XHCIQUAL\readme.txt: use a PS/2 keyboard, because a USB keyboard on
-   the controller being tested can stop responding mid-run; and do not boot
-   or write a log through that same controller.
-
-A controller reporting no interrupt pin is still driven: the driver reads
-its events on a timer instead (polling, XhciInterruptMode in section 9),
-and on Windows Vista and 7 it may use a message-signalled interrupt (MSI)
-in place of the pin. A controller whose interrupt line the driver sees
-raised and never delivered is polled the same way.
-
-The checker's last criterion, "no USB 2.0 ports", is stricter than the
-driver: this driver accepts a controller with no USB 2.0 port at all,
-built from the specification; no such controller has been tested.
+{HISTORY}
 
 
 ==============================================================================
- 2. WHAT YOU NEED
+ 2. INSTALL
 ==============================================================================
 
-  Operating system   Windows 98 SE (4.10.2222) or Windows 2000 SP4; Windows
-                     ME, 32-bit Windows XP (SP3), 32-bit Windows Vista (SP2)
-                     and 32-bit Windows 7 (SP1) in virtual machines only.
-                     Windows 2000 has never run on real hardware.{ARCHOSREQ}
-                     Windows 8, 8.1 and 10, for Thunderbolt 3 and USB4,
-                     in virtual machines only.
+Unzip the WHOLE download first.
 
-  On Windows 98 SE   Nothing for the controller, hubs, mice, keyboards and
-                     audio: no USB 2.0 stack is needed. FOR USB STORAGE,
-                     NUSB 3.3 or 3.6, or at least its mass-storage part
-                     (section 3). SweetLow's USB 2.0 stack alone has no
-                     storage part.
+SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Double-click it in
+the top directory: on Windows 2000 and XP sign in as an administrator, on
+Vista and later Windows asks once for an administrator's approval. Go
+through its pages - Welcome, Components, the free and non-free USB driver
+pages when this download carries them, and Summary; the driver's options
+are under Settings. Nothing changes before you click Install. Answer
+Windows' unsigned-driver questions, do any steps its last page lists for
+you, and restart when it offers.
 
-  On Windows ME      Nothing to install: no USB 2.0 stack is needed, and
-                     SweetLow's, if already there, also works. Windows ME
-                     carries its own USB storage files. DO NOT install
-                     NUSB on Windows ME: it is a Windows 98 SE package.
+  - Windows 2000 to 7: it installs or updates the driver of every device
+    present and stages the package for devices plugged in later.
+  - Windows 98 SE and ME: it copies the package to the install directory
+    (C:\XHCI98 unless you choose another) and installs each device through
+    Windows' own installer. A USB 3 controller added later may ask once
+    for the "xhci98 xHCI Host Controller Disk": give it that directory.
+  - Windows 8, 8.1 and 10: it installs the Thunderbolt 3 / USB4 support,
+    and this package's USB drivers only if you tick them. Secure Boot must
+    be off, or it refuses before changing anything.
 
-  On Windows 2000,   Nothing to install. DO NOT install NUSB on these.
-  XP, Vista and 7
+It also installs the xHCI98 USB Tree (XHCITR), which shows every USB and
+Thunderbolt or USB4 device and removes a Thunderbolt or USB4 device
+safely from its icon by the clock. To uninstall, use Remove in
+Add/Remove Programs (Programs and Features on Vista and later). Every run
+adds to XHCIINST.LOG at the root of the system drive.
 
-  On Windows 8,      Secure Boot off in the computer's firmware setup, and
-  8.1 and 10         on x64 test-signing mode as well (section 4). DO NOT
-                     install NUSB on these.
+BY HAND, without SETUP.EXE: in Device Manager find the unrecognised xHCI
+controller (a yellow mark, usually under "Other devices"), then
+Properties, Driver, Update Driver, Have Disk, and point it at the folder
+for your Windows:
 
-  Controller         xHCI, PCI class code 0C0330, and a memory window
-                     below 4 GB. No interrupt pin is needed: a controller
-                     without one is polled (section 9, XhciInterruptMode).
+{RELEASEDIR}
+
+Point Windows at that folder, never at a loose .sys file.{ARCHNOTE}
+
+A UAS disk or an external hub asks for its driver when plugged in: give
+it the same folder; a Thunderbolt or USB4 controller its CM folder. The
+release notes' "Installing" sections have every system's steps, and
+INTEGRATE.TXT the F6 disk of Windows 2000 and XP Setup and how to add
+the drivers to a Windows setup with nLite, NTLite or DISM.{ARCHINSTALL}
 
 
 ==============================================================================
  3. THE FILES WINDOWS SUPPLIES, AND USB STORAGE ON WINDOWS 98 SE
 ==============================================================================
 
-The package's own files are in:
+Two files the driver depends on, usbd.sys and usbui.dll, are Windows' own
+and are not in this download. The install asks Windows to copy them from
+its own installation source, each only if it is absent:
 
-      {DIRLIST}
+  WINDOWS 98 SE   Have the Windows 98 SE CD at hand (or its CABs on the
+  AND ME          disk): Windows may show "Insert Disk". Give it the CD's
+                  WIN98 folder (the Windows ME CD on ME).
+  WINDOWS 2000    Nothing to do: both come from the driver cache, with no
+  AND XP          prompt.{ARCHFILES}
+  VISTA TO 10     Nothing to do: every installation has both.
 
-  xhci98.inf, xhci98.sys     the USB host controller driver
-  xhciuas.inf, xhciuas.sys   the UAS storage driver
-  txtsetup.oem               the driver description Windows 2000 and XP
-                             Setup read when F6 is pressed (section 4)
-  xhcihlpr.sys               in the -X86 directories only: the helper that
-                             gives 32-bit Vista and 7 a message-signalled
-                             interrupt, and 32-bit Windows 2000, XP, Vista
-                             and 7 a finer clock while the controller is
-                             polled. The install puts it on those four
-                             systems and no other
-  xhcicm.inf, xhcicm.sys     the Thunderbolt 3 / USB4 connection manager,
-                             with xhcicmf.inf, its tunnel-port filter's INF
-                             (in nt\ in the -X86 directories)
-
-Section 8 lists every file, Stor98's among them, and there is nothing to
-complete. The Intel port switchover's scripts (section 9,
-XhciIntelPortSwitch) are not in these directories: they are in the
-TOOLS\PORTSW directory, one copy for all of them.
-
-Two files the driver depends on are NOT in the package, because they are
-Windows' own, unmodified, and this download does not carry them:
-
-  usbd.sys     Helper routines the drivers above this one call. Without it
-               the USB devices' own drivers do not load.
-
-  usbui.dll    The USB property pages in Device Manager. Only cosmetic.
-
-UP TO WINDOWS XP, WINDOWS ONLY INSTALLS ITS USB FILES WHEN SETUP FINDS A USB
-CONTROLLER IT RECOGNISES, and on an xHCI-only machine it never does. The
-install in step 4 therefore asks Windows to copy them from its own
-installation source, each only if it is absent.
-
-  WINDOWS 98 SE   HAVE THE WINDOWS 98 SE INSTALLATION CD AT HAND. Unless the
-                  Windows CABs are on the hard disk (C:\WINDOWS\OPTIONS\CABS,
-                  as on OEM and Windows 98 QuickInstall installs), the
-                  install shows "Insert Disk" asking for the Windows 98
-                  Second Edition CD-ROM: insert it and click OK, and if it
-                  then asks where to copy from, give it the CD's WIN98
-                  folder. It is asking for usbd.sys, not for anything of
-                  this driver's. The first mouse or keyboard can ask again,
-                  for Windows' own hidclass.sys; give it the same.
-
-  WINDOWS ME      The same, with the Windows ME CD, or the CABs its Setup
-                  left on the hard disk.
-
-  WINDOWS 2000    Nothing to do: both come from the driver cache every
-  AND XP          installation has, with no prompt.{ARCHFILES}
-
-  WINDOWS VISTA   Nothing to do: every installation already has both.
-  TO 10
-
-USB STORAGE ON WINDOWS 98 SE NEEDS NUSB'S MASS-STORAGE PART
-...........................................................
-
-Windows 98 SE has no USB storage driver, and a drive letter there comes from
-a layer this package does not replace. It needs seven files, which NUSB 3.3
-and NUSB 3.6 install:
-
-      USBSTOR.INF, USBSTOR.SYS     the USB storage driver
-      USBAUTH.SYS, USBU2A.SYS      two filters USBSTOR.INF installs for a
-                                   few card readers and older devices
-      USBNTMAP.INF, USBNTMAP.SYS   what gives a USB disk a drive letter
-      USBMPHLP.PDR                 the mapping port driver
+USB storage on Windows 98 SE, UAS disks included, needs seven files that
+NUSB 3.3 and NUSB 3.6 install (USBSTOR.INF and .SYS, USBAUTH.SYS,
+USBU2A.SYS, USBNTMAP.INF and .SYS, USBMPHLP.PDR). SETUP.EXE offers them
+when NUSB is not installed.
 
 {MSSTORAGE}
 
-  WITHOUT THEM a USB stick has no driver at all ("Unknown Device", Code 28),
-  and a UAS disk installs and then sits at Code 2 ("The NTKERN.VXD device
-  loader(s) for this device could not load the device driver"). A restart
-  does not change that.
-
-  WITH NUSB 3.3 OR 3.6 INSTALLED, storage works.
-
-  THE SEVEN FILES CAN ALSO BE INSTALLED ON THEIR OWN, without the rest of
-  NUSB: point the Add New Hardware Wizard, or Update Driver on the device,
-  at a folder holding them. FIRST COPY USBNTMAP.INF INTO C:\WINDOWS\INF,
-  BEFORE THE FIRST USB DISK IS PLUGGED IN. The wizard takes USBSTOR.INF
-  from the folder but not USBNTMAP.INF, and on a stock Windows 98 SE the
-  disk is then taken by Windows' own NTMAP.INF, which copies NTMAPHLP.PDR
-  from the Windows CD; Windows stops with "Invalid VxD dynamic link call
-  from NTMAPHLP" and hangs, even with all seven in the folder. The
-  installer's storage row places and removes the two together, and says
-  so if it finds USBSTOR.INF left in the INF folder without USBNTMAP.INF.
-
-  With USBNTMAP.INF in C:\WINDOWS\INF first, the storage devices tried,
-  USB sticks and UAS disks, worked with no extra step. On a Windows 98 SE
-  that still held
-  NUSB's other files (IOS.VXD, DISKTSD.VXD, NTMAP.SYS), a disk installed
-  before USBNTMAP.INF was seen went to Windows' generic "Disk drive" with
-  no drive letter instead. Then:
-
-    1. Device Manager -> Disk drives -> "Disk drive" -> Driver -> Update
-       Driver, pointed at the same folder. It installs "USB Disk".
-    2. Unplug the device and plug it back in.
-
-  If storage does not work, install NUSB 3.3 or 3.6.
-
-On Windows ME, Windows' own storage files serve USB sticks: they are copied
-from the Windows ME CABs when the first stick installs. UAS disks need the
-same files: a UAS disk plugged in before any ordinary stick shows Code 2.
-Plug in any ordinary USB stick once, then unplug the UAS disk and plug it
-back in.
+Without them a USB stick has no driver (Code 28) and a UAS disk sits at
+Code 2. On Windows ME, Windows' own storage files serve USB sticks: plug an
+ordinary stick in once, so ME copies them, before a UAS disk.
 
 
 ==============================================================================
- 4. INSTALL
+ 4. REPORTING A PROBLEM
 ==============================================================================
 
-INSTALL FROM THE RELEASE DIRECTORY:
-
-      {RELEASEDIR}\
-
-This package carries BOTH builds side by side, RELEASE and DEBUG, each a
-complete set of files with the same names, so the directory you point
-Windows at is what decides which drivers you get. RELEASE is the one you
-want. DEBUG ({DEBUGDIR}\) is the same drivers built
-so that a crash on them can be traced further back. It records nothing more
-than RELEASE does, and it is there only for troubleshooting a machine that
-has already gone wrong. It prints nothing as it runs. Section 8 describes
-both, and nothing about a copied file says which one it is - so point at a
-directory, never at a loose .sys file.{ARCHNOTE}
-
-SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Device Manager by
-hand (BY HAND, below) still works and remains supported.
-
-THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To
-uninstall, use Remove in Add/Remove Programs (Programs and Features on
-Vista and later).
-
-Unzip the WHOLE package first, then double-click SETUP.EXE in its top
-directory. On Windows 2000 and XP sign in as an administrator; on Vista and
-later Windows asks once for an administrator's approval. Its window has
-four pages - Welcome (what it found), Components, Other USB drivers and
-Summary - with a few of the driver's options (section 9) in its Settings
-dialog. Nothing changes before you click Install, and then it:
-
-  - on Windows 2000, XP, XP x64, Vista and 7 installs or updates every
-    driver of the package on the devices present - the controller, its root
-    hub and hubs, UAS disks, a Thunderbolt or USB4 controller - and stages
-    the rest for devices plugged in later. It handles the update traps
-    below (Windows 2000's Have Disk, the root hub, Vista and 7's same
-    DriverVer);
-  - on Windows 8, 8.1 and 10 installs the Thunderbolt 3 / USB4 connection
-    manager, and this package's USB drivers only if you tick them (Windows'
-    own USB 3 driver stays otherwise). On x64 it installs the connection
-    manager only in test-signing mode, and Windows makes it a boot driver:
-    keep test-signing mode on while it is installed, or Windows stops in
-    Automatic Repair;
-  - on Windows 98 SE and ME copies the package to the install directory
-    you choose (C:\XHCI98 unless you choose another), where the hardware
-    wizards search by themselves, and installs each device's driver
-    through Windows' own device installer; a device it cannot install gets
-    its Device Manager steps on a page of their own, which you can save.
-    It asks you once in a run to finish any hardware wizard already open,
-    and again only when it finds one open. On 98 SE it also offers NUSB
-    3.3's storage files (section 3) unless NUSB is installed. A USB 3
-    controller added after the install may ask once for the "xhci98 xHCI
-    Host Controller Disk": give it the install directory.
-
-It ends by offering to restart Windows. Add/Remove Programs (Programs and
-Features on Vista and later, in Control Panel) lists the package as "xHCI98
-USB 3 drivers" ("xHCI98 Thunderbolt 3 / USB4 connection manager" when that
-is all it installed); Remove there takes every driver of the package away
-again (it warns first: on a machine whose only USB controller is xHCI,
-the USB keyboard and mouse stop working).
-
-Every run adds to XHCIINST.LOG at the root of the system drive; attach it
-to a bug report about an install. For scripted installs,
-TOOLS\XHCIINST\readme.txt is the command-line reference.
-
-SETUP.EXE also installs the xHCI98 USB Tree (XHCITR) in the install
-directory you choose (C:\XHCI98 unless you choose another) and starts it
-at each login. Its window shows
-every USB controller, hub and device, and the Thunderbolt and USB4 devices
-with what is connected behind them; its icon in the notification area of
-the taskbar removes a Thunderbolt or USB4 device safely, as Windows' own
-Safely Remove Hardware icon does for other devices. It shows a "can run
-faster" balloon for a device on a slower port or behind a slower hub,
-turns its icon red while something needs you (a slow device, a device
-waiting for approval, a controller that stopped answering), and on
-Windows 2000 and later warns after a Thunderbolt or USB4 device is
-removed unexpectedly. It needs no
-administrator to run. The installer's Components page can leave out its
-start at login; the uninstall removes it with the drivers.
-TOOLS\XHCITR\readme.txt has the rest.
-
-On Windows XP, XP x64 and 98 SE, updating from 2.3.x or earlier needs a
-keyboard and mouse that do not go through this driver, as below; the
-installer says so before it starts.
-
-BY HAND, without SETUP.EXE:
-Put the whole unzipped package somewhere the machine can read - a floppy, a
-CD, a shared folder - then:
-
-  WINDOWS 98 SE
-      If you want USB storage, install NUSB 3.3 or 3.6 first (section 3).
-      Then open Device Manager and find the unrecognised xHCI controller:
-      it sits unclaimed with a yellow mark, usually under "Other devices".
-      Then
-          Properties -> Driver -> Update Driver -> Specify a location
-      and point it at the RELEASE-X86\ directory. "Insert Disk" may ask for
-      the Windows 98 Second Edition CD-ROM (section 3). Restart when asked.
-
-      (If Windows finds the controller for you first, the Add New Hardware
-      Wizard asks the same question - give it the same directory.)
-
-  WINDOWS ME
-      No USB 2.0 stack is needed (section 2). The same Device Manager
-      route as Windows 98 SE, pointed at the RELEASE-X86\ directory;
-      "Insert Disk" may ask for the Windows ME CD (section 3). Restart when
-      asked. Windows ME has only been run in a virtual machine.
-
-  WINDOWS 2000 SP4 AND WINDOWS XP (32-BIT)
-      Open Device Manager and find the unrecognised xHCI controller, then
-          Properties -> Driver -> Update Driver -> Have Disk
-      and point it at the RELEASE-X86\ directory. On Windows XP choose
-      "Continue Anyway" at the unsigned-driver warning. Nothing else is
-      asked for. Windows XP has only been run in a virtual machine.
-
-  WINDOWS VISTA AND WINDOWS 7 (32-BIT)
-      Open Device Manager and find the unrecognised xHCI controller, then
-          Update Driver Software -> Browse my computer for driver software
-      and point it at the RELEASE-X86\ directory. If Windows warns that it
-      cannot verify the publisher, install the driver anyway. Use Device
-      Manager, not a right-click on the INF. RESTART WHEN ASKED: the install
-      and every update ask for one, for xhcihlpr.sys, and after a first
-      install the controller does not start until then (Device Manager
-      shows code 28 on 7, code 1 on Vista meanwhile). A reinstall (the
-      controller removed in Device Manager and found again) needs the
-      restart too, even if Windows does not ask: 32-bit Vista showed only
-      an "installed successfully" balloon, and the controller stayed at
-      code 1 until a restart. Both have only been run in virtual
-      machines.{ARCHINSTALL}
-
-It installs as "xHCI98 USB 3 Controller", with "xHCI98 USB 3 Root Hub"
-underneath it; SETUP.EXE adds the controller's maker and product, as in
-"xHCI98 USB 3 Controller (Renesas uPD720202)", and a hand install does
-not. Neither should carry a warning mark.
-
-THE UAS DRIVER installs the first time a UAS disk is plugged in. On
-Windows 98 SE, ME, 2000, XP and Vista a New Hardware wizard asks for its
-driver: point it at the same directory. Vista's wizard names the disk by
-its own product name; "xHCI98 USB Attached SCSI Storage" is its name once
-installed. Windows 7 shows no wizard: it searches Windows Update, then
-says the device's driver was not installed. Install it from Device
-Manager instead, on the UAS disk's entry, which carries a warning mark:
-    Update Driver Software -> Browse my computer for driver software
-and point it at the same directory. No restart is needed.
-
-WINDOWS 2000 OR XP SETUP, OR THE RECOVERY CONSOLE, ON AN xHCI-ONLY MACHINE
-..........................................................................
-
-When the keyboard or the install medium is on the xHCI controller, Setup
-can load this driver at its F6 prompt. Copy the files of RELEASE-X86\ (or
-RELEASE-X64\ for Windows XP x64) to the root of a floppy disk - F6 reads
-txtsetup.oem, xhci98.sys and xhci98.inf, and from RELEASE-X86\ also
-xhcihlpr.sys, which Setup copies for later and does not load. Start
-Setup, press F6 when "Press F6 if you need to install a third party SCSI
-or RAID driver" shows, press S at the next screen, insert the floppy, and
-pick "xHCI98 USB 3 Controller (32-bit Windows 2000/XP)" (on XP x64,
-the x64 entry). Setup then uses its own keyboard, mouse and USB storage
-drivers above it.
-
-INSTALLING WINDOWS 2000: use the second entry, with three files from your
-CD. Before Setup, copy USBD.SY_, HIDCLASS.SY_ and HIDPARSE.SY_ from the
-I386 folder of the Windows 2000 CD you install from to the root of the
-same floppy, as they are (do not expand or rename them; this package does
-not carry them). At the F6 list press the Down arrow to "xHCI98 USB 3
-Controller (32-bit Windows 2000, files from CD)" and press Enter.
-Text mode then copies those files to the new system as well, so a USB
-keyboard, mouse or stick used during Setup works when it first starts.
-If the files are not on the floppy, Setup stops while copying files with
-"Insert the disk labeled: USBD.SY_ HIDCLASS.SY_ HIDPARSE.SY_ from the
-32-bit Windows 2000 CD into drive A:" - put a floppy holding them in A:
-and press Enter, or press F3 to quit. That entry is for Windows 2000
-only; Windows XP takes the first. It leaves three idle service entries,
-usbd, hidclass and hidparse, set to start on demand.
-
-The same floppy serves the RECOVERY CONSOLE of Windows 2000 and XP: press
-F6 as for an install, then R at Setup's Welcome screen (on Windows 2000,
-then C for the console). The USB keyboard logs in and types commands. The
-console runs in text mode throughout, so the Windows XP restriction below
-does not touch it.
-
-  - Pressing F6 itself needs the firmware's own USB keyboard support.
-  - The floppy must be drive A: as the firmware sees it.
-  - A USB disk that supports ONLY UAS is not usable during Setup. One
-    that also supports the older Bulk-Only mode, as most USB 3
-    enclosures, SSDs and sticks do, runs as Bulk-Only during Setup and
-    works, as do Bulk-Only flash sticks.
-  - Installing Windows ONTO a USB disk is not supported.
-  - A USB DRIVE PRESENT AT THE PARTITION SCREEN TAKES THE LETTER C:.
-    Unplug the USB drives you do not need, or Windows installs to the next
-    letter.
-  - On Windows 2000, plug the USB keyboard and the USB stick in BEFORE
-    Setup starts. Its text-mode Setup uses only the USB devices present
-    when the driver first reports them; one plugged in later stays unused
-    there. The driver waits up to 5 seconds for them (section 9,
-    XhciFirstEnumWaitMs).
-  - Later in Setup, Windows installs the driver again from xhci98.inf and
-    may ask for the floppy or the Windows CD.
-  - INSTALLING WINDOWS XP NEEDS A PS/2 KEYBOARD, OR A LAPTOP'S BUILT-IN
-    ONE, LATER IN SETUP. Setup copies Windows' own HID and USB helper files
-    only with Microsoft's own USB controller drivers, so the USB keyboard
-    and mouse do nothing until the "Installing Devices" step installs them
-    from the CD - and that step first asks about this unsigned driver,
-    default No. A machine whose only keyboard is USB cannot answer, and
-    Setup stops. A laptop's built-in keyboard (connected inside as PS/2) or
-    any PS/2 keyboard answers it; afterwards the USB keyboard and mouse
-    work. This package cannot carry those files. Windows 2000 does not ask.
-  - WINDOWS 2000 WITH THE FIRST ENTRY, "(32-bit Windows 2000/XP)", AND A
-    USB KEYBOARD, MOUSE OR STORAGE DEVICE ON THE xHCI CONTROLLER STOPS
-    AT THE FIRST START OF THE NEW SYSTEM, with STOP c000026c naming
-    hidusb.SYS or usbstor.SYS (error status 0xc0000034). Windows 2000's
-    text-mode Setup copies the drivers for the USB keyboard, mouse and
-    stick it used, but not the Windows files they need, such as
-    usbd.sys, which it copies only with Microsoft's own USB controller
-    drivers. The Windows 2000 entry, with the three files from the CD
-    on the floppy (above), copies them. Seen in virtual machines, and
-    an earlier release's first entry does the same. Text
-    mode and the Recovery Console work with either entry, Windows XP
-    with a USB keyboard and mouse is not affected, and an install with
-    no USB keyboard, mouse or storage device on the controller went on
-    with no stop. This package does not carry those files.
-
-  What has run in virtual machines: text mode with a USB keyboard and a
-  USB stick on Windows 2000 and XP, and the Recovery Console on both,
-  logged in and running commands with the USB keyboard alone; Windows
-  XP and XP x64 installed to the desktop this way; and Windows 2000 SP4
-  with the Windows 2000 entry and the three files, with a USB keyboard
-  and mouse behind a hub and with a USB stick alone, through text mode
-  and GUI-mode Setup to the desktop, and again after a restart. On real
-  hardware: Windows XP x64 Setup started from a USB stick on a Dell
-  Latitude E7250's xHCI controller, with this driver integrated into the
-  install, ran to the desktop on this release's code. Nothing else of
-  this has run on real hardware. A repair install, Windows 2000's
-  Emergency Repair Disk and Windows XP's Automated System Recovery were
-  not tried.
-
-UPDATING FROM AN EARLIER RELEASE
-................................
-
-Run SETUP.EXE over the installed release: it handles the traps below
-itself. By hand, install over it with Update Driver on the controller
-("xHCI98 USB 3 Controller", or by its older name "xHCI98 USB 3.x
-eXtensible Host Controller"), then on the root hub ("xHCI98 USB 3 Root
-Hub", or "xHCI98 USB 3.x Root Hub"), both pointed at the same directory
-as a new install. On 98 SE and ME too, Update Driver replaces
-xhci98.sys. Nothing needs renaming first. (From 2.3.x or
-earlier the controller alone: the root hub is a new one and installs by
-itself - read FROM 2.3.x below first.) As read in virtual machines:
-
-  FROM 2.3.x OR EARLIER, ONCE: EACH ROOT HUB, HUB AND COMPOSITE DEVICE IS
-  FOUND AGAIN AS NEW HARDWARE. From this release they are named under USB\
-  rather than XHCI98\ (there is no XHCI98 bus), and Windows keeps a device
-  entry per name, so each is installed once more under its new name and
-  its old entry stays behind, hidden and inert. The devices beneath them
-  follow: one with a serial number (most USB sticks and disks) keeps its
-  entry and settings; one without (most mice and keyboards) is found again
-  too, and what was kept on its old entry - a hidusbf polling rate, a
-  friendly name, possibly a USB serial adapter's COM number - is not
-  carried over. Apply such settings again afterwards.
-
-  BEFORE UPDATING FROM 2.3.x ON XP, XP X64 OR 98 SE, HAVE A KEYBOARD AND
-  MOUSE THAT DO NOT GO THROUGH THIS DRIVER: PS/2, a laptop's built-in
-  ones, or a USB controller another driver runs. Windows XP and XP x64 ask
-  Found New Hardware and the unsigned-driver question for the new root
-  hub, each hub and each composite device, and until they are answered
-  the USB keyboard and mouse behind the new root hub do nothing. A second
-  controller running this driver does not help: its root hub is new too.
-  On Windows 98 SE the USB keyboard and mouse do nothing while the update
-  wizard's last page is up, so its Finish needs another keyboard or
-  mouse; after the restart the Add New Hardware wizard for a mouse
-  without a serial number, found again, cannot be answered with that
-  mouse. The 98 SE update itself may ask for the Windows CD.
-
-  WINDOWS 98 SE AND ME: CONNECT NO NEW HUB OR COMPOSITE DEVICE BETWEEN
-  THE UPDATE AND THE RESTART. The earlier release still runs until then
-  and would give it an old name.
-
-  THE OLD ENTRIES ARE HARMLESS and nothing needs them removed. They stay.
-  Going back to 2.3.x brings each old entry back with its driver.
-
-  WINDOWS 98 SE AND ME: RESTART AFTERWARDS, ALTHOUGH WINDOWS DOES NOT ASK.
-  The new file waits to replace the old one at the next start, and until
-  then the earlier release keeps running. Under SweetLow's stack the
-  controller showed a problem for a minute or two after Finish; on ME it
-  shows one until the restart, while the devices keep working. From 2.3.x
-  ME asked nothing during the update, and one wizard after the restart,
-  for a USB audio device without a serial number.
-
-  WINDOWS 2000: USE HAVE DISK. Letting Windows search answers that a
-  suitable driver is already installed and keeps the earlier release. Use
-  "Display a list of the known drivers" -> Have Disk, as below. Use Have
-  Disk again for a reinstall: after an uninstall and a scan for hardware
-  changes, Windows 2000 installed the earlier release from the package it
-  still held, since it ignores the dates of unsigned drivers.
-
-  WINDOWS XP, XP X64, AND 64-BIT VISTA AND 7: the update takes effect at
-  once. Windows may still say the device will not work until you
-  restart, and XP then offers a restart: the new driver already runs.
-
-  TWO CONTROLLERS: an update of one makes both run the new driver at once
-  (they share the one file), but the other controller's Driver tab keeps
-  the old version until it is uninstalled and found again (read on XP).
-
-  WINDOWS VISTA AND 7: USE HAVE DISK. Browse my computer with the folder
-  typed in answers that the best driver is already installed and keeps
-  the earlier release. Use Browse my computer for driver software ->
-  "Let me pick from a list of device drivers on my computer" -> Have Disk,
-  pointed at the same directory. (Read on 32-bit Vista and 7.)
-
-  32-BIT WINDOWS VISTA AND 7: RESTART WHEN ASKED. Every update asks for
-  one, for the helper xhcihlpr.sys (above). Until then the earlier release
-  keeps running and Device Manager says the device needs a restart. An
-  update over a release that installed the earlier helper, xhcimsi.sys,
-  also removes it: its file is deleted at once, during the update, and
-  its service is gone after that restart.
-
-  WINDOWS 2000 AND XP: the install and an update copy the helper
-  xhcihlpr.sys and ask for no restart of their own. The controller runs as
-  before; the helper starts at the next restart, and from then a polled
-  controller can ask Windows for a finer clock while it is busy, when
-  XhciPollFineTimer is set to 1 (section 9; off by default). Text-mode
-  Setup through F6 copies the helper from the floppy and does not load
-  it: it arrives with the installed system's own install of the
-  controller.
-
-  REMOVING THE HELPER: uninstalling the controller leaves xhcihlpr, a
-  boot-start service that then loads and idles. Remove it with
-  "sc delete xhcihlpr" on XP, Vista and 7, and on Windows 2000, which has
-  no sc.exe, by deleting the key
-  HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr; then delete
-  System32\Drivers\xhcihlpr.sys after the next restart.
-
-  GOING BACK TO AN OLDER RELEASE ON VISTA OR 7: the controller's request
-  for a message-signalled interrupt stays in its hardware key, and an
-  older driver does not know what to do with one. First uninstall the
-  controller in Device Manager with "Delete the driver software for this
-  device" ticked, or set MSISupported to 0 in its hardware key, under
-  Device Parameters, Interrupt Management,
-  MessageSignaledInterruptProperties. That tick removes only the package
-  in use: older xhci98 packages stay in the driver store, and Windows may
-  install one of them the next time it finds the controller. From an
-  administrator's prompt pnputil -e lists the store; remove each
-  oemNN.inf whose provider is "Yeo Kheng Meng" and class "Universal Serial
-  Bus controllers" with pnputil -d oemNN.inf. The downgrade itself has not
-  been read.
-
-  THE ROOT HUB'S DRIVER TAB STILL SHOWS THE EARLIER VERSION (on 98 SE and
-  ME, its date), although it runs the new file. To change it, run Update
-  Driver on the root hub ("xHCI98 USB 3 Root Hub", or by its older name
-  "xHCI98 USB 3.x Root Hub") too: on Vista and 7, "Let me pick
-  from a list of device drivers on my computer" and the new entry;
-  elsewhere Have Disk. (Not from 2.3.x or earlier: there the root hub is
-  new and installed from this release.)
-
-  From the first 2.x release only, each device is then found once more as
-  new hardware, exactly once: a stick under its serial number, the other
-  devices under a new id. On the NT systems this needs no answer; on
-  Windows 98 SE the wizard runs for each and may ask for the CD for
-  hidclass.sys. Let Windows install them. A hidusbf setting on such a
-  device has to be applied again (section 5).
-
-
-==============================================================================
- 5. USING IT
-==============================================================================
-
-Plug devices in and they are found and installed the usual way. Keyboards,
-mice, flash drives, USB disks, USB Ethernet adapters, audio devices and hubs
-all work through the system's own drivers.
-
-Things specific to this driver, worth knowing in advance:
-
-  * USB DISKS GET UAS WHERE THEY OFFER IT. A disk that can do UAS gets
-    xhciuas.sys; anything else gets Windows' own Bulk-Only storage driver,
-    at whatever speed it connects. A disk that offers both can be kept on
-    Bulk-Only (XhciForceBulkOnly, section 9).
-
-  * DEVICE MANAGER SHOWS A SUPERSPEED DEVICE AS HIGH SPEED AT MOST. The
-    interface it reads on these systems predates SuperSpeed, so that display
-    says nothing about the real link. XHCITR's report (section 6) shows the
-    speed the driver actually uses.
-
-  * HUBS HAVE ENTRIES OF THEIR OWN IN DEVICE MANAGER. A hub appears as
-    "xHCI98 USB Hub", with the devices behind it beneath it. A USB 3 hub
-    appears twice, the second time as "xHCI98 USB 3 Hub" for its
-    SuperSpeed half. Each hub has a Power tab. A hub installs from the
-    driver already installed: on Windows 98 SE and 2000 with nothing to
-    answer, on Windows XP with the Found New Hardware wizard and the
-    unsigned-driver warning (Continue Anyway) for each newly plugged hub.
-    Disabling and enabling a hub in Device Manager brings back the devices
-    behind it (read on 98 SE, 2000, XP). While a drive behind the hub is
-    open in Explorer, Windows refuses the disable, asks for a restart and
-    leaves the hub running; close the window first (read on Vista). The
-    driver still runs every hub itself.
-
-  * A DEVICE WITH A SERIAL NUMBER KEEPS ITS ENTRY ON ANY PORT. Moved to
-    another port or behind a hub, it is not found again as new hardware.
-    A device without a serial number is known by its port, as under
-    Microsoft's own hub driver, and moved elsewhere it is found again.
-
-  * DEVICES NO WINDOWS INF NAMES ARE LISTED UNDER THEIR OWN PRODUCT NAMES,
-    in the Add New Hardware wizard and in Device Manager, instead of "USB
-    Device". Where one of Windows' own INFs names a device (a mouse, a
-    keyboard, a USB stick), that name shows, as over Microsoft's own
-    stack. On Windows 98 SE and ME a character outside plain ASCII shows
-    as '?'.
-
-  * SWEETLOW'S HIDUSBF sets a mouse's polling rate, and this driver
-    programs the rate it sets, up to 1000 Hz for a Low- or Full-Speed
-    device (more only with XhciFastPollFsLs, section 9). Read in virtual
-    machines at a root port and behind a hub on Windows 98 SE under NUSB
-    and on ME, and at a root port on XP and on a stock Windows 98 SE. It
-    works behind a hub on XP too (read). Its setting is
-    kept on the device's Device Manager entry, so it has to be applied
-    again whenever the device is found as new hardware.
-
-  * IDLE DEVICES ARE NOT PUT TO SLEEP UNLESS YOU TURN IT ON. With
-    XhciSelectiveSuspend at 1 (section 9) a device is suspended when
-    Windows asks; hubs, the root hub and the controller never are, and the
-    driver never suspends anything on a timer of its own. Off, the
-    default, an idle device draws its normal power.
-
-  * A COMPOSITE DEVICE HAS AN ENTRY OF ITS OWN in Device Manager, with its
-    functions beneath it, and USBView shows a device's manufacturer,
-    product, serial number and interface names.
-
-  UPDATING xhciuas.sys OVER AN OLDER COPY
-  .......................................
-
-  When the new xhciuas.sys carries the same version as the one installed,
-  "Search for a better driver" keeps the copy Windows already has. Instead:
-  Update Driver on "xHCI98 USB Attached SCSI Storage" -> "Display a list of
-  all the drivers in a specific location" -> Have Disk -> this package's
-  directory.
-
-
-==============================================================================
- 6. IF SOMETHING GOES WRONG
-==============================================================================
-
-  REPORT IT ON GITHUB
-  ...................
-
-  Open an issue on the project's GitHub page (section 7) and describe what
-  happened. The bug report form asks for two things the tools below
-  gather; installing and using the driver never needs them.
-
-  IF THE MACHINE KEEPS RUNNING: THE xHCI98 USB TREE'S REPORT
-
-  The xHCI98 USB Tree (XHCITR, section 4) reads the driver's own log and
-  snapshot straight out of the running machine and writes a report you
-  can attach to that issue. On Windows 98 and Windows ME it is the ONLY
-  way to get anything out, and none of it is REGEDIT. SETUP.EXE puts it
-  in the install directory and the notification area; it is also in
-  TOOLS\XHCITR (XHCITR.EXE, or XHCITR64.EXE on 64-bit Windows):
-
-      1. View > Logging level...   xhci98 at 2, the default; if it is
-                                   not, set 2 and restart Windows
-      2. make the problem happen again
-      3. File > Save Report...     writes one .TXT file: attach it
-
-  The report holds the device tree, both drivers' logs and the driver's
-  snapshot: the controller's Device Manager status and problem code, its
-  resources, the versions and SHA-256 hashes of the installed driver
-  files, and the decoded dump. It is plain text with no internal
-  addresses. If you can, save one report while it works and one after the
-  problem happens, under two names.
-
-  From a prompt the same steps are (step 1 needs administrator rights on
-  Windows 2000 and later: on Vista and later, a Command Prompt started with
-  "Run as administrator"):
-
-      1. XHCITR /setlevel xhci98=2, and restart Windows if it was not 2
-      2. make the problem happen again
-      3. XHCITR /report FILE.TXT
-
-  THE RESTART IN STEP 1 IS NOT OPTIONAL WHEN THE LEVEL CHANGES. The driver
-  reads it when it starts; until the restart it is still at whatever it
-  read last time, and at 0 it gives no answer at all rather than an empty
-  one.
-
-  WHEN THE MAINTAINER ASKS FOR THE SNAPSHOT'S OWN FILES, File > Save
-  Snapshot... (or XHCITR /snapshot at a prompt) writes them: NAME.DEV
-  (the device report), NAME.TXT (the dump), and NAME.BIN and NAME.PSC
-  (the raw state and the port registers). NAME is made from the date and
-  time - for example 3141022A for 14 March at 10:22 (the month is one
-  character, 1 to 9 then A, B, C) - or is the 1 to 8 letters, digits, _
-  or - you give (XHCITR /snapshot MYPC); an earlier set is never
-  overwritten. XHCITR /snapshot /? says what each exit code means.
-
-  If nothing comes back at all, run XHCITR /probe. It checks the route to
-  the driver separately from whether this driver answers on it.
-
-  USE THE XHCITR FROM THIS PACKAGE, not a copy kept from an earlier
-  release. This driver's report is snapshot schema 5.
-
-  The report and the snapshot change nothing about how the driver behaves
-  on the bus, and XHCITR writes no file it was not asked to. They do READ
-  the controller's port registers, which is a hardware access - they just
-  do not write one. The logging level is the one driver setting XHCITR
-  writes; see section 9.
-
-  IF THE MACHINE WILL NOT START WINDOWS, OR CRASHES: QUALREP UNDER DOS
-
-  TOOLS\XHCIQUAL\QUALREP.BAT runs XHCIQUAL's read-only probe under real
-  MS-DOS (not a DOS box inside Windows; see step 1) and saves it to a new
-  .LOG in the directory it runs in, named from the DOS date and time the
-  same way. Run it from writable storage that is not on the controller
-  being tested, and attach the .LOG file it names. Without the batch file:
-  XHCIQUAL --probe-only --no-page --log-stamp
-
-  WHAT THE LOG CAN AND CANNOT ANSWER
-
-  It answers "the device does not work" and "transfers are wrong". It answers
-  NOTHING ABOUT A CRASH - a machine that has crashed is not running for
-  anything to read.
-
-  THE DRIVER WRITES NO LOG FILE ITSELF, and there is no registry value that
-  makes it. XHCITR writes the report and the snapshot's files.
-
-  DEBUGVIEW (Sysinternals), with "Capture Kernel" switched on, receives this
-  driver's log as it runs if XhciLogDebugView is set. USE IT ONLY WHEN THE
-  MAINTAINER ASKS FOR IT.
-
-      !! Do not run DebugView on Windows 98 on real hardware while
-         capturing. Under the earlier releases, plugging in a device while
-         it captured crashed the machine, and this driver has not been
-         run under DebugView on Windows 98 hardware. Inside a virtual
-         machine it is fine. You do not need DebugView to send a report.
-
-
-==============================================================================
- 7. KNOWN LIMITATIONS
-==============================================================================
-
-The full measured list is in the project's docs/using/release-notes.md,
-together with what has and has not been tested on real hardware as opposed
-to in a virtual machine. Read it before reporting a problem, and then report
-it anyway if it is not there - the reports are what fix it:
+This is a hobby driver for systems that left support two decades ago, and
+bugs are not unexpected. Please report what you find:
 
       https://github.com/yeokm1/xhci98/issues
 
-Outside this driver's control - these come from Windows, NUSB or the driver
-being unsigned, and no change to this driver can remove them:
+and attach:
 
-  * WINDOWS VISTA X64 TO 10 X64 NEED TEST-SIGNING MODE, OR DRIVER
-    SIGNATURE ENFORCEMENT DISABLED. The x64 drivers carry this project's
-    own test signature, not Microsoft's. Turn on test-signing mode once
-    (section 4), which shows "Test Mode" on the desktop, or disable driver
-    signature enforcement at every start (F8); otherwise the controller
-    sits at Code 39 on Vista, Code 52 on 7.
+  - The driver's report: set the logging level to 2 (the default; View >
+    Logging level in the xHCI98 USB Tree) and restart if you changed it;
+    make the problem happen, then use File > Save Report (or XHCITR
+    /report <file>) and attach the .TXT. At level 4 the report leaves the
+    log out, as it holds internal addresses.
+  - The driver's snapshot: right after the report, File > Save Snapshot
+    (or XHCITR /snapshot; XHCITR64 on 64-bit Windows), and attach the four
+    files it writes (.DEV, .TXT, .BIN and .PSC).
+  - For a problem with the install, XHCIINST.LOG from the root of the
+    system drive.
+  - The DOS report, if a maintainer asks for it: run QUALREP.BAT from real
+    DOS in TOOLS\XHCIQUAL\ and attach the .LOG it names (read-only).
 
-  * TURN SECURE BOOT OFF ON WINDOWS 8, 8.1 AND 10; the x64 drivers also
-    need test-signing mode, which cannot be turned on while Secure Boot is
-    on (section 4).
-
-  * NO USB STORAGE ON A STOCK WINDOWS 98 SE (section 3). With no NUSB
-    installed there is no mass-storage driver at all. HID and audio still
-    work.
-
-  * WINDOWS 98 SE: STAND BY IS UNTESTED ON REAL HARDWARE; REMOVE USB DISKS
-    BEFORE STAND BY. Read only in QEMU virtual machines, where Windows 98
-    SE itself does not resume reliably, with no USB controller as well.
-    With a USB disk attached the resume stopped before the desktop under
-    this driver and under NUSB's EHCI driver alike; with a USB mouse
-    alone, or behind a hub, it completed and the mouse worked.
-
-  * WINDOWS ME: DO NOT UNPLUG A DEVICE WHILE WINDOWS IS INSTALLING IT. ME's
-    own device manager stops responding; it does the same on Microsoft's
-    own USB stack. Wait for the install to finish before unplugging.
-
-  * A SUPERSPEED DEVICE DECLARING MORE THAN 510 mA READS 510 mA on the
-    Power tab (a bus-powered hub is charged (ports + 1) x 100 mA, at most
-    500 mA, instead): the value the page reads cannot count past 510 mA. With
-    XhciLogVerbosity at 2, XHCITR's report gives the exact figure as
-    dev.ss.maxpower.ma, in hexadecimal mA.
-
-  * INTEL 7-, 8- AND 9-SERIES CHIPSETS: A DEVICE ON A BLUE CONNECTOR MOVES
-    BETWEEN THE USB 2.0 CONTROLLER AND THIS DRIVER when this driver's
-    controller starts or stops, so a drive busy there is disconnected.
-    Only with the switchover on (XhciIntelPortSwitch 1 or 2); it is off
-    by default (section 9).
-
-  * WINDOWS 2000 FROM THE F6 FLOPPY NEEDS THREE FILES FROM ITS CD and the
-    Windows 2000 entry; with the first entry and a USB keyboard, mouse or
-    storage device on the controller the new system stops at its first
-    start (STOP c000026c, hidusb.SYS or usbstor.SYS). Section 4.
-
-  * WINDOWS XP FROM THE F6 FLOPPY: GUI-MODE SETUP ASKS ABOUT THE UNSIGNED
-    DRIVER BEFORE THE USB KEYBOARD WORKS. A PS/2 or built-in laptop
-    keyboard answers it (section 4).
-
-  * WINDOWS VISTA AND 7: DELETING THE DRIVER KEEPS THE OLDER PACKAGES.
-    "Delete the driver software for this device" removes only the package
-    in use, and Windows may install an older one the next time it finds
-    the controller. Section 4, "Going back to an older release", says how
-    to remove them with pnputil.
-
-May be addressed in a later release:
-
-  * THUNDERBOLT 3 AND USB4: STANDBY AND HIBERNATION WITH A TUNNELLED DEVICE
-    ATTACHED ARE NOT SUPPORTED. Stop and unplug every Thunderbolt or USB4
-    device first. On XP x64 and 7 x64 the first shutdown after such a
-    resume can stall for over ten minutes.
-
-  * WINDOWS 98 SE AND ME: A USB 3 CONTROLLER ADDED AFTER THE INSTALL MAY
-    ASK ONCE FOR THE "xhci98 xHCI Host Controller Disk". Give it the
-    install directory (C:\XHCI98 unless you chose another).
-
-  * SELECTIVE SUSPEND IS OFF UNLESS YOU TURN IT ON, AND HUBS ARE NEVER
-    SUSPENDED (sections 5 and 9).
-
-  * 32-BIT WINDOWS VISTA AND 7: THE INSTALL ASKS FOR A RESTART, and the
-    controller does not start until it is done, because the helper
-    xhcihlpr.sys starts only at boot (section 4). A reinstall needs the
-    restart even if Windows does not ask for it: 32-bit Vista did not.
-
-  * WINDOWS ME: A UAS DRIVE AS THE FIRST USB STORAGE DEVICE SHOWS CODE 2.
-    ME has not yet copied its own USBNTMAP.SYS and USBMPHLP.PDR, which it
-    installs only when its first ordinary USB stick is plugged in. Plug in
-    any ordinary USB stick once, then unplug the UAS drive and plug it back
-    in. No Remove and no restart are needed.
-
-  * WINDOWS VISTA AND 7: THE CONTROLLER'S ADVANCED TAB SHOWS NO BANDWIDTH.
-    The figure comes from a query this driver does not answer.
-
-  * WINDOWS ME: SHUT DOWN CAN HANG AFTER THE CONTROLLER WAS DISABLED AND
-    ENABLED in Device Manager in the same session (a black screen that
-    stays). Seen in virtual machines, with an earlier release too. After
-    such a cycle, save your work before shutting down; if Shut Down hangs,
-    switch the computer off.
-
-  * WINDOWS 98 SE AND ME SHOW A DEVICE NAME'S NON-ASCII CHARACTERS AS '?'.
-
-  * A DEVICE THE CONTROLLER FAULTS ON IS RE-ENUMERATED BY THE DRIVER, as if
-    unplugged and plugged in again (XhciTolerance, section 9). Whatever it
-    was doing ends as on an unplug: a copy to a drive fails part way. After
-    three on one port, the next fault there removes the device and holds
-    the port until the device is unplugged, or, held unpowered after
-    over-currents, until the controller restarts. A recovery of the
-    controller itself re-enumerates every device on it the same way, so a
-    copy running across it fails.
-
-  * DISABLING A CONTROLLER THE DRIVER CLOSED OFF WITHOUT PROOF THAT IT
-    STOPPED HANGS: RESTART THE MACHINE. Only after the controller stopped
-    answering altogether, or a recovery could not stop it, and the driver
-    could not prove it had stopped writing to memory, so kept everything it
-    might still write into (XHCITR's report says "CONTAINED" and "PINNED"): a
-    later disable of the controller in Device Manager, or an update or
-    removal of its driver, waits for ever on the kept transfers, and only
-    restarting the machine ends it. Seen in virtual machines on Windows 98
-    SE and 2000 with the fault made on purpose. Restart the machine
-    instead.
-
-  * WINDOWS 2000: A MOUNTED USB DRIVE MAY COME BACK AT CODE 31 AFTER A
-    CONTROLLER RECOVERY OR A RESUME FROM HIBERNATION. After the driver
-    recovers the controller in place (a halted controller, or a failed
-    endpoint reset), or after a hibernation on a controller that lost its
-    state, where the driver finds every device again, a USB drive whose
-    volume was mounted may stay at Code 31 until it is unplugged and
-    plugged in again, or the controller is disabled and enabled in Device
-    Manager; a restart of the drive's own device also cleared it. Other
-    devices come back. Seen in virtual machines, with the controller
-    polled as well; not on Windows 98 SE.
-
-  * INTEL 7-SERIES (PANTHER POINT, 8086:1E31): TOO MANY PERIODIC DEVICES AT
-    ONCE MAY LOSE DATA INSTEAD OF BEING REFUSED. Found by reading Linux's
-    code, not measured: Linux keeps its own bandwidth accounting on this
-    controller (XHCI_SW_BW_CHECKING) because it accepts periodic schedules
-    - audio, mice, keyboards, hubs - that it cannot serve. This driver
-    relies on the controller's own admission there.
-
-Untested ground:
-
-  * SUPERSPEED ISOCHRONOUS TRANSFERS. Built from the specification. No
-    SuperSpeed isochronous device has been held and QEMU models none.
-
-  * SUPERSPEEDPLUS (USB 3.1 GEN 2, USB 3.2 GEN 1X2 AND GEN 2X2). Accepted at
-    its trained rate, built from the specification. No Gen 2 device has been
-    tested, so every mode is untested.
-
-  * A UAS-ONLY DRIVE AT SUPERSPEED ON A CONTROLLER WITHOUT STREAMS. It is
-    sent back to its USB 2.0 port and runs UAS at High Speed, or is refused
-    if it has no USB 2.0 port. Built from the specification; no such
-    controller has been held.
-
-  * POLLING ABOVE 1000 HZ (XhciFastPollFsLs, section 9). Outside the xHCI
-    specification, and read on no real controller; value 4's programming
-    was read in virtual machines only.
-
-  * LOW- AND FULL-SPEED DEVICES BEHIND A BUILT-IN HUB WHOSE USB 2.0 SPEED
-    TABLE LISTS ONLY HIGH SPEED, as on the VIA VL805
-    (XhciUsb2HubSpeedFallback, section 9). Built from the specification
-    and never run on such a controller.
-
-  * XhciIntelPortSwitch AT 2 (section 9). Read on no unlisted Intel
-    controller, and at your own risk.
-
-  * CONTROLLERS BELOW xHCI 1.0 (XhciAccept096, section 9): the 0.96
-    NEC/Renesas uPD720200 and uPD720200A, ASMedia ASM1042 and others.
-    Accepted by default, driven as xHCI 1.0 controllers but for the fields
-    Linux writes differently on them (TD Size in 0.96's units, the control
-    transfer's Transfer Type, the isochronous burst counts, and no
-    isochronous Frame ID) and with the capability register at 1Ch
-    ignored, so a resume from standby re-enumerates their devices. Built
-    against host tests and Linux's handling of the same parts; read on no
-    0.96 controller. Linux's chained isochronous Link TRBs for NEC and AMD
-    0.96 parts are not applied, so isochronous transfers (audio, video) on
-    those parts are the least certain. Set XhciAccept096 to 0 to refuse
-    such a controller, as the releases before it did.
-
-  * HIDUSBF ON A COMPOSITE DEVICE'S OWN ENTRY (xHCI98 USB Composite
-    Device, new in this release). Each function takes its polling rate
-    from the rate set there, unless a filter on the function's own entry
-    sets another. QEMU has no keyboard-and-mouse composite device, so this
-    is read on no virtual machine (the composite entry's own selection
-    was, with USB audio devices) and is owed to a real device after the
-    release; a new rate reaches a function when it next starts (on 98 SE
-    and ME restart the function's entry too, or replug the device).
-
-  * A FINER SYSTEM TIMER WHILE POLLING (XhciPollFineTimer, section 9; off
-    by default). Read only in QEMU virtual machines without hardware
-    acceleration, polling: on Windows 7 and Vista, while it was held, the
-    guest's clock ran at a tenth to seven tenths of real time and USB
-    keyboard input was lost; on XP and 2000 the clock kept nine tenths of
-    real time or more. Read on no real machine.
-
-  * LINUX'S CONTROLLER QUIRKS (XhciMsiAvoid and the thirteen others,
-    section 9). Built from Linux's handling and the xHCI specification;
-    none has been read on a controller it lists, and QEMU's controller is
-    on no list.
-
-  * WINDOWS 2000: A THUNDERBOLT PORT SHOWS CODE 12 AFTER ITS FILTER IS
-    INSTALLED BY HAND, UNTIL A RESTART. Installing the tunnel-port filter
-    from NT\ through Device Manager (Update Driver, Have Disk) leaves the
-    upstream port at Code 12, and the Thunderbolt device's own entries
-    gone, until Windows is restarted; after the restart they all start.
-    SETUP.EXE puts the filter on the upstream and the downstream ports
-    and asks for that restart itself. Seen in a virtual machine.
+Problems with the free USB class drivers go to usb-wdm-free's own issues
+(https://github.com/yeokm1/usb-wdm-free/issues).
 
 
 ==============================================================================
- 8. WHAT IS IN THIS DIRECTORY
+ 5. WHAT IS IN THIS DIRECTORY
 ==============================================================================
 
 {CONTENTS}
-The drivers carry the same names in every directory, and
-every copy carries driver version {VERSION}, so a copy taken out of its
-directory cannot be identified by name or by version. (The -X86 directories
-also hold xhcihlpr.sys, the 32-bit Windows 2000, XP, Vista and 7 helper,
-which has no 64-bit twin.)
-{TELLAPART}
-
-(In Windows driver-kit terms, RELEASE is what the DDK calls a "free" build
-and DEBUG is what it calls a "checked" build. This project says release and
-debug throughout, in its build scripts and its documentation alike.)
+The drivers carry the same names in every directory, and every copy
+carries driver version {VERSION}, so point Windows at a directory rather
+than at a copied file.
 
 
 ==============================================================================
- 9. REGISTRY SETTINGS
+ 6. EARLIER RELEASES
 ==============================================================================
 
-Every value this driver reads from the controller's driver key. There
-are thirty-six, all DWORDs, and the install writes all thirty-six, each
-at the default it states below except
-XhciImodInterval250ns, which it writes as 160, and XhciForceBulkOnly,
-which it writes as 0 where absent counts as 1, so every one is already
-in the key to change. The install writes
-each only where it is missing, so a value you changed survives an
-install or update; to go back to the default, set it by hand, or delete
-the value and update the driver. If an earlier install left
-XhciImodInterval250ns at 500, the update keeps it; set it to 160 by hand.
-A value that is absent means the default each one states.
+{EARLIER}
 
-  YOU SHOULD NOT NEED THIS SECTION FOR A LOG. If the maintainer asks for one,
-  XHCITR's View > Logging level (or XHCITR /setlevel xhci98=2) sets the value
-  that matters, on every controller, and finds the key itself.
+What each of them changed is in the project's release history,
+releases/history.md, and the full release notes are at the address at the
+top of this file. XHCIQUAL, the DOS tool in TOOLS\XHCIQUAL\, is described
+in their section "XHCIQUAL: checking a machine's controller (optional)".
 
-  XhciLogVerbosity  -  the whole log switch
-  .........................................
-
-  Default 2 (an update keeps the value an earlier install wrote, which
-  was 0 in older releases). Level 0 is off outright; above it each
-  level is the one below plus one thing:
-
-      0   OFF. The driver does not answer XHCITR's snapshot at all.
-      1   the channel, plus the counters. The log of what happened is still
-          off, so this is the cheapest reading there is.
-      2   plus the log of what happened.  USE THIS ONE. A fresh install
-          sets it.
-      3   plus the USB port register table.  Still no internal addresses.
-      4   plus everything, including internal addresses. Only if asked -
-          it is more than you would want to paste in public.
-
-  A value outside 0-4 is REFUSED rather than treated as the nearest one: the
-  driver falls back to the default, 2.
-
-  XhciLogDebugView  -  the log to a capture tool
-  ..............................................
-
-  Default 0. Set it to 1 to have the log handed to DebugView as the driver
-  runs, and once more when the controller stops. It does not affect what
-  XHCITR reads. Leave it at 0 unless the maintainer asks for a DebugView
-  capture, and see section 6 about DebugView on Windows 98.
-
-  XhciImodInterval250ns  -  how long the controller holds back an interrupt
-  .........................................................................
-
-  Counted in UNITS OF 250 NANOSECONDS. It sets how long the controller
-  waits after one interrupt before raising the next. A shorter interval
-  makes USB storage faster at the cost of more interrupts.
-
-      160    written by the install: 40 microseconds, at most 25,000
-             interrupts a second. The value Linux uses.
-      4000   used when the value is MISSING, UNREADABLE, OR OUTSIDE
-             10-4000: 1 ms, at most 1,000 a second.
-      10     the lowest accepted: 2.5 microseconds, at most 400,000 a
-             second.
-
-  A value outside 10-4000 is REPLACED BY 4000, not rounded to the nearest
-  limit, so a mistyped 0 cannot turn moderation off. 4000 is the
-  controller's own power-on value.
-
-  On a ThinkPad P14s Gen 1 under Windows 98 SE, a UAS flash drive at
-  SuperSpeed read about 221 MB/s and wrote about 211 MB/s at 8 MB transfers
-  at 160, against about 181 MB/s at 500, the value the earlier releases
-  wrote. 40 added only 1 to 3% more.
-
-  FEEL FREE TO TUNE IT. Raise it towards 4000 (or delete it) if you get
-  audio stutter or instability under load. Enter it as a decimal DWORD.
-  The driver reads it when it starts, so a change takes effect after a
-  restart; XHCITR's report then shows under "registry values" the value
-  it read, the interval in force, and what the controller took.
-
-  XhciForceBulkOnly  -  keep storage on Bulk-Only instead of UAS
-  ..............................................................
-
-  The install writes 0: a disk that offers UAS gets UAS. Set it to 1 and
-  every disk on that controller that offers BOTH transports gets
-  Bulk-Only, Windows' own storage driver, instead. Absent counts as 1:
-  that is text-mode Setup, before the INF has run, where Windows' own
-  storage driver is the only one. A UAS-only disk stays on UAS whatever
-  this says.
-
-  It is read each time a device is plugged in, so unplug the disk and plug
-  it back in after changing it. On Windows 2000 and later a disk already
-  installed keeps its driver until you uninstall it in Device Manager and
-  plug it back in.
-
-  XhciFastPollFsLs  -  Low- and Full-Speed polling above 1000 Hz
-  ..............................................................
-
-  Default 0 (absent): off. For a mouse on a ROOT PORT that hidusbf has set
-  to its "31 Hz" or "62 Hz" rate:
-
-      2      "31 Hz" becomes 2000 Hz, "62 Hz" becomes 4000 Hz
-      3      "31 Hz" becomes 4000 Hz, "62 Hz" becomes 8000 Hz
-
-  4 is described below; any other value is off. With 2 or 3 a device
-  behind a hub keeps its normal rate.
-
-  THIS IS OUTSIDE THE xHCI SPECIFICATION, which sets 1 ms as the shortest
-  interval for these devices. With 2 or 3, a controller that refuses it is
-  caught: the device runs at its normal rate, and XHCITR's report counts
-  it as fastpoll.fallbacks. A controller that accepts it and then misbehaves
-  cannot be caught; if anything misbehaves, delete the value and restart.
-  While 2 or 3 is set, ANY Low- or Full-Speed device on a root port that
-  asks for 16 to 63 ms is polled faster too. Read when the controller
-  starts, so restart after changing it. The faster rates of 2 and 3 have
-  been measured on no real controller and in no virtual machine; in
-  virtual machines 2 and 3 were read only ignoring value 4's codes.
-
-  Set to 4, it does something else: the rate the client driver chooses.
-  An interrupt endpoint whose polling interval in the configuration
-  Windows selects is 128, 129 or 130 is polled at 2000, 4000 or 8000 Hz;
-  every other interval is polled as the specification reads it, so 4 does
-  not speed up 16 to 63 ms, and 2 and 3 do not honour these codes. It
-  applies to a Low- or Full-Speed device on a root port only, and to a
-  High- or SuperSpeed device at a root port or behind a hub. Set the value
-  first and restart, then have hidusbf (or another filter) write 128, 129
-  or 130. A device that itself asks for 128 to 130 ms is polled that fast
-  too while it is 4; a code written while the value is not 4 means what
-  the number says (128 ms, or 4.096 s at High Speed and SuperSpeed; 32 ms
-  instead where XhciIntervalCap applies). A controller that refuses a code
-  is caught and the device polled every 1 ms. Value 4's programming was
-  read in virtual machines only.
-
-  XhciFirstEnumWaitMs, XhciFirstEnumPortMs  -  the first report's wait
-  ....................................................................
-
-  When the root hub or a hub first reports its devices after it starts,
-  the driver waits for the devices already plugged in to be ready, so
-  that they are in that first report (Windows 2000's Setup uses only
-  those, section 4). The wait ends as soon as they are ready.
-
-      XhciFirstEnumWaitMs   the longest wait, in milliseconds. Default
-                            5000; 0 turns the wait off; above 30000 is
-                            held to 30000.
-      XhciFirstEnumPortMs   the longest one port may hold it. Default
-                            2000, held to the total; a slower device is
-                            reported later instead. 0 sets no limit
-                            per port.
-
-  In virtual machines, with the defaults, the first report went 20 to 30
-  ms after the start with nothing plugged in, and 0.3 to 0.9 s after it
-  with a mouse and a stick plugged in.
-
-  XhciIntelPortSwitch  -  the Intel 7/8/9-series port switchover
-  ..............................................................
-
-  Default 0: off. Set to 1, it is on for an Intel xHCI with PCI device id
-  1E31, 8C31, 9C31, 8CB1, 9CB1 or 8D31 (7-, 8- and 9-series chipsets, Ivy
-  Bridge to Broadwell, and C610/X99). It is read on every Intel controller
-  and on no other vendor's. On those chipsets each switchable
-  connector, usually a blue one, is wired to both the USB 2.0 (EHCI) and
-  the xHCI controller, and firmware on "Auto", or with no setting,
-  typically leaves it on the USB 2.0 one, where it works if a USB 2.0
-  driver is loaded. At 1 this driver moves
-  those connectors to itself at each start and resume, and hands them back
-  when its controller stops and at shutdown.
-
-  A device under a running USB 2.0 driver (NUSB's, for example) on such a
-  connector is disconnected there when this driver starts and comes back
-  under it, and the reverse at a stop: do not have a drive busy there then.
-
-  At 0, absent or not a DWORD, the driver leaves the connectors where
-  firmware put them; 1 or any other number but 2 is on. Earlier releases
-  wrote 1, and an update KEEPS the value already there, so a machine
-  updated from one of them stays at 1 until it is changed.
-
-  PORTSW.VBS, in the TOOLS\PORTSW directory, shows and sets it on every
-  xhci98 controller, with nothing to install, on every Windows this
-  driver runs on. Double-click it, or, at a prompt in the TOOLS\PORTSW
-  directory, run
-      cscript //nologo portsw.vbs show     (or 1, or 0)
-  as an administrator. Read when the controller starts, so RESTART
-  WINDOWS after changing it. A stop gives back only the registers the
-  driver itself wrote. Read on a Lenovo B490 (1E31) under Windows 98 SE
-  with NUSB; standby and the other five ids are untested.
-
-  PORTSW-ON.BAT and PORTSW-OFF.BAT, beside it, do the same in one
-  double-click: each shows the value, sets 1 or 0 through PORTSW.VBS and
-  says to restart. On Vista and 7, right-click one and choose Run as
-  administrator. At a prompt on Windows 98 SE and ME, change to the
-  TOOLS\PORTSW directory first. Then RESTART WINDOWS.
-
-  On a 7-, 8- or 9-series machine, a USB 3 stick or drive that copies
-  only at USB 2.0 speed on a blue connector is most likely still on the
-  USB 2.0 controller, because the switchover is off by default. Run
-  PORTSW-ON.BAT and restart Windows.
-
-  Set to exactly 2, it does the same on ANY Intel xHCI controller, listed
-  or not, for a chipset with these connectors that the list misses (on a
-  listed one 2 is the same as 1). AT YOUR OWN RISK:
-
-      Setting XhciIntelPortSwitch to 2 makes the driver read four Intel
-      chipset registers and write two of them on any Intel USB 3
-      controller, not only on the 7-, 8- and 9-series and C610/X99
-      chipsets it was written for. On a controller that does not have
-      those registers - every Intel chipset from the 100-series (Skylake)
-      on, and any other whose layout has not been read - it writes
-      registers of unknown meaning, at every start, resume, stop and
-      shutdown, and the result is unknown. Use 2 only for an Intel chipset
-      that has both an EHCI and an xHCI controller and that this driver
-      does not list, and at your own risk. Everyone else should use 0
-      or 1.
-
-  Value 2 has been read on no unlisted Intel controller.
-
-  XhciIntelIrqRoute  -  the Intel interrupt routing repair
-  ..............................................................
-
-  On the same Intel chipsets two chipset registers decide
-  which interrupt line the xHCI controller's interrupt reaches, and some
-  firmware points them at a different line from the one it tells Windows.
-  The Dell Latitude E7250's sends it to IRQ 16 while Windows listens on IRQ
-  21, so the driver never hears from the controller and every USB device
-  on it is slow or stops. At each start and resume the driver reads those
-  registers and, where this value allows it, points the interrupt at the
-  line Windows assigned. It changes nothing else.
-
-      1   the default, and the meaning of absent or any other value: only
-          on the E7250 (controller 8086:9CB1, subsystem 1028:062D, chipset
-          9CC3); elsewhere it reads and reports.
-      2   on any of the six controllers listed under XhciIntelPortSwitch,
-          each with one of its own chipset ids.
-      0   reads and reports, writes nothing.
-
-  IT DOES NOTHING on any other controller, NOTHING when the interrupt is a
-  message (MSI) rather than a line, as it can be on Vista and 7, and
-  NOTHING while the driver is polling the controller. On 2000, XP, Vista
-  and 7 it also writes nothing when Windows gave the controller an
-  interrupt below 16. XHCITR's report
-  has an "interrupt routing" section saying what it found and did. The
-  same register written by hand fixed the E7250 under XP x64; the
-  driver's own write has not yet been read on any machine.
-
-  XhciTolerance  -  the controller tolerance, all together
-  ........................................................
-
-  Default 1: on. The driver recovers by itself from transfer, port and
-  controller faults that used to leave a device dead until it was
-  replugged: an interrupt that never arrived, a USB transaction error on a
-  bulk or interrupt endpoint (retried up to three times, except for a Low-
-  or Full-Speed device behind a High-Speed hub's transaction translator - a
-  mouse or a keyboard in a USB 2.0 hub running at High Speed - on UAS
-  streams and on four controllers), a fault it cannot pin on a transfer
-  (the device is re-enumerated, as if unplugged and plugged in again), a
-  USB 2.0 root port the controller disabled or an over-current (the port
-  re-enumerated or powered again), a controller that halts (recovered at
-  most three times in a window of at least ten minutes) or stops answering
-  (closed off). Each but the lost interrupt, which is picked up every time,
-  a few times at most: after three on one port, the next fault removes the
-  device and holds the port until its device is unplugged for a few
-  seconds, or, held unpowered, until the controller restarts. While no
-  fault is reported none of it acts. A fault need not mean an unhealthy
-  controller: a healthy one reports a device's missing handshake, a CRC
-  failure or a timeout as a transaction error.
-
-  Set it to 0 to turn all of that off together and have the earlier
-  handling back, but for the rules below that apply at every value.
-  ONLY 0 TURNS IT OFF; absent or any other number is on. It does not
-  touch the next two values. At 0 XHCITR's report still counts the
-  faults it sees and what the rules below did, while the counters of the
-  behaviours switched off stay at 0. Read when the controller starts, so
-  restart after changing it.
-
-  These apply at every value, 0 included: a device the controller
-  reports incompatible is removed and re-enumerated, as the xHCI
-  specification asks, at most three times on one port before the port is
-  held; and a recovery that cannot stop the controller, and cannot prove
-  it has stopped writing to memory, closes the controller off until the
-  machine restarts. XHCITR's report then says "CONTAINED: halt and reset did
-  not complete and Bus Master Enable would not clear; DMA not proven
-  stopped, common buffer pinned". And on a controller latched failed (its
-  recoveries refused or failed three times in a row): once it shows it
-  has halted, the transfers it holds are completed and its devices
-  removed; a resume from standby no longer brings it back, only a disable
-  and enable or a restart does (at 0 a change from earlier releases); and its
-  state is not saved or restored for standby.
-
-  XhciIntervalCap  -  the AMD interrupt-interval cap
-  ..................................................
-
-  Default 1: on AMD controllers (PCI vendor 1022) and the ATI Navi10's
-  USB-C controller (1002:7316) only, an interrupt endpoint - a mouse, a
-  keyboard, a hub - asking to be polled less often than every 32 ms is
-  polled every 32 ms, as Linux does on some AMD controllers and on that
-  one. Audio is never capped. Set it to 0 to turn it off, or to 2 to apply
-  it on every controller; absent or any other number is 1. Read when the
-  controller starts. Read on no AMD or ATI controller yet.
-
-  XhciAvgTrbEsit  -  a comparison switch
-  ......................................
-
-  Default 0. Set to 1 it tells the controller, for each interrupt
-  endpoint, an average transfer size equal to the endpoint's largest
-  transfer per interval, as Linux does, instead of the 1024 bytes the xHCI
-  specification suggests. Any other value is 0. It exists so that a
-  machine whose USB devices misbehave can be compared both ways; leave it
-  at 0 otherwise. Read when the controller starts.
-
-  XhciInterruptMode, XhciPollIdleMs, XhciPollActiveMs  -  how events arrive
-  .........................................................................
-
-  XhciInterruptMode, default 0: automatic. The interrupt line where it
-  works; a controller with no interrupt pin, or whose line the driver sees
-  raised and never delivered, is polled - the driver reads its events on a
-  timer. On Vista and 7 a message-signalled interrupt is used where Windows
-  grants one. 1 is the interrupt line only: a controller given no line -
-  on Vista and 7 also one given a message instead - fails to start (Code
-  10). 2 polls always, at the cost of more processor wake-ups. 3 is a
-  message-signalled interrupt only: on Vista and 7 the driver asks for the
-  message, and the controller fails to start (Code 10) if none is granted
-  or it cannot be connected (on 32-bit, when xhcihlpr.sys is not running);
-  on 98 SE, ME, 2000 and XP, which have none, 3 always fails the start.
-  Any other value is 0.
-  Read when the controller starts: disable and enable it, or restart.
-
-  While polling, XhciPollIdleMs (default 50, held to 5000; 0 is 50) is how
-  often in ms the driver looks with nothing outstanding, and
-  XhciPollActiveMs (default 1, held to the idle period; 0 is 1) how often
-  with transfers outstanding - except that when only a mouse's or
-  keyboard's periodic transfers are outstanding it looks at that
-  endpoint's interval, held between the two. Windows runs the timer no
-  faster than its clock tick, so 1 means as often as Windows allows.
-  Polling adds up to one period to each transfer's completion. Neither
-  value matters while the interrupt works.
-
-  XhciPollFineTimer, default 0 (off): set to 1, while the controller is
-  polled and busy the driver asks Windows for a finer clock -
-  XhciPollActiveMs in milliseconds - so a polled disk is not held to one
-  transfer per clock tick (10 to 15.6 ms), and gives the request back
-  once the controller has been idle for XhciPollIdleMs. It is Windows
-  2000 and later only: on 32-bit systems through the helper xhcihlpr.sys,
-  from the restart after the install; on 98 SE and ME the value is read
-  and does nothing. Any value but 0 turns it on. The clock is the whole
-  system's, so other programs see it too while it is held. Read when the
-  controller starts; an update keeps the number already in the key. It
-  ships off because in virtual machines (QEMU without hardware
-  acceleration, polling, on Windows 7 and Vista) the guest's clock ran at
-  a tenth to seven tenths of real time while it was held, and USB
-  keyboard input was lost (on XP and 2000 nine tenths or more); real
-  hardware is unread (section 7, Untested ground).
-
-  XhciMaxTransferKB  -  the UAS command size
-  ..........................................
-
-  Default 1024: the most one UAS command asks the drive to move, in KiB.
-  Any multiple of 4 from 64 to 2048 is taken; anything else is 1024. 64 is
-  what earlier releases always used - set it for a drive that misbehaves
-  at large commands. Bulk-Only devices keep Windows' own limits, and on
-  Windows 98 SE and ME Windows' mapping layer sends at most 64 KiB at a
-  time whatever this says. Windows reads the size when the drive starts,
-  so RESTART WINDOWS after changing it. An update keeps the number already
-  in the key.
-
-  ONE DRIVE MODEL CAN BE SET APART, on Windows 2000 and later, with the
-  value Windows' own Bulk-Only driver reads: MaximumTransferLength, a
-  DWORD in BYTES, under
-    HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP
-  (the drive's vendor and product IDs, four uppercase hex digits each).
-  65535 to 2097152 is taken, rounded to 4 KiB, and REPLACES
-  XhciMaxTransferKB for every drive of that model - so if you lower
-  XhciMaxTransferKB to test a drive, change or delete that value too.
-  Restart after setting it.
-
-  XhciWideMap  -  two transfer pieces at once
-  ...........................................
-
-  Written as 0 by the install; 0 or absent is off. Set to 1 and restart
-  Windows, and on Windows 2000 and later the driver gives a large bulk
-  write on any device, and a large bulk read on a UAS drive's streams, to
-  the controller two pieces at a time; a UAS drive at SuperSpeed may also
-  take one command's data as a single piece of up to 2 MiB. It does so
-  only where the machine's DMA needs no translation, which it checks at
-  every start and for each transfer; under Driver Verifier's DMA checks,
-  or where the DMA does need translation, every transfer goes one piece
-  at a time as before. It is off by default because a fault, though
-  unlikely, would show as wrong data rather than an error: if a large
-  copy misbehaves with it on, set 0 and restart.
-
-  XhciSelectiveSuspend  -  putting idle devices to sleep
-  ......................................................
-
-  Written as 0 by the install; 0, absent or any number but 1 is off, and
-  the driver then suspends no device. Set to 1 and restart, and a USB 2.0
-  or SuperSpeed device is suspended when Windows asks and woken when
-  Windows asks again or the device signals a remote wake. Hubs, the root
-  hub, a composite device's own entry and the controller are never
-  suspended. Read in virtual machines only so far; leave it off unless
-  you are testing it, and if a device misbehaves with it on, set 0.
-
-  XhciSilentInstall  -  the silent install, Windows 98 SE and ME only
-  ...................................................................
-
-  Written as 0 by the install; 0, absent or any number but 1 is off. At
-  1, a device whose class is in the SilentClasses list installs with no
-  Add New Hardware wizard. Set it with silent-on.bat and silent-off.bat
-  in TOOLS\SILENT\ (above), not by hand: silent-on.bat merges the list
-  first, and the value does nothing without it. Windows 2000 and later
-  never read it.
-
-  XhciUsb2HubSpeedFallback  -  Low- and Full-Speed IDs behind a hub
-  .................................................................
-
-  Written as 1 by the install; 1, absent or any number but 0 is on.
-
-  Some controllers reach Low- and Full-Speed devices only through a USB
-  2.0 hub built into the chip, and the speed table of the USB 2.0 port
-  that hub hangs from names High Speed alone; the VIA VL805 (1106:3483) is
-  one. Every mouse, keyboard and other Low- or Full-Speed device on such a
-  controller sits behind that hub, and the driver must write a speed ID
-  for each of them from that table. With this on, such a device gets the
-  standard speed ID (Full Speed 1, Low Speed 2) when the table names
-  neither that speed nor that number; a table that names them is
-  followed, a controller with no table or one that lists Low and Full
-  Speed is not affected, and a device on a root port of its own is never
-  given one. It is on by default because without it every such device on
-  such a controller is refused. Set 0 and restart to refuse them again.
-  XHCITR's report shows whether it is on and counts the devices given an ID
-  (Usb2HubSpeedFallbacks) and those still refused (TopoBehindHubNoSpeed).
-  It was built without the hardware and has never run on a VL805.
-
-  XhciAccept096  -  controllers below xHCI 1.0
-  ............................................
-
-  Written as 1 by the install; 1, absent or any number but 0 is on.
-
-  A controller names the xHCI revision it was built to in its HCIVERSION
-  register. Earlier releases refused anything below 1.0 (Code 10), where
-  the first-generation NEC/Renesas uPD720200 and uPD720200A (1033:0194)
-  and ASMedia's ASM1042 stopped: they are 0.96 parts. With this on, a
-  controller from 0.96 up starts, driven as a 1.0 one but for the fields
-  Linux writes differently on 0.96 parts, and with the capability
-  register at 1Ch ignored, so a resume from standby re-enumerates its
-  devices. Below 0.96 is refused at every value, and on a 1.0 or later
-  controller the value changes nothing. Set 0 and restart to refuse a
-  controller below 1.0 again. XHCIQUAL names the controller's version,
-  and XHCITR's "controller version" lines say what the driver decided.
-
-  Linux's controller quirks  -  fourteen values
-  .............................................
-
-  Linux's xHCI driver works around faults of particular controllers, each
-  named by its PCI vendor and device ID (vendor:device below). This driver
-  takes fourteen of them, each behind a value of its own; the faults and
-  the lists are Linux's, the code this driver's own. Every one reads the
-  same way:
-
-      0   off on every controller.
-      1   on the controllers listed: the default, except
-          XhciShutdownReset, which is 0.
-      2   on every controller, except XhciIntelShutdownToEhci,
-          XhciAsmediaFlowControl and XhciAmdSuspendBitClear, which are
-          vendor-specific (a 2 there is read as 1).
-      Absent, not a DWORD or any other number is the default.
-
-  Matched by vendor and device ID alone; the revision is logged, never
-  matched. Read when the controller starts, so restart after changing one.
-  XHCITR's report has a "Linux quirks" block: each value as read,
-  whether this controller is listed, whether it applies, what it last did.
-  The Linux flag is in brackets.
-
-  XhciMsiAvoid (XHCI_BROKEN_MSI; 1B73:1000, 1B73:1400): on Vista and 7,
-    no message-signalled interrupt - these controllers never raise one.
-    Under XhciInterruptMode 0 the line is asked for, and a message granted
-    anyway is not used: the controller is polled. XhciInterruptMode 3, a
-    message by name, is honoured. 2: every controller.
-  XhciStreamsOff (XHCI_BROKEN_STREAMS; 1B73:1000, 1B73:1009, 1B6F:7023,
-    1B6F:7052, 1106:3432, 1B21:1042, 17CD:0200): no UAS streams; a drive
-    that offers Bulk-Only uses it, a UAS-only drive at SuperSpeed goes to
-    its USB 2.0 port. 2: every controller.
-  XhciResumeReinit (XHCI_RESET_ON_RESUME; 1022:15E5, 1B6F:7023,
-    1B6F:7052, 1912:0015, every VIA 1106, 1DB7:DC27, 1B21:3042,
-    1D17:9202): after standby or hibernation the controller is started
-    afresh and every device found again. 2: every controller.
-  XhciIntelShutdownToEhci (XHCI_SPURIOUS_REBOOT; 8086:1E31, 8086:9C31,
-    8086:9CB1): at shutdown the switchable connectors go back to the USB
-    2.0 controller, WHATEVER XhciIntelPortSwitch SAYS, against a machine
-    that powers itself back on. 2 is read as 1.
-  XhciShutdownReset (XHCI_SPURIOUS_WAKEUP; 8086:9C31, 8086:9CB1): OFF BY
-    DEFAULT. At 1 the controller is reset at shutdown once it has proved
-    halted, for a machine that wakes by itself after shutting down.
-    2: every controller.
-  XhciSuspendHaltDelay (XHCI_SUSPEND_DELAY; 1022:145C, 1022:15E0,
-    1022:15E1, 1022:43BB): a 1.5 ms pause before the controller is halted
-    for standby, hibernation or shutdown. 2: every controller.
-  XhciSuspendHaltTimeout (XHCI_SLOW_SUSPEND; 1B73:1000): that halt may
-    take up to 640 ms instead of 32 ms; it ends as soon as the controller
-    halts. 2: every controller.
-  XhciAsmediaFlowControl (XHCI_ASMEDIA_MODIFY_FLOWCONTROL; 1B21:1142, the
-    ASM1042A): a vendor flow-control setting after each start, recovery
-    and resume. 2 is read as 1.
-  XhciTiIntervalCap (XHCI_LIMIT_ENDPOINT_INTERVAL_7; 104C:8241): an
-    interrupt endpoint of a High-Speed or faster device is polled at least
-    every 8 ms; audio is never capped. 2: every controller.
-  XhciStuckLinkReset (XHCI_MISSING_CAS; 8086:22B5, 8086:9D2F, 8086:A12F,
-    8086:5AA8, 8086:19D0): after a resume, a USB 3 port stuck in its
-    link's Polling state is reset once. 2: every controller.
-  XhciStreamRingPad (XHCI_TRB_OVERFETCH; 1106:3483, the VL805, 1D17:9202,
-    1D17:9203): spare memory after each block of UAS stream rings, which
-    these controllers read past. 2: every controller.
-  XhciControlLinkNoOp (XHCI_ETRON_HOST, part; 1B6F:7023, 1B6F:7052): a
-    SuperSpeed control transfer kept from straddling the end of its ring.
-    2: every controller, SuperSpeed devices only.
-  XhciIsochSpuriousSuccess (XHCI_ETRON_HOST, part; the same two): a false
-    success after an audio packet's error is dropped. 2: every controller.
-  XhciAmdSuspendBitClear (XHCI_DISABLE_SPARSE; 1022:15E5): bit 17 of the
-    controller's register at C12Ch cleared before each standby,
-    hibernation and shutdown, as Linux does. 2 is read as 1.
-
-  WHAT HAPPENS AT SHUTDOWN IS SEEN ONLY IN A CAPTURE OF THAT SHUTDOWN.
-  XhciIntelShutdownToEhci and XhciShutdownReset log what they did, but the
-  log lives in memory and is gone at the next start, so XHCITR never
-  shows it. Set XhciLogVerbosity to 2 or above (below it nothing is
-  recorded) and XhciLogDebugView to 1, and attach a debug-output viewer or
-  a kernel debugger to the shutdown to see it.
-
-  THOSE THIRTY-SIX ARE THE WHOLE LIST. The earlier releases'
-  XhciVirtualHSHub, XhciVirtualHSHubVid and XhciVirtualHSHubPid are not
-  read: a copy left in the key by an earlier install has no effect, because
-  this driver reports
-  every device at its true speed with no virtual hub in the way. Delete
-  them if you want them gone.
-
-  WHERE THE KEY IS. The values live in the controller's own driver key,
-  which is spelled one way on the NT systems and another on the 9x ones:
-
-    Windows 2000 to 10
-      HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\
-        {36FC9E60-C465-11CF-8056-444553540000}\0002
-
-    Windows 98 SE and Windows ME
-      HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\Class\USB\0002
-
-  THE LAST PART OF THE PATH IS ASSIGNED BY THE MACHINE AND WILL NOT
-  NECESSARILY BE 0002 ON YOURS. That is also why no ready-made .REG file
-  ships here.
-
-  DO NOT IDENTIFY THAT KEY BY ITS DESCRIPTION, AND DO NOT ASSUME THERE IS
-  ONLY ONE. If the controller has ever been enumerated at more than one PCI
-  slot, there is one such key per slot, all carrying this driver's name.
-  Values typed into a stale one are read by nothing. Ask the device itself
-  which key it uses. Find your controller under
-
-    Windows 98    HKEY_LOCAL_MACHINE\Enum\PCI
-    Windows 2000  HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Enum\PCI
-    and later
-
-  open the subkey for the slot it occupies, and read its Driver value. It
-  names the key to edit - for example USB\0004.
-
-  RAISE THE LEVEL ABOVE 2, OR SET XhciLogDebugView, ONLY WHILE DIAGNOSING
-  SOMETHING, AND PUT THEM BACK WHEN YOU HAVE SENT THE CAPTURE. While the
-  channel is enabled (at any level above 0), anyone using this machine can
-  read the driver's own diagnostic state through it - counters, the log,
-  the port table, and at level 4 internal addresses. It is this driver's
-  own state and nothing else: no documents, no passwords, no other
-  program's memory. At level 0 the driver does not answer at all, so the
-  value you set IS the lock. On Windows 2000 and later you need
-  administrator rights to set it (XHCITR's Logging level asks for them; on
-  Vista and later, XHCITR /setlevel needs a Command Prompt started with
-  "Run as administrator").
-
-
-==============================================================================
- 10. RELEASE HISTORY
-==============================================================================
-
-{HISTORY}
 
 ==============================================================================
  LICENCE
@@ -6820,8 +5487,8 @@ repository rather than here.
     # the audit of 2026-09-07 nothing made anyone look.
     #
     # **The owner's rule since 2026-09-17: the readme states the current state
-    # only.** What changed between versions, and why, belongs in section 10,
-    # which is history.md embedded; the template itself names no release. So
+    # only.** What changed in this version belongs in section 1, which is
+    # its history.md entry; the template itself names no release. So
     # the list below is empty, and a four-part version written into the
     # template by hand fails the cut. Write it with {VERSION}, or put the
     # sentence in history.md. This runs against the template BEFORE
@@ -6878,10 +5545,10 @@ which XHCITR matches this driver by that number; correct the sentence.
     # the console is not where a user reads it.
     #
     $missingTools = @()
-    if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS machine checker of section 1)" }
-    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal service of section 4)" }
-    if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the installer of section 4)" }
-    if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }
+    if ($null -eq $qualtoolStaged) { $missingTools += "TOOLS\XHCIQUAL\ (the DOS report tool of section 4)" }
+    if ($null -eq $marktoolStaged) { $missingTools += "TOOLS\XHCIMARK\ (the Thunderbolt safe-removal service of section 5)" }
+    if ($null -eq $insttoolStaged) { $missingTools += "SETUP.EXE, INSTALL.BAT and TOOLS\XHCIINST\ (the installer of section 2)" }
+    if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of sections 2 and 4)" }
     if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }
     $incomplete = ""
     if ($missingTools.Count -gt 0) {
@@ -6913,7 +5580,7 @@ $(($missingTools | ForEach-Object { "      " + $_ }) -join "`r`n")
 ******************************************************************************
  TEST $Version, $TestLabel.
  This is a test build, not a release. It is not published, and a later
- release replaces it. Section 10, its release history entry, says what it
+ release replaces it. Section 1, its release history entry, says what it
  is for and what it changes.
 ******************************************************************************
 
@@ -6969,17 +5636,14 @@ file is named, never shipped.
         Replace("{VERSION}", $Version).
         Replace("{DATE}", $today).
         Replace("{RELEASEDIR}", $readmeReleaseDir).
-        Replace("{DEBUGDIR}", $readmeDebugDir).
-        Replace("{DIRLIST}", $readmeDirList).
-        Replace("{TELLAPART}", $readmeTellApart).
         Replace("{ARCHNOTE}", $readmeArchNote).
         Replace("{ARCHOS}", $readmeArchOs).
-        Replace("{ARCHOSREQ}", $readmeArchOsReq).
         Replace("{ARCHFILES}", $readmeArchFiles).
         Replace("{ARCHINSTALL}", $readmeArchInstall).
         Replace("{INCOMPLETE}", $incomplete).
         Replace("{CONTENTS}", (($contents -join "`r`n").TrimEnd() + "`r`n")).
-        Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd()))
+        Replace("{HISTORY}", (($historyText -join "`r`n").TrimEnd())).
+        Replace("{EARLIER}", (($earlierText -join "`r`n").TrimEnd()))
 
     # Nothing may reach the reader still carrying a placeholder: a typo in one
     # would otherwise ship as literal braces in a file nobody re-reads.
@@ -7679,6 +6343,13 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Copy-Item -LiteralPath $licenseSrc -Destination (Join-Path $destRoot "LICENSE") -Force
     Write-Ok "LICENSE copied into the release root, CRLF throughout"
 
+    # INTEGRATE.TXT (record 36 section 8.2): which family folder for which
+    # Windows, and how to point an integration tool at it.
+    if ($familyFlat.Count -gt 0) {
+        Write-GeneratedText -Path (Join-Path $destRoot "INTEGRATE.TXT") -Lines ((Get-IntegrateText -Version $Version) -split "`r`n")
+        Write-Ok "INTEGRATE.TXT written at the release root"
+    }
+
     # The driver pack's record (task 43.3): tracked, plain text, and the one
     # thing -UploadSetOnly rebuilds the download's pack from. Written by
     # every cut, so a release without the pack says so rather than leaving
@@ -7824,6 +6495,12 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Host "            packages' checks, the x64 test signatures and the upload set."
         exit 0
     }
+    # The second comparison (record 36 section 7.1): a family file changed
+    # since the first is a refusal before anything is published.
+    if ($familyFlat.Count -gt 0) {
+        Assert-FamilyFromLegs -Root $destRoot -FlatDirs $familyFlat -What "the staged release '$destRoot'"
+    }
+
     $asideRoot = $null
     if (Test-Path -LiteralPath $finalRoot) {
         Write-Warn ("-Force: replacing the existing {0}" -f $finalRoot)
@@ -7927,8 +6604,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host "            Each published directory holds this project's own files only: its"
     Write-Host "            drivers, their INFs, txtsetup.oem, in an x86 directory nt\ beside"
     Write-Host "            them, and in an x64 directory the test certificate; tools\,"
-    Write-Host "            SETUP.EXE and INSTALL.BAT at the root; in each release- directory"
-    Write-Host "            the Stor98 built with them. No Microsoft file. Commit this."
+    Write-Host "            SETUP.EXE, INSTALL.BAT and INTEGRATE.TXT at the root; in each"
+    Write-Host "            family folder's stor98\ the Stor98 built with them. No Microsoft"
+    Write-Host "            file. Commit this."
     Write-Host ("            {0} records whether the download carries the driver pack." -f $script:DriverPackRecordName)
     if ($null -ne $uploadRoot) {
         Write-Host ""
@@ -7977,6 +6655,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
     }
     exit 1
 } finally {
+    foreach ($d in @($script:FlatViewDirs)) {
+        if ($d -ne "" -and (Test-Path -LiteralPath $d)) {
+            Remove-Item -LiteralPath $d -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
     if ($checkOnlyRoot -ne "" -and (Test-Path -LiteralPath $checkOnlyRoot)) {
         Remove-Item -LiteralPath $checkOnlyRoot -Recurse -Force -ErrorAction SilentlyContinue
     }

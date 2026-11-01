@@ -360,7 +360,7 @@ static volatile UCHAR *tbtRxDesc(PTBT_RING ring, ULONG i)
 }
 
 /* Spec 12.4.1 Table 12-7: the buffer's address, RS set so the status is
- * written back, DD clear. */
+ * written back, DD clear; IE as the ring interrupt's intent says (RxIe). */
 static VOID tbtRxPost(PTBT_RING ring, ULONG i)
 {
     volatile UCHAR *d;
@@ -369,7 +369,8 @@ static VOID tbtRxPost(PTBT_RING ring, ULONG i)
     tbtStoreLe32(d + TBT_DESC_ADDR_LO,
                  ring->Phys + tbtRxBufOff(ring) + TBT_RING_BUF_BYTES * i);
     tbtStoreLe32(d + TBT_DESC_ADDR_HI, 0);
-    tbtStoreLe32(d + TBT_DESC_DW2, TBT_DESC_RS);
+    tbtStoreLe32(d + TBT_DESC_DW2,
+                 TBT_DESC_RS | (ring->RxIe ? TBT_DESC_IE : 0UL));
     tbtStoreLe32(d + TBT_DESC_DW3, 0);
 }
 
@@ -377,6 +378,12 @@ VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context)
 {
     ring->Unsolicited = fn;
     ring->UnsolicitedContext = context;
+}
+
+VOID TbtRingSetXdomainSink(PTBT_RING ring, TBT_XDOMAIN_SINK fn, PVOID context)
+{
+    ring->XdomainSink = fn;
+    ring->XdomainContext = context;
 }
 
 /*
@@ -555,11 +562,30 @@ LONG TbtRingStartEx(PTBT_RING ring,
            entries | (TBT_RING_BUF_BYTES << TBT_RX_BUFSIZE_SHIFT));
     TBT_WR(ring, TBT_RX_PDF(0), rxPdfMask);
     ring->RxPdfMask = rxPdfMask;
-    TBT_WR(ring, TBT_RX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
-    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, entries - 1);
 
     ring->TxNext = 0;
     ring->RxNext = 0;
+
+    /* RX's Producer Index is the host interface's: one the base write did
+     * not move to 0 is where the next frame lands, so the receive starts
+     * there; otherwise every answer would be waited for at slot 0. It is
+     * read while the ring is not yet valid and the Consumer Index not yet
+     * written, so no frame can move it between this read and the start,
+     * and none is skipped. An unreadable or out-of-range one is refused. */
+    idx = TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_INDEX);
+    if (TBT_RING_PROD(idx) != 0) {
+        tbtLog(host, "tbt.ring.rx-index", idx);
+        if (idx == 0xFFFFFFFFUL || TBT_RING_PROD(idx) >= entries) {
+            TBT_WR(ring, TBT_TX_CTRL(0), 0);
+            TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, 0);
+            tbtRingVerifyStopped(ring);
+            return TBT_E_HW;
+        }
+        ring->RxNext = TBT_RING_PROD(idx);
+    }
+    TBT_WR(ring, TBT_RX_CTRL(0), TBT_RING_CTRL_VALID | TBT_RING_CTRL_RAW);
+    TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX,
+           (ring->RxNext + entries - 1) % entries);
 
     /* Writing the base reset both TX indexes (Table 12-17). A ring whose
      * indexes did not move to an agreeing pair is not one to send on. */
@@ -728,6 +754,12 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
         }
         tbtRingStep(ring, &w);
     }
+    /* A wait the gate ended (TBT_HOST.Cancelled) proves nothing about the
+     * hardware: not counted or answered as a ring that does not move. */
+    if (ring->Host->Cancelled != NULL &&
+        ring->Host->Cancelled(ring->Host->Context)) {
+        return TBT_E_STOPPED;
+    }
     ring->Counters.TxStuck++;
     tbtLog(ring->Host, "tbt.ring.tx-stuck", idx);
     return TBT_E_HW;
@@ -803,12 +835,41 @@ BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame)
         }
     }
 
+    /* An inter-domain packet goes to its sink before any reader sees it
+     * (record 35 section 3.2): whoever is draining, the packet reaches
+     * the discovery engine, and the reader gets Words 0, which every
+     * reader already treats as nothing to act on. */
+    if (frame->Words != 0 &&
+        (frame->Pdf == TBT_PDF_XDOMAIN_REQ ||
+         frame->Pdf == TBT_PDF_XDOMAIN_RESP)) {
+        if (ring->XdomainSink != NULL) {
+            ring->Counters.Xdomain++;
+            ring->XdomainSink(ring->XdomainContext, frame);
+            frame->Words = 0;
+            frame->Flags |= TBT_FRAME_DIVERTED;
+        } else {
+            ring->Counters.XdomainUnclaimed++;
+        }
+    }
+
     /* Give the descriptor back: the Consumer Index names the one just
      * taken, which leaves exactly one vacant (Spec 12.4.2.2, Table 12-24). */
     tbtRxPost(ring, i);
     TBT_WR(ring, TBT_RX_RING(0) + TBT_RING_INDEX, i);
     ring->RxNext = (i + 1) % ring->Entries;
     return TRUE;
+}
+
+BOOLEAN TbtRingRxPending(const TBT_RING *ring)
+{
+    const volatile UCHAR *d;
+
+    if (!ring->Running || ring->Va == NULL || ring->Entries == 0) {
+        return FALSE;
+    }
+    d = ring->Va + TBT_DESC_BYTES * ring->Entries +
+        TBT_DESC_BYTES * ring->RxNext;
+    return (BOOLEAN)((tbtLoadLe32(d + TBT_DESC_DW2) & TBT_DESC_DD) != 0);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -827,6 +888,9 @@ static ULONG tbtReqDw3(ULONG address, ULONG count, ULONG adapter, ULONG cs,
 
 static VOID tbtHandOff(PTBT_RING ring, const TBT_FRAME *f)
 {
+    if ((f->Flags & TBT_FRAME_DIVERTED) != 0) {
+        return;     /* the XDomain sink's already */
+    }
     ring->Counters.Unsolicited++;
     if (ring->Unsolicited != NULL) {
         ring->Unsolicited(ring->UnsolicitedContext, f);
@@ -856,9 +920,10 @@ ULONG TbtCtlClassify(ULONG code)
         return TBT_NOTE_ACK_IGNORE;
     case TBT_EV_ROP_CMPLT:
     case TBT_EV_POP_CMPLT:
-    case TBT_EV_LINK_RECOVERY:
     case TBT_EV_ASYM_LINK:
         return TBT_NOTE_SILENT;
+    case TBT_EV_LINK_RECOVERY:
+        return TBT_NOTE_DELIVER;
     case TBT_EV_HP_ACK:
         return TBT_NOTE_HP_ACK;
     }
@@ -1009,6 +1074,12 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
                 }
             }
             return TBT_OK;
+        }
+        /* As in TbtRingSend: the gate's end of the wait is no timeout, and
+         * no attempt follows it. */
+        if (ring->Host->Cancelled != NULL &&
+            ring->Host->Cancelled(ring->Host->Context)) {
+            return TBT_E_STOPPED;
         }
         tbtLog(ring->Host, "tbt.ring.ctl-no-answer", want);
     }
@@ -1211,6 +1282,9 @@ static VOID tbtCtlNotification(PTBT_CTL ctl, const TBT_FRAME *f)
         }
         break;
     case TBT_NOTE_SILENT:
+        break;
+    case TBT_NOTE_DELIVER:
+        tbtCtlQueueNote(ctl, &n);
         break;
     default:
         ctl->Counters.Strays++;

@@ -190,6 +190,10 @@ VOID CmNhiQuiesce(PCM_NHI nhi)
     if (nhi->DevicePower != PowerDeviceD0) {
         return;
     }
+    /* The ring interrupt down while the function is still in D0, before
+     * any ring stops and before the D3 is forwarded (record 21 section
+     * 4.5.6): never connected outside D0. */
+    CmRirqDown(nhi, CM_RIRQ_DOWN_D3);
     /* At shutdown a client already suspended in D0 (the direct
      * transition) still owes its unbind and its ownership cleanup. */
     if (nhi->SystemPower == PowerSystemShutdown) {
@@ -320,6 +324,9 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
     }
+    /* The ring interrupt's intent before the resume restarts the rings;
+     * the re-arm follows on the thread's pass (cm_rirqos.c). */
+    CmRirqIntent(nhi);
     held = FALSE;
     if (ok && nhi->U4On) {
         ran = TRUE;
@@ -437,6 +444,25 @@ VOID CmPowerD0Work(PCM_NHI nhi, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
 
+    if (!NT_SUCCESS(irp->IoStatus.Status)) {
+        /* A D0 the bus failed (cmD0Done): nothing reinitialised, and the
+         * release owed through the failure path made here, on the thread,
+         * never beside its own re-enumeration calls (cm_reenum.h's
+         * contract). The IRP completes as it came back. */
+#if defined(XHCI_FLAVOUR_QEMU)
+        CmLogNote(nhi, "cm.qemu.d0.failed.thread",
+                  ((ULONG)irp->IoStatus.Status & 0xFFFFFFUL) |
+                      (nhi->Suspended ? 0x01000000UL : 0) |
+                      (nhi->ReenumOn ? 0x02000000UL : 0));
+#endif
+        if (nhi->Suspended || nhi->ReenumOn) {
+            CmReenumResumeFailed(nhi);
+        }
+        PoStartNextPowerIrp(irp);
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        CmPowerRelease(nhi);
+        return;
+    }
     stack = IoGetCurrentIrpStackLocation(irp);
     nhi->DevicePower = PowerDeviceD0;
     (VOID)CmNhiReinit(nhi);
@@ -497,6 +523,16 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     UNREFERENCED_PARAMETER(DeviceObject);
 
     nhi = (PCM_NHI)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciCmQemuFailD0 (task 45.27): no guest's bus fails a D0, so the
+     * qemu flavour takes the one it names as failed below, once, for
+     * the failure path's legs. Never in the published flavour. */
+    if (NT_SUCCESS(Irp->IoStatus.Status) && nhi->QemuFailD0 != 0 &&
+        (ULONG)InterlockedIncrement(&nhi->QemuD0Seen) == nhi->QemuFailD0) {
+        Irp->IoStatus.Status = STATUS_UNSUCCESSFUL;
+        CmLogNote(nhi, "cm.qemu.d0.failed", nhi->QemuFailD0);
+    }
+#endif
     if (NT_SUCCESS(Irp->IoStatus.Status)) {
         if (CmThrQueueOrRecord(nhi, CM_WORK_D0, Irp, PowerDeviceD0)) {
             return STATUS_MORE_PROCESSING_REQUIRED;
@@ -507,11 +543,17 @@ static NTSTATUS NTAPI cmD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         (VOID)PoSetPowerState(nhi->Common.Self, DevicePowerState,
                               stack->Parameters.Power.State);
         nhi->Counters.PowerInline++;
+    } else if (CmThrQueue(nhi, CM_WORK_D0, Irp)) {
+        /* Refused below: the failure path is the thread's work
+         * (CmPowerD0Work), since the thread may be inside CmReenumStop or
+         * CmReenumStart on the same domain. */
+        return STATUS_MORE_PROCESSING_REQUIRED;
     }
-    /* No reinitialisation will run for this D0 (refused below, or no
-     * thread): a suspend this driver ran, or a domain still marking its
-     * tunnel bridges, is owed their release now, through the failure path:
-     * the marks cleared and the bridges invalidated (cm_reenum.h). */
+    /* No reinitialisation will run for this D0 and no thread to take it:
+     * a suspend this driver ran, or a domain still marking its tunnel
+     * bridges, is owed their release now, through the failure path: the
+     * marks cleared and the bridges invalidated (cm_reenum.h). With no
+     * thread, nothing of the re-enumeration runs beside it. */
     if (nhi->Suspended || nhi->ReenumOn) {
         CmReenumResumeFailed(nhi);
     }

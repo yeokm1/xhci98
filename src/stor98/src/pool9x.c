@@ -2303,9 +2303,9 @@ BOOLEAN PlatCmRemoveStartIo(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLO
         if (p->RmBusy <= 255) {
             DBGSTAGE(STG_P9_RM_BUSY, (p->RmBusy & 0xFFFF) | ((((ULONG)(ULONG_PTR)Srb >> 4) & 0xFFF) << 16));
         }
+        // DataTransferLength kept, as for every BUSY (EngBusyOrFail).
         Srb->SrbStatus = SRB_STATUS_BUSY;
         Srb->ScsiStatus = SCSISTAT_GOOD;
-        Srb->DataTransferLength = 0;
         EngCompleteSrb(DevExt, Srb);
         EngTimerEnsure(DevExt, ENG_TICK_FAST_US);
     }

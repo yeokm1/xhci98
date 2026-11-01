@@ -60,7 +60,12 @@ static void test_match(void)
     hw = TbtHwMatch(0x1B21, 0x2425, 0x0C0340, FALSE);
     CHECK(hw != NULL && (hw->Flags & TBT_HW_CLASS_MATCH), "any class 0C0340 host");
     CHECK(TbtHwMatch(0x8086, 0x15DC, 0x088000, FALSE) == NULL, "USB-only NHI: not a candidate");
-    CHECK(TbtHwMatch(0x8086, 0x1513, 0x088000, FALSE) == NULL, "Light Ridge: not claimed");
+    hw = TbtHwMatch(0x8086, 0x1513, 0x088000, FALSE);
+    CHECK(hw != NULL && (hw->Flags & TBT_HW_MAC_ONLY) && hw->Icm == NULL,
+          "Light Ridge: an Apple machine's only (record 22 section 19.3)");
+    hw = TbtHwMatch(0x8086, 0x1547, 0x088000, FALSE);
+    CHECK(hw != NULL && (hw->Flags & TBT_HW_MAC_ONLY), "Cactus Ridge 4C likewise");
+    CHECK(TbtHwMatch(0x8086, 0x1548, 0x088000, FALSE) == NULL, "Cactus Ridge 2C: not claimed");
     hw = TbtHwMatch(0x8086, 0x1234, 0x088000, TRUE);
     CHECK(hw != NULL && (hw->Flags & TBT_HW_FORCED), "XhciCmMode 2: unlisted Intel id");
     CHECK(hw != NULL && hw->Icm == &TbtIcmProfileAlpineRidge, "on the Alpine Ridge row");
@@ -198,7 +203,8 @@ static void doSelect(const TBT_HW_PROFILE *hw, BOOLEAN ready, BOOLEAN apple,
     unsigned long writes = g_fake.Writes;
     unsigned long cfgWrites = g_fake.CfgWrites;
 
-    TbtHwSelect(hw, &g_fakeHost, ready, apple, force, s);
+    TbtHwSelect(hw, &g_fakeHost, ready, apple ? TBT_HW_VENDOR_APPLE : 0x22B017AAUL,
+                force, s);
     if (s->Outcome == TBT_SEL_INERT) {
         CHECK_EQ(g_fake.Writes, writes, "an inert selection writes no register");
         CHECK_EQ(g_fake.CfgWrites, cfgWrites,
@@ -286,9 +292,17 @@ static void test_select(void)
     fakeReset();
     doSelect(ar, FALSE, FALSE, FALSE, &s);
     CHECK_EQ(s.Reason, TBT_INERT_PLATFORM, "platform not ready");
+    /* Record 22 section 19.3: an Apple machine's Alpine Ridge keeps its
+     * running ICM; with the ICM enable clear it is the Thunderbolt-host
+     * profile's (test_tbt_select.c has the rest). */
     fakeReset();
     doSelect(ar, TRUE, TRUE, FALSE, &s);
-    CHECK_EQ(s.Reason, TBT_INERT_APPLE, "Apple: platform policy");
+    CHECK_EQ(s.Outcome, TBT_SEL_ICM, "Apple, ICM running: the ICM's");
+    fakeReset();
+    g_fake.FwStatus = 0;
+    doSelect(ar, TRUE, TRUE, FALSE, &s);
+    CHECK_EQ(s.Outcome, TBT_SEL_SOFTWARE, "Apple, ICM enable clear: software");
+    CHECK_EQ(s.Route, TBT_SW_ROUTE_TBT_HOST, "the Thunderbolt-host profile");
     fakeReset();
     doSelect(NULL, TRUE, FALSE, FALSE, &s);
     CHECK_EQ(s.Reason, TBT_INERT_PLATFORM, "no profile");

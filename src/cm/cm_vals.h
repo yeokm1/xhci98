@@ -66,6 +66,21 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out);
 ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
 
 /*
+ * The role by position (design record 33 section 4.4, task 45.12), after
+ * CmRoleDecide, whose NHI answer stands whatever the stack holds: a
+ * CM_ROLE_FILTER answer (a bridge the filter INF lists) becomes the child
+ * when `pciAbove` is 0 - AddDevice found no device of the PCI driver above
+ * the PDO, so this call is the device's LowerFilters registration, made
+ * before the PCI driver's FDO - and stays the bridge filter when the PCI
+ * driver's FDO is above it (the filter INF's UpperFilters). Every other
+ * role is returned as it came, and every role when `byPlace` is 0: the
+ * placement is Windows 2000 to XP x64's alone (record 33 sections 4.4 and
+ * 7.8: NT 6.x untouched, the lower and the upper call one bridge filter,
+ * decision M15).
+ */
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace);
+
+/*
  * The NHI profiles (record 21 section 1.4, and the coverage plan of the
  * owner's 2026-10-15 decisions; orchestrator's table, owner to confirm):
  * which connection manager a matched NHI gets and, for the firmware one
@@ -79,9 +94,12 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed);
  * sys/dev/thunderbolt/nhi_reg.h's DEVICE_PINK_SARDINE_* (pinned at
  * 9d50245a); legal-provenance.md has the rows. Only 15BF has been read by
  * this project [obs]; every other row is untested. Not claimed: the
- * USB-only Alpine Ridge NHIs (15DC 15DD 15DE), Light Ridge, Cactus Ridge,
- * Win Ridge and Redwood Ridge; Apple machines are excluded at run time by
- * a platform check, not here.
+ * USB-only Alpine Ridge NHIs (15DC 15DD 15DE), Cactus Ridge 2C, Win Ridge
+ * and Redwood Ridge. Falcon, Alpine and Titan Ridge on an Apple machine,
+ * and Light Ridge and Cactus Ridge 4C, run the software CM's
+ * Thunderbolt-host profile (design record 22 section 19), which a run-time
+ * check of the subsystem and the firmware status selects; the INFs bind
+ * the last two by their class form on NT 6.x alone (section 19.9).
  *
  * A profile is a hardware candidate only. Whether the platform is ready,
  * who owns the connection manager and whether the router protocol is
@@ -203,7 +221,16 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 /* The log's emission (record 21 section 8, the owner's decision of
  * 2026-10-16): 1 hands the ring to DbgPrint in every flavour. */
 #define CM_VAL_LOG_DEBUGVIEW     11  /* XhciCmLogDebugView                  */
-#define CM_VAL_COUNT             12
+/* Thunderbolt networking (design record 35 section 8.1, task 45.59):
+ * XhciCmNet gates every inter-domain answer, path and the network PDO;
+ * the others size and pace the service's rings (record 35 sections 5.3,
+ * 5.4). Each refused out of range, the default standing. */
+#define CM_VAL_NET               12  /* XhciCmNet                           */
+#define CM_VAL_NET_POLL_MS       13  /* XhciCmNetPollMs                     */
+#define CM_VAL_NET_RX_FRAMES     14  /* XhciCmNetRxFrames                   */
+#define CM_VAL_NET_TX_FRAMES     15  /* XhciCmNetTxFrames                   */
+#define CM_VAL_NET_E2E           16  /* XhciCmNetE2E                        */
+#define CM_VAL_COUNT             17
 
 
 /* XhciCmMode (record 21 section 8, decision D11). */
@@ -216,8 +243,9 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 /*
  * XhciCmTunnelBridge, REG_SZ, a comma-separated list of "bb:dd.f" bridges
  * that replaces record 21 section 6.3's discovery as the domain's whole
- * tunnel-port set. No INF writes it: its absence is meaningful (record 21
- * section 8), so absent and empty both mean no override. Held here
+ * tunnel-port set. Absent, empty and "auto" (any case, alone), the form
+ * the INFs write since task 45.50 (record 21 section 8.1), all mean no
+ * override, the driver's own finding. Held here
  * unparsed; task 39-A.5 parses it. A string of this many characters or
  * more (seven bridges and their separators fit) is refused, not
  * truncated.
@@ -258,11 +286,71 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
  * into the two protocol-adapter HopID 8 entries of a PCIe tunnel this
  * driver builds between an ASM4242 host router and an ASM2464 device
  * router (tbt_u4cm.h, TBT_U4_CONFIG AsmPcie7Credits); 0 keeps them as
- * read. No INF writes it and the installer does not ask for it; absent
- * reads as 0, and any other value is refused and 0 stands. Read once per
+ * read. The INFs write it at 0 since task 45.50 and the installer does
+ * not ask for it; absent reads as 0, and any other value is refused and 0
+ * stands. Read once per
  * start, machine-wide key first, as every value.
  */
 #define CM_ASM_PCIE7_DEFAULT 0UL
+
+/*
+ * XhciCmUsb4V2, REG_DWORD (design record 22 sections 6.2 and 12, decision
+ * U30, task 45.20): a bench switch. 1 runs a USB4 version 2 router this
+ * driver enumerates as version 2 (CMUV 2.0) and keys section 6.2.2's
+ * version 2 obligations on each router's own version and capabilities;
+ * 0 is the version 1 run of 3.3.0.0 (tbt_u4cm.h, TBT_U4_CONFIG Usb4V2).
+ * The INFs write it at 1 since task 45.50 and the installer does not
+ * ask for it; absent reads as 1, and any other value is refused and 1
+ * stands. Read once per
+ * start, machine-wide key first, as every value.
+ */
+#define CM_USB4_V2_DEFAULT 1UL
+
+/*
+ * XhciCmGen4LinkRecovery, REG_DWORD (design record 22 sections 6.2.3 item
+ * 4 and 12, decision U33, task 45.56): a bench switch. 1 sets Enable Gen
+ * 4 Link Recovery on both ends of a depth-1 Gen 4 link between two USB4
+ * version 2 routers, with the recovery check after each LINK_RECOVERY;
+ * 0 never sets it, an uncorrectable error on such a link being a
+ * disconnect as in task 45.20 (tbt_u4cm.h, TBT_U4_CONFIG
+ * Gen4LinkRecovery). XhciCmUsb4V2 0 never sets it either. The INFs
+ * write it at 1 and the installer does not ask for it; absent reads as
+ * 1, and any other value is refused and 1 stands. Read once per start,
+ * machine-wide key first, as every value.
+ */
+#define CM_GEN4_ELR_DEFAULT 1UL
+
+/*
+ * XhciCmBridgeReq, REG_DWORD, Windows 2000, XP and XP x64 only (design
+ * record 33 section 9.1, task 45.12): 1 rewrites the requirement list of
+ * a hot-added bridge below an active tunnel port (record 33 section 6)
+ * and lets the mark service write its bridge marks (section 4.3); 0 does
+ * neither, lists passing untouched and each attempt still recorded with
+ * outcome "off"; 2 computes and records every attempt, replaces no list
+ * and writes no bridge mark (a reading mode for the bench). The NT 5.x
+ * install paths write it at 1 since task 45.50; absent reads as 1, any other value is refused and 1 stands. Read
+ * once per start, machine-wide key first, as every value, and never on
+ * Vista and later or on 98 SE and ME.
+ */
+/*
+ * XhciCmRingInterrupt, REG_DWORD (design record 21 section 4.5.4, task
+ * 45.22): 1 lets the NHI's line interrupt end the connection-manager
+ * thread's idle wait where the start grants one and it is proven
+ * (cm_rirqos.c), on 2000 to 10; 0 polls as before. 98 SE and ME poll
+ * whatever it says until their route is read. The NT install paths write
+ * it at 0 since task 45.50 and the installer does not ask for it (owner,
+ * 2026-10-29: off by default);
+ * absent reads as 0, and any other value (2 and above are reserved for the
+ * message step) is refused and 0 stands. Read once per start, machine-wide
+ * key first, as every value.
+ */
+#define CM_RING_IRQ_DEFAULT 0UL
+#define CM_RING_IRQ_MAX     1UL
+
+#define CM_BRIDGE_REQ_DEFAULT 1UL
+#define CM_BRIDGE_REQ_OFF     0UL
+#define CM_BRIDGE_REQ_ON      1UL
+#define CM_BRIDGE_REQ_RECORD  2UL
 
 typedef struct _CM_VALUES {
     ULONG Value[CM_VAL_COUNT];  /* what the driver runs with                */
@@ -285,6 +373,27 @@ typedef struct _CM_VALUES {
     ULONG AsmPcie7Found;
     ULONG AsmPcie7Raw;
     ULONG AsmPcie7Refused;
+    ULONG Usb4V2;               /* XhciCmUsb4V2 as run with                 */
+    ULONG Usb4V2Found;
+    ULONG Usb4V2Raw;
+    ULONG Usb4V2Refused;
+    ULONG Gen4Elr;              /* XhciCmGen4LinkRecovery as run with       */
+    ULONG Gen4ElrFound;
+    ULONG Gen4ElrRaw;
+    ULONG Gen4ElrRefused;
+    ULONG BridgeReq;            /* XhciCmBridgeReq as run with              */
+    ULONG BridgeReqFound;
+    ULONG BridgeReqRaw;
+    ULONG BridgeReqRefused;
+    ULONG RingIrq;              /* XhciCmRingInterrupt as run with          */
+    ULONG RingIrqFound;
+    ULONG RingIrqRaw;
+    ULONG RingIrqRefused;
+    /* XhciCmQemuIrqDead, read by the qemu flavour alone (never published):
+     * after this many claims the ring interrupt's service routine goes on
+     * acknowledging and stops counting and queueing - a line that died,
+     * for the lost-interrupt leg of task 45.22. 0: never. */
+    ULONG QemuIrqDead;
 } CM_VALUES, *PCM_VALUES;
 
 /* Every value at its default, nothing found. */
@@ -316,6 +425,18 @@ VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmAsmediaPcie7Credits: 0 or 1, anything else refused. */
 VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmUsb4V2: 0 or 1, anything else refused (1 stands). */
+VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmGen4LinkRecovery: 0 or 1, anything else refused (1 stands). */
+VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmBridgeReq: 0, 1 or 2, anything else refused (1 stands). */
+VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);
+
+/* Take XhciCmRingInterrupt: 0 or 1, anything else refused (0 stands). */
+VOID CmValuesTakeRingIrq(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

@@ -141,12 +141,13 @@ ULONG XhciFuncSplit(const UCHAR *device, const UCHAR *config, ULONG length,
     }
 
     /* Microsoft's composite-parent rule ("Enumeration of the composite
-     * parent device"), not design record 13 section 10.8's wider one: a
-     * device Windows leaves under one whole-device driver (several
-     * configurations, or a class of its own, IADs or not) must keep the
-     * USB\VID_v&PID_p id that driver matched on. */
+     * parent device"): a device of a class of its own, IADs or not, keeps
+     * the USB\VID_v&PID_p id a whole-device driver matched on. Several
+     * configurations no longer keep a device whole (task 45.34; design
+     * record 13 section 10.8): `config` is configuration index 0, the one
+     * the bus reads and sets. */
     cls = (ULONG)device[4];
-    if ((ULONG)device[17] != 1UL || count < 2 ||
+    if ((ULONG)device[17] == 0UL || count < 2 ||
         !(cls == 0 ||
           (cls == 0xEFUL && device[5] == 0x02 && device[6] == 0x01))) {
         return XHCI_FUNC_NO_SPLIT;
@@ -530,11 +531,22 @@ static VOID xhciFuncMi(XHCI_FUNC_TEXT *t, const XHCI_FUNC *func)
     xhciFuncHexN(t, func->FirstInterface, 2);
 }
 
+/* IRQL: any. */
+ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot)
+{
+    (VOID)sub;
+    if (cls == 0x01UL && (prot == 0x20UL || prot == 0x30UL)) {
+        return 2;
+    }
+    return 3;
+}
+
 ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
                  ULONG which, char *out, ULONG capacity, PULONG used)
 {
     XHCI_FUNC_TEXT t;
     ULONG depth;
+    ULONG last;
 
     if (device == NULL || func == NULL || used == NULL ||
         (out == NULL && capacity != 0)) {
@@ -561,7 +573,9 @@ ULONG XhciFuncId(const UCHAR *device, const XHCI_FUNC *func, ULONG port,
         xhciFuncChar(&t, 0);
         break;
     case XHCI_FUNC_ID_COMPATIBLE:
-        for (depth = 3; depth != 0; depth--) {
+        last = 3UL - XhciFuncCompatCount(func->Class, func->SubClass,
+                                         func->Protocol);
+        for (depth = 3; depth != last; depth--) {
             xhciFuncStr(&t, "USB\\Class_");
             xhciFuncHexN(&t, func->Class, 2);
             if (depth >= 2) {
@@ -736,6 +750,80 @@ ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial)
         return 0;
     }
     return xhciFuncExact(oldSerial, newSerial);
+}
+
+ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
+                          ULONG memVidPid, ULONG memSerial, ULONG latch)
+{
+    if (!covered || !readFailed || latch == XHCI_FUNC_LATCH_BYPASS) {
+        return XHCI_FUNC_DEFER_NO;
+    }
+    if (latch == XHCI_FUNC_LATCH_FAILED) {
+        return XHCI_FUNC_DEFER_FAIL;
+    }
+    if (memSerial && memVidPid == vidPid) {
+        return XHCI_FUNC_DEFER_YES;
+    }
+    return XHCI_FUNC_DEFER_NO;
+}
+
+PXHCI_ID_PLACE XhciFuncIdPlaceFind(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key)
+{
+    ULONG i;
+
+    if (table == NULL || key == 0) {
+        return NULL;
+    }
+    for (i = 0; i < count; i++) {
+        if (table[i].Key == key) {
+            return &table[i];
+        }
+    }
+    return NULL;
+}
+
+PXHCI_ID_PLACE XhciFuncIdPlaceTake(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key, PULONG clock)
+{
+    PXHCI_ID_PLACE e;
+    ULONG oldest;
+    ULONG age;
+    ULONG i;
+
+    if (table == NULL || count == 0 || key == 0 || clock == NULL) {
+        return NULL;
+    }
+    e = XhciFuncIdPlaceFind(table, count, key);
+    if (e == NULL) {
+        for (i = 0; i < count && e == NULL; i++) {
+            if (table[i].Key == 0) {
+                e = &table[i];
+            }
+        }
+    }
+    if (e == NULL) {
+        oldest = 0;
+        e = &table[0];
+        for (i = 0; i < count; i++) {
+            age = *clock - table[i].Stamp;
+            if (age > oldest) {
+                oldest = age;
+                e = &table[i];
+            }
+        }
+    }
+    if (e->Key != key) {
+        e->Key = key;
+        e->VidPid = 0;
+        e->Serial = 0;
+        e->Latch = XHCI_FUNC_LATCH_NONE;
+        e->Deferrals = 0;
+        e->Fails = 0;
+    }
+    e->Stamp = *clock;
+    *clock = *clock + 1UL;
+    return e;
 }
 
 ULONG XhciFuncRetireByPlace(const char *oldSerial, ULONG oldKey,

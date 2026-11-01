@@ -3251,7 +3251,13 @@ static void details_unit(TR_TEXT *t, int dn)
         }
     }
     if (envNt) {
-        tr_printf(t, "  Safe-removal mark: %s.\n", tr_mark_text(unit_mark(u)));
+        int mk = unit_mark(u);
+        const char *clause = tr_mark_clause(mk, gw.N[u].HasCaps,
+                                            (INST_U32)gw.N[u].Caps);
+        tr_printf(t, "  Safe-removal mark: %s.\n", tr_mark_text(mk));
+        if (clause[0] != '\0') {
+            tr_printf(t, "  %s\n", clause);
+        }
     } else if (!envNt) {
         tr_printf(t, "  %s\n", (gw.N[u].Status & TR_DN_REMOVABLE)
                                   ? "Marked removable by the Thunderbolt driver."
@@ -8483,7 +8489,7 @@ static void open_window(void)
             }
         }
     }
-    hMain = CreateWindowExA(0, "Xhci98TrMain", "xHCI98 USB Tree",
+    hMain = CreateWindowExA(0, "Xhci98TrMain", TR_MAIN_TITLE,
                             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, cx, cy,
                             NULL, LoadMenuA(hInst, MAKEINTRESOURCEA(IDR_MENU)),
                             hInst, NULL);

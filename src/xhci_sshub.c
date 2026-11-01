@@ -238,7 +238,11 @@ ULONG XhciSsHubResetProgress(ULONG status, ULONG change, PULONG warmSeen)
     if (warmSeen != NULL) {
         *warmSeen = (change & XHCI_SSHUB_C_BH_PORT_RESET) != 0;
     }
-    if (!done && (status & XHCI_SSHUB_PORT_RESET) != 0) {
+    /* A port still in reset has not ended this reset, whatever change
+     * stands: a C_PORT_RESET or C_BH_PORT_RESET an older reset left would
+     * otherwise read this one as failed (the caller clears them first, but
+     * a clear the hub refused leaves one). */
+    if ((status & XHCI_SSHUB_PORT_RESET) != 0) {
         return XHCI_HUB_RESET_PENDING;
     }
     if ((status & XHCI_SSHUB_PORT_CONNECTION) == 0) {

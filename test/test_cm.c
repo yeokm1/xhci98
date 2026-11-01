@@ -113,6 +113,29 @@ static void test_role_decide(void)
     CHECK_EQ(CmClassifyIds(NULL, 0, &ids), CM_ROLE_NONE, "no list");
     CHECK_EQ(CmRoleDecide(&ids, 0), CM_ROLE_CHILD,
              "an unreadable list is a child: a lower filter's AddDevice never fails");
+
+    /* The role by position (design record 33 section 4.4, task 45.12). */
+    classify(bridge, sizeof(bridge), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 0), CM_ROLE_FILTER,
+             "NT 6.x: a listed bridge's lower call stays the bridge filter (M15)");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 0), CM_ROLE_FILTER,
+             "NT 6.x: the upper call the same");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_FILTER,
+             "an INF-listed bridge with the PCI driver's FDO above: the bridge "
+             "filter (its UpperFilters)");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_CHILD,
+             "an INF-listed bridge with nothing of the PCI driver's above: the "
+             "child (its LowerFilters bridge mark)");
+    classify(nhi, sizeof(nhi), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 0, 1), CM_ROLE_NHI,
+             "the NHI with nothing above its PDO stays the NHI");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 1), 1, 1), CM_ROLE_NHI,
+             "the NHI whatever is above it");
+    classify(usp, sizeof(usp), &ids);
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 1, 1), CM_ROLE_CHILD,
+             "an unlisted bridge is a child in either order");
+    CHECK_EQ(CmRolePlace(CmRoleDecide(&ids, 0), 0, 1), CM_ROLE_CHILD,
+             "an unlisted bridge, below the FDO");
 }
 
 static void test_profiles(void)
@@ -164,6 +187,15 @@ static void test_profiles(void)
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "AMD Pink Sardine 1669");
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "an Intel id under AMD's vendor id");
+    /* Task 45.46: the ASM4242's row, the profile its class gives it. */
+    ids.Vendor = 0x1B21;
+    ids.Device = 0x2425;
+    ids.ClassCode = CM_CLASS_USB4_NHI;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425");
+    ids.ClassCode = 0x088000;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "ASMedia ASM4242 2425 by its row");
+    ids.Device = 0x2423;
+    CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "the ASM4242's port is no NHI");
     ids.Vendor = 0x8086;
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_ICM_AR, "a listed id outranks the class");
@@ -182,6 +214,9 @@ static void test_values(void)
     CM_VALUES before;
     static const WCHAR bdf[] = { '0', '4', ':', '0', '0', '.', '0', 0 };
     WCHAR longer[CM_TUNNEL_BRIDGE_CHARS + 1];
+    static const WCHAR autoLower[] = { 'a', 'u', 't', 'o', 0 };
+    static const WCHAR autoMixed[] = { 'A', 'u', 'T', 'o' };
+    static const WCHAR autoLonger[] = { 'a', 'u', 't', 'o', 'x', 0 };
     ULONG i;
 
     CmValuesDefault(&v);
@@ -197,12 +232,41 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_USB3_TUNNEL], 1, "XhciCmUsb3Tunnel defaults to 1 (U3)");
     CHECK_EQ(v.Value[CM_VAL_LANE_BONDING], 1, "XhciCmLaneBonding defaults to 1 (U4)");
     CHECK_EQ(v.Value[CM_VAL_PREOS_CLEANUP], 0, "XhciCmPreOsCleanup defaults to 0 (U2)");
+    CHECK_EQ(v.Value[CM_VAL_NET], 0, "XhciCmNet defaults to 0 (record 35 section 8.1)");
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs defaults to 1");
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 128, "XhciCmNetRxFrames defaults to 128");
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames defaults to 128");
+    CHECK_EQ(v.Value[CM_VAL_NET_E2E], 1, "XhciCmNetE2E defaults to 1");
     CHECK_EQ(v.Found | v.Refused | v.Clamped, 0, "nothing found yet");
     CHECK_EQ(v.TunnelBridgeChars, 0, "no bridge override");
     for (i = 0; i < CM_VAL_COUNT; i++) {
         CHECK_EQ(CmValueDefault(i), v.Value[i], "CmValueDefault matches the defaults");
     }
     CHECK_EQ(CmValueDefault(CM_VAL_COUNT), 0, "an index out of range");
+
+    /* Record 35 section 8.1: each refused out of its range, the default
+     * standing; the bounds taken. */
+    CmValuesTake(&v, CM_VAL_NET, 1, 1);
+    CHECK_EQ(v.Value[CM_VAL_NET], 1, "XhciCmNet 1 taken");
+    CmValuesTake(&v, CM_VAL_NET, 1, 2);
+    CHECK_EQ(v.Value[CM_VAL_NET], 0, "XhciCmNet 2 refused: 0 stands");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs 0 refused");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 100);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 100, "XhciCmNetPollMs 100 taken");
+    CmValuesTake(&v, CM_VAL_NET_POLL_MS, 1, 101);
+    CHECK_EQ(v.Value[CM_VAL_NET_POLL_MS], 1, "XhciCmNetPollMs 101 refused: 1 stands");
+    CmValuesTake(&v, CM_VAL_NET_RX_FRAMES, 1, 31);
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 128, "XhciCmNetRxFrames 31 refused");
+    CmValuesTake(&v, CM_VAL_NET_RX_FRAMES, 1, 32);
+    CHECK_EQ(v.Value[CM_VAL_NET_RX_FRAMES], 32, "XhciCmNetRxFrames 32 taken");
+    CmValuesTake(&v, CM_VAL_NET_TX_FRAMES, 1, 1024);
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 1024, "XhciCmNetTxFrames 1024 taken");
+    CmValuesTake(&v, CM_VAL_NET_TX_FRAMES, 1, 1025);
+    CHECK_EQ(v.Value[CM_VAL_NET_TX_FRAMES], 128, "XhciCmNetTxFrames 1025 refused");
+    CmValuesTake(&v, CM_VAL_NET_E2E, 1, 0);
+    CHECK_EQ(v.Value[CM_VAL_NET_E2E], 0, "XhciCmNetE2E 0 taken");
+    CmValuesDefault(&v);
 
     CmValuesTake(&v, CM_VAL_MODE, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_MODE], 0, "mode 0 is taken");
@@ -218,6 +282,19 @@ static void test_values(void)
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 0, "approve 0 is taken");
     CmValuesTake(&v, CM_VAL_APPROVE, 0, 0);
     CHECK_EQ(v.Value[CM_VAL_APPROVE], 1, "absent is the default");
+
+    /* XhciCmBridgeReq (design record 33 section 9.1). */
+    CHECK_EQ(v.BridgeReq, 1, "XhciCmBridgeReq defaults to 1");
+    CmValuesTakeBridgeReq(&v, 1, 0);
+    CHECK_EQ(v.BridgeReq, 0, "XhciCmBridgeReq 0 is taken");
+    CmValuesTakeBridgeReq(&v, 1, 2);
+    CHECK_EQ(v.BridgeReq, 2, "XhciCmBridgeReq 2 is taken");
+    CmValuesTakeBridgeReq(&v, 1, 3);
+    CHECK(v.BridgeReq == 1 && v.BridgeReqRefused,
+          "XhciCmBridgeReq 3 is refused, 1 stands");
+    CmValuesTakeBridgeReq(&v, 0, 0);
+    CHECK(v.BridgeReq == 1 && !v.BridgeReqFound,
+          "XhciCmBridgeReq absent reads as 1");
 
     CmValuesTake(&v, CM_VAL_SAFE_EJECT, 1, 0);
     CHECK_EQ(v.Value[CM_VAL_SAFE_EJECT], 0, "safe eject 0 is taken");
@@ -271,6 +348,19 @@ static void test_values(void)
     CHECK_EQ(v.TunnelBridgeChars, 7, "a counted terminator is dropped");
     CmValuesTakeBridge(&v, bdf, 0);
     CHECK_EQ(v.TunnelBridgeChars, 0, "empty is no override");
+    /* Task 45.50: "auto", the install's written form, is no override in
+     * any case, with or without its counted terminator; a longer word is
+     * text, held for the parser. */
+    CmValuesTakeBridge(&v, bdf, 7);
+    CmValuesTakeBridge(&v, autoLower, 5);
+    CHECK(v.TunnelBridgeChars == 0 && v.TunnelBridgeRefused == 0 &&
+          v.TunnelBridge[0] == 0, "auto is no override");
+    CmValuesTakeBridge(&v, autoMixed, 4);
+    CHECK_EQ(v.TunnelBridgeChars, 0, "AuTo is no override");
+    CmValuesTakeBridge(&v, autoLonger, 5);
+    CHECK_EQ(v.TunnelBridgeChars, 5, "autox is text, not auto");
+    CmValuesTakeBridge(&v, autoLonger, 3);
+    CHECK_EQ(v.TunnelBridgeChars, 3, "aut is text, not auto");
     for (i = 0; i <= CM_TUNNEL_BRIDGE_CHARS; i++) {
         longer[i] = 'x';
     }
@@ -326,6 +416,63 @@ static void test_values(void)
     CHECK_EQ(v.AsmPcie7, 0, "all-ones is refused");
     CmValuesTakeAsmPcie7(&v, 0, 0);
     CHECK_EQ(v.AsmPcie7Found | v.AsmPcie7Refused, 0, "a later absent read clears both");
+    CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
+
+    /* XhciCmRingInterrupt (task 45.22, record 21 section 4.5.4): 0 by
+     * default (owner, 2026-10-29), 0 or 1 taken, 2 and above refused. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_RING_IRQ_DEFAULT, 0, "XhciCmRingInterrupt defaults to 0");
+    CHECK_EQ(v.RingIrq, 0, "0 after CmValuesDefault");
+    CmValuesTakeRingIrq(&v, 0, 1);
+    CHECK_EQ(v.RingIrq | v.RingIrqFound | v.RingIrqRefused, 0, "absent: 0, nothing found");
+    CmValuesTakeRingIrq(&v, 1, 1);
+    CHECK(v.RingIrq == 1 && v.RingIrqFound == 1 && v.RingIrqRefused == 0, "1 is taken");
+    CmValuesTakeRingIrq(&v, 1, 0);
+    CHECK(v.RingIrq == 0 && v.RingIrqFound == 1, "0 is taken");
+    CmValuesTakeRingIrq(&v, 1, 2);
+    CHECK(v.RingIrq == 0 && v.RingIrqRefused == 1 && v.RingIrqRaw == 2,
+          "2 (the reserved message step) is refused: 0 stands");
+    CmValuesTakeRingIrq(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.RingIrq, 0, "all-ones is refused");
+    CmValuesTakeRingIrq(&v, 0, 0);
+    CHECK_EQ(v.RingIrqFound | v.RingIrqRefused, 0, "a later absent read clears both");
+    /* XhciCmUsb4V2 (task 45.20, decision U30): 1 by default, 0 or 1 taken,
+     * anything else refused with 1 standing. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_USB4_V2_DEFAULT, 1, "XhciCmUsb4V2 defaults to 1");
+    CHECK_EQ(v.Usb4V2, 1, "1 after CmValuesDefault");
+    CmValuesTakeUsb4V2(&v, 0, 0);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Found == 0 && v.Usb4V2Refused == 0,
+          "absent: 1, nothing found");
+    CmValuesTakeUsb4V2(&v, 1, 0);
+    CHECK(v.Usb4V2 == 0 && v.Usb4V2Found == 1 && v.Usb4V2Refused == 0, "0 is taken");
+    CmValuesTakeUsb4V2(&v, 1, 1);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Found == 1, "1 is taken");
+    CmValuesTakeUsb4V2(&v, 1, 2);
+    CHECK(v.Usb4V2 == 1 && v.Usb4V2Refused == 1 && v.Usb4V2Raw == 2,
+          "2 is refused: 1 stands, the value recorded");
+    CmValuesTakeUsb4V2(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.Usb4V2, 1, "all-ones is refused");
+    CmValuesTakeUsb4V2(&v, 0, 0);
+    CHECK_EQ(v.Usb4V2Found | v.Usb4V2Refused, 0, "a later absent read clears both");
+    /* XhciCmGen4LinkRecovery (task 45.56, decision U33): the same rule. */
+    CmValuesDefault(&v);
+    CHECK_EQ(CM_GEN4_ELR_DEFAULT, 1, "XhciCmGen4LinkRecovery defaults to 1");
+    CHECK_EQ(v.Gen4Elr, 1, "1 after CmValuesDefault");
+    CmValuesTakeGen4Elr(&v, 0, 0);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrFound == 0 && v.Gen4ElrRefused == 0,
+          "absent: 1, nothing found");
+    CmValuesTakeGen4Elr(&v, 1, 0);
+    CHECK(v.Gen4Elr == 0 && v.Gen4ElrFound == 1 && v.Gen4ElrRefused == 0, "0 is taken");
+    CmValuesTakeGen4Elr(&v, 1, 1);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrFound == 1, "1 is taken");
+    CmValuesTakeGen4Elr(&v, 1, 2);
+    CHECK(v.Gen4Elr == 1 && v.Gen4ElrRefused == 1 && v.Gen4ElrRaw == 2,
+          "2 is refused: 1 stands, the value recorded");
+    CmValuesTakeGen4Elr(&v, 1, 0xFFFFFFFFUL);
+    CHECK_EQ(v.Gen4Elr, 1, "all-ones is refused");
+    CmValuesTakeGen4Elr(&v, 0, 0);
+    CHECK_EQ(v.Gen4ElrFound | v.Gen4ElrRefused, 0, "a later absent read clears both");
     CHECK_EQ(v.Found | v.Refused, 0, "the rule table's bits untouched by it");
 }
 

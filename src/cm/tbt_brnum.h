@@ -112,12 +112,26 @@
                                                nothing behind it is
                                                NOT_READY (undone), for a
                                                caller that will try again */
+#define XHCI_TBT_BRNUM_F_PAD        0x8UL   /* pad each chain-port candidate
+                                               (design record 34 section
+                                               3.3.6): buses at the
+                                               numbering, memory with the
+                                               windows                    */
+#define XHCI_TBT_BRNUM_PAD_MAX_BUSES 8UL
+#define XHCI_TBT_BRNUM_PAD_MIN_BUSES 2UL
+#define XHCI_TBT_BRNUM_PAD_MAX_MEM  0x04000000UL    /* 64 MiB */
+#define XHCI_TBT_BRNUM_PAD_MIN_MEM  0x00200000UL    /* 2 MiB  */
 #define XHCI_TBT_BRNUM_F_IRQ        0x2UL   /* ... and its interrupt lines:
                                                each function below whose
                                                interrupt reaches the port on
                                                the port's own pin gets the
                                                port's own Interrupt Line,
-                                               where its line is unset    */
+                                               where its line is unset;
+                                               also with no bridge below
+                                               (NONE), for the functions on
+                                               the port's secondary bus
+                                               (design record 28 section
+                                               13)                         */
 
 /* Configuration registers this file writes (a type 1 header but 04h). */
 #define XHCI_TBT_CFG_COMMAND        0x04UL  /* Command 15:0, Status 31:16   */
@@ -184,6 +198,18 @@ typedef struct _XHCI_TBT_BRNUM {
      * 32-bit one): 24h alone does not close it. */
     ULONG WasPfUp[XHCI_TBT_BRNUM_MAX_BRIDGES];
     ULONG WasPfLimit[XHCI_TBT_BRNUM_MAX_BRIDGES];
+    /* The padding (XHCI_TBT_BRNUM_F_PAD; record 34 section 3.3.6). */
+    ULONG Pad[XHCI_TBT_BRNUM_MAX_BRIDGES];   /* buses added below a
+                                               candidate, 0 for none     */
+    ULONG PadQual[XHCI_TBT_BRNUM_MAX_BRIDGES]; /* given memory padding    */
+    ULONG Padded;           /* candidates padded with buses               */
+    ULONG PadMem;           /* the memory added beside each one's need, 0
+                               for none                                   */
+    ULONG PadNoBus;         /* candidates left without buses (too few)    */
+    ULONG PadNoMem;         /* memory padding left out (too little room,
+                               or the padded need did not fit)            */
+    ULONG PadDropped;       /* a numbering made again without bus padding
+                               after NO_ROOM                              */
 } XHCI_TBT_BRNUM, *PXHCI_TBT_BRNUM;
 
 /*

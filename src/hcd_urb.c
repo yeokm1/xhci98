@@ -2207,6 +2207,91 @@ static NTSTATUS hcdStreamsIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
 }
 
 /*
+ * IOCTL_XHCI98_RESUME_STATE (xhci98_xfer.h; task 45.23, design record 20
+ * section 4.3.3): the function's quiet declaration, its withdrawal, the
+ * controller's resume state and the device's epoch, and the wake check's
+ * outcome, for the log. The declaration is the device record's QuietMark,
+ * valid for the controller's present MarkGen only (one sleep), voided by
+ * the device's next transfer off EP0 (HcdIoSubmit). Every op but the query
+ * is logged ("uas.resume": op in the top byte, the value below). Answered
+ * under the controller lock and completed before this returns. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+static NTSTATUS hcdResumeStateIoctl(PHCD_DEVICE_PDO pdo, PHCD_CONTROLLER hc,
+                                    PIRP irp, PXHCI98_RESUME_STATE rq)
+{
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+    ULONG cycle;
+
+    if (rq == NULL || rq->Size < sizeof(XHCI98_RESUME_STATE)) {
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    rq->State = 0;
+    rq->Epoch = 0;
+    rq->Reserved[0] = 0;
+    rq->Reserved[1] = 0;
+    cycle = 0;
+    if (rq->Signature != XHCI98_RESUME_SIGNATURE ||
+        rq->Version != XHCI98_RESUME_VERSION ||
+        rq->Op > XHCI98_RESUME_OP_CYCLE) {
+        rq->Status = XHCI98_RESUME_INVALID;
+        return HcdCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    if (hc == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    dev = hcdDeviceRef(hc, pdo);
+    if (dev == NULL) {
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Gone) {
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+        return HcdCompleteIrp(irp, STATUS_NO_SUCH_DEVICE, 0);
+    }
+    if (rq->Op == XHCI98_RESUME_OP_DECLARE) {
+        dev->QuietMark = XhciEnumQuietMark(hc->MarkGen);
+    } else if (rq->Op == XHCI98_RESUME_OP_WITHDRAW) {
+        dev->QuietMark = 0;
+    } else if (rq->Op == XHCI98_RESUME_OP_CYCLE && dev->Location != 0 &&
+               dev->Location <= HCD_PORT_COUNT && dev->PdoGroup != 0) {
+        /* Task 45.41: the cycle, its serial and its charge published in
+         * this one hold of the lock, as HcdEnumCycle publishes the first
+         * two; carried out and charged by the thread (hcd_enum.c). */
+        cycle = dev->Location;
+        hc->PortCycle[(cycle - 1) / 32UL] |= 1UL << ((cycle - 1) % 32UL);
+        hc->PortCycleSerial[cycle - 1] = dev->PdoGroup;
+        hc->PortCycleCharge[(cycle - 1) / 32UL] |= 1UL << ((cycle - 1) % 32UL);
+    }
+    if (hc->Hc.ControllerFailed || hc->Hc.Tol.Unreadable ||
+        hc->ResumePhase == XHCI98_RESUME_FAILED) {
+        rq->State = XHCI98_RESUME_FAILED;
+    } else if (hc->ResumePhase == XHCI98_RESUME_PENDING) {
+        rq->State = XHCI98_RESUME_PENDING;
+    } else {
+        rq->State = XHCI98_RESUME_RUNNING;
+    }
+    rq->Epoch = dev->ResumeEpoch;
+    rq->Status = XHCI98_RESUME_SUCCESS;
+    if (rq->Op != XHCI98_RESUME_OP_QUERY) {
+        XhciLogNoteLocked(&hc->Hc, "uas.resume",
+                          (rq->Op << 24) | (rq->Value & 0x00FFFFFFUL));
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (rq->Op != XHCI98_RESUME_OP_QUERY) {
+        XHCI_DBG_VALUE("hcd: uas resume state, op/value",
+                       (rq->Op << 24) | (rq->Value & 0x00FFFFFFUL));
+    }
+    if (cycle != 0) {
+        HcdThreadWake(hc);
+    }
+    (VOID)InterlockedDecrement((PLONG)&dev->Refs);
+    return HcdCompleteIrp(irp, STATUS_SUCCESS, 0);
+}
+
+/*
  * IOCTL_XHCI98_TELEMETRY (xhci98_xfer.h, task 36.21): the class driver's
  * record, its signature, version and size checked, copied whole into the
  * record its device owns - or, the first time, into a free one, else into
@@ -2487,6 +2572,12 @@ NTSTATUS HcdDevicePdoInternalIoctl(PHCD_DEVICE_PDO pdo, PIRP irp)
         status = hcdTelemetryIoctl(pdo, hc, irp,
                                    (PXHCI98_TELEMETRY)
                                        stack->Parameters.Others.Argument1);
+        break;
+
+    case IOCTL_XHCI98_RESUME_STATE:
+        status = hcdResumeStateIoctl(pdo, hc, irp,
+                                     (PXHCI98_RESUME_STATE)
+                                         stack->Parameters.Others.Argument1);
         break;
 
     case XHCI_USBDX_IOCTL_CAPABILITY:
@@ -2980,8 +3071,7 @@ static NTSTATUS hcdCompSend(PDEVICE_OBJECT lower, PURB urb)
     HCD_SET_COMPLETION_ALWAYS(irp, hcdCompDone, &done);
     status = IoCallDriver(lower, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        (VOID)HcdWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);

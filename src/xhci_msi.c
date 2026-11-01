@@ -47,9 +47,11 @@ ULONG XhciMsiCapRead(const UCHAR *config)
         0) {
         return XHCI_POLL_DELIVERY_MESSAGE;
     }
-    ptr = (ULONG)config[XHCI_MSI_CAP_POINTER];
+    /* The two low bits of a capability pointer are reserved and masked
+     * before use (PCI 3.0 section 6.7), not a reason to stop. */
+    ptr = (ULONG)config[XHCI_MSI_CAP_POINTER] & ~3UL;
     for (n = 0; n < XHCI_MSI_CAP_WALK_MAX; n++) {
-        if (ptr < 0x40UL || ptr > 0xFCUL || (ptr & 3UL) != 0) {
+        if (ptr < 0x40UL || ptr > 0xFCUL) {
             break;
         }
         if ((ULONG)config[ptr] == XHCI_MSI_CAP_ID_MSI) {
@@ -61,7 +63,7 @@ ULONG XhciMsiCapRead(const UCHAR *config)
                 msix = 1;
             }
         }
-        ptr = (ULONG)config[ptr + 1];
+        ptr = (ULONG)config[ptr + 1] & ~3UL;
     }
     if (msix) {
         return XHCI_POLL_DELIVERY_MSIX;

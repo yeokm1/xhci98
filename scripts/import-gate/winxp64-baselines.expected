@@ -7,7 +7,7 @@
 # One target covers both Windows XP Professional x64 and Windows Server 2003
 # x64 - they are the same NT 5.2.3790 build.
 #
-# Source: D:\isos\Win XP SP2 VL x64.iso, AMD64\, measured 2026-09-09.
+# Source: <iso folder>\Win XP SP2 VL x64.iso, AMD64\, measured 2026-09-09.
 #
 # **Three files, not ten, and the difference is real rather than an enumeration
 # gap.** win2k-baselines.expected lists eight HAL images; this media ships

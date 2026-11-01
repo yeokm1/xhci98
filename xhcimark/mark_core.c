@@ -86,6 +86,49 @@ int mk_query_parse(const unsigned char *b, size_t n, MK_QUERY *q,
     return 1;
 }
 
+/* The bridge inventory (cm_query.h CM_QB_*), read only when flagged and
+ * laid out exactly: after the entries, its length CM_QB_BYTES, inside
+ * the answer. Anything else leaves HasBridges 0 (every bridge unknown). */
+static void mk_marks_bridges(const unsigned char *b, INST_U32 bytes,
+                             INST_U32 entEnd, MK_MARKS *m)
+{
+    INST_U32 at;
+    INST_U32 len;
+    INST_U32 i;
+    INST_U32 j;
+    INST_U32 w;
+    const unsigned char *s;
+
+    if ((mk_get32(b, CM_QM_O_FLAGS) & CM_QM_F_BRIDGES) == 0) {
+        return;
+    }
+    at = mk_get32(b, CM_QM_O_BR_OFFSET);
+    len = mk_get32(b, CM_QM_O_BR_BYTES);
+    if (len != CM_QB_BYTES || at < entEnd || at > bytes ||
+        len > bytes - at) {
+        return;
+    }
+    for (i = 0; i < MK_QB_MEMBERS; i++) {
+        s = b + at + i * CM_QB_SEC_BYTES;
+        w = mk_get32(s, 0);
+        if (((w >> 24) & CM_QB_F_MEMBER) == 0) {
+            continue;
+        }
+        m->Br[i].Valid = 1;
+        m->Br[i].Member = w & 0xFFFFUL;
+        m->Br[i].Count = (w >> 16) & 0xFFUL;
+        m->Br[i].Complete = ((w >> 24) & CM_QB_F_COMPLETE) != 0;
+        if (m->Br[i].Count > MK_QB_MAX) {
+            m->Br[i].Count = MK_QB_MAX;
+            m->Br[i].Complete = 0;
+        }
+        for (j = 0; j < m->Br[i].Count; j++) {
+            m->Br[i].Loc[j] = mk_get32(s, 4 + 4 * j) & 0xFFFFUL;
+        }
+    }
+    m->HasBridges = 1;
+}
+
 int mk_marks_parse(const unsigned char *b, size_t n, MK_MARKS *m,
                    INST_U32 *need)
 {
@@ -136,6 +179,7 @@ int mk_marks_parse(const unsigned char *b, size_t n, MK_MARKS *m,
         m->E[i].Pending = mk_get32(e, CM_QM_E_PENDING);
         m->E[i].PendingGen = mk_get32(e, CM_QM_E_PENDING_GEN);
     }
+    mk_marks_bridges(b, bytes, off + count * entBytes, m);
     return 1;
 }
 
@@ -181,7 +225,7 @@ const char *mk_w_text(int w)
     }
 }
 
-int mk_restart_wanted(const MK_ENTRY *e, int valuePresent)
+int mk_restart_wanted(const MK_ENTRY *e, int valuePresent, int winRecorded)
 {
     INST_U32 att;
 
@@ -193,7 +237,29 @@ int mk_restart_wanted(const MK_ENTRY *e, int valuePresent)
     if (att == 0) {
         return 1;
     }
-    return (e->Flags & MK_EF_REMOVABLE) == 0;
+    if ((e->Flags & MK_EF_REMOVABLE) == 0) {
+        return 1;
+    }
+    /* Answered, yet Windows recorded no Removable: the answer went to a
+     * query Windows does not keep (record 21 section 7.7). */
+    return winRecorded == 0;
+}
+
+#define MK_DEVCAP_REMOVABLE         0x00000004UL
+#define MK_DEVCAP_SURPRISEREMOVALOK 0x00000080UL
+
+int mk_win_recorded(int have, unsigned long caps)
+{
+    if (!have) {
+        return -1;
+    }
+    if ((caps & MK_DEVCAP_REMOVABLE) != 0) {
+        return 1;
+    }
+    if ((caps & MK_DEVCAP_SURPRISEREMOVALOK) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
@@ -312,14 +378,98 @@ int mk_rec_parse(const char *text, INST_U32 *member, INST_U32 *epochHi,
         !mk_hex(text + 18, 8, epochLo) || strncmp(text + 26, " s=", 3) != 0) {
         return 0;
     }
-    if (strcmp(text + 29, "written") == 0) {
+    if (strncmp(text + 29, "written", 7) == 0) {
         *state = MK_REC_WRITTEN;
-    } else if (strcmp(text + 29, "writing") == 0) {
+    } else if (strncmp(text + 29, "writing", 7) == 0) {
         *state = MK_REC_WRITING;
     } else {
         return 0;
     }
-    return 1;
+    return text[36] == '\0' || strcmp(text + 36, MK_REC_BRIDGE) == 0;
+}
+
+void mk_rec_format_bridge(char *out, size_t cap, INST_U32 member,
+                          INST_U32 epochHi, INST_U32 epochLo, int state)
+{
+    char tmp[64];
+
+    mk_rec_format(tmp, sizeof(tmp), member, epochHi, epochLo, state);
+    strcat(tmp, MK_REC_BRIDGE);
+    inst_copy(out, tmp, cap);
+}
+
+int mk_rec_is_bridge(const char *text)
+{
+    INST_U32 member;
+    INST_U32 hi;
+    INST_U32 lo;
+    int state;
+
+    return mk_rec_parse(text, &member, &hi, &lo, &state) &&
+           text[36] != '\0';
+}
+
+int mk_bridge_attached(const MK_MARKS *m, INST_U32 member, INST_U32 bdf)
+{
+    int i;
+    INST_U32 j;
+
+    if (m == NULL || !m->HasBridges) {
+        return MK_BA_UNKNOWN;
+    }
+    for (i = 0; i < MK_QB_MEMBERS; i++) {
+        if (!m->Br[i].Valid || m->Br[i].Member != (member & 0xFFFFUL)) {
+            continue;
+        }
+        for (j = 0; j < m->Br[i].Count; j++) {
+            if (m->Br[i].Loc[j] == (bdf & 0xFFFFUL)) {
+                return MK_BA_ATTACHED;
+            }
+        }
+        return m->Br[i].Complete ? MK_BA_MISSING : MK_BA_UNKNOWN;
+    }
+    return MK_BA_UNKNOWN;
+}
+
+int mk_bridge_pending(int hasDriver, int flagsRead, INST_U32 flags)
+{
+    return !hasDriver || !flagsRead ||
+           (flags & (MK_CONFIGFLAG_REINSTALL |
+                     MK_CONFIGFLAG_FINISH_INSTALL)) != 0;
+}
+
+int mk_bridge_needs(int statusOk, int started, int hasProblem,
+                    INST_U32 problem, int attached)
+{
+    if (!statusOk) {
+        return 0;
+    }
+    if (hasProblem && problem == MK_PROB_NORMAL_CONFLICT) {
+        return 1;
+    }
+    return started && !hasProblem && attached == MK_BA_MISSING;
+}
+
+int mk_bridge_gate_refuses(int statusOk, int started, int classRead,
+                           const char *classGuid)
+{
+    if (!statusOk) {
+        return 1;
+    }
+    if (!started) {
+        return 0;
+    }
+    if (!classRead || classGuid == NULL) {
+        return 1;
+    }
+    return inst_eq(classGuid, MK_CLASS_DISK) ||
+           inst_eq(classGuid, MK_CLASS_CDROM) ||
+           inst_eq(classGuid, MK_CLASS_VOLUME);
+}
+
+int mk_bridge_wait(int allMarked, INST_U32 sinceArrivalMs)
+{
+    return !allMarked && sinceArrivalMs < MK_BRIDGE_WAIT;
 }
 
 void mk_confirm_build(unsigned char *out, const MK_MARKS *m,
@@ -697,6 +847,74 @@ static size_t mk_fake_query(unsigned char *b, INST_U32 stage, INST_U32 live,
     return id + strlen(text);
 }
 
+/* ---- a hot-added controller waiting for a restart (record 21 7.6) -------- */
+
+#define MK_CTL_DN_HAS_PROBLEM   0x00000400UL
+
+int mk_ctl_ready_why(const MK_CTL_IN *in)
+{
+    if (!in->Restart) {
+        return MK_CTL_OFF;
+    }
+    if (!in->Nt6x86) {
+        return MK_CTL_SYSTEM;
+    }
+    if (!in->Pci || in->Service == NULL || !inst_eq(in->Service, "xhci98") ||
+        !in->XhciCompat) {
+        return MK_CTL_NOT_OURS;
+    }
+    if (!in->DrvRead || in->InfSection == NULL || in->MatchingId == NULL ||
+        !inst_eq(in->InfSection, MK_CTL_SECTION) ||
+        !inst_eq(in->MatchingId, MK_CTL_MATCH)) {
+        return MK_CTL_DRIVER_KEY;
+    }
+    if (!in->FlagsRead ||
+        (in->Flags & (MK_CONFIGFLAG_REINSTALL | MK_CONFIGFLAG_FAILEDINSTALL |
+                      MK_CONFIGFLAG_FINISH_INSTALL)) != 0) {
+        return MK_CTL_FLAGS;
+    }
+    if (!in->StatusOk || (in->Status & MK_CTL_DN_HAS_PROBLEM) == 0 ||
+        (in->Status & MK_DN_NEED_RESTART) == 0 ||
+        in->Problem != MK_PROB_NOT_CONFIGURED) {
+        return MK_CTL_NOT_WAITING;
+    }
+    if (!in->Behind) {
+        return MK_CTL_NOT_BEHIND;
+    }
+    if (in->Protected) {
+        return MK_CTL_PROTECTED;
+    }
+    if (!in->HelperRunning) {
+        return MK_CTL_HELPER;
+    }
+    if (!in->InstallIdle) {
+        return MK_CTL_INSTALLING;
+    }
+    if (in->Tried) {
+        return MK_CTL_TRIED;
+    }
+    return MK_CTL_GO;
+}
+
+const char *mk_ctl_why_text(int why)
+{
+    switch (why) {
+    case MK_CTL_GO:          return "to be started";
+    case MK_CTL_OFF:         return "the service's Restart value is 0";
+    case MK_CTL_SYSTEM:      return "not 32-bit Windows Vista or 7";
+    case MK_CTL_NOT_OURS:    return "not an xHCI98 controller";
+    case MK_CTL_DRIVER_KEY:  return "not installed by xhci98.inf's Xhci.Dev6, or its driver key unread";
+    case MK_CTL_FLAGS:       return "its install is not finished (or its flags unread)";
+    case MK_CTL_NOT_WAITING: return "not waiting for a restart (problem 1 with DN_NEED_RESTART)";
+    case MK_CTL_NOT_BEHIND:  return "not behind a verified tunnel port";
+    case MK_CTL_PROTECTED:   return "a protected device";
+    case MK_CTL_HELPER:      return "the helper xhcihlpr is not running";
+    case MK_CTL_INSTALLING:  return "an installation is pending (or cannot be told)";
+    case MK_CTL_TRIED:       return "started once this arrival already";
+    default:                 return "?";
+    }
+}
+
 int mk_selftest(void (*report)(int ok, const char *what))
 {
     unsigned char b[1024];
@@ -772,19 +990,35 @@ int mk_selftest(void (*report)(int ok, const char *what))
 
     memset(&e, 0, sizeof(e));
     e.Flags = MK_EF_LOCATED | MK_EF_REPORTED;
-    mk_check(mk_restart_wanted(&e, 1), "no attachment with the value: restart");
-    mk_check(!mk_restart_wanted(&e, 0), "no value: none");
+    mk_check(mk_restart_wanted(&e, 1, -1), "no attachment with the value: restart");
+    mk_check(!mk_restart_wanted(&e, 0, -1), "no value: none");
+    mk_check(!mk_restart_wanted(&e, 0, 0), "no value, not recorded: none");
     e.Flags |= MK_EF_ADD_ATT;
-    mk_check(mk_restart_wanted(&e, 1), "attached, Removable not answered: restart");
+    mk_check(mk_restart_wanted(&e, 1, -1), "attached, Removable not answered: restart");
+    mk_check(mk_restart_wanted(&e, 1, 1),
+             "attached, not answered, recorded: restart as before");
     e.Flags |= MK_EF_REMOVABLE;
-    mk_check(!mk_restart_wanted(&e, 1), "attached and answered: none");
+    mk_check(!mk_restart_wanted(&e, 1, -1), "attached and answered: none");
+    mk_check(!mk_restart_wanted(&e, 1, 1), "answered and recorded: none");
+    mk_check(mk_restart_wanted(&e, 1, 0),
+             "answered, Windows recorded no Removable: restart (45.62)");
+    e.Flags |= MK_EF_SAFE_OFF;
+    mk_check(!mk_restart_wanted(&e, 1, 0), "safe eject off, not recorded: none");
+    e.Flags = MK_EF_LOCATED | MK_EF_BUS_ATT | MK_EF_REMOVABLE;
+    mk_check(!mk_restart_wanted(&e, 1, 0), "not reported, not recorded: none");
+    mk_check(mk_win_recorded(0, 0x4) == -1, "capabilities not read: -1");
+    mk_check(mk_win_recorded(1, 0x4) == 1, "Removable recorded: 1");
+    mk_check(mk_win_recorded(1, 0x84) == 1, "Removable and SurpriseRemovalOK: 1");
+    mk_check(mk_win_recorded(1, 0x80) == -1, "SurpriseRemovalOK alone: -1");
+    mk_check(mk_win_recorded(1, 0x0) == 0, "neither: 0");
+    mk_check(mk_win_recorded(1, 0x3) == 0, "lock and eject bits alone: 0");
     e.Flags = MK_EF_LOCATED | MK_EF_REPORTED;
     e.Pending = 5;
-    mk_check(mk_restart_wanted(&e, 1),
+    mk_check(mk_restart_wanted(&e, 1, -1),
              "a departure pending (a first plug's install) does not stop it");
     e.Pending = 0;
     e.Flags |= MK_EF_SAFE_OFF;
-    mk_check(!mk_restart_wanted(&e, 1), "safe eject off: none");
+    mk_check(!mk_restart_wanted(&e, 1, -1), "safe eject off: none");
 
     mk_check(mk_reconcile(MK_P_ABSENT, 1, 1, 0, 1, 1, 0, 0, 0) == MK_R_REMOVE,
              "absent, its domain verifiable: removed");
@@ -866,6 +1100,97 @@ int mk_selftest(void (*report)(int ok, const char *what))
     mk_check(inst_msz_has(out, n, "xhcicm") && inst_msz_has(out, n, "XHCICM"),
              "the name found, case ignored");
 
+    /* The bridge marks (design record 33 section 4.3, task 45.12). */
+    {
+        static unsigned char ab[CM_QM_MAX_BYTES];
+        static MK_MARKS mm;
+        size_t at;
+        size_t k;
+
+        memset(ab, 0, sizeof(ab));
+        mk_put32(ab, CM_QM_O_MAGIC, CM_QM_MAGIC);
+        mk_put32(ab, CM_QM_O_VERSION, CM_QM_VERSION);
+        mk_put32(ab, CM_QM_O_ENT_BYTES, CM_QM_ENT_BYTES);
+        mk_put32(ab, CM_QM_O_ENT_OFFSET, CM_QM_HDR_BYTES);
+        mk_put32(ab, CM_QM_O_COUNT, 1);
+        at = CM_QM_HDR_BYTES + CM_QM_ENT_BYTES;
+        mk_put32(ab, CM_QM_O_BYTES, (INST_U32)at);
+        mk_check(mk_marks_parse(ab, at, &mm, &need) == 1 && !mm.HasBridges &&
+                 mk_bridge_attached(&mm, 0x0218, 0x0300) == MK_BA_UNKNOWN,
+                 "a driver without the inventory: every bridge unknown");
+        /* Member 02:03.0 complete with 03:00.0 and 04:01.0; member
+         * 02:04.0 incomplete with 05:00.0. */
+        mk_put32(ab, at, 0x0218UL | (2UL << 16) |
+                             ((CM_QB_F_MEMBER | CM_QB_F_COMPLETE) << 24));
+        mk_put32(ab, at + 4, 0x0300);
+        mk_put32(ab, at + 8, 0x0408);
+        mk_put32(ab, at + CM_QB_SEC_BYTES, 0x0220UL | (1UL << 16) |
+                                               (CM_QB_F_MEMBER << 24));
+        mk_put32(ab, at + CM_QB_SEC_BYTES + 4, 0x0500);
+        mk_put32(ab, CM_QM_O_BR_OFFSET, (INST_U32)at);
+        mk_put32(ab, CM_QM_O_BR_BYTES, CM_QB_BYTES);
+        mk_put32(ab, CM_QM_O_FLAGS, CM_QM_F_BRIDGES);
+        mk_put32(ab, CM_QM_O_BYTES, (INST_U32)(at + CM_QB_BYTES));
+        mk_check(mk_marks_parse(ab, at + CM_QB_BYTES, &mm, &need) == 1 &&
+                 mm.HasBridges && mm.Count == 1,
+                 "the inventory parses beside the entries");
+        mk_check(mk_bridge_attached(&mm, 0x0218, 0x0408) == MK_BA_ATTACHED,
+                 "a nested bridge listed: attached (its child never answers "
+                 "Removable)");
+        mk_check(mk_bridge_attached(&mm, 0x0218, 0x0410) == MK_BA_MISSING,
+                 "a complete list without it: missing");
+        mk_check(mk_bridge_attached(&mm, 0x0220, 0x0500) == MK_BA_ATTACHED &&
+                 mk_bridge_attached(&mm, 0x0220, 0x0508) == MK_BA_UNKNOWN,
+                 "an incomplete list: listed attached, the rest unknown");
+        mk_check(mk_bridge_attached(&mm, 0x0228, 0x0600) == MK_BA_UNKNOWN,
+                 "no section for the member: unknown");
+        /* A section of CM_QB_MAX_BRIDGES flagged incomplete. */
+        mk_put32(ab, at, 0x0218UL | (16UL << 16) | (CM_QB_F_MEMBER << 24));
+        for (k = 0; k < 16; k++) {
+            mk_put32(ab, at + 4 + 4 * k, (INST_U32)(0x0300 + 8 * k));
+        }
+        mk_check(mk_marks_parse(ab, at + CM_QB_BYTES, &mm, &need) == 1 &&
+                 mk_bridge_attached(&mm, 0x0218, 0x0FF0) == MK_BA_UNKNOWN,
+                 "a full section flagged incomplete: unknown");
+        mk_put32(ab, CM_QM_O_BR_BYTES, CM_QB_BYTES - 4);
+        mk_check(mk_marks_parse(ab, at + CM_QB_BYTES, &mm, &need) == 1 &&
+                 !mm.HasBridges, "an inventory of another length: ignored");
+        mk_put32(ab, CM_QM_O_BR_BYTES, CM_QB_BYTES);
+        mk_put32(ab, CM_QM_O_BR_OFFSET, CM_QM_HDR_BYTES);
+        mk_check(mk_marks_parse(ab, at + CM_QB_BYTES, &mm, &need) == 1 &&
+                 !mm.HasBridges, "an inventory over the entries: ignored");
+        mk_check(mk_bridge_pending(1, 1, 0) == 0 &&
+                 mk_bridge_pending(0, 1, 0) == 1 &&
+                 mk_bridge_pending(1, 0, 0) == 1 &&
+                 mk_bridge_pending(1, 1, MK_CONFIGFLAG_REINSTALL) == 1 &&
+                 mk_bridge_pending(1, 1, MK_CONFIGFLAG_FINISH_INSTALL) == 1 &&
+                 mk_bridge_pending(1, 1, 0x40) == 0,
+                 "a bridge's install: done only with a driver and no install "
+                 "flag");
+        mk_check(mk_bridge_needs(1, 0, 1, 12, MK_BA_UNKNOWN) == 1 &&
+                 mk_bridge_needs(1, 1, 0, 0, MK_BA_MISSING) == 1 &&
+                 mk_bridge_needs(1, 1, 0, 0, MK_BA_ATTACHED) == 0 &&
+                 mk_bridge_needs(1, 1, 0, 0, MK_BA_UNKNOWN) == 0 &&
+                 mk_bridge_needs(0, 0, 1, 12, MK_BA_MISSING) == 0 &&
+                 mk_bridge_needs(1, 0, 1, 28, MK_BA_MISSING) == 0,
+                 "the restart's trigger: problem 12, or placed and missing");
+        mk_check(mk_bridge_gate_refuses(1, 1, 1, MK_CLASS_DISK) == 1 &&
+                 mk_bridge_gate_refuses(1, 1, 1,
+                     "{71a27cdd-812a-11d0-bec7-08002be2092f}") == 1 &&
+                 mk_bridge_gate_refuses(1, 0, 1, MK_CLASS_DISK) == 0 &&
+                 mk_bridge_gate_refuses(1, 1, 1,
+                     "{36FC9E60-C465-11CF-8056-444553540000}") == 0 &&
+                 mk_bridge_gate_refuses(1, 1, 1,
+                     "{4D36E972-E325-11CE-BFC1-08002BE10318}") == 0 &&
+                 mk_bridge_gate_refuses(1, 1, 0, NULL) == 1 &&
+                 mk_bridge_gate_refuses(0, 0, 1, "") == 1,
+                 "the gate: a started disk or volume refuses, a started xHCI "
+                 "or NIC does not");
+        mk_check(mk_bridge_wait(0, 0) && mk_bridge_wait(0, 59999) &&
+                 !mk_bridge_wait(0, 60000) && !mk_bridge_wait(1, 0),
+                 "the other restarts wait for the bridge marks, 60 s at most");
+    }
+
     mk_rec_format(rec, sizeof(rec), 0x0518, 0x01D9ABCD, 0x12345678, MK_REC_WRITING);
     mk_check(strcmp(rec, "m=0518 e=01D9ABCD:12345678 s=writing") == 0, "the record's form");
     mk_check(mk_rec_parse(rec, &member, &hi, &lo, &state) && member == 0x0518 &&
@@ -876,6 +1201,18 @@ int mk_selftest(void (*report)(int ok, const char *what))
              "written");
     mk_check(!mk_rec_parse("m=0518 e=1:2 s=written", &member, &hi, &lo, &state),
              "a malformed record refused");
+    mk_check(!mk_rec_is_bridge(rec), "a unit's record is no bridge mark's");
+    mk_rec_format_bridge(rec, sizeof(rec), 0x0518, 1, 2, MK_REC_WRITING);
+    mk_check(strcmp(rec, "m=0518 e=00000001:00000002 s=writing k=bridge") == 0 &&
+             mk_rec_parse(rec, &member, &hi, &lo, &state) &&
+             state == MK_REC_WRITING && member == 0x0518 &&
+             mk_rec_is_bridge(rec),
+             "a bridge mark's record: the same form and its suffix");
+    mk_check(!mk_rec_parse("m=0518 e=00000001:00000002 s=writtenX", &member,
+                           &hi, &lo, &state) &&
+             !mk_rec_parse("m=0518 e=00000001:00000002 s=written k=other",
+                           &member, &hi, &lo, &state),
+             "another suffix refused");
 
     m.EpochLo = 0x1234;
     m.EpochHi = 1;
@@ -1214,6 +1551,90 @@ int mk_selftest(void (*report)(int ok, const char *what))
                  !mk_s98_driverless(1, 0, 0) &&
                  !mk_s98_driverless(0, 1, MK_S98_PROB_DISABLED),
                  "the driverless states the restarts admit");
+    }
+    {
+        /* A hot-added controller waiting for a restart (record 21 7.6). */
+        MK_CTL_IN f;
+        MK_CTL_IN g;
+
+        memset(&f, 0, sizeof(f));
+        f.Restart = 1;
+        f.Nt6x86 = 1;
+        f.Pci = 1;
+        f.Service = "xhci98";
+        f.XhciCompat = 1;
+        f.DrvRead = 1;
+        f.InfSection = "Xhci.Dev6";
+        f.MatchingId = "pci\\cc_0c0330";
+        f.FlagsRead = 1;
+        f.Flags = 0;
+        f.StatusOk = 1;
+        f.Status = 0x01802500UL;
+        f.Problem = 1;
+        f.Behind = 1;
+        f.Protected = 0;
+        f.HelperRunning = 1;
+        f.InstallIdle = 1;
+        f.Tried = 0;
+        mk_check(mk_ctl_ready_why(&f) == MK_CTL_GO,
+                 "the dock's xHCI as read on 7 (0x01802500, problem 1): started");
+        g = f; g.Restart = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_OFF, "the switch off: never");
+        g = f; g.Nt6x86 = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_SYSTEM,
+                 "XP, 8 or a 64-bit system: never");
+        g = f; g.Pci = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS,
+                 "a root hub or hub (USB\\, service xhci98): never");
+        g = f; g.Service = "usbxhci";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "another driver: never");
+        g = f; g.Service = NULL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "the service unread: never");
+        g = f; g.XhciCompat = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_OURS, "not an xHCI: never");
+        g = f; g.InfSection = "Xhci.Dev";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "another section with service xhci98: never");
+        g = f; g.MatchingId = "pci\\ven_1b36&dev_000d";
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "another INF's id row: never");
+        g = f; g.DrvRead = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_DRIVER_KEY,
+                 "the driver key unread: never");
+        g = f; g.Flags = 0x20UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "reinstall pending: never");
+        g = f; g.Flags = 0x40UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "a failed install: never");
+        g = f; g.Flags = 0x400UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "an unfinished install: never");
+        g = f; g.FlagsRead = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_FLAGS, "the flags unread: never");
+        g = f; g.Status = 0x01802400UL;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING,
+                 "problem 1 without DN_NEED_RESTART: never");
+        g = f; g.Problem = 10;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING,
+                 "DN_NEED_RESTART with another problem: never");
+        g = f; g.Status = 0x0180200AUL; g.Problem = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING, "started: nothing to do");
+        g = f; g.StatusOk = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_WAITING, "the status unread: never");
+        g = f; g.Behind = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_NOT_BEHIND,
+                 "behind no verified tunnel port: never");
+        g = f; g.Protected = 1;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_PROTECTED, "a protected device: never");
+        g = f; g.HelperRunning = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_HELPER,
+                 "the helper stopped, absent or unread: never");
+        g = f; g.InstallIdle = 0;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_INSTALLING, "an install pending: not now");
+        g = f; g.Tried = 1;
+        mk_check(mk_ctl_ready_why(&g) == MK_CTL_TRIED,
+                 "a second attempt in the same arrival: never");
+        mk_check(strcmp(mk_ctl_why_text(MK_CTL_HELPER),
+                        "the helper xhcihlpr is not running") == 0,
+                 "a reason's text");
     }
     return mkFails;
 }

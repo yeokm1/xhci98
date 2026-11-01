@@ -39,7 +39,7 @@ NTSTATUS HcdForwardAndWait(PHCD_CONTROLLER hc, PIRP irp)
     HCD_SET_COMPLETION_ALWAYS(irp, hcdSignalOnComplete, &done);
     status = IoCallDriver(hc->LowerDevice, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+        (VOID)HcdWaitEvent(&done, 0);
         status = irp->IoStatus.Status;
     }
     return status;
@@ -105,12 +105,14 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
      */
     hc->Common.PnpState = HCD_PNP_REMOVED;
     HcdIoLeave(hc);
-    (VOID)KeWaitForSingleObject(&hc->RemoveEvent, Executive, KernelMode,
-                                FALSE, NULL);
+    (VOID)HcdWaitEvent(&hc->RemoveEvent, 0);
 
     if (hc->ControllerStarted) {
         HcdStopController(hc);
     }
+    /* Record 17 section 4.13.6: released whatever the start reached
+     * (idempotent), before the removal reaches xhcicm.sys's filter. */
+    HcdCtlIsoRelease(hc);
     /* Before the IRP goes down: the interface belongs to the PCI PDO. */
     HcdDoorControllerRemove(hc);
     /* After the stop's release disconnected any message: the x86 helper's

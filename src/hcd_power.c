@@ -15,7 +15,9 @@
  *     (XhciResumeController) after the bus has powered it, from the
  *     completion routine when that runs at PASSIVE_LEVEL and from a work item
  *     otherwise. A resume that fails declares the controller failed and asks
- *     for the in-place recovery (HcdControllerFail).
+ *     for the in-place recovery (HcdControllerFail). A D0 the bus below
+ *     fails resumes nothing and latches the bus refusing instead
+ *     (hcdD0Refused, task 45.63), on the same route.
  *
  * No dispatch routine waits for its own IRP (task 26-A.2). The D0 and system
  * SET_POWER IRPs, which this driver pends, keep the outstanding-I/O count
@@ -107,6 +109,9 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
 
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     HcdSuspControllerDownLocked(hc);
+    /* Task 45.23 (design record 20 section 4.3.3): pending from here to
+     * this suspend's resume's end (hcdResume, HcdEnumService). */
+    hc->ResumePhase = XHCI98_RESUME_PENDING;
     if (XhciTolShutLatch((ULONG)hc->Common.SystemPower)) {
         hc->ShutLatched = 1;
     }
@@ -116,6 +121,16 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
      * other suspend quirks act inside XhciSuspendController. */
     HcdQuirkSuspend(hc);
     XhciSuspendController(&hc->Hc);
+    /* Task 45.63 (record 13 section 5.8.1): the halt's proof, read while
+     * the function is still in D0 - the callers' precondition - on a
+     * started controller with its registers mapped, as hcdShutFlush reads
+     * it. Nothing sets Run/Stop again before a resume, which clears it. */
+    hc->SuspendHaltProven = 0;
+    if (hc->BarVa != NULL && hc->Hc.HcInfoStatus == XHCI_HC_OK &&
+        !hc->Hc.Tol.Unreadable) {
+        hc->SuspendHaltProven =
+            XhciTolHaltProven(XhciReadOp(&hc->Hc, XHCI_OP_USBSTS));
+    }
     HcdSuspSettleStale(hc);
 }
 
@@ -124,13 +139,46 @@ static VOID hcdSuspendSettled(PHCD_CONTROLLER hc)
  * that fails is the recovery's. IRQL: PASSIVE_LEVEL. */
 static VOID hcdResume(PHCD_CONTROLLER hc)
 {
+    KIRQL oldIrql;
     ULONG restores;
 
     restores = hc->Hc.Quirk.Restores;
+    /* Task 45.63: the controller runs again, so the suspend's proof ends;
+     * and this resume begins PENDING, whatever a D0 the bus failed before
+     * it left (hcdD0Refused): it ends RUNNING or FAILED below or at the
+     * thread's pass (design record 20 section 4.3.3). */
+    hc->SuspendHaltProven = 0;
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->ResumePhase = XHCI98_RESUME_PENDING;
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    /* Task 45.23 (design record 20 section 4.3.2): the invalidation this
+     * resume's re-initialization raises is marked, and the devices may be
+     * kept only once it has succeeded - its HCRST done. */
+    hc->ResumeInvalidating = 1;
+    hc->ResumeSlotsInvalidated = 0;
+    hc->ResumeKeepReady = 0;
     if (XhciResumeController(&hc->Hc) != MP_STATUS_SUCCESS) {
+        hc->ResumeInvalidating = 0;
         hc->ResumeFailures++;
+        /* Section 4.3.3: the resume's end, failed; every quiet mark void. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->ResumePhase = XHCI98_RESUME_FAILED;
+        hc->MarkGen++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
         HcdControllerFail(hc);
         return;
+    }
+    hc->ResumeInvalidating = 0;
+    hc->ResumeKeepReady = hc->ResumeSlotsInvalidated;
+    hc->ResumeKeepPending = (hc->ResumeKeepReady && hc->ResumeKeepOn) ? 1L
+                                                                      : 0L;
+    if (!hc->ResumeKeepReady) {
+        /* Section 4.3.3: no re-initialization, so this is the resume's
+         * end; one that re-initialized ends with the thread's pass. */
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        hc->ResumePhase = XHCI98_RESUME_RUNNING;
+        hc->MarkGen++;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
     }
     HcdQuirkResumed(hc, restores);
 }
@@ -198,12 +246,112 @@ static VOID hcdShutClear(PHCD_CONTROLLER hc)
     XhciControllerLockRelease(&hc->Hc, oldIrql);
 }
 
-/* The resume half of a D0, then the IRP's completion. IRQL: PASSIVE_LEVEL. */
+/* How long a D0 waits for the thread's pass to keep or drop the devices
+ * of a resume's re-initialization (task 45.23): every restore is a few
+ * commands and descriptor reads a device, so this bound is only met when
+ * the thread cannot run - the D0 then completes, and what comes after is
+ * the pass's whenever it runs. */
+#define HCD_RKEEP_D0_WAIT_MS    15000UL
+
+/* Task 45.23 (design record 20 section 4.3.2): the D0 of a resume that
+ * re-initialized waits, outside the power gate the thread's pass takes,
+ * until that pass has kept or dropped the devices, so the function
+ * drivers above, which PnP powers only after this D0, never submit to a
+ * device left between the two. Polled at 10 ms - no event wait, whose
+ * unsatisfied return on Windows 98 would need the same loop - and bounded
+ * (HCD_RKEEP_D0_WAIT_MS). IRQL: PASSIVE_LEVEL. */
+static VOID hcdResumeKeepWait(PHCD_CONTROLLER hc)
+{
+    LARGE_INTEGER due;
+    ULONG waited;
+
+    for (waited = 0; hc->ResumeKeepPending != 0 &&
+                     waited < HCD_RKEEP_D0_WAIT_MS;
+         waited += 10) {
+        HcdRelativeMs(&due, 10);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    if (waited != 0) {
+        XhciLogNote(&hc->Hc, "resume.keep.d0wait",
+                    (waited & 0x00FFFFFFUL) |
+                        (hc->ResumeKeepPending != 0 ? 0x80000000UL : 0UL));
+    }
+}
+
+/*
+ * Task 45.63 (design record 13 section 5.8.1): the bus below failed this
+ * D0 - Windows 10's PCI driver answers STATUS_NO_SUCH_DEVICE when the
+ * function is gone after a sleep (a dock unplugged while asleep; QEMU's
+ * wake reset reads the same) - so the function stays out of D0, nothing
+ * here touches it, and no D0 serves what the bus holds. Until PnP removes
+ * it, or a later D0 clears the latch, every request held or sent is ended
+ * as at the shutdown (section 5.8): the latch set, the resume's state
+ * FAILED for the UAS driver's wake check (design record 20 section 4.3.3),
+ * the commands completed, the transfers on the suspend's proof of the
+ * halt (hcdSuspendSettled), the window itself being unreadable now, and
+ * a selectively suspended PDO's pended D0 settled (HcdSuspSettleLatched). A
+ * function driver whose D0 waits on a request to its PDO (Windows 10's
+ * HID stack) then sees it fail, its D0 ends, and PnP's removal of the
+ * controller can run. The power gate held; IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdD0Refused(PHCD_CONTROLLER hc, NTSTATUS status)
+{
+    KIRQL oldIrql;
+    ULONG mask;
+    ULONG cmds;
+
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    hc->D0Refusals++;
+    hc->ShutLatched = 1;
+    if (hc->ResumePhase == XHCI98_RESUME_PENDING) {
+        hc->ResumePhase = XHCI98_RESUME_FAILED;
+        hc->MarkGen++;
+    }
+    mask = 0;
+    if (hc->ControllerStarted) {
+        mask = XhciTolShutFlush(1, hc->SuspendHaltProven,
+                                hc->CommonBufferPinned != 0 ? 1UL : 0UL,
+                                hc->Hc.Tol.Unreadable != 0 ? 1UL : 0UL);
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    cmds = 0;
+    if (mask & XHCI_TOL_SHUT_CMDS) {
+        cmds = HcdCfgShutFlush(hc);
+    }
+    if (mask & XHCI_TOL_SHUT_XFERS) {
+        HcdIoShutFlush(hc);
+    }
+    /* A selectively suspended PDO's D0 pended before the latch: no
+     * powered pass comes for it (record 14 section 4.4). */
+    HcdSuspSettleLatched(hc);
+    if (cmds > 0x00FFFFFFUL) {
+        cmds = 0x00FFFFFFUL;
+    }
+    XhciLogNote(&hc->Hc, "power.d0.refused", (ULONG)status);
+    XhciLogNote(&hc->Hc, "power.d0.flush", (cmds << 8) | mask);
+}
+
+/* The resume half of a D0, then the IRP's completion; a D0 the bus below
+ * failed is hcdD0Refused's, and completes with the bus's status. IRQL:
+ * PASSIVE_LEVEL. */
 static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
 
     stack = IoGetCurrentIrpStackLocation(irp);
+    if (!NT_SUCCESS(irp->IoStatus.Status)) {
+        /* Only a suspended controller: one still running in D0 (a D0 asked
+         * for a function already there) goes on serving. */
+        HcdPowerGateEnter(hc);
+        if (hc->Common.DevicePower != PowerDeviceD0 || hc->SuspendedInD0) {
+            hcdD0Refused(hc, irp->IoStatus.Status);
+        }
+        HcdPowerGateLeave(hc);
+        PoStartNextPowerIrp(irp);
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        HcdIoLeave(hc);
+        return;
+    }
     HcdPowerGateEnter(hc);
     hcdShutClear(hc);
     if (hc->ControllerStarted &&
@@ -227,6 +375,7 @@ static VOID hcdD0Finish(PHCD_CONTROLLER hc, PIRP irp)
         HcdPollGrant(hc);
     }
     HcdPowerGateLeave(hc);
+    hcdResumeKeepWait(hc);
     (VOID)PoSetPowerState(hc->Common.Self, DevicePowerState,
                           stack->Parameters.Power.State);
     PoStartNextPowerIrp(irp);
@@ -261,6 +410,9 @@ static VOID hcdDirectTransition(PHCD_CONTROLLER hc)
     HcdPowerGateEnter(hc);
     flush = hcdDirectTransitionGated(hc);
     HcdPowerGateLeave(hc);
+    /* A resume this route made waits for its keep as a D0 does (task
+     * 45.23), before the system IRP completes and the children follow. */
+    hcdResumeKeepWait(hc);
     /* Task 38.10: the shutdown's records flushed, the gate left (design
      * record 20 section 6.4). */
     if (flush) {
@@ -320,15 +472,14 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     ULONG kind;
 
     hc = (PHCD_CONTROLLER)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    (VOID)InterlockedDecrement(&hc->QemuPowerDeferred);
+#endif
     irp = hc->PowerWorkIrp;
     kind = hc->PowerWorkKind;
     hc->PowerWorkIrp = NULL;
     hc->PowerWorkKind = 0;
 
-    if (kind == HCD_POWER_WORK_D0) {
-        hcdD0Finish(hc, irp);
-        return;
-    }
     if (kind == HCD_POWER_WORK_DIRECT) {
         hcdDirectTransition(hc);
     }
@@ -342,11 +493,50 @@ static VOID NTAPI hcdPowerWork(PVOID Context)
     HcdIoLeave(hc);
 }
 
-/* One power IRP of each kind is in flight at a time - the power manager
- * serializes them per device - so one work item serves both. IRQL:
- * <= DISPATCH_LEVEL. */
+/* IRQL: PASSIVE_LEVEL (a system worker thread). */
+static VOID NTAPI hcdPowerWorkD0(PVOID Context)
+{
+    PHCD_CONTROLLER hc;
+    PIRP irp;
+
+    hc = (PHCD_CONTROLLER)Context;
+#if defined(XHCI_FLAVOUR_QEMU)
+    (VOID)InterlockedDecrement(&hc->QemuPowerDeferred);
+#endif
+    irp = hc->PowerWorkD0Irp;
+    hc->PowerWorkD0Irp = NULL;
+    hcdD0Finish(hc, irp);
+}
+
+/* The power manager serializes each kind per device but lets a system IRP
+ * and a device IRP be in flight together, so the device IRP's D0 has its
+ * own item and slot: a D0 deferred from hcdD0Done at DISPATCH_LEVEL must
+ * not overwrite a system IRP's deferral still queued, nor the reverse. The
+ * system IRP's paths (SYSTEM, DIRECT, SHUT) share the other, one system
+ * IRP being in flight at a time. IRQL: <= DISPATCH_LEVEL. */
 static VOID hcdPowerDefer(PHCD_CONTROLLER hc, PIRP irp, ULONG kind)
 {
+#if defined(XHCI_FLAVOUR_QEMU)
+    {
+        /* Task 45.27 (record 15 section 8.1): counted before the item is
+         * queued and uncounted when its work routine begins, so 2 here is
+         * this deferral made while the other kind's routine had not yet
+         * begun. The qemu flavour alone. */
+        LONG pending;
+
+        pending = InterlockedIncrement(&hc->QemuPowerDeferred);
+        if (pending >= 2) {
+            XHCI_DBG_VALUE("hcd: power defer overlap",
+                           (kind << 16) | ((ULONG)pending & 0xFFUL));
+        }
+    }
+#endif
+    if (kind == HCD_POWER_WORK_D0) {
+        hc->PowerWorkD0Irp = irp;
+        ExInitializeWorkItem(&hc->PowerWorkD0, hcdPowerWorkD0, hc);
+        ExQueueWorkItem(&hc->PowerWorkD0, DelayedWorkQueue);
+        return;
+    }
     hc->PowerWorkIrp = irp;
     hc->PowerWorkKind = kind;
     ExInitializeWorkItem(&hc->PowerWork, hcdPowerWork, hc);
@@ -362,11 +552,8 @@ static NTSTATUS NTAPI hcdD0Done(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     UNREFERENCED_PARAMETER(DeviceObject);
 
     hc = (PHCD_CONTROLLER)Context;
-    if (!NT_SUCCESS(Irp->IoStatus.Status)) {
-        PoStartNextPowerIrp(Irp);
-        HcdIoLeave(hc);
-        return STATUS_SUCCESS;
-    }
+    /* A failed D0 takes the same route as one that succeeded (task 45.63):
+     * hcdD0Finish ends what the bus holds before the IRP completes. */
     if (KeGetCurrentIrql() == PASSIVE_LEVEL) {
         hcdD0Finish(hc, Irp);
     } else {

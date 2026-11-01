@@ -46,9 +46,10 @@ static ULONG hcdWcsLen(const WCHAR *s)
     return n;
 }
 
-/* A copy of a string in handed-off pool, with one extra NUL when `multi` is
- * set (a REG_MULTI_SZ of one string). NULL on allocation failure. */
-static PWCHAR hcdCopyId(const WCHAR *s, ULONG multi)
+/* A copy of a string in handed-off pool, always double-NUL terminated, so
+ * the same copy serves a single id and a REG_MULTI_SZ of one string. NULL
+ * on allocation failure. */
+static PWCHAR hcdCopyId(const WCHAR *s)
 {
     PWCHAR out;
     ULONG n;
@@ -64,7 +65,6 @@ static PWCHAR hcdCopyId(const WCHAR *s, ULONG multi)
     }
     out[n] = 0;
     out[n + 1] = 0;
-    UNREFERENCED_PARAMETER(multi);
     return out;
 }
 
@@ -212,8 +212,8 @@ NTSTATUS HcdControllerBusRelations(PHCD_CONTROLLER hc, PIRP irp)
     rel = (PDEVICE_RELATIONS)HcdPoolAllocHandedOff(
         sizeof(DEVICE_RELATIONS) + count * sizeof(PDEVICE_OBJECT));
     if (rel == NULL) {
-        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES,
-                              irp->IoStatus.Information);
+        HcdRelationsGiveBack(old);
+        return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
     }
     for (i = 0; i < count; i++) {
         rel->Objects[i] = old->Objects[i];
@@ -241,13 +241,13 @@ static NTSTATUS hcdRootHubQueryId(PIRP irp, BUS_QUERY_ID_TYPE type)
 
     switch (type) {
     case BusQueryDeviceID:
-        id = hcdCopyId(hcdRootHubId, 0);
+        id = hcdCopyId(hcdRootHubId);
         break;
     case BusQueryHardwareIDs:
-        id = hcdCopyId(hcdRootHubId, 1);
+        id = hcdCopyId(hcdRootHubId);
         break;
     case BusQueryInstanceID:
-        id = hcdCopyId(L"0", 0);
+        id = hcdCopyId(L"0");
         break;
     default:
         /* No compatible id, by design (section 8.6): the IRP keeps the
@@ -385,7 +385,7 @@ NTSTATUS HcdRootHubPdoPnp(PHCD_ROOTHUB_PDO pdo, PIRP irp)
     case IRP_MN_QUERY_DEVICE_TEXT:
         if (stack->Parameters.QueryDeviceText.DeviceTextType ==
             DeviceTextDescription) {
-            text = hcdCopyId(hcdRootHubText, 0);
+            text = hcdCopyId(hcdRootHubText);
             if (text == NULL) {
                 return HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES, 0);
             }
@@ -628,8 +628,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
     if (stack->MinorFunction == IRP_MN_REMOVE_DEVICE) {
         fdo->Common.PnpState = HCD_PNP_REMOVED;
         hcdRhIoLeave(fdo);
-        (VOID)KeWaitForSingleObject(&fdo->RemoveEvent, Executive, KernelMode,
-                                    FALSE, NULL);
+        (VOID)HcdWaitEvent(&fdo->RemoveEvent, 0);
         /*
          * The bus is detached before its children are settled: the thread
          * drops every device and stops creating PDOs (HcdEnumDetach), and
@@ -662,8 +661,7 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
         HCD_SET_COMPLETION_ALWAYS(irp, hcdRhSignal, &done);
         status = IoCallDriver(fdo->LowerDevice, irp);
         if (status == STATUS_PENDING) {
-            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                        NULL);
+            (VOID)HcdWaitEvent(&done, 0);
         }
         status = irp->IoStatus.Status;
         if (NT_SUCCESS(status)) {
@@ -724,6 +722,14 @@ NTSTATUS HcdRootHubFdoPnp(PHCD_ROOTHUB_FDO fdo, PIRP irp)
                 }
                 irp->IoStatus.Information = (ULONG_PTR)rel;
                 irp->IoStatus.Status = STATUS_SUCCESS;
+            } else if (hc != NULL) {
+                /* Passed down, the list from above would read every child
+                 * of this bus as departed. */
+                HcdRelationsGiveBack(old);
+                status = HcdCompleteIrp(irp, STATUS_INSUFFICIENT_RESOURCES,
+                                        0);
+                hcdRhIoLeave(fdo);
+                return status;
             }
         }
         break;

@@ -9,19 +9,26 @@
 # src\uas for every flavour and runs the import gate on the result against
 # scripts\import-gate\xhcicm-imports.allow (x86) or
 # xhcicm-imports-amd64.allow (amd64). Output: src\cm\objfre\<arch>\
-# xhcicm.sys (release), src\cm\objchk (debug), src\cm\objchk_qemu (qemu).
+# xhcicm.sys (release) and src\cm\objchk_qemu (qemu).
 #
 # THE PURE CORE: cm_vals.c (test\test_cm.c); the host interface ring 0,
 # the ICM client and the hardware profiles, tbt_ring.c, tbt_icm.c and
 # tbt_hw.c (test_tbt_ring, test_tbt_icm, test_tbt_hw, test_tbt_select);
 # the USB4 software connection manager, tbt_u4cm.c (test_u4cm; Phase 40,
-# design record 22); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
+# design record 22); the inter-domain discovery and USB4NET service it
+# drives, tbt_xdp.c (test_tbt_xdp, test_u4xd; task 45.59, design record
+# 35); the tunnel ports, tbt_topo.c (test_tbt_topo), and the
 # 9x bus numbering of the bridges below them, tbt_brnum.c (test_tbt_brnum;
 # record 21 section 6.1.1); the 9x start of a function with no interrupt,
 # cm_noirq.c (test_cm_noirq; design record 28); the
 # re-enumeration's own pure half, cm_ports.c (test_cm_ports), the
 # interrupt of a function hot-added on 2000, cm_irq.c (test_cm_irq; task
-# 44.53, record 21 section 6.2.1), the marks
+# 44.53, record 21 section 6.2.1), the requirement lists of a hot-added
+# bridge on 2000 and XP, cm_breq.c (test_cm_breq; task 45.12, design
+# record 33), the isolation statement's decision, cm_iso.c (test_cm_iso;
+# task 45.35, design record 22 section 10.5), the ring interrupt's pure
+# half, cm_rirq.c (test_cm_rirq; task 45.22, design record 21 section
+# 4.5; its driver half cm_rirqos.c), the marks
 # answer's table, cm_marks.c (test_cm_marks; task 42-A.5), the 9x
 # tunnel id's pure half, cm_tagid.c (test_cm_tagid; task 44.3), and the
 # query device's answers, cm_query.c and cm_qpci.c (test_cm_query); the
@@ -29,8 +36,10 @@
 # the registry values' precedence, ..\xhci_regsrc.c (test\test_regsrc.c;
 # task 42-A.17), compiled in the same way.
 # All DDK-free.
-# cm_pool.c is the one file that allocates pool; cm_reg.c the one that
-# opens a registry key; cm_log.c the one DbgPrint site (every flavour,
+# cm_pool.c is the one file that allocates pool; cm_reg.c and cm_statos.c
+# the two that open a registry key through the kernel's imports
+# (cm_nvlinkos.c's 9x keys go through the VMM's registry services);
+# cm_log.c the one DbgPrint site (every flavour,
 # under XhciCmLogDebugView, since the owner's reversal of decision D12 on
 # 2026-10-16). The allowlists hold each to its file with SITES=. cm_cfgmg.c is
 # the one file that calls CONFIGMG (Windows 98 SE and ME, x86 only).
@@ -59,11 +68,15 @@ SOURCES=cm_vals.c      \
         tbt_icm.c      \
         tbt_hw.c       \
         tbt_u4cm.c     \
+        tbt_xdp.c      \
         tbt_topo.c     \
         tbt_brnum.c    \
         cm_noirq.c     \
         cm_ports.c     \
         cm_irq.c       \
+        cm_breq.c      \
+        cm_iso.c               cm_rirq.c      \
+        cm_netr.c      \
         cm_marks.c     \
         cm_tagid.c     \
         cm_nvlink.c    \
@@ -80,7 +93,8 @@ SOURCES=cm_vals.c      \
         cm_cfgmg.c     \
         cm_cfgwk.c     \
         cm_filt.c      \
-        cm_live.c      \
+        cm_live.c              cm_rirqos.c    \
+        cm_net.c       \
         cm_pwrr.c      \
         cm_nvlinkos.c  \
         cm_call.c      \
@@ -97,20 +111,33 @@ SOURCES=cm_vals.c      \
 !ENDIF
 
 #
-# The three flavours, derived from BUILD_ALT_DIR exactly as src\sources
+# The flavours, derived from BUILD_ALT_DIR exactly as src\sources
 # derives them for xhci98.sys (design record 08), so the same flavour
-# marker check and packaging refusals apply to this binary. The qemu flavour
-# differs from debug in its marker and in cm_log.c's port-0xE9 mirror of the
-# log emission (decision D12), whose WRITE_PORT_UCHAR import is a qemu row.
+# marker check and packaging refusals apply to this binary: release and
+# qemu (debug was retired with task 45.45, design record 08 section 14). The
+# qemu flavour is a checked build and carries cm_log.c's port-0xE9 mirror of
+# the log emission (decision D12), whose WRITE_PORT_UCHAR import is a qemu
+# row, and the DebugView sink forced on (cm_log.c, #if DBG).
 #
+# NTNOFPO: the release flavour keeps frame pointers on the MSVC 6.0 x86
+# build (/Oy- and FPO=0; the Windows 2000 DDK's i386mk.inc reads it after
+# this file), as the retired debug flavour did (task 45.45, design record 08
+# section 14). WDK 7.1 does not read it: its amd64 build has no FPO switch.
 !IF "$(BUILD_ALT_DIR)" == "chk_qemu"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_QEMU
-!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
-C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
 !ELSEIF "$(BUILD_ALT_DIR)" == "fre"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+NTNOFPO=1
 !ELSE
-!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). Build through scripts\build-driver.cmd.
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu). The debug flavour (chk) was retired with roadmap-usb4 task 45.45 (design record 08 section 14). Build through scripts\build-driver.cmd.
 !ENDIF
 
+#
+# x86 only. The amd64 images (WDK 7.1) keep .rdata a section of its own,
+# so the import address table is not in the executable .text: with it
+# there, Driver Verifier's code integrity checks on 10 x64 stop the
+# driver as it loads (bug check 0xC4, 0x2005; roadmap-usb4 task 45.63).
+#
+!IF "$(_BUILDARCH)" != "AMD64"
 LINKER_FLAGS=-merge:.rdata=.text
+!ENDIF

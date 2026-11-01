@@ -1409,8 +1409,8 @@ and the owner's decision.
 Tags in this section, beside the record's own: **[hw]** read on
 hardware - the owner's P14s bench of 2026-10-22 (`runs/run-43.md`, "The
 first real-hardware reading") or the ASM4242's own state as
-`usb4-emu`'s asm4242 data records it (record 22 section 18; `9f333f3`, the
-`lspci -vvv` of the tunnel's functions with the enclosure attached at
+`usb4-emu`'s asm4242 data records it (record 22 section 18; `a0b6749` on its `main`, `9f333f3` before
+the 2026-10-29 squash, the `lspci -vvv` of the tunnel's functions with the enclosure attached at
 power-on; read there, never modified from here); **[src]** read in this tree's sources at
 `3.3.0.0`; **[model]** this section's arithmetic on [hw] figures. A
 [hyp] here is read on the bench or in the emulator before anything rests
@@ -1710,11 +1710,31 @@ the never-complete-early rule of its `AGENTS.md` excludes.
 
 ### 13.7 The emulator's readings
 
-None were taken for this draft. The rule for new legs (QEMU's q35
-machine, 98 SE and ME through AHCI) needs a q35 98 SE base, which was not
-ready on 2026-10-25; the readings of section 13.4's "can" list (C2's
-relative cost, two threads' overlap, the sizes at 4 and 8 MiB) are owed
-to that base and go to the run sheet `runs/run-44.md`, under a section "44.36".
+None were taken for the first draft (the q35 98 SE base was not ready
+on 2026-10-25). Taken on 2026-10-29 for task 45.10 on a q35 98 SE guest
+with this tree's package at `1765b18c` (`runs/run-45.md`, "45.10", has
+the vehicle and every figure), comparable within that run only:
+
+- **Two and four threads** put no more than two commands at the drive,
+  what one 1 MiB request's two children already do at one thread [read];
+  that the threads' requests did not overlap at Stor98 is inferred from
+  that depth [inf], and the rates moved little either way [read]. Item 2
+  showed no clear lever in the emulator.
+- **4 and 8 MiB requests** from an aligned buffer reach Stor98 as 63 KiB
+  scatter/gather pieces, each double-buffered, at about 80 to 108 MB/s
+  against 202 to 241 at 2 MiB, Stor98's granted maximum being 2048 KiB
+  [read]: item 4's cut above the maximum is real; whether C4's larger
+  maximum would let such requests through whole is not shown [inf].
+- **A scattered buffer** reaches Stor98 as pieces below 63 KiB, one
+  command at a time, at about a third of the aligned rate at 1 and 2 MiB
+  [read]: the aligned-against-scattered difference there mixes IOS's
+  cut with Stor98's per-page mapping, which this reading can neither
+  isolate nor exclude [inf].
+  C2's gain needs another reading (a counter of the mapping's time, or
+  B4's refit of B).
+
+C1 to C5 stay planned, each decided by its reading; the bench B1 to B7
+is unchanged (task 45-E.9).
 
 ### 13.8 Open, and the owner's
 
@@ -1762,4 +1782,5 @@ to that base and go to the run sheet `runs/run-44.md`, under a section "44.36".
   `src/nvme2k.h`, `src/pool9x.c`, `README.md` ("Settings") and
   `docs/PLAN.md` ("Polling mode"); `src/cm/tbt_u4cm.c` (`tbtU4Bond`,
   `tbtU4Paths`) and `tbt_regs.h`; design record 29; `usb4-emu`'s
-  asm4242 data (`9f333f3`; record 22 section 18).
+  asm4242 data (`a0b6749`; `9f333f3` before the 2026-10-29 squash;
+  record 22 section 18).

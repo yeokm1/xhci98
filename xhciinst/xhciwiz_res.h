@@ -24,6 +24,11 @@
 #define IDD_OTHER               111     /* the other USB drivers (section 6.7) */
 /* Record 26 section 5.0 (draft 35): the Change folder dialog. */
 #define IDD_FOLDER              112
+/* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4 page. */
+#define IDD_TBT                 114
+#define IDD_HELP                115     /* Help (record 26 section 5.10)  */
+#define IDC_H_TEXT              1120
+#define IDC_H_README            1121
 
 /* The controls. */
 #define IDC_TITLE               1001
@@ -57,6 +62,17 @@
 #define IDC_C_FOLDER            1034    /* Change folder...               */
 #define IDC_S_PART              1035    /* a tab's next part              */
 #define IDC_C_PFW               1036    /* XHCIPFW.VXD or XHCIPFW.SYS     */
+/* The Thunderbolt and USB4 page's own (record 26 section 5.3.5); XHCIPFW,
+ * Stor98 and S98VSD keep their ids there. */
+#define IDC_T_HEAD              1110
+#define IDC_T_APPR_H            1111
+#define IDC_T_APPR1             1112
+#define IDC_T_APPR1_T           1113
+#define IDC_T_APPR0             1114
+#define IDC_T_APPR0_T           1115
+#define IDC_T_APPR_NOTE         1116
+#define IDC_T_NET               1117    /* networking (record 35 s. 9.5) */
+#define IDC_T_NET_T             1118
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

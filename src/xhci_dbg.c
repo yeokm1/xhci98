@@ -26,8 +26,8 @@
 
 /*
  * The header's own condition under its own name: this file is the `qemu`
- * flavour's live trace, and `debug` must carry neither its port write nor its
- * per-line `DbgPrint`.
+ * flavour's live trace, and `release` (and `debug`, until task 45.45 retired
+ * it) must carry neither its port write nor its per-line `DbgPrint`.
  */
 #ifdef XHCI_DBG_TRACE
 
@@ -84,8 +84,9 @@ static ULONG xhciDbgAppendHex(char *buf, ULONG len, ULONG value, ULONG digits)
  * is **still open** - that is defect 2b, `docs/contributing/runs/run-13e.md`
  * P6, and XHCI_DBG_E9_NOEXEC below is the discriminator that answers it. What
  * the polarity change settles is only which configuration is the default: the
- * shipping `debug` flavour, whose defining requirement is that it loads on real
- * Windows 98 and Windows 2000 metal, no longer carries the import at all.
+ * flavours that ship (`release`, and `debug` until task 45.45 retired it),
+ * whose defining requirement is that they load on real Windows 98 and Windows
+ * 2000 metal, carry no such import at all.
  */
 #if defined(XHCI_DBG_E9_NOEXEC) && !defined(XHCI_DBG_E9)
 #error XHCI_DBG_E9_NOEXEC exists to keep the WRITE_PORT_UCHAR import while never executing the write, so it is meaningless without XHCI_DBG_E9. Build defect 2b's discriminating binary from the qemu flavour, which is the one that defines XHCI_DBG_E9.

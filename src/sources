@@ -3,8 +3,8 @@
 # host controller driver (design record 13; roadmap-hcd.md).
 #
 # Build with scripts\build-driver.cmd, which runs the gates after every link.
-# Output: src\objfre\i386\xhci98.sys (release), src\objchk\i386 (debug),
-# src\objchk_qemu\i386 (qemu), and the amd64 trees beside them - build.exe
+# Output: src\objfre\i386\xhci98.sys (release), src\objchk_qemu\i386
+# (qemu), and the amd64 trees beside them - build.exe
 # appends the architecture and the wrapper overrides BUILD_ALT_DIR back to the
 # flavour name (design record 11 section 8).
 #
@@ -124,39 +124,53 @@ SOURCES=xhci_mem.c    \
 
 #
 # ------------------------------------------------------------------
-# The three build flavours (roadmap task 13-L.1, design record 08)
+# The build flavours (roadmap task 13-L.1, design record 08)
 # ------------------------------------------------------------------
 #
 # BUILD_ALT_DIR is the DDK's own flavour discriminator: build.exe concatenates
 # it onto `obj` to make the output tree, and setenv.bat sets it to fre or chk.
-# scripts\build-driver.cmd overrides it to chk_qemu for the third flavour,
-# because debug and qemu are both checked builds and would otherwise share
-# src\objchk. The value may be at most 10 characters (build.exe's own limit).
+# scripts\build-driver.cmd overrides it to chk_qemu for the qemu flavour, a
+# checked build with a tree of its own. The value may be at most 10
+# characters (build.exe's own limit).
 #
 #   release  BUILD_ALT_DIR=fre       free     ships, default
-#   debug    BUILD_ALT_DIR=chk       checked  ships, the diagnostic download
 #   qemu     BUILD_ALT_DIR=chk_qemu  checked  never published
+#
+# The third, debug (chk, checked, the diagnostic download), was retired with
+# roadmap-usb4 task 45.45 (design record 08 section 14): release keeps its
+# frame pointers (NTNOFPO below) and its command-state checker (hcd_strict.c).
 #
 # XHCI_DBG_LIVE and XHCI_DBG_E9 make the qemu flavour: the live trace and its
 # port-0xE9 mirror, a runtime and a load-time hazard respectively on Windows 98
 # metal (design record 08 section 5.1), both opt-in. XHCI_FLAVOUR_* is the
 # in-image flavour marker hcd_entry.c emits, and XHCI_FLAVOUR_QEMU alone
 # compiles the qemu test aids: task 35.4's XhciQemuPsiE460 and 35-T.9's fault
-# injection (xhci_inj.c, hcd_inj.c), which compile to nothing in the two
-# flavours that ship.
+# injection (xhci_inj.c, hcd_inj.c), which compile to nothing in release.
+#
+# NTNOFPO: the release flavour keeps frame pointers on the MSVC 6.0 x86
+# build (/Oy- and FPO=0; the Windows 2000 DDK's i386mk.inc reads it after
+# this file), as the retired debug flavour did (task 45.45, design record 08
+# section 14). WDK 7.1 does not read it: its amd64 build has no FPO switch.
 #
 !IF "$(BUILD_ALT_DIR)" == "chk_qemu"
 C_DEFINES=$(C_DEFINES) -DXHCI_DBG_LIVE -DXHCI_DBG_E9 -DXHCI_FLAVOUR_QEMU
-!ELSEIF "$(BUILD_ALT_DIR)" == "chk"
-C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_DEBUG
 !ELSEIF "$(BUILD_ALT_DIR)" == "fre"
 C_DEFINES=$(C_DEFINES) -DXHCI_FLAVOUR_RELEASE
+NTNOFPO=1
 !ELSE
-!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly three flavours - fre (release), chk (debug) and chk_qemu (qemu). setenv.bat sets the first two; scripts\build-driver.cmd sets the third. A build with any other value would carry no flavour marker, so it is refused here rather than shipped as an unidentifiable binary.
+!ERROR BUILD_ALT_DIR is "$(BUILD_ALT_DIR)" and this tree knows exactly two flavours - fre (release) and chk_qemu (qemu); scripts\build-driver.cmd sets the second. The debug flavour (chk) was retired with roadmap-usb4 task 45.45 (design record 08 section 14). A build with any other value would carry no flavour marker, so it is refused here rather than shipped as an unidentifiable binary.
 !ENDIF
 
 #
 # No separate .rdata section, as the shipping NUSB/SP4 drivers and the
 # miniport before this.
 #
+#
+# x86 only. The amd64 images (WDK 7.1) keep .rdata a section of its own,
+# so the import address table is not in the executable .text: with it
+# there, Driver Verifier's code integrity checks on 10 x64 stop the
+# driver as it loads (bug check 0xC4, 0x2005; roadmap-usb4 task 45.63).
+#
+!IF "$(_BUILDARCH)" != "AMD64"
 LINKER_FLAGS=-merge:.rdata=.text
+!ENDIF

@@ -272,6 +272,13 @@ ULONG XhciLinkDecide(PXHCI_LINK_PORT link, ULONG portsc, ULONG want,
     }
 }
 
+VOID XhciLinkRefund(PXHCI_LINK_PORT link)
+{
+    if (link != NULL && link->WarmResets != 0) {
+        link->WarmResets--;
+    }
+}
+
 ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen)
 {
     if (warmSeen != NULL) {
@@ -393,15 +400,15 @@ ULONG XhciHoldBegin(PXHCI_LINK_HOLD hold, ULONG port, ULONG companion,
     hold->ConnectSeen = 0;
     hold->MatchSeen = 0;
     hold->OthersSeen = 0;
-    hold->Held.Valid = 0;
-    hold->Held.Vendor = 0;
-    hold->Held.Product = 0;
-    hold->Held.SerialLength = 0;
+    /* Field-wise, not a struct assignment: 144 bytes is a copy MSVC 6.0
+     * may emit as a memcpy call, an import this driver does not take
+     * (xhci_desc.c's one deliberate exception says why). */
+    hold->Held.Valid = (identity != NULL) ? identity->Valid : 0;
+    hold->Held.Vendor = (identity != NULL) ? identity->Vendor : 0;
+    hold->Held.Product = (identity != NULL) ? identity->Product : 0;
+    hold->Held.SerialLength = (identity != NULL) ? identity->SerialLength : 0;
     for (i = 0; i < XHCI_LINK_SERIAL_CHARS; i++) {
-        hold->Held.Serial[i] = 0;
-    }
-    if (identity != NULL) {
-        hold->Held = *identity;
+        hold->Held.Serial[i] = (identity != NULL) ? identity->Serial[i] : 0;
     }
     if (companion == 0) {
         hold->Kind = XHCI_HOLD_ORPHAN;

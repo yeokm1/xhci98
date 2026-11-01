@@ -227,6 +227,7 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
     const TBT_U4_PORT *p;
     const TBT_U4_ROUTER *r;
     const TBT_U4_LINK *l;
+    const TBT_U4_KID *k;
     ULONG lanes;
 
     for (i = 0; i < u4->PortCount && i < TBT_U4_MAX_PORTS; i++) {
@@ -274,6 +275,59 @@ static VOID cmStU4(UCHAR *buf, const TBT_U4CM *u4,
         cmStPut(e, CM_ST_E_BRIDGE,
                 p->Index >= 1 && p->Index <= 32 ? cmStU4Bridge(binds, p->Index)
                                                 : CM_ST_UNKNOWN);
+        cmStPut(e, CM_ST_E_SHORT_ID,
+                cmStShortId((BOOLEAN)(r->Present && r->UuidValid), r->Uuid));
+        if (r->Present) {
+            cmStName(e + CM_ST_E_VENDOR, r->VendorName, TBT_U4_NAME_LEN);
+            cmStName(e + CM_ST_E_MODEL, r->ModelName, TBT_U4_NAME_LEN);
+        }
+    }
+    /* Design record 34 section 3.7: a kid (a router chained at depth 2
+     * this driver runs) as a kind 3 entry with its fields filled: its
+     * state, ids, generation, lanes and PCIe tunnel; the tunnel port its
+     * tunnel reaches (its chain port) is not named until the chain
+     * port's correspondence is known (CM_ST_UNKNOWN). */
+    for (i = 0; i < TBT_U4_MAX_KIDS; i++) {
+        k = &u4->Kids[i];
+        r = &k->Dev;
+        if (!k->Used) {
+            continue;
+        }
+        e = cmStEntry(buf, count, flags);
+        if (e == NULL) {
+            return;
+        }
+        if (k->Bonded) {
+            lanes = CM_ST_LANES_BONDED;
+        } else if (k->SingleLane) {
+            lanes = CM_ST_LANES_SINGLE;
+        } else {
+            lanes = CM_ST_LANES_UNKNOWN;
+        }
+        cmStPut(e, CM_ST_E_KIND, CM_ST_KIND_USB4_LINK);
+        cmStPut(e, CM_ST_E_PLACE, (k->Port & 0xFFUL) | (2UL << 8));
+        cmStPut(e, CM_ST_E_ROUTE_LO, r->Depth == 2 ? r->Route.Lo : CM_ST_UNKNOWN);
+        cmStPut(e, CM_ST_E_ROUTE_HI, r->Depth == 2 ? r->Route.Hi : CM_ST_UNKNOWN);
+        cmStPut(e, CM_ST_E_APPROVAL, cmStU4Approval(k->State));
+        cmStPut(e, CM_ST_E_PORT_STATE,
+                (k->State & 0xFFUL) | ((k->Why & 0xFFUL) << 8));
+        cmStPut(e, CM_ST_E_IDS,
+                r->Present ? ((r->Vendor & 0xFFFFUL) |
+                              ((r->Device & 0xFFFFUL) << 16))
+                           : CM_ST_UNKNOWN);
+        if (!r->Present) {
+            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_UNKNOWN);
+        } else if (r->Tbt3) {
+            cmStPut(e, CM_ST_E_GEN, CM_ST_GEN_TBT3);
+        } else {
+            cmStPut(e, CM_ST_E_GEN,
+                    CM_ST_GEN_USB4 | ((r->Usb4Version & 0xFFUL) << 8));
+        }
+        cmStPut(e, CM_ST_E_LANES, lanes);
+        cmStPut(e, CM_ST_E_TUNNELS,
+                cmStTunnel(&k->Pcie, k->PcieFailed, k->Ejected) |
+                    (CM_ST_TUN_NONE << 4) | (CM_ST_TUN_NONE << 8));
+        cmStPut(e, CM_ST_E_BRIDGE, CM_ST_UNKNOWN);
         cmStPut(e, CM_ST_E_SHORT_ID,
                 cmStShortId((BOOLEAN)(r->Present && r->UuidValid), r->Uuid));
         if (r->Present) {

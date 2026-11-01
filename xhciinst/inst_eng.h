@@ -40,6 +40,7 @@
 #define INST_Q_VSD          14  /* 98 SE and ME: S98VSD.VXD?               */
 #define INST_Q_OTHER        15  /* a free or non-free set: copy it, stage it? */
 #define INST_Q_PFW          16  /* XHCIPFW.VXD or XHCIPFW.SYS?             */
+#define INST_Q_TBNET        17  /* Thunderbolt networking?                 */
 
 typedef struct _INST_ASK {
     int Kind;               /* INST_Q_*                                   */
@@ -136,6 +137,14 @@ void inst_eng_tb_question(void);
 int inst_eng_tb_state(int *haveCm, int *present, int *defaultYes,
                       int *installed);
 void inst_eng_tb_choose(int include);
+/* Thunderbolt networking's box (design record 35 section 9.5): *shown the
+ * gate (INST_TBNET_WIRED), *enabled the package carries the network driver
+ * for this system, *first the box's first state (a switch, else the
+ * XhciCmNet in force); the box as left, planned again; the Summary's line
+ * (NULL: none). */
+void inst_eng_net_state(int *shown, int *enabled, int *first);
+void inst_eng_net_choose(int ticked);
+const char *inst_eng_net_plan(void);
 /* 1 when Intel's Thunderbolt driver runs a controller (record 23 section
  * 8.5.1): the Thunderbolt box is then the user's, unticked until ticked. */
 int inst_eng_tb_intel(void);
@@ -341,6 +350,12 @@ const char *inst_eng_other_earlier(int set);
 /* The package's scope on this system in words, for its details. */
 void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
                               size_t cap);
+/* Record 26 section 6.7.13 (task 45.8), 98 SE and ME: 1 with the line when
+ * the i-th package of a set has only COPY lines for this system (no box);
+ * and the sentence for the rest of the set's packages ("" on NT). */
+int inst_eng_other_copy_only(int set, int i, char *out, size_t cap);
+void inst_eng_other_rest(int set, const char *dir, int part, char *out,
+                         size_t cap);
 /* The free set's certificate (section 6.7.11): ticked, and *offered the
  * box shown; and its choice. */
 int inst_eng_other_trust(int *offered);
@@ -389,9 +404,6 @@ const char *inst_eng_s98_choose_value(int i, int set, const char *text);
  * for a later run. */
 int inst_eng_s98_file_update(void);
 void inst_eng_s98_file_ok(int ok);
-
-/* The Thunderbolt 3 / USB4 controller found ("" for none). */
-const char *inst_eng_tb_name(void);
 
 /* 1 when the finish offers a shutdown rather than a restart (98 SE and ME
  * after a Stor98 update); 1 when the uninstall left a Stor98 it did not

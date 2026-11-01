@@ -1,6 +1,54 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 45, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61, the
+Status: draft 60, 2026-11-01 (task 45.59 step S11: the Thunderbolt
+networking box wired, `INST_TBNET_WIRED` 1, with its sentence, Summary
+line and Help paragraph, section 5.3.5; record 35 section 9.5); draft
+59, 2026-11-01 (three readings of task 45.66's legs: the
+Progress page's Help names each system's own hardware wizard, F1 opens
+the page's Help as the Help button does, and Back from the Components
+page keeps its boxes, sections 5 and 5.10); draft 58, 2026-10-31 (the owner's request of that day: the Help
+texts' paragraphs, one a choice, apart by an empty line; a text taller
+than the window scrolls, section 5.10); draft 57, 2026-10-31 (a cut of both pinned driver sets with no
+earlier record under its releases directory, a TEST or dry cut, proves
+the installer's lifted rows by themselves, section 6.7.14); draft 56, 2026-10-31 (task 45.60, the owner's request of that
+day: the XHCIPFW box on the Thunderbolt and USB4 page says what it does,
+"Find Thunderbolt and USB4 devices placed above 4 GB", with no file name, section 5.3.1;
+its Help names the files); draft 55, 2026-10-31 (task 45.66, the owner's request of that
+day: Help on every page, the Settings sheet's tabs and the Advanced
+dialog opens a small window explaining that page's choices, with the
+readme one button away, section 5.10); draft 54, 2026-10-31 (task 45.60, the owner's decisions of
+that day: the Components page's Thunderbolt sentence without the
+controller's name, and the USB Tree's box worded as the start at login
+it decides, sections 5.3 and 5.3.5); draft 53, 2026-10-31 (task 45.60, the owner's decisions of
+that day: a Thunderbolt and USB4 page after the Components page,
+shown only when the Thunderbolt box is ticked, carrying XHCIPFW,
+Stor98, S98VSD and the approval choice, and the networking box's slot
+behind a gate, section 5.3.5); draft 52, 2026-10-31 (task 45.54, the owner's decisions of
+that day: on 98 SE and ME a controller the run installs counts for the
+settings, and the USB and Thunderbolt tabs' Advanced lists offer every
+user setting of `tuning.md` but the ones named left out, section
+5.4.1); draft 51, 2026-10-30 (task 45.6: a lifted row of the
+installer's table held to a lift only in a cut carrying both sets of
+its pair, section 6.7.14); draft 50, 2026-10-29 (task 45.7's ME leg: ME's `DevicePath`
+limit 259, not 98 SE's 280, section 6.7.13); draft 49, 2026-10-29
+(task 45.12's `XhciCmBridgeReq` an
+Advanced row of the Thunderbolt page on 2000 and XP, section 5.5);
+draft 48, 2026-10-29 (roadmap-usb4 task 45.28, the owner's
+decision of that day: the Components page evenly spaced, every shown
+row's sentence at the height its words take and the rows stacked with
+one gap, the buttons at the page's foot, section 5.3.4);
+draft 47, 2026-10-29 (roadmap-usb4 tasks 45.7, 45.8 and 45.6: on
+98 SE and ME every package with a STAGE line is stageable again within
+the 280-character DevicePath, the console and the window reading the
+ticks in order, and the page listing the copied-only packages and
+where to point the wizard for the rest, section 6.7.13; an EXCLUDES
+lifted to a COEXISTS only where the cut reads the two packages'
+devices apart, recorded LIFTED and proved at every later cut, and held
+against an earlier staging of another release, section 6.7.14);
+draft 46, 2026-10-29 (roadmap-usb4 task 45.5: on 98 SE the
+storage record's value for each file is written out with `RegFlushKey`,
+and the file's temporary copy with `FlushFileBuffers`, before the file
+is moved into place, section 6.5.6); draft 45, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61, the
 owner's decisions of that day: the Add/Remove Programs entry named for
 what the run installs as well as what is registered, on 98 SE and ME too
 (by the two drivers' files), and ME's UAS hint only in a run that
@@ -251,6 +299,11 @@ asks for the restart.
 
 ## 2. Where it lives in the package
 
+From `3.4.0.0` the drivers beside it are in one folder per Windows family,
+`98-me\`, `nt-x86\` and `nt-x64\`, in place of the flavour directories
+named below (design record 36 section 2); the installer's own place, the
+root's `SETUP.EXE` and `INSTALL.BAT` and `tools\xhciinst\`, is unchanged.
+
 ```
 <package>\SETUP.EXE                     the entry point for people (draft 15)
 <package>\INSTALL.BAT                   the command line's entry point, kept
@@ -302,7 +355,7 @@ and ME; a windows-subsystem program opens none. `SETUP.EXE`
   `tools\xhciinst\XHCIWIZ.EXE` otherwise, 98 SE and ME included.
 - It starts the window with `ShellExecuteExA`, verb `open`, the working
   directory the package root, and its own command line after its name
-  passed on unchanged (`SETUP /uninstall`, `/debug`), then exits at
+  passed on unchanged (`SETUP /uninstall`), then exits at
   once. `ShellExecuteEx` is what raises the window's own
   `requireAdministrator` prompt on Vista and 7; `CreateProcess` refuses
   such an image with `ERROR_ELEVATION_REQUIRED`.
@@ -352,7 +405,8 @@ finds its package two levels up from itself, section 2).
 
 A double-click on `XHCIWIZ.EXE` itself is the same as `INSTALL` with no
 argument: the window reads its own location and picks the `release-`
-directory of its architecture, with `/debug` for the other (section 10).
+directory of its architecture (section 10; `/debug` and the `debug-`
+directory went with the debug flavour, roadmap-usb4 task 45.45).
 
 ## 3. One engine, two front ends
 
@@ -521,9 +575,43 @@ entry on x64, which names the x64 program directly (section 9).
 ## 5. The pages
 
 The owner's list (2026-10-18), in order. Every page has Back, Next (or
-Install, or Finish), Cancel and a Help button that opens the package's
+Install, or Finish), Cancel and a Help button that opened the package's
 `tools\xhciinst\readme.txt` in Notepad (`ShellExecuteA` on 98 SE and ME,
-`CreateProcessA notepad.exe` where that is simpler; looked up at run time).
+`CreateProcessA notepad.exe` where that is simpler; looked up at run time);
+since draft 55 it opens the page's own help, with the readme one button
+away (section 5.10).
+
+Every page keeps its choices across Back and Next (draft 59,
+2026-11-01): Back from a page takes its choices into the window's state
+as its Next does (`page_back`), so its fill at the next entry shows them
+as the user left them. Until draft 59 the Components page's Back did not:
+its fill, which sets the boxes from the window's state at every entry,
+showed them as they stood before the clicks (read on XP: the Thunderbolt
+box ticked, Back to Welcome, Next, and the box unticked again, the
+Summary saying "left out"). Its Back now keeps the boxes in the
+window's state (`comp_keep`) and makes no plan: a change is owed to the
+engine (`compOwed`) and handed over, with the plan made again, by the
+page's Next or the Settings button (`comp_take`, which keeps the boxes
+the same way first). A plan made at the Back could be refused for the
+boxes (the x64 signing gate with the Thunderbolt box ticked, section
+5.3.3), and Welcome greyed Next under any refused plan, so the page
+could not be reached again to change the box; at the page's Next the
+refusal is said on the page, which stays. Welcome after a Back shows the
+plan of the last Next, as before. Since draft 59 Welcome greys Next only
+where the reading, or the plan it made before any page (`planFirst`),
+refused the run (`welcome_refused`); a plan the boxes made at the
+Components page's Next or its Settings button and refused for them (the
+same gate, before draft 59 a dead end after Back as well) shows its text
+on Welcome with Next open, and the Components page refuses it again at
+its Next until a box is changed. The Thunderbolt and USB4 page, the settings pages and
+Stor98's already did; the other USB drivers' pages hand each click to
+the engine as it comes; Welcome, the Summary, Progress, Steps and Finish
+hold no choice a Back leaves (the uninstall's box is on its first page,
+which no page goes Back to). The self-test ticks and unticks the
+Components page's boxes, goes Back through `page_back`, fills the page
+again, and finds them as left and the change owed; and Welcome's Next
+open under a refused plan of the boxes, greyed under a refused reading or
+first plan.
 Every text a page shows comes from the pure half (section 11), so the host
 suite renders every page once at its longest and the self-test renders them
 through the built binary, as record 23 section 10 does for the console's
@@ -563,7 +651,7 @@ the uninstall's pages (section 9) are unchanged.
       [x] Stor98 (hot-pluggable NVMe driver)
             [x] Request-size driver          98 SE and ME only (43.46)
 [x] USB storage drivers for Windows 98 SE (NUSB 3.3's)    98 SE only
-[x] xHCI98 USB Tree, started at login
+[x] Start the xHCI98 USB Tree (tray icon) at login
 [ ] Replace the stored build                 Vista and 7, the trap found
 Install folder: C:\XHCI98
             [Settings...]   [Change folder...]
@@ -1157,12 +1245,12 @@ Check boxes, one a line, each with one sentence:
 |---|---|---|---|
 | xHCI98 USB 3 host controller driver (`xhci98.sys`; "USB 3.x" until draft 45; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked): until draft 20 on 2000 to 7 alone, shown ticked and disabled on 98 SE and ME and unticked and disabled on 8 and 8.1; from draft 20 on every system, with section 5.3.1's warning where it does not apply (unticked on 98 SE and ME, ticked on 8 and 8.1) | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
 | UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still offered, being `xhci98.sys`'s (`inst_uas_decide`; an Advanced row from draft 35) |
-| Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found: <name>." (the name cut to 36 characters, `inst_tb_found_text`) with the sentence that a device plugged into its port can reach the computer's memory, see `XhciCmApprove`; or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
+| Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found." (draft 54, owner 2026-10-31: no controller's name, which a row's width cut off; until then "... was found: <name>.", the name cut to 36 characters; the console's question still names it, on a line of its own where it is long), or "Intel's Thunderbolt driver is in use; ...", or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98 (hot-pluggable NVMe driver; the owner's words of 2026-10-23) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel." (section 6.3; draft 12: it no longer offers an internal drive; "the installer selects tunnel drives only" dropped from it, owner, 2026-10-27, the behaviour unchanged), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
 | Large transfers for Stor98 (`S98VSD.VXD`) (draft 34; owner, 2026-10-22; design record 30 section 7) | on 98 SE and ME, whenever Stor98's box is ticked: ticking Stor98 ticks it; `/nos98vsd` preselects it unticked, `/s98vsd` ticked | yes, while Stor98's box is ticked | a child of Stor98's box, indented under it as Stor98's is under the Thunderbolt box: open only while Stor98's box is ticked, unticked and greyed while it is unticked or greyed; shown only when the flavour directory carries `S98VSD.VXD`; one line, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB", and no sentence under it (the page stays 223 units high); the longer sentence "Lets Windows 98 SE and ME send Stor98 reads and writes of up to 2 MiB whole, instead of in 63 KiB pieces. Changes nothing for copies through the file cache." is the console's, and the Summary's line says what the run does with the file. On every other system shown greyed and unticked, its line "Large transfers for Stor98 (Windows 98 SE and ME only)", never taken by the page or the engine (the convention of section 5.4 for a row of another system; the owner's exception, 2026-10-22, to section 5.3.1). Ticked, the run places `SYSTEM\IOSUBSYS\S98VSD.VXD`, never over a file of that name it did not place, and updates its own through `WININIT.INI` as Stor98's file; unticked by the user over the file it placed, the run removes it (owner, 2026-10-22); greyed by an unticked Stor98, it follows Stor98: kept when the run keeps Stor98, removed when it removes Stor98 (owner, 2026-10-22); the uninstall removes the one it placed (record 30 sections 7.3 and 7.4) |
-| Close PCI windows above 4 GB (`XHCIPFW.VXD` on 98 SE and ME, `XHCIPFW.SYS` on 2000, XP and the 32-bit Vista and 7; not on the 32-bit 8, 8.1 and 10 since 2026-10-28, task 44.72, where the Summary lists the removal of one this installer placed) (task 44.49; owner, 2026-10-27; design record 32 sections 8, 9 and 11.3) | with the Thunderbolt box, on every system offered it (the owner's Q9 of 2026-10-27, replacing Q7's "where the problem is seen"; `inst_pfw_box`); ticking the Thunderbolt box gives it its own state back (ticked unless the user unticked it), unticking it unticks it; `/noxhcipfw` preselects it unticked, `/xhcipfw` ticked | yes, while the Thunderbolt box is ticked | a child of the Thunderbolt 3 / USB4 box (the owner, 2026-10-27): under that box's sentence and above Stor98's box, indented as Stor98's is (the order Thunderbolt 3 / USB4, XHCIPFW, Stor98, `S98VSD.VXD`), open only while the Thunderbolt box is ticked, unticked and greyed while it is not; shown only on the systems named and only when the flavour directory carries the file, the rows below moving up into its place elsewhere; its line names the file per system, "Close PCI windows above 4 GB (XHCIPFW.VXD)" or "(XHCIPFW.SYS)", and no sentence (the console's question carries the longer text, the Summary's line says what the run does with it). For its row the tools folder's line moved beside the Settings and Change folder buttons, right of Change folder, its path shortened in the middle where it is long (`SS_PATHELLIPSIS`), so the page stays 210 units high on 98 SE with the storage row; the self-test lays the page out as 98 SE has it and as Vista and later have it with the box and without it. Hidden on every 64-bit system. Ticked, the run places `SYSTEM\XHCIPFW.VXD` by record 30 section 7.3's table (its own record) and registers it as a static VxD, or on NT writes `XHCIPFW.SYS` into the drivers folder under the image name not in use and points the boot-start service `xhcipfw` at it; unticked by the user, and at the uninstall, it removes the static-VxD key or the service (`Start` 4 first), then the files it placed; greyed by an unticked Thunderbolt box, an installed one is left as it is |
+| Find Thunderbolt and USB4 devices placed above 4 GB (draft 56, owner 2026-10-31: the box says what it does for the user and names no file, both systems' labels the same; the Help window names `XHCIPFW.VXD` and `XHCIPFW.SYS` and their systems, section 5.10; until then "Close PCI windows above 4 GB (`XHCIPFW.VXD`)" or "(`XHCIPFW.SYS`)") (`XHCIPFW.VXD` on 98 SE and ME, `XHCIPFW.SYS` on 2000, XP and the 32-bit Vista and 7; not on the 32-bit 8, 8.1 and 10 since 2026-10-28, task 44.72, where the Summary lists the removal of one this installer placed) (task 44.49; owner, 2026-10-27; design record 32 sections 8, 9 and 11.3) | with the Thunderbolt box, on every system offered it (the owner's Q9 of 2026-10-27, replacing Q7's "where the problem is seen"; `inst_pfw_box`); ticking the Thunderbolt box gives it its own state back (ticked unless the user unticked it), unticking it unticks it; `/noxhcipfw` preselects it unticked, `/xhcipfw` ticked | yes, while the Thunderbolt box is ticked | a child of the Thunderbolt 3 / USB4 box (the owner, 2026-10-27): under that box's sentence and above Stor98's box, indented as Stor98's is (the order Thunderbolt 3 / USB4, XHCIPFW, Stor98, `S98VSD.VXD`), open only while the Thunderbolt box is ticked, unticked and greyed while it is not; shown only on the systems named and only when the flavour directory carries the file, the rows below moving up into its place elsewhere; its line names the file per system, "Close PCI windows above 4 GB (XHCIPFW.VXD)" or "(XHCIPFW.SYS)", and no sentence (the console's question carries the longer text, the Summary's line says what the run does with it). For its row the tools folder's line moved beside the Settings and Change folder buttons, right of Change folder, its path shortened in the middle where it is long (`SS_PATHELLIPSIS`), so the page stays 210 units high on 98 SE with the storage row; the self-test lays the page out as 98 SE has it and as Vista and later have it with the box and without it. Hidden on every 64-bit system. Ticked, the run places `SYSTEM\XHCIPFW.VXD` by record 30 section 7.3's table (its own record) and registers it as a static VxD, or on NT writes `XHCIPFW.SYS` into the drivers folder under the image name not in use and points the boot-start service `xhcipfw` at it; unticked by the user, and at the uninstall, it removes the static-VxD key or the service (`Start` 4 first), then the files it placed; greyed by an unticked Thunderbolt box, an installed one is left as it is |
 | USB storage drivers for Windows 98 SE (NUSB 3.3's) (task 43.4, draft 17; owner, 2026-10-20) | no while NUSB is installed (its `Uninstall\USB20U` entry; task 43.51, owner, 2026-10-22), ahead of an earlier run's recorded choice, and the note says the user can leave it unticked; otherwise ticked with a lone `USBSTOR.INF` in the INF directories when a ticked run completes the pair (draft 31, section 6.5.5); otherwise an earlier run's recorded choice; otherwise when none of the seven is found (section 6.5.3); `/storage` and `/nostorage` preselect it | yes, whatever was found; greyed when the download lacks the pack or its files are not this release's (section 6.5.1) | shown on Windows 98 SE alone, never on ME, 2000 or later; a box of its own under the UAS box; the sentence and the detection's line of section 6.5.2 and 6.5.3; ticked it never copies over a file already present (section 6.5.4) |
-| xHCI98 USB Tree, the tray tool, started at login (draft 33: the label carries what was the sentence under it) | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
+| Start the xHCI98 USB Tree (tray icon) at login (draft 33: the label carries what was the sentence under it; draft 54, owner 2026-10-31: worded as the start at login it decides, the tool being copied either way, and the Summary's line "the xHCI98 USB Tree, installed and started at login" or "installed, not started at login") | yes | yes (the `/notray` of record 23 section 9.5) | the tray tool |
 | Tell me when a USB device can run faster (draft 33, task 43.27) | the computer's choice in force: `TrayFasterNotice` under `HKLM\Software\xhci98` when it is a DWORD 0 or 1, else the default, on on every system (the owner, 2026-10-22; `inst_fast_default`, record 25 section 7.7); `/faster` and `/nofaster` preselect it | yes | XHCITR's balloon and red icon for a device running slower than it can; a box of its own, in the place of the tray box's sentence, indented under it and not tied to it (the notice also shows when the tool is opened by hand); shown when the tray box is (the package carries the tool); written only when its tick is changed from the one in force (record 23 section 9.5 item 7) |
 | The install folder | - | - | an edit box with Browse, `C:\XHCI98` by default or the directory an earlier install recorded (record 23 section 9.6's default and checks; the failure text under the box, in the place of the 98 SE and ME line while it shows, so the page with the UAS box still fits a 640 by 480 screen; Next checks it and stays on the page until it passes); on 98 SE and ME the line that the package's drivers go there too and the 8.3 rule |
 
@@ -1633,6 +1721,320 @@ not known keeps the notes and runs as they were; memory integrity adds
 its sentence and refuses nothing. (The alternatives were a warning for
 the USB drivers, or for both.)
 
+#### 5.3.4 The page evenly spaced (task 45.28; draft 48)
+
+The owner, 2026-10-29: the Components page (`IDD_COMPONENTS`) is evenly
+spaced. Until then its rows sat at the template's fixed places, whose
+gaps ran from 1 to 3 dialog units with each sentence a fixed height
+whatever its words took, and `comp_layout` moved them by hand-chosen
+amounts per system - the storage row on 98 SE (the rows below moved
+down by 22, 21, 20 or 19 units), XHCIPFW's row (the rows below 11 units
+up where it is hidden, against its 12-unit pitch), the "Replace the
+stored build" box (the buttons 14 units up where it is hidden) - and a
+row hidden by `comp_fill` (Stor98's and `S98VSD.VXD`'s where the
+flavour directory lacks them, the tray boxes where the package lacks
+the tool) left its place empty. So the spacing differed by system and by
+package.
+
+**The stack** (`comp_layout`, run at the end of `comp_fill` - every time
+the page is entered - once every row's words and its shown state are
+set, and again by `comp_usb_state` when the USB drivers' box changes its
+sentence's words; the other clicks on the page change ticks and greying,
+not words or shown rows, and the folder's line at the foot is cut to its
+width, so they lay nothing out; it places every control from the page's
+edges, so it is the same however often it runs). The rows, in the page's order, each a box and, for some,
+its sentence:
+
+| Row | Box (indent) | Sentence (indent) | Shown |
+|---|---|---|---|
+| USB drivers | `IDC_C_DRIVERS` (8) | `IDC_C_DRIVERS_T` (20) | always; the sentence not on 98 SE (the storage row's layout, section 5.3.1) |
+| UAS | `IDC_C_UAS` (20) | `IDC_C_UAS_T` (32) | always |
+| USB storage | `IDC_C_STOR` (8) | `IDC_C_STOR_T` (20) | 98 SE alone |
+| Thunderbolt 3 / USB4 | `IDC_C_TB` (8) | `IDC_C_TB_T` (20) | always |
+| XHCIPFW | `IDC_C_PFW` (20) | - | where offered (section 5.3, its row) |
+| Stor98 | `IDC_C_S98` (20) | `IDC_C_S98_T` (32) | when the flavour directory carries it |
+| Large transfers | `IDC_C_VSD` (32) | - | as section 5.3 has it |
+| Tray tool | `IDC_C_TRAY` (8) | - | when the package carries the tool |
+| Faster notice | `IDC_C_FAST` (20) | - | with the tray box |
+| Replace the stored build | `IDC_C_RESTAGE` (8) | - | Vista and later |
+
+The indents are the template's, unchanged. A box keeps the template's
+height (10 dialog units, one line). A sentence takes the height its
+words take at its control's width and font (`text_h`, as the storage
+row's already did, `comp_stor_h`), one line at least. A hidden row takes
+no room. The first shown box sits 2 dialog units from the page's top
+(the other pages' top margin); a sentence sits **1 dialog unit** under
+its box; the next row's box sits **G dialog units** under the bottom of
+the row above it (its box, or its sentence where it has one). The
+Settings and Change folder buttons sit at the page's foot, 2 dialog
+units from its bottom as the first box is from its top (194 to 208 of the
+210 units; the template had them at 189, and 98 SE's storage layout
+moved them to 195), the folder's line 2 units under their top as the
+template has it, on every system the same; the page's height and its
+640 by 480 fit on 98 SE are unchanged.
+
+**The gap G** is one for the whole page: 4 dialog units where the stack
+then ends at least G above the buttons, else 3, else 2, else 1. So 2000
+to 10 take 3 or 4 and 98 SE, whose page carries the storage row with its
+words whole, as little as 1 where the detection's longest line takes a
+fourth line; each page is evenly spaced at its own G. A stack that does
+not fit with 1 is laid out with 1 all the same and the self-test fails,
+which is how a longer text or a new row is caught before it ships.
+Measured in pixels from dialog units (`MapDialogRect`) at each layout,
+so 96 and 120 DPI and the large-font NT systems keep the same
+proportions.
+
+**What it replaces.** `comp_layout`'s per-system moves (`below[]`,
+`afterPfw[]`, `last[]`, the 2-unit and 19-unit moves of the USB drivers'
+and UAS rows) and `compLaidOut`. The storage row's words keep section
+6.5.2's rule (static text, whole, no scroll bar): its sentence is a
+stacked sentence like the others, at the height its words take; the
+framed-box sizing and the offsets section 5.4's "Three whole lines" note
+gives it are superseded.
+
+**The self-test** (`XHCIWIZ /selftest`, `st_comp_layout` and
+`st_comp_layout_nt`): the page laid out with every row's longest words
+(each sentence's longest form the engine can give: the Thunderbolt
+sentence with the longest controller name, the storage row with each
+detection line of `st_comp_layout`'s list) in each variant of shown
+rows - 98 SE (storage row, XHCIPFW, Stor98, `S98VSD.VXD`, tray), ME (no
+storage row), 2000 and XP (XHCIPFW.SYS, `S98VSD.VXD` greyed), Vista and 7
+32-bit (XHCIPFW.SYS and the restage box), 64-bit Vista to 10 (no
+XHCIPFW), and a package without Stor98 or the tray tool - and in each:
+every hidden row's controls hidden, the first box 2 units from the top,
+every gap between rows the one G, every sentence 1 unit under its box
+at the height its words take, the last row G above the buttons, the
+buttons on the page and the folder's line beside them, XHCIPFW's box
+indented under the Thunderbolt box, and on 98 SE the storage words whole
+with no scroll bar.
+
+**The legs** (`runs/run-45.md`, "45.28"): the page by screenshot (QMP
+`screendump`) on 98 SE, ME, 2000, XP, 7 and 10 from this tree's package,
+each with the rows that system shows (98 SE and ME with and without the
+Thunderbolt support's files in the download where the variant exists).
+
+#### 5.3.5 The Thunderbolt and USB4 page (task 45.60; draft 53)
+
+The owner, 2026-10-31: a page of its own after the Components page,
+shown only when the Thunderbolt 3 / USB4 box there is ticked, carrying
+what is Thunderbolt's alone. Before this draft those rows sat on the
+Components page under the Thunderbolt box, greyed whenever it was
+unticked, and the approval choice was the Thunderbolt tab's second row
+in the Settings dialog.
+
+*Where it sits.* `P_TBT`, titled "Thunderbolt and USB4", comes after
+`P_COMP` and before the two other-drivers pages (section 6.7.12): Welcome,
+Components, Thunderbolt and USB4, Free USB drivers, Non-free USB drivers,
+Summary. It is skipped, Next and Back alike, by the mechanism those
+pages use (`page_skipped`, a `PSN_SETACTIVE` answer of -1), on one test
+alone: the effective Thunderbolt choice the Components page's Next takes
+(`tbChoice`) is 0. A box ticked and disabled (the USB drivers unticked,
+not over Intel's driver: section 5.3's lock, `comp_usb_state`) is a
+choice of 1 and shows the page; a box greyed and unticked (a package
+without the Thunderbolt support) is 0 and skips it. The uninstall's pages
+are as before.
+
+*What moves to it, unchanged in meaning.* The three boxes of section
+5.3.1 that hang under the Thunderbolt box: XHCIPFW (`XHCIPFW.VXD` on 98
+SE and ME, `XHCIPFW.SYS` on 2000 to 32-bit 7, absent on the other
+systems), Stor98 and its child S98VSD (98 SE and ME; greyed with
+"Windows 98 SE and ME only" elsewhere). Each keeps its words, its
+default, its shown and greyed rules for the system and the package, its
+own remembered state (`pfwOwn`, `s98Own`, `vsdOwn`) and the
+parent-and-child rule between Stor98 and S98VSD (section 5.0, draft 35).
+The rule "open only while the Thunderbolt box is ticked" is now the
+page's: the page exists only while it is.
+
+*The state, captured.* The three choices live in the window's state, not
+in controls another page reads: `pfwChoice`, `s98Choice`, `vsdChoice`
+with the three remembered states. `comp_take` (the Components page's
+Next, and the Settings button's call) no longer reads those boxes; it
+sets each effective choice from the Thunderbolt choice: with it on, each
+is its remembered state (S98VSD only with Stor98, and each only where
+its box is open for the system and the package); with it off, each is 0
+and the remembered states are kept for a later tick. The page's fill
+sets its boxes from that state; its Next and its Back both read them back
+(the remembered states with them) and call the same re-plan `comp_take`
+calls when anything changed, so the Summary and the plan always hold
+what the page shows. The Components page's warnings
+(`inst_eng_comp_warn`) and the Secure Boot refusal stay in `comp_leave`,
+which passes the effective Stor98 choice from that state; the page's
+Next shows the warnings again only when its own change brings a new
+one (the same function, its result compared with the one already shown),
+and the Summary repeats them as before. The
+Components page keeps the Thunderbolt box and its sentence, cut to what
+was found ("A Thunderbolt 3 / USB4 controller was found."; draft 54,
+owner 2026-10-31: without the controller's name, which the row's width
+cut off; draft 53 had ": <name>."); the
+sentence on what a device can reach moves to the approval row below.
+The box keeps its words, "(experimental)" included: that is the
+owner's word for the support. Section 5.3.4's stacking takes the rows
+left on the Components page, and the new page is stacked by the same
+routine, rows of its own.
+
+*The approval choice.* `XhciCmApprove`, from the Thunderbolt tab of the
+Settings dialog to this page, so it is offered in one place: the tab
+keeps `XhciCmMode` and `XhciCmSafeEject`, and Advanced does not list it
+(it is an asked row, section 5.4.1). Two option buttons, under a
+heading "When a Thunderbolt or USB4 device is plugged in":
+
+- 1, the default: "Give it a PCI Express connection at once." Under it:
+  "A PCI Express device can read and write all of this computer's
+  memory: plug in only devices you trust. Some controllers' firmware
+  decides this itself."
+- 0: "Give it none." Under it: "No new PCI Express connection is made; a
+  device may still work over USB where it offers that. Connections
+  already made when Windows starts stay, unless XhciCmPreOsCleanup ends
+  them."
+
+What the value does, as records 21 and 22 have it: under a controller's
+firmware connection manager (record 21 section 5.4) 1 sends the approve
+for each device the firmware announces unapproved, and 0 sends none, so
+no new PCI Express tunnel comes up; a device the firmware approved
+itself, or an earlier start approved, keeps its tunnel; on the profiles
+whose firmware has no approve command (record 21's ICL row) the driver
+sends none at either value and the firmware alone decides, which the
+second sentence under 1 says. Under the driver's own USB4 connection
+manager (record 22) 0 builds no PCI Express tunnel for a device while
+its USB 3 tunnel is built as before; the tunnels found at the start are
+kept or torn down by `XhciCmPreOsCleanup` (0, the default, keeps them;
+2 tears them down, and with 0 here none is built again). A USB4 device
+whose PCI Express tunnel is refused under a firmware connection manager
+can fall back to USB, as read on the bench (record 21 section 5.4).
+The owner's short form for 0, "only those the BIOS connected at
+power-on", is that: nothing new, what is up stays (with the default
+cleanup). Preselected with the value in force, exactly as
+the tab's row was (`row_start`: the page's own choice, a `/set`
+preselection included, else the value in force); where the controllers
+hold different values and no machine-wide one is set, neither button is
+selected and "each controller keeps its own" is said beside them, and
+leaving them so writes nothing. The page's Next and Back take the
+choice into the same state the tab's row used (`choiceSet`,
+`choiceVal`), so the Summary, the write (machine-wide, only when it
+differs from the value in force, record 26 section 5.4) and the
+new-install note ("a new install starts with the default; a change
+applies from the next restart: unplug the dock until then if you choose
+0", shown under the buttons when the host interface is a new install)
+are as they were. On a system where the row does not apply the buttons
+are greyed with the value in force shown; the Thunderbolt support runs
+on every system the package covers, so this is the package-without-the-
+connection-manager's case only, where the page is never shown.
+
+*The networking box, its slot* (record 35 section 9.1; task 45.59). One
+box, "Thunderbolt networking", the page's last row, unticked by
+default. Until task 45.59's driver steps S5 to S7 are merged and its
+step S11 wires the installer, it is not shown on any system. The gate
+is one constant in the installer, `INST_TBNET_WIRED`, 0 in this draft:
+
+- 0: the box's controls are hidden and take no room in the page's
+  stacking; the console asks no networking question; `XhciCmNet` is
+  not in the values' table, so `/set XhciCmNet=` is refused as any
+  unknown name is; nothing reads or writes `XhciCmNet`. The two
+  switches are parsed already, as record 35 section 9.2 has them where
+  the package carries no network driver: `/tbnet` is refused ("this
+  package carries no Thunderbolt networking driver for this system"),
+  `/notbnet` is accepted and changes nothing, so a silent-install
+  command written for a later package does not fail here; both together
+  are refused, and either with `/uninstall`, `/devices` or `/eject`.
+- 1 (step S11, in the same change that stages `xhcinet.inf`): record 35
+  section 9.1 applies whole: the box shown, greyed and unticked where
+  the package carries no network driver for the system; its first state
+  on an update the value in force; `/tbnet` and `/notbnet`; `/set
+  XhciCmNet=` refused with "use /tbnet or /notbnet"; `XhciCmNet` not an
+  Advanced row; the console's question after the Thunderbolt question
+  and its children.
+
+*Wired* (draft 60, task 45.59 step S11; record 35 section 9.5, which is
+the authority for what the engine does). `INST_TBNET_WIRED` is 1. The
+row is the box and a sentence under it (`IDC_T_NET`, `IDC_T_NET_T`;
+`INST_PT_TBNET_T`: "A network link to another computer over a Thunderbolt
+or USB4 cable, file sharing included. Run Setup again to turn it off."),
+stacked with the page's other rows; the approval's note takes no room
+when it says nothing. The window reads its first state from the engine
+(`inst_eng_net_state`: shown, open where the family folder carries
+`cm\tbnet\`'s driver for this system, first a switch's or the value in
+force's), and the page's Next and Back hand a changed box to the engine
+(`inst_eng_net_choose`), which takes the network driver into the run or
+out of it and plans again. The Summary lists the engine's line
+(`inst_eng_net_plan`): "Thunderbolt networking: turned on (the network
+adapter appears after the restart)", "turned off (... goes after the
+restart)", "on, as it is" or "left out". `/tbnet` needs `/thunderbolt`
+or `/cmonly`, as `/stor98` does, and is refused where the package
+carries no network driver for the system; `/notbnet` stands alone. The
+page's Help gains a paragraph for the box. The window's `/selftest`
+shows the row in the page's tallest common form (every row shown, the
+new-install note said) and holds the sentence whole and the rows above the page's foot,
+then greys the box for a package without the driver.
+
+What the box writes is decided by one pure function, written and
+host-tested in this task so that S11 only connects it,
+`inst_tbnet_decide` (`inst_core.c`):
+
+    void inst_tbnet_decide(int wired, int carried, int sw, int inForce,
+                           int box, int nhiPresent, int mwHas,
+                           INST_TBNET *d);
+
+- in: `wired` the gate; `carried` the package carries the network
+  driver for this system; `sw` -1 none, 0 `/notbnet`, 1 `/tbnet`;
+  `inForce` the `XhciCmNet` in force, 1 or 0, -1 when none is set
+  (every present host interface's key and `Services\USB` read as the
+  connection manager reads them: machine-wide first); `box` the box as
+  the user left it, -1 untouched; `nhiPresent` a host interface is
+  present; `mwHas` `Services\USB` holds an `XhciCmNet`.
+- out: `Shown` (`wired`), `Enabled` (`wired && carried`), `First` (the
+  box's first state: `sw` when given, else `inForce == 1`; 0 when not
+  enabled), `Write`, `Value`, `ToNhi` (every present host interface's
+  driver key), `ToMw` (`Services\USB`).
+- the rule: the final state is `box` when touched, else `First`.
+  `Write` when enabled and either a switch was given (it makes the box
+  changed, as `/faster` and `/nofaster` do) or the final state differs
+  from `inForce == 1`; `Value` the final state. `ToNhi` when
+  `nhiPresent`; `ToMw` when `mwHas` or no host interface is present.
+  Unticked where nothing is in force writes nothing (the INF's 0
+  stands). Not enabled: nothing is written whatever was asked (`/tbnet`
+  is refused before this, section 10; `/notbnet` is a no-op).
+
+The engine's write itself (after the network INF's install, setting the
+run's restart flag; record 35 section 9.1) and the uninstall's removal
+are step S11's, with the INF they follow.
+
+*The console and the silent install.* They already take the page's
+choices by the same means: the Thunderbolt question, then XHCIPFW's,
+Stor98's and S98VSD's (record 23 section 7.1; `/thunderbolt`,
+`/xhcipfw`, `/noxhcipfw`, `/stor98`, `/s98vsd`), and `XhciCmApprove`
+among the connection manager's questions or by `/set` (record 23 section
+8.1). Nothing changes there in this draft but the two switches above and
+the gate's networking question, which is not asked while it is 0.
+
+*Texts.* The page's heading: "Thunderbolt 3 and USB4: what is installed
+with the support, and how devices are approved." No page text gives a
+testing status (section 5.3.1). The Advanced dialog's heading, which
+read "For the release notes' advice and a tester's use.", now reads
+"For the release notes' advice. A value left as it is is not written;
+one you change is written machine-wide." Every new text is a row of
+`instPageTexts` with its control's width and height, so the window's
+`/selftest` holds it to its control as the others are.
+
+*The self-test and the host vectors.* The window's `/selftest` renders
+the new page's template with its fixed texts (`st_page`), the approval
+row in its three states (1, 0, neither), and the page hidden and shown
+by the Thunderbolt choice. `test_inst.c`: `inst_tbnet_decide` case by
+case (the gate off: nothing shown or written whatever is asked; on and
+not carried: greyed, nothing written; on and carried: the first state
+from the value in force and from each switch, a tick and an untick
+against each value in force, the targets with and without a host
+interface and with and without a machine-wide value, and record 35's
+sequence: staged-only `/tbnet`, then a host interface present,
+`/notbnet`, `/tbnet` again ends with 1 in both places); the
+Components sentence's cut; the new texts' presence.
+
+*The legs.* As task 45.54's: the window on 98 SE, XP and 7 x86 with
+the emulated ASM4242 and a first install: the page shown after
+Components with the Thunderbolt box ticked and skipped with it
+unticked, Next and Back; the three moved boxes' states; the approval
+choice preselected 1, set to 0, the value written machine-wide; the
+Settings dialog's Thunderbolt tab without it; no networking box.
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -1687,10 +2089,13 @@ decision the rest the console sets only with `/set`), each with its
 default, its range or list, the systems it applies to, and its warning
 (section 11's table carries all three), every one preselected with the
 value in force and written only when changed. The dialog says at its top
-that these are for the release notes' advice and a tester's use. The
+that these are for the release notes' advice (draft 53: "and a
+tester's use" dropped, no installer text naming testing). The
 fourteen Linux quirk values (record 20), the log values and the poll
 periods stay out, as record 23 section 8.1 keeps them out: a value nobody
-should set from an installer is not offered by one.
+should set from an installer is not offered by one. (Draft 52, task
+45.54: the log values, the poll periods and the other values of
+section 5.4.1 join the dialog; the quirk values stay out.)
 
 **The layout** (draft 21, roadmap-usb4 task 43.10; the owner, 2026-10-20:
 "some drop-down text is longer than the menu, and the description at the
@@ -1810,7 +2215,9 @@ under the rows 20 dialog units tall, two lines.
   faster boxes), 18 (the folder's line, at 184) and 17 (the buttons,
   195 to 209 of the page's 210), each one dialog unit under the one
   above; the "Replace the stored build" box is never shown with the
-  storage row (Vista and later only). The Other USB drivers page's
+  storage row (Vista and later only). (Draft 48: section 5.3.4's stack
+  replaces these moves; the storage words keep this rule, whole and
+  with no scroll bar, at the height they take.) The Other USB drivers page's
   details box (`IDC_O_DETAIL`, 29 dialog units) holds three whole lines
   as it is (47 pixels at 96 DPI, the three lines, frame and margins
   46) and is unchanged; the Settings note's least height is six lines,
@@ -1839,6 +2246,147 @@ under the rows 20 dialog units tall, two lines.
   every advanced value of the table shown in turn, its list's entries
   within its closed box and its open list at least as wide.
 
+#### 5.4.1 Every user setting behind Advanced (task 45.54; draft 52)
+
+The owner, 2026-10-31: "we should add more advanced settings in
+installer for usb and thunderbolt, especially the interrupt mode". On a
+98 SE first install the USB tab's Advanced showed one row,
+`XhciPollFineTimer`, greyed, where section 5.4 names five.
+
+*The cause.* A row is listed only where a device takes the value after
+the run (`value_targets`, `inst_eng_rows`), or where it is a Thunderbolt
+row or a greyed one. On NT a target is a controller whose action is
+install, update, current or newer. On 98 SE and ME it was only a
+controller already bound to `xhci98` (record 23 section 8.2, from
+`3.0.0.0`, when the console asked its questions after the restart). On a
+first install no controller is bound yet, so every USB row that is not
+greyed was dropped, `XhciInterruptMode` and the asked
+`XhciSilentInstall` among them. The greyed `XhciPollFineTimer` was the
+only row left. *The fix:* on 98 SE and ME a controller this run
+installs (action install, no driver now) is a target as well, as on NT.
+Since task 42-A.17 every value is written machine-wide in
+`Services\USB` with no device needed, which the driver reads first at
+its start. What changes is what is shown and asked, and one write
+decision. The console takes the same rule: a 98 SE or ME first install
+now asks `XhciSilentInstall`, as record 23 section 8.1's "Asked when"
+says (the owner, 2026-10-31), and a newly installed NHI's three
+Thunderbolt questions, as on NT. Before the restart such a controller's
+"now" is its default, as a new install's on NT is. The write decision
+is this: a value chosen equal to its INF default, with no machine-wide
+value set, is no longer written on a first install. The controller the
+run installs gets that default from its INF (`inst_mw_write_needed`),
+as on NT; until now it had no target there, so the value was written
+machine-wide. The steps page's last sentence asked for the installer to
+be run again "to check the result and set the driver's options". It
+now says "to check the result; the driver's options can be changed
+there too", since the first run sets them.
+
+*The rows added* (the owner, 2026-10-31: the list below, no other). Each
+is never asked and is an Advanced row only. Each is preselected with the
+value in force and written machine-wide only when changed, as section
+5.4 says. Each default is its INF's `AddReg` line (task 45.50 writes
+every one), and the choices and ranges are `tuning.md`'s:
+
+| Value | Tab | Systems (greyed elsewhere) | Allowed | Meaning shown |
+|---|---|---|---|---|
+| `XhciImodInterval250ns` | USB | every | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
+| `XhciLinkKeep` | USB | every | 0, 1 | keep a UAS drive with a serial number as it was when its SuperSpeed link drops and recovers |
+| `XhciResumeKeep` | USB | every | 0, 1 | keep a device on a root port as it was after a standby or hibernation that started the controller afresh |
+| `XhciUsb2Bos` | USB | every | 0, 1 | ask a USB 2.1 device at High or Full Speed whether it can run at SuperSpeed (its BOS descriptor) |
+| `XhciLogVerbosity` | USB | every | 0 to 4 | the driver's log (the 0 to 4 meanings of the connection manager's row, 4 with its caution) |
+| `XhciLogDebugView` | USB | every | 0, 1 | the driver's log also to a debugger or DebugView |
+| `XhciPollIdleMs` | USB | every | 1 to 5000 | while polling, the period with nothing outstanding, in ms |
+| `XhciPollActiveMs` | USB | every | 1 to 5000 | while polling, the shortest period with transfers outstanding, in ms; the driver holds it to `XhciPollIdleMs` |
+| `XhciFirstEnumWaitMs` | USB | every | 0 to 30000 | the longest wait, in ms, for a hub's first report |
+| `XhciFirstEnumPortMs` | USB | every | 0 to 30000 | the longest one port may hold that wait, in ms; the driver holds it to `XhciFirstEnumWaitMs` |
+| `XhciMaxTransferKB` | USB | every | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
+| `XhciWideMap` | USB | 2000 and later (`INST_APPLY_NT_XHCI`; greyed as "Windows 2000 to 7 only", as `XhciPollFineTimer` is) | 0, 1 | two pieces of a large bulk transfer on the controller at once |
+| `XhciCmRingInterrupt` | Thunderbolt | 2000 to 10 (`INST_APPLY_NT_CM`, new) | 0, 1 | let the controller's interrupt tell the driver at once that a device was plugged in or removed |
+| `XhciCmUsb4V2` | Thunderbolt | every | 0, 1 | USB4: run a version 2 router as a version 2 one, with a caution on 0 (a bench switch: leave it at 1) |
+
+In record 23 section 8.1's terms each row's "Asked when" is "never
+(task 45.54; the window's Advanced)". With the five rows the USB tab
+already had, it lists seventeen values; on 98 SE and ME two of them,
+`XhciPollFineTimer` and `XhciWideMap`, are greyed. The
+Thunderbolt tab gains two. The values the driver takes as "anything
+but 0 is on" are offered as 0 and 1, as `XhciPollFineTimer` is. The
+rows come in the owner's order. On the USB tab:
+- `XhciInterruptMode`;
+- `XhciLinkKeep`, `XhciResumeKeep` and `XhciUsb2Bos`;
+- the moderation interval;
+- the two log values;
+- then the poll periods with `XhciPollFineTimer`, and the rest in the
+  table's order.
+
+On the Thunderbolt tab `XhciCmRingInterrupt` comes first, with
+`XhciCmUsb4V2` before the period, the timeouts and the log.
+
+*Left out* (the owner, 2026-10-31):
+
+- `XhciCommandCheck`: the owner's ruling of task 45.45.
+- `XhciCmTunnelBridge`: a string, for a hand edit (section 5.5).
+- `XhciCmAsmediaPcie7Credits`: a bench experiment, to be left at 0.
+- `XhciTolerance`, the hardware quirks (`XhciIntelPortSwitch` aside,
+  which is asked) and the fourteen Linux quirk values: their
+  per-controller defaults are the point.
+
+`/set` still refuses each of these by name, as before.
+
+*A range with a step.* `XhciMaxTransferKB` is a multiple of 4: the
+driver takes any other number as its default (task 36.22,
+`XhciXpolValue`). So the table gains a `Step` field (0 for none). One
+check, `inst_value_in_range`, holds a range row's number to Lo, Hi and
+the step, and one text, `inst_value_range_text` ("64 to 2048, a
+multiple of 4"), says it. `/set`, the console, the pages' number box,
+the Advanced dialog's box, its message and the row's note all use the
+two.
+
+*A new system rule.* `XhciCmRingInterrupt` is read on 2000 to 10 and
+ignored on 98 SE and ME (`tuning.md`). The x86 NHI INF writes it on its
+NT paths alone. Its rule, `INST_APPLY_NT_CM`, makes it a Thunderbolt
+row: it is on `inst_eng_rows`' list of Thunderbolt rules (`cmRow`), so
+it is shown with no NHI present too (the staged-only case of section
+5.5), and it is greyed on 98 SE and ME with "(Windows 2000 to 10
+only)". The rule is taken by `inst_value_relevant`,
+`inst_value_greyed`, `inst_value_only`, `inst_value_set_mask` and the
+engine's two write guards (`value_needs_write`, `write_values`), so
+`/set`, the page and the run refuse it there, as they refuse
+`XhciCmBridgeReq` outside 2000 and XP. `XhciWideMap` keeps its existing
+rule's behaviour: greyed on 98 SE and ME and accepted there by `/set`,
+as `XhciPollFineTimer` is; the driver ignores it there.
+
+*The dialog with many rows.* The Advanced dialog is a report-style list
+over the selected row's note and choice. The list scrolls by itself, so
+no template grows; seventeen rows take the USB tab's list past its
+height, about eight rows, and the list scrolls. Its arrays were sized
+for twelve rows (`WIZ_ROWS`, the pages' bound) and are sized for the
+whole table now (`INST_MAX_VALUES`, raised from 32 to 48 for the
+table's 37 rows). The window's `/selftest` already shows every advanced
+row of the table in turn, in its mixed, machine-wide and greyed forms,
+so it covers the new rows.
+
+*The uninstall.* It deletes from `Services\USB` every value the table
+names (section 9.3), so the new rows' machine-wide values go with it,
+as the five old rows' did.
+
+*Host vectors* (`test\test_inst.c`). The table-wide INF checks are
+rewritten first. They held every `xhci98.inf` row's default at 0 and
+checked it through the `/set` mask. They now check a range row's
+default with `inst_value_in_range` and a list row's through its mask.
+Then:
+
+- every new row is found, never asked, and has its tab;
+- its default is its INF's and is allowed;
+- `/set` takes its bounds, refuses one past each, and refuses a
+  `XhciMaxTransferKB` off its step;
+- `XhciCmRingInterrupt` is greyed and refused on 98 SE, taken on XP, and
+  relevant only with an NHI;
+- `XhciWideMap` is greyed on 98 SE;
+- each left-out value is not in the table;
+- the 98 SE target rule (`inst_value_target_9x`, the pure form of the
+  rule above): a controller with no driver, one already bound and one
+  bound elsewhere.
+
 ### 5.5 The Thunderbolt settings
 
 Shown when Thunderbolt 3 / USB4 support is ticked and `xhcicm.inf` matches
@@ -1846,7 +2394,8 @@ a present device, or the box is ticked with none present (the staged-only
 case of record 23 section 8.5, where the page says the values take effect
 when the controller appears and are written to the machine-wide key, which
 needs no device). The rows: `XhciCmMode`, `XhciCmApprove`, `XhciCmSafeEject`
-as 8.1 asks them, with 8.4's new-install note for `XhciCmMode` and
+as 8.1 asks them (since draft 53 `XhciCmApprove` is on the Thunderbolt
+and USB4 page instead, section 5.3.5, and the tab keeps the other two), with 8.4's new-install note for `XhciCmMode` and
 `XhciCmApprove` (the connection manager runs with the INF's defaults until
 the restart; disconnect the dock until then when the answer is 0).
 "Advanced...": `XhciCmReenum`, `XhciCmUsb3Tunnel`, `XhciCmLaneBonding`,
@@ -1857,15 +2406,30 @@ each with its default, range and warning (`XhciCmBridgeNumbering` shown
 greyed on 2000 to 7, as section 5.4 says); design record 28's
 `XhciCmNoIrqStart` (98 SE and ME only) and the mark service's `Restart`
 (2000 to 7 only; record 21 section 7.4, revision 3) join these rows with
-their systems, written machine-wide when changed. `XhciCmTunnelBridge` (a string
+their systems, written machine-wide when changed. Since draft 49 (task
+45.12; design record 33 section 9.1) `XhciCmBridgeReq` is one more row,
+2000 and XP (and XP x64) only, shown greyed elsewhere: 0 off, 1 on (the
+default, the driver's own, which the NHI INFs' 2000 and XP paths write
+since task 45.50), 2 record only, with the
+caution that 0 can leave a dock hot-plugged while Windows runs with one
+port and that 2 records and changes nothing; `/set` refuses it on
+another system. `XhciCmTunnelBridge` (a string
 for a machine whose ports the driver does not find) is not offered: it is
-a diagnostic the release notes describe for a hand edit.
+a diagnostic the release notes describe for a hand edit. Since draft 52
+(task 45.54, section 5.4.1) two more rows join Advanced:
+`XhciCmRingInterrupt` (2000 to 10, greyed on 98 SE and ME) and
+`XhciCmUsb4V2`. `XhciCmAsmediaPcie7Credits`, a bench experiment, is not
+offered.
 
 ### 5.6 Stor98's settings
 
 Shown when Stor98 is ticked. Stor98's settings (its `readme.txt`,
-"Settings") are optional, its INFs write none, and an update keeps a
-value the user set, so the page reads what is set now and shows each row
+"Settings") are optional; since `3.4.0.0` its INFs write each at its
+default where it is missing (roadmap-usb4 task 45.50, record 21 section
+8.1: each 98 SE and ME value, and on 2000 to 10 one `DriverParameter`
+holding every key), so once Stor98 is installed a row reads the default
+as an explicit value; an update keeps a value the user set, so the page
+reads what is set now and shows each row
 either as "not set (the built-in default is <value>)" or as the explicit
 value found, preselected; a row left alone writes nothing, and choosing
 the default's value where none was set writes it explicitly, which the
@@ -1907,7 +2471,10 @@ suite checks every row against that readme's table
 `src\stor98\docs\package-readme.txt`'s table to it), so a Stor98 change
 that renames or retypes a value fails the build rather than the user. Every Stor98 value the installer writes is
 recorded by name under the `Stor98` key of section 6.3, for the uninstall.
-The page is not shown when Stor98 is unticked.
+The page is not shown when Stor98 is unticked. Task 45.54 (draft 52)
+checked the page against the readme's table: every one of its nine
+settings is already a row, two on the page and seven behind Advanced,
+so the page is unchanged.
 
 ### 5.7 The summary
 
@@ -1982,6 +2549,207 @@ The exit code is record 23's, so `INSTALL.BAT` passes it on unchanged
 whichever front end ran. `SETUP.EXE` does not wait for the window and
 returns 0 once it is started (section 2, draft 15): the result a person
 reads is this page, and the log.
+
+### 5.10 Help on every page (task 45.66; draft 55)
+
+The owner, 2026-10-31: until this draft the Help button opened the
+package's `tools\xhciinst\readme.txt` in Notepad on every page (section
+5's opening). Now Help on each page opens a small window, owned by the
+window it was pressed in, that says in a line or two for each choice on
+that page what it does and when to change it, in the words the page
+itself uses, with a button to the full readme.
+
+*The window.* One dialog template, `IDD_HELP`, 300 by 200 dialog units
+in the pages' font (MS Sans Serif 8, as every page): a read-only
+multi-line text (`IDC_H_TEXT`, 284 by 166, with a vertical scroll bar,
+which the longer texts use since draft 58), and two buttons on its last row:
+"Open the &readme" (`IDC_H_README`, the readme in Notepad exactly as Help
+opened it before: `open_help`, its message box where the file is
+missing) and "Close" (`IDCANCEL`, the default button; Esc and the
+title bar's close do the same). Its caption is "Help: " and the page's
+title ("Help: Components"). It is modal (`DialogBoxParamA`), owned by
+the window Help was pressed in: the wizard sheet for its pages, the
+Settings sheet for its tabs (`GetParent` of the tab, never the global
+wizard sheet), the Advanced dialog for itself; so the owner is
+disabled while it is open, and it closes before its owner can. On
+opening it is moved, never resized, into the work area (`wiz_fit`,
+section 5.0, draft 35). Its client area is 300 by 200 dialog units:
+about 450 by 325 pixels at 96 DPI and 565 by 410 at 120 DPI (MS Sans
+Serif 8's base units scale with the DPI), plus a caption of about 20
+and a frame of about 8 pixels at 120 DPI: inside 640 by 480 at both,
+with the taskbar's 28 pixels taken from 480. The text is set when the
+dialog opens, the focus on Close, nothing selected.
+
+One lifecycle case: the run's end (`WM_APP_DONE`) arrives while the
+modal loop of a help window opened on the Progress page runs, and the
+sheet would press Next by itself. The help window's handle is kept while
+it is open (`helpWnd`). `sheet_sub`, seeing the run's end with a help
+window open, does not move on: it keeps the end pending (`helpDone`,
+its `wParam`), and ends the help window (`EndDialog`, IDCANCEL), which
+only marks it to close; nothing is posted again while it is open. The
+help function, when `DialogBoxParamA` returns, posts the pending
+`WM_APP_DONE` once and clears it; the sheet, enabled again, takes it
+with no help window open and moves on. A readme message box open over
+the help window (the readme missing, or Notepad not started) is its own
+modal loop: while it is open (`helpNested`) the end is only held, the
+help window not ended, so its owner stays disabled; when that box is
+closed the help window ends itself, and the end is posted once after its
+`DialogBoxParamA` returns, with no message repeated in between. A help window never describes a page that is no
+longer shown. The read's end (`JOB_READ`) only refreshes the Welcome
+page under it and needs nothing.
+
+*Where Help is.* The wizard's pages keep `PSP_HASHELP` and the sheet
+`PSH_HASHELP`; `PSN_HELP` opens the page's topic in place of the
+readme. The Settings sheet (section 5.4) gains Help the same way
+(`PSH_HASHELP`, each tab `PSP_HASHELP`, `PSN_HELP` in `tab_proc`), each
+tab with its own topic. The Advanced dialog (`IDD_ADVANCED`, sections
+5.4.1 and 5.6) gains a "Help" button (`IDHELP`) on its button row, left
+of OK, opening the USB and Thunderbolt Advanced topic, or Stor98's, as
+the dialog was opened for. The install folder's dialog (Change folder...)
+has one field and its own sentences, and gets no Help. The "What was
+found" list is the Welcome page's since draft 28 (section 5.0): its help
+is the Welcome topic's (`IDD_FOUND` is not in the sheet).
+
+Which topic a page opens is decided by one pure function,
+`inst_help_topic(kind, uninstall, variant)` (section 11): `kind` the
+page (`INST_HK_WELCOME`, `_COMP`, `_TBT`, `_FREE`, `_NONFREE`,
+`_SET_USB`, `_SET_TB`, `_SET_S98`, `_ADV`, `_ADV_S98`, `_SUMMARY`,
+`_PROGRESS`, `_STEPS`, `_FINISH`), `uninstall` the run's mode, `variant`
+for the Finish page what its two buttons are (restart, shut down, or
+none shown: the run changed nothing, whatever the reason), and for the
+Progress page the system (draft 59: `INST_PV_9X` on 98 SE and ME, whose
+hardware wizard is the Add New Hardware Wizard, `INST_PV_NT` on 2000 and
+later, whose is Found New Hardware; `page_help_variant`, from
+`GetVersion`'s platform bit, as `is_9x`). The window maps its page numbers to kinds in one table
+(`helpKind[]`, which holds the Settings sheet's tabs `P_USB`, `P_TBS`
+and `P_S98` too) and calls it; `tab_proc` takes its tab's kind from the
+same table, and the two Advanced procedures take theirs from one
+function, `adv_help_kind(page)` (the USB and the Thunderbolt tab give
+`INST_HK_ADV`, Stor98's `INST_HK_ADV_S98`), so there is one routing to
+pin; the self-test checks it (below).
+
+*The texts.* In the pure half, `inst_help_text(topic)` and
+`inst_help_title(topic)` over one table, `instHelpTexts[]`, one entry a
+topic, in a file of their own (`xhciinst\inst_help.c`) that the window
+and `test	est_inst.c` link and the tools that link `inst_core.c` for
+other reasons (the tray tool, the mark service, the other host suites)
+do not; each choice a paragraph of its own starting with the control's own
+label (its first words where the label goes on with a file name or a
+parenthesis), then what it does, then when to change it; plain, short,
+and no word on testing status. Since draft 58 (owner, 2026-10-31: the
+lines ran together) the paragraphs, an intro among them, are apart by
+one empty line, and a paragraph that held two choices is split, one a
+choice ("Settings..." and "Change folder...", "More >" and
+"Advanced...", "Back" and "Install", "Remove" and "Cancel", "Save as
+text file..." and "Open Device Manager", each Finish topic's "now" and
+"later", and the OK line of each Settings tab). The topics and their
+texts (" / " stands for a paragraph break; the host suite holds the
+final words and paragraphs):
+
+| Topic | Shown for | Text |
+|---|---|---|
+| `INST_HELP_WELCOME` | the Welcome page (install), its three wordings (section 5.3.2) | The list: each controller this package has a driver for, what runs it now, and what this install does to it. The note under it says what to do first when something needs it, such as a hardware wizard Windows has open. / Nothing is chosen on this page. Next goes on to the choices; Cancel leaves with nothing changed. / The log named above records what the installer reads and does: keep it when you report a problem. |
+| `INST_HELP_UWELCOME` | the uninstall's first page, both wordings | Remove takes away every driver of this package, its tools and its records. / The box: tick it once you have a keyboard and mouse that do not go through these drivers (PS/2, a laptop's built-in ones, or a USB controller another driver runs). Where only the connection manager is removed: once every program that uses a Thunderbolt or USB4 device is closed. / Next shows what will be removed; nothing is changed before Remove. |
+| `INST_HELP_COMP` | Components | xHCI98 USB 3 host controller driver: runs the USB 3 controllers listed on the Welcome page. Untick it to install the Thunderbolt support alone. / UAS disk driver: the faster protocol of USB disks that offer it. Untick it only if another UAS driver is installed. / USB storage drivers for Windows 98 SE: the disk drivers 98 SE lacks. Leave it unticked if NUSB is installed. / Thunderbolt 3 / USB4 support: the connection manager. Tick it if this computer has a Thunderbolt or USB4 port; the next page holds its choices. / Start the xHCI98 USB Tree (tray icon) at login: the tool that lists USB devices and stops them for removal; installed either way. / Tell me when a USB device can run faster: the USB Tree's notice for a device on a slower port than it supports. / Replace the stored build of this package's drivers: available to tick where Windows' driver store holds these drivers' version with other bytes; ticked, that copy is replaced and the devices are installed again. / Settings...: the drivers' settings. Change folder...: where the tools and this installer go. |
+| `INST_HELP_TBT` | Thunderbolt and USB4 | Find Thunderbolt and USB4 devices placed above 4 GB: XHCIPFW.VXD on 98 SE and ME, XHCIPFW.SYS on 2000 to the 32-bit 8.1. At each start it closes the PCI bridge windows above 4 GB this Windows cannot use, so the devices behind them are found; it writes nothing where there are none. Leave it ticked. / Stor98: the driver for NVMe drives behind a Thunderbolt or USB4 tunnel. Untick it only if another driver runs those drives. / Large transfers for Stor98 (98 SE and ME): reads and writes of up to 2 MiB whole, instead of 63 KiB pieces. / Give it a PCI Express connection at once: each device plugged in is connected and can read and write this computer's memory; for devices you trust. Some controllers' firmware decides this itself. / Give it none: no new PCI Express connection; a device may still work over USB. Connections made before Windows starts stay, unless XhciCmPreOsCleanup ends them. / The choice applies from the next restart; on a new install unplug the dock until then if you choose none. |
+| `INST_HELP_FREE` | Free USB drivers | The box: copies the free USB class drivers (usb-wdm-free) to the install folder, for USB devices this Windows has no driver for. / The list under it: a package ticked there is staged, so Windows uses it by itself when a matching device is plugged in; unticked, point the hardware wizard at its folder when you want it. The text under the list says which are copied only on this Windows. / Trust usb-wdm-free's test certificate on this computer (64-bit Windows): adds the certificate its 64-bit drivers are signed with to the trusted roots and publishers; the uninstall removes the trust this installer added. / The line under the box says where the drivers are, or where to download them. |
+| `INST_HELP_NONFREE` | Non-free USB drivers | The box: copies other manufacturers' drivers (USB Ethernet, serial and game pads) to the install folder. The copy installs nothing. / The list under it: a package ticked there is staged, so Windows uses it by itself when a matching device is plugged in; unticked, point the hardware wizard at its folder when you want it. The text under the list says which are copied only on this Windows. / The line under the box says where the drivers are, or where to download them. |
+| `INST_HELP_SET_USB` | the Settings sheet's USB tab | XhciSilentInstall (98 SE and ME): installs hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard. / XhciIntelPortSwitch (Intel controllers with shared connectors): moves those connectors from the EHCI controller to this driver; 2 only on the release notes' advice. / A greyed row is for another system or controller and cannot be changed here. More >: the tab's next rows, where they do not all fit. Advanced...: the other USB settings, each explained. / A row left as it is writes nothing. A change is written machine-wide when you click Install and is read from the next restart. OK keeps your choices for Install; Cancel drops them. |
+| `INST_HELP_SET_TB` | its Thunderbolt tab | XhciCmMode: the Thunderbolt and USB4 support, 1 automatic (the default) or 0 off; 2 and 3 only on the release notes' advice. A new install starts with the default until the restart: unplug the dock until then if you choose 0. / XhciCmSafeEject: 1 offers Safely Remove for the devices behind a dock; 0 does not, and the install also removes the safe-removal mark service with its marks. / The approval of new devices is on the Thunderbolt and USB4 page. More >, where shown: the next rows. Advanced...: the other Thunderbolt settings. / A row left as it is writes nothing; a change is written machine-wide when you click Install. OK keeps your choices for Install; Cancel drops them. |
+| `INST_HELP_SET_S98` | its Stor98 tab | StorWriteThrough: how writes reach the drive's media: auto (cacheoff on ME, off elsewhere), off (the drive as it is), cacheoff (its write cache off) or fua (every write marked Force Unit Access). / StorPollMode: 0 polls only without an interrupt, 1 always polls. / A row left as it is keeps Stor98's current setting; where nothing is set, its built-in default applies. Change one when Stor98's readme or a problem report points to it. / Advanced...: Stor98's other settings. OK keeps your choices for Install; Cancel drops them. |
+| `INST_HELP_ADV` | Advanced, for the USB and the Thunderbolt tab | The settings not on the tab, one row each with its value now. Select a row to read what it does under the list, then choose its value under Setting. / A value left as it is is not written; a change is written machine-wide when you click Install. Change one only when the release notes or a problem report advise it. / OK keeps your choices for Install; Cancel drops them. |
+| `INST_HELP_ADV_S98` | Advanced, for the Stor98 tab | Stor98's settings not on the tab, one row each. Select a row to read what it does, then give its value under The value. / A row left as it is keeps Stor98's current setting; where nothing is set, its built-in default applies. Change one only when Stor98's readme or a problem report advises it. / OK keeps your choices for Install; Cancel drops them. |
+| `INST_HELP_SUMMARY` | Summary (install) | What Install will do: the devices, the components, the settings written and the install folder, and what to know before going on. Nothing has been changed yet. / Back: to change a choice. Install: goes on. / The USB keyboard and mouse on a controller whose driver changes stop for a moment: have a keyboard and mouse that do not go through it. |
+| `INST_HELP_USUMMARY` | Summary (uninstall) | What Remove will take away: each driver of this package, its tools and its records. Nothing has been changed yet. / Remove: goes on. Cancel: leaves with nothing changed. |
+| `INST_HELP_PROGRESS` | Progress, both, 2000 and later | The steps as they run. Windows may open windows of its own, such as Found New Hardware or a driver-signing question: answer them (Next, Yes or Continue, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
+| `INST_HELP_PROGRESS_9X` | Progress, both, 98 SE and ME (draft 59; until then the topic above on every system) | The steps as they run. Windows may open windows of its own, such as the Add New Hardware Wizard: answer them (Next, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
+| `INST_HELP_STEPS` | Steps left for you | Devices the installer could not install by itself, each with the steps to do after the restart. / Save as text file...: keeps the steps to read after the restart. Open Device Manager: where the steps are done. |
+| `INST_HELP_FINISH` | Finish (install), Restart choices | What was done and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, and what was installed starts. Restart Windows later: to save your work, or to do the steps first; restart before using the devices. |
+| `INST_HELP_FINISH_SHUT` | Finish (install), Shut down choices | What was done and what is left, and the log's place. / Shut down now, then start Windows again: Finish shuts Windows down; start it again yourself. Stor98's update, or the USB storage drivers' copy, needs a fresh start rather than a restart. Shut down later: to save your work first. |
+| `INST_HELP_FINISH_NONE` | Finish, nothing changed (install or uninstall, done, refused or stopped) | This run changed nothing on this computer, so no restart is asked; the last line above says why. Finish closes this window. |
+| `INST_HELP_UFINISH` | Finish (uninstall), Restart choices | What was removed and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, so what was removed is gone from it. Restart Windows later: to save your work first, or to do what the page says is left. |
+
+*What pins them.* The host suite (section 11): every topic has a title
+and a text; each text is ASCII, its paragraphs apart by exactly one
+empty line with none at either end, as many paragraphs as the suite
+pins for the topic, and at most twice `inst_page_rows(166)` (40) lines
+at `inst_page_cols(284)` (68) characters (`inst_text_lines`); one past
+20 lines scrolls in the window (draft 58; Components and the
+Thunderbolt and USB4 page's, at 26 and 22); no text contains "tested", "testing",
+"emulat", "virtual machine" or "experimental" (a certificate's and
+Windows' "test-signing" names are words of the page, not a testing
+status); value names are compared without regard to case (98 SE and
+ME show `StorWriteThrough` where 2000 to 10 show `storwritethrough`);
+`inst_help_topic` gives, for every kind, mode and variant, the
+topic of the table above, and every topic is reached; the two Progress
+texts name one hardware wizard each, "Found New Hardware" and "Add New
+Hardware Wizard" (draft 59); and a fixed list
+of (topic, label) pairs holds that each topic's text quotes the page's
+own labels: the Components labels from `INST_PT_DRIVERS`, `INST_PT_UAS`,
+`INST_PT_STOR`, `INST_PT_TB` and `INST_PT_FAST` (their words before the
+first parenthesis), `INST_PT_TRAY` whole, the approval's
+`INST_PT_APPR_1` and `INST_PT_APPR_0` whole, `INST_PT_NOW`,
+`INST_PT_LATER`, `INST_PT_SHUT_NOW` and `INST_PT_SHUT_LATER` whole in
+their Finish topics, the Settings tabs' value names, and so on for each
+topic. The window's self-test (record 23 section 10, the window's half)
+checks the window's own routing: for every page number of the install
+and the uninstall sheet and for the Settings sheet's three tabs,
+`helpKind[]` gives the kind the page is; `adv_help_kind` gives
+`INST_HK_ADV` for `P_USB` and `P_TBS` and `INST_HK_ADV_S98` for
+`P_S98`; and the Finish page's variant follows its buttons (both shown
+with the restart words, with the shut-down words, none shown), and the
+Progress page's is this system's (draft 59). Then it
+opens `IDD_HELP` for every topic, sets the text, and measures it in the
+edit control's formatting rectangle (`EM_GETRECT`) at the control's
+font (`DrawTextA` with `DT_WORDBREAK | DT_EDITCONTROL | DT_CALCRECT`),
+failing a text wider than the rectangle or not held whole (its length,
+CR LF for each line break); since draft 58 a text taller than the
+rectangle must have the vertical scroll bar and scroll past its first
+line (`EM_LINESCROLL`, `EM_GETFIRSTVISIBLELINE`); it checks the two buttons
+inside the dialog and apart, and the dialog's window rectangle within
+640 by 452 (480 less a taskbar) at the DPI it runs at; a failure names
+the topic. The self-test measures at the DPI of the system it runs on,
+so the 120-DPI fit is read by running it, and opening the window, on a
+guest set to 120 DPI (the legs, below); no scaled estimate stands in
+for that reading.
+
+*The legs.* 98 SE at 640 by 480 (96 DPI), XP and 7 x86: every page's
+Help opened and its screenshot kept for the owner to read, including the
+Settings tabs and both Advanced dialogs; `XHCIWIZ.EXE /selftest` run on
+each; and on one of them set to 120 DPI the self-test run and the
+Components page's Help opened at 640 by 480 where the system allows it
+(else at its smallest size), its screenshot kept.
+
+*The other texts.* The Welcome page's three wordings end "Help explains
+each page." where they said "Help opens the readme." The readme's
+pages paragraph (`README.TXT`) says that Help explains the page and
+opens the readme from there. The console is unchanged: its questions
+carry their own explanations.
+
+*F1* (draft 59, 2026-11-01). Until draft 59, F1 on a page gave
+Windows' "No Help topic is associated with this item": `WM_HELP` went
+from the focused control to its page, and from the page or the sheet's
+own buttons to the sheet, which handed it to WinHelp with no topic. Now
+F1 opens the page's help, the same window as the Help button. The page
+procedures (`page_proc`, `tab_proc`) answer `WM_HELP` by passing it to
+their sheet, and the wizard sheet (`sheet_sub`) and the Settings sheet
+(`set_sheet_sub`, a subclass set at its `PSCB_INITIALIZED`, as the
+wizard's is) answer it in `sheet_help`: the current page
+(`PropSheet_GetCurrentPageHwnd`) is sent `PSN_HELP`, as the Help button
+sends it, so one route serves both. Nothing is done while the sheet is
+disabled: a help window, a message box or a dialog of its own is open,
+and their F1 comes to the sheet as their owner. The help window answers
+F1 itself and passes nothing on. The Advanced dialogs answer `WM_HELP` as
+their Help button, unless a message box of theirs has disabled them. The
+install folder's dialog has no Help, and its F1 comes to the disabled
+sheet and does nothing. Read on 98 SE, XP and 7 with the focus on a
+page's box and on the sheet's Next button (`runs/run-45.md`, "45.66
+(closed)").
+
+*Not done.* No context help ("?" in the title bar, a topic per
+control): the page's own sentences already sit under each box; one
+window a page is what was asked. No help file (`.HLP`/`.CHM`): a
+dialog with text works the same on 98 SE and on 10.
 
 ## 6. What it installs
 
@@ -2769,6 +3537,38 @@ Driver, or the install directory given to the wizard).
 The readings are taken where Stor98's are (`s98_record_devices`): after
 every settle and helper job, at every exit of the helper's passes, and at
 the end of the run; the baseline before the run's first change.
+
+**Written out before each placement** (task 45.5, was INSTREC.1). 98
+SE keeps the registry in memory and writes it out later, and a power cut
+in the copy loses what the run wrote while the files it placed survive:
+read in task 44.20 (`runs/run-44.md`, "43.5's package copy cut between
+the INFs"), where the next run took the seven as found installed (case
+1) and the uninstall left them. So a `Files` or `Placed` value is
+followed by `RegFlushKey(HKEY_LOCAL_MACHINE)` before its file is moved
+into place, as the other USB drivers' `RecordMade` is (section 6.7.5),
+which writes out with it every value written before it - `Choice`,
+`PreExisting`, `Before` and `BeforeOk` - so the record is on the disk
+before the first storage file is. The file's temporary copy is flushed
+(`FlushFileBuffers`) before its value is written, so a value never names
+bytes that were not yet written. `Published` is written out the same
+way when it is first set, at the first INF placement and after the
+package's copy, since the uninstall's adoption rests on it. A flush that
+fails is a failed placement: the temporary copy deleted, the value
+deleted, the file not moved and said ("The registry could not be written
+out after the USB storage drivers' record." and "<file> is not
+copied."). For a binary the storage install then stops as at any failed
+copy (a step left). For an INF it stops the publication too, which a
+failed INF placement alone does not: the run says "The USB storage
+drivers are not published in this run: run the installer again.", the
+seven are left out of the package's copy (`storCopyOk` cleared, a step
+left), and what this run placed in `%windir%\INF` is withdrawn before
+that copy (section 6.5.4's withdrawal, as for any copy made without the
+seven). A failed write-out of `Published` after the package's copy
+leaves a step. A cut after the flush and before the move leaves a value
+with no file at its path and the temporary copy beside it, as a failed
+move does: the value then names nothing, and the next run copies the
+file again once the temporary copy is gone (a temporary copy that is
+there stops that copy, said, as before).
 
 #### 6.5.7 An update over its own install
 
@@ -4344,7 +5144,8 @@ packages whose devices Windows' own generic INFs would take, `uac2` and
 `usbmidi`, staged on `DevicePath` again, about 90 characters, so that
 their exact matches win; with copy-only the Sound Blaster X4 gets 98 SE's
 own `USBAUDIO` and stops with exception 0E; every other package stays
-copy-only, W9XSTAGE.1 kept in "Planned work"). This section amends
+copy-only, W9XSTAGE.1 kept in "Planned work", roadmap-usb4 task 45.7
+since 2026-10-29). This section amends
 sections 6.7.4, 6.7.6, 6.7.7 and 6.7.11 where it says so; the rest of
 section 6.7 (the downloads, the folders and their records, the
 detection, the copy and its journal, the uninstall) stands. Proposals of
@@ -4519,6 +5320,403 @@ bring under the limit, two folders of which only the first fits, and a
 folder already an entry counted once; the exclusion of `usbmidi` by an
 earlier `uac1` staging as a condition at the read. The window self-test
 lays each page out with its own set's rows.
+
+#### 6.7.13 98 SE and ME: every package staged again within 280 characters, and the page that says so (tasks 45.7 and 45.8; draft 47)
+
+Roadmap-usb4 task 45.7 (was W9XSTAGE.1, the owner's item of 2026-10-24,
+kept when section 6.7.6 made 98 SE and ME copy-only): the free and
+non-free drivers found by 98 SE's and ME's hardware wizard again without
+browsing, `DevicePath` kept under about 280 characters. Task 45.8 (was
+W9XOTHERPG.1, the owner, 2026-10-28, after the `3.3.0.0` cut): the free
+page on these systems listed only `uac2` and `usbmidi`, the two packages
+section 6.7.12 stages there, so a user could take the free download to
+hold two drivers and not know that a ticked box means staged on
+`DevicePath`; the other packages were copied and not shown. This section
+amends sections 6.7.4, 6.7.6, 6.7.7, 6.7.11 and 6.7.12 where it says so;
+the rest stands.
+
+**ME's limit is 259 (draft 50).** The 280 of section 6.7.12 was read on
+98 SE; task 45.7's ME leg read ME's (q35, the `-free` test cut,
+2026-10-29). A fresh install with every free package ticked that fitted
+280 left `DevicePath` at exactly 280 characters, and at the next start
+ME's "New Hardware Found" window for the controller's root hub stayed at
+"locating the software" for more than twelve minutes, the guest busy,
+on two cold starts. The same install with the free set unticked started
+clean. With the controller's drivers in place, a USB keyboard, mouse or
+tablet plugged in while `DevicePath` held 24, 238 or 259 characters was
+installed by ME within seconds and with no wizard; with 260, 270 or 280
+characters its window stayed at "locating the software" the same way
+(the padding an absent folder or real ones alike). So on ME the limit is
+259 (`INST_ME_DEVICEPATH_MAX`, `inst_9x_devicepath_max`), and past it
+ME's wizard does not find no driver, as 98 SE's does: it stops
+responding, which holds every device's install, the controller's root
+hub's included. The projection, the install directory's own entry
+(`inst_9x_devicepath_room`) and the read before each append take the
+system's limit; the reason a box is barred names it ("DevicePath would
+pass 259 characters, past which Windows ME's hardware wizard stops
+responding: point the wizard at <folder> instead"). 98 SE keeps 280.
+Where this section says 280 below, it is 259 on ME.
+
+**What changes, and what does not.** Section 6.7.12 already keeps a run
+from taking `DevicePath` past the limit: the projection
+(`inst_9x_devicepath_project`, `other_9x_fits`) bars a box whose folders
+would take the value past 280 characters, the run reads the value again
+before each append and leaves a folder out that would pass it, and an
+earlier run's entries take their room first. What made 98 SE and ME
+copy-only on 2026-10-24 was a `DevicePath` of 608 characters, with no
+such limit; with it, the fixed list of section 6.7.12
+(`instOther9xStage`, the free set's `uac2` and `usbmidi`) is no longer
+what keeps the wizard working. It is prevention, not repair: a value
+already past the limit (another program's entries) stays so, bars every
+new box, and is said as section 6.7.12 says it. So:
+
+- **Every package is stageable on 98 SE and ME** that has a `STAGE` line
+  naming the system's token (`W98SE`, `WME`), in either set: the list is
+  gone, `inst_other_9x_stageable` holds for every package id of the free
+  and the non-free set, and `other_count` counts a package's lines as on
+  2000 and later. Its box is offered on its set's page, unticked (the
+  default of every box on every run, section 6.7.11), with section
+  6.7.11's words and its details; `/wdmfree:stage=<ids>` and
+  `/wdmnonfree:stage=<ids>` take it. A package with only `COPY` lines for
+  the system (the free `rtl815x` and `noaud`, the free `usbmidi` on ME)
+  has no box, as on every system, and the stage switch naming it is
+  refused before any change ("its set stages nothing for it on this
+  Windows, so it is copied, not staged ..."). Staging on these systems
+  is still the package's folder appended to `DevicePath` (section
+  6.7.6), one entry per folder, with every section 6.7.11 rule for a
+  folder there (one package per folder, its `COPY` INFs visible with it).
+- **The limit decides what fits.** With the default install directory a
+  folder costs 43 to 65 characters with its separator, and
+  `C:\WINDOWS\INF;C:\XHCI98` (24) leaves 256 of the 280: four to five
+  packages' folders, the pinned sets holding 20 such folders on 98 SE
+  and 17 on ME. On the page an unticked box whose folders would not fit
+  with every ticked box's is barred, as section 6.7.12 has it ("(not
+  available: see below)", the reason in its details: "DevicePath would
+  pass 280 characters, past which Windows 98 SE's hardware wizard finds
+  no driver: point the wizard at <folder> instead"). **The console now
+  checks the ticks it is given**, once the install directory is
+  chosen (`other_9x_after_dir`, after `choose_dir`; the projection
+  reads that directory, so at the read and at the question it has
+  none and counts every tick): the stage switches in their order,
+  each counted only if every one before it fits, the first whose
+  folders do not fit refused with that reason before any change, exit
+  1, as the other switch refusals; the ids typed at the question read
+  again in the page's order (`other_block`, below), a package that no
+  longer fits unticked and said ("Not staged: <id>: <reason>"), before
+  the confirmation. In the window an unticked box that
+  would pass it is barred, and every making of the bars
+  (`other_block`, at each tick and at each change of the install
+  directory, `inst_eng_other_dir`) first reads the ticked boxes the
+  same way, in the page's order (by heading, as the page lays the
+  boxes out, then as the set lists them): a ticked box whose folders no longer
+  fit after the ones before it - the install directory made longer
+  after it was ticked - is unticked and barred with the reason, so the
+  Summary and the run never carry a choice that cannot be staged. The
+  run's own reading before each append stays the last guard.
+- **The projection's room.** `other_9x_fits` holds up to 48 folders
+  (the 24 of section 6.7.12 were for two packages; the pinned sets have
+  20 on 98 SE) and up to 16 of the candidate's own
+  (`other_9x_pkg_folders` says when a package has more than it was given
+  room for, never a part of its list), and more than either holds is
+  read as not fitting.
+- **Earlier staging, by system.** Section 6.7.12 took out of
+  `DevicePath`, at every run, the entries an earlier run's `Staged`
+  record names for a package off its list. The rule now is by the
+  package's lines (`other_9x_keeps`): an earlier run's entry is kept -
+  shown as earlier staging (section 6.7.11), counted first by the
+  projection, restored when `DevicePath` lacks it, removed by the
+  uninstall - when the set is carried in this download and the package
+  has a `STAGE` line for this system in it, or when the set is not
+  carried (its lines are not known: the entry stays until a run that
+  carries the set, or the uninstall, decides). An entry of a carried set's
+  package that has no `STAGE` line for this system any more (its set's
+  lines changed, or it is not in the set) is taken out, as section 6.7.6
+  has it. The published releases staged nothing on 98 SE and ME but
+  section 6.7.12's two packages (`3.2.0.0` none, `3.3.0.0` those two, 84
+  characters), and both keep their `STAGE` lines in the pinned free set,
+  so a `3.3.0.0` install keeps them - unless the run replaces the free
+  set's copy (another release of it, or another folder; below), which
+  takes them out with every entry of that set, staged again only when
+  ticked. (`3.3.0.0`'s free set and this release's have the same
+  `SHA256.TXT`, task 45.2, so its copy is not replaced.)
+- **A set this run replaces, first.** The projection already takes out
+  every entry of a set whose copy this run replaces (an earlier copy of
+  another release or in another folder, section 6.7.5), but the run took
+  them out only in that set's copy step (`other_begin`'s withdrawal),
+  after the other set's restorations and staging may have used the room.
+  So the run's withdrawal step (`other_withdraw_devicepath`, both sets
+  before either stages, section 6.7.12) now takes out every
+  `DevicePath` entry of a set `other_9x_replaced` reads replaced, its
+  `Staged` value with it, as it takes out the entries no longer kept;
+  the copy step's own withdrawal then finds none left. The run's order
+  is then the projection's.
+- **Exclusions.** `EXCLUDES` and `COEXISTS` hold on these systems as on
+  every other (section 6.7.11): of the pinned sets' lines naming `W98SE`
+  or `WME`, `uac1` against `usbmidi` (no `uac1` line stages there), the
+  free and non-free `ax88179` (the non-free one has no 98 SE or ME
+  line), the free and non-free `rtl815x` (the free one is copy-only
+  there), `xpad98` against `x360wc` (no `x360wc` line there) and the
+  `COEXISTS` of `xpad98` and `x360c` and of `uvc98` and `noaud`. None bars
+  a box today; the rule stands for the sets' later releases.
+- **The setup engine's prompt** (section 6.7.12's bullet) stands for
+  every package: the wizard may ask for the folder of the files the first
+  time, and the details name it.
+
+**The page on 98 SE and ME (task 45.8).** Each set's page shows, under
+its copy box, sentence and line:
+
+1. the heading "Let Windows choose these drivers automatically for
+   matching devices:" and the boxes of the packages it can stage on this
+   system, as on 2000 and later, barred ones included, and the set's
+   earlier-staging line;
+2. then, when the set has any package with only `COPY` lines for this
+   system (no box), the heading "Copied only (no automatic install on
+   this Windows):" and one line per such package, its description and
+   every distinct folder its lines for this system name,
+   "<description>: USBDRV\FREE\<class>\<package>\<folder>" (or
+   `NONFREE`; `inst_other_copy_only_line`, more folders separated by
+   "; "), past eight folders "and more: see USBDRV\FREE\STAGE.TXT" (the
+   set's own list of every folder);
+3. then the words for the rest (`inst_other_rest_text`), two lines so
+   that each is whole in the list's least height, which depend on the
+   copy box: ticked, "Ticked: staged, so Windows' hardware wizard finds
+   the driver by itself; earlier staging kept is listed above." and "Not
+   ticked: copied only; when the wizard asks for a driver, choose Specify
+   a location and the package's folder under <dir>\USBDRV\FREE." (or
+   `NONFREE`), the install directory the window chose; unticked, one
+   line, "Nothing of this set is copied in this run: tick the box above to
+   copy it and to choose packages to stage.", with "Earlier staging kept
+   is listed above." where the set's earlier-staging line is shown. The
+   earlier-staging line is the run's own decision (`other_earlier`, read
+   at the start): it shows only what the run keeps by `other_9x_keeps`.
+   Where the copy box is ticked and the run replaces the set's copy
+   (`other_9x_replaced`: an earlier copy of another release or in another
+   folder, read again as the copy box and the install directory change),
+   the earlier-staging line is not shown and the first line ends "this
+   run replaces the set's earlier copy and takes its earlier staging
+   out.", so the page never promises staging the run withdraws;
+4. and, when no package of the set has a box on this system, the set's
+   `inst_other_none_text` line in place of item 1 (unchanged, as the
+   ME `usbmidi` case can make it for a set), followed by items 2 and 3.
+
+The lines are in the list's scrolling area under the boxes, which the
+keyboard reaches too: Down from the last box (Up from the first)
+scrolls the list a line, and Page Down, Page Up, End and Home on a box
+scroll it a page or to its end (`othbox_sub`); the same four keys on the
+set's copy box do too (`othcopy_sub`), since the list's boxes are greyed
+while it is unticked, so the copied-only lines and the sentence can be
+read without a mouse in every state.
+
+So the page lists every package of the set for this system - the boxes
+and the copied-only lines -, says which are staged (a ticked box, and
+the earlier staging) and which are only copied, and names the folder
+the wizard should be pointed at for the rest. The Summary, the Finish
+page and the console's end (section 6.7.7) are unchanged: they list the
+staged packages, and the Finish paragraph's "To install one by hand,
+point the Add New Hardware Wizard ... at one of:" lists the folders as
+now.
+
+On 2000 and later the page is unchanged: a package with no box there is
+one whose set has no `STAGE` line for the system, and its folders are
+listed by section 6.7.7's Finish paragraph as now.
+
+**The console.** On 98 SE and ME the question per set (section 6.7.11)
+lists the stageable packages as now, then the copied-only lines and the
+sentence for the rest (items 2 and 3, for the copy answer given); `/list`
+prints them too.
+
+**Host vectors** (`test_inst.c`): `inst_other_9x_stageable` true for a
+free and a non-free package and false for a NULL or empty id and an
+unknown set; `other_9x_keeps`' rule as a pure function
+(`inst_other_9x_keeps`: carried with a `STAGE` line kept, carried
+without one taken out, not carried kept); the projection with six
+52-character folders after `C:\WINDOWS\INF;C:\XHCI98` (four fit, the
+fifth and sixth do not); the copied-only line with one and with two
+folders, an empty one skipped; the sentence for the rest copied and
+not, replaced and not, with and without earlier staging, and held to
+its buffer. The window self-test lays each package's copied-only line
+with two long folders, and each set's sentence for the rest at a long
+install directory, whole in the list's window. The ticks' reading in
+order (`other_9x_after_dir`, `other_block`) is engine code over the
+registry and the plan, read in the legs.
+
+**The legs** (`runs/run-45.md`, "45.7" and "45.8"): 98 SE and ME, the
+`-free` and `-nonfree` downloads, the window: every stageable box
+offered and unticked, the copied-only lines and the sentence read by
+screenshot, ticked and unticked; ticking boxes until the next is barred,
+`DevicePath` after the run at most 280 characters and holding exactly
+the ticked folders; a QEMU device of a ticked package (`usb-serial`, an
+FTDI FT232, for the non-free `ftdi`; `usb-net` for the free `cdcnet`
+where its INF matches QEMU's model) installed by the wizard from the
+staged folder with no Specify a location; the console's refusal of a
+switch naming too many packages; an update over a `3.3.0.0` install with
+`uac2` staged (kept, shown as earlier staging); a second run showing the
+earlier staging; the uninstall taking the entries out.
+
+#### 6.7.14 An exclusion lifted where the devices are apart (task 45.6; draft 47)
+
+Roadmap-usb4 task 45.6 (was RTLNARROW.1; the owner, 2026-10-28, after
+the `3.3.0.0` cut): the free and the non-free `rtl815x` allowed side by
+side where their INFs list disjoint chips. `3.3.0.0` excludes the pair
+on every system, by the installer's table (`instOtherRels`) and by the
+free set's own `EXCLUDES` line ("the same chips; on XP to 7 `RTLXP7.INF`
+lists only chips the nonfree INFs leave out, but xHCI98 `3.2.0.0`
+excluded the pair everywhere and its rule is kept"), because the cut
+never drops a relationship line an earlier release carried (section
+6.7.11, "The table's history"; `Test-OtherPkgsTransition`). This
+section adds the one way a line may change: an `EXCLUDES` lifted on a
+system where the cut itself reads the two packages' devices apart, and
+kept apart at every later cut.
+
+**What a package matches on a system** (`Get-OtherPkgDevices`, the
+cut): over every `STAGE` and every `COPY` line of the package naming the
+system, the ids its INF's models match there (`Get-InfModelIds`, as
+`Test-OtherStageIds` reads them: the `[Manufacturer]` entries' models
+sections with the decoration that system's engine takes), read from the
+carried set's exported folder, each turned into a device key: an id of
+the form `USB\VID_<4 hex>&PID_<4 hex>` followed by nothing or by `&`
+and more (`&REV_`, `&MI_`, any other) becomes `VID_<v>&PID_<p>`, upper
+case, so a revision or an interface of one device is that device (the
+bus gives a device both forms, `src/hcd_pdo.c`'s hardware ids, and a
+function its interface's). **No answer** for the system (not an empty
+list) when the package's set is not carried in this cut, it has no line
+for the system, an INF of its lines cannot be read, an INF has no
+models section that system reads, or any id it matches is of another
+form (a class id, `USB\Class_...`, a compatible id, another bus): such
+an id does not say which devices it takes, so it cannot be shown apart.
+A `CLASS` package (section 6.7.11) gives no answer either.
+
+**The transition.** Where the previous release's record has an
+`EXCLUDES` line for a pair on a set of systems and this cut's lines for
+the pair (the table's and both sets', whichever source) leave some of
+those systems without an `EXCLUDES`, `Test-OtherPkgsTransition` admits
+it only when every such system is named by a `COEXISTS` line of the
+pair and, on it, both packages give an answer and the two answers have
+no key in common; otherwise it refuses as now, saying why ("the package
+table drops the EXCLUDES line of <a> and <b> on <systems>, which <ver>
+carried ... and the cut does not read them apart on <system>: <key in
+common, or which package gave no answer and why>"). The comparison is
+of unordered pairs (either endpoint first), and of the union of the
+pair's lines of each kind, so a line the table and the pack both carry
+is one statement.
+
+**Kept apart.** A system lifted so is recorded: the cut writes, beside
+the record's `EXCLUDES` and `COEXISTS` lines, a line `LIFTED | <a> | <b>
+| <systems> | <why>` in `otherpkgs.txt` for every pair and system a
+`COEXISTS` holds where an earlier release's record had an `EXCLUDES` or
+a `LIFTED` line (carried forward, its systems the union). The next cut
+reads it back and holds those systems to the same proof: a `COEXISTS`
+there must again show both packages apart, or the cut refuses; an
+`EXCLUDES` there instead is allowed (the pair excluded again) and ends
+the `LIFTED` line for that system. So a later release of either set
+that adds an overlapping id, by a `STAGE` or a `COPY` line, cannot keep
+a lifted pair together unchecked. A `COEXISTS` the maintainer wrote
+where no `EXCLUDES` stood (a considered overlap, section 6.7.11) is not
+held to it.
+
+**Earlier staging of another release.** The cut proves the releases it
+carries apart; an install may also hold a package an earlier run staged
+from another release of its set (an older payload whose ids the cut
+never read), and section 6.7.11 holds exclusions against earlier
+staging. So a lifted system is `COEXISTS` only between the packages this
+download carries: the installer's table marks such a row with a third
+kind, `INST_REL_LIFTED` (`instOtherRels`' kind field: 1 `EXCLUDES`, 0
+`COEXISTS`, 2 lifted), written as `COEXISTS` by the cut (a pack's own
+`COEXISTS` for the pair is the same statement) and recorded `LIFTED`. At
+the installer (`other_pair_excluded`, through `inst_other_lift_bars`) a
+lifted row bars a package against an earlier staging of its partner
+whenever that staging is not of the partner set's release this download
+carries - the set not carried here, or the set's recorded `Sums` (the
+release its copy and staging came from) other than this download's - as
+an `EXCLUDES` would, with the same words ("uninstall the other drivers
+first"); between two packages of the carried releases, ticked now or
+staged earlier from the same release, it bars nothing. The cut holds
+the table and its lifts to each other both ways (`Test-OtherTableLifts`):
+a table row of kind 2 whose pair and systems no lift of this cut covers
+is refused, and so is a lift (a pack's `COEXISTS`, or a table row left of
+kind 0) that no row of kind 2 names on every system it lifts, since the
+installer's hold against an earlier release is that row. Both hold in a
+cut that carries both sets of the pair (draft 51): a cut that leaves one
+out (`-NoWdmFree`, `-NoNonFree`) reads no lift, and the installer then
+holds that row as an `EXCLUDES` against any earlier staging, the
+partner's set not being this download's (`other_same_release`); so
+such a cut records the pair's `COEXISTS` lines on the row's systems,
+the table's and the carried pack's, as `EXCLUDES` (`Get-OtherHeldLifts`;
+the rest of each line as it is), and neither the history nor the
+table is held to a lift there.
+
+**A cut with no history** (draft 57, 2026-10-31). The previous record
+is the newest `otherpkgs.txt` below the cut's version under the cut's
+`-ReleasesDir`. A TEST build (`-TestLabel`) or a dry cut writes into
+another directory, which holds none, so before this draft such a cut of
+both pinned sets lifted nothing and `Test-OtherTableLifts` refused the
+table's lifted `rtl815x` row ("the installer's table marks
+free:net/rtl815x and nonfree:ethernet/rtl815x lifted on WXP ... W7X64,
+and this cut lifts no EXCLUDES of the pair there"), though the table,
+both sets' `STAGE.TXT` and a cut into `releases\` agreed (read at the
+free set's `v0.1.5` and `v0.1.6`). Where no earlier record is found, the
+cut now takes each lifted row of the table (kind 2, left only where both
+of its sets are carried) as an `EXCLUDES` on its own systems and lifts it
+as above (`Get-OtherTableOwnLifts`, through `Get-OtherLifted`): a
+`COEXISTS` of this cut's lines on every one of those systems, both
+packages answering and no device key in common, or the cut refuses
+("... excluded on <system> by the installer's lifted row (no earlier
+otherpkgs.txt) ..."). The record then carries the `LIFTED` line a cut
+into `releases\` writes. The history itself is not borrowed from
+`releases\`: until the version is raised, a cut reads its version from
+the INF, and the record below that one is an older release's, whose rows
+a cut leaving a set out does not match.
+
+**The pair this is for.** Read at the pins of `3.3.0.0` (free `v0.1.4`
+at `c28fce8`, non-free `v1.1.0` at `565d11b`) with the cut's own
+functions: the free `rtl815x` matches 34 ids on 98 SE, ME and 2000, 4 on
+XP and Vista and 2 on 7, x86 and x64; the non-free one has no line on
+98 SE, ME or 2000, 68 ids on XP and Vista and 315 on 7, x86 and x64;
+neither has a line on 8 or 10; no id in common anywhere (their device
+keys are to be read the same way with the new function before the
+change). Both are `DEVICE` packages. So the lift is possible on XP, XP
+x64, Vista, Vista x64, 7 and 7 x64 alone; on 98 SE, ME, 2000, 8, 8 x64,
+10 and 10 x64 one package gives no answer and the `EXCLUDES` stays (it
+bars nothing there, one of the pair having no line).
+
+**Where each line is.** The free set's line is in `usb-wdm-free`'s
+`STAGE.TXT`, which this repository does not change: its maintainer
+splits it (proposal: "EXCLUDES | free:net/rtl815x |
+nonfree:ethernet/rtl815x | W98SE WME W2K W8 W8X64 W10 W10X64 | kept
+where one of the pair has no INF" and "COEXISTS | free:net/rtl815x |
+nonfree:ethernet/rtl815x | WXP WXP64 WVISTA WVISTA64 W7 W7X64 | disjoint
+chips: RTLXP7.INF lists only chips the nonfree INFs leave out"), and the
+installer's table row (`instOtherRels`) is split the same way in the
+change that moves the free set's pin to that release, since the cut
+refuses a table and a pack line of two kinds for one pair on a common
+system, and the installer reads both and excludes where either does.
+Until then the pair stays excluded everywhere, as in `3.3.0.0`; the
+cut's check and the `LIFTED` record are in place for the move.
+
+**What the user sees.** The free `rtl815x` is copied only on every
+system in `v0.1.4` (no `STAGE` line), so an `EXCLUDES` against it bars
+nothing today: the non-free package's box is offered beside the free
+set's copy either way. The lift matters once the free set stages its
+`rtl815x` on XP to 7, and the page then offers both boxes.
+
+**Host vectors** (`test-package.ps1`, the packager self-tests), with
+stand-in packages: disjoint `VID&PID` ids on one system and a common one
+on another, the previous record's `EXCLUDES` on both: a `COEXISTS` on
+the disjoint system admitted and recorded as `LIFTED`, on the other
+refused naming the key; the same device by a `&REV_` id in one package
+and a plain id in the other refused; a `COPY`-only overlap refused; a
+class id refused; a `CLASS` package refused; a package whose second INF
+cannot be read refused; a system one package has no line on refused; a
+set not carried refused; endpoints reversed in the `COEXISTS` admitted;
+the table's and a pack's `EXCLUDES` for the pair both lifted on part of
+their systems and kept on the rest admitted; an `EXCLUDES` dropped with
+no `COEXISTS` still refused; a `LIFTED` system re-proved at the next
+cut, refused when an overlapping id appears, and ended by an `EXCLUDES`
+there.
+
+**The legs** (`runs/run-45.md`, "45.6"): the install leg on XP and 7
+waits for the pin move (the coordinator's); until then the packager
+self-tests and the cut's `-CheckOnly` are the reading.
 
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
@@ -4840,7 +6038,7 @@ page:
 | `/set Name=Value` | preselects a setting (and makes it "changed", so it is written); the page still shows it |
 | `/defaults` | as record 23 section 7.1: every current value kept and no value question asked, which in the window means the settings pages are shown with the values in force and nothing marked changed (a page left alone writes nothing) |
 | `/force`, `/restage` | as record 23; the Found page shows what they add |
-| `/debug` | `INSTALL.BAT`'s flavour choice, and the window's own when started by hand |
+| `/debug` | withdrawn with the `debug-` directory (roadmap-usb4 task 45.45): refused as an unknown switch |
 | `/log <path>` | the log's path |
 | `/yes`, `/list`, `/nopause`, `/devices`, `/eject`, `/dir`, `/console` | console only: refused with "use INSTALL /console" |
 
@@ -5007,6 +6205,10 @@ greyed by the window on 2000 to 7).
 Draft 8 (task 42-A.21) changes record 23 by its revision 13: section 4.5
 (the connection manager alone), 4.3 (Windows 8 and 8.1, `RtlGetVersion`),
 5.10, 7.1 (`/cmonly`), 8.5, 9.1, 9.5, 10 and 13 (D17 to D19).
+
+Draft 52 (task 45.54) changes record 23 by its revision 51: section
+8.1 (fourteen more never-asked rows, and the values left out) and 8.2
+(on 98 SE and ME a controller the run installs is a target).
 
 ## 13. Decisions taken in writing this (the orchestrator's, owner to confirm)
 

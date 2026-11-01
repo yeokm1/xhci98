@@ -17,7 +17,9 @@
  * discovered and preserved (every type), held, or cleaned on the user's
  * request; hot plug and unplug, including inside every wait; the per-port
  * state machine; Thunderbolt 3 device routers at depth 1, PCIe first;
- * resume obligations; the per-port eject. What is not: the registry, PnP,
+ * resume obligations; the per-port eject; and design record 34 Part 3's
+ * minimal chain (task 45.15): a USB4 router behind a depth-1 router's
+ * downstream port, at depth 2, PCIe only (TBT_U4_KID). What is not: the registry, PnP,
  * power, the thread, the common buffer, the PCI side (tunnel-port sets,
  * re-enumeration, the PCI-side reading, the stor98 delivery) - the driver
  * (task 40-A.6) does those and reaches this file through the TBT_HOST
@@ -62,6 +64,7 @@
 #include "../xhci_compat.h"
 #include "tbt_regs.h"
 #include "tbt_ring.h"
+#include "tbt_xdp.h"
 
 /* ---------------------------------------------------------------------- */
 /* Limits and bounds (record 22 section 5.2)                              */
@@ -70,9 +73,11 @@
 #define TBT_U4_MAX_PORTS            4UL     /* host USB4 ports handled */
 #define TBT_U4_MAX_ADP              64UL    /* adapter numbers 0..63, Spec 8.2.1 */
 #define TBT_U4_MAX_LINKS            8UL     /* discovered links below depth 1 */
+#define TBT_U4_MAX_KIDS             4UL     /* chained routers at depth 2, per domain
+                                               (design record 34 section 6.2) */
 #define TBT_U4_QUARANTINE           32UL
 #define TBT_U4_ACTION_QUEUE         32UL
-#define TBT_U4_OBLIGATIONS          (2UL * TBT_U4_MAX_PORTS)
+#define TBT_U4_OBLIGATIONS          (2UL * TBT_U4_MAX_PORTS + TBT_U4_MAX_KIDS)
 #define TBT_U4_NAME_LEN             32UL
 #define TBT_U4_DROM_MAX             512UL
 #define TBT_U4_DEPTH_MAX            5UL     /* Guide 3.2.1 step 2 */
@@ -150,6 +155,36 @@ typedef struct _TBT_U4_CONFIG {
      * experiment for the hardware bench; nothing
      * else changes. */
     BOOLEAN AsmPcie7Credits;
+    /* Record 22 section 19: a Mac's Thunderbolt 1 to 3 host (TbtHwSelect's
+     * TBT_SW_ROUTE_TBT_HOST), the host router's id test (d) wants; 0, the
+     * default, for a USB4 host. The host router is then a Thunderbolt
+     * router, driven as section 8 drives one at route 0 too. */
+    ULONG TbtHostRouter;
+    /* XhciCmUsb4V2, default 1 (record 22 section 6.2, decision U30, task
+     * 45.20): a Ver. 2 Connection Manager - CMUV 2.0 written to a router
+     * whose USB4 Version has major 2, and section 6.2.2's version 2
+     * obligations keyed on each router's own version and capabilities.
+     * FALSE is the version 1 run of 3.3.0.0 (CMUV 1.0 everywhere, none of
+     * those obligations); the two-dword path writes and the Gen 4 Link
+     * Recovery clear hold either way. A bench switch, written at 1 by the
+     * INFs since task 45.50. */
+    BOOLEAN Usb4V2;
+    /* XhciCmNet, default 0 (design record 35 section 8.1, task 45.59): TRUE
+     * runs the inter-domain discovery on a depth-1 port whose router read
+     * answers ERR_ENUM or ERR_NUA (TBT_U4_XDOMAIN), answers the peer and
+     * builds the USB4NET paths; FALSE leaves such a port UNSUPPORTED and
+     * every inter-domain packet unanswered. NetRevision: the deviceid's
+     * revision the properties block publishes (the package version's four
+     * parts, one byte each). */
+    BOOLEAN Net;
+    ULONG NetRevision;
+    /* XhciCmGen4LinkRecovery, default 1 (record 22 section 6.2.3 item 4,
+     * decision U33, task 45.56): Enable Gen 4 Link Recovery set on both
+     * ends of a depth-1 Gen 4 link between two version 2 routers, with
+     * the recovery check after each LINK_RECOVERY. FALSE never sets it
+     * (the task 45.20 run); the recovery check and the adoption's clear
+     * hold either way. Usb4V2 FALSE never sets it either. */
+    BOOLEAN Gen4LinkRecovery;
 } TBT_U4_CONFIG, *PTBT_U4_CONFIG;
 
 VOID TbtU4DefaultConfig(PTBT_U4_CONFIG cfg);
@@ -186,6 +221,9 @@ typedef struct _TBT_U4_ROUTER {
     ULONG Usb4Version;      /* ROUTER_CS_4 31:24 */
     BOOLEAN Present;
     BOOLEAN Tbt3;           /* USB4 Version 0: record 22 section 8 */
+    ULONG TbtGen;           /* Tbt3: 1 to 3 by its id (TbtHwTbtGeneration) */
+    BOOLEAN UidFromDrom;    /* Tbt3 with no link controller: Uuid is the
+                               DROM's UID (record 22 section 19.4 item 3a) */
     BOOLEAN EnumeratedHere;
     BOOLEAN Preserved;      /* found enumerated at start or resume */
     BOOLEAN OpBlocked;      /* Operation Valid never cleared (section 6.7) */
@@ -198,6 +236,7 @@ typedef struct _TBT_U4_ROUTER {
     BOOLEAN BaValid;
     ULONG BaMaxPcie;        /* Buffer Allocation answer, 0 when none */
     ULONG BaMaxUsb3;
+    ULONG BaMaxHi;          /* baMaxHI (task 45.59, record 35 section 5.1), 0 when none */
     ULONG Uuid[4];          /* USB4: ROUTER_CS_7, 8; Thunderbolt 3: the LC fuse */
     BOOLEAN UuidValid;      /* read successfully: compared, never a failed sample */
     ULONG Quirks;           /* TBT_U4_QUIRK_* */
@@ -208,6 +247,14 @@ typedef struct _TBT_U4_ROUTER {
     BOOLEAN DromOwed;       /* Thunderbolt 3: adopted, or rebuilt under a resume
                                budget, its EEPROM not yet read: its names read
                                by TbtU4Poll once no budget runs (section 8) */
+    ULONG Cmuv;             /* ROUTER_CS_4 CMUV as written here or found (section
+                               6.2.1), 0 on a Thunderbolt 3 router */
+    BOOLEAN SeqSet;         /* a Set Capabilities for the Sequence bit was sent
+                               to this router (section 6.2.2 item 3): its
+                               state may differ from the default, whatever a
+                               failed read-back left recorded */
+    BOOLEAN SeqOwed;        /* a recovery found the capability supported and
+                               disabled and sent no Set: owed to the next tick */
     TBT_U4_ADP Adp[TBT_U4_MAX_ADP];
 } TBT_U4_ROUTER, *PTBT_U4_ROUTER;
 
@@ -250,6 +297,7 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_FAILED           7UL
 #define TBT_U4_UNSUPPORTED      8UL
 #define TBT_U4_TEARDOWN         9UL
+#define TBT_U4_XDOMAIN          10UL    /* another domain's router: record 35 section 3.3 */
 
 /* Why a port is FAILED, HELD or UNSUPPORTED (the log). */
 #define TBT_U4_WHY_NONE             0UL
@@ -276,6 +324,17 @@ typedef struct _TBT_U4_TUNNEL {
 #define TBT_U4_WHY_RECOVER          21UL    /* HELD by a recovery (section 7.7):
                                                unclassified, or drained and
                                                waiting for its rebuild */
+#define TBT_U4_WHY_CV_FOUND         22UL    /* HELD: a preserved router's CV set
+                                               without PTO (section 6.2.2 item 5) */
+#define TBT_U4_WHY_LINK             23UL    /* FAILED: a Gen 4 link not usable
+                                               (section 6.2.3 item 1) */
+#define TBT_U4_WHY_XDOMAIN          24UL    /* XDOMAIN: the inter-domain discovery (task 45.59) */
+#define TBT_U4_WHY_LOOP             25UL    /* UNSUPPORTED: a loop in this domain (Guide 3.3) */
+
+/* TBT_U4CM.IsoWord (record 22 section 10.5). */
+#define TBT_U4_ISO_VALID        0x80000000UL
+#define TBT_U4_ISO_GEN_MASK     0x00FFFFFFUL
+#define TBT_U4_ISO_WORD(gen)    (TBT_U4_ISO_VALID | ((gen) & TBT_U4_ISO_GEN_MASK))
 
 typedef struct _TBT_U4_PORT {
     ULONG Index;            /* 1-based */
@@ -297,6 +356,7 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN DpPreserved;    /* a DisplayPort tunnel found at start */
     ULONG HostBaPcie;       /* the host router's Buffer Allocation for this port */
     ULONG HostBaUsb3;
+    ULONG HostBaHi;         /* baMaxHI for this port (record 35 section 5.1) */
     BOOLEAN RemovalOwed;    /* a PCIe teardown's step 6 is owed */
     BOOLEAN HostResidual;   /* host entries never read at a teardown: swept
                              * before the port connects again */
@@ -316,9 +376,14 @@ typedef struct _TBT_U4_PORT {
     /* Lane fields this driver changed (section 6.5), restored at unplug. */
     BOOLEAN Bonded;
     BOOLEAN SingleLane;     /* verified single (section 6.5 step 6) */
+    BOOLEAN Gen4;           /* a Gen 4 link, used as bonded (section 6.2.3) */
+    BOOLEAN Asym;           /* and asymmetric, used as found (decision U31) */
     BOOLEAN LaneWritten;
     ULONG LaneSaved[4];     /* LANE_ADP_CS_1 before step 4: host 0, host 1, dev 0, dev 1 */
     BOOLEAN Lane1Disabled;  /* section 6.5 step 6.4 set Lane Disable */
+    BOOLEAN LcDprOwed;      /* Thunderbolt host: the link controller's
+                               Downstream Port Reset possibly set by the
+                               cleaning, not yet read back clear */
     BOOLEAN PcSetHost;
     BOOLEAN PcSetDev;
 
@@ -326,10 +391,15 @@ typedef struct _TBT_U4_PORT {
     BOOLEAN TmuConfigured;  /* this driver enabled HiFi-Bi on this link */
     BOOLEAN TmuOk;          /* the link has accuracy for a USB3 tunnel */
     BOOLEAN TmuQuarantine;
+    BOOLEAN TmuEnhanced;    /* with TmuConfigured: the mode is HiFi Enhanced
+                               Uni-Directional, a link of two version 2 routers
+                               (section 6.2.2 item 6), disabled only at unplug */
 
     TBT_U4_TUNNEL Pcie;
     TBT_U4_TUNNEL Usb3;
     BOOLEAN Usb3Failed;
+    BOOLEAN UtoOff;         /* a preserved router found with CV set and UTO
+                               clear: no USB3 tunnel (section 6.2.2 item 5) */
     BOOLEAN BwQuarantine;   /* CMR or HCA stuck (section 6.9 step 5) */
     BOOLEAN Usb3GapValid;
     ULONG LastUsb3TeardownUs;   /* kept per port, outside the generation */
@@ -385,6 +455,26 @@ typedef struct _TBT_U4_PORT {
      * on a link that read disconnected; the link is read again before any
      * of it is made (tbtU4RecCleanupGate). */
     BOOLEAN RecCleanup;
+    /* Record 22 section 6.2.3 item 4 (task 45.56). ElrSet: Enable Gen 4
+     * Link Recovery set and read back on both ends, counted as not set
+     * again after a stop, a suspend or a recovery's commit. ElrDev and
+     * ElrHost (part 3): that end may hold this driver's 1, from its write
+     * until a read-back shows 0 - the device's forgotten at a teardown
+     * (its router reset), the host's cleared at section 7.3 step 5 (Spec
+     * 4.4.5.2 keeps it across a disconnect). ElrRefused: a set refused or
+     * failed, not tried again on this connection. ElrCheckOwed: a
+     * LINK_RECOVERY's recovery check owed, ElrCheckSinceUs its first try
+     * once ElrCheckTried. */
+    BOOLEAN ElrSet;
+    BOOLEAN ElrDev;
+    BOOLEAN ElrHost;
+    BOOLEAN ElrRefused;
+    BOOLEAN ElrCheckOwed;
+    BOOLEAN ElrCheckTried;
+    ULONG ElrCheckSinceUs;
+    ULONG ElrNoteSeq;       /* LINK_RECOVERY (or a lost notification) owing the
+                             * check, counted: one drained during a check (at a
+                             * safe point) keeps the check owed afresh */
 } TBT_U4_PORT, *PTBT_U4_PORT;
 
 /* A router below depth 1 a predecessor configured (section 7.1). */
@@ -404,7 +494,63 @@ typedef struct _TBT_U4_LINK {
     ULONG CapsEnabled;
     BOOLEAN ChildDromRead;  /* the child's DROM asked once (a USB4 child) */
     ULONG ChildDromUnused[2];   /* its unused adapters (TBT_U4_ROUTER.DromUnused) */
+    BOOLEAN AdoptTried;     /* record 34 section 6.9: a depth-2 link read once
+                               for adoption under an UP parent */
+    BOOLEAN KidDown;        /* a kid ejected or FAILED for PCIe, made a link
+                               again by a recovery: never adopted or connected
+                               until it is removed and plugged again */
 } TBT_U4_LINK, *PTBT_U4_LINK;
+
+/*
+ * Design record 34 Part 3 (section 6.2): a router chained behind a host
+ * port's device router, at depth 2 - one per chained link, in
+ * TBT_U4CM.Kids. Its sequences run as its host port's (ActivePort); its
+ * state is record 22 section 7.2's, per kid (record 34 section 6.3). A
+ * free slot (Used FALSE) reads EMPTY. The tunnel's entry bits are
+ * TBT_U4_E_*, the parent standing for the host: E_HOST_PROTO the parent's
+ * PCIe Down HopID 8, E_HOST_LANE its downstream lane 0's Hu entry,
+ * E_HOST_ENABLE its Path Enable; E_DEV_* the child's.
+ */
+typedef struct _TBT_U4_KID {
+    BOOLEAN Used;
+    ULONG Port;             /* the host port, 1-based */
+    ULONG Index;            /* 1-based, in TBT_U4CM.Kids */
+    ULONG ParentLane0;      /* the parent's downstream lane 0 adapter */
+    ULONG ParentPcieDown;   /* the parent's PCIe Down paired with it, 0 none */
+    ULONG ParentUsb3Down;   /* a USB4 parent's USB3 Down paired with it, 0 none */
+    ULONG State;            /* TBT_U4_* */
+    ULONG Why;
+    ULONG Generation;       /* drawn from TBT_U4CM.KidGeneration at every
+                               entry to CONNECTING: never reused */
+    ULONG ParentGeneration; /* the host port's Generation when it connected */
+    BOOLEAN UnplugPending;  /* a hint, confirmed by removal evidence */
+    BOOLEAN CheckPending;
+    BOOLEAN Unlocked;       /* this driver cleared the parent lane's Lock */
+    BOOLEAN PcieFailed;     /* no PCIe until a re-plug */
+    BOOLEAN Ejected;
+    BOOLEAN RemovalOwed;    /* the chain port's removal owed (TUNNEL_DOWN) */
+    BOOLEAN SweepOwed;      /* the teardown's residual sweep of the parent's
+                               link entries not yet read whole */
+    TBT_U4_ROUTER Dev;      /* the child, route at depth 2 */
+    BOOLEAN Bonded;
+    BOOLEAN SingleLane;
+    BOOLEAN Gen4;           /* a Gen 4 link, used as bonded (record 22 section 6.2.3) */
+    BOOLEAN Asym;           /* and asymmetric, used as found */
+    BOOLEAN TmuConfigured;  /* HiFi Enhanced Uni-Directional on the link (record 22
+                               section 6.2.2 item 6), owned before its writes */
+    BOOLEAN LaneWritten;
+    ULONG LaneSaved[4];     /* LANE_ADP_CS_1 before the bonding: parent 0, parent 1,
+                               child 0, child 1 */
+    BOOLEAN Lane1Disabled;  /* the parent's lane 1 disabled */
+    BOOLEAN PcSetParent;    /* PORT_CS_19 PC, or a Thunderbolt 3 parent's LC
+                               SX_CTRL L1C or L2C, on the parent's port */
+    BOOLEAN PcSetDev;
+    TBT_U4_TUNNEL Pcie;
+    BOOLEAN Transitional;   /* record 22 section 7.1 item 4 at the kid */
+    ULONG TransitionalSinceUs;
+    ULONG Ticks;            /* idle ticks UP: a Thunderbolt 3 parent's Path
+                               Enable read every fourth (section 6.5) */
+} TBT_U4_KID, *PTBT_U4_KID;
 
 /* A path entry not proven invalid and drained, or a protocol adapter
  * whose Path Enable would not clear (section 7.3). */
@@ -418,7 +564,9 @@ typedef struct _TBT_U4_QENTRY {
                                it until a read shows it closed, or as this
                                driver wrote it (OutAdapter, OutHop)      */
     ULONG Port;             /* 0 for the host router alone */
-    ULONG Generation;       /* a device router's entries: its connection's */
+    ULONG Kid;              /* record 34 section 6.7: the kid's Index, 0 none */
+    ULONG Generation;       /* a device router's entries: its connection's (on
+                               a kid's own router, the kid's Generation) */
     TBT_ROUTE Route;
     ULONG Adapter;
     ULONG Hop;
@@ -441,6 +589,8 @@ typedef struct _TBT_U4_QENTRY {
 typedef struct _TBT_U4_ACTION {
     ULONG Kind;             /* TBT_U4_ACT_* */
     ULONG Port;
+    ULONG Kid;              /* record 34 Part 3: a chained tunnel's kid (Index),
+                               Generation then the kid's; 0 for depth 1 */
     ULONG Generation;
     ULONG PcieDown;         /* the host adapter, for the fabric mapping */
     BOOLEAN MapValid;       /* router-named: MapRid is the tunnel port */
@@ -465,6 +615,9 @@ typedef struct _TBT_U4_ACTION {
 
 typedef struct _TBT_U4_LINKDOWN {
     ULONG Port;
+    ULONG Kid;              /* a chained tunnel's kid (Generation the kid's), 0
+                               none: no statement at depth 2 before task 45.18
+                               (record 34 section 12, Q4) */
     ULONG Generation;
     ULONG PcieDown;
     BOOLEAN MapValid;
@@ -482,6 +635,8 @@ typedef ULONG (*TBT_U4_LINKDOWN_FN)(PVOID context, const TBT_U4_LINKDOWN *info);
 typedef struct _TBT_U4_OBLIGATION {
     BOOLEAN Used;
     ULONG Port;
+    ULONG Kid;              /* a kid's PCIe tunnel (Index), Generation the
+                               kid's; 0 for the port's own */
     ULONG Generation;
     BOOLEAN Usb3;           /* FALSE: PCIe */
     BOOLEAN BuiltHere;
@@ -509,6 +664,18 @@ typedef struct _TBT_U4_CARRY_PORT {
     TBT_U4_CARRY_TUN Usb3;
 } TBT_U4_CARRY_PORT;
 
+/* Record 34 section 6.9: a kid's PCIe tunnel this instance owned. */
+typedef struct _TBT_U4_CARRY_KID {
+    BOOLEAN Used;
+    ULONG HostLane0;        /* its host port's lane 0 adapter */
+    ULONG ParentLane0;
+    ULONG Vendor;
+    ULONG Device;
+    ULONG Uuid[2];
+    ULONG Hd;
+    ULONG Hu;
+} TBT_U4_CARRY_KID;
+
 typedef struct _TBT_U4_CARRY {
     BOOLEAN Valid;
     BOOLEAN Forwarded;      /* TbtU4GetCarry: handed on unchanged, the start
@@ -517,6 +684,7 @@ typedef struct _TBT_U4_CARRY {
     ULONG HostVendor;
     ULONG HostDevice;
     TBT_U4_CARRY_PORT Port[TBT_U4_MAX_PORTS];
+    TBT_U4_CARRY_KID Kid[TBT_U4_MAX_KIDS];
 } TBT_U4_CARRY, *PTBT_U4_CARRY;
 
 /* ---------------------------------------------------------------------- */
@@ -610,7 +778,111 @@ typedef struct _TBT_U4_COUNTERS {
     ULONG RecoverRebuilt;   /* tunnels drained, then rebuilt after the commit */
     ULONG RecoverDeparted;  /* tunnels whose router left: host side drained */
     ULONG RecoverHeld;      /* tunnels HELD for anything short of the rules */
+    /* Record 34 Part 3 */
+    ULONG KidConnects;      /* kids entered CONNECTING */
+    ULONG KidsUp;           /* chained PCIe tunnels built */
+    ULONG KidsAdopted;      /* preserved chains adopted (section 6.9) */
+    ULONG KidsTornDown;     /* kid teardowns and ejects */
+    ULONG KidsDropped;      /* kids dropped with their parent (section 6.8) */
+    ULONG KidsLost;         /* a kid's PCIe tunnel lost */
+    ULONG KidsFull;         /* a chained router with no kid slot free */
+    /* Record 22 section 6.2 (task 45.20). */
+    ULONG Gen4Links;        /* Gen 4 links used as bonded, either form */
+    ULONG Gen4Asym;         /* of them asymmetric, used as found */
+    ULONG Gen4Unusable;     /* Gen 4 readings that left a port FAILED */
+    ULONG SeqEnabled;       /* Sequence bit capability read back enabled */
+    ULONG SeqRefused;       /* Set refused, the capability read back disabled */
+    ULONG SeqUnknown;       /* Set or read-back failed: capability state unknown */
+    ULONG EeSet;            /* Extended Encapsulation set on a v2-v2 PCIe tunnel */
+    ULONG EeCleared;        /* and cleared at a teardown */
+    ULONG ElrCleared;       /* a predecessor's Enable Gen 4 Link Recovery cleared */
+    ULONG LinkRecoveries;   /* LINK_RECOVERY notifications, each a port check */
+    ULONG CvFound;          /* preserved routers found with CV set, not reconfigured */
+    /* Record 22 section 6.2.3 item 4 (task 45.56). */
+    ULONG ElrEnabled;       /* Enable Gen 4 Link Recovery set on both ends */
+    ULONG ElrRefused;       /* a set refused or failed */
+    ULONG ElrOwnCleared;    /* this driver's set cleared on an end */
+    ULONG ElrClearFailed;   /* a clear of it that failed */
+    ULONG ElrChecks;        /* recovery checks made */
+    ULONG ElrKept;          /* of them, every tunnel read whole and kept */
+    ULONG ElrPcieLost;      /* a PCIe tunnel lost to a recovery check */
+    ULONG ElrUsb3Lost;      /* a USB3 tunnel torn down by one */
+    ULONG ElrUsb3Down;      /* a USB3 link not operational 2 s on, kept */
+    ULONG ElrUnread;        /* a check given up, its registers unread for 2 s */
 } TBT_U4_COUNTERS;
+
+/*
+ * Record 35 (task 45.59): an inter-domain link's peer, one record per host
+ * port (one service per NHI at a time, section 13), and what the driver
+ * gives the service. RingsUp sets up and enables ring `ring` both ways
+ * (record 35 section 5.3), E2E as `e2e` says; TBT_OK or the service does
+ * not start. Link(up) once both paths are built; Link(down) before they
+ * are torn down, after which the driver accepts no send and drains its
+ * transmit ring (at most 500 ms, section 5.1). RingsDown after the
+ * entries are invalid: the rings disabled (`lost`: the host interface
+ * lost, nothing to disable). All on the connection-manager thread, from
+ * TbtU4Poll, TbtU4RingWake, TbtU4Suspend, TbtU4Stop or TbtU4Contain; none
+ * may call back into this file.
+ */
+#define TBT_U4_XD_QUEUE             8UL     /* inter-domain packets held for the thread */
+#define TBT_U4_XD_RING              1UL     /* the service's ring (record 35 section 4.3) */
+#define TBT_U4_XD_CREDITS           14UL    /* without baMaxHI ([linux] TB_DMA_CREDITS) */
+#define TBT_U4_XD_PRIORITY          4UL     /* Guide Table 6-1 */
+
+typedef struct _TBT_U4_NET {
+    PVOID Context;
+    LONG (*RingsUp)(PVOID context, ULONG port, ULONG ring, BOOLEAN e2e);
+    VOID (*RingsDown)(PVOID context, ULONG port, BOOLEAN lost);
+    VOID (*Link)(PVOID context, ULONG port, BOOLEAN up, const UCHAR *peerMac6);
+} TBT_U4_NET;
+
+struct _TBT_U4CM;
+typedef struct _TBT_U4_XD {
+    BOOLEAN Used;
+    BOOLEAN PidSet;         /* PORT_CS_19 Inter-Domain owned (written or tried) */
+    BOOLEAN PidOk;          /* and its write answered: set */
+    BOOLEAN Lane1Owed;      /* lane 1 to disable once the peer is known */
+    BOOLEAN RingsUp;
+    BOOLEAN LinkUp;
+    BOOLEAN TxWritten;      /* the transmit entry owned (host interface, Ring) */
+    BOOLEAN RxWritten;      /* the receive entry owned (lane 0, RxHop) */
+    BOOLEAN LinkBad;        /* lane 1 not verified off on a link left single:
+                               no service until a re-plug (record 22 6.5 step 6) */
+    struct _TBT_U4CM *Cm;
+    ULONG Port;             /* 1-based */
+    ULONG Gen;              /* the port's connection generation it began in */
+    ULONG Hi;               /* the host interface adapter */
+    ULONG Ring;
+    ULONG TxHop;
+    ULONG RxHop;
+    TBT_XDP_PEER Peer;
+} TBT_U4_XD, *PTBT_U4_XD;
+
+/* A service's two path entries from the start of their teardown until each
+ * is proven invalid: where they are and where they send, so an entry is
+ * invalidated only while it still reads as this service's (record 35
+ * section 3.9). Kept across the containment, which allows no access. */
+/* An early UUID Request's answer not yet sent (tbtU4XdEarlyUuid): held
+ * while the port's lane 0 is Locked, then retried at each take until
+ * sent, at most TBT_XDP_RESENDS failed sends, whether or not a record has
+ * started on the port since (that request never reaches its engine). */
+typedef struct _TBT_U4_XD_EARLY {
+    BOOLEAN Owed;
+    BOOLEAN NextConn;   /* taken still Locked or behind an unplug: for the next connection */
+    ULONG Sn;
+    ULONG Type;
+    ULONG Tries;
+    ULONG Gen;          /* the port's Generation when it was taken */
+} TBT_U4_XD_EARLY, *PTBT_U4_XD_EARLY;
+
+typedef struct _TBT_U4_XD_OWED {
+    BOOLEAN Tx;             /* the host interface adapter's entry at Ring */
+    BOOLEAN Rx;             /* lane 0's entry at RxHop */
+    ULONG Hi;
+    ULONG Ring;
+    ULONG TxHop;            /* the transmit entry sends to lane 0 at TxHop */
+    ULONG RxHop;            /* the receive entry sends to Hi at Ring */
+} TBT_U4_XD_OWED;
 
 /* The start stages (section 3.5's two inert forms). */
 #define TBT_U4_STAGE_NONE           0UL
@@ -639,14 +911,39 @@ typedef struct _TBT_U4CM {
     TBT_U4_ROUTER HostRouter;
     ULONG PortCount;
     TBT_U4_PORT Ports[TBT_U4_MAX_PORTS];
+    /* Record 22 section 10.5 (task 45.35), per port (index port - 1):
+     * TBT_U4_ISO_WORD of the generation whose PCIe path step 1 read back
+     * closed, else 0. Set before the statement upcall; written 0 before
+     * anything that can enable a PCIe path or reinitialize the core. Kept
+     * apart from Ports, which the snapshots and the resume copy whole.
+     * Read by another thread (TbtU4PortIsolated), one aligned word. */
+    volatile ULONG IsoWord[TBT_U4_MAX_PORTS];
     TBT_U4_PORT ResumeSaved[TBT_U4_MAX_PORTS];  /* TbtU4Resume's copy: kept
                                                  * off the kernel stack */
     TBT_U4_LINK Links[TBT_U4_MAX_LINKS];
+    /* Record 34 Part 3: the chained routers at depth 2; the generation
+     * counter they draw from; the kid whose work is running (its
+     * quarantine records are keyed by it, 0 for none); per host port
+     * (index port - 1), the connection generation whose parent's
+     * downstream Disable Hot Plug was cleared (KidDhpValid bit port - 1). */
+    TBT_U4_KID Kids[TBT_U4_MAX_KIDS];
+    ULONG KidGeneration;
+    ULONG KidCtx;
+    BOOLEAN ForeignNotify;  /* the last request ended by a kid's ERR_CONN or
+                               ERR_LOCK, the request outside that kid */
+    ULONG KidDhpGen[TBT_U4_MAX_PORTS];
+    ULONG KidDhpValid;
     TBT_U4_QENTRY Quarantine[TBT_U4_QUARANTINE];
 
     /* Section 7.4: the port whose sequence is running, and the nested
      * teardown in progress. */
     ULONG ActivePort;       /* 0 for none */
+    /* Record 22 section 6.2.2 item 3: a Set Capabilities owed by a
+     * recovery and made by TbtU4Poll as port SeqGuardPort's own sequence of
+     * generation SeqGuardGen (0: none); the Set is not sent once that port
+     * is no longer live. */
+    ULONG SeqGuardPort;
+    ULONG SeqGuardGen;
     BOOLEAN InTeardown;
     ULONG DeferredTail[TBT_U4_MAX_PORTS];   /* steps 4 to 6 owed, by port */
 
@@ -682,7 +979,7 @@ typedef struct _TBT_U4CM {
     TBT_U4_PORT SnapPorts[TBT_U4_MAX_PORTS];
     TBT_U4_ROUTER SnapHost;
     TBT_U4_LINK SnapLinks[TBT_U4_MAX_LINKS];
-    BOOLEAN Recovering;     /* TbtU4Recover's work: the core's gate open
+    BOOLEAN Recovering;    /* TbtU4Recover's work: the core's gate open
                                for it alone (decision U26) */
     BOOLEAN RecoverRings;   /* this attempt restarted the rings */
     ULONG SnapDeferred[TBT_U4_MAX_PORTS];   /* tails abandoned at containment */
@@ -710,6 +1007,34 @@ typedef struct _TBT_U4CM {
                                discovers the port again                     */
 
     TBT_U4_COUNTERS Counters;
+
+    /* Record 35 (task 45.59): the inter-domain links. Kept apart from
+     * Ports, which the snapshots and the resume copy whole. */
+    TBT_U4_NET Net;
+    BOOLEAN NetWanted;      /* the network driver holds the service open */
+    ULONG NetPrtcstns;
+    BOOLEAN XdLocalValid;
+    TBT_UUID XdLocal;       /* this domain's UUID (record 35 section 3.1) */
+    UCHAR XdMac[6];         /* the adapter's MAC (section 4.4) */
+    BOOLEAN XdClockValid;
+    BOOLEAN XdTaking;
+    ULONG XdIn;             /* the port whose engine is running, 0 for none */
+    ULONG XdLastUs;
+    ULONG XdRemUs;
+    ULONG XdMs;
+    ULONG XdHead;
+    ULONG XdCount;
+    ULONG XdQueued;
+    ULONG XdOverflow;       /* the queue full: a packet dropped (the peer resends) */
+    ULONG XdIgnored;        /* XhciCmNet 0: dropped unanswered (cm.xdp.ignored) */
+    ULONG XdNoPeer;         /* no port of this domain's for its route */
+    ULONG XdLoops;
+    ULONG XdPidOwed;        /* bit port - 1: PORT_CS_19 Inter-Domain set by this
+                               driver, its clear not yet read back */
+    TBT_FRAME XdQ[TBT_U4_XD_QUEUE];
+    TBT_U4_XD Xd[TBT_U4_MAX_PORTS];
+    TBT_U4_XD_OWED XdOwed[TBT_U4_MAX_PORTS];
+    TBT_U4_XD_EARLY XdEarly[TBT_U4_MAX_PORTS];
 } TBT_U4CM, *PTBT_U4CM;
 
 /* Bind `cm` to its ring, the accessor and the configuration. */
@@ -735,6 +1060,11 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes);
  * queue. Bounded; what is left waits for the next call. */
 VOID TbtU4Poll(PTBT_U4CM cm);
 
+/* The ring interrupt's wake (record 22 section 5.4): the drain and the
+ * queues the tick takes, then only the port checks this drain's events
+ * asked for; never the port scan. */
+VOID TbtU4RingWake(PTBT_U4CM cm);
+
 /* The next queued tunnel change, oldest first. */
 BOOLEAN TbtU4NextAction(PTBT_U4CM cm, PTBT_U4_ACTION out);
 
@@ -752,6 +1082,14 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port);
  * its devices being the host xHCI's, which the PCI-side eject never asked
  * to stop (task 40-A.9's entry point). */
 LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port);
+/* Record 34 section 6.7: the same for kid `kid` (its Index) of host port
+ * `port`, the chained tunnel alone, both ends; the kid stays down until
+ * the child is unplugged and plugged again. TBT_E_PARAM for no such kid
+ * with its router present. */
+LONG TbtU4EjectKid(PTBT_U4CM cm, ULONG port, ULONG kid);
+/* A kid by its 1-based Index, NULL past the table; for the driver's
+ * action liveness and the log. */
+const TBT_U4_KID *TbtU4Kid(const TBT_U4CM *cm, ULONG kid);
 
 /* Section 7.6 and 11: record every tunnel up as an obligation, then stop
  * the rings. */
@@ -773,6 +1111,14 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs);
 /* Stop (section 11): rings stopped, nothing on the fabric changed.
  * Idempotent. */
 VOID TbtU4Stop(PTBT_U4CM cm);
+/* Record 22 section 10.5: TRUE while port `port`'s (1-based) PCIe path of
+ * connection generation `gen` stands read back closed. One read of the
+ * port's IsoWord; any thread, any IRQL. */
+BOOLEAN TbtU4PortIsolated(const TBT_U4CM *cm, ULONG port, ULONG gen);
+/* The generation of port `port`'s PCIe tunnel when one is up, through
+ * *gen: TRUE when it is. Read from another thread at a controller's start
+ * (the binding of record 22 section 10.5). */
+BOOLEAN TbtU4PortPcieGen(const TBT_U4CM *cm, ULONG port, PULONG gen);
 
 /*
  * Section 9.4. TbtU4SetCarry, after TbtU4Init and before TbtU4Start: the
@@ -875,12 +1221,31 @@ BOOLEAN TbtU4AllPortsDisconnected(PTBT_U4CM cm);
 /* A port by its 1-based index, for the log and the snapshot. */
 const TBT_U4_PORT *TbtU4Port(const TBT_U4CM *cm, ULONG port);
 
+/*
+ * Record 35 (task 45.59). TbtU4SetNet: the service's operations (NULL:
+ * none), before TbtU4Start. TbtU4NetWanted: the network driver opened
+ * (TRUE, with the prtcstns it offers) or closed the service; every peer's
+ * block rebuilt and the peer told, a Login started or a Logout sent.
+ * TbtU4NetIdentity: this domain's MAC (section 4.4), read once from the
+ * host router's UUID; FALSE with XhciCmNet 0, before the running stage or
+ * when the read fails. TbtU4Peer: port `port`'s peer, NULL for none, for
+ * the log and the query device. All on the connection-manager thread but
+ * TbtU4Peer (no access).
+ */
+VOID TbtU4SetNet(PTBT_U4CM cm, const TBT_U4_NET *net);
+VOID TbtU4NetWanted(PTBT_U4CM cm, BOOLEAN wanted, ULONG prtcstns);
+BOOLEAN TbtU4NetIdentity(PTBT_U4CM cm, PUCHAR mac6);
+const TBT_XDP_PEER *TbtU4Peer(const TBT_U4CM *cm, ULONG port);
+
 #ifdef XHCI_HOST_TEST
 /* The USB3 bandwidth conversions, for the host suite's exhaustive vectors
  * (task 44.38): Mb/s to units of 512 << scale bytes per 1 ms frame,
  * rounded up, and units back to Mb/s, rounded to nearest. */
 ULONG TbtU4TestBwUnits(ULONG mbps, ULONG scale);
 ULONG TbtU4TestBwMbps(ULONG units, ULONG scale);
+/* The USB3 allocation's link bound in Mb/s from a host lane 0
+ * LANE_ADP_CS_1 reading (record 22 section 6.2.3 item 5, task 45.20). */
+ULONG TbtU4TestLinkBound(ULONG lane);
 #endif
 
 #endif /* TBT_U4CM_H */

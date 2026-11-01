@@ -102,10 +102,6 @@ BEGIN
     LTEXT           "", IDC_C_STOR_T, 20, 55, 272, 31, SS_NOPREFIX
     AUTOCHECKBOX    "", IDC_C_TB, 8, 65, 284, 10, WS_TABSTOP
     LTEXT           "", IDC_C_TB_T, 20, 76, 272, 24
-    AUTOCHECKBOX    "", IDC_C_PFW, 20, 102, 272, 10, WS_TABSTOP
-    AUTOCHECKBOX    "", IDC_C_S98, 20, 114, 272, 10, WS_TABSTOP
-    LTEXT           "", IDC_C_S98_T, 32, 125, 260, 16
-    AUTOCHECKBOX    "", IDC_C_VSD, 32, 142, 260, 10, WS_TABSTOP
     AUTOCHECKBOX    "", IDC_C_TRAY, 8, 154, 284, 10, WS_TABSTOP
     AUTOCHECKBOX    "", IDC_C_FAST, 20, 165, 272, 10, WS_TABSTOP
     AUTOCHECKBOX    "Replace the stored build of this package's drivers",
@@ -114,6 +110,49 @@ BEGIN
     PUSHBUTTON      "&Change folder...", IDC_C_FOLDER, 84, 189, 70, 14
     LTEXT           "", IDC_C_DIRLINE, 160, 191, 132, 10,
                     SS_NOPREFIX | SS_PATHELLIPSIS
+END
+
+/* Record 26 section 5.3.5 (task 45.60): what is Thunderbolt's alone,
+ * shown only while the Thunderbolt 3 / USB4 box is ticked. The rows are
+ * stacked by the Components page's routine; the networking box and its
+ * sentence are shown while INST_TBNET_WIRED is 1 (task 45.59). */
+IDD_TBT DIALOG 0, 0, 300, 210
+STYLE DS_SETFONT | WS_CHILD | WS_DISABLED | WS_CAPTION
+CAPTION "Thunderbolt and USB4"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_T_HEAD, 8, 2, 284, 18
+    AUTOCHECKBOX    "", IDC_C_PFW, 8, 24, 284, 10, WS_TABSTOP
+    AUTOCHECKBOX    "", IDC_C_S98, 8, 38, 284, 10, WS_TABSTOP
+    LTEXT           "", IDC_C_S98_T, 20, 49, 272, 16
+    AUTOCHECKBOX    "", IDC_C_VSD, 20, 67, 272, 10, WS_TABSTOP
+    LTEXT           "", IDC_T_APPR_H, 8, 82, 284, 10
+    /* The two buttons next to each other: an LTEXT starts a group of its
+     * own, so a sentence between them would end the buttons' group and
+     * leave the second out of reach of the arrow keys. */
+    AUTORADIOBUTTON "", IDC_T_APPR1, 8, 94, 284, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "", IDC_T_APPR0, 8, 131, 284, 10
+    LTEXT           "", IDC_T_APPR1_T, 20, 105, 272, 24
+    LTEXT           "", IDC_T_APPR0_T, 20, 142, 272, 24
+    LTEXT           "", IDC_T_APPR_NOTE, 8, 168, 284, 34
+    AUTOCHECKBOX    "", IDC_T_NET, 8, 180, 284, 10, WS_GROUP | WS_TABSTOP |
+                    NOT WS_VISIBLE
+    LTEXT           "", IDC_T_NET_T, 20, 191, 272, 16, NOT WS_VISIBLE
+END
+
+/* Record 26 section 5.10 (task 45.66): Help on every page, a modal
+ * window owned by the window Help was pressed in. */
+IDD_HELP DIALOG 0, 0, 300, 200
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION |
+      WS_SYSMENU
+CAPTION "Help"
+FONT 8, "MS Sans Serif"
+BEGIN
+    EDITTEXT        IDC_H_TEXT, 8, 6, 284, 166, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Open the &readme", IDC_H_README, 8, 180, 90, 14,
+                    WS_TABSTOP
+    DEFPUSHBUTTON   "Close", IDCANCEL, 242, 180, 50, 14, WS_TABSTOP
 END
 
 IDD_FOLDER DIALOG 0, 0, 300, 92
@@ -234,6 +273,7 @@ BEGIN
                     WS_VSCROLL | WS_TABSTOP
     EDITTEXT        IDC_A_EDIT, 50, 202, 80, 13, ES_AUTOHSCROLL | ES_NUMBER |
                     WS_TABSTOP
+    PUSHBUTTON      "&Help", IDHELP, 8, 228, 50, 14
     DEFPUSHBUTTON   "OK", IDOK, 206, 228, 50, 14
     PUSHBUTTON      "Cancel", IDCANCEL, 262, 228, 50, 14
 END

@@ -111,6 +111,12 @@ static VOID hcdLogTolLocked(PXHCI_EXTENSION ext, PXHCI_LOG log)
     XhciLogAppend(log, "tol.window.count", ext->Tol.Window.Count, 1);
     XhciLogAppend(log, "tol.dead.episodes", s->DeadEpisodes, 1);
     XhciLogAppend(log, "tol.contained", s->Contained, 1);
+    /* Record 17 section 4.13.6: the USB4 tunnel's isolation statement. */
+    XhciLogAppend(log, "tol.iso.held",
+                  HcdControllerFromExt(ext)->IsoHeldStarts, 1);
+    XhciLogAppend(log, "tol.iso.asked", HcdControllerFromExt(ext)->IsoAsks, 1);
+    XhciLogAppend(log, "tol.iso.proofs",
+                  HcdControllerFromExt(ext)->IsoProofs, 1);
     XhciLogAppend(log, "tol.clock", ext->Tol.Clock, 1);
     for (i = 0; i < 256; i++) {
         if (s->Codes[i] != 0) {
@@ -153,6 +159,7 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
 {
     PXHCI_EXTENSION ext;
     PXHCI_LOG log;
+    ULONG i;
 
     ext = &hc->Hc;
     log = &ext->Log;
@@ -199,6 +206,28 @@ static VOID hcdLogCountersLocked(PHCD_CONTROLLER hc)
     XhciLogAppend(log, "serial.refused", hc->SerialIdsRefused, 1);
     XhciLogAppend(log, "serial.readfailed", hc->SerialReadsFailed, 1);
     XhciLogAppend(log, "serial.duplicate", hc->SerialIdsDuplicate, 1);
+    XhciLogAppend(log, "serial.deferred", hc->SerialDeferrals, 1);
+    XhciLogAppend(log, "serial.defer.ok", hc->SerialDeferOk, 1);
+    XhciLogAppend(log, "serial.defer.fail", hc->SerialDeferFailed, 1);
+    /* Task 45.40: each root port's identity memory and deferral latch, from
+     * the port's own state, which a log note can be overwritten before. */
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (hc->Ports[i].Id.VidPid != 0 || hc->Ports[i].Id.Latch != 0) {
+            XhciLogAppend(log, "id.port", i + 1, 1);
+            XhciLogAppend(log, "id.mem.vidpid", hc->Ports[i].Id.VidPid, 1);
+            XhciLogAppend(log, "id.mem.serial", hc->Ports[i].Id.Serial, 1);
+            XhciLogAppend(log, "id.defer.latch", hc->Ports[i].Id.Latch, 1);
+        }
+    }
+    /* And each place behind a hub that has a record. */
+    for (i = 0; i < HCD_ID_PLACES; i++) {
+        if (hc->IdPlaces[i].Key != 0) {
+            XhciLogAppend(log, "id.place", hc->IdPlaces[i].Key, 1);
+            XhciLogAppend(log, "id.mem.vidpid", hc->IdPlaces[i].VidPid, 1);
+            XhciLogAppend(log, "id.mem.serial", hc->IdPlaces[i].Serial, 1);
+            XhciLogAppend(log, "id.defer.latch", hc->IdPlaces[i].Latch, 1);
+        }
+    }
     XhciLogAppend(log, "fastpoll.mode", hc->FastPollMode, 1);
     XhciLogAppend(log, "fastpoll.opened", hc->FastPollOpened, 1);
     XhciLogAppend(log, "fastpoll.fallbacks", hc->FastPollFallbacks, 1);

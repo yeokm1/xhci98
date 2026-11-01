@@ -294,6 +294,104 @@ ULONG XhciEnumSettleReached(ULONG done, ULONG target);
  * device comes back as a new PDO at the same instance id. */
 ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived);
 
+/*
+ * Task 45.23 (design record 20 sections 4.3.1 to 4.3.3): whether a device
+ * is kept across a resume's re-initialization (K1 to K9 as built, and a
+ * UAS drive only on its driver's quiet declaration), from
+ * what the caller read of it, as XHCI_RKEEP_F_* flags; `on` is the switch
+ * (XhciResumeKeep). Returns XHCI_RKEEP_KEEP, or the first reason it is
+ * not kept, XHCI_RKEEP_WHY_*. Pure; any IRQL.
+ */
+#define XHCI_RKEEP_F_ROOT        0x0001UL /* on a root port                  */
+#define XHCI_RKEEP_F_HUB         0x0002UL /* the device is a hub              */
+#define XHCI_RKEEP_F_STARTED     0x0004UL /* every PDO of it listed, reported
+                                           * and started, none removed,
+                                           * surprised, closing or let go    */
+#define XHCI_RKEEP_F_SUSPENDED   0x0008UL /* selective suspend not running,
+                                           * or a wake armed or pending       */
+#define XHCI_RKEEP_F_ISOCH       0x0010UL /* an isochronous pipe open         */
+#define XHCI_RKEEP_F_STORAGE     0x0020UL /* an interface of class 08         */
+#define XHCI_RKEEP_F_UAS         0x0040UL /* every storage interface runs UAS */
+#define XHCI_RKEEP_F_SERIAL      0x0080UL /* a serial number taken as its id  */
+#define XHCI_RKEEP_F_BUSY        0x0100UL /* a URB outstanding on its PDOs    */
+#define XHCI_RKEEP_F_FAULTED     0x0200UL /* gone, EP0 stuck, a cycle, a
+                                           * send-back or a slot fault owed,
+                                           * or a pipe left paused by a
+                                           * failure                         */
+#define XHCI_RKEEP_F_QUIET       0x0400UL /* its function declared itself
+                                           * quiet for this sleep and has
+                                           * sent nothing since (4.3.3)      */
+#define XHCI_RKEEP_F_OTHER_CFG   0x0800UL /* configured with another
+                                           * configuration than index 0,
+                                           * the one the record holds and
+                                           * the restore compares            */
+#define XHCI_RKEEP_F_ONE_IFACE   0x1000UL /* one interface in its
+                                           * configuration (task 45.41; the
+                                           * resume's keep ignores it)       */
+
+#define XHCI_RKEEP_KEEP              0UL
+#define XHCI_RKEEP_WHY_OFF           1UL
+#define XHCI_RKEEP_WHY_FAULTED       2UL
+#define XHCI_RKEEP_WHY_NOT_ROOT      3UL
+#define XHCI_RKEEP_WHY_HUB           4UL
+#define XHCI_RKEEP_WHY_NOT_STARTED   5UL
+#define XHCI_RKEEP_WHY_SUSPENDED     6UL
+#define XHCI_RKEEP_WHY_ISOCH         7UL
+#define XHCI_RKEEP_WHY_BULK_ONLY     8UL  /* storage not on UAS: the Bulk-Only
+                                           * stacks' drain is unread          */
+#define XHCI_RKEEP_WHY_NO_SERIAL     9UL
+#define XHCI_RKEEP_WHY_BUSY         10UL
+#define XHCI_RKEEP_WHY_NOT_QUIET    11UL  /* UAS storage with no quiet
+                                           * declaration (4.3.3)              */
+#define XHCI_RKEEP_WHY_OTHER_CFG    12UL  /* XHCI_RKEEP_F_OTHER_CFG          */
+
+ULONG XhciEnumResumeKeep(ULONG on, ULONG flags);
+
+/*
+ * Task 45.41 (design record 13 section 15, L2): whether a device whose
+ * SuperSpeed link fell to SS.Inactive or Compliance Mode is restored in
+ * place instead of dropped, from the XHCI_RKEEP_F_* flags hcdRkeepFlags
+ * reads, `on` the switch (XhciLinkKeep) and `recent` how many times it was
+ * kept so inside the window (XhciEnumLinkKeepRecent). Only a device of
+ * one interface, storage on UAS, with a serial number is kept: every other
+ * device's recovery contract is unread. Returns XHCI_LKEEP_KEEP or the first refusal, XHCI_LKEEP_WHY_*.
+ * Pure; any IRQL.
+ */
+#define XHCI_LINK_KEEP_MAX       3UL    /* keeps a device may take ...     */
+#define XHCI_LINK_KEEP_WINDOW    600UL  /* ... inside this many tolerance-
+                                         * clock ticks (nominally 60 s)    */
+
+#define XHCI_LKEEP_KEEP              0UL
+#define XHCI_LKEEP_WHY_OFF           1UL
+#define XHCI_LKEEP_WHY_FAULTED       2UL
+#define XHCI_LKEEP_WHY_HUB           3UL
+#define XHCI_LKEEP_WHY_NOT_STARTED   4UL
+#define XHCI_LKEEP_WHY_SUSPENDED     5UL
+#define XHCI_LKEEP_WHY_ISOCH         6UL
+#define XHCI_LKEEP_WHY_NOT_UAS       7UL  /* not a one-interface UAS
+                                           * storage device                */
+#define XHCI_LKEEP_WHY_NO_SERIAL     8UL
+#define XHCI_LKEEP_WHY_BUDGET        9UL
+#define XHCI_LKEEP_WHY_OTHER_CFG    10UL  /* another configuration than
+                                           * index 0, as the resume's keep */
+
+ULONG XhciEnumLinkKeep(ULONG on, ULONG flags, ULONG recent);
+
+/* The keeps in the current window, a fixed one: `count` kept since the
+ * window opened at tick `first`, read at tick `now` (unsigned arithmetic:
+ * the clock may wrap). 0 from the window's XHCI_LINK_KEEP_WINDOW-th tick
+ * on, when the next keep opens a new window. Pure; any IRQL. */
+ULONG XhciEnumLinkKeepRecent(ULONG count, ULONG first, ULONG now);
+
+/* Task 45.23 (design record 20 section 4.3.3): a function's quiet
+ * declaration, made while the controller's mark generation is `markGen`
+ * (one more at every resume's end): XhciEnumQuietMark is the device
+ * record's mark for it, and XhciEnumQuietValid 1 while `mark` still
+ * counts, so a declaration lasts to the end of the resume that follows it
+ * and no further. 0 is no mark (a withdrawal, a transfer since). Pure. */
+ULONG XhciEnumQuietMark(ULONG markGen);
+ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen);
+
 /* 1 when a relations answer for the parent `answering` (0 the root hub,
  * else the hub PDO's serial) carries a listed PDO presented under
  * `parentSerial`: its own children, never one PnP let go of. */

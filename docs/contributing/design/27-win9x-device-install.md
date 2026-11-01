@@ -1,6 +1,12 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 15, 2026-10-24 (the owner's decision of that day,
+Status: draft 17, 2026-10-30 (task 45.38: a second controller of the
+same INF asked for "xhci98 xHCI Host Controller Disk" at the Windows
+source: a later controller's job passes `nocopy`, `DI_NOFILECOPY`,
+sections 4.1 and 6); draft 16, 2026-10-29 (task 45.32, the owner's
+decision of that day: on a system read as English the first gate looks for a wizard too
+and asks only when it finds one or cannot look, section 6 and H6);
+draft 15, 2026-10-24 (the owner's decision of that day,
 W9XGATE.1: the gate of section 6 asks once in a run, and before a later
 pass only when it finds a hardware wizard's window open or cannot look,
 section 6 and H6); draft 14, 2026-10-24 (the owner's decision of that day, record
@@ -348,7 +354,7 @@ HWND <hwnd>
 DEVICE <device id>          install and remove only
 INF <inf path>              install only
 SECTION <install section>   install only, and optional (draft 13)
-FLAGS <flag> [<flag>]       install only, and optional
+FLAGS <flag> [<flag> [<flag>]]  install only, and optional
 END
 ```
 
@@ -437,10 +443,14 @@ The operands:
   keeps a file already there); the root hub, the hubs, the composite
   parents and every other INF's devices get no `SECTION` line. Section
   5.2 says what the helper does with it.
-- `FLAGS`: one or both of `force` (reinstall a current driver: record
-  23's `/force` and the Have Disk cases of its section 6.4) and `quiet`
-  (section 5.2), lower case, each at most once; the line is left out for
-  neither.
+- `FLAGS`: one or more of `force` (reinstall a current driver: record
+  23's `/force` and the Have Disk cases of its section 6.4), `quiet`
+  (section 5.2) and `nocopy` (draft 17: the helper sets `DI_NOFILECOPY`,
+  "Set if DiInstallDevice should skip file copying", for a later
+  controller of an INF whose files a controller's job of the same run
+  copied, section 6), lower case, each at most once (the installer
+  writes them in that order; the helper takes any order); the line is
+  left out for none.
 
 The installer waits in one loop: `MsgWaitForMultipleObjects` on the
 process handle with a one-second timeout in the window
@@ -734,8 +744,9 @@ record 23 section 6.4's steps.
   device through the configuration manager, unless `DI_DONOTCALLCONFIGMG`
   is set, which the helper never sets (the network sample sets it because
   its devices are not present yet; ours are, and the restart is what
-  makes the driver start without a reboot). `DI_NOFILECOPY` and
-  `DI_FORCECOPY` are not set: the engine's version conflict rules decide
+  makes the driver start without a reboot). `DI_FORCECOPY` is not set,
+  and `DI_NOFILECOPY` only for a job with `nocopy` (draft 17, section
+  6): the engine's version conflict rules decide
   (`suVerConflict` is its own), and a `force` install goes through the
   copy engine as the wizard's Have Disk does.
 - After the call: `Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)` ("flags
@@ -780,18 +791,54 @@ its three calls missing, the enumeration failed) asks, as before
 (`inst_gate_ask`). `/yes` asks nothing, as before. The titles are the
 English systems'; on another language's the look finds nothing, and the
 first gate's page and the settle are what stand.
+
+Since draft 16 (task 45.32, the owner's decision of 2026-10-29) the first
+gate looks too on a system read as English, and shows the page only when
+the look finds a wizard open (its title said) or cannot be made; none
+found goes on without it, as at a later gate. A system is read as English
+(`inst_gate_english`) when two languages read through `KERNEL32` alone
+both have the primary language `LANG_ENGLISH`: the system's default
+language (`GetSystemDefaultLangID`) and the language of `KERNEL32.DLL`'s
+own version resource (`EnumResourceLanguagesA` on its `RT_VERSION`
+entry). The resource's language is the one the system's files were built
+in, which is what the wizards' titles are in, and Regional Settings do not
+change it; the default language alone could read English on a localised
+system whose user chose English settings, or the reverse, so both are
+asked and either one in another language keeps the first gate's page. A
+language that cannot be read (a default language of 0, no version
+resource, or one in two primary languages) counts as not English. On any
+system not read as English the first gate asks as before. The run's log
+names both languages and the reading. `GetUserDefaultLangID` is not used:
+on 98 SE and ME it follows the user's Regional Settings, which say nothing
+about the language of the system's windows.
 The page says not to cancel a wizard, because a cancelled one removes its
 device until the next start (section 5.1); a device the helper then
 answers `not-present` for is a step of the finish page (restart, finish
 its wizard when it opens, run the installer again), and the rest of the
 plan goes on.
 
-1. **The controller** (`PCI\CC_0C0330` among its ids, `xhci98.inf`). Its
-   install starts `xhci98.sys`, which enumerates the root hub as a new
-   devnode. On a fresh install nothing of the package is below it yet; on
-   an update the root hub, hubs and composite entries keep their devnodes
-   (record 13 section 10.13.4: new ids from `2.4.0.0`, new devnodes from
-   `2.3.x`).
+1. **The controller** (`PCI\CC_0C0330` among its ids, `xhci98.inf`).
+   Its install starts `xhci98.sys`, which enumerates the root hub as a new
+   devnode. A second controller of the same INF in the run (two xHCI
+   controllers, or a dock's or a USB4 host's own one) is installed with
+   `nocopy` (draft 17): read on a 98 SE guest with two QEMU controllers on
+   2026-10-29, the second controller's job, with `LDID_SRCPATH` set to the
+   INF's directory exactly as for the first, brought "Insert Disk: Please
+   insert the disk labeled 'xhci98 xHCI Host Controller Disk'" and then
+   the copy box at `C:\WIN98` for `xhci98.sys`, the value the first job
+   restored `LDID_SRCPATH` to. Why setupx looks there is not read: it is
+   one instance for every process, so state from the first job's copy (a
+   source it resolved or cached before this job set `LDID_SRCPATH`, the
+   driver list being built first) can outlive the helper, which explains
+   how, not why. The first job's copy put the same files in place, or left
+   them for `WININIT` to replace at the restart its verdict already asks
+   for, so the second takes none. Only a controller's job that installed
+   (or installed with a restart) marks its INF so; the root hub's, the
+   hubs' and the composite entries' sections copy nothing, and Stor98's
+   devices are not controllers. On a fresh install nothing of the package
+   is below it yet; on an update the root hub, hubs and composite entries
+   keep their devnodes (record 13 section 10.13.4: new ids from `2.4.0.0`,
+   new devnodes from `2.3.x`).
 2. **The settle.** Windows' own hardware detection finds the new devnodes
    and opens its wizards for them, or installs them silently where the
    silent install is on. The installer waits as record 23 section 5.8
@@ -1072,8 +1119,9 @@ found through `DevicePath`.
   class installer, and where the dispatcher has no default
   (`ERR_DI_DO_DEFAULT` for `DIF_SELECTBESTCOMPATDRV`, read on 98 SE) the
   helper's own choice of the best-ranked node (owner, 2026-10-18); never
-  `DI_NOFILECOPY`, `DI_FORCECOPY` or `DI_DONOTCALLCONFIGMG` (sections 5.2,
-  5.3 and 9).
+  `DI_FORCECOPY` or `DI_DONOTCALLCONFIGMG`, and `DI_NOFILECOPY` only for a
+  later controller of an INF a controller's job of the run installed
+  (sections 5.2, 5.3, 6 and 9; draft 17).
 - **H5** `LDID_SRCPATH` set to the INF's directory for the install and
   restored after; the package's files came from that directory with no
   prompt on the 98 SE smoke run, and the Windows CD's prompt, which still
@@ -1083,7 +1131,8 @@ found through `DevicePath`.
   settle gates every pass, the user's Next the first, and a later pass
   the user's Next again only when a wizard's window is found open or the
   look cannot be made (section 6, draft 15; record 23 decision D13 on
-  these systems).
+  these systems); on a system read as English the first pass too (draft
+  16).
 - **H7** Removal through `DIF_REMOVE` with an explicit global
   `REMOVEDEVICE_PARAMS`, entries present or not, children first, the
   controller last; an entry left stops the uninstall's destructive steps;

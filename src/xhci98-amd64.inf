@@ -5,8 +5,8 @@
 ; two INFs were two files: a second binary from a second
 ; toolchain (WDK 7.1) in a second package, with no Windows 98 path - an
 ; undecorated section here is one a 32-bit engine falls back to (PATH-NO9X).
-; NT 5.2 takes [XhciModels.NTamd64], which fetches usbd.sys and usbui.dll
-; through LayoutFile; Vista and Windows 7 x64 take [XhciModels.NTamd64.6.0],
+; NT 5.2 takes [XhciModels.NTamd64], which fetches usbd.sys through
+; LayoutFile; Vista and Windows 7 x64 take [XhciModels.NTamd64.6.0],
 ; which copies the driver alone. Both models sections carry the controller
 ; and the root hub the controller creates, under the project-owned id
 ; (xhci98.inf has the long form), with the hubs and composite devices the
@@ -28,7 +28,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=10/28/2026,3.3.0.0
+DriverVer=11/01/2026,3.4.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhci98.cat
 
@@ -62,9 +62,15 @@ Xhci.CopyFiles=10,System32\Drivers
 Xhci.CopyOS=10,System32\Drivers
 Xhci.CopyUI=11
 
+; No usbui.dll here since 3.4.0.0 (design record 11, decision 13 revised
+; 2026-11-01; OS-UINT52): the driver store of Vista to 10 reads this
+; section as well, and Windows PE has no usbui.dll, so DISM refused the
+; package for a boot.wim. On a machine where nothing else placed it the
+; controller's Advanced tab and the root hub's Power tab are absent. The
+; right-click [DefaultInstall.NTamd64] still copies it.
 [Xhci.Dev.NTamd64]
 AddReg=Xhci.AddReg.NT
-CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI
+CopyFiles=Xhci.CopyFiles,Xhci.CopyOS
 
 [Xhci.Dev.NTamd64.Services]
 AddService=xhci98,0x00000002,Xhci.AddService
@@ -170,6 +176,15 @@ HKR,,XhciSelectiveSuspend,0x00010003,0
 HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
+HKR,,XhciCommandCheck,0x00010003,1
+; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
+; device kept across a resume's re-initialization (task 45.23) and across
+; its SuperSpeed link's recovery (task 45.41): on is each one's default
+; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since
+; task 45.50 so that every value is in the key, ready to change.
+HKR,,XhciUsb2Bos,0x00010003,1
+HKR,,XhciResumeKeep,0x00010003,1
+HKR,,XhciLinkKeep,0x00010003,1
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.

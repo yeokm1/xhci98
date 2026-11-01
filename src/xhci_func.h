@@ -67,9 +67,10 @@ typedef struct _XHCI_FUNC_SET {
 
 /*
  * The functions of a device with the 18-byte `device` descriptor and the
- * whole configuration `config` of `length` bytes. Split only as Microsoft's
- * composite parent is: bNumConfigurations 1, at least two interfaces, and
- * bDeviceClass 0 or class/subclass/protocol EF/02/01. Grouped by IAD; with
+ * whole configuration `config` of `length` bytes (configuration index 0).
+ * Split as Microsoft's composite parent is - at least two interfaces and
+ * bDeviceClass 0 or class/subclass/protocol EF/02/01 - and, since task
+ * 45.34, whatever bNumConfigurations above 0 the device has. Grouped by IAD; with
  * no IAD in the configuration at all, by the positional audio rule; else
  * one interface per function. XHCI_FUNC_OK with Count >= 1 when the bus
  * splits it, in the order of their first interfaces' descriptors;
@@ -126,6 +127,16 @@ ULONG XhciFuncOwnerOf(const ULONG *masks, ULONG count, ULONG iface);
  * the device's to answer. */
 ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
                            ULONG deviceMask);
+
+/*
+ * How many compatible ids a function or device with the class triple
+ * cls/sub/prot carries (design record 13 section 10.7.2): 2 - the
+ * &SubClass_ss&Prot_pp form and the &SubClass_ss form - for the audio
+ * class (01) with protocol 20h (USB Audio 2.0) or 30h (3.0), which the
+ * bare USB\Class_01 would hand to a USB Audio 1.0 driver; 3, the bare
+ * class id last, for every other triple.
+ */
+ULONG XhciFuncCompatCount(ULONG cls, ULONG sub, ULONG prot);
 
 #define XHCI_FUNC_ID_DEVICE     0UL
 #define XHCI_FUNC_ID_HARDWARE   1UL
@@ -211,6 +222,61 @@ ULONG XhciFuncReviveByPlace(const char *oldSerial, const char *oldRead,
                             ULONG oldUnread, const char *newRead,
                             ULONG newUnread, ULONG newLocation);
 ULONG XhciFuncReviveBySerial(const char *oldSerial, const char *newSerial);
+
+/*
+ * Identity across a re-enumeration (roadmap-usb4 task 45.40; design record
+ * 13 section 10.7): what a device whose serial read has just ended does at
+ * a root port that remembers the last group listed there. `covered`: a
+ * non-hub device attached directly to a root port, with an iSerialNumber.
+ * `readFailed`: its read ended FAILED or REFUSED (no usable serial).
+ * `vidPid`: its (idVendor << 16) | idProduct. `memVidPid`, `memSerial`:
+ * the port's memory, the last listed group's ids and whether it answered
+ * the serial form. `latch`: the port's XHCI_FUNC_LATCH_*. A usable read
+ * is never deferred; a bypass publishes; a failure latched for this
+ * connection fails at once; a remembered serial form of the same ids
+ * defers. XHCI_FUNC_DEFER_*.
+ */
+#define XHCI_FUNC_LATCH_NONE    0UL /* nothing latched                   */
+#define XHCI_FUNC_LATCH_FAILED  1UL /* a deferral failed, this connection */
+#define XHCI_FUNC_LATCH_BYPASS  2UL /* a new connection after the failure */
+
+#define XHCI_FUNC_DEFER_NO      0UL /* go on as read                     */
+#define XHCI_FUNC_DEFER_YES     1UL /* read again in place               */
+#define XHCI_FUNC_DEFER_FAIL    2UL /* fail the creation, no reads       */
+
+ULONG XhciFuncSerialDefer(ULONG covered, ULONG readFailed, ULONG vidPid,
+                          ULONG memVidPid, ULONG memSerial, ULONG latch);
+
+/*
+ * A place's identity record (task 45.40; design record 13 section 10.7):
+ * a root port's own, or an entry of the controller's table for a place
+ * behind a hub, named by its instance key (XhciHubInstanceKey, nonzero;
+ * 0 a free entry). VidPid and Serial: the last non-hub group listed there,
+ * (idVendor << 16) | idProduct and whether it answered the serial form;
+ * Latch: XHCI_FUNC_LATCH_*; the deferrals made and spent there; Stamp:
+ * the table's clock at the entry's last write.
+ */
+typedef struct _XHCI_ID_PLACE {
+    ULONG Key;
+    ULONG VidPid;
+    ULONG Serial;
+    ULONG Latch;
+    ULONG Deferrals;
+    ULONG Fails;
+    ULONG Stamp;
+} XHCI_ID_PLACE, *PXHCI_ID_PLACE;
+
+/* The entry of `key` in `table` (`count` entries), or NULL; key 0 finds
+ * nothing. */
+PXHCI_ID_PLACE XhciFuncIdPlaceFind(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key);
+
+/* The entry of `key`, its Stamp set from *clock, which moves on one: the
+ * one already there, else a free entry, else the one written least
+ * recently (by the clock's distance, so a wrap does not matter) - a new
+ * or reused entry zeroed and named `key`. NULL for key 0 or no table. */
+PXHCI_ID_PLACE XhciFuncIdPlaceTake(PXHCI_ID_PLACE table, ULONG count,
+                                   ULONG key, PULONG clock);
 
 /*
  * Whether a dormant group the device just listed did not revive is retired

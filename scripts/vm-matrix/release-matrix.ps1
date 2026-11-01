@@ -16,6 +16,10 @@ lists the Manual legs (a window leg with no WindowKeys is one) as owed,
 and a leg whose guest the configuration does not have as not configured
 (-Only naming such a leg is an error).
 
+When no leg is running and none fits the budget (other QEMUs on the host,
+or a leg larger than the budget), it says so once and waits at most
+-WaitMinutes (default 60), then stops and lists the legs not started.
+
 The package is the unpacked download (INSTALL.BAT at its top); it goes onto
 each leg's CD and is never run on the host.
 #>
@@ -26,6 +30,7 @@ param(
     [string]$Legs = '',
     [string[]]$Only = @(),
     [int]$MaxVcpu = -1,
+    [int]$WaitMinutes = 60,
     [switch]$Cold
 )
 $ErrorActionPreference = 'Stop'
@@ -86,6 +91,8 @@ $free = New-Object System.Collections.ArrayList
 for ($i = 0; $i -lt $slots; $i++) { [void]$free.Add($i) }
 $running = @()
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
+$idleSince = $null
+$notStarted = @()
 Write-Host "release matrix: $($todo.Count) legs, $slots slots, MaxVcpu $MaxVcpu, host $logical logical processors; $runRoot"
 
 while ($todo.Count -gt 0 -or $running.Count -gt 0) {
@@ -97,6 +104,7 @@ while ($todo.Count -gt 0 -or $running.Count -gt 0) {
         }
     }
     $started = $false
+    $external = 0
     if ($todo.Count -gt 0 -and $free.Count -gt 0) {
         # A running leg holds its vCPUs for its whole life (between cold
         # starts and while its CD is built, too); other QEMUs on the host are
@@ -125,6 +133,22 @@ while ($todo.Count -gt 0 -or $running.Count -gt 0) {
             break
         }
     }
+    # Nothing running and nothing started: only another QEMU's vCPUs or a
+    # leg larger than the budget stand in the way, and nothing of the
+    # matrix's own will free them. Said once, and waited for a bounded time.
+    if (-not $started -and $todo.Count -gt 0 -and $running.Count -eq 0) {
+        if (-not $idleSince) {
+            $idleSince = Get-Date
+            $need = (@($todo | ForEach-Object { $_.Smp }) | Measure-Object -Minimum).Minimum
+            Write-Host ("{0,7:N0} s  waiting: no leg fits the budget (the smallest needs {1} vCPUs; other QEMUs hold {2} of {3} logical processors; MaxVcpu {4}); at most {5} min" -f $sw.Elapsed.TotalSeconds, $need, $external, $logical, $MaxVcpu, $WaitMinutes)
+        } elseif (((Get-Date) - $idleSince).TotalMinutes -ge $WaitMinutes) {
+            Write-Host ("{0,7:N0} s  stopped: no leg fitted the budget for {1} min; not started: {2}" -f $sw.Elapsed.TotalSeconds, $WaitMinutes, ((@($todo | ForEach-Object { $_.Def.Id })) -join ', '))
+            $notStarted = @($todo | ForEach-Object { $_.Def.Id })
+            break
+        }
+    } else {
+        $idleSince = $null
+    }
     # A leg's QEMU takes a few seconds to show in the process list the
     # budget reads, so one leg is started per pass, then a pause.
     if ($started) { Start-Sleep -Seconds 20 } else { Start-Sleep -Seconds 5 }
@@ -144,6 +168,10 @@ foreach ($l in $legSet.Legs) {
     }
     if (Test-LegManual $l) {
         $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'OWED (manual)'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "run-leg.ps1 -Leg $($l.Id) with an operator at VNC" }
+        continue
+    }
+    if ($notStarted -contains $l.Id) {
+        $rows += [pscustomobject]@{ Leg = $l.Id; Guest = $l.Guest; Mode = $l.Mode; Verdict = 'NOT STARTED'; Minutes = ''; Boots = ''; Restore = ''; Exits = ''; Notes = "no room in the vCPU budget for $WaitMinutes min" }
         continue
     }
     if (-not (Test-Path -LiteralPath $res)) {

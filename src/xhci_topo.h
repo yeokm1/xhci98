@@ -30,7 +30,7 @@
  * lock. Like src/xhci_xfer.c it speaks the usbport transfer ABI, so it includes
  * src/xhci_usbport.h - itself DDK-free. The caller owns the lock discipline:
  * every function here mutates only the XHCI_TOPOLOGY it is handed, and the
- * driver keeps that inside the controller lock.
+ * driver confines that to the controller thread, unlocked.
  *
  * It never dereferences a pointer usbport owns. The one place a reply's bytes
  * are needed, the *caller* reads them out of the mapped transfer buffer and
@@ -258,7 +258,7 @@ struct _XHCI_SETUP_PACKET;
 
 typedef struct _XHCI_TOPO_NODE {
     ULONG Flags;
-    ULONG Address;          /* usbport's device address, 1..127 */
+    ULONG Address;          /* the hub's Slot ID, as the HCD keys it */
     ULONG Speed;            /* XHCI_SPEED_*, as this driver decoded the port */
 
     /* Position. Tier 0 is a hub on a root port; Route is the path *to* this

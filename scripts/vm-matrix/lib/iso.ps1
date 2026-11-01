@@ -1,7 +1,8 @@
 # A CD image from a directory, with Windows' own IMAPI2 file-system image
 # builder (no tool to fetch). ISO 9660 plus Joliet: Windows 98 SE and every
 # NT guest read the Joliet names, so the package's long directory names
-# (release-x86, tools\xhciinst) arrive as they are. Dot-source it.
+# (release-x86 up to 3.3.0.0, the family folders nt-x86 and nt-x64 from
+# 3.4.0.0, tools\xhciinst) arrive as they are. Dot-source it.
 
 if (-not ('XhciLegIsoWriter' -as [type])) {
     Add-Type -TypeDefinition @'

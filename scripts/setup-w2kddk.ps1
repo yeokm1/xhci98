@@ -5,7 +5,7 @@ Install or configure the Windows 2000 DDK for Phase 1.
 .DESCRIPTION
 This script validates tools/WIN2KDDK.EXE, optionally launches the installer,
 checks for <DdkPath>\bin\setenv.bat, and writes local command wrappers for
-debug/release build prompts and the DDK toaster sample build.
+checked/release build prompts and the DDK toaster sample build.
 
 -DdkPath defaults to tools\ntddk inside this repository. The wrappers it
 writes derive both the repository root and the DDK from their own location
@@ -127,12 +127,14 @@ $ddkDebug = Join-Path $LocalScriptDir "ddk-debug.cmd"
 Write-AsciiFile $ddkDebug ($prologue + @(
     "rem setenv.bat uses %1 verbatim as BASEDIR - pass it unquoted or every",
     "rem derived path carries literal quotes and the build cannot find inc/lib.",
-    "rem ""checked"" is the DDK's own word for what this project calls the debug build.",
+    "rem ""checked"" is the DDK's own word. No flavour of this project builds here:",
+    "rem the debug flavour was retired with task 45.45, src\sources refuses chk,",
+    "rem and the checked qemu flavour is built by scripts\build-driver.cmd qemu.",
     "call ""%DDKROOT%\bin\setenv.bat"" %DDKROOT% checked w2k x86",
     "cd /d ""%REPO%""",
     "echo.",
-    "echo DDK debug build environment ready.",
-    "echo When src exists: cd src && build",
+    "echo DDK checked build environment ready, for experiments outside src.",
+    "echo A bare build in src stops at its flavour check (task 45.45).",
     "cmd /k"
 ))
 
@@ -153,7 +155,7 @@ Write-AsciiFile $ddkRelease ($prologue + @(
 $verifyDdk = Join-Path $LocalScriptDir "verify-ddk-toaster.cmd"
 Write-AsciiFile $verifyDdk ($prologue + @(
     "rem setenv.bat uses %1 verbatim as BASEDIR - pass it unquoted (see ddk-debug).",
-    "rem ""checked"" is the DDK's own word for what this project calls the debug build.",
+    "rem ""checked"" is the DDK's own word (the retired debug flavour's, task 45.45).",
     "call ""%DDKROOT%\bin\setenv.bat"" %DDKROOT% checked w2k x86",
     "if not exist ""%DDKROOT%\src\general\toaster\func"" (",
     "  echo Missing sample path: %DDKROOT%\src\general\toaster\func",

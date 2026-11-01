@@ -13,8 +13,9 @@
  * DiCallClassInstaller, with DI_NODI_DEFAULTACTION left clear so the
  * engine's default (DiSelectBestCompatDrv, DiInstallDevice,
  * DiRemoveDevice) runs when the class installer answers ERR_DI_DO_DEFAULT
- * or there is none. Never DI_NOFILECOPY, DI_FORCECOPY or
- * DI_DONOTCALLCONFIGMG (record 27 decision H4); never a registry write.
+ * or there is none. Never DI_FORCECOPY or DI_DONOTCALLCONFIGMG, and
+ * DI_NOFILECOPY only for a job whose FLAGS line says nocopy (record 27
+ * decision H4, task 45.38); never a registry write.
  *
  * Runs once per start, on the one thread a Win16 task has. The engine's
  * dialogs are its own, owned by the hwnd the installer passed.
@@ -217,6 +218,17 @@ void di_sys_install(DI_RUN *run, const DI_CMD *cmd, HWND hwnd)
     lpdi->Flags |= DI_ENUMSINGLEINF;
     if (cmd->flags & DI_FLAG_QUIET) {
         lpdi->Flags |= DI_QUIETINSTALL;
+    }
+    /*
+     * DI_NOFILECOPY: "Set if DiInstallDevice should skip file copying"
+     * (the DEVICE_INFO block). The installer asks for it for a later
+     * controller of an INF a controller's job of the same run installed
+     * (record 27 section 6, task 45.38): its files are in place, and
+     * setupx, one instance for every process, otherwise looks for them a
+     * second time at the Windows source and asks for the driver's disk.
+     */
+    if (cmd->flags & DI_FLAG_NOCOPY) {
+        lpdi->Flags |= DI_NOFILECOPY;
     }
 
     err = DiBuildCompatDrvList(lpdi);

@@ -110,7 +110,7 @@ HAL.dll!KeStallExecutionProcessor            all  required  w2k-export; win98-pr
 ntoskrnl.exe!PsCreateSystemThread            all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsCreateSystemThread, hint BA); NUSB USBPORT.SYS 5.00.2195.5652 (hint C1) (design record 13 Appendix A row 112). The controller thread (section 5.4)
 ntoskrnl.exe!PsTerminateSystemThread         all  required  w2k-export; win98-precedent bt829.sys 4.10.2222 (NTOSKRNL.EXE!PsTerminateSystemThread, hint BB); NUSB USBPORT.SYS 5.00.2195.5652 (hint C2) (Appendix A row 113)
 ntoskrnl.exe!ObReferenceObjectByHandle      all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!ObReferenceObjectByHandle, hint AA) (+11 other 98 SE) (Appendix A row 116). Called on NT only (IoIsWdmVersionAvailable(1, 0x10): Windows 2000 is WDM 1.10, Windows 98 1.00, ME 1.05): the stop waits on the thread object there and on an event on Windows 98, where that wait faulted (runs/run-26.md). A NULL object type: PsThreadType is a data import
-ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above
+ntoskrnl.exe!ObfDereferenceObject           all  required  w2k-export; win98-precedent hidclass.sys 4.10.2222 (NTOSKRNL.EXE!ObfDereferenceObject, hint AC) (+16 other 98 SE) (Appendix A row 34). The ObDereferenceObject macro; NT only, as above: the thread object the stop joins (cm_thr.c) and the link-state callback object (cm_nvlinkos.c)
 # The stor98 link-state channel (cm_nvlinkos.c; tasks 39-A.7 and 40-A.7;
 # stor98's stor98cm.h, its decision MD-6): the callback object
 # \Callback\Stor98LinkState and its one callback, created at DriverEntry
@@ -139,6 +139,27 @@ ntoskrnl.exe!KeQuerySystemTime               all  required  SITES=cm_statos.obj,
 ntoskrnl.exe!IoRegisterDeviceInterface       all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoRegisterDeviceInterface, hint 54) (+9 other 98 SE); ntkern-name
 ntoskrnl.exe!IoCreateSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateSymbolicLink, hint 3B) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 15)
 ntoskrnl.exe!IoDeleteSymbolicLink            all  required  w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteSymbolicLink, hint 3E) (+13 other 98 SE); ntkern-name (design record 13 Appendix A row 16)
+
+# --- the ring interrupt (cm_rirqos.c, design record 21 section 4.5.8,
+# task 45.22): the line's connection, its DPC and the synchronize routines
+# of the arm and the mask. xhci98.sys's own pairs, its evidence verbatim;
+# connected on NT only (98 SE and ME poll until their route is read). ---
+ntoskrnl.exe!IoConnectInterrupt              all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoConnectInterrupt, hint 37) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!IoDisconnectInterrupt           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDisconnectInterrupt, hint 40) (+6 other 98 SE); ntkern-name
+ntoskrnl.exe!KeInitializeDpc                 all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeDpc, hint 73) (+24 other 98 SE)
+ntoskrnl.exe!KeInsertQueueDpc                all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInsertQueueDpc, hint 7C) (+10 other 98 SE)
+ntoskrnl.exe!KeSynchronizeExecution        all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSynchronizeExecution, hint 92) (+openhci.sys); task 36.7, the dead line's retirement under the ISR's lock (design record 15 section 4.2)
+
+# --- Thunderbolt networking (cm_net.c, design record 35 sections 5.4 and
+# 6.1, task 45.59): the data rings' one-shot poll timer, whose DPC queues
+# the receive service's (KeInitializeDpc and KeInsertQueueDpc above), and
+# the network PDO's references (the BusRelations and TargetDeviceRelation
+# answers, and the image pinned at the first timer arming). xhci98.sys's
+# own pairs, its evidence verbatim. ---
+ntoskrnl.exe!KeInitializeTimer               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeTimer, hint 78) (+20 other 98 SE)
+ntoskrnl.exe!KeSetTimer                      all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeSetTimer, hint 90) (+18 other 98 SE)
+ntoskrnl.exe!KeCancelTimer                   all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeCancelTimer, hint 6D) (+20 other 98 SE)
+ntoskrnl.exe!ObfReferenceObject              all  required  w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!ObfReferenceObject, hint AD) (+14 other 98 SE) (design record 13 Appendix A row 35). The ObReferenceObject macro: every PDO a relations list returns is referenced
 
 [deny]
 

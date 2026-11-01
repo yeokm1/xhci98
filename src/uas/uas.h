@@ -61,7 +61,7 @@
 #define UAS_TMF_TIMEOUT_MS      3000
 
 /* IoSetCompletionRoutine without the ASSERT the checked DDK wraps it in,
- * which would import RtlAssert into the debug and qemu builds - a pair with
+ * which would import RtlAssert into the checked qemu build - a pair with
  * no Windows 98 evidence (hcd.h's HCD_SET_COMPLETION_ALWAYS, for the same
  * reason). Invoked on success, error and cancel. */
 #define UAS_SET_COMPLETION_ALWAYS(irp, routine, context)                     \
@@ -183,7 +183,18 @@ typedef struct _UAS_PDO {
     UCHAR CloseStatus;
     KEVENT CloseDone;
     UCHAR Inquiry[UAS_INQUIRY_LENGTH];
+    /* Task 45.23 (design record 20 section 4.3.3): the LUN's identity as
+     * the last sleep hold read it, or the last wake check that passed
+     * (uas_xport.c); the power lock's. */
+    UAS_LUN_ID Id;
 } UAS_PDO, *PUAS_PDO;
+
+/* Task 45.23: a deadline as elapsed time (uas_xport.c). */
+typedef struct _UAS_DEADLINE {
+    ULONG Last;                     /* the system time's low word, read  */
+    ULONG Spent;                    /* 100 ns units summed               */
+    ULONG Budget;                   /* milliseconds                      */
+} UAS_DEADLINE, *PUAS_DEADLINE;
 
 /* The FDO extension. */
 typedef struct _UAS_FDO {
@@ -199,6 +210,9 @@ typedef struct _UAS_FDO {
     BOOLEAN Recovering;
     BOOLEAN RecoveryQueued;
     BOOLEAN Dead;                   /* a reset failed: every SRB fails */
+    BOOLEAN CycleOwed;              /* task 45.41: a failed reset's cycle
+                                     * not yet taken by the bus; retried by
+                                     * the recovery worker (uasCycleOwed) */
 
     /* The configuration this driver selected. */
     PUCHAR Config;
@@ -266,6 +280,31 @@ typedef struct _UAS_FDO {
     KEVENT TimerDone;
     WORK_QUEUE_ITEM Recovery;
 
+    /* Task 45.23 (design record 20 section 4.3.3): the sleep hold and the
+     * wake check (uas_xport.c). PowerLock, a synchronization event, is held
+     * by the sleep phase and by the wake check, so one never runs inside
+     * the other. Holding (lock): uasPump starts only internal requests;
+     * set by the sleep phase, kept across the sleep, released only by the
+     * wake check of that hold (HoldCheck, lock: an S0 has asked for it).
+     * WakeQueued (lock): WakeItem queued, with a rundown reference. The
+     * rest is the power lock's: what the bus answered at the sleep
+     * (BusKnown: the request is known; WithdrawOk; DeclareTried), the
+     * epoch the last check verified, and the counts the bus's log is told
+     * of. */
+    KEVENT PowerLock;
+    WORK_QUEUE_ITEM WakeItem;
+    BOOLEAN Holding;
+    BOOLEAN HoldCheck;
+    BOOLEAN Sealed;                 /* lock: from the declaration's proof
+                                     * to the wake check, no recovery is
+                                     * queued (uasWantRecovery)           */
+    BOOLEAN WakeQueued;
+    BOOLEAN BusKnown;
+    BOOLEAN WithdrawOk;
+    BOOLEAN DeclareTried;
+    ULONG Episode;
+    ULONG VerifiedEpoch;
+
     /* The engine's rundown: 1 (the bias) plus one per transfer from build
      * to the end of its completion routine, per queued recovery worker to
      * its last access, and per timer DPC run. IoIdle is set at 0, which only
@@ -291,15 +330,53 @@ typedef struct _UAS_FDO {
 /* DriverContext slots of a queued request IRP. */
 #define UAS_CTX_PDO             0
 #define UAS_CTX_SRB             1
-#define UAS_CTX_EVENT           2   /* internal requests: signalled on finish */
+#define UAS_CTX_EVENT           2   /* internal requests: their UAS_ICMD
+                                     * (uas_xport.c), told at the finish  */
+#define UAS_CTX_PASS            3   /* a program's pass-through or SMART
+                                     * request: its UAS_PCMD (uas_pdo.c);
+                                     * NULL for every other request       */
+
+/*
+ * Task 45.52 (design record 13 section 16): one pass-through or SMART
+ * request. The caller's own IRP is the engine's request, with this
+ * record's SRB; the finish (UasPdoPassFinish) writes the outcome back and
+ * completes the IRP. Claimed and Cancelled are the FDO lock's: Claimed once
+ * a path has taken the IRP off the queue with its cancel routine cleared
+ * (uasClaimQueued), Cancelled when the cancel routine took it.
+ */
+#define UAS_PCMD_PT             0   /* SCSI or ATA pass-through           */
+#define UAS_PCMD_SMART          1   /* IOCTL_SCSI_MINIPORT, SCSIDISK      */
+
+typedef struct _UAS_PCMD {
+    struct _UAS_FDO *Fdo;
+    PUAS_PDO Pdo;
+    PIRP Irp;
+    ULONG Form;
+    ULONG OutLength;                /* the IRP's output length            */
+    ULONG Room;                     /* SMART: the reply's room            */
+    UAS_PT_PLAN Plan;
+    UAS_SMART_PLAN Smart;
+    PMDL UserMdl;                   /* direct forms: the caller's buffer  */
+    PUCHAR Data;                    /* SMART: its data-in buffer          */
+    BOOLEAN Claimed;
+    BOOLEAN Cancelled;
+    SCSI_REQUEST_BLOCK Srb;
+    UCHAR Sense[UAS_PT_SENSE_MAX];
+} UAS_PCMD, *PUAS_PCMD;
 
 extern PDRIVER_OBJECT UasDriverObject;
 
 /* uas_mem.c - every pool and MDL call in the driver. PASSIVE or DISPATCH. */
+VOID UasPoolInit(VOID);
 PVOID UasAlloc(ULONG bytes);
 VOID UasFree(PVOID p);
 PMDL UasDataMdl(PIRP request, PSCSI_REQUEST_BLOCK srb);
 VOID UasFreeMdl(PMDL mdl);
+/* Task 45.52: the direct forms' buffer, locked in the caller's context
+ * with its requestor mode (PASSIVE_LEVEL), and its release. */
+NTSTATUS UasLockBuffer(PVOID address, ULONG length, KPROCESSOR_MODE mode,
+                       BOOLEAN deviceWrites, PMDL *mdl);
+VOID UasUnlockBuffer(PMDL mdl);
 PIRP UasIrpAlloc(CCHAR stackSize, PUSHORT size);
 VOID UasIrpReset(PIRP irp, USHORT size, CCHAR stackSize);
 
@@ -307,12 +384,14 @@ VOID UasIrpReset(PIRP irp, USHORT size, CCHAR stackSize);
 NTSTATUS UasCompleteIrp(PIRP irp, NTSTATUS status, ULONG_PTR information);
 VOID UasZero(PVOID p, ULONG n);
 VOID UasCopy(PVOID dst, const VOID *src, ULONG n);
+VOID UasWaitEvent(PKEVENT event);   /* PASSIVE_LEVEL */
 
 /* uas_fdo.c - PASSIVE_LEVEL unless noted. */
 NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp);
 NTSTATUS UasSyncUrb(PUAS_FDO fdo, PURB urb);
 NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code);
+NTSTATUS UasBusIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1);
 
 /* uas_pdo.c - PnP at PASSIVE; SCSI and device control at <= DISPATCH. */
 NTSTATUS UasPdoCreate(PUAS_FDO fdo, ULONG lun, const UCHAR *inquiry,
@@ -321,6 +400,9 @@ NTSTATUS UasPdoPnp(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoPower(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoScsi(PUAS_PDO pdo, PIRP irp);
 NTSTATUS UasPdoDeviceControl(PUAS_PDO pdo, PIRP irp);
+/* <= DISPATCH_LEVEL, no lock held: a pass-through request's end, from the
+ * engine's completion of it (uasCompleteRequest). Completes the IRP. */
+VOID UasPdoPassFinish(PUAS_PCMD pc, PSCSI_REQUEST_BLOCK srb);
 
 /* uas_xport.c - the engine. Init/Start/Stop/Internal/CloseLun at PASSIVE;
  * Submit, Abort, Reset, Flush, OpenLun and UnlockQueue at <= DISPATCH;
@@ -334,6 +416,18 @@ NTSTATUS UasEngineSubmit(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 NTSTATUS UasInternalCommand(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
                             ULONG cdbLength, PVOID buffer, ULONG length,
                             PULONG transferred, PUCHAR scsiStatus);
+NTSTATUS UasInternalCommandEx(PUAS_FDO fdo, ULONG lun, const UCHAR *cdb,
+                              ULONG cdbLength, PVOID buffer, ULONG length,
+                              PULONG transferred, PUCHAR scsiStatus,
+                              PUCHAR sense, PULONG senseLength,
+                              PUAS_DEADLINE deadline);
+/* Task 45.23 (design record 20 section 4.3.3): the sleep phase at the
+ * FDO's system set-power to a sleeping state (PASSIVE_LEVEL), and the S0's
+ * request for the wake check (<= DISPATCH_LEVEL). */
+BOOLEAN UasEngineSleep(PUAS_FDO fdo);
+BOOLEAN UasEngineHold(PUAS_FDO fdo);
+VOID UasEngineRelease(PUAS_FDO fdo);
+VOID UasEngineWake(PUAS_FDO fdo);
 NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                         PSCSI_REQUEST_BLOCK srb);
 NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
@@ -343,5 +437,9 @@ NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 VOID UasEngineUnlockQueue(PUAS_FDO fdo);
 VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo);
 VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus);
+/* Task 45.52: <= DISPATCH_LEVEL. Admits and queues a pass-through request
+ * (its IRP marked pending, with a cancel routine while queued); FALSE when
+ * admission refused it, nothing counted and the IRP left to the caller. */
+BOOLEAN UasEngineSubmitPass(PUAS_FDO fdo, PUAS_PDO pdo, PUAS_PCMD pc);
 
 #endif /* UAS_H */

@@ -533,6 +533,109 @@ ULONG XhciEnumLetGo(ULONG listed, ULONG reported, ULONG removeReceived)
     return (listed && reported && removeReceived) ? 1UL : 0UL;
 }
 
+ULONG XhciEnumResumeKeep(ULONG on, ULONG flags)
+{
+    if (!on) {
+        return XHCI_RKEEP_WHY_OFF;
+    }
+    if ((flags & XHCI_RKEEP_F_FAULTED) != 0) {
+        return XHCI_RKEEP_WHY_FAULTED;
+    }
+    if ((flags & XHCI_RKEEP_F_ROOT) == 0) {
+        return XHCI_RKEEP_WHY_NOT_ROOT;
+    }
+    if ((flags & XHCI_RKEEP_F_HUB) != 0) {
+        return XHCI_RKEEP_WHY_HUB;
+    }
+    if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
+        return XHCI_RKEEP_WHY_NOT_STARTED;
+    }
+    /* Every other test - storage among them - and the restore's
+     * identity check read configuration index 0. */
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_RKEEP_WHY_OTHER_CFG;
+    }
+    if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
+        return XHCI_RKEEP_WHY_SUSPENDED;
+    }
+    if ((flags & XHCI_RKEEP_F_ISOCH) != 0) {
+        return XHCI_RKEEP_WHY_ISOCH;
+    }
+    if ((flags & XHCI_RKEEP_F_STORAGE) != 0) {
+        if ((flags & XHCI_RKEEP_F_UAS) == 0) {
+            return XHCI_RKEEP_WHY_BULK_ONLY;
+        }
+        if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
+            return XHCI_RKEEP_WHY_NO_SERIAL;
+        }
+        /* Design record 20 section 4.3.3: only on the driver's proof that
+         * nothing of it was in flight and nothing will be sent until its
+         * wake check; the busy test then checks the same fact again. */
+        if ((flags & XHCI_RKEEP_F_QUIET) == 0) {
+            return XHCI_RKEEP_WHY_NOT_QUIET;
+        }
+        if ((flags & XHCI_RKEEP_F_BUSY) != 0) {
+            return XHCI_RKEEP_WHY_BUSY;
+        }
+    }
+    return XHCI_RKEEP_KEEP;
+}
+
+ULONG XhciEnumLinkKeep(ULONG on, ULONG flags, ULONG recent)
+{
+    if (!on) {
+        return XHCI_LKEEP_WHY_OFF;
+    }
+    if ((flags & XHCI_RKEEP_F_FAULTED) != 0) {
+        return XHCI_LKEEP_WHY_FAULTED;
+    }
+    if ((flags & XHCI_RKEEP_F_HUB) != 0) {
+        return XHCI_LKEEP_WHY_HUB;
+    }
+    if ((flags & XHCI_RKEEP_F_OTHER_CFG) != 0) {
+        return XHCI_LKEEP_WHY_OTHER_CFG;
+    }
+    if ((flags & XHCI_RKEEP_F_STARTED) == 0) {
+        return XHCI_LKEEP_WHY_NOT_STARTED;
+    }
+    if ((flags & XHCI_RKEEP_F_SUSPENDED) != 0) {
+        return XHCI_LKEEP_WHY_SUSPENDED;
+    }
+    if ((flags & XHCI_RKEEP_F_ISOCH) != 0) {
+        return XHCI_LKEEP_WHY_ISOCH;
+    }
+    if ((flags & XHCI_RKEEP_F_ONE_IFACE) == 0 ||
+        (flags & XHCI_RKEEP_F_STORAGE) == 0 ||
+        (flags & XHCI_RKEEP_F_UAS) == 0) {
+        return XHCI_LKEEP_WHY_NOT_UAS;
+    }
+    if ((flags & XHCI_RKEEP_F_SERIAL) == 0) {
+        return XHCI_LKEEP_WHY_NO_SERIAL;
+    }
+    if (recent >= XHCI_LINK_KEEP_MAX) {
+        return XHCI_LKEEP_WHY_BUDGET;
+    }
+    return XHCI_LKEEP_KEEP;
+}
+
+ULONG XhciEnumLinkKeepRecent(ULONG count, ULONG first, ULONG now)
+{
+    if (count == 0 || now - first >= XHCI_LINK_KEEP_WINDOW) {
+        return 0;
+    }
+    return count;
+}
+
+ULONG XhciEnumQuietMark(ULONG markGen)
+{
+    return markGen + 1UL;
+}
+
+ULONG XhciEnumQuietValid(ULONG mark, ULONG markGen)
+{
+    return (mark != 0 && mark == markGen + 1UL) ? 1UL : 0UL;
+}
+
 ULONG XhciEnumAnswerCarries(ULONG parentSerial, ULONG answering,
                             ULONG letGo)
 {

@@ -68,9 +68,11 @@ function Read-MediaLayout {
 # not. A `Declared` value shorter than four parts is zero-extended, since an INF
 # `DriverVer` of "1.0" means 1.0.0.0.
 #
-# Which of the three build flavours an image is, read out of the file (task
-# 13-L.1). Returns "release", "debug", "qemu" or "" when the image carries no
-# marker at all - which means a binary built before the marker existed.
+# Which build flavour an image is, read out of the file (task 13-L.1).
+# Returns "release", "qemu", "debug" (an image of the flavour task 45.45
+# retired, which every caller then refuses as not the one asked for) or ""
+# when the image carries no marker at all - which means a binary built
+# before the marker existed.
 #
 # **This is shared because both packaging scripts need the same answer and must
 # not derive it two ways.** The path is not evidence: -DriverPath can name a
@@ -146,6 +148,419 @@ function Get-CmPublishable {
         return @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")
     }
     return @("xhcicm.inf", "nt\xhcicmf.inf", "xhcicm.sys", "nt\xhcicm.sys")
+}
+
+# ------------------------------------------------------------------
+# Task 45.44, design record 36: the download by Windows family.
+# ------------------------------------------------------------------
+#
+# make-package.ps1 stages one flat package per architecture, as before
+# (record 36 section 5.1); the cut re-lays each into its family folders by
+# this one table, and every later check of a published tree reads it back
+# through the flat view ConvertFrom-FamilyLayout rebuilds. Per flat name of
+# each architecture's package, its places, each "<family>\<path>": the x86
+# package fills 98-me\ and nt-x86\, the amd64 one nt-x64\. A family holds
+# only what its systems install (section 2). The renames: the filter INF to
+# cm\xhcicmf.inx, so no integration tool or wizard takes it as an INF
+# (section 3.2), and the 9x Stor98 INF stor98w9.inf to
+# 98-me\stor98\stor98.inf (section 3.4). One flat file has no place:
+# nt\xhcicm.sys, the filter INF's copy of xhcicm.sys (the same bytes,
+# which CM-NO9XBRIDGE compares), rebuilt in the flat view from
+# nt-x86\cm\xhcicm.sys whenever nt-x86\cm\xhcicmf.inx is there.
+# xhciinst\inst_core.c's instPkgFiles is the same table's local-name side
+# (section 6.2), held to this one by test-package.ps1.
+$script:FamilyNames = @("98-me", "nt-x86", "nt-x64")
+$script:FamilyArch = @{ "98-me" = "x86"; "nt-x86" = "x86"; "nt-x64" = "amd64" }
+$script:FamilyFlatDir = @{ "x86" = "release-x86"; "amd64" = "release-x64" }
+# cm\tbnet\ (task 45.59 step S10, record 36 section 9, record 35 section
+# 9.5): Thunderbolt networking's INF and images, apart from xhcicm's, so an
+# integration leaves it out by one folder. 98-me\ carries no xhcinet6.sys:
+# 98 SE and ME install xhcinet.sys alone ([Net.CopyFiles9x]).
+$script:FamilyLayout = @{
+    "x86" = [ordered]@{
+        "xhci98.inf"         = @("98-me\xhci98.inf", "nt-x86\xhci98.inf")
+        "xhci98.sys"         = @("98-me\xhci98.sys", "nt-x86\xhci98.sys")
+        "xhcihlpr.sys"       = @("nt-x86\xhcihlpr.sys")
+        "xhciuas.inf"        = @("98-me\xhciuas.inf", "nt-x86\xhciuas.inf")
+        "xhciuas.sys"        = @("98-me\xhciuas.sys", "nt-x86\xhciuas.sys")
+        "txtsetup.oem"       = @("nt-x86\txtsetup.oem")
+        "xhcicm.inf"         = @("98-me\cm\xhcicm.inf", "nt-x86\cm\xhcicm.inf")
+        "xhcicm.sys"         = @("98-me\cm\xhcicm.sys", "nt-x86\cm\xhcicm.sys")
+        "nt\xhcicmf.inf"     = @("nt-x86\cm\xhcicmf.inx")
+        "nt\xhcicm.sys"      = @()
+        "XHCIPFW.VXD"        = @("98-me\cm\XHCIPFW.VXD")
+        "XHCIPFW.SYS"        = @("nt-x86\cm\XHCIPFW.SYS")
+        "stor98.inf"         = @("nt-x86\stor98\stor98.inf")
+        "stor98w9.inf"       = @("98-me\stor98\stor98.inf")
+        "stor98.mpd"         = @("98-me\stor98\stor98.mpd")
+        "S98VSD.VXD"         = @("98-me\stor98\S98VSD.VXD")
+        "stor98.sys"         = @("nt-x86\stor98\stor98.sys")
+        "stor98-readme.txt"  = @("98-me\stor98\stor98-readme.txt", "nt-x86\stor98\stor98-readme.txt")
+        "stor98-LICENSE.txt" = @("98-me\stor98\stor98-LICENSE.txt", "nt-x86\stor98\stor98-LICENSE.txt")
+        "stor98-NOTICE.txt"  = @("98-me\stor98\stor98-NOTICE.txt", "nt-x86\stor98\stor98-NOTICE.txt")
+        "xhcinet.inf"        = @("98-me\cm\tbnet\xhcinet.inf", "nt-x86\cm\tbnet\xhcinet.inf")
+        "xhcinet.sys"        = @("98-me\cm\tbnet\xhcinet.sys", "nt-x86\cm\tbnet\xhcinet.sys")
+        "xhcinet6.sys"       = @("nt-x86\cm\tbnet\xhcinet6.sys")
+    }
+    "amd64" = [ordered]@{
+        "xhci98.inf"         = @("nt-x64\xhci98.inf")
+        "xhci98.cat"         = @("nt-x64\xhci98.cat")
+        "xhci98.sys"         = @("nt-x64\xhci98.sys")
+        "xhciuas.inf"        = @("nt-x64\xhciuas.inf")
+        "xhciuas.cat"        = @("nt-x64\xhciuas.cat")
+        "xhciuas.sys"        = @("nt-x64\xhciuas.sys")
+        "txtsetup.oem"       = @("nt-x64\txtsetup.oem")
+        "xhci98-test.cer"    = @("nt-x64\xhci98-test.cer")
+        "xhcicm.inf"         = @("nt-x64\cm\xhcicm.inf")
+        "xhcicm.cat"         = @("nt-x64\cm\xhcicm.cat")
+        "xhcicm.sys"         = @("nt-x64\cm\xhcicm.sys")
+        "xhcicmf.inf"        = @("nt-x64\cm\xhcicmf.inx")
+        "xhcicmf.cat"        = @("nt-x64\cm\xhcicmf.cat")
+        "stor98.inf"         = @("nt-x64\stor98\stor98.inf")
+        "stor98.cat"         = @("nt-x64\stor98\stor98.cat")
+        "stor98.sys"         = @("nt-x64\stor98\stor98.sys")
+        "stor98-readme.txt"  = @("nt-x64\stor98\stor98-readme.txt")
+        "stor98-LICENSE.txt" = @("nt-x64\stor98\stor98-LICENSE.txt")
+        "stor98-NOTICE.txt"  = @("nt-x64\stor98\stor98-NOTICE.txt")
+        "xhcinet.inf"        = @("nt-x64\cm\tbnet\xhcinet.inf")
+        "xhcinet.cat"        = @("nt-x64\cm\tbnet\xhcinet.cat")
+        "xhcinet.sys"        = @("nt-x64\cm\tbnet\xhcinet.sys")
+        "xhcinet6.sys"       = @("nt-x64\cm\tbnet\xhcinet6.sys")
+    }
+}
+# The flat file with no place, and where the flat view takes it from.
+$script:FamilyRebuilt = @{
+    "x86" = @{ "nt\xhcicm.sys" = @{ From = "nt-x86\cm\xhcicm.sys"; When = "nt-x86\cm\xhcicmf.inx"; Same = "xhcicm.sys" } }
+    "amd64" = @{}
+}
+
+function Get-FamilyArchOf {
+    # The package architecture ("x86" or "amd64") whose table fills a family.
+    param([string]$Family)
+    if (-not $script:FamilyArch.ContainsKey($Family)) { throw "'$Family' is not a family folder ($($script:FamilyNames -join ', '))." }
+    return $script:FamilyArch[$Family]
+}
+
+function Get-FamilyRelFiles {
+    # Every file under $Dir, as paths relative to it, in a fixed order.
+    param([string]$Dir)
+    $full = (Get-Item -LiteralPath $Dir).FullName.TrimEnd('\')
+    return @(Get-ChildItem -LiteralPath $full -File -Recurse -Force | Sort-Object FullName |
+             ForEach-Object { $_.FullName.Substring($full.Length + 1) })
+}
+
+function Get-FamilyPlaceMap {
+    # Place ("<family>\<path>", lower case) -> flat name, for one architecture.
+    param([string]$Arch)
+    $map = @{}
+    foreach ($flat in $script:FamilyLayout[$Arch].Keys) {
+        foreach ($place in @($script:FamilyLayout[$Arch][$flat])) { $map[$place.ToLowerInvariant()] = $flat }
+    }
+    return $map
+}
+
+function Get-FamilyLayoutKind {
+    # "family" when $Root holds family folders, "flavour" when it holds the
+    # flavour directories of a version up to 3.3.0.0 (any directory carrying
+    # xhci98.inf at its root), refused when it holds both or neither
+    # (record 36 section 7.2).
+    param([string]$Root, [string]$What)
+    $fam = @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })
+    $flv = @(Get-ChildItem -LiteralPath $Root -Directory -Force | Where-Object {
+                 $script:FamilyNames -notcontains $_.Name -and (Test-Path -LiteralPath (Join-Path $_.FullName "xhci98.inf") -PathType Leaf) })
+    if ($fam.Count -gt 0 -and $flv.Count -gt 0) {
+        throw "$What holds both family folders ($($fam -join ', ')) and flavour directories ($(@($flv | ForEach-Object { $_.Name }) -join ', ')): it is neither layout (design record 36 section 7.2)."
+    }
+    if ($fam.Count -gt 0) { return "family" }
+    if ($flv.Count -gt 0) { return "flavour" }
+    throw "$What holds neither family folders ($($script:FamilyNames -join ', ')) nor flavour directories."
+}
+
+function ConvertTo-FamilyLayout {
+    # Writes one flat package's files into their family folders under $Dest
+    # (record 36 section 5.1). Every flat file is placed or is the one with
+    # no place (compared with the file it copies); a flat file the table does
+    # not know, or a place already taken, is a refusal. Returns one row per
+    # copy: Flat, Place, Sha256.
+    param([string]$FlatDir, [string]$Arch, [string]$Dest)
+    if (-not $script:FamilyLayout.ContainsKey($Arch)) { throw "no family table for architecture '$Arch'." }
+    $table = $script:FamilyLayout[$Arch]
+    $byLower = @{}
+    foreach ($k in $table.Keys) { $byLower[$k.ToLowerInvariant()] = $k }
+    $rows = @()
+    $files = @(Get-FamilyRelFiles -Dir $FlatDir)
+    foreach ($rel in $files) {
+        if (-not $byLower.ContainsKey($rel.ToLowerInvariant())) {
+            throw "PKG-FAMILY: the flat $Arch package '$FlatDir' holds '$rel', which the family table (package-common.ps1, `$script:FamilyLayout) does not place: a new file is a layout decision (design record 36 section 5.1)."
+        }
+        $flat = $byLower[$rel.ToLowerInvariant()]
+        $hash = (Get-FileHash -LiteralPath (Join-Path $FlatDir $rel) -Algorithm SHA256).Hash
+        $places = @($table[$flat])
+        if ($places.Count -eq 0) {
+            $rb = $script:FamilyRebuilt[$Arch][$flat]
+            $same = Join-Path $FlatDir $rb.Same
+            if (-not (Test-Path -LiteralPath $same -PathType Leaf) -or (Get-FileHash -LiteralPath $same -Algorithm SHA256).Hash -ne $hash) {
+                throw "PKG-FAMILY: the flat $Arch package's $flat is not the same bytes as its $($rb.Same), which the family layout carries in its place."
+            }
+            continue
+        }
+        foreach ($place in $places) {
+            $target = Join-Path $Dest $place
+            if (Test-Path -LiteralPath $target) { throw "PKG-FAMILY: '$target' is already there; the family folders are written once, from one flat package each." }
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $FlatDir $rel) -Destination $target
+            $rows += [pscustomobject]@{ Flat = $flat; Place = $place; Sha256 = $hash }
+        }
+    }
+    return $rows
+}
+
+function ConvertFrom-FamilyLayout {
+    # Rebuilds under $Dest the flat view of the family folders under $Root
+    # (record 36 sections 3.5 and 7.2): release-x86\ from 98-me\ and nt-x86\,
+    # release-x64\ from nt-x64\, each file under its flat name, a file two
+    # families carry required to be present in both and the same bytes, and
+    # nt\xhcicm.sys rebuilt from nt-x86\cm\xhcicm.sys. A file the table does
+    # not place is a refusal (Test-FamilyLayout names every fault). Returns a
+    # map from the architecture to its flat directory.
+    param([string]$Root, [string]$Dest)
+    $out = @{}
+    foreach ($arch in @("x86", "amd64")) {
+        $fams = @($script:FamilyNames | Where-Object { $script:FamilyArch[$_] -eq $arch -and (Test-Path -LiteralPath (Join-Path $Root $_)) })
+        if ($fams.Count -eq 0) { continue }
+        $placeMap = Get-FamilyPlaceMap -Arch $arch
+        foreach ($fam in $fams) {
+            foreach ($rel in @(Get-FamilyRelFiles -Dir (Join-Path $Root $fam))) {
+                if (-not $placeMap.ContainsKey(("$fam\$rel").ToLowerInvariant())) {
+                    throw "PKG-FAMILY: $fam\$rel is not a file of the family layout (design record 36 section 2)."
+                }
+            }
+        }
+        $flatDir = Join-Path $Dest $script:FamilyFlatDir[$arch]
+        New-Item -ItemType Directory -Force -Path $flatDir | Out-Null
+        $table = $script:FamilyLayout[$arch]
+        foreach ($flat in $table.Keys) {
+            $places = @($table[$flat])
+            if ($places.Count -eq 0) { continue }
+            $present = @($places | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf })
+            $famsOf = @($places | ForEach-Object { ($_ -split '\\')[0] } | Where-Object { $fams -contains $_ })
+            if ($present.Count -eq 0) { continue }
+            if ($present.Count -ne $famsOf.Count) {
+                $gone = @($places | Where-Object { $present -notcontains $_ -and $fams -contains (($_ -split '\\')[0]) })
+                throw "PKG-FAMILY: $($present -join ' and ') is there and $($gone -join ' and ') is not: a shared file goes in every family folder of its architecture."
+            }
+            $hashes = @($present | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $Root $_) -Algorithm SHA256).Hash } | Sort-Object -Unique)
+            if ($hashes.Count -ne 1) { throw "PKG-FAMILY: $($present -join ' and ') are not the same bytes; they are one file of the flat package ($flat)." }
+            $target = Join-Path $flatDir $flat
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            Copy-Item -LiteralPath (Join-Path $Root $present[0]) -Destination $target
+        }
+        foreach ($flat in $script:FamilyRebuilt[$arch].Keys) {
+            $rb = $script:FamilyRebuilt[$arch][$flat]
+            if ((Test-Path -LiteralPath (Join-Path $Root $rb.When) -PathType Leaf) -and (Test-Path -LiteralPath (Join-Path $Root $rb.From) -PathType Leaf)) {
+                $target = Join-Path $flatDir $flat
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+                Copy-Item -LiteralPath (Join-Path $Root $rb.From) -Destination $target
+            }
+        }
+        $out[$arch] = $flatDir
+    }
+    return $out
+}
+
+function Get-FamilyInfSources {
+    # The source names of an INF's [SourceDisksFiles] (and its decorated
+    # forms), lower case.
+    param([string]$Path)
+    $inf = Read-InfText -Path $Path
+    $names = @()
+    foreach ($k in @($inf.Sections.Keys | Where-Object { $_ -match '^sourcedisksfiles(\..+)?$' })) {
+        foreach ($e in @(Get-InfEntries -Inf $inf -Section $k)) {
+            $n = if ($e.Key -ne "") { $e.Key } else { $e.Value.Trim().Trim('"').ToLowerInvariant() }
+            if ($n -ne "") { $names += $n }
+        }
+    }
+    return @($names | Sort-Object -Unique)
+}
+
+function Test-FamilyLayout {
+    # PKG-FAMILY (record 36 section 5.2): "" when the family folders under
+    # $Root are this layout, else every fault, one a line. Every file where
+    # the table puts it and nothing else; no nt\, xhcicmf.inf or
+    # stor98w9.inf; 98-me\ and nt-x86\ together; a file two families carry
+    # in both and the same bytes; and each INF's [SourceDisksFiles] beside it,
+    # filtered by the family: a name the family carries nowhere
+    # (xhcihlpr.sys and xhcinet6.sys in 98-me\,
+    # section 3.1) skipped, every other required in the INF's folder.
+    param([string]$Root)
+    $faults = @()
+    $fams = @($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) })
+    if ($fams.Count -eq 0) { return "PKG-FAMILY: no family folder ($($script:FamilyNames -join ', '))" }
+    if (($fams -contains "98-me") -ne ($fams -contains "nt-x86")) { $faults += "PKG-FAMILY: 98-me\ and nt-x86\ are the x86 package's two folders and go together" }
+    foreach ($fam in $fams) {
+        $famDir = Join-Path $Root $fam
+        if (-not (Test-Path -LiteralPath $famDir -PathType Container)) { $faults += "PKG-FAMILY: $fam is not a directory"; continue }
+        $arch = Get-FamilyArchOf -Family $fam
+        $placeMap = Get-FamilyPlaceMap -Arch $arch
+        $famFull = (Get-Item -LiteralPath $famDir).FullName.TrimEnd('\')
+        foreach ($d in @(Get-ChildItem -LiteralPath $famFull -Directory -Recurse -Force)) {
+            $drel = $d.FullName.Substring($famFull.Length + 1)
+            if ($d.Name -ieq "nt") { $faults += "PKG-FAMILY: $fam\$drel is an nt\ directory, which this layout has none of (section 3.2)" }
+        }
+        $here = @{}
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir)) {
+            $leaf = Split-Path -Leaf $rel
+            $here[$leaf.ToLowerInvariant()] = 1
+            if ($leaf -ieq "xhcicmf.inf") { $faults += "PKG-FAMILY: $fam\$rel is named xhcicmf.inf; the filter ships as cm\xhcicmf.inx (section 3.2)" }
+            elseif ($leaf -ieq "stor98w9.inf") { $faults += "PKG-FAMILY: $fam\$rel is named stor98w9.inf; the 9x Stor98 INF ships as 98-me\stor98\stor98.inf (section 3.4)" }
+            elseif (-not $placeMap.ContainsKey(("$fam\$rel").ToLowerInvariant())) { $faults += "PKG-FAMILY: $fam\$rel is not a file of $fam\ (section 2)" }
+        }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir | Where-Object { $_ -match '\.(inf|inx)$' })) {
+            $infDir = Split-Path -Parent (Join-Path $famDir $rel)
+            foreach ($n in @(Get-FamilyInfSources -Path (Join-Path $famDir $rel))) {
+                $carried = @($placeMap.Keys | Where-Object { $_.StartsWith($fam.ToLowerInvariant() + "\") -and (Split-Path -Leaf $_) -eq $n }).Count -gt 0
+                if (-not $carried) { continue }
+                if (-not (Test-Path -LiteralPath (Join-Path $infDir $n) -PathType Leaf)) {
+                    $faults += "PKG-FAMILY: $fam\$rel names $n in [SourceDisksFiles], and its folder does not hold it"
+                }
+            }
+        }
+    }
+    foreach ($arch in @("x86", "amd64")) {
+        foreach ($flat in $script:FamilyLayout[$arch].Keys) {
+            $places = @($script:FamilyLayout[$arch][$flat] | Where-Object { $fams -contains (($_ -split '\\')[0]) })
+            if ($places.Count -lt 2) { continue }
+            $present = @($places | Where-Object { Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf })
+            if ($present.Count -ne 0 -and $present.Count -ne $places.Count) {
+                $faults += "PKG-FAMILY: $($present -join ' and ') is there and $(@($places | Where-Object { $present -notcontains $_ }) -join ' and ') is not"
+            } elseif ($present.Count -gt 1 -and @($present | ForEach-Object { (Get-FileHash -LiteralPath (Join-Path $Root $_) -Algorithm SHA256).Hash } | Sort-Object -Unique).Count -ne 1) {
+                $faults += "PKG-FAMILY: $($present -join ' and ') are not the same bytes"
+            }
+        }
+    }
+    return ($faults -join "`n")
+}
+
+function Assert-FamilyFromLegs {
+    # Every file of the family folders under $Root compared by hash with the
+    # verified flat file it came from (record 36 section 7.1), and nothing
+    # else there: $FlatDirs maps an architecture ("x86", "amd64") to the
+    # verified flat package that fills its families. Run after the
+    # conversion and again just before the publication, so a file changed in
+    # between is a refusal.
+    param([string]$Root, [hashtable]$FlatDirs, [string]$What)
+    $faults = @()
+    $want = @{}
+    foreach ($arch in $FlatDirs.Keys) {
+        $table = $script:FamilyLayout[$arch]
+        $byLower = @{}
+        foreach ($k in $table.Keys) { $byLower[$k.ToLowerInvariant()] = $k }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $FlatDirs[$arch])) {
+            if (-not $byLower.ContainsKey($rel.ToLowerInvariant())) { $faults += "the flat $arch package holds $rel, which no family carries"; continue }
+            $flat = $byLower[$rel.ToLowerInvariant()]
+            $hash = (Get-FileHash -LiteralPath (Join-Path $FlatDirs[$arch] $rel) -Algorithm SHA256).Hash
+            foreach ($place in @($table[$flat])) { $want[$place.ToLowerInvariant()] = @($place, $hash, $flat) }
+        }
+    }
+    foreach ($w in $want.Values) {
+        $p = Join-Path $Root $w[0]
+        if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { $faults += "$($w[0]) is missing (the flat $($w[2]))" }
+        elseif ((Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash -ne $w[1]) { $faults += "$($w[0]) is not the bytes of the verified flat $($w[2])" }
+    }
+    foreach ($fam in $script:FamilyNames) {
+        $famDir = Join-Path $Root $fam
+        if (-not (Test-Path -LiteralPath $famDir)) { continue }
+        if (-not $FlatDirs.ContainsKey($script:FamilyArch[$fam])) { $faults += "$fam\ is there, and this cut built no $($script:FamilyArch[$fam]) package for it"; continue }
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $famDir)) {
+            if (-not $want.ContainsKey(("$fam\$rel").ToLowerInvariant())) { $faults += "$fam\$rel is not a file of the verified flat package" }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("PKG-FAMILY: {0}'s family folders are not the verified flat packages (design record 36 section 7.1):`n  - {1}" -f $What, ($faults -join "`n  - "))
+    }
+}
+
+function Get-IntegrateText {
+    # INTEGRATE.TXT (record 36 section 8.2): plain text, 78 columns, which
+    # make-release.ps1 writes at the download's root and test-package.ps1
+    # holds to the table above.
+    param([string]$Version)
+    $t = @'
+xHCI98 {VERSION}: adding the drivers to a Windows setup
+=======================================================
+
+WHICH FOLDER
+
+  98-me\    Windows 98 SE and ME. They have no integration route: install
+            with SETUP.EXE, or point the hardware wizard at this folder.
+  nt-x86\   Windows 2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit
+  nt-x64\   Windows XP x64 and Server 2003 x64, Vista to 10, 64-bit
+
+Each folder holds the drivers its Windows installs: the USB controller and
+UAS drivers at its root, the Thunderbolt 3 / USB4 connection manager in
+cm\, Thunderbolt networking (a network connection to another computer
+over a Thunderbolt or USB4 cable) in cm\tbnet\, and Stor98, the driver for
+NVMe drives behind a Thunderbolt or USB4 port, in stor98\.
+
+NLITE, NTLITE AND DISM
+
+Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
+
+  nLite, NTLite  add the folder as a driver folder, with its subfolders.
+  DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
+                 /Recurse, and for nt-x64\ also /ForceUnsigned.
+
+For Windows Vista to 10, add the folder to install.wim and to both images
+of boot.wim (Windows PE and Setup). The drivers in boot.wim let Setup use
+a USB keyboard, mouse and install stick on a computer whose only USB ports
+are USB 3; those in install.wim are the installed Windows' own. Setup from
+a 64-bit boot.wim also needs test signing on in the medium's boot
+configuration, in efi\microsoft\boot\bcd as well on a medium that also
+starts on UEFI:
+
+  bcdedit /store <medium>\boot\bcd /set {default} testsigning on
+
+and the installed Windows its own: on Vista or 7 x64, press F8 at each of
+its starts, Setup's own restarts included, and choose Disable Driver
+Signature Enforcement, until test signing is on as readme.txt, section 2,
+says (8 to 10 start with their own USB 3 driver).
+
+The 64-bit drivers carry this project's test signature, which Vista x64 to
+10 x64 load only in test-signing mode (readme.txt, section 2).
+
+Leave cm\ out to leave out the Thunderbolt 3 / USB4 connection manager
+and Thunderbolt networking, cm\tbnet\ alone to leave out Thunderbolt
+networking, and stor98\ to leave out Stor98.
+
+cm\xhcicmf.inx is the connection manager's filter for Thunderbolt and USB4
+PCIe ports. It is not for integration and is not named .inf on purpose:
+SETUP.EXE installs it. Do not rename it.
+
+TEXT-MODE SETUP (F6): WINDOWS 2000, XP AND XP X64
+
+Copy the files at the root of nt-x86\ (nt-x64\ for XP x64 and Server 2003
+x64), without its subfolders, to a floppy disk, and press F6 when Setup
+asks for additional drivers. txtsetup.oem on it lists the options. For
+the Windows 2000 option "files from CD", also copy USBD.SY_, HIDCLASS.SY_
+and HIDPARSE.SY_ from the I386 folder of your Windows 2000 CD to the
+floppy's root, unchanged: do not expand or rename them.
+
+AFTER AN INTEGRATED INSTALL, RUN SETUP.EXE
+
+SETUP.EXE then finds the drivers already in place and adds what an
+integration leaves out:
+
+  - XHCIPFW, which keeps PCI bridges' prefetchable windows above 4 GB
+    from stopping Windows (32-bit 2000 to 8.1);
+  - the connection manager's tunnel-port filter, and the start type of
+    the connection manager put back;
+  - the safe-removal mark service for Thunderbolt and USB4 devices;
+  - Thunderbolt networking turned on, when its box is ticked: it stays off
+    until then;
+  - the xHCI98 USB Tree (XHCITR) with its icon by the clock, the entry in
+    Add/Remove Programs, and the settings it asks for.
+'@
+    return ($t.Replace("{VERSION}", $Version) -replace "`r?`n", "`r`n")
 }
 
 function Test-DriverVersionMatches {
@@ -592,6 +1007,7 @@ $script:PackageCatalogs = [ordered]@{
     "xhcicm.cat"  = @{ Inf = "xhcicm.inf";  Files = @("xhcicm.inf", "xhcicm.sys") }
     "xhcicmf.cat" = @{ Inf = "xhcicmf.inf"; Files = @("xhcicmf.inf", "xhcicm.sys") }
     "stor98.cat"  = @{ Inf = "stor98.inf";  Files = @("stor98.inf", "stor98.sys") }
+    "xhcinet.cat" = @{ Inf = "xhcinet.inf"; Files = @("xhcinet.inf", "xhcinet.sys", "xhcinet6.sys") }
 }
 # The systems the catalogs are made for, as the catalog's OSAttr attribute
 # (major version 2 = NT; 5.2 XP x64 and Server 2003 x64, 6.0 Vista, 6.1 7,
@@ -1966,8 +2382,14 @@ $script:BuildInputPrefixes = @(
     "src\stor98\tests\",
     "src\stor98\third_party\"
 )
+# xhcinet.sys and xhcinet6.sys (record 35 section 9.5) have no source stamp
+# of their own: their three directories are build-input directories whole,
+# so every build-kind file there counts (their INFs, read again by every
+# staging's gate, do not).
+$script:BuildInputDirs = @("src\net", "src\net\ndis5", "src\net\ndis6")
 $script:BuildInputScripts = @(
     "scripts\build-driver.cmd",
+    "scripts\build-steps.ps1",
     "scripts\build-all.cmd",
     "scripts\source-stamp.ps1",
     "scripts\check-flavour-marker.ps1",
@@ -1994,6 +2416,7 @@ function Get-BuildInputRules {
             [void]$dirs.Add((Split-Path -Parent ([string]$p)))
         }
     }
+    foreach ($d in $script:BuildInputDirs) { [void]$dirs.Add($d) }
     $root = [System.IO.Path]::GetFullPath($Repo).TrimEnd('\') + '\'
     $hostSuite = Join-Path $Repo "test\run-host-tests.cmd"
     # The host suite's files by name, then every quoted #include of them
@@ -2110,7 +2533,7 @@ function Get-GatedHeadAdvance {
 # record that admits anything. Like the record itself this protects against
 # a mismatch by accident, not against someone who forges one.
 $script:ImportArch = "amd64"
-$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "debug" = "objchk"; "qemu" = "objchk_qemu" }
+$script:ImportObjDirs = [ordered]@{ "release" = "objfre"; "qemu" = "objchk_qemu" }
 $script:ImportStor98Dir = "src\stor98\out\free\amd64"
 
 function Get-GatedImportDirs {
@@ -2118,7 +2541,8 @@ function Get-GatedImportDirs {
     # reads, relative to a tree's root.
     param([string]$Flavor)
     $obj = $script:ImportObjDirs[$Flavor]
-    return @(("src\{0}\amd64" -f $obj), ("src\uas\{0}\amd64" -f $obj), ("src\cm\{0}\amd64" -f $obj))
+    return @(("src\{0}\amd64" -f $obj), ("src\uas\{0}\amd64" -f $obj), ("src\cm\{0}\amd64" -f $obj),
+             ("src\net\ndis5\{0}\amd64" -f $obj), ("src\net\ndis6\{0}\amd64" -f $obj))
 }
 
 function Get-GatedImportBinaries {
@@ -2131,6 +2555,9 @@ function Get-GatedImportBinaries {
         "xhciuas.sys" = (Join-Path $Root ("src\uas\{0}\amd64\xhciuas.sys" -f $obj))
         "xhcicm.sys"  = (Join-Path $Root ("src\cm\{0}\amd64\xhcicm.sys" -f $obj))
         "stor98.sys"  = (Join-Path $Root ($script:ImportStor98Dir + "\stor98.sys"))
+        # Thunderbolt networking's two images (record 35 section 9.5).
+        "xhcinet.sys"  = (Join-Path $Root ("src\net\ndis5\{0}\amd64\xhcinet.sys" -f $obj))
+        "xhcinet6.sys" = (Join-Path $Root ("src\net\ndis6\{0}\amd64\xhcinet6.sys" -f $obj))
     }
 }
 
@@ -2290,8 +2717,8 @@ function Enter-GatedLock {
 function Import-GatedBuild {
     # Copies the amd64 build of each flavour in $Flavor from the worktree
     # $From into the same directories of the tree $Repo, with its records,
-    # under the rules above. With no -Flavor: release and debug, and qemu
-    # where $From has its record. Throws with every reason when it refuses;
+    # under the rules above. With no -Flavor: release, and qemu where $From
+    # has its record (debug was retired with task 45.45). Throws with every reason when it refuses;
     # returns one object per flavour (Flavor, Commit, Time, Advance, Sha256,
     # Record). -RepoLockHeld: the caller (cut-builds.ps1) already holds
     # $Repo's amd64 lock, taken with Enter-GatedLock -Owner cut-builds, and
@@ -2307,11 +2734,11 @@ function Import-GatedBuild {
     $why = Get-GatedImportTreeFault -Repo $Repo -From $From
     if ($why -ne "") { throw "the amd64 build cannot be imported: $why." }
     if ($Flavor.Count -eq 0) {
-        $Flavor = @("release", "debug")
+        $Flavor = @("release")
         if (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $From -Arch $arch -Flavor "qemu") -PathType Leaf) { $Flavor += "qemu" }
     }
     foreach ($f in $Flavor) {
-        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release, debug or qemu)." }
+        if (-not $script:ImportObjDirs.Contains($f)) { throw "'$f' is not a flavour (release or qemu; debug was retired with task 45.45)." }
     }
     $dirs = @()
     foreach ($f in $Flavor) { $dirs += Get-GatedImportDirs -Flavor $f }
@@ -2463,6 +2890,9 @@ function Start-CutBuild {
     $psi.UseShellExecute = $false
     $psi.EnvironmentVariables["TEMP"] = $tmp
     $psi.EnvironmentVariables["TMP"] = $tmp
+    # A cut runs every self-test in full, never skipping one whose inputs
+    # its last passing run read (the INF gate's, task 45.30).
+    $psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"
     $p = [System.Diagnostics.Process]::Start($psi)
     [void]$Started.Add($p)
     Write-Host ("  {0}: {1} in {2} (PID {3}), log {4}" -f $Arch, $Command, $Tree, $p.Id, $log)
@@ -2492,6 +2922,108 @@ function Format-CutSpan {
     return ("{0}:{1:00}:{2:00}" -f [int][Math]::Floor($Span.TotalHours), $Span.Minutes, $Span.Seconds)
 }
 
+function Get-DefaultCutX64Tree {
+    # Tree B when -X64Tree is not given (task 45.3): <A>-x64 beside tree A.
+    param([string]$Repo)
+    $Repo = Resolve-TreePath $Repo
+    return (Join-Path (Split-Path -Parent $Repo) ((Split-Path -Leaf $Repo) + "-x64"))
+}
+
+function Invoke-CutTreeGit {
+    # git in -At for Initialize-CutX64Tree; throws with git's own words.
+    param([string]$At, [string[]]$GitArgs)
+    # With no git to run, $LASTEXITCODE would still be some earlier
+    # program's, and a failure would read as git's success.
+    if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+        throw "git is not on PATH: tree B is made and moved with git; put git on PATH and run again."
+    }
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $global:LASTEXITCODE = 0
+    try { $o = (& git -C $At @GitArgs 2>&1 | Out-String) } finally { $ErrorActionPreference = $eap }
+    if ($LASTEXITCODE -ne 0) { throw ("git {0} in '{1}' failed (exit {2}): {3}" -f ($GitArgs -join " "), $At, $LASTEXITCODE, $o.Trim()) }
+    return $o.Trim()
+}
+
+function Initialize-CutX64Tree {
+    # The default tree B made or brought to tree A's HEAD before the builds
+    # (task 45.3; build-and-test.md, "A faster gated build"). Absent, it is
+    # made with `git worktree add --detach` and marked as the launcher's
+    # (out\cut-x64-tree.txt, naming A). Only a tree so marked, for this A,
+    # detached, clean and with no build lock, is ever moved (`git checkout
+    # --detach`) or given links: each directory of A's tools\ that its
+    # tools\ lacks, as a junction. Any other tree at that path is left as it
+    # is, for Invoke-CutBuilds's checks to take or refuse. Both of B's build
+    # locks are held while it is changed. Returns B's path.
+    param([string]$Repo, [string]$X64Tree)
+    $Repo = Resolve-TreePath $Repo
+    $X64Tree = [System.IO.Path]::GetFullPath($X64Tree).TrimEnd('\')
+    $marker = Join-Path $X64Tree "out\cut-x64-tree.txt"
+    if (-not (Test-Path -LiteralPath $X64Tree)) {
+        Write-Step ("tree B: made at {0}" -f $X64Tree)
+        [void](Invoke-CutTreeGit -At $Repo -GitArgs @("worktree", "add", "--detach", $X64Tree, "HEAD"))
+        Ensure-Directory (Join-Path $X64Tree "out")
+        [System.IO.File]::WriteAllText($marker, ($Repo + "`r`n"))
+    }
+    $why = Get-GatedImportTreeFault -Repo $Repo -From $X64Tree
+    if ($why -ne "") { throw "tree B ($X64Tree): $why." }
+    $owned = (Test-Path -LiteralPath $marker -PathType Leaf) -and
+             [string]::Equals(([System.IO.File]::ReadAllText($marker)).Trim(), $Repo, [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $owned) {
+        Write-Warn ("tree B ({0}) was not made by this script for this tree: it is taken as it is, never moved or linked" -f $X64Tree)
+        return $X64Tree
+    }
+    $held = @()
+    try {
+        foreach ($ar in @("x86", "amd64")) {
+            if (-not (Enter-GatedLock -Root $X64Tree -Arch $ar -Owner "cut-builds")) {
+                Write-Warn ("tree B ({0}) holds a build lock: left as it is" -f $X64Tree)
+                return $X64Tree
+            }
+            $held += Join-Path $X64Tree ("out\gated-{0}.lock" -f $ar)
+        }
+        $a = Get-GitTreeState -Repo $Repo
+        $b = Get-GitTreeState -Repo $X64Tree
+        $eap = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $global:LASTEXITCODE = 128
+        try { & git -C $X64Tree symbolic-ref -q HEAD 2>&1 | Out-Null; $onBranch = ($LASTEXITCODE -ne 1) } finally { $ErrorActionPreference = $eap }
+        if ($b.Head -eq "none" -or $b.Dirty -or $onBranch) {
+            Write-Warn ("tree B ({0}) is {1}: left as it is, neither moved nor linked" -f $X64Tree,
+                        $(if ($b.Head -eq "none") { "not readable by git" } elseif ($onBranch) { "on a branch" } else { "not clean" }))
+            return $X64Tree
+        }
+        if ($a.Head -ne "none" -and $a.Head -ne $b.Head) {
+            Write-Step ("tree B: moved from {0} to {1}" -f $b.Head, $a.Head)
+            [void](Invoke-CutTreeGit -At $X64Tree -GitArgs @("checkout", "--quiet", "--detach", $a.Head))
+        }
+        $aTools = Join-Path $Repo "tools"
+        if (Test-Path -LiteralPath $aTools -PathType Container) {
+            $bTools = Join-Path $X64Tree "tools"
+            Ensure-Directory $bTools
+            foreach ($d in @(Get-ChildItem -LiteralPath $aTools -Directory -Force)) {
+                $link = Join-Path $bTools $d.Name
+                if (Test-Path -LiteralPath $link) {
+                    $item = Get-Item -LiteralPath $link -Force
+                    if (-not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                        Write-Warn ("tree B's tools\{0} is a directory of its own, not a link to this tree's; left as it is" -f $d.Name)
+                    }
+                    continue
+                }
+                $ErrorActionPreference = "Continue"
+                try { & cmd.exe /d /c ('mklink /J "{0}" "{1}" >nul 2>nul' -f $link, $d.FullName) | Out-Null } finally { $ErrorActionPreference = $eap }
+                if (-not (Test-Path -LiteralPath $link -PathType Container)) {
+                    throw "tree B's tools\$($d.Name) could not be linked to '$($d.FullName)'; the tree is kept, and the next run links what it lacks."
+                }
+                Write-Ok ("tree B's tools\{0} linked to {1}" -f $d.Name, $d.FullName)
+            }
+        }
+    } finally {
+        foreach ($l in $held) { Remove-Item -LiteralPath $l -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    return $X64Tree
+}
+
 function Invoke-CutBuilds {
     # scripts\package\cut-builds.ps1's work (its help, and build-and-test.md,
     # "The cut's two builds at once"): the checks of the two trees, the two
@@ -2508,6 +3040,12 @@ function Invoke-CutBuilds {
     if ($Serial -and $ImportOnly) { throw "-Serial and -ImportOnly contradict each other: -ImportOnly builds nothing." }
     if ($NoTargetEvidence -and -not $ImportOnly) {
         throw "-NoTargetEvidence goes with -ImportOnly alone: the x86 build a cut takes needs the target evidence (the helper's import gate), so build without it, or build by hand and import with -ImportOnly."
+    }
+    if ($X64Tree -eq "") {
+        # Tree B by default (task 45.3): <A>-x64, made or brought to A's
+        # HEAD here, except for -ImportOnly, which takes it as it is.
+        $X64Tree = Get-DefaultCutX64Tree -Repo $Repo
+        if (-not $ImportOnly) { $X64Tree = Initialize-CutX64Tree -Repo $Repo -X64Tree $X64Tree }
     }
     if (-not (Test-Path -LiteralPath $X64Tree -PathType Container)) { throw "-X64Tree: there is no directory '$X64Tree'." }
     $Repo = Resolve-TreePath $Repo
@@ -2703,6 +3241,12 @@ function Invoke-DriverPackGit {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.CreateNoWindow = $true
+    # git looks no higher than -Root: a directory that is not a checkout
+    # itself, lying inside another one (a temporary folder under a
+    # worktree's out\, as a gated build sets TEMP), is refused rather than
+    # read as the enclosing repository (task 45.3).
+    $ceiling = Split-Path -Parent ([System.IO.Path]::GetFullPath($Root.TrimEnd('\')))
+    if ("$ceiling" -ne "") { $psi.EnvironmentVariables["GIT_CEILING_DIRECTORIES"] = $ceiling }
     try {
         $p = [System.Diagnostics.Process]::Start($psi)
     } catch {
@@ -3091,6 +3635,47 @@ function Get-HistoryEmbedLines {
     })
 }
 
+function Get-HistoryEntryLines {
+    # history.md's entry for -Version, without its '##' heading: what the
+    # readme's section 1 renders (roadmap-usb4 task 45.29). Empty when there
+    # is no such entry; the changelog check refuses that before any build.
+    param([string[]]$Lines, [string]$Version)
+
+    if ($null -eq $Lines) { return @() }
+    $head = '^##\s+' + [regex]::Escape($Version) + '(\s|$)'
+    $start = -1
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match $head) { $start = $i; break }
+    }
+    if ($start -lt 0 -or $start + 1 -ge $Lines.Count) { return @() }
+    $end = $Lines.Count
+    for ($i = $start + 1; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -match '^##\s') { $end = $i; break }
+    }
+    while ($end -gt $start + 1 -and $Lines[$end - 1].Trim() -eq "") { $end-- }
+    while ($end -gt $start + 1 -and $Lines[$start + 1].Trim() -eq "") { $start++ }
+    if ($end -le $start + 1) { return @() }
+    return @($Lines[($start + 1)..($end - 1)])
+}
+
+function Get-HistoryEarlierText {
+    # The versions history.md lists after -Version's entry (the earlier
+    # releases, newest first), as one comma-separated sentence wrapped to
+    # -Width with a two-space margin: the readme's section 6.
+    param([string[]]$Lines, [string]$Version, [int]$Width = 78)
+
+    $versions = @()
+    $past = $false
+    foreach ($l in @($Lines)) {
+        if ($l -match '^##\s+(\d+\.\d+\.\d+\.\d+)(\s|$)') {
+            if ($past) { $versions += $Matches[1] }
+            if ($Matches[1] -eq $Version) { $past = $true }
+        }
+    }
+    if ($versions.Count -eq 0) { return @("  None: this is the first release.") }
+    return @(Format-Wrapped -Text (($versions -join ", ") + ".") -Width $Width -FirstPrefix "  " -RestPrefix "  ")
+}
+
 function Format-Wrapped {
     # Greedy word wrap with a separate first-line and continuation prefix, so a
     # bullet hangs under its own text rather than under the marker.
@@ -3121,7 +3706,9 @@ function Format-Wrapped {
 
 function ConvertFrom-MarkdownBlocks {
     # The narrow subset releases\history.md actually uses: '###' headings,
-    # '-' bullets that may continue on indented lines, and plain paragraphs.
+    # '-' bullets that may continue on indented lines, '-' bullets indented
+    # by two spaces under them and by four under those (task 45.29), and
+    # plain paragraphs.
     # Inline '**bold**', '*emphasis*' and `code` are stripped rather than
     # rendered - there is nothing to render them with in a .txt file.
     param([string[]]$Lines, [int]$Width = 78)
@@ -3135,6 +3722,12 @@ function ConvertFrom-MarkdownBlocks {
         if ($Text -eq "") { return @($Acc) }
         if ($Kind -eq "bullet") {
             return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "    * " -RestPrefix "      "))
+        }
+        if ($Kind -eq "subsub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "            - " -RestPrefix "              "))
+        }
+        if ($Kind -eq "sub") {
+            return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "        - " -RestPrefix "          "))
         }
         return @(@($Acc) + (Format-Wrapped -Text $Text -Width $W -FirstPrefix "  " -RestPrefix "  "))
     }
@@ -3157,6 +3750,16 @@ function ConvertFrom-MarkdownBlocks {
             if ($out.Count -gt 0 -and $out[-1] -ne "") { $out += "" }
             $out += ("  " + $Matches[1].Trim())
             $out += ""
+            continue
+        }
+        if ($line -match '^\s{4,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "subsub"
+            continue
+        }
+        if ($line -match '^\s{2,}-\s+(.*)$') {
+            $out = @(Flush -Text $pending -Kind $kind -W $Width -Acc $out)
+            $pending = $Matches[1].Trim(); $kind = "sub"
             continue
         }
         if ($line -match '^\s*-\s+(.*)$') {
@@ -3290,6 +3893,10 @@ function Resolve-OtherSetTag {
     try {
         $rev = (Invoke-DriverPackGit -Root $Root -Arguments @("rev-parse", "--verify", "--quiet", "refs/tags/$Tag^{commit}")).Trim()
     } catch {
+        # `rev-parse --verify --quiet` answers a missing tag with exit 1 and
+        # nothing on stderr. Any other failure (no git, not a repository) is
+        # not a missing tag and is not reported as one.
+        if ($_.Exception.Message -notmatch '\(exit 1\): $') { throw }
         $rev = ""
     }
     if ($rev -notmatch '^[0-9a-f]{40}$') {
@@ -3502,6 +4109,7 @@ function Read-WdmFreePin {
             if ($tag -ne "") { throw "'$Path' names two tags." }
             $tag = $Matches[1]
         } elseif ($t -match '^Commit: ([0-9a-f]{40})$') {
+            if ($commit -ne "") { throw "'$Path' names two commits." }
             $commit = $Matches[1]
         } elseif ($t -match '^Certificate: ([0-9A-Fa-f]{40})$') {
             if ($thumb -ne "") { throw "'$Path' names two certificates." }
@@ -3830,7 +4438,7 @@ function Get-InstOtherTable {
     if ($pkgs.Count -eq 0 -or $pkgs.Count -ne $rows) { throw "xhciinst\inst_core.c's instOtherPkgs has $rows rows and this reader took $($pkgs.Count): change the reader with the table." }
     $rels = @()
     $body = Get-Block "instOtherRels"
-    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([01])\s*\}')) {
+    foreach ($m in [regex]::Matches($body, '\{\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*(INST_SET_FREE|INST_SET_NONFREE)\s*,\s*"([^"]*)"\s*,\s*([A-Z_]+|0x[0-9A-Fa-f]+UL?)\s*,\s*([012])\s*\}')) {
         $mask = $m.Groups[5].Value
         if ($mask -eq "INST_SYS_ALL") { $sys = @($script:StageSystems) }
         elseif ($mask -match '^0x([0-9A-Fa-f]+)') {
@@ -3843,6 +4451,9 @@ function Get-InstOtherTable {
             B = ($(if ($m.Groups[3].Value -eq "INST_SET_FREE") { "free:" } else { "nonfree:" }) + $m.Groups[4].Value)
             Systems = $sys
             Desc = "the installer's table"
+            # Kind 2: a COEXISTS the cut lifted from an EXCLUDES (record 26
+            # section 6.7.14), held to this cut's proof.
+            Lifted = ($m.Groups[6].Value -eq "2")
         }
     }
     $relRows = @([regex]::Matches($body, '\{\s*INST_SET_')).Count
@@ -4162,6 +4773,136 @@ function Test-OtherStageIds {
     }
 }
 
+function Get-OtherPkgDevices {
+    # Record 26 section 6.7.14: the devices a package ("<set>:<class>/
+    # <package>") matches on one system token, over every STAGE and COPY
+    # line of it naming the system, each id of its INF's models there
+    # (Get-InfModelIds) as the key VID_<v>&PID_<p>, a revision, an
+    # interface or any other "&" suffix folded into its device. Ok $false
+    # with Why when there is no answer: a CLASS package, its set not
+    # carried, no line for the system, an INF that cannot be read or has no
+    # models section the system reads, or an id of any other form (a class
+    # or compatible id does not say which devices it takes).
+    param($Sets, [string]$Pkg, [string]$Sys, [string]$Kind = "DEVICE")
+    $none = { param($w) [pscustomobject]@{ Ok = $false; Why = $w; Keys = @() } }
+    if ($Kind -ceq "CLASS") { return (& $none "$Pkg is a CLASS package, whose INF does not show which devices its class line takes") }
+    $c = $Pkg.IndexOf(":")
+    if ($c -lt 1) { return (& $none "$Pkg is not set-qualified") }
+    $setName = $Pkg.Substring(0, $c)
+    $id = $Pkg.Substring($c + 1)
+    $s = @($Sets | Where-Object { $_.Name -ceq $setName })
+    if ($s.Count -ne 1) { return (& $none "the $setName set is not carried in this cut") }
+    $pre = $s[0].Prefix + "/"
+    $lines = @($s[0].Lines | Where-Object { (Get-OtherPkgOf -Path $_.Inf -Prefix $s[0].Prefix) -ceq $id -and $_.Systems -ccontains $Sys })
+    if ($lines.Count -eq 0) { return (& $none "$Pkg has no line for $Sys") }
+    $keys = @()
+    foreach ($l in $lines) {
+        $path = Join-Path $s[0].Dir ($l.Inf.Substring($pre.Length).Replace('/', '\'))
+        $inf = $null
+        try { $inf = Read-InfText -Path $path } catch { $inf = $null }
+        if ($null -eq $inf) { return (& $none "$($l.Inf) cannot be read") }
+        $ids = @(Get-InfModelIds -Inf $inf -Sys $Sys)
+        if ($ids.Count -eq 0) { return (& $none "$($l.Inf) has no models section $Sys reads") }
+        foreach ($i in $ids) {
+            $m = [regex]::Match($i, '^USB\\VID_([0-9A-F]{4})&PID_([0-9A-F]{4})(&.*)?$', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            if (-not $m.Success) { return (& $none "$($l.Inf) matches $i, which does not name one device") }
+            $keys += ("VID_" + $m.Groups[1].Value.ToUpperInvariant() + "&PID_" + $m.Groups[2].Value.ToUpperInvariant())
+        }
+    }
+    return [pscustomobject]@{ Ok = $true; Why = ""; Keys = @($keys | Sort-Object -Unique) }
+}
+
+function Get-OtherRelPairKey {
+    # An unordered pair of set-qualified ids as one key.
+    param([string]$A, [string]$B)
+    if ([string]::CompareOrdinal($A, $B) -le 0) { return ($A + "|" + $B) }
+    return ($B + "|" + $A)
+}
+
+function Get-OtherLifted {
+    # Record 26 section 6.7.14: every pair and system this cut takes from an
+    # EXCLUDES of the previous record (-Prev, ConvertFrom-OtherPkgsRecord's)
+    # or keeps from its LIFTED lines to a COEXISTS of this cut's lines
+    # (-Now, the same, of this cut's record before its LIFTED lines), each
+    # proved apart over the carried sets (-Sets) with this cut's rows' kinds;
+    # throws the first that is not. A system the pair has neither kind on
+    # now is left to Test-OtherPkgsTransition, which refuses the drop.
+    # Returns @{ A; B; Systems } per pair lifted.
+    param($Prev, $Now, $Sets)
+    $prevSys = [ordered]@{}
+    $ends = @{}
+    $prevLifted = @()
+    if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+    foreach ($r in @(@($Prev.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" }) + $prevLifted)) {
+        if ($null -eq $r) { continue }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $prevSys.Contains($k)) { $prevSys[$k] = @(); $ends[$k] = @($r.A, $r.B) }
+        $prevSys[$k] = @($prevSys[$k] + $r.Systems | Sort-Object -Unique)
+    }
+    $out = @()
+    foreach ($k in @($prevSys.Keys)) {
+        $a = $ends[$k][0]; $b = $ends[$k][1]
+        $same = @($Now.Rels | Where-Object { (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })
+        $ex = @(); $co = @()
+        foreach ($r in $same) {
+            if ($r.Kind -ceq "EXCLUDES") { $ex += $r.Systems } elseif ($r.Kind -ceq "COEXISTS") { $co += $r.Systems }
+        }
+        $lift = @($prevSys[$k] | Where-Object { $ex -cnotcontains $_ -and $co -ccontains $_ })
+        if ($lift.Count -eq 0) { continue }
+        $kindA = "DEVICE"; $kindB = "DEVICE"
+        $ra = @($Now.Rows | Where-Object { $_.Id -ceq $a }); if ($ra.Count -gt 0) { $kindA = $ra[0].Kind }
+        $rb = @($Now.Rows | Where-Object { $_.Id -ceq $b }); if ($rb.Count -gt 0) { $kindB = $rb[0].Kind }
+        foreach ($sys in $lift) {
+            $da = Get-OtherPkgDevices -Sets $Sets -Pkg $a -Sys $sys -Kind $kindA
+            $db = Get-OtherPkgDevices -Sets $Sets -Pkg $b -Sys $sys -Kind $kindB
+            $why = ""
+            if (-not $da.Ok) { $why = $da.Why }
+            elseif (-not $db.Ok) { $why = $db.Why }
+            else {
+                $common = @($da.Keys | Where-Object { $db.Keys -ccontains $_ })
+                if ($common.Count -gt 0) { $why = "both match $($common[0])" }
+            }
+            if ($why -ne "") {
+                throw "$a and $b were excluded on $sys by $($Prev.Version), and this cut's COEXISTS there is admitted only where the cut reads them apart (design record 26 section 6.7.14): $why."
+            }
+        }
+        $out += [pscustomobject]@{ A = $a; B = $b; Systems = @($lift) }
+    }
+    return $out
+}
+
+function Test-OtherTableLifts {
+    # The installer's table and this cut's lifts the same (section 6.7.14):
+    # every system a row of kind 2 (lifted) names lifted for its pair, and
+    # every lifted pair and system named by such a row, since the installer
+    # holds a lifted pair against an earlier staging of another release only
+    # through that row. -Carried names the sets this cut carries ("free",
+    # "nonfree"; $null for both): a row whose pair has a set the cut does
+    # not carry is not held to a lift, since no lift can be read there and
+    # the installer then holds the row as an EXCLUDES (the partner set is
+    # not this download's, inst_eng.c other_same_release).
+    param($Table, $Lifted, $Carried = $null)
+    $rows = @($Table.Rels | Where-Object { $_.PSObject.Properties.Name -contains "Lifted" -and $_.Lifted })
+    if ($null -ne $Carried) {
+        $rows = @($rows | Where-Object { @($Carried) -ccontains $_.A.Split(':')[0] -and @($Carried) -ccontains $_.B.Split(':')[0] })
+    }
+    foreach ($r in $rows) {
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        $have = @()
+        foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $have += $l.Systems } }
+        $miss = @($r.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "the installer's table marks $($r.A) and $($r.B) lifted on $($miss -join ' '), and this cut lifts no EXCLUDES of the pair there (design record 26 section 6.7.14)." }
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $k = Get-OtherRelPairKey -A $l.A -B $l.B
+        $have = @()
+        foreach ($r in $rows) { if ((Get-OtherRelPairKey -A $r.A -B $r.B) -ceq $k) { $have += $r.Systems } }
+        $miss = @($l.Systems | Where-Object { $have -cnotcontains $_ })
+        if ($miss.Count -gt 0) { throw "this cut lifts the EXCLUDES of $($l.A) and $($l.B) on $($miss -join ' '), and the installer's table has no lifted row (kind 2, INST_REL_LIFTED) for the pair there, which holds it against an earlier staging of another release (design record 26 section 6.7.14)." }
+    }
+}
+
 function Get-OtherScopes {
     # Each package of -Sets with the systems its STAGE lines name:
     # "<set>:<class>/<package>" to a list of tokens.
@@ -4314,7 +5055,7 @@ function Get-OtherOverlaps {
 function ConvertTo-OtherPkgsRecord {
     # releases\<version>\otherpkgs.txt: the table's rows, current and
     # withdrawn, and every relationship line of the table and both sets.
-    param([string]$Version, $Table, $Meta)
+    param([string]$Version, $Table, $Meta, $Lifted = @())
     $lines = @(
         "# otherpkgs.txt - the other USB drivers' package table this release was cut with",
         "#",
@@ -4324,6 +5065,8 @@ function ConvertTo-OtherPkgsRecord {
         "#",
         "#   ROW | <set>:<class>/<package> | CLASS or DEVICE | <heading> | <description> | current, withdrawn or known",
         "#   EXCLUDES or COEXISTS | <set>:<id> | <set>:<id> | <systems> | <why>",
+        "#   LIFTED | <set>:<id> | <set>:<id> | <systems> | <why> (section 6.7.14: an EXCLUDES",
+        "#     this cut proved apart and admitted as COEXISTS; the next cut proves it again)",
         "",
         "Version: $Version")
     foreach ($r in (Get-OtherEffectiveRows -Table $Table -Meta $Meta)) {
@@ -4331,6 +5074,10 @@ function ConvertTo-OtherPkgsRecord {
     }
     foreach ($r in (@($Table.Rels) + @($Meta | Where-Object { $_.Kind -cne "PACKAGE" }))) {
         $lines += ("{0} | {1} | {2} | {3} | {4}" -f $r.Kind, $r.A, $r.B, ($r.Systems -join " "), $r.Desc)
+    }
+    foreach ($l in @($Lifted)) {
+        if ($null -eq $l) { continue }
+        $lines += ("LIFTED | {0} | {1} | {2} | ids read apart by the cut" -f $l.A, $l.B, ($l.Systems -join " "))
     }
     return $lines
 }
@@ -4340,7 +5087,7 @@ function ConvertFrom-OtherPkgsRecord {
     # a record whose Version line is empty (3.2.0.0's, cut before the
     # version reached the check; task 44.34).
     param([string]$Text, [string]$Label, [string]$Fallback = "")
-    $rows = @(); $rels = @(); $ver = ""
+    $rows = @(); $rels = @(); $lifted = @(); $ver = ""
     foreach ($line in ($Text -split "`r?`n")) {
         $t = $line.Trim()
         if ($t -eq "" -or $t.StartsWith("#")) { continue }
@@ -4351,13 +5098,15 @@ function ConvertFrom-OtherPkgsRecord {
             $rows += [pscustomobject]@{ Id = $f[1]; Kind = $f[2]; Heading = $f[3]; Desc = $f[4]; State = $f[5] }
         } elseif (($f[0] -ceq "EXCLUDES" -or $f[0] -ceq "COEXISTS") -and $f.Count -eq 5) {
             $rels += [pscustomobject]@{ Kind = $f[0]; A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }); Desc = $f[4] }
+        } elseif ($f[0] -ceq "LIFTED" -and $f.Count -eq 5) {
+            $lifted += [pscustomobject]@{ A = $f[1]; B = $f[2]; Systems = @($f[3] -split '\s+' | Where-Object { $_ -ne "" }) }
         } else {
             throw "$Label has a line it cannot read: '$line'."
         }
     }
     if ($ver -eq "") { $ver = $Fallback }
     if ($ver -eq "") { throw "$Label names no version." }
-    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels }
+    return [pscustomobject]@{ Version = $ver; Rows = $rows; Rels = $rels; Lifted = $lifted }
 }
 
 function Test-OtherPkgsTransition {
@@ -4366,8 +5115,10 @@ function Test-OtherPkgsTransition {
     # kind; a withdrawn row stays withdrawn with its words, or returns to
     # current only as a package a carried set ships in this cut (-Shipped,
     # Get-OtherPresent's "<set>:<class>/<package>" ids; task 44.34); every
-    # relationship line is still there, on at least its systems.
-    param($Prev, $Now, [string[]]$Shipped = @())
+    # relationship line is still there, on at least its systems - an
+    # EXCLUDES except on a system -Lifted (Get-OtherLifted's) proves its
+    # pair apart (section 6.7.14).
+    param($Prev, $Now, [string[]]$Shipped = @(), $Lifted = @())
     foreach ($r in $Prev.Rows) {
         $n = @($Now.Rows | Where-Object { $_.Id -ceq $r.Id })
         if ($n.Count -eq 0) { throw "the package table drops $($r.Id), which $($Prev.Version) carried: a row is never removed, only marked withdrawn (design record 26 section 6.7.11)." }
@@ -4386,8 +5137,93 @@ function Test-OtherPkgsTransition {
         $n = @($Now.Rels | Where-Object { $_.Kind -ceq $r.Kind -and (($_.A -ceq $r.A -and $_.B -ceq $r.B) -or ($_.A -ceq $r.B -and $_.B -ceq $r.A)) })
         $kept = $false
         foreach ($x in $n) { if (@($r.Systems | Where-Object { $x.Systems -cnotcontains $_ }).Count -eq 0) { $kept = $true } }
+        if (-not $kept -and $r.Kind -ceq "EXCLUDES") {
+            # Each system kept by one of the pair's EXCLUDES lines, or lifted.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            foreach ($l in @($Lifted)) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $cover += $l.Systems } }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
+        if (-not $kept -and $r.Kind -ceq "COEXISTS") {
+            # A system the previous release lifted may be excluded again,
+            # which ends its lift (section 6.7.14); every other system kept
+            # by one of the pair's COEXISTS lines.
+            $k = Get-OtherRelPairKey -A $r.A -B $r.B
+            $cover = @()
+            foreach ($x in $n) { $cover += $x.Systems }
+            $prevLifted = @()
+            if ($Prev.PSObject.Properties.Name -contains "Lifted") { $prevLifted = @($Prev.Lifted) }
+            $was = @()
+            foreach ($l in $prevLifted) { if ($null -ne $l -and (Get-OtherRelPairKey -A $l.A -B $l.B) -ceq $k) { $was += $l.Systems } }
+            foreach ($x in @($Now.Rels | Where-Object { $_.Kind -ceq "EXCLUDES" -and (Get-OtherRelPairKey -A $_.A -B $_.B) -ceq $k })) {
+                $cover += @($x.Systems | Where-Object { $was -ccontains $_ })
+            }
+            $kept = @($r.Systems | Where-Object { $cover -cnotcontains $_ }).Count -eq 0
+        }
         if (-not $kept) { throw "the package table drops the $($r.Kind) line of $($r.A) and $($r.B) on $($r.Systems -join ' '), which $($Prev.Version) carried: a line is never removed (design record 26 section 6.7.11)." }
     }
+}
+
+function Get-OtherTableOwnLifts {
+    # Record 26 section 6.7.14 (draft 57): a cut with no earlier record
+    # under its -ReleasesDir (a TEST build or a dry cut writes into another
+    # directory) has no EXCLUDES to lift, yet the installer's table marks a
+    # pair lifted (kind 2) on some systems. Each such row is proved as a lift
+    # of an EXCLUDES on its own systems would be: Get-OtherLifted over the
+    # carried sets (-Sets) against this cut's lines (-Now), throwing where
+    # the two are not read apart. Returns the lifts, @() for no such row.
+    param($Table, $Now, $Sets)
+    $own = @()
+    foreach ($r in @($Table.Rels)) {
+        if (-not ($r.PSObject.Properties.Name -contains "Lifted" -and $r.Lifted)) { continue }
+        $own += [pscustomobject]@{ Kind = "EXCLUDES"; A = $r.A; B = $r.B; Systems = @($r.Systems); Desc = $r.Desc }
+    }
+    if ($own.Count -eq 0) { return @() }
+    $p = [pscustomobject]@{ Version = "the installer's lifted row (no earlier $($script:OtherPkgsRecordName))"; Rows = @(); Rels = $own; Lifted = @() }
+    return @(Get-OtherLifted -Prev $p -Now $Now -Sets $Sets)
+}
+
+function Get-OtherHeldLifts {
+    # Record 26 section 6.7.14 (draft 51): in a cut that leaves out a set of
+    # a pair the installer's table marks lifted (kind 2), the installer holds
+    # that row as an EXCLUDES (the partner set is not this download's), so
+    # the cut records it so: on the row's systems the pair's COEXISTS lines,
+    # the table's and the carried pack's, become EXCLUDES, and the rest of
+    # each line stays as it is. Returns the table and the metadata to check
+    # and record; both unchanged in a cut that carries both sets.
+    param($Table, $Meta, [string[]]$Carried)
+    $hold = @{}
+    foreach ($r in @($Table.Rels)) {
+        if (-not ($r.PSObject.Properties.Name -contains "Lifted" -and $r.Lifted)) { continue }
+        if (@($Carried) -ccontains $r.A.Split(':')[0] -and @($Carried) -ccontains $r.B.Split(':')[0]) { continue }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $hold.ContainsKey($k)) { $hold[$k] = @() }
+        $hold[$k] += @($r.Systems)
+    }
+    if ($hold.Count -eq 0) { return [pscustomobject]@{ Table = $Table; Meta = $Meta } }
+    function Split-Held($r) {
+        if ($r.Kind -cne "COEXISTS") { return $r }
+        $k = Get-OtherRelPairKey -A $r.A -B $r.B
+        if (-not $hold.ContainsKey($k)) { return $r }
+        $in = @($r.Systems | Where-Object { $hold[$k] -ccontains $_ })
+        $out = @($r.Systems | Where-Object { $hold[$k] -cnotcontains $_ })
+        $res = @()
+        if ($in.Count -gt 0) {
+            $x = $r.PSObject.Copy(); $x.Kind = "EXCLUDES"; $x.Systems = $in
+            if ($x.PSObject.Properties.Name -contains "Lifted") { $x.Lifted = $false }
+            $res += $x
+        }
+        if ($out.Count -gt 0) { $y = $r.PSObject.Copy(); $y.Systems = $out; $res += $y }
+        return $res
+    }
+    $heldRels = @()
+    foreach ($r in @($Table.Rels)) { $heldRels += @(Split-Held $r) }
+    # Not $meta: PowerShell names are case-blind, and that is -Meta.
+    $heldMeta = @()
+    foreach ($m in @($Meta)) { $heldMeta += @(Split-Held $m) }
+    $t = $Table.PSObject.Copy(); $t.Rels = $heldRels
+    return [pscustomobject]@{ Table = $t; Meta = $heldMeta }
 }
 
 function Find-PreviousOtherPkgs {
@@ -4456,15 +5292,31 @@ function Invoke-OtherSetChecks {
     }
     Test-OtherStageIds -Sets $sets
     Test-OtherPkgTable -Table $table -Sets $sets -Meta $meta -Brands $brands -Headings $headings
+    $carried = @($sets | ForEach-Object { $_.Name })
+    $held = Get-OtherHeldLifts -Table $table -Meta $meta -Carried $carried
+    $table = $held.Table
+    $meta = $held.Meta
     $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta
     $prev = $null
+    $lifted = @()
     $vParsed = $null
     if ([version]::TryParse($Version, [ref]$vParsed)) { $prev = Find-PreviousOtherPkgs -ReleasesDir $ReleasesDir -Version $Version }
     if ($null -ne $prev) {
         $p = ConvertFrom-OtherPkgsRecord -Text ([System.IO.File]::ReadAllText($prev.Path)) -Label "'$($prev.Path)'" -Fallback ($prev.V.ToString())
         $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
-        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets)
+        # An EXCLUDES lifted to a COEXISTS only where proved apart, and an
+        # earlier lift proved again (record 26 section 6.7.14).
+        $lifted = @(Get-OtherLifted -Prev $p -Now $n -Sets $sets)
+        Test-OtherPkgsTransition -Prev $p -Now $n -Shipped (Get-OtherPresent -Sets $sets) -Lifted $lifted
+    } else {
+        # No history here: the table's lifted rows are proved by themselves
+        # (draft 57). After Get-OtherHeldLifts a row of kind 2 is left only
+        # where both of its sets are carried.
+        $n = ConvertFrom-OtherPkgsRecord -Text ($record -join "`r`n") -Label "this cut's otherpkgs.txt"
+        $lifted = @(Get-OtherTableOwnLifts -Table $table -Now $n -Sets $sets)
     }
+    Test-OtherTableLifts -Table $table -Lifted $lifted -Carried $carried
+    if ($lifted.Count -gt 0) { $record = ConvertTo-OtherPkgsRecord -Version $Version -Table $table -Meta $meta -Lifted $lifted }
     return [pscustomobject]@{ Record = $record; Overlaps = @(Get-OtherOverlaps -Table $table -Sets $sets -Meta $meta); Previous = $prev }
 }
 

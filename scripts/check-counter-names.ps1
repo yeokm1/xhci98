@@ -1,9 +1,11 @@
-# check-counter-names.ps1 - XHCISNAP's counter names against the driver's
-# counter block, word by word (task 36.35's 18-word shift; p36-int3).
+# check-counter-names.ps1 - the snapshot reader's counter names against the
+# driver's counter block, word by word (task 36.35's 18-word shift;
+# p36-int3). The reader is XHCITR's (xhcitr\tr_snap.c) since 3.1.0.0,
+# XHCISNAP's before (roadmap-usb4 task 42-A.4); xhcitr\snaptest.cmd runs this.
 #
-# `XHCISNAP -selftest-counters` prints the counter section of a canned
-# image whose word i holds i + 1. This script reads XHCIHC_COUNTERS from
-# src\xhci_counters.h - the driver's own field order, which XHCISNAP's
+# `XHCITR /snaptest -selftest-counters` prints the counter section of a
+# canned image whose word i holds i + 1. This script reads XHCIHC_COUNTERS
+# from src\xhci_counters.h - the driver's own field order, which the reader's
 # tables only copy - and requires, for every word: a field's line with
 # its name and the value i + 1; a reserved array (none since stage B filled SuspBReserved)
 # not printed at all; and each word past the struct printed as
@@ -37,7 +39,7 @@ foreach ($m in [regex]::Matches($body, 'ULONG\s+([A-Za-z0-9_]+)\s*(\[\s*(\d+)\s*
     }
 }
 
-$lines = Get-Content $Log
+$lines = Get-Content -LiteralPath $Log
 $sect = $false
 $printed = @{}
 foreach ($l in $lines) {

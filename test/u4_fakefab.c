@@ -168,7 +168,9 @@ static void fabQueue(FAB *f, unsigned long pdf, const unsigned long *dw,
     unsigned long at;
     unsigned long pos;
 
-    if (f->RxQCount >= FAB_RXQ || words > 62) {
+    /* 63 words and the CRC fill a 256-byte ring 0 buffer (TBT_RING_BUF_BYTES):
+     * a Properties Read Response of 45 DWs is that long (task 45.59). */
+    if (f->RxQCount >= FAB_RXQ || words > 63) {
         f->RxDropped++;
         return;
     }
@@ -269,6 +271,12 @@ static void setLaneWidth(FAB_ADP *a, unsigned long w)
     a->Cs[FAB_CAP_LANE + 1] = (a->Cs[FAB_CAP_LANE + 1] & ~(0x3FUL << 20)) | (w << 20);
 }
 
+/* Current Link Speed (Spec 8.2.2.3): 8h Gen 2, 4h Gen 3, 2h Gen 4. */
+static void setLaneSpeed(FAB_ADP *a, unsigned long s)
+{
+    a->Cs[FAB_CAP_LANE + 1] = (a->Cs[FAB_CAP_LANE + 1] & ~(0xFUL << 16)) | (s << 16);
+}
+
 /* Walk a route; -1 with the reporting router, the code and its adapter
  * when it cannot be delivered (Spec 6.4.3). */
 static int fabResolve(FAB *f, unsigned long hi, unsigned long lo, int *errRouter,
@@ -353,7 +361,7 @@ static int fabPortOfLane(const FAB *f, unsigned lane)
 
     for (a = 1; a <= f->R[0].MaxAdp; a++) {
         if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1 &&
-            f->R[0].Adp[a].Cs[FAB_CAP_PORT] != 0) {
+            (f->R[0].Tbt3 ? (a & 1U) != 0 : f->R[0].Adp[a].Cs[FAB_CAP_PORT] != 0)) {
             k++;
             if (a == lane) {
                 return k;
@@ -378,6 +386,96 @@ static int fabNthOf(const FAB *f, int port, unsigned long type)
     return 0;
 }
 
+/* A device router's Nth downstream lane 0 adapter (1-based), its
+ * upstream port not counted; 0 when there is none. */
+static int fabDownLaneN(const FAB_ROUTER *d, int n)
+{
+    unsigned i;
+    int k = 0;
+
+    for (i = 1; i <= d->MaxAdp; i++) {
+        if (d->Adp[i].Present && (d->Adp[i].Cs[2] & 0xFFFFFFUL) == 1 && !d->Adp[i].Lane1 &&
+            i != d->UpAdp && ++k == n) {
+            return (int)i;
+        }
+    }
+    return 0;
+}
+
+/* The far end of a protocol adapter below depth 1 (record 34 sections 6.4
+ * and 6.6): a device router's Nth down adapter of a type belongs to its
+ * Nth downstream port, and the child there pairs by its first up adapter
+ * of the type; a child's up adapter the other way round. */
+static int fabPeerDeep(FAB *f, int r, unsigned a, unsigned long t, unsigned long want,
+                       int *pr, unsigned *pa)
+{
+    const FAB_ROUTER *d = &f->R[r];
+    unsigned i;
+    int n;
+    int k;
+    int lane;
+    int other;
+
+    if ((t & 0xFFUL) == 1) {
+        n = 0;
+        for (i = 1; i <= a; i++) {
+            if (d->Adp[i].Present && (d->Adp[i].Cs[2] & 0xFFFFFFUL) == t) {
+                n++;
+            }
+        }
+        lane = fabDownLaneN(d, n);
+        if (lane == 0) {
+            return 0;
+        }
+        other = d->Adp[lane].Peer;
+        if (other < 0 || !f->R[other].Connected || f->R[other].Parent != r) {
+            return 0;
+        }
+        for (i = 1; i <= f->R[other].MaxAdp; i++) {
+            if (f->R[other].Adp[i].Present &&
+                (f->R[other].Adp[i].Cs[2] & 0xFFFFFFUL) == want) {
+                *pr = other;
+                *pa = i;
+                return 1;
+            }
+        }
+        return 0;
+    }
+    if (!d->Connected || d->Parent <= 0) {
+        return 0;
+    }
+    for (i = 1; i <= d->MaxAdp; i++) {
+        if (d->Adp[i].Present && (d->Adp[i].Cs[2] & 0xFFFFFFUL) == t) {
+            if (i != a) {
+                return 0;
+            }
+            break;
+        }
+    }
+    other = d->Parent;
+    n = 0;
+    for (k = 1; ; k++) {
+        lane = fabDownLaneN(&f->R[other], k);
+        if (lane == 0) {
+            return 0;
+        }
+        if (lane == d->ParentAdp) {
+            n = k;
+            break;
+        }
+    }
+    k = 0;
+    for (i = 1; i <= f->R[other].MaxAdp; i++) {
+        if (f->R[other].Adp[i].Present && (f->R[other].Adp[i].Cs[2] & 0xFFFFFFUL) == want &&
+            ++k == n) {
+            *pr = other;
+            *pa = i;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* The far end of a PCIe/USB3 protocol adapter across a host port: the
  * Nth down adapter of a type belongs to the Nth USB4 port (Spec 5.2.5),
  * and the device's first up adapter of the type is its peer. */
@@ -393,6 +491,9 @@ static int fabPeerProto(FAB *f, int r, unsigned a, int *pr, unsigned *pa)
 
     t = f->R[r].Adp[a].Cs[2] & 0xFFFFFFUL;
     want = (t & ~0xFFUL) | ((t & 0xFFUL) == 1 ? 2UL : 1UL);
+    if (r != 0 && ((t & 0xFFUL) == 1 || f->R[r].Parent > 0)) {
+        return fabPeerDeep(f, r, a, t, want, pr, pa);
+    }
     if (r == 0) {
         port = 0;
         for (i = 1; i <= a; i++) {
@@ -404,7 +505,8 @@ static int fabPeerProto(FAB *f, int r, unsigned a, int *pr, unsigned *pa)
         k = 0;
         for (i = 1; i <= f->R[0].MaxAdp; i++) {
             if (f->R[0].Adp[i].Present && (f->R[0].Adp[i].Cs[2] & 0xFFFFFFUL) == 1 &&
-                f->R[0].Adp[i].Cs[FAB_CAP_PORT] != 0 && ++k == port) {
+                (f->R[0].Tbt3 ? (i & 1U) != 0 : f->R[0].Adp[i].Cs[FAB_CAP_PORT] != 0) &&
+                ++k == port) {
                 lane = (int)i;
                 break;
             }
@@ -462,6 +564,18 @@ static void fabPcieUpdate(FAB *f, int r, unsigned a)
         c = &f->R[r].Adp[a].Cs[FAB_CAP_ADP];
         *c = (*c & ~(0xFUL << 25)) |
              ((unsigned long)(f->R[r].Adp[a].LtssmForce - 1) << 25);
+        /* The far end of a pair whose near end reads a fixed state (the
+         * Thunderbolt 3 dock's PCIe Down, FAB_DEV_TBT3_DOCK) still trains
+         * by both Path Enables; any other forced end stops here, as it
+         * always did. */
+        if (!f->R[r].Adp[a].PeerFollows || !fabPeerProto(f, r, a, &pr, &pa) ||
+            f->R[pr].Adp[pa].LtssmForce != 0) {
+            return;
+        }
+        o = &f->R[pr].Adp[pa].Cs[FAB_CAP_ADP];
+        both = (*c & 0x80000000UL) && (*o & 0x80000000UL);
+        *o = (*o & ~(0xFUL << 25)) |
+             ((both ? 6UL : (f->R[pr].Adp[pa].DetectStuck ? 1UL : 0UL)) << 25);
         return;
     }
     if (!fabPeerProto(f, r, a, &pr, &pa)) {
@@ -472,10 +586,20 @@ static void fabPcieUpdate(FAB *f, int r, unsigned a)
     c = &f->R[r].Adp[a].Cs[FAB_CAP_ADP];
     o = &f->R[pr].Adp[pa].Cs[FAB_CAP_ADP];
     both = (*c & 0x80000000UL) && (*o & 0x80000000UL);
+    if (f->R[pr].Adp[pa].LtssmForce != 0 && f->R[pr].Adp[pa].PeerFollows) {
+        /* The far end reads a fixed state; only this end trains. */
+        *c = (*c & ~(0xFUL << 25)) |
+             ((both ? 6UL : (f->R[r].Adp[a].DetectStuck ? 1UL : 0UL)) << 25);
+        return;
+    }
+    /* A Thunderbolt router's adapter reads 3 there with its tunnel up, not
+     * USB4's L0 (usb4-emu's captured Thunderbolt 3 adapter, 0x46210400). */
     *c = (*c & ~(0xFUL << 25)) |
-         ((both ? 6UL : (f->R[r].Adp[a].DetectStuck ? 1UL : 0UL)) << 25);
+         ((both ? (f->R[r].Tbt3 ? 3UL : 6UL) :
+                  (f->R[r].Adp[a].DetectStuck ? 1UL : 0UL)) << 25);
     *o = (*o & ~(0xFUL << 25)) |
-         ((both ? 6UL : (f->R[pr].Adp[pa].DetectStuck ? 1UL : 0UL)) << 25);
+         ((both ? (f->R[pr].Tbt3 ? 3UL : 6UL) :
+                  (f->R[pr].Adp[pa].DetectStuck ? 1UL : 0UL)) << 25);
 }
 
 static void fabRouterOp(FAB *f, int ri)
@@ -494,6 +618,7 @@ static void fabRouterOp(FAB *f, int ri)
     case 0x30: slot = FAB_OP_MAP; break;
     case 0x31: slot = FAB_OP_CAPS; break;
     case 0x33: slot = FAB_OP_BA; break;
+    case 0x32: slot = FAB_OP_SETCAPS; break;
     case 0x25:
         r->NvmOps++;
         slot = r->Kind == FAB_DEV_ASM2464 ? FAB_OP_NVM : -1;
@@ -535,8 +660,30 @@ static void fabRouterOp(FAB *f, int ri)
         r->MapNext = (r->MapNext + 1) % r->MapEntries;
         break;
     case FAB_OP_CAPS:
+        if (r->CapsFailAfterSet != 0 && r->SetCapsOps != 0) {
+            if (r->CapsFailAfterSet > 0) {
+                r->CapsFailAfterSet--;
+            }
+            r->Rcs[26] = (r->Rcs[26] & 0xFFFFUL) | (1UL << 24);
+            return;
+        }
         r->Rcs[25] = 5;
         r->Rcs[9] = r->CapsData;
+        break;
+    case FAB_OP_SETCAPS:
+        /* Spec 8.3.1.3.3: Capability Index 7:0, Enable Capability 8; a
+         * capability is enabled only where it is supported. */
+        r->SetCapsOps++;
+        r->SetCapsLastMeta = meta;
+        i = meta & 0xFFUL;
+        if (!r->SetCapsIgnore && i >= 1 && i <= 15 &&
+            (r->CapsData & (1UL << (2 * i))) != 0) {
+            if (meta & 0x100UL) {
+                r->CapsData |= 1UL << (2 * i + 1);
+            } else {
+                r->CapsData &= ~(1UL << (2 * i + 1));
+            }
+        }
         break;
     case FAB_OP_BA:
         r->BaLastMeta = meta;
@@ -567,6 +714,14 @@ static void fabEnumerated(FAB *f, int ri)
             r->RrAtUs = f->NowUs + r->RrDelayUs;
         } else {
             r->Rcs[6] |= 0x01000000UL;
+        }
+    }
+    if (ri == 0 && r->Tbt3) {
+        for (a = 1; a <= r->MaxAdp; a++) {
+            if (r->Adp[a].Present && (r->Adp[a].Cs[2] & 0xFFFFFFUL) == 1 &&
+                r->Adp[a].Peer >= 0) {
+                fabHotPlug(f, 0, a, 0);
+            }
         }
     }
     if (r->DpPlugEvents) {
@@ -625,10 +780,53 @@ static void fabEeCtl(FAB_ROUTER *r, unsigned long old, unsigned long v)
     }
 }
 
+static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
+                            unsigned long v);
+
+/* A Thunderbolt router's link controller port block of `addr`, as
+ * physical port 0 or 1, or -1 (FAB_RCAP_LC + FAB_LC_START + n *
+ * FAB_LC_PORT_SIZE). */
+static int fabLcPortOf(const FAB_ROUTER *r, unsigned long addr, unsigned long reg)
+{
+    unsigned long n;
+
+    if (!r->Tbt3 || r->Rcs[FAB_RCAP_LC] == 0 || addr < FAB_RCAP_LC + FAB_LC_START) {
+        return -1;
+    }
+    for (n = 0; n < 2; n++) {
+        if (addr == FAB_RCAP_LC + FAB_LC_START + n * FAB_LC_PORT_SIZE + reg) {
+            return (int)n;
+        }
+    }
+    return -1;
+}
+
 static void fabRouterWrite(FAB *f, int ri, unsigned long addr, unsigned long v)
 {
     FAB_ROUTER *r = &f->R[ri];
     unsigned long old = r->Rcs[addr];
+    int phys;
+
+    phys = fabLcPortOf(r, addr, 0x26);
+    if (phys >= 0 && ri == 0) {
+        /* The link controller's Downstream Port Reset (Linux lc.c
+         * tb_lc_reset_port): the PORT_CS_19 semantics on the port's lane
+         * 0 adapter, which keeps no Lock on a Thunderbolt host. */
+        r->Rcs[addr] = (old & ~1UL) | (v & 1UL);
+        fabAdapterWrite(f, ri, (unsigned)(2 * phys + 1), FAB_CAP_PORT + 19, v & 1UL);
+        r->Adp[2 * phys + 1].Cs[4] &= ~0x80000000UL;
+        r->Adp[2 * phys + 2].Cs[4] &= ~0x80000000UL;
+        f->LcResets += (v & 1UL);
+        return;
+    }
+    if (r->Tbt3 && addr == 0x26 && r->Rcs[0] == (0x8086UL | (0x1513UL << 16))) {
+        /* Light Ridge's TMU access enable (cap.c), counted while set. */
+        r->Rcs[addr] = v;
+        if ((v & 0x00100000UL) != 0 && (old & 0x00100000UL) == 0) {
+            f->TmuAccessOn++;
+        }
+        return;
+    }
 
     if (r->Tbt3 && addr == FAB_RCAP_PLUG + 4) {
         r->Rcs[addr] = (old & ~0x17UL) | (v & 0x17UL);
@@ -701,6 +899,12 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         if (!(v & 0x4000UL) && (old & 0x4000UL) && ad->Peer >= 0) {
             setLaneState(ad, 2);
         }
+        if ((v & 0x8000UL) && ad->Peer >= 0 &&
+            ((ad->Cs[addr] >> 16) & 0xFUL) == 0x2UL) {
+            /* Spec 8.2.2.3: on a Gen 4 link the bit clears itself. */
+            ad->Cs[addr] &= ~0x8000UL;
+            return;
+        }
         if ((v & 0x8000UL) && ad->Peer >= 0) {
             /* Lane Bonding on lane 0: x2 on both lanes at both ends, LB
              * cleared, lane 1 reports a hot unplug (the emulator). */
@@ -733,6 +937,9 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
         return;
     }
     if (t == 1 && addr == FAB_CAP_PORT + 19) {
+        if (r->ElrStuck) {
+            v &= ~0x80000000UL;
+        }
         ad->Cs[addr] = v;
         if ((v & 1UL) == 0 && ad->Peer >= 0 && f->R[ad->Peer].ReconnectPending &&
             !f->R[ad->Peer].ReconnectArmed) {
@@ -752,6 +959,17 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
             for (pa = 1; pa <= f->R[d].MaxAdp; pa++) {
                 memset(f->R[d].Adp[pa].Path + 16, 0, sizeof(f->R[d].Adp[pa].Path) - 64);
                 f->R[d].Adp[pa].Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+                /* Version 2 state back to its defaults (task 45.20). */
+                if (fabPcieAdp(&f->R[d], pa)) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_ADP + 1] = 0;
+                } else if ((f->R[d].Adp[pa].Cs[2] & 0xFFFFFFUL) == 1) {
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 8] = 0;
+                    f->R[d].Adp[pa].Cs[FAB_CAP_TMU_ADP + 9] = 0;
+                }
+            }
+            if (!f->R[d].Tbt3) {
+                f->R[d].CapsData &= 0x55555555UL;
+                f->R[d].SetCapsOps = 0;
             }
             ad->Cs[4] |= 0x80000000UL;
             r->Adp[a + 1].Cs[4] |= 0x80000000UL;
@@ -799,6 +1017,10 @@ static void fabAdapterWrite(FAB *f, int ri, unsigned a, unsigned long addr,
     if (fabUsb3Adp(r, a) && (addr == FAB_CAP_ADP + 1 || addr == FAB_CAP_ADP + 4)) {
         return;
     }
+    if (fabPcieAdp(r, a) && addr == FAB_CAP_ADP + 1 && ad->EeStuck) {
+        ad->Cs[addr] = (v & ~1UL) | (old & 1UL);
+        return;
+    }
     (void)pr;
     ad->Cs[addr] = v;
 }
@@ -844,6 +1066,14 @@ static unsigned long fabRead(FAB *f, int ri, unsigned long cs, unsigned a,
         if (fabPcieAdp(r, a) && addr == FAB_CAP_ADP) {
             fabPcieUpdate(f, ri, a);
         }
+        if (fabUsb3Adp(r, a) && addr == FAB_CAP_ADP + 4) {
+            /* Task 45.56: USB3 Link Valid and the Port Link State. */
+            if (r->Adp[a].Usb3Ls != 0) {
+                return (r->Adp[a].Cs[addr] & ~0xFFFUL) | ((r->Adp[a].Usb3Ls - 1) & 0xFFFUL);
+            }
+            return (r->Adp[a].Cs[addr] & ~0xFFFUL) |
+                   ((r->Adp[a].Cs[FAB_CAP_ADP] & 0x80000000UL) ? 0x80UL : 0UL);
+        }
         return r->Adp[a].Cs[addr];
     }
     return r->Adp[a].Path[addr];
@@ -873,6 +1103,13 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
     f->Requests++;
     if (f->Stopped) {
         return;
+    }
+    if (pdf == TBT_PDF_WRITE) {
+        if (f->TriedCount < FAB_WRLOG) {
+            f->TriedHi[f->TriedCount] = dw[0] & 0xFFFFFFUL;
+            f->TriedLo[f->TriedCount] = dw[1];
+        }
+        f->TriedCount++;
     }
     r = fabResolve(f, dw[0] & 0xFFFFFFUL, dw[1], &errRouter, &code, &errAdp);
     drop = 0;
@@ -931,6 +1168,7 @@ static void fabRequest(FAB *f, unsigned long pdf, const unsigned long *dw,
                 f->WrAddr[f->WrCount] = addr + i;
                 f->WrVal[f->WrCount] = dw[3 + i];
                 f->WrAtUs[f->WrCount] = f->NowUs;
+                f->WrN[f->WrCount] = n;
             }
             f->WrCount++;
             if (cs == TBT_CS_ROUTER) {
@@ -971,7 +1209,34 @@ static void fabTx(FAB *f, unsigned long pdf, const unsigned long *dw,
     case TBT_PDF_NOTIFY_ACK_ENH:
         f->AcksEnh++;
         break;
+    case TBT_PDF_XDOMAIN_REQ:
+    case TBT_PDF_XDOMAIN_RESP:
+        /* Routed as any control packet (Spec 6.4.3): one that cannot be
+         * delivered - a Locked lane adapter on its way among them (ERR_LOCK,
+         * as usb4-emu's host router answers) - is dropped with the
+         * notification, never handed to the far end. */
+        {
+            int er;
+            unsigned long code;
+            unsigned long ea;
+
+            if (fabResolve(f, dw[0] & 0x7FFFFFFFUL, dw[1], &er, &code, &ea) < 0) {
+                f->XdRefused++;
+                fabNotify(f, er, code, ea);
+                break;
+            }
+        }
+        f->XdSent++;
+        if (f->XdTx != NULL) {
+            f->XdTx(f, pdf, dw, words);
+        }
+        break;
     }
+}
+
+void fabAdapterPoke(FAB *f, int router, unsigned adp, unsigned long addr, unsigned long v)
+{
+    fabAdapterWrite(f, router, adp, addr, v);
 }
 
 static void fabProcessTx(FAB *f)
@@ -1325,6 +1590,23 @@ int fabHostMinimal(FAB *f)
     return 0;
 }
 
+/* usb4-emu's `minimal` host as a USB4 version 2 host router (task 45.20):
+ * USB4 Version 40h, host interface version 40h (Spec Table 12-11), Get
+ * Capabilities reporting the Sequence bit capability supported, Gen 4
+ * links with another version 2 router. Test ids, no product's. */
+int fabHostV2(FAB *f)
+{
+    FAB_ROUTER *h = &f->R[0];
+
+    fabHostMinimal(f);
+    h->Rcs[4] = (h->Rcs[4] & 0x00FFFFFFUL) | (0x40UL << 24);
+    h->Rcs[0] = 0x46F4UL | (0x0002UL << 16);
+    h->CapsData = 1UL << 4;
+    h->Gen4 = 1;
+    f->Caps = (f->Caps & ~(0xFFUL << 16)) | (0x40UL << 16);
+    return 0;
+}
+
 int fabHostAdl(FAB *f)
 {
     FAB_ROUTER *h = &f->R[0];
@@ -1530,6 +1812,9 @@ static void fabAsm2464(FAB_ROUTER *d, int i)
     d->LinkDelayUs = 594000;
 }
 
+static void fabDromUid(FAB_ROUTER *r, unsigned long lo, unsigned long hi);
+static void fabTbtCaps(FAB_ROUTER *r, int lc, unsigned ports, unsigned long tag);
+
 int fabDevice(FAB *f, int kind)
 {
     int i;
@@ -1544,8 +1829,9 @@ int fabDevice(FAB *f, int kind)
     memset(d, 0, sizeof(*d));
     d->Parent = -1;
     d->Kind = kind;
-    if (kind == FAB_DEV_USB4) {
-        fabRouterBase(d, 0x46F4, 0x4242, 0x20);
+    if (kind == FAB_DEV_USB4 || kind == FAB_DEV_USB4V2) {
+        fabRouterBase(d, 0x46F4, kind == FAB_DEV_USB4 ? 0x4242 : 0x4280,
+                      kind == FAB_DEV_USB4 ? 0x20 : 0x40);
         fabTmuRouter(d);
         fabLane(d, 1, 1, 1);
         fabLane(d, 2, 0, 1);
@@ -1566,11 +1852,28 @@ int fabDevice(FAB *f, int kind)
         d->BaData[0] = 4UL | (32UL << 16);
         d->BaData[1] = 1UL | (16UL << 16);
         fabDrom(d, "QEMU", "USB4 NVMe Enclosure");
+        if (kind == FAB_DEV_USB4V2) {
+            d->CapsData = 1UL << 4;     /* the Sequence bit capability */
+            d->Gen4 = 1;
+        }
     } else if (kind == FAB_DEV_ASM2464) {
         fabAsm2464(d, i);
+    } else if (kind == FAB_DEV_TBT1_PR) {
+        /* Port Ridge: generation 1, no link controller; its identity the
+         * DROM's UID (record 22 section 19.4 item 3a). */
+        d->Tbt3 = 1;
+        fabRouterBase(d, 0x8086, 0x1549, 0x00);
+        d->BondPossible = 0;
+        fabTbtCaps(d, 0, 1, 0);
+        fabDrom(d, "QEMU", "Port Ridge Enclosure");
+        fabDromUid(d, 0x51DE0000UL + (unsigned long)i, 0x80861549UL);
+        fabLane(d, 1, 0, 0);
+        fabLane(d, 2, 0, 0);
+        fabProto(d, 3, 0x100102UL);
+        d->UpAdp = 1;
     } else {
         d->Tbt3 = 1;
-        fabRouterBase(d, 0x8086, kind == FAB_DEV_TBT3_TR ? 0x15EF : 0x15C0, 0x00);
+        fabRouterBase(d, 0x8086, kind == FAB_DEV_TBT3_AR ? 0x15C0 : 0x15EF, 0x00);
         d->Rcs[1] |= FAB_RCAP_PLUG;
         d->Rcs[FAB_RCAP_PLUG] = FAB_RCAP_LC | (0x05UL << 8) | (0x01UL << 16) | (0x0CUL << 24);
         d->Rcs[FAB_RCAP_PLUG + 1] = 0x7CUL;
@@ -1592,11 +1895,150 @@ int fabDevice(FAB *f, int kind)
         d->Rcs[FAB_RCAP_LC + FAB_LC_START + 0x8D] = 0x1000UL;     /* BE, phys port 0 */
         fabLane(d, 1, 0, 0);
         fabLane(d, 2, 0, 0);
-        fabProto(d, 3, 0x100102UL);
+        if (kind == FAB_DEV_TBT3_DOCK) {
+            /* usb4-emu usb4-router-tb3.c's device router: its downstream
+             * port's lanes 3 and 4, PCIe Up 6 and Down 7. */
+            d->Rcs[FAB_RCAP_LC + FAB_LC_START + FAB_LC_PORT_SIZE + 0x8D] = 0x1000UL;
+            fabLane(d, 3, 0, 0);
+            fabLane(d, 4, 0, 0);
+            d->Adp[3].Cs[4] &= ~0x80000000UL;
+            d->Adp[4].Cs[4] &= ~0x80000000UL;
+            fabProto(d, 6, 0x100102UL);
+            fabProto(d, 7, 0x100101UL);
+            /* Its PCIe Down's LTSSM field reads 3 whatever the link does
+             * (the emulator's 0xc6210400 with the chained tunnel up,
+             * record 34 sections 6.5 and 6.6); the child's end trains. */
+            d->Adp[7].LtssmForce = 1 + 3;
+            d->Adp[7].PeerFollows = 1;
+        } else {
+            fabProto(d, 3, 0x100102UL);
+        }
         d->UpAdp = 1;
     }
     fabFinish(d);
     return i;
+}
+
+/* The DROM's UID and its CRC-8 (Linux eeprom.c tb_drom_read_uid_only):
+ * byte 0 the CRC-8 (polynomial 07h, from FFh) of bytes 1 to 8. */
+static void fabDromUid(FAB_ROUTER *r, unsigned long lo, unsigned long hi)
+{
+    unsigned char c = 0xFF;
+    unsigned i;
+    unsigned b;
+
+    for (i = 0; i < 4; i++) {
+        r->Drom[1 + i] = (unsigned char)(lo >> (8 * i));
+        r->Drom[5 + i] = (unsigned char)(hi >> (8 * i));
+    }
+    for (i = 1; i <= 8; i++) {
+        c = (unsigned char)(c ^ r->Drom[i]);
+        for (b = 0; b < 8; b++) {
+            c = (unsigned char)((c & 0x80) != 0 ? ((c << 1) ^ 0x07) : (c << 1));
+        }
+    }
+    r->Drom[0] = c;
+}
+
+static void fabTbtCaps(FAB_ROUTER *r, int lc, unsigned ports, unsigned long tag)
+{
+    r->Rcs[1] |= FAB_RCAP_PLUG;
+    r->Rcs[FAB_RCAP_PLUG] = (lc ? FAB_RCAP_LC : 0) | (0x05UL << 8) | (0x01UL << 16) |
+                            (0x0CUL << 24);
+    r->Rcs[FAB_RCAP_PLUG + 1] = 0x7CUL;
+    r->Rcs[FAB_RCAP_PLUG + 4] = 0x0002218AUL;
+    r->Rcs[FAB_RCAP_PLUG + 12] = 0x100UL;
+    r->EeBase = 0x100UL;
+    r->EeData = 1;
+    if (!lc) {
+        return;
+    }
+    r->Rcs[FAB_RCAP_LC] = (0x05UL << 8) | (0x06UL << 16);
+    r->Rcs[FAB_RCAP_LC + 1] = 0;
+    r->Rcs[FAB_RCAP_LC + 2] = (unsigned long)ports | ((unsigned long)FAB_LC_START << 8) |
+                              ((unsigned long)FAB_LC_PORT_SIZE << 16);
+    r->Rcs[FAB_RCAP_LC + 3] = tag;
+    r->Rcs[FAB_RCAP_LC + 4] = 0x01020304UL;
+    r->Rcs[FAB_RCAP_LC + 5] = 0x05060708UL;
+    r->Rcs[FAB_RCAP_LC + 6] = 0x090A0B0CUL;
+}
+
+int fabHostTbt(FAB *f, unsigned long device)
+{
+    FAB_ROUTER *h = &f->R[0];
+    unsigned a;
+    unsigned pcieA = 6;
+    unsigned pcieB = 7;
+    int gen = 3;
+
+    switch (device) {
+    case 0x1513:
+    case 0x1547:
+        gen = 1;
+        break;
+    case 0x156D:
+        gen = 2;
+        pcieB = 8;
+        break;
+    case 0x15EA:
+        pcieA = 8;
+        pcieB = 9;
+        break;
+    }
+    memset(h, 0, sizeof(*h));
+    h->Parent = -1;
+    h->Tbt3 = 1;
+    fabRouterBase(h, 0x8086, device, 0x00);
+    h->BondPossible = gen == 3;
+    fabTbtCaps(h, gen >= 2, 2, 0xCAFE0000UL);
+    if (gen >= 2) {
+        h->Rcs[FAB_RCAP_LC + FAB_LC_START + 0x8D] = gen == 3 ? 0x1000UL : 0;
+        h->Rcs[FAB_RCAP_LC + FAB_LC_START + FAB_LC_PORT_SIZE + 0x8D] =
+            gen == 3 ? 0x1000UL : 0;
+    }
+    fabDrom(h, "QEMU", "Thunderbolt Host Router");
+    fabDromUid(h, 0x00C0FFEEUL, 0x8086D00DUL);
+    for (a = 1; a <= 4; a++) {
+        fabLane(h, a, 0, 0);
+        h->Adp[a].Cs[4] &= ~0x80000000UL;
+    }
+    fabAdpNew(h, 5, 0x000002UL, 11);
+    fabProto(h, pcieA, 0x100101UL);
+    fabProto(h, pcieB, 0x100101UL);
+    h->UpAdp = 5;
+    fabFinish(h);
+    h->Rcs[3] = 0;
+    h->RopMode[FAB_OP_DROM] = FAB_ROP_NS;
+    h->RopMode[FAB_OP_MAP] = FAB_ROP_NS;
+    h->RopMode[FAB_OP_CAPS] = FAB_ROP_NS;
+    h->RopMode[FAB_OP_BA] = FAB_ROP_NS;
+    return 0;
+}
+
+/* A Thunderbolt router whose TMU runs, as usb4-emu's routers come up on
+ * its tb*-apple-* hosts (task 45.58's Cactus Ridge leg): a router TMU
+ * capability, ahead of the others at 0x20, with a TSPacketInterval, and a
+ * TMU adapter capability on each lane adapter, uni-directional mode
+ * clear. A USB4 link's "TMU Off" reads false on it. */
+int fabTbtTmuOn(FAB *f, int rt, unsigned long interval)
+{
+    FAB_ROUTER *r = &f->R[rt];
+    FAB_ADP *ad;
+    unsigned a;
+
+    r->Rcs[0x20] = (r->Rcs[1] & 0xFFUL) | (0x03UL << 8);
+    r->Rcs[0x23] = interval << 16;
+    r->Rcs[1] = (r->Rcs[1] & ~0xFFUL) | 0x20UL;
+    for (a = 1; a <= r->MaxAdp; a++) {
+        ad = &r->Adp[a];
+        if (ad->Present && (ad->Cs[2] & 0xFFFFFFUL) == 1 &&
+            (ad->Cs[FAB_CAP_LANE] & 0xFFUL) == 0) {
+            ad->Cs[FAB_CAP_LANE] |= FAB_CAP_TMU_ADP;
+            ad->Cs[FAB_CAP_TMU_ADP] = 0x03UL << 8;
+            ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
+        }
+    }
+    return 0;
 }
 
 int fabChild(FAB *f, int dev)
@@ -1616,7 +2058,7 @@ int fabPortLane0(const FAB *f, int port)
 
     for (a = 1; a <= f->R[0].MaxAdp; a++) {
         if (f->R[0].Adp[a].Present && (f->R[0].Adp[a].Cs[2] & 0xFFFFFFUL) == 1 &&
-            f->R[0].Adp[a].Cs[FAB_CAP_PORT] != 0) {
+            (f->R[0].Tbt3 ? (a & 1U) != 0 : f->R[0].Adp[a].Cs[FAB_CAP_PORT] != 0)) {
             if (++k == port) {
                 return (int)a;
             }
@@ -1657,6 +2099,29 @@ int fabDevAt(const FAB *f, int port)
     return a != 0 ? f->R[0].Adp[a].Peer : -1;
 }
 
+/* A Gen 4 link's lanes at both ends: Current Link Speed Gen 4, CL0, the
+ * widths the device router's preset names (task 45.20). */
+static void fabGen4Lanes(FAB *f, int pr, unsigned pa, int dev)
+{
+    FAB_ROUTER *p = &f->R[pr];
+    FAB_ROUTER *d = &f->R[dev];
+    unsigned da = d->UpAdp;
+    unsigned k;
+
+    for (k = 0; k < 2; k++) {
+        if (p->Adp[pa + k].Present) {
+            setLaneSpeed(&p->Adp[pa + k], 0x2UL);
+            setLaneState(&p->Adp[pa + k], 2);
+            setLaneWidth(&p->Adp[pa + k], d->Gen4HostW != 0 ? d->Gen4HostW : 2UL);
+        }
+        if (d->Adp[da + k].Present) {
+            setLaneSpeed(&d->Adp[da + k], 0x2UL);
+            setLaneState(&d->Adp[da + k], 2);
+            setLaneWidth(&d->Adp[da + k], d->Gen4DevW != 0 ? d->Gen4DevW : 2UL);
+        }
+    }
+}
+
 static void fabConnect(FAB *f, int pr, unsigned pa, int dev)
 {
     FAB_ROUTER *p = &f->R[pr];
@@ -1689,6 +2154,17 @@ static void fabConnect(FAB *f, int pr, unsigned pa, int dev)
         p->Adp[pa].Cs[FAB_CAP_PORT + 18] = (p->BondPossible && d->BondPossible ? 0x100UL : 0) |
                                           (tcm ? 0x200UL : 0);
     }
+    /* Two version 2 routers: Gen 4, its two lanes aggregated by link
+     * initialisation (Spec 4.2.2), the widths on both lanes of each end. */
+    d->Gen4Up = p->Gen4 && d->Gen4;
+    if (d->Gen4Up) {
+        fabGen4Lanes(f, pr, pa, dev);
+    } else if (((p->Adp[pa].Cs[FAB_CAP_LANE + 1] >> 16) & 0xFUL) == 0x2UL) {
+        setLaneSpeed(&p->Adp[pa], 0x4UL);
+        if (p->Adp[pa + 1].Present) {
+            setLaneSpeed(&p->Adp[pa + 1], 0x4UL);
+        }
+    }
 }
 
 void fabPlug(FAB *f, int port, int dev)
@@ -1696,6 +2172,9 @@ void fabPlug(FAB *f, int port, int dev)
     int a = fabPortLane0(f, port);
 
     fabConnect(f, 0, (unsigned)a, dev);
+    if (f->R[0].Tbt3 && (f->R[0].Rcs[3] & 0x80000000UL) == 0) {
+        return;     /* a Thunderbolt host router reports once configured */
+    }
     if ((f->R[0].Adp[a].Cs[5] & 0x80000000UL) == 0) {
         fabHotPlug(f, 0, (unsigned long)a, 0);
     }
@@ -1753,6 +2232,8 @@ static void fabResetRouter(FAB *f, int d)
             }
             ad->Cs[FAB_CAP_TMU_ADP + 3] = 0;
             ad->Cs[FAB_CAP_TMU_ADP + 6] = 0;
+            ad->Cs[FAB_CAP_TMU_ADP + 8] = 0;
+            ad->Cs[FAB_CAP_TMU_ADP + 9] = 0;
         } else if (t != 2 && r->Kind == FAB_DEV_ASM2464) {
             ad->Path[2 * 8] = t == 0x100102UL ? 0x00000008UL : 0;
             ad->Path[2 * 8 + 1] = 0;
@@ -1761,6 +2242,43 @@ static void fabResetRouter(FAB *f, int d)
             ad->Path[2 * 8] = 7UL << 17;
             ad->Path[2 * 8 + 1] = 0x01000000UL;
             ad->Cs[FAB_CAP_ADP] &= ~0xC0000000UL;
+            if (fabPcieAdp(r, a)) {
+                ad->Cs[FAB_CAP_ADP + 1] = 0;    /* Extended Encapsulation 0 */
+            }
+        }
+    }
+    if (!r->Tbt3) {
+        /* Uninitialised again: every capability back to disabled (Spec
+         * 8.3.1.3.2), on every USB4 router, the host's included. */
+        r->CapsData &= 0x55555555UL;
+        r->SetCapsOps = 0;
+    }
+}
+
+/* A device router losing power (fabDisconnect) or the domain's (fabPowerCycle):
+ * its downstream lanes' Lock set again, as after power on; with `deep`
+ * the router behind each downstream port loses its upstream link and
+ * resets too (Spec 3.3), still attached there. The host-only reset
+ * (fabResetHost) never comes here. */
+static void fabLockDownstream(FAB *f, int d, int deep)
+{
+    FAB_ROUTER *r = &f->R[d];
+    unsigned a;
+    int c;
+
+    for (a = 1; a <= r->MaxAdp; a++) {
+        if (!r->Adp[a].Present || (r->Adp[a].Cs[2] & 0xFFFFFFUL) != 1 ||
+            a == r->UpAdp || a == r->UpAdp + 1) {
+            continue;
+        }
+        if (!r->Tbt3) {
+            /* No Lock on a Thunderbolt 3 router's lanes (fabHotPlugChild). */
+            r->Adp[a].Cs[4] |= 0x80000000UL;
+        }
+        c = r->Adp[a].Peer;
+        if (deep && !r->Adp[a].Lane1 && c > 0 && c != d && f->R[c].Parent == d) {
+            fabResetRouter(f, c);
+            fabLockDownstream(f, c, 1);
         }
     }
 }
@@ -1785,11 +2303,17 @@ static void fabDisconnect(FAB *f, int pr, unsigned pa)
          * write clears it. */
     }
     if (dev >= 0) {
+        /* Its configuration and that of every router behind it go; the
+         * routers behind it stay attached to its downstream ports. */
+        fabResetRouter(f, dev);
+        fabLockDownstream(f, dev, 1);
         f->R[dev].Connected = 0;
         for (i = 1; i <= f->R[dev].MaxAdp; i++) {
-            f->R[dev].Adp[i].Peer = -1;
+            if (i == f->R[dev].UpAdp || i == f->R[dev].UpAdp + 1) {
+                f->R[dev].Adp[i].Peer = -1;
+            }
         }
-        fabResetRouter(f, dev);
+        f->R[dev].Gen4Up = 0;
     }
     if (pr == 0) {
         /* Spec 4.4.5.2: the host's protocol adapters back to defaults. */
@@ -1834,6 +2358,7 @@ void fabPowerCycle(FAB *f)
     for (i = 1; i < FAB_MAX_ROUTERS; i++) {
         if (f->R[i].Used) {
             fabResetRouter(f, i);
+            fabLockDownstream(f, i, 0);
         }
     }
     fabResetRouter(f, 0);
@@ -1849,6 +2374,10 @@ void fabPowerCycle(FAB *f)
         if (f->R[i].Used && f->R[i].Connected) {
             setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp], 1);
             setLaneWidth(&f->R[i].Adp[f->R[i].UpAdp + 1], 1);
+            if (f->R[i].Gen4Up && f->R[i].Parent >= 0) {
+                /* A Gen 4 link retrains as Gen 4 (task 45.20). */
+                fabGen4Lanes(f, f->R[i].Parent, (unsigned)f->R[i].ParentAdp, i);
+            }
         }
     }
     f->RxQCount = 0;
@@ -1929,6 +2458,171 @@ void fabPlugChild(FAB *f, int dev, int child, int enumerate)
 void fabUnplugChild(FAB *f, int dev)
 {
     fabDisconnect(f, dev, 3);
+}
+
+unsigned long fabTriedTo(const FAB *f, unsigned long from, int r)
+{
+    unsigned long hi;
+    unsigned long lo;
+    unsigned long i;
+    unsigned long n = 0;
+
+    fabRouteOf(f, r, &hi, &lo);
+    for (i = from; i < f->TriedCount && i < FAB_WRLOG; i++) {
+        if (f->TriedHi[i] == hi && f->TriedLo[i] == lo) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int fabDownLane0(const FAB *f, int dev)
+{
+    return fabDownLaneN(&f->R[dev], 1);
+}
+
+void fabHotPlugChild(FAB *f, int dev, int child)
+{
+    unsigned a = (unsigned)fabDownLaneN(&f->R[dev], 1);
+
+    fabConnect(f, dev, a, child);
+    if (f->R[dev].Tbt3) {
+        /* No Lock on a Thunderbolt 3 router's lanes ([linux] switch.c
+         * tb_port_unlock writes it only on a USB4 router). */
+        f->R[dev].Adp[a].Cs[4] &= ~0x80000000UL;
+        f->R[dev].Adp[a + 1].Cs[4] &= ~0x80000000UL;
+    }
+    if (f->R[dev].Tbt3 || (f->R[dev].Adp[a].Cs[5] & 0x80000000UL) == 0) {
+        fabHotPlug(f, dev, (unsigned long)a, 0);
+    }
+}
+
+static void fabSetPath(FAB *f, int r, unsigned a, unsigned hop, unsigned outAdp,
+                       unsigned outHop, unsigned credits);
+
+void fabPreosChild(FAB *f, int dev, int child, int stray)
+{
+    unsigned a = (unsigned)fabDownLaneN(&f->R[dev], 1);
+    unsigned dp = 0;
+    unsigned cu = 0;
+    unsigned cl = f->R[child].UpAdp;
+    unsigned i;
+
+    fabPlugChild(f, dev, child, 1);
+    f->R[dev].Adp[a + 1].Cs[4] &= ~0x80000000UL;
+    f->R[child].Rcs[4] |= 0x1000UL | 0xFFUL;
+    f->R[child].Rcs[5] = 0x81000000UL;
+    f->R[child].Rcs[6] |= 0x03000000UL;
+    setLaneWidth(&f->R[dev].Adp[a], 2);
+    setLaneWidth(&f->R[dev].Adp[a + 1], 2);
+    setLaneWidth(&f->R[child].Adp[cl], 2);
+    setLaneWidth(&f->R[child].Adp[cl + 1], 2);
+    for (i = 1; i <= f->R[dev].MaxAdp; i++) {
+        if (dp == 0 && (f->R[dev].Adp[i].Cs[2] & 0xFFFFFFUL) == 0x100101UL) {
+            dp = i;
+        }
+    }
+    for (i = 1; i <= f->R[child].MaxAdp; i++) {
+        if (cu == 0 && (f->R[child].Adp[i].Cs[2] & 0xFFFFFFUL) == 0x100102UL) {
+            cu = i;
+        }
+    }
+    fabSetPath(f, dev, dp, 8, a, 8, 7);
+    fabSetPath(f, child, cl, 8, cu, 8, 32);
+    fabSetPath(f, child, cu, 8, cl, 9, 7);
+    fabSetPath(f, dev, a, 9, dp, 8, 32);
+    f->R[dev].Adp[dp].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    f->R[child].Adp[cu].Cs[FAB_CAP_ADP] |= 0x80000000UL;
+    fabPcieUpdate(f, dev, dp);
+    if (stray) {
+        /* A predecessor's second path through the link: lane 0's HopID
+         * 10 into the parent's lane 1 back toward the host, as a
+         * DisplayPort or USB3 path through the parent would cross it. */
+        fabSetPath(f, dev, a, 10, f->R[dev].UpAdp, 12, 16);
+    }
+}
+
+void fabHotUnplugChild(FAB *f, int dev)
+{
+    unsigned a = (unsigned)fabDownLaneN(&f->R[dev], 1);
+    unsigned i;
+
+    fabDisconnect(f, dev, a);
+    /* The parent's protocol adapters toward the departed child follow
+     * (Spec 4.4.5.2, as fabUnplug models the host's). */
+    for (i = 1; i <= f->R[dev].MaxAdp; i++) {
+        if (fabPcieAdp(&f->R[dev], i)) {
+            fabPcieUpdate(f, dev, i);
+        }
+    }
+    if (f->R[dev].Tbt3 || (f->R[dev].Adp[a].Cs[5] & 0x80000000UL) == 0) {
+        fabHotPlug(f, dev, (unsigned long)a, 1);
+    }
+}
+
+int fabChainPcieUp(const FAB *f, int dev)
+{
+    unsigned a = (unsigned)fabDownLaneN(&f->R[dev], 1);
+    int child;
+    unsigned i;
+    unsigned dp = 0;
+    unsigned cu = 0;
+
+    if (a == 0) {
+        return 0;
+    }
+    child = f->R[dev].Adp[a].Peer;
+    if (child < 0) {
+        return 0;
+    }
+    for (i = 1; i <= f->R[dev].MaxAdp; i++) {
+        if (dp == 0 && (f->R[dev].Adp[i].Cs[2] & 0xFFFFFFUL) == 0x100101UL) {
+            dp = i;
+        }
+    }
+    for (i = 1; i <= f->R[child].MaxAdp; i++) {
+        if (cu == 0 && (f->R[child].Adp[i].Cs[2] & 0xFFFFFFUL) == 0x100102UL) {
+            cu = i;
+        }
+    }
+    if (dp == 0 || cu == 0) {
+        return 0;
+    }
+    {
+        /* The four entries of record 34 section 6.6, chained: the
+         * parent's PCIe Down HopID 8 into its lane at hd, the child's lane
+         * hd to its PCIe Up 8, its PCIe Up 8 to its lane at hu, the
+         * parent's lane hu back to the PCIe Down 8. */
+        unsigned cl = f->R[child].UpAdp;
+        unsigned long e;
+        unsigned hd;
+        unsigned hu;
+
+        e = f->R[dev].Adp[dp].Path[2 * 8];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != a) {
+            return 0;
+        }
+        hd = (unsigned)(e & 0x7FUL);
+        e = f->R[child].Adp[cu].Path[2 * 8];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != cl) {
+            return 0;
+        }
+        hu = (unsigned)(e & 0x7FUL);
+        if (hd >= FAB_HOPS || hu >= FAB_HOPS) {
+            return 0;
+        }
+        e = f->R[child].Adp[cl].Path[2 * hd];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != cu || (e & 0x7FUL) != 8) {
+            return 0;
+        }
+        e = f->R[dev].Adp[a].Path[2 * hu];
+        if (!(e & 0x80000000UL) || ((e >> 11) & 0x3FUL) != dp || (e & 0x7FUL) != 8) {
+            return 0;
+        }
+    }
+    return (f->R[dev].Adp[dp].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
+           (f->R[child].Adp[cu].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
+           ((f->R[child].Adp[cu].Cs[FAB_CAP_ADP] >> 25) & 0xF) == 6;
 }
 
 static void fabSetPath(FAB *f, int r, unsigned a, unsigned hop, unsigned outAdp,
@@ -2044,7 +2738,8 @@ int fabPcieUp(const FAB *f, int port)
         if ((f->R[d].Adp[a].Cs[2] & 0xFFFFFFUL) == 0x100102UL) {
             return (f->R[0].Adp[hp].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
                    (f->R[d].Adp[a].Cs[FAB_CAP_ADP] & 0x80000000UL) &&
-                   ((f->R[0].Adp[hp].Cs[FAB_CAP_ADP] >> 25) & 0xF) == 6;
+                   ((f->R[0].Adp[hp].Cs[FAB_CAP_ADP] >> 25) & 0xF) ==
+                   (f->R[0].Tbt3 ? 3UL : 6UL);
         }
     }
     return 0;

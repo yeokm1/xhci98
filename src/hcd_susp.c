@@ -2872,7 +2872,10 @@ ULONG HcdSuspPdoSetPower(PHCD_DEVICE_PDO pdo, PIRP irp, NTSTATUS *status)
     KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
     XhciControllerLockAcquire(&hc->Hc, &oldIrql);
     dev = pdo->Device;
-    in.Closed = (pdo->PwrClosed || dev == NULL) ? 1UL : 0UL;
+    /* Task 45.63: past the latch (record 13 sections 5.8 and 5.8.1) no
+     * powered pass comes to serve a pended D0. */
+    in.Closed = (pdo->PwrClosed || dev == NULL || hc->ShutLatched) ? 1UL
+                                                                   : 0UL;
     in.PowerDown = hc->PowerDown;
     in.Link = (dev != NULL) ? dev->Susp.State : XHCI_SUSP_GONE;
     in.SiblingD0 = (dev != NULL) ? hcdSuspSiblingD0(dev, pdo) : 0;
@@ -3495,6 +3498,52 @@ VOID HcdSuspSettleStale(PHCD_CONTROLLER hc)
         XhciControllerLockRelease(&hc->Hc, oldIrql);
         KeReleaseSpinLock(&hc->PdoListLock, listIrql);
         /* Under the power gate: completed by the workers, as the thread's. */
+        hcdSuspFinishT(hc, &taken);
+    }
+    (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
+}
+
+/*
+ * Task 45.63 (record 13 section 5.8.1): the latch set by a D0 the bus
+ * failed - the controller stays out of D0, so no powered pass serves a
+ * D0 already pended (4.4) - settles every pended D0 SUCCESS, as the
+ * PDO's teardown does, by the same workers; admission completes later
+ * ones at once (HcdSuspPdoSetPower). PwrState is left for the thread,
+ * as a closed slot's. A pended Dx was settled at the suspend
+ * (HcdSuspSettleStale). IRQL: PASSIVE_LEVEL, the power gate held.
+ */
+VOID HcdSuspSettleLatched(PHCD_CONTROLLER hc)
+{
+    PHCD_USB_DEVICE dev;
+    PHCD_DEVICE_PDO pdo;
+    HCD_SUSP_TAKEN taken;
+    KIRQL listIrql;
+    KIRQL oldIrql;
+    ULONG slot;
+
+    if (hc->SuspDoneList.Flink == NULL) {
+        return;                 /* never initialized: no start ran */
+    }
+    (VOID)InterlockedIncrement((PLONG)&hc->SuspDoneHolds);
+    if (hc->SuspDoneClosed != 0) {
+        (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);
+        return;
+    }
+    for (slot = 1; slot <= XHCI_MAX_SLOTS; slot++) {
+        taken.Count = 0;
+        KeAcquireSpinLock(&hc->PdoListLock, &listIrql);
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        dev = hc->SlotDevice[slot];
+        for (pdo = (dev != NULL) ? hcdSuspPdo(dev->Pdo) : NULL; pdo != NULL;
+             pdo = pdo->Sibling) {
+            if (pdo->PwrIrp != NULL && pdo->PwrWanted == XHCI_SUSP_D0 &&
+                hc->ShutLatched) {
+                hcdSuspTake(&taken, pdo, pdo->PwrIrp, HCD_SUSP_TAKE_D0);
+                pdo->PwrIrp = NULL;
+            }
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        KeReleaseSpinLock(&hc->PdoListLock, listIrql);
         hcdSuspFinishT(hc, &taken);
     }
     (VOID)InterlockedDecrement((PLONG)&hc->SuspDoneHolds);

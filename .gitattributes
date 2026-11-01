@@ -18,6 +18,11 @@
 # their working-tree CRLF only from core.autocrlf=true, so a clone with
 # autocrlf=false or input silently lost it.
 *.cmd eol=crlf
+# ...and the uppercase spelling, for the reason given for *.bat above: the
+# files of scripts/vm-matrix/leg/ (LEGNT.CMD, XHPOLL.CMD, XHSETUP.CMD) are .CMD, and
+# matched *.cmd only through core.ignorecase. xhciqual/test/check-bat-eol.ps1
+# checks both spellings' endings.
+*.CMD eol=crlf
 
 # The INF is parsed by Win98's 16-bit setup engine, which wants ANSI/CRLF.
 # scripts/inf-gate/check-inf.ps1 already fails FILE-EOL on a bare LF, so this

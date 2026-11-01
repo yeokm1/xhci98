@@ -171,6 +171,9 @@ typedef struct _TBT_HOST {
 #define TBT_FRAME_CRC_BAD       0x00000001UL    /* the trailer did not match */
 #define TBT_FRAME_OVERFLOW      0x00000002UL    /* BO set, or a length past the buffer */
 #define TBT_FRAME_MALFORMED     0x00000004UL    /* shorter than 8 bytes or not whole DWs */
+/* An inter-domain packet (PDF 6 or 7) taken by the XDomain sink
+ * (TbtRingSetXdomainSink): Words is 0, so no other reader acts on it. */
+#define TBT_FRAME_DIVERTED      0x00000008UL
 
 typedef struct _TBT_FRAME {
     ULONG Pdf;          /* EOF PDF of the RX descriptor */
@@ -185,6 +188,14 @@ typedef struct _TBT_FRAME {
  * transport's (TbtCtlInit) sends acknowledgements, which are not requests
  * (Guide 4.2 limits outstanding requests, not acknowledgements). */
 typedef VOID (*TBT_UNSOLICITED)(PVOID context, const TBT_FRAME *frame);
+
+/* Called with every intact inter-domain packet (PDF 6 or 7, its trailer
+ * good) that TbtRingReceive takes, whoever is reading the ring at the
+ * time - a control transfer's busy-poll, the ICM client's wait, the idle
+ * drain - before that reader sees it (design record 35 section 3.2, task
+ * 45.59 step S2). It must not send on the ring: it records, and the
+ * connection-manager thread answers once the reader is done. */
+typedef VOID (*TBT_XDOMAIN_SINK)(PVOID context, const TBT_FRAME *frame);
 
 /* ---------------------------------------------------------------------- */
 /* The ring                                                               */
@@ -210,12 +221,16 @@ typedef struct _TBT_RING_COUNTERS {
     ULONG OtherRingsEnabled;/* takeover: rings 1 and up read enabled, left alone */
     ULONG StopUnverified;   /* a stop whose read-back did not show both
                                controls disabled: DmaMayRun kept */
+    ULONG Xdomain;          /* inter-domain packets handed to the sink */
+    ULONG XdomainUnclaimed; /* inter-domain packets with no sink set */
 } TBT_RING_COUNTERS;
 
 typedef struct _TBT_RING {
     const TBT_HOST *Host;
     TBT_UNSOLICITED Unsolicited;
     PVOID UnsolicitedContext;
+    TBT_XDOMAIN_SINK XdomainSink;
+    PVOID XdomainContext;
 
     volatile UCHAR *Va;     /* the common buffer, TBT_RING_DMA_BYTES_N(Entries) */
     ULONG Phys;             /* its bus address, below 4 GB */
@@ -234,6 +249,12 @@ typedef struct _TBT_RING {
      * into the common buffer, which is therefore never freed (cm_pool.c). */
     BOOLEAN DmaMayRun;
     ULONG RxPdfMask;        /* the RX PDF mask the last start programmed */
+    /* Interrupt Enable in every RX descriptor posted from now on (Spec
+     * 12.5.1: the RX cause's status set after the frame's write-back), the
+     * ring interrupt's intent (record 21 section 4.5.2), set by the driver
+     * before a start and kept by it; FALSE (polling) as a zeroed ring has
+     * it. A descriptor already posted keeps what it was posted with. */
+    BOOLEAN RxIe;
 
     /* The error notification that ended the last request with
      * TBT_E_NOTIFY (Spec 6.4.3): its event code, Event Info and the route
@@ -367,6 +388,10 @@ BOOLEAN TbtRingIntact(PTBT_RING ring);
 
 /* The receiver of frames a control transfer does not want. */
 VOID TbtRingSetUnsolicited(PTBT_RING ring, TBT_UNSOLICITED fn, PVOID context);
+/* Install (or, with NULL, remove) the XDomain sink. With none set an
+ * inter-domain packet is delivered as before, to whoever reads it, which
+ * treats it as a stray. */
+VOID TbtRingSetXdomainSink(PTBT_RING ring, TBT_XDOMAIN_SINK fn, PVOID context);
 
 /*
  * Post one buffer of `words` DWs with PDF `pdf`, its CRC-32C trailer
@@ -396,6 +421,12 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
  * delivered, as record 21 section 5.2 has the client strip it unchecked.
  */
 BOOLEAN TbtRingReceive(PTBT_RING ring, PTBT_FRAME frame);
+
+/* Whether the next RX descriptor TbtRingReceive would take holds a frame
+ * (DD set), read from the common buffer alone: no register access, nothing
+ * taken (the ring interrupt's watchdog, record 21 section 4.5.5). FALSE
+ * while the ring is not running. */
+BOOLEAN TbtRingRxPending(const TBT_RING *ring);
 
 /*
  * Read `count` DWs (1..60) of configuration space `cs`, adapter `adapter`,
@@ -463,9 +494,13 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
 #define TBT_NOTE_REQUEST        1UL     /* fails the outstanding request */
 #define TBT_NOTE_EVENT          2UL     /* ERR_LINK, HEC, FC, PLUG: counted, acknowledged */
 #define TBT_NOTE_ACK_IGNORE     3UL     /* DP_BW, PCIE_WAKE, DP_CON_CHANGE, DPTX_DISCOVERY */
-#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, LINK_RECOVERY, ASYM_LINK: no acknowledgement */
+#define TBT_NOTE_SILENT         4UL     /* ROP_CMPLT, POP_CMPLT, ASYM_LINK: no acknowledgement */
 #define TBT_NOTE_HP_ACK         5UL     /* a hot plug acknowledgement: only a CM sends one */
 #define TBT_NOTE_UNKNOWN        6UL     /* a reserved code: counted, not acknowledged */
+/* LINK_RECOVERY (record 22 section 6.2.3 item 4, task 45.20): never
+ * acknowledged (Spec 6.6), and queued for the connection manager as a
+ * note, which checks the port whose path holds the router that sent it. */
+#define TBT_NOTE_DELIVER        7UL
 
 /* The acknowledgement form a router's notifications take (record 22
  * section 6.4), the connection manager's answer to TBT_CTL_ACK_FORM. */
@@ -487,8 +522,8 @@ typedef struct _TBT_HP_EVENT {
 } TBT_HP_EVENT, *PTBT_HP_EVENT;
 
 /* A notification the connection manager has to see: ERR_CONN, ERR_LOCK,
- * ERR_ENUM or ERR_NUA that arrived with no request waiting for it, and
- * ERR_PLUG. */
+ * ERR_ENUM or ERR_NUA that arrived with no request waiting for it,
+ * ERR_PLUG, and LINK_RECOVERY. */
 typedef struct _TBT_NOTE {
     TBT_ROUTE Route;
     ULONG Code;

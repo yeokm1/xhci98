@@ -58,14 +58,15 @@
  * readiness timeout (a timeout is not evidence that nothing depends on the
  * controller; orchestrator decision of 2026-10-15, owner to confirm). Tunnels and
  * approvals survive every stop. The device table and the counters go to
- * the log, which is emitted at each stop (decision D12: debug and qemu
- * only).
+ * the log, which is emitted at each stop (always in the qemu flavour, and in
+ * every flavour with XhciCmLogDebugView 1: cm_log.c).
  *
  * IRQL: PASSIVE_LEVEL throughout - PnP IRPs on a DO_POWER_PAGABLE object,
  * and the *Work, Bind, PollPass and DrainActions functions on the
  * connection-manager thread.
  */
 
+#include "../xhci_version.h"
 #include "cm.h"
 #include "cm_nvlink.h"
 #include "cm_pwrr.h"
@@ -266,6 +267,8 @@ NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
     CmValuesDefault(&nhi->Values);
     CmLogInit(nhi);
     CmThrInit(nhi);
+    CmRirqInit(nhi);
+    CmNetInit(nhi);
     nhi->Common.Lower = IoAttachDeviceToDeviceStack(self, pdo);
     if (nhi->Common.Lower == NULL) {
         IoDeleteDevice(self);
@@ -296,7 +299,8 @@ static const char *const cmIcmCounterNames[] = {
     "cm.icm.mailbox.errors", "cm.icm.mailbox.timeouts",
     "cm.icm.hostpoll.tries", "cm.icm.hostpoll.answered", "cm.icm.idle-polls",
     "cm.icm.rediscoveries", "cm.icm.resume-budget-expired", "cm.icm.lost",
-    "cm.icm.recoveries", "cm.icm.version.reads", "cm.icm.version.failures"
+    "cm.icm.recoveries", "cm.icm.version.reads", "cm.icm.version.failures",
+    "cm.icm.approve.owed"
 };
 
 static const char *const cmRingCounterNames[] = {
@@ -305,7 +309,8 @@ static const char *const cmRingCounterNames[] = {
     "cm.ring.tx-stuck", "cm.ring.ctl.reads", "cm.ring.ctl.retries",
     "cm.ring.ctl.timeouts", "cm.ring.ctl.notify", "cm.ring.ctl.stale",
     "cm.ring.unsolicited", "cm.ring.ctl.writes", "cm.ring.ring0-was-enabled",
-    "cm.ring.other-rings-enabled", "cm.ring.stop-unverified"
+    "cm.ring.other-rings-enabled", "cm.ring.stop-unverified", "cm.ring.xdomain",
+    "cm.ring.xdomain.unclaimed"
 };
 
 static const char *const cmNhiCounterNames[] = {
@@ -322,7 +327,8 @@ static const char *const cmNhiCounterNames[] = {
     "u4.drv.force-power.kept", "u4.drv.contained", "u4.drv.contain-refused",
     "u4.recover.probes", "u4.recover.refused", "u4.recover.ok",
     "u4.recover.final", "u4.recover.retire-requests",
-    "u4.recover.retirement-owed", "u4.recover.rearm"
+    "u4.recover.retirement-owed", "u4.recover.rearm", "cm.iso.asked",
+    "cm.iso.yes", "cm.iso.no"
 };
 
 XHCI_C_ASSERT(cm_icm_counter_names,
@@ -382,6 +388,34 @@ static VOID cmU4BindRest(PCM_NHI nhi);
 static VOID cmU4Drain(PCM_NHI nhi);
 static VOID cmU4LearnPending(PCM_NHI nhi);
 static BOOLEAN cmU4Contained(PCM_NHI nhi);
+
+/* The package version, XHCI_VER_STR's four dot-separated parts, one byte
+ * each (the properties block's devicerv, design record 35 section 3.7). */
+static ULONG cmNetRevision(void)
+{
+    const char *s = XHCI_VER_STR;
+    ULONG rev = 0;
+    ULONG part = 0;
+    ULONG parts = 0;
+
+    for (;; s++) {
+        if (*s >= '0' && *s <= '9') {
+            part = part * 10 + (ULONG)(*s - '0');
+            continue;
+        }
+        rev = (rev << 8) | (part & 0xFFUL);
+        part = 0;
+        parts++;
+        if (*s != '.' || parts == 4) {
+            break;
+        }
+    }
+    while (parts < 4) {
+        rev <<= 8;
+        parts++;
+    }
+    return rev;
+}
 
 static VOID cmLogCounters(PCM_NHI nhi)
 {
@@ -478,6 +512,20 @@ VOID CmNhiDrainActions(PCM_NHI nhi)
     }
 }
 
+/* The thread's CM_WORK_NET (cm_net.c): the Open or Close given to the
+ * connection manager where one runs (the software one, or the firmware
+ * one once bound), then the waiter released. */
+VOID CmNhiNetWork(PCM_NHI nhi)
+{
+    if (nhi->Stage == CM_STAGE_ACTIVE && nhi->DevicePower == PowerDeviceD0 &&
+        !nhi->Suspended &&
+        (nhi->U4On ? !cmU4Contained(nhi)
+                   : (nhi->Net.Fw && nhi->Icm.Bound && !nhi->Icm.Failed))) {
+        CmNetPass(nhi);
+    }
+    CmNetAck(nhi);
+}
+
 VOID CmNhiPollPass(PCM_NHI nhi)
 {
     if (nhi->U4On) {
@@ -485,6 +533,9 @@ VOID CmNhiPollPass(PCM_NHI nhi)
             return;
         }
         CmNhiU4Barrier(nhi);
+        /* Record 35 (task 45.59): the network driver's Open or Close and
+         * this domain's MAC, before the tick that acts on them. */
+        CmNetPass(nhi);
         TbtU4Poll(&nhi->U4);
         CmNhiDrainActions(nhi);
         cmU4LearnPending(nhi);
@@ -495,6 +546,11 @@ VOID CmNhiPollPass(PCM_NHI nhi)
             CmLogNote(nhi, "u4.failed", nhi->U4.InertReason);
         }
         return;
+    }
+    /* Record 35 section 3.10: the same pass under the firmware connection
+     * manager, before the poll whose engine ticks act on it. */
+    if (nhi->Net.Fw && nhi->Icm.Bound && !nhi->Icm.Failed) {
+        CmNetPass(nhi);
     }
     TbtIcmPoll(&nhi->Icm);
     CmNhiDrainActions(nhi);
@@ -570,7 +626,16 @@ static const char *const cmU4CounterNames[] = {
     "u4.action-overflows", "u4.ejects", "u4.contained.refused",
     "u4.contained.retired", "u4.recover.attempts", "u4.recover.committed",
     "u4.recover.stop-unverified", "u4.recover.preserved",
-    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held"
+    "u4.recover.rebuilt", "u4.recover.departed", "u4.recover.held",
+    "u4.kid.connects", "u4.kid.up", "u4.kid.adopted", "u4.kid.torn-down",
+    "u4.kid.dropped", "u4.kid.lost", "u4.kid.full",
+    "u4.gen4.links", "u4.gen4.asym", "u4.gen4.unusable", "u4.caps.seq-enabled",
+    "u4.caps.seq-refused", "u4.caps.seq-unknown", "u4.ee.set", "u4.ee.cleared",
+    "u4.elr.cleared", "u4.link-recoveries", "u4.cv.found",
+    "u4.elr.enabled", "u4.elr.refused", "u4.elr.own-cleared",
+    "u4.elr.clear-failed", "u4.elr.checks", "u4.elr.kept",
+    "u4.elr.pcie-lost", "u4.elr.usb3-lost", "u4.elr.usb3-down",
+    "u4.elr.unread"
 };
 
 XHCI_C_ASSERT(cm_u4_counter_names,
@@ -928,7 +993,7 @@ static BOOLEAN cmLiveValidate(PCM_NHI nhi)
         CmLogNote(nhi, "cm.live.rings-changed", 1);
         return FALSE;
     }
-    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, nhi->Subsystem,
                 FALSE, &sel);
     nhi->AccessClass = CM_ACCESS_ORDINARY;
     CmLogNote(nhi, "cm.live.select", sel.Outcome);
@@ -955,6 +1020,7 @@ static VOID cmLiveRecover(PCM_NHI nhi, BOOLEAN full)
         rc = TBT_E_STATE;
     }
     if (rc == TBT_OK) {
+        CmRirqIntent(nhi);
         rc = TbtIcmRecover(&nhi->Icm, full);
     }
     nhi->AccessClass = CM_ACCESS_ORDINARY;
@@ -1136,7 +1202,7 @@ static BOOLEAN cmU4Prepare(PCM_NHI nhi, ULONG cmd, BOOLEAN *ones)
     }
     step = 3;
     nhi->AccessClass = CM_ACCESS_PROBE;
-    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, TRUE, nhi->Subsystem,
                 nhi->Sel.Forced, &sel);
     CmLogNote(nhi, "u4.recover.select",
               (sel.Outcome << 16) | (sel.Reason & 0xFFFFUL));
@@ -1674,6 +1740,7 @@ static VOID cmU4Recover(PCM_NHI nhi)
     rc = TBT_E_STOPPED;
     nhi->AccessClass = CM_ACCESS_RECOVERY;
     if (!cmU4StopWaiting(nhi)) {
+        CmRirqIntent(nhi);
         rc = TbtU4Recover(&nhi->U4, &final);
     }
     CmLogNote(nhi, "u4.recover.core", (ULONG)(-rc));
@@ -1913,15 +1980,27 @@ VOID CmNhiWaitService(PCM_NHI nhi)
 
 /* Whether the device an action names is still the one it named: the
  * ICM's table entry, or the USB4 port's connection generation with its
- * router present (and, for a tunnel up, its PCIe tunnel still up). */
+ * router present (and, for a tunnel up, its PCIe tunnel still up); for a
+ * chained tunnel (design record 34 Part 3, Slot bits 15:8 the kid), the
+ * kid's generation with both routers present. */
 BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
     const TBT_U4_PORT *p;
+    const TBT_U4_KID *k;
+    ULONG kid;
 
     if (!nhi->U4On) {
         return TbtIcmActionLive(&nhi->Icm, action);
     }
     p = TbtU4Port(&nhi->U4, action->Link);
+    kid = (action->Slot >> 8) & 0xFFUL;
+    if (kid != 0) {
+        k = TbtU4Kid(&nhi->U4, kid);
+        return (BOOLEAN)(p != NULL && k != NULL && !nhi->U4.Failed && !cmU4Contained(nhi) &&
+                         p->Dev.Present && k->Used && k->Port == action->Link &&
+                         k->Generation == action->Serial && k->Dev.Present &&
+                         (action->Kind != TBT_ICM_ACT_TUNNEL_UP || k->Pcie.Up));
+    }
     return (BOOLEAN)(p != NULL && !nhi->U4.Failed && !cmU4Contained(nhi) &&
                      p->Generation == action->Serial && p->Dev.Present &&
                      (action->Kind != TBT_ICM_ACT_TUNNEL_UP || p->Pcie.Up));
@@ -1932,8 +2011,12 @@ BOOLEAN CmNhiActionLive(PCM_NHI nhi, const TBT_ICM_ACTION *action)
  * whole set then acts, as it always does under the ICM client. */
 ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
 {
+    /* A chained tunnel's (record 34 Part 3, Slot bits 15:8 the kid) names
+     * no member: the member's exposure must not take the kid's generation
+     * for its own tunnel's (CmNvlinkActionTunnel), and the chain action
+     * walks every member, as under the firmware connection manager. */
     if (!nhi->U4On || !cmTopoUsable(nhi) ||
-        action->Kind == TBT_ICM_ACT_RESYNC) {
+        action->Kind == TBT_ICM_ACT_RESYNC || ((action->Slot >> 8) & 0xFFUL) != 0) {
         return XHCI_TBT_NO_MEMBER;
     }
     return XhciTbtPortMember(&nhi->Reenum.Topo, &nhi->Binds, action->Link);
@@ -1943,7 +2026,10 @@ ULONG CmNhiActionMember(PCM_NHI nhi, const TBT_ICM_ACTION *action)
  * Serial its connection generation, Slot the port again (CmNhiActionLive
  * reads the port, never the ICM's table). A router removed below depth 1
  * re-enumerates the whole set, as a RESYNC: its function sat below the
- * depth-1 router's own switch (record 22 section 7.1). */
+ * depth-1 router's own switch (record 22 section 7.1). A chained tunnel's
+ * (record 34 Part 3): Depth 2, Serial the kid's generation, Slot the port
+ * with the kid in bits 15:8 - the chain action's owed key, one per kid
+ * (record 34 section 3.9). */
 static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
 {
     CmZero(a, sizeof(*a));
@@ -1955,10 +2041,10 @@ static VOID cmU4ToIcm(const TBT_U4_ACTION *u, PTBT_ICM_ACTION a)
         a->Kind = TBT_ICM_ACT_RESYNC;
     }
     a->Why = CM_U4_WHY_BASE | (u->Kind & 0xFUL);
-    a->Slot = u->Port;
+    a->Slot = u->Port | ((u->Kid & 0xFFUL) << 8);
     a->Serial = u->Generation;
     a->Link = u->Port;
-    a->Depth = (u->Kind == TBT_U4_ACT_DEEP_REMOVED) ? 2UL : 1UL;
+    a->Depth = (u->Kind == TBT_U4_ACT_DEEP_REMOVED || u->Kid != 0) ? 2UL : 1UL;
     a->WasApproved = TRUE;
 }
 
@@ -2265,7 +2351,9 @@ VOID CmNhiU4Take(PCM_NHI nhi)
      * it. A TUNNEL_DOWN alone is never closure. */
     for (i = 0; i < n; i++) {
         u = &nhi->U4Batch[i];
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Port >= 1 &&
+        /* A chained tunnel's (record 34 Part 3) is not its port's: no
+         * learning, and no stor98 statement before task 45.18. */
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0 && u->Port >= 1 &&
             u->Port <= XHCI_TBT_MAX_PORTS &&
             !cmU4ClosedFor(nhi, u->Port, u->Generation)) {
             XhciTbtLearnUp(&nhi->Binds, u->Port);
@@ -2284,7 +2372,7 @@ VOID CmNhiU4Take(PCM_NHI nhi)
         }
         for (i = 0; i < n; i++) {
             u = &nhi->U4Batch[i];
-            if (u->Kind != TBT_U4_ACT_TUNNEL_UP) {
+            if (u->Kind != TBT_U4_ACT_TUNNEL_UP || u->Kid != 0) {
                 continue;
             }
             cmU4ToIcm(u, &a);
@@ -2338,10 +2426,13 @@ static VOID cmU4Deliver(PCM_NHI nhi)
         CmLogNote(nhi, "u4.action",
                   (u->Kind << 24) | ((u->Port & 0xFFUL) << 16) |
                       (u->Generation & 0xFFFFUL));
+        if (u->Kid != 0) {
+            CmLogNote(nhi, "u4.action.kid", (u->Kid << 24) | (u->Generation & 0xFFFFFFUL));
+        }
         CmLogNote(nhi, "u4.action.map",
                   u->MapValid ? (0x80000000UL | (u->MapRid & 0xFFFFUL))
                               : (u->PcieDown & 0xFFUL));
-        if (u->Kind == TBT_U4_ACT_TUNNEL_UP) {
+        if (u->Kind == TBT_U4_ACT_TUNNEL_UP && u->Kid == 0) {
             cmU4LogRouter(nhi, u->Port);
         }
         cmU4ToIcm(u, &a);
@@ -2353,6 +2444,12 @@ static VOID cmU4Deliver(PCM_NHI nhi)
         }
         if (nhi->ReenumOn) {
             CmReenumAction(nhi, &a);
+        }
+        if (u->Kid != 0) {
+            /* A chained tunnel (record 34 Part 3): the chain action alone
+             * (CmReenumAction above); the port's own records, its eject's
+             * connection and its learning, are not its. */
+            continue;
         }
         if (u->Port >= 1 && u->Port <= TBT_U4_MAX_PORTS) {
             /* The connection the seam last heard of on this port: an
@@ -2415,6 +2512,17 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
 
     nhi = (PCM_NHI)context;
     nhi->Counters.U4LinkDowns++;
+    if (info->Kid != 0) {
+        /* A chained tunnel's (record 34 section 6.7): no statement at
+         * depth 2 before task 45.18 (record 34 section 12, Q4), so a
+         * chained drive is held by stor98's own gone deadline (MD-1); the
+         * port's learning and isolation are its own. */
+        CmLogNote(nhi, "u4.linkdown.kid",
+                  ((info->Port & 0xFFUL) << 24) | ((info->Kid & 0xFFUL) << 16) |
+                      ((info->Generation & 0xFFUL) << 8) |
+                      (info->PathClosed ? 0x01UL : 0));
+        return TBT_U4_STMT_WITHHELD;
+    }
     CmLogNote(nhi, "u4.linkdown",
               ((info->Port & 0xFFUL) << 24) |
                   ((info->Generation & 0xFFFFUL) << 8) |
@@ -2668,13 +2776,24 @@ static VOID cmU4Activate(PCM_NHI nhi)
     nhi->U4Cfg.LaneBonding =
         (BOOLEAN)(nhi->Values.Value[CM_VAL_LANE_BONDING] != 0);
     nhi->U4Cfg.PreOsCleanup = nhi->Values.Value[CM_VAL_PREOS_CLEANUP];
+    /* Design record 35 section 8.1 (task 45.59): read at this start alone.
+     * The properties block's devicerv, the package version a byte a part. */
+    nhi->U4Cfg.Net = (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0);
+    nhi->U4Cfg.NetRevision = cmNetRevision();
     nhi->U4Cfg.AsmPcie7Credits = (BOOLEAN)(nhi->Values.AsmPcie7 != 0);
+    nhi->U4Cfg.Usb4V2 = (BOOLEAN)(nhi->Values.Usb4V2 != 0);
+    nhi->U4Cfg.Gen4LinkRecovery = (BOOLEAN)(nhi->Values.Gen4Elr != 0);
     nhi->U4Cfg.RingFlags = TbtHwRingFlags(nhi->Hw);
     nhi->U4Cfg.HostInterfaceCaps = nhi->Sel.Caps;
+    /* Record 22 section 19: a Mac's Thunderbolt host, its router's id. */
+    nhi->U4Cfg.TbtHostRouter = nhi->Sel.Route == TBT_SW_ROUTE_TBT_HOST ?
+                               nhi->Sel.TbtHostRouter : 0;
     /* The bind takes the tunnel ports' learning baseline between the
      * start and the first tick, before any cold device is connected. */
     nhi->U4Cfg.DeferFirstPoll = TRUE;
     TbtU4Init(&nhi->U4, &nhi->Ring, &nhi->Host, &nhi->U4Cfg);
+    /* Record 35 (task 45.59): the service's operations, before the start. */
+    CmNetBindOps(nhi, FALSE);
     /* Section 9.4: the record of the earlier instance on this NHI, taken
      * at this start, given to the core only for the same ids. */
     if (nhi->U4CarryIds != nhi->LiveIds || nhi->U4CarrySub != nhi->SubVendor) {
@@ -2906,6 +3025,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         return;
     }
     nhi->SubVendor = v & 0xFFFFUL;
+    nhi->Subsystem = v;
     CmLogNote(nhi, "cm.cfg.class", nhi->ClassCode);
     CmLogNote(nhi, "cm.cfg.subsystem", v);
     nhi->Hw = TbtHwMatch(nhi->Vendor, nhi->Device, nhi->ClassCode,
@@ -2939,7 +3059,7 @@ VOID CmNhiStartWork(PCM_NHI nhi)
     CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
 
     /* (c), (d) */
-    TbtHwSelect(nhi->Hw, &nhi->Host, ready, TbtHwIsApple(nhi->SubVendor),
+    TbtHwSelect(nhi->Hw, &nhi->Host, ready, nhi->Subsystem,
                 (BOOLEAN)(mode == CM_MODE_FORCE_SW), &nhi->Sel);
     CmLogNote(nhi, "cm.select.outcome", nhi->Sel.Outcome);
     CmLogNote(nhi, "cm.select.reason", nhi->Sel.Reason);
@@ -2985,6 +3105,13 @@ VOID CmNhiStartWork(PCM_NHI nhi)
      * Version is read - the generation is the router's, whatever the
      * host (the ORICO behind Alpine Ridge reads 20h). */
     TbtIcmSetReadVersion(&nhi->Icm, TRUE);
+    /* Design record 35 section 3.10: XhciCmNet gates the host-to-host
+     * links under the firmware connection manager too. */
+    TbtIcmSetNetConfig(&nhi->Icm, (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0),
+                       cmNetRevision());
+    /* The service's operations and the NHI's serial for the MAC, before
+     * the start (record 35 section 3.10). */
+    CmNetBindOps(nhi, TRUE);
     CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
     CmReenumStart(nhi);
     nhi->ReenumOn = 1;
@@ -3005,6 +3132,9 @@ VOID CmNhiBind(PCM_NHI nhi)
         cmInert(nhi, CM_INERT_POWER);
         return;
     }
+    /* The ring interrupt's intent before the rings start (record 21
+     * section 4.5.2): the first frame after the arm raises it. */
+    CmRirqIntent(nhi);
     if (nhi->U4On) {
         cmU4Bind(nhi);
         return;
@@ -3046,6 +3176,9 @@ VOID CmNhiStopWork(PCM_NHI nhi)
     BOOLEAN active;
     BOOLEAN powered;
 
+    /* The ring interrupt taken down before any ring stops (record 21
+     * section 4.5.6): a stop always disconnects it. */
+    CmRirqDown(nhi, CM_RIRQ_DOWN_STOP);
     active = (BOOLEAN)(nhi->Stage == CM_STAGE_ACTIVE ||
                        nhi->Stage == CM_STAGE_FAILED);
     /* The bus's state, not the client's: a client suspended while the
@@ -3094,8 +3227,13 @@ VOID CmNhiStopWork(PCM_NHI nhi)
         }
         CmNhiDrainActions(nhi);
     }
+    /* Record 35 (task 45.59): a service the unbind left running ended, its
+     * memory given back or kept, before the adapter goes. */
+    CmNetStopWork(nhi);
     cmLogTable(nhi);
     cmLogCounters(nhi);
+    CmRirqLogCounters(nhi);
+    CmNetLogCounters(nhi);
     CmLogNote(nhi, "cm.live.final", (CmLiveEpisode(&nhi->Live) << 8) |
                                         nhi->Live.State);
     CmLogNote(nhi, "cm.live.refused",
@@ -3137,9 +3275,12 @@ static VOID cmFindBar(PCM_NHI nhi, PIRP irp)
     stack = IoGetCurrentIrpStackLocation(irp);
     translated = stack->Parameters.StartDevice.AllocatedResourcesTranslated;
     if (translated == NULL || translated->Count == 0) {
+        CmRirqStart(nhi, NULL);
         return;
     }
     list = &translated->List[0].PartialResourceList;
+    /* The line interrupt, if any, for the ring interrupt (task 45.22). */
+    CmRirqStart(nhi, list);
     for (i = 0; i < list->Count; i++) {
         d = &list->PartialDescriptors[i];
         if (d->Type == CmResourceTypeMemory) {
@@ -3203,6 +3344,23 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
                   (nhi->Values.AsmPcie7Refused << 9));
     if (nhi->Values.AsmPcie7Refused) {
         CmLogNote(nhi, "cm.asm.pcie7.raw", nhi->Values.AsmPcie7Raw);
+    }
+    /* XhciCmUsb4V2 as run with (record 22 section 6.2.1 item 5); bit 8
+     * found, bit 9 refused (the value read is then the next note's). */
+    CmLogNote(nhi, "cm.usb4.v2",
+              nhi->Values.Usb4V2 | (nhi->Values.Usb4V2Found << 8) |
+                  (nhi->Values.Usb4V2Refused << 9));
+    if (nhi->Values.Usb4V2Refused) {
+        CmLogNote(nhi, "cm.usb4.v2.raw", nhi->Values.Usb4V2Raw);
+    }
+    /* XhciCmGen4LinkRecovery as run with (record 22 section 6.2.3 item
+     * 4); bit 8 found, bit 9 refused (the value read is then the next
+     * note's). */
+    CmLogNote(nhi, "cm.usb4.elr",
+              nhi->Values.Gen4Elr | (nhi->Values.Gen4ElrFound << 8) |
+                  (nhi->Values.Gen4ElrRefused << 9));
+    if (nhi->Values.Gen4ElrRefused) {
+        CmLogNote(nhi, "cm.usb4.elr.raw", nhi->Values.Gen4ElrRaw);
     }
 
     cmFindBar(nhi, irp);
@@ -3316,7 +3474,17 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
         if (NT_SUCCESS(status)) {
             status = cmNhiStart(nhi, irp);
         }
+        if (NT_SUCCESS(status)) {
+            /* Record 35 section 6.1: the network PDO, reported or not. */
+            CmNetStarted(nhi);
+        }
         return CmCompleteIrp(irp, status, 0);
+
+    case IRP_MN_QUERY_DEVICE_RELATIONS:
+        if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            return CmNetBusRelations(nhi, irp);
+        }
+        break;
 
     case IRP_MN_QUERY_STOP_DEVICE:
     case IRP_MN_QUERY_REMOVE_DEVICE:
@@ -3331,6 +3499,7 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
             /* The function is gone: no access of any class from now, even
              * inside a sequence the thread is running (cm_live.h). */
             CmNhiRevoke(nhi);
+            CmNetGone(nhi);
         }
         cmNhiStop(nhi, stack->MinorFunction);
         if (stack->MinorFunction == IRP_MN_SURPRISE_REMOVAL) {
@@ -3348,6 +3517,9 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
          * holds finished (without the thread, cm_power.c): none may outlive
          * the device object. */
         CmPowerDrain(nhi);
+        /* Record 35 section 6.1: the network PDO orphaned, and deleted
+         * once the PnP manager has removed it. */
+        CmNetRemove(nhi);
         irp->IoStatus.Status = STATUS_SUCCESS;
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(nhi->Common.Lower, irp);

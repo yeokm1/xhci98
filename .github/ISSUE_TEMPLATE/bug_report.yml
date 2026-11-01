@@ -26,6 +26,10 @@ body:
         - Windows Vista, 64-bit
         - Windows 7, 32-bit
         - Windows 7, 64-bit
+        - Windows 8 or 8.1, 32-bit
+        - Windows 8 or 8.1, 64-bit
+        - Windows 10, 32-bit
+        - Windows 10, 64-bit
         - Other / not sure
     validations:
       required: true
@@ -35,7 +39,7 @@ body:
     attributes:
       label: Driver version
       description: The version of the release you downloaded - it is at the top of its readme.txt, and in the driver's properties in Device Manager.
-      placeholder: "the four-part number from readme.txt, e.g. 2.0.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 3.3.0.0"
     validations:
       required: true
 
@@ -43,7 +47,7 @@ body:
     id: build
     attributes:
       label: Which directory of the download you installed from
-      description: release-x86 (or release-x64 on a 64-bit Windows) unless a maintainer asked you for a debug one. If you are not sure, the Version tab of xhci98.sys shows a "debug" flag on the debug build.
+      description: release-x86 (or release-x64 on a 64-bit Windows). The debug-x86 and debug-x64 directories exist only in downloads up to 3.3.0.0.
       options:
         - release-x86
         - release-x64
@@ -61,6 +65,7 @@ body:
         - A fresh install, no earlier xhci98 driver on this Windows
         - An upgrade over a 1.x.x.x release
         - An update over an earlier 2.x.x.x release
+        - An update over an earlier 3.x.x.x release
         - Not sure
     validations:
       required: true
@@ -90,8 +95,8 @@ body:
       description: |
         The driver does not need these: it replaces their port and hub drivers.
         What still matters is storage on Windows 98 SE, which needs NUSB's
-        mass-storage files (the release notes say why). On Windows 2000, XP,
-        Vista or 7, pick "Windows 2000, XP, Vista or 7: nothing extra".
+        mass-storage files (the release notes say why). On Windows 2000 to
+        10, pick "Windows 2000 to 10: nothing extra".
       options:
         - "Windows 98 SE: nothing extra (a stock install)"
         - "Windows 98 SE: NUSB 3.3"
@@ -101,7 +106,7 @@ body:
         - "Windows 98 SE: SweetLow's USB 2.0 stack (Windows 98 QuickInstall)"
         - "Windows ME: SweetLow's USB 2.0 stack"
         - "Windows ME: nothing extra (a stock install)"
-        - "Windows 2000, XP, Vista or 7: nothing extra"
+        - "Windows 2000 to 10: nothing extra"
         - Not sure
     validations:
       required: true
@@ -157,6 +162,7 @@ body:
                                        set 2 and restart Windows)
             (make the problem happen)
             File > Save Report...     (writes one .TXT file)
+            File > Save Snapshot...   (writes four files)
 
         Attach the .TXT file here. It holds the device tree, both drivers'
         logs and the driver's snapshot (the controller's Device Manager
@@ -166,9 +172,9 @@ body:
         same. If you can, save one report while it works and one after the
         problem happens, under two names.
 
-        Attach the snapshot's raw files (File > Save Snapshot..., or
-        XHCITR /snapshot: a .DEV, .TXT, .BIN and .PSC) only if a maintainer
-        asks for them. On 3.0.0.0 or earlier, use that release's
+        Attach the snapshot's four files too (File > Save Snapshot..., or
+        XHCITR /snapshot: a .DEV, .TXT, .BIN and .PSC, named from the date
+        and time). On 3.0.0.0 or earlier, use that release's
         TOOLS\XHCISNAP and its SNAPON.BAT, SNAPGET.BAT and SNAPOFF.BAT, as
         its release notes say.
 

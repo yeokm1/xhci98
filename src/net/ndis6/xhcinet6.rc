@@ -1,0 +1,42 @@
+/*
+ * xhcinet6.rc - the file version resource of xhcinet6.sys, the NDIS 6.20
+ * miniport of Thunderbolt networking (roadmap-usb4.md task 45.59 step S7,
+ * design record 35). The version is the package's, from
+ * src\xhci_version.h, as every binary of the package takes it.
+ */
+
+#include <windows.h>
+#include "../../xhci_version.h"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     XHCI_VER_CSV
+PRODUCTVERSION  XHCI_VER_CSV
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+#if DBG
+FILEFLAGS       VS_FF_DEBUG
+#else
+FILEFLAGS       0
+#endif
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_DRV
+FILESUBTYPE     VFT2_DRV_NETWORK
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Yeo Kheng Meng\0"
+            VALUE "FileDescription",  "xhci98 Thunderbolt networking (NDIS 6)\0"
+            VALUE "FileVersion",      XHCI_VER_STR "\0"
+            VALUE "InternalName",     "xhcinet6.sys\0"
+            VALUE "LegalCopyright",   "Copyright (c) 2026 Yeo Kheng Meng. GNU GPL v2 or later.\0"
+            VALUE "OriginalFilename", "xhcinet6.sys\0"
+            VALUE "ProductName",      "xhci98 - USB host controller driver for xHCI\0"
+            VALUE "ProductVersion",   XHCI_VER_STR "\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -43,6 +43,8 @@
  * query device of a started NHI (CM_KIND_QUERY; cm_qryos.c, design record
  * 25 section 4), a named control device the dispatch routines tell apart
  * by its Kind before anything else; its answer is built by cm_query.c.
+ * And a fifth, the network PDO (CM_KIND_NETPDO; cm_net.c, design record 35
+ * section 6): the NHI FDO's one child while XhciCmNet is 1, a bus role.
  *
  * IRQL: as each file's header says; every PnP object this driver creates
  * is DO_POWER_PAGABLE (the filter copies its lower device's power flags).
@@ -62,6 +64,8 @@
 #include "cm_qryb.h"
 #include "cm_eject.h"
 #include "cm_irq.h"
+#include "cm_breq.h"
+#include "cm_rirqos.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -100,6 +104,10 @@
                                   then its completion                      */
 #define CM_WORK_QUIESCE 0x80UL /* a 9x shutdown's quiescence, its system
                                   IRP not retained for it (CM_PWR_DETACH)  */
+#define CM_WORK_RING   0x100UL /* the ring interrupt's DPC: RX ring 0 may
+                                  hold a frame (cm_rirqos.c, task 45.22)   */
+#define CM_WORK_NET    0x200UL /* the network driver's Open or Close to give
+                                  the engine (cm_net.c, task 45.59)        */
 
 /* BAR0's extent this driver reads up to: the firmware status at 39944h
  * is the highest register touched (tbt_regs.h). A smaller window is
@@ -137,6 +145,10 @@ typedef struct _CM_COMMON {
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT Lower;
 } CM_COMMON, *PCM_COMMON;
+
+/* The Thunderbolt networking service (design record 35, task 45.59): the
+ * network PDO's extension and the NHI's share, cm_net.c. */
+#include "cm_net.h"
 
 /* Counters of the NHI driver's own (record 21 section 8), beside the
  * ring's and the client's, emitted at stop as cm.* lines. */
@@ -184,6 +196,9 @@ typedef struct _CM_COUNTERS {
     ULONG U4RetireRequests; /* removal-only requests made                  */
     ULONG U4RetirementOwed; /* a pass that found a barrier still standing  */
     ULONG U4RecoverRearm;   /* an attempt that ended on an all-ones read   */
+    ULONG IsoAsked;         /* record 22 10.5: isolation asked by xhci98   */
+    ULONG IsoYes;           /* ... and answered yes                        */
+    ULONG IsoNo;            /* ... and refused (the reason in cm.iso)      */
 } CM_COUNTERS;
 
 typedef struct _CM_NHI {
@@ -224,6 +239,7 @@ typedef struct _CM_NHI {
     ULONG Device;
     ULONG ClassCode;
     ULONG SubVendor;
+    ULONG Subsystem;        /* PCI dword 2Ch whole: TbtHwSelect's subsystem */
     const TBT_HW_PROFILE *Hw;
     TBT_HW_SELECTION Sel;
 
@@ -418,8 +434,22 @@ typedef struct _CM_NHI {
     /* IoIsWdmVersionAvailable(1, 0x10), read by the power dispatch at
      * PASSIVE_LEVEL for its completion routine (cm_pwrr.h, task 43.65). */
     BOOLEAN PowerOnNt;
+#if defined(XHCI_FLAVOUR_QEMU)
+    /* XhciCmQemuFailD0, the qemu flavour's alone (cm_power.c, task
+     * 45.27): which D0 the bus completes successfully is taken as failed,
+     * counted from 1 (0: none), and the D0s counted so far. */
+    ULONG QemuFailD0;
+    LONG QemuD0Seen;
+    /* XhciCmQemuFailReenum (cm_cfgwk.c, task 45.27): how many of the 9x
+     * worker's member calls are taken as failed before they are made. */
+    ULONG QemuFailReenum;
+#endif
 
     CM_COUNTERS Counters;
+
+    /* The ring interrupt (cm_rirqos.h; design record 21 section 4.5, task
+     * 45.22). */
+    CM_RIRQ_DRV Rirq;
 
     /* The status record for the install tool's viewer (cm_statos.c,
      * design record 24 section 3). */
@@ -436,6 +466,14 @@ typedef struct _CM_NHI {
     ULONG NiDiag[CM_NIDIAG_WORDS];
     ULONG NiDiagSeq;
     ULONG NiDiagWritten;
+    /* Design record 33 section 9.2's XhciCmBridgeReqDiag
+     * (CM_BQDIAG_WORDS), posted by the child filters' PnP dispatch under
+     * BrDiagLock (CmRegBreqPost) and written by the thread when BqDiagGen
+     * changed: the start of an attempt already recorded changes it too. */
+    ULONG BqDiag[CM_BQDIAG_WORDS];
+    ULONG BqDiagSeq;
+    ULONG BqDiagGen;
+    ULONG BqDiagWritten;
     KSPIN_LOCK BrDiagLock;  /* BrDiag and BrDiagSeq; taken inside the
                                worker's own lock, never around a call     */
 
@@ -471,6 +509,9 @@ typedef struct _CM_NHI {
      * (cm_ejectos.c, task 43.18): this start's share; the transactions
      * themselves are that file's image-static records. */
     CM_EJ_DOM Ej;
+    /* The Thunderbolt networking service (cm_net.h): the network PDO, kept
+     * across a stop, and the data rings' state, memory, timer and DPCs. */
+    CM_NET Net;
 } CM_NHI, *PCM_NHI;
 
 /* The query device's extension (CM_KIND_QUERY): no lower object. Lock
@@ -566,7 +607,7 @@ typedef struct _CM_FILTER {
     struct _CM_NHI *HeldBy;
     /* The snapshot of section 7.4: written by the PnP dispatch alone,
      * under the registration list's lock (the eject's eligibility reads
-     * it from a child's removal). */
+     * it from the CM thread, CmReenumService). */
     ULONG SnapCount;
     PVOID Snap[CM_SNAP_MAX];
     ULONG SnapTruncated;    /* the last answer held more than CM_SNAP_MAX  */
@@ -657,6 +698,39 @@ typedef struct _CM_FILTER {
     ULONG IrqBdf;           /* the function's location as CmRegIrqWire read
                                it (XHCI_TBT_BDF, 16 bits), for the log;
                                0 before                                  */
+
+    /* ---- a bridge's requirements (design record 33, task 45.12), NT 5.x
+     * alone; the PnP dispatch's alone ---- */
+    ULONG BreqTimes;        /* lists of this bridge rewritten since the
+                               attachment                                 */
+    ULONG BreqStart;        /* a rewrite whose start is not yet seen       */
+    ULONG BreqBdf;          /* the bridge's location at that rewrite       */
+    ULONG BreqPort;         /* its tunnel port's                           */
+
+    /* ---- the isolation statement (design record 22 section 10.5, task
+     * 45.35), a child's, NT 5.x alone; written under cmRegLock ---- */
+    ULONG IsoBound;         /* the binding was taken (CmRegIsoBind)        */
+    ULONG IsoGone;          /* its removal has begun                       */
+    PVOID IsoDom;           /* the bound domain's NHI object, compared only */
+    ULONG IsoStarts;        /* its Reenum.Starts at the binding            */
+    ULONG IsoMember;        /* the member's location (XHCI_TBT_BDF, 16 bits) */
+    ULONG IsoUpMask;        /* bit n-1: USB4 port n's PCIe tunnel was up at
+                               the binding, of generation IsoGens[n-1]     */
+    ULONG IsoGens[TBT_U4_MAX_PORTS];
+    LONG IsoRefs;           /* the interface's references held by xhci98,
+                               counted under cmRegLock                     */
+
+    /* ---- the chained unit's parent (design record 34 section 3.10, task
+     * 45.13), a chain child on a bridge: classified at each of its
+     * BusRelations answers, written and read under cmRegLock ---- */
+    ULONG ChainLanding;     /* its location | CM_MK_LANDING_VALID when it is
+                               a chain port of an active member, else 0    */
+    ULONG ChainSec;         /* its secondary bus at that classification    */
+    ULONG ChainMember;      /* the member's location (16 bits)             */
+    ULONG ChainWhy;         /* the last outcome logged (XHCI_TBT_CPT_* + 1,
+                               0 none yet)                                 */
+    ULONG ChainMayLog;      /* a chained unit's: its Removable gate's last
+                               logged reading (cm.chain.removable)         */
 } CM_FILTER, *PCM_FILTER;
 
 #define CM_CHAIN_UNKNOWN    0UL
@@ -801,6 +875,10 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
  * the top of what is on the PDO, passive until associated, and never a
  * failed AddDevice for want of a role (decision M7). */
 NTSTATUS CmChildAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+/* A child filter's removal reference for the chain action (cm_filt.c,
+ * task 45.13): FALSE once its removal has begun. */
+BOOLEAN CmFilterTryHold(PCM_FILTER filter);
+VOID CmFilterUnhold(PCM_FILTER filter);
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp);
 NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp);
 
@@ -812,6 +890,24 @@ VOID CmReadValues(PCM_NHI nhi);
  * role, PASSIVE_LEVEL, and only read after. */
 extern ULONG CmIrqGate;
 VOID CmReadIrqGate(VOID);
+/* Design record 33's gate (task 45.12): the NT minor version plus one on
+ * NT 5.x (1 on 2000, 2 on XP, 3 on XP x64), else 0; read once by
+ * CmReadBreqGate in DriverEntry on the NT role, and only read after. */
+extern ULONG CmBreqGate;
+/* Design record 22 section 10.5 (task 45.35), cm_reenum.c: the binding of
+ * a child filter to the USB4 port whose PCIe tunnel its device started
+ * under (TRUE when taken), the decision for it (cm_iso.h CM_ISO_*), and
+ * its end at the child's removal. PASSIVE_LEVEL or below; cmRegLock taken
+ * inside. */
+BOOLEAN CmRegIsoBind(PCM_FILTER child);
+ULONG CmRegIsoAsk(PCM_FILTER child);
+VOID CmRegIsoGone(PCM_FILTER child);
+/* The interface's references after the first (which CmRegIsoBind takes),
+ * counted under cmRegLock; the binding retired with the last, so the next
+ * start binds afresh. IRQL <= DISPATCH_LEVEL. */
+VOID CmRegIsoRef(PCM_FILTER child);
+VOID CmRegIsoDeref(PCM_FILTER child);
+VOID CmReadBreqGate(VOID);
 
 /* cm_statos.c: CmStatusOpen in the PnP start's dispatch (the keys and the
  * first record); CmStatusPass once per thread pass; CmStatusStopped after
@@ -863,11 +959,35 @@ VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
 
 /* cm_pool.c */
+VOID CmPoolInit(VOID);
 PVOID CmAlloc(ULONG bytes);
 PVOID CmAllocPaged(ULONG bytes);
 VOID CmFree(PVOID p);
 NTSTATUS CmDmaOpen(PCM_NHI nhi);
 VOID CmDmaClose(PCM_NHI nhi);
+/* One common buffer of `bytes` on the NHI's adapter, cached, below 4 GB and
+ * 16-byte aligned, zeroed; its bus address in *pa. NULL on a failure. The
+ * Thunderbolt networking rings' (cm_net.c). PASSIVE_LEVEL. */
+PVOID CmDmaCommonAlloc(PCM_NHI nhi, ULONG bytes, PULONG pa);
+VOID CmDmaCommonFree(PCM_NHI nhi, ULONG bytes, ULONG pa, PVOID va);
+
+/* cm_net.c (design record 35 sections 5 and 6, task 45.59). */
+VOID CmNetInit(PCM_NHI nhi);
+VOID CmNetBindOps(PCM_NHI nhi, BOOLEAN fw);
+VOID CmNetPass(PCM_NHI nhi);
+VOID CmNetAck(PCM_NHI nhi);
+VOID CmNetStopWork(PCM_NHI nhi);
+VOID CmNetLogCounters(PCM_NHI nhi);
+VOID CmNetStarted(PCM_NHI nhi);
+VOID CmNetGone(PCM_NHI nhi);
+VOID CmNetRemove(PCM_NHI nhi);
+NTSTATUS CmNetBusRelations(PCM_NHI nhi, PIRP irp);
+NTSTATUS CmNetPdoPnp(PCM_NETPDO pdo, PIRP irp);
+NTSTATUS CmNetPdoPower(PCM_NETPDO pdo, PIRP irp);
+NTSTATUS CmNetPdoOther(PCM_NETPDO pdo, PIRP irp);
+/* The thread's CM_WORK_NET and its poll pass (cm_nhi.c): CmNetPass where
+ * a connection manager runs, then the acknowledgement. */
+VOID CmNhiNetWork(PCM_NHI nhi);
 
 /* The completion routine of a forwarded IRP is called on success, error
  * and cancel alike; IoSetCompletionRoutine's macro spelled out, as uas.h

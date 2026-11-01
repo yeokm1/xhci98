@@ -15,7 +15,10 @@ against - the function-driver contract (25.2), the Windows 98 export evidence
 the gates (25.5), and hubs and composite devices inside the bus (25.6);
 section 11 is the transfer-buffer policy (25.7) and section 12 the index of
 what Phase 25 leaves open; section 14 is a cancelled TD behind the head
-(task 43.64). Appendix A is the full Windows 98 export table.
+(task 43.64), section 15 a device kept across its SuperSpeed link's
+recovery (task 45.41), section 16 a UAS drive's pass-through and SMART
+(task 45.52), and section 17 a UAS drive in Safely Remove Hardware (task
+45.61). Appendix A is the full Windows 98 export table.
 
 **Since 2026-10-02 the successor is `xhci98.sys` and `src\` is the
 successor's** (owner, the same day, after task 25.8 had first built it as
@@ -1262,6 +1265,74 @@ register beyond the halt the D3 already makes. It does not release
 requests already parked on a PDO for a departed device (`HcdIoPark`),
 whose rule is usbport's. It changes nothing at S1 to S4, at a stop or a
 removal, or with the latch clear.
+
+### 5.8.1 A D0 the bus fails (task 45.63, 2026-11-01)
+
+**The gap.** S1 to S4 hold what the bus has until the D0 that follows
+(section 5.8). That D0 can fail: the bus driver below completes it with an
+error and the function stays out of D0. Windows 10's PCI driver does so with
+`STATUS_NO_SUCH_DEVICE` when the function is no longer there after a sleep
+(a dock's controller unplugged while asleep), and then reports it gone so
+PnP removes the stack. Until `3.4.0.0` the FDO's completion routine
+(`hcdD0Done`) let a failed D0 go with nothing done: no resume, no latch, and
+every request held, or sent afterwards, waited for a D0 that never came. The
+device PDOs complete their own D-IRPs at once (selective suspend off, the
+default), so each function driver's D0 succeeded; Windows 10's HID stack
+then sends a request to its PDO before it finishes its D0 (a class URB),
+and holds that D0 until the request ends. The request waited on the
+suspended bus, the HID stack's D0 waited on it, and PnP's removal of the
+controller waited on the D0: bug check 0x9F (3) about five minutes later,
+with the HID D0 named (`runs/run-45.md`, "45.63", stop 3, and "45.63 (the
+S3 wake)"). Read on QEMU, where the guest's PCI driver fails this driver's D0 of the
+`qemu-xhci` function after every S3 wake (QEMU resets its devices at the
+wake); under Windows' own `USBXHCI` the same wake removes the controller
+and finds it again within seconds, which is taken to be the same failed
+D0 met by a stack that completes what it holds (inferred, not traced).
+
+**The answer** (`hcd_power.c`, `hcdD0Refused`): a failed D0 takes the same
+route as one that succeeded, to `hcdD0Finish` at PASSIVE_LEVEL (inline or
+through the D0 work item). There, under the power gate, when the controller
+is suspended (out of D0, or suspended in D0 by the direct transition), the
+D0 resumes nothing, touches no register, leaves the recorded device state
+where the bus left it, and ends what the bus holds as the shutdown does:
+
+1. the latch (`ShutLatched`) set under the controller lock, so every
+   admission of section 5.8 refuses from here on - a transfer or command
+   URB `DEVICE_NOT_RESPONDING` at the next tick, a request without a URB
+   `STATUS_UNSUCCESSFUL`;
+2. the resume's state (`ResumePhase`, design record 20 section 4.3.3) set
+   FAILED if it is still PENDING, with `MarkGen` moved, so `xhciuas.sys`'s
+   wake check fails at once instead of waiting out its bound. A later
+   resume begins PENDING again (`hcdResume`) and ends as any resume does,
+   and a PnP start publishes RUNNING, so a refused D0 leaves no FAILED on a
+   controller that serves;
+3. the commands flushed (`HcdCfgShutFlush`);
+4. the transfers flushed (`HcdIoShutFlush`) on the halt's proof. The
+   function cannot be read now, so the proof is the one the suspend took:
+   `USBSTS` read `HCHalted` on a decoding window by `hcdSuspendSettled`
+   right after `XhciSuspendController`, while the function was still in
+   D0 (`SuspendHaltProven`), which only a resume (`hcdResume`) or a start
+   clears; nothing sets Run/Stop in between. No proof, a pinned buffer or a
+   contained controller: the transfers stay, as at the shutdown
+   (`XhciTolShutFlush`).
+
+5. a selectively suspended PDO's D0 already pended (design record 14
+   section 4.4) settled SUCCESS by the completion workers, as at the PDO's
+   teardown (`HcdSuspSettleLatched`): no powered pass comes to serve it.
+
+Then the IRP completes with the bus's status. A selectively suspended
+PDO's D0 admitted while the latch stands completes at once, as a closed
+PDO's does (design record 14, the admission of a D-IRP). The function driver's request fails, its D0
+ends, and PnP's surprise removal and removal of the controller run; the
+stack is rebuilt and the devices enumerated again, as under `USBXHCI`. A
+later D0 that succeeds clears the latch before its resume, as after a
+shutdown (`hcdShutClear`), and that resume re-initializes (the flush
+dropped the saved image). A failed D0 for a function already running in D0
+changes nothing.
+
+The log ring notes `power.d0.refused` (the bus's status) and
+`power.d0.flush` (bits 1-0 the decision, bits 31-8 the commands
+completed); `D0Refusals` counts them.
 
 ## 6. The function-driver contract (task 25.2)
 
@@ -4102,7 +4173,7 @@ log, the registry, `msinfo32`, a screendump), **documentation**
 Windows 10 x86 only, in one guest leg (6.14.5); on 10 x64 the forced
 install was refused before any file was copied.
 
-**Method.** The two images of 43.32 (`E:\xhci98-vm\win8-10`, built
+**Method.** The two images of 43.32 (`<vm root>\win8-10`, built
 2026-10-22 from the owner's `Win10_22H2_English_x64v1.iso` and
 `Win10_22H2_English_x32v1.iso`, Windows 10 Pro 22H2, 10.0.19045.2965).
 Files taken read-only with `7z e <image>.qcow2` (7-Zip reads the
@@ -4854,6 +4925,11 @@ DMA"). That rule left the tree with the miniport; it remains the rule of the
 2. **`NonPagedPool` only**, at `PASSIVE_LEVEL` or `DISPATCH_LEVEL`, never in
    the ISR and never in a `KeSynchronizeExecution` callback. No `PagedPool`:
    Windows 98's pager and its `DO_POWER_PAGABLE` interactions are unread.
+   From NT 6.2 (Windows 8) on the nonpaged type is `NonPagedPoolNx`
+   (512), chosen once at `DriverEntry` (`HcdPoolInit`; `xhcicm.sys` and
+   `xhciuas.sys` likewise, `CmPoolInit` and `UasPoolInit`), so Driver
+   Verifier's code integrity checks find no executable pool (roadmap-usb4
+   task 45.63; record 11 section 8, "The nonpaged pool type").
 3. **Lifetime-scoped sites, not the transfer path.** Allowed: device objects
    and their extensions (which `IoCreateDevice` allocates for the HCD),
    per-controller state at `START_DEVICE`, per-device, per-endpoint, per-hub
@@ -5364,8 +5440,9 @@ that:
 
 **The switch.** `XhciUsb2Bos`, a DWORD read at every start, machine-wide
 first as the other values are (`hcdReadDword`): only 0 turns the read off;
-absent, another number or another type is on. No INF writes it. The start
-logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
+absent, another number or another type is on. Written at 1 by both
+controller INFs since task 45.50 (record 21 section 8.1), never over a
+user's value; no INF wrote it before. The start logs it (`enum.bos.usb2.on`). It is the way out for a device that the read
 upsets in a way the retry does not cure, until the device is known.
 
 **Who reads what the read keeps.** `dev->BosInfo` and `dev->Bos`, as at
@@ -6800,7 +6877,7 @@ case-insensitive matching above, and the form most INF lines use.
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr`, `USB\VID_vvvv&PID_pppp` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): from the interface when `bDeviceClass` is 0 and the configuration has exactly one interface, from the device descriptor otherwise - so a multi-interface device the bus does not split (10.8) reports its own triple, `00/00/00` when its class is 0, never its first interface's, which would bind a class driver to the whole device (corrected 2026-10-03 by 26-A.7 from "from the interface when `bDeviceClass` is 0"; Windows 2000's `usbaudio.sys` bound to a whole composite device bugchecks, guest leg c14, `runs/run-26.md`). Whether to add the `USB\DevClass_cc...` forms XP's `usbhub.sys` carries templates for (and Vista's and 7's `USB\DevClass_00&SubClass_00&Prot_00`) is open (10.9); no stock INF in the table above matches a `DevClass` id |
 | `BusQueryInstanceID` | the serial id when the device has a usable one that no present PDO of the same VID and PID carries already, with `UniqueID` TRUE in its capabilities: the NT instance path `USB\VID_0781&PID_5567\4C530001230920108174` (what Windows 98 SE and ME make of it is for task 33.2's guest legs to read); else the location key in decimal, `UniqueID` FALSE - root port 3 is `3`, and behind hubs the Route String sits above the port (`XhciHubInstanceKey`, route `0x31` over port 2 is `12546`). The rule is "Instance ids from the serial number" below (task 33.2; until `2.1.0.0` every device had the location form) |
 
 **A function PDO** (one per function of a split device; since task 36.43 a
@@ -6811,7 +6888,7 @@ child of the device's composite-parent PDO, whose own ids are section
 |---|---|
 | `BusQueryDeviceID` | `USB\VID_vvvv&PID_pppp&MI_nn` |
 | `BusQueryHardwareIDs` | `USB\VID_vvvv&PID_pppp&REV_rrrr&MI_nn`, `USB\VID_vvvv&PID_pppp&MI_nn` |
-| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc`: for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03; it was open (10.10) |
+| `BusQueryCompatibleIDs` | `USB\Class_cc&SubClass_ss&Prot_pp`, `USB\Class_cc&SubClass_ss`, `USB\Class_cc` (the last left out for `01/ss/20` and `01/ss/30`, 10.7.2): for an IAD function from the IAD's `bFunctionClass` / `bFunctionSubClass` / `bFunctionProtocol`, as Microsoft's "Support for interface collections" gives them; for any other function, a legacy audio group included, from its first interface (alternate 0). Decided 2026-10-03; it was open (10.10) |
 | `BusQueryInstanceID` | with the device's serial id, that id, `&` and `nn`, `UniqueID` TRUE: `ABC123&03`; without, the location key in decimal, then `nn`: port 3's `MI_03` is `303`, `UniqueID` FALSE (task 33.2; the location form was corrected 2026-10-03 by 26-A.7 from "the parent device's instance string plus the function number") |
 
 **Instance ids from the serial number** (roadmap task 33.2, `2.1.0.0`;
@@ -6853,8 +6930,10 @@ device keeps the location form and `UniqueID` FALSE.
   newcomer on the location form (`serial.duplicate`); an instance id with
   `UniqueID` TRUE names one devnode on the whole machine. `usbhub` checks
   only its own hub's ports. A PDO already unlisted (gone, its missing
-  report pending) on the same controller does not count - one relations
-  answer omits it and brings the newcomer - so a device moved quickly from
+  report pending) on the same controller and under the same parent does
+  not count - one relations answer omits it and brings the newcomer; under
+  another parent it does until its missing report (task 33.4) - so a
+  device moved quickly from
   one port to another keeps its id, as under `usbhub`; moved between
   controllers faster than the old root hub's next answer, it takes the
   location form for that plug. This is the other way a
@@ -6895,6 +6974,152 @@ device keeps the location form and `UniqueID` FALSE.
   before.
 - **Upgrading** from `2.0.0.0` gives every device with a usable serial one
   new devnode, at its first plug, because its instance id changed once.
+
+**Identity across a re-enumeration** (roadmap-usb4 task 45.40, `3.4.0.0`).
+A user's RTL8157 on 32-bit XP, set to a static address with no gateway,
+later took the default route. XP keeps a network adapter's TCP/IP settings
+under its devnode's `NetCfgInstanceId`, so an instance id that changes
+makes a new adapter with DHCP and leaves the old one's settings on a
+phantom. On a q35 XP guest with `3.3.0.0` and a simulated RTL8157 with a
+serial, set static: a replug whose first three serial reads STALL was
+published on the location form (`USB\VID_0BDA&PID_8157\6&58728d&0&1`),
+Windows installed a second adapter with DHCP, and its default route, metric
+10, outranked the other adapter's, metric 20 (`runs/run-45.md`, "45.40");
+the next replug, read cleanly, went back to the first devnode and its
+static address. The user's own cause is not read. The rule below keeps a
+device that was serial-named at a root port from being renamed there by a
+read that fails.
+
+- **Spaced tries.** The reader's three tries (`HCD_SERIAL_READ_TRIES`) are
+  no longer back to back: a try that does not bring the string waits 100 ms
+  before the second and 400 ms before the third, on the controller thread,
+  as `hcdAddress` waits its recovery. Only a failed try pays it; a STALL of
+  string descriptor 0 is not a failure (0409h), as before. A timeout
+  (`Ep0Stuck`) still returns at once. A string that arrives but is no
+  instance id (`HCD_SERIAL_REFUSED`) ends the reader at once, as before.
+- **The port's memory.** Each root port (`HCD_PORT`'s `IdMemVidPid` and
+  `IdMemSerial`) remembers the vendor and product id of the last non-hub
+  device group listed for a device attached to it directly, and whether
+  that group's first PDO answers the serial form - its effective identity,
+  after the duplicate rule, or the revived group's (Windows 98 SE and ME).
+  It is written by the controller thread once the group is listed or
+  revived (`hcdIdRemember`, which also clears the latch), and lasts as long as the controller's storage: a recovery, a
+  cycle, a link recovery, a controller stop and start, or a resume that
+  re-initialized the controller keeps it; a controller removal (XP's
+  disable) forgets it. An unplug does not clear it: a link that drops reads
+  as one, and that is the case this rule is for.
+- **Behind a hub** (owner, 2026-10-30, the 45.41 case): a device attached
+  directly to a downstream port of a USB 2.0 or SuperSpeed hub, at any
+  tier, has the same memory, held for its **place** rather than for a port
+  object: an entry of a controller table (`IdPlaces`,
+  `HCD_ID_PLACES` = 32) named by the place's instance key
+  (`XhciHubInstanceKey(root port, route)`, the key its location form
+  answers). A hub's port objects can sit at other indexes after the hub is
+  removed and enumerated again, but the places keep their keys, so the
+  memory survives the hub's own departure, re-enumeration and replacement
+  at the same place, and a controller stop and start; it goes with the
+  controller's storage, as a root port's. An entry is taken at the first
+  listing at its place; with all 32 taken, the one written least recently
+  is reused (`XhciFuncIdPlaceTake`, host vectors in `test_func`), and a
+  place whose entry went is treated as one never seen. The latch and the
+  deferral counts are the entry's. A different hub put at the same place
+  inherits its ports' entries, with the cost a root port's memory has (a
+  same-model device whose read fails there is deferred once). Root ports
+  keep their memory in `HCD_PORT` as before.
+- **The decision**, `XhciFuncSerialDefer` (`xhci_func.c`, host vectors in
+  `test_func`), taken in `HcdDevicePdoCreate` right after the read and
+  before anything is configured, so a composite device's whole group is
+  covered: a non-hub device attached directly to a root port or to a
+  hub's downstream port, with an `iSerialNumber`, whose read is `HCD_SERIAL_FAILED` or
+  `HCD_SERIAL_REFUSED`, where the port remembers the same vendor and
+  product id answering the serial form, is **deferred** - unless the
+  port's latch (below) is a bypass, when it is published, or a failure,
+  when the creation fails at once. A read that brings a usable serial is
+  never deferred, latch or not. Any other device goes on as before. A
+  device without `iSerialNumber` is never deferred:
+  that is its own answer at every plug. The dormant groups of Windows 98 SE
+  and ME need no exception: a group revived by place has no serial id
+  (`XhciFuncReviveByPlace`), so its port never remembers the serial form
+  for it, and a serial-named group is revived only by a serial read again.
+- **Deferral is in place.** The deferred device is read again where it is,
+  in the same `HcdDevicePdoCreate` (`HcdDeviceSerialDefer`): up to
+  `HCD_SERIAL_DEFER_TRIES` (3) more reader runs, each after a 1 s wait,
+  each a fresh read (the serial state reset to unread), never a remembered
+  serial, and none started more than 6 s after the first wait began. After
+  every wait, after every run (before its success is taken) and before a
+  failure is recorded, the deferral is cancelled - the creation fails with no latch
+  and nothing counted as spent - when the controller has failed
+  (`hcdHalted`), its thread is stopping or its root hub is no longer
+  started, or the device's path no longer holds the same connection
+  (`hcdSerialDeferGone`): every hub port above the device, its own first,
+  read with GET_STATUS (which clears no change bit), cancels when it does
+  not answer, reads not connected or not enabled, or has C_PORT_CONNECTION
+  set (C_PORT_ENABLE alone is not taken: a hub raises it when an error
+  disabled the port, which PORT_ENABLE clear says already, and QEMU's hub
+  model raises it at every port reset too, with the port enabled - a leg
+  on QEMU's USB 2.0 hub cancelled every deferral by it), or when its hub
+  is departing (`Draining`, or no device); then the root port the path starts at cancels when it reads
+  unreadable, not connected, not enabled, or with a connection change
+  (CSC). Every change is left set for its port's own inspection: a
+  departure and a new arrival, or a port its hub disabled, which the
+  ordinary path retries. An ancestor's departure shows here even though
+  its teardown cannot run while this thread is in the child's creation. A reader that times out (`Ep0Stuck`) returns as it
+  does now, with no PDO. A run that brings the serial goes on to the
+  ordinary creation, the duplicate rule included (`serial.defer.ok`). The
+  cost is up to 3 s of waits, plus the reads' own time (a control transfer
+  may take up to its 5 s deadline before it fails), on the controller
+  thread under its power gate; the creation action is outside the per-port
+  enumeration budget already, and a first relations answer still stops at
+  its own deadline.
+- **The failure.** When the runs are spent the creation fails
+  (`STATUS_DEVICE_NOT_READY`): the port's machine takes it as any failed
+  creation does (`XHCI_ENUM_FAIL_PDO`, the slot disabled), nothing is
+  published, `serial.defer.fail` is counted and logged with the port, and
+  the port is latched (`IdDeferFailed` = failed). The run's failure handler
+  (`hcdRun`) does not take the machine's own retry for a latched
+  `XHCI_ENUM_FAIL_PDO`: the port stays Failed, which waits for a new
+  connection; a hub's port is left as it is, not disabled as a hub port
+  is at other final failures (`HcdHubPortDisable`), since a SuperSpeed
+  hub port disabled that way is re-armed by itself later, which would be a
+  new connection with no replug. The next connection fed to that port (`hcdFeed`, a CONNECT
+  that starts an enumeration from Empty or Failed - a replug, or the
+  re-enumeration after a recovery, the hub's own included; for a hub's
+  port the entry of its place, found by `XhciTopoChildOf`) turns the latch
+  into a bypass for that
+  connection, kept across its own retries and device records: a bypassed
+  arrival is never deferred, and is published whatever its read gives - on
+  the location form if it still fails, a new devnode, which Windows shows.
+  Any listing for a device attached to the port, a hub's included, clears
+  the latch; a non-hub group's also writes the memory afresh.
+  That is the way out for a device of the same model whose serial cannot be
+  read.
+  The device whose runs are spent stays invisible - no devnode, no
+  Device Manager entry - until that next connection (owner, 2026-10-31,
+  choosing it over a devnode under a failure id, which would add a
+  devnode and a hardware wizard each time).
+- **What it shows.** Every listing writes `id.form` to the log - the
+  location, the read's outcome, whether a duplicate cleared the serial id,
+  and the form answered - and every deferral `serial.defer` with its run.
+  The counters are `serial.deferred`, `serial.defer.ok` and
+  `serial.defer.fail`. Because the log ring can overwrite a note, each
+  root port's record in the snapshot's HCD region carries the port's own
+  state, four words appended after its flags (`XHCI_SNAPSHOT_HCD_PORT_IDMEM`
+  to `_IDFAILS`: the remembered ids, the serial-form flag and the latch,
+  the deferrals made and spent there), which `XHCITR` prints as an
+  "identity:" line under the port, an Empty one included; the counter block
+  of a stop's flush lists the same (`id.port` and its lines). The places
+  behind hubs are a block appended to the region's header
+  (`XHCI_SNAPSHOT_HCD_IDPLACE_*`, version unchanged: the entry count, the
+  words of one and the first entry's word, then `HCD_ID_PLACES` entries of
+  the key, the ids, the serial-form flag and latch, the deferrals made and
+  spent), which `XHCITR` prints as "identity behind hubs", one line a
+  place in use. It is a diagnostic, not a Device Manager entry.
+- **Not changed.** The resume keep (`hcdRkeepRestore`) and the link keep
+  (`HcdThreadSameIdentity`, task 45.41) still read the serial afresh and
+  compare it, and never take the port's memory; the spaced tries only make
+  their reads slower when they fail. The duplicate rules stand. A
+  serial-less device keeps the location form, so one that comes back on
+  another port or on its USB 2.0 companion is still a new devnode.
 
 **A storage interface that offers UAS** (roadmap task 31-A.3, `xhci_xport.c`;
 a device PDO's one interface, or a function's when no IAD groups it) gets
@@ -7252,15 +7477,108 @@ the 9x guests, which decides the change on every target by decision 1.
   any `USB\XHCI98_NOXPORT` line, and the installer's `inst_bus_id` and
   `inst_remove_rank` already treat that form as not the bus's and leave it.
 
+#### 10.7.2 A UAC 2.0 function's compatible ids (task 45.24)
+
+**Status.** Designed 2026-10-29 from task 45.24's reading
+(`runs/run-45.md`, "45.24"), reviewed and revised, for `3.4.0.0`.
+
+**The reading** (runtime, q35 XP SP3 x86 guests, a simulated UAC 2.0
+device - `usb-wdm-free`'s `uacemu.py`, profile `hs24` - over `usb-redir`;
+`3.2.0.0` with `usb-wdm-free` v0.1.0's `uac2`, and `3.3.0.0` with
+v0.1.4's):
+
+- Windows' `wdma_usb.inf` binds `usbaudio.sys`, which on 2000 to 8
+  serves USB Audio 1.0 only, to the bare `USB\CLASS_01` (10.6). On XP
+  that signed generic line outranked `uac2wdm.inf`'s unsigned
+  `USB\Class_01&SubClass_00&Prot_20` and `USB\Class_01&SubClass_01&Prot_20`
+  lines even with `uac2wdm.inf` copied in by `SetupCopyOEMInf` before the
+  plug: the function came up as "USB Audio Device" on `usbaudio`, no
+  wizard asked.
+- From there no change of that devnode completed. Update Driver to
+  `uac2` (Have Disk, or the copied INF's line) stopped at "uac2wdm.sys To
+  C:\WINDOWS\system32\DRIVERS" with `usbaudio` running and `uac2wdm`
+  never started; Disable in Device Manager waited the same way; after an
+  unplug, the update of the non-present devnode waited too, and so did
+  Windows' own shutdown, until a reset. After the reset `uac2` bound and
+  played. Under Windows' own `usbehci.sys` and `usbccgp.sys`, with no
+  xHCI98 on the machine, the same update, and the shutdown after an
+  unplug, waited the same way. That is consistent with a teardown that
+  never ends in Windows' audio stack once `usbaudio` holds a UAC 2.0
+  function, and it shows this bus is not needed for the wait; which
+  component waits (`usbaudio.sys`, KS, PortCls or PnP) was not read, no
+  thread's stack having been taken. `uac2` never loads before it.
+
+**The change.** A function, or an unsplit device, whose class triple is
+`01/ss/20` or `01/ss/30` drops the third, bare `USB\Class_01` compatible
+id and keeps the other two:
+
+| Triple (`cc/ss/pp`) | `BusQueryCompatibleIDs` |
+|---|---|
+| `01/00/20` (a UAC 2.0 IAD) | `USB\Class_01&SubClass_00&Prot_20`, `USB\Class_01&SubClass_00` |
+| `01/01/20` (a UAC 2.0 AudioControl interface, no IAD) | `USB\Class_01&SubClass_01&Prot_20`, `USB\Class_01&SubClass_01` |
+| `01/00/30` (UAC 3.0) | likewise, two ids |
+| `01/ss/00` (UAC 1.0; MIDIStreaming), `01/ss/pp` with any other `pp`, every other class | the three ids, unchanged |
+
+- Why those two protocols: USB Audio 1.0 requires `bInterfaceProtocol` 0
+  (and so does USB MIDI, 1.0 and 2.0); USB Audio 2.0 sets
+  `IP_VERSION_02_00` (20h), in the AudioControl and AudioStreaming
+  interfaces and the IAD's `bFunctionProtocol`, and 3.0
+  `IP_VERSION_03_00` (30h). Neither is a protocol `usbaudio.sys` on 2000
+  to 8 serves. A non-conforming device with some other non-zero protocol
+  is left as it was, its bare id with it.
+- The triple is the one the ids already come from: the IAD's when the
+  function has one, else its first interface's at alternate 0
+  (`XhciFuncSplit`), and for an unsplit device the device descriptor's,
+  or its single interface's when the device class is 0
+  (`hcdClassTriple`). An IAD saying `20` over an AudioControl interface
+  saying `00` is non-conforming and follows the IAD. A MIDIStreaming
+  interface inside a UAC 2.0 IAD shares the IAD's ids, so loses the bare
+  id with it; a separate MIDI function keeps all three.
+- Per target. 98 SE and ME: `wdma_usb.inf`'s `USB\CLASS_01` line no
+  longer matches such a function; on 98 SE `uac2`'s lines ranked above
+  it already (`usb-wdm-free`'s profiles record; ME's ranking was not
+  read). 2000 to 8.1: the generic class-only line no longer matches;
+  `wdma_usb.inf`'s VID/PID lines still do for the devices they name. The
+  function then waits for a driver: Found New Hardware, or a copied
+  `uac2wdm.inf` that matches its specific id. That makes `uac2` a
+  candidate with nothing to tear down first; whether Windows installs it
+  silently is still its signing policy's and the INF's own matter. 10,
+  from 1703: Windows' own USB Audio 2.0 driver matches the protocol 20h
+  ids with subclass 00 to 03 (Microsoft's published "USB Audio 2.0
+  Drivers" documentation), which stay.
+- Hardware ids, the device id and the instance id are unchanged, so a
+  driver matched by VID and PID, `&MI_nn` included, binds as before. No
+  consumer in this tree needs three compatible ids: `XHCITR` and the
+  installer's `inst_msz_has` and `inst_ids_split` walk a list of any
+  length.
+- `XhciFuncCompatCount` (`xhci_func.c`, pure) answers 2 or 3 from the
+  triple; `XhciFuncId`'s `XHCI_FUNC_ID_COMPATIBLE` and
+  `hcdDeviceQueryId`'s device-PDO answer both take it. Host vectors in
+  `test_func`: the rows above, an IAD over a disagreeing AudioControl
+  interface, MIDI beside a UAC 2.0 IAD, a reserved protocol, and the
+  shortened answer's size, its size query and its truncation.
+- A devnode already bound to `usbaudio` keeps it, and its
+  `MatchingDeviceId` (`USB\CLASS_01`) with it: Windows does not rank an
+  installed devnode again when its compatible ids change, and a device
+  with a serial number keeps that devnode on any port. The way out
+  there, read in the last leg: unplug the device, restart Windows (and
+  reset the machine if the shutdown waits), then update the hidden "USB
+  Audio Device" to `uac2` (Device Manager started with
+  `devmgr_show_nonpresent_devices=1`, View, Show hidden devices), which
+  completes, and plug the device in again. The release notes say so.
+- Not this bus's: under Windows' own USB stack the generic id stays, and
+  `usb-wdm-free`'s README carries that known issue for XP and XP x64.
+
 ### 10.8 When and how the bus splits a device
 
 **When.** Microsoft's composite-parent rule, as `XhciFuncSplit`
 (`xhci_func.c`) implements it: split only a device with
-`bNumConfigurations` 1, two or more interfaces (counted over
+`bNumConfigurations` 1 (since task 45.34 also more than 1, by
+configuration index 0; below), two or more interfaces (counted over
 `bAlternateSetting` 0 descriptors), and `bDeviceClass` 0 or
 class/subclass/protocol `EF/02/01` (the IAD device class). Every other
-device - several configurations, or a device class of its own, IADs or not -
-is one device PDO with the whole-device ids of 10.7, which keeps the
+device - a device class of its own, IADs or not (until task 45.34 also
+several configurations) - is one device PDO with the whole-device ids of 10.7, which keeps the
 `USB\VID_vvvv&PID_pppp` id a whole-device driver matched on; so is a device
 with more than 16 functions or IADs, or an interface number of 32 or more. A
 multi-interface device left whole no longer reports its first interface's
@@ -7274,6 +7592,60 @@ IADs", left any other device class unsplit "until it is read", and had the
 bus split using "the first configuration", leaving the multi-configuration
 rule (`ParentFindOriginalConfiguration`, `ParentFindAltConfiguration`)
 unread. A device with more than one configuration is now never split.
+
+**Several configurations (task 45.34, `3.4.0.0`; owner, 2026-10-29).**
+Superseding "never split" just above: a device whose `bNumConfigurations`
+is above 1 is split by the same rule over its configuration index 0, the
+one the bus reads at enumeration (`hcd_enum.c`), and nothing else of it
+changes - the class test, the interface count, IADs, the legacy audio
+rule, the limits. The bus configures it as any split device
+(`HcdCfgParentConfigure`, SET_CONFIGURATION with configuration 0's
+`bConfigurationValue`); its other configurations are never read, never
+selected and never shown: a function's GET_DESCRIPTOR(CONFIGURATION) for
+an index above 0 is refused as before (10.9); a function's
+SELECT_CONFIGURATION whose configuration descriptor carries another
+`bConfigurationValue` than the one the bus set is refused with
+`USBD_STATUS_INVALID_PARAMETER` before any pipe changes
+(`hcdCfgSelectFunction`, as the composite parent's `hcdCompSelect`
+already refuses one, 10.14), so GET_CONFIGURATION and a RESET_PORT replay
+keep naming the configuration the functions run in; and the device
+descriptor a client reads from the device still carries the device's own
+`bNumConfigurations`.
+
+- Why: a USB Audio 3.0 device must carry an ADC 1.0 or 2.0 function in
+  its first configuration (index 0) and its 3.0 functions in later ones
+  (ADC 3.0 with errata, section 3.3 "Backwards Compatibility"). Left
+  whole, under this bus it had no driver at all (`usb-wdm-free`'s
+  `docs/design/uac2.md` section 16.6: only index 0 read, no configuration
+  selected, Found New Hardware without a driver). Split by configuration
+  0, its 2.0 function is a function PDO with the `01/00/20` ids of 10.7,
+  which `uac2` matches.
+- What Windows' own stacks do, read on XP SP3 (the same section 16.6, a
+  simulated two-configuration device under `usbehci.sys`): the hub reads
+  configuration index 0 only, sends SET_CONFIGURATION 0 and presents the
+  whole device to one driver - no `USB\COMPOSITE` match, since
+  Microsoft's rule ("Enumeration of the composite parent device") reports
+  that id only for `bNumConfigurations` 1 - and that driver (here `usbaudio.sys`, by the
+  whole device's compatible ids) selects configuration 0 itself. Windows
+  98 SE and ME never see this rule: under xHCI98 the bus presents the
+  devices on every target alike (10.12), so the change is the same on all.
+- What it costs: a driver written for Windows' own stack that binds such
+  a device whole, by `USB\VID_vvvv&PID_pppp`, no longer matches it, since
+  the split device's own PDO carries the project-owned composite ids
+  (10.12) and its functions `&MI_nn` ones. Single-configuration composite
+  devices are already split that way under this bus; for several
+  configurations Windows makes no composite match by itself, so such
+  INFs exist: a vendor driver for the whole device, or a vendor INF that
+  loads `usbccgp.sys` on it and lets it choose a configuration, which
+  Microsoft documents. Neither binds here any more. Recorded here as the
+  owner's trade: the UAC 3.0 case over that one; a device list to keep
+  whole can be added if one is reported.
+- `XhciFuncSplit` (`xhci_func.c`, pure) drops its `bNumConfigurations == 1`
+  test; host vectors in `test_func`: a two-configuration IAD audio device
+  splits as its one-configuration twin, a two-configuration device with a
+  class of its own (`bDeviceClass` 02) stays whole, and a
+  two-configuration device of one interface stays whole; the
+  configuration-value refusal of a function's select is read in the leg.
 
 The bus configures a split device itself, once, before any function PDO
 exists (`HcdCfgParentConfigure`): SET_CONFIGURATION with its one
@@ -11832,6 +12204,1411 @@ this branch, and 7 of 10 with the branch before 43.69. None of these
 differences is significant, and against its own base, side by side, this
 build faulted 5 times to 7. Nothing on hardware: the defect needs a
 controller that breaks 4.10.1.1.2 and a cancel in the window.
+
+## 15. A device kept across its link's recovery (task 45.41, 2026-10-30)
+
+Status: 2026-10-30, reviewed and revised; built the same day. Written
+from roadmap-usb4 task 45.41's reading (`runs/run-45.md`, "45.41").
+
+### 15.1 The report and the reading
+
+A SanDisk UAS drive (`0781:55A9`) on port 1 of a SuperSpeed hub
+(`0BDA:0411`) at root port 3 of a VIA VL805 (`1106:3483`), Windows XP x64
+(the `3.3.0.0` release-x64 `xhci98.sys` by its size); Windows reported "Delayed Write Failed" for files on it and,
+separately, the machine "after a while" froze but for the mouse pointer,
+recovering partly after a wait; the drive stays plugged in for long hours.
+The user's snapshot: the UAS driver's telemetry record 1 "departed, slot
+4", record 2 "present, slot 4", `SsHubWarmResets` 1, no UAS sense, timeout,
+abort or reset counted; and on root port 2 an RTL8157 network adapter
+whose look reads "machine Bound, fed disconnect, link warm reset; PORTSC
+PLS 6, changes CSC PLC" - a SuperSpeed link in SS.Inactive (PLS 6) under a
+bound device, with CCS 0 (xhci-data-structures.md section 10.4).
+
+What the code does with such a link, on a root port and behind a
+SuperSpeed hub alike, is to drop the device and enumerate it afresh:
+
+- a hub port: `HcdSsHubPortLook` (`hcd_sshub.c`) reads the link in
+  SS.Inactive or Compliance Mode (`XhciSsHubPortDecide`), marks the port
+  `HubSsRecover` and asks for the disconnect of what it holds;
+  `hcdHubPortChanged` (`hcd_enum.c`) feeds that disconnect - the device
+  frozen, its transfers ended, its slot disabled, its PDOs reported
+  missing - and only then `HcdSsHubPortRecover` sends BH_PORT_RESET, and
+  the trained link is enumerated as a new device (section 10.5, roadmap-hcd
+  30-A.1);
+- a root port: `hcdPortChanged` reads the link as `XHCI_LINK_ERROR` or
+  `XHCI_LINK_COMPLIANCE` (`XhciLinkPortFeed`, `xhci_link.c`), feeds the
+  disconnect and writes the warm reset (PORTSC.WPR), and the reset's
+  completion finds the machine Empty and enumerates (roadmap-hcd 29-A.2).
+
+To the storage stack that is a surprise removal and a new disk: requests
+in flight fail, cached writes not yet on the medium are lost ("Delayed
+Write Failed"), and every handle opened on the old volume fails for good.
+The transfers the teardown ends are held on the old PDO until PnP's
+surprise removal reaches it (`HcdIoPark`, `hcd_io.c`), so its class driver
+sees no error until then. Read on q35 XP with `3.3.0.0` and a test-only
+SuperSpeed hub model that fails a downstream link (`runs/run-45.md`,
+"45.41"): the drive under a copy loop is dropped about 2 s after the link
+fails, every copy fails for about 16 s, and the drive comes back as a new
+disk.
+
+SS.Inactive is not a disconnect. A port enters it when its link fails and
+cannot recover - "a link error", USB 3.2 7.5.2 - with the device still
+attached; a detach takes the link to Rx.Detect instead. Only a warm reset
+(or a directed transition) leaves it (USB 3.2 7.5.2, 7.5.5.2, the comment
+at `XhciSsHubPortDecide`; verified for 30-A.1). The device behind it is
+the device that was there, reset by the warm reset to its Default state.
+
+**What Linux does [linux].** The hub driver's port event handler
+(`drivers/usb/core/hub.c`, `port_event`) warm-resets a port whose link
+needs it; when a configured device is attached it does so through
+`usb_reset_device`, which keeps the device and its interface drivers:
+each driver's `pre_reset` quiesces it, the port is reset, the device is
+readdressed and its descriptors compared (`usb_reset_and_verify_device`),
+the configuration and alternate settings are restored, and `post_reset`
+resumes the driver; a device whose descriptors changed is disconnected
+instead. A driver with no reset handlers is unbound and bound again.
+Facts only, and not checked against a pinned commit: the local mirror
+(`external/README.md`) carries no `drivers/usb/core`, so this paragraph
+binds nothing in the design and is a reader's orientation.
+
+### 15.2 What already exists
+
+The bus already restores a device in place: IOCTL_INTERNAL_USB_RESET_PORT
+(`hcdCfgResetPort`, `hcd_cfg.c`; section 10.9) pauses every pipe, brings
+each to rest with what it held completed (`hcdCfgResetQuiet`), resets the
+port - warm where the link cannot take a hot reset (`hcdUsb3ResetWrite`
+on a root port, `HcdSsHubPortReset` on a hub port, each within the port's
+warm-reset budget) - runs Reset Device and Address Device on the same
+slot (`HcdThreadReaddress`, which also refuses a changed speed or
+SuperSpeed link rank), compares the device descriptor, replays the
+configuration (`hcdCfgReplayConfig`: one Configure Endpoint for every open
+endpoint, SET_CONFIGURATION, the nonzero alternates; stream rings
+restarted), checks the port once more (connected, enabled, no connection
+or enable change) and resumes the pipes; any failure cycles the device.
+Every pipe handle a function driver holds stays valid. `usbstor` and
+`xhciuas.sys` already rely on it, the latter as the last step of its
+transport recovery (`uasResetDevice`, `uas_xport.c`).
+
+### 15.3 The design
+
+L1. **When.** A SuperSpeed link read in SS.Inactive or Compliance Mode on
+a port whose machine holds a device, and nothing else in the same sample:
+- a hub port: the look (`HcdSsHubPortLook`) returns `WarmReset` with
+  `Disconnect`, and neither `OverCurrent` nor `Repower` (the decision
+  already carries both; the look has then acknowledged the change bits and
+  powered nothing);
+- a root port: the link class is `XHCI_LINK_ERROR` or
+  `XHCI_LINK_COMPLIANCE` (`XhciLinkClassify` on the sample), PP set, OCC
+  clear, `XhciLinkPortFeed` asked for a warm reset (not a give-up) with the
+  disconnect fed, and `hcdTolPortFeed` left the disconnect as it was - not
+  the Cold Attach case (CAS in Disconnected) nor 38.10's stuck-Polling
+  reading, which have no device behind a trained link to keep.
+Every other port event is unchanged.
+
+L2. **Which devices (the decision).** A pure function,
+`XhciEnumLinkKeep(on, flags, recent)` (`xhci_enum.c`, host vectors in
+`test_enum`), on the flags 45.23's `hcdRkeepFlags` gathers. Restoring the
+configuration restores only what the bus knows (endpoint contexts,
+SET_CONFIGURATION, alternates); any class or vendor state a function
+driver set with its own requests is lost by the device's reset (record 20
+section 4.3.1, "Cost and risk"). So a device is kept only where the
+function driver's recovery contract has been read to need nothing more:
+a device of one interface in its configuration (`bNumInterfaces` 1,
+`XHCI_RKEEP_F_ONE_IFACE`), that interface storage running UAS under
+`xhciuas.sys` (`XHCI_RKEEP_F_STORAGE` with `XHCI_RKEEP_F_UAS`) - a UAS
+device carries no class state beyond its configuration and alternate,
+and `xhciuas.sys`'s own recovery ends with RESET_PORT (L5); a composite
+device whose other functions would lose their state is not kept. It is
+refused, in this order, when:
+- the switch is off (`XhciLinkKeep`, L7);
+- the device is faulted (`XHCI_RKEEP_F_FAULTED`: gone, EP0 stuck, a cycle
+  or abandonment owed, a slot fault, a send-back asked, a function
+  release owed);
+- it is a hub;
+- not every PDO of it is listed, reported and started, or one is
+  surprised, removed, closing, let go or dormant;
+- selective suspend is not running it, or a wake is armed or pending
+  (record 14: its link and armed state are that machine's);
+- an isochronous pipe is open;
+- it is not a one-interface UAS storage device as above (every other
+  class, Bulk-Only storage and composite devices included, takes today's
+  drop until its drivers' contracts are read; record 20 section 4.3.2
+  leaves `usbstor`'s unread);
+- it has no serial number taken as its instance id: between the sample
+  that read the link failed and the reset's acknowledgement (L3) a drive
+  could be swapped for an identical one, which the descriptors and
+  configuration cannot tell apart, and the old volume's cached writes
+  would reach the new medium - record 20 section 4.3.1, K5's rule;
+- the device was kept this way `XHCI_LINK_KEEP_MAX` (3) times in the
+  current window - a fixed window, opened by the first keep after the last
+  one closed and lasting `XHCI_LINK_KEEP_WINDOW` tolerance-clock ticks
+  (600: nominally 60 s, at least 27 s; `HcdTolNow`), so a keep at the
+  window's 600th tick or later opens a new one and at most six keeps can
+  fall inside any 600 ticks spanning two windows; a link that keeps failing
+  is dropped as today, so the class driver is not held in a reset loop.
+  `recent` is the count in the window (`XhciEnumLinkKeepRecent`: the
+  record keeps the window's first tick and the count), and a dropped
+  device's successor starts at 0 under 35-T.5's location charge (L4).
+URBs outstanding do not refuse it: the link failure has already ended
+what they were part of, and they fail (L3).
+
+So the RTL8157 network adapter the same snapshot shows dropped on root
+port 2 (section 15.1) is not kept: it is dropped and enumerated afresh as
+before, and task 45.40 - an RTL8157 on XP losing its static settings - is
+not answered by this section. To keep a network adapter would need its
+driver's recovery contract read first: what the vendor's NDIS driver
+programs into the device with its own requests (the MAC filter, the
+receive configuration, the multicast list, offloads) and whether it
+programs it again after a transfer error and a port reset, or only at
+its start - a device reset loses all of it, as Linux's r8152 driver
+answers with reset handlers of its own [linux]. With that contract read
+for a named driver, L2 can admit the device by its vendor and product
+ids, and the keep's restore stays as it is; without it, an adapter kept
+in place but left unprogrammed would pass no traffic until it was
+restarted, which is worse than today's drop.
+
+L3. **The restore.** On the controller thread, in the inspection that read
+the link (powered, under the power gate, as every inspection), before
+anything is fed to the port's machine, the sequence RESET_PORT runs
+(section 15.2), as one function extracted from `hcdCfgResetPort` and
+shared by both, keeping its order - the final port check before the pipes
+resume - with these differences for the link's case:
+- the status the pipes' requests complete with is passed down as
+  `USBD_STATUS_DEV_NOT_RESPONDING` (`hcdCfgResetQuietAs`), as 45.23's
+  `HcdCfgResumeQuiet` passes it; on the paths of `HcdIoPipeCancelAll`
+  that complete with CANCELED whatever they are given (a held record, a
+  waiting IRP, a record still being mapped, `hcd_io.c`), CANCELED is what
+  the function driver sees. Both are failures to `xhciuas.sys`, which
+  tells its own cancels by its own mark (`x->Cancelling`,
+  `uasXferDone`), not by the status, so either way the slot faults and
+  its recovery runs (L5). Nothing is replayed;
+- every pipe is quieted - paused, its requests failed, its endpoint
+  stopped, its ring drained - before any pipe's cancels are waited out
+  (`hcdCfgResetQuietAs`, then `hcdCfgResetSettle` for each): a cancelled
+  record still mapping can wait for map registers that a transfer of a
+  later pipe holds until that pipe is drained, so waiting pipe by pipe
+  could wait for ever on a link that will never finish that transfer
+  (45.23's resume quiet and settle are split for the same reason). The
+  settling is bounded, `HCD_RESET_SETTLE_ROUNDS` (1000) 1 ms waits shared
+  by the device's pipes (`HcdIoPipeWaitCancelledFor`): a cancelled record
+  still mapping can also wait for map registers another device holds -
+  another device whose link failed, whose own recovery this thread would
+  then never reach - so a settle that runs out fails the restore (L4)
+  rather than waiting there. The cycle that follows does not cure that
+  case: its teardown waits, unbounded, for the device's references
+  (`hcdDeviceFree`, `HcdIoDeviceGone`), and the record still mapping
+  holds one. That wait is today's: the drop the keep replaces takes the
+  same teardown, as does every departure, and RESET_PORT and ABORT_PIPE
+  wait unbounded for their cancels (`HcdIoPipeWaitCancelled`); it needs
+  the map registers of the whole grant (256 on the reporter's controller)
+  to be held by transfers of devices whose links have failed together.
+  The keep neither adds a wait nor removes that one; L11 records it as an
+  item of its own. The split and the bound apply to RESET_PORT itself too,
+  which had the same order and an unbounded wait;
+- the warm-reset budget is charged once per physical reset. A hub port's
+  look charges nothing (`HcdSsHubPortReset` charges when it decides a warm
+  reset). A root port's `XhciLinkPortFeed` has already charged one warm
+  reset (`xhciLinkWarm` under `WANT_SERVICE`) that it would have written
+  itself; the keep writes none of its own, so that charge is refunded
+  (`XhciLinkRefund`, a pure helper with vectors: one warm reset off the
+  count, never below 0, the give-up untouched) before the shared reset
+  path decides and charges its own (`hcdUsb3ResetWrite`, `WANT_RESET`).
+  Neither path writes the warm reset the inspection would have written
+  (the root path's `LinkRecovering` stays 0: the reset is waited for
+  synchronously, as RESET_PORT's is);
+- on a root port the change bits the reset raises - CSC (CCS returns from
+  the 0 that SS.Inactive reads), PRC, WRC, PLC, PEC - are acknowledged
+  once the reset has ended with the port connected and enabled in U0,
+  right after it and before Reset Device, as 45.23's restore acknowledges
+  after its reset; a hub port's reset already clears C_PORT_CONNECTION
+  and C_PORT_LINK_STATE with C_BH_PORT_RESET (`XhciSsHubResetClears`).
+  A connection or enable change after that fails the final check;
+- the device is identified as the resume's keep identifies it
+  (`hcdRkeepRestore`): device descriptor, the whole configuration
+  descriptor, and the serial number, each compared with the record's;
+- the link's absence through the reset is the driver's own: on a root
+  port `HcdTolLocRecovery` before the reset, as the warm reset it replaces
+  did; a hub port's reset path observes the recovered connection itself
+  (`HcdSsHubPortReset` calls `HcdTolLocObserve`), and the keep calls
+  `HcdTolLocRecovery` before it there too;
+- on success the inspection's own action is consumed: the hub port's
+  `HubSsRecover` is cleared and neither the disconnect, the recovery's
+  warm reset nor the connect is fed; on a root port nothing is fed and no
+  warm reset written; the port is not looked at again for this sample.
+URBs submitted during the restore wait on the paused pipes and are
+published when they resume. Requests on the SlowIrps queue (a RESET_PORT,
+an ABORT_PIPE, a select) arriving meanwhile wait for the thread's next
+service pass, as they wait behind any inspection today, and are then
+served on the restored device; a selective-suspend deferral is not
+possible (L2 keeps only devices selective suspend is not holding).
+
+L4. **Failure.** Not started when the controller is halted or
+`hcdHalted` reads so (the inspection then does what it does today). Any
+step failing - the reset, a command, a read, a compare, the final check -
+ends as a failed RESET_PORT ends: `HcdCfgCycle`, which charges the
+location's re-enumeration (`XHCI_TOL_CHARGE_REENUM`) and holds it on a
+refusal (35-T.5), and asks the thread to drop the device at its next pass
+(`PortCycle`); the pipes stay paused until the drop's teardown completes
+what they hold (DEVICE_GONE), and the cycle's pass, then the port's next
+inspection, enumerate whatever the link offers - warm-resetting it first
+when it still reads SS.Inactive, through today's path. A command that
+never answered has asked for the controller reset, as RESET_PORT's do,
+and what is left is that recovery's invalidation's. On the hub path the
+look's `HubSsRecover` is cleared on failure too (the cycle owns the
+port's next steps), and the hub port is marked `Changed` so it is looked
+at again after the drop. Failure counts in the device's budget only in
+that the device is gone; its successor is a new record.
+
+L5. **The class driver above.** No change to `xhciuas.sys` is needed. A
+UAS command whose status or data transfer fails without the driver
+having cancelled it marks its slot failed (`uasSlotFault`,
+`uas_xport.c`), and the recovery worker's device reset (`uasResetDevice`)
+ends every command in flight with `SRB_STATUS_BUS_RESET`, waits up to
+5 s for every transfer to come back (`uasWaitAllFree`) and then sends
+RESET_PORT, which waits on the SlowIrps
+queue until the keep's inspection is over and then resets a device the
+bus has just restored (a hot reset; the device's tags are free after
+it). What the class driver above does with BUS_RESET is its own: Windows
+2000's and XP's disk class driver retries a bounded number of times, and
+the Windows 98 mapping layer's behaviour is unread (record 20 section
+4.3.3, B2, which also names the ordering hazard of a write issued again).
+What the keep changes is that the disk is not removed: the drop it
+replaces fails every request and loses every cached write outright.
+
+The worker can start before the keep does - at a transfer that failed
+before the inspection reached the port, while the thread served other
+requests - or while it quiets one pipe after another, so its 5 s wait can
+run out on a device the bus then restores. Until now `uasResetDevice`
+then marked the FDO Dead and left it so: every request failed
+`SRB_STATUS_NO_DEVICE` until the drive was unplugged, a state no timing
+bound on the bus's side can rule out (the system time is not monotonic,
+and the worker's start is not the bus's to see). So `uasResetDevice`
+changes in one place: when it gives up without the bus having had its
+RESET_PORT - its transfers not back within the 5 s, or no IRP to send it
+in - it marks the FDO Dead as before and owes the bus a cycle
+(`CycleOwed`, `uasCycleOwed`). The cycle is asked through the resume
+request's new op, `XHCI98_RESUME_OP_CYCLE` (`xhci98_xfer.h`), which the
+bus carries out as a failed RESET_PORT's: on the thread, charged to the
+location's re-enumeration budget (`XHCI_TOL_CHARGE_REENUM`, a refusal
+holding it, 35-T.5) before the cycle's disconnect (`PortCycleCharge`,
+published with `PortCycle` and its serial in one hold of the controller
+lock, and taken and cleared with them in the thread's pass), so repeated failures meet
+the same bound as repeated failed RESET_PORTs; a bus before `3.4.0.0`
+refuses the op as invalid and is asked with IOCTL_INTERNAL_USB_CYCLE_PORT
+instead (uncharged, as there). A request that could not be sent for want
+of an IRP stays owed: the driver's one-second timer queues its recovery
+worker while it is, and the worker asks again first thing, until the bus
+has taken it or the engine has stopped or the device gone; the engine's
+stop and its start clear what is owed, so a restarted drive is never
+cycled for its predecessor's failure. When the bus
+had the RESET_PORT and failed it, it has cycled and charged the device
+already (`hcdCfgResetPort`), and nothing more is asked. The worst case of
+the race is then today's outcome - the drive enumerated afresh - never a
+drive left present and dead. The change applies to every device reset of the driver,
+not only after a link's recovery: a drive whose reset fails is
+re-enumerated rather than left dead, as Linux disconnects a device whose
+reset fails [linux].
+
+L6. **What the driver reports.** Log notes, as the resume's keep:
+`link.keep` at each decision (the location in the high half, kept or the
+refusal's reason in the low byte) and `link.keep.done` (restored, or the
+step that failed); no counter-block change (the snapshot's layout would
+move). The trace's `XHCI_DBG_VALUE` lines name each step.
+
+L7. **The switch.** `XhciLinkKeep`, a DWORD read as the other values at
+each start (`hcd_ctl.c`): absent, or anything but 0, is on; 0 restores
+today's drop. Noted `link.keep.on`. Written at 1 by both controller INFs
+since task 45.50 (record 21 section 8.1), never over a user's value.
+
+L8. **The freeze.** Reported separately ("after a while ... freezes except
+the mouse cursor", partly recovering after a wait; the drive plugged in
+for hours). The reading so far (`runs/run-45.md`, "45.41"): with
+`3.3.0.0` each link failure under load leaves the disk absent for 11 to 31
+s (seven drops measured) before its successor is usable, every request in
+that time fails, and the old volume's device stack stays until every
+handle on it is closed - a virtual machine's disk image, a browser
+profile; a snapshot after twenty-one failures shows nothing of the bus
+growing (slots, pool rings, transfer records). Whether repeated episodes
+make the freeze through the programs that hold the old volume is read by
+the soak legs (L9); the keep removes the surprise removal from the path
+whatever the answer.
+
+L9. **Legs.** q35 XP x64 with the amd64 build (the reporter's system) and
+q35 XP with the x86 build, QEMU 11.1 with a test-only patch: a SuperSpeed hub model
+(`usb-ss-hub`) whose `link-drop` property fails a downstream link
+(SS.Inactive and C_PORT_LINK_STATE; the host controller forgets the
+transfers in flight to the device, with no event, and starts none until
+a warm reset), and the same for a `qemu-xhci` root port (PLS 6, CCS 0,
+PED 0, CSC and PLC, as the VL805 reported). A UAS disk (`usb-uas`, serial
+set) under a copy loop compared byte for byte, and a file held open and
+written every second:
+- a hub-port and a root-port link failure: kept, the copies after it
+  compare equal, the held file grows on, no "Delayed Write Failed", the
+  stall measured from the serial log;
+- the soak, twenty failures forty seconds apart, before (`3.3.0.0`) and
+  after, comparing stall lengths and looking for growth and the freeze;
+- the budget: four failures inside the window, the fourth dropped;
+- the hub model's variants: the connection bit dropped too (0x100), and a
+  failure the hub never reports (0x200) - the class driver's timeout
+  path with a link nobody announced;
+- refusals: `XhciLinkKeep` 0; a UAS disk with no serial number; a
+  Bulk-Only disk (`usb-storage` at SuperSpeed) - each dropped as today;
+- a swap: the link failed, the disk image behind the same serial changed
+  is not detectable by the bus (the bridge's identity is the bus's
+  check; record 20 section 4.3.3, B7's bound) - recorded as such, not a
+  leg;
+- regressions: 45.23's resume keep (a hibernation under the copy loop),
+  a plain unplug of the disk and of the hub under load, and RESET_PORT
+  through `xhciuas.sys`'s own recovery.
+The VL805 and the Realtek hub are the reporter's to read.
+
+L11. **Not in this change: a departure that waits on another device's
+map registers.** A record of one device waiting in the map pump for
+registers that another device's transfers hold, when the other device's
+link has failed and only this thread's inspection would end them, blocks
+the thread in the first device's teardown (and in a RESET_PORT or
+ABORT_PIPE of it) before it reaches the second. It predates this section,
+whichever path the first device takes, and is left for a design of its
+own: deferring a departing record's reclamation while the thread serves
+other devices, or a controller-wide drain before it. Recorded in the
+release notes' known limitations only if it is ever observed.
+
+L10. **Where.** `xhci_enum.c`/`.h` (the decision, its reasons and
+constants), `xhci_link.c`/`.h` (`XhciLinkRefund`), `uas/uas_xport.c`
+(`uasResetDevice`'s owed cycle, L5), `uas/uas.h`, `xhci98_xfer.h` and
+`hcd_urb.c` (the CYCLE op), `test/test_enum.c`,
+`test/test_link.c`; `hcd_cfg.c` (`hcdCfgResetPort` split into the shared
+restore with the link case's options, and `HcdCfgLinkKeep`); `hcd_enum.c`
+(the two trigger points, the flags and budget, L3's consumption and L4's
+fallback); `hcd_ctl.c` (the switch); `hcd.h` (the device's count and
+window start, the controller's switch).
+
+## 16. A UAS drive's pass-through and SMART (task 45.52, 2026-10-31)
+
+Status: 2026-10-31, reviewed and revised. Written from roadmap-usb4 task
+45.52 (the owner's choice of 2026-10-30, option (c) of the question in
+`runs/run-45.md`, "45.27 (the owed legs)") and that section's XP reading.
+The owner's answers of 2026-10-31 are written in: the access check is
+choice B (16.3), `IOCTL_ATA_PASS_THROUGH_DIRECT` is served (16.2), and the
+emulator gains a test-only ATA answer so that a virtual machine shows a
+whole SMART reading (16.12).
+
+Tags in this section: [hdr] a fact from the WDK 7.1 headers this tree builds
+with (`tools\WinDDK71\inc\api\ntddscsi.h`, `ntdddisk.h`, `inc\ddk\scsi.h`;
+facts only, nothing copied); [spec] a field layout from the T10 SCSI / ATA
+Translation standard (SAT-3) or ATA/ATAPI Command Set (ACS-3), neither of
+which is in `docs/references/` yet, so the code step adds their rows and
+checks every [spec] field against the text before a vector rests on it;
+[obs] read in this project's runs; [static] read from a shipped binary,
+nothing executed; [hyp] not read.
+
+### 16.1 The reading and what is missing
+
+`ATATEST.EXE` (`test/atatest`, `42093a03`) on q35 XP SP3 with a `usb-uas`
+LUN and a Bulk-Only stick on XP's own `usbstor.sys` (`runs/run-45.md`,
+"45.27 (the owed legs)", `atatest-xp.txt`) [obs]:
+
+| Request | IDE (`atapi.sys`) | Bulk-Only (`usbstor.sys`) | UAS (`xhciuas.sys`) |
+|---|---|---|---|
+| `IOCTL_SCSI_PASS_THROUGH` INQUIRY, data in | GOOD | GOOD | error 1 |
+| the same, direction unspecified | GOOD | error 87 | error 1 |
+| ATA PASS-THROUGH (12) and (16) in a SCSI pass-through | refused, error 1 | reached the drive: CHECK CONDITION 5/20/00 | error 1 |
+| `SMART_GET_VERSION`, `SMART_RCV_DRIVE_DATA` | answered (version 1.1, READ DATA) | error 50 | error 1 |
+| `IOCTL_ATA_PASS_THROUGH` | answered | error 50 | error 1 |
+
+Error 1 is `STATUS_INVALID_DEVICE_REQUEST`: `UasPdoDeviceControl`
+(`uas_pdo.c`) answers `IOCTL_STORAGE_QUERY_PROPERTY` and
+`IOCTL_SCSI_GET_ADDRESS` and completes every other code with it. Two things
+follow from the table. First, XP's disk class driver passes the SCSI and
+ATA pass-through IOCTLs down to the device below it, here the LUN's PDO:
+the IDE disk under the same `disk.sys` answers them. Second, the SMART
+IOCTLs reach the device below in some form, because the Bulk-Only stick and
+the UAS LUN answer them with different errors under the same `disk.sys`.
+Reading R1 (16.11) found the form: `disk.sys` turns each SMART IOCTL into
+`IOCTL_SCSI_MINIPORT` with the `SCSIDISK` signature.
+
+What exists already: the engine (`uas_xport.c`) carries any CDB a class SRB
+brings, in a COMMAND IU, with autosense; `uasSlotPrepare` takes the
+direction from `SRB_FLAGS_DATA_IN`/`_OUT` and, when the SRB names neither,
+from `UasCdbDataDirection` (`uas_iu.c`, `2f57cad2`: T_DIR for ATA
+PASS-THROUGH (12) and (16), else the opcode table). Nothing on NT reaches
+that from a program.
+
+### 16.2 What is served
+
+The LUN's PDO serves, in `UasPdoDeviceControl`:
+
+| IOCTL [hdr] | Code | Access in the code [hdr] | Served as |
+|---|---|---|---|
+| `IOCTL_SCSI_PASS_THROUGH` | `0x4D004` | read and write | the caller's CDB, data in the system buffer (16.4, 16.5) |
+| `IOCTL_SCSI_PASS_THROUGH_DIRECT` | `0x4D014` | read and write | the caller's CDB, data in the caller's own buffer, locked (16.4, 16.5) |
+| `IOCTL_ATA_PASS_THROUGH` | `0x4D02C` | read and write | translated to ATA PASS-THROUGH (16) (16.8) |
+| `IOCTL_ATA_PASS_THROUGH_DIRECT` | `0x4D030` | read and write | the same, data in the caller's own buffer, locked (16.5, 16.8) |
+| `IOCTL_SCSI_MINIPORT`, signature `SCSIDISK`, control codes `0x1B0500` to `0x1B050B` | `0x4D008` | read and write | the SMART IOCTLs as `disk.sys` sends them down (R1): `SMART_GET_VERSION` answered in the driver, the rest translated to ATA PASS-THROUGH (16) (16.9) |
+
+A program's `SMART_GET_VERSION` (`0x74080`, read access),
+`SMART_RCV_DRIVE_DATA` (`0x7C088`) and `SMART_SEND_DRIVE_COMMAND`
+(`0x7C084`) never reach the PDO under those codes. `disk.sys` on 2000 to 7
+translates them at its FDO, and a partition's device passes them to the
+FDO first (R1). So the PDO serves only the miniport form, and the access
+rule of 16.3 applies to the program's original codes.
+
+Every other code keeps `STATUS_INVALID_DEVICE_REQUEST`, including
+`IOCTL_IDE_PASS_THROUGH`. `IOCTL_ATA_PASS_THROUGH_DIRECT` was added by the
+owner on 2026-10-31. It costs one case, because the direct SCSI path
+already locks a caller's buffer.
+
+`PathId`, `TargetId` and `Lun` in a request are ignored. The command goes to
+the PDO's own LUN, whatever they say. A program holding one disk's handle
+therefore cannot address another LUN of the same device through it.
+`IOCTL_SCSI_GET_ADDRESS` already reports port 0, path 0, target 0 and the
+LUN.
+
+The CDB is filtered in one respect only. **Commands that address other
+targets are refused** with `STATUS_INVALID_PARAMETER`, because they would
+reach past the one LUN the handle's access covers (16.3); the WDK's
+description of `IOCTL_SCSI_PASS_THROUGH` excludes multi-target commands for
+the same reason. These are COPY (`18h`), COMPARE (`39h`), COPY AND VERIFY
+(`3Ah`) and every service action of opcode `83h` (EXTENDED COPY,
+POPULATE TOKEN, WRITE USING TOKEN) [spec: SPC-4 and SBC-3 opcode tables].
+Everything else goes to the drive as it came, a WRITE, a MODE SELECT, a
+START STOP UNIT or a FORMAT UNIT included, with only the access check of
+16.3 in front of it. That matches what the pass-through IOCTLs are for on every
+other port. The disk class driver above is not told: its cached geometry,
+its partition table and the file system on a mounted volume are the
+caller's responsibility, as they are on Windows' own ports [hyp: Windows'
+ports are not read for this].
+
+### 16.3 The access check (the owner's decision: B)
+
+**What the system enforces before this driver runs.** Each IOCTL code
+carries its required access in its `CTL_CODE` [hdr]:
+- `IOCTL_SCSI_PASS_THROUGH`, `_DIRECT`, `IOCTL_ATA_PASS_THROUGH`,
+  `IOCTL_SCSI_MINIPORT`, `SMART_RCV_DRIVE_DATA` and
+  `SMART_SEND_DRIVE_COMMAND` require `FILE_READ_ACCESS | FILE_WRITE_ACCESS`;
+- `SMART_GET_VERSION` requires `FILE_READ_ACCESS` alone.
+
+The I/O manager compares that against the access the caller's handle was
+granted and fails the call before any driver sees an IRP. That is the
+documented meaning of the field (the WDK's description of `CTL_CODE`) and
+not a reading of this project's. Opening `\\.\PhysicalDriveN` or a volume
+for read and write is decided by the device object's security descriptor.
+The usual default grants that only to Administrators and SYSTEM [hyp].
+
+**What Windows' own disk class driver, `usbstor.sys` and the SCSI and
+Storport ports add on top: not read here.** No binary of theirs has been
+read for an access check of their own. The XP table above shows only that
+an administrator's handle reaches the drive through `disk.sys` and
+`usbstor.sys`. Reading R2 (16.11) reads the rest as behaviour, on 2000, XP
+and 7: `ATATEST` run as a member of Users against the IDE disk, the
+Bulk-Only stick and the UAS LUN, with each open's and each request's error
+recorded. If the open fails with error 5 on all three, then the
+system's own check is what stands in front of Windows' ports. If one of
+Windows' ports refuses a request that a user's handle could send, that
+port's check is visible there.
+
+**Choice A - an explicit administrator check in `xhciuas.sys`.** The
+dispatch would refuse a pass-through or SMART IRP from a caller that is not
+an administrator.
+- Cost: the 32-bit binary is one binary for 98 SE to 7, and none of the
+  routines for the check is in its reach. `SeSinglePrivilegeCheck` is not
+  among Windows 98 SE's `NTKERN.VXD` names, and neither are
+  `SeTokenIsAdmin` (XP and later besides) or a token query [static: a
+  name search of the 98 SE files under `tools\win98se-extracted`,
+  2026-10-31]. Each would be a load-blocking import on 98 SE and ME, and
+  there is no run-time lookup there (`MmGetSystemRoutineAddress` is
+  denied). So A could be done on x64 only, leaving the 32-bit targets on B.
+- Effect: it would also refuse a user to whom an administrator has given
+  read and write access to the disk. Windows' own route admits such a user
+  [hyp, until R2].
+- Effect: `disk.sys` forwards the IRP unchanged with the user's requestor
+  mode. A SMART IOCTL that `disk.sys` turns into its own request (R1) would
+  arrive with kernel requestor mode, and the check would have to be made
+  on the original thread's token.
+
+**Choice B - rely on the access needed to open the disk, as Windows'
+storage class path does.** The driver adds no check of its own. A request
+that reaches the PDO has passed the I/O manager's check of the code's
+required access against the handle. The handle needed read and write
+access to the disk or the volume, which the disk's security descriptor
+gives to administrators by default [hyp, until R2].
+- Cost: nothing, the same on every target and in both binaries.
+- What it rests on: R2 showing that a Users member cannot get there on any
+  of the three targets.
+
+**The owner's decision (2026-10-31): B.** Reading R2 on 2000, XP and 7
+is still to confirm it. It was the recommendation for these reasons. It gives the same
+rule as Windows' own path on the same machine: whoever may write the
+disk's sectors may send it a CDB, and nobody else. It is the same in both binaries, and needs no import that
+Windows 98 SE lacks. A is not available to the 32-bit binary at all. R2
+confirms B on each target before the legs close. If R2 shows Windows' own
+ports refusing something a user's handle can send, the design comes back
+to the owner before code.
+
+The kernel-mode case: a request built by another driver (requestor mode
+`KernelMode`) is served the same way, because the I/O manager's check does
+not apply to it and the kernel caller is trusted, as on every port. Only
+the direct form's buffer lock (16.5) reads the requestor mode.
+
+### 16.4 The buffers and their checks, x86 and x64
+
+All five served codes are `METHOD_BUFFERED` [hdr], and so are the three
+SMART codes a program sends `disk.sys`. The input and the output share
+`Irp->AssociatedIrp.SystemBuffer`, nonpaged and `max(in, out)` long. Every
+field of the request header is copied out of it before anything is written
+back.
+
+**No uninitialised byte goes back.** The I/O manager copies the caller's
+input into the system buffer and nothing else. When the output length
+exceeds the input length, the bytes between them are whatever the pool
+held. They are therefore zeroed in the dispatch, before the request is
+queued, from the input length to the output length. After that every byte
+the finish can return is one of three things: the caller's own input, data
+the drive sent, or a field this driver wrote. This matters because
+`Information` (16.7) may cover a gap between the header and a distant data
+or sense region. The SMART and miniport replies (16.9) are built in a zeroed
+structure of their own, reserved fields included, and copied out whole.
+
+**Layouts.** A 64-bit driver serving a 32-bit program (WOW64) gets the
+32-bit layout. On amd64, for an IRP whose requestor mode is `UserMode`,
+`IoIs32bitProcess(Irp)` decides which layout the buffer holds; it exists on
+XP x64 and later and only the amd64 build calls it. Its contract covers
+only the IRP the I/O manager built for the process. A `KernelMode` IRP -
+one that `disk.sys` or another driver built - is always taken in the
+native layout and is never passed to it. In the x86 build every caller is
+32-bit. The sizes below follow from the
+WDK 7.1 declarations [hdr] and are compile-time asserts in the code:
+
+| Structure | x86 | amd64, native | amd64, a 32-bit caller (`..._32`) |
+|---|---|---|---|
+| `SCSI_PASS_THROUGH` | 44; `DataBufferOffset` at 20 | 56; at 24 (8 bytes) | `SCSI_PASS_THROUGH32`, 44; at 20 (4 bytes) |
+| `SCSI_PASS_THROUGH_DIRECT` | 44; `DataBuffer` at 20 | 56; at 24 | `SCSI_PASS_THROUGH_DIRECT32`, 44; a 32-bit pointer at 20 |
+| `ATA_PASS_THROUGH_EX` | 40; `DataBufferOffset` at 20 | 48; at 24 | `ATA_PASS_THROUGH_EX32`, 40; at 20 |
+| `ATA_PASS_THROUGH_DIRECT` | 40; `DataBuffer` at 20 | 48; at 24 | `ATA_PASS_THROUGH_DIRECT32`, 40; a 32-bit pointer at 20 |
+| `SENDCMDINPARAMS` (packed 1) | 33, `bBuffer` at 32 | the same | the same |
+| `SENDCMDOUTPARAMS` (packed 1) | 17, `bBuffer` at 16 | the same | the same |
+| `GETVERSIONINPARAMS` (packed 1) | 24 | the same | the same |
+
+**The pure check.** One function in `uas_iu.c`, host-tested, takes the
+layout (x86 / 64 / 32-on-64), the IOCTL kind, the input and output lengths
+and the header's fields widened to 32 bits. It returns either a refusal or
+the request plan: direction, data offset and length, sense offset and
+length, CDB. Its rules for the SCSI forms:
+1. The input length is at least the layout's header size, and the header's
+   `Length` equals it. Otherwise `STATUS_INVALID_PARAMETER`. A 32-bit
+   program's header in a 64-bit process, or the reverse, fails here.
+2. The output length is at least the header size, so the status can come
+   back. Otherwise `STATUS_BUFFER_TOO_SMALL`.
+3. `CdbLength` is 1 to 16. `DataIn` is `SCSI_IOCTL_DATA_OUT` (0),
+   `_IN` (1) or `_UNSPECIFIED` (2) [hdr]. `SenseInfoLength` is at most
+   `UAS_PT_SENSE_MAX`, 252 (a SENSE IU's limit, `UAS_SENSE_MAX`; under
+   the 255 a byte-wide `SenseInfoBufferLength` allows).
+4. `DataTransferLength` is at most the LUN's maximum transfer, the
+   `MaximumTransferLength` the PDO reports in its adapter descriptor
+   (`uasAdapterProperty`). Otherwise `STATUS_INVALID_PARAMETER`.
+5. The direction: `DataIn` 0 or 1 as given. For 2 it is
+   `UasCdbDataDirection(Cdb, CdbLength)`, and `UAS_DIR_NONE` with a
+   non-zero length is refused with `STATUS_INVALID_PARAMETER`, as
+   Windows' own Bulk-Only driver refused it on XP (error 87, 16.1). A zero
+   length is no data, whatever `DataIn` says.
+6. The buffered form's data region, when the length is not zero,
+   `[DataBufferOffset, DataBufferOffset + DataTransferLength)`:
+   - it starts at or after the header;
+   - it lies within the input length for data out, or within the output
+     length for data in;
+   - every sum is checked as `offset <= limit && length <= limit - offset`,
+     never added first.
+   On 64-bit, a `DataBufferOffset` above 32 bits is refused.
+7. The sense region, when `SenseInfoLength` is not zero, starts at or after
+   the header, lies within the output length and does not overlap the data
+   region.
+8. The direct form's `DataBuffer` is a pointer (32-bit for a WOW64 caller),
+   checked in 16.5, not here. A null pointer with a non-zero length is
+   refused.
+9. The opcode is not one of 16.2's multi-target commands.
+10. An ATA PASS-THROUGH (12) or (16) CDB with CK_COND set and a non-zero
+    length is refused with `STATUS_INVALID_PARAMETER`. 16.8 gives the
+    reason: the engine cannot yet tell CK_COND's good CHECK CONDITION from
+    a failure while data is moving. That is a limit, recorded in the
+    release notes text. A non-data ATA PASS-THROUGH with CK_COND is served.
+
+The ATA forms follow the same rules 1, 2 and 4, and rule 6 (buffered) or 8
+(direct), with their own fields (16.8). The SMART form checks its fixed
+sizes (16.9).
+
+**The miniport envelope** (`IOCTL_SCSI_MINIPORT`, the SMART form R1 found).
+The input starts with `SRB_IO_CONTROL`, 28 bytes [hdr]: `HeaderLength`,
+`Signature[8]`, `Timeout`, `ControlCode`, `ReturnCode`, `Length`. Before
+the signature or the payload is read:
+- the input length and the output length are each at least 28, checked
+  before any subtraction;
+- `HeaderLength` is 28;
+- `Length` (the payload capacity the sender declares) is at most
+  `max(in, out) - 28`, the system buffer's own size past the envelope;
+- the payload starts at offset 28.
+
+`Length` describes capacity, not the input: a sender may declare room for
+the reply while sending only the command. So `Length` is never used as a
+bound by itself. Control code `0x1B0500` (SMART_VERSION) is taken first: its
+payload is a 24-byte `GETVERSIONINPARAMS` both ways (52 bytes in and out as
+`disk.sys` sends it), no `SENDCMDINPARAMS` is read, and its reply is the
+answer of 16.9 in a zeroed 24 bytes. Any other control code's payload input
+is checked as a `SENDCMDINPARAMS` (16.9) against the input length minus 28. Its reply is checked as a
+`SENDCMDOUTPARAMS` against both the output length minus 28 and `Length`,
+so a reply never runs past what the sender declared or what the buffer
+holds. The reply is the zeroed envelope:
+- `HeaderLength`, `Signature` and `ControlCode` as sent;
+- `ReturnCode` 0, or the SMART error code of 16.9;
+- `Length` the payload returned.
+
+`Information` is 28 plus that payload. `Timeout`, in seconds, takes the
+place of `TimeOutValue` under 16.6's clamp.
+
+### 16.5 How a request enters the engine
+
+**The same path as a class SRB: the caller's own IRP, queued with an SRB
+built for it.** The dispatch:
+- allocates one pass-through record (`UAS_PCMD`, `uas_mem.c`'s `UasAlloc`);
+- fills the record's `SCSI_REQUEST_BLOCK` from the plan: `EXECUTE_SCSI`,
+  the CDB, `SRB_FLAGS_DATA_IN`, `_DATA_OUT` or `_NO_DATA_TRANSFER` from the
+  plan's direction (never "unspecified": the plan has already resolved it),
+  the clamped timeout (16.6), the simple task attribute, and autosense into
+  the record's own nonpaged sense buffer;
+- queues the caller's IRP through `UasEngineSubmit` with the LUN's PDO,
+  marked pending.
+
+The engine then treats it as one of the class driver's SRBs, so the
+following holds with no new rule:
+- **Admission.** `uasAdmit` refuses it when the FDO is not started, is gone
+  or dead, or the LUN's admission is closed (`pdo->Admit` FALSE: STOP,
+  SURPRISE_REMOVAL and REMOVE close it, `UasEngineCloseLun`). Once
+  admitted it is counted in `pdo->Requests`, so a close waits for it as for
+  any class request. A refused request was never counted (`uasAdmit`
+  returns FALSE before it touches the count or the context) and is never
+  uncounted (below).
+- **The class driver's queue lock.** It carries no
+  `SRB_FLAGS_BYPASS_LOCKED_QUEUE`, so while the class driver holds the
+  LUN's queue locked (its power path, `SRB_FUNCTION_LOCK_QUEUE`) it waits
+  in the queue. No pass-through reaches a drive the class driver is
+  powering down. `SRB_FUNCTION_FLUSH_QUEUE` completes it
+  `SRB_STATUS_REQUEST_FLUSHED` like the rest.
+- **The sleep hold** (task 45.23, design record 20 section 4.3.3). It is
+  not an internal request (`UAS_CTX_EVENT` is NULL), so while `Holding`
+  stands it waits.
+- **Reset recovery.** While `fdo->Recovering` the pump starts nothing.
+  A pass-through in flight when a timeout or a protocol fault starts
+  recovery ends as recovery ends any command: aborted, reset, or failed
+  with the device (sections 15 and 6 of this record for what a reset
+  keeps).
+- **Surprise removal and a dead device** (`Gone`, `Dead`). Queued requests
+  fail `SRB_STATUS_NO_DEVICE`.
+- **Ordering.** The task attribute is SIMPLE, like the class driver's
+  commands, so a pass-through runs beside the class driver's I/O. It is
+  ordered neither before nor after that I/O, as on any tagged port.
+
+**Where it differs: the finish.** `uasCompleteRequest` completes a class
+IRP with the SRB's status and `DataTransferLength` as `Information`, which
+is wrong for an IOCTL. A request carrying a pass-through record is handed
+instead to the PDO's finish, `UasPdoPassFinish`, at `<= DISPATCH_LEVEL`.
+The record travels in a fourth driver-context slot, `UAS_CTX_PASS`, beside
+the PDO, SRB and event slots. `uasAdmit` writes that slot for every
+request it admits, under the engine lock and before the request is on the
+queue: NULL for a class SRB and an internal command, the record for a
+pass-through (a new argument). So a value an upper driver left in the slot
+is never read as a record. That finish:
+- copies the outcome into the system buffer: SCSI status, the bytes moved
+  into the header's `DataTransferLength`, the sense into the sense region
+  with its length into `SenseInfoLength`, and the ATA registers for 16.8
+  and 16.9;
+- sets `Information` (16.7);
+- unlocks and frees the direct form's MDL;
+- frees the record, completes the IRP, and then drops the LUN's request
+  count, as `uasCompleteRequest` does now.
+
+**A refusal at admission does not go through that finish.** The
+pass-through uses a sibling of `UasEngineSubmit`, `UasEngineSubmitPass`,
+which returns FALSE when `uasAdmit` refuses and leaves the IRP to its
+caller, with nothing counted. The dispatch then unlocks and frees the MDL,
+frees the record and completes the IRP `STATUS_NO_SUCH_DEVICE`, touching
+neither `pdo->Requests` nor `RequestsIdle`. Only the finish of an admitted
+request drops the count.
+
+**Cancellation.** The engine's queue has no cancel routine today. A class
+SRB never needs one, because the class driver bounds its own requests. A
+program's IRP does need one: a request can wait unbounded behind the
+class driver's queue lock, the sleep hold or recovery, where no slot timer
+runs. If the program ends during that wait, the IRP and the direct form's
+locked pages must not stay held, and the command must not be sent later.
+So a pass-through IRP carries a cancel routine **while it is on the
+engine's main queue and not claimed**. The protocol rests on one rule: the
+routine is cleared exactly once, under the engine lock, by whoever takes
+the IRP off the main queue, at the moment it does so, and never later.
+
+- **Claiming.** A helper, `uasClaimQueued(fdo, irp)`, is called with the
+  engine lock held by every site that unlinks an IRP from `fdo->Queue`:
+  - the pump's start of a request;
+  - the pump's failing of queued requests when the FDO is dead or gone;
+  - `UasEngineStop`'s, `UasEngineFlush`'s and `UasEngineCloseLun`'s moves
+    onto their local drain lists;
+  - `UasEngineAbort`'s search for a queued victim.
+
+  The helper is called before `RemoveEntryList`, never after. For a class
+  SRB or an internal command it returns TRUE. For a pass-through it calls
+  `IoSetCancelRoutine(irp, NULL)`. A non-NULL return means the site now
+  owns the IRP: the record is marked claimed, and the site unlinks it and
+  goes on as for any request. A NULL return means the cancel routine has
+  started or is about to: the site leaves the IRP where it is, on the
+  main queue, and skips it. The pump moves to the next request; a drain
+  does not move it to its list; the abort search treats it as not found.
+- **After a claim**, every outcome goes through the counted finish and
+  none touches the cancel routine again. That includes a slot that cannot
+  be prepared (`UasDataMdl` failing, `uasSlotPrepare`'s SRB_STATUS_BUSY)
+  and a drain list's `uasFailRequest`. So a drain list and a slot only
+  ever hold claimed requests, and the cancel routine never meets an IRP
+  that someone else still references.
+- **The cancel routine** releases the cancel spin lock, takes the engine
+  lock and looks for the IRP on the main queue. It is always there, because
+  only a claim unlinks a pass-through and a claim cannot succeed once the
+  routine has been taken. It unlinks the IRP, drops the lock, and the
+  counted finish completes it `STATUS_CANCELLED`. A pass-through is never
+  put on `RecoveryRequests`; only the abort and reset SRBs go there.
+- **Submission.** `UasEngineSubmitPass` works under the engine lock:
+  1. `uasAdmit`, which counts the request;
+  2. insertion at the queue's tail;
+  3. `IoSetCancelRoutine` with the routine;
+  4. then, if `Irp->Cancel` is already set, a claim of its own. If the
+     claim succeeds, the IRP is unlinked again, and after the lock is
+     dropped the counted finish completes it `STATUS_CANCELLED`. If the
+     claim fails, the cancel routine is already running and finds the IRP
+     on the queue.
+
+  Either way an admitted request is finished exactly once and its count
+  dropped exactly once. The uncounted cleanup of a refusal applies only
+  when `uasAdmit` itself refused.
+
+A started command is not cancellable: it is on the wire with a tag. It
+ends by its own completion, its slot timeout (16.6) or recovery, as a
+class command does. New imports: `IoReleaseCancelSpinLock`; the
+`IoSetCancelRoutine` macro expands to an interlocked exchange on the IRP
+(16.5's import table).
+
+**The data buffer.**
+- *Buffered* (`IOCTL_SCSI_PASS_THROUGH`, the ATA and SMART forms): the data
+  region lies inside the system buffer, which is nonpaged. The SRB's
+  `DataBuffer` points into it, the IRP's `MdlAddress` stays NULL, and
+  `UasDataMdl` builds the data MDL with `MmBuildMdlForNonPagedPool`, as for
+  an internal command. For the SMART forms the system buffer is too small
+  or shaped differently, so the record carries its own nonpaged buffer of
+  the plan's length and the finish copies out of it.
+- *Direct* (`IOCTL_SCSI_PASS_THROUGH_DIRECT`, `IOCTL_ATA_PASS_THROUGH_DIRECT`):
+  the caller's pointer is a
+  user address when the requestor mode is `UserMode`. A new routine in
+  `uas_mem.c`, the one site of the import rule, allocates an MDL over it
+  (`IoAllocateMdl`) and locks it (`MmProbeAndLockPages`) for write when data
+  comes in and for read when it goes out. It locks with the IRP's requestor
+  mode, inside a structured exception handler, because the lock raises on
+  a bad address. That is done in the dispatch, at `PASSIVE_LEVEL`.
+  - For a `UserMode` IRP, only when the IRP is being served in the thread
+    that issued it (`Irp->Tail.Overlay.Thread == KeGetCurrentThread()`), so
+    the address is read in the caller's own address space. Otherwise it is
+    refused with `STATUS_INVALID_DEVICE_REQUEST`. A user request that
+    reached the PDO in another thread (a class driver that queued it)
+    cannot be served safely. On XP the IRP arrives in the caller's thread
+    [hyp: read by the A5 line of the legs, which uses the direct form].
+  - For a `KernelMode` IRP there is no thread test. A driver-built IRP need
+    not be issued from the thread that runs it. The lock is a
+    `KernelMode` lock of the pointer as given, and the kernel caller
+    answers for that pointer being valid in the context it sent the IRP
+    from, as with every port's direct form. While queued, the locked
+  MDL is the IRP's `MdlAddress`, so `UasDataMdl` builds its partial MDL
+  over it as over a class driver's buffer. The finish sets `MdlAddress`
+  back to NULL before it unlocks, frees and completes, so the I/O manager
+  never sees a pointer to an MDL this driver freed.
+
+The engine never reads or writes the data through a system address: the
+data travels as an MDL to the bus. The code step checks that this still
+holds in `uas_xport.c` before relying on it.
+
+**IRQL.** The direct form is served at `PASSIVE_LEVEL` only and refused
+above it. Every other form is served at `<= DISPATCH_LEVEL`, like the rest
+of the dispatch. The system buffer and the record are nonpaged.
+
+**New imports**, each with its evidence row in the import allowlists before
+the code lands:
+
+| Import | Build | Evidence |
+|---|---|---|
+| `MmProbeAndLockPages`, `MmUnlockPages` | x86 and amd64 | Appendix A rows 131 and 132, "evidenced (stock 98 SE precedent)": `ks.sys` 4.10.2222 (hints 9F, A5) and others |
+| `KeGetCurrentThread` | x86 (on amd64 an inline) | Appendix A row 115, evidenced: `ks.sys` 4.10.2222 (hint 71) and others |
+| `KeGetCurrentIrql` (HAL) | x86 (on amd64 an inline) | the row `xhci98-imports.allow` already carries (`uhcd.sys` 4.10.2222 precedent) |
+| `_except_handler3` (the compiler's SEH frame) | x86 | NUSB 3.3's `USBSTOR.SYS` 4.90.3000.1 imports it (hint 46C), and stock 98 SE's `NTKERN.VXD` names it; no stock 98 SE driver imports it. Windows ME's own `KS.SYS`, `USBHUB.SYS`, `SYSAUDIO.SYS` and `TDI.SYS` 4.90.3000.1 import it [static: their import tables, read out of the q35 ME base image, 2026-10-31] |
+| `__C_specific_handler` | amd64 | WNET; the amd64 rule of design record 11 |
+| `IoIs32bitProcess` | amd64 | WNET (XP x64 and later) |
+| `IoReleaseCancelSpinLock`, `InterlockedExchange` (x86: the `IoSetCancelRoutine` macro's) | x86 and amd64 (amd64: an intrinsic) | the rows `xhci98-imports.allow` already carries (`uhcd.sys` 4.10.2222 precedent), copied to `xhciuas`'s lists |
+
+`SITES` admits `uas_mem.obj` for the lock, unlock and exception frame,
+`uas_pdo.obj` for the thread, IRQL and WOW64 checks, and `uas_xport.obj`
+for the cancel pair. The loads on 98 SE and ME are read at the legs:
+`_except_handler3` is the one pair with no stock 98 SE importer.
+
+### 16.6 The timeout clamp
+
+The timeout is the header's `TimeOutValue`, in seconds. 0 becomes 30
+(`UAS_DEFAULT_TIMEOUT`, what a class SRB naming none gets). Anything above
+`UAS_PASS_TIMEOUT_MAX` = 120 becomes 120. The reason for the upper bound is
+the lifetime rules of 16.5: a request in flight holds a STOP or a REMOVE of
+its LUN until it ends. `UasEngineCloseLun` waits for the LUN's requests
+with no bound of its own. The clamp bounds the command's own share of that
+wait, as the 30 s default bounds a class SRB's. It does not bound the
+whole wait: a timeout is followed by recovery (ABORT TASK, a LUN reset, a
+port reset), whose own budgets come on top, exactly as for a class
+command. A request still queued and not started is not covered by the
+clamp at all; it ends by cancellation (16.5) or by the close failing it.
+
+A command that runs longer, such as a captive extended self-test or FORMAT
+UNIT without IMMED, times out at 120 s and goes through the engine's
+recovery. That is a limit, recorded in the release notes text. The
+non-captive forms such tools use instead are not affected. The clamped
+value is not written back into the caller's header.
+
+### 16.7 Status, sense and the returned length
+
+The SRB status and SCSI status map to the IOCTL's outcome. The drive's
+answer is the program's to read, so a command that reached the drive and
+came back with a SCSI status succeeds at the IOCTL level, CHECK CONDITION
+included. That is what the XP table shows of Windows' Bulk-Only driver
+(5/20/00 returned to the program, 16.1).
+
+| SRB status (and SCSI status) | IOCTL status | Header back |
+|---|---|---|
+| SUCCESS; DATA_OVERRUN (a short transfer) | `STATUS_SUCCESS` | status 0; `DataTransferLength` = bytes moved |
+| ERROR with a non-zero SCSI status (CHECK CONDITION, RESERVATION CONFLICT, ...) | `STATUS_SUCCESS` | that status; bytes moved; sense if `AUTOSENSE_VALID`, its length in `SenseInfoLength`, else 0 |
+| BUSY with a non-zero SCSI status (BUSY, TASK SET FULL: `UasSrbStatus` folds both to `SRB_STATUS_BUSY`) | `STATUS_SUCCESS` | that status; bytes moved; no sense |
+| TIMEOUT | `STATUS_IO_TIMEOUT` | nothing written |
+| NO_DEVICE | `STATUS_NO_SUCH_DEVICE` | nothing written |
+| BUSY with SCSI status 0 (this driver's own: no MDL) | `STATUS_DEVICE_BUSY` | nothing written |
+| INVALID_REQUEST (the IU could not be built) | `STATUS_INVALID_PARAMETER` | nothing written |
+| ABORTED, REQUEST_FLUSHED, any other | `STATUS_IO_DEVICE_ERROR` | nothing written |
+
+`Information` on success is the end of what was written back: the larger of
+the header size, the sense region's end when sense came, and, for data in
+through the buffered form, `DataBufferOffset` + bytes moved. It never
+exceeds the output length. On failure it is 0. The direct form's data is
+already in the caller's buffer, so its `Information` covers only the header
+and the sense.
+
+Sense is copied as the device gave it: fixed or descriptor format, up to
+`SenseInfoLength` bytes. The engine copies sense only when the SRB has a
+sense buffer and autosense is on (`uasStatusIu`), which the record always
+provides.
+
+### 16.8 `IOCTL_ATA_PASS_THROUGH` as ATA PASS-THROUGH (16)
+
+**The header checks** (beyond 16.4's rules 1, 2, 4 and 6):
+- `AtaFlags` uses only `DRDY_REQUIRED`, `DATA_IN`, `DATA_OUT`,
+  `48BIT_COMMAND` and `USE_DMA` [hdr], and not both directions.
+- A non-zero `DataTransferLength` needs a direction flag. A direction flag
+  needs a non-zero length.
+- With data only (a non-data command's count register is a parameter, such
+  as AUTOSAVE's `F1h`, and goes to the drive unchanged):
+  - the length is a multiple of 512;
+  - the length equals the command's count times 512. The count is
+    `CurrentTaskFile[1]`, with `PreviousTaskFile[1]` as its high byte for a
+    48-bit command. A count of 0 with data is refused, never taken as 256 or
+    65536.
+  - There is one exception: a 28-bit command whose count ACS marks not
+    applicable and whose length is 512 - IDENTIFY DEVICE (`ECh`), IDENTIFY
+    PACKET DEVICE (`A1h`), and SMART (`B0h`) READ DATA (`D0h`) and READ
+    THRESHOLDS (`D1h`). For these, the CDB's count is set to 1, whatever the
+    caller's register held [spec: ACS-3, the count field of each].
+- Anything else is refused with `STATUS_INVALID_PARAMETER`.
+
+The rule exists because ATA PASS-THROUGH (16) with T_LENGTH 2 and
+BYTE_BLOCK 1 takes the transfer length from the count field in 512-byte
+blocks [spec: SAT-3, ATA PASS-THROUGH (16)]. A count that disagreed with
+the buffer would make the drive and the bridge disagree with the engine
+about the data phase.
+
+**The CDB** [spec: SAT-3, the ATA PASS-THROUGH (16) CDB; every field
+checked against the text in the code step]:
+
+| Byte | Field | From |
+|---|---|---|
+| 0 | `85h` | - |
+| 1 | MULTIPLE_COUNT 0; PROTOCOL; EXTEND | PROTOCOL 3 (non-data) with no data; 4 (PIO data-in) or 5 (PIO data-out); 6 (DMA) with `USE_DMA`. EXTEND = `48BIT_COMMAND` |
+| 2 | OFF_LINE 0; CK_COND; T_TYPE 0; T_DIR; BYTE_BLOCK; T_LENGTH | CK_COND 1 for a non-data command, 0 with data (below). T_DIR 1 for data in. BYTE_BLOCK 1 and T_LENGTH 2 with data; T_LENGTH 0 without |
+| 3, 4 | FEATURES 15:8, 7:0 | `PreviousTaskFile[0]` (48-bit only, else 0), `CurrentTaskFile[0]` |
+| 5, 6 | COUNT 15:8, 7:0 | `PreviousTaskFile[1]` (48-bit only), `CurrentTaskFile[1]` (or 1, the exception above) |
+| 7, 8 | LBA 31:24, 7:0 | `PreviousTaskFile[2]` (48-bit only), `CurrentTaskFile[2]` |
+| 9, 10 | LBA 39:32, 15:8 | `PreviousTaskFile[3]` (48-bit only), `CurrentTaskFile[3]` |
+| 11, 12 | LBA 47:40, 23:16 | `PreviousTaskFile[4]` (48-bit only), `CurrentTaskFile[4]` |
+| 13 | DEVICE | `CurrentTaskFile[5]` |
+| 14 | COMMAND | `CurrentTaskFile[6]` |
+| 15 | CONTROL | 0 |
+
+The direction then comes from the CDB itself through `UasCdbDataDirection`,
+so the ATA form shares the SCSI form's path from 16.5 on.
+
+**CK_COND only without data.** With CK_COND set, the drive's registers come
+back as sense on every completion, success included: CHECK CONDITION,
+RECOVERED ERROR, `00h/1Dh` "ATA pass through information available" [spec].
+For a command that moves data, the engine cancels the data transfer when a
+SENSE IU with a non-GOOD status arrives (`uasStatusIu`). On the host, the
+status pipe's completion can be processed before the data pipe's, so a
+good completion would be read as an error with its data at risk. A data
+command therefore does not ask for the registers. The same holds for a
+program's own ATA PASS-THROUGH CDB in a SCSI pass-through, which is why
+16.4's rule 10 refuses CK_COND with data there instead of altering the
+CDB. Serving that case would need the engine to let a data transfer finish
+under a CHECK CONDITION, a change to every command's path that this task
+does not make. A non-data command is the case that needs
+them, for example SMART RETURN STATUS, whose answer is only in LBA Mid and
+LBA High.
+
+**The registers back** into `CurrentTaskFile` and `PreviousTaskFile`, on
+output `[0]` Error and `[6]` Status [hdr: the structure's use as Windows'
+ATA ports document it]:
+- From the sense, whenever it carries them:
+  - descriptor format (`72h`), the ATA Status Return descriptor (`09h`):
+    ERROR, COUNT, LBA, DEVICE and STATUS, with EXTEND filling the previous
+    registers [spec: SAT-3];
+  - fixed format (`70h`) with ASC/ASCQ `00h/1Dh`: ERROR, STATUS, DEVICE and
+    COUNT 7:0 in INFORMATION, and LBA 23:0 with the EXTEND and upper-non-zero
+    bits in COMMAND-SPECIFIC INFORMATION [spec: SAT-3]. The fixed format
+    carries no upper bytes, only flags saying whether COUNT 15:8 and LBA
+    47:24 are non-zero. For a 48-bit command where either flag is set, the
+    values are not available: the low registers are returned, the IOCTL
+    fails with `STATUS_IO_DEVICE_ERROR` rather than report wrong upper
+    bytes, and `DataTransferLength` still holds the bytes moved. Fetching
+    them from the ATA PASS-THROUGH Results log is not done. With both flags
+    clear the upper bytes are exactly 0 and are returned as such.
+- With no such sense, on a good completion with data: Status `50h` (DRDY,
+  and bit 4, which ATA-7 and earlier call DSC), Error 0, and the other
+  registers as sent. These are written by this driver, not read from the
+  drive; the record and the release notes say so. A non-data command that
+  ends GOOD has asked for registers with CK_COND and got none: it fails
+  with `STATUS_IO_DEVICE_ERROR`, because an echo of the sent registers
+  would read as the drive's answer (SMART RETURN STATUS's `4Fh/C2h`).
+- With other sense (the bridge refused the CDB, or a transport fault):
+  Status `51h` (ERR set), Error `04h` (ABRT), and the sense not returned,
+  because `ATA_PASS_THROUGH_EX` has no sense field. That is how a program
+  sees "aborted" from a bridge without SAT, such as QEMU's `scsi-hd`
+  (5/20/00, 16.1).
+
+The IOCTL status follows 16.7 (`STATUS_SUCCESS` once the drive answered),
+with one exception. BUSY and TASK SET FULL bring neither an executed
+command nor registers, and `ATA_PASS_THROUGH_EX` has no SCSI status field
+to carry them, so for this form and the SMART forms they fail the IOCTL
+with `STATUS_DEVICE_BUSY` and write nothing back. Only the SCSI forms
+return them as status.
+`DataTransferLength` holds the bytes moved, and `Information` is the header
+plus the data in, as in 16.7. The direct form's `Information` is the header
+alone, its data already being in the caller's buffer.
+
+### 16.9 The SMART IOCTLs as ATA PASS-THROUGH (16)
+
+One entry, as R1 read it: `IOCTL_SCSI_MINIPORT` with an `SRB_IO_CONTROL`
+header whose `Signature` is `SCSIDISK`, one of the `IOCTL_SCSI_MINIPORT_*`
+control codes of `scsi.h` [hdr], and then the program's
+`SENDCMDINPARAMS`, whose `bDriveNumber` `disk.sys` has overwritten. The
+control code decides the command. The registers in the payload must agree
+with it (command `ECh` for IDENTIFY, `B0h` and the matching feature for
+SMART), or the request is refused as `SMART_INVALID_COMMAND`.
+
+| Control code [hdr] | `disk.sys` sends it for [static, R1] | Served as |
+|---|---|---|
+| `0x1B0500` SMART_VERSION | `SMART_GET_VERSION` | answered in the driver |
+| `0x1B0501` IDENTIFY | RCV, command `ECh` | IDENTIFY DEVICE |
+| `0x1B0502` READ_SMART_ATTRIBS | RCV, `B0h` / `D0h` | SMART READ DATA |
+| `0x1B0503` READ_SMART_THRESHOLDS | RCV, `B0h` / `D1h` | SMART READ ATTRIBUTE THRESHOLDS |
+| `0x1B0504` ENABLE_SMART, `0x1B0505` DISABLE_SMART | SEND, `B0h` / `D8h`, `D9h` | SMART ENABLE / DISABLE OPERATIONS |
+| `0x1B0506` RETURN_STATUS | SEND, `B0h` / `DAh` | SMART RETURN STATUS |
+| `0x1B0507` ENABLE_DISABLE_AUTOSAVE | SEND, `B0h` / `D2h` | SMART ENABLE/DISABLE ATTRIBUTE AUTOSAVE |
+| `0x1B0508` SAVE_ATTRIBUTE_VALUES | SEND, `B0h` / `D3h` | SMART SAVE ATTRIBUTE VALUES (obsolete in ACS; passed as sent) |
+| `0x1B0509` EXECUTE_OFFLINE_DIAGS | SEND, `B0h` / `D4h` | SMART EXECUTE OFF-LINE IMMEDIATE |
+| `0x1B050A` ENABLE_DISABLE_AUTO_OFFLINE | SEND, `B0h` / `DBh` | SMART ENABLE/DISABLE AUTOMATIC OFF-LINE (obsolete; passed as sent) |
+| `0x1B050B` READ_SMART_LOG | its own failure-prediction path: in XP SP3 a routine at `14E52h` (called from `152E6h`) sends `B0h` / `D5h` with this code; XP SP3's RCV branch passes only `ECh`, `D0h` and `D1h`; the other versions' routing is not read; 2000 has no such code | SMART READ LOG, served when it arrives |
+| `0x1B050C` WRITE_SMART_LOG | its own path (XP SP3 `14F31h`); not read further | refused, `SMART_INVALID_COMMAND` |
+
+The sizes `disk.sys` sends (XP SP3, R1) are:
+- SMART_VERSION: 52 in and 52 out, `Length` 24;
+- RCV: 60 in (the envelope and the 32-byte `SENDCMDINPARAMS`), 557 out,
+  `Length` 529;
+- SEND: 60 in, `28 + Length` out, `Length` 33, or 41 for RETURN STATUS.
+
+16.4's envelope rules and the output sizes below accept all of these.
+
+Any other `IOCTL_SCSI_MINIPORT` signature or control code keeps
+`STATUS_INVALID_DEVICE_REQUEST`.
+
+**`SMART_GET_VERSION`** (and `IOCTL_SCSI_MINIPORT_SMART_VERSION`) is
+answered without a command:
+- `bVersion` 1, `bRevision` 1, `bIDEDeviceMap` 1;
+- `fCapabilities` = `CAP_ATA_ID_CMD | CAP_SMART_CMD`;
+- `bReserved` and `dwReserved` 0 (16.4: no uninitialised byte).
+
+That is the shape XP's `atapi.sys` returned (version 1.1, 16.1). The answer
+says the IOCTLs are served, not that the bridge translates ATA. A bridge
+without SAT shows that at the first command (16.8, "With other sense").
+The alternative, an IDENTIFY at every LUN start to find out, would put a
+command the class driver never sends in front of every UAS drive's start,
+and is not taken. The output needs 24 bytes; less is
+`STATUS_BUFFER_TOO_SMALL`.
+
+**The commands.** Input: `SENDCMDINPARAMS`, at least 32 bytes (33 with
+data out, none of which is served). Output: `SENDCMDOUTPARAMS`, at least 16
+bytes plus the data or register block. `bDriveNumber` is ignored (one device
+per PDO). For SMART, LBA Mid and LBA High are always sent as `4Fh` and
+`C2h` [hdr: `SMART_CYL_LOW`, `SMART_CYL_HI`; spec: ACS-3 SMART], whatever
+the caller set.
+
+| IOCTL | `bCommandReg` | `bFeaturesReg` | ATA command [spec: ACS-3] | Data | CK_COND | Output `bBuffer` |
+|---|---|---|---|---|---|---|
+| RCV | `ECh` | - | IDENTIFY DEVICE | 512 in (count 1) | 0 | the 512 bytes |
+| RCV | `B0h` | `D0h` | SMART READ DATA | 512 in (count 1) | 0 | the 512 bytes |
+| RCV | `B0h` | `D1h` | SMART READ ATTRIBUTE THRESHOLDS (obsolete in ACS, still sent by tools) | 512 in (count 1) | 0 | the 512 bytes |
+| RCV | `B0h` | `D5h` | SMART READ LOG (log address in LBA Low, count = the caller's `bSectorCountReg`, 1 to 255) | count x 512 in | 0 | the data |
+| SEND | `B0h` | `D8h`, `D9h` | SMART ENABLE / DISABLE OPERATIONS | none | 1 | none (`cBufferSize` 0) |
+| SEND | `B0h` | `DAh` | SMART RETURN STATUS | none | 1 | the 8-byte `IDEREGS` read back (LBA Mid/High `4Fh/C2h` or `F4h/2Ch`) |
+| SEND | `B0h` | `D2h` | SMART ENABLE/DISABLE ATTRIBUTE AUTOSAVE (`bSectorCountReg` `F1h` or 0) | none | 1 | none |
+| SEND | `B0h` | `D4h` | SMART EXECUTE OFF-LINE IMMEDIATE (subcommand in LBA Low) | none | 1 | none |
+| SEND | `B0h` | `D3h`, `DBh` | SMART SAVE ATTRIBUTE VALUES; ENABLE/DISABLE AUTOMATIC OFF-LINE (`bSectorCountReg` as sent) | none | 1 | none |
+
+Output sizes: a RCV row needs 16 bytes plus its data; RETURN STATUS needs
+16 plus 8; every other SEND row needs the 16-byte header alone.
+
+Refused, with `DRIVERSTATUS.bDriverError` set and
+`STATUS_INVALID_PARAMETER`:
+- `A1h` (an ATAPI identify: a UAS disk LUN is not ATAPI);
+- SMART WRITE LOG (`D6h`), the one data-out SMART command: nothing reads
+  with it and it writes the drive;
+- any other command or feature: `SMART_INVALID_COMMAND` (3);
+- a buffer too small for the command: `SMART_INVALID_BUFFER` (4).
+
+Captive self-tests (`D4h` subcommands `81h`, `82h`) run under 16.6's
+120 s clamp.
+
+**The outcome.**
+- The drive completed the command: `STATUS_SUCCESS`, `bDriverError` 0,
+  `cBufferSize` the bytes in `bBuffer`.
+- The drive answered with an ATA error - the returned Status shows ERR
+  (bit 0) or DF, device fault (bit 5) [spec: ACS-3 Status field]:
+  `bDriverError` `SMART_IDE_ERROR` (1), `bIDEError` the Error register,
+  and the IOCTL fails with `STATUS_IO_DEVICE_ERROR`. A data command's
+  registers come only from sense (CK_COND 0, 16.8), so for it a good SCSI
+  status is the success test.
+- The bridge refused the CDB (ILLEGAL REQUEST, invalid opcode or field in
+  the CDB): `STATUS_NOT_SUPPORTED`, `bDriverError` `SMART_NOT_SUPPORTED`
+  (9). That is what a program sees from a drive behind a bridge without
+  SAT.
+- A transport failure: 16.7's mapping.
+
+`Information` covers the 16-byte header plus `cBufferSize`.
+
+### 16.10 The systems this applies to, and Windows 98 SE and ME
+
+- **Windows 2000 SP4, XP SP3, XP x64 / 2003 x64, Vista and 7** (both
+  architectures): the LUN's PDO serves 16.2's list on each. What each
+  `disk.sys` passes down is R1's reading. On 2000, `classpnp.sys` names
+  neither SCSI pass-through code and `disk.sys` names no ATA one.
+  Whether 2000 forwards them as unknown codes is read by the 2000 leg
+  [hyp until then]. If it does not, the record and the release notes say
+  so. A program's SMART READ LOG through `SMART_RCV_DRIVE_DATA` is not
+  passed down by XP SP3's `disk.sys` (16.9), and 2000's has no
+  READ_SMART_LOG code at all. For the others the routing is not read.
+- **Windows 8, 8.1 and 10**: wherever `xhciuas.sys` is the LUN's driver
+  (section 6.12.4 and 6.14 for when Windows' own UAS driver binds instead,
+  in which case Windows serves these IOCTLs itself). The same code, read at
+  a leg only if the matrix has such a guest free.
+- **Windows 98 SE and ME: out of scope for code, recorded.** No program
+  there reaches this dispatch: a Win32 program cannot send a WDM device an
+  IOCTL, and the system's pass-through route is ASPI through IOS. A UAS LUN
+  there is presented by NUSB's mapping layer (the `USBSTOR\GenDisk` id,
+  `USBMPHLP.PDR`). If an ASPI request reaches `xhciuas.sys` at all, it
+  arrives as an `SRB_FUNCTION_EXECUTE_SCSI` through `UasPdoScsi`, which
+  already carries any CDB and resolves an unspecified direction from T_DIR.
+  Whether ASPI lists that adapter and passes the request was a hypothesis;
+  it was read on 98 SE (R3, 2026-10-31, `runs/run-45.md` "45.52") with
+  this task's own ASPI probe (`test/atatest/aspi9x.c`) in place of
+  Stor98's client: ASPI lists the UAS LUN's adapter and passes INQUIRY and
+  ATA PASS-THROUGH (12) and (16) to it, and the data and the CK_COND
+  registers come back. No 9x code was needed.
+- The new imports are on both 32-bit routes (16.5's evidence), so the one
+  binary still loads on 98 SE and ME. The code there is reached by no one.
+
+### 16.11 Readings, vectors and legs
+
+**Readings before the code is final:**
+- **R1** [static, done 2026-10-31]: capstone over `disk.sys` and
+  `classpnp.sys` from the q35 bases of 2000 SP4, XP SP3, XP x64 SP2 and
+  Vista x86 SP2 (read out of the images with 7-Zip), and Windows 7 x86 RTM
+  from the symbol store under `tools\symbols`; nothing executed. The 7 SP1
+  bases' NTFS volume could not be read in place. Facts:
+  - `disk.sys` (every version) carries the `SCSIDISK` signature and the
+    SMART_VERSION to READ_SMART_THRESHOLDS control codes, and sends
+    `IOCTL_SCSI_MINIPORT` (`push 4D008h`; XP x64 `mov ecx, 4D008h`).
+  - XP SP3 `disk.sys`, device control at `10636h`, with the extension's
+    flag `[ext+38h]` bit 0 (`IsFdo`) tested first; a partition's device
+    passes the IRP down unchanged (`10B5Ah`, `IofCallDriver`):
+    - `SMART_GET_VERSION`: `SRB_IO_CONTROL` length `1Ch`, the signature
+      from `105D4h`, ControlCode `1B0500h` at `10A66h`, `Length` 18h,
+      `IoBuildDeviceIoControlRequest` with 34h in and out;
+    - RCV at `10E2Eh`: input at least 20h and output at least 210h; `ECh`
+      selects `1B0501h`, `B0h` with `D0h`/`D1h` selects `1B0502h`/`1B0503h`;
+      `bDriveNumber` is overwritten (`10EF7h`); `Length` 211h; in 3Ch, out
+      22Dh;
+    - SEND at `10F8Eh`: `B0h` only; features `D2h`, `D3h`, `D4h`, `D8h`,
+      `D9h`, `DAh`, `DBh` (`10FDDh` on); `Length` 21h, plus 8 for `DAh`
+      (`1111Fh`); in 3Ch.
+
+    No capability or bus-type test precedes any of them, so a UAS LUN gets
+    SMART requests on the same terms as an IDE disk.
+  - XP x64, Vista and 7 carry the same codes, plus `1B050Bh` and
+    `1B050Ch`. 2000 stops at `1B050Ah`.
+  - `classpnp.sys` of XP, XP x64, Vista and 7 compares the code with
+    `4D004h` and `4D014h`. Windows 7's (`15FDFh`) refuses an input shorter
+    than 2Ch with `C000000Dh` (`16C0Dh`). Otherwise it copies the stack
+    location down, sets the next location's MinorFunction to 1 (`16C41h`),
+    and calls the device below in the caller's thread (`16C56h`). 2000's
+    `classpnp.sys` names neither code.
+
+  The binaries' SHA-256 are in `legal-provenance.md` section 4.
+- **R2** [obs]: the access reading of 16.3, which the owner's choice rests
+  on.
+
+**Host vectors** (`test_uas`, the pure parts in `uas_iu.c`):
+- the check of 16.4 for each layout: every refusal, the overflow cases
+  (offset `FFFFFFF0h` with length `20h`), overlap, the 32-bit layouts on a
+  64-bit host-side description;
+- the direction choice with `DataIn` 2 for INQUIRY, ATA PT (12) and (16)
+  either way, and an opcode with none;
+- the CDB builder of 16.8: every flag combination, the count rule and its
+  exception, 48-bit;
+- the register decode from descriptor and fixed sense, and from no sense;
+- the SMART plan of 16.9 for every row and every refusal;
+- the outcome mapping of 16.7 (BUSY and TASK SET FULL included) and the
+  returned length, with the zeroed gap of 16.4;
+- the multi-target refusals and rule 10 (CK_COND with data);
+- the miniport envelope's checks and reply (16.4);
+- the fixed-format sense of a 48-bit command with either upper flag set.
+
+The structure sizes and offsets are compile-time asserts in each driver
+build.
+
+**Legs** (the reviewed build, q35, a `usb-uas` LUN beside a Bulk-Only
+stick):
+- `ATATEST` on 2000, XP and 7 x86. On 7 x64, the x64 package is signed in
+  the guest with a throwaway certificate (BRIEF practice), and the 32-bit
+  `ATATEST` there exercises the WOW64 layouts, the ATA direct form's
+  included. `ATATEST` gains the lines these legs need:
+  - `A6`: `IOCTL_ATA_PASS_THROUGH_DIRECT` IDENTIFY;
+  - `T3`: `IOCTL_ATA_PASS_THROUGH` SMART READ DATA;
+  - `M3`: SMART READ THRESHOLDS;
+  - `M4`: `SMART_SEND_DRIVE_COMMAND` RETURN STATUS. The native 64-bit layouts
+  rest on the vectors unless a 64-bit `ATATEST` is built.
+- Twice per system. First with QEMU's `scsi-hd` as it is: it has no SAT
+  (16.1), so it reads how a refusal comes back (16.8, 16.9). Then with
+  16.12's test answer on, which reads a whole IDENTIFY, SMART READ DATA,
+  thresholds and RETURN STATUS through the UAS path. A drive behind a real
+  SAT bridge stays on the bench list.
+- A free SMART reader in one guest, if one runs there.
+- R3, the 98 SE ASPI reading.
+- During one `ATATEST` loop, a Safely Remove and a surprise removal of the
+  UAS drive: the request ends, no hang, and the disk's removal completes.
+- Cancellation: `ATATEST` ended (Task Manager) while its request waits
+  queued. The vehicle is a guest standby, so the sleep hold keeps the
+  request queued, if one can be timed. Otherwise the leg is owed and the
+  path rests on review.
+
+**Where:** `uas/uas_pdo.c` (the dispatch, the finish), `uas/uas_xport.c`
+(the finish branch, `UAS_CTX_PASS` set in `uasAdmit`, `UasEngineSubmitPass`,
+the cancel routine and its clearing on every path off the queue),
+`uas/uas_mem.c` (the record, the user-buffer lock), `uas/uas_iu.c` and `.h`
+(the pure parts), `uas/uas.h`, `test/test_uas.c`, and both
+`xhciuas-imports*.allow`.
+
+### 16.12 The emulator's test answer (owner, 2026-10-31)
+
+QEMU's `scsi-hd` refuses both ATA PASS-THROUGH CDBs (ILLEGAL REQUEST,
+`20h/00h`), so no virtual machine can show a successful ATA or SMART
+reading through `xhciuas.sys`. The owner chose to add a test-only answer
+to the project's QEMU fork (`usb4-emu`, `src/qemu`, branch `usb4-emu`):
+- `scsi-hd` gains a property `x-sat`, off by default. With it off, the
+  device is unchanged.
+- With it on, the disk answers ATA PASS-THROUGH (12) and (16) as a SAT
+  layer over an emulated ATA drive would [spec: SAT-3, ACS-3], for this
+  set:
+  - IDENTIFY DEVICE (`ECh`): 512 bytes made from the disk's own size,
+    serial, model and firmware strings, with the integrity word;
+  - SMART (`B0h`) with LBA Mid/High `4Fh/C2h`: READ DATA (`D0h`) and READ
+    THRESHOLDS (`D1h`), with fixed attributes and their checksum; ENABLE
+    and DISABLE OPERATIONS (`D8h`, `D9h`); RETURN STATUS (`DAh`), with LBA
+    Mid/High `4Fh/C2h`; ENABLE/DISABLE AUTOSAVE (`D2h`); EXECUTE OFF-LINE
+    IMMEDIATE (`D4h`), answered at once;
+  - CHECK POWER MODE (`E5h`): count `FFh` (active).
+- Any other command ends ABORTED: Status `51h`, Error `04h`.
+- CK_COND returns the registers as descriptor sense (`72h`, descriptor
+  `09h`). D_SENSE is not read for this. An error always returns them.
+- The protocol and T_DIR are checked against the command as a SAT layer
+  would.
+
+It is test-only, says so in its help text, and is reviewed and committed
+in `usb4-emu` on its own branch. The legs of 16.11 name the fork commit
+and the command line. It makes no claim about any real bridge: the
+reading behind a real SAT bridge stays on the bench list.
+
+## 17. A UAS drive in Safely Remove Hardware (task 45.61, 2026-10-31)
+
+Status: 2026-10-31, the reading done and the change designed, reviewed and
+revised. The change adds one notice on Windows 2000, so it went to the
+owner first (roadmap-usb4 task 45.61); the owner chose A (17.4) the same
+day. 17.5 is the code, `817dd191`, read on 2000, XP, Vista and 7
+(`runs/run-45.md`, "45.61", "The change and its legs").
+
+Tags in this section: [obs] read in this project's runs (`runs/run-45.md`,
+"45.61"); [hist] read in this repository's history; [hyp] not read.
+
+### 17.1 The report
+
+45.52's Windows 7 x64 leg (`runs/run-45.md`, "45.52", the Safely Remove
+reading) found that Windows' Safely Remove Hardware applet lists a
+Bulk-Only stick but not a UAS drive, and that with "Display device
+components" on, stopping "xHCI98 USB Attached SCSI Storage" offers to stop
+the whole controller, its root hub and every device on it [obs]. The roadmap
+line names the likely cause: `UasFdoPnp` (`src/uas/uas_fdo.c`) completes
+`IRP_MN_QUERY_CAPABILITIES` with `SurpriseRemovalOK` TRUE on top of the
+bus's answer.
+
+### 17.2 Why the bit is set
+
+`4e66702` (roadmap-hcd task 31-A.2, 2026-10-04 01:21 +0800), the UAS class
+driver's first commit, wrote `SurpriseRemovalOK = TRUE` in two places: the
+FDO's completion of the capabilities query and the LUN PDO's own answer
+(`uasCapabilities`, `src/uas/uas_pdo.c`). No comment, commit text, run
+record, design section or `lessons.md` entry gives a reason [hist]. At that
+hour the bus's device PDOs answered TRUE as well; `9001ebd` (14:38 the same
+day) turned the device PDO's answer to FALSE, as Windows 2000's `usbhub.sys`
+answers, so that the hot-plug applet lists a USB stick again (`runs/run-28.md`,
+the upgrade report's finding 1; `roadmap-hcd.md`, decisions table, "Device
+PDOs and `SurpriseRemovalOK`"), and `8993884` kept TRUE for a split function
+of a composite device. The UAS FDO's override was left as written, so since
+`2.0.0.0` the UAS drive's devnode has said TRUE where the bus answers
+FALSE [hist].
+
+### 17.3 What the bit changes, read
+
+Read on q35 guests of 2000 SP4, XP SP3, Vista SP2 x86 and 7 SP1 x86, each
+with a UAS drive (QEMU `usb-uas`, a FAT volume) at root port 3 and a
+Bulk-Only stick on the system's own `usbstor.sys` at root port 4: first with
+the package as built (`xhciuas.sys` as at `b71199a9`), then with that one
+binary rebuilt with the override written FALSE and nothing else changed
+(the variant), each read after a cold start [obs]:
+
+| | 2000 | XP | Vista | 7 |
+|---|---|---|---|---|
+| UAS devnode's capabilities, package / variant | `0x94` / `0x14` | `0x94` / `0x14` | `0x94` / `0x14` | `0x94` / `0x14` |
+| The stick's `usbstor` devnode | `0x14` | `0x14` | `0x54` | `0xD4` |
+| Listed, package | the stick alone; the UAS drive not even among the components | the same | the controller and the stick; the UAS drive only under the controller | the same |
+| Listed, variant | the stick and "xHCI98 USB Attached SCSI Storage", its disk and volume beneath | the same | the controller, the stick and the UAS drive | the same |
+| Stop of the UAS drive, variant | the drive, its volume and its disk alone; "Safe To Remove Hardware" | the same | the same | the same |
+| Unplug without a stop, package | no notice | no notice | no notice | no notice |
+| Unplug without a stop, variant | "Unsafe Removal of Device" naming "xHCI98 USB Attached SCSI Storage" | no notice | no notice (read during the copy loop of 17.6) | no notice |
+| The stick unplugged without a stop | "Unsafe Removal of Device" naming the stick and its disk | no notice | not read | not read |
+
+(`0x04` Removable, `0x10` UniqueID, `0x40` RawDeviceOK, `0x80`
+SurpriseRemovalOK; the UAS LUN's devnode read `0x90` in both builds, the
+stick's disk `0x10`.) The controller is listed on Vista and 7 only because
+the emulator places it behind a hot-pluggable PCI Express root port, which
+those systems mark removable; 2000 and XP read its capabilities `0x0`. On a
+board whose USB 3 controller is part of the chipset nothing is above the
+UAS drive to stop, so today the applet cannot stop it on any of the four
+systems [hyp: no real board read].
+
+Further readings with the variant [obs]: the stop followed by an unplug
+gave no notice on any of the four; the disk's removal policy read "Quick
+removal (default)" on 7 with the package and with the variant, and
+"Optimize for quick removal" on XP with the variant, so the write-cache
+policy does not move; a surprise unplug during a copy loop failed the copies
+("The system cannot find the drive specified") with no hang on XP and 7.
+
+What the bit does not touch: on 98 SE and ME the applet lists the UAS drive
+through `USBNTMAP.SYS`'s device interface on its parent and reads no
+capability (`runs/run-43.md`, 43.62), so neither system changes. In the USB
+Tree the one line that moves is the raw capability line of the drive's
+"Device Manager entry" details (`details_devnode`, `xhcitr/xhcitr.c`):
+"surprise removal OK: yes" becomes "no". Its USB Safely Remove
+(`details_usb_eject`, `tr_usb_rule`) reads no capability, and the
+Thunderbolt unit's lines that do (`details_unit`) read a tunnelled unit's
+devnode, not a USB device's, so both are unchanged.
+
+### 17.4 The owner's question
+
+The change lists the UAS drive and stops it alone on every NT system read,
+and on Windows 2000 it brings one new notice: a UAS drive pulled without a
+stop shows "Unsafe Removal of Device", as a Bulk-Only stick does there
+today. XP, Vista and 7 show no notice either way.
+
+- **A (recommended): drop the override on every NT system.** The UAS drive
+  behaves as a Bulk-Only stick on all of them: listed, stopped alone, and on
+  2000 the same notice when it is pulled without a stop. The notice is
+  Windows 2000's own and true (cached writes are lost as on a stick), and
+  the drive becomes stoppable on a real board, where today it is not.
+- **B: drop it on XP and later, keep it on 2000.** No new notice on 2000,
+  but there the UAS drive stays out of the applet and can be stopped only
+  from the USB Tree. Chosen at run time (`IoIsWdmVersionAvailable(1, 0x20)`,
+  FALSE on 2000 alone among the NT targets [hyp: the WDM version numbers,
+  checked against the DDK header in the code step]); one more branch to
+  test.
+- **C: no change.** A release-notes line instead: Windows does not list a
+  UAS drive in Safely Remove Hardware; stop it from the USB Tree.
+
+**The owner's answer (2026-10-31): A.**
+
+### 17.5 The change (for A)
+
+`UasFdoPnp` stops overriding the capabilities: its
+`IRP_MN_QUERY_CAPABILITIES` case is removed, and the query passes down and
+back unchanged, as every other minor code the FDO does not handle. The
+bus's answer then stands: FALSE for a whole device, TRUE for a function of a
+composite device (`8993884`), so a UAS function inside a composite device
+stays out of the applet like every split function. The LUN PDO keeps its
+answer (`Removable` FALSE, `SurpriseRemovalOK` TRUE): the applet lists the
+drive by its USB devnode whichever way the LUN answers, and with TRUE
+Windows 2000's notice names the drive alone where `usbstor`'s names the
+stick and its disk. Nothing else moves: no registry value, INF line, import
+or installer text. For B, the case stays and sets TRUE only when
+`IoIsWdmVersionAvailable(1, 0x20)` is FALSE.
+
+An update path to read: on XP, after the variant was copied over the
+running driver and Windows restarted with `shutdown -r`, the devnode still
+read `0x94` and the drive stayed unlisted, through two replugs; a shut down
+and cold start read `0x14` [obs; the cause not read]. The legs therefore
+include an update over the previous package followed by the restart the
+installer asks for.
+
+The legs, on the gated x86 build, on 2000, XP, Vista and 7 (each a fresh
+overlay; a Bulk-Only stick beside the UAS drive throughout): the listing
+with and without components; the stop, its confirmation and "Safe To Remove
+Hardware"; the unplug after the stop; a surprise unplug without a stop (no
+hang; on 2000 the notice, beside the stick's); a surprise unplug during a
+copy loop (the copies fail, no hang); and the update over the package of
+`b71199a9` with its restart, then the listing.
+
+### 17.6 Found on the way
+
+On Vista, a surprise unplug during a copy loop with an Explorer window open
+on the drive's volume left the next copy blocked for good, the volume still
+mounted and `shutdown` hanging; the same with the package and with the
+variant, and the same with the Bulk-Only stick on `usbstor.sys`, so it is
+neither UAS's nor this change's [obs]. Without the Explorer window the same
+unplug failed the copies and did not hang in that reading; the legs of the
+change saw it block once without the window too. Handed to the coordinator;
+not read on real hardware.
+
+Read beside it by task 45.65 (`runs/run-45.md` "45.65"): on Vista's own USB
+stack (EHCI, `usbehci.sys` and `usbstor.sys`, no xHCI98) the same unplug
+leaves the copy, dir and shutdown blocked, with and without the Explorer
+window; XP and 7 on the same EHCI are clean. The hang needs no xHCI98.
 
 ## Appendix A. The Windows 98 export evidence, pair by pair (task 25.3)
 

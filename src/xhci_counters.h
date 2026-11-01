@@ -494,9 +494,25 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG XportBotForced;
     ULONG XportBotNoStreams;
     ULONG XportNoStreams;
+    /* The command-state checker (hcd_strict.c; roadmap-usb4 45.45, design
+     * record 08 section 14), appended at word 252: how XhciCommandCheck
+     * was read (0 absent, 1 a DWORD taken, 2 another type) and whether
+     * the checker runs this start, written by the start (hcdReadValues);
+     * then the commands checked, the preconditions a conforming xHC would
+     * refuse, the spec's "undefined behavior" cases, and the commands
+     * answered Slot Not Enabled, Parameter or Context State Error,
+     * written by the thread, plainly, before and after each command.
+     * Until 3.4.0.0 the last four were fields of the controller in the
+     * checked builds alone, never published. */
+    ULONG StrictSwitchRead;
+    ULONG StrictOn;
+    ULONG StrictChecked;
+    ULONG StrictViolations;
+    ULONG StrictUndefined;
+    ULONG StrictRefusals;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 252 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 258 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

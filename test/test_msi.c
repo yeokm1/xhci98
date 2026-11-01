@@ -199,7 +199,8 @@ static void test_cap(void)
              "MSI-X enabled wins");
     cfg[0x52] = 0x00;
     CHECK_EQ(XhciMsiCapRead(cfg), XHCI_POLL_DELIVERY_MSIX, "MSI-X alone");
-    /* A loop is bounded; a pointer out of range or unaligned stops it. */
+    /* A loop is bounded; a pointer out of range stops it, and a pointer's
+     * reserved low bits are masked. */
     cfg[0x71] = 0x50;
     cfg[0x73] = 0x00;
     cfg[0x52] = 0x01;
@@ -209,8 +210,15 @@ static void test_cap(void)
     CHECK_EQ(XhciMsiCapRead(cfg), XHCI_POLL_DELIVERY_MESSAGE,
              "a pointer below 40h is not followed");
     cfg[0x34] = 0x51;
-    CHECK_EQ(XhciMsiCapRead(cfg), XHCI_POLL_DELIVERY_MESSAGE,
-             "an unaligned pointer is not followed");
+    CHECK_EQ(XhciMsiCapRead(cfg), XHCI_POLL_DELIVERY_MSI,
+             "a pointer's reserved low bits are masked");
+    cfg[0x34] = 0x50;
+    cfg[0x51] = 0x73;
+    cfg[0x52] = 0x00;
+    cfg[0x71] = 0x00;
+    cfg[0x73] = 0x80;
+    CHECK_EQ(XhciMsiCapRead(cfg), XHCI_POLL_DELIVERY_MSIX,
+             "a Next pointer's reserved low bits are masked");
 }
 
 /* ---- the walk ----------------------------------------------------------- */

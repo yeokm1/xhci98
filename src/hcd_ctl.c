@@ -25,6 +25,7 @@
 #include "hcd_svc.h"
 #include "xhci_hw.h"
 #include "xhci_usbport.h"
+#include "xhci_cmiso.h"
 
 /* The resource mask XhciInitController holds the start to. The miniport
  * settled it from the registration packet's interface version, because NT 6.x
@@ -93,9 +94,17 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * Read at every start and latched for its lifetime. */
 #define HCD_VALUE_ACCEPT_096    L"XhciAccept096"
 /* Task 43.27 (design record 13 section 8.4.1): the BOS read at High and
- * Full Speed, written by no INF: only a DWORD 0 turns it off; absent,
- * another number or another type is on. Read at every start. */
+ * Full Speed, written by the INFs at 1 since task 45.50: only a DWORD 0
+ * turns it off; absent, another number or another type is on. Read at
+ * every start. */
 #define HCD_VALUE_USB2_BOS      L"XhciUsb2Bos"
+#define HCD_VALUE_RESUME_KEEP   L"XhciResumeKeep"
+#define HCD_VALUE_LINK_KEEP     L"XhciLinkKeep"
+/* Task 45.45 (design record 08 section 14): the command-state checker
+ * (hcd_strict.c), written by both INFs at 1: only a DWORD 0 turns it off;
+ * absent, another number, another type or a failed read is on. Read at
+ * every start and latched for its lifetime. */
+#define HCD_VALUE_COMMAND_CHECK L"XhciCommandCheck"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). The INFs
@@ -489,6 +498,35 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     status = hcdReadDword(hc, HCD_VALUE_USB2_BOS, &value);
     hc->Usb2Bos = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "enum.bos.usb2.on", hc->Usb2Bos);
+
+    /* Task 45.45: the command-state checker. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_COMMAND_CHECK, &value);
+    hc->Counters.StrictSwitchRead =
+        NT_SUCCESS(status) ? 1UL
+        : (status == STATUS_OBJECT_TYPE_MISMATCH) ? 2UL
+                                                 : 0UL;
+    hc->StrictOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    hc->Counters.StrictOn = hc->StrictOn;
+    XhciLogNote(ext, "strict.value",
+                NT_SUCCESS(status) ? value : 0xFFFFFFFFUL);
+    XhciLogNote(ext, "strict.on", hc->StrictOn);
+
+    /* Task 45.23 (design record 20 section 4.3.2): devices kept across a
+     * resume's re-initialization. Written at 1 by the INFs since task
+     * 45.50: absent, or anything but a DWORD 0, is on. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_RESUME_KEEP, &value);
+    hc->ResumeKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "resume.keep.on", hc->ResumeKeepOn);
+
+    /* Task 45.41 (design record 13 section 15, L7): a device kept across
+     * its SuperSpeed link's recovery. Written at 1 by the INFs since task
+     * 45.50: absent, or anything but a DWORD 0, is on. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_LINK_KEEP, &value);
+    hc->LinkKeepOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    XhciLogNote(ext, "link.keep.on", hc->LinkKeepOn);
 
     /* Task 38.11: latched in the extension, which this start has zeroed
      * and which no in-place reinitialization zeroes again, so every version
@@ -1863,12 +1901,17 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
  * The power gate: a synchronization event used as a mutex - KeInitializeMutex
  * has no allowlist row - held by the in-place recovery and by every path that
  * suspends or resumes the controller, so the two never interleave on two
- * processors. IRQL: PASSIVE_LEVEL to enter.
+ * processors. Entry past a bounded run of unsatisfied waits is recorded,
+ * not refused (HcdWaitEvent). IRQL: PASSIVE_LEVEL to enter.
  */
 VOID HcdPowerGateEnter(PHCD_CONTROLLER hc)
 {
-    (VOID)KeWaitForSingleObject(&hc->PowerGate, Executive, KernelMode, FALSE,
-                                NULL);
+    ULONG missed;
+
+    missed = HcdWaitEvent(&hc->PowerGate, HCD_GATE_WAIT_BOUND);
+    if (missed != 0) {
+        XhciLogNote(&hc->Hc, "gate.power.missed", missed);
+    }
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
@@ -2317,7 +2360,7 @@ ULONG HcdCommandDrain(PHCD_CONTROLLER hc)
  * recorded, so a later start puts the bit back (xhciRestoreBusMaster).
  * IRQL: PASSIVE_LEVEL (configuration space goes out to the bus driver).
  */
-static ULONG hcdContainProve(PXHCI_EXTENSION ext)
+static ULONG hcdContainProveBme(PXHCI_EXTENSION ext)
 {
     USHORT command;
 
@@ -2346,6 +2389,130 @@ static ULONG hcdContainProve(PXHCI_EXTENSION ext)
     command = HcdInjPciCommand(HcdControllerFromExt(ext), command);
 #endif
     return (command & XHCI_PCI_COMMAND_BME) == 0 ? 1UL : 0UL;
+}
+
+/*
+ * Record 17 section 4.13.6 (task 45.35): where Bus Master Enable gives no
+ * proof, xhcicm.sys's statement that the USB4 tunnel this controller
+ * started behind has its path read back closed (record 22 section 10.5).
+ * Asked on the controller thread alone, with the interface taken before
+ * the thread started and released after it was joined. Returns the proof
+ * (XHCI_TOL_PROOF_*). IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdContainProof(PXHCI_EXTENSION ext)
+{
+    PHCD_CONTROLLER hc;
+    ULONG bme;
+    ULONG asked;
+    ULONG isolated;
+    ULONG proof;
+
+    hc = HcdControllerFromExt(ext);
+    bme = hcdContainProveBme(ext);
+    asked = 0;
+    isolated = 0;
+    if (!bme && hc->IsoIsolated != NULL) {
+        asked = 1;
+        isolated = hc->IsoIsolated(hc->IsoContext) ? 1UL : 0UL;
+        hc->IsoAsks++;
+    }
+    proof = XhciTolProof(bme, asked, isolated);
+    if (proof == XHCI_TOL_PROOF_TUNNEL) {
+        hc->IsoProofs++;
+    }
+    if (asked) {
+        XhciLogNote(ext, "tol.proof.tunnel", isolated);
+    }
+    return proof;
+}
+
+static ULONG hcdContainProve(PXHCI_EXTENSION ext)
+{
+    return hcdContainProof(ext) != XHCI_TOL_PROOF_NONE ? 1UL : 0UL;
+}
+
+/*
+ * Record 17 section 4.13.6: IRP_MN_QUERY_INTERFACE for xhcicm.sys's
+ * isolation statement, sent to the object this FDO is attached to (the
+ * kernel chain's child filter sits on the PDO below it), at the start
+ * before the thread runs. NT only; a refusal leaves no interface and the
+ * proof as before. IRQL: PASSIVE_LEVEL.
+ */
+static const GUID hcdIsoGuid = XHCI_CM_ISO_GUID_INIT;
+
+static NTSTATUS NTAPI hcdIsoDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
+                                 PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+
+    (VOID)KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static VOID hcdIsoAcquire(PHCD_CONTROLLER hc)
+{
+    XHCI_CM_ISO_INTERFACE iface;
+    PIO_STACK_LOCATION next;
+    KEVENT done;
+    PIRP irp;
+    NTSTATUS status;
+
+    HcdCtlIsoRelease(hc);
+    if (!IoIsWdmVersionAvailable(1, 0x10) || hc->LowerDevice == NULL) {
+        return;
+    }
+    RtlZeroMemory(&iface, sizeof(iface));
+    irp = IoAllocateIrp(hc->LowerDevice->StackSize, FALSE);
+    if (irp == NULL) {
+        return;
+    }
+    irp->IoStatus.Status = STATUS_NOT_SUPPORTED;
+    irp->IoStatus.Information = 0;
+    next = IoGetNextIrpStackLocation(irp);
+    next->MajorFunction = IRP_MJ_PNP;
+    next->MinorFunction = IRP_MN_QUERY_INTERFACE;
+    next->Parameters.QueryInterface.InterfaceType = &hcdIsoGuid;
+    next->Parameters.QueryInterface.Size = (USHORT)sizeof(iface);
+    next->Parameters.QueryInterface.Version = XHCI_CM_ISO_VERSION;
+    next->Parameters.QueryInterface.Interface = (PINTERFACE)&iface;
+    next->Parameters.QueryInterface.InterfaceSpecificData = NULL;
+    KeInitializeEvent(&done, NotificationEvent, FALSE);
+    HCD_SET_COMPLETION_ALWAYS(irp, hcdIsoDone, &done);
+    status = IoCallDriver(hc->LowerDevice, irp);
+    if (status == STATUS_PENDING) {
+        (VOID)HcdWaitEvent(&done, 0);
+    }
+    status = irp->IoStatus.Status;
+    IoFreeIrp(irp);
+    if (!NT_SUCCESS(status) || iface.Isolated == NULL ||
+        iface.Header.Version != XHCI_CM_ISO_VERSION) {
+        if (NT_SUCCESS(status) && iface.Header.InterfaceDereference != NULL) {
+            iface.Header.InterfaceDereference(iface.Header.Context);
+        }
+        XhciLogNote(&hc->Hc, "iso.none", (ULONG)status);
+        return;
+    }
+    hc->IsoContext = iface.Header.Context;
+    hc->IsoDeref = iface.Header.InterfaceDereference;
+    hc->IsoIsolated = iface.Isolated;
+    hc->IsoHeldStarts++;
+    XhciLogNote(&hc->Hc, "iso.held", hc->IsoHeldStarts);
+}
+
+VOID HcdCtlIsoRelease(PHCD_CONTROLLER hc)
+{
+    PINTERFACE_DEREFERENCE deref;
+    PVOID context;
+
+    deref = hc->IsoDeref;
+    context = hc->IsoContext;
+    hc->IsoIsolated = NULL;
+    hc->IsoDeref = NULL;
+    hc->IsoContext = NULL;
+    if (deref != NULL) {
+        deref(context);
+    }
 }
 
 /* The same proof for an invalidation no halt or HCRST has proven
@@ -2432,14 +2599,16 @@ static VOID hcdContain(PHCD_CONTROLLER hc)
         return;
     }
 
-    proof = hcdContainProve(ext);
-    if (!proof) {
+    proof = hcdContainProof(ext);
+    if (proof == XHCI_TOL_PROOF_NONE) {
         HcdSvcDmaNotStopped(ext);
     }
-    HcdEnumContain(hc, proof);
+    HcdEnumContain(hc, proof != XHCI_TOL_PROOF_NONE ? 1UL : 0UL);
     XhciControllerLockAcquire(ext, &oldIrql);
-    ext->Tol.Stats.Contained = proof ? XHCI_TOL_CONTAIN_RELEASED
-                                     : XHCI_TOL_CONTAIN_PINNED;
+    ext->Tol.Stats.Contained =
+        proof == XHCI_TOL_PROOF_TUNNEL ? XHCI_TOL_CONTAIN_TUNNEL
+        : proof != XHCI_TOL_PROOF_NONE ? XHCI_TOL_CONTAIN_RELEASED
+                                       : XHCI_TOL_CONTAIN_PINNED;
     XhciLogNoteLocked(ext, "tol.contained", ext->Tol.Stats.Contained);
     XhciControllerLockRelease(ext, oldIrql);
     HcdPowerGateLeave(hc);
@@ -2802,6 +2971,10 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
      * (reviewed and revised after 4de0f999). Before the start
      * admits anything, so no lock is needed against an admission. */
     hc->ShutLatched = 0;
+    hc->SuspendHaltProven = 0;
+    /* Task 45.63: and the resume state, which a D0 the bus failed may have
+     * left FAILED on this FDO: a start's controller runs. */
+    hc->ResumePhase = XHCI98_RESUME_RUNNING;
     /* Task 36.3's record was reset when the START_DEVICE arrived, before
      * the lower driver saw it (HcdPirqStartAttempt, hcd_pnp.c). */
     HcdCountersStart(hc);
@@ -3021,6 +3194,8 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     if (!NT_SUCCESS(HcdSuspCbStart(hc))) {
         XhciLogNote(ext, "susp.cbthread.failed", 1);
     }
+    /* Record 17 section 4.13.6: before the thread that asks it runs. */
+    hcdIsoAcquire(hc);
     status = hcdThreadStart(hc);
     if (!NT_SUCCESS(status)) {
         hcdStopBody(hc);
@@ -3060,6 +3235,9 @@ static VOID hcdStopBody(PHCD_CONTROLLER hc)
     HcdSuspControllerDownLocked(hc);
     XhciControllerLockRelease(ext, oldIrql);
     hcdThreadStop(hc);
+    /* Record 17 section 4.13.6: the thread, the statement's one caller,
+     * is joined. */
+    HcdCtlIsoRelease(hc);
     /* Record 15 section 4.2: the poller's service revoked and a moved
      * line's owed retirement contained by the stop itself, before anything
      * is disabled or disconnected; still owed, it is recorded uncontained. */

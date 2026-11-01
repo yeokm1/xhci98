@@ -79,13 +79,9 @@ unsigned long XhciPswGate(unsigned long vendorDevice);
 
 #ifdef _WIN64
 #define INST_MY_ARCH        INST_ARCH_AMD64
-#define INST_DIR_SUFFIX     "-x64"
-#define INST_DEFAULT_DIR    "release-x64"
 #define INST_PE_MINE        INST_PE_AMD64
 #else
 #define INST_MY_ARCH        INST_ARCH_X86
-#define INST_DIR_SUFFIX     "-x86"
-#define INST_DEFAULT_DIR    "release-x86"
 #define INST_PE_MINE        INST_PE_I386
 #endif
 
@@ -131,10 +127,11 @@ static INST_FRONT front;
 
 /* The INF slots: file, service, systems. */
 static const char *const instInfFile[INST_INF_COUNT] = {
-    "xhci98.inf", "xhciuas.inf", "xhcicm.inf", "xhcicmf.inf", "stor98.inf"
+    "xhci98.inf", "xhciuas.inf", "xhcicm.inf", "xhcicmf.inf", "stor98.inf",
+    "xhcinet.inf"
 };
 static const char *const instInfService[INST_INF_COUNT] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcicm", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "xhcicm", "stor98", "xhcinet"
 };
 
 /* ---- the routines, looked up at run time ------------------------------------- */
@@ -237,11 +234,12 @@ static int is_controller(const DEVREC *d);
 static const char *first_hw(const DEVREC *d);
 
 /* The service groups of record 23 section 5.4. */
-#define INST_GROUPS 4
+#define INST_GROUPS 5
 static const char *const groupService[INST_GROUPS] = {
-    "xhci98", "xhciuas", "xhcicm", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "stor98", "xhcinet"
 };
 #define INST_GROUP_S98 3
+#define INST_GROUP_NET 4    /* Thunderbolt networking (record 35 s. 9.5) */
 static int groupVerdict[INST_GROUPS];
 
 /* The devices a step changed, by instance id, for the results check. */
@@ -280,6 +278,14 @@ static char srcDir[INST_PATH_CHARS];
 /* Each INF relative to the flavour directory: the NT-only filter INF is in
  * nt\ (39-0.4), where Windows 98's search never meets it. */
 static char infRel[INST_INF_COUNT][32];
+/* Each INF's path in the family folder (record 36 section 6.2). */
+static char pkgRel[INST_INF_COUNT][40];
+/* The family folder this run reads (INST_FAM_*). */
+static int pkgFam;
+/* Each row of instPkgFiles present when the package check passed: every
+ * later walk requires it still (record 36 section 6.2). */
+#define INST_PKG_MAX 48
+static unsigned char pkgHave[INST_PKG_MAX];
 static int restagePending[INST_INF_COUNT];
 static int restageOk[INST_INF_COUNT];
 static int restage_listed(const char *id);
@@ -293,6 +299,11 @@ static char helperResult[INST_PATH_CHARS];  /* the result file            */
 static char helperJobFile[INST_PATH_CHARS]; /* the job file (section 4.1) */
 static int helperRan;       /* a device job ran: the steps are per device  */
 static int helperLastOut;   /* the last job's INST_DI_OUT_*, -1 none made  */
+/* Record 27 section 6 (task 45.38): a controller's job of this run that
+ * installed an INF's driver, per INF; a later controller's job of the
+ * same INF passes nocopy (helperNoCopy, read by helper_job). */
+static int helperCtlCopied[INST_INF_COUNT];
+static int helperNoCopy;
 static int parentJobs;      /* parents' jobs (or NT calls) that reached
                                their device this run: inst_absent_retry */
 static int helperStop;      /* a settle inside a helper job failed: the
@@ -315,6 +326,13 @@ static int devTruncated;
 
 static INST_OPTS opts;
 static INST_ENV envNow;
+
+/* The DevicePath limit of this 98 SE or ME (record 26 sections 6.7.12 and
+ * 6.7.13). */
+static int dp_9x_max(void)
+{
+    return inst_9x_devicepath_max(!envNow.Nt && envNow.Minor == 90);
+}
 static OSVERSIONINFOA osv;
 static FILE *logFile;
 static char logPath[INST_PATH_CHARS];
@@ -342,6 +360,19 @@ static char s98StagedInf[INST_PATH_CHARS]; /* NT: the staged stor98.inf,
 static int s98Include;      /* ticked, or /stor98, with the Thunderbolt
                                component in the run                       */
 static int s98Want;         /* ticked, or /stor98                          */
+/* Thunderbolt networking (design record 35 section 9.5): an INF slot of
+ * its own, in the run only while the Thunderbolt support is and the box's
+ * final state is 1 (netInclude). */
+static char *netText;       /* xhcinet.inf, read when the package has it  */
+static int haveNet;         /* the family folder carries it for this system */
+static int netInclude;      /* in the run                                  */
+static int netBox = -1;     /* the box as the user left it, -1 untouched   */
+static int netStaged;       /* NT: xhcinet.inf staged by this run          */
+static void net_set(void);
+static void net_write(void);
+static void net_question(void);
+static void net_decide(INST_TBNET *d);
+static const char *net_plan_text(void);
 /* S98VSD.VXD (design record 30 section 7). */
 static int haveVsd;         /* the flavour directory carries S98VSD.VXD   */
 static char vsdHash[65];    /* its SHA-256 (98 SE and ME)                 */
@@ -357,6 +388,7 @@ static int havePfwSys;      /* the flavour directory carries XHCIPFW.SYS  */
 static char pfwSysHash[65]; /* its SHA-256                                */
 static int pfwsys_check_package(void);
 static int pfwDid;          /* 1 placed, 2 queued, 4 removed              */
+static int pfwLegacy;       /* XHCIPFW.SYS's entry-role install acted on */
 /* A VxD this installer places in the system directory by record 30
  * section 7.3's table: S98VSD.VXD in IOSUBSYS, XHCIPFW.VXD in the system
  * directory itself (design record 32 section 8). */
@@ -380,6 +412,13 @@ static const VXDDESC vsdDesc = {
 static const VXDDESC pfwDesc = {
     INST_PFW_FILE, INST_PFW_TMPNAME, "", "SYSTEM\\XHCIPFW.VXD",
     "SYSTEM\\XHCIPFW.TMP", INST_PFW_KEY, "xhcipfw", &havePfw, pfwHash,
+    &pfwDid
+};
+/* XHCIPFW.SYS's filter role on 8 and 8.1: its record of its own (record
+ * 32 section 11.5.2); only Key is read for XHCIPFW.SYS's record. */
+static const VXDDESC pfwfDesc = {
+    INST_PFW_FILE, INST_PFW_TMPNAME, "", "SYSTEM\\XHCIPFW.VXD",
+    "SYSTEM\\XHCIPFW.TMP", INST_PFW_KEY_F, "xhcipff", &havePfw, pfwHash,
     &pfwDid
 };
 static int s98TopoFresh;    /* the places were read since the last scan   */
@@ -469,8 +508,9 @@ static void s98_write_values(void);
 static void s98_ask_values(void);
 static void s98_ask_unused(void);
 static void s98_file_update_9x(void);
+static int s98_defaults_drop_9x(void);
 static void s98_mpd_place_9x(void);
-static void s98_wininit_cancel(const char *bin);
+static int s98_wininit_cancel(const char *bin);
 static int stor_hash(const char *path, char hex[65]);
 static int vxd_check_package(const VXDDESC *d);
 static int vsd_mode(int uninstall);
@@ -549,6 +589,8 @@ static void other_finish(char *text, size_t cap, const char *nl);
 static char storPackDir[INST_PATH_CHARS];
 static int storPlanCase;      /* the case the plan showed (defined below) */
 static void pkg_src(const char *rel, char *path, size_t cap);
+static int pkg_path(const char *local, char *path, size_t cap);
+static void pkg_mark(const char *name);
 static void own_variant(const char *path, const char *ext, char *out,
                         size_t cap);
 static void stor_read(void);
@@ -1164,6 +1206,22 @@ static void dev_driver_values(DEVREC *d)
                 *dot = '\0';
             }
             inst_copy(d->Service, text, sizeof(d->Service));
+        } else {
+            /* Thunderbolt networking's adapter, which NDIS.VXD loads
+             * (DevLoader *ndis): its miniport is the driver key's
+             * DeviceVxDs, xhcinet.sys (record 35 section 9.5). Read for
+             * that name alone, so another network adapter's VxD names no
+             * service here; unreadable on the adapter's own id is unknown
+             * ownership, as above. */
+            r = reg_text3(HKEY_LOCAL_MACHINE, path, "DeviceVxDs", text,
+                          sizeof(text));
+            if (r > 0 && inst_eq(text, "xhcinet.sys")) {
+                inst_copy(d->Service, "xhcinet", sizeof(d->Service));
+            } else if (r < 0 &&
+                       inst_msz_has(d->Hw, d->HwBytes, "XHCICM\\TBNET")) {
+                out("  unreadable: the driver of %s\n", d->Id);
+                walkErrors++;
+            }
         }
     }
 }
@@ -1688,7 +1746,8 @@ static int group_of(const DEVREC *d)
 static int group_of_inf(int inf)
 {
     return inf == INST_INF_XHCI ? 0 : inf == INST_INF_UAS ? 1 :
-           inf == INST_INF_S98 ? INST_GROUP_S98 : 2;
+           inf == INST_INF_S98 ? INST_GROUP_S98 :
+           inf == INST_INF_NET ? INST_GROUP_NET : 2;
 }
 
 /* The version an INF's devices are measured against: the package's for
@@ -1723,6 +1782,24 @@ static void group_binary(int g, char *path, size_t cap)
         join(path, cap, win, "IOSUBSYS\\stor98.mpd");
         return;
     }
+    if (g == INST_GROUP_NET) {
+        /* The image this system loads (record 35 section 9.5): on 98 SE
+         * and ME xhcinet.inf's dirid 11, System; on 8 to 10 the NDIS 6.20
+         * one. */
+        if (!envNow.Nt) {
+            if (GetSystemDirectoryA(win, sizeof(win)) == 0) {
+                path[0] = '\0';
+                return;
+            }
+            join(path, cap, win, "xhcinet.sys");
+            return;
+        }
+        join(path, cap, win, "System32\\Drivers");
+        join(path, cap, path, (envNow.Major > 6 ||
+                               (envNow.Major == 6 && envNow.Minor >= 2)) ?
+                              "xhcinet6.sys" : "xhcinet.sys");
+        return;
+    }
     inst_copy(name, groupService[g], sizeof(name));
     strcat(name, ".sys");
     join(path, cap, win, "System32\\Drivers");
@@ -1746,6 +1823,12 @@ static void group_verdicts(void)
         repair = 0;
         newer = 0;
         unknown = 0;
+        if (g == INST_GROUP_NET && !netInclude) {
+            /* The box unticked: an installed adapter is not part of the
+             * run (record 35 section 9.5). */
+            groupVerdict[g] = INST_GROUP_OK;
+            continue;
+        }
         if (g == 2 && haveCm && !tbInclude) {
             /* A No to the Thunderbolt question: the installed xhcicm is
              * not part of the run, so no verdict on it (section 8.5). */
@@ -1916,7 +1999,7 @@ static void plan(void)
          * 2026-10-25): installed over, as Windows' own USBXHCI above, by
          * the NHI's forced install. */
         if (d->Inf == INST_INF_CM && dv.HasService &&
-            inst_tb_intel(d->Service)) {
+            inst_tb_intel(d->Service) && !inst_cm_tb1_foreign(d->Id)) {
             dv.HasService = 0;
         }
         dv.OwnService = inst_eq(d->Service, instInfService[d->Inf]);
@@ -2029,8 +2112,7 @@ static void print_plan(void)
                  (tbInclude && d->Inf == INST_INF_CM)) &&
                 names_canon(d, canon, sizeof(canon)) != NULL) {
                 /* Ours after the run: this package's driver's now, or
-                 * installed by it (xhci98 a controller, xhcicm an NHI of
-                 * instNhiFnNames, task 44.55). */
+                 * installed by it (xhci98 a controller). */
                 int ours = names_ours(d) || (d->Runs && !d->Refused);
                 int hasRec = names_rec_get(d->Id, rec, sizeof(rec)) == 1;
                 int a = inst_name_action(ours, canon, d->Friendly,
@@ -2177,7 +2259,10 @@ static int inf_source(int k, int i, const char *base, char *path, size_t cap,
     }
     slash = strrchr(rel, '\\');
     inst_copy(name, slash != NULL ? slash + 1 : rel, nameCap);
-    join(dir, sizeof(dir), base, infRel[k]);
+    /* The download keeps each INF in its family folder's place (record 36
+     * section 6.2); the local copy is flat. */
+    join(dir, sizeof(dir), base,
+         base == pkgDir && pkgRel[k][0] != '\0' ? pkgRel[k] : infRel[k]);
     slash = strrchr(dir, '\\');
     if (slash != NULL) {
         *slash = '\0';
@@ -2231,14 +2316,12 @@ static int s98_check_package(void)
     haveS98 = 0;
     free(s98Text);
     s98Text = NULL;
+    /* One name in every family folder (record 36 section 3.4): on 98-me\
+     * it is the 9x INF, stor98w9.inf up to 3.3.0.0. */
     s98InfName = "stor98.inf";
-    if (!envNow.Nt) {
-        join(path, sizeof(path), pkgDir, "stor98w9.inf");
-        if (file_exists(path, NULL)) {
-            s98InfName = "stor98w9.inf";
-        }
-    }
-    join(path, sizeof(path), pkgDir, s98InfName);
+    inst_copy(pkgRel[INST_INF_S98], inst_pkg_rel(pkgFam, s98InfName),
+              sizeof(pkgRel[0]));
+    join(path, sizeof(path), pkgDir, pkgRel[INST_INF_S98]);
     if (!file_exists(path, NULL)) {
         return 1;
     }
@@ -2268,7 +2351,7 @@ static int s98_check_package(void)
         }
         if (!cls) {
             return refuse("the bundled Stor98 INF for 98 SE and ME "
-                          "(stor98w9.inf) is missing or has no class "
+                          "(98-me\\stor98\\stor98.inf) has no class "
                           "match: ", path);
         }
     }
@@ -2287,12 +2370,21 @@ static int s98_check_package(void)
             return refuse("a file stor98.inf names lies outside the package: ",
                           name);
         }
+        /* A file of another family's half (stor98.mpd in an x86 INF that
+         * still names it on NT, record 36 section 3.3) is not required. */
+        if (inst_pkg_rel(pkgFam, name) == NULL &&
+            (inst_pkg_rel(INST_FAM_9X, name) != NULL ||
+             inst_pkg_rel(INST_FAM_NT86, name) != NULL ||
+             inst_pkg_rel(INST_FAM_NT64, name) != NULL)) {
+            continue;
+        }
         n = strlen(name);
         if (!file_exists(path, &size) || size == 0) {
             infText[INST_INF_S98] = NULL;
             return refuse("a file stor98.inf names is missing or empty: ",
                           path);
         }
+        pkg_mark(name);
         if (n > 4 && inst_eq(name + n - 4, ".sys")) {
             buf = read_file(path, &size);
             if (buf == NULL ||
@@ -2361,36 +2453,66 @@ static int check_package(void)
     }
     inst_copy(root, self, sizeof(root));
     root[n - t] = '\0';
+    /* The download by Windows family (record 36 section 6.3): 98-me\ on
+     * 98 SE and ME, nt-x86\ or nt-x64\ on NT. */
+    pkgFam = inst_family(envNow.Nt, INST_MY_ARCH);
     if (opts.Dir[0] == '\0') {
-        /* The window takes no /dir: its own architecture's release- (or,
-         * with /debug, debug-) directory (record 26 section 2). */
-        inst_copy(opts.Dir, opts.Debug ? "debug" INST_DIR_SUFFIX
-                                       : INST_DEFAULT_DIR, sizeof(opts.Dir));
+        /* The window takes no /dir: its own system's family folder. */
+        inst_copy(opts.Dir, inst_family_dir(pkgFam), sizeof(opts.Dir));
     }
     if (strchr(opts.Dir, '\\') != NULL || strchr(opts.Dir, '/') != NULL ||
         strchr(opts.Dir, ':') != NULL || strstr(opts.Dir, "..") != NULL) {
         return refuse("/dir names a directory of the package: ", opts.Dir);
     }
-    n = strlen(opts.Dir);
-    if (n < 4 || !inst_eq(opts.Dir + n - 4, INST_DIR_SUFFIX)) {
-        out("%s is the %s build; %s is not its architecture's directory.\n",
+    if (inst_family_of_dir(opts.Dir) < 0) {
+        if (inst_starts(opts.Dir, "release-") ||
+            inst_starts(opts.Dir, "debug-")) {
+            out("This package has no %s: it is laid out by Windows family "
+                "(98-me, nt-x86, nt-x64).\n", opts.Dir);
+        }
+        return refuse("not a folder of the package: ", opts.Dir);
+    }
+    if (inst_family_of_dir(opts.Dir) != pkgFam) {
+        out("%s is the %s build on %s; %s is not its folder (%s is).\n",
             INST_MY_NAME, INST_MY_ARCH == INST_ARCH_X86 ? "32-bit" : "x64",
-            opts.Dir);
-        return refuse("mixing architectures. Run INSTALL.BAT, which picks "
-                      "the right program and directory.", NULL);
+            envNow.Nt ? "Windows NT" : "Windows 98 SE or ME", opts.Dir,
+            inst_family_dir(pkgFam));
+        return refuse("mixing systems or architectures. Run INSTALL.BAT, "
+                      "which picks the right program and folder.", NULL);
     }
-    if (inst_starts(opts.Dir, "release-")) {
-        wantFlavour = "RELEASE";
-    } else if (inst_starts(opts.Dir, "debug-")) {
-        wantFlavour = "DEBUG";
-        out("The debug- directory is for troubleshooting only; install it "
-            "only if asked.\n");
-    } else {
-        return refuse("not a flavour directory of the package: ", opts.Dir);
-    }
+    wantFlavour = "RELEASE";
     join(pkgDir, sizeof(pkgDir), root, opts.Dir);
+    if (instPkgFileCount > INST_PKG_MAX) {
+        return refuse("the package table is larger than the tool's.", NULL);
+    }
+    /* The present set before any check: a file there now is required at
+     * every later walk (package_files), whatever happens between. */
+    for (i = 0; i < instPkgFileCount; i++) {
+        const char *pr0 = instPkgFiles[i].Fam[pkgFam];
+        pkgHave[i] = 0;
+        if (pr0 != NULL) {
+            join(path, sizeof(path), pkgDir, pr0);
+            pkgHave[i] = (unsigned char)file_exists(path, NULL);
+        }
+    }
     out("Package:   %s\n", root);
     out("Directory: %s\n\n", pkgDir);
+    {
+        /* Not this release's layout: a 3.3.0.0 flavour directory's files
+         * copied into a family folder (record 36 section 6.4). */
+        static const char *const foreign[] = {
+            "stor98w9.inf", "stor98\\stor98w9.inf", "xhcicmf.inf",
+            "cm\\xhcicmf.inf", "nt"
+        };
+        size_t f;
+        for (f = 0; f < sizeof(foreign) / sizeof(foreign[0]); f++) {
+            join(path, sizeof(path), pkgDir, foreign[f]);
+            if (GetFileAttributesA(path) != 0xFFFFFFFFUL) {
+                return refuse("this folder is not this release's layout: ",
+                              path);
+            }
+        }
+    }
     if (!s98_check_package() || !vxd_check_package(&vsdDesc) ||
         !vxd_check_package(&pfwDesc) || !pfwsys_check_package()) {
         return 0;
@@ -2398,38 +2520,51 @@ static int check_package(void)
 
     cmFiles = 0;
     for (k = 0; k < INST_INF_COUNT; k++) {
+        const char *pr;
         inst_copy(infRel[k], k == INST_INF_S98 ? s98InfName : instInfFile[k],
                   sizeof(infRel[k]));
+        if (k == INST_INF_CMF) {
+            /* The local copy's place: nt\ for x86, the copy's root for
+             * x64 (inst_cmf_rel); the download's cm\xhcicmf.inx. */
+            inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
+                      sizeof(infRel[k]));
+        }
         if (k == INST_INF_S98) {
             /* Checked by s98_check_package; in the run only when ticked. */
             infText[k] = NULL;
             continue;
         }
-        if (k == INST_INF_CMF) {
-            /* nt\ in the x86 package, the flavour directory in the x64
-             * one (inst_cmf_rel). */
-            join(path, sizeof(path), pkgDir, inst_cmf_rel(INST_MY_ARCH));
-            if (file_exists(path, NULL)) {
-                inst_copy(infRel[k], inst_cmf_rel(INST_MY_ARCH),
-                          sizeof(infRel[k]));
-            }
-            if (!envNow.Nt) {
-                /* 98 and ME never read the NT filter INF. */
-                infText[k] = NULL;
+        if (k == INST_INF_NET && !INST_TBNET_WIRED) {
+            infText[k] = NULL;
+            continue;
+        }
+        pr = inst_pkg_rel(pkgFam, infRel[k]);
+        inst_copy(pkgRel[k], pr != NULL ? pr : "", sizeof(pkgRel[k]));
+        if (k == INST_INF_CMF && !envNow.Nt) {
+            /* 98 and ME never read the NT filter INF; 98-me\ has none. */
+            infText[k] = NULL;
+            continue;
+        }
+        if (pr == NULL) {
+            infText[k] = NULL;
+            if (k >= INST_INF_CM) {
                 continue;
             }
+            return refuse("this family folder has no place for ", infRel[k]);
         }
-        join(path, sizeof(path), pkgDir, infRel[k]);
+        join(path, sizeof(path), pkgDir, pr);
         infText[k] = read_file(path, NULL);
-        if (k >= INST_INF_CM) {
+        if (k == INST_INF_CM || k == INST_INF_CMF) {
             cmFiles += infText[k] != NULL;
+        } else if (k == INST_INF_NET) {
+            /* Counted apart from the connection manager's (below). */
         } else if (infText[k] == NULL) {
             return refuse("a file of the package is missing or unreadable: ",
                           path);
         }
     }
-    join(path, sizeof(path), pkgDir, "xhcicm.sys");
-    cmFiles += file_exists(path, NULL);
+    cmFiles += pkg_path("xhcicm.sys", path, sizeof(path)) &&
+               file_exists(path, NULL);
     if (!envNow.Nt && cmFiles == 2) {
         cmFiles = 3;
     }
@@ -2443,9 +2578,12 @@ static int check_package(void)
         /* Record 23 D20 (a): the x64 connection manager only with its
          * catalog (owner, 2026-10-22). */
         const char *why;
-        join(path, sizeof(path), pkgDir, "xhcicm.cat");
-        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm,
-                                  file_exists(path, NULL));
+        int cat = pkg_path("xhcicm.cat", path, sizeof(path)) &&
+                  file_exists(path, NULL);
+        if (cat) {
+            pkg_mark("xhcicm.cat");
+        }
+        why = inst_cm_cat_refusal(INST_MY_ARCH, haveCm, cat);
         if (why != NULL) {
             return refuse(why, " Nothing was changed.");
         }
@@ -2453,6 +2591,40 @@ static int check_package(void)
     if (!haveCm) {
         out("This package carries no Thunderbolt or USB4 driver "
             "(xhcicm.sys); going on without it.\n\n");
+    }
+    {
+        /* Thunderbolt networking (record 35 section 9.5): cm\tbnet\'s INF
+         * and the images this system installs from it (xhcinet.sys; on NT
+         * xhcinet6.sys too; on x64 its catalog), all or none. */
+        int netFiles = infText[INST_INF_NET] != NULL;
+        int netWant = 2 + (envNow.Nt ? 1 : 0) +
+                      (INST_MY_ARCH == INST_ARCH_AMD64 ? 1 : 0);
+        netFiles += pkg_path("xhcinet.sys", path, sizeof(path)) &&
+                    file_exists(path, NULL);
+        if (envNow.Nt) {
+            netFiles += pkg_path("xhcinet6.sys", path, sizeof(path)) &&
+                        file_exists(path, NULL);
+        }
+        if (INST_MY_ARCH == INST_ARCH_AMD64 &&
+            pkg_path("xhcinet.cat", path, sizeof(path)) &&
+            file_exists(path, NULL)) {
+            netFiles++;
+            pkg_mark("xhcinet.cat");
+        }
+        if (netFiles != 0 && netFiles != netWant) {
+            return refuse("the package holds part of Thunderbolt "
+                          "networking (cm\\tbnet\\xhcinet.inf and the images "
+                          "it names go together).", NULL);
+        }
+        haveNet = INST_TBNET_WIRED && haveCm && netFiles == netWant;
+        netText = haveNet ? infText[INST_INF_NET] : NULL;
+        if (!haveNet) {
+            infText[INST_INF_NET] = NULL;
+        }
+        if (opts.TbNet && !haveNet) {
+            return refuse("/tbnet: this package carries no Thunderbolt "
+                          "networking driver for this system.", NULL);
+        }
     }
     if (!inst_ver_parse(XHCIINST_VERSION, pkgVersion)) {
         return refuse("the tool's own version does not parse.", NULL);
@@ -2481,10 +2653,21 @@ static int check_package(void)
                 return refuse("a file the INF names lies outside the package: ",
                               name);
             }
+            /* A file the INF names for another family's sections, which
+             * this family folder does not carry (xhcihlpr.sys on 98 SE and
+             * ME, record 36 section 3.1). */
+            if (inst_pkg_rel(INST_FAM_9X, name) == NULL &&
+                inst_pkg_rel(INST_FAM_NT86, name) == NULL &&
+                inst_pkg_rel(INST_FAM_NT64, name) == NULL) {
+                /* Not a file of the table at all: required as before. */
+            } else if (inst_pkg_rel(pkgFam, name) == NULL) {
+                continue;
+            }
             if (!file_exists(path, &size) || size == 0) {
                 return refuse("a file the INF names is missing or empty: ",
                               path);
             }
+            pkg_mark(name);
             n = strlen(name);
             if (n > 4 && inst_eq(name + n - 4, ".sys")) {
                 buf = read_file(path, &size);
@@ -2524,6 +2707,14 @@ static int check_package(void)
             }
         }
     }
+    /* Present now too: added to the set, never taken out of it. */
+    for (i = 0; i < instPkgFileCount; i++) {
+        const char *pr = instPkgFiles[i].Fam[pkgFam];
+        if (pr != NULL && !pkgHave[i]) {
+            join(path, sizeof(path), pkgDir, pr);
+            pkgHave[i] = (unsigned char)file_exists(path, NULL);
+        }
+    }
     return 1;
 }
 
@@ -2555,7 +2746,12 @@ static int value_target(const DEVREC *d, int v)
         return 0;
     }
     if (!envNow.Nt) {
-        return inst_eq(d->Service, instInfService[inf]);
+        /* Revision 51 of record 23 (task 45.54): a controller with no
+         * driver that this run installs takes the machine-wide values too,
+         * as on NT; until then only one already bound did, and a first
+         * install listed no row but the greyed ones. */
+        return inst_value_target_9x(inst_eq(d->Service, instInfService[inf]),
+                                    d->Action);
     }
     return d->Action == INST_ACT_INSTALL || d->Action == INST_ACT_UPDATE ||
            d->Action == INST_ACT_CURRENT || d->Action == INST_ACT_NEWER;
@@ -2856,6 +3052,8 @@ int inst_eng_rows(INST_ROW *rows, int cap)
         cmRow = instValues[v].Inf == INST_INF_CM &&
                 (instValues[v].Apply == INST_APPLY_CM ||
                  instValues[v].Apply == INST_APPLY_9X_CM ||
+                 instValues[v].Apply == INST_APPLY_NT5_CM ||
+                 instValues[v].Apply == INST_APPLY_NT_CM ||
                  instValues[v].Apply == INST_APPLY_MARK);
         asked = inst_value_applies(v, &envNow) ||
                 (cmRow && !greyed && instValues[v].Asked != 0) ||
@@ -3021,6 +3219,9 @@ static int value_needs_write(int v)
     if (!answerSet[v] ||
         (envNow.Nt && (instValues[v].Apply == INST_APPLY_9X_XHCI ||
                        instValues[v].Apply == INST_APPLY_9X_CM)) ||
+        (instValues[v].Apply == INST_APPLY_NT5_CM &&
+         !(envNow.Nt && envNow.Major == 5)) ||
+        (instValues[v].Apply == INST_APPLY_NT_CM && !envNow.Nt) ||
         value_inf(v) == NULL) {
         return 0;
     }
@@ -3079,6 +3280,13 @@ static void write_values(void)
             }
         }
         if (envNow.Nt && instValues[v].Apply == INST_APPLY_9X_CM) {
+            continue;
+        }
+        if (instValues[v].Apply == INST_APPLY_NT5_CM &&
+            !(envNow.Nt && envNow.Major == 5)) {
+            continue;
+        }
+        if (instValues[v].Apply == INST_APPLY_NT_CM && !envNow.Nt) {
             continue;
         }
         if (!value_needs_write(v)) {
@@ -3969,11 +4177,13 @@ static int choose_dir(void)
     char from[INST_PATH_CHARS];
     char moveFrom[INST_PATH_CHARS];
     char text[2048];
+    char reason[512];
     const char *why;
     const char *defWhy;
     int toolHere;
     int setupHere;
     int k;
+    size_t n;
 
     toolDir[0] = '\0';
     moveFrom[0] = '\0';
@@ -4075,8 +4285,13 @@ static int choose_dir(void)
                 inst_copy(toolDir, checked, sizeof(toolDir));
                 break;
             }
-            _snprintf(text, sizeof(text) - 1, "  Not that one: %s.\n  Type "
-                      "another%s: ", why,
+            /* The reason shaped to the width here, as a value question
+             * is (inst_value_question_mw): the 98 SE and ME one is longer
+             * than a line. */
+            _snprintf(reason, sizeof(reason) - 1, "  Not that one: %s.", why);
+            reason[sizeof(reason) - 1] = '\0';
+            n = inst_wrap_text(reason, text, sizeof(text));
+            _snprintf(text + n, sizeof(text) - 1 - n, "\n  Type another%s: ",
                       defWhy == NULL ? ", or Enter for the one above" : "");
             text[sizeof(text) - 1] = '\0';
         }
@@ -5063,102 +5278,108 @@ typedef int (*PKG_EACH)(const char *rel, void *ctx);
 
 static int package_files(PKG_EACH each, void *ctx)
 {
-    char pattern[INST_PATH_CHARS];
-    char rel[INST_PATH_CHARS];
-    WIN32_FIND_DATAA fd;
-    HANDLE h;
-    int pass;
+    char path[INST_PATH_CHARS];
+    const char *pr;
+    const char *base;
+    const char *rel;
+    int i;
+    int k;
+    int need;
+    DWORD a;
 
-    for (pass = 0; pass < 2; pass++) {
-        if (pass == 1 && !envNow.Nt) {
-            break;
+    /* The folder the package check validated must still be there: an
+     * absent one would read as a package of no files, and on 98 SE and ME
+     * an empty copy would replace the install directory's. */
+    a = GetFileAttributesA(pkgDir);
+    if (a == 0xFFFFFFFFUL || !(a & FILE_ATTRIBUTE_DIRECTORY)) {
+        out("%s can no longer be read (error %lu): the package is gone.\n",
+            pkgDir, (unsigned long)GetLastError());
+        return 0;
+    }
+    for (i = 0; i < instPkgFileCount; i++) {
+        rel = instPkgFiles[i].Local;
+        pr = instPkgFiles[i].Fam[pkgFam];
+        if (pr == NULL) {
+            continue;
         }
-        join(pattern, sizeof(pattern), pkgDir, pass == 0 ? "*.*" : "nt\\*.*");
-        h = FindFirstFileA(pattern, &fd);
-        if (h == INVALID_HANDLE_VALUE) {
-            /* Only an absent nt\ is "nothing there"; any other failure,
-             * and any failure of the flavour directory, is an error. */
+        join(path, sizeof(path), pkgDir, pr);
+        if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
             DWORD e = GetLastError();
-            /* nt\ may be absent only when the validated package has no
-             * INF there (the filter INF's place, 39-0.4). */
-            if (pass == 1 &&
-                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) &&
-                !(infText[INST_INF_CMF] != NULL &&
-                  inst_starts(infRel[INST_INF_CMF], "nt\\"))) {
+            /* A file present when the package check passed, an INF it
+             * loaded or the controller's image must still be there. */
+            need = (i < INST_PKG_MAX && pkgHave[i]) ||
+                   inst_eq(rel, "xhci98.sys");
+            for (k = 0; k < INST_INF_COUNT; k++) {
+                if (infText[k] != NULL && inst_eq(rel, infRel[k])) {
+                    need = 1;
+                }
+            }
+            /* Otherwise only an absent file is "not in this package"; any
+             * other failure is an error. */
+            if (!need &&
+                (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND)) {
                 continue;
             }
-            out("%s could not be listed (error %lu).\n", pattern,
+            out("%s could not be read (error %lu).\n", path,
                 (unsigned long)e);
             return 0;
         }
-        do {
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-                continue;
+        base = strrchr(rel, '\\');
+        base = base != NULL ? base + 1 : rel;
+        /* 98 and ME never get an NT filter file (39-0.4); 98-me\ has none,
+         * and the table gives them no nt\ name. */
+        if (!envNow.Nt && (inst_eq(base, "xhcicmf.inf") ||
+                           inst_starts(rel, "nt\\"))) {
+            continue;
+        }
+        /* The bundled Stor98 driver goes into the copy only when ticked
+         * (record 26 section 6.3): a copy of its INF on DevicePath, or
+         * in the store, would install it unasked. */
+        if (inst_bundled_file(base) &&
+            (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
+            if (s98Include) {
+                /* Held for the whole run: a later reading that lifts
+                 * the hold finds no Stor98 in the copy. */
+                s98HoldRun = 1;
             }
-            if (!envNow.Nt && inst_eq(fd.cFileName, "xhcicmf.inf")) {
-                continue;
-            }
-            /* The 98 SE and ME Stor98 INF keeps the class match: never in
-             * an NT copy. */
-            if (envNow.Nt && inst_eq(fd.cFileName, "stor98w9.inf")) {
-                continue;
-            }
-            /* The bundled Stor98 driver goes into the copy only when ticked
-             * (record 26 section 6.3): a copy of its INF on DevicePath, or
-             * in the store, would install it unasked. */
-            if (inst_bundled_file(fd.cFileName) &&
-                (!s98Include || s98Share == INST_S98_SHARE_HOLD)) {
-                if (s98Include) {
-                    /* Held for the whole run: a later reading that lifts
-                     * the hold finds no Stor98 in the copy. */
-                    s98HoldRun = 1;
-                }
-                continue;
-            }
-            /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
-             * the copy is on DevicePath, where its INF would install it
-             * unasked; on NT it is simply not staged. */
-            if (!envNow.Nt && !uasInclude &&
-                (inst_eq(fd.cFileName, "xhciuas.inf") ||
-                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
-                continue;
-            }
-            /* The connection manager alone on 98 SE and ME (record 26
-             * section 5.3.1 case 2): no wizard may offer the USB drivers
-             * from the copy on DevicePath. */
-            if (!envNow.Nt && !usbInclude &&
-                (inst_eq(fd.cFileName, "xhci98.inf") ||
-                 inst_eq(fd.cFileName, "xhci98.sys") ||
-                 inst_eq(fd.cFileName, "xhciuas.inf") ||
-                 inst_eq(fd.cFileName, "xhciuas.sys"))) {
-                continue;
-            }
-            /* A No to the Thunderbolt question: none of its files in the
-             * copy, so no wizard and no store offers them (section 8.5);
-             * the x64 package's two catalogs go with their INFs (design
-             * record 19 section 3a). The other catalogs ride along with
-             * the rest of the flavour directory, beside their INFs. */
-            if (!tbInclude && !tbTagAll &&
-                (inst_eq(fd.cFileName, "xhcicm.inf") ||
-                               inst_eq(fd.cFileName, "xhcicmf.inf") ||
-                               inst_eq(fd.cFileName, "xhcicm.sys") ||
-                               inst_eq(fd.cFileName, "xhcicm.cat") ||
-                               inst_eq(fd.cFileName, "xhcicmf.cat"))) {
-                continue;
-            }
-            inst_copy(rel, pass == 0 ? "" : "nt\\", sizeof(rel));
-            strncat(rel, fd.cFileName, sizeof(rel) - strlen(rel) - 1);
-            if (!each(rel, ctx)) {
-                FindClose(h);
-                return 0;
-            }
-        } while (FindNextFileA(h, &fd));
-        if (GetLastError() != ERROR_NO_MORE_FILES) {
-            out("%s could not be listed to its end.\n", pattern);
-            FindClose(h);
+            continue;
+        }
+        /* The UAS driver left out (owner, 2026-10-19): on 98 SE and ME
+         * the copy is on DevicePath, where its INF would install it
+         * unasked; on NT it is simply not staged. */
+        if (!envNow.Nt && !uasInclude &&
+            (inst_eq(base, "xhciuas.inf") || inst_eq(base, "xhciuas.sys"))) {
+            continue;
+        }
+        /* The connection manager alone on 98 SE and ME (record 26
+         * section 5.3.1 case 2): no wizard may offer the USB drivers
+         * from the copy on DevicePath. */
+        if (!envNow.Nt && !usbInclude &&
+            (inst_eq(base, "xhci98.inf") || inst_eq(base, "xhci98.sys") ||
+             inst_eq(base, "xhciuas.inf") || inst_eq(base, "xhciuas.sys"))) {
+            continue;
+        }
+        /* A No to the Thunderbolt question: none of its files in the
+         * copy, so no wizard and no store offers them (section 8.5);
+         * the x64 package's two catalogs go with their INFs (design
+         * record 19 section 3a). The other catalogs ride along with
+         * the rest of the folder, beside their INFs. */
+        if (!tbInclude && !tbTagAll &&
+            (inst_eq(base, "xhcicm.inf") || inst_eq(base, "xhcicmf.inf") ||
+             inst_eq(base, "xhcicm.sys") || inst_eq(base, "xhcicm.cat") ||
+             inst_eq(base, "xhcicmf.cat"))) {
+            continue;
+        }
+        /* Thunderbolt networking only when in the run (record 35 section
+         * 9.5): a copy of its INF on DevicePath or in the store would
+         * install it unasked. */
+        if ((!netInclude || groupVerdict[INST_GROUP_NET] != INST_GROUP_OK) &&
+            !tbTagAll && inst_starts(base, "xhcinet")) {
+            continue;
+        }
+        if (!each(rel, ctx)) {
             return 0;
         }
-        FindClose(h);
     }
     /* 98 SE: the USB storage drivers' seven, from the download's NUSB33\
      * folder, once their files are in place (record 26 section 6.5.4). */
@@ -6525,6 +6746,9 @@ static int stage_nt(void)
         if (k == INST_INF_CM) {
             tbStaged = 1;
         }
+        if (k == INST_INF_NET) {
+            netStaged = 1;
+        }
         if (k == INST_INF_S98) {
             inst_copy(s98StagedInf, dest, sizeof(s98StagedInf));
         }
@@ -7103,6 +7327,12 @@ static int install_inf(int inf, int controllers)
             continue;
         }
         inst_copy(hwid, first_hw(d), sizeof(hwid));
+        if (inf == INST_INF_CM || inf == INST_INF_CMF) {
+            /* A Thunderbolt 1 NHI and its bridges share their hardware
+             * ids: the class form the INF binds reaches one role only. */
+            (void)inst_cm_tb1_classid(first_hw(d), inf == INST_INF_CM, hwid,
+                                      sizeof(hwid));
+        }
         if (!hwid_clear(hwid, inf)) {
             d->Done = 1;
             note_changed(d, 0);
@@ -8598,6 +8828,7 @@ static int run_install_nt(void)
     }
     write_values();
     s98_write_values();
+    net_write();
     /* Design record 32 section 11: XHCIPFW.SYS on 2000 and the 32-bit Vista
      * and 7; on 8 to 10 an earlier one of this installer's removed. */
     pfw_run(pfw_mode(0));
@@ -8663,6 +8894,8 @@ stopped:
  * appended when it is not NULL. No other entry is touched, and the value
  * keeps its type. */
 static int devicepath_write(const char *addDir);
+static int dpLeftOff;       /* the last write left addDir off DevicePath,
+                               past the system's limit with it      */
 
 /* devicepath_write, and on 98 SE whether this run left DevicePath without
  * the install directory: every way out of the run then reads the INF
@@ -8672,7 +8905,7 @@ static int devicepath_update(const char *addDir)
     int r = devicepath_write(addDir);
 
     if (r) {
-        storDpOff = addDir == NULL && stor_98se();
+        storDpOff = (addDir == NULL || dpLeftOff) && stor_98se();
     }
     return r;
 }
@@ -8736,9 +8969,29 @@ static int devicepath_write(const char *addDir)
         return 0;
     }
     logonly("DevicePath was: %s\n", list);
+    dpLeftOff = 0;
     if (!devicepath_compose(list, rootDir, addDir, newList, sizeof(newList))) {
         out("DevicePath is too long to change.\n");
         return 0;
+    }
+    /* Record 26 section 6.7.12's limit, as the other USB drivers' staging
+     * keeps it: the entry is left off and the folder named for the
+     * wizard, the withdrawals still written. The step it leaves is the
+     * install's to say (run_install_9x): its later withdrawal of an
+     * earlier run's staging may make room, and the entry is tried again
+     * then. */
+    if (addDir != NULL && !envNow.Nt &&
+        !inst_9x_devicepath_room(newList, dp_9x_max())) {
+        out("DevicePath would be %d characters with %s on it, more than "
+            "%d, past which %s: %s is left off it; point the wizard at it "
+            "instead.\n", (int)strlen(newList), addDir, dp_9x_max(),
+            inst_9x_devicepath_harm(envNow.Minor == 90), addDir);
+        if (!devicepath_compose(list, rootDir, NULL, newList,
+                                sizeof(newList))) {
+            out("DevicePath is too long to change.\n");
+            return 0;
+        }
+        dpLeftOff = 1;
     }
     if (strcmp(newList, list) == 0) {
         out("DevicePath needs no change.\n");
@@ -9017,8 +9270,8 @@ static int steps_9x(const char *dir)
         }
     }
     /* The Thunderbolt half only when this run copied its INF (section 8.5). */
-    out("\nThen run INSTALL.BAT again, to check the result and set the "
-        "driver's options.\n");
+    out("\nThen run INSTALL.BAT again, to check the result; the driver's "
+        "options can be\nchanged there too.\n");
     if (usbInclude && uasInclude) {
         out("A UAS disk plugged in later opens Windows' New Hardware wizard "
             "(again at\nanother port); Next until Finish installs it, no "
@@ -9178,8 +9431,8 @@ static int helper_job(int job, const DEVREC *d, const char *inf, int force,
     if (owner > 65535UL) {
         owner = 0;
     }
-    if (!inst_di_jobfile(jobText, sizeof(jobText), job, helperResult, owner,
-                         id, inf, force, 1) ||
+    if (!inst_di_jobfile_ex(jobText, sizeof(jobText), job, helperResult,
+                            owner, id, inf, force, 1, helperNoCopy) ||
         !inst_di_cmdline(tail, sizeof(tail), XHCIINST_VERSION,
                          helperJobFile)) {
         logonly("helper: the job cannot be written (%s %s, result %s, job "
@@ -9444,14 +9697,79 @@ static int wizard_open_9x(char *title, size_t cap)
     return r;
 }
 
-/* Whether the gate has asked in this run: it asks once, and afterwards
- * only when it sees a wizard open or cannot look (W9XGATE.1). */
+/* Whether the gate has asked in this run: on a system not read as English
+ * it asks once, and afterwards only when it sees a wizard open or cannot
+ * look (W9XGATE.1); on an English one it looks from the first gate (task
+ * 45.32). */
 static int gateAsked;
 
+/* The languages of KERNEL32's version resource (task 45.32): Lang the
+ * first one's, Other set when another primary language is there too. */
+typedef struct _LANG_LOOK {
+    int Lang;
+    int Other;
+} LANG_LOOK;
+
+static BOOL CALLBACK version_lang(HMODULE m, LPCSTR type, LPCSTR name,
+                                  WORD lang, LPARAM lp)
+{
+    LANG_LOOK *s = (LANG_LOOK *)lp;
+
+    (void)m;
+    (void)type;
+    (void)name;
+    if (s->Lang < 0) {
+        s->Lang = (int)lang;
+    } else if ((lang & 0x3FF) != (s->Lang & 0x3FF)) {
+        s->Other = 1;
+    }
+    return TRUE;
+}
+
+/* Whether the gate's look knows this system's wizard titles (task 45.32,
+ * record 27 section 6): the system's default language and the language
+ * KERNEL32's own version resource is in, both read through KERNEL32 (the
+ * console tool's imports stay KERNEL32 and ADVAPI32). The resource's is
+ * the language Windows was built in, which Regional Settings leave; the
+ * default language is the one Setup set, which they may move. Both
+ * English: 1; either another: 0; either unread: -1. Read once in a run. */
+static int gateEnglish = -2;
+
+static int system_english_9x(void)
+{
+    HMODULE k32;
+    LANG_LOOK s;
+    LANGID sys;
+
+    if (gateEnglish != -2) {
+        return gateEnglish;
+    }
+    s.Lang = -1;
+    s.Other = 0;
+    sys = GetSystemDefaultLangID();
+    k32 = GetModuleHandleA("kernel32.dll");
+    if (k32 != NULL) {
+        EnumResourceLanguagesA(k32, (LPCSTR)RT_VERSION, MAKEINTRESOURCEA(1),
+                               (ENUMRESLANGPROC)version_lang, (LPARAM)&s);
+    }
+    if (s.Other) {
+        s.Lang = 0;     /* two languages: not read as one */
+    }
+    gateEnglish = inst_gate_english(sys == 0 ? -1 : (int)sys, s.Lang);
+    logonly("gate: system language %04X, KERNEL32's version resource "
+            "%s%04X: %s\n", (unsigned)sys, s.Lang < 0 ? "unread " : "",
+            (unsigned)(s.Lang < 0 ? 0 : s.Lang),
+            gateEnglish > 0 ? "English, the first gate looks" :
+            gateEnglish == 0 ? "not English, the first gate asks" :
+            "unread, the first gate asks");
+    return gateEnglish;
+}
+
 /* The gate before a pass (record 27 section 6): the tree settled, then
- * the user's word that no hardware wizard is open - asked the first time,
- * and afterwards only when a wizard's window is found open or the look
- * cannot be made. 1 go on, 0 stop. */
+ * the user's word that no hardware wizard is open - asked when a wizard's
+ * window is found open or the look cannot be made, and at the first gate
+ * of a run also on a system not read as English, where the look knows no
+ * title (task 45.32). 1 go on, 0 stop. */
 static int gate_9x(int first)
 {
     char line[16];
@@ -9474,7 +9792,7 @@ static int gate_9x(int first)
     }
     w = 1;
     title[0] = '\0';
-    if (gateAsked) {
+    if (gateAsked || system_english_9x() == 1) {
         w = wizard_open_9x(title, sizeof(title));
         if (w > 0) {
             out("A hardware wizard is open (\"%s\").\n", title);
@@ -9482,7 +9800,7 @@ static int gate_9x(int first)
             logonly("gate: the open windows could not be read\n");
         }
     }
-    if (!inst_gate_ask(gateAsked, w)) {
+    if (!inst_gate_ask(gateAsked, w, system_english_9x())) {
         logonly("gate: no hardware wizard open\n");
         return go_on();
     }
@@ -9559,6 +9877,11 @@ static int helper_install(DEVREC *d)
     /* Every helper install is bracketed by the INF listings (record 26
      * section 6.3): a copy made in it is that device's step. */
     s98_inf_sync();
+    helperNoCopy = is_controller(d) && helperCtlCopied[d->Inf];
+    if (helperNoCopy) {
+        logonly("helper: nocopy: a controller's job of this run copied "
+                "%s's files\n", infRel[d->Inf]);
+    }
     v = helper_job(INST_DI_INSTALL, d, inf, force, &r);
     if (d->Inf != INST_INF_S98 && helperState >= 0 &&
         inst_absent_retry(inst_di_outcome(INST_DI_INSTALL, v), parentJobs, 0)) {
@@ -9585,6 +9908,11 @@ static int helper_install(DEVREC *d)
         s98_inf_after(infPath, 0);
     }
     out9x = inst_di_outcome(INST_DI_INSTALL, v);
+    helperNoCopy = 0;
+    if (is_controller(d) && (out9x == INST_DI_OUT_OK ||
+                             out9x == INST_DI_OUT_RESTART)) {
+        helperCtlCopied[d->Inf] = 1;
+    }
     helperLastOut = out9x;
     if (inst_settle_after_job(inst_parent_kind(d->Id, is_controller(d)),
                               out9x, 1)) {
@@ -9782,6 +10110,7 @@ static void helper_installs(void)
 
     if (!pass_any(INST_INF_XHCI, -1) && !pass_any(INST_INF_UAS, -1) &&
         !pass_any(INST_INF_CM, -1) && !pass_any(INST_INF_S98, -1) &&
+        !pass_any(INST_INF_NET, -1) &&
         !(storCopyOk && (stor_any(INST_STOR_KIND_BULK) ||
                          stor_any(INST_STOR_KIND_UNIT)))) {
         return;
@@ -9936,53 +10265,71 @@ left:
  * it and asks for the swap in WININIT.INI's [rename] section, done at the
  * next start ("target=source", read on the 98 SE update leg of
  * 2026-10-19: xhci98.sys=...\xhci98.tmp). 1 when such an entry renames a
- * file of version `want` over `bin`. */
+ * file of version `want` over `bin`. The section is read from the file
+ * (wininit_text), as for the VxD's line: 98 SE's and ME's profile routines
+ * did not give this installer's own line back. */
+typedef struct _WIPEND {
+    const char *Bin;
+    const char *BinS;
+    const INST_U32 *Want;
+    int Hit;
+} WIPEND;
+
+static int wininit_pending_line(void *ctx, const char *key, const char *value)
+{
+    WIPEND *w = (WIPEND *)ctx;
+    char st[INST_PATH_CHARS];
+    INST_U32 v[4];
+    DWORD n;
+
+    if (key[0] == '\0') {
+        return 1;
+    }
+    n = GetShortPathNameA(key, st, sizeof(st));
+    if (n == 0 || n >= sizeof(st)) {
+        inst_copy(st, key, sizeof(st));
+    }
+    if ((inst_eq(key, w->Bin) || inst_eq(st, w->BinS)) &&
+        file_version(value, v) > 0 && inst_ver_cmp(v, w->Want) == 0) {
+        w->Hit = 1;
+        return 0;
+    }
+    return 1;
+}
+
 static int wininit_pending(const char *bin, const INST_U32 *want)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
-    char *sec;
-    char *p;
     char sb[INST_PATH_CHARS];
-    char st[INST_PATH_CHARS];
-    INST_U32 v[4];
+    char *text;
+    WIPEND w;
     DWORD n;
-    int hit = 0;
+    int gone;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return 0;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
-    sec = (char *)calloc(1, 32768);
-    if (sec == NULL) {
-        return 0;
-    }
-    n = GetPrivateProfileSectionA("rename", sec, 32766, ini);
     n = GetShortPathNameA(bin, sb, sizeof(sb));
     if (n == 0 || n >= sizeof(sb)) {
         inst_copy(sb, bin, sizeof(sb));
     }
-    for (p = sec; *p != '\0' && !hit; p += strlen(p) + 1) {
-        char *eq = strchr(p, '=');
-        if (eq == NULL || eq == p) {
-            continue;
+    w.Bin = bin;
+    w.BinS = sb;
+    w.Want = want;
+    w.Hit = 0;
+    text = wininit_text(ini, &gone);
+    if (text != NULL) {
+        if (!inst_rename_scan(text, wininit_pending_line, &w) && !w.Hit) {
+            logonly("WININIT.INI: a line too long to read\n");
         }
-        *eq = '\0';
-        n = GetShortPathNameA(p, st, sizeof(st));
-        if (n == 0 || n >= sizeof(st)) {
-            inst_copy(st, p, sizeof(st));
-        }
-        if ((inst_eq(p, bin) || inst_eq(st, sb)) &&
-            file_version(eq + 1, v) > 0 && inst_ver_cmp(v, want) == 0) {
-            hit = 1;
-        }
-        *eq = '=';
+        free(text);
     }
-    free(sec);
     logonly("WININIT.INI: %s %s\n", bin,
-            hit ? "is replaced by this package's at the next start"
-                : "has no pending replacement");
-    return hit;
+            w.Hit ? "is replaced by this package's at the next start"
+                  : "has no pending replacement");
+    return w.Hit;
 }
 
 /* Record 26 section 8: each device the helper installed read again - its
@@ -10289,7 +10636,9 @@ static int run_install_9x(void)
         step(INST_STEP_FAILED, "The package's copy, not recorded");
         return inst_exit_code(0, 1, 0, 1);
     }
-    step(INST_STEP_DONE, "The package is in %s and on DevicePath", srcDir);
+    step(INST_STEP_DONE, dpLeftOff ? "The package is in %s, off DevicePath" :
+                                     "The package is in %s and on DevicePath",
+         srcDir);
     hashed_cleanup();
     s98_mpd_place_9x();
     helper_installs();
@@ -10297,12 +10646,35 @@ static int run_install_9x(void)
     s98_file_update_9x();
     vsd_run(vsd_mode(0));
     pfw_run(pfw_mode(0));
-    write_values();
-    s98_write_values();
+    /* A run cancelled before here writes no value, as the NT run's stop
+     * skips them: since task 45.54 a first install's controller takes the
+     * answers (XhciSilentInstall's list merge among them), and a stop
+     * before its install must not leave them for a later one. */
+    if (runCancelled) {
+        logonly("cancelled: no registry value written\n");
+    } else {
+        write_values();
+        s98_write_values();
+        net_write();
+    }
     tray_install();
     own_install();
     stor_tools_copy();
     other_run();
+    /* The install directory left off DevicePath above, tried again now
+     * that other_run has taken out the earlier staging it replaces, which
+     * the page's projection already discounted (record 26 section
+     * 6.7.12); still off, a step for the user. */
+    if (dpLeftOff) {
+        if (devicepath_update(srcDir) && !dpLeftOff) {
+            out("%s is on DevicePath now, with the earlier staging taken "
+                "out.\n", srcDir);
+            step(INST_STEP_DONE, "The package is in %s and on DevicePath",
+                 srcDir);
+        } else {
+            flagSteps = 1;
+        }
+    }
     old_dir_cleanup();
     arp_write(0);
     check_results_9x();
@@ -10579,8 +10951,9 @@ static int is_u4_nhi(const DEVREC *d)
            inst_msz_has(d->Hw, d->HwBytes, "PCI\\CC_0C0340");
 }
 
-/* The devnodes the names follow: the xHCI controllers, and the NHIs named
- * by FriendlyName (task 44.55). */
+/* The devnodes the names follow: the xHCI controllers, and the USB4 NHIs,
+ * whose FriendlyName up to 3.3.0.0 (the ASM4242's, task 44.55) is cleared
+ * now that their INF line names them (task 45.46). */
 static int names_dev(const DEVREC *d)
 {
     return is_controller(d) || is_u4_nhi(d);
@@ -10593,8 +10966,8 @@ static int names_ours(const DEVREC *d)
     return inst_eq(d->Service, is_controller(d) ? "xhci98" : "xhcicm");
 }
 
-/* The table's name for an xHCI controller, or for an NHI of instNhiFnNames,
- * or NULL (no row: the INF's own name, no FriendlyName). */
+/* The table's name for an xHCI controller, or NULL (no row, or an NHI:
+ * the INF's own name, no FriendlyName). */
 static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
 {
     INST_U32 vd;
@@ -10604,10 +10977,6 @@ static const char *names_canon(const DEVREC *d, char *buf, size_t cap)
     }
     if (is_controller(d)) {
         return inst_xhci_name(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
-                                                                      : NULL;
-    }
-    if (is_u4_nhi(d)) {
-        return inst_nhi_fname(vd & 0xFFFFUL, vd >> 16, buf, cap) == 1 ? buf
                                                                       : NULL;
     }
     return NULL;
@@ -11235,7 +11604,7 @@ static int remove_own_infs(void)
     return ok;
 }
 static const char *const instServices[] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi"
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "xhcinet"
 };
 
 /* The package's services this run removed or found absent (the
@@ -11243,7 +11612,7 @@ static const char *const instServices[] = {
 static const char *svcGone[8];
 static int svcGoneCount;
 static const char *const cddbOwn[] = {
-    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98"
+    "xhci98", "xhciuas", "xhcicm", "xhcihlpr", "xhcimsi", "stor98", "xhcinet"
 };
 static int svc_state(const char *name);
 
@@ -11386,9 +11755,16 @@ static int cddb_service_scrub(void)
     return ok;
 }
 static const char *const instFiles[] = {
-    "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys"
+    "xhci98.sys", "xhciuas.sys", "xhcicm.sys", "xhcihlpr.sys", "xhcimsi.sys",
+    "xhcinet.sys"
 };
-#define INST_SVC_COUNT 5
+/* A service's second image, deleted on the same terms: xhcinet's NDIS
+ * 6.20 one, which 8 to 10 load under the one service (record 35 section
+ * 9.5). */
+static const char *const instFiles2[] = {
+    NULL, NULL, NULL, NULL, NULL, "xhcinet6.sys"
+};
+#define INST_SVC_COUNT 6
 
 /* Section 9.2 steps 5 and 6. */
 static void remove_services_and_files(void)
@@ -11399,6 +11775,7 @@ static void remove_services_and_files(void)
     char sys[INST_PATH_CHARS];
     char path[INST_PATH_CHARS];
     int i;
+    int f;
     int fileOk;
     PFN_MOVEEX moveEx = move_ex();
 
@@ -11469,27 +11846,33 @@ static void remove_services_and_files(void)
         if (!fileOk || sys[0] == '\0') {
             continue;
         }
-        join(path, sizeof(path), sys, "drivers");
-        join(path, sizeof(path), path, instFiles[i]);
-        if (!file_exists(path, NULL)) {
-            continue;
-        }
-        out("Deleting %s ... ", path);
-        if (opts.List) {
-            out("(/list)\n");
-            continue;
-        }
-        if (DeleteFileA(path)) {
-            out("done.\n");
-            flagChanged = 1;
-        } else if (moveEx != NULL &&
-                   moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
-            out("in use; deleted at the restart.\n");
-            flagRestart = 1;
-            flagChanged = 1;
-        } else {
-            out("FAILED (error %lu).\n", (unsigned long)GetLastError());
-            flagFailed = 1;
+        for (f = 0; f < 2; f++) {
+            const char *fn = f == 0 ? instFiles[i] : instFiles2[i];
+            if (fn == NULL) {
+                continue;
+            }
+            join(path, sizeof(path), sys, "drivers");
+            join(path, sizeof(path), path, fn);
+            if (!file_exists(path, NULL)) {
+                continue;
+            }
+            out("Deleting %s ... ", path);
+            if (opts.List) {
+                out("(/list)\n");
+                continue;
+            }
+            if (DeleteFileA(path)) {
+                out("done.\n");
+                flagChanged = 1;
+            } else if (moveEx != NULL &&
+                       moveEx(path, NULL, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+                out("in use; deleted at the restart.\n");
+                flagRestart = 1;
+                flagChanged = 1;
+            } else {
+                out("FAILED (error %lu).\n", (unsigned long)GetLastError());
+                flagFailed = 1;
+            }
         }
     }
     if (scm != NULL) {
@@ -13185,7 +13568,8 @@ static void un9x_consider(const char *id)
         return;
     }
     dev_driver_values(&d);
-    if (!inst_own_service(d.Service) && inst_bus_id(id) == 0) {
+    if (!inst_own_service(d.Service) && inst_bus_id(id) == 0 &&
+        !inst_cm_child_id(id)) {
         return;
     }
     if (un9xCount >= INST_MAX_UN9X) {
@@ -13601,9 +13985,13 @@ static void files_9x(int list)
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
         return;
     }
-    for (i = 0; i < INST_SVC_COUNT; i++) {
-        join(path, sizeof(path), win, "SYSTEM32\\DRIVERS");
-        join(path, sizeof(path), path, instFiles[i]);
+    for (i = 0; i <= INST_SVC_COUNT; i++) {
+        /* The last: xhcinet.inf's 98 SE and ME copy goes to dirid 11,
+         * SYSTEM, not SYSTEM32\DRIVERS (record 35 section 9.5). */
+        const char *fn = i < INST_SVC_COUNT ? instFiles[i] : "xhcinet.sys";
+        join(path, sizeof(path), win, i < INST_SVC_COUNT ?
+             "SYSTEM32\\DRIVERS" : "SYSTEM");
+        join(path, sizeof(path), path, fn);
         if (!file_exists(path, NULL)) {
             continue;
         }
@@ -13615,8 +14003,9 @@ static void files_9x(int list)
         if (DeleteFileA(path)) {
             char rec[80];
             DWORD t;
-            int placed = reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY,
-                                  instFiles[i], rec, sizeof(rec), &t);
+            int placed = i < INST_SVC_COUNT &&
+                         reg_text(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY,
+                                  fn, rec, sizeof(rec), &t);
             flagChanged = 1;
             out("Deleted %s%s.\n", path,
                 placed ? " (placed there by this installer)" : "");
@@ -13624,7 +14013,7 @@ static void files_9x(int list)
                 HKEY pk;
                 if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_PLACED9X_KEY, 0,
                                   KEY_SET_VALUE, &pk) == ERROR_SUCCESS) {
-                    RegDeleteValueA(pk, instFiles[i]);
+                    RegDeleteValueA(pk, fn);
                     RegCloseKey(pk);
                 }
             }
@@ -15808,6 +16197,334 @@ static void s98_set(void)
     }
 }
 
+/* ---- Thunderbolt networking (design record 35 sections 9.1, 9.2, 9.5) -- */
+
+/* A present NHI this package's connection manager runs: its driver key is
+ * where XhciCmNet goes (record 35 section 9.1). */
+static int net_nhi(const DEVREC *d)
+{
+    return d->Present && inst_eq(d->Service, "xhcicm") && d->Driver[0] != '\0';
+}
+
+/* XhciCmNet in force, as the connection manager reads it (cm_reg.c
+ * cmQuery): Services\USB first, then the NHIs' own keys. A DWORD 1 is 1,
+ * any other value 0 (the CM refuses it and its default 0 stands). *mwHas:
+ * Services\USB holds one, in any type (a zero-length REG_NONE is absent,
+ * inst_mw_reading). Returns 1, 0, or -1 when none is set. */
+static int net_in_force(int *mwHas)
+{
+    HKEY k;
+    DWORD t = REG_NONE;
+    BYTE data[16];
+    DWORD n = sizeof(data);
+    DWORD v;
+    INST_U32 in;
+    char path[INST_PATH_CHARS];
+    LONG r;
+    int got;
+    int any = -1;
+    int i;
+
+    *mwHas = 0;
+    if (stScreens) {
+        return -1;
+    }
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_MW_KEY, 0, KEY_QUERY_VALUE, &k);
+    if (r == ERROR_SUCCESS) {
+        memset(data, 0, sizeof(data));
+        r = RegQueryValueExA(k, "XhciCmNet", NULL, &t, data, &n);
+        RegCloseKey(k);
+        if (r == ERROR_MORE_DATA) {
+            *mwHas = 1;
+            return 0;
+        }
+        if (r == ERROR_SUCCESS) {
+            got = inst_mw_reading(1, (INST_U32)t, (INST_U32)n,
+                                  inst_get32(data, 0), 0, &in);
+            if (got != 0) {
+                *mwHas = 1;
+                return (got == 1 && in == 1UL) ? 1 : 0;
+            }
+        } else if (r != ERROR_FILE_NOT_FOUND) {
+            *mwHas = 1;
+            return 0;
+        }
+    } else if (r != ERROR_FILE_NOT_FOUND) {
+        *mwHas = 1;
+        return 0;
+    }
+    for (i = 0; i < devCount; i++) {
+        if (!net_nhi(&devs[i])) {
+            continue;
+        }
+        driver_key_path(&devs[i], path, sizeof(path));
+        if (reg_dword(HKEY_LOCAL_MACHINE, path, "XhciCmNet", &v)) {
+            if (v == 1UL) {
+                return 1;
+            }
+            any = 0;
+        }
+    }
+    return any;
+}
+
+static int net_nhi_count(void)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < devCount; i++) {
+        n += net_nhi(&devs[i]);
+    }
+    return n;
+}
+
+/* The box's decision as things stand (inst_tbnet_decide; record 26
+ * section 5.3.5). A host interface counts as present when one is found,
+ * bound yet or not (tbNhiPresent), so a first install writes to its key
+ * once the run has installed it. */
+static void net_decide(INST_TBNET *d)
+{
+    int mwHas;
+    int inForce = net_in_force(&mwHas);
+    int sw = opts.TbNet ? 1 : opts.NoTbNet ? 0 : -1;
+
+    inst_tbnet_decide(INST_TBNET_WIRED, haveNet, sw, inForce, netBox,
+                      tbNhiPresent || net_nhi_count() > 0, mwHas, d);
+}
+
+/* Networking in the run or out of it: in only while the Thunderbolt
+ * support is and the box's final state is 1. */
+static void net_set(void)
+{
+    INST_TBNET d;
+
+    netInclude = 0;
+    if (haveNet && tbInclude) {
+        net_decide(&d);
+        netInclude = d.Enabled && d.Value == 1UL;
+    }
+    infText[INST_INF_NET] = netInclude ? netText : NULL;
+    infIds[INST_INF_NET].Count = 0;
+    if (netInclude) {
+        inst_inf_models(netText, &envNow, &infIds[INST_INF_NET]);
+    }
+}
+
+/* What the run does with XhciCmNet, for the Summary; NULL when the box is
+ * not shown or the Thunderbolt support is left out. */
+static const char *net_plan_text(void)
+{
+    INST_TBNET d;
+
+    if (!INST_TBNET_WIRED || !haveCm || !tbInclude) {
+        return NULL;
+    }
+    net_decide(&d);
+    if (!d.Enabled) {
+        return NULL;
+    }
+    if (d.Write) {
+        return d.Value == 1UL ?
+               "Thunderbolt networking: turned on (the network adapter "
+               "appears after the restart)" :
+               "Thunderbolt networking: turned off (the network adapter "
+               "goes after the restart)";
+    }
+    return d.Value == 1UL ? "Thunderbolt networking: on, as it is" :
+                            "Thunderbolt networking: left out";
+}
+
+/* Ready for the adapter: on NT staged by this run; on 98 SE and ME in the
+ * local copy on DevicePath (record 35 section 9.5). */
+static int net_ready(const char **why)
+{
+    char path[INST_PATH_CHARS];
+
+    *why = NULL;
+    if (groupVerdict[INST_GROUP_NET] != INST_GROUP_OK) {
+        /* An installed xhcinet.sys newer or unreadable: refused as its
+         * group is, so no new adapter binds from this package. */
+        *why = "the network driver installed now is newer or unreadable";
+        return 0;
+    }
+    if (envNow.Nt) {
+        if (!netStaged) {
+            *why = "its driver was not staged (see above)";
+        }
+        return netStaged;
+    }
+    join(path, sizeof(path), srcDir, "xhcinet.inf");
+    if (!file_exists(path, NULL)) {
+        *why = "its driver is not in the install directory";
+        return 0;
+    }
+    join(path, sizeof(path), srcDir, "xhcinet.sys");
+    if (!file_exists(path, NULL)) {
+        *why = "its driver is not in the install directory";
+        return 0;
+    }
+    return 1;
+}
+
+static int net_write_one(const char *path, DWORD val)
+{
+    HKEY k;
+    LONG w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, path, 0, NULL, 0,
+                             KEY_SET_VALUE, NULL, &k, NULL);
+
+    if (w == ERROR_SUCCESS) {
+        w = RegSetValueExA(k, "XhciCmNet", 0, REG_DWORD, (const BYTE *)&val,
+                           sizeof(val));
+        RegCloseKey(k);
+    }
+    if (w != ERROR_SUCCESS) {
+        out("XhciCmNet could not be written to HKLM\\%s (error %ld).\n", path,
+            (long)w);
+        flagFailed = 1;
+        return 0;
+    }
+    logonly("  wrote HKLM\\%s\\XhciCmNet = %lu\n", path, (unsigned long)val);
+    return 1;
+}
+
+/* After the installs and the table's values (record 35 section 9.5): the
+ * box's XhciCmNet into each present NHI's driver key and, where decided,
+ * Services\USB; a 1 only once the driver is ready for the adapter. */
+static void net_write(void)
+{
+    INST_TBNET d;
+    const char *why;
+    char path[INST_PATH_CHARS];
+    int nhi = net_nhi_count();
+    int wrote = 0;
+    int mwHas;
+    int inForce;
+    int sw = opts.TbNet ? 1 : opts.NoTbNet ? 0 : -1;
+    int i;
+    DWORD val;
+
+    if (!INST_TBNET_WIRED || opts.List) {
+        return;
+    }
+    inForce = net_in_force(&mwHas);
+    if (!haveNet || !tbInclude) {
+        /* Networking not in the run: /notbnet still turns off a 1 in
+         * force (a silent update without /thunderbolt, record 35 section
+         * 9.5), and nothing else is written. */
+        if (!opts.NoTbNet || inForce != 1) {
+            return;
+        }
+        sw = 0;
+    }
+    inst_tbnet_decide(1, 1, sw, inForce, netBox, nhi > 0, mwHas, &d);
+    logonly("tbnet: in force %d, mw %d, nhi %d, box %d, write %d value %lu "
+            "nhi %d mw %d\n", inForce, mwHas, nhi, netBox, d.Write,
+            (unsigned long)d.Value, d.ToNhi, d.ToMw);
+    if (!d.Write) {
+        out("Thunderbolt networking stays %s.\n", d.Value ? "on" : "off");
+        return;
+    }
+    if (d.Value == 1UL && !net_ready(&why)) {
+        out("Thunderbolt networking was not turned on: %s. Run the installer "
+            "again.\n", why);
+        flagSteps = 1;
+        step(INST_STEP_LEFT, "Thunderbolt networking not turned on");
+        return;
+    }
+    val = (DWORD)d.Value;
+    if (d.ToNhi) {
+        for (i = 0; i < devCount; i++) {
+            if (net_nhi(&devs[i])) {
+                driver_key_path(&devs[i], path, sizeof(path));
+                wrote += net_write_one(path, val);
+            }
+        }
+    }
+    /* No NHI key to write after all (an install left for a wizard): the
+     * machine-wide key, which the CM reads first. */
+    if (d.ToMw || (d.ToNhi && wrote == 0)) {
+        wrote += net_write_one(INST_MW_KEY, val);
+    }
+    if (wrote == 0) {
+        return;
+    }
+    flagChanged = 1;
+    flagRestart = 1;
+    step(INST_STEP_DONE, "Thunderbolt networking turned %s",
+         val ? "on" : "off");
+    out("Thunderbolt networking turned %s (XhciCmNet %lu): the network "
+        "adapter %s after the restart.\n", val ? "on" : "off",
+        (unsigned long)val, val ? "appears" : "goes");
+}
+
+/* The console's question (record 35 sections 9.2 and 9.5): after the
+ * Thunderbolt question and its children. Enter and /yes give the box's
+ * first state: N on a new install, the value in force on an update. */
+static void net_question(void)
+{
+    INST_TBNET d;
+    int asked;
+    int r;
+    int k;
+    char line[16];
+    char text[1024];
+
+    if (!INST_TBNET_WIRED || !haveCm || !tbInclude) {
+        net_set();
+        return;
+    }
+    net_decide(&d);
+    if (!d.Enabled) {
+        out("Thunderbolt networking: this package carries no network driver "
+            "for this system.\n\n");
+        net_set();
+        return;
+    }
+    out("Thunderbolt networking\n");
+    out("  A network connection to another computer over a Thunderbolt or "
+        "USB4 cable:\n  the other computer then reaches this one as over any "
+        "network, file sharing\n  included. Run the installer again to turn "
+        "it off.\n");
+    asked = !opts.Yes && !opts.List && !opts.TbNet && !opts.NoTbNet;
+    r = d.First;
+    if (asked) {
+        inst_yesno_question(text, sizeof(text),
+                            "Install Thunderbolt networking?", "turn it on",
+                            "leave it off", d.First);
+        for (k = 0;; k++) {
+            if (!ask(INST_Q_TBNET, k == 0 ? text : d.First ? "  Type Y or N, "
+                     "or Enter for [Y]: " : "  Type Y or N, or Enter for "
+                     "[N]: ", k > 0, 0, d.First, NULL, line, sizeof(line))) {
+                r = d.First;
+                out("\n");
+                break;
+            }
+            r = inst_tb_answer(line, d.First);
+            if (r >= 0) {
+                break;
+            }
+        }
+    } else if (opts.TbNet) {
+        out("  /tbnet: turned on without asking.\n");
+    } else if (opts.NoTbNet) {
+        out("  /notbnet: left off without asking.\n");
+    } else if (opts.List) {
+        out("  /list: it would be asked:\n    Y  turn it on\n"
+            "    N  leave it off\n  Enter would give [%s].\n",
+            d.First ? "Y" : "N");
+    } else {
+        out("  /yes: %s (/tbnet turns it on, /notbnet off).\n",
+            d.First ? "Y, as it is now" : "N");
+    }
+    out("\n");
+    netBox = r ? 1 : 0;
+    net_set();
+    plan();
+    logonly("tbnet: asked %d, chosen %d, include %d\n", asked, netBox,
+            netInclude);
+}
+
 static void s98_apply(int include)
 {
     s98Want = include;
@@ -15849,6 +16566,7 @@ static void tb_apply(int include)
     }
     tbInclude = include && haveCm;
     s98_set();
+    net_set();
     plan();
 }
 
@@ -18383,7 +19101,12 @@ static int s98_un_service(void)
         group_binary(INST_GROUP_S98, path, sizeof(path));
         /* A file update queued and not yet done goes with it, or the
          * next start would put stor98.mpd back. */
-        s98_wininit_cancel(path);
+        if (!s98_wininit_cancel(path)) {
+            return 0;
+        }
+        if (!s98_defaults_drop_9x()) {
+            return 0;
+        }
     }
     s = file_state(path);
     if (s < 0) {
@@ -18700,6 +19423,171 @@ static int s98_inf_refresh_9x(void)
  * the setup engine does for a running xhci98.sys (wininit_pending reads
  * it back); the INF copies the driver keys name are refreshed; no device
  * is reinstalled. Windows is then shut down and started again. */
+/* Task 45.50 (record 21 section 8.1): 98 SE and ME, each Stor98 setting
+ * missing from Services\stor98 written at its default, as the INF's
+ * [Stor98_Settings_9x] does at a device's install, for the file-only
+ * update, which installs no device. A value there of any content stays.
+ * Not recorded: the uninstall takes such a value back by its being the
+ * default (s98_defaults_drop_9x). */
+static void s98_defaults_put_9x(void)
+{
+    HKEY k;
+    LONG w;
+    DWORD dw;
+    int i;
+
+    if (RegCreateKeyExA(HKEY_LOCAL_MACHINE, INST_S98_SVC_9X, 0, NULL, 0,
+                        KEY_QUERY_VALUE | KEY_SET_VALUE, NULL, &k,
+                        NULL) != ERROR_SUCCESS) {
+        out("Stor98's settings could not be put in place: %s cannot be "
+            "opened.\n", INST_S98_SVC_9X);
+        flagSteps = 1;
+        return;
+    }
+    for (i = 0; i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+            continue;
+        }
+        w = RegQueryValueExA(k, v->Name9x, NULL, NULL, NULL, NULL);
+        if (w != ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (v->Kind == INST_S98_WORDS) {
+            w = RegSetValueExA(k, v->Name9x, 0, REG_SZ,
+                               (const BYTE *)v->Def9x,
+                               (DWORD)strlen(v->Def9x) + 1);
+        } else {
+            dw = (DWORD)strtoul(v->Def9x, NULL, 10);
+            w = RegSetValueExA(k, v->Name9x, 0, REG_DWORD, (const BYTE *)&dw,
+                               sizeof(dw));
+        }
+        if (w == ERROR_SUCCESS) {
+            logonly("stor98: %s written at its default %s\n", v->Name9x,
+                    v->Def9x);
+        } else {
+            out("Stor98's %s could not be written at its default (error "
+                "%ld).\n", v->Name9x, (long)w);
+            flagSteps = 1;
+        }
+    }
+    RegCloseKey(k);
+}
+
+/* Task 45.50: at the uninstall that removes Stor98 on 98 SE and ME, each
+ * setting at its default goes too - the INF's or s98_defaults_put_9x's,
+ * reading as its absence - and each interrupt report the driver wrote
+ * (inst_s98_run_report_9x), so the key holds nothing of Stor98's that a
+ * later first run would take for a Stor98 there before (record 26 section
+ * 6.3, s98_svc_key_stor98_9x; with the reports left, a reinstall on 98 SE
+ * read "found before 1", 2026-11-01). A value of another number stays. 0
+ * when a value could not be read or removed. */
+static int s98_defaults_drop_9x(void)
+{
+    HKEY k;
+    LONG w;
+    DWORD t;
+    DWORD n;
+    BYTE data[64];
+    int i;
+    int ok = 1;
+
+    w = RegOpenKeyExA(HKEY_LOCAL_MACHINE, INST_S98_SVC_9X, 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &k);
+    if (w == ERROR_FILE_NOT_FOUND) {
+        return 1;
+    }
+    if (w != ERROR_SUCCESS) {
+        out("%s could not be opened (error %ld): Stor98's settings stay.\n",
+            INST_S98_SVC_9X, (long)w);
+        return 0;
+    }
+    for (i = 0; i < INST_S98_COUNT; i++) {
+        const INST_S98_VALUE *v = &instS98Values[i];
+        int def;
+        if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+            continue;
+        }
+        n = sizeof(data) - 1;
+        w = RegQueryValueExA(k, v->Name9x, NULL, &t, data, &n);
+        if (w == ERROR_FILE_NOT_FOUND) {
+            continue;
+        }
+        if (w == ERROR_MORE_DATA) {
+            continue;
+        }
+        if (w != ERROR_SUCCESS) {
+            out("Stor98's %s could not be read (error %ld): it stays.\n",
+                v->Name9x, (long)w);
+            ok = 0;
+            continue;
+        }
+        data[n < sizeof(data) ? n : sizeof(data) - 1] = 0;
+        if (t == REG_DWORD && n == sizeof(DWORD)) {
+            DWORD dw;
+            memcpy(&dw, data, sizeof(dw));
+            def = inst_s98_is_default_9x(i, 1, (INST_U32)dw, NULL);
+        } else if (t == REG_SZ) {
+            def = inst_s98_is_default_9x(i, 0, 0, (const char *)data);
+        } else {
+            def = 0;
+        }
+        if (!def) {
+            continue;
+        }
+        w = RegDeleteValueA(k, v->Name9x);
+        if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+            out("Stor98's %s could not be removed (error %ld).\n", v->Name9x,
+                (long)w);
+            ok = 0;
+            continue;
+        }
+        logonly("stor98: %s, at its default, removed\n", v->Name9x);
+        flagChanged = 1;
+    }
+    /* The reports, read again from the first value after each removal. */
+    for (;;) {
+        char name[128];
+        DWORD idx;
+        int gone = 0;
+        for (idx = 0;; idx++) {
+            n = sizeof(name);
+            w = RegEnumValueA(k, idx, name, &n, NULL, NULL, NULL, NULL);
+            if (w == ERROR_NO_MORE_ITEMS) {
+                break;
+            }
+            if (w == ERROR_MORE_DATA) {
+                continue;
+            }
+            if (w != ERROR_SUCCESS) {
+                out("%s could not be read (error %ld): Stor98's interrupt "
+                    "reports stay.\n", INST_S98_SVC_9X, (long)w);
+                ok = 0;
+                break;
+            }
+            if (!inst_s98_run_report_9x(name)) {
+                continue;
+            }
+            w = RegDeleteValueA(k, name);
+            if (w != ERROR_SUCCESS && w != ERROR_FILE_NOT_FOUND) {
+                out("Stor98's %s could not be removed (error %ld).\n", name,
+                    (long)w);
+                ok = 0;
+                continue;
+            }
+            logonly("stor98: %s, the driver's report, removed\n", name);
+            flagChanged = 1;
+            gone = 1;
+            break;
+        }
+        if (!gone) {
+            break;
+        }
+    }
+    RegCloseKey(k);
+    return ok;
+}
+
 static void s98_file_update_9x(void)
 {
     char bin[INST_PATH_CHARS];
@@ -18790,6 +19678,7 @@ static void s98_file_update_9x(void)
     flagChanged = 1;
     out("Stor98 %s replaces %s when Windows next starts; no drive is "
         "reinstalled.\n", s98VersionText, bin);
+    s98_defaults_put_9x();
     if (!s98_inf_refresh_9x()) {
         /* Retried by the next run (s98InfRefresh), the file then current. */
         flagSteps = 1;
@@ -18862,9 +19751,6 @@ static void s98_mpd_place_9x(void)
         bin);
 }
 
-/* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
- * update this installer queued (s98_file_update_9x) is taken back - its
- * [rename] entry for stor98.mpd and STOR98.TMP beside it. */
 /* ======================================================================== */
 /* S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design record */
 /* 30 section 7; owner, 2026-10-22)                                          */
@@ -19128,9 +20014,19 @@ static int vxd_check_package(const VXDDESC *d)
 
     *d->Have = 0;
     d->Hash[0] = '\0';
-    join(path, sizeof(path), pkgDir, d->Name);
     if (envNow.Nt) {
-        *d->Have = file_exists(path, NULL);
+        /* Whether the download carries it, for the box a run warns about
+         * where it does not apply (record 26 section 5.3.1): in 98-me\,
+         * beside this NT folder (record 36 section 6.2). */
+        const char *pr = inst_pkg_rel(INST_FAM_9X, d->Name);
+        if (pr != NULL && INST_MY_ARCH == INST_ARCH_X86) {
+            join(path, sizeof(path), root, inst_family_dir(INST_FAM_9X));
+            join(path, sizeof(path), path, pr);
+            *d->Have = file_exists(path, NULL);
+        }
+        return 1;
+    }
+    if (!pkg_path(d->Name, path, sizeof(path))) {
         return 1;
     }
     if (!file_exists(path, NULL)) {
@@ -19140,6 +20036,7 @@ static int vxd_check_package(const VXDDESC *d)
     if (buf == NULL) {
         return refuse("a file of the package is unreadable: ", path);
     }
+    pkg_mark(d->Name);
     _snprintf(stamp, sizeof(stamp) - 1, "%s %s", d->Name, XHCIINST_VERSION);
     stamp[sizeof(stamp) - 1] = '\0';
     sl = strlen(stamp);
@@ -19229,7 +20126,7 @@ static int vsd_do(const VXDDESC *d, int op, const char *file,
         flagRestart = 1;
         return 1;
     case INST_VOP_START:
-        join(src, sizeof(src), pkgDir, d->Name);
+        pkg_path(d->Name, src, sizeof(src));
         if (!vsd_rec_set(d, "Pending", d->Hash)) {
             return 0;
         }
@@ -19799,6 +20696,7 @@ static int pfw_seen(void)
  * image and the service is there). */
 static int pfwsys_installed(void);
 
+
 /* The box's default (inst_pfw_box), the one decision, with the
  * Thunderbolt support in the run (tb) or out of it; *open whether the box
  * is open then. */
@@ -19934,6 +20832,54 @@ static int pfwsys_run(int mode);
 /* XHCIPFW.SYS's record holds something, or cannot be read. */
 static int pfwsys_recorded(void);
 
+/* XHCIPFW.SYS's run under a machine-wide lock of its own, so that two
+ * XHCIINST runs never interleave its service, images and root bus
+ * entries (an install appending entries while another run removed the
+ * service would leave a root bus naming a missing filter, record 32
+ * section 11.5.2); each pass reads the record and the service again
+ * under it. On 8 and 8.1 the entry role's install (3.3.0.0's place,
+ * unordered there) is removed whatever the boxes, by its own name and
+ * record, before the filter role's run. */
+static int pfwsys_run_locked(int mode)
+{
+    HANDLE m;
+    DWORD w;
+    int ok = 1;
+
+    m = shared_mutex("Global\\XhciinstPfw");
+    if (m == NULL) {
+        out("XHCIPFW.SYS's lock could not be opened (error %lu): it is left "
+            "as it is.\n", (unsigned long)GetLastError());
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "XHCIPFW.SYS: its lock not opened");
+        return 0;
+    }
+    w = WaitForSingleObject(m, INST_MAINT_WAIT_MS);
+    if (w != WAIT_OBJECT_0 && w != WAIT_ABANDONED) {
+        out("Another XHCIINST has been changing XHCIPFW.SYS for a minute: it "
+            "is left as it is;\nrun INSTALL.BAT again when that one has "
+            "finished.\n");
+        CloseHandle(m);
+        flagSteps = 1;
+        steps_add_id(INST_PFWSYS_FILE, "left: another run was changing it");
+        step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another run");
+        return 0;
+    }
+    if (pfw_kind() == INST_PFW_SYS_FILTER) {
+        pfwLegacy = 1;
+        if (pfwsys_recorded()) {
+            ok = pfwsys_run(INST_VSD_DESELECTED);
+        }
+        pfwLegacy = 0;
+    }
+    if (ok) {
+        ok = pfwsys_run(mode);
+    }
+    ReleaseMutex(m);
+    CloseHandle(m);
+    return ok;
+}
+
 static int pfw_run(int mode)
 {
     static const char begin[] =
@@ -19946,13 +20892,13 @@ static int pfw_run(int mode)
         return 1;
     }
     if (envNow.Nt) {
-        /* Not offered (8, 8.1 and 10): only a record of this installer's
-         * has anything to remove; none, and the run says nothing of it. */
+        /* Not offered (10): only a record of this installer's has
+         * anything to remove; none, and the run says nothing of it. */
         if (pfw_kind() == INST_PFW_SYS_GONE && mode != INST_VSD_UNINSTALL &&
             !pfwsys_recorded()) {
             return 1;
         }
-        return pfwsys_run(mode);
+        return pfwsys_run_locked(mode);
     }
     /* Cancelled (an earlier step may have seen it): nothing of it changes,
      * the static-VxD key above all. */
@@ -20023,8 +20969,7 @@ static void pfw_question(void)
         const char *pl = pfwsys_recorded() ? inst_eng_pfw_plan() : NULL;
         pfwChoice = 0;
         if (pl != NULL) {
-            out("%s.\n  XHCIPFW.SYS is not offered on Windows 8, 8.1 and "
-                "10.\n\n", pl);
+            out("%s.\n  XHCIPFW.SYS is not offered on Windows 10.\n\n", pl);
         }
         return;
     }
@@ -20050,7 +20995,7 @@ static void pfw_question(void)
     }
     if (envNow.Nt) {
         out("Close PCI windows above 4 GB (XHCIPFW.SYS): Windows 2000 and XP, "
-            "and the\n32-bit Vista and 7\n");
+            "and the\n32-bit Vista, 7, 8 and 8.1\n");
         out("  At each start it closes the PCI bridges' prefetchable windows "
             "that lie\n  wholly above 4 GB. It does so before Windows' PCI "
             "driver reads them.\n  This Windows cannot use such a window. "
@@ -20059,7 +21004,7 @@ static void pfw_question(void)
         if (envNow.Major >= 6) {
             out("  Where the firmware setup offers \"Above 4G Decoding\", "
                 "set it off for this\n  Windows. With it on, the 32-bit "
-                "Vista and 7 can stop at start on a\n  board that offers "
+                "Vista to 8.1 can stop at start on a\n  board that offers "
                 "much memory space above 4 GB. This cannot help\n  there. "
                 "With it off, this closes the windows the firmware still "
                 "leaves\n  above 4 GB.\n");
@@ -20215,10 +21160,11 @@ static int pfwsys_check_package(void)
     if (!envNow.Nt) {
         return 1;
     }
-    join(path, sizeof(path), pkgDir, INST_PFWSYS_FILE);
-    if (!file_exists(path, NULL)) {
+    if (!pkg_path(INST_PFWSYS_FILE, path, sizeof(path)) ||
+        !file_exists(path, NULL)) {
         return 1;
     }
+    pkg_mark(INST_PFWSYS_FILE);
     buf = read_file(path, &size);
     if (buf == NULL) {
         return refuse("a file of the package is unreadable: ", path);
@@ -20242,10 +21188,51 @@ static int pfwsys_check_package(void)
     return 1;
 }
 
-/* The record's value (INST_PFW_KEY): 1 read, 0 absent, -1 unreadable. */
+/* Which XHCIPFW.SYS installation the pfwsys_ routines act on: the
+ * entry role's (service xhcipfw, 2000 to 7, and 3.3.0.0's on 8 to 10) or,
+ * on 8 and 8.1, the filter role's (service xhcipff), which 3.3.0.0's
+ * installer does not recognise (record 32 section 11.5.2). pfwLegacy set:
+ * the entry role's, for its removal on 8 and 8.1 (pfwLegacy). */
+
+static int pfw_ns_filter(void)
+{
+    return !pfwLegacy && pfw_kind() == INST_PFW_SYS_FILTER;
+}
+
+static const char *pfw_svc(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_SERVICE_F : INST_PFWSYS_SERVICE;
+}
+
+static const char *pfw_name_a(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_NAME_FA : INST_PFWSYS_NAME_A;
+}
+
+static const char *pfw_name_b(void)
+{
+    return pfw_ns_filter() ? INST_PFWSYS_NAME_FB : INST_PFWSYS_NAME_B;
+}
+
+static const VXDDESC *pfw_desc(void)
+{
+    return pfw_ns_filter() ? &pfwfDesc : &pfwDesc;
+}
+
+/* HKLM's path of the service key, and of a subkey of it (sub NULL: the
+ * key itself). */
+static void pfw_svc_key(char *buf, size_t cap, const char *sub)
+{
+    _snprintf(buf, cap - 1, "SYSTEM\\CurrentControlSet\\Services\\%s%s%s",
+              pfw_svc(), sub != NULL ? "\\" : "", sub != NULL ? sub : "");
+    buf[cap - 1] = '\0';
+}
+
+/* The record's value (INST_PFW_KEY or INST_PFW_KEY_F): 1 read, 0 absent,
+ * -1 unreadable. */
 static int pfwsys_rec_get(const char *name, char *buf, DWORD cap)
 {
-    return vsd_rec_get(&pfwDesc, name, buf, cap);
+    return vsd_rec_get(pfw_desc(), name, buf, cap);
 }
 
 /* The service key's ImagePath, the image's name alone (xhcipfw.sys or
@@ -20260,10 +21247,11 @@ static int pfwsys_image(char *name, DWORD cap)
     DWORD n = sizeof(path) - 1;
     LONG r;
 
+    char key[128];
+
     name[0] = '\0';
-    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
-                      &k);
+    pfw_svc_key(key, sizeof(key), NULL);
+    r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 0;
     }
@@ -20281,8 +21269,7 @@ static int pfwsys_image(char *name, DWORD cap)
     }
     slash = strrchr(path, '\\');
     slash = slash != NULL ? slash + 1 : path;
-    if (!inst_eq(slash, INST_PFWSYS_NAME_A) &&
-        !inst_eq(slash, INST_PFWSYS_NAME_B)) {
+    if (!inst_eq(slash, pfw_name_a()) && !inst_eq(slash, pfw_name_b())) {
         return -1;
     }
     /* The whole path, as this installer writes it or as the system's own
@@ -20410,14 +21397,15 @@ static int pfwsys_installed(void)
 /* The service's Start value: 1 read, 0 no service or unreadable. */
 static int pfwsys_start(DWORD *start)
 {
+    char key[128];
     HKEY k;
     DWORD type = 0;
     DWORD n = sizeof(*start);
     LONG r;
 
-    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                      "Services\\" INST_PFWSYS_SERVICE, 0, KEY_QUERY_VALUE,
-                      &k) != ERROR_SUCCESS) {
+    pfw_svc_key(key, sizeof(key), NULL);
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k) !=
+        ERROR_SUCCESS) {
         return 0;
     }
     r = RegQueryValueExA(k, "Start", NULL, &type, (BYTE *)start, &n);
@@ -20425,8 +21413,189 @@ static int pfwsys_start(DWORD *start)
     return r == ERROR_SUCCESS && type == REG_DWORD;
 }
 
+/* Record 32 section 11.5.2: xhcipfw added to (add) or taken out of the
+ * UpperFilters of every PCI root bus devnode (*PNP0A03, *PNP0A08), the
+ * other filters kept in order. Adding reads the present devnodes; taking
+ * out reads every devnode, present or not, since an entry naming this
+ * installer's service refers to its image whoever wrote it. The count of
+ * devnodes changed, or -1 when one could not be read or written (said):
+ * then nothing that depends on the entries being out may follow. */
+static int pfw_rootbus_filters(int add)
+{
+    HDEVINFO set;
+    SP_DEVINFO_DATA data;
+    DWORD i;
+    DWORD type;
+    DWORD hwN;
+    DWORD cpN;
+    DWORD upN;
+    char hw[2048];
+    char cp[2048];
+    char up[1024];
+    char msz[1100];
+    char id[INST_ID_CHARS];
+    size_t n;
+    int changed;
+    int count = 0;
+    int failed = 0;
+
+    if (api.GetClassDevs == NULL || api.EnumInfo == NULL ||
+        api.GetRegProp == NULL || api.SetRegProp == NULL ||
+        api.Destroy == NULL) {
+        out("XHCIPFW.SYS: the device routines this needs are missing.\n");
+        return -1;
+    }
+    set = api.GetClassDevs(NULL, NULL, NULL,
+                           DIGCF_ALLCLASSES | (add ? DIGCF_PRESENT : 0));
+    if (set == INVALID_HANDLE_VALUE) {
+        out("XHCIPFW.SYS: the device list could not be read (error "
+            "0x%08lX).\n", (unsigned long)GetLastError());
+        return -1;
+    }
+    for (i = 0;; i++) {
+        data.cbSize = sizeof(data);
+        if (!api.EnumInfo(set, i, &data)) {
+            if (GetLastError() != ERROR_NO_MORE_ITEMS) {
+                out("XHCIPFW.SYS: the device list could not be read to its "
+                    "end (error 0x%08lX).\n", (unsigned long)GetLastError());
+                failed = 1;
+            }
+            break;
+        }
+        memset(hw, 0, sizeof(hw));
+        memset(cp, 0, sizeof(cp));
+        hwN = 0;
+        cpN = 0;
+        /* An id list that cannot be read (other than absent) leaves the
+         * devnode unknown: a root bus may hide there, so taking out fails
+         * rather than miss one (record 32 section 11.5.2). */
+        if (!api.GetRegProp(set, &data, SPDRP_HARDWAREID, &type, (PBYTE)hw,
+                            sizeof(hw) - 2, &hwN)) {
+            if (!add && GetLastError() != ERROR_INVALID_DATA) {
+                failed = 1;
+            }
+            hwN = 0;
+        }
+        if (!api.GetRegProp(set, &data, SPDRP_COMPATIBLEIDS, &type, (PBYTE)cp,
+                            sizeof(cp) - 2, &cpN)) {
+            if (!add && GetLastError() != ERROR_INVALID_DATA) {
+                failed = 1;
+            }
+            cpN = 0;
+        }
+        if (!inst_pfw_rootbus(hw, hwN, cp, cpN)) {
+            continue;
+        }
+        if (!api.GetInstanceId(set, &data, id, sizeof(id), NULL)) {
+            inst_copy(id, "(a PCI root bus)", sizeof(id));
+        }
+        memset(up, 0, sizeof(up));
+        upN = 0;
+        if (!api.GetRegProp(set, &data, SPDRP_UPPERFILTERS, &type, (PBYTE)up,
+                            sizeof(up) - 2, &upN)) {
+            if (GetLastError() != ERROR_INVALID_DATA) {
+                out("XHCIPFW.SYS: the filters of %s could not be read (error "
+                    "0x%08lX).\n", id, (unsigned long)GetLastError());
+                failed = 1;
+                continue;
+            }
+            upN = 0;
+        }
+        n = add ? inst_msz_append(up, upN, pfw_svc(), msz, sizeof(msz),
+                                  &changed)
+                : inst_msz_remove(up, upN, pfw_svc(), msz, sizeof(msz),
+                                  &changed);
+        if (n == (size_t)-1) {
+            out("XHCIPFW.SYS: the filters of %s are too long.\n", id);
+            failed = 1;
+            continue;
+        }
+        if (!changed) {
+            continue;
+        }
+        if (!api.SetRegProp(set, &data, SPDRP_UPPERFILTERS,
+                            n ? (const BYTE *)msz : NULL, (DWORD)n)) {
+            out("XHCIPFW.SYS: the filters of %s could not be written (error "
+                "0x%08lX).\n", id, (unsigned long)GetLastError());
+            failed = 1;
+            continue;
+        }
+        count++;
+        logonly("xhcipfw: %s %s the UpperFilters of %s\n",
+                pfw_svc(), add ? "added to" : "taken out of", id);
+    }
+    api.Destroy(set);
+    if (count > 0) {
+        flagChanged = 1;
+        flagRestart = 1;
+    }
+    return failed ? -1 : count;
+}
+
+/* Before any change to the service or the image on 8, 8.1 and 10: every
+ * root bus entry out (record 32 section 11.5.2). 1 done or not this
+ * kind; 0 an entry is left, said, the run's step failed. */
+static int pfw_entries_out(void)
+{
+    int k = pfw_kind();
+
+    if (k != INST_PFW_SYS_FILTER && k != INST_PFW_SYS_GONE) {
+        return 1;
+    }
+    if (pfw_rootbus_filters(0) < 0) {
+        out("XHCIPFW.SYS is left as it is: a PCI root bus may still name it, "
+            "and Windows\nwould not start without its image.\n");
+        flagFailed = 1;
+        step(INST_STEP_FAILED, "XHCIPFW.SYS: a root bus filter entry left");
+        return 0;
+    }
+    return 1;
+}
+
+/* After the service and the image are in place on 8 and 8.1: the entries
+ * in, last. 1 done (or not this kind). */
+static int pfw_entries_in(void)
+{
+    int n;
+
+    if (pfw_kind() != INST_PFW_SYS_FILTER) {
+        return 1;
+    }
+    n = pfw_rootbus_filters(1);
+    if (n < 0) {
+        flagSteps = 1;
+        steps_add_id(INST_PFWSYS_FILE, "it was not added to every PCI root "
+                     "bus: run the installer again");
+        return 0;
+    }
+    return 1;
+}
+
+/* A boot-start image written out before the service or a root bus entry
+ * names it (record 32 section 11.5.2): Windows writes a copy's bytes and
+ * the registry out later, each on its own, and a power cut between them
+ * would otherwise leave a start naming an image cut short. 1 written. */
+static int pfwsys_flush(const char *path)
+{
+    HANDLE h;
+    int ok;
+
+    /* CopyFileA gives the copy the package file's attributes: a read-only
+     * one would refuse the write access the flush needs. */
+    SetFileAttributesA(path, FILE_ATTRIBUTE_NORMAL);
+    h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_EXISTING,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = FlushFileBuffers(h) ? 1 : 0;
+    CloseHandle(h);
+    return ok;
+}
+
 /* The service's values for a boot-start driver of System Reserved
- * (record 32 section 11.2), the image named. Start is 4 while the other
+ * (record 32 section 11.2), or of PnP Filter on 8 and 8.1 (section
+ * 11.5.2), the image named. Start is 4 while the other
  * values are written and set to 0 last, so a run cut short leaves the
  * driver off, never on with a half-written service. start 4: Start
  * alone. 1 written. */
@@ -20438,15 +21607,25 @@ static int pfwsys_service(const char *name, DWORD start)
     DWORD type = SERVICE_KERNEL_DRIVER;
     DWORD err = SERVICE_ERROR_IGNORE;
     DWORD off = SERVICE_DISABLED;
+    const char *group = pfw_ns_filter() ? INST_PFWSYS_GROUP_FILTER :
+                        INST_PFWSYS_GROUP;
+    char key[128];
 
     _snprintf(image, sizeof(image) - 1, "System32\\DRIVERS\\%s", name);
     image[sizeof(image) - 1] = '\0';
-    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, "SYSTEM\\CurrentControlSet\\"
-                        "Services\\" INST_PFWSYS_SERVICE, 0, NULL, 0,
-                        KEY_SET_VALUE, NULL, &k, NULL);
+    pfw_svc_key(key, sizeof(key), NULL);
+    w = RegCreateKeyExA(HKEY_LOCAL_MACHINE, key, 0, NULL, 0, KEY_SET_VALUE,
+                        NULL, &k, NULL);
     if (w == ERROR_SUCCESS) {
-        w = RegSetValueExA(k, "Start", 0, REG_DWORD, (const BYTE *)&off,
-                           sizeof(off));
+        /* The filter role's service is never set off while values are
+         * written: a root bus naming it would not start (record 32
+         * section 11.5.2); its ImagePath only ever names an image
+         * written and compared. Off only for its removal, after the
+         * entries are out. */
+        if (start == SERVICE_DISABLED || !pfw_ns_filter()) {
+            w = RegSetValueExA(k, "Start", 0, REG_DWORD, (const BYTE *)&off,
+                               sizeof(off));
+        }
         if (w == ERROR_SUCCESS && start != SERVICE_DISABLED) {
             w = RegSetValueExA(k, "Type", 0, REG_DWORD, (const BYTE *)&type,
                                sizeof(type));
@@ -20456,8 +21635,8 @@ static int pfwsys_service(const char *name, DWORD start)
             }
             if (w == ERROR_SUCCESS) {
                 w = RegSetValueExA(k, "Group", 0, REG_SZ,
-                                   (const BYTE *)INST_PFWSYS_GROUP,
-                                   (DWORD)strlen(INST_PFWSYS_GROUP) + 1);
+                                   (const BYTE *)group,
+                                   (DWORD)strlen(group) + 1);
             }
             if (w == ERROR_SUCCESS) {
                 w = RegSetValueExA(k, "ImagePath", 0, REG_EXPAND_SZ,
@@ -20510,12 +21689,12 @@ static int pfwsys_delete(const char *path)
  * (Start 4: Windows no longer loads it), said. */
 static int pfwsys_service_delete(void)
 {
-    static const char key[] = "SYSTEM\\CurrentControlSet\\Services\\"
-                              INST_PFWSYS_SERVICE;
-    char sub[sizeof(key) + 16];
+    char key[128];
+    char sub[160];
     HKEY k;
     LONG r;
 
+    pfw_svc_key(key, sizeof(key), NULL);
     r = RegOpenKeyExA(HKEY_LOCAL_MACHINE, key, 0, KEY_QUERY_VALUE, &k);
     if (r == ERROR_FILE_NOT_FOUND) {
         return 1;
@@ -20548,18 +21727,27 @@ static int pfwsys_service_delete(void)
 
 /* The two names' files deleted where they are this installer's (the
  * record's, or a copy cut short while Pending was set), but keep's, each at
- * the next start if in use; another program's file is left. 1 done; 0 one could not be read or deleted (the record kept). */
+ * the next start if in use; another program's file is left. The registry
+ * is written out first, so no start after a power cut finds the service
+ * or a root bus entry naming an image already gone (record 32 section
+ * 11.5.2). 1 done; 0 one could not be read or deleted, or the registry
+ * not written out (the record kept). */
 static int pfwsys_clean(const PFWREC *r, const char *keep)
 {
-    static const char *const names[2] = {
-        INST_PFWSYS_NAME_A, INST_PFWSYS_NAME_B
-    };
+    const char *names[2];
     char path[INST_PATH_CHARS];
     char hex[65];
     int i;
     int c;
     int ok = 1;
 
+    if (RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out: XHCIPFW.SYS's earlier "
+            "images are kept.\n");
+        return 0;
+    }
+    names[0] = pfw_name_a();
+    names[1] = pfw_name_b();
     for (i = 0; i < 2; i++) {
         if (keep != NULL && inst_eq(names[i], keep)) {
             continue;
@@ -20588,12 +21776,12 @@ static int pfwsys_clean(const PFWREC *r, const char *keep)
 /* The record's values named cleared; 1 all gone. */
 static int pfwsys_rec_clear(int file)
 {
-    int ok = vsd_rec_del(&pfwDesc, "Old");
+    int ok = vsd_rec_del(pfw_desc(), "Old");
 
-    ok = vsd_rec_del(&pfwDesc, "Pending") && ok;
-    ok = vsd_rec_del(&pfwDesc, "Slot") && ok;
+    ok = vsd_rec_del(pfw_desc(), "Pending") && ok;
+    ok = vsd_rec_del(pfw_desc(), "Slot") && ok;
     if (file) {
-        ok = vsd_rec_del(&pfwDesc, "File") && ok;
+        ok = vsd_rec_del(pfw_desc(), "File") && ok;
     }
     return ok;
 }
@@ -20648,9 +21836,9 @@ static int pfwsys_run(int mode)
         partial = 1;
     }
     if (img < 0 || (img == 1 && !r.Any)) {
-        out("A service named " INST_PFWSYS_SERVICE " is another installation's "
-            "or unreadable: it is left as it is.\n");
-        steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw that is not "
+        out("A service named %s is another installation's or unreadable: it "
+            "is left as it is.\n", pfw_svc());
+        steps_add_id(INST_PFWSYS_FILE, "a service of its name that is not "
                      "this installer's is left as it is");
         flagSteps = 1;
         step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another installation's "
@@ -20659,6 +21847,11 @@ static int pfwsys_run(int mode)
     }
     if (mode == INST_VSD_DESELECTED || mode == INST_VSD_UNINSTALL) {
         if (!r.Any && img == 0) {
+            /* No service: an entry naming it would name an image never
+             * loaded, so it goes whoever wrote it. */
+            if (!pfw_entries_out()) {
+                return 0;
+            }
             step(INST_STEP_DONE, "XHCIPFW.SYS: as it is");
             return 1;
         }
@@ -20677,9 +21870,8 @@ static int pfwsys_run(int mode)
             }
             if (c == PFW_F_OTHER) {
                 out("The service's image %s is not this installer's file: "
-                    "the service " INST_PFWSYS_SERVICE " is left as it "
-                    "is.\n", cur);
-                steps_add_id(INST_PFWSYS_FILE, "a service named xhcipfw "
+                    "the service %s is left as it is.\n", cur, pfw_svc());
+                steps_add_id(INST_PFWSYS_FILE, "a service of its name "
                              "whose image is not this installer's is left "
                              "as it is");
                 flagSteps = 1;
@@ -20687,6 +21879,12 @@ static int pfwsys_run(int mode)
                      "installation's image");
                 return 1;
             }
+        }
+        /* The service and its image are this installer's: every entry
+         * naming it goes before anything of it (record 32 section
+         * 11.5.2). */
+        if (!pfw_entries_out()) {
+            return 0;
         }
         if (!pfwsys_service_delete()) {
             flagFailed = 1;
@@ -20706,12 +21904,14 @@ static int pfwsys_run(int mode)
         step(INST_STEP_DONE, "XHCIPFW.SYS: removed");
         return 1;
     }
-    /* Selected: this release's image already the service's. */
+    /* Selected: this release's image already the service's, and one the
+     * record holds (another installation's copy of the same bytes is not
+     * this installer's: it goes to the ownership check below). */
     if (img == 1 && pfwsys_path(cur, curPath, sizeof(curPath)) &&
-        stor_hash(curPath, hex) == 1 && inst_eq(hex, pfwSysHash) &&
-        r.Any) {
+        pfwsys_class(curPath, &r, hex) == PFW_F_OURS &&
+        inst_eq(hex, pfwSysHash) && r.Any) {
         int was = pfwsys_start(&start) && start == SERVICE_BOOT_START;
-        if (!vsd_rec_set(&pfwDesc, "File", pfwSysHash) ||
+        if (!vsd_rec_set(pfw_desc(), "File", pfwSysHash) ||
             !pfwsys_service(cur, SERVICE_BOOT_START)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its service not written");
@@ -20729,6 +21929,10 @@ static int pfwsys_run(int mode)
             steps_add_id(INST_PFWSYS_FILE, "an earlier image could not be "
                          "removed: run the installer again");
         }
+        if (!pfw_entries_in()) {
+            step(INST_STEP_LEFT, "XHCIPFW.SYS: not on every PCI root bus");
+            return 0;
+        }
         step(INST_STEP_DONE, was ? "XHCIPFW.SYS: this release's, as it is" :
              "XHCIPFW.SYS: on again at the next start");
         return 1;
@@ -20745,16 +21949,32 @@ static int pfwsys_run(int mode)
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its image unreadable");
             return 0;
         }
+        if (c == PFW_F_OTHER) {
+            /* Another installation's bytes under the service's image
+             * path: its service and its root bus entries are left as they
+             * are (record 32 sections 11.2 and 11.5.2). */
+            out("The service's image %s is not this installer's file: "
+                "the service %s is left as it is.\n", cur, pfw_svc());
+            steps_add_id(INST_PFWSYS_FILE, "a service of its name whose "
+                         "image is not this installer's is left as it is");
+            flagSteps = 1;
+            step(INST_STEP_LEFT, "XHCIPFW.SYS: left, another installation's "
+                 "image");
+            return 0;
+        }
         if (c == PFW_F_OURS && !inst_eq(hex, r.File) &&
-            !vsd_rec_set(&pfwDesc, "File", hex)) {
+            !vsd_rec_set(pfw_desc(), "File", hex)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
             return 0;
         }
     }
+    /* An update of the filter role keeps its entries: its service stays
+     * on and its ImagePath moves to the new image only once that image
+     * is written and compared (record 32 section 11.5.2). */
     /* A service key this installer's creation left without an image path
-     * goes before the record that makes it its own. */
-    if (partial && !pfwsys_service_delete()) {
+     * goes before the record that makes it its own (its entries first). */
+    if (partial && (!pfw_entries_out() || !pfwsys_service_delete())) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its incomplete service not "
              "removed");
@@ -20767,9 +21987,9 @@ static int pfwsys_run(int mode)
              "removed");
         return 0;
     }
-    target = (img == 1 && inst_eq(cur, INST_PFWSYS_NAME_A)) ?
-             INST_PFWSYS_NAME_B : INST_PFWSYS_NAME_A;
-    join(src, sizeof(src), pkgDir, INST_PFWSYS_FILE);
+    target = (img == 1 && inst_eq(cur, pfw_name_a())) ? pfw_name_b() :
+             pfw_name_a();
+    pkg_path(INST_PFWSYS_FILE, src, sizeof(src));
     if (!pfwsys_path(target, newPath, sizeof(newPath))) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: the system folder unreadable");
@@ -20797,7 +22017,7 @@ static int pfwsys_run(int mode)
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its image unreadable");
             return 0;
         }
-        if (c == PFW_F_OURS && !vsd_rec_set(&pfwDesc, "Old", hex)) {
+        if (c == PFW_F_OURS && !vsd_rec_set(pfw_desc(), "Old", hex)) {
             flagFailed = 1;
             step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
             return 0;
@@ -20805,14 +22025,15 @@ static int pfwsys_run(int mode)
     }
     /* Pending and its Slot before the bytes, so a copy cut short there is
      * this installer's. */
-    if (!vsd_rec_set(&pfwDesc, "Slot", target) ||
-        !vsd_rec_set(&pfwDesc, "Pending", pfwSysHash)) {
+    if (!vsd_rec_set(pfw_desc(), "Slot", target) ||
+        !vsd_rec_set(pfw_desc(), "Pending", pfwSysHash)) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its record not written");
         return 0;
     }
     SetFileAttributesA(newPath, FILE_ATTRIBUTE_NORMAL);
-    if (!CopyFileA(src, newPath, FALSE) || same_file3(src, newPath) != 1) {
+    if (!CopyFileA(src, newPath, FALSE) || same_file3(src, newPath) != 1 ||
+        !pfwsys_flush(newPath)) {
         out("XHCIPFW.SYS could not be written as %s (error %lu).\n", newPath,
             (unsigned long)GetLastError());
         flagFailed = 1;
@@ -20820,8 +22041,8 @@ static int pfwsys_run(int mode)
         return 0;
     }
     if (!pfwsys_service(target, SERVICE_BOOT_START) ||
-        !vsd_rec_set(&pfwDesc, "File", pfwSysHash) ||
-        !vsd_rec_del(&pfwDesc, "Pending") || !vsd_rec_del(&pfwDesc, "Slot")) {
+        !vsd_rec_set(pfw_desc(), "File", pfwSysHash) ||
+        !vsd_rec_del(pfw_desc(), "Pending") || !vsd_rec_del(pfw_desc(), "Slot")) {
         flagFailed = 1;
         step(INST_STEP_FAILED, "XHCIPFW.SYS: its service or record not "
              "written");
@@ -20832,12 +22053,17 @@ static int pfwsys_run(int mode)
     flagChanged = 1;
     flagRestart = 1;
     /* The earlier image and anything else of the record's but the new one;
-     * the record read again (File now this release's). */
+     * the record read again (File now this release's); pfwsys_clean
+     * writes the service's move to the new image out first. */
     if (!pfwsys_rec(&r) || !pfwsys_clean(&r, target) ||
-        !vsd_rec_del(&pfwDesc, "Old")) {
+        !vsd_rec_del(pfw_desc(), "Old")) {
         flagSteps = 1;
         steps_add_id(INST_PFWSYS_FILE, "an earlier image could not be "
                      "removed: run the installer again");
+    }
+    if (!pfw_entries_in()) {
+        step(INST_STEP_LEFT, "XHCIPFW.SYS: not on every PCI root bus");
+        return 0;
     }
     step(INST_STEP_DONE, img == 1 ? "XHCIPFW.SYS: updated at the next start" :
          "XHCIPFW.SYS: installed");
@@ -20885,43 +22111,112 @@ static const char *pfwsys_plan(int mode)
                       "installed, loaded at the next start";
 }
 
-static void s98_wininit_cancel(const char *bin)
+/* The uninstall, removing the bundled Stor98 on 98 SE and ME: a file
+ * update this installer queued (s98_file_update_9x) is taken back - its
+ * [rename] line putting STOR98.TMP in the place of stor98.mpd, and the
+ * .TMP itself. The lines are read from the file (wininit_text through
+ * vsd_entry_r), as wininit_pending reads them: 98 SE's and ME's profile
+ * routines did not give this installer's own line back, and they see only
+ * the first of equal keys. The line goes by the profile routine, by its
+ * 8.3 and its long key, and the file is read again until it is gone, as
+ * vsd_old_name takes back its own; another program's line naming either
+ * file is left and said. The .TMP is deleted in every case: with it gone,
+ * a line left behind has nothing to put back. 1 when no queued update can
+ * put stor98.mpd back (no such line, or the .TMP gone); 0 when one may
+ * (said), and the uninstall then keeps the driver and the record for a
+ * later run. */
+static int s98_wininit_cancel(const char *bin)
 {
     char win[INST_PATH_CHARS];
     char ini[INST_PATH_CHARS];
     char sb[INST_PATH_CHARS];
     char tmp[INST_PATH_CHARS];
-    char val[INST_PATH_CHARS];
+    char tmpS[INST_PATH_CHARS];
     char *slash;
     DWORD n;
+    int unread = 0;
+    int r;
     int k;
+    int s;
 
     if (GetWindowsDirectoryA(win, sizeof(win)) == 0) {
-        return;
+        out("The Windows directory cannot be read, so whether WININIT.INI "
+            "replaces %s at the next start is not known.\n", bin);
+        return 0;
     }
     join(ini, sizeof(ini), win, "WININIT.INI");
     n = GetShortPathNameA(bin, sb, sizeof(sb));
     if (n == 0 || n >= sizeof(sb)) {
         inst_copy(sb, bin, sizeof(sb));
     }
-    for (k = 0; k < 2; k++) {
-        const char *key = k == 0 ? sb : bin;
-        if (GetPrivateProfileStringA("rename", key, "", val, sizeof(val),
-                                     ini) > 0) {
-            WritePrivateProfileStringA("rename", key, NULL, ini);
-            logonly("stor98: WININIT.INI [rename] %s=%s taken back\n", key,
-                    val);
-        }
-    }
     inst_copy(tmp, bin, sizeof(tmp));
     slash = strrchr(tmp, '\\');
+    if (slash == NULL) {
+        return 0;
+    }
+    inst_copy(slash + 1, "STOR98.TMP",
+              sizeof(tmp) - (size_t)(slash + 1 - tmp));
+    /* The .TMP's 8.3 path from the driver's: the .TMP may be gone. */
+    inst_copy(tmpS, sb, sizeof(tmpS));
+    slash = strrchr(tmpS, '\\');
     if (slash != NULL) {
         inst_copy(slash + 1, "STOR98.TMP",
-                  sizeof(tmp) - (size_t)(slash + 1 - tmp));
-        if (file_state(tmp) > 0 && DeleteFileA(tmp)) {
-            logonly("stor98: %s deleted\n", tmp);
+                  sizeof(tmpS) - (size_t)(slash + 1 - tmpS));
+    } else {
+        inst_copy(tmpS, tmp, sizeof(tmpS));
+    }
+    r = vsd_entry_r(bin, tmp, sb, tmpS, &unread);
+    for (k = 0; r == INST_VE_EXACT && k < 16; k++) {
+        if (!WritePrivateProfileStringA("rename", (k & 1) == 0 ? sb : bin,
+                                        NULL, ini)) {
+            break;
+        }
+        /* 9x keeps profile writes in a cache: flushed before the file is
+         * read back. */
+        WritePrivateProfileStringA(NULL, NULL, NULL, ini);
+        r = vsd_entry_r(bin, tmp, sb, tmpS, &unread);
+        if (r == INST_VE_ABSENT) {
+            logonly("stor98: WININIT.INI [rename] %s=%s taken back\n", sb,
+                    tmpS);
         }
     }
+    if (r == INST_VE_EXACT) {
+        out("The queued update of %s in %s could not be taken back (error "
+            "%lu); deleting %s instead leaves it nothing to put back.\n",
+            bin, ini, (unsigned long)GetLastError(), tmp);
+    } else if (r == INST_VE_CONFLICT && unread) {
+        out("%s could not be read, so whether it still replaces %s at the "
+            "next start is not known.\n", ini, bin);
+        flagSteps = 1;
+    } else if (r == INST_VE_CONFLICT) {
+        out("%s has a [rename] line of another program naming %s or %s: it "
+            "is left as it is. Remove that line, or restart Windows to let "
+            "it run, then run the uninstall again.\n", ini, bin, tmp);
+        flagSteps = 1;
+    }
+    s = file_state(tmp);
+    if (s > 0) {
+        if (DeleteFileA(tmp)) {
+            logonly("stor98: %s deleted\n", tmp);
+            s = 0;
+        } else {
+            out("%s could not be deleted (error %lu).\n", tmp,
+                (unsigned long)GetLastError());
+        }
+    } else if (s < 0) {
+        out("Whether %s is there cannot be read.\n", tmp);
+    }
+    /* Only this installer's own line, its .TMP gone, is neutralized: an
+     * unread file shows nothing gone, and another program's line may put
+     * a file of its own at stor98.mpd's path, so the driver and the record
+     * stay for a run after that line is resolved. */
+    if (r == INST_VE_ABSENT || (r == INST_VE_EXACT && s == 0)) {
+        return 1;
+    }
+    out("A queued update may put %s back at the next start: it and Stor98's "
+        "record stay; restart Windows, then run the uninstall again.\n", bin);
+    flagSteps = 1;
+    return 0;
 }
 
 static int s98_adopt_inf(const char *infPath)
@@ -21415,6 +22710,25 @@ static int storInfPlaced;       /* this run placed an INF in %windir%\INF */
 static int storInfMissed;       /* an INF's placement failed in this run */
 static int storSourceOff;       /* Source is cleared once the copy is made */
 static int storStepsLeft;
+static int storFlushFailed;     /* the record could not be written out */
+
+/* Record 26 section 6.5.6 (task 45.5): 98 SE writes its registry out
+ * later, so the record is written out before the file it names is put in
+ * place; a power cut would otherwise keep the file and lose the record of
+ * it, with every value written before it. 1 written out. */
+static int stor_rec_flush(void)
+{
+    if (opts.List) {
+        return 1;
+    }
+    if (RegFlushKey(HKEY_LOCAL_MACHINE) != ERROR_SUCCESS) {
+        out("The registry could not be written out after the USB storage "
+            "drivers' record.\n");
+        storFlushFailed = 1;
+        return 0;
+    }
+    return 1;
+}
 
 static int stor_98se(void)
 {
@@ -22062,9 +23376,43 @@ static void pkg_src(const char *rel, char *path, size_t cap)
 {
     if (storCopyOk && inst_stor_index(rel) >= 0) {
         join(path, cap, storPackDir, rel);
-    } else {
+    } else if (!pkg_path(rel, path, cap)) {
         join(path, cap, pkgDir, rel);
     }
+}
+
+/* Every row whose local name is name, or ends in \name, marked as
+ * validated: package_files requires it from then on. */
+static void pkg_mark(const char *name)
+{
+    int i;
+    size_t n;
+    size_t m = strlen(name);
+    const char *l;
+
+    for (i = 0; i < instPkgFileCount && i < INST_PKG_MAX; i++) {
+        l = instPkgFiles[i].Local;
+        n = strlen(l);
+        if (instPkgFiles[i].Fam[pkgFam] != NULL &&
+            (inst_eq(l, name) ||
+             (n > m && l[n - m - 1] == '\\' && inst_eq(l + n - m, name)))) {
+            pkgHave[i] = 1;
+        }
+    }
+}
+
+/* A local name's file in this run's family folder (record 36 section
+ * 6.2): 1 with its path, 0 when the family does not carry it. */
+static int pkg_path(const char *local, char *path, size_t cap)
+{
+    const char *pr = inst_pkg_rel(pkgFam, local);
+
+    if (pr == NULL) {
+        path[0] = '\0';
+        return 0;
+    }
+    join(path, cap, pkgDir, pr);
+    return 1;
 }
 
 /* ---- the run ------------------------------------------------------------ */
@@ -22257,6 +23605,10 @@ static int stor_place_to(int i, const char *dest, const char *sub)
     }
     w = WriteFile(h, buf, n, &wrote, NULL);
     free(buf);
+    /* The bytes on the disk before a record names them (task 45.5). */
+    if (w && wrote == n && !FlushFileBuffers(h)) {
+        w = FALSE;
+    }
     if (!CloseHandle(h) || !w || wrote != n) {
         out("%s could not be written.\n", tmp);
         delete_file(tmp);
@@ -22270,6 +23622,12 @@ static int stor_place_to(int i, const char *dest, const char *sub)
     SetFileAttributesA(tmp, FILE_ATTRIBUTE_NORMAL);
     if (!stor_rec_text(sub, dest, instStorFile[i].Sha256)) {
         delete_file(tmp);
+        return 0;
+    }
+    if (!stor_rec_flush()) {
+        out("%s is not copied.\n", instStorFile[i].Name);
+        delete_file(tmp);
+        stor_rec_del(sub, dest);
         return 0;
     }
     if (!MoveFileA(tmp, dest)) {
@@ -22491,6 +23849,7 @@ static int stor_run_begin(void)
     storUasWait = 0;
     storInfPlaced = 0;
     storInfMissed = 0;
+    storFlushFailed = 0;
     if (storHere) {
         stor_run_begin_body();
     }
@@ -22755,14 +24114,31 @@ static void stor_place_infs(void)
         }
         if (stor_place(i)) {
             /* A placement publishes the pack: the adoption's evidence
-             * (record 26 section 6.5.6). */
+             * (record 26 section 6.5.6), written out with it. */
             if (!storInfPlaced) {
-                stor_rec_dword("Published", 1);
+                if (stor_rec_dword("Published", 1)) {
+                    (void)stor_rec_flush();
+                }
             }
             storInfPlaced = 1;
         } else {
             storInfMissed = 1;
         }
+        if (storFlushFailed) {
+            break;
+        }
+    }
+    /* A record that could not be written out publishes nothing: the
+     * storage files go no further in this run, and what it placed in
+     * %windir%\INF is withdrawn before the package's copy (task 45.5). */
+    if (storFlushFailed) {
+        out("The USB storage drivers are not published in this run: run "
+            "the installer again.\n");
+        storCopyOk = 0;
+        storInfPlaced = 0;
+        storInfMissed = 1;
+        storStepsLeft = 1;
+        return;
     }
     /* The pair in %windir%\INF whole or not there: a half this installer
      * placed, in this run or an earlier one, is withdrawn, and a step is
@@ -22814,8 +24190,10 @@ static void stor_copy_made(void)
     /* The package's copy with the seven made and DevicePath naming it:
      * the publication the uninstall's adoption rests on, kept for good
      * (record 26 section 6.5.6). */
-    if (storCopyOk && !opts.List) {
-        stor_rec_dword("Published", 1);
+    if (storCopyOk && !opts.List && stor_rec_dword("Published", 1) &&
+        !stor_rec_flush()) {
+        storStepsLeft = 1;
+        flagSteps = 1;
     }
     if (storSourceOff && !storCopyOk && !opts.List &&
         stor_rec_dword("Source", 0)) {
@@ -24659,10 +26037,14 @@ typedef struct _OTHPKG {
     int Heading;                /* index into instOtherHeadings            */
     int Eligible;               /* a STAGE line naming this system         */
     int Infs;                   /* those lines                             */
+    int CopyHere;               /* COPY lines naming this system           */
     int Tick;                   /* its box ticked                          */
     int Earlier;                /* staged by an earlier run (its record)   */
     int Blocked;                /* EXCLUDES bars it, or an unknown staging */
     char Why[200];
+    int Retick;                 /* other_block: ticked, read again          */
+    char Unfit[200];            /* other_block: unticked, its folders past
+                                   the 9x limit after the ones before it  */
     int Staged;                 /* the run: INFs or folders staged         */
     int Failed;
 } OTHPKG;
@@ -25059,39 +26441,61 @@ static void other_read_set(int set)
             o->Src, o->Count, o->StageCount, o->PkgCount);
 }
 
-/* The STAGE lines for this system. On 98 SE and ME only the packages of
- * inst_other_9x_stageable (record 26 section 6.7.12, task 44.11: the free
- * set's uac2 and usbmidi, which 98 SE's own USB audio INF would otherwise
- * take); every other package is copied only there (owner, 2026-10-24:
- * with the packages' folders DevicePath grew to 15 entries and about 600
- * characters, and 98 SE's hardware wizard then found no driver at all,
- * not even in %windir%\INF). */
+/* The STAGE lines for this system, and each package's COPY lines for it.
+ * On 98 SE and ME every package with a STAGE line there is stageable
+ * (record 26 section 6.7.13, task 45.7), DevicePath held within
+ * the system's limit (dp_9x_max) by the projection (section 6.7.12)
+ * rather than by a list of packages. */
 static void other_count(int set)
 {
     OTHSET *o = &oth[set];
     INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
     char pkg[64];
     int i;
+    int k;
 
     o->ForThis = 0;
     for (i = 0; i < o->StageCount; i++) {
         if (!(o->Stage[i].Systems & bit)) {
             continue;
         }
-        if (o->Stage[i].Stage) {
-            int k;
-            other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
-            if (!envNow.Nt && !inst_other_9x_stageable(set, pkg)) {
-                continue;
-            }
-            o->ForThis++;
-            k = other_pkg_index(o, pkg);
+        other_pkg_of(o->Stage[i].Inf, pkg, sizeof(pkg));
+        k = other_pkg_index(o, pkg);
+        if (!o->Stage[i].Stage) {
             if (k >= 0) {
-                o->Pkg[k].Eligible = 1;
-                o->Pkg[k].Infs++;
+                o->Pkg[k].CopyHere++;
             }
+            continue;
+        }
+        if (!envNow.Nt && !inst_other_9x_stageable(set, pkg)) {
+            continue;
+        }
+        o->ForThis++;
+        if (k >= 0) {
+            o->Pkg[k].Eligible = 1;
+            o->Pkg[k].Infs++;
         }
     }
+}
+
+static int other_9x_fits(int set, int k, char *why, size_t cap);
+
+/* 98 SE and ME (record 26 section 6.7.13): whether an earlier run's
+ * DevicePath entry of set:id stays - its set not carried here, or the
+ * package staged on this system by the carried set's lines. */
+static int other_9x_keeps(int set, const char *id)
+{
+    const OTHSET *o = &oth[set];
+    int k;
+
+    if (!inst_other_9x_stageable(set, id)) {
+        return 0;
+    }
+    if (o->State != INST_OTHER_CARRIED) {
+        return inst_other_9x_keeps(0, 0);
+    }
+    k = other_pkg_index(o, id);
+    return inst_other_9x_keeps(1, k >= 0 && o->Pkg[k].Eligible);
 }
 
 static void other_read(void)
@@ -25131,6 +26535,55 @@ static const char *other_version(void)
     return XHCIINST_VERSION;
 }
 
+static int other_9x_replaced(int set, const char *dir);
+/* The install directory the window has chosen (inst_eng_other_dir), for
+ * the 98 SE and ME projection of DevicePath; toolDir when none. */
+static char othProjDir[INST_PATH_CHARS];
+
+/* 98 SE and ME (record 26 section 6.7.13): 1 when this run's copy of set
+ * replaces an earlier one, which takes out what an earlier run staged of
+ * it. */
+static int other_9x_replacing(int set)
+{
+    return !envNow.Nt && other_9x_replaced(set, othProjDir[0] != '\0' ?
+                                           othProjDir : toolDir);
+}
+
+/* The set's earlier staging in words, "" where the run replaces the set's
+ * copy and so takes it out (section 6.7.13). */
+static const char *other_earlier_text(int set)
+{
+    return other_9x_replacing(set) ? "" : oth[set].Earlier;
+}
+
+/* 98 SE and ME (record 26 section 6.7.13): the set's copied-only packages
+ * and the sentence for the rest, as its page shows them. */
+static void other_9x_rest_out(int set)
+{
+    char line[700];
+    int any = 0;
+    int i;
+
+    if (envNow.Nt) {
+        return;
+    }
+    for (i = 0; i < oth[set].PkgCount; i++) {
+        if (inst_eng_other_copy_only(set, i, line, sizeof(line))) {
+            if (!any) {
+                out("  Copied only (no automatic install on this Windows):\n");
+                any = 1;
+            }
+            stor_out_wrapped("    ", line);
+        }
+    }
+    for (i = 0; i < 2; i++) {
+        inst_eng_other_rest(set, toolDir, i, line, sizeof(line));
+        if (line[0] != '\0') {
+            stor_out_wrapped("  ", line);
+        }
+    }
+}
+
 /* The console's packages of a set (section 6.7.11): listed, then "Stage
  * which?", ids separated by commas, a wrong id asked again. */
 static void other_ask_pkgs(int set)
@@ -25154,9 +26607,10 @@ static void other_ask_pkgs(int set)
             out("      %s\n", p->Why);
         }
     }
-    if (o->Earlier[0] != '\0') {
-        stor_out_wrapped("  ", o->Earlier);
+    if (other_earlier_text(set)[0] != '\0') {
+        stor_out_wrapped("  ", other_earlier_text(set));
     }
+    other_9x_rest_out(set);
     for (k = 0;; k++) {
         int n;
         int bad = 0;
@@ -25178,9 +26632,15 @@ static void other_ask_pkgs(int set)
         }
         for (i = 0; i < n && !bad; i++) {
             int j = other_pkg_index(o, ids + (size_t)i * INST_PKG_ID_CHARS);
+            char why[300];
             if (j < 0 || !o->Pkg[j].Eligible) {
                 out("  %s is not one of the ids above.\n",
                     ids + (size_t)i * INST_PKG_ID_CHARS);
+                bad = 1;
+            } else if (!envNow.Nt && !o->Pkg[j].Tick &&
+                       !other_9x_fits(set, j, why, sizeof(why))) {
+                /* In the order typed (record 26 section 6.7.13). */
+                out("  %s: %s\n", o->Pkg[j].Id, why);
                 bad = 1;
             } else {
                 o->Pkg[j].Tick = 1;
@@ -25244,9 +26704,10 @@ static void other_question(void)
                     out("    %s %s\n", o->Pkg[i].Id, o->Pkg[i].Desc);
                 }
             }
-            if (o->Earlier[0] != '\0') {
-                stor_out_wrapped("  ", o->Earlier);
+            if (other_earlier_text(set)[0] != '\0') {
+                stor_out_wrapped("  ", other_earlier_text(set));
             }
+            other_9x_rest_out(set);
             out("\n");
             continue;
         }
@@ -25263,6 +26724,9 @@ static void other_question(void)
             }
             if (o->Earlier[0] != '\0') {
                 stor_out_wrapped("  ", o->Earlier);
+            }
+            if (opts.List) {
+                other_9x_rest_out(set);
             }
             out("\n");
             continue;
@@ -25285,6 +26749,8 @@ static void other_question(void)
         o->Include = r > 0;
         if (o->Include && o->ForThis > 0) {
             other_ask_pkgs(set);
+        } else if (o->Include) {
+            other_9x_rest_out(set);
         }
         if (set == INST_SET_FREE && other_trust_offered() && !othTrust) {
             inst_yesno_question(text, sizeof(text), "Trust usb-wdm-free's "
@@ -25581,12 +27047,12 @@ static void other_earlier(int set)
         }
         inst_other_pkg_of(rel, id, sizeof(id));
         /* 98 SE and ME: an earlier run's DevicePath entry of a package
-         * staged only on other systems is taken out by this run
-         * (other_withdraw_devicepath), not shown as staged; one of
-         * inst_other_9x_stageable's stays (record 26 section 6.7.12). */
+         * this release does not stage on the system is taken out by this
+         * run (other_withdraw_devicepath), not shown as staged; one
+         * other_9x_keeps keeps stays (record 26 section 6.7.13). */
         if (!envNow.Nt && inst_eq(data, "DevicePath") &&
             (rel[0] == '\0' || strchr(id, '/') == NULL ||
-             !inst_other_9x_stageable(set, id))) {
+             !other_9x_keeps(set, id))) {
             continue;
         }
         if (rel[0] == '\0' || strchr(id, '/') == NULL) {
@@ -25694,10 +27160,9 @@ static int other_sig_kind(void)
     return (envNow.Major == 6 || envNow.Major == 10) ? 2 : 0;
 }
 
-/* The install directory the window has chosen, for the 98 SE and ME
- * projection of DevicePath (record 26 section 6.7.12); the run's toolDir
- * when none was given. */
-static char othProjDir[INST_PATH_CHARS];
+/* othProjDir (above other_9x_replacing): the install directory the window
+ * has chosen, for the 98 SE and ME projection of DevicePath (record 26
+ * section 6.7.12); the run's toolDir when none was given. */
 
 static int other_9x_entry_id(int set, const char *name, char *id, size_t cap);
 static int other_9x_entry_kept(int set, const char *name);
@@ -25705,7 +27170,8 @@ static int other_key_exists(int set);
 
 /* The folders of set's package k on 98 SE and ME (its STAGE lines naming
  * this system), each an absolute path under dir's set folder, appended to
- * fold (at most max). */
+ * fold; max + 1 when another folder would pass max (record 26 section
+ * 6.7.13: the caller reads that as not fitting, never a partial list). */
 static int other_9x_pkg_folders(int set, int k, const char *dir,
                                 char (*fold)[INST_PATH_CHARS], int n, int max)
 {
@@ -25714,11 +27180,12 @@ static int other_9x_pkg_folders(int set, int k, const char *dir,
     char setDir[INST_PATH_CHARS];
     char pkg[INST_PKG_ID_CHARS];
     char folder[INST_OTHER_REL_CHARS];
+    char one[INST_PATH_CHARS];
     int i;
     int j;
 
     join(setDir, sizeof(setDir), dir, inst_other_folder(set));
-    for (i = 0; i < o->StageCount && n < max; i++) {
+    for (i = 0; i < o->StageCount; i++) {
         if (!o->Stage[i].Stage || !(o->Stage[i].Systems & bit)) {
             continue;
         }
@@ -25730,14 +27197,30 @@ static int other_9x_pkg_folders(int set, int k, const char *dir,
         if (strrchr(folder, '/') != NULL) {
             *strrchr(folder, '/') = '\0';
         }
-        other_path(fold[n], INST_PATH_CHARS, setDir, folder);
-        for (j = 0; j < n && !inst_eq(fold[j], fold[n]); j++) {
+        other_path(one, sizeof(one), setDir, folder);
+        for (j = 0; j < n && !inst_eq(fold[j], one); j++) {
         }
-        if (j == n) {
-            n++;
+        if (j < n) {
+            continue;
         }
+        if (n >= max) {
+            return max + 1;
+        }
+        inst_copy(fold[n++], one, INST_PATH_CHARS);
     }
     return n;
+}
+
+/* Record 26 section 6.7.14: 1 when set's earlier copy and staging came from
+ * the release of it this download carries (its recorded Sums this
+ * download's); 0 for another, an unknown one, or a set not carried. */
+static int other_same_release(int set)
+{
+    char sums[80];
+
+    return oth[set].State == INST_OTHER_CARRIED &&
+           other_key_text(set, "Sums", sums, sizeof(sums)) > 0 &&
+           inst_eq(sums, inst_other_sums(set));
 }
 
 /* 1 when this run's copy of set replaces an earlier copy of another release
@@ -25759,20 +27242,25 @@ static int other_9x_replaced(int set, const char *dir)
            !inst_eq(v, want) || !inst_eq(sums, inst_other_sums(set));
 }
 
+/* The folders other_9x_fits projects at most (record 26 section 6.7.13:
+ * the pinned sets stage 20 on 98 SE). */
+#define OTH_9X_FOLDS 48
+#define OTH_9X_CAND 16
+
 /* 98 SE and ME (record 26 section 6.7.12): whether set's package k would
- * fit on DevicePath within INST_9X_DEVICEPATH_MAX, after this run's own
- * changes (the install directory's entry, the withdrawals of the packages
- * staged elsewhere only and of a set this run's copy replaces), the
- * restorations of the kept entries, and every other package ticked now.
- * 1 fits (or cannot be told here: the run reads again before each
- * append); 0 with why. */
+ * fit on DevicePath within the system's limit (dp_9x_max), after this
+ * run's own changes (the install directory's entry, the withdrawals of the
+ * packages staged elsewhere only and of a set this run's copy replaces), the
+ * restorations of the kept entries, and every other package ticked now. 1
+ * fits (or cannot be told here: the run reads again before each append); 0
+ * with why. */
 static int other_9x_fits(int set, int k, char *why, size_t cap)
 {
-    static char fold[24][INST_PATH_CHARS];
-    static char cand[8][INST_PATH_CHARS];
-    const char *ptr[24];
-    int fits[24];
-    int idx[8];
+    static char fold[OTH_9X_FOLDS][INST_PATH_CHARS];
+    static char cand[OTH_9X_CAND][INST_PATH_CHARS];
+    const char *ptr[OTH_9X_FOLDS];
+    int fits[OTH_9X_FOLDS];
+    int idx[OTH_9X_CAND];
     char list[2048];
     char cut[2048];
     char base[2048];
@@ -25790,6 +27278,7 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
     int c;
     int e;
     int r;
+    int full = 0;
 
     if (dir[0] == '\0' || !legacy_dir(rootDir, sizeof(rootDir)) ||
         !reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
@@ -25814,9 +27303,12 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
                 continue;
             }
             if (!replaced && other_9x_entry_kept(s2, name)) {
-                if (n < 24 && inst_path_append(list, name, cut,
-                                               sizeof(cut)) > 0) {
-                    inst_copy(fold[n++], name, INST_PATH_CHARS);
+                if (inst_path_append(list, name, cut, sizeof(cut)) > 0) {
+                    if (n < OTH_9X_FOLDS) {
+                        inst_copy(fold[n++], name, INST_PATH_CHARS);
+                    } else {
+                        full = 1;
+                    }
                 }
                 continue;
             }
@@ -25831,27 +27323,38 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
     for (s2 = 0; s2 < INST_SET_COUNT; s2++) {
         for (j = 0; j < oth[s2].PkgCount; j++) {
             if (oth[s2].Pkg[j].Tick && !(s2 == set && j == k)) {
-                n = other_9x_pkg_folders(s2, j, dir, fold, n, 24);
+                n = other_9x_pkg_folders(s2, j, dir, fold, n, OTH_9X_FOLDS);
+                if (n >= OTH_9X_FOLDS) {
+                    n = OTH_9X_FOLDS;
+                    full = 1;
+                }
             }
         }
     }
     /* The candidate's own folders, each by its index in the whole list,
-     * whether a restoration or a ticked box put it there already. */
-    nc = other_9x_pkg_folders(set, k, dir, cand, 0, 8);
+     * whether a restoration or a ticked box put it there already; more
+     * than cand holds is read as not fitting. */
+    nc = other_9x_pkg_folders(set, k, dir, cand, 0, OTH_9X_CAND);
+    if (nc > OTH_9X_CAND) {
+        nc = OTH_9X_CAND;
+        full = 1;
+    }
     for (c = 0; c < nc; c++) {
         for (j = 0; j < n && !inst_eq(fold[j], cand[c]); j++) {
         }
-        if (j == n && n < 24) {
+        if (j == n && n < OTH_9X_FOLDS) {
             inst_copy(fold[n++], cand[c], INST_PATH_CHARS);
         }
-        idx[c] = j < 24 ? j : -1;
+        idx[c] = j < OTH_9X_FOLDS ? j : -1;
     }
     for (j = 0; j < n; j++) {
         ptr[j] = fold[j];
     }
-    r = inst_9x_devicepath_project(base, ptr, n, fits);
+    r = inst_9x_devicepath_project(base, ptr, n, fits, dp_9x_max());
+    /* More folders than the projection holds are read as not fitting
+     * (record 26 section 6.7.13). */
     for (c = 0; c < nc && bad == NULL; c++) {
-        if (idx[c] < 0 || r < 0 || !fits[idx[c]]) {
+        if (idx[c] < 0 || r < 0 || full || !fits[idx[c]]) {
             bad = cand[c];
         }
     }
@@ -25859,8 +27362,8 @@ static int other_9x_fits(int set, int k, char *why, size_t cap)
         return 1;
     }
     _snprintf(why, cap - 1, "DevicePath would pass %d characters, past which "
-              "Windows 98 SE's hardware wizard finds no driver: point the "
-              "wizard at %s instead.", INST_9X_DEVICEPATH_MAX, bad);
+              "%s: point the wizard at %s instead.", dp_9x_max(),
+              inst_9x_devicepath_harm(envNow.Minor == 90), bad);
     why[cap - 1] = '\0';
     return 0;
 }
@@ -25884,6 +27387,42 @@ static void other_block(void)
     int s2;
     int j;
 
+    /* 98 SE and ME (record 26 section 6.7.13): the ticks read again in
+     * the page's order, each counted only if its folders fit after the
+     * ones before it; one that no longer fits (the install directory made
+     * longer after it was ticked) is unticked and barred below. */
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            OTHPKG *p = &oth[set].Pkg[i];
+            p->Unfit[0] = '\0';
+            p->Retick = !envNow.Nt && p->Tick;
+            if (p->Retick) {
+                p->Tick = 0;
+            }
+        }
+    }
+    for (set = 0; set < INST_SET_COUNT && !envNow.Nt; set++) {
+        /* The page's order: by heading (othlist_build), then as the set
+         * lists its packages. */
+        for (j = 0; j < instOtherHeadingCount * oth[set].PkgCount; j++) {
+            OTHPKG *p = &oth[set].Pkg[j % oth[set].PkgCount];
+            int ph = p->Heading >= 0 && p->Heading < instOtherHeadingCount ?
+                     p->Heading : instOtherHeadingCount - 1;
+            i = j % oth[set].PkgCount;
+            if (ph != j / oth[set].PkgCount || !p->Retick) {
+                continue;
+            }
+            p->Retick = 0;
+            if (other_9x_fits(set, i, p->Unfit, sizeof(p->Unfit))) {
+                p->Unfit[0] = '\0';
+                p->Tick = 1;
+            } else {
+                p->Unfit[sizeof(p->Unfit) - 1] = '\0';
+                logonly("other: %s:%s unticked: %s\n", other_set_tag(set),
+                        p->Id, p->Unfit);
+            }
+        }
+    }
     for (set = 0; set < INST_SET_COUNT; set++) {
         OTHSET *o = &oth[set];
         for (i = 0; i < o->PkgCount; i++) {
@@ -25891,6 +27430,11 @@ static void other_block(void)
             p->Blocked = 0;
             p->Why[0] = '\0';
             if (!p->Eligible) {
+                continue;
+            }
+            if (p->Unfit[0] != '\0') {
+                p->Blocked = 1;
+                inst_copy(p->Why, p->Unfit, sizeof(p->Why));
                 continue;
             }
             if (unknown) {
@@ -25921,7 +27465,12 @@ static void other_block(void)
                     if (s2 == set && inst_eq(e, p->Id)) {
                         continue;
                     }
-                    if (other_pair_excluded(set, p->Id, s2, e)) {
+                    /* A lifted pair (section 6.7.14) bars an earlier staging
+                     * of another release, whose ids the cut never read. */
+                    if (other_pair_excluded(set, p->Id, s2, e) ||
+                        (inst_other_lifted(set, p->Id, s2, e, othSys) &&
+                         inst_other_rel_bars(INST_REL_LIFTED, 1,
+                                             other_same_release(s2)))) {
                         p->Blocked = 1;
                         _snprintf(p->Why, sizeof(p->Why) - 1, "Not with "
                                   "%s, staged by an earlier run (%s): "
@@ -25947,6 +27496,70 @@ static void other_block(void)
     }
 }
 
+/* 98 SE and ME, the console's ticks once the install directory is chosen
+ * (record 26 section 6.7.13): the projection reads that directory only
+ * now. The stage switches in their order, each fitting after the ones
+ * before it or refused before any change (0, said); the ticks typed at
+ * the question in the page's order (other_block), a package that no
+ * longer fits unticked and said. 1 go on. */
+static int other_9x_after_dir(void)
+{
+    char why[300];
+    int set;
+    int i;
+    int any = 0;
+
+    if (envNow.Nt || !othRead) {
+        return 1;
+    }
+    /* The window's ticks are its final choice (the user may have changed
+     * what a switch preselected): read again as they stand. */
+    for (set = 0; set < INST_SET_COUNT && !instWindow; set++) {
+        any |= opts.StageCount[set] > 0;
+    }
+    if (any) {
+        /* Only what the switches ticked is taken again, in their order,
+         * after the other set's ticks typed at its question. */
+        for (set = 0; set < INST_SET_COUNT; set++) {
+            OTHSET *o = &oth[set];
+            for (i = 0; i < opts.StageCount[set]; i++) {
+                int k = other_pkg_index(o, opts.StageIds[set] +
+                                        (size_t)i * INST_PKG_ID_CHARS);
+                if (k >= 0) {
+                    o->Pkg[k].Tick = 0;
+                }
+            }
+        }
+        for (set = 0; set < INST_SET_COUNT; set++) {
+            OTHSET *o = &oth[set];
+            for (i = 0; i < opts.StageCount[set]; i++) {
+                const char *id = opts.StageIds[set] +
+                                 (size_t)i * INST_PKG_ID_CHARS;
+                int k = other_pkg_index(o, id);
+                if (k < 0 || o->Pkg[k].Tick) {
+                    continue;
+                }
+                if (!other_9x_fits(set, k, why, sizeof(why))) {
+                    out("REFUSED: %s:%s: %s Nothing was changed.\n",
+                        other_set_tag(set), id, why);
+                    return 0;
+                }
+                o->Pkg[k].Tick = 1;
+            }
+        }
+    }
+    other_block();
+    for (set = 0; set < INST_SET_COUNT; set++) {
+        for (i = 0; i < oth[set].PkgCount; i++) {
+            if (oth[set].Pkg[i].Unfit[0] != '\0') {
+                out("Not staged: %s:%s: %s\n", other_set_tag(set),
+                    oth[set].Pkg[i].Id, oth[set].Pkg[i].Unfit);
+            }
+        }
+    }
+    return 1;
+}
+
 /* The read's ticks from /wdmfree:stage= and /wdmnonfree:stage=, every id
  * checked before any change; 0 with othSwitchErr said. */
 static int other_ticks(void)
@@ -25969,22 +27582,31 @@ static int other_ticks(void)
                           "its set" : k < 0 ? "no such package in the set" :
                           envNow.Nt ? "it has nothing to stage on this "
                           "Windows" :
-                          /* A listed package whose set stages nothing for
-                           * this system (usbmidi on ME, record 26 section
-                           * 6.7.12) is told so, not that the list stages
-                           * it. */
-                          inst_other_9x_stageable(set, id) ? "its set "
+                          /* A package whose set stages nothing for this
+                           * system (usbmidi on ME, record 26 section
+                           * 6.7.12) is told so. */
+                          set == INST_SET_FREE ? "its set stages nothing for "
+                          "it on this Windows, so it is copied, not staged "
+                          "(use /wdmfree:copy, then point the hardware "
+                          "wizard at the package's folder)" : "its set "
                           "stages nothing for it on this Windows, so it is "
-                          "copied, not staged (use /wdmfree:copy, then point "
-                          "the hardware wizard at the package's folder)" :
-                          "on Windows 98 SE and ME this package is copied, "
-                          "not staged (only free audio/uac2 and audio/usbmidi "
-                          "can be staged there, each where its set stages "
-                          "it; use /wdmfree:copy or /wdmnonfree:copy, then "
+                          "copied, not staged (use /wdmnonfree:copy, then "
                           "point the hardware wizard at the package's "
                           "folder)");
                 othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
                 return 0;
+            }
+            /* 98 SE and ME (record 26 section 6.7.13): in the order given,
+             * each package's folders fit on DevicePath after the ones
+             * before it, or the switch is refused before any change. */
+            if (!envNow.Nt && !o->Pkg[k].Tick) {
+                char why[300];
+                if (!other_9x_fits(set, k, why, sizeof(why))) {
+                    _snprintf(othSwitchErr, sizeof(othSwitchErr) - 1,
+                              "%s:%s: %s", other_set_tag(set), id, why);
+                    othSwitchErr[sizeof(othSwitchErr) - 1] = '\0';
+                    return 0;
+                }
             }
             o->Pkg[k].Tick = 1;
         }
@@ -27572,11 +29194,10 @@ static int other_stage_9x(int set, const char *folderPath)
     }
     /* The limit 98 SE's hardware wizard was read to keep (record 26
      * section 6.7.12), read again before each append. */
-    if (r > 0 && strlen(newList) > INST_9X_DEVICEPATH_MAX) {
-        out("  DevicePath would pass %d characters, past which Windows 98 "
-            "SE's hardware wizard finds no driver: %s is not staged; point "
-            "the wizard at it instead.\n", INST_9X_DEVICEPATH_MAX,
-            folderPath);
+    if (r > 0 && strlen(newList) > (size_t)dp_9x_max()) {
+        out("  DevicePath would pass %d characters, past which %s: %s is "
+            "not staged; point the wizard at it instead.\n", dp_9x_max(),
+            inst_9x_devicepath_harm(envNow.Minor == 90), folderPath);
         return 0;
     }
     if (strcmp(newList, list) == 0) {
@@ -27740,9 +29361,8 @@ static void other_recover_only(int set)
     free(recs);
 }
 
-/* 1 when a 98 SE or ME Staged entry (an absolute folder) lies under the
- * set's recorded Dir and belongs to a package inst_other_9x_stageable
- * keeps on DevicePath (record 26 section 6.7.12). */
+/* 1 with id when a 98 SE or ME Staged entry (an absolute folder) lies
+ * under the set's recorded Dir in a package's folder. */
 static int other_9x_entry_id(int set, const char *name, char *id, size_t cap)
 {
     char dir[INST_PATH_CHARS];
@@ -27768,12 +29388,14 @@ static int other_9x_entry_id(int set, const char *name, char *id, size_t cap)
     return strchr(id, '/') != NULL;
 }
 
+/* 1 when that entry's package keeps it on DevicePath (record 26 section
+ * 6.7.13, other_9x_keeps). */
 static int other_9x_entry_kept(int set, const char *name)
 {
     char id[INST_PKG_ID_CHARS];
 
     return other_9x_entry_id(set, name, id, sizeof(id)) &&
-           inst_other_9x_stageable(set, id);
+           other_9x_keeps(set, id);
 }
 
 /* The package of a DevicePath entry under set's folder, the recorded Dir
@@ -27881,11 +29503,11 @@ static int other_9x_bar_left(int set, const char *id, char *why, size_t cap)
 
 /* 98 SE and ME: each folder an earlier run's Staged record names taken
  * out of DevicePath, and its record value with it, but a folder of a
- * package inst_other_9x_stageable keeps there (record 26 section 6.7.12).
- * Every other package is copied only on these systems (other_count): a
- * DevicePath of many entries left 98 SE's hardware wizard finding no
- * driver at all, so an install, update or repair over such a run gives
- * the wizard its search back. */
+ * package other_9x_keeps keeps there (record 26 section 6.7.13). Every
+ * entry of a set whose copy this run replaces goes here too, before
+ * either set's restorations and staging take the room, as the projection
+ * (other_9x_fits) counts it; the copy step's own withdrawal then finds
+ * none. */
 static void other_withdraw_devicepath(int set)
 {
     char name[INST_PATH_CHARS * 2];
@@ -27895,6 +29517,7 @@ static void other_withdraw_devicepath(int set)
     DWORD type = REG_SZ;
     DWORD i;
     int e;
+    int replaced;
 
     if (envNow.Nt || opts.List) {
         return;
@@ -27909,6 +29532,7 @@ static void other_withdraw_devicepath(int set)
     if (e == 0) {
         return;
     }
+    replaced = other_9x_replaced(set, toolDir);
     for (i = 0;; i++) {
         e = other_staged_enum(set, i, name, sizeof(name), data, sizeof(data));
         if (e < 0) {
@@ -27920,7 +29544,8 @@ static void other_withdraw_devicepath(int set)
         if (e == 0) {
             return;
         }
-        if (!inst_eq(data, "DevicePath") || other_9x_entry_kept(set, name)) {
+        if (!inst_eq(data, "DevicePath") ||
+            (!replaced && other_9x_entry_kept(set, name))) {
             continue;
         }
         if (!reg_text(HKEY_LOCAL_MACHINE, INST_REG_CV, "DevicePath", list,
@@ -28142,7 +29767,7 @@ static void other_run_set(int set)
 }
 
 /* 98 SE and ME: each folder an earlier run's Staged record names for a
- * package inst_other_9x_stageable keeps, missing from DevicePath now,
+ * package other_9x_keeps keeps, missing from DevicePath now,
  * appended again within the wizard's limit (sections 6.7.11, 6.7.12). */
 static void other_9x_restore(int set)
 {
@@ -28961,12 +30586,95 @@ const char *inst_eng_other_none_text(int set)
     return inst_other_none_text(envNow.Nt, set);
 }
 
+int inst_eng_other_copy_only(int set, int i, char *out, size_t cap)
+{
+    const OTHSET *o;
+    const OTHPKG *p;
+    INST_U32 bit = othSys >= 0 ? ((INST_U32)1 << othSys) : 0;
+    char folders[8][INST_PATH_CHARS];
+    char more[INST_PATH_CHARS];
+    const char *ptr[9];
+    int n = 0;
+    int over = 0;
+    int k;
+    int j;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (envNow.Nt || set < 0 || set >= INST_SET_COUNT || !othRead ||
+        i < 0 || i >= oth[set].PkgCount) {
+        return 0;
+    }
+    o = &oth[set];
+    p = &o->Pkg[i];
+    if (p->Eligible || p->CopyHere == 0) {
+        return 0;
+    }
+    /* Every distinct folder its COPY lines for this system name; past
+     * eight, the set's STAGE.TXT, which lists them all. */
+    for (k = 0; k < o->StageCount && !over; k++) {
+        char id[INST_PKG_ID_CHARS];
+        char rel[INST_OTHER_REL_CHARS];
+        char one[INST_PATH_CHARS];
+        if (o->Stage[k].Stage || !(o->Stage[k].Systems & bit)) {
+            continue;
+        }
+        inst_other_pkg_of(o->Stage[k].Inf, id, sizeof(id));
+        if (!inst_eq(id, p->Id)) {
+            continue;
+        }
+        inst_copy(rel, o->Stage[k].Inf, sizeof(rel));
+        if (strrchr(rel, '/') != NULL) {
+            *strrchr(rel, '/') = '\0';
+        }
+        other_path(one, sizeof(one), inst_other_folder(set), rel);
+        for (j = 0; j < n && !inst_eq(folders[j], one); j++) {
+        }
+        if (j == n && n == 8) {
+            over = 1;
+        } else if (j == n) {
+            inst_copy(folders[n++], one, INST_PATH_CHARS);
+        }
+    }
+    for (j = 0; j < n; j++) {
+        ptr[j] = folders[j];
+    }
+    if (over) {
+        _snprintf(more, sizeof(more) - 1, "and more: see %s\\STAGE.TXT",
+                  inst_other_folder(set));
+        more[sizeof(more) - 1] = '\0';
+        ptr[n++] = more;
+    }
+    inst_other_copy_only_line(out, cap, p->Desc, ptr, n);
+    return 1;
+}
+
+void inst_eng_other_rest(int set, const char *dir, int part, char *out,
+                         size_t cap)
+{
+    int earlier;
+
+    if (cap > 0) {
+        out[0] = '\0';
+    }
+    if (envNow.Nt || set < 0 || set >= INST_SET_COUNT || !othRead ||
+        oth[set].State != INST_OTHER_CARRIED) {
+        return;
+    }
+    earlier = other_earlier_text(set)[0] != '\0';
+    inst_other_rest_text(out, cap, part, set,
+                         dir != NULL && dir[0] != '\0' ? dir :
+                         toolDir, oth[set].Include,
+                         oth[set].Include && other_9x_replacing(set), earlier);
+}
+
 const char *inst_eng_other_earlier(int set)
 {
     if (set < 0 || set >= INST_SET_COUNT || !othRead) {
         return "";
     }
-    return oth[set].Earlier;
+    return other_earlier_text(set);
 }
 
 void inst_eng_other_choose(int set, int include, int stage)
@@ -29107,10 +30815,15 @@ static void other_finish(char *text, size_t cap, const char *nl)
                 }
                 n++;
             }
-            _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.%s%s",
-                      inst_other_label(set), dir, inst_other_address(set),
-                      set == INST_SET_FREE ? nl : "",
-                      set == INST_SET_FREE ? INST_FREE_NOTICE : "");
+            /* The free set's notice gives its address: not twice. */
+            if (set == INST_SET_FREE) {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s.%s%s",
+                          inst_other_label(set), dir, nl, INST_FREE_NOTICE);
+            } else {
+                _snprintf(one, sizeof(one) - 1, "%s: in %s. Up to date: %s.",
+                          inst_other_label(set), dir,
+                          inst_other_address(set));
+            }
             one[sizeof(one) - 1] = '\0';
             strncat(text, one, cap - strlen(text) - 1);
             for (i = 0; i < o->PkgCount; i++) {
@@ -29394,11 +31107,6 @@ void inst_eng_s98_file_ok(int ok)
     logonly("stor98: file update confirmed %d\n", s98FileOk);
 }
 
-const char *inst_eng_tb_name(void)
-{
-    return tbNhiPresent ? tbNhiName : "";
-}
-
 int inst_eng_shutdown(void)
 {
     return (inst_s98_cold_start(envNow.Nt) && s98Cold) || stor_cold();
@@ -29434,7 +31142,16 @@ void inst_eng_usage(void)
 "  /stor98       with /thunderbolt: install the bundled Stor98 unasked\n"
 "                (the default with /thunderbolt /yes)\n"
 "  /nostor98     leave the bundled Stor98 out of a /thunderbolt run\n"
-"  /nouas        leave the UAS disk driver (xhciuas.sys) out of this run\n"
+"  /s98vsd       98 SE and ME, with Stor98 in the run: install S98VSD.VXD\n"
+"                (Stor98's large transfers) unasked\n"
+"  /nos98vsd     leave S98VSD.VXD out\n"
+"  /xhcipfw      98 SE to 32-bit 7, with /thunderbolt or /cmonly: install\n"
+"                XHCIPFW (PCI windows above 4 GB closed at each start) unasked\n"
+"  /noxhcipfw    leave XHCIPFW out\n"
+"  /tbnet        with /thunderbolt or /cmonly: turn Thunderbolt networking\n"
+"                on unasked (a network connection to another computer)\n"
+"  /notbnet      turn Thunderbolt networking off\n"
+"  /nouas     leave the UAS disk driver (xhciuas.sys) out of this run\n"
 "  /storage      Windows 98 SE: install the USB storage drivers (NUSB 3.3's);\n"
 "                elsewhere copy their files to the install folder only\n"
 "  /nostorage    leave the USB storage drivers out of this run\n"
@@ -29451,7 +31168,6 @@ void inst_eng_usage(void)
 "                computer (/nofaster: off)\n"
 "  /restage      Vista to 10: replace a stored build with the same DriverVer\n"
 "  /uninstall    remove the drivers (asks for the word REMOVE)\n"
-"  /debug        (INSTALL.BAT) the debug- directory, for troubleshooting\n"
 "  /nopause      do not wait for Enter at the end\n"
 "  /log path     write the log there (default XHCIINST.LOG on the system\n"
 "                drive)\n"
@@ -29564,6 +31280,11 @@ static void st_screens_once(int longest)
     static const char *const nt1[] = {
         "y", "", "9", "", "", "", "C:\\WINDOWS\\X", "", "n", NULL
     };
+    /* 98: the Thunderbolt question, the storage row, the port switchover,
+     * XhciSilentInstall and the connection manager's three (asked on 98
+     * SE and ME too since task 45.54), then a long-named directory that
+     * is refused, Enter for the one above, the confirmation, and no to
+     * Device Manager. */
     static const char *const x9[] = {
         "y", "", "", "", "", "", "", "C:\\Program Files\\xHCI98", "",
         "y", "n", NULL
@@ -30527,6 +32248,28 @@ static int mw_values_remove(void)
         flagFailed = 1;
         return 0;
     }
+    /* XhciCmNet, written by the networking box and not a row of the table
+     * (record 35 section 9.5), by name. */
+    if (INST_TBNET_WIRED) {
+        if (opts.List) {
+            DWORD t;
+            if (RegQueryValueExA(k, "XhciCmNet", NULL, &t, NULL, NULL) ==
+                ERROR_SUCCESS) {
+                out("(/list) the machine-wide XhciCmNet would be deleted.\n");
+            }
+        } else {
+            r = RegDeleteValueA(k, "XhciCmNet");
+            if (r == ERROR_SUCCESS) {
+                flagChanged = 1;
+                out("The machine-wide XhciCmNet was deleted.\n");
+            } else if (r != ERROR_FILE_NOT_FOUND) {
+                out("The machine-wide XhciCmNet could not be deleted (error "
+                    "%ld).\n", (long)r);
+                flagFailed = 1;
+                ok = 0;
+            }
+        }
+    }
     for (v = 0; v < instValueCount; v++) {
         if (instValues[v].Loc != INST_LOC_MW) {
             continue;   /* goes with the mark service's key */
@@ -30741,15 +32484,15 @@ int inst_eng_begin(int argc, char **argv)
     }
     /* Design record 32 sections 8 and 11. */
     if (opts.Pfw && pfw_kind() == INST_PFW_SYS_GONE) {
-        /* Task 44.72 (the owner, 2026-10-28). */
-        out("REFUSED: /xhcipfw: XHCIPFW.SYS may start too late on Windows "
-            "8, 8.1 and 10.\n");
+        /* Task 44.72 (the owner, 2026-10-28); task 45.9 (2026-10-29). */
+        out("REFUSED: /xhcipfw: XHCIPFW.SYS cannot start in time on Windows "
+            "10.\n");
         return INST_EXIT_REFUSED;
     }
     if ((opts.Pfw || opts.NoPfw) && (pfw_kind() == INST_PFW_SYS_NONE ||
                                      pfw_kind() == INST_PFW_SYS_GONE)) {
         out("REFUSED: /xhcipfw and /noxhcipfw are for Windows 98 SE, ME, "
-            "2000, XP and\nthe 32-bit Vista and 7 only.\n");
+            "2000, XP and\nthe 32-bit Vista, 7, 8 and 8.1 only.\n");
         return INST_EXIT_REFUSED;
     }
     for (i = 0; i < opts.SetCount; i++) {
@@ -30962,6 +32705,7 @@ void inst_eng_tb_question(void)
     pfw_question();
     s98_question();
     vsd_question();
+    net_question();
     stor_question();
     other_question();
 }
@@ -31010,6 +32754,29 @@ void inst_eng_tb_choose(int include)
 {
     tb_apply(include);
     logonly("thunderbolt: chosen %d (present %d)\n", tbInclude, tbNhiPresent);
+}
+
+void inst_eng_net_state(int *shown, int *enabled, int *first)
+{
+    INST_TBNET d;
+
+    net_decide(&d);
+    *shown = d.Shown;
+    *enabled = d.Enabled;
+    *first = d.First;
+}
+
+void inst_eng_net_choose(int ticked)
+{
+    netBox = ticked ? 1 : 0;
+    net_set();
+    plan();
+    logonly("tbnet: chosen %d, include %d\n", netBox, netInclude);
+}
+
+const char *inst_eng_net_plan(void)
+{
+    return net_plan_text();
 }
 
 static int planResult = -1;
@@ -31152,11 +32919,19 @@ int inst_eng_ask(void)
     if (!choose_dir()) {
         return INST_EXIT_REFUSED;
     }
+    if (!other_9x_after_dir()) {
+        return INST_EXIT_REFUSED;
+    }
     s98_ask_unused();
     cm_off_warning();
     comp_warnings_out();
     if (opts.List) {
         tray_install();
+        /* The real run's end-of-run scrub, previewed (its /list branch
+         * names each entry it would delete). */
+        if (envNow.Nt) {
+            (void)cddb_service_scrub();
+        }
         out("/list: nothing was changed.\n");
         return INST_EXIT_DONE;
     }

@@ -1,0 +1,12 @@
+# ndisvxd-baselines.expected - the NDIS.VXD of Windows 98 SE and ME whose
+# export names check-imports.ps1 -GateProfile net98 reads for xhcinet.sys's
+# NDIS.SYS imports (design record 35 section 7.8, task 45.59 step S6).
+# SYSTEM FILE LENGTH SHA-256, one a line. The files are not tracked: they
+# are WINDOWS\SYSTEM\NDIS.VXD of the q35 98 SE and ME base images,
+# extracted read-only with 7-Zip (7z e -y -o<dir> disk.qcow2
+# WINDOWS\SYSTEM\NDIS.VXD) into tools\win98se-extracted and
+# tools\winme-extracted (or the directories -Ndis98Dir and -NdisMeDir
+# name). Only export names are read (the owner's rule of 2026-10-31,
+# 14:40): each NDIS.SYS import as a NUL-delimited name in the file.
+98SE NDIS.VXD 166029 71C52BC6AEDD76AED7B6E3D87B413689C3C711A1D896DA9FA36435BA1363FF94
+ME NDIS.VXD 157397 9E0F9ADA90BDC93985858D14A451AB706584FFC4E6F49BA69F48C00C7A332DB2

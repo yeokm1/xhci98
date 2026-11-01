@@ -13,7 +13,7 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\check-text.ps1 -SelfTest
 #
 # THE BUILD'S TEXT CHECKS, each its own script, run here in turn:
-#   - xhciqual\test\check-bat-eol.ps1: every tracked .BAT is CRLF
+#   - xhciqual\test\check-bat-eol.ps1: every tracked .BAT and .CMD is CRLF
 #   - scripts\check-source-charset.ps1: no control byte, byte >= 0x80 or
 #     forbidden BOM in tracked source
 #   - scripts\check-readme-text.ps1: the tool readmes the cut publishes and
@@ -50,6 +50,8 @@
 #     releases\history.md heading, dated as src\xhci98.inf's DriverVer
 #     (package-common.ps1's Get-ChangelogEntryFaults, the cut's own check),
 #     so a version bump carries its entry's heading from the start
+#   - docs\using\release-notes.md's head describing src\xhci_version.h's
+#     version ("package version `X`" in its first lines)
 #   - no TODO(...) or TBD in docs\using\release-notes.md or in
 #     releases\history.md from its first entry down, which the readme embeds
 #   - no claim of package-common.ps1's $script:ReadmeForbiddenPhrases in any
@@ -97,8 +99,6 @@ function Get-PlaceholderStandIns {
         "{VERSION}"    = $Version
         "{DATE}"       = "2026-12-31"
         "{RELEASEDIR}" = "RELEASE-X86 or RELEASE-X64"
-        "{DEBUGDIR}"   = "DEBUG-X86 or DEBUG-X64"
-        "{DIRLIST}"    = "RELEASE-X86\, DEBUG-X86\, RELEASE-X64\ and DEBUG-X64\"
     }
 }
 
@@ -404,6 +404,19 @@ function Get-DownloadReadmeFaults {
     return $faults
 }
 
+function Get-ReleaseNotesHeadFaults {
+    # The release notes open by naming the version they describe ("This
+    # file describes package version `X`"), and it must be -Version, the
+    # package's: on 2026-10-29 the head still named 3.2.0.0 with the tree,
+    # every INF and the history at 3.3.0.0.
+    param([string[]]$Lines, [string]$Version)
+    $head = (@($Lines | Select-Object -First 12)) -join " "
+    $m = [regex]::Match($head, 'package version\s+`(\d+\.\d+\.\d+\.\d+)`')
+    if (-not $m.Success) { return @("docs\using\release-notes.md: its first 12 lines name no package version; its head must describe $Version.") }
+    if ($m.Groups[1].Value -ne $Version) { return @("docs\using\release-notes.md: its head describes package version $($m.Groups[1].Value), but src\xhci_version.h is $Version.") }
+    return @()
+}
+
 function Get-HistoryFaults {
     # The changelog entry for -Version, dated as -ReleaseDate (the cut's own
     # check), and TODO(...) or TBD in the release notes or in history.md
@@ -426,6 +439,7 @@ function Get-HistoryFaults {
     }
     $notes = Join-Path $Root "docs\using\release-notes.md"
     if (Test-Path -LiteralPath $notes) {
+        $faults += @(Get-ReleaseNotesHeadFaults -Lines @(Get-Content -LiteralPath $notes) -Version $Version)
         $faults += @(Find-DraftMarkers -Lines @(Get-Content -LiteralPath $notes) -Label "docs\using\release-notes.md" |
                      ForEach-Object { "$_ (a draft marker; the cut refuses it)" })
     }
@@ -652,7 +666,7 @@ if ($SelfTest) {
             }
         }
         [System.IO.File]::WriteAllText($histPath, "## 2.0.0.0 - 2026-01-01`r`n")
-        [System.IO.File]::WriteAllText((Join-Path $root "docs\using\release-notes.md"), "ok`r`nTODO(bench)`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $root "docs\using\release-notes.md"), ('This file describes package version `2.0.0.0`.' + "`r`nTODO(bench)`r`n"))
         $hf = @(Get-HistoryFaults -Script $stub -Root $root -Version "2.0.0.0" -ReleaseDate "2026-01-01")
         Assert-Self ("a draft marker in the release notes: " + ($hf -join " | ")) ($hf.Count -eq 1 -and $hf[0].Contains("release-notes.md line 2: TODO(bench)"))
 
@@ -725,6 +739,12 @@ if ($SelfTest) {
     } finally {
         Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    # The release notes' head against the package version.
+    $rnHead = @('# xhci98 - Release Notes', '', 'This file describes package version `9.8.7.6`, the', 'nth release.')
+    Assert-Self "the release notes' head at the package version is refused" (@(Get-ReleaseNotesHeadFaults -Lines $rnHead -Version "9.8.7.6").Count -eq 0)
+    Assert-Self "the release notes' head at another version is taken" (Test-Has @(Get-ReleaseNotesHeadFaults -Lines $rnHead -Version "9.8.7.7") "describes package version 9.8.7.6")
+    Assert-Self "release notes naming no version in their head are taken" (Test-Has @(Get-ReleaseNotesHeadFaults -Lines @("# xhci98 - Release Notes", "", "Nothing here.") -Version "9.8.7.6") "name no package version")
 
     $childOk = Invoke-Child -Rel "scripts\check-readme-text.ps1" -Arguments @("-SelfTest")
     if (-not $childOk) { $script:selfFailed++ }

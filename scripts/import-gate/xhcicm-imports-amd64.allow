@@ -8,8 +8,8 @@
 # Every row is the amd64 twin of a row in xhcicm-imports.allow, except where
 # the architecture changes the pair: KeInitializeSpinLock is an inline on
 # amd64, and the Kf* spin-lock pair is KeAcquireSpinLockRaiseToDpc /
-# KeReleaseSpinLock there; WDK 7.1's checked headers import RtlAssert (debug
-# and qemu only); and /GS imports KeBugCheckEx, exactly as in
+# KeReleaseSpinLock there; WDK 7.1's checked headers import RtlAssert (qemu
+# only, debug having been retired with task 45.45); and /GS imports KeBugCheckEx, exactly as in
 # xhci98-imports-amd64.allow, whose comments say why each is accepted. The
 # SITES rules are the x86 file's.
 
@@ -17,7 +17,6 @@
 
 # --- Compiler- and header-added pairs, as in xhci98-imports-amd64.allow ---
 ntoskrnl.exe!KeBugCheckEx                  all    required  nt52-amd64-export; /GS __report_gsfailure only, bugcheck 0xF7 (as xhci98-imports-amd64.allow)
-ntoskrnl.exe!RtlAssert                     debug  required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
 ntoskrnl.exe!RtlAssert                     qemu   required  nt52-amd64-export; WDK 7.1 checked-header ASSERTs only
 
 # --- PnP: the NHI's FDO and the tunnel bridge's filter ---
@@ -94,6 +93,19 @@ ntoskrnl.exe!RtlInitUnicodeString          all    required  SITES=cm_statos.obj 
 ntoskrnl.exe!IoCreateSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoDeleteSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!IoRegisterDeviceInterface     all    required  nt52-amd64-export; twin of the x86 row
+
+# --- the ring interrupt (cm_rirqos.c, design record 21 section 4.5.8) ---
+ntoskrnl.exe!IoConnectInterrupt            all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!IoDisconnectInterrupt         all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeInitializeDpc               all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeInsertQueueDpc              all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+ntoskrnl.exe!KeSynchronizeExecution        all    required  nt52-amd64-export; twin of the x86 row (task 45.22)
+
+# --- Thunderbolt networking (cm_net.c, design record 35, task 45.59) ---
+ntoskrnl.exe!KeInitializeTimer             all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!KeSetTimer                    all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!KeCancelTimer                 all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
+ntoskrnl.exe!ObfReferenceObject            all    required  nt52-amd64-export; twin of the x86 row (task 45.59)
 
 [deny]
 

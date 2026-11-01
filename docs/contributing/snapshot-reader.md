@@ -546,6 +546,19 @@ header, a record or the counters is still read; a version past the one the
 tool knows is refused, since a version bump means a field changed meaning.
 35.3's driver sent an eight-word header; 35-T.8's appended twelve words with
 the version left at 1, and an older tool reads the region as before.
+From 3.4.0.0 (roadmap-usb4 task 45.40, design record 13 section 10.7,
+"Identity across a re-enumeration") the record is twenty words: four
+appended after the flags, the port's identity memory (the vendor and
+product id of the last group listed there), its serial-form flag and
+deferral latch, and its deferrals made and spent. The tool prints them as
+an "identity:" line under the port, and shows a port that holds them even
+when it is Empty.
+The places behind hubs (the same task, owner 2026-10-30) are a block
+appended to the header (header 792 words): the entry count, the words of
+one and the first entry's word at words 629 to 631, then 32 entries of
+five words - the place's instance key (root port in bits 7:0, Route
+String above), the ids, the serial-form flag and latch, the deferrals
+made and spent - which the tool prints under "identity behind hubs".
 
 ### Controller tolerance (2.2.0.0)
 
@@ -868,6 +881,17 @@ per reason, in the counter list by name. Until `3.3.0.0` they were
 `hc->XportDecisions`, outside the block and never zeroed; in the block
 they are zeroed at each start with it. A block shorter than 252 words is
 a driver from before it.
+Task 45.45's six follow (252 to 257, `StrictSwitchRead`, `StrictOn`,
+`StrictChecked`, `StrictViolations`, `StrictUndefined`,
+`StrictRefusals`; design record 08 section 14): how `XhciCommandCheck`
+was read (0 absent, 1 a DWORD, 2 another type), whether the
+command-state checker runs this start, and its counts - the commands
+checked, the preconditions a conforming controller would refuse, the
+spec's "undefined behavior" cases, and the commands answered Slot Not
+Enabled, Parameter or Context State Error - in the counter list by name;
+the log's `strict.*` notes say which. The last four were fields of the
+checked builds' controller until `3.4.0.0`, never published. A block
+shorter than 258 words is a driver from before it.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

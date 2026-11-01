@@ -28,6 +28,44 @@ VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds)
     due->HighPart = (ticks == 0) ? 0 : -1;
 }
 
+/*
+ * A wait on a KEVENT that returns only once the event satisfied it.
+ * Windows 98 can end KeWaitForSingleObject with an undocumented 0xFFFFFFFF
+ * and the event unsignalled (win98-wdm.md, "Win98/98 SE status"); a caller
+ * that went on from there would leave a stack event for a completion
+ * routine to set in a dead frame, free an IRP still below it, tear down
+ * with a dispatch still inside, or enter a gate another party holds. A
+ * 1 ms delay follows each unsatisfied return, so a wait that keeps ending
+ * at once yields the processor rather than spinning.
+ *
+ * `bound` 0 waits until the event is satisfied: for an event a completion
+ * routine or a leaving dispatch is owed to set, any return before that is
+ * worse than waiting on. A gate passes a bound, because win98-wdm.md knows
+ * no remedy for the nested-block case and warns against an unbounded retry
+ * there, which would wedge the gate's every later caller too; after `bound`
+ * unsatisfied returns in a row the wait is abandoned and the caller goes on
+ * unowned, as every gate did before its wait was checked, and records it.
+ *
+ * Returns the number of unsatisfied returns. IRQL: PASSIVE_LEVEL.
+ */
+ULONG HcdWaitEvent(PKEVENT event, ULONG bound)
+{
+    LARGE_INTEGER due;
+    ULONG missed;
+
+    missed = 0;
+    while (KeWaitForSingleObject(event, Executive, KernelMode, FALSE,
+                                 NULL) != STATUS_SUCCESS) {
+        missed++;
+        if (bound != 0 && missed >= bound) {
+            break;
+        }
+        HcdRelativeMs(&due, 1);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+    return missed;
+}
+
 /* IRQL: PASSIVE_LEVEL. */
 VOID HcdSvcWaitMs(PXHCI_EXTENSION ext, ULONG milliseconds)
 {
@@ -117,7 +155,7 @@ MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
     HCD_SET_COMPLETION_ALWAYS(irp, hcdConfigDone, &done);
     status = IoCallDriver(hc->Pdo, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+        (VOID)HcdWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     hc->ConfigLastInformation = (ULONG)irp->IoStatus.Information;

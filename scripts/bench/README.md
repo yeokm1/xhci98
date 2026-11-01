@@ -17,7 +17,7 @@ ASCII.
 |---|---|---|
 | `IMOD.BAT` | Windows 2000 and later (needs `reg.exe`: in the base install from XP, on Windows 2000 SP4 only with the Support Tools; without it the file prints the class key to set the value in by hand with regedit) | Sets, shows or clears `XhciImodInterval250ns`, the interrupt-moderation interval the driver reads at every start (roadmap task 23.4; task 23.3 swept it) |
 | `IMOD98.BAT` | Windows 98 SE and Windows ME only | The same, through `regedit /s` and a generated `REGEDIT4` file. It writes the 9x software key, `...\Services\Class\USB\NNNN`, which no NT target reads, so it is no fallback for a Windows 2000 machine without `reg.exe` |
-| `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`) |
+| `SWEEP98.BAT` | Windows 98 SE and Windows ME | One boot of the sweep: a timed `XHCISNAP` dump before a benchmark run (`SWEEP98 ARM A`) and one after (`SWEEP98 ARM B`). **For `3.0.0.0` and earlier only**: `XHCISNAP` was retired in `3.1.0.0` (roadmap-usb4 task 42-A.4), and on a later kit the file stops and points at `XHCITR /dump /o NAME`, which takes the same dump by hand |
 
 **Nothing in a 9x batch file may put `<`, `>` or `|` in a `REM` line.**
 COMMAND.COM performs redirection on a comment: until 2026-09-22 the header of
@@ -70,12 +70,14 @@ any USB host controller devnode bugchecks the machine before the teardown
 completes (`build-and-test.md`). On the E460 under 32-bit Windows 7 the first
 Disable of this controller never finished (`runs/run-22.md`, task 22.9).
 
-Confirm what the driver actually did with an `XHCISNAP` dump rather than with
+Confirm what the driver actually did with a snapshot dump (`XHCITR /dump` or
+`/snapshot` since `3.1.0.0`, `XHCISNAP` up to `3.0.0.0`) rather than with
 either script's own output: the `XhciImodInterval250ns` lines of its `.TXT`
 give the value read, the interval in force and what the register read back,
 and those are what make a throughput figure attributable to an interval. The
-channel has to be engaged (`XHCISNAP -verbosity 1` or higher) at the start the
-dump is taken in, so set it before the same reboot.
+channel has to be engaged (`XHCITR /setlevel xhci98=1` or higher;
+`XHCISNAP -verbosity 1` up to `3.0.0.0`) at the start the dump is taken in,
+so set it before the same reboot.
 
 The procedures these serve are `docs/contributing/runs/run-23.md`, "23.3 - the
 moderation experiment" and 23.5, the audio test.

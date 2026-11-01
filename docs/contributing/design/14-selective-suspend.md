@@ -7,7 +7,9 @@ SUSP.1 is 36.28, SUSPa.1 to SUSPa.6 are 36.29 to 36.34, SUSPa-V and
 SUSPa-E 36.35 and 36.36, SUSPb.1, SUSPb.2, SUSPb-V and SUSPb-E 36.37 to
 36.40, SUSP.2 is 36.41, and SUSP.3 and SUSP.4 joined 36.20 and 36.final.
 This record keeps the old ids, and its revision history the old phase
-numbers). DRAFT, revision 10,
+numbers). Implemented by those tasks and shipped in `2.3.0.0`
+(2026-10-12), off by default (`XhciSelectiveSuspend`); the rest of this
+paragraph is the record's history as it was written. Draft revision 10,
 2026-10-05: written at the owner's request to solve the known limitation "the
 driver never initiates selective suspend" (roadmap-hcd decisions table, row
 "The idle power policy (28.3)"; release notes, "Known limitations").
@@ -256,7 +258,9 @@ ask, and perform the one step asked. What it decides:
   what this reads as when the link is ACTIVE, the revived PDO's case.
 - **The admission of a D-IRP** at dispatch (4.2 to 4.4): complete at once or
   pend, and the `PwrState` written. Closed (`PwrClosed`, the controller
-  released): complete at once. The switch at 0, a hub or a SuperSpeed PDO:
+  released; or the controller's latch set, at a shutdown or after a D0 the
+  bus failed, record 13 sections 5.8 and 5.8.1, task 45.63): complete at
+  once. The switch at 0, a hub or a SuperSpeed PDO:
   today's (record, complete). A Dx while `PowerDown`, while a sibling is
   D0, or while the link is not ACTIVE (the PDO is already Dx there, 4.3's
   D2->D3): complete at once; otherwise pend, the last to leave D0. A D0:

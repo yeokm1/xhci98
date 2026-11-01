@@ -1,0 +1,19 @@
+# Authenticated Windows 10 x86 kernel, HAL and NDIS export baselines, for the
+# import gate's net6 profile (xhcinet6.sys, the NDIS 6.20 miniport of
+# Thunderbolt networking, design record 35 section 7.9, roadmap-usb4.md
+# task 45.59 step S7). Only the files' export names are read (dumpbin
+# /exports), as for hlprx86-win7-baselines.expected; the files stay
+# untracked in tools\win10-x86-extracted.
+#
+# Source: the project's q35 base image w10x86 (read-only, never booted for
+# this): Windows\System32\ntoskrnl.exe, hal.dll and drivers\ndis.sys, extracted
+# by the owner with 7-Zip on 2026-10-31 on development host A; measured
+# the same day. Any staging whose files match these rows satisfies the
+# gate.
+#
+# Format:
+#   PACKED OUTPUT PROVIDER VERSION LENGTH SHA256
+
+ntoskrnl.exe ntoskrnl.exe ntoskrnl.exe 10.0.19041.2965 7204688 F57145F91A3B6527AFD0B386151C4C769B52F18C00CEB2CC7A5D405B931A2827
+hal.dll hal.dll hal.dll 10.0.19041.2728 403264 DC345A990CB785A4A0AADCA12764DF7FCD049EAC11B24BC7D88D7513C843503E
+ndis.sys ndis.sys ndis.sys 10.0.19041.1387 1071952 6A076B75EC5CDB24CE514A824DFA0D305EBCA4D7FA15749294B6682276A3D2E4

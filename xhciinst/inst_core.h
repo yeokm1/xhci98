@@ -224,7 +224,8 @@ int inst_uas_fix_9x(int nt, INST_U32 minor, int isUas, INST_U32 problem,
                     int ntmapPresent);
 
 /* The XHCI98_FLAVOUR_* markers in an image: their count, and the first's
- * suffix (RELEASE, DEBUG, QEMU) in out. */
+ * suffix (RELEASE or QEMU; DEBUG in an image from before task 45.45) in
+ * out. */
 int inst_flavour_marker(const unsigned char *buf, size_t len, char *out,
                         size_t cap);
 
@@ -272,6 +273,14 @@ int inst_path_remove_copies(const char *list, const char *root, char *out,
  * when out is too small. */
 size_t inst_msz_remove(const char *in, size_t inBytes, const char *name,
                        char *out, size_t cap, int *removed);
+
+/* The multi-string with name appended as its last entry, the others kept
+ * in order, unless an entry already equals it (compared without case):
+ * then the same list and *added 0. Returns the new length in bytes
+ * including the final NUL pair; (size_t)-1 when out is too small. in may
+ * be NULL or empty (inBytes 0). */
+size_t inst_msz_append(const char *in, size_t inBytes, const char *name,
+                       char *out, size_t cap, int *added);
 
 /* A filter list value (LowerFilters or UpperFilters, read as a
  * multi-string of inBytes; a REG_SZ is passed with its NUL pair) with
@@ -466,7 +475,11 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_INF_CM         2
 #define INST_INF_CMF        3
 #define INST_INF_S98        4   /* the bundled Stor98, when ticked */
-#define INST_INF_COUNT      5
+#define INST_INF_NET        5   /* Thunderbolt networking, when ticked
+                                   (record 35 section 9.5); appended, so an
+                                   interrupted run's slot numbers keep
+                                   their meaning */
+#define INST_INF_COUNT      6
 
 #define INST_APPLY_ANY_XHCI 0
 #define INST_APPLY_PSW      1
@@ -475,6 +488,10 @@ const char *inst_hvci_text(int state, int cmInRun);
 #define INST_APPLY_9X_XHCI  4   /* 98 SE and ME with an xHCI controller */
 #define INST_APPLY_9X_CM    5   /* 98 SE and ME with a device xhcicm.inf matches */
 #define INST_APPLY_MARK     6   /* where the mark service runs (inst_mk_system) */
+#define INST_APPLY_NT5_CM   7   /* 2000, XP and XP x64 with the connection
+                                   manager (record 33 section 9.1) */
+#define INST_APPLY_NT_CM    8   /* 2000 to 10 with the connection manager
+                                   (task 45.54: XhciCmRingInterrupt) */
 
 /* Where a value lives (record 26 section 5.0): Services\USB machine-wide,
  * or the mark service's own Parameters key (its Restart). */
@@ -508,10 +525,12 @@ typedef struct _INST_VALUE {
     int NoInf;
     INST_U32 Def;
     int Loc;                /* INST_LOC_*: 0 for every Services\USB value */
+    INST_U32 Step;          /* a range's number a multiple of it (0: any;
+                               task 45.54, XhciMaxTransferKB's 4) */
 } INST_VALUE;
 
 /* The most values the table holds (the answers' arrays). */
-#define INST_MAX_VALUES     32
+#define INST_MAX_VALUES     48
 
 /* Where the installer writes a value (record 26 section 5.4, task 42-A.17;
  * owner, 2026-10-18): the machine-wide key both drivers read first, under
@@ -570,6 +589,19 @@ const char *inst_value_only(int index);
  * writes (NoInf) and for a 98 SE and ME Thunderbolt value the INF does
  * not write (the amd64 xhcicm.inf), the table's. 1 when there is one. */
 int inst_value_default(int index, const char *infText, INST_U32 *def);
+
+/* A range value's number (Hi nonzero) within Lo to Hi and on its Step
+ * (record 26 section 5.4.1): 1 when it is, 0 otherwise or for a list. */
+int inst_value_in_range(int index, INST_U32 v);
+
+/* A range value's allowed numbers as text, "64 to 2048, a multiple of 4"
+ * or "1 to 5000"; "" for a list. */
+void inst_value_range_text(int index, char *out, size_t cap);
+
+/* 98 SE and ME (record 23 section 8.2, revision 51): 1 when a controller
+ * takes the values after the run - bound to the INF's service now, or a
+ * device with no driver that the run installs (INST_ACT_INSTALL). */
+int inst_value_target_9x(int serviceIsOurs, int action);
 
 /* An answer: 0 keep (empty line), 1 *value set, -1 not an allowed value. */
 int inst_value_answer(const char *line, INST_U32 mask, INST_U32 *value);
@@ -790,6 +822,9 @@ typedef struct _INST_OPTS {
                                with the Thunderbolt part (design record
                                32 sections 8 and 11)                   */
     int NoPfw;              /* /noxhcipfw: it unticked                */
+    int TbNet;              /* /tbnet: the networking box ticked (record
+                               26 section 5.3.5, record 35 section 9.2)  */
+    int NoTbNet;            /* /notbnet: it unticked                  */
     int NoPause;
     int SelfTest;
     int Devices;            /* /devices (record 24)                     */
@@ -801,8 +836,6 @@ typedef struct _INST_OPTS {
     char To[260];           /* /to <path>: the install directory, unasked */
     char From[260];         /* /from <dir>: the uninstall's relaunch from the
                                install directory (record 26 section 9.2) */
-    int Debug;              /* /debug: the debug- directory (the window's
-                               own choice; INSTALL.BAT's for the console) */
     int Console;            /* /console: INSTALL.BAT's word, the console's */
     int SetCount;
     int SetIndex[INST_MAX_SET];
@@ -817,7 +850,7 @@ typedef struct _INST_OPTS {
     "Too many arguments for INSTALL.BAT on this Windows (eight at most, " \
     "seven\nafter /console; /set Name=Value counts as three, and a " \
     "/wdmfree:stage=\nlist one more than its packages). Run\n" \
-    "TOOLS\\XHCIINST\\XHCIINST.EXE /dir release-x86 with the same " \
+    "TOOLS\\XHCIINST\\XHCIINST.EXE /dir 98-me with the same " \
     "arguments\ninstead, or use fewer arguments.\n"
 
 /* Returns 0 with opts filled, 1 refused with why in err. */
@@ -1001,12 +1034,6 @@ const char *inst_summary_head(int runs, int writes, int other, int nt);
  * instCmOffText. */
 int inst_cm_mode_off(const char *name, INST_U32 value);
 
-/* The Thunderbolt row's note when a controller was found (owner,
- * 2026-10-19): "A Thunderbolt 3 / USB4 controller was found: <name>."
- * with the name cut to INST_TB_NAME_SHOWN characters, then the memory
- * sentence of INST_PT_TB_T; with no name, INST_PT_TB_T as it is. */
-#define INST_TB_NAME_SHOWN  36
-void inst_tb_found_text(char *out, size_t cap, const char *name);
 extern const char instCmOffText[];
 
 /* ---- the uninstall's selection and order (record 23 section 9.2) ---------------------- */
@@ -1024,6 +1051,9 @@ int inst_bundled_file(const char *name);
 int inst_bundled_service(const char *service);
 
 /* The removal rank: lower goes first. -1 when the devnode is not removed. */
+/* 1 for an instance id under the connection manager's own enumerator,
+ * XHCICM\ (the network adapter, record 35 sections 6.1 and 9.5). */
+int inst_cm_child_id(const char *instanceId);
 int inst_remove_rank(const char *instanceId, const char *service,
                      int filterPresent);
 
@@ -1300,15 +1330,55 @@ const char *inst_eject_remind_text(void);
 
 /* ---- the Thunderbolt 3 / USB4 question (record 23 section 8.5) ---------------- */
 
-/* Where a flavour directory keeps the tunnel-port filter's INF, relative to
- * it: nt\xhcicmf.inf in the x86 package, out of the way of Windows 98 and
- * ME, which read a $Windows NT$ INF (task 39-0.4); xhcicmf.inf, beside
- * xhcicm.inf and xhcicm.sys, in the x64 package, which 98 and ME never
- * read. inst_cmf_pnf is the device installer's precompiled copy of it, and
- * inst_cmf_where the place as the run's text names it for Have Disk. */
+/* Where the local copy keeps the tunnel-port filter's INF, relative to it
+ * (the shape of 3.3.0.0's flavour directories, kept by record 36 section
+ * 6.1): nt\xhcicmf.inf for x86, xhcicmf.inf, beside xhcicm.inf and
+ * xhcicm.sys, for x64. The download ships it as cm\xhcicmf.inx (record 36
+ * section 3.2). inst_cmf_pnf is the device installer's precompiled copy of
+ * it, and inst_cmf_where the place as the run's text names it for Have
+ * Disk: the local copy's, since no wizard takes an .inx. */
 const char *inst_cmf_rel(int arch);
 const char *inst_cmf_pnf(int arch);
 const char *inst_cmf_where(int arch);
+
+/* ---- the download by Windows family (record 36) ------------------------- */
+
+/* The three family folders of the download: 98-me (98 SE and ME), nt-x86
+ * (32-bit 2000 to 10) and nt-x64 (XP x64 and Server 2003 x64, Vista to 10
+ * x64). */
+#define INST_FAM_9X         0
+#define INST_FAM_NT86       1
+#define INST_FAM_NT64       2
+#define INST_FAM_COUNT      3
+
+/* The family of a system: nt 0 on 98 SE and ME (x86 only). */
+int inst_family(int nt, int arch);
+/* Its folder's name, "98-me", "nt-x86" or "nt-x64"; NULL for another fam. */
+const char *inst_family_dir(int fam);
+/* The family whose folder name is name (without case), or -1. */
+int inst_family_of_dir(const char *name);
+
+/* One file of the local copy (record 36 section 6.2): its name there,
+ * relative to the copy (Local, the shape of 3.3.0.0's flavour
+ * directories), and its path in each family folder of the download, NULL
+ * where that family does not carry it. The table is held against
+ * package-common.ps1's $script:FamilyLayout by the packager's self-test. */
+typedef struct _INST_PKG_FILE {
+    const char *Local;
+    const char *Fam[INST_FAM_COUNT];
+} INST_PKG_FILE;
+
+extern const INST_PKG_FILE instPkgFiles[];
+extern const int instPkgFileCount;
+
+/* The path in family fam's folder of the local name local (without case),
+ * or NULL when the family does not carry it or the table has no such
+ * name. */
+const char *inst_pkg_rel(int fam, const char *local);
+/* 1 when a family folder holding a file of this path (relative to it, any
+ * case) is not this release's layout: a stor98w9.inf, an nt\ file, or a
+ * filter INF under its installed name (record 36 section 6.4). */
+int inst_pkg_foreign(const char *rel);
 
 /* Whether the run installs and stages the Thunderbolt driver (xhcicm.inf,
  * the filter INF, xhcicm.sys). haveCm: the package carries it; nhiPresent:
@@ -1343,6 +1413,19 @@ int inst_tb_box_default(int haveCm, int nhiPresent, int optThunderbolt,
 /* 1 when a controller's service is Intel's Thunderbolt driver's, nhi (its
  * older package and its DCH driver alike; record 21 section 3.6). */
 int inst_tb_intel(const char *service);
+/* 1 when a device instance id names a Light Ridge or Cactus Ridge 4C NHI
+ * (8086:1513, 8086:1547) that is not an Apple machine's - subsystem other
+ * than 2222:1111, or none in the id: xhcicm starts inert there (design
+ * record 22 section 19.3), so a driver already running it is never
+ * installed over. */
+int inst_cm_tb1_foreign(const char *instanceId);
+/* The id an install call names for a Light Ridge or Cactus Ridge 4C
+ * device (`instanceId` 8086:1513 or 1547): its class form, the NHI's
+ * PCI\VEN_8086&DEV_xxxx&CC_0880 (`nhi` 1) or a bridge's &CC_0604 (0), the
+ * forms the INFs bind (design record 22 section 19.9) - the NHI and its
+ * bridges share their hardware ids, which no call may name. 1 with `out`
+ * set; 0 for any other device, `out` untouched. */
+int inst_cm_tb1_classid(const char *instanceId, int nhi, char *out, size_t cap);
 
 /* The answer to the question: 1 yes, 0 no (Enter: the default), -1 not an
  * answer (asked again). */
@@ -1446,11 +1529,19 @@ int inst_mw_write_needed(int mwState, INST_U32 mwValue, const INST_VNOW *now,
 
 /* ---- the gate before a pass on 98 SE and ME (record 27 section 6) ---- */
 
-/* Whether the gate asks the user: always the first time in a run (asked
- * 0), and afterwards only when a hardware wizard was seen open (wizard 1)
- * or the look could not be made (wizard -1); wizard 0, none seen, goes on
- * without asking. 1 ask, 0 not. */
-int inst_gate_ask(int asked, int wizard);
+/* Whether the gate asks the user: a hardware wizard seen open (wizard 1)
+ * or a look that could not be made (wizard -1) asks; none seen (wizard 0)
+ * goes on without asking, except at the first gate of a run (asked 0) on
+ * a system not read as English (english 0, or -1 unread), which asks once
+ * as before, the look knowing only the English titles (task 45.32, record
+ * 27 section 6). 1 ask, 0 not. */
+int inst_gate_ask(int asked, int wizard, int english);
+/* Whether the system reads as English for the gate: 1 when both the
+ * system's default language (GetSystemDefaultLangID) and the language of
+ * KERNEL32's version resource have the primary language LANG_ENGLISH
+ * (0x09), 0 when either has another, -1 when either could not be read
+ * (a negative argument). */
+int inst_gate_english(int sysLang, int resLang);
 
 /* 1 when a visible top-level window's title is a hardware wizard's on 98
  * SE or ME (Found New Hardware, New Hardware Found, Add New Hardware
@@ -1499,6 +1590,14 @@ int inst_di_cmdline(char *out, size_t cap, const char *version,
 int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
                     unsigned long hwnd, const char *devId, const char *inf,
                     int force, int quiet);
+/* The same with nocopy, the FLAGS word that has the helper set
+ * DI_NOFILECOPY: a later controller of an INF whose files a controller's
+ * job of the same run copied (record 27 sections 4.1 and 6, task 45.38):
+ * setupx, one instance for every process, then asks for "xhci98 xHCI
+ * Host Controller Disk" at the Windows source for the second copy. */
+int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
+                       unsigned long hwnd, const char *devId, const char *inf,
+                       int force, int quiet, int nocopy);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
@@ -1685,6 +1784,17 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
  * the NT systems. */
 #define INST_PT_PFW             47
 #define INST_PT_PFW_SYS         48
+/* Record 26 section 5.3.5 (task 45.60): the Thunderbolt and USB4 page. */
+#define INST_PT_TBT_HEAD        49
+#define INST_PT_APPR_HEAD       50
+#define INST_PT_APPR_1          51
+#define INST_PT_APPR_1_T        52
+#define INST_PT_APPR_0          53
+#define INST_PT_APPR_0_T        54
+#define INST_PT_APPR_MIXED      55
+#define INST_PT_APPR_NEW        56
+#define INST_PT_TBNET           57
+#define INST_PT_TBNET_T         58
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1697,6 +1807,73 @@ extern const INST_PAGE_TEXT instPageTexts[];
 extern const int instPageTextCount;
 
 const char *inst_page_text(int id);
+
+/* ---- Help on every page (record 26 section 5.10, task 45.66) --------------- */
+
+/* The kind of page Help was pressed on. */
+#define INST_HK_WELCOME         0
+#define INST_HK_COMP            1
+#define INST_HK_TBT             2
+#define INST_HK_FREE            3
+#define INST_HK_NONFREE         4
+#define INST_HK_SET_USB         5
+#define INST_HK_SET_TB          6
+#define INST_HK_SET_S98         7
+#define INST_HK_ADV             8
+#define INST_HK_ADV_S98         9
+#define INST_HK_SUMMARY         10
+#define INST_HK_PROGRESS        11
+#define INST_HK_STEPS           12
+#define INST_HK_FINISH          13
+#define INST_HK_COUNT           14
+
+/* The Finish page's two buttons: the restart words, the shut-down words,
+ * or none shown (the run changed nothing, whatever the reason). */
+#define INST_FV_RESTART         0
+#define INST_FV_SHUT            1
+#define INST_FV_NONE            2
+
+/* The Progress page's: the system, for the name its hardware wizard has
+ * (98 SE and ME: the Add New Hardware Wizard; 2000 and later: Found New
+ * Hardware). */
+#define INST_PV_NT              0
+#define INST_PV_9X              1
+
+/* The topics, one text each. */
+#define INST_HELP_WELCOME       0
+#define INST_HELP_UWELCOME      1
+#define INST_HELP_COMP          2
+#define INST_HELP_TBT           3
+#define INST_HELP_FREE          4
+#define INST_HELP_NONFREE       5
+#define INST_HELP_SET_USB       6
+#define INST_HELP_SET_TB        7
+#define INST_HELP_SET_S98       8
+#define INST_HELP_ADV           9
+#define INST_HELP_ADV_S98       10
+#define INST_HELP_SUMMARY       11
+#define INST_HELP_USUMMARY      12
+#define INST_HELP_PROGRESS      13
+#define INST_HELP_STEPS         14
+#define INST_HELP_FINISH        15
+#define INST_HELP_FINISH_SHUT   16
+#define INST_HELP_FINISH_NONE   17
+#define INST_HELP_UFINISH       18
+#define INST_HELP_PROGRESS_9X   19
+#define INST_HELP_COUNT         20
+
+/* The help window's text control, in dialog units (xhciwiz.rc IDD_HELP):
+ * every text is inst_page_cols wide; one longer than inst_page_rows
+ * scrolls there (owner, 2026-10-31: a blank line between paragraphs). */
+#define INST_HELP_W             284
+#define INST_HELP_H             166
+
+/* The topic for a kind of page, the run's mode (1: the uninstall) and the
+ * page's variant: the Finish page's INST_FV_*, the Progress page's
+ * INST_PV_*; -1 for a kind not known. */
+int inst_help_topic(int kind, int uninstall, int variant);
+const char *inst_help_text(int topic);
+const char *inst_help_title(int topic);
 
 /* The lines a text takes, word-wrapped at cols characters. */
 INST_U32 inst_text_lines(const char *text, INST_U32 cols);
@@ -1789,6 +1966,13 @@ int inst_s98_param_get(const char *param, const char *key, char *out,
                        size_t cap);
 int inst_s98_param_set(const char *param, const char *key, const char *value,
                        char *out, size_t cap);
+
+/* Task 45.50: 1 when a 98 SE and ME value of row i as read (a DWORD, or
+ * text) is its 98 SE and ME default, the one Stor98's INF and the
+ * installer's file-only update write; such a value goes with Stor98 at
+ * the uninstall, a value of another number stays. */
+int inst_s98_is_default_9x(int i, int isDword, INST_U32 dword,
+                           const char *text);
 
 /* A row's "now" as the page shows it: "not set (the built-in default is
  * <d>)" or "set: <value>"; state 1 set, 0 not set, -1 unreadable. */
@@ -1916,6 +2100,32 @@ extern const char instS98DisconnectText[];
  * USB4 box, and open only while that box can be and is ticked. */
 int inst_s98_box_open(int haveS98, int tbHave, int tbTicked);
 
+/* Thunderbolt networking's box (record 26 section 5.3.5, record 35
+ * sections 9.1 and 9.5). INST_TBNET_WIRED is 1 since task 45.59's step S11
+ * stages the network driver's INF (INST_INF_NET): the box is shown, /tbnet
+ * and /notbnet set it, and the run writes XhciCmNet as inst_tbnet_decide
+ * says. At 0 the box is hidden, /tbnet is refused, /notbnet changes
+ * nothing, and nothing reads or writes XhciCmNet. */
+#define INST_TBNET_WIRED        1
+
+typedef struct _INST_TBNET {
+    int Shown;              /* the box shown at all (the gate)          */
+    int Enabled;            /* open: the package carries the driver     */
+    int First;              /* its first state                          */
+    int Write;              /* XhciCmNet to be written                  */
+    INST_U32 Value;         /* the value to write                       */
+    int ToNhi;              /* into every present host interface's key  */
+    int ToMw;               /* into Services\USB                        */
+} INST_TBNET;
+
+/* wired the gate; carried the package carries the network driver for
+ * this system; sw -1 none, 0 /notbnet, 1 /tbnet; inForce the XhciCmNet in
+ * force, 1 or 0, -1 none set; box the box as left, -1 untouched;
+ * nhiPresent a host interface is present; mwHas Services\USB holds an
+ * XhciCmNet. */
+void inst_tbnet_decide(int wired, int carried, int sw, int inForce, int box,
+                       int nhiPresent, int mwHas, INST_TBNET *d);
+
 /* ---- S98VSD.VXD, the 98 SE and ME IOS layer for Stor98's disks (design
  * record 30 section 7; owner, 2026-10-22) ---------------------------------- */
 
@@ -2022,9 +2232,13 @@ int inst_vsd_next(const INST_VSDFACTS *f);
 #define INST_PFW_SYS_SEEN   3   /* XP, Vista and 7 (x86): XHCIPFW.SYS;
                                    the installer reads the problem for
                                    its note                              */
-#define INST_PFW_SYS_GONE   4   /* 8, 8.1 and 10 (x86): not offered; an
-                                   XHCIPFW.SYS this installer placed is
-                                   removed (record 32 section 11.3)      */
+#define INST_PFW_SYS_GONE   4   /* 10 (x86): not offered; an XHCIPFW.SYS
+                                   this installer placed is removed
+                                   (record 32 sections 11.3 and 11.5.2) */
+#define INST_PFW_SYS_FILTER 5   /* 8 and 8.1 (x86): XHCIPFW.SYS as an upper
+                                   filter of every PCI root bus (record
+                                   32 section 11.5.2), offered as on
+                                   Vista and 7                           */
 /* nt 0: 98 SE or ME. major.minor: the version (RtlGetVersion's); x86: a
  * 32-bit system. */
 int inst_pfw_sys(int nt, unsigned long major, unsigned long minor, int x86);
@@ -2043,6 +2257,11 @@ int inst_pfw_box(int sysKind, int havePfw, int tbTicked, int noSwitch,
  * DESELECTED unticked. */
 int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
                   int ticked);
+/* 1 when a devnode's hardware or compatible ids (multi-strings of the
+ * byte lengths given) name a PCI root bus, *PNP0A03 or *PNP0A08: the
+ * devnodes XHCIPFW.SYS filters on 8 and 8.1. */
+int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
+                     size_t compatBytes);
 /* A device's BootConfig (REG_RESOURCE_LIST, as the registry holds it):
  * 1 when it holds a prefetchable memory window (CmResourceTypeMemory or
  * CmResourceTypeMemoryLarge, CM_RESOURCE_MEMORY_PREFETCHABLE and
@@ -2130,6 +2349,11 @@ int inst_s98_stray_inf_ours(int preExisting, int namesStor98);
  * link-state locator, its value LinkState; 1 when a value of that key is
  * another, so Stor98's (the baseline's "Stor98 there before"). */
 int inst_s98_svc_value_stor98(const char *name);
+/* 98 SE and ME: 1 when a value of Services\stor98 is the report the
+ * driver itself writes at each start of a controller ("StorInterrupt
+ * <bus>.<device>.<function>", Stor98's README "Interrupt report"), which
+ * the uninstall that removes Stor98 takes with its settings (task 45.50). */
+int inst_s98_run_report_9x(const char *name);
 
 #define INST_S98_SHARE_FREE     0
 #define INST_S98_SHARE_SAME     1
@@ -2297,7 +2521,7 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "0CBF177CF2AEBEE20DF28DFEFE9DFA33A7141D74868AF2FEB8ADC5F28C7FFA75"
+#define INST_WDMFREE_SUMS       "BC2D0659340D4C23CE32886CF5BA265791AFBD98AA437B553B35B07E86F66101"
 #define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
@@ -2381,7 +2605,14 @@ typedef struct _INST_OTHER_PKG {
 extern const INST_OTHER_PKG instOtherPkgs[];
 extern const int instOtherPkgCount;
 
-/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems. */
+/* EXCLUDES (1) or COEXISTS (0) of two set-qualified packages on Systems;
+ * 2 a COEXISTS lifted from an EXCLUDES where the cut read the two apart
+ * (record 26 section 6.7.14): COEXISTS between the packages of the
+ * releases a download carries, EXCLUDES against an earlier staging of
+ * another release (inst_other_rel_bars). */
+#define INST_REL_COEXISTS   0
+#define INST_REL_EXCLUDES   1
+#define INST_REL_LIFTED     2
 typedef struct _INST_OTHER_REL {
     int SetA;
     const char *A;
@@ -2401,28 +2632,74 @@ int inst_other_heading_index(const char *heading);
 
 /* The package of a path under a set's folder: its first two parts. */
 void inst_other_pkg_of(const char *rel, char *pkg, size_t cap);
-/* Record 26 section 6.7.12 (task 44.11): on 98 SE and ME only these free
- * packages are staged (on DevicePath), the ones whose devices 98 SE's and
- * ME's own USB audio INF would take by class; every other package of
- * either set is copy-only there. 1 when set:id is one of them. */
+/* Record 26 section 6.7.13 (task 45.7): on 98 SE and ME every package of
+ * either set may be staged (on DevicePath) where its set has a STAGE line
+ * for the system, within the system's limit; section 6.7.12's list of
+ * two free packages is gone. 1 for any package id of a known set. */
 int inst_other_9x_stageable(int set, const char *id);
+/* Section 6.7.13's rule for an earlier run's DevicePath entry of a
+ * package: kept (1) when its set is not carried in this download (its
+ * lines are not known), or when it is and the package has a STAGE line
+ * for this system; 0 (taken out) when the set is carried and the package
+ * has none. */
+int inst_other_9x_keeps(int carried, int stageHere);
+/* Section 6.7.13's page and console on 98 SE and ME: a package with only
+ * COPY lines for the system, as "<desc>: <folder>[; <folder>...]" (the
+ * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
+void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
+                               const char *const *folders, int n);
+/* Section 6.7.13's words for the rest of a set's packages, in two parts
+ * (part 0: what a tick does, or that nothing is copied; part 1: what an
+ * unticked package is and where its folder is, "" when nothing is
+ * copied): copy ticked or not; replaced, this run's copy taking out what
+ * an earlier run staged of the set; earlier, an earlier run's staging of
+ * it shown on the page; dir the install directory. */
+void inst_other_rest_text(char *out, size_t cap, int part, int set,
+                          const char *dir, int copy, int replaced,
+                          int earlier);
 /* The longest DevicePath with which 98 SE's hardware wizard was read to
  * find a driver (280 characters; none with 285 or more, section 6.7.6). */
 #define INST_9X_DEVICEPATH_MAX  280
+/* ME's (task 45.7's ME leg, section 6.7.13): its wizard found a driver
+ * with 259 characters and stopped responding, its window "locating the
+ * software" for good, with 260, 270 and 280. */
+#define INST_ME_DEVICEPATH_MAX  259
+/* The limit on this system: me 1 for ME, 0 for 98 SE. */
+int inst_9x_devicepath_max(int me);
+/* What a longer DevicePath does there, after "past which ": "Windows 98
+ * SE's hardware wizard finds no driver" or ME's words. */
+const char *inst_9x_devicepath_harm(int me);
 /* Section 6.7.12's projection: base (DevicePath as this run will leave it
  * before any staging: its own changes and withdrawals made) with each of
- * the n folders appended in order where the value stays within
- * INST_9X_DEVICEPATH_MAX; fits[i] 1 for a folder appended or already an
- * entry, 0 for one left out (then counted no further). Returns the
- * projected length, or -1 when base alone passes the limit (every fits[i]
- * then 0) or a folder is not a valid entry (empty, or holding ';'). */
+ * the n folders appended in order where the value stays within max (the
+ * system's limit, at most INST_9X_DEVICEPATH_MAX); fits[i] 1 for a folder
+ * appended or already an entry, 0 for one left out (then counted no
+ * further). Returns the projected length, or -1 when base alone passes
+ * the limit (every fits[i] then 0) or a folder is not a valid entry
+ * (empty, or holding ';'). */
 int inst_9x_devicepath_project(const char *base, const char *const *folders,
-                               int n, int *fits);
+                               int n, int *fits, int max);
+/* The same limit for the install directory's own entry: 1 when withDir,
+ * DevicePath as the run would write it with that entry, stays within max;
+ * 0 when it passes it, and the entry is left off (a longer value takes
+ * every driver from the wizard, not only this package's). */
+int inst_9x_devicepath_room(const char *withDir, int max);
 /* The table's row of a package, or NULL. */
 const INST_OTHER_PKG *inst_other_pkg(int set, const char *id);
-/* 1 when the table's relations exclude the pair on system token tok. */
+/* 1 when the table's relations exclude the pair on system token tok
+ * (an EXCLUDES row; a lifted row does not, between this download's
+ * releases). */
 int inst_other_excludes(int setA, const char *a, int setB, const char *b,
                         int tok);
+/* 1 when a lifted row of the table (INST_REL_LIFTED) names the pair on
+ * system token tok. */
+int inst_other_lifted(int setA, const char *a, int setB, const char *b,
+                      int tok);
+/* Record 26 section 6.7.14: 1 when a relation of kind (INST_REL_*) bars a
+ * package against its partner - ticked now (earlier 0), or staged by an
+ * earlier run (earlier 1) from the release of its set this download
+ * carries (sameRelease 1) or from another or an unknown one (0). */
+int inst_other_rel_bars(int kind, int earlier, int sameRelease);
 /* 1 when a description keeps the rules: printable ASCII, no '|', at most
  * INST_PKG_DESC_MAX characters, and for a CLASS row no brand word. */
 int inst_other_desc_ok(int kind, const char *desc);
@@ -2525,6 +2802,15 @@ void inst_other_warn_text(INST_U32 set, char *out, size_t cap);
 #define INST_PFWSYS_NAME_A      "xhcipfw.sys"
 #define INST_PFWSYS_NAME_B      "xhcipf2.sys"
 #define INST_PFWSYS_GROUP       "System Reserved"
+/* The filter role on 8 and 8.1 (record 32 section 11.5.2): its group, and
+ * a service, two image names and a record of its own, which 3.3.0.0's
+ * installer (it removes the xhcipfw service there without its root bus
+ * entries) does not recognise. */
+#define INST_PFWSYS_GROUP_FILTER "PnP Filter"
+#define INST_PFWSYS_SERVICE_F   "xhcipff"
+#define INST_PFWSYS_NAME_FA     "xhcipff.sys"
+#define INST_PFWSYS_NAME_FB     "xhcipff2.sys"
+#define INST_PFW_KEY_F          "Software\\xhci98\\XhciPfwFilter"
 #define INST_STOR_USB20U_KEY \
     "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\USB20U"
 
@@ -2733,6 +3019,7 @@ const char *inst_stor_remove_text(int why);
  * in all three (task 43.73's reading); the table holds every name below. */
 #define INST_NAME_MAX       46
 #define INST_NAME_USB3      "xHCI98 USB 3 Controller"
+#define INST_NAME_TB1       "xHCI98 TB1 Controller"
 #define INST_NAME_TB2       "xHCI98 TB2 Controller"
 #define INST_NAME_TB3       "xHCI98 TB3 Controller"
 #define INST_NAME_USB4      "xHCI98 USB4 Router"
@@ -2743,6 +3030,7 @@ const char *inst_stor_remove_text(int why);
 #define INST_NB_TB2         1
 #define INST_NB_TB3         2
 #define INST_NB_USB4        3
+#define INST_NB_TB1         4
 typedef struct _INST_NAMEROW {
     INST_U32 Ven;
     INST_U32 Dev;
@@ -2753,11 +3041,6 @@ extern const INST_NAMEROW instXhciNames[];  /* xHCI controllers (0C0330) */
 extern const int instXhciNameCount;
 extern const INST_NAMEROW instNhiNames[];   /* xhcicm.inf's NHI ids      */
 extern const int instNhiNameCount;
-/* NHIs xhcicm.inf matches by its class line alone, named, as the xHCI
- * controllers are, by the installer's FriendlyName (task 44.55: no id line,
- * so no change of rank; record 23 section 5.13.8). */
-extern const INST_NAMEROW instNhiFnNames[];
-extern const int instNhiFnNameCount;
 const char *inst_name_base(int base);
 /* The canonical name of an xHCI controller (1: a row of the table, the
  * product in parentheses; 0: not one, the plain name) and of an NHI (1: a
@@ -2765,10 +3048,6 @@ const char *inst_name_base(int base);
  * INST_NAME_MAX + 1 bytes. */
 int inst_xhci_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 int inst_nhi_name(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
-/* The FriendlyName the installer gives an NHI (1: a row of instNhiFnNames,
- * the name in out; 0: none, the INF's own name stands, out the plain
- * name). inst_nhi_name names both tables' rows, for XHCITR. */
-int inst_nhi_fname(INST_U32 ven, INST_U32 dev, char *out, size_t cap);
 /* A devnode's canonical name: 1 for an xHCI controller (PCI\CC_0C0330 in
  * its ids) whose service is xhci98, or a PCI device whose service is
  * xhcicm (the NHI), out then the name; 0 for any other. */
@@ -2776,7 +3055,7 @@ int inst_dev_canon(const char *hw, size_t hwBytes, const char *compat,
                    size_t compatBytes, const char *service, char *out,
                    size_t cap);
 /* The reconciliation of one controller's FriendlyName (record 23 section
- * 5.13): ours whether xhci98 drives it (an NHI of instNhiFnNames: xhcicm), canon its table name or NULL (an
+ * 5.13): ours whether xhci98 drives it, canon its table name or NULL (an
  * id the table does not hold), current the FriendlyName now ("" none),
  * recorded the name this installer recorded writing or NULL. *record is
  * set to 1 when the record is to hold canon afterwards, 0 when it is to be

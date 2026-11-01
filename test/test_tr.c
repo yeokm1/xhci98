@@ -47,6 +47,41 @@ static int has(const char *hay, const char *needle)
     return strstr(hay, needle) != NULL;
 }
 
+/* ---- the main window's title (task 45.4) ---------------------------------- */
+
+#define TR_T_STR2(x) #x
+#define TR_T_STR(x) TR_T_STR2(x)
+
+/* The title against the version's other spelling, XHCI_VER_CSV, with its
+ * commas read as dots: the two forms in src\xhci_version.h agree, and the
+ * title is the name, one space and that version. */
+static void test_main_title(void)
+{
+    char want[64];
+    const char *csv = TR_T_STR(XHCI_VER_CSV);
+    size_t i;
+    size_t n;
+    int dots = 0;
+
+    strcpy(want, "xHCI98 USB Tree ");
+    n = strlen(want);
+    for (i = 0; csv[i] != '\0' && n + 1 < sizeof(want); i++) {
+        if (csv[i] == ' ') {
+            continue;
+        }
+        if (csv[i] == ',') {
+            want[n++] = '.';
+            dots++;
+        } else {
+            want[n++] = csv[i];
+        }
+    }
+    want[n] = '\0';
+    CHECK(dots == 3, "title: the version has four parts");
+    CHECK(strcmp(TR_MAIN_TITLE, want) == 0, "title: the name and the package version");
+    CHECK(strcmp(TR_MAIN_TITLE + 16, XHCI_VER_STR) == 0, "title: ends in XHCI_VER_STR");
+}
+
 /* ---- text ---------------------------------------------------------------- */
 
 static void test_printf(void)
@@ -4141,8 +4176,20 @@ static void test_marks(void)
              "the value and an attachment, Removable not set");
     CHECK_EQ(tr_mark_state(1, &markSet, 7, 1), TR_MK_WRITTEN,
              "an entry index past the count is none");
-    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "listed by Windows") == 0,
-          "listed text");
+    CHECK(strcmp(tr_mark_text(TR_MK_LISTED), "the Thunderbolt driver has "
+                 "answered it as removable") == 0, "answered text");
+    CHECK(strcmp(tr_mark_text(TR_MK_NOTLISTED), "mark written; the "
+                 "Thunderbolt driver has not answered it as removable") == 0,
+          "not answered text");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 1, 0x00000000UL),
+                 "Windows has not recorded it as removable.") == 0,
+          "answered, Windows recorded no Removable: the clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 1, 0x00000004UL), "") == 0,
+          "answered and recorded: no clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_LISTED, 0, 0x00000000UL), "") == 0,
+          "capabilities not read: no clause");
+    CHECK(strcmp(tr_mark_clause(TR_MK_WRITTEN, 1, 0x00000000UL), "") == 0,
+          "another state: no clause");
     CHECK(strcmp(tr_mark_text(TR_MK_WRITTEN), "mark written; takes effect at "
                  "the next start of the device") == 0, "written text");
     CHECK(strcmp(tr_mark_text(TR_MK_NOT), "not marked") == 0, "not text");
@@ -4485,6 +4532,7 @@ static void test_ver_route(void)
 
 int main(void)
 {
+    test_main_title();
     test_printf();
     test_hex_names();
     test_conn();

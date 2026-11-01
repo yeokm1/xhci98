@@ -54,6 +54,18 @@ typedef struct _MK_ENTRY {
     INST_U32 PendingGen;
 } MK_ENTRY;
 
+/* The bridge inventory's section of one member (cm_query.h CM_QB_*;
+ * design record 33 section 4.3, task 45.12). */
+#define MK_QB_MEMBERS       4       /* CM_QM_MAX_MEMBERS */
+#define MK_QB_MAX           16      /* CM_QB_MAX_BRIDGES */
+typedef struct _MK_BRSEC {
+    int Valid;              /* the section names a member                */
+    int Complete;           /* every attachment below it listed          */
+    INST_U32 Member;
+    INST_U32 Count;
+    INST_U32 Loc[MK_QB_MAX];
+} MK_BRSEC;
+
 typedef struct _MK_MARKS {
     INST_U32 Bytes;
     INST_U32 EpochLo;
@@ -63,6 +75,8 @@ typedef struct _MK_MARKS {
     INST_U32 Dropped;
     INST_U32 Count;
     MK_ENTRY E[MK_MAX_ENTRIES];
+    int HasBridges;         /* the answer carried the bridge inventory   */
+    MK_BRSEC Br[MK_QB_MEMBERS];
 } MK_MARKS;
 
 /* As mk_query_parse, for the marks answer. */
@@ -113,8 +127,17 @@ const char *mk_w_text(int w);
  * attachment of this driver on the stack now or one that did not answer
  * Removable. A pending departure does not stop it (a first plug's install
  * leaves one); the unit's fresh status decides. 1 when a restart is to be
- * considered. */
-int mk_restart_wanted(const MK_ENTRY *e, int valuePresent);
+ * considered. winRecorded (record 21 section 7.7): 0 when Windows'
+ * recorded capabilities of the unit hold neither Removable nor
+ * SurpriseRemovalOK, which also makes an attachment that answered
+ * Removable a candidate; 1 or -1 (recorded, or not read, or not 2000/XP)
+ * keep the answer of the flags alone. */
+int mk_restart_wanted(const MK_ENTRY *e, int valuePresent, int winRecorded);
+
+/* Record 21 section 7.7: the unit's CM_DRP_CAPABILITIES as Windows recorded
+ * them, read (have 1) or not, to the winRecorded of mk_restart_wanted:
+ * 1 Removable set, 0 Removable and SurpriseRemovalOK clear, -1 otherwise. */
+int mk_win_recorded(int have, unsigned long caps);
 
 /* The reconciliation of one record (section 7.4, "Departures and
  * reconciliation"): MK_R_KEEP, MK_R_REMOVE (the mark taken off and the
@@ -156,6 +179,51 @@ int mk_reconcile(int presence, int ownerKnown, int ownerVerif,
 int mk_listed(const MK_MARKS *m, INST_U32 member, INST_U32 bus,
               INST_U32 address, const MK_ENTRY **entry);
 
+/* ---- the bridge marks (design record 33 section 4.3, task 45.12) ------- */
+
+/* Whether this driver's filter is on the bridge at `bdf` below member
+ * `member` (mk_bridge_attached): attached (its location in the member's
+ * section), missing (the section complete and the location not in it),
+ * or unknown (no inventory, an incomplete section, no section for the
+ * member). Unknown never asks for a restart. */
+#define MK_BA_UNKNOWN       0
+#define MK_BA_ATTACHED      1
+#define MK_BA_MISSING       2
+int mk_bridge_attached(const MK_MARKS *m, INST_U32 member, INST_U32 bdf);
+
+/* A bridge's install as the service reads it: pending (1) when its
+ * devnode has no driver, its flags could not be read, or
+ * CONFIGFLAG_REINSTALL or CONFIGFLAG_FINISH_INSTALL is set; done (0)
+ * otherwise. Only a bridge whose install is done gets its bridge mark. */
+#define MK_CONFIGFLAG_FINISH_INSTALL 0x00000400UL
+int mk_bridge_pending(int hasDriver, int flagsRead, INST_U32 flags);
+
+/* Whether a bridge asks for its unit's restart: at problem 12 (no
+ * resources), or started without a problem with its attachment missing.
+ * A status that could not be read asks for nothing. */
+#define MK_PROB_NORMAL_CONFLICT 0x0000000CUL
+int mk_bridge_needs(int statusOk, int started, int hasProblem,
+                    INST_U32 problem, int attached);
+
+/* The widened restart gate's test of one devnode below the unit (record
+ * 33 section 4.3, the owner's answer to Q1): 1 (refuse) for a started
+ * disk, volume or CD-ROM drive, or a started devnode whose setup class
+ * could not be read; 0 for anything else, a started dock's xHCI or
+ * network function included. */
+#define MK_CLASS_DISK       "{4D36E967-E325-11CE-BFC1-08002BE10318}"
+#define MK_CLASS_CDROM      "{4D36E965-E325-11CE-BFC1-08002BE10318}"
+#define MK_CLASS_VOLUME     "{71A27CDD-812A-11D0-BEC7-08002BE2092F}"
+int mk_bridge_gate_refuses(int statusOk, int started, int classRead,
+                           const char *classGuid);
+
+/* The other restarts' wait for the bridge marks (section 4.3): from the
+ * unit's arrival as the service first saw it, at most this long. */
+#define MK_BRIDGE_WAIT      60000UL
+/* 1 while a unit's other restarts wait: some bridge below it has its
+ * install pending or its mark not written, and less than MK_BRIDGE_WAIT
+ * has passed since its arrival. */
+int mk_bridge_wait(int allMarked, INST_U32 sinceArrivalMs);
+
 /* ---- the multi-string ----------------------------------------------------- */
 
 /* `in` (inBytes, possibly 0 or one empty string) with MK_NAME appended as
@@ -172,9 +240,18 @@ size_t mk_msz_append(const char *in, size_t inBytes, char *out, size_t cap);
  * epoch high and low words, the state). */
 void mk_rec_format(char *out, size_t cap, INST_U32 member, INST_U32 epochHi,
                    INST_U32 epochLo, int state);
-/* 1 with the fields when `text` is that form; 0 otherwise. */
+/* 1 with the fields when `text` is that form, with or without the
+ * bridge mark's suffix; 0 otherwise. */
 int mk_rec_parse(const char *text, INST_U32 *member, INST_U32 *epochHi,
                  INST_U32 *epochLo, int *state);
+/* A bridge mark's record (design record 33 section 4.3): the same form
+ * and MK_REC_BRIDGE after it ("... s=written k=bridge"), the same records
+ * and reconciliation as a unit's. */
+#define MK_REC_BRIDGE       " k=bridge"
+void mk_rec_format_bridge(char *out, size_t cap, INST_U32 member,
+                          INST_U32 epochHi, INST_U32 epochLo, int state);
+/* 1 when a record that parses carries the suffix. */
+int mk_rec_is_bridge(const char *text);
 
 /* ---- the confirmation (cm_query.h CM_QC_*) ------------------------------- */
 
@@ -357,6 +434,52 @@ typedef struct _MK_S98_MF {
  * the unit with no driver, no id, in an admitted state, not declined and
  * not protected. Never one with a driver or an unread Service. */
 int mk_s98_mark_sets(const MK_S98_MF *in);
+
+/* ---- a hot-added controller waiting for a restart (record 21 7.6) -------- */
+
+/* A hot-added xHCI98 controller the Vista and 7 section's Reboot left at
+ * problem 1 with DN_NEED_RESTART (task 45.47, owner 2026-10-30: option
+ * B). The inputs of one devnode, as read on the walk or afresh. */
+#define MK_DN_NEED_RESTART      0x00000100UL
+#define MK_PROB_NOT_CONFIGURED  0x00000001UL
+#define MK_CTL_SECTION          "Xhci.Dev6"
+#define MK_CTL_MATCH            "PCI\\CC_0C0330"
+typedef struct _MK_CTL_IN {
+    int Restart;            /* the service's Restart value (paramRestart) */
+    int Nt6x86;             /* native 32-bit Vista or 7 (NT 6.0 or 6.1)   */
+    int Pci;                /* a PCI\ devnode                             */
+    const char *Service;    /* its Service value, or NULL when unread     */
+    int XhciCompat;         /* its compatible ids carry PCI\CC_0C0330     */
+    int DrvRead;            /* its driver key read                        */
+    const char *InfSection; /* that key's InfSection                      */
+    const char *MatchingId; /* that key's MatchingDeviceId                */
+    int FlagsRead;          /* CM_DRP_CONFIGFLAGS read                    */
+    INST_U32 Flags;
+    int StatusOk;           /* CM_Get_DevNode_Status succeeded            */
+    INST_U32 Status;
+    INST_U32 Problem;
+    int Behind;             /* behind a verified, active tunnel port      */
+    int Protected;          /* mk_protect's node                          */
+    int HelperRunning;      /* the xhcihlpr service reads RUNNING         */
+    int InstallIdle;        /* no device installation pending             */
+    int Tried;              /* started once this arrival already          */
+} MK_CTL_IN;
+/* 0 when the service starts the controller (CM_Setup_DevNode READY);
+ * otherwise the first reason it does not, MK_CTL_*. */
+#define MK_CTL_GO           0
+#define MK_CTL_OFF          1
+#define MK_CTL_SYSTEM       2
+#define MK_CTL_NOT_OURS     3
+#define MK_CTL_DRIVER_KEY   4
+#define MK_CTL_FLAGS        5
+#define MK_CTL_NOT_WAITING  6
+#define MK_CTL_NOT_BEHIND   7
+#define MK_CTL_PROTECTED    8
+#define MK_CTL_HELPER       9
+#define MK_CTL_INSTALLING   10
+#define MK_CTL_TRIED        11
+int mk_ctl_ready_why(const MK_CTL_IN *in);
+const char *mk_ctl_why_text(int why);
 
 /* ---- the self-test -------------------------------------------------------- */
 

@@ -60,6 +60,7 @@
 #include "hcd_svc.h"
 #include "xhci_xfer.h"
 #include "xhci_enum.h"
+#include "xhci_xport.h"
 #include "xhci_dbg.h"
 
 #define HCD_DEBOUNCE_MS        100UL
@@ -320,9 +321,8 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     ULONG trbPA;
     ULONG answer;
     ULONG rounds;
-#if DBG
     HCD_STRICT_SNAP strict;
-#endif
+    ULONG strictOn;
 
     *control = 0;
     if (hcdHalted(hc)) {
@@ -335,10 +335,11 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         return answer;
     }
 #endif
-#if DBG
     /* Read before the doorbell: the completion rewrites the contexts. */
-    HcdStrictBefore(hc, trb, &strict);
-#endif
+    strictOn = hc->StrictOn;
+    if (strictOn) {
+        HcdStrictBefore(hc, trb, &strict);
+    }
     trbPA = 0;
     answer = XHCI_CMD_BUSY;
     if (hcdCommandArm(hc)) {
@@ -361,9 +362,9 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
         }
         if (hc->CmdDonePA == trbPA) {
             *control = hc->CmdDoneControl;
-#if DBG
-            HcdStrictAfter(hc, &strict, hc->CmdDoneCode, *control);
-#endif
+            if (strictOn) {
+                HcdStrictAfter(hc, &strict, hc->CmdDoneCode, *control);
+            }
             return hc->CmdDoneCode;
         }
         if (!hcdCommandWaitDone(hc)) {
@@ -1911,15 +1912,18 @@ static ULONG hcdLinkRankNow(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * 0 on any failure; a command that never answered has requested the
  * controller reset. Thread only, powered.
  */
-ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                         ULONG linkKeep)
 {
     PXHCI_EXTENSION ext;
     PXHCI_HC_LAYOUT layout;
     LARGE_INTEGER due;
     XHCI_TRB trb;
     KIRQL oldIrql;
+    PHCD_PORT p;
     ULONG ringOffset;
     ULONG control;
+    ULONG portsc;
     ULONG speed;
     ULONG was;
     ULONG code;
@@ -1948,6 +1952,27 @@ ULONG HcdThreadReaddress(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
             XHCI_DBG_VALUE("hcd: reset port, SS link rank changed, was/now",
                            (dev->SsLinkRank << 8) | speed);
             return 0;
+        }
+    }
+    /* Task 45.41 (design record 13 section 15, L3): a root port's link
+     * recovered from SS.Inactive raised a connection change of its own (CCS
+     * reads 0 there) with the reset's; acknowledged now, the port connected
+     * and enabled in U0, so the final check sees only a change after this.
+     * A hub port's warm reset clears its own (XhciSsHubResetClears). */
+    p = &hc->Ports[dev->Location - 1];
+    if (linkKeep && p->Hub == NULL) {
+        portsc = XhciReadPortsc(ext, p->PortId);
+        if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+            (portsc & XHCI_PORTSC_PED) == 0 ||
+            XHCI_PORTSC_GET_PLS(portsc) != XHCI_PLS_U0) {
+            XHCI_DBG_VALUE("hcd: link keep, port not up after its reset",
+                           portsc);
+            return 0;
+        }
+        if ((portsc & XHCI_PORTSC_CHANGE_MASK) != 0) {
+            XhciWritePortsc(ext, p->PortId,
+                            XhciPortscClearChanges(
+                                portsc, portsc & XHCI_PORTSC_CHANGE_MASK));
         }
     }
     code = 0;
@@ -2281,10 +2306,13 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * that arrives is OK when XhciFuncSerialId takes it and REFUSED when it
  * does not - both the device's own answer, the same at every plug. A try
  * that does not get the string (a STALL, an error, a request not sent) is
- * made again, HCD_SERIAL_READ_TRIES in all, and only when every try failed
- * is the device FAILED - counted and traced, never silent - and named by
- * its location: a device whose read fails at one plug and not at the next
- * changes devnode, and three fails in a row is what it takes. (The other
+ * made again, HCD_SERIAL_READ_TRIES in all, 100 ms and then 400 ms after
+ * the try before (task 45.40), and only when every try failed is the
+ * device FAILED - counted and traced, never silent - and named by its
+ * location unless its root port remembers its serial form, when
+ * HcdDeviceSerialDefer reads again: a device whose read fails at one plug
+ * and not at the next changes devnode, and three fails in a row is what it
+ * takes. A controller halted during a wait returns 0, as a timeout. (The other
  * way is a duplicate: a serial id a present PDO already carries leaves
  * the newcomer on the location form, hcd_pdo.c.) A timeout is not retried: it
  * set dev->Ep0Stuck and either requested the controller reset or found the
@@ -2295,9 +2323,12 @@ static VOID hcdReadIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
  * only, powered.
  */
 #define HCD_SERIAL_READ_TRIES 3UL
+#define HCD_SERIAL_READ_GAP1_MS 100UL
+#define HCD_SERIAL_READ_GAP2_MS 400UL
 
 ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
 {
+    LARGE_INTEGER due;
     PUCHAR s;
     ULONG langid;
     ULONG outcome;
@@ -2316,6 +2347,18 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     }
     s = (PUCHAR)hc->ScratchVa;
     for (tries = 0; tries < HCD_SERIAL_READ_TRIES; tries++) {
+        if (tries != 0) {
+            /* Task 45.40: a try that did not bring the string is not
+             * repeated at once - a device busy just after its reset gets
+             * the time; a halted controller ends the read as a timeout
+             * does, with no PDO made from it. */
+            HcdRelativeMs(&due, tries == 1 ? HCD_SERIAL_READ_GAP1_MS
+                                           : HCD_SERIAL_READ_GAP2_MS);
+            (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+            if (hcdHalted(hc)) {
+                return 0;
+            }
+        }
         langid = 0x0409UL;
         bytes = 0;
         outcome = HcdThreadControlOutcome(hc, dev, 0x80, 6, (USHORT)0x0300,
@@ -2358,6 +2401,187 @@ ULONG HcdDeviceReadSerial(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
     XHCI_DBG_VALUE("hcd: serial string not read, location id, port",
                    dev->Port);
     return 1;
+}
+
+/* hcd.h. IRQL: any. */
+ULONG HcdDeviceVidPid(PHCD_USB_DEVICE dev)
+{
+    return ((ULONG)dev->DeviceDesc[8] << 16) |
+           ((ULONG)dev->DeviceDesc[9] << 24) |
+           (ULONG)dev->DeviceDesc[10] | ((ULONG)dev->DeviceDesc[11] << 8);
+}
+
+/* hcd.h (task 45.40). */
+PXHCI_ID_PLACE HcdIdPlace(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG take)
+{
+    XHCI_TOPO_CHILD child;
+    ULONG key;
+
+    if (p == NULL) {
+        return NULL;
+    }
+    if (p->Hub == NULL) {
+        return &p->Id;
+    }
+    if (p->Hub->Device == NULL ||
+        !XhciTopoChildOf(&hc->Hc.Topology, p->Hub->SlotId, p->Number,
+                         &child) ||
+        child.TooDeep) {
+        return NULL;
+    }
+    key = XhciHubInstanceKey(child.RootPort, child.Route);
+    return take ? XhciFuncIdPlaceTake(hc->IdPlaces, HCD_ID_PLACES, key,
+                                      &hc->IdPlaceClock)
+                : XhciFuncIdPlaceFind(hc->IdPlaces, HCD_ID_PLACES, key);
+}
+
+/* Whether a deferred arrival is to be given up rather than read again
+ * (task 45.40): the controller halted, its thread stopping or its root hub
+ * gone, or the device's path no longer holding the same connection. Each
+ * hub port above it, its own first, read with GET_STATUS: no answer, not
+ * connected, not enabled, or a connection change, or its hub departing
+ * (Draining, or no device) - C_PORT_ENABLE alone is not taken: a hub
+ * raises it when an error disabled the port (USB 2.0 11.24.2.7.2), which
+ * PORT_ENABLE clear already says, and QEMU's hub model raises it at every
+ * port reset as well, with the port enabled; then the root port the path starts
+ * at: unreadable, not connected, not enabled, or a connection change. No
+ * change bit is cleared: each is its port's own inspection's. An
+ * ancestor's departure shows here though its teardown cannot run while
+ * this thread creates the child. Thread only, powered. */
+static ULONG hcdSerialDeferGone(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PHCD_HUB hub;
+    ULONG status;
+    ULONG change;
+    ULONG portsc;
+    ULONG hops;
+
+    if (hcdHalted(hc) || hc->ThreadStop || !hc->RootHubStarted) {
+        return 1;
+    }
+    for (hops = 0; p != NULL && p->Hub != NULL; hops++) {
+        hub = p->Hub;
+        if (hops > XHCI_TOPO_MAX_TIER || hub->Draining ||
+            hub->Device == NULL || hcdHalted(hc) ||
+            !HcdHubPortStatus(hc, hub, p->Number, &status, &change) ||
+            (status & XHCI_HUB_PORT_CONNECTION) == 0 ||
+            (status & XHCI_HUB_PORT_ENABLE) == 0 ||
+            (change & XHCI_HUB_C_PORT_CONNECTION) != 0) {
+            return 1;
+        }
+        p = hub->Upstream;
+    }
+    if (p == NULL) {
+        return 1;
+    }
+    portsc = XhciReadPortsc(&hc->Hc, p->PortId);
+    return portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+           (portsc & XHCI_PORTSC_PED) == 0 ||
+           (portsc & XHCI_PORTSC_CSC) != 0;
+}
+
+/*
+ * Identity across a re-enumeration (roadmap-usb4 task 45.40; design record
+ * 13 section 10.7), right after HcdDeviceReadSerial and before anything of
+ * the device is configured: a non-hub device attached directly to a root
+ * port or to a hub's port, with an iSerialNumber, whose read gave no
+ * usable serial while its place (HcdIdPlace) remembers a group of its ids
+ * answering the serial form, is read
+ * again in place - up to HCD_SERIAL_DEFER_TRIES fresh reader runs, each
+ * after HCD_SERIAL_DEFER_WAIT_MS, none started past HCD_SERIAL_DEFER_SPAN_MS
+ * from the first wait, the connection and the controller checked again
+ * after every wait and every run. XhciFuncSerialDefer decides; the port's latch makes
+ * a failed arrival's own retry fail at once and lets the next connection
+ * be published. HCD_SDEFER_GO: go on with dev->SerialState as it is now.
+ * HCD_SDEFER_FAIL: every run spent, or the failure already latched for
+ * this connection - no PDO. HCD_SDEFER_CANCEL: the connection or the
+ * controller went meanwhile, or a reader returned 0 - no PDO, nothing
+ * latched or counted as spent. Thread only, powered.
+ */
+#define HCD_SERIAL_DEFER_TRIES   3UL
+#define HCD_SERIAL_DEFER_WAIT_MS 1000UL
+#define HCD_SERIAL_DEFER_SPAN_MS 6000UL
+
+ULONG HcdDeviceSerialDefer(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    LARGE_INTEGER due;
+    PXHCI_ID_PLACE place;
+    PHCD_PORT p;
+    ULONG covered;
+    ULONG failed;
+    ULONG vidPid;
+    ULONG where;
+    ULONG start;
+    ULONG run;
+
+    if (dev->Location == 0 || dev->Location > HCD_PORT_COUNT) {
+        return HCD_SDEFER_GO;
+    }
+    p = &hc->Ports[dev->Location - 1];
+    place = (p->Device == dev) ? HcdIdPlace(hc, p, 0) : NULL;
+    if (place == NULL) {
+        return HCD_SDEFER_GO;
+    }
+    covered = (dev->DeviceDesc[4] != XHCI_HUB_CLASS &&
+               dev->DeviceDesc[16] != 0) ? 1UL : 0UL;
+    failed = (dev->SerialState == HCD_SERIAL_FAILED ||
+              dev->SerialState == HCD_SERIAL_REFUSED) ? 1UL : 0UL;
+    vidPid = HcdDeviceVidPid(dev);
+    where = dev->Location << 16;
+    switch (XhciFuncSerialDefer(covered, failed, vidPid, place->VidPid,
+                                place->Serial, place->Latch)) {
+    case XHCI_FUNC_DEFER_YES:
+        break;
+    case XHCI_FUNC_DEFER_FAIL:
+        XhciLogNote(&hc->Hc, "serial.defer.latched", where);
+        XHCI_DBG_VALUE("hcd: serial deferral latched, no PDO, location",
+                       dev->Location);
+        return HCD_SDEFER_FAIL;
+    default:
+        return HCD_SDEFER_GO;
+    }
+    hc->SerialDeferrals++;
+    place->Deferrals++;
+    XhciLogNote(&hc->Hc, "serial.defer", where | dev->SerialState);
+    XHCI_DBG_VALUE("hcd: serial read failed where its serial form was, "
+                   "read again, location", dev->Location);
+    start = HcdTolNow(hc);
+    for (run = 1; run <= HCD_SERIAL_DEFER_TRIES; run++) {
+        HcdRelativeMs(&due, HCD_SERIAL_DEFER_WAIT_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        if (hcdSerialDeferGone(hc, p)) {
+            XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+            return HCD_SDEFER_CANCEL;
+        }
+        if (HcdTolNow(hc) - start >
+            HCD_SERIAL_DEFER_SPAN_MS / XHCI_TOL_TICK_MS) {
+            break;
+        }
+        dev->SerialState = HCD_SERIAL_UNREAD;
+        if (!HcdDeviceReadSerial(hc, dev) || hcdSerialDeferGone(hc, p)) {
+            XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+            return HCD_SDEFER_CANCEL;
+        }
+        XhciLogNote(&hc->Hc, "serial.defer",
+                    where | (run << 8) | dev->SerialState);
+        if (dev->SerialState == HCD_SERIAL_OK) {
+            hc->SerialDeferOk++;
+            XHCI_DBG_VALUE("hcd: serial read again, its own id, location",
+                           dev->Location);
+            return HCD_SDEFER_GO;
+        }
+    }
+    if (hcdSerialDeferGone(hc, p)) {
+        XhciLogNote(&hc->Hc, "serial.defer.cancel", where | run);
+        return HCD_SDEFER_CANCEL;
+    }
+    hc->SerialDeferFailed++;
+    place->Fails++;
+    place->Latch = XHCI_FUNC_LATCH_FAILED;
+    XhciLogNote(&hc->Hc, "serial.defer.fail", where | run);
+    XHCI_DBG_VALUE("hcd: serial deferral spent, no PDO, location",
+                   dev->Location);
+    return HCD_SDEFER_FAIL;
 }
 
 /*
@@ -2936,6 +3160,14 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
 }
 
 static VOID hcdPortInspectAgain(PHCD_CONTROLLER hc, PHCD_PORT p);
+/* hcdLinkKeep's outcomes (task 45.41): not attempted (the inspection goes
+ * on as before), restored, or failed with the device's cycle asked; ASK is
+ * the root inspection's own mark that L1's sample allows one. */
+#define HCD_LKEEP_NONE      0UL
+#define HCD_LKEEP_KEPT      1UL
+#define HCD_LKEEP_FAILED    2UL
+#define HCD_LKEEP_ASK       3UL
+static ULONG hcdLinkKeep(PHCD_CONTROLLER hc, PHCD_PORT p);
 static ULONG hcdTimerFired(PKTIMER t);
 
 /* A hub port deferred for the first answer, remembered by its physical
@@ -3047,6 +3279,7 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
     ULONG abandoned;
     ULONG reconnect;
     ULONG gen;
+    PXHCI_ID_PLACE idPlace;
 
     retries = (p->Hub != NULL) ? XHCI_HUB_PORT_ATTEMPTS - 1UL
                                : XHCI_ENUM_RETRIES;
@@ -3101,6 +3334,21 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
                     hcdBosHalt(hc, p);
                 }
                 hcdNoteFail(hc, p, cause, attempt, 1);
+                break;
+            }
+            /* Task 45.40: a creation its serial deferral failed is not
+             * retried on this connection; the port waits in Failed for a
+             * new one, which hcdFeed lets through - a hub's port left
+             * enabled, not given up, so a SuperSpeed hub port's re-arm
+             * cannot bring one with no replug (design record 13 section
+             * 10.7). */
+            idPlace = (cause == XHCI_ENUM_FAIL_PDO) ? HcdIdPlace(hc, p, 0)
+                                                    : NULL;
+            if (idPlace != NULL &&
+                idPlace->Latch == XHCI_FUNC_LATCH_FAILED) {
+                hcdNoteFail(hc, p, cause, attempt, 1);
+                XHCI_DBG_VALUE("hcd: enumeration failed, port/cause",
+                               (p->PortId << 16) | cause);
                 break;
             }
             (VOID)XhciEnumRetryUpTo(&p->Enum, retries, &act);
@@ -3182,6 +3430,7 @@ static ULONG hcdRun(PHCD_CONTROLLER hc, PHCD_PORT p, XHCI_ENUM_EVENT event)
 static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
 {
     XHCI_ENUM_EVENT event;
+    PXHCI_ID_PLACE idPlace;
     ULONG guard;
 
     if (kind == XHCI_ENUM_EV_DISCONNECT || kind == XHCI_ENUM_EV_ABANDONED ||
@@ -3189,6 +3438,19 @@ static VOID hcdFeed(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG kind)
          (p->Enum.State == XHCI_ENUM_EMPTY ||
           p->Enum.State == XHCI_ENUM_FAILED))) {
         hcdConnectGen(hc, p);
+    }
+    /* Task 45.40: a connection that starts an enumeration after a spent
+     * serial deferral - a replug, or a recovery's re-enumeration - is
+     * published whatever its read gives; the machine's own retry of the
+     * failed connection never comes here. */
+    idPlace = (kind == XHCI_ENUM_EV_CONNECT &&
+               (p->Enum.State == XHCI_ENUM_EMPTY ||
+                p->Enum.State == XHCI_ENUM_FAILED))
+                  ? HcdIdPlace(hc, p, 0)
+                  : NULL;
+    if (idPlace != NULL && idPlace->Latch == XHCI_FUNC_LATCH_FAILED) {
+        idPlace->Latch = XHCI_FUNC_LATCH_BYPASS;
+        XhciLogNote(&hc->Hc, "serial.defer.bypass", p->PortId << 16);
     }
     hcdEventInit(&event, kind, 1);
     for (guard = 0; hcdRun(hc, p, event) && guard < XHCI_TOL_REENUMS;
@@ -3675,6 +3937,7 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
     ULONG changes;
     ULONG feed;
     ULONG stuck;
+    ULONG lk;
 
     ext = &hc->Hc;
     portsc = XhciReadPortsc(ext, p->PortId);
@@ -3754,7 +4017,33 @@ static VOID hcdPortChanged(PHCD_CONTROLLER hc, PHCD_PORT p)
                          XHCI_QK_WHY_NONE);
         XhciLogNote(ext, "quirk.stucklink.port", p->PortId);
     }
+    /* Task 45.41 (design record 13 section 15, L1): a link that fell to
+     * SS.Inactive or Compliance Mode under a device - nothing else in the
+     * sample, 35-T.5 leaving the disconnect as it was - may be restored in
+     * place instead of the disconnect and warm reset below. */
+    lk = HCD_LKEEP_NONE;
+    if (act.Kind == XHCI_LINK_ACT_WARM_RESET && !stuck &&
+        (feed & XHCI_LINK_FEED_DISCONNECT) != 0 && p->Device != NULL &&
+        (portsc & XHCI_PORTSC_PP) != 0 && (portsc & XHCI_PORTSC_OCC) == 0 &&
+        (XhciLinkClassify(portsc) == XHCI_LINK_ERROR ||
+         XhciLinkClassify(portsc) == XHCI_LINK_COMPLIANCE)) {
+        lk = HCD_LKEEP_ASK;
+    }
     feed = hcdTolPortFeed(hc, p, portsc, feed);
+    if (lk == HCD_LKEEP_ASK && (feed & XHCI_LINK_FEED_DISCONNECT) != 0 &&
+        !hcdHalted(hc)) {
+        lk = hcdLinkKeep(hc, p);
+        if (lk != HCD_LKEEP_NONE) {
+            /* Restored, or its cycle asked (L4): the inspection's own
+             * disconnect and warm reset are not carried out; a failed
+             * restore's port is looked at again after the drop. */
+            if (lk == HCD_LKEEP_FAILED) {
+                hcdPortInspectAgain(hc, p);
+            }
+            p->Unreadable = 0;
+            return;
+        }
+    }
     if (XhciEnumNoteWantLook(&p->Notes, p->Enum.State, feed,
                              act.Kind == XHCI_LINK_ACT_WARM_RESET ||
                                  act.Kind == XHCI_LINK_ACT_GIVE_UP)) {
@@ -4629,10 +4918,614 @@ static VOID hcdDropAll(PHCD_CONTROLLER hc)
         }
         hcdDeviceFree(hc, hc->SlotDevice[i]);
     }
-#if DBG
     HcdStrictForgetSlots(hc);
-#endif
     hc->SlotSweep = 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Task 45.23: devices kept across a resume's re-initialization            */
+/* (design record 20 sections 4.3.1 and 4.3.2)                             */
+/* ----------------------------------------------------------------------- */
+
+/* How long a kept root port's link may take to show its device after the
+ * re-initialization ran the controller (a SuperSpeed link trains by
+ * itself), before the restore takes the port as empty. */
+#define HCD_RKEEP_LINK_MS       1000UL
+
+/* The temporary pool references a kept device's rings are held under
+ * until its new slot is enabled: above every slot id. */
+#define HCD_RKEEP_REF_BASE      0x100UL
+
+/* 1 when the active configuration holds an interface of class 08 at any
+ * of its alternates - a UAS setting may sit behind a vendor alternate 0
+ * (XhciXportChoose takes it) - or the bus chose a storage transport for
+ * one of its PDOs; *count is how many interface numbers carry class 08.
+ * The configuration as the device gave it (dev->Config); a malformed walk
+ * answers 1, so the stricter storage rules apply. Thread only. */
+static ULONG hcdRkeepStorage(PHCD_USB_DEVICE dev, PULONG count)
+{
+    ULONG seen[8];
+    PUCHAR c;
+    ULONG len;
+    ULONG at;
+    ULONG num;
+    ULONG n;
+
+    *count = 0;
+    c = dev->Config;
+    len = dev->ConfigLength;
+    if (c == NULL || len < 9) {
+        return dev->XportCount != 0 ? 1UL : 0UL;
+    }
+    for (n = 0; n < 8; n++) {
+        seen[n] = 0;
+    }
+    n = 0;
+    for (at = 0; at + 2 <= len;) {
+        if (c[at] < 2 || at + c[at] > len) {
+            *count = 0xFFUL;
+            return 1;
+        }
+        if (c[at + 1] == 4 && c[at] >= 9 && c[at + 5] == 0x08) {
+            /* One per interface number, whichever of its alternates. */
+            num = (ULONG)c[at + 2];
+            if ((seen[num >> 5] & (1UL << (num & 31UL))) == 0) {
+                seen[num >> 5] |= 1UL << (num & 31UL);
+                n++;
+            }
+        }
+        at += c[at];
+    }
+    *count = n;
+    return (n != 0 || dev->XportCount != 0) ? 1UL : 0UL;
+}
+
+/* What XhciEnumResumeKeep decides on, read for the device on root port or
+ * hub port p. Thread only, the power gate held. */
+static ULONG hcdRkeepFlags(PHCD_CONTROLLER hc, PHCD_PORT p,
+                           PHCD_USB_DEVICE dev)
+{
+    PHCD_DEVICE_PDO pdo;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG storage;
+    ULONG flags;
+    ULONG dci;
+
+    flags = 0;
+    if (p->Hub == NULL) {
+        flags |= XHCI_RKEEP_F_ROOT;
+    }
+    if (dev->Hub != NULL) {
+        flags |= XHCI_RKEEP_F_HUB;
+    }
+    if (dev->Gone || dev->Ep0Stuck || dev->CycleAbandon ||
+        dev->Ep0Abandoned || dev->SlotFatal || dev->HoldAsked ||
+        dev->Abandoned || dev->FuncRelease != 0) {
+        flags |= XHCI_RKEEP_F_FAULTED;
+    }
+    if (dev->Susp.State != XHCI_SUSP_ACTIVE || dev->FwArmedAll != 0) {
+        flags |= XHCI_RKEEP_F_SUSPENDED;
+    }
+    /* A pause still standing between the thread's passes is a failure's
+     * (a refused ABORT_PIPE leaves its pipe paused for the reset it asked
+     * for, whose invalidation drops the device): the replay resumes only
+     * the quiet's own pause, so a kept device would hold that pipe's
+     * requests for good. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (dev->Ep0Pipe.Paused != 0) {
+        flags |= XHCI_RKEEP_F_FAULTED;
+    }
+    for (dci = 2; dci < 32; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe != NULL && pipe->Paused != 0) {
+            flags |= XHCI_RKEEP_F_FAULTED;
+        }
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    for (dci = 2; dci < 32; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe != NULL && pipe->TransferType == XHCI_PIPE_XFER_ISOCH) {
+            flags |= XHCI_RKEEP_F_ISOCH;
+        }
+    }
+    /* A whole-device driver may select another configuration than index
+     * 0 (an unsplit device, design record 13 section 10.8), which
+     * dev->Config does not describe. */
+    if (dev->ConfigValue != 0 &&
+        (dev->Config == NULL || dev->ConfigLength < 9 ||
+         dev->ConfigValue != (ULONG)dev->Config[5])) {
+        flags |= XHCI_RKEEP_F_OTHER_CFG;
+    }
+    if (hcdRkeepStorage(dev, &storage)) {
+        flags |= XHCI_RKEEP_F_STORAGE;
+        if (storage == 1 && dev->XportCount == 1 &&
+            dev->XportTransport == XHCI_XPORT_UAS) {
+            flags |= XHCI_RKEEP_F_UAS;
+        }
+    }
+    if (dev->SerialState == HCD_SERIAL_OK && dev->SerialId[0] != 0) {
+        flags |= XHCI_RKEEP_F_SERIAL;
+    }
+    /* Task 45.41: bNumInterfaces of the configuration the bus read. */
+    if (dev->Config != NULL && dev->ConfigLength > 4 && dev->Config[4] == 1) {
+        flags |= XHCI_RKEEP_F_ONE_IFACE;
+    }
+    /* Section 4.3.3: the function's quiet declaration for this sleep. */
+    XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+    if (XhciEnumQuietValid(dev->QuietMark, hc->MarkGen)) {
+        flags |= XHCI_RKEEP_F_QUIET;
+    }
+    XhciControllerLockRelease(&hc->Hc, oldIrql);
+    if (dev->Pdo != NULL) {
+        flags |= XHCI_RKEEP_F_STARTED;
+        KeAcquireSpinLock(&hc->PdoListLock, &oldIrql);
+        for (pdo = (PHCD_DEVICE_PDO)dev->Pdo->DeviceExtension; pdo != NULL;
+             pdo = pdo->Sibling) {
+            if (!pdo->Listed || !pdo->Reported || pdo->Surprised ||
+                pdo->RemoveReceived || pdo->ParentLetGo || pdo->Closing ||
+                pdo->Dormant || pdo->Common.PnpState != HCD_PNP_STARTED) {
+                flags &= ~XHCI_RKEEP_F_STARTED;
+            }
+            if (pdo->WaitWakeIrp != NULL || pdo->FwArmed || pdo->ArmNow) {
+                flags |= XHCI_RKEEP_F_SUSPENDED;
+            }
+            if (pdo->UrbsPending != 0) {
+                flags |= XHCI_RKEEP_F_BUSY;
+                XHCI_DBG_VALUE("hcd: resume keep, a PDO's URBs pending",
+                               (ULONG)pdo->UrbsPending);
+            }
+        }
+        KeReleaseSpinLock(&hc->PdoListLock, oldIrql);
+    }
+    return flags;
+}
+
+/*
+ * Task 45.41 (design record 13 section 15): the device on root port or hub
+ * port p, whose SuperSpeed link the inspection just read in SS.Inactive or
+ * Compliance Mode, decided (XhciEnumLinkKeep, L2) and, when kept, restored
+ * in place (HcdCfgLinkKeep, L3): a root port's warm reset XhciLinkPortFeed
+ * charged and will not write is taken back first, since the restore's own
+ * reset charges its own; the link's absence through that reset is the
+ * driver's (35-T.5), and on a root port the recovered connection is
+ * observed after it (a hub port's reset observes its own). Returns
+ * HCD_LKEEP_NONE when not attempted, KEPT, or FAILED with the cycle asked.
+ * Thread only, powered, under the power gate (an inspection).
+ */
+static ULONG hcdLinkKeep(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_USB_DEVICE dev;
+    ULONG recent;
+    ULONG flags;
+    ULONG where;
+    ULONG now;
+    ULONG why;
+    ULONG ok;
+
+    ext = &hc->Hc;
+    dev = p->Device;
+    if (dev == NULL || dev->Location == 0) {
+        return HCD_LKEEP_NONE;
+    }
+    where = dev->Location << 16;
+    flags = hcdRkeepFlags(hc, p, dev);
+    now = HcdTolNow(hc);
+    recent = XhciEnumLinkKeepRecent(dev->LinkKeepCount, dev->LinkKeepFirst,
+                                    now);
+    why = XhciEnumLinkKeep(hc->LinkKeepOn, flags, recent);
+    XhciLogNote(ext, "link.keep", where | why);
+    XHCI_DBG_VALUE("hcd: link keep, location/why", where | why);
+    if (why != XHCI_LKEEP_KEEP) {
+        return HCD_LKEEP_NONE;
+    }
+    if (recent == 0) {
+        dev->LinkKeepFirst = now;
+    }
+    dev->LinkKeepCount = recent + 1;
+    if (p->Hub == NULL) {
+        XhciLinkRefund(&p->Link);
+    }
+    HcdTolLocRecovery(hc, p);
+    ok = HcdCfgLinkKeep(hc, dev);
+    if (ok && p->Hub == NULL) {
+        HcdTolLocObserve(hc, p, 1, 1, 0);
+    }
+    XhciLogNote(ext, "link.keep.done", where | ok);
+    XHCI_DBG_VALUE("hcd: link keep done, location/restored", where | ok);
+    return ok ? HCD_LKEEP_KEPT : HCD_LKEEP_FAILED;
+}
+
+/* The kept device's pool rings, which XhciPoolInit has just freed, taken
+ * back under its temporary reference before anything else can acquire
+ * them. 0 when one cannot be had: the device is then dropped. Thread
+ * only. */
+static ULONG hcdRkeepClaim(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
+                           ULONG ref)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_PIPE pipe;
+    KIRQL oldIrql;
+    ULONG ok;
+    ULONG dci;
+
+    ext = &hc->Hc;
+    ok = 1;
+    XhciControllerLockAcquire(ext, &oldIrql);
+    dev->ResumeRef = ref;
+    for (dci = 2; dci < 32 && ok; dci++) {
+        pipe = dev->Pipes[dci];
+        if (pipe != NULL &&
+            XhciPoolClaim(&ext->RingPool, ref, pipe->PoolIndex) !=
+                XHCI_POOL_OK) {
+            ok = 0;
+        }
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    return ok;
+}
+
+/* A kept device whose restore failed, on its root port: its temporary
+ * rings released, then today's departure - its slot given back when the
+ * restore had enabled one (HCD_GO_UNPLUG), else none to give (taken by
+ * HCRST) - its PDOs reported missing and its URBs completed as any
+ * device's, and the machine where a disconnect puts it, so the port's
+ * next inspection enumerates what is there afresh (K7). Thread only. */
+static VOID hcdRkeepDrop(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    XHCI_ENUM_EVENT event;
+    XHCI_ENUM_ACTION act;
+    PHCD_USB_DEVICE dev;
+    KIRQL oldIrql;
+
+    dev = p->Device;
+    hc->ResumeKeepFailed++;
+    XHCI_DBG_VALUE("hcd: resume keep failed, dropping, port", p->PortId);
+    if (dev->ResumeRef != 0) {
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        (VOID)XhciPoolReleaseDevice(&hc->Hc.RingPool, dev->ResumeRef);
+        dev->ResumeRef = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+    }
+    hcdConnectGen(hc, p);
+    p->AwaitSerial = hcdSubtreeGo(hc, p,
+                                  dev->SlotId != 0 ? HCD_GO_UNPLUG
+                                                   : HCD_GO_TAKEN,
+                                  1);
+    hcdEventInit(&event, XHCI_ENUM_EV_DISCONNECT, 1);
+    (VOID)XhciEnumStep(&p->Enum, &event, &act);
+    (VOID)hcdSettleGone(hc, p);
+}
+
+/*
+ * The kept device on root port p restored in place (K5, K6): the link
+ * awaited, the port reset at the speed it had, a new slot enabled and
+ * given the record, its rings moved to that slot, Address Device; the
+ * device descriptor, the whole configuration descriptor and - for a
+ * storage device - the serial number read and compared with the record's;
+ * then the pipes' endpoints, configuration and alternates replayed
+ * (HcdCfgResumeReplay). The port's change bits are acknowledged once, after
+ * the reset, so its inspection takes the device as present; a connection
+ * or enable change after that fails the restore.
+ * Returns 0 on any failure, with the device as the failure left it for
+ * hcdRkeepDrop. Thread only, powered.
+ */
+ULONG HcdThreadSameIdentity(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
+{
+    PUCHAR s;
+    char serial[XHCI_SERIAL_ID_BYTES];
+    ULONG bytes;
+    ULONG i;
+
+    s = (PUCHAR)hc->ScratchVa;
+    if (s == NULL) {
+        return 0;
+    }
+    if (dev->Config != NULL && dev->ConfigLength != 0) {
+        bytes = 0;
+        if (!hcdGetDescriptor(hc, dev, HCD_DESC_CONFIGURATION,
+                              dev->ConfigLength, &bytes) ||
+            bytes != dev->ConfigLength) {
+            return 0;
+        }
+        for (i = 0; i < bytes; i++) {
+            if (s[i] != dev->Config[i]) {
+                XHCI_DBG_TEXT("hcd: kept device, configuration differs");
+                return 0;
+            }
+        }
+    }
+    if (dev->SerialState == HCD_SERIAL_OK) {
+        for (i = 0; i < XHCI_SERIAL_ID_BYTES; i++) {
+            serial[i] = dev->SerialId[i];
+        }
+        dev->SerialState = HCD_SERIAL_UNREAD;
+        if (!HcdDeviceReadSerial(hc, dev) ||
+            dev->SerialState != HCD_SERIAL_OK) {
+            return 0;
+        }
+        for (i = 0; i < XHCI_SERIAL_ID_BYTES; i++) {
+            if (serial[i] != dev->SerialId[i]) {
+                XHCI_DBG_TEXT("hcd: kept device, serial number differs");
+                return 0;
+            }
+            if (serial[i] == 0) {
+                break;
+            }
+        }
+    }
+    return 1;
+}
+
+static ULONG hcdRkeepRestore(PHCD_CONTROLLER hc, PHCD_PORT p)
+{
+    PXHCI_EXTENSION ext;
+    PHCD_USB_DEVICE dev;
+    LARGE_INTEGER due;
+    XHCI_TRB trb;
+    KIRQL oldIrql;
+    PUCHAR s;
+    ULONG control;
+    ULONG portsc;
+    ULONG waited;
+    ULONG speed;
+    ULONG after;
+    ULONG prWait;
+    ULONG rank;
+    ULONG bytes;
+    ULONG slotId;
+    ULONG code;
+    ULONG i;
+
+    ext = &hc->Hc;
+    dev = p->Device;
+    s = (PUCHAR)hc->ScratchVa;
+    if (hcdHalted(hc) || s == NULL) {
+        return 0;
+    }
+    portsc = XhciReadPortsc(ext, p->PortId);
+    for (waited = 0; waited < HCD_RKEEP_LINK_MS &&
+                     (portsc == 0xFFFFFFFFUL ||
+                      (portsc & XHCI_PORTSC_CCS) == 0);
+         waited += HCD_POLL_STEP_MS) {
+        HcdRelativeMs(&due, HCD_POLL_STEP_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        portsc = XhciReadPortsc(ext, p->PortId);
+    }
+    speed = 0;
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        !hcdResetPort(hc, p, &speed, &after, &prWait) || speed != dev->Speed) {
+        XHCI_DBG_VALUE("hcd: resume keep, port or speed, port/speed",
+                       (p->PortId << 8) | speed);
+        return 0;
+    }
+    p->LinkPsiv = speed;
+    /* What the re-initialization and this reset raised is acknowledged now,
+     * before the device is identified: a connection change seen after
+     * this is a device that left or came during the restore, which fails
+     * it (below). */
+    portsc = XhciReadPortsc(ext, p->PortId);
+    if (portsc == 0xFFFFFFFFUL) {
+        return 0;
+    }
+    if ((portsc & XHCI_PORTSC_CHANGE_MASK) != 0) {
+        XhciWritePortsc(ext, p->PortId,
+                        XhciPortscClearChanges(portsc,
+                                               portsc &
+                                                   XHCI_PORTSC_CHANGE_MASK));
+    }
+
+    code = 0;
+    if (XhciTrbEnableSlot(&trb, 0) == XHCI_RING_OK) {
+        code = hcdCommand(hc, &trb, &control);
+    }
+    if (code != XHCI_CC_SUCCESS) {
+        return 0;
+    }
+    slotId = XHCI_TRB_GET_SLOT_ID(control);
+    if (slotId == 0 || slotId > XHCI_MAX_SLOTS ||
+        hc->SlotDevice[slotId] != NULL) {
+        HcdSvcRequestReset(ext);
+        return 0;
+    }
+    XhciControllerLockAcquire(ext, &oldIrql);
+    dev->SlotId = slotId;
+    hc->SlotDevice[slotId] = dev;
+    (VOID)XhciPoolRehome(&ext->RingPool, dev->ResumeRef, slotId);
+    if (XhciPoolDeviceCount(&ext->RingPool, dev->ResumeRef) == 0) {
+        dev->ResumeRef = 0;
+    }
+    XhciControllerLockRelease(ext, oldIrql);
+    hc->Counters.SlotsEnabled++;
+    if (dev->ResumeRef != 0) {
+        return 0;
+    }
+
+    rank = dev->SsLinkRank;
+    if (!hcdAddress(hc, p, dev->Mps0) || dev->SsLinkRank != rank) {
+        XHCI_DBG_VALUE("hcd: resume keep, address or rank, port", p->PortId);
+        return 0;
+    }
+    bytes = 0;
+    if (!HcdThreadControl(hc, dev, 0x80, 6, 0x0100, 0, 18, &bytes) ||
+        bytes != 18) {
+        return 0;
+    }
+    for (i = 0; i < 18; i++) {
+        if (s[i] != dev->DeviceDesc[i]) {
+            XHCI_DBG_TEXT("hcd: resume keep, another device answered");
+            return 0;
+        }
+    }
+    if (!HcdThreadSameIdentity(hc, dev)) {
+        return 0;
+    }
+    if (!HcdCfgResumeReplay(hc, dev)) {
+        return 0;
+    }
+    /* Still the device that was identified: connected and enabled, with no
+     * connection or enable change since the acknowledgement above. A change
+     * is left for the port's inspection, which enumerates what is there
+     * once the drop has taken this record. */
+    portsc = XhciReadPortsc(ext, p->PortId);
+    if (portsc == 0xFFFFFFFFUL || (portsc & XHCI_PORTSC_CCS) == 0 ||
+        (portsc & XHCI_PORTSC_PED) == 0 ||
+        (portsc & (XHCI_PORTSC_CSC | XHCI_PORTSC_PEC)) != 0) {
+        XHCI_DBG_VALUE("hcd: resume keep, port changed meanwhile, PORTSC",
+                       portsc);
+        return 0;
+    }
+    XHCI_DBG_VALUE("hcd: resume keep, restored, port/slot",
+                   (p->PortId << 8) | slotId);
+    return 1;
+}
+
+/*
+ * The invalidation of a resume whose re-initialization succeeded, with
+ * XhciResumeKeep on (K1 to K7 as built, design record 20 section 4.3.2):
+ * each root port's device that XhciEnumResumeKeep keeps stays on its port
+ * with its PDOs listed and started and its pipe objects whole - its slot
+ * gone with HCRST, its pipes paused and what they held completed with a
+ * transport error (HcdCfgResumeQuiet), its rings claimed back - and every
+ * other device leaves as hcdDropAll takes it. Then each kept device is
+ * restored on its port (hcdRkeepRestore), or dropped there when that
+ * fails (hcdRkeepDrop). Thread only, the power gate held, powered.
+ */
+static VOID hcdResumeInvalidate(PHCD_CONTROLLER hc)
+{
+    ULONG keep[XHCI_MAX_ROOT_PORTS];
+    PHCD_USB_DEVICE dev;
+    PHCD_HUB hub;
+    KIRQL oldIrql;
+    ULONG flags;
+    ULONG why;
+    ULONG i;
+    ULONG n;
+
+    XHCI_DBG_TEXT("hcd: slots invalidated by a resume, keeping devices");
+    hcdHoldsForget(hc, 1);
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        keep[i] = 0;
+        dev = hc->Ports[i].Device;
+        if (dev == NULL) {
+            continue;
+        }
+        flags = hcdRkeepFlags(hc, &hc->Ports[i], dev);
+        why = XhciEnumResumeKeep(hc->ResumeKeepOn, flags);
+        XHCI_DBG_VALUE("hcd: resume keep, port/flags/why",
+                       ((i + 1UL) << 24) | ((flags & 0xFFFFUL) << 8) |
+                           (why & 0xFFUL));
+        XhciLogNote(&hc->Hc, "resume.keep.port",
+                    ((i + 1UL) << 8) | (why & 0xFFUL));
+        if (why == XHCI_RKEEP_KEEP) {
+            keep[i] = 1;
+        } else {
+            hc->ResumeKeepRefused++;
+        }
+    }
+    /* The kept devices off their old slots, so nothing below frees them
+     * and no command names a slot HCRST took; then every device drained -
+     * a kept one by its quiet, a departing one as hcdDropAll drains it -
+     * before any is waited out (a request waiting for map registers can
+     * depend on another device's). */
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (!keep[i]) {
+            continue;
+        }
+        dev = hc->Ports[i].Device;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        if (dev->SlotId != 0 && dev->SlotId <= XHCI_MAX_SLOTS &&
+            hc->SlotDevice[dev->SlotId] == dev) {
+            hc->SlotDevice[dev->SlotId] = NULL;
+        }
+        dev->SlotId = 0;
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        HcdCfgResumeQuiet(hc, dev);
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        dev = hc->Ports[i].Device;
+        if (dev != NULL && !keep[i]) {
+            (VOID)HcdIoDeviceDrain(hc, dev);
+        }
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        dev = hc->SlotDevice[i];
+        if (dev == NULL) {
+            continue;
+        }
+        for (n = 0; n < XHCI_MAX_ROOT_PORTS; n++) {
+            if (keep[n] && hc->Ports[n].Device == dev) {
+                break;
+            }
+        }
+        if (n == XHCI_MAX_ROOT_PORTS) {
+            (VOID)HcdIoDeviceDrain(hc, dev);
+        }
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (keep[i]) {
+            HcdCfgResumeSettle(hc, hc->Ports[i].Device);
+        }
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (!keep[i]) {
+            hcdDropPort(hc, &hc->Ports[i]);
+        }
+    }
+    for (i = 0; i < HCD_MAX_HUBS; i++) {
+        hub = &hc->Hubs[i];
+        if (!hub->Used) {
+            continue;
+        }
+        for (n = 1; n <= HCD_HUB_MAX_PORTS; n++) {
+            hcdDropPort(hc, HcdHubPort(hc, hub, n));
+        }
+    }
+    for (i = 1; i <= XHCI_MAX_SLOTS; i++) {
+        if (hc->SlotDevice[i] != NULL) {
+            (VOID)HcdDevicePdoGone(hc, hc->SlotDevice[i]);
+        }
+        hcdDeviceFree(hc, hc->SlotDevice[i]);
+    }
+    HcdStrictForgetSlots(hc);
+    hc->SlotSweep = 0;
+    hc->ScratchTainted = 0;
+    hc->ScratchHeld = 0;
+    /* Every kept device's rings claimed before any is restored: a
+     * restore's Enable Slot and the pipes it configures must not meet a
+     * ring another kept device still has to claim. */
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (keep[i] &&
+            !hcdRkeepClaim(hc, hc->Ports[i].Device, HCD_RKEEP_REF_BASE + i)) {
+            keep[i] = 2;
+        }
+    }
+    for (i = 0; i < XHCI_MAX_ROOT_PORTS; i++) {
+        if (keep[i] == 0) {
+            continue;
+        }
+        if (keep[i] == 1 && hcdRkeepRestore(hc, &hc->Ports[i])) {
+            hc->ResumeKept++;
+            /* Section 4.3.3: what the function's wake check reads. */
+            XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+            hc->Ports[i].Device->ResumeEpoch++;
+            XhciControllerLockRelease(&hc->Hc, oldIrql);
+            continue;
+        }
+        /* Every kept device left is dropped even once a failed command
+         * has asked for the controller's reset, so none stays slotless with
+         * paused pipes should that reset be refused (a recovery window
+         * spent). A slotless one goes with no command; one whose new slot
+         * the controller may still own goes through Disable Slot, which a
+         * halted controller refuses, leaving the record quarantined in
+         * SlotDevice[] for the reset's invalidation, as any departure's. */
+        hcdRkeepDrop(hc, &hc->Ports[i]);
+    }
+    XhciLogNote(&hc->Hc, "resume.keep",
+                ((hc->ResumeKept & 0xFFUL) << 16) |
+                    ((hc->ResumeKeepFailed & 0xFFUL) << 8) |
+                    (hc->ResumeKeepRefused & 0xFFUL));
 }
 
 static VOID hcdInvalidate(PHCD_CONTROLLER hc)
@@ -4717,6 +5610,7 @@ static VOID hcdDetach(PHCD_CONTROLLER hc, ULONG powered)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortCycleCharge[i] = 0;
         hc->PortRepresent[i] = 0;
     }
     hc->EnumDetachRequested = 0;
@@ -4734,6 +5628,7 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
 {
     XHCI_HUB_PORT_DECISION d;
     PHCD_PORT q;
+    ULONG lk;
 
     q = HcdHubPort(hc, hub, n);
     if (!HcdHubPortLook(hc, hub, n, q->Enum.State, &d)) {
@@ -4746,6 +5641,22 @@ static VOID hcdHubPortChanged(PHCD_CONTROLLER hc, PHCD_HUB hub, ULONG n)
         return;
     }
     q->LookFails = 0;
+    /* Task 45.41 (design record 13 section 15, L1): the link fell to
+     * SS.Inactive or Compliance Mode under a device, nothing else in the
+     * sample: restored in place when it may be, and the look's disconnect,
+     * recovery and connect are then not carried out; a failed restore's
+     * cycle owns the port's next steps, and it is looked at again. */
+    if (q->HubSsRecover && d.Disconnect && !d.OverCurrent && !d.Repower &&
+        q->Device != NULL && !hcdHalted(hc)) {
+        lk = hcdLinkKeep(hc, q);
+        if (lk != HCD_LKEEP_NONE) {
+            q->HubSsRecover = 0;
+            if (lk == HCD_LKEEP_FAILED) {
+                hub->Changed |= 1UL << n;
+            }
+            return;
+        }
+    }
     if (d.Disabled && d.Disconnect && hc->Hc.Tol.Stats.Tolerance) {
         /* The hub disabled the port under its device (35-T.5): the
          * re-enumeration is charged to the location, and a refusal holds
@@ -5221,10 +6132,12 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     ULONG started[HCD_PORT_WORDS];
     ULONG removed[HCD_PORT_WORDS];
     ULONG cycle[HCD_PORT_WORDS];
+    ULONG charge[HCD_PORT_WORDS];
     KIRQL oldIrql;
     ULONG serial;
     ULONG invalidated;
     ULONG unproven;
+    ULONG keepReady;
     ULONG detach;
     ULONG asked;
     ULONG outstanding;
@@ -5245,10 +6158,15 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
     outstanding = !XhciEnumSettleReached(hc->SettleDone, asked);
     invalidated = 0;
     unproven = 0;
+    keepReady = 0;
     if (powered) {
         invalidated = hc->SlotsInvalidated;
         unproven = hc->SlotsUnproven;
         hc->SlotsInvalidated = 0;
+        /* Task 45.23: a resume's invalidation, its re-initialization
+         * done (hcd_power.c); taken once, whatever the pass decides. */
+        keepReady = invalidated && hc->ResumeKeepReady;
+        hc->ResumeKeepReady = 0;
     }
     XhciControllerLockRelease(ext, oldIrql);
 
@@ -5283,9 +6201,26 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
             XhciControllerLockRelease(ext, oldIrql);
             HcdSvcDmaNotStopped(ext);
             HcdEnumContain(hc, 0);
+        } else if (keepReady) {
+            hcdResumeInvalidate(hc);
         } else {
             hcdInvalidate(hc);
         }
+    }
+    if (invalidated) {
+        /* The invalidation taken - devices kept, dropped or contained - so
+         * the D0 waits no longer (hcd_power.c, hcdResumeKeepWait); never
+         * before, whatever disarmed the keep. */
+        (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
+        /* Design record 20 section 4.3.3: and a resume that re-initialized
+         * ends here; every quiet mark is void (any invalidation's end, so
+         * a recovery's too). */
+        XhciControllerLockAcquire(ext, &oldIrql);
+        if (hc->ResumePhase == XHCI98_RESUME_PENDING) {
+            hc->ResumePhase = XHCI98_RESUME_RUNNING;
+        }
+        hc->MarkGen++;
+        XhciControllerLockRelease(ext, oldIrql);
     }
     if (detach) {
         hcdDetach(hc, powered);
@@ -5348,10 +6283,12 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
         started[i] = hc->PortPdoStarted[i];
         removed[i] = hc->PortPdoRemoved[i];
         cycle[i] = hc->PortCycle[i];
+        charge[i] = hc->PortCycleCharge[i];
         hc->PortChange[i] = 0;
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortCycleCharge[i] = 0;
         if (invalidated) {
             changed[i] = 0xFFFFFFFFUL;
         }
@@ -5383,7 +6320,13 @@ VOID HcdEnumService(PHCD_CONTROLLER hc, ULONG powered)
                 /* An unplug as the machine sees one: the PDO goes and the
                  * slot with it, the port waits in Gone for the PDO's
                  * deletion (hcdSettleGone), and an Empty port that reads
-                 * connected is then a new device (hcdPortChanged). */
+                 * connected is then a new device (hcdPortChanged). A
+                 * function driver's cycle after its own failed reset is
+                 * charged as a failed RESET_PORT's (task 45.41). */
+                if ((charge[word] & bit) != 0 &&
+                    !HcdTolLocCharge(hc, p, XHCI_TOL_CHARGE_REENUM)) {
+                    hc->Hc.Tol.Stats.CyclesRefused++;
+                }
                 XHCI_DBG_VALUE("hcd: cycling port, location", port);
                 hcdFeed(hc, p, XHCI_ENUM_EV_DISCONNECT);
                 hcdMarkChanged(p, changed);
@@ -5707,10 +6650,14 @@ VOID HcdEnumInit(PHCD_CONTROLLER hc)
         hc->PortPdoStarted[i] = 0;
         hc->PortPdoRemoved[i] = 0;
         hc->PortCycle[i] = 0;
+        hc->PortCycleCharge[i] = 0;
         hc->PortRepresent[i] = 0;
     }
     hc->SlotsInvalidated = 0;
     hc->SlotsUnproven = 0;
+    /* Task 45.23: no keep is owed to a fresh start. */
+    hc->ResumeKeepReady = 0;
+    hc->ResumeKeepPending = 0;
     hc->TerminalReleased = 0;
     hc->SavePublished = 0;
     /* 35-T.2: the queues that held requests went with their devices. */
@@ -5737,4 +6684,8 @@ VOID HcdEnumDrop(PHCD_CONTROLLER hc)
         HcdDevicePdoDormantAll(hc);
     }
     hcdDropAll(hc);
+    /* Task 45.23: every device dropped, so a keep still owed is settled
+     * and a D0 waiting for it goes on (hcd_power.c, hcdResumeKeepWait). */
+    hc->ResumeKeepReady = 0;
+    (VOID)InterlockedExchange((PLONG)&hc->ResumeKeepPending, 0);
 }

@@ -27,12 +27,22 @@ in-memory certificate that signs them (CertificateRequest). One
 stand-in driver carries the exact probe marker to prove diagnostic artifacts
 are rejected before staging.
 
+The whole run is skipped when nothing it may read has changed since a
+passing run in this tree or any other (the shared store of task 45.51,
+Get-SelfTestPassDir in common.ps1): build-and-test.md, "The packager's
+self-tests, skipped when unchanged" and "The self-tests' skip across
+worktrees", is the design.
+
+.PARAMETER Force
+Run every case even when the last passing run read the same inputs.
+XHCI98_FULL_SELFTESTS=1 does the same; a cut's builds set it.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File scripts\package\test-package.ps1
 #>
 
 [CmdletBinding()]
-param()
+param([switch]$Force)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Stop"
@@ -40,6 +50,300 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "package-common.ps1")
 
 $repo = Get-RepoRoot
+# The fixtures are git repositories (the driver pack, the free set, the
+# import's two trees, the records' commits): with no git to run, the
+# suite cannot read what it means to and fails here, at once, saying why
+# (task 45.30).
+if ($null -eq (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)) {
+    Write-Err "packager self-tests FAILED: git is not on PATH, and the fixtures these tests build are git repositories. Put git on PATH and run again."
+    exit 1
+}
+function Get-CatalogPeSample {
+    # The real image the catalog case gives MakeCat to hash as a PE member
+    # (MakeCat's PE hashing needs one): Windows' own kernel32.dll, the same
+    # file for every run of a tree, rather than a driver this tree has
+    # built, which every build replaces.
+    return (Join-Path $env:SystemRoot "System32\kernel32.dll")
+}
+
+function Get-PackagerSelfTestFileSet {
+    # The packager's set (task 45.51; build-and-test.md, "The self-tests'
+    # skip across worktrees", "The packager's set"), repository-relative,
+    # backslashed: what the kept cases read of this tree, and what the
+    # fixture repository the moved cases run in is made of
+    # (New-PackagerFixtureRepo), so a moved case reads nothing of a tree
+    # this set does not hold.
+    #   Listed - every file git lists, tracked (a tracked one deleted
+    #            included) or untracked and not ignored, under scripts\,
+    #            releases\, xhciinst\, xhcimark\, xhciqual\, xhcitr\,
+    #            docs\using\ and src\, and every .gitignore and
+    #            .gitattributes; of src\ every file but a compiled source
+    #            (.c, .cpp, .asm, .h: their content is no input) and, of
+    #            src\stor98\, its INFs alone (its other bundled files are
+    #            Named); a compiler's or linker's intermediate (.res, .obj
+    #            and the like, made and deleted by a gated build's parallel
+    #            steps while this suite runs, task 45.48) left out.
+    #   Named  - the files read by name, whatever git says of them, among
+    #            them the connection manager's value tables, which
+    #            check-cm-inf.ps1 holds its INFs to.
+    # $null when git cannot list -Root.
+    param([string]$Root)
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    $specs = @("scripts", "releases", "xhciinst", "xhcimark", "xhciqual", "xhcitr", "docs/using", "src",
+               ":(glob)**/.gitignore", ":(glob)**/.gitattributes")
+    $listed = & git -C $root -c core.quotePath=false ls-files -z --cached --others --exclude-standard -- @specs 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    $compiled = @(".c", ".cpp", ".asm", ".h")
+    $transient = @(".res", ".obj", ".pdb", ".ilk", ".exp", ".idb", ".pch", ".tmp")
+    $names = @()
+    foreach ($n in @((($listed | Out-String) -split [char]0) | Where-Object { $_.Trim() -ne "" } | ForEach-Object { $_.Trim().Replace('/', '\') })) {
+        $ext = [System.IO.Path]::GetExtension($n).ToLowerInvariant()
+        if ($transient -contains $ext) { continue }
+        if ($n.StartsWith("src\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($compiled -contains $ext) { continue }
+            if ($n.StartsWith("src\stor98\", [System.StringComparison]::OrdinalIgnoreCase) -and
+                -not $n.StartsWith("src\stor98\inf\", [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        }
+        $names += $n
+    }
+    $named = @(
+        "LICENSE", "README.md", ".gitignore", ".gitattributes",
+        "docs\contributing\design\19-x64-test-signing.md",
+        "test\stor98-settings.txt",
+        "src\xhci_version.h", "src\xhci.h", "src\xhci_hub.h",
+        "src\cm\cm_status.h", "src\cm\cm_query.h", "src\cm\cm_ejask.h", "src\cm\stor98cm.h",
+        "src\cm\cm_vals.c", "src\cm\cm_vals.h",
+        "src\stor98\LICENSE", "src\stor98\NOTICE", "src\stor98\docs\package-readme.txt",
+        "src\stor98\include\stor98cm.h", "src\stor98\include\stor98pf.h")
+    return @{ Listed = @($names | Sort-Object -Unique); Named = $named }
+}
+
+function Get-PackagerSelfTestInherited {
+    # What the suite and its children inherit, as the digest's rows: the
+    # environment variables they read (the scripts' $env: reads, what the
+    # compilers and run-host-tests.cmd read, PSModulePath, every GIT_* and
+    # every XHCI98_* but the per-run ones - the gated run's token, the
+    # switches this skip reads and the store it records in - and the names
+    # the suite's git policy sets or clears, which no caller's value can
+    # reach), set or not, each value normalised against -Root
+    # (ConvertTo-PackagerDigestValue) so two trees of one commit read alike.
+    # Not TEMP or TMP: the suite sets both to one scratch root, where the
+    # cases make their scratch and which none asserts. Not every variable:
+    # build-driver.cmd sets its own per run (the step clock's times, ARCH),
+    # which no case reads and which would move the digest between two
+    # identical runs. Taken before the suite sets its git policy.
+    param([string]$Root)
+    $read = @("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "USERPROFILE", "HOME", "APPDATA",
+              "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "OS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
+              "PSMODULEPATH",
+              "MSVC6", "WDK71", "WDKROOT", "DDKROOT", "DDK98", "XHCI_HOST_TEST_DEFINES", "INCLUDE", "LIB", "CL", "_CL_",
+              "LINK", "_LINK_",
+              # run-host-tests.cmd's own flags, which a caller's would preset
+              # (NORUN skips running the suites), and the suites' getenv reads.
+              "NORUN", "RUNDIR", "SUITEBLOCKED", "SUITEFAILED", "SUITEPARTIAL", "SUITESKIPPED",
+              "TBT_TRACE", "U4_TRACE", "XHCIINST_SCREENS", "XHCISNAP_FAULT")
+    $skip = @("XHCI98_GATED_RUN", "XHCI98_FULL_SELFTESTS", "XHCI98_SELFTEST_SKIP_OK", "XHCI98_SELFTEST_PASS_DIR")
+    $vars = @{}
+    foreach ($v in @(Get-ChildItem Env:)) { $vars[$v.Name.ToUpperInvariant()] = $v.Value }
+    $rows = @()
+    foreach ($n in $read) {
+        $rows += ("env:" + $n + "=" + $(if ($vars.ContainsKey($n)) { "set:" + (ConvertTo-PackagerDigestValue -Value $vars[$n] -Root $Root) } else { "unset" }))
+    }
+    foreach ($n in @($vars.Keys | Sort-Object)) {
+        if (($n.StartsWith("GIT_") -or $n.StartsWith("XHCI98_")) -and $skip -notcontains $n -and -not (Test-SelfTestGitPolicyName -Name $n)) {
+            $rows += ("env:" + $n + "=set:" + (ConvertTo-PackagerDigestValue -Value $vars[$n] -Root $Root))
+        }
+    }
+    return $rows
+}
+
+function ConvertTo-PackagerDigestValue {
+    # A value as the digest's rows hold it (task 45.51): split on ';', and
+    # each part that names a path trimmed of quotes and its trailing
+    # separator, its slashes turned back, lower-cased, and, when it is under
+    # -Root, rewritten as <repo> and the rest, so two trees of one commit
+    # read alike.
+    param([string]$Value, [string]$Root)
+    $r = [System.IO.Path]::GetFullPath($Root).TrimEnd('\').ToLowerInvariant()
+    $parts = @()
+    foreach ($p in ($Value -split ';')) {
+        $q = $p.Trim().Trim('"')
+        if ($q.Contains('\') -or $q.Contains('/') -or $q -match '^[A-Za-z]:') {
+            $q = $q.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+            if ($q -eq $r -or $q.StartsWith($r + '\')) { $q = "<repo>" + $q.Substring($r.Length) }
+        }
+        $parts += $q
+    }
+    return ($parts -join ';')
+}
+
+function Get-PackagerCheckoutRow {
+    # A driver set's checkout under scripts\local\ as the kept case reads it
+    # (task 45.51): absent; or, at its pinned tag, the commit and tree ids,
+    # every object of that tree present or missing, its replace refs (which
+    # the suite's git policy turns off) and its own configuration, git
+    # looking no higher than the checkout as Invoke-DriverPackGit does. $null
+    # on any git failure: no digest, no skip.
+    param([string]$Path, [string]$Name, [string]$Tag)
+    if (-not (Test-Path -LiteralPath $Path)) { return ("checkout:" + $Name + ":absent") }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { return ("checkout:" + $Name + ":not a directory") }
+    if ($Tag -eq "") { return ("checkout:" + $Name + ":present:no pin") }
+    $ErrorActionPreference = "Continue"
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $savedCeiling = $env:GIT_CEILING_DIRECTORIES
+    $env:GIT_CEILING_DIRECTORIES = Split-Path -Parent $full
+    try {
+        $commit = ((& git -C $full rev-parse --verify -q ("refs/tags/" + $Tag + "^{commit}") 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-f]{40}$') { return $null }
+        $tree = ((& git -C $full rev-parse --verify -q ($commit + "^{tree}") 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $objects = @(& git -C $full ls-tree -r -t --full-tree $commit 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $ids = @($objects | ForEach-Object { ($_ -split '\s+')[2] } | Where-Object { $_ -match '^[0-9a-f]{40}$' })
+        $present = @($ids | & git -C $full cat-file --batch-check 2>$null)
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $replace = ((& git -C $full for-each-ref "refs/replace" 2>$null) | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { return $null }
+        $config = ((& git -C $full config --local --list 2>$null) | Out-String).Trim()
+        return ("checkout:" + $Name + ":tag:" + $Tag + ":" + $commit + ":" + $tree + ":objects:" + ($present -join "|") +
+                ":replace:" + $replace + ":config:" + $config)
+    } finally {
+        $env:GIT_CEILING_DIRECTORIES = $savedCeiling
+    }
+}
+
+function Test-CmdAutoRun {
+    # Whether cmd.exe has an AutoRun (read, never written; task 45.51). It
+    # runs before every cmd.exe a case starts, the packager's host runner
+    # among them, and what it runs is no file of the set, so while one is
+    # set this tree has no digest: the suite runs whole and records nothing.
+    foreach ($hive in @("HKLM:\Software\Microsoft\Command Processor", "HKCU:\Software\Microsoft\Command Processor")) {
+        $auto = $null
+        try { $auto = (Get-ItemProperty -LiteralPath $hive -Name "AutoRun" -ErrorAction Stop).AutoRun } catch { $auto = $null }
+        if ("$auto".Trim() -ne "") { return $true }
+    }
+    return $false
+}
+
+function Get-PackagerSelfTestDigest {
+    # One SHA-256 over what these self-tests may read (task 45.48; narrowed
+    # by task 45.51, build-and-test.md, "The self-tests' skip across
+    # worktrees"), every row relative to the tree's root so two trees of one
+    # commit give one digest:
+    #   - the packager's set (Get-PackagerSelfTestFileSet), each file by its
+    #     path and content, a listed one gone as absent;
+    #   - releases\ by membership, every file by its path and size, ignored
+    #     or not, since the historical checks list it with -Force;
+    #   - for each driver, the names source-stamp.ps1 -List gives and
+    #     whether each is there, not their content;
+    #   - the driver sets' checkouts (Get-PackagerCheckoutRow);
+    #   - the catalog case's MakeCat and PE sample, and the dumpers the import
+    #     gate would resolve, by content;
+    #   - what the suite inherits (-Inherited, Get-PackagerSelfTestInherited,
+    #     taken once at the start) and the PowerShell, .NET and git versions.
+    # No driver source's content, no HEAD, no git status, no built output:
+    # no case reads them. $null when git cannot list the tree or a row
+    # cannot be read: no skip. (cmd.exe's AutoRun is Test-CmdAutoRun's.)
+    param([string]$Root, [string[]]$Inherited = @())
+    # Local to this function: git's warnings on stderr are not errors here.
+    $ErrorActionPreference = "Continue"
+    $root = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    $set = Get-PackagerSelfTestFileSet -Root $root
+    if ($null -eq $set) { return $null }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashOf = { param($f) (($sha.ComputeHash([System.IO.File]::ReadAllBytes($f)) | ForEach-Object { $_.ToString("x2") }) -join "") }
+        $rows = @()
+        foreach ($n in @(@($set.Listed) + @($set.Named) | Sort-Object -Unique)) {
+            $f = Join-Path $root $n
+            $rows += ("file:" + $n.ToLowerInvariant() + ":" + $(if (Test-Path -LiteralPath $f -PathType Leaf) { & $hashOf $f } else { "absent" }))
+        }
+        $rel = Join-Path $root "releases"
+        if (Test-Path -LiteralPath $rel -PathType Container) {
+            foreach ($f in @(Get-ChildItem -LiteralPath $rel -File -Recurse -Force)) {
+                $rows += ("member:" + $f.FullName.Substring($root.Length).ToLowerInvariant() + ":" + $f.Length)
+            }
+        }
+        $stamp = Join-Path $root "scripts\source-stamp.ps1"
+        if (-not (Test-Path -LiteralPath $stamp -PathType Leaf)) { return $null }
+        foreach ($d in $script:StampDrivers) {
+            try { $list = @(& $stamp -Driver $d -List) } catch { return $null }
+            foreach ($p in $list) {
+                $rows += ("stamp:" + $d + ":" + ([string]$p).ToLowerInvariant() + ":" +
+                          $(if (Test-Path -LiteralPath (Join-Path $root ([string]$p)) -PathType Leaf) { "present" } else { "absent" }))
+            }
+        }
+        $freePin = $null
+        $pinFile = Join-Path $root "scripts\package\wdmfree-pin.txt"
+        if (Test-Path -LiteralPath $pinFile -PathType Leaf) {
+            try { $freePin = Read-WdmFreePin -Path $pinFile } catch { return $null }
+        }
+        foreach ($co in @(@{ Name = "usb-wdm-nonfree"; Tag = $script:NonFreePin.Tag },
+                          @{ Name = "usb-wdm-free"; Tag = $(if ($null -ne $freePin) { $freePin.Tag } else { "" }) })) {
+            $row = Get-PackagerCheckoutRow -Path (Join-Path $root ("scripts\local\" + $co.Name)) -Name $co.Name -Tag $co.Tag
+            if ($null -eq $row) { return $null }
+            $rows += $row
+        }
+        $msvc = if ("$env:MSVC6" -ne "") { "$env:MSVC6" } else { Join-Path $root "tools\MSVC600" }
+        $wdk = if ("$env:WDKROOT" -ne "") { "$env:WDKROOT" } else { Join-Path $root "tools\WinDDK71" }
+        foreach ($run in @(@{ Name = "makecat"; Path = (Join-Path $root "tools\WinDDK71\bin\x86\MakeCat.exe") },
+                           @{ Name = "pe-sample"; Path = (Get-CatalogPeSample) },
+                           @{ Name = "dumpbin-x86"; Path = (Join-Path $msvc "VC98\BIN\dumpbin.exe") },
+                           @{ Name = "dumper-amd64"; Path = (Join-Path $wdk "bin\x86\amd64\link.exe") })) {
+            $rows += ("run:" + $run.Name + ":" + $(if (Test-Path -LiteralPath $run.Path -PathType Leaf) { & $hashOf $run.Path } else { "absent" }))
+        }
+        $rows = @($rows | Sort-Object -CaseSensitive -Unique)
+        $rows += @($Inherited)
+        $rows += ("powershell:" + $PSVersionTable.PSVersion.ToString())
+        $rows += ("clr:" + [System.Environment]::Version.ToString())
+        $rows += ("certrequest:" + [bool]("System.Security.Cryptography.X509Certificates.CertificateRequest" -as [type]))
+        $rows += ("git:" + ((& git --version 2>$null) | Out-String).Trim())
+        $all = [System.Text.Encoding]::UTF8.GetBytes(($rows -join "`n"))
+        return (($sha.ComputeHash($all) | ForEach-Object { $_.ToString("x2") }) -join "")
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+# **Skipped when nothing it may read has changed**, as the INF gate's
+# self-tests are (task 45.30), across worktrees since task 45.51: a pass is
+# recorded in the shared store (Get-SelfTestPassDir, common.ps1) under the
+# digest it read. -Force and XHCI98_FULL_SELFTESTS=1 (a cut's builds) run
+# it all. The in-tree record of 45.48, out\packager-selftest-pass.txt, is
+# retired; a leftover one is not read.
+$inherited = @(Get-PackagerSelfTestInherited -Root $repo)
+# The self-tests' git (task 45.51; Set-SelfTestGitPolicy, common.ps1): set
+# here, before anything runs git, so the digest's listing, the fixtures and
+# every git call this suite reaches see one git whatever the caller's
+# configuration. It and its folder go when the run ends.
+$gitPolicyRoot = Join-Path ([System.IO.Path]::GetFullPath($env:TEMP)) ("xhci98-git-policy-" + [System.IO.Path]::GetRandomFileName())
+# The caller's environment comes back whichever way the run ends - a skip,
+# a pass, a failure, an error or Ctrl+C - through the finally at the end of
+# this file. The rest of the script is not indented under this try, to
+# keep its lines where every other change to it expects them.
+$gitPolicy = $null
+try {
+$gitPolicy = Set-SelfTestGitPolicy -ScratchRoot $gitPolicyRoot -Keep @("TEMP", "TMP")
+# TEMP and TMP: one scratch root for this suite and its children, so
+# neither value is an input (only where the cases make their scratch).
+$tempRoot = [System.IO.Path]::GetFullPath($env:TEMP)
+$env:TEMP = $tempRoot
+$env:TMP = $tempRoot
+$digest = if (Test-CmdAutoRun) { $null } else { Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited }
+$fullAsked = $Force -or ("$env:XHCI98_FULL_SELFTESTS" -eq "1")
+if (-not $fullAsked -and $null -ne $digest) {
+    $rec = Read-SelfTestPassRecord -Suite "packager" -Digest $digest
+    if ($null -ne $rec) {
+        Write-Ok ("packager self-tests skipped: nothing they may read has changed since the run that passed at {0} ({1} checks; digest {2}; in {3}). -Force runs them." -f
+                  $rec.Time, $rec.Checks, $digest.Substring(0, 16), $rec.Tree)
+        exit 0
+    }
+}
+
 $packager = Join-Path $PSScriptRoot "make-package.ps1"
 $releaser = Join-Path $PSScriptRoot "make-release.ps1"
 $prodInf = Join-Path $repo "src\xhci98.inf"
@@ -66,7 +370,7 @@ function Invoke-Packager {
     # unless it names its own or is about the helper's absence; the amd64
     # package carries none.
     $isAmd64 = $false
-    $flavour = "debug"
+    $flavour = "release"
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         if ($Arguments[$i] -eq "-Arch" -and $i + 1 -lt $Arguments.Count -and $Arguments[$i + 1] -eq "amd64") { $isAmd64 = $true }
         if ($Arguments[$i] -eq "-Flavor" -and $i + 1 -lt $Arguments.Count) { $flavour = $Arguments[$i + 1] }
@@ -78,7 +382,20 @@ function Invoke-Packager {
         }
         $Arguments = $Arguments + @("-HlprDriverPath", $standIn)
     }
-    $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $packager) + $Arguments
+    # Every call runs fixture P's packager (task 45.51) and names a stand-in
+    # -DriverPath of its own: a call with none, or one in this tree that is
+    # not under this run's scratch (a gated build's TEMP is under the tree's
+    # out\), would take the tree's build, which no digest holds, and is
+    # refused here.
+    $dpAt = [array]::IndexOf([string[]]$Arguments, "-DriverPath")
+    $dpPath = if ($dpAt -ge 0 -and $dpAt + 1 -lt $Arguments.Count) { "$($Arguments[$dpAt + 1])" } else { "" }
+    $dpFull = if ($dpPath -ne "") { [System.IO.Path]::GetFullPath($dpPath) } else { "" }
+    $dpUnder = { param($Root) $dpFull.StartsWith(([System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'), [System.StringComparison]::OrdinalIgnoreCase) }
+    if ($dpPath -eq "" -or ((& $dpUnder $repo) -and -not (& $dpUnder $script:work))) {
+        Assert-True $false ("a packager case named no stand-in -DriverPath of its own ('{0}'); it would take the tree's build." -f $dpPath)
+        return @{ Output = "refused by the self-test: no stand-in -DriverPath"; ExitCode = 99 }
+    }
+    $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:fxPackager) + $Arguments
     # ErrorActionPreference relaxed across the call, as
     # `scripts\import-gate\check-imports.ps1` relaxes it for dumpbin (an
     # earlier repository audit):
@@ -100,11 +417,114 @@ function Invoke-Packager {
     return @{ Output = ($out -replace '\s+', ' '); ExitCode = $LASTEXITCODE }
 }
 
+function New-PackagerFixtureRepo {
+    # Fixture repository P (task 45.51; build-and-test.md, "The self-tests'
+    # skip across worktrees"): the packager's set (Get-PackagerSelfTestFileSet)
+    # copied from this tree with its layout into -Dir, so its scripts are
+    # today's and never a frozen copy, and committed there in a repository
+    # of its own under the suite's git policy, with no tools\ (no case
+    # reaches the toolchain through it); and a fixture host runner in place of
+    # test\run-host-tests.cmd, which notes that it ran in -RunnerMark and
+    # fails as a failing host suite does. The cases that drive the packager
+    # and the releaser run the copies rooted there: whatever they read of
+    # their own tree is a file of the set, which the digest holds, and the
+    # HEAD and git status they read are the fixture's. Throws when it cannot
+    # be made.
+    param([string]$Dir, [string]$RunnerMark)
+    $set = Get-PackagerSelfTestFileSet -Root $repo
+    if ($null -eq $set) { throw "git could not list this tree's packager set for the fixture repository." }
+    foreach ($rel in @(@($set.Listed) + @($set.Named) | Sort-Object -Unique)) {
+        $from = Join-Path $repo $rel
+        if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
+        $to = Join-Path $Dir $rel
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $to))
+        [System.IO.File]::Copy($from, $to, $true)
+    }
+    $runner = Join-Path $Dir "test\run-host-tests.cmd"
+    [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $runner))
+    [System.IO.File]::WriteAllText($runner, ("@echo off`r`n" +
+        "rem The packager self-tests' fixture host runner (task 45.51): it notes`r`n" +
+        "rem that it ran and fails as a failing host suite does.`r`n" +
+        "echo fixture host runner>""{0}""`r`n" +
+        "echo host tests: 1 failed, 0 passed (the fixture host runner)`r`n" +
+        "exit /b 1`r`n") -f $RunnerMark, (New-Object System.Text.ASCIIEncoding))
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $o = & git -C $Dir init -q 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "git init in the fixture repository failed: $o" }
+        $o = & git -C $Dir add -A 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "git add in the fixture repository failed: $o" }
+        $o = & git -C $Dir -c user.name=xhci98-test -c user.email=test@invalid commit -q -m "fixture P" 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "git commit in the fixture repository failed: $o" }
+    } finally {
+        $ErrorActionPreference = $eap
+    }
+}
+
+function New-SourceFixtureTree {
+    # Fixture tree S (task 45.51; build-and-test.md, "The self-tests' skip
+    # across worktrees"): today's scripts\source-stamp.ps1 copied with its
+    # layout into -Dir, over small source trees of the six drivers it stamps
+    # (each its sources and makefile, its own sources and headers, the
+    # parent headers it includes, Stor98's interface headers) and a host
+    # runner with its quoted-include chains, so the stamp's and the input
+    # rules' cases read no driver source of this tree, whose content no
+    # digest holds. Returns -Dir.
+    param([string]$Dir)
+    $files = [ordered]@{
+        "src\sources" = "TARGETNAME=xhci98`r`nSOURCES= xhci_ring.c \`r`n         xhci_hcd.c`r`n`r`nINCLUDES=.`r`n"
+        "src\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\xhci_ring.c" = "#include `"xhci_log.h`"`r`n"
+        "src\xhci_hcd.c" = "#include `"xhci_version.h`"`r`n"
+        "src\xhci_log.c" = "#include `"xhci_log.h`"`r`n"
+        "src\xhci_hlpr.c" = "#include `"xhci_hlpr.h`"`r`n"
+        "src\xhci_log.h" = "#define XHCI_LOG 1`r`n"
+        "src\xhci_version.h" = "#define XHCI_VER_STR `"0.0.0.1`"`r`n"
+        "src\xhci98_streams.h" = "#define XHCI_STREAMS 1`r`n"
+        "src\xhci_hlpr.h" = "#define XHCI_HLPR 1`r`n"
+        "src\uas\sources" = "TARGETNAME=xhciuas`r`nSOURCES= uas_xport.c`r`n"
+        "src\uas\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\uas\uas_xport.c" = "#include `"..\xhci98_streams.h`"`r`n"
+        "src\uas\uas.h" = "#define UAS 1`r`n"
+        "src\cm\sources" = "TARGETNAME=xhcicm`r`nSOURCES= cm_main.c \`r`n         ..\xhci_log.c`r`n"
+        "src\cm\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\cm\cm_main.c" = "#include `"cm_ejask.h`"`r`n"
+        "src\cm\cm_ejask.h" = "#define CM_EJASK 1`r`n"
+        "src\hlpr\sources" = "TARGETNAME=xhcihlpr`r`nSOURCES= ..\xhci_hlpr.c \`r`n         xhci_hlpr.rc`r`n"
+        "src\hlpr\makefile" = "!INCLUDE `$(NTMAKEENV)\makefile.def`r`n"
+        "src\hlpr\xhci_hlpr.rc" = "#include `"..\xhci_version.h`"`r`n"
+        "src\stor98\src\sources" = "TARGETNAME=stor98`r`nSOURCES= engine.c"
+        "src\stor98\src\engine.c" = "#include `"stor98.h`"`r`n"
+        "src\stor98\src\stor98.h" = "#define STOR98 1`r`n"
+        "src\stor98\include\stor98cm.h" = "#define STOR98LS_VERSION 4`r`n"
+        "src\stor98\include\stor98pf.h" = "#define STOR98PF 1`r`n"
+        "test\run-host-tests.cmd" = "@echo off`r`ncl ..\xhciinst\inst_core.c ..\xhciinst\wiz_lay.c ..\xhcitr\tr_core.c test_ring.c`r`n"
+        "test\test_ring.c" = "#include `"../xhciinst/inst_ej9x.h`"`r`n#include `"..\src\cm\cm_ejask.h`"`r`n"
+        "xhciinst\inst_core.c" = "#include `"inst_core.h`"`r`n"
+        "xhciinst\inst_core.h" = "#define INST_CORE 1`r`n"
+        "xhciinst\wiz_lay.c" = "#include `"wiz_lay.h`"`r`n"
+        "xhciinst\wiz_lay.h" = "#define WIZ_LAY 1`r`n"
+        "xhciinst\inst_ej9x.h" = "#define INST_EJ9X 1`r`n"
+        "xhciinst\xhciwiz.c" = "#include `"xhciwiz_res.h`"`r`n"
+        "xhcitr\tr_core.c" = "int tr_core;`r`n"
+    }
+    foreach ($rel in $files.Keys) {
+        $full = Join-Path $Dir $rel
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Parent $full))
+        [System.IO.File]::WriteAllText($full, $files[$rel], (New-Object System.Text.ASCIIEncoding))
+    }
+    [void][System.IO.Directory]::CreateDirectory((Join-Path $Dir "scripts"))
+    [System.IO.File]::Copy((Join-Path $repo "scripts\source-stamp.ps1"), (Join-Path $Dir "scripts\source-stamp.ps1"), $true)
+    return $Dir
+}
+
 function Invoke-Releaser {
     # make-release.ps1 -UploadSetOnly, driven the same way and relaxed for the
     # same reason as Invoke-Packager above.
     param([string[]]$Arguments, [switch]$SelfTest)
-    $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $releaser) + $Arguments
+    # Fixture P's releaser (task 45.51), rooted there.
+    $psArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $script:fxReleaser) + $Arguments
     $saved = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     # -SelfTest: the child sees XHCI98_PACKAGER_SELFTEST=1, for this call alone.
@@ -179,22 +599,36 @@ $script:work = Join-Path $tempBase ("xhci98-package-test-" + [System.IO.Path]::G
 try {
     New-Item -ItemType Directory -Path $script:work | Out-Null
 
+    # --- fixture repository P (task 45.51) ----------------------------------
+    #
+    # The cases about behaviour run today's packager and releaser copied
+    # into a repository of their own (New-PackagerFixtureRepo), and seed
+    # themselves from its files; the cases about this tree's content read
+    # this tree.
+    $fxRepo = Join-Path $script:work "fx-repo"
+    $script:fxRunnerMark = Join-Path $script:work "fx-host-runner-ran.txt"
+    New-PackagerFixtureRepo -Dir $fxRepo -RunnerMark $script:fxRunnerMark
+    $script:fxPackager = Join-Path $fxRepo "scripts\package\make-package.ps1"
+    $script:fxReleaser = Join-Path $fxRepo "scripts\package\make-release.ps1"
+    $fxInf = Join-Path $fxRepo "src\xhci98.inf"
+    $fxAmd64Inf = Join-Path $fxRepo "src\xhci98-amd64.inf"
+
     # --- stand-in inputs ----------------------------------------------------
     $srcDir = Join-Path $script:work "src"
     New-Item -ItemType Directory -Path $srcDir | Out-Null
     #
     # Every stand-in "driver" carries a flavour marker, because the packager
     # reads one out of the image and refuses a binary with none (task 13-L.1).
-    # `debug` is make-package.ps1's default -Flavor, so that is what these say;
-    # the qemu cases below deliberately say something else.
+    # `release` is make-package.ps1's default -Flavor since task 45.45, so that
+    # is what these say; the qemu cases below deliberately say something else.
     #
     $driver = Join-Path $srcDir "xhci98.sys"
     Set-Content -LiteralPath $driver -Value `
-        "not a real driver XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+        "not a real driver XHCI98_FLAVOUR_RELEASE" -Encoding ASCII
 
     function New-Inf {
         param([string]$Name, [scriptblock]$Mutate)
-        $text = [System.IO.File]::ReadAllText($prodInf)
+        $text = [System.IO.File]::ReadAllText($fxInf)
         if ($null -ne $Mutate) { $text = & $Mutate $text }
         $path = Join-Path $script:work "$Name.inf"
         [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.ASCIIEncoding))
@@ -205,6 +639,10 @@ try {
 
     # --- the baseline package must build ------------------------------------
     Write-Step "a flat package builds and gates"
+    # This tree's own x86 INF makes the flat package (class A, task 45.51);
+    # the behaviour cases below seed from the fixture's.
+    $r = Invoke-Packager @("-InfPath", $prodInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-flat-real"))
+    Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
     $flatOut = Join-Path $script:work "pkg-flat"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $flatOut)
     Assert-True ($r.ExitCode -eq 0) ("the baseline package was rejected:`n" + $r.Output)
@@ -221,12 +659,12 @@ try {
     # only these self-tests may use; the real images are gated in
     # build-driver.cmd and again by make-package.ps1 without -SkipBinaryGates.
     Write-Step "Stor98: the build of src\stor98 bundles at the package root, one version"
-    $nvAmd64Inf = Join-Path $repo "src\xhci98-amd64.inf"
+    $nvAmd64Inf = Join-Path $fxRepo "src\xhci98-amd64.inf"
     $nvHeader4 = Join-Path $script:work "stor98cm-4.h"
     Set-Content -LiteralPath $nvHeader4 -Value "#define STOR98LS_VERSION            4" -Encoding ASCII
     $nvHeaderNone = Join-Path $script:work "stor98cm-none.h"
     Set-Content -LiteralPath $nvHeaderNone -Value "#define NVME98LS_VERSION            1" -Encoding ASCII
-    $nvVerText = [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci_version.h"))
+    $nvVerText = [System.IO.File]::ReadAllText((Join-Path $fxRepo "src\xhci_version.h"))
     $nvVer = [regex]::Match($nvVerText, '(?m)^#define\s+XHCI_VER_STR\s+"([^"]+)"').Groups[1].Value
     $nvDate = [regex]::Match($nvVerText, '(?m)^#define\s+XHCI_DRIVERVER_DATE\s+"([^"]+)"').Groups[1].Value
     function New-Stor98Tree {
@@ -237,7 +675,7 @@ try {
             "out\free\win9x\stor98.mpd" = "stand-in mpd"
             "out\free\x86\stor98.sys"   = "stand-in x86 sys"
             "out\free\amd64\stor98.sys" = "stand-in amd64 sys"
-            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
+            "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "inf\stor98-x64.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=$nvDate,$nvVer`r`nCatalogFile=stor98.cat`r`n"
             "inf\stor98-9x.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=$nvDate,$nvVer`r`n"
             "include\stor98cm.h" = [System.IO.File]::ReadAllText($nvHeader4)
@@ -302,7 +740,7 @@ try {
 
     # Refusals, before anything is staged.
     $nvNoAmd64 = New-Stor98Tree -Name "nv-noamd64" -Omit @("out\free\amd64\stor98.sys")
-    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$CHICAGO`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
+    $nvOldInf = New-Stor98Tree -Name "nv-oldinf" -Set @{ "inf\stor98-x86.inf" = "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nDriverVer=10/16/2026,0.4.0.0`r`n" }
     $nvNoReadme = New-Stor98Tree -Name "nv-noreadme" -Omit @("docs\package-readme.txt")
     foreach ($bad in @(
         @{ Arch = "x86";   Args = (Get-NvArgs $nvRoot $nvHeaderNone); Says = "is not byte for byte" },
@@ -379,8 +817,8 @@ try {
     Set-Content -LiteralPath $wrongHelper -Value "not a real helper XHCI98_FLAVOUR_QEMU" -Encoding ASCII
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper,
         "-OutDir", (Join-Path $script:work "pkg-wrong-helper"))
-    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a debug package."
-    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $repo "src\xhci98-amd64.inf"),
+    Assert-True ($r.ExitCode -ne 0) "a qemu-flavour helper was staged into a release package."
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", (Join-Path $fxRepo "src\xhci98-amd64.inf"),
         "-DriverPath", $driver, "-HlprDriverPath", $wrongHelper, "-OutDir", (Join-Path $script:work "pkg-amd64-helper"))
     Assert-True ($r.ExitCode -ne 0) "an amd64 package accepted -HlprDriverPath."
     # Record 18 section 15.11: the helper is never packaged on its allowlist
@@ -409,12 +847,12 @@ try {
     Write-Step "txtsetup.oem is staged at the root and gated against the staged INF"
     $oemOut = Join-Path $script:work "pkg-oem"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-OemPath", (Join-Path $repo "src\txtsetup.oem"), "-OutDir", $oemOut)
+        "-OemPath", (Join-Path $fxRepo "src\txtsetup.oem"), "-OutDir", $oemOut)
     Assert-True ($r.ExitCode -eq 0) ("a package with txtsetup.oem was rejected:`n" + $r.Output)
     Assert-True (Test-Path -LiteralPath (Join-Path $oemOut "txtsetup.oem")) "txtsetup.oem is not at the package root."
     $badOem = Join-Path $script:work "bad-txtsetup.oem"
     [System.IO.File]::WriteAllText($badOem,
-        [System.IO.File]::ReadAllText((Join-Path $repo "src\txtsetup.oem")).Replace('"USB\XHCI98_ROOT_HUB"', '"USB\ROOT_HUB"'),
+        [System.IO.File]::ReadAllText((Join-Path $fxRepo "src\txtsetup.oem")).Replace('"USB\XHCI98_ROOT_HUB"', '"USB\ROOT_HUB"'),
         (New-Object System.Text.ASCIIEncoding))
     $badOemOut = Join-Path $script:work "pkg-oem-bad"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
@@ -424,8 +862,47 @@ try {
         ("expected the refusal to name the txtsetup.oem gate. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $badOemOut)) "a refused package left an output directory."
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-OemPath", (Join-Path $repo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
+        "-OemPath", (Join-Path $fxRepo "src\txtsetup-amd64.oem"), "-OutDir", (Join-Path $script:work "pkg-oem-arch"))
     Assert-True ($r.ExitCode -ne 0) "the amd64 txtsetup.oem was staged into an x86 package."
+
+    # --- XHCIPFW.VXD, XHCIPFW.SYS and S98VSD.VXD (roadmap-usb4 task 45.3) ---
+    #
+    # A stand-in caller stages none of the tree's images, so no case here
+    # turns on what an earlier build left in src\pfw\ or src\vsd\: only the
+    # images it names, at the package root (S98VSD.VXD beside stor98.mpd),
+    # byte for byte; and the amd64 package refuses them.
+    Write-Step "the PFW and VSD images: a stand-in caller's own or none, never the tree's"
+    $pfwNone = Join-Path $script:work "pkg-pfw-none"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwNone)
+    Assert-True ($r.ExitCode -eq 0) ("a stand-in package was rejected:`n" + $r.Output)
+    Assert-True (@(Get-ChildItem -LiteralPath $pfwNone -Recurse -Force | Where-Object { $_.Name -like "XHCIPFW*" -or $_.Name -like "S98VSD*" }).Count -eq 0) `
+        "a stand-in package that named no PFW or VSD image carries one (the tree's)."
+    Assert-True ($r.Output -notmatch "XHCIPFW|S98VSD") ("a stand-in package that named no PFW or VSD image read the tree's. Output:`n" + $r.Output)
+    $pfwVxdIn = Join-Path $script:work "stand-in-XHCIPFW.VXD"
+    $pfwSysIn = Join-Path $script:work "stand-in-xhcipfw.sys"
+    $vsdIn = Join-Path $script:work "stand-in-S98VSD.VXD"
+    [System.IO.File]::WriteAllText($pfwVxdIn, "stand-in pfw vxd", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($pfwSysIn, "stand-in pfw sys", (New-Object System.Text.ASCIIEncoding))
+    [System.IO.File]::WriteAllText($vsdIn, "stand-in vsd", (New-Object System.Text.ASCIIEncoding))
+    $pfwOut = Join-Path $script:work "pkg-pfw"
+    $r = Invoke-Packager (@("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $pfwOut,
+                            "-PfwVxdPath", $pfwVxdIn, "-PfwSysPath", $pfwSysIn, "-VsdPath", $vsdIn) + (Get-NvArgs $nvRoot))
+    Assert-True ($r.ExitCode -eq 0) ("a package naming the PFW and VSD stand-ins was rejected:`n" + $r.Output)
+    foreach ($pc in @(@{ In = $pfwVxdIn; Dest = "XHCIPFW.VXD" }, @{ In = $pfwSysIn; Dest = "XHCIPFW.SYS" }, @{ In = $vsdIn; Dest = "S98VSD.VXD" })) {
+        $at = Join-Path $pfwOut $pc.Dest
+        Assert-True ((Test-Path -LiteralPath $at -PathType Leaf) -and
+                     (Get-FileHash -LiteralPath $at -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $pc.In -Algorithm SHA256).Hash) `
+            ("the package has no {0} at its root, or not the stand-in it named." -f $pc.Dest)
+    }
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $nvAmd64Inf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-amd64"),
+                           "-PfwVxdPath", $pfwVxdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "x86 package alone") ("an amd64 package took a PFW image. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-pfw-missing"),
+                           "-PfwSysPath", (Join-Path $script:work "no-such-xhcipfw.sys"))
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "-PfwSysPath: there is no file") ("a named PFW image that is not there was passed over. Output:`n" + $r.Output)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-vsd-nostor98"),
+                           "-VsdPath", $vsdIn)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "carries no Stor98") ("-VsdPath was taken for a package without Stor98. Output:`n" + $r.Output)
 
     # --- portsw.vbs (roadmap-hcd task 36.42) --------------------------------
     #
@@ -445,7 +922,7 @@ try {
             "a package carries $name, which since roadmap-hcd task 37.5 is published once in portsw\ and staged into no package."
     }
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-PswScriptPath", $pswSrc, "-OutDir", (Join-Path $script:work "pkg-psw-gone"))
+        "-PswScriptPath", (Join-Path $fxRepo "src\portsw.vbs"), "-OutDir", (Join-Path $script:work "pkg-psw-gone"))
     Assert-True ($r.ExitCode -ne 0) "make-package.ps1 still takes -PswScriptPath, so a package can carry the port switchover's scripts again (roadmap-hcd task 37.5)."
     $packagerSrcText = [System.IO.File]::ReadAllText($packager)
     foreach ($needle in @('$PswScriptPath', '"portsw.vbs"', '"portsw-on.bat"', '"portsw-off.bat"')) {
@@ -516,7 +993,7 @@ try {
     # Controls on the checker itself: each of these must be refused, and the
     # last, harmless echo text that names a cmd.exe word, must not be.
     $latin1 = [System.Text.Encoding]::GetEncoding(28591)
-    $onBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo "src\portsw-on.bat"))
+    $onBytes = [System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\portsw-on.bat"))
     $onText = $latin1.GetString($onBytes)
     $anchor = "`r`necho Now:`r`n"
     Assert-True ($onText.Contains($anchor)) "src\portsw-on.bat has no 'echo Now:' line for the checker's controls to replace."
@@ -568,7 +1045,7 @@ try {
 
     # Controls on the checker: each mutant of silent-on.bat (and one of
     # silent-off.bat) must be refused, and harmless echo text must not be.
-    $sOnBytes = [System.IO.File]::ReadAllBytes((Join-Path $repo "src\silent-on.bat"))
+    $sOnBytes = [System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\silent-on.bat"))
     $sOnText = $latin1.GetString($sOnBytes)
     $sAnchor = "`r`necho Now:`r`n"
     Assert-True ($sOnText.Contains($sAnchor)) "src\silent-on.bat has no 'echo Now:' line for the checker's controls to replace."
@@ -593,7 +1070,7 @@ try {
     # The merge moved after the set: the order pin must refuse it.
     $sMoved = $sOnText.Replace("regedit /s silent.reg`r`n", "").Replace("cscript //nologo silent.vbs 1`r`n", "cscript //nologo silent.vbs 1`r`nregedit /s silent.reg`r`n")
     Assert-True (@(Get-SilentBatchFaults -Text $sMoved -Value "1").Count -gt 0) "the silent batch checker accepted silent-on.bat merging SILENT.REG after it sets the switch."
-    $sOffText = $latin1.GetString([System.IO.File]::ReadAllBytes((Join-Path $repo "src\silent-off.bat")))
+    $sOffText = $latin1.GetString([System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\silent-off.bat")))
     foreach ($mutant in @($sOffText.Replace("cscript //nologo silent.vbs 0`r`n", "regedit /s silent.reg`r`ncscript //nologo silent.vbs 0`r`n"),
                           $sOffText.Replace("SilentClasses key", "key"),
                           $sOffText.Replace("cscript //nologo silent.vbs 0", "cscript //nologo silent.vbs 1"))) {
@@ -608,6 +1085,7 @@ try {
     $regText = $latin1.GetString([System.IO.File]::ReadAllBytes($regSrc))
     $regFaults = @(Get-SilentRegFaults -Text $regText)
     Assert-True ($regFaults.Count -eq 0) ("src\silent.reg:`n  " + ($regFaults -join "`n  "))
+    $regText = $latin1.GetString([System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\silent.reg")))
     foreach ($mutant in @($regText.Replace("hex:c3,08,06,50", "hex:c3,08,06,62"),
                           $regText.Replace("hex:80,09,00,00", "hex:00,09,00,00"),
                           $regText.Replace("`"5`"=hex:83,03,01,02`r`n", ""),
@@ -788,7 +1266,7 @@ try {
     Write-Step "a diagnostic probe driver is refused"
     $probeDriver = Join-Path $srcDir "xhci98-probe.sys"
     Set-Content -LiteralPath $probeDriver -Value `
-        "stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY XHCI98_FLAVOUR_DEBUG driver" `
+        "stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY XHCI98_FLAVOUR_RELEASE driver" `
         -Encoding ASCII
     $probeOut = Join-Path $script:work "pkg-probe"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $probeDriver,
@@ -804,7 +1282,7 @@ try {
     Write-Step "the HCD build scaffold is refused"
     $scaffoldDriver = Join-Path $srcDir "xhci98-scaffold.sys"
     Set-Content -LiteralPath $scaffoldDriver -Value `
-        "stand-in XHCI98_SCAFFOLD_DO_NOT_STAGE XHCI98_FLAVOUR_DEBUG driver" `
+        "stand-in XHCI98_SCAFFOLD_DO_NOT_STAGE XHCI98_FLAVOUR_RELEASE driver" `
         -Encoding ASCII
     $scaffoldOut = Join-Path $script:work "pkg-scaffold"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $scaffoldDriver,
@@ -843,26 +1321,42 @@ try {
     Assert-True (-not (Test-Path -LiteralPath $nfOut)) `
         "the output directory was created for a driver with no flavour marker."
 
-    # 2. A qemu binary staged under -Flavor debug is the failure this exists to
-    #    prevent: media labelled `debug` carrying the import no published
+    # 2. A qemu binary staged under -Flavor release is the failure this exists
+    #    to prevent: media labelled `release` carrying the import no published
     #    binary may have.
     $qemuDriver = Join-Path $srcDir "xhci98-qemu.sys"
     Set-Content -LiteralPath $qemuDriver -Encoding ASCII -Value `
         "stand-in XHCI98_FLAVOUR_QEMU driver"
-    $qwOut = Join-Path $script:work "pkg-qemu-as-debug"
+    $qwOut = Join-Path $script:work "pkg-qemu-as-release"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $qemuDriver,
         "-OutDir", $qwOut)
-    Assert-True ($r.ExitCode -ne 0) "a qemu binary was staged as the debug flavour."
+    Assert-True ($r.ExitCode -ne 0) "a qemu binary was staged as the release flavour."
     Assert-True ($r.Output -match "qemu") `
         ("expected the refusal to name the flavour it found. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $qwOut)) `
         "the output directory was created for a mislabelled flavour."
 
-    # 3. The same mistake the other way round: a debug binary asked for as qemu.
-    $dqOut = Join-Path $script:work "pkg-debug-as-qemu"
+    # 2a. An image of the debug flavour task 45.45 retired is refused as the
+    #     release it is not, and -Flavor debug is no longer a flavour.
+    $oldDebugDriver = Join-Path $srcDir "xhci98-olddebug.sys"
+    Set-Content -LiteralPath $oldDebugDriver -Encoding ASCII -Value `
+        "stand-in XHCI98_FLAVOUR_DEBUG driver"
+    $odOut = Join-Path $script:work "pkg-olddebug"
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $oldDebugDriver,
+        "-OutDir", $odOut)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "debug build") `
+        ("an image of the retired debug flavour was staged as release. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $odOut)) `
+        "the output directory was created for an image of the retired debug flavour."
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
+        "-OutDir", $odOut, "-Flavor", "debug")
+    Assert-True ($r.ExitCode -ne 0) "make-package.ps1 took -Flavor debug, the retired flavour."
+
+    # 3. The same mistake the other way round: a release binary asked for as qemu.
+    $dqOut = Join-Path $script:work "pkg-release-as-qemu"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OutDir", $dqOut, "-Flavor", "qemu")
-    Assert-True ($r.ExitCode -ne 0) "a debug binary was staged as the qemu flavour."
+    Assert-True ($r.ExitCode -ne 0) "a release binary was staged as the qemu flavour."
     Assert-True (-not (Test-Path -LiteralPath $dqOut)) `
         "the output directory was created for a mislabelled flavour."
 
@@ -892,7 +1386,7 @@ try {
     $failStartDriver = Join-Path $srcDir "xhci98-failstart.sys"
     Set-Content -LiteralPath $failStartDriver -Encoding ASCII -Value `
         ("stand-in XHCI98_PROBE_BUILD_DO_NOT_DEPLOY " +
-         "XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_DEBUG driver")
+         "XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_RELEASE driver")
 
     # 1. Without the switch it is a diagnostic build like any other.
     $fsRefusedOut = Join-Path $script:work "pkg-failstart-refused"
@@ -919,7 +1413,7 @@ try {
     #    have refused on its own.
     $fsBareDriver = Join-Path $srcDir "xhci98-failstart-bare.sys"
     Set-Content -LiteralPath $fsBareDriver -Encoding ASCII -Value `
-        ("stand-in XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_DEBUG " +
+        ("stand-in XHCI98_FAILSTART_ARTIFACT_TASK_12_3 XHCI98_FLAVOUR_RELEASE " +
          "driver with no probe marker")
     $fsBareOut = Join-Path $script:work "pkg-failstart-bare"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $fsBareDriver,
@@ -1079,15 +1573,15 @@ try {
     # the full package, Microsoft binaries included, inside a tree git tracks.
     # The refusal is by path, before anything is staged.
     Write-Step "a destination under releases\ is refused"
-    $releaseOut = Join-Path $repo "releases\9.9.9.9\release"
+    $releaseOut = Join-Path $fxRepo "releases\9.9.9.9\release"
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
         "-OutDir", $releaseOut)
     Assert-True ($r.ExitCode -ne 0) "the packager accepted an -OutDir under releases\."
     Assert-True ($r.Output -match "releases") ("the refusal did not name releases\:`n" + $r.Output)
-    Assert-True (-not (Test-Path -LiteralPath (Join-Path $repo "releases\9.9.9.9"))) `
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $fxRepo "releases\9.9.9.9"))) `
         "the packager created a directory under releases\ before refusing."
     $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver,
-        "-OutDir", (Join-Path $repo "releases"))
+        "-OutDir", (Join-Path $fxRepo "releases"))
     Assert-True ($r.ExitCode -ne 0) "the packager accepted releases\ itself as -OutDir."
 
     # An empty directory is not foreign - it is the ordinary first run.
@@ -1123,7 +1617,7 @@ try {
     $otherDriver = Join-Path $srcDir "xhci98-other.sys"
     Set-Content -LiteralPath $otherDriver -Encoding ASCII -Value `
         ("a different stand-in driver, visibly not the one already packaged " +
-         "XHCI98_FLAVOUR_DEBUG")
+         "XHCI98_FLAVOUR_RELEASE")
     Assert-True ((Get-FileHash -LiteralPath $otherDriver).Hash -ne
                  (Get-FileHash -LiteralPath $driver).Hash) `
         "the two stand-in drivers are identical, so this vector proves nothing."
@@ -1204,6 +1698,9 @@ try {
          "Run it again. Output:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $gatedOut)) `
         "the output directory was created for a driver that failed a binary gate."
+    # The gate that ran is the packager's default host-suite branch, on
+    # fixture P's host runner, not the real host suite (task 45.51).
+    Assert-True (Test-Path -LiteralPath $script:fxRunnerMark) "the packager's default binary gates did not run the fixture's host runner."
 
     # --- the output path refusals (the audit of 2026-09-07) ----------------
     #
@@ -1222,7 +1719,7 @@ try {
     Assert-True ($r.Output -match "volume or repository root") `
         ("expected the volume-root refusal. Output:`n" + $r.Output)
 
-    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $repo)
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $fxRepo)
     Assert-True ($r.ExitCode -ne 0) "the packager accepted the repository root as -OutDir."
     Assert-True ($r.Output -match "volume or repository root") `
         ("expected the repository-root refusal. Output:`n" + $r.Output)
@@ -1352,10 +1849,10 @@ try {
     $cwd = Join-Path $script:work "cwd"
     New-Item -ItemType Directory -Path $cwd | Out-Null
     $hlprStandInDebug = Join-Path $script:work "xhcihlpr-relpkg.sys"
-    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_DEBUG" -Encoding ASCII
+    Set-Content -LiteralPath $hlprStandInDebug -Value "not a real helper XHCI98_FLAVOUR_RELEASE" -Encoding ASCII
     $script = @(
         "Set-Location -LiteralPath '$cwd'",
-        "& '$packager' -InfPath '$plainInf' -DriverPath '$driver' -HlprDriverPath '$hlprStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
+        "& '$($script:fxPackager)' -InfPath '$plainInf' -DriverPath '$driver' -HlprDriverPath '$hlprStandInDebug' -OutDir 'relpkg' -SkipBinaryGates | Out-Null",
         "exit `$LASTEXITCODE"
     ) -join "; "
     $savedEap = $ErrorActionPreference
@@ -1389,9 +1886,189 @@ try {
     # tree already on disk instead of building anything - and it is the same
     # code path the tail of a real cut uses.
     #
+    # The download by Windows family (roadmap-usb4 task 45.44, design record 36
+    # sections 5.3 and 11): the table, both conversions, PKG-FAMILY, the
+    # comparison with the verified flat packages, INTEGRATE.TXT and the
+    # installer engine's source map, on stand-in flat packages.
+    Write-Step "the family layout: the table, the conversions, PKG-FAMILY and INTEGRATE.TXT"
+    $famWork = Join-Path $script:work "family"
+    function New-FlatStandIn {
+        # Every flat file the table knows for $Arch, each a stand-in text; the
+        # INFs name their files in [SourceDisksFiles] as the real ones do.
+        param([string]$Dir, [string]$Arch, [string[]]$Omit = @())
+        $infs = @{
+            "xhci98.inf"     = "[SourceDisksFiles]`r`nxhci98.sys=1`r`nxhcihlpr.sys=1`r`n"
+            "xhciuas.inf"    = "[SourceDisksFiles]`r`nxhciuas.sys=1`r`n"
+            "xhcicm.inf"     = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "nt\xhcicmf.inf" = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "xhcicmf.inf"    = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "stor98.inf"     = "[SourceDisksFiles]`r`nstor98.sys=1`r`n"
+            "stor98w9.inf"   = "[SourceDisksFiles]`r`nstor98.mpd=1`r`n"
+            "xhcinet.inf"    = "[SourceDisksFiles]`r`nxhcinet.sys=1`r`nxhcinet6.sys=1`r`n"
+        }
+        foreach ($flat in $script:FamilyLayout[$Arch].Keys) {
+            if ($Omit -contains $flat) { continue }
+            $full = Join-Path $Dir $flat
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $full) | Out-Null
+            $text = if ($infs.ContainsKey($flat)) { $infs[$flat] } elseif ($flat -eq "nt\xhcicm.sys") { "stand-in $Arch xhcicm.sys" } else { "stand-in $Arch $flat" }
+            if ($Arch -eq "amd64" -and $flat -eq "xhci98.inf") { $text = "[SourceDisksFiles]`r`nxhci98.sys=1`r`n" }
+            [System.IO.File]::WriteAllText($full, $text, (New-Object System.Text.ASCIIEncoding))
+        }
+    }
+    function Get-TreeHashes {
+        param([string]$Dir)
+        $h = @{}
+        foreach ($rel in @(Get-FamilyRelFiles -Dir $Dir)) { $h[$rel.ToLowerInvariant()] = (Get-FileHash -LiteralPath (Join-Path $Dir $rel) -Algorithm SHA256).Hash }
+        return $h
+    }
+    $flat86 = Join-Path $famWork "flat\release-x86"
+    $flat64 = Join-Path $famWork "flat\release-x64"
+    New-FlatStandIn -Dir $flat86 -Arch "x86"
+    New-FlatStandIn -Dir $flat64 -Arch "amd64"
+    $famGood = Join-Path $famWork "good"
+    [void](ConvertTo-FamilyLayout -FlatDir $flat86 -Arch "x86" -Dest $famGood)
+    [void](ConvertTo-FamilyLayout -FlatDir $flat64 -Arch "amd64" -Dest $famGood)
+    $why = Test-FamilyLayout -Root $famGood
+    Assert-True ($why -eq "") "PKG-FAMILY refused the converted stand-in packages:`n$why"
+    Assert-True ((Get-FamilyLayoutKind -Root $famGood -What "the stand-in") -eq "family") "the converted tree was not read as the family layout."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $famGood "98-me\nt")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\nt")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\cm\xhcicmf.inx")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\cm\xhcicmf.inx")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "98-me\stor98\stor98.inf")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\stor98\stor98.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\stor98\stor98.mpd")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\xhcihlpr.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\txtsetup.oem")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\txtsetup.oem"))) `
+        "the converted tree is not record 36 section 2's layout (the filter as cm\xhcicmf.inx, no nt\, the 9x Stor98 INF in 98-me\stor98, each family only its own files)."
+    $ok = $true
+    try { Assert-FamilyFromLegs -Root $famGood -FlatDirs @{ "x86" = $flat86; "amd64" = $flat64 } -What "the stand-in" } catch { $ok = $false; Write-Host $_.Exception.Message }
+    Assert-True $ok "Assert-FamilyFromLegs refused the tree converted from the same flat packages."
+    $view = Join-Path $famWork "view"
+    $viewDirs = ConvertFrom-FamilyLayout -Root $famGood -Dest $view
+    foreach ($pair in @(@("x86", $flat86), @("amd64", $flat64))) {
+        $a = Get-TreeHashes -Dir $pair[1]; $b = Get-TreeHashes -Dir $viewDirs[$pair[0]]
+        $diff = @($a.Keys | Where-Object { -not $b.ContainsKey($_) -or $b[$_] -ne $a[$_] }) + @($b.Keys | Where-Object { -not $a.ContainsKey($_) })
+        Assert-True ($diff.Count -eq 0) "the $($pair[0]) flat view is not the flat package it was converted from: $($diff -join ', ')."
+    }
+
+    # A flat file the table does not know, and nt\xhcicm.sys not the same
+    # bytes as xhcicm.sys, are refused by the conversion.
+    foreach ($bad in @(
+        @{ Rel = "notes.txt"; Text = "a stray"; Says = "does not place" },
+        @{ Rel = "nt\xhcicm.sys"; Text = "another build"; Says = "not the same bytes" })) {
+        $bf = Join-Path $famWork ("flat-bad-" + [Guid]::NewGuid().ToString("N"))
+        New-FlatStandIn -Dir $bf -Arch "x86"
+        [System.IO.File]::WriteAllText((Join-Path $bf $bad.Rel), $bad.Text)
+        $msg = ""
+        try { [void](ConvertTo-FamilyLayout -FlatDir $bf -Arch "x86" -Dest (Join-Path $famWork ("out-" + [Guid]::NewGuid().ToString("N")))) } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -like "*$($bad.Says)*") "the conversion took a flat package with $($bad.Rel) ($($bad.Text)): '$msg'."
+    }
+
+    # PKG-FAMILY's refusals, each on a copy of the good tree.
+    $famCases = @(
+        @{ Why = "a file outside the family's list"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "98-me\notes.txt"), "x") } },
+        @{ Why = "an nt\ directory"; Do = { param($r) New-Item -ItemType Directory -Force -Path (Join-Path $r "nt-x86\nt") | Out-Null; Copy-Item (Join-Path $r "nt-x86\cm\xhcicm.sys") (Join-Path $r "nt-x86\nt\xhcicm.sys") } },
+        @{ Why = "an xhcicmf.inf"; Do = { param($r) Copy-Item (Join-Path $r "nt-x64\cm\xhcicmf.inx") (Join-Path $r "nt-x64\cm\xhcicmf.inf") } },
+        @{ Why = "a stor98w9.inf"; Do = { param($r) Copy-Item (Join-Path $r "98-me\stor98\stor98.inf") (Join-Path $r "98-me\stor98\stor98w9.inf") } },
+        @{ Why = "an NT-only file in 98-me"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\txtsetup.oem") (Join-Path $r "98-me\txtsetup.oem") } },
+        @{ Why = "nt-x86 without the helper"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\xhcihlpr.sys") } },
+        @{ Why = "98-me without the image its Stor98 INF names"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98.mpd") } },
+        @{ Why = "a shared file differing"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\xhci98.sys"), "another build") } },
+        @{ Why = "a shared file in one family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98-readme.txt") } },
+        @{ Why = "an xhcinet6.sys in 98-me (record 35 section 9.5)"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\cm\tbnet\xhcinet6.sys") (Join-Path $r "98-me\cm\tbnet\xhcinet6.sys") } },
+        @{ Why = "nt-x86\cm\tbnet\ without the xhcinet6.sys its INF names"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\cm\tbnet\xhcinet6.sys") } },
+        @{ Why = "the network driver loose in cm\ rather than cm\tbnet\"; Do = { param($r) Move-Item (Join-Path $r "nt-x64\cm\tbnet\xhcinet.inf") (Join-Path $r "nt-x64\cm\xhcinet.inf") } },
+        @{ Why = "the network INF in one x86 family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\cm\tbnet\xhcinet.inf") } },
+        @{ Why = "a stray file under cm\tbnet\"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\cm\tbnet\notes.txt"), "x") } },
+        @{ Why = "98-me without nt-x86"; Do = { param($r) Remove-Item -Recurse -Force (Join-Path $r "nt-x86") } }
+    )
+    foreach ($c in $famCases) {
+        $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+        Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+        & $c.Do $copy
+        $why = Test-FamilyLayout -Root $copy
+        Assert-True ($why -ne "") "PKG-FAMILY accepted $($c.Why)."
+    }
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    foreach ($fam in @("98-me", "nt-x86", "nt-x64")) { Remove-Item -Recurse -Force (Join-Path $copy "$fam\cm\tbnet") }
+    $why = Test-FamilyLayout -Root $copy
+    Assert-True ($why -eq "") "PKG-FAMILY refused a package without the network driver (no cm\tbnet\ in any family): $why"
+    Assert-True ((Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet.inf")) -and (Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet.sys")) -and
+                 -not (Test-Path -LiteralPath (Join-Path $famGood "98-me\cm\tbnet\xhcinet6.sys")) -and (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\cm\tbnet\xhcinet6.sys")) -and
+                 (Test-Path -LiteralPath (Join-Path $famGood "nt-x64\cm\tbnet\xhcinet.cat")) -and -not (Test-Path -LiteralPath (Join-Path $famGood "nt-x86\xhcinet.inf"))) `
+        "the network driver is not where record 35 section 9.5 places it in the converted stand-in."
+
+    # A family file changed after the conversion is refused by the
+    # comparison with the verified flat package.
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    [System.IO.File]::WriteAllText((Join-Path $copy "nt-x64\cm\xhcicmf.inx"), "changed after the conversion")
+    $msg = ""
+    try { Assert-FamilyFromLegs -Root $copy -FlatDirs @{ "x86" = $flat86; "amd64" = $flat64 } -What "the stand-in" } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*xhcicmf.inx*") "Assert-FamilyFromLegs accepted a family file changed after the conversion: '$msg'."
+    $msg = ""
+    try { Assert-FamilyFromLegs -Root $famGood -FlatDirs @{ "x86" = $flat86 } -What "the stand-in" } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*nt-x64*") "Assert-FamilyFromLegs accepted a family folder no flat package of the cut fills: '$msg'."
+
+    # A tree with family folders and a flavour directory is neither layout.
+    $copy = Join-Path $famWork ("case-" + [Guid]::NewGuid().ToString("N"))
+    Copy-Item -LiteralPath $famGood -Destination $copy -Recurse
+    Copy-Item -LiteralPath $flat86 -Destination (Join-Path $copy "release-x86") -Recurse
+    $msg = ""
+    try { [void](Get-FamilyLayoutKind -Root $copy -What "the stand-in") } catch { $msg = $_.Exception.Message }
+    Assert-True ($msg -like "*neither layout*") "a tree with both family folders and a flavour directory was taken: '$msg'."
+
+    # INTEGRATE.TXT (record 36 section 8.2), held to the table: plain text
+    # within 78 columns, each family folder named, the filter's .inx named as
+    # not for integration, DISM's /Recurse and /ForceUnsigned, boot.wim
+    # beside install.wim (record 36 section 4, revision 5), and no
+    # testing-status wording.
+    $it = Get-IntegrateText -Version "9.9.9.9"
+    $itLines = @($it -split "`r`n")
+    Assert-True (@($itLines | Where-Object { $_.Length -gt 78 -or $_ -match '[^\x20-\x7E]' }).Count -eq 0) "INTEGRATE.TXT has a line over 78 columns or a character outside printable ASCII."
+    foreach ($fam in $script:FamilyNames) { Assert-True ($it -match ('(?m)^  ' + [regex]::Escape($fam) + '\\')) "INTEGRATE.TXT does not name $fam\ in its table." }
+    foreach ($need in @("cm\xhcicmf.inx", "/Recurse", "/ForceUnsigned", "txtsetup.oem", "SETUP.EXE", "stor98\", "cm\tbnet\", "9.9.9.9", "USBD.SY_", "HIDCLASS.SY_", "HIDPARSE.SY_", "boot.wim", "install.wim", "testsigning on", "efi\microsoft\boot\bcd")) {
+        Assert-True ($it.Contains($need)) "INTEGRATE.TXT does not say '$need'."
+    }
+    Assert-True ($it -notmatch '(?i)emulat|virtual machine|untested|not tested|qemu') "INTEGRATE.TXT carries testing-status wording."
+
+    # The installer engine's source map (xhciinst\inst_core.c, instPkgFiles;
+    # record 36 section 6.2) is the table's local-name side: the 9x Stor98
+    # INF's local name is stor98.inf, and nt\xhcicm.sys the copy rebuilt
+    # from nt-x86\cm\xhcicm.sys.
+    $core = [System.IO.File]::ReadAllText((Join-Path $repo "xhciinst\inst_core.c"))
+    $mapAt = $core.IndexOf("const INST_PKG_FILE instPkgFiles[] = {")
+    Assert-True ($mapAt -ge 0) "xhciinst\inst_core.c has no instPkgFiles table."
+    if ($mapAt -ge 0) {
+        $mapText = $core.Substring($mapAt, $core.IndexOf("};", $mapAt) - $mapAt)
+        $engine = @{}
+        foreach ($m in [regex]::Matches($mapText, '\{\s*"([^"]+)"\s*,\s*\{\s*(NULL|"[^"]*")\s*,\s*(NULL|"[^"]*")\s*,\s*(NULL|"[^"]*")\s*\}\s*\}')) {
+            for ($i = 0; $i -lt 3; $i++) {
+                $v = $m.Groups[$i + 2].Value
+                if ($v -ne "NULL") { $engine[("{0}|{1}" -f $script:FamilyNames[$i], $m.Groups[1].Value.Replace('\\', '\')).ToLowerInvariant()] = $v.Trim('"').Replace('\\', '\') }
+            }
+        }
+        $want = @{}
+        foreach ($arch in @("x86", "amd64")) {
+            foreach ($flat in $script:FamilyLayout[$arch].Keys) {
+                $local = if ($flat -eq "stor98w9.inf") { "stor98.inf" } else { $flat }
+                foreach ($place in @($script:FamilyLayout[$arch][$flat])) {
+                    $fam = ($place -split '\\')[0]
+                    $want[("{0}|{1}" -f $fam, $local).ToLowerInvariant()] = $place.Substring($fam.Length + 1)
+                }
+            }
+            foreach ($flat in $script:FamilyRebuilt[$arch].Keys) {
+                $from = $script:FamilyRebuilt[$arch][$flat].From
+                $fam = ($from -split '\\')[0]
+                $want[("{0}|{1}" -f $fam, $flat).ToLowerInvariant()] = $from.Substring($fam.Length + 1)
+            }
+        }
+        $diff = @($want.Keys | Where-Object { -not $engine.ContainsKey($_) -or $engine[$_] -ine $want[$_] } | ForEach-Object { "$_ -> $($want[$_]) (engine: $(if ($engine.ContainsKey($_)) { $engine[$_] } else { 'none' }))" }) +
+                @($engine.Keys | Where-Object { -not $want.ContainsKey($_) } | ForEach-Object { "$_ -> $($engine[$_]) (not in the table)" })
+        Assert-True ($engine.Count -gt 0 -and $diff.Count -eq 0) ("the installer engine's source map is not package-common.ps1's family table:`n  " + ($diff -join "`n  "))
+    }
+
     Write-Step "the upload set is complete install media in every flavour directory"
 
-    $infText = [System.IO.File]::ReadAllText($prodInf)
+    $infText = [System.IO.File]::ReadAllText($fxInf)
     if ($infText -notmatch '(?m)^DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)\s*$') {
         Assert-True $false "src\xhci98.inf has no readable DriverVer version; the upload-set cases cannot name a release directory."
     } else {
@@ -1408,7 +2085,7 @@ try {
         Ensure-Directory $upRoot
 
         $flavourBytes = @{}
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             # Distinct per flavour, so a run that crossed the two would fail the
             # published-vs-package identity check rather than pass unnoticed.
             $flavourBytes[$fl] = [System.Text.Encoding]::ASCII.GetBytes(
@@ -1434,7 +2111,7 @@ try {
         }
         Set-Content -LiteralPath (Join-Path $pubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
-        Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
+        Copy-Item -LiteralPath (Join-Path $fxRepo "LICENSE") `
                   -Destination (Join-Path $pubRoot "LICENSE") -Force
         # The tools under tools\, as every cut publishes them since roadmap-hcd
         # task 38.9: the tree is the current version's, which is 2.4.0.0 or
@@ -1449,19 +2126,19 @@ try {
         # assembly refuses a tool directory without its batches
         # (Assert-ReportBatchLayout), and one whose text the shared checker
         # refuses (Assert-ReportBatchContent), so it is the repository's own.
-        Copy-Item -LiteralPath (Join-Path $repo "xhciqual\QUALREP.BAT") `
+        Copy-Item -LiteralPath (Join-Path $fxRepo "xhciqual\QUALREP.BAT") `
                   -Destination (Join-Path $pubRoot "tools\xhciqual\QUALREP.BAT") -Force
         # The port switchover's scripts in tools\portsw\, as every cut publishes
         # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
         # refuses a tree of this version without them (Assert-PortSwitchLayout).
         Ensure-Directory (Join-Path $pubRoot "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot "tools\portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $pubRoot "tools\portsw\$name") -Force
         }
         # The silent install's four files in tools\silent\ (task 38.2).
         Ensure-Directory (Join-Path $pubRoot "tools\silent")
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
-            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot ("tools\silent\" + $pair[1])) -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot ("tools\silent\" + $pair[1])) -Force
         }
         # The driver pack's record (roadmap-usb4 task 43.3), which every cut
         # from 3.2.0.0 writes and -UploadSetOnly then requires: this
@@ -1498,7 +2175,7 @@ try {
 
         # The files the INF names, in one directory, per flavour. This is the
         # assertion the malformed asset would have failed.
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf", "xhcihlpr.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory; a user pointing Windows at it gets an incomplete install."
@@ -1528,7 +2205,7 @@ try {
             Assert-True ($backslashed.Count -eq 0) `
                 ("the archive names " + $backslashed.Count + " entry/entries with backslashes, which unzip on a Linux or macOS host extracts as flat files: " +
                  (($backslashed | Select-Object -First 3) -join ", "))
-            foreach ($want in @("release/xhci98.sys", "debug/xhci98.inf")) {
+            foreach ($want in @("release/xhci98.sys", "release/xhci98.inf")) {
                 Assert-True ($entries -contains $want) "the archive has no '$want' entry."
             }
             # The release's records stay in releases\<version>\: the zip
@@ -1563,6 +2240,61 @@ try {
         Remove-Item -LiteralPath (Join-Path $pubRoot "otherpkgs.txt") -Force
         Remove-Item -LiteralPath (Join-Path $pubRoot "wdmfree-pin.txt") -Force
 
+        # --- a tree published by Windows family (task 45.44) -----------------
+        #
+        # Design record 36 section 7.2: -UploadSetOnly rebuilds a version
+        # published from 3.4.0.0 at its family folders, through the flat view
+        # ConvertFrom-FamilyLayout rebuilds, and the set carries the family
+        # folders. The same stand-in release, its release\ re-laid: the INF
+        # and image in 98-me\ and nt-x86\, the helper in nt-x86\ alone.
+        Write-Step "-UploadSetOnly rebuilds a tree published by Windows family"
+        $famRelRoot = Join-Path $script:work "releases-family"
+        $famPub = Join-Path $famRelRoot $relVersion
+        Copy-Item -LiteralPath $pubRoot -Destination $famPub -Recurse
+        foreach ($fam in @("98-me", "nt-x86")) {
+            Ensure-Directory (Join-Path $famPub $fam)
+            foreach ($name in @("xhci98.inf", "xhci98.sys")) {
+                Copy-Item -LiteralPath (Join-Path $famPub "release\$name") -Destination (Join-Path $famPub "$fam\$name")
+            }
+        }
+        Copy-Item -LiteralPath (Join-Path $famPub "release\xhcihlpr.sys") -Destination (Join-Path $famPub "nt-x86\xhcihlpr.sys")
+        Remove-Item -LiteralPath (Join-Path $famPub "release") -Recurse -Force
+        $famUp = Join-Path $script:work "upload-family"
+        Ensure-Directory $famUp
+        $famArgs = @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $famRelRoot,
+                     "-PackageRoot", $pkgRoot, "-UploadDir", $famUp)
+        $r = Invoke-Releaser $famArgs
+        Assert-True ($r.ExitCode -eq 0) ("the upload set of a family tree was not assembled:`n" + $r.Output)
+        $famSet = Join-Path $famUp ("upload-" + $relVersion)
+        foreach ($name in @("98-me\xhci98.inf", "98-me\xhci98.sys", "nt-x86\xhci98.inf", "nt-x86\xhci98.sys", "nt-x86\xhcihlpr.sys", "readme.txt")) {
+            Assert-True (Test-Path -LiteralPath (Join-Path $famSet $name)) "the family tree's upload set has no $name."
+        }
+        Assert-True (-not (Test-Path -LiteralPath (Join-Path $famSet "release")) -and -not (Test-Path -LiteralPath (Join-Path $famSet "release-x86")) -and
+                     -not (Test-Path -LiteralPath (Join-Path $famSet "98-me\xhcihlpr.sys"))) `
+            "the family tree's upload set carries a flavour directory or the helper in 98-me\: the flat view is the checks' alone."
+        $famZip = Join-Path $famUp ("xhci98-" + $relVersion + ".zip")
+        if (Test-Path -LiteralPath $famZip) {
+            $zip = [System.IO.Compression.ZipFile]::OpenRead($famZip)
+            try { $famEntries = @($zip.Entries | ForEach-Object { $_.FullName }) } finally { $zip.Dispose() }
+            Assert-True (($famEntries -contains "98-me/xhci98.sys") -and ($famEntries -contains "nt-x86/xhcihlpr.sys") -and
+                         @($famEntries | Where-Object { $_ -like "release*/*" }).Count -eq 0) "the family tree's archive does not carry the family folders alone."
+        } else {
+            Assert-True $false "the family tree's upload set wrote no archive."
+        }
+        # Refused: an nt\ in a family folder (PKG-FAMILY), and a tree with
+        # family folders and a flavour directory both.
+        foreach ($bad in @(
+            @{ Why = "an nt\ in nt-x86\"; Do = { param($p) Ensure-Directory (Join-Path $p "nt-x86\nt"); Copy-Item (Join-Path $p "nt-x86\xhci98.sys") (Join-Path $p "nt-x86\nt\xhcicm.sys") }; Says = "PKG-FAMILY" },
+            @{ Why = "a flavour directory beside the family folders"; Do = { param($p) Ensure-Directory (Join-Path $p "release-x86"); Copy-Item (Join-Path $p "nt-x86\xhci98.inf") (Join-Path $p "release-x86\xhci98.inf") }; Says = "neither layout" })) {
+            $badRel = Join-Path $script:work ("releases-family-bad-" + [Guid]::NewGuid().ToString("N"))
+            Copy-Item -LiteralPath $famRelRoot -Destination $badRel -Recurse
+            & $bad.Do (Join-Path $badRel $relVersion)
+            $badUp = Join-Path $script:work ("upload-family-bad-" + [Guid]::NewGuid().ToString("N"))
+            Ensure-Directory $badUp
+            $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $badRel, "-PackageRoot", $pkgRoot, "-UploadDir", $badUp)
+            Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) ("-UploadSetOnly took a family tree with $($bad.Why):`n" + $r.Output)
+        }
+
         # --- assembled from the tracked directory alone ---------------------
         #
         # roadmap Phase 20, F15. This mode used to require the gated
@@ -1580,7 +2312,7 @@ try {
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled without a package root:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory when assembled without a package root."
@@ -1754,7 +2486,7 @@ try {
         $r = Invoke-Releaser ($packRelArgs + @("-DriverPackRoot", $packRepo))
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the recorded driver pack:`n" + $r.Output)
         $projStamp = (Get-Item -LiteralPath (Join-Path $uploadDir "release\xhci98.inf")).LastWriteTime
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Assert-True (-not (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\USBDRV\NUSB33"))) "the upload set's $fl\ holds NUSB33\; it belongs at the root."
         }
         $fault = Get-DriverPackFolderFault -Dir (Join-Path $uploadDir "USBDRV\NUSB33") -Files $exp.Files
@@ -1958,6 +2690,12 @@ try {
             try { Export-NonFreeSet -Root $packRepo -Pin $bad.Pin -Dest (Join-Path $script:work ("nf-bad-" + [System.IO.Path]::GetRandomFileName())) | Out-Null } catch { $msg = $_.Exception.Message }
             Assert-True ($msg.Contains($bad.Want)) ("the non-free export with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
         }
+        # A checkout git cannot read is not reported as a missing tag.
+        $notRepo = Join-Path $script:work ("not-a-repo-" + [System.IO.Path]::GetRandomFileName())
+        New-Item -ItemType Directory -Path $notRepo | Out-Null
+        $msg = ""
+        try { Resolve-OtherSetTag -Root $notRepo -Tag "v9.0.0" -Commit $nfCommit -What "usb-wdm-nonfree" | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg -ne "" -and -not $msg.Contains("has no tag")) ("a directory that is no git checkout read as a missing tag: '" + $msg + "'")
         # STAGE.TXT's rules, and the paths the installer accepts.
         $threw = ""
         try { Assert-StageCovers -Lines @(Read-StageText -Text "STAGE | W98SE | non-free/a/A.INF | x" -Label "s") -Infs @("non-free/a/A.INF", "non-free/b/B.INF") -Label "s" } catch { $threw = $_.Exception.Message }
@@ -2030,6 +2768,7 @@ try {
             @{ Lines = @($freePinLines + @($cerPinLines[1])); Want = "go together"; Why = "the certificate's file with no Certificate line"; Read = $true },
             @{ Lines = @($freePinLines + @($cerPinLines[0])); Want = "go together"; Why = "a Certificate line with no file pinned"; Read = $true },
             @{ Lines = @($freePinLines + @($cerPinLines[0], $cerPinLines[0])); Want = "two certificates"; Why = "two Certificate lines"; Read = $true },
+            @{ Lines = @($freePinLines + @(("Commit: " + ("0" * 40)), $cerPinLines[0], $cerPinLines[1])); Want = "two commits"; Why = "two Commit lines"; Read = $true },
             @{ Lines = @($freePinLines + @(("Certificate: " + ("0" * 40)), $cerPinLines[1])); Want = "not the pinned"; Why = "another thumbprint"; Read = $false },
             @{ Lines = @($freePinLines + @($cerPinLines[0], ("SHA256: " + (Get-FileSha256 -Path (Join-Path $freeRepo "notacert.cer")) + " usb-wdm-free-test.cer"))); Want = "not the pinned"; Why = "the certificate at other bytes"; Read = $false })
         foreach ($cc in $cerCases) {
@@ -2274,6 +3013,117 @@ try {
         $msg = ""
         try { Test-OtherPkgsTransition -Prev $recA -Now $recK } catch { $msg = $_.Exception.Message }
         Assert-True ($msg.Contains("only known, not shipped")) ("a shipped package made known only was accepted: '" + $msg + "'")
+        # Record 26 section 6.7.14 (task 45.6): an EXCLUDES lifted to a
+        # COEXISTS only where the cut reads the two apart, recorded LIFTED and
+        # proved again by the next cut.
+        $lpF = Join-Path $script:work "oth-lift-free"
+        $lpN = Join-Path $script:work "oth-lift-nonfree"
+        foreach ($d in @("net\a\x", "net\c\x")) { Ensure-Directory (Join-Path $lpF $d) }
+        foreach ($d in @("net\b\xp", "net\b\w7", "net\b\cls")) { Ensure-Directory (Join-Path $lpN $d) }
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\a\x\A.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0001`r`nE=I,USB\VID_1111&PID_0002&REV_0100`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpF "net\c\x\C.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\Class_02&SubClass_06`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\xp\B.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_2222&PID_0001&MI_00`r`n")
+        [System.IO.File]::WriteAllText((Join-Path $lpN "net\b\w7\B7.INF"), "[Manufacturer]`r`nM=Mo,NTx86`r`n[Mo.NTx86]`r`nD=I,USB\VID_1111&PID_0002`r`n")
+        $setLift = @(
+            [pscustomobject]@{ Name = "free"; Prefix = "free"; Dir = $lpF; Lines = @(Read-StageText -Text "COPY | WXP W7 | free/net/a/x/A.INF | a`nSTAGE | WXP | free/net/c/x/C.INF | c" -Label "lf") },
+            [pscustomobject]@{ Name = "nonfree"; Prefix = "non-free"; Dir = $lpN; Lines = @(Read-StageText -Text "STAGE | WXP | non-free/net/b/xp/B.INF | b`nSTAGE | W7 | non-free/net/b/w7/B7.INF | b7`nCOPY | W2K | non-free/net/b/cls/NONE.INF | n" -Label "ln") })
+        $liftRows = @(foreach ($q in @("free:net/a", "nonfree:net/b", "free:net/c")) { [pscustomobject]@{ Id = $q; Kind = "DEVICE"; Heading = "Network"; Desc = "USB Ethernet (x): adapters"; State = "current" } })
+        $mkRel = { param($k, $a, $b, $s) [pscustomobject]@{ Kind = $k; A = $a; B = $b; Systems = @($s); Desc = "t" } }
+        $liftPrev = [pscustomobject]@{ Version = "3.3.0.0"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7", "W2K"))); Lifted = @() }
+        # Apart on WXP (a &MI_ and a plain id of other devices), the same
+        # device on W7 by a &REV_ id against a plain one, no line on W2K.
+        $liftNow = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP")), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }
+        $lifted = @(Get-OtherLifted -Prev $liftPrev -Now $liftNow -Sets $setLift)
+        Assert-True ($lifted.Count -eq 1 -and ($lifted[0].Systems -join " ") -eq "WXP") "a COEXISTS on a system the cut reads apart, endpoints reversed, was not lifted."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $liftNow -Lifted $lifted
+        $recL = ConvertFrom-OtherPkgsRecord -Text ((ConvertTo-OtherPkgsRecord -Version "3.4.0.0" -Table ([pscustomobject]@{ Pkgs = @(); Rels = @() }) -Meta @() -Lifted $lifted) -join "`r`n") -Label "l"
+        Assert-True ($recL.Lifted.Count -eq 1 -and ($recL.Lifted[0].Systems -join " ") -eq "WXP") "the record's LIFTED line does not read back."
+        foreach ($bad in @(
+                @{ S = @("W7"); Want = "both match VID_1111&PID_0002"; Why = "a &REV_ id and a plain id of one device" },
+                @{ S = @("W2K"); Want = "has no line for W2K"; Why = "a system one package has no line on" })) {
+            $nowBad = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" $bad.S), (& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @(@("WXP", "W7", "W2K") | Where-Object { $bad.S -cnotcontains $_ }))) }
+            $msg = ""
+            try { Get-OtherLifted -Prev $liftPrev -Now $nowBad -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains($bad.Want)) ("a lift with " + $bad.Why + " did not refuse with '" + $bad.Want + "': '" + $msg + "'")
+        }
+        # A class id, a CLASS package, a set not carried, a system with no
+        # line: no answer; an interface id folded into its device.
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/c" -Sys "WXP").Ok) "a class id was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "WXP" -Kind "CLASS").Ok) "a CLASS package was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets @($setLift[0]) -Pkg "nonfree:net/b" -Sys "WXP").Ok) "a set not carried was read as devices."
+        Assert-True (-not (Get-OtherPkgDevices -Sets $setLift -Pkg "free:net/a" -Sys "W2K").Ok) "a system with no line was read as devices."
+        Assert-True ((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "W2K").Why.Contains("cannot be read")) "an INF that cannot be read was read as devices."
+        Assert-True (((Get-OtherPkgDevices -Sets $setLift -Pkg "nonfree:net/b" -Sys "WXP").Keys -join ",") -eq "VID_2222&PID_0001") "an &MI_ id was not folded into its device."
+        # The dropped EXCLUDES with no COEXISTS still refused; the next cut
+        # proves the lift again, and an EXCLUDES there ends it.
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7", "W2K"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("an EXCLUDES dropped with no COEXISTS was not refused: '" + $msg + "'")
+        $liftPrev2 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        $msg = ""
+        try { Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("both match")) ("a LIFTED system was not proved again: '" + $msg + "'")
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Sets $setLift).Count -eq 0) "an EXCLUDES again on a LIFTED system did not end the lift."
+        # The transition admits that EXCLUDES in place of the lifted
+        # COEXISTS, whole or on part of its systems, and nowhere else.
+        Test-OtherPkgsTransition -Prev $liftPrev2 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W7"))) }) -Lifted @()
+        $liftPrev3 = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP", "W7"))); Lifted = @([pscustomobject]@{ A = "free:net/a"; B = "nonfree:net/b"; Systems = @("W7") }) }
+        Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP")), (& $mkRel "EXCLUDES" "nonfree:net/b" "free:net/a" @("W7"))) }) -Lifted @()
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $liftPrev3 -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP", "W7"))) }) -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the COEXISTS line")) ("a COEXISTS the previous release did not lift, made an EXCLUDES, was not refused: '" + $msg + "'")
+        # A table row of kind 2 must be covered by this cut's lifts.
+        $msg = ""
+        try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on W7")) ("a lifted table row past this cut's lifts was not refused: '" + $msg + "'")
+        Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }) -Lifted $lifted
+        # ...in a cut that carries both of the pair's sets: one that leaves a
+        # set out (-NoWdmFree, -NoNonFree) reads no lift, and the row is not
+        # held to one.
+        $liftRow = [pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP", "W7"); Desc = "t"; Lifted = $true }) }
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("nonfree")
+        Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free")
+        $msg = ""
+        try { Test-OtherTableLifts -Table $liftRow -Lifted @() -Carried @("free", "nonfree") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("lifted on WXP W7")) ("a lifted table row with both sets carried and no lift was not refused: '" + $msg + "'")
+        # With no earlier record (a TEST or dry cut into another releases
+        # directory, draft 57) the table's lifted rows are proved by
+        # themselves: apart on WXP, the same device on W7.
+        $ownNow = [pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "COEXISTS" "free:net/a" "nonfree:net/b" @("WXP", "W7"))); Lifted = @() }
+        $ownRow = [pscustomobject]@{ Rels = @([pscustomobject]@{ Kind = "COEXISTS"; A = "free:net/a"; B = "nonfree:net/b"; Systems = @("WXP"); Desc = "t"; Lifted = $true }) }
+        $own = @(Get-OtherTableOwnLifts -Table $ownRow -Now $ownNow -Sets $setLift)
+        Assert-True ($own.Count -eq 1 -and ($own[0].Systems -join " ") -eq "WXP") "a lifted table row with no history, its sets read apart, was not lifted."
+        Test-OtherTableLifts -Table $ownRow -Lifted $own -Carried @("free", "nonfree")
+        $msg = ""
+        try { Get-OtherTableOwnLifts -Table $liftRow -Now $ownNow -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("both match VID_1111&PID_0002") -and $msg.Contains("lifted row")) ("a lifted table row with no history on a system both packages match was not refused: '" + $msg + "'")
+        $msg = ""
+        try { Get-OtherTableOwnLifts -Table $ownRow -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Sets $setLift | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True (@(Get-OtherTableOwnLifts -Table $ownRow -Now ([pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Sets $setLift).Count -eq 0) "a lifted table row with this cut's EXCLUDES on its system was read as a lift."
+        Assert-True (@(Get-OtherTableOwnLifts -Table ([pscustomobject]@{ Rels = @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("WXP"))) }) -Now $ownNow -Sets $setLift).Count -eq 0) "a table with no lifted row gave a lift."
+        # Such a cut records the pair's COEXISTS on the row's systems as an
+        # EXCLUDES (the installer's hold there), the rest of a line as it is,
+        # so the history check asks no proof of the absent set; with both
+        # sets carried nothing changes.
+        $heldMeta = @((& $mkRel "COEXISTS" "nonfree:net/b" "free:net/a" @("WXP", "W7", "W8")))
+        $h1 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("nonfree")
+        $hk = @($h1.Table.Rels) + @($h1.Meta) | ForEach-Object { $_.Kind + ":" + ($_.Systems -join " ") }
+        Assert-True (($hk -join ",") -ceq "EXCLUDES:WXP W7,EXCLUDES:WXP W7,COEXISTS:W8") ("a lifted pair with a set not carried was not recorded as held: " + ($hk -join ","))
+        Assert-True (@($h1.Table.Rels | Where-Object { $_.Lifted }).Count -eq 0 -and $liftRow.Rels[0].Kind -ceq "COEXISTS" -and $heldMeta[0].Kind -ceq "COEXISTS") "the hold changed the table it was given, or left a lifted row."
+        $h2 = Get-OtherHeldLifts -Table $liftRow -Meta $heldMeta -Carried @("free", "nonfree")
+        Assert-True ([object]::ReferenceEquals($h2.Table, $liftRow) -and @($h2.Meta).Count -eq 1 -and $h2.Meta[0].Kind -ceq "COEXISTS") "a lifted pair with both sets carried was changed by the hold."
+        $heldNow = [pscustomobject]@{ Version = "x"; Rows = $liftRows; Rels = @($h1.Table.Rels) + @($h1.Meta) + @((& $mkRel "EXCLUDES" "free:net/a" "nonfree:net/b" @("W2K"))); Lifted = @() }
+        Assert-True (@(Get-OtherLifted -Prev $liftPrev -Now $heldNow -Sets @()).Count -eq 0) "a held pair was read as a lift."
+        Test-OtherPkgsTransition -Prev $liftPrev -Now $heldNow -Lifted @()
+        # ...and a lift with no lifted row of the table, or a part of one,
+        # refused: the installer's hold against an earlier release is that row.
+        foreach ($case in @(0, 1)) {
+            $tr = @()
+            if ($case -eq 1) { $tr = @([pscustomobject]@{ Kind = "COEXISTS"; A = "nonfree:net/b"; B = "free:net/a"; Systems = @("W7"); Desc = "t"; Lifted = $true }) }
+            $msg = ""
+            try { Test-OtherTableLifts -Table ([pscustomobject]@{ Rels = @($tr) }) -Lifted $lifted } catch { $msg = $_.Exception.Message }
+            Assert-True ($msg.Contains("no lifted row") -or $msg.Contains("lifted on W7")) ("a lift the table does not mark lifted was not refused: '" + $msg + "'")
+        }
         $xq = Join-Path $osp "net\a\w98\Q.INF"
         [System.IO.File]::WriteAllText($xq, "[Manufacturer]`r`nM=Mo,`"NTamd64`"`r`n[Mo.NTamd64]`r`nD=I,ID\Q64`r`n")
         Assert-True ((Get-InfModelIds -Inf (Read-InfText -Path $xq) -Sys "W7X64") -join "," -eq "ID\Q64") "a quoted decoration was not read."
@@ -2389,9 +3239,37 @@ try {
         if (Test-Path -LiteralPath $realPack) {
             $realNf = Export-NonFreeSet -Root $realPack -Dest (Join-Path $script:work "nonfree-real")
             Assert-True ($realNf.Sums -eq $instSums.NonFree) ("NONFREE\SHA256.TXT for the pinned usb-wdm-nonfree is {0}; the installer carries {1}." -f $realNf.Sums, $instSums.NonFree)
-            # The cut's checks of record 26 section 6.7.11 over the pinned pack.
-            $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
-            Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+            # The cut's checks of record 26 section 6.7.11 over the pinned pack,
+            # and over the pinned free set too where its checkout is here. A
+            # lifted row of the installer's table (section 6.7.14) is proved
+            # only by both sets against the release history, so with both the
+            # checks run as the cut runs them: the repository's releases\ and
+            # the INF's version.
+            $realLifted = @((Get-InstOtherTable -Repo $repo).Rels | Where-Object { $_.Lifted })
+            $realFreeRoot = Get-DefaultWdmFreeRoot
+            $realFree = $null
+            if ($null -ne $repoPin -and (Test-Path -LiteralPath $realFreeRoot)) {
+                $realFree = Export-WdmFreeSet -Root $realFreeRoot -Pin $repoPin -Dest (Join-Path $script:work "free-real")
+                Assert-True ($realFree.Sums -eq $instSums.Free) ("FREE\SHA256.TXT for the pinned usb-wdm-free is {0}; the installer carries {1}." -f $realFree.Sums, $instSums.Free)
+            }
+            if ($null -ne $realFree) {
+                $infVer = [regex]::Match([System.IO.File]::ReadAllText((Join-Path $repo "src\xhci98.inf")), '(?m)^DriverVer=[^,]+,(\d+\.\d+\.\d+\.\d+)')
+                Assert-True $infVer.Success "src\xhci98.inf has no DriverVer this check can read."
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $repo "releases") -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned sets wrote no record."
+                Assert-True ($realLifted.Count -eq 0 -or @($realChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0) "the installer's table lifts a pair and the cut's checks over the pinned sets record no LIFTED line."
+                # A TEST or dry cut into a releases directory with no earlier
+                # record (draft 57): the lifted rows proved by themselves.
+                $realElse = Join-Path $script:work "oth-real-else"
+                Ensure-Directory $realElse
+                $elseChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir $realElse -Version $infVer.Groups[1].Value -Free $realFree -NonFree $realNf
+                Assert-True ($null -eq $elseChk.Previous -and ($realLifted.Count -eq 0 -or @($elseChk.Record | Where-Object { $_ -like "LIFTED |*" }).Count -gt 0)) "the cut's checks over the pinned sets into a releases directory with no history did not prove the installer's lifted rows."
+            } else {
+                # The pack alone: a lifted row is not held to a lift there.
+                $realChk = Invoke-OtherSetChecks -Repo $repo -ReleasesDir (Join-Path $script:work "oth-none") -Version "3.2.0.0" -Free $null -NonFree $realNf
+                Assert-True ($realChk.Record.Count -gt 10) "the cut's checks over the pinned usb-wdm-nonfree wrote no record."
+                if ($realLifted.Count -gt 0) { Write-Host "  (no usb-wdm-free checkout at ${realFreeRoot}: the installer's lifted rows are not proved against the pinned sets here)" }
+            }
         } else {
             Write-Host "  (no usb-wdm-nonfree checkout at ${realPack}: INST_NONFREE_SUMS is not checked against the pinned tag here)"
         }
@@ -2426,8 +3304,8 @@ try {
         # refused. Where the pair is absent (every version before 2.0.0.0, and
         # the cases above) nothing is required of it in this mode.
         Write-Step "the upload set gates the UAS class driver's pair by its own INF"
-        $uasInfSrc = Join-Path $repo "src\uas\xhciuas.inf"
-        foreach ($fl in @("release", "debug")) {
+        $uasInfSrc = Join-Path $fxRepo "src\uas\xhciuas.inf"
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $uasInfSrc -Destination (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
             [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhciuas.sys"),
                 [System.Text.Encoding]::ASCII.GetBytes("stand-in xhciuas.sys, $fl flavour"))
@@ -2439,7 +3317,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the UAS pair present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the UAS class driver") `
             ("expected the UAS pair to be gated by its own INF. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhciuas.sys", "xhciuas.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
@@ -2454,7 +3332,7 @@ try {
         Assert-True ($r.Output -match "check-uas-inf") `
             ("expected the refusal to name the UAS INF gate. Output:`n" + $r.Output)
         # Back to the fixture the cases below were written against.
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.inf") -Force
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\xhciuas.sys") -Force
         }
@@ -2472,11 +3350,11 @@ try {
         # has them).
         Write-Step "the upload set gates the connection manager's four files, all or none"
         $cmFiles = @{
-            "xhcicm.inf"  = (Join-Path $repo "src\cm\xhcicm.inf")
-            "nt\xhcicmf.inf" = (Join-Path $repo "src\cm\xhcicmf.inf")
+            "xhcicm.inf"  = (Join-Path $fxRepo "src\cm\xhcicm.inf")
+            "nt\xhcicmf.inf" = (Join-Path $fxRepo "src\cm\xhcicmf.inf")
         }
         $putCm = {
-            foreach ($fl in @("release", "debug")) {
+            foreach ($fl in @("release")) {
                 Ensure-Directory (Join-Path $pubRoot "$fl\nt")
                 foreach ($n in $cmFiles.Keys) { Copy-Item -LiteralPath $cmFiles[$n] -Destination (Join-Path $pubRoot "$fl\$n") -Force }
                 [System.IO.File]::WriteAllBytes((Join-Path $pubRoot "$fl\xhcicm.sys"),
@@ -2494,7 +3372,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with the connection manager present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected the connection manager's INFs to be gated by their own gate. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf", "nt\xhcicm.sys")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from the upload set's $fl\ directory though the published one carries it."
@@ -2539,7 +3417,7 @@ try {
                                "-PackageRoot", $noOut, "-UploadDir", $upRoot)
         Assert-True ($r.ExitCode -ne 0) "a filter INF beside xhcicm.inf, where a 98 wizard is pointed, was assembled into the asset."
         Assert-True ($r.Output -match "CM-NO9XBRIDGE") ("expected the refusal to name CM-NO9XBRIDGE. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhcicm.sys", "xhcicm.inf", "nt\xhcicmf.inf")) {
                 Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\$name") -Force
             }
@@ -2569,8 +3447,8 @@ try {
         # the asset, and not required in this mode (no version before 2.1.0.0
         # has one).
         Write-Step "the upload set gates txtsetup.oem by its own gate"
-        $oemSrc = Join-Path $repo "src\txtsetup.oem"
-        foreach ($fl in @("release", "debug")) {
+        $oemSrc = Join-Path $fxRepo "src\txtsetup.oem"
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $oemSrc -Destination (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
         }
         Remove-Item -LiteralPath $uploadDir -Recurse -Force
@@ -2580,7 +3458,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) ("the upload set was not assembled with txtsetup.oem present:`n" + $r.Output)
         Assert-True ($r.Output -match "carries the text-mode Setup description") `
             ("expected txtsetup.oem to be gated. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\txtsetup.oem")) `
                 "txtsetup.oem is missing from the upload set's $fl\ directory though the published one carries it."
         }
@@ -2591,7 +3469,7 @@ try {
         Assert-True ($r.ExitCode -ne 0) "a published txtsetup.oem binding an EHCI class id was assembled into the asset."
         Assert-True ($r.Output -match "check-txtsetup-oem") `
             ("expected the refusal to name the txtsetup.oem gate. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Remove-Item -LiteralPath (Join-Path $pubRoot "$fl\txtsetup.oem") -Force
         }
         if (Test-Path -LiteralPath $uploadDir) { Remove-Item -LiteralPath $uploadDir -Recurse -Force }
@@ -2610,7 +3488,7 @@ try {
         Write-Step "-UploadSetOnly refuses a version other than the current cut, and says why"
         $olderVersion = "0.9.9.9"
         $olderRoot = Join-Path $relRoot $olderVersion
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Ensure-Directory (Join-Path $olderRoot $fl)
             Copy-Item -LiteralPath (Join-Path $pubRoot "$fl\xhci98.sys") -Destination (Join-Path $olderRoot "$fl\xhci98.sys") -Force
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $olderRoot "$fl\xhci98.inf") -Force
@@ -2663,16 +3541,14 @@ try {
         Write-Step "-UploadSetOnly assembles a four-directory tree, each INF under its own architecture"
         # The tracked 64-bit INF, read from src\ rather than mutated, because
         # what is under test is the gate profile it is parsed under.
-        $amd64InfSrc = Join-Path $repo "src\xhci98-amd64.inf"
+        $amd64InfSrc = Join-Path $fxRepo "src\xhci98-amd64.inf"
         Assert-True (Test-Path -LiteralPath $amd64InfSrc) `
             "src\xhci98-amd64.inf is missing; the 64-bit half of the upload set cannot be driven."
         $relRoot4 = Join-Path $script:work "releases-4dir"
         $pubRoot4 = Join-Path $relRoot4 $relVersion
         foreach ($leg in @(
             @{ Dir = "release-x86"; Inf = $plainInf },
-            @{ Dir = "debug-x86";   Inf = $plainInf },
-            @{ Dir = "release-x64"; Inf = $amd64InfSrc },
-            @{ Dir = "debug-x64";   Inf = $amd64InfSrc }
+            @{ Dir = "release-x64"; Inf = $amd64InfSrc }
         )) {
             $d = Join-Path $pubRoot4 $leg.Dir
             Ensure-Directory $d
@@ -2698,12 +3574,12 @@ try {
         # Assert-ToolsLayout).
         Ensure-Directory (Join-Path $pubRoot4 "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $pubRoot4 "tools\portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $pubRoot4 "tools\portsw\$name") -Force
         }
         # The silent install's four files in tools\silent\ (task 38.2).
         Ensure-Directory (Join-Path $pubRoot4 "tools\silent")
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
-            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot4 ("tools\silent\" + $pair[1])) -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo ("src\" + $pair[0])) -Destination (Join-Path $pubRoot4 ("tools\silent\" + $pair[1])) -Force
         }
         # The driver pack's record, required from 3.2.0.0 (task 43.3).
         Write-AsciiFile -Path (Join-Path $pubRoot4 "drvpack.txt") -Lines (ConvertTo-DriverPackRecord -Version $relVersion -Pack $null)
@@ -2712,7 +3588,7 @@ try {
         $up4 = Join-Path $script:work "upload-4dir"
         Ensure-Directory $up4
         $st4 = @("-SelfTestCatalogThumbprint", (Get-SelfTestCatalogCert).Thumbprint)
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         # The thumbprint is the self-test's alone: refused without the marker,
         # and with the repository's own releases\.
         $r = Invoke-Releaser (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -2742,7 +3618,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) `
             ("-UploadSetOnly refused a published tree holding both architectures - the likeliest cause is the INF gate being run on the amd64 file under its default x86 profile:`n" + $r.Output)
         $uploadDir4 = Join-Path $up4 ("upload-" + $relVersion)
-        foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+        foreach ($d in @("release-x86", "release-x64")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\$name")) `
                     "'$name' is missing from the upload set's $d\ directory."
@@ -2751,7 +3627,7 @@ try {
         # The 64-bit directories really do carry the 64-bit INF, so the run
         # above gated what it claims to have gated rather than four copies of
         # one file.
-        foreach ($d in @("release-x64", "debug-x64")) {
+        foreach ($d in @("release-x64")) {
             $t = [System.IO.File]::ReadAllText((Join-Path $uploadDir4 "$d\xhci98.inf"))
             Assert-True ($t -match [regex]::Escape("%Mfg%=XhciModels,NTamd64")) `
                 "the upload set's $d\xhci98.inf is not the amd64 file, so the case that needs the gate's amd64 profile was never run."
@@ -2779,15 +3655,15 @@ try {
             "Get-CmPublishable does not name the connection manager's files of each layout."
         $putCm4 = {
             param([bool]$X64InNt)
-            foreach ($d in @("release-x86", "debug-x86", "release-x64", "debug-x64")) {
+            foreach ($d in @("release-x86", "release-x64")) {
                 $dd = Join-Path $pubRoot4 $d
                 $isX64 = $d -like "*-x64"
                 if (Test-Path -LiteralPath (Join-Path $dd "nt")) { Remove-Item -LiteralPath (Join-Path $dd "nt") -Recurse -Force }
                 foreach ($n in @("xhcicm.inf", "xhcicmf.inf", "xhcicm.sys")) {
                     if (Test-Path -LiteralPath (Join-Path $dd $n)) { Remove-Item -LiteralPath (Join-Path $dd $n) -Force }
                 }
-                $nhi = Join-Path $repo $(if ($isX64) { "src\cm\xhcicm-amd64.inf" } else { "src\cm\xhcicm.inf" })
-                $flt = Join-Path $repo $(if ($isX64) { "src\cm\xhcicmf-amd64.inf" } else { "src\cm\xhcicmf.inf" })
+                $nhi = Join-Path $fxRepo $(if ($isX64) { "src\cm\xhcicm-amd64.inf" } else { "src\cm\xhcicm.inf" })
+                $flt = Join-Path $fxRepo $(if ($isX64) { "src\cm\xhcicmf-amd64.inf" } else { "src\cm\xhcicmf.inf" })
                 $sysBytes = [System.Text.Encoding]::ASCII.GetBytes("stand-in xhcicm.sys, $d")
                 Copy-Item -LiteralPath $nhi -Destination (Join-Path $dd "xhcicm.inf") -Force
                 [System.IO.File]::WriteAllBytes((Join-Path $dd "xhcicm.sys"), $sysBytes)
@@ -2801,7 +3677,7 @@ try {
             }
         }
         & $putCm4 $false
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -2811,12 +3687,12 @@ try {
         Assert-True ($r.Output -match "release-x64\\ carries the connection manager's xhcicmf\.inf" -and
                      $r.Output -match "release-x86\\ carries the connection manager's nt\\xhcicmf\.inf") `
             ("expected each directory's filter INF gated at its own place. Output:`n" + $r.Output)
-        foreach ($d in @("release-x64", "debug-x64")) {
+        foreach ($d in @("release-x64")) {
             Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf")) -and
                          -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt"))) `
                 "the upload set's $d\ does not carry the filter INF at its root with no nt\."
         }
-        foreach ($d in @("release-x86", "debug-x86")) {
+        foreach ($d in @("release-x86")) {
             Assert-True ((Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicmf.inf")) -and
                          (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\nt\xhcicm.sys")) -and
                          -not (Test-Path -LiteralPath (Join-Path $uploadDir4 "$d\xhcicmf.inf"))) `
@@ -2824,7 +3700,7 @@ try {
         }
         # The x86 layout in an x64 directory of this version is refused.
         & $putCm4 $true
-        foreach ($d in @("release-x64", "debug-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
+        foreach ($d in @("release-x64")) { Add-SelfTestCatalogs -Dir (Join-Path $pubRoot4 $d) }
         if (Test-Path -LiteralPath $uploadDir4) { Remove-Item -LiteralPath $uploadDir4 -Recurse -Force }
         if (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) { Remove-Item -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip")) -Force }
         $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot4,
@@ -2874,12 +3750,19 @@ try {
         # Microsoft's - which is the incomplete-media defect again, reached by
         # a different route, and it used to exit 0.
         #
+        # Since task 45.45 release is the only flavour a run completes, so the
+        # directory left behind is one of the retired debug flavour's beside it.
         Write-Step "-Flavor may not leave a published flavour directory incomplete"
+        $leftDir = Join-Path $pubRoot "debug"
+        Ensure-Directory $leftDir
+        Copy-Item -LiteralPath (Join-Path $pubRoot "release\xhci98.inf") -Destination (Join-Path $leftDir "xhci98.inf") -Force
+        Copy-Item -LiteralPath (Join-Path $pubRoot "release\xhci98.sys") -Destination (Join-Path $leftDir "xhci98.sys") -Force
         $r = Invoke-Releaser ($relArgs + @("-Flavor", "release"))
         Assert-True ($r.ExitCode -ne 0) `
             "-Flavor release completed only one of two published flavour directories and said nothing."
         Assert-True ($r.Output -match "was not asked to complete") `
             ("expected the refusal to name the flavour left behind. Output:`n" + $r.Output)
+        Remove-Item -LiteralPath $leftDir -Recurse -Force
 
         # --- a relative -PackageRoot --------------------------------------
         #
@@ -2900,7 +3783,7 @@ try {
         $relPkgLeaf = Split-Path -Leaf $pkgRoot
         $relScript = @(
             "Set-Location -LiteralPath '$relPkgParent'",
-            ("& '$releaser' -UploadSetOnly -Version '$relVersion' -ReleasesDir '$relRoot' " +
+            ("& '$($script:fxReleaser)' -UploadSetOnly -Version '$relVersion' -ReleasesDir '$relRoot' " +
              "-PackageRoot '$relPkgLeaf' -UploadDir '$upRoot' | Out-Null"),
             "exit `$LASTEXITCODE"
         ) -join "; "
@@ -2913,7 +3796,7 @@ try {
             $ErrorActionPreference = $savedEap2
         }
         Assert-True ($relExit -eq 0) "a relative -PackageRoot was not accepted."
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             foreach ($name in @("xhci98.sys", "xhci98.inf")) {
                 Assert-True (Test-Path -LiteralPath (Join-Path $uploadDir "$fl\$name")) `
                     "'$name' is missing from $fl\ after a relative -PackageRoot run; the relative path derivation cut in the wrong place."
@@ -2961,7 +3844,7 @@ try {
         $thirdInf = New-Inf -Name "third" -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1`r`nextra.bin=1")
         }
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $thirdInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
         }
         $r = Invoke-Releaser @("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $relRoot,
@@ -2969,7 +3852,7 @@ try {
         Assert-True ($r.ExitCode -ne 0) "an INF naming a third media file assembled an upload set from the tracked directory alone."
         Assert-True ($r.Output -match "extra\.bin") `
             ("expected the refusal to name the file the tracked directory cannot supply. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
         }
 
@@ -3004,7 +3887,7 @@ try {
         $subPubInf = New-Inf -Name "subpub" -Mutate {
             param($t) $t.Replace("xhci98.inf=1", "xhci98.inf=1,setup")
         }
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $subPubInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
             Copy-Item -LiteralPath $subPubInf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
         }
@@ -3013,7 +3896,7 @@ try {
             "an INF declaring xhci98.inf in a subdirectory assembled an upload set."
         Assert-True ($r.Output -match "carries those two at its root") `
             ("expected the refusal to explain the release layout. Output:`n" + $r.Output)
-        foreach ($fl in @("release", "debug")) {
+        foreach ($fl in @("release")) {
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pubRoot "$fl\xhci98.inf") -Force
             Copy-Item -LiteralPath $plainInf -Destination (Join-Path $pkgRoot "pkg-$fl\xhci98.inf") -Force
         }
@@ -3049,7 +3932,7 @@ try {
             # refuse before anything is written, and the case removes the
             # probe if a broken guard ever creates it.
             @{ Why = "under the repository's own releases directory with -ReleasesDir overridden";
-               UploadDir = (Join-Path (Join-Path $repo "releases") (".selftest-probe-" + [System.IO.Path]::GetRandomFileName())) }
+               UploadDir = (Join-Path (Join-Path $fxRepo "releases") (".selftest-probe-" + [System.IO.Path]::GetRandomFileName())) }
         )
         # The "around" case needs the release to sit under what would become
         # the upload root, so it is staged as a copy rather than by moving the
@@ -3096,7 +3979,7 @@ try {
             # leave.
             Assert-True ((@(Get-ChildItem -LiteralPath $useRoot -Directory -Recurse).Count) -eq $beforeDirs) `
                 "the refused $($c.Why) run left a directory behind inside the published release."
-            if ($c.UploadDir.StartsWith((Join-Path $repo "releases"), [System.StringComparison]::OrdinalIgnoreCase)) {
+            if ($c.UploadDir.StartsWith((Join-Path $fxRepo "releases"), [System.StringComparison]::OrdinalIgnoreCase)) {
                 Assert-True (-not (Test-Path -LiteralPath $c.UploadDir)) `
                     "the refused $($c.Why) run created its destination under the repository's own releases directory."
                 if (Test-Path -LiteralPath $c.UploadDir) {
@@ -3134,6 +4017,19 @@ try {
                            "-Version", "9.9.9.9")
     Assert-True ($r.ExitCode -ne 0) `
         "-Flavor release,qemu was accepted: a publishable flavour beside qemu must not launder it."
+
+    # The debug flavour, retired with task 45.45 (design record 08 section
+    # 14): in the ValidateSet for the same reason, refused with its reason.
+    Write-Step "a release cut refuses the retired debug flavour"
+    $r = Invoke-Releaser @("-Flavor", "debug", "-UploadSetOnly",
+                           "-PackageRoot", $script:work, "-Version", "9.9.9.9")
+    Assert-True ($r.ExitCode -ne 0) "a release cut accepted -Flavor debug."
+    Assert-True ($r.Output -match "retired" -and $r.Output -match "45\.45") `
+        ("expected the refusal to say the debug flavour was retired, by task 45.45. Output:`n" + $r.Output)
+    $r = Invoke-Releaser @("-Flavor", "release", "-Flavor", "debug",
+                           "-UploadSetOnly", "-PackageRoot", $script:work,
+                           "-Version", "9.9.9.9")
+    Assert-True ($r.ExitCode -ne 0) "-Flavor release,debug was accepted."
 
     # --- and that refusal has to come before the publish, not after ---------
     #
@@ -3589,10 +4485,12 @@ try {
     # Three rounds of review went into this one gate and each defect was found
     # by reading rather than by a failing test, so here is the test. The
     # `.sys` is a stand-in - `source-stamp.ps1` hashes it as bytes and never
-    # parses it - and the source half is hashed from the real `src\`, which is
-    # what makes case 4 a genuine mismatch rather than a fabricated one.
+    # parses it - and the source half is hashed from fixture tree S's `src\`
+    # (task 45.51: today's script over sources of its own), which is what
+    # makes case 4 a genuine mismatch rather than a fabricated one.
     Write-Step "the source stamp: sources, binary identity, and the legacy format"
-    $stampScript = Join-Path $repo "scripts\source-stamp.ps1"
+    $sx = New-SourceFixtureTree -Dir (Join-Path $script:work "sx-tree")
+    $stampScript = Join-Path $sx "scripts\source-stamp.ps1"
     $stampWork = Join-Path $script:work "stamp"
     New-Item -ItemType Directory -Path $stampWork | Out-Null
     $stampSys = Join-Path $stampWork "xhci98.sys"
@@ -3752,7 +4650,7 @@ try {
         # the asset of the current cut and nothing else - so a made-up number
         # is refused for that reason and this case would be testing the wrong
         # refusal.
-        $newInfText = [System.IO.File]::ReadAllText($prodInf)
+        $newInfText = [System.IO.File]::ReadAllText($fxInf)
         Assert-True ($newInfText -match '(?m)^DriverVer\s*=\s*[^,\r\n]+,\s*([0-9.]+)\s*$') `
             "src\xhci98.inf has no readable DriverVer version."
         $newVersion = $Matches[1].Trim()
@@ -3761,8 +4659,8 @@ try {
         $newUpRoot = Join-Path $script:work "upload-newnames"
         Ensure-Directory $newUpRoot
 
-        $newInf = $prodInf
-        foreach ($fl in @("release-x86", "debug-x86")) {
+        $newInf = $fxInf
+        foreach ($fl in @("release-x86")) {
             $d = Join-Path $newPubRoot $fl
             Ensure-Directory $d
             [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"),
@@ -3773,7 +4671,7 @@ try {
         }
         Set-Content -LiteralPath (Join-Path $newPubRoot "readme.txt") -Encoding ASCII `
                     -Value "stand-in per-version readme"
-        Copy-Item -LiteralPath (Join-Path $repo "LICENSE") `
+        Copy-Item -LiteralPath (Join-Path $fxRepo "LICENSE") `
                   -Destination (Join-Path $newPubRoot "LICENSE") -Force
         # The port switchover's scripts in tools\portsw\, as every cut publishes
         # them since roadmap-hcd tasks 37.5 and 38.9: the upload assembly
@@ -3781,12 +4679,12 @@ try {
         # Assert-ToolsLayout).
         Ensure-Directory (Join-Path $newPubRoot "tools\portsw")
         foreach ($name in @("portsw.vbs", "portsw-on.bat", "portsw-off.bat")) {
-            Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $newPubRoot "tools\portsw\$name") -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $newPubRoot "tools\portsw\$name") -Force
         }
         # The silent install's four files in tools\silent\ (task 38.2).
         Ensure-Directory (Join-Path $newPubRoot "tools\silent")
         foreach ($pair in @(@("silent.reg", "SILENT.REG"), @("silent.vbs", "SILENT.VBS"), @("silent-on.bat", "silent-on.bat"), @("silent-off.bat", "silent-off.bat"))) {
-            Copy-Item -LiteralPath (Join-Path $repo ("src\" + $pair[0])) -Destination (Join-Path $newPubRoot ("tools\silent\" + $pair[1])) -Force
+            Copy-Item -LiteralPath (Join-Path $fxRepo ("src\" + $pair[0])) -Destination (Join-Path $newPubRoot ("tools\silent\" + $pair[1])) -Force
         }
         # The driver pack's and the downloads' records, required from 3.2.0.0
         # (tasks 43.3 and 43.48), as the four-directory tree above has them.
@@ -3798,7 +4696,7 @@ try {
         Assert-True ($r.ExitCode -eq 0) (
             "-UploadSetOnly refused a published tree using the release-x86/debug-x86 names, which is what every cut from now on produces:`n" + $r.Output)
         $newAssembled = Join-Path $newUpRoot ("upload-" + $newVersion)
-        foreach ($fl in @("release-x86", "debug-x86")) {
+        foreach ($fl in @("release-x86")) {
             Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.sys"))) (
                 "the assembled upload set has no $fl\xhci98.sys. Output:`n" + $r.Output)
             Assert-True (Test-Path -LiteralPath (Join-Path $newAssembled (Join-Path $fl "xhci98.inf"))) (
@@ -3838,12 +4736,12 @@ try {
     foreach ($n in @("xhcicmf.inf", "xhcicm.sys")) {
         [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\$n"), "stand-in from a 3.0.0.0 x64 package")
     }
-    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
     Assert-True ($r.ExitCode -eq 0) ("the amd64 package did not replace one staged in the 3.0.0.0 nt\ layout:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $arch64Out "nt"))) "the replaced amd64 package still has an nt\ subdirectory."
     Ensure-Directory (Join-Path $arch64Out "nt")
     [System.IO.File]::WriteAllText((Join-Path $arch64Out "nt\README.TXT"), "somebody else's")
-    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver, "-OutDir", $arch64Out)
     Assert-True ($r.ExitCode -ne 0) "the amd64 packager replaced a directory holding nt\README.TXT, which it never staged."
     Remove-Item -LiteralPath (Join-Path $arch64Out "nt") -Recurse -Force
 
@@ -3865,7 +4763,7 @@ try {
     # And the mirror, which is the likelier mistake: the 64-bit INF staged as
     # the 32-bit package.
     $mismatchOut2 = Join-Path $script:work "pkg-arch-mismatch2"
-    $r = Invoke-Packager @("-InfPath", $amd64Inf, "-DriverPath", $driver, "-OutDir", $mismatchOut2)
+    $r = Invoke-Packager @("-InfPath", $fxAmd64Inf, "-DriverPath", $driver, "-OutDir", $mismatchOut2)
     Assert-True ($r.ExitCode -ne 0) ("the packager staged the 64-bit INF as the x86 package:`n" + $r.Output)
     Assert-True (-not (Test-Path -LiteralPath $mismatchOut2)) `
         "the refused x86 package left an output directory behind."
@@ -3976,8 +4874,8 @@ try {
            Why  = "a cut no longer puts SETUP.EXE, the program a person double-clicks, at the version root (task 42-A.31, design record 26 section 2)" },
         @{ Find = 'foreach ($name in ($instExes + $rootExes)) {';
            Why  = "a cut no longer refuses a SETUP.EXE older than its sources (task 42-A.31)" },
-        @{ Find = 'THE EASY WAY: SETUP.EXE. To install or update, double-click SETUP.EXE. To';
-           Why  = "the readme's section 4 no longer sends a person to SETUP.EXE first (task 42-A.31)" },
+        @{ Find = 'SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Double-click it in';
+           Why  = "the readme's section 2 no longer sends a person to SETUP.EXE first (tasks 42-A.31 and 45.29)" },
         @{ Find = 'Assert-TakesSharedVersion -Path (Join-Path $InstallToolDir "inst_eng.c") -Macro "XHCIINST_VERSION"';
            Why  = "a cut no longer holds the install tool's version to the shared macro (task 40.6)" },
         @{ Find = '$instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })';
@@ -4028,10 +4926,10 @@ try {
            Why  = "a cut no longer adds XHCIDI.EXE's statically linked runtime and import library to the install tool's NOTICE.TXT (legal-provenance.md section 2a)" },
         @{ Find = 'if ($null -eq $ditoolStaged -and $null -ne $insttoolStaged) { $missingTools += "TOOLS\XHCIINST\XHCIDI.EXE (98 SE and ME use the printed steps)" }';
            Why  = "a cut without the helper no longer says so in its readme (design record 27 section 3.3)" },
-        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of section 4)" }';
+        @{ Find = 'if ($null -eq $traytoolStaged) { $missingTools += "TOOLS\XHCITR\ (the xHCI98 USB Tree of sections 2 and 4)" }';
            Why  = "a cut without the USB tree tool no longer says so in its readme (task 41-A.6)" },
-        @{ Find = "administrator to run. The installer's Components page can leave out its";
-           Why  = "the readme's section 4 no longer describes the xHCI98 USB Tree INSTALL.BAT installs, or /notray (task 41-A.6)" },
+        @{ Find = "It also installs the xHCI98 USB Tree (XHCITR), which shows every USB and";
+           Why  = "the readme's section 2 no longer says SETUP.EXE installs the xHCI98 USB Tree (tasks 41-A.6 and 45.29)" },
         @{ Find = '$silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")';
            Why  = "a cut no longer publishes the silent install's list and scripts once, from src\, into tools\silent\ (task 38.2)" },
         @{ Find = 'Assert-SilentInstallLayout -Root $destRoot -Map $silentPublishable -What "the staged release ''$destRoot''"';
@@ -4135,13 +5033,13 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $cutRoot $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $cutRoot "$d\xhci98.inf"), "; stand-in")
         }
-        $pubDir = Publish-PortSwitchScripts -SourceDir (Join-Path $repo "src") -DestRoot $cutRoot -Names $pswNames -DirName "tools\portsw"
+        $pubDir = Publish-PortSwitchScripts -SourceDir (Join-Path $fxRepo "src") -DestRoot $cutRoot -Names $pswNames -DirName "tools\portsw"
         Assert-True ($pubDir -eq (Join-Path $cutRoot "tools\portsw")) "Publish-PortSwitchScripts did not return the portsw\ directory it wrote: $pubDir"
         foreach ($name in $pswNames) {
             $pubFile = Join-Path $cutRoot "tools\portsw\$name"
             Assert-True ((Test-Path -LiteralPath $pubFile) -and
                          (Get-StandInSha ([System.IO.File]::ReadAllBytes($pubFile))) -eq
-                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $repo "src\$name"))))) `
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\$name"))))) `
                 "Publish-PortSwitchScripts did not publish src\$name byte for byte into portsw\."
         }
         $refused = $null
@@ -4151,8 +5049,8 @@ try {
         # A source missing one: refused, naming it, and nothing written.
         $loneSrc = Join-Path $pswRoot "lone-src"
         New-Item -ItemType Directory -Force -Path $loneSrc | Out-Null
-        Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination $loneSrc
-        Copy-Item -LiteralPath (Join-Path $repo "src\portsw-on.bat") -Destination $loneSrc
+        Copy-Item -LiteralPath (Join-Path $fxRepo "src\portsw.vbs") -Destination $loneSrc
+        Copy-Item -LiteralPath (Join-Path $fxRepo "src\portsw-on.bat") -Destination $loneSrc
         $loneDest = Join-Path $pswRoot "lone-dest"
         New-Item -ItemType Directory -Force -Path $loneDest | Out-Null
         $refused = $null
@@ -4200,7 +5098,7 @@ try {
             [System.IO.File]::WriteAllText((Join-Path $legacyNone "$d\xhci98.inf"), "; stand-in")
             [System.IO.File]::WriteAllText((Join-Path $legacyFlavour "$d\xhci98.inf"), "; stand-in")
             foreach ($name in $pswNames) {
-                Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $legacyFlavour "$d\$name")
+                Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $legacyFlavour "$d\$name")
             }
         }
         $legacyCases = @(
@@ -4219,7 +5117,7 @@ try {
         $damaged = @(
             @{ Name = "2300-missing";  Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Remove-Item -LiteralPath (Join-Path $t "debug-x86\portsw-off.bat") } },
             @{ Name = "2300-stray";    Base = $legacyFlavour; Version = "2.3.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $t "debug-x86\portsw.vbs") -Destination (Join-Path $t "xhciqual\portsw.vbs") } },
-            @{ Name = "none-stray";    Base = $legacyNone;    Version = "2.2.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $repo "src\portsw.vbs") -Destination (Join-Path $t "release-x86\portsw.vbs") } },
+            @{ Name = "none-stray";    Base = $legacyNone;    Version = "2.2.0.0"; Do = { param($t) Copy-Item -LiteralPath (Join-Path $fxRepo "src\portsw.vbs") -Destination (Join-Path $t "release-x86\portsw.vbs") } },
             @{ Name = "none-portsw-file"; Base = $legacyNone; Version = "2.2.0.0"; Do = { param($t) [System.IO.File]::WriteAllText((Join-Path $t "portsw"), "x") } }
         )
         foreach ($c in $damaged) {
@@ -4386,7 +5284,7 @@ try {
                     [System.IO.File]::WriteAllText((Join-Path $tree "$d\xhci98.inf"), "; stand-in")
                     if ($tree -ne $tlMixed) { continue }
                     foreach ($name in $pswNames) {
-                        Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $tree "$d\$name")
+                        Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $tree "$d\$name")
                     }
                 }
             }
@@ -4395,7 +5293,7 @@ try {
             Copy-Item -LiteralPath $tlCut -Destination $tlGood -Recurse
             Remove-Item -LiteralPath (Join-Path $tlGood "tools\portsw\readme.txt")
             foreach ($name in $pswNames) {
-                Copy-Item -LiteralPath (Join-Path $repo "src\$name") -Destination (Join-Path $tlGood "tools\portsw\$name")
+                Copy-Item -LiteralPath (Join-Path $fxRepo "src\$name") -Destination (Join-Path $tlGood "tools\portsw\$name")
             }
             foreach ($c in @(
                 @{ Tree = $tlMixed;     Version = "2.3.0.0"; Want = $false },
@@ -4458,7 +5356,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Join-Path $siCut $d) | Out-Null
             [System.IO.File]::WriteAllText((Join-Path $siCut "$d\readme.txt"), "stand-in")
         }
-        $siDir = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $siCut -Map $silentPublishable -DirName "tools\silent"
+        $siDir = Publish-SilentInstallScripts -SourceDir (Join-Path $fxRepo "src") -DestRoot $siCut -Map $silentPublishable -DirName "tools\silent"
         Assert-True ($siDir -eq (Join-Path $siCut "tools\silent")) "Publish-SilentInstallScripts did not return the tools\silent\ directory it wrote: $siDir"
         $siGot = @(Get-ChildItem -LiteralPath $siDir -File | ForEach-Object { $_.Name } | Sort-Object)
         Assert-True (($siGot -join ",") -ceq ((@($siWant.Values) | Sort-Object) -join ",")) "Publish-SilentInstallScripts put '$($siGot -join ', ')' in tools\silent\."
@@ -4466,7 +5364,7 @@ try {
             $pubFile = Join-Path $siDir $siWant[$k]
             Assert-True ((Test-Path -LiteralPath $pubFile) -and
                          (Get-StandInSha ([System.IO.File]::ReadAllBytes($pubFile))) -eq
-                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $repo "src\$k"))))) `
+                         (Get-StandInSha ([System.IO.File]::ReadAllBytes((Join-Path $fxRepo "src\$k"))))) `
                 "Publish-SilentInstallScripts did not publish src\$k byte for byte."
         }
         foreach ($v in @("", "2.4.0.0", "2.4.1.0")) {
@@ -4480,7 +5378,7 @@ try {
         # naming its file; a stale SILENT.VBS (no checker of its own) by the
         # cut's byte comparison alone. The reference is the repository.
         Write-Step "a staged or published tools\silent\ is held to the checkers"
-        foreach ($ref in @("", $repo)) {
+        foreach ($ref in @("", $fxRepo)) {
             $refused = $null
             try { Assert-SilentInstallContent -Root $siCut -Map $silentPublishable -What "fixture cut" -Reference $ref } catch { $refused = $_.Exception.Message }
             Assert-True ($null -eq $refused) "Assert-SilentInstallContent -Reference '$ref' refused the published four: $refused"
@@ -4498,7 +5396,7 @@ try {
             Copy-Item -LiteralPath $siCut -Destination $t -Recurse
             $f = Join-Path $t ("tools\silent\" + $c.File)
             [System.IO.File]::WriteAllBytes($f, $siLatin1.GetBytes((& $c.Edit $siLatin1.GetString([System.IO.File]::ReadAllBytes($f)))))
-            foreach ($ref in @("", $repo)) {
+            foreach ($ref in @("", $fxRepo)) {
                 $refused = $null
                 try { Assert-SilentInstallContent -Root $t -Map $silentPublishable -What "fixture $($c.Name)" -Reference $ref } catch { $refused = $_.Exception.Message }
                 $want = ($ref -ne "") -or (-not $c.Stale)
@@ -4510,7 +5408,7 @@ try {
         $siLone = Join-Path $siRoot "lone-src"
         $siLoneDest = Join-Path $siRoot "lone-dest"
         New-Item -ItemType Directory -Force -Path $siLone | Out-Null
-        foreach ($k in @("silent.reg", "silent.vbs", "silent-on.bat")) { Copy-Item -LiteralPath (Join-Path $repo "src\$k") -Destination (Join-Path $siLone $k) }
+        foreach ($k in @("silent.reg", "silent.vbs", "silent-on.bat")) { Copy-Item -LiteralPath (Join-Path $fxRepo "src\$k") -Destination (Join-Path $siLone $k) }
         $refused = $null
         try { $null = Publish-SilentInstallScripts -SourceDir $siLone -DestRoot $siLoneDest -Map $silentPublishable -DirName "tools\silent" } catch { $refused = $_.Exception.Message }
         Assert-True ($null -ne $refused -and $refused -match "silent-off\.bat") "Publish-SilentInstallScripts did not refuse a source with no silent-off.bat, naming it: $refused"
@@ -4539,7 +5437,7 @@ try {
         foreach ($tree in @($siLegacy, $siLegacyCopy)) {
             foreach ($d in @("release-x86", "portsw")) { New-Item -ItemType Directory -Force -Path (Join-Path $tree $d) | Out-Null }
         }
-        Copy-Item -LiteralPath (Join-Path $repo "src\silent-on.bat") -Destination (Join-Path $siLegacyCopy "release-x86\silent-on.bat")
+        Copy-Item -LiteralPath (Join-Path $fxRepo "src\silent-on.bat") -Destination (Join-Path $siLegacyCopy "release-x86\silent-on.bat")
         foreach ($c in @(
             @{ Tree = $siLegacy;     Version = "";        Want = $false },
             @{ Tree = $siLegacy;     Version = "2.4.0.0"; Want = $false },
@@ -4792,7 +5690,7 @@ try {
         Copy-Item -LiteralPath $rbCut -Destination $rbOld -Recurse
         New-Item -ItemType Directory -Force -Path (Join-Path $rbOld "tools\xhcisnap") | Out-Null
         foreach ($b in @("SNAPON.BAT", "SNAPGET.BAT", "SNAPOFF.BAT")) {
-            Copy-Item -LiteralPath (Join-Path $repo "releases\3.0.0.0\tools\xhcisnap\$b") -Destination (Join-Path $rbOld "tools\xhcisnap\$b")
+            Copy-Item -LiteralPath (Join-Path $fxRepo "releases\3.0.0.0\tools\xhcisnap\$b") -Destination (Join-Path $rbOld "tools\xhcisnap\$b")
         }
         $rbOldCases = @(
             @{ Name = "good";       Do = { param($t) };                                                                                                   Says = $null },
@@ -5162,11 +6060,11 @@ try {
 
     Write-Step "x64 test signature: the packager's and the cut's refusals"
     $tsMissing = Join-Path $script:work "no-such-key.pfx"
-    $r = Invoke-Packager @("-InfPath", $prodInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-ts-x86"),
+    $r = Invoke-Packager @("-InfPath", $fxInf, "-DriverPath", $driver, "-OutDir", (Join-Path $script:work "pkg-ts-x86"),
                            "-TestSignPfx", $tsMissing)
     Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "never signed") `
         ("make-package.ps1 did not refuse -TestSignPfx on the x86 package. Output:`n" + $r.Output)
-    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver,
                            "-OutDir", (Join-Path $script:work "pkg-ts-nokey"), "-TestSignPfx", $tsMissing)
     Assert-True ($r.ExitCode -ne 0 -and $r.Output -match "no test-signing key at") `
         ("make-package.ps1 did not refuse a -TestSignPfx naming no file. Output:`n" + $r.Output)
@@ -5259,7 +6157,7 @@ try {
     # amd64 INF names it (the gates' BOTH-CATALOG holds the line itself).
     foreach ($pair in @(@("xhci98.cat", "src\xhci98-amd64.inf"), @("xhciuas.cat", "src\uas\xhciuas-amd64.inf"),
                         @("xhcicm.cat", "src\cm\xhcicm-amd64.inf"), @("xhcicmf.cat", "src\cm\xhcicmf-amd64.inf"),
-                        @("stor98.cat", "src\stor98\inf\stor98-x64.inf"))) {
+                        @("stor98.cat", "src\stor98\inf\stor98-x64.inf"), @("xhcinet.cat", "src\net\xhcinet-amd64.inf"))) {
         Assert-True ($script:PackageCatalogs.Contains($pair[0])) "package-common.ps1's catalog table has no $($pair[0])."
         $catInfText = [System.IO.File]::ReadAllText((Join-Path $repo $pair[1]))
         Assert-True ($catInfText -match ('(?m)^CatalogFile=' + [regex]::Escape($pair[0]) + '\r?$')) "$($pair[1]) does not name $($pair[0])."
@@ -5361,19 +6259,18 @@ try {
         Write-Step "x64 catalogs: the parser, on a catalog MakeCat makes of stand-ins"
         $catWork = Join-Path $script:work "catalog"
         New-Item -ItemType Directory -Force -Path $catWork | Out-Null
-        # The PE member: a driver this tree has built, where there is one
-        # (MakeCat's PE hashing needs a real image, which the synthetic
-        # header is not); otherwise a text stand-in, hashed flat, and the PE
-        # member type is left to the mocks above and to the packager's own
-        # check of every catalog it signs.
+        # The PE member: a real image, Get-CatalogPeSample's (MakeCat's PE
+        # hashing needs one, which the synthetic header is not; a fixed one,
+        # so the skip's digest can hold it); otherwise a text stand-in,
+        # hashed flat, and the PE member type is left to the mocks above
+        # and to the packager's own check of every catalog it signs.
         $catPe = Join-Path $catWork "x.sys"
-        $catBuilt = @(Get-ChildItem -LiteralPath (Join-Path $repo "src") -Recurse -File -Filter "xhci98.sys" -ErrorAction SilentlyContinue |
-                      Where-Object { $_.FullName -match '\\obj(fre|chk)' } | Select-Object -First 1)
+        $catBuilt = @(Get-Item -LiteralPath (Get-CatalogPeSample) -ErrorAction SilentlyContinue)
         if ($catBuilt.Count -gt 0) {
             Copy-Item -LiteralPath $catBuilt[0].FullName -Destination $catPe
         } else {
             [System.IO.File]::WriteAllText($catPe, "not a driver", (New-Object System.Text.ASCIIEncoding))
-            Write-Warn "x64 catalogs: no built xhci98.sys under src\obj*, so the catalog's second member is a text stand-in."
+            Write-Warn "x64 catalogs: no kernel32.dll to sample, so the catalog's second member is a text stand-in."
         }
         $catInf = Join-Path $catWork "x.inf"
         [System.IO.File]::WriteAllText($catInf, "[Version]`r`nSignature=`"`$Windows NT`$`"`r`nCatalogFile=x.cat`r`n", (New-Object System.Text.ASCIIEncoding))
@@ -5507,7 +6404,7 @@ try {
     $soNoTeM = ConvertFrom-GatedManifest -Text ($soText -replace "(?m)^target_evidence=1", "target_evidence=0")
     foreach ($c in @(
         @{ Why = "the x86 package";        Says = "records the release amd64 build"; F = (Get-SoFault -Arch "x86") },
-        @{ Why = "the debug flavour";      Says = "records the release amd64 build"; F = (Get-SoFault -Flavor "debug") },
+        @{ Why = "the qemu flavour";       Says = "records the release amd64 build"; F = (Get-SoFault -Flavor "qemu") },
         @{ Why = "an altered binary";      Says = "xhcicm.sys at";                   F = (Get-SoFault -Bins $soAlteredBins) },
         @{ Why = "an unrecorded binary";   Says = "no hash for xhcihlpr.sys";        F = (Get-SoFault -Bins $soExtraBins) },
         @{ Why = "a dirty build";          Says = "uncommitted changes";             F = (Get-SoFault -M $soDirtyM) },
@@ -5522,14 +6419,16 @@ try {
         "a record without target evidence was refused for a run that passes -NoTargetEvidence too."
 
     # make-package.ps1 itself: each refusal, before anything is staged. The
-    # stand-in driver says debug, the packager's default flavour.
+    # stand-in driver says release, the packager's default flavour.
     $soDbgSha = @{ "xhci98.sys" = (Get-FileSha256 -Path $driver) }
-    $soState = Get-GitTreeState -Repo $repo
+    # The tree the packager reads its HEAD and status from is fixture P
+    # (task 45.51), committed and clean, not this tree.
+    $soState = Get-GitTreeState -Repo $fxRepo
     function New-SoRecord {
         param([string]$Name, [string]$Arch = "amd64", [string]$Commit = $soState.Head, [hashtable]$Sha = $soDbgSha)
         $p = Join-Path $soDir $Name
         [System.IO.File]::WriteAllBytes($p, [System.Text.Encoding]::ASCII.GetBytes(
-            (ConvertTo-GatedManifest -Arch $Arch -Flavor "debug" -Commit $Commit -Dirty $false `
+            (ConvertTo-GatedManifest -Arch $Arch -Flavor "release" -Commit $Commit -Dirty $false `
                 -TargetEvidence $true -Time "2026-10-16T00:00:00Z" -Sha256 $Sha)))
         return $p
     }
@@ -5551,7 +6450,7 @@ try {
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (Join-Path $soDir "none.txt")) },
         @{ Why = "an unreadable record";                   Says = "is not a gated build record";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", $soBins["xhci98.sys"]) },
-        @{ Why = "the other architecture's record";        Says = "records the debug x86 build";
+        @{ Why = "the other architecture's record";        Says = "records the release x86 build";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "x86.txt" -Arch "x86")) },
         @{ Why = "a hash mismatch";                        Says = "is not the binary the build gated";
            Args = @("-Arch", "amd64", "-SignOnly", "-GatedManifestPath", (New-SoRecord -Name "hash.txt" -Sha $soWrongHash)) },
@@ -5562,7 +6461,7 @@ try {
     foreach ($c in $soCases) {
         $soN++
         $soOut = Join-Path $script:work ("pkg-signonly-" + $soN)
-        $soArgs = @("-InfPath", $(if ($c.Args -contains "amd64") { $amd64Inf } else { $prodInf }),
+        $soArgs = @("-InfPath", $(if ($c.Args -contains "amd64") { $fxAmd64Inf } else { $fxInf }),
                     "-DriverPath", $driver, "-OutDir", $soOut) + $c.Args
         $r = Invoke-Packager $soArgs -WithBinaryGates
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains($c.Says)) `
@@ -5573,18 +6472,27 @@ try {
     }
     # A record that admits the stand-in is reported as admitting it, and the
     # run stops there - in a clean tree. In a tree with uncommitted changes the
-    # refusal is the tree's, which is the right answer there too.
+    # refusal is the tree's, which is the right answer there too. Both are
+    # run, on fixture P clean and then with a change in it (task 45.51).
+    Assert-True ($soState.Head -match '^[0-9a-f]{40}$' -and -not $soState.Dirty) "fixture P is not a clean committed repository for the sign-only cases."
     $soOkOut = Join-Path $script:work "pkg-signonly-ok"
-    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $amd64Inf, "-DriverPath", $driver,
+    $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver,
                            "-OutDir", $soOkOut, "-SignOnly",
                            "-GatedManifestPath", (New-SoRecord -Name "ok.txt")) -WithBinaryGates
-    if ($soState.Dirty) {
+    Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
+                 $r.Output.Contains("REUSED from the gated build")) `
+        ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
+    Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
+    $soDirtyFile = Join-Path $fxRepo "src\signonly-dirty.txt"
+    [System.IO.File]::WriteAllText($soDirtyFile, "an uncommitted change")
+    try {
+        $r = Invoke-Packager @("-Arch", "amd64", "-InfPath", $fxAmd64Inf, "-DriverPath", $driver,
+                               "-OutDir", $soOkOut, "-SignOnly",
+                               "-GatedManifestPath", (New-SoRecord -Name "ok-dirty.txt")) -WithBinaryGates
         Assert-True ($r.ExitCode -ne 0 -and $r.Output.Contains("uncommitted changes since")) `
             ("a matching record in a dirty tree was not refused for the tree. Output:`n" + $r.Output)
-    } else {
-        Assert-True ($r.ExitCode -eq 0 -and $r.Output.Contains("nothing is staged or signed") -and
-                     $r.Output.Contains("REUSED from the gated build")) `
-            ("a matching record was not reported as admitting the stand-in. Output:`n" + $r.Output)
+    } finally {
+        Remove-Item -LiteralPath $soDirtyFile -Force -ErrorAction SilentlyContinue
     }
     Assert-True (-not (Test-Path -LiteralPath $soOkOut)) "a -GatedManifestPath run staged a package."
 
@@ -5622,7 +6530,7 @@ try {
     # Admitted when the recorded commit is an ancestor of HEAD and no file
     # changed since is a build input; a change to a source, a header, the
     # host suite or the import gates is refused as before. The rules are
-    # read from this tree; the commits are a fixture repository's.
+    # fixture tree S's; the commits are a fixture repository's.
     Write-Step "a HEAD newer than the gated build is admitted only when no build input changed"
     foreach ($d in @("xhci98", "xhciuas", "xhcicm", "xhcihlpr", "stor98", "stor98mpd")) {
         $l = @(& (Join-Path $repo "scripts\source-stamp.ps1") -Driver $d -List)
@@ -5630,7 +6538,10 @@ try {
         Assert-True (@($l | Where-Object { -not (Test-Path -LiteralPath (Join-Path $repo $_) -PathType Leaf) }).Count -eq 0) `
             "source-stamp.ps1 -Driver $d -List names a file that is not in the tree."
     }
-    $biRules = Get-BuildInputRules -Repo $repo
+    # The rules the classification vectors and the import's cases use are
+    # fixture tree S's (task 45.51): its six drivers' lists, its host
+    # runner and its include chains; the loop above holds this tree's lists.
+    $biRules = Get-BuildInputRules -Repo $sx
     foreach ($v in @(
         @{ P = "docs/contributing/build-and-test.md"; In = $false },
         @{ P = "releases/history.md";                In = $false },
@@ -5667,6 +6578,7 @@ try {
         @{ P = "xhcitr/tr_core.c";                   In = $true },
         @{ P = "scripts/import-gate/xhci98-imports.allow"; In = $true },
         @{ P = "scripts/build-driver.cmd";           In = $true },
+        @{ P = "scripts/build-steps.ps1";            In = $true },
         @{ P = "scripts\source-stamp.ps1";           In = $true },
         @{ P = "scripts/common.ps1";                 In = $true },
         @{ P = "scripts/import-gate/evidence-common.ps1"; In = $true }
@@ -5755,7 +6667,7 @@ try {
         return $o.Trim()
     }
     [void](Invoke-ImGit $imA @("init", "-q"))
-    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`n")
+    [System.IO.File]::WriteAllText((Join-Path $imA ".gitignore"), "out/`nobj*/`nsrc/stor98/out/`ntools/`n")
     [System.IO.File]::WriteAllText((Join-Path $imA "src\xhci_ring.c"), "a")
     [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "a")
     [void](Invoke-ImGit $imA @("add", "-A")); [void](Invoke-ImGit $imA @("commit", "-q", "-m", "A"))
@@ -5787,9 +6699,7 @@ try {
         return $p
     }
     $imShaR = Set-ImBuild -Root $imB -Flavor "release"
-    $imShaD = Set-ImBuild -Root $imB -Flavor "debug"
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR
-    $imRecD = Set-ImRecord -Root $imB -Flavor "debug" -Sha $imShaD
     # A's own, older amd64 build, with a qemu record that covers its Stor98.
     $imShaQ = Set-ImBuild -Root $imA -Flavor "qemu" -Tag " old"
     $imOldQ = Set-ImRecord -Root $imA -Flavor "qemu" -Sha $imShaQ
@@ -5841,7 +6751,7 @@ try {
         Remove-Item -LiteralPath $lock -Recurse -Force
         Test-ImUnchanged "a lock"
     }
-    $imPending = [System.IO.Path]::ChangeExtension($imRecD, ".pending")
+    $imPending = [System.IO.Path]::ChangeExtension($imRecR, ".pending")
     [System.IO.File]::WriteAllText($imPending, "run=1")
     $r = Invoke-Import
     Assert-True ($r.Error.Contains("did not finish")) ("the import was not refused for a pending record: '{0}'" -f $r.Error)
@@ -5884,20 +6794,21 @@ try {
     $imOldQ = Set-ImRecord -Root $imA -Flavor "qemu" -Sha $imShaQ
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR
     # A copy that is not what the record admitted: no amd64 record at all.
-    $r = Invoke-Import -AfterCopy { [System.IO.File]::AppendAllText((Join-Path $imA "src\cm\objchk\amd64\xhcicm.sys"), "!") }
+    $r = Invoke-Import -AfterCopy { [System.IO.File]::AppendAllText((Join-Path $imA "src\cm\objfre\amd64\xhcicm.sys"), "!") }
     Assert-True ($r.Error.Contains("no amd64 record was written")) ("a copy that is not its record's was not refused: '{0}'" -f $r.Error)
     Assert-True (@($script:ImportObjDirs.Keys | Where-Object { Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $_) }).Count -eq 0) `
         "a failed import left an amd64 record in the cut's tree."
     foreach ($t in @($imA, $imB)) {
         Assert-True (-not (Test-Path -LiteralPath (Join-Path $t "out\gated-amd64.lock"))) "a failed import left the lock in '$t'."
     }
-    # The import that passes: release and debug, at a documentation commit
-    # past the build's, and nothing else.
+    # The import that passes: release (the one flavour B recorded since task
+    # 45.45 retired debug), at a documentation commit past the build's, and
+    # nothing else.
     [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "b")
     [void](Invoke-ImGit $imA @("commit", "-q", "-am", "B"))
     $r = Invoke-Import
-    Assert-True ($r.Error -eq "" -and $r.Result.Count -eq 2) ("the import of a clean build at an ancestor commit failed: '{0}'" -f $r.Error)
-    foreach ($f in @("release", "debug")) {
+    Assert-True ($r.Error -eq "" -and $r.Result.Count -eq 1) ("the import of a clean build at an ancestor commit failed: '{0}'" -f $r.Error)
+    foreach ($f in @("release")) {
         $dst = Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $f
         $src = Get-GatedManifestPath -Repo $imB -Arch "amd64" -Flavor $f
         Assert-True ((Test-Path -LiteralPath $dst) -and
@@ -5910,7 +6821,7 @@ try {
             Assert-True (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $bins[$n]) "beside.obj")) "the import did not bring the objects beside the $f $n."
         }
     }
-    Assert-True (@($r.Result | Where-Object { $null -ne $_.Advance -and $_.Advance.Commits -eq 1 }).Count -eq 2) "the import did not report the HEAD one documentation commit past the build."
+    Assert-True (@($r.Result | Where-Object { $null -ne $_.Advance -and $_.Advance.Commits -eq 1 }).Count -eq 1) "the import did not report the HEAD one documentation commit past the build."
     Assert-True (-not (Test-Path -LiteralPath $imOldQ)) "the import left the cut tree's qemu record, which covers the Stor98 it replaced."
     # A build input changed since the build: refused by name.
     [System.IO.File]::WriteAllText((Join-Path $imA "src\xhci_ring.c"), "c")
@@ -5927,11 +6838,11 @@ try {
     Assert-True ($null -ne $r -and $r.Contains("holds no amd64 lock of cut-builds.ps1's")) ("an import told its lock was held ran without it: '{0}'" -f $r)
     # cut-builds.ps1's own refusals, before any build: run here with
     # XHCI98_PACKAGER_SELFTEST=1, under which it never starts one.
-    $cb = Join-Path $PSScriptRoot "cut-builds.ps1"
+    $cb = Join-Path $fxRepo "scripts\package\cut-builds.ps1"
     $cbAlias = Join-Path $imRoot "repo-alias"
-    New-ImJunction $cbAlias $repo
+    New-ImJunction $cbAlias $fxRepo
     foreach ($c in @(
-        @{ Why = "the same tree";        Args = @("-X64Tree", $repo);   Says = "this tree itself" },
+        @{ Why = "the same tree";        Args = @("-X64Tree", $fxRepo);   Says = "this tree itself" },
         @{ Why = "the tree through a junction"; Args = @("-X64Tree", $cbAlias); Says = "(this tree itself|not the top of a worktree)" },
         @{ Why = "another repository";   Args = @("-X64Tree", $imOther); Says = "another repository" },
         @{ Why = "-NoTargetEvidence building"; Args = @("-X64Tree", $imB, "-NoTargetEvidence"); Says = "goes with -ImportOnly alone" },
@@ -5953,7 +6864,7 @@ try {
                  -not (Test-Path -LiteralPath (Join-Path $imA "out\gated-x86.lock"))) `
         ("a lock whose marker could not be written was kept: '{0}'" -f $r)
     # A stopped qemu build in B (its .pending, no record) is refused, though
-    # the default import would take release and debug alone.
+    # the default import would take release alone.
     $imQPending = [System.IO.Path]::ChangeExtension((Get-GatedManifestPath -Repo $imB -Arch "amd64" -Flavor "qemu"), ".pending")
     [System.IO.File]::WriteAllText($imQPending, "run=1")
     $r = Invoke-Import
@@ -5972,7 +6883,7 @@ try {
     Assert-True ($r.Error.Contains("junction") -and $r.Error.Contains("out")) ("an import through a junctioned out\ was not refused: '{0}'" -f $r.Error)
     [System.IO.Directory]::Delete($imAOut)
     Rename-Item -LiteralPath (Join-Path $imA "out-real") -NewName "out"
-    $imInner = Join-Path $imA "src\cm\objchk\amd64\linked"
+    $imInner = Join-Path $imA "src\cm\objfre\amd64\linked"
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $imInner) | Out-Null
     New-ImJunction $imInner $imOutside
     $r = Invoke-Import
@@ -5983,11 +6894,15 @@ try {
     # Writing a later record fails: the ones written are deleted again.
     $imHeadNow = Invoke-ImGit $imA @("rev-parse", "HEAD")
     $imRecR = Set-ImRecord -Root $imB -Flavor "release" -Sha $imShaR -Commit $imHeadNow
-    $imRecD = Set-ImRecord -Root $imB -Flavor "debug" -Sha $imShaD -Commit $imHeadNow
+    # Two records to write needs a second flavour in B: a qemu build, for
+    # this case alone (its record is removed after it).
+    $imShaBQ = Set-ImBuild -Root $imB -Flavor "qemu"
+    $imRecBQ = Set-ImRecord -Root $imB -Flavor "qemu" -Sha $imShaBQ -Commit $imHeadNow
     $r = $null
     try {
-        [void](Import-GatedBuild -Repo $imA -From $imB -Rules $biRules -BeforeWrite { param($F) if ($F -eq "debug") { throw "disk full" } })
+        [void](Import-GatedBuild -Repo $imA -From $imB -Rules $biRules -BeforeWrite { param($F) if ($F -eq "qemu") { throw "disk full" } })
     } catch { $r = $_.Exception.Message }
+    Remove-Item -LiteralPath $imRecBQ -Force
     Assert-True ($null -ne $r -and $r.Contains("every one written was deleted again") -and
                  @($script:ImportObjDirs.Keys | Where-Object { Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor $_) }).Count -eq 0) `
         ("a failure writing a later record left an earlier one: '{0}'" -f $r)
@@ -6053,14 +6968,14 @@ try {
     # import took A's amd64 lock as held and dropped none it did not take.
     $cb3 = Invoke-CbRun
     Assert-True ($cb3.Error -eq "" -and $cb3.Marks["x86"] -eq "held held" -and $cb3.Marks["amd64"] -eq "held held" -and
-                 $cb3.Locks.Count -eq 0 -and $cb3.Result.Imported.Count -eq 2 -and
-                 (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "debug"))) `
+                 $cb3.Locks.Count -eq 0 -and $cb3.Result.Imported.Count -eq 1 -and
+                 (Test-Path -LiteralPath (Get-GatedManifestPath -Repo $imA -Arch "amd64" -Flavor "release"))) `
         ("two stand-in builds at once and the import did not pass as designed: '{0}', x86 '{1}', amd64 '{2}', locks left {3}" -f `
             $cb3.Error, $cb3.Marks["x86"], $cb3.Marks["amd64"], ($cb3.Locks -join ", "))
     Assert-True (@($cb3.Result.Builds | Where-Object { $_.Elapsed.TotalSeconds -ge 1 -and $_.Elapsed -le $cb3.Result.Wall }).Count -eq 2) `
         "a build's own time was not taken from its process."
     $cb4 = Invoke-CbRun -Serial
-    Assert-True ($cb4.Error -eq "" -and $cb4.Result.Imported.Count -eq 2 -and $cb4.Locks.Count -eq 0 -and
+    Assert-True ($cb4.Error -eq "" -and $cb4.Result.Imported.Count -eq 1 -and $cb4.Locks.Count -eq 0 -and
                  $cb4.Result.Wall -ge ($cb4.Result.Builds[0].Elapsed + $cb4.Result.Builds[1].Elapsed)) `
         ("-Serial did not run the two one after the other and import: '{0}'" -f $cb4.Error)
     # The trees must be at one commit, clean, and free of either lock.
@@ -6083,10 +6998,63 @@ try {
                      [System.IO.Directory]::GetCurrentDirectory() -ne $imRoot) "Resolve-TreePath did not take a relative path against PowerShell's location."
         $r = $null
         try { $r = Invoke-CutBuilds -Repo "a" -X64Tree "b" -ImportOnly -Rules $biRules } catch { $r = $_.Exception.Message }
-        Assert-True ($r -isnot [string] -and $r.Imported.Count -eq 2) ("an import of relative trees failed: '{0}'" -f $r)
+        Assert-True ($r -isnot [string] -and $r.Imported.Count -eq 1) ("an import of relative trees failed: '{0}'" -f $r)
     } finally {
         Pop-Location
     }
+    # The default tree B (task 45.3): <A>-x64 made beside A at A's HEAD
+    # with A's tools\ directories linked, moved when A moves on, left when
+    # it is dirty, and refused when it is no worktree of A's repository.
+    Write-Step "the default tree B: made, its tools linked, moved with A, left when dirty, refused when foreign"
+    $dtTools = Join-Path $imA "tools\kit"
+    New-Item -ItemType Directory -Force -Path $dtTools | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $dtTools "kit.txt"), "kit")
+    $dtB = Get-DefaultCutX64Tree -Repo $imA
+    Assert-True ($dtB -eq (Join-Path $imRoot "a-x64")) ("the default tree B is '{0}', not a-x64 beside A" -f $dtB)
+    $r = $null
+    try { $r = Initialize-CutX64Tree -Repo $imA -X64Tree $dtB } catch { $r = $_.Exception.Message }
+    $dtHead = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    Assert-True ($r -eq $dtB -and (Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead -and
+                 (Test-Path -LiteralPath (Join-Path $dtB "tools\kit\kit.txt")) -and
+                 ((Get-Item -LiteralPath (Join-Path $dtB "tools\kit") -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint)) `
+        ("the default tree B was not made at A's HEAD with A's tools linked: '{0}'" -f $r)
+    Assert-True ((Get-GatedImportTreeFault -Repo $imA -From $dtB) -eq "") "the default tree B is not another worktree of A's repository."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "e")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "E"))
+    $dtHead2 = Invoke-ImGit $imA @("rev-parse", "HEAD")
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "the default tree B was not moved to A's new HEAD."
+    [System.IO.File]::WriteAllText((Join-Path $imA "notes.md"), "f")
+    [void](Invoke-ImGit $imA @("commit", "-q", "-am", "F"))
+    [System.IO.File]::WriteAllText((Join-Path $dtB "notes.md"), "dirty")
+    New-Item -ItemType Directory -Force -Path (Join-Path $imA "tools\kit2") | Out-Null
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and [System.IO.File]::ReadAllText((Join-Path $dtB "notes.md")) -eq "dirty") `
+        "a dirty default tree B was moved."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) "a dirty default tree B was given a link."
+    # A tree there that this script did not make (no marker naming A) is
+    # never moved, even clean.
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "--", "notes.md"))
+    Remove-Item -LiteralPath (Join-Path $dtB "out\cut-x64-tree.txt") -Force
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2) "a default tree B this script did not make was moved."
+    # Nor one on a branch, though marked.
+    [System.IO.File]::WriteAllText((Join-Path $dtB "out\cut-x64-tree.txt"), $imA)
+    [void](Invoke-ImGit $dtB @("checkout", "-q", "-b", "bside"))
+    [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtB)
+    Assert-True ((Invoke-ImGit $dtB @("rev-parse", "HEAD")) -eq $dtHead2 -and -not (Test-Path -LiteralPath (Join-Path $dtB "tools\kit2"))) `
+        "a default tree B on a branch was moved or given a link."
+    Assert-True (-not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-x86.lock")) -and -not (Test-Path -LiteralPath (Join-Path $dtB "out\gated-amd64.lock"))) `
+        "preparing tree B left a lock in it."
+    [System.IO.Directory]::Delete((Join-Path $dtB "tools\kit"))
+    [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $dtB))
+    $dtForeign = Join-Path $imRoot "foreign-x64"
+    New-Item -ItemType Directory -Force -Path $dtForeign | Out-Null
+    $r = ""
+    try { [void](Initialize-CutX64Tree -Repo $imA -X64Tree $dtForeign) } catch { $r = $_.Exception.Message }
+    Assert-True ($r.Contains("tree B") -and $r -match "not a git worktree|not the top of a worktree|another repository") ("a directory that is no worktree was taken as tree B: '{0}'" -f $r)
+    Remove-Item -LiteralPath (Join-Path $imA "tools") -Recurse -Force
+    [void](Invoke-ImGit $imA @("branch", "-D", "bside"))
     [System.IO.Directory]::Delete($cbAlias)
     if (Test-Path -LiteralPath $imAlias) { [System.IO.Directory]::Delete($imAlias) }
     [void](Invoke-ImGit $imA @("worktree", "remove", "--force", $imB))
@@ -6096,6 +7064,8 @@ try {
     $pcText = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot "package-common.ps1"))
     Assert-True ($pcText.Contains('$psi.EnvironmentVariables["TEMP"] = $tmp') -and $pcText.Contains('$psi.EnvironmentVariables["TMP"] = $tmp')) `
         "Start-CutBuild no longer gives each build its own TEMP and TMP."
+    Assert-True ($pcText.Contains('$psi.EnvironmentVariables["XHCI98_FULL_SELFTESTS"] = "1"')) `
+        "Start-CutBuild no longer has a cut's builds run every self-test in full (task 45.30)."
 
     # --- make-release.ps1 -CheckOnly (task 43.9) -----------------------------
     #
@@ -6151,7 +7121,10 @@ try {
     # the build-driver.cmd run holding the lock it refuses, before it reads or
     # writes anything. The token is cleared for the child, so a self-test run
     # inside build-driver.cmd cannot reach the real record either.
-    $writer = Join-Path $PSScriptRoot "write-gated-manifest.ps1"
+    $writer = Join-Path $fxRepo "scripts\package\write-gated-manifest.ps1"
+    $wLock = Join-Path $fxRepo "out\gated-x86.lock"
+    New-Item -ItemType Directory -Force -Path $wLock | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $wLock "run.txt"), "fixture-run-token`r`n")
     $savedRun = $env:XHCI98_GATED_RUN
     try {
         foreach ($tok in @($null, "not-this-run")) {
@@ -6166,6 +7139,7 @@ try {
         }
     } finally {
         $env:XHCI98_GATED_RUN = $savedRun
+        Remove-Item -LiteralPath $wLock -Recurse -Force -ErrorAction SilentlyContinue
     }
 
     # Where the record is checked and written.
@@ -6177,8 +7151,8 @@ try {
         "make-package.ps1 no longer reads each binary once and checks the gated build record before its gates and its signing."
     Assert-True ($soPkgText.Contains('$DriverPath = $snapBinaries["xhci98.sys"]')) `
         "make-package.ps1 -SignOnly no longer stages and signs the copy it hashed."
-    Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 4) `
-        "make-package.ps1 no longer guards exactly its four binary gates (host suite, import gates, helper) by `$runBinaryGates."
+    Assert-True (([regex]::Matches($soPkgText, 'if \(\$runBinaryGates\)')).Count -eq 5) `
+        "make-package.ps1 no longer guards exactly its five binary gates (host suite, import gates, the network images', helper) by `$runBinaryGates."
     $soBuildText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\build-driver.cmd"))
     $soLockAt = $soBuildText.IndexOf('mkdir "%GATEDLOCK%" 2>nul')
     $soMainAt = $soBuildText.IndexOf('call :mainbody')
@@ -6193,7 +7167,9 @@ try {
         @{ Gate = '-Image "%OUTSYS%" -Flavor %FLAVOR% -Arch %ARCH% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhci98.sys -Image "%OUTSYS%"' },
         @{ Gate = '-AllowPath "%UASALLOW%" %GATEOPT%';  Cap = 'call :gated -Capture -Name xhciuas.sys -Image "%UASSYS%"' },
         @{ Gate = '-AllowPath "%CMALLOW%" %GATEOPT%';   Cap = 'call :gated -Capture -Name xhcicm.sys -Image "%CMSYS%"' },
-        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' }
+        @{ Gate = '-AllowPath "%HLPRALLOW%" %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcihlpr.sys -Image "%HLPRSYS%"' },
+        @{ Gate = '-AllowPath "%NETALLOW%" %NETPROFILE% %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcinet.sys -Image "%NETSYS%"' },
+        @{ Gate = '-AllowPath "%NET6ALLOW%" -GateProfile net6 %GATEOPT%'; Cap = 'call :gated -Capture -Name xhcinet6.sys -Image "%NET6SYS%"' }
     )) {
         $g = $soBuildText.IndexOf($cap.Gate)
         $k = $soBuildText.IndexOf($cap.Cap)
@@ -6214,6 +7190,268 @@ try {
                  ([regex]::Matches($soBuildText, 'set "XHCI98_GATED_RUN="')).Count -eq 1 -and
                  ([regex]::Matches($soBuildText, 'XHCI98_GATED_RUN=')).Count -eq 2) `
         "build-driver.cmd sets XHCI98_GATED_RUN somewhere other than around the one writer call."
+
+    # The suite's git policy (task 45.51) is in force: no system
+    # configuration, the suite's own global one, no inherited injection, no
+    # hooks or templates in a new repository, and the same for a child.
+    Write-Step "the suite's git: one policy for its fixtures and every git it reaches"
+    Assert-True ("$env:GIT_CONFIG_NOSYSTEM" -eq "1" -and "$env:GIT_ATTR_NOSYSTEM" -eq "1" -and "$env:GIT_NO_REPLACE_OBJECTS" -eq "1" -and
+                 "$env:GIT_CONFIG_GLOBAL" -ne "" -and $null -eq $env:GIT_DIR -and $null -eq $env:GIT_CONFIG_PARAMETERS -and
+                 $null -eq $env:GIT_CONFIG_COUNT -and $null -eq $env:GIT_INDEX_FILE) "the suite's git policy is not in force in its environment."
+    $gpEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $gpSign = ((& git config --global --get commit.gpgsign 2>$null) | Out-String).Trim()
+        $gpOrigins = ((& git config --list --show-origin --show-scope 2>$null) | Out-String)
+        $gpRepo = Join-Path $script:work "git-policy-probe"
+        & git init -q $gpRepo 2>&1 | Out-Null
+        $gpChild = (@(& powershell.exe -NoProfile -Command '$env:GIT_CONFIG_NOSYSTEM; $env:GIT_CONFIG_GLOBAL' 2>$null) -join "|").Trim()
+    } finally {
+        $ErrorActionPreference = $gpEap
+    }
+    Assert-True ($gpSign -eq "false") "the suite's global git configuration does not turn signing off."
+    Assert-True ($gpOrigins -notmatch '(?m)^system\s') ("git still reads a system configuration under the suite's policy:`n" + $gpOrigins)
+    Assert-True (@(Get-ChildItem -LiteralPath (Join-Path $gpRepo ".git\hooks") -Force -ErrorAction SilentlyContinue).Count -eq 0) "a repository the suite makes still takes a template's hooks."
+    Assert-True ($gpChild -eq ("1|" + $env:GIT_CONFIG_GLOBAL)) "a child of the suite does not inherit its git policy."
+    # A caller's GIT_DEFAULT_HASH=sha256 still gives a SHA-1 fixture, and the
+    # caller's variables come back when the policy goes.
+    $gpOuter = @{}
+    foreach ($n in @("GIT_DEFAULT_HASH", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_NOSYSTEM", "GIT_DIR")) { $gpOuter[$n] = [Environment]::GetEnvironmentVariable($n) }
+    [Environment]::SetEnvironmentVariable("GIT_DEFAULT_HASH", "sha256")
+    [Environment]::SetEnvironmentVariable("GIT_DIR", "C:\no-such-git-dir")
+    $gpInner = Set-SelfTestGitPolicy -ScratchRoot (Join-Path $script:work "git-policy-inner")
+    try {
+        $gpRepo2 = Join-Path $script:work "git-policy-sha1"
+        $ErrorActionPreference = "Continue"
+        try {
+            & git init -q $gpRepo2 2>&1 | Out-Null
+            [System.IO.File]::WriteAllText((Join-Path $gpRepo2 "a.txt"), "a")
+            & git -C $gpRepo2 add a.txt 2>&1 | Out-Null
+            & git -C $gpRepo2 -c user.name=t -c user.email=t@t commit -q -m a 2>&1 | Out-Null
+            $gpHead = ((& git -C $gpRepo2 rev-parse HEAD 2>$null) | Out-String).Trim()
+        } finally {
+            $ErrorActionPreference = $gpEap
+        }
+        Assert-True ($gpHead -match '^[0-9a-f]{40}$') ("a caller's GIT_DEFAULT_HASH=sha256 reached a fixture under the git policy: HEAD '{0}'." -f $gpHead)
+    } finally {
+        Restore-SelfTestGitPolicy -Policy $gpInner
+    }
+    Assert-True ("$env:GIT_DEFAULT_HASH" -eq "sha256" -and "$env:GIT_DIR" -eq "C:\no-such-git-dir" -and
+                 "$env:GIT_CONFIG_GLOBAL" -eq "$($gpOuter["GIT_CONFIG_GLOBAL"])" -and -not (Test-Path -LiteralPath (Join-Path $script:work "git-policy-inner"))) `
+        "the git policy did not put the caller's variables back, or left its folder."
+    foreach ($n in $gpOuter.Keys) { [Environment]::SetEnvironmentVariable($n, $gpOuter[$n]) }
+
+    # The skip's digest (task 45.48; its set narrowed by task 45.51): it
+    # moves when a file of the packager's set changes, appears or goes, when
+    # releases\ gains a file even an ignored one, when a driver's stamp list
+    # names another file, and when a checkout's pinned tag moves; it stays
+    # for a driver source's content, a built image or driver, a build log,
+    # a file outside the set and an unrelated tag. Two trees of one commit
+    # give one digest.
+    Write-Step "the skip's digest: the packager's set, and nothing built"
+    $dg = Join-Path $script:work "digest-tree"
+    [void](New-SourceFixtureTree -Dir $dg)
+    foreach ($dd in @("scripts\package", "src\pfw\obj", "out\free\x86", "out\logs", "releases\1.0.0.0", "docs")) { New-Item -ItemType Directory -Force -Path (Join-Path $dg $dd) | Out-Null }
+    [System.IO.File]::WriteAllText((Join-Path $dg ".gitignore"), "out/`nobj/`nobjfre/`n*.sys`nscripts/local/`nreleases/*/out/`n")
+    foreach ($ff in @("scripts\package\make-package.ps1", "src\xhci98.inf", "releases\1.0.0.0\readme.txt", "docs\other.md")) { [System.IO.File]::WriteAllText((Join-Path $dg $ff), "a") }
+    $dgEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $dg init -q 2>&1 | Out-Null
+        & git -C $dg add -A 2>&1 | Out-Null
+        & git -C $dg -c user.name=xhci98-test -c user.email=test@invalid commit -q -m a 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $dgEap
+    }
+    $dg0 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dg0) "digest : no digest of a git tree."
+    $dgCases = @(
+        @{ Why = "a tracked script changed";             File = "scripts\package\make-package.ps1";   Moves = $true },
+        @{ Why = "a tracked INF changed";                File = "src\xhci98.inf";                     Moves = $true },
+        @{ Why = "the version header changed";           File = "src\xhci_version.h";                 Moves = $true },
+        @{ Why = "a driver's makefile changed";          File = "src\makefile";                       Moves = $true },
+        @{ Why = "an untracked script not ignored";      File = "scripts\package\new.ps1";            Moves = $true },
+        @{ Why = "a release record changed";             File = "releases\1.0.0.0\readme.txt";        Moves = $true },
+        @{ Why = "an ignored file under releases\";      File = "releases\1.0.0.0\out\SNAPON.BAT";    Moves = $true },
+        @{ Why = "a driver source changed";              File = "src\xhci_ring.c";                    Moves = $false },
+        @{ Why = "a driver header changed";              File = "src\xhci_log.h";                     Moves = $false },
+        @{ Why = "a UAS source changed";                 File = "src\uas\uas_xport.c";                Moves = $false },
+        @{ Why = "a Stor98 source changed";              File = "src\stor98\src\engine.c";            Moves = $false },
+        @{ Why = "a test source changed";                File = "test\test_ring.c";                   Moves = $false },
+        @{ Why = "a document outside the set";           File = "docs\other.md";                      Moves = $false },
+        @{ Why = "an untracked compiler intermediate";   File = "xhcitr\xhcitr.res";                  Moves = $false },
+        @{ Why = "the built XHCIPFW.VXD";                File = "src\pfw\obj\XHCIPFW.VXD";            Moves = $false },
+        @{ Why = "a built driver appeared";              File = "out\free\x86\stor98.sys";            Moves = $false },
+        @{ Why = "a built sys under src appeared";       File = "src\objfre\i386\xhci98.sys";         Moves = $false },
+        @{ Why = "a build log";                          File = "out\logs\x.log";                     Moves = $false },
+        @{ Why = "an ignored object under src";          File = "src\objfre\i386\x.obj";              Moves = $false }
+    )
+    foreach ($c in $dgCases) {
+        $ff = Join-Path $dg $c.File
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ff) | Out-Null
+        [System.IO.File]::WriteAllText($ff, "b-" + $c.File)
+        $dg1 = Get-PackagerSelfTestDigest -Root $dg
+        Assert-True (($dg1 -ne $dg0) -eq $c.Moves) ("digest : {0}: the digest {1}." -f $c.Why, $(if ($c.Moves) { "did not move" } else { "moved" }))
+        $dg0 = $dg1
+    }
+    # A source added to a driver's list moves it (a name the list gives);
+    # a tracked file of the set deleted moves it.
+    [System.IO.File]::WriteAllText((Join-Path $dg "src\xhci_new.c"), "n")
+    $dg1 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($dg1 -eq $dg0) "digest : a C source no list names moved the digest."
+    [System.IO.File]::WriteAllText((Join-Path $dg "src\sources"), "TARGETNAME=xhci98`r`nSOURCES= xhci_ring.c xhci_hcd.c xhci_new.c`r`n")
+    $dg0 = Get-PackagerSelfTestDigest -Root $dg
+    Remove-Item -LiteralPath (Join-Path $dg "src\xhci_new.c") -Force
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -ne $dg0) "digest : a file a driver's stamp list names going did not move the digest."
+    $dg0 = Get-PackagerSelfTestDigest -Root $dg
+    Remove-Item -LiteralPath (Join-Path $dg "src\xhci98.inf") -Force
+    $dg1 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($dg1 -ne $dg0) "digest : a tracked file deleted did not move the digest."
+    # A driver set's checkout in scripts\local\ (git-ignored): its appearing
+    # moves the digest, its pinned tag moves it, an unrelated tag does not.
+    $dgCo = Join-Path $dg "scripts\local\usb-wdm-nonfree"
+    # A file where the checkout would be is not its absence: the kept case
+    # takes any path there for a checkout and fails on it.
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dgCo) | Out-Null
+    [System.IO.File]::WriteAllText($dgCo, "not a checkout")
+    $dgFile = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dgFile -and $dgFile -ne $dg1) "digest : a file where a driver set's checkout would be read as no checkout."
+    Remove-Item -LiteralPath $dgCo -Force
+    New-Item -ItemType Directory -Force -Path $dgCo | Out-Null
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $dgCo init -q 2>&1 | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $dgCo "a.txt"), "a")
+        & git -C $dgCo add -A 2>&1 | Out-Null
+        & git -C $dgCo -c user.name=xhci98-test -c user.email=test@invalid commit -q -m a 2>&1 | Out-Null
+        & git -C $dgCo tag $script:NonFreePin.Tag 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $dgEap
+    }
+    $dg0 = $dg1
+    $dg1 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ($null -ne $dg1 -and $dg1 -ne $dg0) "digest : a driver set's checkout under scripts\local\ did not move the digest."
+    $ErrorActionPreference = "Continue"
+    try { & git -C $dgCo tag v9.9.9 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -eq $dg1) "digest : a tag the pin does not name moved the digest."
+    $ErrorActionPreference = "Continue"
+    try {
+        [System.IO.File]::WriteAllText((Join-Path $dgCo "a.txt"), "b")
+        & git -C $dgCo -c user.name=xhci98-test -c user.email=test@invalid commit -q -am b 2>&1 | Out-Null
+        & git -C $dgCo tag -f $script:NonFreePin.Tag 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $dgEap
+    }
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -ne $dg1) "digest : the pinned tag moved and the digest did not."
+    $ErrorActionPreference = "Continue"
+    try { & git -C $dgCo tag -d $script:NonFreePin.Tag 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
+    Assert-True ($null -eq (Get-PackagerSelfTestDigest -Root $dg)) "digest : a checkout without its pinned tag gave a digest."
+    Remove-Item -LiteralPath $dgCo -Recurse -Force
+    Remove-Item -LiteralPath (Join-Path $dg "releases\1.0.0.0\out") -Recurse -Force
+    $dg1 = Get-PackagerSelfTestDigest -Root $dg
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg) -eq $dg1) "digest : the digest of one tree is not the same twice."
+    Assert-True ($null -eq (Get-PackagerSelfTestDigest -Root (Join-Path $script:work "no-such-tree"))) "digest : a tree git cannot list gave a digest."
+    # Two trees of one commit, at two paths, give one digest, a variable
+    # naming each one's own root included.
+    $ErrorActionPreference = "Continue"
+    try {
+        & git -C $dg add -A 2>&1 | Out-Null
+        & git -C $dg -c user.name=xhci98-test -c user.email=test@invalid commit -q -m b 2>&1 | Out-Null
+        $dgTwo = Join-Path $script:work "digest-tree-two"
+        & git -C $dg worktree add -q --detach $dgTwo HEAD 2>&1 | Out-Null
+    } finally {
+        $ErrorActionPreference = $dgEap
+    }
+    $dgSavedDdk = $env:DDKROOT
+    try {
+        $env:DDKROOT = Join-Path $dg "tools\WinDDK71"
+        $dgOne = Get-PackagerSelfTestDigest -Root $dg -Inherited @(Get-PackagerSelfTestInherited -Root $dg)
+        $env:DDKROOT = Join-Path $dgTwo "tools\WinDDK71\"
+        $dgOther = Get-PackagerSelfTestDigest -Root $dgTwo -Inherited @(Get-PackagerSelfTestInherited -Root $dgTwo)
+        Assert-True ($null -ne $dgOne -and $dgOne -eq $dgOther) "digest : two trees of one commit gave two digests."
+        $env:DDKROOT = "C:\elsewhere\WinDDK71"
+        Assert-True ((Get-PackagerSelfTestDigest -Root $dgTwo -Inherited @(Get-PackagerSelfTestInherited -Root $dgTwo)) -ne $dgOther) "digest : a variable naming another place did not move the digest."
+    } finally {
+        $env:DDKROOT = $dgSavedDdk
+    }
+    $dgInh = @(Get-PackagerSelfTestInherited -Root $dg)
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh) -ne $dg1) "digest : the inherited environment did not reach the digest."
+    Assert-True ((Get-PackagerSelfTestDigest -Root $dg -Inherited ($dgInh + @("env:X=1"))) -ne (Get-PackagerSelfTestDigest -Root $dg -Inherited $dgInh)) `
+        "digest : a changed variable did not move the digest."
+
+    # The set's guard (task 45.51): every tracked file the scripts this
+    # suite runs name is in the packager's set, or below as a path no case
+    # reads as an input, with its reason. Its control: a script in the
+    # digest tree naming a tracked file outside the set is found.
+    Write-Step "the packager's set holds every tracked file its scripts name"
+    $gdNotInput = @{
+        "src\xhci_psw.c" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\xhci_psw.h" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\xhci_cmnet.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
+        "src\xhci_compat.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
+        "src\xhci_ring.c" = "a path the input rules' vectors and the import's fixtures classify or write in a fixture, never read here"
+        "docs\contributing\build-and-test.md" = "a path the input rules' vectors classify, never read here"
+        "src\stor98\tests\unit\build.cmd" = "a path the input rules' vectors classify, never read here"
+        "test\run-host-tests.cmd" = "the binary gates' host suite: every case that reaches it runs fixture P's host runner, and the input rules read fixture S's"
+    }
+    # The files of fixture tree S and of the digest's tree, named here to
+    # be written there, never read from this tree.
+    foreach ($n in @("src\xhci_log.c", "src\xhci_hlpr.c", "src\xhci_log.h", "src\xhci98_streams.h", "src\xhci_hlpr.h",
+                     "src\uas\uas_xport.c", "src\uas\uas.h", "src\stor98\src\sources", "src\stor98\src\engine.c", "test\test_ring.c")) {
+        $gdNotInput[$n] = "a file of fixture tree S or of the digest's tree, written there, never read from this tree"
+    }
+    $gdNotInput["src\stor98\src\sources"] = "also read in this tree, by source-stamp.ps1 -List alone, whose names the digest holds"
+    $gdSet = Get-PackagerSelfTestFileSet -Root $repo
+    $gdOut = @(Get-SelfTestUnlistedPaths -Root $repo -Set (@($gdSet.Listed) + @($gdSet.Named)) -NotInput $gdNotInput -Scripts @(
+                 "scripts\package\test-package.ps1", "scripts\package\make-package.ps1", "scripts\package\make-release.ps1",
+                 "scripts\package\package-common.ps1", "scripts\package\cut-builds.ps1", "scripts\package\write-gated-manifest.ps1",
+                 "scripts\inf-gate\check-inf.ps1", "scripts\inf-gate\check-cm-inf.ps1", "scripts\inf-gate\check-uas-inf.ps1",
+                 "scripts\inf-gate\check-stor98-inf.ps1", "scripts\inf-gate\check-txtsetup-oem.ps1",
+                 "scripts\import-gate\check-imports.ps1", "scripts\import-gate\evidence-common.ps1",
+                 "scripts\check-stor98-build.ps1", "scripts\check-stor98-header.ps1", "scripts\check-flavour-marker.ps1",
+                 "scripts\check-helper-build.ps1", "src\pfw\check-pfw.ps1", "src\pfw\nt\check-pfwsys.ps1", "src\vsd\check-vsd.ps1",
+                 "scripts\common.ps1", "scripts\test-harness.ps1", "scripts\source-stamp.ps1"))
+    Assert-True ($gdOut.Count -eq 0) ("guard : the packager's scripts name tracked files its digest does not hold: " + ($gdOut -join ", "))
+    [System.IO.File]::WriteAllText((Join-Path $dg "scripts\probe.ps1"), "`$x = Join-Path `$repo `"src\xhci_ring.c`"`r`n`$y = Join-Path `$repo 'src/xhci_hcd.c'`r`n")
+    $ErrorActionPreference = "Continue"
+    try { & git -C $dg add -A 2>&1 | Out-Null } finally { $ErrorActionPreference = $dgEap }
+    $gdProbe = @(Get-SelfTestUnlistedPaths -Root $dg -Scripts @("scripts\probe.ps1") -Set (@((Get-PackagerSelfTestFileSet -Root $dg).Listed)))
+    Assert-True ($gdProbe.Count -eq 2 -and $gdProbe[0] -eq "src\xhci_ring.c (scripts\probe.ps1:1)" -and $gdProbe[1] -eq "src\xhci_hcd.c (scripts\probe.ps1:2)") `
+        ("guard : a tracked driver source a script names, with either separator, was not found: " + ($gdProbe -join ", "))
+    $dgSaved = @{}
+    foreach ($n in @("XHCI98_GATED_RUN", "XHCI98_DIGEST_PROBE", "GIT_DIGEST_PROBE", "RUNT0", "STEPT0", "NORUN")) { $dgSaved[$n] = [Environment]::GetEnvironmentVariable($n) }
+    try {
+        [Environment]::SetEnvironmentVariable("XHCI98_GATED_RUN", "probe-1")
+        [Environment]::SetEnvironmentVariable("RUNT0", "probe-1")
+        [Environment]::SetEnvironmentVariable("STEPT0", "probe-1")
+        $dgA = @(Get-PackagerSelfTestInherited -Root $dg)
+        [Environment]::SetEnvironmentVariable("XHCI98_GATED_RUN", "probe-2")
+        [Environment]::SetEnvironmentVariable("RUNT0", "probe-2")
+        [Environment]::SetEnvironmentVariable("STEPT0", "probe-2")
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -eq ($dgA -join "|")) `
+            "digest : the gated run's token or a build's own per-run variable moved the inherited rows."
+        [Environment]::SetEnvironmentVariable("XHCI98_DIGEST_PROBE", "1")
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgA -join "|")) "digest : an XHCI98_ variable did not reach the inherited rows."
+        [Environment]::SetEnvironmentVariable("XHCI98_DIGEST_PROBE", $null)
+        [Environment]::SetEnvironmentVariable("GIT_DIGEST_PROBE", "1")
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgA -join "|")) "digest : a GIT_ variable did not reach the inherited rows."
+        [Environment]::SetEnvironmentVariable("GIT_DIGEST_PROBE", $null)
+        $dgB = @(Get-PackagerSelfTestInherited -Root $dg)
+        [Environment]::SetEnvironmentVariable("NORUN", $(if ($null -eq $dgSaved["NORUN"]) { "1" } else { $null }))
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -ne ($dgB -join "|")) "digest : NORUN, which run-host-tests.cmd reads, did not reach the inherited rows."
+        # A variable the git policy sets or clears is no input (task 45.51).
+        [Environment]::SetEnvironmentVariable("NORUN", $dgSaved["NORUN"])
+        $dgB = @(Get-PackagerSelfTestInherited -Root $dg)
+        $dgSaved["GIT_CONFIG_PARAMETERS"] = [Environment]::GetEnvironmentVariable("GIT_CONFIG_PARAMETERS")
+        $dgSaved["GIT_CONFIG_KEY_0"] = [Environment]::GetEnvironmentVariable("GIT_CONFIG_KEY_0")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", "'core.probe=1'")
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_0", "core.probe")
+        Assert-True ((@(Get-PackagerSelfTestInherited -Root $dg) -join "|") -eq ($dgB -join "|")) "digest : a variable the suite's git policy clears reached the inherited rows."
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_PARAMETERS", $dgSaved["GIT_CONFIG_PARAMETERS"])
+        [Environment]::SetEnvironmentVariable("GIT_CONFIG_KEY_0", $dgSaved["GIT_CONFIG_KEY_0"])
+    } finally {
+        foreach ($n in $dgSaved.Keys) { [Environment]::SetEnvironmentVariable($n, $dgSaved[$n]) }
+    }
 } finally {
     if (Test-Path -LiteralPath $script:work) {
         Remove-Item -LiteralPath $script:work -Recurse -Force -ErrorAction SilentlyContinue
@@ -6225,5 +7463,14 @@ if ($script:failures.Count -gt 0) {
     Write-Err ("packager self-tests FAILED: {0} of {1} check(s)." -f $script:failures.Count, $script:checks)
     exit 1
 }
+# The record of this pass, for the next run's skip in any tree: written
+# only if what may be read is still what the run began with (a change
+# during the run runs it again).
+if ($null -ne $digest -and (Get-PackagerSelfTestDigest -Root $repo -Inherited $inherited) -eq $digest) {
+    [void](Write-SelfTestPassRecord -Suite "packager" -Digest $digest -Checks $script:checks -Tree ([System.IO.Path]::GetFullPath($repo).TrimEnd('\')))
+}
 Write-Ok ("packager self-tests passed ({0} checks)" -f $script:checks)
 exit 0
+} finally {
+    Restore-SelfTestGitPolicy -Policy $gitPolicy
+}

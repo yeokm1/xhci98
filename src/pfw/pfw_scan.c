@@ -273,9 +273,10 @@ void PfwFunction(PFW_RESULT *r, PFW_U32 pass, PFW_U32 bus, PFW_U32 devfn,
     r->NSubj++;
 }
 
-/* Every bus 0 to 255, device 0 to 31, functions 1 to 7 only where
- * function 0 says the device has them (record 32 section 4.1 step 1). */
-void PfwScan(PFW_RESULT *r, PFW_U32 pass)
+/* Every bus first to last (0 to 255 for the whole step), device 0 to 31,
+ * functions 1 to 7 only where function 0 says the device has them (record
+ * 32 section 4.1 step 1; section 11.5.2: one root bus's range). */
+void PfwScan(PFW_RESULT *r, PFW_U32 pass, PFW_U32 first, PFW_U32 last)
 {
     PFW_U32 bus;
     PFW_U32 dev;
@@ -284,7 +285,7 @@ void PfwScan(PFW_RESULT *r, PFW_U32 pass)
     PFW_U32 id;
     PFW_U32 hdr;
 
-    for (bus = 0; bus < 256; bus++) {
+    for (bus = first; bus <= last && bus < 256; bus++) {
         for (dev = 0; dev < 32; dev++) {
             id = PfwCfgRead(bus, dev << 3, PFW_CFG_ID);
             if ((id & 0xFFFFUL) == 0xFFFFUL) {
@@ -330,14 +331,19 @@ void PfwRecord(PFW_RESULT *r, PFW_SUBJ *s, int action, PFW_U32 *after)
 
 void PfwRun(PFW_RESULT *r)
 {
+    PfwRunBuses(r, 0, 255);
+}
+
+void PfwRunBuses(PFW_RESULT *r, PFW_U32 first, PFW_U32 last)
+{
     PFW_U32 i;
     PFW_U32 after[3];
     PFW_SUBJ *s;
     int action;
 
-    PfwScan(r, 1);
+    PfwScan(r, 1, first, last);
     if (r->NSubj != 0) {
-        PfwScan(r, 2);
+        PfwScan(r, 2, first, last);
     }
     for (i = 0; i < r->NSubj; i++) {
         s = &r->Subj[i];

@@ -239,10 +239,20 @@ static void test_iad(void)
     CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
              XHCI_FUNC_NO_SPLIT, "EF/02/00: whole");
 
+    /* Task 45.34: several configurations split by configuration index 0,
+     * as the one-configuration twin above (a USB Audio 3.0 device's ADC
+     * 2.0 function, ADC 3.0 section 3.3). */
     copy_dev(iadDev);
     dev[17] = 2;
     CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
-             XHCI_FUNC_NO_SPLIT, "EF/02/01 with two configurations: whole");
+             XHCI_FUNC_OK, "EF/02/01 with two configurations: split");
+    CHECK_EQ(set.Count, 3, "two configurations: CDC, audio, HID");
+    check_func(&set.Func[1], 2, 0x0C, 2, 0x01, 0x00, 0x20, 66,
+               "two configurations: UAC 2.0 pair, the IAD's triple", __LINE__);
+    copy_dev(iadDev);
+    dev[17] = 255;
+    CHECK_EQ(XhciFuncSplit(dev, iadCfg, sizeof(iadCfg), &set),
+             XHCI_FUNC_OK, "255 configurations: split");
 }
 
 /* IAD over if0-1 (CDC), then AudioControl if2 and AudioStreaming if3 with
@@ -297,12 +307,19 @@ static void test_no_split(void)
     CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
              XHCI_FUNC_NO_SPLIT, "no configuration at all: whole");
 
-    /* Several configurations: Microsoft's composite parent leaves the
-     * device whole, under the driver that matched USB\VID_v&PID_p. */
+    /* Several configurations (task 45.34): split by configuration index
+     * 0 when the rule holds there; a class of its own, or one interface,
+     * still keeps the device whole. */
     copy_dev(cmDev);
     dev[17] = 2;
     CHECK_EQ(XhciFuncSplit(dev, cmCfg, sizeof(cmCfg), &set),
-             XHCI_FUNC_NO_SPLIT, "two configurations: whole");
+             XHCI_FUNC_OK, "two configurations, class 0: split");
+    CHECK_EQ(set.Count >= 1, 1, "two configurations: functions");
+    copy_dev(kbDev);
+    dev[4] = 0x02;
+    dev[17] = 2;
+    CHECK_EQ(XhciFuncSplit(dev, kbCfg, sizeof(kbCfg), &set),
+             XHCI_FUNC_NO_SPLIT, "two configurations, CDC class: whole");
     CHECK_EQ(set.Count, 0, "no functions");
 
     memcpy(one, kbCfg, 34);
@@ -311,6 +328,10 @@ static void test_no_split(void)
     copy_dev(kbDev);
     CHECK_EQ(XhciFuncSplit(dev, one, sizeof(one), &set), XHCI_FUNC_NO_SPLIT,
              "one interface: whole");
+    copy_dev(kbDev);
+    dev[17] = 2;
+    CHECK_EQ(XhciFuncSplit(dev, one, sizeof(one), &set), XHCI_FUNC_NO_SPLIT,
+             "two configurations, one interface: whole");
 }
 
 /* Task 36.46 (GitHub issue 17 item 7): SweetLow's low-speed mouse, VID 073A
@@ -612,12 +633,13 @@ static void test_ids(void)
              XHCI_FUNC_BAD_PARAM, "no such id");
 }
 
+/* A UAC 2.0 IAD (01/00/20): no bare USB\Class_01, which would bind a
+ * USB Audio 1.0 driver (design record 13 section 10.7.2). */
 static void test_iad_ids(void)
 {
     static const char compatIds[] =
         "USB\\Class_01&SubClass_00&Prot_20\0"
-        "USB\\Class_01&SubClass_00\0"
-        "USB\\Class_01\0";
+        "USB\\Class_01&SubClass_00\0";
     XHCI_FUNC_SET set;
     char out[128];
     ULONG used;
@@ -632,6 +654,7 @@ static void test_iad_ids(void)
     CHECK_EQ(used, sizeof(compatIds), "IAD compatible ids: length");
     CHECK_EQ(memcmp(out, compatIds, sizeof(compatIds)), 0,
              "IAD compatible ids: the IAD's SubClass 00, not the 01");
+    CHECK_EQ(out[sizeof(compatIds)], 'x', "IAD compatible ids: nothing past");
 }
 
 /*
@@ -761,6 +784,109 @@ static void check_instance(const char *serial, ULONG location, ULONG mi,
              XHCI_FUNC_OK, what);
     CHECK_EQ(used, (ULONG)strlen(want) + 1, what);
     CHECK_EQ(strcmp(out, want), 0, what);
+}
+
+/*
+ * Which class triples drop the bare class id (task 45.24; design record 13
+ * section 10.7.2): the audio class with protocol 20h or 30h only; the
+ * triple the split chose, an IAD's over its first interface's.
+ */
+static void test_compat_count(void)
+{
+    static const char ac20[] =
+        "USB\\Class_01&SubClass_01&Prot_20\0"
+        "USB\\Class_01&SubClass_01\0";
+    static const char ac30[] =
+        "USB\\Class_01&SubClass_00&Prot_30\0"
+        "USB\\Class_01&SubClass_00\0";
+    static const char ac10[] =
+        "USB\\Class_01&SubClass_01&Prot_00\0"
+        "USB\\Class_01&SubClass_01\0"
+        "USB\\Class_01\0";
+    static const char hid[] =
+        "USB\\Class_03&SubClass_01&Prot_01\0"
+        "USB\\Class_03&SubClass_01\0"
+        "USB\\Class_03\0";
+    static const char iad20[] =
+        "USB\\Class_01&SubClass_00&Prot_20\0"
+        "USB\\Class_01&SubClass_00\0";
+    static const char midi[] =
+        "USB\\Class_01&SubClass_03&Prot_00\0"
+        "USB\\Class_01&SubClass_03\0"
+        "USB\\Class_01\0";
+    static UCHAR cfg[sizeof(iadCfg)];
+    XHCI_FUNC_SET set;
+    XHCI_FUNC f;
+    char small[40];
+    ULONG used;
+
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x00, 0x20), 2, "UAC 2.0 IAD");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x01, 0x20), 2, "UAC 2.0 AudioControl");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x02, 0x20), 2, "UAC 2.0 AudioStreaming");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x00, 0x30), 2, "UAC 3.0");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x01, 0x00), 3, "UAC 1.0 AudioControl");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x03, 0x00), 3, "MIDIStreaming");
+    CHECK_EQ(XhciFuncCompatCount(0x03, 0x01, 0x01), 3, "HID boot keyboard");
+    CHECK_EQ(XhciFuncCompatCount(0xFF, 0x01, 0x20), 3, "vendor class, protocol 20");
+    CHECK_EQ(XhciFuncCompatCount(0x00, 0x00, 0x20), 3, "class 00");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x01, 0x10), 3, "a reserved protocol");
+    CHECK_EQ(XhciFuncCompatCount(0x01, 0x01, 0xFF), 3, "protocol FF");
+
+    memset(&f, 0, sizeof(f));
+    f.FirstInterface = 0;
+    f.InterfaceMask = 1;
+    f.InterfaceCount = 1;
+    copy_dev(cmDev);
+    f.Class = 0x01;
+    f.SubClass = 0x01;
+    f.Protocol = 0x20;
+    id_is(&f, 1, XHCI_FUNC_ID_COMPATIBLE, ac20, sizeof(ac20),
+          "compatible ids: 01/01/20, two");
+    f.SubClass = 0x00;
+    f.Protocol = 0x30;
+    id_is(&f, 1, XHCI_FUNC_ID_COMPATIBLE, ac30, sizeof(ac30),
+          "compatible ids: 01/00/30, two");
+    f.SubClass = 0x01;
+    f.Protocol = 0x00;
+    id_is(&f, 1, XHCI_FUNC_ID_COMPATIBLE, ac10, sizeof(ac10),
+          "compatible ids: 01/01/00, three");
+    f.Class = 0x03;
+    f.Protocol = 0x01;
+    id_is(&f, 1, XHCI_FUNC_ID_COMPATIBLE, hid, sizeof(hid),
+          "compatible ids: 03/01/01, three");
+
+    f.Class = 0x01;
+    f.SubClass = 0x01;
+    f.Protocol = 0x20;
+    used = 0;
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_COMPATIBLE, NULL, 0, &used),
+             XHCI_FUNC_TOO_SMALL, "two ids: the size query");
+    CHECK_EQ(used, sizeof(ac20), "two ids: their size, both NULs");
+    memset(small, 'x', sizeof(small));
+    CHECK_EQ(XhciFuncId(dev, &f, 1, XHCI_FUNC_ID_COMPATIBLE, small,
+                        sizeof(small) - 1, &used),
+             XHCI_FUNC_TOO_SMALL, "two ids: a buffer too small");
+    CHECK_EQ(used, sizeof(ac20), "two ids: the size it needs");
+    CHECK_EQ(memcmp(small, ac20, sizeof(small) - 1), 0,
+             "two ids: written to the buffer's end");
+    CHECK_EQ(small[sizeof(small) - 1], 'x', "two ids: not past it");
+
+    /* An IAD of 01/00/20 over an AudioControl interface saying 00: the
+     * IAD's triple; a MIDIStreaming interface outside the IAD: its own,
+     * all three. */
+    memcpy(cfg, iadCfg, sizeof(iadCfg));
+    cfg[74 + 7] = 0x00;
+    cfg[117 + 5] = 0x01;
+    cfg[117 + 6] = 0x03;
+    cfg[117 + 7] = 0x00;
+    copy_dev(iadDev);
+    CHECK_EQ(XhciFuncSplit(dev, cfg, sizeof(iadCfg), &set), XHCI_FUNC_OK,
+             "the altered IAD configuration splits");
+    CHECK_EQ(set.Count, 3, "three functions");
+    id_is(&set.Func[1], 1, XHCI_FUNC_ID_COMPATIBLE, iad20, sizeof(iad20),
+          "IAD 01/00/20 over AC 01/01/00: the IAD's two");
+    id_is(&set.Func[2], 1, XHCI_FUNC_ID_COMPATIBLE, midi, sizeof(midi),
+          "MIDIStreaming beside it: three");
 }
 
 static void test_serial_ids(void)
@@ -973,6 +1099,94 @@ static void test_revive(void)
 }
 
 /* Device text (task 33.6): the indexes a PDO is named from, in order. */
+/* Task 45.40: the deferral decision (design record 13 section 10.7). */
+static void test_serial_defer(void)
+{
+    const ULONG rtl = 0x0BDA8157UL;
+    const ULONG other = 0x0BDA8156UL;
+
+    /* The case it is for: a serial-named group of these ids last listed
+     * at the port, and this read failed or was refused. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_YES, "remembered serial form, read failed");
+    /* A usable read is never deferred, latched or not. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "read usable");
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_NO, "read usable, failure latched");
+    CHECK_EQ(XhciFuncSerialDefer(1, 0, rtl, rtl, 1, XHCI_FUNC_LATCH_BYPASS),
+             XHCI_FUNC_DEFER_NO, "read usable, bypass");
+    /* Not covered: a hub, behind a hub, or no iSerialNumber. */
+    CHECK_EQ(XhciFuncSerialDefer(0, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "not covered");
+    CHECK_EQ(XhciFuncSerialDefer(0, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_NO, "not covered, failure latched");
+    /* The port remembers another device, or the location form, or
+     * nothing. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, other, 1, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "other ids remembered");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 0, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "location form remembered");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, 0, 0, XHCI_FUNC_LATCH_NONE),
+             XHCI_FUNC_DEFER_NO, "nothing remembered");
+    /* The failure latched for this connection fails at once; a new
+     * connection's bypass publishes. */
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_FAIL, "failure latched, same connection");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, other, rtl, 1, XHCI_FUNC_LATCH_FAILED),
+             XHCI_FUNC_DEFER_FAIL, "failure latched, other ids read");
+    CHECK_EQ(XhciFuncSerialDefer(1, 1, rtl, rtl, 1, XHCI_FUNC_LATCH_BYPASS),
+             XHCI_FUNC_DEFER_NO, "bypass");
+}
+
+/* Task 45.40, behind hubs: the place table. */
+static void test_id_places(void)
+{
+    XHCI_ID_PLACE t[3];
+    PXHCI_ID_PLACE e;
+    PXHCI_ID_PLACE f;
+    ULONG clock;
+    ULONG i;
+
+    for (i = 0; i < 3; i++) {
+        t[i].Key = 0;
+        t[i].VidPid = 0;
+        t[i].Serial = 0;
+        t[i].Latch = 0;
+        t[i].Deferrals = 0;
+        t[i].Fails = 0;
+        t[i].Stamp = 0;
+    }
+    clock = 0xFFFFFFFEUL;   /* the clock wraps on the way */
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == NULL, "empty: not found");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0, &clock) == NULL, "key 0 taken never");
+    e = XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock);
+    CHECK(e == &t[0], "a free entry first");
+    e->VidPid = 0x0BDA8157UL;
+    e->Serial = 1;
+    e->Latch = XHCI_FUNC_LATCH_FAILED;
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == e, "found by its key");
+    f = XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock);
+    CHECK(f == e && f->VidPid == 0x0BDA8157UL && f->Serial == 1 &&
+              f->Latch == XHCI_FUNC_LATCH_FAILED,
+          "taken again: the same entry, kept");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x2203UL, &clock) == &t[1], "second");
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x3203UL, &clock) == &t[2], "third");
+    /* Full: entry 0, written before 1 and 2, would be reused - but take
+     * it again first, so entry 1 is now the oldest. */
+    CHECK(XhciFuncIdPlaceTake(t, 3, 0x1203UL, &clock) == &t[0], "refresh");
+    f = XhciFuncIdPlaceTake(t, 3, 0x4203UL, &clock);
+    CHECK(f == &t[1], "full: the least recently written reused");
+    CHECK(f->Key == 0x4203UL && f->VidPid == 0 && f->Serial == 0 &&
+              f->Latch == 0 && f->Deferrals == 0 && f->Fails == 0,
+          "reused: zeroed and named");
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x2203UL) == NULL, "the evicted gone");
+    CHECK(XhciFuncIdPlaceFind(t, 3, 0x1203UL) == &t[0] &&
+              t[0].VidPid == 0x0BDA8157UL,
+          "the refreshed one kept");
+    CHECK(XhciFuncIdPlaceFind(NULL, 3, 0x1203UL) == NULL, "no table");
+}
+
 static void check_picks(const UCHAR *device, const XHCI_FUNC *func,
                         const UCHAR *cfg, ULONG length, ULONG n, ULONG a,
                         ULONG b, ULONG c, const char *what, int line)
@@ -1468,10 +1682,13 @@ int main(void)
     test_setup();
     test_ids();
     test_id_edges();
+    test_compat_count();
     test_parent_ids();
     test_serial_ids();
     test_instance_ids();
     test_revive();
+    test_serial_defer();
+    test_id_places();
     test_text_picks();
     test_text();
     test_firsts();

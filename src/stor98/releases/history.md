@@ -4,6 +4,17 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.4.0.0 - not yet released
+
+- The download is laid out by Windows family. Windows 98 SE and ME
+  install Stor98 from 98-me\stor98\stor98.inf (named stor98w9.inf
+  before), with stor98.mpd and S98VSD.VXD beside it; 32-bit Windows
+  2000 to 10 from nt-x86\stor98\, 64-bit Windows from nt-x64\stor98\.
+- The 32-bit stor98.inf for Windows 2000 to 10 is for Windows NT only:
+  it no longer carries a Windows 98 SE / ME install section and no
+  longer names stor98.mpd, which nt-x86\stor98\ does not carry. What
+  each Windows installs is unchanged.
+
 ## 3.3.0.0 - not yet released
 
 - Windows 98 SE and ME: a drive on a PCI bus numbered above 15 is

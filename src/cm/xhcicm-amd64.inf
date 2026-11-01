@@ -24,7 +24,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/28/2026,3.3.0.0
+DriverVer=11/01/2026,3.4.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicm.cat
 
@@ -60,9 +60,10 @@ CatalogFile=xhcicm.cat
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E333
@@ -74,6 +75,7 @@ CatalogFile=xhcicm.cat
 %U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev,PCI\CC_0C0340
 
 [CmModels.NTamd64.6.0]
@@ -105,9 +107,10 @@ CatalogFile=xhcicm.cat
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine named beside the
-; class line, and any other USB4 host (class 0C/03/40) by the class line,
-; which the id lines outrank. All untested.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
+; ASM4242 (task 45.46) named beside the class line, and any other USB4
+; host (class 0C/03/40) by the class line, which the id lines outrank.
+; All untested.
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
@@ -119,6 +122,9 @@ CatalogFile=xhcicm.cat
 %U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425
+%Tb1LrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1513&CC_0880
+%Tb1CrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1547&CC_0880
 %U4Desc%=Cm.Dev6,PCI\CC_0C0340
 
 [SourceDisksNames]
@@ -135,7 +141,7 @@ Cm.CopyFiles=10,System32\Drivers
 ; --- Windows XP x64 and Server 2003 x64 -------------------------------------
 
 [Cm.Dev.NTamd64]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev.NTamd64.Services]
@@ -144,7 +150,7 @@ AddService=xhcicm,0x00000002,Cm.AddService
 ; --- Windows Vista x64 and 7 x64 --------------------------------------------
 
 [Cm.Dev6.NTamd64]
-AddReg=Cm.Values
+AddReg=Cm.Values,Cm.ValuesNt
 CopyFiles=Cm.CopyFiles
 
 [Cm.Dev6.NTamd64.Services]
@@ -169,6 +175,34 @@ HKR,,XhciCmLaneBonding,0x00010003,1
 HKR,,XhciCmPreOsCleanup,0x00010003,0
 ; The log's emission (record 21 section 8): 1 prints it to a debugger.
 HKR,,XhciCmLogDebugView,0x00010003,0
+; Thunderbolt networking (design record 35 section 8.1, task 45.59): off
+; until the installer's networking box or /tbnet writes XhciCmNet 1.
+HKR,,XhciCmNet,0x00010003,0
+HKR,,XhciCmNetPollMs,0x00010003,1
+HKR,,XhciCmNetRxFrames,0x00010003,128
+HKR,,XhciCmNetTxFrames,0x00010003,128
+HKR,,XhciCmNetE2E,0x00010003,1
+; Written since task 45.50 (record 21 section 8.1), each at the driver's
+; default: the tunnel ports' override, whose "auto" is the driver's own
+; finding (a REG_SZ; a list of bb:dd.f bridges replaces it), the ASM4242
+; credits experiment (record 22 section 18.8), the USB4 version 2 switch
+; (record 22 section 12) and, since task 45.56, its Gen 4 Link Recovery
+; switch (record 22 section 6.2.3 item 4).
+HKR,,XhciCmTunnelBridge,0x00000002,"auto"
+HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
+HKR,,XhciCmUsb4V2,0x00010003,1
+HKR,,XhciCmGen4LinkRecovery,0x00010003,1
+
+; Task 45.50: the values the driver uses on Windows 2000 to 10 alone, written
+; by their install paths alone: the NHI's interrupt (record 21 section 4.5).
+[Cm.ValuesNt]
+HKR,,XhciCmRingInterrupt,0x00010003,0
+
+; Task 45.50: the values the driver reads on Windows 2000 and XP (and XP
+; x64) alone, written by their install paths alone: the bridges' memory
+; windows set at a hot plug (design record 33 section 9.1).
+[Cm.ValuesNt5]
+HKR,,XhciCmBridgeReq,0x00010003,1
 
 [Cm.AddService]
 DisplayName=%CmSvcDesc%
@@ -178,8 +212,10 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhcicm.sys
 LoadOrderGroup=Base
 
+; No temporary-file field, as in xhcicm.inf: that field is the 9x engine's
+; replace-a-loaded-file route through WININIT.INI, which no NT install takes.
 [Cm.CopyFiles]
-xhcicm.sys,,xhcicm.tmp
+xhcicm.sys
 
 ; Right-click Install pre-stages the driver with no device present.
 [DefaultInstall.NTamd64]
@@ -189,6 +225,8 @@ CopyFiles=Cm.CopyFiles
 Provider="Yeo Kheng Meng"
 Mfg="xHCI98 Project"
 DiskName="xhci98 xHCI Host Controller Disk"
+Tb1LrDesc="xHCI98 TB1 Controller (Intel Light Ridge)"
+Tb1CrDesc="xHCI98 TB1 Controller (Intel Cactus Ridge)"
 Tb2FrDesc="xHCI98 TB2 Controller (Intel Falcon Ridge)"
 Tb3ArDesc="xHCI98 TB3 Controller (Intel Alpine Ridge)"
 Tb3TrDesc="xHCI98 TB3 Controller (Intel Titan Ridge)"
@@ -203,5 +241,6 @@ U4PlDesc="xHCI98 USB4 Router (Intel Panther Lake)"
 U4WlDesc="xHCI98 USB4 Router (Intel Wildcat Lake)"
 U4BrDesc="xHCI98 USB4 Router (Intel Barlow Ridge)"
 U4PsDesc="xHCI98 USB4 Router (AMD Pink Sardine)"
+U4AsDesc="xHCI98 USB4 Router (ASMedia ASM4242)"
 U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

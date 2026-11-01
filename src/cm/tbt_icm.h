@@ -43,8 +43,7 @@
  *
  * WHAT IS LEFT OUT, from what Linux's client does with the same firmware:
  * boot ACL reads and writes, keys and challenges (security level
- * "secure"), host-to-host (XDomain) paths, the USB4 router-operation proxy,
- * NVM upgrade, the firmware start path and CIO reset for a stopped ICM,
+ * "secure"), the USB4 router-operation proxy, NVM upgrade, the firmware start path and CIO reset for a stopped ICM,
  * and runtime suspend. Each row's lifecycle follows Linux icm_probe's hooks
  * for it: Falcon Ridge asks the route through the multi-packet topology
  * query (icm_fr_get_route), Alpine Ridge through get route; Titan Ridge and
@@ -53,6 +52,15 @@
  * suspend. Ice Lake's RTD3 veto is recorded (VetoActive) and needs nothing
  * more: it holds off a runtime suspend this driver never makes. Ice Lake's
  * fused host UUID and its force power are PCI configuration, tbt_hw.h's.
+ *
+ * HOST-TO-HOST LINKS (design record 35 section 3.10, task 45.59 step S4):
+ * with XhciCmNet 1 (TbtIcmSetNetConfig) the inter-domain events 0x06 and
+ * 0x07, the approve 0x10 and its teardown (Falcon and Alpine Ridge: NHI
+ * mailbox 0x10 or 0x11; Titan Ridge and Ice Lake: command 0x11 in two
+ * stages), in Linux's layouts (tb_msgs.h icm_fr_*_xdomain_*,
+ * icm_tr_*_xdomain_*), and one TBT_XDP_PEER (tbt_xdp.h, FirmwareCm) per
+ * link, ticked from TbtIcmPoll and fed from ring 0's XDomain sink. The
+ * service's operations (TBT_ICM_NET) are the driver's.
  *
  * Which row, and whether this client runs at all, is tbt_hw.h's
  * TbtHwSelect: TbtIcmStart is called only after it returned TBT_SEL_ICM.
@@ -80,6 +88,7 @@
 #include "../xhci_compat.h"
 #include "tbt_regs.h"
 #include "tbt_ring.h"
+#include "tbt_xdp.h"
 
 /* ---------------------------------------------------------------------- */
 /* ICM header word (ICM 3.1; Linux tb_msgs.h struct icm_pkg_header)       */
@@ -105,12 +114,17 @@
 #define TBT_ICM_CMD_DRIVER_READY    0x03UL  /* ICM_DRIVER_READY */
 #define TBT_ICM_CMD_APPROVE         0x04UL  /* ICM_APPROVE_DEVICE */
 #define TBT_ICM_CMD_GET_ROUTE       0x0AUL  /* ICM_GET_ROUTE */
+#define TBT_ICM_CMD_APPROVE_XD      0x10UL  /* ICM_APPROVE_XDOMAIN */
+#define TBT_ICM_CMD_DISCONNECT_XD   0x11UL  /* ICM_DISCONNECT_XDOMAIN */
 /* Event codes (ICM 4; enum icm_event_code). */
 #define TBT_ICM_EV_CONNECTED        0x03UL  /* ICM_EVENT_DEVICE_CONNECTED */
 #define TBT_ICM_EV_DISCONNECTED     0x04UL  /* ICM_EVENT_DEVICE_DISCONNECTED */
-#define TBT_ICM_EV_XD_CONNECTED     0x06UL  /* host-to-host; ignored */
-#define TBT_ICM_EV_XD_DISCONNECTED  0x07UL  /* host-to-host; ignored */
+#define TBT_ICM_EV_XD_CONNECTED     0x06UL  /* host-to-host (XhciCmNet 1) */
+#define TBT_ICM_EV_XD_DISCONNECTED  0x07UL  /* host-to-host (XhciCmNet 1) */
 #define TBT_ICM_EV_DP_CHANGED       0x08UL  /* DisplayPort; ignored */
+/* A one-DW response of this code follows every inter-domain frame the
+ * host sends, on Alpine Ridge (run-45 45-E.15 [obs]); answers no command. */
+#define TBT_ICM_XD_ACK_CODE         0x08UL
 #define TBT_ICM_EV_RTD3_VETO        0x0AUL  /* Ice Lake family; logged, ignored */
 
 /* Driver-ready flags: RTD3 is bit 6 on every generation that reports it
@@ -235,6 +249,26 @@ typedef struct _TBT_ICM_NAMES {
     ULONG IntelFlags;       /* its flags byte; bit 0 the device supports RTD3 */
 } TBT_ICM_NAMES, *PTBT_ICM_NAMES;
 
+/* A decoded inter-domain event (record 35 section 3.10; Linux tb_msgs.h
+ * icm_fr_event_xdomain_connected and _disconnected, icm_tr_event_xdomain_
+ * connected and _disconnected). Route is the local route of a connected
+ * event (the far host's router as this domain reaches it) and the route of
+ * a Titan Ridge disconnect, the CM bit clear; Link and Depth are a Falcon
+ * or Alpine Ridge event's link info (the depth naming the router the far
+ * host hangs off, 0 for a direct link), 0 on the other rows. */
+typedef struct _TBT_ICM_XD_EVENT {
+    ULONG Kind;             /* TBT_ICM_XE_* */
+    ULONG Link;
+    ULONG Depth;
+    TBT_ROUTE Route;
+    TBT_ROUTE RemoteRoute;
+    TBT_UUID Remote;
+    TBT_UUID Local;
+} TBT_ICM_XD_EVENT, *PTBT_ICM_XD_EVENT;
+
+#define TBT_ICM_XE_CONNECTED        1UL
+#define TBT_ICM_XE_DISCONNECTED     2UL
+
 /* A decoded device-connected event. */
 typedef struct _TBT_ICM_ANNOUNCE {
     ULONG Uuid[4];
@@ -252,6 +286,13 @@ typedef struct _TBT_ICM_ANNOUNCE {
     TBT_ICM_NAMES Names;
     ULONG RawWords;         /* the frame as received, for the log */
     ULONG Raw[TBT_FRAME_DWORDS];
+    /* Record 35 section 3.10: a host-to-host connected event queued in
+     * the same order as the devices' (IsXd TRUE: only Xd is meaningful). */
+    BOOLEAN IsXd;
+    TBT_ICM_XD_EVENT Xd;
+    /* A device's announcement a disconnect purged: kept in its place in
+     * the queue for its one effect on a host there (record 35 3.10). */
+    BOOLEAN ReplaceOnly;
 } TBT_ICM_ANNOUNCE, *PTBT_ICM_ANNOUNCE;
 
 /* A decoded device-disconnected event. */
@@ -261,6 +302,15 @@ typedef struct _TBT_ICM_GONE {
     BOOLEAN RouteValid;
     TBT_ROUTE Route;
 } TBT_ICM_GONE, *PTBT_ICM_GONE;
+
+/* Where a link's firmware paths are, as an approve or a teardown names
+ * them. */
+typedef struct _TBT_ICM_XD_ADDR {
+    ULONG Link;
+    ULONG Depth;
+    TBT_ROUTE Route;
+    TBT_UUID Remote;
+} TBT_ICM_XD_ADDR, *PTBT_ICM_XD_ADDR;
 
 /* One entry of the device table (record 21 section 5.3). */
 typedef struct _TBT_ICM_DEVICE {
@@ -282,6 +332,15 @@ typedef struct _TBT_ICM_DEVICE {
     TBT_ICM_NAMES Names;
     ULONG VersionState;     /* TBT_ICM_VER_*: this occupancy's router read */
     ULONG Usb4Version;      /* ROUTER_CS_4 31:24 where VersionState says USB4 */
+    /* The policy approved it, but its parent's approval is not yet
+     * established (record 34 section 4.6): no approve sent. OwedParent is
+     * the parent entry's serial then, 0 when there was none. */
+    BOOLEAN ApproveOwed;
+    ULONG OwedParent;
+    /* Kept from before a driver ready and not announced since: set with
+     * Stale, but cleared only by an announcement, never by a driver
+     * ready that failed (record 34 section 4.6). */
+    BOOLEAN Unconfirmed;
 } TBT_ICM_DEVICE, *PTBT_ICM_DEVICE;
 
 /* The router's generation, read once per occupancy where the driver asked
@@ -328,9 +387,20 @@ typedef struct _TBT_ICM_PROFILE {
      * length; the response echoes words 1 to 4, the UUID. NULL on a row
      * with no approve. */
     ULONG (*EncodeApprove)(const TBT_ICM_DEVICE *dev, PULONG dw);
+    /* Record 35 section 3.10: the inter-domain events, decoded (FALSE for
+     * a frame the row cannot read); the approve 0x10 with the transmit
+     * HopID and ring and the receive HopID and ring (room for
+     * TBT_ICM_XD_MAX_WORDS); the teardown command of `stage` 1 or 2, NULL
+     * on the rows that tear down through the NHI mailbox. */
+    BOOLEAN (*DecodeXdConnected)(const ULONG *dw, ULONG words, PTBT_ICM_XD_EVENT out);
+    BOOLEAN (*DecodeXdDisconnected)(const ULONG *dw, ULONG words, PTBT_ICM_XD_EVENT out);
+    ULONG (*EncodeXdApprove)(const TBT_ICM_XD_ADDR *addr, ULONG txHop, ULONG txRing,
+                             ULONG rxHop, ULONG rxRing, PULONG dw);
+    ULONG (*EncodeXdTeardown)(const TBT_ICM_XD_ADDR *addr, ULONG stage, PULONG dw);
 } TBT_ICM_PROFILE, *PTBT_ICM_PROFILE;
 
 #define TBT_ICM_APPROVE_MAX_WORDS   8UL
+#define TBT_ICM_XD_MAX_WORDS        9UL
 
 extern const TBT_ICM_PROFILE TbtIcmProfileFalconRidge;
 extern const TBT_ICM_PROFILE TbtIcmProfileAlpineRidge;
@@ -420,6 +490,103 @@ typedef BOOLEAN (*TBT_ICM_APPROVE_HOOK)(PVOID context,
                                         const TBT_ICM_DEVICE *dev);
 
 /* ---------------------------------------------------------------------- */
+/* Host-to-host links (design record 35 section 3.10)                     */
+/* ---------------------------------------------------------------------- */
+
+/* Linux tb_msgs.h: icm_*_event_xdomain_connected 14 DWs,
+ * icm_fr_event_xdomain_disconnected 6, icm_tr_event_xdomain_disconnected
+ * 7. A shorter frame is malformed. */
+#define TBT_ICM_XD_CONNECTED_WORDS  14UL
+#define TBT_ICM_FR_XD_GONE_WORDS    6UL
+#define TBT_ICM_TR_XD_GONE_WORDS    7UL
+/* Linux nhi.h NHI_MAILBOX_DISCONNECT_PA, _PB: Falcon and Alpine Ridge's
+ * teardown of a port's host-to-host paths, data 1 then 2 (icm.c
+ * icm_fr_disconnect_xdomain_paths). */
+#define TBT_ICM_MBOX_DISCONNECT_PA  0x10UL
+#define TBT_ICM_MBOX_DISCONNECT_PB  0x11UL
+/* Between the teardown's two steps (Linux usleep_range(10, 50)). */
+#define TBT_ICM_XD_GAP_US           20UL
+#define TBT_ICM_MAX_XD              2UL     /* links with a peer record */
+#define TBT_ICM_XD_QUEUE            8UL     /* inter-domain packets held */
+/* The maxhopid this host publishes and the Max Output HopID it assumes:
+ * the firmware's lane adapter is not read (record 35 section 3.10). */
+#define TBT_ICM_XD_MAXHOP           15UL
+/* The service's ring (record 35 section 4.3): 1, or 2 on Falcon Ridge. */
+#define TBT_ICM_XD_RING             1UL
+#define TBT_ICM_XD_RING_FR          2UL
+
+/*
+ * The service's operations, the same as tbt_u4cm.h's TBT_U4_NET so one set
+ * serves both profiles: RingsUp sets up and enables ring `ring` both ways
+ * (record 35 section 5.3), E2E as `e2e` says, TBT_OK or no service;
+ * Link(up) once the firmware built the paths, Link(down) before they are
+ * torn down; RingsDown after the teardown (`lost`: the host interface
+ * lost, nothing to disable). `port` is the peer record's slot + 1. All on
+ * the connection-manager thread, from TbtIcmPoll, TbtIcmRingWake,
+ * TbtIcmNetWanted, TbtIcmSuspend, TbtIcmUnbind, TbtIcmLost, TbtIcmRecover
+ * or TbtIcmResume; none may call back into this file.
+ */
+typedef struct _TBT_ICM_NET {
+    PVOID Context;
+    LONG (*RingsUp)(PVOID context, ULONG port, ULONG ring, BOOLEAN e2e);
+    VOID (*RingsDown)(PVOID context, ULONG port, BOOLEAN lost);
+    VOID (*Link)(PVOID context, ULONG port, BOOLEAN up, const UCHAR *peerMac6);
+} TBT_ICM_NET;
+
+struct _TBT_ICM;
+/* One link's peer record. */
+typedef struct _TBT_ICM_XD {
+    BOOLEAN Used;
+    BOOLEAN FwGone;         /* the firmware announced the link's end (a
+                               disconnect, or another host or a device at
+                               its place): its paths are not torn down    */
+    BOOLEAN Approved;       /* the approve answered: the paths stand      */
+    BOOLEAN ApproveUnknown; /* sent and never answered: they may          */
+    BOOLEAN EndPending;     /* a disconnect decoded: ended at the next run */
+    BOOLEAN Stale;          /* not announced again since a rediscovery's
+                               driver ready                               */
+    BOOLEAN RingsUp;
+    BOOLEAN LinkUp;
+    struct _TBT_ICM *Icm;
+    ULONG Slot;
+    ULONG Serial;           /* this occupancy's stamp, never 0 while Used */
+    TBT_ICM_XD_ADDR Addr;
+    TBT_ROUTE RemoteRoute;
+    TBT_UUID Local;
+    ULONG Ring;
+    ULONG TxHop;
+    ULONG RxHop;
+    TBT_XDP_PEER Peer;
+} TBT_ICM_XD, *PTBT_ICM_XD;
+
+typedef struct _TBT_ICM_XD_COUNTERS {
+    ULONG Connected;        /* events 0x06 decoded with XhciCmNet 1 */
+    ULONG Disconnected;     /* events 0x07 */
+    ULONG Malformed;
+    ULONG Deep;             /* a link not direct (record 35 section 13) */
+    ULONG Again;            /* re-announced at the same place: kept */
+    ULONG Replaced;         /* ended by an announcement at its place */
+    ULONG Full;             /* no free record */
+    ULONG Reconciled;       /* not announced again after a driver ready */
+    ULONG DevicesReplaced;  /* a device where a host was announced */
+    ULONG Packets;          /* inter-domain packets queued */
+    ULONG PacketsIgnored;   /* XhciCmNet 0: dropped unanswered */
+    ULONG PacketOverflows;
+    ULONG NoPeer;           /* no record at the packet's route */
+    ULONG NotReady;         /* a discovery request answered Not Ready */
+    ULONG Approves;
+    ULONG ApprovesOk;
+    ULONG ApprovesFailed;   /* the error flag */
+    ULONG ApprovesUnknown;  /* not answered */
+    ULONG ApprovesFenced;   /* refused: an earlier one's answer may come */
+    ULONG Teardowns;
+    ULONG TeardownsFailed;  /* not answered, or not sent */
+    ULONG TeardownsRefused; /* the error flag: nothing of it held */
+    ULONG TeardownsOwed;    /* left to the next approve */
+    ULONG OwedRetired;      /* an owed one the firmware's events settled */
+} TBT_ICM_XD_COUNTERS;
+
+/* ---------------------------------------------------------------------- */
 /* The client                                                             */
 /* ---------------------------------------------------------------------- */
 
@@ -466,6 +633,7 @@ typedef struct _TBT_ICM_COUNTERS {
     ULONG Recoveries;       /* TbtIcmRecover called */
     ULONG VersionReads;     /* router reads for the generation */
     ULONG VersionFailures;  /* of them, no generation known */
+    ULONG ApprovalsOwed;    /* deferred behind a parent (record 34 4.6) */
 } TBT_ICM_COUNTERS;
 
 typedef struct _TBT_ICM {
@@ -495,6 +663,7 @@ typedef struct _TBT_ICM {
     BOOLEAN Session;            /* driver ready was sent: 0x07 ends it */
     BOOLEAN VetoActive;         /* Ice Lake's RTD3 veto, for the log */
     BOOLEAN InWait;             /* a command or a poll is outstanding */
+    BOOLEAN XdAckLogged;        /* the first code-8 acknowledgement logged */
     ULONG WaitSlot;             /* the entry the outstanding command is for */
     ULONG WaitSerial;           /* 0 when it is for none */
     BOOLEAN WaitGone;           /* that entry was dropped during the wait */
@@ -538,6 +707,37 @@ typedef struct _TBT_ICM {
     ULONG TopoPorts[TBT_ICM_TOPO_PACKETS][TBT_ICM_TOPO_PORTS];
 
     TBT_ICM_COUNTERS Counters;
+
+    /* Record 35 section 3.10: the host-to-host links. Kept apart from
+     * Counters, whose names the driver lists one for one. */
+    BOOLEAN NetOn;              /* XhciCmNet */
+    ULONG NetRevision;          /* devicerv: the package version */
+    TBT_ICM_NET Net;
+    BOOLEAN NetWanted;          /* the network driver holds the service open */
+    ULONG NetPrtcstns;          /* what this host offers (record 35 4.1) */
+    BOOLEAN NetSerialValid;
+    ULONG NetSerialLo;
+    ULONG NetSerialHi;
+    BOOLEAN NetMacValid;
+    UCHAR NetMac[6];
+    BOOLEAN XdTaking;           /* the thread is running the records */
+    BOOLEAN XdQuiet;            /* the host interface lost: nothing sent */
+    BOOLEAN XdEndOwed;          /* an end of every record asked while they ran */
+    BOOLEAN XdEndOwedGone;
+    /* An approve or a teardown whose answer may still come and pass for
+     * a later one's: no approve is sent until the rings restart. */
+    BOOLEAN XdFenced;
+    ULONG XdFenceMs;            /* when, for the log */
+    ULONG XdNextSerial;
+    TBT_FRAME XdQ[TBT_ICM_XD_QUEUE];
+    ULONG XdHead;
+    ULONG XdCount;
+    /* One teardown owed (record 35 section 3.10): sent before the next
+     * approve. */
+    BOOLEAN XdOwed;
+    TBT_ICM_XD_ADDR XdOwedAddr;
+    TBT_ICM_XD Xd[TBT_ICM_MAX_XD];
+    TBT_ICM_XD_COUNTERS XdCounters;
 } TBT_ICM, *PTBT_ICM;
 
 /* Bind `icm` to its row (tbt_hw.h TBT_HW_PROFILE.Icm), its ring, the
@@ -603,6 +803,15 @@ LONG TbtIcmStart(PTBT_ICM icm, PVOID va, ULONG phys, ULONG bytes);
  */
 VOID TbtIcmPoll(PTBT_ICM icm);
 
+/*
+ * The ring interrupt's wake (design record 21 section 4.5.1): the idle
+ * poll's RX drain alone - every frame the RX ring holds decoded and acted
+ * on, then the events decoded meanwhile, under the same bounds - without
+ * its router read owed, its rediscovery or its count, which stay the idle
+ * poll's. A drain that finds the ring empty sends nothing.
+ */
+VOID TbtIcmRingWake(PTBT_ICM icm);
+
 /* Drain the RX ring as a wait does: device-connected events are queued
  * for the next TbtIcmPoll, disconnects act at once. Sends nothing. For the
  * driver's own waits (the tunnel-up poll of record 21 section 6.5). */
@@ -665,5 +874,28 @@ LONG TbtIcmRecover(PTBT_ICM icm, BOOLEAN full);
  * survive it; nothing is queued. Idempotent: 0x07 only after a driver
  * ready, nothing at all if the rings never started. */
 VOID TbtIcmUnbind(PTBT_ICM icm);
+
+/*
+ * Record 35 section 3.10, after TbtIcmInit and before TbtIcmStart:
+ * TbtIcmSetNetConfig takes XhciCmNet (FALSE, the default: the events are
+ * logged and ignored and every inter-domain packet is dropped unanswered)
+ * and the package version for devicerv. TbtIcmSetNet: the service's
+ * operations (NULL: none, and no service starts). TbtIcmSetNetSerial: the
+ * NHI's 64-bit PCI Express Device Serial Number, where the driver read
+ * one, for the MAC (record 35 section 4.4).
+ *
+ * On the thread: TbtIcmNetWanted, the network driver opened (TRUE, with
+ * the prtcstns it offers) or closed the service; every record's block is
+ * rebuilt and its peer told, a Login started or a Logout sent.
+ * TbtIcmNetIdentity: the adapter's MAC, FALSE with XhciCmNet 0 or before
+ * the bind. TbtIcmPeer: the peer of record `slot` (0 to
+ * TBT_ICM_MAX_XD - 1), NULL for none, for the log and the query device.
+ */
+VOID TbtIcmSetNetConfig(PTBT_ICM icm, BOOLEAN net, ULONG revision);
+VOID TbtIcmSetNet(PTBT_ICM icm, const TBT_ICM_NET *net);
+VOID TbtIcmSetNetSerial(PTBT_ICM icm, ULONG lo, ULONG hi);
+VOID TbtIcmNetWanted(PTBT_ICM icm, BOOLEAN wanted, ULONG prtcstns);
+BOOLEAN TbtIcmNetIdentity(PTBT_ICM icm, PUCHAR mac6);
+const TBT_XDP_PEER *TbtIcmPeer(const TBT_ICM *icm, ULONG slot);
 
 #endif /* TBT_ICM_H */

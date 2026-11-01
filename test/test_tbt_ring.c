@@ -127,6 +127,80 @@ static void test_start_refusals(void)
     CHECK_EQ(g_fake.Writes, 0, "a refused block writes nothing");
 }
 
+/* The RX Producer Index is the host interface's: one the start's base
+ * write left where it was is where the next frame lands, so the receive
+ * starts there with the Consumer Index one behind it; one unreadable is
+ * refused, the rings stopped. */
+static void test_rx_index_kept(void)
+{
+    ULONG dw[2];
+    TBT_FRAME f;
+
+    fakeReset();
+    g_fake.RxProdKept = 1;
+    g_fake.RxProd = 4;
+    CHECK_EQ(startRing(0), TBT_OK, "RX index kept: started");
+    CHECK_EQ(g_ring.RxNext, 4, "RX index kept: the receive starts at the producer");
+    CHECK_EQ(g_fake.RxCons, 3, "RX index kept: the consumer one behind it");
+    dw[0] = 0x01000003UL;
+    dw[1] = 7;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f) && f.Dw[1] == 7, "RX index kept: the frame received");
+
+    fakeReset();
+    g_fake.RxIndexOverride = 0xFFFFFFFFUL;
+    CHECK_EQ(startRing(0), TBT_E_HW, "RX index unreadable: refused");
+    CHECK_EQ(g_fake.RxCtrl, 0, "RX index unreadable: the RX ring stopped");
+    CHECK_EQ(g_fake.TxCtrl, 0, "RX index unreadable: the TX ring stopped");
+}
+
+/* A wait the gate ends (TBT_HOST.Cancelled) is no hardware fault and no
+ * timeout: the send's consume wait and the request's answer wait end
+ * TBT_E_STOPPED, neither counted, no retry sent. */
+static int g_cancel;
+static TBT_HOST g_cancelHost;
+
+static BOOLEAN cancelNow(PVOID context)
+{
+    (void)context;
+    return (BOOLEAN)(g_cancel != 0);
+}
+
+static void test_cancelled_waits(void)
+{
+    TBT_ROUTE root = { 0, 0 };
+    ULONG dw[3] = { 0, 0, 0 };
+    ULONG out[1];
+    ULONG sent;
+
+    fakeReset();
+    g_cancelHost = g_fakeHost;
+    g_cancelHost.Cancelled = cancelNow;
+    g_cancel = 0;
+    memset(&g_ring, 0, sizeof(g_ring));
+    CHECK_EQ(TbtRingStart(&g_ring, &g_cancelHost, fakeMem(), FAKE_PHYS,
+                          FAKE_MEM_BYTES, TBT_RX_PDF_ALL_ONES, 0),
+             TBT_OK, "cancelled: started");
+    g_fake.TxConsume = 0;
+    g_cancel = 1;
+    CHECK_EQ(TbtRingSend(&g_ring, 1, dw, 3), TBT_E_STOPPED, "cancelled: the send's wait");
+    CHECK_EQ(g_ring.Counters.TxStuck, 0, "cancelled: no ring counted stuck");
+
+    fakeReset();
+    g_cancel = 0;
+    memset(&g_ring, 0, sizeof(g_ring));
+    (void)TbtRingStart(&g_ring, &g_cancelHost, fakeMem(), FAKE_PHYS, FAKE_MEM_BYTES,
+                       TBT_RX_PDF_ALL_ONES, 0);
+    g_cancel = 1;
+    sent = g_fake.TxCount;
+    CHECK_EQ(TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 0, 0, 1, out, 100, 3),
+             TBT_E_STOPPED, "cancelled: the answer's wait");
+    CHECK_EQ(g_ring.Counters.CtlTimeouts, 0, "cancelled: no timeout counted");
+    CHECK_EQ(g_fake.TxCount - sent, 1, "cancelled: no retry sent");
+    g_cancel = 0;
+}
+
 static void test_send(void)
 {
     ULONG dw[3];
@@ -229,6 +303,73 @@ static void test_receive_wrap(void)
     }
     CHECK_EQ(g_fake.RxDropped, 0, "nothing dropped");
     CHECK_EQ(g_ring.RxNext, 25 % 10, "wrapped");
+}
+
+/* DW2 of RX descriptor i, little-endian in the common buffer. */
+static ULONG rxDescDw2(ULONG i)
+{
+    const unsigned char *p;
+
+    p = fakeMem() + TBT_RING_RX_DESC_OFF + TBT_DESC_BYTES * i + TBT_DESC_DW2;
+    return (ULONG)p[0] | ((ULONG)p[1] << 8) | ((ULONG)p[2] << 16) |
+           ((ULONG)p[3] << 24);
+}
+
+/* Task 45.22 (record 21 section 4.5.2): Interrupt Enable in the RX
+ * descriptors as the intent says, from the initial post on; and the
+ * watchdog's peek, which takes nothing. */
+static void test_rx_ie_and_pending(void)
+{
+    ULONG dw[2];
+    ULONG i;
+    ULONG bad;
+    TBT_FRAME f;
+
+    fakeReset();
+    CHECK_EQ(startRing(0), TBT_OK, "start, polling");
+    bad = 0;
+    for (i = 0; i < TBT_RING_ENTRIES; i++) {
+        if (rxDescDw2(i) != TBT_DESC_RS) {
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "polling: every RX descriptor RS alone, as before");
+    CHECK(!TbtRingRxPending(&g_ring), "nothing pending");
+
+    fakeReset();
+    memset(&g_ring, 0, sizeof(g_ring));
+    g_ring.RxIe = TRUE;
+    CHECK_EQ(TbtRingStart(&g_ring, &g_fakeHost, fakeMem(), FAKE_PHYS,
+                          FAKE_MEM_BYTES, TBT_RX_PDF_ALL_ONES, 0),
+             TBT_OK, "start, the interrupt intended");
+    CHECK(g_ring.RxIe, "the start keeps the intent");
+    bad = 0;
+    for (i = 0; i < TBT_RING_ENTRIES; i++) {
+        if (rxDescDw2(i) != (TBT_DESC_RS | TBT_DESC_IE)) {
+            bad++;
+        }
+    }
+    CHECK_EQ(bad, 0, "every initial descriptor carries IE: no wrap needed");
+    dw[0] = 0x01000003UL;
+    dw[1] = 7;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingRxPending(&g_ring), "a frame written back: pending");
+    CHECK(TbtRingRxPending(&g_ring), "the peek takes nothing");
+    CHECK_EQ(g_ring.Counters.Rx, 0, "and counts nothing");
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(f.Dw[1], 7, "the frame");
+    CHECK(!TbtRingRxPending(&g_ring), "nothing pending after it");
+    CHECK_EQ(rxDescDw2(0), TBT_DESC_RS | TBT_DESC_IE, "reposted with IE");
+    g_ring.RxIe = FALSE;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 2, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(rxDescDw2(1), TBT_DESC_RS, "after the retirement: reposted without");
+    CHECK_EQ(rxDescDw2(2), TBT_DESC_RS | TBT_DESC_IE,
+             "one already posted keeps what it was posted with");
+    TbtRingStop(&g_ring);
+    CHECK(!TbtRingRxPending(&g_ring), "a stopped ring: never pending");
 }
 
 static void test_rx_exhaustion(void)
@@ -1012,7 +1153,9 @@ static void test_u4_notifications(void)
     TbtCtlForget(&g_ctl, &dev);
     CHECK_EQ(g_ctl.DeferCount, 0, "a route below the unplugged one forgotten");
 
-    /* The silent codes, an unknown one and a stray request error. */
+    /* The silent codes, an unknown one and a stray request error;
+     * LINK_RECOVERY never acknowledged but delivered as a note (record 22
+     * section 6.2.3 item 4, task 45.20). */
     CHECK_EQ(u4Setup(0), TBT_OK, "start");
     {
         unsigned long e[3];
@@ -1032,8 +1175,11 @@ static void test_u4_notifications(void)
     fakePump();
     TbtCtlService(&g_ctl);
     CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK), 1, "only ERR_PLUG acknowledged (Guide 7.7.2)");
+    CHECK_EQ(countTx(TBT_PDF_NOTIFY_ACK_ENH), 0, "and no enhanced acknowledgement");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
-    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK first, for the port check");
+    CHECK_EQ(n.Code, TBT_EV_LINK_RECOVERY, "LINK_RECOVERY first, unacknowledged");
+    CHECK(TbtCtlNextNote(&g_ctl, &n), "a note queued");
+    CHECK_EQ(n.Code, TBT_EV_ERR_LOCK, "ERR_LOCK next, for the port check");
     CHECK(TbtCtlNextNote(&g_ctl, &n), "another");
     CHECK_EQ(n.Code, TBT_EV_ERR_PLUG, "ERR_PLUG");
     CHECK(!TbtCtlNextNote(&g_ctl, &n), "no more");
@@ -1047,6 +1193,8 @@ static void test_u4_notifications(void)
     CHECK_EQ(TbtCtlClassify(TBT_EV_DPTX_DISCOVERY), TBT_NOTE_ACK_IGNORE, "DPTX");
     CHECK_EQ(TbtCtlClassify(TBT_EV_ASYM_LINK), TBT_NOTE_SILENT, "ASYM_LINK");
     CHECK_EQ(TbtCtlClassify(TBT_EV_POP_CMPLT), TBT_NOTE_SILENT, "POP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_ROP_CMPLT), TBT_NOTE_SILENT, "ROP_CMPLT");
+    CHECK_EQ(TbtCtlClassify(TBT_EV_LINK_RECOVERY), TBT_NOTE_DELIVER, "LINK_RECOVERY");
     CHECK_EQ(TbtCtlClassify(TBT_EV_HP_ACK), TBT_NOTE_HP_ACK, "HP_ACK");
     CHECK_EQ(TbtCtlClassify(3), TBT_NOTE_UNKNOWN, "a reserved code");
 }
@@ -1202,15 +1350,96 @@ static void test_u4_safe_point_and_routes(void)
 /* Each vector named in the request trace (tbt_fake.h, task 44.38). */
 #define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
 
+/* Task 45.59 step S2 (design record 35 section 3.2): an intact
+ * inter-domain packet goes to the XDomain sink before any reader acts on
+ * it - the receive call and a control read's wait alike - and a reader
+ * sees it as nothing; with no sink it is delivered as before; a bad
+ * trailer drops it as any control packet. */
+static ULONG g_sinkCount;
+static ULONG g_sinkPdf;
+static ULONG g_sinkWord;
+
+static void onSink(PVOID context, const TBT_FRAME *f)
+{
+    (void)context;
+    g_sinkCount++;
+    g_sinkPdf = f->Pdf;
+    g_sinkWord = f->Words > 7 ? f->Dw[7] : 0xFFFFFFFFUL;
+}
+
+static void test_xdomain_sink(void)
+{
+    ULONG dw[8];
+    TBT_FRAME f;
+    TBT_ROUTE root = { 0, 0 };
+    ULONG out[2];
+    ULONG i;
+
+    for (i = 0; i < 8; i++) {
+        dw[i] = 0;
+    }
+    dw[1] = 1;
+    dw[2] = 5;              /* Data Size 5 */
+    dw[7] = 12;             /* a UUID Request's type */
+
+    fakeReset();
+    CHECK_EQ(startRing(0), TBT_OK, "start");
+    TbtRingSetXdomainSink(&g_ring, onSink, NULL);
+    g_sinkCount = 0;
+    fakeQueue(6, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "taken");
+    CHECK_EQ(g_sinkCount, 1UL, "to the sink");
+    CHECK_EQ(g_sinkPdf, 6UL, "PDF 6");
+    CHECK_EQ(g_sinkWord, 12UL, "its words");
+    CHECK_EQ(f.Words, 0UL, "the reader sees nothing");
+    CHECK((f.Flags & TBT_FRAME_DIVERTED) != 0, "marked diverted");
+    CHECK_EQ(g_ring.Counters.Xdomain, 1UL, "counted");
+
+    fakeQueue(7, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "PDF 7 taken");
+    CHECK_EQ(g_sinkCount, 2UL, "to the sink too");
+
+    fakeQueue(6, dw, 8, 0, FAKE_FLAG_BAD_CRC);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "bad trailer taken");
+    CHECK_EQ(g_sinkCount, 2UL, "not to the sink");
+    CHECK_EQ(f.Words, 0UL, "dropped as a control packet");
+
+    TbtRingSetXdomainSink(&g_ring, NULL, NULL);
+    fakeQueue(6, dw, 8, 0, 0);
+    fakePump();
+    CHECK(TbtRingReceive(&g_ring, &f), "with no sink");
+    CHECK_EQ(f.Words, 8UL, "delivered to the reader");
+    CHECK_EQ(g_ring.Counters.XdomainUnclaimed, 1UL, "counted unclaimed");
+
+    /* Inside a control read's wait: the sink, not the unsolicited
+     * receiver, and the read completes. */
+    readSetup(0);
+    TbtRingSetXdomainSink(&g_ring, onSink, NULL);
+    g_sinkCount = 0;
+    g_answerDelayUs = 200;
+    fakeQueue(7, dw, 8, 50, 0);
+    CHECK_EQ(TbtRingCtlRead(&g_ring, &root, TBT_CS_ROUTER, 5, 0, 2, out, 100, 0),
+             TBT_OK, "the read completes");
+    CHECK_EQ(g_sinkCount, 1UL, "the packet reached the sink during the wait");
+    CHECK_EQ(g_unsolicited, 0, "not the unsolicited receiver");
+}
+
 int main(void)
 {
     RUN_VEC(test_crc_vectors);
+    test_xdomain_sink();
     RUN_VEC(test_start);
     RUN_VEC(test_start_refusals);
+    RUN_VEC(test_rx_index_kept);
+    RUN_VEC(test_cancelled_waits);
     RUN_VEC(test_send);
     RUN_VEC(test_send_limits);
     RUN_VEC(test_tx_exhaustion);
     RUN_VEC(test_receive_wrap);
+    RUN_VEC(test_rx_ie_and_pending);
     RUN_VEC(test_rx_exhaustion);
     RUN_VEC(test_overflow_and_malformed);
     RUN_VEC(test_trailer);

@@ -75,7 +75,7 @@ launcher uses every boot (the CD's "Press any key" falls through to the hard
 disk).
 
 .EXAMPLE
-powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp64.ps1 -WinXp64Iso "D:\isos\Win XP SP2 VL x64.iso" -CreateDisk
+powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-winxp64.ps1 -WinXp64Iso "<iso folder>\Win XP SP2 VL x64.iso" -CreateDisk
 #>
 
 [CmdletBinding()]
@@ -192,6 +192,11 @@ if ($CreateDisk) {
             Write-Warn "Skipping $diskImage because qemu-img.exe is not available."
         } else {
             & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
+            # As setup-qemu.ps1 reads it: a failed create once printed "Created"
+            # for an image that does not exist (2026-10-29).
+            if ($LASTEXITCODE -ne 0) {
+                throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
+            }
             Write-Ok "Created $diskImage ($DiskSize)"
         }
     } else {

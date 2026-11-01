@@ -19,9 +19,10 @@
 # The footer the cut appends is make-release.ps1's own text and is checked
 # there; what a merge changes is the tracked readme.
 #
-# And releases\history.md, which the cut embeds in the release's top-level
-# readme.txt: rendered here as the cut renders it (Get-HistoryEmbedLines and
-# ConvertFrom-MarkdownBlocks, package-common.ps1's too) and held to the same
+# And releases\history.md, whose entry for the version the cut puts in the
+# release's top-level readme.txt (roadmap-usb4 task 45.29; the whole
+# history up to 3.3.0.0): every entry rendered here as the cut renders one
+# (ConvertFrom-MarkdownBlocks, package-common.ps1's too) and held to the same
 # rule, since the wrap cannot shorten a word longer than a line and passes a
 # non-ASCII character through. The rest of that readme is make-release.ps1's
 # template, met at a cut.
@@ -89,6 +90,28 @@ if ($SelfTest) {
         Write-Host "SELFTEST FAIL: a 79-character word in the history was not refused" -ForegroundColor Red
         $failed++
     }
+    # The readme's section 1 and 6 (task 45.29): one version's entry,
+    # without its heading, its three bullet depths, and the earlier releases.
+    $hl = @("# Title", "note", "", "## 2.0.0.0 - 2026-01-02", "", "### New", "", "- **a** bullet",
+            "  - a sub-bullet", "    - a third", "", "## 1.1.0.0 - 2026-01-01", "", "- old", "",
+            "## 1.0.0.0 - 2025-12-31", "", "- older")
+    $entry = @(Get-HistoryEntryLines -Lines $hl -Version "2.0.0.0")
+    $hist = @(ConvertFrom-MarkdownBlocks -Lines $entry -Width $script:PlainTextColumns)
+    $want = "  New||    * a bullet|        - a sub-bullet|            - a third"
+    if (($hist -join "|") -ne $want) {
+        Write-Host ("SELFTEST FAIL: the 2.0.0.0 entry rendered as '{0}', not '{1}'" -f ($hist -join "|"), $want) -ForegroundColor Red
+        $failed++
+    }
+    if (@(Get-HistoryEntryLines -Lines $hl -Version "1.0.0.0").Count -ne 1 -or @(Get-HistoryEntryLines -Lines $hl -Version "3.0.0.0").Count -ne 0) {
+        Write-Host "SELFTEST FAIL: the last entry, or a version with none, was not read as such" -ForegroundColor Red
+        $failed++
+    }
+    $earlier = @(Get-HistoryEarlierText -Lines $hl -Version "2.0.0.0" -Width $script:PlainTextColumns)
+    $first = @(Get-HistoryEarlierText -Lines $hl -Version "1.0.0.0" -Width $script:PlainTextColumns)
+    if (($earlier -join "|") -ne "  1.1.0.0, 1.0.0.0." -or ($first -join "|") -notmatch "first release") {
+        Write-Host ("SELFTEST FAIL: the earlier releases read '{0}' and '{1}'" -f ($earlier -join "|"), ($first -join "|")) -ForegroundColor Red
+        $failed++
+    }
 
     if ($script:ToolReadmeDirs.Count -lt 4) {
         Write-Host "SELFTEST FAIL: package-common.ps1 lists fewer than the four tool readmes" -ForegroundColor Red
@@ -110,8 +133,9 @@ foreach ($dir in $script:ToolReadmeDirs.Values) {
     $faults += @(Get-PlainTextFaults -Name $rel -Lines @(Read-ToolReadmeLines $path))
 }
 
-# The release history the top-level readme embeds, read as the cut reads it
-# (Get-Content; make-release.ps1's default -ReleasesDir).
+# The release history, read as the cut reads it (Get-Content;
+# make-release.ps1's default -ReleasesDir), every entry rendered as the cut
+# renders the version's own.
 $histRel = "releases\history.md"
 $histPath = Join-Path $repo $histRel
 if (-not (Test-Path -LiteralPath $histPath)) {

@@ -151,6 +151,20 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
                     PVOID const *snap, ULONG count, BOOLEAN truncated,
                     BOOLEAN active, ULONG now)
 {
+    BOOLEAN changed;
+
+    changed = CmMarksBury(m, member, memberBdf, 0, snap, count, active, now);
+    if (CmMarksMake(m, member, memberBdf, 0, snap, count, truncated, active,
+                    now)) {
+        changed = TRUE;
+    }
+    return changed;
+}
+
+BOOLEAN CmMarksBury(PCM_MARKS m, ULONG member, ULONG memberBdf,
+                    ULONG landing, PVOID const *snap, ULONG count,
+                    BOOLEAN active, ULONG now)
+{
     ULONG i;
     ULONG k;
     BOOLEAN found;
@@ -161,12 +175,10 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
     if (!active) {
         count = 0;
     }
-    if (active && truncated) {
-        m->Incomplete = 1;
-    }
     for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
         e = &m->E[i];
-        if (e->Pdo == NULL || e->Tomb || e->Member != member) {
+        if (e->Pdo == NULL || e->Tomb || e->Member != member ||
+            e->Landing != landing) {
             continue;
         }
         found = FALSE;
@@ -179,6 +191,55 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
             cmMkBury(m, e, now);
             changed = TRUE;
         }
+    }
+    return changed;
+}
+
+BOOLEAN CmMarksBuryLandings(PCM_MARKS m, ULONG member, const ULONG *keep,
+                            ULONG keepCount, ULONG now)
+{
+    ULONG i;
+    ULONG k;
+    BOOLEAN found;
+    BOOLEAN changed;
+    PCM_MARK e;
+
+    changed = FALSE;
+    for (i = 0; i < CM_QM_MAX_ENTRIES; i++) {
+        e = &m->E[i];
+        if (e->Pdo == NULL || e->Tomb || e->Member != member ||
+            e->Landing == 0) {
+            continue;
+        }
+        found = FALSE;
+        for (k = 0; keep != NULL && k < keepCount; k++) {
+            if (keep[k] == e->Landing) {
+                found = TRUE;
+            }
+        }
+        if (!found) {
+            cmMkBury(m, e, now);
+            changed = TRUE;
+        }
+    }
+    return changed;
+}
+
+BOOLEAN CmMarksMake(PCM_MARKS m, ULONG member, ULONG memberBdf,
+                    ULONG landing, PVOID const *snap, ULONG count,
+                    BOOLEAN truncated, BOOLEAN active, ULONG now)
+{
+    ULONG i;
+    ULONG k;
+    BOOLEAN changed;
+    PCM_MARK e;
+
+    changed = FALSE;
+    if (!active) {
+        return FALSE;
+    }
+    if (truncated) {
+        m->Incomplete = 1;
     }
     for (k = 0; k < count; k++) {
         if (snap[k] == NULL || CmMarksFind(m, snap[k]) != NULL) {
@@ -216,6 +277,7 @@ BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
         e->Pdo = snap[k];
         e->Member = member;
         e->MemberBdf = memberBdf;
+        e->Landing = landing;
         m->NextSerial++;
         if (m->NextSerial == 0) {
             m->NextSerial = 1;
@@ -384,6 +446,10 @@ static VOID cmMkEntry(UCHAR *b, const CM_MARK *e, ULONG safeOff)
     if (safeOff) {
         flags |= CM_QM_EF_SAFE_EJECT_OFF;
     }
+    if (e->Landing != 0) {
+        flags |= CM_QM_EF_CHAINED;
+        cmMkPut32(b, CM_QM_E_LANDING, e->Landing & 0xFFFFUL);
+    }
     cmMkPut32(b, CM_QM_E_MEMBER, e->MemberBdf);
     if (e->Flags & CM_QM_EF_LOCATED) {
         cmMkPut32(b, CM_QM_E_BUS, e->Bus);
@@ -431,6 +497,16 @@ ULONG CmMarksBuild(UCHAR *out, const CM_MARKS *m, const CM_QM_IN *in)
         }
     }
     flags = 0;
+    if (in->Bridges != NULL) {
+        /* Design record 33 section 4.3: after the entries and tombstones. */
+        for (i = 0; i < CM_QB_WORDS; i++) {
+            cmMkPut32(out, at + 4UL * i, in->Bridges[i]);
+        }
+        cmMkPut32(out, CM_QM_O_BR_OFFSET, at);
+        cmMkPut32(out, CM_QM_O_BR_BYTES, CM_QB_BYTES);
+        at += CM_QB_BYTES;
+        flags |= CM_QM_F_BRIDGES;
+    }
     if (m->Incomplete) {
         flags |= CM_QM_F_INCOMPLETE;
     }
@@ -514,6 +590,12 @@ PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
     }
     if (e == NULL) {
         *why = CM_MK_CONF_SERIAL;
+        return NULL;
+    }
+    if (e->Landing != 0) {
+        /* Windows' own eject of a chained unit is the whole eject; a
+         * member eject would take the first device's tunnel. */
+        *why = CM_MK_CONF_CHAINED;
         return NULL;
     }
     if ((e->Flags & CM_QM_EF_LOCATED) == 0 ||

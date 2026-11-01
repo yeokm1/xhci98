@@ -27,8 +27,9 @@
  *   corrupts the schedule; an unaddressed one does not (design doc 02
  *   section 3).
  *
- * C89 only. No MMIO, no DDK, no lock: the caller holds the controller lock
- * across every call.
+ * C89 only. No MMIO, no DDK, no lock: the graph is the controller thread's
+ * alone (hcd_hub.c, hcd_sshub.c; hcd_enum.c resets it), so no lock is held
+ * across a call and none is needed.
  */
 
 #include "xhci.h"
@@ -776,7 +777,8 @@ static VOID xhciTopoObservePortRequest(PXHCI_TOPOLOGY topo,
     selector = (ULONG)setup->wValue;
 
     /*
-     * **Only the three requests whose `wIndex` is a port number.** The
+     * **Only the two OUT requests whose `wIndex` is a port number** (the
+     * third, GET_STATUS, is an IN request and the PORT_IN arm's). The
      * recipient bits alone do not say that: a hub-class request to
      * recipient Other also covers `CLEAR_TT_BUFFER` (bRequest 8), whose `wIndex`
      * encodes an endpoint number, device address, endpoint type and direction,
@@ -787,8 +789,7 @@ static VOID xhciTopoObservePortRequest(PXHCI_TOPOLOGY topo,
      * descriptor overwrote it.
      */
     if (setup->bRequest != XHCI_TOPO_REQ_SET_FEATURE &&
-        setup->bRequest != XHCI_TOPO_REQ_CLEAR_FEATURE &&
-        setup->bRequest != XHCI_TOPO_REQ_GET_STATUS) {
+        setup->bRequest != XHCI_TOPO_REQ_CLEAR_FEATURE) {
         return;
     }
 

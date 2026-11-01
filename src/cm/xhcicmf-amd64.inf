@@ -27,7 +27,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=10/28/2026,3.3.0.0
+DriverVer=11/01/2026,3.4.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicmf.cat
 
@@ -39,6 +39,8 @@ CatalogFile=xhcicmf.cat
 ; 15C0 has been read by this project, every other line is untested.
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_15C0&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1513&CC_0604
+%TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1547&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_156D&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1576&CC_0604
 %TbBridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_1578&CC_0604
@@ -90,6 +92,8 @@ CatalogFile=xhcicmf.cat
 ; 15C0 has been read by this project, every other line is untested.
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_15C0&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156B&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1513&CC_0604
+%TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1547&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_156D&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1576&CC_0604
 %TbBridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_1578&CC_0604
@@ -197,8 +201,10 @@ ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhcicm.sys
 LoadOrderGroup=Base
 
+; No temporary-file field, as in xhcicmf.inf: that field is the 9x engine's
+; replace-a-loaded-file route through WININIT.INI, which no NT install takes.
 [CmFilter.CopyFiles]
-xhcicm.sys,,xhcicm.tmp
+xhcicm.sys
 
 [Strings]
 Provider="Yeo Kheng Meng"

@@ -71,6 +71,7 @@ typedef struct FAKE {
     unsigned long InmailCmd;
     int MboxMode;
     unsigned long MboxLog[FAKE_MBOX_LOG];
+    unsigned long MboxDataLog[FAKE_MBOX_LOG];  /* the data register at each command */
     unsigned long MboxCount;
     unsigned long Imr[4];
     unsigned long ImrWrites;
@@ -91,6 +92,8 @@ typedef struct FAKE {
     int TxConsume;                  /* the host interface fetches TX */
     unsigned long TxIndexOverride;  /* nonzero: the TX index register reads this */
     unsigned long RxBaseLo, RxBaseHi, RxSize, RxSizeReg, RxCtrl, RxPdf, RxProd, RxCons;
+    unsigned long RxIndexOverride;  /* nonzero: the RX index register reads this */
+    int RxProdKept;                 /* the RX base and size writes leave RxProd */
     unsigned long Ring1Ctrl;        /* TX Ring Control of ring 1, read only */
 
     unsigned long MemDw[FAKE_MEM_BYTES / 4];   /* DW-aligned host memory */
@@ -437,7 +440,11 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
     case 0x19820: return g_fake.Ring1Ctrl;
     case 0x08000: return g_fake.RxBaseLo;
     case 0x08004: return g_fake.RxBaseHi;
-    case 0x08008: return (g_fake.RxProd << 16) | g_fake.RxCons;
+    case 0x08008:
+        if (g_fake.RxIndexOverride != 0) {
+            return g_fake.RxIndexOverride;
+        }
+        return (g_fake.RxProd << 16) | g_fake.RxCons;
     case 0x0800C: return g_fake.RxSizeReg;
     case 0x29800: return g_fake.RxCtrl;
     case 0x29804: return g_fake.RxPdf;
@@ -446,6 +453,16 @@ static ULONG fakeRead32(PVOID ctx, ULONG off)
         return g_fake.Imr[(off - 0x38200) / 4];
     }
     return 0;
+}
+
+/* The base and size writes reset both RX indexes, but for a host
+ * interface modelled as leaving its producer where it was. */
+static void fakeRxIndexReset(void)
+{
+    if (!g_fake.RxProdKept) {
+        g_fake.RxProd = 0;
+    }
+    g_fake.RxCons = 0;
 }
 
 static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
@@ -467,6 +484,7 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
         if (v & 0x80000000UL) {
             if (g_fake.MboxCount < FAKE_MBOX_LOG) {
                 g_fake.MboxLog[g_fake.MboxCount] = v & 0xFFUL;
+                g_fake.MboxDataLog[g_fake.MboxCount] = g_fake.InmailData;
             }
             g_fake.MboxCount++;
             if (g_fake.MboxMode == FAKE_MBOX_COMPLETE) {
@@ -484,10 +502,10 @@ static void fakeWrite32(PVOID ctx, ULONG off, ULONG v)
     case 0x00008: g_fake.TxProd = (v >> 16) & 0xFFFFUL; fakeProcessTx(); return;
     case 0x0000C: g_fake.TxSize = v & 0xFFFFUL; g_fake.TxProd = g_fake.TxCons = 0; return;
     case 0x19800: g_fake.TxCtrl = v; return;
-    case 0x08000: g_fake.RxBaseLo = v; g_fake.RxProd = g_fake.RxCons = 0; return;
-    case 0x08004: g_fake.RxBaseHi = v; g_fake.RxProd = g_fake.RxCons = 0; return;
+    case 0x08000: g_fake.RxBaseLo = v; fakeRxIndexReset(); return;
+    case 0x08004: g_fake.RxBaseHi = v; fakeRxIndexReset(); return;
     case 0x08008: g_fake.RxCons = v & 0xFFFFUL; fakePump(); return;
-    case 0x0800C: g_fake.RxSizeReg = v; g_fake.RxSize = v & 0xFFFFUL; g_fake.RxProd = g_fake.RxCons = 0; return;
+    case 0x0800C: g_fake.RxSizeReg = v; g_fake.RxSize = v & 0xFFFFUL; fakeRxIndexReset(); return;
     case 0x29800: g_fake.RxCtrl = v; return;
     case 0x29804: g_fake.RxPdf = v; return;
     }

@@ -354,6 +354,151 @@ ULONG CmNvlinkU4Verdict(BOOLEAN pathClosed, BOOLEAN memberKnown,
     return CM_NVLINK_SEND;
 }
 
+ULONG CmNvlinkQ35Kind(ULONG pcieCaps, ULONG linkCap, ULONG slotCap)
+{
+    ULONG type;
+
+    type = XHCI_TBT_PCIE_TYPE(pcieCaps);
+    if (type != XHCI_TBT_PCIE_TYPE_ROOT && type != XHCI_TBT_PCIE_TYPE_DOWN) {
+        return CM_NVLINK_Q35_NONE;
+    }
+    /* No Power Controller: the emulator marks a slot empty at a guest's
+     * power-off write, before any stage 2, so a slot that has one is
+     * never admitted (record 34 section 3.11 item 5). */
+    if ((pcieCaps & XHCI_TBT_PCIE_SLOT_IMPL) == 0 ||
+        (slotCap & XHCI_TBT_SLOTCAP_HPC) == 0 ||
+        (slotCap & CM_NVLINK_SLOTCAP_PCP) != 0 ||
+        (linkCap & XHCI_TBT_LINKCAP_DLLLARC) == 0) {
+        return CM_NVLINK_Q35_NONE;
+    }
+    return type == XHCI_TBT_PCIE_TYPE_ROOT ? CM_NVLINK_Q35_ROOT
+                                           : CM_NVLINK_Q35_DOWN;
+}
+
+BOOLEAN CmNvlinkQ35Endpoint(ULONG id)
+{
+    return (BOOLEAN)(id != 0xFFFFFFFFUL &&
+                     (id & 0xFFFFUL) == CM_NVLINK_QEMU_VENDOR);
+}
+
+BOOLEAN CmNvlinkQ35IdValid(ULONG id)
+{
+    return (BOOLEAN)((id & 0xFFFFUL) != 0UL && (id & 0xFFFFUL) != 0xFFFFUL);
+}
+
+ULONG CmNvlinkSystemNt(ULONG major, ULONG minor, BOOLEAN win64)
+{
+    if (major == 5UL && minor == 0UL) {
+        return win64 ? CM_NVLINK_SYS_UNKNOWN : CM_NVLINK_SYS_2000;
+    }
+    if (major == 5UL && minor == 1UL) {
+        return win64 ? CM_NVLINK_SYS_UNKNOWN : CM_NVLINK_SYS_XP;
+    }
+    if (major == 5UL && minor == 2UL) {
+        return win64 ? CM_NVLINK_SYS_XP64 : CM_NVLINK_SYS_UNKNOWN;
+    }
+    if (major == 6UL && minor == 0UL) {
+        return win64 ? CM_NVLINK_SYS_VISTA64 : CM_NVLINK_SYS_VISTA;
+    }
+    if (major == 6UL && minor == 1UL) {
+        return win64 ? CM_NVLINK_SYS_764 : CM_NVLINK_SYS_7;
+    }
+    if (major == 6UL && minor == 2UL) {
+        return win64 ? CM_NVLINK_SYS_864 : CM_NVLINK_SYS_8;
+    }
+    if (major == 6UL && minor == 3UL) {
+        return win64 ? CM_NVLINK_SYS_8164 : CM_NVLINK_SYS_81;
+    }
+    if (major == 10UL && minor == 0UL) {
+        return win64 ? CM_NVLINK_SYS_1064 : CM_NVLINK_SYS_10;
+    }
+    return CM_NVLINK_SYS_UNKNOWN;
+}
+
+ULONG CmNvlinkSystem9x(ULONG vmmVersion)
+{
+    /* The first edition of 98 also answers 4.10; it is no target of this
+     * driver's. */
+    if ((vmmVersion & 0xFFFFUL) == 0x040AUL) {
+        return CM_NVLINK_SYS_98SE;
+    }
+    if ((vmmVersion & 0xFFFFUL) == 0x045AUL) {
+        return CM_NVLINK_SYS_ME;
+    }
+    return CM_NVLINK_SYS_UNKNOWN;
+}
+
+/*
+ * The q35 qualification (record 34 section 3.11 item 8): one row per
+ * system, a bit per kind and case (CmNvlinkQ35Bit). Every bit is 0 until
+ * a reading of task 45.18 passes it, and each is set by a commit that
+ * cites that reading (runs/run-45.md, "45.18"): Windows 2000, XP and XP
+ * x64, the root port's D1, read 2026-10-30; 98 SE and ME, read 2026-10-31
+ * and admitted by the owner's decision of that day (record 34 section 3.11
+ * item 8).
+ */
+static const UCHAR cmNvQ35Table[CM_NVLINK_SYSTEMS] = {
+    0, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
+
+ULONG CmNvlinkQ35Bit(ULONG kind, ULONG kase)
+{
+    if ((kind != CM_NVLINK_Q35_ROOT && kind != CM_NVLINK_Q35_DOWN) ||
+        kase > CM_NVLINK_CASE_M) {
+        return 0;
+    }
+    /* D2 lands on a chain port, always a downstream port. */
+    if (kase == CM_NVLINK_CASE_D2 && kind != CM_NVLINK_Q35_DOWN) {
+        return 0;
+    }
+    return 1UL << ((kind - 1UL) * 3UL + kase);
+}
+
+BOOLEAN CmNvlinkQ35QualifiedIn(const UCHAR *table, ULONG system, ULONG kind,
+                               ULONG kase)
+{
+    ULONG bit;
+
+    if (table == NULL || system == CM_NVLINK_SYS_UNKNOWN ||
+        system >= CM_NVLINK_SYSTEMS) {
+        return FALSE;
+    }
+    bit = CmNvlinkQ35Bit(kind, kase);
+    return (BOOLEAN)(bit != 0 && ((ULONG)table[system] & bit) != 0);
+}
+
+BOOLEAN CmNvlinkQ35Qualified(ULONG system, ULONG kind, ULONG kase)
+{
+    return CmNvlinkQ35QualifiedIn(cmNvQ35Table, system, kind, kase);
+}
+
+ULONG CmNvlinkU4VerdictQ35(BOOLEAN pathClosed, BOOLEAN memberKnown,
+                           ULONG kind, BOOLEAN platform, BOOLEAN qualified,
+                           ULONG reading, ULONG remainingMs)
+{
+    if (!pathClosed) {
+        return CM_NVLINK_PATH_OPEN;
+    }
+    if (!memberKnown) {
+        return CM_NVLINK_SEVERAL;
+    }
+    if (kind == CM_NVLINK_Q35_NONE || !platform) {
+        return CM_NVLINK_HARDWARE;
+    }
+    if (!qualified) {
+        return CM_NVLINK_UNQUALIFIED;
+    }
+    /* DOWN needs Link Active and Presence Detect both clear: a retrain
+     * clears Link Active alone, before stage 2 (MIXED). */
+    if (reading != XHCI_TBT_PORT_DOWN) {
+        return CM_NVLINK_NOT_DOWN;
+    }
+    if (remainingMs < CM_NVLINK_DELIVERY_MS) {
+        return CM_NVLINK_LATE;
+    }
+    return CM_NVLINK_SEND;
+}
+
 ULONG CmNvlinkWaitStep(const STOR98LS_TABLE *t, CM_NV_SHADOW *shadow,
                        PVOID owner, BOOLEAN receiver, ULONG nowMs,
                        ULONG boundMs, PULONG ends, PULONG count)

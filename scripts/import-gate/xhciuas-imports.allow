@@ -8,11 +8,13 @@
 # header says only what differs.
 #
 # EVERY ROW IS EITHER A PAIR xhci98.sys ALREADY IMPORTS, with that file's
-# evidence text verbatim, or one of three pairs new to the package, each with
-# its design record 13 Appendix A row (task 25.3's table): IoInitializeIrp
-# (row 26), IoCancelIrp (row 30) and IoBuildPartialMdl (row 129), each
-# "evidenced (stock 98 SE precedent)" there. No pair here is new to the
-# evidence base.
+# evidence text verbatim, or a pair new to the package with its design
+# record 13 Appendix A row (task 25.3's table), each "evidenced (stock 98 SE
+# precedent)" there: IoInitializeIrp (row 26), IoCancelIrp (row 30),
+# IoBuildPartialMdl (row 129), and for task 45.52 MmProbeAndLockPages (row
+# 131), MmUnlockPages (row 132) and KeGetCurrentThread (row 115). One pair
+# is new to the evidence base, task 45.52's _except_handler3, whose row
+# carries its evidence (design record 13 section 16.5).
 #
 # THE POOL RULE (design record 13 section 7.5) holds for this binary too:
 # every pool, MDL and IRP-memory pair is SITES=uas_mem.obj.
@@ -28,6 +30,7 @@
 [imports]
 
 # --- PnP, the FDO attach and the LUN PDOs ---
+ntoskrnl.exe!IoIsWdmVersionAvailable        all  required  w2k-export; win98-precedent ohci1394.sys 4.10.2222 (NTOSKRNL.EXE!IoIsWdmVersionAvailable, hint 51) (Appendix A row 40); NUSB USBPORT.SYS 5.00.2195.5652 (hint 55). Tells NT from 98 and ME for the nonpaged pool type (uas_mem.c, UasPoolInit; roadmap-usb4 task 45.63): (1, 0x10) is TRUE from Windows 2000 (WDM 1.10) on and FALSE on 98 (1.00) and ME (1.05)
 ntoskrnl.exe!IoCreateDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoCreateDevice, hint 38) (+43 other 98 SE); ntkern-name
 ntoskrnl.exe!IoDeleteDevice                  all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoDeleteDevice, hint 3D) (+41 other 98 SE); ntkern-name
 ntoskrnl.exe!IoAttachDeviceToDeviceStack     all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoAttachDeviceToDeviceStack, hint 30) (+36 other 98 SE); ntkern-name
@@ -43,6 +46,7 @@ ntoskrnl.exe!KeSetEvent                      all  required  w2k-export; win98-pr
 ntoskrnl.exe!KeClearEvent                    all  required  w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeClearEvent, hint 6E) (+5 other 98 SE); ntkern-name
 ntoskrnl.exe!KeWaitForSingleObject           all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeWaitForSingleObject, hint 95) (+51 other 98 SE); ntkern-name
 ntoskrnl.exe!KeDelayExecutionThread          all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeDelayExecutionThread, hint 6F) (+12 other 98 SE); ntkern-name
+ntoskrnl.exe!KeQuerySystemTime               all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQuerySystemTime, hint 80) (+9 other 98 SE) (design record 13 section 7.4; Appendix A row 97). Task 45.23's deadlines (uas_xport.c): the low word's difference only, no 64-bit arithmetic; inline on amd64
 
 # --- The engine: its lock, the one-second timer and the recovery worker ---
 ntoskrnl.exe!KeInitializeSpinLock            all  required  w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeInitializeSpinLock, hint 77) (+32 other 98 SE); ntkern-name
@@ -76,6 +80,15 @@ ntoskrnl.exe!IoFreeMdl                       all  required  SITES=uas_mem.obj w2
 ntoskrnl.exe!MmBuildMdlForNonPagedPool       all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbd.sys 4.10.2222 (NTOSKRNL.EXE!MmBuildMdlForNonPagedPool, hint 99) (+6 other 98 SE); ntkern-name
 ntoskrnl.exe!IoBuildPartialMdl               all  required  SITES=uas_mem.obj w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoBuildPartialMdl, hint 33) (+1 other 98 SE: sbp2port.sys) (design record 13 Appendix A row 129). The data MDL over a class driver's SRB buffer, as a port driver builds it
 ntoskrnl.exe!IoInitializeIrp                 all  required  SITES=uas_mem.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!IoInitializeIrp, hint 4D) (+9 other 98 SE) (design record 13 Appendix A row 26). Transfer IRPs in this driver's own pool, initialised before each use: IoReuseIrp has no Windows 98 evidence (row 27)
+
+# --- Task 45.52: a program's pass-through and SMART (design record 13 section 16) ---
+ntoskrnl.exe!MmProbeAndLockPages             all  required  SITES=uas_mem.obj w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!MmProbeAndLockPages, hint 9F) (+3 other 98 SE) (design record 13 Appendix A row 131). The direct pass-through's caller buffer (UasLockBuffer)
+ntoskrnl.exe!MmUnlockPages                   all  required  SITES=uas_mem.obj w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!MmUnlockPages, hint A5) (+7 other 98 SE) (design record 13 Appendix A row 132). That buffer's release (UasUnlockBuffer)
+ntoskrnl.exe!_except_handler3                all  required  SITES=uas_mem.obj w2k-export; win98-precedent USBSTOR.SYS 4.90.3000.1 of NUSB 3.3 (NTOSKRNL.EXE!_except_handler3, hint 46C), no stock 98 SE importer; ntkern-name; Windows ME's own KS.SYS, USBHUB.SYS, SYSAUDIO.SYS and TDI.SYS 4.90.3000.1 import it (hint 46C; static, read 2026-10-31 from the q35 ME base image). The compiler's __try frame around UasLockBuffer's MmProbeAndLockPages
+ntoskrnl.exe!KeGetCurrentThread              all  required  SITES=uas_pdo.obj w2k-export; win98-precedent ks.sys 4.10.2222 (NTOSKRNL.EXE!KeGetCurrentThread, hint 71) (+5 other 98 SE) (design record 13 Appendix A row 115). The direct form's issuing-thread check
+HAL.dll!KeGetCurrentIrql                     all  required  SITES=uas_pdo.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (HAL.DLL!KeGetCurrentIrql, hint 3) (+15 other 98 SE). The direct form's PASSIVE_LEVEL check
+ntoskrnl.exe!IoReleaseCancelSpinLock         all  required  SITES=uas_xport.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!IoReleaseCancelSpinLock, hint 57) (+12 other 98 SE); ntkern-name. A queued pass-through's cancel routine
+ntoskrnl.exe!InterlockedExchange             all  required  SITES=uas_xport.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!InterlockedExchange, hint 27) (+22 other 98 SE); ntkern-name. The IoSetCancelRoutine macro (uas_xport.c)
 
 [deny]
 

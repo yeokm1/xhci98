@@ -149,10 +149,18 @@ The settings below apply on 8, 8.1 and 10 as on 2000 to 7: the same key, the sam
 
 ## Settings
 
-Stor98 needs no settings: every value below is optional. The INFs write none of them,
-so an absent value means the built-in default on every system, and a later Stor98 with a
-better default applies it without the user doing anything. Updating the driver keeps any
-value the user set: the INFs neither write nor delete these values.
+Stor98 needs no settings: every value below is at its default as installed. Since xhci98
+3.4.0.0 the INFs write each one at the default for that system, so that every setting is
+already there, ready to change (xhci98 roadmap-usb4 45.50, owner 2026-10-30): on Windows 98
+SE / ME each value, on Windows 2000 to 10 one `DriverParameter` string holding every key
+below. An install or update writes a value only where it is missing, never over one
+already there: a value you set, or a `DriverParameter` you wrote (whole, whatever keys it
+holds), stays as it is, and a key missing from your `DriverParameter` still takes its
+default. So a value the install wrote keeps that number: a later Stor98 with a better
+default does not apply it by itself. To go back to the default, delete the value (or the
+key from `DriverParameter`, or `DriverParameter` itself, which the next update writes
+again) or set it to the default in the table. An absent value means the built-in
+default, as before. The INFs delete none of these values.
 
 One value changed its name: Stor98 0.3.0.0 and 0.3.0.1 read the Windows 98 SE / ME
 write-through value as `WriteThrough`, and 0.4.0.0 and later read only
@@ -168,7 +176,9 @@ Where they are set:
 - **Windows 2000 to 10:** one string value, `DriverParameter` (REG_SZ), in
   `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\Parameters\Device`, holding
   lower-case `key=value` pairs separated by semicolons, for example
-  `stormaxtransferkb=128;storpollmode=1;storpollbusyus=20000`. It is read when the controller starts:
+  `stormaxtransferkb=128;storpollmode=1;storpollbusyus=20000`. As installed it reads
+  `stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`.
+  It is read when the controller starts:
   at boot, or after disabling and enabling it in Device Manager (not at a resume from
   standby or hibernation, which keeps what was read at the start).
 
@@ -295,8 +305,9 @@ It gives the controller's Interrupt Pin (0 = none, 1-4 = INTA-INTD) and Interrup
 from its PCI configuration space, and whether it has the MSI and MSI-X capabilities
 (reported only; Stor98 uses neither). `port` is the interrupt level and vector Windows
 handed the driver. The last part is the outcome: `interrupt`, or `polling` with its
-reason (`forced by StorPollMode` on Windows 98 SE / ME, `forced by pollmode` on Windows
-2000 to 10, when polling was forced). Open it with Regedit, or export it with
+reason (`forced by StorPollMode` on Windows 98 SE / ME, `forced by storpollmode` on
+Windows 2000 to 10, when polling was forced; `INTx would not enable` when the
+controller's INTx enable did not read back as set). Open it with Regedit, or export it with
 `regedit /e report.reg "HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\stor98"`.
 On Windows 2000 to 10 it is not rewritten when the system resumes from hibernation.
 

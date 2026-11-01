@@ -505,12 +505,28 @@ ULONG HwFoundAdapter(
         NvmeReadReg32(DevExt, NVME_REG_CSTS) != 0xFFFFFFFF) {
         NvmeWriteReg32(DevExt, NVME_REG_INTMS, 0xFFFFFFFF);
         if (!DevExt->PollAlways) {
+            USHORT back;
+
             if (!ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &cmdReg)) {
                 return SP_RETURN_ERROR;
             }
             cmdReg &= ~PCI_INTERRUPT_DISABLE;
-            WritePciConfigWord(DevExt, PCI_COMMAND_OFFSET, cmdReg);
-            DevExt->IntxEnabled = TRUE;
+            // Read back, as the enables above are: an INTx that did not
+            // take would leave the engine waiting on interrupts that never
+            // come until a bus reset. It polls instead, and the port is
+            // given no interrupt to connect.
+            if (WritePciConfigWord(DevExt, PCI_COMMAND_OFFSET, cmdReg) &&
+                ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &back) &&
+                (back & PCI_INTERRUPT_DISABLE) == 0) {
+                DevExt->IntxEnabled = TRUE;
+            } else {
+                DevExt->PollWhy = POLL_WHY_INTX_OFF;
+                DevExt->PollAlways = TRUE;
+                ConfigInfo->BusInterruptLevel = 0;
+                ConfigInfo->BusInterruptVector = 0;
+                DBGMARK(STG_POLL_DECIDE, ((ULONG)DevExt->PollWhy << 16) |
+                        ((ULONG)DevExt->IntInfo.Flags << 24));
+            }
         }
     }
 
@@ -859,7 +875,10 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
         }
         ScsiCompletionStatus(Srb);
         ScsiPortNotification(RequestComplete, DeviceExtension, Srb);
-        ScsiPortNotification(NextRequest, DeviceExtension, NULL);
+        // NextRequest through the engine's debt (EngStartIoTail), so it is
+        // withheld while the engine cannot accept, as for any other SRB;
+        // never NextLuRequest, which is LU 0's and owed by none of these.
+        EngStartIoTail(DevExt, FALSE);
         return TRUE;
     }
 

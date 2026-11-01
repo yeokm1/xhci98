@@ -26,6 +26,13 @@
 #define CM_ID(dev) CM_PORTS_ID(CM_V, (dev))
 #define CM_N(a) (sizeof(a) / sizeof((a)[0]))
 
+/* Light Ridge and Cactus Ridge 4C (design record 22 section 19.4 item 4):
+ * their switch ports carry the NHI's id; the discrete-switch source takes
+ * type 1 siblings only, so the NHI itself is never a member. */
+static const ULONG cmLrNhi[] = { CM_ID(0x1513) };
+static const ULONG cmLrPort[] = { CM_ID(0x1513) };
+static const ULONG cmCrNhi[] = { CM_ID(0x1547) };
+static const ULONG cmCrPort[] = { CM_ID(0x1547) };
 static const ULONG cmFrNhi[] = { CM_ID(0x156A), CM_ID(0x156C) };
 static const ULONG cmFrPort[] = { CM_ID(0x156B), CM_ID(0x156D) };
 static const ULONG cmArNhi[] = { CM_ID(0x1575), CM_ID(0x1577), CM_ID(0x15BF),
@@ -87,6 +94,10 @@ static const ULONG cmEmuRoot[] = { CM_PORTS_ID(0x1B36, 0x000C) };
 static const ULONG cmUnpaired[] = { CM_PORTS_ID(0x1B36, 0x0001) };
 
 static const CM_FAMILY cmFamilies[] = {
+    { "light-ridge", cmLrNhi, CM_N(cmLrNhi), cmLrPort, CM_N(cmLrPort),
+      NULL, 0 },
+    { "cactus-ridge", cmCrNhi, CM_N(cmCrNhi), cmCrPort, CM_N(cmCrPort),
+      NULL, 0 },
     { "falcon-ridge", cmFrNhi, CM_N(cmFrNhi), cmFrPort, CM_N(cmFrPort),
       NULL, 0 },
     { "alpine-ridge", cmArNhi, CM_N(cmArNhi), cmArPort, CM_N(cmArPort),

@@ -38,9 +38,10 @@ OS file, each rule named as check-inf.ps1 names its families.
            nothing else - NUSB's USBSTOR.INF value, without which NUSB's
            port driver fails every unit (Code 10) - naming the file, never
            copying it; no .NTx86.HW or .NTamd64.HW section exists, so the NT
-           path is unchanged. UAS-TMPNAME (x86): xhciuas.sys is copied with
-           no temporary-file name; one would route the copy on Windows 98
-           through WININIT.INI and a restart even at a first install.
+           path is unchanged. UAS-TMPNAME: xhciuas.sys is copied with no
+           temporary-file name, in both INFs; one would route the copy on
+           Windows 98 through WININIT.INI and a restart even at a first
+           install, and no NT install takes that route.
   PKG-*    With -PackageDir: every [SourceDisksFiles] entry is in the staged
            package (PKG-LAYOUT), and no Microsoft file is, under any of the
            names UAS-MSFILE knows, at the root or below it (PKG-MSFILE).
@@ -215,8 +216,8 @@ function Test-UasInfText {
                 $file = ($l.Raw -split ',')[0].Trim()
                 if ($file -notmatch '^[A-Za-z0-9_\-]{1,8}(\.[A-Za-z0-9_]{1,3})?$') { & $add "W98-83" "[$name] copies '$file', not an 8.3 name." }
                 $tmpField = @($l.Raw -split ',')
-                if ($Profile -eq "x86" -and $file -ieq $binary -and $tmpField.Count -ge 3 -and $tmpField[2].Trim() -ne "") {
-                    & $add "UAS-TMPNAME" "[$name] gives $binary the temporary name '$($tmpField[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded."
+                if ($file -ieq $binary -and $tmpField.Count -ge 3 -and $tmpField[2].Trim() -ne "") {
+                    & $add "UAS-TMPNAME" "[$name] gives $binary the temporary name '$($tmpField[2].Trim())': Windows 98 then copies through WININIT.INI and asks for a restart at a first install, when the driver is not loaded, and no NT install takes that route."
                 }
                 $copied[$file.ToLowerInvariant()] = $destOf[$name.ToLowerInvariant()]
                 $file.ToLowerInvariant()
@@ -320,7 +321,11 @@ function Test-UasInfText {
             if ($as.Count -ne 1) { & $add "PATH-NT" "[$inst$ntSuffix.Services] needs exactly one AddService." }
             else {
                 $f = @($as[0] -split ',' | ForEach-Object { $_.Trim() })
-                if ($f.Count -lt 3 -or $f[0] -ine $service -or ([Convert]::ToInt32(($f[1] -replace '^0x', ''), 16) -band 2) -eq 0) {
+                # The flags field is read only when it is hex digits: an empty
+                # or malformed one is a refusal, never a parse exception.
+                $asFlags = -1L
+                if ($f.Count -ge 2 -and $f[1] -match '^(0x)?([0-9A-Fa-f]{1,8})$') { $asFlags = [Convert]::ToInt64($Matches[2], 16) }
+                if ($f.Count -lt 3 -or $f[0] -ine $service -or $asFlags -lt 0 -or ($asFlags -band 2) -eq 0) {
                     & $add "PATH-NT" "AddService must be $service with flag 0x2 (the function driver) and a service section."
                 } else {
                     $svc = & $get $f[2]
@@ -400,7 +405,9 @@ if ($SelfTest) {
                 @{ Rule = "UAS-ID";        Text = $text.Replace("Prot_62", "Prot_50") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.Svc]") },
                 @{ Rule = "PATH-NT";       Text = $text.Replace("[Uas.Dev.NTx86]`r`nCopyFiles=Uas.CopyFiles", "[Uas.Dev.NTx86]") },
-                @{ Rule = "PATH-9X";       Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("AddService=xhciuas,0x00000002,Uas.AddService", "AddService=xhciuas,,Uas.AddService") },
+                @{ Rule = "PATH-NT";       Text = $text.Replace("AddService=xhciuas,0x00000002,Uas.AddService", "AddService=xhciuas,0xZZ,Uas.AddService") },
+                @{ Rule = "PATH-9X";      Text = $text.Replace("HKR,,NTMPDriver,,xhciuas.sys", "HKR,,NTMPDriver,,other.sys") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "W98-DIRID12";   Text = $text.Replace("Uas.CopyFiles=10,System32\Drivers", "Uas.CopyFiles=12") },
                 @{ Rule = "W98-SECTLEN";   Text = $text.Replace("[Uas.AddService]", "[Uas.AddService.Very.Long.Section]").Replace("Uas.AddService`r`n", "Uas.AddService.Very.Long.Section`r`n").Replace(",Uas.AddService", ",Uas.AddService.Very.Long.Section") },
@@ -429,7 +436,8 @@ if ($SelfTest) {
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[UasModels.NTamd64]", "[UasModels]`r`n%UasDesc%=Uas.Dev,USB\Class_08&SubClass_06&Prot_62`r`n`r`n[UasModels.NTamd64]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64]", "[Uas.Dev]`r`nCopyFiles=Uas.CopyFiles`r`n`r`n[Uas.Dev.NTamd64]") },
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
-                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("xhciuas.sys,,xhciuas.tmp", "xhciuas.sys,,xhciuas.tmp`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbd.sys,,,16") },
+                @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
                 @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat`r`n", "") },
@@ -442,7 +450,12 @@ if ($SelfTest) {
             $total++
             $got = @(Test-UasInfText -Bytes ([System.Text.Encoding]::GetEncoding(28591).GetBytes($c.Text)) -HeaderText $headerText -Package "" -Profile $profile)
             $hit = @($got | Where-Object { $_.StartsWith($c.Rule + " ") })
-            if ($hit.Count -eq 0) {
+            if ($c.Text -eq $text) {
+                # A mutation whose anchor text is gone changes nothing, and
+                # the committed file's own refusals would then pass for it.
+                $bad++
+                Write-Err "$profile mutation for $($c.Rule) did not change the file - the self-test is stale."
+            } elseif ($hit.Count -eq 0) {
                 $bad++
                 Write-Err ("$profile mutation for $($c.Rule) was not refused by that rule. Got:`n  " + ($got -join "`n  "))
             } else {

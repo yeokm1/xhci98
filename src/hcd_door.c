@@ -125,8 +125,6 @@
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define HCD_SNAPSHOT_FLAVOUR XHCI_SNAPSHOT_FLAVOUR_QEMU
-#elif defined(XHCI_FLAVOUR_DEBUG)
-#define HCD_SNAPSHOT_FLAVOUR XHCI_SNAPSHOT_FLAVOUR_DEBUG
 #elif defined(XHCI_FLAVOUR_RELEASE)
 #define HCD_SNAPSHOT_FLAVOUR XHCI_SNAPSHOT_FLAVOUR_RELEASE
 #else
@@ -554,11 +552,16 @@ static VOID hcdNameDelete(PHCD_CONTROLLER hc, ULONG *taken, PWCHAR name,
 /* The door's lifetime                                                      */
 /* ----------------------------------------------------------------------- */
 
-/* IRQL: PASSIVE_LEVEL. */
+/* Entry past a bounded run of unsatisfied waits is recorded, not refused
+ * (HcdWaitEvent). IRQL: PASSIVE_LEVEL. */
 VOID HcdDoorGateEnter(PHCD_CONTROLLER hc)
 {
-    (VOID)KeWaitForSingleObject(&hc->DoorGate, Executive, KernelMode, FALSE,
-                                NULL);
+    ULONG missed;
+
+    missed = HcdWaitEvent(&hc->DoorGate, HCD_GATE_WAIT_BOUND);
+    if (missed != 0) {
+        XhciLogNote(&hc->Hc, "gate.door.missed", missed);
+    }
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
@@ -985,6 +988,41 @@ static ULONG hcdDoorHcdPortWord(PHCD_CONTROLLER hc, PHCD_PORT p, ULONG word)
     case XHCI_SNAPSHOT_HCD_PORT_FLAGS:
         return XhciSnapHcdFlags(p->SettleDeferred, p->LinkRecovering,
                                 p->Unreadable);
+    case XHCI_SNAPSHOT_HCD_PORT_IDMEM:
+        return p->Id.VidPid;
+    case XHCI_SNAPSHOT_HCD_PORT_IDSTATE:
+        return (p->Id.Serial ? 1UL : 0UL) | ((p->Id.Latch & 0xFFUL) << 8);
+    case XHCI_SNAPSHOT_HCD_PORT_IDDEFERS:
+        return p->Id.Deferrals;
+    case XHCI_SNAPSHOT_HCD_PORT_IDFAILS:
+        return p->Id.Fails;
+    default:
+        return 0;
+    }
+}
+
+/* One word of task 45.40's places behind hubs (xhci.h,
+ * XHCI_SNAPSHOT_HCD_IP_*), entry `index`. IRQL: DISPATCH_LEVEL, controller
+ * lock held; the table is the thread's, read as it stands. */
+static ULONG hcdDoorIdPlaceWord(PHCD_CONTROLLER hc, ULONG index, ULONG word)
+{
+    PXHCI_ID_PLACE e;
+
+    if (index >= HCD_ID_PLACES) {
+        return 0;
+    }
+    e = &hc->IdPlaces[index];
+    switch (word) {
+    case XHCI_SNAPSHOT_HCD_IP_KEY:
+        return e->Key;
+    case XHCI_SNAPSHOT_HCD_IP_IDMEM:
+        return e->VidPid;
+    case XHCI_SNAPSHOT_HCD_IP_IDSTATE:
+        return (e->Serial ? 1UL : 0UL) | ((e->Latch & 0xFFUL) << 8);
+    case XHCI_SNAPSHOT_HCD_IP_IDDEFERS:
+        return e->Deferrals;
+    case XHCI_SNAPSHOT_HCD_IP_IDFAILS:
+        return e->Fails;
     default:
         return 0;
     }
@@ -1278,7 +1316,19 @@ static VOID hcdDoorHcd(PHCD_CONTROLLER hc, XHCI_SNAPSHOT_HEADER *header,
     for (i = 0; i < count; i++) {
         switch (XhciSnapHcdLocate(ports, first + i, &record, &word)) {
         case XHCI_SNAPSHOT_HCD_IN_HEAD:
-            /* 44.35's transport records end the header. */
+            /* 45.40's places end the header, after 44.35's records. */
+            if (word >= XHCI_SNAPSHOT_HCD_IDPLACE_AT) {
+                value = hcdDoorIdPlaceWord(
+                    hc, (word - XHCI_SNAPSHOT_HCD_IDPLACE_AT) /
+                            XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS,
+                    (word - XHCI_SNAPSHOT_HCD_IDPLACE_AT) %
+                        XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS);
+                break;
+            }
+            if (word >= XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS) {
+                value = XhciSnapHcdHead(ports, word);
+                break;
+            }
             if (word >= XHCI_SNAPSHOT_HCD_XPORT_AT) {
                 value = hcdDoorXportWord(
                     hc, (word - XHCI_SNAPSHOT_HCD_XPORT_AT) /

@@ -26,8 +26,13 @@ QMP send-key, a screendump after each, then takes Finish's restart
 (lib\legwin.ps1; build-and-test.md, "The installer's window, driven from
 the host"). The same checks as the console leg follow. A window leg with no
 WindowKeys, or -Operator, waits instead for an operator at VNC on
-127.0.0.1 to run SETUP.EXE and shut Windows down. Nothing here opens a
-viewer.
+127.0.0.1 to run SETUP.EXE and shut Windows down, up to 4 hours for that
+first start; its leg deadline is that much longer unless -LegMinutes is
+given. Nothing here opens a viewer.
+
+A leg that passes removes its disk and stick overlays (-KeepDisk keeps
+them); a leg that fails keeps them for reading. The leg's CD is removed
+whatever the verdict.
 
 The package is never run on the host: the host only copies it into the CD.
 #>
@@ -41,7 +46,8 @@ param(
     [int]$Slot = 0,
     [switch]$Cold,
     [switch]$Operator,
-    [int]$LegMinutes = 0
+    [int]$LegMinutes = 0,
+    [switch]$KeepDisk
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'lib\legvm.ps1')
@@ -55,6 +61,9 @@ $def = $null
 foreach ($l in $legSet.Legs) { if ($l.Id -eq $Leg) { $def = $l } }
 if (-not $def) { throw "no leg '$Leg' in $Legs" }
 $guest = Get-LegGuest $cfg $def.Guest
+# The starting point's disk is an overlay of the base: without the base the
+# leg could only fail later, in QEMU, with the backing file's name alone.
+if (-not (Test-Path -LiteralPath $guest.Base)) { throw "guest $($guest.Id): no base image $($guest.Base) (the configuration's Base)" }
 $mode = $def.Mode
 if ($mode -notin 'console', 'window') { throw "leg ${Leg}: Mode is console or window" }
 if (-not (Test-Path -LiteralPath (Join-Path $Package 'INSTALL.BAT'))) { throw "$Package has no INSTALL.BAT at its top: give the unpacked download" }
@@ -81,6 +90,10 @@ $installArgs = ''; if ($def.ContainsKey('InstallArgs')) { $installArgs = [string
 if ($installArgs -notmatch '^[A-Za-z0-9/ :=,_-]*$') { throw "leg ${Leg}: InstallArgs takes letters, digits, blanks and / : = , - _ only" }
 # The window's first start is driven by the host when the leg names its keys.
 $autoWindow = ($mode -eq 'window' -and $def.ContainsKey('WindowKeys') -and @($def.WindowKeys).Count -gt 0 -and -not $Operator)
+# An operator's first start may take up to 4 hours (its stall limit below);
+# the leg's deadline must not end it first (2026-10-29: it did, at 90 min).
+$operatorHours = 4
+if ($mode -eq 'window' -and -not $autoWindow -and -not $PSBoundParameters.ContainsKey('LegMinutes')) { $LegMinutes += $operatorHours * 60 }
 
 $rec = [ordered]@{
     leg = $Leg; guest = $guest.Id; mode = $mode; cold = [bool]$Cold; package = (Resolve-Path -LiteralPath $Package).Path
@@ -109,10 +122,15 @@ $rnd = New-Object byte[] (4MB)
 (New-Object System.Random 4312).NextBytes($rnd)
 [IO.File]::WriteAllBytes((Join-Path $cd 'XHDATA\RAND.BIN'), $rnd)
 $legIso = Join-Path $RunDir 'leg.iso'
+$disk = Join-Path $RunDir 'disk.qcow2'
+# From the CD on, everything is inside one try: its finally removes the CD
+# whatever ends the leg (a throw before the boots once left it), and on a
+# PASS the overlays too. The block is not indented again.
+$legExit = 1
+try {
 New-LegMedium -Guest $guest -SourceDir $cd -Path $legIso -Label 'XHLEG'
 Remove-LegTree $cd
 
-$disk = Join-Path $RunDir 'disk.qcow2'
 New-LegOverlay $cfg $start.Disk $disk
 
 $ended = $false
@@ -136,7 +154,7 @@ function Read-LegLines {
         if ($ln -match '^XHLEG PHASE (\S+)') { $ph = $Matches[1] }
         if ($ln -match '^XHLEG OPERATOR') { $ph = '1' }
         if ($ph) { $script:pendingStep = ''; if ($hostSteps.ContainsKey("AfterPhase$ph")) { $script:pendingStep = $hostSteps["AfterPhase$ph"] } }
-        if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true }
+        if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true; if (-not $script:powerOffAt) { $script:powerOffAt = Get-Date } }
         if ($ln -match '^XHLEG CHECK (\S+) (PASS|FAIL)(.*)$') { $rec.checks[$Matches[1]] = ($Matches[2] + $Matches[3]).Trim() }
         if ($ln -match '^XHLEG EXIT (\S+) (\S+)$') { $rec.exits[$Matches[1]] = $Matches[2] }
         if ($ln -match '^XHLEG END') { $script:ended = $true; if (-not $script:endAt) { $script:endAt = Get-Date } }
@@ -174,6 +192,8 @@ try {
         $nLines = 0
         $endAt = $null
         $sawPowerOff = $false
+        $powerOffAt = $null
+        $offRetried = $false
         $stepEnded = $false
         $hostStopped = $false
         try {
@@ -213,7 +233,7 @@ try {
                     if ($r -match 'FAILED') { throw $r }
                     if ($r -match 'QEMU ended at the restart') { $stepEnded = $true }
                 } else {
-                    Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits."
+                    Write-Host "OPERATOR: VNC 127.0.0.1:$($ports.Vnc). Run the installer's window from the CD (PKG\SETUP.EXE), take the defaults, Finish; then shut Windows down (98 SE: never Restart). The host waits up to $operatorHours hours (leg deadline $LegMinutes min)."
                 }
             }
             if ($step) {
@@ -248,6 +268,23 @@ try {
                     $null = Wait-LegPowerOff -Config $cfg -Guest $guest -Ports $ports -Process $proc -Dir $RunDir -Tag $tag
                     if ($proc.HasExited) { break }
                 }
+                # A 98 SE or ME guest whose shut down after POWEROFF never
+                # began (read 2026-11-01, w45-matrix86 me-console: the
+                # desktop idle and its clock running 14 min on, no "Windows
+                # is shutting down" screen) is asked once more by the host,
+                # from Start, Shut Down, Enter, and the leg says so. A guest
+                # hung inside its shut down takes no keys and still stalls.
+                if ($sawPowerOff -and -not $offRetried -and $powerOffAt -and $guest.Family -eq '9x' -and ((Get-Date) - $powerOffAt).TotalSeconds -ge 120) {
+                    $offRetried = $true
+                    Save-LegShot $ports.Qmp $RunDir "$tag-offretry"
+                    Send-QmpChord -Port $ports.Qmp -Chord 'esc'; Start-Sleep -Seconds 2
+                    Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-esc'; Start-Sleep -Seconds 3
+                    Send-QmpChord -Port $ports.Qmp -Chord 'u' -Layout $guest.Layout; Start-Sleep -Seconds 4
+                    Save-LegShot $ports.Qmp $RunDir "$tag-offretry-dialog"
+                    Send-QmpChord -Port $ports.Qmp -Chord 'ret'
+                    $rec.steps += "boot $boot no power-off 120 s after POWEROFF: the host sent Start, Shut Down, Enter"
+                    $lastNew = Get-Date
+                }
                 if ($def.ContainsKey('PromptStep') -and $def.PromptStep -eq 'nt6' -and -not ($mode -eq 'window' -and $boot -eq 1) -and ((Get-Date) - $lastPrompt).TotalSeconds -ge 6) {
                     $lastPrompt = Get-Date
                     if (Invoke-LegNt6UnsignedAnswer -QmpPort $ports.Qmp -Dir $RunDir -Tag $tag -Layout $guest.Layout) { $prompts++; $lastNew = Get-Date }
@@ -259,7 +296,7 @@ try {
                 }
                 if (((Get-Date) - $lastShot).TotalSeconds -ge 60) { Save-LegShot $ports.Qmp $RunDir "$tag-last"; $lastShot = Get-Date }
                 $waitLimit = $stall
-                if ($mode -eq 'window' -and $boot -eq 1 -and -not $autoWindow) { $waitLimit = 4 * 3600 }
+                if ($mode -eq 'window' -and $boot -eq 1 -and -not $autoWindow) { $waitLimit = $operatorHours * 3600 }
                 if (((Get-Date) - $lastNew).TotalSeconds -gt $waitLimit) {
                     Save-LegShot $ports.Qmp $RunDir "$tag-stalled"
                     $rec.reasons += "boot $boot stalled: nothing new on COM1 for $waitLimit s"
@@ -342,6 +379,14 @@ if ($rec.reasons.Count -eq 0) { $rec.verdict = 'PASS' } else { $rec.verdict = 'F
 $rec.seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
 $rec.finished = (Get-Date -Format s)
 $rec | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $RunDir 'result.json') -Encoding ASCII
-Remove-LegMedium $legIso
 Write-Host ("{0} {1} in {2} s{3}" -f $Leg, $rec.verdict, $rec.seconds, $(if ($rec.reasons.Count) { ': ' + ($rec.reasons -join '; ') } else { '' }))
-if ($rec.verdict -eq 'PASS') { exit 0 } else { exit 1 }
+if ($rec.verdict -eq 'PASS') { $legExit = 0 }
+} finally {
+    Remove-LegMedium $legIso
+    if ($legExit -eq 0 -and -not $KeepDisk) {
+        foreach ($o in @($disk) + @(Get-ChildItem -LiteralPath $RunDir -Filter 'stick-*.qcow2' -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })) {
+            Remove-Item -LiteralPath $o -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+exit $legExit

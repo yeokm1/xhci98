@@ -84,6 +84,14 @@ typedef struct FW {
     unsigned long DevReadDw3;
     unsigned long DisconnectInReadUs;   /* the device leaves during the read */
     const unsigned long *AnnounceUuid;  /* NULL: kUuid */
+    int ChildPresent;           /* a router chained behind the dock */
+    int ChildApproved;          /* its tunnel exists */
+    int ChildFirst;             /* announced before the dock (an order
+                                   the firmware is not known to use) */
+    int ChildAlone;             /* announced with the dock absent */
+    unsigned long ChildOnApprove;   /* announce the child, with this id,
+                                       unapproved, inside the dock's
+                                       approve (0: not) */
 } FW;
 
 static FW g_fw;
@@ -308,9 +316,25 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         }
         fakeQueue(TBT_PDF_ICM_RESP, r, i, 6000, 0);
         g_fw.HoldUntil = g_fake.NowUs + g_fw.HoldUs;
+        if (g_fw.ChildAlone && g_fw.ChildPresent) {
+            g_fw.ConnId++;
+            arConnected(g_fw.ConnId, g_fw.ChildApproved, 1, 2, kUuid2,
+                        g_fw.HoldUs - 5000UL);
+        }
         if (g_fw.Present) {
             g_fw.ConnId++;
-            fwAnnounce(g_fw.HoldUs - 10000UL);
+            fwAnnounce(g_fw.HoldUs - (g_fw.ChildFirst ? 2000UL : 10000UL));
+            if (g_fw.ChildPresent) {
+                /* depth order, the parent first (usb4-emu R39) */
+                g_fw.ConnId++;
+                if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+                    trConnected(g_fw.ConnId, g_fw.ChildApproved, 0x0301,
+                                kUuid2, g_fw.HoldUs - 5000UL, 0);
+                } else {
+                    arConnected(g_fw.ConnId, g_fw.ChildApproved, 1, 2,
+                                kUuid2, g_fw.HoldUs - 5000UL);
+                }
+            }
         }
         return;
     }
@@ -323,6 +347,10 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
         r[1] = dw[1];
         r[2] = 0;
         r[3] = (dw[1] >> 16) & 7;   /* the route of a depth-1 device is its link */
+        if (((dw[1] >> 20) & 0xF) == 2) {
+            /* depth 2 behind the dock's adapter 3 (usb4-emu R36) */
+            r[3] |= 0x0300UL;
+        }
         fakeQueue(TBT_PDF_ICM_RESP, r, 4, 3000, 0);
         return;
     }
@@ -340,6 +368,14 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
     }
     if (code == 0x04) {
         g_fw.Approves++;
+        if (g_fw.ChildOnApprove != 0 && words >= 2 && dw[1] == kUuid[0]) {
+            if (g_fw.Gen == GEN_TR || g_fw.Gen == GEN_ICL) {
+                trConnected(g_fw.ChildOnApprove, 0, 0x0301, kUuid2, 1000, 0);
+            } else {
+                arConnected(g_fw.ChildOnApprove, 0, 1, 2, kUuid2, 1000);
+            }
+            g_fw.ChildOnApprove = 0;
+        }
         memcpy(g_fw.LastApprove, dw, 4 * (words < 8 ? words : 8));
         g_fw.LastApproveWords = words;
         if (g_fw.DisconnectInApproveUs != 0) {
@@ -360,7 +396,11 @@ static void fwOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
             r[0] |= 0x100UL;
         }
         if (g_fw.ApproveMode == MODE_ANSWER && !(r[0] & 0x100UL)) {
-            g_fw.Approved = 1;
+            if (words >= 2 && dw[1] == kUuid2[0]) {
+                g_fw.ChildApproved = 1;
+            } else {
+                g_fw.Approved = 1;
+            }
         }
         fakeQueue(TBT_PDF_ICM_RESP, r, words, g_fw.ApproveDelayUs, 0);
         return;
@@ -689,6 +729,35 @@ static void test_plug_approve_unplug(void)
     CHECK_EQ(act[0].Why, TBT_ICM_WHY_UNMATCHED, "unmatched");
 }
 
+/* Task 45.22 (record 21 section 4.5.1): the ring interrupt's wake drains
+ * and acts as the idle poll does - a plug approved and its tunnel-up
+ * queued with no idle poll between - without counting an idle poll; an
+ * empty drain sends nothing. */
+static void test_ring_wake(void)
+{
+    TBT_ICM_ACTION act[8];
+    ULONG polls;
+    ULONG tx;
+
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind with nothing attached");
+    polls = g_icm.Counters.IdlePolls;
+    tx = g_icm.Ring->Counters.Tx;
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Ring->Counters.Tx, tx, "an empty drain sends nothing");
+    g_fw.Present = 1;
+    arConnected(6, 0, 1, 1, kUuid, 0);
+    fakeSleep(NULL, 1);
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Counters.ApprovalsOk, 1, "approved by the wake");
+    CHECK_EQ(actions(act, 8), 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_UP, "tunnel up, no idle poll between");
+    CHECK_EQ(g_icm.Counters.IdlePolls, polls, "no idle poll counted");
+    tx = g_icm.Ring->Counters.Tx;
+    TbtIcmRingWake(&g_icm);
+    CHECK_EQ(g_icm.Ring->Counters.Tx, tx, "the next drain finds the responses consumed");
+}
+
 static void test_policy(void)
 {
     TBT_ICM_ACTION act[4];
@@ -1001,6 +1070,16 @@ static void test_odd_frames(void)
     CHECK_EQ(g_icm.Counters.EventsUnknown, 1, "unknown event code counted");
     CHECK_EQ(g_icm.Counters.Strays, 1, "a response nobody waited for");
     CHECK_EQ(g_icm.Counters.EventsMalformed, 1, "short event counted");
+    /* Run-45 45-E.15: the one-DW code-8 acknowledgement Alpine Ridge sends
+     * for each inter-domain frame - counted, logged once, nothing else. */
+    CHECK(!g_icm.XdAckLogged, "no acknowledgement yet");
+    dw[0] = 0x01000008UL;
+    fakeQueue(TBT_PDF_ICM_RESP, dw, 1, 0, 0);
+    fakeQueue(TBT_PDF_ICM_RESP, dw, 1, 0, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.Strays, 3, "both acknowledgements counted");
+    CHECK(g_icm.XdAckLogged, "logged once");
+    CHECK_EQ(g_icm.Counters.EventsUnknown, 1, "not taken for an event");
 
     /* Rejected: ignored. */
     {
@@ -2432,12 +2511,1663 @@ static void test_router_version(void)
 /* Each vector named in the request trace (tbt_fake.h, task 44.38). */
 #define RUN_VEC(fn) do { fakeTraceMark(#fn); fn(); } while (0)
 
+/* ------------------------------------------------------------------ */
+/* The approval order behind a parent (record 34 sections 4.1, 4.6)   */
+/* ------------------------------------------------------------------ */
+
+/* How many approves the firmware received for `uuid`. */
+static unsigned long approvesFor(const unsigned long *uuid)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == TBT_PDF_ICM_CMD &&
+            (g_fake.TxLogDw[i][0] & 0xFF) == 0x04 &&
+            g_fake.TxLogDw[i][1] == uuid[0]) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* The slot holding `uuid`, or -1. */
+static long slotOf(const unsigned long *uuid)
+{
+    unsigned long i;
+    const TBT_ICM_DEVICE *d;
+
+    for (i = 0; i < TBT_ICM_MAX_DEVICES; i++) {
+        d = TbtIcmDevice(&g_icm, i);
+        if (d != NULL && d->Uuid[0] == uuid[0]) {
+            return (long)i;
+        }
+    }
+    return -1;
+}
+
+static int approvedNow(const unsigned long *uuid)
+{
+    long s = slotOf(uuid);
+
+    return s >= 0 && TbtIcmDevice(&g_icm, (ULONG)s)->Approved;
+}
+
+/* Index in the TX log of the n-th (0-based) approve, or -1. */
+static long nthApprove(unsigned long nth)
+{
+    unsigned long i;
+    unsigned long n = 0;
+
+    for (i = 0; i < g_fake.TxCount && i < FAKE_TXLOG; i++) {
+        if (g_fake.TxLogPdf[i] == TBT_PDF_ICM_CMD &&
+            (g_fake.TxLogDw[i][0] & 0xFF) == 0x04) {
+            if (n == nth) {
+                return (long)i;
+            }
+            n++;
+        }
+    }
+    return -1;
+}
+
+static void test_chain_order_ar(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long a0;
+    long a1;
+
+    /* The child announced first, with no parent in the table: owed. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for an orphan child");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    CHECK(slotOf(kUuid2) >= 0 &&
+              TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->ApproveOwed,
+          "marked owed");
+    /* The parent arrives unapproved: its approve, then the child's. */
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid), 1, "the parent approved");
+    CHECK_EQ(approvesFor(kUuid2), 1, "then the child");
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "parent's approve first");
+    CHECK(approvedNow(kUuid) && approvedNow(kUuid2), "both approved");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[0].Depth, 1, "the parent's first");
+    CHECK_EQ(act[1].Depth, 2, "the child's carries depth 2");
+    CHECK_EQ(act[1].Kind, TBT_ICM_ACT_TUNNEL_UP, "up");
+    CHECK_EQ(act[1].Why, TBT_ICM_WHY_APPROVED, "approved");
+
+    /* The child announced during the parent's approve (the firmware
+     * sends it while the approve is in flight): queued in the wait,
+     * decided after it with the parent established. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ChildOnApprove = 6;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK(g_icm.Counters.EventsQueued >= 1, "the child's event queued in the wait");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 0, "never owed");
+    CHECK_EQ(approvesFor(kUuid2), 1, "approved after the parent");
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "the parent's approve answered before the child's is sent");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The child after the parent's approve: approved at once. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 0, "nothing owed");
+    CHECK(approvedNow(kUuid2), "child approved");
+    {
+        long r = findTx(TBT_PDF_ICM_CMD, 0x0A);
+        CHECK(r >= 0, "get route sent");
+    }
+    CHECK(slotOf(kUuid2) >= 0 &&
+              TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->Route.Lo == 0x0301,
+          "the child's route from get route (link 1, depth 2)");
+}
+
+static void test_chain_parent_outcomes(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* The parent refused (the error flag): the child stays owed; the
+     * parent's next announcement approves it, then the child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ErrorApproves = 1;
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsFailed, 1, "the parent's approve failed");
+    CHECK_EQ(approvesFor(kUuid2), 0, "the child not approved");
+    CHECK(!approvedNow(kUuid2), "child unapproved");
+    arConnected(7, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "parent approved on its re-announcement");
+    CHECK_EQ(approvesFor(kUuid2), 1, "then the owed child");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent disconnected with the child's approve owed: both leave,
+     * nothing is sent for the child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    actions(act, 8);
+    arDisconnected(1, 1, 0);
+    idle(200);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "both gone");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the child");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-downs");
+    CHECK_EQ(act[0].Depth, 2, "deepest first");
+    CHECK(!act[0].WasApproved, "the child never had a tunnel");
+
+    /* The parent already approved, announced after its child. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(5, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid), 0, "the approved parent needs no approve");
+    CHECK_EQ(approvesFor(kUuid2), 1, "the child's approve follows its announcement");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent's approve times out (outcome unknown): the child waits;
+     * an announcement settling the parent approved releases it. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetTimeouts(&g_icm, 1000, 1000);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_NEVER;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(10000);
+    CHECK_EQ(g_icm.Counters.ApprovalsUnknown, 1, "outcome unknown");
+    CHECK_EQ(approvesFor(kUuid2), 0, "the child waits");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    g_fw.ApproveMode = MODE_ANSWER;
+    arConnected(8, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "settled approved");
+    CHECK_EQ(approvesFor(kUuid2), 1, "the child approved");
+
+    /* A parent replaced while its child waits: the child goes with it;
+     * announced again, it is owed behind the new parent. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    {
+        unsigned long u4[4] = { 0x44444444UL, 0x55555555UL, 0xffffffffUL, 0xffffffffUL };
+
+        arConnected(8, 0, 1, 1, u4, 0);
+        idle(1000);
+        CHECK(slotOf(kUuid2) < 0, "the child left with the old parent");
+        arConnected(9, 0, 1, 2, kUuid2, 0);
+        idle(1000);
+        CHECK_EQ(approvesFor(kUuid2), 0, "owed behind the new, unapproved parent");
+        g_fw.ApproveMode = MODE_ANSWER;
+        arConnected(10, 0, 1, 1, u4, 0);
+        idle(1000);
+        CHECK(approvedNow(u4), "the new parent approved");
+        CHECK_EQ(approvesFor(kUuid2), 1, "then the child");
+    }
+
+    /* The policy withholds the parent: the child stays owed. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApproveHook(&g_icm, onApproveHook, NULL);
+    g_hookAnswer = TRUE;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    g_hookAnswer = FALSE;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsWithheld, 1, "parent withheld");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve at all");
+}
+
+static void test_chain_route_rows(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+    long a0;
+    long a1;
+
+    /* Titan Ridge: the route in the event; the child at 0x0301 waits for
+     * route 1's approve. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(6, 0, 0x0301, kUuid2, 0, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    CHECK_EQ(approvesFor(kUuid2), 0, "nothing sent for it");
+    trConnected(5, 0, 1, kUuid, 0, 0);
+    idle(1000);
+    a0 = nthApprove(0);
+    a1 = nthApprove(1);
+    CHECK(a0 >= 0 && a1 > a0 && g_fake.TxLogDw[a0][1] == kUuid[0] &&
+              g_fake.TxLogDw[a1][1] == kUuid2[0],
+          "route 1 approved, then route 0x0301");
+    if (a1 >= 0) {
+        CHECK_EQ(g_fake.TxLogDw[a1][6], 0x0301, "the child's route in its approve");
+    }
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[1].Depth, 2, "depth 2 from the route");
+    CHECK_EQ(act[1].Route.Lo, 0x0301, "and its route");
+
+    /* A route not below the approved one is not its child. */
+    setup(GEN_TR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    trConnected(5, 0, 1, kUuid, 0, 0);
+    idle(1000);
+    trConnected(6, 0, 0x0303, kUuid2, 0, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 0, "0x0303's parent is route 3, absent");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+
+    /* Falcon Ridge: link and depth, the route from the topology. */
+    setup(GEN_FR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(approvesFor(kUuid2), 0, "owed on Falcon Ridge too");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK(approvedNow(kUuid) && approvedNow(kUuid2), "both approved, parent first");
+}
+
+static void test_chain_rebind_and_reconcile(void)
+{
+    TBT_ICM_ACTION act[8];
+    unsigned long n;
+
+    /* A chain tunnelled before the start: both announced approved at the
+     * driver ready, both up, nothing approved. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "both in the table");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 0, "no approve");
+    n = actions(act, 8);
+    CHECK_EQ(n, 2, "two tunnel-ups");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_ANNOUNCED, "as announced");
+    CHECK_EQ(act[1].Depth, 2, "the chained one at depth 2");
+
+    /* Resume with both re-announced: refreshes, no change. */
+    TbtIcmSuspend(&g_icm);
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(actions(act, 8), 0, "no tunnel change");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 2, "both kept");
+
+    /* The child not re-announced: reconciled away, its tunnel-down at
+     * depth 2; the parent kept. */
+    TbtIcmSuspend(&g_icm);
+    g_fw.ChildPresent = 0;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the parent kept");
+    n = actions(act, 8);
+    CHECK_EQ(n, 1, "one action");
+    CHECK_EQ(act[0].Kind, TBT_ICM_ACT_TUNNEL_DOWN, "tunnel down");
+    CHECK_EQ(act[0].Why, TBT_ICM_WHY_RECONCILED, "reconciled");
+    CHECK_EQ(act[0].Depth, 2, "at depth 2");
+}
+
+/* The hook: no for the dock (kUuid), yes for anything else. */
+static BOOLEAN onApproveNotDock(PVOID ctx, const TBT_ICM_DEVICE *dev)
+{
+    (void)ctx;
+    g_hookCalls++;
+    return (BOOLEAN)(dev->Uuid[0] != kUuid[0]);
+}
+
+static void test_chain_settled_in_place(void)
+{
+    long s2;
+
+    /* A withheld parent later announced approved settles in place: the
+     * owed child is kept and approved, not dropped with a replacement. */
+    setup(GEN_AR, 0, 0);
+    TbtIcmSetApproveHook(&g_icm, onApproveNotDock, NULL);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsWithheld, 1, "the dock withheld");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed");
+    s2 = slotOf(kUuid2);
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "the dock approved by the firmware");
+    CHECK_EQ(slotOf(kUuid2), s2, "the child kept in its slot");
+    CHECK_EQ(approvesFor(kUuid2), 1, "and approved");
+    CHECK_EQ(countTx(TBT_PDF_ICM_CMD, 4), 1, "the dock's own never sent");
+
+    /* A child owed, then announced approved: it owes nothing; the
+     * parent's approval later sends no approve for it. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.ApproveMode = MODE_ERROR;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(7, 1, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK(approvedNow(kUuid2), "the child approved by its announcement");
+    CHECK(!TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid2))->ApproveOwed,
+          "owed mark cleared");
+    g_fw.ApproveMode = MODE_ANSWER;
+    arConnected(8, 0, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK(approvedNow(kUuid), "the parent approved");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the approved child");
+}
+
+static void test_chain_resume_child_first(void)
+{
+    TBT_ICM_ACTION act[8];
+
+    /* Resume: the child announced unapproved before its parent; the kept,
+     * approved parent is not established until it is announced again. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    TbtIcmSuspend(&g_icm);
+    g_fw.ChildApproved = 0;
+    g_fw.ChildFirst = 1;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "the child owed behind the stale parent");
+    CHECK_EQ(approvesFor(kUuid2), 1, "approved once the parent was announced");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* The parent gone across the suspension: the child stays owed, no
+     * approve, and the parent's entry is reconciled away. */
+    setup(GEN_AR, 1, 1);
+    g_fw.ChildPresent = 1;
+    g_fw.ChildApproved = 1;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    actions(act, 8);
+    TbtIcmSuspend(&g_icm);
+    g_fw.Present = 0;
+    g_fw.ChildApproved = 0;
+    g_fw.ChildAlone = 1;
+    CHECK_EQ(TbtIcmResume(&g_icm), TBT_OK, "resume");
+    CHECK(slotOf(kUuid) < 0, "the parent reconciled away");
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve for the orphan child");
+}
+
+static void test_chain_queued_and_unconfirmed(void)
+{
+    long a1;
+
+    /* An owed child with a newer announcement queued during its parent's
+     * approve: the debt is left to that announcement, which approves it
+     * with its own (latest) connection id, once. */
+    setup(GEN_AR, 0, 0);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(200);
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    g_fw.ChildOnApprove = 9;
+    arConnected(5, 0, 1, 1, kUuid, 0);
+    idle(2000);
+    CHECK_EQ(approvesFor(kUuid2), 1, "one approve for the child");
+    a1 = nthApprove(1);
+    CHECK(a1 >= 0 && g_fake.TxLogDw[a1][1] == kUuid2[0] &&
+              ((g_fake.TxLogDw[a1][5] >> 8) & 0xFF) == 9,
+          "with the id of its queued announcement");
+    CHECK(approvedNow(kUuid2), "child approved");
+
+    /* A rediscovery whose driver ready failed: the kept parent stays
+     * unconfirmed, so a child announced then is owed, not approved; the
+     * parent's own announcement releases it. */
+    setup(GEN_AR, 1, 1);
+    CHECK_EQ(start(), TBT_OK, "bind");
+    g_fw.Present = 0;
+    g_fw.ReadyMode = MODE_NEVER;
+    g_icm.RediscoverPending = TRUE;
+    idle(30000);
+    CHECK(slotOf(kUuid) >= 0, "the parent kept across the failed rediscovery");
+    CHECK(TbtIcmDevice(&g_icm, (ULONG)slotOf(kUuid))->Unconfirmed,
+          "unconfirmed");
+    g_fw.ReadyMode = MODE_ANSWER;
+    arConnected(6, 0, 1, 2, kUuid2, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 0, "no approve behind an unconfirmed parent");
+    CHECK_EQ(g_icm.Counters.ApprovalsOwed, 1, "owed");
+    arConnected(7, 1, 1, 1, kUuid, 0);
+    idle(1000);
+    CHECK_EQ(approvesFor(kUuid2), 1, "released by the parent's announcement");
+}
+
+/* ------------------------------------------------------------------ */
+/* Host-to-host links (design record 35 section 3.10; task 45.59 S4)  */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The far host is a second instance of the pure engine (tbt_xdp.c) in
+ * the software connection manager's mode, as a Linux peer on a q35
+ * usb4-generic would run: it asks this domain's UUID first. The firmware
+ * passes every inter-domain packet between ring 0 and the link untouched,
+ * the route of each set as its receiver sees it (record 35 section 3.2):
+ * this domain reaches the far router at route 1 (the host lane adapter),
+ * the far host reaches this one at route 3. The firmware's events and its
+ * answers to 0x10 and 0x11 are built from Linux tb_msgs.h's structures
+ * (icm_fr_* and icm_tr_*); every row is UNCAPTURED here.
+ */
+
+#define XD_OUR_ROUTE    1UL
+#define XD_FAR_ROUTE    3UL
+
+static const TBT_UUID kXdFar = {
+    { 0x9e1d2a3bUL, 0x4c5d6e7fUL, 0x80918a2bUL, 0x0c1d2e3fUL }
+};
+static const TBT_UUID kXdFar2 = {
+    { 0x11223344UL, 0x55667788UL, 0x99aabbccUL, 0xddeeff00UL }
+};
+static const TBT_UUID kXdLocal = {
+    { 0xa0211100UL, 0x003d0efcUL, 0xffffffffUL, 0xffffffffUL }
+};
+
+typedef struct XP {
+    int Live;
+    TBT_XDP_PEER E;
+    unsigned long Ups;
+    unsigned long Downs;
+    unsigned long TxHop;
+    unsigned long RxHop;
+} XP;
+static XP g_xp;
+
+/* The firmware's side of 0x10 and 0x11. */
+typedef struct XFW {
+    int ApproveMode;
+    int TeardownMode;
+    unsigned long DelayUs;
+    unsigned long Approves;
+    unsigned long LastApprove[9];
+    unsigned long LastApproveWords;
+    unsigned long Teardowns;
+    unsigned long Stages[8];
+    unsigned long LastTeardown[8];
+    int GoneInApprove;          /* a disconnect inside the approve's wait */
+    int Tr;                     /* the Titan Ridge layouts */
+} XFW;
+static XFW g_xfw;
+
+/* The service's operations, in the order they ran. */
+static unsigned long g_netSeq;
+static unsigned long g_ringsUpAt;
+static unsigned long g_ringsDownAt;
+static unsigned long g_linkUpAt;
+static unsigned long g_linkDownAt;
+static unsigned long g_ringsUps;
+static unsigned long g_ringsDowns;
+static unsigned long g_linkUps;
+static unsigned long g_linkDowns2;
+static unsigned long g_lastRingNo;
+static int g_lastE2e;
+static int g_lastLost;
+static unsigned long g_lastPort;
+static unsigned long g_approveAt;   /* g_netSeq when the firmware saw 0x10 */
+static unsigned long g_teardownAt;  /* ... and the teardown's first step */
+static unsigned long g_txAtLinkDown;
+
+static LONG xdRingsUp(PVOID c, ULONG port, ULONG ring, BOOLEAN e2e)
+{
+    (void)c;
+    g_ringsUps++;
+    g_ringsUpAt = ++g_netSeq;
+    g_lastRingNo = ring;
+    g_lastE2e = e2e ? 1 : 0;
+    g_lastPort = port;
+    return TBT_OK;
+}
+
+static VOID xdRingsDown(PVOID c, ULONG port, BOOLEAN lost)
+{
+    (void)c; (void)port;
+    g_ringsDowns++;
+    g_ringsDownAt = ++g_netSeq;
+    g_lastLost = lost ? 1 : 0;
+}
+
+static VOID xdLink(PVOID c, ULONG port, BOOLEAN up, const UCHAR *mac)
+{
+    (void)c; (void)port; (void)mac;
+    if (up) {
+        g_linkUps++;
+        g_linkUpAt = ++g_netSeq;
+    } else {
+        g_linkDowns2++;
+        g_linkDownAt = ++g_netSeq;
+        g_txAtLinkDown = g_fake.TxCount;
+    }
+}
+
+static const TBT_ICM_NET g_xdNet = { NULL, xdRingsUp, xdRingsDown, xdLink };
+
+/* ---- the far engine ---------------------------------------------------- */
+
+static LONG xpSend(PVOID c, ULONG pdf, const ULONG *dw, ULONG words)
+{
+    unsigned long w[64];
+    ULONG i;
+
+    (void)c;
+    for (i = 0; i < words && i < 64; i++) {
+        w[i] = dw[i];
+    }
+    w[0] &= TBT_ROUTE_HI_CM;
+    w[1] = XD_OUR_ROUTE;
+    fakeQueue(pdf, w, words, 200, 0);
+    return TBT_OK;
+}
+
+static ULONG xpNow(PVOID c)
+{
+    (void)c;
+    return g_fake.NowUs / 1000UL;
+}
+
+static VOID xpLog(PVOID c, const char *label, ULONG value)
+{
+    (void)c; (void)label; (void)value;
+}
+
+static LONG xpUp(PVOID c, ULONG txHop, ULONG rxHop)
+{
+    (void)c;
+    g_xp.Ups++;
+    g_xp.TxHop = txHop;
+    g_xp.RxHop = rxHop;
+    return TBT_OK;
+}
+
+static VOID xpDown(PVOID c, BOOLEAN gone)
+{
+    (void)c; (void)gone;
+    g_xp.Downs++;
+}
+
+static void xpStart(const TBT_UUID *self)
+{
+    TBT_XDP_OPS ops;
+    TBT_XDP_LOCAL props;
+    TBT_ROUTE r;
+    static const UCHAR mac[6] = { 0x02, 0x11, 0x22, 0x33, 0x44, 0x55 };
+
+    memset(&ops, 0, sizeof(ops));
+    ops.Send = xpSend;
+    ops.NowMs = xpNow;
+    ops.Log = xpLog;
+    ops.ServiceUp = xpUp;
+    ops.ServiceDown = xpDown;
+    memset(&props, 0, sizeof(props));
+    props.VendorId = 0x1d6b;
+    props.VendorText = "Linux";
+    props.DeviceId = 4;
+    props.DeviceText = "far";
+    props.MaxHopId = 15;
+    props.Network = TRUE;
+    props.Prtcstns = TBT_NET_STNS_FRAME_ID | TBT_NET_STNS_E2E;
+    r.Hi = 0;
+    r.Lo = XD_FAR_ROUTE;
+    TbtXdpPeerInit(&g_xp.E, &ops, &r, self, NULL, FALSE, FALSE, &props, mac, 15, NULL);
+    g_xp.Live = 1;
+    TbtXdpPeerStart(&g_xp.E);
+}
+
+/* ---- the firmware's host-to-host side ---------------------------------- */
+
+static void xdConnectedEv(unsigned long link, unsigned long depth,
+                          unsigned long routeHi, unsigned long routeLo,
+                          const TBT_UUID *remote, unsigned long delayUs)
+{
+    unsigned long dw[14];
+
+    dw[0] = 0x01000006UL;
+    dw[1] = (link | (depth << 4)) << 16;
+    memcpy(&dw[2], remote->Dw, 16);
+    memcpy(&dw[6], kXdLocal.Dw, 16);
+    dw[10] = routeHi;
+    dw[11] = routeLo;
+    dw[12] = 0;
+    dw[13] = XD_FAR_ROUTE;
+    fakeQueue(TBT_PDF_ICM_EVENT, dw, 14, delayUs, 0);
+}
+
+static void xdDisconnectedEv(unsigned long link, unsigned long routeLo,
+                             const TBT_UUID *remote, unsigned long delayUs)
+{
+    unsigned long dw[7];
+
+    dw[0] = 0x01000007UL;
+    if (g_xfw.Tr) {
+        dw[1] = 0;
+        dw[2] = routeLo;
+        memcpy(&dw[3], remote->Dw, 16);
+        fakeQueue(TBT_PDF_ICM_EVENT, dw, 7, delayUs, 0);
+    } else {
+        dw[1] = link << 16;
+        memcpy(&dw[2], remote->Dw, 16);
+        fakeQueue(TBT_PDF_ICM_EVENT, dw, 6, delayUs, 0);
+    }
+}
+
+static void xdOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                   unsigned long words)
+{
+    unsigned long w[64];
+    unsigned long i;
+    unsigned long code;
+
+    if (pdf == TBT_PDF_XDOMAIN_REQ || pdf == TBT_PDF_XDOMAIN_RESP) {
+        if (!g_xp.Live || words < 2 || dw[1] != XD_OUR_ROUTE) {
+            return;
+        }
+        for (i = 0; i < words && i < 64; i++) {
+            w[i] = dw[i];
+        }
+        w[1] = XD_FAR_ROUTE;
+        (void)TbtXdpPeerOnPacket(&g_xp.E, pdf, (ULONG *)w, words);
+        return;
+    }
+    code = words >= 1 ? (dw[0] & 0xFF) : 0;
+    if (pdf == TBT_PDF_ICM_CMD && code == 0x10) {
+        g_xfw.Approves++;
+        g_approveAt = ++g_netSeq;
+        g_xfw.LastApproveWords = words;
+        memcpy(g_xfw.LastApprove, dw, 4 * (words < 9 ? words : 9));
+        if (g_xfw.GoneInApprove) {
+            g_xfw.GoneInApprove = 0;
+            xdDisconnectedEv(1, XD_OUR_ROUTE, &kXdFar, 1000);
+            return;
+        }
+        if (g_xfw.ApproveMode == MODE_NEVER) {
+            return;
+        }
+        memcpy(w, dw, 4 * words);
+        w[0] = 0x01000010UL | (g_xfw.ApproveMode == MODE_ERROR ? 0x100UL : 0);
+        fakeQueue(TBT_PDF_ICM_RESP, w, words, g_xfw.DelayUs, 0);
+        return;
+    }
+    if (pdf == TBT_PDF_ICM_CMD && code == 0x11) {
+        if (g_xfw.Teardowns == 0) {
+            g_teardownAt = ++g_netSeq;
+        }
+        if (g_xfw.Teardowns < 8) {
+            g_xfw.Stages[g_xfw.Teardowns] = words > 1 ? (dw[1] & 0xFF) : 0;
+        }
+        g_xfw.Teardowns++;
+        memcpy(g_xfw.LastTeardown, dw, 4 * (words < 8 ? words : 8));
+        if (g_xfw.TeardownMode == MODE_NEVER) {
+            return;
+        }
+        memcpy(w, dw, 4 * words);
+        w[0] = 0x01000011UL | (g_xfw.TeardownMode == MODE_ERROR ? 0x100UL : 0);
+        fakeQueue(TBT_PDF_ICM_RESP, w, words, 2000, 0);
+        return;
+    }
+    fwOnTx(fk, pdf, dw, words);
+}
+
+/* Bound, with XhciCmNet 1, the service's operations and the network
+ * driver holding the service open. */
+static void xdSetup(int gen)
+{
+    setup(gen, 0, 0);
+    memset(&g_xp, 0, sizeof(g_xp));
+    memset(&g_xfw, 0, sizeof(g_xfw));
+    g_xfw.Tr = (gen == GEN_TR || gen == GEN_ICL);
+    g_xfw.DelayUs = 20000UL;
+    g_netSeq = 0;
+    g_ringsUpAt = g_ringsDownAt = g_linkUpAt = g_linkDownAt = 0;
+    g_ringsUps = g_ringsDowns = g_linkUps = g_linkDowns2 = 0;
+    g_approveAt = g_teardownAt = 0;
+    g_lastRingNo = 0;
+    g_lastE2e = -1;
+    g_lastLost = -1;
+    g_fake.OnTx = xdOnTx;
+    TbtIcmSetNetConfig(&g_icm, TRUE, 0x03040000UL);
+    TbtIcmSetNet(&g_icm, &g_xdNet);
+}
+
+static void xdBind(void)
+{
+    CHECK_EQ(start(), TBT_OK, "bind");
+    TbtIcmNetWanted(&g_icm, TRUE, TBT_NET_STNS_FRAME_ID | TBT_NET_STNS_E2E);
+}
+
+/* The thread's idle polls and the far host's own clock, 50 ms a step. */
+static void xdIdle(unsigned long ms)
+{
+    unsigned long t;
+
+    for (t = 0; t < ms; t += 50) {
+        fakeSleep(NULL, 50);
+        TbtIcmPoll(&g_icm);
+        if (g_xp.Live) {
+            TbtXdpPeerTick(&g_xp.E);
+        }
+    }
+}
+
+/* The cable in: the firmware's connected event (direct link: link 1,
+ * depth 0, local route 1) and the far host's discovery. */
+static void xdPlug(void)
+{
+    if (g_xfw.Tr) {
+        xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    } else {
+        xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    }
+    xpStart(&kXdFar);
+}
+
+static int xdUp(void)
+{
+    const TBT_XDP_PEER *p = TbtIcmPeer(&g_icm, 0);
+
+    return p != NULL && p->NetState == TBT_NET_S_UP && g_xp.E.NetState == TBT_NET_S_UP;
+}
+
+static unsigned long xdMboxFrom;
+
+static void test_xd_frames(void)
+{
+    unsigned long ev[14];
+    TBT_ICM_XD_EVENT e;
+    TBT_ICM_XD_ADDR a;
+    ULONG dw[9];
+    ULONG n;
+
+    /* struct icm_fr_event_xdomain_connected */
+    ev[0] = 0x01000006UL;
+    ev[1] = (2UL | (0UL << 4)) << 16;
+    memcpy(&ev[2], kXdFar.Dw, 16);
+    memcpy(&ev[6], kXdLocal.Dw, 16);
+    ev[10] = 0x80000000UL;
+    ev[11] = 2;
+    ev[12] = 0;
+    ev[13] = 3;
+    CHECK(TbtIcmProfileAlpineRidge.DecodeXdConnected(ev, 14, &e), "AR 0x06 decodes");
+    CHECK_EQ(e.Kind, TBT_ICM_XE_CONNECTED, "connected");
+    CHECK_EQ(e.Link, 2, "link from link_info 31:16");
+    CHECK_EQ(e.Depth, 0, "depth 0");
+    CHECK_EQ(e.Remote.Dw[0], kXdFar.Dw[0], "remote_uuid at DW 2");
+    CHECK_EQ(e.Remote.Dw[3], kXdFar.Dw[3], "remote_uuid to DW 5");
+    CHECK_EQ(e.Local.Dw[0], kXdLocal.Dw[0], "local_uuid at DW 6");
+    CHECK_EQ(e.Route.Hi, 0, "the CM bit cleared from local_route_hi");
+    CHECK_EQ(e.Route.Lo, 2, "local_route_lo DW 11");
+    CHECK_EQ(e.RemoteRoute.Lo, 3, "remote_route_lo DW 13");
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeXdConnected(ev, 13, &e), "13 DWs: short");
+    ev[1] = 0;
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeXdConnected(ev, 14, &e), "link 0 refused");
+    ev[1] = (5UL << 16);
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeXdConnected(ev, 14, &e), "link 5 refused");
+    ev[1] = (1UL | (7UL << 4)) << 16;
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeXdConnected(ev, 14, &e), "depth 7 refused");
+    ev[1] = 0;
+    CHECK(TbtIcmProfileTitanRidge.DecodeXdConnected(ev, 14, &e), "TR: link info not used");
+    ev[11] = 0;
+    CHECK(!TbtIcmProfileTitanRidge.DecodeXdConnected(ev, 14, &e), "local route 0 refused");
+
+    /* the disconnects */
+    ev[0] = 0x01000007UL;
+    ev[1] = 1UL << 16;
+    memcpy(&ev[2], kXdFar.Dw, 16);
+    CHECK(TbtIcmProfileAlpineRidge.DecodeXdDisconnected(ev, 6, &e), "AR 0x07, 6 DWs");
+    CHECK_EQ(e.Link, 1, "its link");
+    CHECK_EQ(e.Remote.Dw[1], kXdFar.Dw[1], "its remote_uuid");
+    CHECK(!TbtIcmProfileAlpineRidge.DecodeXdDisconnected(ev, 5, &e), "5 DWs short");
+    ev[1] = 0;
+    ev[2] = 0x0301UL;
+    memcpy(&ev[3], kXdFar.Dw, 16);
+    CHECK(TbtIcmProfileTitanRidge.DecodeXdDisconnected(ev, 7, &e), "TR 0x07, 7 DWs");
+    CHECK_EQ(e.Route.Lo, 0x0301, "route_lo DW 2");
+    CHECK_EQ(e.Remote.Dw[0], kXdFar.Dw[0], "remote_uuid at DW 3");
+    CHECK(!TbtIcmProfileTitanRidge.DecodeXdDisconnected(ev, 6, &e), "6 DWs short on TR");
+
+    /* struct icm_fr_pkg_approve_xdomain and icm_tr_pkg_approve_xdomain */
+    memset(&a, 0, sizeof(a));
+    a.Link = 3;
+    a.Depth = 0;
+    a.Route.Lo = 3;
+    a.Remote = kXdFar;
+    n = TbtIcmProfileAlpineRidge.EncodeXdApprove(&a, 8, 1, 9, 1, dw);
+    CHECK_EQ(n, 8, "AR approve: 8 DWs");
+    CHECK_EQ(dw[0], 0x00000010UL, "code 0x10, flags 0");
+    CHECK_EQ(dw[1], 0x00030000UL, "link_info in 31:16");
+    CHECK_EQ(dw[2], kXdFar.Dw[0], "remote_uuid");
+    CHECK_EQ(dw[6], 0x00010008UL, "transmit_path 8, transmit_ring 1");
+    CHECK_EQ(dw[7], 0x00010009UL, "receive_path 9, receive_ring 1");
+    CHECK(TbtIcmProfileFalconRidge.EncodeXdTeardown == NULL, "FR tears down by mailbox");
+    CHECK(TbtIcmProfileAlpineRidge.EncodeXdTeardown == NULL, "AR tears down by mailbox");
+    a.Route.Hi = 0;
+    a.Route.Lo = 0x0301;
+    n = TbtIcmProfileTitanRidge.EncodeXdApprove(&a, 15, 1, 8, 1, dw);
+    CHECK_EQ(n, 9, "TR approve: 9 DWs");
+    CHECK_EQ(dw[1], 0, "route_hi");
+    CHECK_EQ(dw[2], 0x0301UL, "route_lo");
+    CHECK_EQ(dw[3], kXdFar.Dw[0], "remote_uuid at DW 3");
+    CHECK_EQ(dw[7], 0x0001000FUL, "transmit 15 on ring 1");
+    CHECK_EQ(dw[8], 0x00010008UL, "receive 8 on ring 1");
+    n = TbtIcmProfileIceLake.EncodeXdApprove(&a, 15, 1, 8, 1, dw);
+    CHECK_EQ(n, 9, "Ice Lake takes Titan Ridge's approve");
+    n = TbtIcmProfileTitanRidge.EncodeXdTeardown(&a, 2, dw);
+    CHECK_EQ(n, 8, "TR teardown: 8 DWs");
+    CHECK_EQ(dw[0], 0x00000011UL, "code 0x11");
+    CHECK_EQ(dw[1], 2, "stage in 7:0");
+    CHECK_EQ(dw[3], 0x0301UL, "route_lo");
+    CHECK_EQ(dw[7], kXdFar.Dw[3], "remote_uuid to DW 7");
+    CHECK(TbtIcmProfileIceLake.EncodeXdTeardown != NULL, "Ice Lake: the command");
+}
+
+/* XhciCmNet 0: the events logged and ignored, every packet dropped. */
+static void test_xd_off(void)
+{
+    unsigned long ignored;
+    unsigned long tx;
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+
+    setup(GEN_AR, 0, 0);
+    g_fake.OnTx = xdOnTx;
+    CHECK_EQ(start(), TBT_OK, "bind");
+    ignored = g_icm.Counters.EventsIgnored;
+    xdConnectedEv(1, 0, 0, 1, &kXdFar, 1000);
+    r.Hi = 0;
+    r.Lo = 1;
+    n = TbtXdpBuildUuidRequest(buf, &r, 1, TBT_XDP_UUID_REQ);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 2000, 0);
+    tx = g_fake.TxCount;
+    idle(1000);
+    CHECK_EQ(g_icm.Counters.EventsIgnored, ignored + 1, "0x06 ignored");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "no record");
+    CHECK_EQ(g_icm.XdCounters.PacketsIgnored, 1, "the request dropped");
+    CHECK_EQ(g_fake.TxCount, tx, "nothing answered");
+    CHECK(!TbtIcmNetIdentity(&g_icm, (PUCHAR)buf), "no identity");
+}
+
+/* Alpine Ridge: the link up through the firmware's approve, and its
+ * teardown by mailbox 0x10, data 1 then 2. */
+static void test_xd_ar_up_down(void)
+{
+    const TBT_XDP_PEER *p;
+    unsigned long mb;
+    UCHAR mac[6];
+
+    xdSetup(GEN_AR);
+    xdBind();
+    CHECK(TbtIcmNetIdentity(&g_icm, mac), "an identity");
+    CHECK((mac[0] & 0x03) == 0x02, "locally administered, unicast");
+    xdPlug();
+    xdIdle(6000);
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL, "a record for the link");
+    CHECK(p != NULL && p->FirmwareCm, "firmware-CM mode");
+    CHECK(p != NULL && TbtUuidEqual(&p->Local, &kXdLocal), "this domain's UUID is the event's");
+    CHECK(TbtUuidEqual(&g_xp.E.Remote, &kXdLocal), "the far host learned it");
+    CHECK(xdUp(), "the service up on both ends");
+    CHECK_EQ(g_xfw.Approves, 1, "one approve");
+    CHECK_EQ(g_xfw.LastApproveWords, 8, "Alpine Ridge's 8 DWs");
+    CHECK_EQ(g_xfw.LastApprove[1], 0x00010000UL, "link 1 depth 0");
+    CHECK_EQ(g_xfw.LastApprove[2], kXdFar.Dw[0], "the far UUID");
+    CHECK_EQ(g_xfw.LastApprove[6], (1UL << 16) | 8UL, "our Service HopID 8 on ring 1");
+    CHECK_EQ(g_xfw.LastApprove[7], (1UL << 16) | g_xp.TxHop, "the far host's HopID in");
+    CHECK_EQ(g_xp.RxHop, 8, "the far host receives on our HopID");
+    CHECK_EQ(g_lastRingNo, 1, "ring 1");
+    CHECK_EQ(g_lastE2e, 1, "E2E: both offer it");
+    CHECK_EQ(g_lastPort, 1, "record 1");
+    CHECK(g_ringsUpAt < g_approveAt && g_approveAt < g_linkUpAt,
+          "rings, approve, link: in that order");
+
+    /* The network driver closes the service: the link down at once, the
+     * Logout, then mailbox 0x10 data 1 and 2, then the rings. */
+    mb = g_fake.MboxCount;
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    CHECK_EQ(g_linkDowns2, 1, "the link down at the close");
+    CHECK_EQ(g_ringsDowns, 0, "the rings held until the paths go");
+    xdIdle(3000);
+    CHECK_EQ(g_fake.MboxCount - mb, 2, "two mailbox commands");
+    CHECK_EQ(g_fake.MboxLog[mb], 0x10, "port A");
+    CHECK_EQ(g_fake.MboxDataLog[mb], 1, "data 1");
+    CHECK_EQ(g_fake.MboxLog[mb + 1], 0x10, "port A again");
+    CHECK_EQ(g_fake.MboxDataLog[mb + 1], 2, "data 2");
+    CHECK_EQ(g_ringsDowns, 1, "the rings down");
+    CHECK(g_xp.Downs >= 1, "the far host's service ended too");
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL && p->NetState == TBT_NET_S_OFF, "the record stays, service off");
+
+    /* Opened again: a second service, a second approve. */
+    TbtIcmNetWanted(&g_icm, TRUE, TBT_NET_STNS_FRAME_ID | TBT_NET_STNS_E2E);
+    xdIdle(6000);
+    CHECK(xdUp(), "up again");
+    CHECK_EQ(g_xfw.Approves, 2, "the second approve");
+
+    /* The unbind: one Logout, the teardown, then mailbox 0x07. */
+    mb = g_fake.MboxCount;
+    TbtIcmUnbind(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "no record after the unbind");
+    CHECK_EQ(g_fake.MboxLog[mb], 0x10, "the teardown first");
+    CHECK_EQ(g_fake.MboxLog[mb + 2], 0x07, "then driver unloads");
+    CHECK_EQ(g_ringsDowns, 2, "the rings down");
+}
+
+/* Port B's links take mailbox 0x11. */
+static void test_xd_ar_port_b(void)
+{
+    unsigned long mb;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdConnectedEv(3, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);
+    xpStart(&kXdFar);
+    xdIdle(6000);
+    CHECK(xdUp(), "up on link 3");
+    CHECK_EQ(g_xfw.LastApprove[1], 0x00030000UL, "link 3");
+    mb = g_fake.MboxCount;
+    TbtIcmSuspend(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "ended at the suspend");
+    CHECK_EQ(g_fake.MboxLog[mb], 0x11, "port B");
+    CHECK_EQ(g_fake.MboxLog[mb + 1], 0x11, "port B, data 2");
+    CHECK_EQ(g_fake.MboxDataLog[mb + 1], 2, "data 2");
+}
+
+/* The disconnect: no Logout, no teardown; the rings down. */
+static void test_xd_unplug(void)
+{
+    unsigned long mb;
+    unsigned long tx;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up");
+    mb = g_fake.MboxCount;
+    g_xp.Live = 0;
+    xdDisconnectedEv(1, 0, &kXdFar, 1000);
+    tx = g_fake.TxCount;
+    xdIdle(500);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
+    CHECK_EQ(g_fake.MboxCount, mb, "no teardown: the firmware dropped the paths");
+    CHECK_EQ(g_fake.TxCount, tx, "no Logout");
+    CHECK_EQ(g_linkDowns2, 1, "the link down");
+    CHECK_EQ(g_ringsDowns, 1, "the rings down");
+    CHECK_EQ(g_lastLost, 0, "the host interface is there");
+}
+
+/* Titan Ridge: the approve by route, the teardown in two stages. */
+static void test_xd_tr(void)
+{
+    xdSetup(GEN_TR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up on Titan Ridge");
+    CHECK_EQ(g_xfw.LastApproveWords, 9, "9 DWs");
+    CHECK_EQ(g_xfw.LastApprove[2], XD_OUR_ROUTE, "route_lo");
+    CHECK_EQ(g_xfw.LastApprove[7], (1UL << 16) | 8UL, "transmit 8 on ring 1");
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    xdIdle(3000);
+    CHECK_EQ(g_xfw.Teardowns, 2, "two stages");
+    CHECK_EQ(g_xfw.Stages[0], 1, "stage 1");
+    CHECK_EQ(g_xfw.Stages[1], 2, "then stage 2");
+    CHECK_EQ(g_xfw.LastTeardown[3], XD_OUR_ROUTE, "its route");
+    CHECK(g_teardownAt < g_ringsDownAt, "the rings after the teardown");
+    CHECK(g_linkDownAt < g_teardownAt, "the link before it");
+
+    /* Stage 1 refused: no stage 2, nothing owed. */
+    TbtIcmNetWanted(&g_icm, TRUE, TBT_NET_STNS_FRAME_ID);
+    xdIdle(6000);
+    CHECK(xdUp(), "up again");
+    CHECK_EQ(g_lastE2e, 0, "no E2E: this host withdrew it");
+    g_xfw.TeardownMode = MODE_ERROR;
+    g_xfw.Teardowns = 0;
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    xdIdle(3000);
+    CHECK_EQ(g_xfw.Teardowns, 1, "no stage 2 after a refused stage 1");
+    CHECK(g_icm.XdOwed, "a refused teardown stays owed: nothing proves the paths gone");
+}
+
+/* Ice Lake: no device approve, but the host-to-host one. */
+static void test_xd_icl(void)
+{
+    xdSetup(GEN_ICL);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up on Ice Lake");
+    CHECK_EQ(g_xfw.LastApproveWords, 9, "Titan Ridge's layout");
+    TbtIcmUnbind(&g_icm);
+    CHECK_EQ(g_xfw.Teardowns, 2, "the staged teardown at the unbind");
+}
+
+/* Falcon Ridge: ring 2, the E2E bit withdrawn. */
+static void test_xd_fr(void)
+{
+    xdSetup(GEN_FR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up on Falcon Ridge");
+    CHECK_EQ(g_lastRingNo, 2, "ring 2");
+    CHECK_EQ(g_lastE2e, 0, "no E2E");
+    CHECK_EQ(g_xfw.LastApprove[6], (2UL << 16) | 8UL, "ring 2 in the approve");
+    CHECK_EQ(g_icm.NetPrtcstns & TBT_NET_STNS_E2E, 0, "not offered");
+}
+
+/* The approve's three failures. */
+static void test_xd_approve_fails(void)
+{
+    unsigned long mb;
+
+    /* The error flag: no service, no teardown. */
+    xdSetup(GEN_AR);
+    g_xfw.ApproveMode = MODE_ERROR;
+    xdBind();
+    xdPlug();
+    mb = g_fake.MboxCount;
+    xdIdle(3000);
+    CHECK(!xdUp(), "no service");
+    CHECK(g_icm.XdCounters.ApprovesFailed >= 1, "counted");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "every ring set-up undone");
+    CHECK_EQ(g_linkUps, 0, "no link");
+    CHECK_EQ(g_fake.MboxCount, mb, "nothing to tear down");
+
+    /* No answer: the paths may stand, so the teardown; the next approve
+     * fenced. */
+    xdSetup(GEN_AR);
+    g_xfw.ApproveMode = MODE_NEVER;
+    TbtIcmSetTimeouts(&g_icm, 1000, 1000);
+    xdBind();
+    xdPlug();
+    mb = g_fake.MboxCount;
+    xdIdle(6000);
+    CHECK(!xdUp(), "no service");
+    CHECK(g_icm.XdCounters.ApprovesUnknown >= 1, "unknown");
+    CHECK(g_fake.MboxCount - mb >= 2, "the teardown sent");
+    CHECK(g_icm.XdFenced, "later approves fenced");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "every ring set-up undone");
+
+    /* A disconnect inside the wait ends it at once. */
+    xdSetup(GEN_AR);
+    g_xfw.GoneInApprove = 1;
+    xdBind();
+    xdPlug();
+    mb = g_fake.MboxCount;
+    xdIdle(6000);
+    CHECK_EQ(g_xfw.Approves, 1, "one approve");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the record ended");
+    CHECK_EQ(g_fake.MboxCount, mb, "no teardown");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "the rings down");
+    CHECK(g_fake.NowUs < 9000000UL, "not the approve's 10 s");
+}
+
+/* Before any record: a discovery request answered Not Ready. */
+static void test_xd_not_ready(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    TBT_XDP_PKT k;
+    ULONG n;
+    long i;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    r.Hi = 0;
+    r.Lo = XD_OUR_ROUTE;
+    n = TbtXdpBuildUuidRequest(buf, &r, 2, TBT_XDP_UUID_REQ);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 1000, 0);
+    idle(400);
+    i = findTx(TBT_PDF_XDOMAIN_RESP, 0);
+    CHECK(i >= 0, "answered");
+    if (i >= 0) {
+        CHECK_EQ(TbtXdpDecode(TBT_PDF_XDOMAIN_RESP, (const ULONG *)g_fake.TxLogDw[i],
+                              g_fake.TxLogWords[i], &k), TBT_XDP_K_DISCOVERY, "a discovery packet");
+        CHECK_EQ(k.Type, TBT_XDP_ERROR, "an Error Response");
+        CHECK_EQ(k.Error, TBT_XDP_ERR_NOT_READY, "Not Ready");
+        CHECK_EQ(k.Sn, 2, "the request's SN");
+    }
+}
+
+/* The keying: announced again kept; another host at the port replaces
+ * it; a device at the port ends it; a link not direct gets nothing. */
+static void test_xd_keying(void)
+{
+    ULONG serial;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up");
+    serial = g_icm.Xd[0].Serial;
+    xdConnectedEv(2, 0, 0, XD_OUR_ROUTE, &kXdFar, 1000);  /* the dual link */
+    xdIdle(500);
+    CHECK(g_icm.Xd[0].Used && g_icm.Xd[0].Serial == serial, "kept: the same port");
+    CHECK_EQ(g_icm.Xd[0].Addr.Link, 2, "its link updated");
+    CHECK(xdUp(), "still up");
+
+    g_xp.Live = 0;
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar2, 1000);
+    xdIdle(500);
+    CHECK(g_icm.Xd[0].Used && TbtUuidEqual(&g_icm.Xd[0].Addr.Remote, &kXdFar2),
+          "another host at the port: a new record");
+    CHECK(g_icm.Xd[0].Serial != serial, "a new occupancy");
+    CHECK(!g_icm.Xd[1].Used, "the old one gone");
+    CHECK_EQ(g_linkDowns2, 1, "the old service's link down");
+
+    /* A device at depth 1 on the same port. */
+    arConnected(6, 1, 1, 1, kUuid, 1000);
+    idle(1000);
+    CHECK(!g_icm.Xd[0].Used, "a device where the host was: ended");
+
+    /* Not direct: depth 1 on Alpine Ridge names a router in between. */
+    xdConnectedEv(3, 1, 0, 0x0103, &kXdFar, 1000);
+    xdIdle(500);
+    CHECK(!g_icm.Xd[0].Used && !g_icm.Xd[1].Used, "no record behind a router");
+    CHECK_EQ(g_icm.XdCounters.Deep, 1, "counted");
+}
+
+/* A host announced where a device was takes the device away. */
+static void test_xd_replaces_device(void)
+{
+    TBT_ICM_ACTION acts[8];
+    unsigned long n;
+
+    setup(GEN_TR, 1, 1);
+    memset(&g_xp, 0, sizeof(g_xp));
+    memset(&g_xfw, 0, sizeof(g_xfw));
+    TbtIcmSetNetConfig(&g_icm, TRUE, 0);
+    TbtIcmSetNet(&g_icm, &g_xdNet);
+    g_xfw.Tr = 1;
+    g_fake.OnTx = xdOnTx;
+    CHECK_EQ(start(), TBT_OK, "bind with the dock");
+    (void)actions(acts, 8);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the dock");
+    xdConnectedEv(0, 0, 0, 1, &kXdFar, 1000);
+    xdIdle(500);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "the device replaced");
+    n = actions(acts, 8);
+    CHECK(n >= 1 && acts[0].Kind == TBT_ICM_ACT_TUNNEL_DOWN &&
+              acts[0].Why == TBT_ICM_WHY_REPLACED, "its TUNNEL_DOWN");
+    CHECK(TbtIcmPeer(&g_icm, 0) != NULL, "the host's record");
+}
+
+/* Order across the kinds inside a wait: a host's announcement and then a
+ * device's at the same place leave the device. */
+static void test_xd_order_in_wait(void)
+{
+    TBT_ICM_ANNOUNCE a;
+    TBT_FRAME f;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 100);
+    arConnected(7, 1, 1, 1, kUuid, 200);
+    fakeSleep(NULL, 5);
+    TbtIcmService(&g_icm);      /* the driver's own wait: both queued */
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "nothing acted on in the wait");
+    CHECK_EQ(g_icm.QueueCount, 2, "both queued, in order");
+    (void)a;
+    (void)f;
+    idle(1000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the later device ended the host's record");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 1, "the device stays");
+}
+
+/* The host interface lost: nothing sent, the teardown owed and sent
+ * before the next approve; a refused one retired. */
+static void test_xd_lost_and_owed(void)
+{
+    unsigned long mb;
+    unsigned long tx;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up");
+    mb = g_fake.MboxCount;
+    tx = g_fake.TxCount;
+    TbtIcmLost(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "ended");
+    CHECK_EQ(g_fake.MboxCount, mb, "no mailbox");
+    CHECK_EQ(g_fake.TxCount, tx, "nothing sent");
+    CHECK_EQ(g_lastLost, 1, "the rings told the host interface is lost");
+    CHECK(g_icm.XdOwed, "the teardown owed");
+    CHECK_EQ(TbtIcmRecover(&g_icm, TRUE), TBT_OK, "recovered");
+    g_xp.Live = 0;
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up again");
+    CHECK(!g_icm.XdOwed, "the owed teardown sent first");
+    CHECK(g_fake.MboxCount - mb >= 2, "its two mailbox steps");
+
+    /* An owed one the disconnect settles. */
+    TbtIcmLost(&g_icm);
+    CHECK(g_icm.XdOwed, "owed again");
+    CHECK_EQ(TbtIcmRecover(&g_icm, TRUE), TBT_OK, "recovered");
+    xdDisconnectedEv(1, 0, &kXdFar, 1000);
+    xdIdle(500);
+    CHECK(!g_icm.XdOwed, "settled by the disconnect");
+    CHECK(g_icm.XdCounters.OwedRetired >= 1, "counted");
+}
+
+/* A rediscovery's driver ready: a link not announced again ends. */
+static void test_xd_rediscover(void)
+{
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up");
+    g_icm.RediscoverPending = TRUE;
+    idle(3000);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "not announced again: ended");
+    CHECK_EQ(g_icm.XdCounters.Reconciled, 1, "reconciled");
+
+    /* Announced again within the window: kept. */
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    g_icm.RediscoverPending = TRUE;
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 300000);
+    idle(3000);
+    CHECK(TbtIcmPeer(&g_icm, 0) != NULL, "announced again: kept");
+}
+
+/* The MAC from the Device Serial Number (record 35 section 4.4). */
+static void test_xd_identity(void)
+{
+    UCHAR mac[6];
+    UCHAR want[6];
+
+    xdSetup(GEN_AR);
+    TbtIcmSetNetSerial(&g_icm, 0x12345678UL, 0x9abcdef0UL);
+    xdBind();
+    CHECK(TbtIcmNetIdentity(&g_icm, mac), "an identity");
+    TbtNetMacFromUuid(0x12345678UL, 0x9abcdef0UL, 0, 0, want);
+    CHECK(memcmp(mac, want, 6) == 0, "IDS 5.1.5.3 over the serial, router 0, port 0");
+}
+
+/* An attempt of the approve unanswered and a retry answered: the first
+ * attempt's answer may still come and match a later approve of the same
+ * words, so the fence holds every approve until the rings restart. */
+static int g_xdSkipApproves;
+
+static void xdSkipOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                       unsigned long words)
+{
+    if (pdf == TBT_PDF_ICM_CMD && words >= 1 && (dw[0] & 0xFF) == 0x10 &&
+        g_xdSkipApproves > 0) {
+        g_xdSkipApproves--;
+        g_xfw.Approves++;
+        return;
+    }
+    xdOnTx(fk, pdf, dw, words);
+}
+
+static void test_xd_fence(void)
+{
+    unsigned long approves;
+    unsigned long mb;
+
+    xdSetup(GEN_AR);
+    TbtIcmSetTimeouts(&g_icm, 1000, 1000);
+    g_fake.OnTx = xdSkipOnTx;
+    g_xdSkipApproves = 1;
+    xdBind();
+    xdPlug();
+    mb = g_fake.MboxCount;
+    xdIdle(8000);
+    CHECK_EQ(g_xfw.Approves, 2, "the first attempt unanswered, the retry answered");
+    CHECK(g_icm.XdFenced, "fenced: the first attempt's answer may still come");
+    CHECK(!xdUp(), "no service on an answer that may be the first attempt's");
+    CHECK_EQ(g_linkUps, 0, "no link");
+    CHECK(g_fake.MboxCount - mb >= 2, "the paths torn down");
+    CHECK(g_icm.XdCounters.ApprovesUnknown >= 1, "taken as unknown");
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    xdIdle(3000);
+    approves = g_xfw.Approves;
+    TbtIcmNetWanted(&g_icm, TRUE, TBT_NET_STNS_FRAME_ID | TBT_NET_STNS_E2E);
+    xdIdle(6000);
+    CHECK_EQ(g_xfw.Approves, approves, "no approve while fenced");
+    CHECK(g_icm.XdCounters.ApprovesFenced >= 1, "refused, counted");
+    CHECK(!xdUp(), "no service meanwhile");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "every ring set-up undone");
+}
+
+/* The approve published and its wait ended by the access closing: the
+ * paths may stand, so the teardown is owed. */
+static int g_xdCancel;
+
+static BOOLEAN xdCancelled(PVOID ctx)
+{
+    (void)ctx;
+    return (BOOLEAN)(g_xdCancel != 0);
+}
+
+static TBT_HOST g_xdHost;
+
+static void xdCancelOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                         unsigned long words)
+{
+    if (pdf == TBT_PDF_ICM_CMD && words >= 1 && (dw[0] & 0xFF) == 0x10) {
+        g_xfw.Approves++;
+        g_xdCancel = 1;     /* published; the access closes before any answer */
+        return;
+    }
+    xdOnTx(fk, pdf, dw, words);
+}
+
+static void test_xd_cancel_in_approve(void)
+{
+    unsigned long mb;
+
+    xdSetup(GEN_AR);
+    g_xdHost = g_fakeHost;
+    g_xdHost.Cancelled = xdCancelled;
+    g_xdCancel = 0;
+    TbtIcmInit(&g_icm, rowFor(GEN_AR), &g_ring, &g_xdHost, 0);
+    TbtIcmSetNetConfig(&g_icm, TRUE, 0);
+    TbtIcmSetNet(&g_icm, &g_xdNet);
+    g_fake.OnTx = xdCancelOnTx;
+    xdBind();
+    xdPlug();
+    mb = g_fake.MboxCount;
+    xdIdle(6000);
+    CHECK(g_xfw.Approves >= 1, "the approve published");
+    CHECK(g_icm.XdCounters.ApprovesUnknown >= 1, "its outcome unknown");
+    CHECK(g_icm.XdOwed, "the teardown owed: none could be sent");
+    CHECK_EQ(g_fake.MboxCount, mb, "nothing sent with the access closed");
+    CHECK(g_icm.XdFenced, "fenced");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "the rings down");
+    CHECK_EQ(g_linkUps, 0, "no link");
+}
+
+/* A host's announcement inside a command wait, then a device's at the
+ * same place read just after the answer that ends the wait: the device is
+ * acted on after the host, so the host's record ends and the device
+ * stays. */
+static void xdOrderOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                        unsigned long words)
+{
+    xdOnTx(fk, pdf, dw, words);
+    if (pdf == TBT_PDF_ICM_CMD && words >= 2 && (dw[0] & 0xFF) == 0x04 &&
+        dw[1] == kUuid2[0]) {
+        xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, g_fw.ApproveDelayUs / 2);
+        /* the same arrival time as the approve's answer, queued after it */
+        arConnected(9, 1, 1, 1, kUuid, g_fw.ApproveDelayUs);
+    }
+}
+
+static void test_xd_order_after_wait(void)
+{
+    xdSetup(GEN_AR);
+    xdBind();
+    g_fake.OnTx = xdOrderOnTx;
+    arConnected(5, 0, 3, 1, kUuid2, 1000);     /* port B, unapproved */
+    idle(3000);
+    CHECK_EQ(approvesFor(kUuid2), 1, "port B's device approved, with a wait");
+    CHECK(slotOf(kUuid) >= 0, "the device on port A stays");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL && TbtIcmPeer(&g_icm, 1) == NULL,
+          "the host's record ended by the later device");
+}
+
+/* A packet of host A's held when A's record ends never reaches host B's
+ * record at the same route. */
+static void test_xd_purge(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    const TBT_XDP_PEER *p;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up with A");
+    g_xp.Live = 0;
+    r.Hi = 0;
+    r.Lo = XD_OUR_ROUTE;
+    n = TbtXdpBuildChanged(buf, &r, 1, &kXdFar);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 100000, 0);
+    xdDisconnectedEv(1, 0, &kXdFar, 150000);
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar2, 200000);
+    fakeSleep(NULL, 300);
+    TbtIcmPoll(&g_icm);     /* one drain: all three, then the records */
+    p = TbtIcmPeer(&g_icm, 0);
+    if (p == NULL) {
+        p = TbtIcmPeer(&g_icm, 1);
+    }
+    CHECK(p != NULL, "B's record");
+    CHECK(p != NULL && TbtUuidEqual(&p->Remote, &kXdFar2), "B's engine still knows B");
+    CHECK_EQ(g_icm.XdCount, 0, "A's packet dropped");
+}
+
+/* The same inside a wait, with no record yet: A announced, a packet of
+ * A's, A's disconnect and B announced, all queued; B's record never sees
+ * A's packet. */
+static void test_xd_purge_queued(void)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE r;
+    ULONG n;
+    const TBT_XDP_PEER *p;
+
+    xdSetup(GEN_AR);
+    xdBind();
+    r.Hi = 0;
+    r.Lo = XD_OUR_ROUTE;
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar, 100);
+    n = TbtXdpBuildChanged(buf, &r, 1, &kXdFar);
+    fakeQueue(TBT_PDF_XDOMAIN_REQ, (unsigned long *)buf, n, 200, 0);
+    xdDisconnectedEv(1, 0, &kXdFar, 300);
+    xdConnectedEv(1, 0, 0, XD_OUR_ROUTE, &kXdFar2, 400);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);      /* the driver's own wait: everything held */
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "no record in the wait");
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(g_icm.XdCount, 0, "A's packet dropped with A's record");
+    p = TbtIcmPeer(&g_icm, 0);
+    CHECK(p != NULL && TbtUuidEqual(&p->Remote, &kXdFar2), "B's engine knows B");
+}
+
+/* Host A up; host B announced at A's port and disconnected, both inside a
+ * wait: B's announcement never acted on still ended A. */
+static void test_xd_replaced_queued(void)
+{
+    xdSetup(GEN_AR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up with A");
+    g_xp.Live = 0;
+    xdConnectedEv(2, 0, 0, XD_OUR_ROUTE, &kXdFar2, 100);
+    xdDisconnectedEv(2, 0, &kXdFar2, 200);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    TbtIcmPoll(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL && TbtIcmPeer(&g_icm, 1) == NULL,
+          "A's record ended");
+    CHECK_EQ(g_linkUps, g_linkDowns2, "its link down");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "its rings down");
+}
+
+/* Titan Ridge, all inside one wait: a device announced at route 1, a host
+ * announced there, the host's disconnect - the host replaced the device,
+ * so neither remains. */
+static void test_xd_queued_order_tr(void)
+{
+    xdSetup(GEN_TR);
+    xdBind();
+    trConnected(6, 1, 1, kUuid, 100, 0);
+    xdConnectedEv(0, 0, 0, 1, &kXdFar, 200);
+    xdDisconnectedEv(0, 1, &kXdFar, 300);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    CHECK_EQ(g_icm.QueueCount, 3, "all three queued, in order");
+    TbtIcmPoll(&g_icm);
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "the device replaced by the host");
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the host gone");
+
+    /* A host moved from route 1 to route 3 and gone from there, both
+     * queued: the record at route 1 ends too. */
+    xdSetup(GEN_TR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up at route 1");
+    g_xp.Live = 0;
+    xdConnectedEv(0, 0, 0, 3, &kXdFar, 100);
+    xdDisconnectedEv(0, 3, &kXdFar, 200);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    TbtIcmPoll(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL && TbtIcmPeer(&g_icm, 1) == NULL,
+          "the moved host's old record ended");
+    CHECK_EQ(g_linkUps, g_linkDowns2, "its link down");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "its rings down");
+}
+
+/* Host A up at route 1; a device announced there and disconnected, both
+ * inside a wait: the device never acted on still ended A. */
+static void test_xd_device_purged(void)
+{
+    xdSetup(GEN_TR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up at route 1");
+    g_xp.Live = 0;
+    trConnected(6, 1, 1, kUuid, 100, 0);
+    trDisconnected(1, 200);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    TbtIcmPoll(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "A's record ended");
+    CHECK_EQ(g_linkUps, g_linkDowns2, "its link down");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "its rings down");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "no device");
+
+    /* No record yet: a host announced, then a device there and its
+     * disconnect, all queued - the device's place-taking still ends the
+     * host's record. */
+    xdSetup(GEN_TR);
+    xdBind();
+    xdConnectedEv(0, 0, 0, 1, &kXdFar, 100);
+    trConnected(6, 1, 1, kUuid, 200, 0);
+    trDisconnected(1, 300);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    TbtIcmPoll(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "no host record left");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "no device either");
+
+    /* Host up at route 1; the device announced at route 1, again at route
+     * 3, and gone from 3, all queued: the first announcement, superseded,
+     * still ends the host's record. */
+    xdSetup(GEN_TR);
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up at route 1");
+    g_xp.Live = 0;
+    trConnected(6, 1, 1, kUuid, 100, 0);
+    trConnected(7, 1, 3, kUuid, 200, 0);
+    trDisconnected(3, 300);
+    fakeSleep(NULL, 1);
+    TbtIcmService(&g_icm);
+    TbtIcmPoll(&g_icm);
+    CHECK(TbtIcmPeer(&g_icm, 0) == NULL, "the host's record ended");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "its rings down");
+    CHECK_EQ(TbtIcmDeviceCount(&g_icm), 0, "the device gone");
+}
+
+/* The access closing during an established service's teardown: the
+ * teardown owed, the rings told the host interface is lost. */
+static int g_xdCancelInTeardown;
+
+static void xdCancelTdOnTx(FAKE *fk, unsigned long pdf, const unsigned long *dw,
+                           unsigned long words)
+{
+    if (pdf == TBT_PDF_ICM_CMD && words >= 1 && (dw[0] & 0xFF) == 0x11 &&
+        g_xdCancelInTeardown) {
+        g_xfw.Teardowns++;
+        g_xdCancel = 1;
+        return;
+    }
+    xdOnTx(fk, pdf, dw, words);
+}
+
+static void test_xd_cancel_in_teardown(void)
+{
+    xdSetup(GEN_TR);
+    g_xdHost = g_fakeHost;
+    g_xdHost.Cancelled = xdCancelled;
+    g_xdCancel = 0;
+    TbtIcmInit(&g_icm, rowFor(GEN_TR), &g_ring, &g_xdHost, 0);
+    TbtIcmSetNetConfig(&g_icm, TRUE, 0);
+    TbtIcmSetNet(&g_icm, &g_xdNet);
+    g_fake.OnTx = xdCancelTdOnTx;
+    xdBind();
+    xdPlug();
+    xdIdle(6000);
+    CHECK(xdUp(), "up");
+    g_xdCancelInTeardown = 1;
+    TbtIcmNetWanted(&g_icm, FALSE, 0);
+    xdIdle(3000);
+    g_xdCancelInTeardown = 0;
+    CHECK(g_xfw.Teardowns >= 1, "stage 1 published");
+    CHECK(g_icm.XdOwed, "the teardown owed");
+    CHECK_EQ(g_ringsUps, g_ringsDowns, "the rings down");
+    CHECK_EQ(g_lastLost, 1, "told the host interface is lost");
+    CHECK_EQ(g_linkUps, g_linkDowns2, "the link up and down paired");
+}
+
 int main(void)
 {
     RUN_VEC(test_frames_ar);
     RUN_VEC(test_names);
     RUN_VEC(test_bind_rebind);
     RUN_VEC(test_plug_approve_unplug);
+    RUN_VEC(test_ring_wake);
     RUN_VEC(test_policy);
     RUN_VEC(test_resume_refresh_and_reconcile);
     RUN_VEC(test_disconnect_during_approve);
@@ -2462,6 +4192,38 @@ int main(void)
     RUN_VEC(test_lost_and_recover);
     RUN_VEC(test_unsent_and_stalled);
     RUN_VEC(test_router_version);
+    RUN_VEC(test_chain_order_ar);
+    RUN_VEC(test_chain_parent_outcomes);
+    RUN_VEC(test_chain_route_rows);
+    RUN_VEC(test_chain_rebind_and_reconcile);
+    RUN_VEC(test_chain_settled_in_place);
+    RUN_VEC(test_chain_resume_child_first);
+    RUN_VEC(test_chain_queued_and_unconfirmed);
+    RUN_VEC(test_xd_frames);
+    RUN_VEC(test_xd_off);
+    RUN_VEC(test_xd_ar_up_down);
+    RUN_VEC(test_xd_ar_port_b);
+    RUN_VEC(test_xd_unplug);
+    RUN_VEC(test_xd_tr);
+    RUN_VEC(test_xd_icl);
+    RUN_VEC(test_xd_fr);
+    RUN_VEC(test_xd_approve_fails);
+    RUN_VEC(test_xd_not_ready);
+    RUN_VEC(test_xd_keying);
+    RUN_VEC(test_xd_replaces_device);
+    RUN_VEC(test_xd_order_in_wait);
+    RUN_VEC(test_xd_lost_and_owed);
+    RUN_VEC(test_xd_rediscover);
+    RUN_VEC(test_xd_identity);
+    RUN_VEC(test_xd_fence);
+    RUN_VEC(test_xd_cancel_in_approve);
+    RUN_VEC(test_xd_order_after_wait);
+    RUN_VEC(test_xd_purge);
+    RUN_VEC(test_xd_purge_queued);
+    RUN_VEC(test_xd_replaced_queued);
+    RUN_VEC(test_xd_queued_order_tr);
+    RUN_VEC(test_xd_device_purged);
+    RUN_VEC(test_xd_cancel_in_teardown);
     fakeTraceMark("end");
     printf("test_tbt_icm: %d checks, %d failures\n", checks, failures);
     return failures;

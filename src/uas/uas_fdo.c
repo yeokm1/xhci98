@@ -40,7 +40,7 @@ static NTSTATUS uasForwardSync(PUAS_FDO fdo, PIRP irp)
     IoCopyCurrentIrpStackLocationToNext(irp);
     UAS_SET_COMPLETION_ALWAYS(irp, uasSignal, &done);
     (VOID)IoCallDriver(fdo->Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    UasWaitEvent(&done);
     return irp->IoStatus.Status;
 }
 
@@ -63,7 +63,7 @@ static NTSTATUS uasInternalIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
     next->Parameters.Others.Argument1 = arg1;
     UAS_SET_COMPLETION_ALWAYS(irp, uasSignal, &done);
     (VOID)IoCallDriver(fdo->Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    UasWaitEvent(&done);
     status = irp->IoStatus.Status;
     IoFreeIrp(irp);
     return status;
@@ -83,6 +83,13 @@ NTSTATUS UasSyncUrb(PUAS_FDO fdo, PURB urb)
 NTSTATUS UasSyncIoctl(PUAS_FDO fdo, ULONG code)
 {
     return uasInternalIoctl(fdo, code, NULL);
+}
+
+/* One internal device control to the bus with its argument (task 45.23's
+ * IOCTL_XHCI98_RESUME_STATE), waited for. */
+NTSTATUS UasBusIoctl(PUAS_FDO fdo, ULONG code, PVOID arg1)
+{
+    return uasInternalIoctl(fdo, code, arg1);
 }
 
 /* One standard descriptor from the device, into nonpaged pool. */
@@ -408,7 +415,7 @@ static ULONG uasStreamsWanted(PUAS_FDO fdo)
 
 /* REPORT LUNS on LUN 0, retried past a unit attention; LUN 0 alone when
  * the device cannot answer. */
-static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
+static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns, PBOOLEAN answered)
 {
     UCHAR cdb[12];
     PUCHAR buf;
@@ -419,6 +426,7 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
     UCHAR scsi;
 
     n = 0;
+    *answered = FALSE;
     length = 8 + 8 * UAS_MAX_LUNS;
     buf = (PUCHAR)UasAlloc(length);
     if (buf != NULL) {
@@ -429,6 +437,14 @@ static ULONG uasReportLuns(PUAS_FDO fdo, PUCHAR luns)
             if (NT_SUCCESS(UasInternalCommand(fdo, 0, cdb, 12, buf, length,
                                               &got, &scsi))) {
                 n = UasParseReportLuns(buf, got, luns, UAS_MAX_LUNS);
+                /* Definite only when the whole list the header announces
+                 * arrived: a short transfer (an overrun counts as success)
+                 * or a list longer than this buffer leaves LUNs unseen. */
+                if (got >= 8 &&
+                    (((ULONG)buf[0] << 24) | ((ULONG)buf[1] << 16) |
+                     ((ULONG)buf[2] << 8) | buf[3]) <= got - 8) {
+                    *answered = TRUE;
+                }
                 break;
             }
         }
@@ -483,7 +499,10 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     ULONG wanted;
     ULONG i;
     ULONG j;
+    ULONG before;
     BOOLEAN known;
+    BOOLEAN answered;
+    BOOLEAN seen[UAS_MAX_LUNS];
     PUAS_PDO pdo;
     UCHAR serialIndex;
     USHORT vid;
@@ -576,9 +595,28 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     }
     UasEngineStart(fdo);
 
-    count = uasReportLuns(fdo, luns);
+    /* A start after a STOP asks again: a LUN of the earlier start that
+     * this one's REPORT LUNS answered without, or whose INQUIRY now says
+     * no unit is attached, stops being reported, so PnP removes it
+     * (uas_pdo.c deletes it then). Only a definite answer removes one: a
+     * REPORT LUNS that failed (its LUN 0 fallback) or an INQUIRY that
+     * failed keeps the LUN's earlier standing, so an allocation failure or
+     * a transient error never takes a working disk away. Present is set
+     * after the loop, not cleared first, so a LUN that stays is never
+     * briefly refused. */
+    before = fdo->LunCount;
+    count = uasReportLuns(fdo, luns, &answered);
+    for (j = 0; j < UAS_MAX_LUNS; j++) {
+        seen[j] = (BOOLEAN)(j < before && !answered &&
+                            fdo->Luns[j]->Present);
+    }
     for (i = 0; i < count; i++) {
         if (!NT_SUCCESS(uasInquiry(fdo, luns[i], inquiry))) {
+            for (j = 0; j < before; j++) {
+                if (fdo->Luns[j]->Lun == luns[i]) {
+                    seen[j] = fdo->Luns[j]->Present;
+                }
+            }
             continue;
         }
         /* Peripheral qualifier 0: a unit is attached at this LUN. */
@@ -589,7 +627,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         for (j = 0; j < fdo->LunCount; j++) {
             if (fdo->Luns[j]->Lun == luns[i]) {
                 known = TRUE;
-                fdo->Luns[j]->Present = TRUE;
+                seen[j] = TRUE;
             }
         }
         if (known || fdo->LunCount >= UAS_MAX_LUNS) {
@@ -598,6 +636,9 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
         if (NT_SUCCESS(UasPdoCreate(fdo, luns[i], inquiry, &pdo))) {
             fdo->Luns[fdo->LunCount++] = pdo;
         }
+    }
+    for (j = 0; j < before; j++) {
+        fdo->Luns[j]->Present = seen[j];
     }
     return STATUS_SUCCESS;
 }
@@ -664,8 +705,7 @@ static VOID uasFdoRemove(PUAS_FDO fdo)
         pdo = fdo->Luns[i];
         pdo->Gone = TRUE;
         if (InterlockedDecrement(&pdo->Busy) != 0) {
-            (VOID)KeWaitForSingleObject(&pdo->BusyIdle, Executive,
-                                        KernelMode, FALSE, NULL);
+            UasWaitEvent(&pdo->BusyIdle);
         }
     }
     UasStreamsClose(&fdo->Streams);
@@ -684,7 +724,6 @@ static VOID uasFdoRemove(PUAS_FDO fdo)
 NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
 {
     PIO_STACK_LOCATION stack;
-    PDEVICE_CAPABILITIES caps;
     NTSTATUS status;
     KIRQL irql;
 
@@ -699,14 +738,6 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
             }
         }
         return UasCompleteIrp(irp, status, 0);
-
-    case IRP_MN_QUERY_CAPABILITIES:
-        status = uasForwardSync(fdo, irp);
-        if (NT_SUCCESS(status)) {
-            caps = stack->Parameters.DeviceCapabilities.Capabilities;
-            caps->SurpriseRemovalOK = TRUE;
-        }
-        return UasCompleteIrp(irp, status, irp->IoStatus.Information);
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:
         if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
@@ -751,6 +782,10 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
         IoDeleteDevice(fdo->Self);
         return status;
 
+    /* IRP_MN_QUERY_CAPABILITIES passes here unchanged: the bus's
+     * SurpriseRemovalOK (FALSE for a whole device, as for a Bulk-Only
+     * stick) is what lets Safely Remove Hardware list and stop the drive
+     * on its own (task 45.61, design record 13 section 17). */
     default:
         break;
     }
@@ -758,8 +793,58 @@ NTSTATUS UasFdoPnp(PUAS_FDO fdo, PIRP irp)
     return IoCallDriver(fdo->Lower, irp);
 }
 
+/* The S0's completion below (<= DISPATCH_LEVEL): the wake check asked
+ * for (task 45.23), the IRP left to complete on. */
+static NTSTATUS uasWakeDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
+{
+    UNREFERENCED_PARAMETER(device);
+    if (irp->PendingReturned) {
+        IoMarkIrpPending(irp);
+    }
+    PoStartNextPowerIrp(irp);
+    UasEngineWake((PUAS_FDO)context);
+    /* The reference UasFdoPower took for this completion; the wake
+     * check's own is separate. */
+    UasEngineRelease((PUAS_FDO)context);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Power IRPs go down unchanged, except the system set-power (task 45.23,
+ * design record 20 section 4.3.3): to a sleeping state, the sleep phase
+ * (UasEngineSleep: the hold, the drain, the flushes, the declaration)
+ * runs first; to S0, the wake check is asked for once the bus below has
+ * completed it (UasEngineWake), which alone releases the hold.
+ */
 NTSTATUS UasFdoPower(PUAS_FDO fdo, PIRP irp)
 {
+    PIO_STACK_LOCATION stack;
+    NTSTATUS status;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->MinorFunction == IRP_MN_SET_POWER &&
+        stack->Parameters.Power.Type == SystemPowerState) {
+        if (stack->Parameters.Power.State.SystemState > PowerSystemWorking) {
+            if (UasEngineSleep(fdo)) {
+                /* Its rundown reference covers this dispatch to its
+                 * last access. */
+                PoStartNextPowerIrp(irp);
+                IoSkipCurrentIrpStackLocation(irp);
+                status = PoCallDriver(fdo->Lower, irp);
+                UasEngineRelease(fdo);
+                return status;
+            }
+        } else if (stack->Parameters.Power.State.SystemState ==
+                   PowerSystemWorking) {
+            if (UasEngineHold(fdo)) {
+                IoCopyCurrentIrpStackLocationToNext(irp);
+                UAS_SET_COMPLETION_ALWAYS(irp, uasWakeDone, fdo);
+                return PoCallDriver(fdo->Lower, irp);
+            }
+            /* A stopped engine has no hold to check: passed down as any
+             * other. */
+        }
+    }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);
     return PoCallDriver(fdo->Lower, irp);

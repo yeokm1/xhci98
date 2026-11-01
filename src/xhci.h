@@ -1294,6 +1294,19 @@ ULONG XhciPoolRelease(PXHCI_RING_POOL pool, ULONG deviceRef, ULONG poolIndex);
 ULONG XhciPoolReleaseDevice(PXHCI_RING_POOL pool, ULONG deviceRef);
 
 /*
+ * Task 45.23 (design record 20 section 4.3.2): a device kept across a
+ * resume's re-initialization, which ran XhciPoolInit, takes back the very
+ * rings its pipes still hold. XhciPoolClaim gives `poolIndex` to
+ * `deviceRef` when it is free, and refuses (XHCI_POOL_BAD_PARAM) an index
+ * out of range or owned. The kept device holds them under a temporary
+ * reference until its new slot is enabled; XhciPoolRehome then moves every
+ * ring of `fromRef` to `toRef` and returns how many, refusing (0) a `toRef`
+ * that already holds one. IRQL: any (the caller holds the lock).
+ */
+ULONG XhciPoolClaim(PXHCI_RING_POOL pool, ULONG deviceRef, ULONG poolIndex);
+ULONG XhciPoolRehome(PXHCI_RING_POOL pool, ULONG fromRef, ULONG toRef);
+
+/*
  * There is deliberately **no way to disown a ring without releasing it**, and
  * that is a decision an earlier draft got wrong in an instructive way.
  *
@@ -1929,6 +1942,7 @@ typedef struct _XHCI_HC_INFO {
 #define XHCI_HC_NO_INTERRUPTERS     9
 #define XHCI_HC_WINDOW_TOO_SMALL    10
 #define XHCI_HC_BAD_XECP            11  /* xECP inside the capability block */
+#define XHCI_HC_CHANGED             12  /* decodes, but not as before HCRST */
 
 /*
  * The first two capability values, checked before anything else is read.
@@ -7807,8 +7821,9 @@ typedef struct _XHCI_EXTENSION {
      *
      * `EndpointQuiesceFailures` counts every call to `xhciEpQuiesceFail`, which
      * is the only place `XHCI_EPQ_FAILED` is set *without* `XHCI_EPQ_UNAVAILABLE`
-     * beside it - and that is precisely the state `xhciSaveQuiesceUnproven`
-     * declines a `CSS` on for the life of the driver. Task 12.1 added it because
+     * beside it - and that is precisely the state the miniport's save gate
+     * declined a `CSS` on for the life of the driver (the HCD's gate is
+     * XhciSlotSaveBusy). Task 12.1 added it because
      * the limitation that task published names a counter which has to be able to
      * say a machine is in that state, and neither of the two above can: a Stop
      * Endpoint answered with an error completion, a failed Set TR Dequeue Pointer
@@ -8940,7 +8955,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * second binary before they can report anything is the same shape as telling
  * them to install one that does not load. **The verbosity level decides how
  * much there is to read; the flavour decides neither that nor whether the
- * door exists** - all three flavours record the same (design record 08,
+ * door exists** - every flavour records the same (design record 08,
  * section 5).
  *
  * **The door is shut until it is asked for.** `XhciLogVerbosity` in the
@@ -9231,7 +9246,27 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
                                              * protocol 23:16               */
 #define XHCI_SNAPSHOT_HCD_X_COUNT       9   /* storage interfaces decided   */
 #define XHCI_SNAPSHOT_HCD_X_RECORD_WORDS 10UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    629UL /* the records end the header */
+/*
+ * Appended by roadmap-usb4 task 45.40, version unchanged, after 44.35's
+ * records (design record 13 section 10.7, "Identity across a
+ * re-enumeration", behind a hub): the controller's identity records of
+ * places behind hubs (XHCI_ID_PLACE, xhci_func.h), each the words below,
+ * a free entry all 0. The entry count, the words of one and the first
+ * entry's word index come first. A header shorter than this is an
+ * earlier driver's, which kept none.
+ */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS 629 /* entries                  */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_WORDS   630 /* one entry, in words      */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_FIRST   631 /* the first entry's word   */
+#define XHCI_SNAPSHOT_HCD_IDPLACE_AT      632
+#define XHCI_SNAPSHOT_HCD_IDPLACE_COUNT   32UL
+#define XHCI_SNAPSHOT_HCD_IP_KEY          0 /* XhciHubInstanceKey, 0 free */
+#define XHCI_SNAPSHOT_HCD_IP_IDMEM        1 /* (idVendor << 16) | idProduct */
+#define XHCI_SNAPSHOT_HCD_IP_IDSTATE      2 /* serial form | (latch << 8) */
+#define XHCI_SNAPSHOT_HCD_IP_IDDEFERS     3 /* arrivals deferred there    */
+#define XHCI_SNAPSHOT_HCD_IP_IDFAILS      4 /* deferrals spent there      */
+#define XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS 5UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    792UL /* the entries end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
@@ -9267,14 +9302,21 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_PORT_REFUSED  13  /* note bursts refused           */
 #define XHCI_SNAPSHOT_HCD_PORT_HOLDFAIL 14  /* failed PDO recreations        */
 #define XHCI_SNAPSHOT_HCD_PORT_FLAGS    15  /* XHCI_SNAPSHOT_HCD_F_*         */
-#define XHCI_SNAPSHOT_HCD_PORT_WORDS    16UL
+/* Appended by task 45.40 (design record 13 section 10.7, "Identity across
+ * a re-enumeration"), version unchanged: the port's identity memory, its
+ * serial-form flag and deferral latch, and its deferrals. */
+#define XHCI_SNAPSHOT_HCD_PORT_IDMEM    16  /* (idVendor << 16) | idProduct  */
+#define XHCI_SNAPSHOT_HCD_PORT_IDSTATE  17  /* serial form | (latch << 8)    */
+#define XHCI_SNAPSHOT_HCD_PORT_IDDEFERS 18  /* arrivals deferred here        */
+#define XHCI_SNAPSHOT_HCD_PORT_IDFAILS  19  /* deferrals spent here          */
+#define XHCI_SNAPSHOT_HCD_PORT_WORDS    20UL
 
 #define XHCI_SNAPSHOT_HCD_F_DEFERRED    0x00000001UL /* set aside by the settle */
 #define XHCI_SNAPSHOT_HCD_F_RECOVERING  0x00000002UL /* warm reset in flight */
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 252UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 258UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 
@@ -9317,11 +9359,12 @@ ULONG XhciSnapHcdFlags(ULONG settleDeferred, ULONG linkRecovering,
 #define XHCI_SNAPSHOT_B_DIAGNOSTIC      0x00000002UL
 
 /*
- * Which of the three build flavours produced this window (task 13-L.1).
- * `XHCI_SNAPSHOT_B_DEBUG` cannot say: it is `#if DBG`, which is set for BOTH
- * checked builds, and those are exactly the two that must not be confused -
- * one ships as the diagnostic download and one is never published. HOSTTEST is
- * the host suite's, so a vector cannot read a host build as a shipping one.
+ * Which build flavour produced this window (task 13-L.1).
+ * `XHCI_SNAPSHOT_B_DEBUG` cannot say: it is `#if DBG`, which was set for BOTH
+ * checked builds, debug (the diagnostic download until task 45.45 retired it;
+ * DEBUG stays here for the drivers before it) and qemu, never published, and
+ * is set for qemu alone since. HOSTTEST is the host suite's, so a vector
+ * cannot read a host build as a shipping one.
  */
 #define XHCI_SNAPSHOT_FLAVOUR_UNKNOWN   0UL
 #define XHCI_SNAPSHOT_FLAVOUR_RELEASE   1UL

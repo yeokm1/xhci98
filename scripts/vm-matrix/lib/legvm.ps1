@@ -93,7 +93,7 @@ function Get-LegHardwareArgs {
             '-device', 'isa-debugcon,iobase=0xe9,chardev=dbg',
             '-device', 'qemu-xhci,id=xh,p2=4,p3=4')
     } else {
-        # The q35 machine as the q35 bases run it (E:\xhci98-vm\q35-bases,
+        # The q35 machine as the q35 bases run it (<vm root>\q35-bases,
         # launch-q35.ps1; owner, 2026-10-25): native PCIe hot-plug, the
         # controller behind a root port as on a board. DiskBus ahci puts the
         # disk on the board's ICH9 AHCI port 0; piix (2000, XP: no inbox AHCI

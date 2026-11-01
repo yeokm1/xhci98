@@ -4,6 +4,12 @@ rem tasks 23.3 and 23.5): a timed XHCISNAP dump either side of a benchmark
 rem run.  Run it from the
 rem folder holding XHCISNAP.EXE, on the bench machine.
 rem
+rem FOR 3.0.0.0 AND EARLIER ONLY.  XHCISNAP was retired in 3.1.0.0 (roadmap-usb4
+rem task 42-A.4); a 3.1.0.0 or later kit has no XHCISNAP.EXE, and this file
+rem stops at once saying so.  On those kits take each dump by hand with
+rem XHCITR /dump /o NAME (xhcitr\README.TXT), which writes NAME.TXT, .BIN and
+rem .PSC and shows its result in a message box, and note the time yourself.
+rem
 rem   SWEEP98 ARM A     before the benchmark: starts C:\Iarm.LOG, dump C:\IarmA.*
 rem   SWEEP98 ARM B     after the benchmark:  appends to the log, dump C:\IarmB.*
 rem
@@ -72,6 +78,8 @@ goto end
 
 :nosnap
 echo ERROR: XHCISNAP.EXE is not in this folder.  cd to the kit first.
+echo This file is for 3.0.0.0 and earlier: XHCISNAP was retired in 3.1.0.0.
+echo On a 3.1.0.0 or later kit take each dump with  XHCITR /dump /o NAME
 goto end
 
 :usage

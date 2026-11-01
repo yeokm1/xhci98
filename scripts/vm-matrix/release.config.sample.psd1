@@ -4,6 +4,8 @@
     to scripts\vm-matrix\release.config.psd1 (git-ignored) and edit the
     paths. Every path may be absolute or relative to the repository root.
     EXAMPLE VALUES: nothing here is a statement of where any host keeps them.
+    Every SET-ME path is a placeholder to replace: run-leg.ps1 and
+    make-start.ps1 refuse a guest whose Base does not exist, naming it.
 #>
 @{
     # QEMU, as lib\qemu.ps1 resolves it ('' = -Qemu, XHCI98_QEMU, PATH, then
@@ -14,16 +16,16 @@
 
     # QemuDllPath: the folder of the DLLs a QEMU build needs on PATH. The q35
     # guests run on the build their bases were made and checked with (a copy
-    # of E:\xhci98-vm\q35-bases\bin\...\qemu-system-x86_64.exe, usb4-emu's
-    # QEMU 11.1.2, with usb4-emu's toolchain\msys64\ucrt64\bin here and its
-    # vms\qemu-baseline\share as -L in each guest's Extra): read on 2026-10-26,
+    # of usb4-emu's QEMU 11.1.2 kept with the q35 bases, with usb4-emu's
+    # toolchain\msys64\ucrt64\bin here and its vms\qemu-baseline\share as -L
+    # in each guest's Extra): read on 2026-10-26,
     # QEMU 11.1.0 (scoop) stopped 98 SE's start on q35 at the logo, where
     # that build reached the desktop with the same disk.
     QemuDllPath = ''
 
     # Starting points (start\<guest>\), leg runs (runs\<run>\<leg>\) and
     # pids.txt, the record of every QEMU started and stopped.
-    WorkDir = 'E:\xhci98-vm\release-matrix'
+    WorkDir = 'SET-ME\release-matrix'
 
     # The port block: three ports a leg (QMP, VNC, the migration socket), so
     # PortCount / 3 legs at once at most. Keep it outside Windows' excluded
@@ -52,7 +54,7 @@
     # a CPU with a local APIC (pentium3, not pentium3,-apic): QEMU 11.1
     # cannot load a qemu-xhci's saved state when MSI-X could not be set up.
     # Machine: q35 for every new leg (owner, 2026-10-25), as the q35 bases
-    # run (E:\xhci98-vm\q35-bases, launch-q35.ps1); without it, pc
+    # run (the q35 bases' launch-q35.ps1); without it, pc
     # (i440FX), the machine of the legs read before. On q35: DiskBus ahci
     # (the board's ICH9 AHCI) or piix (a piix3-ide at 00:1e.0: 2000 and XP
     # have no inbox AHCI driver, ME fails on AHCI); CdBus, the leg's CD, the
@@ -71,24 +73,24 @@
     Guests = @(
         @{
             Id = 'w98se'; Name = 'Windows 98 SE'; Family = '9x'
-            Base = 'E:\xhci98-vm\q35-bases\w98se\disk.qcow2'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\w98se\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'ahci'; CdBus = 'disk'
             Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'qwerty'
             ColdStep = 'esc-wizard98'; CdLetter = 'D'; BootSeconds = 600; SettleSeconds = 30
         }
         @{
             Id = 'me'; Name = 'Windows ME'; Family = '9x'
-            Base = 'E:\xhci98-vm\q35-bases\me\disk.qcow2'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\me\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'piix'
             Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'qwerty'
             ColdStep = 'esc-wizard98'; CdLetter = 'D'; BootSeconds = 600; SettleSeconds = 30
         }
         @{
             Id = 'w2k'; Name = 'Windows 2000 SP4'; Family = 'nt'
-            Base = 'E:\xhci98-vm\q35-bases\w2k\disk.qcow2'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\w2k\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'piix'; Hole64Off = $true; Win2kHack = $true; Vga = 'cirrus'
             Cpu = 'pentium3'; Smp = 1; Memory = 512; Layout = 'dvorak'
             ColdStep = 'walk-fnh'; HostPowerOff = $true; ShutdownCommand = 'cscript //nologo C:\XHLEG\XHOFF.VBS'
@@ -96,8 +98,8 @@
         }
         @{
             Id = 'xp'; Name = 'Windows XP SP3'; Family = 'nt'
-            Base = 'E:\xhci98-vm\q35-bases\xp\disk.qcow2'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\xp\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'piix'; Hole64Off = $true
             Cpu = 'pentium3'; Smp = 2; Memory = 1024; Layout = 'dvorak'
             ColdStep = 'esc-fnh'; PrepSteps = @('xp-signing-ignore')
@@ -105,16 +107,16 @@
         }
         @{
             Id = 'vista'; Name = 'Windows Vista SP2'; Family = 'nt'
-            Base = 'E:\xhci98-vm\q35-bases\vx86\disk.qcow2'; ConsentKey = 'alt-c'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\vx86\disk.qcow2'; ConsentKey = 'alt-c'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'ahci'; Rtc = '2026-09-20T12:00:00'
             Cpu = 'qemu64'; Smp = 2; Memory = 2048; Layout = 'dvorak'; SetupElevated = $true
             BootSeconds = 1200; SettleSeconds = 60
         }
         @{
             Id = 'w7'; Name = 'Windows 7 SP1'; Family = 'nt'
-            Base = 'E:\xhci98-vm\q35-bases\w7x86\disk.qcow2'
-            Extra = @('-L', 'D:\OneDrive\git-projects\usb4-emu\vms\qemu-baseline\share')
+            Base = 'SET-ME\q35-bases\w7x86\disk.qcow2'
+            Extra = @('-L', 'SET-ME\usb4-emu\vms\qemu-baseline\share')
             Machine = 'q35'; DiskBus = 'ahci'; Rtc = '2026-09-20T12:00:00'
             Cpu = 'qemu64'; Smp = 2; Memory = 2048; Layout = 'dvorak'; SetupElevated = $true
             BootSeconds = 1200; SettleSeconds = 60

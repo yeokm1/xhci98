@@ -30,7 +30,12 @@ static const CM_RULE cmRules[CM_VAL_COUNT] = {
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmUsb3Tunnel       */
     { 1,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLaneBonding      */
     { 0,     0,    2,           CM_RULE_SWITCH }, /* XhciCmPreOsCleanup     */
-    { 0,     0,    1,           CM_RULE_SWITCH }  /* XhciCmLogDebugView     */
+    { 0,     0,    1,           CM_RULE_SWITCH }, /* XhciCmLogDebugView     */
+    { 0,     0,    1,           CM_RULE_SWITCH }, /* XhciCmNet              */
+    { 1,     1,    100,         CM_RULE_SWITCH }, /* XhciCmNetPollMs        */
+    { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetRxFrames      */
+    { 128,   32,   1024,        CM_RULE_SWITCH }, /* XhciCmNetTxFrames      */
+    { 1,     0,    1,           CM_RULE_SWITCH }  /* XhciCmNetE2E           */
 };
 
 static WCHAR cmUpper(WCHAR c)
@@ -152,7 +157,9 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out)
 
 /* NHI ids by profile (cm_vals.h): Intel's from Linux
  * drivers/thunderbolt/nhi.h, AMD's from FreeBSD sys/dev/thunderbolt
- * nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1). */
+ * nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1), ASMedia's from design record
+ * 22 section 18.1 (the ASM4242's host interface: class 0C0340 gives it
+ * the same profile; the row is there for its INF line, task 45.46). */
 typedef struct _CM_NHI_ROW {
     ULONG Device;
     ULONG Profile;
@@ -161,6 +168,10 @@ typedef struct _CM_NHI_ROW {
 static const CM_NHI_ROW cmAmdNhi[] = {
     { 0x1668, CM_PROFILE_USB4 },     /* Pink Sardine                      */
     { 0x1669, CM_PROFILE_USB4 }
+};
+
+static const CM_NHI_ROW cmAsmNhi[] = {
+    { 0x2425, CM_PROFILE_USB4 }      /* ASM4242                           */
 };
 
 static const CM_NHI_ROW cmIntelNhi[] = {
@@ -196,11 +207,18 @@ static const CM_NHI_ROW cmIntelNhi[] = {
     { 0xE434, CM_PROFILE_USB4 },
     { 0x4D33, CM_PROFILE_USB4 },     /* Wildcat Lake                      */
     { 0x5781, CM_PROFILE_USB4 },     /* Barlow Ridge host 80G             */
-    { 0x5784, CM_PROFILE_USB4 }      /* Barlow Ridge host 40G             */
+    { 0x5784, CM_PROFILE_USB4 },     /* Barlow Ridge host 40G             */
+    /* Record 22 section 19: no ICM; the Thunderbolt-host profile on an
+     * Apple machine, inert on any other (tbt_hw.c). Bound by their class
+     * form (PCI\VEN_8086&DEV_1513&CC_0880), NT 6.x only: their bridges
+     * carry the same id and are filters by CC_0604 above. */
+    { 0x1513, CM_PROFILE_USB4 },     /* Light Ridge                       */
+    { 0x1547, CM_PROFILE_USB4 }      /* Cactus Ridge 4C                   */
 };
 
 #define CM_INTEL_VENDOR 0x8086
 #define CM_AMD_VENDOR   0x1022
+#define CM_ASM_VENDOR   0x1B21
 
 static ULONG cmLookup(const CM_NHI_ROW *rows, ULONG count, ULONG device)
 {
@@ -229,6 +247,9 @@ ULONG CmProfileFor(const CM_IDS *ids)
     } else if (ids->Vendor == CM_AMD_VENDOR) {
         profile = cmLookup(cmAmdNhi, sizeof(cmAmdNhi) / sizeof(cmAmdNhi[0]),
                            ids->Device);
+    } else if (ids->Vendor == CM_ASM_VENDOR) {
+        profile = cmLookup(cmAsmNhi, sizeof(cmAsmNhi) / sizeof(cmAsmNhi[0]),
+                           ids->Device);
     }
     if (profile != CM_PROFILE_UNKNOWN) {
         return profile;
@@ -243,16 +264,26 @@ ULONG CmRoleDecide(const CM_IDS *ids, ULONG filterListed)
 {
     CM_IDS nhi;
 
-    if (ids->Role == CM_ROLE_FILTER && filterListed) {
-        return CM_ROLE_FILTER;
-    }
+    /* The NHI first (record 33 section 4.4): its own AddDevice finds no
+     * function driver above its PDO, this driver being that driver. */
     if (ids->Role == CM_ROLE_NHI) {
         nhi = *ids;
         if (CmProfileFor(&nhi) != CM_PROFILE_UNKNOWN) {
             return CM_ROLE_NHI;
         }
     }
+    if (ids->Role == CM_ROLE_FILTER && filterListed) {
+        return CM_ROLE_FILTER;
+    }
     return CM_ROLE_CHILD;
+}
+
+ULONG CmRolePlace(ULONG role, ULONG pciAbove, ULONG byPlace)
+{
+    if (byPlace && role == CM_ROLE_FILTER && !pciAbove) {
+        return CM_ROLE_CHILD;
+    }
+    return role;
 }
 
 ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built)
@@ -303,6 +334,46 @@ VOID CmValuesDefault(PCM_VALUES v)
     v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
+    v->Usb4V2 = CM_USB4_V2_DEFAULT;
+    v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
+    v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
+    v->RingIrq = CM_RING_IRQ_DEFAULT;
+}
+
+VOID CmValuesTakeRingIrq(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->RingIrq = CM_RING_IRQ_DEFAULT;
+    v->RingIrqFound = 0;
+    v->RingIrqRaw = 0;
+    v->RingIrqRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->RingIrqFound = 1;
+    v->RingIrqRaw = raw;
+    if (raw > CM_RING_IRQ_MAX) {
+        v->RingIrqRefused = 1;
+        return;
+    }
+    v->RingIrq = raw;
+}
+
+VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->BridgeReq = CM_BRIDGE_REQ_DEFAULT;
+    v->BridgeReqFound = 0;
+    v->BridgeReqRaw = 0;
+    v->BridgeReqRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->BridgeReqFound = 1;
+    v->BridgeReqRaw = raw;
+    if (raw > CM_BRIDGE_REQ_RECORD) {
+        v->BridgeReqRefused = 1;
+        return;
+    }
+    v->BridgeReq = raw;
 }
 
 VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw)
@@ -321,6 +392,42 @@ VOID CmValuesTakeAsmPcie7(PCM_VALUES v, ULONG found, ULONG raw)
         return;
     }
     v->AsmPcie7 = raw;
+}
+
+VOID CmValuesTakeUsb4V2(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->Usb4V2 = CM_USB4_V2_DEFAULT;
+    v->Usb4V2Found = 0;
+    v->Usb4V2Raw = 0;
+    v->Usb4V2Refused = 0;
+    if (!found) {
+        return;
+    }
+    v->Usb4V2Found = 1;
+    v->Usb4V2Raw = raw;
+    if (raw > 1) {
+        v->Usb4V2Refused = 1;
+        return;
+    }
+    v->Usb4V2 = raw;
+}
+
+VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
+    v->Gen4ElrFound = 0;
+    v->Gen4ElrRaw = 0;
+    v->Gen4ElrRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->Gen4ElrFound = 1;
+    v->Gen4ElrRaw = raw;
+    if (raw > 1) {
+        v->Gen4ElrRefused = 1;
+        return;
+    }
+    v->Gen4Elr = raw;
 }
 
 VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw)
@@ -395,6 +502,12 @@ VOID CmValuesTakeBridge(PCM_VALUES v, const WCHAR *text, ULONG chars)
     }
     while (chars != 0 && text[chars - 1] == 0) {
         chars--;
+    }
+    /* Task 45.50: the word the install writes, the driver's own finding as
+     * absent and empty are. */
+    if (chars == 4 && (text[0] | 0x20) == 'a' && (text[1] | 0x20) == 'u' &&
+        (text[2] | 0x20) == 't' && (text[3] | 0x20) == 'o') {
+        return;
     }
     if (chars >= CM_TUNNEL_BRIDGE_CHARS) {
         v->TunnelBridgeRefused = 1;

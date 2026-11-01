@@ -327,7 +327,21 @@ rem                  task 39-A.3): every Alpine Ridge frame ICM-PROTOCOL.md
 rem                  quotes as observed, the bind, plug, approve, unplug,
 rem                  resume and reconciliation sequences, a disconnect inside
 rem                  a 10 s approve, timeouts, retries, the error flag, and
-rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows
+rem                  the uncaptured Falcon Ridge, Titan Ridge and Ice Lake rows;
+rem                  and the host-to-host links (task 45.59 step S4, design
+rem                  record 35 section 3.10): each row's 0x06, 0x07, 0x10 and
+rem                  teardown in Linux's layouts, a far host of tbt_xdp.c's
+rem                  engine to the service up and down, the unplug, the
+rem                  approve's failures, the keying, Lost and the owed
+rem                  teardown, the rediscovery and XhciCmNet 0
+rem   test_tbt_xdp - the inter-domain discovery and the USB4NET service
+rem                  (src\cm\tbt_xdp.c, task 45.59 step S1, design record 35
+rem                  sections 3 and 4): the IDS 2.0 UUID examples, its Table
+rem                  4-10 sample block word for word and the parser's
+rem                  refusals, every packet's layout, the MAC and HopID rules,
+rem                  two engines over a modelled link (bonding, the firmware
+rem                  CM, a single lane, no answer) and packets shaped as
+rem                  record 35 section 2.4 says thunderbolt-net shapes them
 rem                  against Linux's structure layouts
 rem   test_tbt_hw  - the hardware profiles, the Ice Lake family's force-power
 rem                  sequence and the connection manager's selection
@@ -340,6 +354,13 @@ rem                  (src\cm\tbt_hw.c, task 40-A.2): every row of its table,
 rem                  every NVM_AUTH_DONE/ICM_EN combination, test (d)'s
 rem                  interface and router versions, and each negative case
 rem                  inert, never the other profile
+rem   test_u4xd    - the software connection manager's inter-domain links
+rem                  (src\cm\tbt_u4cm.c with tbt_xdp.c, task 45.59 step S3,
+rem                  design record 35 sections 3.3 to 5.1): a far host over the
+rem                  fake fabric, both bonding roles and none, the two path
+rem                  entries and their credits, the unplug, the stop's
+rem                  Logout, no answer, a loop, one service per NHI and
+rem                  XhciCmNet 0
 rem   test_u4cm    - the USB4 software connection manager (src\cm\tbt_u4cm.c,
 rem                  tasks 40-A.3 and 40-A.8, design record 22 section 14.1)
 rem                  over the fake fabric of u4_fakefab.c: both emulator host
@@ -352,6 +373,43 @@ rem                  cleaning, quarantine, the statement's gating and anchor,
 rem                  links below depth 1, eject, suspend and resume, and the
 rem                  ASM2464 device router's captured quirks (record 22
 rem                  section 6.11)
+rem   test_u4v2    - the same connection manager as a Ver. 2 Connection
+rem                  Manager (task 45.20, design record 22 section 6.2.4),
+rem                  over the same fabric's USB4 version 2 routers: CMUV by
+rem                  version and as found, Set Capabilities and its
+rem                  read-back, two-DW path writes, the enhanced TMU, CV
+rem                  found, Gen 4 Link Recovery, Extended Encapsulation, Gen
+rem                  4 links symmetric and asymmetric, XhciCmUsb4V2 0; Gen 4
+rem                  Link Recovery enabled, its recovery check and its
+rem                  clears (task 45.56, section 6.2.5)
+rem   test_cm_live - the host interface's liveness monitor (src\cm\cm_live.c,
+rem                  design record 21 sections 5.5 and 5.6): its states,
+rem                  cadence, recovery and gate
+rem   test_cm_pwrr - the system SET_POWER's route and the 9x shutdown taken
+rem                  with no device IRP (src\cm\cm_pwrr.c, task 43.65)
+rem   test_cm_irq  - the interrupt a child filter gives a function hot-added
+rem                  behind a tunnel on 2000's Standard PC HAL (src\cm\cm_irq.c,
+rem                  task 44.53, design record 21 section 6.2.1): the HAL id,
+rem                  the swizzle, the requirements and start lists, the
+rem                  records' sequences; also built for amd64 (below)
+rem   test_cm_rirq - the NHI's ring interrupt (src\cm\cm_rirq.c, task 45.22,
+rem                  design record 21 section 4.5): the cause's geometry, the
+rem                  service routine's outcomes, the storm count, the mask by
+rem                  host contract, the watchdog, the order down's end
+rem   test_cm_breq - the requirement lists of a hot-added bridge on 2000 and
+rem                  XP (src\cm\cm_breq.c, task 45.12, design record 33):
+rem                  the templates, the rules, the writer, the diagnostic;
+rem                  also built for amd64 (below)
+rem   test_cm_iso  - the isolation statement's decision (src\cm\cm_iso.c,
+rem                  task 45.35, design record 22 section 10.5): the one
+rem                  yes and every condition's refusal in order
+rem   test_cm_net  - the Thunderbolt networking data rings' pure half
+rem                  (src\cm\cm_netr.c, task 45.59, design record 35
+rem                  sections 5.3 and 6.3): descriptors, completion, reaping,
+rem                  the wrap and the reservation's tokens
+rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
+rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
+rem                  tool's pure half
 rem
 rem RETIRED ON 2026-10-02 with the miniport's sources (design record 13):
 rem test_vhub (src\xhci_vhub.c) and test_init (the miniport's MMIO-facing code
@@ -359,9 +417,11 @@ rem and its usbport callback surface). Their last copies are on branch
 rem 1.2.0.0. test_xfer and test_iso left with them and came back with task
 rem 26-A.9, unchanged, because src\xhci_xfer.c was kept whole (26-A.4).
 rem
-rem THE SECOND ARCHITECTURE (roadmap task 21.4). Two suites are compiled and run
-rem twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
-rem compiler, as test_packet_amd64 and test_membuf_amd64.
+rem THE SECOND ARCHITECTURE (roadmap task 21.4). Three suites are compiled and
+rem run twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
+rem compiler, as test_packet_amd64, test_membuf_amd64 and (task 44.53)
+rem test_cm_irq_amd64, whose resource descriptor is larger on amd64, and
+rem (task 45.12) test_cm_breq_amd64, the requirement lists' rewriter.
 rem
 rem   test_packet_amd64  src\xhci_usbport.h declares three structures and a
 rem                      registration packet that change shape under _WIN64 -
@@ -595,8 +655,9 @@ rem the ring alone; the ICM client over the ring it drives; the hardware
 rem profiles and the selection over both, since each profile names its
 rem ICM message row.
 call :run test_tbt_ring "test_tbt_ring.c ..\src\cm\tbt_ring.c"
-call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
-call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_icm "test_tbt_icm.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_xdp "test_tbt_xdp.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_hw "test_tbt_hw.c ..\src\cm\cm_vals.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 rem test_tbt_topo links nothing else: the tunnel ports' discovery, the
 rem port readings and the poll are pure, driven over a modelled machine
 rem whose P14s half is the captured configuration space (39-A.5).
@@ -604,7 +665,7 @@ call :run test_tbt_topo "test_tbt_topo.c ..\src\cm\tbt_topo.c"
 rem test_tbt_brnum links nothing else: the Windows 98 SE and ME bus
 rem numbering of the bridges below a tunnel port is pure (record 21
 rem section 6.1.1).
-call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c"
+call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c ..\src\cm\tbt_topo.c"
 rem test_cm_noirq links nothing else: design record 28's state machine of
 rem operations is pure; its CONFIGMG and PCI.VXD calls are the model's.
 call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
@@ -625,14 +686,21 @@ rem test_cm_eject links the transaction's pure half and, for the vanished
 rem child's held re-enumeration, the channel's pure hold (43.18, 43.47).
 call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
-rem 40.6, design record 23 section 10) and reads the package's INFs in src\.
-call :run test_inst "test_inst.c ..\xhciinst\inst_core.c"
+rem 40.6, design record 23 section 10), with the window's Help texts
+rem (xhciinst\inst_help.c, task 45.66, record 26 section 5.10), and reads
+rem the package's INFs in src\.
+call :run test_inst "test_inst.c ..\xhciinst\inst_core.c ..\xhciinst\inst_help.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check,
 rem and the mark service's pure half (its self-test; task 44.52).
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
+rem test_mark runs the mark service's pure half through its own
+rem self-test (xhcimark\mark_core.c, mk_selftest; since task 45.12 the
+rem bridge inventory and the bridge marks of design record 33 section
+rem 4.3), with inst_core.c, which it links against.
+call :run test_mark "test_mark.c ..\xhcimark\mark_core.c ..\xhciinst\inst_core.c"
 call :run test_trred "test_trred.c ..\xhcitr\tr_red.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
 rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
@@ -644,12 +712,18 @@ call :run test_trlog "test_trlog.c ..\xhcitr\tr_log.c ..\xhcitr\tr_core.c ..\src
 rem test_tbt_select links the hardware profiles' selection (src\cm\tbt_hw.c,
 rem task 40-A.2, design record 22 section 3) and the ICM client and ring
 rem tbt_hw.c links against, without cm_vals.c.
-call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_tbt_select "test_tbt_select.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_ring.c"
 rem test_u4cm links the USB4 software connection manager (src\cm\tbt_u4cm.c,
 rem tasks 40-A.3 and 40-A.8, design record 22 section 14.1) over the fake
 rem fabric of u4_fakefab.c, with the router-version helper of tbt_hw.c and
 rem the ring it drives (and tbt_icm.c, which tbt_hw.c links against).
-call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+call :run test_u4cm "test_u4cm.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_u4v2 links the same files: the version 2 vectors (task 45.20), a
+rem suite of their own over the same fabric.
+call :run test_u4v2 "test_u4v2.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
+rem test_u4xd links the same files: the inter-domain links (task 45.59 step
+rem S3), the far host an engine of tbt_xdp.c's own over the same fabric.
+call :run test_u4xd "test_u4xd.c u4_fakefab.c ..\src\cm\tbt_u4cm.c ..\src\cm\tbt_xdp.c ..\src\cm\tbt_hw.c ..\src\cm\tbt_icm.c ..\src\cm\tbt_ring.c"
 rem test_cm_ports links nothing else: the re-enumeration's own pure half,
 rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
@@ -662,6 +736,32 @@ rem HAL id, the swizzle, the requirements and start lists and the records'
 rem sequences; built for amd64 too (below), whose resource descriptor is
 rem larger.
 call :run test_cm_irq "test_cm_irq.c ..\src\cm\cm_irq.c"
+rem test_cm_rirq links the pure half of the NHI's ring interrupt
+rem (src\cm\cm_rirq.c, task 45.22, design record 21 section 4.5): the
+rem cause for every Total Paths, the service routine's outcomes, the storm
+rem count, the mask by host contract and its proof, the watchdog's
+rem suspicion and slower storm, the order down's end and latch, the waits.
+call :run test_cm_rirq "test_cm_rirq.c ..\src\cm\cm_rirq.c"
+rem test_cm_breq links the pure half of the requirement lists of a
+rem hot-added bridge on 2000 and XP (src\cm\cm_breq.c, task 45.12, design
+rem record 33 section 10.1): the templates on the captured lists, the
+rem worked examples byte for byte, the rules' edges, the arithmetic bounds,
+rem the diagnostic and a seeded sweep of the invariants; built for amd64
+rem too (below), whose descriptor layout cm_filt.c asserts the same.
+call :run test_cm_breq "test_cm_breq.c ..\src\cm\cm_breq.c"
+rem test_cm_iso links the isolation statement's decision (src\cm\cm_iso.c,
+rem task 45.35, design record 22 section 10.5): the one yes, each
+rem condition refused alone, and all 1024 patterns' first failing one.
+call :run test_cm_iso "test_cm_iso.c ..\src\cm\cm_iso.c"
+rem test_cm_net links the Thunderbolt networking data rings' pure half
+rem (src\cm\cm_netr.c, task 45.59, design record 35 sections 5.3 and 6.3).
+call :run test_cm_net "test_cm_net.c ..\src\cm\cm_netr.c"
+rem test_net_frame links the USB4NET framing core of Thunderbolt
+rem networking (src\net\net_frame.c, task 45.59 step S6, design record
+rem 35 sections 7.2 to 7.4): the transmit split, the Frame ID rule, every
+rem receive drop and the reassembly, a short frame whose SOF PDF reads 0,
+rem and the receive segmentation over IPv4 and IPv6 with its refusals.
+call :run test_net_frame "test_net_frame.c ..\src\net\net_frame.c"
 rem test_cm_marks links the marks answer's table (task 42-A.5, design
 rem record 21 section 7.4 revision 3) and the re-enumeration's pure half
 rem for the Removable answer's gate (design record 31 section 4.1).
@@ -717,17 +817,19 @@ if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 se
 call :run test_packet_amd64 "test_packet.c" amd64
 call :run test_membuf_amd64 "test_membuf.c ..\src\xhci_mem.c" amd64
 call :run test_cm_irq_amd64 "test_cm_irq.c ..\src\cm\cm_irq.c" amd64
+call :run test_cm_breq_amd64 "test_cm_breq.c ..\src\cm\cm_breq.c" amd64
 set "NORUN="
 goto amd64done
 
 :noamd64
 set "SUITESKIPPED=1"
 echo.
-echo === test_packet_amd64, test_membuf_amd64 === SKIPPED
+echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64, test_cm_breq_amd64 === SKIPPED
 echo WDK 7.1 was not found at %WDK71%, and its amd64 compiler is the only thing
-echo here that compiles the _WIN64 half of src\xhci_usbport.h. That half is
-echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the
-echo verdict below as covering x86 alone.
+echo here that compiles the _WIN64 half of src\xhci_usbport.h and the amd64
+echo resource lists of src\cm\cm_irq.c. Those are therefore unchecked in this
+echo run. Set WDK71 to a WDK 7.1 root, or read the verdict below as covering
+echo x86 alone.
 
 :amd64done
 call :cleanrun

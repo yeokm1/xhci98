@@ -40,15 +40,18 @@
  *     That is a *runtime* hazard where the first is a *load-time*
  *     one, and they are not the same failure.
  *
- * `debug` is the flavour a user with a problem is told to install, so it must
- * survive both. It therefore carries **neither**: `XHCI_DBG_LIVE` is defined by
- * `src/sources` for the `qemu` flavour and by nothing else, and without it
- * every macro below compiles to nothing. What `debug` keeps is the DDK's own
+ * `release` is the flavour every user installs (and `debug`, the one a user
+ * with a problem was told to install until task 45.45 retired it, was held to
+ * the same), so it must survive both. It therefore carries **neither**:
+ * `XHCI_DBG_LIVE` is defined by `src/sources` for the `qemu` flavour and by
+ * nothing else, and without it
+ * every macro below compiles to nothing. What `debug` kept was the DDK's own
  * `DBG`, and what that is worth here is **smaller than it sounds** - this
  * comment said "asserts, no optimisation" until after Phase 13 and both halves were
  * wrong. **Both flavours build `/Oxs`**: the checked build differs by `/Oy-`
  * against `/Oy`, so it keeps frame pointers and is otherwise optimised the same
- * (compare `src/buildchk.log` and `src/buildfre.log`, which print the line).
+ * (the logs print the line). Since task 45.45 the release build keeps frame
+ * pointers too (`NTNOFPO`), and `debug` is retired.
  * And this driver has **no runtime `ASSERT`** - every `XHCI_C_ASSERT` in it is
  * compile-time and fires in every flavour. What `DBG` buys, then, is the
  * readable stack `/Oy-` leaves, `VS_FF_DEBUG` in the version resource, the
@@ -63,7 +66,8 @@
  * *(Two of those five were missed when this paragraph was written, and
  * it also called `VS_FF_DEBUG` the only thing that tells two published binaries
  * apart - the `XHCI98_FLAVOUR_*` marker does too, and is the one that can name
- * three flavours rather than two.)* What `debug` is *for* is
+ * three flavours rather than two.)* What `debug` was *for* (until task 45.45
+ * retired it) is
  * `src/xhci_log.c`'s ring, which is recorded from any IRQL and handed over in
  * exactly one bulk dump from the PASSIVE flush. **Recording is not emission**,
  * and this file is the emission half.

@@ -17,7 +17,11 @@
  * device router, a Thunderbolt 3 device router (Titan Ridge or Alpine
  * Ridge, with the Plug Events and link controller capabilities), the
  * ASMedia ASM2464PD device router of usb4-emu's `asm2464` model (its
- * captured quirks), and the pre-OS connection manager's leftovers.
+ * captured quirks), the pre-OS connection manager's leftovers, and (task
+ * 45.20, design record 22 section 6.2.4) a USB4 version 2 host and device
+ * router: USB4 Version 40h, Set Capabilities, Gen 4 links symmetric or
+ * asymmetric between two such routers, Extended Encapsulation and the
+ * enhanced uni-directional TMU fields.
  *
  * A virtual clock in microseconds advances only when the code under test
  * stalls or sleeps. Test-only code; C89 with the C library.
@@ -62,13 +66,19 @@
 #define FAB_OP_CAPS         2
 #define FAB_OP_BA           3
 #define FAB_OP_NVM          4       /* NVM Sector Size, 25h: the ASM2464 preset only */
-#define FAB_OPS             5
+#define FAB_OP_SETCAPS      5       /* Set Capabilities, 32h (task 45.20) */
+#define FAB_OPS             6
 
 /* Device kinds */
 #define FAB_DEV_USB4        1
 #define FAB_DEV_TBT3_TR     2       /* Titan Ridge DD 8086:15EF */
 #define FAB_DEV_TBT3_AR     3       /* Alpine Ridge LP bridge 8086:15C0 */
 #define FAB_DEV_ASM2464     4       /* ASMedia ASM2464PD 174C:2463, the ORICO capture */
+#define FAB_DEV_USB4V2      5       /* a USB4 version 2 device router (task 45.20) */
+#define FAB_DEV_TBT3_DOCK   6       /* Titan Ridge dock with a downstream port, as usb4-emu's
+                                     * usb4-router-tb3.c device router: lanes 1 to 4, PCIe Up 6,
+                                     * PCIe Down 7 (record 34 section 6.4) */
+#define FAB_DEV_TBT1_PR     7       /* Port Ridge 8086:1549: generation 1, no link controller */
 
 typedef struct FAB_ADP {
     int Present;
@@ -81,8 +91,14 @@ typedef struct FAB_ADP {
     int DetectStuck;                /* PCIe: LTSSM never Detect while PE is 0 */
     int HcaStuck;                   /* USB3 Down: HCA never follows CMR */
     int LtssmForce;                 /* PCIe: nonzero reads LTSSM LtssmForce - 1 */
+    int PeerFollows;                /* with LtssmForce: the far end still trains */
     int Lane1;                      /* a lane 1 adapter (every fixture: even numbers) */
     unsigned long Consumed;         /* USB3: consumed bandwidth, CS_1 11:0 | 23:12 */
+    int EeStuck;                    /* PCIe: Extended Encapsulation never sets (task 45.20) */
+    /* USB3 (task 45.56): ADP_USB3_GX_CS_4 bits 11:0 (USB3 Link Valid, Port
+     * Link State) read Usb3Ls - 1 when nonzero; else Link Valid and U0
+     * while the adapter's Path Enable is set, 0 otherwise (usb4-emu). */
+    unsigned long Usb3Ls;
 } FAB_ADP;
 
 typedef struct FAB_ROUTER {
@@ -144,6 +160,23 @@ typedef struct FAB_ROUTER {
     unsigned long EeBase;
     unsigned long EeCtlWrites;
     unsigned long AdpTouches[FAB_MAX_ADP];  /* requests addressed to each adapter */
+    /* A USB4 version 2 router (task 45.20, record 22 section 6.2). Gen4:
+     * a link between two such routers comes up Gen 4, its widths
+     * Gen4HostW at the parent and Gen4DevW here (0: symmetric x2) on both
+     * lanes of each end. Gen4Up: the link up at Gen 4 now. SetCapsIgnore:
+     * Set Capabilities answers success and enables nothing; CapsFailAfterSet:
+     * that many Get Capabilities fail once a Set has been made (-1: every
+     * one). */
+    int Gen4;
+    unsigned long Gen4HostW;
+    unsigned long Gen4DevW;
+    int Gen4Up;
+    int SetCapsIgnore;
+    int CapsFailAfterSet;
+    unsigned long SetCapsOps;
+    unsigned long SetCapsLastMeta;
+    int ElrStuck;                   /* PORT_CS_19 Enable Gen 4 Link Recovery never
+                                     * sets (task 45.56): a router that keeps it 0 */
 } FAB_ROUTER;
 
 typedef struct FAB_FRAME {
@@ -163,6 +196,11 @@ struct FAB;
 typedef int (*FAB_HOOK)(struct FAB *f, unsigned long pdf, int router,
                         unsigned long cs, unsigned long adp, unsigned long addr,
                         unsigned long n, const unsigned long *data);
+/* An inter-domain packet (PDF 6 or 7) the code under test sent, its words
+ * from the Route String High on, the CRC excluded (task 45.59): a test's
+ * model of the far host takes it there. */
+typedef void (*FAB_XDTX)(struct FAB *f, unsigned long pdf, const unsigned long *dw,
+                         unsigned long words);
 
 typedef struct FAB {
     TBT_HOST Host;                  /* Context = this */
@@ -198,6 +236,9 @@ typedef struct FAB {
     FAB_ROUTER R[FAB_MAX_ROUTERS];
     FAB_HOOK Hook;
     void *HookCtx;
+    FAB_XDTX XdTx;
+    unsigned long XdSent;           /* inter-domain packets sent */
+    unsigned long XdRefused;        /* ... refused on the way (ERR_LOCK, ...) */
 
     /* logs */
     unsigned long Requests;
@@ -209,6 +250,8 @@ typedef struct FAB {
     unsigned long AcksEnh;
     unsigned long HpAcks;
     unsigned long Notifications;    /* error notifications sent */
+    unsigned long LcResets;         /* a Thunderbolt host's LC port resets set */
+    unsigned long TmuAccessOn;      /* Light Ridge's TMU access enable set */
     unsigned long WrCount;
     unsigned long Lane1LockWrites;  /* ADP_CS_4 of a lane 1 adapter written:
                                      * undefined behaviour (Spec 8.2.2.1) */
@@ -218,6 +261,12 @@ typedef struct FAB {
     unsigned long WrAddr[FAB_WRLOG];
     unsigned long WrVal[FAB_WRLOG];
     unsigned long WrAtUs[FAB_WRLOG];
+    /* Every write request by its route as sent, delivered or not (an
+     * undeliverable one answered with ERR_CONN never reaches WrRouter). */
+    unsigned long TriedCount;
+    unsigned long TriedHi[FAB_WRLOG];
+    unsigned long TriedLo[FAB_WRLOG];
+    unsigned long WrN[FAB_WRLOG];   /* the DW count of the request each came in */
     unsigned long LogCount;
     const char *LastLabel;
     unsigned long LastValue;
@@ -234,6 +283,20 @@ void fabInit(FAB *f);
 int  fabHostMinimal(FAB *f);        /* usb4-emu `minimal`: returns the host index 0 */
 int  fabHostAdl(FAB *f);            /* usb4-emu `intel-adl` */
 int  fabHostAsm4242(FAB *f);        /* usb4-emu `asm4242`: ASMedia, public sources */
+/* A Thunderbolt host with no firmware CM, as usb4-emu's tb*-apple-*
+ * profiles present it (its docs/TB-SWCM-HOSTS.md; design record 22
+ * section 19): Intel host router `device` (1578 Alpine Ridge 4C, 156D
+ * Falcon Ridge 4C, 15EA Titan Ridge 4C, 1547 Cactus Ridge 4C, 1513 Light
+ * Ridge), USB4 Version 0, lanes 1-4 with no USB4 Port Capability and no
+ * Lock, NHI 5 the upstream adapter, the PCIe Down adapters of the
+ * emulator's layout, Plug Events with the EEPROM (its DROM's UID
+ * CRC-8-sealed), a link controller with two port blocks from generation 2
+ * (whose PORT_MODE bit 0 is the port's Downstream Port Reset), no router
+ * operations, Router CS 3 Valid clear at power-on and no hot plug event
+ * until it is set. */
+int  fabHostTbt(FAB *f, unsigned long device);
+int  fabTbtTmuOn(FAB *f, int rt, unsigned long interval); /* a Thunderbolt router's TMU running (45.58) */
+int  fabHostV2(FAB *f);             /* `minimal` as a USB4 version 2 host router (45.20) */
 int  fabDevice(FAB *f, int kind);   /* a device router, unplugged; its index */
 int  fabChild(FAB *f, int dev);     /* a USB4 router behind a device's downstream port */
 
@@ -249,6 +312,27 @@ void fabPlugChild(FAB *f, int dev, int child, int enumerate);
  * two checks (only its UUID tells). */
 void fabSwapQuiet(FAB *f, int port, int dev);
 void fabUnplugChild(FAB *f, int dev);
+/* Record 34 Part 3: a child plugged into `dev`'s downstream port as at a
+ * hot plug - not enumerated, its parent's lane 0 Lock left set - with the
+ * parent's hot plug event where its Disable Hot Plug is clear (always on a
+ * Thunderbolt 3 parent); and its unplug, with the event. */
+void fabHotPlugChild(FAB *f, int dev, int child);
+void fabHotUnplugChild(FAB *f, int dev);
+/* `dev`'s downstream lane 0 adapter (3 on every fixture), and whether the
+ * chained PCIe tunnel is up: record 34 section 6.6's four entries Valid
+ * and chained, the parent's PCIe Down and the child's PCIe Up both with
+ * Path Enable, and the child's LTSSM in L0. */
+int  fabDownLane0(const FAB *f, int dev);
+/* A pre-OS chain on `dev`'s downstream port, as record 34 section 6.9
+ * adopts it: the child enumerated at depth 2, Router Ready, PTO, CV and
+ * Configuration Ready, the link bonded, the four PCIe entries of section
+ * 6.6 at lane HopIDs 8 and 9, Path Enable at both ends; `stray` adds a
+ * second path entry through the link (the mixed case kept watched). */
+void fabPreosChild(FAB *f, int dev, int child, int stray);
+int  fabChainPcieUp(const FAB *f, int dev);
+/* Write requests sent from entry `from` of the tried log on to router
+ * `r`'s route as it stands, delivered or not. */
+unsigned long fabTriedTo(const FAB *f, unsigned long from, int r);
 
 /* The pre-OS connection manager's leftovers on `port` (record 22 section
  * 9.1): host and device enumerated, bonded, PTO and CV, PCIe paths at lane
@@ -288,6 +372,10 @@ long fabFindWrite(const FAB *f, long from, int router, unsigned long cs,
 
 /* A frame from the fabric, now (a notification, a hot plug event). */
 void fabInject(FAB *f, unsigned long pdf, const unsigned long *dw, unsigned long words);
+/* A write to an adapter's configuration space as if a connection manager
+ * of the router's own domain made it (task 45.59: the far host's lanes in
+ * a host-to-host test), with every effect the model gives the write. */
+void fabAdapterPoke(FAB *f, int router, unsigned adp, unsigned long addr, unsigned long v);
 
 /* The DROM's CRC-32C (as the routers' DROMs carry it). */
 unsigned long fabCrcOf(const unsigned char *p, unsigned long n);

@@ -227,7 +227,10 @@ authentication material.
 
 ### 3.1 Layout
 
-- Title "xHCI98 USB Tree". A resizable top-level window: tree view (left),
+- Title "xHCI98 USB Tree" and the package version, as `xHCI98 USB Tree
+  3.4.0.0`, built from `src\xhci_version.h` (`TR_MAIN_TITLE`, task 45.4),
+  so a screenshot or a report says which build it came from; the message
+  boxes keep the plain name. A resizable top-level window: tree view (left),
   read-only multi-line edit with both scroll bars (right), a splitter
   between them, a status bar ("N USB devices, M Thunderbolt/USB4
   devices"). Size, splitter position and the View check boxes persist
@@ -540,7 +543,8 @@ counters as text, then the log as text. Both texts are ASCII lines
   tray, the window and a second program read the same log, and the
   release flavour, which drains only under `XhciCmLogDebugView` 1, keeps
   the last 16 KiB. Where the thread hands the ring to DebugView after
-  each pass - the `debug` and `qemu` flavours always, and any flavour
+  each pass - the `qemu` flavour always (and the `debug` one until task
+  45.45 retired it), and any flavour
   with `XhciCmLogDebugView` 1 since the owner's decision of 2026-10-16
   (record 21 section 8) - the copy holds what has not been emitted yet;
   the answer's `CM_QL_F_EMITTED` flag says so. That emission withholds
@@ -1170,7 +1174,12 @@ not yet in effect), and the window shows the mark's state beside the
 unit as that revision says. As built (42-A.5's tool part, 2026-10-19): on NT a unit's
 details read "Safe-removal mark: listed by Windows", "mark written; takes
 effect at the next start of the device", "mark written, but Windows does
-not list it", "not marked", or "not read" with the reason, from its NHI's
+not list it", "not marked", or "not read" with the reason (since task
+45.62 the first and third read "the Thunderbolt driver has answered it as
+removable" and "mark written; the Thunderbolt driver has not answered it
+as removable", and the first is followed by "Windows has not recorded it
+as removable." when the unit's recorded capabilities lack `Removable`:
+record 21 section 7.7), from its NHI's
 marks answer (`IOCTL_XHCICM_MARKS`, read at each refresh with the query and
 held to its epoch) and the unit's `LowerFilters`; the NHI's details add
 "Mark service: running", "stopped", "not installed" or "not read"

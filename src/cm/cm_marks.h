@@ -57,7 +57,14 @@ typedef struct _CM_MARK {
                                left the snapshot, 0 for none or once
                                confirmed (task 43.70)                      */
     ULONG LeftPendingGen;
+    ULONG Landing;          /* design record 34 section 3.10: the chain
+                               port whose snapshot reported it, its 16-bit
+                               location | CM_MK_LANDING_VALID; 0 for a
+                               child of the member itself. Kept through
+                               its burial                                  */
 } CM_MARK, *PCM_MARK;
+
+#define CM_MK_LANDING_VALID     0x10000UL
 
 typedef struct _CM_MARKS {
     CM_MARK E[CM_QM_MAX_ENTRIES];
@@ -98,6 +105,35 @@ VOID CmMarksBegin(PCM_MARKS m);
 BOOLEAN CmMarksSync(PCM_MARKS m, ULONG member, ULONG memberBdf,
                     PVOID const *snap, ULONG count, BOOLEAN truncated,
                     BOOLEAN active, ULONG now);
+
+/*
+ * The same in two phases, per landing (design record 34 section 3.10):
+ * CmMarksSync is CmMarksBury then CmMarksMake with landing 0. The caller
+ * buries first, for the member's own set and every landing it still has,
+ * and CmMarksBuryLandings every other landing of the member, then makes:
+ * so a member's bound is freed by the entries that leave before any new
+ * one is made, and a PDO that moved from one landing to another is made
+ * again under its new one in the same sync.
+ *
+ * CmMarksBury: every current entry of `member` with landing `landing`
+ * whose PDO is not in snap[] (all of them when not `active`), or whose
+ * member BDF is not `memberBdf`, becomes a tombstone.
+ * CmMarksBuryLandings: every current entry of `member` with a landing not
+ * 0 and not in keep[0 .. keepCount - 1] becomes a tombstone.
+ * CmMarksMake: with `active`, each PDO of snap[] with no current entry
+ * anywhere gets one of `member`, `memberBdf` and `landing` (a new serial),
+ * within the member's bound (else the table reads incomplete), and
+ * `truncated` reads incomplete.
+ * Each returns TRUE when anything changed.
+ */
+BOOLEAN CmMarksBury(PCM_MARKS m, ULONG member, ULONG memberBdf,
+                    ULONG landing, PVOID const *snap, ULONG count,
+                    BOOLEAN active, ULONG now);
+BOOLEAN CmMarksBuryLandings(PCM_MARKS m, ULONG member, const ULONG *keep,
+                            ULONG keepCount, ULONG now);
+BOOLEAN CmMarksMake(PCM_MARKS m, ULONG member, ULONG memberBdf,
+                    ULONG landing, PVOID const *snap, ULONG count,
+                    BOOLEAN truncated, BOOLEAN active, ULONG now);
 
 /* A location the member's bridge kept for a PDO of its snapshot
  * (locd[k], bus[k], address[k] beside snap[k]) given to the member's
@@ -168,6 +204,9 @@ typedef struct _CM_QM_IN {
     ULONG EpochHi;
     ULONG NhiBdf;
     ULONG SafeEjectOff;
+    /* The bridge inventory (cm_query.h CM_QB_*), CM_QB_WORDS dwords laid
+     * out as the answer carries them, or NULL for none. */
+    const ULONG *Bridges;
 } CM_QM_IN, *PCM_QM_IN;
 
 /* The answer into out (at least CM_QM_MAX_BYTES), PASS 0 and no stopping
@@ -199,6 +238,9 @@ ULONG CmMarksAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
 #define CM_MK_CONF_IDENTITY     4UL
 #define CM_MK_CONF_NOT_PENDING  5UL
 #define CM_MK_CONF_GEN          6UL
+#define CM_MK_CONF_CHAINED      7UL     /* a chained unit's entry, current
+                                           or a tombstone: no member eject
+                                           for it (record 34 section 3.10) */
 PCM_MARK CmMarksConfirm(PCM_MARKS m, const UCHAR *v, ULONG bytes,
                         ULONG epochLo, ULONG epochHi, BOOLEAN checkGen,
                         const ULONG *portGen, ULONG ports, PULONG why);

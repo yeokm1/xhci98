@@ -406,6 +406,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_HCD_VERSION            1UL
 #define SNAP_HCD_HEAD_WORDS         8UL
 #define SNAP_HCD_PORT_WORDS         16UL
+#define SNAP_HCD_PORT_ID_WORDS      20UL /* task 45.40's words appended */
 #define SNAP_HCD_COUNTER_WORDS      96UL
 #define SNAP_HCD_MAX_BYTES          32768UL
 /*
@@ -1554,6 +1555,32 @@ typedef BOOL (WINAPI *PFN_GMSEX)(SYS_MEMORYSTATUSEX *);
  * refused; `nativeArch` is GetNativeSystemInfo's, SYS_ARCH_UNKNOWN where that
  * does not exist.
  */
+/* XHCITR.EXE is an x86 program, which on a 64-bit Windows runs under WOW64
+ * and says so; XHCITR64.EXE is a native x64 one, for which IsWow64Process
+ * answers FALSE, so there the build says the Windows is 64-bit. */
+#if defined(_WIN64)
+#define SYS_TOOL_64             1
+#else
+#define SYS_TOOL_64             0
+#endif
+
+static const char *sys_bitness(int tool64, int wow, unsigned arch)
+{
+    if (tool64) {
+        return "64-bit Windows (x64); this x64 tool ran natively";
+    }
+    if (!wow) {
+        return "x86 (32-bit Windows)";
+    }
+    if (arch == SYS_ARCH_AMD64) {
+        return "64-bit Windows (x64); this x86 tool ran under WOW64";
+    }
+    if (arch == SYS_ARCH_IA64) {
+        return "64-bit Windows (Itanium); this x86 tool ran under WOW64";
+    }
+    return "64-bit Windows (64-bit); this x86 tool ran under WOW64";
+}
+
 static const char *sys_os_name(unsigned long platform, unsigned long major,
                                unsigned long minor, unsigned long build,
                                int product, unsigned nativeArch)
@@ -2197,17 +2224,12 @@ static void write_companion_system(void)
                  csd);
     }
 
-    /* This tool is an x86 program on every target; on a 64-bit Windows it
-     * runs under WOW64 and says so. */
     wow = FALSE;
-    if (isWow64 != NULL && isWow64(GetCurrentProcess(), &wow) && wow) {
-        sys_line("bitness", "64-bit Windows (%s); this x86 tool ran under "
-                 "WOW64",
-                 (nativeArch == SYS_ARCH_AMD64) ? "x64" :
-                 (nativeArch == SYS_ARCH_IA64) ? "Itanium" : "64-bit");
-    } else {
-        sys_line("bitness", "x86 (32-bit Windows)");
+    if (isWow64 == NULL || !isWow64(GetCurrentProcess(), &wow)) {
+        wow = FALSE;
     }
+    sys_line("bitness", "%s",
+             sys_bitness(SYS_TOOL_64, wow ? 1 : 0, nativeArch));
 
     if (haveVersion && v.dwPlatformId == SYS_PLATFORM_NT) {
         int haveBiosKey;
@@ -2338,6 +2360,13 @@ static int selftest_sysinfo(void)
                sys_os_name(cases[i].platform, cases[i].major, cases[i].minor,
                            cases[i].build, cases[i].product, cases[i].arch));
     }
+    /* The bitness line over each build and WOW64 answer. */
+    printf("bitness tool64 0 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_X86,
+           sys_bitness(0, 0, SYS_ARCH_X86));
+    printf("bitness tool64 0 wow 1 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(0, 1, SYS_ARCH_AMD64));
+    printf("bitness tool64 1 wow 0 arch %u: %s\n", (unsigned)SYS_ARCH_AMD64,
+           sys_bitness(1, 0, SYS_ARCH_AMD64));
     for (i = 0; dirty[i] != NULL; i++) {
         sys_clean(dirty[i], out, sizeof(out));
         printf("clean [%s]\n", out);
@@ -3219,6 +3248,15 @@ static const char *const xportc_counter_names[SNAP_XPORTC_WORDS] = {
     "XportBotNoStreams", "XportNoStreams"
 };
 
+/* Task 45.45's six (the command-state checker in every flavour, design
+ * record 08 section 14) follow at 252, by name in the list. */
+#define SNAP_STRICT_AT              252UL
+#define SNAP_STRICT_WORDS           6UL
+static const char *const strict_counter_names[SNAP_STRICT_WORDS] = {
+    "StrictSwitchRead", "StrictOn", "StrictChecked", "StrictViolations",
+    "StrictUndefined", "StrictRefusals"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3319,6 +3357,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_XPORTC_AT && i - SNAP_XPORTC_AT < SNAP_XPORTC_WORDS) {
         return xportc_counter_names[i - SNAP_XPORTC_AT];
+    }
+    if (i >= SNAP_STRICT_AT && i - SNAP_STRICT_AT < SNAP_STRICT_WORDS) {
+        return strict_counter_names[i - SNAP_STRICT_AT];
     }
     return NULL;
 }
@@ -3856,7 +3897,9 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
         r = image + portsAt + i * portBytes;
         if (get32(r, 4) == 0 && get32(r, 8) == 0 && get32(r, 20) == 0 &&
             get32(r, 40) == 0 && get32(r, 44) == 0 && get32(r, 52) == 0 &&
-            get32(r, 60) == 0) {
+            get32(r, 60) == 0 &&
+            (portBytes < SNAP_HCD_PORT_ID_WORDS * 4 ||
+             (get32(r, 64) == 0 && get32(r, 68) == 0 && get32(r, 72) == 0))) {
             continue;
         }
         shown++;
@@ -3879,6 +3922,18 @@ static void print_hcd(const unsigned char *image, unsigned long bytes)
                  (v & 1UL) != 0 ? "; deferred by the settle" : "",
                  (v & 2UL) != 0 ? "; warm reset in flight" : "",
                  (v & 4UL) != 0 ? "; PORTSC unreadable" : "");
+        }
+        /* Task 45.40's identity words, where the driver appends them. */
+        if (portBytes >= SNAP_HCD_PORT_ID_WORDS * 4 &&
+            (get32(r, 64) != 0 || get32(r, 68) != 0 || get32(r, 72) != 0)) {
+            v = (get32(r, 68) >> 8) & 0xFFUL;
+            comp("        identity: last listed %04lX:%04lX on the %s form; "
+                 "%lu deferred, %lu spent%s\n",
+                 (get32(r, 64) >> 16) & 0xFFFFUL, get32(r, 64) & 0xFFFFUL,
+                 (get32(r, 68) & 1UL) != 0 ? "serial" : "location",
+                 get32(r, 72), get32(r, 76),
+                 v == 1UL ? "; failed, waits for a new connection"
+                          : v == 2UL ? "; bypass for this connection" : "");
         }
     }
     comp("  (%lu of %lu root ports shown; the rest are Empty with nothing "
@@ -4163,6 +4218,8 @@ static void print_tol(const unsigned char *hcd, unsigned long hcdBytes,
                            "devices dropped"
                 : v == 2 ? "PINNED: no proof DMA stopped; buffer, transfers "
                            "kept"
+                : v == 3 ? "RELEASED: the USB4 tunnel's path read back "
+                           "closed, devices dropped"
                          : "?");
     comp("  all-ones USBSTS  %lu episode(s) begun\n", get32(t, 32 * 4));
     comp("  tolerance clock  %lu ticks (100 ms nominal, at least 45 ms "
@@ -5686,6 +5743,66 @@ static void print_xport(const unsigned char *image, unsigned long bytes)
 }
 
 /*
+ * Task 45.40's identity records of places behind hubs (design record 13
+ * section 10.7): an appended header block of the entry count, the words
+ * of one and the first entry's word, then each entry's instance key (0
+ * free), ids, serial-form flag and latch, deferrals made and spent. A
+ * header shorter than it is an earlier driver's, which kept none.
+ */
+#define SNAP_HCD_IDPLACE_HEAD       629UL
+#define SNAP_HCD_IDPLACE_HEAD_WORDS 792UL
+static void print_idplace(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long key;
+    unsigned long latch;
+    unsigned long i;
+    unsigned long shown = 0;
+    const unsigned char *r;
+
+    headBytes = get32(image, 4);
+    comp("\nidentity behind hubs (task 45.40):\n");
+    if (headBytes < SNAP_HCD_IDPLACE_HEAD_WORDS * 4 || bytes < headBytes) {
+        comp("  not kept by this driver (a %lu-byte header; from 3.4.0.0 "
+             "on).\n", headBytes);
+        return;
+    }
+    records = get32(image, SNAP_HCD_IDPLACE_HEAD * 4);
+    words = get32(image, (SNAP_HCD_IDPLACE_HEAD + 1) * 4);
+    at = get32(image, (SNAP_HCD_IDPLACE_HEAD + 2) * 4);
+    if (words < 5 || words > 64 || records > 255 ||
+        at < SNAP_HCD_IDPLACE_HEAD + 3 || at > headBytes / 4 ||
+        records > (headBytes / 4 - at) / words) {
+        comp("  places: %lu of %lu words at %lu - not a shape this build "
+             "reads\n", records, words, at);
+        return;
+    }
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        key = get32(r, 0);
+        if (key == 0) {
+            continue;
+        }
+        latch = (get32(r, 8) >> 8) & 0xFFUL;
+        comp("  root port %lu, route %05lX: last listed %04lX:%04lX on the "
+             "%s form; %lu deferred, %lu spent%s\n",
+             key & 0xFFUL, (key >> 8) & 0xFFFFFUL,
+             (get32(r, 4) >> 16) & 0xFFFFUL, get32(r, 4) & 0xFFFFUL,
+             (get32(r, 8) & 1UL) != 0 ? "serial" : "location",
+             get32(r, 12), get32(r, 16),
+             latch == 1UL ? "; failed, waits for a new connection"
+                          : latch == 2UL ? "; bypass for this connection" : "");
+        shown++;
+    }
+    if (shown == 0) {
+        comp("  no place behind a hub recorded.\n");
+    }
+}
+
+/*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
  * says so and nothing else is decoded from it (task 36.9),
@@ -5719,6 +5836,8 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     print_ssusp(hcd, bytes);
     /* 44.35: the storage transport records, from the header alone. */
     print_xport(hcd, bytes);
+    /* 45.40: the identity records behind hubs, from the header alone. */
+    print_idplace(hcd, bytes);
 }
 
 /*
@@ -5745,13 +5864,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 245 and two words
+ * word is nonzero and its value names its place): 0 to 257 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_XPORTC_AT + SNAP_XPORTC_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STRICT_AT + SNAP_STRICT_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];
@@ -6233,6 +6352,47 @@ static int selftest_xport(void)
     return 0;
 }
 
+/*
+ * `-selftest-idplace`: task 45.40's decode over canned headers: a place
+ * behind a hub on root port 1 latched after a spent deferral, one with a
+ * bypass, a location form one, then a header from before 45.40 and one
+ * whose count it cannot hold.
+ */
+static int selftest_idplace(void)
+{
+    static unsigned char hcd[SNAP_HCD_IDPLACE_HEAD_WORDS * 4];
+    unsigned char *r;
+
+    memset(hcd, 0, sizeof(hcd));
+    put32(hcd, 0, 1);
+    put32(hcd, 4, SNAP_HCD_IDPLACE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_IDPLACE_HEAD * 4, 32);
+    put32(hcd, (SNAP_HCD_IDPLACE_HEAD + 1) * 4, 5);
+    put32(hcd, (SNAP_HCD_IDPLACE_HEAD + 2) * 4, SNAP_HCD_IDPLACE_HEAD + 3);
+    r = hcd + (SNAP_HCD_IDPLACE_HEAD + 3) * 4;
+    put32(r, 0, 0x101UL);
+    put32(r, 4, 0x0BDA8157UL);
+    put32(r, 8, 0x101UL);
+    put32(r, 12, 2);
+    put32(r, 16, 1);
+    r += 20 * 2;
+    put32(r, 0, 0x2103UL);
+    put32(r, 4, 0x0BDA8157UL);
+    put32(r, 8, 0x201UL);
+    put32(r, 12, 1);
+    put32(r, 16, 1);
+    r += 20;
+    put32(r, 0, 0x302UL);
+    put32(r, 4, 0x07815567UL);
+    print_idplace(hcd, sizeof(hcd));
+    put32(hcd, 4, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    print_idplace(hcd, SNAP_HCD_XPORT_HEAD_WORDS * 4);
+    put32(hcd, 4, SNAP_HCD_IDPLACE_HEAD_WORDS * 4);
+    put32(hcd, SNAP_HCD_IDPLACE_HEAD * 4, 40);
+    print_idplace(hcd, sizeof(hcd));
+    return 0;
+}
+
 static int selftest_xpipe(void)
 {
     static unsigned char hcd[SNAP_HCD_BIG_HEAD_WORDS * 4];
@@ -6477,8 +6637,28 @@ static int selftest_hcd(void)
     put32(image, 24, 32);
     print_hcd(image, sizeof(image));
 
-    /* A later driver's longer record (80 bytes, words appended): walked by
-     * the header's record size, the known words read as before. */
+    /* A later driver's longer record (96 bytes, words appended past task
+     * 45.40's): walked by the header's record size, the known words read
+     * as before. */
+    memset(image, 0, sizeof(image));
+    put32(image, 0, 1);
+    put32(image, 4, 32);
+    put32(image, 8, 2);
+    put32(image, 12, 96);
+    put32(image, 16, 32);
+    put32(image, 20, 0);
+    put32(image, 24, 32 + 2 * 96);
+    put32(image, 28, 8);
+    base = 32 + 96;
+    put32(image, base + 0, 17);
+    put32(image, base + 4, 13);
+    put32(image, base + 8, 7);
+    put32(image, base + 20, 4);
+    put32(image, base + 80, 0xDEADBEEFUL);
+    print_hcd(image, 32 + 2 * 96);
+
+    /* Task 45.40's identity words: port 2 Empty, remembering a serial-named
+     * 0BDA:8157 whose deferral was spent, latched; port 3 a bypass. */
     memset(image, 0, sizeof(image));
     put32(image, 0, 1);
     put32(image, 4, 32);
@@ -6488,12 +6668,20 @@ static int selftest_hcd(void)
     put32(image, 20, 0);
     put32(image, 24, 32 + 2 * 80);
     put32(image, 28, 8);
+    base = 32;
+    put32(image, base + 0, 2);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x101UL);
+    put32(image, base + 72, 1);
+    put32(image, base + 76, 1);
     base = 32 + 80;
-    put32(image, base + 0, 17);
+    put32(image, base + 0, 3);
     put32(image, base + 4, 13);
-    put32(image, base + 8, 7);
-    put32(image, base + 20, 4);
-    put32(image, base + 64, 0xDEADBEEFUL);
+    put32(image, base + 8, 6);
+    put32(image, base + 64, 0x0BDA8157UL);
+    put32(image, base + 68, 0x201UL);
+    put32(image, base + 72, 2);
+    put32(image, base + 76, 1);
     print_hcd(image, 32 + 2 * 80);
     return 0;
 }
@@ -10624,6 +10812,8 @@ int tr_snap_main(int argc, char **argv)
             return selftest_ssusp();
         } else if (strcmp(argv[i], "-selftest-xport") == 0) {
             return selftest_xport();
+        } else if (strcmp(argv[i], "-selftest-idplace") == 0) {
+            return selftest_idplace();
         } else if (strcmp(argv[i], "-selftest-report") == 0 && i + 1 < argc) {
             /*
              * The report path on its own, with no device: open BASE.TXT, write

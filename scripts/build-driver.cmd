@@ -81,6 +81,28 @@ rem      source stamp, and its four INFs' own gate
 rem      (scripts\inf-gate\check-cm-inf.ps1, self-tested first, run over
 rem      src\cm\xhcicm.inf, xhcicm-amd64.inf, xhcicmf.inf and
 rem      xhcicmf-amd64.inf on every build)
+rem  14b. the fourth binary, xhcinet.sys - the NDIS 5 miniport of
+rem      Thunderbolt networking (roadmap-usb4.md task 45.59 step S6, design
+rem      record 35), built from src\net\ndis5 after xhcicm.sys for each
+rem      flavour and architecture: its import gate (-GateProfile net98 over
+rem      scripts\import-gate\xhcinet-imports.allow on x86, the default amd64
+rem      rules over xhcinet-imports-amd64.allow), the frame-pointer check and
+rem      the flavour marker check, and its two INFs' own gate
+rem      (scripts\inf-gate\check-net-inf.ps1, self-tested first, over
+rem      src\net\xhcinet.inf and xhcinet-amd64.inf on every build). It is not
+rem      yet in the gated record or the source stamp: the package carries it
+rem      from step S10 (record 35 section 9.3), which adds both
+rem  14c. the fifth binary, xhcinet6.sys - the NDIS 6.20 miniport of
+rem      Thunderbolt networking for 8, 8.1 and 10 (task 45.59 step S7,
+rem      record 35 section 7.9), built from src\net\ndis6 after xhcinet.sys
+rem      for each flavour and architecture with WDK 7.1's WIN7 environment
+rem      (setenv <WDK> <flavor> x86 WIN7 no_oacr, or x64 WIN7 no_oacr; the
+rem      one kit here with NDIS 6.20), so every build needs tools\WinDDK71
+rem      (or WDKROOT): its import gate (-GateProfile net6 over
+rem      scripts\import-gate\xhcinet6-imports.allow or
+rem      xhcinet6-imports-amd64.allow) and the flavour marker check. Its INF
+rem      sections are 14b's two INFs'. Not yet in the gated record or the
+rem      source stamp, as 14b
 rem  14a. Stor98 (src\stor98; roadmap-usb4 task 42-A.30), which the package
 rem      bundles from this build since 3.1.0.0: its two INFs held to
 rem      src\xhci_version.h's DriverVer (scripts\inf-gate\check-stor98-inf.ps1,
@@ -106,29 +128,35 @@ rem      file must still have that hash, and the record is written from it,
 rem      clean only if the tree is still clean at the commit noted at the
 rem      start. A run that fails leaves no record for the flavour that failed
 rem
+rem Steps 2 to 9 and the INF, UAS, CM, Stor98 and txtsetup.oem gates of
+rem steps 3, 12, 13, 14 and 14a need no DDK, and since roadmap-usb4 task
+rem 45.3 they run at once, after step 0, through scripts\build-steps.ps1
+rem (build-and-test.md, "A faster gated build"); each step of the run says
+rem its time in the log ("--- <step>: m:ss").
+rem
 rem Any failure stops the run. scripts\local\ddk-debug.cmd still exists for an
 rem interactive DDK prompt, but a binary built that way has not been through the
 rem gates - do not deploy one.
 rem
-rem VOCABULARY. This project says "release", "debug" and "qemu" for the three
-rem build flavors, everywhere except where the DDK's own words are literally
+rem VOCABULARY. This project says "release" and "qemu" for the two build
+rem flavors, everywhere except where the DDK's own words are literally
 rem required: setenv.bat's third argument (free|checked), the src\objfre /
-rem src\objchk / src\objchk_qemu output trees, and the buildfre / buildchk /
-rem buildchk_qemu log names. The mapping is made once, in :flavordirs below.
+rem src\objchk_qemu output trees, and the buildfre / buildchk_qemu log
+rem names. The mapping is made once, in :flavordirs below.
 rem
-rem THREE FLAVORS, since roadmap task 13-L.1 (design record 08):
+rem TWO FLAVORS, since roadmap-usb4 task 45.45 (design record 08 section 14):
 rem
-rem   release  free     ships by default        no port-0xE9 mirror
-rem   debug    checked  ships as the diagnostic download, and its DEFINING
-rem                     requirement is that it LOADS on real Windows 98 and
-rem                     Windows 2000 metal - so no port-0xE9 mirror either
+rem   release  free     ships; no port-0xE9 mirror. Its MSVC 6.0 x86 builds
+rem                     keep frame pointers (/Oy-, NTNOFPO in each sources,
+rem                     held by scripts\check-frame-pointers.ps1) and the
+rem                     command-state checker runs unless XhciCommandCheck
+rem                     is 0
 rem   qemu     checked  the emulator/bench build: port-0xE9 mirror and the live
 rem                     per-line trace.  NEVER PUBLISHED.
 rem
-rem debug and qemu are both CHECKED builds, so they need distinct output trees
-rem or they overwrite each other's objects; BUILD_ALT_DIR is what separates
-rem them (:flavordirs).  The one import that distinguishes them -
-rem HAL.dll!WRITE_PORT_UCHAR - is the sole import delta between 0.0.0.4's two
+rem The third, debug (checked, the diagnostic download, task 13-L.1), was
+rem retired with task 45.45: "debug" and "both" are refused. qemu's import
+rem HAL.dll!WRITE_PORT_UCHAR is the sole import delta between 0.0.0.4's two
 rem published binaries, of which the debug one gave the ThinkPad E460 a Code 2.
 rem WHY that build failed is not established (defect 2b), so the import gate
 rem carries it as "qemu required" and no published binary can have it.
@@ -138,7 +166,7 @@ rem fed is assembled by a separate explicit step, which re-runs the INF gate
 rem against the finished directory so a package is never less gated than the
 rem binary in it:
 rem
-rem   scripts\package\make-package.ps1 [-Flavor release|debug] [-Arch x86|amd64]
+rem   scripts\package\make-package.ps1 [-Flavor release|qemu] [-Arch x86|amd64]
 rem
 rem The media holds no Microsoft file: it is the drivers (xhcihlpr.sys on x86
 rem only) and their INFs, txtsetup.oem, on amd64 the test certificate, and a
@@ -147,15 +175,14 @@ rem The OS supplies usbd.sys and usbui.dll through the INF's LayoutFile. The
 rem HCD replaces usbport.sys and usbhub.sys, and the INF gate refuses an INF
 rem that fetches either (OS-HCDREPLACED).
 rem
-rem Usage:  scripts\build-driver.cmd [release|debug|qemu|both|all]
+rem Usage:  scripts\build-driver.cmd [release|qemu|all]
 rem                                  [-amd64] [-NoTargetEvidence]
-rem                                                          (default: both)
+rem                                                       (default: release)
 rem
-rem   "both" is the two SHIPPING flavors - release and debug - and it stays the
-rem   default deliberately: widening it to three would build a binary that must
-rem   never be published on every ordinary run.  "all" is the three, and is what
-rem   a release cut uses so that every flavor is gated even though only two are
-rem   staged.
+rem   "release" is the default deliberately: widening it would build a binary
+rem   that must never be published on every ordinary run.  "all" is the two,
+rem   and is what a release cut uses so that every flavor is gated even though
+rem   only release is staged.
 rem
 rem   The DDK and MSVC 6.0 both live inside this repository - tools\ntddk and
 rem   tools\MSVC600 - and are found relative to this script, so a
@@ -164,7 +191,7 @@ rem   Set DDKROOT to build against a DDK somewhere else.
 rem   Add -NoTargetEvidence after the flavor to skip the gate's target-file
 rem   evidence steps on a host that has none staged.
 rem
-rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same three
+rem SECOND ARCHITECTURE, since roadmap task 21.2. -amd64 builds the same
 rem flavors for amd64 with WDK 7.1 (tools\WinDDK71) instead of the Windows 2000
 rem DDK, which cannot target it. The two toolchains are separate all the way
 rem down and the x86 path is untouched by the switch:
@@ -174,7 +201,7 @@ rem                                                     src\obj*\i386
 rem   amd64  tools\WinDDK71    setenv <root> <flavor> x64 WNET no_oacr
 rem                                                     src\obj*\amd64
 rem
-rem BUILD_ALT_DIR is overridden back to fre/chk/chk_qemu after setenv.bat in
+rem BUILD_ALT_DIR is overridden back to fre/chk_qemu after setenv.bat in
 rem BOTH cases. WDK 7.1's setenv sets it to fre_wnet_AMD64, which src\sources
 rem hard-errors on, and build.exe appends the architecture itself - so the
 rem override is what puts the output at src\objfre\amd64 beside src\objfre\i386
@@ -216,10 +243,21 @@ set "ARCH=x86"
 set "BADOPT="
 call :readopt "%~2"
 call :readopt "%~3"
-if "%FLAVORS%"=="" set "FLAVORS=both"
-if /i "%FLAVORS%"=="both" set "FLAVORS=debug release"
-if /i "%FLAVORS%"=="all" set "FLAVORS=debug release qemu"
-if /i "%FLAVORS%"=="debug" set "FLAVORS=debug"
+if "%FLAVORS%"=="" set "FLAVORS=release"
+rem Task 45.45 retired the debug flavour, and "both" meant debug and
+rem release: refused by name, before a single self-test, rather than read as
+rem release, which would hide a caller that still expects two binaries.
+if /i "%FLAVORS%"=="both" goto retiredflavor
+if /i "%FLAVORS%"=="debug" goto retiredflavor
+rem "all" is what a cut builds (cut-builds.ps1, or by hand for -ImportOnly or
+rem a one-tree cut), so it runs every self-test in full: the INF gate's
+rem self-tests skip themselves when nothing they read has changed since
+rem their last passing run, except under this (roadmap-usb4 task 45.30).
+rem A pre-merge build of a branch sets XHCI98_SELFTEST_SKIP_OK=1 to let that
+rem skip stand in an "all" build too; a cut never sets it, and
+rem XHCI98_FULL_SELFTESTS=1 set by the caller still wins (owner, 2026-10-30).
+if /i "%FLAVORS%"=="all" if not "%XHCI98_SELFTEST_SKIP_OK%"=="1" set "XHCI98_FULL_SELFTESTS=1"
+if /i "%FLAVORS%"=="all" set "FLAVORS=release qemu"
 if /i "%FLAVORS%"=="release" set "FLAVORS=release"
 if /i "%FLAVORS%"=="qemu" set "FLAVORS=qemu"
 rem Validate both arguments here, before the self-tests and the host suite
@@ -283,6 +321,7 @@ exit /b 1
 
 :mainbody
 setlocal
+call :stepclock RUNT0
 rem Every text check of this build and of the release cut, before anything
 rem else: none needs a toolchain, and each costs seconds against a build's
 rem hour (task 44.1). Until then the build met its text checks after its
@@ -295,12 +334,14 @@ rem and a BEL written into src\xhci_slot.c by a PowerShell escape passed
 rem all three x86 flavours and every gate on 2026-09-12.
 echo.
 echo === text checks ===
+call :stepclock STEPT0
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-text.ps1" -SelfTest
 if errorlevel 1 goto textfail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
     "%REPO%\scripts\check-text.ps1"
 if errorlevel 1 goto textfail
+call :steptime STEPT0 "text checks"
 
 rem The DDK output directory for the target architecture - build.exe's own
 rem <arch> component, and the one place this script turns ARCH into a path.
@@ -382,280 +423,33 @@ if not exist "%DDKROOT%\bin\setenv.bat" goto ddkspace
 set "DDKFIRST="
 echo DDK: %DDKROOT%
 
+rem The checks that need no DDK, at once (roadmap-usb4 task 45.3;
+rem build-and-test.md, "A faster gated build"): the import gate's
+rem self-tests, the INF, UAS, CM, Stor98 and txtsetup.oem gates with their
+rem self-tests, the packager's, the QEMU launchers' and the VM matrix's
+rem self-tests, the Stor98 interface header, on the x86 run XHCITR and
+rem XHCIPERF rebuilt (XHCITR compiles the installer's pure half, so a cut
+rem never needs it built by hand) and their self-tests, the XHCIINST,
+rem XHCIMARK and XHCIDI self-tests when their EXEs are there, the host suite
+rem and on the x86 run Stor98's unit suite. scripts\build-steps.ps1 holds
+rem them as a table, with what each waits for and the message each failure
+rem gives; XHCI98_BUILD_STEPS says how many run at once (default 4, 1 one at
+rem a time in the table's order). The runner is self-tested first. The host
+rem suite still runs before the DDK builds, not after: it compiles the same
+rem core files in seconds, so a bad carve, ring or PORTSC constant should
+rem not cost two full builds first.
 echo.
-echo === import gate self-tests ===
+echo === the build-step runner's self-tests ===
+call :stepclock STEPT0
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\test-evidence-manifests.ps1"
-if errorlevel 1 goto gatetestfail
-rem The FLAVORS column is the whole of task 13-L.1's enforcement - one row
-rem decides whether a published binary may carry the sole import delta of the
-rem build that gave the E460 a Code 2 - so it is tested before anything is
-rem built rather than after.
+    "%REPO%\scripts\build-steps.ps1" -SelfTest
+if errorlevel 1 goto stepstestfail
 powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\import-gate\test-flavour-rules.ps1"
-if errorlevel 1 goto gatetestfail
-rem The x86 helper's toolchain rules (design record 18 section 15.10): a
-rem helper built for another target than WXP shows in no field of its header.
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-helper-build.ps1" -SelfTest
-if errorlevel 1 goto gatetestfail
-
-echo.
-echo === INF gate self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\test-inf-checks.ps1"
-if errorlevel 1 goto inftestfail
-
-echo.
-echo === INF gate (x86) ===
-rem INFFILE is what :inffail names; the two gate runs share the label and used
-rem to share the x86 file's name too (the audit of 2026-09-17).
-set "INFFILE=src\xhci98.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch x86
-if errorlevel 1 goto inffail
-
-rem The 64-bit package's INF, gated on every build and not only an -amd64 one.
-rem The two ship as one release, neither engine reports a mistake in either,
-rem and the cost of the second run is a second or two.
-echo.
-echo === INF gate (amd64) ===
-set "INFFILE=src\xhci98-amd64.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-inf.ps1" -Arch amd64
-if errorlevel 1 goto inffail
-
-rem The UAS class driver's INF (task 31-A.2). check-inf.ps1 is built around
-rem xhci98.inf's own facts and would refuse a second INF for lacking them, so
-rem the second INF has a gate of its own, self-tested by mutation first.
-echo.
-echo === UAS INF gate self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -SelfTest
-if errorlevel 1 goto inftestfail
-
-echo.
-echo === UAS INF gate (x86) ===
-set "INFFILE=src\uas\xhciuas.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch x86
-if errorlevel 1 goto inffail
-
-echo.
-echo === UAS INF gate (amd64) ===
-set "INFFILE=src\uas\xhciuas-amd64.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-uas-inf.ps1" -Arch amd64
-if errorlevel 1 goto inffail
-
-rem The connection manager's four INFs (task 39-A.1): the NHI's pair and the
-rem NT-only tunnel-bridge filter's pair, under a gate of their own,
-rem self-tested by mutation first.
-echo.
-echo === CM INF gate self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -SelfTest
-if errorlevel 1 goto inftestfail
-
-echo.
-echo === CM INF gate (NHI, x86) ===
-set "INFFILE=src\cm\xhcicm.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Arch x86
-if errorlevel 1 goto inffail
-
-echo.
-echo === CM INF gate (NHI, amd64) ===
-set "INFFILE=src\cm\xhcicm-amd64.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Arch amd64
-if errorlevel 1 goto inffail
-
-echo.
-echo === CM INF gate (filter, x86) ===
-set "INFFILE=src\cm\xhcicmf.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch x86
-if errorlevel 1 goto inffail
-
-echo.
-echo === CM INF gate (filter, amd64) ===
-set "INFFILE=src\cm\xhcicmf-amd64.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-cm-inf.ps1" -Filter -Arch amd64
-if errorlevel 1 goto inffail
-
-rem Stor98's two INFs (task 42-A.30): the package's one DriverVer, from
-rem src\xhci_version.h, self-tested by mutation first.
-echo.
-echo === Stor98 INF gate ===
-set "INFFILE=src\stor98\inf\stor98-x86.inf and stor98-x64.inf"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1" -SelfTest
-if errorlevel 1 goto inftestfail
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-stor98-inf.ps1"
-if errorlevel 1 goto inffail
-
-rem The text-mode Setup driver descriptions (task 33.3): src\txtsetup.oem and
-rem src\txtsetup-amd64.oem, self-tested by mutation first, then each gated
-rem against the INF of its own architecture and against the other file.
-echo.
-echo === txtsetup.oem gate self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -SelfTest
-if errorlevel 1 goto inftestfail
-
-echo.
-echo === txtsetup.oem gate (x86) ===
-set "INFFILE=src\txtsetup.oem"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -Arch x86
-if errorlevel 1 goto inffail
-
-echo.
-echo === txtsetup.oem gate (amd64) ===
-set "INFFILE=src\txtsetup-amd64.oem"
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\inf-gate\check-txtsetup-oem.ps1" -Arch amd64
-if errorlevel 1 goto inffail
-
-rem Stand-ins only - no build, no staged media, no VM - so this runs here with
-rem the other self-tests rather than next to the packaging step it guards.
-echo.
-echo === packager self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\package\test-package.ps1"
-if errorlevel 1 goto pkgtestfail
-
-echo.
-echo === QEMU launcher self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\test-qemu-launchers.ps1"
-if errorlevel 1 goto qemutestfail
-
-rem The verdict evaluator's suite (design record 06) and the batch-file
-rem line-ending check were not wired in here until the audit of
-rem 2026-09-05; a build that ran every other self-test could still ship a
-rem matrix that read a refusal as a pass. Both are guestless and quick.
-echo.
-echo === VM matrix verdict self-tests ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\vm-matrix\selftest.ps1"
-if errorlevel 1 goto matrixtestfail
-rem The M86 trace validator (design record 18 section 9): a capture it
-rem accepts is what R1, R2 and the lifecycle legs are read from.
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\vm-matrix\check-msi86-trace.ps1" -SelfTest
-if errorlevel 1 goto matrixtestfail
-
-rem The batch-file line endings, the source charset and the readme text
-rem ran first, in scripts\check-text.ps1 (task 44.1), at the top of
-rem :mainbody.
-
-rem XHCITR compiles the installer's pure half (xhciinst\inst_core.c), so a
-rem change there makes it stale and make-release.ps1 refuses it; the x86
-rem run rebuilds it, the x64 half included, before its self-tests below, so
-rem a cut never needs it built by hand.
-if /i "%ARCH%"=="x86" (
-    echo.
-    echo === xhcitr and xhciperf, rebuilt ===
-    call "%REPO%\xhcitr\build.cmd"
-    if errorlevel 1 goto toolbuildfail
-    rem The disk benchmark (task 43.50, design record 29 section 10), which
-    rem compiles Stor98's interface header stor98pf.h.
-    call "%REPO%\xhciperf\build.cmd"
-    if errorlevel 1 goto toolbuildfail
-)
-
-rem Stor98's interface header is in this tree twice since task 42-A.20:
-rem src\stor98\include\stor98cm.h, the master, and src\cm\stor98cm.h, the
-rem copy xhcicm.sys compiles against. Byte for byte until they are one.
-echo.
-echo === Stor98 interface header ===
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-stor98-header.ps1" -SelfTest
-if errorlevel 1 goto stor98hdrfail
-powershell -NoProfile -ExecutionPolicy Bypass -File ^
-    "%REPO%\scripts\check-stor98-header.ps1"
-if errorlevel 1 goto stor98hdrfail
-
-rem The install tool (task 40.5, design record 23), when its EXE has been
-rem built: its /selftest, its switch refusals and its import table, which
-rem must name KERNEL32 and ADVAPI32 alone (xhciinst\selftest.cmd).
-if exist "%REPO%\xhciinst\XHCIINST.EXE" (
-    echo.
-    echo === xhciinst self-test ===
-    call "%REPO%\xhciinst\selftest.cmd"
-    if errorlevel 1 goto insttestfail
-)
-
-rem The USB tree tool (Phase 41, design record 25), when its EXE has been
-rem built: its /selftest, its switch refusals and its import table, which
-rem must name KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and
-rem COMDLG32 alone (xhcitr\selftest.cmd).
-if exist "%REPO%\xhcitr\XHCITR.EXE" (
-    echo.
-    echo === xhcitr self-test ===
-    call "%REPO%\xhcitr\selftest.cmd"
-    if errorlevel 1 goto trtestfail
-    rem The snapshot reader, XHCISNAP's until 42-A.4: its report path with
-    rem no controller, its decodes over canned data and the counter-name
-    rem check (scripts\check-counter-names.ps1) on the built image.
-    echo.
-    echo === xhcitr snapshot self-test ===
-    call "%REPO%\xhcitr\snaptest.cmd"
-    if errorlevel 1 goto snaptestfail
-)
-
-rem The disk benchmark (task 43.50, design record 29 section 10.3), when its
-rem EXE has been built: its import table (the seven of XHCITR), the source
-rem rule that it opens no physical drive, and its /selftest, which touches no
-rem disk and opens no window (xhciperf\selftest.cmd).
-if exist "%REPO%\xhciperf\XHCIPERF.EXE" (
-    echo.
-    echo === xhciperf self-test ===
-    call "%REPO%\xhciperf\selftest.cmd"
-    if errorlevel 1 goto perftestfail
-)
-
-rem The safe-removal mark service (task 42-A.5, design record 21 section
-rem 7.4 revision 3), when its EXE has been built: its -selftest, its switch
-rem refusals and its import table, which must name KERNEL32 and ADVAPI32
-rem alone (xhcimark\selftest.cmd). Nothing of it installs or starts the
-rem service.
-if exist "%REPO%\xhcimark\XHCIMARK.EXE" (
-    echo.
-    echo === xhcimark self-test ===
-    call "%REPO%\xhcimark\selftest.cmd"
-    if errorlevel 1 goto mktestfail
-)
-
-rem The 98 SE and ME device install helper (task 42-A.1, design record 27),
-rem when its EXE has been built (xhciinst\di\build.cmd, Open Watcom): its
-rem import table, by ordinal from KERNEL, USER and SETUPX and each the
-rem allowlist's, the gate's own refusals, and its version stamp
-rem (xhciinst\di\selftest.cmd).
-if exist "%REPO%\xhciinst\di\xhcidi.exe" (
-    echo.
-    echo === xhcidi self-test ===
-    call "%REPO%\xhciinst\di\selftest.cmd"
-    if errorlevel 1 goto ditestfail
-)
-
-echo.
-echo === host tests ===
-call "%REPO%\test\run-host-tests.cmd"
+    "%REPO%\scripts\build-steps.ps1" -Arch %ARCH%
 if errorlevel 2 goto inconclusive
-if errorlevel 1 goto failed
+if errorlevel 1 goto stepsfail
+call :steptime STEPT0 "the checks that need no DDK"
 
-rem Stor98's own host unit suite, on the x86 run (its compiler is MSVC 6.0).
-if /i "%ARCH%"=="amd64" goto skipstor98unit
-echo.
-echo === Stor98 unit tests ===
-call "%REPO%\src\stor98\tests\unit\build.cmd"
-if errorlevel 1 goto stor98fail
-:skipstor98unit
 
 rem Stor98 (task 42-A.30): built once per run, free only - the package ships
 rem its free build whatever this project's flavour - for this architecture,
@@ -664,6 +458,7 @@ rem (this architecture's only; the other run's stay) are deleted first, so a
 rem failed build cannot leave an old one to gate.
 echo.
 echo === build Stor98 (free, %ARCH%) ===
+call :stepclock STEPT0
 set "STOR98_DBGPORT="
 set "S98TARGETS=9x x86"
 set "S98IMAGES=win9x\stor98.mpd x86\stor98.sys"
@@ -672,6 +467,7 @@ if /i "%ARCH%"=="amd64" set "S98IMAGES=amd64\stor98.sys"
 for %%T in (%S98IMAGES%) do if exist "%REPO%\src\stor98\out\free\%%T" del "%REPO%\src\stor98\out\free\%%T"
 call "%REPO%\src\stor98\scripts\build.cmd" "%S98TARGETS%" free
 if errorlevel 1 goto stor98fail
+call :steptime STEPT0 "build Stor98"
 
 rem S98VSD.VXD (task 43.46, design record 30 section 6.4), the Windows 98
 rem SE and ME IOS layer for Stor98's disks, on the x86 run: the release
@@ -683,6 +479,7 @@ rem make-release.ps1 refuses a cut without the image.
 if /i "%ARCH%"=="amd64" goto skipvsd
 echo.
 echo === build S98VSD.VXD ===
+call :stepclock STEPT0
 for %%V in (obj\S98VSD.VXD obj\qemu\S98VSD.VXD) do if exist "%REPO%\src\vsd\%%V" del "%REPO%\src\vsd\%%V"
 call "%REPO%\src\vsd\build.cmd"
 if errorlevel 2 goto vsdnotbuilt
@@ -696,6 +493,7 @@ goto skipvsd
 :vsdnotbuilt
 echo S98VSD.VXD was not built on this host (see above); the package goes without it.
 :skipvsd
+if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build S98VSD.VXD"
 
 rem XHCIPFW.VXD (task 44.49, design record 32 section 8), the Windows 98
 rem SE and ME static VxD that closes PCI bridges' prefetchable windows
@@ -707,6 +505,7 @@ rem (no Open Watcom or no 98 SE DDK on this host), said and passed over.
 if /i "%ARCH%"=="amd64" goto skippfw
 echo.
 echo === build XHCIPFW.VXD ===
+call :stepclock STEPT0
 for %%V in (obj\XHCIPFW.VXD obj\qemu\XHCIPFW.VXD) do if exist "%REPO%\src\pfw\%%V" del "%REPO%\src\pfw\%%V"
 call "%REPO%\src\pfw\build.cmd"
 if errorlevel 2 goto pfwnotbuilt
@@ -720,6 +519,7 @@ goto skippfw
 :pfwnotbuilt
 echo XHCIPFW.VXD was not built on this host (see above); the package goes without it.
 :skippfw
+if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build XHCIPFW.VXD"
 
 rem XHCIPFW.SYS (task 44.49, design record 32 section 11), the same step for
 rem Windows 2000 and the 32-bit Vista, 7, 8, 8.1 and 10: a boot-start driver
@@ -729,6 +529,7 @@ rem each gated there (the import gate's hlprx86 profile, check-pfwsys.ps1).
 if /i "%ARCH%"=="amd64" goto skippfwsys
 echo.
 echo === build XHCIPFW.SYS ===
+call :stepclock STEPT0
 for %%V in (objfre\i386\xhcipfw.sys objfre_qemu\i386\xhcipfw.sys) do if exist "%REPO%\src\pfw\nt\%%V" del "%REPO%\src\pfw\nt\%%V"
 call "%REPO%\src\pfw\nt\build.cmd"
 if errorlevel 2 goto pfwsysnotbuilt
@@ -742,6 +543,7 @@ goto skippfwsys
 :pfwsysnotbuilt
 echo XHCIPFW.SYS was not built on this host (see above); the package goes without it.
 :skippfwsys
+if /i not "%ARCH%"=="amd64" call :steptime STEPT0 "build XHCIPFW.SYS"
 
 rem `if errorlevel` inside the block is evaluated per iteration, so a first
 rem flavor that fails cannot be masked by a second one that succeeds.
@@ -750,6 +552,7 @@ for %%F in (%FLAVORS%) do (
     if errorlevel 1 goto failed
 )
 
+call :steptime RUNT0 "the whole run"
 echo.
 echo BUILD + GATES PASSED (%FLAVORS%)
 echo Next, to build the install media a VM can be pointed at:
@@ -764,14 +567,13 @@ endlocal
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :checkflavour <release|debug|qemu>
+rem :checkflavour <release|qemu>
 rem
 rem Exactly one XHCI98_FLAVOUR_* string, and it must be this flavor's. Both
 rem halves are the check: a binary carrying two markers would be one the
 rem preprocessor let through with more than one flavor define, and a binary
-rem carrying the wrong one is a qemu build wearing a debug name - which is the
-rem confusion the marker exists to make impossible, since both are checked
-rem builds and VS_FF_DEBUG cannot tell them apart.
+rem carrying the wrong one is a qemu build wearing a release name, or an old
+rem debug image - which is the confusion the marker exists to make impossible.
 rem ------------------------------------------------------------------
 :checkflavour
 setlocal
@@ -804,7 +606,7 @@ exit /b 0
 :flavourmissing
 echo.
 echo ERROR: the %FLAVOR% image does not carry exactly its own flavour marker.
-echo src\sources derives XHCI_FLAVOUR_RELEASE / _DEBUG / _QEMU from
+echo src\sources derives XHCI_FLAVOUR_RELEASE / _QEMU from
 echo BUILD_ALT_DIR and src\hcd_entry.c emits the string; DriverEntry reads
 echo it so the linker cannot drop it. A binary that cannot be identified from
 echo the file is one a user cannot report against and one the packager cannot
@@ -824,17 +626,17 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :flavordirs <release|debug|qemu>
+rem :flavordirs <release|qemu>
 rem
 rem The one place a flavor name becomes a DDK output tree. Sets OBJDIR and
 rem ALTDIR, and leaves OBJDIR empty for a name this project does not know -
 rem every caller tests that and goes to :badflavor.
 rem
 rem ALTDIR is the DDK's BUILD_ALT_DIR, which build.exe concatenates onto `obj`
-rem to make the output tree: fre -> objfre, chk -> objchk, chk_qemu ->
-rem objchk_qemu. setenv.bat sets the first two itself; the third is this
-rem project's, and it exists because DEBUG AND QEMU ARE BOTH CHECKED BUILDS and
-rem would otherwise overwrite each other's objects in src\objchk\i386.
+rem to make the output tree: fre -> objfre, chk_qemu -> objchk_qemu.
+rem setenv.bat sets the first itself (and chk, the retired debug flavour's,
+rem which no sources accepts since task 45.45); the second is this
+rem project's, a tree of its own for the checked qemu build.
 rem
 rem Verified against this DDK's build.exe rather than assumed:
 rem the value may be at most 10 characters ("BUILD: environment variable
@@ -857,11 +659,6 @@ if /i "%~1"=="release" (
     set "ALTDIR=fre"
     set "DDKFLAVOR=free"
 )
-if /i "%~1"=="debug" (
-    set "OBJDIR=objchk"
-    set "ALTDIR=chk"
-    set "DDKFLAVOR=checked"
-)
 if /i "%~1"=="qemu" (
     set "OBJDIR=objchk_qemu"
     set "ALTDIR=chk_qemu"
@@ -870,20 +667,21 @@ if /i "%~1"=="qemu" (
 exit /b 0
 
 rem ------------------------------------------------------------------
-rem :buildflavor <release|debug|qemu>
+rem :buildflavor <release|qemu>
 rem
 rem DDKFLAVOR is the DDK's own word for the same thing, and it exists only
 rem because setenv.bat takes it as an argument. It no longer identifies the
-rem build on its own: debug and qemu are both "checked", which is exactly why
-rem ALTDIR exists.
+rem build on its own: the retired debug flavour and qemu were both "checked",
+rem which is why ALTDIR exists.
 rem ------------------------------------------------------------------
 :buildflavor
 setlocal
 set "FLAVOR=%~1"
+call :stepclock FLVT0
 call :flavordirs %FLAVOR%
 if "%OBJDIR%"=="" goto badflavor
 set "OUTSYS=%REPO%\src\%OBJDIR%\%ARCHDIR%\xhci98.sys"
-rem objchk -> buildchk, objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
+rem objfre -> buildfre, objchk_qemu -> buildchk_qemu: the
 rem names build.exe writes its log and error file under, which are BUILD_ALT_DIR
 rem with "build" in front. The substitution below is the same rule spelled once.
 set "LOGBASE=%REPO%\src\build%OBJDIR:obj=%"
@@ -916,6 +714,8 @@ rem build.exe's exit code is not sufficient on its own: it writes the errors it
 rem found to build<flavor>.err and that file only exists when there were some.
 if exist "%LOGBASE%.err" goto builderrfile
 if not exist "%OUTSYS%" goto nooutput
+call :checkfpo "%LOGBASE%.log"
+if errorlevel 1 goto fpofail
 
 echo.
 echo === import gate (%FLAVOR%) ===
@@ -946,6 +746,12 @@ if errorlevel 1 goto uasfail
 call :buildcm %FLAVOR%
 if errorlevel 1 goto cmfail
 
+call :buildnet %FLAVOR%
+if errorlevel 1 goto netfail
+
+call :buildnet6 %FLAVOR%
+if errorlevel 1 goto net6fail
+
 rem xhcihlpr.sys, the x86 helper (design record 18, section 15), with every
 rem x86 flavour and never with -amd64: the amd64 HCD has no helper.
 if /i "%ARCH%"=="amd64" goto skiphlpr
@@ -965,8 +771,38 @@ echo.
 echo === gated build record (%FLAVOR%, %ARCH%) ===
 call :gated -Finish %GATEOPT%
 if errorlevel 1 goto gatedrecfail
+call :steptime FLVT0 "the %FLAVOR% flavour, built and gated"
 
 endlocal
+exit /b 0
+
+rem ------------------------------------------------------------------
+rem :stepclock <var> and :steptime <var> "<step>" (roadmap-usb4 task 45.3):
+rem each step's time in the build log. :stepclock puts the time of day in
+rem <var> as hundredths of a second since midnight, read from %TIME% (its
+rem leading space made a 0, and each field taken with a 1 in front less
+rem 100, so 08 and 09 are not read as octal); :steptime prints
+rem "--- <step>: m:ss" from it, a step that crossed midnight given a day.
+rem Neither opens a scope: :stepclock's variable is the caller's.
+rem ------------------------------------------------------------------
+:stepclock
+set "STEPNOW=%TIME: =0%"
+for /f "tokens=1-4 delims=:.," %%a in ("%STEPNOW%") do set /a "%~1=((1%%a-100)*3600+(1%%b-100)*60+(1%%c-100))*100+(1%%d-100)"
+set "STEPNOW="
+exit /b 0
+
+:steptime
+call :stepclock STEPEND
+set /a "STEPCS=STEPEND-%~1"
+if %STEPCS% lss 0 set /a "STEPCS+=8640000"
+set /a "STEPMIN=STEPCS/6000"
+set /a "STEPSEC=(STEPCS/100)%%60"
+if %STEPSEC% lss 10 set "STEPSEC=0%STEPSEC%"
+echo --- %~2: %STEPMIN%:%STEPSEC%
+set "STEPEND="
+set "STEPCS="
+set "STEPMIN="
+set "STEPSEC="
 exit /b 0
 
 rem ------------------------------------------------------------------
@@ -1067,7 +903,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :buildhlpr <release|debug|qemu>
+rem :buildhlpr <release|qemu>
 rem
 rem xhcihlpr.sys, the x86 helper (design record 18 section 15.10; until task
 rem 38.3 xhcimsi.sys, built for Vista): WDK 7.1, x86, Windows XP target
@@ -1154,7 +990,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :builduas <release|debug|qemu>
+rem :builduas <release|qemu>
 rem
 rem xhciuas.sys, the UAS class driver (roadmap task 31-A.2): the same DDK,
 rem the same flavour and BUILD_ALT_DIR as the xhci98.sys just built, in
@@ -1180,6 +1016,8 @@ cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && se
 if errorlevel 1 goto uasbuildfail
 if exist "%UASLOG%.err" goto uasbuildfail
 if not exist "%UASSYS%" goto uasbuildfail
+call :checkfpo "%UASLOG%.log"
+if errorlevel 1 goto uasbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhciuas.sys) ===
@@ -1217,7 +1055,7 @@ endlocal
 exit /b 1
 
 rem ------------------------------------------------------------------
-rem :buildcm <release|debug|qemu>
+rem :buildcm <release|qemu>
 rem
 rem xhcicm.sys, the Thunderbolt 3 connection manager (roadmap-usb4.md task
 rem 39-A.1, design record 21): the same toolchain, flavour and
@@ -1243,6 +1081,8 @@ cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && se
 if errorlevel 1 goto cmbuildfail
 if exist "%CMLOG%.err" goto cmbuildfail
 if not exist "%CMSYS%" goto cmbuildfail
+call :checkfpo "%CMLOG%.log"
+if errorlevel 1 goto cmbuildfail
 
 echo.
 echo === import gate (%FLAVOR% xhcicm.sys) ===
@@ -1278,17 +1118,179 @@ echo wrong flavour marker, or could not be stamped - see above. Do not deploy it
 endlocal
 exit /b 1
 
+rem ------------------------------------------------------------------
+rem :buildnet <release|qemu>
+rem
+rem xhcinet.sys, the NDIS 5 miniport of Thunderbolt networking
+rem (roadmap-usb4.md task 45.59 step S6, design record 35 section 7.1):
+rem the same toolchain, flavour and BUILD_ALT_DIR as xhcicm.sys, in
+rem src\net\ndis5, then the import gate (net98 on x86), the frame-pointer
+rem check and the flavour marker check.
+rem ------------------------------------------------------------------
+:buildnet
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "NETALLOW=%REPO%\scripts\import-gate\xhcinet-imports.allow"
+set "NETPROFILE=-GateProfile net98"
+if /i "%ARCH%"=="amd64" set "NETALLOW=%REPO%\scripts\import-gate\xhcinet-imports-amd64.allow"
+if /i "%ARCH%"=="amd64" set "NETPROFILE="
+set "NETSYS=%REPO%\src\net\ndis5\%OBJDIR%\%ARCHDIR%\xhcinet.sys"
+set "NETLOG=%REPO%\src\net\ndis5\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcinet.sys ===
+if exist "%NETSYS%" del "%NETSYS%"
+if exist "%NETLOG%.err" del "%NETLOG%.err"
+cmd /c "call "%DDKROOT%\bin\setenv.bat" %DDKROOT% %DDKFLAVOR% %SETENVARGS% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\net\ndis5" && build -cZ"
+if errorlevel 1 goto netbuildfail
+if exist "%NETLOG%.err" goto netbuildfail
+if not exist "%NETSYS%" goto netbuildfail
+call :checkfpo "%NETLOG%.log"
+if errorlevel 1 goto netbuildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcinet.sys) ===
+call :gated -Hash -Name xhcinet.sys -Image "%NETSYS%"
+if errorlevel 1 goto netgatefail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NETSYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NETALLOW%" %NETPROFILE% %GATEOPT%
+if errorlevel 1 goto netgatefail
+call :gated -Capture -Name xhcinet.sys -Image "%NETSYS%"
+if errorlevel 1 goto netgatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%NETSYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto netgatefail
+endlocal
+exit /b 0
+
+:netbuildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcinet.sys failed. See "%NETLOG%.log" and
+echo "%NETLOG%.err".
+endlocal
+exit /b 1
+
+:netgatefail
+echo.
+echo ERROR: the %FLAVOR% xhcinet.sys failed the import gate or carries the
+echo wrong flavour marker - see above. Do not deploy it.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
+rem :buildnet6 <release|qemu>
+rem
+rem xhcinet6.sys, the NDIS 6.20 miniport of Thunderbolt networking for 8,
+rem 8.1 and 10 (roadmap-usb4.md task 45.59 step S7, design record 35
+rem sections 7.1 and 7.9): WDK 7.1's WIN7 environment for the run's
+rem architecture, the same BUILD_ALT_DIR as every binary of the run, in
+rem src\net\ndis6; then the import gate's net6 profile and the flavour
+rem marker check. No frame-pointer check: that rule is MSVC 6.0's, and
+rem this image is WDK 7.1's on both architectures.
+rem ------------------------------------------------------------------
+:buildnet6
+setlocal
+set "FLAVOR=%~1"
+call :flavordirs %FLAVOR%
+if "%OBJDIR%"=="" goto badflavor
+set "NET6WDK=%REPO%\tools\WinDDK71"
+if not "%WDKROOT%"=="" set "NET6WDK=%WDKROOT%"
+if not exist "%NET6WDK%\bin\setenv.bat" goto net6nowdk
+set "NET6ENV=x86 WIN7 no_oacr"
+set "NET6ALLOW=%REPO%\scripts\import-gate\xhcinet6-imports.allow"
+if /i "%ARCH%"=="amd64" set "NET6ENV=x64 WIN7 no_oacr"
+if /i "%ARCH%"=="amd64" set "NET6ALLOW=%REPO%\scripts\import-gate\xhcinet6-imports-amd64.allow"
+set "NET6SYS=%REPO%\src\net\ndis6\%OBJDIR%\%ARCHDIR%\xhcinet6.sys"
+set "NET6LOG=%REPO%\src\net\ndis6\build%OBJDIR:obj=%"
+
+echo.
+echo === build %FLAVOR% xhcinet6.sys (WDK 7.1 %NET6ENV%) ===
+if exist "%NET6SYS%" del "%NET6SYS%"
+if exist "%NET6LOG%.err" del "%NET6LOG%.err"
+if exist "%NET6LOG%.log" del "%NET6LOG%.log"
+cmd /c "call "%NET6WDK%\bin\setenv.bat" %NET6WDK% %DDKFLAVOR% %NET6ENV% && set "BUILD_ALT_DIR=%ALTDIR%" && cd /d "%REPO%\src\net\ndis6" && build -cZ"
+if errorlevel 1 goto net6buildfail
+if exist "%NET6LOG%.err" goto net6buildfail
+if not exist "%NET6SYS%" goto net6buildfail
+
+echo.
+echo === import gate (%FLAVOR% xhcinet6.sys) ===
+call :gated -Hash -Name xhcinet6.sys -Image "%NET6SYS%"
+if errorlevel 1 goto net6gatefail
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\import-gate\check-imports.ps1" -Image "%NET6SYS%" -Flavor %FLAVOR% -Arch %ARCH% -AllowPath "%NET6ALLOW%" -GateProfile net6 %GATEOPT%
+if errorlevel 1 goto net6gatefail
+call :gated -Capture -Name xhcinet6.sys -Image "%NET6SYS%"
+if errorlevel 1 goto net6gatefail
+
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-flavour-marker.ps1" -Image "%NET6SYS%" -Flavour %FLAVOR%
+if errorlevel 1 goto net6gatefail
+endlocal
+exit /b 0
+
+:net6nowdk
+echo.
+echo ERROR: xhcinet6.sys needs WDK 7.1 (its WIN7 environment), which was not
+echo found at "%NET6WDK%". Unpack it into tools\WinDDK71 or set WDKROOT.
+endlocal
+exit /b 1
+
+:net6buildfail
+echo.
+echo ERROR: the %FLAVOR% build of xhcinet6.sys failed. See "%NET6LOG%.log" and
+echo "%NET6LOG%.err".
+endlocal
+exit /b 1
+
+:net6gatefail
+echo.
+echo ERROR: the %FLAVOR% xhcinet6.sys failed the import gate or carries the
+echo wrong flavour marker - see above. Do not deploy it.
+endlocal
+exit /b 1
+
+rem ------------------------------------------------------------------
+rem :checkfpo "<build log>" - on the x86 release build of xhci98.sys,
+rem xhciuas.sys and xhcicm.sys (MSVC 6.0), every compile kept frame
+rem pointers (/Oy-; task 45.45, design record 08 section 14). Nothing to
+rem check on amd64 (WDK 7.1) or in the qemu flavour.
+rem ------------------------------------------------------------------
+:checkfpo
+if /i not "%ARCH%"=="x86" exit /b 0
+if /i not "%FLAVOR%"=="release" exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -File ^
+    "%REPO%\scripts\check-frame-pointers.ps1" -Log "%~1"
+exit /b %errorlevel%
+
+:fpofail
+echo.
+echo ERROR: the release build of xhci98.sys was compiled without frame
+echo pointers - see above. src\sources sets NTNOFPO=1 in its fre branch.
+endlocal
+exit /b 1
+
+:retiredflavor
+echo ERROR: "%FLAVORS%" names the debug flavour, which roadmap-usb4 task
+echo 45.45 retired (design record 08 section 14): "both" was debug and
+echo release. Use release, the default, or all for release and qemu.
+echo The release build keeps the debug build's frame pointers and its
+echo command-state checker (XhciCommandCheck).
+endlocal
+exit /b 1
+
 :badflavor
-echo ERROR: unknown build flavor "%FLAVOR%" - use release, debug, qemu, both
-echo or all.
+echo ERROR: unknown build flavor "%FLAVOR%" - use release, qemu or all.
 echo (The flavor formerly called "standard" is now "release".
 echo It is a hard cut: the old word is not accepted.)
-echo (There are THREE flavors since task 13-L.1. "both" is the two that ship -
-echo release and debug - and stays the default; "all" adds qemu, which carries
-echo the port-0xE9 mirror and must NEVER be published.)
+echo (There are TWO flavors since task 45.45: release ships and is the
+echo default; "all" adds qemu, which carries the port-0xE9 mirror and must
+echo NEVER be published. debug and both were retired with it.)
 echo (The DDK's own words are free and checked; this project uses them only
-echo where setenv.bat forces it. They no longer identify a build on their own,
-echo because debug and qemu are both checked - see :flavordirs.)
+echo where setenv.bat forces it - see :flavordirs.)
 endlocal
 exit /b 1
 
@@ -1371,6 +1373,18 @@ echo ERROR: the %FLAVOR% xhcicm.sys did not build or did not pass its gates.
 endlocal
 exit /b 1
 
+:netfail
+echo.
+echo ERROR: the %FLAVOR% xhcinet.sys did not build or did not pass its gates.
+endlocal
+exit /b 1
+
+:net6fail
+echo.
+echo ERROR: the %FLAVOR% xhcinet6.sys did not build or did not pass its gates.
+endlocal
+exit /b 1
+
 :gatefail
 echo.
 echo ERROR: the %FLAVOR% binary failed the import-compatibility gate. Do not
@@ -1402,28 +1416,6 @@ echo (or set DDKROOT to a DDK installed elsewhere).
 endlocal
 exit /b 1
 
-:gatetestfail
-echo.
-echo ERROR: the import gate's evidence-manifest self-tests failed.
-endlocal
-exit /b 1
-
-:inftestfail
-echo.
-echo ERROR: the INF gate's own self-tests failed, so its verdict on
-echo src\xhci98.inf cannot be trusted either. Fix the gate first.
-endlocal
-exit /b 1
-
-:inffail
-echo.
-echo ERROR: %INFFILE% failed the setup-engine gate. Do not install it -
-echo Win98's setup engine has no log, and a Win2000 install that creates no
-echo service looks the same in Device Manager as a driver that loaded and
-echo failed.
-endlocal
-exit /b 1
-
 :nowdk
 echo.
 echo ERROR: %DDKROOT%\bin\setenv.bat not found.
@@ -1436,18 +1428,19 @@ echo import gate reads).
 endlocal
 exit /b 1
 
-:pkgtestfail
+:stepstestfail
 echo.
-echo ERROR: the install-media packager's self-tests failed, so any package it
-echo builds is untrustworthy - including where it puts each file and whether
-echo a Microsoft file has crept back onto the media.
+echo ERROR: the build-step runner's self-tests failed, so it cannot be trusted
+echo to run the checks or to report what they found
+echo (scripts\build-steps.ps1 -SelfTest).
 endlocal
 exit /b 1
 
-:matrixtestfail
+:stepsfail
 echo.
-echo ERROR: the VM matrix verdict self-tests failed, so a matrix run's PASS,
-echo FAIL and NODRIVER words cannot be trusted. Fix scripts\vm-matrix first.
+echo ERROR: a check that needs no DDK failed - each failed step's message is
+echo above, after the table, and its whole output under its own heading. Its
+echo log is out\steps-%ARCH%\^<step^>.log. Nothing was built.
 endlocal
 exit /b 1
 
@@ -1460,69 +1453,6 @@ echo release cut publishes with a line past 78 columns, a character that is
 echo not printable ASCII, or another of the cut's text refusals. The same
 echo checks run alone, in seconds:
 echo   powershell -ExecutionPolicy Bypass -File scripts\check-text.ps1
-endlocal
-exit /b 1
-
-:mktestfail
-echo.
-echo ERROR: xhcimark's self-test failed: its pure half, its switches or its
-echo import table cannot be trusted (xhcimark\selftest.cmd).
-endlocal
-exit /b 1
-
-:stor98hdrfail
-echo.
-echo ERROR: src\cm\stor98cm.h is not src\stor98\include\stor98cm.h, the
-echo master, byte for byte - see the check's output above.
-endlocal
-exit /b 1
-
-:ditestfail
-echo.
-echo ERROR: xhcidi's self-test failed: its import table, the gate over it or
-echo its version stamp cannot be trusted (xhciinst\di\selftest.cmd).
-endlocal
-exit /b 1
-
-:perftestfail
-echo.
-echo ERROR: xhciperf's self-test failed: its import table, its source rule or
-echo its pure half cannot be trusted (xhciperf\selftest.cmd).
-endlocal
-exit /b 1
-
-:trtestfail
-echo.
-echo ERROR: xhcitr's self-test failed: its switches, its pure half or its
-echo import table cannot be trusted (xhcitr\selftest.cmd).
-endlocal
-exit /b 1
-
-:insttestfail
-echo.
-echo ERROR: xhciinst's self-test failed: its switches, its decisions or its
-echo import table cannot be trusted (xhciinst\selftest.cmd).
-endlocal
-exit /b 1
-
-:toolbuildfail
-echo.
-echo ERROR: xhcitr\build.cmd or xhciperf\build.cmd failed: XHCITR, which
-echo compiles the installer's pure half, or XHCIPERF is not current.
-endlocal
-exit /b 1
-
-:snaptestfail
-echo.
-echo ERROR: xhcitr's snapshot self-test failed, so a dump's "send this" line
-echo cannot be trusted to mean the report was written in full.
-endlocal
-exit /b 1
-
-:qemutestfail
-echo.
-echo ERROR: the QEMU launcher self-tests failed. The generated launch command
-echo may lose or conflate qemu-driver trace evidence.
 endlocal
 exit /b 1
 

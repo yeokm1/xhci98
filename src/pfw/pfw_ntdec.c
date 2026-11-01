@@ -36,3 +36,32 @@ int PfwNtDecide(PFW_U32 major, PFW_U32 minor, PFW_U32 nproc, int safeMode,
     }
     return PFW_NT_RUN_IPI;
 }
+
+int PfwNtRole(PFW_U32 major, PFW_U32 minor)
+{
+    if (major == 5) {
+        return (minor == 0 || minor == 1) ? PFW_ROLE_ENTRY : PFW_ROLE_NONE;
+    }
+    if (major == 6) {
+        if (minor <= 1) {
+            return PFW_ROLE_ENTRY;
+        }
+        if (minor <= 3) {
+            return PFW_ROLE_FILTER;
+        }
+    }
+    return PFW_ROLE_NONE;
+}
+
+void PfwNtSumAdd(PFW_NT_SUM *sum, PFW_U32 skip, PFW_U32 result,
+                 PFW_U32 closed)
+{
+    if (sum->RootBuses != 0xFFFFFFFFUL) {
+        sum->RootBuses++;
+    }
+    sum->SkippedAny |= skip;
+    sum->ResultAny |= result;
+    sum->ClosedAll = closed > 0xFFFFFFFFUL - sum->ClosedAll ? 0xFFFFFFFFUL
+                                                           : sum->ClosedAll +
+                                                             closed;
+}

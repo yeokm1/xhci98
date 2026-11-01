@@ -151,6 +151,16 @@
 #define TBT_RX_PDF(n)               (0x29804UL + 0x20UL * (ULONG)(n))
 #define TBT_RX_PDF_ALL_ONES         0xFFFFFFFFUL
 #define TBT_RX_PDF_SPEC             0x7FFE7FFEUL
+/* A data ring in Frame Mode (record 35 section 5.3; IDS 5.1.5): USB4NET's
+ * frame start PDF 1 in the SOF half (bit 16 + 1) and its frame end PDF 2
+ * in the EOF half (bit 2). The receive ring's Transmit E2E HopID, Ring
+ * Control 22:12 (Spec Table 12-26), the transmit ring whose credits its
+ * E2E flow control returns. */
+#define TBT_NET_PDF_SOF             0x1UL
+#define TBT_NET_PDF_EOF             0x2UL
+#define TBT_RX_PDF_NET              0x00020004UL
+#define TBT_RX_CTRL_E2E_HOP_SHIFT   12
+#define TBT_RX_CTRL_E2E_HOP_MASK    0x007FF000UL
 
 /*
  * Interrupt Mask, Spec 12.6.3.4.4, Table 12-31: R/W, 1 = the cause raises
@@ -170,9 +180,20 @@
 #define TBT_HI_IMC                  0x38208UL   /* REG_RING_INTERRUPT_MASK_CLEAR_BASE */
 #define TBT_HI_IMR_DWORDS(paths)    ((3UL * (ULONG)(paths) + 31UL) / 32UL)
 /* Interrupt Status, Spec 12.6.3.4.1: read-to-clear unless auto-clear is
- * disabled, so never read by this driver (ICM 2.1 notes the capture tool
- * skipped it for the same reason). */
+ * disabled, so read only by the ring interrupt's service routine, its arm
+ * and its retirement, every DW at once (cm_rirqos.c; record 21 section
+ * 4.5.2), never while polling (ICM 2.1 notes the capture tool skipped it
+ * for the same reason). Status Clear, Status Set (Spec 12.6.3.4.2 and
+ * 12.6.3.4.3: a 1 clears or sets the cause's status), Mask Set (12.6.3.4.6)
+ * and Throttling Rate 0 (12.6.3.4.7, the rate INTx and MSI share) are the
+ * interrupt's alone too. */
 #define TBT_HI_ISR                  0x37800UL
+#define TBT_HI_ISC                  0x37808UL
+#define TBT_HI_ISS                  0x37810UL
+#define TBT_HI_IMS                  0x38210UL
+#define TBT_HI_ITR0                 0x38C00UL
+/* Host Interface Control bit 17, Disable ISR Auto-Clear (Table 12-14). */
+#define TBT_HI_CONTROL_NO_AUTOCLEAR 0x00020000UL
 
 /* ====================================================================== */
 /* Ring descriptors, 16 bytes, little-endian DWs (Spec 12.1.1)            */
@@ -191,7 +212,7 @@
 #define TBT_DESC_PDF_MASK           0xFUL
 #define TBT_DESC_DD                 0x00200000UL    /* 21 Descriptor Done */
 #define TBT_DESC_RS                 0x00400000UL    /* 22 Request Status */
-#define TBT_DESC_IE                 0x00800000UL    /* 23 Interrupt Enable; never set here */
+#define TBT_DESC_IE                 0x00800000UL    /* 23 Interrupt Enable: RX ring 0 under the ring interrupt */
 /* DW2 of a receive descriptor posted back by the host interface, Spec
  * 12.4.1, Table 12-8 (Length, EOF PDF and DD as above): */
 #define TBT_DESC_RX_CRC_ERR         0x00100000UL    /* 20 CRC Error, Frame Mode only */
@@ -210,6 +231,10 @@
 #define TBT_PDF_NOTIFY              0x3UL   /* Notification Packet */
 #define TBT_PDF_NOTIFY_ACK          0x4UL
 #define TBT_PDF_HOTPLUG             0x5UL
+/* Inter-Domain Request and Response (Spec 6.4.2.11 and 6.4.2.12; IDS
+ * Table 2-1), task 45.59. */
+#define TBT_PDF_XDOMAIN_REQ         0x6UL
+#define TBT_PDF_XDOMAIN_RESP        0x7UL
 /* ICM frames on ring 0, ICM 2.4 and 3 [inf] (observed by name as ICM_EVENT,
  * ICM_CMD and ICM_RESP in the trace, ICM 3 [obs]). */
 #define TBT_PDF_ICM_EVENT           0xAUL
@@ -452,6 +477,11 @@
 #define TBT_RTR4_NOTIFY_TIMEOUT_MAX 0xFFUL      /* Guide 3.2.1; Linux plug_events_delay = 0xff */
 #define TBT_RTR4_CMUV_MASK          0x0000FF00UL
 #define TBT_RTR4_CMUV_1_0           0x00001000UL
+/* CMUV 20h, a Ver. 2 Connection Manager (Spec 8.2.1.1: major 15:12, minor
+ * 11:8; Linux ROUTER_CS_4_CMUV_V2), written to a router whose USB4 Version
+ * has major 2 (Guide 3.2.1 step 4; design record 22 section 6.2.1). */
+#define TBT_RTR4_CMUV_2_0           0x00002000UL
+#define TBT_RTR4_CMUV(v)            (((ULONG)(v) >> 8) & 0xFFUL)
 #define TBT_RTR4_VERSION(v)         (((ULONG)(v) >> 24) & 0xFFUL)
 #define TBT_USB4_VERSION_MAJOR(b)   (((ULONG)(b) >> 5) & 0x7UL)     /* 31:29 of the dword */
 #define TBT_USB4_VERSION_MINOR(b)   ((ULONG)(b) & 0x1FUL)           /* 28:24 of the dword */
@@ -479,6 +509,11 @@
 #define TBT_ROP_PCIE_DOWN_MAPPING   0x30UL
 #define TBT_ROP_GET_CAPABILITIES    0x31UL
 #define TBT_ROP_BUFFER_ALLOC        0x33UL
+/* Set Capabilities, Spec 8.3.1.3.3, Tables 8-53 to 8-55 (Linux has no such
+ * operation): metadata Capability Index 7:0, Enable Capability 8; no data
+ * DW for index 2 (Table 8-54); Status only in its completion. */
+#define TBT_ROP_SET_CAPABILITIES    0x32UL
+#define TBT_ROP_SETCAP_ENABLE       0x00000100UL
 #define TBT_ROP_DATA_DWORDS         16UL
 /* DROM Read metadata, Table 8-43 (Linux usb4.c USB4_DROM_ADDRESS_MASK,
  * USB4_DROM_SIZE_MASK): DW address 14:2, Read Size 19:15 (1 to 16). */
@@ -637,8 +672,23 @@
 #define TBT_TMU_ADP6_DTS            0x00000002UL    /* 1 Disable Time Sync */
 #define TBT_TMU_ADP_CS_8            8UL
 #define TBT_TMU_ADP8_EUDM           0x00008000UL    /* 15 Enable Enhanced Uni-Directional Mode */
+#define TBT_TMU_ADP8_REPL_TIMEOUT_MASK 0x00007FFFUL /* 14:0 Replenish Timeout */
+#define TBT_TMU_ADP8_REPL_THRESH_MASK 0x03FF0000UL  /* 25:16 Replenish Threshold */
+#define TBT_TMU_ADP8_REPL_THRESH_SHIFT 16
 #define TBT_TMU_ADP_CS_9            9UL
 #define TBT_TMU_ADP9_INTERVAL_MASK  0xFFFF0000UL    /* 31:16 AdapterTimeSyncInterval */
+#define TBT_TMU_ADP9_INTERVAL_SHIFT 16
+#define TBT_TMU_ADP9_REPLN_MASK     0x000000FFUL    /* 7:0 ReplenishN */
+#define TBT_TMU_ADP9_DIRSWN_MASK    0x0000FF00UL    /* 15:8 DirSwitchN */
+#define TBT_TMU_ADP9_DIRSWN_SHIFT   8
+/* HiFi in Enhanced Uni-Directional mode: Spec 8.2.2.2's connection manager
+ * note (Replenish Timeout 3125, Replenish Threshold 0, ReplenishN 30,
+ * DirSwitchN 255, AdapterTimeSyncInterval 16), Guide Tables 7-2 and 7-3. */
+#define TBT_TMU_REPL_TIMEOUT_HIFI   3125UL
+#define TBT_TMU_REPL_THRESH_HIFI    0UL
+#define TBT_TMU_REPLN_HIFI          30UL
+#define TBT_TMU_DIRSWN_HIFI         255UL
+#define TBT_TMU_ADP_INTERVAL_HIFI   16UL
 
 /* Lane Adapter Configuration Capability, Spec 8.2.2.3 (Linux LANE_ADP_CS_*). */
 #define TBT_LANE_CS_0               0UL
@@ -660,6 +710,8 @@
 #define TBT_LANE1_NLW(v)            (((ULONG)(v) >> 20) & 0x3FUL)   /* 25:20 Negotiated Link Width */
 #define TBT_LANE_WIDTH_X1           0x01UL
 #define TBT_LANE_WIDTH_X2           0x02UL
+#define TBT_LANE_WIDTH_ASYM_TX      0x04UL  /* Asymmetric, 3 transmitters (Gen 4) */
+#define TBT_LANE_WIDTH_ASYM_RX      0x08UL  /* Asymmetric, 3 receivers (Gen 4) */
 #define TBT_LANE1_STATE(v)          (((ULONG)(v) >> 26) & 0xFUL)    /* 29:26 Adapter State */
 #define TBT_LANE_STATE_DISABLED     0UL
 #define TBT_LANE_STATE_TRAINING     1UL
@@ -674,15 +726,24 @@
 #define TBT_PORT_CS_18              18UL
 #define TBT_PORT18_BE               0x00000100UL    /* 8 Bonding Enabled */
 #define TBT_PORT18_TCM              0x00000200UL    /* 9 TBT3-Compatible Mode */
+#define TBT_PORT18_TIP              0x01000000UL    /* 24 AsymmetricTransitionInProgress */
 #define TBT_PORT_CS_19              19UL
 #define TBT_PORT19_DPR              0x00000001UL    /* 0 Downstream Port Reset */
 #define TBT_PORT19_PC               0x00000008UL    /* 3 USB4 Port is Configured */
+#define TBT_PORT19_PID              0x00000010UL    /* 4 USB4 Port is Inter-Domain (task 45.59) */
+#define TBT_PORT19_SAF              0x01000000UL    /* 24 StartAsymmetricFlow, never written 1 */
+#define TBT_PORT19_ILR              0x40000000UL    /* 30 Initiate Gen 4 Link Recovery, never written */
+#define TBT_PORT19_ELR              0x80000000UL    /* 31 Enable Gen 4 Link Recovery */
 
 /* PCIe Adapter Configuration Capability, Spec 8.2.2.7 (Linux
  * ADP_PCIE_CS_0_*, enum tb_pcie_ltssm_state). */
 #define TBT_PCIE_CS_0               0UL
 #define TBT_PCIE0_LTSSM(v)          (((ULONG)(v) >> 25) & 0xFUL)    /* 28:25 */
 #define TBT_PCIE0_PE                0x80000000UL    /* 31 Path Enable */
+/* ADP_PCIE_CS_1 Extended Encapsulation, bit 0 (Spec 8.2.2.7, 11.1.1.1.3):
+ * set before Path Enable, default 0. */
+#define TBT_PCIE_CS_1               1UL
+#define TBT_PCIE1_EE                0x00000001UL
 #define TBT_LTSSM_DETECT            0x0UL
 #define TBT_LTSSM_RECOVERY          0x4UL
 #define TBT_LTSSM_RECOVERY_IDLE     0x5UL
@@ -704,6 +765,8 @@
 #define TBT_USB3_CS_3               3UL
 #define TBT_USB3_3_SCALE(v)         ((ULONG)(v) & 0x3FUL)           /* 5:0 */
 #define TBT_USB3_CS_4               4UL
+#define TBT_USB3_4_ULV              0x00000080UL    /* 7 USB3 Link Valid */
+#define TBT_USB3_4_PLS(v)           (((ULONG)(v) >> 8) & 0xFUL)     /* 11:8 Port Link State */
 #define TBT_USB3_4_MSLR(v)          (((ULONG)(v) >> 12) & 0x7FUL)   /* 18:12 Maximum Supported Link Rate */
 #define TBT_USB3_MSLR_20G           0x1UL   /* Linux ADP_USB3_CS_4_MSLR_20G; anything else 10 Gb/s */
 
@@ -732,6 +795,7 @@
 #define TBT_PATH1_ISE               0x04000000UL
 #define TBT_PATH1_ESE               0x08000000UL
 #define TBT_PATH1_PP                0x10000000UL    /* 28 Pending Packets */
+#define TBT_PATH1_RSVDZ29           0x20000000UL    /* 29 RsvdZ: written 0 */
 /* Guide Table 6-1 and Linux tunnel.c: PCIe and USB3 priority 3; weight 1
  * for PCIe (TB_PCI_WEIGHT), 2 for USB3 (TB_USB3_WEIGHT). */
 #define TBT_PATH_PRIORITY_TUNNEL    3UL
@@ -783,6 +847,16 @@
 #define TBT_LC_SX_CTRL_L1C          0x00010000UL    /* 16 odd adapter configured */
 #define TBT_LC_SX_CTRL_L2C          0x00100000UL    /* 20 even adapter configured */
 #define TBT_LC_SX_CTRL_UPSTREAM     0x40000000UL    /* 30 */
+/* A port block's PORT_MODE (Linux TB_LC_PORT_MODE): bit 0 Downstream Port
+ * Reset (lc.c tb_lc_reset_port, generations 2 and 3). */
+#define TBT_LC_PORT_MODE            0x26UL
+#define TBT_LC_PORT_MODE_DPR        0x00000001UL
+/* Light Ridge's and Eagle Ridge's TMU access enable, bit 20 of router DW
+ * 26h and 2Ah, set around a walk of an adapter's capabilities (Linux
+ * cap.c tb_port_enable_tmu, TMU_ACCESS_EN). */
+#define TBT_LR_TMU_ACCESS_DW        0x26UL
+#define TBT_ER_TMU_ACCESS_DW        0x2AUL
+#define TBT_TMU_ACCESS_EN           0x00100000UL
 /* Linux switch.c tb_init_port: a Thunderbolt 3 lane adapter's control path
  * credits when its HopID 0 entry does not report them. */
 #define TBT_TBT3_CTL_CREDITS        2UL

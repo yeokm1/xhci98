@@ -12,7 +12,7 @@ for Windows 7, and no field of the image's header shows it, because
 SUBSYSTEM_VERSION=5.00 in src\hlpr\sources overrides the subsystem whatever
 the target. So two things are read, each refused on its own:
 
-  - **The build log** (src\hlpr\build<fre|chk|chk_qemu>.log): the kit's own
+  - **The build log** (src\hlpr\build<fre|chk_qemu>.log): the kit's own
     line "BUILDMSG: _NT_TARGET_VERSION SET TO WINXP" must be there, and every
     library the link names must come from lib\wxp\i386 - except the one the
     kit adds for a driver whose subsystem is below 6.01,
@@ -266,8 +266,16 @@ $saved = $ErrorActionPreference
 $ErrorActionPreference = "Continue"
 try {
     $headers = @(& $Dumper /dump /headers $Image 2>&1 | ForEach-Object { "$_" })
+    $dumpExit = $LASTEXITCODE
 } finally {
     $ErrorActionPreference = $saved
+}
+if ($dumpExit -ne 0) {
+    # A dumper that did not run says nothing about the image; blaming the
+    # image's header for its silence would send the reader to the wrong place.
+    foreach ($h in $headers) { Write-Host "  $h" }
+    Write-Err "'$Dumper /dump /headers' failed on '$Image' (exit $dumpExit), so the image's header was not read."
+    exit 1
 }
 $errors += @(Get-HelperHeaderErrors -Lines $headers)
 if ($errors.Count -gt 0) {

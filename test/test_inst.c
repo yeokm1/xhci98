@@ -761,24 +761,60 @@ static void test_real_infs(void)
     CHECK(inst_inf_is_ours(u64), "xhciuas-amd64.inf is ours");
 
     /* Every xhci98 row of the value table is written by both INFs, at the
-     * default the table's meaning assumes. */
-    for (i = 0; i < instValueCount; i++) {
-        INST_U32 d86;
-        INST_U32 d64;
-        if (instValues[i].Inf != INST_INF_XHCI) {
-            continue;
+     * default the table's meaning assumes (task 45.54: docs\using\
+     * tuning.md's "Written by the install" column, a range row's within
+     * its range and on its step). */
+    {
+        static const struct {
+            const char *Name;
+            INST_U32 Def;
+        } want[] = {
+            { "XhciIntelPortSwitch", 0 }, { "XhciInterruptMode", 0 },
+            { "XhciLinkKeep", 1 }, { "XhciResumeKeep", 1 },
+            { "XhciUsb2Bos", 1 }, { "XhciImodInterval250ns", 160 },
+            { "XhciLogVerbosity", 2 }, { "XhciLogDebugView", 0 },
+            { "XhciPollIdleMs", 50 }, { "XhciPollActiveMs", 1 },
+            { "XhciPollFineTimer", 0 }, { "XhciSelectiveSuspend", 0 },
+            { "XhciSilentInstall", 0 }, { "XhciForceBulkOnly", 0 },
+            { "XhciFastPollFsLs", 0 }, { "XhciMaxTransferKB", 1024 },
+            { "XhciWideMap", 0 }, { "XhciFirstEnumWaitMs", 5000 },
+            { "XhciFirstEnumPortMs", 2000 }
+        };
+        int rowsSeen = 0;
+        for (i = 0; i < instValueCount; i++) {
+            INST_U32 d86;
+            INST_U32 d64;
+            int w;
+            if (instValues[i].Inf != INST_INF_XHCI) {
+                continue;
+            }
+            rowsSeen++;
+            CHECK(inst_inf_addreg_default(x86, instValues[i].Name, &d86),
+                  instValues[i].Name);
+            CHECK(inst_inf_addreg_default(a64, instValues[i].Name, &d64),
+                  instValues[i].Name);
+            CHECK_EQ(d86, d64, instValues[i].Name);
+            for (w = 0; w < (int)(sizeof(want) / sizeof(want[0])); w++) {
+                if (inst_eq(want[w].Name, instValues[i].Name)) {
+                    break;
+                }
+            }
+            CHECK(w < (int)(sizeof(want) / sizeof(want[0])) &&
+                  want[w].Def == d86, instValues[i].Name);
+            if (instValues[i].Hi != 0) {
+                CHECK(instValues[i].Asked == 0 && instValues[i].Settable == 0 &&
+                      inst_value_in_range(i, d86),
+                      "a range row's default is in its range");
+                continue;
+            }
+            CHECK(d86 < 32 && (instValues[i].Asked == 0 ||
+                               (instValues[i].Asked & (1UL << d86)) != 0),
+                  "the default is an offered answer");
+            CHECK(d86 < 32 && (instValues[i].Settable & (1UL << d86)) != 0,
+                  "the default is a value /set takes");
         }
-        CHECK(inst_inf_addreg_default(x86, instValues[i].Name, &d86),
-              instValues[i].Name);
-        CHECK(inst_inf_addreg_default(a64, instValues[i].Name, &d64),
-              instValues[i].Name);
-        CHECK_EQ(d86, d64, instValues[i].Name);
-        CHECK_EQ(d86, 0, instValues[i].Name);
-        CHECK(instValues[i].Asked == 0 ||
-              (instValues[i].Asked & (1UL << d86)) != 0,
-              "the default is an offered answer");
-        CHECK((instValues[i].Settable & (1UL << d86)) != 0,
-              "the default is a value /set takes");
+        CHECK_EQ(rowsSeen, (int)(sizeof(want) / sizeof(want[0])),
+                 "every xhci98 row has its expected default");
     }
 
     free(x86);
@@ -1531,7 +1567,27 @@ static void test_values(void)
 
     CHECK(psw >= 0 && im >= 0 && ft >= 0 && ss >= 0 && cm >= 0, "rows found");
     CHECK_EQ(inst_value_find("XhciTolerance"), -1, "a quirk value is not asked");
-    CHECK_EQ(inst_value_find("XhciLogVerbosity"), -1, "the log is SNAPON's");
+    /* Task 45.54 (the owner, 2026-10-31): the log is an Advanced row now;
+     * these stay out of the table. */
+    {
+        static const char *const out[] = {
+            "XhciCommandCheck", "XhciCmTunnelBridge",
+            "XhciCmAsmediaPcie7Credits", "XhciIntelIrqRoute",
+            "XhciIntervalCap", "XhciAvgTrbEsit", "XhciUsb2HubSpeedFallback",
+            "XhciAccept096", "XhciMsiAvoid", "XhciStreamsOff",
+            "XhciResumeReinit", "XhciIntelShutdownToEhci",
+            "XhciShutdownReset", "XhciSuspendHaltDelay",
+            "XhciSuspendHaltTimeout", "XhciAsmediaFlowControl",
+            "XhciTiIntervalCap", "XhciStuckLinkReset", "XhciStreamRingPad",
+            "XhciControlLinkNoOp", "XhciIsochSpuriousSuccess",
+            "XhciAmdSuspendBitClear"
+        };
+        int k;
+        for (k = 0; k < (int)(sizeof(out) / sizeof(out[0])); k++) {
+            CHECK_EQ(inst_value_find(out[k]), -1, out[k]);
+        }
+        CHECK(instValueCount <= INST_MAX_VALUES, "the table fits its arrays");
+    }
 
     /* 98 SE with a QEMU controller: no switchover, no fine timer, no NHI. */
     e = env(0, 4, 10, INST_ARCH_X86);
@@ -1559,6 +1615,44 @@ static void test_values(void)
         e2.CmNhi = 1;
         CHECK(ni >= 0 && inst_value_set_mask(ni, &e2) == 0,
               "XhciCmNoIrqStart: refused on NT");
+        /* Record 33 section 9.1, record 26 section 5.5 draft 49 (task
+         * 45.12): 2000 and XP (and XP x64) only, never asked, not written
+         * by the INFs, default 1, 0 to 2 by /set. */
+        {
+            int br = inst_value_find("XhciCmBridgeReq");
+            INST_ENV n5 = env(1, 5, 1, INST_ARCH_X86);
+            INST_ENV n2 = env(1, 5, 0, INST_ARCH_X86);
+            INST_ENV n6 = env(1, 6, 1, INST_ARCH_X86);
+            INST_ENV n9 = env(0, 4, 10, INST_ARCH_X86);
+            n5.AnyXhci = n2.AnyXhci = n6.AnyXhci = n9.AnyXhci = 1;
+            n5.CmNhi = n2.CmNhi = n6.CmNhi = n9.CmNhi = 1;
+            CHECK(br >= 0 && instValues[br].Inf == INST_INF_CM &&
+                  instValues[br].Apply == INST_APPLY_NT5_CM &&
+                  instValues[br].Asked == 0 && !instValues[br].NoInf &&
+                  instValues[br].Def == 1 && instValues[br].Loc == 0,
+                  "XhciCmBridgeReq: never asked, written by the INFs "
+                  "(task 45.50), default 1");
+            CHECK(br >= 0 && !inst_value_applies(br, &n5) &&
+                  inst_value_relevant(br, &n5) &&
+                  inst_value_relevant(br, &n2) &&
+                  !inst_value_greyed(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7 &&
+                  inst_value_set_mask(br, &n2) == 0x7,
+                  "XhciCmBridgeReq: 2000 and XP, /set 0 to 2");
+            CHECK(br >= 0 && inst_value_greyed(br, &n6) &&
+                  inst_value_greyed(br, &n9) &&
+                  !inst_value_relevant(br, &n6) &&
+                  !inst_value_relevant(br, &n9) &&
+                  inst_value_set_mask(br, &n6) == 0 &&
+                  inst_value_set_mask(br, &n9) == 0 &&
+                  inst_value_only(br) != NULL &&
+                  strcmp(inst_value_only(br), "Windows 2000 and XP only") == 0,
+                  "XhciCmBridgeReq: greyed and refused on 7 and 98 SE");
+            n5.CmNhi = 0;
+            CHECK(br >= 0 && !inst_value_relevant(br, &n5) &&
+                  inst_value_set_mask(br, &n5) == 0x7,
+                  "XhciCmBridgeReq: XP with no host interface not relevant");
+        }
         {
             int rs = inst_value_find("Restart");
             INST_ENV e9 = env(0, 4, 10, INST_ARCH_X86);
@@ -1762,6 +1856,155 @@ static void test_values(void)
         }
     }
 
+    /* Task 45.54 (record 26 section 5.4.1; the owner, 2026-10-31): the
+     * Advanced rows added, each never asked, on its tab, with its range or
+     * list, its systems and its /set bounds. */
+    {
+        static const struct {
+            const char *Name;
+            int Inf;
+            int Apply;
+            INST_U32 Settable;  /* a list's /set mask, 0 for a range */
+            INST_U32 Lo;
+            INST_U32 Hi;
+            INST_U32 Step;
+        } add[] = {
+            { "XhciLinkKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
+            { "XhciResumeKeep", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0,
+              0 },
+            { "XhciUsb2Bos", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0, 0, 0 },
+            { "XhciImodInterval250ns", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0,
+              10, 4000, 0 },
+            { "XhciLogVerbosity", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x1F, 0,
+              0, 0 },
+            { "XhciLogDebugView", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x3, 0,
+              0, 0 },
+            { "XhciPollIdleMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 1, 5000,
+              0 },
+            { "XhciPollActiveMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 1,
+              5000, 0 },
+            { "XhciMaxTransferKB", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 64,
+              2048, 4 },
+            { "XhciWideMap", INST_INF_XHCI, INST_APPLY_NT_XHCI, 0x3, 0, 0, 0 },
+            { "XhciFirstEnumWaitMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
+              30000, 0 },
+            { "XhciFirstEnumPortMs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0, 0,
+              30000, 0 },
+            { "XhciCmRingInterrupt", INST_INF_CM, INST_APPLY_NT_CM, 0x3, 0, 0,
+              0 },
+            { "XhciCmUsb4V2", INST_INF_CM, INST_APPLY_CM, 0x3, 0, 0, 0 }
+        };
+        INST_ENV e98 = env(0, 4, 10, INST_ARCH_X86);
+        INST_ENV exp = env(1, 5, 1, INST_ARCH_X86);
+        char arg[64];
+        char range[64];
+        int k;
+        e98.AnyXhci = 1;
+        e98.CmNhi = 1;
+        exp.AnyXhci = 1;
+        exp.CmNhi = 1;
+        for (k = 0; k < (int)(sizeof(add) / sizeof(add[0])); k++) {
+            int ix = inst_value_find(add[k].Name);
+            const INST_VALUE *x;
+            CHECK(ix >= 0, add[k].Name);
+            if (ix < 0) {
+                continue;
+            }
+            x = &instValues[ix];
+            CHECK(x->Inf == add[k].Inf && x->Apply == add[k].Apply &&
+                  x->Asked == 0 && x->Loc == INST_LOC_MW && !x->NoInf,
+                  "a 45.54 row: its tab and system, never asked");
+            CHECK(!inst_value_applies(ix, &exp) && inst_value_relevant(ix, &exp),
+                  "a 45.54 row: an Advanced row on XP");
+            if (add[k].Hi != 0) {
+                CHECK(x->Settable == 0 && x->Lo == add[k].Lo &&
+                      x->Hi == add[k].Hi && x->Step == add[k].Step,
+                      "a 45.54 range row's bounds and step");
+                sprintf(arg, "%s=%lu", add[k].Name, (unsigned long)add[k].Lo);
+                CHECK(inst_value_set(arg, &idx, &v) == 1 && idx == ix &&
+                      v == add[k].Lo, "/set takes the range's lowest");
+                sprintf(arg, "%s=%lu", add[k].Name, (unsigned long)add[k].Hi);
+                CHECK(inst_value_set(arg, &idx, &v) == 1 && v == add[k].Hi,
+                      "/set takes the range's highest");
+                sprintf(arg, "%s=%lu", add[k].Name,
+                        (unsigned long)(add[k].Hi + 1));
+                CHECK_EQ(inst_value_set(arg, &idx, &v), -1,
+                         "/set refuses one past the highest");
+                if (add[k].Lo > 0) {
+                    sprintf(arg, "%s=%lu", add[k].Name,
+                            (unsigned long)(add[k].Lo - 1));
+                    CHECK_EQ(inst_value_set(arg, &idx, &v), -1,
+                             "/set refuses one under the lowest");
+                }
+                CHECK(inst_value_allowed(ix, &e98, add[k].Hi) &&
+                      inst_value_allowed(ix, &exp, add[k].Lo) &&
+                      !inst_value_allowed(ix, &exp, add[k].Hi + 1),
+                      "a range row allowed on every system");
+                inst_value_range_text(ix, range, sizeof(range));
+                CHECK(strstr(range, " to ") != NULL &&
+                      (add[k].Step == 0) == (strstr(range, "multiple") == NULL),
+                      "a range row's text");
+            } else {
+                CHECK(x->Settable == add[k].Settable && x->Hi == 0,
+                      "a 45.54 list row's choices");
+                inst_value_range_text(ix, range, sizeof(range));
+                CHECK(range[0] == '\0', "a list row has no range text");
+            }
+        }
+        {
+            int mt = inst_value_find("XhciMaxTransferKB");
+            int ri = inst_value_find("XhciCmRingInterrupt");
+            int wm = inst_value_find("XhciWideMap");
+            int lv = inst_value_find("XhciLogVerbosity");
+            INST_ENV ex = env(1, 5, 1, INST_ARCH_X86);
+            CHECK_EQ(inst_value_set("XhciMaxTransferKB=1026", &idx, &v), -1,
+                     "/set refuses a command size off its step of 4");
+            CHECK(inst_value_set("XhciMaxTransferKB=1028", &idx, &v) == 1 &&
+                  idx == mt && v == 1028, "/set takes one on its step");
+            CHECK(!inst_value_in_range(mt, 1026) && inst_value_in_range(mt, 64),
+                  "the step held by the range check");
+            inst_value_range_text(mt, range, sizeof(range));
+            CHECK(inst_eq(range, "64 to 2048, a multiple of 4"),
+                  "the command size's range text");
+            inst_value_range_text(inst_value_find("XhciPollIdleMs"), range,
+                                  sizeof(range));
+            CHECK(inst_eq(range, "1 to 5000"), "a range text with no step");
+            CHECK(!inst_value_in_range(wm, 0), "a list row is no range");
+            /* The ring interrupt: 2000 to 10 alone. */
+            CHECK(inst_value_greyed(ri, &e98) && inst_value_set_mask(ri, &e98) == 0
+                  && !inst_value_allowed(ri, &e98, 1) &&
+                  inst_eq(inst_value_only(ri), "Windows 2000 to 10 only"),
+                  "XhciCmRingInterrupt on 98 SE: greyed, refused");
+            CHECK(!inst_value_greyed(ri, &exp) && inst_value_set_mask(ri, &exp)
+                  == 0x3 && inst_value_allowed(ri, &exp, 1),
+                  "XhciCmRingInterrupt on XP: taken");
+            ex.Major = 10;
+            ex.Minor = 0;
+            ex.CmNhi = 1;
+            CHECK(!inst_value_greyed(ri, &ex) && inst_value_relevant(ri, &ex),
+                  "XhciCmRingInterrupt on 10: shown");
+            ex.CmNhi = 0;
+            CHECK(!inst_value_relevant(ri, &ex) && !inst_value_greyed(ri, &ex),
+                  "XhciCmRingInterrupt with no NHI: neither relevant nor "
+                  "greyed (the engine's Thunderbolt rows show it)");
+            /* The wide map: greyed on 98 SE, as the fine timer. */
+            CHECK(inst_value_greyed(wm, &e98) && !inst_value_greyed(wm, &exp),
+                  "XhciWideMap greyed on 98 SE, shown on XP");
+            CHECK(instValues[lv].Choice[4] != NULL &&
+                  instValues[lv].Caution != NULL &&
+                  instValues[lv].CautionMask == 0x10,
+                  "the log's level 4 named, with its caution");
+        }
+        /* Record 23 section 8.2, revision 51: the 98 SE target rule. */
+        CHECK(inst_value_target_9x(0, INST_ACT_INSTALL),
+              "98 SE: a controller with no driver the run installs");
+        CHECK(inst_value_target_9x(1, INST_ACT_UPDATE) &&
+              inst_value_target_9x(1, INST_ACT_CURRENT),
+              "98 SE: a controller already bound");
+        CHECK(!inst_value_target_9x(0, INST_ACT_FOREIGN),
+              "98 SE: a controller another driver holds");
+    }
+
     inst_mask_text(0x7, text, sizeof(text));
     CHECK(inst_eq(text, "0, 1, 2"), "mask text");
     inst_mask_text(0x0, text, sizeof(text));
@@ -1778,7 +2021,7 @@ static int parse(int argc, const char **argv, INST_OPTS *o)
 static void test_args(void)
 {
     INST_OPTS o;
-    const char *a1[] = { "x", "/dir", "release-x86", "/list" };
+    const char *a1[] = { "x", "/dir", "nt-x86", "/list" };
     const char *a2[] = { "x", "-set", "XhciSelectiveSuspend=1", "/yes",
                          "/set", "XhciInterruptMode", "2" };
     const char *a3[] = { "x", "/frobnicate" };
@@ -1793,7 +2036,7 @@ static void test_args(void)
     const char *a12[] = { "x", "/clean" };
 
     CHECK_EQ(parse(4, a1, &o), 0, "/dir /list");
-    CHECK(o.List && inst_eq(o.Dir, "release-x86"), "fields");
+    CHECK(o.List && inst_eq(o.Dir, "nt-x86"), "fields");
     CHECK_EQ(parse(7, a2, &o), 0, "/set twice, one split by a batch file");
     CHECK_EQ(o.SetCount, 2, "two values");
     CHECK_EQ(o.SetValue[1], 2, "split form joined");
@@ -2586,6 +2829,27 @@ static void test_tb_question(void)
     CHECK(inst_tb_intel("nhi") && inst_tb_intel("NHI") &&
           !inst_tb_intel("xhcicm") && !inst_tb_intel("") &&
           !inst_tb_intel(NULL), "Intel's Thunderbolt driver by its service");
+    CHECK(inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513&SUBSYS_00001234&REV_01\\3&1&0") &&
+          inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1547&SUBSYS_22B017AA&REV_00") &&
+          inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1513&SUBSYS_11112222&REV_01\\3&1&0") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1547&SUBSYS_11112222&REV_00") &&
+          !inst_cm_tb1_foreign("PCI\\VEN_8086&DEV_1577&SUBSYS_0000106B&REV_02") &&
+          !inst_cm_tb1_foreign(NULL),
+          "a PC's Light or Cactus Ridge: its driver never installed over (record 22 section 19.3)");
+    {
+        char cid[64];
+
+        CHECK(inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1513&SUBSYS_11112222&REV_01", 1, cid,
+                                  sizeof(cid)) &&
+              strcmp(cid, "PCI\\VEN_8086&DEV_1513&CC_0880") == 0 &&
+              inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1547&SUBSYS_11112222&REV_00", 0, cid,
+                                  sizeof(cid)) &&
+              strcmp(cid, "PCI\\VEN_8086&DEV_1547&CC_0604") == 0 &&
+              !inst_cm_tb1_classid("PCI\\VEN_8086&DEV_1577&SUBSYS_0000106B&REV_02", 1, cid,
+                                   sizeof(cid)),
+              "a Thunderbolt 1 NHI's and bridge's install calls name their class forms");
+    }
 
     /* The answers. */
     CHECK_EQ(inst_tb_answer("", 1), 1, "Enter: the default yes");
@@ -2937,7 +3201,7 @@ static void test_tb_eject(void)
     CHECK_EQ(inst_parse_args(3, argv1, &o, err, sizeof(err)), 1,
              "/devices /eject refused");
     argv1[2] = "/dir";
-    argv1[3] = "release-x86";
+    argv1[3] = "98-me";
     CHECK(inst_parse_args(4, argv1, &o, err, sizeof(err)) == 0,
           "INSTALL.BAT's /dir is accepted");
     argv1[1] = "/eject";
@@ -2970,7 +3234,10 @@ static void test_cmf_place(void)
           "x86: the text names nt\\");
     CHECK(strstr(inst_cmf_where(INST_ARCH_AMD64), "nt\\") == NULL &&
           strstr(inst_cmf_where(INST_ARCH_AMD64), "x64") != NULL,
-          "x64: the text names the x64 directory, not nt\\");
+          "x64: the text names the x64 copy, not nt\\");
+    CHECK(strstr(inst_cmf_where(INST_ARCH_X86), "copy") != NULL &&
+          strstr(inst_cmf_where(INST_ARCH_AMD64), "copy") != NULL,
+          "Have Disk names the local copy: no wizard takes cm\\xhcicmf.inx");
     for (a = INST_ARCH_X86; a <= INST_ARCH_AMD64; a++) {
         strcpy(pnf, inst_cmf_rel(a));
         n = strlen(pnf);
@@ -2980,6 +3247,91 @@ static void test_cmf_place(void)
               strlen("), then run INSTALL.BAT again.") <= 79,
               "the Have Disk line within 79 columns");
     }
+}
+
+/* The download by Windows family (record 36 sections 6.2 to 6.4). */
+static void test_family(void)
+{
+    int i;
+    int f;
+    int any;
+
+    CHECK_EQ(inst_family(0, INST_ARCH_X86), INST_FAM_9X, "98 SE and ME: 98-me");
+    CHECK_EQ(inst_family(1, INST_ARCH_X86), INST_FAM_NT86, "NT x86: nt-x86");
+    CHECK_EQ(inst_family(1, INST_ARCH_AMD64), INST_FAM_NT64, "x64: nt-x64");
+    CHECK(strcmp(inst_family_dir(INST_FAM_9X), "98-me") == 0 &&
+          strcmp(inst_family_dir(INST_FAM_NT86), "nt-x86") == 0 &&
+          strcmp(inst_family_dir(INST_FAM_NT64), "nt-x64") == 0 &&
+          inst_family_dir(3) == NULL, "the three folders' names");
+    CHECK_EQ(inst_family_of_dir("NT-X86"), INST_FAM_NT86, "any case");
+    CHECK_EQ(inst_family_of_dir("release-x86"), -1, "the flavour directory");
+    CHECK_EQ(inst_family_of_dir(NULL), -1, "NULL");
+    /* Every INF and image at its place. */
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "xhci98.inf"), "xhci98.inf") == 0,
+          "the controller's INF at the root");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcicm.inf"), "cm\\xhcicm.inf")
+          == 0, "the connection manager in cm\\");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, inst_cmf_rel(INST_ARCH_X86)),
+                 "cm\\xhcicmf.inx") == 0, "x86 filter: cm\\xhcicmf.inx");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT64, inst_cmf_rel(INST_ARCH_AMD64)),
+                 "cm\\xhcicmf.inx") == 0, "x64 filter: cm\\xhcicmf.inx");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_NT86, "nt\\xhcicm.sys"),
+                 inst_pkg_rel(INST_FAM_NT86, "xhcicm.sys")) == 0,
+          "the filter's own xhcicm.sys is the one in cm\\");
+    CHECK(inst_pkg_rel(INST_FAM_9X, inst_cmf_rel(INST_ARCH_X86)) == NULL &&
+          inst_pkg_rel(INST_FAM_9X, "nt\\xhcicm.sys") == NULL,
+          "98-me: no filter");
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcihlpr.sys") == NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcihlpr.sys"), "xhcihlpr.sys")
+          == 0 && inst_pkg_rel(INST_FAM_NT64, "xhcihlpr.sys") == NULL,
+          "the helper in nt-x86 alone (record 36 section 3.1)");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "stor98.inf"),
+                 "stor98\\stor98.inf") == 0, "98-me: the 9x INF as stor98.inf");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, "stor98.mpd"),
+                 "stor98\\stor98.mpd") == 0 &&
+          inst_pkg_rel(INST_FAM_NT86, "stor98.mpd") == NULL &&
+          inst_pkg_rel(INST_FAM_NT64, "stor98.mpd") == NULL,
+          "stor98.mpd in 98-me alone (record 36 section 3.3)");
+    CHECK(strcmp(inst_pkg_rel(INST_FAM_9X, INST_VSD_FILE),
+                 "stor98\\S98VSD.VXD") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_9X, INST_PFW_FILE),
+                 "cm\\XHCIPFW.VXD") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, INST_PFWSYS_FILE),
+                 "cm\\XHCIPFW.SYS") == 0 &&
+          inst_pkg_rel(INST_FAM_NT86, INST_VSD_FILE) == NULL &&
+          inst_pkg_rel(INST_FAM_NT64, INST_PFWSYS_FILE) == NULL,
+          "the images no INF names, each in its family");
+    CHECK(inst_pkg_rel(INST_FAM_NT86, "xhcicm.cat") == NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcicm.cat"), "cm\\xhcicm.cat")
+          == 0 && strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcicmf.cat"),
+                         "cm\\xhcicmf.cat") == 0,
+          "x64: each catalog beside its INF");
+    CHECK(inst_pkg_rel(INST_FAM_NT86, "unknown.inf") == NULL &&
+          inst_pkg_rel(-1, "xhci98.inf") == NULL &&
+          inst_pkg_rel(INST_FAM_9X, NULL) == NULL, "no such name or family");
+    /* Every engine INF slot has a place in each family that carries it,
+     * and no family path is in nt\ or names a filter as an INF. */
+    for (i = 0; i < instPkgFileCount; i++) {
+        any = 0;
+        for (f = 0; f < INST_FAM_COUNT; f++) {
+            const char *p = instPkgFiles[i].Fam[f];
+            if (p == NULL) {
+                continue;
+            }
+            any = 1;
+            CHECK(!inst_pkg_foreign(p), "no family path is 3.3.0.0's layout");
+            CHECK(strlen(p) < 40, "within pkgRel's room");
+        }
+        CHECK(any, "every local name is in some family");
+        CHECK(instPkgFileCount <= 48, "within the engine's INST_PKG_MAX");
+        CHECK(strlen(instPkgFiles[i].Local) < 32, "within infRel's room");
+    }
+    CHECK(inst_pkg_foreign("stor98w9.inf") &&
+          inst_pkg_foreign("stor98\\stor98w9.inf") &&
+          inst_pkg_foreign("nt\\xhcicmf.inf") &&
+          inst_pkg_foreign("cm\\xhcicmf.inf") &&
+          !inst_pkg_foreign("cm\\xhcicmf.inx") &&
+          !inst_pkg_foreign(NULL), "3.3.0.0's names refused");
 }
 
 /* XHCITR's "can run faster" notice (record 25 section 7.7 item 7; record 23
@@ -3544,12 +3896,30 @@ static const char *diFile(const char *body)
  * look fails. */
 static void test_gate(void)
 {
-    CHECK_EQ(inst_gate_ask(0, 1), 1, "gate: the first call asks");
-    CHECK_EQ(inst_gate_ask(0, 0), 1, "gate: the first call asks, none seen");
-    CHECK_EQ(inst_gate_ask(0, -1), 1, "gate: the first call asks, no look");
-    CHECK_EQ(inst_gate_ask(1, 0), 0, "gate: later, no wizard: not asked");
-    CHECK_EQ(inst_gate_ask(1, 1), 1, "gate: later, a wizard open: asked");
-    CHECK_EQ(inst_gate_ask(1, -1), 1, "gate: later, no look: asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 0), 1, "gate: the first call asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 0), 1, "gate: the first call asks, none seen");
+    CHECK_EQ(inst_gate_ask(0, -1, 0), 1, "gate: the first call asks, no look");
+    CHECK_EQ(inst_gate_ask(0, 0, -1), 1, "gate: first, language unread: asks");
+    CHECK_EQ(inst_gate_ask(0, 0, 1), 0, "gate: first, English, none seen: not asked");
+    CHECK_EQ(inst_gate_ask(0, 1, 1), 1, "gate: first, English, a wizard open: asked");
+    CHECK_EQ(inst_gate_ask(0, -1, 1), 1, "gate: first, English, no look: asked");
+    CHECK_EQ(inst_gate_ask(1, 0, 0), 0, "gate: later, no wizard: not asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 1, 0), 1, "gate: later, a wizard open: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, -1, 0), 1, "gate: later, no look: asked (0)");
+    CHECK_EQ(inst_gate_ask(1, 0, 1), 0, "gate: later, no wizard: not asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 1, 1), 1, "gate: later, a wizard open: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, -1, 1), 1, "gate: later, no look: asked (1)");
+    CHECK_EQ(inst_gate_ask(1, 0, -1), 0, "gate: later, no wizard: not asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, 1, -1), 1, "gate: later, a wizard open: asked (-1)");
+    CHECK_EQ(inst_gate_ask(1, -1, -1), 1, "gate: later, no look: asked (-1)");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0409), 1, "gate: US English");
+    CHECK_EQ(inst_gate_english(0x0809, 0x0409), 1, "gate: UK default, US build");
+    CHECK_EQ(inst_gate_english(0x0407, 0x0409), 0, "gate: German default, US build");
+    CHECK_EQ(inst_gate_english(0x0409, 0x0407), 0, "gate: US default, German build");
+    CHECK_EQ(inst_gate_english(0x040C, 0x040C), 0, "gate: French");
+    CHECK_EQ(inst_gate_english(-1, 0x0409), -1, "gate: default unread");
+    CHECK_EQ(inst_gate_english(0x0409, -1), -1, "gate: resource unread");
+    CHECK_EQ(inst_gate_english(0x0009, 0x0009), 1, "gate: neutral English");
 
     CHECK(inst_wizard_title("Found New Hardware"), "wizard: Found New Hardware");
     CHECK(inst_wizard_title("New Hardware Found"), "wizard: New Hardware Found");
@@ -3657,6 +4027,19 @@ static void test_di_helper(void)
           strstr(tail, "FLAGS") == NULL &&
           strstr(tail, ".INF\r\nEND\r\n") != NULL,
           "no flag: no FLAGS line");
+    /* Record 27 section 4.1 (task 45.38): nocopy after force and quiet. */
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                             id, inf, 1, 1, 1) &&
+          strstr(tail, "\r\nFLAGS force quiet nocopy\r\nEND\r\n") != NULL,
+          "force, quiet and nocopy");
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_INSTALL, res, 0UL,
+                             id, inf, 0, 0, 1) &&
+          strstr(tail, "\r\nFLAGS nocopy\r\nEND\r\n") != NULL,
+          "nocopy alone");
+    CHECK(inst_di_jobfile_ex(tail, sizeof(tail), INST_DI_REMOVE, res, 0UL,
+                             id, NULL, 0, 0, 1) &&
+          strstr(tail, "FLAGS") == NULL,
+          "a removal takes no nocopy");
     CHECK(inst_di_jobfile(tail, sizeof(tail), INST_DI_REMOVE, res, 65535UL,
                           id, NULL, 1, 1) &&
           strstr(tail, "INF") == NULL && strstr(tail, "FLAGS") == NULL &&
@@ -4168,9 +4551,10 @@ static void test_uninstall_entry(void)
     argv[1] = "/list";
     CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 &&
           inst_window_refusal(&o, 2, argv) != NULL, "/list is the console's");
+    /* Task 45.45: /debug went with the debug- directory. */
     argv[1] = "/debug";
-    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) == 0 && o.Debug &&
-          inst_window_refusal(&o, 2, argv) == NULL, "/debug is the window's");
+    CHECK(inst_parse_args(2, argv, &o, err, sizeof(err)) != 0,
+          "/debug is refused: the debug flavour was retired");
     argv[1] = "/thunderbolt";
     argv[2] = "/to";
     argv[3] = "C:\\XHCI98";
@@ -4424,6 +4808,106 @@ static int s98_block(const char *table, int i, char *out, size_t cap)
 static int has_text(const char *block, const char *text)
 {
     return text == NULL || strstr(block, text) != NULL;
+}
+
+/* Task 45.50: Stor98's INFs write each setting at the default the
+ * installer's table gives (record 21 section 8.1), and
+ * inst_s98_is_default_9x knows a default as read. */
+static void test_s98_inf_defaults(void)
+{
+    char *nine = load("..\\src\\stor98\\inf\\stor98-9x.inf");
+    char *x86 = load("..\\src\\stor98\\inf\\stor98-x86.inf");
+    char *x64 = load("..\\src\\stor98\\inf\\stor98-x64.inf");
+    char *infs[3];
+    char line[256];
+    char what[256];
+    char got[64];
+    const char *p;
+    const char *q;
+    int i;
+    int f;
+    int keys;
+    int pairs;
+
+    infs[0] = nine;
+    infs[1] = x86;
+    infs[2] = x64;
+    CHECK(nine != NULL && x86 != NULL && x64 != NULL, "Stor98's three INFs read");
+    /* The x86 INF is NT-only (record 36 section 3.3): no 98 SE and ME
+     * setting, no stor98.mpd. */
+    CHECK(x86 != NULL && !has_text(x86, "System\\CurrentControlSet\\Services\\stor98\",") &&
+          !has_text(x86, "stor98.mpd=") && !has_text(x86, "PortDriver"),
+          "stor98-x86.inf writes no 98 SE and ME setting and names no stor98.mpd");
+    for (f = 0; f < 1; f++) {
+        for (i = 0; infs[f] != NULL && i < INST_S98_COUNT; i++) {
+            const INST_S98_VALUE *v = &instS98Values[i];
+            if (v->Name9x == NULL || !inst_s98_applies(i, 0)) {
+                continue;
+            }
+            sprintf(line, "HKLM,\"System\\CurrentControlSet\\Services\\stor98\",%s,%s,%s%s%s",
+                    v->Name9x,
+                    v->Kind == INST_S98_WORDS ? "0x00000002" : "0x00010003",
+                    v->Kind == INST_S98_WORDS ? "\"" : "", v->Def9x,
+                    v->Kind == INST_S98_WORDS ? "\"" : "");
+            sprintf(what, "%s writes %s at the table's 98 SE and ME default",
+                    "stor98-9x.inf", v->Name9x);
+            CHECK(has_text(infs[f], line), what);
+        }
+    }
+    for (f = 1; f < 3; f++) {
+        p = infs[f] != NULL ? strstr(infs[f], "\"DriverParameter\",0x00000002,\"") : NULL;
+        CHECK(p != NULL, "an NT INF writes DriverParameter, only where missing");
+        if (p == NULL) {
+            continue;
+        }
+        p += strlen("\"DriverParameter\",0x00000002,\"");
+        q = strchr(p, '"');
+        CHECK(q != NULL && (size_t)(q - p) < sizeof(line), "the string ends");
+        if (q == NULL || (size_t)(q - p) >= sizeof(line)) {
+            continue;
+        }
+        memcpy(line, p, (size_t)(q - p));
+        line[q - p] = '\0';
+        keys = 0;
+        for (i = 0; i < INST_S98_COUNT; i++) {
+            const INST_S98_VALUE *v = &instS98Values[i];
+            if (v->KeyNt == NULL || !inst_s98_applies(i, 1)) {
+                continue;
+            }
+            keys++;
+            sprintf(what, "DriverParameter holds %s= at the table's NT default", v->KeyNt);
+            CHECK(inst_s98_param_get(line, v->KeyNt, got, sizeof(got)) &&
+                  strcmp(got, v->DefNt) == 0, what);
+        }
+        pairs = 1;
+        for (p = line; *p != '\0'; p++) {
+            if (*p == ';') {
+                pairs++;
+            }
+        }
+        CHECK_EQ(pairs, keys, "DriverParameter holds every key and nothing else");
+    }
+    free(nine);
+    free(x86);
+    free(x64);
+
+    CHECK(inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 1, 2048UL, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 1, 1024UL, NULL) &&
+          inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, "2048") &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, "2048k") &&
+          !inst_s98_is_default_9x(INST_S98_MAXTRANSFERKB, 0, 0, ""),
+          "a number's default, as a DWORD or decimal text");
+    CHECK(inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "auto") &&
+          inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "AUTO") &&
+          !inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 0, 0, "off") &&
+          !inst_s98_is_default_9x(INST_S98_WRITETHROUGH, 1, 0, NULL),
+          "write-through's default is the word auto, as text");
+    CHECK(inst_s98_is_default_9x(INST_S98_POLLSPINUS, 1, 0, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_POLLSPINUS, 1, 500UL, NULL) &&
+          inst_s98_is_default_9x(INST_S98_HOLD9X, 1, 4000UL, NULL) &&
+          !inst_s98_is_default_9x(-1, 1, 0, NULL) &&
+          !inst_s98_is_default_9x(INST_S98_COUNT, 1, 0, NULL),
+          "the 98 SE and ME defaults, and no row out of range");
 }
 
 static void test_s98(void)
@@ -4908,20 +5392,13 @@ static void test_s98(void)
           !inst_cm_mode_off(NULL, 0) &&
           strcmp(instCmOffText, "Thunderbolt 3 and USB4 will be turned off "
                  "(XhciCmMode 0)") == 0, "the XhciCmMode 0 warning");
-    /* The Thunderbolt row's note (owner, 2026-10-19). */
+    /* The Thunderbolt row's note (owner, 2026-10-19): since record 26
+     * draft 54 (owner, 2026-10-31) that one was found, with no name; what
+     * a device can reach is the approval row's (section 5.3.5). */
     {
-        char tt[400];
-        inst_tb_found_text(tt, sizeof(tt), "Thunderbolt Controller 15EB");
-        CHECK(strncmp(tt, "A Thunderbolt 3 / USB4 controller was found: "
-                      "Thunderbolt Controller 15EB. ", 74) == 0 &&
-              strstr(tt, "XhciCmApprove") != NULL, "found, with its name");
-        inst_tb_found_text(tt, sizeof(tt), "");
-        CHECK(strcmp(tt, inst_page_text(INST_PT_TB_T)) == 0,
-              "found, no name: the page's text");
-        inst_tb_found_text(tt, sizeof(tt),
-                           "0123456789012345678901234567890123456789XYZ");
-        CHECK(strstr(tt, "XYZ") == NULL && strstr(tt, "012345678901234567"
-                     "890123456789012345.") != NULL, "a long name cut");
+        CHECK(strcmp(inst_page_text(INST_PT_TB_T), "A Thunderbolt 3 / USB4 "
+                     "controller was found.") == 0,
+              "found: the short sentence, no controller's name");
         CHECK(strstr(inst_page_text(INST_PT_TB), "(experimental)") != NULL &&
               strstr(inst_page_text(INST_PT_TB_ABSENT), "No Thunderbolt 3 / "
                      "USB4 controller was found") != NULL,
@@ -4967,6 +5444,14 @@ static void test_s98(void)
           inst_s98_svc_value_stor98("StorWriteThrough"),
           "98 SE and ME: xhcicm's LinkState alone is not Stor98 there "
           "before");
+    CHECK(inst_s98_run_report_9x("StorInterrupt 5.0.0") &&
+          inst_s98_run_report_9x("storinterrupt 255.31.7") &&
+          !inst_s98_run_report_9x("StorInterrupt") &&
+          !inst_s98_run_report_9x("StorInterruptX 1.0.0") &&
+          !inst_s98_run_report_9x("StorPollMode") &&
+          !inst_s98_run_report_9x("LinkState"),
+          "98 SE and ME: the driver's interrupt report is named "
+          "StorInterrupt and a space, case aside");
     CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
           !inst_s98_stray_inf_ours(0, 0),
           "a stray INF copy: the package's when Stor98's and none before");
@@ -6213,6 +6698,9 @@ static int count_rename(void *ctx, const char *key, const char *value)
  * variants a run meets (task 43.80). */
 /* Task 44.11 (record 26 section 6.7.12): the two free packages staged on
  * 98 SE and ME, and the 280-character projection of DevicePath. */
+/* 98 SE's DevicePath limit, for the projection's vectors. */
+#define DP98 INST_9X_DEVICEPATH_MAX
+
 static void test_9x_stage(void)
 {
     static const char base[] = "C:\\WINDOWS\\INF;C:\\XHCI98";
@@ -6226,16 +6714,121 @@ static void test_9x_stage(void)
     int fits[3];
     int r;
 
+    /* Record 26 section 6.7.13 (task 45.7): every package of either set,
+     * the projection holding DevicePath to the limit. */
     CHECK(inst_other_9x_stageable(INST_SET_FREE, "audio/uac2") &&
-          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI"),
-          "9x stage: uac2 and usbmidi");
-    CHECK(!inst_other_9x_stageable(INST_SET_FREE, "audio/uac1") &&
-          !inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
-          !inst_other_9x_stageable(INST_SET_NONFREE, "audio/uac2") &&
-          !inst_other_9x_stageable(INST_SET_FREE, NULL),
-          "9x stage: every other package copy-only");
+          inst_other_9x_stageable(INST_SET_FREE, "AUDIO/USBMIDI") &&
+          inst_other_9x_stageable(INST_SET_FREE, "video/uvc98") &&
+          inst_other_9x_stageable(INST_SET_NONFREE, "serial/ftdi"),
+          "9x stage: every package of either set");
+    CHECK(!inst_other_9x_stageable(INST_SET_FREE, NULL) &&
+          !inst_other_9x_stageable(INST_SET_NONFREE, "") &&
+          !inst_other_9x_stageable(INST_SET_COUNT, "serial/ftdi") &&
+          !inst_other_9x_stageable(-1, "serial/ftdi"),
+          "9x stage: no id, or no such set");
+    CHECK(inst_other_9x_keeps(1, 1) && !inst_other_9x_keeps(1, 0) &&
+          inst_other_9x_keeps(0, 0) && inst_other_9x_keeps(0, 1),
+          "9x keeps: carried with a STAGE line, or not carried");
+    {
+        static const char *const five[] = {
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\aaaaaa",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\bbbbbb",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\cccccc",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\dddddd",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\eeeeee",
+            "C:\\XHCI98\\USBDRV\\NONFREE\\serial\\ftdi\\w98se-me\\ffffff"
+        };
+        int six[6];
+        CHECK(strlen(five[0]) == 52, "9x project: the stand-in folder");
+        r = inst_9x_devicepath_project(base, five, 6, six, DP98);
+        CHECK(six[0] && six[1] && six[2] && six[3] && !six[4] && !six[5] &&
+              r == (int)strlen(base) + 4 * 53,
+              "9x project: four 52-character folders fit, the fifth not");
+    }
+    {
+        char line[400];
+        char rest[600];
+        const char *fp[3];
+        fp[0] = "USBDRV\\FREE\\net\\rtl815x\\w98se-me";
+        fp[1] = "";
+        fp[2] = "USBDRV\\FREE\\net\\rtl815x\\w2k";
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 1);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me") == 0, "9x copied only: one folder");
+        inst_other_copy_only_line(line, sizeof(line), "USB Ethernet", fp, 3);
+        CHECK(strcmp(line, "USB Ethernet: USBDRV\\FREE\\net\\rtl815x\\"
+                     "w98se-me; USBDRV\\FREE\\net\\rtl815x\\w2k") == 0,
+              "9x copied only: two folders, an empty one skipped");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strcmp(rest, "Ticked: staged, so Windows' hardware wizard finds "
+                     "the driver by itself.") == 0, "9x rest: what a tick does");
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_NONFREE,
+                             "C:\\XHCI98", 1, 0, 0);
+        CHECK(strstr(rest, "Not ticked: copied only") == rest &&
+              strstr(rest, "under C:\\XHCI98\\USBDRV\\NONFREE.") != NULL,
+              "9x rest: what an unticked package is, the set's folder named");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             0, 1);
+        CHECK(strstr(rest, "by itself; earlier staging kept is listed above.") !=
+              NULL, "9x rest: copied, earlier staging kept");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "C:\\X", 1,
+                             1, 1);
+        CHECK(strstr(rest, "takes its earlier staging out.") != NULL &&
+              strstr(rest, "listed above") == NULL,
+              "9x rest: copied over another release, earlier staging out");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 0);
+        CHECK(strstr(rest, "Nothing of this set is copied") == rest &&
+              strstr(rest, "arlier") == NULL,
+              "9x rest: not copied, no earlier staging");
+        inst_other_rest_text(rest, sizeof(rest), 1, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(rest[0] == '\0', "9x rest: not copied, no second part");
+        inst_other_rest_text(rest, sizeof(rest), 0, INST_SET_FREE, "", 0, 0, 1);
+        CHECK(strstr(rest, "Earlier staging kept is listed above.") != NULL,
+              "9x rest: not copied, with earlier staging");
+        inst_other_rest_text(rest, 20, 1, INST_SET_FREE, "C:\\XHCI98", 1, 0,
+                             1);
+        CHECK(strlen(rest) == 19, "9x rest: held to its buffer");
+    }
+    /* Record 26 section 6.7.14 (task 45.6): a lifted pair bars only an
+     * earlier staging of another release; EXCLUDES bars always, COEXISTS
+     * never. */
+    CHECK(inst_other_rel_bars(INST_REL_EXCLUDES, 0, 1) &&
+          inst_other_rel_bars(INST_REL_EXCLUDES, 1, 1) &&
+          !inst_other_rel_bars(INST_REL_COEXISTS, 1, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 0, 0) &&
+          !inst_other_rel_bars(INST_REL_LIFTED, 1, 1) &&
+          inst_other_rel_bars(INST_REL_LIFTED, 1, 0),
+          "lifted: bars an earlier staging of another release alone");
+    /* usb-wdm-free 0.1.5: lifted on XP to 7 x64, EXCLUDES on the rest. */
+    {
+        static const unsigned long v[13][5] = {
+            { 0, 4, 10, 2222, 0 }, { 0, 4, 90, 3000, 0 },
+            { 1, 5, 0, 2195, 0 }, { 1, 5, 1, 2600, 0 }, { 1, 5, 2, 3790, 1 },
+            { 1, 6, 0, 6002, 0 }, { 1, 6, 0, 6002, 1 }, { 1, 6, 1, 7601, 0 },
+            { 1, 6, 1, 7601, 1 }, { 1, 6, 2, 9200, 0 }, { 1, 6, 2, 9200, 1 },
+            { 1, 10, 0, 19045, 0 }, { 1, 10, 0, 19045, 1 }
+        };
+        int k;
+        int ok = 1;
+        for (k = 0; k < 13; k++) {
+            int tok = inst_sys_token((int)v[k][0], v[k][1], v[k][2],
+                                     v[k][3], (int)v[k][4]);
+            int lift = tok >= 3 && tok <= 8;
+            if (tok != k ||
+                inst_other_excludes(INST_SET_FREE, "net/rtl815x",
+                                    INST_SET_NONFREE, "ethernet/rtl815x",
+                                    tok) == lift ||
+                inst_other_lifted(INST_SET_NONFREE, "ethernet/rtl815x",
+                                  INST_SET_FREE, "net/rtl815x", tok) != lift) {
+                ok = 0;
+            }
+        }
+        CHECK(ok, "lifted: rtl815x lifted on XP to 7 x64, excluded on the "
+                  "rest");
+    }
 
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r == (int)(strlen(base) + 2 + strlen(two[0]) + strlen(two[1])) &&
           fits[0] && fits[1], "9x project: the default folders, 84 more");
     CHECK(r - (int)strlen(base) == 84, "9x project: about 90 characters");
@@ -6246,23 +6839,67 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[269] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX && fits[0], "9x project: 280 fits");
     b[269] = 'A';
     b[270] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == 270 && !fits[0], "9x project: 281 does not");
     b[268] = '\0';
-    r = inst_9x_devicepath_project(b, f, 1, fits);
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
     CHECK(r == INST_9X_DEVICEPATH_MAX - 1 && fits[0], "9x project: 279 fits");
+
+    /* The install directory's own entry, by the same limit: a value of
+     * 280 characters with it keeps it, 281 leaves it off. */
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[INST_9X_DEVICEPATH_MAX] = '\0';
+    CHECK(inst_9x_devicepath_room(b, DP98), "9x own entry: 280 kept");
+    b[INST_9X_DEVICEPATH_MAX] = 'A';
+    b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
+    CHECK(!inst_9x_devicepath_room(b, DP98), "9x own entry: 281 left off");
+    CHECK(inst_9x_devicepath_room(base, DP98), "9x own entry: an ordinary value kept");
+    CHECK(!inst_9x_devicepath_room(NULL, DP98), "9x own entry: nothing composed");
+
+    /* ME's limit (record 26 section 6.7.13, task 45.7's ME leg): 259
+     * fits, 260 does not; 98 SE's stays 280. */
+    CHECK(inst_9x_devicepath_max(0) == 280 && inst_9x_devicepath_max(1) == 259,
+          "9x limit: 280 on 98 SE, 259 on ME");
+    CHECK(strstr(inst_9x_devicepath_harm(1), "ME") != NULL &&
+          strstr(inst_9x_devicepath_harm(0), "98 SE") != NULL,
+          "9x limit: the words name the system");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[248] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 259 && fits[0], "ME project: 259 fits");
+    b[248] = 'A';
+    b[249] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, inst_9x_devicepath_max(1));
+    CHECK(r == 249 && !fits[0], "ME project: 260 does not");
+    r = inst_9x_devicepath_project(b, f, 1, fits, DP98);
+    CHECK(r == 260 && fits[0], "98 SE project: 260 fits");
+    b[249] = 'A';
+    b[259] = '\0';
+    CHECK(inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 259 kept");
+    b[259] = 'A';
+    b[260] = '\0';
+    CHECK(!inst_9x_devicepath_room(b, inst_9x_devicepath_max(1)),
+          "ME own entry: 260 left off");
+    memset(b, 'A', sizeof(b));
+    memcpy(b, "C:\\", 3);
+    b[269] = '\0';
+    r = inst_9x_devicepath_project(b, f, 1, fits, 0);
+    CHECK(r == DP98 && fits[0], "9x project: no limit given reads as 280");
 
     /* An oversized value as read is the caller's to shrink first; once
      * this run's withdrawals bring it under the limit, the folders count. */
     b[INST_9X_DEVICEPATH_MAX + 1] = '\0';
     memset(b, 'A', INST_9X_DEVICEPATH_MAX + 1);
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(r == -1 && !fits[0] && !fits[1], "9x project: over the limit as read");
-    r = inst_9x_devicepath_project(base, two, 2, fits);
+    r = inst_9x_devicepath_project(base, two, 2, fits, DP98);
     CHECK(r > 0 && fits[0] && fits[1], "9x project: after the withdrawals");
 
     /* Two folders of which only the first fits; a folder already there
@@ -6270,7 +6907,7 @@ static void test_9x_stage(void)
     memset(b, 'A', sizeof(b));
     memcpy(b, "C:\\", 3);
     b[INST_9X_DEVICEPATH_MAX - 1 - (int)strlen(two[0]) - 10] = '\0';
-    r = inst_9x_devicepath_project(b, two, 2, fits);
+    r = inst_9x_devicepath_project(b, two, 2, fits, DP98);
     CHECK(fits[0] && !fits[1] && r <= INST_9X_DEVICEPATH_MAX,
           "9x project: the first fits, the second not");
     _snprintf(fold, sizeof(fold) - 1, "%s;%s", base, two[0]);
@@ -6278,12 +6915,12 @@ static void test_9x_stage(void)
     f[0] = two[0];
     f[1] = two[0];
     f[2] = two[1];
-    r = inst_9x_devicepath_project(fold, f, 3, fits);
+    r = inst_9x_devicepath_project(fold, f, 3, fits, DP98);
     CHECK(fits[0] && fits[1] && fits[2] &&
           r == (int)(strlen(fold) + 1 + strlen(two[1])),
           "9x project: an entry already there counted once");
     f[0] = "";
-    CHECK(inst_9x_devicepath_project(base, f, 1, fits) == -1 && !fits[0],
+    CHECK(inst_9x_devicepath_project(base, f, 1, fits, DP98) == -1 && !fits[0],
           "9x project: an empty folder is no entry");
 }
 
@@ -6611,12 +7248,14 @@ static void test_pfw_inst(void)
     CHECK(inst_pfw_sys(1, 6, 0, 1) == INST_PFW_SYS_SEEN &&
           inst_pfw_sys(1, 6, 1, 1) == INST_PFW_SYS_SEEN,
           "Vista, 7 x86: offered");
-    /* Task 44.72 (the owner, 2026-10-28): from 8 on the step's start
-     * races the PCI driver's. */
-    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_GONE &&
-          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_GONE &&
-          inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
-          "8, 8.1, 10 x86: not offered, an earlier one removed");
+    /* Task 44.72 (the owner, 2026-10-28): from 8 on the boot driver's
+     * start races the PCI driver's; task 45.9 (the owner, 2026-10-29): a
+     * root bus filter on 8 and 8.1, not 10. */
+    CHECK(inst_pfw_sys(1, 6, 2, 1) == INST_PFW_SYS_FILTER &&
+          inst_pfw_sys(1, 6, 3, 1) == INST_PFW_SYS_FILTER,
+          "8, 8.1 x86: offered, the filter role");
+    CHECK(inst_pfw_sys(1, 10, 0, 1) == INST_PFW_SYS_GONE,
+          "10 x86: not offered, an earlier one removed");
     CHECK(inst_pfw_sys(1, 6, 4, 1) == INST_PFW_SYS_NONE &&
           inst_pfw_sys(1, 11, 0, 1) == INST_PFW_SYS_NONE,
           "an unknown NT 6 or later: nothing");
@@ -6647,9 +7286,15 @@ static void test_pfw_inst(void)
     CHECK(!inst_pfw_box(INST_PFW_SYS_SEEN, 1, 1, 1, &shown, &open),
           "XP to 7, /noxhcipfw: unticked");
     CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 1, 0, &shown, &open) &&
-          !shown && !open, "8, 8.1 and 10 x86: not shown, never ticked");
+          !shown && !open, "10 x86: not shown, never ticked");
     CHECK(!inst_pfw_box(INST_PFW_SYS_GONE, 1, 0, 0, &shown, &open) &&
-          !shown && !open, "8 to 10, Thunderbolt unticked: not shown");
+          !shown && !open, "10, Thunderbolt unticked: not shown");
+    CHECK(inst_pfw_box(INST_PFW_SYS_FILTER, 1, 1, 0, &shown, &open) &&
+          shown && open, "8 and 8.1, Thunderbolt ticked: ticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_FILTER, 1, 0, 0, &shown, &open) &&
+          shown && !open, "8 and 8.1, Thunderbolt unticked: unticked");
+    CHECK(!inst_pfw_box(INST_PFW_SYS_FILTER, 1, 1, 1, &shown, &open) &&
+          shown && open, "8 and 8.1, /noxhcipfw: unticked");
 
     CHECK(inst_pfw_mode(INST_PFW_SYS_NONE, 0, 1, 1, 1) == INST_VSD_NONE &&
           inst_pfw_mode(INST_PFW_SYS_NONE, 1, 1, 1, 1) == INST_VSD_NONE,
@@ -6676,6 +7321,50 @@ static void test_pfw_inst(void)
           "whatever the boxes or the package");
     CHECK(inst_pfw_mode(INST_PFW_SYS_GONE, 1, 1, 1, 1) == INST_VSD_UNINSTALL,
           "8 to 10 x86: the uninstall removes it");
+    CHECK(inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 1, 1) ==
+              INST_VSD_SELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 1, 0) ==
+              INST_VSD_DESELECTED &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 0, 1, 0, 1) ==
+              INST_VSD_INACTIVE &&
+          inst_pfw_mode(INST_PFW_SYS_FILTER, 1, 1, 1, 1) ==
+              INST_VSD_UNINSTALL,
+          "8 and 8.1: as on Vista and 7");
+
+    /* The root bus devnodes (record 32 section 11.5.2). */
+    {
+        static const char hw[] = "ACPI\\VEN_PNP&DEV_0A08\0ACPI\\PNP0A08\0*PNP0A08\0";
+        static const char cp[] = "*PNP0A03\0";
+        static const char other[] = "ACPI\\PNP0C0A\0*PNP0C0A\0";
+        static const char low[] = "*pnp0a03\0";
+        char out[64];
+        size_t n;
+        int added;
+
+        CHECK(inst_pfw_rootbus(hw, sizeof(hw), NULL, 0),
+              "a PCI Express root complex: a root bus");
+        CHECK(inst_pfw_rootbus(other, sizeof(other), cp, sizeof(cp)),
+              "*PNP0A03 among the compatible ids: a root bus");
+        CHECK(inst_pfw_rootbus(other, sizeof(other), low, sizeof(low)),
+              "compared without case");
+        CHECK(!inst_pfw_rootbus(other, sizeof(other), NULL, 0),
+              "a battery: no");
+
+        n = inst_msz_append(NULL, 0, "xhcipfw", out, sizeof(out), &added);
+        CHECK(n == 9 && added && memcmp(out, "xhcipfw\0\0", 9) == 0,
+              "no filters: the one entry");
+        n = inst_msz_append("partmgr\0\0", 9, "xhcipfw", out, sizeof(out),
+                            &added);
+        CHECK(n == 17 && added &&
+              memcmp(out, "partmgr\0xhcipfw\0\0", 17) == 0,
+              "another filter kept first, the entry appended");
+        n = inst_msz_append("XHCIPFW\0a\0\0", 12, "xhcipfw", out,
+                            sizeof(out), &added);
+        CHECK(n == 11 && !added && memcmp(out, "XHCIPFW\0a\0\0", 11) == 0,
+              "already there (without case): unchanged");
+        n = inst_msz_append("partmgr\0\0", 9, "xhcipfw", out, 12, &added);
+        CHECK(n == (size_t)-1, "too long: refused");
+    }
 
     /* BootConfig: 7 x86's root port on the 4G-off layout, as read
      * (runs/run-44.md "44.49"): a memory range, a second, the 64-bit
@@ -7154,6 +7843,12 @@ static void test_other_sets(void)
                     "3.2.0.0");
     CHECK(strcmp(text, "Up to date: https://github.com/yeokm1/usb-wdm-nonfree.")
           == 0, "line: carried");
+    /* Owner, 2026-10-31: the free set's address once, in its notice. */
+    inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_CARRIED, 1,
+                    "3.2.0.0");
+    CHECK(strcmp(text, "Up to date: see the address above.") == 0 &&
+          strstr(text, "github") == NULL,
+          "line: the free set carried names no address twice");
     inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_ABSENT, 1,
                     "3.2.0.0");
     CHECK(strcmp(text, "Not in this download: the non-free driver pack is in "
@@ -7257,6 +7952,14 @@ static void names_table(const INST_NAMEROW *t, int n, int nhi)
 /* The model lines of one NHI INF against the table: every line's string is
  * the table's name for its id (the class line the plain name), and every
  * row of the table is a line of each models section. */
+/* The Thunderbolt 1 rows (design record 22 section 19.9): bound by their
+ * class form in the NT 6.x sections alone, never in a section Windows 98
+ * SE, ME, 2000 or XP reads. */
+static int names_tb1(INST_U32 ven, INST_U32 dev)
+{
+    return ven == 0x8086UL && (dev == 0x1513UL || dev == 0x1547UL);
+}
+
 static void names_inf(const char *text, const char *section, const char *label)
 {
     const char *p = inst_inf_section(text, section);
@@ -7269,6 +7972,8 @@ static void names_inf(const char *text, const char *section, const char *label)
     char what[256];
     int seen[256];
     int lines = 0;
+    int nt6;
+    int tb1;
     int i;
 
     memset(seen, 0, sizeof(seen));
@@ -7293,21 +7998,28 @@ static void names_inf(const char *text, const char *section, const char *label)
         sprintf(what, "%s %s: '%s' is the table's name", label, id, desc);
         CHECK(inst_nhi_name(ven, dev, name, sizeof(name)) == 1 &&
               strcmp(desc, name) == 0 && name_ok(desc), what);
-        sprintf(what, "%s %s: no id line for a FriendlyName NHI (no rank change)",
-                label, id);
-        CHECK(inst_nhi_fname(ven, dev, name, sizeof(name)) == 0, what);
         for (i = 0; i < instNhiNameCount; i++) {
             if (instNhiNames[i].Ven == ven && instNhiNames[i].Dev == dev) {
                 seen[i] = 1;
             }
         }
     }
-    CHECK_EQ(lines, instNhiNameCount + 1, "one line per row, and the class line");
+    nt6 = strstr(section, ".6.0") != NULL;
+    tb1 = 0;
+    for (i = 0; i < instNhiNameCount; i++) {
+        tb1 += names_tb1(instNhiNames[i].Ven, instNhiNames[i].Dev);
+    }
+    CHECK_EQ(lines, instNhiNameCount + 1 - (nt6 ? 0 : tb1),
+             "one line per row, and the class line");
     for (i = 0; i < instNhiNameCount; i++) {
         sprintf(what, "%s binds %04lX:%04lX", label,
                 (unsigned long)instNhiNames[i].Ven,
                 (unsigned long)instNhiNames[i].Dev);
-        CHECK(seen[i], what);
+        if (names_tb1(instNhiNames[i].Ven, instNhiNames[i].Dev) && !nt6) {
+            CHECK(!seen[i], "a Thunderbolt 1 row: no line before NT 6.x");
+        } else {
+            CHECK(seen[i], what);
+        }
     }
 }
 
@@ -7515,18 +8227,6 @@ static void test_names(void)
 
     names_table(instXhciNames, instXhciNameCount, 0);
     names_table(instNhiNames, instNhiNameCount, 1);
-    names_table(instNhiFnNames, instNhiFnNameCount, 1);
-    {
-        int a;
-        int b;
-        for (a = 0; a < instNhiFnNameCount; a++) {
-            for (b = 0; b < instNhiNameCount; b++) {
-                CHECK(instNhiFnNames[a].Ven != instNhiNames[b].Ven ||
-                      instNhiFnNames[a].Dev != instNhiNames[b].Dev,
-                      "an NHI is named by its INF line or by FriendlyName, not both");
-            }
-        }
-    }
     CHECK(name_ok(INST_NAME_USB3) && name_ok(INST_NAME_USB4) &&
           name_ok(INST_NAME_TB2) && name_ok(INST_NAME_TB3), "the plain names");
 
@@ -7546,14 +8246,27 @@ static void test_names(void)
     CHECK(inst_xhci_name(0x1B21UL, 0x2426UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB 3 Controller (ASMedia ASM4242)") == 0,
           "the ASM4242's xHCI");
+    /* Task 45.46: the ASM4242's router named by its own INF line (the
+     * table names_inf holds both NHI INFs to). */
     CHECK(inst_nhi_name(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
-          strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0 &&
-          inst_nhi_fname(0x1B21UL, 0x2425UL, name, sizeof(name)) == 1 &&
           strcmp(name, "xHCI98 USB4 Router (ASMedia ASM4242)") == 0,
-          "the ASM4242's router: named by the FriendlyName");
-    CHECK(inst_nhi_fname(0x8086UL, 0x15BFUL, name, sizeof(name)) == 0 &&
+          "the ASM4242's router: its INF line's name");
+    CHECK(inst_nhi_name(0x1B21UL, 0x2142UL, name, sizeof(name)) == 0 &&
           strcmp(name, INST_NAME_USB4) == 0,
-          "an NHI its INF line names: no FriendlyName");
+          "an NHI id the table lacks: the class line's plain name");
+    {
+        /* The FriendlyName 3.3.0.0's installer wrote on that router: an NHI
+         * has no table name for a FriendlyName now (names_canon NULL), so
+         * the update clears the recorded one, and a user's own stays. */
+        int r;
+        CHECK(inst_name_action(1, NULL, "xHCI98 USB4 Router (ASMedia ASM4242)",
+                               "xHCI98 USB4 Router (ASMedia ASM4242)", &r) ==
+                  INST_NAME_CLEAR && !r,
+              "task 45.46: the router's recorded FriendlyName cleared at an update");
+        CHECK(inst_name_action(1, NULL, "My router", NULL, &r) ==
+                  INST_NAME_NONE && !r,
+              "task 45.46: a user's name for the router stays");
+    }
     {
         static const char hwA[] = "PCI\\VEN_1B21&DEV_2425&SUBSYS_24211B21\0";
         static const char ccA[] = "PCI\\CC_0C0340\0";
@@ -7670,7 +8383,7 @@ static void test_other_pkgs(void)
     static const char *const freeReadme[] = {
         "video/uvc98", "audio/uac2", "audio/usbmidi", "net/cdcnet",
         "net/rtl815x", "net/ax88179", "serial/usbcom", "hid/xpad98",
-        "storage/usbflop", "generic/libusb0"
+        "storage/usbflop", "generic/libusb0", "print/usbprn"
     };
     char ids[INST_PKG_MAX * INST_PKG_ID_CHARS];
     char pkg[INST_PKG_ID_CHARS];
@@ -7915,8 +8628,445 @@ static void test_other_pkgs(void)
           "the certificate left out said");
 }
 
+/* Task 45.60 (record 26 section 5.3.5): the Thunderbolt and USB4 page's
+ * texts, the networking box's rule and its switches. */
+/* Record 26 section 5.10 (task 45.66): Help on every page. */
+static int help_has_ci(const char *text, const char *word)
+{
+    size_t n = strlen(word);
+    const char *p;
+
+    for (p = text; *p != '\0'; p++) {
+        size_t i;
+        for (i = 0; i < n; i++) {
+            char a = p[i];
+            char b = word[i];
+            if (a >= 'A' && a <= 'Z') {
+                a = (char)(a - 'A' + 'a');
+            }
+            if (b >= 'A' && b <= 'Z') {
+                b = (char)(b - 'A' + 'a');
+            }
+            if (a == '\0' || a != b) {
+                break;
+            }
+        }
+        if (i == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The label's words before its first " (", the way a help line quotes a
+ * label that goes on with a file name. */
+static void help_label_head(const char *label, char *out, size_t cap)
+{
+    const char *par = strstr(label, " (");
+    size_t n = par != NULL ? (size_t)(par - label) : strlen(label);
+
+    if (n >= cap) {
+        n = cap - 1;
+    }
+    memcpy(out, label, n);
+    out[n] = '\0';
+}
+
+/* A "\n" with no other beside it: a paragraph break that is no empty
+ * line. */
+static int help_lone_nl(const char *t)
+{
+    const char *p;
+
+    for (p = t; *p != '\0'; p++) {
+        if (*p == '\n' && p[1] != '\n' && (p == t || p[-1] != '\n')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static size_t help_paras(const char *t)
+{
+    size_t n = 1;
+    const char *p = t;
+
+    while ((p = strstr(p, "\n\n")) != NULL) {
+        n++;
+        p += 2;
+    }
+    return n;
+}
+
+static void test_help(void)
+{
+    /* Each topic's paragraphs, in INST_HELP_* order. */
+    static const size_t paras[INST_HELP_COUNT] = {
+        3, 3, 9, 7, 4, 3, 7, 7, 5, 3, 3, 4, 3, 2, 3, 3, 3, 1, 3, 2
+    };
+    static const char *const banned[] = {
+        "tested", "testing", "emulat", "virtual machine", "experimental"
+    };
+    static const struct {
+        int Kind;
+        int Un;
+        int Var;
+        int Topic;
+    } routes[] = {
+        { INST_HK_WELCOME, 0, 0, INST_HELP_WELCOME },
+        { INST_HK_WELCOME, 1, 0, INST_HELP_UWELCOME },
+        { INST_HK_COMP, 0, 0, INST_HELP_COMP },
+        { INST_HK_TBT, 0, 0, INST_HELP_TBT },
+        { INST_HK_FREE, 0, 0, INST_HELP_FREE },
+        { INST_HK_NONFREE, 0, 0, INST_HELP_NONFREE },
+        { INST_HK_SET_USB, 0, 0, INST_HELP_SET_USB },
+        { INST_HK_SET_TB, 0, 0, INST_HELP_SET_TB },
+        { INST_HK_SET_S98, 0, 0, INST_HELP_SET_S98 },
+        { INST_HK_ADV, 0, 0, INST_HELP_ADV },
+        { INST_HK_ADV_S98, 0, 0, INST_HELP_ADV_S98 },
+        { INST_HK_SUMMARY, 0, 0, INST_HELP_SUMMARY },
+        { INST_HK_SUMMARY, 1, 0, INST_HELP_USUMMARY },
+        { INST_HK_PROGRESS, 0, INST_PV_NT, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 1, INST_PV_NT, INST_HELP_PROGRESS },
+        { INST_HK_PROGRESS, 0, INST_PV_9X, INST_HELP_PROGRESS_9X },
+        { INST_HK_PROGRESS, 1, INST_PV_9X, INST_HELP_PROGRESS_9X },
+        { INST_HK_STEPS, 0, 0, INST_HELP_STEPS },
+        { INST_HK_FINISH, 0, INST_FV_RESTART, INST_HELP_FINISH },
+        { INST_HK_FINISH, 0, INST_FV_SHUT, INST_HELP_FINISH_SHUT },
+        { INST_HK_FINISH, 0, INST_FV_NONE, INST_HELP_FINISH_NONE },
+        { INST_HK_FINISH, 1, INST_FV_RESTART, INST_HELP_UFINISH },
+        { INST_HK_FINISH, 1, INST_FV_NONE, INST_HELP_FINISH_NONE }
+    };
+    /* Each topic quotes the page's own labels: whole, or (Whole 0) their
+     * words before the first parenthesis. */
+    static const struct {
+        int Topic;
+        int Pt;
+        int Whole;
+    } labels[] = {
+        { INST_HELP_COMP, INST_PT_DRIVERS, 0 },
+        { INST_HELP_COMP, INST_PT_UAS, 0 },
+        { INST_HELP_COMP, INST_PT_STOR, 0 },
+        { INST_HELP_COMP, INST_PT_TB, 0 },
+        { INST_HELP_COMP, INST_PT_TRAY, 1 },
+        { INST_HELP_COMP, INST_PT_FAST, 1 },
+        { INST_HELP_TBT, INST_PT_PFW, 0 },
+        { INST_HELP_TBT, INST_PT_S98, 0 },
+        { INST_HELP_TBT, INST_PT_APPR_1, 1 },
+        { INST_HELP_TBT, INST_PT_APPR_0, 1 },
+        { INST_HELP_FINISH, INST_PT_NOW, 1 },
+        { INST_HELP_FINISH, INST_PT_LATER, 1 },
+        { INST_HELP_UFINISH, INST_PT_NOW, 1 },
+        { INST_HELP_UFINISH, INST_PT_LATER, 1 },
+        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_NOW, 1 },
+        { INST_HELP_FINISH_SHUT, INST_PT_SHUT_LATER, 0 }
+    };
+    static const struct {
+        int Topic;
+        const char *Words;
+    } quotes[] = {
+        { INST_HELP_COMP, "Replace the stored build of this package's "
+                          "drivers" },
+        { INST_HELP_COMP, "Settings..." },
+        { INST_HELP_COMP, "Change folder..." },
+        { INST_HELP_FREE, "Trust usb-wdm-free's test certificate on this "
+                          "computer" },
+        { INST_HELP_SET_USB, "XhciSilentInstall" },
+        { INST_HELP_SET_USB, "XhciIntelPortSwitch" },
+        { INST_HELP_SET_USB, "More >" },
+        { INST_HELP_SET_USB, "Advanced..." },
+        { INST_HELP_SET_TB, "XhciCmMode" },
+        { INST_HELP_SET_TB, "XhciCmSafeEject" },
+        { INST_HELP_SET_S98, "storwritethrough" },
+        { INST_HELP_SET_S98, "storpollmode" },
+        { INST_HELP_ADV_S98, "The value" },
+        { INST_HELP_ADV, "Setting" },
+        { INST_HELP_STEPS, "Save as text file..." },
+        { INST_HELP_STEPS, "Open Device Manager" },
+        { INST_HELP_TBT, "XHCIPFW.VXD on 98 SE and ME" },
+        { INST_HELP_TBT, "XHCIPFW.SYS on 2000 to the 32-bit 8.1" },
+        { INST_HELP_PROGRESS, "Found New Hardware" },
+        { INST_HELP_PROGRESS_9X, "Add New Hardware Wizard" }
+    };
+    int reached[INST_HELP_COUNT];
+    char head[128];
+    char msg[160];
+    int i;
+
+    memset(reached, 0, sizeof(reached));
+    for (i = 0; i < INST_HELP_COUNT; i++) {
+        const char *t = inst_help_text(i);
+        const unsigned char *p;
+        size_t b;
+        int ascii = 1;
+        sprintf(msg, "help topic %d: a title and a text", i);
+        CHECK(inst_help_title(i)[0] != '\0' && t[0] != '\0', msg);
+        for (p = (const unsigned char *)t; *p != '\0'; p++) {
+            if (*p > 126 || (*p < 32 && *p != '\n')) {
+                ascii = 0;
+            }
+        }
+        sprintf(msg, "help topic %d: ASCII, lines by \\n alone", i);
+        CHECK(ascii, msg);
+        /* A paragraph a choice, one empty line between paragraphs, none
+         * at either end (owner, 2026-10-31); a text past the window's
+         * rows scrolls there, and stays within two windows. */
+        sprintf(msg, "help topic %d: paragraphs apart by one empty line", i);
+        CHECK(t[0] != '\n' && t[strlen(t) - 1] != '\n' &&
+              strstr(t, "\n\n\n") == NULL && help_lone_nl(t) == 0, msg);
+        sprintf(msg, "help topic %d: %lu paragraphs, %lu pinned", i,
+                (unsigned long)help_paras(t), (unsigned long)paras[i]);
+        CHECK(help_paras(t) == paras[i], msg);
+        sprintf(msg, "help topic %d: %lu lines at %lu columns, at most %lu",
+                i, (unsigned long)inst_text_lines(t,
+                                                  inst_page_cols(INST_HELP_W)),
+                (unsigned long)inst_page_cols(INST_HELP_W),
+                (unsigned long)(2 * inst_page_rows(INST_HELP_H)));
+        CHECK(inst_text_lines(t, inst_page_cols(INST_HELP_W)) <=
+              2 * inst_page_rows(INST_HELP_H), msg);
+        for (b = 0; b < sizeof(banned) / sizeof(banned[0]); b++) {
+            sprintf(msg, "help topic %d: no \"%s\"", i, banned[b]);
+            CHECK(!help_has_ci(t, banned[b]), msg);
+        }
+    }
+    CHECK(inst_help_text(-1)[0] == '\0' &&
+          inst_help_text(INST_HELP_COUNT)[0] == '\0' &&
+          inst_help_title(INST_HELP_COUNT)[0] == '\0',
+          "help: no text out of range");
+    CHECK(strcmp(inst_help_title(INST_HELP_TBT), "Thunderbolt and USB4") ==
+          0 && strcmp(inst_help_title(INST_HELP_COMP), "Components") == 0 &&
+          strcmp(inst_help_title(INST_HELP_UWELCOME), "Uninstall") == 0,
+          "help: titles in topic order");
+    for (i = 0; i < (int)(sizeof(routes) / sizeof(routes[0])); i++) {
+        int t = inst_help_topic(routes[i].Kind, routes[i].Un, routes[i].Var);
+        sprintf(msg, "help route %d: kind %d mode %d variant %d -> %d", i,
+                routes[i].Kind, routes[i].Un, routes[i].Var, routes[i].Topic);
+        CHECK(t == routes[i].Topic, msg);
+        if (t >= 0 && t < INST_HELP_COUNT) {
+            reached[t] = 1;
+        }
+    }
+    CHECK(inst_help_topic(INST_HK_COUNT, 0, 0) == -1 &&
+          inst_help_topic(-1, 0, 0) == -1, "help: an unknown kind, none");
+    for (i = 0; i < INST_HELP_COUNT; i++) {
+        sprintf(msg, "help topic %d reached by a page", i);
+        CHECK(reached[i], msg);
+    }
+    for (i = 0; i < (int)(sizeof(labels) / sizeof(labels[0])); i++) {
+        const char *l = inst_page_text(labels[i].Pt);
+        if (labels[i].Whole) {
+            strncpy(head, l, sizeof(head) - 1);
+            head[sizeof(head) - 1] = '\0';
+        } else {
+            help_label_head(l, head, sizeof(head));
+        }
+        sprintf(msg, "help topic %d quotes page text %d", labels[i].Topic,
+                labels[i].Pt);
+        CHECK(head[0] != '\0' &&
+              strstr(inst_help_text(labels[i].Topic), head) != NULL, msg);
+    }
+    for (i = 0; i < (int)(sizeof(quotes) / sizeof(quotes[0])); i++) {
+        sprintf(msg, "help topic %d quotes \"%.60s\"", quotes[i].Topic,
+                quotes[i].Words);
+        CHECK(help_has_ci(inst_help_text(quotes[i].Topic), quotes[i].Words),
+              msg);
+    }
+    /* The XHCIPFW box says what it does, no file name (owner,
+     * 2026-10-31; record 26 draft 56); its Help names the files. */
+    CHECK(strcmp(inst_page_text(INST_PT_PFW), "Find Thunderbolt and USB4 "
+                 "devices placed above 4 GB") == 0 &&
+          strcmp(inst_page_text(INST_PT_PFW_SYS),
+                 inst_page_text(INST_PT_PFW)) == 0 &&
+          strstr(inst_page_text(INST_PT_PFW), "XHCIPFW") == NULL,
+          "help: the XHCIPFW box's label, the same on every system");
+    /* Each system's Progress text names its own hardware wizard alone. */
+    CHECK(!help_has_ci(inst_help_text(INST_HELP_PROGRESS_9X), "Found New") &&
+          !help_has_ci(inst_help_text(INST_HELP_PROGRESS), "Add New") &&
+          strcmp(inst_help_title(INST_HELP_PROGRESS_9X),
+                 inst_help_title(INST_HELP_PROGRESS)) == 0,
+          "help: the Progress texts, one hardware wizard each");
+    /* The Welcome page's three wordings point at Help, not the readme. */
+    CHECK(strstr(inst_page_text(INST_PT_WELCOME), "Help explains each "
+                 "page.") != NULL &&
+          strstr(inst_page_text(INST_PT_WELCOME_CM), "Help explains each "
+                 "page.") != NULL &&
+          strstr(inst_page_text(INST_PT_WELCOME_TOOLS), "Help explains "
+                 "each page.") != NULL,
+          "help: the Welcome page says what Help does");
+}
+
+static void test_tbt_page(void)
+{
+    INST_TBNET d;
+    INST_OPTS o;
+    char err[256];
+    const char *a1[] = { "x", "/tbnet" };
+    const char *a2[] = { "x", "/notbnet", "/yes" };
+    const char *a3[] = { "x", "/tbnet", "/notbnet" };
+    const char *a4[] = { "x", "/notbnet", "/uninstall" };
+    const char *a5[] = { "x", "/notbnet", "/devices" };
+    const char *a6[] = { "x", "/tbnet", "/thunderbolt", "/yes" };
+    const char *a7[] = { "x", "/tbnet", "/cmonly" };
+    const char *a8[] = { "x", "/set", "XhciCmNet=1" };
+    static const int ids[] = {
+        INST_PT_TBT_HEAD, INST_PT_APPR_HEAD, INST_PT_APPR_1, INST_PT_APPR_1_T,
+        INST_PT_APPR_0, INST_PT_APPR_0_T, INST_PT_APPR_MIXED, INST_PT_APPR_NEW,
+        INST_PT_TBNET, INST_PT_TBNET_T
+    };
+    int i;
+    int sw;
+    int inForce;
+
+    for (i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
+        const char *s = inst_page_text(ids[i]);
+        CHECK(s != NULL && s[0] != '\0', "a 45.60 page text is there");
+        CHECK(s != NULL && strstr(s, "test") == NULL &&
+              strstr(s, "experimental") == NULL, "no testing status");
+    }
+    CHECK(strstr(inst_page_text(INST_PT_ADVANCED), "tester") == NULL,
+          "the Advanced heading names no testing");
+    CHECK(strstr(inst_page_text(INST_PT_TB), "(experimental)") != NULL,
+          "the Components box keeps the owner's word");
+    CHECK(strstr(inst_page_text(INST_PT_TB_T), "memory") == NULL &&
+          strstr(inst_page_text(INST_PT_APPR_1_T), "memory") != NULL,
+          "what a device can reach moved to the approval row");
+    CHECK(strcmp(inst_page_text(INST_PT_TBNET), "Thunderbolt networking") == 0,
+          "the networking box's words");
+    CHECK_EQ(INST_TBNET_WIRED, 1, "networking wired (task 45.59 step S11)");
+    CHECK(inst_value_find("XhciCmNet") < 0,
+          "XhciCmNet not in the values table: the box is the setting");
+    {
+        /* Record 35 section 9.1: what it does, nothing of testing. */
+        const char *s = inst_page_text(INST_PT_TBNET_T);
+        CHECK(s != NULL && strstr(s, "another computer") != NULL &&
+              strstr(s, "file sharing") != NULL &&
+              strstr(s, "turn it off") != NULL,
+              "the networking sentence says what it does and how to undo it");
+    }
+    /* The network driver's own slot, after Stor98's (record 35 section
+     * 9.5): an interrupted run's slot numbers keep their meaning. */
+    CHECK(INST_INF_NET == 5 && INST_INF_COUNT == 6 && INST_INF_S98 == 4,
+          "the network INF slot appended");
+    CHECK(inst_own_service("xhcinet"), "xhcinet is a service of the package");
+    CHECK_EQ(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "xhcinet", 0), 0,
+             "the network adapter removed first, before the NHI");
+    CHECK(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "xhcinet", 0) <
+              inst_remove_rank("PCI\\VEN_8086&DEV_15EB\\3&1", "xhcicm", 0),
+          "the adapter before its NHI");
+    CHECK_EQ(inst_remove_rank("XHCICM\\TBNET\\1&2&3", "", 0), 0,
+             "an adapter whose install failed is removed too");
+    CHECK(inst_cm_child_id("XHCICM\\TBNET\\1&2&3") &&
+          !inst_cm_child_id("PCI\\VEN_8086&DEV_15EB\\3&1"),
+          "the connection manager's children by their enumerator");
+    {
+        static const char netInf[] =
+            "[Version]\r\nSignature=\"$CHICAGO$\"\r\nProvider=%Provider%\r\n"
+            "[Net.Dev.NTx86.Services]\r\nAddService=xhcinet,0x00000002,"
+            "Net.Service\r\n[Strings]\r\nProvider=\"Yeo Kheng Meng\"\r\n";
+        CHECK(inst_inf_is_ours(netInf), "xhcinet.inf is this package's INF");
+    }
+    /* The source map's rows (record 35 section 9.5): cm\tbnet\ in each
+     * family, 98-me\ without xhcinet6.sys, the catalog on x64 alone. */
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcinet.inf") != NULL &&
+          strcmp(inst_pkg_rel(INST_FAM_9X, "xhcinet.inf"),
+                 "cm\\tbnet\\xhcinet.inf") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT86, "xhcinet.sys"),
+                 "cm\\tbnet\\xhcinet.sys") == 0 &&
+          strcmp(inst_pkg_rel(INST_FAM_NT64, "xhcinet.cat"),
+                 "cm\\tbnet\\xhcinet.cat") == 0,
+          "the network driver's places in the download");
+    CHECK(inst_pkg_rel(INST_FAM_9X, "xhcinet6.sys") == NULL &&
+          inst_pkg_rel(INST_FAM_NT86, "xhcinet6.sys") != NULL &&
+          inst_pkg_rel(INST_FAM_NT86, "xhcinet.cat") == NULL,
+          "98-me without xhcinet6.sys, nt-x86 without a catalog");
+
+    /* The gate off: nothing shown, open or written, whatever is asked. */
+    for (sw = -1; sw <= 1; sw++) {
+        for (inForce = -1; inForce <= 1; inForce++) {
+            inst_tbnet_decide(0, 1, sw, inForce, 1, 1, 1, &d);
+            CHECK(!d.Shown && !d.Enabled && !d.First && !d.Write && !d.ToNhi &&
+                  !d.ToMw, "the gate off: nothing");
+        }
+    }
+    /* Wired, no driver for this system: shown greyed, nothing written. */
+    inst_tbnet_decide(1, 0, 1, 1, 1, 1, 1, &d);
+    CHECK(d.Shown && !d.Enabled && !d.First && !d.Write,
+          "no driver: greyed, nothing written");
+    /* Wired and carried: the first state. */
+    inst_tbnet_decide(1, 1, -1, -1, -1, 1, 0, &d);
+    CHECK(d.Shown && d.Enabled && !d.First && !d.Write,
+          "a new install: unticked, nothing written (the INF's 0)");
+    inst_tbnet_decide(1, 1, -1, 1, -1, 1, 0, &d);
+    CHECK(d.First && !d.Write, "1 in force: ticked, left as it is");
+    inst_tbnet_decide(1, 1, -1, 0, -1, 1, 0, &d);
+    CHECK(!d.First && !d.Write, "0 in force: unticked, left as it is");
+    inst_tbnet_decide(1, 1, 1, 0, -1, 1, 0, &d);
+    CHECK(d.First && d.Write && d.Value == 1 && d.ToNhi && !d.ToMw,
+          "/tbnet over 0: ticked and written to the controller's key");
+    inst_tbnet_decide(1, 1, 0, -1, -1, 1, 0, &d);
+    CHECK(!d.First && d.Write && d.Value == 0 && d.ToNhi,
+          "/notbnet makes the box changed: 0 written");
+    /* A tick and an untick against each value in force. */
+    inst_tbnet_decide(1, 1, -1, -1, 1, 1, 0, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && !d.ToMw, "ticked over none");
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 0, &d);
+    CHECK(d.Write && d.Value == 1, "ticked over 0");
+    inst_tbnet_decide(1, 1, -1, 1, 1, 1, 0, &d);
+    CHECK(!d.Write, "ticked over 1: nothing");
+    inst_tbnet_decide(1, 1, -1, 1, 0, 1, 0, &d);
+    CHECK(d.Write && d.Value == 0 && d.ToNhi, "unticked over 1: 0 written");
+    inst_tbnet_decide(1, 1, -1, 0, 0, 1, 0, &d);
+    CHECK(!d.Write, "unticked over 0: nothing");
+    inst_tbnet_decide(1, 1, -1, -1, 0, 1, 0, &d);
+    CHECK(!d.Write, "unticked over none: nothing");
+    /* The targets. */
+    inst_tbnet_decide(1, 1, -1, -1, 1, 0, 0, &d);
+    CHECK(d.Write && !d.ToNhi && d.ToMw, "no host interface: machine-wide");
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 1, &d);
+    CHECK(d.Write && d.ToNhi && d.ToMw,
+          "a machine-wide value there: both places");
+    /* Record 35's sequence: staged-only /tbnet, then a host interface,
+     * /notbnet, /tbnet again: 1 in both places at the end. */
+    inst_tbnet_decide(1, 1, 1, -1, -1, 0, 0, &d);
+    CHECK(d.Write && d.Value == 1 && !d.ToNhi && d.ToMw, "staged-only /tbnet");
+    inst_tbnet_decide(1, 1, 0, 1, -1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 0 && d.ToNhi && d.ToMw,
+          "then /notbnet with a host interface: 0 in both");
+    inst_tbnet_decide(1, 1, 1, 0, -1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && d.ToMw,
+          "then /tbnet again: 1 in both");
+    /* Its mirror: ticked on the page over a machine-wide 0. */
+    inst_tbnet_decide(1, 1, -1, 0, 1, 1, 1, &d);
+    CHECK(d.Write && d.Value == 1 && d.ToNhi && d.ToMw,
+          "the box over a machine-wide 0: 1 in both");
+
+    /* The switches, wired (record 35 section 9.2): /tbnet needs the
+     * Thunderbolt support, as /stor98 does; /notbnet stands alone. */
+    CHECK(inst_parse_args(2, (char **)a1, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/tbnet needs /thunderbolt") != NULL,
+          "/tbnet alone refused: it needs the Thunderbolt support");
+    CHECK(inst_parse_args(4, (char **)a6, &o, err, sizeof(err)) == 0 &&
+              o.TbNet && !o.NoTbNet, "/tbnet with /thunderbolt accepted");
+    CHECK(inst_parse_args(3, (char **)a7, &o, err, sizeof(err)) == 0 &&
+              o.TbNet, "/tbnet with /cmonly accepted");
+    CHECK(inst_parse_args(3, (char **)a2, &o, err, sizeof(err)) == 0 &&
+              o.NoTbNet && !o.TbNet, "/notbnet accepted");
+    CHECK(inst_parse_args(3, (char **)a8, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "use /tbnet or /notbnet") != NULL,
+          "/set XhciCmNet= refused: the box is the setting");
+    CHECK(inst_parse_args(3, (char **)a3, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "contradict") != NULL, "both: refused");
+    CHECK(inst_parse_args(3, (char **)a4, &o, err, sizeof(err)) != 0 &&
+              strstr(err, "/notbnet belongs to an install") != NULL,
+          "with /uninstall: refused");
+    CHECK(inst_parse_args(3, (char **)a5, &o, err, sizeof(err)) != 0,
+          "with /devices: refused");
+}
+
 int main(void)
 {
+    test_tbt_page();
+    test_help();
     test_versions();
     test_models_rule();
     test_cm_only();
@@ -7940,6 +9090,7 @@ int main(void)
     test_tb_eject();
     test_tb_question();
     test_cmf_place();
+    test_family();
     test_tray();
     test_fast();
     test_wrap();
@@ -7957,6 +9108,7 @@ int main(void)
     test_page_texts();
     test_secure_boot_refusals();
     test_s98();
+    test_s98_inf_defaults();
     test_s98_tunnel();
     test_marks();
     test_storage();

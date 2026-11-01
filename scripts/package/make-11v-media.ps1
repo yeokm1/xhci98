@@ -43,22 +43,20 @@ other media.
 consumes them.
 
 .PARAMETER Flavor
-qemu (default), debug, release, both, or all. **`qemu` is the default because it
+qemu (default), release, or all (the two). **`qemu` is the default because it
 is the only flavour that produces a LIVE trace** - since task 13-L.1
  every `XHCI_DBG_*` site and the port-0xE9 mirror compile only into
 `qemu`, so the `DriverEntry (built ...)` identity line
 `docs\contributing\runs\run-11v.md` blocks on, and every clause that reads a
 counter off a running guest through `readcounters.ps1`, need a `qemu` guest.
 (The
-*counters themselves* are in every flavour and `XHCISNAP` reads them from any of
-the three; what `qemu` alone gives is the live channel this sheet's VM clauses
+*counters themselves* are in every flavour and `XHCISNAP` reads them from either; what `qemu` alone gives is the live channel this sheet's VM clauses
 are written against.) `release` is what task 11-V.3 validates as the shipping
-media; `debug` is the other shipping flavour and is what stage B6's upgrade legs
-install. `both` is the two shipping flavours and `all` is the three, which is
-`scripts\build-driver.cmd`'s vocabulary. **The import allowlist's `FLAVORS`
-column is deliberately NOT the same list** - it refuses `both` outright and
-takes release, debug, qemu or all - because a row written about two builds must
-not silently cover three.
+media. `all` is the two, which is `scripts\build-driver.cmd`'s vocabulary;
+`debug` and `both` went with the debug flavour (roadmap-usb4 task 45.45, design
+record 08 section 14; stage B6's upgrade legs installed `debug` until then). The
+import allowlist's `FLAVORS` column takes release, qemu or all and refuses
+`both` and `debug` by name.
 
 *(This parameter defaulted to `debug` and described it as "what a run reads
 counters from" until it was reviewed and revised after Phase 13. That was true before the three-flavour split
@@ -108,12 +106,12 @@ staged.
 powershell -ExecutionPolicy Bypass -File scripts\package\make-11v-media.ps1
 
 .EXAMPLE
-powershell -File scripts\package\make-11v-media.ps1 -Flavor both
+powershell -File scripts\package\make-11v-media.ps1 -Flavor all
 #>
 
 [CmdletBinding()]
 param(
-    [ValidateSet("qemu", "debug", "release", "both", "all")]
+    [ValidateSet("qemu", "release", "all")]
     [string]$Flavor = "qemu",
     [string]$OutRoot = "",
     [string]$BaselineVersion = "",
@@ -148,12 +146,10 @@ if (-not [System.IO.Path]::IsPathRooted($OutRoot)) {
 }
 $OutRoot = [System.IO.Path]::GetFullPath($OutRoot)
 
-# "both" is the two SHIPPING flavours and "all" is the three - never blur them,
-# because a run that wanted the trace and got `debug` fails as a boot timeout
-# with no hint of the cause (the vm-matrix break batch 13-L caused).
+# "all" is the two flavours, qemu and release; "both" and "debug" went with
+# the debug flavour (roadmap-usb4 task 45.45, design record 08 section 14).
 $flavors = switch ($Flavor) {
-    "both" { @("debug", "release") }
-    "all"  { @("qemu", "debug", "release") }
+    "all"  { @("qemu", "release") }
     default { @($Flavor) }
 }
 

@@ -23,25 +23,28 @@
  */
 static const TBT_HW_PROFILE tbtHwTable[] = {
     /* Falcon Ridge: icm_fr_is_supported. */
-    { 0x8086, 0x156A, "DSL5320 Falcon Ridge 2C", TBT_HW_INTEL | TBT_HW_FR_E2E,
+    { 0x8086, 0x156A, "DSL5320 Falcon Ridge 2C",
+      TBT_HW_INTEL | TBT_HW_FR_E2E | TBT_HW_MAC_HOST,
       TBT_HW_OWN_PRESENT, &TbtIcmProfileFalconRidge },
-    { 0x8086, 0x156C, "DSL5520 Falcon Ridge 4C", TBT_HW_INTEL | TBT_HW_FR_E2E,
+    { 0x8086, 0x156C, "DSL5520 Falcon Ridge 4C",
+      TBT_HW_INTEL | TBT_HW_FR_E2E | TBT_HW_MAC_HOST,
       TBT_HW_OWN_PRESENT, &TbtIcmProfileFalconRidge },
     /* Alpine Ridge: icm_ar_is_supported. */
-    { 0x8086, 0x1575, "DSL6340 Alpine Ridge 2C", TBT_HW_INTEL,
+    { 0x8086, 0x1575, "DSL6340 Alpine Ridge 2C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileAlpineRidge },
-    { 0x8086, 0x1577, "DSL6540 Alpine Ridge 4C", TBT_HW_INTEL,
+    { 0x8086, 0x1577, "DSL6540 Alpine Ridge 4C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileAlpineRidge },
-    { 0x8086, 0x15BF, "JHL6240 Alpine Ridge LP", TBT_HW_INTEL | TBT_HW_CAPTURED,
+    { 0x8086, 0x15BF, "JHL6240 Alpine Ridge LP",
+      TBT_HW_INTEL | TBT_HW_CAPTURED | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileAlpineRidge },
-    { 0x8086, 0x15D2, "JHL6540 Alpine Ridge C 4C", TBT_HW_INTEL,
+    { 0x8086, 0x15D2, "JHL6540 Alpine Ridge C 4C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileAlpineRidge },
-    { 0x8086, 0x15D9, "JHL6340 Alpine Ridge C 2C", TBT_HW_INTEL,
+    { 0x8086, 0x15D9, "JHL6340 Alpine Ridge C 2C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileAlpineRidge },
     /* Titan Ridge: icm_ar_is_supported. */
-    { 0x8086, 0x15E8, "JHL7540 Titan Ridge 2C", TBT_HW_INTEL,
+    { 0x8086, 0x15E8, "JHL7540 Titan Ridge 2C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileTitanRidge },
-    { 0x8086, 0x15EB, "JHL7540 Titan Ridge 4C", TBT_HW_INTEL,
+    { 0x8086, 0x15EB, "JHL7540 Titan Ridge 4C", TBT_HW_INTEL | TBT_HW_MAC_HOST,
       TBT_HW_OWN_ICM_RUNNING, &TbtIcmProfileTitanRidge },
     /* Maple Ridge: Titan Ridge's messages, icm_tgl_is_supported. */
     { 0x8086, 0x1134, "Maple Ridge 2C", TBT_HW_INTEL,
@@ -91,8 +94,64 @@ static const TBT_HW_PROFILE tbtHwTable[] = {
       TBT_HW_OWN_NONE, NULL },
     /* AMD Pink Sardine, FreeBSD nhi_reg.h. */
     { 0x1022, 0x1668, "Pink Sardine USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
-    { 0x1022, 0x1669, "Pink Sardine USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL }
+    { 0x1022, 0x1669, "Pink Sardine USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    /* Light Ridge and Cactus Ridge 4C: no ICM, the Thunderbolt-host profile
+     * on an Apple machine only (record 22 section 19.3; Linux pci.c
+     * nhi_ids[] by class and subsystem). */
+    { 0x8086, 0x1513, "CV82524 Light Ridge 4C", TBT_HW_INTEL | TBT_HW_MAC_ONLY,
+      TBT_HW_OWN_NONE, NULL },
+    { 0x8086, 0x1547, "DSL3510 Cactus Ridge 4C", TBT_HW_INTEL | TBT_HW_MAC_ONLY,
+      TBT_HW_OWN_NONE, NULL }
 };
+
+/* Record 22 section 19.1: NHI to host router; Light Ridge and Cactus Ridge
+ * report the NHI's id as the router's. */
+static const ULONG tbtHwTbtPairs[][2] = {
+    { 0x1513, 0x1513 }, { 0x1547, 0x1547 },
+    { 0x156A, 0x156B }, { 0x156C, 0x156D },
+    { 0x1575, 0x1576 }, { 0x1577, 0x1578 }, { 0x15BF, 0x15C0 },
+    { 0x15D2, 0x15D3 }, { 0x15D9, 0x15DA },
+    { 0x15E8, 0x15E7 }, { 0x15EB, 0x15EA }
+};
+
+ULONG TbtHwTbtHostRouter(ULONG nhiDevice)
+{
+    ULONG i;
+
+    for (i = 0; i < sizeof(tbtHwTbtPairs) / sizeof(tbtHwTbtPairs[0]); i++) {
+        if (tbtHwTbtPairs[i][0] == nhiDevice) {
+            return tbtHwTbtPairs[i][1];
+        }
+    }
+    return 0;
+}
+
+ULONG TbtHwTbtGeneration(ULONG vendor, ULONG device)
+{
+    if (vendor != TBT_HW_VENDOR_INTEL) {
+        return 0;
+    }
+    switch (device) {
+    case 0x156B:    /* Falcon Ridge 2C */
+    case 0x156D:    /* Falcon Ridge 4C */
+    case 0x157E:    /* Win Ridge 2C */
+        return 2;
+    case 0x1576:    /* Alpine Ridge 2C, 4C, LP, C 4C, C 2C */
+    case 0x1578:
+    case 0x15C0:
+    case 0x15D3:
+    case 0x15DA:
+    case 0x15E7:    /* Titan Ridge 2C, 4C, DD */
+    case 0x15EA:
+    case 0x15EF:
+    case 0x8A17:    /* Ice Lake */
+    case 0x8A0D:
+        return 3;
+    }
+    /* Light Ridge, Eagle Ridge, Light Peak, Cactus Ridge, Port Ridge,
+     * Redwood Ridge, and every id Linux does not know. */
+    return 1;
+}
 
 static const TBT_HW_PROFILE tbtHwForced = {
     0x8086, 0, "unlisted Intel NHI (XhciCmMode 2)",
@@ -114,7 +173,11 @@ const TBT_HW_PROFILE *TbtHwMatch(ULONG vendorId,
 
     for (i = 0; i < sizeof(tbtHwTable) / sizeof(tbtHwTable[0]); i++) {
         if (tbtHwTable[i].VendorId == vendorId &&
-            tbtHwTable[i].DeviceId == deviceId) {
+            tbtHwTable[i].DeviceId == deviceId &&
+            ((tbtHwTable[i].Flags & TBT_HW_MAC_ONLY) == 0 ||
+             (classCode & 0xFFFF00UL) == 0x088000UL)) {
+            /* Light Ridge and Cactus Ridge 4C by class 0880 as well, as
+             * Linux matches them: their bridges carry the same id. */
             return &tbtHwTable[i];
         }
     }
@@ -348,7 +411,7 @@ static ULONG tbtHwRead(const TBT_HOST *host, ULONG off)
 VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
                  const TBT_HOST *host,
                  BOOLEAN platformReady,
-                 BOOLEAN apple,
+                 ULONG subsystem,
                  BOOLEAN forceSoftware,
                  PTBT_HW_SELECTION out)
 {
@@ -365,12 +428,18 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
     out->Route = TBT_SW_ROUTE_NONE;
     out->Experimental = FALSE;
     out->Forced = FALSE;
+    out->TbtHostRouter = 0;
 
     if (hw == NULL || !platformReady) {
         tbtHwInert(out, TBT_INERT_PLATFORM, host);
         return;
     }
-    if (apple) {
+    if ((hw->Flags & TBT_HW_MAC_ONLY) != 0 && subsystem != TBT_HW_SUBSYS_TBT1) {
+        tbtHwInert(out, TBT_INERT_NOT_MAC, host);
+        return;
+    }
+    if ((hw->Flags & TBT_HW_MAC_ONLY) == 0 &&
+        TbtHwIsApple(subsystem & 0xFFFFUL) && (hw->Flags & TBT_HW_MAC_HOST) == 0) {
         tbtHwInert(out, TBT_INERT_APPLE, host);
         return;
     }
@@ -380,6 +449,40 @@ VOID TbtHwSelect(const TBT_HW_PROFILE *hw,
         TBT_HI_CAPS_PATHS(out->Caps) > TBT_HI_CAPS_PATHS_MAX) {
         tbtHwInert(out, TBT_INERT_NOT_DECODING, host);
         return;
+    }
+
+    /* Record 22 section 19.3: a Mac's Thunderbolt host. XhciCmMode 3 is
+     * refused (decision U1). Light and Cactus Ridge have no ICM; on Falcon,
+     * Alpine and Titan Ridge a valid firmware status with the ICM enable
+     * clear admits the profile, set keeps the ICM's admission below, and no
+     * valid read is inert. This driver never starts or resets the ICM. */
+    if ((hw->Flags & TBT_HW_MAC_ONLY) != 0 ||
+        ((hw->Flags & TBT_HW_MAC_HOST) != 0 && TbtHwIsApple(subsystem & 0xFFFFUL))) {
+        if (forceSoftware) {
+            tbtHwInert(out, TBT_INERT_FORCED_UNSUPPORTED, host);
+            return;
+        }
+        if ((hw->Flags & TBT_HW_MAC_HOST) != 0) {
+            fw = tbtHwRead(host, TBT_ICM_FW_STATUS);
+            out->FwStatus = fw;
+            tbtHwLog(host, "tbt.hw.fw-status", fw);
+            if (fw == 0xFFFFFFFFUL) {
+                tbtHwInert(out, TBT_INERT_NOT_DECODING, host);
+                return;
+            }
+        } else {
+            fw = 0;
+        }
+        if ((fw & TBT_ICM_FW_ICM_ENABLED) == 0) {
+            out->Outcome = TBT_SEL_SOFTWARE;
+            out->Route = TBT_SW_ROUTE_TBT_HOST;
+            out->TbtHostRouter = TbtHwTbtHostRouter(hw->DeviceId);
+            /* Test (d) here is the host router's; a Thunderbolt host
+             * interface predates the USB4 versions [unread]: logged. */
+            tbtHwLog(host, "tbt.hw.nhi-version", TBT_HI_CAPS_VERSION(out->Caps));
+            tbtHwLog(host, "tbt.hw.software-cm", TBT_SW_ROUTE_TBT_HOST);
+            return;
+        }
     }
 
     /* No firmware CM by identity (decision B'1): admitted once (b), the

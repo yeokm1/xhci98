@@ -1,6 +1,14 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 49, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61 and
+Status: revision 51, 2026-10-31 (roadmap-usb4 task 45.54, the owner's
+decisions of that day: fourteen more never-asked values in section 8.1's
+table, and on 98 SE and ME a controller the run installs a target of
+the values, section 8.2);
+revision 50, 2026-10-30 (roadmap-usb4 task 45.46, the owner's
+decision of that day: the ASM4242's USB4 router named by an id line of its
+own in both NHI INFs and by no FriendlyName, the one 3.3.0.0 wrote cleared
+at an update, section 5.13.9);
+revision 49, 2026-10-27 (roadmap-usb4 tasks 44.60 and 44.61 and
 the owner's decision of that day on `8086:0F35`: the uninstall's
 connection-manager warning, like record 26's Add/Remove Programs name,
 read on 98 SE and ME too, by the two drivers' files, section 9.1; the
@@ -474,7 +482,7 @@ program around them, in the shape `XHCICLN` already has.
 <package>\INSTALL.BAT              the command line's entry point
 <package>\release-x86\ ...         unchanged: the drivers and their INFs
 <package>\release-x64\ ...
-<package>\debug-x86\, debug-x64\
+<package>\debug-x86\, debug-x64\     up to 3.3.0.0 (the debug flavour, retired by task 45.45)
 <package>\tools\xhciinst\XHCIINST.EXE   32-bit
 <package>\tools\xhciinst\XHCIIN64.EXE   x64
 <package>\tools\xhciinst\readme.txt, NOTICE.TXT
@@ -539,8 +547,9 @@ arguments on:
   to `AMD64`: `XHCIIN64.EXE`, `release-x64`, the arguments passed with
   `%*`.
 - `Windows_NT` otherwise: `XHCIINST.EXE`, `release-x86`.
-- `/debug` among the arguments: the `debug-` directory instead, which the
-  tool says is for troubleshooting only.
+- `/debug` among the arguments chose the `debug-` directory until
+  roadmap-usb4 task 45.45 retired the debug flavour; `INSTALL.BAT` no
+  longer reads it, and the tool refuses it as an unknown switch.
 
 The batch file is ASCII with CRLF endings (`.gitattributes` holds `*.BAT`
 to CRLF; MS-DOS 7.1 loses `goto` labels in LF files), and `make-release.ps1`
@@ -624,6 +633,12 @@ the three present is refused.
 
 ### 4.2 "Unpacked correctly"
 
+From `3.4.0.0` the package's drivers are laid out by Windows family
+(`98-me\`, `nt-x86\`, `nt-x64\`): design record 36 sections 6.2 to 6.4
+amend this section's file reads and refusals, where the engine reads each
+file in the download (its source map) and which family folder it reads
+(`/dir`); the local copy keeps the flat shape described here.
+
 Before anything is read from the system, the tool refuses (exit 1) unless:
 
 1. its own path (`GetModuleFileName`) ends in `\tools\xhciinst\<its name>`,
@@ -653,10 +668,11 @@ Before anything is read from the system, the tool refuses (exit 1) unless:
    equals the package version - an older `.sys` beside a current INF is
    refused - and, for the images that carry one (`xhci98.sys`,
    `xhciuas.sys`), whose `XHCI98_FLAVOUR_*` marker is exactly one and is the
-   directory's flavour (`RELEASE` in `release-`, `DEBUG` in `debug-`): the
-   marker `scripts\check-flavour-marker.ps1` reads at every build, so a
-   release and a debug binary swapped between directories, or a `qemu`
-   build, is refused.
+   directory's flavour (`RELEASE` in `release-`; `DEBUG` in `debug-` until
+   roadmap-usb4 task 45.45 retired that flavour, since when only a
+   `release-` directory is taken): the marker
+   `scripts\check-flavour-marker.ps1` reads at every build, so a debug or
+   `qemu` build in a `release-` directory is refused.
 
 ### 4.3 Mixing architectures
 
@@ -1941,10 +1957,12 @@ in the description's place (read on 98 SE below; on NT
 other case: `xhcicm.inf` already carries a line per NHI id beside its class
 line (record 21 section 3.3), so its names are those lines' own
 descriptions, one `[Strings]` entry per product, and no FriendlyName is
-written for such an NHI. An NHI the class line alone matches and a
-second table names (`instNhiFnNames`, task 44.55: the ASMedia ASM4242,
-section 5.13.8) is named by the FriendlyName, as a controller is, since
-an id line of its own would change its rank. A description is no input to the ranking - a driver's
+written for such an NHI. Up to `3.3.0.0` one NHI the class line alone
+matched, the ASMedia ASM4242's, was named by the FriendlyName from a
+second table (`instNhiFnNames`, task 44.55, section 5.13.8), to leave
+its match as it was; since task 45.46 it has a line of its own, which
+makes its match its own id, ahead of the class, and changes no system's
+choice of driver (section 5.13.9). A description is no input to the ranking - a driver's
 rank comes from which of the device's ids the line matched and where that
 id stands in its list, then the signature, date and version (Microsoft,
 "How Windows Ranks Drivers"; on 98 SE and ME the setup engine's `DRIVER_NODE` rank, "0 is the most compatible", which record 27 section 5 reads, is the match's too) - so a
@@ -2152,12 +2170,10 @@ both NHI INFs; `test_inst` holds every model line of `xhcicm.inf` and
 `xhcicm-amd64.inf` to the table string for string, and the gate's
 `CM-DESC` holds each id to its product's token. The second table,
 `instNhiFnNames` (task 44.55), holds the NHIs the class line alone
-matches that are named by the FriendlyName (section 5.13.4), today the
-ASMedia ASM4242 (`1B21:2425`, `xHCI98 USB4 Router (ASMedia ASM4242)`);
-`test_inst` holds that no NHI INF line binds one of its ids and that no
-id is in both tables. On 98 SE and ME its Properties title shows the
-class line's `xHCI98 USB4 Router`, as an xHCI controller's did before
-section 5.13.7 (an id line would be the rank change the owner ruled out).
+matches that were named by the FriendlyName (section 5.13.4), the ASMedia
+ASM4242 (`1B21:2425`, `xHCI98 USB4 Router (ASMedia ASM4242)`), up to
+`3.3.0.0`. Since task 45.46 that router has a line of its own and a row
+of the first table, and the second table is gone (section 5.13.9).
 
 #### 5.13.4 The reconciliation
 
@@ -2170,9 +2186,10 @@ and a machine updated by hand through Have Disk and then given to the
 installer is named all the same. On 98 SE and ME it runs before the run
 opens Device Manager. It runs again at the end of the uninstall, before its
 records go. It scans the devices again (after the run's last use of its
-plan) and, for each xHCI controller, each NHI of `instNhiFnNames` (the
-driver of "ours" then `xhcicm`, task 44.55) and each instance the record
-names, takes `inst_name_action`'s decision (`inst_core.c`, the host suite's
+plan) and, for each xHCI controller, each USB4 NHI (the driver of "ours"
+then `xhcicm`; task 44.55, and since task 45.46 an NHI has no table name
+here, so only a name recorded for it is cleared, section 5.13.9) and each
+instance the record names, takes `inst_name_action`'s decision (`inst_core.c`, the host suite's
 vectors):
 
 | The controller | Its FriendlyName now | Done |
@@ -2338,7 +2355,8 @@ no rank.
 - **The router: no change of rank.** `xhcicm.inf` and `xhcicm-amd64.inf`
   are unchanged: the ASM4242's NHI is matched by the class line alone, as
   before, and named as the xHCI controllers are, by the FriendlyName the
-  installer writes (`instNhiFnNames`, sections 5.13.3 and 5.13.4); a hand
+  installer writes (`instNhiFnNames`, sections 5.13.3 and 5.13.4; until
+  task 45.46, section 5.13.9); a hand
   install from the INF shows the class line's `xHCI98 USB4 Router`, and
   on 98 SE and ME the Properties title does too. `names_reconcile` takes
   the NHIs of that table beside the controllers, with `xhcicm` as the
@@ -2370,6 +2388,68 @@ no rank.
   Manager's list and the Properties title, section 5.13.7) and on 7 x86,
   the router's (the list; the title the plain name on 98 SE and ME), and
   `qemu-xhci`'s name unchanged.
+
+The router's FriendlyName of this section gave way to an id line of its
+own in `3.4.0.0` (section 5.13.9).
+
+#### 5.13.9 The router's own line (task 45.46; revision 50)
+
+The owner, 2026-10-30: the ASM4242's USB4 router is named by an INF line
+of its own, as every other NHI the table names is, so that the INF itself
+names it, a hand install included, and the installer writes no name for
+it.
+
+- **The line.** `%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425` (and `Cm.Dev6`)
+  in every models section of `xhcicm.inf` and `xhcicm-amd64.inf`, after
+  AMD's lines and before the class line, `U4AsDesc` = `xHCI98 USB4 Router
+  (ASMedia ASM4242)` (36 characters). The form is the other NHI lines'
+  plain `VEN&DEV`. `PCI\VEN_1B21&CC_0C0340`, which every system lists as a
+  compatible id, was not taken: it would give every ASMedia USB4 host the
+  ASM4242's name (the coordinator's decision, 2026-10-30).
+- **The table.** `src\cm\cm_vals.c` gains `cmAsmNhi`, one row, `2425` at
+  `CM_PROFILE_USB4`, the profile its class `0C0340` already gave it, so
+  `CmProfileFor` answers the same for that device. The gate's `CM-IDLIST`
+  reads the ASMedia table beside Intel's and AMD's, `CM-ID` admits vendor
+  `1B21` on an NHI line, `CM-DESC` holds the line to `U4AsDesc`, and its
+  self-tests gain one mutation per rule (the line removed, the line under
+  the plain `U4Desc`; `CM-ID`'s own mutation now names vendor `10EC`).
+- **The match gets closer; the choice does not.** Before, the router
+  matched by `PCI\CC_0C0340` alone, the last of the device's compatible
+  ids. Now it matches by `PCI\VEN_1B21&DEV_2425`, the device's own id,
+  which every system lists before the class: as a compatible id where
+  the device has a subsystem id, as the ASM4242's NHI does (`24211B21`;
+  read on the 98 SE guest, `runs/run-45.md`, "45.46 and 45.50"; and on 10
+  for `PCI\VEN_8086&DEV_15BF`, record 21 section 3.6), and as a hardware
+  id where it has none (`runs/run-39.md`, 39-0.3, a port with subsystem
+  `00000000`). So this INF's rank for the router gets better or stays in
+  its class on every system, never worse.
+  Which driver Windows ranks first still does not change: no other driver
+  for this NHI exists for 98 SE, ME, 2000, XP, Vista or 7, so this INF was
+  already the only candidate there. On 8 to 11, any other driver for it
+  is signed by Microsoft or under a vendor's attestation, and the
+  signature score outranks the identifier score whatever id this INF
+  matches (record 21 section 3.6; this package's x64 catalog is signed by
+  the project's test certificate). Whether 10 x64 carries a driver of its
+  own for the router is read in the legs below.
+- **The installer.** `instNhiFnNames` and `inst_nhi_fname` are gone. The
+  row joins `instNhiNames`, so `test_inst`'s `names_inf` holds both NHI
+  INFs' line to it, and XHCITR names the router from it as before
+  (section 5.13.5). `names_canon` gives an NHI no name any more. The
+  reconciliation still takes the NHIs (`names_dev`), so the FriendlyName
+  `3.3.0.0`'s installer wrote and recorded on an ASM4242 router is cleared
+  by an update (the table's "id no longer in the table, the one
+  recorded" row), and its record forgotten. A name the user gave stays.
+  The update reinstalls `xhcicm` on the router, whose version is older, so
+  its `DeviceDesc` becomes the line's string. On 98 SE and ME that string
+  is now the Properties title as well (section 5.13.7).
+- **The documents.** Record 21 section 3.3's table and README's
+  "Thunderbolt 3 and USB4" table name the router by its line. The release
+  notes' cell already reads `xHCI98 USB4 Router (ASMedia ASM4242)` with no
+  installer phrase.
+- **The reading** (`runs/run-45.md`, "45.46"): on q35 with the emulated
+  ASM4242, the driver Windows chooses for the router and the name it
+  shows, on 98 SE, one of 2000 to 7, and the 10 x64 base; there, whether
+  Windows has a driver of its own for the NHI.
 
 ### 5.14 The connection manager off the boot path (roadmap-usb4 tasks 44.32 and 44.12; owner, 2026-10-25)
 
@@ -2891,7 +2971,7 @@ second-guessed (it may be an Update Driver's file waiting for its swap).
 | `/faster`, `/nofaster` | (revision 35) the computer's choice of XHCITR's "can run faster" notice, on or off (section 9.5 item 7; record 25 section 7.7); refused together, and with `/uninstall`, `/devices` and `/eject` |
 | `/restage` | Vista to 10: replace a stored package the trap holds (section 5.7) |
 | `/uninstall` | section 9 |
-| `/debug` | `INSTALL.BAT` only: the `debug-` flavour directory |
+| `/debug` | withdrawn with the `debug-` flavour directory (roadmap-usb4 task 45.45): refused |
 | `/nopause` | do not wait for Enter before closing |
 | `/log path` | write the log there |
 | `/devices` | the connected Thunderbolt and USB4 devices and the Windows devices behind them; reads only (design record 24) |
@@ -3055,6 +3135,20 @@ user-visible effect, off or on by default for a reason the user can judge
 | `XhciCmUsb3Tunnel` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: build USB3 tunnels |
 | `XhciCmLaneBonding` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1 | USB4: bond the two lanes of a link |
 | `XhciCmPreOsCleanup` | `xhcicm.inf`, the NHI's | never (owner, 2026-10-15) | - | 0, 1, 2 | USB4: tunnels found at start kept (0), cleaned where they do not verify (1), or all cleaned (2) |
+| `XhciImodInterval250ns` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 10 to 4000 | the interrupt moderation interval, in 250 ns units |
+| `XhciLinkKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a UAS drive as it was when its SuperSpeed link drops and recovers |
+| `XhciResumeKeep` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | keep a root-port device as it was after a resume that started the controller afresh |
+| `XhciUsb2Bos` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | ask a USB 2.1 device at High or Full Speed for its BOS descriptor |
+| `XhciLogVerbosity` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 4 | the driver's log |
+| `XhciLogDebugView` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | the driver's log also to DebugView |
+| `XhciPollIdleMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 1 to 5000 | while polling, the idle period, in ms |
+| `XhciPollActiveMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 1 to 5000 | while polling, the shortest period, in ms (held to `XhciPollIdleMs`) |
+| `XhciFirstEnumWaitMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 30000 | the longest wait for a hub's first report, in ms |
+| `XhciFirstEnumPortMs` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0 to 30000 | the longest one port may hold it, in ms (held to `XhciFirstEnumWaitMs`) |
+| `XhciMaxTransferKB` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 64 to 2048, a multiple of 4 | the largest UAS command, in KiB |
+| `XhciWideMap` | `xhci98.inf`, the controller's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 (read on 2000 and later; the window shows it greyed on 98 SE and ME, as `XhciPollFineTimer`) | two pieces of a large bulk transfer at once |
+| `XhciCmRingInterrupt` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 on 2000 and later; refused on 98 SE and ME, where the window shows it greyed | the controller's interrupt for a plug or removal |
+| `XhciCmUsb4V2` | `xhcicm.inf`, the NHI's | never (task 45.54, the owner 2026-10-31; the window's Advanced) | - | 0, 1 | USB4: a version 2 router run as one (a bench switch: leave it at 1) |
 
 Not asked: the log values (`SNAPON.BAT` and `SNAPOFF.BAT` own them, with a
 restart the user is told about), the fourteen Linux quirk values (record
@@ -3074,6 +3168,16 @@ Name=Value` only; and, by the owner's decision of 2026-10-19,
 `XhciFastPollFsLs` (tuning for hidusbf, outside the specification at Low
 and Full Speed), settable with `/set Name=Value` and the window's
 "Advanced..." only. Any of them stays settable by hand, as today.
+
+Revision 51 (roadmap-usb4 task 45.54, the owner's decision of
+2026-10-31): the log values, the poll periods, the moderation interval,
+`XhciMaxTransferKB`, `XhciWideMap` and `XhciFirstEnum*` join the table
+above as never-asked rows, with `XhciLinkKeep`, `XhciResumeKeep`,
+`XhciUsb2Bos`, `XhciCmRingInterrupt` and `XhciCmUsb4V2`, settable with
+`/set Name=Value` and the window's "Advanced..." (record 26 section
+5.4.1). The Linux quirk values, `XhciTolerance` and the other hardware
+quirks, `XhciCommandCheck`, `XhciCmTunnelBridge` and
+`XhciCmAsmediaPcie7Credits` stay out of it.
 
 Each value's default is taken from its INF's `AddReg` line, not from the
 table; a value the INF does not write is not asked, and the host suite
@@ -3104,8 +3208,12 @@ there; `/set` may still set any value, within the system's allowed set:
   service is not a target; an `xhcicm.inf` value belongs to the NHIs'
   keys, never a filtered port's. A target is a device that will be bound
   to the value's driver after the run - installed or updated by it, or
-  already current or newer. On 98 and ME that is only a device already
-  bound (section 6.5).
+  already current or newer. On 98 and ME that was only a device already
+  bound (section 6.5) until revision 51 (roadmap-usb4 task 45.54, the
+  owner 2026-10-31): a controller with no driver that the run installs
+  is a target there too, as on NT, since every value is written
+  machine-wide (record 26 section 5.4) and needs no bound device; a 98 SE
+  or ME first install so asks `XhciSilentInstall`.
 
 The applicability rule is a pure function of the value, the system and the
 present ids, and is host-tested row by row (section 10).

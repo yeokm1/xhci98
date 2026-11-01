@@ -18,18 +18,36 @@
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define UAS_FLAVOUR_NAME "XHCI98_FLAVOUR_QEMU"
-#elif defined(XHCI_FLAVOUR_DEBUG)
-#define UAS_FLAVOUR_NAME "XHCI98_FLAVOUR_DEBUG"
 #elif defined(XHCI_FLAVOUR_RELEASE)
 #define UAS_FLAVOUR_NAME "XHCI98_FLAVOUR_RELEASE"
 #else
-#error "no build flavour was defined. src/uas/sources derives XHCI_FLAVOUR_RELEASE, _DEBUG or _QEMU from BUILD_ALT_DIR; build through scripts\build-driver.cmd."
+#error "no build flavour was defined. src/uas/sources derives XHCI_FLAVOUR_RELEASE or _QEMU from BUILD_ALT_DIR (the debug flavour was retired with task 45.45); build through scripts\build-driver.cmd."
 #endif
 
 static volatile const char UasFlavourMarker[] = UAS_FLAVOUR_NAME;
 static volatile const char UasVersionString[] = "xhciuas " XHCI_VER_STR;
 
 PDRIVER_OBJECT UasDriverObject;
+
+/*
+ * An event wait that returns only once the event is signalled. Windows 98
+ * can return from KeWaitForSingleObject unsatisfied (0xFFFFFFFF,
+ * docs/usb-xhci-info/win98-wdm.md), and every caller here goes on to
+ * free, delete or reuse what the signaller still holds, so any other
+ * return is waited again after a millisecond. No timeout: each caller's
+ * event is one a completion or a rundown sets. IRQL: PASSIVE_LEVEL.
+ */
+VOID UasWaitEvent(PKEVENT event)
+{
+    LARGE_INTEGER due;
+
+    while (KeWaitForSingleObject(event, Executive, KernelMode, FALSE,
+                                 NULL) != STATUS_SUCCESS) {
+        due.LowPart = (ULONG)-10000L;
+        due.HighPart = -1;
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+    }
+}
 
 VOID UasZero(PVOID p, ULONG n)
 {
@@ -205,6 +223,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return STATUS_UNSUCCESSFUL;
     }
     UasDriverObject = DriverObject;
+    UasPoolInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {
         DriverObject->MajorFunction[i] = uasDispatchOther;
     }

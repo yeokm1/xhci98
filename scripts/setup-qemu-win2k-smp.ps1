@@ -65,7 +65,7 @@ powershell -ExecutionPolicy Bypass -File scripts\setup-qemu-win2k-smp.ps1 -Accel
 param(
     [string]$VmDir = "",
     [string]$LocalScriptDir = "",
-    [string]$Win2KIso = "D:\isos\win2ksp4.ISO",
+    [string]$Win2KIso = "",
     [string]$Win2KUsbdSys = "",
     [string]$DiskSize = "4G",
     [string]$QemuBinDir = "",
@@ -167,7 +167,7 @@ Write-Ok "VM directory: $VmDir"
 Write-Ok "Local script directory: $LocalScriptDir"
 Write-Ok "Transfer (VVFAT) directory: $xferDir (shared read-only with the 2b VM)"
 
-if (-not (Test-Path -LiteralPath $Win2KIso)) {
+if (-not $Win2KIso -or -not (Test-Path -LiteralPath $Win2KIso)) {
     Write-Warn "Win2000 ISO not found at: $Win2KIso (pass -Win2KIso to override)."
 } else {
     Write-Ok "Win2000 ISO: $Win2KIso"
@@ -185,6 +185,11 @@ if ($CreateDisk) {
             Write-Warn "Skipping $diskImage because qemu-img.exe is not available."
         } else {
             & $qemuImg create -f qcow2 $diskImage $DiskSize | Out-Host
+            # As setup-qemu.ps1 reads it: a failed create once printed "Created"
+            # for an image that does not exist (2026-10-29).
+            if ($LASTEXITCODE -ne 0) {
+                throw "qemu-img create failed (exit code $LASTEXITCODE) for $diskImage, so no disk image was created."
+            }
             Write-Ok "Created $diskImage ($DiskSize)"
         }
     } else {

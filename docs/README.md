@@ -32,7 +32,7 @@ source comments, scripts, and other docs use these same locations.
   onward, the successor host controller driver's, in
   [its third](contributing/roadmap-hcd.md); the USB4 and Thunderbolt 3
   connection-manager work, Phases 39 to 41 (`3.0.0.0`), 42 (`3.1.0.0`),
-  43 (`3.2.0.0`) and the open Phase 44 (`3.3.0.0`), is in
+  43 (`3.2.0.0`), 44 (`3.3.0.0`) and the open Phase 45 (`3.4.0.0`), is in
   [its fourth](contributing/roadmap-usb4.md).
 - [Source files](contributing/source-files.md) - what every file in `src/` is
   for, and which belong to the host-tested pure core.
@@ -102,6 +102,27 @@ source comments, scripts, and other docs use these same locations.
   read to Windows' own mouse driver; a 9x function with no interrupt
   started on its memory alone; the connection manager off the boot path;
   and the free driver pack at `usb-wdm-free` 0.1.4.
+- [Phase 45 record](contributing/runs/run-45.md) - release `3.4.0.0`'s
+  readings, one section per task: the docks on 2000 and XP (45.12) and
+  their unplug with an input device on the dock's own USB controller
+  (45.35); devices kept across a resume that starts the controller afresh
+  (45.23); a USB Audio 2.0 function kept from Windows' USB Audio 1.0
+  driver (45.24) and a device with several configurations split (45.34);
+  XHCIPFW as a root-bus filter on 32-bit 8 and 8.1 (45.9); 98 SE's and
+  ME's staging, page, wizard question, second controller and power cut
+  (45.5, 45.7, 45.8, 45.32, 45.38); a held shared IRQ on 98 SE (45.33);
+  the kept child's prototype and the connection manager's unload under
+  Driver Verifier (45.11, 45.31); the chains' first legs (45.13, 45.16,
+  45.17, 45.37) and the minimal chain behind a USB4 host (45.15); USB4
+  version 2 links and Gen 4 link recovery (45.20, 45.56); Thunderbolt
+  networking (45.59); a UAS drive's pass-through, SMART and Safely Remove
+  (45.52, 45.61); a device's identity kept across a re-enumeration
+  (45.40) and a UAS drive across a link's warm reset (45.41); the
+  installer's Advanced lists, Thunderbolt and USB4 page and Help (45.54,
+  45.60, 45.66); one build for everyone and the download by Windows
+  family (45.45, 45.44); Driver Verifier on 10 x64 (45.63); the faster
+  cut build and the INF gate's self-tests (45.3, 45.30); and the
+  readings still open (45.39) or closed as a known issue (45.36).
 - The post-release matrix reports, one pair per release (four from `1.1.0.0`
   on, which added XP x64 and Windows 7 x86 clones), produced by
   `run-matrix.ps1 -PostRelease` on freshly installed guests and read against
@@ -121,8 +142,10 @@ source comments, scripts, and other docs use these same locations.
   how the reading channel works end to end: route, wire format, the
   kernel-side ordering rules, the decode chain, the operating traps, and what
   was executed on which target. It ships in every flavour, switched off by
-  default behind the `XhciLogVerbosity` registry value, and the release
-  carries its `XHCISNAP` host tool. This document is the
+  default behind the `XhciLogVerbosity` registry value; its host-side reader
+  is `XHCITR /snapshot` since `3.1.0.0` (`XHCISNAP` up to `3.0.0.0`,
+  retired by roadmap-usb4 task 42-A.4;
+  [the snapshot reader](contributing/snapshot-reader.md)). This document is the
   as-built "what"; the "why" is
   [design record 08](contributing/design/08-build-flavours-and-the-log-channel.md),
   and each fact has one owner between the two. Its section 11 is the route
@@ -204,6 +227,7 @@ turn out to need.
 | Phase 42 (the windowed installer, the uninstall from Add/Remove Programs, the Windows 98 SE and ME device install, `XHCISNAP` retired, the safe-removal mark across a stack rebuild, the connection-manager follow-ups, and the `3.1.0.0` cut) | `docs/contributing/roadmap-usb4.md` (Phase 42's tasks and the decisions table); `docs/contributing/design/23-install-upgrade-tool.md` (the install tool, its routes per system, its value table and its uninstall); design record 26 (the windowed installer) and design record 27 (the Windows 98 SE and ME device install through the 16-bit setup engine's documented device installer); design record 25 (XHCITR, which takes over from `XHCISNAP`); design record 21 sections 7.2 and 7.4 (the Stor98 channel's 9x half and the safe-removal mark across a stack rebuild, revised 2026-10-18) and design record 24 (the device viewer and eject, revision 6); design record 22 sections 7.7 and 10 (the USB4 host's recovery after loss, revised 2026-10-18, and the channel's USB4 half); design record 28 (a 9x function with no interrupt) | `xhciinst\README.TXT` and `xhcisnap\README.md` (the tools as they ship in `3.0.0.0`); the Windows 98 DDK's `SETUPX` documentation (`docs/references/README.md`) |
 | Phase 43 (the cut's text checks, faster emulator legs, NUSB 3.3's 98 SE storage files and the three downloads, the unsafe-unplug and "can run faster" notices, the 9x Stor98 channel and `S98VSD.VXD`, Windows 8, 8.1 and 10, **and the `3.2.0.0` cut**) | `docs/contributing/roadmap-usb4.md` (Phase 43's tasks and the decisions table, "Phase 43"); `docs/contributing/runs/run-43.md` and `run-43-24.md` (every task's readings; the Windows 8 to 10 installer legs); design record 26 sections 6.5 (the 98 SE storage row) and 6.7 (the three downloads and the other USB drivers' pages); design record 13 sections 6.12, 6.13 and 6.14 (what Windows 8, 8.1 and 10 ask of the bus) and section 14 (a cancelled TD behind the head); design record 23 sections 5.10, 5.12 and 5.13 (the connection manager's start type, Windows 10's signature policy, the controller names); design record 19 section 3a (the catalogs); design record 21 section 7.2 (the 9x Stor98 channel and eject); design record 25 sections 7 and 16 (the red tray icon and the 98 SE pop-up); design record 30 (`S98VSD.VXD`); design record 29 (XHCIPERF, kept as a developer diagnostic) | `docs/contributing/legal-provenance.md` section 5 (NUSB 3.3's files, the one Microsoft-file exception); `docs/contributing/build-and-test.md` (the release matrix and the cut's checks) |
 | Phase 44 (Stor98 for tunnelled drives only, the connection manager off the boot path, the hibernate resume, the installer's pages, the emulator and virtual-machine legs owed, **and the `3.3.0.0` cut**, its bench after it) | `docs/contributing/roadmap-usb4.md` (Phase 44's tasks and the decisions table, "Phase 44"); `docs/contributing/runs/run-44.md` (every task's readings); design record 31 (Stor98 for tunnelled drives only, 44.2 and 44.3); design record 23 section 5.14 (the connection manager off the boot path and the boot-driver gate, 44.32 and 44.12), section 5.13.7 (the 98 SE and ME Properties title, 44.5), section 6.6 (a leftover `xhci98.tmp`, 44.13) and section 8.5.1 (Intel's Thunderbolt driver, 44.28); design record 22 section 9.4 (a tunnel an earlier instance built, rebuilt across a hibernate, 44.26); design record 25 sections 17 to 19 (the USB Tree's generation line, version warning and storage transport, 44.9, 44.8 and 44.35); design record 26 sections 5.1 (the Welcome page, 44.7), 5.3.3 (Secure Boot and memory integrity, 44.25), 6.5.2 (the storage row, 44.37) and 6.7.12 (the two driver-pack pages and the two packages staged on 98 SE and ME, 44.10 and 44.11); design record 28 section 12 (a 9x function with no interrupt, the memory-only form, 44.30); design record 13 section 6.14.7 (what Windows 10 loses under `xhci98.sys`, 44.24); design record 17 section 4.13 (44.33); `docs/contributing/runs/run-43.md` and `run-43-24.md` (what each 43 item left) | `usb4-emu`'s `docs/XHCI98-HANDOFF.md` (the root hot-plug modes and `device-model=asm2464`, 44.15 to 44.18); `build-and-test.md` (the release matrix and the window legs, 44.19 and 44.20) |
+| Phase 45 (hot-added docks on 2000 and XP and daisy chains, the kept child, what `3.3.0.0` left, **and the `3.4.0.0` cut**, its bench after it; open) | `docs/contributing/roadmap-usb4.md` (Phase 45's tasks and the decisions table, "Phase 45" and "Phase 45 additions"); `docs/contributing/runs/run-45.md` (every task's readings); design records 33 (docks, 45.12) and 34 (chains, 45.13 to 45.18; section 3.9 the chain action); design record 31 sections 4.8 and 4.9 (the kept child, 45.11); design record 17 section 4.13.6 and design record 22 section 10.5 (a tunnel read back closed as the proof, 45.35); design record 20 sections 4.3.1 to 4.3.3 (devices kept across a resume, 45.23); design record 13 sections 10.7.2 and 10.8 (a UAC 2.0 function's compatible ids, 45.24; several configurations, 45.34); design record 32 section 11.5 (the root-bus filter, 45.9); design record 30 section 13.7 (45.10); design record 26 sections 5.3.4 (45.28), 5.5 (`XhciCmBridgeReq`'s row), 6.5.6 (45.5), 6.7.13 (45.7, 45.8) and 6.7.14 (45.6); design record 27 section 6 (45.32) and sections 4.1 and 5.3 (45.38); design records 21 section 4.5 and 22 section 5.4 (ring interrupts, 45.22), 22 (version 2 links and Gen 4 link recovery, 45.20, 45.56); design record 35 (Thunderbolt networking, 45.59); design record 36 (the download by Windows family, 45.44); design record 13 sections 10.7 (identity across a re-enumeration, 45.40), 16 (UAS pass-through and SMART, 45.52) and 17 (a UAS drive in Safely Remove, 45.61); design record 08 section 14 (one build, 45.45); design record 21 sections 7.6 and 7.7 (a dock's xHCI started by the mark service, 45.47; the restart's safe-removal listing, 45.62); design record 26 sections 5.3.5 and 5.10 (the Thunderbolt and USB4 page, 45.60; Help, 45.66) | The sections of the records each task names; `build-and-test.md`, "A faster gated build" (45.3) |
 | Any debugging or real-hardware qualification | `docs/contributing/lessons.md`; `docs/contributing/failure-diagnosis.md` | The phase-specific sources above |
 
 When a phase checkpoint fails or goes silent, read
@@ -228,23 +252,33 @@ third-party documents remain untracked in `docs/references/`.
 
 ## Documents that live outside `docs/`
 
-Eight trees keep their documentation beside the thing it describes. This index
+Nine trees keep their documentation beside the thing it describes. This index
 points at them rather than copying them, so that everything tracked is
 reachable from here or from `AGENTS.md`'s repository layout.
 
 - [`xhciqual/README.md`](../xhciqual/README.md) and
   [`xhciqual/hardware-testing.md`](../xhciqual/hardware-testing.md) - the DOS
-  qualification tool and its bare-metal field procedure; `xhciqual/results/`
-  holds one README per machine and run.
-- [`xhcisnap/README.md`](../xhcisnap/README.md) - the host-side reader for the
-  driver's log channel, and what it can and cannot get off a Windows 98 machine.
+  qualification tool and its bare-metal field procedure. Its run logs,
+  `xhciqual/results/` (one README per machine and run), are git-ignored and
+  kept only on the maintainer's disk (`AGENTS.md`, "Repository Layout"), so
+  a clone does not have them.
 - [`xhciinst/README.TXT`](../xhciinst/README.TXT) - the install, update and
   uninstall tool `INSTALL.BAT` runs, from `3.0.0.0` (roadmap-usb4 task 40.4,
   design record 23), with its Thunderbolt and USB4 device modes `/devices`
   and `/eject` (design record 24); published as the tool's `readme.txt`.
 - [`xhcitr/README.TXT`](../xhcitr/README.TXT) - the xHCI98 USB Tree, the
   graphical tree, eject and tray tool, from `3.0.0.0` (roadmap-usb4 Phase
-  41, design record 25); published as the tool's `readme.txt`.
+  41, design record 25); published as the tool's `readme.txt`. Since
+  `3.1.0.0` it is also the host-side reader of the driver's log channel,
+  `XHCITR /snapshot` (`XHCISNAP` up to `3.0.0.0`); the route's reference is
+  [the snapshot reader](contributing/snapshot-reader.md).
+- [`xhcimark/README.TXT`](../xhcimark/README.TXT) - XHCIMARK, the
+  Thunderbolt safe-removal mark service that keeps a device behind the
+  connection manager listed in "Safely Remove Hardware" across driver
+  rebuilds.
+- [`xhciperf/README.TXT`](../xhciperf/README.TXT) - XHCIPERF, the
+  developer's disk benchmark that also reads Stor98's counters, not shipped
+  (roadmap-usb4 task 43.50, design record 29).
 - [`src/stor98/README.md`](../src/stor98/README.md) - Stor98, the NVMe
   SCSI miniport the packages bundle, a BSD-3-Clause project in this tree
   since 2026-10-19 (roadmap-usb4 task 42-A.20) and built, versioned and
@@ -257,6 +291,8 @@ reachable from here or from `AGENTS.md`'s repository layout.
 - [`scripts/vm-matrix/README.md`](../scripts/vm-matrix/README.md) - the
   automated VM device matrix, its files, and its traps; its `guest/README.md`
   covers the load scripts that must run inside the guest.
+- [`scripts/bench/README.md`](../scripts/bench/README.md) - the small batch
+  files run on a bench machine or a guest rather than the build host.
 - [`releases/README.md`](../releases/README.md) and
   [`releases/history.md`](../releases/history.md) - the numbering rule and what
   each cut release changed.

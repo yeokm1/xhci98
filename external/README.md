@@ -13,19 +13,24 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 
 | Path | Upstream | Role in this project |
 |---|---|---|
-| `reactos/usbmport.h` | `sdk/include/reactos/drivers/usbport/usbmport.h` | The miniport-facing ABI header: `USBPORT_REGISTRATION_PACKET`, callback typedefs, version/flag constants. The single most important reference for Phase 3. |
-| `reactos/usbport/` | `drivers/usb/usbport/` | The port driver `xhci98.sys` plugs into: `usbport.c` (registration/takeover), `endpoint.c`, `roothub.c`, `device.c` (the SET_ADDRESS flow to intercept), `queue.c`, `iface.c`, `pnp.c`, `power.c`, plus `usbport.spec` (export list). |
-| `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for `src/xhci_dispatch.c`. |
+| `reactos/usbmport.h` | `sdk/include/reactos/drivers/usbport/usbmport.h` | The miniport-facing ABI header: `USBPORT_REGISTRATION_PACKET`, callback typedefs, version/flag constants. The single most important reference for the miniport's Phase 3. |
+| `reactos/usbport/` | `drivers/usb/usbport/` | The port driver the `1.x.x.x` miniport `xhci98.sys` plugged into: `usbport.c` (registration/takeover), `endpoint.c`, `roothub.c`, `device.c` (the SET_ADDRESS flow to intercept), `queue.c`, `iface.c`, `pnp.c`, `power.c`, plus `usbport.spec` (export list). |
+| `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for the miniport's `src/xhci_dispatch.c`, which left the tree with the miniport (its last sources are on branch `1.2.0.0`). |
 | `reactos/usbohci/`, `reactos/usbuhci/` | `drivers/usb/usbohci/`, `usbuhci/` | USB 1.1 miniports; secondary templates showing which parts vary by controller type. |
 | `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover); and, as single files from elsewhere in the tree, `include/linux/pci_ids.h` (the vendor and device constants) and `drivers/usb/core/message.c` (`usb_set_interface`'s rollback), copied flat as `pci_ids.h` and `message.c` (2026-10-14, design record 20). |
 | `freebsd/` | `sys/dev/usb/controller/` | Secondary. Clean xHCI register-sequence reference: `xhci.c`, `xhci.h`, `xhcireg.h`, `xhci_pci.c`. |
 | `linux/thunderbolt/` | `drivers/thunderbolt/` (all 40 files), plus `include/linux/thunderbolt.h` copied in as `include-linux-thunderbolt.h` | The Thunderbolt 3 and USB4 work (`roadmap-usb4.md`, design record 21; owner, 2026-10-15): NHI and bridge ids (`nhi.h`, `pci.c`), the ICM message set per generation (`tb_msgs.h`, `icm.c`), ring and register offsets (`nhi_regs.h`, `tb_regs.h`), control-packet framing (`ctl.c`) and quirks (`quirks.c`). Interface documentation only, cited by file and symbol; `docs/contributing/legal-provenance.md` section 3. Linux has no `include/uapi/linux/thunderbolt.h` at the pinned commit |
+| `linux/net-thunderbolt/` | `drivers/net/thunderbolt/` (all 5 files: `main.c`, `trace.c`, `trace.h`, `Kconfig`, `Makefile`), at the same pinned commit | Thunderbolt networking (`roadmap-usb4.md` task 45.59, design record 35; added 2026-10-31): `thunderbolt-net`, the USB4NET peer the legs run against - its login and logout, its `network` directory, the frame header and its Frame ID rule, what it puts on the wire, its MTU and rings (record 35 section 2.4). Facts only, cited by file and symbol; nothing adapted (`legal-provenance.md` section 3) |
 | `freebsd/thunderbolt/` | `sys/dev/thunderbolt/` (all 21 files), at its own commit (below) | A second reading for the same work: `nhi_reg.h` (register offsets and ids), `tb_reg.h`, `nhi.c`, `nhi_pci.c`, `hcm.c`, `router.c`. Interface documentation only |
 | `haiku/` | `src/add-ons/kernel/busses/usb/` | Secondary. Readable xHCI implementation: `xhci.cpp`, `xhci.h`, `xhci_hardware.h`, `xhci_rh.cpp`. |
 | `qemu/` | `hw/usb/` | The emulated controller this project's guests actually run against, read to settle what the model does and does not implement: `hcd-xhci.c`, `hcd-xhci.h`. Added 2026-09-20 for roadmap task 23.3, whose first question is whether QEMU models interrupt moderation at all. It does not - `imod` is stored, returned and migrated, and no code path consults it - so no interrupt-rate reading can come out of a guest. **This tree documents the emulator, not the hardware**: where it and `xhci-data-structures.md` disagree the spec wins, and the disagreements are themselves findings (the model resets IMOD to 0 where hardware resets it to 4000). |
 
-Split by layer (per `AGENTS.md`): ReactOS documents the upward usbport
-miniport interface; Linux documents the downward xHCI hardware. FreeBSD and
+The ReactOS rows are the miniport's: since `2.0.0.0` `xhci98.sys` is a host
+controller driver that replaces `usbport.sys` rather than plugging into it
+(`AGENTS.md`, "Project Purpose"), and the `1.2.0.0` branch keeps the
+miniport's sources. Split by layer (per `AGENTS.md`): ReactOS documents the
+upward usbport miniport interface the miniport used; Linux documents the
+downward xHCI hardware. FreeBSD and
 Haiku are secondary, kept for a second opinion on a hardware detail. Nothing
 currently rests on them: the Route String tier order they were cited for was
 settled by the controller itself in batch 7b-A (see
@@ -45,13 +50,20 @@ only and are not to be copied into `src/`:
   ABI (struct layouts, function signatures for interoperability). Write this
   project's code independently; do not paste function bodies into `src/`
   (`docs/usb-xhci-info/usbport-miniport-interface.md`, license note).
-- Linux, GPL 2.0. Reference for hardware behaviour only.
+- Linux, GPL 2.0. Reference for hardware behaviour, and for the controller
+  quirk population of design record 20 (`docs/contributing/design/20-linux-xhci-quirks.md`).
+  `legal-provenance.md` section 3 records one exception to the do-not-copy
+  rule, for Linux's xHCI controller quirks and under the conditions it
+  lists; its table of copies is empty, and nothing has been copied under it.
 - FreeBSD, BSD 2-Clause.
 - Haiku, MIT.
 - Linux `drivers/thunderbolt` and `include/linux/thunderbolt.h`, GPL-2.0
   (SPDX `GPL-2.0` or `GPL-2.0-only` in every file). Interface
   documentation for the Thunderbolt 3 and USB4 work: facts cited by file
   and symbol, no function body copied (`legal-provenance.md` section 3).
+- Linux `drivers/net/thunderbolt`, GPL-2.0 (SPDX `GPL-2.0` in `main.c`).
+  Facts for design record 35 only, cited by file and symbol, no function
+  body copied or paraphrased into `src/` or the docs.
 - FreeBSD `sys/dev/thunderbolt`, BSD 2-Clause (SPDX `BSD-2-Clause` or
   `BSD-2-Clause-FreeBSD`). The same terms.
 
@@ -62,7 +74,7 @@ Fetched at these upstream commits:
 | Repo | Commit | Date |
 |---|---|---|
 | reactos/reactos | `0298e10d5d904a0230868be8f7bdf6436d589c62` | 2026-07-18 |
-| torvalds/linux (also `drivers/thunderbolt` and `include/linux/thunderbolt.h`, fetched 2026-10-15) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | 2026-07-18 |
+| torvalds/linux (also `drivers/thunderbolt` and `include/linux/thunderbolt.h`, fetched 2026-10-15; `drivers/net/thunderbolt`, fetched 2026-10-31) | `c6859eed755df351a3978b33cb92365f9b3e8f06` | 2026-07-18 |
 | freebsd/freebsd-src | `cb325dcedfa291c9bfe350a513694df3776a17a4` | 2026-07-18 |
 | freebsd/freebsd-src, `sys/dev/thunderbolt` only | `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` | 2026-10-14 (fetched 2026-10-15) |
 | haiku/haiku | `618e42b86da9d041c995efe240af0a11329751fe` | 2026-07-18 |
@@ -137,6 +149,15 @@ git -C "$tmp/lxtb" checkout -q FETCH_HEAD
 mkdir -p linux/thunderbolt
 cp "$tmp/lxtb/drivers/thunderbolt/"* linux/thunderbolt/
 cp "$tmp/lxtb/include/linux/thunderbolt.h" linux/thunderbolt/include-linux-thunderbolt.h
+# Thunderbolt networking (design record 35, added 2026-10-31): drivers/net/thunderbolt at
+# the same commit, by raw file, copied flat into linux/net-thunderbolt/.
+R=https://raw.githubusercontent.com/torvalds/linux/c6859eed755df351a3978b33cb92365f9b3e8f06/drivers/net/thunderbolt
+mkdir -p linux/net-thunderbolt
+curl -sSfL -o linux/net-thunderbolt/main.c   "$R/main.c"    # SHA-256 a94c194c7c5417a62922164fa7deebf1604d2e7dd0eae4bcad0c695715d2c1f6
+curl -sSfL -o linux/net-thunderbolt/trace.c  "$R/trace.c"   # SHA-256 892e55352fa73aa7e0e3822bd2444b0ec2ea0dc056bf08d112bda66b62d0a80f
+curl -sSfL -o linux/net-thunderbolt/trace.h  "$R/trace.h"   # SHA-256 00556617e72cda84265feaca33aab5a3e4bdc3891d2ed53b0e2fe194b340fb5a
+curl -sSfL -o linux/net-thunderbolt/Kconfig  "$R/Kconfig"   # SHA-256 cb3131a7afb510e3bd8d4d754101c9811b56600c51c51a0dffe12671dab36af5
+curl -sSfL -o linux/net-thunderbolt/Makefile "$R/Makefile"  # SHA-256 024edbee2d9c9e65f0132d97b701e907fedff9200d1890d4b6809b314827f8a4
 git init -q "$tmp/fbtb"
 git -C "$tmp/fbtb" remote add origin https://github.com/freebsd/freebsd-src
 git -C "$tmp/fbtb" sparse-checkout set sys/dev/thunderbolt
