@@ -8083,10 +8083,12 @@ host.
 | A local `qemu` build with the log ring mirrored to port `0xE9` and the device PDOs' power, IOCTL and URB dispatches traced (diagnostics only, not committed) | `qemu` + traces | the controller FDO's D0 completed from the bus driver below with `STATUS_NO_SUCH_DEVICE` (`0xC000000E`) at DISPATCH_LEVEL; `hcdD0Done` let it go with nothing done. The device PDOs then completed their own D0s at once, the tablet's HID stack sent a class URB (function `0x1B`) to its PDO, which waited on the suspended bus, and 0x9F (3) followed (`a\w4.png`, `a\debugcon-d1.log`) |
 | The controller moved to `pcie.0` (`addr 5.0`, no root port) | `qemu` + traces | the same `0xC000000E`: not the root port's |
 | `XhciInterruptMode` 1 (the interrupt line, no message) | `qemu` + traces | the same: not the message interrupt's |
-| Windows' own `USBXHCI` on `pcie.0` (`addr 6.0`, a new instance), the same S3 | Windows' | no stop; the controller's `DEVPKEY_Device_LastArrivalDate` moved from before the sleep to 22 s after the wake, and the tablet's and stick's with it (`a\arr-u6-before.txt`, `a\arr-u6-after.txt`): after QEMU's wake reset the bus driver fails the function's D0 and reports it gone under either driver, and Windows' stack completes what it holds, so the removal and the new start run |
+| Windows' own `USBXHCI` on `pcie.0` (`addr 6.0`, a new instance), the same S3 | Windows' | no stop; the controller's `DEVPKEY_Device_LastArrivalDate` moved from before the sleep to 22 s after the wake, and the tablet's and stick's with it (`a\arr-u6-before.txt`, `a\arr-u6-after.txt`): Windows removed the controller after the wake and found it again. That the bus failed this stack's D0 too, as it fails this driver's, is inferred from the removal, not read (nothing traces Windows' stack here) |
 
-So the failed D0 is the vehicle's, as a dock's controller unplugged while
-the machine sleeps is real hardware's, and the hang is this driver's:
+So the failed D0 comes from the vehicle's wake (the controller is removed
+after it under Windows' own driver too, which the inference above ties
+to the same failure), as a dock's controller unplugged while the machine
+sleeps fails it on real hardware, and the hang is this driver's:
 with the D0 failed, every request the bus held or was sent afterwards
 waited for a D0 that never came; the HID stack's D0 waited on its
 request, and PnP's removal of the controller waited on that D0. Without
@@ -8123,7 +8125,8 @@ The package of `ac0788ad` (below) on fresh overlays, installed with
 | Leg | System, build | Steps | Result |
 |---|---|---|---|
 | c | 10 x64, release (`xhci98.sys` `f2399033...`, signed in the guest), the root-port layout above | a hibernation (made by mistake: with hibernation on, `SetSuspendState 0,1,0` hibernates) and its resume | no stop; the controller, the tablet and the UAS disk kept (their arrival times unchanged), the stick enumerated again (a Bulk-Only drive is not kept, design record 20 section 4.3.2) |
-| c | the same, hibernation off | Sleep and wake seven times (`s1`, `s2`, `v1` to `v5`), 16 MiB copied, compared and deleted twice on the stick and twice on the UAS disk before and after each (`c\cycles-rel.txt`, `c\cycles-v.txt`) | no stop; after each wake the controller, its root hub, the stick and the UAS disk "Started" (`pnputil /enum-devices /connected /class USB`), and every copy `OK` (after `s2` not read, below) |
+| c | the same, hibernation off | Sleep and wake six times to the end (`s1`, `v1` to `v5`), 16 MiB copied, compared and deleted twice on the stick and twice on the UAS disk before and after each (`c\cycles-rel.txt`, `c\cycles-v.txt`) | no stop; after each wake the controller, its root hub, the stick and the UAS disk "Started" (`pnputil /enum-devices /connected /class USB`, read after `v1` to `v5`), and every copy `OK` |
+| c | the same | a seventh, `s2`: the copies before it `OK`, the wake with no stop | incomplete, cause unknown: the copies after it never answered, the console then stopped taking keys (the display off, both processors busy in user mode) and the guest was reset (below) |
 | c | the same, Driver Verifier `0x020209BB` on `xhci98.sys` and `xhciuas.sys` (`verifier /query`: both loaded and verified) | Sleep and wake once, the copies before and after (`c\cycles-w.txt`) | no stop, the guest watched for 25 minutes after the wake; the four devices "Started"; every copy `OK`; `verifier /query` after it: `xhci98.sys` and `xhciuas.sys` still verified (load 1, unload 0) |
 | b | 7 x64 SP1, release (`xhci98.sys` signed in the guest), `-vga std`, the same USB devices | `powercfg -a`: Standby is refused by the base's display driver ("The VGAPNP.SYS display driver does not support standby"), so hibernation stands in: three hibernations and resumes, copies (`W.BAT`, 16 MiB twice) on the stick and the UAS disk before and after each (`b\serial-h1.log` to `h3.log`) | no stop; every copy `OK`; `XHCIIN64 /devices`: "xHCI98 USB 3 Controller - xhci98, started" |
 | - | 98 SE, ME, XP standby | not run (owner, 2026-11-01). 98 SE's standby does not resume on QEMU (run-36, 36.28 part 2) and XP's is vetoed by its display driver (45.23 above); an ME standby on the i440FX machine was tried on a copy of 45.27's ME overlay, which did not reach the desktop in 25 minutes with a tablet and a stick present at boot, before this build was put on it | - |
@@ -8133,10 +8136,11 @@ so after each wake the agent was started again from the keyboard; under
 the host's load the first command after it often waited several minutes
 (PnP rebuilding the stack), and a run of keystrokes was sometimes lost.
 Cycles `s1` and `s2` were made before the display and idle-sleep timeouts
-were turned off (`powercfg -change ... 0`); after `s2` the console
-stopped taking keys (the display off, both processors busy in user mode)
-and the guest was reset before its copies were read. Those are the
-harness's; no leg stopped.
+were turned off (`powercfg -change ... 0`). After `s2` the copy client
+timed out, the console stopped taking keys (the display off, both
+processors busy in user mode, the guest running) and the guest was reset
+before its copies were read; why was not read. No cycle stopped with a
+bug check.
 
 ### Builds and reviews
 

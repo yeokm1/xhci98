@@ -1283,11 +1283,11 @@ and holds that D0 until the request ends. The request waited on the
 suspended bus, the HID stack's D0 waited on it, and PnP's removal of the
 controller waited on the D0: bug check 0x9F (3) about five minutes later,
 with the HID D0 named (`runs/run-45.md`, "45.63", stop 3, and "45.63 (the
-S3 wake)"). Read on QEMU, where the guest's PCI driver fails the D0 of the
+S3 wake)"). Read on QEMU, where the guest's PCI driver fails this driver's D0 of the
 `qemu-xhci` function after every S3 wake (QEMU resets its devices at the
-wake), under this driver and under Windows' own `USBXHCI` alike; Windows'
-own stack completes its requests, the removal runs, and the controller is
-found again within seconds.
+wake); under Windows' own `USBXHCI` the same wake removes the controller
+and finds it again within seconds, which is taken to be the same failed
+D0 met by a stack that completes what it holds (inferred, not traced).
 
 **The answer** (`hcd_power.c`, `hcdD0Refused`): a failed D0 takes the same
 route as one that succeeded, to `hcdD0Finish` at PASSIVE_LEVEL (inline or
