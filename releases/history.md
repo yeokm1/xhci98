@@ -25,8 +25,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   Thunderbolt networking uses, on every system from 98 SE to 10, 32-bit
   and 64-bit. With no DHCP server on the link both computers take a
   169.254.x.x address; set fixed addresses for a lasting setup.
-  [PLACEHOLDER w45-tbnet6, S10/S11: off unless you tick "Thunderbolt
-  networking" on the installer's Thunderbolt and USB4 page; cm\tbnet\.]
+  Off unless you tick "Thunderbolt networking" on the installer's
+  Thunderbolt and USB4 page; the driver is in each folder's `cm\tbnet\`.
 - **Windows 2000, XP and XP x64: Thunderbolt 3 and USB4 docks plugged in
   while Windows runs.** A dock, or an enclosure with a PCI Express switch
   of its own, now gets every port in it placed, so the devices behind
@@ -36,8 +36,6 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **Daisy chains** behind a USB4 host whose tunnels xHCI98 builds: a
   device plugged into a USB4 device's downstream port is connected
   through it, and a drive in it appears beside the parent's.
-  [PLACEHOLDER w45-dock: 45.17, chains under the Thunderbolt 3 firmware
-  connection manager.]
 - **USB4 version 2 routers** (Barlow Ridge, say) run as version 2, Gen 4
   links at 80 Gbit/s (120/40 asymmetric) included. An error on the Gen 4
   link to the device plugged into the computer is recovered in place,
@@ -52,8 +50,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   whose USB bridge passes ATA commands through (SAT), on 2000 to 10 (ASPI
   tools on 98 SE and ME). On 2000, XP, Vista and 7 a UAS drive is listed
   in Safely Remove Hardware and can be stopped on its own.
-  [PLACEHOLDER w45-dock, 45.41: a UAS drive behind a SuperSpeed hub kept
-  across the hub port's warm reset.]
+  A UAS drive behind a SuperSpeed hub is kept across the hub port's warm
+  reset.
 - **The installer:** a Thunderbolt and USB4 page after the Components
   page; the Advanced lists offer every setting a user may change; Help
   (and F1) explains the page it is on.
@@ -61,11 +59,15 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   first configuration and split into their parts where a device with
   one configuration would be, so a USB Audio 3.0 device's USB Audio 2.0
   part gets the free `uac2`, where before the device had no driver.
-- [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit Windows 8 and 8.1, as a
-  filter of the PCI root bus (the service `xhcipff`); not on Windows 10.]
-- [PLACEHOLDER w45-tidy, 45.4: the USB Tree's title shows its version, as
-  `xHCI98 USB Tree 3.4.0.0`.]
-- [PLACEHOLDER w45-pe: the x64 INF in a Windows PE boot.wim with DISM.]
+- **XHCIPFW on 32-bit Windows 8 and 8.1**, as a filter of the PCI root bus
+  (the service `xhcipff`); not on Windows 10. The installer readme's
+  recovery steps say how to reach the recovery environment and remove the
+  filter there.
+- **The USB Tree's title** shows its version, as `xHCI98 USB Tree
+  3.4.0.0`.
+- **DISM can add `nt-x64\` to a Windows PE or Setup `boot.wim`** as well
+  as `install.wim`. On XP x64 with no other USB driver installed, the
+  controller has no Advanced tab and the root hub no Power tab.
 
 ### Changed
 
@@ -77,8 +79,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **One build for everyone:** `debug-x86\`, `debug-x64\` and `/debug` are
   gone. The build keeps a command-state checker that only counts
   (`XhciCommandCheck` `0` turns it off).
-- [PLACEHOLDER w45-tidy, 45.50: the install writes every value the drivers
-  read at its default, only where it is missing.]
+- **Every setting the drivers read** is written by the install at its
+  default, only where it is missing. On 98 SE and ME the uninstall removes
+  Stor98's settings, so a later install starts clean.
 - **USB Audio 2.0 and 3.0 devices (Windows 2000 to 8.1):** xHCI98 no
   longer offers such a device to Windows' own USB Audio 1.0 driver ("USB
   Audio Device"), which cannot run it and keeps Device Manager, the Update
@@ -115,7 +118,9 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **Thunderbolt 3 / USB4:** under Driver Verifier, the connection manager
   could stop Windows at the start (Windows 7) or when it was unloaded by an
   uninstall (Windows 8 and 8.1).
-- [PLACEHOLDER w45-s3: Sleep (S3) on Windows 10 x64, the wake fix.]
+- **Windows 10 x64:** waking from Sleep could stop Windows with
+  DRIVER_POWER_STATE_FAILURE (0x9F) when a USB mouse or keyboard was
+  attached.
 - **Smaller fixes** from a review of the whole code: the USB driver, the
   UAS driver, Stor98, the Thunderbolt 3 / USB4 driver and the installer.
 

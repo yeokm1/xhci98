@@ -399,7 +399,6 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
 - A dock plugged in after startup needs bus numbers the BIOS reserves
   for the ports; without them, Code 31 on 7 and nothing behind the port
   on XP or 98 SE.
-- [PLACEHOLDER w45-dock: 45.17, firmware connection manager chains.]
 - USB4 version 2 routers run as version 2, Gen 4 links and their
   recovery included (`XhciCmUsb4V2`, `XhciCmGen4LinkRecovery`).
 - Vista and 7 x86: a dock's USB controller starts at its first plug
@@ -407,18 +406,25 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
   INF.
 - A drive attached during the install is listed in Safely Remove after a
   restart or replug ("What `3.1.0.0` changes").
-- [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit 8 and 8.1.]
-- [PLACEHOLDER w45-s3: the Sleep (S3) wake on 10 x64.]
+- XHCIPFW on 32-bit 8 and 8.1 (the service `xhcipff`); the installer
+  readme's recovery steps reach the registry editor from the setup DVD's
+  Repair your computer.
+- 10 x64: waking from Sleep no longer stops Windows with 0x9F.
 
 ### Networking
 - Thunderbolt networking (new): two computers on one Thunderbolt or USB4
   cable, in Linux's frame format; one link, not through a dock.
-- [PLACEHOLDER w45-tbnet6, S10/S11: the installer's box; `cm\tbnet\`.]
+- SETUP's Thunderbolt and USB4 page has a Thunderbolt networking box,
+  unticked by default (`/tbnet`, `/notbnet`); an update keeps the choice
+  and the uninstall removes the adapter. The driver is in each folder's
+  `cm\tbnet\`. On 98 SE the adapter's first install may ask for
+  `xhcinet.sys`: type `C:\XHCI98`.
 
 ### Storage
 - UAS drives answer pass-through and SMART (2000 to 10) and stop on
   their own in Safely Remove (2000 to 7); Stor98 on 8.1 fixed.
-- [PLACEHOLDER w45-dock, 45.41: UAS drive kept over a warm reset.]
+- A UAS drive behind a SuperSpeed hub is kept across the hub port's warm
+  reset.
 
 ### Installer and package
 - One folder per Windows family (`98-me\`, `nt-x86\`, `nt-x64\`,
@@ -426,9 +432,13 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
 - A Thunderbolt and USB4 page, full Advanced lists, Help and F1. 98 SE
   and ME: more packages staged; a controller "not reached in this run"
   needs a restart and another run.
-- [PLACEHOLDER w45-tidy, 45.50: every value written by the install.]
-- [PLACEHOLDER w45-tidy, 45.4: the USB Tree's title has its version.]
-- [PLACEHOLDER w45-pe: the x64 INF in a PE `boot.wim`; the XP x64 tab.]
+- The install writes each setting the drivers read at its default, only
+  where it is missing; on 98 SE and ME the uninstall removes Stor98's
+  settings, so a later install starts clean.
+- The USB Tree's title shows its version.
+- The `nt-x64\` folder goes into a Windows PE or Setup `boot.wim` with
+  DISM, as well as `install.wim`; on XP x64 with no other USB driver, the
+  controller has no Advanced tab and the root hub no Power tab.
 
 ### Other drivers
 - usb-wdm-free 0.1.7: `usbprn` (printing, 98 SE and ME), `uac2` 0.1.6.0,
@@ -1366,7 +1376,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmUsb4V2` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` runs a USB4 version 2 router (Barlow Ridge, say) as version 2, Gen 4 links included; `0` runs every router as version 1, as `3.3.0.0` did |
 | `XhciCmGen4LinkRecovery` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` lets the Gen 4 link between the controller and the device plugged into it recover from a link error in place, the devices behind it kept; `0` takes such an error as an unplug and a fresh plug, as before |
 | `XhciCmRingInterrupt` | `0` | From `3.4.0.0`, Windows 2000 to 10: `1` lets the controller's interrupt tell the driver at once that a device was plugged in or removed, the driver still looking every `XhciCmPollIdleMs` and going back to that alone if the interrupt fails; `0` looks every `XhciCmPollIdleMs` alone. 98 SE and ME look as with `0` |
-| `XhciCmNet` | `0` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic; `0` answers no other computer. [PLACEHOLDER w45-tbnet6 S11: the installer's "Thunderbolt networking" box sets it.] Its buffer and polling values are in `docs/using/tuning.md` |
+| `XhciCmNet` | `0` | From `3.4.0.0`, Thunderbolt networking: `1` lets the controller answer another computer joined by a Thunderbolt or USB4 cable and carry the network adapter's traffic; `0` answers no other computer. The installer's "Thunderbolt networking" box sets it. Its buffer and polling values are in `docs/using/tuning.md` |
 | `XhciCmTunnelBridge` | `auto` (`REG_SZ`) | `auto`, written by the install (or empty): the driver finds the tunnel ports itself. A comma-separated list of `bb:dd.f` PCI bridges replaces that finding, for a machine whose ports it does not find (its log says so) |
 | `XhciCmAsmediaPcie7Credits` | `0` | From `3.3.0.0` (roadmap-usb4 task 44.41): a bench experiment for the ASMedia ASM4242, leave it at `0`. `1` writes 7 credits, IFC 1 and ISE 0 into the two protocol-adapter entries of a PCI Express tunnel the USB4 connection manager builds between an ASM4242 host router and an ASM2464 device router; `0` keeps them as read; any other value is refused and `0` stands. Written as `0` by the install from `3.4.0.0`; the installer does not ask for it |
 | `XhciCmPollIdleMs` | `200` | How often, in ms, the driver looks at the controller with nothing happening (`50` to `5000`) |
@@ -1632,8 +1642,8 @@ have every leg.
 - **32-bit Windows 8 and 8.1: a PCI root bus that names XHCIPFW.SYS's
   filter with its file gone stops Windows at the start** (task 45.9).
   The installer takes the filter off every root bus before it removes the
-  file. If the file was deleted or damaged by other means, Windows'
-  System Restore recovered such a start on 8; `tools\xhciinst\readme.txt`
+  file. If the file was deleted or damaged by other means, System Restore
+  may recover such a start on 8; `tools\xhciinst\readme.txt`
   gives the manual route from the recovery environment's registry editor.
 - **Windows 98 SE: answer No to the restart when an enclosure is first
   plugged in** (roadmap-usb4 task 44.78). When an enclosure is first

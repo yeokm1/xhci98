@@ -147,7 +147,7 @@ Use Safely Remove before unplugging a drive, on every system.
 
 ### Thunderbolt networking
 
-Two computers joined by one Thunderbolt or USB4 cable can share a network connection, file sharing included, in the frame format Linux's Thunderbolt networking uses. [PLACEHOLDER w45-tbnet6 S11: It is off unless you tick "Thunderbolt networking" on the installer's Thunderbolt and USB4 page.] One `xhcinet.inf` installs `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. With no DHCP server on the link both computers take a 169.254.x.x address; set fixed addresses for a lasting setup. The MTU (1500 to 65522, the same on both ends) is in the adapter's Advanced settings. One link at a time; a computer behind a dock or another router is not reached.
+Two computers joined by one Thunderbolt or USB4 cable can share a network connection, file sharing included, in the frame format Linux's Thunderbolt networking uses. It is off unless you tick "Thunderbolt networking" on the installer's Thunderbolt and USB4 page. One `xhcinet.inf` installs `xhcinet.sys` on 98 SE to 7 and `xhcinet6.sys` on 8, 8.1 and 10. With no DHCP server on the link both computers take a 169.254.x.x address; set fixed addresses for a lasting setup. The MTU (1500 to 65522, the same on both ends) is in the adapter's Advanced settings. One link at a time; a computer behind a dock or another router is not reached.
 
 ### Things to know
 
