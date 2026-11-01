@@ -881,17 +881,19 @@ Status: not opened, unnumbered and unversioned. Planned by the owner on
 - [ ] XP64UI.1 XP x64 and Server 2003 x64 in a folder of their own (for example `xp-x64\`, its root the F6 floppy), with an INF that copies `usbui.dll` again, and `nt-x64\xhci98.inf` for Vista to 10 x64 alone; a change to record 36's three-family layout, so the installer's source map and `/dir`, the family table, `INTEGRATE.TXT`, the F6 text and the gates move with it; the legs: DISM into 7 and 10 x64 `boot.wim` and `install.wim`, XP x64 with F6, with nLite and with `SETUP.EXE`, the tabs read
 - [ ] XP64UI.2 the lighter alternative, if XP64UI.1 is not taken: `SETUP.EXE` places `usbui.dll` from the system's own install source on NT 5.2 when it is missing (never from the package, which carries no Microsoft file); the tabs read after an F6, nLite and wizard install followed by `SETUP.EXE`
 
-## Planned - The Installer's Settings Split by Page
+## Planned - The Installer's Settings Split by Page, and Its Progress Bar
 
 Goal: the Settings dialog opened from the Components page holds the USB 3
 settings only; the Thunderbolt 3 / USB4 and Stor98 settings move to a
 Settings dialog of their own, opened from the Thunderbolt and USB4 page
-(design record 26, the Settings dialog's three tabs).
+(design record 26, the Settings dialog's three tabs); and the Progress
+page's bar follows the install's real progress.
 
 Status: not opened, unnumbered and unversioned. Planned by the owner on
 2026-11-01, for the next release.
 
 - [ ] SETSPLIT.1 the Components page's `Settings...` opens the USB tab alone (its main rows and its Advanced list); the Thunderbolt and USB4 page gains a `Settings...` button opening the Thunderbolt and Stor98 tabs, each with its Advanced list, shown while that page's components are ticked; record 26's Settings dialog and the page layouts revised first, with Help and F1 text, the window self-test and the 640x480 and 120 DPI legs on 98 SE, XP and 7 following it
+- [ ] PROGBAR.1 the Progress page's bar matching the install's actual progress: each step of the run weighted by the work it does (the file copies, each controller's and device's driver install, the hardware wizards waited on, the registry writes), so the bar neither jumps nor sits still while a long step runs and reaches the end only when the run has finished; read on 98 SE, XP and 7 with the bar's position logged against each step's start and end
 
 ## Planned - A Larger Event Ring
 
