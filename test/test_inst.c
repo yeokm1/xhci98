@@ -5444,6 +5444,14 @@ static void test_s98(void)
           inst_s98_svc_value_stor98("StorWriteThrough"),
           "98 SE and ME: xhcicm's LinkState alone is not Stor98 there "
           "before");
+    CHECK(inst_s98_run_report_9x("StorInterrupt 5.0.0") &&
+          inst_s98_run_report_9x("storinterrupt 255.31.7") &&
+          !inst_s98_run_report_9x("StorInterrupt") &&
+          !inst_s98_run_report_9x("StorInterruptX 1.0.0") &&
+          !inst_s98_run_report_9x("StorPollMode") &&
+          !inst_s98_run_report_9x("LinkState"),
+          "98 SE and ME: the driver's interrupt report is named "
+          "StorInterrupt and a space, case aside");
     CHECK(inst_s98_stray_inf_ours(0, 1) && !inst_s98_stray_inf_ours(1, 1) &&
           !inst_s98_stray_inf_ours(0, 0),
           "a stray INF copy: the package's when Stor98's and none before");

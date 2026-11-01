@@ -2339,6 +2339,11 @@ int inst_s98_stray_inf_ours(int preExisting, int namesStor98);
  * link-state locator, its value LinkState; 1 when a value of that key is
  * another, so Stor98's (the baseline's "Stor98 there before"). */
 int inst_s98_svc_value_stor98(const char *name);
+/* 98 SE and ME: 1 when a value of Services\stor98 is the report the
+ * driver itself writes at each start of a controller ("StorInterrupt
+ * <bus>.<device>.<function>", Stor98's README "Interrupt report"), which
+ * the uninstall that removes Stor98 takes with its settings (task 45.50). */
+int inst_s98_run_report_9x(const char *name);
 
 #define INST_S98_SHARE_FREE     0
 #define INST_S98_SHARE_SAME     1

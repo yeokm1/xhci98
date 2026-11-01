@@ -7779,6 +7779,11 @@ int inst_s98_svc_value_stor98(const char *name)
     return !inst_eq(name, "LinkState");
 }
 
+int inst_s98_run_report_9x(const char *name)
+{
+    return inst_starts(name, "StorInterrupt ");
+}
+
 int inst_s98_stray_inf_ours(int preExisting, int namesStor98)
 {
     return !preExisting && namesStor98;
