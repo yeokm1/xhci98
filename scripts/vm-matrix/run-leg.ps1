@@ -154,7 +154,7 @@ function Read-LegLines {
         if ($ln -match '^XHLEG PHASE (\S+)') { $ph = $Matches[1] }
         if ($ln -match '^XHLEG OPERATOR') { $ph = '1' }
         if ($ph) { $script:pendingStep = ''; if ($hostSteps.ContainsKey("AfterPhase$ph")) { $script:pendingStep = $hostSteps["AfterPhase$ph"] } }
-        if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true }
+        if ($ln -match '^XHLEG POWEROFF') { $script:sawPowerOff = $true; if (-not $script:powerOffAt) { $script:powerOffAt = Get-Date } }
         if ($ln -match '^XHLEG CHECK (\S+) (PASS|FAIL)(.*)$') { $rec.checks[$Matches[1]] = ($Matches[2] + $Matches[3]).Trim() }
         if ($ln -match '^XHLEG EXIT (\S+) (\S+)$') { $rec.exits[$Matches[1]] = $Matches[2] }
         if ($ln -match '^XHLEG END') { $script:ended = $true; if (-not $script:endAt) { $script:endAt = Get-Date } }
@@ -192,6 +192,8 @@ try {
         $nLines = 0
         $endAt = $null
         $sawPowerOff = $false
+        $powerOffAt = $null
+        $offRetried = $false
         $stepEnded = $false
         $hostStopped = $false
         try {
@@ -265,6 +267,23 @@ try {
                 if ($sawPowerOff -and $guest.ContainsKey('HostPowerOff') -and $guest.HostPowerOff) {
                     $null = Wait-LegPowerOff -Config $cfg -Guest $guest -Ports $ports -Process $proc -Dir $RunDir -Tag $tag
                     if ($proc.HasExited) { break }
+                }
+                # A 98 SE or ME guest whose shut down after POWEROFF never
+                # began (read 2026-11-01, w45-matrix86 me-console: the
+                # desktop idle and its clock running 14 min on, no "Windows
+                # is shutting down" screen) is asked once more by the host,
+                # from Start, Shut Down, Enter, and the leg says so. A guest
+                # hung inside its shut down takes no keys and still stalls.
+                if ($sawPowerOff -and -not $offRetried -and $powerOffAt -and $guest.Family -eq '9x' -and ((Get-Date) - $powerOffAt).TotalSeconds -ge 120) {
+                    $offRetried = $true
+                    Save-LegShot $ports.Qmp $RunDir "$tag-offretry"
+                    Send-QmpChord -Port $ports.Qmp -Chord 'esc'; Start-Sleep -Seconds 2
+                    Send-QmpChord -Port $ports.Qmp -Chord 'ctrl-esc'; Start-Sleep -Seconds 3
+                    Send-QmpChord -Port $ports.Qmp -Chord 'u' -Layout $guest.Layout; Start-Sleep -Seconds 4
+                    Save-LegShot $ports.Qmp $RunDir "$tag-offretry-dialog"
+                    Send-QmpChord -Port $ports.Qmp -Chord 'ret'
+                    $rec.steps += "boot $boot no power-off 120 s after POWEROFF: the host sent Start, Shut Down, Enter"
+                    $lastNew = Get-Date
                 }
                 if ($def.ContainsKey('PromptStep') -and $def.PromptStep -eq 'nt6' -and -not ($mode -eq 'window' -and $boot -eq 1) -and ((Get-Date) - $lastPrompt).TotalSeconds -ge 6) {
                     $lastPrompt = Get-Date
