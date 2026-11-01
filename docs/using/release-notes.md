@@ -1,8 +1,8 @@
 # xhci98 - Release Notes
 
 This file describes package version `3.4.0.0`, the nineteenth release and
-the twelfth of the host controller driver, dated 2026-10-28 (`DriverVer`
-`10/28/2026,3.4.0.0` in every INF of the package: those of `xhci98.sys`,
+the twelfth of the host controller driver, dated 2026-11-01 (`DriverVer`
+`11/01/2026,3.4.0.0` in every INF of the package: those of `xhci98.sys`,
 the UAS driver and the connection manager, and Stor98's). What it changes
 from `3.3.0.0` is "What `3.4.0.0` changes", below, and is marked "new in
 `3.4.0.0`" or "from `3.4.0.0`" where it applies below. What `3.3.0.0`

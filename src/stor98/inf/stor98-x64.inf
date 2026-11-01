@@ -46,7 +46,7 @@ Signature="$Windows NT$"
 Class=SCSIAdapter
 ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=10/28/2026,3.4.0.0
+DriverVer=11/01/2026,3.4.0.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=stor98.cat
 

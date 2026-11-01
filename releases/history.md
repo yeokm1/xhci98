@@ -16,7 +16,7 @@ history; those cut folders stay as they were written.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
-## 3.4.0.0 - 2026-10-28
+## 3.4.0.0 - 2026-11-01
 
 ### New
 
