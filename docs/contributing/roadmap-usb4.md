@@ -895,6 +895,18 @@ Status: not opened, unnumbered and unversioned. Planned by the owner on
 - [ ] SETSPLIT.1 the Components page's `Settings...` opens the USB tab alone (its main rows and its Advanced list); the Thunderbolt and USB4 page gains a `Settings...` button opening the Thunderbolt and Stor98 tabs, each with its Advanced list, shown while that page's components are ticked; record 26's Settings dialog and the page layouts revised first, with Help and F1 text, the window self-test and the 640x480 and 120 DPI legs on 98 SE, XP and 7 following it
 - [ ] PROGBAR.1 the Progress page's bar matching the install's actual progress: each step of the run weighted by the work it does (the file copies, each controller's and device's driver install, the hardware wizards waited on, the registry writes), so the bar neither jumps nor sits still while a long step runs and reaches the end only when the run has finished; read on 98 SE, XP and 7 with the bar's position logged against each step's start and end
 
+## Planned - XHCITR's Save Snapshot Without Its Window
+
+Goal: the USB Tree's File > Save Snapshot... writes its four files (`.DEV`,
+`.TXT`, `.BIN`, `.PSC`) straight to the folder the user picks, with no
+window of its own; today that window is taller than the desktop and runs
+below its bottom edge.
+
+Status: not opened, unnumbered and unversioned. Planned by the owner on
+2026-11-01, for the next release.
+
+- [ ] TRSNAP.1 Save Snapshot asks only for the location (the system's folder or save dialog), writes the four files there named from the date and time as now, and says where in the status bar or a short message box; the oversized window removed; `XHCITR /snapshot` unchanged; read at 640x480 on 98 SE and at 96 and 120 DPI on XP and 7, `XHCITR64` on 7 x64
+
 ## Planned - A Larger Event Ring
 
 Goal: more isochronous budget than one 256-entry event ring allows
