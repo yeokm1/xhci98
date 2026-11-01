@@ -8051,6 +8051,106 @@ guests (ASM4242, Alpine Ridge): `verifier /query` lists `xhci98.sys`,
 
 The installer still refuses Windows 11 (unchanged; not read here).
 
+## 45.63 (continued): part 1's remaining legs under the code integrity checks, and part 2, `xhcicm.sys` and `xhcinet6.sys` during Thunderbolt networking (2026-11-01)
+
+Worker w45-verif2, development host A, branch `w45-verif2` from 3.4.0.0
+`e5a71b83`. No source change: no leg stopped. Sleep (S3) was not run here;
+its 0x9F at the wake (part 1, stop 3) is task w45-s3's.
+
+### The vehicle
+
+- The gated amd64 build of `e5a71b83` (`build-driver.cmd all -amd64`):
+  "BUILD + GATES PASSED (release qemu)", host tests passed
+  (`E:\xhci98-scratch\p45-w45-verif2\gb-amd64-tip.log`); the tools built
+  from the same tree. The amd64 package staged unsigned by
+  `make-package.ps1` (release and qemu), its five catalogs made unsigned
+  by the packager's `New-PackageCatalogFile`; release amd64
+  `xhci98.sys` `d56e2998...`, `xhcicm.sys` `a9343cf0...`, `xhciuas.sys`
+  `e16132ca...`, `stor98.sys` `fb48c071...`.
+- The network drivers are not in the package yet (45.59 step S10): the
+  release amd64 `xhcinet6.sys` (`557fdef0...`) and `xhcinet.sys`
+  (`3eb51cd2...`) of the same build beside `xhcinet-amd64.inf` staged as
+  `xhcinet.inf` (`a670a9d0...`), with an unsigned `xhcinet.cat` made the
+  same way.
+- In each guest, part 1's setup: a throwaway certificate made there, every
+  image and catalog signed with it (16 "Successfully signed"), nothing
+  signed on the host; `INSTALL.BAT /console /yes /nopause /thunderbolt
+  /stor98 /usb` (exit 3); `verifier /flags 0x020209BB /driver xhci98.sys
+  xhciuas.sys xhcicm.sys stor98.sys xhcinet6.sys`, `resetonbootfail`;
+  the idle sleep and hibernate timers off. Fresh overlays of the q35
+  `w10x64` base, `-smp 2`, 4 GB, the test devices of part 1 (tablet,
+  `usb-uas`, `usb-storage`). Evidence: `E:\xhci98-vm\p45\w45-verif2\`
+  (`a\`, `b\`, `c\`, `kubs\`, `pids.txt`, `hashes.txt`, `STATE.md`,
+  `vq*.txt` the `verifier /query` readings).
+- Part 1's emulator (`qemu-system-x86_64.exe` `46104db9...`, `usb4-emu`
+  main `4287e70`); part 2's both ends on the `w45-emuar` build
+  (`83474795...`).
+
+Each first start under the flags passed with no stop, and `verifier
+/query` listed every loaded driver of the list as verified.
+
+### Part 1's remaining legs, under `0x020209BB`
+
+| Leg | Steps | Result |
+|---|---|---|
+| a, ASM4242 | the enclosure with a chain port at power-on; 16 MiB copy loops (written, compared, deleted) on the stick, the UAS disk and the NVMe drive (Stor98), five each; a second enclosure chained behind the first (PCIe tunnel up, its NVMe on `stornvme`), copies on both; the child surprise-removed during a copy loop and plugged again; the parent ejected with the child behind it (`XHCIIN64 /console /eject id=... /yes`), unplugged, plugged again with the child; parent and child surprise-removed during copies and plugged again; `qemu-xhci`, the NHI and the ASM4242's own xHCI disabled and enabled (`pnputil`), then the `qemu-xhci` and the NHI again during 30-copy loops on two of the disks; hibernation (`shutdown /h`) with both enclosures attached and the resume (`LastBootUpTime` kept), copies on all four disks after it | no stop. Every copy before a removal `OK`; at a removal `CMPFAIL` once and then `COPYFAIL`; `OK` again after each plug. The eject stopped the switch and printed "The Thunderbolt driver has not confirmed that the PCIe tunnel was closed" (as in part 1). The `qemu-xhci` disable during the copies answered "System reboot is needed" (the removal Windows defers while a volume on it is open) and the copies went on `OK` |
+| b, version 2 router (`-Usb4 v2`) | the device with a downstream port at power-on; copy loops on the stick, the UAS disk and the NVMe drive, five each; a second version 2 device chained behind it, copies on it; `x-link-event=error` on the depth-1 link during copies on both NVMe drives (`recoveries=1`), then `asym-tx` and `error` again (`width=0x4/0x8 ... recoveries=2 disconnects=0`); the child surprise-removed during copies and plugged again; parent and child removed and plugged again; the report batch (`R.BAT`: PnP listing, volumes, `driverquery`, `verifier /query`, `XHCIIN64 /devices`) twice | no stop; the copies through both recoveries `OK` (six each), the tunnels kept; after each plug `OK`; no problem device |
+
+The hang without a bug check that part 1's version 2 leg met about
+10 minutes after its start did not come back: this leg ran 4 h 15 min on
+that layout under the full flags, the report batch included. Not
+reproduced.
+
+Why the legs were slow: right after the install, Windows' own background
+work (.NET native image generation, OneDrive setup, the search indexer,
+Windows Update, Defender) kept both virtual processors busy (`typeperf`
+100%, three quarters of it user mode), so one PowerShell start took
+minutes; stopping those services brought the copy of 16 MiB down to
+seconds. Verifier's counters show some 3.6 million pool allocations in the
+first 90 minutes, almost all special pool and "not tracked" (none of the
+verified drivers held more than 107 at once): the DMA and I/O checks'
+own. Three identical test disks (overlays of one FAT image) share a disk
+signature, so Windows leaves all but one offline; `diskpart online disk`
+brought each up.
+
+### Part 2: `xhcicm.sys` and `xhcinet6.sys` during Thunderbolt networking
+
+Leg c: 10 x64 with the Intel Alder Lake host (`-Usb4 adl`, software
+connection manager), its USB4 port 1 a `usb4-xdomain` cable to a Kubuntu
+26.04.1 live guest (Linux 7.0, its stock `thunderbolt` and
+`thunderbolt_net`, the server end, runtime power management off on the
+host interface and the domain). `XhciCmNet` 1 set by hand in the NHI's
+driver key, `pnputil /add-driver xhcinet.inf /install`, the NHI
+restarted: "xHCI98 Thunderbolt Networking" (`XHCICM\TBNET\...`) Code 0 on
+the service `xhcinet` (`\SystemRoot\System32\drivers\xhcinet6.sys`),
+`xhcinet6.sys` loaded and verified. Linux `10.99.0.1/24`, Windows
+`10.99.0.2/24`.
+
+| Flags | Steps | Result |
+|---|---|---|
+| `0x020209BB` | Linux's login and Windows' (`login successful, enabling paths`, `network traffic started`); ping both ways, 32, 1472, 8000 and 30000 bytes; the cable unplugged (QMP `plugged=false`) and plugged again; the network adapter disabled and enabled twice (`pnputil`) under Linux's ping stream; the NHI restarted (`pnputil /restart-device`) | no stop; every ping 0% loss with the link up, 100% while unplugged; the adapter kept its address over each disable; Linux logged a new login after each replug and restart |
+| `0x022209BB` (NDIS/WIFI verification added, `ndis.sys` then verified too; a restart) | the same: pings both ways (1472, 8000, 30000 bytes, 100 of 8000 bytes), the cable out and in under a ping stream, the adapter disabled and enabled twice, the NHI restarted; then hibernation with the network bound (`shutdown /h`) and the resume (`LastBootUpTime` kept) | no stop; pings both ways 0% loss after each step |
+
+`verifier /query` at the end: `xhcinet6.sys` load 4 / unload 3 (the
+adapter cycles), 66 nonpaged allocations current and peak; `xhcicm.sys`
+1 current, 4 peak.
+
+Linux's `thunderbolt0` loses its address at each new login (a replug, the
+NHI restart, the resume), as 45.59 S5 recorded, so `10.99.0.1` was added
+again each time; Linux's own ping stream counts those gaps as loss.
+
+`xhcinet.sys`, the NDIS 5 miniport, is not loaded on 10 x64: the INF's
+`.6.2` models install `xhcinet6.sys` there.
+
+### Builds
+
+The gated amd64 build of `e5a71b83` above. No code changed, so no x86
+build was made for this section.
+
+### What is left
+
+Nothing of 45.63 but Sleep (S3) on 10 x64 (part 1's stop 3, task w45-s3).
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
