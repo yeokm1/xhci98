@@ -36,8 +36,8 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 - **Daisy chains** behind a USB4 host whose tunnels xHCI98 builds: a
   device plugged into a USB4 device's downstream port is connected
   through it, and a drive in it appears beside the parent's.
-  [PLACEHOLDER w45-dock: 45.15's Code 31, 45.17 chains under the
-  Thunderbolt 3 firmware connection manager.]
+  [PLACEHOLDER w45-dock: 45.17, chains under the Thunderbolt 3 firmware
+  connection manager.]
 - **USB4 version 2 routers** (Barlow Ridge, say) run as version 2, Gen 4
   links at 80 Gbit/s (120/40 asymmetric) included. An error on the Gen 4
   link to the device plugged into the computer is recovered in place,
@@ -148,6 +148,10 @@ EDIT, where a `.md` file renders as nothing and its markup is just noise.)
   - A maker's driver that takes a whole USB device with more than one
     configuration no longer binds to it under xHCI98 where xHCI98 now
     splits that device.
+  - A Thunderbolt or USB4 dock plugged in after Windows starts needs the
+    BIOS to reserve bus numbers for those ports, as boards commonly do;
+    without that the dock's switch stays at Code 31 on 7, and nothing
+    appears behind the port on XP or 98 SE.
   - Thunderbolt networking: one link at a time; a computer behind a dock
     or another router is not reached.
   - A drive in a daisy chain, once stopped, keeps its connection until it

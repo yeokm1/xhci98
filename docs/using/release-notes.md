@@ -23,27 +23,6 @@ The next release, `3.4.0.0`, is being prepared: what it changes from
 `3.3.0.0` so far is "What `3.4.0.0` changes", below, and is marked "new
 in `3.4.0.0`" or "from `3.4.0.0`" where it applies below.
 
-`2.3.0.0`'s changes were read in QEMU virtual machines, or rest on host
-tests where QEMU models no such device or controller. The owner's bench of
-2026-10-11 then read several on real hardware: a Dell Latitude E7250 under
-Windows XP x64 and 7 x64, and a ThinkPad E460 under Windows 98 SE. "What
-`2.3.0.0` changed", below, lists them and says which. `2.3.1.0`'s setup
-fix was read on the same E7250 under Windows XP x64 Setup. "What
-`2.4.0.0` adds" says, item by item, what was read of `2.4.0.0`'s changes.
-`3.0.0.0`'s Thunderbolt and USB4 support was read in virtual machines, on
-an emulator of those controllers; of real machines, only its Thunderbolt 3
-half on the owner's ThinkPad P14s Gen 1 under Windows 98 SE: "Where
-`3.0.0.0` was read" lists the readings. `3.1.0.0`'s and `3.2.0.0`'s
-changes were read in QEMU virtual machines, the Thunderbolt 3 and USB4
-parts against the emulated hosts and enclosure; of real hardware, the
-owner's bench of 2026-10-22 read `3.2.0.0`'s `S98VSD.VXD` with Stor98 on
-the P14s Gen 1 under Windows 98 SE (`docs/contributing/runs/run-43.md`,
-"The first real-hardware reading"). `3.3.0.0`'s changes were read in QEMU
-virtual machines, the Thunderbolt 3 and USB4 parts against the emulated
-hosts and enclosure; its real-hardware bench is roadmap-usb4 Phase 45's
-(45-E.1 to 45-E.5 and 45-E.8), and "What `3.3.0.0` changes" says, item by
-item, where each change was read.
-
 The notes for `1.2.0.0`, the last release of the USB 2.0-only miniport, stay
 as they were published: on the `1.2.0.0` branch,
 [docs/using/release-notes.md](https://github.com/yeokm1/xhci98/blob/1.2.0.0/docs/using/release-notes.md),
@@ -394,188 +373,68 @@ downstream ports `xHCI98 USB4 PCI Bridge
 
 ## What `3.4.0.0` changes
 
-What `3.4.0.0` changes from `3.3.0.0`; every system `3.3.0.0` supports
-is supported. The records are `docs/contributing/runs/run-45.md`, under
-each task's number.
+The full list: the `3.4.0.0` entry of `releases/history.md`.
 
 ### USB
-
-- **Devices kept across standby and hibernation** (`XhciResumeKeep`, on
-  by default). Where a resume starts the USB controller afresh (every
-  VIA controller, and any without a usable saved state), a device on
-  one of the computer's own ports is restored in place, with its drive
-  letter and open files, instead of being found again; a UAS drive is
-  kept under load too. Hubs and what is behind them, Bulk-Only drives
-  and the other cases "XhciResumeKeep" lists are still found again.
-- **A device that comes back is no longer taken for a new one** when
-  its serial number cannot be read at that moment (after a link drop, a
-  recovery or a replug, at a root port or behind a hub): the driver
-  tries again for a few seconds and, if it still cannot, leaves the
-  device out until it is plugged in again. Before, a network adapter came back as a new
-  connection with automatic (DHCP) settings, losing its fixed address.
-- **USB Audio 2.0 and 3.0 devices (Windows 2000 to 8.1)** are no longer
-  offered to Windows' own USB Audio 1.0 driver ("USB Audio Device"),
-  which cannot run them and could keep Device Manager and the shutdown
-  waiting until a reset. Windows now asks for a driver (the free
-  `uac2`). A device already on "USB Audio Device" keeps it until changed
-  ("Known limitations").
-- **A device with more than one configuration** is set up in its first
-  and split by the rules a single-configuration device is split by (one
-  with a class of its own, or one interface, stays whole), so a USB
-  Audio 3.0 device's 2.0 function gets `uac2`. A maker's driver that
-  took such a split device whole no longer matches it.
-- **Windows 8, 8.1 and 10:** `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys`
-  take only non-executable memory for their own data, and their 64-bit
-  files keep their import table outside executable code, as Windows'
-  memory-integrity checks require.
-- **Smaller fixes** from a reading of the whole code: the event waits on
-  98 SE and ME, a device's power-up during a system sleep or wake, a
-  SuperSpeed hub port's reset, the UAS driver's departed units, and the
-  connection manager's teardown, resume and retry paths.
-- **Known limitation, Windows 98 SE:** Windows crawls or freezes once
-  xHCI98 is installed when a device with no working driver holds
-  asserted the IRQ an xHCI98 controller shares ("Known limitations").
-- **Known issue, Windows 98 SE and ME:** rarely, a start stops with "A
-  fatal exception 0E has occurred at 019F:BFF72170" (98 SE) or "Error:
-  0E : 01A7 : BFF62170" (ME). Turn the computer off and on again; the
-  next start works.
+- Devices on the computer's own ports kept across a resume that restarts
+  the controller (`XhciResumeKeep`).
+- A device that comes back with its serial number unreadable is no
+  longer taken for a new one.
+- USB Audio 2.0 and 3.0 kept from Windows' USB Audio 1.0 driver (2000 to
+  8.1); devices with several configurations split.
+- Memory integrity's rules met on 8 to 10; smaller fixes throughout.
+- 98 SE: a device with no working driver holding a shared IRQ slows or
+  freezes Windows ("Known limitations").
+- 98 SE and ME: rarely a start stops with "A fatal exception 0E has
+  occurred at 019F:BFF72170" (98 SE) or "Error: 0E : 01A7 : BFF62170"
+  (ME); turn the computer off and on.
 
 ### Thunderbolt and USB4
-
-- **Docks on Windows 2000, XP and XP x64.** A dock or device whose own
-  switch has more than one downstream port, plugged in while Windows
-  runs, now gets every port placed, also when its switch ports ask for
-  their own interrupt; before, the other ports stopped with Code 12
-  (`XhciCmBridgeReq` `0` turns it off). At the first plug its devices
-  may stop and start again once; a first NVMe enclosure brings two Found
-  New Hardware wizards, the second offering Stor98 ("Thunderbolt and
-  USB4: known limitations").
-- **A dock unplugged with a keyboard, mouse or tablet on its own USB
-  controller** is now removed, and found again when plugged back, on
-  Windows 2000 and XP with a USB4 host whose tunnels xHCI98 builds.
-  Under a firmware connection manager (Thunderbolt 3), and on 98 SE and
-  ME, stop such a dock before unplugging it.
-- **Daisy chains behind a USB4 host whose tunnels xHCI98 builds:** a
-  device plugged into a USB4 device's downstream port is connected
-  through it, and a drive in it appears beside the parent's; unplugging
-  the parent removes the chained device first. A stopped chained drive
-  keeps its tunnel until the unplug, so unplug it after the stop. On
-  Windows 2000 with the Standard PC HAL, a drive chained after startup
-  gets no interrupt (Code 10).
-- **[PLACEHOLDER w45-dock: 45.15's Code 31 fix, and 45.17, daisy chains
-  under the Thunderbolt 3 firmware connection manager.]**
-- **USB4 version 2 routers** (Barlow Ridge, say) are run as version 2:
-  Gen 4 links at 80 Gbit/s, symmetric or asymmetric (120/40), with
-  Extended Encapsulation and the enhanced time sync. An error on the
-  Gen 4 link between the computer's USB4 controller and the device
-  plugged into it is now recovered in place, the devices behind it kept
-  (`XhciCmUsb4V2` and `XhciCmGen4LinkRecovery` `0` go back to
-  `3.3.0.0`'s behaviour).
-- **Windows Vista and 7, 32-bit:** a dock's own USB controller, plugged
-  in for the first time, starts without a restart (the safe-removal
-  service starts it); with safe removal off it shows Code 1 until
-  Windows is restarted once.
-- **`XhciCmRingInterrupt` `1`** (Windows 2000 to 10) has the Thunderbolt
-  driver take the controller's interrupt, so it sees a plug sooner; at
-  its default, `0`, it polls as before.
-- **The ASMedia ASM4242's USB4 router** is matched and named by the
-  INF's own line, a hand install included.
-- **Fixed:** under Driver Verifier the connection manager could stop
-  Windows, at the start on 7 and at its unload on 8 and 8.1.
-- **[PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit Windows 8 and 8.1, as
-  a filter of the PCI root bus (the service `xhcipff`); still not on
-  32-bit Windows 10. If Windows no longer starts after `xhcipff.sys` was
-  deleted or damaged, use System Restore or the steps in
-  `tools\xhciinst\readme.txt`.]**
-- **[PLACEHOLDER w45-s3: Sleep (S3) on Windows 10 x64, the wake fix.]**
+- 2000, XP and XP x64: every port of a hot-plugged dock placed
+  (`XhciCmBridgeReq`); a first NVMe enclosure brings two wizards
+  ("Thunderbolt and USB4: known limitations").
+- Docks with an input device on their USB controller removed cleanly on
+  2000 and XP under a USB4 host xHCI98 runs; elsewhere stop them first.
+- Daisy chains behind such a host; on 2000's Standard PC HAL a drive
+  chained after startup gets Code 10.
+- A dock plugged in after startup needs bus numbers the BIOS reserves
+  for the ports; without them, Code 31 on 7 and nothing behind the port
+  on XP or 98 SE.
+- [PLACEHOLDER w45-dock: 45.17, firmware connection manager chains.]
+- USB4 version 2 routers run as version 2, Gen 4 links and their
+  recovery included (`XhciCmUsb4V2`, `XhciCmGen4LinkRecovery`).
+- Vista and 7 x86: a dock's USB controller starts at its first plug
+  without a restart; `XhciCmRingInterrupt`; the ASM4242 named by its
+  INF.
+- A drive attached during the install is listed in Safely Remove after a
+  restart or replug ("Thunderbolt and USB4: known limitations").
+- [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit 8 and 8.1.]
+- [PLACEHOLDER w45-s3: the Sleep (S3) wake on 10 x64.]
 
 ### Networking
-
-- **Thunderbolt networking** (new): a network connection between two
-  computers joined by one Thunderbolt or USB4 cable, in the frame
-  format Linux's Thunderbolt networking uses (`xhcinet.sys` on 98 SE to
-  7, `xhcinet6.sys` on 8 to 10). With no DHCP server both computers
-  take a 169.254.x.x address; the MTU, the same on both ends, is in the
-  adapter's Advanced settings. One link at a time, not through a dock.
-- **[PLACEHOLDER w45-tbnet6, S10/S11: off unless the "Thunderbolt
-  networking" box on the installer's Thunderbolt and USB4 page is
-  ticked (`INSTALL /tbnet`); the files in `cm\tbnet\` of each family
-  folder.]**
+- Thunderbolt networking (new): two computers on one Thunderbolt or USB4
+  cable, in Linux's frame format; one link, not through a dock.
+- [PLACEHOLDER w45-tbnet6, S10/S11: the installer's box; `cm\tbnet\`.]
 
 ### Storage
-
-- **UAS drives answer SCSI and ATA pass-through and SMART** on Windows
-  2000 to 10, so SMART and drive-information tools read a drive whose
-  USB bridge passes ATA commands through (SAT); 32-bit tools work on
-  64-bit Windows, and on 98 SE and ME ASPI tools reach the same drives.
-  A bridge without SAT gives the standard refusal.
-- **A UAS drive is listed in Safely Remove Hardware** on Windows 2000,
-  XP, Vista and 7 and can be stopped on its own, as a Bulk-Only stick
-  can; on 2000, pulling it without a stop shows "Unsafe Removal of
-  Device", as for a stick.
-- **[PLACEHOLDER w45-dock, 45.41: a UAS drive behind a SuperSpeed hub
-  kept across the hub port's warm reset (`XhciLinkKeep`).]**
-- **Fixed, Windows 8.1:** Stor98 failing to start (Code 10) on an NVMe
-  drive that Windows' own `stornvme` ran before.
+- UAS drives answer pass-through and SMART (2000 to 10) and stop on
+  their own in Safely Remove (2000 to 7); Stor98 on 8.1 fixed.
+- [PLACEHOLDER w45-dock, 45.41: UAS drive kept over a warm reset.]
 
 ### Installer and package
-
-- **One folder per Windows family:** `98-me\` (98 SE, ME), `nt-x86\`
-  (32-bit 2000 to 10) and `nt-x64\` (64-bit), each with only what its
-  Windows installs: the USB drivers at its root (on NT the F6 floppy),
-  `cm\` and `stor98\`. `INTEGRATE.TXT` says which folder to give nLite,
-  NTLite or DISM. The 98 SE and ME Stor98 INF is now `stor98.inf` (was
-  `stor98w9.inf`).
-- **One build for everyone:** `debug-x86\`, `debug-x64\`, `INSTALL
-  /debug` and `SETUP /debug` are gone. The build keeps a command-state
-  checker that only counts what a strict controller would refuse (in the
-  USB Tree's snapshot; `XhciCommandCheck` `0` turns it off).
-- **[PLACEHOLDER w45-tidy, 45.50: every value the drivers read written by
-  the install at its default, only where missing, so a value you set
-  survives an update; `XhciCmTunnelBridge` as `auto`; Stor98's too.]**
-- **The Thunderbolt and USB4 page** follows the Components page when
-  that support is ticked: XHCIPFW ("Find Thunderbolt and USB4 devices
-  placed above 4 GB"), Stor98 and its large transfers on 98 SE and ME,
-  and whether a device plugged in gets a PCI Express connection at once
-  (the default) or none (`XhciCmApprove` `0`, before on the Settings
-  dialog).
-- **The Advanced lists** offer every setting a user may change, among
-  them the interrupt and polling values, the log, `XhciLinkKeep`,
-  `XhciResumeKeep`, `XhciCmRingInterrupt` and `XhciCmUsb4V2`; on 98 SE
-  and ME a first install lists the USB settings too.
-- **Help**, or F1, explains the page it is on, a short paragraph per
-  choice.
-- **Windows 98 SE and ME:** every free and non-free package offered for
-  staging can be ticked, while the wizard's search path stays within 280
-  characters (98 SE) or 259 (ME), and the Free USB drivers page lists the
-  ones only copied. The wizard question comes only when a hardware wizard
-  is open (English Windows). If the installer reports a controller "not
-  reached in this run", restart Windows and run it again.
-- **Fixed, Windows 98 SE:** two USB 3 controllers no longer ask for the
-  "xhci98 xHCI Host Controller Disk"; a power cut during the file copy
-  no longer loses the record of the storage files placed.
-- **The Components page** is evenly spaced on every system, and the
-  USB Tree's safe-removal line says whether the Thunderbolt driver, and
-  Windows, have the device as removable.
-- **[PLACEHOLDER w45-tidy, 45.4: the USB Tree's title carries its
-  version, as `xHCI98 USB Tree 3.4.0.0`.]**
-- **[PLACEHOLDER w45-pe: the x64 INF in a Windows PE `boot.wim` with
-  DISM, and the XP x64 property-tab line.]**
+- One folder per Windows family (`98-me\`, `nt-x86\`, `nt-x64\`,
+  `INTEGRATE.TXT`); one build, `/debug` gone.
+- A Thunderbolt and USB4 page, full Advanced lists, Help and F1. 98 SE
+  and ME: more packages staged; a controller "not reached in this run"
+  needs a restart and another run.
+- [PLACEHOLDER w45-tidy, 45.50: every value written by the install.]
+- [PLACEHOLDER w45-tidy, 45.4: the USB Tree's title has its version.]
+- [PLACEHOLDER w45-pe: the x64 INF in a PE `boot.wim`; the XP x64 tab.]
 
 ### Other drivers
-
-- **usb-wdm-free 0.1.7** in the free download: new, `usbprn`, USB
-  printers and USB-to-parallel printer cables on 98 SE and ME (a printer
-  port, `USB001` and on, for Add Printer); `uac2` 0.1.6.0, each output
-  and input its own sound device, no old sound after a seek, and a
-  co-installer, installed by hand, that keeps Windows' USB Audio 1.0
-  driver off a UAC 2.0 device on 2000 to 7; `usbcom` 0.1.5.0, the FTDI
-  FT-X, FT232H and FT4232H, Prolific PL2303 and Silicon Labs CP2105 and
-  CP2108 serial bridges on 98 SE and ME. Its own release notes list the
-  rest.
-- **The free and non-free `rtl815x`** can be staged side by side on XP
-  to 7, 32-bit and x64, where their INFs list different chips.
-- usb-wdm-nonfree in the non-free download is 1.1.0, as in `3.3.0.0`.
+- usb-wdm-free 0.1.7: `usbprn` (printing, 98 SE and ME), `uac2` 0.1.6.0,
+  `usbcom` 0.1.5.0 (FTDI, Prolific, Silicon Labs bridges); `rtl815x`
+  beside the non-free one on XP to 7.
 
 ## What `3.3.0.0` changes
 
