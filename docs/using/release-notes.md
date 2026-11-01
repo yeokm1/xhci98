@@ -408,7 +408,7 @@ The full list: the `3.4.0.0` entry of `releases/history.md`.
   without a restart; `XhciCmRingInterrupt`; the ASM4242 named by its
   INF.
 - A drive attached during the install is listed in Safely Remove after a
-  restart or replug ("What `3.3.0.0` changes").
+  restart or replug ("What `3.1.0.0` changes").
 - [PLACEHOLDER w45-tidy, 45.9: XHCIPFW on 32-bit 8 and 8.1.]
 - [PLACEHOLDER w45-s3: the Sleep (S3) wake on 10 x64.]
 
@@ -1592,7 +1592,7 @@ have every leg.
 - **A device tunnelled before the driver started** (by the BIOS's pre-boot
   support) is offered for safe removal only after a re-plug, on Windows
   2000 to 7 (one connected while the package was installed, after a
-  restart or a re-plug: "What `3.3.0.0` changes"); the xHCI98 USB
+  restart or a re-plug: "What `3.1.0.0` changes"); the xHCI98 USB
   Tree and `INSTALL /console /eject` stop it before that, as an administrator.
 - **Windows 98 SE and ME: once the controller has started, `xhcicm.sys`
   stays loaded until Windows restarts**: disabling, updating or removing
