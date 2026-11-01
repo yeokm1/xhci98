@@ -3067,7 +3067,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `3.3.0.0`.
+This download bundles Stor98 `3.4.0.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
