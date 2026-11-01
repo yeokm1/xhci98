@@ -8436,6 +8436,100 @@ signed with the project's test key by the owner), and with them Driver Verifier 
 on the `d0813ef5` images (their legs above ran on `5fd8b6fd`, before the
 two connection-manager changes).
 
+## 45.59 S10 and S11: the network driver in the package, and the installer's networking box (2026-11-01)
+
+Worker `w45-tbnet6`, branch `w45-tbnet6` from `3.4.0.0` `208552f9`,
+development host A. Design record 35 revision 13 (section 9.5, section
+9.3 amended, Q12) and record 26 draft 60 are the plan. Commits:
+`ca90ab5a` (the design), `c57f5164` (S10), `7f5e34ec` (S11),
+`dccce821` (the networking row fitted to its page); each reviewed and
+revised.
+
+### What changed
+
+- **The package (S10).** `make-package.ps1` stages `xhcinet.inf`,
+  `xhcinet.sys` and `xhcinet6.sys` at the flat package root, each image
+  held to its flavour marker and import gate (x86 `net98` and `net6`,
+  amd64 the default rules and `net6`), the INF to `check-net-inf.ps1`;
+  on amd64 both images are signed with the others and `xhcinet.cat` is
+  made with the other catalogs (`$script:PackageCatalogs`).
+  `$script:FamilyLayout` re-lays them into `98-me\cm\tbnet\`
+  (`xhcinet.inf`, `xhcinet.sys`), `nt-x86\cm\tbnet\` (and
+  `xhcinet6.sys`) and `nt-x64\cm\tbnet\` (and `xhcinet.cat`).
+  `build-driver.cmd`'s gated record hashes and captures both images,
+  and the two-worktree import carries them. `make-release.ps1` publishes
+  them only as the gated builds, newer than every source they are made of
+  (`Assert-NetPublished`), gates the INF in the upload set and lists the
+  folder in the readme; `INTEGRATE.TXT` says that leaving `cm\tbnet\` out
+  leaves Thunderbolt networking out. The installed copy stays flat, so
+  98 SE's and ME's `DevicePath` keeps one entry.
+- **The installer (S11).** `INST_TBNET_WIRED` 1. The network driver is
+  the engine's sixth INF slot (`INST_INF_NET`) with a version group of
+  its own; it is copied, staged and installed only while the Thunderbolt
+  support is in the run and the box is ticked. `XhciCmNet` is written as
+  `inst_tbnet_decide` says, into each present NHI's key or, with none
+  present, `Services\USB`; a 1 only once the driver is staged (NT) or in
+  the copy (98 SE, ME). The uninstall removes the adapter, its INF, the
+  service with both images and the machine-wide `XhciCmNet`. The window's
+  Thunderbolt and USB4 page carries the box and its sentence, the
+  Summary a line, Help a paragraph; the console asks after the
+  Thunderbolt question; `/tbnet` needs `/thunderbolt` or `/cmonly`;
+  `/set XhciCmNet=` is refused.
+- Not changed: `XhciCmNetPollMs`, `XhciCmNetRxFrames`,
+  `XhciCmNetTxFrames` and `XhciCmNetE2E` were already written at their
+  defaults by both NHI INFs (read on XP below) and have `tuning.md` rows;
+  they are not Advanced rows (record 35 Q12, the owner's).
+
+### Checks and builds
+
+- `test_inst` 8015 checks, 0 failures; `xhciinst\build.cmd` RC 0.
+- Gated x86 `all` on `7f5e34ec`: the window self-test failed one check
+  ("the page's rows above its foot, every row shown"): fixed in
+  `dccce821`. Gated x86 `all` on `dccce821`: BUILD + GATES PASSED, the
+  host tests, the packager self-tests (1817 checks) and the window
+  self-test with them. Gated amd64 `all` on `dccce821`: BUILD + GATES
+  PASSED. Logs `E:\xhci98-scratch\p45-w45-tbnet6\logs\gated-x86-2.log`,
+  `gated-amd64-1.log`.
+- The legs' package: `make-release.ps1 -Arch x86 -TestLabel w45tbnet6`
+  with both driver sets, `-SkipQualtool -SkipMarkTool`, exit 0; the
+  nonfree download on the transfer disk. `98-me\cm\tbnet\` holds
+  `xhcinet.inf` and `xhcinet.sys`, `nt-x86\cm\tbnet\` those and
+  `xhcinet6.sys`. Hashes
+  `E:\xhci98-vm\p45\w45-tbnet6\hashes-dccce821.txt` (`SETUP.EXE`
+  `495da4f1...`, `xhcicm.sys` `b2f4fc6f...`, `xhcinet.sys`
+  `5b93e89d...`, `xhcinet6.sys` `48402fe3...`, `xhcinet.inf`
+  `87fcaedd...`).
+
+### The legs
+
+The far end: Kubuntu 26.04.1 live, kernel `7.0.0-30-generic`, its stock
+`thunderbolt_net`, the server end of `usb4-xdomain` on `usb4-emu`'s
+`w45-emuar` build (as `w45-tbnet5`), runtime power management off on
+`0000:00:04.0` and `0-0`. Each Windows guest a fresh q35 overlay,
+`-Usb4 adl`, the cable in from power-on. Evidence and screens:
+`E:\xhci98-vm\p45\w45-tbnet6\` (`w98\`, `w7\`, `xp\`, `pids.txt`).
+
+| System | What | Result |
+|---|---|---|
+| 98 SE | `INSTALL /console /thunderbolt /tbnet /yes /nopause` | pass: "Thunderbolt networking turned on (XhciCmNet 1): the network adapter appears after the restart"; no NHI bound yet, so `Services\USB` `XhciCmNet` 1 |
+| 98 SE | cold start | the NHI installed by itself; the hardware wizard for "xHCI98 Thunderbolt Networking" found the INF in `C:\XHCI98` on `DevicePath`, asked twice for `xhcinet.sys` (its default `C:\WIN98`; `C:\XHCI98` typed), took the 98 CD's network files by itself, asked for a restart |
+| 98 SE | after the restart | 169.254.211.195 to Linux 169.254.211.7: ping 4/4; Linux to 98: 4/4 and 1472 bytes DF 3/3; driver key `DeviceVxDs` and `NTMPDriver` `xhcinet.sys` |
+| 98 SE | `INSTALL /console /uninstall /yes /nopause` | pass: the adapter removed, `INF\OTHER`'s `xhcinet.inf`, `SYSTEM\xhcinet.sys` and the machine-wide `XhciCmNet` deleted; `Enum\XHCICM` left as an empty key |
+| 7 x86 | `SETUP.EXE /thunderbolt /tbnet` | pass: the box ticked with its sentence, the page whole (`w7\s4.png`); Summary "Thunderbolt networking: turned on (the network adapter appears after the restart)" (`w7\n3.png`) |
+| 7 x86 | after the restart | the adapter installed from the store by itself; `XhciCmNet` 1 in the NHI's key, none in `Services\USB`; 169.254.33.2 to Linux 4/4, Linux to 7 4/4 and 1472 DF 3/3 (firewall off) |
+| 7 x86 | update: `INSTALL /console /yes /nopause /thunderbolt` | pass: "/yes: Y, as it is now", "Thunderbolt networking stays on." |
+| 7 x86 | `INSTALL /console /uninstall /yes /nopause` | pass: `XHCICM\TBNET\...` removed, service `xhcinet` and `xhcinet.sys` deleted, its `oem7.inf` removed; no INF of this package left |
+| XP | `INSTALL /console /yes /nopause /thunderbolt` (no `/tbnet`) | pass: "/yes: N", "Thunderbolt networking stays off."; the NHI's key `XhciCmNet` 0 with `XhciCmNetPollMs` 1, `RxFrames` and `TxFrames` 0x80, `E2E` 1; no `Services\USB` value; no `Enum\XHCICM`. The first run ended with exit 4 behind a hardware wizard; the run after a restart, exit 3 |
+
+Not run (the owner's trim, 2026-11-01): Windows 10 x86 with the box
+ticked (`xhcinet6.sys` was read there by `w45-tbnet5`; this guest was
+stopped mid-install) and the ME recheck (98 SE passed from the same
+`98-me\` folder). Owed: the x64 legs, on the owner-signed kit (record 35
+Q11): stage it with `scripts\package\make-package.ps1 -Flavor release
+-Arch amd64 -TestSignPfx <pfx> -SignOnly` (or the cut's `make-release.ps1
+-Arch both ... -TestSignPfx <pfx>`), which now signs `xhcinet.sys` and
+`xhcinet6.sys` and makes `xhcinet.cat`.
+
 ## 45.final: the release-notes texts the tasks handed over
 
 Owner rule of 2026-10-31: user-facing text describes behaviour only, with
