@@ -462,6 +462,9 @@ function Invoke-Check([string]$path, [string]$a) {
 
 if ($SelfTest) {
     $bad = 0
+    # The DriverVer mutation takes the version from the header, so a bump
+    # leaves it a mutation of the committed INF.
+    $curVer = (Get-Version).Version
     $cases = @(
         @{ A = "x86"; Rule = "FILE-CRLF"; From = "[Version]`r`n"; To = "[Version]`n" },
         @{ A = "x86"; Rule = "FILE-ASCII"; From = 'MtuDesc="MTU"'; To = ('MtuDesc="MT' + [char]0xE9 + '"') },
@@ -469,7 +472,7 @@ if ($SelfTest) {
         @{ A = "x86"; Rule = "W98-SECTIONLEN"; From = "[Net.Ndis]"; To = "[Net.Ndis.AVeryLongSectionNameIndeed]" },
         @{ A = "x86"; Rule = "BOTH-CLASS"; From = "Class=Net"; To = "Class=System" },
         @{ A = "x86"; Rule = "BOTH-COMPATIBLE"; From = "Compatible=1`r`n"; To = "" },
-        @{ A = "x86"; Rule = "BOTH-DRIVERVER"; From = ",3.3.0.0"; To = ",3.2.0.0" },
+        @{ A = "x86"; Rule = "BOTH-DRIVERVER"; From = ("," + $curVer); To = ",9.9.9.9" },
         @{ A = "x86"; Rule = "BOTH-CATALOG"; From = "Provider=%Provider%"; To = "Provider=%Provider%`r`nCatalogFile=xhcinet.cat" },
         @{ A = "amd64"; Rule = "BOTH-CATALOG"; From = "CatalogFile=xhcinet.cat`r`n"; To = "" },
         @{ A = "x86"; Rule = "BOTH-STRING"; From = 'MtuDesc="MTU"'; To = 'MtuDescX="MTU"' },
