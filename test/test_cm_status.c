@@ -237,6 +237,40 @@ static void test_icm_gen(void)
              "a Thunderbolt 3 host: no USB3 tunnel, whatever the router");
     CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
              "and its generation still the router's");
+
+    /* Record 32 section 12.8.15.13: the NT handover's bits. */
+    in.Handover = CM_ST_HO_PROFILE | 8UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ((get32(rec, CM_ST_O_FLAGS) >> CM_ST_F_HO_SHIFT) & 0x7FUL,
+             CM_ST_HO_PROFILE | 8UL, "tier 4, sent");
+    in.Handover = CM_ST_HO_NONE | 0x10UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x00FF0000UL, CM_ST_F_HO_GUARD,
+             "the guard's skip: bit 20");
+    in.Handover = CM_ST_HO_PROFILE | 8UL | 0x20UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x00FF0000UL,
+             (CM_ST_HO_PROFILE << 16) | CM_ST_F_HO_SENT | CM_ST_F_HO_TIMEOUT,
+             "a timeout: bit 21");
+    in.Handover = CM_ST_HO_UNKNOWN | 0x40UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x00FF0000UL,
+             (CM_ST_HO_UNKNOWN << 16) | CM_ST_F_HO_UNKNOWN,
+             "an unknown board at reads 0: bit 22");
+    in.Handover = 0x80UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x00FF0000UL, CM_ST_F_HO_NOROUTE,
+             "no routine route: bit 23");
+    in.Handover = 0x100UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x01FF0000UL, CM_ST_F_HO_EXPIRED,
+             "the deferral's bound: bit 24");
+    in.Handover = CM_ST_HO_PROFILE | 0x200UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x03FF0000UL,
+             (CM_ST_HO_PROFILE << 16) | CM_ST_F_HO_ECAMOFF,
+             "ECAM needing reads 1: bit 25");
+    in.Handover = 0;
 }
 
 static void test_limit(void)

@@ -76,7 +76,7 @@ Static, over Windows 7 SP1's `USBAUDIO.sys` in both architectures (x86,
 80,768 bytes, SHA-256 `72603e0a...b933`; x64, 109,696 bytes,
 `de1cddee...bb15`), with the function names from Microsoft's public symbols
 for those files; nothing executed. The addresses are in
-`docs/contributing/legal-provenance.md` section 4.
+`docs/contributing/design/13-superspeed-hcd.md` appendix B, item B.64.
 
 - `USBType1BuildIsochUrbRequest` builds a stream's data request. When the
   stream has a feedback endpoint it writes an explicit `StartFrame` from a

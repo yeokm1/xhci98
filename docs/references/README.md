@@ -195,6 +195,16 @@ secondary source, which is the standing it has here: it describes the
 platform, it does not specify it, and where it disagrees with what a target
 machine does, the machine wins.
 
+## Web pages cited by name, not saved
+
+Cited for facts and by section or heading name only; no text is quoted and
+nothing is kept.
+
+| Tag | Page | Cited in | What it gives |
+|---|---|---|---|
+| `[ms-osi]` | Microsoft, "How to Identify the Windows Version in ACPI by Using _OSI" (learn.microsoft.com, windows-hardware/drivers/acpi/winacpi-osi) | design record 32 | the table of `_OSI` strings |
+| `[ms-usb4acpi]` | Microsoft, "USB4 ACPI requirements" (learn.microsoft.com, windows-hardware/design/component-guidelines) | design record 22 section 7.6.1 (task 46.23) | the `_DSD` properties of a USB4 host's PCIe root ports, `usb4-host-interface` and `usb4-port-number` |
+
 ## Usage Notes
 
 - Treat the xHCI specification as authoritative for hardware programming.

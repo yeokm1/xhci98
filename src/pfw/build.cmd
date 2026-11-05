@@ -14,8 +14,9 @@ rem
 rem The toolchain and its checks are S98VSD.VXD's (design record 30 section
 rem 6.1): Open Watcom 2.0 wcc386, the Windows 98 SE DDK's LINK 5.12 /VXD
 rem staged by src\vsd\stage-ddk.ps1 into src\vsd\obj\bin\, and src\vsd's
-rem omfpub.py, omfcheck.py and callcheck.py. So no file-scope static in the
-rem sources and the data in an object of its own (pfw_data.c).
+rem omfpub.py, omfcheck.py and callcheck.py, with -zld. So no file-scope
+rem static in the sources and the data in objects of their own (pfw_data.c,
+rem and pfw_ids.c, the host interfaces' ids the host suite links too).
 setlocal
 cd /d "%~dp0"
 set "FLAV=%~1"
@@ -63,38 +64,41 @@ set "PATH=%WBIN%;%PATH%"
 rem -zp1: packed records, the layouts pfw_scan.h gives byte for byte. -zc:
 rem string literals in the code segment. -s: no stack probes. -zl -zls: no
 rem default-library records. -oxi: inline inpd/outpd. -we: a warning fails.
-set "CF=-q -bt=windows -3r -zp1 -zc -s -zl -zls -oxi -w4 -we -i=%WATCOM%\H %DEF%"
-for %%F in (pfw pfw_scan pfw_io pfw_data) do (
+rem -zld: no dependency records (each header's full path and time stamp), so
+rem with omfpub.py's THEADR the objects do not depend on where they are built.
+set "CF=-q -bt=windows -3r -zp1 -zc -s -zl -zls -zld -oxi -w4 -we -i=%WATCOM%\H %DEF%"
+for %%F in (pfw pfw_scan pfw_line pfw_io pfw_data pfw_ids) do (
     wcc386 %CF% -fo=%O%\%%F.obj %%F.c || exit /b 1
     "%PY%" -I %V%\omfpub.py %O%\%%F.obj || exit /b 1
 )
-"%PY%" -I %V%\omfcheck.py %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_io.obj %O%\pfw_data.obj || exit /b 1
+"%PY%" -I %V%\omfcheck.py %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_line.obj %O%\pfw_io.obj %O%\pfw_data.obj %O%\pfw_ids.obj || exit /b 1
 rem Linked as PFWNEW.VXD and made XHCIPFW.VXD only once every check below
 rem has passed (the old image is deleted at the start).
 if exist %O%\PFWNEW.VXD del %O%\PFWNEW.VXD
-%V%\obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /OUT:%O%\PFWNEW.VXD /MAP:%O%\xhcipfw.map /DEF:pfw.def %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_io.obj %O%\pfw_data.obj
+"%PY%" -I %V%\callcheck.py --self-test || exit /b 1
+%V%\obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /OUT:%O%\PFWNEW.VXD /MAP:%O%\xhcipfw.map /DEF:pfw.def %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_line.obj %O%\pfw_io.obj %O%\pfw_data.obj %O%\pfw_ids.obj
 if errorlevel 1 exit /b 1
-"%PY%" -I %V%\callcheck.py %O%\PFWNEW.VXD %O%\xhcipfw.map %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_io.obj || exit /b 1
+"%PY%" -I %V%\callcheck.py %O%\PFWNEW.VXD %O%\xhcipfw.map %O%\pfw.obj %O%\pfw_scan.obj %O%\pfw_line.obj %O%\pfw_io.obj %O%\pfw_data.obj %O%\pfw_ids.obj || exit /b 1
 set "QF="
 if /i "%FLAV%"=="qemu" set "QF=-Qemu"
 rem Every object is disassembled. In the release image no port instruction
 rem may be outside pfw_io.obj, and pfw_io.obj's ports are CF8h and CFCh
 rem alone (record 32 section 8); the qemu image's debug-console writes are
 rem its own.
-for %%F in (pfw pfw_scan pfw_io pfw_data) do (
+for %%F in (pfw pfw_scan pfw_line pfw_io pfw_data pfw_ids) do (
     wdis %O%\%%F.obj > %O%\%%F.dis || (
         echo XHCIPFW.VXD: wdis could not disassemble %%F.obj
         exit /b 1
     )
 )
-for %%F in (pfw pfw_scan pfw_io) do (
+for %%F in (pfw pfw_scan pfw_line pfw_io) do (
     findstr /r /c:"^0000 " %O%\%%F.dis >nul || (
         echo XHCIPFW.VXD: %%F.dis holds no disassembled code
         exit /b 1
     )
 )
 if /i not "%FLAV%"=="qemu" (
-    for %%F in (pfw pfw_scan pfw_data) do (
+    for %%F in (pfw pfw_scan pfw_line pfw_data pfw_ids) do (
         findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]out$" /c:"[ 	]in[sbwd]*[ 	]" /c:"[ 	]in$" %O%\%%F.dis >nul && (
             echo XHCIPFW.VXD: %%F.obj has a port instruction in the release build
             exit /b 1
@@ -111,6 +115,7 @@ findstr /r /i /c:"0x00000cf8" %O%\pfw_io.ports >nul || (
     echo XHCIPFW.VXD: pfw_io.obj loads no port CF8h
     exit /b 1
 )
+powershell -NoProfile -ExecutionPolicy Bypass -File check-pfw.ps1 -SelfTest || exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File check-pfw.ps1 %O%\PFWNEW.VXD %QF% || exit /b 1
 move /y %O%\PFWNEW.VXD %O%\XHCIPFW.VXD >nul || exit /b 1
 echo built %O%\XHCIPFW.VXD

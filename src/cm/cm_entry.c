@@ -16,6 +16,7 @@
 #include "../xhci_version.h"
 #include "cm_nvlink.h"
 #include "cm_ports.h"
+#include "cm_oscp.h"
 
 #if defined(XHCI_FLAVOUR_QEMU)
 #define CM_FLAVOUR_NAME "XHCI98_FLAVOUR_QEMU"
@@ -141,6 +142,8 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     CM_IDS idsSeen;
     NTSTATUS status;
     ULONG role;
+    ULONG member;
+    ULONG pciAbove;
 
     CmZero(&idsSeen, sizeof(idsSeen));
     if (!IoIsWdmVersionAvailable(1, 0x10)) {
@@ -158,19 +161,32 @@ static NTSTATUS cmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
         ids[bytes / sizeof(WCHAR) + 1] = 0;
         (VOID)CmClassifyIds(ids, bytes / sizeof(WCHAR) + 2, &idsSeen);
     }
+    pciAbove = (ULONG)cmPciAbove(pdo);
+    /* Record 32 section 12.8.15.7: the ASM4242's upstream port above the
+     * PCI driver and its xHCI above its function driver are the mailbox's
+     * members, objects of their own (cm_oscnt.c); its downstream ports are
+     * bridge filters with a member half. */
+    member = CmOscpMemberRole(idsSeen.Vendor, idsSeen.Device,
+                              (BOOLEAN)(idsSeen.Role == CM_ROLE_FILTER),
+                              (BOOLEAN)(pciAbove != 0),
+                              (BOOLEAN)(pdo->AttachedDevice != NULL));
+    if (member == CM_OSCP_R_USP || member == CM_OSCP_R_XHCI) {
+        return CmOscmAddDevice(driver, pdo, member);
+    }
     role = CmRoleDecide(&idsSeen,
                         (ULONG)CmPortsFilterId(CM_PORTS_ID(idsSeen.Vendor,
                                                            idsSeen.Device)));
     /* Since task 45.12 (design record 33 section 4.4): a listed bridge's
      * LowerFilters registration, made before the PCI driver's FDO, is the
      * child; the NHI's answer stands whatever is above its PDO. */
-    role = CmRolePlace(role, (ULONG)cmPciAbove(pdo),
-                       (ULONG)(CmBreqGate != 0));
+    role = CmRolePlace(role, pciAbove, (ULONG)(CmBreqGate != 0));
     if (role == CM_ROLE_FILTER) {
         if (cmBridgeOnStack(pdo)) {
             return STATUS_SUCCESS;
         }
-        return CmFilterAddDevice(driver, pdo);
+        return CmFilterAddDevice(driver, pdo,
+                                 CM_PORTS_ID(idsSeen.Vendor, idsSeen.Device),
+                                 member == CM_OSCP_R_DSP ? member : 0);
     }
     if (role == CM_ROLE_NHI) {
         return CmNhiAddDevice(driver, pdo, &idsSeen);
@@ -200,6 +216,9 @@ static NTSTATUS cmDispatchPnp(PDEVICE_OBJECT device, PIRP irp)
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPnp((PCM_NHI)device->DeviceExtension, irp);
     }
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_MEMBER) {
+        return CmOscmPnp((PCM_MEMBER)device->DeviceExtension, irp);
+    }
     return CmFilterPnp((PCM_FILTER)device->DeviceExtension, irp);
 }
 
@@ -213,6 +232,9 @@ static NTSTATUS cmDispatchPower(PDEVICE_OBJECT device, PIRP irp)
     }
     if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_NHI) {
         return CmNhiPower((PCM_NHI)device->DeviceExtension, irp);
+    }
+    if (((PCM_COMMON)device->DeviceExtension)->Kind == CM_KIND_MEMBER) {
+        return CmOscmPower((PCM_MEMBER)device->DeviceExtension, irp);
     }
     return CmFilterPower((PCM_FILTER)device->DeviceExtension, irp);
 }
@@ -260,7 +282,10 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         IoIsWdmVersionAvailable(1, 0x10) ? cmUnload : NULL;
     CmRegInit();
     CmNvlinkInit();
+    CmOscInit();
+    CmOscntInit();
     CmEjectInit();
+    CmLogClockInit();
     CmQueryInit();
     CmNhiCarryInit();
     for (i = 0; i <= IRP_MJ_MAXIMUM_FUNCTION; i++) {

@@ -412,6 +412,7 @@ static VOID xhciTbtSetClear(PXHCI_TBT_TOPO topo)
     }
     topo->Tunnels = 0;
     topo->Named = 0;
+    topo->AcpiNamed = 0;
     topo->Tunnel = XHCI_TBT_NO_BDF;
     topo->BaseArmed = 0;
     xhciTbtZero((PULONG)&topo->Pick, sizeof(topo->Pick) / sizeof(ULONG));
@@ -968,8 +969,14 @@ static VOID xhciTbtSetVoid(PXHCI_TBT_TOPO topo, ULONG outcome)
     xhciTbtMarkMembers(topo);
 }
 
-ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
-                          PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf)
+/*
+ * The router-named and ACPI-named sources' common rules (tbt_topo.h): with
+ * `binds` NULL (ACPI-named) nothing is bound and the member joins
+ * unbound, with source `source`.
+ */
+static ULONG xhciTbtTopoAdd(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
+                            PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf,
+                            ULONG source)
 {
     ULONG member;
     ULONG probe;
@@ -978,10 +985,6 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
     ULONG claim;
     XHCI_TBT_BRIDGE br;
 
-    if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
-        port == 0 || port > XHCI_TBT_MAX_PORTS || bdf > 0xFFFFUL) {
-        return XHCI_TBT_MAP_BAD_PARAM;
-    }
     if (topo->Outcome != XHCI_TBT_TOPO_SET &&
         topo->Outcome != XHCI_TBT_TOPO_OVERRIDE &&
         topo->Outcome != XHCI_TBT_TOPO_NO_CANDIDATE &&
@@ -995,6 +998,9 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
     member = xhciTbtMemberOf(topo, bdf);
     if (member != XHCI_TBT_NO_MEMBER) {
         /* Whatever source put it there stays; the naming binds it. */
+        if (binds == NULL) {
+            return XHCI_TBT_MAP_KNOWN;
+        }
         claim = xhciTbtClaim(binds, port, bdf, XHCI_TBT_CORR_NAMED,
                              XHCI_TBT_MAP_KNOWN);
         return claim;
@@ -1023,8 +1029,10 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
     /* A claim that disagrees with one already made binds nothing, but
      * the router still names the bridge as a tunnel port: it joins the set
      * all the same, its port unknown (the whole set acts for it). */
-    claim = xhciTbtClaim(binds, port, bdf, XHCI_TBT_CORR_NAMED,
-                         XHCI_TBT_MAP_ADDED);
+    claim = binds == NULL ? XHCI_TBT_MAP_ADDED
+                          : xhciTbtClaim(binds, port, bdf,
+                                         XHCI_TBT_CORR_NAMED,
+                                         XHCI_TBT_MAP_ADDED);
     if (topo->Tunnels >= XHCI_TBT_MAX_TUNNELS) {
         xhciTbtSetVoid(topo, XHCI_TBT_TOPO_MANY);
         return XHCI_TBT_MAP_FULL;
@@ -1033,12 +1041,34 @@ ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
     /* Taken whatever its capability list reads, as an override entry is:
      * only its port readings depend on the capabilities. */
     xhciTbtClassify(io, bdf, id, &br);
-    xhciTbtSetAdd(topo, &br, XHCI_TBT_SRC_ROUTER);
-    topo->Named++;
+    xhciTbtSetAdd(topo, &br, source);
+    if (source == XHCI_TBT_SRC_ACPI) {
+        topo->AcpiNamed++;
+    } else {
+        topo->Named++;
+    }
     topo->Outcome = XHCI_TBT_TOPO_SET;
     xhciTbtMarkMembers(topo);
     return claim == XHCI_TBT_MAP_CONFLICT ? XHCI_TBT_MAP_CONFLICT
                                           : XHCI_TBT_MAP_ADDED;
+}
+
+ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
+                          PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf)
+{
+    if (io == NULL || io->Read == NULL || topo == NULL || binds == NULL ||
+        port == 0 || port > XHCI_TBT_MAX_PORTS || bdf > 0xFFFFUL) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    return xhciTbtTopoAdd(io, topo, binds, port, bdf, XHCI_TBT_SRC_ROUTER);
+}
+
+ULONG XhciTbtTopoAddAcpi(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG bdf)
+{
+    if (io == NULL || io->Read == NULL || topo == NULL || bdf > 0xFFFFUL) {
+        return XHCI_TBT_MAP_BAD_PARAM;
+    }
+    return xhciTbtTopoAdd(io, topo, NULL, 0, bdf, XHCI_TBT_SRC_ACPI);
 }
 
 /*

@@ -8,7 +8,10 @@
  * ignored, the scan's bounds, the BAR count over a subtree's bus range,
  * the xHCI controllers with a BAR above 4 GB (section 4.4), the log
  * records and their sizes, the tables' limits, and the emulator's
- * 4G-off layout as the VxD read it.
+ * 4G-off layout as the VxD read it; and section 12.10's interrupt-line
+ * pass (task 46.11): the switch, the NHI by id or class, its own port by
+ * topology, every function left that the pass must leave, the byte
+ * write, and the id list against xhcicm.inf.
  */
 
 #include <stdio.h>
@@ -616,6 +619,240 @@ static void test_ntsum(void)
           "the counts held at their top");
 }
 
+/* ---- the interrupt-line pass (record 32 section 12.10, task 46.11) ---- */
+
+static int bytes8;      /* byte writes, any function                  */
+static int lineLock;    /* the model's line byte ignores writes       */
+
+void PfwCfgWrite8(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val)
+{
+    FN *f = find(bus, devfn);
+
+    bytes8++;
+    if (f == NULL || (off & 3UL) != 0) {
+        stray++;
+        return;
+    }
+    if (lineLock && off == 0x3C) {
+        return;
+    }
+    f->Cfg[off / 4] = (f->Cfg[off / 4] & 0xFFFFFF00UL) | (val & 0xFFUL);
+}
+
+/* A function with its line and pin, decode on. */
+static FN *lined(FN *f, PFW_U32 line, PFW_U32 pin)
+{
+    f->Cfg[0x3C / 4] = 0x12340000UL | (pin << 8) | line;
+    f->Cfg[0x04 / 4] = 0x00100006UL;
+    return f;
+}
+
+/* The ASM4242's shape: root port 00:03.0 -> upstream port 01:00.0 ->
+ * downstream ports 02:00.0 (a tunnel port, its bus empty), 02:02.0 (the
+ * xHCI's) and 02:03.0 (the NHI's, bus 64h). */
+static FN *nhiOf;
+static FN *dspOf;
+static FN *tunOf;
+static FN *xhcOf;
+
+static void asm4242(void)
+{
+    FN *f;
+
+    reset();
+    bridge(0, 3, 0, 1, 0x70, 0, 0, 0);
+    f = bridge(1, 0, 0, 2, 0x70, 0, 0, 0);
+    f->Cfg[0] = 0x24211B21UL;
+    tunOf = lined(bridge(2, 0, 0, 3, 0x30, 0, 0, 0), 0x0B, 1);
+    tunOf->Cfg[0] = 0x24231B21UL;
+    f = lined(bridge(2, 2, 0, 0x60, 0x60, 0, 0, 0), 0x0B, 1);
+    f->Cfg[0] = 0x24231B21UL;
+    dspOf = lined(bridge(2, 3, 0, 0x64, 0x64, 0, 0, 0), 0x04, 1);
+    dspOf->Cfg[0] = 0x24231B21UL;
+    dspOf->Cfg[0x3C / 4] |= 0x00010000UL;    /* a Bridge Control bit */
+    xhcOf = lined(add(0x60, 0, 0, 0, 0x0C0330UL), 0x0B, 1);
+    xhcOf->Cfg[0] = 0x24261B21UL;
+    nhiOf = lined(add(0x64, 0, 0, 0, 0x0C0340UL), 0x04, 1);
+    nhiOf->Cfg[0] = 0x24251B21UL;
+}
+
+static void lines(PFW_RESULT *r, PFW_U32 setting)
+{
+    memset(r, 0, sizeof(*r));
+    r->Switch.Setting = setting;
+    bytes8 = 0;
+    PfwLines(r);
+}
+
+static void test_lines(void)
+{
+    static PFW_RESULT r;
+    FN *f;
+    PFW_U32 tun;
+    PFW_U32 xhc;
+
+    CHECK_EQ(sizeof(PFW_LINE_REC), 8, "a line record is 8 bytes");
+    CHECK_EQ(sizeof(PFW_SWITCH), 24, "the switch record six dwords");
+
+    /* The switch (step 1). */
+    CHECK_EQ(PfwSwitchSetting(0, 0, 4, 4, 0), PFW_SW_OFF, "0 read whole: off");
+    CHECK_EQ(PfwSwitchSetting(0, 0, 4, 4, 1), PFW_SW_ON, "1: on");
+    CHECK_EQ(PfwSwitchSetting(0, 0, 4, 4, 7), PFW_SW_ON, "another value refused: the default");
+    CHECK_EQ(PfwSwitchSetting(0, 2, 0, 4, 0), PFW_SW_ON, "missing: the default");
+    CHECK_EQ(PfwSwitchSetting(0, 234, 4, 4, 0), PFW_SW_FAILED, "another query code: lines left");
+    CHECK_EQ(PfwSwitchSetting(0, 0, 3, 4, 0), PFW_SW_FAILED, "a binary value: left");
+    CHECK_EQ(PfwSwitchSetting(0, 0, 4, 2, 0), PFW_SW_FAILED, "two bytes: left");
+    CHECK_EQ(PfwSwitchSetting(1011, 0, 4, 4, 1), PFW_SW_FAILED, "the key not opened: left");
+
+    /* The NHI by id or class (step 2). */
+    CHECK(PfwIsNhi(0x24251B21UL, 0), "the ASM4242 NHI by its id");
+    CHECK(PfwIsNhi(0x12345678UL, 0x0C034000UL), "any USB4 host interface by class");
+    CHECK(!PfwIsNhi(0x24261B21UL, 0x0C033000UL), "the xHCI is not one");
+    CHECK(!PfwIsNhi(0x24231B21UL, 0x06040000UL), "nor a downstream port");
+
+    asm4242();
+    tun = tunOf->Cfg[0x3C / 4];
+    xhc = xhcOf->Cfg[0x3C / 4];
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 2, "the NHI and its own port");
+    CHECK_EQ(nhiOf->Cfg[0x3C / 4], 0x123401FFUL, "the NHI's line FFh, the rest kept");
+    CHECK_EQ(dspOf->Cfg[0x3C / 4], 0x123501FFUL, "the port's line FFh, Bridge Control kept");
+    CHECK_EQ(tunOf->Cfg[0x3C / 4], tun, "the tunnel port never touched");
+    CHECK_EQ(xhcOf->Cfg[0x3C / 4], xhc, "the xHCI never touched");
+    CHECK_EQ(bytes8, 2, "two byte writes");
+    CHECK_EQ(writes, 0, "no dword write");
+    CHECK_EQ(stray, 0, "nothing written elsewhere");
+    CHECK_EQ(r.Lines[0].Role, PFW_ROLE_NHI, "first the NHI");
+    CHECK_EQ(r.Lines[0].Outcome, PFW_LN_WRITTEN, "written");
+    CHECK_EQ(r.Lines[0].Before, 0x04, "its line before");
+    CHECK_EQ(r.Lines[0].After, 0xFF, "and after");
+    CHECK_EQ(r.Lines[1].Role, PFW_ROLE_PORT, "then its port");
+    CHECK_EQ(r.Lines[1].Bus, 2, "02:03.0");
+    CHECK_EQ(r.Lines[1].DevFn, 3 << 3, "02:03.0's devfn");
+    CHECK_EQ(r.Lines[1].Hdr, 1, "a type 1 header");
+    CHECK(r.Result & PFW_RES_LINE, "a line written");
+
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.Lines[0].Outcome, PFW_LN_ALREADY, "the next start: FFh already");
+    CHECK_EQ(bytes8, 0, "and nothing written");
+
+    asm4242();
+    lines(&r, PFW_SW_OFF);
+    CHECK_EQ(r.NLines, 2, "the switch 0: both recorded");
+    CHECK_EQ(r.Lines[0].Outcome, PFW_LN_LEFT, "left");
+    CHECK_EQ(bytes8, 0, "nothing written");
+    CHECK(r.Result & PFW_RES_LINE_OFF, "the switch 0 in the result");
+    lines(&r, PFW_SW_FAILED);
+    CHECK_EQ(bytes8, 0, "the switch not read: nothing written");
+    CHECK(r.Result & PFW_RES_LINE_NOREAD, "and said");
+
+    /* The port's bus holds something else: the NHI alone. */
+    asm4242();
+    lined(add(0x64, 1, 0, 0, 0x020000UL), 0x0B, 1);
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 1, "a second device on the NHI's bus: no port");
+    CHECK_EQ(dspOf->Cfg[0x3C / 4] & 0xFF, 0x04, "the port left");
+    asm4242();
+    lined(add(0x64, 0, 1, 0, 0x020000UL), 0x0B, 1);
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 1, "a second function of the NHI's device: no port");
+
+    /* Two bridges claiming the NHI's bus: none taken. */
+    asm4242();
+    bridge(0x50, 0, 0, 0x64, 0x64, 0, 0, 0);
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 1, "two ports claim the bus: none taken");
+
+    /* Decode off; pin 0; a line that does not read back. */
+    asm4242();
+    dspOf->Cfg[0x04 / 4] = 0x00100000UL;
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.Lines[1].Outcome, PFW_LN_NODECODE, "decode off: left");
+    CHECK_EQ(dspOf->Cfg[0x3C / 4] & 0xFF, 0x04, "its line kept");
+    asm4242();
+    nhiOf->Cfg[0x3C / 4] &= 0xFFFF00FFUL;
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 0, "an NHI with pin 0 is not selected");
+    CHECK_EQ(dspOf->Cfg[0x3C / 4] & 0xFF, 0x04, "nor its port");
+    asm4242();
+    lineLock = 1;
+    lines(&r, PFW_SW_ON);
+    lineLock = 0;
+    CHECK_EQ(r.Lines[0].Outcome, PFW_LN_REFUSED, "a line that does not read back: refused");
+    CHECK(r.Result & PFW_RES_LINE_BAD, "and said");
+
+    /* An integrated NHI on the root bus: alone, no port. */
+    reset();
+    lined(add(0, 0x0D, 0, 0x80, 0x0C0330UL), 0x0A, 1);
+    f = lined(add(0, 0x0D, 2, 0, 0x0C0340UL), 0x0A, 1);
+    f->Cfg[0] = 0x9A1B8086UL;
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 1, "an NHI on the root bus: itself alone");
+    CHECK_EQ(f->Cfg[0x3C / 4] & 0xFF, 0xFF, "its line FFh");
+
+    /* No NHI: nothing. */
+    reset();
+    lined(add(0, 2, 0, 0, 0x0C0330UL), 0x0B, 1);
+    lines(&r, PFW_SW_ON);
+    CHECK_EQ(r.NLines, 0, "no host interface: nothing");
+    CHECK_EQ(bytes8, 0, "and nothing written");
+}
+
+/* The id list equal to xhcicm.inf's [CmModels] Cm.Dev rows, the class row
+ * included (record 32 section 12.10 step 2). */
+static void test_line_ids(void)
+{
+    static char inf[65536];
+    FILE *fp;
+    size_t n;
+    char *sec;
+    char *end;
+    char *p;
+    PFW_U32 seen;
+    PFW_U32 i;
+    unsigned v;
+    unsigned d;
+    int cls;
+
+    fp = fopen("..\\src\\cm\\xhcicm.inf", "rb");
+    CHECK(fp != NULL, "xhcicm.inf read");
+    if (fp == NULL) {
+        return;
+    }
+    n = fread(inf, 1, sizeof(inf) - 1, fp);
+    fclose(fp);
+    inf[n] = '\0';
+    sec = strstr(inf, "\r\n[CmModels]\r\n");
+    CHECK(sec != NULL, "its [CmModels]");
+    if (sec == NULL) {
+        return;
+    }
+    sec += 2;
+    end = strstr(sec + 1, "\r\n[");
+    if (end != NULL) {
+        *end = '\0';
+    }
+    seen = 0;
+    cls = 0;
+    for (p = strstr(sec, "=Cm.Dev,PCI\\"); p != NULL;
+         p = strstr(p + 1, "=Cm.Dev,PCI\\")) {
+        if (strncmp(p + 12, "CC_0C0340", 9) == 0) {
+            cls = 1;
+            continue;
+        }
+        CHECK(sscanf(p + 12, "VEN_%4x&DEV_%4x", &v, &d) == 2, "an id row");
+        for (i = 0; i < PfwNhiIdCount; i++) {
+            if (PfwNhiIds[i] == (((PFW_U32)d << 16) | v)) {
+                break;
+            }
+        }
+        CHECK(i < PfwNhiIdCount, "each INF id in the VxD's list");
+        seen++;
+    }
+    CHECK_EQ(seen, PfwNhiIdCount, "as many ids as the list holds");
+    CHECK(cls, "the class row there, PFW_CLASS_USB4_NHI");
+}
+
 int main(void)
 {
     test_classify();
@@ -629,6 +866,8 @@ int main(void)
     test_limits();
     test_emulator();
     test_ntdec();
+    test_lines();
+    test_line_ids();
     printf("test_pfw: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

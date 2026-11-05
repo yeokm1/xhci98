@@ -99,6 +99,35 @@
  * answer awaited). A clear bit says neither that a removal ended nor that
  * nothing changed. */
 #define CM_ST_F_EJECTING_SHIFT  12UL
+/* Bits 18:16: the platform's USB4 handover's tier for this start (design
+ * record 32 sections 12.8.11 and 12.8.15.13): 0 not looked for, 1 the
+ * firmware (98 SE and ME) or the board (NT) not recognised, 2 a known
+ * build, 3 the same handover code in another build, 4 (NT) a known
+ * board's profile. Bit 19: the handover written this boot. NT alone: bit
+ * 20 this start skipped by the boot guard, bit 21 an exchange timed out
+ * this boot, bit 22 not sent: an unknown board, XhciCmAsm4242Reads 0. A
+ * reader that knows no such bit reads 0 for it; the version stays 1. */
+#define CM_ST_F_HO_SHIFT        16UL
+#define CM_ST_F_HO_MASK         0x7UL
+#define CM_ST_F_HO_SENT         0x00080000UL
+#define CM_ST_F_HO_GUARD        0x00100000UL
+#define CM_ST_F_HO_TIMEOUT      0x00200000UL
+#define CM_ST_F_HO_UNKNOWN      0x00400000UL
+/* Bit 23 (NT): not sent, the routines it needs not reachable (the x86
+ * image with no helper, record 32 section 12.8.15.15). */
+#define CM_ST_F_HO_NOROUTE      0x00800000UL
+/* Bit 24 (NT): not sent, the start's wait for it ended at its bound
+ * (record 32 section 12.8.15.16). */
+#define CM_ST_F_HO_EXPIRED      0x01000000UL
+/* Bit 25 (NT): not sent, a known board on 2000, 32-bit XP or XP x64,
+ * whose mailbox only ECAM reaches, left at XhciCmAsm4242Reads 0 (record
+ * 32 section 12.8.15.18, 113h). */
+#define CM_ST_F_HO_ECAMOFF      0x02000000UL
+#define CM_ST_HO_NONE           0UL
+#define CM_ST_HO_UNKNOWN        1UL
+#define CM_ST_HO_KNOWN          2UL
+#define CM_ST_HO_SAME           3UL
+#define CM_ST_HO_PROFILE        4UL
 
 /* Kinds, and what CM_ST_E_IDS holds for each. */
 #define CM_ST_KIND_ICM          1UL     /* an ICM-announced device: the

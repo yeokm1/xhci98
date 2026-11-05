@@ -1,6 +1,16 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 24, 2026-10-28 (revision 24, roadmap-usb4 task 44.80:
+Status: revision 27, 2026-11-03 (roadmap-usb4 task 46.21, the owner's
+option B and XP route: on 98 SE and ME the DSDT and every SSDT read by
+`xhci98.sys` when the tool asks, on 32-bit XP and 2000 the registry's
+copies, section 21 item 9); revision 26, 2026-11-03
+(roadmap-usb4 task 46.21: File > Save
+Firmware Tables... and `XHCITR /acpi <folder>` save the computer's ACPI
+tables, on 98 SE and ME through a fifth request of `xhcicm.sys`'s query
+device, section 21, with section 4.2); revision 25, 2026-11-03 (roadmap-usb4 task 46.4, was TRSNAP.1:
+File > Save Snapshot... asks only for the folder and says where the files
+went in a short message, section 15 item 8); revision 24, 2026-10-28
+(revision 24, roadmap-usb4 task 44.80:
 the "can run faster" notice held to what this computer and the path
 give, and Windows' own ports as an option, section 7.7 items 10 and 11,
 with sections 7.2.1, 10 and 12 and record 13 section 8.12's version 3);
@@ -449,7 +459,8 @@ unelevated user can open it on every target is read by leg T.1 (section
   the device name is refused), `CLEANUP` and `CLOSE` succeed,
   `DEVICE_CONTROL` answers `CM_Q_IOCTL` alone (and, since revision 9,
   `CM_QL_IOCTL`, section 4.5; since revision 12, `CM_QP_IOCTL`, section
-  4.7), everything else fails with
+  4.7; `CM_QM_IOCTL`, record 21 section 7.4; since revision 26,
+  `CM_QA_IOCTL`, section 21), everything else fails with
   `STATUS_INVALID_DEVICE_REQUEST`, and PnP and power never reach it.
 - **Name.** `\Device\XhciCm<n>`, linked as `\DosDevices\XHCICM<n>`, `n`
   the first free of 0..15, created in the start IRP's system context (so
@@ -2826,7 +2837,37 @@ moved) stays the reference for the route and the files.
    `src\xhci_counters.h`, as it checked XHCISNAP's.
 8. **File > Save Snapshot...** picks a folder (`SHBrowseForFolder`),
    runs `/snapshot` there for the first xhci98 controller and shows the
-   text, with the folder, in a message box.
+   text, with the folder, in a message box. **Revision 25** (task 46.4,
+   the owner, 2026-11-01): that message box held the engine's whole
+   text, up to 6 KB, a window taller than a 640 by 480 screen. The
+   folder dialog stays the one question (its prompt "Save the snapshot
+   in:"); the files keep `/snapshot`'s own names from the date and time
+   (`stamp_base`, unchanged, as is `XHCITR /snapshot` itself); and the
+   window then says in a short message box, of a few lines whatever the
+   engine printed, where the files went and whether they are whole:
+
+   | `/snapshot`'s exit (`tr_snap.c`, `-report`'s list) | The message (drafts for the owner) |
+   |---|---|
+   | 0 | "Snapshot saved in <folder>: <name>.DEV, .TXT, .BIN and .PSC." |
+   | 3 (the dump's `.TXT` incomplete or not written, or the extension's size disagreed) | "Snapshot saved in <folder> as <name>, but its .TXT is missing / incomplete. Send the files anyway." |
+   | 4 | "Snapshot saved in <folder>: <name>.DEV only. No dump was taken; the .DEV says why." |
+   | 5 (the `.DEV` not written in full, or not at all) | "The snapshot in <folder> is not complete: its device report <name>.DEV could not be written." |
+   | 8 (a file of the set appeared after its name was chosen) | "The snapshot in <folder> is not complete: a file named <name> was made by something else meanwhile. Run it again." |
+   | any other (6, the 26 names of a minute taken; 7, the clock), or no name read | "No snapshot was saved in <folder>." and the engine's first line, its "XHCITR /snapshot: " prefix left out |
+   | not run, or not ended within two minutes | "The snapshot did not run, or did not end within two minutes." |
+
+   None of them says which files exist beyond what its exit proves. The
+   name is read from the engine's own line "files named <name>" (`,` or
+   " (the name given)" after it; Save Snapshot gives no name), in the
+   first 1 KB of the child's output, read on its own before the output
+   is deleted (`snap_read_head`): the tail the message box used to show
+   may begin after it. `tr_snap_named` (the name) and `tr_snap_saved`
+   (the message) are the pure half's, `tr_core.c`, host-tested in
+   `test_tr` (every exit, the name followed by `,` and by " (the name
+   given)", a line with no name, a name longer than 8.3, a folder of
+   `MAX_PATH` characters, the output's bound). The folder is the one
+   picked, shown on this machine only, as before. Save Report's
+   "Snapshot" part (item 9) and `/report` are unchanged.
 9. **Save Report and `/report <file>`** end with a "Snapshot" part,
    always with the `.DEV`, once (it is the machine's): from the run for
    the first xhci98 controller, or, when none is listed, from a run for
@@ -3417,3 +3458,238 @@ were read with a registry editor or an export.
    Standard PC HAL with 44.53's code, which is on its own branch: until
    the two are merged the host vectors hold the decoding, and a 2000
    Standard PC hot plug read through the node is owed at the merge.
+
+## 21. The firmware tables (revision 26, task 46.21)
+
+The owner's task of 2026-11-03 and its amendment of the same day: the
+tool saves the computer's ACPI firmware tables to a folder the user
+picks, so that another board's firmware can be read for record 32
+section 12.8 (its handover code, 12.8.12) without asking the user for a
+capture made under Linux. It is an item of its own; File > Save
+Snapshot... and `/snapshot` are unchanged (section 15). The tables are
+the user's own firmware, sent by the user's choice: read for facts only,
+never tracked, never a fixture (the host vectors use made-up tables).
+
+1. **The item and the switch.** File > **Save Firmware Tables...**,
+   below Save Snapshot..., on every system and always enabled, asks for
+   the folder alone (`SHBrowseForFolder`, its prompt "Save the firmware
+   tables in:"), reads and writes in the window's own process (nothing
+   in it is process-wide, so no child is run), and then says in one
+   short message box what was written (item 6). **`XHCITR /acpi
+   <folder>`** does the same, used alone (as `/report`): its message
+   goes to the redirected output, wrapped at 79 columns, or else to a
+   message box (`say`). Its exit: 0 tables written, 1 nothing to save
+   on this system or the folder refused (item 5), 2 a write failed.
+   Nothing but the files of item 5 is written, and only in that folder;
+   nothing is read but the route of item 2 (no registry value, no
+   device, no physical memory from the tool itself).
+2. **Where the tables come from.**
+   - **NT, with the interface**: where `kernel32.dll` exports both
+     `EnumSystemFirmwareTables` and `GetSystemFirmwareTable` (Vista and
+     later, XP x64 and Server 2003 SP1), looked up at run time with
+     `GetProcAddress` and never imported, so `XHCITR.EXE` still starts
+     on 98 SE, ME, 2000 and 32-bit XP and section 9's import list does
+     not change. Provider `'ACPI'`: the list enumerated (its size asked
+     first, at most 256 ids); each distinct id asked once, its size
+     first and then the table, at most 1 MB a table and 8 MB in all, a
+     table whose second answer is not the size the first gave refused.
+     The interface names a table by its signature alone, so of several
+     tables with one signature (the SSDTs) it gives one: the index and
+     the message say how many the list named and that the first alone
+     was saved. `DSDT`, when the list does not name it, is asked by
+     name once; no answer, none.
+   - **NT without it** (2000 and 32-bit XP): nothing is read; the
+     message says this Windows gives programs no way to read them. The
+     driver's request of item 3 is not asked on NT (its NT answer is
+     "not on this system").
+   - **98 SE and ME**: Windows gives programs no way to read them. The
+     tool asks `xhcicm.sys` for the tables its handover discovery read
+     (record 32 sections 12.8.3 and 12.8.14) through the query device
+     of each NHI the tree lists whose answer named it (section 4.2), in
+     the tree's order, and takes the first that serves tables; where
+     none does, the message gives the reason of the first answer (item
+     6). So on these systems only an ASM4242 USB4 host's discovery
+     gives tables, and only those it read: the root pointer, the root
+     table, `MCFG` and the three named SSDTs whole, every other entry's
+     header alone (listed in the index, no file).
+3. **`IOCTL_XHCICM_ACPI`**, a fifth request on the query device:
+   `CTL_CODE(FILE_DEVICE_UNKNOWN, 0xA44, METHOD_BUFFERED,
+   FILE_ANY_ACCESS)` = `0x00222910`, the same access rules and
+   removed-device answer as section 4.3; a driver from before revision
+   26 answers `STATUS_INVALID_DEVICE_REQUEST` ("this xhcicm.sys does
+   not serve them"). The layout is `src\cm\cm_query.h`'s `CM_QA_*`,
+   built by the pure `src\cm\cm_qacpi.c` (`CmQaBody`, `CmQaAnswer`):
+   - **Paged.** The input is empty or one dword, the byte offset into
+     the body to answer from (any other input length:
+     `STATUS_INVALID_PARAMETER`; an offset past the body: the header
+     alone, its part 0 and `CM_QA_F_PAST`). Under 64 bytes of output:
+     `STATUS_BUFFER_TOO_SMALL`. Otherwise the 64-byte header and as
+     much of the body from that offset as fits, at most 32,704 bytes
+     (`CM_QA_PART_MAX`) a request, so that no answer is larger than the
+     32 KiB the log request's reader already asks for on 98 SE; the reader
+     asks again from the next offset. The body is built once per start
+     and never changes after, so the parts of one epoch fit together;
+     the reader takes parts only while the epoch and the body's size
+     stay those of its first answer, and takes that first answer only
+     when its epoch is the one of the `XCMQ` answer that named the NHI
+     (section 4.2), as section 4.5's log is matched: a device name
+     recycled by another start or NHI between the two opens is refused.
+   - **The header**: magic `XCMA`, version 1, the answer's bytes, flags
+     (`CM_QA_F_STOPPING`, `_CUT` a table kept as its header for the
+     bound, `_NOMEM` a copy that could not be kept, `_PAST`), the start
+     epoch (section 4.2's), the state (`CM_QA_S_*`: 1 tables kept, 2
+     not on this system (NT), 3 not looked for - not an ASM4242 under
+     the USB4 profile, or no discovery at this start - 4
+     `XhciCmAsm4242Handover` 0, 5 the host's ports not found by bus, 6
+     no root pointer found, 7 no memory for the copy), the discovery's
+     own outcome (record 32 section 12.8.12's `cm.osc.refused` value, 0
+     when it went through), its tier (12.8.11), the body's bytes, the
+     entries' count and size, the part's offset and bytes.
+   - **The body**: one 32-byte entry per table (signature, kind - the
+     root pointer, the root table, a root entry and its index - what is
+     held: the whole table, its 36-byte header, or nothing; the length
+     its header gives; the offset and bytes of what is held), then the
+     bytes held, each at a dword boundary. At most 66 entries and 256
+     KiB of bytes held (`CM_QA_MAX_ENTRIES`, `CM_QA_DATA_MAX`).
+   - **No address.** The answer holds the tables as the firmware gives
+     them (their own pointer fields are physical addresses of the
+     firmware's tables, as the ACPI Specification lays them out) and no
+     kernel or driver address; where the tables lie in memory is not in
+     the entries.
+4. **Reading the answer** (`xhcitr\tr_acpi.c`, pure): the header's
+   magic, version and sizes checked against the bytes returned; each
+   entry's offset and bytes inside the body, its held bytes no more
+   than its kind allows (the root pointer 20 to 255, a header 36, a
+   whole table its own length field); a body that fails any of these
+   is refused whole ("the driver's answer could not be read"), never
+   saved in part.
+5. **The files.** In the folder picked, one file per table held whole,
+   named by its signature (a character outside `A`-`Z` and `0`-`9`
+   written `_`; the root pointer is `RSDP`) and its index, from 1, among
+   the tables whose name has that same stem, so that two signatures
+   written alike never share a name: `RSDP1.DAT`, `XSDT1.DAT`,
+   `FACP1.DAT`, `SSDT1.DAT`, `SSDT2.DAT`; every name is 8.3; and `TABLES.TXT`, the index: a line per table in the order read
+   with the file (or "not saved"), the signature, the OEM ID, the OEM
+   table ID, the revision, the length its header gives, the bytes
+   saved and whether its checksum is right ("ok", "BAD", or "-" where
+   there is none: `FACS`, or a header alone), then where the tables
+   came from, the interface's one-per-signature limit or the driver's
+   state, and on 98 SE and ME which tables the driver did not read.
+   Lines within 79 columns, ASCII, a character outside printable ASCII
+   in an id written `.`. Before anything is written every name is
+   looked for in the folder: one that exists refuses the whole save
+   ("already has", item 6), so a set is never mixed with another; each
+   file is then created new (`CREATE_NEW`), and a write that fails
+   stops the save, saying what was written.
+6. **The message** (drafts for the owner, task 46.18's rule):
+
+   | Case | The message |
+   |---|---|
+   | written | "This computer's firmware (ACPI) tables were saved in <folder>: <list>, and TABLES.TXT listing them." |
+   | ... on NT, a signature listed more than once | then, one sentence for them all, "Windows gives one table of each name: of <sig> (<n>), <sig> (<n>), the first was saved." |
+   | ... on 98 SE and ME | then "Windows 98 SE / ME give no access to these tables; these are the ones xhcicm.sys read for the USB4 handover." |
+   | 2000 and 32-bit XP | "No tables were saved: this Windows gives programs no way to read the firmware (ACPI) tables. XP x64, Vista and later do." |
+   | 98 SE and ME, no query device | "No tables were saved: Windows 98 SE / ME give no access to them, and xhcicm.sys, which reads them for an ASM4242 USB4 host, is not running here." |
+   | 98 SE and ME, the driver kept none | "No tables were saved: xhcicm.sys did not read them at this start: <reason>." with the state's reason ("it reads them only for an ASM4242 USB4 host", "XhciCmAsm4242Handover is 0", "the ASM4242 host's ports were not found", "no ACPI tables were found in memory", "it had no memory to keep them", "this xhcicm.sys does not serve them", "the driver's answer could not be read") |
+   | the interface answered nothing | "No tables were saved: Windows gave none." |
+   | a name exists | "Nothing was saved: <folder> already has <name>. Pick an empty folder." |
+   | a write failed | "Saving stopped at <name> in <folder>: <n> of <m> files were written." |
+
+   `<list>` is the signatures of the tables saved (held whole), in the
+   order read, a count after one saved more than once ("RSDP, XSDT,
+   FACP, DSDT, APIC, MCFG, SSDT (3)"); a table held as its header alone
+   is never in it. Where some were held as headers, the message adds
+   "<n> more are listed in TABLES.TXT, not saved." (on 98 SE and ME
+   that is every table discovery did not read whole).
+7. **Host vectors** (`test\test_tracpi.c`, over `xhcitr\tr_acpi.c` and
+   `src\cm\cm_qacpi.c`): made-up tables only (ids such as `TESTOE`,
+   `TESTTBL1`), no board's bytes: the driver's body built and read
+   back through parts of every size, a part past the body, the epoch or
+   size changing between parts refused; each bad shape (an entry past
+   the body, held bytes over its kind's, a bad magic or version, a
+   count over the bound); the checksum of a good and a bad table, the
+   root pointer of revision 0 and 2, `FACS`; the names (two of one
+   signature, a signature with a bad character); the index's lines
+   within 79 columns; every message, the list with counts.
+8. **The legs**: 98 SE without ACPI on the emulator's ASM4242 with its
+   tables (the `qemu` flavour's `xhcicm.sys`, record 32 section 12.8.8),
+   the item at 640 by 480 and `/acpi`: the files compared with the
+   tables QEMU was given; 32-bit XP: the message; 7 x86 and 10 x64
+   (`XHCITR64.EXE`) at 96 and 120 DPI: the files and the index, the
+   SSDT limit said.
+
+9. **The full tables (revision 27, the owner's option B and the XP
+   route, 2026-11-03).**
+   - **98 SE and ME.** The tool asks `xhci98.sys` (design record 13
+     section 8.13; record 32 section 12.8.16 is the reading) on the
+     first controller the tree lists as driven by it, for the root, the
+     DSDT and every SSDT whole, part by part with `XHA_IN_READ`, holding
+     the parts of one save to the first part's version, body size,
+     entry count and generation; it sends
+     `XHA_IN_RELEASE` on every way out of the save once it has asked.
+     Where `xhcicm.sys` answers too (item 3), its copies are saved
+     beside them: a copy identical to `xhci98.sys`'s table of the same
+     root entry is not written again (the index says "the same as read
+     by xhcicm.sys at its start"); one that differs is saved as
+     `<SIG><n>C.DAT`. Where `xhci98.sys` does not serve the request (a
+     driver from before revision 27, no controller of it, or its state
+     not 1), the save is item 3's kept set alone, as before, and the
+     message says why the DSDT and the other SSDTs are not in it.
+   - **NT with the interface, the root table** (the coordinator,
+     2026-11-03, after w46-nthand's reading on 10 x64: `RSDT` given by name
+     on a SeaBIOS boot, `XSDT` on an OVMF one, neither listed): after the
+     list and `DSDT`, `XSDT` and then `RSDT` are asked for by name when the
+     list names neither; the first that comes is saved. `TABLES.TXT` lists
+     its entries by physical address, with how many tables Windows gave
+     (each name once) and how many were not saved; Windows gives no
+     address with a table, so no entry is matched to a file. The message
+     adds "<n> SSDTs were not saved." where Windows' list names the SSDT
+     n + 1 times.
+   - **`TABLES.TXT`** gains a "From" column: `Windows`, `registry`,
+     `xhci98` or `xhcicm`; a table not saved shows its reason (record 32
+     section 12.8.16's texts).
+   - **32-bit XP and 2000** (no firmware table interface; the owner,
+     2026-11-03): the tool reads the copies Windows keeps in the registry
+     with `KEY_READ` alone, so a standard user can: under
+     `HKLM\HARDWARE\ACPI`, for each of `DSDT`, `FADT` and `RSDT`, every
+     `<OEM ID>\<OEM table ID>\<revision>` subkey's value `00000000`, and
+     `FACS`'s own value `00000000` (read on XP SP3, run 46). A value is
+     kept only as a `REG_BINARY` of at least 36 bytes (the FACS, 64)
+     whose signature is its key's (`DSDT`, `FACP`, `RSDT`, `FACS`), whose
+     length field equals its size, at most 1 MB, and whose checksum is
+     zero (the FACS has none); one that fails is listed "not saved" with
+     its reason and never written. At most 8 subkeys a level, 4 tables a key.
+     The registry holds no SSDT, `MCFG` or `APIC`: the index lists the
+     RSDT's entries by their physical addresses, with how many of them
+     the registry keeps (the FACP) and how many were not saved; it gives
+     no address with a table, so no entry is matched to a file. The message: "This computer's
+     firmware (ACPI) tables were saved in <folder>: <list>, and
+     TABLES.TXT listing them. They come from the copies Windows keeps in
+     the registry; the SSDTs cannot be read on this Windows." Where none
+     is found, the "no way to read" message stays. 2000 is read the same
+     way where its registry has these keys (checked in run 46).
+   - **Host vectors**: `xhci98.sys`'s set built over a modelled memory
+     (`src\xhci_acpi.c` with a reader over a byte array): the bootstrap
+     pass, `MCFG` windows of every segment, a nonzero first bus, a
+     misaligned base and a wrapping one, the FADT's 43, 44, 147 and 148
+     bytes, a table moved (its signature changed after the header pass),
+     a length changed, a bad checksum, the caps and the budget at their
+     edges, a 64 KB piece starting mid-page, the timeout; the answer in
+     parts, release, busy and past headers, the generation; the tool's
+     merge with `xhcicm.sys`'s copies (identical and different), the
+     registry walk over a modelled key tree (good values, a wrong
+     signature, a length that disagrees, a `REG_SZ`, too many subkeys),
+     the index's "From" and reasons, every message.
+   - **Legs**: 98 SE without ACPI with the emulator's tables and no
+     `xhcicm.sys`: the DSDT and every SSDT saved byte for byte as QEMU's
+     (the SSDTs against the files QEMU was given, the DSDT against a
+     dump of guest memory from QEMU's monitor at the address and length
+     the saved FADT and DSDT header give); the same with `xhcicm.sys`:
+     its copies identical, 46.12's notes and handover unchanged; a start
+     nobody asks: `xhci98.sys`'s log unchanged. 32-bit XP, an
+     administrator and a standard user: DSDT, FACP, FACS and RSDT saved,
+     the DSDT and RSDT byte for byte as the registry and QEMU's monitor
+     hold them; Windows 2000 SP4 (the ACPI base), an administrator and a
+     standard user, the same, its registry having the same keys. Not
+     covered by a leg: ME, a DSDT near 1 MB, a refused
+     mapping.

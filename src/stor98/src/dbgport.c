@@ -88,13 +88,42 @@ static VOID DbgOut8(USHORT Port, UCHAR Value)
 }
 #endif
 
+#ifdef STOR98_POSTCODE
+// Each code is held on the display for STOR98_POSTCODE_MS (a phone video
+// of the display then shows the sequence), preceded by a blank 00 when it
+// repeats the last one, so that two calls of one stage are two codes.
+static UCHAR DbgPostLast;
+
+static VOID DbgPostCode(IN ULONG Code)
+{
+    ULONG i;
+
+    if ((UCHAR)Code == DbgPostLast) {
+        DbgOut8(STOR98_POSTCODE_PORT, 0);
+        for (i = 0; i < STOR98_POSTCODE_MS / 4; i++) {
+            ScsiPortStallExecution(1000);
+        }
+    }
+    DbgPostLast = (UCHAR)Code;
+    DbgOut8(STOR98_POSTCODE_PORT, (UCHAR)Code);
+    for (i = 0; i < STOR98_POSTCODE_MS; i++) {
+        ScsiPortStallExecution(1000);
+    }
+}
+#endif
+
 VOID DbgPortInit(VOID)
 {
     if (DbgPortProbed) {
         return;
     }
     DbgPortProbed = TRUE;
+#ifdef STOR98_POSTCODE
+    // Real hardware: the emulator's ports are never probed or written.
+    DbgPortPresent = FALSE;
+#else
     DbgPortPresent = (BOOLEAN)(DbgIn32(STOR98_DBGPORT_BASE) == STOR98_DBGPORT_SIG);
+#endif
 }
 
 static VOID DbgConHex(ULONG Value, ULONG Digits)
@@ -130,6 +159,9 @@ VOID DbgStage(IN ULONG Code, IN ULONG Arg)
     if (!DbgPortProbed) {
         DbgPortInit();
     }
+#ifdef STOR98_POSTCODE
+    DbgPostCode(Code);
+#endif
     if (!DbgPortPresent) {
         return;
     }
@@ -146,6 +178,9 @@ VOID DbgMark(IN ULONG Code, IN ULONG Arg)
     if (!DbgPortProbed) {
         DbgPortInit();
     }
+#ifdef STOR98_POSTCODE
+    DbgPostCode(Code);
+#endif
     if (!DbgPortPresent) {
         return;
     }

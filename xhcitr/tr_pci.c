@@ -824,6 +824,7 @@ static const char *source_text(TR_U32 s)
     case 3: return "XhciCmTunnelBridge";
     case 4: return "named by the host router";
     case 5: return "SHPC bridge";
+    case 6: return "named by the firmware (ACPI)";
     default: return "unknown source";
     }
 }

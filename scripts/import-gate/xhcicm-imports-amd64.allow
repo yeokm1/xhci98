@@ -11,7 +11,9 @@
 # KeReleaseSpinLock there; WDK 7.1's checked headers import RtlAssert (qemu
 # only, debug having been retired with task 45.45); and /GS imports KeBugCheckEx, exactly as in
 # xhci98-imports-amd64.allow, whose comments say why each is accepted. The
-# SITES rules are the x86 file's.
+# SITES rules are the x86 file's. And three rows have no x86 twin: the NT
+# handover's (task 46.12, design record 32 section 12.8.15), whose routines
+# the x86 image, which loads on 98 SE and ME too, cannot import.
 
 [imports]
 
@@ -88,6 +90,19 @@ ntoskrnl.exe!ExUnregisterCallback          all    required  SITES=cm_nvlinkos.ob
 # KeQuerySystemTime is inline on amd64 ---
 ntoskrnl.exe!ZwSetValueKey                 all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
 ntoskrnl.exe!RtlInitUnicodeString          all    required  SITES=cm_statos.obj nt52-amd64-export; twin of the x86 row
+# The boot guard's marker (record 32 section 12.8.15.13): flushed after
+# its write and its delete. No x86 twin.
+ntoskrnl.exe!ZwFlushKey                    all    required  SITES=cm_statos.obj nt52-amd64-export; task 46.12, the boot guard's marker persisted
+ntoskrnl.exe!ZwDeleteValueKey              all    required  SITES=cm_statos.obj nt52-amd64-export; task 46.12, the boot guard's marker cleared
+
+# --- Routines found at run time, no x86 twin (the x86 file refuses
+# MmGetSystemRoutineAddress for Windows 98; the x86 image asks the
+# helper's channel instead). One caller: cm_oscnt.c, CmRoutine (record 32
+# section 12.8.15.15), for the NT handover (RtlGetVersion, IoWMIOpenBlock
+# and IoWMIQueryAllData) and for the ACPI-named tunnel-port source
+# (cm_dsdos.c, task 46.23, design record 22 section 7.6.1:
+# IoGetDevicePropertyData for the NHI's own ACPI name) ---
+ntoskrnl.exe!MmGetSystemRoutineAddress     all    required  SITES=cm_oscnt.obj nt52-amd64-export; task 46.12, the NT handover's routines looked up (CmRoutine); task 46.23, the NHI's ACPI name through CmRoutine (record 22 section 7.6.1)
 
 # --- the query device (cm_qryos.c, design record 25 section 4.2) ---
 ntoskrnl.exe!IoCreateSymbolicLink          all    required  nt52-amd64-export; twin of the x86 row

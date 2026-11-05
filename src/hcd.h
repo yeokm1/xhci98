@@ -1406,6 +1406,17 @@ typedef struct _HCD_CONTROLLER {
     PVOID ThreadObject;
     PDEVICE_OBJECT RootHubPdo;
     KSPIN_LOCK PdoListLock;
+    /* The firmware tables request (hcd_acpi.c, task 46.21; design record
+     * 13 section 8.13): the set held (an HCD_ACPI_SET, NULL for none) and
+     * the counts below under AcpiLock alone; AcpiGate lets one request at a
+     * time read; AcpiTablesOn is XhciAcpiTables as the start read it. */
+    KSPIN_LOCK AcpiLock;
+    KEVENT AcpiGate;
+    PVOID AcpiSet;
+    ULONG AcpiGen;
+    ULONG AcpiEpoch;
+    ULONG AcpiClosed;       /* stopped: no request admitted until a start */
+    ULONG AcpiTablesOn;
     PHCD_DEVICE_PDO DevicePdos;     /* listed: present, in the relations */
     PHCD_DEVICE_PDO GonePdos;       /* unlisted, awaiting their deletion */
     PHCD_DEVICE_PDO RemovedPdos;    /* removed by PnP, deleted at the next
@@ -1488,6 +1499,13 @@ typedef struct _HCD_CONTROLLER {
                                      * HcdCfgRetryService)                */
     ULONG QemuStreamQuirk;          /* 36.54: QEMU's xHCI (1B36:000D), at
                                      * each start (record 17 4.12.4)      */
+    struct _HCD_USB_DEVICE *StreamDeqRefused;
+                                    /* issue 24: the device whose stream's
+                                     * Set TR Dequeue the controller still
+                                     * refused after the retries: its
+                                     * failure cycles it, not the
+                                     * controller (hcdCfgFault). Thread  */
+    ULONG StreamDeqCycled;          /* issue 24: its cycle already queued */
     ULONG ThreadCommandDepth;       /* HcdThreadCommand calls in progress:
                                      * the resync runs at the outermost   */
     volatile LONG CancelsRunning;   /* cancel routines past the cancel lock */
@@ -2676,6 +2694,14 @@ VOID HcdDoorGateEnter(PHCD_CONTROLLER hc);
 VOID HcdDoorGateLeave(PHCD_CONTROLLER hc);
 VOID HcdDoorControllerStart(PHCD_CONTROLLER hc);
 VOID HcdDoorControllerStop(PHCD_CONTROLLER hc);
+/* hcd_acpi.c (task 46.21; design record 13 section 8.13): HcdAcpiInit at
+ * AddDevice; HcdAcpiForget at the stop, surprise removal and removal;
+ * HcdAcpiRequest for IOCTL_XHCI98_ACPI at PASSIVE_LEVEL. */
+VOID HcdAcpiInit(PHCD_CONTROLLER hc);
+VOID HcdAcpiForget(PHCD_CONTROLLER hc);
+VOID HcdAcpiOpen(PHCD_CONTROLLER hc);
+NTSTATUS HcdAcpiRequest(PHCD_CONTROLLER hc, PUCHAR buf, ULONG inLen,
+                        ULONG outLen, PULONG_PTR info);
 VOID HcdDoorControllerRemove(PHCD_CONTROLLER hc);
 VOID HcdDoorRootHubStart(PHCD_ROOTHUB_FDO fdo, PHCD_CONTROLLER hc);
 VOID HcdDoorRootHubStop(PHCD_ROOTHUB_FDO fdo);
@@ -2924,6 +2950,8 @@ PVOID HcdPoolAllocHandedOff(ULONG bytes);
 VOID HcdPoolFreeForeign(PVOID p);
 PVOID HcdPoolAllocClient(ULONG bytes);
 VOID HcdPoolFreeClient(PVOID p);
+PVOID HcdPoolAllocAcpi(ULONG bytes);
+VOID HcdPoolFreeAcpi(PVOID p);
 ULONG HcdPoolClientCount(VOID);
 PMDL HcdPoolMdlBuild(PVOID va, ULONG bytes);
 VOID HcdPoolMdlFree(PMDL mdl);

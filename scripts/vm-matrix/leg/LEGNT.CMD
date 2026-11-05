@@ -70,7 +70,7 @@ call INSTALL.BAT /console /list >%XL%\LIST2.TXT 2>&1
 >COM1 echo XHLEG EXIT list %ERRORLEVEL%
 popd
 call :send list %XL%\LIST2.TXT
-find "current (this" %XL%\LIST2.TXT >NUL
+find "Reinstall (same version)" %XL%\LIST2.TXT >NUL
 if errorlevel 1 (
     echo XHLEG CHECK list-current FAIL>COM1
 ) else (
@@ -168,7 +168,7 @@ call INSTALL.BAT /console /list >%XL%\LIST3.TXT 2>&1
 >COM1 echo XHLEG EXIT list-final %ERRORLEVEL%
 popd
 call :send list %XL%\LIST3.TXT
-find "current (this" %XL%\LIST3.TXT >NUL
+find "Reinstall (same version)" %XL%\LIST3.TXT >NUL
 if errorlevel 2 (
     echo XHLEG CHECK list-removed FAIL find could not read the list>COM1
 ) else if errorlevel 1 (

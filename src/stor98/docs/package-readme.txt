@@ -171,6 +171,9 @@ Windows 8, 8.1 and 10 as well.
   StorPollSpinUs          us    500 on 2000 to 7,  0-500, 0 = none (check
   storpollspinus=               0 on 98 SE / ME    for a completion right
                                                    after a request)
+  StorIntWatchdog         -     1                  1 = poll for the rest of
+  storintwatchdog=                                 the start once interrupts
+                                                   stop arriving, 0 = never
   StorGoneMs              ms    5000               1-600000: how long held
   storgonems=                                      requests wait for proof
                                                    after the drive is gone;
@@ -206,7 +209,9 @@ leaves the drive as it is.
 Polling: when Windows gives the controller no usable interrupt (no
 interrupt pin, as on an MSI-only controller, none assigned, or no
 interrupt line set), Stor98 polls the controller for completed requests
-instead.
+instead. With StorIntWatchdog / storintwatchdog= 1 it also polls, until
+the controller next starts, once its interrupts stop arriving while
+requests complete.
 
 INTERRUPT REPORT
 

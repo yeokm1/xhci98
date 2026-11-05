@@ -1,6 +1,62 @@
 # Design Record 26 - The Windowed Installer
 
-Status: draft 60, 2026-11-01 (task 45.59 step S11: the Thunderbolt
+Status: draft 75, 2026-11-04 (roadmap-usb4 task 46.24, the owner's decisions of that day on the
+UAS driver: on Windows 8, 8.1 and 10 `xhciuas.inf` neither staged nor
+installed, the UAS box unticked and greyed, an `xhciuas` an earlier
+release bound there left as it is, section 5.3.1 case 3a and the UAS row
+of section 5.3; on 2000 to 7 the UAS devnodes not plugged in updated by
+the run too, record 23 revision 53; on 98 SE and ME the placement of
+`xhciuas.sys` and `xhcicm.sys` before the helper's jobs, section 5.0);
+draft 74, 2026-11-04 (roadmap-usb4 task 46.22, the owner's
+decisions of that day: the Thunderbolt box ticked over an installed
+Thunderbolt part, the console's default and `/yes` with it, section
+5.3.8; the packages copied only on this Windows as greyed rows of the
+Free and Non-free USB drivers pages and the console, section 6.7.15);
+draft 73, 2026-11-04 (roadmap-usb4 task 46.12 on NT, the owner's
+decisions of that day: the ASM4242 board's identity read by the driver's
+own match, said in the report, the reads row's note and the Summary, on
+2000 and 32-bit XP by WMI at the Thunderbolt and USB4 page's Next with a
+countdown and Skip; the ASM4242 xHCI's filter devnodes listed before the
+go-ahead, sections 5.5 and 5.7); draft 72, 2026-11-04 (roadmap-usb4 task 46.12 on NT: the read
+path's Advanced row and the ASM4242 xHCI's filter entry, section 5.5,
+from design record 32 section 12.8.15.12); draft 71, 2026-11-04
+(roadmap-usb4 task 46.22, the owner's
+answers of that day: the Thunderbolt box the user's on every system, the
+tools alone on 98 SE and ME with no package copy and no DevicePath
+change, no switch added, the no-restart end kept, section 5.3.7);
+draft 70, 2026-11-03 (roadmap-usb4 task 46.22, the owner's
+decision of that day: on Windows 8, 8.1 and 10 the Thunderbolt box is the
+user's whatever the USB drivers' box, both unticked a run of the xHCI98
+tools alone, and Stor98's line on Windows 10 its own, section 5.3.7);
+draft 69, 2026-11-03 (the queued replacement of a resident
+image withdrawn by the uninstall, and placed under a lock by staging and
+publishing, section 5.0's placement rows); draft 68, 2026-11-03 (a
+resident driver image replaced on 98 SE and ME asks for the restart,
+section 5.0's placement rows); draft 67,
+2026-11-03 (roadmap-usb4 task 46.8, the owner's
+decision of that day, option B: the reserve shrinks as the known work is
+done, so the run's end's step is about an ordinary item's, section
+5.8.1; and the Settings sheet's Enter presses OK on every tab, section
+5.4.2); draft 66, 2026-11-03 (roadmap-usb4 task 46.8, the owner's
+decision of that day: the run's last item, the run's end, takes the
+reserve, so the bar reaches the end with a step of its own and does not
+jump at done, section 5.8.1; and section 5.11's legs completed: the
+Steps page is 98 SE and ME's alone, section 7); draft 65, 2026-11-03
+(roadmap-usb4 task 46.8: the Progress page's bar by the work left,
+section 5.8.1); draft 64,
+2026-11-03 (roadmap-usb4 task 46.7: the Settings dialog
+split by page, the Components page the USB tab, the Thunderbolt and USB4
+page the Thunderbolt and Stor98 tabs, section 5.4.2); draft 63, 2026-11-03
+(roadmap-usb4 task 46.5: a USB4 host whose
+router 98 SE or ME has not listed, found by its switch ports, section
+5.3.6); draft 62, 2026-11-02 (roadmap-usb4 task 46.18, second part: the
+engine's and the console's texts, the console's questions and `/?`, and
+`xhciinst\README.TXT`, in the owner's style at the owner's request,
+section 5.11); draft 61, 2026-11-02 (roadmap-usb4 task 46.18, first part:
+the window's texts read through with the owner, who rephrased them - every
+page, the Settings sheet and its Advanced lists, the Help windows and the
+message boxes; the owner's wording taken as given, section 5.11); draft
+60, 2026-11-01 (task 45.59 step S11: the Thunderbolt
 networking box wired, `INST_TBNET_WIRED` 1, with its sentence, Summary
 line and Help paragraph, section 5.3.5; record 35 section 9.5); draft
 59, 2026-11-01 (three readings of task 45.66's legs: the
@@ -823,7 +879,9 @@ per pack or per driver, their systems, the folder's name, the
 manifest's form and the staging's details are 43.48's.
 
 **The Settings dialog.** One dialog, three tabs - USB, Thunderbolt,
-Stor98 - each tab shown only while its component is ticked (proposal: a
+Stor98 - (since draft 64 opened per page: the Components page's the USB
+tab, the Thunderbolt and USB4 page's the other two, section 5.4.2) each
+tab shown only while its component is ticked (proposal: a
 tab of an unticked component shown greyed instead), each with its main
 rows and an "Advanced..." button that opens that tab's advanced rows,
 the rows built and read as sections 5.4 to 5.6 build and read them (the
@@ -899,8 +957,8 @@ still sets them, as it sets every value.
 
 **The Summary** repeats, after the headline, each component warning of
 section 5.3.1 that applies, each warning's first sentence. On 98 SE and
-ME the Stor98 file update's checkbox ("Please disconnect all external
-NVMe drives before proceeding", section 6.3) becomes a message box, OK
+ME the Stor98 file update's checkbox ("Disconnect all external NVMe
+drives before Setup continues.", section 6.3) becomes a message box, OK
 and Cancel, shown on Install only when Stor98's file would be replaced
 (`inst_eng_s98_file_update`); Cancel stays on the Summary and nothing is
 written.
@@ -976,6 +1034,75 @@ Thunderbolt controller found later opens the wizard and installs with no
 disk asked for. The leg: an install with no controller present, then a
 controller added (`qemu-xhci`, and the Thunderbolt model), the wizard
 finishing with no Insert Disk prompt.
+
+**Draft 68** (2026-11-03): since `edcddc2b` `xhciuas.sys` registers no
+`DriverUnload` on 98 SE and ME, as `xhcicm.sys` never did there, so each
+stays resident for the boot once loaded: a disk plugged in later runs
+the image already in memory, whatever file is now in `SYSTEM32\DRIVERS`.
+A package of the same `DriverVer` with other bytes reinstalls no device
+(`inst_action_runs`), and the placement above then put the new file over
+the old one and said "Copied", with no restart asked for, so the old
+image went on running. Now a placement that replaces a file already
+there with other bytes asks for the restart (`inst_resident_restart`:
+98 SE and ME, a file in place, not the package's): the Summary says it
+before the run ("- xhciuas.sys (UAS disk driver): replaced, loaded at
+next start", and for `xhcicm.sys` "- Thunderbolt / USB4 support
+(experimental): xhcicm.sys replaced, loaded at next start"), the
+console's plan the same in its own words, and the run sets the restart
+flag, so the Finish page offers the restart and the exit code carries
+it. A file in place is never replaced in the running boot: the
+package's file waits beside it as `<name>.IN$` and a `WININIT.INI`
+`[rename]` line (8.3 names) puts it in place at the next start, as
+Stor98's file update does (section 6.3); its hash is what the placement
+records. The copy and the line outlive the run, so a second run in the
+same boot finds them and still owes the restart (a replacement made in
+place would leave the next run seeing the package's bytes and no reason
+to ask). A run that
+finds such a queued copy keeps it when it is this package's file,
+writing its line again over its own key and never the copy the line may
+name (so a run cut short between the copy and the line leaves nothing
+unrenamed, and no half-written copy is ever named; the restart owed,
+said again), and otherwise takes it back first, the
+`WININIT.INI` line before the copy, so the next start never puts an
+earlier run's bytes over this run's decision. A new file
+(none in place) needs no restart: nothing of it was loaded, and a refused
+copy there is a failure as before.
+
+**Draft 69** (2026-11-03). *The uninstall* on 98 SE and ME holds the
+placement lock below from its start to its end, and withdraws a
+replacement this installer queued before anything else: for `xhciuas.sys` and
+`xhcicm.sys` the exact `WININIT.INI` line naming `<name>.IN$` is taken
+back and then the copy deleted, so the pending-rename guard after it
+(draft 39) stops only for lines of others or a section it cannot read;
+a line of another's naming either file on either side stops the
+uninstall there, before any file goes.
+The files then go as before; one that cannot be deleted in the running
+boot is the existing case: restart Windows and run the uninstall again.
+*Two installers* never meet on the shared copy: inspection, take-back,
+staging, verification, publication and the placement's hash record
+(`Placed9x`, the value written and its key closed) run under one named
+lock,
+`XhciinstPlaced9x` (the maintenance lock's naming), and the copy is
+staged as `<name>.IS$` by exclusive creation, compared with the
+package's, and published as `<name>.IN$` by a rename that never
+overwrites; a `.IN$` a line may name is never rewritten, only taken back
+first. A line of another's naming either file (`INST_VE_CONFLICT`), or a
+section that cannot be read, leaves the file and fails the run, as the
+uninstall's guard stops. The decision is `inst_resident_queued`, a pure
+function with host vectors. Host vectors: `test_resident`. The
+leg: 98 SE, the published `3.4.0.0` installed, a UAS disk plugged and
+unplugged, then Setup with a package whose `xhciuas.sys` differs at the
+same version: the restart asked for, and after it the new image the one
+loaded.
+
+**Draft 75** (2026-11-04, roadmap-usb4 task 46.24): the placement of
+`xhciuas.sys` and `xhcicm.sys` above runs before the helper's first job,
+not after its last, and a UAS disk's or a host interface's job whose
+file it placed or queued passes `nocopy` (record 27 section 6, steps 4
+and 5, draft 18). An update with a UAS disk plugged in had asked for the
+"xhci98 xHCI Host Controller Disk" and `xhciuas.sys` at `C:\WIN98`: the
+UAS job was the run's second copying job, after the controller's, as
+for record 27's second controller (task 45.38).
 
 **Draft 40 (the owner, 2026-10-24): what follows under draft 39 was
 withdrawn before the cut.** The owner's requirement is that an update
@@ -1244,7 +1371,7 @@ Check boxes, one a line, each with one sentence:
 | Component | Ticked | Can be unticked | What it is |
 |---|---|---|---|
 | xHCI98 USB 3 host controller driver (`xhci98.sys`; "USB 3.x" until draft 45; until 2026-10-19 with `xhciuas.sys` in the same box) | yes, but on Windows 8 and 8.1 (draft 8) | when the package carries the connection manager (record 23 section 4.5; `/cmonly` preselects it unticked): until draft 20 on 2000 to 7 alone, shown ticked and disabled on 98 SE and ME and unticked and disabled on 8 and 8.1; from draft 20 on every system, with section 5.3.1's warning where it does not apply (unticked on 98 SE and ME, ticked on 8 and 8.1) | the driver for the controller, its hubs and devices, and Bulk-Only disks (UAS disks: the box under it); on 8 and 8.1 the sentence says Windows' own USB 3 driver runs the controllers there; unticked on 2000 to 7, the sentence under the box says the run leaves an installed `xhci98.sys` as it is and that the uninstall removes the whole package |
-| UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still offered, being `xhci98.sys`'s (`inst_uas_decide`; an Advanced row from draft 35) |
+| UAS disk driver (`xhciuas.sys`) (owner, 2026-10-19) | yes | yes, while the USB drivers are ticked: a child of their box, indented under it, open only while it is ticked and unticked and greyed with it (the connection manager alone); `/nouas` preselects it unticked | "untick only if you use another UAS driver; Bulk-Only disks are not affected, and `XhciForceBulkOnly` is the other way to avoid UAS". Unticked, `xhciuas.inf` is neither staged nor installed (on 98 SE and ME not copied to `DevicePath` either), and an `xhciuas` already installed stays as it is: unticking is "not now", not an uninstall, as for every component; `XhciForceBulkOnly` is still offered, being `xhci98.sys`'s (`inst_uas_decide`; an Advanced row from draft 35). On 8, 8.1 and 10 (draft 75, owner 2026-11-04) the box is unticked and greyed whatever the USB drivers' box does, and the run treats it as unticked (`inst_uas_here`, `inst_eng_uas_offered`): Windows' own UAS driver runs UAS disks there (design record 13 section 6.13.9); the Summary says "- xhciuas.sys (UAS disk driver): not installed (one installed earlier is kept)" (reworded 2026-11-05 from "not installed; an installed one is kept", which read as if one were installed on a machine that never had xHCI98) |
 | Thunderbolt 3 / USB4 support (experimental) (`xhcicm.sys`) | no, whether or not a controller is found (draft 16; owner, 2026-10-19, replacing "ticked when a controller is found"): the user ticks it on purpose; `/thunderbolt` preselects it; ticked when it is locked on (the USB drivers unticked, and 8 and 8.1) | yes | the connection manager; the note under the box says whether a controller was found - "A Thunderbolt 3 / USB4 controller was found." (draft 54, owner 2026-10-31: no controller's name, which a row's width cut off; until then "... was found: <name>.", the name cut to 36 characters; the console's question still names it, on a line of its own where it is long), or "Intel's Thunderbolt driver is in use; ...", or "No Thunderbolt 3 / USB4 controller was found (some laptops show it only with a device plugged in or a BIOS setting). Tick it only if this computer has such a port." Unticked on an update leaves an installed `xhcicm` as it is (record 23 section 8.5's N) |
 | Stor98 (hot-pluggable NVMe driver; the owner's words of 2026-10-23) | with the Thunderbolt box (draft 16; owner, 2026-10-19, replacing "never unasked" of 2026-10-18): ticking the Thunderbolt box ticks it, unticking it unticks it; `/nostor98` preselects it unticked; on 8 and 8.1 (draft 20) shown, and never ticked but by the user (section 5.3.1) | yes | a child of the Thunderbolt 3 / USB4 box, indented under it (owner, 2026-10-19): open only while that box is ticked (also when the USB drivers' box is unticked and the Thunderbolt box is locked on), unticked and greyed when it is unticked or the package lacks the support (both shown greyed then; `inst_s98_box_open`); shown only when the flavour directory carries it; the sentence "For NVMe drives behind a Thunderbolt or USB4 tunnel." (section 6.3; draft 12: it no longer offers an internal drive; "the installer selects tunnel drives only" dropped from it, owner, 2026-10-27, the behaviour unchanged), and the engine keeps Stor98 out of a run without the Thunderbolt support by the same rule (`s98_set`) |
 | Large transfers for Stor98 (`S98VSD.VXD`) (draft 34; owner, 2026-10-22; design record 30 section 7) | on 98 SE and ME, whenever Stor98's box is ticked: ticking Stor98 ticks it; `/nos98vsd` preselects it unticked, `/s98vsd` ticked | yes, while Stor98's box is ticked | a child of Stor98's box, indented under it as Stor98's is under the Thunderbolt box: open only while Stor98's box is ticked, unticked and greyed while it is unticked or greyed; shown only when the flavour directory carries `S98VSD.VXD`; one line, "Large transfers for Stor98 (S98VSD.VXD), up to 2 MiB", and no sentence under it (the page stays 223 units high); the longer sentence "Lets Windows 98 SE and ME send Stor98 reads and writes of up to 2 MiB whole, instead of in 63 KiB pieces. Changes nothing for copies through the file cache." is the console's, and the Summary's line says what the run does with the file. On every other system shown greyed and unticked, its line "Large transfers for Stor98 (Windows 98 SE and ME only)", never taken by the page or the engine (the convention of section 5.4 for a row of another system; the owner's exception, 2026-10-22, to section 5.3.1). Ticked, the run places `SYSTEM\IOSUBSYS\S98VSD.VXD`, never over a file of that name it did not place, and updates its own through `WININIT.INI` as Stor98's file; unticked by the user over the file it placed, the run removes it (owner, 2026-10-22); greyed by an unticked Stor98, it follows Stor98: kept when the run keeps Stor98, removed when it removes Stor98 (owner, 2026-10-22); the uninstall removes the one it placed (record 30 sections 7.3 and 7.4) |
@@ -1261,8 +1388,11 @@ section 5.0's simplified Components page is built.
 The component page is not shown under `/uninstall`. Unticking Thunderbolt
 support does what record 23 section 8.5's N does; unticking the tray tool
 what `/notray` does. Unticking the USB drivers does what `/cmonly` does:
-the Thunderbolt box is then ticked and disabled (it is all the run
-installs), the USB settings page is not shown, and the plan is made again;
+since draft 71 the Thunderbolt box stays the user's on every system,
+both unticked a run of the tools alone (section 5.3.7; until draft 70
+it was then ticked and disabled, it being all the run installs, but
+over Intel's Thunderbolt driver), the USB settings page is not shown,
+and the plan is made again;
 ticking them again gives the Thunderbolt box back its own state. That
 state is the user's last choice while the USB drivers were ticked, or else
 the box's default, the console's answer with the USB drivers in the run
@@ -1300,9 +1430,9 @@ Thunderbolt and UAS boxes, which follow the USB drivers' box.
 
 **What stays.** The defaults (section 5.3's table, unchanged on every
 system), and the boxes' dependencies on one another, which are not a
-system's gate: the UAS box a child of the USB drivers' box, the
-Thunderbolt box ticked and locked while the USB drivers are unticked (it
-is then all the run installs), Stor98's box a child of the Thunderbolt
+system's gate: the UAS box a child of the USB drivers' box (until draft
+71 the Thunderbolt box was ticked and locked while the USB drivers were
+unticked; section 5.3.7), Stor98's box a child of the Thunderbolt
 box, and a box greyed because the package or the download lacks its files
 (the Thunderbolt support, Stor98, the storage pack, section 6.5.1; the
 USB drivers' box can be unticked only where the package carries the
@@ -1321,7 +1451,7 @@ words):
 |---|---|---|---|
 | 1 | the USB storage drivers ticked on ME, or on 2000 to 8.1 | the pack's seven files copied to `<the install directory>\NUSB33\` and nothing else: nothing in `%windir%`, the INF directory, `INF\OTHER` or `DevicePath`, no device job, no `Storage` record but the copies' own (below). A file of the seven's names already in that folder - the same bytes, other bytes or unreadable - is left as it is and never recorded; each absent one is written as `<name>.TMP` with `CREATE_NEW`, compared byte for byte with the download's, its `Tools` value written, then moved to its name with `MoveFileA`, which never replaces; a step that fails deletes the `.TMP` and the value and leaves the rest copied. The run says how many of the seven are in the folder and names any left out (a note, not a step); a later ticked run copies only those still absent. **Acceptance condition (ME):** Windows ME must not find the INFs there - the install directory is on ME's `DevicePath`, and whether ME's device search reads its subfolders is unread; if case 1's ME leg shows ME offering the pack's INF from `NUSB33` (or binding a stick from it), this placement is withdrawn before the code is released and the owner chooses another place or form for ME | "The USB storage drivers (NUSB 3.3's) are for Windows 98 SE only. On this Windows they are not installed: their seven files are copied to <dir>\NUSB33 for you to use by hand, and nothing installs them." |
 | 2 | the USB drivers unticked on 98 SE or ME | the connection manager installed alone, as on 2000 to 7 (record 23 section 4.5, amended): `xhci98.inf` and `xhciuas.inf` out of the run, the Thunderbolt support in it; on these two systems through the helper (record 27 section 6 step 5), and the local copy on `DevicePath` made without `xhci98.inf`, `xhci98.sys`, `xhciuas.inf` and `xhciuas.sys`, as `/nouas` already leaves the UAS pair out of it, so no hardware wizard can offer them; an `xhci98.sys` already installed stays as it is (record 23 section 4.5) | "Without the xHCI98 USB drivers, Windows 98 SE and ME have no driver of their own for a USB 3 controller: an xHCI controller with no other driver installed, a dock's included, stays without one, and the USB devices on it do not work. Only the Thunderbolt 3 / USB4 connection manager is installed; xHCI98 USB drivers already installed stay as they are. This has not been tested on Windows 98 SE or ME." |
-| 3a | the USB drivers ticked on 8 or 8.1 | `xhci98.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row, and, with its box, `xhciuas.inf` staged but forced onto no device (owner, 2026-10-22, draft 27; record 13 section 6.13.9 on the `p43-29` branch: the bus answers Windows 8's own client contract, so Windows' own `uaspstor.sys` stays the default for a UAS disk, unless the package's test certificate is trusted, when Windows may rank the trusted-signed `xhciuas.inf` above it, as the 3.2.0.0 matrix read on 8.1 x64): a UAS disk with no driver is left for Windows to bind (`INST_ACT_WINDOWS`, "left for Windows' own UAS driver", `inst_uas_nt6_action`), one on another driver stays foreign, and one already on `xhciuas` (the user's own pick in Device Manager) is kept current as on 2000 to 7; the staged INF is what Device Manager then offers; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either. There the UAS disk driver, when ticked, is staged: Windows keeps its own UAS driver unless this package's test certificate is trusted, when Windows may choose xhciuas.sys; either can be chosen for a disk in Device Manager." |
+| 3a | the USB drivers ticked on 8 or 8.1 | **From draft 75 (owner, 2026-11-04), on 8, 8.1 and 10:** `xhciuas.inf` is neither staged nor installed and the UAS box is unticked and greyed (`inst_uas_here`); a UAS disk is Windows' own `UASPStor`'s, through the bus's `0x602` client contract (design record 13 sections 6.12.10, 6.13 and 6.13.9); a devnode an earlier release bound to `xhciuas` there is neither updated nor removed by an update, and the uninstall still removes the whole package; the warning's last sentences read "UAS disks use Windows' own UAS driver." (`INST_CW_USB8`); the staging, `INST_ACT_WINDOWS` and the kept-current clauses of the rest of this row are history. Until draft 75: `xhci98.sys` installed through the NT route of record 23 section 5 (`Xhci.Dev6`), taking roadmap task 43.29's row, and, with its box, `xhciuas.inf` staged but forced onto no device (owner, 2026-10-22, draft 27; record 13 section 6.13.9 on the `p43-29` branch: the bus answers Windows 8's own client contract, so Windows' own `uaspstor.sys` stays the default for a UAS disk, unless the package's test certificate is trusted, when Windows may rank the trusted-signed `xhciuas.inf` above it, as the 3.2.0.0 matrix read on 8.1 x64): a UAS disk with no driver is left for Windows to bind (`INST_ACT_WINDOWS`, "left for Windows' own UAS driver", `inst_uas_nt6_action`), one on another driver stays foreign, and one already on `xhciuas` (the user's own pick in Device Manager) is kept current as on 2000 to 7; the staged INF is what Device Manager then offers; and, the one narrow exception to record 23 decision D3 (amended, revision 26), a controller whose service is Windows' own `USBXHCI` is not "another driver" here: with the box ticked it is planned as an install and installed with `INSTALLFLAG_FORCE` (Windows' signed in-box driver otherwise outranks this package's INF), as the user chose; every other vendor's driver on a controller stays foreign and left, as before; such a controller is this package's from then on, and the uninstall removes its devnode and rescans (record 23 section 9.2), after which Windows is expected to bind `usbxhci.sys` again (43.29's "the controller given back", unread until 43.31) | "The xHCI98 USB drivers have not been tested on Windows 8 or 8.1. They replace Windows' own USB 3 driver on every xHCI controller, the one your keyboard and mouse may use included. The uninstall is meant to give the controllers back to Windows' own driver; that has not been tested either. There the UAS disk driver, when ticked, is staged: Windows keeps its own UAS driver unless this package's test certificate is trusted, when Windows may choose xhciuas.sys; either can be chosen for a disk in Device Manager." |
 | 3b | Stor98 ticked on 8 or 8.1 | the bundled Stor98 on tunnel drives as on 2000 to 7 (section 6.3), taking roadmap task 43.23's installer row; the same narrow exception as 3a for Windows' own NVMe driver: on 8.1 a tunnel drive whose service is `stornvme` is installed over with `INSTALLFLAG_FORCE` when the box is ticked, and becomes Stor98's by section 6.3's record (its first binding by this installer); the replacement goes through section 6.3's reconnection rules as an update of a drive Stor98 runs does - the tunnel may be torn down and brought back when the drive's driver changes (the connection manager's child filter sees the removal whatever storage driver ran), so a drive gone after its job is "installed, awaiting reconnection", its read-back deferred to the reconnection (`s98_reconnect_nt`, which then admits a baseline of `stornvme` beside Stor98's own), and its ownership recorded when it is read back running Stor98; because that read-back may come only in a later run (a skipped or timed-out reconnection wait, a run cut short), the drive's id is written under the `Stor98` record's `Pending` subkey with the data `attempt` before its job starts, rewritten `done` once the install call returns success for it, and deleted when the call fails or is cancelled; every later install run and the uninstall resolve each pending id first: a `done` drive read back running Stor98 moves to the record's devices as this installer's (its first binding, evidenced by the call's success); a `done` drive not present stays pending, and the uninstall takes it when its `Enum` entry names Stor98; an `attempt` drive (a run cut short during the call, its outcome unknown) is never taken: read back running Stor98, its value is kept as `unknown`, a durable exclusion that the uninstall's adoption of tunnel drives (section 6.3) honours too, so that Stor98 stays as anyone's; the `attempt` value must be written before the call is made, and a write that fails leaves the drive's group unchanged; a `done` value moves to the devices only once the devices' value is written; a drive read back running another driver, or gone with no `Enum` entry, has its pending value deleted; an internal drive, and a drive another vendor's driver runs, are left as before; the uninstall removes Stor98 from it and rescans, Windows then expected to bind `stornvme` again, unread until 43.24, whose legs gain the `stornvme` replacement, its reconnection, a replug, and the wait skipped, timed out and cut short with the next run and the uninstall resolving the pending drive | "Stor98 has not been tested on Windows 8 or 8.1. If a drive behind a Thunderbolt or USB4 tunnel uses Windows' own NVMe driver, this choice replaces it." |
 | 5 | a package without the connection manager on 8 or 8.1 (owner, 2026-10-22, in place of draft 20's refusal) | the run goes on with what the package has: the USB drivers' box, tickable and unticked by default (case 3a's warning when ticked), and the tools; Stor98, a child of the Thunderbolt support, is not in the run; with nothing ticked the run installs the tools alone | "This package carries no Thunderbolt 3 / USB4 driver. On Windows 8 and 8.1 it installs only what is ticked: the xHCI98 tools, and the xHCI98 USB drivers if their box is ticked." |
 
@@ -1453,7 +1583,8 @@ the systems say "8, 8.1 and 10" where they said "8 and 8.1".
 **The pages on 10:**
 
 - Welcome (section 5.1): the connection manager's paragraph and title;
-  the system line "Windows 10 (10.0.<build> <CSD>), x64." (or 32-bit),
+  the system line "Windows 10 (10.0.<build> <CSD>), x64." (or 32-bit;
+  the CSD's spaces trimmed and a blank one left out, `inst_os_line`),
   a Server build named "Windows 10" too, since the tool makes no Server
   check.
 - Components (sections 5.3 and 5.3.1), as on 8.1: the USB drivers' box
@@ -2035,6 +2166,329 @@ unticked, Next and Back; the three moved boxes' states; the approval
 choice preselected 1, set to 0, the value written machine-wide; the
 Settings dialog's Thunderbolt tab without it; no networking box.
 
+#### 5.3.6 A USB4 host whose router Windows has not listed, on 98 SE and ME (task 46.5; draft 63)
+
+The owner, 2026-11-01 (roadmap-usb4 task 46.5): on the board of
+46-E.1 the ASM4242's router sat behind a downstream port 98 SE had not
+started (problem 12; record 32 section 12), so no device `xhcicm.inf`
+matches was listed, the Components page said "No Thunderbolt / USB4
+controller found ..." and left the Thunderbolt box, and `XHCIPFW.VXD`
+under it, unticked. The installer is to recognise such a host by its
+switch ports, say so and tick the box; and its note for a bridge whose
+firmware window lies above 4 GB (`pfw_seen`, record 32 section 11.3),
+read on NT alone, is to be read on 98 SE and ME too where the 9x
+registry allows.
+
+*What 98 SE lists* (read 2026-11-02 on q35, the emulated ASM4242 with
+the root port's padding above 4 GB, `-AsmReserve`, and no `usb4-host`
+behind the switch's fourth downstream port: the router missing, its
+switch present; `runs/run-46.md`, "46.5"). The configuration manager's
+tree holds the switch's upstream port `1B21:2421` at problem 12 and
+nothing below it: no downstream port `1B21:2423`, no xHCI `1B21:2426`, no
+router. Without the padding the upstream port and the four downstream
+ports start and only the router is missing. `HKLM\Enum\PCI` keeps an
+entry for every function 98 SE has ever seen, present or not, so only
+a devnode of the tree counts. A bridge's `LogConfig` there holds the
+requirement list `PCI.VXD` made, in 32-bit ranges, and a bridge at
+problem 12 has an empty allocation (`HKEY_DYN_DATA\Config
+Manager\Enum\...\Allocation`): **nothing in the 9x registry records the
+firmware's window above 4 GB**, and a problem 12 on 98 SE is as often an
+interrupt that cannot be given (record 32 section 12, the board's case)
+as a window.
+
+*The detection.* On 98 SE and ME only (on NT a router behind an
+unstarted port is not a case met), when no device `xhcicm.inf` matches
+is present (`envNow.CmNhi` 0), a present devnode of the tree whose
+first hardware id is a **USB4 or Thunderbolt host's own switch port**
+makes the run read "a controller was found, its router not listed"
+(`envNow.CmPorts` 1). The ids are one pure function,
+`inst_tb_switch_port(vendev)`: the ASM4242's own switch, its upstream
+port `1B21:2421` and its downstream port `1B21:2423` (record 22 section
+18.1; the latter is `cm_ports.c`'s `asmedia-asm4242` family's switch
+port), the upstream port being all 98 SE lists when it is itself at
+problem 12. The other families' ids are not taken: Light and Cactus
+Ridge's switch ports carry their NHI's own id (`8086:1513`, `8086:1547`,
+whose NHIs `xhcicm.inf` matches only on Vista and later), the Intel
+discrete families' switch port ids are carried by docks' switches too
+(record 21 section 3.3, the TS3 Plus's `8086:15D3`), and an integrated
+host's root ports are the processor's ordinary ones. The host suite holds
+the function to the two ids, `cm_ports.c`'s ASMedia family's switch port
+among them, and refuses every other family's NHI, switch port and root
+port ids, QEMU's bridges and an ordinary bridge.
+
+*What the run does with it* (owner, 2026-11-01, "the page then saying
+so and ticking the box"; a narrowing of revision 23 of record 23
+section 8.5, owner 2026-10-19, which leaves the support unticked
+whether or not a controller is found):
+
+- the Components page's sentence under the Thunderbolt box is
+  `INST_PT_TB_PORTS`, "Thunderbolt / USB4 controller found; Windows has
+  not listed its router yet.";
+- the box opens ticked (`inst_tb_box_default` takes `portsOnly`): the
+  support, `XHCIPFW.VXD` and Stor98 come with it, and the user can
+  untick it; the console asks with the default Y and `/yes` gives Y,
+  saying "  Thunderbolt / USB4 controller found; Windows has not listed
+  its router yet." where it names a found controller;
+- the run is the "Y with none present" case of record 23 section 8.5
+  on 98 SE and ME: `xhcicm.inf` copied to the install folder for the
+  New Hardware wizard, `XHCIPFW.VXD` placed and registered, and the
+  steps for when the router appears (`tb_later_note`) printed as they
+  are. Nothing is bound to a switch port.
+- `envNow.CmNhi` keeps its meaning (a device the INF matches), and so
+  does the engine's `tbNhiPresent`, which `tb_later_note`, the
+  networking key and the settings' targets read: the switch ports are
+  evidence of a host, not an install target. The decision functions take
+  the case as a third value of their `nhiPresent`
+  (`INST_TB_ROUTER_UNLISTED`); the window reads it from
+  `inst_eng_tb_ports`.
+- The Settings sheet's Thunderbolt tab is the staged-settings case of
+  section 5.5 as before (its values written machine-wide, no device
+  needed); its note says `INST_PT_TB_LATER_ROUTER`, "Router not listed
+  yet: these take effect once it is.", where it says
+  `INST_PT_TB_LATER` ("No controller found: ...") with no host at all.
+- A run made after the router is listed reads the NHI (`CmNhi` 1) and is
+  the present case again: unticked, "found" (revision 23).
+
+*The `pfw_seen` note on 98 SE and ME: not given.* From the reading
+above the 9x registry cannot tell a window above 4 GB from any other
+problem 12, so a note there would name the wrong cause on the board it
+was asked for. Where it matters most, the switch's own ports at problem
+12, the detection above now ticks the Thunderbolt box and with it
+`XHCIPFW.VXD`. The NT note is unchanged.
+
+*Texts* (drafts for the owner): `INST_PT_TB_PORTS`,
+`INST_PT_TB_LATER_ROUTER`, the console line above and the console's
+"/yes: Y" in place of "/yes: N (/thunderbolt installs it)" where the
+default is Y; the log line "thunderbolt: router not listed; switch port
+<id> found".
+
+*Checks.* Host vectors: `inst_tb_switch_port` takes the two ASMedia ids
+(the downstream one checked against `cm_ports.c`'s ASMedia family) and
+refuses every id of every other family of `cm_ports.c`, the ASM4242's
+NHI and xHCI, QEMU's bridges `1B36:000C` and `1B36:0001` and an ordinary
+bridge; `inst_tb_decide` and
+`inst_tb_box_default` with `portsOnly` set and not, with Intel's driver,
+`/thunderbolt`, `/yes`, `/list` and the connection manager alone. The
+window's self-test lays the Components page out with the new sentence.
+
+*The legs.* 98 SE and ME on q35, the emulated ASM4242 with no router:
+with `-AsmReserve` (the upstream port at problem 12) and without (the
+four downstream ports started): the page's sentence and the box ticked,
+the install, `XHCIPFW.VXD` placed and registered, the cold start after
+it; and with the router present, the page as before (unticked, "found").
+The board's case, a downstream port at problem 12 for its interrupt
+alone, needs the emulator to hold that one port back; until it can
+(an emulator property), the two layouts above stand in for it.
+
+#### 5.3.7 The Thunderbolt box the user's, and the tools alone (task 46.22; drafts 70 and 71)
+
+*The owner's decisions.* 2026-11-03: on Windows 8, 8.1 and 10 the
+Thunderbolt / USB4 box is the user's, ticked or unticked, whatever the
+USB drivers' box does; with both unticked Setup installs or updates the
+xHCI98 tools alone (the USB Tree, `XHCITR`, Setup and the other files of
+the install folder), and the Summary says so; on Windows 10 the line
+under Stor98's box is its own. 2026-11-04 (draft 71), answering this
+section's questions: the same on every system, 98 SE, ME and 2000 to 7
+included, the run of the tools alone on 98 SE and ME copying nothing it
+does not need; no switch added for it; the no-restart end below kept.
+The defaults are as they were: the USB drivers' box ticked on 98 SE to 7
+and unticked on 8, 8.1 and 10, the Thunderbolt box unticked with the USB
+drivers ticked and ticked with them unticked (`/cmonly`, and 8 to 10)
+where the package carries the support; Stor98 ticked with it on 8 and
+8.1 and unticked on 10 (task 43.59, confirmed by the owner 2026-11-03).
+
+*The lock, and why it went.* Until draft 70 the USB drivers' box,
+unticked, ticked and disabled the Thunderbolt box on every system but
+over Intel's Thunderbolt driver (draft 8: it is then all the run
+installs). On 8, 8.1 and 10 that box starts unticked (Windows' own
+driver runs the controllers, section 5.3.1 case 3), so the lock held the
+Thunderbolt box on from the first page: a user could not leave the
+connection manager out there, nor install the tools alone. Draft 70 took
+the lock off there; draft 71 takes it off everywhere, so on every system
+a user can install the tools alone. The window's read, its page, its
+Back and its Next take the box as ticked; ticking or unticking the USB
+drivers leaves it as the user left it.
+
+*The line under the USB drivers' box* is `inst_drivers_line`: on 8 to 10
+`INST_PT_DRIVERS_T8` as before; elsewhere, unticked, "Setup will
+install only the Thunderbolt / USB4 connection manager. ..." only while
+the Thunderbolt box is ticked, and with both unticked
+`INST_PT_DRIVERS_TOOLS`, "Setup will install only the xHCI98 tools.
+xHCI98 USB drivers already installed are kept." (the owner's words of
+2026-11-04). A click of the Thunderbolt box sets it again. On 98 SE and
+ME the Components page's warning for the USB drivers unticked (section
+5.3.1 case 2) ends, with the Thunderbolt box unticked too, "Setup will
+install only the xHCI98 tools. xHCI98 USB drivers already installed are
+kept." (`INST_CW_TOOLS9X`) in place of its connection manager
+sentences.
+
+*The run of the tools alone* (`inst_tools_only`): no driver of the
+package in the run - neither the USB drivers nor the Thunderbolt support,
+and so neither Stor98, the network driver nor `XHCIPFW`, their children,
+nor on 98 SE the USB storage drivers - and no other USB driver set
+ticked (section 6.7, which may stage). On NT the engine's
+`tools_only_run` (no INF text left in the run) then
+makes no local copy and stages nothing, does not wait for Windows' own
+installs nor read the device list again before its changes (it touches
+no device; but under `/notbnet`, whose write reads the devices), runs no install pass, and leaves the end-of-run driver upkeep
+to the next run with a driver: `XHCIPFW.SYS`'s maintenance (on 8 to 10
+the removal of an earlier one of this installer's), the mark service's
+end-of-run action, the connection manager's start type and the
+CriticalDeviceDatabase scrub. It writes no setting (every value is an
+INF's, section 5.4), copies and starts the tools, moves the install
+folder if asked, and writes the Add/Remove Programs entry, named for
+what is registered (section 9.1). It asks for a restart only where the
+tools' own steps need one (an old USB Tree in use in a folder moved
+from): its last line is "Done. No restart is needed." (a draft for the
+owner), exit 0, the Finish page without the restart buttons - the one
+exception to the owner's rule of 2026-10-15 that every run that changes
+anything asks for a restart, by the owner's words for this task
+(`inst_final_tools`, `INST_FINAL_DONE`; a run with `/notbnet` or an
+other driver set ticked keeps the rule). The window's Summary heads it "Install/update only the xHCI98
+tools now (no driver changes)." and lists the drivers as "not installed
+(xHCI98 tools only)"; the console asks the same words as its go-ahead.
+A `/notbnet` given keeps its write of `XhciCmNet` 0 without the
+Thunderbolt support (record 35 section 9.5), so such a run is headed as
+before, not as the tools alone.
+The uninstall is unchanged.
+
+*On 98 SE and ME* (draft 71) such a run (`run_tools_only_9x`) makes no
+package copy in the install folder and leaves `DevicePath`, the helper,
+every device, the hand steps, `stor98.mpd`, `S98VSD.VXD` and
+`XHCIPFW.VXD` as they are; it records the install folder, writes no
+setting, copies and starts the tools and Setup, and writes the
+Add/Remove Programs entry. Its plan says so in place of the copy's
+sentence ("On Windows 98 SE and ME Setup will copy only the xHCI98 tools
+to the install folder; DevicePath and the devices are left as they
+are.", the owner's words of 2026-11-04), and the Summary leaves out the
+Add New Hardware
+wizard's paragraph. Until draft 71 a run with neither box there
+(then reachable over Intel's driver alone) made the copy on
+`DevicePath`, the drivers left out of it. There the package copy of an
+earlier install is in the install folder itself, on `DevicePath`, so a
+run of the tools alone that would move the folder is refused before any
+change: "Cannot continue: Setup installs only the xHCI98 tools in this
+run, and on Windows 98 SE and ME it does not move the install folder
+then. Keep <folder>, or tick a driver. Nothing was changed." (a draft):
+moving the tools without the copy would split the two, and moving the
+copy is a driver change.
+
+*The console* (record 23 section 8.5, amended): off 8 to 10 the USB
+drivers leave the run only by `/cmonly`, which puts the Thunderbolt
+support in unasked, so the console reaches the tools alone only on 8 to
+10 (the owner, 2026-11-04: no switch). On 8, 8.1 and 10 without
+`/usb` the Thunderbolt question is asked, Enter for Y (until draft 70 the
+component was in unasked, "Connection manager only: installed without
+asking."), so N leaves a run of the tools alone; `/yes` and `/list` take
+the Y as before, `/thunderbolt` and `/cmonly` put the component in
+unasked, and over Intel's driver it is asked with N the default as
+before (`inst_tb_alone`, `INST_TB_ALONE_ASK`). No switch was added (the
+owner, 2026-11-04): an unattended run of the tools alone is not
+reachable. An unfinished `/restage` that includes
+the Thunderbolt driver still refuses an N (record 23 section 5.7).
+
+*Stor98's line on Windows 10* (`inst_s98_line`): "Windows 10 has its
+own NVMe driver." (the owner, 2026-11-04, at the X870E bench: the second
+half, "Stor98 stops drives cleanly.", dropped; first worded that day for
+the sense "Windows has its own NVMe driver, so Stor98 is
+not required, but it helps where a drive must stop cleanly when
+unplugged without ejecting"; its table row 272 units wide, the
+`IDC_C_S98_T` control's own width, so the row's count allows its 64
+characters), in the box of the line it replaces and on one line,
+as that one is: with every row shown the Thunderbolt and USB4 page has
+no room for a second (the window's self-test, laying the page out on a
+host that reads as 10, found the two-line form pushed Settings... off
+its foot); 8 and 8.1, and every other system, keep "For NVMe drives in
+Thunderbolt / USB4 enclosures.".
+
+*The host suite* (`test_inst`, `test_tb_lock_4622`): `inst_tb_alone`
+and `inst_tb_decide` with it, a controller found or not, under `/yes`,
+`/list`, `/thunderbolt` and without the support; the tools alone's rule,
+its words and its end; the 98 SE and ME warning for it; the USB drivers'
+line for each state of both boxes; Stor98's line on every system and its
+defaults on 8, 8.1 and 10. The window's self-test lays out the new texts
+in their boxes and reads the Thunderbolt box open and as the user left
+it with the USB drivers unticked, with the line for each state, on 8 to
+10 and elsewhere.
+
+*The legs* (`runs/run-46.md`, "46.22"): Windows 10 x64, 8.1 and 8, 98
+SE and one of 2000, XP and 7 on q35, both boxes unticked, then Install:
+the tools alone, nothing else changed, the Summary's words, no restart;
+the Thunderbolt box ticked alone, as before; Stor98's line on 10 against
+8.1's.
+
+#### 5.3.8 The Thunderbolt box ticked over an installed Thunderbolt part (task 46.22; draft 74)
+
+*The owner's decision* (2026-11-04): on a rerun over an install that has
+the Thunderbolt part, the Thunderbolt / USB4 box starts ticked, on every
+system where the box is offered, so the part is updated with the rest
+unless the user unticks it. "Installed" is section 5.3.7's reading for
+the Summary's row (`tbInstalled`, the engine's `tb_decide`): a devnode
+whose service is `xhcicm` (on 98 SE and ME its driver key's
+`NTMPDriver`) or whose `UpperFilters` name `xhcicm`. Unticked, the
+Summary keeps "not changed; the installed one is kept".
+
+*The rule* is `inst_tb_decide`'s, so the window and the console share it:
+a new argument `installed` makes the default yes (`*defaultYes` 1),
+except over Intel's Thunderbolt driver (the box stays the user's there,
+record 23 section 8.5.1) and where the connection manager would be
+refused by Secure Boot on this system (`inst_cm_sb_refused`, section
+5.3.3): a box ticked there would only meet the Components page's
+refusal. The window's first state of the box is `inst_tb_box_default`
+with the same argument; Back and Next keep the user's choice as before.
+
+*The console* (record 23 section 8.5): where the question is asked, Enter
+gives Y over an installed Thunderbolt part, the N choice reading "do not
+install it (the installed driver is kept)" as before. `/yes` takes that
+default, so **an unattended `/yes` rerun over an install with the
+Thunderbolt part now updates it** (until draft 74 it left it "not
+changed"); `/list` shows the Y. Its line reads "  /yes: Y (the installed
+Thunderbolt / USB4 support is updated)." (a draft). `xhciinst\readme.txt`
+says so beside `/yes`.
+
+*Host vectors* (`test_inst.c`): `inst_tb_decide` and
+`inst_tb_box_default` with `installed` set: asked with Y the default,
+`/yes` included, `/list` Y; not over Intel's driver; not where Secure Boot
+refuses; unchanged with it clear. The window self-test sets an installed
+part and reads the Components page's box ticked, and unticked with the
+refusal.
+
+#### 5.3.9 An update on Windows 8, 8.1 and 10 over the xHCI98 USB drivers (2026-11-04; draft 74)
+
+*Found* (the 3.4.1.0 update legs, 10 x64 over 3.4.0.0 installed with
+`/usb`): the Components page opened with the USB drivers' box unticked
+and the Thunderbolt box ticked ("No Thunderbolt / USB4 controller
+found"), so a user clicking through left `xhci98` and `xhciuas` at the
+old version and got the tunnel-port filter. The cause: on 8 to 10 the
+USB drivers were in the run only by `/usb` (`inst_usb_decide`, section
+5.3.1 case 3), whatever ran the controllers, and with them out the
+Thunderbolt box takes the connection-manager-alone default, yes
+(section 5.3.7).
+
+*The rule* (`inst_usb_opt`, the coordinator on the owner's delegation):
+on 8 to 10, over controllers `xhci98` already runs (a devnode whose
+service is `xhci98`), the USB drivers are in the run as on every other
+system - the box ticked, the console saying so (its line below) - and
+`/cmonly` leaves them out. With them
+in, the Thunderbolt box opens unticked unless the Thunderbolt part is
+installed (section 5.3.8). 98 SE, ME and 2000 to 7 never took this path:
+their USB drivers are in the run by default.
+
+*The owner's decision* (2026-11-04), amending section 5.3.7: on 8, 8.1
+and 10 with the USB drivers out of the run, the Thunderbolt box opens
+ticked only where a Thunderbolt or USB4 host is found - an NHI
+`xhcicm.inf` matches, or a switch or tunnel port of a known host
+(`inst_tb_port_known`: `instTbPortIds`, the filter INF's ids, but QEMU's
+own bridges, `PCI\VEN_1B36`, which the filter binds for the emulator
+alone) - and unticked otherwise; the user can tick it. The console's
+question takes the same default for Enter, `/yes` and `/list`
+(`INST_TB_PORT_FOUND`, `inst_tb_decide`), and `/cmonly` there no longer
+puts the part in unasked: it is asked as without it (`inst_tb_alone`).
+An installed part (section 5.3.8) and `/thunderbolt` still tick it. The
+console's line over installed USB drivers reads "Setup updates the xHCI98
+USB drivers already running here (/cmonly leaves them as they are)."
+(the owner's words).
+
 ### 5.4 The USB settings
 
 The values of record 23 section 8.1 whose "Asked when" holds for this
@@ -2387,6 +2841,97 @@ Then:
   rule above): a controller with no driver, one already bound and one
   bound elsewhere.
 
+#### 5.4.2 The Settings dialog split by page (task 46.7; draft 64)
+
+The owner, 2026-11-01 (roadmap-usb4 task 46.7, was SETSPLIT.1): each
+page opens the settings of its own components. Until this draft the
+Components page's "Settings..." opened one sheet with a tab per ticked
+component, USB, Thunderbolt / USB4 and Stor98 (section 5.0's Settings
+dialog), so the Thunderbolt and Stor98 settings were reached from the
+page before the one that ticks Stor98 and sets the approval.
+
+*The Components page's "Settings..."* opens the sheet with the USB tab
+alone: its main rows and its "Advanced..." list, as section 5.4 and
+5.4.1 build them. The button is greyed where that tab has nothing to
+show (the USB drivers unticked, or no USB row in the plan made with
+them in the run). A plan made with the USB drivers out of the run has
+no USB row to tell, so where the last plan left them out, or a change
+of the boxes is still owed to the plan (Back keeps the boxes without
+planning, section 5.10's draft 59), the box ticked leaves the button
+open, and its press, which makes the plan again, says "The selected
+components have no settings on this computer." if the tab is still
+empty.
+
+*The Thunderbolt and USB4 page's "Settings..."* (`IDC_T_SETTINGS`, new)
+opens the sheet with the Thunderbolt / USB4 tab and, while the page's
+Stor98 box is ticked, the Stor98 tab, each with its "Advanced..." list,
+as sections 5.5 and 5.6 build them. The page is shown only while the
+Thunderbolt box is ticked (section 5.3.5), so the button is always
+there; the Stor98 tab follows the page's own box, read at the press,
+not the state the page had when it opened. Before the sheet opens the
+page's boxes and its approval choice are taken as its Next takes them
+(`tbt_leave`, with no warning shown), so the tabs and the plan match
+what the page shows; the sheet does not show `XhciCmApprove`, which
+stays the page's (section 5.3.5).
+
+*Where it sits.* At the page's foot, at the left, 2 dialog units from
+its bottom, as the Components page's "Settings..." sits on its own; the
+rows are stacked above it (`tbt_layout`), the gap chosen so the last
+row's bottom stays above the button's top. On 98 SE at 640 by 480 the
+page holds every row it can show there (the box for `XHCIPFW.VXD`,
+Stor98 and `S98VSD.VXD`, the approval with its note, the networking
+row) with the button below them; the window's self-test lays the page
+out at its fullest on each system and fails a row that reaches the
+button.
+
+*One sheet, two callers.* `settings_open(page, set)` takes which tabs
+the caller offers (`SET_USB`, or `SET_TB` with `SET_S98`); the sheet's
+OK and Cancel, its Help per tab, F1 and the keeping and restoring of
+the choices are as before (section 5.10). The sheet's caption stays
+"xHCI98 Settings".
+
+*Enter presses OK* (draft 67, the owner's decision of 2026-11-03). Read
+on 98 SE and XP (`runs/run-46.md`, "46.7 the per-tab checks left"):
+Enter on a tab's row pressed "Advanced...", which a tab's first focus
+had made the default button, not the sheet's OK. Each tab, when it
+becomes the active one (`PSN_SETACTIVE`), makes the sheet's OK the
+default (`DM_SETDEFID` on the sheet) and takes the default style off
+its own "Advanced..." and "More >"; and a press of either that comes
+from Enter while that button does not have the focus (Enter down, the
+focus elsewhere: the dialog manager's default press) is taken as the
+sheet's OK, so Enter closes the sheet with OK from any row. Where the
+sheet has put a tab's first focus on its "Advanced..." or "More >", the
+tab moves it to its first row that can be changed, else to the sheet's
+OK; a focus the user put elsewhere (the tab strip, whose arrow keys
+switch tabs, or a row) is kept, and a tab no longer the current one is
+left alone (read on XP with
+`c986e287`: the first focus was "Advanced...", so an Enter at once still
+opened it, while Enter from a row closed the sheet with OK and kept the
+row's value). Enter on the focused button, a click and the access keys
+(Alt+A, Alt+M) press it as before. The window's self-test holds that neither button of the
+tab template has the default style.
+
+*Help* (the owner's style; drafts): the Components topic's
+"Settings...: the drivers' settings." becomes "Settings...: the USB
+settings."; the Thunderbolt and USB4 topic gains a last paragraph,
+"Settings...: the Thunderbolt / USB4 and Stor98 settings." (eight
+paragraphs, about 24 lines at 68 columns, scrolling as before). F1 and
+the routing of the tabs are unchanged.
+
+*Checks.* The host suite: the two Help texts and their paragraph counts,
+the labels quoted. The window's self-test: the Components button's
+state with the USB drivers ticked and unticked; the Thunderbolt and
+USB4 page laid out at its fullest with the button below the last row on
+the system it runs on and as 98 SE has it; the tabs each caller offers
+(`set_tabs`, a pure helper of the window: USB alone; Thunderbolt alone,
+or with Stor98).
+
+*The legs.* 98 SE at 640 by 480, XP and 7 x86 at 96 DPI and 7 at
+120 DPI: the Components page's Settings (the USB tab alone, its
+Advanced), the Thunderbolt and USB4 page with its button (the two tabs,
+then Stor98 unticked and only the Thunderbolt tab), Help and F1 on each
+tab, a value changed on each and seen in the Summary.
+
 ### 5.5 The Thunderbolt settings
 
 Shown when Thunderbolt 3 / USB4 support is ticked and `xhcicm.inf` matches
@@ -2421,6 +2966,62 @@ a diagnostic the release notes describe for a hand edit. Since draft 52
 `XhciCmUsb4V2`. `XhciCmAsmediaPcie7Credits`, a bench experiment, is not
 offered.
 
+(Draft 72, task 46.12 on NT; design record 32 section 12.8.15.12, the
+owner's decisions of 2026-11-04.) `XhciCmAsm4242Reads` joins Advanced on
+2000 and later (greyed on 98 SE and ME), never asked, `/set` 0 or 1, its
+default 0: "send the USB4 handover to an ASM4242 board Setup does not
+recognise, reading the firmware's tables to find it", its note "a known
+board always gets it. This reads the firmware's own memory, which can
+stop Windows on some machines. Restart Windows after changing it.", the
+choices "no: only to a known board" and "yes" (drafts for the owner).
+Until both `xhcicm` INFs' NT installs write it at 0 (the driver's
+change), its row takes the driver's default (`NoInf`). On 2000 and later
+the install also writes `xhcicm` into the `UpperFilters` of every
+present devnode of the ASM4242's xHCI (`PCI\VEN_1B21&DEV_2426`,
+whatever driver owns it), the other names kept in order, when the run
+has the Thunderbolt support in it and installed it (its admission
+checks made, its group not refused, its INFs staged, no failure in the
+run, the image in place this package's version, its service not
+disabled) and leaves it installed
+(its service and image in place); any other
+run with the support installed leaves the entries as they are
+and never on Windows 11 (refused by Setup; an entry carried over stays
+and does nothing there); an install that leaves it out, and the
+uninstall as its first NT step, take the entry out of every devnode,
+present or not; these devnodes are no tunnel port and no member of the
+connection manager's version group (`tunnel_filter`); a devnode changed asks for the restart
+and is said and logged ("xhcicm: added to / taken out of the
+UpperFilters of <instance>"). A run of the xHCI98 tools alone (section
+5.3.7) does neither.
+
+(Draft 73, task 46.12 on NT; design record 32 section 12.8.15.12, "As
+built in the installer", the owner's decisions of 2026-11-04.) With the
+Thunderbolt support in the run and an ASM4242 host listed, Setup reads
+the board's identity (the NHI's three functions and root port by the
+device tree, the SMBIOS tables) and matches it with the driver's own
+`cm_oscp.c`, its release profiles alone: known, not recognised, or not
+checked. The tables come from `GetSystemFirmwareTable` where it exists,
+on 2000 and 32-bit XP from WMI, both read at the Thunderbolt and USB4
+page's Next and never by a plan; WMI's with a small modal box saying "Reading this
+board's identity... N" counting down from 10 with Skip, the wizard going
+on at the answer, at 0 or at Skip (then not checked, the log saying why);
+Back and Next reuse it; the console says the same line once its
+Thunderbolt question is answered yes and waits at most 10 s. The
+`XhciCmAsm4242Reads` row's note ends with the class ("This board:
+known; the handover is sent without this setting.", "This board: not
+recognised.", "This board: Setup could not check it.", and before the
+page's Next "This board: Setup checks it when you press
+Next."); the plan's report and the Summary say it too ("ASM4242 board:
+known; the USB4 handover is sent.", "... not recognised (see
+XhciCmAsm4242Reads).", "... Setup could not check this board."), the
+report again at the run's start when it changed. On 2000, where the
+driver reads no board identity, Setup reads none and says it could not
+check (the line follows what the driver will do); on 32-bit NT a known
+board without the helper `xhcihlpr.sys` after the run (the xHCI98 USB
+drivers' part) is "ASM4242 board: known; the handover needs the xHCI98
+USB drivers here." (the note "This board: known; the handover needs the
+xHCI98 USB drivers on this Windows."). Drafts for the owner.
+
 ### 5.6 Stor98's settings
 
 Shown when Stor98 is ticked. Stor98's settings (its `readme.txt`,
@@ -2437,7 +3038,8 @@ row says. The rows asked: `StorWriteThrough` (`auto`, `off`, `cacheoff`,
 `fua`, each with Stor98's one-line meaning; a string on every system) and
 `StorPollMode` (0 or 1). "Advanced...": `StorMaxTransferKB`,
 `StorPollBusyUs`, `StorPollIdleMs`, `StorPollSpinUs`, `StorGoneMs`,
-`StorWriteIdleMs` and, from `3.3.0.0`, `StorHold9xMs`, each with Stor98's
+`StorWriteIdleMs`, from `3.3.0.0` `StorHold9xMs` and, from `3.4.1.0`,
+`StorIntWatchdog` (0 or 1, roadmap-usb4 46.9), each with Stor98's
 default, unit and range; `StorHold9xMs` is a 98 SE and ME value with no
 `DriverParameter` key, shown greyed on 2000 to 10 ("Windows 98 SE and ME
 only") and never written there. Up to
@@ -2497,6 +3099,17 @@ sentence that Windows' own wizards may open for the devices the controller
 shows after its restart. The button is Install (Remove under `/uninstall`,
 section 9). Nothing is written before it.
 
+Draft 73 (task 46.12 on NT, record 32 section 12.8.15.12): on 2000 and
+later the list also names each `PCI\VEN_1B21&DEV_2426` devnode whose
+`UpperFilters` the run will change, "Setup will add the xhcicm filter to
+these USB controllers (restart):" or "Setup will take the xhcicm filter
+out of these USB controllers:" with each instance id under it, read by a
+pass that writes nothing and decided as the run's step decides
+(`inst_cm_xhci_mode`); the uninstall's summary names those it takes out;
+the console prints the same lines before its go-ahead (the uninstall's
+before the word REMOVE). With the Thunderbolt support in the run and an
+ASM4242 NHI found, the list says the board's class (section 5.5).
+
 ### 5.8 The progress
 
 A list of record 23's steps in order as `INST_STEP`s arrive (the copy, the
@@ -2512,6 +3125,187 @@ device it found (2 of 10 minutes); answer the window it opened". Cancel
 during the progress is record 23's stop at a step boundary; the page says
 so when it is pressed and the Finish page then reports what was done, as
 the console's "Changes were made, but not everything is done" does.
+
+#### 5.8.1 The bar by the work left (task 46.8; draft 65)
+
+The owner, 2026-11-01 (roadmap-usb4 task 46.8, was PROGBAR.1): the bar
+is to match the install's actual progress, neither jumping nor sitting
+still while a long step runs, and reaching the end only when the run has
+finished. Until this draft its range grew with each step as it began
+(`progress_add`: `stepsTotal` counted the steps begun, the position the
+steps ended), so it showed only the steps seen so far: on XP and 7 it
+stood near two thirds once "Package copied and staged" was done and sat
+still through every device's install and Windows' own wizards, most of
+the run's time, which report no step of their own (`runs/run-46.md`,
+"46.18"); on 98 SE each helper job, which waits with no bound, moved
+nothing until it ended.
+
+*The model: weighted items and the space left.* One pool of items, in
+whatever order the engine does them (no fixed parts: the install and the
+uninstall interleave their kinds of work), each with a weight by its
+kind; the space left on the bar is shared by the weight still to come
+plus a reserve for work not yet known. The state is the engine's, one
+pure structure in the pure half (`INST_PROG`, `inst_prog_*`,
+host-tested), guarded by the engine's lock where the window reads it.
+
+| Item | Weight |
+|---|---|
+| a device installed: on NT `install_inf`'s and Stor98's synchronous installs, on 98 SE and ME each helper job (`XHCIDI.EXE`) | 6 |
+| a wait of its own: a barrier's settle, a reconnect, a reappearance | 4 |
+| the package copy | 4 |
+| an INF staged; a devnode removed; a filter, INF or service removed | 1 |
+| a file step (Stor98's file, `S98VSD.VXD`, `XHCIPFW`, the mark service) | 2 |
+| an other-driver set copied | 3 |
+| the settings written; the tools copied; the record and the Add/Remove entry | 1 each |
+| the reserve, for work not yet known | 6 (one device's), plus the weight of every item found late so far; at each share scaled by the square root of the share of the known work still to do (draft 67) |
+
+- `inst_prog_plan(p, w)`: at the run's start the engine adds the items
+  it knows from the plan (the device installs that run, the file steps
+  and sets chosen, the copy, the settings, the tools, the record); the
+  uninstall adds its devnodes and removals when it has listed them.
+- `inst_prog_add(p, w)`: an item found later (a barrier's rescan, a
+  child the replan adds, a retry, a wait) joins the weight left.
+- `inst_prog_begin(p, w)` and `inst_prog_end(p)`: an item opens and
+  ends; at its end the bar moves by `space_left * w / (weight_left +
+  reserve)` (the weight left including this item). No item but the last
+  spends the reserve, so until the run's end begins a share is always
+  less than the space left: an item found late always has room. It grows
+  by each late item's weight,
+  so a run that keeps finding work expects more of it (until draft 67 a
+  run of late devices left `1 / (k + 2)` of the space after the k-th, not
+  half of it each time; the scaling below makes that somewhat less). The state counts in millionths; the bar shows
+  thousandths, at most 999 before the end.
+- The reserve in a share shrinks as the known work is done (draft 67,
+  the owner's decision of 2026-11-03, option B): a share is `space_left
+  * w / (weight_left + min(reserve * sqrt(weight_left / (weight_left +
+  weight_done)), 2 * weight_left))`, `weight_done` the weight of every
+  item ended so far (the gaps included, the dropped not). The cap, twice
+  the known work left, is a reading of the legs on this draft's code
+  (`runs/run-46.md`, "46.8 the shrinking reserve"): on 7 x86 the waits,
+  all found late, grow the reserve to some 80 weights, so near the end
+  the root alone still left it at three times the known work and the
+  run's end took 72 thousandths after items of 8 to 37. Twice, not once:
+  with the cap at the known work left a run of late items each took half
+  of what was left, and twenty in a row left no room in millionths; at
+  twice, with the run's end's weight 3 always in the known work (the
+  uninstall now plans its run's end too), a late removal or gap of
+  weight 1 takes a twelfth and a late device some two ninths, which
+  keeps room past forty removals with their gaps (the
+  old reserve's `1 / (k + 2)` kept more: a run that finds nearly all its
+  work late now stands near the end sooner, the price of the ordinary
+  last step). At the run's start, nothing done,
+  it is the whole reserve; as the run nears its end, little known work
+  left beside much done, it is a small part of it, so the items near the
+  end take most of what is left and the run's end, which still takes all
+  the space left, finds about an ordinary item's step. It stays above 0
+  while any weight is left (the item itself counts), so an item found
+  late still always has room. The square root, not the plain ratio, is
+  the reading of the legs' item sequences of `runs/run-46.md` "46.8 the
+  run's end takes the reserve" replayed through the model: the plain
+  ratio brought the bar to 997 to 999 several items before the end and
+  then sat still; the root keeps the last items moving, and with the cap
+  the run's end's step on the legs' sequences is 21 to 43 thousandths
+  where the items' median step is 38 to 47, against 74 to 146 with the
+  reserve whole. In
+  the pure half it is integer arithmetic: the root of the ratio in
+  thousandths by an integer square root, the reserve in thousandths of a
+  weight.
+- The device installs planned are counted again at each item's end
+  (draft 67; until then only at each scan): one install call on 2000
+  and later reaches every device of its hardware id and marks them all
+  done (the ASM4242's four downstream ports, one call), and a device the
+  call leaves as it is (a port already filtered) is done with no item of
+  its own, so their weight stayed planned until the next scan and,
+  after the last, to the run's end, which then took it as one step: on
+  XP 852 to 999 with this draft's reserve (`runs/run-46.md`, "46.8 the
+  shrinking reserve"). Counted at the end of the item that reached them,
+  that weight leaves the pool with no movement (`inst_prog_drop`), as a
+  device Windows installed itself does. At an item's end the count only
+  drops: a device marked done just after its own item (the 98 SE and ME
+  helper's fallback marks it after the step's line) never joins again
+  as found late; a scan's count still plans and drops both ways. A
+  device left for the user (on the steps list) is not counted, and when
+  the run on 2000 and later stops before all devices are done (a
+  barrier that timed out on an unfinished wizard: "Stopped before all
+  devices were done"), every device install still planned is dropped
+  and no later count plans one again: on XP a root hub whose wizard was
+  not finished stayed planned to the run's end (879 to 999 on
+  `ef6aa7a6`).
+- `inst_prog_last(p, w, now)` (draft 66, the owner's decision of
+  2026-11-03): the run's last item, the run's end, which both the
+  install and the uninstall begin once their work is done (on the
+  uninstall an item found late, the install's planned), takes the
+  reserve: it begins as `inst_prog_begin` does, but its share is all the
+  space left, so it creeps as any item does and at its end the bar stands
+  at 999, a step of its own (draft 67: with the reserve shrunk by then,
+  about an ordinary item's). Until this draft the reserve was never
+  spent and the bar jumped from where the last item left it to the end
+  at done (876 to 1000 on 98 SE and 777 to 1000 on 7 x86, `runs/run-46.md`
+  "46.8"). The run's end holds the bar to its own end: a step its writes
+  open (the mark service's install, `mk_end_of_run`, with its copy, its
+  configuration and a wait of up to 30 s) is part of it, not an item of
+  its own: the step's begin and end are logged and move nothing, and its
+  waits' bounds reach the run's end's creep as a wait inside any item
+  does (`inst_prog_bound`), so the bar moves through that work and stands
+  at 999 only when the run's end ends. No gap opens inside it or after
+  it.
+- `inst_prog_drop(p, w)`: an item planned that no longer needs doing
+  (Windows installed the device itself, found at the rescan) leaves the
+  weight left with no movement.
+- The open item creeps while it runs, within 0.9 of its share: each wait
+  of the item over half of what is left of that 0.9, by `elapsed /
+  bound` for a wait with a bound, else `elapsed / (elapsed + 30 s)`; a
+  wait of another bound inside the same item (the 98 SE and ME helper's
+  reappearance poll, a settle, the helper again) keeps what was crept and
+  creeps over half of the rest, so each wait moves the bar. Its elapsed time is the clock since
+  `inst_prog_begin`, so a call that blocks the engine's thread
+  (`UpdateDriverForPlugAndPlayDevices`, `DiInstallDevice`, a helper job)
+  creeps too.
+- Between items the gap is an item of its own, of weight 1, found late:
+  the work the engine does with no item (the uninstall's service, filter
+  and record removals, the mark service's stop, a poll before a wait)
+  creeps as an unbounded item does, and ends when the next item begins.
+  An item that begins while another is open (a device's inside a
+  step's) ends the open one first, with its weight.
+- The position never goes back, and `inst_prog_done` at the run's end
+  sets it to the end, one thousandth past the run's end item's 999.
+
+*Reaching the window.* The window reads the position; the engine never
+pushes it. A 500 ms timer on the Progress page, running while the run
+does, calls `inst_eng_progress()` (the position now, the open item's
+creep included, under the engine's lock) and sets the bar (range 0 to
+1000); the step rows and the wait line stay as they are, and the window
+no longer counts steps. At the run's end (`WM_APP_DONE`, before the page
+moves on) the window stops the timer and sets the bar from one last call,
+which then reads the end. The console has no bar and is unchanged.
+
+*The log.* The engine writes "progress: <pos>/1000 begin|end <item>" at
+each item's begin and end, after each begin "progress: weight left <w>,
+devices planned <n>, reserve <r>, done <d>" (draft 67: the pool as the
+share was taken, so a leg's log says where a large step came from),
+"progress: <pos>/1000 part <step>" at the
+begin and end of a step inside the run's end, and "progress: 1000/1000
+done" at the run's end, before the step's callback, so the log holds every boundary however
+the window drew it.
+
+*Checks.* Host vectors over `inst_prog_*`: a first install on 98 SE with
+two controllers and their helper jobs, the same on XP with its waits, an
+update with nothing to install, the Thunderbolt support with its file
+steps, the uninstall with its late listing; monotonic under every
+sequence; an item added after every known one ended, before the run's
+end, still moving the bar; the shrunk reserve: whole at the start, a
+small part of itself near the end, never 0 while weight is left, and on
+an XP-like and a 98 SE-like sequence of late waits the run's end's step
+no larger than the median item's; items dropped; the creep moving for a bounded and an unbounded item
+and stopping short of its share; the end only at `inst_prog_done`; the
+run's end taking the reserve: its share all the space left, its creep
+short of it, 999 at its end after twenty late devices as after none, a
+wait of another bound inside it creeping on, and done one thousandth
+more.
+
+*The legs.* 98 SE, XP and 7 x86, a first install with the Thunderbolt
+support: the log's progress lines against each step's begin and end, and
+screenshots of the bar during a device's install and a wait.
 
 ### 5.9 The finish
 
@@ -2648,26 +3442,26 @@ final words and paragraphs):
 
 | Topic | Shown for | Text |
 |---|---|---|
-| `INST_HELP_WELCOME` | the Welcome page (install), its three wordings (section 5.3.2) | The list: each controller this package has a driver for, what runs it now, and what this install does to it. The note under it says what to do first when something needs it, such as a hardware wizard Windows has open. / Nothing is chosen on this page. Next goes on to the choices; Cancel leaves with nothing changed. / The log named above records what the installer reads and does: keep it when you report a problem. |
-| `INST_HELP_UWELCOME` | the uninstall's first page, both wordings | Remove takes away every driver of this package, its tools and its records. / The box: tick it once you have a keyboard and mouse that do not go through these drivers (PS/2, a laptop's built-in ones, or a USB controller another driver runs). Where only the connection manager is removed: once every program that uses a Thunderbolt or USB4 device is closed. / Next shows what will be removed; nothing is changed before Remove. |
-| `INST_HELP_COMP` | Components | xHCI98 USB 3 host controller driver: runs the USB 3 controllers listed on the Welcome page. Untick it to install the Thunderbolt support alone. / UAS disk driver: the faster protocol of USB disks that offer it. Untick it only if another UAS driver is installed. / USB storage drivers for Windows 98 SE: the disk drivers 98 SE lacks. Leave it unticked if NUSB is installed. / Thunderbolt 3 / USB4 support: the connection manager. Tick it if this computer has a Thunderbolt or USB4 port; the next page holds its choices. / Start the xHCI98 USB Tree (tray icon) at login: the tool that lists USB devices and stops them for removal; installed either way. / Tell me when a USB device can run faster: the USB Tree's notice for a device on a slower port than it supports. / Replace the stored build of this package's drivers: available to tick where Windows' driver store holds these drivers' version with other bytes; ticked, that copy is replaced and the devices are installed again. / Settings...: the drivers' settings. Change folder...: where the tools and this installer go. |
-| `INST_HELP_TBT` | Thunderbolt and USB4 | Find Thunderbolt and USB4 devices placed above 4 GB: XHCIPFW.VXD on 98 SE and ME, XHCIPFW.SYS on 2000 to the 32-bit 8.1. At each start it closes the PCI bridge windows above 4 GB this Windows cannot use, so the devices behind them are found; it writes nothing where there are none. Leave it ticked. / Stor98: the driver for NVMe drives behind a Thunderbolt or USB4 tunnel. Untick it only if another driver runs those drives. / Large transfers for Stor98 (98 SE and ME): reads and writes of up to 2 MiB whole, instead of 63 KiB pieces. / Give it a PCI Express connection at once: each device plugged in is connected and can read and write this computer's memory; for devices you trust. Some controllers' firmware decides this itself. / Give it none: no new PCI Express connection; a device may still work over USB. Connections made before Windows starts stay, unless XhciCmPreOsCleanup ends them. / The choice applies from the next restart; on a new install unplug the dock until then if you choose none. |
-| `INST_HELP_FREE` | Free USB drivers | The box: copies the free USB class drivers (usb-wdm-free) to the install folder, for USB devices this Windows has no driver for. / The list under it: a package ticked there is staged, so Windows uses it by itself when a matching device is plugged in; unticked, point the hardware wizard at its folder when you want it. The text under the list says which are copied only on this Windows. / Trust usb-wdm-free's test certificate on this computer (64-bit Windows): adds the certificate its 64-bit drivers are signed with to the trusted roots and publishers; the uninstall removes the trust this installer added. / The line under the box says where the drivers are, or where to download them. |
-| `INST_HELP_NONFREE` | Non-free USB drivers | The box: copies other manufacturers' drivers (USB Ethernet, serial and game pads) to the install folder. The copy installs nothing. / The list under it: a package ticked there is staged, so Windows uses it by itself when a matching device is plugged in; unticked, point the hardware wizard at its folder when you want it. The text under the list says which are copied only on this Windows. / The line under the box says where the drivers are, or where to download them. |
-| `INST_HELP_SET_USB` | the Settings sheet's USB tab | XhciSilentInstall (98 SE and ME): installs hubs, boot keyboards and mice and Bulk-Only storage with no Add New Hardware wizard. / XhciIntelPortSwitch (Intel controllers with shared connectors): moves those connectors from the EHCI controller to this driver; 2 only on the release notes' advice. / A greyed row is for another system or controller and cannot be changed here. More >: the tab's next rows, where they do not all fit. Advanced...: the other USB settings, each explained. / A row left as it is writes nothing. A change is written machine-wide when you click Install and is read from the next restart. OK keeps your choices for Install; Cancel drops them. |
-| `INST_HELP_SET_TB` | its Thunderbolt tab | XhciCmMode: the Thunderbolt and USB4 support, 1 automatic (the default) or 0 off; 2 and 3 only on the release notes' advice. A new install starts with the default until the restart: unplug the dock until then if you choose 0. / XhciCmSafeEject: 1 offers Safely Remove for the devices behind a dock; 0 does not, and the install also removes the safe-removal mark service with its marks. / The approval of new devices is on the Thunderbolt and USB4 page. More >, where shown: the next rows. Advanced...: the other Thunderbolt settings. / A row left as it is writes nothing; a change is written machine-wide when you click Install. OK keeps your choices for Install; Cancel drops them. |
-| `INST_HELP_SET_S98` | its Stor98 tab | StorWriteThrough: how writes reach the drive's media: auto (cacheoff on ME, off elsewhere), off (the drive as it is), cacheoff (its write cache off) or fua (every write marked Force Unit Access). / StorPollMode: 0 polls only without an interrupt, 1 always polls. / A row left as it is keeps Stor98's current setting; where nothing is set, its built-in default applies. Change one when Stor98's readme or a problem report points to it. / Advanced...: Stor98's other settings. OK keeps your choices for Install; Cancel drops them. |
-| `INST_HELP_ADV` | Advanced, for the USB and the Thunderbolt tab | The settings not on the tab, one row each with its value now. Select a row to read what it does under the list, then choose its value under Setting. / A value left as it is is not written; a change is written machine-wide when you click Install. Change one only when the release notes or a problem report advise it. / OK keeps your choices for Install; Cancel drops them. |
-| `INST_HELP_ADV_S98` | Advanced, for the Stor98 tab | Stor98's settings not on the tab, one row each. Select a row to read what it does, then give its value under The value. / A row left as it is keeps Stor98's current setting; where nothing is set, its built-in default applies. Change one only when Stor98's readme or a problem report advises it. / OK keeps your choices for Install; Cancel drops them. |
-| `INST_HELP_SUMMARY` | Summary (install) | What Install will do: the devices, the components, the settings written and the install folder, and what to know before going on. Nothing has been changed yet. / Back: to change a choice. Install: goes on. / The USB keyboard and mouse on a controller whose driver changes stop for a moment: have a keyboard and mouse that do not go through it. |
-| `INST_HELP_USUMMARY` | Summary (uninstall) | What Remove will take away: each driver of this package, its tools and its records. Nothing has been changed yet. / Remove: goes on. Cancel: leaves with nothing changed. |
-| `INST_HELP_PROGRESS` | Progress, both, 2000 and later | The steps as they run. Windows may open windows of its own, such as Found New Hardware or a driver-signing question: answer them (Next, Yes or Continue, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
-| `INST_HELP_PROGRESS_9X` | Progress, both, 98 SE and ME (draft 59; until then the topic above on every system) | The steps as they run. Windows may open windows of its own, such as the Add New Hardware Wizard: answer them (Next, then Finish); this waits for them. / Cancel stops at the next step; what was done stays. While a Thunderbolt drive's reconnection is awaited, Cancel skips that wait alone and the run goes on. |
-| `INST_HELP_STEPS` | Steps left for you | Devices the installer could not install by itself, each with the steps to do after the restart. / Save as text file...: keeps the steps to read after the restart. Open Device Manager: where the steps are done. |
-| `INST_HELP_FINISH` | Finish (install), Restart choices | What was done and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, and what was installed starts. Restart Windows later: to save your work, or to do the steps first; restart before using the devices. |
-| `INST_HELP_FINISH_SHUT` | Finish (install), Shut down choices | What was done and what is left, and the log's place. / Shut down now, then start Windows again: Finish shuts Windows down; start it again yourself. Stor98's update, or the USB storage drivers' copy, needs a fresh start rather than a restart. Shut down later: to save your work first. |
-| `INST_HELP_FINISH_NONE` | Finish, nothing changed (install or uninstall, done, refused or stopped) | This run changed nothing on this computer, so no restart is asked; the last line above says why. Finish closes this window. |
-| `INST_HELP_UFINISH` | Finish (uninstall), Restart choices | What was removed and what is left, and the log's place. / Restart Windows now: Finish restarts Windows, so what was removed is gone from it. Restart Windows later: to save your work first, or to do what the page says is left. |
+| `INST_HELP_WELCOME` | the Welcome page (install), its three wordings (section 5.3.2) | The list shows each device this package has a driver for, its current driver, and what Setup will do. The note under it says what to do first if needed, such as finishing a hardware wizard Windows has open. / Nothing is chosen on this page. Next continues; Cancel exits with nothing changed. / The log file named above records what Setup reads and does. Keep it when you report a problem. |
+| `INST_HELP_UWELCOME` | the uninstall's first page, both wordings | Setup will remove all of this package's drivers, tools and records. / The box: tick it once you have a keyboard/mouse that does not use these drivers (PS/2, a laptop's built-in one, or a USB controller run by another driver). When only the connection manager is removed: once all programs using Thunderbolt / USB4 devices are closed. / Next shows what will be removed. Nothing is changed before Remove. |
+| `INST_HELP_COMP` | Components | xHCI98 USB 3 driver: runs the USB 3 controllers listed on the Welcome page. Untick it to install only the Thunderbolt / USB4 support. / UAS disk driver: the faster protocol for USB disks that support it. Untick only if you use another UAS driver. / Storage drivers for Win 98 SE: the USB disk drivers 98 SE lacks. Untick if you already have NUSB installed. / Thunderbolt / USB4 support: the connection manager. Tick it if this computer has such a port; the next page has its options. / Start xHCI98 USB Tree (tray icon) at login: the tool that lists USB devices and stops them for removal. It is installed either way. / Notify me when a USB device can run faster: the USB Tree's notification for a device on a slower port than it supports. / Replace the driver files Windows has stored for this package: available when Windows' driver store holds this version with different files. Ticked, that copy is replaced and the devices are installed again. / Settings...: the USB settings (draft 64; until then "the drivers' settings"). / Change folder...: where the tools and Setup go. |
+| `INST_HELP_TBT` | Thunderbolt and USB4 | Find Thunderbolt / USB4 controllers and devices placed above 4 GB: XHCIPFW.VXD on 98 SE and ME, XHCIPFW.SYS on 2000 to the 32-bit 8.1. At each start it closes the PCI bridge windows above 4 GB this Windows cannot use, so the controllers and devices behind them are found. It changes nothing where there are none. Leave it ticked. / Stor98: the driver for NVMe drives in Thunderbolt / USB4 enclosures. Untick only if another driver runs those drives. / Allow Stor98 transfer chunks up to 2MiB (98 SE and ME): reads and writes of up to 2 MiB at once, instead of 63 KiB pieces. / Connect PCIe devices automatically: each device plugged in is connected and can read and write this computer's memory. Only for devices you trust. Some controller firmware can control this instead. / Do not connect PCIe devices: no new PCIe connection is made; a device may still work over USB. Connections made before Windows starts are kept unless XhciCmPreOsCleanup is set. / Change only takes effect after restart. / Thunderbolt networking: network with another computer over a TB / USB4 cable, file sharing included. Ticked, the network adapter appears after restart; unticked later, it is removed after the next restart. Greyed when this package has no network driver for this Windows. / Settings...: the Thunderbolt / USB4 and Stor98 settings (draft 64). |
+| `INST_HELP_FREE` | Free USB drivers | The box: copies the free USB drivers (usb-wdm-free) to the install folder, for USB devices this Windows has no driver for. / The list: a ticked package is staged, so Windows installs it automatically when a matching device is plugged in. Unticked, point Windows' hardware wizard at its folder when you need it. The text under the list says which are only copied on this Windows. / Trust usb-wdm-free's 64-bit test certificate (64-bit Windows): adds the certificate its 64-bit drivers are signed with to this computer's trusted certificates. Uninstalling will remove this certificate if Setup added it. / The line under the box says where the drivers are, or where to download them. |
+| `INST_HELP_NONFREE` | Non-free USB drivers | The box: copies all non-free USB drivers (USB Ethernet, serial, game pads and audio) to the install folder. Copying installs nothing. / The list: a ticked package is staged, so Windows installs it automatically when a matching device is plugged in. Unticked, point Windows' hardware wizard at its folder when you need it. The text under the list says which are only copied on this Windows. / The line under the box says where the drivers are, or where to download them. |
+| `INST_HELP_SET_USB` | the Settings sheet's USB tab | XhciSilentInstall (98 SE and ME): installs hubs, keyboards, mice and Bulk-Only disks without the Add New Hardware wizard. / XhciIntelPortSwitch (Intel controllers with shared ports): moves the shared ports from EHCI controller to xHCI. Use 2 only if the release notes advise it. / A greyed row is for another system or controller and cannot be changed here. / More >: the next rows, when they do not all fit. / Advanced...: the other USB settings, each explained. / Only the settings you change are saved for all controllers, when you click Install. They take effect after restart. / OK keeps your choices; Cancel discards them. |
+| `INST_HELP_SET_TB` | its Thunderbolt tab | XhciCmMode: Thunderbolt / USB4 support, 1 automatic (default) or 0 off. Use 2 and 3 only if the release notes advise it. Change only takes effect after restart. / XhciCmSafeEject: 1 offers Safely Remove for devices behind a dock; 0 does not, and also removes the safe-removal mark service and its marks. / Whether PCIe devices connect automatically is on the Thunderbolt / USB4 page. / More >, when shown: the next rows. / Advanced...: the other Thunderbolt / USB4 settings. / Only the settings you change are saved for all controllers, when you click Install. / OK keeps your choices; Cancel discards them. |
+| `INST_HELP_SET_S98` | its Stor98 tab | StorWriteThrough: how writes reach the drive. auto (cacheoff on ME, off elsewhere), off (drive left as it is), cacheoff (the drive's write cache off) or fua (every write marked Force Unit Access). / StorPollMode: 0 polls only if there is no interrupt, 1 always polls. / Only the settings you change are saved. Unchanged ones keep Stor98's current setting, or its default if none is set. Change one only if Stor98's readme or a problem report advises it. / Advanced...: Stor98's other settings. / OK keeps your choices; Cancel discards them. |
+| `INST_HELP_ADV` | Advanced, for the USB and the Thunderbolt tab | The settings not on the tab, one row each with its current value. Select a row to read what it does under the list, then choose its value under Setting. / Only the settings you change are saved for all controllers, when you click Install. Change one only if the release notes or a problem report advise it. / OK keeps your choices; Cancel discards them. |
+| `INST_HELP_ADV_S98` | Advanced, for the Stor98 tab | Stor98's settings not on the tab, one row each. Select a row to read what it does, then type its value under Value. / Only the settings you change are saved. Unchanged ones keep Stor98's current setting, or its default if none is set. Change one only if Stor98's readme or a problem report advises it. / OK keeps your choices; Cancel discards them. |
+| `INST_HELP_SUMMARY` | Summary (install) | What Install will do: the devices, components, settings saved and install folder, and what to know before you continue. Nothing has been changed yet. / Back: change a choice. / Install: make the changes. / USB keyboards and mice on a controller whose driver changes stop working for a moment. Have a keyboard/mouse that uses alternative connections like PS/2. |
+| `INST_HELP_USUMMARY` | Summary (uninstall) | What Remove will remove: all of this package's drivers, tools and records. Nothing has been changed yet. / Remove: make the changes. / Cancel: exit with nothing changed. |
+| `INST_HELP_PROGRESS` | Progress, both, 2000 and later | The steps as they run. Windows may open its own windows, such as Found New Hardware or a driver-signing question: answer them (Next, Yes or Continue, then Finish). Setup waits for them. / Cancel stops at the next step; what was done is kept. While Setup waits for a Thunderbolt drive to reconnect, Cancel skips only that wait and Setup continues. |
+| `INST_HELP_PROGRESS_9X` | Progress, both, 98 SE and ME (draft 59; until then the topic above on every system) | The steps as they run. Windows may open its own windows, such as the Add New Hardware Wizard: answer them (Next, then Finish). Setup waits for them. / Cancel stops at the next step; what was done is kept. While Setup waits for a Thunderbolt drive to reconnect, Cancel skips only that wait and Setup continues. |
+| `INST_HELP_STEPS` | Steps left for you | Devices Setup could not install by itself, each with the steps to follow after the restart. / Save as text file...: saves the steps to read after the restart. / Open Device Manager: where the steps are done. |
+| `INST_HELP_FINISH` | Finish (install), Restart choices | What was done, what is left, and where the log file is. / Restart Windows now: Finish restarts Windows, and what was installed starts. / Restart Windows later: to save your work or follow the steps first. Restart before using the devices. |
+| `INST_HELP_FINISH_SHUT` | Finish (install), Shut down choices | What was done, what is left, and where the log file is. / Shut down now, then start Windows again: Finish shuts Windows down; start it again yourself. Stor98's update, or the storage drivers' copy, needs a fresh start rather than a restart. / Shut down later: to save your work first. |
+| `INST_HELP_FINISH_NONE` | Finish, nothing changed (install or uninstall, done, refused or stopped) | No changes were made, so no restart is needed. The last line above says why. Finish closes Setup. |
+| `INST_HELP_UFINISH` | Finish (uninstall), Restart choices | What was removed, what is left, and where the log file is. / Restart Windows now: Finish restarts Windows, and what was removed is gone. / Restart Windows later: to save your work or follow the steps left first. |
 
 *What pins them.* The host suite (section 11): every topic has a title
 and a text; each text is ASCII, its paragraphs apart by exactly one
@@ -2720,8 +3514,9 @@ each; and on one of them set to 120 DPI the self-test run and the
 Components page's Help opened at 640 by 480 where the system allows it
 (else at its smallest size), its screenshot kept.
 
-*The other texts.* The Welcome page's three wordings end "Help explains
-each page." where they said "Help opens the readme." The readme's
+*The other texts.* The Welcome page's three wordings ended "Help
+explains each page." where they said "Help opens the readme." (until
+draft 61; the owner's wording of section 5.11 has no such sentence). The readme's
 pages paragraph (`README.TXT`) says that Help explains the page and
 opens the readme from there. The console is unchanged: its questions
 carry their own explanations.
@@ -2750,6 +3545,141 @@ page's box and on the sheet's Next button (`runs/run-45.md`, "45.66
 control): the page's own sentences already sit under each box; one
 window a page is what was asked. No help file (`.HLP`/`.CHM`): a
 dialog with text works the same on 98 SE and on 10.
+
+### 5.11 The owner's wording (task 46.18; draft 61)
+
+The owner read every text the window shows, one page at a time, on
+2026-11-02, and rephrased what sounded machine-written; the owner's
+wording is taken as given and is not rewritten without the owner. The
+sources hold it and are the authority: `instPageTexts`, the values'
+tables (`instValues`, `instS98Values`), `inst_action_text`, the
+Components, storage, other-drivers and folder texts in
+`xhciinst\inst_core.c`; the Summary, Settings, dropdown and message-box
+texts in `xhciinst\xhciwiz.c` and `xhciwiz.rc`; the Summary lines the
+engine gives (`inst_eng_*_plan`, `inst_eng_stor_summary`,
+`inst_eng_other_summary`, `other_finish`) in `xhciinst\inst_eng.c`; and
+the Help texts in `xhciinst\inst_help.c`. Where an earlier section of
+this record quotes a window text, it gives the wording of its own draft.
+
+What changed, in the order the pages come:
+
+- *Welcome.* Title "xHCI98 USB 3 drivers 3.4.1.0" (or "xHCI98
+  Thunderbolt / USB4 connection manager 3.4.1.0"); the paragraph "Setup
+  will install/update xHCI98 drivers and tools. You may be asked to
+  restart Windows at the end." on the install and on the connection
+  manager's install alike, and on 8, 8.1 and 10 without the connection
+  manager "Windows 8 and later should have their own USB 3 drivers but
+  you still can install xHCI98's if you tick them in the next page."
+  (2026-11-05: it named only 8/8.1 and is shown on 10 as well); "Windows: <name>
+  (<version>), <32-bit|x64>"; "Log file: <path>"; the device table's
+  columns Device, Current driver, Action, the actions "Install",
+  "Update", "Reinstall (same version)" (the owner's, told that nothing
+  is reinstalled without `/force`), "Skip (...)" for every row left.
+- *Components.* "xHCI98 USB 3 driver (xhci98.sys)", "Experimental
+  support for Thunderbolt / USB4 (xhcicm.sys)", "Storage drivers for Win
+  98 SE (from NUSB 3.3)", "Start xHCI98 USB Tree (tray icon) at login",
+  "Notify me when a USB device can run faster", "Replace the driver
+  files Windows has stored for this package", with shorter sentences
+  under them; the Intel note "Intel Thunderbolt driver is in use. Tick
+  to replace it." (what a device can reach is the approval row's); the
+  folder dialog's reasons after "This folder cannot be used:".
+- *Thunderbolt and USB4.* "Find Thunderbolt / USB4 controllers and
+  devices placed above 4 GB" (the 32-bit Vista to 10 lose the USB4
+  controller itself, 98 SE what is behind its tunnel port: record 32
+  section 1); "Connect PCIe devices automatically" and "Do not connect
+  PCIe devices"; the first-install note "Change only takes effect after
+  restart."; "Allow Stor98 transfer chunks up to 2MiB (S98VSD.VXD)",
+  greyed "Stor98 transfer chunks up to 2 MiB (Win 98SE/ME only)" (one
+  character inside its row); the networking sentence "Network with
+  another computer over a TB / USB4 cable." (file sharing and turning it
+  off are in its Help).
+- *Other USB drivers.* "Experimental free USB drivers (usb-wdm-free)",
+  "Non-free USB drivers (usb-wdm-nonfree)"; the non-free sentence "Setup
+  will copy all drivers to <dir>\USBDRV\NONFREE." alone, on every system
+  (the owner's pass of 2026-11-04: the list's own label says what a tick
+  does); "Latest version: <address>." The free
+  set's notice (the owner's of 2026-10-23) and the package names are
+  kept.
+- *Settings.* The tabs USB, Thunderbolt / USB4, Stor98; the headings "USB
+  settings. Only the settings you change are saved for all controllers."
+  and the like; a row's "Current: ..."; every value's meaning, caution
+  and choices rephrased (the owner's or the owner's pick), with no
+  bracket in a meaning (section 11's check that a meaning carries no
+  choice list); Stor98's nine rows' words (ten from `3.4.1.0`) (its readme's table holds the
+  keys, units, defaults and ranges, which are unchanged).
+- *Summary, Progress, Steps, Finish.* "Nothing has been changed yet.
+  Click Install to make these changes."; "Install the drivers now";
+  "Devices:", "Components:", "Settings saved for all controllers:",
+  "Install folder:"; "BEFORE YOU CONTINUE: USB keyboards and mice on
+  this controller stop working for a moment while it restarts. ..."; the
+  final lines "Done. Please restart Windows now." and "Not everything is
+  done: follow the steps above first, then restart Windows."; the
+  window's Finish, where no Steps page was shown, "Not everything is
+  done: see the steps in the log, then restart Windows." (the owner's
+  pass of 2026-11-04, `inst_final_text_shown`)
+- *Uninstall.* "Remove xHCI98 USB 3 drivers"; "Setup will remove xHCI98
+  drivers from Windows. ..." (written in the owner's style at the
+  owner's request and chosen by the owner); the Summary's last lines
+  "Windows usbd.sys and usbui.dll are kept together with other drivers.
+  Windows will look for a driver for the controller on next boot."
+- *Help.* Every topic rewritten in the same style with the new labels
+  (the owner: "Help text can go with your suggestions"). Help names the
+  Thunderbolt box and the free set without "Experimental", so the Help
+  texts' ban on it stands (the owner).
+- *Message boxes.* "Click OK to continue, or Cancel to change your
+  choice."; "Setup cannot continue with this choice; see the log for
+  details."; the Components warnings shortened. The 8 and 8.1 warning
+  keeps that the staged `xhciuas.inf` may be chosen by Windows where the
+  package's test certificate is trusted (section 5.3.1 case 3a), not
+  "only staged". The trust box's line and its Help say the uninstall
+  removes the certificate "if Setup added it": one already trusted is
+  not recorded and stays (section 6.7.11).
+- *Refusals.* Every refusal starts "Cannot continue:" where it started
+  "REFUSED:" (the console's too: one engine), and the package checks'
+  texts are reworded ("A package file cannot be read: <path>", "Wrong
+  program for this system. Run INSTALL.BAT, which picks the right
+  one.", and the like); the hand-wrapped ones are wrapped again within
+  78 columns.
+
+*The second part* (draft 62). The owner asked that the console's
+questions, the engine's output (the plan and progress text the Welcome
+page's status box, the Progress and Steps detail, the Finish text and
+the console's screens show alike), the console's `/?` text and
+`xhciinst\README.TXT` follow the window's answers in the owner's style
+without a question each ("console can go with your suggestions, can
+reference my earlier GUI answers"; for the readme "my suggestions"):
+"Cannot continue:" for "REFUSED:", "Setup" for "the installer" and "this
+tool", "skipped" for "LEFT", "kept" for "stays", "folder" for
+"directory", "saved" for "written", "plugged in" for "present" and
+"connected", "for all controllers" for "machine-wide", the boxes' and
+pages' labels as section 5.11's first part gives them. Every fact, step,
+path and switch is kept; the `%` conversions of each text are unchanged.
+The Welcome table's "Current driver" suffix for a controller recorded in
+the registry with no driver is " (listed, not running)" (the owner took
+it on a recommendation, after "(installed, not running)" was found
+wrong: nothing is installed there). The Help and `/?` name XHCIPFW.SYS's
+systems as 2000 to the 32-bit 8.1 (`inst_pfw_sys`: the 32-bit 8 and 8.1
+take it as a root-bus filter since task 45.9; rows of section 5.3 and
+section 10 that say "not on the 32-bit 8, 8.1 and 10" give task 44.72's
+state). The Add/Remove Programs entry keeps its name ("xHCI98
+Thunderbolt 3 / USB4 connection manager" for the connection manager
+alone): an installed system carries it.
+
+The window self-test and the console's (every screen within 79 columns)
+pass on the build host at 96 DPI. The legs of section 5.10 (*The legs*),
+for the texts of both parts, were read on 2026-11-02 and 03
+(`runs/run-46.md`, "46.18"): every page and its Help on 98 SE at 640 by
+480, and on XP and 7 x86 at 96 DPI every page; on 7 x86 at 120 DPI at
+its smallest size (800 by 600) every page and its Help, Progress read on
+2026-11-03 (`runs/run-46.md`, "46.18 the Steps page on 2000 and later");
+the window self-test on each; nothing clipped or overflowing. The Steps
+page is 98 SE and ME's alone (section 7): only their hand steps write
+its text, and on 2000 and later what is left for the user is in the
+Finish page's text, read on XP with the `XHCIPFW.SYS` step refused. They found
+one figure wrong: Stor98's Advanced gave `StorMaxTransferKB`'s range on
+98 SE and ME as 64 to 512 KiB, a copy of its own; it now takes the top
+the engine checks (`inst_s98_hi`: 2048 KiB there, 256 KiB on 2000 to
+10).
 
 ## 6. What it installs
 
@@ -2850,8 +3780,9 @@ unasked. With the box ticked:
   drive attached (the readme records a volume coming back "not ready",
   and ME stopping with a VCACHE error, after a warm restart there). So on
   those two systems, when the run replaces Stor98's file, the Summary
-  page carries one check box, "Please disconnect all external NVMe
-  drives before proceeding" (draft 16, owner 2026-10-19; until then one
+  page carries one check box, "Disconnect all external NVMe drives
+  before Setup continues." (draft 16, owner 2026-10-19, worded so on
+  2026-11-04; until then one
   box per drive, "nothing is using this drive", that Install required;
   under section 5.0's flow an OK/Cancel box at Install instead, Cancel
   staying on the Summary page):
@@ -4042,14 +4973,20 @@ unchanged). The packager's `SHA256.TXT`: one line `<sha256, lower case>  <path>`
 the folder, the path relative to `USBDRV\NONFREE\` with `/`, the lines in
 ordinal order of the path, ASCII, CRLF line ends. The pack's `nusb33/` is
 not in it and is not duplicated there (owner, 2026-10-22). The pin
-(`package-common.ps1`): the tag `v1.1.0`, its commit
-`565d11b40fbeb53f5a576c01b5ceba331892c610`, and the SHA-256 of the pack's
+(`package-common.ps1`): the tag `v1.2.0`, its commit
+`c40ad7e4568fe2be7a889a79f6ada01f33123e81`, and the SHA-256 of the pack's
 `SHA256.TXT` blob there,
-`2208e5b4f68de00938c20dfe6b3520da22a1ad3cdf7489baed01f3af4fde8d87`; the
+`0360249f34c3eabc48e2c38f9b6008cf6e8341f3639fe864e4bbbd0fe0e25701`; the
 generated `USBDRV\NONFREE\SHA256.TXT` of that pin, `wifi/` left out,
 hashes to
-`f85b52d1d1249b819fa8233dc5c5f974a06f604086e2019e3140f5e9d8c71866`
-(673 lines), which the installer carries. `3.2.0.0` pinned `v1.0.0`
+`ff7fe4c680034515212320a561d576c5dafb270064f5689f100eb862d07f8780`
+(694 lines), which the installer carries. `v1.2.0` adds
+`audio/us122/`, TASCAM's US-122 driver for 98 SE and ME (owner,
+2026-11-02; roadmap-usb4 task 46.17), and the installer's table its row.
+`3.3.0.0` and `3.4.0.0` pinned `v1.1.0` (commit
+`565d11b40fbeb53f5a576c01b5ceba331892c610`, the pack's `SHA256.TXT`
+`2208e5b4...4fde8d87`, the folder's `f85b52d1...d8c71866`, 673 lines).
+`3.2.0.0` pinned `v1.0.0`
 (commit `3b558c04a462a643abec84b31e5611c866e3a72d`, its folder's
 `SHA256.TXT` `e3ea38f9...12845c1`, 456 lines; `releases/3.2.0.0/downloads.txt`).
 
@@ -4712,7 +5649,7 @@ COEXISTS | <set>:<class>/<package> | <set>:<class>/<package> | <systems> | <why>
   first to choose new ones."); the copy boxes stay open.
 
 Until a set's pinned release carries `PACKAGE` lines (neither does today:
-`usb-wdm-nonfree` `v1.0.0`, and from `3.3.0.0` `v1.1.0`, is pinned by its hash, and `usb-wdm-free` has
+`usb-wdm-nonfree` `v1.0.0`, from `3.3.0.0` `v1.1.0`, and from `3.4.1.0` `v1.2.0`, is pinned by its hash, and `usb-wdm-free` has
 no release), the installer's own table supplies them
 (`instOtherPkgs`, `inst_core.c`: id, kind, heading, description, and the
 exclusions), and the cut holds the table to the pinned `STAGE.TXT`:
@@ -5718,6 +6655,63 @@ there.
 waits for the pin move (the coordinator's); until then the packager
 self-tests and the cut's `-CheckOnly` are the reading.
 
+#### 6.7.15 The packages copied only on this Windows, as rows of the list (task 46.22; draft 74)
+
+*The owner's decision* (2026-11-04): the Free and Non-free USB drivers
+pages list, beside the packages they can stage, each package that this
+Windows only copies - a `COPY` line for this Windows and no `STAGE` line
+- as a greyed row that takes no tick, saying it was copied and where to
+install it by hand. The console's list says the same. On 98 SE and ME
+these rows replace section 6.7.13's "Copied only (no automatic install on
+this Windows):" block, so every system has one form.
+
+*Which packages.* A package (its id, the first two parts of the INF's
+path) with no `STAGE` line naming this system, and at least one `COPY`
+line naming it whose INF is a device driver's: an INF with a
+`[Manufacturer]` section, read from the download's copy of the set when
+`STAGE.TXT` is read. A co-installer or helper set up by hand (uac2's
+`UACCI.INF`, `DefaultInstall` only) has none, so it never makes a row by
+itself: uac2 on 2000, 32-bit Vista and 8, whose only line there is the
+co-installer's, gets none. A package's row is driven by its main INF's
+folder; the folders are taken once each, so a second INF in the same
+folder (the RTL8723AU's Bluetooth half, `RTLBt.inf`, beside
+`netrtwlanu.inf`) adds nothing. An INF that cannot be read counts as a
+driver's (the row is a hint, and a wrong one points at a folder that is
+there).
+
+*The row.* Under the package's heading, after the stageable ones, a
+disabled check box, unticked, its text (a draft for the owner):
+"<description>: copied only on this Windows. Install it by hand from
+<folder>." with `<folder>` the install folder's copy,
+`<install dir>\USBDRV\FREE\<class>\<package>\<folder>` (or
+`\USBDRV\NONFREE\`), e.g. "USB audio (uac2): copied only on this Windows.
+Install it by hand from C:\XHCI98\USBDRV\FREE\audio\uac2\wv-8-x64.";
+two folders "from A or B", three "from A, B or C", more "from A, B, C
+or another folder listed in <set folder>\STAGE.TXT". The install dir is
+the one the window has chosen (the Components page's folder), the
+console's `toolDir`. The heading is shown when it has a row of either
+kind. The rows follow the copy box like the others (greyed with it
+unticked), and never take a tick, a focus or a detail line.
+
+*The console*: after "Stage these drivers ..." and its ids (or, where
+nothing is stageable, after the set's question), each row's text,
+wrapped at 79 columns under "  Copied only on this Windows:" (a draft);
+`/list` prints them too.
+
+*The page's room.* The list is the page's own scrolled pane (section
+6.7.12), so more rows lengthen the pane, not the page; read on 98 SE at
+640 by 480 and on 7 x86 at 120 DPI for the page's texts whole and no
+scroll bar but the pane's.
+
+*Host vectors* (`test_inst.c`): from a fixture `STAGE.TXT` of made-up
+packages (never the packs' text): a package staged here gets no row; one
+with a `COPY` driver INF gets one with its folder; one with only a
+co-installer `COPY` gets none; two driver INFs in one folder one folder;
+two folders "A or B", four the `STAGE.TXT` ending; the systems' bits
+honoured; `inst_inf_has_models` on a `DefaultInstall`-only INF and on a
+model INF. The window self-test lays a copied-only row with two long
+folders whole in the list's pane.
+
 ## 7. Windows 98 SE and ME: the helper, and the steps page
 
 On 98 SE and ME the engine runs record 23 section 6's route (the copy, the
@@ -6135,6 +7129,10 @@ pages out as that section's last item says.
 Record 23 is revised in the same change as the code (task 42-A.2), and
 this list is the whole of it:
 
+- (Draft 70, task 46.22) Section 8.5: on Windows 8, 8.1 and 10 without
+  `/usb` or `/cmonly` the Thunderbolt question is asked, Enter for Y, in
+  place of the connection manager alone's unasked yes (section 5.3.7).
+
 - Section 2: the package layout of section 2 here; `INSTALL.BAT`'s
   `/console` rule; (draft 15, record 23 revision 22) `SETUP.EXE` at the
   root for people, `INSTALL.BAT` for the command line, and D1 revised.
@@ -6396,6 +7394,7 @@ Draft 52 (task 45.54) changes record 23 by its revision 51: section
 | `xhciinst\xhciinst.c` | the console front end |
 | `xhciinst\inst_core.c`, `inst_core.h` | the pure half (section 11) |
 | `xhciinst\wiz_lay.c`, `wiz_lay.h` | (draft 21) the settings pages' layout arithmetic (sections 5.4 and 11) |
+| `xhciinst\inst_board.c`, `inst_board.h` | (draft 73) the ASM4242 board's identity by the driver's `src\cm\cm_oscp.c` (section 5.5; design record 32 section 12.8.15.12) |
 | `xhciinst\build.cmd`, `selftest.cmd`, `check-imports.ps1` | the four builds and the helper's; the self-tests; the import allowlists per executable |
 | `xhciinst\INSTALL.BAT` | the launcher with `/console` |
 | `xhciinst\setup.c`, `setup.rc`, `setup.manifest` | `SETUP.EXE`, the package root's starter of the window (draft 15) |
@@ -6407,3 +7406,17 @@ Draft 52 (task 45.54) changes record 23 by its revision 51: section
 | `scripts\package\make-release.ps1`, `test-package.ps1`, `scripts\build-driver.cmd` | staging, the mutation cases, the gates |
 | `docs\contributing\design\23-install-upgrade-tool.md` | revised as section 12 says |
 | `docs\using\release-notes.md`, `README.md` | "Installing" rewritten around the window; `/console` in every scripted example |
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **NUSB 3.3's installer: how it places its INFs** (roadmap-usb4 task 43.42) - `tools\nusb33e.exe` (774,144 bytes, SHA-256 `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`, section 5's) is an IExpress package: its `RCDATA` resources `RUNPROGRAM` `rundll32 advpack.dll,LaunchINFSection _nusb.inf`, `POSTRUNPROGRAM`, `ADMQCMD` and `USRQCMD` `<None>`, `REBOOT` four zero bytes, and `CABINET` the 38 files. `_NUSB.INF`'s `[DefaultInstall]` is `CopyFiles` and `AddReg` alone; its `W98Upd.Copy.inf` list (`usbstor.inf` and `usbntmap.inf` among seven INFs) goes to dirid 17 (`[DestinationDirs]`), a `Win98.Copy.cab` list to `10,Options\Cabs`; no `DelFiles`, no `Run*SetupCommands`, nothing naming `DRVIDX.BIN` or `DRVDATA.BIN`. `W95INF32.DLL` exports `GenInstall32@20` and `W95INF16.DLL` names the module `SETUPX`; `CSETUP.EXE` is a catalog registration program ("CAT File registration program", `MSCAT32.DLL`) named by no line of the INF or the run command. `_USB2UN.INF`'s `[UnInstall]` deletes `USB2.INF` from dirid 17 by `DelFiles` | static: the package's PE resource directory walked by a script of this session's own (the resource data read, not run) and its cabinet listed and unpacked with 7-Zip, routine unpacking (section 1); the INFs read as text; the two DLLs' and `CSETUP.EXE`'s printable strings scanned; 2026-10-21, development host A; nothing executed, nothing patched | design record 26 section 6.5.11 |

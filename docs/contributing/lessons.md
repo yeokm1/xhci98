@@ -9957,7 +9957,8 @@ no Microsoft file. It cannot work; the reading and the legs follow.
 
 **What text mode does with a second OEM disk** (static, Windows 2000 SP4
 `SETUPDD.SYS`, `SETUPLDR.BIN` and `USETUP.EXE`, MSVC 6.0 `dumpbin /disasm`
-and WDK 7.1 `kd -z`; `legal-provenance.md` section 4 has the addresses):
+and WDK 7.1 `kd -z`; the addresses are in design record 18 appendix A,
+A.1 and A.2, which `legal-provenance.md` section 4 indexes):
 
 - Every file of an F6 option is read from `\device\floppy0`, whatever its
   `[Disks]` entry says. The routine that copies the option's files is
@@ -10052,3 +10053,65 @@ every `driver`, `port` or `class` line is a service; read the loader's and
 `setupdd`'s handling of a new option shape before trying it, and expect
 `setupldr` to drop the whole option, not one line, when a line is
 malformed.**
+
+## The same sources linked into a wrong VxD in one checkout: the 98 DDK's linker and an 18n-character `THEADR`
+
+Phase 46, 2026-11-03, development host A, file-only. `XHCIPFW.VXD` built
+in one worktree wrote none of its `Device_Init` registry values on 98 SE
+and ME, while its window scan ran; the same sources built in other
+worktrees and in scratch copies gave the image that writes them. Every
+check of the time passed both. Rebuilding in that worktree, even after
+touching the sources, always gave the bad image, which made it look like
+a stale or untracked file there.
+
+The evidence was in the build's own files. The two images differed in 13
+LE fixups, `PfwLog`'s value-name strings (`-zc` places them in `_TEXT`):
+targets `FFFFF0xxh` where the good image has the strings' offsets. The
+objects differed only in the `THEADR` record (Open Watcom writes the
+source's full path there) and the dependency comments (each header's path
+and time stamp); the maps were the same but for the time stamp. Relinking
+copied objects in a scratch folder reproduced it, so nothing of the
+worktree, the environment, `PATH` or `TEMP` was in it. Splicing records
+from the bad object into the good one: `THEADR` alone made it bad. A sweep
+of `THEADR` names of 1 to 140 characters: every multiple of 18 mislinked,
+nothing else did; the name's characters did not matter (two worktree
+names of one length behaved alike). The bad worktree's
+`E:\xhci98-wt\w46-inst2\src\pfw\pfw.c` is 36 characters. Only fixups whose
+target is the object's own segment (a `SEGDEF` target) go wrong; `pfw.obj`
+has 13 and `vsd_list.obj` one, so `S98VSD.VXD` can fail the same way
+(reproduced with a 36-character name, and from a scratch checkout whose
+`vsd_list.c` path is 54 characters). Why 18 is not read; it is the size of
+a COFF symbol record, the form the linker converts OMF into [hyp].
+
+Proven: a linker defect that turns on the length of the checkout's path,
+silent at link time, and caught by nothing that checked calls, services
+or stamps. Unknown: the linker's mechanism, and whether other OMF names
+can trigger it (no other record of the objects mattered in the splice).
+
+Rules. **When the same sources build differently in two places, compare
+the build's own outputs record by record (objects, maps, the image's
+fixup table) and relink copied objects elsewhere before suspecting the
+tree; then bisect the differing records.** And **a gate that holds an
+image only to what it calls or contains does not see a wrong address:
+hold every relocation to its target** - here `callcheck.py` matches every
+segment-relative fixup of every object to the image's, and the image
+gates refuse any LE fixup outside its target object. The fix makes the
+objects path-independent (`omfpub.py` sets `THEADR` to the base name,
+`wcc386 -zld`), and `omfcheck.py` refuses a name of 18n characters (design
+record 30 section 6.1; `runs/run-46.md`, "XHCIPFW.VXD's log strings: a
+path-dependent bad build").
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | How the idle suspend is gated in the three symbol-less 32-bit `usbport.sys` builds - NUSB 3.3/3.6 5.00.2195.5652, SweetLow's 5.1.2600.2180, Windows 2000 SP4 5.00.2195.6681. `HcDisableSelectiveSuspend` is read by a function that passes BOOLEAN 1 to the registry helper (NUSB `0x11C10` -> `0x2D00A`, SweetLow `0x10BCE` -> `0x2CC3A`, SP4 `0x11CCC` -> `0x2D8BE`), which turns it into `IoOpenDeviceRegistryKey(Pdo, 2 = PLUGPLAY_REGKEY_DRIVER, ...)` and copies the first 4 data bytes of a `KeyValueFullInformation` query without checking the type; absent or 0 means "allowed". The global `Services\usb\DisableSelectiveSuspend` is a `RtlQueryRegistryValues` entry whose query routine accepts `REG_DWORD` (4 bytes) and `REG_BINARY` (1 byte). The start routine sets FDO-extension flag `0x800` ("selective suspend allowed") only when Hc allows AND the global is 0 (NUSB `0x10933`, SweetLow `0x115FC`, SP4 `0x109A3`), and `0x08000000` when the global is nonzero; miniport flag `0x20` forces the same pair. The one test of `0x800` on the idle path is the root hub's idle-notification IOCTL `0x220027` (NUSB `0x1F1BB`, SweetLow `0x1E65F`, SP4 `0x1F8C3`: `test ah,8`, clear -> `STATUS_NOT_SUPPORTED`); `0x08000000`'s only test is the bus-interface setter that re-enables selective suspend and writes Hc back (NUSB `0x13214`). The NUSB and SP4 start routines default the global to 1 when `IoIsWdmVersionAvailable` reports WDM 1.10 without 1.20, i.e. Windows 2000 (NUSB `0x1082B`, SP4 `0x10890`); SweetLow's has no such check | static (`link -dump -disasm`, image base `0x10000`; nothing executed), and the Hc-alone conclusion corroborated at runtime under NUSB 3.3 and SweetLow's stack on 2026-09-16 (two boots each against a suspending control) | `docs/contributing/lessons.md`, "And then the whole framing turned out to be wrong", the correction; issue 5 section 4 |
+| A.2 | NUSB 3.6's `usbhub20.sys` (5.00.2195.6891, 50,032 B) carries `DisableSelectiveSuspend` (1) and `SelectiveSuspend` (1); NUSB 3.6's `usbhub.sys` (4.90.3002.1) carries none; NUSB 3.6's `usbport.sys` (5.00.2195.5652) carries the same three names as SP4's | static (string search, as above) | the same site: an unconfirmed candidate explanation for the differing bounded idle observations on the two targets (`build-and-test.md`) |

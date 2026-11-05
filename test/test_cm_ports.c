@@ -56,13 +56,50 @@ static void test_families(void)
     CHECK(CmPortsFamily(CM_PORTS_ID(0x1234, 0x15BF)) == NULL, "the vendor counts");
 
     n = CmPortsFamilyCount();
-    CHECK_EQ(n, 19, "nineteen families: ten of record 21, nine of record 22 (section 19: Light and Cactus Ridge)");
+    CHECK_EQ(n, 23, "23 families: ten of record 21, nine of record 22 (section 19: Light and Cactus Ridge), four of task 46.23");
     f = CmPortsFamily(ID(0x1513));
     CHECK(f != NULL && f->SwitchPortIdCount == 1 && f->SwitchPortIds[0] == ID(0x1513),
           "Light Ridge: its switch ports carry the NHI's id (record 22 section 19.4 item 4)");
     f = CmPortsFamily(CM_PORTS_ID(0x1022, 0x1669));
     CHECK(f != NULL && f->RootPortIdCount == 3 && f->NhiIdCount == 2,
           "AMD's two routers share their root ports (ambiguous: the override assigns them)");
+    /* Task 46.23: AMD's other integrated hosts, by processor, each with
+     * the PCIe USB4 bridge pci.ids names for it. */
+    {
+        static const struct {
+            ULONG Nhi;
+            const char *Name;
+            ULONG Nhis;
+            ULONG Root;
+        } amd[] = {
+            { 0x162E, "amd-rembrandt", 2, 0x14CD }, { 0x162F, "amd-rembrandt", 2, 0x14CD },
+            { 0x15C4, "amd-phoenix", 2, 0x14EF },   { 0x15C5, "amd-phoenix", 2, 0x14EF },
+            { 0x151C, "amd-strix", 4, 0x150A },     { 0x151D, "amd-strix", 4, 0x150A },
+            { 0x158D, "amd-strix", 4, 0x150A },     { 0x158E, "amd-strix", 4, 0x150A },
+            { 0x1120, "amd-krackan", 4, 0x1125 },   { 0x1121, "amd-krackan", 4, 0x1125 },
+            { 0x113B, "amd-krackan", 4, 0x1125 },   { 0x113C, "amd-krackan", 4, 0x1125 }
+        };
+        ULONG a;
+        for (a = 0; a < sizeof(amd) / sizeof(amd[0]); a++) {
+            f = CmPortsFamily(CM_PORTS_ID(0x1022, amd[a].Nhi));
+            CHECK(f != NULL && strcmp(f->Name, amd[a].Name) == 0 &&
+                  f->NhiIdCount == amd[a].Nhis && f->SwitchPortIdCount == 0 &&
+                  f->RootPortIdCount == 1 &&
+                  f->RootPortIds[0] == CM_PORTS_ID(0x1022, amd[a].Root),
+                  "an AMD host: its processor's family and its one root port id");
+        }
+        CHECK(CmPortsFilterId(CM_PORTS_ID(0x1022, 0x1125)), "the filter takes Krackan's 1125");
+        CHECK(CmPortsAcpiPort(CM_PORTS_ID(0x1022, 0x150A)) &&
+              CmPortsAcpiPort(CM_PORTS_ID(0x1022, 0x14CD)) &&
+              CmPortsAcpiPort(CM_PORTS_ID(0x1022, 0x1125)),
+              "an AMD family's root port reads _DSD (record 22 section 7.6.1)");
+        CHECK(!CmPortsAcpiPort(CM_PORTS_ID(0x8086, 0x9A23)) &&
+              !CmPortsAcpiPort(CM_PORTS_ID(0x1B36, 0x000C)) &&
+              !CmPortsAcpiPort(CM_PORTS_ID(0x1B21, 0x2423)) &&
+              !CmPortsAcpiPort(CM_PORTS_ID(0x1022, 0x158D)),
+              "an Intel, emulator or ASMedia port, or an NHI, does not");
+        CHECK(CmPortsFamily(CM_PORTS_ID(0x1022, 0x1125)) == NULL, "1125 is no NHI");
+    }
     f = CmPortsFamily(ID(0x5784));
     CHECK(f != NULL && f->SwitchPortIdCount == 2, "Barlow Ridge has its own switch ports");
     /* Task 44.40, record 22 section 18: the ASM4242's NHI, matched by the
@@ -171,16 +208,24 @@ static void test_infs(void)
     const char *p;
     const CM_FAMILY *f;
     ULONG known;
+    ULONG usp;
 
     CHECK(readInf("..\\src\\cm\\xhcicmf.inf") != 0, "xhcicmf.inf read");
     seenCount = 0;
     unknown = 0;
+    usp = 0;
     for (p = strstr(infText, "DEV_"); p != NULL; p = strstr(p + 4, "DEV_")) {
         if (strncmp(p + 8, "&CC_0604", 8) != 0) {
             continue;
         }
         dev = hex4(p + 4);
         ven = hex4(p - 5);
+        if (CM_PORTS_ID(ven, dev) == CM_PORTS_ID(0x1B21, 0x2421)) {
+            /* The ASM4242's upstream port: the mailbox's member (record 32
+             * section 12.8.13.4), never a tunnel port. */
+            usp++;
+            continue;
+        }
         known = 0;
         for (i = 0; i < CmPortsFamilyCount(); i++) {
             if (inFamily(CmPortsFamilyAt(i), CM_PORTS_ID(ven, dev))) {
@@ -220,10 +265,11 @@ static void test_infs(void)
         missing += CmPortsFilterId(seen[i]) ? 0 : 1;
     }
     CHECK_EQ(missing, 0, "CmPortsFilterId takes every bridge id of xhcicmf.inf (task 42-A.5)");
+    CHECK_EQ(usp, 2, "the ASM4242's upstream port named once in each models section");
     CHECK(!CmPortsFilterId(CM_PORTS_ID(0x1B21, 0x2421)),
-          "and not the emulator's chained upstream port, which the INF does not name");
+          "and not that upstream port, which is no tunnel port");
     CHECK(!CmPortsFilterId(CM_PORTS_ID(0x8086, 0x15BF)), "nor an NHI");
-    CHECK_EQ(seenCount, 40, "40 bridge ids: record 21's 30, record 22's 8, the emulator's 2");
+    CHECK_EQ(seenCount, 41, "41 bridge ids: record 21's 30, record 22's 8, task 46.23's 1, the emulator's 2");
 
     CHECK(readInf("..\\src\\cm\\xhcicm.inf") != 0, "xhcicm.inf read");
     seenCount = 0;

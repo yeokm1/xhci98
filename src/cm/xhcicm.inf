@@ -13,10 +13,12 @@
 ; The NHI ids: record 21 section 3.3's list (decision D9, owner 2026-10-15),
 ; every Intel firmware-connection-manager host Linux's drivers/thunderbolt
 ; addresses; and design record 22 section 3.7's USB4 hosts, the Intel ones
-; with no firmware connection manager, AMD's Pink Sardine, ASMedia's
-; ASM4242 (task 45.46) and the class line for any other. src\cm\cm_vals.c
-; maps each id to its profile (the gate's CM-IDLIST). Only 15BF (Alpine
-; Ridge LP, the ThinkPad P14s Gen 1's) has been read by this project;
+; with no firmware connection manager, AMD's Pink Sardine, Rembrandt,
+; Phoenix, Strix, Strix Halo, Krackan and Krackan2 (task 46.23),
+; ASMedia's ASM4242 (task 45.46) and the class line for any other.
+; src\cm\cm_vals.c maps each id to its profile (the gate's CM-IDLIST).
+; Only 15BF (Alpine Ridge LP, the ThinkPad P14s Gen 1's) has been read by
+; this project;
 ; every other line is untested. A user who needs another id adds a model
 ; line to a copy of this file (record 21 section 8, XhciCmMode 2).
 ;
@@ -31,8 +33,13 @@
 ; undecorated sections and load the driver through *NTKERN/NTMPDriver;
 ; Windows 2000 and XP read the .NTx86 sections and install a kernel
 ; service; Vista and 7 read the .NTx86.6.0 models section and its install
-; sections. The driver needs no OS-supplied file, so there is no LayoutFile
-; and every path copies the driver alone.
+; sections. The driver needs no OS-supplied file, so there is no LayoutFile.
+; The 98 SE and ME path copies the driver alone; the two NT paths also
+; install xhcihlpr.sys, the x86 helper, as xhci98.inf does (design record
+; 18 section 15.15): one x86 xhcicm.sys also loads on 98 SE and ME, so it
+; reaches the NT routines the USB4 handover needs only through the helper,
+; and a Thunderbolt-only install brings it. The same service, the same
+; file, both INFs; the copy never puts an older helper over a newer one.
 ;
 ; Every registry value the driver reads (record 21 section 8, record 22
 ; section 12) is written by
@@ -57,7 +64,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=11/01/2026,3.4.0.0
+DriverVer=11/05/2026,3.4.1.0
 
 [Manufacturer]
 %Mfg%=CmModels,NTx86.6.0
@@ -91,9 +98,11 @@ DriverVer=11/01/2026,3.4.0.0
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
-; ASM4242 (task 45.46) named beside the class line, and any other USB4
-; host (class 0C/03/40) by the class line, which the id lines outrank.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine, Rembrandt,
+; Phoenix, Strix, Strix Halo, Krackan and Krackan2 (task 46.23) and
+; ASMedia's ASM4242 (task 45.46) named beside the class line, and any
+; other USB4 host (class 0C/03/40) by the class line, which the id lines
+; outrank.
 ; All untested.
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
@@ -106,6 +115,18 @@ DriverVer=11/01/2026,3.4.0.0
 %U4BrDesc%=Cm.Dev,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669
+%U4RbDesc%=Cm.Dev,PCI\VEN_1022&DEV_162E
+%U4RbDesc%=Cm.Dev,PCI\VEN_1022&DEV_162F
+%U4PhDesc%=Cm.Dev,PCI\VEN_1022&DEV_15C4
+%U4PhDesc%=Cm.Dev,PCI\VEN_1022&DEV_15C5
+%U4SxDesc%=Cm.Dev,PCI\VEN_1022&DEV_151C
+%U4SxDesc%=Cm.Dev,PCI\VEN_1022&DEV_151D
+%U4ShDesc%=Cm.Dev,PCI\VEN_1022&DEV_158D
+%U4ShDesc%=Cm.Dev,PCI\VEN_1022&DEV_158E
+%U4KrDesc%=Cm.Dev,PCI\VEN_1022&DEV_1120
+%U4KrDesc%=Cm.Dev,PCI\VEN_1022&DEV_1121
+%U4K2Desc%=Cm.Dev,PCI\VEN_1022&DEV_113B
+%U4K2Desc%=Cm.Dev,PCI\VEN_1022&DEV_113C
 %U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425
 %U4Desc%=Cm.Dev,PCI\CC_0C0340
 
@@ -138,9 +159,11 @@ DriverVer=11/01/2026,3.4.0.0
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
 ; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine and ASMedia's
-; ASM4242 (task 45.46) named beside the class line, and any other USB4
-; host (class 0C/03/40) by the class line, which the id lines outrank.
+; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine, Rembrandt,
+; Phoenix, Strix, Strix Halo, Krackan and Krackan2 (task 46.23) and
+; ASMedia's ASM4242 (task 45.46) named beside the class line, and any
+; other USB4 host (class 0C/03/40) by the class line, which the id lines
+; outrank.
 ; All untested.
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
@@ -153,6 +176,18 @@ DriverVer=11/01/2026,3.4.0.0
 %U4BrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_5784
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1668
 %U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669
+%U4RbDesc%=Cm.Dev6,PCI\VEN_1022&DEV_162E
+%U4RbDesc%=Cm.Dev6,PCI\VEN_1022&DEV_162F
+%U4PhDesc%=Cm.Dev6,PCI\VEN_1022&DEV_15C4
+%U4PhDesc%=Cm.Dev6,PCI\VEN_1022&DEV_15C5
+%U4SxDesc%=Cm.Dev6,PCI\VEN_1022&DEV_151C
+%U4SxDesc%=Cm.Dev6,PCI\VEN_1022&DEV_151D
+%U4ShDesc%=Cm.Dev6,PCI\VEN_1022&DEV_158D
+%U4ShDesc%=Cm.Dev6,PCI\VEN_1022&DEV_158E
+%U4KrDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1120
+%U4KrDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1121
+%U4K2Desc%=Cm.Dev6,PCI\VEN_1022&DEV_113B
+%U4K2Desc%=Cm.Dev6,PCI\VEN_1022&DEV_113C
 %U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425
 %Tb1LrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1513&CC_0880
 %Tb1CrDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1547&CC_0880
@@ -163,11 +198,13 @@ DriverVer=11/01/2026,3.4.0.0
 
 [SourceDisksFiles]
 xhcicm.sys=1
+xhcihlpr.sys=1
 xhcicm.inf=1
 
 [DestinationDirs]
 DefaultDestDir=10
 Cm.CopyFiles=10,System32\Drivers
+XhciHlpr.CopyFiles=10,System32\Drivers
 Inf.CopyFiles=17
 
 ; --- Windows 98 SE and ME ---------------------------------------------------
@@ -182,21 +219,26 @@ HKR,,NTMPDriver,,xhcicm.sys
 
 ; --- Windows 2000 and XP ----------------------------------------------------
 
+; The helper starts at the next boot (boot start); no Reboot here: Setup
+; asks for the restart, and a device installed by hand sends the handover
+; from the next start (design record 18 section 15.15).
 [Cm.Dev.NTx86]
 AddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5
-CopyFiles=Cm.CopyFiles
+CopyFiles=Cm.CopyFiles,XhciHlpr.CopyFiles
 
 [Cm.Dev.NTx86.Services]
 AddService=xhcicm,0x00000002,Cm.AddService
+AddService=xhcihlpr,,XhciHlpr.AddService
 
 ; --- Windows Vista and 7 ----------------------------------------------------
 
 [Cm.Dev6.NTx86]
 AddReg=Cm.Values,Cm.ValuesNt
-CopyFiles=Cm.CopyFiles
+CopyFiles=Cm.CopyFiles,XhciHlpr.CopyFiles
 
 [Cm.Dev6.NTx86.Services]
 AddService=xhcicm,0x00000002,Cm.AddService
+AddService=xhcihlpr,,XhciHlpr.AddService
 
 ; --- Shared -----------------------------------------------------------------
 
@@ -234,11 +276,20 @@ HKR,,XhciCmTunnelBridge,0x00000002,"auto"
 HKR,,XhciCmAsmediaPcie7Credits,0x00010003,0
 HKR,,XhciCmUsb4V2,0x00010003,1
 HKR,,XhciCmGen4LinkRecovery,0x00010003,1
+; The platform's USB4 handover on an ASM4242 (design record 32 sections
+; 12.8.6, 12.8.15.10 and 12.8.15.17, task 46.12): its master switch and
+; the structural tier, read on every system (on 2000 to 10 the tier
+; applies to the read path alone).
+HKR,,XhciCmAsm4242Handover,0x00010003,1
+HKR,,XhciCmAsm4242Structural,0x00010003,0
 
 ; Task 45.50: the values the driver uses on Windows 2000 to 10 alone, written
 ; by their install paths alone: the NHI's interrupt (record 21 section 4.5).
 [Cm.ValuesNt]
 HKR,,XhciCmRingInterrupt,0x00010003,0
+; Task 46.12 (record 32 section 12.8.15.12): the read path's opt-in for an
+; ASM4242 board no profile knows, read on NT alone.
+HKR,,XhciCmAsm4242Reads,0x00010003,0
 
 ; Task 45.50: the values the driver reads on Windows 2000 and XP (and XP
 ; x64) alone, written by their install paths alone: the bridges' memory
@@ -268,6 +319,19 @@ LoadOrderGroup=Base
 ; restart.
 [Cm.CopyFiles]
 xhcicm.sys
+
+; xhci98.inf's helper service, the same in every directive (the gate's
+; CM-HLPR); COPYFLG_NO_VERSION_DIALOG (0x20): a newer helper already in
+; place is kept.
+[XhciHlpr.AddService]
+DisplayName=%XhciHlprSvcDesc%
+ServiceType=1                       ; SERVICE_KERNEL_DRIVER
+StartType=0                         ; SERVICE_BOOT_START
+ErrorControl=1                      ; SERVICE_ERROR_NORMAL
+ServiceBinary=%12%\xhcihlpr.sys
+
+[XhciHlpr.CopyFiles]
+xhcihlpr.sys,,,0x00000020
 
 [Inf.CopyFiles]
 xhcicm.inf
@@ -299,6 +363,13 @@ U4PlDesc="xHCI98 USB4 Router (Intel Panther Lake)"
 U4WlDesc="xHCI98 USB4 Router (Intel Wildcat Lake)"
 U4BrDesc="xHCI98 USB4 Router (Intel Barlow Ridge)"
 U4PsDesc="xHCI98 USB4 Router (AMD Pink Sardine)"
+U4RbDesc="xHCI98 USB4 Router (AMD Rembrandt)"
+U4PhDesc="xHCI98 USB4 Router (AMD Phoenix)"
+U4SxDesc="xHCI98 USB4 Router (AMD Strix)"
+U4ShDesc="xHCI98 USB4 Router (AMD Strix Halo)"
+U4KrDesc="xHCI98 USB4 Router (AMD Krackan)"
+U4K2Desc="xHCI98 USB4 Router (AMD Krackan2)"
 U4AsDesc="xHCI98 USB4 Router (ASMedia ASM4242)"
 U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"
+XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"

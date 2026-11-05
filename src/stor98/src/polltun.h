@@ -73,17 +73,28 @@
 #define POLL_SPIN_US_MAX        500
 #define POLL_SPIN_STEP_US       10
 
+// IntWatchdog (9x value StorIntWatchdog, NT key storintwatchdog=; xhci98
+// 3.4.1.0, PLAN "Missed-interrupt watchdog"). 1 = on (the default): an
+// adapter that started interrupt-driven and whose interrupts stop switches
+// to polling for the rest of that start (PollWatchTick below). 0 = off.
+// Anything above 1 is clamped to 1.
+#define POLL_WATCH_OFF          0
+#define POLL_WATCH_ON           1
+#define POLL_WATCH_DEFAULT      POLL_WATCH_ON
+
 // Clamp record (POLL_SETTINGS.Clamped)
 #define POLL_CLAMP_MODE         0x01
 #define POLL_CLAMP_BUSY         0x02
 #define POLL_CLAMP_IDLE         0x04
 #define POLL_CLAMP_SPIN         0x08
+#define POLL_CLAMP_WATCH        0x10    // logged on its own stage (STG_POLL_WATCHCFG): 0x150 and 0x151 have no room
 
 typedef struct _POLL_SETTINGS {
     ULONG Mode;             // POLL_MODE_*
     ULONG BusyUs;           // busy timer period (us)
     ULONG IdleMs;           // idle timer period (ms), 0 = timer stops when idle
     ULONG SpinUs;           // HwStartIo completion spin (us), 0 = none
+    ULONG Watch;            // POLL_WATCH_*: the missed-interrupt watchdog
     ULONG Clamped;          // POLL_CLAMP_* of the values clamped by the last PollSettingsApply
 } POLL_SETTINGS;
 
@@ -94,6 +105,7 @@ typedef struct _POLL_RAW {
     ULONG BusyUs;
     ULONG IdleMs;
     ULONG SpinUs;
+    ULONG Watch;
 } POLL_RAW;
 
 static ULONG PollClampRange(ULONG v, ULONG lo, ULONG hi, ULONG Bit, ULONG *Clamped)
@@ -115,6 +127,7 @@ static VOID PollSettingsDefault(POLL_SETTINGS *s)
     s->BusyUs = POLL_BUSY_US_DEFAULT;
     s->IdleMs = POLL_IDLE_MS_DEFAULT;
     s->SpinUs = POLL_SPIN_US_DEFAULT;
+    s->Watch = POLL_WATCH_DEFAULT;
     s->Clamped = 0;
 }
 
@@ -135,6 +148,9 @@ static VOID PollSettingsApply(POLL_SETTINGS *s, const POLL_RAW *r)
     }
     if (r->Present & POLL_CLAMP_SPIN) {
         s->SpinUs = PollClampRange(r->SpinUs, POLL_SPIN_US_MIN, POLL_SPIN_US_MAX, POLL_CLAMP_SPIN, &s->Clamped);
+    }
+    if (r->Present & POLL_CLAMP_WATCH) {
+        s->Watch = PollClampRange(r->Watch, POLL_WATCH_OFF, POLL_WATCH_ON, POLL_CLAMP_WATCH, &s->Clamped);
     }
 }
 
@@ -229,6 +245,8 @@ static ULONG PollCombine(ULONG EngineUs, ULONG OtherUs)
 #define POLL_WHY_NO_CONFIG      5   // Pin and Line unreadable
 #define POLL_WHY_INTX_OFF       6   // INTx enable not taken (HwFindAdapter's
                                     // read-back; not a PollDecide answer)
+#define POLL_WHY_MISSED         7   // interrupts missed: the watchdog's latch
+                                    // (PollWatchTick; not a PollDecide answer)
 
 static ULONG PollDecide(ULONG Mode, BOOLEAN PinLine, UCHAR Pin, UCHAR Line, BOOLEAN PortGives,
                         ULONG PortLevel, ULONG PortVector)
@@ -249,6 +267,114 @@ static ULONG PollDecide(ULONG Mode, BOOLEAN PinLine, UCHAR Pin, UCHAR Line, BOOL
         return POLL_WHY_FORCED;
     }
     return POLL_WHY_INTERRUPT;
+}
+
+//
+// The missed-interrupt watchdog (PLAN "Missed-interrupt watchdog", xhci98
+// 3.4.1.0). A heuristic read from the timer: called once per timer
+// callback, it says when an adapter that started interrupt-driven has gone
+// three misses within 2 s with no interrupt claimed between them (the run),
+// or eight within 2 s at callbacks with few completions claimed between them
+// (the finds: a shared line whose other device's calls claim this
+// controller's completions; xhci98's run sheet "46.9 the shared-line
+// claims").
+//   Armed      the vector is in use and the running step ran in this
+//              callback (state running, interrupt-driven start, no storm
+//              mask, the setting on). Not armed: the run and the finds are
+//              forgotten and the claim counts taken as seen.
+//   Claims     HwInterrupt's count of calls that consumed a completion.
+//   ClaimCqes  the completions those calls consumed.
+//   Found      this callback's running step consumed a completion.
+//   NowMs      the engine's clock, ms.
+// No claim since the previous armed callback: a find is a miss and adds one
+// to the run. A claim: the run is 0, and a find is a miss only with at most
+// POLL_WATCH_FEW_CQES claimed completions. Every miss is counted (saturating)
+// and its time kept among the last POLL_WATCH_FINDS. A callback with nothing
+// found keeps the run and the finds, unless the newest find is older than
+// POLL_WATCH_WINDOW_MS (then they are forgotten: none can count again). A run
+// whose first miss is older than the window starts again at the new miss.
+// TRUE when the run reaches POLL_WATCH_MISSES, or the oldest of the last
+// POLL_WATCH_FINDS finds is at most the window older than the newest: latch.
+// PollWatchForget: a callback that is not armed. The timer stopping (idle)
+// forgets nothing: at queue depth 1 every command can end that way, and a
+// dead line's misses must add up across those gaps. PollWatchForgetFinds:
+// a gap the engine's clock could not measure (LcIntWatch), after which a
+// find's age cannot be trusted; the run, which claims set back, is kept.
+//
+#define POLL_WATCH_MISSES       3
+#define POLL_WATCH_FINDS        8
+#define POLL_WATCH_FEW_CQES     2
+#define POLL_WATCH_WINDOW_MS    2000
+
+typedef struct _POLL_WATCH {
+    ULONG Run;              // misses in the current run (no claim between)
+    ULONG RunStartMs;       // clock ms of the run's first miss
+    ULONG FindMs[POLL_WATCH_FINDS]; // clock ms of the last finds, a ring
+    ULONG Finds;            // finds kept in FindMs (0..POLL_WATCH_FINDS)
+    ULONG FindNext;         // FindMs slot of the next find
+    ULONG ClaimsSeen;       // Claims at the previous callback
+    ULONG ClaimCqesSeen;    // ClaimCqes at the previous callback
+    ULONG Misses;           // misses of the start (saturating)
+} POLL_WATCH;
+
+static VOID PollWatchForgetFinds(POLL_WATCH *w)
+{
+    w->Finds = 0;
+    w->FindNext = 0;
+}
+
+static VOID PollWatchForget(POLL_WATCH *w)
+{
+    w->Run = 0;
+    PollWatchForgetFinds(w);
+}
+
+static BOOLEAN PollWatchTick(POLL_WATCH *w, BOOLEAN Armed, ULONG Claims, ULONG ClaimCqes, BOOLEAN Found,
+                             ULONG NowMs)
+{
+    BOOLEAN claimed;
+    ULONG cqes, newest;
+
+    claimed = (BOOLEAN)(Claims != w->ClaimsSeen);
+    cqes = ClaimCqes - w->ClaimCqesSeen;
+    w->ClaimsSeen = Claims;
+    w->ClaimCqesSeen = ClaimCqes;
+    if (!Armed) {
+        PollWatchForget(w);
+        return FALSE;
+    }
+    if (claimed) {
+        w->Run = 0;
+    }
+    if (w->Finds != 0) {
+        newest = w->FindMs[(w->FindNext + POLL_WATCH_FINDS - 1) % POLL_WATCH_FINDS];
+        if (NowMs - newest > POLL_WATCH_WINDOW_MS) {
+            w->Finds = 0;
+            w->FindNext = 0;
+        }
+    }
+    if (!Found || (claimed && cqes > POLL_WATCH_FEW_CQES)) {
+        return FALSE;
+    }
+    if (w->Misses != 0xFFFFFFFFUL) {
+        w->Misses++;
+    }
+    w->FindMs[w->FindNext] = NowMs;
+    w->FindNext = (w->FindNext + 1) % POLL_WATCH_FINDS;
+    if (w->Finds < POLL_WATCH_FINDS) {
+        w->Finds++;
+    }
+    if (!claimed) {
+        if (w->Run == 0 || NowMs - w->RunStartMs > POLL_WATCH_WINDOW_MS) {
+            w->Run = 1;
+            w->RunStartMs = NowMs;
+        } else {
+            w->Run++;
+        }
+    }
+    // With the ring full, FindNext is the slot of the oldest kept find.
+    return (BOOLEAN)(w->Run >= POLL_WATCH_MISSES ||
+                     (w->Finds == POLL_WATCH_FINDS && NowMs - w->FindMs[w->FindNext] <= POLL_WATCH_WINDOW_MS));
 }
 
 #endif // _STOR98_POLLTUN_H_

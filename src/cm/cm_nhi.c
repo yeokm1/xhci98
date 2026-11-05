@@ -231,16 +231,11 @@ static VOID cmU4CarryOut(PCM_NHI nhi)
 }
 
 /* cm.h: an address record, at XhciCmLogVerbosity 4 alone (the shared ring's
- * own gate, XhciLogAppendAddress). Here rather than beside CmLogNote in
- * cm_log.c, whose values and emission another branch owns. IRQL:
- * <= DISPATCH_LEVEL. */
+ * own gate, XhciLogAppendAddress), through cm_log.c's CmLogRecord since
+ * task 46.13. IRQL: <= DISPATCH_LEVEL. */
 VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value)
 {
-    KIRQL irql;
-
-    KeAcquireSpinLock(&nhi->LogLock, &irql);
-    XhciLogAppendAddress(&nhi->Log, label, value);
-    KeReleaseSpinLock(&nhi->LogLock, irql);
+    CmLogRecord(nhi, label, value, 1);
 }
 
 NTSTATUS CmNhiAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
@@ -1611,6 +1606,11 @@ static VOID cmU4AfterCommit(PCM_NHI nhi)
 
     CmLogNote(nhi, "u4.recover.ok", CmLiveEpisode(&nhi->Live));
     nhi->Counters.U4RecoverOk++;
+    if (nhi->OscNetOwed) {
+        /* A deferred activation's network PDO still owed (record 32
+         * section 12.8.15.16): the PnP path's next BusRelations. */
+        IoInvalidateDeviceRelations(nhi->Common.Pdo, BusRelations);
+    }
     bound = 0;
     open = 0;
     unknownOpen = FALSE;
@@ -2530,6 +2530,9 @@ static ULONG cmU4LinkDown(PVOID context, const TBT_U4_LINKDOWN *info)
                   (info->AnchorValid ? 0x02UL : 0) |
                   (info->Nested ? 0x04UL : 0) |
                   (info->MapValid ? 0x08UL : 0));
+    /* Task 46.13 (record 21 section 8.3): the connection's link-down in
+     * the CONFIGMG worker's event order, for the guard of its DOWN. */
+    CmEjectLinkDown(nhi, info->Port, info->Generation);
     if (info->PathClosed) {
         nhi->Counters.U4PathsClosed++;
         if (info->Port >= 1 && info->Port <= XHCI_TBT_MAX_PORTS) {
@@ -2839,6 +2842,14 @@ static VOID cmU4Bind(PCM_NHI nhi)
     rc = TbtU4Start(&nhi->U4, nhi->CommonVa, nhi->CommonPa.LowPart,
                     nhi->DmaBytes);
     CmLogNote(nhi, "u4.start", (ULONG)(-rc));
+    /* Record 32 section 12.8.15.13: the host router answered after a
+     * handover's send, whatever follows, clears the boot guard's marker. */
+    if (rc == TBT_OK ||
+        (nhi->U4.InertReason != TBT_INERT_HOST_ROUTER &&
+         nhi->U4.HostRouter.Vendor != 0 &&
+         nhi->U4.HostRouter.Vendor != 0xFFFFUL)) {
+        CmOscntRouter(nhi);
+    }
     if (rc != TBT_OK) {
         if (nhi->U4.Failed || nhi->Ring.Running || nhi->Ring.DmaMayRun) {
             /* Failure after activation (record 22 section 3.5): the core
@@ -2967,21 +2978,200 @@ VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
 
 /* The selection, on the thread. Sets StartStatus (a Code 10 refusal only
  * for BAR0 that cannot be mapped) and BindOwed. */
+/* The PnP start's network step done, under WorkLock (record 32 section
+ * 12.8.15.16). <= DISPATCH_LEVEL. */
+static VOID cmStartDoneSet(PCM_NHI nhi, LONG v)
+{
+    KIRQL irql;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->OscStartDone = v;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
+static BOOLEAN cmStartDoneGet(PCM_NHI nhi)
+{
+    KIRQL irql;
+    LONG v;
+
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    v = nhi->OscStartDone;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return (BOOLEAN)(v != 0);
+}
+
+/* The start's activation, from the platform step on (the selection and
+ * the client's activation; the bind follows on the thread, BindOwed): at
+ * the start, or at a deferred activation's end (record 32 section
+ * 12.8.15.16). The thread, PASSIVE_LEVEL. */
+static VOID cmStartActivate(PCM_NHI nhi, ULONG mode)
+{
+    BOOLEAN ready;
+
+    ready = CmNhiPlatformInit(nhi);
+    CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
+
+    /* (c), (d) */
+    TbtHwSelect(nhi->Hw, &nhi->Host, ready, nhi->Subsystem,
+                (BOOLEAN)(mode == CM_MODE_FORCE_SW), &nhi->Sel);
+    CmLogNote(nhi, "cm.select.outcome", nhi->Sel.Outcome);
+    CmLogNote(nhi, "cm.select.reason", nhi->Sel.Reason);
+    CmLogNote(nhi, "cm.select.caps", nhi->Sel.Caps);
+    CmLogNote(nhi, "cm.select.fw-status", nhi->Sel.FwStatus);
+    CmLogNote(nhi, "cm.select.mode", nhi->Sel.Mode);
+    if (nhi->Sel.Outcome == TBT_SEL_SAFE_MODE) {
+        cmInert(nhi, CM_INERT_SAFE_MODE);
+        return;
+    }
+    if (nhi->Sel.Outcome == TBT_SEL_SOFTWARE) {
+        if (mode == CM_MODE_FORCE_ICM) {
+            /* XhciCmMode 2 asks for the ICM client: a host whose ICM is
+             * not running is inert, never the software CM. */
+            cmInert(nhi, CM_INERT_FORCE_ICM_REFUSED);
+            return;
+        }
+        cmU4Activate(nhi);
+        return;
+    }
+    if (nhi->Sel.Outcome != TBT_SEL_ICM) {
+        cmInert(nhi, CM_INERT_SELECTION);
+        return;
+    }
+
+    if (!NT_SUCCESS(CmDmaOpen(nhi))) {
+        cmInert(nhi, CM_INERT_RESOURCES);
+        return;
+    }
+    if (!CmNhiSetBusMaster(nhi, TRUE)) {
+        /* No ring may be started without it; the buffer and a bit set
+         * here are given back at the stop. */
+        cmInert(nhi, CM_INERT_BUS_MASTER);
+        return;
+    }
+    TbtIcmInit(&nhi->Icm, nhi->Hw->Icm, &nhi->Ring, &nhi->Host,
+               TbtHwRingFlags(nhi->Hw));
+    TbtIcmSetApprovePolicy(&nhi->Icm,
+                           (BOOLEAN)(nhi->Values.Value[CM_VAL_APPROVE] != 0));
+    TbtIcmSetTimeouts(&nhi->Icm, nhi->Values.Value[CM_VAL_CMD_TIMEOUT_MS],
+                      nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
+    /* Record 21 section 5.3: on every row, each announced router's USB4
+     * Version is read - the generation is the router's, whatever the
+     * host (the ORICO behind Alpine Ridge reads 20h). */
+    TbtIcmSetReadVersion(&nhi->Icm, TRUE);
+    /* Design record 35 section 3.10: XhciCmNet gates the host-to-host
+     * links under the firmware connection manager too. */
+    TbtIcmSetNetConfig(&nhi->Icm, (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0),
+                       cmNetRevision());
+    /* The service's operations and the NHI's serial for the MAC, before
+     * the start (record 35 section 3.10). */
+    CmNetBindOps(nhi, TRUE);
+    CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
+    CmReenumStart(nhi);
+    nhi->ReenumOn = 1;
+    nhi->Inert = CM_INERT_NONE;
+    nhi->Stage = CM_STAGE_ACTIVE;
+    nhi->BindOwed = 1;
+}
+
+/* A deferred activation's pass (record 32 section 12.8.15.16), on the
+ * thread after the pass's work: a try of the handover each second by the
+ * clock, ended by the try that is done, by 120 s, by a sleep or by any
+ * gate the start's activation needs. PASSIVE_LEVEL. */
+#define CM_DEFER_TRY_MS     1000UL
+#define CM_DEFER_BOUND_MS   120000UL
+
+VOID CmNhiDeferPass(PCM_NHI nhi)
+{
+    ULONG now;
+    BOOLEAN expired;
+
+    if (!nhi->OscDeferred) {
+        return;
+    }
+    if (nhi->Stage != CM_STAGE_INERT || nhi->Inert != CM_INERT_HO_DEFER) {
+        nhi->OscDeferred = 0;
+        return;
+    }
+    if (nhi->PnpStopPending ||
+        !cmStartDoneGet(nhi)) {
+        return;
+    }
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi) || !CmNhiHwAccess(nhi)) {
+        nhi->OscDeferred = 0;
+        CmLogNote(nhi, "cm.osc.defer.ended", (ULONG)nhi->SystemPower);
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
+    now = nhi->Host.NowMs(nhi->Host.Context);
+    expired = (BOOLEAN)(now - nhi->OscDeferAtMs >= CM_DEFER_BOUND_MS);
+    if (!expired) {
+        if (now - nhi->OscDeferTryMs < CM_DEFER_TRY_MS) {
+            return;
+        }
+        nhi->OscDeferTryMs = now;
+        if (CmOscntRetry(nhi) == CM_OSCN_DEFER) {
+            return;
+        }
+    } else {
+        nhi->OscFlags |= CM_OSCN_F_EXPIRED;
+        CmLogNote(nhi, "cm.osc.defer.expired", now - nhi->OscDeferAtMs);
+    }
+    /* The gates again: the try could block, and a stop, a sleep or a
+     * revocation may have come meanwhile. */
+    if (nhi->PnpStopPending) {
+        nhi->OscDeferred = 0;
+        return;
+    }
+    if (nhi->DevicePower != PowerDeviceD0 || nhi->Suspended ||
+        CmPowerSleeping(nhi) || !CmNhiHwAccess(nhi)) {
+        nhi->OscDeferred = 0;
+        CmLogNote(nhi, "cm.osc.defer.ended", (ULONG)nhi->SystemPower);
+        cmInert(nhi, CM_INERT_POWER);
+        return;
+    }
+    nhi->OscDeferred = 0;
+    nhi->Inert = CM_INERT_NONE;
+    CmLogNote(nhi, "cm.osc.defer.done", expired ? 1UL : 0UL);
+    cmStartActivate(nhi, nhi->OscDeferMode);
+    if (nhi->BindOwed) {
+        nhi->BindOwed = 0;
+        CmNhiBind(nhi);
+    }
+    /* Record 35 section 6.1: the network PDO, which the start could not
+     * report while the activation waited, published by the PnP path's
+     * next BusRelations, which a surprise removal is serialised with. */
+    /* Owed whatever the bind's outcome: a loss-interrupted bind's
+     * recovery commits ACTIVE later and asks again. */
+    nhi->OscNetOwed = 1;
+    if (nhi->Stage == CM_STAGE_ACTIVE) {
+        IoInvalidateDeviceRelations(nhi->Common.Pdo, BusRelations);
+    }
+}
+
 VOID CmNhiStartWork(PCM_NHI nhi)
 {
     ULONG mode;
     ULONG v;
     ULONG profile;
-    BOOLEAN ready;
 
     nhi->StartStatus = STATUS_SUCCESS;
     nhi->BindOwed = 0;
+    nhi->OscDeferred = 0;
+    nhi->OscNetOwed = 0;
     /* A new start, new resources: the monitor begins OFF, unrevoked. */
     CmLiveInit(&nhi->Live, 0, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
     nhi->AccessClass = CM_ACCESS_ORDINARY;
     mode = nhi->Values.Value[CM_VAL_MODE];
     if (mode == CM_MODE_OFF) {
         cmInert(nhi, CM_INERT_MODE_OFF);
+        return;
+    }
+    /* The settings were not read (98 SE and ME, the registry closed away
+     * from S0 when the start read them; task 46.14): nothing is activated
+     * on defaults that may not be the user's. */
+    if (!nhi->ValuesRead) {
+        cmInert(nhi, CM_INERT_POWER);
         return;
     }
     /* A start queued beside a 9x shutdown's system IRP, which the thread
@@ -3055,70 +3245,26 @@ VOID CmNhiStartWork(PCM_NHI nhi)
         nhi->StartStatus = STATUS_INSUFFICIENT_RESOURCES;
         return;
     }
-    ready = CmNhiPlatformInit(nhi);
-    CmLogNote(nhi, "cm.platform.ready", ready ? 1UL : 0UL);
-
-    /* (c), (d) */
-    TbtHwSelect(nhi->Hw, &nhi->Host, ready, nhi->Subsystem,
-                (BOOLEAN)(mode == CM_MODE_FORCE_SW), &nhi->Sel);
-    CmLogNote(nhi, "cm.select.outcome", nhi->Sel.Outcome);
-    CmLogNote(nhi, "cm.select.reason", nhi->Sel.Reason);
-    CmLogNote(nhi, "cm.select.caps", nhi->Sel.Caps);
-    CmLogNote(nhi, "cm.select.fw-status", nhi->Sel.FwStatus);
-    CmLogNote(nhi, "cm.select.mode", nhi->Sel.Mode);
-    if (nhi->Sel.Outcome == TBT_SEL_SAFE_MODE) {
-        cmInert(nhi, CM_INERT_SAFE_MODE);
-        return;
-    }
-    if (nhi->Sel.Outcome == TBT_SEL_SOFTWARE) {
-        if (mode == CM_MODE_FORCE_ICM) {
-            /* XhciCmMode 2 asks for the ICM client: a host whose ICM is
-             * not running is inert, never the software CM. */
-            cmInert(nhi, CM_INERT_FORCE_ICM_REFUSED);
+    /* The platform's USB4 handover, where the firmware's own code would
+     * have sent it from _OSC: 98 SE and ME (cm_oscos.c), the NT targets
+     * (cm_oscnt.c); each does nothing on the other's systems. On NT the
+     * start's activation may wait for it (record 32 section 12.8.15.16):
+     * the start then ends inert, nothing activated, and the thread runs
+     * the activation later (CmNhiDeferPass). */
+    if (profile == CM_PROFILE_USB4) {
+        CmOscHandover(nhi);
+        if (CmOscntHandover(nhi) == CM_OSCN_DEFER) {
+            nhi->OscDeferred = 1;
+            nhi->OscDeferMode = mode;
+            nhi->OscDeferAtMs = nhi->Host.NowMs(nhi->Host.Context);
+            nhi->OscDeferTryMs = nhi->OscDeferAtMs;
+            cmInert(nhi, CM_INERT_HO_DEFER);
             return;
         }
-        cmU4Activate(nhi);
-        return;
     }
-    if (nhi->Sel.Outcome != TBT_SEL_ICM) {
-        cmInert(nhi, CM_INERT_SELECTION);
-        return;
-    }
-
-    if (!NT_SUCCESS(CmDmaOpen(nhi))) {
-        cmInert(nhi, CM_INERT_RESOURCES);
-        return;
-    }
-    if (!CmNhiSetBusMaster(nhi, TRUE)) {
-        /* No ring may be started without it; the buffer and a bit set
-         * here are given back at the stop. */
-        cmInert(nhi, CM_INERT_BUS_MASTER);
-        return;
-    }
-    TbtIcmInit(&nhi->Icm, nhi->Hw->Icm, &nhi->Ring, &nhi->Host,
-               TbtHwRingFlags(nhi->Hw));
-    TbtIcmSetApprovePolicy(&nhi->Icm,
-                           (BOOLEAN)(nhi->Values.Value[CM_VAL_APPROVE] != 0));
-    TbtIcmSetTimeouts(&nhi->Icm, nhi->Values.Value[CM_VAL_CMD_TIMEOUT_MS],
-                      nhi->Values.Value[CM_VAL_APPROVE_TIMEOUT_MS]);
-    /* Record 21 section 5.3: on every row, each announced router's USB4
-     * Version is read - the generation is the router's, whatever the
-     * host (the ORICO behind Alpine Ridge reads 20h). */
-    TbtIcmSetReadVersion(&nhi->Icm, TRUE);
-    /* Design record 35 section 3.10: XhciCmNet gates the host-to-host
-     * links under the firmware connection manager too. */
-    TbtIcmSetNetConfig(&nhi->Icm, (BOOLEAN)(nhi->Values.Value[CM_VAL_NET] != 0),
-                       cmNetRevision());
-    /* The service's operations and the NHI's serial for the MAC, before
-     * the start (record 35 section 3.10). */
-    CmNetBindOps(nhi, TRUE);
-    CmLogNote(nhi, "cm.icm.row", nhi->Hw->Icm->Generation);
-    CmReenumStart(nhi);
-    nhi->ReenumOn = 1;
-    nhi->Inert = CM_INERT_NONE;
-    nhi->Stage = CM_STAGE_ACTIVE;
-    nhi->BindOwed = 1;
+    cmStartActivate(nhi, mode);
 }
+
 
 /* The bind, on the thread after the PnP path was released. */
 VOID CmNhiBind(PCM_NHI nhi)
@@ -3299,6 +3445,9 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     POWER_STATE d0;
 
     CmReadValues(nhi);
+    /* The start's first record carries no handover tier (record 32
+     * section 12.8.11): an earlier start's never stands for this one. */
+    nhi->OscTier = 0;
     CmStatusOpen(nhi);
     CmLogApply(nhi);
     nhi->Starts++;
@@ -3444,6 +3593,7 @@ static VOID cmNhiStop(PCM_NHI nhi, ULONG reason)
     CmQueryStopping(nhi);
     if (!nhi->Started) {
         CmQueryClose(nhi);
+        CmQueryForgetTables(nhi);
         return;
     }
     if (nhi->ThreadRunning) {
@@ -3455,6 +3605,7 @@ static VOID cmNhiStop(PCM_NHI nhi, ULONG reason)
         nhi->PnpStopPending = 0;
     }
     CmQueryClose(nhi);
+    CmQueryForgetTables(nhi);
     nhi->Stage = CM_STAGE_STOPPED;
     nhi->Started = 0;
     nhi->Stops++;
@@ -3470,6 +3621,7 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
     stack = IoGetCurrentIrpStackLocation(irp);
     switch (stack->MinorFunction) {
     case IRP_MN_START_DEVICE:
+        cmStartDoneSet(nhi, 0);
         status = CmForwardSync(&nhi->Common, irp);
         if (NT_SUCCESS(status)) {
             status = cmNhiStart(nhi, irp);
@@ -3478,10 +3630,22 @@ NTSTATUS CmNhiPnp(PCM_NHI nhi, PIRP irp)
             /* Record 35 section 6.1: the network PDO, reported or not. */
             CmNetStarted(nhi);
         }
+        /* A deferred activation (record 32 section 12.8.15.16) waits for
+         * this, the start's last use of the network PDO. */
+        cmStartDoneSet(nhi, 1);
         return CmCompleteIrp(irp, status, 0);
 
     case IRP_MN_QUERY_DEVICE_RELATIONS:
         if (stack->Parameters.QueryDeviceRelations.Type == BusRelations) {
+            /* A deferred activation's network PDO (record 32 section
+             * 12.8.15.16), never after a revocation. */
+            if (nhi->OscNetOwed && nhi->Stage == CM_STAGE_ACTIVE &&
+                CmNhiHwAccess(nhi)) {
+                /* Kept while access is withheld (a containment): its
+                 * recovery asks again. */
+                nhi->OscNetOwed = 0;
+                CmNetStarted(nhi);
+            }
             return CmNetBusRelations(nhi, irp);
         }
         break;

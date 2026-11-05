@@ -4,6 +4,27 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.4.1.0 - not yet released
+
+- Windows 98 SE and ME: Stor98 starts only the drive Windows loaded
+  it for. It used to start every NVMe drive in the machine, the one
+  Windows itself was started from among them, so with Windows on an
+  internal NVMe drive, attaching a Thunderbolt or USB4 NVMe drive
+  stopped Windows at start ("Initing stor98.mpd").
+- Windows 98 SE and ME: an NVMe drive the computer's BIOS has already
+  set up when Windows starts (for example a Thunderbolt or USB4 drive
+  attached at power-on, which the BIOS lists as a disk) is left to the
+  BIOS: it works through the BIOS (compatibility mode), and Stor98's
+  entry in Device Manager shows Code 10. Taking it stopped Windows at
+  start. A drive plugged in after Windows has started runs on Stor98.
+- A drive that runs on its interrupt and whose interrupts then stop
+  arriving is polled until it next starts, so its requests no longer
+  complete about ten a second (StorIntWatchdog / storintwatchdog=, on
+  by default, 0 turns it off). XHCIPERF's Stor98 page shows it as
+  "polling after missed interrupts".
+- Windows 98 SE and ME: StorFind lists all six BAR values of the
+  drive's slot.
+
 ## 3.4.0.0 - not yet released
 
 - The download is laid out by Windows family. Windows 98 SE and ME

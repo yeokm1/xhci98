@@ -24,7 +24,7 @@ Compatible=1
 Class=Net
 ClassGUID={4D36E972-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
-DriverVer=11/01/2026,3.4.0.0
+DriverVer=11/05/2026,3.4.1.0
 
 ; NTx86 for XP, Vista and 7 beside NTx86.6.2: Vista's and 7's driver store
 ; stages only the files of the decorated models sections once the line

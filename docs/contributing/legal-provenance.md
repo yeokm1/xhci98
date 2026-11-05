@@ -1,457 +1,300 @@
 # Provenance and third-party material
 
-This is a factual record of where this project's non-obvious facts came from,
-what third-party material it touches, and how each piece is handled. It is
-written so that a reader can see the sources and the methods without having to
-reconstruct them.
+A factual record of where this project's non-obvious facts came from, what
+third-party material it touches and how each piece is handled, so a reader
+can see the sources and methods without reconstructing them. `AGENTS.md`,
+"Third-Party Material and Provenance" and "Reference Implementations",
+states the rules that bind day-to-day work and points here for the record.
 
-It is not a legal opinion, and it does not state a conclusion about whether
-any act described here is permitted in any jurisdiction. It records what this
-repository holds, what it publishes, and what the third-party material it
-touches says about itself. Do not quote this file as clearance for anything,
-and do not add a conclusion to it.
+It is not a legal opinion and states no conclusion about whether any act
+described here is permitted in any jurisdiction. It records what this
+repository holds, what it publishes, and what the third-party material says
+about itself. Do not quote it as clearance for anything, and do not add a
+conclusion to it.
 
 ---
 
 ## 1. What the project is, and why it needs any of this
 
-`xhci98.sys` is an independently written WDM kernel-mode driver for xHCI host
-controllers, targeting Windows 98 SE to Windows 7. Since `2.0.0.0` it is a
-monolithic host controller driver: it replaces Microsoft's `usbport.sys`, the
-hub driver and the composite parent with code of this project's own (see
-`AGENTS.md`, "Architecture Overview", and design record 13). Up to `1.2.0.0`
-it was a miniport of `usbport.sys`, which meant it had to fit an interface,
-`USBPORT_REGISTRATION_PACKET` and its callbacks, that Microsoft never
-documented; that miniport is frozen, and its sources are on branch
-`1.2.0.0`.
+`xhci98.sys` is an independently written WDM kernel-mode driver for xHCI
+host controllers, Windows 98 SE to Windows 7. Since `2.0.0.0` it is a
+monolithic host controller driver that replaces `usbport.sys`, the hub
+driver and the composite parent (`AGENTS.md`, "Architecture Overview";
+design record 13). Up to `1.2.0.0` it was a miniport of `usbport.sys`,
+fitting the undocumented `USBPORT_REGISTRATION_PACKET` and its callbacks;
+that miniport is frozen, its sources on branch `1.2.0.0`.
 
-Either way the driver plugs into interfaces Microsoft documented only in
-part. The miniport plugged in beneath `usbport.sys`. The host controller
-driver sits beneath Windows' own class drivers (`hidusb.sys`, `usbstor.sys`,
-`usbaudio.sys` and others), the helper exports of `usbd.sys`, and the
-Device Manager pages (`usbui.dll`, `sysclass.dll`). Everything in this
-file exists because of that one problem: to make an independent driver
-plug into an undocumented or partly documented interface, the shape of the
-interface has to be determined. Two sources supply it.
+Either way it plugs into interfaces Microsoft documented only in part:
+beneath `usbport.sys` then; now beneath Windows' class drivers
+(`hidusb.sys`, `usbstor.sys`, `usbaudio.sys` and others), the helper
+exports of `usbd.sys` and the Device Manager pages (`usbui.dll`,
+`sysclass.dll`). Everything in this file exists because the shape of those
+interfaces has to be determined. Two sources supply it:
 
-- ReactOS reimplements the whole NT5-era USB stack in readable C, including
-  `usbport`, `usbhub` and three miniports written against `usbport`. It
-  supplies most of the interface description.
-- The Microsoft binaries already installed on the target machines
-  (`usbport.sys` for the miniport; the class drivers, `usbd.sys` and the
-  Device Manager pages for the host controller driver) supply the
-  target-specific contracts where ReactOS differs from them, omits
-  something, or (as happened repeatedly) carries a guard the shipping code
-  does not have.
+- ReactOS, which reimplements the NT5-era USB stack in C (`usbport`,
+  `usbhub` and three miniports written against `usbport`): most of the
+  interface description.
+- The Microsoft binaries already installed on the targets (`usbport.sys`
+  for the miniport; the class drivers, `usbd.sys` and the Device Manager
+  pages for the host controller driver): the target-specific contracts
+  where ReactOS differs, omits something, or (as happened repeatedly)
+  carries a guard the shipping code does not have.
 
-No protection mechanism on any executable or driver binary is defeated, and no
-binary is patched or modified. Each is read as the vendor shipped it, with the
-Windows 2000 DDK's own COFF dumper (`link -dump -disasm`, the same dumper as
-`dumpbin`) and with runtime counters compiled into this project's own driver.
+No protection mechanism on any executable or driver binary is defeated,
+and no binary is patched or modified. Each is read as the vendor shipped
+it, with the Windows 2000 DDK's COFF dumper (`link -dump -disasm`, the
+same dumper as `dumpbin`) and with runtime counters compiled into this
+project's own driver.
 
-One qualification, because an unqualified "nothing is unpacked" would be
-false. Several of these binaries ship inside distribution packaging and are
-expanded before they can be read at all: `I386\USBD.SY_` and
-`I386\USBPORT.SY_` off Windows install media, extracted with `7z e` and
-expanded with `expand.exe` (`scripts/package/extract-usbd-sources.ps1`;
-`docs/usb-xhci-info/usbport-miniport-interface.md` section 5). That is
-Microsoft's own compression and Microsoft's own decompression tool, applied to
-get at the file the installer would place anyway. It is not the defeat of any
-protection measure, and it is recorded here so the distinction is stated
-rather than assumed.
+Two adjacent cases, stated so the distinction is not assumed:
 
-One further detail belongs up front. The Intel xHCI specification PDF is
-encrypted with an empty owner password, and this project's text-extraction
-recipe supplies that empty password (`r.decrypt("")`,
-`docs/references/README.md`). Each user does that to their own downloaded copy
-in order to read and quote a document Intel publishes for download; no
-password is guessed, broken, or supplied from elsewhere, and no extracted text
-is redistributed beyond the short verbatim quotations kept in `docs/` for
-identification.
+- **Unpacking.** Some binaries ship in distribution packaging and are
+  expanded before they can be read: `I386\USBD.SY_` and `I386\USBPORT.SY_`
+  off Windows install media, extracted with `7z e` and expanded with
+  `expand.exe` (`scripts/package/extract-usbd-sources.ps1`;
+  `docs/usb-xhci-info/usbport-miniport-interface.md` section 5). That is
+  Microsoft's own compression and decompression tool, applied to get the
+  file the installer would place anyway; it is not the defeat of any
+  protection measure.
+- **The Intel xHCI specification PDF** is encrypted with an empty owner
+  password, and the text-extraction recipe supplies that empty password
+  (`r.decrypt("")`, `docs/references/README.md`), each user to their own
+  downloaded copy of a document Intel publishes for download. No password is
+  guessed, broken or supplied from elsewhere, and no extracted text is
+  redistributed beyond the short verbatim quotations kept in `docs/` for
+  identification.
 
 ---
 
 ## 2. What is tracked in this repository, and what is not
 
+This project's own code is under `LICENSE`: GPL-2.0-only in every release up
+to `3.2.0.0`, GPL-2.0-or-later since 2026-10-26 (roadmap-usb4 task 44.38;
+first release `3.3.0.0`). The rows below say "this project's code" for it.
+This project's documentation, every tracked `.md` file outside
+`src/stor98/`, is under CC BY 4.0 instead (`LICENSE-docs.md`).
+
+**The WDK-object open question** (marked [Q] below; section 6's rule for a
+new tracked build output): whether the WDK-supplied objects a row names ask
+for a notice beside the binary has not been read, and no `NOTICE.TXT` is
+generated for the `-x64` directories. Each such row records the composition
+and the question and draws no conclusion.
+
 | Material | Tracked? | Where | Note |
 |---|---|---|---|
-| This project's source, tests, scripts, docs | Yes | `src/`, `test/`, `scripts/`, `xhciqual/`, `docs/` | GPL-2.0-or-later (`LICENSE`) since 2026-10-26 (roadmap-usb4 task 44.38, the first release `3.3.0.0`); GPL-2.0-only before, in every release up to `3.2.0.0` |
-| Published driver binary | Yes | `releases/<version>/release-x86/xhci98.sys`, `releases/<version>/debug-x86/xhci98.sys`, and the `-x64` pair in a cut that carries one (the directories cut before roadmap task 21.3 keep the bare `release/` and `debug/` names they were written with) | This project's code, linked by the Windows 2000 DDK (the `-x86` pair) or by WDK 7.1 (the `-x64` pair; `scripts/build-driver.cmd`, `src/usbport_amd64.lib`) against `ntoskrnl.exe`/`hal.dll`/`usbport.sys` import libraries, which contribute no code to the image; the import table names symbols and nothing more (verify with `scripts\import-gate\check-imports.ps1`, which prints every module/symbol pair in it). No runtime or extender is linked into either build, which is what makes this row different from the qualifier's below. The 32-bit build links no third-party object at all. **The amd64 build links one object that is not this project's code**: WDK 7.1 compiles amd64 drivers with `/GS`, and its libraries supply `__security_check_cookie` and `__report_gsfailure`, the handler that issues `KeBugCheckEx(0xF7)` on a cookie mismatch - one call site in the whole of `.text`, reached from nothing in `src/` (`scripts/import-gate/xhci98-imports-amd64.allow`, the `KeBugCheckEx` row; `runs/run-21.md` task 21.3). Static, read from the release image's disassembly; which WDK library supplied the object is not recorded, because no amd64 linker map has been read or tracked. **Open question, per section 6's rule for a new tracked build output:** whether that WDK-supplied object asks for a notice beside the 64-bit binary has not been read, and no `NOTICE.TXT` is generated for the `-x64` directories. This row records the composition and the open question; it draws no conclusion from either. this project's code under `LICENSE` (GPL-2.0-only in a release up to `3.2.0.0`, GPL-2.0-or-later from `3.3.0.0`) |
-| The x64 binaries' embedded test signature, and `xhci98-test.cer` | Yes, from the first cut that carries them (`2.3.0.0`) | Appended to `xhci98.sys` and `xhciuas.sys` in every `-x64` directory, and from `3.0.0.0` to `xhcicm.sys` there too (in `3.0.0.0` also to its `nt\xhcicm.sys` copy; from `3.1.0.0` an `-x64` directory has no `nt\`; and from `3.1.0.0` to the bundled `stor98.sys` of `release-x64`, one key for every driver, "The bundled Stor98 build" below) (AGENTS.md, "The INF and install media"); `releases/<version>/*-x64/xhci98-test.cer` beside them; never in an `-x86` directory | Design record 19 (owner, 2026-10-11). The signature is a PKCS #7 `WIN_CERTIFICATE` appended to the image by WDK 7.1's `SignTool.exe`, run in place from the git-ignored `tools/WinDDK71/bin/x86` at each cut; it holds this project's own self-signed certificate (`CN=xhci98 project test signing (not trusted)`), the image's SHA-1 digest and the signature over it, and no code. The certificate was made by the owner on 2026-10-11 with WDK 7.1's `MakeCert.exe` and `pvk2pfx.exe`, run in place the same way (the commands of design record 19 section 4, which `scripts/package/make-testcert.ps1` runs); its SHA-1 thumbprint is `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; `xhci98-test.cer` is its public half, the DER encoding the packager exports from the `.pfx` at each cut. None of the three tools is tracked or published. The private key (`.pfx`) is not tracked or published (`.gitignore`: `*.pfx`, `*.pvk`). It is not a Microsoft signature and chains to no Microsoft or public root |
-| Published MSI helper binary | Yes, from the first cut that carries it (2.3.0.0) | `releases/<version>/release-x86/xhcimsi.sys` and `debug-x86/xhcimsi.sys`; never in an `-x64` directory | This project's code (`src/msi86/`, `src/xhci_msi86.c`), linked by **WDK 7.1 for x86, Vista target** (`setenv x86 WLH`; design record 18 section 8.1), against `ntoskrnl.exe` import libraries, which contribute no code. **Unlike the 32-bit `xhci98.sys` it links WDK library objects**: `wdmsec.lib`'s `IoCreateDeviceSecure` and the members it pulls in (31 `ntoskrnl.exe` pairs, listed in `scripts/import-gate/xhcimsi-imports.allow` from the first link's import table, 2026-10-10), and, `/GS` being left on as the kit's default, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support with `__report_gsfailure` (`KeBugCheckEx(0xF7)`), the same kind of object as the amd64 row above. Which members the link retained is to be read from a linker map, which no build here has written yet. **The same open question as the amd64 row**: whether those WDK-supplied objects ask for a notice beside the binary has not been read; this row records the composition and the question and draws no conclusion. this project's code under `LICENSE` (GPL-2.0-only in a release up to `3.2.0.0`, GPL-2.0-or-later from `3.3.0.0`) |
-| Published x86 helper binary, renamed | Yes, from the first cut that carries it (`2.4.0.0`; not cut yet) | `releases/<version>/release-x86/xhcihlpr.sys` and `debug-x86/xhcihlpr.sys`; never in an `-x64` directory; the `2.3.x` directories keep `xhcimsi.sys` (the row above) | The same helper renamed and extended to Windows 2000 and XP (roadmap-hcd task 38.3, design record 18 section 15): this project's code (`src/hlpr/`, `src/xhci_hlpr.c`), linked by **WDK 7.1 for x86, Windows XP target** (`setenv x86 WXP`, `SUBSYSTEM_VERSION=5.00`; record 18 section 15.10, decision H5), against `ntoskrnl.exe` import libraries from `lib\wxp\i386`, which contribute no code. It links the same kinds of WDK library object as the row above, now the `wxp` copies: `wdmsec.lib`'s `IoCreateDeviceSecure` and its members, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support, and - for a driver whose subsystem is below 6.01 - `lib\crt\i386\safecrtnt.lib` and `libcntpr.lib` (`makefile.new`; the build's own link line, 2026-10-14); its imports, 39 pairs listed in `scripts/import-gate/xhcihlpr-imports.allow` from the first `WXP` link of each flavour, resolve in every kernel and HAL the gate's manifests authenticate for Windows 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86 - the Vista and 7 PAE kernels not among them (section 4). **The same open question as the two rows above** about a notice for the WDK-supplied objects; this row records the composition and draws no conclusion. this project's code under `LICENSE` (GPL-2.0-only in a release up to `3.2.0.0`, GPL-2.0-or-later from `3.3.0.0`) |
-| Published Thunderbolt 3 and USB4 driver binary | Yes, from the first cut that carries it (`3.0.0.0`) | `releases/<version>/<flavour>-<arch>/xhcicm.sys`, in all four flavour directories, and the same image under `nt\` beside its tunnel-port filter's INF in the x86 ones (and in `3.0.0.0`'s x64 ones; from `3.1.0.0` an x64 directory has the filter INF at its root and one copy) | This project's code (`src/cm/`, and `src/xhci_log.c` compiled in by path), linked by the Windows 2000 DDK (x86) or by WDK 7.1 (amd64) as `xhci98.sys` is (`src/cm/sources`), against `ntoskrnl.exe` and `hal.dll` import libraries, which contribute no code; its imports are gated against `scripts/import-gate/xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, every row of the x86 list a pair `xhci98.sys` already imports. The amd64 build carries the same `/GS` cookie support and `__report_gsfailure` as `xhci98.sys`'s amd64 row above (the `KeBugCheckEx` row of `xhcicm-imports-amd64.allow`), and the same open question. **Some of its source files carry third-party code with their notices kept**: the files lifted from `usb4-emu`'s `tools/usb4cm` (MIT) and the files adapted from `usb4-emu` (GPL-2.0-only there; offered to this project under GPL-2.0-or-later by its copyright holder, owner 2026-10-25), section 2a; up to `3.2.0.0` also portions adapted from Linux `drivers/thunderbolt` (GPL-2.0-only), rewritten from the specifications for `3.3.0.0` (task 44.38, section 2a); and `src/cm/stor98cm.h`, Stor98's header carried unchanged (BSD-3-Clause), section 2a. This project's code under `LICENSE` (GPL-2.0-only in a release up to `3.2.0.0`, GPL-2.0-or-later from `3.3.0.0`) |
-| Published DOS qualifier binary | Yes | `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; see section 2a |
-| Published cleanup tool binaries | Yes, in the cuts that carry them (`2.4.0.0` to `3.2.0.0`; the tool was dropped in `3.3.0.0`) | `releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
-| Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Built from this project's sources but not only this project's code: the MSVC 6.0 C runtime is statically linked in. See section 2a |
+| This project's source, tests, scripts, docs | Yes | `src/`, `test/`, `scripts/`, `xhciqual/`, `docs/` | This project's code |
+| Published driver binary | Yes | `releases/<version>/release-x86/xhci98.sys`, `debug-x86/xhci98.sys`, and the `-x64` pair in a cut that carries one (cuts before roadmap task 21.3 keep the bare `release/` and `debug/` names) | This project's code, linked by the Windows 2000 DDK (`-x86`) or WDK 7.1 (`-x64`; `scripts/build-driver.cmd`, `src/usbport_amd64.lib`) against `ntoskrnl.exe`/`hal.dll`/`usbport.sys` import libraries, which contribute no code; the import table names symbols only (`scripts\import-gate\check-imports.ps1` prints every module/symbol pair). No runtime or extender is linked, unlike the qualifier. The 32-bit build links no third-party object. **The amd64 build links one object that is not this project's code**: WDK 7.1's `/GS` support, `__security_check_cookie` and `__report_gsfailure` (`KeBugCheckEx(0xF7)` on a cookie mismatch), one call site in `.text`, reached from nothing in `src/` (`scripts/import-gate/xhci98-imports-amd64.allow`, the `KeBugCheckEx` row; `runs/run-21.md` task 21.3). Static, from the release image's disassembly; which WDK library supplied it is not recorded (no amd64 linker map read or tracked). [Q] |
+| The x64 binaries' embedded test signature, and `xhci98-test.cer` | Yes, from `2.3.0.0` | Appended to `xhci98.sys` and `xhciuas.sys` in every `-x64` directory; from `3.0.0.0` to `xhcicm.sys` (in `3.0.0.0` also its `nt\xhcicm.sys` copy; from `3.1.0.0` an `-x64` directory has no `nt\`); from `3.1.0.0` to the bundled `stor98.sys` of `release-x64` (one key for every driver; "The bundled Stor98 build"; AGENTS.md, "The INF and install media"); `releases/<version>/*-x64/xhci98-test.cer`; never in an `-x86` directory | Design record 19 (owner, 2026-10-11). A PKCS #7 `WIN_CERTIFICATE` appended by WDK 7.1's `SignTool.exe`, run in place from git-ignored `tools/WinDDK71/bin/x86` at each cut; it holds this project's self-signed certificate (`CN=xhci98 project test signing (not trusted)`), the image's SHA-1 digest and the signature, and no code. Made by the owner on 2026-10-11 with WDK 7.1's `MakeCert.exe` and `pvk2pfx.exe` run in place (record 19 section 4; `scripts/package/make-testcert.ps1`); SHA-1 thumbprint `A512DF4530C63AFEA9C0F18D64E333BF75E5ABFF`; `xhci98-test.cer` is its public half, DER, exported from the `.pfx` at each cut. None of the three tools is tracked or published; the private key (`.pfx`) is not tracked or published (`.gitignore`: `*.pfx`, `*.pvk`). Not a Microsoft signature; chains to no Microsoft or public root |
+| Published MSI helper binary | Yes, from 2.3.0.0 | `releases/<version>/release-x86/xhcimsi.sys` and `debug-x86/xhcimsi.sys`; never in `-x64` | This project's code (`src/msi86/`, `src/xhci_msi86.c`), linked by **WDK 7.1 for x86, Vista target** (`setenv x86 WLH`; design record 18 section 8.1) against `ntoskrnl.exe` import libraries (no code). **Unlike the 32-bit `xhci98.sys` it links WDK library objects**: `wdmsec.lib`'s `IoCreateDeviceSecure` and the members it pulls in (31 `ntoskrnl.exe` pairs, `scripts/import-gate/xhcimsi-imports.allow`, from the first link's import table, 2026-10-10), and with `/GS` left at the kit default, `GsDriverEntry` and `BufferOverflowK.lib`'s cookie support with `__report_gsfailure` (`KeBugCheckEx(0xF7)`). Which members the link retained is for a linker map, which no build has written yet. [Q] |
+| Published x86 helper binary, renamed | Yes, from `2.4.0.0` (cut 2026-10-14) | `releases/<version>/release-x86/xhcihlpr.sys` and `debug-x86/xhcihlpr.sys`; never in `-x64`; the `2.3.x` directories keep `xhcimsi.sys` | The same helper renamed and extended to 2000 and XP (roadmap-hcd task 38.3, design record 18 section 15): this project's code (`src/hlpr/`, `src/xhci_hlpr.c`), linked by **WDK 7.1 for x86, Windows XP target** (`setenv x86 WXP`, `SUBSYSTEM_VERSION=5.00`; record 18 section 15.10, decision H5) against `lib\wxp\i386` `ntoskrnl.exe` import libraries (no code). The same kinds of WDK object as the row above, the `wxp` copies (`wdmsec.lib`'s `IoCreateDeviceSecure` and members, `GsDriverEntry`, `BufferOverflowK.lib`'s cookie support), and for a subsystem below 6.01 `lib\crt\i386\safecrtnt.lib` and `libcntpr.lib` (`makefile.new`; the link line, 2026-10-14). Its 39 import pairs (`scripts/import-gate/xhcihlpr-imports.allow`, from the first `WXP` link of each flavour) resolve in every kernel and HAL the gate's manifests authenticate for 2000 SP4, XP SP3, Vista SP2 and 7 SP1 x86, the Vista and 7 PAE kernels not among them (section 4). [Q] |
+| Published Thunderbolt 3 and USB4 driver binary | Yes, from `3.0.0.0` | `releases/<version>/<flavour>-<arch>/xhcicm.sys`, all four flavour directories, and the same image under `nt\` beside its tunnel-port filter's INF in the x86 ones (and `3.0.0.0`'s x64 ones; from `3.1.0.0` an x64 directory has the filter INF at its root and one copy) | This project's code (`src/cm/`, and `src/xhci_log.c` by path), linked by the Windows 2000 DDK (x86) or WDK 7.1 (amd64) as `xhci98.sys` is (`src/cm/sources`) against `ntoskrnl.exe` and `hal.dll` import libraries (no code); imports gated by `scripts/import-gate/xhcicm-imports.allow` and `xhcicm-imports-amd64.allow`, every x86 row a pair `xhci98.sys` already imports. The amd64 build carries the same `/GS` cookie support and `__report_gsfailure` as `xhci98.sys`'s (the `KeBugCheckEx` row of `xhcicm-imports-amd64.allow`). [Q] **Some source files carry third-party code with notices kept** (section 2a): files lifted from `usb4-emu`'s `tools/usb4cm` (MIT); files adapted from `usb4-emu` (GPL-2.0-only there; offered to this project under GPL-2.0-or-later by its copyright holder, owner 2026-10-25); up to `3.2.0.0` portions adapted from Linux `drivers/thunderbolt` (GPL-2.0-only), rewritten from the specifications for `3.3.0.0` (task 44.38); and `src/cm/stor98cm.h`, Stor98's header unchanged (BSD-3-Clause) |
+| Published DOS qualifier binary | Yes | `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` + `.MAP` | Built from this project's sources but not only this project's code; section 2a |
+| Published cleanup tool binaries | Yes, `2.4.0.0` to `3.2.0.0` (dropped in `3.3.0.0`) | `releases/<version>/tools/xhcicln/XHCICLN.EXE`, `XHCICL64.EXE` | Statically linked C runtime (MSVC 6.0's, WDK 7.1's); section 2a |
+| Published snapshot reader binary | Yes | `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` | Statically linked MSVC 6.0 C runtime; section 2a |
 | Intel xHCI specification PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
 | USB-IF backwards-compatibility testing PDF | No | `docs/references/` (git-ignored) | URL + version + SHA-256 in `docs/references/README.md` |
-| Published install tool binaries, and `INSTALL.BAT` | Yes, from the first cut that carries them (`3.0.0.0`; the window and `SETUP.EXE` from `3.1.0.0`, not cut yet) | `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`, and from `3.1.0.0` `XHCIWIZ.EXE` and `XHCIWZ64.EXE`; `releases/<version>/INSTALL.BAT`, and from `3.1.0.0` `releases/<version>/SETUP.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each executable (MSVC 6.0's, WDK 7.1's). See section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines they use are the system's own, looked up at run time |
-| Published USB tree tool binaries | Yes, from the first cut that carries them (`3.0.0.0`) | `releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's). See section 2a |
-| Disk benchmark binaries (`XHCIPERF.EXE`, `XHCIPF64.EXE`) | No: a developer diagnostic, never in a package (owner, 2026-10-23: dropped from `3.2.0.0`); built under `xhciperf\` and git-ignored | `xhciperf/` only | Built from this project's sources but not only this project's code: a C runtime is statically linked into each (MSVC 6.0's, WDK 7.1's), and they compile Stor98's BSD-3-Clause interface header `src/stor98/include/stor98pf.h`. See section 2a |
-| Published 98 SE and ME device-install helper binary | Yes, from the first cut that carries it (`3.1.0.0`; not cut yet) | `releases/<version>/tools/xhciinst/XHCIDI.EXE` | Built from this project's sources but not only this project's code (design record 27 section 3): a 16-bit Windows program whose Open Watcom 2.0 C runtime is statically linked in (the Sybase Open Watcom Public License, as the qualifier's), linked against the Windows 98 SE DDK's `setupx.lib`, an import library whose OMF records name the module `SETUPX` and its exports and carry no code, so the image holds module-and-ordinal imports of the running system's `SETUPX.DLL` and no Microsoft code; compiled against that DDK's `inc16\setupx.h`, the `prsht.h` it includes and its 98 `windows.h` (the four members identified in `docs/references/README.md`, "Windows 98 DDK"); see section 2a, "XHCIDI.EXE" (task 42-A.1) |
-| Published 98 SE and ME IOS layer for Stor98's disks | Yes, from the first cut that carries it (`3.2.0.0`; not cut yet) | `releases/<version>/release-x86/S98VSD.VXD` and the other x86 flavour directories beside `stor98.mpd` | Built from this project's sources alone (design record 30 section 6): Open Watcom 2.0's compiler with no runtime linked (`-zl`, no library), linked by the Windows 98 SE DDK's `LINK.EXE` 5.12, which adds its MS-DOS stub and its `Rich` record of tool identifiers as Microsoft's linkers do to every PE driver of this package; compiled against ten of that DDK's headers (`docs/references/README.md`, "Windows 98 DDK"), none of whose text the image holds; GPL-2.0 like the rest of this project |
-| Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, and it never was; it is in no commit and in no directory of this repository | Nowhere in this tree; a purchased book on the reader's own shelf | The one third-party document cited by printed page that is not kept in `docs/references/`. Edition, page count, SHA-256 of the copy the citations were read from, and the page-index offset are in `docs/references/README.md`. There is no fetch URL to record, because there is no download |
+| Published install tool binaries, and `INSTALL.BAT` | Yes, from `3.0.0.0` (the window and `SETUP.EXE` from `3.1.0.0`, cut 2026-10-19) | `releases/<version>/tools/xhciinst/XHCIINST.EXE`, `XHCIIN64.EXE`, from `3.1.0.0` `XHCIWIZ.EXE`, `XHCIWZ64.EXE`; `releases/<version>/INSTALL.BAT`, from `3.1.0.0` `releases/<version>/SETUP.EXE` | Statically linked C runtime in each executable (MSVC 6.0's, WDK 7.1's); section 2a. `INSTALL.BAT` is this project's own text. Neither carries or calls a Microsoft setup program: the routines used are the system's own, looked up at run time |
+| Published USB tree tool binaries | Yes, from `3.0.0.0` | `releases/<version>/tools/xhcitr/XHCITR.EXE`, `XHCITR64.EXE` | Statically linked C runtime (MSVC 6.0's, WDK 7.1's); section 2a |
+| Disk benchmark binaries (`XHCIPERF.EXE`, `XHCIPF64.EXE`) | No: a developer diagnostic, never in a package (owner, 2026-10-23: dropped from `3.2.0.0`); built under `xhciperf\`, git-ignored | `xhciperf/` only | Statically linked C runtime (MSVC 6.0's, WDK 7.1's); compiles Stor98's BSD-3-Clause interface header `src/stor98/include/stor98pf.h`; section 2a |
+| Published 98 SE and ME device-install helper binary | Yes, from `3.1.0.0` (cut 2026-10-19) | `releases/<version>/tools/xhciinst/XHCIDI.EXE` | Not only this project's code (design record 27 section 3): a 16-bit Windows program with the Open Watcom 2.0 C runtime statically linked (Sybase Open Watcom Public License, as the qualifier's), linked against the Windows 98 SE DDK's `setupx.lib`, an import library (OMF records naming module `SETUPX` and its exports, no code), so the image holds module-and-ordinal imports of the running system's `SETUPX.DLL` and no Microsoft code; compiled against that DDK's `inc16\setupx.h`, the `prsht.h` it includes and its 98 `windows.h` (the four members in `docs/references/README.md`, "Windows 98 DDK"); section 2a, "XHCIDI.EXE" (task 42-A.1) |
+| Published 98 SE and ME IOS layer for Stor98's disks | Yes, from `3.2.0.0` (cut 2026-10-24) | `releases/<version>/release-x86/S98VSD.VXD` and the other x86 flavour directories beside `stor98.mpd` | This project's sources alone (design record 30 section 6): Open Watcom 2.0's compiler with no runtime (`-zl`, no library), linked by the Windows 98 SE DDK's `LINK.EXE` 5.12, which adds its MS-DOS stub and `Rich` record of tool identifiers as Microsoft's linkers do to every PE driver of this package; compiled against ten of that DDK's headers (`docs/references/README.md`, "Windows 98 DDK"), none of whose text the image holds; GPL-2.0 like the rest of this project |
+| Oney, *Programming the Microsoft Windows Driver Model* (2nd ed., 2003) | No, never; in no commit and no directory of this repository | A purchased book on the reader's own shelf | The one third-party document cited by printed page that is not in `docs/references/`; edition, page count, SHA-256 of the copy read and the page-index offset are in `docs/references/README.md`. No fetch URL: there is no download |
 | ReactOS / Linux / FreeBSD / Haiku source mirrors | No | `external/` (git-ignored) | Fetch procedure and pinned commits in `external/README.md` |
-| `usbport.sys`, `usbhub20.sys`, NUSB 3.3, MSVC 6.0, the Win2000 DDK | No | `tools/` (git-ignored) | Supplied by the user's own install media or download |
-| WDK 7.1 (7600.16385.1) | No | `tools/WinDDK71/` (git-ignored) | Supplied by the user's own download. It is the amd64 build's whole toolchain - no compiler in this tree older than its `cl` 15.00 can target x64 - and, since task 36.15, the x86 MSI helper's (`xhcimsi.sys`, Vista target, design record 18 section 8.1), whose `wlh\i386` import library and headers are the only ones in this tree that declare `IoConnectInterruptEx` - since task 38.3 the x86 helper's as `xhcihlpr.sys`, built for the Windows XP target from `lib\wxp\i386` at subsystem 5.00 (record 18 section 15.10), asking `MmGetSystemRoutineAddress` for that pair instead of importing it - and the source of `kd.exe -z`, which is how the amd64 static readings of section 4 were taken. Since 2026-10-11 also the source of `MakeCert.exe`, `pvk2pfx.exe` and `SignTool.exe` (`bin/x86`), used in place to make the project test certificate and to sign the x64 binaries at each cut (design record 19); they are used, not redistributed |
-| The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies, staged from the user's own install media for the import gate's Windows 98 evidence and the Windows 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0 and carries them no longer; see section 5 |
-| Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies only; see section 4 |
-| Windows 8 and 8.1 files read for roadmap-usb4 task 43.26 (the USB drivers, `usbd.sys`, `Wdf01000.sys`, `usbui.dll`, `ci.dll`, `ntoskrnl.exe`, every `Windows\inf\*.inf`), Microsoft's PDBs for them, and the mingw-w64 headers used for the Windows 8 constants | No, and in no directory of this repository | A scratch directory outside the repository on the development host (owner, 2026-10-21: scratch material off the tree) | The Windows files are Microsoft's, taken with `7z e` from `sources\install.wim` of the owner's own install media (named in design record 13 section 6.12, whose table gives the version, size and SHA-256 of each file it reads; `ci.dll`, `ntoskrnl.exe` and the INFs outside that table were collected for the sweep or for later and are not identified there); the PDBs are Microsoft's public symbols as msdl serves them; nothing from either was executed. The mingw-w64 headers (`usb.h`, `usbioctl.h`, `usbiodef.h`, `usbbusif.h`, `usbdlib.h`, `hubbusif.h`, `usbspec.h`) were fetched from `https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/mingw-w64-headers/` at commit `62891fa4bf507d674c8c48822b596560b7cb506d`, each carrying the line "This file is part of the mingw-w64 runtime package" and referring to that package's `DISCLAIMER`; only constants are taken from them. Section 4, the 43.26 rows |
-| Windows 8 and 8.1 files read for roadmap-usb4 task 43.25 (`shell32.dll`, `hotplug.dll`, `usbui.dll`, their `en-US` MUI files, every `System32\en-US\*.mui` of the 8 x86 image for a text search, and the `SOFTWARE` hive) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from `sources\install.wim` of the owner's own install media (the 8 x86 and 8.1 x64 media of design record 13 section 6.12; section 6.12.11's table gives the version, size and SHA-256 of each file it reads); nothing was executed | Section 4, the 43.25 rows |
-| Windows 10 22H2 files read for roadmap-usb4 task 43.33 (the USB drivers, `usbd.sys`, `Wdf01000.sys`, `usbui.dll`, `shell32.dll`, `UsbTask.dll`, `UsbSettingsHandlers.dll`, `hotplug.dll`, their `en-US` MUI files, every `Windows\INF\*.inf` of both images and every `System32\en-US\*.mui` of the x64 image) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from the two Windows 10 22H2 guest images of task 43.32 (installed from the owner's own media, named in design record 13 section 6.14, whose table gives the version, size and SHA-256 of each file it reads); nothing was executed | Section 4, the 43.33 rows |
-| Windows 2000 SP4 and XP SP3 files read for roadmap-usb4 task 44.81 (`usbui.dll` and `usbport.sys` of each) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with 7-Zip from `driver.cab`, `sp4.cab` and `sp3.cab` in the `Driver Cache\i386` folders of the project's clean q35 guest images of 2000 SP4 and XP SP3 (installed from the owner's own media); 2000 `usbui.dll` 59,664 bytes, SHA-256 `fc106598c6b2fe8a128e1753099b916662225ccf1aed5addd0e23399b4011313`; XP SP3 `usbui.dll` 74,240 bytes, `82076e04f96b30693f61f0373e17cb8f6d9ca4a7b6ba819679435472c3c7c6a8`; 2000 SP4 `usbport.sys` 138,288 bytes, `22388c0e5ecb8840027559b1b1fbe0d7af9f1c87741a222b3d55772ada91b53f` (the same as `tools\win2ksp4-extracted\USBPORT.SYS`); nothing was executed | Section 4, the 44.81 row |
-| Intel's Thunderbolt driver packages read for roadmap-usb4 task 43.33 (c): 17.4.77.13 (`tbt100x.inf`), DCH 1.41.1379.0 and 1.41.1423.0 (`TbtHostController.inf` and its component INFs) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Intel's, signed by Microsoft's hardware publisher, downloaded on 2026-10-22 from the Microsoft Update Catalog (`catalog.s.download.windowsupdate.com`, update ids `98f33697-c606-43f9-821f-2854d66e5356`, `8c2262db-9cdc-4046-9c9d-6de1311d47cf` and `5854aaf0-891a-4a64-a6ee-ba6466cdd48a`; the three `.cab` files' SHA-256 `aa2beb6dce0e3bd819b055feacfe888261729836bcc44e06518ae9f4b8aa9078`, `d01be65779f2e26ea6c07e4db2f4e0b8bb3a99d5f64aabada8828ac0969eb1c6` and `965d8184f96958b22e305aa29c001aa353f76881f8ed7ece4ef40c020875ddfc`), unpacked with 7-Zip; only the INF text was read and nothing was executed | Section 4, the 43.33 rows |
-| Windows 7, 8 and 8.1 storage files read for roadmap-usb4 task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `storport.sys`, `partmgr.sys`, `ntoskrnl.exe`, `hal.dll`, 8.1's `stornvme.sys`, and `stornvme.inf`, `disk.inf` and `mshdc.inf`) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from `sources\install.wim` of the owner's own install media (the three named in the 43.26 row, and `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` for 7 x64's `scsiport.sys`, `Classpnp.sys` and `disk.sys`); the version, size and SHA-256 of each file a fact rests on are in `docs/contributing/runs/run-43.md`, "43.23"; nothing executed. Section 4, the 43.23 rows |
-| Windows 10 storage files read for roadmap-usb4 task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `stornvme.sys`, `ntoskrnl.exe`, `hal.dll`, `stornvme.inf` and `scsidev.inf` of 10 22H2 x86 and x64) | No, and in no directory of this repository | A scratch directory outside the repository on the development host | Microsoft's, taken with `7z e` from the `Windows` tree of the powered-off pristine `w10x86` and `w10x64` VM images, which were installed from the owner's own Windows 10 22H2 media; the version, size and SHA-256 of each file a fact rests on are in `docs/contributing/runs/run-43.md`, "43.23", "Windows 10"; nothing executed. Section 4, the 43.23 rows |
-| Staged install media | No | `out/` (git-ignored) | Generated; the upload set for a release is assembled here |
-| NUSB 3.3's Windows 98 SE storage files (`USBSTOR.INF`, `USBSTOR.SYS`, `USBNTMAP.INF`, `USBNTMAP.SYS`, `USBMPHLP.PDR`, `USBAUTH.SYS`, `USBU2A.SYS`) and their `nusb33/NOTICE.md` | No, and never; from task 43.3 a cut is refused whose `releases/` tree or tracked files hold any of the seven names | The owner's separate repository `usb-wdm-nonfree`, `nusb33/w98se/` (kept apart from its `non-free/` since 2026-10-22); copied at packaging time into `out/` and the upload set only, from `3.2.0.0` | Microsoft's, apart from `USBU2A.SYS` ("USB Compliance"), unmodified from NUSB 3.3; not this project's work, and no licence to redistribute them has been established. The decision, the channel and each file's evidence are in section 5, "NUSB 3.3's Windows 98 SE storage files" |
-| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/` and `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0`; see "The bundled Stor98 build" below. Since 2026-10-19 the release folders they are copied from are tracked, as part of `src/stor98/` (the next row); the copies in `out/` are not |
-| Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there; see "Stor98 in this tree" below |
-| The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched on 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; its identity, SHA-256, source URL and the licence it states are in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed; nothing in it was executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are what is taken from it (section 4, the CONFIGMG row) |
+| `usbport.sys`, `usbhub20.sys`, NUSB 3.3, MSVC 6.0, the Win2000 DDK | No | `tools/` (git-ignored) | From the user's own install media or download |
+| WDK 7.1 (7600.16385.1) | No | `tools/WinDDK71/` (git-ignored) | From the user's own download. The amd64 build's whole toolchain (no compiler here older than its `cl` 15.00 targets x64); since task 36.15 the x86 MSI helper's (`xhcimsi.sys`, Vista target, record 18 section 8.1; its `wlh\i386` import library and headers are the only ones here declaring `IoConnectInterruptEx`), since task 38.3 the helper's as `xhcihlpr.sys` (XP target, `lib\wxp\i386`, subsystem 5.00, record 18 section 15.10, asking `MmGetSystemRoutineAddress` for that pair instead of importing it); the source of `kd.exe -z` for section 4's amd64 static readings; since 2026-10-11 of `MakeCert.exe`, `pvk2pfx.exe` and `SignTool.exe` (`bin/x86`), used in place for the test certificate and the x64 signing (record 19), not redistributed |
+| The two `usbd.sys` builds and Windows 98 SE's `usbhub.sys` | No | `tools/` (git-ignored) | Reference copies from the user's own install media, for the import gate's Windows 98 evidence and the 2000 VM setup. The assembled release download carried them from 0.0.0.4 to 1.0.0.0, no longer; section 5 |
+| Disassembly extracts taken from those binaries | No | `tools/*-extracted/` (git-ignored) | Convenience copies; section 4 |
+| Windows 8 and 8.1 files for task 43.26 (the USB drivers, `usbd.sys`, `Wdf01000.sys`, `usbui.dll`, `ci.dll`, `ntoskrnl.exe`, every `Windows\inf\*.inf`), their Microsoft PDBs, and the mingw-w64 headers for the Windows 8 constants | No, in no directory of this repository | Scratch outside the repository on the development host (owner, 2026-10-21: scratch material off the tree) | Microsoft's, by `7z e` from `sources\install.wim` of the owner's own media (design record 13 section 6.12, whose table gives version, size and SHA-256 of each file it reads; `ci.dll`, `ntoskrnl.exe` and the INFs outside that table, collected for the sweep or for later, are not identified there); the PDBs are Microsoft's public symbols as msdl serves them; nothing from either executed. The mingw-w64 headers (`usb.h`, `usbioctl.h`, `usbiodef.h`, `usbbusif.h`, `usbdlib.h`, `hubbusif.h`, `usbspec.h`) from `https://raw.githubusercontent.com/mingw-w64/mingw-w64/master/mingw-w64-headers/` at commit `62891fa4bf507d674c8c48822b596560b7cb506d`, each carrying the line "This file is part of the mingw-w64 runtime package" and referring to that package's `DISCLAIMER`; only constants taken. Section 4, the 43.26 rows |
+| Windows 8 and 8.1 files for task 43.25 (`shell32.dll`, `hotplug.dll`, `usbui.dll`, their `en-US` MUI files, every `System32\en-US\*.mui` of the 8 x86 image for a text search, and the `SOFTWARE` hive) | No, in no directory of this repository | Scratch outside the repository on the development host | Microsoft's, by `7z e` from `sources\install.wim` of the owner's own 8 x86 and 8.1 x64 media (record 13 section 6.12; section 6.12.11's table gives version, size and SHA-256 of each file it reads); nothing executed. Section 4, the 43.25 rows |
+| Windows 10 22H2 files for task 43.33 (the USB drivers, `usbd.sys`, `Wdf01000.sys`, `usbui.dll`, `shell32.dll`, `UsbTask.dll`, `UsbSettingsHandlers.dll`, `hotplug.dll`, their `en-US` MUI files, every `Windows\INF\*.inf` of both images, every `System32\en-US\*.mui` of the x64 image) | No, in no directory of this repository | Scratch outside the repository on the development host | Microsoft's, by `7z e` from the two 10 22H2 guest images of task 43.32 (installed from the owner's own media; record 13 section 6.14, whose table gives version, size and SHA-256 of each file it reads); nothing executed. Section 4, the 43.33 rows |
+| Windows 2000 SP4 and XP SP3 files for task 44.81 (`usbui.dll` and `usbport.sys` of each) | No, in no directory of this repository | Scratch outside the repository on the development host | Microsoft's, by 7-Zip from `driver.cab`, `sp4.cab` and `sp3.cab` in `Driver Cache\i386` of the project's clean q35 2000 SP4 and XP SP3 guest images (owner's own media). 2000 `usbui.dll` 59,664 bytes, SHA-256 `fc106598c6b2fe8a128e1753099b916662225ccf1aed5addd0e23399b4011313`; XP SP3 `usbui.dll` 74,240 bytes, `82076e04f96b30693f61f0373e17cb8f6d9ca4a7b6ba819679435472c3c7c6a8`; 2000 SP4 `usbport.sys` 138,288 bytes, `22388c0e5ecb8840027559b1b1fbe0d7af9f1c87741a222b3d55772ada91b53f` (the same as `tools\win2ksp4-extracted\USBPORT.SYS`); nothing executed. Section 4, the 44.81 row |
+| Intel's Thunderbolt driver packages for task 43.33 (c): 17.4.77.13 (`tbt100x.inf`), DCH 1.41.1379.0 and 1.41.1423.0 (`TbtHostController.inf` and its component INFs) | No, in no directory of this repository | Scratch outside the repository on the development host | Intel's, signed by Microsoft's hardware publisher, downloaded 2026-10-22 from the Microsoft Update Catalog (`catalog.s.download.windowsupdate.com`, update ids `98f33697-c606-43f9-821f-2854d66e5356`, `8c2262db-9cdc-4046-9c9d-6de1311d47cf`, `5854aaf0-891a-4a64-a6ee-ba6466cdd48a`; the three `.cab` files' SHA-256 `aa2beb6dce0e3bd819b055feacfe888261729836bcc44e06518ae9f4b8aa9078`, `d01be65779f2e26ea6c07e4db2f4e0b8bb3a99d5f64aabada8828ac0969eb1c6`, `965d8184f96958b22e305aa29c001aa353f76881f8ed7ece4ef40c020875ddfc`), unpacked with 7-Zip; only INF text read, nothing executed. Section 4, the 43.33 rows |
+| Windows 7, 8 and 8.1 storage files for task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `storport.sys`, `partmgr.sys`, `ntoskrnl.exe`, `hal.dll`, 8.1's `stornvme.sys`, and `stornvme.inf`, `disk.inf`, `mshdc.inf`) | No, in no directory of this repository | Scratch outside the repository on the development host | Microsoft's, by `7z e` from `sources\install.wim` of the owner's own media (the three of the 43.26 row, and `en_windows_7_professional_with_sp1_vl_build_x64_dvd_u_677791.iso` for 7 x64's `scsiport.sys`, `Classpnp.sys`, `disk.sys`); version, size and SHA-256 of each file a fact rests on in `docs/contributing/runs/run-43.md`, "43.23"; nothing executed. Section 4, the 43.23 rows |
+| Windows 10 storage files for task 43.23 (`scsiport.sys`, `Classpnp.sys`, `disk.sys`, `stornvme.sys`, `ntoskrnl.exe`, `hal.dll`, `stornvme.inf`, `scsidev.inf` of 10 22H2 x86 and x64) | No, in no directory of this repository | Scratch outside the repository on the development host | Microsoft's, by `7z e` from the `Windows` tree of the powered-off pristine `w10x86` and `w10x64` images (installed from the owner's own 10 22H2 media); version, size and SHA-256 of each file a fact rests on in `docs/contributing/runs/run-43.md`, "43.23", "Windows 10"; nothing executed. Section 4, the 43.23 rows |
+| Staged install media | No | `out/` (git-ignored) | Generated; the release upload set is assembled here |
+| NUSB 3.3's Windows 98 SE storage files (`USBSTOR.INF`, `USBSTOR.SYS`, `USBNTMAP.INF`, `USBNTMAP.SYS`, `USBMPHLP.PDR`, `USBAUTH.SYS`, `USBU2A.SYS`) and their `nusb33/NOTICE.md` | No, never; from task 43.3 a cut is refused whose `releases/` tree or tracked files hold any of the seven names | The owner's separate repository `usb-wdm-nonfree`, `nusb33/w98se/` (kept apart from its `non-free/` since 2026-10-22); copied at packaging time into `out/` and the upload set only, from `3.2.0.0` | Microsoft's, apart from `USBU2A.SYS` ("USB Compliance"), unmodified from NUSB 3.3; not this project's work; no licence to redistribute them has been established. The decision, the channel and each file's evidence: section 5, "NUSB 3.3's Windows 98 SE storage files" |
+| Stor98 release builds (BSD-3-Clause) | No | Copied at packaging time from the pinned Stor98 release folder into `out/` (the package and the upload set's `release-x86/`, `release-x64/`); never into `releases/` | A separate project's released binaries, bundled unchanged from `3.0.0.0` ("The bundled Stor98 build"). Since 2026-10-19 the release folders they come from are tracked in `src/stor98/` (next row); the copies in `out/` are not |
+| Stor98, its source, docs, tests and released builds (BSD-3-Clause) | Yes, from 2026-10-19 (roadmap-usb4 task 42-A.20) | `src/stor98/` | The Stor98 project's tracked files, imported as one snapshot (owner, 2026-10-19). Not this project's GPL-2.0 code: Stor98's own `LICENSE` and `NOTICE` govern every file there ("Stor98 in this tree") |
+| The Windows 98 Second Edition DDK (`win98se_ddk.exe`) | No | `tools/win98ddk/`, extracted into `tools/win98ddk-extracted/` (git-ignored) | Fetched 2026-10-15 from the Internet Archive for roadmap-usb4 task 39-0.3; identity, SHA-256, source URL and stated licence in `docs/references/README.md`, "Windows 98 DDK". Extracted with 7-Zip, not installed, nothing in it executed. The CONFIGMG and VMM values of `src/cm/cm_cfgmg.h` are taken from it (section 4, the CONFIGMG row) |
 | Source files from `usb4-emu`'s `tools/usb4cm` (MIT) | Yes, from the change that lifts the first of them (roadmap-usb4 task 39-A.2) | `src/cm/` | Not only this project's code: which files, their notices and the rule a lifted file follows are in section 2a, "Source files lifted from `usb4cm`" |
 
-Three of the git-ignored trees exist for this reason rather than for tidiness:
-`docs/references/`, `external/` and `tools/` hold third-party material, and
-tracking it is what this project does not do. The Oney row is the same rule
-reached from the other side: a document this project never held in the tree
-still gets its identity written down, because the alternative is a `p.N`
-citation a reader cannot resolve. `out/`, `vm/` and `scripts/local/` are
-ignored because they are generated or host-specific; `out/` additionally
-because the release upload set is assembled there.
+`docs/references/`, `external/` and `tools/` are git-ignored because they
+hold third-party material, which this project does not track (`AGENTS.md`,
+"Third-Party Material and Provenance"); the Oney row records a document
+never held in the tree so that a `p.N` citation can be resolved. `out/`,
+`vm/` and `scripts/local/` are ignored because they are generated or
+host-specific; `out/` also because the release upload set is assembled
+there.
 
-"Not tracked" is a statement about this repository. It is not a statement
-that a file is never distributed, and the distinction mattered for three
-files, `usbd98.sys`, `usbd2k.sys` and `usbhub98.sys`, while the assembled
-asset carried them; see section 5.
+"Not tracked" is a statement about this repository, not that a file is
+never distributed: the distinction mattered for `usbd98.sys`, `usbd2k.sys`
+and `usbhub98.sys` while the assembled asset carried them (section 5).
 
-The rule this implies for future work: a fact may be tracked; the source
-document or binary it was read out of may not. Where a fact would be
-unre-derivable without the source, the document that records it also records
-how to re-derive it (the address, the instruction, the command), so a clone
-with none of the inputs can still check the claim.
+A fact may be tracked; the document or binary it was read out of may not.
+Where a fact cannot be re-derived without the source, the document recording
+it also records how to re-derive it (the address, the instruction, the
+command), so a clone with none of the inputs can check the claim;
 `docs/usb-xhci-info/usbport-miniport-abi.md` does this at length.
 
 ### 2a. The tracked binaries that are not only ours
 
-There are two, from `2.4.0.0` four, and from `3.0.0.0` eight. All are tools rather than the
-drivers, and all are the exception to the row above saying this project tracks
-only its own code: `releases/<version>/tools/xhciqual/XHCIQUAL.EXE` and
-`releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (at the version root,
-without `tools/`, in a release before 2.4.0.0; roadmap-hcd task 38.9), and
-from `2.4.0.0` to `3.2.0.0` `releases/<version>/tools/xhcicln/XHCICLN.EXE`
-and `XHCICL64.EXE` (roadmap-hcd task 38.8), and from `3.0.0.0`
-`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE`
-(roadmap-usb4 task 40.4, numbered 40.5 before 2026-10-16) and
-`releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE`
-(roadmap-usb4 Phase 41). They are not the same case: the
-qualifier carries an embedded DOS extender and an Open Watcom runtime, the
-reader, the cleanup tool, the install tool and the USB tree tool statically
-linked Microsoft C runtimes. From `3.1.0.0`, once cut, a ninth joins them,
-`releases/<version>/tools/xhciinst/XHCIDI.EXE` (roadmap-usb4 task 42-A.1),
-with an Open Watcom 16-bit runtime ("XHCIDI.EXE" below).
+These are the exception to section 2's rule that this project tracks only
+its own code. All are tools, not drivers: two until `2.4.0.0`, four from
+it, eight from `3.0.0.0`, and from `3.1.0.0` (cut 2026-10-19) a ninth (`XHCIDI.EXE`). In a
+release before `2.4.0.0` the qualifier and the reader sit at the version
+root without `tools/` (roadmap-hcd task 38.9). The tasks that added them:
+the cleanup tool roadmap-hcd 38.8; the install tool roadmap-usb4 40.4
+(numbered 40.5 before 2026-10-16); the USB tree tool roadmap-usb4 Phase 41;
+`XHCIDI.EXE` roadmap-usb4 42-A.1. Where a subsection says "this project's
+GPL-2.0-only code" it describes an executable of a release up to
+`3.2.0.0`; the same executable of a later release carries this project's
+code under GPL-2.0-or-later (section 2), with the same third-party runtimes.
 
-This project's own code was GPL-2.0-only in every release up to `3.2.0.0`
-and is GPL-2.0-or-later from 2026-10-26 (roadmap-usb4 task 44.38), the
-first release so licensed being `3.3.0.0`. Where a subsection below says
-"this project's GPL-2.0-only code", it describes an executable published
-in a release up to `3.2.0.0`; the same executable of a later release
-carries this project's code under GPL-2.0-or-later, with the same
-third-party runtimes.
+This section also records source files of this project that carry code
+taken from elsewhere, each with its notices. For the Thunderbolt and USB4
+work (`src/cm/`) there are two kinds: files lifted from `usb4-emu`'s
+`tools/usb4cm` while it was MIT (keeping the MIT notice of the commit they
+came from), and, since 2026-10-15, files adapted under section 3's rule for
+the Thunderbolt and USB4 mirrors from `usb4-emu` (`3c74189` or later,
+GPL-2.0-only), Linux `drivers/thunderbolt`, FreeBSD `sys/dev/thunderbolt`
+or Intel's tbtools data, one entry per file added in the change that adapts
+it (`AGENTS.md`, "Reference Implementations", for what an entry names).
+Since 2026-10-26 (task 44.38) no portion adapted from Linux remains; "Rewritten
+from" below records what each was rewritten from.
 
-This section also records the other way third-party code enters the
-tree: source files of this project that carry code taken from elsewhere,
-each with its notices. For the Thunderbolt and USB4 work (`src/cm/`) there
-are two kinds. The first is the files lifted from `usb4-emu`'s
-`tools/usb4cm` while that repository was MIT ("Source files lifted from
-`usb4cm`" below), which keep the MIT notice of the commit they came from.
-The second, since 2026-10-15, is any file adapted under section 3's rule
-for the Thunderbolt and USB4 mirrors from `usb4-emu` (at `3c74189` or
-later, GPL-2.0-only), from Linux `drivers/thunderbolt`, from FreeBSD
-`sys/dev/thunderbolt` or from Intel's tbtools data ("Source files adapted
-for the Thunderbolt and USB4 work" below): one entry per file, naming the
-source file, the pinned commit actually read and what was adapted, added
-in the change that adapts it. Since 2026-10-26 (task 44.38) no portion
-adapted from Linux remains: those portions were rewritten from the
-specifications, and the subsection records what each was rewritten from.
+"Static" below means read from the linker map or the import table; nothing
+was executed. The MSVC 6.0 runtime comes from the MSVC 6.0 installation used
+in place out of `tools/MSVC600` (untracked, section 2). Nothing of either
+runtime's terms is quoted here; the linkage is the fact.
+
+| Tool | Built by, from (this project's own text) | Third-party code in the image | Re-derivable by | Run-time lookups and notice |
+|---|---|---|---|---|
+| `releases/<version>/tools/xhcisnap/XHCISNAP.EXE` (Windows console reader) | `xhcisnap/build.cmd`, from `xhcisnap/xhcisnap.c` alone | MSVC 6.0 C runtime, static (`cl /nologo /W3 /WX /O2`, no `/MD`), bound into the image rather than reached through `MSVCRT.DLL`; intentional, so the tool is one file that runs on a Windows 98 SE machine with nothing installed, the machine it exists for. No DOS extender and no Open Watcom code: an ordinary Win32 console PE, so the qualifier's two items have no counterpart and its `NOTICE.TXT` is not this one | `link -dump -imports XHCISNAP.EXE`: `KERNEL32.dll`, `ADVAPI32.dll`, no C runtime DLL | `scripts/package/make-release.ps1` generates `NOTICE.TXT` beside it recording the linkage, as for the qualifier; both notices are generated at every cut, so a published directory carries the one for each tool it holds. No text from the runtime's product is reproduced anywhere in this tree |
+| `releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` (optional cleanup tool, `2.4.0.0` to `3.2.0.0`; design record 13 section 10.13.8) | `xhcicln/build.cmd`, from `xhcicln/xhcicln.c` alone, with `xhcicln/xhcicln.rc` embedding `xhcicln/xhcicln.manifest` | `XHCICLN.EXE`: MSVC 6.0 C runtime, static, exactly as `XHCISNAP.EXE` (`cl /nologo /W3 /WX /O2`, no `/MD`). `XHCICL64.EXE`: WDK 7.1 amd64 C runtime (`LIBCMT`, from untracked `tools/WinDDK71/lib/crt/amd64`), static (WDK 7.1's `cl`, `/MT`) | `link -dump -imports`: `KERNEL32.dll`, `ADVAPI32.dll`, no C runtime DLL (`XHCICL64.EXE` read 2026-10-14 with WDK 7.1's `link /dump /imports`) | every SetupAPI and configuration-manager routine either calls is looked up at run time from the system's own `setupapi.dll` and `cfgmgr32.dll`, not linked, shipped or tracked; one `NOTICE.TXT` beside the two records both linkages. Dropped in `3.3.0.0` (task 44.82), its source gone from the tree, so these `xhcicln/` paths are the `3.2.0.0` tree's; the copies published up to `3.2.0.0` stay |
+| `releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE` (install, update and uninstall tool of `3.0.0.0`; design record 23) | `xhciinst/build.cmd`, from `xhciinst/xhciinst.c`, `xhciinst/inst_core.c` and `src/xhci_psw.c` (the driver's own port-switchover gate), with `xhciinst/xhciinst.rc` embedding `xhciinst/xhciinst.manifest`; from `3.1.0.0` (`roadmap-usb4.md` task 42-A.2, design record 23 revision 11) from `xhciinst/inst_eng.c` (the engine) and `xhciinst/xhciinst.c` (its console front end), the same linkages | in exactly `XHCICLN`'s way: `XHCIINST.EXE` MSVC 6.0 C runtime, static (`cl /nologo /W3 /WX /O2`, no `/MD`); `XHCIIN64.EXE` WDK 7.1 amd64 C runtime (`LIBCMT`), static (`/MT`) | `link -dump -imports XHCIINST.EXE`: `KERNEL32.dll`, `ADVAPI32.dll`, no C runtime DLL, checked by `xhciinst/selftest.cmd` at every build; `XHCIIN64.EXE`'s, read the same way with WDK 7.1's `link`, names the same two | every SetupAPI, `newdev.dll`, configuration-manager and `version.dll` routine either calls is looked up at run time from the system's own DLLs, not linked, shipped or tracked; neither contains or runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged at the version root, is this project's own text. One `NOTICE.TXT` beside the two records both linkages, as for `XHCICLN` |
+| `releases/<version>/tools/xhciinst/XHCIWIZ.EXE` and `XHCIWZ64.EXE` (the installer's window, from `3.1.0.0`; design record 26) | `xhciinst/build.cmd`, from `xhciinst/xhciwiz.c`, `xhciinst/wiz_lay.c` (from `3.2.0.0`), `xhciinst/inst_eng.c`, `xhciinst/inst_core.c` and `src/xhci_psw.c`, with `xhciinst/xhciwiz.rc` embedding `xhciinst/xhciwiz.manifest` and `xhcitr/xhcitr.ico` (XHCITR's icon, drawn for this project in the 16 VGA colours) | in `XHCITR`'s way: `XHCIWIZ.EXE` MSVC 6.0 C runtime, static multithreaded (`cl /nologo /W3 /WX /O2 /MT`, `LIBCMT`); `XHCIWZ64.EXE` WDK 7.1 amd64 C runtime (`LIBCMT`), static (`/MT`) | `link -dump -imports XHCIWIZ.EXE`: `KERNEL32.dll`, `USER32.dll`, `GDI32.dll`, `ADVAPI32.dll`, `COMCTL32.dll`, `COMDLG32.dll`, `SHELL32.dll`, no C runtime DLL, checked by `xhciinst/selftest.cmd` at every build; `XHCIWZ64.EXE`'s names the same seven | as for the console pair: every SetupAPI, `newdev.dll`, configuration-manager and `version.dll` routine is looked up at run time; neither contains or runs a Microsoft setup program. The one `NOTICE.TXT` beside the four executables records all four linkages |
+| `releases/<version>/SETUP.EXE` (from `3.1.0.0`; `roadmap-usb4.md` task 42-A.31, design record 26 section 2: starts the installer's window and exits) | `xhciinst/build.cmd`, from `xhciinst/setup.c`, with `xhciinst/setup.rc` embedding `xhciinst/setup.manifest` and `xhcitr/xhcitr.ico` (the xHCI98 USB Tree's icon, drawn for this project) | MSVC 6.0 C runtime, static (`cl /nologo /W3 /WX /O2`, `LIBC`) | `link -dump -imports SETUP.EXE`: `KERNEL32.dll`, `USER32.dll`, `SHELL32.dll`, no C runtime DLL, checked by `xhciinst/selftest.cmd` at every build | contains and runs no Microsoft setup program; the `NOTICE.TXT` in `tools/xhciinst/` records its linkage with the others' |
+| `releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` (the xHCI98 USB Tree of `3.0.0.0`; roadmap-usb4 Phase 41, design record 25) | `xhcitr/build.cmd`, from `xhcitr/xhcitr.c`, `tr_core.c`, `tr_log.c`, `tr_pci.c` and `xhciinst/inst_core.c`, with `xhcitr/xhcitr.rc` embedding `xhcitr/xhcitr.manifest` and `xhcitr/xhcitr.ico` (drawn for this project), and from `3.2.0.0` `xhcitr/xhcitr-f.ico` (the same icon with its controller's blue painted red; record 25 section 7.7) | in exactly `XHCIINST`'s way: `XHCITR.EXE` MSVC 6.0 C runtime, static (`cl /nologo /W3 /WX /O2`, no `/MD`, `/SUBSYSTEM:WINDOWS,4.0`); `XHCITR64.EXE` WDK 7.1 amd64 C runtime (`LIBCMT`, from untracked `tools/WinDDK71/lib/crt/amd64`), static (`/MT`) | without the toolchain: `xhcitr/check-imports.ps1`, run by `xhcitr/selftest.cmd` at every build, reads each image's import directory itself and requires exactly `KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `SHELL32`, `COMCTL32` and `COMDLG32` and no delay-load import, so no C runtime DLL | every SetupAPI and configuration-manager routine either calls is looked up at run time from the system's own DLLs, not linked, shipped or tracked; one `NOTICE.TXT` beside the two records both linkages, as for `XHCICLN` and `XHCIINST` |
+| `XHCIPERF.EXE` and `XHCIPF64.EXE` (XHCIPERF, the disk benchmark of roadmap-usb4 task 43.50, design record 29; a developer diagnostic no package carries, owner 2026-10-23: dropped from `3.2.0.0`) | `xhciperf/build.cmd`, from `xhciperf/xhciperf.c`, `pf_core.c` and `pf_s98.c`, with `xhciperf/xhciperf.rc` embedding `xhciperf/xhciperf.manifest` and `xhciperf/xhciperf.ico` (drawn for this project); compiles Stor98's interface header `src/stor98/include/stor98pf.h`, BSD-3-Clause, carried with its notice (Stor98's decision MD-8) | in `XHCITR`'s way: `XHCIPERF.EXE` MSVC 6.0 C runtime, static (`/MT`, `/SUBSYSTEM:WINDOWS,4.0`); `XHCIPF64.EXE` WDK 7.1 amd64 C runtime (`LIBCMT`) | `xhciperf/check-imports.ps1`, run by `xhciperf/selftest.cmd` at every gated build, requires exactly `KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `SHELL32`, `COMCTL32` and `COMDLG32` and no delay-load import | `WNASPI32.DLL` and `OLE32.DLL` are the system's own, loaded at run time and never shipped. ATTO Disk Benchmark and CrystalDiskMark were the owner's references for the window's layout only (record 29 section 12): neither was run, read or examined, and nothing of theirs is in these files |
+
+Stated plainly: `XHCISNAP.EXE` is a single executable combining this
+project's GPL-2.0-only code with Microsoft's Visual C++ 6.0 static C runtime,
+two licences in one file where the qualifier's three meet in the other. In
+both cases the binary was published first and its provenance written down
+afterwards, by an audit reading the linker map rather than by the cut
+itself; section 6's rule for a new tracked build output is written against
+that.
 
 #### XHCIQUAL.EXE
 
-`releases/<version>/tools/xhciqual/XHCIQUAL.EXE` is built from `xhciqual/`'s own C
-and assembly, but it is not only that:
+`releases/<version>/tools/xhciqual/XHCIQUAL.EXE`, built from `xhciqual/`'s
+own C and assembly, also holds:
 
-- DOS/32 Advanced DOS Extender, embedded as the executable's stub.
-  `xhciqual/makefile` links `system dos32a` and says so in its own comment:
-  "`system dos32a` embeds the full DOS/32A extender as the EXE stub ... so
-  XHCIQUAL.EXE is one standalone file - no DOS4GW.EXE to carry." The linker map
-  states it independently at its head: "creating a DOS/32 Advanced DOS Extender
-  (LE-style) executable". Static, read from the linker map and the makefile. The tracked copy of the
-  map is `releases/<version>/tools/xhciqual/XHCIQUAL.MAP`, which every release
-  stages beside the executable; `xhciqual/xhciqual.map` is the build's own
-  output and is git-ignored.
-- Open Watcom C runtime, statically linked. `XHCIQUAL.MAP` names the modules
-  individually against `C:\WATCOM\lib386\dos\clib3r.lib` (`_strcmp`,
-  `strncmp.c`, `fopen.c`, and others). Static, read from the map.
+- **DOS/32 Advanced DOS Extender, embedded as the stub.** `xhciqual/makefile`
+  links `system dos32a`; its comment: "`system dos32a` embeds the full
+  DOS/32A extender as the EXE stub ... so XHCIQUAL.EXE is one standalone
+  file - no DOS4GW.EXE to carry." The linker map's head: "creating a DOS/32
+  Advanced DOS Extender (LE-style) executable". Static, from the map and the
+  makefile. The tracked map is `releases/<version>/tools/xhciqual/XHCIQUAL.MAP`,
+  staged by every release beside the executable; `xhciqual/xhciqual.map` is
+  the build's output, git-ignored.
+- **Open Watcom C runtime, statically linked.** `XHCIQUAL.MAP` names the
+  modules against `C:\WATCOM\lib386\dos\clib3r.lib` (`_strcmp`,
+  `strncmp.c`, `fopen.c` and others). Static, from the map.
 
-What each one's own text says. DOS/32A ships its licence as `binw/license.d32`
-in an Open Watcom install (Copyright (C) 1996-2006 by Narech K.). Quoting it
-rather than characterising it: its clause 2 reads "Redistributions in binary
-form must reproduce the above copyright notice, this list of conditions and the
-following disclaimer in the documentation and/or other materials provided with
-the distribution", and its clause 3 reads "The end-user documentation included
-with the redistribution, if any, must include the following acknowledgment:
-'This product uses DOS/32 Advanced DOS Extender technology.'"
+DOS/32A ships its licence as `binw/license.d32` in an Open Watcom install
+(Copyright (C) 1996-2006 by Narech K.). Its clause 2: "Redistributions in
+binary form must reproduce the above copyright notice, this list of
+conditions and the following disclaimer in the documentation and/or other
+materials provided with the distribution"; its clause 3: "The end-user
+documentation included with the redistribution, if any, must include the
+following acknowledgment: 'This product uses DOS/32 Advanced DOS Extender
+technology.'" Open Watcom is distributed under the Sybase Open Watcom Public
+License.
 
-The first two cuts carried neither of those texts in the release directory,
-naming only this project's own licence. `scripts/package/make-release.ps1` now
-generates `NOTICE.TXT` beside the executable reproducing the licence text in
-full, including the acknowledgement sentence, and the qualifier's own readme
-points at it.
-
-For the Open Watcom runtime, `NOTICE.TXT` records the linkage and reproduces
-the copyright lines the linker writes at the head of the map. Open Watcom is
-distributed under the Sybase Open Watcom Public License.
-
-Stated plainly: `XHCIQUAL.EXE` is a single executable combining this project's
-GPL-2.0-only code, the DOS/32A extender as its stub, and the Open Watcom C
-runtime. Three licences meet in one file (this project's, DOS/32A's and Open
-Watcom's), and what ships beside it is `NOTICE.TXT`, reproducing the DOS/32A
-text in full and recording the Watcom linkage. That composition is what this
-section records; it draws no conclusion from it.
+The first two cuts carried neither text, naming only this project's
+licence. `scripts/package/make-release.ps1` now generates `NOTICE.TXT`
+beside the executable reproducing the DOS/32A licence in full, the acknowledgement
+included, and recording the Open Watcom linkage with the copyright lines the
+linker writes at the head of the map; the qualifier's readme points at it.
+Stated plainly: one executable combining this project's GPL-2.0-only code,
+the DOS/32A stub and the Open Watcom runtime, three licences in one file.
+That composition is what this section records; it draws no conclusion from
+it.
 
 #### XHCISNAP.EXE
 
-`releases/<version>/tools/xhcisnap/XHCISNAP.EXE` is the Windows console reader. It
-is built from `xhcisnap/xhcisnap.c` alone, but like the qualifier it is not
-only that:
-
-- Microsoft Visual C++ 6.0 C runtime, statically linked. `xhcisnap/build.cmd`
-  compiles with `cl /nologo /W3 /WX /O2` and no `/MD`, so MSVC 6.0's default
-  static runtime is bound into the image rather than reached through
-  `MSVCRT.DLL` at run time. Static, and re-derivable without the toolchain
-  that produced it: `link -dump -imports XHCISNAP.EXE` names `KERNEL32.dll`
-  and `ADVAPI32.dll` and no C runtime DLL at all. The static link is
-  intentional: it is what makes the tool one file that runs on a Windows 98
-  SE machine with nothing installed on it, which is the machine it exists for.
-- No DOS extender and no Open Watcom code. It is an ordinary Win32 console
-  PE, so the qualifier's two items have no counterpart here and its
-  `NOTICE.TXT` is not this one.
-
-What its own text says: nothing is quoted here, and no text from that product
-is reproduced anywhere in this tree. The runtime modules come from the MSVC
-6.0 installation this repository uses in place out of `tools/MSVC600`, itself
-untracked third-party material (section 2's row). The linkage is the fact;
-`scripts/package/make-release.ps1` generates `NOTICE.TXT` beside the
-executable recording it, in the same place and for the same reason as the
-qualifier's. Both notices are generated at every cut, so a published directory
-carries the one for each tool it holds.
+In the table above.
 
 #### XHCICLN.EXE and XHCICL64.EXE
 
-`releases/<version>/tools/xhcicln/XHCICLN.EXE` and `XHCICL64.EXE` are the
-optional cleanup tool of `2.4.0.0` to `3.2.0.0` (design record 13 section
-10.13.8), both built from `xhcicln/xhcicln.c` alone, with
-`xhcicln/xhcicln.rc` embedding `xhcicln/xhcicln.manifest`, this project's
-own text. Each is not only that:
-
-- `XHCICLN.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked,
-  exactly as `XHCISNAP.EXE` above. `xhcicln/build.cmd` compiles with
-  `cl /nologo /W3 /WX /O2` and no `/MD`. Static, and re-derivable:
-  `link -dump -imports XHCICLN.EXE` names `KERNEL32.dll` and `ADVAPI32.dll`
-  and no C runtime DLL.
-- `XHCICL64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`,
-  from the untracked `tools/WinDDK71/lib/crt/amd64`), statically linked:
-  `xhcicln/build.cmd` compiles with WDK 7.1's `cl` and `/MT`. Static, and
-  re-derivable the same way: the import table names `KERNEL32.dll` and
-  `ADVAPI32.dll` and no C runtime DLL (read 2026-10-14 with WDK 7.1's
-  `link /dump /imports`).
-
-Every SetupAPI and configuration-manager routine either calls is looked up
-at run time from the system's own `setupapi.dll` and `cfgmgr32.dll`, which
-are not linked, shipped or tracked. Nothing of either runtime's terms is
-quoted here. `scripts/package/make-release.ps1` generates one `NOTICE.TXT`
-beside the two recording both linkages, for the same reason as the two
-above.
-
-XHCICLN was dropped in `3.3.0.0` (roadmap-usb4 task 44.82) and its source
-left the tree, so the `xhcicln/` paths above are those of the `3.2.0.0`
-tree. The copies published up to `3.2.0.0` stay where they are.
+In the table above.
 
 #### XHCIINST.EXE and XHCIIN64.EXE
 
-`releases/<version>/tools/xhciinst/XHCIINST.EXE` and `XHCIIN64.EXE` are the
-install, update and uninstall tool of `3.0.0.0` (design record 23), built by
-`xhciinst/build.cmd` from `xhciinst/xhciinst.c`, `xhciinst/inst_core.c` and
-`src/xhci_psw.c` (the driver's own port-switchover gate), with
-`xhciinst/xhciinst.rc` embedding `xhciinst/xhciinst.manifest` - all this
-project's own text. Each is not only that, in exactly `XHCICLN`'s way:
-
-- `XHCIINST.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
-  (`cl /nologo /W3 /WX /O2`, no `/MD`). Re-derivable: `link -dump -imports
-  XHCIINST.EXE` names `KERNEL32.dll` and `ADVAPI32.dll` and no C runtime
-  DLL, which `xhciinst/selftest.cmd` checks at every build.
-- `XHCIIN64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
-  statically linked (`/MT`); its import table, read the same way with WDK
-  7.1's `link`, names the same two DLLs.
-
-Every SetupAPI, `newdev.dll`, configuration-manager and `version.dll`
-routine either calls is looked up at run time from the system's own DLLs,
-which are not linked, shipped or tracked; neither executable contains or
-runs `devcon` or any other Microsoft setup program. `INSTALL.BAT`, staged
-at the version root, is this project's own text. `make-release.ps1`
-generates one `NOTICE.TXT` beside the two executables recording both
-linkages, as for `XHCICLN`.
-
-From `3.1.0.0` (roadmap-usb4.md task 42-A.2, design record 23 revision 11)
-the same tool is built from `xhciinst/inst_eng.c` (the engine) and
-`xhciinst/xhciinst.c` (its console front end), the same linkages.
+In the table above.
 
 #### XHCIWIZ.EXE and XHCIWZ64.EXE
 
-`releases/<version>/tools/xhciinst/XHCIWIZ.EXE` and `XHCIWZ64.EXE` are the
-installer's window, from `3.1.0.0` (design record 26), built by
-`xhciinst/build.cmd` from `xhciinst/xhciwiz.c`, `xhciinst/wiz_lay.c` (from
-`3.2.0.0`), `xhciinst/inst_eng.c`, `xhciinst/inst_core.c` and
-`src/xhci_psw.c`, with `xhciinst/xhciwiz.rc`
-embedding `xhciinst/xhciwiz.manifest` and `xhcitr/xhcitr.ico` (XHCITR's
-icon, drawn for this project in the 16 VGA colours) - all this project's own
-text. Each is not only that, in `XHCITR`'s way:
-
-- `XHCIWIZ.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
-  multithreaded (`cl /nologo /W3 /WX /O2 /MT`, `LIBCMT`). Re-derivable:
-  `link -dump -imports XHCIWIZ.EXE` names `KERNEL32.dll`, `USER32.dll`,
-  `GDI32.dll`, `ADVAPI32.dll`, `COMCTL32.dll`, `COMDLG32.dll` and
-  `SHELL32.dll` and no C runtime DLL, which `xhciinst/selftest.cmd` checks
-  at every build.
-- `XHCIWZ64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`),
-  statically linked (`/MT`); its import table names the same seven DLLs.
-
-As for the console pair, every SetupAPI, `newdev.dll`,
-configuration-manager and `version.dll` routine is looked up at run time;
-neither executable contains or runs a Microsoft setup program. The one
-`NOTICE.TXT` beside the four executables records all four linkages.
+In the table above.
 
 #### SETUP.EXE
 
-`releases/<version>/SETUP.EXE`, from `3.1.0.0` (roadmap-usb4.md task
-42-A.31, design record 26 section 2), starts the installer's window and
-exits. It is built by `xhciinst/build.cmd` from `xhciinst/setup.c`, with
-`xhciinst/setup.rc` embedding `xhciinst/setup.manifest` and
-`xhcitr/xhcitr.ico` (the xHCI98 USB Tree's icon, drawn for this project) -
-all this project's own text - and the Microsoft Visual C++ 6.0 C runtime,
-statically linked (`cl /nologo /W3 /WX /O2`, `LIBC`). Re-derivable: `link
--dump -imports SETUP.EXE` names `KERNEL32.dll`, `USER32.dll` and
-`SHELL32.dll` and no C runtime DLL, which `xhciinst/selftest.cmd` checks
-at every build. It contains and runs no Microsoft setup program; the
-`NOTICE.TXT` in `tools/xhciinst/` records its linkage with the others'.
+In the table above.
 
 #### XHCIPERF.EXE and XHCIPF64.EXE
 
-`XHCIPERF.EXE` and `XHCIPF64.EXE` are XHCIPERF, the disk benchmark of
-roadmap-usb4 task 43.50 (design record 29), a developer diagnostic that no
-package carries (owner, 2026-10-23: dropped from `3.2.0.0`), built by `xhciperf/build.cmd` from `xhciperf/xhciperf.c`, `pf_core.c`
-and `pf_s98.c`, with `xhciperf/xhciperf.rc` embedding
-`xhciperf/xhciperf.manifest` and `xhciperf/xhciperf.ico`, an icon drawn for
-this project - this project's own - and compiling Stor98's interface header
-`src/stor98/include/stor98pf.h`, BSD-3-Clause, carried with its notice
-(Stor98's decision MD-8). Each is not only that, in `XHCITR`'s way: the
-Microsoft Visual C++ 6.0 C runtime statically linked into `XHCIPERF.EXE`
-(`/MT`, `/SUBSYSTEM:WINDOWS,4.0`) and the Windows Driver Kit 7.1's amd64 C
-runtime (`LIBCMT`) into `XHCIPF64.EXE`. `xhciperf/check-imports.ps1`,
-which `xhciperf/selftest.cmd` runs at every gated build, requires exactly
-`KERNEL32`, `USER32`, `GDI32`, `ADVAPI32`, `SHELL32`, `COMCTL32` and
-`COMDLG32` and no delay-load import. `WNASPI32.DLL` and `OLE32.DLL` are the
-system's own, loaded at run time and never shipped. ATTO Disk Benchmark and CrystalDiskMark were the owner's
-references for the window's layout only (record 29 section 12): neither
-was run, read or examined, and nothing of theirs is in these files.
+In the table above.
 
 #### XHCITR.EXE and XHCITR64.EXE
 
-`releases/<version>/tools/xhcitr/XHCITR.EXE` and `XHCITR64.EXE` are the
-xHCI98 USB Tree of `3.0.0.0` (roadmap-usb4 Phase 41, design record 25),
-built by `xhcitr/build.cmd` from `xhcitr/xhcitr.c`, `tr_core.c`,
-`tr_log.c`, `tr_pci.c` and `xhciinst/inst_core.c`, with `xhcitr/xhcitr.rc`
-embedding `xhcitr/xhcitr.manifest` and `xhcitr/xhcitr.ico`, an icon drawn
-for this project, and from `3.2.0.0` `xhcitr/xhcitr-f.ico`, the same icon
-with its controller's blue painted red (record 25 section 7.7) - all this
-project's own. Each is not only that, in
-exactly `XHCIINST`'s way:
-
-- `XHCITR.EXE`: the Microsoft Visual C++ 6.0 C runtime, statically linked
-  (`cl /nologo /W3 /WX /O2`, no `/MD`, `/SUBSYSTEM:WINDOWS,4.0`).
-- `XHCITR64.EXE`: the Windows Driver Kit 7.1's amd64 C runtime (`LIBCMT`,
-  from the untracked `tools/WinDDK71/lib/crt/amd64`), statically linked
-  (`/MT`).
-
-Re-derivable without the toolchain: `xhcitr/check-imports.ps1`, which
-`xhcitr/selftest.cmd` runs at every build, reads each image's import
-directory itself and requires exactly `KERNEL32`, `USER32`, `GDI32`,
-`ADVAPI32`, `SHELL32`, `COMCTL32` and `COMDLG32` and no delay-load import,
-so no C runtime DLL. Every SetupAPI and configuration-manager routine
-either calls is looked up at run time from the system's own DLLs, which
-are not linked, shipped or tracked. Nothing of either runtime's terms is
-quoted here. `make-release.ps1` generates one `NOTICE.TXT` beside the two
-executables recording both linkages, as for `XHCICLN` and `XHCIINST`.
-
-Stated plainly: `XHCISNAP.EXE` is a single executable combining this project's
-GPL-2.0-only code with Microsoft's Visual C++ 6.0 static C runtime, two
-licences meeting in one file where the qualifier's three meet in the other.
-That composition is what this subsection records.
-
-In both cases the binary was published first and its provenance written down
-afterwards, by an audit reading the linker map rather than by the cut itself.
-Section 6's rule for a new tracked build output is written against that.
+In the table above.
 
 #### XHCIDI.EXE
 
-`releases/<version>/tools/xhciinst/XHCIDI.EXE` is the Windows 98 SE and ME
-device install helper (roadmap-usb4 task 42-A.1, design record 27), from
-the first cut that carries it (`3.1.0.0`; not cut yet). It is built by
-`xhciinst/di/build.cmd` from `xhciinst/di/xhcidi.c`, `di_sys.c` and
-`di_core.c`, this project's own, with Open Watcom 2.0's 16-bit compiler for
-the Windows 3.x target in the large model. It is not only that:
+`releases/<version>/tools/xhciinst/XHCIDI.EXE`, the Windows 98 SE and ME
+device install helper (task 42-A.1, design record 27), from `3.1.0.0` (cut
+2026-10-19),
+built by `xhciinst/di/build.cmd` from `xhciinst/di/xhcidi.c`, `di_sys.c`
+and `di_core.c` (this project's own) with Open Watcom 2.0's 16-bit compiler
+for the Windows 3.x target, large model. It also holds:
 
-- The Open Watcom C runtime for 16-bit Windows, statically linked.
-  `xhciinst/di/xhcidi.map`, which the linker writes beside the image, names
-  the modules against `lib286\win\clibl.lib` (`wstart`, `cmodel`, `i4m`,
-  `i4d`, `exit.c`, `initrtns.c`, `winrtns.c` and others) and carries the
-  linker's two copyright lines at its head. Static, read from the map.
-- Microsoft's `setupx.lib` from the Windows 98 SE DDK, linked against: an
-  OMF import library whose records (an IMPDEF comment per routine) name the
-  module `SETUPX`, each routine and its ordinal, and carry no code. The
-  image therefore holds, in its NE relocation records, a module-and-ordinal
-  reference per `SETUPX.DLL` routine it calls (`SETUPX.406`,
-  `DiGetClassDevsEx`, and ten more) and no byte of the library or of the
-  headers it was compiled against (the DDK's `inc16\setupx.h`, `prsht.h`
-  and `windows.h`; `docs/references/README.md`, "Windows 98 DDK", for
-  their hashes). Re-derivable without the toolchain:
-  `xhciinst/di/check-imports.ps1` reads the image's module reference table
-  and relocation records itself and requires `KERNEL`, `USER` and `SETUPX`
-  alone, every import by ordinal, each one a row of
-  `xhciinst/di/xhcidi-imports.allow`; `check-imports.ps1 -List` prints
-  them, and `wdump -a` of Open Watcom shows the same table.
+- **The Open Watcom C runtime for 16-bit Windows, statically linked.**
+  `xhciinst/di/xhcidi.map` names the modules against `lib286\win\clibl.lib`
+  (`wstart`, `cmodel`, `i4m`, `i4d`, `exit.c`, `initrtns.c`, `winrtns.c`
+  and others) and carries the linker's two copyright lines at its head.
+  Static, from the map.
+- **Linked against Microsoft's `setupx.lib`** (Windows 98 SE DDK), an OMF
+  import library whose records (an IMPDEF comment per routine) name module
+  `SETUPX`, each routine and its ordinal, and carry no code. The image holds,
+  in its NE relocation records, a module-and-ordinal reference per
+  `SETUPX.DLL` routine called (`SETUPX.406`, `DiGetClassDevsEx` and ten
+  more) and no byte of the library or of the headers it was compiled against
+  (`inc16\setupx.h`, `prsht.h`, `windows.h`; hashes in
+  `docs/references/README.md`, "Windows 98 DDK"). Re-derivable:
+  `xhciinst/di/check-imports.ps1` reads the module reference table and
+  relocation records and requires `KERNEL`, `USER` and `SETUPX` alone, every
+  import by ordinal, each a row of `xhciinst/di/xhcidi-imports.allow`;
+  `check-imports.ps1 -List` prints them, and Open Watcom's `wdump -a` shows
+  the same table.
 
 Nothing of either's text is quoted here or shipped beyond the Watcom
 copyright lines. `make-release.ps1` adds a section for the helper to the
-`NOTICE.TXT` it writes beside the install tool in `tools/xhciinst/`, with
-the copyright lines taken from that build's `xhcidi.map` and the name of
-the Open Watcom licence, and a sentence that the image references
-`SETUPX.DLL` of the running system by ordinal and carries nothing of the
-DDK. Stated plainly: `XHCIDI.EXE` is a single executable combining this
-project's GPL-2.0-only code with the Open Watcom 16-bit C runtime, two
-licences meeting in one file, linked by ordinal to a module of the
-Windows it runs on. That composition is what this subsection records.
+`NOTICE.TXT` in `tools/xhciinst/`: the copyright lines from that build's
+`xhcidi.map`, the name of the Open Watcom licence, and a sentence that the
+image references `SETUPX.DLL` of the running system by ordinal and carries
+nothing of the DDK. Stated plainly: this project's GPL-2.0-only code with the
+Open Watcom 16-bit C runtime, two licences in one file, linked by ordinal to
+a module of the Windows it runs on.
 
 #### Source files lifted from `usb4cm` (MIT)
 
-Not a binary. This subsection records the other way third-party code
-enters a tracked file. The `usb4-emu` repository's `tools/usb4cm/` is a
-polling USB4 connection manager written for that project, and its
-`README.md` ("What xhci98 can lift") offers `core/` for lifting into this
-driver. The Thunderbolt 3 client (`xhcicm.sys`, design record 21) and the
-USB4 software connection manager after it (roadmap-usb4 Phase 40) take the
-files below. They were read at `usb4-emu` `main` commit `a68bc74`; for these
-paths that commit is identical to `eba0cf1`, the commit record 21 cites.
+`usb4-emu`'s `tools/usb4cm/` is a polling USB4 connection manager written
+for that project; its `README.md` ("What xhci98 can lift") offers `core/`
+for lifting into this driver. The Thunderbolt 3 client (`xhcicm.sys`, design
+record 21) and the USB4 software connection manager (Phase 40) take the
+files below, read at `usb4-emu` `main` commit `a68bc74` (for these paths
+identical to `eba0cf1`, the commit record 21 cites).
 
 | File (`tools/usb4cm/`) | Lines | Git blob | Origin, as its header states it | Lifted by |
 |---|---|---|---|---|
@@ -461,15 +304,14 @@ paths that commit is identical to `eba0cf1`, the commit record 21 cites.
 | `core/u4cm.c` | 754 | `826722d9c202e1b06439ddffb869c78979cd578c` | written from scratch from the Connection Manager Guide 2.0 and Specification 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
 | `core/usb4cm.h` | 224 | `6be9bab78443e7e8d6238ccf17287f7a23d9556d` | written from scratch from Specification 2.0 and the Connection Manager Guide 2.0 | Phase 40 (task 40-A.3); if taken from `3c74189` or later, entered below as an adaptation instead |
 
-Not lifted, and not to be: `dos/usb4cm.c`, a DOS front end whose build links
-the DOS/32A extender and the Open Watcom runtime; `host/cm-host-test.c`,
-which links `usb4-emu`'s QEMU fabric model; and the build scripts.
+Not lifted, and not to be: `dos/usb4cm.c` (a DOS front end whose build links
+DOS/32A and the Open Watcom runtime), `host/cm-host-test.c` (links
+`usb4-emu`'s QEMU fabric model), and the build scripts.
 
-The notices. Each of the five files opens with
-`Copyright (c) 2026 usb4-emu contributors` and
-`SPDX-License-Identifier: MIT`. The `usb4-emu` repository's `LICENSE` is the
-MIT License with the line `Copyright (c) 2026 Yeo Kheng Meng`. Its
-permission notice, which every lifted file carries in full, reads:
+The notices. Each of the five files opens with `Copyright (c) 2026 usb4-emu
+contributors` and `SPDX-License-Identifier: MIT`. `usb4-emu`'s `LICENSE`
+is the MIT License with `Copyright (c) 2026 Yeo Kheng Meng`; its
+permission notice, carried in full by every lifted file:
 
 ```text
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -491,42 +333,34 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The rule for a lifted file (design record 21 section 9):
+The rule for a lifted file (design record 21 section 9): it keeps its
+original copyright line and SPDX tag, carries the permission notice in full
+and names the `usb4-emu` path and commit it came from; a change by this
+project adds its own copyright line below the original and marks the file
+changed, with the date, never replacing the original line; `LICENSE`'s scope
+note names the lifted files in the change that lifts the first; this table
+gains the `src/cm/` path as each lands.
 
-- The file keeps its original copyright line and its SPDX tag.
-- It carries the permission notice above in full.
-- It names the `usb4-emu` path and commit it came from.
-- When this project changes the file, it adds its own copyright line below
-  the original and marks the file as changed, with the date. It never
-  replaces the original line.
-- `LICENSE`'s scope note names the lifted files in the same change that
-  lifts the first of them.
-- This subsection's table gains the `src/cm/` path as each file lands.
-
-One fact recorded for the lift to check. `u4regs.h`'s header says its field
-positions were "cross-checked against tbtools registers.json". That is
-Intel's tbtools, which `usb4-emu`'s `docs/REFERENCES.md` records as MIT
-(`https://github.com/intel/tbtools`, commit
-`aa0b1be590443d7074e799ebd6c72e308c5bdd02`). That document's own rule is
+`u4regs.h`'s header says its field positions were "cross-checked against
+tbtools registers.json": Intel's tbtools, which `usb4-emu`'s
+`docs/REFERENCES.md` records as MIT (`https://github.com/intel/tbtools`,
+commit `aa0b1be590443d7074e799ebd6c72e308c5bdd02`), and whose rule there is
 that files generated from `registers.json` carry the tbtools notice.
-`u4regs.h` carries no tbtools notice and does not say it was generated. Task
-39-A.2 reads the file against that rule before it lands, and records what
-it finds here.
+`u4regs.h` carries no tbtools notice and does not say it was generated; task
+39-A.2 reads the file against that rule before it lands and records what it
+finds here.
 
 `usb4-emu`'s `main` was relicensed to GPL-2.0-only at `3c74189`
-(2026-10-15). The files above that have landed (`u4hi.c` as
-`src/cm/tbt_ring.c` and `u4regs.h` as `src/cm/tbt_regs.h`, task 39-A.2)
-were lifted from `a68bc74`, where they carry the MIT notice, and keep it.
-The others are planned: a file taken from `3c74189` or later is an
-adaptation under section 3's rule and is entered in the subsection below
-instead.
+(2026-10-15). The files that have landed (`u4hi.c` as `src/cm/tbt_ring.c`,
+`u4regs.h` as `src/cm/tbt_regs.h`, task 39-A.2) were lifted from `a68bc74`
+with the MIT notice and keep it. A file taken from `3c74189` or later is an
+adaptation under section 3's rule, entered in the next subsection.
 
 #### Source files adapted for the Thunderbolt and USB4 work
 
-Not a binary either: the files adapted under section 3's rule for the
-Thunderbolt and USB4 mirrors, from 2026-10-15. One row per adapted file,
-added in the change that adapts it; the notices it keeps are the ones that
-rule names.
+The files adapted under section 3's rule for the Thunderbolt and USB4
+mirrors, from 2026-10-15; one row per file, added in the change that adapts
+it, keeping the notices that rule names.
 
 | File in this tree | Source file | Commit read | What was adapted | Notices kept | Task |
 |---|---|---|---|---|---|
@@ -537,28 +371,32 @@ rule names.
 | `test/u4_fakefab.c` (`fabEeByte`, `fabEeCtl` only) | `usb4-emu` `src/qemu/hw/usb4/usb4-router-tb3.c` (`eeprom_byte`, `eeprom_ctl`; GPL-2.0-only) | QEMU fork `2a893ea` | the Thunderbolt 3 router's EEPROM bit-bang model (a 25-series SPI part: chip select, 24 command and address bits, data out on each later rising clock edge) | `Copyright (c) 2026 usb4-emu contributors`, with the owner's statement below (the source's licence line, quoted until 2026-10-27, dropped at the owner's word) | 40-A.8 |
 | `scripts/usb4-crosscheck/u4cm-crosscheck.c`, `run-crosscheck.sh` | `usb4-emu` `tools/usb4cm/host/cm-host-test.c`, `run-host-test.sh`, `src/qemu/tests/usb4/fabric-test.c` (GPL-2.0-only) | `3c74189`; QEMU fork `178237c`; QEMU fork `02dda40` (before the 2026-10-29 squash; `2e063be` on `usb4-emu` `main` after its merge) for task 44.42's two stubs and the asm4242 preset configuration, `2e063be` for the cold reconcile stub | the fakes for the fabric's neighbours, the virtual clock and timers, the ring 0 shim, the build | `Copyright (c) 2026 usb4-emu contributors`, with the owner's statement below (the source's licence line, quoted until 2026-10-27, dropped at the owner's word) | 40-A.5 |
 
-**The owner's statement of 2026-10-25 (task 44.38).** The owner, who
-holds the copyright of `usb4-emu` (its `LICENSE`: "Copyright (c) 2026 Yeo
-Kheng Meng"; its `NOTICE`: "The maintainer, who holds the copyright in all
-of it"), states that the code this project takes from `usb4-emu` is offered
-to it under GPL-2.0-or-later; `usb4-emu` itself stays GPL-2.0-only. The
-files of this repository that take `usb4-emu` text under this statement
-are the rows of this table that name `usb4-emu` as their source; each
-keeps the copyright line of the file it came from and names this
-statement. The
-files lifted while `usb4-emu` was MIT (`tbt_regs.h`, and `tbt_ring.c`'s
-lifted text, with `tbt_ring.h`) keep that MIT notice, as the table below
-shows.
+The host suite's fake fabric (`test/u4_fakefab.c`) is otherwise written for
+this project from the specification and `usb4-emu`'s documents; it adapts no
+code but the EEPROM model above. `usb4-emu`'s fabric model
+(`src/qemu/hw/usb4/`) is compiled in place, never copied, by task 40-A.5's
+cross-check.
+
+**The owner's statement of 2026-10-25 (task 44.38).** The owner, who holds
+the copyright of `usb4-emu` (its `LICENSE`: "Copyright (c) 2026 Yeo Kheng
+Meng"; its `NOTICE`: "The maintainer, who holds the copyright in all of
+it"), states that the code this project takes from `usb4-emu` is offered to
+it under GPL-2.0-or-later; `usb4-emu` itself stays GPL-2.0-only. The files
+taking `usb4-emu` text under it are this table's rows that name `usb4-emu`
+as their source; each keeps the copyright line of the file it came from and
+names this statement. The files lifted while `usb4-emu` was MIT
+(`tbt_regs.h`, and `tbt_ring.c`'s lifted text, with `tbt_ring.h`) keep that
+MIT notice.
 
 **Rewritten from, task 44.38 (2026-10-26).** The portions of
 `src/cm/tbt_u4cm.c` and `src/cm/tbt_ring.c` that tasks 40-A.1, 40-A.3 and
 40-A.8 had adapted from Linux `drivers/thunderbolt` were rewritten without
-reading the Linux text, from the sources below, each step held by a
-request trace of the host suites and of the `usb4-emu` cross-check that
-stayed identical to the one captured before the rewrite
-(`scripts/usb4-trace/u4-trace.ps1`; `runs/run-44.md`, "44.38"). A value or
-an order whose only source is Linux's behaviour is cited at its site as a
-fact and tagged [linux], through design record 22.
+reading the Linux text, from the sources below, each step held by a request
+trace of the host suites and of the `usb4-emu` cross-check that stayed
+identical to the one captured before (`scripts/usb4-trace/u4-trace.ps1`;
+`runs/run-44.md`, "44.38"). A value or order whose only source is Linux's
+behaviour is cited at its site as a fact and tagged [linux], through design
+record 22.
 
 | File in this tree | What was rewritten | Rewritten from | Commit |
 |---|---|---|---|
@@ -573,14 +411,14 @@ fact and tagged [linux], through design record 22.
 
 **Rewritten from, task 44.65 (2026-10-27).** `hcdQuirkAsmWait` in
 `src/hcd_quirk.c`, the ASM1042A's bounded wait before each half of its
-vendor flow-control write (design record 20 section 4.8, Q9), was written
-from that record in task 38.10 (its section 13.6); at the owner's word
-(2026-10-27) it was rewritten once more without reading any Linux text,
-from the sources below. Its contract was written down from the project's
-own code and record 20 before the new body was written, and the old body
-was read only afterwards, to confirm the same reads, stalls, bound and
-results. The loop moved to the pure half (`XhciQuirkAsmWait`), where the
-host suite `test_quirk` pins it (`runs/run-44.md`, "44.65").
+vendor flow-control write (design record 20 section 4.8, Q9), written from
+that record in task 38.10 (its section 13.6), was rewritten at the owner's
+word (2026-10-27) without reading any Linux text, from the sources below.
+Its contract was written down from the project's own code and record 20
+before the new body; the old body was read only afterwards, to confirm the
+same reads, stalls, bound and results. The loop moved to the pure half
+(`XhciQuirkAsmWait`), pinned by the host suite `test_quirk`
+(`runs/run-44.md`, "44.65").
 
 | File in this tree | What was rewritten | Rewritten from | Commit |
 |---|---|---|---|
@@ -599,124 +437,113 @@ host suite `test_quirk` pins it (`runs/run-44.md`, "44.65").
 | `scripts/usb4-crosscheck/u4cm-crosscheck.c`, `run-crosscheck.sh` | the `usb4-emu` files' notice quoted with the owner's statement above; `LICENSE` |
 | `scripts/usb4-crosscheck/u4cm-glue.c`, `u4cm-glue.h` | `SPDX-License-Identifier: GPL-2.0-or-later` |
 
-The host suite's fake fabric (`test/u4_fakefab.c`) is written for this
-project from the specification and from `usb4-emu`'s documents; it adapts
-no code, except the Thunderbolt 3 EEPROM model in the row above. `usb4-emu`'s fabric model (`src/qemu/hw/usb4/`) is compiled in
-place, never copied, by the cross-check of task 40-A.5.
-
 #### Third-party headers incorporated unchanged
 
-Not a binary either, and not an adaptation: a header another project
-publishes as an interface definition, carried in this tree byte for byte
-with its own licence notice, so that this driver and the other project
-build against one definition. It is never edited here; a change is made in
-its own repository and copied in again, with this row updated. For
-`stor98cm.h` that repository is, since 2026-10-19, `src/stor98/` of this
-one ("Stor98 in this tree" below): the change is made in
-`src/stor98/include/stor98cm.h` and copied to `src/cm/` unchanged.
+A header another project publishes as an interface definition, carried byte
+for byte with its own licence notice so both sides build against one
+definition. It is never edited here: a change is made in its own repository
+and copied in again, with this row updated. For `stor98cm.h` that repository
+is, since 2026-10-19, `src/stor98/` of this one ("Stor98 in this tree"): the
+change is made in `src/stor98/include/stor98cm.h` and copied to `src/cm/`
+unchanged.
 
 | File in this tree | Source | Commit read | SHA-256 | Licence | Why | Task |
 |---|---|---|---|---|---|---|
 | `src/cm/stor98cm.h` | Stor98 `include/stor98cm.h` (the `nvme98` project's `include/nvme98cm.h` until its rename, 2026-10-16) | `56954657` of this repository (`src/stor98/include/stor98cm.h`, 2026-10-22: R11 O6's clause for a connection manager with no per-port teardown, contract text only, interface version 4 and the layout unchanged); before it `f9755aee7a27725e2a0edfb0d8c1e1231669f777` (contract text only, on Stor98's branch `audit-2026-10-18`, read 2026-10-18) and `6609c1c36701e50665daf0305fdc35fe06e258d6`, read 2026-10-16 | `8401af56d65fdf8a4617f3ac0d50ddc83a06ab750d9af1c7afafc9c824e6ab41` | BSD-3-Clause, `Copyright (c) 2026, Yeo Kheng Meng`, the notice kept in the file; the file's own text says it is licensed on its own, independently of the code on either side, and asks that no GPL-licensed code or text be put into it | the link-state table, callback object, 9x locator and current-boot proof Stor98 adopted as its connection-manager interface (decisions MD-5 and MD-6, gate G3, interface version 4); `src/cm/cm_nvlink.c` and `cm_nvlinkos.c` implement this side, on NT and on 98 SE and ME (the 9x half read on 2026-10-16, `runs/run-41.md`, "The Stor98 link-state channel on 98 SE and ME") | 39-A.7, 40-A.7, and the Stor98 rename of 2026-10-16 (`runs/run-41.md`, "Stor98 behind the Thunderbolt 3 controller") |
 
 The file uses `//` comments, which AGENTS.md's C89 rule forbids in this
-project's own source. It is the recorded exception: a third-party header
-carried unchanged. Both compilers accept it as it is - MSVC 6.0 under the
-DDK's flags for every x86 flavour, under the host suites' `/Za /W3 /WX`,
-and WDK 7.1's amd64 compiler - so no wrapper is needed. Nothing from this
-repository moves the other way: Stor98 is BSD-3-Clause, and this
-project's code stays out of it.
+project's own source: the recorded exception, a third-party header carried
+unchanged. MSVC 6.0 (the DDK's flags for every x86 flavour, the host suites'
+`/Za /W3 /WX`) and WDK 7.1's amd64 compiler accept it as it is, so no
+wrapper is needed. Nothing from this repository moves the other way: Stor98
+is BSD-3-Clause, and this project's code stays out of it.
 
 ### The bundled Stor98 build
 
 From `3.0.0.0` the release download may carry Stor98, an NVMe storage
-driver under its own licence (owner, 2026-10-16). Since `3.1.0.0`
-(roadmap-usb4 task 42-A.30, owner 2026-10-19) it is built from this
-repository's `src/stor98/` ("Stor98 in this tree" below) with the drivers,
-at the package's version and date. What is recorded here:
+driver under its own licence (owner, 2026-10-16). Since `3.1.0.0` (task
+42-A.30, owner 2026-10-19) it is built from `src/stor98/` ("Stor98 in this
+tree") with the drivers, at the package's version and date.
 
-- **What is shipped.** The Stor98 that `scripts/build-driver.cmd` built
-  and gated from `src/stor98/`: `stor98.inf`, `stor98.mpd` and
-  `stor98.sys` at the root of `release-x86/`, and `stor98.inf` and
-  `stor98.sys` at the root of `release-x64/`, with no `stor98/` folder.
-  Every name there starts with `stor98`. Binaries only: none of Stor98's
-  source is bundled. The `debug-` directories carry none of it.
+- **What is shipped.** The Stor98 that `scripts/build-driver.cmd` built and
+  gated from `src/stor98/`: `stor98.inf`, `stor98.mpd` and `stor98.sys` at
+  the root of `release-x86/`, `stor98.inf` and `stor98.sys` at the root of
+  `release-x64/`, no `stor98/` folder; every name starts with `stor98`.
+  Binaries only, no Stor98 source; the `debug-` directories carry none of it.
 - **The licence files.** Stor98's `LICENSE` (BSD-3-Clause) and `NOTICE`
-  (where each part of Stor98 came from) ship beside those files in each of
-  the two directories as `stor98-LICENSE.txt` and `stor98-NOTICE.txt`,
-  with its `docs/package-readme.txt` as `stor98-readme.txt`.
-- **Signing.** The x64 `stor98.sys` carries the same embedded test
-  signature as this project's other x64 drivers, by this project's test
-  certificate, applied by `make-package.ps1 -TestSignPfx` in the same step
-  (section 2's test-signature row; design record 19). Stor98's own test
-  certificate (`CN=stor98 project test signing (not trusted)`, SHA-1
-  thumbprint `461311C79165DC7985522D46274DCAD8832DD919`), which signed the
-  bundled `stor98.sys` of `3.0.0.0` (Stor98 `0.4.0.0`, with
-  `stor98-test.cer` beside it), signs nothing any more, and
-  `stor98-test.cer` is not shipped.
+  (where each part came from) ship beside them in both directories as
+  `stor98-LICENSE.txt` and `stor98-NOTICE.txt`, with its
+  `docs/package-readme.txt` as `stor98-readme.txt`.
+- **Signing.** The x64 `stor98.sys` carries the same embedded test signature
+  as this project's other x64 drivers, by this project's certificate,
+  applied by `make-package.ps1 -TestSignPfx` in the same step (section 2's
+  test-signature row; design record 19). Stor98's own test certificate
+  (`CN=stor98 project test signing (not trusted)`, SHA-1 thumbprint
+  `461311C79165DC7985522D46274DCAD8832DD919`), which signed the bundled
+  `stor98.sys` of `3.0.0.0` (Stor98 `0.4.0.0`, with `stor98-test.cer`
+  beside it), signs nothing any more, and `stor98-test.cer` is not shipped.
 - **What is tracked.** From `3.1.0.0` the Stor98 files of a `release-`
-  directory are published in `releases/<version>/` with this project's
-  own. `3.0.0.0`'s were copied into its upload set alone, from the pinned
-  release folder (four `-Stor98*` parameters, since removed); that release
-  folder is tracked in `src/stor98/releases/0.4.0.0/`. The generated
-  `readme.txt` and `docs/using/release-notes.md` name the bundled version.
-- **The other direction.** No code of this project, and none of
-  `usb4-emu`'s, is copied into Stor98 (AGENTS.md, "Reference
-  Implementations"). Its version header, `src/stor98/src/stor98ver.h`,
-  includes this project's `src/xhci_version.h` for the version number
-  alone (`#define` lines); no code crosses.
+  directory are published in `releases/<version>/` with this project's own.
+  `3.0.0.0`'s were copied into its upload set alone, from the pinned release
+  folder (four `-Stor98*` parameters, since removed), tracked now in
+  `src/stor98/releases/0.4.0.0/`. The generated `readme.txt` and
+  `docs/using/release-notes.md` name the bundled version.
+- **The other direction.** No code of this project or of `usb4-emu` is
+  copied into Stor98 (AGENTS.md, "Reference Implementations"). Its version
+  header, `src/stor98/src/stor98ver.h`, includes this project's
+  `src/xhci_version.h` for the version number alone (`#define` lines); no
+  code crosses.
 
 ### Stor98 in this tree (`src/stor98/`)
 
-Since 2026-10-19 the Stor98 project is in this repository as `src/stor98/`
-(roadmap-usb4 task 42-A.20; owner): every tracked file of its own
-repository's branch `audit-2026-10-18` at commit `4253b58` (its `0.4.0.0`
-release and the reviewed fixes of its audit of 2026-10-18), copied as one
-commit with every blob identical to that commit's and none of its history.
-What is recorded here:
+Since 2026-10-19 (task 42-A.20; owner) the Stor98 project is in this
+repository as `src/stor98/`: every tracked file of its own repository's
+branch `audit-2026-10-18` at commit `4253b58` (its `0.4.0.0` release and the
+reviewed fixes of its audit of 2026-10-18), copied as one commit with every
+blob identical to that commit's and none of its history.
 
 - **Licence.** BSD-3-Clause, the whole of `src/stor98/` (its `LICENSE`, with
-  its four copyright lines: Dominik Behr for nvme2k, Dominik Behr and Ray
+  four copyright lines: Dominik Behr for nvme2k, Dominik Behr and Ray
   Hinchliffe for the nvme2k INF its INFs derive from, SweetLow for the
-  nvme9x/nvment port, Yeo Kheng Meng for Stor98). This project's
-  `LICENSE` (GPL-2.0-or-later since 2026-10-26, GPL-2.0-only before) is
-  not its licence; the root `LICENSE`'s scope note says so.
-- **Provenance.** Stor98's `NOTICE` is the record and governs; this list
-  repeats what it says. Stor98's `src/` was imported from SweetLow's nvme9x/nvment source
+  nvme9x/nvment port, Yeo Kheng Meng for Stor98). This project's `LICENSE`
+  (GPL-2.0-or-later since 2026-10-26, GPL-2.0-only before) is not its
+  licence; the root `LICENSE`'s scope note says so.
+- **Provenance.** Stor98's `NOTICE` is the record and governs; this repeats
+  it. Stor98's `src/` was imported from SweetLow's nvme9x/nvment source
   (`nvme2k-src.zip` of `https://github.com/LordOfMice/Tools`, SHA-256
   `272b50836d7f9fe4c1a483f5868d099604916ccd4c89b4daacbc1d17c80bb4f2`),
-  imported without the Microsoft headers `SCSI.H` and `SRB.H` it bundled
-  and with BSD-3-Clause headers added, and is Stor98's development of it since; SweetLow stated on 2026-10-14 that
-  his port and changes are BSD-3-Clause, the licence of the original
-  nvme2k, and his `NVMEVSD.VXD` public domain (neither its source nor its
-  binary is in the tree). That code derives from Dominik Behr's nvme2k
-  1.0.0.2, whose own licence the `NOTICE` records as read in the upstream
-  history (2026-10-19, 42-A.19): at tag `1.0.0.2` (commit `cbbadf0`) the
-  `LICENSE` is the BSD-3-Clause text with the template's unfilled
-  copyright line, `Copyright (c) <year>, <copyright holder>`, and the
-  `README.md` names the 3-Clause BSD License; commit `eb31419` (2025-12-02)
-  filled in "Copyright (c) 2025, Dominik Behr" and changed nothing else.
-  So 1.0.0.2 is BSD-3-Clause on 1.2.0.0's terms. `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
+  without the Microsoft headers `SCSI.H` and `SRB.H` it bundled and with
+  BSD-3-Clause headers added, and is Stor98's development of it since.
+  SweetLow stated on 2026-10-14 that his port and changes are BSD-3-Clause,
+  the licence of the original nvme2k, and his `NVMEVSD.VXD` public domain
+  (neither its source nor its binary is in the tree). That code derives from
+  Dominik Behr's nvme2k 1.0.0.2, whose licence the `NOTICE` records as read
+  in the upstream history (2026-10-19, 42-A.19): at tag `1.0.0.2` (commit
+  `cbbadf0`) the `LICENSE` is the BSD-3-Clause text with the template's
+  unfilled copyright line, `Copyright (c) <year>, <copyright holder>`, and
+  the `README.md` names the 3-Clause BSD License; commit `eb31419`
+  (2025-12-02) filled in "Copyright (c) 2025, Dominik Behr" and changed
+  nothing else, so 1.0.0.2 is BSD-3-Clause on 1.2.0.0's terms.
+  `third_party/nvme2k-1.2.0.0/` is an unmodified copy of
   `https://github.com/techomancer/nvme2k` at commit `0c41727` (release
   1.2.0.0), with its `LICENSE` (BSD-3-Clause). `include/stor98cm.h` is
   Stor98's own, licensed on its own as an interface definition.
-- **Its rules.** Stor98's `AGENTS.md` keeps its own provenance rules for
-  those files (every nvme2k-derived file keeps Dominik Behr's notice, the
-  reference copy stays unmodified, no Microsoft kit file is committed).
-  This project's rules on source (C89, ASCII, the gates of
-  `build-driver.cmd`) do not bind it.
+- **Its rules.** Stor98's `AGENTS.md` keeps its own provenance rules (every
+  nvme2k-derived file keeps Dominik Behr's notice, the reference copy stays
+  unmodified, no Microsoft kit file is committed). This project's source
+  rules (C89, ASCII, the gates of `build-driver.cmd`) do not bind it.
 - **Tracked binaries.** Its released builds up to `0.4.0.0` as Stor98
   committed them (history since `3.1.0.0`, which builds it with this
   package), `src/stor98/releases/0.3.0.1/` and `0.4.0.0/`: `stor98.mpd` and
-  `stor98.sys` (x86), `stor98.sys` (x64) with the embedded test signature
-  by Stor98's own test certificate, and that certificate's public half
-  `stor98-test.cer`, each listed in the folder's `SHA256SUMS.txt`. The
-  `0.4.0.0` folder's `SHA256SUMS.txt` hashes to
-  `ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7`, the
-  pin `3.0.0.0` bundled it under.
-- **Not tracked.** Its build needs `SCSI.H` and `SRB.H` from a Windows 98
-  (or NT4) DDK, kept in the git-ignored `tools/w98ddk/inc/` with the other
-  kits: `SCSI.H` 36,501 bytes, SHA-256
+  `stor98.sys` (x86), `stor98.sys` (x64) with the embedded test signature by
+  Stor98's own certificate, and its public half `stor98-test.cer`, each
+  listed in the folder's `SHA256SUMS.txt`. The `0.4.0.0` folder's
+  `SHA256SUMS.txt` hashes to
+  `ef7a230207789ad2a8b6f185988e0328f9f10d6727b4187d95cfbf38889c96b7`, the pin
+  `3.0.0.0` bundled it under.
+- **Not tracked.** Its build needs `SCSI.H` and `SRB.H` from a Windows 98 (or
+  NT4) DDK, kept in the git-ignored `tools/w98ddk/inc/`: `SCSI.H` 36,501
+  bytes, SHA-256
   `809d57e6756de21524930eb4d17840ab3047c7e1773da634ceb73a81ff8d39b7`;
   `SRB.H` 21,056 bytes, SHA-256
   `4b3c3305686f2593ceb471ae69f1d690de5d833c8f2047859d735b21affd8396` (the
@@ -724,15 +551,14 @@ What is recorded here:
   "Windows 98 DDK"). Its build output (`src/stor98/out/`, `obj*/`) is
   ignored by its own `.gitignore`.
 - **The interface header.** `src/cm/stor98cm.h` (section 2a, "Third-party
-  headers incorporated unchanged") is now a copy of
-  `src/stor98/include/stor98cm.h` in the same tree, the master;
-  `scripts/check-stor98-header.ps1` holds the two to the same bytes until
-  they are made one.
+  headers incorporated unchanged") is a copy of the master
+  `src/stor98/include/stor98cm.h`; `scripts/check-stor98-header.ps1` holds
+  the two to the same bytes until they are made one.
 
 ### The third-party PDFs
 
-Both PDFs were tracked in this repository for a time. The xHCI specification
-was moved twice, so between them they occupied four paths:
+Both PDFs were once tracked here, at four paths between them (the xHCI
+specification moved twice):
 
 - `docs/extensible-host-controler-interface-usb-xhci.pdf` (the original,
   misspelled "controler")
@@ -742,44 +568,40 @@ was moved twice, so between them they occupied four paths:
 - `docs/references/xhci-backwards-compatibility-testing-v1-7.pdf` (the USB-IF
   document, one path only)
 
-No third-party PDF is tracked now, and the published repository starts from a
-single commit, so no historical blob of either file exists to fetch. The check
-walks every ref and must print nothing:
+No third-party PDF is tracked now, and the published repository starts from
+a single commit, so no historical blob of either exists. The check walks
+every ref and must print nothing:
 
 ```sh
 git log --all --pretty=format: --name-only | grep -i '\.pdf$' | sort -u
 ```
 
-Their licence limits are recorded in `docs/references/README.md`: the Intel
+Their licence limits are in `docs/references/README.md`: the Intel
 specification reserves all rights and grants no licence in the document
-itself, and the USB-IF test document is licensed "FOR INTERNAL USE ONLY". No
-applicable public-redistribution permission is documented for either. That is
-a statement about what this project has established, not a claim that no
-permission could exist. Intel's xHCI Adopters Agreement section 3.2, for
-instance, contains a limited, non-transferable licence for an Adopter to
-reproduce the final specification as necessary to exercise the agreement's
-patent rights,
-and this project has not established that its maintainer is an Adopter or
-that public Git redistribution would fall inside that grant.
+itself; the USB-IF test document is licensed "FOR INTERNAL USE ONLY". No
+applicable public-redistribution permission is documented for either - a
+statement about what this project has established, not a claim that none
+could exist. Intel's xHCI Adopters Agreement section 3.2, for instance,
+contains a limited, non-transferable licence for an Adopter to reproduce the
+final specification as necessary to exercise the agreement's patent rights;
+this project has not established that its maintainer is an Adopter or that
+public Git redistribution would fall inside that grant.
 
 ### The Microsoft public symbol files
 
 Since 2026-09-11 the static readings of the NT 5.x and 6.x `usbport.sys` and
-`usbehci.sys` binaries are taken with Microsoft's own public symbol files
-loaded, which name every function and turn a day of address arithmetic into
-`x usbport!MPf_*` and `uf`. The files are third-party material of the same
-standing as the binaries they describe: **never tracked**, fetched per machine
-into `tools/symbols/` (git-ignored with the rest of `tools/`), identified
-here so a fresh clone can fetch the same thirty-nine - twelve for the two
-miniport-facing binaries; since 2026-09-17 six for `usbhub.sys`, which
-the issue 5 mechanism readings had to follow the selective-suspend calls
-into; and since 2026-10-02 twenty-one for roadmap Phase 25's readings
-(design record 13): fourteen for the class drivers of task 25.2, five for
-`usbui.dll` (25.4) and two for `usbccgp.sys` (25.6). Each comes from
+`usbehci.sys` are taken with Microsoft's public symbol files loaded (`x
+usbport!MPf_*`, `uf`). They are third-party material like the binaries:
+**never tracked**, fetched per machine into git-ignored `tools/symbols/`,
+identified here so a clone can fetch the same thirty-nine: twelve for the
+two miniport-facing binaries; since 2026-09-17 six for `usbhub.sys` (the
+issue 5 selective-suspend readings); since 2026-10-02 twenty-one for Phase
+25 (design record 13): fourteen for the class drivers (task 25.2), five for
+`usbui.dll` (25.4), two for `usbccgp.sys` (25.6). Each is
 `https://msdl.microsoft.com/download/symbols/<name>/<GUID><age>/<name>`,
-where the GUID and age are the ones in the binary's own `RSDS` debug
-directory (`link /dump /headers`), which is also what makes the pairing
-verifiable. `kd -z <binary> -y srv*<repo>\tools\symbols` loads them offline.
+the GUID and age from the binary's own `RSDS` debug directory
+(`link /dump /headers`), which is what makes the pairing verifiable;
+`kd -z <binary> -y srv*<repo>\tools\symbols` loads them offline.
 
 | Binary (`tools/<dir>-extracted/`) | PDB identifier (`<GUID><age>`) | Bytes |
 |---|---|---|
@@ -823,954 +645,730 @@ verifiable. `kd -z <binary> -y srv*<repo>\tools\symbols` loads them offline.
 | `win7-x86/class/usbccgp.sys` 6.1.7601.17514 | `usbccgp.pdb/98139E8789364020AED0AC05265F1B941` | 184,320 |
 | `sweetlow/XP_SP3.QFE/USBCCGP.SYS` 5.1.2600.5585 (identical to `nusb36/usbccgp.sys`) | `usbccgp.pdb/7574CEABA313461FA33512EE9B0C17351` | 44,032 |
 
-Since 2026-10-10 a further set serves the HAL reading of design record 13
-section 11.6.1: the public PDBs of XP SP3's seven HALs, of the XP x64, Vista SP2
-and 7 SP1 HALs (x86 and x64), of the kernels whose DMA verifier was read and of
-two `pci.sys` builds. Their identifiers are in that section's binaries table and
-are not repeated here; the Windows 2000 SP4 HALs have none on the server.
+Since 2026-10-10 a further set serves design record 13 section 11.6.1's HAL
+reading: the public PDBs of XP SP3's seven HALs, of the XP x64, Vista SP2 and
+7 SP1 HALs (x86 and x64), of the kernels whose DMA verifier was read and of
+two `pci.sys` builds; their identifiers are in that section's binaries table.
+The Windows 2000 SP4 HALs have none on the server.
 
-Windows 2000 SP4's and NUSB's `usbport.sys` were read without symbols, as
-before. A symbol name is a fact about the binary like an offset is, and is
-recorded under the same `static` tag; no function body is copied from any of
-them.
+Windows 2000 SP4's and NUSB's `usbport.sys` were read without symbols. A
+symbol name is a fact about the binary like an offset, recorded under the
+same `static` tag; no function body is copied from any of them.
 
 ---
 
 ## 3. ReactOS: used as interface documentation, not as source
 
-ReactOS is GPL-2.0, and this project is GPL-2.0-or-later (GPL-2.0-only
-until 2026-10-26, roadmap-usb4 task 44.38). The two are
-combined nowhere, and the shared licence does not change that by one line.
-What makes `src/` this project's own work is that it was written independently
-against recorded interface facts; that is a statement about authorship, not
-about whether two licences would have permitted a copy. The rules below are
-unchanged by the licence, and so is what the overlap audit found.
+ReactOS is GPL-2.0, and this project is GPL-2.0-or-later (GPL-2.0-only until
+2026-10-26, task 44.38). The two are combined nowhere, and the shared licence
+does not change that. What makes `src/` this project's own work is that it
+was written independently against recorded interface facts; that is a
+statement about authorship, not about whether two licences would have
+permitted a copy. The rules below and the overlap audit's result are
+unchanged by the licence.
 
 What is taken from ReactOS is the description of an interface: structure
 layouts, field offsets, function signatures, constants, and the call ordering
-its implementation performs. Those facts are recorded in
-`docs/usb-xhci-info/usbport-miniport-abi.md`, with `file:line` citations into
+its implementation performs, recorded in
+`docs/usb-xhci-info/usbport-miniport-abi.md` with `file:line` citations into
 the pinned mirror (`reactos/reactos` commit
-`0298e10d5d904a0230868be8f7bdf6436d589c62`). Code under `src/` is then written
-independently against those facts.
+`0298e10d5d904a0230868be8f7bdf6436d589c62`). `src/` is written independently
+against those facts. Enforced by convention and review:
 
-Rules that are enforced by convention and by review, and that must stay
-enforced:
+- No ReactOS function body is copied into `src/`;
+  `docs/usb-xhci-info/usbport-miniport-abi.md` contains none either and
+  carries the do-not-copy rule at its head.
+- `external/` is a read-only local cache, git-ignored, not redistributed.
+- The overlap audit checked mechanically and found no non-interface verbatim
+  overlap between `src/` and the ReactOS, Linux, Haiku or FreeBSD mirrors. It
+  found 37 matching `#define`/typedef lines in `src/xhci_usbport.h`: the
+  interface constants and signatures the miniport must declare to be callable
+  at all, this section's category. An audit result, not a legal conclusion.
+  Demoting a reference does not narrow it: it swept `src/` against all four
+  mirrors.
 
-- No ReactOS function body is copied into `src/`.
-  `docs/usb-xhci-info/usbport-miniport-abi.md` contains no ReactOS function
-  body either, and carries the do-not-copy rule at its head.
-- `external/` is a read-only local cache. It is git-ignored and is not
-  redistributed by this project.
-- The overlap audit checked this mechanically and found no non-interface
-  verbatim overlap between `src/` and the ReactOS, Linux, Haiku or FreeBSD
-  mirrors. It did find 37 matching `#define`/typedef lines in
-  `src/xhci_usbport.h`; those are the interface constants and signatures the
-  miniport must declare in order to be callable at all, which is the category
-  of thing this section is about. That is an audit result, not a legal
-  conclusion.
+Linux (GPL-2.0), FreeBSD (BSD 2-Clause) and Haiku (MIT) are cross-references
+for xHCI hardware behaviour, which the xHCI specification independently
+specifies; the same do-not-copy rule applies. Linux is consulted routinely,
+above all for the controller quirk population, the stated authority for
+`xhciqual/quirks.c`. FreeBSD and Haiku carry nothing today: the 64-bit
+register write order is settled by the specification as a `shall` (5.1,
+p.337), and the Route String tier order that once rested on the two agreeing
+was settled by the controller in batch 7b-A, which resolved this driver's
+route strings to the physically correct devices on both usbport builds
+(`docs/usb-xhci-info/xhci-data-structures.md`, "Route String tier order").
+They stay mirrored as a cheap second opinion.
 
-The other three mirrors, Linux (GPL-2.0), FreeBSD (BSD 2-Clause) and Haiku
-(MIT), are used only as cross-references for xHCI hardware behaviour, which is
-independently specified by the xHCI specification itself. The same
-do-not-copy rule applies to them.
-
-They are not equal in weight. Linux is consulted routinely, above all for the
-controller quirk population, which is the stated authority for
-`xhciqual/quirks.c`.
-
-One exception to the do-not-copy rule, for Linux's xHCI controller quirks
-only (owner, 2026-10-12, for roadmap-hcd task 37.17, removed from Phase 37
-the same day, so nothing was copied under it; widened by the owner on
-2026-10-13 for task 38.10, which took 37.17's place). The facts: this
-project is GPL-2.0-only (`LICENSE`), and Linux's xHCI host driver files
-carry a GPL-2.0 SPDX identifier. The owner's decision: the table that says
+**The Linux xHCI quirk exception** (owner, 2026-10-12, for roadmap-hcd task
+37.17, removed from Phase 37 the same day, so nothing was copied under it;
+widened on 2026-10-13 for task 38.10, which took 37.17's place). The facts
+then: this project was GPL-2.0-only (`LICENSE`), and Linux's xHCI host
+driver files carry a GPL-2.0 SPDX identifier. The decision: the table of
 which vendor, device and revision ids carry which quirk, with the comments
-that name the hardware, and since 2026-10-13 the code that applies each
-quirk taken, may be copied or adapted into this project, under these
-conditions:
+that name the hardware, and since 2026-10-13 the code that applies each quirk
+taken, may be copied or adapted, under these conditions:
 
 - only from a file whose SPDX identifier is `GPL-2.0`, `GPL-2.0-only` or
   `GPL-2.0+` / `GPL-2.0-or-later`, read on the pinned mirror's commit; a file
   under any other licence, or dual-licensed with one this project cannot
-  carry, is still under the do-not-copy rule;
-- every copyright, licence and warranty-disclaimer notice of the file it
-  came from, its SPDX identifier among them, is kept beside the copied text
-  (GPL-2.0 section 1), and the copy is marked as changed from that file,
-  with the date (section 2(a)). A copy from a `GPL-2.0-or-later` file keeps
-  that grant on the copied text as received, and nothing of it is
-  relicensed;
-- this section gains a row for each copy: the Linux file, the commit (the
-  pinned mirror's, from `external/README.md`), the lines, and where it landed
-  in this tree;
+  carry, stays under the do-not-copy rule;
+- every copyright, licence and warranty-disclaimer notice of the source
+  file, its SPDX identifier among them, is kept beside the copied text
+  (GPL-2.0 section 1), and the copy is marked changed, with the date
+  (section 2(a)); a copy from a `GPL-2.0-or-later` file keeps that grant as
+  received, nothing of it relicensed;
+- this section gains a row per copy: the Linux file, the commit (the pinned
+  mirror's, `external/README.md`), the lines, where it landed;
 - a release whose binary carries such a copy says so in its notices, naming
   the Linux file and its copyright holders, as the tools' `NOTICE.TXT` files
-  do for what their EXEs link, and the release's complete corresponding
-  source (GPL-2.0 section 3), the adapted code and the scripts that build
-  and package it included, is offered with the binary: the release's tag in
-  this public repository, named in the release's notes beside the download,
-  and checked at the cut;
+  do, and offers the release's complete corresponding source (GPL-2.0
+  section 3), the adapted code and the build and packaging scripts included,
+  with the binary: the release's tag in this public repository, named in the
+  release notes beside the download, checked at the cut;
 - what is taken is the quirk and its handling, adapted to this driver's
-  structures; nothing else of Linux's xHCI host driver comes with it;
-- the overlap audit above treats the recorded rows as known overlap, so any
-  other verbatim overlap with the Linux mirror is still a finding.
+  structures, nothing else of Linux's xHCI host driver;
+- the overlap audit treats the recorded rows as known overlap; any other
+  verbatim overlap with the Linux mirror is still a finding.
 
-This records the decision and its conditions; it draws no legal conclusion.
-
-Since 2026-10-26 this project's code is GPL-2.0-or-later (task 44.38).
-Nothing was copied under this exception: the table below is empty, and
-task 44.38's audit of design record 20's quirks found nothing copied in
-`src/xhci_quirk.c`, `src/hcd_quirk.c` or `xhciqual/quirks.c`. Whether the
-exception stays open for a file whose SPDX identifier is `GPL-2.0` or
-`GPL-2.0-only` is the owner's to decide; until then nothing is copied
-under it from such a file (owner, 2026-10-26).
+Since 2026-10-26 (task 44.38, code GPL-2.0-or-later): nothing was copied
+under this exception (the table is empty), and task 44.38's audit of design
+record 20's quirks found nothing copied in `src/xhci_quirk.c`,
+`src/hcd_quirk.c` or `xhciqual/quirks.c`. Whether the exception stays open
+for a `GPL-2.0` or `GPL-2.0-only` file is the owner's to decide; until then
+nothing is copied under it from such a file (owner, 2026-10-26).
 
 | Linux file | Commit | Lines | Landed in | Notice kept |
 | (none yet) | | | | |
 
-FreeBSD and Haiku were consulted at two points, and neither carries anything
-today: the 64-bit register write order is settled by the specification as a
-`shall` (5.1, p.337), and the Route String tier order that once rested on the
-two of them agreeing was settled by the controller itself in batch 7b-A, which
-resolved this driver's own route strings to the physically correct devices on
-both usbport builds (`docs/usb-xhci-info/xhci-data-structures.md`, "Route
-String tier order"). They remain mirrored because a second opinion on someone
-else's silicon is cheap to keep.
-
-Demoting a reference does not narrow the audit above, which swept `src/`
-against all four mirrors.
-
-One later reading of source rather than binaries: for roadmap task 33.3
+One later reading of source, not binaries: for roadmap task 33.3
 (2026-10-04), ReactOS's `drivers/usb/usbhub/pnp.c`
-(`USBH_FdoQueryBusRelations`) and Linux's `drivers/usb/core/hub.c`, both
-from their master branches as fetched that day into a scratch directory
-(not the pinned mirrors, and not kept), were read for the shape and the
-timing constants of a hub driver's first enumeration. Only those facts are
-recorded (design record 13 section 5.7); nothing of either was taken into
-`src/`. The same section cites Microsoft's USB blog post "How does USB
-stack enumerate a device?" and USB 2.0 section 9.2.6.4, which are
-documentation, not binaries, so no section 4 row records them.
+(`USBH_FdoQueryBusRelations`) and Linux's `drivers/usb/core/hub.c`, from
+their master branches as fetched that day into a scratch directory (not the
+pinned mirrors, not kept), were read for the shape and timing constants of a
+hub driver's first enumeration; only those facts are recorded (design record
+13 section 5.7), nothing taken into `src/`. The same section cites
+Microsoft's USB blog post "How does USB stack enumerate a device?" and USB
+2.0 section 9.2.6.4, documentation rather than binaries, so no section 4 row.
+
+This records the decisions and their conditions; it draws no legal
+conclusion.
+
 ---
 
 ### The Thunderbolt and USB4 mirrors (owner, 2026-10-15)
 
-Design record 21's first draft did not open Linux's `drivers/thunderbolt`
-for the Thunderbolt 3 work. Its contract was `usb4-emu`'s `ICM-PROTOCOL.md`
-alone, a clean-room description (section 4, the `ICM-PROTOCOL` rows). On
-2026-10-15 the owner changed that, so the driver can support as many
-controllers as possible. Two trees may now be read for roadmap-usb4's work
-(Phase 39, the firmware connection manager client; Phase 40, the USB4
-software connection manager), under the same terms as the ReactOS and
-xHCI mirrors above:
+Until 2026-10-15 design record 21 did not open Linux's `drivers/thunderbolt`:
+its contract was `usb4-emu`'s `ICM-PROTOCOL.md` alone, a clean-room
+description (section 4, the `ICM-PROTOCOL` rows). On 2026-10-15 the owner
+opened two trees for roadmap-usb4's work (Phase 39, the firmware connection
+manager client; Phase 40, the USB4 software connection manager), so the
+driver can support as many controllers as possible, under the same terms as
+the mirrors above:
 
-- Linux `drivers/thunderbolt` (40 files) and `include/linux/thunderbolt.h`,
-  at the pinned Linux commit `c6859eed755df351a3978b33cb92365f9b3e8f06`.
-  Every file carries a `GPL-2.0` or `GPL-2.0-only` SPDX identifier.
-- Linux `drivers/net/thunderbolt` (5 files: `main.c`, `trace.c`,
-  `trace.h`, `Kconfig`, `Makefile`), at the same pinned commit, added
-  2026-10-31 for roadmap-usb4 task 45.59 (design record 35 section 2.4):
-  `main.c` carries the SPDX identifier `GPL-2.0`. Read for facts about
-  the USB4NET peer the legs run against; nothing of it is adapted,
-  quoted or paraphrased into `src/` (`AGENTS.md`, "Reference
-  Implementations": a `GPL-2.0` file is read for facts only).
-- FreeBSD `sys/dev/thunderbolt` (21 files), at
-  `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` (2026-10-14). Every file
-  carries a `BSD-2-Clause` or `BSD-2-Clause-FreeBSD` SPDX identifier and
-  the line `Copyright (c) 2022 Scott Long`.
+| Tree | Pinned commit | Files | Licence as the files state it |
+|---|---|---|---|
+| Linux `drivers/thunderbolt` and `include/linux/thunderbolt.h` | `c6859eed755df351a3978b33cb92365f9b3e8f06` | 40, and the header | every file `GPL-2.0` or `GPL-2.0-only` SPDX |
+| Linux `drivers/net/thunderbolt` (`main.c`, `trace.c`, `trace.h`, `Kconfig`, `Makefile`), added 2026-10-31 for task 45.59 (design record 35 section 2.4) | the same | 5 | `main.c` `GPL-2.0` SPDX; read for facts about the USB4NET peer the legs run against, nothing adapted, quoted or paraphrased into `src/` |
+| FreeBSD `sys/dev/thunderbolt` | `9d50245a0f1333e10cc1c4dda16878cd79a7c42b` (2026-10-14) | 21 | every file `BSD-2-Clause` or `BSD-2-Clause-FreeBSD` SPDX and `Copyright (c) 2022 Scott Long` |
 
 What is taken: device ids, message codes and layouts, register and field
-offsets, constants, sequences and controller quirks. Each is cited by file
-and symbol where it is used, and section 4 records the classes.
+offsets, constants, sequences and controller quirks, each cited by file and
+symbol where used; section 4 records the classes. Both mirrors are in
+`external/` (`external/README.md` for fetching). On 2026-10-15 every mirrored
+file matched the upstream blob at its pinned commit once CR-LF was normalised
+to LF; Linux has no `include/uapi/linux/thunderbolt.h` at that commit, so
+neither has the mirror. `ICM-PROTOCOL.md`, written clean-room under
+`usb4-emu`'s former rule and stated there to remain accurate, stays the
+contract record 21 cites first; a statement it tags [inf] (what Linux's
+client does) may be checked against `icm.c` and cited there as well.
 
-The owner's first decision of 2026-10-15 named reading and citing only,
-with no function body of either tree copied. Later that day the owner
-widened it, through the `usb4-emu` maintainer's note, to take effect when
-`usb4-emu`'s relicensing from MIT to GPL-2.0-only landed on its `main`. It
-landed at `3c74189` (2026-10-15), whose handoff (`docs/XHCI98-HANDOFF.md`
-section 3) reads: "xhci98 may adapt code directly from this repo
-(`tools/usb4cm` included) and from Linux `drivers/thunderbolt`
-(GPL-2.0-only), as well as FreeBSD `sys/dev/thunderbolt` (BSD-2) and Intel
-tbtools data (MIT). Keep the notices of whatever you adapt: the copyright
-lines of the source file, its SPDX tag, and an entry in xhci98's
-provenance record naming the source file and pinned commit". The rule this
-project keeps for that, for the Thunderbolt and USB4 work only (roadmap-usb4
-Phases 39 and 40, design records 21 and 22, `src/cm/`):
+The decisions, in order:
 
-- Code may be adapted from those four sources. The facts above are still
-  cited by file and symbol where they are used.
-- Every adapted file keeps the copyright lines of each source file it came
-  from and that file's SPDX tag. A file adapted from Linux carries
-  `SPDX-License-Identifier: GPL-2.0-only` with the source's copyright
-  lines. A file adapted from `usb4-emu` at or after `3c74189` keeps
-  `usb4-emu`'s copyright line and the owner's statement of 2026-10-25
-  (section 2a) and is under this project's GPL-2.0-or-later; it quoted
-  the source's GPL-2.0-only tag until 2026-10-27, when the owner had
-  that quotation dropped. A file adapted from FreeBSD keeps its BSD-2-Clause copyright line,
-  conditions and disclaimer verbatim; tbtools data keeps its MIT copyright
-  and permission notice verbatim; a `usb4cm` file lifted from a commit
-  before `3c74189` keeps the MIT notice of that commit (section 2a, "Source
-  files lifted from `usb4cm`"). The file is marked as changed, with the
-  date, and its header names the source file.
-- Each adapted file gets an entry in section 2a, "Source files adapted for
-  the Thunderbolt and USB4 work", naming the source file, the commit
-  actually read (Linux `c6859eed755df351a3978b33cb92365f9b3e8f06` and
-  FreeBSD `9d50245a0f1333e10cc1c4dda16878cd79a7c42b`, `external/README.md`'s
-  pins; the `usb4-emu` commit read, `3c74189` or later; the tbtools commit
-  read), what was adapted and where it landed, in the same change.
-- Adapting is translating: the code is still C89, safe on Windows 98 and
-  2000, free of 64-bit arithmetic and in `AGENTS.md`'s style, never a
-  paste of a Linux kernel API.
-- Behaviour taken from Linux alone stays tagged [linux], unconfirmed,
-  until a hardware capture shows it; adapting the code that implements it
-  does not change the tag.
-- Nothing moves from this repository or from `usb4-emu` into Stor98,
-  which is BSD-3-Clause.
-- A release whose binary carries adapted code says so in its notices,
-  naming the source files and their copyright holders, and offers its
-  corresponding source as the Linux xHCI exception above does (taken over
-  from that exception as an orchestrator decision of 2026-10-15, for the
-  owner to confirm).
-- The overlap audit above treats the recorded entries as known overlap;
-  any other verbatim overlap with these mirrors is still a finding.
+- **2026-10-15, first:** reading and citing only, no function body of either
+  tree copied.
+- **2026-10-15, widened** by the owner through the `usb4-emu` maintainer's
+  note, effective when `usb4-emu`'s relicensing from MIT to GPL-2.0-only
+  landed on its `main`. It landed at `3c74189` (2026-10-15), whose handoff
+  (`docs/XHCI98-HANDOFF.md` section 3) reads: "xhci98 may adapt code
+  directly from this repo (`tools/usb4cm` included) and from Linux
+  `drivers/thunderbolt` (GPL-2.0-only), as well as FreeBSD
+  `sys/dev/thunderbolt` (BSD-2) and Intel tbtools data (MIT). Keep the
+  notices of whatever you adapt: the copyright lines of the source file, its
+  SPDX tag, and an entry in xhci98's provenance record naming the source file
+  and pinned commit". The rule kept for it, for the Thunderbolt and USB4 work
+  only (Phases 39 and 40, design records 21 and 22, `src/cm/`), is
+  `AGENTS.md`, "Reference Implementations"; what this record adds to it:
+  a file adapted from Linux carries `SPDX-License-Identifier: GPL-2.0-only`
+  with the source's copyright lines; a file adapted from `usb4-emu` at or
+  after `3c74189` keeps `usb4-emu`'s copyright line and the owner's statement
+  of 2026-10-25 (section 2a) and is under this project's GPL-2.0-or-later,
+  having quoted the source's GPL-2.0-only tag until 2026-10-27, when the
+  owner had that quotation dropped; a FreeBSD file keeps its BSD-2-Clause
+  copyright line, conditions and disclaimer verbatim, tbtools data its MIT
+  copyright and permission notice verbatim, and a `usb4cm` file lifted from a
+  commit before `3c74189` the MIT notice of that commit (section 2a, "Source
+  files lifted from `usb4cm`"); nothing moves from this repository or from
+  `usb4-emu` into Stor98, which is BSD-3-Clause; an adapted file is marked
+  changed, with the date, and its header names the source file; its section 2a entry
+  ("Source files adapted for the Thunderbolt and USB4 work") names the
+  source file, the commit actually read (the Linux and FreeBSD pins above;
+  the `usb4-emu` commit read, `3c74189` or later; the tbtools commit read),
+  what was adapted and where it landed, in the same change; a release whose
+  binary carries adapted code says so in its notices, naming the source
+  files and their copyright holders, and offers its corresponding source as
+  the Linux xHCI exception does (taken over from that exception as an
+  orchestrator decision of 2026-10-15, for the owner to confirm); the
+  overlap audit treats the recorded entries as known overlap, any other
+  verbatim overlap with these mirrors still a finding. Every other mirror,
+  and Linux and FreeBSD outside this work, stays under the do-not-copy rule,
+  with the xHCI quirk exception as the only other one.
+- **2026-10-26 (task 44.38)**, with this project's code GPL-2.0-or-later: the
+  portions adapted from Linux were rewritten from the specifications (section
+  2a, "Rewritten from"); no adapted Linux code remains. Linux and FreeBSD
+  stay mirrored and are read for the facts above, cited by file and symbol, a
+  fact from Linux alone tagged [linux]; code is no longer adapted from a
+  `GPL-2.0` or `GPL-2.0-only` file (owner, 2026-10-26). Code taken from
+  `usb4-emu` is offered under GPL-2.0-or-later by its copyright holder
+  (owner, 2026-10-25; section 2a) and keeps the notice of the file it came
+  from.
 
-Every other mirror, and Linux and FreeBSD outside the Thunderbolt and
-USB4 work, stays under the do-not-copy rule, with the xHCI quirk
-exception above as the only other one.
-
-Both mirrors are in `external/` (git-ignored), and `external/README.md`
-records how to fetch them. On 2026-10-15 every mirrored file matched the
-upstream blob at its pinned commit once CR-LF was normalised to LF. Linux
-has no `include/uapi/linux/thunderbolt.h` at that commit, so the mirror
-has no such file. `usb4-emu`'s `ICM-PROTOCOL.md`, written clean-room under
-that repository's former rule and stated there to remain accurate, stays
-the contract record 21 cites first. A statement it tags [inf] - what
-Linux's client does - may be checked against `icm.c` and cited there as
-well.
-
-From 2026-10-26 (roadmap-usb4 task 44.38), with this project's code
-GPL-2.0-or-later: the portions adapted from Linux under the rule above
-were rewritten from the specifications (section 2a, "Rewritten from"), and
-no adapted Linux code remains in the tree. Linux `drivers/thunderbolt` and
-FreeBSD `sys/dev/thunderbolt` stay mirrored and are read for the facts the
-list above names, cited by file and symbol, a fact from Linux alone tagged
-[linux]; code is no longer adapted from a file whose SPDX identifier is
-`GPL-2.0` or `GPL-2.0-only` (owner, 2026-10-26). Code taken from `usb4-emu` is offered
-to this project under GPL-2.0-or-later by its copyright holder (owner,
-2026-10-25; section 2a), and keeps the notice of the file it came from.
-
-This records the decisions, the text they rest on and what was fetched;
-it draws no legal conclusion.
+This records the decisions, the text they rest on and what was fetched; it
+draws no legal conclusion.
 
 ## 4. Facts read out of shipping binaries: a source-method inventory
 
-This is the part most easily misread.
+"Binary-confirmed" in this project's documents means "checked against the
+shipping binary", almost always by a static read of a disassembly listing,
+not "observed at runtime". Each fact is tagged with the method actually used
+(`AGENTS.md`, "Third-Party Material and Provenance", for the rule):
 
-"Binary-confirmed" in this project's documents does not mean "observed at
-runtime". It means "checked against the shipping binary", and the check was
-almost always a static read of a disassembly listing. The distinction matters
-legally and technically, so this inventory tags each fact with the method
-actually used:
-
-- static: the fact was read out of a binary **without executing any of it**.
-  That is the whole of what the tag claims, and the tool varies with the
-  target: `link -dump -disasm` (the Windows 2000 DDK's COFF dumper) and
+- static: read out of a binary **without executing any of it**; that is the
+  whole claim. The tool varies with the target and each row names it:
+  `link -dump -disasm` (the Windows 2000 DDK's COFF dumper) and
   `dumpbin /exports` for the 32-bit work; `cdb.exe -z` and `kd.exe -z`, which
   load a raw PE and execute nothing, for amd64, where neither dumper can
-  disassemble; and capstone over an extracted image with its public PDB for
-  the NT 6.x readings. The section 4 table names the tool per row. *(This
-  entry listed the two 32-bit tools as though they were the definition, while
-  four rows below it were taken with the others - the 2026-09-16 audit's E8.)*
-- runtime: the fact was observed while the machine was running, through
-  counters and traces compiled into this project's own driver, or through
-  property dumps this driver made of data usbport handed it.
-- debugger: the fact was observed on a running or crashed system through a
-  debugger rather than through this driver - `kd` on a guest's `MEMORY.DMP`,
-  or a QEMU gdbstub watchpoint. Live, but not this driver's own evidence,
-  which is why it is not written as `runtime`. *(Added 2026-09-17; two
-  rows below carried `runtime` for readings taken this way.)*
+  disassemble; capstone over an extracted image with its public PDB for the
+  NT 6.x readings.
+- runtime: observed while the machine ran, through counters and traces
+  compiled into this project's own driver, or through property dumps this
+  driver made of data usbport handed it.
+- debugger (since 2026-09-17): observed on a running or crashed system
+  through a debugger rather than this driver - `kd` on a guest's
+  `MEMORY.DMP`, or a QEMU gdbstub watchpoint. Live, but not this driver's own
+  evidence, so not `runtime`.
 - both: established statically and corroborated by running the system.
 
-Which binaries. The miniport ABI work reads NUSB 3.3's `USBPORT.SYS`
+History: the 2026-09-16 audit (its E8) found the static entry listing the
+two 32-bit tools as though they were the definition, while four rows were
+taken with the others, and a horizontal rule above the table's second run
+that read as closing this section; until 2026-09-17 two rows carried
+`runtime` for readings taken by debugger.
+
+A running system is not corroboration of a reading. The 64-bit build of this
+driver (2026-09-09, task 21.2; installed and ran on an XP x64 guest the same
+day, task 21.5) and the Vista and Windows 7 tier (since 2026-09-16, both
+architectures; the four NT 6.x guests of task 22.5 ran the Version 300 path
+through every clause, issue 7 section 7.5, through this driver's log channel
+and, on the two x86 guests, its extension read out of guest memory) change
+no tag below. The amd64 reading a runtime observation is entangled with,
+**M8**, says so in its row (defect seen at runtime, layout read off the
+binary, no fact rests on the run); the one row recording the NT 6.x run is
+the runtime row beside the Version 300 tier rows, and it says what it
+corroborates rather than re-tagging it. The tiers are stated in `AGENTS.md`,
+"Project Purpose".
+
+**Which binaries.** The miniport ABI work reads NUSB 3.3's `USBPORT.SYS`
 5.00.2195.5652 (Windows 98 SE), Windows 2000 SP4's `USBPORT.SYS`
 5.00.2195.6681, in a few places Windows XP SP3's `usbport.sys`, and since
-2026-09-02 the SweetLow 5.1.2600.2180 rebuild for Windows 98 (below). Other
-shipping binaries have been read statically for narrower questions and are not
-individually inventoried below: both `usbehci.sys` builds (the periodic
-`Period` derivation, abi section 5), `usbhub20.sys` and the two `usbd.sys`
-builds (import and load-gate work), and a function driver, `ax88772.sys` (a
-Phase 8 behaviour question).
+2026-09-02 the SweetLow 5.1.2600.2180 rebuild for Windows 98 (below). Read
+statically for narrower questions and not individually inventoried: both
+`usbehci.sys` builds (the periodic `Period` derivation, abi section 5),
+`usbhub20.sys` and the two `usbd.sys` builds (import and load-gate work), and
+a function driver, `ax88772.sys` (a Phase 8 behaviour question).
 
-Since 2026-09-08 the same work reads a fifth lineage, and the first 64-bit
-one: the NT 5.2 amd64 `usbport.sys` and `usbehci.sys` of Windows XP
-Professional x64 / Windows Server 2003 x64, both 5.2.3790.3959
-(`srv03_sp2_rtm.070216-1710`). They were expanded from the `AMD64` directory
-of the project owner's own Windows XP x64 SP2 media with 7-Zip and
-`expand.exe` - routine unpacking, section 1's recorded case - into
-git-ignored `tools/winxp64-extracted/`, together with that media's
-`usbhub.sys` and its `usbport.inf`. Method **static** throughout: the export
-table was read with `link /dump /exports` and the two functions below were
-disassembled with `cdb.exe -z`, which loads a raw PE and executes nothing.
-Neither MSVC 6.0's `dumpbin` nor WDK 7.1's `link /dump /disasm` can
-disassemble amd64 here, which is why the tool differs from the one this
-section names for the 32-bit work; `docs/contributing/design/11-x64-targets.md`
-section 3 records the method and the four files' sizes and SHA-256s. What was
-established (Phase 21 task 21.1, design record 11 section 5): the three
-exports and their ordinals, that `USBPORT_GetHciMn` returns `0x10000001`,
-and the registration function's version gate and its two copied packet sizes,
-`0x250` and `0x230`. Nothing was executed; no file from that media is tracked.
+**Where those copies came from.** Every copy read came from a public
+download, an install on this project's
+own machine, or the maintainer's own install media: NUSB's binaries from the
+publicly distributed `nusb33e.exe`; Windows 98 SE's from the installed
+guest; Windows 2000 SP4's and XP SP3's from installation media
+(`I386\USBPORT.SY_`, `USBEHCI.SY_` and `USBD.SY_` off the SP4-integrated
+`win2ksp4.ISO` and a retail XP Pro SP3 OEM ISO), by `7z e` and `expand.exe`
+(`docs/usb-xhci-info/usbport-miniport-interface.md` section 5,
+`scripts/package/extract-usbd-sources.ps1`); the SP4 media copy matches the
+installed guest's byte for byte. Unpacking with 7-Zip and `expand.exe`
+below is section 1's recorded case. The listings produced live under
+git-ignored `tools/*-extracted/`, convenience copies, not the record. No
+file from the media in the next table is tracked, and nothing in them was
+executed.
 
-A further reading was taken from the same two files on 2026-09-09 (task 21.4,
-design record 11 section 5, **M7**): the amd64 layout of
-`USBPORT_ENDPOINT_PROPERTIES`, read out of `usbehci.sys`'s `OpenEndpoint`,
-`QueryEndpointRequirements` and the two endpoint-open paths below them - the
-`sizeof` from the nine 8-byte moves that copy the structure, and nine field
-offsets each from the instruction that reads it. Method **static**, with
-`kd.exe -z` from WDK 7.1's amd64 debuggers, which loads a raw PE and executes
-nothing; it is the same technique and the same debugger engine as the `cdb.exe
--z` above, and the reason a debugger is used at all is that neither MSVC 6.0's
-`dumpbin` nor WDK 7.1's `link /dump /disasm` can disassemble amd64 on this
-host - `msdis160.dll` is not present.
+The lineages and files added since, each method **static**:
 
-**A 64-bit binary of this driver now exists**, built on 2026-09-09 (task
-21.2), and on the same day it installed and ran on a Windows XP x64 guest
-(task 21.5) - which changes nothing about the tagging above. Every fact in
-this paragraph and the one before it remains `static`, read from Microsoft's
-shipped binaries. A running system is not corroboration of a reading: the
-standing rule is that a static fact is not upgraded because the machine also
-happens to work, and the one amd64 reading a runtime observation is entangled
-with, **M8**, says so in its own row - the defect was seen at runtime, the
-layout was read off the binary, and no fact rests on the run. The tier that
-observation supports is stated in `AGENTS.md`, "Project Purpose", and the
-tier does not change what any row here is tagged.
-
-Three more files came off the same media on 2026-09-09 for task 21.3, and they
-are a different kind of thing from the ABI readings: they are the *export
-tables the import gate resolves against*, the amd64 counterpart of the Windows
-2000 SP4 kernels and HALs already recorded here. `NTOSKRNL.EX_`,
-`NTKRNLMP.EX_` and `HAL.DL_` were expanded from `AMD64\` with 7-Zip and
-`expand.exe` into git-ignored `tools/winxp64-extracted/`, all three
-5.2.3790.3959 (`srv03_sp2_rtm.070216-1710`), by
-`scripts\import-gate\extract-target-baselines.ps1 -Amd64Iso`, which
-authenticates each file against `scripts\import-gate\winxp64-baselines.expected`
-by version, length and SHA-256 *before* staging it. Method **static**: only
-the export tables are read, with `link /dump /exports`. **Three files and not
-ten** - NT 5.2 amd64 ships one HAL where i386 ships eight, checked by listing
-every name on the media beginning `HAL` rather than by a pattern, which is the
-`HALBORG.DLL` lesson the i386 manifest records. Nothing from that media is
-tracked; the manifest records the identities, which is what makes the claim
-re-derivable without the files.
-
-Eleven more came off the owner's own Windows XP Professional SP3 OEM medium
-on 2026-10-14 for task 38.3, the same kind of thing: the export tables the
-import gate's `hlprx86` profile resolves `xhcihlpr.sys` against (design
-record 18 section 15.11). The medium is `Win XP Pro SP3 OEM original.iso`
-(volume `GRTMPOEM_EN`, 621,314,048 bytes, SHA-256
-`47E08EC0D987783411EFE47DC3582824E4ABD5B0931059D34C2F644BB4144F98`), the
-one this section names above for XP SP3's `usbport.sys`. It was read only:
-`7z e` took `I386\SP3.CAB` into a temporary directory and the members out
-of that cab - `ntoskrnl.exe`, `ntkrnlpa.exe`, `ntkrnlmp.exe`, `ntkrpamp.exe`
-and the seven HALs `hal.dll`, `halaacpi.dll`, `halacpi.dll`, `halapic.dll`,
-`halmacpi.dll`, `halmps.dll` and `halsp.dll`, all 5.1.2600.5512
-(`xpsp.080413-2111`), stored uncompressed in the cab, so nothing was
-expanded - into git-ignored `tools/winxpsp3-extracted/`, by
-`scripts\import-gate\extract-target-baselines.ps1 -WinXpIso`, which
-authenticates each file against `scripts\import-gate\winxp-x86-baselines.expected`
-by version, length and SHA-256 before staging it. The cab is the only place
-on the medium that carries the two PAE kernels; the loose, compressed
-`I386\NTOSKRNL.EX_` and `HAL.DL_` were expanded with `expand.exe` once, to
-compare, and are byte-identical to the cab's members. Method **static**:
-only the export tables are read, with `link /dump /exports`. The medium was
-not modified. Nothing from it is tracked.
-
-Since 2026-09-09 it reads two more lineages, in both architectures: the
-`usbport.sys` and `usbehci.sys` of Windows Vista SP2 (6.0.6002.18005,
-`lh_sp2rtm.090410-1830`) and Windows 7 Professional SP1 (6.1.7601.17514,
-`win7sp1_rtm.101119-1850`), and - for the x86 pair only - those systems'
-`ntoskrnl.exe` and `hal.dll`, whose export tables are what an import check
-resolves against. All eight came out of the `sources\install.wim` of the project
-owner's own retail media, mounted read-only with `Mount-DiskImage` and opened
-with 7-Zip: routine unpacking of shipped media, section 1's recorded case, with
-nothing copied out of the ISOs but the eight files and nothing written back.
-They live git-ignored in `tools/vista-x86-extracted/`, `tools/vista-x64-extracted/`,
-`tools/win7-x86-extracted/` and `tools/win7-x64-extracted/`. Method **static**
-throughout, with the same tools as the NT 5.2 amd64 work: `link /dump` for
-exports, headers and imports, and `cdb.exe -z` for the function bodies. What was
-established (Phase 21 task 21.7, Phase 22 tasks 22.1 and 22.2; design record 11
-sections 3 and 6, and the ABI document's "The 6.0 and 6.1 lineages"): the export
-table gained a fourth name and the ordinals shifted; `USBPORT_GetHciMn` still
-returns `0x10000001`; the registration gate and the `Version >= 200` packet size
-are unchanged in both architectures; the `USBPORT_RESOURCES` prefix and the 50
-miniport callback slots are unchanged; Windows 7 has a second, 64-bit DMA
-adapter behind a `Version >= 310` gate; and every import the shipping 32-bit
-`xhci98.sys` names resolves, in the right module, in both x86 kernels. Nothing
-was executed, no guest was booted, and no file from that media is tracked.
-
-Issue 5's mechanism work added a ninth file to each of those four directories
-on 2026-09-16/17: that lineage's own `usbhub.sys`, by the same route out of
-image 1 of the same `install.wim` (196,096 B Vista x86 - byte-identical to the
-copy on the Vista guest - 273,920 B Vista x64, 258,560 B Windows 7 x86,
-343,040 B Windows 7 x64). It was needed because the question was not what
-`usbport.sys` does with a selective-suspend setting but **who asks it to**, and
-the asking is in the hub driver. A tenth lineage joined them, git-ignored in
-`tools/winxpsp3-extracted/`: Windows XP SP3's `usbhub.sys`, 59,520 B,
-5.1.2600.5512, expanded with `expand.exe` from the loose `I386\USBHUB.SY_` on
-the owner's own XP SP3 medium and identical to the copy inside that medium's
-`SP3.CAB`. Method **static** throughout, `kd.exe -z` with the public PDBs above;
-nothing executed, no guest booted, no file from any of that media tracked.
-
-Two further readings were taken from those same files on 2026-09-10, both
-method **static** and both with `kd.exe -z`, which loads a raw PE and executes
-nothing. The first (task 21.8, design record 11 section 6.1) is the arity of
-`USBPORT_RegisterUSBPortDriver` - four arguments on NT 6.x against three on NT
-5.x - read from the callee's use of the fourth argument register in
-`vista-x64-extracted` and `win7-x64-extracted`, from the `ret` immediate in the
-two x86 builds, and from the caller's side in Vista x64's own `usbehci.sys`.
-The second (section 6.2) is the `USBPORT_RESOURCES.ResourcesTypes` bit
-assignment, read out of `USBPORT_ParseResources` in all four of those
-`usbport.sys` builds **and in `tools/winxp64-extracted/usbport.sys`**, which is
-the NT 5.2 comparison the finding rests on: NT 6.x carries a second port bit
-and moves interrupt and memory up one place each. Because that function is not
-exported there was no symbol to disassemble by name, so the whole `.text`
-section of each image was swept with `u <start> <end>` - bounds from `link
-/dump /headers` - and the listing searched. Still nothing executed; the driver
-was later rebuilt and its host tests run, which is this project's own code and
-is not a reading of anyone's binary. **Both facts stay `static`.** A Vista x64
-guest was running on 2026-09-10 and did report `0x0C` through this driver's own
-log channel, which is a `runtime` observation of *this* driver's input and is
-recorded as the symptom; the bit assignment itself is read off Microsoft's
-binaries and is not upgraded by it.
-
-Two more readings were taken on 2026-09-10 and 2026-09-11, both method
-**static**, both with `kd.exe -z` and `link /dump`, nothing executed. The
-first (task 21.8, design record 11 section 6.4) is the miniport interrupt DPC
-slot, read in **six** `usbport.sys` builds - `vista-x64`, `win7-x64`,
-`vista-x86`, `win7-x86`, and the two NT 5.x comparisons the finding rests on,
-`winxp64` and `winxpsp3` - together with the version-gated copy length and the
-interface allocation size in each. As with `USBPORT_ParseResources`, the
-dispatch is not an exported function, so it was reached by following
-`IoConnectInterrupt` to usbport's own ISR and on through `KeInsertQueueDpc` to
-the DPC's `DeferredRoutine`; on the x86 builds part of that chain was located
-by scanning `.text` for raw displacement bytes, because the relevant
-`KeInitializeDpc` call goes through a register and no indirect-call scan can
-see it. The second (section 6.3) is the WDM version each kernel reports, read
-out of `IoIsWdmVersionAvailable` itself in `tools/winxp64-extracted/
-ntoskrnl.exe` (1.30), `tools/vista-x86-extracted/ntoskrnl.exe` (6.00) and
-`tools/win7-x86-extracted/ntoskrnl.exe` (6.00) - three kernels, five
-instructions each, and the fact that corrected this driver's own version
-predicate. **Both stay `static`.** The XP x64 guest booted on 2026-09-11 both
-before and after that correction, and what it reported is a `runtime`
-observation of *this* driver's behaviour, recorded as such; the version
-constants themselves are read off Microsoft's binaries and are not upgraded by
-it.
-
-**Vista and Windows 7 are a supported tier since 2026-09-16, in both
-architectures, and that changes nothing about the tagging above either.** The
-four NT 6.x guests of roadmap task 22.5 ran this driver's Version 300 path
-through every clause (issue 7 section 7.5), which is a `runtime` observation
-of *this* driver - what usbport accepted from it and called back - taken
-through its own log channel and, on the two x86 guests, its own extension read
-out of guest memory. Every row below about the NT 6.x lineages stays as its
-method column says. The one row that records the run is the runtime row
-beside the Version 300 tier rows, and it says what it corroborates rather than
-re-tagging what it corroborates. The tier itself is stated in `AGENTS.md`,
-"Project Purpose".
+| Date, task | Files | Source and route | Read with | What was established |
+|---|---|---|---|---|
+| 2026-09-08, Phase 21 task 21.1 (design record 11 section 5) | NT 5.2 amd64 `usbport.sys` and `usbehci.sys` of XP Professional x64 / Server 2003 x64, both 5.2.3790.3959 (`srv03_sp2_rtm.070216-1710`), with that media's `usbhub.sys` and `usbport.inf`; the first 64-bit lineage, the fifth | `AMD64` directory of the owner's own XP x64 SP2 media, 7-Zip and `expand.exe`, into git-ignored `tools/winxp64-extracted/`; `docs/contributing/design/11-x64-targets.md` section 3 records the method and the four files' sizes and SHA-256s | export table with `link /dump /exports`, the two functions with `cdb.exe -z` (neither MSVC 6.0's `dumpbin` nor WDK 7.1's `link /dump /disasm` can disassemble amd64 here) | the three exports and their ordinals; `USBPORT_GetHciMn` returns `0x10000001`; the registration function's version gate and its two copied packet sizes, `0x250` and `0x230` |
+| 2026-09-09, task 21.4 (record 11 section 5, **M7**) | the same two files | as above | `kd.exe -z` from WDK 7.1's amd64 debuggers (the same engine as `cdb.exe -z`; a debugger because `msdis160.dll` is not present on this host) | the amd64 layout of `USBPORT_ENDPOINT_PROPERTIES` from `usbehci.sys`'s `OpenEndpoint`, `QueryEndpointRequirements` and the two endpoint-open paths below them: the `sizeof` from the nine 8-byte moves that copy it, nine field offsets each from the instruction that reads it |
+| 2026-09-09, task 21.3 | `NTOSKRNL.EX_`, `NTKRNLMP.EX_`, `HAL.DL_`, all 5.2.3790.3959 (`srv03_sp2_rtm.070216-1710`): the export tables the import gate resolves against, the amd64 counterpart of the 2000 SP4 kernels and HALs | `AMD64\` of the same media, 7-Zip and `expand.exe`, into `tools/winxp64-extracted/`, by `scripts\import-gate\extract-target-baselines.ps1 -Amd64Iso`, which authenticates each against `scripts\import-gate\winxp64-baselines.expected` by version, length and SHA-256 *before* staging it | export tables only, `link /dump /exports` | **three files, not ten**: NT 5.2 amd64 ships one HAL where i386 ships eight, checked by listing every name on the media beginning `HAL` rather than by a pattern (the `HALBORG.DLL` lesson of the i386 manifest); the manifest records the identities, so the claim is re-derivable without the files |
+| 2026-10-14, task 38.3 (design record 18 section 15.11) | eleven files for the import gate's `hlprx86` profile (`xhcihlpr.sys`): `ntoskrnl.exe`, `ntkrnlpa.exe`, `ntkrnlmp.exe`, `ntkrpamp.exe` and the seven HALs `hal.dll`, `halaacpi.dll`, `halacpi.dll`, `halapic.dll`, `halmacpi.dll`, `halmps.dll`, `halsp.dll`, all 5.1.2600.5512 (`xpsp.080413-2111`) | the owner's own `Win XP Pro SP3 OEM original.iso` (volume `GRTMPOEM_EN`, 621,314,048 bytes, SHA-256 `47E08EC0D987783411EFE47DC3582824E4ABD5B0931059D34C2F644BB4144F98`; the medium named above for XP SP3's `usbport.sys`), read only: `7z e` took `I386\SP3.CAB` into a temporary directory and its members (stored uncompressed, nothing expanded) into git-ignored `tools/winxpsp3-extracted/`, by `extract-target-baselines.ps1 -WinXpIso`, authenticating each against `scripts\import-gate\winxp-x86-baselines.expected` by version, length and SHA-256 before staging; the medium was not modified. The cab is the only place on the medium with the two PAE kernels; the loose compressed `I386\NTOSKRNL.EX_` and `HAL.DL_` were expanded once with `expand.exe` to compare and are byte-identical to the cab's members | export tables only, `link /dump /exports` | the export tables `xhcihlpr.sys` resolves against |
+| 2026-09-09, Phase 21 task 21.7, Phase 22 tasks 22.1 and 22.2 (record 11 sections 3 and 6; the ABI document's "The 6.0 and 6.1 lineages") | `usbport.sys` and `usbehci.sys` of Vista SP2 (6.0.6002.18005, `lh_sp2rtm.090410-1830`) and Windows 7 Professional SP1 (6.1.7601.17514, `win7sp1_rtm.101119-1850`), both architectures, and for x86 only those systems' `ntoskrnl.exe` and `hal.dll` (export tables for the import check): eight files | `sources\install.wim` of the owner's own retail media, mounted read-only with `Mount-DiskImage` and opened with 7-Zip, nothing copied out but the eight files, nothing written back; git-ignored `tools/vista-x86-extracted/`, `vista-x64-extracted/`, `win7-x86-extracted/`, `win7-x64-extracted/` | `link /dump` for exports, headers and imports; `cdb.exe -z` for function bodies; no guest booted | the export table gained a fourth name and the ordinals shifted; `USBPORT_GetHciMn` still returns `0x10000001`; the registration gate and the `Version >= 200` packet size unchanged in both architectures; the `USBPORT_RESOURCES` prefix and the 50 miniport callback slots unchanged; Windows 7 has a second, 64-bit DMA adapter behind a `Version >= 310` gate; every import the shipping 32-bit `xhci98.sys` names resolves, in the right module, in both x86 kernels |
+| 2026-09-16/17, issue 5's mechanism work | a ninth file in each of those four directories, that lineage's `usbhub.sys` (196,096 B Vista x86, byte-identical to the Vista guest's copy; 273,920 B Vista x64; 258,560 B Windows 7 x86; 343,040 B Windows 7 x64), needed because the question was **who asks** usbport to apply a selective-suspend setting, and the asking is in the hub driver; and a tenth lineage, XP SP3's `usbhub.sys`, 59,520 B, 5.1.2600.5512, in `tools/winxpsp3-extracted/` | image 1 of the same `install.wim`; XP SP3's expanded with `expand.exe` from the loose `I386\USBHUB.SY_` on the owner's own XP SP3 medium, identical to the copy in its `SP3.CAB` | `kd.exe -z` with the public PDBs (section 2, "The Microsoft public symbol files"); no guest booted | the rows below |
+| 2026-09-10 (task 21.8, record 11 sections 6.1 and 6.2) | the same files, and `tools/winxp64-extracted/usbport.sys` | as above | `kd.exe -z`; `ParseResources` is not exported, so each image's whole `.text` was swept with `u <start> <end>` (bounds from `link /dump /headers`) and the listing searched | the arity of `USBPORT_RegisterUSBPortDriver` (four arguments on NT 6.x, three on NT 5.x), from the callee's use of the fourth argument register in `vista-x64-extracted` and `win7-x64-extracted`, the `ret` immediate in the two x86 builds and the caller's side in Vista x64's `usbehci.sys`; the `USBPORT_RESOURCES.ResourcesTypes` bit assignment from `USBPORT_ParseResources` in all four NT 6.x builds **and the NT 5.2 one** the finding rests on: NT 6.x carries a second port bit and moves interrupt and memory up one place. **Both stay `static`**: the driver was later rebuilt and its host tests run (this project's own code), and a Vista x64 guest reported `0x0C` through this driver's log channel on 2026-09-10, a `runtime` observation of this driver's input, recorded as the symptom |
+| 2026-09-10 and 2026-09-11 (task 21.8, record 11 sections 6.4 and 6.3) | six `usbport.sys` builds (`vista-x64`, `win7-x64`, `vista-x86`, `win7-x86`, and the NT 5.x comparisons `winxp64`, `winxpsp3`); `ntoskrnl.exe` of `winxp64` (1.30), `vista-x86` (6.00) and `win7-x86` (6.00) | as above | `kd.exe -z` and `link /dump`; the DPC dispatch is not exported, so it was reached by following `IoConnectInterrupt` to usbport's ISR and through `KeInsertQueueDpc` to the DPC's `DeferredRoutine`, on x86 partly by scanning `.text` for raw displacement bytes (the `KeInitializeDpc` call goes through a register, invisible to an indirect-call scan) | the miniport interrupt DPC slot with the version-gated copy length and interface allocation size in each build; the WDM version each kernel reports, read out of `IoIsWdmVersionAvailable` (five instructions each), the fact that corrected this driver's version predicate. **Both stay `static`**: the XP x64 guest booted on 2026-09-11 before and after that correction, a `runtime` observation of this driver, recorded as such |
 
 The toolchain that reads them is third-party material on the same terms.
 WDK 7.1 (`GRMWDK_EN_7600_1.ISO`, 649,877,504 bytes, SHA-256
-`5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, from the
+`5edc723b50ea28a070cad361dd0927df402b7a861a036bbcf11d27ebba77657d`, the
 owner's own media) is unpacked into git-ignored `tools/WinDDK71/` with
 `msiexec /a`, an administrative install that lays out files and registers
-nothing; verified the same day that no WDK or debugger entry appears in
-installed programs and no `C:\WinDDK` exists. It is used in place and
-distributed nowhere, exactly as `tools/MSVC600` and `tools/ntddk` are.
-Whether it stays is design record 11's decision 3.
+nothing (verified the same day: no WDK or debugger entry in installed
+programs, no `C:\WinDDK`). It is used in place and distributed nowhere, as
+`tools/MSVC600` and `tools/ntddk` are. Whether it stays is design record 11's
+decision 3.
 
-One more package has been read at the file level only: `nusb36e.exe` (NUSB
-3.6, public download, kept git-ignored in `tools/` beside the 3.3 package).
-Method static throughout: its files were extracted, hashed and
-version-stamped, and its INFs read, to establish that its USB 2.0 stack is
-byte-identical to 3.3's; nothing in it was disassembled.
-`docs/usb-xhci-info/usbport-miniport-interface.md` section 5 records the
-comparison. The one runtime observation involving it (a 2026-09-01 VM pass)
-was taken through this project's own driver counters, not from the package's
-binaries.
+Read at the file level only (method static; nothing disassembled or
+executed, nothing kept in this tree or under `tools/` unless stated):
 
-The Windows ME OEM CD image on the project owner's machine was read at the
-file level on 2026-09-02, for the Windows ME target question: `layout.inf`,
-`layout1.inf`, `layout2.inf`, `usb.inf` and `hiddev.inf` were extracted from
-its `win9x\PRECOPY1.CAB` with 7-Zip and read as text. Nothing was executed
-and nothing was disassembled, and no file from it is kept in this tree or
-under `tools/`. The facts are in `docs/contributing/build-and-test.md`,
-"Windows ME target VM".
+- `nusb36e.exe` (NUSB 3.6, public download, git-ignored in `tools/` beside
+  the 3.3 package): files extracted, hashed and version-stamped and the INFs
+  read, establishing that its USB 2.0 stack is byte-identical to 3.3's
+  (`docs/usb-xhci-info/usbport-miniport-interface.md` section 5). The one
+  runtime observation involving it (a 2026-09-01 VM pass) was through this
+  project's driver counters, not the package's binaries.
+- The Windows ME OEM CD image on the owner's machine, 2026-09-02, for the ME
+  target question: `layout.inf`, `layout1.inf`, `layout2.inf`, `usb.inf` and
+  `hiddev.inf` from `win9x\PRECOPY1.CAB` with 7-Zip, read as text
+  (`docs/contributing/build-and-test.md`, "Windows ME target VM").
+- The four target CDs, 2026-09-07, for the `usbui.dll` question: each one's
+  `layout.inf` (`PRECOPY1.CAB` on the 9x CDs, the uncompressed
+  `I386\LAYOUT.INF` on the NT CDs) and the `usbui.dll` and `sysclass.dll`
+  files, with 7-Zip and `expand.exe`, PE export and import tables read with a
+  parser, staged in a scratch directory outside the repository. Established
+  (`build-and-test.md`, "The files the OS supplies"): four distinct per-OS
+  `usbui.dll` builds, each exporting `USBControllerPropPageProvider` and
+  `USBHubPropPageProvider`, and a 9x `sysclass.dll` that is a 16-bit NE
+  module carrying the string `usbui.dll`. The Device Manager behaviour those
+  files drive was observed the same day in the four target VMs (property
+  sheets with the file present and absent): observations of Windows' own user
+  interface, with this driver installed but not through its counters or
+  traces, so neither `static` nor `runtime`; `build-and-test.md` records them
+  as guest readings, naming each guest.
 
-The four target CDs were read at the file level again on 2026-09-07, for the
-`usbui.dll` question: each one's `layout.inf` (from `PRECOPY1.CAB` on the two
-9x CDs, and `I386\LAYOUT.INF`, which the NT CDs carry uncompressed), and the
-`usbui.dll` and `sysclass.dll` files themselves, extracted with 7-Zip and
-`expand.exe`. Method static: the PE export and import tables were read with a
-parser, nothing was disassembled and nothing was executed. What it established
-is in `docs/contributing/build-and-test.md`, "The files the OS supplies" -
-four distinct per-OS `usbui.dll` builds, each exporting
-`USBControllerPropPageProvider` and `USBHubPropPageProvider`, and a 9x
-`sysclass.dll` that is a 16-bit NE module carrying the string `usbui.dll`. No
-file from any of those CDs is kept in this tree or under `tools/`; the copies
-read were staged into a scratch directory outside the repository.
-
-Separately, and not a binary-derived fact at all: the Device Manager behaviour
-those files drive was observed the same day in the four target virtual
-machines, by opening property sheets with the file present and with it absent.
-Those are observations of Windows' own user interface, made with this driver
-installed but not through its counters or its traces, so they carry neither
-the static nor the runtime tag defined above. `build-and-test.md` records them
-as guest readings, naming the guest each came from.
-
-A further package has been read, statically and at run time, on 2026-09-02:
-SweetLow's USB 2.0 stack for Windows 98, `usb20_win9x.zip`, from the download
-link its author gave the project owner
-(`http://sweetlow.orgfree.com/download/usb20_win9x.zip`; the zip is kept
-git-ignored in `tools/` and its extraction in `tools/sweetlow-extracted/`
+SweetLow's USB 2.0 stack for Windows 98, `usb20_win9x.zip`, was read
+statically and at run time on 2026-09-02, from the download link its author
+gave the owner (`http://sweetlow.orgfree.com/download/usb20_win9x.zip`; the
+zip git-ignored in `tools/`, its extraction in `tools/sweetlow-extracted/`
 with a README recording URL, sizes, versions and SHA-256s). The same five
 binaries had been fetched earlier that day from Windows 98 QuickInstall's
 driver library (`oerg866/win98-driver-lib-base`, `[MBD]_sweetlow_usb2.0`,
-commit `5ef7f88e`, a public GitHub repository) and hash identical. Its `USBPORT.SYS` is a 5.1.2600.2180
-build carrying the resource string "built by: WinDDK", so the file is a
-rebuild from XP SP2-level sources rather than a Microsoft-shipped binary; how
-those sources were obtained is not recorded here, and this project has not
-asked. Method: `dumpbin /exports`, `/imports` and `/disasm` over the port
-driver, the miniport and the hub driver as fetched, with the two exported
-routines' bodies extracted to `usbport-registration-disasm.txt`; a UTF-16
-string scan for registry value names; and one VM session in which this
-driver's own trace recorded the registration values and the controller
-lifecycle. Nothing was patched. `docs/usb-xhci-info/usbport-miniport-interface.md`
-section 5 holds the record. The package is not tracked and not carried in the
-release download; the three-file exception in section 5 is unchanged, and the
-stack is referred to by its upstream repository only.
+commit `5ef7f88e`, a public GitHub repository), hash-identical. Its
+`USBPORT.SYS` is a 5.1.2600.2180 build carrying the resource string "built
+by: WinDDK", a rebuild from XP SP2-level sources rather than a
+Microsoft-shipped binary; how those sources were obtained is not recorded
+here, and this project has not asked. Method: `dumpbin /exports`, `/imports`
+and `/disasm` over the port driver, the miniport and the hub driver as
+fetched, the two exported routines' bodies extracted to
+`usbport-registration-disasm.txt`; a UTF-16 string scan for registry value
+names; one VM session in which this driver's trace recorded the registration
+values and the controller lifecycle. Nothing was patched
+(`docs/usb-xhci-info/usbport-miniport-interface.md` section 5). The package
+is not tracked and not in the release download; section 5's three-file
+exception is unchanged, and the stack is referred to by its upstream
+repository only.
 
-Where those copies came from, since "read as installed" is not the whole
-story: NUSB's binaries from the publicly-distributed `nusb33e.exe` package;
-Windows 98 SE binaries from the installed guest; and the Windows 2000 SP4 and
-Windows XP SP3 binaries from installation media (`I386\USBPORT.SY_`,
-`USBEHCI.SY_` and `USBD.SY_` off the SP4-integrated `win2ksp4.ISO` and a retail
-XP Pro SP3 OEM ISO), extracted with `7z e` and expanded with `expand.exe`
-(`docs/usb-xhci-info/usbport-miniport-interface.md` section 5,
-`scripts/package/extract-usbd-sources.ps1`). For the SP4 build the media copy
-was checked against the installed guest's own copy and matches byte for byte.
-Every copy read came from one of those three places: a public download, an
-install on this project's own machine, or the maintainer's own install media.
+**Scope of the table.** It indexes the `usbport.sys` miniport ABI facts: the
+contracts `src/` is written against, and those unre-derivable without a
+binary. It is an index into `docs/usb-xhci-info/usbport-miniport-abi.md`
+(the complete, citation-level record) by method, not a replacement for it
+nor an exhaustive list of every observation this project has made about a
+third-party binary; the roadmap's per-task boxes hold the rest, each with its
+own method stated. Where a fact is inferred rather than read, the documents
+say so, and several record refutations of earlier readings; keep that habit.
+"abi section N" means section N of `docs/usb-xhci-info/usbport-miniport-abi.md`.
+Each row gives the fact in one sentence, its method tag, the binary and
+where the fact is used; "detail: <record> appendix X, X.n" points at the
+appendix item of that record that keeps the full reading (addresses,
+offsets, commands, the evidence) in the words the row had here. "The ABI
+builds" are NUSB 3.3's and Windows 2000 SP4's `USBPORT.SYS` and, in a few
+places (a row naming XP, or "all three"), XP SP3's, as "Which binaries"
+names them.
+The rows from the issue 7 and issue 8 readings on (then the three task 22.12
+(b) readings of 2026-09-18) were added after this paragraph was first
+written; they are part of this section.
 
-The listings produced from them live under `tools/*-extracted/` and are
-git-ignored; they are convenience copies, not the record.
-
-Scope of the table. It indexes the `usbport.sys` miniport ABI facts: the
-contracts `src/` is written against, and the ones that would be
-unre-derivable without a binary. It is an index into
-`docs/usb-xhci-info/usbport-miniport-abi.md` by method, not an exhaustive list
-of every observation this project has ever made about a third-party binary;
-the roadmap's per-task boxes hold the rest, each with its own method stated.
-
-"abi section N" below means section N of `docs/usb-xhci-info/usbport-miniport-abi.md`.
-
-| Fact | Method | Where recorded |
-| SweetLow's `USBPORT.SYS` has the same unguarded single-TT lookup: `CreateDevice` calls `0x26628` at `0x26B1D`; a zero count takes `0x2667A` and the empty list becomes `0xFFFFFFEC` at `0x26686` | static: MSVC 6 `dumpbin /disasm` on the 134,912-byte file, SHA-256 `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56`; the branch was never observed executing (the next row is a crash consistent with it, not a reading of it) | abi section 8; issue 06 section 6 |
-| Under that build, a truthfully reported Full-Speed device on a root port takes Windows 98 SE down with a fatal exception 0E at `0028:C002F70E` in `NTKERN` (the NUSB address), after usbhub's port reset and before usbport opens the device's EP0 | runtime (QEMU only, 2026-09-25: an uncommitted build, the guest's screen and this driver's trace; no debugger, and the status word usbport read for that port was not captured) | abi section 8; issue 06 sections 1 and 8; `runs/run-24.md`, 24.3 |
-| `USBPORT_GetHciMn` present at ordinal 2, `USBPORT_RegisterUSBPortDriver` at 3, plus an undocumented `DllUnload` at 1; `usbehci.sys` imports only the first two | static (`dumpbin /exports`) | abi section 1 |
-| `USBPORT_REGISTRATION_PACKET` layout identical across all three builds (Phase 3 task 1) | static | abi section 3 |
-| The SweetLow WinDDK rebuild (5.1.2600.2180, Windows 98) has the same three exports and ordinals, the same `>= 100` / `>= 200` gate, the 300/316-byte copy, the 0x150 wrapper with `Version` at +0x10 and the packet at +0x14, writes the same 16 service pointers, and returns `0x10000001` from `USBPORT_GetHciMn` | both: read from `tools/sweetlow-extracted/usbport-registration-disasm.txt`, then `USBPORT_GetHciMn=10000001` and `packet size=0000013C` in this driver's trace on the `2a-sweetlow` guest | interface doc section 5, "The SweetLow rebuild" |
-| Under that build, Windows 98 completes the controller stop (`DisableInterrupts`, `StopController(TRUE)`) on disable, Remove and reinstall, where both 5.00.2195 builds on Windows 98 bugcheck at `0028:C00312EE` after `RH_DisableIrq` | runtime (this driver's trace, QEMU only) | `docs/contributing/lessons.md`, "The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport" |
-| The `USBPORT_MINIPORT_INTERFACE` wrapper differs per build: packet at +0x14 (Win2000/XP) vs +0x10 (NUSB), because NUSB's wrapper has no `Version` field, so an interface offset is not a packet offset | static | abi section 3, and the `FlushInterrupts` box in section 4 |
-| Registration version gating: `TakePortControl` additionally gated on interface `Version >= 200` in the Win2000/XP builds | static | abi section 4 |
-| `UsbPortBugCheck` is `KeBugCheckEx(0xD2, 0, 0, 0, 0)`; all four parameters hard zero; the extension argument is pushed and never read | static | abi section 5 |
-| `UsbPortRequestAsyncCallback` callbacks run at DISPATCH_LEVEL holding neither miniport lock, and cannot be cancelled | static (NUSB `0002785E`) | abi section 5 and the locking table |
-| `ResetController` runs at DISPATCH_LEVEL inside a usbport spin lock (so `UsbPortWait` is illegal there); `UsbPortInvalidateController(RESET)` queues a DPC rather than acting inline | static | abi section 4 |
-| Common buffer: 32-bit DMA adapter, page-aligned `StartVA`/`StartPA`, `ROUND_TO_PAGES(size + 0x30)` with usbport's 48-byte header at the end, block zeroed before `StartController`, and `CacheEnabled = TRUE` | static | abi section 4; consequences in design doc 04 |
-| Scatter/gather elements are page-granular: `ElementLength = 0x1000 - (PA.LowPart & 0xFFF)` clamped to the remaining length | static | abi section 5 |
-| SG element ordering versus `SgOffset` | not claimed; a static pass cannot establish it | abi open item 8 |
-| `TransferParameters` is an interior pointer of the transfer record; `SubmitTransfer` preconditions (list pointer never NULL, `SgElementCount == 0` legal) | static | abi section 4 |
-| Post-`SubmitTransfer` lifetime: usbport's post-callback writes happen after it releases the miniport lock, and the completion path takes no lock ordering it behind them | static | abi section 4 |
-| `AbortTransfer` post-return lifetime: usbport retains nothing, the record is `ExFreePool`d in the same worker pass, and the miniport extension is interior to the freed block | static | abi section 4 |
-| `ENDPOINT_FLAG_NUKE` is a controller-teardown flag; on that path usbport completes and frees transfers with no miniport callback | static, with the whole-image negative enumerated so it is checkable without the files | abi section 4 |
-| The `USBPORT_GetTt` defect: `USBPORT_CreateDevice` gates the TT lookup on `USB_MINIPORT_FLAGS_USB2` and not-High-Speed; `USBPORT_GetTt`'s single-TT branch has no empty-list guard and returns `0xFFFFFFEC`, which `OpenPipe`'s null check passes, bugchecking in `ExfInterlockedInsertTailList` | both: the bugcheck was observed on both targets first, then read out of the instructions | abi section 8 ("The transaction-translator lookup, and why `USB_MINIPORT_FLAGS_USB2` must be set"); the resulting untruth is in `docs/contributing/implementation-invariants.md`, "Root Hub Reporting" |
-| Hub-descriptor request shape, and `PowerOnToPowerGood` copied straight through and truncated to a UCHAR (so 20 ms encodes as 10) | static | abi open item 7, root-hub block in section 4 |
-| Root-hub `RH_DisableIrq`/`RH_EnableIrq` lifecycle: a close is not guaranteed a matching open; per-build addresses recorded | static | abi section 4 |
-| `RH_SetFeatureUSB2PortPower`'s helper drops its lock before the callback (correcting an earlier wrong claim); caller-held locking in general remains unverified | static | abi section 4 |
-| The isochronous block: `SubmitIsoTransfer` at packet slot 0x54, the parameter builder and the completion consumer identical across both builds bar three known private offsets, no version gate | static | abi section 4 |
-| `FlushInterrupts` call site: the device-power completion routine on the `PowerDeviceD0` path, holding neither miniport lock | static, and explicitly not by waiting for a trace (an earlier "remains unreached" was a statement about Phase 3's traces misread as a statement about the binaries) | abi section 4 |
-| `InterruptNextSOF`: two call sites per build, both the endpoint state-change machine, DISPATCH under `MiniportSpinLock`, and nothing waits on it | static | abi section 4 |
-| Callback reachability: which slots are actually called on a live target, e.g. `PollController` called repeatedly from bind onward | runtime (Phase 3 traces) | abi open item, section 7 |
-| `FlushInterrupts` and `InterruptNextSOF` occurrence corroborated by `XHCI_EXTENSION.InterruptFlushes` and `InterruptNextSofRequests` counters in a release build | runtime, corroborating a static reading | abi open item, section 7 |
-| `HubAddr`/`PortNumber` property values: `PortNumber` names the root-hub port for a device on a root port, and is not a TT-only field | runtime (batch 6-V VM runs, on both builds): a property dump of what usbport handed this driver | abi section 5 |
-| `SetEndpointState` is edge-triggered on usbport's own recorded state and skips the miniport call when they match | static | abi section 4 |
-| `UsbPortGetMiniportRegistryKeyValue` (packet slot 0xF0): populated in both builds; six stack arguments (`ret 18h`); the `BOOL` selects `IoOpenDeviceRegistryKey`'s key type (FALSE = hardware, TRUE = driver/software); the `PCWSTR` is a value name and the first `SIZE_T` its byte length including the NUL; the reader is instruction-for-instruction identical across the two images; the return collapses to `(ntStatus == 0) ? 0 : 8`; PASSIVE_LEVEL only (`IoOpenDeviceRegistryKey`, `ZwQueryValueKey`, PagedPool) | static | abi section 6, task 11-V.7 box |
-| The shipping `usbehci.sys` calls that slot exactly once per image, with `BOOL = TRUE` and a 4-byte read of `L"EnIdleEndpointSupport"`, from inside `StartController` | static (both builds) | abi section 6, task 11-V.7 box |
-| Controller-lifecycle census: whole-image enumeration of usbport's slot calls finds exactly three `StartController` and three `StopController` call sites per build and exactly one `ResetController`; every direct caller chain out of the five routines holding them terminates at an `IRP_MJ_PNP` or `IRP_MJ_POWER` handler (plus, in the Win2000/XP build only, an HCD IOCTL that requests a power transition); and the reset DPC's body arms nothing after calling the slot. A transitive whole-image negative was attempted and is explicitly not claimed: indirect transfers are unclassified, and the attempt produced a known false edge. The only producer of `UsbPortInvalidateController(RESET)` is a miniport: usbport's one internal call site passes `SURPRISE_REMOVE` | static (both builds; the commands, the instruction pair enumerated, and every per-build address recorded, so the census is re-runnable without the files) | abi section 4, the two notes after the `UsbPortInvalidateController(RESET)` box |
-| What drives `PassThru` (packet slot 0xE0): the user-mode escape is `IOCTL_USB_USER_REQUEST` `0x00220438`, METHOD_BUFFERED, `UsbUserRequest == 3`, reached through the `\DosDevices\HCD<n>` symbolic link the HCD FDO's start path creates; the buffer contract, the non-paged copy usbport hands the callback, PASSIVE_LEVEL with no usbport lock held, and the second site being a test-mode-only internal probe whose fallback to `RH_GetPortStatus` fires only on a return of exactly 6 | both. Static for all of it, from the binaries' own comparison chains rather than from a header (the Win2000 DDK here has no `usbuser.h`). Runtime on the Windows 98 target, on the NUSB 5652 build this was read out of, in the 2a guest: the link opens, the round trip completes, the four `-probe` controls return 0 / 2 / 4 / 7, and the driver's own trace carries `cb PassThru` lines. Runtime on Windows 2000 as well: in the 2b guest, against SP4's own `usbport.sys` 6681, the link opens, the round trip completes, and the four `-probe` controls return the same 0 / 2 / 4 / 7. So the structural reading of the SP4 binary is an observation on both targets, and the two builds answer this escape identically at run time as well as in their comparison chains. The same run also measured the route's one limit: usbport builds its link at a fixed index with no retry, so on a machine where Windows 98's own USB stack already owns that name no usbport link appears at all | abi section 4, "Debug / single-packet" box |
-| SP4's native `usbhub.sys` (5.00.2195.6689, 40,176 B, from the fresh Windows 2000 image) carries no `SelectiveSuspend`, `DisableSelectiveSuspend` or `IdleNotification` string, ASCII or UTF-16; SP4's `usbport.sys` (5.00.2195.6681) carries `DisableSelectiveSuspend` (3), `HcDisableSelectiveSuspend` (2) and `SelectiveSuspend` (3) | static (a string search over the files extracted from the image; nothing disassembled, nothing executed) | build-and-test.md, "A replug onto an idle-suspended controller"; F18's Windows 2000 reading |
-| How the idle suspend is gated in the three symbol-less 32-bit `usbport.sys` builds - NUSB 3.3/3.6 5.00.2195.5652, SweetLow's 5.1.2600.2180, Windows 2000 SP4 5.00.2195.6681. `HcDisableSelectiveSuspend` is read by a function that passes BOOLEAN 1 to the registry helper (NUSB `0x11C10` -> `0x2D00A`, SweetLow `0x10BCE` -> `0x2CC3A`, SP4 `0x11CCC` -> `0x2D8BE`), which turns it into `IoOpenDeviceRegistryKey(Pdo, 2 = PLUGPLAY_REGKEY_DRIVER, ...)` and copies the first 4 data bytes of a `KeyValueFullInformation` query without checking the type; absent or 0 means "allowed". The global `Services\usb\DisableSelectiveSuspend` is a `RtlQueryRegistryValues` entry whose query routine accepts `REG_DWORD` (4 bytes) and `REG_BINARY` (1 byte). The start routine sets FDO-extension flag `0x800` ("selective suspend allowed") only when Hc allows AND the global is 0 (NUSB `0x10933`, SweetLow `0x115FC`, SP4 `0x109A3`), and `0x08000000` when the global is nonzero; miniport flag `0x20` forces the same pair. The one test of `0x800` on the idle path is the root hub's idle-notification IOCTL `0x220027` (NUSB `0x1F1BB`, SweetLow `0x1E65F`, SP4 `0x1F8C3`: `test ah,8`, clear -> `STATUS_NOT_SUPPORTED`); `0x08000000`'s only test is the bus-interface setter that re-enables selective suspend and writes Hc back (NUSB `0x13214`). The NUSB and SP4 start routines default the global to 1 when `IoIsWdmVersionAvailable` reports WDM 1.10 without 1.20, i.e. Windows 2000 (NUSB `0x1082B`, SP4 `0x10890`); SweetLow's has no such check | static (`link -dump -disasm`, image base `0x10000`; nothing executed), and the Hc-alone conclusion corroborated at runtime under NUSB 3.3 and SweetLow's stack on 2026-09-16 (two boots each against a suspending control) | `docs/contributing/lessons.md`, "And then the whole framing turned out to be wrong", the correction; issue 5 section 4 |
-| NUSB 3.6's `usbhub20.sys` (5.00.2195.6891, 50,032 B) carries `DisableSelectiveSuspend` (1) and `SelectiveSuspend` (1); NUSB 3.6's `usbhub.sys` (4.90.3002.1) carries none; NUSB 3.6's `usbport.sys` (5.00.2195.5652) carries the same three names as SP4's | static (string search, as above) | the same site: an unconfirmed candidate explanation for the differing bounded idle observations on the two targets (`build-and-test.md`) |
-| **How the idle suspend is gated in the six symbol-bearing builds**, completing the three symbol-less ones above into all nine this driver runs under. XP SP3 x86 and XP/2003 x64 5.2.3790.3959 follow the NT 5.x shape exactly: the start routine sets FDO flag `0x800` only when `HcDisableSelectiveSuspend` (software key, `IoOpenDeviceRegistryKey` type 2) and the global `Services\usb\DisableSelectiveSuspend` are both absent or 0, sets `0x08000000` when the global is nonzero, and the root hub's idle IOCTL `0x220027` is refused with `STATUS_NOT_SUPPORTED` while `0x800` is clear (`USBPORT_IdleNotificationRequest+0x8b` x86, `+0x9c` x64). Vista SP2 x86/x64 replace the flag pair with a selective-suspend state word at device-extension `+0x3E4` (x86) / `+0x508` (x64) - 1 enabled, 2 disabled by `HcDisableSelectiveSuspend`, 3 by the global value, 4 by miniport flag `0x20` - and usbport's own SSP idle timer arms only in state 1 (`USBPORT_SSP_Enable_Action`, x86 `0x2B90A`). Windows 7 SP1 x86/x64 use the same numbering at `+0x3FC` / `+0x4F8` and **have no `HcDisableSelectiveSuspend` string at all**: the per-controller name there is `HcDisableAllSelectiveSuspend`, and `usbhub` reads `SelectiveSuspendEnabled = (state == 1)` at hub start, entering its sticky state 6 (never idles) when FALSE | static (`kd -z ... -y srv*tools\symbols`, Microsoft public PDBs, section 2; nothing executed) | issue 5 section 5.4; `docs/contributing/lessons.md`, the same correction |
-| **`USBPORTBUSIF_ControllerSelectiveSuspend` is what writes `HcDisableSelectiveSuspend` back**, and who calls it decides whether a per-controller registry value survives. The bus-interface routine (NUSB `0x13214`) sets or clears the selective-suspend state and writes `HcDisableSelectiveSuspend = !Enable` to the software key; it refuses while `0x08000000` is set (9x, 2000, XP) or unless the state is 1 or 2 (Vista), and is a stub on Windows 7. **So the global value and miniport flag `0x20` block it and the per-controller value does not.** Callers: NUSB's and SweetLow's `usbhub20.sys`, XP x86/x64's `usbhub.sys` and SP4's `usbhub20.sys` call it only from the root hub's WMI set of `GUID_POWER_DEVICE_ENABLE` ("Allow the computer to turn off this device"), an explicit user action; Vista's `usbhub.sys` calls it from that AND from `UsbhPowerCallback` (x86 `0x12bb4`), registered at hub start for `GUID_USB_SETTING_SELECTIVE_SUSPEND` `48e6b7a6-50f5-4782-a5d4-53bb8f07e226`, so the power plan reaches it automatically; Windows 7's `usbhub.sys` never calls it (its checkbox writes `EnableSelectiveSuspend` to the root hub's device key instead). No hub on any of the nine sends the root hub an idle D-IRP outside usbport's accepted idle IOCTL - D-IRPs only for Sx, wake, D0 and ESD - so usbport's ungated D-IRP suspend path is reached only on system sleep | static (`kd -z` with the public PDBs where they exist, `link -dump -disasm` for the three symbol-less builds; the hub binaries of section 3; nothing executed) | issue 5 section 5.4 |
-| **Miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) does one thing and nothing else, on all nine builds.** Every read of `MiniPortFlags` in each `.text` was enumerated from usbport's copy of the registration packet (37 to 65 reads per build) and then swept in reverse for every test of bit 5: **bit `0x20` is tested exactly once per build, in the start routine, after the registry reads.** It clears FDO flag `0x800` and sets `0x08000000` on NUSB `0x109BC`, SweetLow `0x11687`, SP4 `0x10A2C`, XP x86 `0x11862`, XP x64 `0x129A5`; it sets selective-suspend state 4 on Vista x86 `0x2AB35`, x64 `0x14C7A`, Win7 x86 `0x25308`, x64 `0x1427A`. Every reader treats that identically to the state the global value produces (`0x08000000`, or state 3), and **nothing tests the bit for S3/S4, D-state choice, wake, root-hub power or `EnIdleEndpointSupport`**. Hand-verified on NUSB: `0x1094C mov ecx,[eax+14h]` loads packet+4 (NUSB copies the packet to record `+0x10` at `0x27836`), and its neighbours test `0x80`, `0x200` and `0x1`. The one route by which the flags word leaves usbport is `USBPORTBUSIF_UsbdQueryControllerType` (Vista x86 `0x2691D`, Win7 x86 `0x268F0`), which copies it to the caller's first output parameter (`mov ecx,[fdo+310h]` / `mov ecx,[ecx+20h]`, Vista x86 `0x26955`; `interface+0x20` is the flags word by the identical addressing in `USBPORT_OpenEndpoint`'s `0x800` test at `0x1FB05`) | static (as above; nothing executed). The flag's *effect* was read at run time on 2026-09-17 on all ten targets - see the next row - but every address and every claim in this row is static | issue 5 section 5.4 and section 5.5; `src/xhci_dispatch.c` above `XHCI_MINIPORT_FLAGS`; `usbport-miniport-abi.md`, the `DISABLE_SS` row |
-| **A driver declaring `USB_MINIPORT_FLAGS_DISABLE_SS` keeps the controller out of idle suspend on all ten targets, measured against a control that idles.** Per target, one clean install of the `1.1.0.0` package (the flag, no registry value written) and one of the previous build with the machine-wide value deleted, on two throw-away overlays over the same clean disk copy, `qemu` flavour, empty root hub. Test legs: `USBCMD 0x00000005` / `USBSTS 0x00000000` across a five-minute watch with no `SuspendController`, a keyboard hot-plugged onto the quiet bus addressed within 5 to 10 s (`devices addressed=00000001`, `info usb` `Device 0.1`), and no re-idle in the 90 to 100 s after the unplug. Control legs: `SuspendController` with no resume and `0x00000000` / `0x00000001` (HCH), the keyboard unseen (`Device 0.0`) at +5, +20 and +40 s. Targets: Windows 98 SE + NUSB 3.3, Windows 98 SE and Windows ME, each + SweetLow's USB 2.0 stack (`USBPORT_GetHciMn=10000001` at every boot), Windows 2000 SP4 (both legs with an explicit `DisableSelectiveSuspend = 0`, which its usbport needs or the legs cannot differ), Windows XP SP3 x86, Windows XP x64 SP2, Windows Vista SP2 x86 and x64 (each discriminated by the Balanced plan's USB-selective-suspend flip, which halts the control within 5 s, and by the control's boot-time suspend/resume pair, not by an unprompted idle), Windows 7 SP1 x86, Windows 7 SP1 x64. **None unread.** ME, XP x64, Vista x64 and Windows 7 x64 had never been read without the value before this; they have now | runtime (QEMU guests, the owner and Claude at the console; controller callbacks on the port-0xE9 debug console, `USBCMD`/`USBSTS` read from the QEMU monitor at `BAR0+0x40`, `device_add usb-kbd` / `info usb` for the hot-plug; registry state read in-guest per leg). Virtual machines only - no reading here was taken on real hardware | issue 5 section 5.5 |
-| **No `usbhub.sys` on any NT 6.x build calls `UsbdQueryControllerType`**, so the raw `MiniPortFlags` word never leaves usbport on a machine carrying only the OS's own drivers. The routine sits at bus-interface offset `0x2C` on x86 (stored by `USBPORT_GetBusInterfaceUSBDI`: Vista `0x227DE`, Win7 `0x21492`) and `0x58` on amd64 (Vista x64 `0x212F7`, Win7 x64 `0x1D20D`). A sweep of every indirect call through that slot in all four NT 6.x `usbhub.sys` images returns zero; the adjacent `GetUSBDIVersion` and `QueryBusTime` slots, swept identically as controls, return 4 and 5 per x86 build and 3 and 4 per x64 build, which is what authenticates the negative. The three (Vista) and four (Win7) `mov reg,[reg+2Ch]` loads in the x86 hubs were each read and are unrelated: a stack parameter in `UsbhException`, a field-pair copy in `UsbhGetHubDeviceInformation`, one mid-instruction byte coincidence in `UsbhDisableTimerObject`, and Win7's `WppCleanupKm`. **Bounded**: this says what the OS's own hub driver does, not what a third-party holder of the USBDI interface on some machine might do, which no reading here can enumerate | static (byte sweep over the raw images for `FF /2` forms at the slot displacement, each hit disassembled with `kd -z ... -y tools\symbols`; nothing executed) | issue 5 section 5.4 and section 6; `usbport-miniport-abi.md`, "What `DISABLE_SS` does" |
-| **On 32-bit Vista the power plan rewrites `HcDisableSelectiveSuspend` to 0 and the controller suspends at once.** On a throw-away overlay of the Vista x86 guest, with the machine-wide value deleted and `Class\{36FC9E60-...}\0000\HcDisableSelectiveSuspend = 1` set by hand: the value survived a restart and the boot suspend/resume seen without it did not appear. The Balanced plan's USB selective suspend setting read AC = 0 Disabled, DC = 1 Enabled. `powercfg -setacvalueindex <Balanced> 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1` followed by `powercfg -setactive <Balanced>` rewrote the value to **0**, `SuspendController` arrived immediately, and `USBCMD`/`USBSTS` read `0x00000000` / `0x00000001`. Balanced's DC default of Enabled therefore loses the fix on any laptop that unplugs | runtime (this driver's debug-console trace and `xp /2wx 0xfebf0040` off the QEMU monitor, 2026-09-17, the owner at the console; QEMU only, never metal) | issue 5 section 5.4 - the reading that refused the per-controller registry route |
-| Vista SP2 x86 `usbport.sys` (6.0.6002.18005, 226,304 B, `tools/vista-x86-extracted/`) carries, as UTF-16 substring matches (so a longer name is counted again under the shorter), `DisableSelectiveSuspend` (2), `HcDisableSelectiveSuspend` (1), `SelectiveSuspend` (2) and `FastS4_OverrideBiosS4` (1); Windows 7 SP1 x86 `usbport.sys` (6.1.7601.17514, 284,672 B, `tools/win7-x86-extracted/`) carries `DisableSelectiveSuspend` (1), `SelectiveSuspend` (2), and neither `HcDisableSelectiveSuspend` nor `FastS4_OverrideBiosS4`. On the Vista guest, `FastS4_OverrideBiosS4` is present in the clean-install `vm\vista.img`'s `Windows\System32\config\SYSTEM` hive and `DisableSelectiveSuspend` is not; that image's `Windows\inf\usbport.inf` names `FastS4` nowhere, its `AddReg` sections included | static (a string search over the extracted files and over `SYSTEM` and `usbport.inf` pulled from the image with `7z e`; nothing disassembled, the guest not booted for it). The value's *effect* on both stacks is a separate, runtime reading: the driver's own debug-console trace and `USBCMD`/`USBSTS` read off the QEMU monitor, 2026-09-16 | `build-and-test.md`, "Windows Vista and Windows 7 target VMs", the idle-suspend reading; issue 5 section 5 |
-| Windows 98 SE's `usbd.sys` 4.10.2222 (18,912 B, SHA-256 `0118DB14...00AF6F56A`) exports `USBD_ParseConfigurationDescriptor`, `USBD_CreateConfigurationRequestEx`, `_USBD_ParseConfigurationDescriptorEx@28` (ordinal 21) **and `_USBD_ParseDescriptors@16` (ordinal 22, RVA `0x1683`)**, 30 functions in all; NUSB 3.6's Windows ME `usbd.sys` 4.90.3000.1 (22,928 B) exports both as well. **Corrected 2026-10-05:** until then this row said the 98 SE file lacks `USBD_ParseDescriptors`, and that hidusbf's Code 2 under it was the missing import - wrong; under the `2.1.0.0` HCD on a stock 98 SE, `hidusbf.sys` loaded and changed the interval (VM leg 2d), so the Code 2 recorded in the run below had another cause, not read (leg 2d needed `LowerFilters` and `bInterval` on both the device's hardware key and its `Class\HID` driver key) | static (`dumpbin /exports`, re-read 2026-10-05) and runtime (VM leg 2d, `out\phase33\legs\`) | `docs/issues/06-full-speed-root-port-bugcheck.md` section 5; the run record is `out\post-release\issue4-hidusbf\README.md` (git-ignored, this host) |
-| SweetLow's hidusbf Windows 9x lower filter (`hidusbf.sys` 1.2.0.10, 3,648 B, a public-domain third-party binary, not tracked): reads a `bInterval` DWORD from the device's driver key at `AddDevice` and rewrites the interrupt endpoints' `bInterval` in the `URB_FUNCTION_SELECT_CONFIGURATION` configuration descriptor before passing it down; imports `USBD.SYS!_USBD_ParseDescriptors@16` | static (`dumpbin /disasm`, `/imports`), corroborated at runtime by the `Period` this driver received changing with the value | same |
-| Windows XP Professional x64 SP2's `AMD64\LAYOUT.INF`: `usbport.sys = 100,,212480,,,,4_,4,1,3,,1,4`, `usbhub.sys = 100,,102400,...`, `usbd.sys = 1,,222222,...`, `usbui.dll = 1,,222222,,,,,2,1,3`, and no `usbhub20.sys` row at all; `[SourceDisksNames.amd64]` gives disk 1 = `\amd64` on the base CD and disk 100 = `\amd64` on the service-pack source, so the first two resolve to `AMD64\SP2.CAB` and the last two to `AMD64\DRIVER.CAB`. The four files there are 212,480 B, 102,400 B, 7,552 B (5.2.3790.1830) and 123,392 B (5.2.3790.1830); the first three sizes match `tools/winxp64-extracted/` exactly, which is what authenticates the reading | static (7-Zip on the owner's own ISO and on the two cabinets; `expand` not needed, `LAYOUT.INF` is uncompressed on this medium; nothing executed) | `src/xhci98-amd64.inf`'s header block; `build-and-test.md`, "The files the OS supplies"; roadmap task 21.3 |
-| `usbui.dll` is absent from a stock Windows XP x64 install, exactly as it is from 32-bit XP: `7z l vm\winxp64.img -r usbui.dll` on the task 21.5 guest's clean-install snapshot returns zero files. Both XP media give the row the `2,1,3` text-mode disposition, "do not copy at Setup", so a USB controller's own install is the only thing that places it | static (a listing through the qcow2's MBR and NTFS; the guest was not booted) | `src/xhci98-amd64.inf`'s header block; roadmap task 21.3 |
-| `usbui.dll` IS present on a stock Vista and Windows 7 install, in both architectures, so the `LayoutFile` row those targets have no equivalent of is never consulted there: Vista SP2 x86 `Windows\System32\usbui.dll` 83,456 B 6.0.6001.18000; Vista SP2 x64 `System32` 104,960 B 6.0.6000.16386 and `SysWOW64` 83,456 B 6.0.6001.18000; Windows 7 SP1 x86 80,896 B and x64 `System32` 101,376 B / `SysWOW64` 80,896 B, all 6.1.7600.16385. Read from image 1 of each `install.wim`, which is the applied image, so presence there is presence on an install. Whether the other three OS-supplied files behave the same way on those targets is NOT read | static (7-Zip on the owner's own mounted ISOs; nothing executed) | Phase 22's open question about the `usbui.dll` row on 6.0/6.1 |
-| **M4** - the amd64 `USBPORT_RESOURCES` layout, NT 5.2 amd64 `usbport.sys` 5.2.3790.3959: `sizeof` is `0x48`, and `StartPA` stays a 4-byte `ULONG` at `0x40`, so the common-buffer physical address is still 32-bit and nothing this driver places can land above 4 GB. The fields between `InterruptLevel` and `StartPA` drift by 4, 8, 12 and 16 as each pointer-sized member takes its own alignment; only the size and `StartPA` were read off instructions, and `src/xhci_usbport.h` asserts the size per architecture so a divergence in the middle cannot hide | static (`cdb.exe -z` on the extracted image; nothing executed) | design record 11 section 5 M4; `src/xhci_usbport.h` |
-| **M5** - the DMA adapter width on NT 5.2 amd64: usbport creates it 32-bit, so no address it hands the miniport is above 4 GB whatever the guest's RAM. This is what lets the driver keep its high-DWORD refusals as refusals rather than having to implement 64-bit addressing | static (`cdb.exe -z` on the extracted image; nothing executed) | design record 11 section 5 M5 |
-| **M6** - all 50 packet callback slots the amd64 `usbehci.sys` 5.2.3790.3959 fills land on the `0x28 + (X - 0x28) * 2` widening map, with no slot off it. This is the measurement the whole amd64 packet declaration rests on: the map is a derivation, and this is the check that the producer agrees with it | static (`cdb.exe -z` over the extracted image, every `call qword ptr` resolving into the registration packet; nothing executed) | design record 11 section 5 M6; `src/xhci_usbport.h` |
-| **M8** - the amd64 `USBPORT_SCATTER_GATHER_LIST` and its element, read off the producer in NT 5.2 amd64 `usbport.sys` 5.2.3790.3959 at RVA `0xF468`: `lea rdi,[rsi+118h]` (the list, inside usbport's private transfer record), `mov dword ptr [rdi],r12d` (`Flags` 0x00), `mov qword ptr [rdi+8],rcx` (`CurrentVa` 0x08), `mov qword ptr [rdi+10h],rax` (`MappedSystemVa` 0x10), `mov dword ptr [rdi+18h],r12d` and `inc dword ptr [rdi+18h]` (`SgElementCount` 0x18), `lea rbx,[rdi+20h]` (`SgElement[0]` at **0x20**), `add rbx,18h` (stride 24), `mov qword ptr [rbx],rax` (address, element 0x00), `mov dword ptr [rbx-8],r8d` (`SgTransferLength`, element **0x10**), `mov dword ptr [rbx+14h],r11d` (`SgOffset`, element **0x14**); the 4 KB split survives as `and edx,0FFFh` / `mov r8d,1000h` / `sub r8d,edx` / `cmova r8d,r9d`. Element `sizeof` is 24 on both architectures and the list is `0x50` either way, so neither size moved while three offsets did | static (`tools\WinDDK71\Debuggers\kd.exe -z` on the extracted image, function boundaries taken from `.pdata`; nothing executed. The defect it explains was observed at runtime on the task 21.5 guest, but no fact in this row rests on that) | `usbport-miniport-abi.md`, "The amd64 scatter-gather layout (M8)"; design record 11 section 5 M8; `src/xhci_usbport.h` |
-| **The Version 300 tier of `USBPORT_REGISTRATION_PACKET`, slot by slot, on NT 6.x x86**: twelve `ULONG`s at `0x13C`-`0x168` then 29 pointers at `0x16C`-`0x1DC`; the count at `0x13C` read by `USBPORT_AllocateControllerCommonBuffers` behind `MPx_MpRevision >= 300` (vista-x86 `0x2C4C3`/`0x2C4D4`, win7-x86 `0x25C1D`/`0x25C2E`), capped at 8, the eight sizes after it, the three USBX context sizes at `0x160`/`0x164`/`0x168` read by `MPx_HsbControllerContextSize`/`MPx_HsbTtContextSize`/`MPx_HsbEndpointContextSize` behind `MiniPortFlags & 0x400`; every pointer slot NULL-checked by its `usbport!MPf_<Name>` wrapper and the named ones also behind `interface+0x10 >= 0x12C` (vista-x86 wrappers `MPf_InterruptDpcEx 0x12C1E`, `MPf_ReleasePortControl 0x3111D`, `MPf_ReadCfgFlag 0x2631F`, `MPf_SetWakeOnConnect 0x3114F`, `MPf_NotifyTransferQueueState 0x1554A`, `MPf_CheckHwSync 0x30E39`, `MPf_CreateDeviceData 0x2D0FB`, `MPf_DeleteDeviceData 0x311D3`, `MPf_DbgFreeEndpoint 0x1F2BB`, `MPf_HaltController 0x30AC7`, `MPf_Get32BitMicroFrameNumber 0x309DC`, the ten `MPf_Usbx*`; win7-x86 `0x1182D`, `0x2D0DE`, `0x230F2`, `0x1E6DC`, `0x18C4B`, `0x2CDFC`, `0x26F32`, `0x2D154`, `0x1C8DF`, `0x2CADC`, `0x2CA01`); the two OUT services `UsbPortRequestAsyncCallbackEx`/`UsbPortCancelAsyncCallback` stored at `0x1B0`/`0x1B4` by `USBPORT_RegisterUSBPortDriver` at `>= 300` (vista-x86 `0x2DF17`/`0x2DF21`); no reader anywhere in either `.text` for `0x198`, `0x1B8`, `0x1BC`, `0x1C0`, `0x1D0`, `0x1D4`; slot names from the `usbehci.sys` `DriverEntry` stores (vista-x86 `0x16724`, win7-x86 `0x67B0`) | static (`kd -z ... -y srv*tools\symbols`, `x usbport!MPf_*`, `uf` per wrapper, a whole-`.text` `u` sweep grepped for every `[reg+NNNh]` in the tier; Microsoft public PDBs, section 2) | abi section 1 "The Version 300 tier, slot by slot"; design 11 section 6.5 |
-| **The same tier on NT 6.x amd64 follows `0x250 + (X - 0x13C)` for the twelve `ULONG`s and `0x280 + (X - 0x16C) * 2` for the pointers, ending at `0x368`**, confirmed at every site rather than derived: count read at `interface+0x288` (vista-x64 `0x13CED`, win7-x64 `0x137C1`), `InterruptDpcEx` at `interface+0x2D0` in `USBPORT_IsrDpc` (`0x47742` / `0x3D548`), `NotifyTransferQueueState` `+0x2D8` (`0x11223` / `0x111BB`), `CheckHwSync` `+0x2E0` (`0x18D81` / `0x1766A`), `SetWakeOnConnect` `+0x2C8`, `ReadCfgFlag` `+0x2C0`, `ReleasePortControl` `+0x2B8`, `CreateDeviceData` `+0x368` (`0x2EDD9` / `0x27FA3`), `DeleteDeviceData` `+0x370` (`0x3005D` / `0x28CE4`), `DbgFreeEndpoint` `+0x378` (`0x119A2` / `0x1193D`), `HaltController` `+0x390` (`0x2DD57` / `0x27265`), `Get32BitMicroFrameNumber` `+0x398` (`0x21594` / `0x1D494`), the context sizes `+0x2AC`/`+0x2B0`/`+0x2B4`, the OUT services at packet `0x308`/`0x310` (vista-x64 `0x436F3`/`0x43702`) and `0x370` at 310 (`0x43745`); `MPf_CloseEndpoint`, `MPx_OpenEndpoint`, `MPx_PokeEndpoint`, `MPx_InitializeHsbController`, `MPx_QueryEpBandwidthData` and the inlined callers all test `interface+0x20` against `12Ch` | static (as above, on `tools/vista-x64-extracted/` and `tools/win7-x64-extracted/`) | abi section 1 same section |
-| **The `InterruptDpcEx` contract**: consumer `USBPORT_IsrDpc` acquires the device-extension DPC lock at DPC level (vista-x86 `0x11EDB`, win7-x86 `0x12D85`), passes device-extension flag bit 5 as `BOOLEAN enableInterrupts` (`shr al,5 / and al,1`, `0x11F8F`), calls the slot (`0x11F9B` / `0x12E15`), and reads only bits 0 and 1 of the `ULONG` result: `test al,3` (`0x11FA0` / `0x12E1D`) clears device-extension flag `0x10000`, and after the lock is released the same test (`0x12045`) gates `USBPORT_Ev_Rh_IntrEp_Invalidate` (`0x1204C` / `0x12E96`); producer Vista x86 `usbehci!EHCI_InterruptDpcEx` (`0x16A44`) returns 2 when a port-change pass found `PORTSC & 0x2A` on a port (`0x16BCE`), 1 when the transfer interrupt fired with `extension+0xC` non-zero (`0x16AFF`), else 0, and rewrites the interrupt-enable register at `+0x8` when `enableInterrupts` is set (`0x16BF7`); `usbehci!EHCI_InterruptDpc` (the `0x4C` slot) is a thunk `mov edi,edi / push ebp / mov ebp,esp / pop ebp / jmp EHCI_InterruptDpcEx` at `0x16C0C` (Vista) and `0x16D50` (Windows 7); no read of `interface+0x68` (x86) or `+0xA8` (amd64) follows an interface load in any of the four NT 6.x `.text` sections | static (as above) | abi section 1 same section; design 11 section 6.5 |
-| **`MiniPortFlags` as Microsoft sends it and as NT 6.x tests it**: `usbehci.sys` `DriverEntry` stores `0x295` with `Version = 200` on XP SP3 and XP x64, `0xA95` with `Version = 310` (`push 136h` / `mov edx,136h`) on Vista x86 and x64, `0x80A95` at 310 on Windows 7 x86 and x64; on the interface copy NT 6.x tests `0x10` (many), `0x40` (`USBPORT_MpInterrupts`, `shr eax,6`), `0x400` (the `MPx_*` family and the context sizes), `0x800` (`USBPORT_OpenEndpoint`, vista-x86 `0x1FB05`: endpoint flag `0x2000` in place of `0x200`, which `USBPORT_ProcessNeoStateChangeList` `0x11478` routes to `MPf_CheckHwSync`), `0x4000` (`USBPORT_RootHub_Endpoint0`, vista-x86 `0x20836`, win7-x86 `0x1D29A`, the only path to `USBPORT_RootHub_AsyncCommand`, which calls `interface+0x1FC` = packet `0x1E0` with no NULL check at `0x3E241` / `0x32E6D`; amd64 `0x3BF5C` / `0x31904` through `+0x3A0`), `0x10000` (`MPf_CloseEndpoint`, `shr ecx,10h`), `0x40000` (`USBPORT_Core_UsbHcIntDpc_Worker` `0x12386`), and on Windows 7 `0x80000` on a local copy in `MPf_SuspendController` (x86 `0x1E5D5`, x64 `0x112F6`). *(Corrected 2026-09-17: this row also named `USBPORT_SyncPowerAndChirpUsb2Ports` `0x2B118` as a `0x80000` flags site; that `0x80000` is a port-status bit out of `RH_GetPortStatus`, re-read in the issue 5 flag sweep, and the x64 address is new with the correction - `usbport-miniport-abi.md`, the correction under the `MiniPortFlags` paragraph.)* | static (as above) | abi section 1 same section |
-| **`MPf_CloseEndpoint` is the only call through the `CloseEndpoint` slot (`interface+0x50`) in Vista x86 and Windows 7 x86 `usbport.sys`, and it tests `interface+0x10 >= 12Ch` first** (vista-x86 `0x1F33F`, win7-x86 in `0x1C952`), as do `MPf_RebalanceEndpoint` (`0x31214` / in `0x2D186`) and `MPf_TakePortControl` (`0x262FB` / in `0x21010`) before reading packet `0x124` and `0x130`; the amd64 `MPf_CloseEndpoint` carries the same compare | static (as above) | abi section 1 same section; design 11 section 6.5 |
-| **The NT 5.x control for the 300 tier**: the only compares against `64h`, `0C8h`, `12Ch` or `136h` in the whole `.text` of XP SP3 `usbport.sys` (`.text` `0x10380`-`0x2DA00`) are `USBPORT_RegisterUSBPortDriver` (`64h`, `0C8h`) and `[+10h],0C8h` in `USBPORT_PoRequestCompletion` and `USBPORT_RootHub_PowerAndChirpAllCcPorts`; XP x64 the same three functions (`.text` `0x11000`-`0x39384`); Windows 2000 SP4 `USBPORT.SYS` (`0x10300`-`0x2CA07`) two `[+10h],0C8h` plus `cmp eax,64h` / `0C8h`; NUSB `USBPORT.SYS` (`0x10300`-`0x2C227`) `[esp+14h],64h` / `0C8h` only - **no NT 5.x or 9x-era usbport tests for 300 or 310** | static (`kd -z ... u <text start> <text end>` swept with `grep`) | abi section 1 same section; design 11 section 6.5 |
-| **On all four NT 6.x guests usbport accepts a `Version = 300` registration and drives it**: `interface version presented 0000012C`, `nt6 services written 2` (usbport stored both Version 300 service pointers back into the packet), the interrupt DPC reached through the Version 300 slot with `dpc count` tracking `isr count`, No Op self-test `CC_SUCCESS`, and the three devices, five disable/enable cycles, remove and rescan completing - Vista SP2 and Windows 7 SP1, x86 and x64, 2026-09-13; the NT 5.x legs' `-Expect nt5` readings check the other arm, `000000C8` with `nt6 services written 0`. Corroborates the Version 300 tier rows above for the slots this driver fills; says nothing about the slots it leaves zero | runtime (this driver's `0xE9` log read by `scripts\local\read-v300.ps1`, and on x86 its extension read from guest memory; QEMU only) | roadmap task 22.5; issue 7 section 7.5 |
-| **Every 32-bit NT 5.x-era `usbport` moves a completed transfer off the endpoint's list with no lock, and reads that list in an endpoint worker that holds a per-endpoint lock** - the `CompleteTransfer` service (packet `+0xFC`) ends in a mover that does `RemoveEntryList` on the transfer's entry (`+0x38`) with no lock or interlock, stores the status at `+0x28`, then `ExfInterlockedInsertTailList` on the FDO's done list under the done-list lock, then `KeInsertQueueDpc` on the flush DPC: XP SP3 x86 `USBPORT_QueueDoneTransfer` RVA `0x8272` (unlink `0x828d`-`0x8291`, list `fdo+0x6F8`, lock `+0x308`, DPC `+0x58C`); NUSB 3.3 = 3.6 (5.00.2195.5652, one file, SHA-256 `EEC79B5A...`) mover `0x7fa4` (unlink `0x7fc0`-`0x7fc4`, list `+0x63C`, lock `+0x2C0`, DPC `+0x540`), its endpoint worker `0x9c80` taking `endpoint+0xD4` at `0x9c8d` and calling the miniport's `PollEndpoint` (`[packet+0x74]` behind a `0x10` header) under `fdo+0x288` at `0x9df9`; SweetLow 5.1.2600.2180 mover `0x778a` (unlink `0x77a3`-`0x77a7`, list `+0x64C`, lock `+0x2C0`, DPC `+0x550`), worker `0x7836` taking `endpoint+0xD4`, `PollEndpoint` (`[packet+0x78]`, `0x14` header) under `fdo+0x288` at `0x79af`; Windows 2000 SP4 5.00.2195.6681 mover `0x83c0` (unlink `0x83dc`-`0x83e0`, list `+0x690`, lock `+0x2C4`, DPC `+0x548`), worker `0xa096` taking `endpoint+0xD4`, `PollEndpoint` (`[packet+0x78]`, `0x14` header; its `[packet+0x74]` sites are `SetEndpointState`) under `fdo+0x28C` at `0xa20f`. The older flush loops (`0x985a` / `0xac92` / `0x9c6e`) pop under the done-list lock, complete the IRP under `fdo+0x384`/`+0x388`, free the transfer and call `InvalidateEndpoint` (`0x9e0e` / `0x79c4` / `0xa224`, taking `fdo+0x2DC`/`+0x2E0`) every time; the `EndpointHasQueuedTransfers` walk XP runs in its flush loop does not exist in them | static (`kd -z` on each file in `tools/`; the three older builds without symbols, reached from the exported `USBPORT_RegisterUSBPortDriver`'s sixteen service stores and by displacement search; import names by IAT-slot arithmetic over `dumpbin /imports`; the XP names from the public PDB). XP's half was also observed at runtime on 2026-09-15 (issue 7 section 7.9); nothing in this row rests on that | issue 8 section 4d; `vm\issue7-xp32-smp4\static-tier\README.md` (git-ignored) |
-| **XP SP3 x86 `usbport.sys` 5.1.2600.5512 (link stamp `480254CE`) calls the `CloseEndpoint` slot with THREE arguments, from exactly one site**: `usbport!MP_CloseEndpoint` at RVA `0x1568A` - `cmp dword ptr [edi+114h],0` / `sete cl` / `push ecx` (`0x156D1`-`0x156D4`), `lea ecx,[esi+178h]` / `push ecx`, `push dword ptr [edi+140h]`, `call dword ptr [eax+48h]` (`0x156E2`; `eax` = `[edi+144h]`, the interface copy, whose packet begins at `+0x14`), epilogue `pop edi / pop esi / pop ebx / pop ebp / ret 8` at `0x15700` with no frame-pointer restore; reached from `USBPORT_InitializeDevice` (`0x18518`) through `USBPORT_PokeEndpoint` (`0x17532`). `ff 5x 48` / `ff 9x 48 00 00 00` occurs once in the whole file. The same byte sweep over Windows 2000 SP4 `USBPORT.SYS` 5.00.2195.6681 finds none, over NUSB's 5.00.2195.5652 three that are `StartController` (its interface copy's packet begins at `+0x10`), and over SweetLow's 5.1.2600.2180 none (its `+0x44` and `+0x4C` sites are `QueryEndpointRequirements` and `StartController` behind a `+0x14` header) | static (`kd -z` on the guest's kernel memory dump with the public PDB from `tools/symbols` for the names, the file offsets confirmed by a byte search over `tools/winxpsp3-extracted/usbport.sys`; the three other files by byte search alone). The bugcheck that led to it was observed at runtime on the XP guest, twice, and the trap frame's registers match this reading slot for slot; no fact in this row rests on that | abi section 1 `CloseEndpoint` row; `src/xhci_usbport.h` above `PHCI_CLOSE_ENDPOINT`; issue 7 section 7.9 |
-| **XP x64 `usbport.sys` (timestamp `45D69800`) list heads at device-extension `+0x988` and `+0x9A8`**: `+0x988` under the lock at `+0x460`, element `LIST_ENTRY` at `+0x78`, reference `lock inc dword ptr [rbx+8]` on a match (walk at `0x1d140`, fault site `0x1d1a7`); nine displacement-`0x988` hits, all 64-bit (self-link init `0x13dc3`, insert-tail `0x1d3ab`, load `0x2010`, walks `0x1d183`/`0x1d2ec`/`0x1f652`/`0x1f6ed`/`0x206ad`/`0x20ff5`), no `dword` store; `+0x9A8` under the lock at `+0x400`, remove-head in `0x100b0` faulting at `0x101c3`, element `LIST_ENTRY` at `+0x48`; no displacement `0x988` in the amd64 `xhci98.sys` and no `-0x2A0` in either binary. In the 2026-09-13 crash-2 kernel dump: device extension = `[FDO+0x40]`, `MiniportExtension` = `devext+0xC28`, `USBPORT_RESOURCES` = `devext+0x378`, and the `+0x988` head's `Flink` = `fffffadf'00000000` with all four elements' links consistent | static (byte search, `kd -z ... uf`) for the code; debugger (`kd` on the guest's own `MEMORY.DMP`, not this driver's counters) for the dump readings | issue 8 section 2-section 5 |
-| **XP x64 `usbport.sys` (`45D69800`), the store that zeroes `devext+0x988` and the race behind it** - this row corrects the previous one's "no `dword` store": routine `0xbd60` removes a transfer (`LIST_ENTRY` at `+0x48`, endpoint at `+0xA8`) and stores `mov dword ptr [rcx+28h],edx` at `0xbd8b`, so a `rcx` of `devext+0x960` writes `devext+0x988`; its caller walks the endpoint's transfer list, `lea r15,[r12+60h]` at `0xa3ab`, next link `[rsi+48h]`, calling `0xbd60` when bit `0xB` of `[rsi+4]` is set (`0xa454`, `0xa68e`); that walk is reached under the endpoint lock, `lea rcx,[rbx+160h]` / call at `0xadf5`/`0xae01`, walker called at `0xae99`; the done-list side takes the same endpoint lock at `0xca32`/`0xca3e`, and `lea rcx,[rdi+160h]` sits at `0xd639`. The completion service in packet slot `+0x1D0` is `0xc060` (stored at `0x2225c`/`0x22263`): transfer = `TransferParameters - 0x60` (`0xc107`); it acquires only the lock at `[rbx+58h]` (`0xc20d`, `KeAcquireSpinLockRaiseToDpc` at `0xc216`), sets bit `0xB` on a list at `rbx+0xB8`, releases it (`KeReleaseSpinLock` at `0xc2ce`), and **then** unlinks the transfer from its endpoint list with no lock held (`0xc2f1`/`0xc2f4`) before `ExInterlockedInsertTailList(devext+0x9A8, transfer+0x48, devext+0x400)` (`0xc36b`-`0xc37d`). Import names resolved through the image's own hint/name entries | static (`kd -z ... u`/`uf` on `tools/winxp64-extracted/usbport.sys`; a second-opinion reading by another model supplied several offsets and each was re-read here before being recorded). The store itself also **debugger** (live, through the QEMU gdbstub rather than this driver's counters): a write watchpoint on `devext+0x988` stopped after `0xbd8b` with `rcx` = `devext+0x960`, `rdx` = 0 (2026-09-13, crash 4) | issue 8 section 4b-section 4c; `src/xhci.h` `DeliverPerEndpointOnly` |
-
-Where a fact is inferred rather than read, this project's documents say so,
-and several of them record refutations of earlier readings. That habit is what
-makes the inventory above trustworthy; keep it.
-
-The complete, citation-level record is
-`docs/usb-xhci-info/usbport-miniport-abi.md`. This table is an index into it
-by method, not a replacement for it.
-
-**The rows below are part of this section**, and the horizontal rule
-that used to sit above them read as closing it - which made citations to
-"section 4" for those rows look wrong (the 2026-09-16 audit's E8). They are
-the issue 7 and issue 8 readings, added after the paragraph above was
-written, then the three task 22.12 (b) readings of 2026-09-18.
-
-| **NT 6.x `USBPORTSVC_CompleteTransfer` assumes its caller holds usbport's EpList lock**: the service acquires nothing (win7-x64 RVA `154dc`: `AssertSig`, the `cmpT` ring record, `AssertSig`, `EndpointFromHandle`, `Core_iCompleteTransfer`, `WmiLogEvent`; win7-x86 RVA `8d32` the same shape) and `USBPORT_Core_iCompleteTransfer` ends in `USBPORT_Xdpc_iSignal` (win7-x64 `+d9`, win7-x86 `+ae`), which on state 1 calls `KeInsertQueueDpc` then `Xdpc_iSetState(.., 7, 2)` with no lock; `USBPORT_Xdpc_Worker` calls `USBPORT_TxAcquireLock` = `USBPORT_AcquireEpListLock` (`KeAcquireSpinLockRaiseToDpc` on fdo+0xF88 on x64) before reading the state at obj+0xFC (x64) / +0x9C (x86) and enters the worker function with it held; `USBPORT_Xdpc_Signal` is the locked wrapper used by `IsrDpc` and `DM_IoTimerDpc`; `IsrDpc` calls the miniport's InterruptDpcEx under the fdo+0x1028 lock only; `Xdpc_InitDpc` is `KeInitializeDpc` with no target processor; `USBPORT_RootHub_ClassCommand` calls `RH_GetPortStatus` (x86 `+514`, packet `+0x98`) and `RH_GetHubStatus` (`+540`) directly with no lock while `USBPORT_RootHub_PortRequest` wraps the Set/ClearFeature slots in `USBPORT_AcquireSpinLock`; `USBPORT_Core_UsbHcIntDpc_Worker` reaches `MPf_PollEndpoint` via `iSetGlobalEndpointStateTx+7bc` once per active endpoint per pass; `USBPORTSVC_InvalidateEndpoint` on win7-x64 is `AssertSig` only | static (capstone 5.0 over `tools/win7-x86-extracted/` and `tools/win7-x64-extracted/` `usbport.sys` with the public PDBs `5224A6DF...` age 12 and `71BCD350...` age 1 via `dbh.exe enum`; `scripts/local/usbport-disasm.py`); the IRQL of the root-hub queries is **runtime** from this driver's own callback log on the Windows 7 x86 and x64 guests (`cb RH_GetPortStatus irql=00`) | issue 07 section 7; design 05 section 7 "Where a completion may be handed over"; abi "Completion path" |
-| **Windows 7 x64 `usbehci.sys` calls the CompleteTransfer slot (`RegistrationPacket+0x1D0`) only from `EHCI_ProcessDoneAsyncTd+20f` and `EHCI_sMode_PollEndpointSlot+51e/+57c`; `EHCI_InterruptDpcEx` calls `+0x1C8` (InvalidateEndpoint) and `+0x308`; `EHCI_CheckController` calls `+0x208`** - every `call qword ptr [rip+disp]` in `.text` resolving into `RegistrationPacket`, 331 sites, the slot named by design record 11's `0x28 + (X - 0x28) * 2` map | static (capstone over `tools/win7-x64-extracted/usbehci.sys` with PDB `7D5BF41B...` age 1) | issue 07 section 7.1; abi "Completion path" |
-| **Vista x64 `usbport.sys` 6.0.6002.18005 holds none of its log-ring tags as literals**: each is assembled with four `mov byte ptr [rsp+N], imm8` stores (e.g. `Tmt2` at `USBPORT_Core_TimeoutAllTransfers+b8`, `biCF` at `USBPORTBUSIF_UsbdBusQueryBusTimeEx+11f` = the USBDI bus-time query, record `biCF | 0 | caller's out pointer | frame`), 677 sites; Windows 7 x64 holds them as imm32, 1,481 sites; `Tmt2` on both is `TimeoutAllTransfers` walking the FDO's all-transfers list under the EpList lock writing `link | 0 | transfer` with `AssertSig(transfer, 'TrxC')` (transfer+0x30), the miniport's transfer parameters at transfer+0x130 (`USBPORTSVC_CompleteTransfer` does `params - 0x130`) | static (capstone with PDBs `ABEBA17D...` age 1 and `71BCD350...` age 1; `scripts/local/usbport-vista-tags.py`, `usbport-disasm.py ... tags`) | `.claude` working notes of 2026-09-13; issue 07 section 7; the tag tables in `scripts/local/` |
-| **Windows XP SP3 `usbhub.sys` 5.1.2600.5512 (the 59,520 B file above) suspends a child's port only from a D-state change and hands a child its idle callback only from its own**: `USBH_SyncSuspendPort` (RVA `0x9188`) sends one class request `0x23` / `SET_FEATURE` / `PORT_SUSPEND` through `USBH_Transact` with no status read either side, and is called from `USBH_SetPowerD3+0x10e` and `USBH_SetPowerD1orD2+0x45`; `USBH_SetPowerD0` calls `USBH_SyncResumePort` (`+0x7d`, `+0x154`), which sends `CLEAR_FEATURE` / `PORT_SUSPEND` and waits on an event; the child's idle callback is called at exactly one site, `USBH_FdoIdleNotificationCallback+0xbd` (`call dword ptr [eax]`), which runs only when the hub's own idle request is accepted upstream - and `USBH_FdoIdleNotificationRequestComplete` on a refusal completes the port idle IRPs instead. `[roothub+0x268]`, tested `== 1` in `USBH_CheckHubIdle+0x57`, is the hub's device power state (written in `USBH_FdoHubStartDevice`, `USBH_FdoPower`, `USBH_FdoDeferPoRequestCompletion`), not a selective-suspend gate | static (`kd.exe -z` with the public PDB for names and `uf`; a capstone call sweep over the file for the callers; nothing executed) | `runs/run-22.md` 22.12 (b) |
-| **Windows XP SP3 `hidclass.sys` 5.1.2600.5512 (36,864 B, SHA-256 `84a55432...48bff2`, expanded with `expand.exe` from `I386\HIDCLASS.SY_` on the owner's XP SP3 CD, not from `SP3.CAB`) idles a device only when two extension fields are nonzero and a registry value is set**: the routine at RVA `0x542a` returns at once unless `[ext+0CCh]` and `[ext+0D0h]` are nonzero, then opens the PDO's device key (`IoOpenDeviceRegistryKey` type 1, `0x548e`) and reads `SelectiveSuspendOn` (absent = on, `0x54ce`) and `SelectiveSuspendEnabled` (nonzero sets the enable and registers WMI, `0x551b`-`0x5526`); its idle clock is a 1 s periodic timer (`KeSetTimerEx`, period `0x3E8`, `0x53a2`) with a count of 5 per device. That `+0xCC` / `+0xD0` are the `SystemWake` / `DeviceWake` of a `DEVICE_CAPABILITIES` copied at `+0xA0` is inferred from the offsets, not read | static (capstone over the expanded image, no PDB; nothing executed) | `runs/run-22.md` 22.12 (b) |
-| **Vista SP2 x86 `usbhub.sys` (196,096 B) runs a child's idle callback without regard to the root hub's selective-suspend state; Windows 7 SP1 x86 (258,560 B) does not**: in `UsbhIdleIrp_NoIrp`'s new-request arm Vista tests only the PDO's `[+4B8h] & 2` (`0x27da2`) before queueing `UsbhPdoIdleCC_Worker` (`0x27e48`); Windows 7 tests `[pdo+4CCh] & 2` (`0x2bb55`) and then `cmp [fdo+0AB0h],6` (`0x2bb65`), the state `USB_MINIPORT_FLAGS_DISABLE_SS` puts the root hub in (issue 5 section 5.4), and parks the request on either. Vista's `UsbhSyncResumePort` waits `0xEA60` ms for the port's suspend change with trap code 1 (`0x1b1bb`); `UsbhWaitEventWithTimeoutEx` passes a nonzero code to `UsbhTrapFatalTimeout_x9f` on a timeout (`0x14509`), which calls `KeBugCheckEx(0xFE, 8, 6, code, ...)` (`0x141d0`-`0x141d9`) | static (`cdb.exe -z` with the public PDBs, the issue 5 `static-hub` listings; nothing executed). The Vista half is also **runtime**: on a Vista x86 guest the driver logged `RH_SetFeaturePortSuspend` for a mouse the idle callback powered down, and an abandoned resume was followed 60 s later by a `0xFE (8, 6, 1)` bugcheck, reported by Windows Error Reporting after the restart | `runs/run-22.md` 22.12 (b); `src/xhci_rh.c` `xhciRhResumeOwesU0` |
-| **Windows 7 SP1 x86 `usbport.sys` 6.1.7601.17514 (DateStamp `4CE79C15`) faults in its USB 2.0 bus-time budgeter when a Full-Speed device behind a Full-Speed hub on a root port is configured**: RVA `0x1ED30` is `usbport!Allocate_time_for_endpoint+0x15d`, `mov eax,[ecx+0A00h]` after `mov ecx,[esi+0Ch]`; its callers are `USB2LIB_AllocUsb2BusTime+0xbd` (which writes the object's `lbep` signature at RVA `0x1F4E6`), `USBPORT_AllocateBandwidthUSB20+0x1fa`, `MPx_AllocateBandwidth+0x77`, `USBPORT_OpenEndpoint+0x413`, `USBPORT_InternalOpenInterface+0x422`, `USBPORT_SelectConfiguration+0x279`, `USBPORT_ProcessURB+0x752`, `USBPORT_PdoInternalDeviceControlIrp+0xfb`, `USBPORT_Dispatch+0x18a`. The pointer is a NULL transaction translator plus 4: `USBPORT_AllocateBandwidthUSB20` passes `[ep+1Ch] ? [[ep+1Ch]+38h] : 0` (`0x23b26`-`0x23b3f`) as the budgeter's TT, `USB2LIB_AllocUsb2BusTime` takes `TT + 4` for a Full or Low Speed endpoint and `bus + 414h` for High Speed, and `Set_endpoint` (`0x274ab`) stores that at `+0Ch` (addresses at the image base `0x10000`) | static (`dumpbin /disasm` from `tools/MSVC600`, and `kd.exe -z` with the public PDB for the names; nothing executed) and **runtime**: on a Windows 7 x86 guest the stop screen read `STOP 0x7E (0xC0000005, 0x8EAEED30, 0x8A6D749C, 0x8A6D7080)` with `USBPORT.SYS` at `8EAD0000`, and the exception and context records and the stack were read from the halted guest's memory over QEMU's monitor, giving a read of `0x00000A04` with `[esi+0Ch] = 4`. The same function faults on the other three NT 6.x builds, named with their public PDBs: Vista SP2 x86 (DateStamp `49E01FCF`) at `Allocate_time_for_endpoint+0x162`, the same two instructions, a read of `0xA04`; Windows 7 SP1 x64 (`4CE7A670`) at `+0x19c` and Vista SP2 x64 (`49E02D1B`) at `+0x194`, `mov rdi,[rcx+10h]` then `mov rax,[rdi+0C00h]`, each a read of `0xC08` - static for the instructions and names, runtime for the stop screens and exception records read from the halted guests | `runs/run-22.md` 22.9; issue 6 section 6.2 |
-| **Windows 2000 SP4 and NUSB `usbport.sys` bucket an interrupt endpoint's `Period` in `USBPORT_OpenPipe` and raise a Low-Speed value below 8 to 8**: the producer at SP4 `0x251D3`-`0x2524F` / NUSB `0x24B55`-`0x24BD1` (byte-identical but for branch targets), `bInterval` read from `[edx+0x0A]`, the High-Speed arm computing `1 << min(bInterval - 1, 5)`, every other speed rounding the raw value down to a power of two in 1..32, and the Low-Speed compare-and-raise at SP4 `0x2520E`-`0x2521D` / NUSB `0x24B90`-`0x24B9F` (`0x25216` the `mov` of 8). Read for `XhciIntervalFromPeriod`'s contract in Phase 7a and re-cited by roadmap task 24.1 when the floor was found to be these builds' rather than the hardware's | static (`dumpbin /disasm` from `tools/MSVC600` over `tools/nusb-extracted/usbport.sys` and the SP4 file; nothing executed) | `usbport-miniport-abi.md`, "Periodic scheduling: what `Period` actually carries"; `src/xhci_ctx.c` `XhciIntervalFromPeriod`; `src/xhci.h` |
-| **SweetLow's Windows 9x `USBPORT.SYS` 5.1.2600.2180 buckets an interrupt endpoint's `Period` with no Low-Speed floor**: `USBPORT_OpenPipe`'s producer at `0x24A31`-`0x24A8F` (image base `0x10000`) tests `[esi+104h]` against 2 for High Speed, computes `1 << min(bInterval - 1, 5)` inline (`0x24A45`-`0x24A57`), and for every other speed takes `mov al,byte ptr [edx+0Ah]` at `0x24A5B` straight into the preload-32-and-shift-right rounding (`0x24A60`-`0x24A7D`), with no compare against 8; isochronous keeps `Period` 1 unconditionally (`0x24A93`). So a Low-Speed device whose `bInterval` is 1, 2 or 4 arrives at the miniport as `Period` 1, 2 or 4, which SP4 and NUSB never send | static (`dumpbin /disasm` from `tools/MSVC600` over the extracted file, `tools/sweetlow-extracted/usbport-disasm.txt`; nothing executed). The Code 10 it explains is the reporter's runtime observation on the reporter's machine, not this project's | `usbport-miniport-abi.md`, "Periodic scheduling: what `Period` actually carries", the Low-Speed floor table; `src/xhci_ctx.c` `XhciIntervalFromPeriod`; `runs/run-24.md` 24.1 |
-| **Windows XP SP3 x86 `usbport.sys` 5.1.2600.5512 carries the Low-Speed floor SP4 and NUSB carry**: the same producer at `0x25A34`-`0x25A9C`, `DeviceSpeed` at `[esi+110h]`, `Period` at `Endpoint+0x10E`, the High-Speed `raw` through the helper at `0x255EE`, and `test edx,edx` / `cmp al,8` / `jae` / `mov byte ptr [esi+10Eh],8` at `0x25A69`-`0x25A78` raising a Low-Speed value below 8 to 8; its isochronous arm sends the `0x255EE` result for a High-Speed device (`0x25AA0`-`0x25AB4`) and 1 otherwise (`0x25ABC`) | static (`dumpbin /disasm` from `tools/MSVC600` over `tools/winxpsp3-extracted/usbport.sys`; nothing executed) | same |
-| **Every `usbport.sys` this driver runs under copies an interrupt pipe's bucketed `Period` into `USBPORT_ENDPOINT_PROPERTIES` byte `0x07` before its USB 2.0 budget runs, and nothing else in the image touches that byte**: the pipe-open code buckets `bInterval` into `Period` (props `+0x06`) - High Speed `1 << min(bInterval - 1, 5)` microframes, Full and Low Speed a power of two of at most 32 frames, a Low-Speed value below 8 raised to 8 on every build but SweetLow's - and then, inside the interrupt-only block, copies it to props `+0x07`. Addresses in this row and the five after it are VAs with the image at base `0x10000`, as `kd` and `dumpbin` print them (RVA = address - `0x10000`); bucketing range, then the copy: NUSB 3.3 and 3.6 (byte-identical, SHA-256 `EEC79B5A...9B55`) `0x24B55`-`0x24BB5`, `0x24BBB: mov byte ptr [esi+103h],al` (props at `Endpoint+0xFC`); SweetLow 5.1.2600.2180 `0x24A31`-`0x24A83` (no Low-Speed floor), `0x24A89: mov byte ptr [esi+103h],al`; Windows 2000 SP4 `0x251D3`-`0x25231`, `0x25239: mov byte ptr [esi+103h],al`; XP SP3 x86 `0x25A36`-`0x25A8A`, `0x25A96: mov byte ptr [esi+10Fh],al` (props `Endpoint+0x108`); XP x64 `0x2E044`-`0x2E0BC`, `0x2E0C5: mov byte ptr [rdi+1B7h],al` (props `Endpoint+0x1B0`); Vista SP2 x86 `0x1F7E6`-`0x1F841`, `0x1F849: mov byte ptr [esi+11Fh],al` (props `Endpoint+0x118`); Windows 7 SP1 x86 `0x1A9D9`-`0x1AA35`, `0x1AA3D: mov byte ptr [ebx+11Bh],al` (props `Endpoint+0x114`); Vista SP2 x64 `0x3FA80`-`0x3FADF`, `0x3FAE7: mov byte ptr [rbx+17Fh],al` (props `Endpoint+0x178`); Windows 7 SP1 x64 `0x35853`-`0x358C7`, `0x358CF: mov byte ptr [rbx+17Fh],al`. Each copy is the only operand at that `Endpoint` offset in the image (a whole-file census on the 32-bit NT 5.x-family images; `.text` and `PAGE` on XP x64, whose `INIT` was not dumped; `.text` on the four NT 6.x builds), so neither the budget nor a rebalance changes it; control, bulk and isochronous endpoints never reach the write. A write through a register holding the properties pointer (`[reg+7]`) would not match the census; none was seen on the paths read. The same offset on x86 and amd64. `src/xhci_usbport.h` declared the byte `Reserved1` until this reading | static (`kd -z` with the public PDBs for XP SP3, XP x64 and the four NT 6.x builds, the NT 6.x bodies also read from the whole-`.text` dumps in `out\t24-4`, Vista x64's cut from that dump because `kd` stalled; whole-image `DUMPBIN /disasm` from `tools/MSVC600` for NUSB, SweetLow and SP4, which have no PDB, their routines named by structure against XP SP3's; two reading agents' reports in `out\t24-5`, 2026-09-28; nothing executed). Re-checked against the listings the same day: the four NT 6.x copies, SweetLow `0x24A89`, XP SP3 `0x25A96`, XP x64 `0x2E0C5`; the NUSB and SP4 addresses rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **The USB 2.0 budget runs when the registration packet's `MiniPortFlags` has `0x10`, and it overwrites props `+0x06` with the period it budgeted before `OpenEndpoint` is called**: the selector, then the `Period` store of `USB2LIB_GetNewPeriod`'s result: NUSB `0x24C01: test byte ptr [eax+14h],10h` (NUSB's interface wrapper is `0x10`, so `+0x14` is `MiniPortFlags` there, per the ABI document), `call 0x12516` at `0x24C07`, `0x1277D: mov byte ptr [esi+102h],al`; SweetLow `0x24ABE: test byte ptr [eax+18h],10h`, `0x129AE: mov byte ptr [esi+102h],al`; SP4 `0x2527F: test byte ptr [eax+18h],10h`, `0x12897: mov byte ptr [esi+102h],al`; XP SP3 `0x25AEA: test byte ptr [eax+18h],10h`, `call USBPORT_AllocateBandwidthUSB20` `0x25AF4`, `0x12C85: mov byte ptr [esi+10Eh],al`; XP x64 `0x2E12E: test byte ptr [rax+2Ch],10h`, `0x2E13A`, `0x1472A: mov byte ptr [rbx+1B6h],r14b`. NT 6.x selects on `MiniPortFlags & 0x418` equal to `0x10`: Vista x86 `0x1C331: and eax,418h` in `MPx_AllocateBandwidth`, `0x1C390`, `0x25FBF: mov byte ptr [esi+11Eh],al`; Windows 7 x86 `0x19269: and eax,418h`, `0x192C8`, `0x23C16: mov byte ptr [esi+11Ah],al`; Vista x64 `0x3FB3D: and ecx,418h` (inlined in `USBPORT_OpenEndpoint`), `0x3FBEF`, `0x1E531: mov byte ptr [rbx+17Eh],r13b`; Windows 7 x64 `0x35937: and ecx,418h`, `0x35A03`, `0x1A71D: mov byte ptr [r12+17Eh],sil`. The budgeted period is min(`Period`, 256) for High Speed and the Full/Low-Speed value rounded down to a power of two of at most 32 (XP SP3 `0x2BED3`-`0x2BEF0`), unless promoted (next row). The flag is the only registration input read on this path: no `MiniPortVersion`, HCI-type or interface-version test. Without `0x10` the NT 5.x-family builds take `USBPORT_AllocateBandwidthUSB11`, which reads `Period` (XP SP3 `0x105C2`) and writes no mask; the NT 6.x USB 1.1 path's `Period` handling was not read. This driver registers `0xB5`, which includes `0x10`, and the same bit gates the TT lookup that supplies `HubAddr` / `PortNumber` (abi, "The exact rule") | static (as the row above). Re-checked the same day: the four NT 6.x selectors and stores against the `out\t24-4` dumps, SweetLow `0x24ABE` / `0x129AE`, XP SP3 `0x25AEA` / `0x12C85`, XP x64 `0x2E12E` / `0x1472A`; the NUSB and SP4 addresses rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **`Promote_endpoint_periods` re-budgets an interrupt endpoint at period 1 when its start microframe is above 2, with no speed test on the NT 5.x-family builds, while the NT 6.x builds skip High Speed**: the tests are actual period != 1, type == interrupt (low nibble 2), and `and eax,0FF000000h` / `cmp eax,2000000h` / `jle` on the start-microframe byte; then free, save the period at `+0x22`, `mov word ptr [edi+6],1`, re-allocate. XP SP3 `0x2BCF7`-`0x2BD35` (`0x2BD12`, `0x2BD17`, `0x2BD35: mov word ptr [edi+6],1`, re-allocate `0x2BD3B`; the same three tests then promote every interrupt endpoint on the rebalance list, `0x2BD7F`-`0x2BDD2`); SP4 `0x2AAF4`-`0x2AB3F` (`0x2AB0B`, `0x2AB10`); NUSB `0x2A314`-`0x2A35F`; SweetLow `0x2A1AD`-`0x2A1F1` (`0x2A1EB: mov word ptr [edi+6],1`); XP x64 `0x369B1`-`0x369FD` (`0x369F3: mov word ptr [rdi+6],1`) - none of the five reads the speed bits. The NT 6.x builds add `and al,60h` / `cmp al,40h` / `je` past the promotion when the speed bits say High Speed: Vista x86 `0x334F7`-`0x334FD` (then `0x33516: mov word ptr [edi+6],1`), Windows 7 x86 `0x2F385`-`0x2F38B`, Vista x64 `0x1AC86`-`0x1AC89` (`and cl,60h` / `cmp cl,40h`), Windows 7 x64 `0x194DD`-`0x194E3`. A High-Speed endpoint behind a hub and one on a root port run identical code: the High-Speed arm of `USB2LIB_AllocUsb2BusTime` takes the controller-wide table and ignores the TT argument (XP SP3 `0x2BEAF`-`0x2BEB5`, `HcContext+0x414`; Vista x86 `0x336A4`-`0x336AA`; Windows 7 x86 `0x2F532`-`0x2F538`; Vista x64 `0x1AEA7` and Windows 7 x64 `0x19705`, both `+0x420`), and `Allocate_time_for_endpoint` takes the least-loaded microframe, only a strictly smaller load displacing an earlier one (SP4 `0x2C06B`-`0x2C0B3`; XP SP3 `0x2D0BF`-`0x2D0F8`). What decides promotion is how loaded microframes 0..2 already are, i.e. bus load, not topology; on a zeroed table the rule puts the first three High-Speed interrupt endpoints of period 4 or more at microframes 0, 1 and 2 and the fourth at 3 - a consequence of the rule as read, not an observation. On NT 5.x a promoted High-Speed endpoint's `Period` 1 is one microframe (125 us); at period 1 the search does not run, so it lands in microframe 0 and is not promoted again. Root-hub endpoints are not budgeted (XP SP3 `0x12AD2: test byte ptr [esi+4],2`) | static (as the first of these rows). Re-checked the same day: XP SP3 `0x2BCF7`, `0x2BD12`, `0x2BD17`, `0x2BD35`, SweetLow `0x2A1EB`, and the four NT 6.x High-Speed skips against the `out\t24-4` dumps; the SP4, NUSB and XP x64 addresses and the table-selection and search addresses rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **`InterruptScheduleMask` and `SplitCompletionMask` (props `+0x34` / `+0x35` on x86, `+0x3C` / `+0x3D` on amd64) are written only by the USB 2.0 budget, and for High Speed say which microframe, not how often**: the stores after `USB2LIB_GetSMASK` / `USB2LIB_GetCMASK`: NUSB `0x12786` / `0x12795` (`[esi+130h]` / `[esi+131h]`); SweetLow `0x129B7` / `0x129C6` (the same offsets); SP4 `0x128A0` / `0x128AF` (the same); XP SP3 `0x12C8E: mov byte ptr [esi+13Ch],al` / `0x12C9D`; XP x64 `0x14739: mov byte ptr [rbx+1ECh],al` / `0x14744`; Vista x86 `0x25FCE: mov byte ptr [esi+14Ch],cl` / `0x25FD4`; Windows 7 x86 `0x23C28: mov byte ptr [esi+148h],al` / `0x23C31`; Vista x64 `0x1E53F: mov byte ptr [rbx+1B4h],bpl` / `0x1E546`; Windows 7 x64 `0x1A72F: mov byte ptr [r12+1B4h],dil` / `0x1A73A`. On the NT 5.x-family builds the census finds two more sites each, in the budget's `USBPORT_RebalanceEndpoint` (two rows below); the NT 6.x reports find only the two above. High Speed: S-mask `1 << StartMicroframe`, a single bit, and C-mask 0 (`xor al,al`): XP SP3 `0x2BFE7`-`0x2BFF4` / `0x2C047`-`0x2C04C`; SP4 `0x2AE01`-`0x2AE10` (`and eax,60h` / `cmp al,40h` / `sar ecx,18h` / `shl bl,cl`) / `0x2AE9B`; NUSB `0x2A61E`-`0x2A630` / `0x2A6BB`; SweetLow `0x2A47E`-`0x2A48E` / `0x2A4D2`-`0x2A4DF`; XP x64 `0x36D90`-`0x36DAA` / `0x36E00`-`0x36E0D`; Vista x86 `0x337DC`-`0x337E1` / `0x33837`; Windows 7 x86 `0x2F670`-`0x2F675` / `0x2F6CD`; Vista x64 `0x1AFCC`-`0x1AFD5` / `0x1B035`; Windows 7 x64 `0x19829`-`0x19838` / `0x1989C`. Full and Low Speed behind a TT get split start and complete masks from the TT budget; their bits depend on the TT's load and were not determined. The USB 1.1 path writes no mask. The amd64 offsets fit `src/xhci_usbport.h`'s "every field from `BufferVA` on sits 8 higher" rule | static (as the first of these rows). Re-checked the same day: the eight NT 6.x stores against the `out\t24-4` dumps, SweetLow `0x129B7` / `0x129C6`, XP SP3 `0x12C8E` / `0x12C9D`, XP x64 `0x14739` / `0x14744`; the NUSB and SP4 stores and every `GetSMASK` / `GetCMASK` range rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **Neither `bInterval` nor the endpoint descriptor is passed to the miniport**: usbport reads `bInterval` at `+0x0A` of the descriptor copy in the pipe handle and hands `OpenEndpoint` only its extension, the properties and the endpoint data. NT 5.x: SP4 `[edx+0Ah]` at `0x251E4`; XP SP3 pipe handle `0x25949: mov edi,[ebp+10h]`, `bInterval` `[edi+0Ah]` at `0x25A4C` / `0x25A57` / `0x25AAB`, and `MPx_OpenEndpoint` passes `Endpoint+0x108` (`0x25637: lea ecx,[esi+108h]`) and `Endpoint+0x178` (`0x25630`) to `0x2564D: call [eax+3Ch]`; XP x64 `[r12+0Ah]` at `0x2E05A` / `0x2E07D`, then `0x2E3B5: lea r8,[rdi+240h]`, `0x2E3BC: lea rdx,[rdi+1B0h]`, `0x2E3C6: call qword ptr [r9+50h]`. NT 6.x: the pipe handle is `USBPORT_OpenEndpoint`'s third argument, the descriptor copy at its `+4`, `bInterval` at `+0x0A` - Windows 7 x86 `0x1A6B0: mov edi,dword ptr [ebp+10h]`, Vista x86 `0x1F4A9: mov ebx,dword ptr [ebp+10h]`, Vista x64 `0x3F57B: mov r12,r8`, Windows 7 x64 `0x35397: mov rbp,r8`; the properties go down as `Endpoint+0x114` (Windows 7 x86 `0x1B9F6: add eax,114h`, `0x1BA02: call dword ptr [ecx+44h]`), `+0x118` (Vista x86 `0x15673`, `0x1567F`) and `+0x178` (Vista x64 `0x121A8: lea rdx,[r12+178h]`, `0x121B0`; Windows 7 x64 `0x12170`, `0x12178`). No pointer to the pipe handle is kept in the endpoint: the Windows 7 x86 reading searched `USBPORT_OpenEndpoint` for a store of it and found only log records (`0x1A6D1`, `0x1A834`); the other NT 6.x reports and the NT 5.x-family reports state the descriptor is not reachable from the properties without describing such a search. Props `+0x07` (three rows above) carries the interval in bucketed form, not raw `bInterval`. A pre-promotion copy of the period also sits in USB2LIB's own endpoint context (XP SP3 `0x2BD31: mov [edi+22h],ax`), undocumented internal state | static (as the first of these rows). Re-checked the same day: the NT 6.x pipe-handle loads, the three properties offsets and calls and the Windows 7 x86 log-record stores against the `out\t24-4` dumps, XP SP3 `0x25949`, XP x64 `0x2E3B5` / `0x2E3BC` / `0x2E3C6`; the SP4 address and XP SP3's `MPx_OpenEndpoint` rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **When a later allocation promotes an endpoint that is already open, usbport rewrites its `Period` and masks and calls the miniport's `RebalanceEndpoint`**: XP SP3 `USBPORT_RebalanceEndpoint` `0x12524` writes the masks (`0x126CF: mov byte ptr [esi+13Ch],al`, `0x126D8: mov byte ptr [esi+13Dh],al`), `Period` (`0x1273B: mov byte ptr [esi+10Eh],al`) and `ScheduleOffset` (`0x12744`), then `0x127B4: call dword ptr [eax+138h]` (interface `+0x138` = packet `0x124`, `RebalanceEndpoint`). The same rewrite on SP4 (masks `0x124B6` / `0x124BF`, `Period` `0x1251F`), NUSB (`0x1239C` / `0x123A5`, `0x12405`), SweetLow (`0x12403` / `0x1240C`, `0x1246F`) and XP x64 (`USBPORT_RebalanceEndpoint` `0x13CD0`: `0x13EF8` / `0x13F02`, `0x13F71`); the miniport call on those four (not read). Props `+0x07` is not among the rewritten fields (the census in the first of these rows). NT 6.x: not traced; Windows 7 x86 `USBPORT_Rebalance` (`0x23C9B`) calls `RebalanceEndpoint` on other endpoints, and whether it changes an open endpoint's `Period` was not determined | static (as the first of these rows). Re-checked the same day: XP SP3 `0x126CF`, `0x126D8`, `0x1273B`, `0x127B4`; the other builds' addresses rest on the reports alone | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5" (roadmap 24.5) |
-| **Windows XP SP3 x86 `usbport.sys` schedules an isochronous transfer on a separate branch when the endpoint's device is High Speed**: `USBPORT_IsochTransfer` compares `[eax+110h]` with 2 at `0x243EF`, allows up to `0x400` packets on that branch against `0xFF` otherwise (`0x24492`-`0x244AF`), and converts packets to frames as `packets x period >> 3` (`0x244EE`-`0x244F4`; addresses at the image base `0x10000`) | static (`kd.exe -z` with the public PDB; nothing executed). The consequence is also **runtime**: a Full-Speed audio device reported High Speed on a root port received no isochronous transfer while XP played, and the same device behind a Full-Speed hub, reported at its true speed, received 196 | `runs/run-22.md` 22.9; `docs/using/release-notes.md`, Known limitations |
-| **Every hub INF on this driver's targets binds a generic hub by class, and none names vendor id `0x1209`**: NUSB 3.3's, NUSB 3.6's and SweetLow's `USB2.INF` match `USB\HubClass`; NUSB 3.6's `USB.INF` matches `USB\CLASS_09&SUBCLASS_01` and `USB\CLASS_09`; Windows 2000 SP4's `usb.inf` (`I386\USB.IN_`) matches `USB\HubClass` and, under `[GenericHub.Section]`, the same class pair; XP SP3 x86's (`I386\USB.IN_`), XP x64 SP2's (`AMD64\USB.IN_`), and Vista SP2's and Windows 7 SP1's in both architectures (`Windows\inf\usb.inf` inside `sources\install.wim`) match the class pair under `[GenericHub.Section]`, decorated `.NTamd64` on XP x64 and `.NTx86`/`.NTamd64` on NT 6.x; a search for `VID_1209` over all eleven files finds nothing. File hashes are in design record 12, section 3.1 | static (`7z e` from each install medium, `expand.exe` for the two compressed ones, copies kept git-ignored as `tools/<os>-extracted/usb.inf`; a text search, nothing executed) | design record 12 section 3.1; roadmap 24.3.1 |
-| **NT 6.x `USBPORTSVC_InvalidateRootHub` takes usbport's EpList lock**: Vista x64 (6.0.6002.18005) `USBPORTSVC_InvalidateRootHub` RVA `0x2990C` -> `USBPORT_Ev_Rh_IntrEp_Invalidate` `0x2A678` -> `USBPORT_ReferenceEndpoint` `0x8770` -> `USBPORT_AcquireEpListLock` `0x7050`, whose lock is `lea rcx,[rdi+1160h]` at RVA `0x7071` on the FDO extension (`AssertSig` `HFDO`), i.e. miniport extension - `0x580`; Windows 7 x64 the same chain, `lea rcx,[rbx+0F88h]` at RVA `0x5F4D` | static (the chain read from `tools/vista-x64-extracted/` and `tools/win7-x64-extracted/` `usbport.sys`, 2026-09-27; the two lock offsets re-read with `kd -z <usbport.sys> -y srv*tools\symbols -c "uf usbport!USBPORT_AcquireEpListLock"`, public PDBs, image base `0x10000`); the hang it causes from inside `SubmitTransfer` is **runtime** (Windows 7 x64 at 2 and Vista x64 at 1, `info registers -a` plus a stack scan symbolised with the `qemu` build's PDB: `XhciSlotSubmitTransfer+0x15c` -> `XhciRootHubDeferredWork+0x81` -> `xhciRhAnnounce+0xba` -> usbport, spinning) | design 12 section 11; abi section 6 `UsbPortInvalidateRootHub` |
-| **NT 6.x's legacy `UsbPortRequestAsyncCallback` takes neither usbport's timer-list lock nor EpList; its caller is assumed to hold the timer-list lock**: Vista x64 `USBPORTSVC_RequestAsyncCallback` RVA `0x33C88` stores `1` into its seventh outgoing argument (`mov byte ptr [rsp+30h],1`) and calls `...Ex` RVA `0x33910`, which takes the FDO extension as `lea r12,[rcx-16E0h]` (RVA `0x33927`, `AssertSig` `HFDO`), tests that argument (`cmp byte ptr [rsp+0A0h],0` / `jne`) and only when it is 0 acquires `lea rcx,[r12+11C0h]` with `KeAcquireSpinLockRaiseToDpc` (RVA `0x33952`); Windows 7 x64 the same, `0x296D4` -> `0x29430`, `lea r12,[rcx-1500h]`, test at `0x2946A`, lock `+0FE0h` at `0x29474`; `USBPORT_AsyncTimerDpc` acquires `+0FE0h` (Windows 7 x64 RVA `0x29350`) and calls the miniport's callback (`call qword ptr [rbx+0D8h]`, `0x293CE`) before releasing it (`0x293F8`); Vista x86 timer lock FDO+0xD04 (EpList +0xCD0, legacy wrapper RVA `0x304F6`), Windows 7 x86 FDO+0xB94 (EpList +0xB68, wrapper `0xFFFA`, timer-list tail read `0xFEEF`, insertion `0xFEFA`-`0xFF01`, DPC unlink `0xFF9E`, free `0xFFE8`); neither path calls `USBPORT_AcquireEpListLock`; a successful arm does take the separate I/O-count lock, FDO+0x200, in `USBPORT_Core_IncIoRequestCount` (Windows 7 x64 call at RVA `0x295E9`, acquire at `0x15DDD`) | static (Windows 7 x64 read with `kd -z` and the public PDBs, `uf` of `USBPORTSVC_RequestAsyncCallbackEx` and `USBPORT_AsyncTimerDpc`, 2026-09-27; the x86 offsets and the list addresses read the same day) | design 12 section 11; `src/xhci_hw.h` `XhciRootHubDeferredArms`; abi section 6; run-24 "The fix batch" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` keeps its spin locks at fixed offsets of the FDO extension, and the miniport extension at a fixed delta from it, per build**: every address in this row and the ten after it is an RVA (the kd address at image base `0x10000`, minus `0x10000`). Vista SP2 x86 (6.0.6002.18005): miniport ext = FDO + `0x1084` (`add esi,0FFFFEF7Ch`, `USBPORTSVC_RequestAsyncCallbackEx` `0x17F86`), timer-list lock `+0xD04` (`add esi,0D04h` `0x17FAA`, acquire `0x17FB2`), timer list head `+0xD74` (`mov edx,dword ptr [eax+0D78h]` `0x18219`), EpList `+0xCD0` (`lea ecx,[esi+0CD0h]` `0x109C`), MP lock `+0x798` (`lea edi,[esi+798h]` `0x1156`, `MPf_CheckController`), ISR-DPC lock `+0xD28` (`lea ecx,[ebx+0D28h]` `0x1F02`, `USBPORT_IsrDpc`), MP-call lock `+0xD00` (`lea edi,[esi+0D00h]` `0x5416`, `MPf_SubmitTransfer`), I/O-count lock `+0x1E4` (`lea ebx,[esi+1E4h]` `0x4F58`), RH-IntrEp lock `+0x2F8` (`lea ecx,[ebx+2F8h]` `0x13D28`, `USBPORT_Ev_Rh_IntrEp_Invalidate`), MpSuspendResume semaphore `+0x46C` (address not read); Windows 7 SP1 x86 (6.1.7601.17514): FDO + `0xF00` (`add esi,0FFFFF100h` `0xFD15`), timer-list `+0xB94` (`add esi,0B94h` `0xFD38`, acquire `0xFD40`), list head `+0xC04` (`add eax,0C04h` `0xFEF5`), EpList `+0xB68` (`lea ecx,[esi+0B68h]` `0x10ED`), MP `+0x638` (`lea edi,[esi+638h]` `0x1629`), ISR-DPC `+0xBB8` (`lea ecx,[ebx+0BB8h]` `0x2DAC`), MP-call `+0xB90` (`lea eax,[esi+0B90h]` `0xB9D7`, `MPf_OpenEndpoint`), I/O-count `+0x1EC` (`lea ebx,[esi+1ECh]` `0x3574`), RH-IntrEp `+0x310` (acquire `0xEAB3`), MpSuspendResume event `+0x484` (`lea eax,[edi+484h]` `0xDE5C`, `MPh_AcquireMpSuspendResumeLock`); Vista SP2 x64 (6.0.6002.18005): FDO + `0x16E0` (`lea r12,[rcx-16E0h]` `0x33927`), timer-list `+0x11C0` (`lea rcx,[r12+11C0h]` `0x33952`), list head `+0x12A0` (`lea rdx,[r12+12A0h]` `0x33B98`), EpList `+0x1160` (`lea rcx,[rdi+1160h]` `0x7071`), MP `+0xA40` (`add rcx,0A40h` `0x1712`), ISR-DPC `+0x1208` (`lea rcx,[rdi+1208h]` `0x376AF`), MP-call `+0x11B8` (`add rcx,11B8h` `0x1F2D`, `MPf_SubmitTransfer`), I/O-count `+0x1F8` (`lea rcx,[r14+1F8h]` `0x1C307`), RH-IntrEp `+0x3F0` (acquire `0x2A738`), MpSuspendResume semaphore `+0x5E0` (`add rcx,5E0h` `0x108E`); Windows 7 SP1 x64: FDO + `0x1500` (`lea r12,[rcx-1500h]` `0x29447`), timer-list `+0xFE0` (`lea rcx,[r12+0FE0h]` `0x29474`), list head `+0x10C0` (`lea rdx,[r12+10C0h]` `0x2961C`), EpList `+0xF88` (`lea rcx,[rbx+0F88h]` `0x5F4D`), MP `+0x868` (`add rcx,868h` `0x166F`), ISR-DPC `+0x1028` (`lea rcx,[rbx+1028h]` `0x2D4E1`), MP-call `+0xFD8` (`add rcx,0FD8h` `0x1EF5`, `MPf_SubmitTransfer`), I/O-count `+0x200` (`lea rcx,[r12+200h]` `0x15DCF`, `USBPORT_Core_IncIoRequestCount`), RH-IntrEp `+0x3E0` (acquire `0x20753`), MpSuspendResume `+0x5D0` (`add rcx,5D0h` `0x108A`, then `KeWaitForSingleObject` `0x1096`; object type not read). The field 8 bytes after the timer-list lock is the `USBPORT_IsrDpc` KDPC, not a lock: Windows 7 x64 passes `lea rcx,[rbx+0FE8h]` to `KeInsertQueueDpc` in `USBPORT_InvalidateController` (`0x5330`, call `0x533B`) and in `USBPORT_InterruptService` (`0x2D3BA`, call `0x2D3C6`); Vista x64 `+0x11C8` the same (`KeInsertQueueDpc` `0x608B`); Windows 7 x86 `+0xB98` (`lea eax,[esi+0B98h]` `0x1777D`, `USBPORT_InitStateVars`, then `KeInitializeDpc` with `USBPORT_IsrDpc`) | static (`kd -z` whole-`.text` dumps of the four builds with the public PDBs, 2026-09-28; four agents' reports in `out\t24-4`; every cited instruction re-checked against its dump line the same day, and the Windows 7 x64 `+0x10C0`, `+0x200`, `+0x5D0` and `+0xFE8` instructions read from the dump directly, the RIP-relative import slots resolved by hand as next instruction + disp32) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls the miniport's `CheckController` holding no usbport spin lock**: `MPf_CheckController` takes the MP lock only to test a flag and releases it before the call. Windows 7 x64 `MPf_CheckController` `0x1648`: `add rcx,868h` `0x166F`, `KeAcquireSpinLockRaiseToDpc` `0x1676`, `test byte ptr [rbx+4F0h],2` `0x167C`, flag clear: `KeReleaseSpinLock` `0x168E` (`dl` = the saved IRQL), then `call qword ptr [r11+0E0h]` `0x16A2` with `rcx = [rbx+400h]`; flag set: release `0x16AB` and no call (kd labels the two import slots `USBPORT_RootHub_ClassCommand+0x2fc` / `+0x5ec`; next instruction + disp32 gives `_imp_KeAcquireSpinLockRaiseToDpc` / `_imp_KeReleaseSpinLock`). Vista x86 `0x113D`: acquire `+0x798` `0x115E`, release `0x1171`, `call dword ptr [eax+84h]` `0x1183`; Windows 7 x86 `0x1607`: acquire `+0x638` `0x1631`, release `0x1644`, `call dword ptr [eax+84h]` `0x1656`; Vista x64 `0x16F4`: `add rcx,0A40h` `0x1712`, acquire `0x1719`, release `0x1731`, `call qword ptr [r11+0E0h]` `0x1745` | static (Windows 7 x64 read first-hand, `kd -z ... -c "uf usbport!MPf_CheckController; q"`, 2026-09-28; the other three from the whole-`.text` dumps by the agents' reports in `out\t24-4`, each instruction re-checked against the dump) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls the miniport's `InterruptDpcEx` under its ISR-DPC lock only**: `USBPORT_IsrDpc` takes the MP lock for a flag test, releases it, then holds the ISR-DPC lock across the call. Windows 7 x64 `USBPORT_IsrDpc` `0x2D3EC`: MP `KeAcquireSpinLockAtDpcLevel` `0x2D4C1`, `KeReleaseSpinLockFromDpcLevel` `0x2D4DB`, `lea rcx,[rbx+1028h]` `0x2D4E1` + acquire `0x2D4E8`, `mov rcx,qword ptr [rbx+400h]` / `call r8` `0x2D561` (`r8 = [[rbx+408h]+2D0h]`, packet offset `0x298` = InterruptDpcEx), release `0x2D5D1`; after it, with no lock, `USBPORT_Ev_Rh_IntrEp_Invalidate` `0x2D5EE` (when `test sil,1` or `test sil,2` hits, `0x2D5DF`-`0x2D5E9`) and `USBPORT_Xdpc_Signal` `0x2D600`. Vista x86: MP acquire `0x1EE7`, release `0x1EFC`, ISR-DPC acquire `0x1F08`, `call usbport!MPf_InterruptDpcEx` `0x1F9B`, release `0x2039`; Windows 7 x86 `0x2CD7`: MP `0x2D91` / `0x2DA6`, ISR-DPC acquire `0x2DB2`, `call usbport!MPf_InterruptDpcEx` `0x2E15` (whose `call edx` at `0x1850` is packet `+0x194`), release `0x2E83`, then `USBPORT_Ev_Rh_IntrEp_Invalidate` `0x2E96`; Vista x64 `0x37570`: MP `0x3767E` / `0x376A9`, ISR-DPC acquire `0x376B6`, `call r8` `0x3775B` (`mov r12d,eax` `0x3775E`, bits 0/1 tested before `USBPORT_Ev_Rh_IntrEp_Invalidate` `0x37823`), release `0x37802` | static (Windows 7 x64 read first-hand, `kd uf usbport!USBPORT_IsrDpc`, 2026-09-28; the other three by the agents' reports in `out\t24-4`, re-checked against the dumps) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls a miniport timer callback from `USBPORT_AsyncTimerDpc` holding the timer-list lock, and on Windows 7 also from `USBPORT_CancelAllAsyncTimerCallbacks` holding no lock**: the DPC acquires the timer-list lock, unlinks the entry, calls the callback, calls `USBPORT_Core_DecIoRequestCount` (the I/O-count lock, nested), releases, and frees the entry after the release. Windows 7 x64 `0x2931C`: `lea rcx,[rsi+0FE0h]` `0x29350`, acquire `0x29357`, unlink `0x293A9`-`0x293BB`, `call qword ptr [rbx+0D8h]` `0x293CE`, Dec `0x293E9`, release `0x293F8`, `jmp` to `ExFreePoolWithTag` `0x29420`; Vista x86 `0x18255`: acquire `0x18283`, `call dword ptr [esi+78h]` `0x1831A`, Dec `0x1832A`, release `0x1833C`, free `0x18347`; Windows 7 x86 `0xFF2B`: acquire `0xFF58`, unlink `0xFF9E`-`0xFFA6`, `call dword ptr [esi+78h]` `0xFFBB`, Dec `0xFFCB`, release `0xFFDD`, free `0xFFE8`; Vista x64 `0x337DC`: acquire `0x33817`, unlink `0x3388C`-`0x3389E`, `call qword ptr [rbx+0D8h]` `0x338B1`, release `0x338DB`, free `0x33901`. Windows 7 only, both architectures: `MPf_StopController` calls `USBPORT_CancelAllAsyncTimerCallbacks` before the miniport's `StopController`; it pops each entry under the timer-list lock, releases the lock, calls `KeCancelTimer`, and when that returns TRUE raises to DISPATCH_LEVEL and calls the miniport's callback synchronously with the lock not held, then decrements, frees, and re-takes the lock for the next entry. Windows 7 x86: `MPf_StopController` `0x1CA9A` calls it at `0x1CABE`, before `call dword ptr [eax+58h]` `0x1CACE`; the function `0x25003`: acquire `0x25063`, release `0x25083`, `KeCancelTimer` `0x2508C`, `KfRaiseIrql` `0x250DD`, `call dword ptr [esi+78h]` `0x2512B`, re-acquire `0x25160`, final release `0x25174`. Windows 7 x64: `MPf_StopController` `0x1880` calls it at `0x18AE`, before `call qword ptr [r11+88h]` `0x18C4`; the function `0x29914`: acquire `0x2998E`, release `0x299B4`, `KeCancelTimer` `0x299BE`, `mov cr8,rax` (2) `0x29A1C`, `call qword ptr [rdi+0D8h]` `0x29A6B`, re-acquire `0x29AA8`, final release `0x29AC0`. Neither Vista build has the function: neither public-PDB symbol list names `USBPORT_CancelAllAsyncTimerCallbacks`, and Vista x64 calls `StopController` from `USBPORT_StopDevice` (`call rax` `0x3692`) | static (Windows 7 x64 `USBPORT_AsyncTimerDpc` read first-hand with `kd uf`, 2026-09-28; the other DPCs and both `CancelAllAsyncTimerCallbacks` readings from the whole-`.text` dumps by the agents' reports in `out\t24-4`, re-checked against the dumps; the Vista absence from the four builds' symbol lists, the same PDBs) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls the root-hub feature callbacks (`RH_SetFeaturePort*`, `RH_ClearFeaturePort*`) with the timer-list lock from some paths and without it from others**: with it from `USBPORT_RootHub_PortRequest` (usbhub's port requests through the root hub's control endpoint): Vista x86 acquire `0x13E73`, release `0x14084`; Windows 7 x86 `0xEBB0`, acquire `0xEBE3`, the twelve callbacks through a jump table (`call dword ptr [ecx+0BCh]` `0xEC64` to `call dword ptr [ecx+0E8h]` `0xEDA5`), release `0xEDCD`; Vista x64 `0x27478`, acquire `0x274EA`, release `0x2773C`; Windows 7 x64 `0x1E064`, acquire `0x1E0AF`, release `0x1E2D6`. The exception is `SetFeaturePortPower` when the registration packet's `MiniPortFlags` has bit `0x10`: the function releases the lock, calls `USBPORT_RootHub_PowerUsb2Port`, and re-takes it (Windows 7 x86 `test byte ptr [ecx+20h],10h` `0xEC77`, release `0xEC8A`, re-acquire `0xECAA`; Vista x64 `test byte ptr [rax+3Ch],10h` `0x2761A`, `0x2762B`, `0x27646`; Windows 7 x64 `test byte ptr [rax+3Ch],10h` `0x1E1B7`, `0x1E1C7`, `0x1E1E2`; Vista x86 release `0x13F3F`, re-acquire `0x13F61`, flag test not read). With it also from `USBPORT_SyncPowerAndChirpUsb2Ports` (`SetFeaturePortPower`, `ClearFeaturePortOvercurrentChange`: Windows 7 x86 acquire `0x1B0E9` / `call dword ptr [eax+0C0h]` `0x1B0FD`; Vista x64 `0x26B79` / `call qword ptr [r8+158h]` `0x26B93`; Windows 7 x64 `0x1DAB3` / `0x1DACD`; Vista x86 acquire `0x2A9DF`) and `USBPORT_HardResetRootPdo` (`ClearFeaturePortEnable`: Windows 7 x86 `0x22D09` / `call dword ptr [eax+0CCh]` `0x22D1D`; Vista x64 `0x2BA00` / `0x2BA19`; Windows 7 x64 `0x21475` / `call qword ptr [r8+170h]` `0x2148E`; Vista x86 acquire `0x2E016`). Without it from `USBPORT_UserSetRootPortFeature`, `USBPORT_UserClearRootPortFeature`, `USBPORT_UserRawResetPort`, `USBPORT_RootHub_HubRequest` and `USBPORT_RootHub_PowerUsb2Port` (Vista x64 `call qword ptr [rax+158h]` at `0x29B46`, `0x35993`, `0x2A379`, `call qword ptr [rax+1A8h]` `0x2785F`; Windows 7 x86: none of those functions references `+0xB94`; Vista x86 and Windows 7 x64 not read) | static (whole-`.text` dumps, 2026-09-28, by the agents' reports in `out\t24-4`, each cited instruction re-checked; the "without" paths rest on a scan of those functions for the lock offsets, which would miss a lock taken inside a helper) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls `RH_GetPortStatus` and `RH_GetHubStatus` under its MP lock from `USBPORT_RootHub_Endpoint1_Peek`, and the root-hub status callbacks under none of its MP, ISR-DPC or timer-list locks from every other caller**: `Endpoint1_Peek` is the root hub's status-change pipe service; the x64 dumps show `USBPORT_Ev_Rh_IntrEp_Dpc` -> `USBPORT_Rh_IntrEp_Worker` -> `USBPORT_RootHub_Endpoint1_Peek` (Windows 7 x64 `0x20983`, `0x20DA0`; Vista x64 `0x2A9F9`, `0x2AF95`), the DPC queued by `USBPORT_Ev_Rh_IntrEp_Invalidate`, which `USBPORTSVC_InvalidateRootHub` and `USBPORT_IsrDpc` call. Under the MP lock: Vista x86 acquire `0x141CD`, `call dword ptr [eax+0B4h]` `0x14207`, `call dword ptr [eax+0B8h]` `0x142C0`, release `0x142DB`; Windows 7 x86 `0xF20E`, `0xF248`, `0xF2DA`, `0xF300`; Vista x64 `0x289ED`, `call qword ptr [rax+140h]` `0x28A32`, `call qword ptr [rax+148h]` `0x28B2A`, `0x28B49`; Windows 7 x64 `lea rcx,[rbp+868h]` `0x1F0A2`, `0x1F140`, `0x1F1FF`, `lea rcx,[rbp+868h]` `0x1F21F`. None of those locks at `RH_GetStatus`, `RH_GetRootHubData` or the other `RH_GetPortStatus`/`RH_GetHubStatus` sites (`USBPORT_RootHub_ClassCommand`, `USBPORT_RootHub_StandardCommand`, `USBPORT_CreateRootHubPdo`, `SyncPowerAndChirpUsb2Ports`, `HardResetRootPdo` before its timer-list hold, the User* paths): e.g. Windows 7 x86 `RootHub_ClassCommand` `call dword ptr [ecx+0B4h]` `0xD7F5`, Vista x64 `0x283FB`, Windows 7 x64 `HardResetRootPdo` `call qword ptr [rax+140h]` `0x21413` before its acquire at `0x21475` | static (the agents' per-slot caller lists over the whole-`.text` dumps, 2026-09-28, in `out\t24-4`, re-checked; the DPC -> worker -> peek calls read from the two x64 dumps directly) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls the miniport's endpoint entry points under its MP-call lock, `StartController`, `StopController` and `PollController` under no spin lock, and `SuspendController` / `ResumeController` under only a wait object**: `SubmitTransfer` (Vista x86 `MPf_SubmitTransfer` acquire `0x5420` / `call dword ptr [ecx+6Ch]` `0x544E` / release `0x545A`; Windows 7 x86 `0x8CE5` / `0x8D13` / `0x8D1F`; Vista x64 `0x1F34` / `call qword ptr [r10+0B0h]` `0x1F6D` / `0x1F80`; Windows 7 x64 `0x1EFC` / `0x1F35` / `0x1F48`) and `OpenEndpoint` (Vista x86 `MPf_OpenEndpoint` `0x565E` / `call dword ptr [ecx+44h]` `0x567F` / `0x5696`; Windows 7 x86 `0xB9E1` / `0xBA02` / `0xBA19`; Vista x64 `MPx_OpenEndpoint` `0x2182` / `call qword ptr [rax+60h]` `0x21B0` / `0x21C3`; Windows 7 x64 `0x214A` / `0x2178` / `0x218B`); the reports find the same lock around `SetEndpointState`, `PollEndpoint`, `CloseEndpoint`, `AbortTransfer`, `SubmitIsoTransfer`, `QueryEndpointRequirements`, `Get/SetEndpointStatus`, `SetEndpointDataToggle`, `Get32BitFrameNumber`, `InterruptNextSOF` and `ResetController` (`Open/CloseEndpoint` skip it when `MiniPortFlags` bit 16 is set), and EpList held by the callers of the endpoint-state family (read on Vista x86, `USBPORT_iSetGlobalEndpointStateTx`; taken from the reading brief on the other three, not re-derived). `StartController` (Vista x86 `call dword ptr [eax+54h]` `0x1B6C7`; Windows 7 x86 `0x1317F`; Vista x64 `call qword ptr [rax+80h]` `0x18B1`; Windows 7 x64 `0x1815`) and `StopController` (Vista x86 `0x20A93`; Windows 7 x86 `0x1CACE`; Vista x64 `0x3692`; Windows 7 x64 `0x18C4`) with no usbport spin lock; `PollController` from `USBPORT_DM_TimerDpc` after it releases the MP lock (Vista x64 `call rdx` `0x13ACE`; the other builds not read); `SuspendController` (Vista x86 `0x207A9`; Windows 7 x86 `0xE661` after `MPh_AcquireMpSuspendResumeLock` `0xE578`; Vista x64 `0x13D4` after `0x12DE`; Windows 7 x64 `0x1393` after `0x128B`) and `ResumeController` (Vista x86 `0x2094C`; Windows 7 x64 `0x150F`) holding only the MpSuspendResume semaphore (Vista) or event (Windows 7 x86), with `DisableInterrupts` inside Suspend under the ISR-DPC lock | static (the agents' per-wrapper tables over the whole-`.text` dumps, 2026-09-28, in `out\t24-4`, each cited instruction re-checked) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **No NT 6.x `usbport.sys` function takes the MP, MP-call, ISR-DPC or EpList lock while holding the timer-list lock, or the timer-list lock while holding the MP or ISR-DPC lock**: the timer-list lock's holders are `USBPORT_AsyncTimerDpc`, `USBPORT_RootHub_PortRequest`, `USBPORT_SyncPowerAndChirpUsb2Ports`, `USBPORT_HardResetRootPdo`, `USBPORTSVC_RequestAsyncCallbackEx`, `USBPORTSVC_CancelAsyncCallback`, on Windows 7 `USBPORT_CancelAllAsyncTimerCallbacks`, and the zeroing in `USBPORT_InitStateVars`; inside their holds they call only the miniport, `USBPORT_Core_Inc/DecIoRequestCount` (the I/O-count lock, the one lock nested inside the timer-list lock), the kernel timer, DPC and pool routines, `USB_ZAP_LINK` and the log ring. The MP lock's regions are flag tests and sets, the two `Endpoint1_Peek` callbacks, the DM timer and I/O-count work in `USBPORT_StopDevice` / `USBPORT_DM_TimerDpc` / `USBPORT_StartDM_Timer`, and on Vista x64 the `ReadCfgFlag` slot from `ReadUsb2CfgFlag` (`call rdx` `0x13CF9`, only when that slot is non-NULL); the ISR-DPC lock's regions are single miniport calls (`InterruptDpcEx`, `RH_EnableIrq`/`RH_DisableIrq`, `EnableInterrupts`/`DisableInterrupts`). EpList and the timer-list lock are never nested either way: `USBPORT_IsrDpc` takes EpList only after releasing the ISR-DPC lock (Vista x64 `USBPORT_TxAcquireLock` `0x37835` after `0x37802`), and Vista x64's `SyncPowerAndChirpUsb2Ports` releases the MP-call lock (`0x269B4`, `0x269CE`, `0x26CBE`) before its timer-list holds. Windows 7 x86: a script over every `+0x638`, `+0xB94`, `+0xBB8`, `+0xB90` and `+0xB68` operand in `.text`, 109 hits, listed by enclosing function, and a two-level call-graph walk between the EpList and timer-list holders, empty both ways | static (the agents' census of each build's whole-`.text` dump, 2026-09-28, in `out\t24-4`: Windows 7 x86 by script over all hits, Vista x64 and Windows 7 x64 by per-holder tables, Vista x86 by the agent's summary without per-site addresses; the MP-call-lock half rests on the callee lists inside the timer-list holds) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **The NT 6.x services a timer callback of this driver may call take none of usbport's MP, ISR-DPC or timer-list locks**: `USBPORTSVC_InvalidateController` -> `USBPORT_InvalidateController` takes only the I/O-count lock (`USBPORT_Core_AllocIoRequest`) and queues a DPC (Vista x86 `USBPORT_InvalidateController` `0x2195A`; Windows 7 x86 `0x1DBA8` -> `0x1DAF8`; Vista x64 `0x621C` -> `0x6008`, `KeInsertQueueDpc` on the IsrDpc KDPC `0x608B`; Windows 7 x64 `0x546C`, `KeInsertQueueDpc` on `+0xFE8` `0x533B`). `USBPORTSVC_InvalidateRootHub` -> `USBPORT_Ev_Rh_IntrEp_Invalidate` takes the RH-IntrEp lock and, under it, EpList through `USBPORT_ReferenceEndpoint`, then queues the `Ev_Rh_IntrEp` DPC (Vista x86 `+0x2F8` acquire `0x13D31`, `ReferenceEndpoint` `0x13D9C`; Windows 7 x86 `0xF9E3` -> `0xEA5C`, `+0x310` `0xEAB3`, `0xEB19`; Vista x64 `0x2990C` -> `0x2A678`, `+0x3F0` `0x2A738`, `0x2A7B5`; Windows 7 x64 `0x1FC84` -> `0x206E4`, `+0x3E0` `0x20753`, `USBPORT_ReferenceEndpoint` `0x207D2` whose `call usbport!USBPORT_AcquireEpListLock` is at `0x714C`, release `0x20827`). `USBPORTSVC_CompleteTransfer` / `USBPORTSVC_CompleteIsoTransfer` take no FDO lock of their own (`USBPORT_Core_iCompleteTransfer`; Windows 7 x86 `0x8D32` / `0x958C`, Vista x64 `0x1B6D8` / `0x138A0`, Windows 7 x64 `0x154DC` / `0xF12C`), and the split-child path reaches the MP-call lock through `MPf_NotifyTransferQueueState` only when that packet slot is non-NULL. `USBPORTSVC_InvalidateEndpoint` is an `AssertSig` stub (Windows 7 x86 `0x2CA9`, `ret 8` `0x2CC4`; Vista x86 `0xA435`; Vista x64 `0x1B6BC`; Windows 7 x64 `0x154C0`). The legacy `USBPORTSVC_RequestAsyncCallback` takes only the I/O-count lock. The Windows 7 x64 agent's walk did not list the EpList take inside `Ev_Rh_IntrEp_Invalidate`; the call at `0x207D2` was read from the dump | static (the agents' depth-3 call walks over the whole-`.text` dumps, 2026-09-28, in `out\t24-4`, re-checked; Windows 7 x64 `USBPORTSVC_InvalidateController` and `USBPORTSVC_CompleteTransfer` also read first-hand with `kd uf`) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `USBPORTSVC_RequestAsyncCallbackEx` takes seven arguments `(MiniportExt, ms, ctx, ctxLen, callback, PVOID *outHandle /* optional */, BOOLEAN skipLock)` and returns an NTSTATUS**: x86 `ret 1Ch` (Vista x86 `0x180A4`, Windows 7 x86 `0xFDD6`), skipLock `cmp byte ptr [ebp+20h],0` (Vista x86 `0x17F9D`, Windows 7 x86 `0xFD2B`); x64 (Windows 7 x64 `0x29430`) pushes seven registers and does `sub rsp,30h`, so the callback is `[rsp+90h]` (`0x295BE`, stored at `[rbp+0D8h]` `0x295CD`), the out-handle `[rsp+98h]` (`0x29654`, `mov qword ptr [r11],rbp` `0x29661`) and skipLock `[rsp+0A0h]` (`cmp byte ptr [rsp+0A0h],bpl` `0x2946A`; Vista x64 `cmp byte ptr [rsp+0A0h],0` `0x33943`). skipLock 0 takes the timer-list lock (Windows 7 x64 `lea rcx,[r12+0FE0h]` `0x29474`, `KeAcquireSpinLockRaiseToDpc` `0x2947C`; Vista x64 `0x3395A`; Windows 7 x86 `0xFD40`; Vista x86 `0x17FB2`) and, inside it, the I/O-count lock (`USBPORT_Core_IncIoRequestCount`, Windows 7 x64 `0x295E9`, Vista x64 `0x33B65`, Windows 7 x86 `0xFEB7`, Vista x86 `0x181E1`). Returns `0xC000000D` when ctxLen is 0 (Windows 7 x64 `cmp r13d,ebp` `0x294C5`, `mov ebx,0C000000Dh` `0x294CA`; Vista x64 `0x339DD`; Windows 7 x86 `0xFD7B`; Vista x86 `0x1801B`), `0xC0000095` when the size overflows on x64 (Windows 7 x64 `0x294EA`, Vista x64 `0x339FD`), `0xC000009A` when the pool allocation fails (Windows 7 x64 `0x2958F`, Vista x64 `0x33B0B`, Windows 7 x86 `0xFE78`, Vista x86 `0x1819F`), otherwise 0. The entry is `0xE8 + ctxLen` bytes on x64 (`lea edi,[r13+0E8h]` `0x294D4`) and `0x80 + ctxLen` on x86 (`RtlULongAdd`, Windows 7 x86 `0xFDE3`, Vista x86 `push 80h` `0x180AE`), from `UsbAllocPool_Z` with tag `'usbp'` (Windows 7 x64 `mov r8d,70627375h` `0x1036`); x64 layout: +0 LIST_ENTRY, +0x10 `'mTIM'`, +0x18 device object, +0x20 KTIMER, +0x60 KDPC, +0xA0 I/O-request record (tag `'Astm'`), +0xD8 callback, +0xE0 length, +0xE8 context copy. The entry is tail-inserted in the timer list and armed with `KeSetTimer` (Windows 7 x64 `0x2964E`, Vista x64 `0x33BCA`) whatever skipLock is, so a nonzero skipLock inserts it unlocked. The legacy `USBPORTSVC_RequestAsyncCallback` passes `outHandle = NULL, skipLock = 1` and returns Ex's value: Windows 7 x64 `0x296D4` (`mov byte ptr [rsp+30h],1` `0x296DD`, `call` `0x296ED`), Vista x64 `0x33C88`, Windows 7 x86 `0xFFFA` (`push 1` `0xFFFF`, `ret 14h` `0x10018`), Vista x86 `0x304F6` (`push 1` `0x304FB`, `ret 14h` `0x30514`) | static (Windows 7 x64 read first-hand, `kd uf usbport!USBPORTSVC_RequestAsyncCallbackEx`, 2026-09-28; the other builds by the agents' reports in `out\t24-4`, re-checked against the dumps; the x64 argument slots follow from the seven pushes and `sub rsp,30h`, which corrects the Windows 7 x64 report's "arg5" label for `[rsp+0A0h]`: it is the seventh) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `USBPORTSVC_CancelAsyncCallback (MiniportExt, entryHandle, BOOLEAN lockAlreadyHeld)` cancels one armed timer under the timer-list lock and returns whether it did**: with the third argument 0 it takes the timer-list lock (Windows 7 x64 `0x29700`: `cmp r13b,r14b` `0x29744`, acquire `0x29750`; Vista x64 `0x33CB4`: `0x33CF5`, `0x33D01`; Windows 7 x86 `0x24E45`: `cmp byte ptr [ebp+10h],0` `0x24E6D`, `0x24E8A`; Vista x86 `0x3051C`: acquire `0x30561`), walks the list for the entry (FALSE if it is absent), calls `KeCancelTimer` (Windows 7 x64 `0x29821`, Vista x64 `0x33E3E`, Windows 7 x86 `0x24F3D`, Vista x86 `0x306B0`), and only when that returns TRUE unlinks the entry, calls `USBPORT_Core_DecIoRequestCount` and frees it (`ExFreePoolWithTag`: Windows 7 x64 `0x2989E`, Vista x64 `0x33EE0`, Windows 7 x86 `0x24FA4`, Vista x86 `0x3074F`) before releasing (Windows 7 x64 `0x298E8`, Vista x64 `0x33F4E`, Windows 7 x86 `0x24FEF`, Vista x86 `0x307CE`); it returns the `KeCancelTimer` BOOLEAN, so FALSE once `USBPORT_AsyncTimerDpc` owns the entry. This driver does not call it | static (the agents' reports in `out\t24-4`, re-checked against the whole-`.text` dumps, 2026-09-28) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4" (roadmap 24.4) |
-| **NT 6.x `usbport.sys` calls the miniport's `RH_EnableIrq` / `RH_DisableIrq` only from `MPRH_EnableIrq` / `MPRH_DisableIrq`, which take the RH-IntrEp lock (unless their caller holds it) and then always the ISR-DPC lock across the call; the root-hub status queue and the root-hub DPC reach them holding RH-IntrEp, and usbport takes RH-IntrEp itself only while holding no other spin lock**: every code address in this row and in the first, second and fourth after it is an RVA (the `kd` or `dumpbin` address at image base `0x10000`, minus `0x10000`); the third carries runtime addresses. The two wrappers set or clear FDO flag `0x400` beside the call. Windows 7 x86: Enable 0xDCAD (RH-IntrEp 0xDCE0, ISR-DPC 0xDCEE, `call [eax+0F0h]` 0xDCFF), Disable 0xDD7F (`lea ecx,[esi+310h]`, acquire 0xDDB2; `lea ebx,[esi+0BB8h]`, acquire 0xDDC0; `call [eax+0ECh]` 0xDDD1); Vista x86: Enable 0x144E0 (0x1450A, `lea ebx,[esi+0D28h]` 0x1453C, 0x1454D), Disable 0x14615 (0x1463F, 0x14671, 0x14682); Vista x64: Enable 0x273A0 (0x273D1, `lea rcx,[rsi+1208h]` 0x27415, `call [rdx+1B8h]` 0x2742B), Disable 0x272C8 (0x272F9, 0x2733D, `call [rdx+1B0h]` 0x27353; kd labels the import slots wrongly on this build, and next instruction + disp32 lands on `_imp_KeAcquireSpinLockRaiseToDpc`); Windows 7 x64: Enable 0x1DFB0 (0x1DFEA, 0x1E001, 0x1E017), Disable 0x1DEFC (0x1DF36, 0x1DF4D, 0x1DF63). Their callers: the root-hub status queue's insert callback `USBPORT_RhIntrEp_Insert_TxqIrp` -> `MPRH_EnableIrq(fdo, 1)` (Windows 7 x86 `push 1` 0xF3BA, Vista x86 0x144B2, Vista x64 0x2B33B; inlined on Windows 7 x64, ISR-DPC 0x20FFC, `call [rdx+1B8h]` 0x21012) and its remove callback `USBPORT_RhIntrEp_Remove_TxqIrp` -> `MPRH_DisableIrq(fdo, 1)` when the queue becomes empty (Windows 7 x86 0xDD6B-0xDD70, Vista x86 0x145E7, Vista x64 0x2B400; inlined on Windows 7 x64, 0x210B1, 0x210C7), the queue's lock callbacks taking RH-IntrEp (`USBPORT_RhIntrEp_Acquire_TxqLock` / `_Release_TxqLock`: Windows 7 x86 0xDBAC / 0xDC1D, Vista x86 0x13B6A / 0x13C51, Windows 7 x64 0x2121F / 0x2129F, Vista x64 0x2B58C); the tail of `USBPORT_Ev_Rh_IntrEp_Dpc`, after it has run `MPf_CheckController` and `USBPORT_Rh_IntrEp_Worker` with nothing held (Windows 7 x86 DPC 0xEE11: CheckController 0xEEF9, worker 0xEF02, RH-IntrEp 0xEF0F, `MPRH_EnableIrq(fdo, 1)` 0xEF1F when the queue is not empty; Vista x86 0x14800, 0x14809, 0x14816, 0x14826; Vista x64 0x2A9EE, 0x2A9F9, 0x2AA05, 0x2AA1A; Windows 7 x64 0x20978, 0x20983, 0x2098F, inlined ISR-DPC 0x209BD, `call [rdx+1B8h]` 0x209D3); and, with nothing held, `MPf_SuspendController` (Enable), `USBPORT_ResumeUsbController`, `USBPORT_StopRootHubPdo` and `USBPORT_TurnUsbControllerOn` (Disable; Windows 7 x86 0xE5D0, `push 0` 0x19E8B, `push 0` 0x22071, 0x2237A; Vista x86 0x2073C, 0x29CD1, 0x29683, 0x2BB07). The queue's inserter `USBPORT_RH_NeoQueueAsyncTransfer` is reached with nothing held (Windows 7 x86 `IoCsqInsertIrp` 0xD936, from `USBPORT_Core_QueueTransferUrb` 0x731A), and no `KeSetTargetProcessorDpc` appears in any of the four images | static (`kd -z` whole-`.text` dumps with the public PDBs, `out\t24-4\<build>-text.txt`, 2026-09-28, by an agent's read in `out\t24-4\static-24-4-deadlock.md`; the Windows 7 x86 `MPRH_DisableIrq` sites, its four callers and the `IsrDpc` and `Ev_Rh_IntrEp_Invalidate` sites re-checked against the dump the same day) | design 05 section 3 and "Where the root hub may be announced"; abi section 1 "The `InterruptDpcEx` contract" and section 4 "The root hub on NT 6.x"; `src/xhci.h` `RootHubReportThroughDpc`; run-24 "Round 5 on the fixed build" |
-| **NT 6.x `USBPORT_IsrDpc` calls `USBPORT_Ev_Rh_IntrEp_Invalidate` after releasing its ISR-DPC lock, if and only if bit 0 or bit 1 of `InterruptDpcEx`'s return is set; `USBPORTSVC_InvalidateRootHub` is that call plus a log record; and `Ev_Rh_IntrEp_Invalidate` never calls `RH_DisableIrq`**: `IsrDpc` - Vista x86 ISR-DPC acquire 0x1F08, `call usbport!MPf_InterruptDpcEx` 0x1F9B, `test al,3` 0x1FA0, `and dword ptr [ebx+3D8h],0FFFEFFFFh` 0x1FA7, release 0x2039, `test byte ptr [ebp-8],3` 0x2045, invalidate 0x204C; Windows 7 x86 acquire 0x2DB2, call 0x2E15 (the thunk returns the miniport's `eax` unchanged, 0x1850), `test al,3` 0x2E1D, `and dword ptr [ebx+3F0h],0FFFFFBFFh` 0x2E21, release 0x2E83, `test byte ptr [ebp-4],3` 0x2E8F, `call usbport!USBPORT_Ev_Rh_IntrEp_Invalidate` 0x2E96; Vista x64 acquire 0x376B6, `call r8` 0x3775B (`mov r12d,eax`), release 0x37802, `test r12b,1` / `test r12b,2` 0x37814 / 0x3781A, invalidate 0x37823; Windows 7 x64 acquire 0x2D4E8, `call r8` 0x2D561 (`mov esi,eax`), release 0x2D5D1, `test sil,1` / `test sil,2` 0x2D5DF / 0x2D5E5, invalidate 0x2D5EE. The service: Windows 7 x86 `USBPORTSVC_InvalidateRootHub` 0xF9E3, a log record, then `call usbport!USBPORT_Ev_Rh_IntrEp_Invalidate` 0xFA35; Vista x86 the call at 0x17008; Vista x64 0x299C9; Windows 7 x64 a tail `jmp` 0x1FCE3. `Ev_Rh_IntrEp_Invalidate` under RH-IntrEp takes the RH-PDO pointer lock (leaf), `USBPORT_EndpointFromHandle`, `USBPORT_Core_AllocIoRequest` (the I/O-count lock), `USBPORT_ReferenceEndpoint` (EpList) and `KeInsertQueueDpc` on the root-hub DPC only when the endpoint's state word is 2, which it sets to 3 (Windows 7 x86 0xEA5C: acquire 0xEAB3, 0xEABD, 0xEAFF, `call usbport!USBPORT_ReferenceEndpoint` 0xEB19, 0xEB2F, release 0xEB56; Vista x86 0x13D31 to 0x13DD9; Vista x64 0x2A738 to 0x2A80A; Windows 7 x64 0x20753 to 0x20827); no ISR-DPC, MP, MP-call or timer-list lock, and no call through the packet's `RH_DisableIrq` slot (`+0xEC` x86, `+0x1B0` x64), which only the `MPRH_*` sites of the row above use | static (`kd -z` whole-`.text` dumps with the public PDBs, `out\t24-4\<build>-text.txt`, 2026-09-28, by an agent's read in `out\t24-4\static-24-4-deadlock.md`; every Windows 7 x86 address in this row re-checked against the dump, the two in-lock flag clears read from the Vista x86 and Windows 7 x86 dumps directly) | design 05 section 3 and "Where the root hub may be announced"; abi section 1 "The `InterruptDpcEx` contract" and section 4 "The root hub on NT 6.x"; `src/xhci.h` `RootHubReportThroughDpc`; run-24 "Round 5 on the fixed build" |
-| **NT 6.x `usbport.sys` takes its MP lock while holding EpList, through `USBPORT_iSetGlobalEndpointStateTx` -> `MPf_PollEndpoint`, whose flag test takes the MP lock**: Windows 7 x86 0x2150 -> 0x1C64, Vista x86 0x33E1 -> 0x4071, Vista x64 0x7E2E -> 0x1E76, Windows 7 x64 0x69CC -> 0x1E3B (as the read lists them: the call in the EpList holder, then the MP acquire in the callee); also `SetEp_PAUSE` / `SetEp_REMOVE` -> `MPf_Get32BitFrameNumber`. With the row above, RH-IntrEp reaches the MP lock (RH-IntrEp -> EpList -> MP) | static (`kd -z` whole-`.text` dumps with the public PDBs, `out\t24-4\<build>-text.txt`, 2026-09-28, by an agent's read in `out\t24-4\static-24-4-deadlock.md`; not re-checked site by site) | design 05 section 3 (cycle C3) |
-| **The build of 2026-09-28 deadlocked Windows 7 SP1 x86 and Vista SP2 x86, four vCPUs each, with this driver's event DPC calling `USBPORTSVC_InvalidateRootHub` from inside `InterruptDpcEx`**: Windows 7 x86 (usbport FDO extension at `854de0e0`): CPU0 spinning on FDO+0x310 in `USBPORT_IsrDpc+0x143` -> `MPf_InterruptDpcEx+0x25` -> `xhci98!xhciInterruptDpc+0x4e` -> `XhciEventDpc+0x132` -> `XhciRootHubDeferredWork+0x2c` -> `xhciRhAnnounce+0x75` -> `USBPORTSVC_InvalidateRootHub+0x57` -> `USBPORT_Ev_Rh_IntrEp_Invalidate+0x5d`, holding FDO+0xBB8; CPU2 spinning on FDO+0xBB8 in `USBPORT_Ev_Rh_IntrEp_Dpc+0xf6` -> `USBPORT_Rh_IntrEp_Worker+0xe7` -> nt -> `USBPORT_RhIntrEp_Remove_TxqIrp+0x3c` -> `MPRH_DisableIrq+0x43`, holding FDO+0x310. Vista x86: CPU0 on FDO+0x2F8 through `USBPORT_IsrDpc+0x1a6` and the same driver frames to `USBPORT_Ev_Rh_IntrEp_Invalidate+0xaa`, CPU1 on FDO+0xD28 through `USBPORT_Ev_Rh_IntrEp_Dpc+0x152` to `MPRH_DisableIrq+0x5e`. No bugcheck on either; the other two vCPUs halted idle | debugger (registers and memory of the hung guests read through the QEMU monitor and symbolised with `kd` and the public PDBs, 2026-09-28; `out\t24-3-4\r5-win7-r5b-hang-*.txt` and `r5-vista-r5c-hang-*.txt`; the Vista FDO extension address and the two locks' roles were taken from the Windows 7 read of the same functions, not re-derived) | design 05 section 3 (cycle C1); abi section 4 "The root hub on NT 6.x"; run-24 "Round 5 on the fixed build" |
-| **No NT 5.x or 9x-era usbport was found to take the lock `IsrDpc` holds across `InterruptDpc` under a lock that `USBPORT_InvalidateRootHub` takes, and there the service calls `RH_DisableIrq` holding no usbport lock**: XP SP3 x86: `USBPORT_IsrDpc` holds FDO+0x4C8 across `InterruptDpc` (0x1B2C6 to `call [eax+60h]` 0x1B340 to 0x1B349); that lock's only users are `IsrDpc` and `USBPORT_MpInterrupts` (0x1B443 / 0x1B53B, plus its initialisation in `StartDevice`), and `MpInterrupts` is called only from the start, stop, turn-on, turn-off, restore, resume and FDO power paths; `USBPORT_InvalidateRootHub` 0x11A3E calls `RH_DisableIrq` (`[eax+0E4h]` 0x11ADC) with no usbport lock, then takes FDO+0x124 (the RH-PDO pointer, a leaf) and calls `USBPORT_InvalidateEndpoint` (FDO+0x324) after releasing it. XP x64 the same shape: the ISR-DPC lock FDO+0x600 only in `IsrDpc` (0x2589A / 0x25929, `call [rax+98h]`) and `MpInterrupts`; the service calls `[rax+1A0h]` unlocked, then FDO+0x1C0. Windows 2000 SP4: `IsrDpc` holds FDO+0x484 across `call [eax+60h]` (0x1A216 to 0x1A293); the service's `RH_DisableIrq` site (0x11C56) and the `RH_EnableIrq` site (0x115F4) take no acquisition of it in their functions; the lock has about twelve users, mostly around the interrupt enable and disable slots, and a few call helpers under it (0xDD43 -> 0xEC00 / 0xF0CC) that were not traced. SweetLow's `IsrDpc` holds FDO+0x480 (0x19A2E). NUSB's lock offset was not pinned | static (XP SP3 and XP x64 with `kd -z` and the public PDBs, high confidence; Windows 2000 SP4, SweetLow's build and NUSB with no PDB, medium; the NT 5.x code sections re-dumped for this read into a session scratchpad and not kept; by an agent's read in `out\t24-4\static-24-4-deadlock.md`, 2026-09-28, not re-checked site by site) | design 05 section 3 (why the Version 200 tier keeps its in-DPC announcement) |
-| **On every NT 5.x and 9x-era usbport the targets run, an interrupt the miniport claims queues `IsrDpc` unconditionally, and `IsrDpc` reads its interrupt-enabled flag under the same spin lock that its `EnableInterrupts` / `DisableInterrupts` wrapper holds, setting the flag before the enable and clearing it after the disable; `IsrDpc` calls `InterruptDpc` with no other gate**: addresses in this row and the next are RVAs (the address at image base `0x10000` minus `0x10000`). NUSB 3.3 = 3.6 (5.00.2195.5652, SHA-256 `EEC79B5A...9B55`): ISR 0x19690 (`push 29690h` 0xF65, `IoConnectInterrupt` 0xF6B), gates 0x1969B / 0x196A1 / 0x196A4 (flag `0x400`), 0x196A6 / 0x196AB (`0x20000`, set by a surprise-remove invalidate 0x1A38), 0x196B1 / 0x196B8 (the started bit), `call [eax+58h]` 0x196C6, on TRUE `inc` 0x196CF and `KeInsertQueueDpc(fdo+0x520, 0, 0)` 0x196D5-0x196E0, result ignored; DPC 0x19A66 (`KeInitializeDpc` 0x8A1-0x8AD), lock fdo+0x480 0x19AD6, flag 0x19B2C / 0x19B32 / 0x19B35, `call [ecx+5Ch]` 0x19B4A, release 0x19B50, the only jumps in between skipping log records; five enable sites 0x1191, 0xD8B9, 0xE76D, 0xE96B, 0xED16, each under fdo+0x480 with `or byte ptr [esi+1C1h],4` before `call [eax+84h]` (e.g. 0x116F / 0x1175, 0x118A, 0x1191, release 0x11A5), the disable clearing it after (0xD6A0 / 0xD6A6). SweetLow's 5.1.2600.2180: ISR 0x1956C (`push 2956Ch` 0x1C21, 0x1C27), gates 0x19577, 0x1957F, 0x19584, 0x1958F, `call [eax+5Ch]` 0x195A4, `inc` 0x195AD, `KeInsertQueueDpc(fdo+0x530, 0, 0)` 0x195BE; DPC 0x1994E (`KeInitializeDpc` 0x156C), lock 0x199BA (fdo+0x480), flag 0x19A10 / 0x19A16 / 0x19A19, `call [ecx+60h]` 0x19A2E, release 0x19A3A; enable sites (`[eax+88h]`) 0x1E4C, 0xDC23, 0xDE1D, 0xE1B9, 0xFCD9, e.g. lock 0x1E2A / 0x1E30, `or` 0x1E45, release 0x1E60. Windows 2000 SP4 5.00.2195.6681: ISR 0x19DD4 (0xFF9, 0xFFF), gates 0x19DDF, 0x19DE5, 0x19DEA, 0x19DF5, `call [eax+5Ch]` 0x19E0A, `inc` 0x19E13, `KeInsertQueueDpc(fdo+0x528, 0, 0)` 0x19E24; DPC 0x1A1AE (`KeInitializeDpc` 0x906), lock 0x1A21C (fdo+0x484), flag 0x1A273 / 0x1A279 / 0x1A27C, `call [eax+60h]` 0x1A290, release 0x1A299; enable sites 0x123B, 0xDF42, 0xEE3B, 0xF039, 0xF42E, e.g. 0x1219 / 0x121F, `or` 0x1234, release 0x124F. XP SP3 5.1.2600.5512: `USBPORT_InterruptService` 0x1AE54 (gates 0x1AE61 / 0x1AE69 / 0x1AE6E, 0x1AE79; call 0x1AE8E; `inc` 0x1AE97; `KeInsertQueueDpc(fdo+0x56C, 0, 0)` 0x1AEA8); `USBPORT_IsrDpc` 0x1B25C (lock fdo+0x4C8 0x1B2CC, flag 0x1B323 / 0x1B329 / 0x1B32C, `call [eax+60h]` 0x1B340, release 0x1B349); `USBPORT_MpInterrupts` 0x1B41A, the only caller of `[eax+88h]` in the image (lock 0x1B449, `or byte ptr [edi+205h],4` 0x1B458, `call` 0x1B4BF; disable `call [eax+8Ch]` 0x1B527 then `and` 0x1B52D; release 0x1B541). XP x64 SP2: `USBPORT_InterruptService` 0x25300 (0x25312, `bt eax,0Ah` 0x2531B, `bt eax,11h` 0x25321, 0x25338, `call [rax+90h]` 0x2534F, `inc` 0x2535C, `lock inc` of a pending count 0x25362, then `KeInsertQueueDpc(fdo+0x6D8, 0, 0)` 0x25375); `USBPORT_IsrDpc` 0x25810 (lock fdo+0x600 0x258A6, flag 0x25909 / 0x2591D / 0x25920, `call [rax+98h]` 0x25923, release 0x25930); `USBPORT_MpInterrupts` 0x25A50 (lock 0x25A98, `or dword ptr [rbx+2B0h],400h` 0x25AAF, `call [rax+0E8h]` 0x25B28; disable 0x25B9F then `and` 0x25BA5; release 0x25BC9). This driver's `MiniPortFlags` leave `NOT_LOCK_INT` (0x40) clear, so every build takes the lock around its enable and disable calls | static (XP SP3 and XP x64 with `kd -z` and the public PDBs in `tools\symbols`, `uf` and `ln`; NUSB, SweetLow's build and Windows 2000 SP4, which have no PDB, from whole-file `DUMPBIN /disasm /imports` (`tools\MSVC600`), with IAT slots computed from the import list and checked against the ABI record's known `KefAcquireSpinLockAtDpcLevel` call at 0x19AD6 in NUSB, the ISR found from its `IoConnectInterrupt` push and the DPC from `KeInitializeDpc` on the object the ISR queues; by an agent's read in `out\t24-3-4\static-rearm-isr-dpc.md`, 2026-09-28, not re-checked site by site) | design 05 section 4; abi section 1 (the "not operational" gate) and section 7; `src/xhci_init.c` `XhciRearmInterrupter` and `XhciUnmaskInterrupts`; run-24 "Round 5 on the fixed build" |
-| **The same holds on NT 6.x, except that `IsrDpc` skips the miniport while bit 1 of the FDO extension's "not operational" word is set, and two power paths call `USBPORT_MpInterrupts(TRUE)` while it is still set**: ISR gate and queue - Vista x86 `test byte ptr [esi+3D8h],20h` 0x1C26, `test byte ptr [esi+3D4h],1` 0x1C33, `InterlockedIncrement(fdo+0x650)` 0x1C57 and `test eax,eax / je` 0x1C5D (a rundown count set to 0 at `StartDevice` and dropped by one at `StopDevice`, so it blocks only a claim after `StopDevice`), `KeInsertQueueDpc(fdo+0xD08)` 0x1C6C; Vista x64 0x374E5, 0x374F2, `lock xadd [rbx+830h]` 0x3752E, 0x37539, 0x37547; Windows 7 x86 `test byte ptr [esi+3F0h],4` 0x17C7, `test byte ptr [esi+3ECh],1` 0x17D4, fdo+0x530 0x17F8 / 0x17FE, `KeInsertQueueDpc(fdo+0xB98)` 0x180D (the count set at 0x15479, dropped at 0x1D98E, decremented at the end of `IsrDpc` 0x2F53); Windows 7 x64 0x2D365, 0x2D372, `lock xadd [rbx+6C0h]` 0x2D3AD, 0x2D3B8, 0x2D3C6. The DPC gate under the MP lock - Vista x86 `lea ecx,[ebx+798h]` 0x1EE1, `test byte ptr [ebx+3DCh],2` 0x1EE9, `jne` to the release 0x1EF6; Vista x64 `lea rcx,[rdi+0A40h]` 0x37677, `test byte ptr [rdi+500h],2` 0x37684, release 0x3769E and `jmp` 0x376A4; Windows 7 x86 `lea ecx,[ebx+638h]` 0x2D8B, `test byte ptr [ebx+3F4h],2` 0x2D93, `jne` 0x2DA0; Windows 7 x64 `lea rcx,[rbx+868h]` 0x2D4BA, `test byte ptr [rbx+4F0h],2` 0x2D4C7, `jne` 0x2D4D5. `USBPORT_MpInterrupts` (Vista x86 0x1BD79, Vista x64 0x37980, Windows 7 x86 0x10223, Windows 7 x64 0x2D6F0) takes the ISR-DPC lock (Vista x86 0x1BDAD, Vista x64 0x379C5, Windows 7 x86 0x10259, Windows 7 x64 0x2D73E) and sets the enabled flag before the miniport call (Vista x86 0x1BDC8 -> 0x1BE36; Vista x64 0x379E0 -> 0x37A4B; Windows 7 x86 `or dword ptr [esi+3F0h],4` 0x1026E -> `call [eax+90h]` 0x102BD; Windows 7 x64 0x2D753 -> 0x2D7A8). The gate bit's setters (Windows 7 x86): `USBPORT_FdoDevicePowerState` 0x1A2A3 and `USBPORT_StopDevice` 0x1D909, each after `MpInterrupts(FALSE)`; the restart branch of `USBPORT_ResumeUsbController` 0x19E9D; `USBPORT_TurnUsbControllerOn` 0x22293, on entry under the MP lock; cleared in `USBPORT_PoRequestCompletionD0` 0x1B646, at the end of the restart branch 0x19F5D and at the end of TurnUsbControllerOn 0x2238D. Vista x86 setters 0x21C0A, 0x2AF44, 0x29CE6, 0x2B9BC, clears 0x2C920, 0x29DDD, 0x2BB1A; Vista x64 setters 0x365C, 0x235A6, 0x24B8E, 0x244F7, clears 0x2269E, 0x24C83, 0x2463F; Windows 7 x64 setters 0x3214, 0x1B64C, 0x1C641, 0x1C110, clears 0x1AA2B, 0x1C704, 0x1C20C. The two windows, `MpInterrupts(TRUE)` with the bit set - TurnUsbControllerOn: Windows 7 x86 0x22373 (set 0x22293, cleared 0x2238D after `MPRH_DisableIrq` 0x2237A), Vista x86 0x2BAFF (0x2B9BC, 0x2BB1A), Vista x64 0x24623 (0x244F7, 0x2463F), Windows 7 x64 0x1C1F0 (0x1C110, 0x1C20C); the resume restart: Windows 7 x86 0x19F08 (0x19E9D, 0x19F5D), Vista x86 0x29D55 (0x29CE6, 0x29DDD), Vista x64 0x24BFC (0x24B8E, 0x24C83), Windows 7 x64 0x1C6AF (0x1C641, 0x1C704). `USBPORT_PowerUpPhase1` (Windows 7 x86 0x1AB43) takes TurnUsbControllerOn when the controller was turned off (0x1AB9B), and the restart branch runs only when `MPf_ResumeController` fails; the only other queuers of `IsrDpc` are reached from `InvalidateController(SOFT_INTERRUPT)` (Windows 7 x86 0x1DB29 / 0x1DB31) | static (the four NT 6.x builds' whole-`.text` dumps with the public PDBs, `out\t24-4\<build>-text.txt`; high confidence for the ISR, the DPC gate and the windows, medium-high that no further setter exists (a register-form grep over the dumps); by an agent's read in `out\t24-3-4\static-rearm-isr-dpc.md`, 2026-09-28; the Windows 7 x86 DPC gate re-checked against the dump). Whether a claim lands in either window at runtime, and how often the two paths run, was not read | design 05 section 4; abi section 1 (the "not operational" gate) and section 7; `src/xhci_init.c` `XhciRearmInterrupter` and `XhciUnmaskInterrupts`; run-24 "Round 5 on the fixed build" |
-| **Windows 2000 SP4's `KeInsertQueueDpc` returns FALSE only when the DPC is already queued; Windows 98 SE's `NTKERN.VXD` exports no `KeInsertQueueDpc` by name, and its implementation was not located**: `ntkrnlmp.exe` `KeInsertQueueDpc` swings `Dpc->Lock` from 0 (`lea eax,[edi+1Ch]` at `0x42D4EA`, `lock cmpxchg [ecx],edx` at `0x42D4FB`, `jne` to the FALSE return at `0x42D504`, as the dump prints them); that the NT retire loop dequeues a DPC and clears its lock before calling the routine is the standard behaviour and was not read (`KiRetireDpcList` is not exported). `NTKERN.VXD`'s LE objects and fixups were parsed; its export name table carries `KeSetImportanceDpc` and the `Kef*SpinLock*` names but not `KeInsertQueueDpc`, `KeInitializeDpc` or `KeSetTimer`. So the Windows 98 SE and ME half of the ISR-claim premise - that an ISR preempting a running DPC can queue it again - rests on the WDM contract, not on a reading | static (Windows 2000 SP4 `ntkrnlmp.exe` read by export and disassembly; `NTKERN.VXD` parsed by script, nothing executed; by an agent's read in `out\t24-3-4\static-rearm-isr-dpc.md`, 2026-09-28) | design 05 section 4; `src/xhci_init.c` `XhciRearmInterrupter`; run-24 "Round 5 on the fixed build" |
-| **Windows 7 SP1 `usbhub.sys` 6.1.7601.17514 bugchecks 0xFE (8, 6, code, PortData) when a port's change-queue gate is not released within 60 s**: `UsbhHubProcessChangeWorker` waits with `KeWaitForSingleObject` on the gate in the port's data record - `+0x85C` on x86 (DateStamp `4CE79C42`), `+0x988` on x64 (`4CE7A68E`) - with the timeout `0xDC3CBA01 - KeQueryTimeIncrement()`, sign-extended, a relative 60.0 s plus one tick (on x86 after `UsbhIncHubBusy`); on `STATUS_TIMEOUT` it takes the code from `+0x9B4` (x86) / `+0xAFC` (x64), 0xA when that word is 0, calls `USBHUB_TriggerCallBacks` and then `KeBugCheckEx(0xFE, 8, 6, code, PortData)` - through `UsbhTrapFatalTimeout_x9f` on x86, inlined into the worker on x64. On x86 the gate is a SynchronizationEvent created signalled by `UsbhInitPortChangeList` and released only by the `KeSetEvent` at the end of `UsbhPCE_wRun`, after `UsbhDispatch_PortChangeQueueNullEvent`, so it is held for one pass of the port's change-queue state machine, and the code word is written only by `UsbhWaitEventWithTimeoutEx`, when a waiter takes the gate itself; on x64 the gate is a SynchronizationEvent that a completing pass releases through `UsbhPCE_wRun` (+0x13D) | static (the two dump analyses' reads of usbhub's code through `kd` with the PDBs in `tools\symbols`, which carry function names and no types, 2026-09-29, `out\t24-3-4\r6-win7-bugcheck-analysis.md` section 2 and `r6-win7-x64-bugcheck-analysis.md` section 2; the reports do not say whether the code bytes came from the dumps' module images or from the guests' own `usbhub.sys` copied beside them; not re-checked) | run-24 "Round 6 on the round-5 fixes"; design 12 section 11 |
-| **The three 0xFE bugchecks of round 6 were that watchdog, on a root port of the root hub's usbhub instance**: `!analyze -v` names the arguments `USBBUGCODE_RESERVED_USBHUB` (8), `USBHUB_TRAP_FATAL_TIMEOUT` (6) and `TimeoutCode` (0xA), and P4 is a per-port record with the signature `'hhPD'`, the port number in the word at +4 and the hub FDO at +0x10, followed by its `'HUBx'` tag. Windows 7 x86, two minidumps (`092926-14320-01.dmp`, `092926-12511-01.dmp`): P4 `84D449D8` / `852A29D8`, port 2, FDO `84D37028` / `851FF028`, with port 1's record on the same page at P4 - 0x9D8, so a hub of at least two ports where a virtual hub has one; the code word 0 in both; the stack seven frames, `nt!KeBugCheckEx` <- `usbhub!UsbhTrapFatalTimeout_x9f+0x28` <- `usbhub!UsbhHubProcessChangeWorker+0xa2` <- `nt!IopProcessWorkItem` <- `nt!ExpWorkerThread` <- `nt!PspSystemThreadStartup` <- `nt!KiThreadStartup`, with no `xhci98` or `usbport` frame; root port 1's gate also held (`SignalState` 0) with a second change worker queued on it, its newest change-queue entry a `C_PORT_RESET` pass still running, and its reset timer (`+0x1B0`, DPC `usbhub!UsbhResetPortTimerDpc`) placing usbhub's reset of that port about 4 s before each crash. Windows 7 x64, a 64-bit kernel summary dump (`.dumpdebug`), read out of the guest's `pagefile.sys` (a `PAGEDU64` header with BugCheckCode 0xFE; the guest never rebooted, so no `MEMORY.DMP` was written): P4 `fffffa8001bb3c80`, port 5, of the root hub's FDO (`USB\ROOT_HUB20`); the code word 0; the root hub's port records 0xB20 apart; failing stack `nt!KeBugCheckEx` <- `usbhub!UsbhHubProcessChangeWorker+0xec` <- `nt!IopProcessWorkItem` <- `nt!ExpWorkerThread` | debugger (`kd` with the PDBs in `tools\symbols` on the minidumps, and on the pagefile, each copied read-only with `qemu-img convert` out of `vm\t2434-win7.img` and `vm\t2434-win7-x64.img`, 2026-09-29; P4's layout was read from the dumps' memory, not from code; `out\t24-3-4\r6-win7-bugcheck-analysis.md` sections 1-4, `r6-win7-x64-bugcheck-analysis.md` sections 1-2) | run-24 "Round 6 on the round-5 fixes" |
-| **Windows 7 SP1 `usbhub.sys` gives a port reset 2 s**: `UsbhResetPort` arms the port record's reset timer (x86 `+0x1B0`, DPC `usbhub!UsbhResetPortTimerDpc`) for the hub-global value at `HubG+0x58` on x86 and `HubG+0x74` on x64, 2000 ms (`0x7D0` on x64) | static (the dump analyses, as the watchdog row above; `out\t24-3-4\r6-win7-bugcheck-analysis.md` section 4, `r6-win7-x64-bugcheck-analysis.md` section 5; the two reports give different offsets for the two builds, and neither was re-checked) | run-24 "Round 6 on the round-5 fixes"; design 12 section 11 |
-| **Windows 7 SP1 x64 `usbhub.sys` takes usbport's controller-wide bus lock for a port enumeration, and usbport records no owner of it**: `usbport!USBPORTBUSIF_AcquireBusLock` (DateStamp `4CE7A670`) waits with no timeout on the semaphore at FDO extension +0x570; usbhub's `UsbhAcquireEnumBusLock` stores a tag at the hub FDO extension's +0xBF8, a context at +0xC00 and the owner's KTHREAD at context +0x18, and `UsbhReleaseEnumBusLockEx` logs `uBUS`, or `uBSx` for a caller that is not the owner and releases nothing; usbhub's per-hub log is a ring of 256 32-byte entries at FDO extension +0x378 with a global sequence number, written by `usbhub!Log`. On x86 `UsbhAcquireEnumBusLock` is taken by `UsbhReset2Complete` and `UsbhSyncResetDeviceInternal` around `UsbhInitializeDevice`, and waits with no timeout | static (the same reads as the watchdog row above; `out\t24-3-4\r6-win7-x64-bugcheck-analysis.md` sections 3 and 5, `r6-win7-bugcheck-analysis.md` section 5; not re-checked) | run-24 "Round 6 on the round-5 fixes" |
-| **In the Windows 7 x64 dump the gate's holder had waited 60.03 s on that bus lock, a virtual hub's port-1 enumeration held it, and this driver held no device record**: worker thread `0004.003c` (`fffffa8001901b60`) held root port 5's gate, taken inline in `UsbhWaitEventWithTimeoutEx`, while running virtual hub 5's hard reset (`UsbhDispatch_HardResetEvent` -> `UsbhHardReset_Action` -> `UsbhFdoSetD0Cold` -> `IOCTL_INTERNAL_USB_RESET_PORT` -> the root hub's `UsbhFdoResetPdoPort` -> `UsbhSyncResetDeviceInternal` -> `UsbhWaitEventWithTimeoutEx` -> `UsbhPCE_wRun` -> `UsbhHubRunPortChangeQueue` -> `UsbhHubDispatchPortEvent` -> `UsbhWaitConnect` -> `UsbhDriverResetPort` -> `UsbhAcquireEnumBusLock` -> `USBPORTBUSIF_AcquireBusLock+0x61`), blocked 60.03 s on the semaphore `fffffa8001ce1710`; `002c` held root port 2's gate the same way for virtual hub 2, 30.03 s, with the next root-port-2 worker `017c` waiting on that gate; `0044` (virtual hub 1's hard reset) waited 30.03 s on the same semaphore. Of the nine usbhub FDOs only virtual hub 3's recorded an owner (tag 1, context its port-1 record + 0x18, thread `02ac`), which was in `UsbhReset1Timeout` -> `UsbhSetEnumerationFailed` -> `UsbhDisablePort` -> `UsbhSyncSendCommand`, waiting on an IRP carrying `URB_FUNCTION_CONTROL_TRANSFER_EX` (Timeout 2000 ms, setup `23 01 01 00 01 00 00 00`, `CLEAR_FEATURE(PORT_ENABLE)` on port 1) that was 1 s old against usbport's deadline; its log window held three turns of reset timer, reset, `C_PORT_RESET` with `GET_PORT_STATUS` 0x0101 and retry, with no `uBUS`, and its port-1 resets were 7.0 to 8.0 s apart. No thread had an `xhci98` frame; the only `usbport` frames were `USBPORTBUSIF_AcquireBusLock+0x61`. This driver's extension at `fffffa8001ce26a0` (`'XHCI'` at +0, `'#END'` at +0x1B59C, size 112032): all 32 `Devices[]` free with SlotId 0; `DisownPending` 1 on root ports 1, 2, 3 and 5, `PORTSC` `0x603` / `0xE03`; `VhubResetsHeld` 0xAF; `RootHubInvalidatesOwed` 0 with the RH_IRQ gate open (`Flags` 0x3B); `ResetControllerCalls`, `InterruptRearmFailures` and `RearmEscalations` 0 | debugger (`kd` on the Windows 7 x64 kernel summary dump above: `!stacks 2 usbhub` / `usbport` / `xhci98`, the threads, the usbhub FDOs' owner fields, the usbhub rings dumped with `.writemem` and merged by sequence, and this driver's extension, 2026-09-29; `out\t24-3-4\r6-win7-x64-bugcheck-analysis.md` sections 3-5; that the FIFO semaphore passed from the root hub to virtual hub 3 is the report's inference) | run-24 "Round 6 on the round-5 fixes"; design 12 sections 3.3 and 11; `src/xhci_slot.c` `XhciSlotPortHasRecords` |
-| **In the round-7 Windows 7 x64 dump the same chain held, and each looping root port's disown debt had its own device's disowned, idle record under it**: P4 `fffffa8003466c80`, root port 5 of the root hub's FDO, change worker `0044` timed out after 60.03 s at `usbhub!UsbhHubProcessChangeWorker+0xec`; the gate's holder `0034` ran virtual hub 5's hard reset, blocked 60.03 s on usbport's bus-lock semaphore at FDO extension +0x570; only virtual hub 3's usbhub FDO recorded an owner (thread `003c`, in `UsbhReset1Timeout` -> `UsbhResetPort`, its SET_FEATURE(PORT_RESET) held by this driver, `ResetHeld` PORT1); virtual hubs 1 and 2's hard resets queued on the same lock. No thread had an `xhci98` frame. This driver's extension: `DisownPending` 1 on root ports 1, 2 and 3 with `PORTSC` PED still 1 (`0x603` / `0xE03` / `0x603`), port 5 clean; `Devices[0]`, `[1]` and `[3]` (slots 1, 2, 4) Addressed, flags DISOWNED and DCBAA_SET, `DeviceAddress` 0, no endpoint extension, EP0 ring empty; `DisownsSettledEmpty` 8, `VhubResetsHeld` 180, `DevicesDisownedOut` 4, `DevicesDisabledOut` 0 | debugger (`kd` with the PDBs in `tools\symbols` and this build's private PDB, timestamp `6ABB4C14`, on the kernel summary dump read out of `pagefile.sys` from a read-only `qemu-img convert -U` copy of `vm\t2434-win7-x64-r7.img`, 2026-09-29; `out\t24-3-4\r7-win7-x64-bugcheck-analysis.md`; the Enable Slots from the QEMU trace log) | run-24 "Round 7 on the disown fix"; design 12 section 11; `src/xhci_slot.c` `XhciSlotPortHasRecords` |
-| **In the round-7 Windows 7 x86 dump the crash was the same 0xFE, and every looping root port's debt had one disowned, idle record under it**: `BugCheck FE, {8, 6, a, 8479f9d8}`, root port 2 of the root hub, its change-queue gate held by thread `003c` running virtual hub 2's hard reset, blocked 60.03 s on usbport's bus-lock semaphore; the lock's owner at the crash was the root hub's port-1 pass re-enumerating virtual hub 1 (thread `0d20`, about 1 s into `USBPORT_InitializeDevice`); virtual hub 3's hard reset queued 27 s behind; no port-1 reset held at the crash (`ResetHeld` 0 on every virtual hub; `VhubResetsHeld` 5 in that load). No thread had an `xhci98` frame. This driver's extension: `DisownPending` 1 on root ports 1, 2, 3 and 5 with `PORTSC` PED still 1; one record on each (slots 1 to 4), flags DISOWNED and DCBAA_SET, `DeviceAddress` 0, no endpoint extension, EP0 ring and queue empty, no other endpoint, `PendingSetAddress`, `PendingOp` and `ActiveOp` all clear; slot 1 Addressed, slots 2 to 4 Default. A SET_ADDRESS(9) on root port 3 had been refused because slot 1's record still held address 9 | debugger (`kd` with the PDBs in `tools\symbols` and this build's private PDB, timestamp `6ABB4A71`, on the kernel summary dump `Windows\MEMORY.DMP` extracted from a read-only `qemu-img convert -U` copy of `vm\t2434-win7-r7.img`, 2026-09-29; `out\t24-3-4\r7-win7-bugcheck-analysis.md`) | run-24 "Round 7 on the disown fix"; design 12 section 11; `src/xhci_slot.c` `XhciSlotPortRecordsDisownedIdle` |
-| **Windows 7 SP1 x86 `usbhub.sys` records the bus lock's owner in the hub, and usbport keeps the address it allocates in the device handle**: `UsbhAcquireEnumBusLock` stores the owning port at the hub FDO extension's +0xA34 and a context at +0xA38, with the owner's KTHREAD at context +0x10, and logs `aBUS` for a request, `lBUS` when the lock is acquired and `xBUS` when the port already owns it and no wait is made; the per-hub log ring is at FDO extension +0x350 (index, mask 0x1FF, buffer). `USBPORT_InitializeDevice` (DateStamp `4CE79C15`) takes an address from `USBPORT_AllocateUsbAddress` and stores it at device handle +4 (word) and +0x19C (dword) (`+0xC7`..`+0xDA`); its failure path at `+0x288` closes the default pipe, then calls `USBPORT_FreeUsbAddress` and `USBPORT_DeleteDeviceHandle` | static (disassembly and the public PDBs in `tools\symbols`, usbhub `4CE79C42`, during the round-8 dump analysis, 2026-09-29; `out\t24-3-4\r8-win7-bugcheck-analysis.md` sections 3 and 5; not re-checked) | run-24 "Round 8 on the idle-disown fix" |
-| **In the round-8 Windows 7 x86 dump the same 0xFE was held by a circular wait on a USB address this driver still held, with no disown debt anywhere**: `BugCheck FE, {8, 6, a, 85b6b000}`, root port 1 of the root hub; its gate held by thread `0030` running virtual hub 1's hard reset, blocked 60.03 s at the head of the FIFO of usbport's bus-lock semaphore `854fe528` (USBPORT FDO extension +0x500), waiters `0030`, `0040`, `002c`; the owner record names virtual hub 5 port 1, thread `0034`, in `USBPORT_InitializeDevice` (status `c0000001`) -> `USBPORT_ClosePipe`, its device handle at +4 and +0x19C holding address 1 and its device descriptor VID 46F4 PID 0001; virtual hub 5's ring holds `xBUS` re-entries and no `lBUS`, attempt 3; virtual hub 1's ring holds its device's `InitializeDevice` success, then the hard-reset request and the child PDO's removal. This driver's extension at `854fefe0` (size 104708): no root port with `DisownPending`, no record DISOWNED; `Devices[0]` (slot 1, root port 1) Addressed, flags `ADDRESS_VALID` and `DCBAA_SET` (0x06), `DeviceAddress` 1, no endpoint extension, EP0 ring and queue empty; `Devices[1]` (slot 2, root port 5) Default, EP0 bound, idle; no command outstanding; `DisownsSettledIdle` 95, `DisownsSettledEmpty` 118, `VhubResetsHeld` 0, `DevicesDisownedOut` 95, `RhResetTimeouts` 1, `EndpointRefusalsNoDevice` 3 | debugger (`kd` with the PDBs in `tools\symbols` and this build's private PDB, timestamp `6ABBAAAD`, on the kernel summary dump read out of the older of two `pagefile.sys` entries of a read-only `qemu-img convert -U` copy of `vm\t2434-win7-r8.img`, 2026-09-29; `out\t24-3-4\r8-win7-bugcheck-analysis.md` sections 2-6; that usbport had freed address 1 before handing it on, and the circular wait, are the report's inference) | run-24 "Round 8 on the idle-disown fix"; design 12 section 11; `src/xhci_slot.c` `xhciDevByAddress` |
-| **Vista's and Windows 7's usbhub remove a disconnected device without disabling its port**: Windows 7 x86 `usbhub!UsbhPortDisconnect` RVA `0x29967` and Vista x64's RVA `0x2A5D8` unlink the device handle and dispatch the disconnect event with no port disable; Windows 7's `UsbhPortDisable` RVA `0x2967B` logs and returns success, and the `CLEAR_FEATURE` sender is the separate `UsbhDisablePort` RVA `0xDCBE` - not an exhaustive census of callers | static (disassembly of `tools/win7-x86-extracted/` and `tools/vista-x64-extracted/` `usbhub.sys`, 2026-09-27); **runtime** on Windows 7 x86 and x64 at switch 1: after an unplug `VhubDropped` stayed 0 and no `RH_ClearFeaturePortEnable` reached this driver (task 24.3.4, `out\t24-3-4\win7-s1-vhub-evidence.txt`) | design 12 section 11 |
-| **Windows XP SP3 `usbhub.sys` 5.1.2600.5512 (the 59,520 B file above) clears a port feature through one helper and never with `PORT_POWER`**: `USBH_SyncClearPortStatus` (RVA `0x90A6`) has six direct callers (RVAs `0x0A7E`, `0x13A5`, `0x14A6`, `0x14CA`, `0x159A`, `0x8BC3`), each pushing a change selector - `0x10` `C_PORT_CONNECTION`, `0x14` `C_PORT_RESET`, `0x12` `C_PORT_SUSPEND`, `0x13` `C_PORT_OVER_CURRENT` - and none pushing 8; the PDB names no port power-off routine (`USBH_SyncPowerOnPort` and `USBH_SyncPowerOnPorts` only). Not a census of every class request the image can build inline | static (`kd.exe -z` with the public PDB for the names, and a sweep of every `E8` call in the file resolved against the helper's RVA; nothing executed). **Runtime** for the neighbouring claim on the two primary targets: Device Manager's disable and enable of the root hub at switch 2 on Windows 98 SE (NUSB 3.3) and Windows 2000 SP4 reached this driver as `RH_ClearFeaturePortEnable` on all eight ports and then `RH_SetFeaturePortPower` on all eight, with no `RH_ClearFeaturePortPower` (`RhPortsUnpowered` 0), and none of the 24.3.4 debug logs on any of the ten guests holds one | `runs/run-24.md`, "The clauses never read" |
-| **Vista's and Windows 7's `usbhub.sys` hard-reset a hub only through one exception table, and a first-reset change that reads a port enabled and not connected is one of its entries**: addresses are RVAs (image base `0x10000` subtracted). Windows 7 SP1 x86 (DateStamp `4CE79C42`): `UsbhException` finds its handler with `UsbhGetExceptionDispatch` (`0x82A5`), a linear scan of `HubExceptionTable` (`0x309C0`, 139 entries of {code, name, handler}, bound `cmp edx,684h`); `UsbhQueueHardReset` (`0x241AA`) has no direct caller and is the handler of codes 1 `HubErr_TransactionFailure_Reset`, 7 `InterruptPipeFailure_Reset`, 0x14 `HubErr_PortDisableFailed_Reset`, 0x2B, 0x2C, 0x3E `HubErr_HardError_Reset`, 0x4B and 0x84 `HubErr_User_Reset`. `UsbhGetPortStatusBits` (`0x3F21`) folds a port reading into an index - 0x01 the port has a PDO, 0x02 suspend, 0x04 over-current, 0x08 `PORT_ENABLE`, 0x10 `PORT_CONNECTION` - and `UsbhEnumerate1` (`0xBDE0`) dispatches it through `UsbhEN1_ResetChange` (`0x31750`) and `UsbhEN1_TimeoutChange` (`0x31A50`), 32 {index, handler} rows each: reset change 0x09 (PDO + enable, no connection) -> `UsbhHardErrorReset1BadEnable` (`0x292C0`, `push 3Eh` / `call UsbhException` `0x29375`), 0x01 -> `UsbhReset1DropDevice`, 0x11 -> `UsbhReset1CompleteNotEnabled`, 0x19 -> `UsbhReset1Complete`; timeout 0x19 -> `UsbhReset1TimeoutBadEnable` (`0x29CE3`, `push 3Dh` `0x29D4F`, `call UsbhException` `0x29D53`, then `UsbhDisablePort` and `UsbhReset1Timeout`), 0x11 -> `UsbhReset1Timeout` (`0x29A35`, `push 51h` `0x29B00`, `call UsbhException` `0x29B04`, then `UsbhResetPort`). Each hub FDO extension (signature `'HUB '`) keeps its exceptions in a list at +0xEA4 (lock +0xEAC; `UsbhEtwLogHubPastExceptions` `0x2D504`): code at record +0, port word +4, list link +0x18, time +0x24. The table's codes and the raising functions are the same in Vista x86 (table `0x2C8E0`), Windows 7 x64 (`0x457B0`, 24-byte entries, bound `cmp eax,8Bh`) and Vista x64 (`0x3E450`), with User_Reset 0x89 on Vista; only the Windows 7 x86 `EN1` tables were read row by row. Vista's image has no hub-exception ETW event | static (`kd.exe -z` over `tools\<build>-extracted\usbhub.sys` with the PDBs in `tools\symbols`: `x usbhub!*`, whole-`.text` `u`, and the tables read out of the file's `.data` bytes, which `kd -z` does not map; session 9, 2026-09-30; `out\t24-3-4\r9-usbhub-hardreset-static.md`; the x64 call-site census is a pattern match that may miss a site) | run-24 "Round 9 on the address reclaim"; design 12 section 11; `src/xhci_vhub.c` `XhciVhubPort1Report` |
-| **In the round-8 Windows 7 x86 dump a virtual hub's usbhub had repeated that first-reset path on its port 1 until the crash**: of the hub FDOs on `\Driver\usbhub` (`8554a030`), one (extension `845450e0`, list head `84545f84`) held, in rising time order about 38 s per turn, code 0x3E, then 29 s later 0x3D ("Reset(1) timed out with enable bit set"), then 2 s later 0x51 (`PnpErr_Reset1Failure`), then 7 s later 0x3E again, all on port 1, with one each of 0x4 `CreateDeviceFailure` (`c000009c`), 0x1F `InitializeDeviceFailure` (`c0000001`) and 0x37 `DebounceFailure` among them; three other hub FDOs' lists were empty. Which reading carried `PORT_ENABLE` without `PORT_CONNECTION` was not read | debugger (`kd` with the PDBs in `tools\symbols` on the kernel summary dump in the older `pagefile.sys` entry of a read-only `qemu-img convert -U` copy of `vm\t2434-win7-r8.img`, walking the driver object's device list and each `'HUB '` extension's +0xEA4 list; session 9, 2026-09-30; the walk stopped on absent memory before the last device objects) | run-24 "Round 9 on the address reclaim"; `src/xhci_vhub.c` `XhciVhubPort1Report` |
-| **In the round-10 Windows 7 x86 NMI dump, taken while virtual hubs looped after a controller re-enable at switch 2, every hub-reset turn began with usbhub's first or second reset of the hub's port 1 timing out with the port enabled**: three hub FDOs (`84752028`, `8475a028`, `84764028`) held 51 records, all port 1, between 1 and 8 minutes after the enable: code 0x3D, 2.0 s later 0x51, about 5.2 s later 0x3E, repeating about every 67 s per hub; also 0x50 followed about 7 s later by 0x3E, and 0x4 `CreateDeviceFailure` (`c000009c`). Every 0x3D, 0x50, 0x51 and 0x4 record's time falls at the same sub-second phase (.395 to .411 s). The raisers, from the same image's call sites: 0x3D `UsbhReset1TimeoutBadEnable`, 0x51 `UsbhReset1Timeout`, 0x50 `UsbhReset2TimeoutBadEnable`; 0x3E is raised by `UsbhHardErrorReset1BadEnable` (reached only from `UsbhEN1_ResetChange` row 0x09) and `UsbhHardErrorInvalidData` (reached from `UsbhWC_ResetChange` rows 0x11 and 0x19), and this driver's ring logged no reading of port 1 enabled without connection on that load, so the 0x3E here is read as `InvalidData` - an inference | debugger (`kd` with the PDBs in `tools\symbols` on the kernel dump in the `pagefile.sys` of a read-only `qemu-img convert -U` copy of `vm\t2434-win7-r10.img`, bugcheck 0x80 from the QEMU monitor's `nmi` with `CrashControl\NMICrashDump` set to 1 in the guest, walking each `'HUB '` extension's +0xEA4 list, 2026-10-01; `out\t24-3-4\r10g-usbhub-exceptions.md`) plus static (the raisers' `push` sites and the `EN1`/`WC` table rows, `kd -z` over `tools\win7-x86-extracted\usbhub.sys`) | run-24 round 10; `src/xhci.h` `SoftInterruptOwed` |
-| **Windows 7 x86 `usbhub.sys` times a port reset with a 2000 ms timer, and ends it on a change that takes three requests to the hub**: `UsbhResetPort` sends `SET_FEATURE(PORT_RESET)` and arms a `KeSetTimer` of the global at `HubG+0x58`, which is initialised to `0x7D0`; the change that ends the reset is read by `UsbhQueryPortState` (a `GET_PORT_STATUS`), acknowledged by `UsbhHubAckPortChange` (a `CLEAR_FEATURE`), and read again before `UsbhReset1Complete` cancels the timer - each through the synchronous `UsbhSyncSendCommand` | static (`kd -z` over `tools\win7-x86-extracted\usbhub.sys` with the PDB in `tools\symbols`, whole-`.text` disassembly; a subagent's read, 2026-10-01, not re-read line by line by the coordinator; the timeout's value is from the initialising store, not observed) | `src/xhci.h` `SoftInterruptOwed` |
-| **Windows 7 x86 usbport's controller-invalidate service, type 3, simulates an interrupt through its own interrupt DPC**: `USBPORTSVC_InvalidateController` (RVA `0x1DBA8`) calls `USBPORT_InvalidateController` (`0x1DAF8`), whose type switch sends 3 to `USBPORT_SimulateInterrupt` (`0x27575`) and 4 to `USBPORT_SignalInterrupt` (`0x275F0`); `USBPORT_SimulateInterruptDpc` (`0x2750C`) increments the FDO field at +0x530 and, when the result is not zero, `KeInsertQueueDpc`s the DPC at FDO +0xB98 - usbport's IsrDpc - then frees the request it was given. `USBPORT_SimulateInterrupt` itself allocates that request (`USBPORT_Core_AllocIoRequest`) and arms a timer; that it takes neither the EpList lock nor MiniportSpinLock is the subagent's reading of it, and the same branch in Vista x86 and both x64 builds is a call-shape check, not a line-by-line read | static (`kd -z` over `tools\win7-x86-extracted\usbport.sys` with the PDB in `tools\symbols`: `uf` of the three functions, 2026-10-01) | `src/xhci.h` `SoftInterruptOwed`; `src/xhci_slot.c` `xhciSlotDeferredWorkEx` |
-| **How NUSB 3.6 gives a `usbstor.sys` disk a drive letter on Windows 98 SE, as its INFs state it**: `usbntmap.inf` (`Class=Storage`, `DriverVer=06/08/2000`, three "Maximus Decim modified" comment lines ending "fix for NUSB 3.6") binds `USBSTOR\GenDisk`, `USBSTOR\GenCdRom`, `USBSTOR\GenSfloppy`, `GenOptical` and `GenSequential` to `[USBMPHLP.Dev]`, whose `AddReg` writes `DevLoader=*IOS`, `PortDriver=USBMPHLP.PDR` and an empty `PreloadDrivers`, with its `CopyFiles` commented out; `ntmap.inf` does the same for the IEEE 1394 (`SBP2\GenDisk`) devices with `PortDriver=NTMAPHLP.PDR`. The package's install INF `_nusb.inf` copies `usbntmap.sys`, `usbmphlp.pdr`, `ntmaphlp.pdr`, `NTMAP.SYS`, `ios.vxd` and `DISKTSD.VXD`, and its `qfecheck` registry block stamps `NTMAP.SYS` `4.10.0.2227`, `ntmaphlp.pdr` `4.10.0.2223`, `ios.vxd` `4.10.0.2225` and `disktsd.vxd` `4.90.0.3000`, with a comment list naming hotfixes `242975` and `267304` against `NTMAP.SYS` and `242975` against `ntmaphlp.pdr`; `usbmphlp.pdr` and `usbntmap.sys` carry no version stamp in that block, and the INF's file list annotates them `;WinMe (fix, Taiwan comrad)` and `;WinMe` respectively, beside `usbstor.sys` `;WinMe` and `DISKTSD.VXD` `;242975, 246387, WinMe (fix dencorso)`. The stamps, the hotfix numbers and the `WinMe` labels are all the package author's annotations, not a reading of the files themselves; no file in the set was disassembled, hashed or version-read for this row, and their actual provenance is unverified | static (a text read of `tools/nusb36-extracted/usbntmap.inf`, `ntmap.inf` and `_nusb.inf`, extracted from `nusb36e.exe` as section 2 records; 2026-10-02; nothing executed) | roadmap `roadmap-hcd.md`, the decisions table ("Mass storage on Windows 98 SE"); design record 13 section 4; roadmap task 31-0, which reads whether the Windows 98 SE CD carries any of these files |
-| fact | method | where used |
-| **Windows 98 SE's `hidusb.sys` 4.10.2222 sends its PDO `IOCTL_INTERNAL_USB_SUBMIT_URB` (`0x220003`), `GET_PORT_STATUS` (`0x220013`, `push` at `0x10887`) and `RESET_PORT` (`0x220007`, `0x108F8`), and no `IRP_MN_QUERY_INTERFACE`**; URB functions 0x00 (a NULL-descriptor unconfigure, Length 0x3C, `0x11882`), 0x02, 0x09, 0x0B, 0x1B, 0x1C, 0x1E, 0x24, 0x28; it imports `USBD_CreateConfigurationRequestEx` and `USBD_ParseConfigurationDescriptorEx`. 9,296 bytes, SHA-256 `307CD8D8...0196`, from `win98\BASE5.CAB` | static (MSVC 6 `dumpbin` 6.00.8447 `-disasm` and `-imports` over `tools\win98se-extracted\class\hidusb.sys`, extracted with 7-Zip from the owner's Windows 98 SE CD; nothing executed; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows 98 SE's `usbaudio.sys` 4.10.2222 sends only `SUBMIT_URB`** (`push 220003h` at `0x1208A` and six IRP-stack stores) and no `QUERY_INTERFACE`; URB functions 0x00 (NULL descriptor), 0x01, 0x02, 0x07 `GET_CURRENT_FRAME_NUMBER` (`0x12109`), 0x0A, 0x0B, 0x1B, 0x1C, 0x1E; imports `USBD_CreateConfigurationRequestEx`, `USBD_ParseConfigurationDescriptorEx`, `USBD_ParseDescriptors`. 40,272 bytes, `7AF79D9B...EB31`, from `win98\DRIVER20.CAB` | static (as above, over `tools\win98se-extracted\class\usbaudio.sys`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **NUSB 3.3's and 3.6's `usbstor.sys` are the same file**, 4.90.3000.1, 21,040 bytes, SHA-256 `B92A6A15...2D8C`; it sends `SUBMIT_URB`, `GET_PORT_STATUS` (`0x11AFD`) and `RESET_PORT` (`0x11B46`), no `QUERY_INTERFACE`; URB functions 0x00 (NULL descriptor, Length 0x18), 0x09, 0x0B, 0x12, 0x1B, 0x1E, 0x24, 0x28; imports only `USBD_CreateConfigurationRequestEx` from `usbd.sys`; requests `IRP_MN_SET_POWER` through `PoRequestPowerIrp` | static (as above, over `tools\nusb-extracted\USBSTOR.SYS`, hash-compared with `tools\nusb36-extracted\usbstor.sys`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows 2000 SP4's `hidusb.sys` 5.00.2142.1 and `usbstor.sys` 5.00.2195.6655 each send `SUBMIT_URB`, `GET_PORT_STATUS` and `RESET_PORT`, and neither queries an interface** (`hidusb` `0x10DE9` / `0x10EA0`; `usbstor` `0x11B2D` / `0x11BDA`). `hidusb` URB functions 0x00, 0x02, 0x09, 0x0B, 0x1B, 0x1C, 0x1E, 0x24, 0x28, usbd imports as 98 SE's; `usbstor` 0x00 (Length 0x18), 0x01, 0x09, 0x0B, 0x12, 0x1B, 0x1E, 0x24, 0x28, usbd import `USBD_CreateConfigurationRequestEx` only. `hidusb` 13,904 bytes, `1EC30806...FC5C`, expanded from `I386\HIDUSB.SY_`; `usbstor` 21,552 bytes, `9DEF2A07...4285`, from `I386\USBSTOR.SY_`, identical to `SP4.CAB`'s | static (as above, over `tools\win2ksp4-extracted\class\`, expanded from the owner's Windows 2000 SP4 media; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows 2000 SP4's `usbaudio.sys` 5.00.2150.1 sends `IOCTL_INTERNAL_USB_GET_BUS_INFO` (`0x220420`) and fails when the bandwidth does not fit**: `push 220420h` at `0x15546` into `IoBuildDeviceIoControlRequest`, `Argument1` a 0x30-byte pool block, then its need compared with `TotalBandwidth - ConsumedBandwidth` (`0x155D8`) and `0xC000009A` returned when it does not fit (`0x155E3`); also `SUBMIT_URB`, URB functions 0x00, 0x01, 0x02, 0x07, 0x0A, 0x0B, 0x1B, 0x1C, 0x1E; usbd imports `USBD_ParseConfigurationDescriptorEx`, `USBD_CreateConfigurationRequestEx`, `USBD_ParseDescriptors`. 68,912 bytes, `5556161F...ACDF`, from `I386\DRIVER.CAB` (SP4 ships none). The second half of 25.2 found the same `GET_BUS_INFO` and URB 0x07 in a cross-check | static (as above, over `tools\win2ksp4-extracted\class\usbaudio.sys`; the cross-check by WDK 7.1 immediate search; a subagent's read, 2026-10-02, not re-read line by line by the coordinator; the routine's caller was not traced, so whether a failure fails start is not established) | `docs/contributing/design/13-superspeed-hcd.md` section 6; roadmap 26-A.6 |
-| **Windows XP SP3's `hidusb.sys` 5.1.2600.5512 adds `IOCTL_INTERNAL_USB_SUBMIT_IDLE_NOTIFICATION` (`0x220027`, `0x1095A`) and URB 0x2A `GET_MS_FEATURE_DESCRIPTOR` (`0x11E75`)** to the 2000 set (`SUBMIT_URB`, `GET_PORT_STATUS` `0x1080D`, `RESET_PORT` `0x10891`); no `QUERY_INTERFACE`. 10,368 bytes, `93395FA4...26EC`, from `I386\SP3.CAB` | static (as above, over `tools\winxpsp3-extracted\class\hidusb.sys`, from the owner's XP SP3 VL CD; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows XP SP3's `usbstor.sys` 5.1.2600.5512 queries `USB_BUS_INTERFACE_USBDI_GUID` at version 1, size 0x24, and tolerates a failure**: the next stack's major `1Bh` and minor 8 (`0x13FE6`, `0x13FE9`), the GUID at RVA `0x271C`, Size `0x24`, Version 1 (`0x13FF7`, `0x13FFD`); its caller calls `IsDeviceHighSpeed` (+0x20) and stores 0 when the query fails; also `SUBMIT_URB`, `GET_PORT_STATUS` (`0x107CB`), `RESET_PORT` (`0x1087C`); URB functions 0x00 (Length 0x18), 0x01, 0x09, 0x0B, 0x12, 0x1B, 0x1E, 0x24, 0x28. 26,368 bytes, `ED1DC52E...9817` | static (as above, plus a PowerShell byte search for the GUID; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows XP SP3's `usbaudio.sys` 5.1.2600.5512 queries `USB_BUS_INTERFACE_USBDI_GUID` at version 0, size 0x20, and calls only `QueryBusTime`**: the query at `0x1066C`-`0x10689`, the GUID at RVA `0xB3F4`, the routine returning the query's status; `call dword ptr [eax+14h]` at `0x1913C` behind a NULL check; `SUBMIT_URB` only; URB functions 0x00, 0x01, 0x02, 0x09, 0x0A, 0x0B, 0x1B, 0x1C, 0x1E and no 0x07. 60,032 bytes, `226D0329...1B61` | static (as above, plus the GUID byte search; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **`USB_BUS_INTERFACE_USBDI_GUID` is `{b1a96a13-3de0-4574-9b01-c08feab318d6}`**, in-memory bytes `13 6A A9 B1 E0 3D 74 45 9B 01 C0 8F EA B3 18 D6`, with versions 0 to 3 at x86 sizes 0x20 / 0x24 / 0x28 / 0x30 and x64 sizes 0x40 / 0x48 / 0x50 / 0x60; the hub and USBC-configuration interface GUIDs occur in none of the class drivers read | static (a text read of WDK 7.1 `inc\ddk\usbbusif.h` lines 252-414; the bytes found in XP SP3 `usbstor.sys` and `usbaudio.sys` and at file offset `0x47F0` of XP x64 `usbstor.sys`, and in none of the Windows 2000 SP4 drivers; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **ASIX `AX88772.SYS` 3.0.3.12 (98 SE / ME) sends only `SUBMIT_URB` and refuses to continue below USBDI version 0x101**: URB functions 0x09, 0x0B, 0x0D, 0x17 (an embedded URB at extension +0x60A0C and stack URBs); imports `USBD_CreateConfigurationRequestEx`, `USBD_ParseConfigurationDescriptorEx` and `USBD_GetUSBDIVersion`, compared with `0x101` and `0x100` (`0x12ED2`, `0x12EDF`). 18,349 bytes, `7A712D46...4862` | static (MSVC 6 `dumpbin -disasm` and `-imports` over `tools\AX88772_772A_WinME98SE_v3.0.3.12\AX88772.SYS`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **ASIX `ax88772.sys` 3.4.3.38 (2000 / XP) is a KMDF 1.7 client whose PDO traffic goes out through `Wdf01000.sys`, which was not read**: `WDF_BIND_INFO` at `0x1B320` (version 1.7 build 6001, 387 functions, table `0x1B358`); its own URBs (0x09, 0x0D, 0x17) leave through `WdfUsbTargetDeviceFormatRequestForUrb` and `WdfRequestSend`; it calls `WdfUsbTargetDeviceIsConnectedSynchronous`, `CyclePortSynchronously`, `SelectConfig` and `WdfUsbTargetPipeResetSynchronously`; usbd import `USBD_GetUSBDIVersion` only, with the same 0x101 / 0x100 check (`0x1BFC9`, `0x1BFD9`). 61,696 bytes, `30F7B505...4B0A` | static (as above, over `tools\AX88772A_760_772_XP2K_32bit_v3.4.3.38_WHQL\ax88772.sys`; table indexes mapped with WDK 7.1's KMDF 1.9 `wdffuncenum.h`, on the assumption that the enum is append-only from 1.7, checked at two indexes; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6; roadmap 26-A.6, 28-A.1 |
-| **`hidclass.sys` of 98 SE (4.10.2222), 2000 SP4 (5.00.2195.6655) and XP SP3 (5.1.2600.5512) each build `IRP_MN_QUERY_CAPABILITIES` and request `IRP_MN_WAIT_WAKE` and `IRP_MN_SET_POWER`**, which reach the PDO through `hidusb`; none sends an `IOCTL_INTERNAL_USB_*` | static (MSVC 6 `dumpbin -disasm` and `-imports` over the three files named in `docs/contributing/design/13-superspeed-hcd.md` section 6.2; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Identities of the XP x64 SP2, Vista SP2 and Windows 7 SP1 class drivers read for 25.2** (`hidusb.sys`, `usbstor.sys`, `usbaudio.sys`, both architectures on NT 6.x; versions, lengths and SHA-256s in `docs/contributing/design/13-superspeed-hcd.md` section 6.2): XP x64's from `AMD64\DRIVER.CAB`, `AMD64\USBSTOR.SY_` (identical in `SP2.CAB`) and `AMD64\SP2.CAB`; Vista's `usbstor` and `usbaudio` from the SP2 DriverStore packages `usbstor.inf_72a6a3e5`, `usbstor.inf_c0c342db`, `wdma_usb.inf_dc7189cc`, `wdma_usb.inf_7c79e8af` (they are not in `System32\drivers`); Windows 7's `usbaudio` from `wdma_usb.inf_*_neutral_*` | static (7-Zip and `expand.exe` over the owner's `Win XP SP2 VL x64.iso`, and 7-Zip over `sources\install.wim` of the Vista SP2 and 7 SP1 ISOs, into `tools\{winxp64,vista-x86,vista-x64,win7-x86,win7-x64}-extracted\class\`; version resources and SHA-256 read on the host; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **The `usbd.sys` exports the class drivers import are the same on every target read**: `hidusb` `USBD_ParseConfigurationDescriptorEx` and `USBD_CreateConfigurationRequestEx`; `usbstor` `USBD_CreateConfigurationRequestEx`; `usbaudio` those two and `USBD_ParseDescriptors` - on XP x64, Vista and 7 in both architectures, equal to the Windows 2000 SP4 sets | static (WDK 7.1 `link -dump -imports` over `tools\*-extracted\class\`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **`hidusb.sys` on XP x64, Vista and 7 sends `SUBMIT_URB`, `RESET_PORT` (`HumResetParentPort`), `GET_PORT_STATUS` (`HumGetPortStatus`) and `SUBMIT_IDLE_NOTIFICATION`** (`HumSendIdleNotificationRequest` x86, `HumInternalIoctl` x64; e.g. Windows 7 x86 RVA `0x1BA0`, `mov dword ptr [esi-18h],220027h`), and no other internal IOCTL and no `QUERY_INTERFACE`; URB functions 0x00, 0x02, 0x09, 0x0B, 0x28, 0x1B, 0x1C, 0x1E and 0x2A (`HumGetMsGenreDescriptor`), with no 0x24 found | static (`cdb.exe -z` 6.12.0002.633 over `tools\*-extracted\class\hidusb.sys` with the PDBs in `tools\symbols`, XP x64's without (not on msdl); immediates and `[urb+2]` word stores searched over every executable section; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **`usbstor.sys` on XP x64, Vista and 7 queries `USB_BUS_INTERFACE_USBDI_GUID` at version 1** (size 0x24 x86, 0x48 x64) in `USBSTOR_GetBusInterface` (XP x64 RVA `0xC1D4`-`0xC1F5`; Vista x86 `0xBE48`-`0xBE5F`; Vista x64 `0x110D6`-`0x110EF`; 7 x86 `0xC04D`-`0xC070`; 7 x64 `0x127E8`-`0x127FE`) and calls `IsDeviceHighSpeed`, then `InterfaceDereference`; it sends `SUBMIT_URB`, `GET_PORT_STATUS` and `RESET_PORT`, and **on Windows 7 also `IOCTL_INTERNAL_USB_GET_TOPOLOGY_ADDRESS` (`0x22043F`)** from `USBSTOR_IsDeviceConnectedToRootHub` (x86 RVA `0xC244`, x64 `0x12AB2`), called from `USBSTOR_FdoStartDevice`; URB functions 0x00, 0x01, 0x09, 0x0B, 0x12, 0x1B, 0x1E | static (`cdb.exe -z` with the PDBs; IRP stack stores `1Bh` / `8` and the Size / Version word stores; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **`usbaudio.sys` queries `USB_BUS_INTERFACE_USBDI_GUID` at version 0, size 0x40, on XP x64, and at version 1 on Vista and 7**: XP x64 `USBAudioGetUsbBusInterface` (RVA `0x9A0`-`0x9C8`), Vista and 7 `USBHwGetUsbBusInterface` (x86) or inlined in `USBDeviceStart` (x64); it calls `QueryBusTime` and, from version 1, `IsDeviceHighSpeed`; it sends no `GET_BUS_INFO` and no URB 0x07; **Windows 7's also sends `IOCTL_INTERNAL_USB_RECORD_FAILURE` (`0x22002B`)** from `USBHwLogStartFailure` (x86 RVA `0xDD8C`, x64 `0x146B7`), `Argument1` a `USB_START_FAILDATA`-shaped buffer; URB functions 0x00, 0x01, 0x02, 0x09, 0x0A, 0x0B, 0x1B, 0x1C, 0x1E | static (`cdb.exe -z` with the PDBs; the arguments of `USBHwGetSetProperty` and `USBHwAbortOrResetPipe` followed to their callers; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6 |
-| **Windows 2000 SP4 `usbaudio.sys` (DateStamp `3803CAD4`) builds its configuration request for the audio interfaces only and then walks `bNumInterfaces` entries**: in the function holding RVA `0x4A90`, an interface list of `(bNumInterfaces + 1) * 8` bytes from pool, not zeroed, is filled with the AudioControl interface and the AudioStreaming interfaces its class-specific header names, then a NULL-descriptor terminator; `USBD_CreateConfigurationRequestEx` (Windows 2000 `usbd.sys` RVA `0x3C74`) writes `.Interface` only for non-NULL entries; the loop `i < bNumInterfaces` then reads `list[i].Interface` (`[ecx+edx*8+4]` at `0x14A7F`) and `mov dx,[ecx]` at `0x14A90` dereferences it - an uninitialised pointer whenever the configuration carries a non-audio interface, as a whole composite device does | both (static: `DUMPBIN /disasm` over `tools\win2ksp4-extracted\class\usbaudio.sys` and `usbd.sys`; runtime: guest leg c14, STOP 0x1E at `0xBF48AA90` with `usbaudio.sys` at `0xBF486000`, reading `0x00310030`; a subagent's read, 2026-10-03, not re-read line by line by the coordinator) | `docs/contributing/runs/run-26.md`, c14 |
-| **None of the fifteen XP x64, Vista and 7 class drivers sends `CYCLE_PORT`, `GET_DEVICE_HANDLE(_EX)`, `GET_HUB_COUNT`, `GET_ROOTHUB_PDO`, `GET_BUS_INFO`, `GET_CONTROLLER_NAME` or `GET_DEVICE_CONFIG_INFO`, queries any interface but USBDI, or asks for a USBDI version above 1**; the 98 SE, NUSB, 2000 SP4 and XP SP3 drivers send only `0x220003`, `0x220007`, `0x220013`, `0x220027` and `0x220420` among all `0x2200xx` and `0x2204xx` values | static (case-insensitive search for every such immediate and every `IRP_MJ_PNP` / `IRP_MN_QUERY_INTERFACE` stack store over all executable sections, by both halves of the read; a subagent's read, 2026-10-02, not re-read line by line by the coordinator; a code built arithmetically or loaded from data would be missed) | `docs/contributing/design/13-superspeed-hcd.md` section 6; roadmap 26-A.6, 28-A.1 |
-| **Windows 98 SE's own USB 1.1 host controller drivers, `uhcd.sys` 4.10.2222 (30,448 bytes) and `openhci.sys` 4.10.2222 (23,632 bytes), import `NTOSKRNL.EXE!IoGetDmaAdapter` (hint 4A), `IoConnectInterrupt`, `KeSynchronizeExecution`, `MmMapIoSpace`, `MmMapLockedPages`, `ExAllocatePoolWithTag` and `ExFreePool`, and import none of `HalGetAdapter`, `HalAllocateCommonBuffer`, `HalFreeCommonBuffer`, `IoMapTransfer`, `IoAllocateAdapterChannel`, `IoAllocateMdl` or `MmGetPhysicalAddress`** | static (`dumpbin /imports` over `tools\win98se-extracted\wdm\`, extracted with 7-Zip from the owner's Windows 98 SE CD; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 7; `scripts/import-gate/xhci98-imports.allow`; roadmap 25.3, 25.7 |
-| **Both reach DMA only through the adapter's `DMA_OPERATIONS`**: `openhci.sys` calls `IoGetDmaAdapter` at `0x1152B` (`Master`, `ScatterGather`, `Dma32BitAddresses` = 1, `InterfaceType` 5, `MaximumLength` 0x80000000), then `AllocateCommonBuffer` (`call [ecx+8]`) at `0x1155A` with length 0x1000, `FreeCommonBuffer` (+0xC) `0x1145F`, `PutDmaAdapter` (+4) `0x11476`, `AllocateAdapterChannel` (+0x10) `0x13CAA`, `MapTransfer` (+0x20) `0x1496E`, `FlushAdapterBuffers` (+0x14) `0x12BEA`, `FreeMapRegisters` (+0x1C) `0x12BFD`; `uhcd.sys` calls `IoGetDmaAdapter` at `0x16D7A`, `AllocateCommonBuffer` at `0x13487` / `0x137A1` / `0x167E5`, `FreeCommonBuffer` `0x1670F` / `0x16797`, `PutDmaAdapter` `0x167B0`, `AllocateAdapterChannel` `0x12D2F`, `MapTransfer` `0x12C66`, `FlushAdapterBuffers` `0x12A85`, `FreeMapRegisters` `0x12AB7`. Neither calls slot +0x18, +0x2C or +0x30 | static (`dumpbin /disasm`, addresses as it prints them at image base 0x10000, IAT slots by `dumpbin /imports` order, slot meanings from the Windows 2000 DDK `ntddk.h` `DMA_OPERATIONS` order; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 7; roadmap 25.7 |
-| **Over 86 binaries - 67 Microsoft WDM drivers newly staged from the Windows 98 SE CD, the two SE files already listed, NUSB 3.3's eight listed files and NUSB 3.6's nine files not in 3.3 - `ExAllocatePoolWithTag` is imported by 62 stock 98 SE drivers and `ExFreePool` by 61, while the untagged `ExAllocatePool`, `ExFreePoolWithTag`, `MmGetPhysicalAddress`, `HalGetAdapter` and `HalAllocateCommonBuffer` are imported by none**; of those five, all but `ExFreePoolWithTag` are present in `ntkern.vxd`'s name strings | static (the import gate's own `Get-ImportPairs`, `Get-Win98Precedent` and `Test-NtkernName`, lifted from `check-imports.ps1` by PowerShell AST, over files authenticated by `Get-FileIdentityErrors`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` sections 7 and Appendix A; `scripts/import-gate/xhci98-imports.allow` |
-| **Nineteen kernel and HAL names that a stock Windows 98 SE driver imports are absent from `ntkern.vxd`'s NUL-delimited strings**, among them `KeInitializeDpc`, `KeInsertQueueDpc` (imported by `uhcd.sys` and `openhci.sys`, hint 7C), `KeSetTimer`, `KeSetTimerEx`, `KfRaiseIrql`, `KfLowerIrql`, `KeGetCurrentIrql`, `KeQuerySystemTime` and `KeTickCount`; so this inventory's row on `NTKERN.VXD` and `KeInsertQueueDpc` is about the name table, not the export | static (the same functions; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 7; the `win98-evidence.list` header ("a miss is no information"); the `KeInsertQueueDpc` row above (its export, not its semantics) |
-| **NUSB 3.6's `wdmstub.sys` (Walter Oney Software, 5.00.006, 12,767 bytes) carries as strings but does not import `ExFreePoolWithTag`, `IoAllocateWorkItem`, `IoQueueWorkItem`, `IoFreeWorkItem`, `IoReuseIrp`, `IoReportTargetDeviceChangeAsynchronous`, `MmMapLockedPagesSpecifyCache`, `MmGetSystemRoutineAddress`, `KeNumberProcessors`, `PsGetVersion`, `HalTranslateBusAddress`, the `Io*RemoveLockEx` family and 26 more** (the full list in `docs/contributing/design/13-superspeed-hcd.md` section 7); that it supplies them is inferred from its stated purpose ("WDM stub functions for Windows 98", its FileDescription), not from reading its code | static (a string scan and `dumpbin /imports`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `scripts/import-gate/win98-evidence.list` NUSB 3.6 caveat; `docs/contributing/design/13-superspeed-hcd.md` section 7; the deny rows of `xhci98-imports.allow` |
-| **The Windows 2000 DDK links `TARGETTYPE=DRIVER` against `ntoskrnl.lib hal.lib wmilib.lib` in that order, and its `ntoskrnl.lib` - not `hal.lib` - defines `READ_REGISTER_*` / `WRITE_REGISTER_*`; `memcmp` is in none of the three and is not exported by Windows 2000 SP4's kernels**; under `ntddk.h` with `USE_DMA_MACROS` undefined, `HalAllocateCommonBuffer` and its siblings are `NTHALAPI` imports (lines 18120-18196), while `wdm.h` makes them inline wrappers over `DmaOperations` (line 10743) | static (`dumpbin /exports` of `tools\ntddk\libfre\i386\{ntoskrnl,hal,wmilib}.lib` and the kernels; a text read of `bin\makefile.def`, `inc\ddk\ntddk.h` and `wdm.h`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 7; the allowlist's module column |
-| **The Windows 98 SE files staged in `tools\win98se-extracted\wdm\` (67) and the NUSB 3.6 files (9)**, each with version, length and SHA-256 as in the drafted `win98-evidence.list` rows of `docs/contributing/design/13-superspeed-hcd.md` Appendix A; the SE lengths agree with `layout.inf`, `layout1.inf` and `layout2.inf` from `PRECOPY1.CAB`; source `Win98SE.iso`, 656,203,776 bytes, SHA-256 `C048C31E414E3FE4FEC1CDBBA42C62452F7DF5E9F3AFD62464823DE4DEF7F584` | static (7-Zip extraction, `Get-FileHash`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `scripts/import-gate/win98-evidence.list`; `docs/contributing/design/13-superspeed-hcd.md` Appendix A |
-| **The `USBUSER` request set `usbui.dll` sends a controller is one request on two targets and none on seven**: `IOCTL_USB_USER_REQUEST` `0x220438` with `UsbUserRequest` = 1 (`USBUSER_GET_CONTROLLER_INFO_0`), in = out 0x28 bytes, from `UsbItem::GetControllerInfo` on Vista SP2 x86 (6.0.6001.18000) and 7 x86 (6.1.7600.16385), inlined into `UsbItem::EnumerateController` on Vista x64 (6.0.6000.16386) and 7 x64 (`mov edx,220438h`); no `0x220438` immediate in 98 SE 4.10.2222, ME 4.90.3000, 2000 SP4 5.00.2134.1, XP SP3 5.1.2600.5512 or XP x64 5.2.3790.1830. Windows 7 x86 copies the six `USB_CONTROLLER_INFO_0` ULONGs to item +0x11C on a TRUE return without reading `UsbUserStatusCode`, and `IsController20` is `ControllerFlavor` (+0x12C) `>= 0x3E8` | static (`kd -z` over `tools\<target>-extracted\ui\usbui.dll` with the PDBs in `tools\symbols` for XP SP3, Vista and 7, export-symbol labels for 98 SE, ME, 2000 and XP x64; immediate search over whole-`.text` listings; request and IOCTL values from WDK 7.1 `usbuser.h` / `usbiodef.h`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 8; roadmap 26-A.8 |
-| **The legacy controller IOCTLs `usbui.dll` sends on all nine builds are `IOCTL_GET_HCD_DRIVERKEY_NAME` (`0x220424`) and `IOCTL_USB_GET_ROOT_HUB_NAME` (`0x220408`)** (`UsbItem::GetHCDDriverKeyName`, `UsbItem::GetRootHubName`, two calls each), and the driver key is matched to a devnode with `CM_Get_DevNode_Registry_Property(CM_DRP_DRIVER = 0x0A)` in `GetConfigMgrInfo` | static (as above) | `docs/contributing/design/13-superspeed-hcd.md` section 8; roadmap 26-A.8 |
-| **The hub IOCTLs `usbui.dll` sends a hub, per build**: 98 SE, ME and 2000 SP4 `0x220408` node information (0x4C), `0x22040C` connection information, `0x220410` descriptor from node connection (one call, 0x15 bytes), `0x220414` connection name, `0x220420` connection driver key; XP SP3 and XP x64 add `0x22043C` hub capabilities and `0x220440` connection attributes (0x0C); Vista and 7 use `0x220448` connection information EX (0x23 + 0x0B per pipe) and `0x220450` hub capabilities EX in the pages in place of `0x22040C` / `0x22043C`, add `0x22044C` `RESET_HUB` (`HubPage::ResetHub`), and keep `0x22040C` in `UsbPopup::QueryContinue` | static (as above) | `docs/contributing/design/13-superspeed-hcd.md` section 8; roadmap 26-A.8 |
-| **`usbui.dll`'s configuration-descriptor request carries `bRequest` 0, on all nine builds**: `UsbItem::GetConfigDescriptor` allocates and zero-fills 0x15 bytes, writes only `ConnectionIndex` (+0), `wValue` 0x0200 (+6) and `wLength` 9 (+0xA), sends `0x220410` with in = out = 0x15 from the build's one call site, and keeps the result only on success with exactly 0x15 bytes returned; `UsbItem::ComputePower` takes `bMaxPower` * 2 from it and has no value otherwise (98 SE 7700B566..B5AB and 77004CAF, 2000 SP4 666B4696/469C and 666B257A..6592, XP SP3 5AF63BD6/BDC, 7 x86 10004F03/F0A; `grep -c 220410h` over each of the nine listings returns 1) | static (the nine `tools\<target>-extracted\ui\usbui-text-disasm.txt` listings, git-ignored) | `docs/contributing/design/13-superspeed-hcd.md` section 8; `src/hcd_door.c` `hcdDoorDescriptor` (task 33, 2026-10-04) |
-| **How the pages find their device**: 98 SE, ME, 2000 SP4, XP SP3 and XP x64 read `SymbolicName` from the devnode's hardware key (`SetupDiOpenDevRegKey` scope 1, `DIREG_DEV`, `0xF003F`, then `RegQueryValueEx`; XP SP3 `UsbPropertyPage::GetDeviceName`, string `0x5AF61290`; 98 SE IAT slot `0x7701B3C8`, string `0x77001124`) and rewrite `\??\`, `\DosDevices\` and `\\?\` to `\\.\` before `CreateFile`; Vista and 7 enumerate `GUID_DEVINTERFACE_USB_HOST_CONTROLLER` (controller page) or `GUID_DEVINTERFACE_USB_HUB` (hub pages) with `SetupDiGetClassDevsW(..., 0x12)` and keep the interface whose `DevInst` is the page's. On XP SP3 (`PowerPage::Create`) and Windows 7 x86 (`BandwidthPage::Create`) a failed lookup returns before `UsbPropertyPage::Create`, so no page is created | static (as above) | `docs/contributing/design/13-superspeed-hcd.md` section 8; roadmap 26-A.8 |
-| **What the Power page computes**: `UsbItem::PortPower` returns 500 mA when `USB_HUB_INFORMATION.HubIsBusPowered` (item +0x5F) is 0 and 100 mA otherwise; `ComputePower` charges a bus-powered hub `(ports + 1) * 100` mA, capped at 500 above four ports, and any other device `bMaxPower * 2`; the port loop bound is `bNumberOfPorts` (+0x1A); Vista's and 7's `IsHighSpeed` tests connection-information-EX `Speed` (+0x17) `== 2` and hub capability flag bit 1 | static (Windows 7 x86 PDB names; as above) | `docs/contributing/design/13-superspeed-hcd.md` section 8 |
-| **Who reads the `_EX` `Speed` byte** (task 36.18): Vista's and 7's `usbui!UsbItem::IsHighSpeed` tests connection-information-EX `Speed` (+0x17) for exactly 2, so 3 and 4 read as not High Speed, and the hub page's `AddFullSpeedDevicesToListView` then lists such a device among the Full Speed devices - a misclassification, not a crash; XP's and XP x64's pages send the older `0x22040C` and never read the byte. Why the HCD answers 3 and 4 on Windows 98 and ME only | static (a review of the plan at `7567dec`, disassembly of `tools\win7-x86-extracted\ui` and `tools\vista-x64-extracted\ui` with their PDB names) | `docs/contributing/design/13-superspeed-hcd.md` section 8.4 |
-| **The speed ceiling of the node-connection interface**: WDK 7.1 `usb200.h` `USB_DEVICE_SPEED` has `UsbLowSpeed = 0, UsbFullSpeed, UsbHighSpeed` only, and `USB_NODE_CONNECTION_INFORMATION_EX.Speed` is a `UCHAR` from it; the Windows 2000 DDK has no `usb200.h`, and its `USB_NODE_CONNECTION_INFORMATION` carries `BOOLEAN LowSpeed` | static (a text read of `tools\WinDDK71\inc\api` and `tools\ntddk\inc`; a subagent's read, 2026-10-02) | `docs/contributing/design/13-superspeed-hcd.md` section 8; the Phase 25 checkpoint wording |
-| **The root-hub page each OS's INF registers**: 2000 SP4 `usb.inf` `[ROOTHUB2.AddReg.NT]` and XP SP3, XP x64, Vista SP2 and 7 SP1 `usbport.inf` `[ROOTHUB.AddReg.NT]` write `HKR,,EnumPropPages32,,"usbui.dll,USBHubPropPageProvider"`; 98 SE and ME `usb.inf` `[Power.AddReg]` and NUSB 3.3 / 3.6 and SweetLow `USB2.INF` `[Usb2Hub.AddReg]` write `HKR,,EnumPropPages,,"sysclass.dll,USBHubPropPage"` beside `DevLoader=*NTKERN` and `NTMPDriver` | static (a text read of the INFs in `tools\<target>-extracted\ui\`, the NT 6.x files UTF-16 read through `iconv`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 8; `src/xhci98.inf`, `src/xhci98-amd64.inf`; the INF gate's `HCD-HUBPAGE` |
-| **The non-VID `USB\` ids the OS INFs match** are `USB\ROOT_HUB`, `USB\ROOT_HUB20`, `USB\ROOT_HUB_DBC`, `USB\HubClass`, `USB\CLASS_09`, `USB\CLASS_09&SUBCLASS_01`, `USB\COMPOSITE`, `USB\UNKNOWN` and NUSB's `USB\Class_08&...` rows, across 98 SE, ME, NUSB 3.3 / 3.6, SweetLow, 2000 SP4, XP SP3, XP x64, Vista and 7; no `usbui.dll` and no `sysclass.dll` contains a `ROOT_HUB` or `USB\` string | static (a text read of the INFs; a string search of the DLLs; a subagent's read, 2026-10-02, not re-read line by line by the coordinator; each target's whole `%windir%\inf` was not swept) | `docs/contributing/design/13-superspeed-hcd.md` section 8 (the root-hub id `XHCI98\ROOT_HUB`) |
-| **Windows 7 x86 `usbport.sys` 6.1.7601.17514 writes `SymbolicName` from `USBPORT_EnableDeviceInterface`** (`push offset L"SymbolicName"` at `0x25EC7`), and every `usbport.sys` and `usbhub(20).sys` read - NUSB's, SweetLow's, 98 SE's `usbhub.sys`, 2000 SP4's, XP SP3's and 7 x86's - carries the string and imports `IoRegisterDeviceInterface`, `IoSetDeviceInterfaceState` and `IoOpenDeviceRegistryKey` | static (`kd -z` with the existing `usbport.pdb/5224A6DF50AF4F28A0A7A60F3EA734812`; `link -dump -imports`; a string search; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` sections 7 and 8 |
-| **Windows 98 SE's `usb.inf` binds `USB\COMPOSITE` (and 28 VID/PIDs) to `[Composite.Dev]`, whose `NTMPDriver` is `usbhub.sys`**; hubs `USB\CLASS_09&SUBCLASS_01` and `USB\CLASS_09`; the root hub `USB\ROOT_HUB`. Its `hiddev.inf` binds `USB\Class_03`, and its `wdma_usb.inf` binds `USB\CLASS_01`, with the vendor audio lines at `&MI_00` where `hiddev.inf` binds the same devices' HID at `&MI_02`; per-interface ids are `USB\VID_xxxx&PID_xxxx&MI_nn`. It has no stock `usbstor.inf` and no INF binding `USB\Class_02` or `USB\Class_0A` | static (a text read of the INFs extracted from the owner's `Win98SE.iso`, the `PRECOPY1`-`2` cabinet set and `win98\WIN98_50.CAB`, SHA-256s in `docs/contributing/design/13-superspeed-hcd.md` section 10.6; a listing and text search of every INF in `win98\*.CAB`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10 (the ids; the audio rule's corroboration; never `USB\COMPOSITE`) |
-| **Windows 2000 SP4's `usb.inf` binds `USB\COMPOSITE` to service `usbhub`; XP SP3's, XP x64's, Vista SP2's and 7 SP1's bind it to service `usbccgp`**; `input.inf` binds `USB\Class_03&SubClass_01` and `USB\Class_03` on all five; `usbstor.inf` binds `USB\Class_08&SubClass_{02,05,06}&Prot_50`, Vista's and 7's adding `SubClass_08&Prot_50` and `SubClass_08&Prot_52`; `wdma_usb.inf` binds `USB\CLASS_01`, and from XP on uses `USB\VID_xxxx&PID_xxxx&REV_xxxx&MI_nn` as well as `...&MI_nn`; Windows 7's `bth.inf` binds `USB\Class_E0&SubClass_01&Prot_01`, XP's and Vista's do not | static (a text read of the INFs expanded from the owner's `win2ksp4.ISO` `I386\*.IN_`, `WinXP_pro_SP3_vl_x86.iso` `I386\*.IN_`, `Win XP SP2 VL x64.iso` `AMD64\*.IN_`, and `sources\install.wim` `Windows\inf\` of the Vista SP2 x86 and 7 SP1 x86 media; SHA-256s in `docs/contributing/design/13-superspeed-hcd.md` section 10.6; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10 |
-| **NUSB 3.6's `USB.INF` and SweetLow's `USB2.INF` bind `USB\COMPOSITE` to `NTMPDriver` `usbccgp.sys` on Windows 98** | static (a text read of `tools\nusb36-extracted\USB.INF` and `tools\sweetlow-extracted\USB2.INF`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10 (never `USB\COMPOSITE`) |
-| **No hub INF on any target names an `XHCI98\` id, and the hub ids they match are all under `USB\` (task 33.4)**: 98 SE and ME `usb.inf` match `USB\CLASS_09`, `USB\CLASS_09&SUBCLASS_01`, `USB\ROOT_HUB` and `USB\ROOT_HUB_DBC`; 2000 SP4 `usb.inf` adds `USB\HUBCLASS` and `USB\ROOT_HUB20`; XP SP3, XP x64, Vista SP2 and 7 SP1 `usb.inf` the two `CLASS_09` forms; NUSB 3.3's and 3.6's and SweetLow's `USB2.INF` `USB\HUBCLASS` and `USB\ROOT_HUB20`, NUSB 3.6's `USB.INF` the 98 SE set; no INF under `tools\*-extracted\` contains the string `XHCI98` | static (a case-insensitive text search for `USB\...HUB...` and `CLASS_09` ids and for `XHCI98` over the extracted INFs, the NT 6.x files through their UTF-8 copies `usb.utf8.inf`; 2026-10-04; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 10.11; `src/xhci98.inf`, `src/xhci98-amd64.inf`; the INF gate's `HCD-HUB` |
-| **No INF read names a `USB\XHCI98_` id or contains `XHCI98` at all, and no `USB\` token in them is a wildcard (task 38.8)**: 214 INFs - the 187 under `tools\*-extracted\` (98 SE, ME, 2000 SP4, XP SP3, XP x64, Vista and 7 x86 and x64, NUSB 3.3 and 3.6, SweetLow, hidusbf, the Windows 2000 DDK installer), the two ASIX AX88772 vendor packages, hidusbf's 2026-10-03 package, and the samples of the Windows 2000 DDK, WDK 7.1 and MSVC 6.0 - carry 11,361 `USB\` tokens, none with `*` or `?`, none `USB\` alone; the only ones beginning `USB\X` are Vista's and 7's `wdma_usb.inf` `USB\XUSB_AUDIO_DEVICE` and its string key; no `UpperFilters` or `LowerFilters` line in any `usb.inf`, `usbport.inf` or `USB2.INF` except 98 SE's and ME's `[DbcHub.Dev.HW]` (`dbfilter.sys`), and no `AddReg` or `DelReg` line of the 9x ones under `Enum`. A string search of 98 SE's `ntkern.vxd` finds no `USB\` string; 98 SE's `usbd.sys` carries `USB\ROOT_HUB` and `USB\OTHER_ID`; NUSB 3.6's and SweetLow's `usbport.sys` `USB\ROOT_HUB&VIDnnnn` and `USB\ROOT_HUB20&VIDnnnn`, their `usbhub20.sys` `USB\HUB_VID_nnnn` and `USB\HUBCLASS` | static (a PowerShell text read of every `*.inf` under `tools\`, UTF-16LE decoded by its byte-order mark, the code part of each line (before its first `;`) searched case-insensitively for `"?USB\\[^,\s"]*"?`, each match one token; an ASCII and UTF-16LE string search of the binaries in `tools\win98se-extracted`, `tools\winme-extracted`, `tools\nusb36-extracted`, `tools\sweetlow-extracted`, `tools\hidusbf*-extracted` and `tools\usbview*`, no disassembly, so whether any binary parses another bus's ids is not established; 2026-10-13; nothing executed; each target's whole `%windir%\inf` was not swept) | `docs/contributing/design/13-superspeed-hcd.md` section 10.13.2 |
-| **The hub drivers' id templates**: Windows 98 SE's `usbhub.sys` (35,680 bytes, SHA-256 `e898b75f...afc31`) carries the UTF-16 templates `USB\Vid_nnnn&Pid_nnnn&Rev_nnnn&Mi_nn` and `USB\Vid_nnnn&Pid_nnnn&Mi_nn` and `USB\COMPOSITE`; XP SP3's adds `USB\DevClass_nn[&SubClass_nn[&Prot_nn]]`; Vista's and 7's carry `USB\DevClass_00&SubClass_00&Prot_00` and `USB\COMPOSITE` | static (a UTF-16LE string dump of `tools\{win98se,winxpsp3,vista-x86,win7-x86}-extracted\usbhub.sys`, no disassembly; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10 (case-insensitive matching; the open `DevClass` question) |
-| **`usbccgp.sys` 5.1.2600.5585 (SHA-256 `4c1b3e8f...c66c5`, NUSB 3.6's and SweetLow's XP SP3 QFE copy) and 5.1.2600.2180 (`683061af...86457`, SweetLow's) carry `USB\Class_nn&SubClass_nn&Prot_nn`, `USB\Class_nn&SubClass_nn`, `USB\Class_nn`, `&MI_%02x`, `&MI_xx`, `USB\MS_COMP_` and `&MS_SUBCOMP_`, and no VID/PID template and no audio string** | static (a UTF-16LE string dump of `tools\nusb36-extracted\usbccgp.sys` and `tools\sweetlow-extracted\USBCCGP.SYS`, no disassembly; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10 |
-| **Windows 7 SP1 x86 `usbccgp.sys` 6.1.7601.17514 groups interfaces by IAD, else by a positional legacy rule**: `CreateFunctionList` calls `ParseUSBInterfaceAssociationDescriptors` and otherwise `LegacyGroupInterfaces`; `GetFunctionInterfaceListBase` skips interfaces of class `0x0D`, counts a non-audio interface as a function only at `bAlternateSetting` 0, and for class `0x01` continues a function across following class-`0x01` interfaces whose subclass differs from the starting interface's, ending it at another class or at the starting subclass (interface-descriptor offsets +3, +5, +6 compared, at `0x000227C3`-`0x00022888`). Its public symbols include `GroupInterfacesByFunction`, `GroupSubordinateInterfaces`, `GroupSubordinateInterfacesByUFD`, `CheckForWmCdcModemFunction`, `GetCdcFlags`, `CdcBuildHardwareIDs`, `CdcBuildCompatibleIDs`, `BuildFunctionConfigurationDescriptor`, `DispatchPdoUrbSelectConfiguration`, `DispatchPdoUrbGetDescriptorFromDevice`, `ParentSelectConfiguration`, `ParentFindOriginalConfiguration`, `ParentFindAltConfiguration` and `SendSelectInterfaceUrb` | static (`kd -z` on `tools\win7-x86-extracted\class\usbccgp.sys` (SHA-256 `288cac9f...e9dc`), `x usbccgp!*` and `uf` of `CreateFunctionList` and `GetFunctionInterfaceListBase` against the public PDB fetched into `tools\symbols`; nothing executed; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10.8 rule 2, 10.9 |
-| **In that build `GroupInterfacesByFunction` calls `FindInterfaceByClass` with class 2, subclass 8** (`push 8; push 2` at `0x0001AB44`) and then `GroupSubordinateInterfaces`, which calls `GroupSubordinateInterfacesByUFD` and `CheckForWmCdcModemFunction`; **`AppendInterfaceNumber` formats with the UTF-16 string `&MI_%02x`** (at `0x0002382C`, beside `&MI_xx` at `0x0002383E`), and `BuildIds` references `USB\MS_COMP_` and `&MS_SUBCOMP_`; **`DispatchPdoUrbSelectConfiguration` carries the debug strings "Pdo %x SET_CONFIGURATION Invalid Interface Information Length = %x. minimum size required = %x" and "UrbFunctionSelectConfiguration: Failing child pdo %x request with status %x."** and calls `SendSelectInterfaceUrb` | static (`kd -z`, `uf` of the named routines, `du` and `da` of the referenced addresses, public PDB; a subagent's read, 2026-10-02, not re-read line by line by the coordinator; the condition under which the CDC path is taken was not read) | `docs/contributing/design/13-superspeed-hcd.md` section 10.7, 10.8 rule 3, 10.9 |
-| **`usbccgp.sys` 5.1.2600.5585 (the XP SP3 QFE build NUSB 3.6 ships) has `GetFunctionInterfaceListBase` with the same class `0x0D` skip and class `0x01` comparisons, and `ParseUSBInterfaceAssociationDescriptors`, and no `Group*` routine** | static (`kd -z` on `tools\sweetlow-extracted\XP_SP3.QFE\USBCCGP.SYS`, `x` and `uf` against the public PDB; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 10.8 rules 2 and 3 |
-| **NUSB's `USBPORT.SYS` 5.00.2195.5652 and Windows 98 SE's `uhcd.sys` 4.10.2222 reach PCI configuration space with `IRP_MN_READ_CONFIG` / `IRP_MN_WRITE_CONFIG` sent to the PDO saved at `AddDevice`, not to the attached lower object**: usbport's routine at `0x2CAAC` (the target of registration-packet slot `+0x110`, stored at `0x277FD`) builds the IRP with `IoAllocateIrp` (StackSize from `[pdo+30h]`), presets IoStatus to `0C00000BBh`, sets major `1Bh` and minor `0x0F` / `0x10` from the read flag (`neg bl` / `sbb` / `add ebx,10h`), WhichSpace 0, zero-fills a read buffer (`rep stos`), completes through a routine that sets an event and returns `0C0000016h`, and calls `IofCallDriver` on extension `+0xD8`, which `AddDevice` (`0x1C198`) fills from its PhysicalDeviceObject argument while the attach result goes to `+0xDC`; uhcd's routine at `0x1652A` is the same shape against extension `+0x124`, the attach's TargetDevice. Neither file contains `GUID_BUS_INTERFACE_STANDARD` or imports `HalGetBusData*`; `openhci.sys` 4.10.2222 builds no configuration IRP at all. SHA-256 `EEC79B5A...9B55`, `7457D69E...554B`, `6E3D33A8...401D` | static (MSVC 6 `dumpbin` 6.00.8447 `/headers /imports /disasm` over `tools\nusb-extracted\USBPORT.SYS`, `tools\win98se-extracted\wdm\uhcd.sys` and `openhci.sys`, and a byte search for the GUID; nothing executed; a subagent's read, 2026-10-03, not re-read line by line by the coordinator) | `src/hcd_svc.c` `HcdSvcConfigSpace` |
-| **The id vocabulary NUSB's `usbstor.sys` builds its disk PDOs' ids from, as ASCII strings in the image**: the peripheral type words `Disk`, `CdRom`, `Optical`, `Sequential`, `Other` and `?SFloppy`, the generic names `GenDisk`, `GenCdRom`, `GenOptical`, `GenWorm`, `GenChanger`, `GenSequential`, `?GenSFloppy` and `UsbstorOther`, and the format strings `USBSTOR\%s`, `USBSTOR\` and `USBSTOR\RAW` - the same set in the NUSB 3.3 and 3.6 copies (both 21,040 bytes). Which string reaches which id list, and in what order, was not traced; the task 31-A.2 UAS driver takes from this only that the generic names exist in that vocabulary, and binds Windows 98 SE through `USBSTOR\GenDisk` on the strength of `usbntmap.inf`'s own model line (the NUSB 3.6 INF row above), not of this read. Windows 2000 and later's `disk.inf` binding `GenDisk` was **not** read here: no `disk.inf` is extracted under `tools\`, and task 31-0 owes that reading | static (a scan for runs of four or more printable ASCII and UTF-16LE characters in `tools/nusb36-extracted/usbstor.sys` and `tools/nusb-extracted/USBSTOR.SYS`, filtered for id-shaped strings; 2026-10-04; nothing executed, nothing disassembled) | roadmap task 31-A.2, `src/uas/uas_iu.c` `UasBuildId` and `src/uas/uas_pdo.c`; task 31-0 |
-| **ASIX's Windows 98 `AX88772.SYS` 3.0.3.12 waits for its URBs by polling `Irp->IoStatus.Status` for `STATUS_PENDING`, not on an event**: image base 0x10000; the helper at VA `0x1033E` loops on `cmp dword ptr [esi+18h],103h` (`0x103B5`) and then calls `IoFreeIrp` (`0x103D0`); a second helper at `0x102C8` polls the same field at `0x10327` between `NdisMSleep` calls; from `usbd` it imports only `USBD_CreateConfigurationRequestEx`, `USBD_ParseConfigurationDescriptorEx` and `USBD_GetUSBDIVersion`, and it imports no `KeWaitForSingleObject`. Its SELECT_CONFIGURATION is at `0x11821` and its read of `NumberOfPipes` at `0x1182D`, and `0x11836` (`.text+0x1576`) is the site of 26-V.1's "fatal exception 0E ... in VXD ax88772(01) + 00001576". 18,349 bytes, SHA-256 `7a712d4600b02eed49de275ac2459de454b4ada467df61608cba09b50df04862`, from ASIX's Windows 98 driver package (`Ax88772.inf`, `DriverVer = 04/08/2004, 3.0.3.12`) | static (a disassembly of the copy staged as `out\phase26\v0\pkg-v\ASIX98\AX88772.SYS`; nothing executed; a subagent's read, 2026-10-04, not re-read line by line by the coordinator) | `src/hcd_urb.c` `HcdDevicePdoInternalIoctl` |
-| **NUSB 3.3's `USBPORT.SYS` makes `STATUS_PENDING` visible before it pends a URB IRP, and its select handler refuses a configuration descriptor with `wTotalLength` 0**: `mov dword ptr [esi+18h],103h` at `0x15851`, then `IoMarkIrpPending` at `0x1585B`; the SELECT_CONFIGURATION handler at `0x2E45C` closes the old configuration first (`0x2E4DD`) before it reads `ConfigurationDescriptor` (`0x2E4EC`), refuses `wTotalLength` 0 with `0xC0000F00` (`0x2E57F`), and checks the URB's interface count against `bNumInterfaces` (`0x2E5F6`). 5.00.2195.5652, SHA-256 `EEC79B5A4CCE9C40A7D2484AA48F0FBEE7745FC447093D840BBD51A28C3F9B55` | static (a disassembly of `tools\nusb-extracted\USBPORT.SYS`; nothing executed; a subagent's read, 2026-10-04, not re-read line by line by the coordinator) | `src/hcd_urb.c` `HcdDevicePdoInternalIoctl` |
-| **Windows 98 SE's configuration manager sends a device PDO `IRP_MN_QUERY_DEVICE_RELATIONS` (BusRelations) and then `IRP_MN_QUERY_ID` after that PDO's `IRP_MN_REMOVE_DEVICE` has completed, in the same removal pass; Windows 2000 SP4 sends nothing after the REMOVE**: the trace reads `device PDO PnP minor=00000002`, `00000007`, `00000013` on every unplug of a bound device whose PDO was kept - 10 of 10 on each of two audio guests, and the HID and behind-hub mouse legs alike; 0x13 is `IRP_MN_QUERY_ID` and 0x14 `IRP_MN_QUERY_PNP_DEVICE_STATE` in the Windows 2000 DDK's `wdm.h`, and no 0x14 follows a REMOVE there. A PDO deleted inside its REMOVE took Windows 98 SE to "fatal exception 0E ... at 0028:C002A3A7" once its memory was reused | runtime (this driver's port-0xE9 trace, `qemu` flavour, Windows 98 SE under NUSB 3.3 and Windows 2000 SP4 in QEMU, 2026-10-04; traces `out\phase27\audio98\fixa-`, `fixb-`, `fhid-`, `fhmj-` and `w2k-debugcon.log` and `out\mx27\k-98-audio-fault-debugcon.log`, git-ignored, this host; the BusRelations type from diagnostic builds recorded in `c038326`'s message; nothing disassembled) | `src/hcd_pdo.c` (`RemovedPdos`, `hcdReapRemoved`); `docs/contributing/runs/run-27.md`, "The closing legs"; `lessons.md` |
-| **ReactOS's `usbhub` names a device by its serial number only when the serial string passes a character check and is unique among the hub's ports**: `USBH_ValidateSerialNumberString` refuses a string holding any UTF-16 unit below `0x20`, above `0x7F`, or equal to `0x2C` (`,`); `USBH_CheckDeviceIDUnique` refuses one whose `idVendor`, `idProduct`, length and bytes equal those of a device on another port of the same hub; either refusal, or a failed read (`USBH_GetSerialNumberString`, language `0x0409` after `USBH_CheckDeviceLanguage`), leaves the device with no serial, and then `UniqueID` is 0 and `BusQueryInstanceID` answers the port's location id; with one, `UniqueID` is 1 and the instance id is the serial string itself. No length limit beyond the string descriptor's | ReactOS source read, not a binary: interface documentation under section 3, no function body copied (`drivers/usb/usbhub/usbhub.c` at the pinned commit `0298e10d5d904a0230868be8f7bdf6436d589c62`, lines 4182-4255, 4319-4390 and 4555-4590 for the checks and the read, 4013-4019 for `UniqueID`; `pnp.c` 1795-1830 for `BusQueryInstanceID`; fetched into a scratch directory for this read, 2026-10-04, the `external/` mirror not carrying `usbhub`). Microsoft's `usbhub.sys` was not disassembled for it | `src/xhci_func.c` (`XhciFuncSerialId`, narrower: also refuses `0x20`, `0x7F` and `\`), `src/hcd_pdo.c` (`hcdSerialTakenLocked`, `hcdSerialTakenElsewhere`, wider: every controller of the driver, case aside), `src/hcd_enum.c` (`HcdDeviceReadSerial`, the first language id); `docs/contributing/design/13-superspeed-hcd.md` section 10.7 |
-| **Text-mode Setup's own USB support, per medium**: `TXTSETUP.SIF` from `win2ksp4.ISO` `I386\` (335,081 B, SHA-256 `ECA9CDFB...CB6BF2`) loads `openhci`, `uhcd`, `usbhub`, `hidusb`, `serial`, `serenum` and `usbstor` through `[InputDevicesSupport.Load]`, with `hidclass.sys`, `hidparse.sys` and `usbd.sys` in `[files.openhci]` and `[files.uhcd]`, `kbdhid` in `[Keyboard.Load]`, and no `usbport` or `usbehci` row; from the XP SP3 x86 medium `I386\` (480,367 B, `5F754EA5...7F63D8`) and the XP x64 SP2 medium `AMD64\` (512,828 B, `77B96776...DDEAA65`) it loads `usbehci`, `usbohci`, `usbuhci`, `usbhub`, `usbccgp`, `hidusb`, `serial`, `serenum` and `usbstor`, each host controller's `[files.*]` adding `hid.dll`, `hidclass.sys`, `hidparse.sys`, `usbd.sys` and `usbport.sys`. All three `[HardwareIdsDatabase]` sections bind `PCI\CC_0C0300`, `PCI\CC_0C0310` (XP also `PCI\CC_0C0320`), `USB\ROOT_HUB`, `USB\CLASS_09`, `USB\COMPOSITE` (to `usbhub` on 2000, `usbccgp` on XP), `USB\Class_03*`, `HID_DEVICE_SYSTEM_KEYBOARD`, `HID_DEVICE_SYSTEM_MOUSE` and `USB\Class_08&SubClass_{02,05,06}&Prot_50`, and none binds `PCI\CC_0C0330` | static (7-Zip extraction of `TXTSETUP.SIF` alone from the owner's ISOs into a scratch directory, a text read; full hashes in `docs/contributing/design/13-superspeed-hcd.md` section 5.6; 2026-10-04; nothing tracked) | `docs/contributing/design/13-superspeed-hcd.md` section 5.6; `src/txtsetup.oem`, `src/txtsetup-amd64.oem`; roadmap 33.3 |
-| **The `txtsetup.oem` format, from the Windows 2000 DDK's sample** `src\setup\inf\scsi\txtsetup.oem` (1,472 B, SHA-256 `62736CB3...6A165C01`): sections `[Disks]` (`diskN = "description", tagfile, directory`), `[Defaults]` (`scsi = OEMSCSI`), `[scsi]`, `[Files.scsi.ID]` (`filetype = diskN, filename[, DriverKey]`, types `driver`, `inf`, `catalog`), `[Config.ID]` and `[HardwareIds.scsi.ID]` (`id = "deviceID", "service"`) | static (a text read of the file in `tools\ntddk`, unpacked from `tools\WIN2KDDK.EXE`; 2026-10-04; not tracked) | `docs/contributing/design/13-superspeed-hcd.md` section 5.6; `scripts/inf-gate/check-txtsetup-oem.ps1` |
-| **What text-mode Setup does with each `txtsetup.oem` file type** (design record 18 section 15.9's amendment): `SETUPLDR.BIN` and `SETUPDD.SYS` of Windows 2000 SP4 and XP SP3 both carry the type names in the order `driver`, `port`, `class`, `inf`, `dll`, `detect`, `hal`, `catalog` (enum 0 to 7; XP `SETUPLDR.BIN`'s pointer table at VA `0x339684`, its PE image at file offset `0x4CC0`, base `0x300000`; XP `SETUPDD.SYS`'s at VA `0x74424`). **`setupldr` loads one file of the option**: XP's loader loop over the option's file list (VA `0x3259DB`-`0x325B98`) tests the type at `0x3259E5`-`0x3259F9` (`cmp eax,1` / `cmp eax,2` / `test eax,eax` / `cmp eax,6`, else `jne 0x325B94`, the next file) and stops at the first file it loads; 2000's `SETUPLDR.BIN` has the same test at file offset `0x24D00`. Its parser reads the `DriverKey` field only for types 0 to 2 (XP VA `0x324CB7`-`0x324CDC`). **`setupdd` copies every file but the catalog twice**: XP's copy routine (VA `0x27FA6`) picks the type's directory at `0x28157`-`0x28203` (`dll`: `system32`; `driver`, `port`, `class`: `system32\drivers`; `inf`: the `OemDir` pointer at `0x6F3B0` with the name `oem%s%02d.inf`; `catalog`: `OemDir`), copies (`call 0x277E4` at `0x2827F`), and unless the type is 7 sets the directory to `OemDir` and copies again (`0x282B5`-`0x282E1`); 2000's is the same at VA `0x1EDA6`-`0x1EF55` (`OemDir` pointer `0x5436C`). XP SP3 OEM CD (`<iso folder>\Win XP Pro SP3 OEM original.iso`): `SETUPDD.SY_` SHA-256 `807a3203...fcb62c`, expanded `setupdd.sys` 493,696 B `557d0cc4...daa6b9`, `SETUPLDR.BIN` 260,288 B `7d9951a0...121ddc`; `win2ksp4.ISO`: `SETUPDD.SY_` `011426a3...8e07e2`, expanded 382,128 B `16dfe965...6ada69`, `SETUPLDR.BIN` 229,792 B `c0fee221...82f892`. The Windows 2000 DDK's help, `D_SETUP.CAB`'s `d_setup.chm` (expanded SHA-256 `3d4fd281...2a2d03`), "Files.HwComponent.ID Section of a txtsetup.oem File": `dll` valid for all components, copied to `%systemroot%\system32`; `DriverKey` names the services key "if the file is of type driver" | static (7-Zip extraction to a scratch directory, `expand.exe`, MSVC 6.0 `dumpbin /disasm`; nothing executed; 2026-10-14; not tracked). Corroborated at runtime by the matrix's F6 legs: XP SP3's `OemDir` held `xhci98.sys` and `oemscs01.inf` (`setupapi.log`), 2000 SP4's `xhci98.sys` (`out\p38-matrix\legs\f6w2k\drivers-c2-textmode.txt`) | `docs/contributing/design/18-msi-helper-x86.md` section 15.9; `src/txtsetup.oem`; `scripts/inf-gate/check-txtsetup-oem.ps1` `OEM-COPY` |
-| **Where text mode reads an F6 option's files, and what a `driver` line costs** (the Windows 2000 F6 limitation's `txtsetup.oem` fix, investigated 2026-10-14). Windows 2000 SP4 `setupdd.sys` (the expanded image of the row above, `16dfe965...6ada69`, image base `0x10000`, no symbols; names from its export table): **every file of an F6 option is read from `\device\floppy0`** - the caller of the option-copy routine passes `SpDupStringW(L"\device\floppy0")` (string `0x36D90`, `0x37697`-`0x376C2`) unless the `$OEM$\TEXTMODE` preinstall flag (`0x5D4F8`, set at `0x36B4C`) is set; the copy routine (`0x1EC3C`) calls `SpPromptForDisk` (`0x41CA2`) for each file with that device, the file's own disk description and tag file (`0x1EEA3`-`0x1EEB0`) and `IgnoreDiskInDrive` and `AllowEscape` both 0; `SpPromptForDisk` returns at once for a device path holding neither `cdrom` nor `floppy`, opens `<device>\<tagfile>` and returns when it is there, and otherwise shows message `0x2364` ("Insert the disk labeled: %1 into drive %2!c!:", `USETUP.EXE`'s message table) or `0x2365` (the CD form, for a `cdrom` device) with ENTER and F3 only, until the tag file is found. **The source may be compressed**: `SpCopyFileUsingNames` (`0x1D026`) opens it (with `0x5D4A0` clear, as in the legs below) through `0x246C6`, which tries the name and the compressed name `0x421C2` builds (`usbd.sys` to `usbd.sy_`). **Only types 0-2 land in `system32\drivers`** (`0x1EE8E`; `dll` `system32`, `0x1EE39`), and **a service is created for every file with a `DriverKey`**: the loop at `0x1A08A`-`0x1A1F1` walks the option's whole file list, skips a file whose `DriverKey` pointer is 0 (`0x1A0A1`), names the service by the first eight characters of the file's base name, picks the group by component (`SCSI miniport`, `0x19F74`, for `scsi`), and then writes the `[Config.*]` values (`0x1A1AC`-`0x1A1DF`). Windows 2000 SP4 `SETUPLDR.BIN` (`c0fee221...82f892`; a flat image, file offset `0x3290` = VA `0x300000`, read by wrapping it in a minimal PE header so `dumpbin` could list it): the `Files.` line parser (`0x321E44`) requires the third field for types 0, 1 and 2 (`0x321F85`-`0x321F96`, failure at `0x322302`), and a failed parse is reported by `0x321BD2` as "File %s caused an unexpected error (%d) at line 1273" (`push 4F9h`) in `oemdisk.c`, the option dropped. `USETUP.EXE` from `win2ksp4.ISO` `I386\` (152,336 B, `1d0ab40e...e3c650`) for the message texts | static (7-Zip extraction to a scratch directory, `expand.exe`, MSVC 6.0 `dumpbin /disasm` and WDK 7.1 `kd.exe -z`, a Python reader of the message table; nothing executed; 2026-10-14; not tracked). Corroborated at runtime, QEMU, development host A, `out\p38-matrix\legs\f6w2k\` runs 61-66 (git-ignored): a `driver` line with no `DriverKey` drew the `oemdisk.c` error; a `[Disks]` entry tagged `\CDROM_NT.5` drew "Insert the disk labeled: Windows 2000 Professional CD into drive A:" with the CD in the CD drive; the CD's `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` on the floppy were expanded into `system32\drivers` and made services `usbd`, `hidclass` and `hidparse` (`Start` 3 from `[Config.*]`) | `docs/contributing/lessons.md`, "A `txtsetup.oem` disk is always read from drive A: ..."; design record 13 section 5.6, limit 7 |
-| **Windows 7 SP1 x86 `usbhub.sys` 6.1.7601.17514 keeps a device PDO it is sent `IRP_MN_STOP_DEVICE` for, and restarts the device under the same PDO at the next START**: `UsbhPdoPnp_StopDevice` (`0x3B40E`) sets the PDO's software PnP state to `0x67` (`push 67h` / `call SET_PDO_SWPNPSTATE` at `0x3B461`), calls `UsbhCloseDeviceConfiguration` (`0x3B473`) and `UsbhUnlinkPdoDeviceHandle` (`0x3B49B`) and completes the IRP, with no deletion and no `UsbhPdoRemoveCleanup` (which the surprise-removal handler beside it calls); `UsbhPdoPnp_StartDevice` compares that state with `0x67` (`0x1B165`) and `0x66` (`0x1B170`) and then calls `UsbhSyncResetDeviceInternal` (`0x1B1B5`) for the same PDO, treating the device as disconnected only when that fails (`Usb_Disconnected`, `0x1B1D4`). Image 258,560 bytes, SHA-256 `ac34d36d...58e9`, base 0x10000 | static (`cdb.exe -z` with Microsoft's public `usbhub.pdb`, `C8AAA35CAB46490FBA4B37ED793CC0022`; listing `out\post-release\issue5-ssflag\static\static-hub\dis-win7-x86.txt`, git-ignored, development host A; the two functions re-read 2026-10-04 for issue 9; nothing executed) | `docs/issues/09-me-controller-reenable-stopped-pdos.md` section 4.3; `src/hcd_pdo.c` (the dormant state, roadmap-hcd task 33.1) |
-| **Windows 98 SE and Windows ME disable a controller in Device Manager with `IRP_MN_QUERY_STOP_DEVICE` and then `IRP_MN_STOP_DEVICE` to each device PDO, the root hub and the controller, in that order, and no `IRP_MN_REMOVE_DEVICE`, and enable it by starting the controller, the root hub and the same device PDOs; a refused device-PDO START is followed by a STOP. When the restarted bus reports such a PDO missing and lists a new PDO under the same instance id, Windows 98 SE (a mouse and a stick) and ME (a stick only) REMOVE the stale PDO and start the new one, and ME with a mouse attached sends no further IRP to the bus's objects. Windows 2000 SP4's disable sends each device PDO a REMOVE and then the controller a REMOVE, never a STOP; XP SP3, XP x64, Vista and 7 deliver the controller's disable as a REMOVE too** | runtime (this driver's port-0xE9 trace, `qemu` flavour, QEMU, development host A, 2026-10-04: `out\phase28\me-reenable\r1\` to `r4\`, `out\phase28\v1b\me\debugcon-m1-2.log`, `out\phase28\primaries\r-98-gui2-debugcon.log`, `out\phase27\audio98\re98-debugcon.log` and `re2k-debugcon.log`, `out\phase28\v1\<guest>\debugcon-m1-1.log`, all git-ignored; PnP minor numbers from the Windows 2000 DDK's `wdm.h`; nothing disassembled - why ME stops is not read) | `docs/issues/09-me-controller-reenable-stopped-pdos.md` sections 3, 4 and 7; `src/hcd_pnp.c` (`StopPreserve`) |
-| **What a hub driver answers in a device PDO's `DEVICE_CAPABILITIES` `Address` and `UINumber`, and XP's `DeviceTextLocationInformation`**. Windows XP SP3 `usbhub.sys` 5.1.2600.5512 (59,520 B, SHA-256 `a99c4528...b300fe`): `USBH_PdoQueryCapabilities` (`0x1ABEE`) copies 0x40 bytes from the PDO extension's `+0x90` over the caller's structure, keeping its `Size` and `Version`; `USBH_PdoSetCapabilities` writes `Address` (`+0x98`) as `movzx ecx,word ptr [eax+0Ch]` / `mov [eax+98h],ecx` (`0x13F64`, `0x13F6F`), and the PDO extension's `+0x0C` word is the second argument of `USBH_CreateDevice` (`mov word ptr [esi+0Ch],ax` at `0x1B7E9`, after the 0x4B-dword zero fill at `0x1B7C0` and the `PORT` signature), the port number in that routine's interface; `UINumber` (`+0x9C`) is taken to stay 0, from the zero fill and the routines read: no `+9Ch]` operand in `.text`, `PAGE` or `INIT` addresses a device PDO extension (the one in `PAGE`, `0x1B5C5`, is a store into `USBH_BuildCompatibleIDs'` string buffer; the four references in `.text`, two stores, a `lea` and a compare, are the composite-reset extension's) - a search by operand, which a write through an adjusted pointer or a block copy other than the two named would escape. `USBH_PdoQueryDeviceText` (`0x1AC60`) passes through any type but 0 and 1 (`0x1AC7A`-`0x1AC89`) and answers both `DeviceTextDescription` and `DeviceTextLocationInformation` with the `iProduct` string, or the generic device string. Windows 7 SP1 x86 `usbhub.sys` 6.1.7601.17514 (the image of the row above): `UsbhPdoPnp_QueryCapabilities` (`0x1A0F2`) zeroes the structure, restores `Size` and `Version`, sets `UINumber` to -1 (`or dword ptr [esi+0Ch],0FFFFFFFFh`, `0x1A163`) and `Address` from a word of the PDO extension (`movzx eax,word ptr [edi+4D4h]` / `mov [esi+8],eax`, `0x1A15C`, `0x1A167`), whose writer was not traced | static (`kd.exe -z` from WDK 7.1 with Microsoft's public `usbhub.pdb`, `A743565664594F7592F40645D0B71F3A1` and `C8AAA35CAB46490FBA4B37ED793CC0022`, section 2, 2026-10-05, development host A; nothing executed. The commands: `tools\WinDDK71\Debuggers\kd.exe -z tools\winxpsp3-extracted\usbhub.sys -y tools\symbols -c "uf usbhub!USBH_PdoQueryCapabilities; uf usbhub!USBH_PdoSetCapabilities; uf usbhub!USBH_PdoQueryDeviceText; q"`; the same image with `-c "u usbhub+0x380 usbhub+0x78fc; q"` (`.text`, RVA `0x380` size `0x757C`) and `-c "u usbhub+0x7f80 usbhub+0xd080; u usbhub+0xd100 usbhub+0xda4e; q"` (`PAGE`, `INIT`; the ranges from `!dh -s usbhub`), each listing searched for `+9Ch]` and `+0Ch]`; and `kd.exe -z tools\win7-x86-extracted\usbhub.sys -y tools\symbols -c "uf usbhub!UsbhPdoPnp_QueryCapabilities; q"`) | design record 13 section 10.11, "Address"; `src/xhci_hub.c` `XhciHubPdoAddress`; `src/hcd_pdo.c` (the capabilities answer) |
-| **hidusbf's `Setup.exe` (2026-10-03 build, 576,016 B, SHA-256 `b8be2152...2aff185e`, `tools\hidusbf-20261003\SOURCE.txt`) takes a USB device's `SPDRP_ADDRESS` as the connection index on its parent hub**: the routine at `Setup+0x55B70` (offsets from the image as `kd -z` maps it) reads device registry property `0x1C` (`mov edx,1Ch` / `call Setup+0x552E0`, `+0x55BDA`); a nonzero value goes into the request as `ConnectionIndex` (`mov [eax],ebx`, `+0x55C36`) for `IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX` `0x220448` (`+0x55C4E`); when that succeeds it also sends `0x22045C` (`+0x55CF3`), whose flags 4 and 1 set the speed byte to 4 or 3, and when it fails it sends the plain `0x22040C` instead (`+0x55C7D`), whose success skips `0x22045C` (`+0x55C9F` to `+0x55D20`); a zero value calls `Setup+0x559C0` instead, which sends `IOCTL_USB_GET_NODE_INFORMATION` `0x220408` (`+0x55A25`) and walks ports 1 to `bNbrPorts` with `IOCTL_USB_GET_NODE_CONNECTION_DRIVERKEY_NAME` `0x220420` (`+0x55AAA`, `+0x55AF3`), comparing each name with the device's | static (`tools\WinDDK71\Debuggers\kd.exe -z tools\hidusbf-20261003\x\DRIVER\Setup.exe -c "u 0x65600 0x65e40; q"`, the range found by a byte search of the file for the four IOCTL codes at file offsets `0x54E26`, `0x54EAB`, `0x54EF4`, `0x5504F`, `0x5507E`, `0x550F4`; no symbols, 2026-10-05, development host A; nothing executed). The leg 2c outcome it explains is **runtime** (Setup's "Copy IDs" with no `BusSpeed` for a mouse behind a hub, design record 13 section 10.11) | design record 13 section 10.11, "Address"; `src/xhci_hub.c` `XhciHubPdoAddress` |
-| **No class driver of any target sends `IOCTL_INTERNAL_USB_CYCLE_PORT`, and `usbaudio` sends no port request at all (task 35-T.0)**: the bytes `1F 00 22 00` occur in no `hidusb.sys`, `usbstor.sys`, `usbaudio.sys` or `hidclass.sys` under `tools\*-extracted\` (98 SE, NUSB 3.3/3.6, 2000 SP4, XP SP3, XP x64, Vista SP2 x86/x64, 7 SP1 x86/x64); `07 00 22 00` (`RESET_PORT`) and `13 00 22 00` (`GET_PORT_STATUS`) occur once each in every `hidusb` and `usbstor` and in no `usbaudio` or `hidclass` | static (a PowerShell byte search of the files; nothing executed; a subagent's read, 2026-10-06, not re-read by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; design record 17 section 4.10; roadmap 35-T.0 / 35-V |
-| **`hidusb.sys` resets on a failed interrupt read by NTSTATUS alone, once per failed read, with no counter**: 98 SE 4.10.2222 read completion `0x10A5A` queues work item `0x10935` for any failure; 2000 SP4 5.00.2142.1 (`0x10FF0`), XP SP3 5.1.2600.5512 (`0x10A76`), XP x64 5.2.3790.1830 (`0x11C09`), Vista SP2 and 7 SP1 (`HumReadCompletion`) exclude `0xC0000120` and `0xC000009D`. The work item sends `GET_PORT_STATUS`, `ABORT_PIPE` and `RESET_PORT` (98 SE / 2000 only if the port is connected and not enabled; later only if connected), then `SYNC_RESET_PIPE_AND_CLEAR_STALL`, and completes the read with its error; XP SP3, Vista and 7 report `PNP_DEVICE_FAILED` after a `RESET_PORT` that returns `0xC000009C` | static (MSVC 6 `dumpbin` 6.00.8447 `/disasm` over `tools\win98se-extracted\class\`, `win2ksp4-extracted\class\`, `winxpsp3-extracted\class\hidusb.sys`; `cdb.exe -z` with the PDBs in `tools\symbols` over the Vista and 7 builds, raw `u` over XP x64's; nothing executed; a subagent's read, 2026-10-06, not re-read line by line by the coordinator) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; design record 17 section 4.10; roadmap 35-V |
-| **`hidclass.sys` re-reads a failed interrupt read after a backoff of 1 s growing by 1 s to 5 s, with no limit**: 98 SE 4.10.2222 (`KeSetTimer` `0x110D6`, cap `0x1122C`; on `0xC000009D` it re-reads at once, `0x110A7`), 2000 SP4 5.00.2195.6655 (`0x11769`; stops on `0xC000009D`, `0x11724`), XP SP3 5.1.2600.5512 (`0x120FF`, DPC `0x1238C`; no `0xC000009D` case) | static (MSVC 6 `dumpbin` 6.00.8447 `/disasm` over `tools\win98se-extracted\class\`, `win2ksp4-extracted\class\`, `winxpsp3-extracted\hid\hidclass.sys`; nothing executed; a subagent's read, 2026-10-06, not re-read by the coordinator; XP x64 and NT 6.x `hidclass.sys` not in `tools\`, not read) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; design record 17 section 4.10 |
-| **`usbstor.sys` clears a stall and resets the port for everything else, at most three times per episode (once on NUSB)**: `USBD_STATUS(urb) == 4` -> `SYNC_RESET_PIPE_AND_CLEAR_STALL` and the protocol continues (a CSW stall at most twice per command, XP SP3 `0x118D7`); any other failure or a command timeout -> `SRB_STATUS_BUS_RESET` / `0xC0000185` and the reset work item: up to 3 x (`GET_PORT_STATUS`, `RESET_PORT`) (2000 SP4 `0x11A73`, XP SP3 `0x10E14`, XP x64 `0x11BD8`, Vista x86 `0x12FE3`, Vista x64 `0x157E0`, 7 x86 `0x12DB2`, 7 x64 `0x15B77`), stopping on success or a disconnected port, and on final failure every later request fails with `0xC00000C0` (XP SP3 `0x10E32`, `0x11FF6`); NUSB 4.90.3000.1 sends one `RESET_PORT` (`0x11B46`) and no retry. No `ABORT_PIPE` | static (MSVC 6 `dumpbin` 6.00.8447 `/disasm` over `tools\nusb36-extracted\usbstor.sys`, `win2ksp4-extracted\class\`, `winxpsp3-extracted\class\usbstor.sys`; `cdb.exe -z` with the PDBs in `tools\symbols` over XP x64, Vista and 7 `USBSTOR.SYS`; nothing executed; a subagent's read, 2026-10-06, not re-read line by line by the coordinator; the x64 CSW limit not read) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; design record 17 section 4.10; roadmap 35-V |
-| **`usbaudio.sys` answers a failed isochronous or MIDI completion with `ABORT_PIPE` and `SYNC_RESET_PIPE_AND_CLEAR_STALL` before its next submission, and keeps streaming**: XP SP3 5.1.2600.5512 completion `0x151E2` sets the pin flag (`0x1520C`), `0x1905A` aborts and resets the pipe; 98 SE 4.10.2222 flag [pin+0x80] (`0x13FA1`) -> `0x12C89` / `0x13EBB`; 2000 SP4 5.00.2150.1 the same test before `0x15380` / `0x17480`; no counter | static (MSVC 6 `dumpbin` 6.00.8447 `/disasm` over `tools\winxpsp3-extracted\class\`, `win98se-extracted\class\`, `win2ksp4-extracted\class\usbaudio.sys`; nothing executed; a subagent's read, 2026-10-06, not re-read by the coordinator; XP x64, Vista and 7 not read beyond the byte census) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; design record 17 section 4.10; roadmap 35-V |
-| **On Windows 7 SP1 x86 no class driver's remove path sends a port request**: `HumRemoveDevice` sends `ABORT_PIPE` (`HumAbortPendingRequests`, `0x165F7`), `HumStopDevice` aborts (`0x16554`) and sends the unconfigure (`0x16596`); `USBSTOR_FdoRemoveDevice` sends no URB and `USBSTOR_FdoStopDevice` the unconfigure (`USBSTOR_UnConfigure`, `0x1CD30`) | static (`cdb.exe -z` with the PDBs in `tools\symbols` over `tools\win7-x86-extracted\class\hidusb.sys` and `USBSTOR.SYS`; nothing executed; a subagent's read, 2026-10-06, not re-read by the coordinator; the remove paths of earlier targets not read) | `docs/contributing/design/13-superspeed-hcd.md` section 6.7; roadmap 35-V |
-| **`HAL.dll!HalGetBusData` and `ntoskrnl.exe`'s `READ_REGISTER_USHORT` and `WRITE_REGISTER_USHORT` are exported on every target, and named in Windows 98 SE's `ntkern.vxd`** (task 36.3's routing quirk reads 00:14.0 and 00:1F.0 through the first, from offset 0, and reads and writes D20IR through the other two): `HalGetBusData` is in the export table of each of Windows 2000 SP4's eight HALs (`hal`, `halacpi`, `halmacpi`, `halaacpi`, `halapic`, `halmps`, `halsp`, `halborg`), of Vista's and 7's x86 `hal.dll` and of XP x64's `hal.dll`, and is listed in WDK 7.1's amd64 `hal.lib` for wnet, wlh and win7; Windows 2000 SP4's, Vista's and 7's x86 `ntoskrnl.exe` export both USHORT accessors. In 98 SE's `ntkern.vxd` the name `HalGetBusData` sits at file offset `0x2C8C3`, inside the alphabetical `hal.dll` name block (`ExAcquireFastMutex` to `WRITE_PORT_USHORT`, `KfAcquireSpinLock` at `0x2C9B9`), and `READ_REGISTER_USHORT` (`0x2BF60`) and `WRITE_REGISTER_USHORT` (`0x2C3A4`) in its `ntoskrnl` block. That a name is in `ntkern.vxd` says the import resolves, not what the call returns there: whether 98 SE's `HalGetBusData` answers with real configuration data has not been read. `HalGetBusDataByOffset` was not found in `ntkern.vxd` and is not used | static (MSVC 6 `dumpbin` 6.00.8447 `/exports` over the Windows 2000 SP4 HALs and `tools\vista-x86-extracted\hal.dll` and `tools\win7-x86-extracted\hal.dll`; WDK 7.1 `link /dump /exports` over XP x64's `hal.dll` and the three amd64 `hal.lib`; a byte search of `tools\win98se-extracted` `ntkern.vxd`; nothing executed; 2026-10-09) | `src/hcd_ctl.c` `hcdPirqSlot`, `hcdPirqRead16`, `hcdPirqWrite16`; `xhci98-imports.allow` and `xhci98-imports-amd64.allow` |
-| **On every NT target HAL (2000 SP4's eight, XP SP3's seven, XP x64's, Vista SP2's and 7 SP1's x86 and x64), `IoMapTransfer` with a NULL `MapRegisterBase` returns the MDL page's physical address, extends the run over contiguous frames within one 4 GB region, reads no adapter state and ignores the request's register count; `IoFlushAdapterBuffers` and `IoFreeMapRegisters` do nothing with a NULL base. `HalGetAdapter` gives a 32-bit scatter/gather PCI master no map registers (so a NULL base) except under 2000's PAE kernel and, on Vista, 7 and every amd64 HAL, when `HalpPhysicalMemoryMayAppearAbove4GB` is set; XP SP3's HALs never test either. With DMA verification on, the XP, Vista and 7 verifiers never hand an execution routine a NULL base (`0xDEADF00D` or a map register file); 2000 SP4's kernel has no DMA verification** | static (`kd.exe -z` from WDK 7.1 with public PDBs, export names alone for the 2000 SP4 HALs; files, versions and SHA-256 in the cited section; development host A, 2026-10-10); the XP x64 grant of 524,289 registers is also **runtime** (this driver's counter, 36.21's legs) | `docs/contributing/design/13-superspeed-hcd.md` section 11.6.1 |
-| **`IoConnectInterruptEx` and `IoDisconnectInterruptEx` are exported by the Windows Vista SP2 x86 and Windows 7 SP1 x86 kernels, and so is every other `ntoskrnl.exe` pair the x86 MSI helper imports** (`xhcimsi.sys`, design record 18): the export tables of `ntoskrnl.exe` 6.0.6002.18005 (3,549,672 bytes, `45C9CB06...F7FC`) and 6.1.7601.17514 (3,911,040 bytes, `D74E389D...6CF8`) from `tools\vista-x86-extracted` and `tools\win7-x86-extracted`, with their `hal.dll`s, each authenticated by `scripts/import-gate/nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected` (renamed `hlprx86-*` by task 38.3). The PAE kernels (`ntkrnlpa.exe`) are not staged and not read | static (`dumpbin /exports` by `scripts/import-gate/check-imports.ps1 -GateProfile nt6x86`; nothing executed) | `scripts/import-gate/xhcimsi-imports.allow` (`xhcihlpr-imports.allow` since task 38.3); design record 18 section 8.2 |
-| **Every pair `xhcihlpr.sys` imports is exported by every authenticated kernel and HAL image of Windows 2000 SP4, Windows XP SP3 x86, Windows Vista SP2 x86 and Windows 7 SP1 x86 - every image of 2000 and XP, the uniprocessor non-PAE kernel and `hal.dll` of Vista and 7**, in all three flavours (`ExSetTimerResolution`, `MmGetSystemRoutineAddress`, `IofCompleteRequest`, `RtlInitUnicodeString`, `IoIsWdmVersionAvailable`, the `/GS` pair `KeTickCount` and `KeBugCheckEx`, the qemu flavour's `RtlQueryRegistryValues`, the checked flavours' `RtlAssert`, `memcpy` and `memset`, and the 28 pairs the `wxp` `wdmsec.lib` brings, `ExFreePoolWithTag` among them): the ten Windows 2000 SP4 images of `win2k-baselines.expected`, the eleven XP SP3 images of `winxp-x86-baselines.expected` (four kernels, seven HALs), and the Vista and 7 `ntoskrnl.exe` and `hal.dll` of `hlprx86-vista-baselines.expected` and `hlprx86-win7-baselines.expected`, each authenticated. The Vista and 7 PAE kernels are still not staged | static (`link /dump /exports` by `scripts/import-gate/check-imports.ps1 -GateProfile hlprx86` over the first `WXP` links, 2026-10-14; nothing executed) | `scripts/import-gate/xhcihlpr-imports.allow`; design record 18 sections 15.10 and 15.11 |
-| **What Windows Vista and 7's PCI driver offers in `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` for an MSI-capable xHCI controller with `MSISupported` 1** - the requirements list's configurations and the order, `Option` and `Flags` of their interrupt descriptors (design record 18 section 11, R1 and R2) | runtime (this driver's own `qemu`-flavour `M86` trace of the list it received, on QEMU's `qemu-xhci`, validated by `scripts/vm-matrix/check-msi86-trace.ps1`; the readings are recorded in design record 18 section 11 and the phase's run record when taken) | design record 18 sections 4.2 and 11 |
-| **How usbhub answers `0x220410` (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`)** (task 36.45; image base 0x10000, addresses below are RVAs). XP SP3 `usbhub.sys` 5.1.2600.5512 (59,520 B, SHA-256 `a99c4528...b300fe`), `USBH_IoctlGetDescriptorForPDO` at `0xA22C`: `cmp OutputBufferLength,0Ch` (`0xA23F`) and `wLength > OutLen-12` (`0xA25E`) give `0xC0000023`, the input length is never read; port 0, past `bNbrPorts` or with no device object `0xC000000D` (preset `0xA284`, test `0xA2A4`); `wValue` 0200h with `wLength` 9 is copied from the port's cache with `Information` 0x15 (`0xA2AF`-`0xA2D0`); otherwise a URB of function 0x0B (`GET_DESCRIPTOR_FROM_DEVICE`) with `TransferBufferLength` = `wLength`, the caller's dwords at +4 and +8 copied raw to URB +0x48 and +0x4C (`0xA31D`, `0xA323`: `bmRequest`/`bRequest` into the reserved field, `wValue`, `wIndex` as the language id), sent to the child PDO by `USBH_SyncSubmitUrb` (`0x8D20`) with a 5 s `KeSetTimer` (`0x8DC5`) whose DPC cancels the IRP; the status is the bus's, and `Information` = `TransferBufferLength` + 12 whatever it is (`0xA338`). 2000 SP4 `USBHUB20.SYS` 5.00.2195.6655 (49,776 B, `bb6a9f1a...cd7581`) is the same handler instruction for instruction at `0x8C34` (no PDB). 98 SE `usbhub.sys` 4.10.2222 (35,680 B, `e898b75f...afc31`) the same algorithm at `0x7017`, except a port out of range completes with status 0 (`0x70A3`). 7 SP1 x86 `usbhub.sys` 6.1.7601.17514 (258,560 B, `ac34d36d...9b58e9`), `UsbhIoctlGetDescriptorFromNodeConnection` `0x25858`: validation failures become `0xC000000E` (`0x2593D`), `bRequest` 6 and `bmRequest` 80h are written into the caller's buffer (`0x25951`, `0x25955`), no PDO on the port completes success with nothing returned; `UsbhIoctlGetDescriptorForPDO` (`0x245DD`) answers from the cache (device descriptor, configuration descriptor) only while the PDO holds no device handle, else `0xC0000001`; with a handle every request goes to the device (`UsbhSyncSendCommandToDevice`, `0x73B4`, URB function 0x32, 2000 ms), `Information` = 12 + bytes received on success only (`0x2599C`). No path checks or wakes a suspended child | static (`kd -z` `uf` with the public PDBs for XP SP3 and 7 x86, `dumpbin /disasm` for 2000 SP4 and 98 SE; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 8.11; `src/hcd_door.c` `hcdDoorDescriptor` |
-| **Windows 7 SP1 `usbaudio.sys` gives every isochronous URB of an asynchronous Type I stream an explicit `StartFrame`, and resets the feedback pipe before each feedback read** (task 36.57). x86 build of 80,768 B (SHA-256 `72603e0a...b933`): `USBType1BuildIsochUrbRequest` (`0x1216E`) tests `[ctx+48h]` (`0x12255`) and stores `[ctx+228h]` to the URB's `StartFrame` (`+0x48`, `0x1225B`-`0x12261`), else sets `TransferFlags` (`+0x14`) to 4 (`0x12266`); the counter is advanced per packet (`0x122E3`). `USBType1AsyncEndpointStartPolling` (`0x11D46`) sets it to `USBHwGetCurrentFrame` + 2 (`0x11D72`-`0x11D76`) and the feedback frame to that frame + the refresh period + 2 (`0x11D81`-`0x11D90`). `USBType1AsyncEndpointPoll` (`0x11B86`) sends URB function `0x1E` on the feedback pipe (`push 1Eh` at `0x11BDA`, call at `0x11BE5`), then a `0x6C`-byte URB: function `0x0A`, `TransferFlags` 1 (IN, no ASAP), `StartFrame` from `[ctx+220h]` (`0x11C2C`), one packet at offset 0, `TransferBufferLength` 3 (`0x11C2F`); the completion advances that frame by the refresh period (`0x11B46`). x64 build of 109,696 B (`de1cddee...bb15`): the same test at `0x12309`, `StartFrame` (`+0x80`) at `0x12317`, `TransferFlags` (`+0x20`) = 4 at `0x1231F`; the poll's `USBHwAbortOrResetPipe` with `1Eh` at `0x11B74`-`0x11B7D`, and the feedback URB's `+0x20` = 1, `+0x84` = 1 and `+0x24` = 3 at `0x11BAB`-`0x11BE8` | static (MSVC 6 `dumpbin` 6.00.8447 `/disasm` over `tools\win7-x86-extracted\class\USBAUDIO.sys`, function names from the public symbols of `tools\symbols\USBAudio.pdb\1C621A243F0345D3923D2723A61C3B0A1`; WDK 7.1 `cdb.exe -z` `uf` over `tools\win7-x64-extracted\class\USBAUDIO.sys` with `tools\symbols`; addresses are image VAs at base `0x10000`; nothing executed; 2026-10-11) | `docs/contributing/design/13-superspeed-hcd.md` section 6.10 |
-| **The six `USB\SilentClasses` entries of SweetLow's `SilentClasses.reg`** (task 38.2): a `REGEDIT4` file whose one key is `[HKEY_LOCAL_MACHINE\System\CurrentControlSet\Services\USB\SilentClasses]` and whose six values are `"0"=hex:80,09,00,00`, `"1"=hex:43,03,01,01`, `"2"=hex:43,03,01,02`, `"3"=hex:c3,08,06,50`, `"4"=hex:83,03,01,01` and `"5"=hex:83,03,01,02`. The file is `tools\sweetlow-extracted\SilentClasses.reg`, extracted from `tools\usb20_win9x.zip` (the package above), 214 bytes, SHA-256 `4DB099B600F0E45C82AF8F9A9E56745C6245093FCCDE574220FD610B12B523E3`. What each control byte means is the owner's statement of the rule (roadmap-hcd task 38.2, 2026-10-12, from SweetLow's information), not a reading of this file or of any binary | static (a text read of the `.reg` file, `Get-Content` and `Get-FileHash`, 2026-10-13; nothing executed, nothing merged; not tracked, and `tools\silent\SILENT.REG` is written by this project from the six values) | `docs/contributing/design/13-superspeed-hcd.md` section 6.11.8 |
-| **Windows 98 SE's `RtlQueryRegistryValues` (NTKERN) with a query-table entry whose `Name` is NULL calls the routine once for every value of the key**: with `XhciSilentInstall` 1 and the six-value `Services\USB\SilentClasses` list merged, this driver's notes read `silent.entries=00000006`, `silent.ignored=00000000`, `silent.dropped=00000000`, `silent.status=00000000` after a controller disable and enable (design record 13 section 6.11, O1) | runtime (this driver's `silent.*` notes in an `XHCISNAP -o` dump, release flavour at verbosity 2, Windows 98 SE under NUSB 3.3 in QEMU, development host A, 2026-10-13; dump `out\p38-2\legs\w98\Z1.txt`, git-ignored; nothing disassembled); the same on Windows ME (`silent.entries=00000006`, dump `out\p38-2\legs\me\A3.txt`; with three more values merged, `A4.txt` reads `silent.entries=00000007`, `silent.ignored=00000002`, all nine seen) | `docs/contributing/design/13-superspeed-hcd.md` section 6.11, O1; `src/hcd_ctl.c` (`hcdReadSilent`) |
-| **Windows XP SP3's `usbccgp.sys` 5.1.2600.5585 (32,384 B, SHA-256 `4C1B3E8F3F658E356A955108FF84FB5C95244CB2A9D323AA0DFAEF92927C66C5`) selects the whole configuration down the composite devnode's own stack before it creates any function PDO**: `StartParentFdo` (`0x150F0`) passes the `START` down (`CallDriverSync`, `+0x70`), then on a first start calls `GetDeviceDescriptor` (`+0xAD`), `GetConfigDescriptor` (`+0xC4`; `TryGetConfigDescriptor` submits two URBs, `+0x57`, `+0x10F`), `GetParentFdoCapabilities`, `GetInterfaceList`, `ParentSelectConfiguration` (`+0x12B`), and only then `GetNumberFunctions` and `CreateStaticFunctionPDOs` (`+0x17F`); with a flag byte set (`+0x72`) it calls `ParentSelectConfiguration` on the stored descriptor and interface list (`+0x8C`) and returns. `SubmitUrb` (`0x107A0`) calls `IoAllocateIrp`, writes major function `0x0F` and code `0x220003`, and calls `CallNextDriverSync`. `ParentCloseConfiguration` (`0x10A90`) and the function PDO's `UrbFunctionSelectConfiguration` (`0x12E90`, `+0x201`) each submit a URB; their callers and conditions were not traced | static (`tools\WinDDK71\Debuggers\cdb.exe -z tools\symbols\usbccgp.sys\480DE37F7e80\USBCCGP.SYS` with Microsoft's public symbols from `tools\symbols`, `uf /c` on the six routines named and `u` over `StartParentFdo+0x70` to `+0x130` and `SubmitUrb`; 2026-10-14, development host A; nothing executed). ReactOS's `usbccgp` (interface documentation, `0298e10d`) shows the same order | `docs/contributing/design/13-superspeed-hcd.md` section 10.14.1 |
-| **On Windows 98 SE and Windows ME, `cfgmgr32.dll`'s `CM_Uninstall_DevNode` is a stub, and `CM_Locate_DevNodeA` honours `CM_LOCATE_DEVNODE_PHANTOM`** (task 38.8, the route (a) of design record 13's D8). 98 SE's `CFGMGR32.DLL` (45,056 B, dated 04-23-99, SHA-256 `269bbe3e...7aea`): `CM_Uninstall_DevNode` at RVA `0x302F` returns `CR_INVALID_FLAG` (4) for non-zero flags, `CR_INVALID_DEVNODE` (5) for devnode 0 and `CR_SUCCESS` otherwise, and calls nothing; `CM_Locate_DevNodeA` accepts flags 0 or 1 only and, on `CR_NO_SUCH_DEVNODE` (0x0D) from CONFIGMG with flag 1 set, opens `ENUM\<id>` under `HKLM`. ME's `CFGMGR32.DLL` (40,960 B, dated 06-08-00, SHA-256 `05a549a3521d5f060ea85ef0d40919c379b3e62130d89e4579ceae9f37a42982`): the same stub at RVA `0x2C82` (`CM_Uninstall_DevNode_Ex` answers `CR_CALL_NOT_IMPLEMENTED` for a remote machine, else the stub), and the same `CM_Locate_DevNodeA` at RVA `0x3E01`, which goes on to `RegCreateKeyEx` and CONFIGMG for a registry-only entry | static (each guest's file copied out over its serial port, the export table listed and the bytes at the two exports decoded by hand, no disassembler; 2026-10-14, development host A; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 10.13.8 |
-| **The Windows 98 / ME configuration manager's ring-0 interface values in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1; safe eject, roadmap-usb4 task 39-A.8): CONFIGMG's VxD id `0x0033` (`VMM.H` line 175, `CONFIGMG_DEVICE_ID`), the dynalink interrupt `20h` (`VMM.INC` line 3355) and its jump bit `8000h` (`VMM.H` line 4919, `DL_Jmp_Mask`); twenty service numbers - `Get_Version` 0, `Locate_DevNode` 2, `Get_Parent` 3, `Get_Child` 4, `Get_Sibling` 5, `Get_Device_ID_Size` 6, `Get_Device_ID` 7, `Query_Remove_SubTree` 12, `Remove_SubTree` 13, `Register_Device_Driver` 14, `Lock` 22, `Unlock` 23, `Reenumerate_DevNode` 51, `Setup_DevNode` 52, `Get_DevNode_Status` 54, `Disable_DevNode` 64, `Enable_DevNode` 65, `Broadcast_Device_Change_Message` 88, `Change_DevNode_Status` 91, `Set_DevNode_Problem` 122 - each its entry's ordinal in `CONFIGMG.H`'s service table (lines 532-663: 124 entries numbered from 0 by `VMM.H` lines 353-358, with no conditional inside the table and two three-line comments at 624-626 and 645-647 that are not entries; the header's own `DEBUG_SERVICE_NAMES` array, from line 671, lists the same 124 in the same order, but for one spelling at ordinal 109, `_CONFIGMG_Register_For_Idle_Detection` at line 783 for the table's `_CONFIGMG_Register_DevNode_For_Idle_Detection` at line 648); and the `CR_`, `DN_`, `CM_PROB_` and call-flag values the file carries, among them `DN_REMOVABLE` `0x4000`, which `DN_CHANGEABLE_FLAGS` `0x79BB62E0` includes, and `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` `0x2`. Each value is cited to its line in the file | static (a text read of the three headers of the Windows 98 Second Edition DDK, extracted with 7-Zip from `tools\win98ddk\win98se_ddk.exe` into `tools\win98ddk-extracted\`, SHA-256s in `docs/references/README.md`; nothing installed or executed; 2026-10-15; not tracked). The numbers, flag values and result codes alone were taken: no declaration, macro body or comment of the headers is reproduced, and the macro names in the file are this project's own. Every number `usb4-emu`'s re-enumeration experiment used (`tools/reenum-test/reenum.c` at `main` `a68bc74`: the VxD id and eleven services) agrees with these; that experiment's run-time results, recorded in design record 21 section 6.1, are `usb4-emu`'s evidence, not this driver's | `src/cm/cm_cfgmg.h`; design record 21 section 6.1 |
-| **The configuration manager's logical-configuration services in `src/cm/cm_cfgmg.h`** (design record 28, roadmap-usb4 task 42-A.15), counted as the row above counts them: `Add_Empty_Log_Conf` 24 (line 557), `Get_First_Log_Conf` 26 (559), `Get_Next_Log_Conf` 27 (560), `Add_Res_Des` 28 (561), `Get_Next_Res_Des` 31 (564), `Get_Res_Des_Data_Size` 33 (566), `Get_Res_Des_Data` 34 (567), `Read_Registry_Value` 62 (595), `Reprocess_DevNode` 92 (628, the "4.0 OPK2" group) and `Get_Set_Log_Conf_Priority` 106 (642, the same group), with their C signatures from `MAKE_CM_HEADER` (lines 2827 to 2912); the values `BASIC_LOG_CONF` 0 (line 2212), `FORCED_LOG_CONF` 4 (2216), `PRIORITY_EQUAL_LAST` 0 (2235), `LCPRI_SUBOPTIMAL` `0x5000` (445), `LCPRI_DISABLED` `0xFFFF` (453), `CM_GET_LOG_CONF_PRIORITY` 0 and `CM_SET_LOG_CONF_PRIORITY` 1 (1342, 1343), `CM_REGISTRY_SOFTWARE` 1 (1227), `CM_REPROCESS_DEVNODE_ASYNCHRONOUS` 0 (1287), `ResType_All` 0, `ResType_Mem` 1 and `ResType_IRQ` 4 (lines 92 to 97), `CR_NO_MORE_LOG_CONF` `0x0E`, `CR_NO_MORE_RES_DES` `0x0F` and `CR_NO_SUCH_VALUE` `0x25` (951, 952, 974), and the problems `0x08`, `0x0C`, `0x10`, `0x12`, `0x1B`, `0x1C`, `0x1D` (lines 1055 to 1076); `REG_SZ` 1 (`VMM.H` line 2231). The VMM's registry services the Stor98 locator and this record use, which no row carried: VMM id 1, `_RegOpenKey` `0x148` (`VMM.H` line 2216, the table numbered on from there one a line), `_RegCloseKey` `0x149` (2217), `_RegCreateKey` `0x14A`, `_RegDeleteKey` `0x14B`, `_RegQueryValueEx` `0x151` (2225), `_RegSetValueEx` `0x152` and `_RegCreateDynKey` `0x176`, their cdecl signatures from `VXDWRAPS.H` (lines 430 and 439 for the two this task added); Stor98's INF lines `PCI\CC_010802`, `HKR,,DevLoader,,*IOS` and `HKR,,PortDriver,,stor98.mpd` (`inf/stor98-x86.inf`, read at Stor98 `4253b58`) as the ownership evidence of record 28 section 4 rule 4. For the tunnel id on 98 SE and ME (design record 31 section 5, roadmap-usb4 task 44.3), counted the same way: `Add_ID` 85 (line 618, between `Call_Enumerator_Function` 84 and `Find_Range` 86, three entries before `Broadcast_Device_Change_Message` 88 at line 621), its C signature from `MAKE_CM_HEADER` (line 2888: a devnode, a string, the flags), `CM_ADD_ID_HARDWARE` 0 and `CM_ADD_ID_COMPATIBLE` 1 (lines 1252 and 1253; `CM_ADD_ID_BITS` 1, line 1254, read and not used), `CM_REGISTRY_HARDWARE` 0 (line 1226), `CR_WRONG_TYPE` `0x26` (line 975) and `REG_BINARY` 3 (`VMM.H` line 2232) | static (a text read of the same extracted DDK headers and of Stor98's INF; nothing installed or executed; 2026-10-18 and 2026-10-19, and `CONFIGMG.H` again on 2026-10-25 for the record 31 values; not tracked). Numbers and argument orders alone; no declaration, macro body or comment reproduced | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`, `src/cm/cm_nvlinkos.c`, `src/cm/cm_cfgwk.c`; design records 28 and 31 |
-| **The Windows 98 SE setup engine's device-installer values and ordinals in `xhciinst/di/`** (roadmap-usb4 task 42-A.1, design record 27 sections 2, 5 and 9). From the DDK's `inc16\setupx.h`: the `RETERR` values of its five error enumerations, each counting up from its base (`_ERR_IP` from `IP_ERROR` 100 + 1, sixteen; the text processor's from `TP_ERROR` 200 + 1, six; `_ERR_VCP` from `VCP_ERROR` 300 + 1, twenty-five; `_ERR_GENERIC` from `GEN_ERROR` 400 + 1, eighteen; `_ERR_DEVICE_INSTALL` from `DI_ERROR` 500, twenty-eight, in which `ERR_DI_BAD_UNREMOVEDEVICE_PARAMS` is 520, after `ERR_DI_BAD_PATH`, not where its documentation block lists it), with their names, which the helper writes into its result file; `DI_NEEDRESTART` `0x80`, `DI_NEEDREBOOT` `0x100`, `DI_ENUMSINGLEINF` `0x10000`, `DI_CLASSINSTALLPARAMS` `0x100000`, `DI_QUIETINSTALL` `0x800000`, `DNF_OLDDRIVER` `0x2`, `DNF_CURRENT_DRIVER` `0x100`. From the DDK's `setupx.lib`: the ordinals of `SETUPX.DLL` the helper imports, among them `DIGETCLASSDEVSEX` 406, `DiGetINFClass` 351, `DICREATEDEVICEINFO` 303, `DIBUILDCOMPATDRVLIST` 300, `DICALLCLASSINSTALLER` 308, `DIDESTROYDEVICEINFOLIST` 305, `CTLGETLDDPATH` 38 and `CTLSETLDDPATH` 508 (`xhciinst/di/xhcidi-imports.allow` has every row) | static (a text read of the header and a read of the library's IMPDEF records by `xhciinst/di/check-imports.ps1`, which holds every allowlist row to them at each build, and by Open Watcom's `wlib -l`; the DDK as in the CONFIGMG row above, its member hashes in `docs/references/README.md`; nothing executed; 2026-10-18; not tracked). Names and numbers alone are taken: the structure declarations the helper uses are the header's, compiled against and not reproduced, and `test/test_di.c` re-reads the five enumerations and the flags from the header wherever `tools\win98ddk-extracted\` holds it | `xhciinst/di/di_core.c`, `di_core.h`, `xhcidi-imports.allow`; design record 27 |
-| **PCI.VXD's configuration-space services in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1.1, the 9x bus numbering): PCI.VXD's VxD id `0x0043` (`VMM.H` line 197, `PCI_DEVICE_ID`, which `PCI.H` line 67 also names `ResType_PCI_Bus_Number`), and the service numbers `_PCI_Read_Config` 1 and `_PCI_Write_Config` 2, the second and third entries of `PCI.H`'s service table (line 56 on: four entries, numbered from 0 by `VMM.H` lines 353-358); their C signatures, `(BYTE bus, BYTE devfunc, BYTE offset)` returning the dword and `(BYTE bus, BYTE devfunc, BYTE offset, DWORD value)`, both `_cdecl`, from `VXDWRAPS.H` lines 313-314 | static (a text read of `PCI.H`, 8,081 bytes, SHA-256 `0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9`, and `VXDWRAPS.H`, 60,450 bytes, SHA-256 `d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884`, of the same extracted DDK; nothing installed or executed; 2026-10-16; not tracked). Numbers and the argument order alone; no declaration or macro body is reproduced. The run-time guard and the emulator and P14s readings of record 21 section 6.1.1 are what confirm the numbers in use | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`; design record 21 section 6.1.1 |
-| **`usb4-emu/docs/ICM-PROTOCOL.md`, the Thunderbolt 3 client's clean-room contract (design record 21)**: `usb4-emu` `main` `a68bc74`, the same text as at `eba0cf1` (git blob `976cbbe2d4088eb86711463b3f0df3fa2d7fc414`, SHA-256 `43ee04e4326d84d6ea33a17f1b70a3e3b874221c937d3666a31e2b17768d83f8`). The file carries no licence line; its repository's `LICENSE` is MIT. It says it was written from the P14s Gen 1 captures and from a reading of Linux's client behaviour, that no client code, structure or header text is reproduced, and that its field names are its own. It tags each statement [obs] (seen in a capture, citation given) or [inf] (what the Linux client expects, not captured). This project cites it by section and keeps the tag: in `src\cm\` an [inf] fact is a hypothesis until a capture, a leg here, or Linux's `icm.c` itself (section 3, the Thunderbolt mirrors) settles it. The captures, all under `usb4-emu/tests/captures/p14s-gen1/` and named by run id: `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`.tar.gz`, SHA-256 `0638f9b857e7cf6b7b11186aed4bc140d71c622aa080d0bad88895e190bd81c2`), `p14s-linux-20261014-133751-assistON_prebootON` (`5544975d2056f342d479b378406fa785e89a348c1a3629046ea53bd617940c99`), `p14s-win11-20261014-135249-assistOff_prebootOff` (`.zip`, `89171b604592f6f4f2a242f3ad4f903e016870864116df8831d6784e39e658e0`) and the Windows 98 MS-DOS-mode matrix `win98/` (`OFF_OFF`, `OFF_OFF_N`, `OFF_ON`, `OFF_ON_N`, `ON_OFF`, `ON_OFF_N`, `ON_ON`, `ON_ON_NO`) | static (a document read, 2026-10-15; nothing executed; the captures behind its [obs] were not re-read here) | design record 21 section 9 and every section citing `ICM-PROTOCOL` |
-| **`ICM-PROTOCOL` sections 1 and 2: NHI and switch identity, PCI topology, and the NHI's BAR0** - ids, class, BARs, capabilities, the switch's ports and buses (section 1); register values with the firmware running, the firmware status register, the NHI mailbox, ring 0, interrupts, host reset and starting stopped firmware (sections 2.1-2.7) | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`: `P:` (lspci and raw config), `M:` (BAR0 dumps per step) and `T:` (trace). The ring layout is the generic one of USB4 2.0 section 12.6 (`docs/references/README.md`) | design record 21 sections 2, 4.1-4.3, 6.3 |
-| **`ICM-PROTOCOL` sections 0 (byte order), 3 and 4.1-4.8: ICM framing on ring 0 and the Alpine Ridge message set** - the wire byte order, the ICM header word, command and event codes, driver ready, get route, approve, device connected and disconnected, boot ACL, errors | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`, `T:` lines. The wire byte order (section 0) is [inf] there | design record 21 sections 5.1-5.5 |
-| **`ICM-PROTOCOL` section 4.9: how Titan Ridge differs from Alpine Ridge** - driver-ready layout, device addressing by route string, no connection key, the approve and disconnect shapes | static (a document read). **Every row is [inf]**: no Titan Ridge capture exists. The best-effort Titan Ridge message-set row of decision D9 (owner, 2026-10-15) is built from it, and is untested | design record 21 sections 1.4 and 11 (D9) |
-| **`ICM-PROTOCOL` sections 5-7: the config-space traffic the client generates, the sequences, and security level `user`** - host and device router reads, the DMA port, the EEPROM protocol, the read order after a device-connected event, bind, rebind, unplug, plug and approve, runtime suspend and resume, unbind | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`T:`, `D:`, `S<n>:`); section 7's pre-boot statement rests on section 12.1's sources (the Windows 98 matrix and run `p14s-linux-20261014-133751-assistON_prebootON`). Section 6.1's bind order is inferred there | design record 21 sections 5.1, 5.3-5.6 |
-| **`ICM-PROTOCOL` sections 10 and 11: Windows 11 with Intel's driver, and the platform ACPI** - driver binding (the INF's `CC_0880` match), resources (MSI-X, 16 messages), driver state and logs, the root port `RP05` (00:1c.4) `_DSD` properties, force power and `_OSC` | static (a document read). Its [obs] rest on run `p14s-win11-20261014-135249-assistOff_prebootOff` (`W:`); the ACPI tables are its `W:acpi/reg-*`, which that document says match the Linux run's, and section 11.3's `_OSC` reading also cites the dmesg of both Linux runs | design record 21 sections 1.3, 3.3, 10.4 |
-| **`ICM-PROTOCOL` section 12: pre-boot support and BIOS Assist** - with pre-boot on, the firmware tunnels the boot-ACL dock before any OS and the BIOS enumerates it; with BIOS Assist on, pre-boot on and nothing attached at power-on (`ON_ON_NO`), the controller is down and the root port's link is down; whether Assist off does the same with nothing attached is open there (no such capture) | static (a document read). Its [obs] rest on the Windows 98 MS-DOS-mode matrix (`P98:`, each folder's `PCIDUMP.TXT`) and run `p14s-linux-20261014-133751-assistON_prebootON` | design record 21 sections 2, 6.5, 10.2, 10.4 |
-| **Linux `drivers/thunderbolt`: NHI and bridge device ids, and which connection manager each one gets** - `nhi.h`'s `PCI_DEVICE_ID_INTEL_*` constants, `pci.c`'s `nhi_ids[]`, and `icm.c`'s `icm_probe` choice of the Falcon, Alpine and Titan Ridge and Ice Lake message sets by NHI id; FreeBSD `nhi_reg.h`'s ids as a second reading | static (a source read of the pinned mirror, section 3's Thunderbolt paragraph and `external/README.md`; nothing executed). Each id is cited by file and symbol where it is used; no table is copied | design record 21 sections 1.4 and 3.3, and the INFs, as each lands |
-| **Linux `drivers/thunderbolt`: the ICM message codes and layouts per generation** - `tb_msgs.h`'s `enum icm_pkg_code` and its `icm_fr_`, `icm_ar_`, `icm_tr_` and `icm_icl_` request, response and event layouts, and `icm.c`'s per-generation `tb_cm_ops` (`icm_fr_ops`, `icm_ar_ops`, `icm_tr_ops`, `icm_icl_ops`) for the order of operations | static (a source read of the pinned mirror; nothing executed). Word and bit layouts are restated in this project's own names, cited by file and structure; no structure declaration or function body is copied | design record 21 section 5 and `src\cm\`, as each lands |
-| **Linux and FreeBSD: NHI register offsets and fields, and control-packet framing** - Linux `nhi_regs.h`, `tb_regs.h` and `ctl.c` (the frame, `tb_crc`); FreeBSD `nhi_reg.h` and `tb_reg.h` | static (a source read of the pinned mirrors; nothing executed). These are cross-readings of USB4 2.0 section 12 and `usb4cm`'s `u4regs.h` (section 2a), each offset cited by file and symbol | `src\cm\tbt_regs.h` and design record 21 section 4, as each lands |
-| **Linux `drivers/thunderbolt`: controller quirks** - `quirks.c`'s `tb_quirks[]` and the generation-specific handling in `icm.c` and `nhi.c` | static (a source read of the pinned mirror; nothing executed). A quirk is taken as a description, the ids and the register effect, cited by file and symbol, and written fresh; no quirk code is copied (section 3's Thunderbolt paragraph) | design record 21 and `src\cm\`, as each lands |
-| **The PCI ID Repository: the Thunderbolt NHI, switch-port and tunnel root-port ids and their listed names** (design record 21 section 3.3, decision D9) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids> (the listing at <https://pci-ids.ucw.cz/>, vendor `8086`), version `2026.10.14`, dated 2026-10-14 03:15:02, fetched 2026-10-15, 1,671,991 B, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`; the file's header offers it under GPL-2.0-or-later or BSD-3-Clause and says its copyright covers only the aggregation and formatting of factual data | static (a text listing read; nothing executed). Ids only: the vendor and device ids and the names listed beside them, cross-checked against Linux `pci_ids.h` and `nhi.h`; the file is not tracked and nothing else of it is taken | design record 21 section 3.3 |
-| **The ThinkPad P14s Gen 1's PCI configuration space, as the owner captured it, used as host-test vectors** (roadmap-usb4 task 39-A.5, design record 21 section 6.3) - `usb4-emu` `main` `a68bc74` (MIT at that commit, GPL-2.0-only from `3c74189`), `tests/captures/p14s-gen1/win98/OFF_OFF/PCIDUMP.TXT` (BIOS Assist off, pre-boot off; SHA-256 `c0ddd4ee4501b2ad21ffa01eb5ad5b55e3cd9a384039a17daff43b540a44b9cd`) and `.../OFF_ON/PCIDUMP.TXT` (pre-boot on, the dock tunnelled before POST; SHA-256 `03c1448c9d5cb56ecd456cafa2c1b7118889327dbcd116885f42e96b3b6ec1be`), read under DOS with PCI mechanism #1 on the owner's own machine, 256 bytes per function | a hardware capture, neither static nor runtime in this section's sense: the owner's machine read under DOS, not by this driver and not out of a binary. Every function's 256 bytes are reproduced unedited in `test\tbt_topo_p14s.h`, which names both files and both SHA-256s in its header, for `test_tbt_topo`'s P14s vectors | `test\tbt_topo_p14s.h`, `test\test_tbt_topo.c`; design record 21 section 6.3 |
-| **Linux `drivers/thunderbolt`: how a domain's PCI side is associated** - `icm.c` `get_upstream_port` (the discrete switch known by its ids), `acpi.c` `tb_acpi_add_links` and `tb_acpi_add_link` (the `usb4-host-interface` references from root ports to the NHI), `usb4.c` `usb4_switch_map_pcie_down` and `tb.c` `tb_find_pcie_down` (the fabric mapping, which names an adapter and no PCI location) | static (a source read of the pinned mirror; nothing executed). Taken as descriptions of what each source can and cannot say, cited by file and symbol; nothing of them is adapted into `tbt_topo.c` | design record 21 section 6.3; `src\cm\tbt_topo.c` and `tbt_topo.h` |
-| **The PCI ID Repository, second reading: the USB4 hosts' tunnel-port ids** (design record 22 section 3.7, roadmap-usb4 task 40-0.2) - the same `pci.ids`, version `2026.10.14`, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`, read for vendors `8086`, `1022` and `1B21`: the Barlow Ridge host bridges `8086:5780` and `5783`, AMD's "USB4/Thunderbolt PCIe tunnel" `1022:14CD` and `14EF` and "PCIe USB4 Bridge" `150A`, ASMedia's "ASM4242 PCIe Switch Downstream Port" `1B21:2423`; and the ids the gate's `CM-NOROUTER` refuses (Goshen Ridge `8086:0B26`, AMD's "USB4 Router" `1022:151C` and `151D`, "ASM2464PD USB4 Device Controller" `1B21:2463`, and the Thunderbolt 1 and 2 parts listed beside them). The listing names no Lunar, Panther or Wildcat Lake port as a Thunderbolt or USB4 port; Panther Lake's and Meteor Lake's "USB Type-C Subsystem PCIe Root Port" ids were read and not taken | static (a text listing read; nothing executed). Ids and listed names only; neither mirror names these ports (Linux finds them through ACPI, FreeBSD's identifier table is empty at its pin); the file is not tracked | `src\cm\xhcicmf.inf`, `xhcicmf-amd64.inf`, `scripts\inf-gate\check-cm-inf.ps1`; design record 21 section 3.3 |
-| **The PCI ID Repository, third reading: xHCI controllers' names** (design record 23 sections 5.13.2 and 5.13.8, roadmap-usb4 task 44.55; the owner, 2026-10-27: pci.ids a source for a controller's name where no other source names it) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids>, version `2026.10.27` (dated 2026-10-27 03:15:02), fetched 2026-10-27, SHA-256 `d74137d070767260e19a0cd4d80ae9ac39d30cbd2872306490d392bfde4d323a`: the devices whose listed name says xHCI or USB 3, and Intel's and AMD's Thunderbolt and USB4 hosts' USB controllers, of every vendor | static (a text listing read; nothing executed). Ids and listed names only, each name shortened to the record's product form; the file is not tracked | `xhciinst\inst_core.c` `instXhciNames`, `src\xhci98.inf`'s 9x models section, README.md and the release notes' tables; design record 23 section 5.13.2 |
-| **Windows 98 SE's and ME's `cfgmgr32.dll`: its exported names** (design record 24 section 7.1) - `WINDOWS\SYSTEM\CFGMGR32.DLL` of the project's 98 SE guest image (`vm\win98.img`; 4.10.2222, 45,056 bytes, dated 1999-04-23) and ME guest image (`vm\winme.img`; 4.90.3000, 40,960 bytes, dated 2000-06-08), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). Both export the same 179 names, among them `CM_Query_Remove_SubTree`, `CM_Remove_SubTree`, `CM_Reenumerate_DevNode`, `CM_Get_DevNode_Status`, `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling` and `CM_Get_Device_IDA`; neither exports `CM_Request_Device_EjectA`. Names only; whether the routines work is the legs' runtime reading. The files are not tracked | design record 24 section 7.1; `xhciinst\xhciinst.c` |
-| **Windows 2000's `cfgmgr32.dll` and `setupapi.dll`: where `CM_Request_Device_EjectA` is exported** (design record 24 section 7.2) - `WINNT\system32\cfgmgr32.dll` and `setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). `setupapi.dll` exports `CM_Request_Device_EjectA` and its `W` and `_Ex` forms; `cfgmgr32.dll` does not, and both export `CM_Query_And_Remove_SubTreeA`, `CM_Query_Remove_SubTree` and `CM_Remove_SubTree`. Names only; the files are not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c` |
-| **Windows 2000's `CM_Query_And_Remove_SubTreeA` is a stub, and its `W` form accepts `CM_REMOVE_UI_NOT_OK` and `CM_REMOVE_NO_RESTART`** (design record 24 section 7.2, the fallback for a unit not marked removable) - `WINNT\system32\setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`; 570,128 bytes, dated 2003-06-20, SHA-256 `1d0a6e9d062a51e71eaae93d776746823834f5c518096d340f2b332fc059a23d`, image base `0x77880000`), extracted with `7z e`. The export `CM_Query_And_Remove_SubTreeA` (RVA `0x53A1A`) pushes its five arguments and a zero machine handle and calls `CM_Query_And_Remove_SubTree_ExA` (RVA `0x584C7`), whose whole body is `push 34h` / `pop eax` / `ret 18h`: it answers `CR_CALL_NOT_IMPLEMENTED` (0x34) and does nothing else. `CM_Query_And_Remove_SubTreeW` (RVA `0x540F7`) calls `CM_Query_And_Remove_SubTree_ExW` (RVA `0x538C0`), a real body whose flag test (`test dword ptr [ebp+18h],0FFFFFFFCh` at VA `0x778D3906`) refuses any flag above bit 1 with `CR_INVALID_FLAG` (4), so `CM_REMOVE_UI_NOT_OK` (1) and `CM_REMOVE_NO_RESTART` (2) pass it. `cfgmgr32.dll` (17,168 bytes) forwards all four names to `setupapi.dll` | static (MSVC 6.0 `dumpbin /exports` and `/disasm` of a copy in a scratch directory; nothing executed; 2026-10-16, development host A). The file is not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c`; `xhcitr\xhcitr.c` |
-| **NUSB 3.3's seven Windows 98 SE storage files: whose each is, its version and its identity** (roadmap-usb4 task 43.1) - the five binaries' `CompanyName`, `ProductName`, `FileVersion` and `LegalCopyright`, the two INFs' `Provider` and comment headers, and each file's size and SHA-256 | static: PowerShell's `(Get-Item <file>).VersionInfo` on the driver pack's copies, and for `USBMPHLP.PDR` (a VxD that reader does not parse) the `VS_VERSION_INFO` strings in the file; the INFs read as text; `Get-FileHash` against the pack's `SHA256.TXT`, 2026-10-20; nothing executed | section 5, "NUSB 3.3's Windows 98 SE storage files" |
-| **Task 43.46 read-first: how IOS builds the physical list a `SCSIPORT.PDR` request carries, and the calldown chain on Stor98's DCB** (`docs/contributing/runs/run-43.md`, "43.46 read first") - the QuickInstall 98 SE image's `IOS.VXD` (69,594 bytes, SHA-256 `7adb5fe3f458bc2c5f747679fef32e0d799883a9c8fb6bc5fd096dbba3e16ec2`) and `SCSIPORT.PDR` (23,674 bytes, SHA-256 `af7610d41970a5895ad0bbdda2443d4accae6401b1e1a74badd13c6e8f8a08c6`), LE objects loaded at their own bases. IOS: `ISP_INSERT_CALLDOWN` (object 4, `0x1266`-`0x12E2`) keeps the chain in ascending load-group order, gives an entry of an earlier insertion that carries `DCB_dmd_preload` the new entry's bits, and sets `DCB_dmd_flags` to the first entry's; the physical-list builder (object 1, `0x16B8`-`0x17B5`) reads page-table entries with `_CopyPageTable` (VMM service `0x61`) and locks nothing, merges adjacent pages, and sets `IOR_num_sgds` and `IORF_PHYS_SGDS`. `SCSIPORT.PDR`: `ScsiPortGetPhysicalAddress` (object 1, `0x03A6`) walks the list at `IOR_sgd_lin_phys` by byte offset; `IOR_num_sgds` is read at `0x1017` (compared with 1). The chain itself (load groups 7, 0x10, 0x11, 0x14, 0x1F and each entry's demand bits) as the prototype VSD printed it in four boots | both: static (capstone over the LE images with their internal fixups applied; nothing executed), and runtime through the read-first prototype's own output on the 98 SE emulator, 2026-10-21 | `docs/contributing/runs/run-43.md`; Stor98 `docs/INVESTIGATION-9X-REQUEST-SIZE.md` sections 1 and 2 for the criteria routine |
-| **Task 43.46 design: what IOS loads from `IOSUBSYS`, and the request path's facts in three IOS builds** (design record 30 section 2) - `IOS.VXD` of gold 98 SE (69,570 bytes, SHA-256 `bb133fb8edc9464f38bda9ee94349014eebdfd3164583432304a2e88e1a70652`, the 98 SE CD's `WIN98\BASE4.CAB`), of the QuickInstall image (the read-first row's) and of ME (80,147 bytes, `d897ae9986719fb7475c240653b5b23cd9707458f1d1da14b1f5dcb311768da5`, ME's `BASE2.CAB`); `SCSIPORT.PDR` of gold 98 SE (23,650 bytes, `8a0712513067edb75e2146beef889845bf5d77bc293558b9c359af8ced0f4be7`) and ME (26,957 bytes, `bfac66edd87be878be4f1965b53d712ad924b56c7ee1256d809e84980d6df74b`). IOS's directory walk appends the one pattern `*.vxd` to `<system>\IOSUBSYS\` (string object 5 `0x33A`, ME object 8 `0x33B`) and loads each find-first/find-next match (object 4 `0x1E80`-`0x1F53`, ME object 5 `0x1D20`-`0x1DF3`); no instruction names the `*.mpd` string after it; `.mpd` is tested on a file loaded by name (object 1 `0x211F`). The criteria routine (object 1 `0x1592`, the same instruction sequence in gold and QuickInstall; ME `0x19A0`) builds the physical list from `IOR_buffer_ptr`/`IOR_xfer_count` with no test of the IOR function, one `_CopyPageTable` call a fragment (`0x1739`), and keeps the 512 KiB and 17-run limits on the `phys_sgd` path (ME `0x1AC8`, `0x1AE5`). `ISP_INSERT_CALLDOWN`: the same instruction sequence in all three (object 4 `0x1266`, ME object 5 `0x1165`). `ScsiPortGetPhysicalAddress` walks `IOR_sgd_lin_phys` for an address within the SRB's data without testing `IORF_PHYS_SGDS` (the same 50 bytes at file offset `0xDA6` of gold and QuickInstall, `0x1446` of ME) | static (capstone over the LE images with their internal fixups applied, the routines compared by instruction sequence with absolute addresses masked; nothing executed), 2026-10-22; the CAB members extracted with 7-Zip, no installer run | design record 30 section 2 |
-| **Task 43.46 design: the layers above Stor98's disk and `SCSIPORT.PDR`'s own requests** (design record 30 section 2.3; `docs/contributing/runs/run-43.md`, "Static readings before the code") - the QuickInstall image's `DISKTSD.VXD` (18,685 bytes, SHA-256 `bde41e68d8dda77f3cf0cfe0c3b1051c1258046fc0603c4c0004d6b11431aa39`) and `DISKVSD.VXD` (10,194 bytes, `1f0ac9baf1d03380d275d495f8d07e565511569d45ad83d26c0795df2d1463ed`), its `IOS.VXD` and `SCSIPORT.PDR` (the read-first row's), and from the gold 98 SE CD's `WIN98\*.CAB` `DISKTSD.VXD` (18,809, `180ca337513e83191317f65a7161c0583fc0fda654f8ae484d9012cb4bd44caf`), `DISKVSD.VXD` (10,194, `fb671af44da32b56710b8d193a46e45c216296fdfc5d618584b423f2bffb63ff`), `APIX.VXD` (29,497, `d98f340a537636f08933ccf282e2460040025db23a5c4204f68e3f8d2a15d571`), `VOLTRACK.VXD` (18,491, `5be4506487a1021035f45149b158c8683a47eb1b90f90b8845b332bb850fbc6e`) and `SCSIPORT.PDR` and ME's (the IOSUBSYS row's). Each file's DRP (`XXXXXXXX`, then `DRP_LGN` and the ASCII name): DISKTSD bit 7 "Fixed Disk TSD", DISKVSD bit 16 "SCSI Disk VSD", APIX bit 11 "SCSI API XLATOR", VOLTRACK bit 5, SCSIPORT bit 21. The stores at `IOR_buffer_ptr` (`[reg + 0x80]`) in DISKTSD (`0x30161F`, `0x30165E`, `0x301EC8`) and DISKVSD (`0x10063A`, `0x100884`-`0x1008E8`, `0x1009E7`), each in a request the layer builds. `IOS_SendCommand` (service 4, `0x100B20`): `IORF_IO_TOO_BIG | IORF_DOUBLE_BUFFER` tested at `0x100BD3`, the branch at `0x100D0F` allocating pages before the first calldown at `0x100BED`. `SCSIPORT.PDR`'s internal-request builder (`0x100BDF`; ME `0x100C7F`), the same instruction sequence in the three builds, its two callers (`0x100707` and `0x2019ED`; gold `0x100707`, `0x201B8D`; ME `0x1007A7`, `0x301B25`), the `REQUEST SENSE` CDB set-up once in each, and the image's one call of the criteria routine in it (`0x100CBA`) | static (capstone over the LE images with their internal fixups applied, objects at `object * 0x100000`, a linear sweep for stores at fixed displacements, routines compared by instruction sequence with absolute addresses masked; nothing executed), 2026-10-22; the CAB members extracted with 7-Zip, no installer run | design record 30 section 2.3 |
-| **Task 43.79: IOS's double buffer on a DCB that does not demand physical lists** (design record 30 section 4.6) - the three `IOS.VXD` builds of the read-first and IOSUBSYS rows (QuickInstall 69,594 bytes, `7adb5fe3f458bc2c5f747679fef32e0d799883a9c8fb6bc5fd096dbba3e16ec2`; gold 98 SE 69,570, `bb133fb8edc9464f38bda9ee94349014eebdfd3164583432304a2e88e1a70652`; ME 80,147, `d897ae9986719fb7475c240653b5b23cd9707458f1d1da14b1f5dcb311768da5`), and the 98 SE DDK's `IOR.H` (`INC_WIN98_IOR.H`, docs/references/README.md's hash) for `IORF_DOUBLE_BUFFER` (0x40, with its comment that the client must ensure that the SGD buffer pointers and `IOR_sgd_lin_phys` are virtual), `IORF_PHYS_SGDS` (bit 26) and `IOR_ios_private_1`, and `DCB.H` for `DCB_dmd_phys_sgd` (0x800) and `DCB_dmd_phys_sgd_ptr` (0x1000). The criteria routine tests the word/dword demand (`0x600`) before `phys_sgd` (QuickInstall and gold `0x1015BE`, ME `0x1019BE`), and without `phys_sgd` returns non-zero at once (`0x1016A9`, ME `0x101AA6`), its caller setting `IORF_DOUBLE_BUFFER` (`0x100317`, ME `0x1006E7`). `IOS_SendCommand`'s double-buffer branch sets `IOR_buffer_ptr` to its buffer, clears `IORF_SCATTER_GATHER`, sets `IORF_PHYS_SGDS` and points `IOR_sgd_lin_phys` at a one-entry list (`0x100E65`-`0x100E9C`, ME `0x1011D3`-`0x10120A`), makes the entry physical by `_CopyPageTable` only under `phys_sgd` (`0x100EC1`, ME `0x10122F`) and the list pointer only under `phys_sgd_ptr` (`0x100E76`, ME `0x1011E4`). The only instructions in the QuickInstall image's code objects that set `IORF_PHYS_SGDS` (a sweep for a byte, dword or bit set of it) are `0x100E9C` and the criteria routine's builder's `0x1017B1` | both: static (capstone over the LE images with their internal fixups applied, objects at `object * 0x100000`; nothing executed), 2026-10-24; and runtime, through this project's own `S98VSD.VXD` `qemu` image on the 98 SE and ME emulators (the first request arriving with `IORF_PHYS_SGDS`: flags `0x04008441`, its entry equal to `IOR_buffer_ptr`, a linear address) | design record 30 section 4.6; `src/vsd/vsd_list.h` (`VsdPlan`) |
-| **Windows 8 and 8.1's xHCI match: only `usbxhci.inf` names `PCI\CC_0C0330`, with `FeatureScore=80` and three `ExcludeID` lines for Fresco Logic (`PCI\VEN_1B73&DEV_1000&CC_0C0330`, `PCI\VEN_1B73&DEV_1400&CC_0C0330`, `PCI\VEN_1B73&DEV_1009&REV_00`); `uaspstor.inf` binds `USB\Class_08&SubClass_06&Prot_62`; no Windows 8 or 8.1 INF names `XHCI98` or a wildcard `USB\` id** (roadmap-usb4 task 43.26) - `Windows\inf\*.inf` of `install.wim` of the owner's `en_windows_8_pro_vl_x86_dvd_917830.iso`, `Windows 8 x64.iso` (image 1) and `en_windows_8.1_with_update_x64_dvd_6051480.iso` (image 1), 553, 564 and 577 INFs; the INFs' sizes and SHA-256 in the record | static (`7z e` of the WIMs, routine unpacking; a text read and a sweep of each INF's code part for `USB\` tokens and `PCI\CC_0C03`, by a Python script kept outside the tree; nothing executed). The ranking that follows from it is documentation (Microsoft's "How Windows Ranks Driver Packages" and "Signature Score" pages, read 2026-10-22) and an inference until a Windows 8 guest installs the package | `docs/contributing/design/13-superspeed-hcd.md` section 6.12.1 |
-| **What Windows 8's and 8.1's class drivers send a USB device PDO** - `hidusb`, `hidclass`, `USBSTOR`, `uaspstor`, `USBAUDIO`, `usbccgp`, `winusb` and `Wdf01000`'s USB target, x86 and x64 of 8 and x64 of 8.1 (no 8.1 x86 medium): the IOCTLs with their sending functions and RVAs, the `QUERY_INTERFACE` GUIDs, versions and sizes (USBDI V1 0x24 / 0x48, KMDF's V0 fallback, `GUID_USBD_INTERFACE_V1` Version `0x602` Size 0x58 / 0x98, `usbccgp`'s USBC configuration and D3cold queries), the URB function codes (`uaspstor`'s `0x35`, `usbccgp`'s `0x32`, KMDF's `0x08` and `0x13`), `uaspstor`'s start sequence and its `0xC0000182` without streams or High Speed, and the new codes `0x220FB3`, `0x49104B`, `0x49104F`, `0x49140F`, `0x491404`, `0x491408` (raw; named from the handling functions' PDB names) | static (`cdb.exe -z` from WDK 7.1's debuggers with Microsoft's public or private PDBs from msdl, WDK 7.1 `link -dump -imports`, capstone 5.0.7 for x64 operands, byte scans for IOCTL immediates and GUIDs, a straight-line URB scan; four subagents' reads, 2026-10-22, not re-read line by line by the coordinator; nothing executed). Constants beyond WDK 7.1 from the mingw-w64 headers at master `62891fa4` or from PDB-named symbols | `docs/contributing/design/13-superspeed-hcd.md` sections 6.12.2 to 6.12.4 |
-| **Windows 8's client library `usbdex` (static in each client): `USBD_CreateHandle` asks `GUID_USBD_INTERFACE_V1` `{deee98ea-c0a1-42c3-9738-a04606c84e93}` then USBDI V1 and succeeds even when both are refused; `USBD_QueryUsbCapability` sends `0x49104B` only on a `0x602` contract and on `0x600` answers locally (High Speed from `IsDeviceHighSpeed`, selective suspend yes, every other capability `STATUS_NOT_IMPLEMENTED`); the nine capability GUIDs' values** | static (as the row above; the GUID values read from the images at the PDB symbols of those names; Microsoft's `USBD_QueryUsbCapability` page names them without values) | `docs/contributing/design/13-superspeed-hcd.md` section 6.12.3 |
-| **Windows 8's `usbd.sys`: the Windows 7 exports plus five hub-only ones, and the `usbshim` Kernel Shim Engine shim (`{fd8fd62e-4d94-4fc7-8a68-bff7865a706b}`, one hook on `IofCallDriver` re-sending an IRP too shallow for its target); what `usbhub3.sys`, `ucx01000.sys` and `usbhub.sys` answer at their device PDOs (the internal-IOCTL switch of `HUBPDO_EvtDeviceWdmIrpPreprocess` and `UsbhPdoInternalDeviceControl`, the `QUERY_INTERFACE` handling, UCX's USBDI V0 to V3 and its `GUID_USBD_INTERFACE_V1` requiring Version `0x602`); `usbxhci.sys`'s per-id quirk flags (no refusal found in the x64 builds)** | static (`link -dump -exports`, `cdb.exe -z` with the PDBs, capstone; the 8 x64 switch decoded in full, the other builds compared by their constants; a subagent's read, 2026-10-22; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` sections 6.12.1, 6.12.3 and 6.12.5 |
-| **The layout and calls of `GUID_USBD_INTERFACE_V1` at version `0x602`, from both ends: the client fields `usbdex` writes and reads (`USBD_CreateHandle`, `USBD_UrbAllocate`, `USBD_UrbFree`, `USBD_CloseHandle`, `USBD_AssignUrbToIoStackLocation`; Size 0x98 / 0x58), the six routines UCX returns at x64 +0x68 to +0x90 / x86 +0x40 to +0x54 and their arguments (`__stdcall`; `UrbFree` takes the URB alone), UCX's checks (Size, Version `0x602`, a device object, a nonzero pool tag) and its URB header (`'XRB.'`, 0x50 / 0x30 bytes); the capability request `0x49104B`'s block (version 1, size 0x28 / 0x20, context, GUID, output length, a result-length ULONG) and UCX's checks of it (`STATIC_STREAMS` wants an output length of 2); `uaspstor`'s use of the stream open (one URB reused for three pipes, `NumberOfStreams` read back, the count the smaller of its endpoint figure and the capability's) and `USBSTOR`'s handle at start** (roadmap-usb4 task 43.29) - `uaspstor.sys`, `USBSTOR.SYS` and `UCX01000.SYS` of 8 x86, 8 x64 and 8.1 x64, the files of design record 13 section 6.12's table | static (capstone over the images with Microsoft's PDBs naming the functions, the 43.26 scripts kept outside the tree; RVAs given in the record; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.13.1 and 6.13.2 |
-| **Windows 8's and 8.1's `IoIsWdmVersionAvailable` answers as Windows 7's: TRUE for a major below 6, and for 6 with any minor** (so it cannot tell 8 from 7) - `ntoskrnl.exe` of 8 x86, 8 x64 and 8.1 x64 from the same media (6.2.9200.16384 and 6.3.9600.17415 builds; not in the record's table), the export disassembled | static (capstone over the exported routine, 8 x64 RVA `0x50B8B0`; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.13.4 |
-| **No Windows 98 SE, ME, 2000, XP, XP x64, Vista or 7 driver, nor NUSB 3.3, NUSB 3.6 or SweetLow's pack, carries `GUID_USBD_INTERFACE_V1`'s bytes, `0x49104B` or `0x220FB3`** (roadmap-usb4 task 43.29) - every `.sys`, `.dll`, `.vxd`, `.pdr`, `.mpd` and `.exe` under `tools\*-extracted` (235 files, 2026-10-22) | static (a byte scan by a Python script kept outside the tree; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.13.4 |
-| **Windows 8's and 8.1's `usbui.dll` carry `0x22045C` (`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`) beside Windows 7's request codes** - 6.2.9200.16384 (72,192 and 87,552 bytes) and 6.3.9600.17415 (89,088 bytes), against `tools\{vista,win7}-{x86,x64}-extracted\ui\usbui.dll`, none of which carries it | static (a byte scan of each file for `0x0022xxxx` DWORDs of function index 0x100 to 0x13F, by a Python script kept outside the tree; not attributed to code; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.12.7 |
-| **Windows 8's and 8.1's SCSIport: every NT import of Stor98 is exported; 7 x64's, 8 x64's and 8.1 x64's `scsiport.sys` export the same 50 names (8 x86's 47), import the same set but for five names (8: `KeInitializeSpinLock`, `KeLowerIrql`, `KfRaiseIrql` and `MmAllocateContiguousNodeMemory` added, `MmAllocateContiguousMemorySpecifyCache` dropped) and read the same registry value names (8 adds a `RtlQueryRegistryValuesEx` lookup, 8.1 a `Control\MiniNT` read); `Classpnp.sys` exports the same 60 names on 7 x64 and 8 x64, and 8.1 adds `ClassModeSelect` and `ClassModeSenseEx`** (roadmap-usb4 task 43.23) - the files of section 2's 43.23 row, against `scripts\import-gate\stor98-imports.allow` | static (WDK 7.1's `link -dump -exports` and `-imports`, and a strings sweep of each image, by PowerShell scripts kept outside the tree; nothing executed) | `docs/contributing/runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1" |
-| **Windows 10's SCSIport (22H2, x86 and x64): every NT import of Stor98 is exported; `scsiport.sys` exports exactly 8's names (47 x86, 50 x64), imports five more (`IoGetCurrentProcess`, `IoGetRequestorProcess`, `KeFlushIoBuffers`, `KeStackAttachProcess`, `KeUnstackDetachProcess`) and drops `NlsMbCodePageTag` (and `_allmul` on x86); `Classpnp.sys` adds `ClassModeSenseTranslate` and `DllInitialize` to 8.1's names; 10's `stornvme.inf` binds `PCI\CC_010802` with `ExcludeFromSelect = *`, `DriverVer=06/21/2006,10.0.19041.2075`** (roadmap-usb4 task 43.23) - the files of section 2's 43.23 Windows 10 row, against `scripts\import-gate\stor98-imports.allow` and 8's files | static (WDK 7.1's `link -dump -exports` and `-imports` by a PowerShell script kept outside the tree; the INF read as text; nothing executed) | `docs/contributing/runs/run-43.md`, "43.23", "Windows 10"; `src/stor98/docs/TESTING.md`, "Windows 10" |
-| **Windows 8 x64's, 8.1 x64's and 10 x64's driver store refuses a package with no catalog file in test-signing mode**: `UpdateDriverForPlugAndPlayDevices` returns `0xE000022F` (`ERROR_NO_CATALOG_FOR_OEM_INF`), and `setupapi.dev.log` says "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode" and "Failed to import driver package into Driver Store"; 8 x86 and 10 x86 take an uncatalogued x86 package with the unsigned-driver prompt (roadmap-usb4 task 43.23) | runtime: Microsoft's Windows 8 x64, 8.1 x64, 10 x64, 8 x86 and 10 x86 running in QEMU from the owner's install media (the pristine images of `docs/contributing/runs/run-43.md`), the call made by a script of this project in the guest, the log read in the guest; 2026-10-22 | `docs/contributing/runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1" and "Windows 10" |
-| **Windows 8 x86's `classpnp` retries a WRITE that SCSIport completes with `SRB_STATUS_NO_DEVICE` and with `SRB_STATUS_SELECTION_TIMEOUT` alike** (disk event 153, about every 1.4 to 2.7 s), the retries ending only when the disk is removed after the miniport's `BusChangeDetected`; `SELECTION_TIMEOUT` also raised fastfat event 141 and "Delayed Write Failed"; 10 x86 under `NO_DEVICE` logged no event 153, "Delayed Write Failed", disk event 51 and event 157 at the removal (roadmap-usb4 task 43.23) | runtime: Windows 8 x86 and 10 x86 in QEMU with Stor98 builds of this project (one test-only build, never committed), the event logs read with `wevtutil` in the guest and Stor98's stage codes on the debug port; 2026-10-22 | `docs/contributing/runs/run-43.md`, "43.23"; `src/stor98/docs/PLAN.md` item 2.2 |
-| **Windows 8.1 x64's `stornvme` under a link loss with no notice holds the write**, logging event 129 ("Reset to device ... was issued") and event 11 every 35 s without removing the disk, and completes the write with success about 23 s after the link returns (4.6 min later); 8.1's and 10's `stornvme` bind every NVMe controller at first boot (roadmap-usb4 task 43.23) | runtime: Windows 8.1 x64 and 10 x86 and x64 in QEMU, Windows' own driver, the event log and `wmic` read in the guest; 2026-10-22 | `docs/contributing/runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1" |
-| **Windows 8.1's `stornvme.inf` binds `PCI\CC_010802` (`NVME.NTamd64` and `NVME.NTx86`) as a boot-start Storport miniport, `DriverVer=06/21/2006,6.3.9600.16421`, `ExcludeFromSelect = *`** (roadmap-usb4 task 43.23) - `Windows\inf\stornvme.inf` of image 1 of `en_windows_8.1_with_update_x64_dvd_6051480.iso` | static (`7z e`, the INF read as text; nothing executed). That it outranks Stor98's INF is documentation (Microsoft's driver-ranking pages, as the 43.26 row has them) and was then seen in an 8.1 x64 guest, where `stornvme` took both NVMe controllers at first boot (runtime, `runs/run-43.md`) | `docs/contributing/runs/run-43.md`, "43.23"; `xhciinst\inst_core.c` `inst_s98_over_inbox` |
-| **Windows 98 SE's and ME's ASPI layer is installed by Setup, and its adapter identity is a fixed string** (roadmap-usb4 task 43.50, design record 29's reading P.0) - the owner's `Win98SE.iso` (SHA-256 begins `c048c31e414e3fe4`) and `Windows Me OEM Full.iso` (`aa7b36e0249e3fe4`): `subase.inf` (98 SE 61,683 bytes, SHA-256 `10f3852dd331dbd493ed9be68e767419d959a2c47fe541cd1e33adc24cdb16a2`; ME 52,884 bytes, `fd5435b2283717c28a1832a9734b6c62c16d827e0bb4ec3cea54e280da91c8a1`) has `[winbase]` `CopyFiles = sys.files, ios.files, ...` with `wnaspi32.dll` in `[sys.files]` (dirid 11) and `apix.vxd` in `[ios.files]` (dirid 12); `APIX.VXD` (29,497 bytes, the same file on both, SHA-256 `d98f340a537636f08933ccf282e2460040025db23a5c4204f68e3f8d2a15d571`) carries the string "OEM SCSI HBA" at file offset `0x5864` and "SCSI API XLATOR"; `WNASPI32.DLL` (98 SE, 36,864 bytes, `e4d27f9ca758dd9ae3eab762da13393989579721c65d5586372b7d559c3f90e7`) exports `SendASPI32Command` and `GetASPI32SupportInfo`. With the Windows 98 DDK's `block\wnaspi32\WNASPI32.H` (`SRC_BLOCK_WNASPI32_WNASPI32.H`, SHA-256 `19927d4bf9512c5343ea573c43df4111626838555acb117c0da326ad13298d8c`) for the SRB layouts and command codes, and `block\inc\DCB.H` and `DCB.INC` (`SRC_BLOCK_INC_DCB.H`, `50933f200fc02c042b8ee55ed89ae9440bc1d75654a56e5391f6eee7cea73d04`) for `DCB_dmd_flags` (+0x1C), `DCB_max_xfer_len` (+0x50) and `DCB_max_sg_elements` (+0x77), and `IOR.H`'s `IORF_DOUBLE_BUFFER` (0x40), which Stor98 reads (its MD-8) | static (`7z e` of the CD's cabinets, routine unpacking; the INFs read as text; a string scan of the two binaries and their export names; the DDK headers read as text; nothing executed). Whether the identifier the string supplies is what `SC_HA_INQUIRY` returns for a SCSIPORT adapter is not read; the tool does not rely on it and proves the adapter Stor98's by INQUIRY page C9h instead | design record 29 sections 6.2 and 15; `xhciperf\xhciperf.c`; Stor98 `docs/PLAN.md` MD-8, `src\stor98\src\sg9x.h` |
-| **NUSB 3.3's installer: how it places its INFs** (roadmap-usb4 task 43.42) - `tools\nusb33e.exe` (774,144 bytes, SHA-256 `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`, section 5's) is an IExpress package: its `RCDATA` resources `RUNPROGRAM` `rundll32 advpack.dll,LaunchINFSection _nusb.inf`, `POSTRUNPROGRAM`, `ADMQCMD` and `USRQCMD` `<None>`, `REBOOT` four zero bytes, and `CABINET` the 38 files. `_NUSB.INF`'s `[DefaultInstall]` is `CopyFiles` and `AddReg` alone; its `W98Upd.Copy.inf` list (`usbstor.inf` and `usbntmap.inf` among seven INFs) goes to dirid 17 (`[DestinationDirs]`), a `Win98.Copy.cab` list to `10,Options\Cabs`; no `DelFiles`, no `Run*SetupCommands`, nothing naming `DRVIDX.BIN` or `DRVDATA.BIN`. `W95INF32.DLL` exports `GenInstall32@20` and `W95INF16.DLL` names the module `SETUPX`; `CSETUP.EXE` is a catalog registration program ("CAT File registration program", `MSCAT32.DLL`) named by no line of the INF or the run command. `_USB2UN.INF`'s `[UnInstall]` deletes `USB2.INF` from dirid 17 by `DelFiles` | static: the package's PE resource directory walked by a script of this session's own (the resource data read, not run) and its cabinet listed and unpacked with 7-Zip, routine unpacking (section 1); the INFs read as text; the two DLLs' and `CSETUP.EXE`'s printable strings scanned; 2026-10-21, development host A; nothing executed, nothing patched | design record 26 section 6.5.11 |
-| **Where Windows 8's and 8.1's "Device can perform faster when connected to USB 3.0" comes from**: `shell32.dll` strings 38252 and 38253 ("Connected to USB 3.0"), shown by Explorer's details pane (DirectUI elements `PreviewUSB3CanBeFaster`, `PreviewUSB3Connected`, `resstr(0x956C)` / `resstr(0x956D)`) for a selected drive root; and `usbui.dll` 6.2 / 6.3 strings 1210 and 1211, from its Devices and Printers status provider, CLSID `{df6775de-380d-4c14-8b62-fb69912e6d30}`, registered as `DeviceDisplayStatus` of `GUID_DEVINTERFACE_USB_DEVICE` and under `DeviceDisplayObjects\StatusProviders` (Rank 0x3E8); `hotplug.dll` carries neither; 8's `usbui.dll` lacks 7's strings 82 to 96 | static (a PE string-table walk and a registry-hive walk by Python scripts kept outside the tree; capstone 5.0.9 for the class factory's CLSID and the string-load sites, 8 x86 `shell32.dll` RVA `0x4750D1`, `usbui.dll` 6.2 x86 RVAs `0x9E6E` and `0x9E84`; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.12.11 |
-| **What the line tests**: the volume's `BusType` 7 by `IOCTL_STORAGE_QUERY_PROPERTY`; the disk by `0x560000` and `0x2D1080`; a `DEVPKEY_Device_ContainerId` other than `HTREE\ROOT\0`'s; the hub by `DEVPKEY_Device_Parent` and `GUID_DEVINTERFACE_USB_HUB`, the port by `DEVPKEY_Device_Address`; `0x220448` (`Speed`, byte 0x17) and `0x22045C` (`Length` 16, `SupportedUsbProtocols` 7); "capable" = flag bit 1, "Connected" = bit 0 or `Speed` 3, and "can perform faster" only where a `GUID_DEVINTERFACE_USB_HOST_CONTROLLER` devnode has `DEVPKEY_Device_Service` `usbxhci` or `usbxhci_dsf` and problem code 0 (the `usbui.dll` provider tests that before either line, over a `DevCreateObjectQuery` of the container's USB device and hub interfaces) | static (as the row above: IOCTL immediates, property keys referenced by the code and named from WDK 7.1's `devpkey.h`, `propkey.h` and `usbiodef.h`, the input fields stored and the flag bits tested; 8 x86 read at the interface level, 8.1 x64 checked at the IOCTL input, the bit tests and the two service strings; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.12.11 |
-| **Windows 10 22H2's xHCI match**: only `usbxhci.inf` (`DriverVer = 01/13/2023,10.0.19041.2546`) names `PCI\CC_0C0330` in either image's INFs (679 x64, 636 x86), with 8.1's models, `FeatureScore=80` and Fresco Logic `ExcludeID` lines, plus `DmaRemappingCompatible` 2, `DEVPKEY_Device_DebuggerSafe` and, x64 only, the `UsbXhciCompanion` UMDF companion; `usbaudio2.inf` binds `USB\Class_01&SubClass_0x&Prot_20`, which `wdma_usb.inf` excludes; `UcmUcsiAcpiClient.inf` binds `ACPI\USBC000` and `ACPI\PNP0CA0`; no INF names an Intel NHI id, `PCI\CC_0880` or `PCI\CC_0C0340` | static (the INF text read by a Python script kept outside the tree; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.14.1; `21-thunderbolt3-icm-client.md` section 3.6 |
-| **What Windows 10's class drivers send a USB device PDO, against 8.1** - `USBSTOR`, `uaspstor`, `hidusb`, `hidclass`, `usbccgp`, `winusb`, `Wdf01000` (KMDF 1.31), `USBAUDIO` (now a `usbdex` client: `GUID_USBD_INTERFACE_V1`, `0x49104B`, `RESET_PORT`, x64 `CYCLE_PORT`), `usbaudio2` (KMDF USB target only), `usbhub3`, `ucx01000` (`0x491404`, `0x491408` added) and `usbd.sys` (8.1's 20 exports), x86 and x64 | static (a byte scan of executable sections for the USB internal IOCTL codes and of each file for the GUIDs, `pefile` for imports and exports, by Python scripts kept outside the tree, checked against 6.12.2's 8.1 x64 `USBSTOR.SYS`; not attributed to named functions, no PDB; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.14.2 |
-| **Where Windows 10 22H2 shows "Device can perform faster when connected to USB 3.0" and what it tests**: `shell32.dll` 10.0.19041.2788 strings 38252 and 38253, DirectUI ids `PreviewUSB3CanBeFaster` and `PreviewUSB3Connected`; `usbui.dll` 10.0.19041.1 strings 1210 and 1211; the `_EX_V2` request (`0x22045C`, `Length` 0x10) at x64 RVA `0x5624C4`, flag bit 1 capable and bit 0 speed 3 at `0x561C9A` to `0x561CAC`, the host-controller test comparing a devnode's service with `usbxhci` at `0x562681` and then `usbxhci_dsf`; `UsbTask.dll` 10.0.19041.746 strings 1306 to 1342 carry no "faster" text, nor does any other of the x64 image's 1,770 `en-US` MUI files | static (a PE string-table walk and a text search by Python scripts kept outside the tree; capstone 5.0.7 over the x64 `shell32.dll` at the interface level, x86 checked by its strings and IOCTL constants; nothing executed) | `docs/contributing/design/13-superspeed-hcd.md` section 6.14.4 |
-| **Intel's Thunderbolt driver on Windows 10**: `tbt100x.inf` 17.4.77.13 and `TbtHostController.inf` 1.41.1379.0 and 1.41.1423.0 install the service `nhi` (`tbt100x.sys`, `TbtBusDrv.sys`), x64 only; the NHI ids by `PCI\VEN_8086&DEV_<id>&CC_0880` (Alpine Ridge and Titan Ridge, Ice Lake), bare `VEN&DEV` (1134, 1137) or `&CC_0C03` (Tiger Lake and later); 1.41.1423.0 drops the Alpine Ridge ids; no `FeatureScore`; the DCH INFs write `DmaRemappingCompatible` 1; the Thunderbolt Control Center tied by a software component (`pfn://AppUp.ThunderboltControlCenter_8j3eq9eme6ctt`) | static (the INF text read; the catalogs' signer read as data by PowerShell's `Get-AuthenticodeSignature`; nothing executed) | `docs/contributing/design/21-thunderbolt3-icm-client.md` section 3.6 |
-| **Windows 8 and 8.1 x64 refuse a driver package with no catalog in test-signing mode; Windows 8 and 8.1 make `xhcicm` boot start when its filter goes onto a PCI bridge** (roadmap-usb4 task 43.22) - Windows 8 Pro x86 and x64 (6.2.9200) and 8.1 Pro x64 (6.3.9600) guests of the `win8-10` image set, the `3.1.0.0` package's `INSTALL /console /cmonly /yes`: `SetupCopyOEMInf` failed with `0xE000022F` in test-signing mode on both x64 systems (`setupapi.dev.log`: "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode"), and installed after the publisher prompt on a start with driver signature enforcement disabled and on 32-bit 8; on all three `setupapi.dev.log` said "Updated service 'xhcicm' to be boot start" and `sc qc xhcicm` read `BOOT_START`; 8 x64 then stopped in Automatic Repair on a start with test-signing mode off; 8.1 x64 started in test-signing mode with the NHI on `xhcicm` | runtime - but Windows' own setup log, service configuration and device state read in the running guest by a script of this session's, not this driver's counters; the Automatic Repair is a screen observed, its cause inferred; 2026-10-22, development host A, QEMU | design record 23 section 5.10 (revision 30), `runs/run-43.md` "43.22" |
-| **Microsoft's "Driver Signing Policy" table: "Windows 8, Windows 8.1, Windows 10, versions 1507, 1511 with Secure Boot on" - architectures "64-bit, 32-bit"; "Windows Vista, Windows 7; Windows 8+ with Secure Boot off" - "64-bit only, no signature required for 32-bit"** (roadmap-usb4 task 43.22) - `https://learn.microsoft.com/en-us/windows-hardware/drivers/install/kernel-mode-code-signing-policy--windows-vista-and-later-`, `ms.date` 2024-08-19 | documentation, read 2026-10-22; not a binary reading, recorded here beside the row above because the installer's x86 note rests on it; Secure Boot on is read in no guest | design record 23 section 5.10 (revision 30) |
-| **`PCI.VXD`'s Code 29 on 98 SE and ME (task 44.30)**: at its enumerator's `CONFIG_ENUMERATE` (handler `obj4:0x2763`, registered by `Register_Enumerator` at `obj3:0x60b2`), the bus scan `obj3:0x5905` calls the per-function callback `obj3:0x27e4`, which builds a new devnode's basic configuration (`obj3:0x1b22`: the IRQ step `obj3:0x14ac`, then memory `obj3:0x163f`, then I/O `obj3:0x16a5`) and skips a function whose devnode already exists with a basic configuration (`obj3:0x2743`-`0x2757`); the IRQ step reads pin and line (`obj3:0x1a7c`-`0x1ada`: needed when the pin is not 0, the assignment forced to 0 for a line above 15, `FFh` included), looks the function up in the routing table walking up through bridges with the swizzle `(dev + pin) mod 4` (`obj3:0x3a76`, `0x3741`, `0x363d`, `0x367c`), adds an IRQ descriptor for a link found or a line of 1 to 15, and otherwise, for a function whose command register has neither decode bit set, not a CardBus bridge and not a display device, calls `Disable_DevNode(dn, 2)` (the sequence at `obj3:0x1614`, `push 2` at `obj3:0x1619`, through the `VxDJmp CONFIGMG 64` thunk `obj4:0x3008`); its child `CONFIG_FILTER` returns `CR_DEFAULT` (`obj4:0x2b78`) and its child `CONFIG_START` (`obj4:0x2b3b`) fails only a power-state change, writing 3Ch only from an allocated IRQ (`obj4:0x23d9`); the routing table is dropped when a bus-0 function with a pin has no entry (`obj3:0x48ed`, its callback `obj3:0x482f`). Windows 98 SE `pci.vxd` 4.10.0.2222, 65,895 bytes, SHA-256 `a9268f51f5a486817f5484686398215b3600c8eb3608773195ea05ecfacb303d`, from `win98\BASE6.CAB` of `Win98SE.iso` (SHA-256 `C048C31E...F7F584`); ME `pci.vxd` 4.90.0.3000, 70,539 bytes, SHA-256 `5fcb833b90693617fc8003e3d84e48e7b24058cd579096a43e28effeae61cb58`, from `win9x\BASE2.CAB` of the owner's Windows ME OEM CD, its `Disable_DevNode(.., 2)` at `obj4:0x4f4`, the path compared, not every byte | static (7-Zip extraction of the one file into a scratch directory, a Python LE parser applying the internal fixups and capstone 5 over the code objects, `int 20h` with its dword read as the VxD call; object-relative addresses; nothing executed; a subagent's read, 2026-10-25, its key sites re-read by the worker; not tracked). The disable's condition as the trigger of 98 SE's Code 29 in the emulator is consistent with the runtime reading of `runs/run-44.md` 44.30, which reads the outcome, not the instruction | design record 28 section 12.1; `src/cm/cm_noirq.c` (`niMemOnly`) |
-| **CONFIGMG's `Disable_DevNode` with `CM_DISABLE_HARDWARE` sets problem 29, and `Reprocess_DevNode` and `Setup_DevNode(READY)` clear a problem whatever its code (task 44.30)**: `_CONFIGMG_Disable_DevNode` at `obj7:0xabe7`, `test al,2` then `push 1Dh` / `call obj7:0x7746` at `obj7:0xac14` (the routine sets `DN_HAS_PROBLEM` and the problem, the disable count untouched); `Reprocess_DevNode` (`obj7:0xb265`) and `Setup_DevNode`'s `READY` walk (`obj7:0xa687`, callback `obj7:0x1c81`) reach `obj7:0x1c35` and `obj7:0x7285`, which clears the problem and re-runs the devnode's configuration, setting problem 22 again only where the disable count is not zero. Windows 98 SE `configmg.vxd`, 125,057 bytes, SHA-256 `568f800c9633f1ebaf48204fe2c5e6b5cffaee25f00191b9c29e762a0e154162`, from `WIN98_53.CAB` of the same ISO | static (as the row above; the paths these calls take were followed, not every path of the file; a subagent's read, 2026-10-25). The reprocess's effect on a devnode `PCI.VXD` disabled is also runtime: `runs/run-44.md` 44.30, through this driver's own log on 98 SE in the emulator | design record 28 section 12.1 |
-| **On 98 SE a timed kernel wait is a VMM global time-out, and the VMM processes that list through one restricted event it requests only when its accumulator leaves zero (task 44.29)**: NTKERN's `KeWaitForSingleObject` converts the timeout (`VWIN32_ConvertNtTimeout`) and calls `_VWIN32_WaitSingleObject`; VWIN32 queues a wait block on the object and blocks the thread by `Wait_Semaphore` after `Set_Global_Time_Out(ms, block, callback)`, the callback (and `KeSetEvent`'s path) signalling the semaphore; the VMM's `Update_System_Clock` adds an expired head's time to the global list's accumulator and calls `Call_Restricted_Event` (`PEF_WAIT_PREEMPTABLE`) for the list's handler only when the accumulator goes from 0 to non-zero, the handler zeroing it or queuing itself again. Windows 98 SE `ntkern.vxd` (SHA-256 `fc635ee394f3bde5823c6b900e5ca4739a3f326b8fa611beb9122a0fc54e672e`), `vmm32.vxd` (`c561abaf9510831a309bf587fc9973781277867f817ac4cc8a444450718486ad`, its one entry the VMM) and `vwin32.vxd` (`9391f418ac45a9ecc3b89384812c0c419ea28da0a1564d0e4f1ebaebf2eaaee7`), from `win98\BASE4.CAB` of `Win98SE.iso` | static (7-Zip extraction into a scratch directory, the LE parser and capstone of task 44.30's rows, the code objects placed by matching them in a `pmemsave` image of a 98 SE guest; nothing executed; a subagent's read, 2026-10-25, not re-read line by line by the worker; not tracked). The list's state at the stall (the thread's time-out queued at its head, the accumulator about 158 s, no processing event queued) is runtime, read from that image | `runs/run-44.md` 44.29 |
-| **Windows 98 SE's `VMOUSE.VXD` cancels, when the mouse moves to another VM, an event handle it keeps at offset 4 of its per-VM data that one of its event callbacks leaves stale (task 44.29)**: object 1 offset `A4h` `xchg [edx+4],esi` then `Cancel_Restricted_Event` (return at `AFh`), reached from object 3 offset `34h` after `xchg [C0070FD0],ebx` (the VM the mouse belongs to); the handle stored there by `mov [edx+4],esi` after `Call_Priority_VM_Event` at object 1 offsets `E9h` (callback object 3 offset `BECh`) and `170h` (callback `9F0h`) and object 3 offset `9C2h` (callback `9D3h`); the callbacks at `9D3h` and `9F0h` begin `mov dword ptr [edx+4],0`, the one at `BECh` writes the offset nowhere and ends `and byte ptr [edx],0FEh`. The VMM's cancel routine behind `Cancel_Restricted_Event` and `Cancel_Priority_VM_Event` takes the handle in ESI and returns at once for an event already run or cancelled (`bts [esi+8],31` then `jb`, `C00034E8` in the read boot). `vmouse.vxd` 33,332 bytes, SHA-256 `093c0d6c9db144666843e2fedb2879f277f3b4ed143734188f08e75112636489`, from `win98\BASE4.CAB` of `Win98SE.iso`; object 1 at `C007073C` and object 3 at `C02C0E40` in the guest images read | static (7-Zip extraction into a scratch directory, the LE parser and capstone of task 44.30's rows, the objects placed by matching them in a `pmemsave` image; nothing executed; 2026-10-25; not tracked); the offset is otherwise written only by object 3 offset `B5h` (`xchg [ebx+4],esi` with ESI 0, then `Cancel_Priority_VM_Event`). The cancel of a node whose callback is the VMM's time-out-list handler, from VMOUSE object 1 offset `AFh` and object 3 offset `39h`, is debugger: a QEMU gdbstub breakpoint on the cancel routine, read through the stub, not this driver (`runs/run-44.md` 44.29, "The live read") | `runs/run-44.md` 44.29 |
-| **The ASMedia ASM4242 USB4 host, PCI side and firmware state as `usb4-emu`'s asm4242 model and data record them (task 44.39)**: the topology, ids, bus ranges, bridge windows, BARs and slot capabilities of 00:02.2, 13:00.0, 14:00.0 to 14:03.0, 79:00.0, 7A:00.0 and the enclosure's functions; the host router's id, adapters, HopIDs, buffers, NVM version and ROUTER_CS_1 to 4; the firmware's tunnel (ADP_PCIE_CS_0 of adapters 6 to 9, the HopID 8 entries of adapters 3 and 7); the `_DSD` property names and the `_OSC` UUID in two SSDTs. From `usb4-emu`'s asm4242 data at `7ec3865`, `5d7345a` and `9f333f3` (before the 2026-10-29 squash; the record is `a0b6749` on its `main` after the merge, the archives kept outside that repository), seven archives, by SHA-256: `d37d752481a562f2e1e94013961b0655160d15969971a925f9e642125f2767bd`, `56bb173eafcfaea42e8cf9754eb691d7fef6ae1a113301ea94fae18f890beef1`, `d6bcf5220418a3c4bf8a02938c4a055e4952207004039592fd615b17cdd84cba`, `6476407d996db22244d37e255c7fa048d28ecd1a75bf3b8a68935b0e30d2aef6`, `52ae1ea2c402fe5ef651fef29ce90e58442f1cdbe722c7c0d9af7b9e5823725b`, `846759b3a71ac86612499e0abf3a27f5f979370d8fffb01be0acae84872e5d70` and `a802a36ac83ef79ed138528fe887284d84c1d2b7d6045e4f3e0e79f5aa8607b2`. Where that data came from is recorded in `usb4-emu`; nothing of it is in this repository | static (a text read of the archives' logs, `lspci` output, sysfs files and `thunderbolt` trace, a decode of their raw configuration-space files, and a byte search of two ACPI tables for property names and UUIDs, no disassembly; 2026-10-25; nothing of the archives executed). No file of them is tracked here; `usb4-emu`'s asm4242 research note (section 11 at `a0b6749` on its `main` after the merge; `3090d19` before the 2026-10-29 squash) is that repository's own reading of the same files | design record 22 section 18; roadmap-usb4 44.39 and 44-E.6; design record 23 section 5.13.8 (the controllers' ids and names, task 44.55); the ASM4242 family in `src\cm\cm_ports.c` and the host vector `test\test_tbt_topo.c` `test_asm4242_host`, the ASM4242's topology (task 44.40); the host vectors `test\test_u4cm.c` `test_asm4242_preos` (the firmware's four entries) and `test_asm7` (the fresh entry `00000008h 00000000h`) |
-| **Windows 2000 SP4's `pci.sys` and Windows 98 SE's and ME's PCI enumerator with a 64-bit prefetchable window above 4 GB (task 44.49)**: on the emulator's 4G-off layout, 2000's PCI driver writes the ASM4242 root port's `24h` = `FFF00000h`, `28h` = 0 and `2Ch` = `FFFFFFFFh` (a window from 0 to `FFFFFFFF_FFFFFFFF`) and the guest then executes, without end, the loop at offsets `974Bh` to `976Ch` of the image (its `PAGE` section) that follows a list's back links while each node's byte at `+18h` is 1 and its 64-bit value at `+8h` is not above the previous node's; the list at that moment has one node, linked to itself, `+8h` 0, `+10h` `FFFFFFFF_FFFFFFFF`, `+18h` 1; the return addresses on the stack are the image's `+89Eh`, `+6AE0h` and `+E45h`, then the kernel. 98 SE's and ME's PCI enumerators write only `24h` and `26h` of the bridges, never `28h` or `2Ch`. `pci.sys` as loaded in the q35 2000 base's guest (version resource 5.00.2195.6655, "NT Plug and Play PCI Enumerator"; the file not hashed here, the version the same as that of the `I386\PCI.SY_` the stop, remove and power-down row of this table reads); 98 SE's and ME's as installed on the q35 bases | debugger (QMP `info registers` and `memsave` of the running guest, the registers sampled repeatedly in the loop) and static (capstone 5 over the loop's bytes read from the guest's memory; nothing of the image executed by this project); the configuration writes from QEMU's `pci_cfg_write` trace of the guest, which is the emulator's record, not this driver's; not tracked | `runs/run-44.md` "44.49"; design record 32 sections 1 to 3 |
-| **Windows 2000 SP4's `pci.sys` 5.00.2195.6655 at a function PDO's stop, remove and power-down** (59,312 bytes, SHA-256 `66CCD7B1...EA26`, `I386\PCI.SY_`, the same as `SP4.CAB`'s; no symbols): PnP PDO table at RVA `0x3C78`. `STOP` (`0x7A50`) calls the decode disable (`0x2FF6`: `and ...,0FFF8h` at `0x306B`, offset 4 written only if changed, `0x3093`, no read-back). `REMOVE` (`0x799E`) and `SURPRISE_REMOVAL` (`0x7C70`) do the same unless the PDO is marked not present (`+0x78` bit 0), then D3 through the PM capability (`0x24A2`, PMCSR at cap+4, then `0x23F4`: a 10 ms stall from a table at `0x3D74`, a PowerState read-back, 100 retries at 1 ms, `0xC0000186`); their status is ignored. `QUERY_REMOVE` (`0x7958`) and `QUERY_STOP` (`0x7A6E`) touch no hardware. `START` (`0x789E`) ORs 7 into the saved enables (`0x78D9`) and writes Command through `0x152C`. The D0 return (`0x1468`) rewrites the 64-byte header and restores the saved Command bits. No code tests PMCSR bit 3. The bus rescan (`0x6672`, `0x60AE`) skips a vendor id of `0xFFFF` or 0 (`0x6131` to `0x6147`). No child handler touches the parent bridge; Secondary Bus Reset is only in a bridge's own reset (`0x27BA`) | static (MSVC 6 `dumpbin` 6.00.8447 `/headers /disasm` and capstone 5.0.7 over the file expanded with 7-Zip from the owner's Windows 2000 SP4 media; nothing executed; handler names inferred, not symbols; a subagent's read, 2026-10-25, not re-read line by line by the coordinator) | `docs/contributing/design/17-controller-tolerance.md` section 4.13.5 |
-| **Windows 98 SE's `PCI.VXD` 4.10.2222 at a devnode's stop, remove and set-D3** (65,895 bytes, SHA-256 `A9268F51...303D`, `win98\BASE6.CAB`; device id `0x43`): the enumerator handler (obj4:`0x2763`) sends `CONFIG_STOP` (obj4:`0x2B2F`) and `CONFIG_REMOVE` (obj4:`0x2B08`) to `0x72DF9` with D3. It first runs `0x726E8`, which, when a log configuration is allocated, writes `Command & 0xFFF8` as a dword with Status 0 (obj4:`0x2563`). It reads back the decode bits only (`0x70443`, `and al,3`), never Bus Master Enable. Then, where a PM capability exists, it writes PMCSR (obj4:`0x2BE0`), yields 10 ms (a table at `0x73B14`) and polls PowerState up to 1000 times, returning `CR_FAILURE` on a timeout. The configuration-write primitive (obj4:`0x0C4A`) reads nothing back. D0 sets Bus Master Enable (obj4:`0x11EA`). Services: 0 `_PCI_Get_Version`, 1 `_PCI_Read_Config`, 2 `_PCI_Write_Config`, 3 `_PCI_Lock_Unlock`. No child path touches the parent bridge; Secondary Bus Reset is only in a bridge's own D0 path (obj4:`0x20C7`) | static (a Python LE loader and capstone 5.0.7 over the file extracted with 7-Zip from `Win98SE.iso`, SHA-256 `C048C31E...F584`; nothing executed; a subagent's read, 2026-10-25, not re-read line by line by the coordinator; the order of CONFIGMG's calls not read) | `docs/contributing/design/17-controller-tolerance.md` section 4.13.5 |
-| **The signature `DMAR` is in none of the files below** (a narrow static result: no other remapping mechanism, run-time-built signature, component or firmware was read): a byte search for the ACPI table signature `DMAR` (which also matches it as a 32-bit immediate) finds none in Windows 2000 SP4's eight HALs, `ntoskrnl.exe`, `ntkrnlmp.exe` (`tools\win2ksp4-extracted\`) and `acpi.sys` 5.00.2195.6xxx from `SP4.CAB` (163,120 bytes, SHA-256 `5F3683B9...3DF2`), nor in Windows 98 SE's `acpi.sys` (`win98\BASE4.CAB`, SHA-256 `3DDCACEC...A338`), `ntkern.vxd`, `PCI.VXD` and `CONFIGMG.VXD` (`WIN98_53.CAB`, SHA-256 `568F800C...4162`); `DSDT` is found in both `acpi.sys` | static (a byte search with `grep -c -a` over files extracted with 7-Zip from the owner's media; nothing executed; 2026-10-25; 98 SE's compressed `VMM32.VXD` not searched, firmware not read) | `docs/contributing/design/17-controller-tolerance.md` section 4.13.5 |
-| **Windows 2000's and XP's whole-machine USB walk, and 2000 usbport's `HCD<n>` name (task 44.81)**: `usbui.dll`'s `EnumerateAll` opens `\\.\HCD<n>` for n from 0 while n < 10 and passes over a name that does not open (2000: `push 666B132Ch` at `0x666B3129`, `je 0x666B3221` after the open, `cmp dword ptr [ebp-10h],0Ah` / `jl` at `0x666B3224`; XP SP3: `push 5AF61368h` at `0x5AF6527E`, `je 0x5AF6533E`, `cmp dword ptr [ebp-20h],0Ah` / `jl` at `0x5AF65341`). 2000 `usbport.sys`'s AddDevice names its FDO `\Device\USBFDO-<i>` from i = 0 up while the create returns `C0000035` (`0x1C59D` to `0x1C5DD`) and keeps i at extension `+10Ch` (`0x1C61F`); the legacy link routine (`0x11D4C`) copies `\DosDevices\HCD0`, adds i to the last character (`add ax,30h` at `0x11DC0`) and calls `IoCreateSymbolicLink` once, with no retry. XP SP3's `usbport.sys` carries the same `\DosDevices\HCD0` string (not disassembled). Vista SP2, 7 SP1 (x86 and x64), 8, 8.1 and 10 x86: `usbui.dll` carries no `HCD` string; `stobject.dll` carries `\\.\HCD%d` and the host controller interface's GUID (7 x86: SHA-256 `049dfa9ea45a888b984e459b927a0f8aa4c10b9d36c6c0a0fe57f6329beaf555`, the string at file offset `0x455C`); the scans and the other files' hashes are held with the 44.81 evidence | static (MSVC 6.0 `dumpbin /disasm`); the one try at runtime on 2000 and XP: two EHCI controllers on Windows' driver beside one controller on this driver, the second EHCI with no `HCD` name (`runs/run-44.md` "44.81", boot w, and the XP reading there); not tracked | `runs/run-44.md` "44.81"; design record 13 sections 8.1 and 8.8 |
-| **Windows 7's Intel 82574L miniport walks the PCI capability list with no bound, so configuration space reading all ones holds the processor in it (task 45.49)**: the routine at image offset `33E0h` (the image's base found by its `MZ` header, `8FAB1000h` in leg u2) reads the capability pointer at `34h`, then loops at `3420h` to `3457h`: it reads the word at the pointer, compares its low byte with the wanted id (`10h`, PCI Express) and takes the high byte as the next pointer, leaving only at a match or a next pointer of 0; with every read `FFFFh` it reads offset `FFh` for ever. The caller at `4AE0h` asks for word `12h` of that capability (Link Status); the return addresses on the stack are the image's `+343Eh` (inside the loop, the bus read through `NDIS.SYS`), `+34B8h`, `+4B09h`, `+4572h`, `+3C20h`, `+22C21h`, `+22D68h`, `+14D02h`, then `NDIS.SYS` and the kernel's timer DPC. `e1q6032.sys` 11.0.5.21 ("built by: WinDDK", Intel Corporation), 190,464 bytes, SHA-256 `cfb9403f705466583a691d10dc2182c3c40ecf984fb56f77fef8bd7e14490625`, Windows 7 SP1 x86's own copy in the q35 7 x86 base's `System32\drivers` | debugger (QMP `info registers` of the running guest, sampled every 4 s, and the stack and the code bytes read with QMP `x`) and static (GNU `objdump -D -b binary -m i386` over those bytes; nothing of the image executed by this project); not tracked | `runs/run-45.md` "45.49" |
-| **What the disk class drivers send a disk's port for the SMART and pass-through IOCTLs (task 45.52, reading R1)**: `disk.sys` on Windows 2000 SP4, XP SP3, XP x64 SP2, Vista x86 SP2 and 7 x86 RTM turns `SMART_GET_VERSION`, `SMART_RCV_DRIVE_DATA` and `SMART_SEND_DRIVE_COMMAND` into `IOCTL_SCSI_MINIPORT` (`4D008h`) with an `SRB_IO_CONTROL` of length `1Ch`, signature `SCSIDISK` and the `IOCTL_SCSI_MINIPORT_*` control codes `1B0500h` to `1B050Ah` (XP and later also `1B050Bh`, `1B050Ch`), built with `IoBuildDeviceIoControlRequest`. XP SP3's device control (`10636h`) tests `IsFdo` (`[ext+38h]` bit 0) first and passes a partition's IRP down unchanged (`10B5Ah`); GET_VERSION at `10A66h` (in and out 34h); RCV at `10E2Eh` (input at least 20h, output at least 210h, `ECh` / `B0h` with `D0h` or `D1h`, `bDriveNumber` overwritten at `10EF7h`, `Length` 211h, in 3Ch, out 22Dh); SEND at `10F8Eh` (`B0h` with `D2h`, `D3h`, `D4h`, `D8h`, `D9h`, `DAh`, `DBh`; `Length` 21h, 29h for `DAh`); no bus-type or capability test before any of them. `classpnp.sys` of XP, XP x64, Vista and 7 compares the code with `4D004h` and `4D014h`; Windows 7's (`15FDFh`) refuses an input shorter than 2Ch (`16C0Dh`), sets the next stack location's MinorFunction to 1 (`16C41h`) and calls the device below in the caller's thread (`16C56h`); 2000's names neither code. SHA-256: `disk.sys` 2000 `945edaaa...fb5e`, XP `584bddb0...d689`, XP x64 `ab8ef888...61b0`, Vista `11b74d68...6b08`, 7 `abc42b24...63d2`; `classpnp.sys` 2000 `d15432ca...5e0c`, XP `f6da1c22...a4b2`, XP x64 `d550181a...f3f2`, Vista `b6547ce4...36a2`, 7 `e593f142...c811` | static (capstone 5.0.7 over the files read out of the q35 base images with 7-Zip, and Windows 7's from the public symbol store under `tools\symbols`; nothing executed); not tracked | design record 13 section 16.11, R1 |
-| **The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6, design record 35 section 7.8)**: each of its 24 `NDIS.SYS` pairs is a NUL-delimited name in `WINDOWS\SYSTEM\NDIS.VXD` of 98 SE (166,029 bytes, SHA-256 `71C52BC6AEDD76AED7B6E3D87B413689C3C711A1D896DA9FA36435BA1363FF94`, dated 1999-04-23) and of ME (157,397 bytes, `9E0F9ADA90BDC93985858D14A451AB706584FFC4E6F49BA69F48C00C7A332DB2`, 2000-06-08), the files of the q35 base images, whose LE resident and non-resident name tables hold only `NDIS` and `NDIS_DDB`; the reading discriminates (`NdisQueryBufferSafe` is a name of ME's file and not of 98 SE's; `NdisAllocateNetBufferList` of neither). Besides: each pair is declared in the Windows 2000 DDK's `BINARY_COMPATIBLE` `ndis.h` "so that we don't use functions that aren't available on Windows 9x" (the header's comment, line 27), and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` (`src/net/cdcnet/imports-ndis5.txt` at `57ba809`), an NDIS 5.0 WDM miniport recorded loading and passing traffic on 98 SE and ME (`docs/testing/2026-10-22-cdcnet-9x.md` there). `xhcinet.sys`'s own load on 98 SE and ME was then read (2026-11-01, `runs/run-45.md` "45.59 (legs, continued)": loaded, the service up, ping both ways, in the emulator) | static: export names alone (a NUL-delimited name search with a script of this project, and the LE header's two name tables), the owner's rule of 2026-10-31, 14:40, which admits a Microsoft binary's export names for the import gate's baselines and nothing else; documentation (the DDK header); runtime (another driver's recorded load, QEMU only) | `scripts/import-gate/xhcinet-imports.allow` (each `NDIS.SYS` row: `bc-header`, `ndisvxd-name 98SE ME`, `w98-runtime cdcnet-9x`), `ndisvxd-baselines.expected` (the two files) and `net98-runtime.list`, enforced by `check-imports.ps1 -GateProfile net98` |
-| **The imports of `xhcinet6.sys` on 8, 8.1 and 10, x86 and x64 (task 45.59 step S7, design record 35 section 7.9)**: every `NTOSKRNL.EXE`, `HAL.DLL` and `NDIS.SYS` name it imports is in the export tables of the 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` of its architecture, and on x86 also of Windows 7 SP1 x86's kernel and HAL; the 8.1 and 10 x86 `hal.dll` export `KfAcquireSpinLock` and `KfReleaseSpinLock` as forwarders to the kernel (`dumpbin /exports`: "forwarded to ntoskrnl.KfAcquireSpinLock"), which the kernel exports. The files: Windows 8.1 Update x86 and x64 (`ntoskrnl.exe` 6.3.9600.17415, `hal.dll` 6.3.9600.17196, `ndis.sys` 6.3.9600.17399) and Windows 10 x86 and x64 (`ntoskrnl.exe` 10.0.19041.2965, `hal.dll` 10.0.19041.2728, `ndis.sys` 10.0.19041.1387), each one's size and SHA-256 in its manifest, taken by the owner on 2026-10-31 with `7z e` out of the project's q35 base images, read-only, into the untracked `tools\win81-x86-extracted` and the three others. Only the export names were read (the owner, 2026-10-31: export-table reads for the gate's baselines, export names only); no code, no other header | static (`dumpbin /exports`, run by the gate at every build; nothing executed, nothing disassembled) | `scripts/import-gate/net6-win81-x86-baselines.expected` and its three siblings, `xhcinet6-imports.allow` and `xhcinet6-imports-amd64.allow`, enforced by `check-imports.ps1 -GateProfile net6` |
-| **A common buffer of less than a page on Windows 2000 and XP can come back 8-byte aligned (task 45.59, design record 35 section 6.5)**: on Windows 2000 SP4 x86 (512 MB, one processor, q35 in the emulator), the DMA adapter's `AllocateCommonBuffer` for 2 KiB, cache-enabled, on the adapter `IoGetDmaAdapter` gave `xhcicm.sys` for the NHI (Master, ScatterGather, Dma32BitAddresses, PCIBus), returned virtual address `81E62008h` and logical address `01E62008h`, the same with `MaximumLength` `FFFFFFFFh`. On XP SP3 x86 the service's memory was refused (`cm.net.nomem`) at one start and not at another, the allocation's addresses not logged there: that it is the same alignment is inferred, not read. Requests of whole pages were 16-byte aligned on 2000, and on both systems the service then started | runtime (this driver's own log: a scratch build that logged each allocation's length and both addresses, 2026-11-01; nothing of the HAL read) | `src/cm/cm_pool.c` (`CmDmaCommonAlloc`, whole pages); `runs/run-45.md` "45.59 (legs, continued)" |
+| Fact | Method | Binary | Where used; detail |
+|---|---|---|---|
+| SweetLow's `USBPORT.SYS` has the same unguarded single-TT lookup as the 5.00.2195 builds; the branch was never observed executing | static | SweetLow's `USBPORT.SYS` 5.1.2600.2180, 134,912 bytes, SHA-256 `8A3C9F1B568CB25CF5DD9AF3AF9E5C3400DE24BD087CAA3E4E3345588F5CFB56` | abi section 8; issue 06 section 6; detail: abi appendix A, A.1 |
+| Under that build a truthfully reported Full-Speed device on a root port takes Windows 98 SE down with a fatal exception 0E in `NTKERN`, after usbhub's port reset and before usbport opens EP0 | runtime (QEMU only) | the same file | abi section 8; issue 06 sections 1 and 8; `runs/run-24.md`, 24.3; detail: abi appendix A, A.2 |
+| `USBPORT_GetHciMn` present at ordinal 2, `USBPORT_RegisterUSBPortDriver` at 3, plus an undocumented `DllUnload` at 1; `usbehci.sys` imports only the first two | static (`dumpbin /exports`) | the ABI builds ("Which binaries") | abi section 1 |
+| `USBPORT_REGISTRATION_PACKET` layout identical across all three builds (Phase 3 task 1) | static | the three ABI builds | abi section 3 |
+| The SweetLow WinDDK rebuild has the same exports, ordinals and registration gate as the Windows 2000 SP4 / XP builds, their form of the wrapper (`Version` at +0x10, packet at +0x14), and returns `0x10000001` from `USBPORT_GetHciMn` | both | SweetLow's `USBPORT.SYS` 5.1.2600.2180 (Windows 98) | interface doc section 5, "The SweetLow rebuild"; detail: interface doc appendix A, A.1 |
+| Under that build Windows 98 completes the controller stop on disable, Remove and reinstall, where both 5.00.2195 builds on Windows 98 bugcheck after `RH_DisableIrq` | runtime (QEMU only) | SweetLow's 5.1.2600.2180; NUSB 3.3's and 2000 SP4's 5.00.2195 builds | `docs/contributing/lessons.md`, "The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport"; detail: interface doc appendix A, A.2 |
+| The `USBPORT_MINIPORT_INTERFACE` wrapper differs per build: packet at +0x14 (Win2000/XP) vs +0x10 (NUSB), because NUSB's wrapper has no `Version` field, so an interface offset is not a packet offset | static | the ABI builds | abi section 3, and the `FlushInterrupts` box in section 4 |
+| Registration version gating: `TakePortControl` additionally gated on interface `Version >= 200` in the Win2000/XP builds | static | the ABI builds | abi section 4 |
+| `UsbPortBugCheck` is `KeBugCheckEx(0xD2, 0, 0, 0, 0)`; all four parameters hard zero; the extension argument is pushed and never read | static | the ABI builds | abi section 5 |
+| `UsbPortRequestAsyncCallback` callbacks run at DISPATCH_LEVEL holding neither miniport lock, and cannot be cancelled | static (NUSB `0002785E`) | the ABI builds | abi section 5 and the locking table |
+| `ResetController` runs at DISPATCH_LEVEL inside a usbport spin lock (so `UsbPortWait` is illegal there); `UsbPortInvalidateController(RESET)` queues a DPC rather than acting inline | static | the ABI builds | abi section 4 |
+| Common buffer: 32-bit DMA adapter, page-aligned `StartVA`/`StartPA`, `ROUND_TO_PAGES(size + 0x30)` with usbport's 48-byte header at the end, block zeroed before `StartController`, and `CacheEnabled = TRUE` | static | the ABI builds | abi section 4; consequences in design doc 04 |
+| Scatter/gather elements are page-granular: `ElementLength = 0x1000 - (PA.LowPart & 0xFFF)` clamped to the remaining length | static | the ABI builds | abi section 5 |
+| SG element ordering versus `SgOffset` | not claimed; a static pass cannot establish it | the ABI builds | abi open item 8 |
+| `TransferParameters` is an interior pointer of the transfer record; `SubmitTransfer` preconditions (list pointer never NULL, `SgElementCount == 0` legal) | static | the ABI builds | abi section 4 |
+| Post-`SubmitTransfer` lifetime: usbport's post-callback writes happen after it releases the miniport lock, and the completion path takes no lock ordering it behind them | static | the ABI builds | abi section 4 |
+| `AbortTransfer` post-return lifetime: usbport retains nothing, the record is `ExFreePool`d in the same worker pass, and the miniport extension is interior to the freed block | static | the ABI builds | abi section 4 |
+| `ENDPOINT_FLAG_NUKE` is a controller-teardown flag; on that path usbport completes and frees transfers with no miniport callback | static, with the whole-image negative enumerated so it is checkable without the files | the ABI builds | abi section 4 |
+| The `USBPORT_GetTt` defect: the single-TT branch has no empty-list guard and returns `0xFFFFFFEC`, which `OpenPipe`'s null check passes, bugchecking in `ExfInterlockedInsertTailList` | both | the ABI builds | abi section 8; `docs/contributing/implementation-invariants.md`, "Root Hub Reporting"; detail: abi appendix A, A.3 |
+| Hub-descriptor request shape, and `PowerOnToPowerGood` copied straight through and truncated to a UCHAR (so 20 ms encodes as 10) | static | the ABI builds | abi open item 7, root-hub block in section 4 |
+| Root-hub `RH_DisableIrq`/`RH_EnableIrq` lifecycle: a close is not guaranteed a matching open; per-build addresses recorded | static | the ABI builds | abi section 4 |
+| `RH_SetFeatureUSB2PortPower`'s helper drops its lock before the callback (correcting an earlier wrong claim); caller-held locking in general remains unverified | static | the ABI builds | abi section 4 |
+| The isochronous block: `SubmitIsoTransfer` at packet slot 0x54, the parameter builder and the completion consumer identical across both builds bar three known private offsets, no version gate | static | the ABI builds | abi section 4 |
+| `FlushInterrupts` call site: the device-power completion routine on the `PowerDeviceD0` path, holding neither miniport lock | static, and explicitly not by waiting for a trace (an earlier "remains unreached" was a statement about Phase 3's traces misread as a statement about the binaries) | the ABI builds | abi section 4 |
+| `InterruptNextSOF`: two call sites per build, both the endpoint state-change machine, DISPATCH under `MiniportSpinLock`, and nothing waits on it | static | the ABI builds | abi section 4 |
+| Callback reachability: which slots are actually called on a live target, e.g. `PollController` called repeatedly from bind onward | runtime (Phase 3 traces) | the ABI builds | abi open item, section 7 |
+| `FlushInterrupts` and `InterruptNextSOF` occurrence corroborated by `XHCI_EXTENSION.InterruptFlushes` and `InterruptNextSofRequests` counters in a release build | runtime, corroborating a static reading | the ABI builds | abi open item, section 7 |
+| `HubAddr`/`PortNumber` property values: `PortNumber` names the root-hub port for a device on a root port, and is not a TT-only field | runtime (batch 6-V VM runs, on both builds): a property dump of what usbport handed this driver | the ABI builds | abi section 5 |
+| `SetEndpointState` is edge-triggered on usbport's own recorded state and skips the miniport call when they match | static | the ABI builds | abi section 4 |
+| `UsbPortGetMiniportRegistryKeyValue` (packet slot 0xF0) is populated in both builds and reads one named value from the hardware or software key, PASSIVE_LEVEL only | static | the ABI builds | abi section 6, task 11-V.7 box; detail: abi appendix A, A.4 |
+| The shipping `usbehci.sys` calls that slot exactly once per image, with `BOOL = TRUE` and a 4-byte read of `L"EnIdleEndpointSupport"`, from inside `StartController` | static (both builds) | the two `usbehci.sys` builds | abi section 6, task 11-V.7 box |
+| Controller-lifecycle census: usbport calls `StartController` and `StopController` from three sites and `ResetController` from one per build, every direct caller chain ending at a PnP or power handler (in the Win2000/XP build also an HCD IOCTL that requests a power transition); no transitive negative is claimed | static | the ABI builds | abi section 4, the two notes after the `UsbPortInvalidateController(RESET)` box; detail: abi appendix A, A.5 |
+| `PassThru` (packet slot 0xE0) is driven by the user-mode `IOCTL_USB_USER_REQUEST` escape through the `\DosDevices\HCD<n>` link, PASSIVE_LEVEL with no usbport lock held | both (runtime on both targets: NUSB 5652 in the 2a guest, SP4's 6681 in the 2b guest) | the ABI builds | abi section 4, "Debug / single-packet" box; detail: abi appendix A, A.6 |
+| SP4's native `usbhub.sys` carries no selective-suspend or idle-notification string; SP4's `usbport.sys` carries `DisableSelectiveSuspend`, `HcDisableSelectiveSuspend` and `SelectiveSuspend` | static | 2000 SP4 `usbhub.sys` 5.00.2195.6689, 40,176 B; `usbport.sys` 5.00.2195.6681 | build-and-test.md, "A replug onto an idle-suspended controller"; F18's Windows 2000 reading; detail: `build-and-test.md` appendix A, A.1 |
+| In the three symbol-less 32-bit `usbport.sys` builds the idle suspend is gated by `HcDisableSelectiveSuspend` read from the driver (software) key | both (static; the Hc-alone conclusion corroborated at runtime 2026-09-16) | NUSB 3.3/3.6 5.00.2195.5652, SweetLow's 5.1.2600.2180, 2000 SP4 5.00.2195.6681 | `docs/contributing/lessons.md`, "And then the whole framing turned out to be wrong", the correction; issue 5 section 4; detail: `lessons.md` appendix A, A.1 |
+| NUSB 3.6's `usbhub20.sys` carries `DisableSelectiveSuspend` and `SelectiveSuspend`, its `usbhub.sys` neither, its `usbport.sys` the same three names as SP4's | static | NUSB 3.6 `usbhub20.sys` 5.00.2195.6891, 50,032 B; `usbhub.sys` 4.90.3002.1; `usbport.sys` 5.00.2195.5652 | an unconfirmed candidate explanation for the differing bounded idle observations on the two targets (`build-and-test.md`); detail: `lessons.md` appendix A, A.2 |
+| The idle suspend gate in the six symbol-bearing builds follows the NT 5.x shape on XP and the NT 6.x variants on Vista and 7, completing all nine builds | static | XP SP3 x86, XP/2003 x64 5.2.3790.3959, Vista SP2 and 7 SP1 x86 and x64 `usbport.sys` (public PDBs, section 2) | issue 5 section 5.4; `docs/contributing/lessons.md`, the same correction; detail: issue 05 appendix A, A.1 |
+| `USBPORTBUSIF_ControllerSelectiveSuspend` writes `HcDisableSelectiveSuspend` back, so who calls it decides whether a per-controller value survives | static | the nine `usbport.sys` builds | issue 5 section 5.4; detail: issue 05 appendix A, A.2 |
+| Miniport flag `USB_MINIPORT_FLAGS_DISABLE_SS` (0x20) is tested once per build, in the start routine, and only blocks idle suspend | static | the nine `usbport.sys` builds | issue 5 sections 5.4 and 5.5; `src/xhci_dispatch.c` above `XHCI_MINIPORT_FLAGS`; abi, the `DISABLE_SS` row; detail: issue 05 appendix A, A.3 |
+| A driver declaring `USB_MINIPORT_FLAGS_DISABLE_SS` keeps the controller out of idle suspend on all ten targets, measured against a control that idles | runtime (QEMU guests only) | this driver `1.1.0.0` under each target's own `usbport.sys` | issue 5 section 5.5; detail: issue 05 appendix A, A.4 |
+| No `usbhub.sys` on any NT 6.x build calls `UsbdQueryControllerType`, so the raw `MiniPortFlags` word never leaves usbport on a machine with only the OS's own drivers | static | the four NT 6.x `usbhub.sys` and `usbport.sys` (Vista SP2, 7 SP1, x86 and x64) | issue 5 sections 5.4 and 6; abi, "What `DISABLE_SS` does"; detail: issue 05 appendix A, A.5 |
+| On 32-bit Vista the power plan rewrites `HcDisableSelectiveSuspend` to 0 and the controller suspends at once | runtime (QEMU only) | Vista SP2 x86 `usbport.sys` 6.0.6002.18005, under this driver | issue 5 section 5.4; detail: issue 05 appendix A, A.6 |
+| Vista SP2 x86 and Windows 7 SP1 x86 `usbport.sys` carry the selective-suspend value names, counted as UTF-16 substring matches | static (the value's effect a separate runtime reading) | Vista SP2 x86 `usbport.sys` 6.0.6002.18005, 226,304 B; 7 SP1 x86 6.1.7601.17514, 284,672 B | `build-and-test.md`, "Windows Vista and Windows 7 target VMs"; issue 5 section 5; detail: `build-and-test.md` appendix A, A.2 |
+| Windows 98 SE's and NUSB 3.6's ME `usbd.sys` both export `_USBD_ParseDescriptors@16` (corrected 2026-10-05) | both | 98 SE `usbd.sys` 4.10.2222, 18,912 B, SHA-256 `0118DB14...00AF6F56A`; NUSB 3.6 ME `usbd.sys` 4.90.3000.1, 22,928 B | issue 06 section 5; detail: issue 06 appendix A, A.1 |
+| SweetLow's hidusbf lower filter rewrites the interrupt endpoints' `bInterval` in the select-configuration descriptor from a registry DWORD and imports `_USBD_ParseDescriptors@16` | both (static, corroborated at runtime) | `hidusbf.sys` 1.2.0.10, 3,648 B, not tracked | issue 06 section 5; detail: issue 06 appendix A, A.2 |
+| XP x64 SP2's `LAYOUT.INF` names `usbport.sys`, `usbhub.sys`, `usbd.sys` and `usbui.dll` and no `usbhub20.sys`, resolving to `AMD64\SP2.CAB` and `AMD64\DRIVER.CAB` | static | XP Professional x64 SP2 `AMD64\LAYOUT.INF`, the owner's own ISO | `src/xhci98-amd64.inf`'s header block; `build-and-test.md`, "The files the OS supplies"; roadmap task 21.3; detail: `build-and-test.md` appendix A, A.3 |
+| `usbui.dll` is absent from a stock Windows XP x64 install, as from 32-bit XP: only a USB controller's own install places it | static | the task 21.5 XP x64 guest's clean-install snapshot | `src/xhci98-amd64.inf`'s header block; roadmap task 21.3; detail: `roadmap-miniport-updates.md` appendix A, A.1 |
+| `usbui.dll` is present on a stock Vista and Windows 7 install in both architectures, so the `LayoutFile` row is never consulted there | static | Vista SP2 and 7 SP1 `usbui.dll` (6.0.6001.18000, 6.0.6000.16386, 6.1.7600.16385), image 1 of the owner's own media | Phase 22's open question about the `usbui.dll` row on 6.0/6.1 (`roadmap-miniport-updates.md`); detail: `roadmap-miniport-updates.md` appendix A, A.2 |
+| **M4**: the amd64 `USBPORT_RESOURCES` is `0x48` bytes and `StartPA` stays a 4-byte `ULONG` at `0x40`, so the common buffer is below 4 GB | static | NT 5.2 amd64 `usbport.sys` 5.2.3790.3959 | design record 11 section 5 M4; `src/xhci_usbport.h`; detail: record 11 appendix A, A.1 |
+| **M5**: on NT 5.2 amd64 usbport creates its DMA adapter 32-bit, so no address it hands the miniport is above 4 GB | static | NT 5.2 amd64 `usbport.sys` 5.2.3790.3959 | design record 11 section 5 M5; detail: record 11 appendix A, A.2 |
+| **M6**: all 50 packet callback slots the amd64 `usbehci.sys` fills land on the `0x28 + (X - 0x28) * 2` widening map | static | NT 5.2 amd64 `usbehci.sys` 5.2.3790.3959 | design record 11 section 5 M6; `src/xhci_usbport.h`; detail: record 11 appendix A, A.3 |
+| **M8**: the amd64 `USBPORT_SCATTER_GATHER_LIST` and element layout, read off the producer | static (the defect it explains seen at runtime; no fact rests on that) | NT 5.2 amd64 `usbport.sys` 5.2.3790.3959 | abi, "The amd64 scatter-gather layout (M8)"; design record 11 section 5 M8; `src/xhci_usbport.h`; detail: abi appendix A, A.7 |
+| The Version 300 tier of `USBPORT_REGISTRATION_PACKET` on NT 6.x x86 is twelve `ULONG`s at `0x13C`-`0x168` then 29 pointers at `0x16C`-`0x1DC`, slot by slot | static | Vista SP2 and 7 SP1 x86 `usbport.sys` (public PDBs) | abi section 1 "The Version 300 tier, slot by slot"; design 11 section 6.5; detail: abi appendix A, A.8 |
+| The same tier on NT 6.x amd64 follows `0x250 + (X - 0x13C)` and `0x280 + (X - 0x16C) * 2`, ending at `0x368`, confirmed at every site | static | Vista SP2 and 7 SP1 x64 `usbport.sys` | abi section 1 same section; detail: abi appendix A, A.9 |
+| **The `InterruptDpcEx` contract**: `USBPORT_IsrDpc` calls the slot under the DPC lock with an `enableInterrupts` BOOLEAN and reads only bits 0 and 1 of the result | static | Vista SP2 and 7 SP1 `usbport.sys` | abi section 1 same section; design 11 section 6.5; detail: abi appendix A, A.10 |
+| `MiniPortFlags` as Microsoft's `usbehci.sys` sends it per OS and Version, and the bits NT 6.x usbport tests | static | XP SP3, XP x64, Vista and 7 `usbehci.sys` and NT 6.x `usbport.sys` | abi section 1 same section; detail: abi appendix A, A.11 |
+| `MPf_CloseEndpoint` is the only call through the `CloseEndpoint` slot on Vista and 7 x86 and tests `interface+0x10 >= 12Ch` first, as do `MPf_RebalanceEndpoint` and `MPf_TakePortControl` | static | Vista SP2 and 7 SP1 `usbport.sys` | abi section 1 same section; design 11 section 6.5; detail: abi appendix A, A.12 |
+| The NT 5.x control for the 300 tier: no NT 5.x `usbport.sys` compares against 300 or 310 anywhere in its `.text` | static | XP SP3 and XP x64 `usbport.sys`, 2000 SP4 `USBPORT.SYS`, and the other NT 5.x-family builds | abi section 1 same section; design 11 section 6.5; detail: abi appendix A, A.13 |
+| On all four NT 6.x guests usbport accepts a `Version = 300` registration and drives it | runtime (QEMU only) | Vista SP2 and 7 SP1 `usbport.sys`, x86 and x64, under this driver | roadmap task 22.5; issue 7 section 7.5; detail: abi appendix A, A.14 |
+| Every 32-bit NT 5.x-era `usbport` moves a completed transfer off the endpoint's list with no lock, and reads that list in an endpoint worker holding a per-endpoint lock | static | the 32-bit NT 5.x-era `usbport.sys` builds in `tools/` | issue 8 section 4d; detail: issue 08 appendix A, A.1 |
+| XP SP3 x86 `usbport.sys` calls the `CloseEndpoint` slot with three arguments, from exactly one site | static (the bugcheck that led to it observed at runtime) | XP SP3 x86 `usbport.sys` 5.1.2600.5512, link stamp `480254CE` | abi section 1 `CloseEndpoint` row; `src/xhci_usbport.h` above `PHCI_CLOSE_ENDPOINT`; issue 7 section 7.9; detail: abi appendix A, A.15 |
+| XP x64 `usbport.sys` keeps list heads at device-extension `+0x988` and `+0x9A8`, `+0x988` under the lock at `+0x460` | static; debugger for the dump readings | XP x64 `usbport.sys`, timestamp `45D69800` | issue 8 section 2-section 5; detail: issue 08 appendix A, A.2 |
+| In XP x64 `usbport.sys` a transfer removal stores a status `dword` that lands on `devext+0x988`, and the race behind it (correcting the previous row's "no `dword` store") | static; debugger for the store | XP x64 `usbport.sys`, timestamp `45D69800` | issue 8 sections 4b-4c; `src/xhci.h` `DeliverPerEndpointOnly`; detail: issue 08 appendix A, A.3 |
+| NT 6.x `USBPORTSVC_CompleteTransfer` acquires nothing and assumes its caller holds usbport's EpList lock | static; runtime for the root-hub queries' IRQL | Windows 7 SP1 x86 and x64 `usbport.sys` (PDBs `5224A6DF...` age 12, `71BCD350...` age 1) | issue 07 section 7; design 05 section 7; abi "Completion path"; detail: issue 07 appendix A, A.1 |
+| Windows 7 x64 `usbehci.sys` calls the CompleteTransfer slot only from its done-TD and poll paths, never from `EHCI_InterruptDpcEx` | static | Windows 7 SP1 x64 `usbehci.sys` (PDB `7D5BF41B...` age 1) | issue 07 section 7.1; abi "Completion path"; detail: issue 07 appendix A, A.2 |
+| Vista x64 `usbport.sys` assembles its log-ring tags byte by byte, Windows 7 x64 holds them as imm32 | static | Vista SP2 x64 `usbport.sys` 6.0.6002.18005 (PDB `ABEBA17D...` age 1); 7 SP1 x64 (PDB `71BCD350...` age 1) | issue 07 section 7; the tag tables in `scripts/local/`; detail: issue 07 appendix A, A.3 |
+| XP SP3 `usbhub.sys` suspends a child's port only from a D-state change and hands a child its idle callback only from its own | static | XP SP3 `usbhub.sys` 5.1.2600.5512, 59,520 B | `runs/run-22.md` 22.12 (b); detail: `runs/run-22.md` appendix A, A.1 |
+| XP SP3 `hidclass.sys` idles a device only when two extension fields are nonzero and a registry value is set | static | XP SP3 `hidclass.sys` 5.1.2600.5512, 36,864 B, SHA-256 `84a55432...48bff2` | `runs/run-22.md` 22.12 (b); detail: `runs/run-22.md` appendix A, A.2 |
+| Vista SP2 x86 `usbhub.sys` runs a child's idle callback regardless of the root hub's selective-suspend state; Windows 7 SP1 x86's does not | both (static; the Vista half also runtime) | Vista SP2 x86 `usbhub.sys`, 196,096 B; 7 SP1 x86, 258,560 B | `runs/run-22.md` 22.12 (b); `src/xhci_rh.c` `xhciRhResumeOwesU0`; detail: `runs/run-22.md` appendix A, A.3 |
+| Windows 7 SP1 x86 `usbport.sys` faults in its USB 2.0 bus-time budgeter when a Full-Speed device behind a Full-Speed hub on a root port is configured | both | Windows 7 SP1 x86 `usbport.sys` 6.1.7601.17514, DateStamp `4CE79C15` | `runs/run-22.md` 22.9; issue 6 section 6.2; detail: `runs/run-22.md` appendix A, A.4 |
+| Windows 2000 SP4 and NUSB `usbport.sys` bucket an interrupt endpoint's `Period` in `USBPORT_OpenPipe` and raise a Low-Speed value below 8 to 8 | static | 2000 SP4 `USBPORT.SYS` 5.00.2195.6681; NUSB 3.3 5.00.2195.5652 | abi, "Periodic scheduling: what `Period` actually carries"; `src/xhci_ctx.c` `XhciIntervalFromPeriod`; `src/xhci.h`; detail: abi appendix A, A.16 |
+| SweetLow's Windows 9x `USBPORT.SYS` buckets an interrupt endpoint's `Period` with no Low-Speed floor | static | SweetLow's `USBPORT.SYS` 5.1.2600.2180 | abi, "Periodic scheduling: what `Period` actually carries", the Low-Speed floor table; `src/xhci_ctx.c` `XhciIntervalFromPeriod`; `runs/run-24.md` 24.1; detail: abi appendix A, A.17 |
+| Windows XP SP3 x86 `usbport.sys` carries the Low-Speed floor SP4 and NUSB carry | static | XP SP3 x86 `usbport.sys` 5.1.2600.5512 | abi, "Periodic scheduling: what `Period` actually carries"; detail: abi appendix A, A.18 |
+| Every `usbport.sys` this driver runs under copies an interrupt pipe's bucketed `Period` into `USBPORT_ENDPOINT_PROPERTIES` byte `0x07` before its USB 2.0 budget runs, and nothing else touches that byte | static | all ten `usbport.sys` builds (NUSB 3.3 = 3.6, SweetLow, 2000 SP4, XP SP3, XP x64, Vista and 7 x86 and x64) | `src/xhci_usbport.h` `USBPORT_ENDPOINT_PROPERTIES.PipePeriod`; `src/xhci_slot.c` `xhciEpProgramPeriod`; design 12 section 7; run-24 "24.5"; detail: record 12 appendix A, A.1 |
+| The USB 2.0 budget runs when `MiniPortFlags` has `0x10`, and it overwrites props `+0x06` with the period it budgeted before `OpenEndpoint` is called | static | the same builds | the same; detail: record 12 appendix A, A.2 |
+| `Promote_endpoint_periods` re-budgets an interrupt endpoint at period 1 when its start microframe is above 2, with no speed test on NT 5.x, while NT 6.x skips High Speed | static | the same builds | the same; detail: record 12 appendix A, A.3 |
+| `InterruptScheduleMask` and `SplitCompletionMask` are written only by the USB 2.0 budget and, for High Speed, say which microframe, not how often | static | the same builds | the same; detail: record 12 appendix A, A.4 |
+| Neither `bInterval` nor the endpoint descriptor is passed to the miniport | static | the same builds | the same; detail: record 12 appendix A, A.5 |
+| When a later allocation promotes an open endpoint, the NT 5.x-family usbport rewrites its `Period` and masks, and XP SP3's then calls the miniport's `RebalanceEndpoint`; the callback was not read on the other NT 5.x-family builds, and whether NT 6.x changes `Period` there was not traced | static | the NT 5.x-family builds of the rows above (XP SP3's addresses re-checked; the rest from the reports); NT 6.x not traced | the same; detail: record 12 appendix A, A.6 |
+| XP SP3 x86 `usbport.sys` schedules an isochronous transfer on a separate branch when the endpoint's device is High Speed | both | XP SP3 x86 `usbport.sys` 5.1.2600.5512 (public PDB) | `runs/run-22.md` 22.9; `docs/using/release-notes.md`, Known limitations; detail: `runs/run-22.md` appendix A, A.5 |
+| Every hub INF on this driver's targets binds a generic hub by class, and none names vendor id `0x1209` | static | the `USB2.INF` / `USB.INF` / `usb.inf` of NUSB 3.3, NUSB 3.6, SweetLow's stack, 2000 SP4 and the other targets' media | design record 12 section 3.1; roadmap 24.3.1; detail: record 12 appendix A, A.7 |
+| NT 6.x `USBPORTSVC_InvalidateRootHub` takes usbport's EpList lock | static | Vista SP2 x64 `usbport.sys` 6.0.6002.18005; Windows 7 SP1 x64 | design 12 section 11; abi section 6 `UsbPortInvalidateRootHub`; detail: record 12 appendix A, A.8 |
+| NT 6.x's legacy `UsbPortRequestAsyncCallback` takes neither the timer-list lock nor EpList; its caller is assumed to hold the timer-list lock | static | Vista SP2 and 7 SP1 `usbport.sys`, x64 and x86 | design 12 section 11; `src/xhci_hw.h` `XhciRootHubDeferredArms`; abi section 6; run-24 "The fix batch"; detail: record 12 appendix A, A.9 |
+| NT 6.x `usbport.sys` keeps its spin locks at fixed offsets of the FDO extension, and the miniport extension at a fixed delta from it, per build | static | Vista SP2 and 7 SP1 `usbport.sys`, x86 and x64 (public PDBs) | design 05 "Where a timer may be armed"; `src/xhci_hw.h` `XHCI_ARM_*`; abi section 6; run-24 "24.4"; detail: record 5 appendix A, A.1 |
+| NT 6.x `usbport.sys` calls the miniport's `CheckController` holding no usbport spin lock | static | the same four builds | the same; detail: record 5 appendix A, A.2 |
+| NT 6.x `usbport.sys` calls the miniport's `InterruptDpcEx` under its ISR-DPC lock only | static | the same four builds | the same; detail: record 5 appendix A, A.3 |
+| NT 6.x `usbport.sys` calls a miniport timer callback from `USBPORT_AsyncTimerDpc` holding the timer-list lock, and on Windows 7 also from `USBPORT_CancelAllAsyncTimerCallbacks` holding no lock | static | the same four builds | the same; detail: record 5 appendix A, A.4 |
+| NT 6.x `usbport.sys` calls the root-hub feature callbacks with the timer-list lock from some paths and without it from others | static | the same four builds | the same; detail: record 5 appendix A, A.5 |
+| NT 6.x `usbport.sys` calls `RH_GetPortStatus` and `RH_GetHubStatus` under its MP lock from `USBPORT_RootHub_Endpoint1_Peek`, and the root-hub status callbacks under none of its MP, ISR-DPC or timer-list locks from every other caller | static | the same four builds | the same; detail: record 5 appendix A, A.6 |
+| NT 6.x `usbport.sys` calls the endpoint entry points under its MP-call lock, `StartController`, `StopController` and `PollController` under no spin lock, and `SuspendController` / `ResumeController` under only a wait object | static | the same four builds | the same; detail: record 5 appendix A, A.7 |
+| No NT 6.x `usbport.sys` function takes the MP, MP-call, ISR-DPC or EpList lock while holding the timer-list lock, or the timer-list lock while holding the MP or ISR-DPC lock | static | the same four builds | the same; detail: record 5 appendix A, A.8 |
+| The NT 6.x services a timer callback of this driver may call take none of usbport's MP, ISR-DPC or timer-list locks | static | the same four builds | the same; detail: record 5 appendix A, A.9 |
+| NT 6.x `USBPORTSVC_RequestAsyncCallbackEx` takes seven arguments `(MiniportExt, ms, ctx, ctxLen, callback, PVOID *outHandle /* optional */, BOOLEAN skipLock)` and returns an NTSTATUS | static | the same four builds | the same; detail: record 5 appendix A, A.10 |
+| NT 6.x `USBPORTSVC_CancelAsyncCallback (MiniportExt, entryHandle, BOOLEAN lockAlreadyHeld)` cancels one armed timer under the timer-list lock and returns whether it did | static | the same four builds | the same; detail: record 5 appendix A, A.11 |
+| NT 6.x `usbport.sys` calls `RH_EnableIrq` / `RH_DisableIrq` only from `MPRH_EnableIrq` / `MPRH_DisableIrq`, under the RH-IntrEp lock and then always the ISR-DPC lock | static | the same four builds | design 05 section 3 and "Where the root hub may be announced"; abi section 1 "The `InterruptDpcEx` contract" and section 4 "The root hub on NT 6.x"; `src/xhci.h` `RootHubReportThroughDpc`; detail: record 5 appendix A, A.12 |
+| NT 6.x `USBPORT_IsrDpc` calls `USBPORT_Ev_Rh_IntrEp_Invalidate` after releasing its ISR-DPC lock, if and only if bit 0 or 1 of `InterruptDpcEx`'s return is set, and that path never calls `RH_DisableIrq` | static | the same four builds | the same; detail: record 5 appendix A, A.13 |
+| NT 6.x `usbport.sys` takes its MP lock while holding EpList, through `USBPORT_iSetGlobalEndpointStateTx` -> `MPf_PollEndpoint` | static | the same four builds | design 05 section 3 (cycle C3); detail: record 5 appendix A, A.14 |
+| The build of 2026-09-28 deadlocked Windows 7 SP1 x86 and Vista SP2 x86 with this driver's event DPC calling `USBPORTSVC_InvalidateRootHub` from inside `InterruptDpcEx` | debugger | Windows 7 SP1 x86 and Vista SP2 x86 `usbport.sys`, four vCPUs, under that build | design 05 section 3 (cycle C1); abi section 4 "The root hub on NT 6.x"; run-24 "Round 5 on the fixed build"; detail: record 5 appendix A, A.15 |
+| No NT 5.x or 9x-era usbport was found to take the lock `IsrDpc` holds across `InterruptDpc` under a lock `USBPORT_InvalidateRootHub` takes, and there the service calls `RH_DisableIrq` holding no usbport lock | static | XP SP3 x86, XP x64, 2000 SP4, SweetLow's and NUSB's `usbport.sys` | design 05 section 3 (why the Version 200 tier keeps its in-DPC announcement); detail: record 5 appendix A, A.16 |
+| On every NT 5.x and 9x-era usbport, a claimed interrupt queues `IsrDpc` unconditionally, and `IsrDpc` reads its interrupt-enabled flag under the lock its enable/disable wrapper holds, then calls `InterruptDpc` with no other gate | static | NUSB 3.3 = 3.6 5.00.2195.5652 (SHA-256 `EEC79B5A...9B55`), SweetLow's 5.1.2600.2180, 2000 SP4 5.00.2195.6681, XP SP3 5.1.2600.5512, XP x64 SP2 | design 05 section 4; abi sections 1 and 7; `src/xhci_init.c` `XhciRearmInterrupter` and `XhciUnmaskInterrupts`; run-24 "Round 5 on the fixed build"; detail: record 5 appendix A, A.17 |
+| The same holds on NT 6.x, except that `IsrDpc` skips the miniport while the FDO extension's "not operational" bit 1 is set, and two power paths call `USBPORT_MpInterrupts(TRUE)` while it is still set | static | Vista SP2 and 7 SP1 `usbport.sys`, x86 and x64 | the same; detail: record 5 appendix A, A.18 |
+| Windows 2000 SP4's `KeInsertQueueDpc` returns FALSE only when the DPC is already queued; Windows 98 SE's `NTKERN.VXD` exports no `KeInsertQueueDpc` by name | static | 2000 SP4 `ntkrnlmp.exe`; 98 SE `NTKERN.VXD` | design 05 section 4; `src/xhci_init.c` `XhciRearmInterrupter`; run-24 "Round 5 on the fixed build"; detail: record 5 appendix A, A.19 |
+| Windows 7 SP1 `usbhub.sys` bugchecks 0xFE (8, 6, code, PortData) when a port's change-queue gate is not released within 60 s | static | Windows 7 SP1 `usbhub.sys` 6.1.7601.17514, x86 DateStamp `4CE79C42`, x64 `4CE7A68E` | run-24 "Round 6 on the round-5 fixes"; design 12 section 11; detail: `runs/run-24.md` appendix A, A.1 |
+| The three 0xFE bugchecks of round 6 were that watchdog, on a root port of the root hub's usbhub instance | debugger | the same `usbhub.sys`, on the round-6 guests' dumps | run-24 "Round 6 on the round-5 fixes"; detail: `runs/run-24.md` appendix A, A.2 |
+| Windows 7 SP1 `usbhub.sys` gives a port reset 2 s | static (from the dump analyses; not re-checked) | the same `usbhub.sys` | run-24 "Round 6 on the round-5 fixes"; design 12 section 11; detail: `runs/run-24.md` appendix A, A.3 |
+| Windows 7 SP1 x64 `usbhub.sys` takes usbport's controller-wide bus lock for a port enumeration, and usbport records no owner of it | static (not re-checked) | Windows 7 SP1 x64 `usbhub.sys`; `usbport.sys` DateStamp `4CE7A670` | run-24 "Round 6 on the round-5 fixes"; detail: `runs/run-24.md` appendix A, A.4 |
+| In the Windows 7 x64 dump the gate's holder had waited 60.03 s on that bus lock, a virtual hub's port-1 enumeration held it, and this driver held no device record | debugger | the round-6 Windows 7 x64 kernel summary dump | run-24 "Round 6 on the round-5 fixes"; design 12 sections 3.3 and 11; `src/xhci_slot.c` `XhciSlotPortHasRecords`; detail: `runs/run-24.md` appendix A, A.5 |
+| In the round-7 Windows 7 x64 dump the same chain held, and each looping root port's disown debt had its own device's disowned, idle record under it | debugger | the round-7 Windows 7 x64 dump (this build's PDB timestamp `6ABB4C14`) | run-24 "Round 7 on the disown fix"; design 12 section 11; `src/xhci_slot.c` `XhciSlotPortHasRecords`; detail: `runs/run-24.md` appendix A, A.6 |
+| In the round-7 Windows 7 x86 dump the crash was the same 0xFE, and every looping root port's debt had one disowned, idle record under it | debugger | the round-7 Windows 7 x86 dump (PDB timestamp `6ABB4A71`) | run-24 "Round 7 on the disown fix"; design 12 section 11; `src/xhci_slot.c` `XhciSlotPortRecordsDisownedIdle`; detail: `runs/run-24.md` appendix A, A.7 |
+| Windows 7 SP1 x86 `usbhub.sys` records the bus lock's owner in the hub, and usbport keeps the address it allocates in the device handle | static (not re-checked) | Windows 7 SP1 x86 `usbhub.sys` `4CE79C42` and `usbport.sys` | run-24 "Round 8 on the idle-disown fix"; detail: `runs/run-24.md` appendix A, A.8 |
+| In the round-8 Windows 7 x86 dump the same 0xFE was a circular wait on a USB address this driver still held, with no disown debt anywhere | debugger | the round-8 Windows 7 x86 dump (PDB timestamp `6ABBAAAD`) | run-24 "Round 8 on the idle-disown fix"; design 12 section 11; `src/xhci_slot.c` `xhciDevByAddress`; detail: `runs/run-24.md` appendix A, A.9 |
+| Vista's and Windows 7's usbhub remove a disconnected device without disabling its port | both | static: Windows 7 SP1 x86 and Vista SP2 x64 `usbhub.sys`; runtime: Windows 7 x86 and x64 | design 12 section 11; detail: record 12 appendix A, A.10 |
+| XP SP3 `usbhub.sys` clears a port feature through one helper and never with `PORT_POWER` | static; runtime for the neighbouring claim | XP SP3 `usbhub.sys` 5.1.2600.5512, 59,520 B | `runs/run-24.md`, "The clauses never read"; detail: `runs/run-24.md` appendix A, A.10 |
+| Vista's and Windows 7's `usbhub.sys` hard-reset a hub only through one exception table, and a first-reset change reading a port enabled and not connected is one of its entries | static | Vista SP2 and 7 SP1 `usbhub.sys`, x86 and x64 (Windows 7 SP1 x86 DateStamp `4CE79C42`) | run-24 "Round 9 on the address reclaim"; design 12 section 11; `src/xhci_vhub.c` `XhciVhubPort1Report`; detail: `runs/run-24.md` appendix A, A.11 |
+| In the round-8 Windows 7 x86 dump a virtual hub's usbhub had repeated that first-reset path on its port 1 until the crash | debugger | the round-8 Windows 7 x86 dump | run-24 "Round 9 on the address reclaim"; `src/xhci_vhub.c` `XhciVhubPort1Report`; detail: `runs/run-24.md` appendix A, A.12 |
+| In the round-10 Windows 7 x86 NMI dump every hub-reset turn began with usbhub's first or second reset of the hub's port 1 timing out with the port enabled | debugger plus static (the raisers and state tables disassembled) | the round-10 Windows 7 x86 dump | run-24 round 10; `src/xhci.h` `SoftInterruptOwed`; detail: `runs/run-24.md` appendix A, A.13 |
+| Windows 7 x86 `usbhub.sys` times a port reset with a 2000 ms timer, and ends it on a change that takes three requests to the hub | static | Windows 7 SP1 x86 `usbhub.sys` (PDB) | `src/xhci.h` `SoftInterruptOwed`; detail: `runs/run-24.md` appendix A, A.14 |
+| Windows 7 x86 usbport's controller-invalidate service, type 3, simulates an interrupt through its own interrupt DPC | static | Windows 7 SP1 x86 `usbport.sys` (PDB) | `src/xhci.h` `SoftInterruptOwed`; `src/xhci_slot.c` `xhciSlotDeferredWorkEx`; detail: `runs/run-24.md` appendix A, A.15 |
+| NUSB 3.6 gives a `usbstor.sys` disk a drive letter on Windows 98 SE through `usbntmap.inf`'s `[USBMPHLP.Dev]` binding, as its INFs state it | static | NUSB 3.6's `usbntmap.inf`, `ntmap.inf`, `_nusb.inf` (from `nusb36e.exe`) | `roadmap-hcd.md`, the decisions table ("Mass storage on Windows 98 SE"); design record 13 section 4; roadmap task 31-0; detail: record 13 appendix B, B.1 |
+| Windows 98 SE's `hidusb.sys` sends its PDO `SUBMIT_URB`, `GET_PORT_STATUS` and `RESET_PORT`, and no `IRP_MN_QUERY_INTERFACE` | static | 98 SE `hidusb.sys` 4.10.2222 (identities in record 13 section 6.2) | record 13 section 6; detail: record 13 appendix B, B.2 |
+| Windows 98 SE's `usbaudio.sys` sends only `SUBMIT_URB` and no `QUERY_INTERFACE` | static | 98 SE `usbaudio.sys` 4.10.2222 | record 13 section 6; detail: record 13 appendix B, B.3 |
+| NUSB 3.3's and 3.6's `usbstor.sys` are the same file; it sends `SUBMIT_URB`, `GET_PORT_STATUS` and `RESET_PORT`, no `QUERY_INTERFACE` | static | NUSB `usbstor.sys` 4.90.3000.1, 21,040 bytes, SHA-256 `B92A6A15...2D8C` | record 13 section 6; detail: record 13 appendix B, B.4 |
+| Windows 2000 SP4's `hidusb.sys` and `usbstor.sys` each send `SUBMIT_URB`, `GET_PORT_STATUS` and `RESET_PORT`, and neither queries an interface | static | 2000 SP4 `hidusb.sys` 5.00.2142.1, `usbstor.sys` 5.00.2195.6655 | record 13 section 6; detail: record 13 appendix B, B.5 |
+| Windows 2000 SP4's `usbaudio.sys` sends `IOCTL_INTERNAL_USB_GET_BUS_INFO` and fails when the bandwidth does not fit | static | 2000 SP4 `usbaudio.sys` 5.00.2150.1 | record 13 section 6; roadmap 26-A.6; detail: record 13 appendix B, B.6 |
+| Windows XP SP3's `hidusb.sys` adds `SUBMIT_IDLE_NOTIFICATION` and URB 0x2A `GET_MS_FEATURE_DESCRIPTOR` to the 2000 set; no `QUERY_INTERFACE` | static | XP SP3 `hidusb.sys` 5.1.2600.5512, 10,368 bytes | record 13 section 6; detail: record 13 appendix B, B.7 |
+| Windows XP SP3's `usbstor.sys` queries `USB_BUS_INTERFACE_USBDI_GUID` at version 1, size 0x24, and tolerates a failure | static | XP SP3 `usbstor.sys` 5.1.2600.5512 | record 13 section 6; detail: record 13 appendix B, B.8 |
+| Windows XP SP3's `usbaudio.sys` queries `USB_BUS_INTERFACE_USBDI_GUID` at version 0, size 0x20, and calls only `QueryBusTime` | static | XP SP3 `usbaudio.sys` 5.1.2600.5512 | record 13 section 6; detail: record 13 appendix B, B.9 |
+| **`USB_BUS_INTERFACE_USBDI_GUID` is `{b1a96a13-3de0-4574-9b01-c08feab318d6}`**, with versions 0 to 3 at x86 sizes 0x20 / 0x24 / 0x28 / 0x30 and x64 sizes 0x40 / 0x48 / 0x50 / 0x60 | static | WDK 7.1 `inc\ddk\usbbusif.h`; the bytes in XP SP3 and XP x64 `usbstor.sys` and XP SP3 `usbaudio.sys` | record 13 section 6; detail: record 13 appendix B, B.10 |
+| ASIX `AX88772.SYS` (98 SE / ME) sends only `SUBMIT_URB` and refuses to continue below USBDI version 0x101 | static | ASIX `AX88772.SYS` 3.0.3.12 | record 13 section 6; detail: record 13 appendix B, B.11 |
+| ASIX `ax88772.sys` (2000 / XP) is a KMDF 1.7 client whose PDO traffic goes out through `Wdf01000.sys`, which was not read | static | ASIX `ax88772.sys` 3.4.3.38 | record 13 section 6; roadmap 26-A.6, 28-A.1; detail: record 13 appendix B, B.12 |
+| `hidclass.sys` of 98 SE, 2000 SP4 and XP SP3 builds `IRP_MN_QUERY_CAPABILITIES` and requests `IRP_MN_WAIT_WAKE` and `IRP_MN_SET_POWER`; none sends an `IOCTL_INTERNAL_USB_*` | static | `hidclass.sys` 4.10.2222, 5.00.2195.6655, 5.1.2600.5512 (record 13 section 6.2) | record 13 section 6; detail: record 13 appendix B, B.13 |
+| The identities of the XP x64 SP2, Vista SP2 and Windows 7 SP1 class drivers read for task 25.2 | static | `hidusb.sys`, `usbstor.sys`, `usbaudio.sys` of those systems (versions, lengths and SHA-256s in record 13 section 6.2) | record 13 section 6; detail: record 13 appendix B, B.14 |
+| The `usbd.sys` exports the class drivers import are the same on every target read | static | the class drivers in `tools\*-extracted\class\` | record 13 section 6; detail: record 13 appendix B, B.15 |
+| `hidusb.sys` on XP x64, Vista and 7 sends `SUBMIT_URB`, `RESET_PORT`, `GET_PORT_STATUS` and `SUBMIT_IDLE_NOTIFICATION` | static | XP x64, Vista SP2 and 7 SP1 `hidusb.sys` (record 13 section 6.2) | record 13 section 6; detail: record 13 appendix B, B.16 |
+| `usbstor.sys` on XP x64, Vista and 7 queries `USB_BUS_INTERFACE_USBDI_GUID` at version 1 in `USBSTOR_GetBusInterface` | static | XP x64, Vista SP2 and 7 SP1 `usbstor.sys` | record 13 section 6; detail: record 13 appendix B, B.17 |
+| `usbaudio.sys` queries `USB_BUS_INTERFACE_USBDI_GUID` at version 0, size 0x40, on XP x64, and at version 1 on Vista and 7 | static | XP x64, Vista SP2 and 7 SP1 `usbaudio.sys` | record 13 section 6; detail: record 13 appendix B, B.18 |
+| Windows 2000 SP4 `usbaudio.sys` builds its configuration request for the audio interfaces only and then walks `bNumInterfaces` entries | both | 2000 SP4 `usbaudio.sys`, DateStamp `3803CAD4` | `docs/contributing/runs/run-26.md`, c14; detail: `runs/run-26.md` appendix A, A.1 |
+| None of the fifteen XP x64, Vista and 7 class drivers sends `CYCLE_PORT`, `GET_DEVICE_HANDLE(_EX)`, `GET_HUB_COUNT`, `GET_ROOTHUB_PDO`, `GET_BUS_INFO`, `GET_CONTROLLER_NAME` or `GET_DEVICE_CONFIG_INFO`, queries an interface but USBDI, or asks for a USBDI version above 1 | static | the fifteen class drivers of record 13 section 6.2 | record 13 section 6; roadmap 26-A.6, 28-A.1; detail: record 13 appendix B, B.19 |
+| Windows 98 SE's own USB 1.1 host controller drivers import `IoGetDmaAdapter`, `IoConnectInterrupt`, `KeSynchronizeExecution` and the other kernel names listed | static | 98 SE `uhcd.sys` 4.10.2222, 30,448 bytes; `openhci.sys` 4.10.2222, 23,632 bytes | record 13 section 7; `scripts/import-gate/xhci98-imports.allow`; roadmap 25.3, 25.7; detail: record 13 appendix B, B.20 |
+| Both reach DMA only through the adapter's `DMA_OPERATIONS` | static | the same two files | record 13 section 7; roadmap 25.7; detail: record 13 appendix B, B.21 |
+| Over 86 binaries, `ExAllocatePoolWithTag` is imported by 62 stock 98 SE drivers and `ExFreePool` by 61, while none imports the untagged `ExAllocatePool` | static | 67 98 SE WDM drivers, the two SE files, NUSB 3.3's eight and NUSB 3.6's nine (record 13 Appendix A) | record 13 section 7 and Appendix A; `scripts/import-gate/xhci98-imports.allow`; detail: record 13 appendix B, B.22 |
+| Nineteen kernel and HAL names a stock 98 SE driver imports are absent from `ntkern.vxd`'s NUL-delimited strings, `KeInsertQueueDpc` among them | static | 98 SE `ntkern.vxd` and the drivers of the row above | record 13 section 7; the `win98-evidence.list` header; detail: record 13 appendix B, B.23 |
+| NUSB 3.6's `wdmstub.sys` carries as strings but does not import `ExFreePoolWithTag` and the other names listed | static | NUSB 3.6 `wdmstub.sys` (Walter Oney Software) 5.00.006, 12,767 bytes | `scripts/import-gate/win98-evidence.list` NUSB 3.6 caveat; record 13 section 7; the deny rows of `xhci98-imports.allow`; detail: record 13 appendix B, B.24 |
+| The Windows 2000 DDK links drivers against `ntoskrnl.lib hal.lib wmilib.lib`, its `ntoskrnl.lib` defines `READ_REGISTER_*` / `WRITE_REGISTER_*`, and `memcmp` is in none and not exported by 2000 SP4's kernels | static | the Windows 2000 DDK's `libfre\i386` libraries and headers; 2000 SP4's kernels | record 13 section 7; the allowlist's module column; detail: record 13 appendix B, B.25 |
+| The Windows 98 SE files staged in `tools\win98se-extracted\wdm\` (67) and the NUSB 3.6 files (9) are identified by version, length and SHA-256 | static | those 76 files (record 13 Appendix A) | `scripts/import-gate/win98-evidence.list`; record 13 Appendix A; detail: record 13 appendix B, B.26 |
+| The `USBUSER` request set `usbui.dll` sends a controller is one request (`USBUSER_GET_CONTROLLER_INFO_0`) on two targets and none on seven | static | the nine `usbui.dll` builds (section 2's symbol table) | record 13 section 8; roadmap 26-A.8; detail: record 13 appendix B, B.27 |
+| The legacy controller IOCTLs `usbui.dll` sends on all nine builds are `IOCTL_GET_HCD_DRIVERKEY_NAME` (`0x220424`) and `IOCTL_USB_GET_ROOT_HUB_NAME` (`0x220408`) | static | the nine `usbui.dll` builds | record 13 section 8; roadmap 26-A.8; detail: record 13 appendix B, B.28 |
+| The hub IOCTLs `usbui.dll` sends a hub, per build | static | the nine `usbui.dll` builds | record 13 section 8; roadmap 26-A.8; detail: record 13 appendix B, B.29 |
+| `usbui.dll`'s configuration-descriptor request carries `bRequest` 0, on all nine builds | static | the nine `usbui.dll` builds | record 13 section 8; `src/hcd_door.c` `hcdDoorDescriptor`; detail: record 13 appendix B, B.30 |
+| **How the pages find their device**: 98 SE, ME, 2000 SP4, XP SP3 and XP x64 read `SymbolicName` from the devnode's hardware key; Vista and 7 find it otherwise | static | the nine `usbui.dll` builds | record 13 section 8; roadmap 26-A.8; detail: record 13 appendix B, B.31 |
+| What the Power page computes from the hub's and devices' descriptors | static | Windows 7 x86 `usbui.dll` (PDB names) | record 13 section 8; detail: record 13 appendix B, B.32 |
+| **Who reads the `_EX` `Speed` byte** (task 36.18): Vista's and 7's `usbui.dll` treat only 2 as High Speed, so 3 and 4 list a device among the Full Speed devices (a misclassification, not a crash); XP's pages never read the byte | static | Windows 7 x86 and Vista x64 `usbui.dll` (PDB names) | record 13 section 8.4; detail: record 13 appendix B, B.33 |
+| The speed ceiling of the node-connection interface: `USB_DEVICE_SPEED` stops at `UsbHighSpeed` and the Windows 2000 DDK has no `usb200.h` | static | WDK 7.1 `inc\api` and the Windows 2000 DDK `inc` headers | record 13 section 8; the Phase 25 checkpoint wording; detail: record 13 appendix B, B.34 |
+| The root-hub page each OS's INF registers | static | the targets' `usb.inf` / `usbport.inf` and NUSB's and SweetLow's INFs | record 13 section 8; `src/xhci98.inf`, `src/xhci98-amd64.inf`; the INF gate's `HCD-HUBPAGE`; detail: record 13 appendix B, B.35 |
+| The non-VID `USB\` ids the OS INFs match | static | the INFs and DLLs of 98 SE, ME, NUSB 3.3 / 3.6, SweetLow, 2000 SP4, XP SP3, XP x64, Vista and 7 | record 13 section 8 (the root-hub id `XHCI98\ROOT_HUB`); detail: record 13 appendix B, B.36 |
+| Windows 7 x86 `usbport.sys` writes `SymbolicName` from `USBPORT_EnableDeviceInterface`, and every `usbport.sys` and `usbhub(20).sys` read carries the string | static | Windows 7 x86 `usbport.sys` 6.1.7601.17514 (PDB `usbport.pdb/5224A6DF50AF4F28A0A7A60F3EA734812`) and the others named | record 13 sections 7 and 8; detail: record 13 appendix B, B.37 |
+| Windows 98 SE's `usb.inf` binds `USB\COMPOSITE` (and 28 VID/PIDs) to `[Composite.Dev]`, whose `NTMPDriver` is `usbhub.sys` | static | the INFs of the owner's `Win98SE.iso` (SHA-256s in record 13 section 10.6) | record 13 section 10; detail: record 13 appendix B, B.38 |
+| Windows 2000 SP4's `usb.inf` binds `USB\COMPOSITE` to service `usbhub`; XP SP3's, XP x64's, Vista SP2's and 7 SP1's to service `usbccgp` | static | the INFs of those media (SHA-256s in record 13 section 10) | record 13 section 10; detail: record 13 appendix B, B.39 |
+| **NUSB 3.6's `USB.INF` and SweetLow's `USB2.INF` bind `USB\COMPOSITE` to `NTMPDriver` `usbccgp.sys` on Windows 98** | static (a text read of `tools\nusb36-extracted\USB.INF` and `tools\sweetlow-extracted\USB2.INF`; a subagent's read, 2026-10-02, not re-read line by line by the coordinator) | NUSB 3.6 `USB.INF`; SweetLow's `USB2.INF` | `docs/contributing/design/13-superspeed-hcd.md` section 10 (never `USB\COMPOSITE`) |
+| No hub INF on any target names an `XHCI98\` id, and the hub ids they match are all under `USB\` (task 33.4) | static | the targets' `usb.inf` / `usbport.inf` (extracted INFs) | record 13 section 10.11; `src/xhci98.inf`, `src/xhci98-amd64.inf`; the INF gate's `HCD-HUB`; detail: record 13 appendix B, B.40 |
+| No INF read names a `USB\XHCI98_` id or contains `XHCI98` at all, and no `USB\` token in them is a wildcard (task 38.8) | static | 214 INFs (the 187 under `tools\*-extracted\` and the others named) and the binaries searched | record 13 section 10.13.2; detail: record 13 appendix B, B.41 |
+| The hub drivers' id templates, as UTF-16 strings | static | 98 SE `usbhub.sys` 35,680 bytes, SHA-256 `e898b75f...afc31`; XP SP3, Vista x86 and 7 x86 `usbhub.sys` | record 13 section 10 (case-insensitive matching; the open `DevClass` question); detail: record 13 appendix B, B.42 |
+| `usbccgp.sys` 5.1.2600.5585 and 5.1.2600.2180 carry the `USB\Class_nn...` and `&MI_` id templates | static | `usbccgp.sys` 5.1.2600.5585, SHA-256 `4c1b3e8f...c66c5` (NUSB 3.6's and SweetLow's XP SP3 QFE copy); 5.1.2600.2180, `683061af...86457` (SweetLow's) | record 13 section 10; detail: record 13 appendix B, B.43 |
+| Windows 7 SP1 x86 `usbccgp.sys` groups interfaces by IAD, else by a positional legacy rule | static | Windows 7 SP1 x86 `usbccgp.sys` 6.1.7601.17514, SHA-256 `288cac9f...e9dc` | record 13 sections 10.8 rule 2, 10.9; detail: record 13 appendix B, B.44 |
+| In that build `GroupInterfacesByFunction` calls `FindInterfaceByClass` with class 2, subclass 8, then `GroupSubordinateInterfaces`; the CDC path's condition was not read | static | the same file | record 13 sections 10.7, 10.8 rule 3, 10.9; detail: record 13 appendix B, B.45 |
+| `usbccgp.sys` 5.1.2600.5585 has `GetFunctionInterfaceListBase` with the same class `0x0D` skip and class `0x01` comparisons, and `ParseUSBInterfaceAssociationDescriptors`, and no `Group*` routine | static | `usbccgp.sys` 5.1.2600.5585 (the XP SP3 QFE build NUSB 3.6 ships) | record 13 section 10.8 rules 2 and 3; detail: record 13 appendix B, B.46 |
+| NUSB's `USBPORT.SYS` and Windows 98 SE's `uhcd.sys` reach PCI configuration space with `IRP_MN_READ_CONFIG` / `IRP_MN_WRITE_CONFIG` sent to the PDO saved at `AddDevice`, not to the attached lower object | static | NUSB `USBPORT.SYS` 5.00.2195.5652; 98 SE `uhcd.sys` 4.10.2222 and `openhci.sys` | `src/hcd_svc.c` `HcdSvcConfigSpace`; detail: record 13 appendix B, B.47 |
+| The id vocabulary NUSB's `usbstor.sys` builds its disk PDOs' ids from, as strings in the image | static | NUSB 3.3 / 3.6 `usbstor.sys` | roadmap task 31-A.2, `src/uas/uas_iu.c` `UasBuildId` and `src/uas/uas_pdo.c`; task 31-0; detail: record 13 appendix B, B.48 |
+| ASIX's Windows 98 `AX88772.SYS` waits for its URBs by polling `Irp->IoStatus.Status` for `STATUS_PENDING`, not on an event | static | ASIX `AX88772.SYS` 3.0.3.12 | `src/hcd_urb.c` `HcdDevicePdoInternalIoctl`; detail: record 13 appendix B, B.49 |
+| NUSB 3.3's `USBPORT.SYS` makes `STATUS_PENDING` visible before it pends a URB IRP, and its select handler refuses a configuration descriptor with `wTotalLength` 0 | static | NUSB 3.3 `USBPORT.SYS` 5.00.2195.5652 | `src/hcd_urb.c` `HcdDevicePdoInternalIoctl`; detail: record 13 appendix B, B.50 |
+| Windows 98 SE's configuration manager sends a device PDO BusRelations and `IRP_MN_QUERY_ID` after its `IRP_MN_REMOVE_DEVICE` has completed; Windows 2000 SP4 sends nothing after the REMOVE | runtime (QEMU) | 98 SE under NUSB 3.3 and 2000 SP4, with this driver | `src/hcd_pdo.c` (`RemovedPdos`, `hcdReapRemoved`); `runs/run-27.md`, "The closing legs"; `lessons.md`; detail: `runs/run-27.md` appendix A, A.1 |
+| ReactOS's `usbhub` names a device by its serial number only when the serial string passes a character check and is unique among the hub's ports | ReactOS source read, not a binary (section 3) | ReactOS `drivers/usb/usbhub` at `0298e10d5d904a0230868be8f7bdf6436d589c62` | `src/xhci_func.c` (`XhciFuncSerialId`), `src/hcd_pdo.c` (`hcdSerialTakenLocked`, `hcdSerialTakenElsewhere`); record 13; detail: record 13 appendix B, B.51 |
+| Text-mode Setup's own USB support, per medium | static | `TXTSETUP.SIF` of `win2ksp4.ISO` (335,081 B, SHA-256 `ECA9CDFB...CB6BF2`) and the other media (record 13 section 5.6) | record 13 section 5.6; `src/txtsetup.oem`, `src/txtsetup-amd64.oem`; roadmap 33.3; detail: record 13 appendix B, B.52 |
+| The `txtsetup.oem` format, from the Windows 2000 DDK's sample | static | 2000 DDK `src\setup\inf\scsi\txtsetup.oem`, 1,472 B, SHA-256 `62736CB3...6A165C01` | record 13 section 5.6; `scripts/inf-gate/check-txtsetup-oem.ps1`; detail: record 13 appendix B, B.53 |
+| **What text-mode Setup does with each `txtsetup.oem` file type** (design record 18 section 15.9's amendment) | both (static; corroborated by the F6 legs) | 2000 SP4 and XP SP3 `SETUPLDR.BIN` and `SETUPDD.SYS` | record 18 section 15.9; `src/txtsetup.oem`; `scripts/inf-gate/check-txtsetup-oem.ps1` `OEM-COPY`; detail: record 18 appendix A, A.1 |
+| Where text mode reads an F6 option's files, and what a `driver` line costs | both (static; corroborated at runtime, QEMU) | 2000 SP4 `setupdd.sys` (`16dfe965...6ada69`) and XP SP3's | `lessons.md`, "A `txtsetup.oem` disk is always read from drive A: ..."; record 13 section 5.6, limit 7; detail: record 18 appendix A, A.2 |
+| Windows 7 SP1 x86 `usbhub.sys` keeps a device PDO it is sent `IRP_MN_STOP_DEVICE` for, and restarts the device under the same PDO at the next START | static | Windows 7 SP1 x86 `usbhub.sys` 6.1.7601.17514 (`usbhub.pdb` `C8AAA35CAB46490FBA4B37ED793CC0022`) | issue 09 section 4.3; `src/hcd_pdo.c` (the dormant state, roadmap-hcd task 33.1); detail: issue 09 appendix A, A.1 |
+| Windows 98 SE and ME disable a controller in Device Manager with `QUERY_STOP` and `STOP` to each device PDO, the root hub and the controller, and no `REMOVE`, and enable it by starting them again | runtime (QEMU) | 98 SE and ME configuration managers, with this driver | issue 09 sections 3, 4 and 7; `src/hcd_pnp.c` (`StopPreserve`); detail: issue 09 appendix A, A.2 |
+| What a hub driver answers in a device PDO's `DEVICE_CAPABILITIES` `Address` and `UINumber`, and XP's `DeviceTextLocationInformation` | static | XP SP3 `usbhub.sys` 5.1.2600.5512, 59,520 B, SHA-256 `a99c4528...b300fe`; Windows 7 x86's (PDBs `A743565664594F7592F40645D0B71F3A1`, `C8AAA35CAB46490FBA4B37ED793CC0022`) | record 13 section 10.11, "Address"; `src/xhci_hub.c` `XhciHubPdoAddress`; `src/hcd_pdo.c`; detail: issue 09 appendix A, A.3 |
+| hidusbf's `Setup.exe` takes a USB device's `SPDRP_ADDRESS` as the connection index on its parent hub | static | hidusbf `Setup.exe`, 2026-10-03 build, 576,016 B, SHA-256 `b8be2152...2aff185e` | record 13 section 10.11, "Address"; `src/xhci_hub.c` `XhciHubPdoAddress`; detail: record 13 appendix B, B.54 |
+| No class driver of any target sends `IOCTL_INTERNAL_USB_CYCLE_PORT`, and `usbaudio` sends no port request at all (task 35-T.0) | static | the `hidusb.sys`, `usbstor.sys`, `usbaudio.sys` and `hidclass.sys` under `tools\*-extracted\` | record 13 section 6.7; record 17 section 4.10; roadmap 35-T.0 / 35-V; detail: record 13 appendix B, B.55 |
+| `hidusb.sys` resets on a failed interrupt read by NTSTATUS alone, once per failed read, with no counter | static | `hidusb.sys` of 98 SE, 2000 SP4, XP SP3, XP x64, Vista and 7 | record 13 section 6.7; record 17 section 4.10; roadmap 35-V; detail: record 13 appendix B, B.56 |
+| `hidclass.sys` re-reads a failed interrupt read after a backoff of 1 s growing by 1 s to 5 s, with no limit | static | `hidclass.sys` 98 SE 4.10.2222, 2000 SP4 5.00.2195.6655, XP SP3 (XP x64 and NT 6.x not read) | record 13 section 6.7; record 17 section 4.10; detail: record 13 appendix B, B.57 |
+| `usbstor.sys` clears a stall and resets the port for everything else, at most three times per episode (once on NUSB) | static | `usbstor.sys` of NUSB 3.6, 2000 SP4, XP SP3, XP x64, Vista and 7 | record 13 section 6.7; record 17 section 4.10; roadmap 35-V; detail: record 13 appendix B, B.58 |
+| `usbaudio.sys` answers a failed isochronous or MIDI completion with `ABORT_PIPE` and `SYNC_RESET_PIPE_AND_CLEAR_STALL` before its next submission, and keeps streaming | static | `usbaudio.sys` of XP SP3, 98 SE and 2000 SP4 (XP x64, Vista and 7 only by the byte census) | record 13 section 6.7; record 17 section 4.10; roadmap 35-V; detail: record 13 appendix B, B.59 |
+| On Windows 7 SP1 x86 no class driver's remove path sends a port request | static | Windows 7 SP1 x86 `hidusb.sys` and `USBSTOR.SYS` | record 13 section 6.7; roadmap 35-V; detail: record 13 appendix B, B.60 |
+| `HAL.dll!HalGetBusData` and `ntoskrnl.exe`'s `READ_REGISTER_USHORT` and `WRITE_REGISTER_USHORT` are exported on every target, and named in Windows 98 SE's `ntkern.vxd` | static | the 2000 SP4 HALs, Vista and 7 x86 `hal.dll`, XP x64's `hal.dll`, the amd64 `hal.lib`, 98 SE `ntkern.vxd` | `src/hcd_ctl.c` `hcdPirqSlot`, `hcdPirqRead16`, `hcdPirqWrite16`; `xhci98-imports.allow` and `xhci98-imports-amd64.allow`; detail: record 13 appendix B, B.61 |
+| On every NT target HAL, `IoMapTransfer` with a NULL `MapRegisterBase` returns the MDL page's physical address and extends the run over contiguous frames within one 4 GB region | both (static; the XP x64 grant of 524,289 registers also runtime) | 2000 SP4's eight, XP SP3's seven, XP x64's, Vista SP2's and 7 SP1's HALs (files, versions and SHA-256 in record 13 section 11.6.1) | record 13 section 11.6.1; detail: record 13 appendix B, B.62 |
+| `IoConnectInterruptEx` and `IoDisconnectInterruptEx` are exported by the Vista SP2 x86 and 7 SP1 x86 kernels, with every other `ntoskrnl.exe` pair the x86 MSI helper imports | static | Vista SP2 x86 and 7 SP1 x86 `ntoskrnl.exe` | `scripts/import-gate/xhcimsi-imports.allow` (`xhcihlpr-imports.allow` since task 38.3); record 18 section 8.2; detail: record 18 appendix A, A.3 |
+| Every pair `xhcihlpr.sys` imports is exported by every authenticated kernel and HAL image of 2000 SP4 and XP SP3 x86, and by the uniprocessor non-PAE kernel and `hal.dll` of Vista SP2 and 7 SP1 x86 | static | the images of the gate's `hlprx86` profile | `scripts/import-gate/xhcihlpr-imports.allow`; record 18 sections 15.10 and 15.11; detail: record 18 appendix A, A.4 |
+| What Windows Vista and 7's PCI driver offers in `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` for an MSI-capable xHCI controller with `MSISupported` 1 | runtime (QEMU) | Vista and 7 `pci.sys`, with this driver's `M86` trace | record 18 sections 4.2 and 11; detail: record 18 appendix A, A.5 |
+| How usbhub answers `0x220410` (`IOCTL_USB_GET_DESCRIPTOR_FROM_NODE_CONNECTION`) (task 36.45) | static | XP SP3 `usbhub.sys` 5.1.2600.5512 (59,520 B, SHA-256 `a99c4528...b300fe`), 7 x86 and 98 SE `usbhub.sys`; 2000 SP4 `USBHUB20.SYS` 5.00.2195.6655 (49,776 bytes) | record 13 section 8.11; `src/hcd_door.c` `hcdDoorDescriptor`; detail: record 13 appendix B, B.63 |
+| Windows 7 SP1 `usbaudio.sys` gives every isochronous URB of an asynchronous Type I stream an explicit `StartFrame`, and resets the feedback pipe before each feedback read (task 36.57) | static | Windows 7 SP1 x86 `USBAUDIO.sys`, 80,768 B, SHA-256 `72603e0a...b933`, and x64 | record 13 section 6.10; detail: record 13 appendix B, B.64 |
+| The six `USB\SilentClasses` entries of SweetLow's `SilentClasses.reg` (task 38.2) | static | SweetLow's `SilentClasses.reg` (not tracked) | record 13 section 6.11.8; detail: record 13 appendix B, B.65 |
+| Windows 98 SE's `RtlQueryRegistryValues` with a NULL-`Name` query-table entry calls the routine once for every value of the key | runtime (QEMU) | 98 SE NTKERN under NUSB 3.3, and ME, with this driver | record 13 section 6.11, O1; `src/hcd_ctl.c` (`hcdReadSilent`); detail: record 13 appendix B, B.66 |
+| Windows XP SP3's `usbccgp.sys` selects the whole configuration down the composite devnode's own stack before it creates any function PDO | static | XP SP3 `usbccgp.sys` 5.1.2600.5585, 32,384 B, SHA-256 `4C1B3E8F3F658E356A955108FF84FB5C95244CB2A9D323AA0DFAEF92927C66C5` | record 13 section 10.14.1; detail: record 13 appendix B, B.67 |
+| On Windows 98 SE and ME, `cfgmgr32.dll`'s `CM_Uninstall_DevNode` is a stub, and `CM_Locate_DevNodeA` honours `CM_LOCATE_DEVNODE_PHANTOM` (task 38.8) | static | 98 SE `CFGMGR32.DLL`, 45,056 B, SHA-256 `269bbe3e...7aea`, and ME's | record 13 section 10.13.8; detail: record 13 appendix B, B.68 |
+| **The CONFIGMG row**: the Windows 98 / ME configuration manager's ring-0 interface values in `src/cm/cm_cfgmg.h` (VxD id, dynalink, service numbers, flags), from the Windows 98 SE DDK headers | static | the Windows 98 SE DDK `win98se_ddk.exe` headers (SHA-256s in `docs/references/README.md`) | `src/cm/cm_cfgmg.h`; record 21 section 6.1; detail: record 21 appendix A, A.1 |
+| The configuration manager's logical-configuration services in `src/cm/cm_cfgmg.h`, counted as the CONFIGMG row counts them (task 42-A.15) | static | the same DDK headers; Stor98's INF | `src/cm/cm_cfgmg.h`, `cm_cfgmg.c`, `cm_nvlinkos.c`, `cm_cfgwk.c`; design records 28 and 31; detail: record 21 appendix A, A.2 |
+| The Windows 98 SE setup engine's device-installer values and ordinals in `xhciinst/di/`, from the DDK's `inc16\setupx.h` and `setupx.lib` (task 42-A.1) | static | the Windows 98 SE DDK (as in the CONFIGMG row; member hashes in `docs/references/README.md`) | `xhciinst/di/di_core.c`, `di_core.h`, `xhcidi-imports.allow`; design record 27; detail: record 21 appendix A, A.3 |
+| **PCI.VXD's configuration-space services in `src/cm/cm_cfgmg.h`** (record 21 section 6.1.1): its VxD id `0x0043` and service numbers | static | the Windows 98 SE DDK's `PCI.H` (8,081 bytes, SHA-256 `0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9`) and `VXDWRAPS.H` (60,450 bytes, `d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884`) | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`; record 21 section 6.1.1; detail: record 21 appendix A, A.4 |
+| **`usb4-emu/docs/ICM-PROTOCOL.md`**, the Thunderbolt 3 client's clean-room contract (record 21) | static (a document read) | `usb4-emu` `main` `a68bc74` (= `eba0cf1`), git blob `976cbbe2d4088eb86711463b3f0df3fa2d7fc414` | record 21 section 9 and every section citing `ICM-PROTOCOL`; detail: record 21 appendix A, A.5 |
+| `ICM-PROTOCOL` sections 1 and 2: NHI and switch identity, PCI topology, and the NHI's BAR0 | static (a document read) | the document above; its [obs] from run `p14s-linux-20261014-122716-assistOFF_prebootOFF` | record 21 sections 2, 4.1-4.3, 6.3; detail: record 21 appendix A, A.6 |
+| `ICM-PROTOCOL` sections 0, 3 and 4.1-4.8: ICM framing on ring 0 and the Alpine Ridge message set | static (a document read) | the same; [obs] from the same run's `T:` lines | record 21 sections 5.1-5.5; detail: record 21 appendix A, A.7 |
+| `ICM-PROTOCOL` section 4.9: how Titan Ridge differs from Alpine Ridge (every row [inf]) | static (a document read) | the same; no Titan Ridge capture exists | record 21 sections 1.4 and 11 (D9); detail: record 21 appendix A, A.8 |
+| `ICM-PROTOCOL` sections 5-7: the config-space traffic the client generates, the sequences, and security level `user` | static (a document read) | the same; [obs] from that run and run `p14s-linux-20261014-133751-assistON_prebootON` | record 21 sections 5.1, 5.3-5.6; detail: record 21 appendix A, A.9 |
+| `ICM-PROTOCOL` sections 10 and 11: Windows 11 with Intel's driver, and the platform ACPI | static (a document read) | the same; [obs] from run `p14s-win11-20261014-135249-assistOff_prebootOff` | record 21 sections 1.3, 3.3, 10.4; detail: record 21 appendix A, A.10 |
+| `ICM-PROTOCOL` section 12: pre-boot support and BIOS Assist | static (a document read) | the same; [obs] from the Windows 98 MS-DOS-mode matrix and run `p14s-linux-20261014-133751-assistON_prebootON` | record 21 sections 2, 6.5, 10.2, 10.4; detail: record 21 appendix A, A.11 |
+| Linux `drivers/thunderbolt`: NHI and bridge device ids, and which connection manager each gets | static (a source read) | the pinned Linux mirror (section 3) | record 21 sections 1.4 and 3.3, and the INFs; detail: record 21 appendix A, A.12 |
+| Linux `drivers/thunderbolt`: the ICM message codes and layouts per generation | static (a source read) | the pinned Linux mirror | record 21 section 5 and `src\cm\`; detail: record 21 appendix A, A.13 |
+| Linux and FreeBSD: NHI register offsets and fields, and control-packet framing | static (a source read) | the pinned Linux and FreeBSD mirrors | `src\cm\tbt_regs.h`; record 21 section 4; detail: record 21 appendix A, A.14 |
+| Linux `drivers/thunderbolt`: controller quirks, taken as descriptions and written fresh | static (a source read) | the pinned Linux mirror | record 21 and `src\cm\`; detail: record 21 appendix A, A.15 |
+| The PCI ID Repository: the Thunderbolt NHI, switch-port and tunnel root-port ids and their listed names (decision D9) | static (a text listing read) | `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids> | record 21 section 3.3; detail: record 21 appendix A, A.16 |
+| The ThinkPad P14s Gen 1's PCI configuration space, as the owner captured it, used as host-test vectors (task 39-A.5) | a hardware capture (neither static nor runtime here) | `usb4-emu` `main` `a68bc74` `tests/captures` (names and SHA-256s in `test\tbt_topo_p14s.h`) | `test\tbt_topo_p14s.h`, `test\test_tbt_topo.c`; record 21 section 6.3; detail: record 21 appendix A, A.17 |
+| Linux `drivers/thunderbolt`: how a domain's PCI side is associated; nothing adapted into `tbt_topo.c` | static (a source read) | the pinned Linux mirror | record 21 section 6.3; `src\cm\tbt_topo.c` and `tbt_topo.h`; detail: record 21 appendix A, A.18 |
+| The PCI ID Repository, second reading: the USB4 hosts' tunnel-port ids (task 40-0.2) | static (a text listing read) | `pci.ids` version `2026.10.14`, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837` | `src\cm\xhcicmf.inf`, `xhcicmf-amd64.inf`, `scripts\inf-gate\check-cm-inf.ps1`; record 21 section 3.3; detail: record 21 appendix A, A.19 |
+| The PCI ID Repository, third reading: xHCI controllers' names (task 44.55; owner, 2026-10-27: a source for a controller's name where no other names it) | static (a text listing read) | `pci.ids` (record 23 section 5.13.2) | `xhciinst\inst_core.c` `instXhciNames`, `src\xhci98.inf`'s 9x models section, README.md and the release notes' tables; record 23 section 5.13.2; detail: record 23 appendix A, A.1 |
+| The PCI ID Repository, fourth reading: AMD's integrated USB4 hosts' NHI ids and PCIe USB4 bridges (task 46.23), with a Strix Halo machine's device properties | static (a text listing read), and a reading of a machine's device properties (nothing installed) | `pci.ids` version `2026.10.31`, SHA-256 `3af2de60a0cb598912d4ede5314fcb36a59593d08fba4f7f26ca4d4e53a7b9ea`; Windows 11's `Get-PnpDeviceProperty`, 2026-11-03 | `src\cm\cm_vals.c`, `cm_ports.c`, `tbt_hw.c`, the four connection-manager INFs, `src\pfw\pfw_ids.c`, `xhciinst\inst_core.c`, `xhcitr\tr_core.c`, `scripts\inf-gate\check-cm-inf.ps1`; record 21 section 3.3; detail: record 21 appendix A, A.21 |
+| Windows 98 SE's and ME's `cfgmgr32.dll` export the same 179 names, and no `CM_Request_Device_Eject` | static | 98 SE `CFGMGR32.DLL` 4.10.2222, 45,056 bytes; ME's (the guest images) | record 24 section 7.1; `xhciinst\xhciinst.c`; detail: record 24 appendix A, A.1 |
+| Windows 2000's `setupapi.dll`, not `cfgmgr32.dll`, exports `CM_Request_Device_EjectA` | static | 2000 SP4 `cfgmgr32.dll` and `setupapi.dll` (the guest image) | record 24 section 7.2; `xhciinst\xhciinst.c`; detail: record 24 appendix A, A.2 |
+| Windows 2000's `CM_Query_And_Remove_SubTreeA` is a stub, and its `W` form accepts `CM_REMOVE_UI_NOT_OK` and `CM_REMOVE_NO_RESTART` | static | 2000 SP4 `setupapi.dll` (the guest image) | record 24 section 7.2; `xhciinst\xhciinst.c`; `xhcitr\xhcitr.c`; detail: record 24 appendix A, A.3 |
+| **NUSB 3.3's seven Windows 98 SE storage files: whose each is, its version and its identity** (roadmap-usb4 task 43.1) - the five binaries' `CompanyName`, `ProductName`, `FileVersion` and `LegalCopyright`, the two INFs' `Provider` and comment headers, and each file's size and SHA-256 | static: PowerShell's `(Get-Item <file>).VersionInfo` on the driver pack's copies, and for `USBMPHLP.PDR` (a VxD that reader does not parse) the `VS_VERSION_INFO` strings in the file; the INFs read as text; `Get-FileHash` against the pack's `SHA256.TXT`, 2026-10-20; nothing executed | the driver pack's copies (section 5's table) | section 5, "NUSB 3.3's Windows 98 SE storage files" |
+| **Task 43.46 read-first**: how IOS builds the physical list a `SCSIPORT.PDR` request carries, and the calldown chain on Stor98's DCB | both | the QuickInstall 98 SE image's `IOS.VXD` (69,594 bytes) and the files named in the run record | `runs/run-43.md`, "43.46 read first"; Stor98 `docs/INVESTIGATION-9X-REQUEST-SIZE.md` sections 1 and 2; detail: `runs/run-43.md` appendix A, A.1 |
+| Task 43.46 design: what IOS loads from `IOSUBSYS`, and the request path's facts in three IOS builds | static | `IOS.VXD` of gold 98 SE (69,570 bytes, SHA-256 `bb133fb8edc9464f38bda9ee94349014eebdfd3164583432304a2e88e1a70652`) and the other two builds | record 30 section 2; detail: record 30 appendix A, A.1 |
+| Task 43.46 design: the layers above Stor98's disk and `SCSIPORT.PDR`'s own requests | static | the QuickInstall image's `DISKTSD.VXD` (18,685 bytes) and the others named | record 30 section 2.3; detail: record 30 appendix A, A.2 |
+| Task 43.79: IOS's double buffer on a DCB that does not demand physical lists | both | the three `IOS.VXD` builds of the two rows above; this project's `S98VSD.VXD` on the 98 SE and ME emulators | record 30 section 4.6; `src/vsd/vsd_list.h` (`VsdPlan`); detail: record 30 appendix A, A.3 |
+| Windows 8 and 8.1's xHCI match: only `usbxhci.inf` names `PCI\CC_0C0330`, with `FeatureScore=80` and three `ExcludeID` lines for Fresco Logic | static | the 8 and 8.1 INFs (record 13 section 6.12's table) | record 13 section 6.12.1; detail: record 13 appendix B, B.69 |
+| What Windows 8's and 8.1's class drivers send a USB device PDO | static | `hidusb`, `hidclass`, `USBSTOR`, `uaspstor`, `USBAUDIO`, `usbccgp`, `winusb`, `Wdf01000` of 8 x86 and x64 and 8.1 x64 (record 13 section 6.12) | record 13 sections 6.12.2 to 6.12.4; detail: record 13 appendix B, B.70 |
+| Windows 8's client library `usbdex`: `USBD_CreateHandle` asks `GUID_USBD_INTERFACE_V1` then USBDI V1 and succeeds even when both are refused | static | the same clients | record 13 section 6.12.3; detail: record 13 appendix B, B.71 |
+| Windows 8's `usbd.sys`: the Windows 7 exports plus five hub-only ones, and the `usbshim` Kernel Shim Engine shim | static | 8 and 8.1 `usbd.sys`, `usbhub3.sys`, `ucx01000.sys` (record 13 section 6.12) | record 13 sections 6.12.1, 6.12.3 and 6.12.5; detail: record 13 appendix B, B.72 |
+| The layout and calls of `GUID_USBD_INTERFACE_V1` at version `0x602`, from both ends | static | Windows 8 x86 and x64 and 8.1 x64 `uaspstor.sys`, `USBSTOR.SYS` and `UCX01000.SYS` | record 13 sections 6.13.1 and 6.13.2; detail: record 13 appendix B, B.73 |
+| Windows 8's and 8.1's `IoIsWdmVersionAvailable` answers as Windows 7's, so it cannot tell 8 from 7 | static | `ntoskrnl.exe` of 8 x86, 8 x64 (6.2.9200.16384) and 8.1 x64 (6.3.9600.17415) | record 13 section 6.13.4; detail: record 13 appendix B, B.74 |
+| No Windows 98 SE to 7 driver, nor NUSB 3.3, NUSB 3.6 or SweetLow's pack, carries `GUID_USBD_INTERFACE_V1`'s bytes, `0x49104B` or `0x220FB3` (task 43.29) | static | every `.sys`, `.dll`, `.vxd`, `.pdr`, `.mpd` and `.exe` under `tools\*-extracted\` | record 13 section 6.13.4; detail: record 13 appendix B, B.75 |
+| Windows 8's and 8.1's `usbui.dll` carry `0x22045C` (`IOCTL_USB_GET_NODE_CONNECTION_INFORMATION_EX_V2`) beside Windows 7's request codes | static | 8 and 8.1 `usbui.dll` 6.2.9200.16384 (72,192 and 87,552 bytes) and 6.3.9600.17415 (89,088 bytes) | record 13 section 6.12.7; detail: record 13 appendix B, B.76 |
+| Windows 8's and 8.1's SCSIport export every NT import of Stor98 | static | 7 x64, 8 x86 and x64 and 8.1 x64 `scsiport.sys` (identities in `runs/run-43.md`, "43.23") | `runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1"; detail: `runs/run-43.md` appendix A, A.2 |
+| Windows 10's SCSIport (22H2, x86 and x64) exports every NT import of Stor98 and exactly 8's names | static | 10 22H2 x86 and x64 `scsiport.sys` (identities in `runs/run-43.md`, "43.23", "Windows 10") | `runs/run-43.md`, "43.23", "Windows 10"; `src/stor98/docs/TESTING.md`, "Windows 10"; detail: `runs/run-43.md` appendix A, A.3 |
+| Windows 8 x64's, 8.1 x64's and 10 x64's driver store refuses a package with no catalog file in test-signing mode (`0xE000022F`) | runtime (Windows' own, in QEMU) | Windows 8 x64, 8.1 x64, 10 x64, 8 x86 and 10 x86 from the owner's media | `runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1" and "Windows 10"; detail: `runs/run-43.md` appendix A, A.4 |
+| Windows 8 x86's `classpnp` retries a WRITE that SCSIport completes with `SRB_STATUS_NO_DEVICE` and `SRB_STATUS_SELECTION_TIMEOUT` alike, until the disk is removed | runtime (QEMU) | Windows 8 x86 and 10 x86 `classpnp.sys`, with Stor98 builds of this project | `runs/run-43.md`, "43.23"; `src/stor98/docs/PLAN.md` item 2.2; detail: `runs/run-43.md` appendix A, A.5 |
+| Windows 8.1 x64's `stornvme` under a link loss with no notice holds the write, logging events 129 and 11, and completes it about 23 s after the link returns | runtime (QEMU, Windows' own driver) | Windows 8.1 x64 and 10 x86 and x64 `stornvme.sys` | `runs/run-43.md`, "43.23"; `src/stor98/docs/TESTING.md`, "Windows 8 and 8.1"; detail: `runs/run-43.md` appendix A, A.6 |
+| Windows 8.1's `stornvme.inf` binds `PCI\CC_010802` as a boot-start Storport miniport, `DriverVer=06/21/2006,6.3.9600.16421`, `ExcludeFromSelect = *` (task 43.23) | static (its outranking Stor98's INF seen at runtime) | `Windows\inf\stornvme.inf` of the 8.1 medium named in the run record | `runs/run-43.md`, "43.23"; `xhciinst\inst_core.c` `inst_s98_over_inbox`; detail: `runs/run-43.md` appendix A, A.7 |
+| Windows 98 SE's and ME's ASPI layer is installed by Setup, and its adapter identity is a fixed string (task 43.50, record 29's reading P.0) | static | the owner's `Win98SE.iso` (SHA-256 begins `c048c31e414e3fe4`) and `Windows Me OEM Full.iso` | record 29 sections 6.2 and 15; `xhciperf\xhciperf.c`; Stor98 `docs/PLAN.md` MD-8, `src\stor98\src\sg9x.h`; detail: record 29 appendix A, A.1 |
+| **NUSB 3.3's installer: how it places its INFs** (task 43.42): an IExpress package | static | `tools\nusb33e.exe`, 774,144 bytes, SHA-256 `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3` (section 5's) | record 26 section 6.5.11; detail: record 26 appendix A, A.1 |
+| Where Windows 8's and 8.1's "Device can perform faster when connected to USB 3.0" comes from: `shell32.dll`'s strings and `usbui.dll`'s Devices and Printers status provider; `hotplug.dll` carries neither | static | 8 x86 `shell32.dll`; `usbui.dll` 6.2 and 6.3 (record 13 section 6.12.11's table) | record 13 section 6.12.11; detail: record 13 appendix B, B.77 |
+| What the line tests: the volume's `BusType` 7, the disk, the container id, the hub and the port | static | the same files | record 13 section 6.12.11; detail: record 13 appendix B, B.78 |
+| Windows 10 22H2's xHCI match: only `usbxhci.inf` names `PCI\CC_0C0330`, with 8.1's models, `FeatureScore=80` and the Fresco Logic `ExcludeID` lines | static | 10 22H2 `usbxhci.inf`, `DriverVer = 01/13/2023,10.0.19041.2546` | record 13 section 6.14.1; record 21 section 3.6; detail: record 13 appendix B, B.79 |
+| What Windows 10's class drivers send a USB device PDO, against 8.1 | static | 10 22H2 `USBSTOR`, `uaspstor`, `hidusb`, `hidclass`, `usbccgp`, `winusb`, `Wdf01000`, `USBAUDIO` (record 13 section 6.14's table) | record 13 section 6.14.2; detail: record 13 appendix B, B.80 |
+| Where Windows 10 22H2 shows "Device can perform faster when connected to USB 3.0" and what it tests | static | 10 22H2 `shell32.dll` 10.0.19041.2788, `usbui.dll` 10.0.19041.1 | record 13 section 6.14.4; detail: record 13 appendix B, B.81 |
+| **Intel's Thunderbolt driver on Windows 10**: its INFs install the service `nhi`, x64 only, and match the NHI ids in the forms the item lists | static | `tbt100x.inf` 17.4.77.13; `TbtHostController.inf` 1.41.1379.0 and 1.41.1423.0 (section 2's row) | record 21 section 3.6; detail: record 21 appendix A, A.20 |
+| Windows 8 and 8.1 x64 refuse a driver package with no catalog in test-signing mode, and 8 and 8.1 make `xhcicm` boot start when its filter goes onto a PCI bridge (task 43.22) | runtime (Windows' own logs and state, QEMU) | Windows 8 Pro x86 and x64 (6.2.9200) and 8.1 Pro x64 (6.3.9600) | record 23 section 5.10 (revision 30), `runs/run-43.md` "43.22"; detail: record 23 appendix A, A.2 |
+| Microsoft's "Driver Signing Policy" table, by Windows version and Secure Boot | documentation, not a binary reading | Microsoft's page, read 2026-10-22 | record 23 section 5.10 (revision 30); detail: record 23 appendix A, A.3 |
+| **`PCI.VXD`'s Code 29 on 98 SE and ME (task 44.30)**: for a function with neither decode bit set (not a CardBus bridge or display) and no IRQ, its enumerator calls `Disable_DevNode(dn, 2)` | static (consistent with the runtime reading of `runs/run-44.md` 44.30) | 98 SE `pci.vxd` 4.10.0.2222, 65,895 bytes, SHA-256 `a9268f51f5a486817f5484686398215b3600c8eb3608773195ea05ecfacb303d`; ME `pci.vxd` 4.90.0.3000, 70,539 bytes, SHA-256 `5fcb833b90693617fc8003e3d84e48e7b24058cd579096a43e28effeae61cb58` | record 28 section 12.1; `src/cm/cm_noirq.c` (`niMemOnly`); detail: record 28 appendix A, A.1 |
+| CONFIGMG's `Disable_DevNode` with `CM_DISABLE_HARDWARE` sets problem 29, and `Reprocess_DevNode` and `Setup_DevNode(READY)` clear a problem whatever its code (task 44.30) | both | 98 SE `configmg.vxd`, 125,057 bytes, SHA-256 `568f800c9633f1ebaf48204fe2c5e6b5cffaee25f00191b9c29e762a0e154162` | record 28 section 12.1; detail: record 28 appendix A, A.2 |
+| On 98 SE a timed kernel wait is a VMM global time-out, and the VMM processes that list through one restricted event it requests only when its accumulator leaves zero (task 44.29) | static; runtime for the list's state, read from a memory image | 98 SE NTKERN and VMM (the objects placed in a guest's memory image) | `runs/run-44.md` 44.29; detail: `runs/run-44.md` appendix A, A.1 |
+| Windows 98 SE's `VMOUSE.VXD` cancels, when the mouse moves to another VM, an event handle one of its event callbacks leaves stale (task 44.29) | static; debugger (a QEMU gdbstub breakpoint) for the cancel | 98 SE `VMOUSE.VXD` | `runs/run-44.md` 44.29; detail: `runs/run-44.md` appendix A, A.2 |
+| The ASMedia ASM4242 USB4 host, PCI side and firmware state as `usb4-emu`'s asm4242 model and data record them (task 44.39) | static | `usb4-emu`'s asm4242 archives (logs, `lspci`, sysfs, trace, raw configuration space, two ACPI tables) | record 22 section 18; roadmap-usb4 44.39 and 44-E.6; record 23 section 5.13.8; `src\cm\cm_ports.c`; detail: record 22 appendix A, A.1 |
+| Windows 2000 SP4's `pci.sys` and 98 SE's and ME's PCI enumerator with a 64-bit prefetchable window above 4 GB (task 44.49) | debugger and static | 2000 SP4 `pci.sys`; 98 SE and ME `PCI.VXD` (read from the running guests' memory) | `runs/run-44.md` "44.49"; design record 32 sections 1 to 3; detail: `runs/run-44.md` appendix A, A.3 |
+| Windows 2000 SP4's `pci.sys` at a function PDO's stop, remove and power-down | static | 2000 SP4 `pci.sys` 5.00.2195.6655, 59,312 bytes, SHA-256 `66CCD7B1...EA26` | record 17 section 4.13.5; detail: record 17 appendix A, A.1 |
+| **Windows 98 SE's `PCI.VXD` 4.10.2222 at a devnode's stop, remove and set-D3** | static | 98 SE `PCI.VXD` 4.10.2222, 65,895 bytes, SHA-256 `A9268F51...303D` | record 17 section 4.13.5; detail: record 17 appendix A, A.2 |
+| The signature `DMAR` is in none of the files read (a narrow static result) | static | the files listed in the item (from the owner's media) | record 17 section 4.13.5; detail: record 17 appendix A, A.3 |
+| Windows 2000's and XP's whole-machine USB walk opens `\\.\HCD<n>` for n below 10, and 2000 usbport's `HCD<n>` name (task 44.81) | both | 2000 SP4 and XP SP3 `usbui.dll` and `usbport.sys` (section 2's 44.81 row) | `runs/run-44.md` "44.81"; record 13 sections 8.1 and 8.8; detail: `runs/run-44.md` appendix A, A.4 |
+| Windows 7's Intel 82574L miniport walks the PCI capability list with no bound, so configuration space reading all ones holds the processor in it (task 45.49) | debugger and static | Windows 7's 82574L miniport, read from the running guest's memory | `runs/run-45.md` "45.49"; detail: `runs/run-45.md` appendix A, A.1 |
+| What the disk class drivers send a disk's port for the SMART and pass-through IOCTLs (task 45.52, reading R1) | static | `disk.sys` and the class drivers of 2000 SP4, XP SP3, XP x64 SP2, Vista x86 SP2 and 7 x86 | record 13 section 16.11, R1; detail: record 13 appendix B, B.82 |
+| The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6): each of its 24 pairs is a name in `NDIS.VXD` of 98 SE and ME | static (export names alone; owner's rule of 2026-10-31); runtime for the 9x legs | 98 SE `NDIS.VXD`, 166,029 bytes, and ME's (SHA-256s in the item and in `ndisvxd-baselines.expected`) | `scripts/import-gate/xhcinet-imports.allow`, `ndisvxd-baselines.expected` and `net98-runtime.list`; design record 35 section 7.8; detail: record 35 appendix A, A.1 |
+| The imports of `xhcinet6.sys` on 8, 8.1 and 10, x86 and x64 (task 45.59 step S7), are all in the export tables of the 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` of its architecture, and on x86 also of Windows 7 SP1 x86's kernel and HAL | static | 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` (in the four `net6-*-baselines.expected`) | `scripts/import-gate/net6-win81-x86-baselines.expected` and its three siblings, `xhcinet6-imports.allow`, `xhcinet6-imports-amd64.allow`; design record 35 section 7.9; detail: record 35 appendix A, A.2 |
+| A common buffer of less than a page on Windows 2000 and XP can come back 8-byte aligned (task 45.59) | runtime | Windows 2000 SP4 x86's HAL `AllocateCommonBuffer`, under a scratch build of this driver | `src/cm/cm_pool.c` (`CmDmaCommonAlloc`, whole pages); `runs/run-45.md` "45.59 (legs, continued)"; detail: `runs/run-45.md` appendix A, A.2 |
 
 ## 5. Microsoft binaries: what is published, and through which channel
 
-Two channels have to be kept apart here. This project distributes through the
-git repository and, separately, through the GitHub release download, and a
-sentence that is true of one is false of the other.
-
-A third distinction sits underneath those two. This section was first
-written for a decided channel that had carried nothing; every version under
-`releases/` has since been uploaded to a GitHub release and this repository
-is public (see the status note at the end of this section). "The release
-download carries X" throughout means that the asset `make-release.ps1`
-assembles carries X, and that asset is what is uploaded. The same reading
-applies to `releases/README.md`, which describes the same asset. A cut writes
-files in this working tree; a publish uploads one of them.
-
-This repository also uses "published" in two senses, so that word alone
-settles nothing. The INF, `releases/history.md` and `releases/README.md`
-say a version is "published under `releases\`", meaning cut and committed to
-the tracked tree; that is the sense almost every occurrence outside this
-section carries. This section means the other one: uploaded to a GitHub
-release, where a stranger can download it. Where the distinction could be
-misread, prefer "cut" and "uploaded", which have only one sense each.
+This project distributes through the git repository and, separately, through
+the GitHub release download; a sentence true of one is false of the other.
+"The release download carries X" means the asset `make-release.ps1`
+assembles carries X, and that asset is what is uploaded (`releases/README.md`
+describes the same asset). Every version under `releases/` has since been
+uploaded to a GitHub release, and this repository is public. "Published" has
+two senses here: the INF, `releases/history.md` and `releases/README.md` say
+a version is "published under `releases\`", meaning cut and committed to the
+tracked tree (a cut writes `releases/<version>/` and
+`out/xhci98-<version>.zip` in this working tree; in that usage "published"
+names which asset filename was in use at a cut); this section means uploaded
+to a GitHub release, where a stranger can download it. Where it could be
+misread, prefer "cut" and "uploaded". The roadmap carries no clause for an
+upload: it is one act of the owner's, not work this repository can do or
+close.
 
 ### The repository carries none
 
 `usbport.sys` and `usbhub20.sys` come from the target machine's own NUSB
-install (Windows 98 SE) or from Service Pack 4 (Windows 2000), and are never
+install (Windows 98 SE) or from Service Pack 4 (Windows 2000) and are never
 tracked. The toolchain archives (MSVC 6.0, the Windows 2000 DDK) and the NUSB
-package are downloaded by the user from the links in `README.md` and live
-under the git-ignored `tools/`. The two `usbd.sys` builds and Windows 98 SE's
-`usbhub.sys` are staged there too, from the user's own Windows install media,
-by `scripts/package/extract-usbd-sources.ps1`, as reference copies;
+package are downloaded by the user from the links in `README.md` into the
+git-ignored `tools/`. The two `usbd.sys` builds and Windows 98 SE's
+`usbhub.sys` are staged there too, from the user's own install media, by
+`scripts/package/extract-usbd-sources.ps1`, as reference copies;
 `scripts/import-gate/win98-evidence.list` records the Windows 98 pair's
 identity, never content. `releases/<version>/`, the tracked half of
 packaging, carries `xhci98.sys` and `xhci98.inf` and stops there, and since
-1.0.0.1 so does the release download, with one exception decided for
-`3.2.0.0` that the repository never carries: NUSB 3.3's Windows 98 SE
-storage files, below.
+1.0.0.1 so does the release download, with the exceptions below that the
+repository never carries (NUSB 3.3's seven, decided for `3.2.0.0`; downloads
+2 and 3).
 
 The overlap audit swept the full added-file history and found no Microsoft or
-NUSB binary in it. That is still true. The exception below was made a release
-asset rather than a tracked file for the same reason (an asset can be
-withdrawn, and a git blob cannot be without rewriting history), and it was
-withdrawn before it carried anything.
+NUSB binary in it; that is still true. The withdrawn exception below was a
+release asset rather than a tracked file for the reason the later ones are
+too: an asset can be withdrawn, and a git blob cannot be without rewriting
+history.
 
 ### The Windows 2000 F6 option: files the user copies, not the media
 
-Decided by the owner on 2026-10-14. Windows 2000's text-mode Setup lays
-down `hidusb.sys` and `usbstor.sys` for a USB keyboard, mouse or stick on
-the xHCI controller but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`,
-which they import, and the first GUI-mode boot stops (design record 13
-section 5.6, limit 7). From `2.4.0.0` the 32-bit `txtsetup.oem` has a
-second F6 entry, for Windows 2000 only, that copies those three files from
-the F6 floppy; the release notes tell the user to copy them there,
-`USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` unchanged, from the `I386`
-folder of the user's own Windows 2000 CD. What is published is
-`txtsetup.oem` naming the three files, and the instructions. The release
-download and this repository carry none of the three, under either name:
-the release still carries no Microsoft file, `PKG-MSFILE` (in
-`check-inf.ps1` and `check-txtsetup-oem.ps1`) refuses a staged package
-holding any of them or the compressed name of any file it refuses, and
-`OEM-W2K` admits the three names in `txtsetup.oem` only on that entry's
-lines. The legs that read the route used copies taken from the
-development machine's own Windows 2000 SP4 CD image, in a git-ignored
-directory (`out\p38-matrix\legs\f6w2k\`).
+Decided by the owner on 2026-10-14. Windows 2000's text-mode Setup lays down
+`hidusb.sys` and `usbstor.sys` for a USB keyboard, mouse or stick on the xHCI
+controller but not `usbd.sys`, `hidclass.sys` or `hidparse.sys`, which they
+import, and the first GUI-mode boot stops (design record 13 section 5.6,
+limit 7). From `2.4.0.0` the 32-bit `txtsetup.oem` has a second F6 entry, for
+Windows 2000 only, that copies those three from the F6 floppy; the release
+notes tell the user to copy them there, `USBD.SY_`, `HIDCLASS.SY_` and
+`HIDPARSE.SY_` unchanged, from the `I386` folder of their own Windows 2000
+CD. What is published is `txtsetup.oem` naming the three, and the
+instructions. The release download and this repository carry none of them,
+under either name: `PKG-MSFILE` (in `check-inf.ps1` and
+`check-txtsetup-oem.ps1`) refuses a staged package holding any of them or the
+compressed name of any file it refuses, and `OEM-W2K` admits the three names
+in `txtsetup.oem` only on that entry's lines. The legs that read the route
+used copies from the development machine's own Windows 2000 SP4 CD image, in
+a git-ignored directory (`out\p38-matrix\legs\f6w2k\`).
 
 ### NUSB 3.3's Windows 98 SE storage files: in the release download, from the driver pack
 
 Decided by the owner on 2026-10-20 (roadmap-usb4 tasks 43.1 to 43.5). Windows
 98 SE has no USB mass-storage driver, and storage there, Bulk-Only and UAS
-alike, needs the files NUSB's mass-storage part installs (`xhciuas.inf`
-names `USBNTMAP.SYS` as a filter on the UAS device; without it a UAS disk
-sits at Code 2). From `3.2.0.0` the release download may carry seven of
-them, and this is the one exception to "the release download carries no
-Microsoft file" since 1.0.0.1. What is decided:
+alike, needs the files NUSB's mass-storage part installs (`xhciuas.inf` names
+`USBNTMAP.SYS` as a filter on the UAS device; without it a UAS disk sits at
+Code 2). From `3.2.0.0` the release download may carry seven of them, the one
+exception to "the release download carries no Microsoft file" since 1.0.0.1.
+Decided:
 
-- **The channel is the release download only.** The files are never in a
-  commit of this repository, under `releases/<version>/` or anywhere else;
-  they are taken at packaging time from a separate repository of the
-  owner's, `usb-wdm-nonfree` (its top-level `nusb33/w98se/` folder), and
-  staged into the upload set in `out\` alone, at the download's root as
-  `NUSB33\`, a folder of its own beside the installer (`NUSB33\NOTICE.md`,
-  `NUSB33\SHA256.TXT`, `NUSB33\W98SE\`; owner, 2026-10-20, and 2026-10-22
-  for the folder), where the installer
-  takes them from; no package of `make-package.ps1`'s carries them (task
-  43.3: `make-release.ps1`, reading them from the checkout's git objects at
-  one revision and holding them to the pack's `SHA256.TXT` and to an
-  allowlist of the seven hashes below).
-  The reason is the one given for the 0.0.0.4 to 1.0.0.0 exception below: a
-  release asset can be withdrawn, and a git blob cannot be without rewriting
-  history.
-- **NUSB is kept apart from the non-free driver pack** (owner,
-  2026-10-22). In `usb-wdm-nonfree` the seven moved, unchanged, from
-  `non-free/storage/nusb33/w98se/` to a top-level `nusb33/w98se/`, with
-  their provenance in `nusb33/NOTICE.md` (`usb-wdm-nonfree` `f1e0c4e`); in
-  the download they are in `NUSB33\`, never inside a `NONFREE\`. The owner's
-  stated reasons: the seven are Microsoft's files and NUSB's `USBU2A.SYS`,
-  no licence to redistribute them has been found, the owner accepted that
-  risk for them, and the base download carries them for its installer
-  while the rest of the pack is offered apart.
+- **The channel is the release download only.** Never in a commit of this
+  repository, under `releases/<version>/` or anywhere else; taken at
+  packaging time from the owner's separate repository `usb-wdm-nonfree` (its
+  top-level `nusb33/w98se/`) and staged into the upload set in `out\` alone,
+  at the download's root as `NUSB33\`, a folder of its own beside the
+  installer (`NUSB33\NOTICE.md`, `NUSB33\SHA256.TXT`, `NUSB33\W98SE\`; owner,
+  2026-10-20, and 2026-10-22 for the folder), where the installer takes them
+  from. No package of `make-package.ps1`'s carries them (task 43.3:
+  `make-release.ps1` reads them from the checkout's git objects at one
+  revision and holds them to the pack's `SHA256.TXT` and to an allowlist of
+  the seven hashes below).
+- **NUSB is kept apart from the non-free driver pack** (owner, 2026-10-22).
+  In `usb-wdm-nonfree` the seven moved, unchanged, from
+  `non-free/storage/nusb33/w98se/` to a top-level `nusb33/w98se/`, with their
+  provenance in `nusb33/NOTICE.md` (`usb-wdm-nonfree` `f1e0c4e`); in the
+  download they are in `NUSB33\`, never inside a `NONFREE\`. The owner's
+  stated reasons: the seven are Microsoft's files and NUSB's `USBU2A.SYS`, no
+  licence to redistribute them has been found, the owner accepted that risk
+  for them, and the base download carries them for its installer while the
+  rest of the pack is offered apart.
 - **No licence to redistribute them has been established.** None was found
   for any of the seven, none is claimed here or in the pack, and the pack's
-  `nusb33/NOTICE.md`, shipped beside the files, says whose each is and that its
-  owner grants no licence to them. The owner took the decision with that
+  `nusb33/NOTICE.md`, shipped beside the files, says whose each is and that
+  its owner grants no licence to them. The owner took the decision with that
   stated; it is a fact about the decision, not a permission.
-- **The files are unmodified**, byte for byte as NUSB 3.3 for English
-  Windows 98 SE ships them: `nusb33e.exe`, 774,144 bytes, SHA-256
-  `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`.
-  NUSB 3.3's INFs are taken rather than 3.6's, which copy no file on their
-  own; the binaries are the same in both.
+- **The files are unmodified**, byte for byte as NUSB 3.3 for English Windows
+  98 SE ships them: `nusb33e.exe`, 774,144 bytes, SHA-256
+  `f1f30a800cf6013eb6f18db775d88e777ddc3924622e6560edd2dcd7b53698d3`. NUSB
+  3.3's INFs are taken rather than 3.6's, which copy no file on their own;
+  the binaries are the same in both.
 - **The decision requires the installer to offer them on Windows 98 SE
   only**, as a row the user can untick, installing over no file already
-  present (task 43.4, not yet built).
+  present (task 43.4, done 2026-10-20).
 
-Per file, with its evidence. Static: the version resource read from the
-pack's copy (PowerShell's `(Get-Item <file>).VersionInfo`, and for
-`USBMPHLP.PDR`, a VxD whose resource that reader does not parse, the
-`VS_VERSION_INFO` strings in the file itself); the INFs' own comment
-headers; nothing was executed. The hashes are those of the pack's
+Per file, with its evidence (static: the version resource of the pack's copy
+by PowerShell's `(Get-Item <file>).VersionInfo`, and for `USBMPHLP.PDR`, a
+VxD that reader does not parse, the `VS_VERSION_INFO` strings in the file;
+the INFs' own comment headers; nothing executed). The hashes are the pack's
 `SHA256.TXT`, checked against the files on 2026-10-20.
 
 | File | Bytes | SHA-256 | Whose, by the evidence |
@@ -1782,249 +1380,217 @@ headers; nothing was executed. The hashes are those of the pack's
 | `USBSTOR.INF` | 22,017 | `e78b5f2d2d30b039d74d670f09ba41c39bdfca058b72fd7c22eb7d55f81f0f6b` | Microsoft's INF (`provider=%MSFT%`), with the edits its own comment header lists (eight, seven of them Maximus Decim's and one unattributed); its `CopyFiles` copy `USBAUTH.SYS` and `USBU2A.SYS` with the driver |
 | `USBNTMAP.INF` | 1,339 | `372d0a4829eab33cf5c6a1fca347a3be45da82d69a692e89b33d28dc02848657` | Microsoft's INF (`Provider=%Msft%`), with the two edits its own comment header lists, both Maximus Decim's |
 
-What is published, when the pack is included: the seven files, the
-pack's `nusb33/NOTICE.md` and a `SHA256.TXT` of the seven, in a folder of
-their own at the upload set's root (`NUSB33\`); the
-generated readme and the installer's `NOTICE.TXT` saying so in place of
-"No Microsoft file is in this download" (`make-release.ps1`, which chooses
-the text by whether the pack is in the download); and the record of which
-pack revision was used, `releases/<version>/drvpack.txt` (tracked, plain
-text: whether the pack is included, its revision and every file's hash,
-from which `make-release.ps1 -UploadSetOnly` rebuilds the download and
-which holds none of the files; task 43.3). A download built without the pack
-carries none of them and says so as before. Whether the seven are all a
-stock Windows 98 SE needs is not yet read (task 43.5); nothing here or in the
-pack claims it.
+What is published when the pack is included: the seven, the pack's
+`nusb33/NOTICE.md` and a `SHA256.TXT` of the seven in `NUSB33\` at the upload
+set's root; the generated readme and the installer's `NOTICE.TXT` saying so
+in place of "No Microsoft file is in this download" (`make-release.ps1`
+chooses the text by whether the pack is in the download); and the record of
+the pack revision used, `releases/<version>/drvpack.txt` (tracked, plain
+text: whether the pack is included, its revision and every file's hash, from
+which `make-release.ps1 -UploadSetOnly` rebuilds the download; it holds none
+of the files; task 43.3). A download built without the pack carries none of
+them and says so as before. Whether the seven are all a stock Windows 98 SE
+needs is not yet read (task 43.5); nothing here or in the pack claims it.
 
-Status: decided, not yet in any cut. `3.1.0.0` and every earlier download
-carry none of the seven.
+Status: in every cut from `3.2.0.0` (2026-10-24; its `drvpack.txt`:
+"Included: yes"). `3.1.0.0` and every earlier download carry none of the
+seven.
 
 ### The other USB drivers: downloads 2 and 3 (task 43.48)
 
-Decided by the owner on 2026-10-22 (roadmap-usb4 task 43.48; design record
-26 section 6.7). From `3.2.0.0` a release may have three downloads, each
-holding the one before: `xhci98-<version>.zip` (the package and `NUSB33\`,
-above), `xhci98-<version>-free.zip` (adds `WDMFREE\`) and
+Decided by the owner on 2026-10-22 (task 43.48; design record 26 section
+6.7). From `3.2.0.0` a release may have three downloads, each holding the one
+before: `xhci98-<version>.zip` (the package and `NUSB33\`),
+`xhci98-<version>-free.zip` (adds `WDMFREE\`) and
 `xhci98-<version>-nonfree.zip` (adds `NONFREE\`). This widens 43.1's
-decision, which admitted NUSB 3.3's seven storage files alone, and relaxes
-the owner's rule of 2026-10-20 that the repositories are independent, for
-the release downloads only: the copies are made at packaging time, and no
-repository's sources or build depend on another's. What is decided:
+decision, which admitted NUSB 3.3's seven alone, and relaxes the owner's rule
+of 2026-10-20 that the repositories are independent, for the release
+downloads only: the copies are made at packaging time, and no repository's
+sources or build depend on another's.
 
 - **The channel is the release download only**, as for the seven: never a
-  commit of this repository, never `releases/<version>/`, never a package
-  of `make-package.ps1`'s; `make-release.ps1` reads each set from its
+  commit of this repository, never `releases/<version>/`, never a package of
+  `make-package.ps1`'s; `make-release.ps1` reads each set from its
   repository's git objects at a pinned tag and refuses a published tree
   holding either folder.
 - **`NONFREE\` is the `non-free/` folder of the owner's `usb-wdm-nonfree`
-  at tag `v1.1.0`** (commit `565d11b40fbeb53f5a576c01b5ceba331892c610`;
-  `3.2.0.0` carried tag `v1.0.0`, commit
-  `3b558c04a462a643abec84b31e5611c866e3a72d`), every file held to that
-  commit's `SHA256.TXT`, whose own SHA-256
-  (`2208e5b4f68de00938c20dfe6b3520da22a1ad3cdf7489baed01f3af4fde8d87`) is
-  pinned in `package-common.ps1`; with the pack's `NOTICE.md` and
-  `README.md` unchanged, its `STAGE.TXT` unchanged but for the lines of a
-  folder left out, and a `SHA256.TXT` the cut writes. From `3.3.0.0` the
-  pack's `non-free/wifi/` is left out (owner, 2026-10-28: the Wi-Fi
-  drivers stay in `usb-wdm-nonfree` and its own release), so the folder
-  holds its Ethernet, HID and serial drivers. The pack's
-  `nusb33/` is not in it: NUSB 3.3's files are in `NUSB33\` alone, in
-  every download. The folder's files are other makers' drivers (ASIX,
-  Realtek, FTDI, WCH and Masahiko Morii's Xbox 360 controller drivers,
-  among others; the pack's `NOTICE.md` says whose each is), unmodified, as
-  their makers released them. **Among them are Microsoft files**, the
-  KMDF co-installers ASIX and Davicom ship with their drivers. At `v1.0.0`
-  they were `ethernet/ax88772/w2k-xp/WdfCoInstaller01007.dll` (KMDF 1.7,
-  1.7.6001.0) and `ethernet/ax88179/wxpvis/WdfCoInstaller01009.dll` with
-  its `wxpvis64/` twin (KMDF 1.9, 1.9.7600.16385) (static: the pack's
-  `NOTICE.md` lines 29 and 31, read 2026-10-22). At `v1.1.0`, `wifi/`
-  left out, 26 copies of `WdfCoInstaller01007.dll` and
-  `WdfCoInstaller01009.dll` are in folders of `ax88172a/`, `ax88178/`,
-  `ax88179/`, `ax88772/`, `ax88772b/`, `dm96xx/wxp-7/` and `mcs7830/`
-  under `ethernet/` (static: the exported folder's file names and the
-  pack's `NOTICE.md`, which names Microsoft Corporation for each, read
-  2026-10-28). The pack's `NOTICE.md`
-  quotes the statements some makers made about passing their files on -
-  FTDI's ("The driver may be distributed in any form as long as our
-  license information is not modified", in its INFs and on its driver page
-  as archived on 2011-10-20) and Masahiko Morii's (on his home page as
-  archived on 2011-11-23, that those who need to repost his files may do
-  so on their own responsibility) - and records that, apart from those
-  statements, no licence permitting the files' redistribution has been
-  found for any of them (its "The driver files are not this repository's
-  to license"). Nothing here assesses those statements, none is claimed
-  for this project, and the owner took the decision with that stated; it
-  is a fact about the decision, not a permission. The pack says its drivers are
-  untested by its maintainer (owner, 2026-10-22: no VM checks of them), and
-  the installer and the readme say they are other makers' drivers, not
-  this project's work (until 2026-10-24 they also said the drivers were not
-  tested by this project; the owner removed that warning that day).
+  at tag `v1.2.0`** (commit `c40ad7e4568fe2be7a889a79f6ada01f33123e81`), every
+  file held to that commit's `SHA256.TXT`, whose own SHA-256
+  (`0360249f34c3eabc48e2c38f9b6008cf6e8341f3639fe864e4bbbd0fe0e25701`) is
+  pinned in `package-common.ps1`; with the pack's `NOTICE.md` and `README.md`
+  unchanged, its `STAGE.TXT` unchanged but for the lines of a folder left
+  out, and a `SHA256.TXT` the cut writes. The pack's `nusb33/` is not in it:
+  NUSB 3.3's files are in `NUSB33\` alone, in every download.
+
+  | Releases | Tag | Commit | Folder holds |
+  |---|---|---|---|
+  | `3.2.0.0` | `v1.0.0` | `3b558c04a462a643abec84b31e5611c866e3a72d` | the whole `non-free/` |
+  | `3.3.0.0`, `3.4.0.0` | `v1.1.0` | `565d11b40fbeb53f5a576c01b5ceba331892c610` | `non-free/wifi/` left out (owner, 2026-10-28: the Wi-Fi drivers stay in `usb-wdm-nonfree` and its own release): its Ethernet, HID and serial drivers |
+  | from `3.4.1.0` (owner, 2026-11-02: the next release uses the updated pack) | `v1.2.0` | `c40ad7e4568fe2be7a889a79f6ada01f33123e81` | as `v1.1.0`, and its audio driver: `audio/us122/w98se-me/`, TASCAM's US-122 driver 3.24 for 98 SE and ME, which TASCAM no longer offers |
+
+  The folder's files are other makers' drivers (ASIX, Realtek, FTDI, WCH and
+  Masahiko Morii's Xbox 360 controller drivers, among others; the pack's
+  `NOTICE.md` says whose each is), unmodified, as their makers released them.
+  **Among them are Microsoft files**, the KMDF co-installers ASIX and Davicom
+  ship with their drivers: at `v1.0.0`
+  `ethernet/ax88772/w2k-xp/WdfCoInstaller01007.dll` (KMDF 1.7, 1.7.6001.0)
+  and `ethernet/ax88179/wxpvis/WdfCoInstaller01009.dll` with its `wxpvis64/`
+  twin (KMDF 1.9, 1.9.7600.16385) (static: the pack's `NOTICE.md` lines 29
+  and 31, read 2026-10-22); at `v1.1.0`, `wifi/` left out, 26 copies of
+  `WdfCoInstaller01007.dll` and `WdfCoInstaller01009.dll` in folders of
+  `ax88172a/`, `ax88178/`, `ax88179/`, `ax88772/`, `ax88772b/`,
+  `dm96xx/wxp-7/` and `mcs7830/` under `ethernet/` (static: the exported
+  folder's file names and the pack's `NOTICE.md`, which names Microsoft
+  Corporation for each, read 2026-10-28).
+
+  The pack's `NOTICE.md` quotes the statements some makers made about passing
+  their files on - FTDI's ("The driver may be distributed in any form as long
+  as our license information is not modified", in its INFs and on its driver
+  page as archived on 2011-10-20) and Masahiko Morii's (on his home page as
+  archived on 2011-11-23, that those who need to repost his files may do so
+  on their own responsibility) - and records that, apart from those, no
+  licence permitting the files' redistribution has been found for any of them
+  (its "The driver files are not this repository's to license"). The US-122
+  package differs in one respect, recorded in the pack's `NOTICE.md`: it
+  carries no licence of its own, and TASCAM's download page links TEAC's site
+  terms, which forbid "downloading, reproduction, change, uploading, posting,
+  transmission, distribution" of the site's content, programs among it,
+  without TEAC's prior written permission (<https://www.teac.co.jp/int/terms>,
+  "Last updated: April 1, 2016", read 2026-11-02). No permission has been
+  sought or given; the owner's view is that those terms no longer cover a
+  file the site no longer has (TASCAM's link to it returns HTTP 404,
+  2026-11-02), which is not established. Nothing here assesses those
+  statements, none is claimed for this project, and the owner took the
+  decision with that stated; it is a fact about the decision, not a
+  permission. The pack says its drivers are untested by its maintainer
+  (owner, 2026-10-22: no VM checks of them); the installer and the readme say
+  they are other makers' drivers, not this project's work (until 2026-10-24
+  they also said the drivers were not tested by this project; the owner
+  removed that warning that day).
 - **`WDMFREE\` is the qualifying drivers of a tagged `usb-wdm-free`
   release** (the owner's own project, GPL-2.0-or-later from its `v0.1.2`,
-  GPL-2.0-only before), every file held to a SHA-256
-  in `scripts/package/wdmfree-pin.txt`, with that release's `LICENSE` and
+  GPL-2.0-only before), every file held to a SHA-256 in
+  `scripts/package/wdmfree-pin.txt`, with that release's `LICENSE` and
   `NOTICE.md`. A driver qualifies only once its legs have passed on its
-  systems (roadmap 43.48). `3.2.0.0`'s download 2 carried usb-wdm-free
-  `v0.1.0` (commit `57ba8091b382fbc3d0793cf85d5e912a8bd08a7d`). From
-  `3.3.0.0` the pin names `v0.1.1` (commit
-  `646b51aa6dc0205714b02be5635028cc102629a1`; roadmap-usb4 task 44.34,
-  owner 2026-10-25): `v0.1.0`'s files unchanged, plus `ax88179`, the
-  owner's driver for ASIX AX88179 adapters, whose framing, control and
-  bring-up code is adapted from Linux's `ax88179_178a.c`
-  (GPL-2.0-or-later, ASIX's copyright notice kept in each adapted file;
-  that release's `NOTICE.md` lists the files and their sources). No
-  file of ASIX's own driver is in it. The pin then names `v0.1.2` (commit
-  `c9b5269c953ab59b2cd0abf6920a10858fdf6243`; task 44.34, owner
-  2026-10-26): the same packages under GPL-2.0-or-later, `rtl815x`'s chip
-  core rewritten from the chips' register facts so that it no longer
-  follows Linux's `r8152.c` (GPL-2.0-only), the earlier adaptation
-  (usb-wdm-free's `docs/design/ethernet.md` section 6.4). Then `v0.1.3`
-  (commit `062989b3a88df71d566ed31c53bd18f911f97129`; task 44.44, owner
-  2026-10-26): seven INFs of its own changed (class matches), no file
-  from another project. Then `v0.1.4` (commit
-  `222730cbbc8992880409c1d32c5038a043af6482`; task 44.70, owner
-  2026-10-27): `rtl815x`'s newer Realtek chips and `uac2`'s volume and
-  mute, its own code; its `NOTICE.md` unchanged.
+  systems (roadmap 43.48). The pin, in order:
+
+  | Tag | Commit | Task, owner | What changed |
+  |---|---|---|---|
+  | `v0.1.0` | `57ba8091b382fbc3d0793cf85d5e912a8bd08a7d` | - | `3.2.0.0`'s download 2 |
+  | `v0.1.1` | `646b51aa6dc0205714b02be5635028cc102629a1` | 44.34, 2026-10-25 | from `3.3.0.0`: `v0.1.0`'s files unchanged, plus `ax88179`, the owner's driver for ASIX AX88179 adapters, whose framing, control and bring-up code is adapted from Linux's `ax88179_178a.c` (GPL-2.0-or-later, ASIX's copyright notice kept in each adapted file; that release's `NOTICE.md` lists the files and their sources); no file of ASIX's own driver |
+  | `v0.1.2` | `c9b5269c953ab59b2cd0abf6920a10858fdf6243` | 44.34, 2026-10-26 | the same packages under GPL-2.0-or-later, `rtl815x`'s chip core rewritten from the chips' register facts so that it no longer follows Linux's `r8152.c` (GPL-2.0-only), the earlier adaptation (usb-wdm-free's `docs/design/ethernet.md` section 6.4) |
+  | `v0.1.3` | `062989b3a88df71d566ed31c53bd18f911f97129` | 44.44, 2026-10-26 | seven INFs of its own changed (class matches), no file from another project |
+  | `v0.1.4` | `222730cbbc8992880409c1d32c5038a043af6482` | 44.70, 2026-10-27 | `rtl815x`'s newer Realtek chips and `uac2`'s volume and mute, its own code; its `NOTICE.md` unchanged |
 - **The installer copies a set only when the user ticks it, and never
   installs it** (owner, 2026-10-22); the uninstall removes what it placed.
 - **The generated readme of each download says which download it is** and,
-  for download 3, that it carries other makers' files, Microsoft's two
-  among them, with no licence to redistribute them established.
+  for download 3, that it carries other makers' files, Microsoft's two among
+  them, with no licence to redistribute them established.
 
-What this tree holds of it: the pins, and per release
-`releases/<version>/downloads.txt` (which downloads were cut, each set's
-tag, commit and the hash of the `SHA256.TXT` the cut wrote) and, with the
-free set, a copy of the pin it was cut with, from which `-UploadSetOnly`
-rebuilds the downloads.
+This tree holds the pins and, per release, `releases/<version>/downloads.txt`
+(which downloads were cut, each set's tag, commit and the hash of the
+`SHA256.TXT` the cut wrote) and, with the free set, a copy of the pin it was
+cut with, from which `-UploadSetOnly` rebuilds the downloads.
 
 Status: in every cut from `3.2.0.0`.
 
 ### The GitHub release download carried three of them, until 1.0.0.1
 
 Decided by the maintainer for the two `usbd.sys` builds, extended to
-`usbhub98.sys` on the same grounds and by the same mechanism, and withdrawn
-on 2026-09-02 before any release had been uploaded. From release 0.0.0.4 to
+`usbhub98.sys` on the same grounds and by the same mechanism, and withdrawn on
+2026-09-02 before any release had been uploaded. From release 0.0.0.4 to
 1.0.0.0 the asset `make-release.ps1` assembled carried `usbd98.sys`,
-`usbd2k.sys` and `usbhub98.sys` alongside the driver, so that what a user
-downloaded would be a complete install set. What was being distributed:
+`usbd2k.sys` and `usbhub98.sys` beside the driver, so a download would be a
+complete install set:
 
-- Each `usbd` file was the target OS's own `usbd.sys`, byte-for-byte as
-  Microsoft shipped it: Windows 98 SE 4.10.2222 from `BASE5.CAB`, and Windows
-  2000 SP4 5.00.2195.6658 expanded from `I386\USBD.SY_`. Neither was
-  modified, patched, or recompiled. The exact version, length and SHA-256 of
-  the Windows 98 file are in `scripts/import-gate/win98-evidence.list`, and
-  of the Windows 2000 file in `scripts/package/extract-usbd-sources.ps1`,
-  which still stages both as reference copies.
-- They were renamed on the media only, to `usbd98.sys` and `usbd2k.sys`,
-  because both install as `usbd.sys` and each install path had to be able to
-  reach exactly one of them.
-- `src/xhci98.inf` copied whichever one its install path named with
-  `COPYFLG_NO_OVERWRITE`, so a machine that already had a `usbd.sys` kept its
-  own and the shipped file was never placed.
+- Each `usbd` file was the target OS's own `usbd.sys`, byte for byte as
+  Microsoft shipped it: Windows 98 SE 4.10.2222 from `BASE5.CAB`, Windows 2000
+  SP4 5.00.2195.6658 expanded from `I386\USBD.SY_`; neither modified, patched
+  or recompiled. Version, length and SHA-256: of the 98 file in
+  `scripts/import-gate/win98-evidence.list`, of the 2000 file in
+  `scripts/package/extract-usbd-sources.ps1`, which still stages both as
+  reference copies. Renamed on the media only, to `usbd98.sys` and
+  `usbd2k.sys`, because both install as `usbd.sys` and each install path had
+  to reach exactly one; `src/xhci98.inf` copied the one its path named with
+  `COPYFLG_NO_OVERWRITE`, so a machine with a `usbd.sys` kept its own.
 - `usbhub98.sys` was Windows 98 SE's own `usbhub.sys`, 4.10.2222, 35,680
-  bytes, byte-for-byte as Microsoft shipped it on the SE CD and taken from the
-  same cab read that yielded `usbd98.sys`, renamed on the media for the same
-  reason and copied with the same flag, on the Windows 98 path only: on
-  Windows 2000 that filename belongs to the OS's own USB 1.1 hub driver.
+  bytes, byte for byte from the SE CD, taken from the same cab read that
+  yielded `usbd98.sys`, renamed and copied the same way, on the Windows 98
+  path only (on Windows 2000 that filename is the OS's own USB 1.1 hub
+  driver).
+- Why: `usbhub20.sys` imports `USBD.SYS` on both targets, and on an
+  xHCI-only machine nothing placed one, so the root hub failed with
+  `0xc0000034` naming `usbhub20.sys` on Windows 2000 and sat at Code 2 on
+  Windows 98 (`docs/contributing/lessons.md`, "`usbhub20.sys` bugchecks
+  Win2000"). `usbhub.sys` is Windows 98's composite parent driver, missing
+  for the same cause: Windows 98 ships `USB.INF` on every install but copies
+  the USB driver files only when setup detects a USB controller, so a
+  multi-interface device sat at `Code 2`. Batch 13-E measured it on real
+  hardware: every composite device on the ThinkPad E460 was dead, a
+  two-interface HID keyboard among them, and all worked once the file was
+  present; the control was a ThinkPad X61 with the same Windows 98 SE and
+  NUSB 3.3 and no xHCI, where setup had found its UHCI controller.
+- Permission: no permission to redistribute these files is documented
+  anywhere in this repository, and none was claimed. That both products are
+  long out of support, and that the files were unmodified copies placed only
+  where the OS itself would have placed them, are facts about the situation,
+  not permissions.
 
-Why the `usbd.sys` builds. `usbhub20.sys` imports `USBD.SYS` on both targets,
-and on an xHCI-only machine, the entire population this driver exists for,
-nothing ever placed one. Without it the root hub fails with `0xc0000034`
-naming `usbhub20.sys` on Windows 2000, and sits at Code 2 on Windows 98,
-which reads as a fault in this driver and is not one
-(`docs/contributing/lessons.md`, "`usbhub20.sys` bugchecks Win2000").
+What replaced it. Release 1.0.0.1 has the Windows setup engine copy
+`usbd.sys` and `usbhub.sys` from the operating system's own install source:
+`LayoutFile=layout.inf` in the INF's `[Version]` resolves a `CopyFiles` entry
+its own `[SourceDisksFiles]` does not name through the OS's `layout.inf`, and
+the engine fetches the file from the Windows source path (the CABs on the
+hard disk or the Windows 98 CD; the NT targets' driver cache, Windows 2000's
+`sp4.cab`, Windows XP's `sp3.cab`), with the same `COPYFLG_NO_OVERWRITE`. The
+release download carries this project's own files, the two tools and the
+readmes, and no Microsoft file; the INF gate refuses an INF or a package that
+names one (`OS-MEDIA`, `PKG-MSFILE`); `scripts/package/usbd-sources.expected`
+and the three-file wording in `releases/README.md` and `AGENTS.md` went in the
+same change. The reference copies under `tools/` stay, read by the import gate
+and the Windows 2000 VM setup and packaged by nothing (section 4, "Where those
+copies came from"). The measurements are in
+`docs/contributing/build-and-test.md`, "The SweetLow stack" and "The files the
+OS supplies"; roadmap Phase 17 has the tasks. Release 1.0.1.0 extends the
+route on the NT path to `usbport.sys` and `usbhub.sys`, which that path did
+not copy until then: an NT install that never had a USB controller has
+neither (measured on a Windows XP guest on 2026-09-03), and both come from the
+`Driver Cache\i386` every install carries; no file was added to the media and
+no gate rule relaxed (roadmap Phase 19).
 
-Why the third file. `usbhub.sys` is Windows 98's composite parent driver, and
-its absence has the same cause as `usbd.sys`'s: Windows 98 ships `USB.INF` on
-every install but copies the USB driver files only when setup detects a USB
-controller, and an xHCI-only machine looks empty to Win98 setup. So the INF
-matches a multi-interface device, Windows names a `USB Composite Device`
-devnode, and the file it needs is not on disk: `Code 2`, matched and
-unloadable. Batch 13-E measured this on real hardware: every composite device
-on the ThinkPad E460 was dead, including a two-interface HID keyboard that
-would not type, and the same machine drove them all once the file was
-present. The control was a ThinkPad X61 running the same Windows 98 SE and
-the same NUSB 3.3 with no xHCI, where the file is present because setup found
-its UHCI controller.
-
-What is documented about permission: nothing. No permission to redistribute
-these files is documented anywhere in this repository, and none was claimed
-here. That both products are long out of support, and that the files were
-unmodified copies placed only where the OS itself would have placed them,
-are facts about the situation and not permissions. Do not read them as an
-argument that this was allowed.
-
-What replaced it. Release 1.0.0.1 changes `src/xhci98.inf` so that the
-Windows setup engine copies `usbd.sys` and `usbhub.sys` from the operating
-system's own install source: `LayoutFile=layout.inf` in the INF's
-`[Version]` section resolves a `CopyFiles` entry the INF's own
-`[SourceDisksFiles]` does not name through the OS's `layout.inf`, and the
-engine fetches the file from the Windows source path (the CABs on the hard
-disk or the Windows 98 CD, and the NT targets' own driver cache: Windows
-2000's `sp4.cab`, Windows XP's `sp3.cab`), with the same
-`COPYFLG_NO_OVERWRITE`. The release download carries this project's own
-files, the two tools and the readmes, and no Microsoft file; the INF gate
-refuses an INF or a package that names one (`OS-MEDIA`, `PKG-MSFILE`);
-`scripts/package/usbd-sources.expected` and the three-file wording in
-`releases/README.md` and `AGENTS.md` went in the same change. The reference
-copies under `tools/` stay, read by the import gate and the Windows 2000 VM
-setup and packaged by nothing, and section 4's "Where those copies came
-from" paragraph still describes them. The measurements that made the change
-possible are in `docs/contributing/build-and-test.md`, "The SweetLow stack"
-and "The files the OS supplies"; roadmap Phase 17 has the tasks.
-
-Release 1.0.1.0 extends the same route on the NT install path to
-`usbport.sys` and `usbhub.sys`, which that path did not copy until then: an
-NT install that never had a USB controller has neither (measured on a
-Windows XP guest on 2026-09-03), and both come from the `Driver Cache\i386`
-every install carries. No file was added to the media and none of the gate
-rules above was relaxed; roadmap Phase 19 has the tasks.
-
-Status: the exception was never used. No asset of any version was uploaded
+Status: the exception was never used; no asset of any version was uploaded
 while it stood. Every version under `releases/` (`1.0.0.0` to `1.1.0.0`) has
-since been uploaded to a GitHub release, and this repository is public; the
-uploaded `1.0.0.0` asset holds no Microsoft file (the owner, 2026-09-22), and
-every cut since 1.0.0.1 carries nothing under the exception. "The release
-download carries three of them" was true of the assembled asset from 0.0.0.4
-to 1.0.0.0 and of no download anyone made.
-
-This repository's prose calls a cut asset "published" in the INF's sense as
-well: a cut writes `releases/<version>/` and `out/xhci98-<version>.zip` in
-this working tree, and a publish uploads that zip to a GitHub release.
-"Published" in that usage names which asset filename was in use at a cut.
-The roadmap carries no clause for an upload: the upload is one act of the
-project owner's rather than work this repository can do or close.
+since been uploaded to a GitHub release; the uploaded `1.0.0.0` asset holds no
+Microsoft file (the owner, 2026-09-22), and every cut since 1.0.0.1 carries
+nothing under the exception. "The release download carries three of them" was
+true of the assembled asset from 0.0.0.4 to 1.0.0.0 and of no download anyone
+made.
 
 ---
 
 ## 6. Keeping this file true
 
-Update it in the same change that creates the need, not later:
+Update it in the same change that creates the need:
 
-- A new third-party document or binary: add it to section 2's table, and to
-  `docs/references/README.md` if it is a document. It goes in a git-ignored
-  directory with its URL and SHA-256 recorded, never tracked. A document that
-  lives in no directory of this tree still gets the row; the Oney book is the
-  precedent. It sat outside the repository entirely, was cited by printed page
-  in three tracked documents and by name in three more, and for a long time
-  had no row anywhere because the rule only imagined documents kept under
-  `docs/references/`. Record what makes a citation checkable (edition,
-  page-index offset, and a hash of the copy the numbers were read from), and
-  say plainly when there is no URL rather than leaving the column empty.
-- A new thing published through a channel that is not the repository: say
-  which channel, in section 5, and say plainly what goes through it. "Not
-  tracked" and "not distributed" were once the same statement in this
-  project, and every file that repeated one of them repeated it in the
-  other's words. Do not write a sentence that leaves the reader to work out
-  which of the two it means.
-- A new tracked build output: ask what the linker put in it before treating it
-  as this project's code. "Our sources produced it" is not the same claim as
-  "it contains only our code", and section 2a exists because those two were
-  conflated for a published binary. Read the map, name what is statically
-  linked in, and record the notices that material asks for.
-- A new fact read out of a shipping binary: add a row to section 4 with its
-  actual method. If you established it statically, say static, even if the
-  system also happens to run.
+- A new third-party document or binary: a row in section 2's table, and in
+  `docs/references/README.md` if a document; a git-ignored directory with its
+  URL and SHA-256 recorded, never tracked (`AGENTS.md`, "Third-Party Material
+  and Provenance"). A document kept in no directory of this tree still gets
+  the row (the Oney book, cited by printed page in three tracked documents and
+  by name in three more, long had none): record what makes a citation
+  checkable (edition, page-index offset, a hash of the copy read), and say
+  plainly when there is no URL.
+- Something published through a channel that is not the repository: say
+  which channel, in section 5, and plainly what goes through it. "Not
+  tracked" and "not distributed" were once the same statement here; write
+  no sentence that leaves the reader to work out which it means.
+- A new tracked build output: ask what the linker put in it before treating
+  it as this project's code ("our sources produced it" is not "it contains
+  only our code"; section 2a exists because the two were conflated for a
+  published binary). Read the map, name what is statically linked in, and
+  record the notices that material asks for.
+- A new fact read out of a shipping binary: a section 4 row with its actual
+  method; static stays static even if the system also runs.
 - A method correction: correct the row. Section 4 exists because an earlier
   audit described several disassembly-derived facts as live trace results,
-  which was wrong in the direction that matters.
+  wrong in the direction that matters.

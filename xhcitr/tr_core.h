@@ -581,20 +581,23 @@ typedef struct _TR_OPTS {
     int Confirmed;              /* /confirmed: the confirmed list's digest */
     char ConfirmedDigest[TR_PATH_CHARS];
     int SetLevel;               /* /setlevel (record 25 section 7.5)       */
+    int Acpi;                   /* /acpi <folder> (section 21, task 46.21) */
+    char AcpiDir[TR_PATH_CHARS];
     int Level[2];               /* per TR_LV_XHCI98 / TR_LV_XHCICM: 0-4,
                                  * or -1 for not asked                      */
 } TR_OPTS;
 
 /* XHCITR [/tray] [/eject id=<instance id> [/result <section>]
  * [/confirmed <digest>]] [/setlevel xhci98=<n> xhcicm=<n> [/result
- * <section>]] [/report <file>] [/selftest]. Switches start with '/' or
+ * <section>]] [/report <file>] [/acpi <folder>] [/selftest]. Switches
+ * start with '/' or
  * '-', without case; /eject takes id=<id> as the next argument, /report
  * its file, /result a section name (tr_res_name_ok) and /confirmed a
  * digest (tr_res_digest_ok). /setlevel takes one or two of xhci98=<n> and
  * xhcicm=<n> as the next arguments, each driver once, <n> a single digit
- * 0-4 and nothing else (tr_level_arg). Returns 0 with opts filled, 1
- * refused with why in err. /eject, /setlevel, /report and /selftest stand
- * alone; /result goes with /eject or /setlevel, /confirmed with /eject
+ * 0-4 and nothing else (tr_level_arg); /acpi its folder. Returns 0 with
+ * opts filled, 1 refused with why in err. /eject, /setlevel, /report,
+ * /acpi and /selftest stand alone; /result goes with /eject or /setlevel, /confirmed with /eject
  * only (the elevated runs of sections 6.6 and 7.5). */
 int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap);
 
@@ -634,11 +637,10 @@ void tr_unit_label(const char *unitName, const char *diskNames,
 void tr_disk_line(const char *name, const char *letters, char *out,
                   size_t cap);
 
-/* The confirmation's lead, in one pass: with disks, "This stops <unit>
- * and everything on it:", one indented "Disk drive ..." line each (no full
- * stop after a letter), an empty line; without, "Stop <label>?" and an
- * empty line; then "These devices will stop:". diskLines are n plain
- * lines (tr_disk_line's). */
+/* The confirmation's lead: "Stop <label>?" and an empty line, then "These
+ * devices will stop:". The label names the unit's disks and letters where
+ * it has disks (owner, 2026-11-04: never the bridge's name). unitName,
+ * diskLines and n are no longer shown (kept for the callers). */
 void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
                      const char *const *diskLines, int n);
 
@@ -1437,5 +1439,17 @@ TR_U32 tr_eject_watch_ms(int kind);
 
 /* The line when the bound passed with the tunnel not closed. */
 const char *tr_eject_open_text(int kind);
+
+/* File > Save Snapshot... (record 25 section 15 item 8, revision 25; task
+ * 46.4). tr_snap_named: 1 with the file name /snapshot gave its set, read
+ * from its own line "files named <name>" (',' or " (the name given)"
+ * after it) in the head of its output; 0 when the line is not there or the
+ * name is not 1 to 12 printable characters. tr_snap_saved: the short
+ * message for exit rc (-1: not run, or not ended in time), the folder the
+ * files went to, the name (or NULL) and the output's head (its first line
+ * said for an exit that wrote nothing). */
+int tr_snap_named(const char *head, char *name, size_t cap);
+void tr_snap_saved(int rc, const char *folder, const char *name,
+                   const char *head, char *out, size_t cap);
 
 #endif /* TR_CORE_H */

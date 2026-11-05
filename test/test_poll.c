@@ -8,7 +8,8 @@
  * verdict, the adaptive period and the interval observation, the line's
  * retirement over a modelled register file, and the finer timer's request
  * machine, its schedules and its phase observer (record 15 section 7.2.10,
- * task 38.3).
+ * task 38.3); and the start's walk for a device holding the line (section
+ * 4.4, task 46.6).
  */
 
 #include <stdio.h>
@@ -1352,9 +1353,245 @@ static void test_decide_msi_avoid(void)
     CHECK_EQ(reason, XHCI_POLL_R_AUTO_NO_INTERRUPT, "its reason");
 }
 
+/* ------------------------------------------------------------------ */
+/* A line another device holds asserted (record 15 section 4.4, 46.6)  */
+/* ------------------------------------------------------------------ */
+
+#define HELD_MAX 8
+
+typedef struct _HELD_FN {
+    ULONG Bus, Device, Function;
+    UCHAR Cfg[XHCI_POLL_HELD_BYTES];
+} HELD_FN;
+
+typedef struct _HELD_BUSES {
+    HELD_FN Fn[HELD_MAX];
+    ULONG Count;
+    ULONG BusExists[XHCI_POLL_HELD_BUSES];
+    ULONG Reads;
+    ULONG ZeroForAbsent;    /* an absent slot answers no bytes at all */
+} HELD_BUSES;
+
+static void heldPut32(UCHAR *c, ULONG off, ULONG v)
+{
+    c[off] = (UCHAR)v;
+    c[off + 1] = (UCHAR)(v >> 8);
+    c[off + 2] = (UCHAR)(v >> 16);
+    c[off + 3] = (UCHAR)(v >> 24);
+}
+
+static HELD_FN *heldAdd(HELD_BUSES *h, ULONG bus, ULONG dev, ULONG fn,
+                        ULONG id, ULONG bar0, ULONG line, ULONG pin,
+                        ULONG command, ULONG status)
+{
+    HELD_FN *f;
+    ULONG i;
+
+    f = &h->Fn[h->Count++];
+    for (i = 0; i < XHCI_POLL_HELD_BYTES; i++) {
+        f->Cfg[i] = 0;
+    }
+    f->Bus = bus;
+    f->Device = dev;
+    f->Function = fn;
+    heldPut32(f->Cfg, 0x00, id);
+    f->Cfg[0x04] = (UCHAR)command;
+    f->Cfg[0x05] = (UCHAR)(command >> 8);
+    f->Cfg[0x06] = (UCHAR)status;
+    f->Cfg[0x07] = (UCHAR)(status >> 8);
+    heldPut32(f->Cfg, 0x10, bar0);
+    f->Cfg[0x3C] = (UCHAR)line;
+    f->Cfg[0x3D] = (UCHAR)pin;
+    h->BusExists[bus] = 1;
+    return f;
+}
+
+static ULONG heldRead(PVOID context, ULONG bus, ULONG device,
+                      ULONG function, PUCHAR buffer, ULONG length)
+{
+    HELD_BUSES *h;
+    ULONG i;
+    ULONG j;
+
+    h = (HELD_BUSES *)context;
+    h->Reads++;
+    if (!h->BusExists[bus]) {
+        return 0;
+    }
+    for (i = 0; i < h->Count; i++) {
+        if (h->Fn[i].Bus == bus && h->Fn[i].Device == device &&
+            h->Fn[i].Function == function) {
+            for (j = 0; j < length; j++) {
+                buffer[j] = h->Fn[i].Cfg[j];
+            }
+            return length;
+        }
+    }
+    if (h->ZeroForAbsent) {
+        return 0;
+    }
+    buffer[0] = 0xFF;
+    buffer[1] = 0xFF;
+    return 2;
+}
+
+static void heldInit(HELD_BUSES *h, XHCI_POLL_HELD_IN *in)
+{
+    ULONG i;
+
+    h->Count = 0;
+    h->Reads = 0;
+    h->ZeroForAbsent = 0;
+    for (i = 0; i < XHCI_POLL_HELD_BUSES; i++) {
+        h->BusExists[i] = 0;
+    }
+    in->Context = h;
+    in->Read = heldRead;
+    /* This controller: 01:00.0, qemu-xhci, IRQ 10, asserting itself. */
+    heldAdd(h, 1, 0, 0, 0x000D1B36UL, 0xFE800004UL, 10, 1, 0x0006, 0x0018);
+    h->Fn[0].Cfg[0x0E] = 0x80;
+    in->Own[0] = 0x000D1B36UL;
+    in->Own[1] = 0xFE800004UL;
+    in->Own[2] = 0;
+    in->Own[3] = 0;
+    in->Irq = 10;
+    in->From = 0;
+    h->BusExists[0] = 1;
+    heldAdd(h, 0, 0, 0, 0x29C08086UL, 0, 0, 0, 0x0006, 0x0000);
+}
+
+static void test_held_scan(void)
+{
+    HELD_BUSES h;
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    HELD_FN *f;
+
+    heldInit(&h, &in);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "no holder: this controller asserting itself is skipped");
+    CHECK_EQ(out.Functions, 2, "two functions read");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "the serial function holds");
+    CHECK_EQ(out.Bdf, 0x0101UL, "01:00.1");
+    CHECK_EQ(out.Id, 0x00021B36UL, "1B36:0002");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 11, 1, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "a holder on another IRQ");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0401, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "Interrupt Disable set");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0000);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "Interrupt Status clear");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 0, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "pin 0");
+
+    heldInit(&h, &in);
+    h.Fn[0].Cfg[0x0E] = 0x00;
+    heldAdd(&h, 1, 0, 3, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE,
+             "function 3 of a single-function device is not read");
+
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 3, 0x00021B36UL, 0xC001UL, 10, 2, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "a multi-function's 3");
+    CHECK_EQ(out.Bdf, 0x0103UL, "01:00.3");
+
+    heldInit(&h, &in);
+    f = heldAdd(&h, 7, 31, 0, 0x174A1C5CUL, 0xFC000004UL, 10, 1, 0x0006,
+                0x0018);
+    f->Cfg[0x0E] = 0x01;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND,
+             "a bridge on bus 7, after buses that answer nothing");
+    CHECK_EQ(out.Bdf, 0x07F8UL, "07:1F.0");
+
+    heldInit(&h, &in);
+    f = heldAdd(&h, 2, 0, 0, 0x12348086UL, 0, 10, 1, 0x0006, 0x0008);
+    f->Cfg[0x0E] = 0x02;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "a CardBus header is not read");
+
+    /* A walk resumed past an unconfirmed candidate finds the next. */
+    heldInit(&h, &in);
+    heldAdd(&h, 1, 0, 1, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0008);
+    heldAdd(&h, 1, 0, 2, 0x000D1B36UL, 0xFE900004UL, 10, 1, 0x0006,
+            0x0018);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Bdf, 0x0101UL, "the first candidate, 01:00.1");
+    in.From = out.Bdf + 1;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND, "resumed");
+    CHECK_EQ(out.Bdf, 0x0102UL, "the next, 01:00.2");
+    in.From = out.Bdf + 1;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_NONE, "and then none");
+
+    heldInit(&h, &in);
+    h.BusExists[0] = 0;
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FAILED, "bus 0 answers nothing");
+    CHECK_EQ(h.Reads, 1, "and the walk stops there");
+
+    heldInit(&h, &in);
+    XhciPollHeldScan(&in, &out);
+    /* Bus 0: 32 slots; bus 1: its multi-function device 0 eight, then 31
+     * slots; buses 2 to 255: 32 slots each, none skipped. */
+    CHECK_EQ(h.Reads, 32 + 8 + 31 + 254 * 32, "every slot of every bus "
+             "read once; a multi-function device eight");
+
+    /* A populated bus whose device 0 is absent, read where an absent slot
+     * answers no bytes: its later device is still found. */
+    heldInit(&h, &in);
+    h.ZeroForAbsent = 1;
+    heldAdd(&h, 3, 5, 0, 0x00021B36UL, 0xC001UL, 10, 1, 0x0001, 0x0008);
+    XhciPollHeldScan(&in, &out);
+    CHECK_EQ(out.Result, XHCI_POLL_HELD_FOUND,
+             "device 5 of a bus whose device 0 answers nothing");
+    CHECK_EQ(out.Bdf, 0x0328UL, "03:05.0");
+}
+
+static void test_held_still(void)
+{
+    UCHAR c[XHCI_POLL_HELD_BYTES];
+    ULONG i;
+
+    for (i = 0; i < XHCI_POLL_HELD_BYTES; i++) {
+        c[i] = 0;
+    }
+    c[0x04] = 0x01;
+    c[0x06] = 0x08;
+    c[0x3C] = 10;
+    CHECK_EQ(XhciPollHeldStill(c, 10), 1, "still holding IRQ 10");
+    CHECK_EQ(XhciPollHeldStill(c, 11), 0, "another line");
+    c[0x06] = 0x00;
+    CHECK_EQ(XhciPollHeldStill(c, 10), 0, "Interrupt Status dropped");
+    c[0x06] = 0x08;
+    c[0x05] = 0x04;
+    CHECK_EQ(XhciPollHeldStill(c, 10), 0, "Interrupt Disable set");
+}
+
 int main(void)
 {
     test_decide_msi_avoid();
+    test_held_scan();
+    test_held_still();
     test_values();
     test_decide();
     test_connected();

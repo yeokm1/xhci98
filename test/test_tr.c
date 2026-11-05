@@ -4343,6 +4343,10 @@ static void test_gen_link(void)
     CHECK_EQ(tr_profile_of_nhi(0x156A8086UL), TR_PROFILE_ICM_FR, "FR");
     CHECK_EQ(tr_profile_of_nhi(0xA8338086UL), TR_PROFILE_USB4, "Lunar Lake");
     CHECK_EQ(tr_profile_of_nhi(0x16681022UL), TR_PROFILE_USB4, "AMD");
+    CHECK_EQ(tr_profile_of_nhi(0x162E1022UL), TR_PROFILE_USB4, "AMD Rembrandt");
+    CHECK_EQ(tr_profile_of_nhi(0x158E1022UL), TR_PROFILE_USB4, "AMD Strix Halo");
+    CHECK_EQ(tr_profile_of_nhi(0x113C1022UL), TR_PROFILE_USB4, "AMD Krackan2");
+    CHECK_EQ(tr_profile_of_nhi(0x11251022UL), 0, "an AMD bridge id");
     CHECK_EQ(tr_profile_of_nhi(0x00F41B36UL), 0, "the emulator's generic host");
     CHECK_EQ(tr_profile_of_nhi(0x12348086UL), 0, "an Intel id not listed");
 
@@ -4530,6 +4534,72 @@ static void test_ver_route(void)
     CHECK(!tr_path_route(NULL, &root, &route), "none");
 }
 
+/* Record 25 section 15 item 8, revision 25 (task 46.4): Save Snapshot's
+ * name and short message. */
+static void test_snap_saved(void)
+{
+    char name[16];
+    char out[700];
+    char folder[300];
+    char head[400];
+    int i;
+
+    CHECK(tr_snap_named("XHCITR /snapshot: 2026-11-03 01:23, files named "
+                        "B0301230, in the\ncurrent directory\n", name,
+                        sizeof(name)) && strcmp(name, "B0301230") == 0,
+          "snap: the name before its comma");
+    CHECK(tr_snap_named("XHCITR /snapshot: 2026-11-03 01:23, files named "
+                        "MYSNAP (the name given), in the\n", name,
+                        sizeof(name)) && strcmp(name, "MYSNAP") == 0,
+          "snap: a given name");
+    CHECK(!tr_snap_named("XHCITR /snapshot: all 26 names for this minute "
+                         "are taken", name, sizeof(name)) && name[0] == '\0',
+          "snap: no name line");
+    CHECK(!tr_snap_named("files named ABCDEFGHIJKLMN, in", name,
+                         sizeof(name)), "snap: a name too long refused");
+    CHECK(!tr_snap_named("files named B0301230 in", name, sizeof(name)),
+          "snap: a name with no comma after it refused");
+    CHECK(!tr_snap_named("files named B0301230,", name, 4),
+          "snap: a name longer than the room refused");
+    tr_snap_saved(0, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strcmp(out, "Snapshot saved in C:\\SNAP: B0301230.DEV, .TXT, .BIN "
+                 "and .PSC.") == 0, "snap: exit 0");
+    tr_snap_saved(3, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strcmp(out, "Snapshot saved in C:\\SNAP as B0301230, but its .TXT "
+                 "is missing / incomplete. Send the files anyway.") == 0,
+          "snap: exit 3");
+    tr_snap_saved(4, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strstr(out, "B0301230.DEV only") != NULL, "snap: exit 4");
+    tr_snap_saved(5, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strstr(out, "could not be written") != NULL, "snap: exit 5");
+    tr_snap_saved(8, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strstr(out, "Run it again") != NULL, "snap: exit 8");
+    tr_snap_saved(6, "C:\\SNAP", NULL, "XHCITR /snapshot: all 26 names for "
+                  "this minute are taken in this directory\n(A to Z)", out,
+                  sizeof(out));
+    CHECK(strcmp(out, "No snapshot was saved in C:\\SNAP.\r\nall 26 names "
+                 "for this minute are taken in this directory") == 0,
+          "snap: exit 6, its first line without the prefix");
+    tr_snap_saved(0, "C:\\SNAP", NULL, "", out, sizeof(out));
+    CHECK(strcmp(out, "No snapshot was saved in C:\\SNAP.") == 0,
+          "snap: no name read");
+    tr_snap_saved(-1, "C:\\SNAP", "B0301230", "", out, sizeof(out));
+    CHECK(strstr(out, "did not run") != NULL, "snap: not run");
+    for (i = 0; i < 259; i++) {
+        folder[i] = 'D';
+    }
+    folder[259] = '\0';
+    for (i = 0; i < 399; i++) {
+        head[i] = 'x';
+    }
+    head[399] = '\0';
+    tr_snap_saved(3, folder, "B0301230", head, out, sizeof(out));
+    CHECK(strlen(out) < sizeof(out) && strstr(out, "Send the files") != NULL,
+          "snap: a folder of MAX_PATH characters, whole");
+    tr_snap_saved(6, folder, NULL, head, out, 64);
+    CHECK(strlen(out) == 63, "snap: the output's bound held");
+}
+
 int main(void)
 {
     test_main_title();
@@ -4562,6 +4632,7 @@ int main(void)
     test_marks();
     test_mark_rerun();
     test_eject_watch();
+    test_snap_saved();
     {
         /* A UAS interface: bulk endpoints with companions and pipe usage. */
         static const unsigned char uas[] = {
@@ -4686,13 +4757,11 @@ int main(void)
         two[0] = "Disk drive QEMU NVMe Ctrl, volume E:";
         two[1] = "Disk drive Samsung SSD, volumes F:, G:";
         tr_text_init(&t, buf, sizeof(buf));
-        tr_confirm_lead(&t, "NVM Express Controller", "QEMU NVMe Ctrl (E:)", two, 2);
-        CHECK(strcmp(buf, "This stops NVM Express Controller and everything on it:\r\n"
-                          "    Disk drive QEMU NVMe Ctrl, volume E:\r\n"
-                          "    Disk drive Samsung SSD, volumes F:, G:\r\n"
+        tr_confirm_lead(&t, "PCI standard PCI-to-PCI bridge", "QEMU NVMe Ctrl (E:)", two, 2);
+        CHECK(strcmp(buf, "Stop QEMU NVMe Ctrl (E:)?\r\n"
                           "\r\n"
                           "These devices will stop:\r\n") == 0,
-              "confirm: two disks, exact CR LF, no full stop after a letter");
+              "confirm: with disks the drive's name and letter, never the bridge's");
         CHECK(strstr(buf, "\r\r") == NULL, "confirm: no doubled CR");
         tr_text_init(&t, buf, sizeof(buf));
         tr_confirm_lead(&t, "USB xHCI Controller", "USB xHCI Controller", NULL, 0);
@@ -4707,7 +4776,7 @@ int main(void)
         tr_put_box(&t, inst_eject_remind_text());
         CHECK(strcmp(buf, "Close any program that uses them first.\r\n"
                           "Before you eject it, make sure none of its other "
-                          "devices (USB ports, card readers, network) is in "
+                          "devices (USB ports, card readers, network) are in "
                           "use; stop them in Windows first.") == 0,
               "reminder: one paragraph in the box, the break a space");
         tr_text_init(&t, buf, sizeof(buf));
@@ -4837,7 +4906,7 @@ int main(void)
                 "running: eject them too before you unplug it.",
                 "Windows has stopped QEMU NVMe Ctrl (E:).\r\n\r\n"
                 "The device has started again, so it is not safe to unplug. "
-                "Close the programs using it and stop it again in the xHCI98 "
+                "Close the programs using it and stop it again in xHCI98 "
                 "USB Tree."
             };
             for (k = 0; k < 2; k++) {

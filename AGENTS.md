@@ -306,6 +306,7 @@ README.md       The repository's front page.
 AGENTS.md       This file: the agent guide, and the entry point for the rest.
 CLAUDE.md       Claude Code's entry point; it defers to this file.
 LICENSE         The license text and its scope note.
+LICENSE-docs.md The documentation's licence (CC BY 4.0) and its scope.
 ```
 
 Everything above is tracked except `tools/`, `external/`, the PDFs in
@@ -821,7 +822,8 @@ bytes, which `scripts\check-stor98-header.ps1` holds on every gated build
 
 This project is GPL-2.0-or-later licensed (since 2026-10-26, roadmap-usb4
 task 44.38; GPL-2.0-only before, in every release up to `3.2.0.0`) and
-depends on material that is not.
+depends on material that is not. Its documentation (every tracked `.md` file
+outside `src/stor98/`) is CC BY 4.0 (`LICENSE-docs.md`).
 The full record is `docs/contributing/legal-provenance.md`; these are the
 rules that bind day-to-day work, and none of them is optional.
 

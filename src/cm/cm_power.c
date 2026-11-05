@@ -187,6 +187,11 @@ static VOID cmU4Suspend(PCM_NHI nhi)
  */
 VOID CmNhiQuiesce(PCM_NHI nhi)
 {
+    /* Record 32 section 12.8.15.13: an orderly shutdown or restart after
+     * a handover's exchange clears the boot guard's marker (NT). */
+    if (nhi->SystemPower == PowerSystemShutdown) {
+        CmOscntShutdown(nhi);
+    }
     if (nhi->DevicePower != PowerDeviceD0) {
         return;
     }
@@ -320,6 +325,11 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         held = FALSE;
         goto resumed;
     }
+    /* Record 32 section 12.8.13.6: after a hibernation the handover is
+     * sent again before ring 0 restarts (NT, cm_oscnt.c). */
+    if (nhi->U4On) {
+        CmOscntResume(nhi);
+    }
     ok = CmNhiPlatformInit(nhi);
     if (ok && !CmNhiSetBusMaster(nhi, TRUE)) {
         ok = FALSE;
@@ -331,6 +341,10 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
     if (ok && nhi->U4On) {
         ran = TRUE;
         rc = TbtU4Resume(&nhi->U4);
+        if (rc == TBT_OK || rc == TBT_E_STATE) {
+            /* The router answered the resume (12.8.15.13). */
+            CmOscntRouter(nhi);
+        }
         if (rc == TBT_E_STATE && !nhi->U4.Failed) {
             /* Record 22 section 7.6: the domain runs, but an obligation
              * was not met (a port HELD, a budget spent): the hold is
@@ -629,7 +643,13 @@ static NTSTATUS NTAPI cmSystemDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
          * about to open the queue reads (CmNhiStartWork, CmNhiBind), so no
          * client is activated once a sleep or shutdown has been taken. */
         CmPowerSetSystem(nhi, stack->Parameters.Power.State.SystemState);
+        /* Record 32 section 12.8.13.6, Q16 (a): a hibernate request owes
+         * the handover again, any other sleep does not. */
+        CmOscntSystem(nhi, stack->Parameters.Power.State.SystemState);
     }
+    /* 98 SE and ME: the registry reopened only for S0 (CmRegCloseWait at
+     * the dispatch closed it for a sleep or the shutdown). */
+    CmRegSync(nhi);
     /* cm_pwrr.h: the state already held, or a client suspended in D0 by
      * an earlier direct transition, owes no device IRP; nor does a
      * shutdown on Windows 98 SE and ME (task 43.65), whose device IRP's
@@ -710,6 +730,13 @@ NTSTATUS CmNhiPower(PCM_NHI nhi, PIRP irp)
         /* Read here, at PASSIVE_LEVEL, for cmSystemDone, which may run at
          * DISPATCH_LEVEL. */
         nhi->PowerOnNt = IoIsWdmVersionAvailable(1, 0x10);
+        /* 98 SE and ME: no registry access of the thread's from here on
+         * until S0 again, the one in progress waited for, bounded
+         * (task 46.14). */
+        if (!nhi->PowerOnNt &&
+            stack->Parameters.Power.State.SystemState != PowerSystemWorking) {
+            CmRegCloseWait(nhi);
+        }
         IoMarkIrpPending(irp);
         IoCopyCurrentIrpStackLocationToNext(irp);
         CM_SET_COMPLETION_ALWAYS(irp, cmSystemDone, nhi);

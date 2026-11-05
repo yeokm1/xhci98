@@ -262,6 +262,21 @@ VOID PlatXferRaw(OUT BOOLEAN *Present, OUT BOOLEAN *Valid, OUT ULONG *RawKb);
 // unreadable (EngParseTunables then applies the ranges).
 VOID PlatTunMsRaw(IN OUT ULONG *GoneMs, IN OUT ULONG *WriteIdleMs,
                   IN OUT ULONG *Hold9xMs);
+// 9x only (PLAN 3.1): the user-readable find report, a REG_SZ value
+// "StorFind" in the same key, written at every HwFindAdapter whatever its
+// outcome: the bus, slot and first access range the port gave, what was
+// read at that slot (length, class code, BAR0 and BAR1), where the
+// function was found ("none" if nowhere), the found function's command
+// register, CC and CSTS read before anything is written and whether it was
+// left as already set up (PCISCAN_FW_*), and HwFindAdapter's return. A
+// failure only leaves the value unwritten.
+typedef struct _PLAT_FIND_INFO {
+    ULONG PortBus, PortSlot, RangeLo, RangeHi, RangeLen;
+    ULONG SlotBytes, SlotClass, SlotBar[6];         // the port's slot: its six BAR dwords as read
+    ULONG Found, FoundBus, FoundSlot, Result;
+    ULONG FwChecked, FwCmd, FwCc, FwCsts, FwState;
+} PLAT_FIND_INFO;
+VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi);
 #endif
 VOID PlatIrqReport(IN struct _HW_DEVICE_EXTENSION *DevExt, IN PCHAR ArgumentString);
 // TRUE in a crash dump or hibernation instance (NT "dump=1"; 9x never).

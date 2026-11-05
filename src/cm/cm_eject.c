@@ -1143,6 +1143,31 @@ ULONG CmEjSweepPick(const ULONG *busIds, ULONG nIds, const ULONG *childIds,
     return pick;
 }
 
+/* ---- task 46.13: a DOWN acts on its own connection's children only ------ */
+
+BOOLEAN CmEjEvtAfter(ULONG a, ULONG b)
+{
+    return (BOOLEAN)(a != b && ((a - b) & 0x80000000UL) == 0);
+}
+
+ULONG CmEjSweepGuard(const CM_EJ_GUARD_IN *g)
+{
+    if (!g->Bound) {
+        return CM_EJ_G_ACT;
+    }
+    if (g->FreshValid && CmEjEvtAfter(g->Fresh, g->Down)) {
+        return CM_EJ_G_SUPERSEDED;
+    }
+    if (g->Busy) {
+        return CM_EJ_G_WAIT;
+    }
+    if (g->GenKnown && g->GenNow != g->Gen &&
+        (!g->EndValid || CmEjEvtAfter(g->Down, g->End))) {
+        return CM_EJ_G_ALL;
+    }
+    return CM_EJ_G_ACT;
+}
+
 /* ---- the statement decision ---------------------------------------------- */
 
 VOID CmEjDecideBegin(CM_EJ_DECISION *d, ULONG kind, ULONG member,

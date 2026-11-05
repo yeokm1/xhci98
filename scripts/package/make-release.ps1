@@ -3937,10 +3937,14 @@ the result in place of the marker, then cut again. The first:
             $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\check-pfw.ps1") $pfwImage 2>&1
             if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             else {
-                # Not older than any of its inputs, as S98VSD.VXD is held above.
+                # Not older than any of its inputs, as S98VSD.VXD is held above,
+                # src\vsd's link guards and DDK staging included: its build runs
+                # them (design record 30 section 6.1).
                 $pfwTime = (Get-Item -LiteralPath $pfwImage).LastWriteTimeUtc
                 $pfwInputs = @(Get-ChildItem -LiteralPath (Join-Path $repo "src\pfw") -File |
                                Where-Object { $_.Extension -in @(".c", ".h", ".def", ".cmd", ".ps1", ".allow") }) +
+                             @(Get-ChildItem -LiteralPath (Join-Path $repo "src\vsd") -File |
+                               Where-Object { $_.Extension -eq ".py" -or $_.Name -eq "stage-ddk.ps1" }) +
                              @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_version.h"))
                 $pfwNewer = @($pfwInputs | Where-Object { $_.LastWriteTimeUtc -gt $pfwTime })
                 if ($pfwNewer.Count -gt 0) {
@@ -4651,7 +4655,9 @@ cuts without the tool on a host that cannot build it.
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_ejask.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.c")) +
-            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")))
+            @(Get-Item -LiteralPath (Join-Path $repo "src\xhci_psw.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_oscp.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_oscp.h")))
         foreach ($name in ($instExes + $rootExes)) {
             $instTime = (Get-Item -LiteralPath (Join-Path $InstallToolDir $name)).LastWriteTimeUtc
             $instNewer = @($instSources | Where-Object { $_.LastWriteTimeUtc -gt $instTime })
@@ -4986,6 +4992,9 @@ helper (xhciinst\di\build.cmd).
             $contents += [string]::Format($inv, "      CM\xhcicm.sys  {0:N0} bytes", $s.CmLength)
             $contents += "      SHA-256"
             $contents += ("      {0}" -f $s.CmSha256)
+            if ($fam -eq "nt-x86") {
+                $contents += "      CM\xhcihlpr.sys (the same helper: xhcicm.inf installs it too)"
+            }
             if ($fam -ne "98-me") {
                 $contents += "      CM\xhcicmf.inx (its tunnel-port filter, which SETUP.EXE installs;"
                 $contents += "                   not an INF for integration: INTEGRATE.TXT)"

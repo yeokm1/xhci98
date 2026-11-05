@@ -211,11 +211,16 @@ static VOID LcPollTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentStri
     LcPollField(ArgumentString, DPK_POLLBUSYUS, POLL_CLAMP_BUSY, &raw.BusyUs, &raw);
     LcPollField(ArgumentString, DPK_POLLIDLEMS, POLL_CLAMP_IDLE, &raw.IdleMs, &raw);
     LcPollField(ArgumentString, DPK_POLLSPINUS, POLL_CLAMP_SPIN, &raw.SpinUs, &raw);
+    LcPollField(ArgumentString, DPK_INTWATCH, POLL_CLAMP_WATCH, &raw.Watch, &raw);
 #endif
     PollSettingsApply(s, &raw);
+    // The watchdog's setting on its own stage: 0x150 and 0x151 have no
+    // room for a fifth value.
+    DBGSTAGE(STG_POLL_WATCHCFG, s->Watch | ((raw.Watch > 0xF ? 0xF : raw.Watch) << 4) |
+             (((raw.Present & POLL_CLAMP_WATCH) ? 1UL : 0) << 8) | (((s->Clamped & POLL_CLAMP_WATCH) ? 1UL : 0) << 9));
     if (s->Clamped != 0) {
         // The clamp is logged with what was read.
-        DBGSTAGE(STG_POLL_RAW, raw.Present | ((raw.Mode > 0xF ? 0xF : raw.Mode) << 4) |
+        DBGSTAGE(STG_POLL_RAW, (raw.Present & 0xF) | ((raw.Mode > 0xF ? 0xF : raw.Mode) << 4) |
                  ((raw.BusyUs / 1000 > 0xFFFF ? 0xFFFF : raw.BusyUs / 1000) << 8) |
                  ((raw.IdleMs / 100 > 0xFF ? 0xFF : raw.IdleMs / 100) << 24));
     }
@@ -224,7 +229,7 @@ log:
 #endif
     busyMs = s->BusyUs / 1000;
     idleS = s->IdleMs / 1000;
-    DBGSTAGE(STG_POLL_TUNABLES, s->Mode | (s->Clamped << 4) | ((ULONG)DevExt->Resumed << 8) |
+    DBGSTAGE(STG_POLL_TUNABLES, s->Mode | ((s->Clamped & 0xF) << 4) | ((ULONG)DevExt->Resumed << 8) |
              (((s->SpinUs / 10) & 0x3F) << 9) | ((busyMs > 0xFF ? 0xFF : busyMs) << 16) |
              ((idleS > 0xFF ? 0xFF : idleS) << 24));
     UNREFERENCED_PARAMETER(busyMs);
@@ -298,6 +303,9 @@ VOID EngParseTunables(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)
         t->Sg9xFailEvery = 0;
 #endif
         t->Sg9xFailCount = 0;
+#if defined(STOR98_TEST_T0PROBE) && !defined(STOR98_DBGPORT)
+#error STOR98_TEST_T0PROBE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
 #if defined(STOR98_TEST_BOUNCE) && !defined(STOR98_DBGPORT)
 #error STOR98_TEST_BOUNCE is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
 #endif
@@ -493,6 +501,9 @@ VOID EngTimerEnsure(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG PeriodUs)
         }
 #ifdef NVME2K_W9X
         if (DevExt->TimerActive) {
+#ifdef STOR98_TEST_VMMPROBE
+            VpTimerRequest(0);
+#endif
             // 9x: a request while one is pending does not replace it
             // (measured in the polling mode, 98 SE: a 10 ms request after an
             // armed 1 s idle tick waited for that tick). Cancel first.
@@ -501,6 +512,9 @@ VOID EngTimerEnsure(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG PeriodUs)
 #endif
         DevExt->TimerActive = TRUE;
         DevExt->TimerPeriodUs = PeriodUs;
+#ifdef STOR98_TEST_VMMPROBE
+        VpTimerRequest(PeriodUs);
+#endif
         ScsiPortNotification(RequestTimerCall, (PVOID)DevExt, EngTimer, PeriodUs);
     }
 }
@@ -2163,7 +2177,9 @@ static VOID LcRunningStep(IN PHW_DEVICE_EXTENSION DevExt)
         EngEnterGone(DevExt, ENG_GONE_TIMER);
         return;
     }
-    EngProcessCompletions(DevExt);
+    // A completion the timer finds is the watchdog's evidence (EngTimer,
+    // LcIntWatch), only while the state is still running after it.
+    DevExt->IntWatchFound = EngProcessCompletions(DevExt);
     if (DevExt->State != ENG_ST_RUNNING) {
         // A completion just processed changed the state (the SHUTDOWN SRB's
         // Flush completed: CC.SHN is written). Nothing below applies any
@@ -2204,13 +2220,107 @@ static VOID LcRunningStep(IN PHW_DEVICE_EXTENSION DevExt)
     }
 }
 
+#ifdef STOR98_TEST_T0PROBE
+// Test only (STOR98_TEST_T0PROBE): the probe's own timer routine. Logs the
+// call (step 2 after probe 1, 4 after probe 3, 6 any other) with the ms
+// since the request, then hands the timer back to the engine.
+static VOID T0ProbeTimer(IN PVOID DeviceExtension)
+{
+    PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
+    ULONG ms = LcMsSince(DevExt, DevExt->TestT0Time);
+    ULONG step = (DevExt->TestT0Step == 1 || DevExt->TestT0Step == 3) ? DevExt->TestT0Step + 1 : 6;
+
+    if (step != 6) {
+        DevExt->TestT0Step = step;
+    }
+    DBGMARK(STG_TEST_T0PROBE, step | ((ULONG)DevExt->State << 8) | ((ms > 0xFFFF ? 0xFFFF : ms) << 16));
+    DevExt->TimerActive = FALSE;
+    if (DevExt->State != ENG_ST_NONE && DevExt->State != ENG_ST_STOPPED && DevExt->State != ENG_ST_STOPPING) {
+        EngTimerEnsure(DevExt, ENG_TICK_FAST_US);
+    }
+}
+#endif
+
+//
+// The missed-interrupt watchdog (PLAN "Missed-interrupt watchdog"; polltun.h,
+// PollWatchTick). Called once per timer callback. Armed only when this
+// callback ran the running step with the vector in use: running, an
+// interrupt-driven start, no storm mask, the setting on. The latch makes the
+// adapter one that started polling, for the rest of this start: every
+// vector masked (MMIO; no configuration write, PLAN 3.4), PollAlways and
+// PollMode set, why POLL_WHY_MISSED. No registry write here (the timer's
+// context; xhci98 46.14).
+//
+static VOID LcIntWatch(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN StepRan)
+{
+    BOOLEAN armed = (BOOLEAN)(StepRan && DevExt->State == ENG_ST_RUNNING && !DevExt->PollAlways &&
+                              !DevExt->PollMode && DevExt->Tun.Poll.Watch == POLL_WATCH_ON);
+
+    // A gap the clock did not measure (clock.c): folded with the safe clock
+    // (CLK_SPAN_LONG, which on NT counts nothing past 429 s), a reading
+    // behind the base (CLK_SPAN_BACK, nothing counted), or an idle gap with
+    // no TSC (the fallback clock advances only with the timer).
+    if (DevExt->Clock.LongGaps != DevExt->IntWatchLongGaps ||
+        DevExt->Clock.BackSpans != DevExt->IntWatchBackSpans ||
+        (DevExt->IntWatchIdle && DevExt->Clock.UnitsPerMs == 0)) {
+        PollWatchForgetFinds(&DevExt->IntWatch);
+    }
+    DevExt->IntWatchLongGaps = DevExt->Clock.LongGaps;
+    DevExt->IntWatchBackSpans = DevExt->Clock.BackSpans;
+    DevExt->IntWatchIdle = FALSE;
+    if (!PollWatchTick(&DevExt->IntWatch, armed, DevExt->IntClaims, DevExt->IntClaimCqes,
+                       (BOOLEAN)(armed && DevExt->IntWatchFound), LcNow(DevExt))) {
+        return;
+    }
+    NvmeWriteReg32(DevExt, NVME_REG_INTMS, 0xFFFFFFFF);
+    DevExt->PollAlways = TRUE;
+    DevExt->PollMode = TRUE;
+    DevExt->PollWhy = POLL_WHY_MISSED;
+    DevExt->EmptyInts = 0;
+    DBGMARK(STG_POLL_WATCH, (DevExt->IntWatch.Misses > 0xFFFF ? 0xFFFFUL : DevExt->IntWatch.Misses) |
+            ((DevExt->IntClaims & 0xFF) << 16) | ((ULONG)DevExt->State << 24));
+    EngTimerEnsure(DevExt, LcPollBusyUs(DevExt));
+}
+
+#ifdef STOR98_TEST_VMMPROBE
+// Test only (vmmprobe.h): the timer routine counted around its body.
+static VOID EngTimerBody(IN PVOID DeviceExtension);
+
+VOID EngTimer(IN PVOID DeviceExtension)
+{
+    VpEnter(VP_TIMER);
+    EngTimerBody(DeviceExtension);
+    VpExit(VP_TIMER);
+}
+#define EngTimer EngTimerBody
+#endif
+
+#ifdef STOR98_TEST_REENTRY
+static VOID EngTimerBody(IN PVOID DeviceExtension);
+
+VOID EngTimer(IN PVOID DeviceExtension)
+{
+    PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
+
+    DevExt->TestInTimer++;
+    EngTimerBody(DeviceExtension);
+    DevExt->TestInTimer--;
+}
+#define EngTimer EngTimerBody
+#endif
+
 VOID EngTimer(IN PVOID DeviceExtension)
 {
     PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
     ULONG period;
+    BOOLEAN stepRan;
 
     DevExt->TimerActive = FALSE;
     if (DevExt->State == ENG_ST_NONE || DevExt->State == ENG_ST_STOPPED || DevExt->State == ENG_ST_STOPPING) {
+#ifdef STOR98_DBGPORT
+        DevExt->TestTimerStoppedCalls++;
+        DBGMARK(STG_TEST_TIMER_STOPPED, DevExt->State | ((DevExt->TestTimerStoppedCalls & 0xFFFFFF) << 8));
+#endif
         return;
     }
     if (!DevExt->TimerFirstSeen) {
@@ -2228,17 +2338,21 @@ VOID EngTimer(IN PVOID DeviceExtension)
     // it owns the adapter the engine's own step does not run.
     period = PlatCmRemoveTimer(DevExt);
     if (period != 0) {
+        LcIntWatch(DevExt, FALSE);
         if (period != PLAT_RM_NO_REARM) {
             EngTimerEnsure(DevExt, period);
         }
         return;
     }
+    DevExt->IntWatchFound = FALSE;
+    stepRan = FALSE;
     switch (DevExt->State) {
     case ENG_ST_STARTING:
         LcBringupStep(DevExt);
         break;
     case ENG_ST_RUNNING:
         LcRunningStep(DevExt);
+        stepRan = TRUE;
         break;
     case ENG_ST_RESETTING:
         LcResettingStep(DevExt);
@@ -2257,6 +2371,7 @@ VOID EngTimer(IN PVOID DeviceExtension)
     default:
         break;
     }
+    LcIntWatch(DevExt, stepRan);
     LcStormUnmaskTrial(DevExt);
     // Software-only replays first (review round 3, N3): a held request that
     // completes without hardware work (INQUIRY, TEST UNIT READY, READ
@@ -2271,10 +2386,35 @@ VOID EngTimer(IN PVOID DeviceExtension)
     LcHoldCheck(DevExt);
     EngKick(DevExt);
     period = LcWantedPeriod(DevExt);
+#ifdef STOR98_TEST_T0PROBE
+    // Test only: what the port does with RequestTimerCall 0 (a cancel on NT),
+    // through a timer routine of its own (T0ProbeTimer), so that any call of
+    // it is the probe's. Probe 1, at the first idle stop in running: a 0
+    // request with no timer pending; a call means 0 arms a timer. Probe 3,
+    // at an idle stop once probe 1 is answered or 5 s old: a 1 s request,
+    // then a 0 request; a call about 1 s later means 0 did not cancel it.
+    if (period == 0 && DevExt->State == ENG_ST_RUNNING &&
+        (DevExt->TestT0Step == 0 || DevExt->TestT0Step == 2 ||
+         (DevExt->TestT0Step == 1 && LcMsSince(DevExt, DevExt->TestT0Time) > 5000))) {
+        if (DevExt->TestT0Step == 1) {
+            DBGMARK(STG_TEST_T0PROBE, 5 | ((ULONG)DevExt->State << 8));    // probe 1 never called back
+        }
+        DevExt->TestT0Step = (DevExt->TestT0Step == 0) ? 1 : 3;
+        DevExt->TestT0Time = LcNow(DevExt);
+        DBGMARK(STG_TEST_T0PROBE, DevExt->TestT0Step | ((ULONG)DevExt->State << 8));
+        if (DevExt->TestT0Step == 3) {
+            ScsiPortNotification(RequestTimerCall, (PVOID)DevExt, T0ProbeTimer, 1000000);
+        }
+        ScsiPortNotification(RequestTimerCall, (PVOID)DevExt, T0ProbeTimer, 0);
+        ClockTimerStopped(&DevExt->Clock);
+        return;
+    }
+#endif
     if (period != 0) {
         EngTimerEnsure(DevExt, period);
     } else {
         ClockTimerStopped(&DevExt->Clock);
+        DevExt->IntWatchIdle = TRUE;
     }
     if (DevExt->State == ENG_ST_RUNNING && (DevExt->PollAlways ? LcEngineIdle(DevExt) : period == 0)) {
         // Idle and clean: the accounting of the engine so far (every parent
@@ -2295,6 +2435,13 @@ VOID EngTimer(IN PVOID DeviceExtension)
         DevExt->PollIdleLogged = FALSE;
     }
 }
+
+#ifdef STOR98_TEST_REENTRY
+#undef EngTimer
+#endif
+#ifdef STOR98_TEST_VMMPROBE
+#undef EngTimer
+#endif
 
 //
 // Completion processing (ISR and timer)
@@ -2392,7 +2539,14 @@ static VOID LcStormMask(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Masked)
         DevExt->StormMasks++;
         DBGMARK(STG_INT_STORM, 1 | ((ULONG)DevExt->State << 8) | ((DevExt->StormMasks & 0xFFFF) << 16));
     }
+#ifdef NVME2K_W9X
+    // 9x (xhci98 3.4.1.0, PLAN "Missed-interrupt watchdog"): no timer
+    // request from the interrupt, which on 9x cancels the pending request
+    // and makes a new one; the next timer callback takes the fast tick
+    // (LcWantedPeriod, PollMode), and with work outstanding the timer runs.
+#else
     EngTimerEnsure(DevExt, ENG_TICK_FAST_US);
+#endif
 }
 
 // Polling hold over (timer, running only): unmask the vector on trial.
@@ -2413,7 +2567,7 @@ static VOID LcStormUnmaskTrial(IN PHW_DEVICE_EXTENSION DevExt)
 
 BOOLEAN EngInterrupt(IN PHW_DEVICE_EXTENSION DevExt)
 {
-    ULONG now;
+    ULONG now, cqes;
 
     // Vector 0 is unmasked while running and stays so through a reset
     // whose disable was not acknowledged (resetting, quarantined): late
@@ -2450,8 +2604,11 @@ BOOLEAN EngInterrupt(IN PHW_DEVICE_EXTENSION DevExt)
         }
         return FALSE;
     }
+    cqes = DevExt->CqesConsumed;
     if (EngProcessCompletions(DevExt)) {
         DevExt->EmptyInts = 0;
+        DevExt->IntClaims++;
+        DevExt->IntClaimCqes += DevExt->CqesConsumed - cqes;
         EngKick(DevExt);
         return TRUE;
     }
@@ -2500,6 +2657,9 @@ VOID EngStop(IN PHW_DEVICE_EXTENSION DevExt)
             ((EngIssuedChildren(DevExt) & 0xFF) << 24));
     EngSetState(DevExt, ENG_ST_STOPPING, 0);
     // The timer cannot rearm from now on (teardown invariant, 0.11).
+#ifdef STOR98_TEST_VMMPROBE
+    VpTimerRequest(0);
+#endif
     ScsiPortNotification(RequestTimerCall, DevExt, EngTimer, 0);
     DevExt->TimerActive = FALSE;
     // The port owns the SRBs now (on NT it has retired them before the

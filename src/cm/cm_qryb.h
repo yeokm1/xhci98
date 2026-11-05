@@ -169,7 +169,38 @@ typedef struct _CM_QLOG_IN {
     ULONG Dropped;
     ULONG Appends;
     ULONG Pass;             /* the counters' pass                         */
+    const UCHAR *HeadText;  /* the first connection's head (task 46.13), */
+    ULONG HeadBytes;        /* whole records; 0 or NULL: none            */
+    ULONG DroppedAtDrain;   /* Dropped at the last drain for emission    */
 } CM_QLOG_IN, *PCM_QLOG_IN;
+
+/*
+ * Record 21 section 8.2 (task 46.13): the log's time stamps and the head
+ * of the first connection. A stamp is "cm.ms=XXXXXXXX" CR LF, 16 bytes;
+ * the head is CM_LOG_HEAD_BYTES of whole records that never wrap; the
+ * answer's marker "cm.log.head=XXXXXXXX" CR LF, 22 bytes.
+ */
+#define CM_LOG_HEAD_BYTES       4096UL
+#define CM_LOG_STAMP_BYTES      16UL
+#define CM_LOG_STAMP_SPAN       1008UL  /* a record never begins this far
+                                           past its stamp's start       */
+#define CM_LOG_MARK_BYTES       22UL
+#define CM_LOG_STAMP_LOOK       1024UL  /* searched before a tail      */
+#define CM_LOG_STAMP_FORCE      0xFFFFFFFFUL    /* bytes since: a drain  */
+
+/* 1 when a record of `label` must be preceded by a stamp: the clock moved
+ * since the last stamp (lastMs), or the record would begin `bytesSince`
+ * bytes after that stamp's start, CM_LOG_STAMP_SPAN or more (a drain
+ * sets CM_LOG_STAMP_FORCE). */
+ULONG CmLogStampDue(ULONG lastMs, ULONG nowMs, ULONG bytesSince);
+
+/* One record "label=XXXXXXXX" CR LF appended to the head (cap bytes, *used
+ * of them taken) as the ring writes it (XHCI_LOG_MAX_RECORD label bytes
+ * at most, a longer label's record ending with the cut label and no
+ * value), whole or not at all: 1 when it fitted, 0 when not (the head is
+ * then full for good, *full set). Its bytes in *bytes either way. */
+ULONG CmLogHeadPut(UCHAR *head, ULONG cap, PULONG used, PULONG full,
+                   const char *label, ULONG value, PULONG bytes);
 
 /* The log answer into out (room bytes), with CmQueryAnswer's rules:
  * CM_Q_ANS_TOO_SMALL under CM_QL_HDR_BYTES (nothing written);
@@ -180,7 +211,12 @@ typedef struct _CM_QLOG_IN {
  * or CM_QL_F_EMITTED: a drain) the text starts after the first LF
  * (CM_QL_F_LOG_CUT); the value of a record CmQueryLogAddress names is
  * written "--------" (CM_QL_F_WITHHELD). The age is CM_Q_UNKNOWN until
- * CmQueryLogSetAge. */
+ * CmQueryLogSetAge. With a head (HeadBytes not 0, task 46.13): the head,
+ * the marker, the last stamp the ring holds in the CM_LOG_STAMP_LOOK
+ * before the tail's first record when there is one, then the ring's
+ * newest records within what CM_QL_LOG_MAX leaves, from a record
+ * boundary (CM_QL_F_LOG_CUT when any of the ring was left out); the
+ * head's address values withheld as the ring's; CM_QL_F_HEAD. */
 ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
                        PULONG info);
 
@@ -298,5 +334,47 @@ ULONG CmQpciBuild(UCHAR *buf, ULONG room, const CM_QPCI_IN *in);
  * *info the bytes written. */
 ULONG CmQpciAnswer(UCHAR *out, ULONG room, const UCHAR *built, ULONG bytes,
                    PULONG info);
+
+/* ---- the firmware tables answer (cm_qacpi.c; CM_QA_*, task 46.21) ---- */
+
+/* One table kept: its signature, kind word (CM_QA_E_KIND's packing), the
+ * length its header gives, and the bytes held (Held of them at Data). */
+typedef struct _CM_QA_ITEM {
+    ULONG Sig;
+    ULONG Kind;
+    ULONG Length;
+    const UCHAR *Data;
+    ULONG Held;
+} CM_QA_ITEM;
+
+/* The body's bytes for `count` items: 0 past CM_QA_MAX_ENTRIES or
+ * CM_QA_DATA_MAX, or an item holding bytes with no data. */
+ULONG CmQaBodyBytes(const CM_QA_ITEM *items, ULONG count);
+
+/* The body into out (room bytes): the entries, then each item's bytes at
+ * a dword boundary. Returns its length, 0 where it does not fit or
+ * CmQaBodyBytes refuses it. */
+ULONG CmQaBody(UCHAR *out, ULONG room, const CM_QA_ITEM *items, ULONG count);
+
+typedef struct _CM_QA_IN {
+    ULONG State;            /* CM_QA_S_*                                  */
+    ULONG Outcome;
+    ULONG Tier;
+    ULONG Flags;            /* CM_QA_F_CUT, CM_QA_F_NOMEM                 */
+    ULONG EpochLo;
+    ULONG EpochHi;
+    const UCHAR *Body;      /* NULL with BodyBytes 0: none kept            */
+    ULONG BodyBytes;
+    ULONG Count;            /* its entries                                */
+    BOOLEAN Stopping;
+} CM_QA_IN;
+
+/* The request's answer for body offset `from`: CM_Q_ANS_TOO_SMALL under
+ * CM_QA_HDR_BYTES (nothing written); else CM_Q_ANS_WHOLE with the header
+ * and the part from `from` that fits, at most CM_QA_PART_MAX (an offset
+ * past the body: the header alone, CM_QA_F_PAST). *info the bytes
+ * written. */
+ULONG CmQaAnswer(UCHAR *out, ULONG room, const CM_QA_IN *in, ULONG from,
+                 PULONG info);
 
 #endif /* CM_QRYB_H */

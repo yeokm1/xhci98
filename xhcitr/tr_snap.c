@@ -3257,6 +3257,15 @@ static const char *const strict_counter_names[SNAP_STRICT_WORDS] = {
     "StrictUndefined", "StrictRefusals"
 };
 
+/* Task 46.6's six (a line another device holds, design record 15 section
+ * 4.4) follow at 258, by name in the list and summed up by print_intr. */
+#define SNAP_HELD_AT                258UL
+#define SNAP_HELD_WORDS             6UL
+static const char *const held_counter_names[SNAP_HELD_WORDS] = {
+    "HeldScan", "HeldFunctions", "HeldCandidates", "HeldBdf", "HeldId",
+    "HeldIrq"
+};
+
 /*
  * The HCD image's layout as its header gives it, checked against the bytes
  * that arrived: 1 when every figure fits. print_hcd refuses a shape that
@@ -3360,6 +3369,9 @@ static const char *hcd_counter_name(unsigned long i)
     }
     if (i >= SNAP_STRICT_AT && i - SNAP_STRICT_AT < SNAP_STRICT_WORDS) {
         return strict_counter_names[i - SNAP_STRICT_AT];
+    }
+    if (i >= SNAP_HELD_AT && i - SNAP_HELD_AT < SNAP_HELD_WORDS) {
+        return held_counter_names[i - SNAP_HELD_AT];
     }
     return NULL;
 }
@@ -4996,6 +5008,49 @@ static void print_intr_values(const unsigned char *k)
  * of 63 words is a driver from before polling, which is said and not
  * decoded.
  */
+/*
+ * Record 15 section 4.4 (task 46.6): the start's walk for a device holding
+ * this controller's line, 98 SE and ME alone. A block shorter than 264
+ * words is a driver from before it, which prints nothing here.
+ */
+static void print_held(const unsigned char *k, unsigned long counters)
+{
+    const unsigned char *h;
+    unsigned long scan;
+    unsigned long bdf;
+    unsigned long id;
+
+    if (counters < SNAP_HELD_AT + SNAP_HELD_WORDS) {
+        return;
+    }
+    h = k + SNAP_HELD_AT * 4;
+    scan = get32(h, 0);
+    bdf = get32(h, 3 * 4);
+    id = get32(h, 4 * 4);
+    if (scan == 0) {
+        comp("  line held by another   not looked for (98 SE and ME, a "
+             "line given)\n");
+    } else if (scan == 1) {
+        comp("  line held by another   no: IRQ %lu, %lu functions read, "
+             "%lu not confirmed\n",
+             get32(h, 5 * 4), get32(h, 1 * 4), get32(h, 2 * 4));
+    } else if (scan == 2) {
+        comp("  line held by another   likely: %02lX:%02lX.%lu %04lX:%04lX "
+             "seen asserting\n                         IRQ %lu at every "
+             "read (%lu functions read)\n",
+             (bdf >> 8) & 0xFFUL, (bdf >> 3) & 0x1FUL, bdf & 0x7UL,
+             id & 0xFFFFUL, (id >> 16) & 0xFFFFUL, get32(h, 5 * 4),
+             get32(h, 1 * 4));
+    } else if (scan == 4) {
+        comp("  line held by another   inconclusive: IRQ %lu, %lu "
+             "candidates not confirmed\n",
+             get32(h, 5 * 4), get32(h, 2 * 4));
+    } else {
+        comp("  line held by another   not known: the line (%lu) or "
+             "config space unread\n", get32(h, 5 * 4));
+    }
+}
+
 static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
                        const unsigned char *ext, unsigned long extBytes)
 {
@@ -5097,6 +5152,7 @@ static void print_intr(const unsigned char *hcd, unsigned long hcdBytes,
         comp("  PCI Interrupt Disable  found set and cleared by a start "
              "(%lu)\n", get32(k, 30 * 4));
     }
+    print_held(hcd + countersAt, counters);
 
     if (headBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4 ||
         hcdBytes < SNAP_HCD_DELIVERY_HEAD_WORDS * 4) {
@@ -5864,13 +5920,13 @@ static int selftest_hcd_bad(void)
 /*
  * `-selftest-counters`: every counter word named through print_hcd, as the
  * dump prints it, over a canned image whose word i holds i + 1 (so every
- * word is nonzero and its value names its place): 0 to 257 and two words
+ * word is nonzero and its value names its place): 0 to 263 and two words
  * past the last block. selftest.cmd compares each printed name and value
  * with the field order of src\xhci_counters.h, so a lookup that the
  * compiler turns into the wrong table or offset fails there (task 36.35's
  * 18-word shift under MSVC 6.0 /O2).
  */
-#define SNAP_COUNTERS_TEST_WORDS    (SNAP_STRICT_AT + SNAP_STRICT_WORDS + 2UL)
+#define SNAP_COUNTERS_TEST_WORDS    (SNAP_HELD_AT + SNAP_HELD_WORDS + 2UL)
 static int selftest_counters(void)
 {
     static unsigned char image[32 + SNAP_COUNTERS_TEST_WORDS * 4];

@@ -66,7 +66,8 @@ task 45.59's step S10, after this task (section 9).
   nt-x86\
     xhci98.inf  xhci98.sys  xhcihlpr.sys  xhciuas.inf  xhciuas.sys
     txtsetup.oem
-    cm\      xhcicm.inf  xhcicm.sys  xhcicmf.inx  XHCIPFW.SYS
+    cm\      xhcicm.inf  xhcicm.sys  xhcihlpr.sys  xhcicmf.inx
+             XHCIPFW.SYS
              tbnet\       (45.59 S10)
     stor98\  stor98.inf (NT only)  stor98.sys  stor98-readme.txt
              stor98-LICENSE.txt  stor98-NOTICE.txt
@@ -117,7 +118,11 @@ disk; never in `98-me\` (98 SE and ME never read an `.NTx86` section) and
 never in `nt-x64\` (the 64-bit package never carried it). `xhcimsi.sys`,
 its 2.3.x predecessor, is never shipped: `[Xhci.Dev6.NTx86]`'s
 `DelService=xhcimsi` and its delete line remove it in an update, and the
-gate's `MSI-*` rules stay as they are.
+gate's `MSI-*` rules stay as they are. From task 46.12 on NT (design
+record 18 section 15.15) `cm\xhcicm.inf` installs the same helper from its
+NT sections, so `nt-x86\cm\` carries it too, beside that INF (the driver
+store takes no source outside the INF's folder), the same bytes as the
+root's (`PKG-FAMILY`); `98-me\cm\` carries none.
 
 **The task's "2000 to 7 alone" and the INF.** `xhci98.inf`'s
 `NTx86.6.0` decoration has no upper bound: 32-bit 8 to 10, which read it
@@ -465,7 +470,7 @@ becomes a map from the local name to the download's path, one table
 | Local name | `98-me\` | `nt-x86\` | `nt-x64\` |
 |---|---|---|---|
 | `xhci98.inf`, `xhci98.sys`, `xhciuas.inf`, `xhciuas.sys` | root | root | root |
-| `xhcihlpr.sys`, `txtsetup.oem` | - | root | `txtsetup.oem` root |
+| `xhcihlpr.sys`, `txtsetup.oem` | - | root (`xhcihlpr.sys` also `cm\`, section 3.1) | `txtsetup.oem` root |
 | `*.cat` of the root INFs, `xhci98-test.cer` | - | - | root |
 | `xhcicm.inf`, `xhcicm.sys` (and x64 `xhcicm.cat`) | `cm\` | `cm\` | `cm\` |
 | `nt\xhcicmf.inf` | - | `cm\xhcicmf.inx` | - |

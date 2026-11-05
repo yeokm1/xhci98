@@ -36,6 +36,8 @@
 #define DPK_POLLBUSYUS      "storpollbusyus="
 #define DPK_POLLIDLEMS      "storpollidlems="
 #define DPK_POLLSPINUS      "storpollspinus="
+// The missed-interrupt watchdog (lifecycle.c, polltun.h; xhci98 3.4.1.0)
+#define DPK_INTWATCH        "storintwatchdog="
 // Maximum transfer size (lifecycle.c, xfertun.h)
 #define DPK_MAXTRANSFERKB   "stormaxtransferkb="
 // Write-through (platform.c)
@@ -47,6 +49,6 @@
 #define DPK_ALL \
     DPK_GONE, DPK_IDLE, DPK_HOLD9X, DPK_FRAG, DPK_BOUNCE, DPK_CALX, DPK_SHNFLUSH, DPK_CAPTO, \
     DPK_STORMTEST, DPK_STORMINTS, DPK_IDLETO, DPK_POLLMODE, DPK_POLLBUSYUS, DPK_POLLIDLEMS, \
-    DPK_POLLSPINUS, DPK_MAXTRANSFERKB, DPK_WRITETHROUGH, DPK_DUMP
+    DPK_POLLSPINUS, DPK_INTWATCH, DPK_MAXTRANSFERKB, DPK_WRITETHROUGH, DPK_DUMP
 
 #endif // _STOR98_DPKEYS_H_

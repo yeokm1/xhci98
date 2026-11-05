@@ -849,6 +849,21 @@ Windows 98 and 2000 - the primary targets. The options, as they stand:
   every newer target something; the status line is the one place a reader
   checks.
 
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | Windows 98 SE's `usbd.sys` 4.10.2222 (18,912 B, SHA-256 `0118DB14...00AF6F56A`) exports `USBD_ParseConfigurationDescriptor`, `USBD_CreateConfigurationRequestEx`, `_USBD_ParseConfigurationDescriptorEx@28` (ordinal 21) **and `_USBD_ParseDescriptors@16` (ordinal 22, RVA `0x1683`)**, 30 functions in all; NUSB 3.6's Windows ME `usbd.sys` 4.90.3000.1 (22,928 B) exports both as well. **Corrected 2026-10-05:** until then this row said the 98 SE file lacks `USBD_ParseDescriptors`, and that hidusbf's Code 2 under it was the missing import - wrong; under the `2.1.0.0` HCD on a stock 98 SE, `hidusbf.sys` loaded and changed the interval (VM leg 2d), so the Code 2 recorded in the run below had another cause, not read (leg 2d needed `LowerFilters` and `bInterval` on both the device's hardware key and its `Class\HID` driver key) | static (`dumpbin /exports`, re-read 2026-10-05) and runtime (VM leg 2d, `out\phase33\legs\`) | `docs/issues/06-full-speed-root-port-bugcheck.md` section 5; the run record is `out\post-release\issue4-hidusbf\README.md` (git-ignored, this host) |
+| A.2 | SweetLow's hidusbf Windows 9x lower filter (`hidusbf.sys` 1.2.0.10, 3,648 B, a public-domain third-party binary, not tracked): reads a `bInterval` DWORD from the device's driver key at `AddDevice` and rewrites the interrupt endpoints' `bInterval` in the `URB_FUNCTION_SELECT_CONFIGURATION` configuration descriptor before passing it down; imports `USBD.SYS!_USBD_ParseDescriptors@16` | static (`dumpbin /disasm`, `/imports`), corroborated at runtime by the `Period` this driver received changing with the value | same |
+
 ## Sources
 
 - [lessons.md](../contributing/lessons.md), "A Full-Speed device on a root

@@ -3055,6 +3055,70 @@ static VOID test_chain_port_test(VOID)
           XHCI_TBT_CPT_FAILED, "cpt bad bdf");
 }
 
+/* Record 22 section 7.6.1 (task 46.23): the ACPI-named source, under the
+ * router-named source's rules, unbound. */
+static void test_acpi(void)
+{
+    ULONG over[1];
+
+    two_hp();
+    mdev(0, 0, 0, 0x8086, 0x29C0, 0x060000UL);
+    XhciTbtBindsInit(&binds);
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_UNLISTED,
+             "acpi: the discovery takes nothing");
+    CHECK_EQ(XhciTbtTopoAddAcpi(NULL, &topo, B(0, 5, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "acpi: no accessor");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, NULL, B(0, 5, 0)),
+             XHCI_TBT_MAP_BAD_PARAM, "acpi: no discovery");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, 0x10000UL),
+             XHCI_TBT_MAP_BAD_PARAM, "acpi: a location past 16 bits");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 4, 0)), XHCI_TBT_MAP_REFUSED,
+             "acpi: never the NHI");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 0, 0)),
+             XHCI_TBT_MAP_NO_BRIDGE, "acpi: not a bridge");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 0x1F, 0)),
+             XHCI_TBT_MAP_NO_BRIDGE, "acpi: nothing there");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 5, 0)), XHCI_TBT_MAP_ADDED,
+             "acpi: the claimed root port joins");
+    CHECK(topo.Outcome == XHCI_TBT_TOPO_SET &&
+          topo.FindOutcome == XHCI_TBT_TOPO_UNLISTED &&
+          topo.Tunnels == 1 && topo.Set[0] == B(0, 5, 0) &&
+          topo.Source[0] == XHCI_TBT_SRC_ACPI && topo.AcpiNamed == 1 &&
+          topo.Named == 0, "acpi: SET, source ACPI");
+    CHECK(binds.Count == 0 && member(1) == XHCI_TBT_NO_MEMBER &&
+          member(2) == XHCI_TBT_NO_MEMBER,
+          "acpi: unbound - the firmware's port number binds nothing");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN,
+             "acpi: the same claim again is KNOWN");
+    CHECK_EQ(topo.Tunnels, 1, "acpi: not added twice");
+    CHECK_EQ(named(2, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN,
+             "acpi: the router names it: bound, KNOWN");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_ACPI && member(2) == 0,
+          "acpi: the source kept, the binding the router's");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 6, 0)), XHCI_TBT_MAP_ADDED,
+             "acpi: a second port");
+    CHECK(topo.Tunnels == 2 && topo.AcpiNamed == 2, "acpi: two members");
+
+    /* A bridge the router named first keeps ROUTER. */
+    CHECK_EQ(find(B(0, 4, 0), XHCI_TBT_NO_BDF), XHCI_TBT_TOPO_UNLISTED,
+             "acpi: rediscovered");
+    CHECK_EQ(named(1, B(0, 6, 0)), XHCI_TBT_MAP_ADDED, "acpi: router-named");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 6, 0)), XHCI_TBT_MAP_KNOWN,
+             "acpi: then claimed: KNOWN");
+    CHECK(topo.Source[0] == XHCI_TBT_SRC_ROUTER && topo.AcpiNamed == 0,
+          "acpi: ROUTER kept");
+
+    /* The override is the whole set. */
+    over[0] = B(0, 5, 0);
+    CHECK_EQ(findin(B(0, 4, 0), over, 1), XHCI_TBT_TOPO_OVERRIDE,
+             "acpi: an override");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 6, 0)), XHCI_TBT_MAP_REFUSED,
+             "acpi: another bridge refused under the override");
+    CHECK_EQ(XhciTbtTopoAddAcpi(&io, &topo, B(0, 5, 0)), XHCI_TBT_MAP_KNOWN,
+             "acpi: the override's own member is KNOWN");
+    CHECK_EQ(topo.Source[0], XHCI_TBT_SRC_OVERRIDE, "acpi: OVERRIDE kept");
+}
+
 int main(void)
 {
     test_decoders();
@@ -3072,6 +3136,7 @@ int main(void)
     test_failures();
     test_poll();
     test_named();
+    test_acpi();
     test_learned();
     test_learn_window();
     test_chain_ports();

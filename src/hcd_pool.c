@@ -146,6 +146,20 @@ VOID HcdPoolFreeClient(PVOID p)
     }
 }
 
+/* The firmware tables request's set (task 46.21; design record 13
+ * sections 7.5 and 8.13): allocated on the caller's thread when asked,
+ * freed after its last part, at a release or at the controller's stop;
+ * the project tag, counted with the rest. IRQL: <= DISPATCH_LEVEL. */
+PVOID HcdPoolAllocAcpi(ULONG bytes)
+{
+    return HcdPoolAlloc(bytes);
+}
+
+VOID HcdPoolFreeAcpi(PVOID p)
+{
+    HcdPoolFree(p);
+}
+
 ULONG HcdPoolClientCount(VOID)
 {
     return (ULONG)HcdPoolClientOutstanding;

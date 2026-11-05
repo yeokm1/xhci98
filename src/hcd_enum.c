@@ -373,6 +373,12 @@ static ULONG hcdCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb,
     }
     hc->EnumCommandsTimedOut++;
     hc->Counters.CommandsGivenUp++;
+    /* Which command the thread gave up (46.19 step 2: a user's FL1100 gave
+     * up two at start that no log could name): TRB type, slot, endpoint. */
+    XhciLogNote(&hc->Hc, "cmd.givenup",
+                (XHCI_TRB_GET_TYPE(trb->Control) << 24) |
+                (XHCI_TRB_GET_SLOT_ID(trb->Control) << 16) |
+                (XHCI_TRB_GET_EP_ID(trb->Control) << 8));
     HcdSvcRequestReset(&hc->Hc);
     return 0;
 }

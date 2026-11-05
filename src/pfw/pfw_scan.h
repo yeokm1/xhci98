@@ -97,6 +97,66 @@ typedef struct PFW_XHCI_REC {
     PFW_U32 Lo;
 } PFW_XHCI_REC;
 
+/* ---- the interrupt-line pass (record 32 section 12.10, task 46.11) ---- */
+
+#define PFW_CFG_CMD         0x04UL  /* command in bits 15:0             */
+#define PFW_CFG_LINE        0x3CUL  /* line 7:0, pin 15:8, then Min_Gnt
+                                       and Max_Lat or Bridge Control    */
+#define PFW_CLASS_USB4_NHI  0x0C0340UL  /* the USB4 host interface      */
+#define PFW_MAX_NHI         8
+#define PFW_MAX_LINES       8
+
+#define PFW_ROLE_NHI        1
+#define PFW_ROLE_PORT       2
+
+/* A line record's outcome. */
+#define PFW_LN_WRITTEN      1
+#define PFW_LN_ALREADY      2       /* FFh already                      */
+#define PFW_LN_NODECODE     3       /* memory and I/O decode off: left  */
+#define PFW_LN_REFUSED      4       /* did not read back: written back  */
+#define PFW_LN_STUCK        5       /* nor did the old line             */
+#define PFW_LN_LEFT         6       /* the switch 0, or not read        */
+
+/* Result bits of the pass. */
+#define PFW_RES_LINE        0x080UL /* a line written                    */
+#define PFW_RES_LINE_OFF    0x100UL /* the switch 0                      */
+#define PFW_RES_LINE_NOREAD 0x200UL /* the switch not read: lines left   */
+#define PFW_RES_LINE_BAD    0x400UL /* a line refused                    */
+
+/* The switch's setting in force. */
+#define PFW_SW_OFF          0
+#define PFW_SW_ON           1
+#define PFW_SW_FAILED       2
+
+/* VMMREG.H's codes and type the decision reads (pfw_vmm.h has the
+ * citations). */
+#define PFW_RC_NOT_FOUND    2UL
+#define PFW_TYPE_DWORD      4UL
+
+/* 8 bytes: bus, device and function, the role, the outcome, the line
+ * before and after, the header type, a zero byte. */
+typedef struct PFW_LINE_REC {
+    PFW_U8 Bus;
+    PFW_U8 DevFn;
+    PFW_U8 Role;
+    PFW_U8 Outcome;
+    PFW_U8 Before;
+    PFW_U8 After;
+    PFW_U8 Hdr;
+    PFW_U8 Zero;
+} PFW_LINE_REC;
+
+/* 24 bytes, XhciPfwLineSwitch: the open's and the query's result codes,
+ * the type and length the query gave, the raw dword, the setting. */
+typedef struct PFW_SWITCH {
+    PFW_U32 OpenRc;
+    PFW_U32 QueryRc;
+    PFW_U32 Type;
+    PFW_U32 Length;
+    PFW_U32 Raw;
+    PFW_U32 Setting;
+} PFW_SWITCH;
+
 typedef struct PFW_SUBJ {
     PFW_U32 Bus;
     PFW_U32 DevFn;
@@ -123,11 +183,26 @@ typedef struct PFW_RESULT {
     PFW_BRIDGE_REC Bridges[PFW_MAX_BRIDGES];
     PFW_BAR_REC Bars[PFW_MAX_BARS];
     PFW_SUBJ Subj[PFW_MAX_SUBJ];
+    PFW_SWITCH Switch;      /* section 12.10 step 1, the caller's       */
+    PFW_U32 NLines;         /* records in Lines                        */
+    PFW_LINE_REC Lines[PFW_MAX_LINES];
+    PFW_U32 NNhi;           /* the pass's NHIs                          */
+    PFW_U32 NhiBus[PFW_MAX_NHI];
+    PFW_U32 NhiDevFn[PFW_MAX_NHI];
 } PFW_RESULT;
+
+/* The host interfaces xhcicm.inf's 98 SE and ME models name by id,
+ * (device << 16) | vendor (pfw_ids.c, a host check holding it equal to the
+ * INF's Cm.Dev rows); the class row is PFW_CLASS_USB4_NHI. */
+extern const PFW_U32 PfwNhiIds[];
+extern const PFW_U32 PfwNhiIdCount;
 
 /* Supplied by the caller. */
 PFW_U32 PfwCfgRead(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off);
 void PfwCfgWrite(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val);
+/* One byte, lane 0 of the dword at `off` (dword-aligned): the Interrupt
+ * Line write of section 12.10 step 5, never a dword. */
+void PfwCfgWrite8(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val);
 
 /* The whole step (record 32 section 4.1): r is zeroed by the caller. */
 void PfwRun(PFW_RESULT *r);
@@ -143,5 +218,15 @@ int PfwClassify(PFW_U32 r24, PFW_U32 r28, PFW_U32 r2c);
 int PfwSafe(PFW_U32 r24, PFW_U32 r28, PFW_U32 r2c);
 int PfwClose(PFW_U32 bus, PFW_U32 devfn, PFW_U32 *after);
 void PfwXhci(PFW_RESULT *r, PFW_U32 bus, PFW_U32 devfn);
+
+/* Section 12.10 step 1: the setting from the open's and the query's
+ * result codes, the value's type, length and dword. */
+PFW_U32 PfwSwitchSetting(PFW_U32 openRc, PFW_U32 queryRc, PFW_U32 type,
+                         PFW_U32 length, PFW_U32 raw);
+/* Step 2: 1 when a type 0 function's ids (00h) and class (08h) are an
+ * NHI's. */
+int PfwIsNhi(PFW_U32 id, PFW_U32 classReg);
+/* Steps 2 to 6 over every bus, with r->Switch.Setting in force. */
+void PfwLines(PFW_RESULT *r);
 
 #endif

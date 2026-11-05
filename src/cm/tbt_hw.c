@@ -92,9 +92,24 @@ static const TBT_HW_PROFILE tbtHwTable[] = {
       TBT_HW_OWN_NONE, NULL },
     { 0x8086, 0x5784, "JHL9540 Barlow Ridge Host 40G", TBT_HW_INTEL,
       TBT_HW_OWN_NONE, NULL },
-    /* AMD Pink Sardine, FreeBSD nhi_reg.h. */
+    /* AMD Pink Sardine, FreeBSD nhi_reg.h; the other AMD hosts, pci.ids
+     * 2026.10.31 (task 46.23), Strix Halo's pair named NHI #1 and #2 as the
+     * others are, where pci.ids calls both "USB4 Host Router" (owner,
+     * 2026-11-05). */
     { 0x1022, 0x1668, "Pink Sardine USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
     { 0x1022, 0x1669, "Pink Sardine USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x162E, "Rembrandt USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x162F, "Rembrandt USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x15C4, "Phoenix USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x15C5, "Phoenix USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x151C, "Strix USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x151D, "Strix USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x158D, "Strix Halo USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x158E, "Strix Halo USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x1120, "Krackan USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x1121, "Krackan USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x113B, "Krackan2 USB4 NHI #1", 0, TBT_HW_OWN_NONE, NULL },
+    { 0x1022, 0x113C, "Krackan2 USB4 NHI #2", 0, TBT_HW_OWN_NONE, NULL },
     /* Light Ridge and Cactus Ridge 4C: no ICM, the Thunderbolt-host profile
      * on an Apple machine only (record 22 section 19.3; Linux pci.c
      * nhi_ids[] by class and subsystem). */

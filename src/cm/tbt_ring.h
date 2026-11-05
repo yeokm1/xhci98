@@ -249,6 +249,7 @@ typedef struct _TBT_RING {
      * into the common buffer, which is therefore never freed (cm_pool.c). */
     BOOLEAN DmaMayRun;
     ULONG RxPdfMask;        /* the RX PDF mask the last start programmed */
+    BOOLEAN Dumped;         /* tbtRingDump ran since the last start */
     /* Interrupt Enable in every RX descriptor posted from now on (Spec
      * 12.5.1: the RX cause's status set after the frame's write-back), the
      * ring interrupt's intent (record 21 section 4.5.2), set by the driver

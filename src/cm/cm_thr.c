@@ -596,6 +596,7 @@ VOID CmThrInit(PCM_NHI nhi)
     KeInitializeEvent(&nhi->ThreadExited, NotificationEvent, FALSE);
     KeInitializeEvent(&nhi->PowerIdle, NotificationEvent, TRUE);
     KeInitializeEvent(&nhi->DeliverIdle, NotificationEvent, TRUE);
+    KeInitializeEvent(&nhi->RegIdle, NotificationEvent, TRUE);
     nhi->Delivering = 0;
     nhi->Accepting = 0;
     nhi->PowerOutstanding = 0;
@@ -732,6 +733,90 @@ BOOLEAN CmPowerSleeping(PCM_NHI nhi)
     return sleeping;
 }
 
+/*
+ * The registry's admission (task 46.14; runs/run-46.md, "46.14"). On 98 SE
+ * and ME a shutdown's system IRP is let go without waiting for the thread
+ * (task 44.47), so a registry access the thread made after it would race
+ * the rest of the shutdown. Admission closes at the dispatch of a system
+ * IRP away from S0, which then waits, bounded, for an access already
+ * admitted to leave, before the IRP goes down; the completion publishes
+ * the state and reopens admission only for S0 (also when a sleep IRP came
+ * back failed, the state then still S0). The bound: an access the
+ * registry itself holds back (the system busy with the registry while it
+ * sends the IRP) cannot hold the IRP for longer. NT: always admitted,
+ * nothing counted.
+ */
+#define CM_REG_CLOSE_WAIT_MS 1000UL
+
+BOOLEAN CmRegEnter(PCM_NHI nhi)
+{
+    KIRQL irql;
+    BOOLEAN admitted;
+
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        return TRUE;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    admitted = (BOOLEAN)(nhi->RegClosed == 0);
+    if (admitted && nhi->RegBusy++ == 0) {
+        KeClearEvent(&nhi->RegIdle);
+    }
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    return admitted;
+}
+
+VOID CmRegLeave(PCM_NHI nhi)
+{
+    KIRQL irql;
+
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    if (nhi->RegBusy != 0 && --nhi->RegBusy == 0) {
+        (VOID)KeSetEvent(&nhi->RegIdle, IO_NO_INCREMENT, FALSE);
+    }
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
+VOID CmRegCloseWait(PCM_NHI nhi)
+{
+    LARGE_INTEGER timeout;
+    KIRQL irql;
+    ULONG busy;
+
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->RegClosed = 1;
+    busy = nhi->RegBusy;
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+    if (busy == 0) {
+        return;
+    }
+    timeout.QuadPart = -(LONGLONG)(CM_REG_CLOSE_WAIT_MS * 10000UL);
+    if (KeWaitForSingleObject(&nhi->RegIdle, Executive, KernelMode, FALSE,
+                              &timeout) != STATUS_SUCCESS) {
+        /* The residual: the access in progress goes on beside what
+         * follows the IRP (the bound's reason above). */
+        nhi->RegCloseTimeouts++;
+        CmLogNote(nhi, "cm.reg.close-timeout", busy);
+    }
+}
+
+VOID CmRegSync(PCM_NHI nhi)
+{
+    KIRQL irql;
+
+    if (nhi->PowerOnNt) {
+        return;
+    }
+    KeAcquireSpinLock(&nhi->WorkLock, &irql);
+    nhi->RegClosed = (ULONG)(nhi->SystemPower != PowerSystemWorking);
+    KeReleaseSpinLock(&nhi->WorkLock, irql);
+}
+
 /* The removal's half: admission closed, every held IRP waited for, then
  * the lock taken once more, so the last release has left it before the
  * extension is freed. IRQL: PASSIVE_LEVEL. */
@@ -764,9 +849,11 @@ static BOOLEAN cmPolling(PCM_NHI nhi)
 BOOLEAN CmThrInertNext(PCM_NHI nhi)
 {
     /* The wait the thread enters next (cmThread): a timed one while a
-     * stor98 acknowledgement wait is pending, so not inert then. */
+     * stor98 acknowledgement wait is pending, or while the start's
+     * activation is deferred (record 32 section 12.8.15.16), so not inert
+     * then. */
     return (BOOLEAN)(!cmPolling(nhi) && CmLiveWaitMs(&nhi->Live) == 0 &&
-                     !CmNvlinkPending());
+                     !CmNvlinkPending() && !nhi->OscDeferred);
 }
 
 /*
@@ -837,6 +924,13 @@ static VOID NTAPI cmThread(PVOID context)
                                            CM_NVLINK_PEND_MS
                                    ? CM_NVLINK_PEND_MS
                                    : CmLiveWaitMs(&nhi->Live));
+            nhi->ThreadWait = CM_Q_WAIT_TIMED;
+            (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
+                                        KernelMode, FALSE, &due);
+        } else if (nhi->OscDeferred) {
+            /* The start's activation deferred: its tries, by the clock
+             * (cm_nhi.c, CmNhiDeferPass). */
+            cmRelativeMs(&due, nhi->Values.Value[CM_VAL_POLL_IDLE_MS]);
             nhi->ThreadWait = CM_Q_WAIT_TIMED;
             (VOID)KeWaitForSingleObject(&nhi->WorkEvent, Executive,
                                         KernelMode, FALSE, &due);
@@ -916,6 +1010,7 @@ static VOID NTAPI cmThread(PVOID context)
         if (bits & CM_WORK_EXIT) {
             break;
         }
+        CmNhiDeferPass(nhi);
         CmThrLiveness(nhi);
         if (cmPolling(nhi)) {
             /* The ring interrupt's wake drains RX ring 0 and nothing

@@ -78,6 +78,7 @@ SOURCES=xhci_mem.c    \
         xhci_pirq.c   \
         xhci_snap.c   \
         xhci_qry.c    \
+        xhci_acpi.c   \
         xhci_dname.c  \
         xhci_xstat.c  \
         xhci_xpipe.c  \
@@ -99,6 +100,7 @@ SOURCES=xhci_mem.c    \
         xhci_inj.c    \
         hcd_inj.c     \
         hcd_door.c    \
+        hcd_acpi.c    \
         hcd_log.c     \
         xhci_susp.c   \
         hcd_susp.c    \

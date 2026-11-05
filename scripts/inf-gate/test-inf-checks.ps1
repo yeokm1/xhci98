@@ -993,7 +993,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -1054,6 +1054,7 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2HubSpeedFallback,0x00010001,1`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n"; Clob = "HKR,,XhciAccept096,0x00010001,1`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n"; Clob = "HKR,,XhciCommandCheck,0x00010001,1`r`n" },
+        @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n"; Clob = "HKR,,XhciAcpiTables,0x00010001,1`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2Bos,0x00010001,1`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeKeep,0x00010001,1`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciLinkKeep,0x00010001,1`r`n" },
@@ -2336,6 +2337,13 @@ try {
         param($t) $t.Replace("[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`n",
                              "[RootHub.Dev6.NTx86.Services]`r`nAddService=xhci98,0x00000002,Xhci.AddService`r`nAddService=xhcihlpr,,XhciHlpr.AddService`r`n")
     }
+    # Record 18 section 15.15: a newer helper from either INF is kept.
+    Assert-RuleFires "x86-hlpr-copy-no-flag" "HLPR-SVC" {
+        param($t) $t.Replace("xhcihlpr.sys,,xhcihlpr.tmp,0x00000020", "xhcihlpr.sys,,xhcihlpr.tmp")
+    }
+    Assert-RuleFires "x86-hlpr-copy-other-flag" "HLPR-SVC" {
+        param($t) $t.Replace("xhcihlpr.sys,,xhcihlpr.tmp,0x00000020", "xhcihlpr.sys,,xhcihlpr.tmp,0x00000030")
+    }
     Assert-RuleFires "x86-hlpr-demand-start" "HLPR-SVC" {
         param($t) $t.Replace("StartType=0                         ; SERVICE_BOOT_START", "StartType=3                         ; SERVICE_DEMAND_START")
     }
@@ -2394,7 +2402,7 @@ try {
         param($t) $t.Replace("DelFiles=XhciMsi.DelFiles`r`n", "")
     }
     Assert-RuleFires "x86-hlprold-entry-moved" "HLPR-OLD" {
-        param($t) $t.Replace("[XhciHlpr.CopyFiles]`r`nxhcihlpr.sys,,xhcihlpr.tmp`r`n", "[XhciHlpr.CopyFiles]`r`nxhcihlpr.sys,,xhcihlpr.tmp`r`nxhcimsi.sys,,,0x00010000`r`n")
+        param($t) $t.Replace("[XhciHlpr.CopyFiles]`r`nxhcihlpr.sys,,xhcihlpr.tmp,0x00000020`r`n", "[XhciHlpr.CopyFiles]`r`nxhcihlpr.sys,,xhcihlpr.tmp,0x00000020`r`nxhcimsi.sys,,,0x00010000`r`n")
     }
     Assert-RuleFires "x86-hlprold-wrong-dir" "HLPR-OLD" {
         param($t) $t.Replace("XhciMsi.DelFiles=10,System32\Drivers", "XhciMsi.DelFiles=10,System32")
@@ -2750,6 +2758,7 @@ try {
         @{ Key = "hubspeed";  Row = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2HubSpeedFallback,0x00010003,0`r`n" },
         @{ Key = "accept096"; Row = "HKR,,XhciAccept096,0x00010003,1`r`n"; Wrong = "HKR,,XhciAccept096,0x00010003,0`r`n" },
         @{ Key = "cmdcheck"; Row = "HKR,,XhciCommandCheck,0x00010003,1`r`n"; Wrong = "HKR,,XhciCommandCheck,0x00010003,0`r`n" },
+        @{ Key = "acpitables"; Row = "HKR,,XhciAcpiTables,0x00010003,1`r`n"; Wrong = "HKR,,XhciAcpiTables,0x00010003,0`r`n" },
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n" },

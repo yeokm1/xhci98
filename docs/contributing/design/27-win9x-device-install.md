@@ -1,6 +1,12 @@
 # Design Record 27 - The Windows 98 SE and ME Device Install
 
-Status: draft 17, 2026-10-30 (task 45.38: a second controller of the
+Status: draft 18, 2026-11-04 (roadmap-usb4 task 46.24: an update with a
+UAS disk plugged in asked for "xhci98 xHCI Host Controller Disk" at the
+Windows source for `xhciuas.sys`, the UAS job being the run's second
+copying job after the controller's; the installer's placement of
+`xhciuas.sys` and `xhcicm.sys` now comes before the jobs, and a UAS
+disk's or a host interface's job whose file it placed or queued passes
+`nocopy`, section 6 steps 4 and 5); draft 17, 2026-10-30 (task 45.38: a second controller of the
 same INF asked for "xhci98 xHCI Host Controller Disk" at the Windows
 source: a later controller's job passes `nocopy`, `DI_NOFILECOPY`,
 sections 4.1 and 6); draft 16, 2026-10-29 (task 45.32, the owner's
@@ -878,7 +884,20 @@ plan goes on.
    the NUSB mass-storage prerequisite and on ME the first-stick advice
    stay as record 23 section 6.4 says them, on the Found page; on 98 SE
    with the storage row ticked, `USBNTMAP.SYS` is in place before this
-   step, so a UAS disk installed here starts with its filter.
+   step, so a UAS disk installed here starts with its filter. **Draft
+   18** (task 46.24): the job passes `nocopy` when the installer's own
+   placement (record 26 section 5.0, drafts 35, 38 and 68), now made
+   before the helper's first job rather than after its last, has put the
+   package's `xhciuas.sys` in `SYSTEM32\DRIVERS` or queued it as
+   `xhciuas.IN$` with its `WININIT.INI` line (`inst_di_nocopy`). Seen on a
+   98 SE guest (2026-11-04, w46-upd's update leg of the published
+   `3.4.0.0` with the drive plugged in): the UAS job, the run's second
+   copying job after the controller's, brought the same "Insert Disk"
+   and the copy box at `C:\WIN98` for `xhciuas.sys` as the second
+   controller of draft 17; typing the install directory went on. With
+   no drive plugged in there was no UAS job and no prompt. The same
+   holds for step 5's `xhcicm.sys`. A placement that fails leaves the
+   job copying as before.
 4a. **Storage units** (draft 10; on 98 SE, as step 3a): after a settle,
    each present unit (`USBSTOR\GenDisk`, `USBSTOR\GenCdRom` or
    `USBSTOR\GenSfloppy` among its ids) with no driver, by

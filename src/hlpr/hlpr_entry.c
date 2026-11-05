@@ -16,10 +16,15 @@
  *     import address table from the running kernel's exports;
  *   - the MSI service, Vista and 7 only: the IoConnectInterruptEx pair,
  *     asked of MmGetSystemRoutineAddress (the documented way to find a
- *     routine that may be absent), so the image still loads on 2000 and XP.
+ *     routine that may be absent), so the image still loads on 2000 and XP;
+ *   - the routine service, channel minor 1 (record 32 section 12.8.15.15):
+ *     MmGetSystemRoutineAddress itself, imported statically, for the
+ *     connection manager's x86 image, xhcicm.sys, which loads on Windows
+ *     98 and ME too and finds its NT-only routines through it.
  *
- * Nothing the HCD later calls runs in this image, and it calls none of the
- * routines it hands out.
+ * Nothing the HCD or the connection manager later calls runs in this
+ * image, and of the routines it hands out it calls MmGetSystemRoutineAddress
+ * alone, at DriverEntry.
  *
  * It creates one device object, \Device\Xhci98Helper, secured to the system
  * alone (IoCreateDeviceSecure, SDDL_DEVOBJ_SYS_ALL), answers a kernel-mode
@@ -68,6 +73,7 @@ static ULONG XhcihlprInject;
 static PVOID XhcihlprConnectEx;
 static PVOID XhcihlprDisconnectEx;
 static PVOID XhcihlprSetTimer;
+static PVOID XhcihlprFindRoutine;
 
 DRIVER_INITIALIZE DriverEntry;
 __drv_dispatchType(IRP_MJ_CREATE) DRIVER_DISPATCH xhcihlprCreate;
@@ -130,7 +136,7 @@ NTSTATUS xhcihlprInternal(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         stack->Parameters.DeviceIoControl.InputBufferLength,
         stack->Parameters.DeviceIoControl.OutputBufferLength,
         XhcihlprConnectEx, XhcihlprDisconnectEx, XhcihlprSetTimer,
-        XhciHlprPackVersion(XHCI_VER_STR),
+        XhcihlprFindRoutine, XhciHlprPackVersion(XHCI_VER_STR),
         (XhcihlprInject >= XHCI_HLPR_INJ_MAJOR) ? XhcihlprInject
                                                 : XHCI_HLPR_INJ_NONE,
         &information);
@@ -246,6 +252,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     /* Step 3, the timer service, Windows 2000 and later: the address the
      * loader resolved from the running kernel; this image never calls it. */
     XhcihlprSetTimer = (PVOID)ExSetTimerResolution;
+    /* Step 4, the routine service (minor 1), Windows 2000 and later: the
+     * loader's address of the lookup routine this image already imports. */
+    XhcihlprFindRoutine = (PVOID)MmGetSystemRoutineAddress;
 
     RtlInitUnicodeString(&name, XHCI_HLPR_DEVICE_NAME);
     status = IoCreateDeviceSecure(DriverObject, 0, &name, FILE_DEVICE_UNKNOWN,

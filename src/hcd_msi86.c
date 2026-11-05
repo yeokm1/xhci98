@@ -376,7 +376,7 @@ static VOID hcdHlprLook(PHCD_CONTROLLER hc)
     }
     hc->HlprQuery.Size = sizeof(XHCI_HLPR_QUERY);
     hc->HlprQuery.CallerMajor = XHCI_HLPR_MAJOR;
-    hc->HlprQuery.CallerMinor = XHCI_HLPR_MINOR;
+    hc->HlprQuery.CallerMinor = XHCI_HLPR_MINOR_V20;
     hc->HlprQuery.CallerVersion = hcdMsiVersion();
     hc->HlprQuery.CallerWants =
         (hcdMsiNt6() ? XHCI_HLPR_SVC_MSI : 0UL) | XHCI_HLPR_SVC_TIMER;

@@ -231,6 +231,19 @@ ULONG XhciTolCycleOnRefused(ULONG tolerance, ULONG claimed, ULONG isoch,
 ULONG XhciTolHaltCandidate(ULONG tolerance, ULONG code, ULONG isoch,
                            ULONG pipeOpen);
 
+/* 1 when an event on an endpoint with streams open that no stream's TD
+ * claims halts the endpoint and is recovered on it, not by cycling the
+ * device: Stall, Transaction, Babble or Split Transaction, not an Event Data
+ * event (which names no TRB). The endpoint is Halted with every stream's
+ * requests on it; the thread resets it and completes them, as for a Prime
+ * Pipe STALL (hcd_dev.c, hcd_cfg.c hcdCfgCancelOne), and the class driver's
+ * own recovery (xhciuas: a device reset through RESET_PORT) follows with
+ * the device still present. A user report of 2026-11-04 (XP x64, Intel
+ * 8086:1E31, a UAS disk): one Babble on the data-in endpoint inside no TD
+ * cycled the disk, a surprise removal of a volume in use. Whatever the
+ * tolerance setting. */
+ULONG XhciTolStreamHaltDrain(ULONG code, ULONG eventData);
+
 /* 1 when a halt candidate's context state (XHCI_EP_STATE_*) cycles. */
 ULONG XhciTolHaltConfirmed(ULONG epState);
 

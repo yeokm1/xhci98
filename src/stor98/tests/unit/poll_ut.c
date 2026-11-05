@@ -240,6 +240,207 @@ static void test_timer(void)
     check(PollCombine(10000, 0) == 10000 && PollCombine(0, 0) == 0, "no CM channel: engine period");
 }
 
+// The missed-interrupt watchdog (PLAN "Missed-interrupt watchdog"): the run,
+// the claims, the window, the latch, and the setting.
+static void test_watch(void)
+{
+    POLL_WATCH w;
+    POLL_RAW r;
+    POLL_SETTINGS s;
+    ULONG claims = 0, t = 1000;
+    int latched, i;
+
+    printf("watch\n");
+    memset(&w, 0, sizeof(w));
+    latched = 0;
+    for (i = 0; i < 10; i++) {
+        latched |= PollWatchTick(&w, FALSE, claims, (claims) * 4, TRUE, t += 100);
+    }
+    check(!latched && w.Run == 0 && w.Misses == 0, "not armed (off, storm, not running): never a miss, never a latch");
+
+    memset(&w, 0, sizeof(w));
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 1, "a timer find with no claim: miss 1");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, FALSE, t += 100) && w.Run == 1, "nothing found, nothing claimed: the run is kept");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 2, "miss 2");
+    check(PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 3 && w.Misses == 3,
+          "miss 3 within 2 s: latch (dead line, ~300 ms at the watchdog tick)");
+
+    memset(&w, 0, sizeof(w));
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100);
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100);
+    claims++;
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 0 && w.Misses == 2,
+          "an interrupt claimed since the last tick (4 completions): run 0, even with a find, which is no miss");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 1, "then a new run starts");
+
+    // A working line, the rare interleaving: the timer consumes a completion
+    // posted just before it (a miss), the interrupt then finds the queue
+    // empty and claims nothing; the next completions are claimed.
+    memset(&w, 0, sizeof(w));
+    claims = 50;
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, FALSE, t += 100);
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 1, "working line: the timer wins one race, miss 1");
+    claims += 7;
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, FALSE, t += 100) && w.Run == 0, "working line: the next claims set the run back");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100) && w.Run == 1, "working line: a second race is a new run of 1");
+
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = claims;
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t = 10000) && w.Run == 1, "window: miss at 0 s");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 1500) && w.Run == 2, "window: miss at 1.5 s");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 1500) && w.Run == 1 && w.RunStartMs == t,
+          "window: a miss 3 s after the run's first starts a new run, no latch");
+    check(!PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 1990) && w.Run == 2, "window: 1.99 s after the first still counts");
+    check(PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 10) && w.Run == 3, "window: the third at exactly 2 s latches");
+
+    memset(&w, 0, sizeof(w));
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100);
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100);
+    PollWatchTick(&w, FALSE, claims + 9, (claims + 9) * 4, FALSE, t += 100);
+    check(w.Run == 0 && w.Finds == 0 && w.ClaimsSeen == claims + 9, "a callback not armed (reset, gone, removal) ends the run and takes the claims as seen");
+    check(!PollWatchTick(&w, TRUE, claims + 9, (claims + 9) * 4, TRUE, t += 100) && w.Run == 1, "re-armed: a find is miss 1 of a new run");
+
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = claims;
+    w.Misses = 0xFFFFFFFFUL;
+    PollWatchTick(&w, TRUE, claims, (claims) * 4, TRUE, t += 100);
+    check(w.Misses == 0xFFFFFFFFUL, "the miss count saturates");
+
+
+    // A dead line shared with another device whose calls claim this
+    // controller's completions, one each, at almost every tick (the 98 SE
+    // reading of 2026-11-05): the run never grows, the finds latch at the
+    // 8th within 2 s.
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    latched = 0;
+    for (i = 0; i < 7; i++) {
+        claims++;
+        latched |= PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100);
+    }
+    check(!latched && w.Run == 0 && w.Finds == 7 && w.Misses == 7, "shared dead line: 7 finds, one claimed completion each: no latch yet");
+    claims++;
+    PollWatchTick(&w, TRUE, claims, claims, FALSE, t += 100);
+    check(w.Run == 0 && w.Finds == 7, "a claim with nothing found keeps the finds");
+    claims++;
+    check(PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100) && w.Finds == 8 && w.Run == 0,
+          "the 8th find within 2 s latches, claims or not");
+
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    check(!PollWatchTick(&w, TRUE, claims + 1, claims + 2, TRUE, t += 100) && w.Finds == 1 && w.Misses == 1,
+          "two claimed completions: still a find");
+    check(!PollWatchTick(&w, TRUE, claims + 2, claims + 5, TRUE, t += 100) && w.Finds == 1 && w.Misses == 1,
+          "three claimed completions (one claim): not a find, not a miss");
+    claims += 2;
+
+    // The rolling window: a find more than 2 s before the 8th does not count
+    // against it, and the finds before it still do.
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    claims++;
+    PollWatchTick(&w, TRUE, claims, claims, TRUE, t = 20000);
+    for (i = 0; i < 6; i++) {
+        claims++;
+        PollWatchTick(&w, TRUE, claims, claims, TRUE, t = 21500 + 100 * i);
+    }
+    claims++;
+    check(!PollWatchTick(&w, TRUE, claims, claims, TRUE, t = 22100) && w.Finds == 8,
+          "rolling: 8 finds, the oldest 2.1 s before the newest: no latch");
+    claims++;
+    check(PollWatchTick(&w, TRUE, claims, claims, TRUE, t = 22200),
+          "rolling: the next find makes the last 8 span 0.7 s: latch");
+
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    for (i = 0; i < 7; i++) {
+        claims++;
+        PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100);
+    }
+    PollWatchTick(&w, TRUE, claims, claims, FALSE, t += 2001);
+    check(w.Finds == 0, "an armed callback 2 s after the newest find forgets the finds");
+    for (i = 0; i < 7; i++) {
+        claims++;
+        PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100);
+    }
+    claims++;
+    check(PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100) && w.Finds == 8, "with them 8 finds within 2 s: latch");
+
+    // Queue depth 1, the timer stopping after each recovered command and
+    // starting again with the next (no callback between): the evidence adds
+    // up across the gaps, with no claim (the run) and with one each (the finds).
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    check(!PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 130) && !PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 130) &&
+          PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 130), "depth 1, idle between: the run latches at the third");
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    latched = 0;
+    for (i = 0; i < 7; i++) {
+        claims++;
+        latched |= PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 130);
+    }
+    claims++;
+    check(!latched && PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 130), "depth 1 on a shared line, idle between: the finds latch at the 8th");
+    PollWatchTick(&w, FALSE, claims, claims, TRUE, t += 100);
+    check(w.Finds == 0 && w.Run == 0, "a callback not armed forgets the finds too");
+
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    for (i = 0; i < 7; i++) {
+        claims++;
+        PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100);
+    }
+    PollWatchTick(&w, TRUE, claims, claims, TRUE, t += 100);
+    w.Run = 2;
+    PollWatchForgetFinds(&w);
+    check(w.Finds == 0 && w.Run == 2, "a gap the clock did not measure forgets the finds, not the run");
+
+    // A clock that wraps between finds within the window.
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    latched = 0;
+    for (i = 0; i < 8; i++) {
+        claims++;
+        latched |= PollWatchTick(&w, TRUE, claims, claims, TRUE, 0xFFFFFE00UL + 100 * (ULONG)i);
+    }
+    check(latched, "the finds' window across the clock's wrap");
+
+    // A working line under load: a race won by the timer about once in 25
+    // ticks, every tick with many completions claimed, for 60 s; and at light
+    // load (one completion claimed a tick) a race at most every 2.5 s: no latch.
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = claims;
+    w.ClaimCqesSeen = claims * 3;
+    latched = 0;
+    for (i = 0; i < 600; i++) {
+        claims += 9;
+        latched |= PollWatchTick(&w, TRUE, claims, claims * 3, (BOOLEAN)(i % 25 == 7), t += 100);
+    }
+    check(!latched && w.Misses == 0 && w.Run == 0 && w.Finds == 0, "working line under load: races are no misses");
+    memset(&w, 0, sizeof(w));
+    w.ClaimsSeen = w.ClaimCqesSeen = claims;
+    latched = 0;
+    for (i = 0; i < 600; i++) {
+        claims++;
+        latched |= PollWatchTick(&w, TRUE, claims, claims, (BOOLEAN)(i % 25 == 7), t += 100);
+    }
+    check(!latched && w.Misses == 24 && w.Run == 0 && w.Finds == 1, "working line at light load: a race every 2.5 s never latches");
+
+    // The setting (StorIntWatchdog / storintwatchdog=)
+    memset(&r, 0, sizeof(r));
+    PollSettingsApply(&s, &r);
+    check(s.Watch == POLL_WATCH_ON && POLL_WATCH_DEFAULT == 1 && s.Clamped == 0, "watchdog: on by default");
+    r.Present = POLL_CLAMP_WATCH;
+    r.Watch = 0;
+    PollSettingsApply(&s, &r);
+    check(s.Watch == POLL_WATCH_OFF && s.Clamped == 0, "watchdog: 0 turns it off");
+    r.Watch = 5;
+    PollSettingsApply(&s, &r);
+    check(s.Watch == POLL_WATCH_ON && s.Clamped == POLL_CLAMP_WATCH, "watchdog: above 1 clamps to 1, recorded");
+    check(POLL_WHY_MISSED == 7 && POLL_WHY_MISSED != POLL_WHY_INTX_OFF, "why 7: interrupts missed");
+}
+
 int main(void)
 {
     test_timer();
@@ -247,6 +448,7 @@ int main(void)
     test_parse();
     test_decide();
     test_caps();
+    test_watch();
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "passed", failures);
     return failures;
 }

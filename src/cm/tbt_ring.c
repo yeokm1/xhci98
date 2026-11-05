@@ -359,6 +359,49 @@ static volatile UCHAR *tbtRxDesc(PTBT_RING ring, ULONG i)
     return ring->Va + tbtRxDescOff(ring) + TBT_DESC_BYTES * i;
 }
 
+/*
+ * Ring 0 as the host interface holds it, for the log, when a control
+ * request gets no answer or a transmit descriptor is not consumed: the
+ * control and options words, both index and size registers, the RX PDF
+ * mask, the Host Interface Control word, whether each base register holds
+ * the address programmed (no address is logged), and the status words of
+ * the first transmit and receive descriptors, once per start. Reads only;
+ * on real hardware this is what says whether an answer was dropped on the
+ * receive side or never sent (first read on an ASMedia ASM4242, 2026-11-02).
+ */
+static VOID tbtRingDump(PTBT_RING ring)
+{
+    ULONG v;
+
+    /* Once per start: the first failure's picture, without a long run of
+     * retries (a link going away mid-request) pushing the start's own
+     * records out of the log. */
+    if (ring->Dumped) {
+        return;
+    }
+    ring->Dumped = TRUE;
+    tbtLog(ring->Host, "tbt.dump.tx.ctrl", TBT_RD(ring, TBT_TX_CTRL(0)));
+    tbtLog(ring->Host, "tbt.dump.tx.ctrl4", TBT_RD(ring, TBT_TX_CTRL(0) + 4UL));
+    tbtLog(ring->Host, "tbt.dump.tx.index", TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_INDEX));
+    tbtLog(ring->Host, "tbt.dump.tx.size", TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_SIZE_REG));
+    v = TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_LO);
+    tbtLog(ring->Host, "tbt.dump.tx.base-ok", (ULONG)(v == ring->Phys) |
+           ((ULONG)(TBT_RD(ring, TBT_TX_RING(0) + TBT_RING_BASE_HI) == 0) << 1));
+    tbtLog(ring->Host, "tbt.dump.rx.ctrl", TBT_RD(ring, TBT_RX_CTRL(0)));
+    tbtLog(ring->Host, "tbt.dump.rx.pdf", TBT_RD(ring, TBT_RX_PDF(0)));
+    tbtLog(ring->Host, "tbt.dump.rx.index", TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_INDEX));
+    tbtLog(ring->Host, "tbt.dump.rx.size", TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_SIZE_REG));
+    v = TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_LO);
+    tbtLog(ring->Host, "tbt.dump.rx.base-ok", (ULONG)(v == ring->Phys + tbtRxDescOff(ring)) |
+           ((ULONG)(TBT_RD(ring, TBT_RX_RING(0) + TBT_RING_BASE_HI) == 0) << 1));
+    tbtLog(ring->Host, "tbt.dump.hi.control", TBT_RD(ring, TBT_HI_CONTROL));
+    tbtLog(ring->Host, "tbt.dump.tx0.dw2", tbtLoadLe32(tbtTxDesc(ring, 0) + TBT_DESC_DW2));
+    tbtLog(ring->Host, "tbt.dump.tx1.dw2", tbtLoadLe32(tbtTxDesc(ring, 1) + TBT_DESC_DW2));
+    tbtLog(ring->Host, "tbt.dump.rx0.dw2", tbtLoadLe32(tbtRxDesc(ring, 0) + TBT_DESC_DW2));
+    tbtLog(ring->Host, "tbt.dump.rx1.dw2", tbtLoadLe32(tbtRxDesc(ring, 1) + TBT_DESC_DW2));
+    tbtLog(ring->Host, "tbt.dump.rx-next", ring->RxNext | (ring->TxNext << 16));
+}
+
 /* Spec 12.4.1 Table 12-7: the buffer's address, RS set so the status is
  * written back, DD clear; IE as the ring interrupt's intent says (RxIe). */
 static VOID tbtRxPost(PTBT_RING ring, ULONG i)
@@ -499,6 +542,7 @@ LONG TbtRingStartEx(PTBT_RING ring,
     ring->Va = (volatile UCHAR *)va;
     ring->Phys = phys;
     ring->Entries = entries;
+    ring->Dumped = FALSE;
 
     caps = TBT_RD(ring, TBT_HI_CAPS);
     paths = TBT_HI_CAPS_PATHS(caps);
@@ -762,6 +806,7 @@ LONG TbtRingSendUs(PTBT_RING ring, ULONG pdf, const ULONG *dw, ULONG words,
     }
     ring->Counters.TxStuck++;
     tbtLog(ring->Host, "tbt.ring.tx-stuck", idx);
+    tbtRingDump(ring);
     return TBT_E_HW;
 }
 
@@ -1082,6 +1127,7 @@ LONG TbtRingCtlTransfer(PTBT_RING ring,
             return TBT_E_STOPPED;
         }
         tbtLog(ring->Host, "tbt.ring.ctl-no-answer", want);
+        tbtRingDump(ring);
     }
     ring->Counters.CtlTimeouts++;
     return TBT_E_TIMEOUT;

@@ -12,19 +12,26 @@
  * block below, in and out. This header is the one declaration both
  * binaries compile.
  *
+ * Minor 1 (record 32 section 12.8.15.15, task 46.12) appends one service,
+ * the helper's own MmGetSystemRoutineAddress, for the connection manager's
+ * x86 image, xhcicm.sys, which loads on Windows 98 and ME too: its block
+ * is XHCI_HLPR_QUERY1, 0x38 bytes. xhci98.sys still sends the V2.0 block
+ * of 0x34 bytes, declares minor 0 and never sees the new field.
+ *
  * Version 2 (record 18 section 15.3) replaced xhcimsi.sys's version 1 on a
  * new device name: no 2.3.x HCD opens the new device and no 2.4 HCD opens
  * the old one, so an old and a new helper loaded in one boot never collide
  * and neither end speaks the other's version.
  *
  * The pure halves of both ends live in xhci_hlpr.c: the helper's
- * validation and fill (XhciHlprAnswer) and the HCD's two-level acceptance
- * (XhciHlprAccept), host-tested in test\test_msi.c.
+ * validation and fill (XhciHlprAnswer), the HCD's two-level acceptance
+ * (XhciHlprAccept) and the connection manager's (XhciHlprAcceptRoutine),
+ * host-tested in test\test_msi.c.
  *
- * Built three ways: into xhci98.sys (MSVC 6 and the Windows 2000 DDK, or
- * WDK 7.1 for amd64, where nothing calls it), into xhcihlpr.sys (WDK 7.1
- * x86, XHCI_HLPR_HELPER defined, ntddk.h included first), and into the
- * host suite (XHCI_HOST_TEST). The block's layout is x86's; the size and
+ * Built into xhci98.sys and xhcicm.sys (MSVC 6 and the Windows 2000 DDK,
+ * or WDK 7.1 for amd64, where nothing calls it), into xhcihlpr.sys (WDK
+ * 7.1 x86, XHCI_HLPR_HELPER defined, ntddk.h included first), and into
+ * the host suite (XHCI_HOST_TEST). The block's layout is x86's; the size and
  * offset asserts below hold for x86 only and are compiled there.
  *
  * DDK-free: part of the pure core. C89. IRQL: any.
@@ -49,10 +56,13 @@
 /* 'XHLP'. */
 #define XHCI_HLPR_MAGIC             0x504C4858UL
 #define XHCI_HLPR_MAJOR             2
-#define XHCI_HLPR_MINOR             0
+#define XHCI_HLPR_MINOR             1       /* the helper's, xhcicm.sys's */
+#define XHCI_HLPR_MINOR_V20         0       /* xhci98.sys's V2.0 block    */
 
 /* The whole V2.0 block, and the least any later minor may send. */
 #define XHCI_HLPR_V2_MIN            0x34UL
+/* The whole V2.1 block (minor 1). */
+#define XHCI_HLPR_V21_SIZE          0x38UL
 
 /* CTL_CODE(FILE_DEVICE_UNKNOWN, 0x900 + major, METHOD_NEITHER,
  * FILE_ANY_ACCESS): (0x22 << 16) | (0 << 14) | (0x902 << 2) | 3. A new
@@ -62,6 +72,7 @@
 /* CallerWants and Services. */
 #define XHCI_HLPR_SVC_MSI           0x00000001UL    /* the MSI pair        */
 #define XHCI_HLPR_SVC_TIMER         0x00000002UL    /* the timer routine   */
+#define XHCI_HLPR_SVC_ROUTINE       0x00000004UL    /* minor 1: FindRoutine */
 
 /* Flags the helper sets. */
 #define XHCI_HLPR_F_INJECTED        0x00000001UL    /* qemu injection on   */
@@ -115,6 +126,22 @@ XHCI_HLPR_ASSERT(hlpr_query_timer,
                          ->SetTimerResolution == 0x30);
 #endif
 
+/* Minor 1's block: the V2.0 block and one field. The helper writes the
+ * field, and sets XHCI_HLPR_SVC_ROUTINE, only when the caller's Size
+ * covers it. */
+typedef struct _XHCI_HLPR_QUERY1 {
+    XHCI_HLPR_QUERY V2;     /* 0x00 the V2.0 block                         */
+    PVOID FindRoutine;      /* 0x34 helper: MmGetSystemRoutineAddress      */
+} XHCI_HLPR_QUERY1, *PXHCI_HLPR_QUERY1;
+
+#if !defined(_WIN64)
+XHCI_HLPR_ASSERT(hlpr_query1_size,
+                 sizeof(XHCI_HLPR_QUERY1) == XHCI_HLPR_V21_SIZE);
+XHCI_HLPR_ASSERT(hlpr_query1_find,
+                 (ULONG)(ULONG_PTR)&((XHCI_HLPR_QUERY1 *)0)->FindRoutine ==
+                     XHCI_HLPR_V2_MIN);
+#endif
+
 /* The helper's answers, which it maps to an NTSTATUS. */
 #define XHCI_HLPR_ANS_OK            0UL     /* STATUS_SUCCESS              */
 #define XHCI_HLPR_ANS_TOO_SMALL     1UL     /* STATUS_BUFFER_TOO_SMALL     */
@@ -133,7 +160,8 @@ XHCI_HLPR_ASSERT(hlpr_query_timer,
 #define XHCI_HLPR_INJ_TIMER_OFF     7UL     /* timer bit clear, pointer 0  */
 #define XHCI_HLPR_INJ_TIMER_NULL    8UL     /* timer bit set, pointer 0    */
 #define XHCI_HLPR_INJ_MSI_OFF       9UL     /* MSI bit clear, both 0       */
-#define XHCI_HLPR_INJ_LAST          9UL
+#define XHCI_HLPR_INJ_ROUTINE_OFF   10UL    /* routine bit clear, 0        */
+#define XHCI_HLPR_INJ_LAST          10UL
 
 /*
  * The helper's half (record 18 sections 3.2 and 15.3): validates the
@@ -143,12 +171,15 @@ XHCI_HLPR_ASSERT(hlpr_query_timer,
  * min(Size, its block) bytes and returns that count through *information
  * (0 on a refusal). A service is answered when its routines were found at
  * DriverEntry: the MSI pair when both are non-NULL, the timer when its
- * pointer is. `inject` is an XHCI_HLPR_INJ_* value, XHCI_HLPR_INJ_NONE
- * outside the qemu flavour. Returns an XHCI_HLPR_ANS_*. IRQL: any.
+ * pointer is, the routine (minor 1) when its pointer is and the filled
+ * count covers its field. `inject` is an XHCI_HLPR_INJ_* value,
+ * XHCI_HLPR_INJ_NONE outside the qemu flavour. Returns an
+ * XHCI_HLPR_ANS_*. IRQL: any.
  */
 ULONG XhciHlprAnswer(PVOID buffer, ULONG inputLength, ULONG outputLength,
                      PVOID connectEx, PVOID disconnectEx, PVOID setTimer,
-                     ULONG helperVersion, ULONG inject, PULONG information);
+                     PVOID findRoutine, ULONG helperVersion, ULONG inject,
+                     PULONG information);
 
 /* The HCD's channel verdict (record 18 section 15.3): accepted, or the
  * first test that failed - the answer then refused as a whole. */
@@ -177,6 +208,20 @@ ULONG XhciHlprAnswer(PVOID buffer, ULONG inputLength, ULONG outputLength,
 ULONG XhciHlprAccept(ULONG succeeded, ULONG information, ULONG capacity,
                      const XHCI_HLPR_QUERY *query, ULONG nt6,
                      PULONG msiVerdict, PULONG timerVerdict);
+
+/*
+ * The connection manager's half (minor 1, record 32 section 12.8.15.15):
+ * the channel judged by XhciHlprAccept's tests (its MSI and timer
+ * verdicts discarded), `capacity` the Size it sent (0x38). Through
+ * *routineVerdict one XHCI_HLPR_SVC_* (NONE on a refusal): accepted when
+ * Returned covers FindRoutine, bit 2 is set and the pointer is non-NULL;
+ * not offered when bit 2 is clear and the field is uncovered or NULL (a
+ * minor 0 helper's answer); malformed otherwise. The field is read only
+ * where Returned covers it. IRQL: any.
+ */
+ULONG XhciHlprAcceptRoutine(ULONG succeeded, ULONG information,
+                            ULONG capacity, const XHCI_HLPR_QUERY1 *query,
+                            PULONG routineVerdict);
 
 /* "a.b.c.d" packed one byte a part (each part held to 255), for the two
  * ends' version fields. IRQL: any. */

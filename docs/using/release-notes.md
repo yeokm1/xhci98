@@ -1,11 +1,13 @@
 # xhci98 - Release Notes
 
-This file describes package version `3.4.0.0`, the nineteenth release and
-the twelfth of the host controller driver, dated 2026-11-01 (`DriverVer`
-`11/01/2026,3.4.0.0` in every INF of the package: those of `xhci98.sys`,
+This file describes package version `3.4.1.0`, the twentieth release and
+the thirteenth of the host controller driver, dated 2026-11-05 (`DriverVer`
+`11/05/2026,3.4.1.0` in every INF of the package: those of `xhci98.sys`,
 the UAS driver and the connection manager, and Stor98's). What it changes
-from `3.3.0.0` is "What `3.4.0.0` changes", below, and is marked "new in
-`3.4.0.0`" or "from `3.4.0.0`" where it applies below. What `3.3.0.0`
+from `3.4.0.0` is "What `3.4.1.0` changes", below, and is marked "new in
+`3.4.1.0`" or "from `3.4.1.0`" where it applies below. What `3.4.0.0`
+changed from `3.3.0.0` is "What `3.4.0.0` changes", below, and is marked
+"new in `3.4.0.0`" or "from `3.4.0.0`" where it applies. What `3.3.0.0`
 changed from `3.2.0.0` is "What `3.3.0.0` changes", below, and is marked
 "new in `3.3.0.0`" or "from `3.3.0.0`" where it applies. What `3.2.0.0` added
 to `3.1.0.0` is its entry in `releases/history.md` and is marked "new in
@@ -368,6 +370,64 @@ downstream ports `xHCI98 USB4 PCI Bridge
 | Intel 200 Series | `8086:A2AF` | xHCI98 USB 3 Controller (Intel 200 Series) |
 | Intel 300 Series | `8086:A36D` | xHCI98 USB 3 Controller (Intel 300 Series) |
 | Intel Raptor Lake | `8086:A71E` | xHCI98 USB 3 Controller (Intel Raptor Lake) |
+
+## What `3.4.1.0` changes
+
+The full list: the `3.4.1.0` entry of `releases/history.md`.
+
+### USB
+- 98 SE and ME: the USB Tree's snapshot names a device that holds a
+  controller's shared IRQ at its start (its PCI location and ids).
+- 2000 to 7: one stream error no transfer was waiting for now
+  recovers the UAS disk's endpoint; if that fails, only the disk is
+  reconnected, never every device on its controller (issues 22 and 24).
+- A command the controller never answers is named in the snapshot.
+
+### Thunderbolt and USB4
+- 98 SE and ME: on an ASMedia ASM4242 USB4 host whose firmware hands
+  USB4 over only through ACPI `_OSC`, the driver sends that handover itself
+  when it knows the firmware (`XhciCmAsm4242Handover`).
+- 98 SE and ME: the driver stops writing to the registry when Windows
+  announces a shutdown or standby.
+- 2000, XP and XP x64: the ASM4242 handover too, with
+  `XhciCmAsm4242Reads` `1`.
+- Eject: the confirmation names the drive; "It is now safe to
+  disconnect the device."
+- The USB Tree names AMD's other USB4 hosts.
+
+### Storage
+- 98 SE and ME: Stor98 runs only the drive it was loaded for. It took
+  every NVMe drive before, Windows' own NVMe system disk included, and
+  the start could stop at "Initing stor98.mpd".
+- 98 SE and ME: a drive the BIOS has set up stays the BIOS's. Its Stor98
+  entry shows Code 10.
+- Stor98 polls a drive whose interrupts stop arriving, until the drive
+  next starts (`StorIntWatchdog`, `storintwatchdog=`), also on an IRQ
+  shared with another device.
+
+### Installer and package
+- 98 SE and ME: an ASM4242 USB4 host is found while Windows has not yet
+  listed its router, and the Thunderbolt and USB4 box is ticked.
+- Settings... on the Components page holds the USB settings. The
+  Thunderbolt and USB4 page has its own, for Thunderbolt / USB4 and
+  Stor98.
+- The Progress page's bar moves with the work done.
+- The installer's texts reworded: every page, Help, the console and its
+  readme. Stor98's Advanced shows `StorMaxTransferKB` up to 2048 KiB on
+  98 SE and ME.
+- The USB Tree's Save Snapshot asks only for a folder, then says where
+  the files went.
+- 8, 8.1 and 10: the UAS disk driver is no longer installed.
+- Updating on 2000 to 7 updates UAS disks that are not plugged in;
+  on 98 SE and ME it no longer asks for the driver disk.
+- Setup's log lines carry the time.
+
+### Other drivers
+- usb-wdm-nonfree 1.2.0: TASCAM's US-122 audio and MIDI interface on 98
+  SE and ME.
+- usb-wdm-free 0.1.8: `uac2` pops far less under CPU load, never
+  turns a device's volume above 0 dB (`Uac2VolAboveZero`), and
+  names each device by its own product name.
 
 ## What `3.4.0.0` changes
 
@@ -1354,8 +1414,8 @@ key, a `DWORD` unless it says otherwise:
 Manager name ("Which controllers"). The install writes each value below
 at its default, only where it is missing, so a value you set survives an
 update: from `3.4.0.0` every one, `XhciCmTunnelBridge` as `auto`, on the
-systems that read it (`XhciCmNoIrqStart` and `XhciCmBridgeNumbering` on
-98 SE and ME alone, `XhciCmRingInterrupt` on 2000 to 10, `XhciCmBridgeReq`
+systems that read it (`XhciCmNoIrqStart`, `XhciCmBridgeNumbering` and,
+from `3.4.1.0`, `XhciCmAsm4242Handover` on 98 SE and ME alone, `XhciCmRingInterrupt` on 2000 to 10, `XhciCmBridgeReq`
 on 2000, XP and XP x64). `docs/using/tuning.md` has every value. From `3.1.0.0` each is also read from
 `HKLM\System\CurrentControlSet\Services\USB` first, where it wins when it
 is there ("Registry settings", "One value for every controller").
@@ -1372,6 +1432,7 @@ Restart Windows, or disable and enable the controller, after a change.
 | `XhciCmPreOsCleanup` | `0` | USB4 connection manager, tunnels found at its start: `0` keeps every tunnel it can verify and holds a port it cannot; `1` cleans what it cannot verify; `2` cleans everything |
 | `XhciCmNoIrqStart` | `1` | Windows 98 SE and ME: `1` starts an NVMe drive behind a tunnel whose interrupt cannot be routed with no interrupt, for the bundled Stor98 (0.4.0.0 or later; this package's is 3.1.0.0, installed by its installer) to poll; `0` leaves it at its problem code. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
 | `XhciCmBridgeNumbering` | `1` | Windows 98 SE and ME: `1` sets up the PCI bridges a device brings up behind a tunnel after Windows has started (bus numbers, memory windows, interrupt lines, as the BIOS would) (a USB4 NVMe enclosure's switch, which otherwise shows Code 29 until a restart); `0` leaves them as they come up. `0` to `1`. Ignored on 2000 to 7. Written by the install on 98 SE and ME from `3.3.0.0` |
+| `XhciCmAsm4242Handover` | `1` | From `3.4.1.0`: Windows 98 SE and ME only. On an ASMedia ASM4242 USB4 host whose firmware hands USB4 over only through ACPI `_OSC`, which these systems never run, `1` sends that handover when the driver starts, once a boot, if the driver knows the firmware. Without it such a host never answers and nothing behind it works. `0` never sends it. `0` to `1`. Written by the install on 98 SE and ME |
 | `XhciCmBridgeReq` | `1` | From `3.4.0.0`: Windows 2000, XP and XP x64 only. `1` rewrites the resource lists of the PCI bridges a dock or an enclosure with a switch brings, below an active tunnel port, so every port behind it is placed, and has the safe-removal mark service keep the filter on those bridges; `0` neither; `2` computes and records each list without changing it. Any other value is refused and `1` stands. The installer offers it under the Thunderbolt page's "Advanced..." on those systems, and `INSTALL /set XhciCmBridgeReq=0..2` sets it there. What it did is recorded in `XhciCmBridgeReqDiag`, a binary value in the controller's hardware key |
 | `XhciCmUsb4V2` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` runs a USB4 version 2 router (Barlow Ridge, say) as version 2, Gen 4 links included; `0` runs every router as version 1, as `3.3.0.0` did |
 | `XhciCmGen4LinkRecovery` | `1` | From `3.4.0.0`, USB4 connection manager: leave it at `1`. `1` lets the Gen 4 link between the controller and the device plugged into it recover from a link error in place, the devices behind it kept; `0` takes such an error as an unplug and a fresh plug, as before |
@@ -2991,7 +3052,7 @@ Disk, and point it at the package directory.
 
 ### NVMe drives behind Thunderbolt or USB4 (new in `3.0.0.0`)
 
-This download bundles Stor98 `3.4.0.0`.
+This download bundles Stor98 `3.4.1.0`.
 
 <!-- The cut replaces the line above with "This download bundles Stor98
 `<version>`." or "This download bundles no Stor98."
@@ -5344,6 +5405,11 @@ drivers are not in this download. Get them from the
 ASIX and Davicom ship with their drivers (`WdfCoInstaller01007.dll` and
 `WdfCoInstaller01009.dll`, in several folders),
 unmodified, with no licence to redistribute them established either.
+From `3.4.1.0` download 3 carries usb-wdm-nonfree `v1.2.0`, which adds
+an audio driver: TASCAM's US-122 driver 3.24 for 98 SE and ME
+(`USBDRV\NONFREE\audio\us122\w98se-me\`), which TASCAM no longer
+offers. It carries no licence of its own, and no licence to
+redistribute it has been established (`legal-provenance.md` section 5).
 The installer offers each set the download carries on a page of its
 own after Components, unticked: "Free USB drivers" and "Non-free USB
 drivers" from `3.3.0.0` (one page, "Other USB drivers", before;

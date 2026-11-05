@@ -28,7 +28,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/01/2026,3.4.0.0
+DriverVer=11/05/2026,3.4.1.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhci98.cat
 
@@ -177,6 +177,7 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
 ; device kept across a resume's re-initialization (task 45.23) and across
 ; its SuperSpeed link's recovery (task 45.41): on is each one's default

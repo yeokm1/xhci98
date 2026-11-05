@@ -523,7 +523,7 @@ bullet):
   and no other unit counted, and where it would not meet them
   (`inst_eject_remind`) the question is preceded by "Before you eject
   it, make sure none of its other devices (USB ports, card readers,
-  network) is in use; stop them in Windows first."
+  network) are in use; stop them in Windows first."
 
 The exit code is 0 in all three: the asked eject succeeded. The legs read
 the first; the others have no vehicle here (section 12). If the ejected
@@ -1009,3 +1009,19 @@ and have no live vehicle here; they are owed to the bench.
 | `xhciinst\README.TXT`, `INSTALL.BAT`, `README.md`, `docs\using\release-notes.md` | the lines of section 9 |
 | `docs\contributing\legal-provenance.md` section 4 | the two static export readings of sections 7.1 and 7.2 |
 | design records 21 (section 7.4) and 23 (sections 7.1, 7.4 and 8.1) | pointers here, and the exit-code exception |
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Windows 98 SE's and ME's `cfgmgr32.dll`: its exported names** (design record 24 section 7.1) - `WINDOWS\SYSTEM\CFGMGR32.DLL` of the project's 98 SE guest image (`vm\win98.img`; 4.10.2222, 45,056 bytes, dated 1999-04-23) and ME guest image (`vm\winme.img`; 4.90.3000, 40,960 bytes, dated 2000-06-08), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). Both export the same 179 names, among them `CM_Query_Remove_SubTree`, `CM_Remove_SubTree`, `CM_Reenumerate_DevNode`, `CM_Get_DevNode_Status`, `CM_Locate_DevNodeA`, `CM_Get_Child`, `CM_Get_Sibling` and `CM_Get_Device_IDA`; neither exports `CM_Request_Device_EjectA`. Names only; whether the routines work is the legs' runtime reading. The files are not tracked | design record 24 section 7.1; `xhciinst\xhciinst.c` |
+| A.2 | **Windows 2000's `cfgmgr32.dll` and `setupapi.dll`: where `CM_Request_Device_EjectA` is exported** (design record 24 section 7.2) - `WINNT\system32\cfgmgr32.dll` and `setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`), extracted with `7z e` and their PE export name tables read | static (the export table read; nothing executed). `setupapi.dll` exports `CM_Request_Device_EjectA` and its `W` and `_Ex` forms; `cfgmgr32.dll` does not, and both export `CM_Query_And_Remove_SubTreeA`, `CM_Query_Remove_SubTree` and `CM_Remove_SubTree`. Names only; the files are not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c` |
+| A.3 | **Windows 2000's `CM_Query_And_Remove_SubTreeA` is a stub, and its `W` form accepts `CM_REMOVE_UI_NOT_OK` and `CM_REMOVE_NO_RESTART`** (design record 24 section 7.2, the fallback for a unit not marked removable) - `WINNT\system32\setupapi.dll` of the project's 2000 SP4 guest image (`vm\win2k-xonly.img`; 570,128 bytes, dated 2003-06-20, SHA-256 `1d0a6e9d062a51e71eaae93d776746823834f5c518096d340f2b332fc059a23d`, image base `0x77880000`), extracted with `7z e`. The export `CM_Query_And_Remove_SubTreeA` (RVA `0x53A1A`) pushes its five arguments and a zero machine handle and calls `CM_Query_And_Remove_SubTree_ExA` (RVA `0x584C7`), whose whole body is `push 34h` / `pop eax` / `ret 18h`: it answers `CR_CALL_NOT_IMPLEMENTED` (0x34) and does nothing else. `CM_Query_And_Remove_SubTreeW` (RVA `0x540F7`) calls `CM_Query_And_Remove_SubTree_ExW` (RVA `0x538C0`), a real body whose flag test (`test dword ptr [ebp+18h],0FFFFFFFCh` at VA `0x778D3906`) refuses any flag above bit 1 with `CR_INVALID_FLAG` (4), so `CM_REMOVE_UI_NOT_OK` (1) and `CM_REMOVE_NO_RESTART` (2) pass it. `cfgmgr32.dll` (17,168 bytes) forwards all four names to `setupapi.dll` | static (MSVC 6.0 `dumpbin /exports` and `/disasm` of a copy in a scratch directory; nothing executed; 2026-10-16, development host A). The file is not tracked | design record 24 section 7.2; `xhciinst\xhciinst.c`; `xhcitr\xhcitr.c` |

@@ -39,6 +39,11 @@ typedef struct _INST_ENV {
     int AnyXhci;            /* a present xHCI controller (PCI\CC_0C0330) */
     int PswController;      /* one of them passes XhciPswGate           */
     int CmNhi;              /* a present device xhcicm.inf matches      */
+    int AsmHandover;        /* 98 SE and ME: 0 no ASMedia ASM4242 host
+                               interface, 1 one whose firmware no record
+                               of this start says is a known build, 2
+                               every one a known build (record 32
+                               section 12.8.11)                         */
 } INST_ENV;
 
 /* ---- strings ---------------------------------------------------------------- */
@@ -497,6 +502,8 @@ const char *inst_hvci_text(int state, int cmInRun);
  * or the mark service's own Parameters key (its Restart). */
 #define INST_LOC_MW         0
 #define INST_LOC_MARK       1
+#define INST_LOC_PFW        2   /* XHCIPFW.VXD's static-VxD key (record 32
+                                   section 12.10: XhciPfwNhiLine) */
 #define INST_MK_PARAMS_KEY  "SYSTEM\\CurrentControlSet\\Services\\xhcimark\\Parameters"
 
 /* The values a choice list names (0 to 4: XhciFastPollFsLs's 4). */
@@ -557,6 +564,20 @@ int inst_value_find(const char *name);
 /* 1 when the question is shown on this system with this hardware (never
  * for a value whose Asked mask is 0: /set only). */
 int inst_value_applies(int index, const INST_ENV *env);
+
+/* 1 when a question asked only on a condition is held back here, its row
+ * behind Advanced: XhciCmAsm4242Structural, asked on 98 SE and ME only
+ * with an ASM4242 host whose firmware is not known to be a known build
+ * (env->AsmHandover 1; record 32 section 12.8.11). */
+int inst_value_held(int index, const INST_ENV *env);
+
+/* Record 32 section 12.8.11: 1 when an ASM4242 host's status record (`n`
+ * bytes of XhciCmStatus, `started` its devnode started with no problem)
+ * says this start knows the firmware as a known build: the record checks,
+ * it is of this boot (inst_st_fresh against now and the tick count), and
+ * its flags' tier (bits 18:16) is 2. */
+int inst_asm_ho_known(const unsigned char *rec, size_t n, int started,
+                      INST_U32 nowLo, INST_U32 nowHi, INST_U32 tickMs);
 
 /* The values offered when asked on this system (the Asked mask narrowed:
  * XhciInterruptMode 3 on Vista and 7 only). */
@@ -876,12 +897,22 @@ int inst_exit_code(int refused, int failed, int restart, int steps);
 #define INST_FINAL_RESTART      1
 #define INST_FINAL_UNFINISHED   2
 int inst_final(int changed, int list, int code, int *line);
+/* A run of the xHCI98 tools alone (task 46.22, record 26 section 5.3.7):
+ * a change and a run that finished with no restart flagged (0) - "Done. No
+ * restart is needed.", 0; otherwise inst_final's. */
+#define INST_FINAL_DONE         3
+int inst_final_tools(int changed, int list, int code, int *line);
 const char *inst_final_text(int line);
 
 /* The same line where the run asks for a shutdown and a fresh start
  * instead of a restart (98 SE and ME after a Stor98 update, record 26
  * section 5.9); the exit codes are unchanged. */
 const char *inst_final_text_cold(int line, int shutdown);
+
+/* The window's Finish line: the unfinished one where no Steps page was
+ * shown (stepsShown 0) points at the log; every other line as
+ * inst_final_text_cold. */
+const char *inst_final_text_shown(int line, int shutdown, int stepsShown);
 
 /* ---- installing beside Windows' own installer (record 23 section 5.8) ------------ */
 
@@ -1246,6 +1277,24 @@ int inst_os_kind(int nt, INST_U32 major, INST_U32 minor, INST_U32 build);
 const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
                          INST_U32 build);
 
+/* The Welcome page's system line, "Windows: <name> (<major>.<minor>.<build>
+ * <csd>), <arch>": csd (szCSDVersion) with its spaces trimmed, and left out
+ * when blank (98 SE's " A " reads "(4.10.2222 A)"). */
+void inst_os_line(char *out, size_t cap, const char *name, INST_U32 major,
+                  INST_U32 minor, INST_U32 build, const char *csd,
+                  const char *arch);
+
+/* Record 26 section 5.3.9 (2026-11-04): on Windows 8, 8.1 and 10 the USB
+ * drivers are opt-in (/usb, the window's box), but over an install whose
+ * controllers xhci98 already runs (installed: a devnode's service is
+ * xhci98) they are in the run as on every other system, so an update
+ * updates them, /cmonly leaving them out: the usbOpt inst_usb_decide
+ * takes. */
+int inst_usb_opt(int osKind, int usbOpt, int cmOnly, int installed);
+/* 1 when a devnode is a present xHCI controller (PCI\CC_0C0330) whose
+ * service is xhci98: the "installed" inst_usb_opt takes. A phantom
+ * devnode or a hub never counts (w46-inst5 merge review, 2026-11-04). */
+int inst_usb_runs_ctrl(const char *service, int present, int controller);
 /* The USB drivers (xhci98.sys, xhciuas.sys; record 23 section 4.5): 1 in
  * the run, 0 left out, -1 refused (why in *refusal). *offered: the window's
  * box can be unticked. */
@@ -1260,6 +1309,7 @@ int inst_usb_decide(int osKind, int nt, int haveCm, int cmOnly, int usbOpt,
 #define INST_CW_USB8        0x04UL  /* 8, 8.1: the USB drivers           */
 #define INST_CW_NOCM8       0x10UL  /* 8, 8.1: no connection manager     */
 #define INST_CW_INTELTB     0x20UL  /* over Intel's Thunderbolt driver   */
+#define INST_CW_TOOLS9X     0x40UL  /* 98 SE, ME: the tools alone (46.22)*/
 /* tb: the Thunderbolt component ticked; intel: Intel's Thunderbolt driver
  * runs a controller (record 23 section 8.5.1). */
 INST_U32 inst_comp_warnings(int is98se, int is9x, int is8, int haveCm,
@@ -1282,8 +1332,29 @@ size_t inst_wrap_lines(const char *lead, const char *text, size_t width,
  * installed and an xhciuas already installed stays as it is. */
 int inst_uas_decide(int usbInclude, int noUas);
 
+/* 1 when this kind of system takes xhciuas.sys at all (owner, 2026-11-04;
+ * design record 13 section 6.13.10): 98 SE, ME and 2000 to 7. On 8, 8.1
+ * and 10 (INST_OS_CMONLY) Windows' own UASPStor runs UAS disks through
+ * the bus, so xhciuas.inf is neither staged nor installed and an xhciuas
+ * an earlier release bound there is neither updated nor removed: the
+ * UAS driver is out of the run, its box unticked and greyed. */
+int inst_uas_here(int osKind);
+
+/* 2000 to 7 (owner, 2026-11-04): a devnode not present now that runs
+ * xhciuas is updated too, by model selection from the staged INF, since
+ * an update by hardware id reaches present devices alone. 1 when one is
+ * owed: NT, a system that takes xhciuas, the UAS driver in the run and
+ * its group's verdict OK, the devnode not present, its service xhciuas
+ * and its DriverVersion read - older than pkg, or with force equal or
+ * newer (as inst_action_runs). */
+int inst_uas_absent_runs(int nt, int osKind, int uasInRun, int groupOk,
+                         int present, const char *service, int versionState,
+                         const INST_U32 version[4], const INST_U32 pkg[4],
+                         int force);
+
 /* Windows 8 and 8.1 (task 43.29, owner 2026-10-22; record 26 section
- * 5.3.1 case 3a): xhciuas.inf is staged but never forced, so Windows' own
+ * 5.3.1 case 3a; out of use since 3.4.1.0, where inst_uas_here keeps
+ * xhciuas.inf out of the run on that kind): xhciuas.inf was staged but never forced, so Windows' own
  * UAS driver stays the default unless the test certificate is trusted
  * (then Windows may rank xhciuas above it). A UAS disk with no driver is left for
  * Windows (INST_ACT_WINDOWS); one on another driver stays foreign; one
@@ -1398,10 +1469,26 @@ int inst_pkg_foreign(const char *rel);
  * alone), which includes the component unasked - unless intel: Intel's
  * Thunderbolt driver runs a controller (inst_tb_intel), when it is asked
  * with no the default (record 23 section 8.5.1; owner, 2026-10-25: ask,
- * the default leave). */
+ * the default leave). installed (record 26 section 5.3.8, task 46.22;
+ * owner, 2026-11-04): the Thunderbolt part is installed now (xhcicm a
+ * devnode's service or upper filter) and Secure Boot would not refuse it:
+ * the default is yes, /yes and /list included, but over Intel's driver. */
 int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
-                   int cmAlone, int intel, int optList, int *ask,
-                   int *defaultYes);
+                   int cmAlone, int intel, int optList, int installed,
+                   int *ask, int *defaultYes);
+/* nhiPresent's third value (record 26 section 5.3.6, task 46.5; owner,
+ * 2026-11-01): no device xhcicm.inf matches is present, but a USB4 host's
+ * own switch port is (inst_tb_switch_port), on 98 SE and ME: its router
+ * not listed. Enter and /yes then give yes, and the window's box opens
+ * ticked; /thunderbolt, the connection manager alone and Intel's driver
+ * are as above. */
+#define INST_TB_ROUTER_UNLISTED 2
+/* 1 when vendorDevice (inst_pci_vendev's form) is a port of the ASMedia
+ * ASM4242's own PCIe switch, its upstream port 1B21:2421 or its
+ * downstream port 1B21:2423 (record 22 section 18.1): a USB4 host is in
+ * the machine whether or not its router is listed. No other family's id
+ * is taken (record 26 section 5.3.6). */
+int inst_tb_switch_port(INST_U32 vendorDevice);
 /* The window's Thunderbolt box's own state (record 26 section 5.3, task
  * 44.79): the one it opens with when the USB drivers are ticked, and the one
  * it takes back when they are ticked again after the connection manager
@@ -1409,7 +1496,44 @@ int inst_tb_decide(int haveCm, int nhiPresent, int optYes, int optThunderbolt,
  * /yes: unticked, a controller found or not, but by /thunderbolt - never
  * the connection-manager-alone run's unasked yes. */
 int inst_tb_box_default(int haveCm, int nhiPresent, int optThunderbolt,
-                        int intel);
+                        int intel, int installed);
+/* Record 18 section 15.15: the helper xhcihlpr, which xhci98.inf and
+ * xhcicm.inf both install on 32-bit NT, is removed by the uninstall only
+ * when both xhci98's and xhcicm's services are gone (removed, marked for
+ * deletion or absent). */
+int inst_hlpr_removable(int xhciGone, int cmGone);
+/* inst_tb_decide's cmAlone for a run (task 46.22): 0 with the USB drivers
+ * in the run; 1 out of it, the component in unasked (2000 to 7, 98 SE,
+ * ME, /cmonly or not); INST_TB_ALONE_ASK out of it on 8, 8.1 and 10, with
+ * /cmonly too since the owner's decision of 2026-11-04 (record 26 section
+ * 5.3.9): asked, Enter (and /yes, /list) for yes where an NHI or a known
+ * switch or tunnel port is found and for no where neither is, so N leaves
+ * a run of the xHCI98 tools alone. Over Intel's driver either is asked
+ * with no the default, as before. optCmOnly no longer changes the answer;
+ * it is kept for the callers. */
+#define INST_TB_ALONE_ASK 2
+int inst_tb_alone(int cmOnlySystem, int usbIn, int optCmOnly);
+/* nhiPresent's fourth value (record 26 section 5.3.9; owner, 2026-11-04):
+ * no device xhcicm.inf matches is present, but a switch or tunnel port of
+ * a known Thunderbolt or USB4 host is (inst_tb_port_known), on any
+ * system. */
+#define INST_TB_PORT_FOUND 3
+/* 1 when a devnode's hardware ids hold a tunnel-port filter id of a real
+ * host (instTbPortIds): QEMU's own bridges (PCI\VEN_1B36), which the
+ * filter binds for the emulator alone, are not such a port. */
+int inst_tb_port_known(const char *hw, size_t hwBytes);
+/* A run with no driver in it, on every system (task 46.22; owner,
+ * 2026-11-03 and 2026-11-04): neither the USB drivers nor the Thunderbolt
+ * support (and so neither Stor98 nor the network driver), no other driver
+ * set ticked (otherIn), and on 98 SE not the USB storage drivers (storIn).
+ * Its confirmation and the Summary's head are inst_tools_only_text(). */
+int inst_tools_only(int usbIn, int tbIn, int otherIn, int storIn);
+const char *inst_tools_only_text(void);
+/* The line under the USB drivers' box: INST_PT_DRIVERS_T8 on 8, 8.1 and
+ * 10 (notHere), INST_PT_DRIVERS_T ticked, INST_PT_DRIVERS_OFF unticked
+ * with the Thunderbolt box ticked, INST_PT_DRIVERS_TOOLS with both
+ * unticked (task 46.22). */
+int inst_drivers_line(int notHere, int usb, int tb);
 /* 1 when a controller's service is Intel's Thunderbolt driver's, nhi (its
  * older package and its DCH driver alike; record 21 section 3.6). */
 int inst_tb_intel(const char *service);
@@ -1598,6 +1722,16 @@ int inst_di_jobfile(char *out, size_t cap, int job, const char *result,
 int inst_di_jobfile_ex(char *out, size_t cap, int job, const char *result,
                        unsigned long hwnd, const char *devId, const char *inf,
                        int force, int quiet, int nocopy);
+
+/* 1 when a 98 SE or ME install job passes nocopy: a later controller of an
+ * INF a controller's job of this run copied (task 45.38), or a device of
+ * an INF whose driver file this installer has put in SYSTEM32\DRIVERS
+ * itself before the jobs, or queued for the next start (placed: the UAS
+ * disk's xhciuas.sys, the NHI's xhcicm.sys; task 46.24). Any job's copy
+ * after the first in a run asks for "xhci98 xHCI Host Controller Disk" at
+ * the Windows source, so a copy the placement makes is never asked of the
+ * engine again (record 27 section 6). */
+int inst_di_nocopy(int controller, int controllerCopied, int placed);
 
 /* The verdicts (record 27 section 5.4 and section 9), and NONE: the
  * helper did not finish (no END line, a count that differs, another
@@ -1795,6 +1929,17 @@ const char *inst_window_refusal(const INST_OPTS *opts, int argc, char **argv);
 #define INST_PT_APPR_NEW        56
 #define INST_PT_TBNET           57
 #define INST_PT_TBNET_T         58
+/* Task 46.5 (record 26 section 5.3.6): a USB4 host whose router 98 SE or ME
+ * has not listed, found by its switch ports. */
+#define INST_PT_TB_PORTS        59
+#define INST_PT_TB_LATER_ROUTER 60
+/* Task 46.22: the USB drivers' line with both boxes unticked, and Stor98's
+ * line on Windows 10 (inst_s98_line). */
+#define INST_PT_DRIVERS_TOOLS   61
+#define INST_PT_S98_T10         62
+/* Record 32 section 12.8.15.12: the board's box at the Thunderbolt and
+ * USB4 page's Next, its seconds left after it (2000, 32-bit XP). */
+#define INST_PT_BOARD_WAIT      63
 
 typedef struct _INST_PAGE_TEXT {
     int Id;
@@ -1807,6 +1952,64 @@ extern const INST_PAGE_TEXT instPageTexts[];
 extern const int instPageTextCount;
 
 const char *inst_page_text(int id);
+
+/* ---- The Progress page's bar (record 26 section 5.8.1, task 46.8) -------- */
+
+/* One pool of items weighted by their kind, in the engine's own order; the
+ * space left (in millionths) shared by the weight to come plus a reserve
+ * that grows with each item found late. */
+#define INST_PROG_SPACE         1000000UL
+#define INST_PROG_RESERVE       6UL
+#define INST_PROG_W_DEVICE      6UL
+#define INST_PROG_W_WAIT        4UL
+#define INST_PROG_W_COPY        4UL
+#define INST_PROG_W_FILE        2UL
+#define INST_PROG_W_SET         3UL
+#define INST_PROG_W_FINISH      3UL     /* settings, tools, record */
+#define INST_PROG_W_SMALL       1UL     /* an INF, a devnode, a removal */
+#define INST_PROG_CREEP_MS      30000UL /* elapsed / (elapsed + 30 s)    */
+
+typedef struct _INST_PROG {
+    INST_U32 Pos;           /* millionths, never back                    */
+    INST_U32 WeightLeft;    /* the items known and not ended            */
+    INST_U32 Reserve;       /* INST_PROG_RESERVE plus the late weight   */
+    int Open;               /* an item running                          */
+    INST_U32 OpenShare;     /* its share, fixed at its begin            */
+    INST_U32 OpenStart;     /* the clock at its begin, ms               */
+    INST_U32 OpenBound;     /* its wait's bound, 0 none                 */
+    INST_U32 OpenBase;      /* crept by its earlier waits               */
+    INST_U32 OpenW;         /* its weight                               */
+    INST_U32 WeightDone;    /* the weight of the items ended (draft 67) */
+    int Done;               /* the run ended                            */
+} INST_PROG;
+
+void inst_prog_init(INST_PROG *p);
+/* An item known from the plan (in WeightLeft), or one found late (in
+ * WeightLeft and the reserve). */
+void inst_prog_plan(INST_PROG *p, INST_U32 w);
+void inst_prog_add(INST_PROG *p, INST_U32 w);
+/* A planned item no longer needed: out of WeightLeft, no movement. */
+void inst_prog_drop(INST_PROG *p, INST_U32 w);
+/* An item, already planned or added, begins at now (ms) and ends; its
+ * share is space_left * w / (WeightLeft + the reserve now,
+ * inst_prog_reserve_milli). */
+void inst_prog_begin(INST_PROG *p, INST_U32 w, INST_U32 now);
+/* The run's last item (the run's end) begins: as inst_prog_begin, its
+ * share all the space left, the reserve with it. */
+void inst_prog_last(INST_PROG *p, INST_U32 w, INST_U32 now);
+/* The reserve a share counts now, in thousandths of a weight: the reserve
+ * by the square root of WeightLeft / (WeightLeft + WeightDone), at most
+ * twice WeightLeft (record 26 section 5.8.1, draft 67). */
+INST_U32 inst_prog_reserve_milli(const INST_PROG *p);
+/* The open item's current wait (0: no bound); a change keeps what was
+ * crept and creeps the new wait over the rest of the item's 0.9. */
+void inst_prog_bound(INST_PROG *p, INST_U32 boundMs, INST_U32 now);
+void inst_prog_end(INST_PROG *p, INST_U32 w);
+void inst_prog_done(INST_PROG *p);
+/* The bar's position in thousandths at now: the open item's creep (by its
+ * bound, else elapsed / (elapsed + 30 s), at most 0.9 of its share)
+ * included; at most 999 until done, 1000 then. */
+INST_U32 inst_prog_pos(const INST_PROG *p, INST_U32 now);
 
 /* ---- Help on every page (record 26 section 5.10, task 45.66) --------------- */
 
@@ -1892,7 +2095,7 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
  * (test\stor98-settings.txt, a copy make-release.ps1 compares with the
  * bundled readme), so a Stor98 release that renames or retypes a value
  * fails the build rather than the user. */
-#define INST_S98_TABLE_VERSION  "3.3.0.0"
+#define INST_S98_TABLE_VERSION  "3.4.1.0"
 
 #define INST_S98_WORDS      0   /* a word of a list (StorWriteThrough)       */
 #define INST_S98_NUMBER     1   /* a decimal number in a range               */
@@ -1906,7 +2109,8 @@ INST_U32 inst_page_rows(INST_U32 heightDlu);
 #define INST_S98_GONE           6
 #define INST_S98_IDLE           7
 #define INST_S98_HOLD9X         8   /* 98 SE and ME only (3.3.0.0)          */
-#define INST_S98_COUNT          9
+#define INST_S98_INTWATCH       9   /* the missed-interrupt watchdog (3.4.1.0) */
+#define INST_S98_COUNT          10
 
 #define INST_S98_WORDS_MAX      4
 
@@ -1948,6 +2152,41 @@ const char *inst_s98_only(int i);
  * for the system ("cacheoff on ME, off elsewhere"); me: Windows ME. */
 const char *inst_s98_default(int i, int nt);
 void inst_s98_default_text(int i, int nt, int me, char *out, size_t cap);
+
+/* The top of row i's range on this system, the one inst_s98_check takes:
+ * the transfer size is bounded by its own default, which differs. */
+INST_U32 inst_s98_hi(int i, int nt);
+/* The Advanced dialog's "Allowed:" range of a number value i with its top
+ * hi: "<lo> to <hi>[ <unit>]", then ", in steps of <n>" or ", or 0:
+ * <what>"; no space where the value has no unit. */
+void inst_s98_range(int i, INST_U32 hi, char *out, size_t cap);
+
+/* A driver image 98 SE and ME keep resident for the boot (xhciuas.sys and
+ * xhcicm.sys register no DriverUnload there): putting the package's file
+ * over one already in SYSTEM32\DRIVERS that differs from it needs a
+ * restart before the new bytes run, whatever the device installs (record
+ * 26 section 5.0, draft 68). 1 when the run needs it. */
+int inst_resident_restart(int nt, int exists, int same);
+/* How the file is put in place: a new file INST_RES_PUT (copied now), one
+ * over a file in place INST_RES_QUEUE (WININIT.INI replaces it at the next
+ * start), else INST_RES_FAILED. */
+#define INST_RES_FAILED 0
+#define INST_RES_PUT    1
+#define INST_RES_QUEUE  2
+int inst_resident_way(int exists, int putOk, int queueOk);
+/* A queued replacement found beside the file (record 26 section 5.0,
+ * draft 69), from whether <name>.IN$ exists, whether it and the file in
+ * place hold the package's bytes, its WININIT.INI line (INST_VE_*) and
+ * whether the run is the uninstall: INST_RQ_NONE nothing queued,
+ * INST_RQ_KEEP this package's copy queued (its line written again),
+ * INST_RQ_BACK taken back (the line, then the copy), INST_RQ_HOLD a line
+ * of another's or one that cannot be read: nothing touched. */
+#define INST_RQ_NONE    0
+#define INST_RQ_KEEP    1
+#define INST_RQ_BACK    2
+#define INST_RQ_HOLD    3
+int inst_resident_queued(int tmpExists, int tmpIsPkg, int dstIsPkg,
+                         int entry, int uninstall);
 
 /* A value typed or chosen for row i, checked (the installer offers only
  * what the readme admits, rather than leaving the driver to clamp or
@@ -2042,6 +2281,10 @@ int inst_s98_sys_index(int nt, INST_U32 major, INST_U32 minor);
 /* Stor98's box while the Thunderbolt box is ticked, and the console's
  * Enter: 1 ticked. A system without a line takes 1. */
 int inst_s98_box_default(int sys);
+/* The text id of the line under Stor98's box for system sys
+ * (inst_s98_sys_index): INST_PT_S98_T10 on Windows 10, where Windows has
+ * its own NVMe driver; INST_PT_S98_T elsewhere (task 46.22). */
+int inst_s98_line(int sys);
 
 /* Record 23 D20 (a): the 64-bit package's connection manager without its
  * catalog. arch INST_ARCH_*, haveCm the three files there, cat xhcicm.cat
@@ -2260,6 +2503,34 @@ int inst_pfw_mode(int sysKind, int uninstall, int havePfw, int tbTicked,
 /* 1 when a devnode's hardware or compatible ids (multi-strings of the
  * byte lengths given) name a PCI root bus, *PNP0A03 or *PNP0A08: the
  * devnodes XHCIPFW.SYS filters on 8 and 8.1. */
+/* Record 32 sections 12.8.15.7 and 12.8.15.12 (task 46.12 on NT): 1 when a
+ * devnode's hardware ids (a REG_MULTI_SZ of hwBytes) name the ASMedia
+ * ASM4242's xHCI, PCI\VEN_1B21&DEV_2426 alone or followed by "&...":
+ * the devnode whose UpperFilters takes xhcicm, whatever driver owns it. */
+int inst_cm_xhci_target(const char *hw, size_t hwBytes);
+
+/* Record 32 section 12.8.15.12 (task 46.12 on NT): the ASM4242 board's
+ * class (INST_BOARD_*, inst_board.h) in words. inst_board_line: the
+ * plan's line under the NHI, after a four-space indent; inst_board_note:
+ * the sentence the XhciCmAsm4242Reads row's note ends with. "" for
+ * INST_BOARD_NONE. Drafts for the owner (task 46.18's rule). */
+const char *inst_board_line(int cls);
+const char *inst_board_note(int cls);
+
+/* Record 32 section 12.8.15.12: what the run's step does to the ASM4242
+ * xHCI's filter entry. None on 98 SE and ME, on Windows 11 and in a run
+ * of the tools alone; with the Thunderbolt support not in place after the
+ * run (inPlace 0), taken out; in place but not admitted by this run (the
+ * support not in it, or its checks not passed), left; else added. */
+#define INST_CMX_NONE       0
+#define INST_CMX_ADD        1
+#define INST_CMX_REMOVE     2
+#define INST_CMX_LEAVE      3
+int inst_cm_xhci_mode(int nt, int w11, int toolsOnly, int inPlace,
+                      int admitted);
+/* The head of the plan's list for INST_CMX_ADD or INST_CMX_REMOVE ("" for
+ * another): a draft for the owner. */
+const char *inst_cm_xhci_head(int mode);
 int inst_pfw_rootbus(const char *hw, size_t hwBytes, const char *compat,
                      size_t compatBytes);
 /* A device's BootConfig (REG_RESOURCE_LIST, as the registry holds it):
@@ -2521,8 +2792,8 @@ int inst_qc_build(const unsigned char *b, size_t n, INST_U32 member,
  * make-release.ps1 writes it for package-common.ps1's pins (the cut and
  * test-package.ps1 hold the two equal): the installer's record of what the
  * folder must hold. "" for a release with no such set. */
-#define INST_WDMFREE_SUMS       "BC2D0659340D4C23CE32886CF5BA265791AFBD98AA437B553B35B07E86F66101"
-#define INST_NONFREE_SUMS     "F85B52D1D1249B819FA8233DC5C5F974A06F604086E2019E3140F5E9D8C71866"
+#define INST_WDMFREE_SUMS       "4E23A5C34BFFF7E414B8FED6C1378B82C9124293544DB062A1C29277E39F2465"
+#define INST_NONFREE_SUMS     "FF7FE4C680034515212320A561D576C5DAFB270064F5689F100EB862D07F8780"
 /* The owner, 2026-10-23: NUSB 3.3's files and both sets under one folder,
  * in the download and in the install directory, every level 8.3. */
 #define INST_USBDRV_DIR         "USBDRV"
@@ -2577,6 +2848,10 @@ typedef struct _INST_STAGE_LINE {
     int Stage;              /* STAGE 1, COPY 0                            */
     INST_U32 Systems;       /* inst_sys_mask                              */
     char Inf[INST_OTHER_REL_CHARS];
+    int Models;             /* its INF is a device driver's: it names a
+                               [Manufacturer] (inst_inf_has_models); 1 as
+                               parsed, the reader clears it (record 26
+                               section 6.7.15)                           */
 } INST_STAGE_LINE;
 int inst_stage_parse(const char *line, const char *prefix,
                      INST_STAGE_LINE *out);
@@ -2648,6 +2923,30 @@ int inst_other_9x_keeps(int carried, int stageHere);
  * folders given, each "USBDRV\FREE\<class>\<package>\<folder>"). */
 void inst_other_copy_only_line(char *out, size_t cap, const char *desc,
                                const char *const *folders, int n);
+/* Record 26 section 6.7.15 (task 46.22): 1 when an INF's bytes - ASCII,
+ * UTF-8 or UTF-16 (little- or big-endian, with its byte-order mark) - hold
+ * a [Manufacturer] section header, the mark of a device driver's INF; 0
+ * for one with none (a co-installer or helper set up by hand,
+ * DefaultInstall alone). */
+int inst_inf_has_models(const unsigned char *buf, unsigned long len);
+/* Section 6.7.15: the folders (each a '/'-separated path under the set's
+ * folder, the INF's file name dropped) where package id is copied only on
+ * the system bit: 0 when the package has a STAGE line for it, else every
+ * distinct folder of its COPY lines for it whose INF names models, the
+ * first cap copied into folders, *more 1 when there were more. */
+int inst_other_copy_folders(const INST_STAGE_LINE *lines, int n,
+                            const char *id, INST_U32 bit,
+                            char (*folders)[INST_OTHER_REL_CHARS], int cap,
+                            int *more);
+/* Section 6.7.15's row (a draft for the owner): "<desc>: copied only on
+ * this Windows. Install it by hand from <A>[, <B>] [or <C>]." each folder
+ * under setDir (the install folder's copy of the set, "\" joined), and
+ * with more "..., <C> or another folder listed in <setDir>\STAGE.TXT.". */
+void inst_other_copy_row(char *out, size_t cap, const char *desc,
+                         const char *setDir,
+                         const char (*folders)[INST_OTHER_REL_CHARS], int n,
+                         int more);
+#define INST_OTHER_ROW_FOLDERS 3
 /* Section 6.7.13's words for the rest of a set's packages, in two parts
  * (part 0: what a tick does, or that nothing is copied; part 1: what an
  * unticked package is and where its folder is, "" when nothing is

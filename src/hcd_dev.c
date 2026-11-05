@@ -366,6 +366,22 @@ static PHCD_PIPE hcdEventStream(PHCD_PIPE pipe, ULONG trbPA)
     return id == 0 ? NULL : s->Pipe[id];
 }
 
+/* A halt on an endpoint with streams open that no stream's TD claims
+ * (xhci_tol.h, XhciTolStreamHaltDrain): the endpoint's, recovered on it -
+ * Halted with every stream's requests on it, which the thread completes as
+ * stalled and resets on both sides (hcd_cfg.c, hcdCfgCancelOne), never a
+ * cycle of the device. Controller lock held. */
+static VOID hcdStreamHaltDrain(PHCD_CONTROLLER hc, PHCD_PIPE endpoint,
+                               ULONG slotId, ULONG dci, ULONG cc)
+{
+    endpoint->Halted = 1;
+    endpoint->DrainPending = 1;
+    hc->CancelWork = 1;
+    XhciLogNoteLocked(&hc->Hc, "tol.stream.halt",
+                      (slotId << 16) | (dci << 8) | cc);
+    HcdThreadWake(hc);
+}
+
 /* Whether a Stopped event shows the pipe's head TD untouched: a bulk or
  * interrupt TD with nothing latched, the event at its first TRB, with that
  * TRB's whole length left or the length invalid. Controller lock held. */
@@ -532,6 +548,15 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
          * is. */
         ext->Tol.Stats.QueueForeign++;
         cc = XHCI_TRB_GET_COMPLETION(event->Status);
+        if (pipe->Streams != NULL &&
+            XhciTolStreamHaltDrain(cc,
+                                   XHCI_EVENT_IS_EVENT_DATA(event->Control))) {
+            /* On an endpoint with streams, a halt code here is the
+             * endpoint's to recover like any other no stream's TD claims
+             * (below); the pointer itself is never resolved. */
+            hcdStreamHaltDrain(hc, pipe, slotId, dci, cc);
+            return 0;
+        }
         reset = XhciXferCodeInfo(cc, &code) == XHCI_XFER_OK;
         /* 35-T.3/4: Foreign by pointer, so a halt code here is a halt with
          * no TD on the open pipe the slot and DCI name (record 17 section
@@ -547,19 +572,17 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
         pipe = XHCI_EVENT_IS_EVENT_DATA(event->Control)
                    ? NULL
                    : hcdEventStream(pipe, event->Param0);
-        if (pipe == NULL && !XHCI_EVENT_IS_EVENT_DATA(event->Control) &&
-            event->Param0 == 0 && event->Param1 == 0 &&
-            XHCI_TRB_GET_COMPLETION(event->Status) == XHCI_CC_STALL) {
+        if (pipe == NULL &&
+            XhciTolStreamHaltDrain(XHCI_TRB_GET_COMPLETION(event->Status),
+                                   XHCI_EVENT_IS_EVENT_DATA(event->Control))) {
             /* A STALL in a Prime Pipe transaction: no TD was running, so
              * the event names no TRB (xHCI 4.12), yet the endpoint is
-             * Halted with every stream's requests on it. The endpoint's,
-             * not a stream's: the thread resets it and completes what is
-             * on it as stalled (hcd_cfg.c, hcdCfgCancelOne). A nonzero
-             * pointer no stream ring holds stays unclaimed below. */
-            endpoint->Halted = 1;
-            endpoint->DrainPending = 1;
-            hc->CancelWork = 1;
-            HcdThreadWake(hc);
+             * Halted with every stream's requests on it; or any halt code
+             * whose pointer no stream ring holds. The endpoint's, not a
+             * stream's: the thread resets it and completes what is on it
+             * as stalled (hcd_cfg.c, hcdCfgCancelOne). */
+            hcdStreamHaltDrain(hc, endpoint, slotId, dci,
+                               XHCI_TRB_GET_COMPLETION(event->Status));
             return 0;
         }
     }
@@ -617,7 +640,12 @@ ULONG XhciSlotTransferEvent(PXHCI_EXTENSION ext, const XHCI_TRB *event)
     if (result.NeedsRecovery && !result.RefusedRetire) {
         ext->Tol.Stats.QueueHalts++;
     }
-    if (result.Refused || result.Unattributed) {
+    if (endpoint != NULL && !result.Refused && result.Unattributed &&
+        XhciTolStreamHaltDrain(result.Code, 0)) {
+        /* A halt on a stream's ring inside none of its TDs (the user
+         * report in xhci_tol.h): the endpoint's recovery, not a cycle. */
+        hcdStreamHaltDrain(hc, endpoint, slotId, dci, result.Code);
+    } else if (result.Refused || result.Unattributed) {
         hcdTolCycleEvent(hc, slotId, dci, result.Code, !result.Refused,
                          result.Unattributed, 0, 1);
     }

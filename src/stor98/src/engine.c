@@ -146,6 +146,20 @@ static BOOLEAN EngCallerCopy(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BL
         return FALSE;
     }
 #endif
+#ifdef STOR98_TEST_VMMPROBE
+    // Test only: a copy at interrupt or timer time to or from memory
+    // outside the system arena.
+    if (kind == SG9X_SG) {
+        ULONG off = Offset, lin, run;
+
+        while (off < Offset + Bytes && Sg9xResolve(sgd, shift, off, &lin, &run)) {
+            VpCopy(lin, run < Offset + Bytes - off ? run : Offset + Bytes - off, ToCaller);
+            off += run;
+        }
+    } else if (kind == SG9X_LINEAR) {
+        VpCopy((ULONG)(ULONG_PTR)Srb->DataBuffer + Offset, Bytes, ToCaller);
+    }
+#endif
     if (kind == SG9X_SG) {
         ok = Sg9xCopy(sgd, shift, Offset, Bounce, Bytes, ToCaller);
     } else if (kind != SG9X_LINEAR) {
@@ -1515,6 +1529,18 @@ VOID EngPfSrbIn(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
         ULONG kind, mx, sg, dmd, fl;
 
         kind = Sg9xClassify(Srb, Srb->DataBuffer, &sgd, &shift);
+#ifdef STOR98_TEST_VMMPROBE
+        // Test only: the arena of the buffer and of each fragment.
+        VpArena(0, (ULONG)(ULONG_PTR)Srb->DataBuffer, Srb->DataTransferLength, Sg9xIorFunc(Srb), Srb->Cdb[0]);
+        if (kind == SG9X_SG) {
+            ULONG off = 0, lin, run;
+
+            while (off < Srb->DataTransferLength && Sg9xResolve(sgd, shift, off, &lin, &run)) {
+                VpArena(1, lin, run, Sg9xIorFunc(Srb), Srb->Cdb[0]);
+                off += run;
+            }
+        }
+#endif
         PfAdd(&DevExt->Pf.Sg9x[kind == SG9X_LINEAR ? STOR98PF_SG9X_LINEAR :
                                (kind == SG9X_SG ? STOR98PF_SG9X_LIST : STOR98PF_SG9X_UNKNOWN)], 1);
         if (Sg9xDcbFacts(Srb, &mx, &sg, &dmd, &fl)) {

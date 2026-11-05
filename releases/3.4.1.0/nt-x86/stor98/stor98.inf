@@ -1,0 +1,155 @@
+; SPDX-License-Identifier: BSD-3-Clause
+; Copyright (c) 2025 SweetLow (nvme9x.inf)
+; Copyright (c) 2025 Dominik Behr + Ray Hinchliffe (NVMe2K.inf)
+; Copyright (c) 2026 Yeo Kheng Meng
+;
+; stor98-x86.inf - the 32-bit stor98 package for Windows NT. One INF serves
+; every 32-bit NT system, for a PCI NVMe controller (class 01, subclass 08,
+; interface 02) behind a Thunderbolt or USB4 tunnel, which carries xhci98's
+; tunnel id (below):
+;
+;   Windows 2000, XP,    the .NTx86 install and services sections:
+;   Vista, 7, 8, 8.1,    stor98.sys into system32\drivers (DIRID 12) as the
+;   10 (32-bit)          demand-start SCSIport miniport service stor98.
+;                        Derived from upstream nvme2k 1.2.0.0 WDM\NVMe2K.inf.
+;
+; Where this INF goes, next to the x86 stor98.sys in each:
+;
+;   xhci98's flat package     stor98.inf, at the root of the x86 package
+;                             (xhci98's scripts\package\package-common.ps1)
+;   xhci98's release          nt-x86\stor98\stor98.inf (xhci98 design record
+;                             36; stor98.inf at the root up to 3.3.0.0)
+;   Stor98's own layout       x86\stor98.inf (the standalone releases,
+;                             releases\0.3.0.1 and 0.4.0.0, when this INF
+;                             also carried the 9x install and stor98.mpd)
+;
+; Windows 98 SE and ME install from stor98-9x.inf (xhci98 design record 36
+; section 3.3, owner 2026-10-31): up to xhci98 3.3.0.0 this INF carried
+; their install section and stor98.mpd too, which no 9x install read any
+; more. The Signature is $Windows NT$, so 98 SE
+; and ME never read this file. The models section is undecorated (Windows
+; 2000 reads no models decoration), so 64-bit Windows does not offer this
+; INF; it installs from stor98-x64.inf.
+;
+; Data disks only on NT. The service is demand-start (StartType=3): Plug and
+; Play loads stor98.sys when it enumerates an NVMe controller, so a driver
+; that is refused leaves only that device stopped and Windows still starts.
+; Booting from an NVMe disk needs StartType=0, which no release supports yet
+; (docs/BUILD.md, "INFs and version").
+;
+; Windows 8, 8.1 and 10 (xhci98 roadmap 43.23; 10 below build 22000, 43.34)
+; take the .NTx86 sections as 2000 to 7 do. 8.1 and 10 have their own
+; stornvme; where it binds a tunnel drive first, xhci98's installer or its
+; safe-removal mark service puts Stor98 on that one drive (xhci98 design
+; record 31 sections 6 and 7).
+;
+; DriverVer is xhci98's package version and release date, from
+; src\xhci_version.h (XHCI_VER_STR, XHCI_DRIVERVER_DATE), as in the other
+; two INFs; xhci98's scripts\inf-gate\check-stor98-inf.ps1 checks it.
+; ASCII only, CRLF line endings.
+
+[Version]
+Signature="$Windows NT$"
+Class=SCSIAdapter
+ClassGUID={4D36E97B-E325-11CE-BFC1-08002BE10318}
+Provider=%Provider%
+DriverVer=11/05/2026,3.4.1.0
+
+[DestinationDirs]
+; DIRID 12: system32\drivers.
+DefaultDestDir=12
+
+[SourceDisksNames]
+1=%DiskName%,,
+
+[SourceDisksFiles]
+stor98.sys=1
+
+[Manufacturer]
+; Stor98 is for drives behind a Thunderbolt or USB4 tunnel only (xhci98
+; design record 31). xhci98's connection manager gives such a drive one id
+; of its own, PCI\XHCI98_TUNNEL&CC_010802, and on Windows 2000 to 8 (the
+; undecorated section: Windows 2000 reads no models decoration) the model
+; matches that id alone, so Windows never picks this INF for an internal
+; NVMe drive there. Windows 8.1 and 10 (NT 6.3 and later) restart a device
+; with its ids read again, which loses that id, and keep xhci98 3.2.0.0's
+; model: PCI\CC_010802 as the compatible id, hardware id empty, which
+; ranks below their own stornvme on an internal drive (owner, 2026-10-23,
+; roadmap-usb4 43.59, and 2026-10-25, record 31 section 4.8); there
+; Stor98 goes on a tunnelled drive by xhci98's installer or its
+; safe-removal mark service. The 98 SE and ME installs take stor98-9x.inf,
+; which keeps the class match (record 31 section 5.2).
+%Mfg%=Stor98_Models,NTx86.6.3
+
+[Stor98_Models]
+%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802
+
+[Stor98_Models.NTx86.6.3]
+%Stor98.DeviceDesc%=Stor98_Inst,,PCI\CC_010802
+
+; ---- Windows 2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit --------------------
+
+[Stor98_Inst.NTx86]
+CopyFiles=Stor98_Files_NT
+
+; Line-based interrupts only (xhci98 roadmap-usb4 45.31): Stor98 is a SCSI
+; port miniport, and the SCSI port driver takes no message-signaled
+; interrupt. stornvme.inf writes MSISupported 1 in this key of every NVMe
+; drive it runs; Windows 8.1 then offers the drive message interrupts
+; (MSI-X, up to MessageNumberLimit) at its next resource assignment and
+; Stor98 does not start (problem 10, event 4). Read on 8.1 x86, 2026-10-30.
+; stornvme.inf writes the value again if the drive goes back to it.
+[Stor98_Inst.NTx86.HW]
+AddReg=Stor98_HwReg
+
+[Stor98_HwReg]
+HKR,"Interrupt Management\MessageSignaledInterruptProperties",MSISupported,%REG_DWORD%,0
+
+[Stor98_Inst.NTx86.Services]
+AddService=stor98,%SPSVCINST_ASSOCSERVICE%,Stor98_Service,Stor98_EventLog
+
+[Stor98_Files_NT]
+stor98.sys
+
+[Stor98_Service]
+DisplayName=%Stor98.ServiceDesc%
+ServiceType=%SERVICE_KERNEL_DRIVER%
+; Demand-start: data disks only (see the header).
+StartType=%SERVICE_DEMAND_START%
+ErrorControl=%SERVICE_ERROR_NORMAL%
+ServiceBinary=%12%\stor98.sys
+LoadOrderGroup=SCSI Miniport
+AddReg=Stor98_ServiceReg
+
+[Stor98_ServiceReg]
+HKR,"Parameters\PnpInterface","5",%REG_DWORD%,0x00000001
+HKR,"Parameters\Device","MaximumSGList",%REG_DWORD%,0x000000FF
+HKR,"Parameters\Device","NumberOfRequests",%REG_DWORD%,0x00000020
+; The settings (README "Settings"), every product key at its Windows 2000
+; to 10 default, in the one string the driver reads; written only where
+; missing (FLG_ADDREG_NOCLOBBER), so a DriverParameter the user set is kept
+; whole by an update, and a key missing from it still takes its default
+; (xhci98 roadmap-usb4 45.50).
+HKR,"Parameters\Device","DriverParameter",0x00000002,"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000"
+
+[Stor98_EventLog]
+AddReg=Stor98_EventLogReg
+
+[Stor98_EventLogReg]
+HKR,,EventMessageFile,%REG_EXPAND_SZ%,"%%SystemRoot%%\System32\IoLogMsg.dll"
+HKR,,TypesSupported,%REG_DWORD%,7
+
+[Strings]
+Provider="Yeo Kheng Meng"
+Mfg="Stor98 Project"
+Stor98.DeviceDesc="Stor98 Storage Controller for NVMe SSDs"
+Stor98.ServiceDesc="Stor98 Storage Controller Driver (stor98)"
+DiskName="Stor98 Storage Controller Disk"
+
+; Not localizable
+SPSVCINST_ASSOCSERVICE=0x00000002
+SERVICE_KERNEL_DRIVER=1
+SERVICE_DEMAND_START=3
+SERVICE_ERROR_NORMAL=1
+REG_EXPAND_SZ=0x00020000
+REG_DWORD=0x00010001

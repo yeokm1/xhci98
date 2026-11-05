@@ -2343,6 +2343,22 @@ publishes:
 
 ---
 
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **M4** - the amd64 `USBPORT_RESOURCES` layout, NT 5.2 amd64 `usbport.sys` 5.2.3790.3959: `sizeof` is `0x48`, and `StartPA` stays a 4-byte `ULONG` at `0x40`, so the common-buffer physical address is still 32-bit and nothing this driver places can land above 4 GB. The fields between `InterruptLevel` and `StartPA` drift by 4, 8, 12 and 16 as each pointer-sized member takes its own alignment; only the size and `StartPA` were read off instructions, and `src/xhci_usbport.h` asserts the size per architecture so a divergence in the middle cannot hide | static (`cdb.exe -z` on the extracted image; nothing executed) | design record 11 section 5 M4; `src/xhci_usbport.h` |
+| A.2 | **M5** - the DMA adapter width on NT 5.2 amd64: usbport creates it 32-bit, so no address it hands the miniport is above 4 GB whatever the guest's RAM. This is what lets the driver keep its high-DWORD refusals as refusals rather than having to implement 64-bit addressing | static (`cdb.exe -z` on the extracted image; nothing executed) | design record 11 section 5 M5 |
+| A.3 | **M6** - all 50 packet callback slots the amd64 `usbehci.sys` 5.2.3790.3959 fills land on the `0x28 + (X - 0x28) * 2` widening map, with no slot off it. This is the measurement the whole amd64 packet declaration rests on: the map is a derivation, and this is the check that the producer agrees with it | static (`cdb.exe -z` over the extracted image, every `call qword ptr` resolving into the registration packet; nothing executed) | design record 11 section 5 M6; `src/xhci_usbport.h` |
+
 ## Sources
 
 - `docs/usb-xhci-info/usbport-miniport-abi.md`: the x86 ABI record every

@@ -206,6 +206,11 @@ rem   test_trdiag  - XHCITR's PCI and bridge diagnostics (xhcitr\tr_diag.c,
 rem                  task 44.62, design record 25 section 20): XHCIPFW's
 rem                  values, XhciCmBridgeDiag, XhciCmNoIrqDiag, task
 rem                  44.53's log records, bad shapes, 79 columns
+rem   test_tracpi  - the firmware tables (src\cm\cm_qacpi.c,
+rem                  src\xhci_acpi.c and
+rem                  xhcitr\tr_acpi.c, task 46.21, design record 25 section
+rem                  21): the driver's answer in parts, bad shapes, the
+rem                  checksums, the names, the index, every message
 rem   test_dname   - the controller's \DosDevices name (src\xhci_dname.c,
 rem                  task 44.81): HCD<n> on 98 SE and ME, XHCI98HC<k> on
 rem                  NT, the numbers held, a probe's and a delete's status
@@ -244,6 +249,10 @@ rem                  CDB direction table and the storage id strings
 rem   test_tbt_brnum - the bus numbers xhcicm.sys gives the bridges a tunnel
 rem                  brought up below a tunnel port on 98 SE and ME
 rem                  (src\cm\tbt_brnum.c, record 21 section 6.1.1)
+rem   test_cm_osc - the 98 SE and ME platform USB4 handover's pure half
+rem                  (src\cm\cm_osc.c, design record 32 section 12.8)
+rem   test_cm_oscp - the ASM4242 handover's known-board route and boot
+rem                  guard on NT (src\cm\cm_oscp.c, record 32 section 12.8.15)
 rem   test_cm_noirq - a 98 SE or ME function with no interrupt, started
 rem                  (src\cm\cm_noirq.c, design record 28, task 42-A.15):
 rem                  the candidate rules, the result table, the journal
@@ -281,6 +290,9 @@ rem                  statement conditions, where the channel is offered
 rem                  (not on 98 SE and ME in 3.0.0.0) and the wait with no
 rem                  receiver, interface 3's locator bytes and
 rem                  REMOVE_PENDING
+rem   test_cm_dsd  - the ACPI-named tunnel-port source's _DSD reader and
+rem                  ACPI name normalisation (src\cm\cm_dsd.c, task 46.23,
+rem                  design record 22 section 7.6.1)
 rem   test_cm_ports - the re-enumeration's own pure half (src\cm\cm_ports.c,
 rem                  roadmap-usb4.md 39-A.5 and 39-A.8, design record 21
 rem                  sections 3.3, 6.1, 6.3 and 7.4): the families' NHI,
@@ -669,6 +681,23 @@ call :run test_tbt_brnum "test_tbt_brnum.c ..\src\cm\tbt_brnum.c ..\src\cm\tbt_t
 rem test_cm_noirq links nothing else: design record 28's state machine of
 rem operations is pure; its CONFIGMG and PCI.VXD calls are the model's.
 call :run test_cm_noirq "test_cm_noirq.c ..\src\cm\cm_noirq.c"
+rem test_cm_osc links cm_oscc.c beside cm_osc.c: the platform USB4
+rem handover's pure half (task 46.12, design record 32 section 12.8): the
+rem ACPI tables' checks, MCFG and ECAM, the AML walk, the methods' hashes,
+rem the second tier's canonical form and the match.
+call :run test_cm_osc "test_cm_osc.c ..\src\cm\cm_osc.c ..\src\cm\cm_oscc.c"
+rem test_cm_oscp links nothing else: the NT known-board route's WMI and
+rem SMBIOS decoding, the profiles' match and the boot guard are pure
+rem (task 46.12, record 32 sections 12.8.15.11 and 12.8.15.13).
+call :run test_cm_oscp "test_cm_oscp.c ..\src\cm\cm_oscp.c"
+rem test_cm_oscp_rel is the same suite as the installer compiles
+rem cm_oscp.c (xhciinst\build.cmd, CM_OSCP_RELEASE): the bench board's
+rem profile alone, the emulator's not recognised (record 32 section
+rem 12.8.15.12). The one ordinary run that sets XHCI_HOST_TEST_DEFINES,
+rem for this suite alone.
+set "XHCI_HOST_TEST_DEFINES=/DCM_OSCP_RELEASE"
+call :run test_cm_oscp_rel "test_cm_oscp.c ..\src\cm\cm_oscp.c"
+set "XHCI_HOST_TEST_DEFINES="
 rem test_cm_live links nothing else: the host-interface liveness monitor's
 rem states, cadence, recovery and gate are pure (record 21 sections 5.5, 5.6).
 call :run test_cm_live "test_cm_live.c ..\src\cm\cm_live.c"
@@ -687,9 +716,12 @@ rem child's held re-enumeration, the channel's pure hold (43.18, 43.47).
 call :run test_cm_eject "test_cm_eject.c ..\src\cm\cm_eject.c ..\src\cm\cm_nvlink.c"
 rem test_inst links the install tool's pure half (xhciinst\inst_core.c, task
 rem 40.6, design record 23 section 10), with the window's Help texts
-rem (xhciinst\inst_help.c, task 45.66, record 26 section 5.10), and reads
-rem the package's INFs in src\.
-call :run test_inst "test_inst.c ..\xhciinst\inst_core.c ..\xhciinst\inst_help.c"
+rem (xhciinst\inst_help.c, task 45.66, record 26 section 5.10), and the
+rem connection manager's families (src\cm\cm_ports.c, task 46.5, record 26
+rem section 5.3.6), and the board's identity (xhciinst\inst_board.c with
+rem src\cm\cm_oscp.c, task 46.12, record 32 section 12.8.15.12), and
+rem reads the package's INFs in src\.
+call :run test_inst "test_inst.c ..\xhciinst\inst_core.c ..\xhciinst\inst_help.c ..\xhciinst\inst_board.c ..\src\cm\cm_ports.c ..\src\cm\cm_oscp.c"
 rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check,
 rem and the mark service's pure half (its self-test; task 44.52).
@@ -729,6 +761,10 @@ rem the families' id lists (checked against xhcicm.inf and xhcicmf.inf),
 rem Windows 98's PCI device ids, the bridge filter's snapshot and the
 rem resume hold's bound (39-A.5 driver half, 39-A.8).
 call :run test_cm_ports "test_cm_ports.c ..\src\cm\cm_ports.c"
+rem test_cm_dsd links nothing else: the ACPI-named tunnel-port source's
+rem _DSD reader and the ACPI name normalisation (task 46.23, design record
+rem 22 section 7.6.1).
+call :run test_cm_dsd "test_cm_dsd.c ..\src\cm\cm_dsd.c"
 rem test_cm_irq links the pure half of the interrupt a child filter gives
 rem a function hot-added behind a tunnel on 2000's Standard PC HAL
 rem (src\cm\cm_irq.c, task 44.53, design record 21 section 6.2.1): the
@@ -783,6 +819,10 @@ call :run test_trpci "test_trpci.c ..\xhcitr\tr_pci.c ..\xhcitr\tr_core.c ..\src
 rem test_trdiag links XHCITR's PCI and bridge diagnostics decoders
 rem (xhcitr\tr_diag.c, task 44.62, design record 25 section 20).
 call :run test_trdiag "test_trdiag.c ..\xhcitr\tr_diag.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c"
+rem test_tracpi links xhcicm.sys's firmware tables answer builder
+rem (src\cm\cm_qacpi.c) and XHCITR's reader, index and messages
+rem (xhcitr\tr_acpi.c; task 46.21, design record 25 section 21).
+call :run test_tracpi "test_tracpi.c ..\xhcitr\tr_acpi.c ..\xhcitr\tr_core.c ..\src\cm\cm_qacpi.c ..\src\xhci_acpi.c ..\xhciinst\inst_core.c"
 rem test_xhq links xhci98.sys's query answer composer (src\xhci_qry.c,
 rem design record 13 section 8.12) and XHCITR's reader of it and the texts
 rem it makes (xhcitr\tr_log.c, tr_pci.c); the shared default level.
@@ -809,7 +849,7 @@ rem 43.46, design record 30 section 9.1).
 call :run test_vsd_list "test_vsd_list.c ..\src\vsd\vsd_list.c"
 rem test_pfw links XHCIPFW.VXD's pure half (src\pfw\pfw_scan.c, task
 rem 44.49, design record 32 section 10.1).
-call :run test_pfw "test_pfw.c ..\src\pfw\pfw_scan.c ..\src\pfw\pfw_ntdec.c"
+call :run test_pfw "test_pfw.c ..\src\pfw\pfw_scan.c ..\src\pfw\pfw_line.c ..\src\pfw\pfw_ids.c ..\src\pfw\pfw_ntdec.c"
 
 rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64

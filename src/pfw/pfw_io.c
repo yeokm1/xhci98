@@ -28,3 +28,10 @@ void PfwCfgWrite(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val)
     outpd(0xCF8, PfwCfgAddr(bus, devfn, off));
     outpd(0xCFC, val);
 }
+
+/* Byte lane 0 alone, at CFCh itself (record 32 section 12.10 step 5). */
+void PfwCfgWrite8(PFW_U32 bus, PFW_U32 devfn, PFW_U32 off, PFW_U32 val)
+{
+    outpd(0xCF8, PfwCfgAddr(bus, devfn, off));
+    outp(0xCFC, (int)(val & 0xFFUL));
+}

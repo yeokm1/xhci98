@@ -269,6 +269,9 @@ ULONG XhciTbtFindCap(PXHCI_TBT_CFG io, ULONG bdf, ULONG capId,
                                            router's Get PCIe Downstream
                                            Entry Mapping (record 22 7.6)   */
 #define XHCI_TBT_SRC_SHPC           5UL /* an SHPC bridge (the emulator)    */
+#define XHCI_TBT_SRC_ACPI           6UL /* ACPI-named: the root port's _DSD
+                                           usb4-host-interface names this
+                                           NHI (record 22 7.6.1, amd64)    */
 
 
 #define XHCI_TBT_MAX_SIBLINGS       16UL    /* kept for the log             */
@@ -344,6 +347,7 @@ typedef struct _XHCI_TBT_TOPO {
     ULONG FindOutcome;  /* XhciTbtTopoFind's own outcome, kept when a
                            router-named member turns Outcome into SET       */
     ULONG Named;        /* members XhciTbtTopoAddNamed added                */
+    ULONG AcpiNamed;    /* members XhciTbtTopoAddAcpi added                 */
     /* the walk's own state */
     ULONG Visited[8];   /* one bit per bus number                           */
     UCHAR Stack[256];   /* buses still to walk                              */
@@ -536,6 +540,16 @@ VOID XhciTbtBindsInit(PXHCI_TBT_BINDS binds);
  */
 ULONG XhciTbtTopoAddNamed(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo,
                           PXHCI_TBT_BINDS binds, ULONG port, ULONG bdf);
+
+/*
+ * The ACPI-named source (record 22 section 7.6.1): bridge `bdf`, whose
+ * root port's _DSD names this NHI, offered to the set under
+ * XhciTbtTopoAddNamed's rules with no port and no binding: the member joins
+ * unbound with source XHCI_TBT_SRC_ACPI (ADDED); a bridge already a member
+ * keeps its source (KNOWN); the outcomes, refusals, UNREAD and FULL as
+ * there. The firmware's usb4-port-number is never a binding.
+ */
+ULONG XhciTbtTopoAddAcpi(PXHCI_TBT_CFG io, PXHCI_TBT_TOPO topo, ULONG bdf);
 
 /*
  * The learned correspondence (record 22 section 7.6), for a port whose

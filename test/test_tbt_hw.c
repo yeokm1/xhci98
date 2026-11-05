@@ -57,6 +57,16 @@ static void test_match(void)
     CHECK(hw != NULL && hw->Icm == NULL && !(hw->Flags & TBT_HW_ICL_POWER), "Barlow Ridge");
     hw = TbtHwMatch(0x1022, 0x1668, 0x0C0340, FALSE);
     CHECK(hw != NULL && hw->Icm == NULL && hw->DeviceId == 0x1668, "AMD Pink Sardine, named");
+    hw = TbtHwMatch(0x1022, 0x158D, 0x0C0340, FALSE);
+    CHECK(hw != NULL && hw->Icm == NULL && hw->DeviceId == 0x158D &&
+          !(hw->Flags & TBT_HW_CLASS_MATCH), "AMD Strix Halo, named (task 46.23)");
+    CHECK(hw != NULL && strcmp(hw->Name, "Strix Halo USB4 NHI #1") == 0,
+          "AMD Strix Halo, NHI #1 (owner, 2026-11-05)");
+    hw = TbtHwMatch(0x1022, 0x158E, 0x0C0340, FALSE);
+    CHECK(hw != NULL && strcmp(hw->Name, "Strix Halo USB4 NHI #2") == 0,
+          "AMD Strix Halo, NHI #2");
+    hw = TbtHwMatch(0x1022, 0x113C, 0x088000, FALSE);
+    CHECK(hw != NULL && hw->DeviceId == 0x113C, "AMD Krackan2, by id alone");
     hw = TbtHwMatch(0x1B21, 0x2425, 0x0C0340, FALSE);
     CHECK(hw != NULL && (hw->Flags & TBT_HW_CLASS_MATCH), "any class 0C0340 host");
     CHECK(TbtHwMatch(0x8086, 0x15DC, 0x088000, FALSE) == NULL, "USB-only NHI: not a candidate");

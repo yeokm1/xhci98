@@ -123,7 +123,8 @@ What it checks, grouped by the failure each rule prevents:
            (design record 08 section 14; owner, 2026-10-30). Forty since
            task 45.50 (owner, 2026-10-30: every value a released driver
            reads is written by the install): XhciUsb2Bos, XhciResumeKeep
-           and XhciLinkKeep at 1.
+           and XhciLinkKeep at 1. Forty-one since task 46.21's
+           XhciAcpiTables joined at 1.
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -1808,6 +1809,13 @@ $requiredValues = @(
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off (owner, 2026-10-30)"
     },
     @{
+        Name    = "XhciAcpiTables"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 46.21's firmware tables request (design record 13 section 8.13), read at each start: on 98 SE and ME the driver reads the ACPI tables when XHCITR asks and 0 refuses the request; NT answers it as not served whatever the value says. Written by every path (owner, 2026-10-30: every value a released driver reads is written by the install) under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
+    },
+    @{
         Name    = "XhciUsb2Bos"
         Type    = "0x00010003"
         Default = "1"
@@ -2941,7 +2949,17 @@ if ($Arch -eq "amd64") {
         foreach ($cf in @(Get-Directive $inf $ctl "CopyFiles")) {
             foreach ($e in @(Get-Section $inf $cf)) {
                 if ($null -eq $e) { continue }
-                if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) { [void]$deliveredBy.Add($cf) }
+                if ((($e.Text -split ',')[0].Trim()) -ieq $msiHelperBinary) {
+                    [void]$deliveredBy.Add($cf)
+                    # Record 18 section 15.15: xhcicm.inf installs the same
+                    # helper, so neither INF may put an older one over a
+                    # newer (COPYFLG_NO_VERSION_DIALOG, 0x20, and nothing else).
+                    $ef = @($e.Text -split ',' | ForEach-Object { $_.Trim() })
+                    $cflags = if ($ef.Count -ge 4) { ConvertTo-CopyFlags $ef[3] } else { 0 }
+                    if ($null -eq $cflags -or $cflags -ne 0x20) {
+                        Add-Failure "HLPR-SVC" ("[{0}] line {1} copies {2} with flags '{3}'; the copy must carry exactly COPYFLG_NO_VERSION_DIALOG (0x00000020), so a newer helper from either INF is kept (design record 18 section 15.15)." -f $cf, $e.Line, $msiHelperBinary, $(if ($ef.Count -ge 4) { $ef[3] } else { "" }))
+                    }
+                }
             }
         }
         foreach ($cf in $deliveredBy) {

@@ -894,6 +894,115 @@ failed start (Code 10) with its reason wherever the named delivery cannot
 be had - mode 3 on 7 x86 without the helper, on XP and on 98 SE; mode 1
 where no line is offered.
 
+### 4.4 A line another device holds asserted, named at the start (revision 9, 2026-11-03; task 46.6)
+
+**What it is for.** Task 45.33 (`runs/run-45.md`, "45.33") read on 98 SE
+that a device holding a shared, level-triggered line asserted with no
+driver to acknowledge it costs nothing while Windows keeps the line
+masked, and storms as soon as any driver connects to the line; on the
+reporter's board the system crawled once `xHCI98` connected to such a
+line. The answer kept was documentation (`XhciInterruptMode` `2`,
+`README.md`'s known issues). What this section adds is diagnostic only:
+the start says which device holds its line, so a user's snapshot shows
+the case and the device without a Device Manager hunt. Nothing else
+changes: the delivery, the connection, the poller and the watcher are
+section 4's and 4.2's, whatever the walk finds (no move to polling by
+itself; owner, 2026-10-29, task 46.6's line).
+
+**When.** At each start on 98 SE and ME (`IoIsWdmVersionAvailable(1,
+0x10)` false) that was given an interrupt line (`HaveInterrupt`), after
+`hcdSettleDelivery` and before `hcdConnect`, whatever the delivery
+settled: under the line (`XhciInterruptMode` 0 or 1) a holder is read
+before this controller's own connection unmasks the line; under a poll
+(mode 2, the documented way round, or no line at all) nothing is
+connected and the walk names the holder the user went round. Not on
+2000 and later (the line runs under the I/O APIC or their own HAL, not
+read in 45.33).
+
+**The line compared.** This controller's own Interrupt Line, read from
+its configuration space (the IRQ 98 SE and ME write there when they
+route it), must name an IRQ of the PC's interrupt controllers, 1 to 15,
+and must be the IRQ the start was given (the interrupt resource's raw
+level); otherwise nothing is walked and the outcome is "not known" (an
+`FFh` or a reserved value matched against another function's would
+claim a sharing that is not there, PCI 2.3 section 6.2.4).
+
+**The walk** (a pure function over a read callback, `XhciPollHeldScan`
+in `xhci_poll.c`, host vectors): every bus 0 to 255 through
+`HalGetBusData`, every device, function 0 and, when its header says
+multi-function, functions 1 to 7; the first 64 bytes of each, read only.
+A read that gives fewer than 64 bytes, or a vendor of `0` or `FFFFh`, is
+an absent function; no bus is skipped on one absent read (whether 98 SE's
+and ME's `HalGetBusData` answers an absent bus and an absent slot alike
+is not read), and bus 0, device 0 answering nothing (every PC has its
+host bridge there) is a walk that could not run. A function is **a
+candidate** when it is not this controller (the four dwords
+`hcdPirqQemuProbe` already identifies it by: id, BAR0, BAR1,
+subsystem), its header type is 0 or 1, its Interrupt Pin is 1 to 4, its
+Interrupt Line equals this controller's, its Status has Interrupt Status
+(bit 3, PCI 2.3 section 6.2.3) set and its Command has Interrupt Disable
+(bit 10) clear.
+
+**The confirmation** (`hcd_ctl.c`, the caller's): a candidate is named
+only when it still reads so at four more reads of its first 64 bytes,
+each after a requested 10 ms wait (`KeDelayExecutionThread`,
+PASSIVE_LEVEL). Interrupt Status is the state at each read, not a
+record of what happened between them, so what is named is **a function
+seen asserting the line at every one of five reads**: most likely a
+holder (no driver acknowledges it), possibly a busy device that was
+pending each time it was read; the log, the counters and `XHCITR` say
+"seen asserting at every read", never more. The walk resumes past a
+candidate not confirmed; the first confirmed ends it. At most eight
+candidates are tried in one start: a ninth ends the walk "inconclusive",
+an outcome of its own (the ninth, or a function after it, may be the
+holder). The cost: one walk (8,192 reads of function 0 and the further
+functions of multi-function devices) and at most eight confirmations of
+four requested 10 ms waits each - 320 ms requested; the waits are
+rounded up to the system's clock (up to 55 ms each on 98 SE), so the leg
+reads the start's elapsed time (the log's notes before and after).
+
+**What is recorded.** Six counter words appended at word 258 of
+`XHCIHC_COUNTERS` (`xhci_counters.h`), written by the start before the
+connection: `HeldScan` (0 not looked for, 1 none, 2 found, 3 not known:
+bus 0 or this controller's own configuration could not be read, or its
+line is not 1 to 15 or not the IRQ given, 4 inconclusive: eight
+candidates tried, none confirmed),
+`HeldFunctions` (functions read), `HeldCandidates` (candidates not
+confirmed), `HeldBdf` (bus 15:8, device 7:3, function 2:0), `HeldId`
+(vendor 15:0, device 31:16) and `HeldIrq` (the Interrupt Line compared);
+the note `intr.held` with the outcome or the holder's bus, device and
+function, and `intr.held.id` with its ids. The snapshot carries the
+counter block whole (`XHCI_SNAPSHOT_HCD_COUNTER_WORDS` 264), and
+`XHCITR`'s interrupt summary prints a line for it ("line held by
+another"): not looked for, none (with the functions read and the IRQ),
+the function seen asserting at every read (its bus, device, function,
+ids and IRQ), inconclusive, or not known; a
+block from a driver before it prints nothing there.
+
+**What it decides wrongly, and what it does not see.** A device whose
+own driver starts after this controller and that holds its interrupt
+until then is named although it will be served (the note says what was
+read, nothing acts on it). A function without Interrupt Status (PCI 2.3
+and every PCI Express function have it), a holder whose Interrupt Line
+does not carry the IRQ Windows routed, and a holder that asserts only
+now and then (45.33's inference for the board) are not seen. A holder
+appearing after the start is not seen either: the walk is once a start.
+
+**Verification.** Host vectors for the walk (a bus answering nothing,
+a populated bus whose device 0 is absent with a later device found, bus
+0 device 0 answering nothing, multi-function headers, this controller
+left out, pin 0 and pin 5, another line, Interrupt Status clear,
+Interrupt Disable set, a type 2 header, a resumed walk past a
+candidate, the confirmation's per-read test) and the counter layout.
+Legs on 98 SE and ME (q35, 45.33's holder: a `pci-serial`
+beside the `qemu-xhci` on its INTA, armed from `AUTOEXEC.BAT`): the
+holder named by `XHCITR` (bus, device, function, `1B36:0002`, the IRQ)
+under mode 2 and the start otherwise unchanged; under mode 0 the notes on
+the `qemu` flavour's debug console before the storm 45.33 read (the line
+connected, as before); without the holder, "none" with the functions
+read; on 2000 or later, "not looked for"; on each, the start's elapsed
+time with and without a holder.
+
 ## 5. The poller's lifecycle
 
 ### 5.1 The objects
@@ -2797,6 +2906,16 @@ was narrowed. Both answered:
 
 At `ffaaf528`: both problems of `9557fe74` held, and no P1, P2 or P3 was
 left.
+
+### 13.7 Revision 9 (task 46.6)
+
+Section 4.4, 2026-11-03, reviewed and revised: the start's walk for a
+device holding this controller's line on 98 SE and ME, recorded and
+shown, diagnostic only. It takes step 2 of the draft task 45.33 kept
+out of the tree (`runs/run-45.md`, "45.33"), without the move to
+polling, and neither step 1 (this controller's own Interrupt Disable
+before the connection) nor step 3 (the storm detector), which 45.33
+read not to work.
 
 ## 14. What changes in the documents
 

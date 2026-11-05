@@ -52,6 +52,7 @@
 #include "cmlink.h"
 #endif
 #include "dbgport.h"
+#include "vmmprobe.h"
 #include "pfstat.h"
 
 //#define NVME2K_W9X
@@ -408,6 +409,26 @@ typedef struct _HW_DEVICE_EXTENSION {
     ULONG PortIrqVector;
     ULONG PollTicks;                                // timer callbacks while polling
     ULONG PollStartIoHits;                          // HwStartIo calls (spin included) that consumed a completion
+#ifdef STOR98_TEST_REENTRY
+    ULONG TestInStartIo;                            // test: HwStartIo is running (nesting count)
+    ULONG TestInTimer;                              // test: the timer routine is running
+    ULONG TestReentries;                            // test: HwInterrupt entries while either ran
+#endif
+#ifdef STOR98_TEST_T0PROBE
+    ULONG TestT0Step;                               // test: STG_TEST_T0PROBE step reached
+    ULONG TestT0Time;                               // test: clock ms of the probe's request
+#endif
+#ifdef STOR98_DBGPORT
+    ULONG TestTimerStoppedCalls;                    // test: timer routine calls in none/stopping/stopped
+#endif
+    ULONG IntClaims;                                // HwInterrupt calls that consumed a completion (interrupt-driven path)
+    ULONG IntClaimCqes;                             // the completions those calls consumed
+    ULONG CqesConsumed;                             // completion queue entries consumed (both queues; wraps)
+    POLL_WATCH IntWatch;                            // the missed-interrupt watchdog (polltun.h; PLAN "Missed-interrupt watchdog")
+    BOOLEAN IntWatchFound;                          // this timer callback's running step consumed a completion
+    BOOLEAN IntWatchIdle;                           // the timer stopped since the previous callback
+    ULONG IntWatchLongGaps;                         // Clock.LongGaps at the previous callback
+    ULONG IntWatchBackSpans;                        // Clock.BackSpans at the previous callback
     ULONG PollIsrCalls;                             // HwInterrupt calls while polling (the port, a shared line or the dump port)
     // Counter answer (docs/PLAN.md MD-8, include/stor98pf.h): totals since
     // PfEpoch began (HwFindAdapter that is not a resume), and the facts

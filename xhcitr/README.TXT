@@ -55,6 +55,9 @@ easy to spot.
                            text file, for a problem report
   File > Save Snapshot...  writes the driver's snapshot files in a
                            folder you pick (below)
+  File > Save Firmware Tables...
+                           writes this computer's firmware (ACPI)
+                           tables in a folder you pick (below)
   Edit > Copy              copies the details (or the selected part)
   View                     shows or hides each part of the tree; with
                            Descriptors on, the selected USB device's
@@ -326,6 +329,28 @@ Windows' hub driver does not give the descriptor, nothing is said. On
 Windows 98 SE the tool reads no port of Windows' own USB controllers,
 so there the option does nothing.
 
+The firmware tables
+-------------------
+
+File > Save Firmware Tables... and XHCITR /acpi <folder> write this
+computer's firmware (ACPI) tables in the folder: one file a table
+(RSDP1.DAT, SSDT1.DAT, SSDT2.DAT, ...) and TABLES.TXT listing them.
+Nothing is written if the folder already has one of these files.
+
+On XP x64, Vista and later the tables come from Windows, which gives
+one table of each name (the first SSDT of several). On 98 SE and ME
+the xhci98 driver reads them from memory when you save them, the DSDT
+and every SSDT included (XhciAcpiTables 0 turns this off); where the
+xhcicm driver runs, the copies it read at its start are saved too
+where they differ. On 2000 and 32-bit XP they come from the copies
+Windows keeps in the registry: the DSDT, FACP, FACS and RSDT, but no
+SSDT. A table that does not check out is listed in TABLES.TXT with
+the reason and not saved.
+
+The files are your computer's own firmware. They help tell whether
+another board's USB4 firmware can be added; send them only if you
+choose to.
+
 From a command line
 -------------------
 
@@ -337,6 +362,8 @@ From a command line
   XHCITR /eject id=<id>        stops the USB device or Thunderbolt/USB4
                                device with that Device Manager instance
                                ID and exits
+  XHCITR /acpi <folder>        writes this computer's firmware (ACPI)
+                               tables in <folder> and exits
   XHCITR /setlevel xhci98=<n> xhcicm=<n>
                                sets either driver's logging level (0 to
                                4; one or both) and exits; needs

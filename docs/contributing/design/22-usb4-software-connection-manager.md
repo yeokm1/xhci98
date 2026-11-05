@@ -393,7 +393,7 @@ read from the hardware before start.
 | Maple Ridge `1134` `1137` | discrete USB4 | ICM (Titan Ridge messages) or USB4 | the same |
 | Lunar Lake `A833` `A834`; Panther Lake `E333` `E334` `E433` `E434`; Wildcat Lake `4D33` | Intel integrated | USB4 only | [linux] `pci.c` `nhi_ids[]` (`icl_nhi_ops`), no `icm_probe` row |
 | Barlow Ridge host `5781` `5784` | discrete USB4 | USB4 only | the same, default ops |
-| AMD Pink Sardine `1022:1668` `1022:1669`, named; any other host of class `0x0C0340` (ASMedia, other AMD, the emulator's `1B36:00F4`) | generic | USB4 only | [bsd] `nhi_reg.h` `DEVICE_PINK_SARDINE_*`; [linux] `pci.c` class entry |
+| AMD Pink Sardine `1022:1668` `1022:1669`, Rembrandt `162E` `162F`, Phoenix `15C4` `15C5`, Strix `151C` `151D`, Strix Halo `158D` `158E`, Krackan `1120` `1121`, Krackan2 `113B` `113C`, named; any other host of class `0x0C0340` (ASMedia, other AMD, the emulator's `1B36:00F4`) | generic | USB4 only | [bsd] `nhi_reg.h` `DEVICE_PINK_SARDINE_*`; `pci.ids` `2026.10.31` for the others (task 46.23, record 21 section 3.3); [linux] `pci.c` class entry |
 | Alpine Ridge USB-only `15DC` `15DD` `15DE` | - | none: NHIs with no ICM row, excluded from this release | [linux] `nhi.h` |
 | Light Ridge `1513`, Cactus Ridge `1547`, Win Ridge `157D`, Redwood Ridge | - | not claimed | [linux] `pci_ids.h`, `nhi.h` |
 
@@ -467,7 +467,7 @@ The first two are automatic, the third the only forced route:
 1. **Software-only candidates**, under the Linux and FreeBSD matching
    policy, with no supported ICM protocol identified for the hardware: any
    host of class `0x0C0340` not of an Intel ICM-capable generation (AMD,
-   `1022:1668` and `1022:1669` among them; ASMedia; others), and Intel
+   section 3.1's named AMD hosts among them; ASMedia; others), and Intel
    Lunar Lake, Panther Lake, Wildcat Lake and Barlow Ridge (`5781`,
    `5784`). Admitted automatically once the hardware profile's own
    readiness contract (for the Intel integrated hosts, section 4.2's
@@ -566,7 +566,9 @@ named beside the class line so the INF says which AMD hosts are meant
 (decision U12: `U4Desc` = `xHCI98 USB4 Host Router`; from 3.2.0.0 the
 id lines name their products, `xHCI98 USB4 Router (AMD Pink Sardine)` and
 so on, and the class line is `xHCI98 USB4 Router`, roadmap-usb4 task 43.73,
-record 21 section 3.3). The description
+record 21 section 3.3). Task 46.23 adds AMD's other integrated hosts'
+lines the same way, one string per processor (record 21 section 3.3).
+The description
 names the hardware's generation, not the connection manager running it,
 so the "ICM or USB4" ids (Maple Ridge, Tiger Lake to Meteor Lake) carry
 `U4Desc` too and a controller keeps its name whichever manager takes it;
@@ -2466,6 +2468,246 @@ so **system suspend with a tunnelled device attached is unsupported in this
 release on every target**, and the release notes say so. On Windows 98 no
 filter sits on a bridge (record 21 section 6.1) and there is no hold at
 all.
+
+#### 7.6.1 AMD's integrated hosts: the ACPI-named source (task 46.23; design, reviewed and revised)
+
+**The gap.** Record 21 section 6.3's source 3 takes a listed root port only
+beside an NHI on the root bus. AMD's integrated NHIs are functions behind an
+internal bridge: on a Strix Halo machine (record 21 section 3.3, "AMD's
+pairing") `158D` and `158E` sit behind `1022:150C`, and the two `150A`
+tunnel root ports are on the root bus, siblings of that bridge. Source 3
+never applies there, and source 2 would not help: both NHIs share that
+parent, so each would claim both ports and record 21's exclusive ownership
+would leave all of them inactive. `pci.ids` lists an internal bridge of the
+same kind per processor (Phoenix's `14EB`, Strix's `150C`), so the same
+layout is expected on every AMD processor `cm_ports.c` names, Pink Sardine
+included; it is read on Strix Halo alone. Until this section is built the
+set there comes from the router-named source, where the host router answers,
+or from `XhciCmTunnelBridge`; with neither there is no re-enumeration after
+a hot plug and no safe-eject mark.
+
+**What the platform says.** On that machine each `150A` root port's ACPI
+device carries a static `_DSD` (a `Name`, not a method) with the
+device-properties UUID `daffd814-6eba-4d8c-8a91-bc9bbf4aa301` and the keys
+`usb4-host-interface` (a reference to the NHI's ACPI device),
+`usb4-port-number` and `ExternalFacingPort`, in an SSDT (the owner's
+capture, 2026-11-03; firmware facts only, nothing tracked). Windows 11 lists
+each port as depending on one NHI, and Linux links the first port to `158D`
+and the second to `158E` (`acpi.c` `tb_acpi_add_link`, by the
+`usb4-host-interface` reference, [linux]). Microsoft's USB4 ACPI
+requirements [ms-usb4acpi] define these `_DSD` properties for a USB4 host's
+PCIe root ports. So the platform gives, per port, its NHI (the set) and a
+USB4 port number, which is no binding here (below).
+
+**Decision.** The direction below (the sources' order, the ACPI-named
+source on NT, the port number logged only, position rejected, the 9x route
+deferred) is the coordinator's, approved on the owner's delegation
+(2026-11-04). It first held the ACPI-named source to the amd64 build; the
+owner then chose the x86 build too (2026-11-04, the goal being every system
+the package serves), through the routine route of record 32 section
+12.8.15.15 (below, "The x86 build").
+
+**Scope.** Every AMD machine with built-in USB4 known here (Rembrandt and
+later) is UEFI-only with no CSM and no IA32 UEFI (owner, 2026-11-03): 98 SE,
+ME, 2000 and XP cannot start there and 7 in practice cannot; the targets
+that can are 8.1 and 10 x64. The sources below are built for NT, in both
+builds (the x86 one for any 32-bit NT that starts on such a host, none
+known); the 9x route is deferred (below), not rejected.
+
+**The sources for an AMD family, in order** (record 21's exclusive
+ownership decides every claim, as now):
+
+1. **The override**, `XhciCmTunnelBridge`, unchanged: the whole set when
+   present.
+2. **Router-named** (section 7.6, Get PCIe Downstream Entry Mapping,
+   operation `30h`), unchanged and first of the automatic sources. Whether
+   AMD's host router answers it is unread on NT; on 98 SE without ACPI the
+   router answers the connection manager (the no-ACPI reading below), the
+   operation's answer not yet logged there.
+3. **ACPI-named (new, NT only).** The bridge filter (`cm_filt.c`, role 2)
+   on a port whose id is in an AMD family's `RootPortIds` sends
+   `IOCTL_ACPI_EVAL_METHOD` for `_DSD` down its own stack after its start
+   completes (ACPI is a filter in that stack: Windows 11 lists
+   `\Driver\pci`, `\Driver\ACPI`, `\Driver\pci` on `150A`). The answer is
+   parsed by a pure, bounded reader (`cm_dsd.c`, host vectors): the
+   device-properties UUID, then the `usb4-host-interface` element, a name
+   string of at most 128 characters; `usb4-port-number`, an integer, is
+   read for the log alone. Any other shape, a second instance of a key, an
+   oversize answer or a refused request gives no claim and a log line.
+   - **What is compared.** Both sides by ACPI name, never by a PCI
+     location derived from ACPI (an `_ADR` gives a device and function, not
+     a bus, so a path's `_ADR` chain cannot be held against the live
+     topology without a bridge walk this design does not need). The NHI
+     reads its own ACPI name, `DEVPKEY_Device_BiosDeviceName`, with
+     `IoGetDevicePropertyData` (the routine exported from Windows Vista
+     on; the property read so far on 10 and 11), found at run time
+     with `CmRoutine` (`cm_oscnt.c`, record 32 section 12.8.15.15): in the
+     amd64 image its `MmGetSystemRoutineAddress` import (present from XP
+     x64 on), in the x86 image the helper's (below). The filter evaluates
+     `_DSD` on Vista and later alone (WDM 6.0, the routine's systems), in
+     both builds, and not on `CmRoutine`'s answer, which a lookup failed
+     for want of memory would leave NULL for that start alone; where the
+     NHI then reads no name (the routine not found), the filter's claim is
+     matched by none.
+     The filter's reference, normalised (one leading backslash, upper
+     case, segments of four characters), must equal the NHI's name
+     exactly. A name the NHI cannot read, or the routine absent, gives no
+     ACPI-named member for that NHI and a log line. The ACPI namespace is
+     one per machine, so equal names are the same device whatever the
+     buses and segments.
+   - **The x86 build** (the owner's choice, 2026-11-04). The x86
+     `xhcicm.sys` is one image for 98 SE, ME and NT, and its import gate
+     (`scripts\import-gate\xhcicm-imports.allow`) refuses
+     `MmGetSystemRoutineAddress`, Windows 98 lacking it. `CmRoutine` asks
+     the helper's channel, minor 1, there (`xhcihlpr.sys`), so no import
+     row is added. It returns NULL on 98 SE and ME; where the helper is
+     not installed (until 3.4.1.0 `xhci98.inf` alone installed it, so a
+     32-bit 8 to 10 system with every xHCI controller on Windows' own
+     driver had none, record 32 section 12.8.15.15, "the gap"; from
+     3.4.1.0 `xhcicm.inf` installs it too, record 18 section 15.15, so a
+     Thunderbolt-only install has it); where the helper answers without
+     the routine service; and on 2000 and XP, which do not export the
+     routine.
+     In each the ACPI-named source is simply absent (on 98 SE, ME, 2000
+     and XP the filter evaluates nothing; on 8 to 10 without the helper
+     its claim names an NHI that reads no name), and the override and the
+     router-named source serve as before. The helper is boot-start and `xhcicm.sys` demand-start, so
+     the filter's first ask, which can come before any NHI's start, has
+     the answer the NHI's would have; the lookup's answer is kept for the
+     load, except a query that failed for want of memory (no IRP, or the
+     helper's device not opened for it), which the next caller makes
+     again, so this earlier caller cannot leave the handover of record 32
+     section 12.8.15 (`108h`) or an NHI without the routine for the load.
+     `IOCTL_ACPI_EVAL_METHOD` needs no new import either: it is an I/O
+     control code sent with `IoAllocateIrp`, `IofCallDriver`,
+     `KeInitializeEvent`, `KeSetEvent`, `KeWaitForSingleObject` and
+     `IoFreeIrp`, each an x86 row with no `SITES` limit and Windows 98 SE
+     evidence of its own. Its code and the input buffer's layout come on
+     x86 from the Windows 2000 DDK's `acpiioct.h`, which that DDK keeps
+     beside its WDM headers, outside the build's include path (so it is
+     named by that path), and which has no package type: `cm_dsd.h`'s own
+     constants are held equal to it where it has them, the package type
+     on amd64 alone. The amd64 allowlist's `MmGetSystemRoutineAddress`
+     row is held to `cm_oscnt.obj` alone.
+   - **The port number.** `usb4-port-number` is no binding.
+     [ms-usb4acpi] allows it to be zero (unused), and nothing establishes
+     that a non-zero value equals `TBT_U4_PORT.Index`, which `tbt_u4cm.c`
+     assigns in the order it finds lane adapters. An ACPI-named member
+     joins **unbound**; its port comes, as for any member, from the
+     router-named source or from learning (section 7.6), so no eject or
+     teardown is ever directed by the firmware's number. Zero, a repeated
+     value and two values swapped against the router's naming are host
+     vectors, each giving membership and no binding.
+   - **The claim.** The filter's own location, the normalised reference,
+     the port number and the filter's publication serial at the
+     evaluation are kept in its registration entry (`cm_reenum.c`), under
+     the registration list's lock, written once after the evaluation and
+     cleared at withdrawal (`CmRegWithdraw`).
+   - **The set changes only at a discovery.** A claim never adds, removes
+     or moves a member between discoveries, so the state indexed by member
+     position (section 7.7's `RecBarred`, `RecRetireAns`, `RecOldBuses`,
+     the eject entries) keeps its meaning. The NHI's thread, at each
+     discovery (`cmDiscover`, after the router-named pass and before the
+     claims are published for `XhciTbtExclusive`), copies under the lock
+     the scalar claims whose reference is its own name, releases it, and
+     offers each claimed bridge (`XhciTbtTopoAddAcpi`, source
+     `XHCI_TBT_SRC_ACPI`).
+   - **Activity follows the claim.** `cmRegRecompute`, which makes a member
+     active by its filter's location alone today, makes an ACPI-sourced
+     member active, and its filter owned, only while that filter holds a
+     current claim naming this NHI. Otherwise the member carries
+     `CM_PORT_NO_CLAIM` and not `CM_PORT_EXCLUSIVE`, as a port another
+     domain claims does, so every path gated on exclusivity leaves it too
+     (the storage link channel's publication and presence sampling,
+     `cmNvExclusive`; learning; ejects): a filter restart whose new
+     evaluation fails, or names another NHI, leaves the member listed and
+     inactive, so no request goes through it and no storage entry is
+     published or advanced for it.
+     A member another source supports keeps that source and is unaffected.
+   - **A renewed claim.** A root port's filter restarted alone (stop and
+     start, the NHI staying started) publishes again under a new serial
+     and reads the `_DSD` again. When that claim names the same NHI and is
+     the only one naming it, the member adopts the new serial at the next
+     idle pass, its index and the set unchanged, and its activity follows
+     the new publication as a router-named member's does (the baseline is
+     asked of each publication). Not while the host interface is lost or
+     contained: the change is left unseen until it is back, so the
+     recovery's revalidation sees the set as it was (host vector
+     `test_cm_dsd`).
+   - **A late claim.** A claim published while the domain has no set (no
+     listing, rediscovery pending or exhausted) re-arms its rediscovery
+     (`CM_REDISCOVER_TRIES` again), so the claim is offered. A claim
+     published after the domain was listed, for a bridge not in its set, is
+     logged and taken at the NHI's next start; adding members to a listed
+     domain is a later step, not built.
+   - **Recovery.** Record 22 section 7.7's revalidation
+     (`CmReenumSourcesHold`) rebuilds the set with `XhciTbtTopoFind` and
+     compares sources exactly, the router-named ones excepted; an ACPI
+     member is excepted the same way only when, under the registration
+     list's lock, its filter holds a current claim naming this NHI with the
+     serial the member was added under. Otherwise the revalidation fails
+     as for any vanished member. The set being unchanged since the
+     discovery, the snapshot the revalidation checks is the whole set.
+   - **The rules** are `XhciTbtTopoAddNamed`'s: the same outcomes allow a
+     claim, the same locations are refused (not a bridge, the NHI or its
+     parent), a bridge already a member keeps its source, an unreadable
+     location voids the discovery, and the override stays the whole set.
+   - **One port per NHI** (decided by the coordinator on the owner's
+     delegation, 2026-11-04). Each AMD NHI has one tunnel root port, so
+     when two or more current claims name one NHI none of them is taken
+     for it, not one picked (logged, `cm.acpi.several`): taking none is
+     safer than guessing which the firmware meant. The router-named source
+     binds as before. The same holds between discoveries and at recovery:
+     an ACPI member is active, and revalidates, only while its claim is the
+     only one naming its NHI.
+   Unknowns, to read on the emulator's AMD layout before the code is
+   trusted: how 8.1 and 10 return a reference element inside a `_DSD`
+   package (as a name string, which the reader expects, or refused), and
+   whether that string is the same full path `DEVPKEY_Device_BiosDeviceName`
+   gives the NHI; and, if a non-UEFI AMD USB4 machine is ever found, the
+   same on Vista and 7 (2000 and XP lack the property routine).
+4. **Learning by elimination (fallback, not built now).** Where a family has
+   as many NHIs as listed ports among the siblings of their shared parent
+   and no source above names them, the ports are held as candidates of the
+   family, members of no domain, and the first tunnel that adds a device
+   below one of them gives that port to its domain, and with two NHIs the
+   other port to the other. The first hot plug before that still has no set.
+5. **Position, rejected.** The first `150A` with the lower NHI function
+   matches the one machine read and is documented nowhere.
+
+`DEVPKEY_Device_DependencyProviders`, which shows the same pairing on
+Windows 11, is a user-mode property of recent Windows only; it is no driver
+source (at most the installer could write the override from it, not
+planned).
+
+**The 9x route, deferred.** CSM shims may one day start 98 SE and ME on
+these machines (owner, 2026-11-04). Then the route is, in order: operation
+`30h`; a static scan for the `150A` port's `_DSD` package through the
+on-demand table reader of task 46.21 (option B: the DSDT and every SSDT
+whole), resolving the enclosing device's path by static `_ADR` names
+alone; or the override. No code now. The owner's no-ACPI start of 98 SE on
+the Strix Halo machine (2026-11-04) is the reading this route starts from:
+the AMD host routers answered the connection manager; a device attached at
+power-on came up as router `1-2` through the firmware's pre-OS PCIe
+tunnel on the first `150A` root port; no hot-plug event arrived after the
+start on any port; and there was no INTx route.
+
+**Tests.** Host vectors for the `_DSD` reader (the capture's shape made up
+again, a method form's answer, a wrong UUID, a missing or repeated key, a
+port number of zero, repeated or swapped, an oversize answer), for the
+name normalisation and match, for the one-port rule, and for `XhciTbtTopoAddAcpi` (each outcome
+as `XhciTbtTopoAddNamed`'s, a member joining unbound, a bridge already
+router-named keeping its source). The registration glue (the claim, the
+activity rule, the late claim, recovery) runs only in the driver and is
+read on the emulator's legs. Legs on the emulator's AMD layout (NHIs behind an
+internal bridge, two root ports on the root bus, an SSDT with the static
+`_DSD`, a method form and one wrong reference; operation `30h` answered and
+refused), on 8.1 and 10 x64, and on 10 x86 with the helper present and
+absent.
+
+[ms-usb4acpi]: Microsoft, "USB4 ACPI requirements" (learn.microsoft.com,
+windows-hardware/design/component-guidelines), its `_DSD` properties for a
+USB4 host's PCIe root ports (`usb4-host-interface`, `usb4-port-number`).
 
 ### 7.7 The host interface lost: containment
 
@@ -5377,6 +5619,20 @@ active only with a registry value set (an INF default 0) until 45-E.11 has
 read a Mac. Recommended: (a) - inert, a Mac's Thunderbolt does nothing at
 all, the profile is reached only on the ids and subsystems above, and (b)
 adds a value every INF path must write.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **The ASMedia ASM4242 USB4 host, PCI side and firmware state as `usb4-emu`'s asm4242 model and data record them (task 44.39)**: the topology, ids, bus ranges, bridge windows, BARs and slot capabilities of 00:02.2, 13:00.0, 14:00.0 to 14:03.0, 79:00.0, 7A:00.0 and the enclosure's functions; the host router's id, adapters, HopIDs, buffers, NVM version and ROUTER_CS_1 to 4; the firmware's tunnel (ADP_PCIE_CS_0 of adapters 6 to 9, the HopID 8 entries of adapters 3 and 7); the `_DSD` property names and the `_OSC` UUID in two SSDTs. From `usb4-emu`'s asm4242 data at `7ec3865`, `5d7345a` and `9f333f3` (before the 2026-10-29 squash; the record is `a0b6749` on its `main` after the merge, the archives kept outside that repository), seven archives, by SHA-256: `d37d752481a562f2e1e94013961b0655160d15969971a925f9e642125f2767bd`, `56bb173eafcfaea42e8cf9754eb691d7fef6ae1a113301ea94fae18f890beef1`, `d6bcf5220418a3c4bf8a02938c4a055e4952207004039592fd615b17cdd84cba`, `6476407d996db22244d37e255c7fa048d28ecd1a75bf3b8a68935b0e30d2aef6`, `52ae1ea2c402fe5ef651fef29ce90e58442f1cdbe722c7c0d9af7b9e5823725b`, `846759b3a71ac86612499e0abf3a27f5f979370d8fffb01be0acae84872e5d70` and `a802a36ac83ef79ed138528fe887284d84c1d2b7d6045e4f3e0e79f5aa8607b2`. Where that data came from is recorded in `usb4-emu`; nothing of it is in this repository | static (a text read of the archives' logs, `lspci` output, sysfs files and `thunderbolt` trace, a decode of their raw configuration-space files, and a byte search of two ACPI tables for property names and UUIDs, no disassembly; 2026-10-25; nothing of the archives executed). No file of them is tracked here; `usb4-emu`'s asm4242 research note (section 11 at `a0b6749` on its `main` after the merge; `3090d19` before the 2026-10-29 squash) is that repository's own reading of the same files | design record 22 section 18; roadmap-usb4 44.39 and 44-E.6; design record 23 section 5.13.8 (the controllers' ids and names, task 44.55); the ASM4242 family in `src\cm\cm_ports.c` and the host vector `test\test_tbt_topo.c` `test_asm4242_host`, the ASM4242's topology (task 44.40); the host vectors `test\test_u4cm.c` `test_asm4242_preos` (the firmware's four entries) and `test_asm7` (the fresh entry `00000008h 00000000h`) |
 
 ## Sources
 

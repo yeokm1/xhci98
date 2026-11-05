@@ -38,6 +38,31 @@
  * result go to the hardware key beside the record (CmStatusEjectWrite).
  * The driver never writes the tool's ask.
  *
+ * NO REGISTRY ACCESS AWAY FROM S0 ON 98 SE AND ME (task 46.14). Once a
+ * system power IRP for a sleep or the shutdown has come back up the
+ * stack (CmPowerSleeping), the thread reads and writes no value until a
+ * system IRP to S0 does the same: no ask, no record, no diagnostic, no
+ * eject reply. A 9x shutdown passes its system IRP on without waiting for
+ * the thread (cm_power.c, task 44.47), so whatever the thread wrote after
+ * it would race the rest of the shutdown, the system's last save of the
+ * registry among it, in an order nothing here can see. A record not
+ * written then is kept dirty and written at the first pass back in S0;
+ * one not written before the power goes is lost, as the next start
+ * replaces it anyway. The deferrals are counted. The NT targets are
+ * unchanged.
+ *
+ * THE BOOT GUARD'S MARKER (record 32 section 12.8.15.13, NT only):
+ * XhciCmOscPending (REG_DWORD, the send's kind) in the same hardware key,
+ * written and flushed before a handover's send, deleted and flushed when
+ * the start succeeded, read at the boot's first start (cm_oscnt.c). The
+ * key is opened for reading too on NT for it. ZwFlushKey and
+ * ZwDeleteValueKey are imported by the amd64 image alone; the x86 image,
+ * which loads on 98 SE and ME too, imports neither and calls them through
+ * the pointers cm_oscnt.c finds by the helper's channel
+ * (CmStatusMarkerRoutines, record 32 section 12.8.15.15): until then, or
+ * without them, its marker is never flushed nor deleted, and cm_oscnt.c
+ * sends nothing.
+ *
  * A failed write is counted and tried again at the next pass; it never
  * touches the connection manager. The import allowlists hold
  * ZwSetValueKey, RtlInitUnicodeString and KeQuerySystemTime to this file
@@ -58,12 +83,22 @@
 #define CM_ST_PATH_RETRY_MS 5000UL  /* an unknown 98 path tried again      */
 
 static VOID cmStBrDiag(PCM_NHI nhi);
+static VOID cmStQueryNameWrite(PCM_NHI nhi);
 static VOID cmStNiDiag(PCM_NHI nhi);
 static VOID cmStBqDiag(PCM_NHI nhi);
 
 static BOOLEAN cmStNt(VOID)
 {
     return IoIsWdmVersionAvailable(1, 0x10);
+}
+
+/* A write refused admission (CmRegEnter, the header's "away from S0"),
+ * counted; the first one of the start logged with the system state. */
+static VOID cmStDefer(PCM_NHI nhi)
+{
+    if (nhi->StatusPub.Deferred++ == 0) {
+        CmLogNote(nhi, "cm.status.deferred.first", (ULONG)nhi->SystemPower);
+    }
 }
 
 /* The system's uptime in seconds, from the tick count's low word and the
@@ -198,9 +233,14 @@ static VOID cmStReadEject(PCM_NHI nhi)
     table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
     table[0].Name = L"XhciCmEjectAsk";
     table[0].EntryContext = v;
+    if (!CmRegEnter(nhi)) {
+        /* Nothing is known of the ask: nothing is handed over. */
+        return;
+    }
     present = (BOOLEAN)NT_SUCCESS(RtlQueryRegistryValues(
         RTL_REGISTRY_HANDLE, (PWSTR)nhi->StatusPub.DrvKey, table, NULL,
         NULL));
+    CmRegLeave(nhi);
     CmEjectAsk(nhi, present, v, CM_EJ_ASK_BYTES);
 }
 
@@ -208,15 +248,22 @@ BOOLEAN CmStatusEjectWrite(PCM_NHI nhi, BOOLEAN result, const UCHAR *bytes,
                            ULONG length)
 {
     UNICODE_STRING name;
+    BOOLEAN done;
 
     if (nhi->StatusPub.DevKey == NULL) {
         return FALSE;
     }
+    if (!CmRegEnter(nhi)) {
+        cmStDefer(nhi);
+        return FALSE;
+    }
     RtlInitUnicodeString(&name, result ? L"XhciCmEjectResult"
                                        : L"XhciCmEjectReply");
-    return (BOOLEAN)NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey,
+    done = (BOOLEAN)NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey,
                                              &name, 0, REG_BINARY,
                                              (PVOID)bytes, length));
+    CmRegLeave(nhi);
+    return done;
 }
 
 static VOID cmStReadAsk(PCM_NHI nhi)
@@ -227,6 +274,9 @@ static VOID cmStReadAsk(PCM_NHI nhi)
 
     s = &nhi->StatusPub;
     if (s->DrvKey == NULL || nhi->ClockMs - s->AskAtMs < CM_ST_ASK_MS) {
+        return;
+    }
+    if (!CmRegEnter(nhi)) {
         return;
     }
     s->AskAtMs = nhi->ClockMs;
@@ -241,6 +291,7 @@ static VOID cmStReadAsk(PCM_NHI nhi)
                                           NULL))) {
         s->Echo = ask;
     }
+    CmRegLeave(nhi);
     if (cmStNt()) {
         cmStReadConfirm(nhi);
     } else {
@@ -300,6 +351,9 @@ static VOID cmStInput(PCM_NHI nhi, PCM_STATUS_IN in)
     in->Stage = nhi->Stage;
     in->Inert = nhi->Inert;
     in->Echo = nhi->StatusPub.Echo;
+    /* Whatever the stage: an inert start reports its tier too (record 32
+     * section 12.8.11). */
+    in->Handover = CmOscReport(nhi);
     if (nhi->Stage == CM_STAGE_ACTIVE || nhi->Stage == CM_STAGE_FAILED) {
         if (nhi->U4On) {
             in->Cm = CM_ST_CM_USB4;
@@ -368,6 +422,12 @@ static VOID cmStPublish(PCM_NHI nhi, ULONG bytes, BOOLEAN always)
         !CmStatusChanged(s->Built, bytes, s->Last, s->LastBytes)) {
         return;
     }
+    if (!CmRegEnter(nhi)) {
+        /* Away from S0 on 98 SE and ME: written once back in S0. */
+        s->Dirty = 1;
+        cmStDefer(nhi);
+        return;
+    }
     if (!always) {
         s->Generation++;
         if (s->Generation == 0) {
@@ -378,6 +438,7 @@ static VOID cmStPublish(PCM_NHI nhi, ULONG bytes, BOOLEAN always)
     CmStatusStamp(s->Built, s->Generation, cmStUptimeS(nhi), now.LowPart,
                   (ULONG)now.HighPart);
     status = cmStWrite(s, s->Built, bytes);
+    CmRegLeave(nhi);
     if (!NT_SUCCESS(status)) {
         s->Dirty = 1;
         s->Failures++;
@@ -409,28 +470,46 @@ VOID CmStatusOpen(PCM_NHI nhi)
     CM_STATUS_PUB *s;
     CM_STATUS_IN in;
     HANDLE key;
+    PVOID devKey;
+    PVOID drvKey;
     ULONG bytes;
+    BOOLEAN admitted;
 
     s = &nhi->StatusPub;
-    cmStClose(s);
+    /* Refused admission (98 SE and ME away from S0): the keys an earlier
+     * stop could not close are kept, as the same devnode's, and nothing
+     * is opened; the first record is then owed (cmStPublish). */
+    admitted = CmRegEnter(nhi);
+    devKey = s->DevKey;
+    drvKey = s->DrvKey;
+    if (admitted) {
+        cmStClose(s);
+        devKey = NULL;
+        drvKey = NULL;
+    }
     CmZero(s, sizeof(*s));
+    s->DevKey = devKey;
+    s->DrvKey = drvKey;
     /* Before the domain is listed: no child posts to it yet. */
     CmZero(nhi->BqDiag, sizeof(nhi->BqDiag));
     nhi->BqDiagSeq = 0;
     nhi->BqDiagGen = 0;
     nhi->BqDiagWritten = 0;
     KeInitializeSpinLock(&nhi->BrDiagLock);
-    if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
-                                           PLUGPLAY_REGKEY_DEVICE, KEY_WRITE,
-                                           &key))) {
-        s->DevKey = (PVOID)key;
-    }
-    if (NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
-                                           PLUGPLAY_REGKEY_DRIVER,
-                                           cmStNt() ? KEY_READ | KEY_SET_VALUE
-                                                    : KEY_READ,
-                                           &key))) {
-        s->DrvKey = (PVOID)key;
+    if (admitted) {
+        if (NT_SUCCESS(IoOpenDeviceRegistryKey(
+                nhi->Common.Pdo, PLUGPLAY_REGKEY_DEVICE,
+                cmStNt() ? KEY_READ | KEY_WRITE : KEY_WRITE, &key))) {
+            s->DevKey = (PVOID)key;
+        }
+        if (NT_SUCCESS(IoOpenDeviceRegistryKey(
+                nhi->Common.Pdo, PLUGPLAY_REGKEY_DRIVER,
+                cmStNt() ? KEY_READ | KEY_SET_VALUE : KEY_READ, &key))) {
+            s->DrvKey = (PVOID)key;
+        }
+        CmRegLeave(nhi);
+    } else {
+        CmLogNote(nhi, "cm.status.open.deferred", (ULONG)nhi->SystemPower);
     }
     /* The first record, at once: an earlier start's is replaced before
      * anything can take it for this one's (generation 0, no echo). */
@@ -440,14 +519,185 @@ VOID CmStatusOpen(PCM_NHI nhi)
     in.NhiId = (nhi->Ids.Vendor & 0xFFFFUL) |
                ((nhi->Ids.Device & 0xFFFFUL) << 16);
     in.Stage = CM_ST_STAGE_STOPPED;
+    /* Tier 0 (the start's, not yet looked for), the boot's written mark
+     * kept (record 32 section 12.8.11). */
+    in.Handover = CmOscReport(nhi) & 8UL;
     bytes = CmStatusBuild(s->Built, &in, NULL, NULL, NULL);
     s->BuiltBytes = bytes;
     cmStPublish(nhi, bytes, TRUE);
 }
 
+/* ---- the boot guard's marker (record 32 section 12.8.15.13) ----------- */
+
+#define CM_ST_MARKER L"XhciCmOscPending"
+
+#if !defined(_AMD64_)
+typedef NTSTATUS (NTAPI *CM_ST_FLUSHKEY)(HANDLE key);
+typedef NTSTATUS (NTAPI *CM_ST_DELETEVALUE)(HANDLE key,
+                                            PUNICODE_STRING name);
+
+static CM_ST_FLUSHKEY cmStFlushKey;
+static CM_ST_DELETEVALUE cmStDeleteValueKey;
+#endif
+
+VOID CmStatusMarkerRoutines(PVOID flushKey, PVOID deleteValueKey)
+{
+#if !defined(_AMD64_)
+    cmStFlushKey = (CM_ST_FLUSHKEY)flushKey;
+    cmStDeleteValueKey = (CM_ST_DELETEVALUE)deleteValueKey;
+#else
+    UNREFERENCED_PARAMETER(flushKey);
+    UNREFERENCED_PARAMETER(deleteValueKey);
+#endif
+}
+
+static NTSTATUS cmStFlush(HANDLE key)
+{
+#if defined(_AMD64_)
+    return ZwFlushKey(key);
+#else
+    if (cmStFlushKey == NULL) {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    return cmStFlushKey(key);
+#endif
+}
+
+static NTSTATUS cmStDelete(HANDLE key, PUNICODE_STRING name)
+{
+#if defined(_AMD64_)
+    return ZwDeleteValueKey(key, name);
+#else
+    if (cmStDeleteValueKey == NULL) {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    return cmStDeleteValueKey(key, name);
+#endif
+}
+
+/* Any type is a marker; a REG_DWORD gives its kind. */
+static NTSTATUS NTAPI cmStTakeMarker(PWSTR ValueName, ULONG ValueType,
+                                     PVOID ValueData, ULONG ValueLength,
+                                     PVOID Context, PVOID EntryContext)
+{
+    PUCHAR from;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    *(PULONG)EntryContext = 0xFFUL;
+    if (ValueType == REG_DWORD && ValueLength == sizeof(ULONG)) {
+        from = (PUCHAR)ValueData;
+        *(PULONG)EntryContext = (ULONG)from[0] | ((ULONG)from[1] << 8) |
+                                ((ULONG)from[2] << 16) |
+                                ((ULONG)from[3] << 24);
+    }
+    return STATUS_SUCCESS;
+}
+
+ULONG CmStatusMarkerRead(PCM_NHI nhi, PULONG kind)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    NTSTATUS status;
+    ULONG v;
+
+    *kind = 0;
+    if (nhi->StatusPub.DevKey == NULL || !cmStNt()) {
+        return 2UL;     /* CM_OSCG_M_UNREADABLE */
+    }
+    v = 0;
+    CmZero(table, sizeof(table));
+    table[0].QueryRoutine = cmStTakeMarker;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = CM_ST_MARKER;
+    table[0].EntryContext = &v;
+    status = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE,
+                                    (PWSTR)nhi->StatusPub.DevKey, table, NULL,
+                                    NULL);
+    if (status == STATUS_OBJECT_NAME_NOT_FOUND) {
+        return 0UL;     /* CM_OSCG_M_ABSENT */
+    }
+    if (!NT_SUCCESS(status)) {
+        CmLogNote(nhi, "cm.osc.guard.read", (ULONG)status);
+        return 2UL;
+    }
+    *kind = v;
+    return 1UL;         /* CM_OSCG_M_PRESENT */
+}
+
+VOID CmStatusMarkerWrite(PCM_NHI nhi, ULONG kind, BOOLEAN *written,
+                         BOOLEAN *flushed)
+{
+    UNICODE_STRING name;
+    NTSTATUS status;
+
+    *written = FALSE;
+    *flushed = FALSE;
+    if (nhi->StatusPub.DevKey == NULL || !cmStNt()) {
+        return;
+    }
+    RtlInitUnicodeString(&name, CM_ST_MARKER);
+    status = ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
+                           REG_DWORD, &kind, sizeof(kind));
+    *written = (BOOLEAN)NT_SUCCESS(status);
+    if (!*written) {
+        CmLogNote(nhi, "cm.osc.guard.set", (ULONG)status);
+    }
+    if (*written) {
+        status = cmStFlush((HANDLE)nhi->StatusPub.DevKey);
+        *flushed = (BOOLEAN)NT_SUCCESS(status);
+        if (!*flushed) {
+            CmLogNote(nhi, "cm.osc.guard.flush", (ULONG)status);
+        }
+    }
+}
+
+BOOLEAN CmStatusMarkerFlushable(PCM_NHI nhi)
+{
+    NTSTATUS status;
+
+    if (nhi->StatusPub.DevKey == NULL || !cmStNt()) {
+        return FALSE;
+    }
+    status = cmStFlush((HANDLE)nhi->StatusPub.DevKey);
+    if (!NT_SUCCESS(status)) {
+        CmLogNote(nhi, "cm.osc.guard.preflush", (ULONG)status);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+VOID CmStatusMarkerDelete(PCM_NHI nhi, BOOLEAN *deleted, BOOLEAN *flushed)
+{
+    *deleted = FALSE;
+    *flushed = FALSE;
+    if (nhi->StatusPub.DevKey == NULL || !cmStNt()) {
+        return;
+    }
+    {
+        UNICODE_STRING name;
+
+        RtlInitUnicodeString(&name, CM_ST_MARKER);
+        *deleted = (BOOLEAN)NT_SUCCESS(
+            cmStDelete((HANDLE)nhi->StatusPub.DevKey, &name));
+        if (*deleted) {
+            *flushed = (BOOLEAN)NT_SUCCESS(
+                cmStFlush((HANDLE)nhi->StatusPub.DevKey));
+        }
+    }
+}
+
+/* The removal's close: the last point the handles can be closed, so they
+ * are closed whether or not admission is open (98 SE and ME send no
+ * removal at a shutdown). */
 VOID CmStatusClose(PCM_NHI nhi)
 {
+    BOOLEAN admitted;
+
+    admitted = CmRegEnter(nhi);
     cmStClose(&nhi->StatusPub);
+    if (admitted) {
+        CmRegLeave(nhi);
+    }
 }
 
 VOID CmStatusPass(PCM_NHI nhi)
@@ -477,23 +727,84 @@ VOID CmStatusPass(PCM_NHI nhi)
         return;
     }
     cmStPublish(nhi, bytes, FALSE);
+    cmStQueryNameWrite(nhi);
     cmStBrDiag(nhi);
 }
 
 /* XhciCmQueryName: the query device's name, or empty once it is gone
  * (cm_qryos.c: ZwDeleteValueKey has no Windows 98 evidence). Best
- * effort, as the record. */
-VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name)
+ * effort, as the record. The latest name asked for is kept, and one not
+ * yet written (refused admission away from S0, or a failed write) is
+ * written by the next pass, or by the stop before the keys close. */
+static VOID cmStQueryNameWrite(PCM_NHI nhi)
 {
+    CM_STATUS_PUB *s;
     UNICODE_STRING value;
+    WCHAR copy[CM_ST_QNAME_CHARS];
+    ULONG chars;
+    ULONG seq;
+    ULONG written;
+    ULONG i;
+    KIRQL irql;
+    BOOLEAN done;
 
-    if (nhi->StatusPub.DevKey == NULL) {
+    s = &nhi->StatusPub;
+    if (s->DevKey == NULL) {
+        return;
+    }
+    /* The PnP dispatch sets the name and the thread writes it: both under
+     * BrDiagLock, the copy written after it is released. */
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+    seq = s->QNameSeq;
+    written = s->QNameWritten;
+    chars = s->QNameChars;
+    for (i = 0; i <= chars; i++) {
+        copy[i] = s->QName[i];
+    }
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    if (seq == written) {
+        return;
+    }
+    if (!CmRegEnter(nhi)) {
+        cmStDefer(nhi);
         return;
     }
     RtlInitUnicodeString(&value, L"XhciCmQueryName");
-    (VOID)ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &value, 0, REG_SZ,
-                        (PVOID)name->Buffer,
-                        (ULONG)name->Length + sizeof(WCHAR));
+    done = (BOOLEAN)NT_SUCCESS(ZwSetValueKey((HANDLE)s->DevKey, &value, 0,
+                                             REG_SZ, (PVOID)copy,
+                                             (chars + 1UL) * sizeof(WCHAR)));
+    CmRegLeave(nhi);
+    if (done) {
+        KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+        s->QNameWritten = seq;
+        KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    }
+}
+
+VOID CmStatusQueryName(PCM_NHI nhi, PCUNICODE_STRING name)
+{
+    CM_STATUS_PUB *s;
+    ULONG n;
+    ULONG i;
+    KIRQL irql;
+
+    s = &nhi->StatusPub;
+    n = (ULONG)name->Length / sizeof(WCHAR);
+    if (n >= CM_ST_QNAME_CHARS) {
+        n = CM_ST_QNAME_CHARS - 1UL;
+    }
+    KeAcquireSpinLock(&nhi->BrDiagLock, &irql);
+    for (i = 0; i < n; i++) {
+        s->QName[i] = name->Buffer[i];
+    }
+    s->QName[n] = 0;
+    s->QNameChars = n;
+    s->QNameSeq++;
+    if (s->QNameSeq == s->QNameWritten) {
+        s->QNameSeq++;
+    }
+    KeReleaseSpinLock(&nhi->BrDiagLock, irql);
+    cmStQueryNameWrite(nhi);
 }
 
 /* XhciCmBridgeDiag, when the worker has a newer attempt to show: best
@@ -521,11 +832,15 @@ static VOID cmStBrDiag(PCM_NHI nhi)
     if (seq == 0 || seq == nhi->BrDiagWritten) {
         return;
     }
+    if (!CmRegEnter(nhi)) {
+        return;
+    }
     RtlInitUnicodeString(&name, L"XhciCmBridgeDiag");
     if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
                                  REG_BINARY, (PVOID)copy, sizeof(copy)))) {
         nhi->BrDiagWritten = seq;
     }
+    CmRegLeave(nhi);
 }
 
 /* XhciCmBridgeReqDiag (design record 33 section 9.2), the same way, when
@@ -551,11 +866,15 @@ static VOID cmStBqDiag(PCM_NHI nhi)
     if (gen == 0 || gen == nhi->BqDiagWritten) {
         return;
     }
+    if (!CmRegEnter(nhi)) {
+        return;
+    }
     RtlInitUnicodeString(&name, L"XhciCmBridgeReqDiag");
     if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
                                  REG_BINARY, (PVOID)copy, sizeof(copy)))) {
         nhi->BqDiagWritten = gen;
     }
+    CmRegLeave(nhi);
 }
 
 /* XhciCmNoIrqDiag (design record 28 section 7), the same way. */
@@ -579,11 +898,15 @@ static VOID cmStNiDiag(PCM_NHI nhi)
     if (seq == 0 || seq == nhi->NiDiagWritten) {
         return;
     }
+    if (!CmRegEnter(nhi)) {
+        return;
+    }
     RtlInitUnicodeString(&name, L"XhciCmNoIrqDiag");
     if (NT_SUCCESS(ZwSetValueKey((HANDLE)nhi->StatusPub.DevKey, &name, 0,
                                  REG_BINARY, (PVOID)copy, sizeof(copy)))) {
         nhi->NiDiagWritten = seq;
     }
+    CmRegLeave(nhi);
 }
 
 VOID CmStatusStopped(PCM_NHI nhi)
@@ -601,6 +924,7 @@ VOID CmStatusStopped(PCM_NHI nhi)
         in.Stage = CM_ST_STAGE_STOPPED;
         in.Profile = nhi->Profile;
         in.Inert = nhi->Inert;
+        in.Handover = CmOscReport(nhi);
         bytes = CmStatusBuild(s->Built, &in, NULL, NULL, NULL);
         s->BuiltBytes = bytes;
         s->Dirty = 1;
@@ -611,5 +935,19 @@ VOID CmStatusStopped(PCM_NHI nhi)
     if (s->Failures != 0) {
         CmLogNote(nhi, "cm.status.last-error", s->LastError);
     }
-    cmStClose(s);
+    cmStQueryNameWrite(nhi);
+    if (s->Deferred != 0) {
+        CmLogNote(nhi, "cm.status.deferred", s->Deferred);
+    }
+    if (nhi->RegCloseTimeouts != 0) {
+        CmLogNote(nhi, "cm.reg.close-timeouts", nhi->RegCloseTimeouts);
+    }
+    /* Refused admission: the handles are kept for the next start's open
+     * or the removal's close (CmStatusClose). */
+    if (CmRegEnter(nhi)) {
+        cmStClose(s);
+        CmRegLeave(nhi);
+    } else {
+        cmStDefer(nhi);
+    }
 }

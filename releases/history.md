@@ -16,6 +16,248 @@ history; those cut folders stay as they were written.
 columns because it is read on the target machine, in Windows 98 Notepad or DOS
 EDIT, where a `.md` file renders as nothing and its markup is just noise.)
 
+## 3.4.1.0 - 2026-11-05
+
+### New
+
+- **Windows 98 SE and ME: the USB4 handover on ASMedia ASM4242 hosts.**
+  Where a computer's firmware hands the USB4 host to the system only
+  through ACPI `_OSC`, which 98 SE and ME never run, the host never
+  answered and nothing behind it worked. The Thunderbolt 3 / USB4 driver now sends
+  that handover itself when it starts, once a boot, if it knows the
+  firmware. `XhciCmAsm4242Handover` `0` turns it off.
+- **Stor98: interrupts that stop arriving.** A drive that started on its
+  interrupt and then completes requests with no interrupt is polled
+  until it next starts, instead of slowing to a few requests a second,
+  also on an IRQ shared with another device.
+  `StorIntWatchdog` (98 SE and ME) or `storintwatchdog=` (2000 to 10)
+  `0` turns it off.
+- **Windows 98 SE and ME: a device holding a controller's IRQ is named.**
+  At each start on an IRQ xHCI98 looks for another device that holds the
+  controller's shared IRQ. The USB Tree's snapshot names it by its PCI
+  location and ids.
+- **Windows 2000, 32-bit XP and XP x64: the USB4 handover on ASMedia
+  ASM4242 hosts**, as on 98 SE and ME, once
+  `XhciCmAsm4242Reads` is `1`. The USB Tree says when it is needed.
+
+### Changed
+
+- **The installer**
+  - Windows 98 SE and ME: an ASMedia ASM4242 USB4 host is found while
+    Windows has not yet listed its router. The page says so and ticks
+    the Thunderbolt and USB4 support.
+  - Settings... on the Components page holds the USB settings. The
+    Thunderbolt and USB4 page has its own Settings... for the
+    Thunderbolt / USB4 and Stor98 settings.
+  - The Progress page's bar moves with the work done, also while Windows
+    installs the devices.
+  - The texts of every page, of Help, of the console and of the readme
+    are reworded.
+- **The USB Tree:** File, Save Snapshot... asks only for the folder, then
+  says in a short message where the files went. It names AMD's other USB4
+  hosts (Rembrandt, Phoenix, Strix, Strix Halo, Krackan, Krackan2).
+- **Windows 98 SE and ME:** the Thunderbolt 3 / USB4 driver stops writing
+  to the registry when Windows announces a shutdown or standby.
+- **Windows 8, 8.1 and 10:** Setup no longer installs the UAS disk
+  driver. A UAS disk set up from now on uses Windows' own UAS driver; a
+  disk an earlier release set up with `xhciuas.sys` keeps it.
+- **Setup's log:** every line starts with the time.
+- **Thunderbolt and USB4 eject:** the confirmation names the drive and
+  its letter, and the finish message is "It is now safe to disconnect
+  the device."
+- **The log:** a command the controller never answers is named in
+  the snapshot.
+- **The documentation:** the project's own Markdown outside
+  `src/stor98/` is licensed under CC BY 4.0 (`LICENSE-docs.md`).
+
+### Fixed
+
+- **Windows 98 SE and ME: Stor98 took every NVMe drive in the computer**
+  at the start, Windows' own NVMe system disk included, and the start
+  could stop at "Initing stor98.mpd". It now runs only the drive it was
+  loaded for, and leaves a drive the BIOS has set up to the BIOS.
+- **Windows 98 SE and ME:** Stor98's Advanced settings gave
+  `StorMaxTransferKB`'s top as 512 KiB. It is 2048 KiB there.
+- **UAS disks (2000 to 7):** one error on a disk's stream that no
+  transfer was waiting for disconnected the disk while in use, and
+  with some controllers every device on the controller with it.
+  The disk's endpoint is now recovered instead; if that fails, only
+  the disk is reconnected, never the whole controller.
+- **Updating (2000 to 7):** a UAS disk not plugged in during the
+  update kept the earlier UAS driver. It is updated too now.
+- **Updating (98 SE and ME)** with a UAS disk plugged in asked for
+  the driver disk.
+- **Windows 98 SE Summary:** the storage drivers' line was followed
+  by "Not installed" after they were installed.
+
+### Installing/Updating
+
+- **Use `SETUP.EXE`.** Registry values are kept. Device Manager's Update
+  Driver also works on every system: point it at `98-me\`, `nt-x86\` or
+  `nt-x64\`.
+- **Vista x64 to 10 x64:** the x64 drivers are test-signed, so test-signing
+  mode must be on, **and must stay on while the Thunderbolt 3 / USB4 driver
+  is installed**. On 8, 8.1 and 10 that also means Secure Boot must be off.
+- **Windows 98 SE and ME:** the free and non-free drivers are copied to
+  `C:\XHCI98\USBDRV\`; the ones you tick are also added to Windows' driver
+  search path. When Windows asks for a driver for another such device,
+  point it at that device's folder there. If the installer reports a
+  controller "not reached in this run", restart Windows and run it
+  again.
+
+### Known limitations
+
+- **All systems**
+  - Standby and hibernation with a Thunderbolt or USB4 device attached are
+    not supported: use Safely Remove and unplug the device first.
+  - After a standby or hibernation that starts the USB controller afresh,
+    a hub and the devices behind it, a Bulk-Only drive, a drive with no
+    serial number or one that could not finish its work before the sleep,
+    a card reader or other removable drive with a medium in it, a drive
+    that does not report its own identity, and an audio or video device
+    in use are still removed and found again.
+  - An internal NVMe drive already on Stor98 (put there by hand) keeps it.
+  - A maker's driver that takes a whole USB device with more than one
+    configuration no longer binds to it under xHCI98 where xHCI98 now
+    splits that device.
+  - A Thunderbolt or USB4 dock plugged in after Windows starts needs the
+    BIOS to reserve bus numbers for those ports, as boards commonly do;
+    without that the dock's switch stays at Code 31 on 7, and nothing
+    appears behind the port on XP or 98 SE.
+  - Thunderbolt networking: one link at a time; a computer behind a dock
+    or another router is not reached.
+  - A drive in a daisy chain, once stopped, keeps its connection until it
+    is unplugged: unplug it after the stop.
+- **Windows 2000 to 8.1**
+  - A USB Audio 2.0 or 3.0 device that already shows as "USB Audio
+    Device": unplug it, restart Windows (reset the computer if the
+    shutdown hangs), run `cmd /c "set devmgr_show_nonpresent_devices=1&&
+    devmgmt.msc"`, choose View, Show hidden devices, update the greyed
+    "USB Audio Device" to `uac2`, then plug the device in.
+- **Windows 2000, XP and XP x64**
+  - **Docks:** the first time a dock or an enclosure with a switch is
+    plugged in, its devices may stop and start again once, a few seconds
+    after it is plugged in (after its Found New Hardware windows are
+    answered), while xHCI98 sets up its PCI Express ports. If a drive
+    behind it is already in use, unplug it safely and plug it in again
+    instead. A device added later behind a port that has no I/O range (a
+    network adapter behind a chained dock) is placed after the dock is
+    unplugged and plugged in again.
+  - **NVMe enclosures:** the first time one is plugged in, two Found New
+    Hardware wizards appear. The first finds no driver (finish it either
+    way); the second offers "Stor98 Storage Controller for NVMe SSDs":
+    follow it to the end.
+  - **Stop a dock before unplugging it** (Safely Remove Hardware, Unplug or
+    Eject Hardware on 2000, or the xHCI98 USB Tree) when a keyboard, mouse,
+    tablet or similar device is on the dock's own USB controller, unless
+    xHCI98 builds the computer's USB4 tunnels itself (a USB4 host whose
+    firmware has no connection manager), where the unplug is normally
+    handled. Otherwise Windows may never finish
+    removing the dock: it is not found again when plugged back, and Windows
+    does not shut down.
+  - **Updated from 3.2.0.0:** an internal NVMe drive added after the update
+    can start on Stor98: 3.2.0.0 left the key
+    `CriticalDeviceDatabase\pci#cc_010802` with Service `stor98`. Delete
+    that key with Regedit as an administrator, then restart (the release
+    notes, "Known limitations").
+- **Windows 2000**
+  - With the Standard PC HAL, a drive in a daisy chain plugged in after
+    startup gets no interrupt (Code 10); one chained at power-on starts.
+- **Windows XP**
+  - Updating asks one more "Windows Logo testing" question for each UAS
+    disk that is not plugged in; `/yes` cannot answer it.
+- **Windows Vista and 7**
+  - Stop a dock before unplugging it, as on 2000 and XP, when a keyboard,
+    mouse or similar device is on its own USB controller and the computer
+    has a Thunderbolt 3 controller.
+  - 32-bit: with safe removal off, a dock's own USB controller shows Code 1
+    after its first plug until Windows is restarted once.
+- **Windows 98 SE and ME**
+  - **A drive the BIOS has set up** at power-on (one it can start from)
+    stays the BIOS's: its Stor98 entry shows Code 10, and Windows reaches
+    the drive through the BIOS.
+  - **Stor98 and internal NVMe drives:** these systems have no NVMe driver
+    of their own, and they look for a driver before the Thunderbolt 3 / USB4
+    driver can give a drive its id. So Stor98 still matches every NVMe drive
+    there, and Windows may offer it for an internal drive with no driver:
+    decline it. The installer puts Stor98 on tunnelled drives only.
+  - **Docks:** stop a dock in the xHCI98 USB Tree before unplugging it
+    when a keyboard, mouse, tablet or similar device is on the dock's own
+    USB controller.
+  - **First plug of a Thunderbolt or USB4 enclosure (98 SE):** when Windows
+    asks to restart after installing the enclosure's PCI bridges, answer No.
+    If you answered Yes and the drive does not appear, run `asd` from Start,
+    Run, tick "Enumerating a device => PCI standard PCI-to-PCI bridge",
+    click OK and restart.
+  - **Rarely, a start stops** with "A fatal exception 0E has occurred at
+    019F:BFF72170" (98 SE) or "Error: 0E : 01A7 : BFF62170" (ME). Turn the
+    computer off and on again; the next start works.
+  - **USB audio (98 SE):** the first USB audio device plugged in after a
+    boot can freeze Windows, also with Windows' own drivers. Plug the device
+    in before switching on and leave it plugged in. For a webcam whose
+    microphone you don't need, usb-wdm-free's `NOAUD98.INF` avoids it.
+  - **Free USB audio and MIDI drivers:** Windows may ask for `wdmaudio.cat`,
+    `ks.cat` and other files of its own from the Windows CD. Point it at the
+    CD's `WIN98` folder, or click Skip File for the `.cat` files.
+  - **A shared IRQ held by another device (98 SE):**
+    Windows crawls or freezes once xHCI98 is installed when a device with
+    no working driver (an NVMe drive the BIOS still runs, or one whose
+    driver failed) shares an xHCI98 controller's IRQ. Give that device a
+    working driver or remove it; or, if no other working driver uses that
+    IRQ, disable the xHCI98 controllers on it, or set `XhciInterruptMode`
+    to `2` and restart. The USB Tree's snapshot names that device ("line
+    held by another").
+- **Windows 8.1 and 10**
+  - Stor98 still matches by the NVMe class there. Windows' own `stornvme`
+    outranks it, so an internal drive keeps `stornvme`. Stor98 goes only on
+    a drive the installer or you put it on.
+- **32-bit Windows 10**
+  - XHCIPFW is not offered: there it cannot start in time. On a board that
+    leaves the USB4 ports' windows above 4 GB, 10 cannot use the devices
+    behind those ports.
+
+### Choose from 3 downloads
+
+Each zip holds everything in the one before it.
+- **`xhci98-3.4.1.0.zip`:** the xHCI98 drivers (USB 3, UAS, Thunderbolt 3 /
+  USB4, Thunderbolt networking), Stor98, the installer and the tools. It
+  also has NUSB 3.3's seven Windows 98 SE storage files in
+  `USBDRV\NUSB33\`, offered by the installer on 98 SE if you don't already
+  have NUSB. If you have NUSB already installed, it will be kept.
+- **`xhci98-3.4.1.0-free.zip`:** adds the free USB class drivers (audio,
+  MIDI, webcam, Ethernet, serial, printing etc.) from usb-wdm-free
+  (https://github.com/yeokm1/usb-wdm-free) 0.1.8 in `USBDRV\FREE\`.
+  **These are experimental:** they may not work with every device and can
+  make Windows unstable. Please report their problems to that project. New
+  in this release:
+  - `uac2`: far fewer pops under heavy CPU load (more sound queued, set
+    by `Uac2QueueMs`, and a real-time worker, `Uac2Realtime`; a delay in
+    xHCI98 itself of more than 16 ms still interrupts the sound); the volume
+    tops out at 0 dB, a likely cause of distortion on some devices
+    (`Uac2VolAboveZero` `1` offers the whole range again); each device is
+    named by its own product name, such as "Sound Blaster X1".
+  - `uac2`, `cdcnet` and `usbflop` are also offered on XP x64, and
+    `ax88179` on 2000. `uac2` is also copied on 2000, Vista x64, 8 and
+    8.1: point Update Driver at its folder.
+- **`xhci98-3.4.1.0-nonfree.zip`:** also adds a pack of other
+  manufacturers' USB Ethernet, HID, serial and audio drivers from
+  usb-wdm-nonfree (https://github.com/yeokm1/usb-wdm-nonfree) 1.2.0 in
+  `USBDRV\NONFREE\`. New in this release: TASCAM's US-122 audio and MIDI
+  interface driver for 98 SE and ME.
+
+All free/non-free drivers are optional and installed only if you select
+them.
+
+### Disclaimer
+
+This is a fairly new driver. It may have bugs or edge cases that are not yet
+accounted for given the large xHCI/USB 3/4/TB specifications and the many
+host controller implementations and devices. **USB4/TB/NVMe features and the
+usb-wdm-free drivers are even more experimental, so use them at your own
+risk!**
+
+Appreciate all issue reports!
+
 ## 3.4.0.0 - 2026-11-01
 
 ### New

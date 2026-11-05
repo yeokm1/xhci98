@@ -774,3 +774,18 @@ the rows above meet: either the same failure reproduced without this driver in
 the path, or the defect read out of the shipping binary at a named address. A
 symptom this driver merely sits under belongs in `failure-diagnosis.md` until
 it has one of those.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | The SweetLow WinDDK rebuild (5.1.2600.2180, Windows 98) has the same three exports and ordinals, the same `>= 100` / `>= 200` gate, the 300/316-byte copy, the 0x150 wrapper with `Version` at +0x10 and the packet at +0x14, writes the same 16 service pointers, and returns `0x10000001` from `USBPORT_GetHciMn` | both: read from `tools/sweetlow-extracted/usbport-registration-disasm.txt`, then `USBPORT_GetHciMn=10000001` and `packet size=0000013C` in this driver's trace on the `2a-sweetlow` guest | interface doc section 5, "The SweetLow rebuild" |
+| A.2 | Under that build, Windows 98 completes the controller stop (`DisableInterrupts`, `StopController(TRUE)`) on disable, Remove and reinstall, where both 5.00.2195 builds on Windows 98 bugcheck at `0028:C00312EE` after `RH_DisableIrq` | runtime (this driver's trace, QEMU only) | `docs/contributing/lessons.md`, "The Windows 98 teardown bugcheck belongs to the Windows 2000-lineage usbport" |

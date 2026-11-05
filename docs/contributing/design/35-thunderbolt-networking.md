@@ -2998,6 +2998,21 @@ questions as asked follow.
 - **The `usb4-emu` model** (section 10): its own repository's work, on
   which every leg waits.
 
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **The NDIS.SYS imports of `xhcinet.sys` x86 on 98 SE and ME (task 45.59 step S6, design record 35 section 7.8)**: each of its 24 `NDIS.SYS` pairs is a NUL-delimited name in `WINDOWS\SYSTEM\NDIS.VXD` of 98 SE (166,029 bytes, SHA-256 `71C52BC6AEDD76AED7B6E3D87B413689C3C711A1D896DA9FA36435BA1363FF94`, dated 1999-04-23) and of ME (157,397 bytes, `9E0F9ADA90BDC93985858D14A451AB706584FFC4E6F49BA69F48C00C7A332DB2`, 2000-06-08), the files of the q35 base images, whose LE resident and non-resident name tables hold only `NDIS` and `NDIS_DDB`; the reading discriminates (`NdisQueryBufferSafe` is a name of ME's file and not of 98 SE's; `NdisAllocateNetBufferList` of neither). Besides: each pair is declared in the Windows 2000 DDK's `BINARY_COMPATIBLE` `ndis.h` "so that we don't use functions that aren't available on Windows 9x" (the header's comment, line 27), and each is among the imports of `usb-wdm-free`'s `cdcnet.sys` (`src/net/cdcnet/imports-ndis5.txt` at `57ba809`), an NDIS 5.0 WDM miniport recorded loading and passing traffic on 98 SE and ME (`docs/testing/2026-10-22-cdcnet-9x.md` there). `xhcinet.sys`'s own load on 98 SE and ME was then read (2026-11-01, `runs/run-45.md` "45.59 (legs, continued)": loaded, the service up, ping both ways, in the emulator) | static: export names alone (a NUL-delimited name search with a script of this project, and the LE header's two name tables), the owner's rule of 2026-10-31, 14:40, which admits a Microsoft binary's export names for the import gate's baselines and nothing else; documentation (the DDK header); runtime (another driver's recorded load, QEMU only) | `scripts/import-gate/xhcinet-imports.allow` (each `NDIS.SYS` row: `bc-header`, `ndisvxd-name 98SE ME`, `w98-runtime cdcnet-9x`), `ndisvxd-baselines.expected` (the two files) and `net98-runtime.list`, enforced by `check-imports.ps1 -GateProfile net98` |
+| A.2 | **The imports of `xhcinet6.sys` on 8, 8.1 and 10, x86 and x64 (task 45.59 step S7, design record 35 section 7.9)**: every `NTOSKRNL.EXE`, `HAL.DLL` and `NDIS.SYS` name it imports is in the export tables of the 8.1 and 10 `ntoskrnl.exe`, `hal.dll` and `ndis.sys` of its architecture, and on x86 also of Windows 7 SP1 x86's kernel and HAL; the 8.1 and 10 x86 `hal.dll` export `KfAcquireSpinLock` and `KfReleaseSpinLock` as forwarders to the kernel (`dumpbin /exports`: "forwarded to ntoskrnl.KfAcquireSpinLock"), which the kernel exports. The files: Windows 8.1 Update x86 and x64 (`ntoskrnl.exe` 6.3.9600.17415, `hal.dll` 6.3.9600.17196, `ndis.sys` 6.3.9600.17399) and Windows 10 x86 and x64 (`ntoskrnl.exe` 10.0.19041.2965, `hal.dll` 10.0.19041.2728, `ndis.sys` 10.0.19041.1387), each one's size and SHA-256 in its manifest, taken by the owner on 2026-10-31 with `7z e` out of the project's q35 base images, read-only, into the untracked `tools\win81-x86-extracted` and the three others. Only the export names were read (the owner, 2026-10-31: export-table reads for the gate's baselines, export names only); no code, no other header | static (`dumpbin /exports`, run by the gate at every build; nothing executed, nothing disassembled) | `scripts/import-gate/net6-win81-x86-baselines.expected` and its three siblings, `xhcinet6-imports.allow` and `xhcinet6-imports-amd64.allow`, enforced by `check-imports.ps1 -GateProfile net6` |
+
 ## Sources
 
 - USB4 Inter-Domain Service Protocol, Version 2.0, Rev. 1.0 (November

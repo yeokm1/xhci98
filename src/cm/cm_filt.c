@@ -63,7 +63,8 @@
 #include "cm_iso.h"
 #include "../xhci_cmiso.h"
 
-NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
+NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
+                           ULONG portId, ULONG oscRole)
 {
     PDEVICE_OBJECT self;
     PDEVICE_OBJECT lower;
@@ -81,6 +82,7 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
     filter->Common.Self = self;
     filter->Common.Pdo = pdo;
     filter->Outstanding = 1;
+    filter->PortId = portId;
     KeInitializeSpinLock(&filter->Lock);
     KeInitializeEvent(&filter->Drained, NotificationEvent, FALSE);
     CmRegFilterInit(filter);
@@ -90,6 +92,7 @@ NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo)
         return STATUS_NO_SUCH_DEVICE;
     }
     filter->Common.Lower = lower;
+    CmOscmInit(&filter->Osc, oscRole, pdo, lower);
     self->DeviceType = lower->DeviceType;
     self->Characteristics = lower->Characteristics;
     self->Flags |= lower->Flags &
@@ -853,7 +856,48 @@ static NTSTATUS cmIsoQuery(PCM_FILTER filter, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, irp->IoStatus.Information);
 }
 
+static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync);
+
+/*
+ * An ASM4242 downstream port's member half (record 32 section 12.8.15.7,
+ * cm_oscnt.c): its tracked requests counted from their arrival until they
+ * return, waiting while an exchange holds the members; a surprise removal
+ * never waits. Every other filter goes straight to the body.
+ */
 NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
+{
+    PCM_OSC_MEMBER m;
+    NTSTATUS status;
+    UCHAR minor;
+
+    m = &filter->Osc;
+    minor = IoGetCurrentIrpStackLocation(irp)->MinorFunction;
+    if (filter->Common.Kind != CM_KIND_FILTER || m->Role == 0) {
+        return cmFilterPnpBody(filter, irp, FALSE);
+    }
+    if (minor == IRP_MN_SURPRISE_REMOVAL) {
+        CmOscmSurprise(m);
+        return cmFilterPnpBody(filter, irp, FALSE);
+    }
+    if (!CmOscmTracked(irp)) {
+        return cmFilterPnpBody(filter, irp, FALSE);
+    }
+    CmOscmEnter(m);
+    if (minor == IRP_MN_REMOVE_DEVICE) {
+        /* The body deletes the filter: the member goes first. */
+        CmOscmRemove(m);
+        CmOscmLeave(m);
+        return cmFilterPnpBody(filter, irp, FALSE);
+    }
+    /* Forwarded and waited for, so the member's state is the request's
+     * final answer and it is counted until it returns. */
+    status = cmFilterPnpBody(filter, irp, TRUE);
+    CmOscmAfter(m, minor, status);
+    CmOscmLeave(m);
+    return status;
+}
+
+static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
 {
     PIO_STACK_LOCATION stack;
     PDEVICE_OBJECT self;
@@ -913,6 +957,12 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
             filter->SurpriseRemoved = 0;
             if (!child) {
                 CmRegPublish(filter);
+                /* The ACPI-named source's reading (record 22 section
+                 * 7.6.1), on an AMD family's root port, where the NHI
+                 * can read its own name (CmDsdFilterRead). */
+                if (CmPortsAcpiPort(filter->PortId)) {
+                    CmDsdFilterRead(filter);
+                }
             } else {
                 CmRegChainNote(filter, CM_CHAIN_EV_START);
             }
@@ -1050,6 +1100,10 @@ NTSTATUS CmFilterPnp(PCM_FILTER filter, PIRP irp)
     default:
         break;
     }
+    if (sync) {
+        status = CmForwardSync(&filter->Common, irp);
+        return CmCompleteIrp(irp, status, irp->IoStatus.Information);
+    }
     IoSkipCurrentIrpStackLocation(irp);
     return IoCallDriver(filter->Common.Lower, irp);
 }
@@ -1074,6 +1128,9 @@ NTSTATUS CmFilterPower(PCM_FILTER filter, PIRP irp)
         stack->Parameters.Power.Type == DevicePowerState &&
         stack->Parameters.Power.State.DeviceState == PowerDeviceD0) {
         CmRegPassD0(filter);
+    }
+    if (filter->Common.Kind == CM_KIND_FILTER && filter->Osc.Role != 0) {
+        return CmOscmPowerPass(&filter->Osc, filter->Common.Lower, irp);
     }
     PoStartNextPowerIrp(irp);
     IoSkipCurrentIrpStackLocation(irp);

@@ -277,6 +277,7 @@ static BOOLEAN NvmeProcessQueue(IN PHW_DEVICE_EXTENSION DevExt, IN PNVME_QUEUE Q
         }
     }
 
+    DevExt->CqesConsumed += consumed;
     // One doorbell write for everything consumed
     if (processed) {
         NvmeRingDoorbell(DevExt, Queue->QueueId, FALSE, (USHORT)(Queue->CompletionQueueHead & Queue->QueueSizeMask));

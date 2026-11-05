@@ -96,6 +96,17 @@ rule named as the other gates name their families.
   CM-TMPNAME xhcicm.sys is copied with no temporary-file name, in all four
            INFs: on Windows 98 one routes a first install through
            WININIT.INI and a restart, and no NT install takes that route.
+  CM-HLPR  The x86 NHI INF's two NT install sections, and nothing else,
+           install xhci98.inf's helper (design record 18 section 15.15):
+           AddService=xhcihlpr with no flags, once in each .Services, to
+           one install section with ServiceType 1, StartType 0, ErrorControl
+           1, ServiceBinary %12%\xhcihlpr.sys, DisplayName %XhciHlprSvcDesc%
+           (xhci98.inf's text) and no LoadOrderGroup; xhcihlpr.sys copied by
+           that section to 10,System32\Drivers with exactly 0x00000020
+           (COPYFLG_NO_VERSION_DIALOG: a newer helper is kept) and listed in
+           [SourceDisksFiles]; no Reboot or Restart there; never copied or
+           installed by the 98 SE and ME or right-click sections. The filter
+           INFs and the 64-bit NHI INF name no helper.
   Filter INFs (-Filter):
   CM-PORTCC Every model binds PCI\VEN_xxxx&DEV_xxxx&CC_0604 and nothing
            else: the code tells the roles apart by class 06/04 (cm_vals.c),
@@ -186,26 +197,28 @@ $msFiles = @("pci.sys", "usbd.sys", "usbhub.sys", "usbport.sys", "usbui.dll", "u
 # filter INFs bind, read from them below.
 # CM-NOROUTER (design record 22 section 3.1; record 21 section 3.3): ids no
 # INF of this driver binds - device routers and device-side bridges (Titan
-# Ridge DD, Goshen Ridge, the Barlow Ridge hubs, AMD's USB4 router
-# functions, ASMedia's ASM2464PD), the USB-only Alpine Ridge NHIs, and the
-# generations this release does not claim (Light Ridge, Light Peak, Eagle,
-# Port, Cactus, Redwood and Win Ridge). VEN:DEV, from pci.ids 2026.10.14
-# and Linux nhi.h / pci_ids.h.
+# Ridge DD, Goshen Ridge, the Barlow Ridge hubs, ASMedia's ASM2464PD), the
+# USB-only Alpine Ridge NHIs, and the generations this release does not
+# claim (Light Ridge, Light Peak, Eagle, Port, Cactus, Redwood and Win
+# Ridge). VEN:DEV, from pci.ids 2026.10.14 and Linux nhi.h / pci_ids.h.
+# AMD's 151C and 151D, listed in 2026.10.14 as "USB4 Router" and here until
+# task 46.23, are Strix's NHIs in 2026.10.31 and bound by id since.
 $excludedIds = @("8086:15EF", "8086:0B26", "8086:5786", "8086:57A4",
                  "8086:15DC", "8086:15DD", "8086:15DE",
                  "8086:1513", "8086:151A", "8086:151B", "8086:1547", "8086:1548", "8086:1549",
                  "8086:1566", "8086:1567", "8086:1568", "8086:1569", "8086:157D", "8086:157E",
-                 "1022:151C", "1022:151D", "1B21:2463")
+                 "1B21:2463")
 # CM-DESC: the Device Manager names. The description names the hardware,
 # never the connection manager that runs it: the generation (Falcon Ridge is
 # Thunderbolt 2; Alpine Ridge, Titan Ridge and Ice Lake are Thunderbolt 3;
 # Maple Ridge, Tiger Lake onward and every software-CM host are USB4), then
 # the maker and product (record 21 section 3.3's tables, Linux nhi.h and
-# pci.ids 2026.10.14; task 43.73's compact form, TB2/TB3 and Router, within
-# 98 SE's 46 characters). Each NHI id line takes its product's string; the
-# class line takes U4Desc; an id this table does not hold fails. A filter id
+# pci.ids 2026.10.14, AMD's from 2026.10.31, task 46.23; task 43.73's
+# compact form, TB2/TB3 and Router, within 98 SE's 46 characters). Each
+# NHI id line takes its product's string; the class line takes U4Desc; an id this table does not hold fails. A filter id
 # of QEMU's vendor takes BridgeDesc, the ASM4242's downstream port
-# U4AsBridgeDesc (its maker and product; task 44.55), one in neither list
+# U4AsBridgeDesc (its maker and product; task 44.55), its upstream port
+# U4AsUspDesc (the mailbox's member, task 46.12), one in neither list
 # U4BridgeDesc.
 $tb1Ids = @("8086:1513", "8086:1547")
 $descNhi = [ordered]@{
@@ -225,6 +238,12 @@ $descNhi = [ordered]@{
     "U4WlDesc"  = @("xHCI98 USB4 Router (Intel Wildcat Lake)", @("8086:4D33"))
     "U4BrDesc"  = @("xHCI98 USB4 Router (Intel Barlow Ridge)", @("8086:5781", "8086:5784"))
     "U4PsDesc"  = @("xHCI98 USB4 Router (AMD Pink Sardine)", @("1022:1668", "1022:1669"))
+    "U4RbDesc"  = @("xHCI98 USB4 Router (AMD Rembrandt)", @("1022:162E", "1022:162F"))
+    "U4PhDesc"  = @("xHCI98 USB4 Router (AMD Phoenix)", @("1022:15C4", "1022:15C5"))
+    "U4SxDesc"  = @("xHCI98 USB4 Router (AMD Strix)", @("1022:151C", "1022:151D"))
+    "U4ShDesc"  = @("xHCI98 USB4 Router (AMD Strix Halo)", @("1022:158D", "1022:158E"))
+    "U4KrDesc"  = @("xHCI98 USB4 Router (AMD Krackan)", @("1022:1120", "1022:1121"))
+    "U4K2Desc"  = @("xHCI98 USB4 Router (AMD Krackan2)", @("1022:113B", "1022:113C"))
     "U4AsDesc"  = @("xHCI98 USB4 Router (ASMedia ASM4242)", @("1B21:2425"))
 }
 $descNhiById = @{}
@@ -235,6 +254,7 @@ $descStrings = @{
     "nhi"    = [ordered]@{ "U4Desc" = "xHCI98 USB4 Router"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
     "filter" = [ordered]@{ "TbBridgeDesc" = "xHCI98 Thunderbolt PCI Bridge"; "U4BridgeDesc" = "xHCI98 USB4 PCI Bridge";
                            "U4AsBridgeDesc" = "xHCI98 USB4 PCI Bridge (ASMedia ASM4242)";
+                           "U4AsUspDesc" = "xHCI98 USB4 Switch Port (ASMedia ASM4242)";
                            "BridgeDesc" = "xHCI98 PCI Bridge"; "CmSvcDesc" = "xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)" }
 }
 foreach ($k in $descNhi.Keys) { $descStrings["nhi"][$k] = $descNhi[$k][0] }
@@ -306,13 +326,21 @@ function Get-CmNineXTable {
 # as the REG_SZ "auto", which the driver takes as its absence, its own
 # finding (cm_vals.c CmValuesTakeBridge); the NT paths (2000 to 10)
 # XhciCmRingInterrupt; the NT 5.x paths (2000, XP, XP x64) XhciCmBridgeReq,
-# which the driver reads there alone (CmBreqGate).
+# which the driver reads there alone (CmBreqGate). Since task 46.12 on NT
+# (design record 32 sections 12.8.15.10 and 12.8.15.12) every path writes
+# XhciCmAsm4242Handover and the NT paths XhciCmAsm4242Reads; since the NT
+# read path (12.8.15.17) every path writes XhciCmAsm4242Structural too.
 $cmAllValues = [ordered]@{
     "XhciCmAsmediaPcie7Credits" = "CM_ASM_PCIE7_DEFAULT"
     "XhciCmUsb4V2"              = "CM_USB4_V2_DEFAULT"
     "XhciCmGen4LinkRecovery"    = "CM_GEN4_ELR_DEFAULT"
+    "XhciCmAsm4242Handover"     = "CM_PLAT_HANDOVER_DEFAULT"
+    "XhciCmAsm4242Structural"   = "CM_HO_STRUCTURAL_DEFAULT"
 }
-$cmNtValues = [ordered]@{ "XhciCmRingInterrupt" = "CM_RING_IRQ_DEFAULT" }
+$cmNtValues = [ordered]@{
+    "XhciCmRingInterrupt" = "CM_RING_IRQ_DEFAULT"
+    "XhciCmAsm4242Reads"  = "CM_HO_READS_DEFAULT"
+}
 $cmNt5Values = [ordered]@{ "XhciCmBridgeReq" = "CM_BRIDGE_REQ_DEFAULT" }
 $cmBridgeAuto = @{ Flag = "0x00000002"; Data = '"auto"' }
 
@@ -348,6 +376,10 @@ function Test-CmInfText {
     $ntSuffix = if ($Profile -eq "amd64") { ".NTamd64" } else { ".NTx86" }
     $infName = if ($Kind -eq "filter") { "xhcicmf.inf" } else { "xhcicm.inf" }
     $sdfWant = if ($Kind -eq "filter") { @($binary) } else { @($binary, "xhcicm.inf") }
+    # CM-HLPR (design record 18 section 15.15): the x86 NHI INF's NT paths
+    # install xhci98.inf's helper too.
+    $hlprHere = ($Kind -eq "nhi" -and $Profile -ne "amd64")
+    if ($hlprHere) { $sdfWant += "xhcihlpr.sys" }
 
     $fail = New-Object System.Collections.ArrayList
     $add = { param($rule, $msg) [void]$fail.Add("$rule $msg") }
@@ -548,6 +580,8 @@ function Test-CmInfText {
     $checkService = {
         param($ssv, $where, $flagTwo)
         $as = @(& $directive $ssv "AddService")
+        # The helper's line is CM-HLPR's (below), on the x86 NHI's NT paths.
+        if ($hlprHere -and $flagTwo) { $as = @($as | Where-Object { (($_ -split ',')[0].Trim()) -ine "xhcihlpr" }) }
         if ($as.Count -ne 1) { & $add "PATH-NT" "$where needs exactly one AddService."; return }
         $f = @($as[0] -split ',' | ForEach-Object { $_.Trim() })
         $flags = 0
@@ -618,7 +652,7 @@ function Test-CmInfText {
                 }
                 $vd = if ($m4.Success) { ($m4.Groups[1].Value + ":" + $m4.Groups[2].Value).ToUpperInvariant() } else { "" }
                 if ($Kind -eq "filter") {
-                    $wantDesc = if ($vd.StartsWith("1B36:")) { "BridgeDesc" } elseif ($descTbBridge -contains $vd) { "TbBridgeDesc" } elseif ($vd -eq "1B21:2423") { "U4AsBridgeDesc" } else { "U4BridgeDesc" }
+                    $wantDesc = if ($vd.StartsWith("1B36:")) { "BridgeDesc" } elseif ($descTbBridge -contains $vd) { "TbBridgeDesc" } elseif ($vd -eq "1B21:2423") { "U4AsBridgeDesc" } elseif ($vd -eq "1B21:2421") { "U4AsUspDesc" } else { "U4BridgeDesc" }
                 } else {
                     $wantDesc = if ($vd -eq "") { "U4Desc" } elseif ($descNhiById.ContainsKey($vd)) { $descNhiById[$vd] } else { "" }
                 }
@@ -729,6 +763,71 @@ function Test-CmInfText {
         }
         if ($null -eq $ssv) { & $add $pathRule "no [$name$ntSuffix.Services]: the NT targets would install a devnode with no service." }
         else { & $checkService $ssv "[$name$ntSuffix.Services]" $true }
+    }
+
+    # CM-HLPR (design record 18 section 15.15): on the x86 NHI INF's two NT
+    # install sections, and nowhere else, the helper xhci98.inf installs -
+    # the same service in every directive, its file copied to
+    # 10,System32\Drivers with COPYFLG_NO_VERSION_DIALOG (0x20) alone, so a
+    # newer helper from either INF is kept - and no restart asked; in the
+    # filter INFs and the 64-bit NHI INF none.
+    $hlprNamed = @($sections | ForEach-Object { $s = $_; @($s.Lines | Where-Object { $_.Raw -match '(?i)\bxhcihlpr\b' } | ForEach-Object { "[$($s.Name)] '$($_.Raw)'" }) })
+    if (-not $hlprHere) {
+        foreach ($n in $hlprNamed) { & $add "CM-HLPR" "$n names the x86 helper, which only the x86 NHI INF's NT paths install (design record 18 section 15.15)." }
+    } else {
+        $hlprCtl = @($installs | ForEach-Object { "$($_.Name)$ntSuffix" } | Sort-Object -Unique)
+        $hlprSvcSecs = @()
+        foreach ($ctl in $hlprCtl) {
+            $cs = & $get $ctl
+            $ss = & $get "$ctl.Services"
+            if ($null -eq $cs -or $null -eq $ss) { continue }
+            $rows = @(& $directive $ss "AddService" | Where-Object { (($_ -split ',')[0].Trim()) -ieq "xhcihlpr" })
+            if ($rows.Count -ne 1) { & $add "CM-HLPR" "[$ctl.Services] installs the helper $($rows.Count) times; exactly once (design record 18 section 15.15)."; continue }
+            $f = @($rows[0] -split ',' | ForEach-Object { $_.Trim() })
+            if ($f.Count -lt 3 -or ($f[1] -ne "" -and $f[1] -notmatch '^(0x0*0|0)$')) { & $add "CM-HLPR" "[$ctl.Services] must add xhcihlpr with no flags and its install section: it is not the NHI's function driver." }
+            if ($f.Count -ge 3) { $hlprSvcSecs += $f[2] }
+            $delivered = $false
+            foreach ($cf in @((& $directive $cs "CopyFiles") -join ',' -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })) {
+                $csec = & $get $cf
+                if ($null -eq $csec) { continue }
+                foreach ($l in $csec.Lines) {
+                    $ef = @($l.Raw -split ',' | ForEach-Object { $_.Trim() })
+                    if ($ef[0] -ine "xhcihlpr.sys") { continue }
+                    $delivered = $true
+                    if (-not $destOf.ContainsKey($cf.ToLowerInvariant()) -or $destOf[$cf.ToLowerInvariant()] -ne "10,System32\Drivers") { & $add "CM-HLPR" "[$cf] delivers xhcihlpr.sys elsewhere than 10,System32\Drivers, where its ServiceBinary %12%\xhcihlpr.sys loads it from." }
+                    $fl = if ($ef.Count -ge 4) { $ef[3] } else { "" }
+                    if ($fl -notmatch '^0x0*20$') { & $add "CM-HLPR" "[$cf] copies xhcihlpr.sys with flags '$fl'; exactly COPYFLG_NO_VERSION_DIALOG (0x00000020), so a newer helper from either INF is kept." }
+                }
+            }
+            if (-not $delivered) { & $add "CM-HLPR" "[$ctl] installs the helper's service but its CopyFiles does not deliver xhcihlpr.sys." }
+            foreach ($rb in @("Reboot", "Restart")) {
+                if (@($cs.Lines | Where-Object { $_.Raw.Trim() -ieq $rb }).Count -ne 0) { & $add "CM-HLPR" "[$ctl] asks for a restart ($rb): Setup asks for it, and a device installed by hand sends the handover from the next start (design record 18 section 15.15)." }
+            }
+        }
+        foreach ($svcName in @($hlprSvcSecs | Sort-Object -Unique)) {
+            $svc = & $get $svcName
+            if ($null -eq $svc) { & $add "BOTH-XREF" "the helper's AddService names [$svcName], which does not exist."; continue }
+            foreach ($req in @(@("ServiceType", "1"), @("StartType", "0"), @("ErrorControl", "1"), @("ServiceBinary", "%12%\xhcihlpr.sys"), @("DisplayName", "%XhciHlprSvcDesc%"))) {
+                $v = @(& $directive $svc $req[0])
+                if ($v.Count -ne 1 -or $v[0] -ine $req[1]) { & $add "CM-HLPR" "[$svcName] $($req[0]) must be $($req[1]), as xhci98.inf's helper service (design record 18 sections 15.8 and 15.15)." }
+            }
+            if (@(& $directive $svc "LoadOrderGroup").Count -ne 0) { & $add "CM-HLPR" "[$svcName] names a LoadOrderGroup; xhci98.inf's helper service has none." }
+        }
+        if (@($hlprSvcSecs | Sort-Object -Unique).Count -gt 1) { & $add "CM-HLPR" "the NT paths install the helper through different sections; one service shape serves both." }
+        if ($hlprCtl.Count -gt 0 -and $hlprSvcSecs.Count -eq 0) { & $add "CM-HLPR" "no NT install path installs the helper (design record 18 section 15.15)." }
+        $hstr = & $get "Strings"
+        $hd = @(if ($null -ne $hstr) { $hstr.Lines | Where-Object { $_.Key -ieq "XhciHlprSvcDesc" } | ForEach-Object { $_.Value } })
+        if ($hd.Count -ne 1 -or $hd[0] -cne '"xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"') { & $add "CM-HLPR" "[Strings] must define XhciHlprSvcDesc once as xhci98.inf does, so either INF writes the same DisplayName." }
+        # Any other section copying or installing it: the 98 SE and ME path,
+        # the right-click sections.
+        foreach ($s in $sections) {
+            if ($hlprCtl -contains $s.Name -or $hlprCtl -contains ($s.Name -replace '(?i)\.Services$', '')) { continue }
+            foreach ($cf in @((& $directive $s "CopyFiles") -join ',' -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })) {
+                $csec = & $get $cf
+                if ($null -ne $csec -and @($csec.Lines | Where-Object { (($_.Raw -split ',')[0].Trim()) -ieq "xhcihlpr.sys" }).Count -ne 0) { & $add "CM-HLPR" "[$($s.Name)] copies xhcihlpr.sys; only the NT install sections may (never 98 SE and ME, never right-click)." }
+            }
+            if (@(& $directive $s "AddService" | Where-Object { (($_ -split ',')[0].Trim()) -ieq "xhcihlpr" }).Count -ne 0) { & $add "CM-HLPR" "[$($s.Name)] installs the helper; only the NT install sections' .Services may." }
+        }
     }
 
     foreach ($d in @("DefaultInstall", "DefaultInstall$ntSuffix")) {
@@ -978,7 +1077,7 @@ if ($SelfTest) {
                     @{ Rule = "PATH-9X";        Text = $t.Replace("HKR,,NTMPDriver,,xhcicm.sys", "HKR,,NTMPDriver,0x00010001,xhcicm.sys") },
                     @{ Rule = "BOTH-DEST";      Text = $t.Replace("[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles", "[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles9").Replace("Cm.CopyFiles=10,System32\Drivers", "Cm.CopyFiles=10,System32\Drivers`r`nCm.CopyFiles9=10,System").Replace("[Inf.CopyFiles]", "[Cm.CopyFiles9]`r`nxhcicm.sys`r`n`r`n[Inf.CopyFiles]") },
                     @{ Rule = "PATH-NT";        Text = $t.Replace("[Cm.Dev.NTx86.Services]", "[Cm.Dev.NTx86.Svc]") },
-                    @{ Rule = "PATH-NT";        Text = $t.Replace("AddService=xhcicm,0x00000002,Cm.AddService`r`n`r`n; --- Windows Vista", "AddService=xhcicm,,Cm.AddService`r`n`r`n; --- Windows Vista") },
+                    @{ Rule = "PATH-NT";        Text = $t.Replace("AddService=xhcicm,0x00000002,Cm.AddService`r`nAddService=xhcihlpr,,XhciHlpr.AddService`r`n`r`n; --- Windows Vista", "AddService=xhcicm,,Cm.AddService`r`nAddService=xhcihlpr,,XhciHlpr.AddService`r`n`r`n; --- Windows Vista") },
                     @{ Rule = "PATH-NT6";       Text = $t.Replace("[Cm.Dev6.NTx86]", "[Cm.Dev6.NTx86.Old]") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("HKR,,XhciCmReenum,0x00010003,1`r`n", "") },
                     @{ Rule = "VAL-MISSING";    Text = $t.Replace("[Cm.Dev.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt,Cm.ValuesNt5", "[Cm.Dev.NTx86]") },
@@ -1015,6 +1114,8 @@ if ($SelfTest) {
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3`r`n", "").Replace("%U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3`r`n", "") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev,PCI\VEN_8086&DEV_1234`r`n").Replace("%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n", "%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_15BF`r`n%Tb3ArDesc%=Cm.Dev6,PCI\VEN_8086&DEV_1234`r`n") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4PsDesc%=Cm.Dev,PCI\VEN_1022&DEV_1669`r`n", "").Replace("%U4PsDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1669`r`n", "") },
+                    @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4KrDesc%=Cm.Dev,PCI\VEN_1022&DEV_1121`r`n", "").Replace("%U4KrDesc%=Cm.Dev6,PCI\VEN_1022&DEV_1121`r`n", "") },
+                    @{ Rule = "CM-DESC";        Text = $t.Replace("%U4ShDesc%=Cm.Dev,PCI\VEN_1022&DEV_158D", "%U4SxDesc%=Cm.Dev,PCI\VEN_1022&DEV_158D") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425`r`n", "").Replace("%U4AsDesc%=Cm.Dev6,PCI\VEN_1B21&DEV_2425`r`n", "") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4AsDesc%=Cm.Dev,PCI\VEN_1B21&DEV_2425", "%U4Desc%=Cm.Dev,PCI\VEN_1B21&DEV_2425") },
                     @{ Rule = "CM-IDLIST";      Text = $t.Replace("%U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E434`r`n", "").Replace("%U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E434`r`n", "") },
@@ -1043,7 +1144,20 @@ if ($SelfTest) {
                     @{ Rule = "CM-DESC";        Text = $t.Replace("%U4Desc%=Cm.Dev6,PCI\CC_0C0340", "%U4MlDesc%=Cm.Dev6,PCI\CC_0C0340") },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('U4Desc="xHCI98 USB4 Router"', 'U4Desc="xHCI98 USB4 Host Router"') },
                     @{ Rule = "CM-DESC";        Text = $t.Replace('CmSvcDesc="xHCI98 Thunderbolt and USB4', 'CmSvcDesc="xHCI98 Thunderbolt 3 and USB4') },
-                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile=xhcicm.cat") }
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile=xhcicm.cat") },
+                    # Design record 18 section 15.15: the helper on the NT paths.
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("xhcihlpr.sys,,,0x00000020", "xhcihlpr.sys") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("xhcihlpr.sys,,,0x00000020", "xhcihlpr.sys,,,0x00000010") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt`r`nCopyFiles=Cm.CopyFiles,XhciHlpr.CopyFiles", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt`r`nCopyFiles=Cm.CopyFiles") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("AddService=xhcicm,0x00000002,Cm.AddService`r`nAddService=xhcihlpr,,XhciHlpr.AddService`r`n`r`n; --- Shared", "AddService=xhcicm,0x00000002,Cm.AddService`r`n`r`n; --- Shared") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles", "[Cm.Dev]`r`nAddReg=Cm.AddReg,Cm.Values,Cm.Values9x`r`nCopyFiles=Cm.CopyFiles,XhciHlpr.CopyFiles") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("[DefaultInstall.NTx86]`r`nCopyFiles=Cm.CopyFiles", "[DefaultInstall.NTx86]`r`nCopyFiles=Cm.CopyFiles,XhciHlpr.CopyFiles") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt`r`n", "[Cm.Dev6.NTx86]`r`nAddReg=Cm.Values,Cm.ValuesNt`r`nReboot`r`n") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("StartType=0                         ; SERVICE_BOOT_START", "StartType=3                         ; SERVICE_DEMAND_START") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("AddService=xhcihlpr,,XhciHlpr.AddService", "AddService=xhcihlpr,0x00000002,XhciHlpr.AddService") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace('XhciHlprSvcDesc="xHCI98 helper for 32-bit', 'XhciHlprSvcDesc="xHCI98 helper for all 32-bit') },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("XhciHlpr.CopyFiles=10,System32\Drivers", "XhciHlpr.CopyFiles=11") },
+                    @{ Rule = "BOTH-SDF";       Text = $t.Replace("xhcihlpr.sys=1`r`n", "") }
                 )
             }
             "nhi-amd64" {
@@ -1063,7 +1177,8 @@ if ($SelfTest) {
                     @{ Rule = "BOTH-VERSION";   Text = ($t -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                     @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat`r`n", "") },
                     @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat", "CatalogFile=xhcicmf.cat") },
-                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat", "CatalogFile.NTamd64=xhcicm.cat") }
+                    @{ Rule = "BOTH-CATALOG";   Text = $t.Replace("CatalogFile=xhcicm.cat", "CatalogFile.NTamd64=xhcicm.cat") },
+                    @{ Rule = "CM-HLPR";        Text = $t.Replace("[Cm.CopyFiles]`r`nxhcicm.sys", "[Cm.CopyFiles]`r`nxhcicm.sys`r`nxhcihlpr.sys") }
                 )
             }
             "filter-x86" {

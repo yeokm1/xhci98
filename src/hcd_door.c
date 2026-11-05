@@ -58,6 +58,7 @@
 #include "xhci_hw.h"
 #include "xhci_dname.h"
 #include "xhci_qryb.h"
+#include "xhci_acpi.h"
 #include "xhci_verpk.h"
 
 /* CTL_CODE(FILE_DEVICE_USB = 0x22, fn, METHOD_BUFFERED, FILE_ANY_ACCESS);
@@ -621,6 +622,7 @@ VOID HcdDoorControllerStart(PHCD_CONTROLLER hc)
 VOID HcdDoorControllerStop(PHCD_CONTROLLER hc)
 {
     hcdInterfaceOff(&hc->HcInterface, &hc->HcInterfaceOn, 0);
+    HcdAcpiForget(hc);
 }
 
 /* At the remove, before the FDO is deleted: the alias, then the door's
@@ -628,6 +630,7 @@ VOID HcdDoorControllerStop(PHCD_CONTROLLER hc)
 VOID HcdDoorControllerRemove(PHCD_CONTROLLER hc)
 {
     hcdInterfaceOff(&hc->HcInterface, &hc->HcInterfaceOn, 1);
+    HcdAcpiForget(hc);
     hcdNameDelete(hc, hcdAliasTaken, hc->HcdAliasName, hc->HcdAliasIndex,
                   &hc->HcdAliasMade);
     hcdNameDelete(hc, hcdNameTaken, hc->HcdLinkName, hc->HcdIndex,
@@ -1868,6 +1871,10 @@ NTSTATUS HcdDoorControllerIoctl(PHCD_CONTROLLER hc, PIRP irp)
 
     case XHQ_IOCTL:
         status = hcdDoorQuery(hc, buf, outLen, &info);
+        break;
+
+    case XHA_IOCTL:
+        status = HcdAcpiRequest(hc, buf, inLen, outLen, &info);
         break;
 
     case HCD_IOCTL_HCD_DRIVERKEY:

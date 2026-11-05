@@ -156,10 +156,13 @@ ULONG CmClassifyIds(const WCHAR *ids, ULONG chars, PCM_IDS out)
 }
 
 /* NHI ids by profile (cm_vals.h): Intel's from Linux
- * drivers/thunderbolt/nhi.h, AMD's from FreeBSD sys/dev/thunderbolt
- * nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1), ASMedia's from design record
- * 22 section 18.1 (the ASM4242's host interface: class 0C0340 gives it
- * the same profile; the row is there for its INF line, task 45.46). */
+ * drivers/thunderbolt/nhi.h; AMD's Pink Sardine from FreeBSD
+ * sys/dev/thunderbolt nhi_reg.h (DEVICE_PINK_SARDINE_0 and _1) and its
+ * other integrated hosts from pci.ids 2026.10.31 (task 46.23; Linux names
+ * no AMD NHI id and matches them by class); ASMedia's from design record
+ * 22 section 18.1 (the ASM4242's host interface). Class 0C0340 gives
+ * every AMD and ASMedia row the same profile; the rows are there for
+ * their INF lines (tasks 45.46 and 46.23). */
 typedef struct _CM_NHI_ROW {
     ULONG Device;
     ULONG Profile;
@@ -167,7 +170,19 @@ typedef struct _CM_NHI_ROW {
 
 static const CM_NHI_ROW cmAmdNhi[] = {
     { 0x1668, CM_PROFILE_USB4 },     /* Pink Sardine                      */
-    { 0x1669, CM_PROFILE_USB4 }
+    { 0x1669, CM_PROFILE_USB4 },
+    { 0x162E, CM_PROFILE_USB4 },     /* Rembrandt                         */
+    { 0x162F, CM_PROFILE_USB4 },
+    { 0x15C4, CM_PROFILE_USB4 },     /* Phoenix                           */
+    { 0x15C5, CM_PROFILE_USB4 },
+    { 0x151C, CM_PROFILE_USB4 },     /* Strix                             */
+    { 0x151D, CM_PROFILE_USB4 },
+    { 0x158D, CM_PROFILE_USB4 },     /* Strix Halo                        */
+    { 0x158E, CM_PROFILE_USB4 },
+    { 0x1120, CM_PROFILE_USB4 },     /* Krackan                           */
+    { 0x1121, CM_PROFILE_USB4 },
+    { 0x113B, CM_PROFILE_USB4 },     /* Krackan2                          */
+    { 0x113C, CM_PROFILE_USB4 }
 };
 
 static const CM_NHI_ROW cmAsmNhi[] = {
@@ -333,6 +348,9 @@ VOID CmValuesDefault(PCM_VALUES v)
     }
     v->BridgeNumbering = CM_BRIDGE_NUMBERING_DEFAULT;
     v->NoIrqStart = CM_NOIRQ_START_DEFAULT;
+    v->PlatformHandover = CM_PLAT_HANDOVER_DEFAULT;
+    v->HandoverStructural = CM_HO_STRUCTURAL_DEFAULT;
+    v->HandoverReads = CM_HO_READS_DEFAULT;
     v->AsmPcie7 = CM_ASM_PCIE7_DEFAULT;
     v->Usb4V2 = CM_USB4_V2_DEFAULT;
     v->Gen4Elr = CM_GEN4_ELR_DEFAULT;
@@ -428,6 +446,63 @@ VOID CmValuesTakeGen4Elr(PCM_VALUES v, ULONG found, ULONG raw)
         return;
     }
     v->Gen4Elr = raw;
+}
+
+/* XhciCmAsm4242Handover (cm_vals.h): 0 or 1, else the default. */
+VOID CmValuesTakePlatformHandover(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->PlatformHandover = CM_PLAT_HANDOVER_DEFAULT;
+    v->PlatformHandoverFound = 0;
+    v->PlatformHandoverRaw = 0;
+    v->PlatformHandoverRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->PlatformHandoverFound = 1;
+    v->PlatformHandoverRaw = raw;
+    if (raw > 1UL) {
+        v->PlatformHandoverRefused = 1;
+        return;
+    }
+    v->PlatformHandover = raw;
+}
+
+/* XhciCmAsm4242Structural (cm_vals.h): 0 or 1, else the default. */
+VOID CmValuesTakeHandoverStructural(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->HandoverStructural = CM_HO_STRUCTURAL_DEFAULT;
+    v->HandoverStructuralFound = 0;
+    v->HandoverStructuralRaw = 0;
+    v->HandoverStructuralRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->HandoverStructuralFound = 1;
+    v->HandoverStructuralRaw = raw;
+    if (raw > 1UL) {
+        v->HandoverStructuralRefused = 1;
+        return;
+    }
+    v->HandoverStructural = raw;
+}
+
+/* XhciCmAsm4242Reads (cm_vals.h): 0 or 1, else the default. */
+VOID CmValuesTakeHandoverReads(PCM_VALUES v, ULONG found, ULONG raw)
+{
+    v->HandoverReads = CM_HO_READS_DEFAULT;
+    v->HandoverReadsFound = 0;
+    v->HandoverReadsRaw = 0;
+    v->HandoverReadsRefused = 0;
+    if (!found) {
+        return;
+    }
+    v->HandoverReadsFound = 1;
+    v->HandoverReadsRaw = raw;
+    if (raw > 1UL) {
+        v->HandoverReadsRefused = 1;
+        return;
+    }
+    v->HandoverReads = raw;
 }
 
 VOID CmValuesTakeNoIrqStart(PCM_VALUES v, ULONG found, ULONG raw)

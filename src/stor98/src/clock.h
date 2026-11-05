@@ -157,6 +157,7 @@ typedef struct _ENG_CLOCK {
     ULONG Recals;           // TSC re-calibrations accepted
     ULONG Rejects;          // samples rejected
     ULONG LongGaps;         // folds that used the safe clock (gap beyond 32-bit TSC units)
+    ULONG BackSpans;        // readings behind the base (nothing counted; the watchdog's finds, lifecycle.c)
     ULONG WinBroken;        // the timer stopped since the window began: restart it
 } ENG_CLOCK, *PENG_CLOCK;
 

@@ -506,6 +506,7 @@ VOID PlatPollRaw(OUT POLL_RAW *Raw)
     PlatPollValue(hk, "StorPollBusyUs", POLL_CLAMP_BUSY, &Raw->BusyUs, Raw);
     PlatPollValue(hk, "StorPollIdleMs", POLL_CLAMP_IDLE, &Raw->IdleMs, Raw);
     PlatPollValue(hk, "StorPollSpinUs", POLL_CLAMP_SPIN, &Raw->SpinUs, Raw);
+    PlatPollValue(hk, "StorIntWatchdog", POLL_CLAMP_WATCH, &Raw->Watch, Raw);
     PlatRegCloseKey(hk);
 }
 
@@ -601,6 +602,85 @@ static ULONG PlatCatDec(IN OUT PCHAR Buf, IN ULONG Pos, IN ULONG Size, IN ULONG 
     return Pos;
 }
 
+#ifdef NVME2K_W9X
+static ULONG PlatCatHex(IN OUT PCHAR Buf, IN ULONG Pos, IN ULONG Size, IN ULONG Value, IN ULONG Digits)
+{
+    static const char hex[] = "0123456789ABCDEF";
+
+    while (Digits != 0 && Pos + 1 < Size) {
+        Digits--;
+        Buf[Pos++] = hex[(Value >> (Digits * 4)) & 0xF];
+    }
+    Buf[Pos] = 0;
+    return Pos;
+}
+
+static ULONG PlatCatBdf(IN OUT PCHAR Buf, IN ULONG Pos, IN ULONG Size, IN ULONG Bus, IN ULONG Slot)
+{
+    Pos = PlatCatDec(Buf, Pos, Size, Bus);
+    Pos = PlatCat(Buf, Pos, Size, ".");
+    Pos = PlatCatDec(Buf, Pos, Size, Slot & 0x1F);
+    Pos = PlatCat(Buf, Pos, Size, ".");
+    return PlatCatDec(Buf, Pos, Size, (Slot >> 5) & 0x7);
+}
+
+// e.g. "port 115.0.0 slot 0 range FE600000:00000000 len 16384; read 256
+// class 010802 bar0 FE600004 bar1 00000000; found 115.0.0; cmd 0006 cc
+// 00000000 csts 00000000 taken; result 1"
+VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
+{
+    CHAR text[256];
+    ULONG hk = 0, n;
+
+    n = PlatCat(text, 0, sizeof(text), "port ");
+    n = PlatCatBdf(text, n, sizeof(text), Fi->PortBus, Fi->PortSlot);
+    n = PlatCat(text, n, sizeof(text), " slot ");
+    n = PlatCatDec(text, n, sizeof(text), Fi->PortSlot);
+    n = PlatCat(text, n, sizeof(text), " range ");
+    n = PlatCatHex(text, n, sizeof(text), Fi->RangeLo, 8);
+    n = PlatCat(text, n, sizeof(text), ":");
+    n = PlatCatHex(text, n, sizeof(text), Fi->RangeHi, 8);
+    n = PlatCat(text, n, sizeof(text), " len ");
+    n = PlatCatDec(text, n, sizeof(text), Fi->RangeLen);
+    n = PlatCat(text, n, sizeof(text), "; read ");
+    n = PlatCatDec(text, n, sizeof(text), Fi->SlotBytes);
+    n = PlatCat(text, n, sizeof(text), " class ");
+    n = PlatCatHex(text, n, sizeof(text), Fi->SlotClass, 6);
+    n = PlatCat(text, n, sizeof(text), " bars");
+    {
+        ULONG b;
+
+        for (b = 0; b < 6; b++) {
+            n = PlatCat(text, n, sizeof(text), " ");
+            n = PlatCatHex(text, n, sizeof(text), Fi->SlotBar[b], 8);
+        }
+    }
+    n = PlatCat(text, n, sizeof(text), "; found ");
+    if (Fi->Found) {
+        n = PlatCatBdf(text, n, sizeof(text), Fi->FoundBus, Fi->FoundSlot);
+    } else {
+        n = PlatCat(text, n, sizeof(text), "none");
+    }
+    if (Fi->FwChecked) {
+        n = PlatCat(text, n, sizeof(text), "; cmd ");
+        n = PlatCatHex(text, n, sizeof(text), Fi->FwCmd, 4);
+        n = PlatCat(text, n, sizeof(text), " cc ");
+        n = PlatCatHex(text, n, sizeof(text), Fi->FwCc, 8);
+        n = PlatCat(text, n, sizeof(text), " csts ");
+        n = PlatCatHex(text, n, sizeof(text), Fi->FwCsts, 8);
+        n = PlatCat(text, n, sizeof(text), Fi->FwState == 0 ? " taken" :
+                    Fi->FwState == 1 ? " left: already set up" :
+                    Fi->FwState == 2 ? " left: no answer" : " left: unreadable");
+    }
+    n = PlatCat(text, n, sizeof(text), "; result ");
+    n = PlatCatDec(text, n, sizeof(text), Fi->Result);
+    if (PlatRegCreateKey(PLAT_HKLM, PLAT_WT_KEY, &hk) == 0) {
+        PlatRegSetValueEx(hk, "StorFind", 0, PLAT_REG_SZ, text, n + 1);
+        PlatRegCloseKey(hk);
+    }
+}
+#endif
+
 static const char *PlatPollWhyText(IN ULONG Why)
 {
     switch (Why) {
@@ -614,6 +694,7 @@ static const char *PlatPollWhyText(IN ULONG Why)
     case POLL_WHY_NO_PORT_IRQ:  return "polling (no interrupt assigned)";
     case POLL_WHY_NO_LINE:      return "polling (interrupt line not set)";
     case POLL_WHY_INTX_OFF:     return "polling (INTx would not enable)";
+    case POLL_WHY_MISSED:       return "polling (interrupts missed)";
     default:                    return "polling (configuration unreadable)";
     }
 }

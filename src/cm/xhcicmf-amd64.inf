@@ -27,7 +27,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=11/01/2026,3.4.0.0
+DriverVer=11/05/2026,3.4.1.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhcicmf.cat
 
@@ -74,14 +74,19 @@ CatalogFile=xhcicmf.cat
 ; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
 ; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
 ; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
-; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
-; come from XhciCmTunnelBridge. All untested.
+; downstream port; and Krackan's and Krackan2's PCIe USB4 bridge, which
+; pci.ids 2026.10.31 labels so (task 46.23). Lunar, Panther and Wildcat
+; Lake name none; their sets come from XhciCmTunnelBridge. All untested.
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_5780&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_8086&DEV_5783&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_150A&CC_0604
+%U4BridgeDesc%=CmF.Dev,PCI\VEN_1022&DEV_1125&CC_0604
 %U4AsBridgeDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2423&CC_0604
+; The ASM4242's upstream port: no tunnel port, the mailbox's member
+; (design record 32 sections 12.8.13.4 and 12.8.15.7, task 46.12).
+%U4AsUspDesc%=CmF.Dev,PCI\VEN_1B21&DEV_2421&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -127,14 +132,19 @@ CatalogFile=xhcicmf.cat
 ; Design record 22 section 3.7 (task 40-0.2): the USB4-only hosts' tunnel
 ; ports where pci.ids 2026.10.14 labels a port as such - the Barlow Ridge
 ; host bridges, AMD's USB4 PCIe tunnel ports and bridge, ASMedia's ASM4242
-; downstream port. Lunar, Panther and Wildcat Lake name none; their sets
-; come from XhciCmTunnelBridge. All untested.
+; downstream port; and Krackan's and Krackan2's PCIe USB4 bridge, which
+; pci.ids 2026.10.31 labels so (task 46.23). Lunar, Panther and Wildcat
+; Lake name none; their sets come from XhciCmTunnelBridge. All untested.
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5780&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_8086&DEV_5783&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14CD&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_14EF&CC_0604
 %U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_150A&CC_0604
+%U4BridgeDesc%=CmF.Dev6,PCI\VEN_1022&DEV_1125&CC_0604
 %U4AsBridgeDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2423&CC_0604
+; The ASM4242's upstream port: no tunnel port, the mailbox's member
+; (design record 32 sections 12.8.13.4 and 12.8.15.7, task 46.12).
+%U4AsUspDesc%=CmF.Dev6,PCI\VEN_1B21&DEV_2421&CC_0604
 ; The emulator's tunnel ports (usb4-emu; runs/run-39.md 39-0.7): the i440FX
 ; usb4-tunnel-bridge and the q35 usb4-tunnel-port.
 %BridgeDesc%=CmF.Dev6,PCI\VEN_1B36&DEV_0001&CC_0604
@@ -213,5 +223,6 @@ DiskName="xhci98 xHCI Host Controller Disk"
 TbBridgeDesc="xHCI98 Thunderbolt PCI Bridge"
 U4BridgeDesc="xHCI98 USB4 PCI Bridge"
 U4AsBridgeDesc="xHCI98 USB4 PCI Bridge (ASMedia ASM4242)"
+U4AsUspDesc="xHCI98 USB4 Switch Port (ASMedia ASM4242)"
 BridgeDesc="xHCI98 PCI Bridge"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"

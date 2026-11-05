@@ -310,6 +310,26 @@ static void test_cycle(void)
     CHECK_EQ(XhciTolHaltCandidate(1, XHCI_CC_STALL, 1, 1), 0, "isochronous");
     CHECK_EQ(XhciTolHaltCandidate(1, XHCI_CC_STALL, 0, 0), 0, "no pipe");
     CHECK_EQ(XhciTolHaltCandidate(0, XHCI_CC_STALL, 0, 1), 0, "tolerance 0");
+    /* A halt on a streams endpoint no stream's TD claims is the endpoint's
+     * recovery, never a cycle (user report, 2026-11-04). */
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_BABBLE, 0), 1, "stream babble");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_STALL, 0), 1, "stream stall");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_USB_TRANSACTION_ERROR, 0), 1,
+             "stream transaction error");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_SPLIT_TRANSACTION, 0), 1,
+             "stream split");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_BABBLE, 1), 0,
+             "stream event data");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_SHORT_PACKET, 0), 0,
+             "stream short packet");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_SUCCESS, 0), 0, "stream success");
+    /* Issue 24: a stream ID the host holds no ring for, as Linux. */
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_INVALID_STREAM_ID, 0), 1,
+             "stream invalid id");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_INVALID_STREAM_TYPE, 0), 1,
+             "stream invalid type");
+    CHECK_EQ(XhciTolStreamHaltDrain(XHCI_CC_INVALID_STREAM_ID, 1), 0,
+             "stream invalid id, event data");
 
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_HALTED), 1, "Halted");
     CHECK_EQ(XhciTolHaltConfirmed(XHCI_EP_STATE_ERROR), 1, "Error");

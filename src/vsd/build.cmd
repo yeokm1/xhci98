@@ -13,12 +13,13 @@ rem
 rem Compile: Open Watcom 2.0 wcc386 under WATCOM (default C:\WATCOM). Link:
 rem the Windows 98 SE DDK's LINK 5.12 /VXD, staged with the DDK's headers
 rem by stage-ddk.ps1 (held to docs\references\README.md's hashes), which
-rem reads Watcom's OMF objects (warning LNK4033). LINK 5.12 mislinks two
+rem reads Watcom's OMF objects (warning LNK4033). LINK 5.12 mislinks three
 rem OMF shapes Watcom writes (record 30 section 6.1): so no file-scope
 rem static in the sources, the data in an object of its own (vsd_data.c),
-rem omfpub.py moving every PUBDEF to just before MODEND, omfcheck.py failing
-rem on either shape left, and callcheck.py failing if a call in the image
-rem lands anywhere but the function the compiler named.
+rem omfpub.py moving every PUBDEF to just before MODEND and setting the
+rem THEADR name to the source's base name, omfcheck.py failing on any of the
+rem shapes left, and callcheck.py failing if a call or a segment-relative
+rem fixup in the image lands anywhere but where the compiler named.
 setlocal
 cd /d "%~dp0"
 set "FLAV=%~1"
@@ -64,8 +65,10 @@ if not exist "%O%" mkdir "%O%"
 set "PATH=%WBIN%;%PATH%"
 rem -zp1: the DDK's C headers mirror the packed MASM layouts. -zc: string
 rem literals in the code segment. -s: no stack probes. -zl -zls: no
-rem default-library records. -oxi: inline outp. -we: a warning fails.
-set "CF=-q -bt=windows -3r -zp1 -zc -s -zl -zls -oxi -w4 -we -i=obj\inc -i=%WATCOM%\H %DEF%"
+rem default-library records. -oxi: inline outp. -we: a warning fails. -zld:
+rem no dependency records (each header's full path and time stamp), so with
+rem omfpub.py's THEADR the objects do not depend on where they are built.
+set "CF=-q -bt=windows -3r -zp1 -zc -s -zl -zls -zld -oxi -w4 -we -i=obj\inc -i=%WATCOM%\H %DEF%"
 for %%F in (vsd vsd_list vsd_data) do (
     wcc386 %CF% -fo=%O%\%%F.obj %%F.c || exit /b 1
     "%PY%" -I omfpub.py %O%\%%F.obj || exit /b 1
@@ -75,9 +78,10 @@ rem Linked as S98NEW.VXD and made S98VSD.VXD only once every check below
 rem has passed (the old image is deleted at the start), so a build that
 rem fails anywhere leaves no image to package.
 if exist %O%\S98NEW.VXD del %O%\S98NEW.VXD
+"%PY%" -I callcheck.py --self-test || exit /b 1
 obj\bin\link.exe /VXD /NOD /NOLOGO /IGNORE:4033 /IGNORE:4078 /IGNORE:4039 /IGNORE:4070 /IMPLIB:%O%\stor98.lib /OUT:%O%\S98NEW.VXD /MAP:%O%\stor98.map /DEF:vsd.def %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj
 if errorlevel 1 exit /b 1
-"%PY%" -I callcheck.py %O%\S98NEW.VXD %O%\stor98.map %O%\vsd.obj %O%\vsd_list.obj || exit /b 1
+"%PY%" -I callcheck.py %O%\S98NEW.VXD %O%\stor98.map %O%\vsd.obj %O%\vsd_list.obj %O%\vsd_data.obj || exit /b 1
 set "QF="
 if /i "%FLAV%"=="qemu" set "QF=-Qemu"
 rem The release image writes to no I/O port: Open Watcom's disassembler
@@ -99,6 +103,7 @@ if /i not "%FLAV%"=="qemu" (
         )
     )
 )
+powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 -SelfTest || exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File check-vsd.ps1 %O%\S98NEW.VXD %QF% || exit /b 1
 move /y %O%\S98NEW.VXD %O%\S98VSD.VXD >nul || exit /b 1
 echo built %O%\S98VSD.VXD

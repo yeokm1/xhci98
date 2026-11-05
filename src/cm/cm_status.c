@@ -420,6 +420,28 @@ ULONG CmStatusBuild(UCHAR *buf, const CM_STATUS_IN *in, const TBT_ICM *icm,
     flags |= (in->Blocked & CM_ST_F_BLOCKED_MASK) << CM_ST_F_BLOCKED_SHIFT;
     flags |= ((in->Blocked >> 4) & CM_ST_F_BLOCKED_MASK)
              << CM_ST_F_EJECTING_SHIFT;
+    flags |= (in->Handover & CM_ST_F_HO_MASK) << CM_ST_F_HO_SHIFT;
+    if ((in->Handover & 8UL) != 0) {
+        flags |= CM_ST_F_HO_SENT;
+    }
+    if ((in->Handover & 0x10UL) != 0) {
+        flags |= CM_ST_F_HO_GUARD;
+    }
+    if ((in->Handover & 0x20UL) != 0) {
+        flags |= CM_ST_F_HO_TIMEOUT;
+    }
+    if ((in->Handover & 0x40UL) != 0) {
+        flags |= CM_ST_F_HO_UNKNOWN;
+    }
+    if ((in->Handover & 0x80UL) != 0) {
+        flags |= CM_ST_F_HO_NOROUTE;
+    }
+    if ((in->Handover & 0x100UL) != 0) {
+        flags |= CM_ST_F_HO_EXPIRED;
+    }
+    if ((in->Handover & 0x200UL) != 0) {
+        flags |= CM_ST_F_HO_ECAMOFF;
+    }
     cmStPut(buf, CM_ST_O_FLAGS, flags);
     cmStPut(buf, CM_ST_O_ECHO, in->Echo);
     return CM_ST_HDR_BYTES + count * CM_ST_ENTRY_BYTES;
