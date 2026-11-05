@@ -166,7 +166,10 @@ function Get-CmPublishable {
 # 98-me\stor98\stor98.inf (section 3.4). One flat file has no place:
 # nt\xhcicm.sys, the filter INF's copy of xhcicm.sys (the same bytes,
 # which CM-NO9XBRIDGE compares), rebuilt in the flat view from
-# nt-x86\cm\xhcicm.sys whenever nt-x86\cm\xhcicmf.inx is there.
+# nt-x86\cm\xhcicm.sys whenever nt-x86\cm\xhcicmf.inx is there. One flat file
+# has two places in one family: xhcihlpr.sys, beside xhci98.inf and beside
+# cm\xhcicm.inf, which installs it too (design record 18 section 15.15), the
+# same bytes; the installer's local copy keeps it once.
 # xhciinst\inst_core.c's instPkgFiles is the same table's local-name side
 # (section 6.2), held to this one by test-package.ps1.
 $script:FamilyNames = @("98-me", "nt-x86", "nt-x64")
@@ -180,7 +183,7 @@ $script:FamilyLayout = @{
     "x86" = [ordered]@{
         "xhci98.inf"         = @("98-me\xhci98.inf", "nt-x86\xhci98.inf")
         "xhci98.sys"         = @("98-me\xhci98.sys", "nt-x86\xhci98.sys")
-        "xhcihlpr.sys"       = @("nt-x86\xhcihlpr.sys")
+        "xhcihlpr.sys"       = @("nt-x86\xhcihlpr.sys", "nt-x86\cm\xhcihlpr.sys")
         "xhciuas.inf"        = @("98-me\xhciuas.inf", "nt-x86\xhciuas.inf")
         "xhciuas.sys"        = @("98-me\xhciuas.sys", "nt-x86\xhciuas.sys")
         "txtsetup.oem"       = @("nt-x86\txtsetup.oem")
@@ -3795,15 +3798,16 @@ $script:NonFreeFolder = "USBDRV\NONFREE"
 $script:NonFreePrefix = "non-free"
 $script:NonFreeExtras = @("NOTICE.md", "README.md", "STAGE.TXT")
 $script:NonFreePin = [pscustomobject]@{
-    Tag        = "v1.1.0"
-    Commit     = "565d11b40fbeb53f5a576c01b5ceba331892c610"
+    Tag        = "v1.2.0"
+    Commit     = "c40ad7e4568fe2be7a889a79f6ada01f33123e81"
     # The SHA-256 of the pack's own SHA256.TXT blob at that commit.
-    PackSums   = "2208E5B4F68DE00938C20DFE6B3520DA22A1AD3CDF7489BAED01F3AF4FDE8D87"
+    PackSums   = "0360249F34C3EABC48E2C38F9B6008CF6E8341F3639FE864E4BBBD0FE0E25701"
 }
 # The folders of non-free/ that download 3 leaves out, and their STAGE.TXT
 # lines with them. The owner, 2026-10-28: the Wi-Fi drivers stay in
 # usb-wdm-nonfree and its own release, where people get them; download 3
-# keeps the Ethernet, HID and serial drivers.
+# keeps the Ethernet, HID and serial drivers, and from v1.2.0 (owner,
+# 2026-11-02) the audio driver, TASCAM's US-122.
 $script:NonFreeExcluded = @("wifi")
 $script:WdmFreeFolder = "USBDRV\FREE"
 $script:WdmFreePrefix = "free"
@@ -5504,11 +5508,11 @@ function Get-ReadmeDownloadText {
             if ($FreeTag -ne "") {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: $z2 (the base download with the free USB " +
                                               "class drivers of usb-wdm-free $FreeTag in USBDRV\FREE\), with " +
-                                              "the makers' Ethernet, HID and serial drivers of usb-wdm-nonfree " +
+                                              "the makers' Ethernet, HID, serial and audio drivers of usb-wdm-nonfree " +
                                               "$NonFreeTag added in USBDRV\NONFREE\.")
             } else {
                 $L += Format-ReadmeWrap -Text ("This is ${z3}: the base download, $z1, with the makers' " +
-                                              "Ethernet, HID and serial drivers of usb-wdm-nonfree $NonFreeTag " +
+                                              "Ethernet, HID, serial and audio drivers of usb-wdm-nonfree $NonFreeTag " +
                                               "added in USBDRV\NONFREE\.")
             }
             $L += Format-ReadmeWrap -Text ("Wi-Fi drivers are not in this download. Get them from the " +

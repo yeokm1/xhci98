@@ -679,3 +679,18 @@ Records: GitHub issue 4 (the thread); `docs/issues/06-full-speed-root-port-bugch
 lookup); `docs/usb-xhci-info/xhci-data-structures.md` (Tables 5-27, 6-6 and
 6-12); `docs/contributing/design/02-hub-topology-route-string.md`;
 `runs/run-24.md`; `releases/history.md`.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | `usbui.dll` is absent from a stock Windows XP x64 install, exactly as it is from 32-bit XP: `7z l vm\winxp64.img -r usbui.dll` on the task 21.5 guest's clean-install snapshot returns zero files. Both XP media give the row the `2,1,3` text-mode disposition, "do not copy at Setup", so a USB controller's own install is the only thing that places it | static (a listing through the qcow2's MBR and NTFS; the guest was not booted) | `src/xhci98-amd64.inf`'s header block; roadmap task 21.3 |
+| A.2 | `usbui.dll` IS present on a stock Vista and Windows 7 install, in both architectures, so the `LayoutFile` row those targets have no equivalent of is never consulted there: Vista SP2 x86 `Windows\System32\usbui.dll` 83,456 B 6.0.6001.18000; Vista SP2 x64 `System32` 104,960 B 6.0.6000.16386 and `SysWOW64` 83,456 B 6.0.6001.18000; Windows 7 SP1 x86 80,896 B and x64 `System32` 101,376 B / `SysWOW64` 80,896 B, all 6.1.7600.16385. Read from image 1 of each `install.wim`, which is the applied image, so presence there is presence on an install. Whether the other three OS-supplied files behave the same way on those targets is NOT read | static (7-Zip on the owner's own mounted ISOs; nothing executed) | Phase 22's open question about the `usbui.dll` row on 6.0/6.1 |

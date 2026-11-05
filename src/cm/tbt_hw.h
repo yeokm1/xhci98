@@ -74,7 +74,8 @@
  * pci.c (nhi_ids, nhi_pci_check_quirks, icl_nhi_*), nhi.c (nhi_select_cm,
  * nhi_reset), icm.c (icm_probe and its is_supported and get_mode hooks),
  * nhi.h and nhi_regs.h - and FreeBSD sys/dev/thunderbolt/nhi_reg.h (pinned
- * at 9d50245a) for AMD's Pink Sardine ids. Cited by file and symbol; no
+ * at 9d50245a) for AMD's Pink Sardine ids; AMD's other integrated hosts'
+ * ids from pci.ids 2026.10.31 (task 46.23). Cited by file and symbol; no
  * function body copied.
  *
  * IRQL: TbtHwMatch and TbtHwForcePowerValue are pure and callable at any

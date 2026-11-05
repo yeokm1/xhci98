@@ -152,6 +152,7 @@
 #include "tbt_topo.h"
 #include "cm_marks.h"
 #include "cm_breq.h"
+#include "cm_dsd.h"
 
 /* cm.h's CM_NHI and CM_FILTER; the calls take them by their structure tags
  * so that this header stands before cm.h's definitions. */
@@ -189,6 +190,10 @@ typedef VOID (*CM_REENUM_EJECT)(PVOID context, ULONG port);
 #define CM_PORT_NO_FILTER   0x10UL  /* NT: no filter published for it (the
                                        INF did not match its id): no
                                        re-enumeration, no safe eject      */
+#define CM_PORT_NO_CLAIM    0x20UL  /* NT: an ACPI-named member whose
+                                       filter holds no current claim for
+                                       this NHI: not exclusive, so
+                                       inactive (record 22 7.6.1)         */
 
 
 /* One member of the set, the per-member state of record 21 section 6.3.
@@ -233,6 +238,9 @@ typedef struct _CM_REENUM_PORT {
     ULONG SecBus;
     ULONG SecBusValid;
     ULONG ConnGen;
+    /* An ACPI-named member: the filter publication its claim was made
+     * under (record 22 section 7.6.1), 0 for any other source. */
+    ULONG AcpiSerial;
 } CM_REENUM_PORT, *PCM_REENUM_PORT;
 
 /* Children of one tunnel port remembered on 98 as already seen, so that
@@ -346,6 +354,13 @@ typedef struct _CM_REENUM {
     ULONG CallUsable;       /* members whose call worker opened its route,
                                as last given to the worker (task 43.47)   */
     ULONG RediscoverLeft;   /* an empty set's discoveries still to try    */
+    /* The ACPI-named source (record 22 section 7.6.1): this NHI's own ACPI
+     * name, normalised (length 0: not read, no such source), and the
+     * claim generation last seen by the idle pass. */
+    ULONG AcpiNameLen;
+    char AcpiName[CM_DSD_NAME_MAX + 1];
+    ULONG AcpiGenSeen;
+    ULONG AcpiLateLogged;
     ULONG DebtPending;      /* a tunnel change came while it was empty    */
     ULONG RediscoverAt;     /* NowMs of the last                          */
     ULONG Known[XHCI_TBT_MAX_TUNNELS][CM_REENUM_MAX_KNOWN];
@@ -632,6 +647,23 @@ ULONG CmCfgwkRetired(struct _CM_CFGWK *w);
  * <= DISPATCH_LEVEL. */
 ULONG CmCfgwkEnumBusy(struct _CM_CFGWK *w);
 
+/* Task 46.13 (record 21 section 8.3): the worker's event order, one
+ * number for every event below, drawn under the worker's lock. An event
+ * drawn now (the core's link-down upcall); and member `member`'s
+ * re-enumeration calls as one snapshot: Busy, a call admitted and not
+ * ended; End, the last call's end; Fresh, the admission of the last call
+ * made on an inventory its numbering read complete and empty that
+ * returned success. <= DISPATCH_LEVEL. */
+typedef struct _CM_CFGWK_PUB {
+    BOOLEAN Busy;
+    BOOLEAN EndValid;
+    BOOLEAN FreshValid;
+    ULONG End;
+    ULONG Fresh;
+} CM_CFGWK_PUB, *PCM_CFGWK_PUB;
+ULONG CmCfgwkEvent(struct _CM_CFGWK *w);
+VOID CmCfgwkPub(struct _CM_CFGWK *w, ULONG member, PCM_CFGWK_PUB pub);
+
 /* Ends the worker: waits for it when it is between calls (and frees it);
  * when it is inside a CONFIGMG call, which may be waiting for this very
  * stop, leaves it to free itself. `counters` gets its counts (Detached
@@ -692,6 +724,14 @@ VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
  * its entry under its bus, device and function (IoGetDeviceProperty). A
  * filter whose location cannot be read publishes nothing. PASSIVE_LEVEL. */
 VOID CmRegPublish(struct _CM_FILTER *filter);
+
+/* The bridge filter's _DSD read (record 22 section 7.6.1): its result
+ * (CM_DSD_*) and, when CM_DSD_OK, the claim - the normalised reference and
+ * the firmware's port number - kept under the entry's present
+ * publication; nothing when the entry is not published. PASSIVE_LEVEL or
+ * below. */
+VOID CmRegSetClaim(struct _CM_FILTER *filter, ULONG rc, const char *ref,
+                   ULONG port);
 
 /* Stop, surprise removal, removal: withdraw the entry, clear its resume
  * mark, and wait for every call in flight on it to drain. Idempotent.

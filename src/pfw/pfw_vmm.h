@@ -63,6 +63,14 @@ typedef struct PFW_DDB {
 #define PFW_SVC_REGCREATEKEY    0x0001014AUL
 #define PFW_SVC_REGSETVALUEEX   0x00010152UL
 
+/* Record 32 section 12.10 step 1, the switch's read at Sys_Critical_Init
+ * (VMMREG.H 177 and 331, VMM_RegOpenKey and VMM_RegQueryValueEx, the
+ * same calling convention): _RegOpenKey at VMM.H line 2216 (148h),
+ * _RegQueryValueEx at 2225 (151h). VMMREG.H 58 gives ERROR_FILE_NOT_FOUND
+ * (2), the not-found code pfw_scan.h's PFW_RC_NOT_FOUND names. */
+#define PFW_SVC_REGOPENKEY      0x00010148UL
+#define PFW_SVC_REGQUERYVALUEEX 0x00010151UL
+
 #define PFW_HKEY_LOCAL_MACHINE  0x80000002UL /* VMM.H 2240                  */
 #define PFW_REG_SZ              1UL         /* VMM.H 2231                    */
 #define PFW_REG_BINARY          3UL         /* VMM.H 2232                    */

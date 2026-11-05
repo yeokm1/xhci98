@@ -3797,7 +3797,8 @@ guest's interrupt time sampled every 4 s. Evidence:
 (`e1qexpress`, the 82574L) -> `NDIS.SYS` -> `pci.sys` -> the HAL's byte
 read of configuration space (`ECAM 0xb0e00000`, bus 14, offset `0xFF`).
 The miniport (`e1q6032.sys` 11.0.5.21, Windows 7's own; the image
-offsets, the hash and the method in `legal-provenance.md` section 4:
+offsets, the hash and the method in this record's appendix A, A.1, which
+`legal-provenance.md` section 4 indexes:
 the registers and the bytes read from the running guest, the bytes
 disassembled, nothing of it executed) looks for a capability (id `0x10`,
 PCI Express) by walking the list: it reads the word at the pointer, compares the low
@@ -9786,3 +9787,18 @@ controller at Code 52, as documented. Thunderbolt networking on 7 x64
 against Linux 7.0's `thunderbolt_net`: the adapter installed signed with
 no prompt, pings both ways, 1472 bytes with don't-fragment. Not run: the
 networking uninstall and 10 x64's networking.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Windows 7's Intel 82574L miniport walks the PCI capability list with no bound, so configuration space reading all ones holds the processor in it (task 45.49)**: the routine at image offset `33E0h` (the image's base found by its `MZ` header, `8FAB1000h` in leg u2) reads the capability pointer at `34h`, then loops at `3420h` to `3457h`: it reads the word at the pointer, compares its low byte with the wanted id (`10h`, PCI Express) and takes the high byte as the next pointer, leaving only at a match or a next pointer of 0; with every read `FFFFh` it reads offset `FFh` for ever. The caller at `4AE0h` asks for word `12h` of that capability (Link Status); the return addresses on the stack are the image's `+343Eh` (inside the loop, the bus read through `NDIS.SYS`), `+34B8h`, `+4B09h`, `+4572h`, `+3C20h`, `+22C21h`, `+22D68h`, `+14D02h`, then `NDIS.SYS` and the kernel's timer DPC. `e1q6032.sys` 11.0.5.21 ("built by: WinDDK", Intel Corporation), 190,464 bytes, SHA-256 `cfb9403f705466583a691d10dc2182c3c40ecf984fb56f77fef8bd7e14490625`, Windows 7 SP1 x86's own copy in the q35 7 x86 base's `System32\drivers` | debugger (QMP `info registers` of the running guest, sampled every 4 s, and the stack and the code bytes read with QMP `x`) and static (GNU `objdump -D -b binary -m i386` over those bytes; nothing of the image executed by this project); not tracked | `runs/run-45.md` "45.49" |
+| A.2 | **A common buffer of less than a page on Windows 2000 and XP can come back 8-byte aligned (task 45.59, design record 35 section 6.5)**: on Windows 2000 SP4 x86 (512 MB, one processor, q35 in the emulator), the DMA adapter's `AllocateCommonBuffer` for 2 KiB, cache-enabled, on the adapter `IoGetDmaAdapter` gave `xhcicm.sys` for the NHI (Master, ScatterGather, Dma32BitAddresses, PCIBus), returned virtual address `81E62008h` and logical address `01E62008h`, the same with `MaximumLength` `FFFFFFFFh`. On XP SP3 x86 the service's memory was refused (`cm.net.nomem`) at one start and not at another, the allocation's addresses not logged there: that it is the same alignment is inferred, not read. Requests of whole pages were 16-byte aligned on 2000, and on both systems the service then started | runtime (this driver's own log: a scratch build that logged each allocation's length and both addresses, 2026-11-01; nothing of the HAL read) | `src/cm/cm_pool.c` (`CmDmaCommonAlloc`, whole pages); `runs/run-45.md` "45.59 (legs, continued)" |

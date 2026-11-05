@@ -1882,6 +1882,33 @@ half offered on a 2000 or XP caller (not asked); a timer pointer equal to
 (refused: the timer field uncovered); and the guarded-allocation vector
 for the helper's half.
 
+**Minor 1** (task 46.12, design record 32 section 12.8.15.15): one
+service appended for the connection manager's x86 image, `xhcicm.sys`,
+which loads on Windows 98 and ME too and so cannot import
+`MmGetSystemRoutineAddress`. The block `XHCI_HLPR_QUERY1` is the V2.0
+block and one field, 0x38 bytes (`XHCI_HLPR_V21_SIZE`):
+
+| Offset | Field | Written by | Meaning |
+|---|---|---|---|
+| 0x34 | `PVOID FindRoutine` | helper | its own `MmGetSystemRoutineAddress`, or NULL with bit 2 clear |
+
+`Services` bit 2 (`XHCI_HLPR_SVC_ROUTINE`) says the field is valid; the
+helper sets it, and writes the field, only when the caller's `Size`
+covers it, so a V2.0 caller (every `xhci98.sys`, which sends 0x34 bytes
+and declares minor 0, `XHCI_HLPR_MINOR_V20`) is never told of it, and its
+acceptance ignores the bit. The helper answers `HelperMinor` 1 to both.
+The connection manager's acceptance, `XhciHlprAcceptRoutine`: the
+channel by `XhciHlprAccept`'s tests (capacity 0x38); the routine accepted
+when `Returned` covers the field, bit 2 is set and the pointer is
+non-NULL; "not offered" when bit 2 is clear and the field is uncovered (a
+minor 0 helper's answer of 0x34 bytes) or NULL; "malformed" otherwise.
+The qemu injection 10 (`XHCI_HLPR_INJ_ROUTINE_OFF`) answers with the
+service off. Vectors (`test_msi`): a minor 1 block answered whole; a
+minor 0 helper's answer to it; a helper without the routine and the
+injection; bit 2 with its field uncovered or its pointer NULL, and a
+pointer with bit 2 clear (malformed); the channel's tests failing; a V2.0
+caller given no bit 2.
+
 ### 15.4 The HCD's looks
 
 One binding per controller FDO, as section 4.1. Its state machine is
@@ -2071,8 +2098,8 @@ the copy aborted, and Setup installed a NULL driver on the controller
 carries it on a `dll` line. Read off the media (static, 2026-10-14;
 disassembly with MSVC 6.0's `dumpbin /disasm` of `SETUPDD.SYS` and
 `SETUPLDR.BIN` from `win2ksp4.ISO` and the XP SP3 OEM CD's `I386\`, not
-tracked; hashes and instruction addresses in `legal-provenance.md`
-section 4, "What text-mode Setup does with each `txtsetup.oem` file
+tracked; hashes and instruction addresses in this record's appendix A,
+item A.1, "What text-mode Setup does with each `txtsetup.oem` file
 type"): both
 parse the file types `driver`, `port`, `class`, `inf`, `dll`, `detect`,
 `hal`, `catalog` in that order; text mode copies each file of the chosen
@@ -2402,3 +2429,121 @@ VM matrix (`docs/contributing/runs/run-38.md`; U4's reading is in section
   `src\txtsetup-amd64.oem` is unchanged, and `check-txtsetup-oem.ps1`'s
   `OEM-PAIR` compares the two outside their `dll` lines, which its new
   `OEM-COPY` rule holds to each file's own INF.
+
+### 15.15 The helper from the x86 NHI INF too (task 46.12, 2026-11-04)
+
+The owner's decision of 2026-11-04: `src\cm\xhcicm.inf` installs the
+helper as well, so a Thunderbolt-only install on 32-bit NT (every xHCI
+controller left on Windows' own driver, the gap of design record 32
+section 12.8.15.15) has the routine service the x86 `xhcicm.sys` needs to
+send the ASM4242 handover. Designed here, reviewed and revised before its
+code; the choices below were taken on the owner's delegation.
+
+- **Where.** `[Cm.Dev.NTx86]` (Windows 2000 and 32-bit XP) and
+  `[Cm.Dev6.NTx86]` (32-bit Vista and every later 32-bit system) gain
+  `XhciHlpr.CopyFiles` in their `CopyFiles`, and their `.Services` gain
+  `AddService=xhcihlpr,,XhciHlpr.AddService`. Nothing else: never the
+  undecorated Windows 98 SE and ME section `[Cm.Dev]`, never
+  `DefaultInstall` or `DefaultInstall.NTx86`, never the filter INF
+  `xhcicmf.inf` (installed with the NHI by Setup), never the 64-bit INFs.
+  `[SourceDisksFiles]` gains `xhcihlpr.sys=1`; Windows 98 SE and ME read
+  that section and copy nothing of it, as they already read xhci98.inf's
+  (the installer and the packager skip a name the family folder does not
+  carry, record 36 section 3.1).
+- **One service, two INFs.** Both files name the same service with the
+  same install section, the same in every directive: `xhcihlpr`,
+  `ServiceType` 1, `StartType` 0 (boot), `ErrorControl` 1,
+  `ServiceBinary=%12%\xhcihlpr.sys`, no `LoadOrderGroup`, and the same
+  `DisplayName` text (`XhciHlprSvcDesc`, kept as section 15.8 has it), so
+  whichever INF installs last writes the same configuration. The flags
+  are 0, as in xhci98.inf: neither INF's device has it as its function
+  driver.
+- **The same file, the newer kept.** Both copy `xhcihlpr.sys` to
+  `10,System32\Drivers` (`%12%`), and from this change both copy lines
+  carry `COPYFLG_NO_VERSION_DIALOG` (`0x00000020`): an existing file with
+  a newer version resource is not replaced by an older one, and nothing
+  is asked, whichever INF runs second. Within one package the two copies
+  are the same bytes (the packager's `PKG-FAMILY` compares them); across
+  packages the channel's rules (section 15.3, minor versions) let the
+  newer helper serve the older caller. A package before this one carries
+  flags 0 in xhci98.inf and can still put its older helper over a newer
+  one; the newer `xhcicm.sys` then refuses (`108h`) until this package is
+  installed again, which no INF of this change can prevent. The rule, and
+  Setup's version test below, compare version stamps: the helper of
+  `3.4.0.0` carries the same stamp as this tree's until the `3.4.1.0`
+  bump, made at the cut (task 46.final), so both hold from the cut's
+  package on, and the bump must land before that package is staged.
+  xhcicm.inf's line has no temporary name (NT ignores it; the gate's
+  `CM-TMPNAME` rule is the driver's own).
+- **The file beside the INF.** Vista's and 7's driver store takes no
+  source outside the INF's directory (record 21 section 3.3), so the
+  family folder `nt-x86\cm\` carries `xhcihlpr.sys` beside `xhcicm.inf`,
+  the same bytes as `nt-x86\xhcihlpr.sys` (`package-common.ps1`'s family
+  table places the one flat file twice; record 36). The flat package and
+  the installer's local copy keep one file at their root, beside both
+  INFs. `98-me\cm\` carries none.
+- **The restart.** SetupAPI does not start a boot-start service it
+  installs (section 5). No `Reboot` in xhcicm.inf: the installer's run
+  that installs the Thunderbolt part already asks for a restart, and on
+  2000 and XP decision H2 stands. A Device Manager install of the NHI
+  alone asks for none; until the next boot the x86 image finds no helper
+  and refuses the handover (`108h`, logged, record 32 section 12.8.15.15),
+  and sends it from the next start. The gate's `HLPR-REBOOT` stays
+  xhci98.inf's.
+- **Uninstall.** Windows' own removal of a device (Device Manager, with
+  or without its driver software) never deletes a service, so the helper
+  stays while either part has a device. The installer's uninstall (record
+  23 section 9.2 step 5) deletes the `xhcihlpr` service, and step 6 its
+  file, only when the `xhci98` and the `xhcicm` services were both
+  deleted, marked for deletion or absent in that run; a part whose service
+  could not be removed keeps the helper, said, the run ending with steps
+  left as for any service kept, and the next run removes it.
+- **Setup's repair.** A run with either part in it reinstalls its current
+  device (a controller, or the NHI; never a tunnel port, whose INF has no
+  helper) when the helper's file is missing or older than the package, or
+  its service absent, so that INF puts it back; a service marked for
+  deletion is said ("restart Windows, then run Setup again"). A newer
+  helper refuses neither group: both INFs keep it.
+- **Setup's sendable rule.** `inst_board_sendable` (record 32 section
+  12.8.15.12) treats the Thunderbolt part installed by this run on 32-bit
+  NT as sendable, since the helper now comes with it: x64, or the run
+  installs a controller with `xhci98.inf` or the NHI with `xhcicm.inf`
+  (neither held back by the staging), or the helper is in place at 3.4.1.0
+  or later, the first with the routine service (not the package's own
+  version, which 3.4.0.0's minor-0 helper shares until the bump).
+- **Gates.** `check-cm-inf.ps1` gains `CM-HLPR` for the x86 NHI INF: the
+  helper's `AddService` exactly once in each of the two NT `.Services`
+  sections and nowhere else, flags 0, its install section of the shape
+  above, delivered by that NT section's `CopyFiles` to
+  `10,System32\Drivers` with flag `0x00000020`, `xhcihlpr.sys` in
+  `[SourceDisksFiles]`, no copy of it from any other section, no
+  `Reboot`, and no helper in the filter INFs or the 64-bit NHI INF;
+  mutations in `test-inf-checks.ps1`. `check-inf.ps1`'s `HLPR-SVC`
+  requires the `0x00000020` flag on xhci98.inf's copy lines too, and the
+  footprint's two `XhciHlpr.CopyFiles` rows carry it. The x86 package has
+  no catalogs and the x64 INFs do not change, so no catalog changes.
+- **Legs.** 10 x86, the emulated ASM4242 model with the known profile
+  (`-smbios type=2,...`), a test-only installer built without
+  `CM_OSCP_RELEASE` (as run-46's w46-inst4 section), the Thunderbolt part
+  alone: the helper's service and file after the run, the restart, then
+  `cm.osc.handover=100h` with the router answering; then the NHI's device
+  removed in Device Manager with its driver software (the Thunderbolt
+  part alone): the helper stays; then `/uninstall`: the helper gone.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **What text-mode Setup does with each `txtsetup.oem` file type** (design record 18 section 15.9's amendment): `SETUPLDR.BIN` and `SETUPDD.SYS` of Windows 2000 SP4 and XP SP3 both carry the type names in the order `driver`, `port`, `class`, `inf`, `dll`, `detect`, `hal`, `catalog` (enum 0 to 7; XP `SETUPLDR.BIN`'s pointer table at VA `0x339684`, its PE image at file offset `0x4CC0`, base `0x300000`; XP `SETUPDD.SYS`'s at VA `0x74424`). **`setupldr` loads one file of the option**: XP's loader loop over the option's file list (VA `0x3259DB`-`0x325B98`) tests the type at `0x3259E5`-`0x3259F9` (`cmp eax,1` / `cmp eax,2` / `test eax,eax` / `cmp eax,6`, else `jne 0x325B94`, the next file) and stops at the first file it loads; 2000's `SETUPLDR.BIN` has the same test at file offset `0x24D00`. Its parser reads the `DriverKey` field only for types 0 to 2 (XP VA `0x324CB7`-`0x324CDC`). **`setupdd` copies every file but the catalog twice**: XP's copy routine (VA `0x27FA6`) picks the type's directory at `0x28157`-`0x28203` (`dll`: `system32`; `driver`, `port`, `class`: `system32\drivers`; `inf`: the `OemDir` pointer at `0x6F3B0` with the name `oem%s%02d.inf`; `catalog`: `OemDir`), copies (`call 0x277E4` at `0x2827F`), and unless the type is 7 sets the directory to `OemDir` and copies again (`0x282B5`-`0x282E1`); 2000's is the same at VA `0x1EDA6`-`0x1EF55` (`OemDir` pointer `0x5436C`). XP SP3 OEM CD (`<iso folder>\Win XP Pro SP3 OEM original.iso`): `SETUPDD.SY_` SHA-256 `807a3203...fcb62c`, expanded `setupdd.sys` 493,696 B `557d0cc4...daa6b9`, `SETUPLDR.BIN` 260,288 B `7d9951a0...121ddc`; `win2ksp4.ISO`: `SETUPDD.SY_` `011426a3...8e07e2`, expanded 382,128 B `16dfe965...6ada69`, `SETUPLDR.BIN` 229,792 B `c0fee221...82f892`. The Windows 2000 DDK's help, `D_SETUP.CAB`'s `d_setup.chm` (expanded SHA-256 `3d4fd281...2a2d03`), "Files.HwComponent.ID Section of a txtsetup.oem File": `dll` valid for all components, copied to `%systemroot%\system32`; `DriverKey` names the services key "if the file is of type driver" | static (7-Zip extraction to a scratch directory, `expand.exe`, MSVC 6.0 `dumpbin /disasm`; nothing executed; 2026-10-14; not tracked). Corroborated at runtime by the matrix's F6 legs: XP SP3's `OemDir` held `xhci98.sys` and `oemscs01.inf` (`setupapi.log`), 2000 SP4's `xhci98.sys` (`out\p38-matrix\legs\f6w2k\drivers-c2-textmode.txt`) | `docs/contributing/design/18-msi-helper-x86.md` section 15.9; `src/txtsetup.oem`; `scripts/inf-gate/check-txtsetup-oem.ps1` `OEM-COPY` |
+| A.2 | **Where text mode reads an F6 option's files, and what a `driver` line costs** (the Windows 2000 F6 limitation's `txtsetup.oem` fix, investigated 2026-10-14). Windows 2000 SP4 `setupdd.sys` (the expanded image of the row above, `16dfe965...6ada69`, image base `0x10000`, no symbols; names from its export table): **every file of an F6 option is read from `\device\floppy0`** - the caller of the option-copy routine passes `SpDupStringW(L"\device\floppy0")` (string `0x36D90`, `0x37697`-`0x376C2`) unless the `$OEM$\TEXTMODE` preinstall flag (`0x5D4F8`, set at `0x36B4C`) is set; the copy routine (`0x1EC3C`) calls `SpPromptForDisk` (`0x41CA2`) for each file with that device, the file's own disk description and tag file (`0x1EEA3`-`0x1EEB0`) and `IgnoreDiskInDrive` and `AllowEscape` both 0; `SpPromptForDisk` returns at once for a device path holding neither `cdrom` nor `floppy`, opens `<device>\<tagfile>` and returns when it is there, and otherwise shows message `0x2364` ("Insert the disk labeled: %1 into drive %2!c!:", `USETUP.EXE`'s message table) or `0x2365` (the CD form, for a `cdrom` device) with ENTER and F3 only, until the tag file is found. **The source may be compressed**: `SpCopyFileUsingNames` (`0x1D026`) opens it (with `0x5D4A0` clear, as in the legs below) through `0x246C6`, which tries the name and the compressed name `0x421C2` builds (`usbd.sys` to `usbd.sy_`). **Only types 0-2 land in `system32\drivers`** (`0x1EE8E`; `dll` `system32`, `0x1EE39`), and **a service is created for every file with a `DriverKey`**: the loop at `0x1A08A`-`0x1A1F1` walks the option's whole file list, skips a file whose `DriverKey` pointer is 0 (`0x1A0A1`), names the service by the first eight characters of the file's base name, picks the group by component (`SCSI miniport`, `0x19F74`, for `scsi`), and then writes the `[Config.*]` values (`0x1A1AC`-`0x1A1DF`). Windows 2000 SP4 `SETUPLDR.BIN` (`c0fee221...82f892`; a flat image, file offset `0x3290` = VA `0x300000`, read by wrapping it in a minimal PE header so `dumpbin` could list it): the `Files.` line parser (`0x321E44`) requires the third field for types 0, 1 and 2 (`0x321F85`-`0x321F96`, failure at `0x322302`), and a failed parse is reported by `0x321BD2` as "File %s caused an unexpected error (%d) at line 1273" (`push 4F9h`) in `oemdisk.c`, the option dropped. `USETUP.EXE` from `win2ksp4.ISO` `I386\` (152,336 B, `1d0ab40e...e3c650`) for the message texts | static (7-Zip extraction to a scratch directory, `expand.exe`, MSVC 6.0 `dumpbin /disasm` and WDK 7.1 `kd.exe -z`, a Python reader of the message table; nothing executed; 2026-10-14; not tracked). Corroborated at runtime, QEMU, development host A, `out\p38-matrix\legs\f6w2k\` runs 61-66 (git-ignored): a `driver` line with no `DriverKey` drew the `oemdisk.c` error; a `[Disks]` entry tagged `\CDROM_NT.5` drew "Insert the disk labeled: Windows 2000 Professional CD into drive A:" with the CD in the CD drive; the CD's `USBD.SY_`, `HIDCLASS.SY_` and `HIDPARSE.SY_` on the floppy were expanded into `system32\drivers` and made services `usbd`, `hidclass` and `hidparse` (`Start` 3 from `[Config.*]`) | `docs/contributing/lessons.md`, "A `txtsetup.oem` disk is always read from drive A: ..."; design record 13 section 5.6, limit 7 |
+| A.3 | **`IoConnectInterruptEx` and `IoDisconnectInterruptEx` are exported by the Windows Vista SP2 x86 and Windows 7 SP1 x86 kernels, and so is every other `ntoskrnl.exe` pair the x86 MSI helper imports** (`xhcimsi.sys`, design record 18): the export tables of `ntoskrnl.exe` 6.0.6002.18005 (3,549,672 bytes, `45C9CB06...F7FC`) and 6.1.7601.17514 (3,911,040 bytes, `D74E389D...6CF8`) from `tools\vista-x86-extracted` and `tools\win7-x86-extracted`, with their `hal.dll`s, each authenticated by `scripts/import-gate/nt6x86-vista-baselines.expected` and `nt6x86-win7-baselines.expected` (renamed `hlprx86-*` by task 38.3). The PAE kernels (`ntkrnlpa.exe`) are not staged and not read | static (`dumpbin /exports` by `scripts/import-gate/check-imports.ps1 -GateProfile nt6x86`; nothing executed) | `scripts/import-gate/xhcimsi-imports.allow` (`xhcihlpr-imports.allow` since task 38.3); design record 18 section 8.2 |
+| A.4 | **Every pair `xhcihlpr.sys` imports is exported by every authenticated kernel and HAL image of Windows 2000 SP4, Windows XP SP3 x86, Windows Vista SP2 x86 and Windows 7 SP1 x86 - every image of 2000 and XP, the uniprocessor non-PAE kernel and `hal.dll` of Vista and 7**, in all three flavours (`ExSetTimerResolution`, `MmGetSystemRoutineAddress`, `IofCompleteRequest`, `RtlInitUnicodeString`, `IoIsWdmVersionAvailable`, the `/GS` pair `KeTickCount` and `KeBugCheckEx`, the qemu flavour's `RtlQueryRegistryValues`, the checked flavours' `RtlAssert`, `memcpy` and `memset`, and the 28 pairs the `wxp` `wdmsec.lib` brings, `ExFreePoolWithTag` among them): the ten Windows 2000 SP4 images of `win2k-baselines.expected`, the eleven XP SP3 images of `winxp-x86-baselines.expected` (four kernels, seven HALs), and the Vista and 7 `ntoskrnl.exe` and `hal.dll` of `hlprx86-vista-baselines.expected` and `hlprx86-win7-baselines.expected`, each authenticated. The Vista and 7 PAE kernels are still not staged | static (`link /dump /exports` by `scripts/import-gate/check-imports.ps1 -GateProfile hlprx86` over the first `WXP` links, 2026-10-14; nothing executed) | `scripts/import-gate/xhcihlpr-imports.allow`; design record 18 sections 15.10 and 15.11 |
+| A.5 | **What Windows Vista and 7's PCI driver offers in `IRP_MN_FILTER_RESOURCE_REQUIREMENTS` for an MSI-capable xHCI controller with `MSISupported` 1** - the requirements list's configurations and the order, `Option` and `Flags` of their interrupt descriptors (design record 18 section 11, R1 and R2) | runtime (this driver's own `qemu`-flavour `M86` trace of the list it received, on QEMU's `qemu-xhci`, validated by `scripts/vm-matrix/check-msi86-trace.ps1`; the readings are recorded in design record 18 section 11 and the phase's run record when taken) | design record 18 sections 4.2 and 11 |

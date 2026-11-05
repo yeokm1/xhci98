@@ -1,6 +1,8 @@
 # Design Record 30 - S98VSD.VXD: Large Requests Reaching Stor98 Whole on Windows 98 SE and ME
 
-Status: draft 14, 2026-10-25 (task 44.36: section 13, where 98 SE's
+Status: draft 15, 2026-11-03 (section 6.1: a third mislink of
+`LINK` 5.12, a `THEADR` name whose length is a multiple of 18, and its
+guards; section 6.4 the image gate's fixup check); draft 14, 2026-10-25 (task 44.36: section 13, where 98 SE's
 and ME's time goes on a tunnelled drive and what could reach about
 3000 MB/s, read first, no code); draft 13, 2026-10-24 (roadmap 43.79: a list that arrives with
 `IORF_PHYS_SGDS` is replaced, never passed down, after IOS's double
@@ -870,6 +872,65 @@ maximum it finds (section 3.4), up to the 2 MiB it is built for.
   image lands anywhere but the map address of the symbol the compiler
   named. The source rules that go with them: no file-scope `static`, and
   the data in an object of its own (`vsd_data.c`).
+- **A third mislink, found 2026-11-03: the object's header name**
+  (`runs/run-46.md`, "XHCIPFW.VXD's log strings: a path-dependent bad
+  build"). Open Watcom writes the source file's full path as an
+  object's `THEADR` name. When that name's length is a multiple of 18
+  (every length from 1 to 140 was linked; 18, 36, 54, ... and only
+  those mislinked), `LINK` 5.12 resolves every fixup of that object
+  whose target is one of the object's own segments (a `SEGDEF` target:
+  `pfw.c`'s string literals, which `-zc` places in `_TEXT`, and one in
+  `vsd_list.c`) to the place's offset in that segment less `1000h`, the
+  code object's address, so `FFFFF0xxh`; its fixups to external
+  symbols and its calls are right [obs: one set of objects relinked with
+  only the `THEADR` name changed; the name's characters, the dependency
+  records and the object's other bytes do not matter]. The mechanism
+  inside the linker is not read ([hyp] 18 bytes is the size of a COFF
+  symbol record, the form the linker converts OMF into). So the image
+  hung on the checkout's path: `XHCIPFW.VXD` linked from a `pfw.obj`
+  compiled at `E:\xhci98-wt\<a 9-character name>\src\pfw\pfw.c` (36
+  characters) passed every check of the time and wrote none of its
+  `Device_Init` registry values on 98 SE and ME, while its window scan
+  ran. Three more guards close it:
+  1. **The objects no longer hold the path.** `omfpub.py` also sets
+     each object's `THEADR` name to the source file's base name
+     (`pfw.c`), and `wcc386 -zld` leaves out the dependency records
+     (each header's full path and time stamp, read by nothing here): for
+     the same sources, compiler and options an object no longer differs
+     with the checkout's path or the time of the build, and so neither
+     does the image [obs: the same objects and images, release and qemu,
+     from three checkouts whose paths differ in length, two of them
+     lengths that mislinked before].
+  2. **`omfcheck.py` fails on the shape**: a `THEADR` name holding a
+     `\`, `/` or `:` (a path left in), or whose length is a multiple of
+     18 (every multiple, past the 140 measured, as a rule: a source file
+     whose name is 18 characters long is to be renamed, not linked).
+  3. **Every fixup is held to its target.** `callcheck.py` also reads
+     every segment-relative fixup of every object (all of them `OFFSET386`
+     with the `FLAT` group as frame) and fails the build unless the
+     image's LE fixup at that place is one internal 32-bit offset to the
+     code object, at the address the object names: the map address of
+     the external symbol, or the object's own segment placed by that
+     segment's publics in the map, plus the addend in the object's data
+     and the fixup's displacement; and unless every LE fixup of the
+     image is one of these. A fixup shape it does not know (a thread, a
+     self-relative fixup to a segment, a fixup following an iterated
+     data record (`LIDATA`), another location type) fails the build. Its self-test (`--self-test`, run by
+     each `build.cmd` before the link) feeds it a synthetic object's
+     fixups and LE table, matched and mislinked.
+  Each image gate (section 6.4, record 32 section 8) also holds the
+  image alone, with no object or map, to every LE fixup record being an
+  internal reference of a 32-bit offset with no additive, its target
+  object one of the image's and its target offset inside that object,
+  its four bytes inside the object of its page, and a fixup that
+  crosses into the next page listed on both pages (the second time at a
+  negative offset) with one target, as the linker writes it; the
+  packager runs the gate
+  again on the staged image. Its self-test (`-SelfTest`, run by each
+  `build.cmd` before the image check) feeds the check a synthetic fixup
+  table per shape that passes and one per refusal, and `make-release.ps1`
+  holds `XHCIPFW.VXD` newer than `src\vsd`'s guards as well as its own
+  sources.
 
 ### 6.2 What of the DDK enters tracked source: nothing
 
@@ -931,7 +992,9 @@ going on after a 2 with a line that it was not built, as it does for
 DDB named `S98VSD  `; every `int 20h` service dword in its code a row of
 `vsd-services.allow` (the two of section 6.2, and nothing else) and
 every row used; the stamp `S98VSD.VXD <version>`; no write to port
-`0E9h` in the release image (no `out` instruction at all). The package
+`0E9h` in the release image (no `out` instruction at all); every LE
+fixup an internal 32-bit offset inside its target object (section 6.1,
+the third mislink). The package
 carries the image beside `stor98.mpd` in each x86 flavour directory that
 carries Stor98 (`make-package.ps1`, with `-NoStor98` leaving both out).
 
@@ -1757,6 +1820,22 @@ is unchanged (task 45-E.9).
 - **Q4, XHCIPERF on the bench.** It stays unshipped; the bench takes the
   release tree's build in a folder of its own, as task 43.50's bench did.
   Recommended: yes, after task 44.21's open items.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Task 43.46 design: what IOS loads from `IOSUBSYS`, and the request path's facts in three IOS builds** (design record 30 section 2) - `IOS.VXD` of gold 98 SE (69,570 bytes, SHA-256 `bb133fb8edc9464f38bda9ee94349014eebdfd3164583432304a2e88e1a70652`, the 98 SE CD's `WIN98\BASE4.CAB`), of the QuickInstall image (the read-first row's) and of ME (80,147 bytes, `d897ae9986719fb7475c240653b5b23cd9707458f1d1da14b1f5dcb311768da5`, ME's `BASE2.CAB`); `SCSIPORT.PDR` of gold 98 SE (23,650 bytes, `8a0712513067edb75e2146beef889845bf5d77bc293558b9c359af8ced0f4be7`) and ME (26,957 bytes, `bfac66edd87be878be4f1965b53d712ad924b56c7ee1256d809e84980d6df74b`). IOS's directory walk appends the one pattern `*.vxd` to `<system>\IOSUBSYS\` (string object 5 `0x33A`, ME object 8 `0x33B`) and loads each find-first/find-next match (object 4 `0x1E80`-`0x1F53`, ME object 5 `0x1D20`-`0x1DF3`); no instruction names the `*.mpd` string after it; `.mpd` is tested on a file loaded by name (object 1 `0x211F`). The criteria routine (object 1 `0x1592`, the same instruction sequence in gold and QuickInstall; ME `0x19A0`) builds the physical list from `IOR_buffer_ptr`/`IOR_xfer_count` with no test of the IOR function, one `_CopyPageTable` call a fragment (`0x1739`), and keeps the 512 KiB and 17-run limits on the `phys_sgd` path (ME `0x1AC8`, `0x1AE5`). `ISP_INSERT_CALLDOWN`: the same instruction sequence in all three (object 4 `0x1266`, ME object 5 `0x1165`). `ScsiPortGetPhysicalAddress` walks `IOR_sgd_lin_phys` for an address within the SRB's data without testing `IORF_PHYS_SGDS` (the same 50 bytes at file offset `0xDA6` of gold and QuickInstall, `0x1446` of ME) | static (capstone over the LE images with their internal fixups applied, the routines compared by instruction sequence with absolute addresses masked; nothing executed), 2026-10-22; the CAB members extracted with 7-Zip, no installer run | design record 30 section 2 |
+| A.2 | **Task 43.46 design: the layers above Stor98's disk and `SCSIPORT.PDR`'s own requests** (design record 30 section 2.3; `docs/contributing/runs/run-43.md`, "Static readings before the code") - the QuickInstall image's `DISKTSD.VXD` (18,685 bytes, SHA-256 `bde41e68d8dda77f3cf0cfe0c3b1051c1258046fc0603c4c0004d6b11431aa39`) and `DISKVSD.VXD` (10,194 bytes, `1f0ac9baf1d03380d275d495f8d07e565511569d45ad83d26c0795df2d1463ed`), its `IOS.VXD` and `SCSIPORT.PDR` (the read-first row's), and from the gold 98 SE CD's `WIN98\*.CAB` `DISKTSD.VXD` (18,809, `180ca337513e83191317f65a7161c0583fc0fda654f8ae484d9012cb4bd44caf`), `DISKVSD.VXD` (10,194, `fb671af44da32b56710b8d193a46e45c216296fdfc5d618584b423f2bffb63ff`), `APIX.VXD` (29,497, `d98f340a537636f08933ccf282e2460040025db23a5c4204f68e3f8d2a15d571`), `VOLTRACK.VXD` (18,491, `5be4506487a1021035f45149b158c8683a47eb1b90f90b8845b332bb850fbc6e`) and `SCSIPORT.PDR` and ME's (the IOSUBSYS row's). Each file's DRP (`XXXXXXXX`, then `DRP_LGN` and the ASCII name): DISKTSD bit 7 "Fixed Disk TSD", DISKVSD bit 16 "SCSI Disk VSD", APIX bit 11 "SCSI API XLATOR", VOLTRACK bit 5, SCSIPORT bit 21. The stores at `IOR_buffer_ptr` (`[reg + 0x80]`) in DISKTSD (`0x30161F`, `0x30165E`, `0x301EC8`) and DISKVSD (`0x10063A`, `0x100884`-`0x1008E8`, `0x1009E7`), each in a request the layer builds. `IOS_SendCommand` (service 4, `0x100B20`): `IORF_IO_TOO_BIG | IORF_DOUBLE_BUFFER` tested at `0x100BD3`, the branch at `0x100D0F` allocating pages before the first calldown at `0x100BED`. `SCSIPORT.PDR`'s internal-request builder (`0x100BDF`; ME `0x100C7F`), the same instruction sequence in the three builds, its two callers (`0x100707` and `0x2019ED`; gold `0x100707`, `0x201B8D`; ME `0x1007A7`, `0x301B25`), the `REQUEST SENSE` CDB set-up once in each, and the image's one call of the criteria routine in it (`0x100CBA`) | static (capstone over the LE images with their internal fixups applied, objects at `object * 0x100000`, a linear sweep for stores at fixed displacements, routines compared by instruction sequence with absolute addresses masked; nothing executed), 2026-10-22; the CAB members extracted with 7-Zip, no installer run | design record 30 section 2.3 |
+| A.3 | **Task 43.79: IOS's double buffer on a DCB that does not demand physical lists** (design record 30 section 4.6) - the three `IOS.VXD` builds of the read-first and IOSUBSYS rows (QuickInstall 69,594 bytes, `7adb5fe3f458bc2c5f747679fef32e0d799883a9c8fb6bc5fd096dbba3e16ec2`; gold 98 SE 69,570, `bb133fb8edc9464f38bda9ee94349014eebdfd3164583432304a2e88e1a70652`; ME 80,147, `d897ae9986719fb7475c240653b5b23cd9707458f1d1da14b1f5dcb311768da5`), and the 98 SE DDK's `IOR.H` (`INC_WIN98_IOR.H`, docs/references/README.md's hash) for `IORF_DOUBLE_BUFFER` (0x40, with its comment that the client must ensure that the SGD buffer pointers and `IOR_sgd_lin_phys` are virtual), `IORF_PHYS_SGDS` (bit 26) and `IOR_ios_private_1`, and `DCB.H` for `DCB_dmd_phys_sgd` (0x800) and `DCB_dmd_phys_sgd_ptr` (0x1000). The criteria routine tests the word/dword demand (`0x600`) before `phys_sgd` (QuickInstall and gold `0x1015BE`, ME `0x1019BE`), and without `phys_sgd` returns non-zero at once (`0x1016A9`, ME `0x101AA6`), its caller setting `IORF_DOUBLE_BUFFER` (`0x100317`, ME `0x1006E7`). `IOS_SendCommand`'s double-buffer branch sets `IOR_buffer_ptr` to its buffer, clears `IORF_SCATTER_GATHER`, sets `IORF_PHYS_SGDS` and points `IOR_sgd_lin_phys` at a one-entry list (`0x100E65`-`0x100E9C`, ME `0x1011D3`-`0x10120A`), makes the entry physical by `_CopyPageTable` only under `phys_sgd` (`0x100EC1`, ME `0x10122F`) and the list pointer only under `phys_sgd_ptr` (`0x100E76`, ME `0x1011E4`). The only instructions in the QuickInstall image's code objects that set `IORF_PHYS_SGDS` (a sweep for a byte, dword or bit set of it) are `0x100E9C` and the criteria routine's builder's `0x1017B1` | both: static (capstone over the LE images with their internal fixups applied, objects at `object * 0x100000`; nothing executed), 2026-10-24; and runtime, through this project's own `S98VSD.VXD` `qemu` image on the 98 SE and ME emulators (the first request arriving with `IORF_PHYS_SGDS`: flags `0x04008441`, its entry equal to `IOR_buffer_ptr`, a linear address) | design record 30 section 4.6; `src/vsd/vsd_list.h` (`VsdPlan`) |
 
 ## Sources
 

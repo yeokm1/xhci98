@@ -124,12 +124,15 @@ record 30 section 6), from `src\vsd\`:
   `docs\references\README.md`'s hashes and copies them into the
   git-ignored `src\vsd\obj\`, mending the staged headers (a trailing
   Ctrl-Z cut, `AEP.H`'s three typedef tails); nothing of the DDK is
-  tracked. Open Watcom compiles, `omfpub.py` and `omfcheck.py` guard the
-  objects, the DDK's linker links with `/VXD`, `callcheck.py` holds every
-  call in the image to the function the compiler named, and
+  tracked. Open Watcom compiles (`-zld`: no dependency records),
+  `omfpub.py` and `omfcheck.py` guard the objects (each `THEADR` the
+  source's base name, so an object does not depend on the checkout's
+  path: record 30 section 6.1), the DDK's linker links with `/VXD`,
+  `callcheck.py` holds every call and every segment-relative fixup in the
+  image to the target the compiler named, and
   `check-vsd.ps1` holds the image to its DDB `S98VSD`, its two VxD
-  services (`vsd-services.allow`), its stamp and, in the release image, no
-  debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
+  services (`vsd-services.allow`), its stamp, every LE fixup inside its
+  target object and, in the release image, no debug-port write. Out come `src\vsd\obj\S98VSD.VXD` and
   `src\vsd\obj\qemu\S98VSD.VXD`.
 - `scripts\build-driver.cmd` runs it on the x86 run, after Stor98's
   build: the release image always, the qemu one when the run builds qemu;
@@ -7767,13 +7770,14 @@ offers no line (record 18 leg H1a). **`XhciHlprInject`** is the helper's
 own, `qemu` flavour only, in
 `HKLM\SYSTEM\CurrentControlSet\Services\xhcihlpr\Parameters`, read once in
 its `DriverEntry` (so a change needs a reboot; 0, absent, the wrong type or
-outside 1 to 9 is none): 1 fails `DriverEntry`, 2 refuses the query, 3
+outside 1 to 10 is none): 1 fails `DriverEntry`, 2 refuses the query, 3
 answers interface major 3, the next major, which a version 2 caller
 refuses, 4 a short answer (0x30 bytes, the timer field uncovered), 5 the
 MSI bit set with a NULL `IoDisconnectInterruptEx`, 6 a wrong magic, 7 the
 timer service off (its bit clear, its pointer NULL), 8 the timer bit set
 with a NULL pointer, 9 the MSI half off (its bit clear, both pointers
-NULL) (record 18 sections 2.1 and 15.12). Until task 38.3 it was
+NULL), 10 minor 1's routine service off (its bit clear, its pointer NULL,
+record 32 section 12.8.15.15) (record 18 sections 2.1 and 15.12). Until task 38.3 it was
 `xhcimsi.sys`'s `XhciMsiInject`, under `Services\xhcimsi\Parameters`,
 values 1 to 6 with 3 answering major 2.
 
@@ -9332,3 +9336,19 @@ The package's third driver (design record 21; source map in `source-files.md`, "
 **Installing it by hand.** On Windows 98 SE and ME, Device Manager -> the NHI ("PCI System peripheral" or "Base system device", class 08/80) -> Update Driver -> Specify a location -> the package directory; on Windows 2000 and later, Update Driver -> Have Disk -> the same directory, `xhcicm.inf`. The filter INF (`nt\xhcicmf.inf` in the x86 package, `xhcicmf.inf` at the root of the x64 one) is for the NT targets alone, never pointed at from Windows 98 or ME: on each tunnel port (a Thunderbolt switch port, or the root port the platform tunnels through), Update Driver -> "Don't search" -> Have Disk -> the `nt\` directory on x86, the flavour directory itself on x64, which Windows 2000 also takes unforced and XP and 7 need (the unsigned INF otherwise loses to `machine.inf`; task 39-0.4, record 21 section 3.3). Once installed, the NHI reads "xHCI98 Thunderbolt 2 Controller", "xHCI98 Thunderbolt 3 Controller" or "xHCI98 USB4 Host Router" by its generation, and each port the filter attaches to "xHCI98 Thunderbolt PCI Bridge", "xHCI98 USB4 PCI Bridge" or "xHCI98 PCI Bridge".
 
 **The registry values** (record 21 section 8), in the NHI's driver key, each written by the INF at its default: `XhciCmMode` (1; 0 off, 2 the ICM client on an unlisted Intel NHI, 3 the software connection manager), `XhciCmApprove` (1), `XhciCmReenum` (1), `XhciCmPollIdleMs` (200, held to 50-5000), `XhciCmCmdTimeoutMs` (5000, held to 1000-60000), `XhciCmApproveTimeoutMs` (10000, the same bounds), `XhciCmSafeEject` (1), `XhciLogVerbosity` (0), and the USB4 profile's three of design record 22 section 12, `XhciCmUsb3Tunnel` (1), `XhciCmLaneBonding` (1) and `XhciCmPreOsCleanup` (0; 1 cleans what does not verify, 2 everything); on 98 SE and ME `XhciCmBridgeNumbering` (1) and `XhciCmNoIrqStart` (1) (task 44.46); `XhciCmAsmediaPcie7Credits` (0), `XhciCmUsb4V2` (1) and `XhciCmGen4LinkRecovery` (1, task 45.56); on 2000 to 10 `XhciCmRingInterrupt` (0), and on 2000 and XP `XhciCmBridgeReq` (1) (task 45.50); and `XhciCmTunnelBridge` (`REG_SZ`, written as `auto`, the driver's own finding: a comma-separated `bb:dd.f` list replaces the tunnel-port discovery). A switch out of its range is refused and its default stands; a period is held to its bounds; both are recorded in the log ring at start (`cm.values.refused`, `cm.values.clamped`).
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | SP4's native `usbhub.sys` (5.00.2195.6689, 40,176 B, from the fresh Windows 2000 image) carries no `SelectiveSuspend`, `DisableSelectiveSuspend` or `IdleNotification` string, ASCII or UTF-16; SP4's `usbport.sys` (5.00.2195.6681) carries `DisableSelectiveSuspend` (3), `HcDisableSelectiveSuspend` (2) and `SelectiveSuspend` (3) | static (a string search over the files extracted from the image; nothing disassembled, nothing executed) | build-and-test.md, "A replug onto an idle-suspended controller"; F18's Windows 2000 reading |
+| A.2 | Vista SP2 x86 `usbport.sys` (6.0.6002.18005, 226,304 B, `tools/vista-x86-extracted/`) carries, as UTF-16 substring matches (so a longer name is counted again under the shorter), `DisableSelectiveSuspend` (2), `HcDisableSelectiveSuspend` (1), `SelectiveSuspend` (2) and `FastS4_OverrideBiosS4` (1); Windows 7 SP1 x86 `usbport.sys` (6.1.7601.17514, 284,672 B, `tools/win7-x86-extracted/`) carries `DisableSelectiveSuspend` (1), `SelectiveSuspend` (2), and neither `HcDisableSelectiveSuspend` nor `FastS4_OverrideBiosS4`. On the Vista guest, `FastS4_OverrideBiosS4` is present in the clean-install `vm\vista.img`'s `Windows\System32\config\SYSTEM` hive and `DisableSelectiveSuspend` is not; that image's `Windows\inf\usbport.inf` names `FastS4` nowhere, its `AddReg` sections included | static (a string search over the extracted files and over `SYSTEM` and `usbport.inf` pulled from the image with `7z e`; nothing disassembled, the guest not booted for it). The value's *effect* on both stacks is a separate, runtime reading: the driver's own debug-console trace and `USBCMD`/`USBSTS` read off the QEMU monitor, 2026-09-16 | `build-and-test.md`, "Windows Vista and Windows 7 target VMs", the idle-suspend reading; issue 5 section 5 |
+| A.3 | Windows XP Professional x64 SP2's `AMD64\LAYOUT.INF`: `usbport.sys = 100,,212480,,,,4_,4,1,3,,1,4`, `usbhub.sys = 100,,102400,...`, `usbd.sys = 1,,222222,...`, `usbui.dll = 1,,222222,,,,,2,1,3`, and no `usbhub20.sys` row at all; `[SourceDisksNames.amd64]` gives disk 1 = `\amd64` on the base CD and disk 100 = `\amd64` on the service-pack source, so the first two resolve to `AMD64\SP2.CAB` and the last two to `AMD64\DRIVER.CAB`. The four files there are 212,480 B, 102,400 B, 7,552 B (5.2.3790.1830) and 123,392 B (5.2.3790.1830); the first three sizes match `tools/winxp64-extracted/` exactly, which is what authenticates the reading | static (7-Zip on the owner's own ISO and on the two cabinets; `expand` not needed, `LAYOUT.INF` is uncompressed on this medium; nothing executed) | `src/xhci98-amd64.inf`'s header block; `build-and-test.md`, "The files the OS supplies"; roadmap task 21.3 |

@@ -38,9 +38,8 @@ static void test_header(void)
              "a twenty-word record (45.40 appended four)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3168,
              "records right after the header");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 258,
-             "the whole counter block (45.45's command-state checker: 252 "
-             "to 257)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 264,
+             "the whole counter block (46.6's held line: 258 to 263)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
              3168 + 18 * 80, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS), 32,
@@ -67,8 +66,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 792 + 18 * 20 + 258, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 792 + 258,
+    CHECK_EQ(XhciSnapHcdWords(18), 792 + 18 * 20 + 264, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 792 + 264,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -883,7 +882,11 @@ static void test_counter_tail(void)
              "StrictUndefined at 256");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, StrictRefusals), 257 * 4,
              "StrictRefusals at 257");
-    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 258 * 4, "258 words in all");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HeldScan), 258 * 4,
+             "HeldScan at 258");
+    CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, HeldIrq), 263 * 4,
+             "HeldIrq at 263");
+    CHECK_EQ(sizeof(XHCIHC_COUNTERS), 264 * 4, "264 words in all");
 }
 
 /* 44.35: the transport records' header words (tr_snap.c's print_xport

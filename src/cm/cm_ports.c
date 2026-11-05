@@ -74,6 +74,31 @@ static const ULONG cmAmdNhi[] = { CM_PORTS_ID(0x1022, 0x1668),
 static const ULONG cmAmdRoot[] = { CM_PORTS_ID(0x1022, 0x14CD),
                                    CM_PORTS_ID(0x1022, 0x14EF),
                                    CM_PORTS_ID(0x1022, 0x150A) };
+/* Task 46.23: AMD's other integrated hosts by processor, each beside the
+ * PCIe USB4 bridge pci.ids 2026.10.31 names for that processor (Strix and
+ * Strix Halo share 150A, Krackan and Krackan2 1125). Pink Sardine keeps
+ * all three of its ports above: no source ties it to one processor. On a
+ * Strix Halo machine read on 2026-11-03 the two 150A ports are root ports
+ * on the root bus and each depends on one of the two NHIs, which sit
+ * behind an internal bridge, not on that bus, so the root-port source
+ * never takes them: the router's own mapping (record 22 section 7.6) or
+ * the override does. */
+static const ULONG cmRbNhi[] = { CM_PORTS_ID(0x1022, 0x162E),
+                                 CM_PORTS_ID(0x1022, 0x162F) };
+static const ULONG cmRbRoot[] = { CM_PORTS_ID(0x1022, 0x14CD) };
+static const ULONG cmPhNhi[] = { CM_PORTS_ID(0x1022, 0x15C4),
+                                 CM_PORTS_ID(0x1022, 0x15C5) };
+static const ULONG cmPhRoot[] = { CM_PORTS_ID(0x1022, 0x14EF) };
+static const ULONG cmStxNhi[] = { CM_PORTS_ID(0x1022, 0x151C),
+                                  CM_PORTS_ID(0x1022, 0x151D),
+                                  CM_PORTS_ID(0x1022, 0x158D),
+                                  CM_PORTS_ID(0x1022, 0x158E) };
+static const ULONG cmStxRoot[] = { CM_PORTS_ID(0x1022, 0x150A) };
+static const ULONG cmKrkNhi[] = { CM_PORTS_ID(0x1022, 0x1120),
+                                  CM_PORTS_ID(0x1022, 0x1121),
+                                  CM_PORTS_ID(0x1022, 0x113B),
+                                  CM_PORTS_ID(0x1022, 0x113C) };
+static const ULONG cmKrkRoot[] = { CM_PORTS_ID(0x1022, 0x1125) };
 /* ASMedia's ASM4242: host interface 2425 behind the downstream port 2423
  * of its own switch, whose two hot-plug capable 2423 ports are the
  * tunnel ports and whose two others hold the xHCI and the NHI. */
@@ -124,6 +149,14 @@ static const CM_FAMILY cmFamilies[] = {
       NULL, 0 },
     { "amd-usb4", cmAmdNhi, CM_N(cmAmdNhi), NULL, 0,
       cmAmdRoot, CM_N(cmAmdRoot) },
+    { "amd-rembrandt", cmRbNhi, CM_N(cmRbNhi), NULL, 0,
+      cmRbRoot, CM_N(cmRbRoot) },
+    { "amd-phoenix", cmPhNhi, CM_N(cmPhNhi), NULL, 0,
+      cmPhRoot, CM_N(cmPhRoot) },
+    { "amd-strix", cmStxNhi, CM_N(cmStxNhi), NULL, 0,
+      cmStxRoot, CM_N(cmStxRoot) },
+    { "amd-krackan", cmKrkNhi, CM_N(cmKrkNhi), NULL, 0,
+      cmKrkRoot, CM_N(cmKrkRoot) },
     { "asmedia-asm4242", cmAsmNhi, CM_N(cmAsmNhi), cmAsmPort,
       CM_N(cmAsmPort), NULL, 0 },
     { "usb4-emu", cmEmuNhi, CM_N(cmEmuNhi), NULL, 0,
@@ -155,6 +188,25 @@ BOOLEAN CmPortsFilterId(ULONG id)
             if (cmFamilies[f].SwitchPortIds[i] == id) {
                 return TRUE;
             }
+        }
+        for (i = 0; i < cmFamilies[f].RootPortIdCount; i++) {
+            if (cmFamilies[f].RootPortIds[i] == id) {
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+BOOLEAN CmPortsAcpiPort(ULONG id)
+{
+    ULONG f;
+    ULONG i;
+
+    for (f = 0; f < CM_N(cmFamilies); f++) {
+        if (cmFamilies[f].NhiIdCount == 0 ||
+            (cmFamilies[f].NhiIds[0] & 0xFFFFUL) != 0x1022UL) {
+            continue;
         }
         for (i = 0; i < cmFamilies[f].RootPortIdCount; i++) {
             if (cmFamilies[f].RootPortIds[i] == id) {

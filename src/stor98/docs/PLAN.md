@@ -744,10 +744,10 @@ the timer and interrupts active throughout (R6-5).
 
 | # | Item | Source |
 |---|---|---|
-| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent | N4; backport |
+| 3.1 | PnP-constrained discovery (only the supplied function); `ConfigInfo` bus/slot consistent. **9x (xhci98 3.4.1.0, its roadmap 46.1):** `HwFindAdapter` takes only the function whose devnode the port is starting, one adapter per call (`Again` FALSE), and never the NT4-style `HwContext` scan from bus 0, which brought up the first NVMe function it met: on a board whose Windows ran from an internal NVMe drive through the BIOS's INT 13h, a tunnelled drive's load reset that drive and the start stopped at "Initing stor98.mpd". The function is named by the port's first access range, the devnode's memory resource (G9: 98 SE gives `ConfigInfo` the devnode's bus, slot and BAR): it is the NVMe function one of whose memory BARs (both dwords when 64-bit) lies at that range's start - not always BAR0: on the owner's board 98 SE gave an SK hynix drive's second memory BAR, 4 KB above BAR0, as the first range (the `StorFind` report below), and BARs of different functions never share an address (`PciScanIsPortFunction`, `src/pciscan.h`, host test `pciscan_ut`). `ConfigInfo`'s bus and slot are probed first; when they do not hold it, every bus is walked (3.4) for it, and nothing else is taken. No range from the port (start 0) names no function: `SP_RETURN_NOT_FOUND`, nothing touched. **A controller already set up** (xhci98 3.4.1.0, owner 2026-11-02): before anything is written to the found function (before `HwLocateRegisters` turns decode off to size BAR0), its command register and, with memory decode on, CC and CSTS are read through its BAR0; it is taken only with decode off, or with CC.EN 0 and CSTS.RDY 0. Enabled or ready in either combination, all-ones or unreadable registers: `SP_RETURN_NOT_FOUND`, untouched (`PciScanFirmwareState`, `src/pciscan.h`). On the owner's board the BIOS served a tunnelled drive through INT 13h (its boot menu listed it; declined, it kept a drive letter through the real-mode mapper), the port called `HwAdapterState(FALSE)` during start, and the controller this driver had reset could not be given back (review N3: `FALSE` restores nothing, it stops): the start hung. This is a refusal of a controller someone else initialised, not proof that the BIOS will use it again, and not a firmware handoff: a real handoff would have to rebuild the BIOS's I/O queues, which no register holds. Such a drive runs through the BIOS (compatibility mode) and Stor98's devnode shows Code 10; a drive plugged in after start is not set up and is taken. Possible false positive: firmware that leaves a controller it never uses again enabled (to be read on the P14s, whose power-on drive ran under Stor98). The boot-time `FALSE` caller is still unidentified (G9: handoff beyond the load's `TRUE` not tested). Every 9x find writes what it saw as the REG_SZ value `StorFind` in `HKLM\System\CurrentControlSet\Services\stor98` (the port's bus, slot and first range, what its slot holds, where the function was found, the return; `PlatFindReport`). `RangeInMemory` is not relied on (an I/O range cannot equal a memory BAR's address). Residual: a devnode bound to Stor98 for the system disk itself (Stor98 on that devnode by the user's choice) is still brought up; the installer and the INF keep Stor98 off internal drives | N4; backport; xhci98 46.1 |
 | 3.2 | Port/HAL interrupt routing on PnP targets; manual routing only where needed | N6; backport |
 | 3.3 | Full 64-bit BAR decoding, sizing with decode disabled | #13 |
-| 3.4 | **PCI config access only from permitted callbacks** (R4-2). NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on the NT4-ABI scan, which 9x uses (`HwContext` set), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10, R4-2; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
+| 3.4 | **PCI config access only from permitted callbacks** (R4-2). NT: `ScsiPortGetBusData` only in `HwFindAdapter` and `ScsiSetRunningConfig`, `ScsiPortSetBusDataByOffset` likewise; no raw mechanism #1 (CF8/CFC) access on NT, since it cannot be serialised against the HAL's config cycles on another processor. The base reads and writes the PCI command register from `HwInitialize` (src/nvme2k.c:925); that moves to `HwFindAdapter`. 9x: per G9. Return lengths (the helpers request 256 bytes and ignore the count, src/utils.c:752, 770, 788): request only the bytes needed from offset 0; a return of 0 (no such bus) or 2 (no function; only the invalid Vendor ID is returned) is "not found" and `HwFindAdapter` returns `SP_RETURN_NOT_FOUND`; a Vendor ID of 0xFFFF is the same; on a walk of the buses (9x, looking for the port's function when `ConfigInfo`'s bus and slot do not hold it, 3.1; the NT4-ABI `HwContext` scan before xhci98 3.4.1.0), each slot's Vendor ID is probed with a 4-byte read before the header is read, and the scan walks every bus number, 0 to 255 (`src/pciscan.h`; xhci98 3.3.0.0): the base stopped after bus 15, and a firmware numbers a hot-plug port's bus range far up (the emulator's asm4242 model gives its two USB4 ports buses 19h-48h and 49h-78h), so a drive tunnelled there was never found and its devnode stayed at problem 10 (98 SE in the emulator with the asm4242 model's bus ranges, xhci98's `docs/contributing/runs/run-44.md`, "44.45"); the found path resumes through the same walk, so a find at the last slot of bus 255 ends the scan (`Again` FALSE); read on 98 SE in the emulator, the scan from bus 0 to the drive on bus 35h took about 5 ms (the debug-port stages' TSC), so the whole 0-255 walk is a few tens of milliseconds there; the scan reads other slots, as the base's did, and on 9x such a read can return garbage (G9 recorded a Vendor ID of `003E` for a function that does not exist, in `HwFindAdapter`): a probe that does so leads only to the header read, whose checked length and class check decide as before; a short return makes every field beyond it unavailable, and a needed field that is unavailable fails `HwFindAdapter` with `SP_RETURN_ERROR` before CC.EN is written. `ScsiPortSetBusDataByOffset` must return the requested length, and a Bus Master Enable or Command change is read back. No runtime callback reads config space for presence on NT (presence comes from MMIO; isolation from 0.10) | #10, R4-2; src/utils.c:752, 770, 788; src/nvme2k.c:925 |
 | 3.5 | (Moved to 0.9.) | #14, R2-10 |
 | 3.6 | Windows 9x cache-mode fallback: supported VMM memory-type call or proper TLB/cache sync | N7 |
 
@@ -1956,3 +1956,188 @@ Windows 2000, raw disk, 16 MiB with compare, 64 and 256 KiB requests:
 
 XP x64 with the NT defaults (polling, 500 us spin): 49-205 MB/s at QD1, 64-205 MB/s at
 QD8.
+
+### Missed-interrupt watchdog (xhci98 3.4.1.0, its roadmap 46.9)
+
+Decided by the owner on 2026-11-01: on by default, with a setting to turn it off. An
+adapter that started interrupt-driven and whose interrupts then stop switches to the
+polling mode for the rest of that start. The case it answers: a line that the OS
+connected and that never fires (an IRQ routed wrong, a bridge's interrupt path missing
+behind a tunnel, a controller that stops asserting INTx); without it every request then
+completes only at the 100 ms watchdog tick, about ten requests a second.
+
+**What counts (`PollWatchTick`, `src/polltun.h`; host vectors in `tests/unit/poll_ut.c`, the shared line's finds among them).**
+It is a heuristic, read from the timer, and says so: it can latch on a working line in a
+rare interleaving (below), and the cost of that is the polling mode for the rest of the
+start, which is correct operation at a higher CPU cost, never lost or wrong I/O.
+- *Armed* only while the vector is in use: state `running`, the engine's running step
+  run by this callback (not a 9x removal transaction's), a start that is interrupt-driven
+  (`PollAlways` FALSE), the vector not masked after a storm (`PollMode` FALSE), and the
+  setting on. Every timer callback that is not armed sets the run to 0, forgets the finds
+  (below) and takes the claim count as seen (`EngTimer` calls `PollWatchTick` once per callback, whatever the state,
+  the removal transaction's early return included), so a storm's polling, a bring-up, a
+  reset, gone, quarantined or a removal never counts, and the run never spans one.
+- `HwInterrupt` counts each call in which it consumed a completion (`IntClaims`; the
+  interrupt-driven path of `EngInterrupt`), and the completions those calls consumed
+  (`IntClaimCqes`, admin and I/O queue entries alike). A call that consumed nothing
+  (another device on a shared line, a storm) does not count.
+- At an armed callback, after the running step's `EngProcessCompletions` (and only while
+  the state is still `running` after it), with *claims* the interrupts claimed since the
+  previous counted callback and *claimed completions* the completions they consumed:
+  - no claim: the run as before. A completion consumed by this step is a **miss**: the
+    run goes up by one; when it was 0, or its first miss is more than
+    `POLL_WATCH_WINDOW_MS` (2 s) old, it starts again at 1 with this miss as its first;
+    nothing found (a command still running, or a dirty-idle tick) keeps the run;
+  - one claim or more: the run is 0. A completion consumed by this step with at most
+    `POLL_WATCH_FEW_CQES` (2) claimed completions is a miss too (the shared line, below),
+    but adds nothing to the run; with more it is not a miss;
+  - every miss, of either kind, is a **find**: its clock time is kept, the last
+    `POLL_WATCH_FINDS` (8) of them (a rolling window: a find older than the eighth is
+    forgotten, never counted against a later window). An armed callback whose newest find
+    is more than `POLL_WATCH_WINDOW_MS` old forgets them all, since none of them can count
+    again. The start's misses are counted (`IntMisses`, saturating).
+- The run reaching `POLL_WATCH_MISSES` (3), or the eighth most recent find being at most
+  `POLL_WATCH_WINDOW_MS` older than the newest, **latches**.
+- The timer stopping when the adapter goes idle forgets neither the run nor the finds: at
+  queue depth 1 every command can end that way (a read stream, the timer recovering each
+  read and then stopping), and a dead line's misses must add up across those gaps. The
+  first armed callback after a gap tests the newest find's age as above. The age is only
+  as good as the engine's clock over the gap, so the finds (not the run, which claims set
+  back) are forgotten after a gap it did not measure: one folded with the safe clock
+  (`Clock.LongGaps`, beyond the TSC estimate's 32 bits of units, about an hour; on NT the
+  OS clock then counts nothing past 429 s), a reading behind the estimate's base (another
+  processor's counter, `Clock.BackSpans`: nothing counted, so the clock can stand still
+  while time passes), or an idle gap on a processor with no usable TSC (the fallback clock
+  advances only with the timer); each is tested at every counted callback, before the
+  callback's own find. Otherwise the test errs only for a gap within 2 s of a whole number
+  of the 32-bit millisecond clock's wraps (about 49.7 days), and then counts the old finds
+  once. So on a processor with no usable TSC the finds never add up across idle gaps, and
+  where the processors' counters are out of step they add up only between readings behind
+  the base; a dead shared line is then left to the run.
+
+Why three within 2 s: in interrupt mode the timer runs at the 100 ms watchdog tick while
+work is outstanding (`PollRunningPeriod`), so a dead line gives a miss about every tick
+under load and the latch comes about 300 ms after the first. On a working line a step
+finds a completion only when it runs between the posting and the interrupt's service; the
+interrupt then finds the queue empty and claims nothing (`EngProcessCompletions` consumed
+it). That needs the posting to fall inside a timer callback's own run (short, but not
+measured under load), every 100 ms, three times within 2 s with no claimed interrupt
+between: not seen, not excluded [inference; the interrupt-driven leg records the miss
+count]. Host vectors carry that interleaving.
+
+*Shared line (the finds; xhci98's run sheet "46.9 the shared-line claims", 2026-11-05).*
+A claim is a consumed completion, not proof that this controller raised the line: another
+device's interrupts on the same line call `HwInterrupt`, which consumes whatever is posted
+and claims it. Read in the emulator on 98 SE with a test image logging every counted
+callback: with the drive's interrupt suppressed and another function on its IRQ raising
+its own about ten times a second, 137 of 182 counted callbacks found a completion, and
+all but 5 of those had a claim since the previous callback (130 one, 1 two, 1 nineteen),
+so the run was set back each time and the latch came only about 19 s after the suppression
+(I/O meanwhile at that device's rate, 89 random 4 KiB writes a second). On the same line
+before the suppression, under load, the counted callbacks had 5 to more than 20 claims
+each and one of 169 found a completion (with 10 claims). So the run alone cannot tell
+such a line from a working one (both have claims at almost every callback), but the
+number of completions claimed can: a working line under load claims every completion
+but the few the timer races to, many in a 100 ms period, while a dead line's completions
+are claimed only at the other device's calls (one each in that reading, at queue depth 1).
+The finds count the misses at callbacks with at most two claimed completions since the
+previous one, and eight of them within 2 s latch: with the busy period at the 100 ms watchdog tick a window holds
+about 20 counted callbacks, so 8 is 40% of them, reached in about a second on the reading
+above.
+
+Why that does not latch a working line [inference; the interrupt-driven legs record the
+misses]: a callback finds a completion there only when the posting falls between the
+callback's start and its drain (with the timer and the interrupt kept apart, as NT's port
+does and as the 98 port did in the emulator, run sheet "46.9 related"), so with at most
+two completions claimed since the previous callback that is, for random arrivals, a chance
+of about the callback's own run time over the period for each completion, small against
+the 8 in 20 needed; at a high completion rate, where the races are frequent, the claimed
+completions are many and the finds do not count them. Not excluded: a light workload
+whose completions keep falling inside the timer's run at 8 of 20 callbacks (traffic in
+step with the timer, at most two completions claimed between); the cost is the polling
+mode for the rest of the start, correct I/O at a higher CPU cost, as for the run. Left as
+limits: another device interrupting more than about twice in each 100 ms period claims
+more than two completions in it and keeps the finds off, I/O then completing at that
+device's interrupt rate, which is then high, no worse than before this version; and light
+load (fewer than 8 commands in 2 s) never latches by the finds.
+
+**The latch (`LcIntWatchLatch`, `src/lifecycle.c`), from the timer callback.**
+- INTMS is written all-ones, so the controller stops asserting any vector (MMIO; no
+  configuration write: PCI config space only from the permitted callbacks, 3.4, so the
+  command register keeps the INTx enable `HwFindAdapter` set).
+- `PollAlways` and `PollMode` are set, `PollWhy` becomes `POLL_WHY_MISSED` (7), and
+  the timer is asked for the busy period (`EngTimerEnsure`).
+- From then the adapter is an adapter that started polling: the busy and idle periods
+  and `HwStartIo`'s spin apply, `HwInterrupt` consumes but never claims an empty call and
+  does no storm accounting, the storm unmask trial never runs, and a bring-up after a
+  reset never unmasks a vector (`LcBringupDone`). It lasts until the next
+  `HwFindAdapter`: a new start, an NT resume included, decides again.
+- Counted and logged: the perf answer (`include/stor98pf.h`, `Polling`) has bit 0 set,
+  why 7 in bits 15:8 and, new, the start's misses in bits 31:16 (saturating at FFFFh; 0
+  before this version; a fact of the start, not an event to subtract); bit 1 is the vector
+  masked (a storm, or the latch). XHCIPERF shows the mode and the misses ("N missed": the
+  watchdog's misses as counted above, a heuristic's count, not interrupts proven lost;
+  `include/stor98pf.h` says so). Test builds log
+  the latch as debug-port stage `STG_POLL_WATCH` (0x157: misses, the claim count, the
+  state) and the setting as `STG_POLL_WATCHCFG` (0x158: the value used, the raw value,
+  present, clamped), apart from 0x150's and 0x151's packed fields, which have no room. No
+  registry value is written at the latch: the timer runs at DISPATCH_LEVEL on NT and at
+  event time on 9x, where neither the NT registry calls nor VMM's registry services are
+  used (xhci98's roadmap 46.14). `StorInterrupt` keeps the start's own decision; XHCIPERF
+  is the reading of the current mode.
+- Not done: no fall back to interrupts in the same start (no trial unmask, unlike a
+  storm), no change to the port's interrupt object, no configuration write.
+
+**No timer request from 9x interrupt storm masking (with 46.9; xhci98's run sheet "46.9
+related: shared IRQ").** An interrupt storm's mask (`LcStormMask`, called from
+`EngInterrupt`) asked the port for the fast tick from the interrupt (`EngTimerEnsure`,
+which on 9x cancels the pending request and makes a new one). On 9x the storm mask now
+leaves the period to the next timer callback (`LcWantedPeriod` already wants the fast
+tick once `PollMode` is set; with work outstanding the timer is running, at the watchdog
+tick at most); NT keeps the request, which its port documents from `HwInterrupt`. What
+the 98 port does with a timer request at interrupt time is not documented in the
+repository; this takes one such call out of that context. Others stay reachable from the
+interrupt (a completed SHUTDOWN's Flush, `EngShutdownFlushed`, and the state change before
+it ask for a timer), and the repository establishes neither that they are safe nor that
+they are not; nothing else changes in the interrupt.
+
+**Setting.** `StorIntWatchdog` (9x, REG_SZ decimal or REG_DWORD, in
+`HKLM\System\CurrentControlSet\Services\stor98`) / `storintwatchdog=` (NT
+`DriverParameter`), read with the polling settings (`POLL_RAW`, bit `POLL_CLAMP_WATCH`):
+
+| Value | Unit | Default | Range | 0 means |
+|---|---|---|---|---|
+| `StorIntWatchdog` / `storintwatchdog=` | - | 1 | 0-1 | off: interrupts are never given up on (above 1 clamps to 1) |
+
+The INFs write it at its default without overwriting a value the user set (the owner's
+rule of 2026-10-30): the 9x INF a REG_DWORD 1 (flags `0x00010003`), the NT INFs
+`storintwatchdog=1` in their `DriverParameter` string (`FLG_ADDREG_NOCLOBBER`; an
+update over a string written before this version keeps that string, and the absent key
+takes the default, on). xhci98's `scripts\inf-gate\check-stor98-inf.ps1` holds both
+lines (and its self-tests' copies of the string); `src/dpkeys.h` lists the key in
+`DPK_ALL`; the readme's SETTINGS table, xhci98's `docs/using/tuning.md` and xhci98's
+installer (its Stor98 Advanced list, `xhciinst\inst_core.c` and `inst_core.h`, held to
+`test\stor98-settings.txt`) carry the row.
+
+**Legs (emulator).** The controller's interrupt is suppressed after the start by setting
+the Interrupt Disable bit (bit 10) of the drive function's PCI command register from
+QEMU's monitor, through configuration mechanism #1, the guest stopped around it: CF8h read
+and kept, the function's dword 04h selected at CF8h, the command word read at CFCh with a
+16-bit access, written back with bit 10 set by a 16-bit write (the other bits as read),
+and CF8h restored. QEMU's PCI model then keeps that function's INTx deasserted, which is
+the missing line this answers; clearing the bit again afterwards shows the latch holds. No
+test hook in the driver. On 98 SE, ME, 2000, XP and 7 with a tunnelled drive (the ASM4242
+layout): a copy-and-compare running across the suppression goes on, the perf answer shows
+why 7 and the misses; with `StorIntWatchdog` / `storintwatchdog=` 0 the same run continues
+at the watchdog tick and nothing latches; and the interrupt-driven case with no
+suppression shows interrupts with the I/O correct, its misses and any latch recorded and
+read against the heuristic above (a miss there is possible, not a failure by itself). The
+shared line: a second PCI function on the drive's IRQ (QEMU's `edu`, with no driver),
+its interrupt raised and acknowledged from the host in bounded cycles (a write to its
+register 60h raises it, one to 64h acknowledges it, through QEMU's gdbstub in
+physical-memory mode) while a benchmark with compare runs on the drive: the data compare
+clean, completions taken on the shared calls are claims, a latch the claims hold off is
+recorded, and no controller reset follows the empty interrupts. A line held asserted with
+no acknowledgement is a separate fault test, bounded in time (the documented storm case:
+it can starve the timer).
+

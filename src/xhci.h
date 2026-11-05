@@ -6163,6 +6163,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG CommandGeneration;        /* 0 = no command issued in this start  */
     ULONG CommandTrbPA;             /* the outstanding TRB, 0 when resolved */
     ULONG CommandType;              /* TRB type of the outstanding command  */
+    ULONG CommandControl;           /* its control dword (slot, endpoint):
+                                     * the cmd.timeout.trb note (46.19)    */
     ULONG LastCommandTrbPA;         /* the last event this driver matched   */
     ULONG CommandCompletionCode;    /* and that event's completion code     */
     ULONG CommandSlotId;            /* DW3 Slot ID - Enable Slot's answer   */
@@ -9316,7 +9318,7 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_F_UNREADABLE  0x00000004UL /* PORTSC read all ones */
 
 /* XHCIHC_COUNTERS in ULONGs (xhci_counters.h; asserted in xhci_snap.c). */
-#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 258UL
+#define XHCI_SNAPSHOT_HCD_COUNTER_WORDS 264UL
 /* Usb2HubSpeedFallbackSlots' word, which the door computes (issue 18). */
 #define XHCI_SNAPSHOT_HCD_HUB_SPEED_SLOTS 166UL
 

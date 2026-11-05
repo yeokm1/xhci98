@@ -5,8 +5,8 @@
  * capability read, the requirements list's checked walk, its
  * classification, the strip and the qemu no-line rewrite, the filter
  * record, the helper binding's state machine with the timer's event, the
- * channel V2's two halves with each service's verdicts, and the trace
- * record.
+ * channel V2's two halves with each service's verdicts, its minor 1 (the
+ * routine service, record 32 section 12.8.15.15), and the trace record.
  */
 
 #include <stdio.h>
@@ -777,6 +777,7 @@ static void test_bind(void)
 static int dummyConnect;
 static int dummyDisconnect;
 static int dummyTimer;
+static int dummyFind;
 
 static void fresh(XHCI_HLPR_QUERY *q)
 {
@@ -799,7 +800,7 @@ static ULONG answer(XHCI_HLPR_QUERY *q, PVOID c, PVOID d, PVOID t,
 {
     fresh(q);
     return XhciHlprAnswer(q, XHCI_HLPR_V2_MIN, XHCI_HLPR_V2_MIN, c, d, t,
-                          0x02040000UL, inject, info);
+                          &dummyFind, 0x02040000UL, inject, info);
 }
 
 static void test_channel(void)
@@ -822,7 +823,8 @@ static void test_channel(void)
     CHECK_EQ(q.Magic, XHCI_HLPR_MAGIC, "magic 'XHLP'");
     CHECK_EQ(q.Returned, XHCI_HLPR_V2_MIN, "returned");
     CHECK_EQ(q.Services, XHCI_HLPR_SVC_MSI | XHCI_HLPR_SVC_TIMER,
-             "both services");
+             "both services, no routine bit to a V2.0 block");
+    CHECK_EQ(q.HelperMinor, 1, "a minor 1 helper");
     CHECK_EQ(q.CallerVersion, 0x02040000UL, "the caller's fields untouched");
     CHECK_EQ(q.CallerWants, 3, "CallerWants untouched");
     CHECK_EQ(XhciHlprAccept(1, info, sizeof(q), &q, 1, &msi, &tmr),
@@ -894,12 +896,13 @@ static void test_channel(void)
 
     /* Refusals before any read of the block, at the end of an allocation. */
     CHECK_EQ(XhciHlprAnswer(NULL, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
-                            &dummyTimer, 0, 0, &info),
+                            &dummyTimer, &dummyFind, 0, 0, &info),
              XHCI_HLPR_ANS_INVALID, "a NULL buffer");
     for (len = 0; len < 4; len++) {
         guard = (UCHAR *)malloc(len == 0 ? 1 : len);
         CHECK_EQ(XhciHlprAnswer(guard + len, len, len, &dummyConnect,
-                                &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                                &dummyDisconnect, &dummyTimer, &dummyFind,
+                                0, 0, &info),
                  XHCI_HLPR_ANS_TOO_SMALL,
                  "a buffer shorter than Size, at the end of an allocation");
         CHECK_EQ(info, 0, "Information 0");
@@ -907,33 +910,36 @@ static void test_channel(void)
     }
     guard = (UCHAR *)malloc(0x33);
     CHECK_EQ(XhciHlprAnswer(guard, 0x33, 0x33, &dummyConnect,
-                            &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                            &dummyDisconnect, &dummyTimer, &dummyFind,
+                            0, 0, &info),
              XHCI_HLPR_ANS_TOO_SMALL, "0x33 bytes");
     free(guard);
     guard = (UCHAR *)malloc(0x28);
     CHECK_EQ(XhciHlprAnswer(guard, 0x28, 0x28, &dummyConnect,
-                            &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                            &dummyDisconnect, &dummyTimer, &dummyFind,
+                            0, 0, &info),
              XHCI_HLPR_ANS_TOO_SMALL, "a V1-sized block");
     free(guard);
     fresh(&q);
     CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x38, &dummyConnect, &dummyDisconnect,
-                            &dummyTimer, 0, 0, &info),
+                            &dummyTimer, &dummyFind, 0, 0, &info),
              XHCI_HLPR_ANS_INVALID, "unequal lengths");
     fresh(&q);
     q.Size = 0x38;
     CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
-                            &dummyTimer, 0, 0, &info),
+                            &dummyTimer, &dummyFind, 0, 0, &info),
              XHCI_HLPR_ANS_INVALID, "Size disagrees with the length");
     fresh(&q);
     q.CallerMajor = 1;
     CHECK_EQ(XhciHlprAnswer(&q, 0x34, 0x34, &dummyConnect, &dummyDisconnect,
-                            &dummyTimer, 0, 0, &info),
+                            &dummyTimer, &dummyFind, 0, 0, &info),
              XHCI_HLPR_ANS_REVISION, "a V1 caller refused");
 
     /* A newer caller's longer block: filled to the helper's own size. */
     {
         UCHAR big[0x40];
         XHCI_HLPR_QUERY *bq;
+        ULONG routine;
         ULONG i;
 
         for (i = 0; i < sizeof(big); i++) {
@@ -943,12 +949,17 @@ static void test_channel(void)
         bq->Size = 0x40;
         bq->CallerMajor = XHCI_HLPR_MAJOR;
         CHECK_EQ(XhciHlprAnswer(big, 0x40, 0x40, &dummyConnect,
-                                &dummyDisconnect, &dummyTimer, 0, 0, &info),
+                                &dummyDisconnect, &dummyTimer, &dummyFind,
+                                0, 0, &info),
                  XHCI_HLPR_ANS_OK, "a longer block answered");
-        CHECK_EQ(info, XHCI_HLPR_V2_MIN, "to the helper's own size");
-        CHECK_EQ(big[0x34], 0xEE, "nothing written past it");
+        CHECK_EQ(info, XHCI_HLPR_V21_SIZE, "to the helper's own size");
+        CHECK_EQ(big[0x38], 0xEE, "nothing written past it");
         CHECK_EQ(XhciHlprAccept(1, info, 0x40, bq, 1, &msi, &tmr),
                  XHCI_HLPR_ACCEPTED, "and accepted by that caller");
+        CHECK_EQ(XhciHlprAcceptRoutine(1, info, 0x40,
+                                       (XHCI_HLPR_QUERY1 *)big, &routine),
+                 XHCI_HLPR_ACCEPTED, "and by a minor 1 caller");
+        CHECK_EQ(routine, XHCI_HLPR_SVC_ACCEPTED, "its routine accepted");
     }
 
     /* The qemu injections (record 18 sections 2.1 and 15.12, N3). */
@@ -980,6 +991,129 @@ static void test_channel(void)
     (void)XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr);
     CHECK_EQ(msi, XHCI_HLPR_SVC_NOT_OFFERED, "9: the MSI half off");
     CHECK_EQ(tmr, XHCI_HLPR_SVC_ACCEPTED, "9: the timer unchanged");
+    (void)answer(&q, &dummyConnect, &dummyDisconnect, &dummyTimer,
+                 XHCI_HLPR_INJ_ROUTINE_OFF, &info);
+    CHECK_EQ(XhciHlprAccept(1, info, 0x34, &q, 1, &msi, &tmr),
+             XHCI_HLPR_ACCEPTED, "10: a V2.0 caller unaffected");
+    CHECK_EQ(msi + tmr, 2, "10: both its services accepted");
+}
+
+/* ---- the channel's minor 1, the routine service (record 32 section
+ * 12.8.15.15) ------------------------------------------------------------ */
+
+static void fresh1(XHCI_HLPR_QUERY1 *q)
+{
+    UCHAR *p;
+    ULONG i;
+
+    p = (UCHAR *)q;
+    for (i = 0; i < sizeof(*q); i++) {
+        p[i] = 0;
+    }
+    q->V2.Size = XHCI_HLPR_V21_SIZE;
+    q->V2.CallerMajor = XHCI_HLPR_MAJOR;
+    q->V2.CallerMinor = XHCI_HLPR_MINOR;
+    q->V2.CallerVersion = 0x03040100UL;
+    q->V2.CallerWants = XHCI_HLPR_SVC_ROUTINE;
+}
+
+/* A minor 1 helper answering a minor 1 block, or with `inject`. */
+static ULONG answer1(XHCI_HLPR_QUERY1 *q, PVOID find, ULONG inject,
+                     ULONG *info)
+{
+    fresh1(q);
+    return XhciHlprAnswer(q, XHCI_HLPR_V21_SIZE, XHCI_HLPR_V21_SIZE,
+                          &dummyConnect, &dummyDisconnect, &dummyTimer, find,
+                          0x03040100UL, inject, info);
+}
+
+static void test_channel1(void)
+{
+    XHCI_HLPR_QUERY1 q;
+    ULONG info;
+    ULONG routine;
+
+    CHECK_EQ(sizeof(XHCI_HLPR_QUERY1), 0x38, "the V2.1 block is 0x38 bytes");
+    CHECK_EQ(XHCI_HLPR_SVC_ROUTINE, 4, "the routine service is bit 2");
+
+    CHECK_EQ(answer1(&q, &dummyFind, 0, &info), XHCI_HLPR_ANS_OK,
+             "a minor 1 query answered");
+    CHECK_EQ(info, XHCI_HLPR_V21_SIZE, "the whole V2.1 block");
+    CHECK_EQ(q.V2.Returned, XHCI_HLPR_V21_SIZE, "returned 0x38");
+    CHECK_EQ(q.V2.HelperMinor, 1, "minor 1");
+    CHECK_EQ(q.V2.Services & XHCI_HLPR_SVC_ROUTINE, XHCI_HLPR_SVC_ROUTINE,
+             "the routine bit");
+    CHECK(q.FindRoutine == (PVOID)&dummyFind, "the routine handed out");
+    CHECK_EQ(q.V2.CallerWants, XHCI_HLPR_SVC_ROUTINE,
+             "CallerWants untouched");
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine),
+             XHCI_HLPR_ACCEPTED, "the channel accepted");
+    CHECK_EQ(routine, XHCI_HLPR_SVC_ACCEPTED, "the routine accepted");
+
+    /* A minor 0 helper (every helper before this change): it fills 0x34
+     * bytes of the 0x38 block and knows no bit 2. */
+    (void)answer1(&q, &dummyFind, 0, &info);
+    q.V2.Returned = XHCI_HLPR_V2_MIN;
+    q.V2.HelperMinor = 0;
+    q.V2.Services &= ~XHCI_HLPR_SVC_ROUTINE;
+    q.FindRoutine = NULL;
+    CHECK_EQ(XhciHlprAcceptRoutine(1, XHCI_HLPR_V2_MIN, sizeof(q), &q,
+                                   &routine),
+             XHCI_HLPR_ACCEPTED, "a minor 0 helper's channel accepted");
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NOT_OFFERED,
+             "a minor 0 helper: the routine not offered");
+    q.FindRoutine = (PVOID)&dummyFind;
+    (void)XhciHlprAcceptRoutine(1, XHCI_HLPR_V2_MIN, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NOT_OFFERED,
+             "a field past Returned is not read");
+    q.V2.Services |= XHCI_HLPR_SVC_ROUTINE;
+    (void)XhciHlprAcceptRoutine(1, XHCI_HLPR_V2_MIN, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_MALFORMED,
+             "bit 2 set, its field uncovered");
+
+    /* A minor 1 helper without the routine. */
+    CHECK_EQ(answer1(&q, NULL, 0, &info), XHCI_HLPR_ANS_OK,
+             "answered without the routine");
+    CHECK_EQ(q.V2.Services & XHCI_HLPR_SVC_ROUTINE, 0, "no bit 2");
+    (void)XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NOT_OFFERED, "not offered");
+    (void)answer1(&q, &dummyFind, XHCI_HLPR_INJ_ROUTINE_OFF, &info);
+    CHECK_EQ(q.V2.Flags, XHCI_HLPR_F_INJECTED, "10: flagged");
+    CHECK(q.FindRoutine == NULL, "10: no pointer");
+    (void)XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NOT_OFFERED, "10: the routine off");
+
+    /* Malformed answers. */
+    (void)answer1(&q, &dummyFind, 0, &info);
+    q.FindRoutine = NULL;
+    (void)XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_MALFORMED, "bit 2 set, pointer NULL");
+    (void)answer1(&q, NULL, 0, &info);
+    q.FindRoutine = (PVOID)&dummyFind;
+    (void)XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine);
+    CHECK_EQ(routine, XHCI_HLPR_SVC_MALFORMED, "bit 2 clear, a pointer");
+
+    /* The channel's own tests: no service judged. */
+    (void)answer1(&q, &dummyFind, 0, &info);
+    CHECK_EQ(XhciHlprAcceptRoutine(0, info, sizeof(q), &q, &routine),
+             XHCI_HLPR_REFUSE_STATUS, "the IRP failed");
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NONE, "nothing judged");
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info, XHCI_HLPR_V2_MIN, &q, &routine),
+             XHCI_HLPR_REFUSE_LENGTH, "above the capacity");
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info - 4, sizeof(q), &q, &routine),
+             XHCI_HLPR_REFUSE_LENGTH, "Information disagrees");
+    (void)answer1(&q, &dummyFind, XHCI_HLPR_INJ_MAJOR, &info);
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine),
+             XHCI_HLPR_REFUSE_IDENTITY, "another major");
+    CHECK_EQ(routine, XHCI_HLPR_SVC_NONE, "nothing judged");
+    (void)answer1(&q, &dummyFind, XHCI_HLPR_INJ_SHORT, &info);
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine),
+             XHCI_HLPR_REFUSE_LENGTH, "a short answer");
+    CHECK_EQ(q.V2.Services & XHCI_HLPR_SVC_ROUTINE, 0,
+             "a short answer sets no bit 2");
+    (void)answer1(&q, &dummyFind, XHCI_HLPR_INJ_MAGIC, &info);
+    CHECK_EQ(XhciHlprAcceptRoutine(1, info, sizeof(q), &q, &routine),
+             XHCI_HLPR_REFUSE_IDENTITY, "a wrong magic");
 }
 
 /* ---- the trace ---------------------------------------------------------- */
@@ -1031,6 +1165,7 @@ int main(void)
     test_record();
     test_bind();
     test_channel();
+    test_channel1();
     test_trace();
 
     printf("\n%d checks, %d failures\n", checks, failures);

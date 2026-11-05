@@ -187,7 +187,11 @@ typedef struct _STOR98PF_ANSWER {
     ULONG ChildrenIo;           // 0x50 commands outstanding when answered (a gauge)
     ULONG WriteThrough;         // 0x54 resolved mode: 0 off, 1 cache off, 2 FUA (implementation-defined)
     ULONG Vwc;                  // 0x58 1: a volatile write cache is present
-    ULONG Polling;              // 0x5C bit 0 polling mode, bit 1 storm polling, bits 15:8 why
+    ULONG Polling;              // 0x5C bit 0 polling mode, bit 1 vector masked (a storm, or the missed-interrupt
+                                //      latch), bits 15:8 why (7: interrupts missed), bits 31:16 the start's missed
+                                //      interrupts as the watchdog counts them (a heuristic's count, PLAN
+                                //      "Missed-interrupt watchdog"; saturating; 0 before xhci98 3.4.1.0; a fact,
+                                //      not an event)
     ULONG Dcb9xSeen;            // 0x60 STOR98PF_DCB_SEEN
     ULONG DcbMaxXferLen;        // 0x64 9x: DCB_max_xfer_len
     ULONG DcbMaxSgElements;     // 0x68 9x: DCB_max_sg_elements

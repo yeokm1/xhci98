@@ -1,0 +1,73 @@
+xHCI98 3.4.1.0: adding the drivers to a Windows setup
+=======================================================
+
+WHICH FOLDER
+
+  98-me\    Windows 98 SE and ME. They have no integration route: install
+            with SETUP.EXE, or point the hardware wizard at this folder.
+  nt-x86\   Windows 2000, XP, Vista, 7, 8, 8.1 and 10, 32-bit
+  nt-x64\   Windows XP x64 and Server 2003 x64, Vista to 10, 64-bit
+
+Each folder holds the drivers its Windows installs: the USB controller and
+UAS drivers at its root, the Thunderbolt 3 / USB4 connection manager in
+cm\, Thunderbolt networking (a network connection to another computer
+over a Thunderbolt or USB4 cable) in cm\tbnet\, and Stor98, the driver for
+NVMe drives behind a Thunderbolt or USB4 port, in stor98\.
+
+NLITE, NTLITE AND DISM
+
+Point the tool at nt-x86\ or nt-x64\ and let it search the subfolders:
+
+  nLite, NTLite  add the folder as a driver folder, with its subfolders.
+  DISM           Dism /Image:<mounted image> /Add-Driver /Driver:<folder>
+                 /Recurse, and for nt-x64\ also /ForceUnsigned.
+
+For Windows Vista to 10, add the folder to install.wim and to both images
+of boot.wim (Windows PE and Setup). The drivers in boot.wim let Setup use
+a USB keyboard, mouse and install stick on a computer whose only USB ports
+are USB 3; those in install.wim are the installed Windows' own. Setup from
+a 64-bit boot.wim also needs test signing on in the medium's boot
+configuration, in efi\microsoft\boot\bcd as well on a medium that also
+starts on UEFI:
+
+  bcdedit /store <medium>\boot\bcd /set {default} testsigning on
+
+and the installed Windows its own: on Vista or 7 x64, press F8 at each of
+its starts, Setup's own restarts included, and choose Disable Driver
+Signature Enforcement, until test signing is on as readme.txt, section 2,
+says (8 to 10 start with their own USB 3 driver).
+
+The 64-bit drivers carry this project's test signature, which Vista x64 to
+10 x64 load only in test-signing mode (readme.txt, section 2).
+
+Leave cm\ out to leave out the Thunderbolt 3 / USB4 connection manager
+and Thunderbolt networking, cm\tbnet\ alone to leave out Thunderbolt
+networking, and stor98\ to leave out Stor98.
+
+cm\xhcicmf.inx is the connection manager's filter for Thunderbolt and USB4
+PCIe ports. It is not for integration and is not named .inf on purpose:
+SETUP.EXE installs it. Do not rename it.
+
+TEXT-MODE SETUP (F6): WINDOWS 2000, XP AND XP X64
+
+Copy the files at the root of nt-x86\ (nt-x64\ for XP x64 and Server 2003
+x64), without its subfolders, to a floppy disk, and press F6 when Setup
+asks for additional drivers. txtsetup.oem on it lists the options. For
+the Windows 2000 option "files from CD", also copy USBD.SY_, HIDCLASS.SY_
+and HIDPARSE.SY_ from the I386 folder of your Windows 2000 CD to the
+floppy's root, unchanged: do not expand or rename them.
+
+AFTER AN INTEGRATED INSTALL, RUN SETUP.EXE
+
+SETUP.EXE then finds the drivers already in place and adds what an
+integration leaves out:
+
+  - XHCIPFW, which keeps PCI bridges' prefetchable windows above 4 GB
+    from stopping Windows (32-bit 2000 to 8.1);
+  - the connection manager's tunnel-port filter, and the start type of
+    the connection manager put back;
+  - the safe-removal mark service for Thunderbolt and USB4 devices;
+  - Thunderbolt networking turned on, when its box is ticked: it stays off
+    until then;
+  - the xHCI98 USB Tree (XHCITR) with its icon by the clock, the entry in
+    Add/Remove Programs, and the settings it asks for.

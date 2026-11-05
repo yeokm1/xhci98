@@ -229,6 +229,7 @@ ULONG ClockNow(IN OUT PENG_CLOCK Clock)
     switch (ClockSpan(Clock, Clock->AccLo, Clock->AccHi, lo, hi, &units)) {
     case CLK_SPAN_BACK:
         // Another processor's counter, behind this base: nothing elapsed.
+        Clock->BackSpans++;
         return Clock->AccMs;
     case CLK_SPAN_LONG:
         // Over an hour without a reading (the timer was stopped): fold the

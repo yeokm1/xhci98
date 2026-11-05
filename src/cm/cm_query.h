@@ -208,6 +208,12 @@
                                            written "--------" */
 #define CM_QL_F_INERT           0x80UL  /* the thread waits with no timeout:
                                            the counters' pass may be old */
+#define CM_QL_F_HEAD            0x100UL /* the log begins with the head of
+                                           the first connection (record 21
+                                           section 8.2, task 46.13), then
+                                           cm.log.head and the ring's
+                                           newest records; readers before
+                                           it print the text as it is   */
 
 #define CM_QL_CTR_MAX           8192UL
 #define CM_QL_LOG_MAX           16384UL /* XHCI_LOG_RING_BYTES */
@@ -500,5 +506,95 @@
 #define CM_QC_O_ADDRESS         16UL    /* CM_QM_E_ADDRESS */
 #define CM_QC_O_SERIAL          20UL    /* CM_QM_E_SERIAL */
 #define CM_QC_O_GEN             24UL    /* CM_QM_E_PENDING_GEN */
+
+/*
+ * ---- The firmware tables answer (design record 25 section 21, revision
+ * 26; record 32 section 12.8.14; task 46.21) ----
+ *
+ * A fifth request on the same device, IOCTL_XHCICM_ACPI:
+ * CTL_CODE(FILE_DEVICE_UNKNOWN 0x22, 0xA44, METHOD_BUFFERED,
+ * FILE_ANY_ACCESS), the same access rules and removed-device answer as
+ * CM_Q_IOCTL. A driver from before task 46.21 answers it with
+ * STATUS_INVALID_DEVICE_REQUEST. It serves the ACPI tables the 98 SE and
+ * ME handover's discovery (cm_oscos.c) read at this start, kept as copies
+ * of the buffers discovery read them into; nothing is read for it.
+ *
+ * PAGED. The input is empty or one dword, the byte offset into the body
+ * to answer from; any other input length is STATUS_INVALID_PARAMETER.
+ * Output under CM_QA_HDR_BYTES: STATUS_BUFFER_TOO_SMALL, nothing returned.
+ * Otherwise the header and as much of the body from that offset as fits,
+ * at most CM_QA_PART_MAX bytes of it (an offset past the body: the header
+ * alone, CM_QA_F_PAST); Information the header plus the part. The body
+ * is built once per start and never changes, so the parts of one epoch
+ * fit together: a reader takes parts only while CM_QA_O_EPOCH_* and
+ * CM_QA_O_BODY_BYTES stay those of its first answer.
+ */
+#define CM_QA_IOCTL             0x00222910UL
+#define CM_QA_MAGIC             0x414D4358UL    /* 'XCMA' */
+#define CM_QA_VERSION           1UL
+
+#define CM_QA_HDR_BYTES         64UL
+#define CM_QA_O_MAGIC           0UL
+#define CM_QA_O_VERSION         4UL
+#define CM_QA_O_BYTES           8UL     /* this answer: header + part */
+#define CM_QA_O_FLAGS           12UL    /* CM_QA_F_* */
+#define CM_QA_O_EPOCH_LO        16UL    /* CM_Q_O_EPOCH_* of this start */
+#define CM_QA_O_EPOCH_HI        20UL
+#define CM_QA_O_STATE           24UL    /* CM_QA_S_* */
+#define CM_QA_O_OUTCOME         28UL    /* discovery's cm.osc.refused value,
+                                           0 when it went through        */
+#define CM_QA_O_TIER            32UL    /* record 32 section 12.8.11      */
+#define CM_QA_O_BODY_BYTES      36UL    /* the whole body                 */
+#define CM_QA_O_ENT_SHAPE       40UL    /* count 15:0, entry bytes 31:16  */
+#define CM_QA_O_PART_AT         44UL    /* the body offset of this part   */
+#define CM_QA_O_PART_BYTES      48UL    /* the part's bytes after the header */
+/* 52..63 reserved, 0 */
+
+#define CM_QA_F_STOPPING        0x01UL  /* the NHI is stopping */
+#define CM_QA_F_CUT             0x02UL  /* a table kept as its header for
+                                           CM_QA_DATA_MAX */
+#define CM_QA_F_NOMEM           0x04UL  /* a copy could not be kept */
+#define CM_QA_F_PAST            0x08UL  /* the offset asked is past the body */
+
+#define CM_QA_S_KEPT            1UL     /* the entries below */
+#define CM_QA_S_NOT_OS          2UL     /* not on this system (NT)       */
+#define CM_QA_S_NOT_LOOKED      3UL     /* not an ASM4242 under the USB4
+                                           profile, or no discovery at
+                                           this start                    */
+#define CM_QA_S_OFF             4UL     /* XhciCmAsm4242Handover 0       */
+#define CM_QA_S_NO_HOST         5UL     /* the host's ports not found     */
+#define CM_QA_S_NO_RSDP         6UL     /* no root pointer found          */
+#define CM_QA_S_NOMEM           7UL     /* no memory for the copy         */
+
+/* The body: CM_QA_O_ENT_SHAPE's count of entries, then the bytes held,
+ * each piece at a dword boundary. */
+#define CM_QA_ENT_BYTES         32UL
+#define CM_QA_E_SIG             0UL     /* the signature's four bytes, the
+                                           first in bits 7:0; the root
+                                           pointer 'RSDP'                */
+#define CM_QA_E_KIND            4UL     /* CM_QA_K_* 7:0, CM_QA_H_* 15:8,
+                                           the root entry's index 31:16  */
+#define CM_QA_E_LENGTH          8UL     /* the length its header gives (the
+                                           root pointer: 20 before revision
+                                           2, else its length field)      */
+#define CM_QA_E_OFFSET          12UL    /* the bytes held, in the body    */
+#define CM_QA_E_HELD            16UL    /* their count                    */
+/* 20..31 reserved, 0 */
+
+#define CM_QA_K_RSDP            1UL     /* the root pointer               */
+#define CM_QA_K_ROOT            2UL     /* the root table (XSDT or RSDT)  */
+#define CM_QA_K_ENTRY           3UL     /* a root table's entry           */
+
+#define CM_QA_H_NONE            0UL     /* nothing held (no memory)       */
+#define CM_QA_H_WHOLE           1UL     /* the table whole, as checked    */
+#define CM_QA_H_HEADER          2UL     /* its 36-byte header alone       */
+
+#define CM_QA_TBL_HDR           36UL
+#define CM_QA_MAX_ENTRIES       66UL    /* the pointer, the root, 64     */
+#define CM_QA_DATA_MAX          0x40000UL
+#define CM_QA_MAX_BODY          (CM_QA_MAX_ENTRIES * CM_QA_ENT_BYTES + \
+                                 CM_QA_DATA_MAX + 4UL * CM_QA_MAX_ENTRIES)
+#define CM_QA_PART_MAX          32704UL /* the answer at most 32 KiB    */
+#define CM_QA_ASK_BYTES         (CM_QA_HDR_BYTES + CM_QA_PART_MAX)
 
 #endif /* CM_QUERY_H */

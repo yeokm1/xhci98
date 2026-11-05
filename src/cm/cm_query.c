@@ -15,6 +15,7 @@
  */
 
 #include "cm_qryb.h"
+#include "../xhci_log.h"
 #include "../xhci_verpk.h"
 
 static VOID cmQPut(UCHAR *buf, ULONG offset, ULONG value)
@@ -543,6 +544,62 @@ static ULONG cmQWithhold(UCHAR *text, ULONG n)
     return any;
 }
 
+/* ---- Task 46.13: the log's stamps and head (record 21 section 8.2) ---- */
+
+ULONG CmLogStampDue(ULONG lastMs, ULONG nowMs, ULONG bytesSince)
+{
+    return (nowMs != lastMs || bytesSince >= CM_LOG_STAMP_SPAN) ? 1UL : 0UL;
+}
+
+ULONG CmLogHeadPut(UCHAR *head, ULONG cap, PULONG used, PULONG full,
+                   const char *label, ULONG value, PULONG bytes)
+{
+    ULONG len;
+    ULONG need;
+    ULONG p;
+    ULONG k;
+
+    for (len = 0; label[len] != 0 && len < XHCI_LOG_MAX_RECORD; len++) {
+    }
+    /* A label the ring cuts keeps no value there (xhci_log.c). */
+    need = len + ((label[len] == 0) ? 11UL : 2UL);
+    *bytes = need;
+    if (*full || *used > cap || need > cap - *used) {
+        *full = 1;
+        return 0;
+    }
+    p = *used;
+    for (k = 0; k < len; k++) {
+        head[p++] = (UCHAR)label[k];
+    }
+    if (label[len] == 0) {
+        head[p++] = '=';
+        for (k = 0; k < 8; k++) {
+            head[p++] = (UCHAR)cmQHex[(value >> (28 - 4 * k)) & 0xFUL];
+        }
+    }
+    head[p++] = '\r';
+    head[p++] = '\n';
+    *used = p;
+    return 1;
+}
+
+/* Whether the record beginning at ring offset `at` is a stamp,
+ * "cm.ms=XXXXXXXX" CR LF. */
+static ULONG cmQIsStamp(const UCHAR *ring, ULONG mask, ULONG at)
+{
+    static const char stamp[] = "cm.ms=";
+    ULONG k;
+
+    for (k = 0; k < 6; k++) {
+        if (ring[(at + k) & mask] != (UCHAR)stamp[k]) {
+            return 0;
+        }
+    }
+    return (ring[(at + 14) & mask] == '\r' &&
+            ring[(at + 15) & mask] == '\n') ? 1UL : 0UL;
+}
+
 ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
                        PULONG info)
 {
@@ -555,6 +612,14 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
     ULONG logBytes;
     ULONG whole;
     ULONG i;
+    ULONG head;
+    ULONG mark;
+    ULONG stampAt;
+    ULONG stampBytes;
+    ULONG budget;
+    ULONG k;
+    ULONG o;
+    ULONG full;
     UCHAR c;
 
     *info = 0;
@@ -582,7 +647,13 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
     }
     start = (in->Head - used) & mask;
     skip = 0;
-    if (used != 0 && (in->Dropped != 0 || (in->Flags & CM_QL_F_EMITTED))) {
+    if (used != 0 && (in->Dropped != 0 || (in->Flags & CM_QL_F_EMITTED)) &&
+        !(in->Dropped == in->DroppedAtDrain &&
+          used >= CM_LOG_STAMP_BYTES &&
+          cmQIsStamp(in->Ring, mask, start))) {
+        /* (Task 46.13: a ring that has not wrapped since its last drain
+         * and begins with a whole stamp keeps it: the record after a drain
+         * is a stamp, cm_log.c.) */
         /* The oldest bytes may be the tail of a record: the wrap overwrote
          * its head, or a drain's chunk took it (cm_log.c drains in chunks
          * that need not end at a record). From the next record, so no
@@ -595,7 +666,46 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
         }
         flags |= CM_QL_F_LOG_CUT;
     }
-    logBytes = used - skip;
+    /* Task 46.13: the head of the first connection first, its marker,
+     * the stamp that times the tail's first record, and the ring's newest
+     * records within what is left. */
+    head = 0;
+    mark = 0;
+    stampBytes = 0;
+    stampAt = 0;
+    if (in->HeadText != NULL && in->HeadBytes != 0 &&
+        in->HeadBytes <= CM_LOG_HEAD_BYTES) {
+        head = in->HeadBytes;
+        mark = CM_LOG_MARK_BYTES;
+        flags |= CM_QL_F_HEAD;
+        budget = CM_QL_LOG_MAX - head - mark - CM_LOG_STAMP_BYTES;
+        if (used - skip > budget) {
+            /* From the first record boundary at or after the cut. */
+            k = used - budget;
+            while (k < used && in->Ring[(start + k - 1) & mask] != '\n') {
+                k++;
+            }
+            skip = k;
+            flags |= CM_QL_F_LOG_CUT;
+        }
+        if (skip != 0 && skip < used) {
+            /* The last stamp beginning at a record boundary in the
+             * CM_LOG_STAMP_LOOK bytes before the tail, whole before it. */
+            o = (skip > CM_LOG_STAMP_LOOK) ? skip - CM_LOG_STAMP_LOOK : 0;
+            for (k = o; k + CM_LOG_STAMP_BYTES <= skip; k++) {
+                /* Offset 0 is a record's start only when the ring has
+                 * not wrapped since it was last drained (or ever). */
+                if (((k == 0 && in->Dropped == in->DroppedAtDrain) ||
+                     (k != 0 &&
+                      in->Ring[(start + k - 1) & mask] == '\n')) &&
+                    cmQIsStamp(in->Ring, mask, start + k)) {
+                    stampAt = k;
+                    stampBytes = CM_LOG_STAMP_BYTES;
+                }
+            }
+        }
+    }
+    logBytes = head + mark + stampBytes + (used - skip);
     whole = CM_QL_HDR_BYTES + ctr + logBytes;
 
     cmQZero(out, CM_QL_HDR_BYTES);
@@ -620,12 +730,30 @@ ULONG CmQueryLogAnswer(UCHAR *out, ULONG room, const CM_QLOG_IN *in,
         return CM_Q_ANS_HEADER;
     }
     cmQCopy(out + CM_QL_HDR_BYTES, in->Ctr, ctr);
-    for (i = 0; i < logBytes; i++) {
+    o = CM_QL_HDR_BYTES + ctr;
+    for (i = 0; i < head; i++) {
+        c = in->HeadText[i];
+        if ((c < 0x20 || c > 0x7E) && c != '\r' && c != '\n') {
+            c = '.';
+        }
+        out[o++] = c;
+    }
+    if (mark != 0) {
+        k = 0;
+        full = 0;
+        (VOID)CmLogHeadPut(out + o, mark, &k, &full, "cm.log.head", head,
+                           &i);
+        o += mark;
+    }
+    for (i = 0; i < stampBytes; i++) {
+        out[o++] = in->Ring[(start + stampAt + i) & mask];
+    }
+    for (i = 0; i < used - skip; i++) {
         c = in->Ring[(start + skip + i) & mask];
         if ((c < 0x20 || c > 0x7E) && c != '\r' && c != '\n') {
             c = '.';
         }
-        out[CM_QL_HDR_BYTES + ctr + i] = c;
+        out[o++] = c;
     }
     if (cmQWithhold(out + CM_QL_HDR_BYTES + ctr, logBytes)) {
         flags |= CM_QL_F_WITHHELD;

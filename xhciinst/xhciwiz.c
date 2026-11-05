@@ -43,6 +43,7 @@
 #include "../src/xhci_version.h"
 #include "inst_core.h"
 #include "inst_eng.h"
+#include "inst_board.h"
 #include "wiz_lay.h"
 #include "xhciwiz_res.h"
 
@@ -78,6 +79,7 @@
 #define WM_APP_GATE         (WM_APP + 5)    /* sent: 1 go on, 0 stop         */
 #define WM_APP_FOCUS        (WM_APP + 6)    /* the focus to Next or Finish   */
 #define WM_APP_FIT          (WM_APP + 7)    /* the sheet moved into the work area */
+#define WM_APP_TABFOCUS     (WM_APP + 8)    /* a Settings tab's first focus  */
 
 /* The wheel, which MSVC 6.0's headers give only for a later WINVER. */
 #ifndef WM_MOUSEWHEEL
@@ -444,6 +446,24 @@ static void end_run(int code)
 
 static void os_version(OSVERSIONINFOA *v);
 
+/* The Thunderbolt box's first state (record 26 sections 5.3 and 5.3.8):
+ * inst_tb_box_default, an installed part counting where Secure Boot does
+ * not refuse the connection manager (sbRefused). */
+static int tb_first_box(int have, int nhi, int optTb, int intel,
+                        int installed, int sbRefused)
+{
+    return inst_tb_box_default(have, nhi, optTb, intel,
+                               installed && !sbRefused);
+}
+
+/* The box with the USB drivers out of the run, not over Intel's driver:
+ * on 8 to 10 (notHere) its own state, or ticked where a Thunderbolt or
+ * USB4 host is found; elsewhere (/cmonly) ticked. */
+static int tb_alone_box(int notHere, int have, int own, int found)
+{
+    return have && (!notHere || own || found);
+}
+
 static unsigned __stdcall job_main(void *arg)
 {
     int job = (int)(size_t)arg;
@@ -468,14 +488,25 @@ static unsigned __stdcall job_main(void *arg)
              * 16). The box's own state is the console's with the USB
              * drivers in the run, not tbDefault: with them out the
              * engine's yes is the connection manager alone's, which the
-             * box took back when they were ticked (task 44.79). */
-            tbOwn = inst_tb_box_default(tbHave, tbPresent, opts->Thunderbolt,
-                                        inst_eng_tb_intel());
+             * box took back when they were ticked (task 44.79). Over an
+             * installed Thunderbolt part it starts ticked (record 26
+             * section 5.3.8), but where Secure Boot refuses it. */
+            tbOwn = tb_first_box(tbHave, tbPresent ? 1 :
+                                 inst_eng_tb_ports() ?
+                                 INST_TB_ROUTER_UNLISTED : 0,
+                                 opts->Thunderbolt, inst_eng_tb_intel(),
+                                 tbInstalled,
+                                 inst_eng_comp_refusal(0, 1) != NULL);
             tbChoice = tbOwn;
             if (!usbChoice && !inst_eng_tb_intel()) {
                 /* Over Intel's Thunderbolt driver the box stays the user's,
-                 * unticked until ticked (record 23 section 8.5.1). */
-                tbChoice = tbHave;
+                 * unticked until ticked (record 23 section 8.5.1). With the
+                 * USB drivers out, on 8 to 10 ticked where a host is found
+                 * (owner, 2026-11-04, record 26 section 5.3.9), else as its
+                 * own state (installed, /thunderbolt); elsewhere (/cmonly)
+                 * ticked, as before. */
+                tbChoice = tb_alone_box(usbNotHere, tbHave, tbOwn,
+                                        inst_eng_tb_found());
             }
             inst_eng_tb_choose(tbChoice);
             /* Ticked with the Thunderbolt box (owner, 2026-10-19,
@@ -662,11 +693,9 @@ static const char *system_name(char *out, size_t cap)
     name = inst_os_name(v.dwPlatformId == VER_PLATFORM_WIN32_NT,
                         v.dwMajorVersion, v.dwMinorVersion,
                         v.dwBuildNumber & 0xFFFFUL);
-    _snprintf(out, cap - 1, "This computer: %s (%lu.%lu.%lu %s), %s.", name,
-              (unsigned long)v.dwMajorVersion, (unsigned long)v.dwMinorVersion,
-              (unsigned long)(v.dwBuildNumber & 0xFFFFUL), v.szCSDVersion,
-              INST_MY_ARCH == INST_ARCH_AMD64 ? "x64" : "32-bit");
-    out[cap - 1] = '\0';
+    inst_os_line(out, cap, name, v.dwMajorVersion, v.dwMinorVersion,
+                 v.dwBuildNumber & 0xFFFFUL, v.szCSDVersion,
+                 INST_MY_ARCH == INST_ARCH_AMD64 ? "x64" : "32-bit");
     return out;
 }
 
@@ -691,8 +720,8 @@ static void open_help(HWND owner)
     }
     strcpy(slash + 1, "readme.txt");
     if (GetFileAttributesA(path) == 0xFFFFFFFFUL) {
-        MessageBoxA(owner, "The readme is in the package's tools\\xhciinst\\ "
-                    "directory (readme.txt).", "xHCI98 Setup",
+        MessageBoxA(owner, "Readme.txt was not found. It should be in the "
+                    "package's tools\\xhciinst\\ folder.", "xHCI98 Setup",
                     MB_OK | MB_ICONINFORMATION);
         return;
     }
@@ -908,8 +937,9 @@ static void open_devmgr(HWND owner)
         CloseHandle(pi.hThread);
         CloseHandle(pi.hProcess);
     } else {
-        MessageBoxA(owner, "Device Manager could not be opened: Control "
-                    "Panel, System, Device Manager.", "xHCI98 Setup",
+        MessageBoxA(owner, "Device Manager could not be opened. Open it "
+                    "from Control Panel, System, Device Manager.",
+                    "xHCI98 Setup",
                     MB_OK | MB_ICONWARNING);
     }
 }
@@ -920,6 +950,19 @@ static void found_fill(HWND dlg);
 static void found_columns(HWND lv);
 static int dlu_y(HWND dlg, int y);
 static int text_h(HDC dc, const char *text, int w, int *wide);
+
+/* A page whose controls were moved while it shows, drawn again whole.
+ * SetWindowPos carries a control's old pixels to its new place, with a
+ * sibling's where the two overlapped on the way, and leaves the moved
+ * control valid, so those pixels stay until something else repaints it
+ * (the Components page on 7 at 120 DPI, task 46.18). */
+static void page_redraw(HWND dlg)
+{
+    if (IsWindowVisible(dlg)) {
+        RedrawWindow(dlg, NULL, NULL, RDW_ERASE | RDW_INVALIDATE |
+                     RDW_ALLCHILDREN);
+    }
+}
 
 /* The install's Welcome page laid out from its texts (owner, 2026-10-25;
  * task 44.7): the paragraph, the system's line and the log's line each at
@@ -981,6 +1024,7 @@ static void welcome_flow(HWND dlg)
         SetWindowPos(list, NULL, pt.x, y, r.right - r.left,
                      st.y - dlu_y(dlg, 3) - y, SWP_NOZORDER | SWP_NOACTIVATE);
     }
+    page_redraw(dlg);
 }
 
 static void welcome_texts(HWND dlg)
@@ -997,9 +1041,9 @@ static void welcome_texts(HWND dlg)
     _snprintf(title, sizeof(title) - 1, "%s %s",
               uninstallMode ? inst_page_text(cm ? INST_PT_UN_TITLE_CM :
                                              INST_PT_UN_TITLE)
-                            : cm ? "xHCI98 Thunderbolt 3 / USB4 connection "
-                                   "manager, release"
-                                 : "xHCI98 USB 3 drivers, release",
+                            : cm ? "xHCI98 Thunderbolt / USB4 connection "
+                                   "manager"
+                                 : "xHCI98 USB 3 drivers",
               uninstallMode ? "" : XHCI_VER_STR);
     title[sizeof(title) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_TITLE, title);
@@ -1016,9 +1060,9 @@ static void welcome_texts(HWND dlg)
                                                          INST_PT_UN_AGREE));
     }
     SetDlgItemTextA(dlg, IDC_SYSTEM, system_name(sys, sizeof(sys)));
-    _snprintf(logLine, sizeof(logLine) - 1, "The log: %s",
+    _snprintf(logLine, sizeof(logLine) - 1, "Log file: %s",
               inst_eng_log_path()[0] ? inst_eng_log_path() :
-              "(opened when the installer starts)");
+              "(not opened yet)");
     logLine[sizeof(logLine) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_LOG, logLine);
     welcome_flow(dlg);
@@ -1112,9 +1156,9 @@ static void found_fill(HWND dlg)
     if (n == 0) {
         memset(&it, 0, sizeof(it));
         it.mask = LVIF_TEXT;
-        it.pszText = "No device of this package is present now.";
+        it.pszText = "No supported device found.";
         ListView_InsertItem(lv, &it);
-        ListView_SetItemText(lv, 0, 2, "staged for later");
+        ListView_SetItemText(lv, 0, 2, "drivers stored for later");
     }
 }
 
@@ -1138,10 +1182,10 @@ static void found_columns(HWND lv)
     c.pszText = "Device";
     ListView_InsertColumn(lv, 0, &c);
     c.cx = w * 24 / 100;
-    c.pszText = "Runs now";
+    c.pszText = "Current driver";
     ListView_InsertColumn(lv, 1, &c);
     c.cx = w - w * 44 / 100 - w * 24 / 100;
-    c.pszText = "Will be done";
+    c.pszText = "Action";
     ListView_InsertColumn(lv, 2, &c);
 }
 
@@ -1221,36 +1265,44 @@ static void tbt_vsd_follow(HWND dlg)
 }
 
 static void comp_layout(HWND dlg);
+static int set_usb_rows(void);
+static int comp_owed(void);
 
-/* The USB drivers' box and what it locks (record 26 section 5.3, draft
- * 8): unticked, the Thunderbolt box is ticked and disabled, it being all
- * the run installs; ticked again, the Thunderbolt box has its own state.
- * A package without the Thunderbolt support keeps that box greyed, and
- * Stor98's, its child, follows it (owner, 2026-10-19). */
+/* The USB drivers' box (record 26 section 5.3). Since draft 70 (task 46.22;
+ * the owner, 2026-11-03 and 2026-11-04) it locks nothing: the Thunderbolt
+ * box is the user's on every system whatever this box does, and with both
+ * unticked the run installs the xHCI98 tools alone (until then, unticked,
+ * it ticked and disabled the Thunderbolt box but over Intel's Thunderbolt
+ * driver, draft 8). A package without the Thunderbolt support keeps that
+ * box greyed, and Stor98's, its child, follows it (owner, 2026-10-19). */
 static void comp_usb_state(HWND dlg)
 {
     int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
+    int uas = usb && inst_eng_uas_offered();
 
     /* The UAS driver's box, the USB drivers' child: open only while they
      * are ticked, unticked and greyed with them, its own state back when
-     * they are ticked again (owner, 2026-10-19). */
-    CheckDlgButton(dlg, IDC_C_UAS, (usb && uasOwn) ? BST_CHECKED :
+     * they are ticked again (owner, 2026-10-19); on 8, 8.1 and 10 always
+     * unticked and greyed (owner, 2026-11-04). */
+    CheckDlgButton(dlg, IDC_C_UAS, (uas && uasOwn) ? BST_CHECKED :
                                                     BST_UNCHECKED);
-    EnableWindow(GetDlgItem(dlg, IDC_C_UAS), usb);
-    EnableWindow(GetDlgItem(dlg, IDC_C_UAS_T), usb);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS), uas);
+    EnableWindow(GetDlgItem(dlg, IDC_C_UAS_T), uas);
 
-    SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(
-                    usbNotHere ? INST_PT_DRIVERS_T8 :
-                    usb ? INST_PT_DRIVERS_T : INST_PT_DRIVERS_OFF));
-    if (!usb && tbHave && !inst_eng_tb_intel()) {
-        /* Locked on: Stor98 follows its parent here too (owner,
-         * 2026-10-19), as on a click of the Thunderbolt box. Not over
-         * Intel's Thunderbolt driver, where the box stays the user's
-         * (record 23 section 8.5.1). */
-        CheckDlgButton(dlg, IDC_C_TB, BST_CHECKED);
-    }
-    EnableWindow(GetDlgItem(dlg, IDC_C_TB), (usb || inst_eng_tb_intel()) &&
-                                            tbHave);
+    EnableWindow(GetDlgItem(dlg, IDC_C_TB), tbHave);
+    /* The sentence by both boxes: with both unticked, the tools alone. */
+    SetDlgItemTextA(dlg, IDC_C_DRIVERS_T, inst_page_text(inst_drivers_line(
+                    usbNotHere, usb, tbHave && IsDlgButtonChecked(dlg,
+                    IDC_C_TB) == BST_CHECKED)));
+    /* Settings... opens the USB tab alone (record 26 section 5.4.2):
+     * greyed where it has nothing to show. The rows are the last plan's;
+     * one made with the USB drivers out of the run has none, so where
+     * that plan left them out, or a change of the boxes is still owed to
+     * the plan (Back keeps it, comp_keep), the box ticked leaves the
+     * button open and the press, which makes the plan again, says so if
+     * the tab is still empty. */
+    EnableWindow(GetDlgItem(dlg, IDC_C_SETTINGS),
+                 usb && (set_usb_rows() || !usbChoice || comp_owed()));
     /* Its sentence's words changed with the box: the page stacked
      * again (record 26 section 5.3.4). */
     comp_layout(dlg);
@@ -1258,20 +1310,14 @@ static void comp_usb_state(HWND dlg)
 
 static void comp_usb_click(HWND dlg)
 {
-    int usb = IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED;
-
-    if (inst_eng_tb_intel()) {
-        /* The box is the user's whatever the USB drivers' box does. */
-    } else if (!usb) {
-        tbOwn = IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
-    } else {
-        CheckDlgButton(dlg, IDC_C_TB, tbOwn ? BST_CHECKED : BST_UNCHECKED);
-    }
+    /* The Thunderbolt box is the user's whatever this one does (task
+     * 46.22). */
     comp_usb_state(dlg);
 }
 
 static int dlu_y(HWND dlg, int y);
 static int text_h(HDC dc, const char *text, int w, int *wide);
+static int text_h_wrap(HDC dc, const char *text, int w);
 
 /* A read-only edit box's height for a number of lines of its font: the
  * lines, its frame (the control's window less its client height) and
@@ -1558,6 +1604,7 @@ static void comp_layout(HWND dlg)
     }
     (void)comp_stack(dlg, gap, 1);
     compGap = gap;
+    page_redraw(dlg);
 }
 
 /* The folder chosen, as the page's one line. */
@@ -1595,6 +1642,10 @@ static void comp_fill(HWND dlg)
          * record 26 section 5.3.5, draft 54): a name cut to fit the row
          * told the user nothing the box needs. */
         SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_T));
+    } else if (inst_eng_tb_ports() || inst_eng_tb_port_known()) {
+        /* Record 26 sections 5.3.6 and 5.3.9: found by its switch or
+         * tunnel ports. */
+        SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_PORTS));
     } else {
         SetDlgItemTextA(dlg, IDC_C_TB_T, inst_page_text(INST_PT_TB_ABSENT));
     }
@@ -1635,7 +1686,7 @@ static void comp_browse(HWND dlg)
     GetDlgItemTextA(dlg, IDC_C_DIR, path, sizeof(path));
     memset(&bi, 0, sizeof(bi));
     bi.hwndOwner = dlg;
-    bi.lpszTitle = "The folder for the xHCI98 tools:";
+    bi.lpszTitle = "Folder for the xHCI98 tools:";
     bi.ulFlags = BIF_RETURNONLYFSDIRS;
     bi.lpfn = browse_cb;
     bi.lParam = (LPARAM)path;
@@ -1681,7 +1732,7 @@ static WIZ_DLGRET CALLBACK folder_proc(HWND dlg, UINT msg, WPARAM wp,
             GetDlgItemTextA(dlg, IDC_C_DIR, typed, sizeof(typed));
             why = inst_eng_dir_check(typed, checked, sizeof(checked));
             if (why != NULL) {
-                _snprintf(text, sizeof(text) - 1, "Not that folder: %s.", why);
+                _snprintf(text, sizeof(text) - 1, "This folder cannot be used: %s.", why);
                 text[sizeof(text) - 1] = '\0';
                 SetDlgItemTextA(dlg, IDC_C_DIR_WHY, text);
                 ShowWindow(GetDlgItem(dlg, IDC_C_DIR_T), SW_HIDE);
@@ -1711,6 +1762,11 @@ static WIZ_DLGRET CALLBACK folder_proc(HWND dlg, UINT msg, WPARAM wp,
  * again to change the box. */
 static int compOwed;            /* 1: XHCIPFW's choice, 2: the others' */
 
+static int comp_owed(void)
+{
+    return compOwed != 0;
+}
+
 static void comp_keep(HWND dlg)
 {
     int tb;
@@ -1726,11 +1782,8 @@ static void comp_keep(HWND dlg)
     fastChoice = IsDlgButtonChecked(dlg, IDC_C_FAST) == BST_CHECKED;
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
                      : usbChoice;
-    tb = tbHave && ((!usb && !inst_eng_tb_intel()) ||
-                    IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
-    if (usb || inst_eng_tb_intel()) {
-        tbOwn = tb;
-    }
+    tb = tbHave && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
+    tbOwn = tb;
     /* XHCIPFW, Stor98 and S98VSD from the window's state, not from
      * controls (record 26 section 5.3.5): each its remembered state with
      * the Thunderbolt choice on, 0 with it off. */
@@ -1800,8 +1853,8 @@ static int comp_leave(HWND dlg)
 
     why = inst_eng_dir_check(dirChoice, checked, sizeof(checked));
     if (why != NULL) {
-        _snprintf(box, sizeof(box) - 1, "Not that folder: %s. Change "
-                  "folder... chooses another.", why);
+        _snprintf(box, sizeof(box) - 1, "This folder cannot be used: %s. "
+                  "Click Change folder... to choose another.", why);
         box[sizeof(box) - 1] = '\0';
         MessageBoxA(GetParent(dlg), box, "xHCI98 Setup", MB_OK |
                     MB_ICONWARNING);
@@ -1810,8 +1863,7 @@ static int comp_leave(HWND dlg)
     inst_copy(dirChoice, checked, sizeof(dirChoice));
     usb = usbOffered ? IsDlgButtonChecked(dlg, IDC_C_DRIVERS) == BST_CHECKED
                      : usbChoice;
-    tb = tbHave && ((!usb && !inst_eng_tb_intel()) ||
-                    IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED);
+    tb = tbHave && IsDlgButtonChecked(dlg, IDC_C_TB) == BST_CHECKED;
     s98 = inst_s98_box_open(s98Have, tbHave, tb) && s98Own;
     stor = storShown && storOffered &&
            IsDlgButtonChecked(dlg, IDC_C_STOR) == BST_CHECKED;
@@ -1827,8 +1879,8 @@ static int comp_leave(HWND dlg)
         INST_U32 w = inst_eng_comp_warn(usb, stor, s98, tb, checked, warn,
                                         sizeof(warn));
         if (w != 0) {
-            _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel "
-                      "stays on this page to change the choice.", warn);
+            _snprintf(box, sizeof(box) - 1, "%s\n\nClick OK to continue, "
+                      "or Cancel to change your choice.", warn);
             box[sizeof(box) - 1] = '\0';
             if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
                             MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
@@ -1843,8 +1895,8 @@ static int comp_leave(HWND dlg)
          * 5.3.3: the x64 gate with the Thunderbolt box ticked over Intel's
          * driver, say): said here, the page kept to change the choice. */
         why = inst_eng_plan_refusal();
-        MessageBoxA(GetParent(dlg), why != NULL ? why : "The installer "
-                    "cannot go on with this choice; the log says why.",
+        MessageBoxA(GetParent(dlg), why != NULL ? why : "Setup cannot "
+                    "continue with this choice; see the log for details.",
                     "xHCI98 Setup", MB_OK | MB_ICONSTOP);
         return 0;
     }
@@ -2263,12 +2315,12 @@ static WIZ_DLGRET CALLBACK othlist_proc(HWND dlg, UINT msg, WPARAM wp,
                 othlist_sync();
             } else if (HIWORD(wp) == BN_SETFOCUS) {
                 othlist_show((HWND)lp);
-                SetDlgItemTextA(GetParent(dlg), IDC_O_DETAIL, "usb-wdm-free "
-                                "signs its 64-bit drivers with its own test "
-                                "certificate. Ticked, the run adds it to this "
-                                "computer's trusted roots and publishers, and "
-                                "the uninstall removes what it added. No trust "
-                                "is ever added for the non-free drivers.");
+                SetDlgItemTextA(GetParent(dlg), IDC_O_DETAIL, "usb-wdm-free's "
+                                "64-bit drivers are signed with its own test "
+                                "certificate. Tick to add it to this "
+                                "computer's trusted certificates. "
+                                "Uninstalling will remove this certificate "
+                                "if Setup added it.");
             }
             return TRUE;
         }
@@ -2308,24 +2360,11 @@ static int othlist_static(HWND page, HDC dc, HFONT font, const char *t, int x,
 static int othlist_9x_rest(HWND page, HDC dc, HFONT font, int set, int w,
                            int y)
 {
-    INST_OTHPKG_VIEW v;
     char line[700];
-    int any = 0;
     int i;
 
-    for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
-        if (!inst_eng_other_copy_only(set, i, line, sizeof(line))) {
-            continue;
-        }
-        if (!any) {
-            y = othlist_static(page, dc, font, "Copied only (no automatic "
-                               "install on this Windows):", dlu_x(page, 2), y,
-                               w);
-            any = 1;
-        }
-        y = othlist_static(page, dc, font, line, dlu_x(page, 10), y,
-                           w - dlu_x(page, 10));
-    }
+    /* The packages copied only are rows of the list now (record 26
+     * section 6.7.15); the sentence for the rest stays here. */
     for (i = 0; i < 2; i++) {
         inst_eng_other_rest(set, dirChoice, i, line, sizeof(line));
         if (line[0] != '\0') {
@@ -2353,6 +2392,8 @@ static void othlist_build(HWND page)
     int i;
     int vsdShown;
     int sys9x;
+    int elig = 0;
+    int copyRows = 0;
 
     if (othList != NULL) {
         DestroyWindow(othList);
@@ -2383,12 +2424,20 @@ static void othlist_build(HWND page)
         for (h = 0; h < instOtherHeadingCount; h++) {
             INST_OTHPKG_VIEW v;
             int any = 0;
+            int pass;
+            /* Record 26 section 6.7.15: the stageable packages, then the
+             * ones copied only on this Windows, greyed, taking no tick. */
+            for (pass = 0; pass < 2; pass++)
             for (i = 0; inst_eng_other_pkg(set, i, &v); i++) {
                 char head[96];
                 char label[INST_PKG_DESC_MAX + 40];
+                char row[1200];
                 int lh;
                 HWND b;
-                if (!v.Eligible || v.Heading != h) {
+                if (v.Heading != h || (pass == 0 && !v.Eligible) ||
+                    (pass == 1 && !inst_eng_other_copy_only(set, i,
+                                                            dirChoice, row,
+                                                            sizeof(row)))) {
                     continue;
                 }
                 if (!any) {
@@ -2401,6 +2450,25 @@ static void othlist_build(HWND page)
                     y += othBoxH;
                     any = 1;
                 }
+                if (pass == 1) {
+                    /* A greyed box, and the words beside it in a disabled
+                     * read-only edit control, which breaks a folder's path
+                     * longer than the line where a static would cut it. */
+                    lh = text_h_wrap(dc, row, w - dlu_x(page, 22) - 4);
+                    if (lh < othBoxH) {
+                        lh = othBoxH;
+                    }
+                    make_px(othList, "BUTTON", "", BS_CHECKBOX | BS_TOP |
+                            WS_DISABLED, dlu_x(page, 10), y, dlu_x(page, 12),
+                            othBoxH, -1, font);
+                    make_px(othList, "EDIT", row, ES_MULTILINE |
+                            ES_READONLY | WS_DISABLED, dlu_x(page, 22), y,
+                            w - dlu_x(page, 22), lh + 2, -1, font);
+                    y += lh + 3;
+                    copyRows = 1;
+                    continue;
+                }
+                elig = 1;
                 _snprintf(label, sizeof(label) - 1, "%s (not available: see "
                           "below)", v.Desc);
                 label[sizeof(label) - 1] = '\0';
@@ -2422,9 +2490,7 @@ static void othlist_build(HWND page)
             }
         }
         if (set == INST_SET_FREE && inst_eng_other_trust_possible()) {
-            const char *t = "Trust usb-wdm-free's test certificate on this "
-                            "computer (its 64-bit drivers are signed with it; "
-                            "they load only in test-signing mode)";
+            const char *t = "Trust usb-wdm-free's 64-bit test certificate";
             int th = text_h(dc, t, w - dlu_x(page, 22), NULL);
             if (th < othBoxH) {
                 th = othBoxH;
@@ -2443,7 +2509,7 @@ static void othlist_build(HWND page)
         }
         /* 98 SE and ME with no box: the line saying where to point the
          * wizard, then the lists below (record 26 section 6.7.13). */
-        if (sys9x && y == 0) {
+        if (sys9x && !elig) {
             SetDlgItemTextA(page, IDC_O_HEAD,
                             "Using these drivers on Windows 98 SE and ME:");
             y = othlist_static(page, dc, font,
@@ -2463,21 +2529,17 @@ static void othlist_build(HWND page)
             y = othlist_9x_rest(page, dc, font, set, w, y);
         }
     }
-    if (y == 0) {
+    if (!elig && !copyRows && !sys9x) {
         /* No package offered: the line says where to point the hardware
-         * wizard. */
+         * wizard (none with copied-only rows, which say it). */
         const char *none = inst_eng_other_none_text(othPageSet);
         int nh = text_h(dc, none, w, NULL) + 2;
-        if (sys9x) {
-            SetDlgItemTextA(page, IDC_O_HEAD,
-                            "Using these drivers on Windows 98 SE and ME:");
-        }
         if (nh < othBoxH) {
             nh = othBoxH;
         }
         make_px(othList, "STATIC", none, SS_LEFT | SS_NOPREFIX,
-                dlu_x(page, 2), 0, w, nh, -1, font);
-        y = nh;
+                dlu_x(page, 2), y, w, nh, -1, font);
+        y += nh;
     }
     if (old != NULL) {
         SelectObject(dc, old);
@@ -2556,11 +2618,11 @@ static void oth_flow(HWND dlg)
                 if (set == INST_SET_FREE &&
                     (GetWindowLongA(ln, GWL_STYLE) & WS_VISIBLE)) {
                     char addr[200];
-                    _snprintf(addr, sizeof(addr) - 1, "Up to date: %s.",
+                    _snprintf(addr, sizeof(addr) - 1, "Latest version: %s.",
                               inst_other_address(set));
                     addr[sizeof(addr) - 1] = '\0';
                     GetWindowTextA(ln, text, sizeof(text));
-                    if (strcmp(text, "Up to date: see the address above.") ==
+                    if (strcmp(text, "Latest version: see the address above.") ==
                         0) {
                         SetWindowTextA(ln, addr);
                     }
@@ -2671,8 +2733,8 @@ static int oth_leave(HWND dlg)
     (void)dlg;
     inst_eng_other_warnings_set(othPageSet, warn, sizeof(warn));
     if (warn[0] != '\0') {
-        _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel stays on "
-                  "this page to change the choice.", warn);
+        _snprintf(box, sizeof(box) - 1, "%s\n\nClick OK to continue, or "
+                  "Cancel to change your choice.", warn);
         box[sizeof(box) - 1] = '\0';
         if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
                         MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
@@ -2686,6 +2748,18 @@ static int oth_leave(HWND dlg)
 /* ---- the settings pages (record 26 sections 5.4 and 5.5) ------------------- */
 
 /* The rows a settings page or the Advanced dialog shows. */
+static int rows_for(int page, int advanced, int *idx, int cap);
+
+/* The USB tab has a row to show, main or behind Advanced (record 26
+ * section 5.4.2). */
+static int set_usb_rows(void)
+{
+    int idx[WIZ_ROWS];
+
+    return rows_for(P_USB, 0, idx, WIZ_ROWS) > 0 ||
+           rows_for(P_USB, 1, idx, WIZ_ROWS) > 0;
+}
+
 static int rows_for(int page, int advanced, int *idx, int cap)
 {
     int i;
@@ -2710,18 +2784,18 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
     const INST_VALUE *v = &instValues[r->Value];
 
     if (r->MwState == 1) {
-        _snprintf(out, cap - 1, "now: %lu, set machine-wide",
+        _snprintf(out, cap - 1, "Current: %lu (all controllers)",
                   (unsigned long)r->MwValue);
     } else if (r->MwState == -1) {
-        _snprintf(out, cap - 1, "now: not known");
+        _snprintf(out, cap - 1, "Current: unknown");
     } else if (!r->Same) {
-        _snprintf(out, cap - 1, "now: each controller its own");
+        _snprintf(out, cap - 1, "Current: differs per controller");
     } else if (r->NowCount == 0) {
-        _snprintf(out, cap - 1, "now: not set (default %lu)",
+        _snprintf(out, cap - 1, "Current: not set (default %lu)",
                   (unsigned long)r->Def);
     } else {
-        _snprintf(out, cap - 1, "now: %lu%s", (unsigned long)r->InForce,
-                  r->InForce == r->Def ? " (the default)" : "");
+        _snprintf(out, cap - 1, "Current: %lu%s", (unsigned long)r->InForce,
+                  r->InForce == r->Def ? " (default)" : "");
     }
     out[cap - 1] = '\0';
     if (v->Hi != 0) {
@@ -2732,6 +2806,15 @@ static void row_now(const INST_ROW *r, char *out, size_t cap)
             strcat(out, range);
         }
     }
+}
+
+/* The ASM4242 board's class the reads row's note says (record 32 section
+ * 12.8.15.12): the engine's, or the self-test's when it sets one. */
+static int stBoard = -1;
+
+static int row_board(void)
+{
+    return stBoard >= 0 ? stBoard : inst_eng_cm_board();
 }
 
 /* What a row is about, whole: its meaning, what each location holds, the
@@ -2747,34 +2830,32 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
     _snprintf(out, cap - 1, "%s - %s.", v->Name, v->Meaning);
     out[cap - 1] = '\0';
     if (r->Greyed) {
-        _snprintf(line, sizeof(line) - 1, " %s: not used on this system, "
-                  "so it is greyed and nothing is written.",
-                  inst_value_only(r->Value));
+        _snprintf(line, sizeof(line) - 1, " Used on %s; nothing is saved "
+                  "here.", inst_value_only(r->Value));
         line[sizeof(line) - 1] = '\0';
         strncat(out, line, cap - strlen(out) - 1);
     }
     if (r->MwState == 1) {
-        _snprintf(line, sizeof(line) - 1, " Set machine-wide: %lu, which "
-                  "every controller uses.", (unsigned long)r->MwValue);
+        _snprintf(line, sizeof(line) - 1, " Set for all controllers: %lu.",
+                  (unsigned long)r->MwValue);
         line[sizeof(line) - 1] = '\0';
         strncat(out, line, cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
             if (r->Now[i].State > 0 && r->Now[i].Value != r->MwValue) {
-                _snprintf(line, sizeof(line) - 1, " %s's own value: %lu (not "
-                          "used).", r->Now[i].Desc,
+                _snprintf(line, sizeof(line) - 1, " %s's own value: %lu "
+                          "(ignored).", r->Now[i].Desc,
                           (unsigned long)r->Now[i].Value);
                 line[sizeof(line) - 1] = '\0';
                 strncat(out, line, cap - strlen(out) - 1);
             }
         }
     } else if (r->MwState == -1) {
-        strncat(out, " The machine-wide value could not be read as a "
-                "number, and it is what every controller uses: the value in "
-                "force is not known. Leave it, or choose a value to write "
-                "over it.", cap - strlen(out) - 1);
+        strncat(out, " The value saved for all controllers is not a "
+                "number, so the current setting is unknown. Leave it, or "
+                "choose a value to replace it.", cap - strlen(out) - 1);
     } else if (!r->Same) {
-        strncat(out, " Each controller keeps its own value until you choose "
-                "one:", cap - strlen(out) - 1);
+        strncat(out, " Each controller keeps its own value unless you "
+                "choose one:", cap - strlen(out) - 1);
         for (i = 0; i < r->NowCount; i++) {
             _snprintf(line, sizeof(line) - 1, " %s: %lu.", r->Now[i].Desc,
                       (unsigned long)(r->Now[i].State > 0 ? r->Now[i].Value
@@ -2808,14 +2889,19 @@ static void row_note(const INST_ROW *r, char *out, size_t cap)
         char c[1024];
         inst_caution_text(r->Value, v->Hi != 0 ? 0xFFFFFFFFUL : r->Mask, c,
                           sizeof(c));
-        strncat(out, " NOTE: ", cap - strlen(out) - 1);
+        strncat(out, " Note: ", cap - strlen(out) - 1);
         strncat(out, c, cap - strlen(out) - 1);
     }
     if (r->CmNew && (inst_eq(v->Name, "XhciCmMode") ||
                      inst_eq(v->Name, "XhciCmApprove"))) {
-        strncat(out, " A new install starts with the default; a change "
-                "applies from the next restart: unplug the dock until then "
-                "if you choose 0.", cap - strlen(out) - 1);
+        strncat(out, " Change only takes effect after restart.",
+                cap - strlen(out) - 1);
+    }
+    /* Record 32 section 12.8.15.12: the row's state against this board. */
+    if (!r->Greyed && inst_eq(v->Name, "XhciCmAsm4242Reads") &&
+        row_board() != INST_BOARD_NONE) {
+        strncat(out, " ", cap - strlen(out) - 1);
+        strncat(out, inst_board_note(row_board()), cap - strlen(out) - 1);
     }
 }
 
@@ -2848,17 +2934,27 @@ static void tbt_layout(HWND dlg)
     POINT pt;
     size_t i;
     int top;
+    int foot;
     int gap = 1;
 
     GetClientRect(dlg, &cli);
+    /* Settings... at the foot, 2 units from the bottom as the Components
+     * page's is (record 26 section 5.4.2); the rows stacked above it. */
+    GetWindowRect(GetDlgItem(dlg, IDC_T_SETTINGS), &h);
+    pt.x = h.left;
+    pt.y = h.top;
+    ScreenToClient(dlg, &pt);
+    foot = cli.bottom - comp_du(dlg, 2) - (h.bottom - h.top);
+    SetWindowPos(GetDlgItem(dlg, IDC_T_SETTINGS), NULL, pt.x, foot, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER);
     GetWindowRect(GetDlgItem(dlg, IDC_T_HEAD), &h);
     pt.x = h.left;
     pt.y = h.bottom;
     ScreenToClient(dlg, &pt);
     top = pt.y + comp_du(dlg, 4);
     for (i = 0; i < sizeof(gaps) / sizeof(gaps[0]); i++) {
-        if (rows_stack(dlg, tbtRows, n, tbt_shown, top, gaps[i], 0) <=
-            cli.bottom - comp_du(dlg, 2)) {
+        if (rows_stack(dlg, tbtRows, n, tbt_shown, top, gaps[i], 0) +
+            comp_du(dlg, gaps[i]) <= foot) {
             gap = gaps[i];
             break;
         }
@@ -2872,6 +2968,7 @@ static void tbt_layout(HWND dlg)
         }
     }
     (void)rows_stack(dlg, tbtRows, n, tbt_shown, top, gap, 1);
+    page_redraw(dlg);
 }
 
 /* The approval's buttons from the row: the value it starts with, neither
@@ -2925,7 +3022,16 @@ static void tbt_fill(HWND dlg)
                                                    INST_PT_PFW));
     CheckDlgButton(dlg, IDC_C_PFW, pfwChoice ? BST_CHECKED : BST_UNCHECKED);
     SetDlgItemTextA(dlg, IDC_C_S98, inst_page_text(INST_PT_S98));
-    SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(INST_PT_S98_T));
+    {
+        /* Windows 10's own (task 46.22). */
+        OSVERSIONINFOA v;
+        os_version(&v);
+        SetDlgItemTextA(dlg, IDC_C_S98_T, inst_page_text(inst_s98_line(
+                        inst_s98_sys_index(v.dwPlatformId ==
+                                           VER_PLATFORM_WIN32_NT,
+                                           v.dwMajorVersion,
+                                           v.dwMinorVersion))));
+    }
     CheckDlgButton(dlg, IDC_C_S98, s98Choice ? BST_CHECKED : BST_UNCHECKED);
     /* Shown on 98 SE and ME where the package carries the file; greyed on
      * every other system whatever the package carries (record 30 section
@@ -2998,8 +3104,8 @@ static int tbt_leave(HWND dlg, int forward)
                                         s98, tbChoice, dirChoice, warn,
                                         sizeof(warn));
         if ((w & ~compWarned) != 0) {
-            _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; Cancel "
-                      "stays on this page to change the choice.", warn);
+            _snprintf(box, sizeof(box) - 1, "%s\n\nClick OK to continue, "
+                      "or Cancel to change your choice.", warn);
             box[sizeof(box) - 1] = '\0';
             if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
                             MB_OKCANCEL | MB_ICONWARNING) != IDOK) {
@@ -3048,8 +3154,8 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
     if (!r->Same && r->MwState != 1) {
         item = (int)SendMessageA(combo, CB_ADDSTRING, 0,
                                  (LPARAM)(r->MwState == -1
-                                              ? "leave it as it is"
-                                              : "each controller keeps its own"));
+                                              ? "Leave unchanged"
+                                              : "Keep each controller's own"));
         SendMessageA(combo, CB_SETITEMDATA, item, (LPARAM)0xFFFFFFFFUL);
         if (mixed) {
             sel = item;
@@ -3071,7 +3177,7 @@ static void row_fill_combo(HWND combo, const INST_ROW *r)
     }
     if (sel < 0 && !mixed) {
         /* A value in force the list does not offer stays what it is. */
-        _snprintf(text, sizeof(text) - 1, "%lu  (set now)",
+        _snprintf(text, sizeof(text) - 1, "%lu  (current)",
                   (unsigned long)cur);
         text[sizeof(text) - 1] = '\0';
         sel = (int)SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
@@ -3221,6 +3327,24 @@ typedef struct _LAYGEO {
 
 /* Text in the font selected into dc: its height wrapped at w, or (w 0) on
  * one line with its width in *wide. */
+/* The height text takes in a multiline edit control w pixels wide, which
+ * breaks a word longer than the line (DT_EDITCONTROL). */
+static int text_h_wrap(HDC dc, const char *text, int w)
+{
+    RECT r;
+
+    if (text[0] == '\0') {
+        return 0;
+    }
+    r.left = 0;
+    r.top = 0;
+    r.right = w > 0 ? w : 1;
+    r.bottom = 0;
+    DrawTextA(dc, text, -1, &r, DT_CALCRECT | DT_NOPREFIX | DT_WORDBREAK |
+              DT_EDITCONTROL);
+    return r.bottom - r.top;
+}
+
 static int text_h(HDC dc, const char *text, int w, int *wide)
 {
     RECT r;
@@ -3551,14 +3675,16 @@ static void settings_note(HWND dlg, int page, int i)
 {
     ROWPAGE *rp = page_rows(page);
     char note[4096];
+    int later = inst_eng_tb_ports() ? INST_PT_TB_LATER_ROUTER :
+                                      INST_PT_TB_LATER;
 
     if (page == P_TBS && !tbPresent && i < 0) {
-        SetDlgItemTextA(dlg, IDC_S_NOTE, inst_page_text(INST_PT_TB_LATER));
+        SetDlgItemTextA(dlg, IDC_S_NOTE, inst_page_text(later));
     } else if (i >= 0 && i < rp->Count) {
         row_note(&rows[rp->R[i].Row], note, sizeof(note));
         if (page == P_TBS && !tbPresent) {
             strncat(note, " ", sizeof(note) - strlen(note) - 1);
-            strncat(note, inst_page_text(INST_PT_TB_LATER),
+            strncat(note, inst_page_text(later),
                     sizeof(note) - strlen(note) - 1);
         }
         SetDlgItemTextA(dlg, IDC_S_NOTE, note);
@@ -3619,7 +3745,7 @@ static int settings_leave(HWND dlg, int page)
             char text[256];
             char range[64];
             inst_value_range_text(r->Value, range, sizeof(range));
-            _snprintf(text, sizeof(text) - 1, "%s takes %s.",
+            _snprintf(text, sizeof(text) - 1, "%s must be %s.",
                       instValues[r->Value].Name, range);
             text[sizeof(text) - 1] = '\0';
             MessageBoxA(dlg, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
@@ -3641,6 +3767,7 @@ static int advCount;
 static int advCur = -1;
 static int advSet[INST_MAX_VALUES];
 static INST_U32 advVal[INST_MAX_VALUES];
+static HWND advWnd;             /* the dialog while it is open */
 
 static void adv_cell(HWND lv, int i)
 {
@@ -3650,7 +3777,7 @@ static void adv_cell(HWND lv, int i)
     if (r->Greyed) {
         _snprintf(text, sizeof(text) - 1, "(%s)", inst_value_only(r->Value));
     } else if (advSet[i]) {
-        _snprintf(text, sizeof(text) - 1, "%lu (to be written)",
+        _snprintf(text, sizeof(text) - 1, "%lu (will be saved)",
                   (unsigned long)advVal[i]);
     } else {
         row_now(r, text, sizeof(text));
@@ -3752,7 +3879,13 @@ static WIZ_DLGRET CALLBACK adv_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     int i;
 
     switch (msg) {
+    case WM_DESTROY:
+        if (advWnd == dlg) {
+            advWnd = NULL;
+        }
+        break;
     case WM_INITDIALOG:
+        advWnd = dlg;
         SetDlgItemTextA(dlg, IDC_A_HEAD, inst_page_text(INST_PT_ADVANCED));
         lv = GetDlgItem(dlg, IDC_LIST);
         memset(&c, 0, sizeof(c));
@@ -3865,13 +3998,12 @@ static void s98_item_value(int i, int k, char *out, size_t cap)
 /* Where the values go, said under the rows (Stor98's rule, per system). */
 static const char *s98_where(void)
 {
-    return is_9x() ? "Written as values of their own names under "
-                     "HKLM\\System\\CurrentControlSet\\Services\\stor98; read "
+    return is_9x() ? "Saved under "
+                     "HKLM\\System\\CurrentControlSet\\Services\\stor98; used "
                      "when the controller starts."
-                   : "Written into the one DriverParameter string under "
+                   : "Saved in the DriverParameter string under "
                      "HKLM\\SYSTEM\\CurrentControlSet\\Services\\stor98\\"
-                     "Parameters\\Device, each key kept apart; read when the "
-                     "controller starts.";
+                     "Parameters\\Device; used when the controller starts.";
 }
 
 /* Where the page reads a row: the engine, or the self-test's made-up
@@ -3892,7 +4024,7 @@ static void s98_combo_fill(HWND combo, int i)
 
     s98RowFn(i, &r);
     SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)(r.State > 0 ?
-                 "(as it is: nothing written)" : r.NowText));
+                 "(leave unchanged)" : r.NowText));
     for (k = 0; k < INST_S98_WORDS_MAX && v->Means[k] != NULL; k++) {
         s98_item(i, k, text, sizeof(text));
         SendMessageA(combo, CB_ADDSTRING, 0, (LPARAM)text);
@@ -3979,7 +4111,7 @@ static void s98_adv_cell(HWND lv, int n)
                   inst_s98_only(s98AdvRow[n]));
         text[sizeof(text) - 1] = '\0';
     } else if (s98AdvSet[n]) {
-        _snprintf(text, sizeof(text) - 1, "%s (to be written)",
+        _snprintf(text, sizeof(text) - 1, "%s (will be saved)",
                   s98AdvVal[n]);
         text[sizeof(text) - 1] = '\0';
     } else {
@@ -4044,17 +4176,17 @@ static void s98_adv_show(HWND dlg, int n)
     INST_S98ROW r;
     char note[1024];
     char range[160];
-    INST_U32 hi = v->Hi;
+    INST_U32 hi;
 
     s98AdvCur = n;
     EnableWindow(GetDlgItem(dlg, IDC_A_LABEL), !s98AdvGrey[n]);
     EnableWindow(GetDlgItem(dlg, IDC_A_EDIT), !s98AdvGrey[n]);
-    SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
+    SetDlgItemTextA(dlg, IDC_A_LABEL, "Value:");
     ShowWindow(GetDlgItem(dlg, IDC_A_EDIT), SW_SHOW);
     ShowWindow(GetDlgItem(dlg, IDC_A_CHOICE), SW_HIDE);
     if (s98AdvGrey[n]) {
-        _snprintf(note, sizeof(note) - 1, "%s: %s.\r\n%s: not used on this "
-                  "system, so it is greyed and nothing is written.",
+        _snprintf(note, sizeof(note) - 1, "%s: %s.\r\nUsed on %s; nothing "
+                  "is saved here.",
                   v->KeyNt != NULL ? v->KeyNt : v->Name9x, v->What,
                   inst_s98_only(s98AdvRow[n]));
         note[sizeof(note) - 1] = '\0';
@@ -4063,28 +4195,17 @@ static void s98_adv_show(HWND dlg, int n)
         return;
     }
     inst_eng_s98_row(s98AdvRow[n], &r);
-    if (s98AdvRow[n] == INST_S98_MAXTRANSFERKB) {
-        hi = is_9x() ? 512UL : 256UL;
-    }
-    if (v->Step > 1UL) {
-        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s, in steps of %lu",
-                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit,
-                  (unsigned long)v->Step);
-    } else if (v->ZeroOk) {
-        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s, or 0: %s",
-                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit, v->Zero);
-    } else {
-        _snprintf(range, sizeof(range) - 1, "%lu to %lu %s",
-                  (unsigned long)v->Lo, (unsigned long)hi, v->Unit);
-    }
-    range[sizeof(range) - 1] = '\0';
+    /* The top the engine checks against (for the transfer size its
+     * default on this system), never a second copy. */
+    hi = inst_s98_hi(s98AdvRow[n], !is_9x());
+    inst_s98_range(s98AdvRow[n], hi, range, sizeof(range));
     _snprintf(note, sizeof(note) - 1,
-              "%s: %s.\r\nNow: %s.\r\nThe built-in default: %s. Takes %s. "
-              "Empty: as it is, nothing written.\r\n%s", r.Name, v->What,
+              "%s: %s.\r\nCurrent: %s.\r\nDefault: %s. Allowed: %s. "
+              "Leave empty to keep it unchanged.\r\n%s", r.Name, v->What,
               r.NowText, r.Default, range, s98_where());
     note[sizeof(note) - 1] = '\0';
     SetDlgItemTextA(dlg, IDC_A_TEXT, note);
-    SetDlgItemTextA(dlg, IDC_A_LABEL, "The value:");
+    SetDlgItemTextA(dlg, IDC_A_LABEL, "Value:");
     /* The value set now is shown, preselected (record 26 section 5.6);
      * left as it is, it writes nothing. */
     SetDlgItemTextA(dlg, IDC_A_EDIT, s98AdvSet[n] ? s98AdvVal[n] :
@@ -4273,6 +4394,67 @@ static int tab_leave(HWND dlg, int page)
     return settings_leave(dlg, page);
 }
 
+/* The sheet's OK the default button of a tab (record 26 section 5.4.2,
+ * draft 67): neither "Advanced..." nor "More >" keeps the default style
+ * its first focus gave it. */
+static void tab_ok_default(HWND dlg)
+{
+    HWND b;
+    int k;
+
+    SendMessageA(GetParent(dlg), DM_SETDEFID, (WPARAM)IDOK, 0);
+    for (k = 0; k < 2; k++) {
+        b = GetDlgItem(dlg, k == 0 ? IDC_S_ADVANCED : IDC_S_PART);
+        if (b != NULL) {
+            SendMessageA(b, BM_SETSTYLE, (WPARAM)BS_PUSHBUTTON, TRUE);
+        }
+    }
+}
+
+/* A Settings tab's first focus (draft 67): where the sheet left it on the
+ * tab's "Advanced..." or "More >", its first row that can be changed,
+ * else the sheet's OK, so Enter at once presses OK. A focus put anywhere
+ * else (the tab strip, a row) is kept, and a tab no longer the current
+ * one is left alone. */
+static void tab_first_focus(HWND dlg, int page)
+{
+    HWND f = NULL;
+    HWND now = GetFocus();
+    ROWPAGE *rp = page_rows(page);
+    int i;
+
+    if (PropSheet_GetCurrentPageHwnd(GetParent(dlg)) != dlg ||
+        (now != GetDlgItem(dlg, IDC_S_ADVANCED) &&
+         now != GetDlgItem(dlg, IDC_S_PART))) {
+        return;
+    }
+    for (i = 0; i < rp->Count && f == NULL; i++) {
+        if (rp->R[i].Choice != NULL && IsWindowVisible(rp->R[i].Choice) &&
+            IsWindowEnabled(rp->R[i].Choice)) {
+            f = rp->R[i].Choice;
+        }
+    }
+    if (f == NULL) {
+        f = GetDlgItem(GetParent(dlg), IDOK);
+    }
+    if (f != NULL) {
+        SetFocus(f);
+    }
+    tab_ok_default(dlg);
+}
+
+/* A tab button's press that is Enter while the button does not have the
+ * focus, the dialog manager's default press: taken as the sheet's OK. */
+static int tab_enter_is_ok(HWND dlg, int id)
+{
+    if (GetKeyState(VK_RETURN) < 0 && GetFocus() != GetDlgItem(dlg, id)) {
+        tab_ok_default(dlg);
+        PropSheet_PressButton(GetParent(dlg), PSBTN_OK);
+        return 1;
+    }
+    return 0;
+}
+
 static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
 {
     int page = GET_PAGE(dlg);
@@ -4287,12 +4469,18 @@ static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_S_PART:
+            if (tab_enter_is_ok(dlg, IDC_S_PART)) {
+                return TRUE;
+            }
             if (tab_leave(dlg, page)) {
                 ROWPAGE *rp = page_rows(page);
                 tab_fill(dlg, page, (rp->Part + 1) % rp->Parts);
             }
             return TRUE;
         case IDC_S_ADVANCED:
+            if (tab_enter_is_ok(dlg, IDC_S_ADVANCED)) {
+                return TRUE;
+            }
             if (page == P_S98) {
                 s98_page_leave(dlg);
                 DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_ADVANCED), dlg,
@@ -4324,6 +4512,12 @@ static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NOTIFY:
         nm = (NMHDR *)lp;
         switch (nm->code) {
+        case PSN_SETACTIVE:
+            tab_ok_default(dlg);
+            /* After the sheet's own focus for the tab. */
+            PostMessageA(dlg, WM_APP_TABFOCUS, 0, 0);
+            SET_RESULT(dlg, 0);
+            return TRUE;
         case PSN_KILLACTIVE:
             SET_RESULT(dlg, tab_leave(dlg, page) ? FALSE : TRUE);
             return TRUE;
@@ -4348,18 +4542,43 @@ static WIZ_DLGRET CALLBACK tab_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         /* F1 on the tab's controls: the sheet's, as on its buttons. */
         sheet_help(GetParent(dlg));
         return TRUE;
+    case WM_APP_TABFOCUS:
+        tab_first_focus(dlg, page);
+        return TRUE;
     default:
         break;
     }
     return FALSE;
 }
 
-/* Settings... on the Components page: the boxes handed to the engine
- * first, so the tabs are those of the components ticked now; OK keeps the
- * choices, Cancel restores them as they stood when this opening began. */
-static void settings_open(HWND comp)
+/* Settings... on a page (record 26 section 5.4.2): the Components page's
+ * opens the USB tab (SET_USB), the Thunderbolt and USB4 page's the
+ * Thunderbolt and Stor98 tabs (SET_TB). The page's boxes handed to the
+ * engine first, so the tabs are those of the components ticked now; OK
+ * keeps the choices, Cancel restores them as they stood when this opening
+ * began. */
+#define SET_USB 1
+#define SET_TB  2
+
+/* The tabs a caller's sheet holds, as bits 1 USB, 2 Thunderbolt / USB4,
+ * 4 Stor98: the Components page's the USB tab where the USB drivers are
+ * ticked and it has a row; the Thunderbolt and USB4 page's the
+ * Thunderbolt tab and, with Stor98 ticked, Stor98's. */
+static int set_tabs(int set, int usb, int usbRows, int tb, int s98)
 {
-    static const char *const title[3] = { "USB", "Thunderbolt", "Stor98" };
+    if (set == SET_USB) {
+        return usb && usbRows ? 1 : 0;
+    }
+    if (set == SET_TB) {
+        return (tb ? 2 : 0) | (tb && s98 ? 4 : 0);
+    }
+    return 0;
+}
+
+static void settings_open(HWND comp, int set)
+{
+    static const char *const title[3] = { "USB", "Thunderbolt / USB4",
+                                              "Stor98" };
     static const int pg[3] = { P_USB, P_TBS, P_S98 };
     static int keepSet[INST_MAX_VALUES];
     static INST_U32 keepVal[INST_MAX_VALUES];
@@ -4368,16 +4587,18 @@ static void settings_open(HWND comp)
     PROPSHEETPAGEA p[3];
     HPROPSHEETPAGE hp[3];
     PROPSHEETHEADERA h;
-    int idx[WIZ_ROWS];
+    int tabs;
     int n = 0;
     int i;
 
-    comp_take(comp);
+    if (set == SET_USB) {
+        comp_take(comp);
+    } else if (!tbt_leave(comp, 0)) {
+        return;
+    }
+    tabs = set_tabs(set, usbChoice, set_usb_rows(), tbChoice, s98Choice);
     for (i = 0; i < 3; i++) {
-        int in = pg[i] == P_USB ? usbChoice &&
-                     (rows_for(P_USB, 0, idx, WIZ_ROWS) > 0 ||
-                      rows_for(P_USB, 1, idx, WIZ_ROWS) > 0) :
-                 pg[i] == P_TBS ? tbChoice : s98Choice;
+        int in = (tabs >> i) & 1;
         if (!in) {
             continue;
         }
@@ -4399,7 +4620,7 @@ static void settings_open(HWND comp)
         n++;
     }
     if (n == 0) {
-        MessageBoxA(GetParent(comp), "None of the components ticked has "
+        MessageBoxA(GetParent(comp), "The selected components have no "
                     "settings on this computer.", "xHCI98 Setup",
                     MB_OK | MB_ICONINFORMATION);
         return;
@@ -4459,6 +4680,20 @@ static void first_sentences(TEXTBUF *t, const char *text)
 
 /* ---- the summary (record 26 section 5.7) ----------------------------------- */
 
+/* Record 32 section 12.8.15.12: the ASM4242 xHCI's devnodes whose
+ * filters the run changes, listed before Install (Remove). */
+static void summary_cm_xhci(TEXTBUF *t, int tbIn, int toolsOnly,
+                            int uninstall)
+{
+    char text[3000];
+
+    inst_eng_cm_xhci_plan(tbIn, toolsOnly, uninstall, text, sizeof(text));
+    if (text[0] != '\0') {
+        tb_add(t, uninstall ? "\n" : "- ");
+        tb_add(t, text);
+    }
+}
+
 static void summary_fill(HWND dlg)
 {
     TEXTBUF t;
@@ -4470,23 +4705,25 @@ static void summary_fill(HWND dlg)
     memset(&t, 0, sizeof(t));
     if (uninstallMode) {
         SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_UN_SUMMARY));
-        tb_add(&t, "Removed, in this order, each step only once the one "
-               "before it finished:\n");
-        tb_add(&t, "- every device of this package, present or not, children "
-               "first, the\n  controllers last;\n");
-        tb_add(&t, "- on NT the tunnel ports' filter name, then the INFs, the "
-               "services and the\n  driver files; on 98 SE and ME the INF "
-               "copies and the driver files;\n");
-        tb_add(&t, "- the xHCI98 tools, this installer and their start at "
-               "login;\n- the settings this package wrote machine-wide, its "
-               "records, this\n  Add/Remove Programs entry, and the install "
-               "directory.\n\n");
-        tb_add(&t, "Windows' own usbd.sys and usbui.dll stay, and so do other "
-               "drivers' devices.\nNothing of another USB stack is put back: "
-               "Windows finds the controller again\nat the next start.\n");
+        tb_add(&t, "Removed in this order, each step after the previous "
+               "one finishes:\n");
+        tb_add(&t, "- every device of this package, present or not, child "
+               "devices first and\n  controllers last;\n");
+        tb_add(&t, "- on 2000 and later the tunnel-port filter, then the INFs, "
+               "services and driver\n  files; on 98 SE and ME the INF copies "
+               "and driver files;\n");
+        tb_add(&t, "- the xHCI98 tools, Setup, and their start at login;\n"
+               "- the settings this package saved, its records, its "
+               "Add/Remove Programs\n  entry, and the install folder.\n\n");
+        tb_add(&t, "Windows usbd.sys and usbui.dll are kept together with "
+               "other drivers.\nWindows will look for a driver for the "
+               "controller on next boot.\n");
+        summary_cm_xhci(&t, 0, 0, 1);
     } else {
         int writes = 0;
         int other;
+        int otherSet = 0;
+        int toolsOnly;
         SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_SUMMARY));
         /* The headline from what the page lists below it, not from the
          * engine's answers, which the pages hand over only at Install
@@ -4513,8 +4750,17 @@ static void summary_fill(HWND dlg)
             int stage = 0;
             inst_eng_other_state(i, &state, &forThis, &inc, &stage);
             other |= state == INST_OTHER_CARRIED && inc;
+            otherSet |= state == INST_OTHER_CARRIED && inc;
         }
-        _snprintf(line, sizeof(line) - 1, "%s.\n\n",
+        /* No driver in the run (task 46.22): the tools alone. /notbnet
+         * writes even then (record 35 section 9.5); 98 SE's storage
+         * drivers are drivers. */
+        toolsOnly = !writes && !opts->NoTbNet &&
+                    inst_tools_only(usbChoice, tbHave && tbChoice, otherSet,
+                                    storShown && storOffered && storChoice &&
+                                    inst_eng_stor_installs());
+        _snprintf(line, sizeof(line) - 1, "%s.\n\n", toolsOnly ?
+                  inst_tools_only_text() :
                   inst_eng_summary_head(writes, other));
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
@@ -4538,7 +4784,7 @@ static void summary_fill(HWND dlg)
                 tb_add(&t, line);
             }
         }
-        tb_add(&t, "The devices:\n");
+        tb_add(&t, "Devices:\n");
         for (i = 0; inst_eng_found(i, &f); i++) {
             if (!f.Present) {
                 continue;
@@ -4549,27 +4795,44 @@ static void summary_fill(HWND dlg)
             any = 1;
         }
         if (!any) {
-            tb_add(&t, "- none present: the drivers are staged for later.\n");
+            tb_add(&t, toolsOnly ? "- none changed (no driver in this run).\n"
+                                 : "- none found: drivers stored for later.\n");
         }
-        tb_add(&t, usbChoice ? "\nThe components:\n- xhci98.sys\n" :
-               tbHave ? "\nThe components:\n- xhci98.sys and xhciuas.sys: "
-               "left out (the connection manager alone)\n" :
-               "\nThe components:\n- xhci98.sys and xhciuas.sys: left out "
-               "(the xHCI98 tools alone)\n");
+        tb_add(&t, usbChoice ? "\nComponents:\n- xhci98.sys (USB 3 driver)\n" :
+               tbHave && tbChoice ? "\nComponents:\n- xhci98.sys and xhciuas.sys: "
+               "not installed (connection manager only)\n" :
+               "\nComponents:\n- xhci98.sys and xhciuas.sys: not installed "
+               "(xHCI98 tools only)\n");
         if (usbChoice) {
-            tb_add(&t, uasChoice ? "- xhciuas.sys, the UAS disk driver\n" :
-                   "- xhciuas.sys, the UAS disk driver: left out (one "
-                   "installed stays)\n");
+            tb_add(&t, !uasChoice ? "- xhciuas.sys (UAS disk driver): not "
+                   "installed (one installed earlier is kept)\n" :
+                   inst_eng_resident_plan(0) ? "- xhciuas.sys (UAS disk "
+                   "driver): replaced, loaded at next start\n" :
+                   "- xhciuas.sys (UAS disk driver)\n");
         }
         if (tbHave) {
-            tb_add(&t, tbChoice ? "- Thunderbolt 3 / USB4 support "
-                   "(experimental)\n" : "- Thunderbolt 3 / USB4 support "
-                   "(experimental): left out\n");
+            tb_add(&t, !tbChoice && tbInstalled ? "- Thunderbolt / USB4 "
+                   "support (experimental): not changed; the installed one "
+                   "is kept\n" :
+                   !tbChoice ? "- Thunderbolt / USB4 support "
+                   "(experimental): not installed\n" :
+                   inst_eng_resident_plan(1) ? "- Thunderbolt / USB4 support "
+                   "(experimental): xhcicm.sys replaced, loaded at next "
+                   "start\n" : "- Thunderbolt / USB4 support "
+                   "(experimental)\n");
+        }
+        if (tbHave && tbChoice && inst_board_line(row_board())[0] != '\0') {
+            /* Record 32 section 12.8.15.12: read at the Thunderbolt and
+             * USB4 page's Next, before this page. */
+            _snprintf(line, sizeof(line) - 1, "- %s\n",
+                      inst_board_line(row_board()));
+            line[sizeof(line) - 1] = '\0';
+            tb_add(&t, line);
         }
         if (s98Have) {
             _snprintf(line, sizeof(line) - 1, s98Choice ?
-                      "- Stor98 %s, the bundled NVMe driver\n" :
-                      "- Stor98 %s, the bundled NVMe driver: left out\n",
+                      "- Stor98 %s (NVMe driver)\n" :
+                      "- Stor98 %s (NVMe driver): not installed\n",
                       s98Ver);
             line[sizeof(line) - 1] = '\0';
             tb_add(&t, line);
@@ -4600,6 +4863,7 @@ static void summary_fill(HWND dlg)
                 tb_add(&t, line);
             }
         }
+        summary_cm_xhci(&t, tbHave && tbChoice, toolsOnly, 0);
         {
             char ol[900];
             inst_eng_other_summary(dirChoice, ol, sizeof(ol));
@@ -4629,26 +4893,33 @@ static void summary_fill(HWND dlg)
                  * USBSTOR.INF's sentence (record 26 section 6.5.5). */
                 tb_add(&t, "- ");
                 tb_add(&t, sl);
-                tb_add(&t, "\n  ");
-                tb_add(&t, storNote);
                 tb_add(&t, "\n");
+                /* The Components page's note is the state found before
+                 * the run ("Not installed, ..."): under a line that says
+                 * what the run did it read as a contradiction (owner,
+                 * 2026-11-05, the pre-RC 98 SE leg). */
+                if (!inst_eng_stor_summary_final()) {
+                    tb_add(&t, "  ");
+                    tb_add(&t, storNote);
+                    tb_add(&t, "\n");
+                }
             }
         }
         if (trayHere) {
             /* The tool is copied either way; the box decides its start
              * at login alone (owner, 2026-10-31; record 26 draft 54). */
-            tb_add(&t, trayChoice ? "- the xHCI98 USB Tree, installed and "
-                                    "started at login\n"
-                                  : "- the xHCI98 USB Tree, installed, not "
-                                    "started at login\n");
+            tb_add(&t, trayChoice ? "- xHCI98 USB Tree: installed, starts "
+                                    "at login\n"
+                                  : "- xHCI98 USB Tree: installed, does not "
+                                    "start at login\n");
             if (fastForced || fastChoice != fastNow) {
-                tb_add(&t, fastChoice ? "- its \"can run faster\" notice turned "
-                                        "on for this computer\n"
-                                      : "- its \"can run faster\" notice turned "
-                                        "off for this computer\n");
+                tb_add(&t, fastChoice ? "- \"can run faster\" notification: "
+                                        "on\n"
+                                      : "- \"can run faster\" notification: "
+                                        "off\n");
             }
         }
-        tb_add(&t, "\nThe settings written machine-wide:\n");
+        tb_add(&t, "\nSettings saved for all controllers:\n");
         any = 0;
         for (i = 0; i < INST_MAX_VALUES && i < instValueCount; i++) {
             if (choiceSet[i] && choice_live(i)) {
@@ -4660,11 +4931,11 @@ static void summary_fill(HWND dlg)
             }
         }
         if (!any) {
-            tb_add(&t, "- none: every value stays as it is.\n");
+            tb_add(&t, "- none changed.\n");
         }
         if (s98Choice) {
             any = 0;
-            tb_add(&t, "\nStor98's settings, where Stor98 reads them:\n");
+            tb_add(&t, "\nStor98 settings:\n");
             for (i = 0; i < INST_S98_COUNT; i++) {
                 INST_S98ROW r;
                 if (s98WinSet[i] && inst_eng_s98_row(i, &r)) {
@@ -4676,50 +4947,179 @@ static void summary_fill(HWND dlg)
                 }
             }
             if (!any) {
-                tb_add(&t, "- none: each stays as it is.\n");
+                tb_add(&t, "- none changed.\n");
             }
             if (is_9x() && inst_eng_s98_file_update()) {
-                _snprintf(line, sizeof(line) - 1, "\nStor98's driver file "
-                          "(stor98.mpd) is replaced with %s when\nWindows "
-                          "next starts, once the box below is ticked; no "
-                          "drive is\nreinstalled. Afterwards Windows is shut "
-                          "down and started again, not\nrestarted. Unticked, "
-                          "Stor98 is left for a later run.\n", s98Ver);
+                _snprintf(line, sizeof(line) - 1, "\nIf the box below is "
+                          "ticked, Stor98's driver file (stor98.mpd) is\n"
+                          "replaced with %s at the next start; no drive is "
+                          "reinstalled.\nWindows is then shut down and "
+                          "started again, not restarted. If\nunticked, "
+                          "Stor98 is updated in a later run.\n", s98Ver);
                 line[sizeof(line) - 1] = '\0';
                 tb_add(&t, line);
             }
         }
-        _snprintf(line, sizeof(line) - 1, "\nThe install folder: %s\n",
+        _snprintf(line, sizeof(line) - 1, "\nInstall folder: %s\n",
                   dirChoice);
         line[sizeof(line) - 1] = '\0';
         tb_add(&t, line);
         if (inst_eng_controller_changes()) {
-            tb_add(&t, "\nBEFORE YOU GO ON: the USB keyboard and mouse on the "
-                   "controller stop for a\nmoment while it restarts; have a "
-                   "keyboard and mouse that do not go\nthrough this driver "
-                   "(PS/2, a laptop's built-in ones).\n");
+            tb_add(&t, "\nBEFORE YOU CONTINUE: USB keyboards and mice on this "
+                   "controller stop working\nfor a moment while it restarts. "
+                   "Have a keyboard/mouse that uses alternative\nconnections "
+                   "like PS/2.\n");
         }
-        if (is_9x()) {
-            tb_add(&t, "\nWindows' own wizards may open for the devices the "
-                   "controller shows after its\nrestart: answer them (Next, "
-                   "Next, Finish), and type the install folder where\nthey ask "
-                   "for a folder or for the \"xhci98 xHCI Host Controller "
-                   "Disk\". Finish\neach one, even when it finds no driver; "
-                   "never cancel one (a cancelled\nwizard hides its device "
-                   "until Windows restarts). Asked for the Windows CD,\n"
-                   "insert it and type its WIN98 folder (WIN9X on ME) with "
-                   "your CD drive's\nletter, or the folder your PC keeps "
-                   "Windows' setup files in.\n");
+        if (is_9x() && !toolsOnly) {
+            tb_add(&t, "\nWindows may open its Add New Hardware wizard for "
+                   "devices on the controller\nafter it restarts. Click Next, "
+                   "Next, Finish, and type the install folder if\nasked for a "
+                   "folder or the \"xhci98 xHCI Host Controller Disk\". Finish "
+                   "every\nwizard, even if it finds no driver; do not cancel "
+                   "(a cancelled wizard hides\nits device until Windows "
+                   "restarts). If asked for the Windows CD, insert it and\n"
+                   "type its WIN98 folder (WIN9X on ME), or the folder with "
+                   "Windows' setup files.\n");
         }
     }
     set_edit(dlg, IDC_DETAIL, t.Buf != NULL ? t.Buf : "");
     free(t.Buf);
 }
 
+/* ---- the board's identity (record 32 section 12.8.15.12) ------------------- */
+
+/* On 2000 and 32-bit XP the ASM4242 board's SMBIOS identity comes from
+ * WMI, asked at the Thunderbolt and USB4 page's Next (the owner's decision
+ * of 2026-11-04): a small modal box counts down from 10 s with Skip, the
+ * wizard going on at the answer, at 0 or at Skip; Back and Next again
+ * reuse the answer. The engine's thread asks; this box only reads. */
+#define BOARD_TIMER         47
+#define BOARD_WAIT_MS       10000UL
+#define BOARD_ANSWERED      1
+#define BOARD_TIMED_OUT     2
+#define BOARD_SKIPPED       3
+
+static DWORD boardT0;
+static int boardResult;
+static int boardModal;
+static int boardWaited;         /* the box shown once this run        */
+/* The self-test's stand-ins for the engine and the clock. */
+static int stBoardFake;
+static int stBoardPend;
+static DWORD stBoardTick;
+static int stBoardGaveUp;       /* 1 the countdown's end, 2 Skip      */
+static int stBoardOpened;
+
+static int board_pend(void)
+{
+    return stBoardFake ? stBoardPend : inst_eng_board_pending();
+}
+
+static DWORD board_tick(void)
+{
+    return stBoardFake ? stBoardTick : GetTickCount();
+}
+
+static void board_give_up(int skipped)
+{
+    if (stBoardFake) {
+        stBoardGaveUp = skipped ? 2 : 1;
+    } else {
+        inst_eng_board_give_up(skipped);
+    }
+}
+
+static void board_end(HWND dlg, int result)
+{
+    boardResult = result;
+    KillTimer(dlg, BOARD_TIMER);
+    if (boardModal) {
+        EndDialog(dlg, result);
+    }
+}
+
+static void board_text(HWND dlg)
+{
+    char text[96];
+    DWORD gone = board_tick() - boardT0;
+    unsigned long left = gone >= BOARD_WAIT_MS ? 0UL :
+                         (unsigned long)((BOARD_WAIT_MS - gone + 999UL) /
+                                         1000UL);
+
+    _snprintf(text, sizeof(text) - 1, "%s %lu",
+              inst_page_text(INST_PT_BOARD_WAIT), left);
+    text[sizeof(text) - 1] = '\0';
+    SetDlgItemTextA(dlg, IDC_B_TEXT, text);
+}
+
+static void board_step(HWND dlg)
+{
+    if (!board_pend()) {
+        board_end(dlg, BOARD_ANSWERED);
+    } else if (board_tick() - boardT0 >= BOARD_WAIT_MS) {
+        board_give_up(0);
+        board_end(dlg, BOARD_TIMED_OUT);
+    } else {
+        board_text(dlg);
+    }
+}
+
+static WIZ_DLGRET CALLBACK board_proc(HWND dlg, UINT msg, WPARAM wp,
+                                      LPARAM lp)
+{
+    (void)lp;
+    switch (msg) {
+    case WM_INITDIALOG:
+        boardT0 = board_tick();
+        boardResult = 0;
+        SetWindowTextA(dlg, "xHCI98 Setup");
+        board_text(dlg);
+        SetTimer(dlg, BOARD_TIMER, 250, NULL);
+        return TRUE;
+    case WM_TIMER:
+        if (wp == BOARD_TIMER && boardResult == 0) {
+            board_step(dlg);
+        }
+        return TRUE;
+    case WM_COMMAND:
+        if (LOWORD(wp) == IDCANCEL && boardResult == 0) {
+            board_give_up(1);
+            board_end(dlg, BOARD_SKIPPED);
+            return TRUE;
+        }
+        break;
+    default:
+        break;
+    }
+    return FALSE;
+}
+
+/* The Thunderbolt and USB4 page's Next, the box ticked: the board's query
+ * where it applies, its answer waited for in the box once a run. */
+static void tbt_board_next(HWND page)
+{
+    int wait;
+
+    if (!tbHave || !tbChoice || boardWaited) {
+        return;
+    }
+    wait = stBoardFake ? stBoardPend : inst_eng_board_begin();
+    if (!wait) {
+        return;
+    }
+    boardWaited = 1;
+    if (stBoardFake) {
+        stBoardOpened++;
+        return;
+    }
+    boardModal = 1;
+    (void)DialogBoxParamA(hInst, MAKEINTRESOURCEA(IDD_BOARD), GetParent(page),
+                          board_proc, 0);
+    boardModal = 0;
+}
+
 /* ---- the progress (record 26 section 5.8) --------------------------------- */
 
-static int stepsTotal;
-static int stepsDone;
 static int stepOpen = -1;       /* the list's "running" row, or -1 */
 
 /* A step's outcome takes the place of its "running" row (matrix N2,
@@ -4729,7 +5129,7 @@ static void progress_add(HWND dlg, int state, const char *text)
 {
     char line[600];
     static const char *const mark[] = {
-        "running", "done", "FAILED", "skipped", "left for you"
+        "running", "done", "FAILED", "skipped", "left for you to do"
     };
     HWND lb = GetDlgItem(dlg, IDC_STEPLIST);
     int n;
@@ -4749,17 +5149,23 @@ static void progress_add(HWND dlg, int state, const char *text)
         }
     }
     SendMessageA(lb, LB_SETCURSEL, n, 0);
-    if (state == INST_STEP_BEGIN) {
-        stepsTotal++;
-    } else {
-        stepsDone++;
-        if (stepsDone > stepsTotal) {
-            stepsTotal = stepsDone;
-        }
+}
+
+/* The bar from the engine's position (record 26 section 5.8.1, task 46.8):
+ * read on the page's timer while the run goes on, and once more at its
+ * end; never moved back. */
+#define PROG_TIMER          46
+static int progShown = -1;
+
+static void progress_bar(HWND dlg)
+{
+    int pos = inst_eng_progress();
+
+    if (pos < 0 || pos <= progShown) {
+        return;
     }
-    SendDlgItemMessageA(dlg, IDC_PROGRESSBAR, PBM_SETRANGE, 0,
-                        MAKELPARAM(0, stepsTotal + 1));
-    SendDlgItemMessageA(dlg, IDC_PROGRESSBAR, PBM_SETPOS, stepsDone, 0);
+    progShown = pos;
+    SendDlgItemMessageA(dlg, IDC_PROGRESSBAR, PBM_SETPOS, pos, 0);
 }
 
 static void progress_line(HWND dlg, const char *text)
@@ -4826,13 +5232,16 @@ static void restart_now(HWND owner)
     /* 98 SE and ME after a Stor98 update: a shutdown and a fresh start,
      * not a warm restart (record 26 section 5.9). */
     if (!ExitWindowsEx(inst_eng_shutdown() ? EWX_SHUTDOWN : EWX_REBOOT, 0)) {
-        _snprintf(text, sizeof(text) - 1, "Windows did not %s (error %lu). "
-                  "Do it from the Start menu.", inst_eng_shutdown() ?
-                  "shut down" : "restart", (unsigned long)GetLastError());
+        _snprintf(text, sizeof(text) - 1, "Windows could not %s (error "
+                  "%lu). %s from the Start menu.", inst_eng_shutdown() ?
+                  "shut down" : "restart", (unsigned long)GetLastError(),
+                  inst_eng_shutdown() ? "Shut down" : "Restart");
         text[sizeof(text) - 1] = '\0';
         MessageBoxA(owner, text, "xHCI98 Setup", MB_OK | MB_ICONWARNING);
     }
 }
+
+static int page_skipped(int page);
 
 static void finish_fill(HWND dlg)
 {
@@ -4840,12 +5249,13 @@ static void finish_fill(HWND dlg)
     int failed;
     int restart;
     int steps;
-    const char *last = inst_final_text_cold(finalLine, inst_eng_shutdown());
+    const char *last = inst_final_text_shown(finalLine, inst_eng_shutdown(),
+                                             !page_skipped(P_STEPS));
     int cold = inst_eng_shutdown();
 
     inst_eng_flags(&changed, &failed, &restart, &steps);
     SetDlgItemTextA(dlg, IDC_F_LAST, ran ? last :
-                    "Nothing was changed.");
+                    "No changes were made.");
     EnterCriticalSection(&textLock);
     {
         /* The other USB drivers' paragraph under the run's text, on every
@@ -4875,7 +5285,7 @@ static void finish_fill(HWND dlg)
                                                         : INST_PT_NOW));
     SetDlgItemTextA(dlg, IDC_F_LATER, inst_page_text(cold ? INST_PT_SHUT_LATER
                                                           : INST_PT_LATER));
-    if (ran && changed) {
+    if (ran && changed && finalLine != INST_FINAL_DONE) {
         ShowWindow(GetDlgItem(dlg, IDC_F_NOW), SW_SHOW);
         ShowWindow(GetDlgItem(dlg, IDC_F_LATER), SW_SHOW);
         /* Steps left: "later" preselected, the page saying do them first. */
@@ -4926,7 +5336,7 @@ static void steps_save(HWND dlg)
                     FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE ||
         !WriteFile(h, c, (DWORD)strlen(c), &n, NULL)) {
-        MessageBoxA(dlg, "The steps could not be saved there.", "xHCI98 Setup",
+        MessageBoxA(dlg, "The steps could not be saved to that location.", "xHCI98 Setup",
                     MB_OK | MB_ICONWARNING);
     }
     if (h != INVALID_HANDLE_VALUE) {
@@ -5053,6 +5463,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
         SetDlgItemTextA(dlg, IDC_STATUS, text);
         free(text);
         return TRUE;
+    case WM_TIMER:
+        if (wp == PROG_TIMER) {
+            progress_bar(dlg);
+            return TRUE;
+        }
+        break;
     case WM_APP_LINE:
         text = (char *)lp;
         progress_line(dlg, text);
@@ -5070,11 +5486,18 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             }
             return TRUE;
         case IDC_C_SETTINGS:
-            settings_open(dlg);
+            settings_open(dlg, SET_USB);
+            return TRUE;
+        case IDC_T_SETTINGS:
+            settings_open(dlg, SET_TB);
             return TRUE;
         case IDC_C_TB:
             /* The boxes it carried are on the Thunderbolt and USB4 page
-             * since task 45.60; the choice is taken by comp_take. */
+             * since task 45.60; the choice is taken by comp_take. The USB
+             * drivers' sentence follows it (task 46.22). */
+            if (HIWORD(wp) == BN_CLICKED) {
+                comp_usb_state(dlg);
+            }
             return TRUE;
         case IDC_C_PFW:
             if (HIWORD(wp) == BN_CLICKED) {
@@ -5198,6 +5621,12 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 SetDlgItemTextA(dlg, IDC_TEXT, inst_page_text(INST_PT_PROGRESS));
                 buttons(0);
                 if (!ran && !busy) {
+                    SendDlgItemMessageA(dlg, IDC_PROGRESSBAR, PBM_SETRANGE, 0,
+                                        MAKELPARAM(0, 1000));
+                    SendDlgItemMessageA(dlg, IDC_PROGRESSBAR, PBM_SETPOS, 0,
+                                        0);
+                    progShown = -1;
+                    SetTimer(dlg, PROG_TIMER, 500, NULL);
                     start_job(uninstallMode ? JOB_UNINSTALL : JOB_RUN);
                 }
                 break;
@@ -5225,8 +5654,8 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
                 int ok = 0;
                 if (is_9x() && s98Choice && inst_eng_s98_file_update()) {
                     char box[600];
-                    _snprintf(box, sizeof(box) - 1, "%s\n\nOK goes on; "
-                              "Cancel stays on this page.",
+                    _snprintf(box, sizeof(box) - 1, "%s\n\nClick OK to "
+                              "continue, or Cancel to stay on this page.",
                               inst_page_text(INST_PT_S98_UNUSED));
                     box[sizeof(box) - 1] = '\0';
                     if (MessageBoxA(GetParent(dlg), box, "xHCI98 Setup",
@@ -5249,6 +5678,9 @@ static WIZ_DLGRET CALLBACK page_proc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp)
             if (part_step(dlg, page, 1)) {
                 SET_RESULT(dlg, -1);
                 return TRUE;
+            }
+            if (page == P_TBT) {
+                tbt_board_next(dlg);
             }
             /* The direction a page is entered from: a departure's alone
              * (record 26 section 5.4, "The layout"). */
@@ -5373,7 +5805,12 @@ static LRESULT CALLBACK sheet_sub(HWND h, UINT msg, WPARAM wp, LPARAM lp)
                 welcome_state(pageWnd[P_WELCOME]);
             }
         } else {
-            /* The run ended: on to the steps or the finish by itself. */
+            /* The run ended: the bar's last reading (the end), then on to
+             * the steps or the finish by itself. */
+            if (pageWnd[P_PROGRESS] != NULL) {
+                KillTimer(pageWnd[P_PROGRESS], PROG_TIMER);
+                progress_bar(pageWnd[P_PROGRESS]);
+            }
             PropSheet_SetWizButtons(sheet, PSWIZB_NEXT);
             PropSheet_PressButton(sheet, PSBTN_NEXT);
         }
@@ -5747,7 +6184,7 @@ static void st_comp_words(HWND d, const char *note)
         INST_PT_DRIVERS_T, INST_PT_DRIVERS_T8, INST_PT_DRIVERS_OFF
     };
     static const int tb[] = {
-        INST_PT_TB_T, INST_PT_TB_ABSENT, INST_PT_TB_INTEL
+        INST_PT_TB_T, INST_PT_TB_ABSENT, INST_PT_TB_INTEL, INST_PT_TB_PORTS
     };
     char text[1200];
 
@@ -5759,7 +6196,7 @@ static void st_comp_words(HWND d, const char *note)
     comp_stor_text(note, text, sizeof(text));
     SetDlgItemTextA(d, IDC_C_STOR_T, text);
     SetDlgItemTextA(d, IDC_C_TB, inst_page_text(INST_PT_TB));
-    st_comp_longest(d, IDC_C_TB_T, tb, 3);
+    st_comp_longest(d, IDC_C_TB_T, tb, 4);
     SetDlgItemTextA(d, IDC_C_TRAY, inst_page_text(INST_PT_TRAY));
     SetDlgItemTextA(d, IDC_C_FAST, inst_page_text(INST_PT_FAST));
 }
@@ -6216,6 +6653,108 @@ static void st_rows(int form)
     }
 }
 
+/* Record 32 section 12.8.15.12: the reads row's note ends with the
+ * board's sentence, whole, for each class; none with no ASM4242 host or
+ * on a greyed row. */
+static void st_board_note(void)
+{
+    char note[4096];
+    const char *s;
+    size_t n;
+    int form;
+    int c;
+    int i;
+
+    for (form = 0; form <= 2; form += 2) {
+        st_rows(form);
+        for (i = 0; i < rowCount; i++) {
+            if (!inst_eq(instValues[rows[i].Value].Name,
+                         "XhciCmAsm4242Reads")) {
+                continue;
+            }
+            for (c = INST_BOARD_NONE; c <= INST_BOARD_UNREAD; c++) {
+                stBoard = c;
+                row_note(&rows[i], note, sizeof(note));
+                s = inst_board_note(c);
+                n = strlen(s);
+                if (form == 2 || c == INST_BOARD_NONE) {
+                    st(strstr(note, "This board:") == NULL,
+                       "the reads row: no board sentence greyed or with no "
+                       "host");
+                } else {
+                    st(strlen(note) > n &&
+                       strcmp(note + strlen(note) - n, s) == 0,
+                       "the reads row's note ends with the board's sentence");
+                }
+            }
+        }
+    }
+    stBoard = -1;
+    rowCount = 0;
+}
+
+/* Record 32 section 12.8.15.12: the board's box at the Thunderbolt and
+ * USB4 page's Next: an answer before the countdown's end goes on, the end
+ * and Skip give up (the board then not checked), the countdown's text
+ * fits, Back and Next again do not ask twice. */
+static void st_board_wait(HWND parent)
+{
+    HWND d;
+    int savedHave = tbHave;
+    int savedChoice = tbChoice;
+    int k;
+
+    stBoardFake = 1;
+    for (k = 0; k < 3; k++) {
+        stBoardTick = 100000UL;
+        stBoardPend = k != 0;
+        stBoardGaveUp = 0;
+        d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_BOARD), parent,
+                               board_proc, 0);
+        st(d != NULL, "the board's box");
+        if (d == NULL) {
+            continue;
+        }
+        st(fits(GetDlgItem(d, IDC_B_TEXT)), "the board's countdown fits");
+        if (k == 0) {
+            SendMessageA(d, WM_TIMER, BOARD_TIMER, 0);
+            st(boardResult == BOARD_ANSWERED && stBoardGaveUp == 0,
+               "the board's answer before the end: on at once");
+        } else if (k == 1) {
+            stBoardTick += 5000UL;
+            SendMessageA(d, WM_TIMER, BOARD_TIMER, 0);
+            st(boardResult == 0, "the board's countdown still running");
+            stBoardTick += 5000UL;
+            SendMessageA(d, WM_TIMER, BOARD_TIMER, 0);
+            st(boardResult == BOARD_TIMED_OUT && stBoardGaveUp == 1,
+               "the board's countdown at 0: given up, on");
+        } else {
+            SendMessageA(d, WM_COMMAND, IDCANCEL, 0);
+            st(boardResult == BOARD_SKIPPED && stBoardGaveUp == 2,
+               "Skip: given up, on");
+        }
+        DestroyWindow(d);
+    }
+    tbHave = 1;
+    tbChoice = 1;
+    boardWaited = 0;
+    stBoardOpened = 0;
+    stBoardPend = 1;
+    tbt_board_next(parent);
+    tbt_board_next(parent);
+    st(stBoardOpened == 1, "Back and Next again: the board not asked twice");
+    tbChoice = 0;
+    boardWaited = 0;
+    tbt_board_next(parent);
+    st(stBoardOpened == 1, "the box unticked: the board never asked");
+    boardWaited = 0;
+    stBoardFake = 0;
+    stBoardPend = 0;
+    boardResult = 0;
+    tbHave = savedHave;
+    tbChoice = savedChoice;
+}
+
 /* A choice made on a part kept across Next and Back (record 26 section
  * 5.4, "The layout"): the first row's first entry that writes chosen, the
  * page left to its last part and back to its first. */
@@ -6354,6 +6893,12 @@ static void st_settings_layout(HWND parent)
                     seen += rp->Count;
                 }
                 st(seen == n, "every row in one part");
+                tab_ok_default(d);
+                st((GetWindowLongA(GetDlgItem(d, IDC_S_ADVANCED), GWL_STYLE) &
+                    0x0FL) == BS_PUSHBUTTON &&
+                   (GetWindowLongA(GetDlgItem(d, IDC_S_PART), GWL_STYLE) &
+                    0x0FL) == BS_PUSHBUTTON,
+                   "a tab's Advanced and More not the default button");
                 settings_fill(d, pages[p], -1);
                 st(rp->Part == rp->Parts - 1, "entered by Back: the last "
                    "part");
@@ -6470,26 +7015,30 @@ static void st_other_layout(HWND parent)
                 "test-signing mode)", w - dlu_x(d, 22), &wide);
     st(wide <= w - dlu_x(d, 22) && lh + 2 <= c.bottom, "the trust box: whole "
        "in the list's window");
-    /* 98 SE and ME (record 26 section 6.7.13): each package's copied-only
-     * line with two long folders, and the sentence for the rest at a long
-     * install directory, whole in the list's window. */
+    /* Record 26 section 6.7.15 (every system): each package's greyed
+     * copied-only row with one folder as long as the packs' longest (the
+     * packs have one per package and system), at Setup's own install
+     * folder, whole in the list's window at its smallest; a path
+     * longer than the line is broken by its edit control (the sentence
+     * for the rest of 6.7.13 below). */
     for (i = 0; i < instOtherPkgCount; i++) {
         const INST_OTHER_PKG *p = &instOtherPkgs[i];
-        char line[700];
-        char f1[WIZ_PATH];
-        char f2[WIZ_PATH];
-        const char *fp[2];
-        _snprintf(f1, sizeof(f1) - 1, "%s\\%s\\w98se-vista\\RTL8187\\Win98",
-                  inst_other_folder(p->Set), p->Id);
-        f1[sizeof(f1) - 1] = '\0';
-        _snprintf(f2, sizeof(f2) - 1, "%s\\%s\\w98se-me\\WIN 1X",
-                  inst_other_folder(p->Set), p->Id);
-        f2[sizeof(f2) - 1] = '\0';
-        fp[0] = f1;
-        fp[1] = f2;
-        inst_other_copy_only_line(line, sizeof(line), p->Desc, fp, 2);
-        lh = text_h(dc, line, w - dlu_x(d, 10), &wide);
-        _snprintf(msg, sizeof(msg) - 1, "%s:%s's copied-only line: whole in "
+        char line[1200];
+        char setDir[WIZ_PATH];
+        char fr[INST_OTHER_ROW_FOLDERS][INST_OTHER_REL_CHARS];
+        int k;
+        _snprintf(setDir, sizeof(setDir) - 1, "C:\\XHCI98\\%s",
+                  inst_other_folder(p->Set));
+        setDir[sizeof(setDir) - 1] = '\0';
+        for (k = 0; k < INST_OTHER_ROW_FOLDERS; k++) {
+            _snprintf(fr[k], sizeof(fr[k]) - 1, "%s/w98se-xp/WinX64%d",
+                      p->Id, k);
+            fr[k][sizeof(fr[k]) - 1] = '\0';
+        }
+        inst_other_copy_row(line, sizeof(line), p->Desc, setDir,
+                            (const char (*)[INST_OTHER_REL_CHARS])fr, 1, 0);
+        lh = text_h_wrap(dc, line, w - dlu_x(d, 22) - 4);
+        _snprintf(msg, sizeof(msg) - 1, "%s:%s's copied-only row: whole in "
                   "the list's window", p->Set == INST_SET_FREE ? "free" :
                   "nonfree", p->Id);
         msg[sizeof(msg) - 1] = '\0';
@@ -6596,8 +7145,8 @@ static void st_tbt(HWND parent)
     {
         char note[400];
         GetDlgItemTextA(d, IDC_T_APPR_NOTE, note, sizeof(note));
-        st(strstr(note, "different values") != NULL &&
-           strstr(note, "new install") != NULL &&
+        st(strstr(note, "different approval setting") != NULL &&
+           strstr(note, "after restart") != NULL &&
            fits(GetDlgItem(d, IDC_T_APPR_NOTE)),
            "the mixed and the new-install notes both said, whole");
     }
@@ -6633,6 +7182,14 @@ static void st_tbt(HWND parent)
                                         IDC_T_APPR_NOTE));
         st(last.bottom <= cli.bottom, "the page's rows above its foot, "
            "every row shown");
+        {
+            /* Record 26 section 5.4.2 (task 46.7): Settings... at the
+             * foot, every row above it. */
+            RECT sb = st_rect(d, GetDlgItem(d, IDC_T_SETTINGS));
+            st(last.bottom <= sb.top && sb.bottom <= cli.bottom &&
+               sb.bottom >= cli.bottom - dlu_y(d, 4),
+               "the page's Settings... at its foot, every row above it");
+        }
         netOpen = 0;
         tbt_fill(d);
         st(IsDlgButtonChecked(d, IDC_T_NET) != BST_CHECKED &&
@@ -6645,6 +7202,113 @@ static void st_tbt(HWND parent)
         pfwShown = sPfw;
     }
     choiceSet[v] = 0;
+    rows[0] = savedRow;
+    rowCount = savedCount;
+    DestroyWindow(d);
+}
+
+/* Record 26 section 5.4.2 (task 46.7): the tabs each page's Settings...
+ * offers, and the Components page's button greyed where the USB tab has
+ * nothing to show. */
+static void st_set_split(HWND parent)
+{
+    HWND d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS),
+                                parent, st_proc, 0);
+    int savedCount = rowCount;
+    INST_ROW savedRow = rows[0];
+    int v = inst_value_find("XhciInterruptMode");
+
+    st(set_tabs(SET_USB, 1, 1, 1, 1) == 1 &&
+       set_tabs(SET_USB, 0, 1, 1, 1) == 0 &&
+       set_tabs(SET_USB, 1, 0, 1, 1) == 0,
+       "Components: the USB tab alone, where it has a row");
+    st(set_tabs(SET_TB, 1, 1, 1, 1) == 6 &&
+       set_tabs(SET_TB, 0, 0, 1, 0) == 2 &&
+       set_tabs(SET_TB, 1, 1, 0, 1) == 0,
+       "Thunderbolt and USB4: its tab, Stor98's with Stor98 ticked");
+    st(d != NULL && v >= 0, "the Components page made, a USB row found");
+    if (d == NULL || v < 0) {
+        if (d != NULL) {
+            DestroyWindow(d);
+        }
+        return;
+    }
+    memset(&rows[0], 0, sizeof(rows[0]));
+    rows[0].Value = v;
+    rows[0].Asked = 0;
+    rowCount = 1;
+    CheckDlgButton(d, IDC_C_DRIVERS, BST_CHECKED);
+    comp_usb_state(d);
+    st(IsWindowEnabled(GetDlgItem(d, IDC_C_SETTINGS)) != 0,
+       "Components' Settings... open with the USB drivers ticked and an "
+       "Advanced row");
+    CheckDlgButton(d, IDC_C_DRIVERS, BST_UNCHECKED);
+    comp_usb_state(d);
+    st(!IsWindowEnabled(GetDlgItem(d, IDC_C_SETTINGS)),
+       "Components' Settings... greyed with the USB drivers unticked");
+    rowCount = 0;
+    CheckDlgButton(d, IDC_C_DRIVERS, BST_CHECKED);
+    comp_usb_state(d);
+    st(!IsWindowEnabled(GetDlgItem(d, IDC_C_SETTINGS)),
+       "Components' Settings... greyed with no USB row");
+    {
+        /* The last plan made with the USB drivers out of the run (no USB
+         * row in it), the box ticked again: open, the press planning
+         * again. */
+        int savedUsb = usbChoice;
+        usbChoice = 0;
+        comp_usb_state(d);
+        st(IsWindowEnabled(GetDlgItem(d, IDC_C_SETTINGS)) != 0,
+           "Components' Settings... open with the USB drivers ticked again "
+           "after a plan without them");
+        /* Ticked again, then Back and Next: the choice kept, the plan
+         * still owed (comp_keep). */
+        {
+            int savedOwed = compOwed;
+            usbChoice = 1;
+            compOwed = 2;
+            comp_usb_state(d);
+            st(IsWindowEnabled(GetDlgItem(d, IDC_C_SETTINGS)) != 0,
+               "Components' Settings... open with a change still owed to "
+               "the plan");
+            compOwed = savedOwed;
+        }
+        usbChoice = savedUsb;
+    }
+    {
+        /* Task 46.22 (record 26 section 5.3, draft 71): the USB drivers
+         * unticked lock nothing on any system; with both unticked the
+         * sentence is the tools-alone one off 8 to 10, with the
+         * Thunderbolt box ticked the connection manager's. */
+        int savedHave = tbHave;
+        int savedNot = usbNotHere;
+        int pass;
+        tbHave = 1;
+        for (pass = 0; pass < 2; pass++) {
+            char got[400];
+            usbNotHere = pass;
+            CheckDlgButton(d, IDC_C_TB, BST_UNCHECKED);
+            CheckDlgButton(d, IDC_C_DRIVERS, BST_UNCHECKED);
+            comp_usb_state(d);
+            GetDlgItemTextA(d, IDC_C_DRIVERS_T, got, sizeof(got));
+            st(IsDlgButtonChecked(d, IDC_C_TB) == BST_UNCHECKED &&
+               IsWindowEnabled(GetDlgItem(d, IDC_C_TB)) != 0 &&
+               strcmp(got, inst_page_text(pass ? INST_PT_DRIVERS_T8 :
+                                          INST_PT_DRIVERS_TOOLS)) == 0,
+               "Components: the Thunderbolt box the user's with the USB "
+               "drivers unticked, the tools-alone line");
+            CheckDlgButton(d, IDC_C_TB, BST_CHECKED);
+            comp_usb_state(d);
+            GetDlgItemTextA(d, IDC_C_DRIVERS_T, got, sizeof(got));
+            st(IsDlgButtonChecked(d, IDC_C_TB) == BST_CHECKED &&
+               strcmp(got, inst_page_text(pass ? INST_PT_DRIVERS_T8 :
+                                          INST_PT_DRIVERS_OFF)) == 0,
+               "Components: the Thunderbolt box ticked alone, the "
+               "connection manager's line");
+        }
+        tbHave = savedHave;
+        usbNotHere = savedNot;
+    }
     rows[0] = savedRow;
     rowCount = savedCount;
     DestroyWindow(d);
@@ -6774,6 +7438,51 @@ static void st_help(HWND parent)
            "help: its buttons inside it, apart, under the text");
         DestroyWindow(d);
     }
+}
+
+/* Record 26 section 5.3.8: over an installed Thunderbolt part the box
+ * starts ticked, but over Intel's driver and where Secure Boot refuses
+ * the connection manager; the Components page shows it so. */
+static void st_tb_installed(HWND parent)
+{
+    HWND d;
+    int saved[4];
+
+    st(tb_first_box(1, 1, 0, 0, 1, 0) && tb_first_box(1, 0, 0, 0, 1, 0),
+       "tb installed: the box starts ticked, a controller found or not");
+    /* Record 26 section 5.3.9: the USB drivers out, ticked where a host is
+     * found or by its own state, never with no driver in the package. */
+    st(tb_alone_box(1, 1, 0, 1) && tb_alone_box(1, 1, 1, 0) &&
+       !tb_alone_box(1, 1, 0, 0) && !tb_alone_box(1, 0, 1, 1),
+       "tb alone, 8 to 10: ticked where a host is found or as its own state");
+    st(tb_alone_box(0, 1, 0, 0) && !tb_alone_box(0, 0, 0, 0),
+       "tb alone, 2000 to 7 and 98 SE (/cmonly): ticked, found or not");
+    st(!tb_first_box(1, 1, 0, 0, 0, 0) && !tb_first_box(1, 1, 0, 0, 1, 1) &&
+       !tb_first_box(1, 1, 0, 1, 1, 0) && !tb_first_box(0, 1, 0, 0, 1, 0),
+       "tb installed: unticked when not installed, refused by Secure "
+       "Boot, over Intel's driver, or with no driver in the package");
+    d = CreateDialogParamA(hInst, MAKEINTRESOURCEA(IDD_COMPONENTS), parent,
+                           st_proc, 0);
+    st(d != NULL, "tb installed: the components made");
+    if (d == NULL) {
+        return;
+    }
+    saved[0] = tbHave;
+    saved[1] = tbPresent;
+    saved[2] = tbChoice;
+    saved[3] = tbOwn;
+    tbHave = 1;
+    tbPresent = 1;
+    tbOwn = tb_first_box(1, 1, 0, 0, 1, 0);
+    tbChoice = tbOwn;
+    comp_fill(d);
+    st(IsDlgButtonChecked(d, IDC_C_TB) == BST_CHECKED,
+       "tb installed: the Components page shows the box ticked");
+    DestroyWindow(d);
+    tbHave = saved[0];
+    tbPresent = saved[1];
+    tbChoice = saved[2];
+    tbOwn = saved[3];
 }
 
 /* Back from the Components page keeps the boxes as the user left them,
@@ -6935,10 +7644,20 @@ static int selftest(void)
     static const int n2Texts[] = { INST_PT_SHUT_NOW, INST_PT_SHUT_LATER };
     static const int c2Ids[] = { IDC_C_TB_T };
     static const int c2Texts[] = { INST_PT_TB_ABSENT };
+    /* Record 26 section 5.3.6 (task 46.5): the router not listed. */
+    static const int c5Ids[] = { IDC_C_TB_T };
+    static const int c5Texts[] = { INST_PT_TB_PORTS };
+    static const int s4Ids[] = { IDC_S_HEAD, IDC_S_NOTE };
+    static const int s4Texts[] = { INST_PT_TBSET, INST_PT_TB_LATER_ROUTER };
     static const int c4Ids[] = { IDC_C_PFW, IDC_C_PFW };
     static const int c4Texts[] = { INST_PT_PFW, INST_PT_PFW_SYS };
     static const int c3Ids[] = { IDC_C_DRIVERS_T, IDC_C_DRIVERS_T };
     static const int c3Texts[] = { INST_PT_DRIVERS_T8, INST_PT_DRIVERS_OFF };
+    /* Task 46.22: both boxes unticked; Stor98's line on Windows 10. */
+    static const int c6Ids[] = { IDC_C_DRIVERS_T };
+    static const int c6Texts[] = { INST_PT_DRIVERS_TOOLS };
+    static const int b3Ids[] = { IDC_C_S98_T };
+    static const int b3Texts[] = { INST_PT_S98_T10 };
     static const int w2Ids[] = { IDC_TEXT };
     static const int w2Texts[] = { INST_PT_WELCOME_CM };
     static const int u2Ids[] = { IDC_TITLE, IDC_TEXT, IDC_U_AGREE };
@@ -7004,6 +7723,7 @@ static int selftest(void)
         st_page(parent, IDD_TBT, b2Ids, b2Texts, 1, "the Thunderbolt and "
                 "USB4 page, 98 SE and ME");
         st_tbt(parent);
+        st_set_split(parent);
         st_welcome_rows(parent);
         st_comp_layout(parent);
         st_comp_layout_nt(parent);
@@ -7013,8 +7733,16 @@ static int selftest(void)
                 "shutdown");
         st_page(parent, IDD_COMPONENTS, c2Ids, c2Texts, 1, "the components, "
                 "no controller");
+        st_page(parent, IDD_COMPONENTS, c5Ids, c5Texts, 1, "the components, "
+                "the router not listed");
+        st_page(parent, IDD_SETTINGS, s4Ids, s4Texts, 2, "the Thunderbolt "
+                "settings, the router not listed");
         st_page(parent, IDD_COMPONENTS, c3Ids, c3Texts, 2, "the components, "
                 "the connection manager alone");
+        st_page(parent, IDD_COMPONENTS, c6Ids, c6Texts, 1, "the components, "
+                "the tools alone");
+        st_page(parent, IDD_TBT, b3Ids, b3Texts, 1, "the Thunderbolt and "
+                "USB4 page, Stor98's line on Windows 10");
         st_page(parent, IDD_TBT, c4Ids, c4Texts, 2, "the Thunderbolt and "
                 "USB4 page, XHCIPFW's box on each system");
         st_page(parent, IDD_WELCOME, w2Ids, w2Texts, 1, "the welcome, the "
@@ -7032,8 +7760,11 @@ static int selftest(void)
         st_page(parent, IDD_FINISH, nIds, nTexts, 2, "the finish");
         st_page(parent, IDD_ADVANCED, aIds, aTexts, 1, "the Advanced dialog");
         st_settings_layout(parent);
+        st_board_note();
+        st_board_wait(parent);
         st_help(parent);
         st_comp_back(parent);
+        st_tb_installed(parent);
         DestroyWindow(parent);
     }
     printf("%d checks, %d failures\n", stChecks, stFailures);

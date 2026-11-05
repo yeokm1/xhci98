@@ -808,3 +808,107 @@ ULONG XhciPollRetire(const XHCI_POLL_REGS *io)
     }
     return XHCI_POLL_RETIRE_IP;
 }
+
+/* ------------------------------------------------------------------ */
+/* A line another device holds asserted (record 15 section 4.4)        */
+/* ------------------------------------------------------------------ */
+
+static ULONG xhciPollLe32(const UCHAR *b, ULONG offset)
+{
+    return (ULONG)b[offset] | ((ULONG)b[offset + 1] << 8) |
+           ((ULONG)b[offset + 2] << 16) | ((ULONG)b[offset + 3] << 24);
+}
+
+ULONG XhciPollHeldStill(const UCHAR *cfg, ULONG irq)
+{
+    ULONG command;
+    ULONG status;
+
+    command = (ULONG)cfg[0x04] | ((ULONG)cfg[0x05] << 8);
+    status = (ULONG)cfg[0x06] | ((ULONG)cfg[0x07] << 8);
+    if ((status & 0x0008UL) == 0 || (command & 0x0400UL) != 0 ||
+        (ULONG)cfg[0x3C] != irq) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Whether a function read whole is a candidate. */
+static ULONG xhciPollHolder(const XHCI_POLL_HELD_IN *in, const UCHAR *cfg)
+{
+    ULONG type;
+
+    type = (ULONG)cfg[0x0E] & 0x7FUL;
+    if (type != 0 && type != 1) {
+        return 0;
+    }
+    if (xhciPollLe32(cfg, 0x00) == in->Own[0] &&
+        xhciPollLe32(cfg, 0x10) == in->Own[1] &&
+        xhciPollLe32(cfg, 0x14) == in->Own[2] &&
+        xhciPollLe32(cfg, 0x2C) == in->Own[3]) {
+        return 0;
+    }
+    if (cfg[0x3D] < 1 || cfg[0x3D] > 4) {
+        return 0;
+    }
+    return XhciPollHeldStill(cfg, in->Irq);
+}
+
+/*
+ * The walk: every bus from From's, device by device, function 0 and, when
+ * its header says so, 1 to 7. The first candidate at or after From ends it
+ * (function 0 of From's device is read again for its header). Bus 0
+ * device 0 answering nothing is a walk that could not run.
+ */
+VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out)
+{
+    UCHAR cfg[XHCI_POLL_HELD_BYTES];
+    ULONG bus;
+    ULONG device;
+    ULONG function;
+    ULONG functions;
+    ULONG bytes;
+    ULONG vendor;
+    ULONG first;
+    ULONG bdf;
+
+    out->Result = XHCI_POLL_HELD_NONE;
+    out->Functions = 0;
+    out->Bdf = 0;
+    out->Id = 0;
+    first = (in->From >> 8) & 0xFFUL;
+    for (bus = first; bus < XHCI_POLL_HELD_BUSES; bus++) {
+        device = (bus == first) ? ((in->From >> 3) & 0x1FUL) : 0UL;
+        for (; device < 32; device++) {
+            functions = 1;
+            for (function = 0; function < functions; function++) {
+                bytes = in->Read(in->Context, bus, device, function, cfg,
+                                 XHCI_POLL_HELD_BYTES);
+                vendor = (bytes < XHCI_POLL_HELD_BYTES)
+                             ? 0xFFFFUL
+                             : ((ULONG)cfg[0] | ((ULONG)cfg[1] << 8));
+                if (vendor == 0xFFFFUL || vendor == 0) {
+                    if (bus == 0 && device == 0 && function == 0) {
+                        out->Result = XHCI_POLL_HELD_FAILED;
+                        return;
+                    }
+                    if (function == 0) {
+                        break;
+                    }
+                    continue;
+                }
+                if (function == 0 && (cfg[0x0E] & 0x80) != 0) {
+                    functions = 8;
+                }
+                out->Functions++;
+                bdf = (bus << 8) | (device << 3) | function;
+                if (bdf >= in->From && xhciPollHolder(in, cfg)) {
+                    out->Result = XHCI_POLL_HELD_FOUND;
+                    out->Bdf = bdf;
+                    out->Id = xhciPollLe32(cfg, 0x00);
+                    return;
+                }
+            }
+        }
+    }
+}

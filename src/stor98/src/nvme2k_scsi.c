@@ -170,7 +170,8 @@ static VOID ScsiPfAnswer(IN PHW_DEVICE_EXTENSION DevExt, OUT PSTOR98PF_ANSWER A)
     A->ChildrenIo = DevExt->ChildrenIo;
     A->WriteThrough = DevExt->WtMode;
     A->Vwc = DevExt->Vwc ? 1 : 0;
-    A->Polling = (DevExt->PollAlways ? 1 : 0) | (DevExt->PollMode ? 2 : 0) | ((ULONG)DevExt->PollWhy << 8);
+    A->Polling = (DevExt->PollAlways ? 1 : 0) | (DevExt->PollMode ? 2 : 0) | ((ULONG)DevExt->PollWhy << 8) |
+                 ((DevExt->IntWatch.Misses > 0xFFFF ? 0xFFFFUL : DevExt->IntWatch.Misses) << 16);
     A->Dcb9xSeen = DevExt->PfDcbSeen;
     A->DcbMaxXferLen = DevExt->PfDcbMaxXfer;
     A->DcbMaxSgElements = DevExt->PfDcbMaxSg;

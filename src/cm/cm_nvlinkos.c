@@ -797,11 +797,21 @@ static BOOLEAN cmNvEnsure(PCM_NHI nhi)
         }
         return (BOOLEAN)(cmNvRecordTried == 2 && cmNvRecord != 0);
     }
+    if (!CmRegEnter(nhi)) {
+        /* 98 SE and ME away from S0 (task 46.14): no registry service
+         * now; this exposure publishes no UP and a later one writes it. */
+        KeAcquireSpinLock(&cmNvLock, &irql);
+        cmNvRecordTried = 0;
+        KeReleaseSpinLock(&cmNvLock, irql);
+        CmLogNote(nhi, "cm.nvlink.9x.record.deferred", 0);
+        return FALSE;
+    }
 #if defined(_X86_)
     cmNvRecordError = cmNvWriteRecord(cmNvNow(nhi));
 #else
     cmNvRecordError = 0xFFFFFFFEUL;
 #endif
+    CmRegLeave(nhi);
     cmNvRecord = cmNvRecordError == 0 ? 1UL : 0UL;
     cmNvRecordTried = 2;
     /* Bit 31 published; else bits 18:16 the step that stopped it
@@ -1828,6 +1838,9 @@ VOID CmNvlinkU4Up(PVOID context, const TBT_U4_ACTION *action)
     CmLogNote(nhi, "cm.nvlink.u4-up",
               ((action->Port & 0xFFUL) << 16) |
                   (action->Generation & 0xFFFFUL));
+    /* Task 46.13 (record 21 section 8.3): the same connection's tunnel up
+     * again - its own publication never supersedes its later DOWN. */
+    CmEjectLinkUp(nhi, action->Port, action->Generation);
     /* The new establishment's UP now: this hook runs before anything can
      * expose the endpoint, also on the resume path, before the bridges'
      * marks are released and the bridges invalidated. It names the tunnel (port, connection
@@ -2093,4 +2106,51 @@ ULONG CmNvlinkReleaseBus(PCM_NHI nhi, ULONG bridge, ULONG bus)
     KeReleaseSpinLock(&cmNvLock, irql);
     CmLogNote(nhi, "cm.nvlink.release-bus", (bus << 16) | (left << 8) | n);
     return left;
+}
+
+/*
+ * The handover's once-per-boot objects (design record 32 section
+ * 12.8.13.5, cm_oscnt.c), NT only: \Callback\Xhci98CmOsc<bdf>, and with
+ * `success` its ...A twin, permanent named callback objects this driver
+ * alone creates. `create` FALSE opens (CM_NVO_FOUND, else CM_NVO_ABSENT);
+ * TRUE creates (CM_NVO_MADE, else CM_NVO_FAILED). Every pointer returned
+ * is dereferenced at once: the object is kept by its permanence.
+ * PASSIVE_LEVEL.
+ */
+ULONG CmNvOscObject(ULONG bdf, BOOLEAN success, BOOLEAN create)
+{
+    static const WCHAR prefix[] = L"\\Callback\\Xhci98CmOsc";
+    WCHAR name[sizeof(prefix) / sizeof(WCHAR) + 10];
+    UNICODE_STRING text;
+    OBJECT_ATTRIBUTES attributes;
+    PCALLBACK_OBJECT object;
+    NTSTATUS status;
+    ULONG n;
+    ULONG i;
+    ULONG d;
+
+    for (n = 0; prefix[n] != 0; n++) {
+        name[n] = prefix[n];
+    }
+    for (i = 0; i < 8UL; i++) {
+        d = (bdf >> (28UL - 4UL * i)) & 0xFUL;
+        name[n++] = (WCHAR)(d < 10UL ? L'0' + d : L'A' + (d - 10UL));
+    }
+    if (success) {
+        name[n++] = L'A';
+    }
+    name[n] = 0;
+    text.Buffer = name;
+    text.Length = (USHORT)(n * sizeof(WCHAR));
+    text.MaximumLength = (USHORT)((n + 1UL) * sizeof(WCHAR));
+    InitializeObjectAttributes(&attributes, &text,
+                               OBJ_CASE_INSENSITIVE | OBJ_PERMANENT, NULL,
+                               NULL);
+    object = NULL;
+    status = ExCreateCallback(&object, &attributes, create, TRUE);
+    if (!NT_SUCCESS(status) || object == NULL) {
+        return create ? CM_NVO_FAILED : CM_NVO_ABSENT;
+    }
+    ObDereferenceObject(object);
+    return create ? CM_NVO_MADE : CM_NVO_FOUND;
 }

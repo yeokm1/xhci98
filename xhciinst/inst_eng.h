@@ -148,6 +148,46 @@ const char *inst_eng_net_plan(void);
 /* 1 when Intel's Thunderbolt driver runs a controller (record 23 section
  * 8.5.1): the Thunderbolt box is then the user's, unticked until ticked. */
 int inst_eng_tb_intel(void);
+/* 1 when a Thunderbolt or USB4 host is found: an NHI xhcicm.inf matches,
+ * 98 SE's and ME's unlisted router's switch port, or a known host's switch
+ * or tunnel port on any system (record 26 section 5.3.9). */
+int inst_eng_tb_found(void);
+/* 1 when no NHI is listed but a known host's switch or tunnel port is
+ * (record 26 section 5.3.9): the line under the box says a controller was
+ * found. */
+int inst_eng_tb_port_known(void);
+/* 1 on 98 SE and ME when no device xhcicm.inf matches is present but a USB4
+ * host's own switch port is: its router not listed (record 26 section
+ * 5.3.6, task 46.5). */
+int inst_eng_tb_ports(void);
+/* Record 32 section 12.8.15.12: the ASM4242 board under the NHIs the last
+ * plan found, INST_BOARD_* (inst_board.h), as the tables stand now
+ * (INST_BOARD_LATER before the read, INST_BOARD_PENDING while WMI's
+ * runs); INST_BOARD_NONE when no line is shown: on 98 SE and ME, with
+ * no such NHI, or the Thunderbolt support not in the run. Asking never
+ * reads anything. */
+int inst_eng_cm_board(void);
+/* The window's Thunderbolt and USB4 page's Next (the owner's decision of
+ * 2026-11-04): the board's tables read where it applies, the quick read
+ * at once, WMI's started; 1 when its answer is to be waited for (WMI's,
+ * at most 10 s, with Skip), 0 when there is none to wait for (not asked,
+ * the quick read, already answered: Back and Next reuse it). */
+int inst_eng_board_begin(void);
+/* 1 while WMI's answer is awaited. */
+int inst_eng_board_pending(void);
+/* The wait ended before the answer: Skip (skipped 1) or the countdown's
+ * end; the board is then not checked, the log says why. */
+void inst_eng_board_give_up(int skipped);
+/* Record 32 section 12.8.15.12: the Summary's lines for the ASM4242
+ * xHCI's filter entry, with the Thunderbolt support in the run (tbIn) or
+ * not, the tools alone (toolsOnly), or the uninstall: a head line and the
+ * instance ids that change, each line ended by "\n"; "" when none does. */
+void inst_eng_cm_xhci_plan(int tbIn, int toolsOnly, int uninstall,
+                           char *text, size_t cap);
+/* The Progress page's bar (record 26 section 5.8.1, task 46.8): the
+ * position in thousandths now, the open item's creep included; -1 when
+ * no run is under way. Any thread. */
+int inst_eng_progress(void);
 /* Record 26 section 5.3.3: the Components page's refusal for the boxes as
  * ticked (Secure Boot read as on), shown with OK alone; NULL to go on. */
 const char *inst_eng_comp_refusal(int usb, int tb);
@@ -163,12 +203,15 @@ const char *inst_eng_plan_refusal(void);
  * manager alone registered (the uninstall's warning); and the version as
  * record 23 section 4.3 reads it (1 read; 0 not). */
 int inst_eng_usb_state(int *offered, int *notOnThisSystem);
+int inst_eng_stor_installs(void);
 void inst_eng_usb_choose(int include);
 
 /* The UAS disk driver's box, a child of the USB drivers' (owner,
  * 2026-10-19): whether xhciuas.inf is in the run, and the choice,
- * planned again. */
+ * planned again. inst_eng_uas_offered: 0 on 8, 8.1 and 10, where the
+ * box stays unticked and greyed (owner, 2026-11-04). */
 int inst_eng_uas_state(void);
+int inst_eng_uas_offered(void);
 void inst_eng_uas_choose(int include);
 int inst_eng_cm_only_machine(void);
 int inst_eng_os_read(OSVERSIONINFOA *v);
@@ -266,6 +309,9 @@ const char *inst_eng_confirm_text(void);
 /* The window's Summary headline: inst_summary_head with this run's
  * device plan and the page's own writes and other changes. */
 const char *inst_eng_summary_head(int writes, int other);
+/* 98 SE and ME: the run replaces xhciuas.sys (0) or xhcicm.sys (1), a
+ * resident image, in SYSTEM32\DRIVERS: loaded at the next start. */
+int inst_eng_resident_plan(int cm);
 
 /* S98VSD.VXD (design record 30 section 7): the window's box (its choice;
  * *shown where the package carries the file, *sys9x on 98 SE and ME), the
@@ -315,6 +361,10 @@ INST_U32 inst_eng_comp_warn(int usb, int stor, int s98, int tb,
                             const char *dir, char *text, size_t cap);
 /* The Summary's line for it, "" when it is not shown. */
 void inst_eng_stor_summary(char *out, size_t cap);
+/* 1 when the Summary's storage line already says what this run did with
+ * the seven files, so the Components page's note (the state found before
+ * the run) is not shown under it (owner, 2026-11-05). */
+int inst_eng_stor_summary_final(void);
 
 /* The other USB drivers (record 26 section 6.7): a set's state in the
  * download (INST_OTHER_*), its STAGE lines for this system, and the boxes;
@@ -350,10 +400,13 @@ const char *inst_eng_other_earlier(int set);
 /* The package's scope on this system in words, for its details. */
 void inst_eng_other_pkg_scope(int set, int i, const char *dir, char *out,
                               size_t cap);
-/* Record 26 section 6.7.13 (task 45.8), 98 SE and ME: 1 with the line when
- * the i-th package of a set has only COPY lines for this system (no box);
- * and the sentence for the rest of the set's packages ("" on NT). */
-int inst_eng_other_copy_only(int set, int i, char *out, size_t cap);
+/* Record 26 section 6.7.15 (task 46.22), every system: 1 with its greyed
+ * row's text when the i-th package of a set is copied only on this system
+ * (no STAGE line, a COPY line of a driver's INF), its folders under dir
+ * (the install folder; Setup's own when empty). Section 6.7.13: the
+ * sentence for the rest of the set's packages ("" on NT). */
+int inst_eng_other_copy_only(int set, int i, const char *dir, char *out,
+                             size_t cap);
 void inst_eng_other_rest(int set, const char *dir, int part, char *out,
                          size_t cap);
 /* The free set's certificate (section 6.7.11): ticked, and *offered the

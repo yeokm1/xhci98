@@ -293,7 +293,14 @@ void s98_facts(PF_TEXT *t, const S98_ANSWER *a, int is9x)
     pf_tx_s(t, "; block size ");
     pf_tx_u(t, a->blockSize);
     pf_tx_s(t, "; ");
-    pf_tx_s(t, (a->polling & 1) ? "polling" : ((a->polling & 2) ? "polling after an interrupt storm" : "interrupts"));
+    /* Polling bits 15:8 why, 7 the missed-interrupt watchdog (Stor98 3.4.1.0) */
+    pf_tx_s(t, ((a->polling & 1) && ((a->polling >> 8) & 0xFFu) == 7u) ? "polling after missed interrupts" :
+               (a->polling & 1) ? "polling" : ((a->polling & 2) ? "polling after an interrupt storm" : "interrupts"));
+    if ((a->polling >> 16) != 0) {
+        pf_tx_s(t, " (");
+        pf_tx_u(t, a->polling >> 16);
+        pf_tx_s(t, " missed)");
+    }
     pf_tx_s(t, "; write cache ");
     pf_tx_s(t, a->vwc ? "present" : "none");
     pf_tx_s(t, a->writeThrough == 2 ? ", writes with FUA" : (a->writeThrough == 1 ? ", cache off" : ""));

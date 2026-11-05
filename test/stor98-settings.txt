@@ -17,6 +17,9 @@
   StorPollSpinUs          us    500 on 2000 to 7,  0-500, 0 = none (check
   storpollspinus=               0 on 98 SE / ME    for a completion right
                                                    after a request)
+  StorIntWatchdog         -     1                  1 = poll for the rest of
+  storintwatchdog=                                 the start once interrupts
+                                                   stop arriving, 0 = never
   StorGoneMs              ms    5000               1-600000: how long held
   storgonems=                                      requests wait for proof
                                                    after the drive is gone;

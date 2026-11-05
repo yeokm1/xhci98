@@ -371,6 +371,12 @@ Scope note (not part of the GNU General Public License text above)
 The licence above covers the copyrightable contributions of this project's
 authors. It does not, and cannot, grant any right in third-party material.
 
+This project's documentation - every Markdown (.md) file tracked outside
+src/stor98/, README.md among them - is licensed under the Creative Commons
+Attribution 4.0 International License (CC BY 4.0) instead of the licence
+above. LICENSE-docs.md gives the scope and its exclusions, and the
+third-party material described next keeps its own terms wherever it appears.
+
 Some third-party material is unavoidably present in tracked files and keeps its
 own terms: short verbatim quotations from the xHCI and USB specifications,
 quoted for identification where a rule's exact wording matters; interface

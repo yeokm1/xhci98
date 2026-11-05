@@ -6,8 +6,12 @@
  * xHCI controller whose register BAR lies above 4 GB.
  *
  * Sys_Critical_Init: the step (pfw_scan.c's PfwRun), interrupts disabled,
- * no VMM service. Device_Init: its result written once to the registry
- * (section 6). Every other message: nothing. The VxD returns success to
+ * then the interrupt-line pass of section 12.10 (task 46.11: PfwLines),
+ * its switch XhciPfwNhiLine read first with VMM's _RegOpenKey,
+ * _RegQueryValueEx and _RegCloseKey, the one VMM service this message
+ * calls. Device_Init: its result written once to the registry (section 6).
+ * The interrupt-line pass's part of the log, XhciPfwLines and
+ * XhciPfwLineSwitch, is written there too. Every other message: nothing. The VxD returns success to
  * VMM in every case (section 5.1). No file-scope static anywhere (the 98
  * DDK's LINK 5.12 mislinks Watcom's static-symbol records, design record
  * 30 section 6.1); the data lives in pfw_data.c.
@@ -33,6 +37,15 @@ PFW_U32 PfwRegSetValueEx(PFW_U32 hkey, const char *name, PFW_U32 reserved,
 
 PFW_U32 PfwRegCloseKey(PFW_U32 hkey);
 #pragma aux PfwRegCloseKey = 0xcd 0x20 0x49 0x01 0x01 0x00 \
+        parm caller [] value [eax] modify [eax ecx edx];
+
+PFW_U32 PfwRegOpenKey(PFW_U32 hkey, const char *sub, PFW_U32 *result);
+#pragma aux PfwRegOpenKey = 0xcd 0x20 0x48 0x01 0x01 0x00 \
+        parm caller [] value [eax] modify [eax ecx edx];
+
+PFW_U32 PfwRegQueryValueEx(PFW_U32 hkey, const char *name, PFW_U32 *reserved,
+                           PFW_U32 *type, void *data, PFW_U32 *bytes);
+#pragma aux PfwRegQueryValueEx = 0xcd 0x20 0x51 0x01 0x01 0x00 \
         parm caller [] value [eax] modify [eax ecx edx];
 
 #ifdef PFW_DEBUGCON
@@ -94,6 +107,16 @@ void PfwTrace(void)
     }
     PfwLine("closed/refused/parked", PfwRes.Closed, PfwRes.Refused,
             PfwRes.Parked);
+    PfwLine("switch open/query/type", PfwRes.Switch.OpenRc,
+            PfwRes.Switch.QueryRc, PfwRes.Switch.Type);
+    PfwLine("switch length/raw/setting", PfwRes.Switch.Length,
+            PfwRes.Switch.Raw, PfwRes.Switch.Setting);
+    for (i = 0; i < PfwRes.NLines; i++) {
+        PfwLine("line bus/devfn/role", PfwRes.Lines[i].Bus,
+                PfwRes.Lines[i].DevFn, PfwRes.Lines[i].Role);
+        PfwLine(" line outcome/before/after", PfwRes.Lines[i].Outcome,
+                PfwRes.Lines[i].Before, PfwRes.Lines[i].After);
+    }
     PfwLine("across/barsinside/xhcihigh", PfwRes.Across, PfwRes.BarsInside,
             PfwRes.XhciHigh);
 }
@@ -155,6 +178,9 @@ void PfwLog(void)
               PfwRes.NBars * sizeof(PFW_BAR_REC));
     PfwBinary(key, "XhciPfwXhci", PfwRes.Xhci,
               PfwRes.NXhci * sizeof(PFW_XHCI_REC));
+    PfwBinary(key, "XhciPfwLines", PfwRes.Lines,
+              PfwRes.NLines * sizeof(PFW_LINE_REC));
+    PfwBinary(key, "XhciPfwLineSwitch", &PfwRes.Switch, sizeof(PFW_SWITCH));
     for (n = 0; PfwStamp[n] != 0; n++) {
         ;
     }
@@ -167,6 +193,40 @@ void PfwLog(void)
     PFW_LINE("log rc/result/closed", PfwLogRc, PfwRes.Result, PfwRes.Closed);
 }
 
+/* Record 32 section 12.10 step 1: XhciPfwNhiLine from the VxD's own key,
+ * every result code kept for the log; PfwSwitchSetting decides. */
+void PfwReadSwitch(void)
+{
+    PFW_U32 key;
+    PFW_U32 type;
+    PFW_U32 bytes;
+    PFW_U32 raw;
+    PFW_U32 rc;
+
+    key = 0;
+    type = 0;
+    bytes = 4;
+    raw = 0;
+    rc = PfwRegOpenKey(PFW_HKEY_LOCAL_MACHINE,
+                       "System\\CurrentControlSet\\Services\\VxD\\XHCIPFW",
+                       &key);
+    PfwRes.Switch.OpenRc = rc;
+    if (rc == 0) {
+        /* The reserved argument NULL, as the DDK's own callers pass it. */
+        PfwRes.Switch.QueryRc = PfwRegQueryValueEx(key, "XhciPfwNhiLine",
+                                                   0, &type, &raw, &bytes);
+        PfwRegCloseKey(key);
+        PfwRes.Switch.Type = type;
+        PfwRes.Switch.Length = bytes;
+        PfwRes.Switch.Raw = raw;
+    }
+    PfwRes.Switch.Setting = PfwSwitchSetting(PfwRes.Switch.OpenRc,
+                                             PfwRes.Switch.QueryRc,
+                                             PfwRes.Switch.Type,
+                                             PfwRes.Switch.Length,
+                                             PfwRes.Switch.Raw);
+}
+
 /* VMM passes the message in EAX; the C result 0 is success. */
 int PfwCtrl(PFW_U32 msg);
 #pragma aux PfwCtrl parm [eax] value [eax];
@@ -175,6 +235,8 @@ int PfwCtrl(PFW_U32 msg)
     if (msg == PFW_SYS_CRITICAL_INIT) {
         PFW_LINE("sys_critical_init order", PFW_INIT_ORDER, 0, 0);
         PfwRun(&PfwRes);
+        PfwReadSwitch();
+        PfwLines(&PfwRes);
         PFW_TRACE();
     } else if (msg == PFW_DEVICE_INIT) {
         PFW_LINE("device_init", 0, 0, 0);

@@ -104,7 +104,7 @@ BEGIN
     LTEXT           "", IDC_C_TB_T, 20, 76, 272, 24
     AUTOCHECKBOX    "", IDC_C_TRAY, 8, 154, 284, 10, WS_TABSTOP
     AUTOCHECKBOX    "", IDC_C_FAST, 20, 165, 272, 10, WS_TABSTOP
-    AUTOCHECKBOX    "Replace the stored build of this package's drivers",
+    AUTOCHECKBOX    "Replace the driver files Windows has stored for this package",
                     IDC_C_RESTAGE, 8, 177, 284, 10, WS_TABSTOP
     PUSHBUTTON      "&Settings...", IDC_C_SETTINGS, 8, 189, 70, 14
     PUSHBUTTON      "&Change folder...", IDC_C_FOLDER, 84, 189, 70, 14
@@ -138,6 +138,22 @@ BEGIN
     AUTOCHECKBOX    "", IDC_T_NET, 8, 180, 284, 10, WS_GROUP | WS_TABSTOP |
                     NOT WS_VISIBLE
     LTEXT           "", IDC_T_NET_T, 20, 191, 272, 16, NOT WS_VISIBLE
+    /* Record 26 section 5.4.2 (task 46.7): the page's own settings, at
+     * its foot as the Components page's are; tbt_layout places it. */
+    PUSHBUTTON      "&Settings...", IDC_T_SETTINGS, 8, 194, 70, 14,
+                    WS_GROUP | WS_TABSTOP
+END
+
+/* Record 32 section 12.8.15.12: on 2000 and 32-bit XP the ASM4242
+ * board's identity read at the Thunderbolt and USB4 page's Next, a
+ * countdown with Skip. */
+IDD_BOARD DIALOG 0, 0, 200, 52
+STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION
+CAPTION "xHCI98 Setup"
+FONT 8, "MS Sans Serif"
+BEGIN
+    LTEXT           "", IDC_B_TEXT, 8, 10, 184, 10
+    PUSHBUTTON      "&Skip", IDCANCEL, 142, 30, 50, 14, WS_TABSTOP
 END
 
 /* Record 26 section 5.10 (task 45.66): Help on every page, a modal
@@ -158,7 +174,7 @@ END
 IDD_FOLDER DIALOG 0, 0, 300, 92
 STYLE DS_SETFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION |
       WS_SYSMENU
-CAPTION "The install folder"
+CAPTION "Install folder"
 FONT 8, "MS Sans Serif"
 BEGIN
     LTEXT           "", IDC_C_DIR_L, 8, 6, 284, 10
@@ -181,7 +197,7 @@ BEGIN
     AUTOCHECKBOX    "", 1095, 8, 63, 284, 10, WS_TABSTOP
     LTEXT           "", 1096, 20, 73, 272, 34
     LTEXT           "", 1099, 8, 107, 284, 16
-    LTEXT           "Let Windows choose these drivers automatically for matching devices:",
+    LTEXT           "Stage these drivers so Windows installs them automatically:",
                     IDC_O_HEAD, 8, 124, 284, 10
     LTEXT           "", IDC_O_AREA, 8, 134, 284, 42, NOT WS_VISIBLE
     EDITTEXT        IDC_O_DETAIL, 8, 178, 284, 29, ES_MULTILINE | ES_READONLY |

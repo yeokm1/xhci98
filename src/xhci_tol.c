@@ -170,6 +170,29 @@ ULONG XhciTolHaltCandidate(ULONG tolerance, ULONG code, ULONG isoch,
     }
 }
 
+ULONG XhciTolStreamHaltDrain(ULONG code, ULONG eventData)
+{
+    if (eventData) {
+        return 0;
+    }
+    switch (code) {
+    case XHCI_CC_STALL:
+    case XHCI_CC_USB_TRANSACTION_ERROR:
+    case XHCI_CC_BABBLE:
+    case XHCI_CC_SPLIT_TRANSACTION:
+    /* A device's ERDY or Prime Pipe for a stream the host holds no ring
+     * for (xHCI 4.12.2.1): no TD ran, and Linux recovers the endpoint for
+     * both (xhci-ring.c, handle_transferless_tx_event). A user's FL1100
+     * gave three on a UAS status pipe that nothing recovered (2026-11-05,
+     * issue 24). */
+    case XHCI_CC_INVALID_STREAM_ID:
+    case XHCI_CC_INVALID_STREAM_TYPE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 ULONG XhciTolHaltConfirmed(ULONG epState)
 {
     return (epState == XHCI_EP_STATE_HALTED ||

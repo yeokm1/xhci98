@@ -54,6 +54,8 @@
 #include "tr_log.h"
 #include "tr_pci.h"
 #include "tr_diag.h"
+#include "tr_acpi.h"
+#include "../src/xhci_acpi.h"
 #include "tr_red.h"
 #include "tr_popw.h"
 #include "tr_res.h"
@@ -61,6 +63,7 @@
 
 static int report_snapshots(HANDLE f);
 static void save_snapshot_dialog(void);
+static void save_acpi_dialog(void);
 
 #define XHCITR_VERSION XHCI_VER_STR
 
@@ -3327,6 +3330,32 @@ static void details_nhi(TR_TEXT *t, int k)
         tr_printf(t, " (reason %lu)", (unsigned long)inst_get32(R, CM_ST_O_INERT));
     }
     tr_put(t, "\n");
+    if ((inst_get32(R, CM_ST_O_FLAGS) & CM_ST_F_HO_UNKNOWN) != 0) {
+        /* Record 32 section 12.8.15.12: an ASM4242 board no profile knows,
+         * left at XhciCmAsm4242Reads 0. */
+        tr_put(t, "  Handover not sent: this board is not recognised. To try "
+                  "it, set the\n  Thunderbolt setting for unknown ASM4242 "
+                  "boards to yes.\n");
+    }
+    if ((inst_get32(R, CM_ST_O_FLAGS) & CM_ST_F_HO_NOROUTE) != 0) {
+        /* Record 32 section 12.8.15.15: the 32-bit driver's routines come
+         * through the xHCI98 USB driver's helper. */
+        tr_put(t, "  Handover not sent: this needs the xHCI98 USB driver on "
+                  "one of this\n  computer's controllers.\n");
+    }
+    if ((inst_get32(R, CM_ST_O_FLAGS) & CM_ST_F_HO_EXPIRED) != 0) {
+        /* Record 32 section 12.8.15.16: the start's wait ended at its
+         * bound. */
+        tr_put(t, "  Handover not sent: Windows took too long to start. "
+                  "Restart Windows to\n  try again.\n");
+    }
+    if ((inst_get32(R, CM_ST_O_FLAGS) & CM_ST_F_HO_ECAMOFF) != 0) {
+        /* Record 32 section 12.8.15.18: a known board on 2000, XP or XP
+         * x64, whose mailbox only ECAM reaches, left at
+         * XhciCmAsm4242Reads 0. */
+        tr_put(t, "  Handover not sent: on this Windows it needs the "
+                  "firmware reads setting\n  set to yes.\n");
+    }
     if (inst_get32(R, CM_ST_O_SECURITY) != CM_ST_UNKNOWN) {
         tr_printf(t, "  Security level:      %lu\n",
                   (unsigned long)inst_get32(R, CM_ST_O_SECURITY));
@@ -5978,9 +6007,8 @@ static int ej_run(const EJREQ *q, char *msg, size_t cap, int *rights)
         if (notClean) {
             tr_printf(&t, "%s\n", inst_ej_not_clean_text());
         }
-        tr_put(&t, "Until you unplug it, Device Manager's Refresh, or the "
-                   "Thunderbolt driver looking at the port again, can start it "
-                   "again.\n");
+        /* No "until you unplug it ..." line (owner, 2026-11-04): the
+         * unplug line below says it is safe to disconnect, and only that. */
     }
     if (tunnelNote != NULL) {
         tr_printf(&t, "%s\n", tunnelNote);
@@ -8294,6 +8322,9 @@ static int command(HWND w, UINT id)
     case IDM_SNAPSHOT:
         save_snapshot_dialog();
         return 1;
+    case IDM_ACPI:
+        save_acpi_dialog();
+        return 1;
     case IDM_EXIT:
         quit_all();
         return 1;
@@ -9305,7 +9336,7 @@ static void say(const char *text, int warn)
     if (out != NULL && out != INVALID_HANDLE_VALUE &&
         GetFileType(out) != FILE_TYPE_UNKNOWN) {
         /* Console text: at most 79 columns (record 25 section 6.5). */
-        static char wrapped[8192];
+        static char wrapped[16384];
         tr_wrap(text, wrapped, sizeof(wrapped), 79);
         WriteFile(out, wrapped, (DWORD)strlen(wrapped), &w, NULL);
         WriteFile(out, "\r\n", 2, &w, NULL);
@@ -9384,6 +9415,26 @@ static size_t snap_read_tail(const char *path, char *buf, size_t cap)
     }
     CloseHandle(f);
     return strlen(buf);
+}
+
+/* The first cap - 1 bytes of a file, terminated: the head of /snapshot's
+ * output, where its "files named" line is (record 25 section 15 item 8,
+ * revision 25). */
+static void snap_read_head(const char *path, char *buf, size_t cap)
+{
+    HANDLE f;
+    DWORD got = 0;
+
+    buf[0] = '\0';
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return;
+    }
+    if (ReadFile(f, buf, (DWORD)(cap - 1), &got, NULL)) {
+        buf[got] = '\0';
+    }
+    CloseHandle(f);
 }
 
 /* A temporary file's path in %TEMP%, made empty. */
@@ -9784,17 +9835,20 @@ static int report_snapshots(HANDLE f)
 }
 
 /* File > Save Snapshot...: /snapshot in a folder the user picks, for the
- * selected xhci98 controller (else the first), its text in a message box. */
+ * first xhci98 controller, and a short message of where its files went
+ * (record 25 section 15 item 8, revision 25: the engine's whole text in a
+ * message box was taller than a 640 by 480 screen). */
 static void save_snapshot_dialog(void)
 {
-    static char text[6144];
+    char head[1024];
+    char name[16];
+    char box[MAX_PATH + 400];
     BROWSEINFOA bi;
     LPITEMIDLIST pidl;
     IMalloc *m;
     char dir[MAX_PATH];
     char out[MAX_PATH];
     char args[64];
-    char *box;
     HCURSOR old;
     int hcd = -1;
     int rc;
@@ -9814,7 +9868,7 @@ static void save_snapshot_dialog(void)
     memset(&bi, 0, sizeof(bi));
     bi.hwndOwner = hMain;
     bi.pszDisplayName = dir;
-    bi.lpszTitle = "Save the snapshot (a .DEV, .TXT, .BIN and .PSC) in:";
+    bi.lpszTitle = "Save the snapshot in:";
     bi.ulFlags = BIF_RETURNONLYFSDIRS;
     pidl = SHBrowseForFolderA(&bi);
     if (pidl == NULL) {
@@ -9833,25 +9887,650 @@ static void save_snapshot_dialog(void)
     old = SetCursor(LoadCursor(NULL, IDC_WAIT));
     rc = snap_child(args, dir, out, 120000);
     SetCursor(old);
-    text[0] = '\0';
+    head[0] = '\0';
     if (out[0] != '\0') {
-        snap_read_tail(out, text, sizeof(text));
+        snap_read_head(out, head, sizeof(head));
         DeleteFileA(out);
     }
-    box = (char *)malloc(strlen(text) + MAX_PATH + 96);
-    if (box == NULL) {
-        return;
-    }
-    if (rc == -1) {
-        tr_sprintf(box, strlen(text) + MAX_PATH + 96,
-                   "The snapshot did not run, or did not end within two "
-                   "minutes.\r\n%s", text);
-    } else {
-        sprintf(box, "%s\r\n(The files are in %s.)", text, dir);
-    }
+    tr_snap_saved(rc, dir, tr_snap_named(head, name, sizeof(name)) ? name :
+                                                                     NULL,
+                  head, box, sizeof(box));
     MessageBoxA(hMain, box, "xHCI98 USB Tree - snapshot",
                 MB_OK | (rc != 0 ? MB_ICONWARNING : MB_ICONINFORMATION));
-    free(box);
+}
+
+/* ======================================================================== */
+/* The firmware tables (task 46.21; record 25 section 21)                    */
+/* ======================================================================== */
+
+typedef UINT (WINAPI *PFN_TRENUMFW)(DWORD, PVOID, DWORD);
+typedef UINT (WINAPI *PFN_TRGETFW)(DWORD, DWORD, PVOID, DWORD);
+
+#define ACPI_PROVIDER       0x41435049UL    /* 'ACPI' */
+#define ACPI_DSDT_ID        0x54445344UL    /* "DSDT" as its bytes */
+#define ACPI_XSDT_ID        0x54445358UL    /* "XSDT" */
+#define ACPI_RSDT_ID        0x54445352UL    /* "RSDT" */
+#define ACPI_NT_IDS         256
+#define ACPI_NT_TABLE_MAX   0x100000UL
+#define ACPI_NT_ALL_MAX     0x800000UL
+#define ACPI_REG_STORE      0x400000UL
+
+/* What a gathering holds: the tables (pointing into bufs), and the
+ * buffers to free. */
+typedef struct _ACPI_SET {
+    TR_ACPI A;
+    unsigned char *Buf[TR_ACPI_MAX + 1];
+    int Bufs;
+} ACPI_SET;
+
+static void acpi_free(ACPI_SET *s)
+{
+    int i;
+
+    for (i = 0; i < s->Bufs; i++) {
+        free(s->Buf[i]);
+    }
+    s->Bufs = 0;
+}
+
+/* NT: one table by id, its size asked first; NULL when not given. */
+static unsigned char *acpi_nt_one(PFN_TRGETFW get, DWORD id, TR_U32 *bytes)
+{
+    unsigned char *b;
+    UINT n;
+    UINT m;
+
+    *bytes = 0;
+    n = get(ACPI_PROVIDER, id, NULL, 0);
+    if (n < 4 || n > ACPI_NT_TABLE_MAX) {
+        return NULL;
+    }
+    b = (unsigned char *)malloc(n);
+    if (b == NULL) {
+        return NULL;
+    }
+    m = get(ACPI_PROVIDER, id, b, n);
+    if (m != n) {
+        free(b);
+        return NULL;
+    }
+    *bytes = (TR_U32)n;
+    return b;
+}
+
+/* NT with the interface: the list, each distinct id once, DSDT by name
+ * when the list lacks it. Returns TR_ACPI_M_SAVED with tables, or the
+ * message kind that says why not. */
+static int acpi_nt(ACPI_SET *s)
+{
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    PFN_TRENUMFW en;
+    PFN_TRGETFW get;
+    DWORD ids[ACPI_NT_IDS];
+    unsigned char *b;
+    TR_U32 bytes;
+    TR_U32 all = 0;
+    UINT n;
+    UINT m;
+    int count;
+    int listed;
+    int dsdt = 0;
+    int i;
+    int j;
+
+    en = k32 != NULL ? (PFN_TRENUMFW)GetProcAddress(k32,
+                                                    "EnumSystemFirmwareTables")
+                     : NULL;
+    get = k32 != NULL ? (PFN_TRGETFW)GetProcAddress(k32,
+                                                    "GetSystemFirmwareTable")
+                      : NULL;
+    if (en == NULL || get == NULL) {
+        return TR_ACPI_M_NO_API;
+    }
+    s->A.Source = TR_ACPI_SRC_NT;
+    /* The list whole or not at all: a size past the bound, or a second
+     * answer that is not a whole list within the first's size, is no
+     * list (nothing saved, not the DSDT alone). */
+    n = en(ACPI_PROVIDER, NULL, 0);
+    if (n < sizeof(DWORD) || n > sizeof(ids) || (n % sizeof(DWORD)) != 0) {
+        return TR_ACPI_M_NT_NONE;
+    }
+    m = en(ACPI_PROVIDER, ids, n);
+    if (m < sizeof(DWORD) || m > n || (m % sizeof(DWORD)) != 0) {
+        return TR_ACPI_M_NT_NONE;
+    }
+    count = (int)(m / sizeof(DWORD));
+    for (i = 0; i < count; i++) {
+        for (j = 0; j < i && ids[j] != ids[i]; j++) {
+        }
+        if (j < i) {
+            continue;       /* asked at its first */
+        }
+        listed = 0;
+        for (j = i; j < count; j++) {
+            if (ids[j] == ids[i]) {
+                listed++;
+            }
+        }
+        if (ids[i] == ACPI_DSDT_ID) {
+            dsdt = 1;
+        }
+        b = acpi_nt_one(get, ids[i], &bytes);
+        if (b == NULL || bytes > ACPI_NT_ALL_MAX - all ||
+            s->Bufs >= TR_ACPI_MAX || !tr_acpi_add(&s->A, b, bytes, listed)) {
+            free(b);
+            continue;
+        }
+        all += bytes;
+        s->Buf[s->Bufs++] = b;
+    }
+    if (!dsdt) {
+        b = acpi_nt_one(get, ACPI_DSDT_ID, &bytes);
+        if (b != NULL && bytes <= ACPI_NT_ALL_MAX - all &&
+            s->Bufs < TR_ACPI_MAX && tr_acpi_add(&s->A, b, bytes, 1)) {
+            s->Buf[s->Bufs++] = b;
+            s->A.DsdtAsked = 1;
+            all += bytes;
+        } else {
+            free(b);
+        }
+    }
+    /* The root table by name, which the list does not name: the XSDT,
+     * else the RSDT; the first that comes is saved. */
+    for (i = 0; i < count && ids[i] != ACPI_XSDT_ID && ids[i] != ACPI_RSDT_ID;
+         i++) {
+    }
+    if (i == count) {
+        b = acpi_nt_one(get, ACPI_XSDT_ID, &bytes);
+        if (b == NULL) {
+            b = acpi_nt_one(get, ACPI_RSDT_ID, &bytes);
+        }
+        if (b != NULL && bytes <= ACPI_NT_ALL_MAX - all &&
+            s->Bufs < TR_ACPI_MAX && tr_acpi_add(&s->A, b, bytes, 1)) {
+            s->Buf[s->Bufs++] = b;
+            s->A.RootAsked = 1;
+        } else {
+            free(b);
+        }
+    }
+    return s->A.Count != 0 ? TR_ACPI_M_SAVED : TR_ACPI_M_NT_NONE;
+}
+
+/* 98 SE and ME: the body of NHI k's query device, part by part, its first
+ * answer of the epoch the tree's query answer had. Returns 1 with the
+ * tables in s, else 0 with *state the reason (CM_QA_S_*, 0 not served,
+ * -1 an answer not read). */
+static int acpi_door(int k, ACPI_SET *s, long *state)
+{
+    unsigned char *part;
+    unsigned char *body = NULL;
+    TR_QAHDR first;
+    TR_QAHDR h;
+    DWORD got;
+    DWORD at;
+    HANDLE dev;
+    int ok = 0;
+
+    *state = -1;
+    part = (unsigned char *)malloc(CM_QA_ASK_BYTES);
+    dev = open_device(nhi[k].QName);
+    if (part == NULL || dev == INVALID_HANDLE_VALUE) {
+        goto done;
+    }
+    at = 0;
+    got = 0;
+    if (!DeviceIoControl(dev, CM_QA_IOCTL, &at, sizeof(at), part,
+                         CM_QA_ASK_BYTES, &got, NULL)) {
+        if (GetLastError() == ERROR_INVALID_FUNCTION ||
+            GetLastError() == ERROR_NOT_SUPPORTED) {
+            *state = 0;
+        }
+        goto done;
+    }
+    if (got > CM_QA_ASK_BYTES || !tr_qa_header(part, got, &first) ||
+        first.EpochLo != nhi[k].Q.EpochLo ||
+        first.EpochHi != nhi[k].Q.EpochHi || first.PartAt != 0) {
+        goto done;
+    }
+    s->A.State = first.State;
+    s->A.Outcome = first.Outcome;
+    s->A.Tier = first.Tier;
+    s->A.Flags = first.Flags;
+    if (first.State != CM_QA_S_KEPT || first.BodyBytes == 0) {
+        *state = (long)first.State;
+        goto done;
+    }
+    body = (unsigned char *)malloc(first.BodyBytes);
+    if (body == NULL) {
+        goto done;
+    }
+    memcpy(body, part + CM_QA_HDR_BYTES, first.PartBytes);
+    at = first.PartBytes;
+    while (at < first.BodyBytes) {
+        DWORD from = at;
+        got = 0;
+        if (!DeviceIoControl(dev, CM_QA_IOCTL, &from, sizeof(from), part,
+                             CM_QA_ASK_BYTES, &got, NULL) ||
+            got > CM_QA_ASK_BYTES || !tr_qa_header(part, got, &h) ||
+            !tr_qa_same(&first, &h, at) || h.PartBytes == 0) {
+            goto done;
+        }
+        memcpy(body + at, part + CM_QA_HDR_BYTES, h.PartBytes);
+        at += h.PartBytes;
+    }
+    s->A.Source = TR_ACPI_SRC_CM;
+    if (!tr_qa_body(body, first.BodyBytes, first.Count, &s->A)) {
+        goto done;
+    }
+    s->Buf[s->Bufs++] = body;
+    body = NULL;
+    ok = 1;
+done:
+    if (dev != INVALID_HANDLE_VALUE) {
+        CloseHandle(dev);
+    }
+    free(part);
+    free(body);
+    return ok;
+}
+
+/* 98 SE and ME: xhci98.sys's full tables (record 13 section 8.13), from
+ * controller c, part by part, released on every way out. Returns 1 with
+ * the set in s, else 0 with *state the reason (XHA_S_*, 0 not served, -1
+ * an answer not read). */
+static int acpi_xha(int c, ACPI_SET *s, long *state)
+{
+    unsigned char *part;
+    unsigned char *body = NULL;
+    TR_QAHDR first;
+    TR_QAHDR h;
+    DWORD in[2];
+    DWORD got;
+    DWORD at;
+    HANDLE dev;
+    int asked = 0;
+    int ok = 0;
+
+    *state = -1;
+    part = (unsigned char *)malloc(XHA_ASK_BYTES);
+    dev = open_device(uc[c].Path);
+    if (part == NULL || dev == INVALID_HANDLE_VALUE) {
+        goto done;
+    }
+    in[0] = 0;
+    in[1] = XHA_IN_READ;
+    got = 0;
+    asked = 1;
+    if (!DeviceIoControl(dev, XHA_IOCTL, in, sizeof(in), part, XHA_ASK_BYTES,
+                         &got, NULL)) {
+        if (GetLastError() == ERROR_INVALID_FUNCTION ||
+            GetLastError() == ERROR_NOT_SUPPORTED) {
+            *state = 0;
+            asked = 0;
+        }
+        goto done;
+    }
+    if (got > XHA_ASK_BYTES || !tr_xha_header(part, got, &first) ||
+        first.PartAt != 0) {
+        goto done;
+    }
+    if (first.State != XHA_S_READ) {
+        *state = (long)first.State;
+        goto done;
+    }
+    if ((first.Flags & XHA_F_PAST) != 0 || first.BodyBytes == 0) {
+        goto done;          /* read, and nothing: not an answer to use */
+    }
+    body = (unsigned char *)malloc(first.BodyBytes);
+    if (body == NULL) {
+        goto done;
+    }
+    memcpy(body, part + XHA_HDR_BYTES, first.PartBytes);
+    at = first.PartBytes;
+    while (at < first.BodyBytes) {
+        in[0] = at;
+        in[1] = XHA_IN_READ;
+        got = 0;
+        if (!DeviceIoControl(dev, XHA_IOCTL, in, sizeof(in), part,
+                             XHA_ASK_BYTES, &got, NULL) ||
+            got > XHA_ASK_BYTES || !tr_xha_header(part, got, &h) ||
+            !tr_qa_same(&first, &h, at) || h.PartBytes == 0) {
+            goto done;
+        }
+        memcpy(body + at, part + XHA_HDR_BYTES, h.PartBytes);
+        at += h.PartBytes;
+    }
+    if (!tr_xha_body(body, first.BodyBytes, first.Count, &s->A)) {
+        goto done;
+    }
+    s->A.Source = TR_ACPI_SRC_XHA;
+    s->A.Flags = first.Flags;
+    s->A.State = first.State;
+    s->Buf[s->Bufs++] = body;
+    body = NULL;
+    ok = 1;
+done:
+    if (dev != INVALID_HANDLE_VALUE) {
+        if (asked) {
+            /* The set let go; harmless when it already went with its last
+             * part. */
+            in[0] = 0;
+            in[1] = XHA_IN_RELEASE;
+            got = 0;
+            (void)DeviceIoControl(dev, XHA_IOCTL, in, sizeof(in), part,
+                                  XHA_ASK_BYTES, &got, NULL);
+        }
+        CloseHandle(dev);
+    }
+    free(part);
+    free(body);
+    return ok;
+}
+
+/* ---- 2000 and 32-bit XP: the registry's copies (record 25 item 9) ------ */
+
+static int acpi_reg_subkey(void *ctx, const char *path, int index, char *name,
+                           size_t cap)
+{
+    HKEY k;
+    DWORD n = (DWORD)cap;
+    FILETIME ft;
+    LONG r;
+
+    (void)ctx;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegEnumKeyExA(k, (DWORD)index, name, &n, NULL, NULL, NULL, &ft);
+    RegCloseKey(k);
+    return r == ERROR_SUCCESS;
+}
+
+static int acpi_reg_value(void *ctx, const char *path, const char *name,
+                          unsigned char *buf, TR_U32 cap, TR_U32 *bytes,
+                          TR_U32 *type)
+{
+    HKEY k;
+    DWORD n = (DWORD)cap;
+    DWORD t = 0;
+    LONG r;
+
+    (void)ctx;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &k) !=
+        ERROR_SUCCESS) {
+        return 0;
+    }
+    r = RegQueryValueExA(k, name, NULL, &t, buf, &n);
+    RegCloseKey(k);
+    if (r != ERROR_SUCCESS) {
+        return 0;
+    }
+    *bytes = (TR_U32)n;
+    *type = (TR_U32)t;
+    return 1;
+}
+
+static int acpi_reg(ACPI_SET *s)
+{
+    TR_REGOPS ops;
+    unsigned char *store;
+
+    store = (unsigned char *)malloc(ACPI_REG_STORE);
+    if (store == NULL) {
+        return TR_ACPI_M_NO_API;
+    }
+    ops.Subkey = acpi_reg_subkey;
+    ops.Value = acpi_reg_value;
+    ops.Ctx = NULL;
+    if (tr_acpi_reg_walk(&ops, &s->A, store, ACPI_REG_STORE) == 0) {
+        free(store);
+        memset(&s->A, 0, sizeof(s->A));
+        return TR_ACPI_M_NO_API;
+    }
+    s->Buf[s->Bufs++] = store;
+    return TR_ACPI_M_SAVED;
+}
+
+/* The tables of this computer into s: the message kind (TR_ACPI_M_SAVED
+ * with tables), *why the driver's reason for TR_ACPI_M_CM_NONE. */
+static int acpi_gather(ACPI_SET *s, const char **why)
+{
+    static ACPI_SET cm;
+    long state;
+    long first = -1;
+    long xs = -2;
+    int xok = 0;
+    int asked = 0;
+    int haveCm = 0;
+    int c;
+    int k;
+    int i;
+
+    memset(&s->A, 0, sizeof(s->A));
+    s->Bufs = 0;
+    *why = NULL;
+    if (envNt) {
+        k = acpi_nt(s);
+        if (k == TR_ACPI_M_NO_API) {
+            k = acpi_reg(s);
+        }
+        return k;
+    }
+    /* xhci98.sys's full set, from the first controller it drives. */
+    for (c = 0; c < ucCount; c++) {
+        if (!uc[c].Ours) {
+            continue;
+        }
+        xok = acpi_xha(c, s, &xs);
+        break;
+    }
+    /* xhcicm.sys's copies. */
+    memset(&cm.A, 0, sizeof(cm.A));
+    cm.Bufs = 0;
+    for (k = 0; k < nhiCount; k++) {
+        if (!nhi[k].HaveQ) {
+            continue;
+        }
+        if (acpi_door(k, &cm, &state)) {
+            haveCm = 1;
+            break;
+        }
+        if (!asked) {
+            first = state;
+        }
+        asked = 1;
+        acpi_free(&cm);
+        memset(&cm.A, 0, sizeof(cm.A));
+    }
+    if (xok) {
+        if (haveCm) {
+            tr_acpi_merge(&s->A, &cm.A);
+            for (i = 0; i < cm.Bufs && s->Bufs < TR_ACPI_MAX; i++) {
+                s->Buf[s->Bufs++] = cm.Buf[i];
+            }
+            cm.Bufs = 0;
+        }
+        return TR_ACPI_M_SAVED;
+    }
+    if (haveCm) {
+        s->A = cm.A;
+        s->A.XhaState = xs;
+        for (i = 0; i < cm.Bufs && s->Bufs < TR_ACPI_MAX; i++) {
+            s->Buf[s->Bufs++] = cm.Buf[i];
+        }
+        cm.Bufs = 0;
+        return TR_ACPI_M_SAVED;
+    }
+    s->A.XhaState = xs;
+    if (xs != -2) {
+        return TR_ACPI_M_XHA_NONE;
+    }
+    if (!asked) {
+        return TR_ACPI_M_NO_98;
+    }
+    *why = tr_qa_why(first);
+    return TR_ACPI_M_CM_NONE;
+}
+
+static int acpi_write_file(const char *path, const unsigned char *b,
+                           TR_U32 n)
+{
+    HANDLE f;
+    DWORD w = 0;
+    int ok;
+
+    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    ok = WriteFile(f, b, (DWORD)n, &w, NULL) && w == (DWORD)n;
+    if (!CloseHandle(f)) {
+        ok = 0;
+    }
+    return ok;
+}
+
+static void acpi_path(char *out, size_t cap, const char *dir,
+                      const char *name)
+{
+    size_t n = strlen(dir);
+
+    if (n > 0 && (dir[n - 1] == '\\' || dir[n - 1] == '/')) {
+        tr_sprintf(out, cap, "%s%s", dir, name);
+    } else {
+        tr_sprintf(out, cap, "%s\\%s", dir, name);
+    }
+}
+
+/* The tables gathered and saved in dir, the message in msg: INST_EXIT_DONE
+ * when written, _REFUSED when there was nothing to save or a name
+ * existed, _FAILED when a write failed. */
+static int acpi_save(const char *dir, char *msg, size_t cap)
+{
+    static ACPI_SET s;
+    static char index[48 * 1024];
+    char path[MAX_PATH + 32];
+    const char *why;
+    TR_TEXT t;
+    int kind;
+    int files;
+    int done = 0;
+    int i;
+
+    kind = acpi_gather(&s, &why);
+    if (kind != TR_ACPI_M_SAVED) {
+        tr_acpi_message(kind, &s.A, dir, NULL, why, 0, 0, msg, cap);
+        acpi_free(&s);
+        return INST_EXIT_REFUSED;
+    }
+    files = tr_acpi_names(&s.A);
+    tr_text_init(&t, index, sizeof(index));
+    tr_acpi_index(&s.A, &t);
+    /* Every name first: a set is never mixed with another. */
+    acpi_path(path, sizeof(path), dir, "TABLES.TXT");
+    if (GetFileAttributesA(path) != (DWORD)0xFFFFFFFFUL) {
+        tr_acpi_message(TR_ACPI_M_EXISTS, &s.A, dir, "TABLES.TXT", NULL, 0,
+                        0, msg, cap);
+        acpi_free(&s);
+        return INST_EXIT_REFUSED;
+    }
+    for (i = 0; i < s.A.Count; i++) {
+        if (s.A.T[i].File[0] == '\0') {
+            continue;
+        }
+        acpi_path(path, sizeof(path), dir, s.A.T[i].File);
+        if (GetFileAttributesA(path) != (DWORD)0xFFFFFFFFUL) {
+            tr_acpi_message(TR_ACPI_M_EXISTS, &s.A, dir, s.A.T[i].File,
+                            NULL, 0, 0, msg, cap);
+            acpi_free(&s);
+            return INST_EXIT_REFUSED;
+        }
+    }
+    for (i = 0; i < s.A.Count; i++) {
+        if (s.A.T[i].File[0] == '\0') {
+            continue;
+        }
+        acpi_path(path, sizeof(path), dir, s.A.T[i].File);
+        if (!acpi_write_file(path, s.A.T[i].Data, s.A.T[i].Bytes)) {
+            tr_acpi_message(TR_ACPI_M_WRITE, &s.A, dir, s.A.T[i].File, NULL,
+                            done, files + 1, msg, cap);
+            acpi_free(&s);
+            return INST_EXIT_FAILED;
+        }
+        done++;
+    }
+    acpi_path(path, sizeof(path), dir, "TABLES.TXT");
+    if (!acpi_write_file(path, (const unsigned char *)index,
+                         (TR_U32)strlen(index))) {
+        tr_acpi_message(TR_ACPI_M_WRITE, &s.A, dir, "TABLES.TXT", NULL, done,
+                        files + 1, msg, cap);
+        acpi_free(&s);
+        return INST_EXIT_FAILED;
+    }
+    tr_acpi_message(TR_ACPI_M_SAVED, &s.A, dir, NULL, NULL, 0, 0, msg, cap);
+    acpi_free(&s);
+    return INST_EXIT_DONE;
+}
+
+/* File > Save Firmware Tables...: the folder, then one short message. */
+static void save_acpi_dialog(void)
+{
+    static char msg[MAX_PATH + 8192];
+    BROWSEINFOA bi;
+    LPITEMIDLIST pidl;
+    IMalloc *m;
+    char dir[MAX_PATH];
+    HCURSOR old;
+    int rc;
+    int i;
+
+    memset(&bi, 0, sizeof(bi));
+    bi.hwndOwner = hMain;
+    bi.pszDisplayName = dir;
+    bi.lpszTitle = "Save the firmware tables in:";
+    bi.ulFlags = BIF_RETURNONLYFSDIRS;
+    pidl = SHBrowseForFolderA(&bi);
+    if (pidl == NULL) {
+        return;
+    }
+    dir[0] = '\0';
+    i = SHGetPathFromIDListA(pidl, dir);
+    if (SHGetMalloc(&m) == NOERROR) {
+        m->lpVtbl->Free(m, pidl);
+        m->lpVtbl->Release(m);
+    }
+    if (!i || dir[0] == '\0') {
+        return;
+    }
+    old = SetCursor(LoadCursor(NULL, IDC_WAIT));
+    rc = acpi_save(dir, msg, sizeof(msg));
+    SetCursor(old);
+    MessageBoxA(hMain, msg, "xHCI98 USB Tree - firmware tables",
+                MB_OK | (rc != INST_EXIT_DONE ? MB_ICONWARNING
+                                              : MB_ICONINFORMATION));
+}
+
+/* XHCITR /acpi <folder>. */
+static int run_acpi(void)
+{
+    static char msg[TR_PATH_CHARS + 8192];
+    int rc;
+
+    /* NT reads nothing but the interface, or on 2000 and 32-bit XP the
+     * registry; 98 SE and ME need the drivers' devices alone: the device
+     * walk, the NHIs and the controllers, no USB scan. */
+    if (!envNt) {
+        if (!walk(&gw)) {
+            gw.Count = 0;
+        }
+        nhi_find(&gw);
+        usb_controllers();
+    }
+    rc = acpi_save(opts.AcpiDir, msg, sizeof(msg));
+    say(msg, rc != INST_EXIT_DONE);
+    return rc;
 }
 
 /* /eject id=<instance id>: the whole transaction once, then exit (record
@@ -10077,6 +10756,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     if (opts.SelfTest) {
         return run_selftest();
     }
+    /* /acpi on NT: the firmware interface and nothing else, no window
+     * state or device read (record 25 section 21 item 1). */
+    if (opts.Acpi && envNt) {
+        return run_acpi();
+    }
     if (opts.Tray) {
         /* The start at login: the user's choice first, before any window,
          * icon or thread (record 25 section 7.4). */
@@ -10099,6 +10783,9 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdLine, int show)
     }
     if (opts.Report) {
         return run_report();
+    }
+    if (opts.Acpi) {
+        return run_acpi();
     }
     if (opts.Eject) {
         return run_eject();

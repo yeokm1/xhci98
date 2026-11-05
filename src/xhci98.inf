@@ -49,7 +49,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/01/2026,3.4.0.0
+DriverVer=11/05/2026,3.4.1.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
@@ -276,6 +276,7 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
 ; device kept across a resume's re-initialization (task 45.23) and across
 ; its SuperSpeed link's recovery (task 45.41): on is each one's default
@@ -387,6 +388,7 @@ HKR,,XhciSilentInstall,0x00010003,0
 HKR,,XhciUsb2HubSpeedFallback,0x00010003,1
 HKR,,XhciAccept096,0x00010003,1
 HKR,,XhciCommandCheck,0x00010003,1
+HKR,,XhciAcpiTables,0x00010003,1
 ; The BOS read at High and Full Speed (design record 13 section 8.4.1), a
 ; device kept across a resume's re-initialization (task 45.23) and across
 ; its SuperSpeed link's recovery (task 45.41): on is each one's default
@@ -505,8 +507,11 @@ StartType=0                         ; SERVICE_BOOT_START
 ErrorControl=1                      ; SERVICE_ERROR_NORMAL
 ServiceBinary=%12%\xhcihlpr.sys
 
+; COPYFLG_NO_VERSION_DIALOG (0x20): a newer helper already in place - from
+; a later package's xhci98.inf or xhcicm.inf, which installs the same
+; service and file on 32-bit NT (design record 18 section 15.15) - is kept.
 [XhciHlpr.CopyFiles]
-xhcihlpr.sys,,xhcihlpr.tmp
+xhcihlpr.sys,,xhcihlpr.tmp,0x00000020
 
 ; The 2.3.x helper's file, deleted at the restart (record 18 section 15.7).
 [XhciMsi.DelFiles]

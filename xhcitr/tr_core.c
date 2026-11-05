@@ -1345,11 +1345,21 @@ TR_U32 tr_profile_of_nhi(TR_U32 nhiId)
         { 0x4D33, TR_PROFILE_USB4 },    { 0x5781, TR_PROFILE_USB4 },
         { 0x5784, TR_PROFILE_USB4 }
     };
+    /* src\cm\cm_vals.c's cmAmdNhi (task 46.23). */
+    static const TR_U32 amd[] = {
+        0x1668, 0x1669, 0x162E, 0x162F, 0x15C4, 0x15C5, 0x151C,
+        0x151D, 0x158D, 0x158E, 0x1120, 0x1121, 0x113B, 0x113C
+    };
     TR_U32 dev = (nhiId >> 16) & 0xFFFFUL;
     size_t i;
 
-    if ((nhiId & 0xFFFFUL) == 0x1022UL && (dev == 0x1668 || dev == 0x1669)) {
-        return TR_PROFILE_USB4;
+    if ((nhiId & 0xFFFFUL) == 0x1022UL) {
+        for (i = 0; i < sizeof(amd) / sizeof(amd[0]); i++) {
+            if (amd[i] == dev) {
+                return TR_PROFILE_USB4;
+            }
+        }
+        return 0;
     }
     if ((nhiId & 0xFFFFUL) != 0x8086UL) {
         return 0;
@@ -2048,6 +2058,16 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
             o->Report = 1;
             tr_copy(o->ReportPath, argv[++i], sizeof(o->ReportPath));
             alone++;
+        } else if (tr_switch(a, "acpi")) {
+            if (i + 1 >= argc || argv[i + 1][0] == '\0' ||
+                strlen(argv[i + 1]) >= TR_PATH_CHARS) {
+                tr_copy(err, "/acpi needs the folder to save the tables in.",
+                        cap);
+                return 1;
+            }
+            o->Acpi = 1;
+            tr_copy(o->AcpiDir, argv[++i], sizeof(o->AcpiDir));
+            alone++;
         } else if (tr_switch(a, "eject")) {
             const char *id;
             if (i + 1 >= argc) {
@@ -2109,8 +2129,8 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
         }
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
-        tr_copy(err, "/eject, /setlevel, /report and /selftest are each used "
-                "alone.", cap);
+        tr_copy(err, "/eject, /setlevel, /report, /acpi and /selftest are each "
+                "used alone.", cap);
         return 1;
     }
     if ((o->Result && !o->Eject && !o->SetLevel) || (o->Confirmed && !o->Eject)) {
@@ -2324,17 +2344,15 @@ void tr_tidy_name(char *s)
 void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
                      const char *const *diskLines, int n)
 {
-    int i;
-
-    if (n > 0) {
-        tr_printf(t, "This stops %s and everything on it:\n", unitName);
-        for (i = 0; i < n; i++) {
-            tr_printf(t, "    %s\n", diskLines[i]);
-        }
-        tr_put(t, "\n");
-    } else {
-        tr_printf(t, "Stop %s?\n\n", label);
-    }
+    /* The unit is named by what the user knows it as (owner, 2026-11-04,
+     * the X870E 98 SE bench: the bridge's name, "PCI standard PCI-to-PCI
+     * bridge", meant nothing): the label, its disks' names and letters
+     * where it has disks (unit_label), else the unit's own name. The
+     * devices that stop are listed below it as before. */
+    (void)unitName;
+    (void)diskLines;
+    (void)n;
+    tr_printf(t, "Stop %s?\n\n", label);
     tr_put(t, "These devices will stop:\n");
 }
 
@@ -4570,6 +4588,77 @@ TR_U32 tr_eject_watch_ms(int kind)
 {
     return kind == TR_EJW_SERVICE ? TR_EJW_OWN_MS + 2UL * TR_EJW_MK_IDLE_MS
                                   : TR_EJW_OWN_MS;
+}
+
+int tr_snap_named(const char *head, char *name, size_t cap)
+{
+    const char *p = strstr(head, "files named ");
+    size_t n = 0;
+
+    if (cap > 0) {
+        name[0] = '\0';
+    }
+    if (p == NULL || cap == 0) {
+        return 0;
+    }
+    p += 12;
+    while (p[n] != '\0' && p[n] != ',' && p[n] != ' ' && p[n] != '\r' &&
+           p[n] != '\n') {
+        if ((unsigned char)p[n] < 0x21 || (unsigned char)p[n] > 0x7E) {
+            return 0;
+        }
+        n++;
+    }
+    if (n == 0 || n > 12 || n >= cap ||
+        (p[n] != ',' && strncmp(p + n, " (the name given)", 17) != 0)) {
+        return 0;
+    }
+    memcpy(name, p, n);
+    name[n] = '\0';
+    return 1;
+}
+
+void tr_snap_saved(int rc, const char *folder, const char *name,
+                   const char *head, char *out, size_t cap)
+{
+    char first[200];
+    const char *p = head != NULL ? head : "";
+    size_t n = 0;
+
+    if (strncmp(p, "XHCITR /snapshot: ", 18) == 0) {
+        p += 18;
+    }
+    while (p[n] != '\0' && p[n] != '\r' && p[n] != '\n' &&
+           n < sizeof(first) - 1) {
+        first[n] = p[n];
+        n++;
+    }
+    first[n] = '\0';
+    if (rc == -1) {
+        tr_sprintf(out, cap, "The snapshot did not run, or did not end "
+                   "within two minutes.");
+    } else if (name == NULL || name[0] == '\0' ||
+               (rc != 0 && rc != 3 && rc != 4 && rc != 5 && rc != 8)) {
+        tr_sprintf(out, cap, "No snapshot was saved in %s.%s%s", folder,
+                   first[0] != '\0' ? "\n" : "", first);
+    } else if (rc == 0) {
+        tr_sprintf(out, cap, "Snapshot saved in %s: %s.DEV, .TXT, .BIN and "
+                   ".PSC.", folder, name);
+    } else if (rc == 3) {
+        tr_sprintf(out, cap, "Snapshot saved in %s as %s, but its .TXT is "
+                   "missing / incomplete. Send the files anyway.", folder,
+                   name);
+    } else if (rc == 4) {
+        tr_sprintf(out, cap, "Snapshot saved in %s: %s.DEV only. No dump was "
+                   "taken; the .DEV says why.", folder, name);
+    } else if (rc == 5) {
+        tr_sprintf(out, cap, "The snapshot in %s is not complete: its device "
+                   "report %s.DEV could not be written.", folder, name);
+    } else {
+        tr_sprintf(out, cap, "The snapshot in %s is not complete: a file "
+                   "named %s was made by something else meanwhile. Run it "
+                   "again.", folder, name);
+    }
 }
 
 const char *tr_eject_open_text(int kind)

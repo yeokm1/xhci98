@@ -60,6 +60,9 @@
 #define STG_FIND_BAR            0x05    // arg: BAR_F_* flags (7:0) | BAR_* reason << 8 | length in 4 KiB (or the command register read back) << 16 (nvme2k.c)
 #define STG_HOLD9X              0x06    // arg: the 9x hold bound used, ms (StorHold9xMs or its default); 9x, every HwFindAdapter
 #define STG_HOLD9X_REFUSED      0x07    // arg: a hold bound outside 1000-10000 ms as read (StorHold9xMs, or hold9x= in a test build); the default stands
+#define STG_FIND_PORT           0x08    // arg: ConfigInfo's bus << 16 | slot (low 16 bits); 9x, every HwFindAdapter (nvme2k.c, PLAN 3.1)
+#define STG_FIND_FIRMWARE       0x0A    // arg: PCISCAN_FW_* | CC low byte << 8 | CSTS low byte << 16 | read << 24; 9x, the found function before anything is written (PLAN 3.1)
+#define STG_FIND_PORT_RANGE     0x09    // arg: the low dword of the port's first access range, 0 for none; 9x
 #define STG_STARTIO             0x10    // arg: STG_SRB_ARG(Srb, state)
 #define STG_SRB_HELD            0x11    // arg: STG_SRB_ARG | TimeOutValue << 24 (low byte); held while not dispatchable
 #define STG_SRB_DISPATCH_HELD   0x12    // arg: held ms << 8 | cdb0
@@ -166,8 +169,25 @@
 #define STG_POLL_PORTIRQ        0x153   // arg: port-supplied BusInterruptLevel (15:0) | BusInterruptVector << 16 (both as the port gave them)
 #define STG_POLL_REPORT         0x154   // arg: result of writing the interrupt report value (0 written, else the OS status low 16 bits) | skipped reason << 16 (1 resumed, 2 dump)
 #define STG_POLL_IDLE           0x155   // arg: timer ticks while polling (15:0) | completions found by HwStartIo (spin included) << 16 (capped); each time a polling adapter goes idle
+#define STG_POLL_WATCH          0x157   // marker; arg: misses of the start (15:0, capped) | claims (23:16, low byte) | state << 24; the missed-interrupt watchdog's latch (PLAN "Missed-interrupt watchdog")
+#define STG_POLL_WATCHCFG       0x158   // arg: the value used | raw value << 4 (capped 0xF) | present << 8 | clamped << 9; every HwFindAdapter (the watchdog's setting)
 #define STG_POLL_ISR            0x156   // arg: HwInterrupt calls while polling (logged at the first call only; then counted)
 
+// Test-only STOR98_TEST_REENTRY (is HwInterrupt entered while HwStartIo or the timer routine runs? xhci98 3.4.1.0), 0x15D
+#define STG_TEST_REENTRY        0x15D   // marker; arg: entries so far (23:0, capped) | which callback was running (1 HwStartIo, 2 the timer, 3 both) << 24; the first entry and every 256th
+// Test-only STOR98_TEST_T0PROBE (the 9x port's RequestTimerCall of 0, xhci98 3.4.1.0), 0x15E-0x15F
+#define STG_TEST_T0PROBE        0x15E   // marker; arg: step (1 a 0 request with no timer pending, 2 the probe's routine called after it, 3 a 1 s request then a 0 request, 4 the probe's routine called after that, 5 probe 1 not called back in 5 s, 6 the probe's routine called otherwise) | state << 8 | ms since the request << 16 (capped; steps 2, 4, 6)
+#define STG_TEST_TIMER_STOPPED  0x15F   // marker; arg: state | calls << 8; the timer routine called in none, stopping or stopped (test builds log it; product builds return silently)
+// Test-only STOR98_TEST_VMMPROBE (the 98 SE faults inside VMM, xhci98 3.4.1.0 task 46.20; src/vmmprobe.h), 0x180-0x188
+#define STG_TEST_VMM_NEST       0x180   // marker; arg: callback entered (0 HwStartIo, 1 timer, 2 HwInterrupt) | set in progress << 4 (1 HwStartIo, 2 timer, 4 HwInterrupt) | IF at entry << 7 | nested entries so far (31:8, capped); the first of each callback and set, then every 256th nested entry
+#define STG_TEST_VMM_IF         0x181   // marker; arg: callback | IF at entry << 4 | set in progress << 8; the first entry of each callback with IF clear and with IF set
+#define STG_TEST_VMM_STACK      0x182   // marker; arg: headroom bytes below ESP to the first page not present (23:0; 0x8000 = none in 32 KiB) | callback << 24 | set in progress << 28; a new least of the callback
+#define STG_TEST_VMM_ARENA      0x183   // marker; arg: what (0 DataBuffer, 1 a fragment) | arena << 2 (0 private, 1 shared, 2 system) | set in progress << 4 | IOR function << 8 (capped 0xFF) | CDB opcode << 16 | KiB of the span << 24 (capped 0xFF); the first of each what and arena, then every 4096th not system
+#define STG_TEST_VMM_COPY       0x184   // marker; arg: the caller-side linear address of a bounce copy that is not in the system arena, made while HwInterrupt or the timer runs (every one)
+#define STG_TEST_VMM_COPY2      0x185   // arg: bytes (23:0) | to the caller << 24 | set in progress << 28; follows each STG_TEST_VMM_COPY
+#define STG_TEST_VMM_TIMER      0x186   // marker; arg: set in progress | cancel (period 0) << 4 | requests of that set and kind so far (31:8, capped); the first of each set and kind, then every 4096th
+#define STG_TEST_VMM_SUM        0x187   // arg: callback | entries with IF set (23:4, in 16s, capped) | entries (31:24, in 64Ki, capped); per callback every 65536 entries of all callbacks
+#define STG_TEST_VMM_MAP        0x188   // marker; arg: STOR98_TEST_VMMMAP | the never-committed page used (31:12); before the deliberate fault inside a VMM service (46.20); 0xF0 | n after it (the service returned)
 // Maximum transfer setting (xfertun.h; PLAN "0.4.0.0 plan", owner decision 2026-10-16), 0x160-0x16F
 #define STG_XFER_TUNABLE        0x160   // arg: limit used, KiB (15:0) | result (XFER_DEFAULT 0, XFER_SET 1, XFER_REFUSED 2) << 16 | resumed << 20 | parsed << 21; every HwFindAdapter
 #define STG_XFER_REFUSED        0x161   // arg: the refused raw value as read (KiB; 0xFFFFFFFF saturated); 0 also when it is not a number
@@ -189,6 +209,13 @@
 #define STOR98_DBGPORT_BASE     0x5A0
 #define STOR98_DBGPORT_SIG      0x42443455  // "U4DB"
 #define STOR98_DEBUGCON_PORT    0xE9
+// STOR98_POSTCODE (with STOR98_DBGPORT, through STOR98_TESTDEF; 9x, real
+// hardware): each stage code's low byte to the POST code port, which a
+// board's two-digit display shows, and nothing to the emulator's ports.
+#define STOR98_POSTCODE_PORT    0x80
+#ifndef STOR98_POSTCODE_MS
+#define STOR98_POSTCODE_MS      250     // each code held this long (ms); 0 none
+#endif
 
 VOID DbgPortInit(VOID);
 VOID DbgStage(IN ULONG Code, IN ULONG Arg);

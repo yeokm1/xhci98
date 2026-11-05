@@ -158,6 +158,9 @@ ULONG CmProfileFor(const CM_IDS *ids);
                                        start would have activated it        */
 #define CM_INERT_BUS_MASTER     12  /* Bus Master could not be set (or its
                                        command register not read)           */
+/* 14: the start's activation deferred for the ASM4242's handover on NT
+ * (record 32 section 12.8.15.16): transient, the thread ends it. */
+#define CM_INERT_HO_DEFER       14
 #define CM_INERT_FORCE_ICM_REFUSED 13 /* XhciCmMode 2 on a host with no ICM
                                        row, or whose selection found no ICM
                                        running: never the software CM     */
@@ -281,6 +284,49 @@ ULONG CmStartDecision(ULONG mode, ULONG profile, ULONG intel, ULONG built);
 #define CM_NOIRQ_START_DEFAULT 1UL
 
 /*
+ * XhciCmAsm4242Handover, REG_DWORD (design record 32 section 12.8, task
+ * 46.12): 1 sends an ASM4242 host the platform's USB4 handover from the
+ * start, before ring 0 - on 98 SE and ME when the firmware's tables and
+ * code are a build read and name the host found (cm_oscos.c), on the NT
+ * targets when the board is a known board's profile (cm_oscnt.c, section
+ * 12.8.15.11) or, with XhciCmAsm4242Reads 1, by the read path; 0 never
+ * sends it, by any route. Read where XhciCmBridgeNumbering is read and
+ * written as it is (each xhcicm.inf install, at this default, which the
+ * INF gate reads from this line); absent reads as the default, any other
+ * value is refused and the default stands.
+ */
+#define CM_PLAT_HANDOVER_DEFAULT 1UL
+
+/*
+ * XhciCmAsm4242Structural, REG_DWORD, every target (design record 32
+ * sections 12.8.6, 12.8.10 and 12.8.15.17, task 46.12): 1 also sends the
+ * handover to firmware that is not a known build but whose five methods
+ * have a known build's canonical form (the same handover code); 0 (the
+ * default) recognises and reports such firmware (the status record's
+ * tier 3) and sends it nothing. A known build is sent the handover
+ * whatever this says; XhciCmAsm4242Handover 0 overrides both. Read and
+ * written as XhciCmAsm4242Handover is, at this default (the INF gate
+ * reads it from this line); absent reads as the default, any other value
+ * is refused and the default stands. On the NT targets it applies to the
+ * read path alone (section 12.8.15.10), so it matters there only with
+ * XhciCmAsm4242Reads 1.
+ */
+#define CM_HO_STRUCTURAL_DEFAULT 0UL
+
+/*
+ * XhciCmAsm4242Reads, REG_DWORD, the NT targets only (design record 32
+ * sections 12.8.15.10 and 12.8.15.12, task 46.12): 1 lets the read path
+ * (B, C or D) read the firmware's tables and data to find an ASM4242
+ * board that is no known board's profile; 0 (the default) reads nothing
+ * and sends nothing to such a board, and says so in the status record
+ * (bit 22). A known board is sent its profile's command whatever this
+ * says. Read and written as XhciCmAsm4242Handover is, by the NT installs
+ * alone; absent reads as the default, any other value is refused and the
+ * default stands. 98 SE and ME neither read nor write it.
+ */
+#define CM_HO_READS_DEFAULT 0UL
+
+/*
  * XhciCmAsmediaPcie7Credits, REG_DWORD (design record 22 section 18.8,
  * task 44.41): a bench experiment. 1 writes 7 credits, IFC 1 and ISE 0
  * into the two protocol-adapter HopID 8 entries of a PCIe tunnel this
@@ -365,6 +411,18 @@ typedef struct _CM_VALUES {
     ULONG BridgeNumberingFound; /* read as a REG_DWORD                      */
     ULONG BridgeNumberingRaw;   /* ... what it read                         */
     ULONG BridgeNumberingRefused; /* ... out of range: the default stood   */
+    ULONG PlatformHandover;     /* XhciCmAsm4242Handover as run with       */
+    ULONG PlatformHandoverFound;
+    ULONG PlatformHandoverRaw;
+    ULONG PlatformHandoverRefused;
+    ULONG HandoverStructural;   /* XhciCmAsm4242Structural as run with     */
+    ULONG HandoverStructuralFound;
+    ULONG HandoverStructuralRaw;
+    ULONG HandoverStructuralRefused;
+    ULONG HandoverReads;        /* XhciCmAsm4242Reads as run with (NT)     */
+    ULONG HandoverReadsFound;
+    ULONG HandoverReadsRaw;
+    ULONG HandoverReadsRefused;
     ULONG NoIrqStart;           /* XhciCmNoIrqStart as run with             */
     ULONG NoIrqStartFound;
     ULONG NoIrqStartRaw;
@@ -437,6 +495,9 @@ VOID CmValuesTakeBridgeReq(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* Take XhciCmRingInterrupt: 0 or 1, anything else refused (0 stands). */
 VOID CmValuesTakeRingIrq(PCM_VALUES v, ULONG found, ULONG raw);
+VOID CmValuesTakePlatformHandover(PCM_VALUES v, ULONG found, ULONG raw);
+VOID CmValuesTakeHandoverStructural(PCM_VALUES v, ULONG found, ULONG raw);
+VOID CmValuesTakeHandoverReads(PCM_VALUES v, ULONG found, ULONG raw);
 
 /* The default and bounds of value `index`, for the INF gate's cross-check
  * and the host suite. Returns 0 for an index out of range. */

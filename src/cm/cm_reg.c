@@ -78,6 +78,9 @@ static const PCWSTR cmValueNames[CM_VAL_COUNT] = {
  * 0, as the NT install paths write it. */
 #define CM_VALUE_BRIDGE_REQ L"XhciCmBridgeReq"
 #define CM_VALUE_RING_IRQ L"XhciCmRingInterrupt"
+#define CM_VALUE_PLAT_HANDOVER L"XhciCmAsm4242Handover"
+#define CM_VALUE_HO_STRUCTURAL L"XhciCmAsm4242Structural"
+#define CM_VALUE_HO_READS      L"XhciCmAsm4242Reads"
 
 typedef struct _CM_TAKE {
     ULONG Seen;                 /* the routine was called with a value    */
@@ -273,9 +276,19 @@ VOID CmReadValues(PCM_NHI nhi)
     HANDLE key;
     CM_TAKE take;
     ULONG i;
+    BOOLEAN admitted;
 
     CmValuesDefault(&nhi->Values);
     nhi->ValuesRead = 1;
+    /* 98 SE and ME away from S0 (task 46.14): no registry access, the
+     * defaults stand (such a start goes no further than inert). */
+    admitted = CmRegEnter(nhi);
+    if (!admitted) {
+        /* Not read: this start activates nothing (CmNhiStartWork). */
+        nhi->ValuesRead = 0;
+        CmLogNote(nhi, "cm.values.deferred", (ULONG)nhi->SystemPower);
+        return;
+    }
     if (!NT_SUCCESS(IoOpenDeviceRegistryKey(nhi->Common.Pdo,
                                             PLUGPLAY_REGKEY_DRIVER, KEY_READ,
                                             &key))) {
@@ -297,6 +310,20 @@ VOID CmReadValues(PCM_NHI nhi)
     CmValuesTakeAsmPcie7(&nhi->Values, take.Found, take.Dword);
     cmQuery(key, CM_VALUE_RING_IRQ, &take, 0);
     CmValuesTakeRingIrq(&nhi->Values, take.Found, take.Dword);
+    /* The platform's USB4 handover's values (record 32 sections 12.8.6,
+     * 12.8.15.10 and 12.8.15.17): the master switch and the structural
+     * tier on every target (on NT the tier applies to the read path
+     * alone); the read path's opt-in on NT alone. */
+    cmQuery(key, CM_VALUE_PLAT_HANDOVER, &take, 0);
+    CmValuesTakePlatformHandover(&nhi->Values, take.Found, take.Dword);
+    cmQuery(key, CM_VALUE_HO_STRUCTURAL, &take, 0);
+    CmValuesTakeHandoverStructural(&nhi->Values, take.Found, take.Dword);
+    if (IoIsWdmVersionAvailable(1, 0x10)) {
+        cmQuery(key, CM_VALUE_HO_READS, &take, 0);
+        CmValuesTakeHandoverReads(&nhi->Values, take.Found, take.Dword);
+    } else {
+        CmValuesTakeHandoverReads(&nhi->Values, 0, 0);
+    }
 #if defined(XHCI_FLAVOUR_QEMU)
     cmQuery(key, L"XhciCmQemuIrqDead", &take, 0);
     nhi->Values.QemuIrqDead = take.Found ? take.Dword : 0;
@@ -304,6 +331,10 @@ VOID CmReadValues(PCM_NHI nhi)
     nhi->QemuFailD0 = take.Found ? take.Dword : 0;
     cmQuery(key, L"XhciCmQemuFailReenum", &take, 0);
     nhi->QemuFailReenum = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuOscNoClear", &take, 0);
+    nhi->QemuOscNoClear = take.Found ? take.Dword : 0;
+    cmQuery(key, L"XhciCmQemuEcamFault", &take, 0);
+    nhi->QemuEcamFault = take.Found ? take.Dword : 0;
 #endif
     cmQuery(key, CM_VALUE_USB4_V2, &take, 0);
     CmValuesTakeUsb4V2(&nhi->Values, take.Found, take.Dword);
@@ -316,4 +347,5 @@ VOID CmReadValues(PCM_NHI nhi)
     if (key != NULL) {
         ZwClose(key);
     }
+    CmRegLeave(nhi);
 }

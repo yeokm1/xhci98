@@ -1,17 +1,19 @@
 <#
 .SYNOPSIS
-Hold Stor98's two INFs to the package's one version and date.
+Hold Stor98's three INFs to the package's one version and date.
 
 .DESCRIPTION
 Since 3.1.0.0 (roadmap-usb4 task 42-A.30, owner 2026-10-19) every INF of the
 package carries the same DriverVer, from src\xhci_version.h: XHCI_DRIVERVER_DATE
 and XHCI_VER_STR. The project's own eight INFs are held to it by check-inf.ps1,
-check-uas-inf.ps1 and check-cm-inf.ps1; this holds Stor98's two,
-src\stor98\inf\stor98-x86.inf and stor98-x64.inf, which the package stages as
-stor98.inf. Each must have exactly one DriverVer line, zero-padded
-MM/DD/YYYY, equal to the header's date and version; its Signature must be
-$Windows NT$ for both. The x86 INF is NT-only since 3.4.0.0 (design record 36
-section 3.3, owner 2026-10-31): 98 SE and ME install from the 9x INF, so it
+check-uas-inf.ps1 and check-cm-inf.ps1; this holds Stor98's three. The two
+NT INFs, src\stor98\inf\stor98-x86.inf and stor98-x64.inf, are staged as
+stor98.inf at the root of the flat x86 and amd64 packages and published as
+nt-x86\stor98\stor98.inf and nt-x64\stor98\stor98.inf (design record 36).
+Each must have exactly one DriverVer line, zero-padded MM/DD/YYYY, equal to
+the header's date and version; its Signature must be $Windows NT$ for both.
+The x86 INF is NT-only since 3.4.0.0 (design record 36 section 3.3, owner
+2026-10-31): 98 SE and ME install from the 9x INF, so it
 names stor98.sys alone in [SourceDisksFiles], has no undecorated install
 section and writes nothing only 98 SE and ME read (no DevLoader, PortDriver,
 stor98.mpd or 9x settings). The x64 INF names its catalog, CatalogFile=stor98.cat, once, which the
@@ -210,11 +212,12 @@ $settings9x = @(
     'HKLM,"System\CurrentControlSet\Services\stor98",StorPollBusyUs,0x00010003,1000',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorPollIdleMs,0x00010003,1000',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorPollSpinUs,0x00010003,0',
+    'HKLM,"System\CurrentControlSet\Services\stor98",StorIntWatchdog,0x00010003,1',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorGoneMs,0x00010003,5000',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorWriteIdleMs,0x00010003,1000',
     'HKLM,"System\CurrentControlSet\Services\stor98",StorHold9xMs,0x00010003,4000'
 )
-$settingsNt = 'HKR,"Parameters\Device","DriverParameter",0x00000002,"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000"'
+$settingsNt = 'HKR,"Parameters\Device","DriverParameter",0x00000002,"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000"'
 
 function Get-SectionLines {
     param([string]$Text, [string]$Name)
@@ -304,10 +307,10 @@ try {
                 @{ T = $base.Replace("[Stor98_HwReg]", "[Stor98_AddReg_9x]`r`nHKR,,PortDriver,,stor98.mpd`r`n`r`n[Stor98_HwReg]"); Ok = $false; Why = "a PortDriver line in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_HwReg]", "[Stor98_Settings_9x]`r`nHKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0`r`n`r`n[Stor98_HwReg]"); Ok = $false; Why = "a 98 SE and ME setting in the x86 INF" },
                 @{ T = $base.Replace("[Stor98_HwReg]", "; stor98.mpd, DevLoader and PortDriver in a comment`r`n[Stor98_HwReg]"); Ok = $true; Why = "the 9x names in a comment of the x86 INF" },
-                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000000,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter written over a user's (45.50)" },
-                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter missing a key (45.50)" },
-                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"`r`n", ""); Ok = $false; Why = "no DriverParameter (45.50)" },
-                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=0;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter off a default (45.50)" },
+                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000000,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter written over a user's (45.50)" },
+                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter missing a key (45.50)" },
+                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"`r`n", ""); Ok = $false; Why = "no DriverParameter (45.50)" },
+                @{ T = $base.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=0;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter off a default (45.50)" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=01/01/2000," + $parts[1]); Ok = $false; Why = "another date" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=" + $parts[0] + ",0.4.0.0"); Ok = $false; Why = "another version" },
                 @{ T = $base.Replace("DriverVer=$want", "DriverVer=$unpadded," + $parts[1]); Ok = ($unpadded -eq $parts[0]); Why = "an unpadded date" },
@@ -345,10 +348,10 @@ try {
         $b64 = [System.IO.File]::ReadAllText($infs[1].File)
         $c64 = @(
             @{ T = $b64; Ok = $true; Why = "the committed x64 INF" },
-            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000000,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter written over a user's (45.50)" },
-            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter missing a key (45.50)" },
-            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"`r`n", ""); Ok = $false; Why = "no DriverParameter (45.50)" },
-            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=0;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter off a default (45.50)" },
+            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000000,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter written over a user's (45.50)" },
+            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter missing a key (45.50)" },
+            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"`r`n", ""); Ok = $false; Why = "no DriverParameter (45.50)" },
+            @{ T = $b64.Replace("HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"", "HKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=0;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`""); Ok = $false; Why = "DriverParameter off a default (45.50)" },
             @{ T = $b64.Replace("[Stor98_Inst.NTamd64.HW]", "[Stor98_Inst.NTamd64.HWX]"); Ok = $false; Why = "no .HW section in the x64 INF" },
             @{ T = $b64.Replace("MSISupported,%REG_DWORD%,0", "MSISupported,%REG_DWORD%,1"); Ok = $false; Why = "MSISupported 1 in the x64 INF" },
             @{ T = $b64.Replace("Interrupt Management\MessageSignaled", "InterruptManagement\MessageSignaled"); Ok = $false; Why = "the subkey without its space in the x64 INF" },
@@ -398,7 +401,7 @@ try {
             @{ T = $b9.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0", "HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010001,0"); Ok = $false; Why = "a 98 SE and ME setting written over a user's (45.50)" },
             @{ T = $b9.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorPollMode,0x00010003,0`r`n", ""); Ok = $false; Why = "a 98 SE and ME setting missing (45.50)" },
             @{ T = $b9.Replace("HKLM,`"System\CurrentControlSet\Services\stor98`",StorWriteThrough,0x00000002,`"auto`"", "HKLM,`"System\CurrentControlSet\Services\stor98`",StorWriteThrough,0x00000002,`"off`""); Ok = $false; Why = "write-through off its default auto (45.50)" },
-            @{ T = $b9.Replace("[Strings]", "[Stor98_More]`r`nHKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`"`r`n`r`n[Strings]"); Ok = $false; Why = "DriverParameter in the 9x INF (45.50)" },
+            @{ T = $b9.Replace("[Strings]", "[Stor98_More]`r`nHKR,`"Parameters\Device`",`"DriverParameter`",0x00000002,`"stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`"`r`n`r`n[Strings]"); Ok = $false; Why = "DriverParameter in the 9x INF (45.50)" },
             @{ T = $b9.Replace("%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802"); Ok = $false; Why = "no class match in the 9x INF" },
             @{ T = $b9.Replace("%Stor98.DeviceDesc%=Stor98_Inst,PCI\XHCI98_TUNNEL&CC_010802,PCI\CC_010802", "%Stor98.DeviceDesc%=Stor98_Inst,PCI\CC_010802"); Ok = $false; Why = "no tunnel id in the 9x INF" },
             @{ T = $b9.Replace("%Mfg%=Stor98_Models", "%Mfg%=Stor98_Models,NTx86"); Ok = $false; Why = "a decoration in the 9x INF" },

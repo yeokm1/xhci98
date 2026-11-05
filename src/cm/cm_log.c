@@ -56,6 +56,152 @@ VOID CmLogInit(PCM_NHI nhi)
     KeInitializeSpinLock(&nhi->LogLock);
 }
 
+/*
+ * Task 46.13 (record 21 section 8.2): the log's millisecond clock, as the
+ * eject machinery's (cm_ejectos.c, cmEjNow): the tick count times the
+ * tick's length, accumulated in words, never backwards, one for the
+ * image. Its lock is a leaf: nothing is taken under it, and it is taken
+ * under LogLock (CmLogRecord) and under no other lock of this driver.
+ */
+static KSPIN_LOCK cmLogClockLock;
+static ULONG cmLogClockNow;
+static ULONG cmLogClockLast;
+static ULONG cmLogClockRest;
+static ULONG cmLogTickUs;
+
+#define CM_LOG_CLOCK_MAX_TICKS  4000000UL
+
+/* IRQL: PASSIVE_LEVEL (DriverEntry). */
+VOID CmLogClockInit(VOID)
+{
+    LARGE_INTEGER ticks;
+    ULONG unit;
+
+    KeInitializeSpinLock(&cmLogClockLock);
+    unit = KeQueryTimeIncrement();
+    if (unit == 0) {
+        unit = 10000UL;
+    }
+    /* 100 ns units to microseconds; 10 to 55 ms ticks. */
+    cmLogTickUs = unit / 10UL;
+    KeQueryTickCount(&ticks);
+    cmLogClockLast = ticks.LowPart;
+    cmLogClockNow = 1;
+}
+
+/* IRQL: <= DISPATCH_LEVEL. */
+ULONG CmLogClockMs(VOID)
+{
+    LARGE_INTEGER ticks;
+    KIRQL irql;
+    ULONG delta;
+    ULONG now;
+
+    KeAcquireSpinLock(&cmLogClockLock, &irql);
+    KeQueryTickCount(&ticks);
+    delta = ticks.LowPart - cmLogClockLast;
+    cmLogClockLast = ticks.LowPart;
+    if (delta > CM_LOG_CLOCK_MAX_TICKS) {
+        delta = CM_LOG_CLOCK_MAX_TICKS;
+    }
+    /* delta x tick (us) / 1000 in words, as cmEjNow: no product past 32
+     * bits. */
+    cmLogClockRest += delta * (cmLogTickUs % 1000UL);
+    cmLogClockNow += delta * (cmLogTickUs / 1000UL) + cmLogClockRest / 1000UL;
+    cmLogClockRest %= 1000UL;
+    now = cmLogClockNow;
+    KeReleaseSpinLock(&cmLogClockLock, irql);
+    return now;
+}
+
+/* Whether `label` is "u4.connect", the head's trigger. */
+static ULONG cmLogIsConnect(const char *label)
+{
+    static const char connect[] = "u4.connect";
+    ULONG k;
+
+    for (k = 0; connect[k] != 0; k++) {
+        if (label[k] != connect[k]) {
+            return 0;
+        }
+    }
+    return (label[k] == 0) ? 1UL : 0UL;
+}
+
+/* A record into the head while armed and not full. LogLock held. */
+static VOID cmLogHeadLocked(PCM_NHI nhi, const char *label, ULONG value)
+{
+    ULONG bytes;
+
+    if (nhi->LogHeadArmed && !nhi->LogHeadFull) {
+        (VOID)CmLogHeadPut(nhi->LogHead, CM_LOG_HEAD_BYTES,
+                           &nhi->LogHeadBytes, &nhi->LogHeadFull, label,
+                           value, &bytes);
+    }
+}
+
+/*
+ * Every record of this driver comes here (CmLogNote; CmLogNoteAddress,
+ * address 1): a stamp first when CmLogStampDue says so, the record, and
+ * their copies in the head. Only what the ring takes is stamped and
+ * copied: recording on, and an address record at level 4 alone. IRQL:
+ * <= DISPATCH_LEVEL.
+ */
+VOID CmLogRecord(PCM_NHI nhi, const char *label, ULONG value, ULONG address)
+{
+    KIRQL irql;
+    ULONG now;
+    ULONG bytes;
+    ULONG stamped;
+    ULONG used0;
+    ULONG full0;
+
+    KeAcquireSpinLock(&nhi->LogLock, &irql);
+    if (!nhi->Log.Enabled ||
+        (address && nhi->Log.Verbosity < XHCI_LOG_VERBOSITY_FULL)) {
+        /* What the ring refuses it counts itself. */
+        if (address) {
+            XhciLogAppendAddress(&nhi->Log, label, value);
+        } else {
+            XhciLogAppend(&nhi->Log, label, value, 1);
+        }
+        KeReleaseSpinLock(&nhi->LogLock, irql);
+        return;
+    }
+    now = CmLogClockMs();
+    stamped = 0;
+    if (!nhi->LogHeadArmed && cmLogIsConnect(label)) {
+        nhi->LogHeadArmed = 1;
+        /* The head opens with a stamp, whatever the ring's. */
+        cmLogHeadLocked(nhi, "cm.ms", now);
+        stamped = 1;
+    }
+    if (CmLogStampDue(nhi->LogStampMs, now, nhi->LogStampBytes)) {
+        XhciLogAppend(&nhi->Log, "cm.ms", now, 1);
+        if (!stamped) {
+            cmLogHeadLocked(nhi, "cm.ms", now);
+        }
+        nhi->LogStampMs = now;
+        nhi->LogStampBytes = CM_LOG_STAMP_BYTES;
+    }
+    if (address) {
+        XhciLogAppendAddress(&nhi->Log, label, value);
+    } else {
+        XhciLogAppend(&nhi->Log, label, value, 1);
+    }
+    cmLogHeadLocked(nhi, label, value);
+    /* The record's bytes as the ring wrote them (CmLogHeadPut counts the
+     * same way, into a head of no room). */
+    used0 = 0;
+    full0 = 0;
+    bytes = 0;
+    (VOID)CmLogHeadPut(NULL, 0, &used0, &full0, label, value, &bytes);
+    if (nhi->LogStampBytes < CM_LOG_STAMP_FORCE - bytes) {
+        nhi->LogStampBytes += bytes;
+    }
+    KeReleaseSpinLock(&nhi->LogLock, irql);
+}
+
 VOID CmLogApply(PCM_NHI nhi)
 {
     KIRQL irql;
@@ -75,11 +221,7 @@ VOID CmLogApply(PCM_NHI nhi)
 
 VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value)
 {
-    KIRQL irql;
-
-    KeAcquireSpinLock(&nhi->LogLock, &irql);
-    XhciLogAppend(&nhi->Log, label, value, 1);
-    KeReleaseSpinLock(&nhi->LogLock, irql);
+    CmLogRecord(nhi, label, value, 0);
 }
 
 /* One line to the sinks (CmQueryLogEmitLines' callback): NUL-terminated
@@ -125,6 +267,11 @@ VOID CmLogEmit(PCM_NHI nhi, ULONG reason)
     partial = (ULONG)(nhi->Log.BytesDropped != nhi->LogDroppedEmitted);
     n = XhciLogDrain(&nhi->Log, nhi->LogEmit, XHCI_LOG_RING_BYTES);
     nhi->LogDroppedEmitted = nhi->Log.BytesDropped;
+    /* Task 46.13: the drain may have taken the stamp the next record
+     * would be timed by; that record gets its own. */
+    if (n != 0) {
+        nhi->LogStampBytes = CM_LOG_STAMP_FORCE;
+    }
     KeReleaseSpinLock(&nhi->LogLock, irql);
     (VOID)CmQueryLogEmitLines(nhi->LogEmit, n, partial, verbosity, cmLogLine,
                               NULL);

@@ -230,6 +230,38 @@ VOID CmRegCounters(PULONG attached, PULONG over, PULONG skipped,
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* Bumped at every claim made or withdrawn (record 22 section 7.6.1): a
+ * domain with no set discovers again when it moves. Under the lock. */
+static ULONG cmRegAcpiGen;
+
+static PCM_FILTER cmRegFind(ULONG bdf);
+
+/* TRUE when the filter at `bdf` holds a current claim for `name`, made
+ * under `serial`, and it is the only current claim naming `name` (record
+ * 22 section 7.6.1: one ACPI-named port per NHI). Under the lock. */
+static BOOLEAN cmRegAcpiSole(ULONG bdf, ULONG serial, const char *name)
+{
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    PCM_FILTER own;
+    ULONG claims;
+
+    own = cmRegFind(bdf);
+    if (own == NULL || !own->AcpiClaim || own->AcpiSerial != serial ||
+        !CmDsdSameName(own->AcpiRef, name)) {
+        return FALSE;
+    }
+    claims = 0;
+    for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (f->Published && !f->Gone && f->AcpiClaim &&
+            CmDsdSameName(f->AcpiRef, name)) {
+            claims++;
+        }
+    }
+    return (BOOLEAN)(CmDsdClaimsTaken(claims) == 1);
+}
+
 /* The published, not withdrawn, filter at `bdf`, or NULL. Under the lock. */
 static PCM_FILTER cmRegFind(ULONG bdf)
 {
@@ -297,6 +329,17 @@ static VOID cmRegRecompute(VOID)
                 }
             }
             flags = r->Port[i].Flags & (CM_PORT_HELD | CM_PORT_EJECTED);
+            if (r->Port[i].Source == XHCI_TBT_SRC_ACPI) {
+                /* Active only while its filter's claim, made under the
+                 * publication the member was added from, still names this
+                 * NHI (record 22 section 7.6.1): otherwise not exclusive,
+                 * as a port another domain claims. */
+                if (!cmRegAcpiSole(r->Port[i].Bdf, r->Port[i].AcpiSerial,
+                                   r->AcpiName)) {
+                    flags |= CM_PORT_NO_CLAIM;
+                    claimed = 1;
+                }
+            }
             if (!claimed) {
                 flags |= CM_PORT_EXCLUSIVE;
             }
@@ -420,6 +463,31 @@ VOID CmRegPublish(PCM_FILTER filter)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+VOID CmRegSetClaim(PCM_FILTER filter, ULONG rc, const char *ref, ULONG port)
+{
+    KIRQL irql;
+    ULONG i;
+
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    if (filter->Published && !filter->Gone) {
+        filter->AcpiRead = 1;
+        filter->AcpiRc = rc;
+        filter->AcpiClaim = 0;
+        if (rc == CM_DSD_OK && ref != NULL) {
+            for (i = 0; i < CM_DSD_NAME_MAX && ref[i] != 0; i++) {
+                filter->AcpiRef[i] = ref[i];
+            }
+            filter->AcpiRef[i] = 0;
+            filter->AcpiPort = port;
+            filter->AcpiSerial = filter->Serial;
+            filter->AcpiClaim = 1;
+            cmRegAcpiGen++;
+            cmRegRecompute();
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+}
+
 VOID CmRegWithdraw(PCM_FILTER filter)
 {
     KIRQL irql;
@@ -430,6 +498,12 @@ VOID CmRegWithdraw(PCM_FILTER filter)
         KeReleaseSpinLock(&cmRegLock, irql);
         return;
     }
+    if (filter->AcpiClaim) {
+        cmRegAcpiGen++;
+    }
+    filter->AcpiClaim = 0;
+    filter->AcpiRead = 0;
+    filter->AcpiRc = 0;
     filter->Gone = 1;
     filter->Published = 0;
     filter->Baseline = 0;
@@ -3528,7 +3602,8 @@ static BOOLEAN cmTransport(PCM_NHI nhi)
  * post (with a marking window when `mark`); with `expose` FALSE the call
  * alone (publication mode none, record 22 section 7.7). Only for a member
  * whose stor98 gate is down (cmHeld). */
-static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i);
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i, ULONG gen, BOOLEAN own,
+                             ULONG serial);
 
 static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
                         BOOLEAN fresh, ULONG tunnel, BOOLEAN mark,
@@ -3537,7 +3612,8 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
     PCM_REENUM r;
 
     r = &nhi->Reenum;
-    if (removeVanished && cmVanishSweep(nhi, i)) {
+    if (removeVanished &&
+        cmVanishSweep(nhi, i, CM_EJ_SWEEP_NO_GEN, FALSE, 0)) {
         /* Task 43.47: the removal is the member's sweep's now, and its
          * gate is up: the exposure and re-enumeration held behind it,
          * with their publication mode and marking window, run once every
@@ -3571,14 +3647,25 @@ static VOID cmReenumOne(PCM_NHI nhi, ULONG i, BOOLEAN removeVanished,
  * entered where the CONFIGMG route has call workers and the host interface
  * is live; TRUE when it was. Otherwise the worker's removal, as before.
  */
-static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i)
+static BOOLEAN cmVanishSweep(PCM_NHI nhi, ULONG i, ULONG gen, BOOLEAN own,
+                             ULONG serial)
 {
     PCM_REENUM r;
 
     r = &nhi->Reenum;
-    return (BOOLEAN)(r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
-                     r->Callwk != NULL && cmTransport(nhi) &&
-                     CmEjectSweep(nhi, i));
+    if (!(r->Route == CM_ROUTE_CONFIGMG && r->Wk != NULL &&
+          r->Callwk != NULL && cmTransport(nhi) &&
+          CmEjectSweep(nhi, i, gen, own, serial))) {
+        return FALSE;
+    }
+    /* Task 46.13 (record 21 section 8.2): the asking action's kind and
+     * generation, and the member's connection generation now. */
+    CmLogNote(nhi, "cm.vanish.sweep.gen",
+              (gen & 0xF0000000UL) | ((i & 0xFUL) << 24) |
+                  (gen & CM_EJ_SWEEP_NO_GEN));
+    CmLogNote(nhi, "cm.vanish.sweep.now",
+              ((i & 0xFFUL) << 24) | (CmNhiMemberGen(nhi, i) & 0xFFFFFFUL));
+    return TRUE;
 }
 
 /*
@@ -3663,6 +3750,7 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     ULONG i;
     ULONG flags;
     ULONG member;
+    ULONG downMember;
     ULONG tunnel;
     BOOLEAN none;
     BOOLEAN expose;
@@ -3674,6 +3762,12 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
     member = XHCI_TBT_NO_MEMBER;
     if (action->Kind == TBT_ICM_ACT_TUNNEL_UP && nhi->U4On) {
         member = CmNhiActionMember(nhi, action);
+    }
+    /* Task 46.13 (record 21 section 8.3): a USB4 DOWN's own member, whose
+     * sweep the guard binds; a chained tunnel's names none. */
+    downMember = XHCI_TBT_NO_MEMBER;
+    if (action->Kind == TBT_ICM_ACT_TUNNEL_DOWN && nhi->U4On) {
+        downMember = CmNhiActionMember(nhi, action);
     }
     none = (BOOLEAN)(action->Kind == TBT_ICM_ACT_RESYNC &&
                      (action->Why == TBT_ICM_WHY_RECOVERED ||
@@ -3711,7 +3805,11 @@ static VOID cmReenumAll(PCM_NHI nhi, BOOLEAN removeVanished, BOOLEAN fresh,
          * by this call. */
         expose = (BOOLEAN)(!none || (r->Port[i].MissedExpose != 0 &&
                                      cmTransport(nhi)));
-        if (vanish && cmVanishSweep(nhi, i)) {
+        if (vanish &&
+            cmVanishSweep(nhi, i,
+                          (action->Kind << 28) |
+                              (action->Serial & CM_EJ_SWEEP_NO_GEN),
+                          (BOOLEAN)(downMember == i), action->Serial)) {
             /* Task 43.47: the vanished children are read now, at the
              * down, whatever the member's gates; the call below is held
              * behind the sweep's gate without its removal. */
@@ -3763,6 +3861,71 @@ static ULONG cmPoll(PCM_NHI nhi, const TBT_ICM_ACTION *action, ULONG want)
 /* The calls                                                              */
 /* ====================================================================== */
 
+/*
+ * The ACPI-named source at a discovery (record 22 section 7.6.1): every
+ * current claim naming this NHI offered to the set, the claims copied as
+ * scalars under the list's lock and offered after it is released. The
+ * serial each was made under is returned in serials[], parallel to bdfs[],
+ * for the members' AcpiSerial. Returns how many were offered.
+ */
+static ULONG cmAcpiOffer(PCM_NHI nhi, PULONG bdfs, PULONG serials)
+{
+    PCM_REENUM r;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    KIRQL irql;
+    ULONG n;
+    ULONG unclaimed;
+    ULONG i;
+    ULONG rc;
+
+    r = &nhi->Reenum;
+    n = 0;
+    unclaimed = 0;
+    if (r->AcpiNameLen == 0) {
+        return 0;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    r->AcpiGenSeen = cmRegAcpiGen;
+    for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
+        f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+        if (!f->Published || f->Gone) {
+            continue;
+        }
+        if (f->AcpiRead && !f->AcpiClaim) {
+            unclaimed++;
+        }
+        if (f->AcpiClaim && CmDsdSameName(f->AcpiRef, r->AcpiName)) {
+            if (n < XHCI_TBT_MAX_TUNNELS) {
+                bdfs[n] = f->Bdf;
+                serials[n] = f->AcpiSerial;
+            }
+            n++;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (unclaimed != 0) {
+        CmLogNote(nhi, "cm.acpi.unclaimed", unclaimed);
+    }
+    if (CmDsdClaimsTaken(n) == 0) {
+        /* Two or more ports claim this NHI: none is taken (record 22
+         * section 7.6.1); the router-named source binds as before. */
+        if (n != 0) {
+            CmLogNote(nhi, "cm.acpi.several", n);
+        }
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        rc = XhciTbtTopoAddAcpi(&r->Cfg, &r->Topo, bdfs[i]);
+        CmLogNote(nhi, "cm.acpi.offer", (bdfs[i] << 8) | (rc & 0xFFUL));
+        if (r->Topo.Outcome == XHCI_TBT_TOPO_INCOMPLETE ||
+            r->Topo.Outcome == XHCI_TBT_TOPO_MANY) {
+            break;
+        }
+    }
+    return n;
+}
+
 static VOID cmDiscover(PCM_NHI nhi)
 {
     PCM_REENUM r;
@@ -3770,6 +3933,10 @@ static VOID cmDiscover(PCM_NHI nhi)
     const CM_FAMILY *family;
     ULONG tries;
     ULONG i;
+    ULONG k;
+    ULONG acpi;
+    ULONG acpiBdf[XHCI_TBT_MAX_TUNNELS];
+    ULONG acpiSerial[XHCI_TBT_MAX_TUNNELS];
 
     r = &nhi->Reenum;
     CmZero(&in, sizeof(in));
@@ -3803,6 +3970,8 @@ static VOID cmDiscover(PCM_NHI nhi)
     /* The USB4 profile's router-named members join the set here, before
      * Port[] is filled and the claims are published (cm_reenum.h). */
     CmNhiNamePorts(nhi);
+    /* Then the ACPI-named ones (record 22 section 7.6.1). */
+    acpi = cmAcpiOffer(nhi, acpiBdf, acpiSerial);
     CmLogNote(nhi, "cm.reenum.topo", r->Topo.Outcome);
     CmLogNote(nhi, "cm.reenum.topo.parent", r->Topo.Parent);
     CmLogNote(nhi, "cm.reenum.topo.search-bus", r->Topo.SearchBus);
@@ -3817,6 +3986,13 @@ static VOID cmDiscover(PCM_NHI nhi)
         CmZero(&r->Port[i], sizeof(r->Port[i]));
         r->Port[i].Bdf = r->Topo.Set[i];
         r->Port[i].Source = r->Topo.Source[i];
+        if (r->Port[i].Source == XHCI_TBT_SRC_ACPI) {
+            for (k = 0; k < acpi; k++) {
+                if (acpiBdf[k] == r->Port[i].Bdf) {
+                    r->Port[i].AcpiSerial = acpiSerial[k];
+                }
+            }
+        }
         r->Members++;
         CmLogNote(nhi, "cm.reenum.member",
                   (r->Port[i].Bdf << 8) | r->Port[i].Source);
@@ -3859,6 +4035,9 @@ VOID CmReenumStart(PCM_NHI nhi)
     CmNvlinkStart(nhi);
     r->Nhi = cmNhiLocation(nhi);
     CmLogNote(nhi, "cm.reenum.nhi", r->Nhi);
+    r->AcpiNameLen = CmDsdNhiName(nhi, r->AcpiName, sizeof(r->AcpiName));
+    r->AcpiLateLogged = 0;
+    CmLogNote(nhi, "cm.acpi.name", r->AcpiNameLen);
     if (r->Nhi == XHCI_TBT_NO_BDF) {
         r->Why = CM_NOROUTE_NO_LOCATION;
         CmLogNote(nhi, "cm.reenum.no-route", r->Why);
@@ -4473,6 +4652,90 @@ VOID CmReenumAction(PCM_NHI nhi, const TBT_ICM_ACTION *action)
     cmSecBuses(nhi);
 }
 
+/*
+ * A claim made or withdrawn since this domain last looked (record 22
+ * section 7.6.1): with no set, the rediscovery is armed again so the claim
+ * is offered; with a set, a member whose root port's filter was restarted
+ * and claims the same NHI again, alone, adopts the new claim's serial (the
+ * member and its index unchanged), and a claim for a bridge not in the set
+ * is logged once and taken at the next start. Not while the host interface
+ * is lost or contained: the generation is left unseen until it is back, so
+ * the recovery revalidates the set as it was.
+ */
+static VOID cmAcpiLate(PCM_NHI nhi)
+{
+    PCM_REENUM r;
+    PLIST_ENTRY e;
+    PCM_FILTER f;
+    KIRQL irql;
+    ULONG gen;
+    ULONG late;
+    ULONG renewed;
+    ULONG i;
+    ULONG in;
+
+    r = &nhi->Reenum;
+    late = XHCI_TBT_NO_BDF;
+    renewed = XHCI_TBT_NO_BDF;
+    if (r->Nhi == XHCI_TBT_NO_BDF || !cmTransport(nhi) ||
+        CmNhiFailed(nhi)) {
+        return;
+    }
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    gen = cmRegAcpiGen;
+    if (gen == r->AcpiGenSeen) {
+        KeReleaseSpinLock(&cmRegLock, irql);
+        return;
+    }
+    r->AcpiGenSeen = gen;
+    if (r->Listed) {
+        for (i = 0; i < r->Members; i++) {
+            if (r->Port[i].Source != XHCI_TBT_SRC_ACPI) {
+                continue;
+            }
+            f = cmRegFind(r->Port[i].Bdf);
+            if (f != NULL && f->AcpiClaim &&
+                CmDsdRenewed(r->Port[i].AcpiSerial, f->AcpiSerial,
+                             cmRegAcpiSole(f->Bdf, f->AcpiSerial,
+                                           r->AcpiName))) {
+                r->Port[i].AcpiSerial = f->AcpiSerial;
+                renewed = f->Bdf;
+            }
+        }
+        if (renewed != XHCI_TBT_NO_BDF) {
+            cmRegRecompute();
+        }
+        for (e = cmRegFilters.Flink; e != &cmRegFilters; e = e->Flink) {
+            f = CONTAINING_RECORD(e, CM_FILTER, RegLink);
+            if (!f->Published || f->Gone || !f->AcpiClaim ||
+                !CmDsdSameName(f->AcpiRef, r->AcpiName)) {
+                continue;
+            }
+            in = 0;
+            for (i = 0; i < r->Members; i++) {
+                if (r->Port[i].Bdf == f->Bdf) {
+                    in = 1;
+                }
+            }
+            if (!in) {
+                late = f->Bdf;
+            }
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    if (!r->Listed && !r->LossSeen) {
+        r->RediscoverLeft = CM_REDISCOVER_TRIES;
+        r->RediscoverAt = cmNow(nhi) - CM_REDISCOVER_MS;
+        CmLogNote(nhi, "cm.acpi.rediscover", gen);
+    } else if (late != XHCI_TBT_NO_BDF && !r->AcpiLateLogged) {
+        r->AcpiLateLogged = 1;
+        CmLogNote(nhi, "cm.acpi.late", late);
+    }
+    if (renewed != XHCI_TBT_NO_BDF) {
+        CmLogNote(nhi, "cm.acpi.renewed", renewed);
+    }
+}
+
 VOID CmReenumService(PCM_NHI nhi)
 {
     PCM_REENUM r;
@@ -4507,6 +4770,9 @@ VOID CmReenumService(PCM_NHI nhi)
         /* Not while the host interface is lost: its scans read the
          * bridges (record 21 section 5.5). */
         CmNvlinkService(nhi);
+    }
+    if (r->AcpiNameLen != 0) {
+        cmAcpiLate(nhi);
     }
     if (!r->Listed && r->RediscoverLeft != 0 && !r->LossSeen &&
         cmNow(nhi) - r->RediscoverAt >= CM_REDISCOVER_MS) {
@@ -4724,7 +4990,7 @@ VOID CmReenumService(PCM_NHI nhi)
             cmNow(nhi) - r->Port[i].MissedAt >= CM_MISSED_RETRY_MS &&
             !CmNvlinkHeld(nhi, r->Port[i].Bdf)) {
             r->Port[i].MissedAt = cmNow(nhi);
-            if (cmVanishSweep(nhi, i)) {
+            if (cmVanishSweep(nhi, i, CM_EJ_SWEEP_NO_GEN, FALSE, 0)) {
                 /* Task 43.47: its vanished children the sweep's; the owed
                  * call held behind its gate, exposure and marking window
                  * with it. */
@@ -4941,6 +5207,7 @@ VOID CmReenumStop(PCM_NHI nhi)
     r = &nhi->Reenum;
     CmNvlinkStop(nhi);
     r->RediscoverLeft = 0;
+    r->AcpiNameLen = 0;
     if (!r->Listed && r->Route == CM_ROUTE_NONE) {
         r->Members = 0;
         return;
@@ -5241,6 +5508,32 @@ BOOLEAN CmReenumHold(PCM_NHI nhi, ULONG members)
     return FALSE;
 }
 
+/* TRUE when the member at `bdf`, ACPI-named, still has its claim: the
+ * filter published, its claim made under the member's AcpiSerial and
+ * naming this NHI. Takes the list's lock. */
+static BOOLEAN cmAcpiHolds(PCM_NHI nhi, ULONG bdf)
+{
+    PCM_REENUM r;
+    PCM_FILTER f;
+    KIRQL irql;
+    BOOLEAN ok;
+    ULONG i;
+
+    r = &nhi->Reenum;
+    ok = FALSE;
+    KeAcquireSpinLock(&cmRegLock, &irql);
+    for (i = 0; i < r->Members; i++) {
+        if (r->Port[i].Bdf != bdf) {
+            continue;
+        }
+        if (cmRegAcpiSole(bdf, r->Port[i].AcpiSerial, r->AcpiName)) {
+            ok = TRUE;
+        }
+    }
+    KeReleaseSpinLock(&cmRegLock, irql);
+    return ok;
+}
+
 BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)
 {
     PCM_REENUM r;
@@ -5274,6 +5567,17 @@ BOOLEAN CmReenumSourcesHold(PCM_NHI nhi)
     }
     for (i = 0; i < r->Topo.Tunnels && i < XHCI_TBT_MAX_TUNNELS; i++) {
         if (r->Topo.Source[i] == XHCI_TBT_SRC_ROUTER) {
+            continue;
+        }
+        if (r->Topo.Source[i] == XHCI_TBT_SRC_ACPI) {
+            /* Excepted only while its filter's claim, under the publication
+             * it was added from, still names this NHI (record 22 section
+             * 7.6.1). */
+            if (!cmAcpiHolds(nhi, r->Topo.Set[i])) {
+                CmLogNote(nhi, "u4.recover.member.source-lost",
+                          (r->Topo.Set[i] << 8) | r->Topo.Source[i]);
+                return FALSE;
+            }
             continue;
         }
         for (k = 0; k < r->RecTopo.Tunnels && k < XHCI_TBT_MAX_TUNNELS; k++) {

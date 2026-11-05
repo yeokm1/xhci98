@@ -892,6 +892,19 @@ Enabled, Parameter or Context State Error - in the counter list by name;
 the log's `strict.*` notes say which. The last four were fields of the
 checked builds' controller until `3.4.0.0`, never published. A block
 shorter than 258 words is a driver from before it.
+Task 46.6's six follow (258 to 263, `HeldScan`, `HeldFunctions`,
+`HeldCandidates`, `HeldBdf`, `HeldId`, `HeldIrq`; design record 15
+section 4.4): on 98 SE and ME, the start's walk for another device
+holding this controller's line asserted - its outcome (0 not looked for,
+1 none, 2 a function seen asserting it at every read, 3 not known:
+configuration space not read, or this controller's line not 1 to 15 or
+not the IRQ it was given, 4 inconclusive: eight candidates tried, none
+confirmed), the functions read,
+the candidates not confirmed, the holder's bus, device and function and
+its ids, and the Interrupt Line compared - in the counter list by name
+and summed up in the event delivery section ("line held by another");
+the log's `intr.held` notes say the same. A block shorter than 264 words
+is a driver from before it, and the line is not printed.
 `-selftest-counters`
 prints every word of a canned block whose word i holds i + 1, and
 `selftest.cmd` checks it word by word against `src\xhci_counters.h`

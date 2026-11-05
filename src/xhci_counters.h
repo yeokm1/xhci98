@@ -510,9 +510,22 @@ typedef struct _XHCIHC_COUNTERS {
     ULONG StrictViolations;
     ULONG StrictUndefined;
     ULONG StrictRefusals;
+    /* A line another device holds asserted, named at the start (design
+     * record 15 section 4.4; roadmap-usb4 46.6), appended at word 258,
+     * written by the start before the connection on 98 SE and ME alone:
+     * the walk's XHCI_POLL_HELD_* outcome (0 not looked for), the
+     * functions read, the candidates not confirmed, the holder - bus
+     * 15:8, device 7:3, function 2:0, its vendor 15:0 and device 31:16 -
+     * and the Interrupt Line value compared. Diagnostic only. */
+    ULONG HeldScan;
+    ULONG HeldFunctions;
+    ULONG HeldCandidates;
+    ULONG HeldBdf;
+    ULONG HeldId;
+    ULONG HeldIrq;
 } XHCIHC_COUNTERS, *PXHCIHC_COUNTERS;
 
 XHCI_C_ASSERT(xhcihc_counters_all_ulong,
-              sizeof(XHCIHC_COUNTERS) == 258 * sizeof(ULONG));
+              sizeof(XHCIHC_COUNTERS) == 264 * sizeof(ULONG));
 
 #endif /* XHCI_COUNTERS_H */

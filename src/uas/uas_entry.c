@@ -238,6 +238,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->MajorFunction[IRP_MJ_SYSTEM_CONTROL] =
         uasDispatchSystemControl;
     DriverObject->DriverExtension->AddDevice = uasAddDevice;
-    DriverObject->DriverUnload = uasUnload;
+    /* Windows 98 SE and ME: the image stays resident for the boot
+     * (roadmap-usb4.md task 46.20). Their NTKERN calls DriverUnload from
+     * the IoDeleteDevice of the driver's last device object
+     * (win98-wdm.md), and the recovery and wake workers (ExQueueWorkItem;
+     * 9x has no IoQueueWorkItem) release the rundown the removal waits for
+     * (uasDeref) before they return through this image: the rundown proves
+     * their last device access, not that they have left the image.
+     * xhcicm.sys's rule (cm_entry.c). NT keeps uasUnload; the same worker
+     * gap remains open there. */
+    DriverObject->DriverUnload =
+        IoIsWdmVersionAvailable(1, 0x10) ? uasUnload : NULL;
     return STATUS_SUCCESS;
 }

@@ -884,8 +884,10 @@ which are `xhci98.sys`'s by class. The USB4 hosts with no firmware
 connection manager (Lunar Lake `A833`, `A834`, Panther Lake `E333`,
 `E334`, `E433`, `E434`, Wildcat Lake `4D33`, Barlow Ridge `5781`, `5784`,
 and any class `0x0C0340` host, AMD's Pink Sardine `1022:1668` and
-`1022:1669`, named in FreeBSD's `nhi_reg.h`, among them) are Phase 40's
-(design record 22); task `40-0.2` added their lines to the INFs (below).
+`1022:1669`, named in FreeBSD's `nhi_reg.h`, and since task 46.23 AMD's
+other integrated hosts, named in `pci.ids` `2026.10.31`, among them) are
+Phase 40's (design record 22); task `40-0.2` added their lines to the INFs
+(below), task 46.23 AMD's others.
 A
 name in either source is not evidence that a part behaves like the one
 captured; that is what "untested" means in the last column. A part with
@@ -900,7 +902,13 @@ Router", decision U12 as revised; the Maple Ridge and Tiger Lake to
 Meteor Lake lines above take it too, "Class and names" below):
 `PCI\VEN_8086&DEV_xxxx` for `A833`, `A834`,
 `E333`, `E334`, `E433`, `E434`, `4D33`, `5781`, `5784`; `PCI\VEN_1022&DEV_1668`
-and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. Windows 98
+and `DEV_1669`; and `PCI\CC_0C0340`, which the id lines outrank. Task 46.23
+adds AMD's other integrated hosts by id, as `pci.ids` `2026.10.31` lists
+them: Rembrandt `162E`, `162F`; Phoenix `15C4`, `15C5`; Strix `151C`,
+`151D`; Strix Halo `158D`, `158E` (listed as "USB4 Host Router"; on a
+Strix Halo machine read on 2026-11-03 both are class `0C0340` and each
+carries a USB4 root router, so host interfaces); Krackan `1120`, `1121`;
+Krackan2 `113B`, `113C`. Windows 98
 SE matches the class line: on the emulator's generic host `1B36:00F4` (class
 `0C0340`, no id line of its own) its wizard offered `xhcicm.inf` from the
 transfer disk, and the driver started, "working properly", in its INERT
@@ -912,11 +920,39 @@ filter INFs, the USB4-only hosts' tunnel ports where the same `pci.ids`
 |---|---|---|---|
 | `8086:5780` | JHL9580 Thunderbolt 5 80/120G Bridge [Barlow Ridge Host 80G 2023] | Barlow Ridge `5781` | untested |
 | `8086:5783` | JHL9540 Thunderbolt 4 Bridge [Barlow Ridge Host 40G 2023] | Barlow Ridge `5784` | untested |
-| `1022:14CD`, `1022:14EF` | Family 19h USB4/Thunderbolt PCIe tunnel | AMD's USB4 hosts | untested |
-| `1022:150A` | Strix/Strix Halo PCIe USB4 Bridge | AMD's USB4 hosts | untested |
+| `1022:14CD`, `1022:14EF` | Family 19h USB4/Thunderbolt PCIe tunnel (`2026.10.31`: Rembrandt PCIe USB4 Bridge, Phoenix/Phoenix2 PCIe USB4 Bridge) | AMD's USB4 hosts: Pink Sardine; since task 46.23 `14CD` Rembrandt's, `14EF` Phoenix's | untested |
+| `1022:150A` | Strix/Strix Halo PCIe USB4 Bridge | AMD's USB4 hosts: Pink Sardine; since task 46.23 Strix's and Strix Halo's | two root ports on a Strix Halo machine, each depending on one NHI (below); the driver untested |
+| `1022:1125` | Krackan/Krackan2 PCIe USB4 Bridge (`2026.10.31`, task 46.23) | AMD Krackan and Krackan2 | untested |
 | `1B21:2423` | ASM4242 PCIe Switch Downstream Port | ASMedia ASM4242, NHI `1B21:2425` (a family since task 44.40; its own NHI line since task 45.46, the installer's FriendlyName from task 44.55 to 3.3.0.0) | its topology as record 22 section 18.1 gives it; the driver untested |
 | `1B36:0001` | the emulator's i440FX `usb4-tunnel-bridge` (QEMU's PCI-to-PCI bridge id) | `usb4-emu` | [obs] `runs/run-39.md` 39-0.7 |
 | `1B36:000C` | the emulator's q35 `usb4-tunnel-port` (QEMU's PCIe root port id) | `usb4-emu` | not read here |
+
+**AMD's pairing (task 46.23).** `cm_ports.c` gives each AMD processor a
+family: its NHIs and the one PCIe USB4 bridge `pci.ids` names for that
+processor (Rembrandt `14CD`, Phoenix `14EF`, Strix and Strix Halo `150A`,
+Krackan and Krackan2 `1125`; where two processors share the bridge they
+share the family). Pink Sardine keeps the three ports of task `40-0.2`:
+no source at hand ties it to one processor. `pci.ids` lists Phoenix's NHIs
+apart from Pink Sardine's, FreeBSD names Pink Sardine alone, and Linux's
+`quirks.c` names "Yellow Carp and Pink Sardine platforms" by their router
+ids (`0438:0208` to `020B`) only; Hawk Point has no USB4 id in the
+listing (its NPU shares Phoenix's `1502`), so a Hawk Point machine is
+expected to show Phoenix's ids, which no reading here confirms. On a
+Strix Halo machine (2026-11-03, Windows 11's device properties read, no
+driver of this project installed) the two `150A` functions are PCI
+Express root ports on the root bus, and Windows lists each as depending
+on one of the two NHIs, one each; the NHIs are functions behind an
+internal bridge (`150C`), not on the root bus. The owner's Linux capture
+of the same machine (2026-11-03) agrees: Linux's `thunderbolt` driver
+took both NHIs as two domains, found both host routers (generation 4),
+and `tb_acpi_add_link` linked the first `150A` port to `158D` and the
+second to `158E`, the pairing Windows lists. Section 6.3's root-port
+source takes a port only beside a root-bus NHI, so there it takes
+neither: the host router's PCIe mapping (record 22 section 7.6) or
+`XhciCmTunnelBridge` names them, and the filter, on `150A` since task
+`40-0.2`, acts on no port the NHI does not assign. Record 22 section 7.6.1
+designs the source that closes the gap on NT: the filter reads its root
+port's `_DSD` (`usb4-host-interface`, `usb4-port-number`).
 
 The listing labels no tunnel port of Lunar Lake, Panther Lake or Wildcat
 Lake (Panther Lake's "USB Type-C Subsystem PCIe Root Port #24", `E337`
@@ -932,9 +968,11 @@ installed it unforced with no prompt and no restart, and left the port
 (task `40-0.2`, the same day; `xhcicm.sys` was already in place from the NHI's
 install, so that reading does not show the `..` source path being used). The excluded ids are the
 gate's `CM-NOROUTER` list: the device routers and device-side bridges
-(`15EF`, Goshen Ridge `0B26`, `5786`, `57A4`, AMD's `151C` and `151D`
-"USB4 Router", ASMedia's ASM2464PD `2463`), the USB-only NHIs and the
-unclaimed generations above.
+(`15EF`, Goshen Ridge `0B26`, `5786`, `57A4`, ASMedia's ASM2464PD
+`2463`), the USB-only NHIs and the unclaimed generations above. AMD's
+`151C` and `151D`, "USB4 Router" in `pci.ids` `2026.10.14` and on that
+list until task 46.23, are Strix's NHIs in `2026.10.31` and bound by id
+since.
 
 Class and names: `Class=System` with its GUID on the NT paths and `Class=System`
 undecorated for 98 (which also knows that class); device descriptions by decision D8, taken as recommended and then
@@ -976,6 +1014,12 @@ the same lines rank as the three strings did (record 23 section 5.13).
 | `4D33` | `U4WlDesc` | `xHCI98 USB4 Router (Intel Wildcat Lake)` | `cm_vals.c`; Linux `nhi.h` `PCI_DEVICE_ID_INTEL_WCL_NHI0` |
 | `5781`, `5784` | `U4BrDesc` | `xHCI98 USB4 Router (Intel Barlow Ridge)` | `cm_vals.c` (host 80G, 40G); Linux `nhi.h` `PCI_DEVICE_ID_INTEL_BARLOW_RIDGE_HOST_80G_NHI`, `_40G_NHI` |
 | `1022:1668`, `1022:1669` | `U4PsDesc` | `xHCI98 USB4 Router (AMD Pink Sardine)` | `cm_vals.c`; record 22 section 3.1; FreeBSD `nhi_reg.h` `DEVICE_PINK_SARDINE_0`, `_1` (Linux names no AMD NHI id) |
+| `1022:162E`, `1022:162F` | `U4RbDesc` | `xHCI98 USB4 Router (AMD Rembrandt)` | `cm_vals.c`; `pci.ids` `2026.10.31` "Rembrandt USB4/Thunderbolt NHI controller #1", `#2` (task 46.23) |
+| `1022:15C4`, `1022:15C5` | `U4PhDesc` | `xHCI98 USB4 Router (AMD Phoenix)` | `cm_vals.c`; `pci.ids` "Phoenix USB4/Thunderbolt NHI controller #1", `#2` |
+| `1022:151C`, `1022:151D` | `U4SxDesc` | `xHCI98 USB4 Router (AMD Strix)` | `cm_vals.c`; `pci.ids` "Strix USB4/Thunderbolt NHI controller #1", `#2` |
+| `1022:158D`, `1022:158E` | `U4ShDesc` | `xHCI98 USB4 Router (AMD Strix Halo)` | `cm_vals.c`; `pci.ids` "Strix Halo USB4 Host Router"; class `0C0340` read on a Strix Halo machine (above) |
+| `1022:1120`, `1022:1121` | `U4KrDesc` | `xHCI98 USB4 Router (AMD Krackan)` | `cm_vals.c`; `pci.ids` "Krackan USB4/Thunderbolt NHI controller #1", `#2` |
+| `1022:113B`, `1022:113C` | `U4K2Desc` | `xHCI98 USB4 Router (AMD Krackan2)` | `cm_vals.c`; `pci.ids` "Krackan2 USB4/Thunderbolt NHI controller #1", `#2` |
 | `1B21:2425` | `U4AsDesc` | `xHCI98 USB4 Router (ASMedia ASM4242)` | `cm_vals.c` (`cmAsmNhi`); record 22 section 18.1 (`1B21:2425` rev 01, class `0C0340`). Task 45.46: up to 3.3.0.0 matched by the class line and named by the installer's FriendlyName (task 44.55, record 23 section 5.13.8) |
 | class `0C0340` | `U4Desc` | `xHCI98 USB4 Router` | any other USB4 host (other ASMedia, other AMD, the emulator's `1B36:00F4`) |
 
@@ -7653,6 +7697,317 @@ every value of this package).
   `DriverParameter` the user set, read kept whole; and on 98 SE a value set
   before the update, read kept.
 
+### 8.2 The connect and drop loop's log points (task 46.13)
+
+Draft 5, 2026-11-03, reviewed and revised (the reading's number counted
+for the driver image, not the sweep; the removed child's location
+logged; a stamp at the head of a drained ring kept in the answer);
+draft 4, 2026-11-03, reviewed and revised (the stamp's distance bound
+counted to the record's start; a stamp after every drain; each removal
+tied to the reading that recorded it); draft 3, 2026-11-03, reviewed and
+revised (the clock read under the
+log's lock; a reading's two times and the generation that asked for it;
+a stamp at least every kilobyte); draft 2, 2026-11-03, reviewed and
+revised (the DOWN's own generation,
+not the port's current one; the sweep's observation time carried by its
+reading; the new bridges read through `PCI.VXD`'s guarded route; the
+head armed at the connection's entry; the answer's bytes, cut and stamps
+defined); draft 1, 2026-11-03. For `roadmap-usb4.md` task 46.13: on the
+owner's board (98 SE, the ASM4242, a tunnelled NVMe enclosure
+hot-plugged) one failed first connection (the PCIe path not built after
+two unanswered control reads) was followed by a loop of reconnects, each
+dropped again within the enclosure's own ten seconds; the log's record
+order suggests that each reconnect's 9x numbering ran in the same pass
+as the previous connection's DOWN, whose vanish sweep (task 43.47,
+`cm_ejectos.c`) then removed what the new numbering had just found. The
+log has no time stamps, so that order is inferred, not read. The task's
+rule, "a DOWN never acts on a generation newer than its own", is to be
+proven with these log points first; they are what this section adds.
+Nothing else changes: no record is removed or renamed, no decision reads
+them.
+
+1. **Time.** The clock is the log's own millisecond clock
+   (`CmLogClockMs`, `cm_log.c`): the tick count times the tick's length,
+   accumulated in words as the eject machinery's clock is (`cmEjNow`),
+   never backwards, no 64-bit arithmetic, one clock for the driver image,
+   under a spin lock of its own that nothing is taken under (a leaf,
+   taken inside the log's lock and inside no other). Every record of the
+   ring is preceded by a stamp record `cm.ms` holding that clock when the
+   clock has moved since the NHI's last stamp, when the record would
+   begin 1,008 bytes or more after that stamp's own start (so every
+   record begins less than 1,008 bytes after the start of the stamp that
+   times it, and the 1,024 bytes before any record hold that stamp
+   whole), and at the first record after each drain of the ring for
+   emission (`XhciCmLogDebugView` 1, or the checked flavour), which may
+   have taken the stamp. Written by the two funnels every record goes
+   through, `CmLogNote` and `CmLogNoteAddress` (the router, tunnel,
+   numbering and eject records among them): the clock read, the stamp and
+   its record appended, all under the log's lock, so stamps never go
+   backwards and a stamp and its record are adjacent in the ring at any
+   IRQL.
+2. **The connection's entry.** The USB4 core logs `u4.connect` (the port
+   in bits 31:16, the connection's new generation in 15:0) where a
+   connection begins (`tbtU4Connect`, after the generation is advanced):
+   the start of every cycle, timed by item 1.
+3. **The sweep's target and generations.** Where a member's vanished
+   children are handed to its sweep for a tunnel action (`cmReenumAll`
+   through `cmVanishSweep`), `cm.vanish.sweep.gen`: the action's kind in
+   bits 31:28, the member in 27:24 and the action's own generation (the
+   `Serial` the DOWN carried) in 23:0; and `cm.vanish.sweep.now`: the
+   member's connection generation at that moment (`CmNhiMemberGen`),
+   member in 31:24. A sweep entered without an action (a service or
+   retirement path) logs `FFFFFF` for the action's generation. The sweep
+   keeps the latest such generation, and each reading it submits carries
+   it with the reading's number (every reading of the driver image
+   counted, never reset by a sweep's start, modulo 65536): the reading's
+   tag, the number in bits 31:16 and the generation in 15:0. The call worker's
+   reading records the clock twice in its result: before it reads the
+   member's bus (the inventory of ids) and when it has finished reading
+   the children, so the two enclose the whole reading. When the thread
+   takes it, `cm.vanish.reading.at` gives the first, `cm.vanish.reading.end` the end's,
+   `cm.vanish.reading.tag` its tag, and `cm.vanish.reading.gen` the
+   member's generation at the taking, member in 31:24. A reading whose
+   two times enclose a `u4.connect` of the member is indeterminate, and
+   the log shows it so. Each vanished-child record a reading makes keeps
+   that reading's tag (as does a claim or an eject whose devnode the
+   reading saw vanish, a claim keeping its record when it is taken
+   over), and the removal's result (`cm.vanish.cr`) is
+   followed by `cm.vanish.cr.from`, the tag of the reading that recorded
+   the child, and `cm.vanish.cr.at`, where the child was as its instance
+   id names it: the `BUS_`, `DEV_`, `FUNC_` form as bus 15:8, device 7:3,
+   function 2:0; the path form a hot-added function takes (`cm_ports.h`'s
+   `CmPortsIdPath`: its own device and function, then each parent
+   bridge's) as `80000000h`, the count in bits 30:24 and the first three
+   elements in 23:0; `FFFFFFFF` for neither. An eject or a claim whose
+   devnode a reading saw vanish logs its call's result as
+   `cm.vanish.eject.cr`, and a removal a CONFIGMG worker's claim makes
+   as `cm.vanish.claim.cr`, each followed by the same two. So a removal is
+   tied to the reading, and through it to the DOWN's generation, that
+   caused it, and to the function, which the numbering's
+   `cm.brnum.9x.bridge` records name for the new connection.
+4. **The PCIe link state.** At each 9x numbering (`cmWkNumber`, on the
+   CONFIGMG worker, after the numbering's outcome), `cm.brnum.9x.link`
+   for the member (the tunnel port) and for each bridge the numbering
+   gave buses: the function in bits 31:16 (bus 15:8, device 7:3,
+   function 2:0) and its PCI Express Link Status register in 15:0 (Data
+   Link Layer Link Active, bit 13; Link Training, bit 11; the negotiated
+   width and speed), read through the numbering's own accessor
+   (`PCI.VXD`'s `_PCI_Read_Config` behind its guard, which reads a
+   function `PCI.VXD` does not know yet) from the PCI Express capability
+   (a bounded walk of 48 entries, a pointer below `40h` ending it; no
+   capability or a read refused: `FFFF`), each read made only while the
+   numbering's request is still the one taken and no loss of the host
+   interface has come (`cmWkNumberGo`, the numbering's own gate). Read
+   only.
+5. **The first cycle kept.** The ring wraps (16 KB): by the time a user
+   saves a report the first connection - the one that failed and began
+   the loop - is overwritten. At the first `u4.connect` record of the
+   NHI's device lifetime the log arms a head buffer of 4 KB that never
+   wraps: a stamp first, then that record and those after it, whole
+   records only, until the next would not fit. The query device's log
+   answer (record 25 section 4.5) is then: the head; a record
+   `cm.log.head` (the head's bytes, 22 bytes); the last `cm.ms` record
+   the ring holds in the 1,024 bytes before the tail's first record (16
+   bytes; item 1 puts one there in a ring that has records before the
+   tail), so the tail's first records keep their time; and the tail, the
+   newest records of the ring within what is left of `CM_QL_LOG_MAX`
+   (16,384 bytes less the head, 22 and 16), beginning at a record
+   boundary. A ring drained for emission (item 1) begins with a stamp at
+   its first record after the drain; the answer, which leaves out the
+   first record of a drained ring in case a drain cut it, keeps it when
+   it is a whole stamp and the ring has not wrapped since the drain, and
+   the carried stamp may be that one. `CM_QL_F_LOG_CUT` is set when anything of the ring
+   before the tail was left out (the wrap, or the head's share), as for a
+   wrapped ring today, and a new flag `CM_QL_F_HEAD` (`100h`) says the
+   log begins with the head. Values withheld below level 4 (a label that
+   names an address) are withheld in the head as in the tail. Before the
+   first connection the answer is as before. So the answer never exceeds
+   `CM_QL_LOG_MAX` and the readers of `3.4.0.0` print it unchanged. The
+   checked flavour's emission (DebugView, port `0xE9`) is unchanged.
+
+**What it costs.** A stamp is 16 bytes, written when the clock has
+moved (on 98 SE a tick is about 1 to 55 ms: at most one stamp per tick
+of logging) or after a kilobyte of records; the ring holds somewhat fewer records with them, which the
+head offsets for the first cycle. The link reads are a few dwords per
+bridge per numbering.
+
+**What would prove the rule, and the guard.** A sweep's reading taken
+after a `u4.connect` and `u4.action` UP of a newer generation for the
+same member, whose first time is after that UP, followed by the
+removal (`cm.vanish.cr`, `cm.vanish.cr.from` naming that reading and
+`cm.vanish.cr.at` a function a `cm.brnum.9x.bridge` of the new
+connection named) of a child the new numbering had found, with `cm.brnum.9x.link` showing the new bridges' links up.
+The guard (a sweep ends without removing anything once its member's
+generation has moved past the DOWN's own; the new connection's own
+re-enumeration finds what is left) is coded only once such a log, from
+the board or the emulator, shows it; until then it is owed, and these
+points are what the board reads next. (Section 8.3 replaces that guard: the case
+built in the emulator showed that it would keep the old connection's
+devnodes over reset hardware.)
+
+**Verification.** Host vectors: the stamp (the clock moved, not moved,
+a record that would begin 1,008 bytes after it, the first record after a
+drain);
+the head (armed once, at the first `u4.connect`, records whole, the 4 KB
+bound, a stamp first); the answer's composition with and without a head
+(the bytes never above `CM_QL_LOG_MAX`, the tail at a record boundary,
+the carried stamp found and absent, the flags, the withheld value in the
+head). On the
+emulator (98 SE, the ASM4242 with the ORICO model): a plug, an unplug,
+a replug at once (the 15 quick drops of `runs/run-46.md` "46.16"), and
+`XHCITR`'s report showing the stamps, `u4.connect`, the sweep's and
+readings' generations and times, the link records and the head.
+
+### 8.3 A DOWN acts on its own connection's children only (task 46.13)
+
+Draft 2, 2026-11-03, reviewed and revised (a call admitted before the
+link-down may publish after it, so the forced removal needs every call
+of the member ended before the link-down; the snapshot of the calls read
+under the worker's lock with their busy state; each reading's and each
+kept child's binding fixed; the supersession read whatever holds the next
+reading; a tunnel up of the same connection unbinds); draft 1,
+2026-11-03. For `roadmap-usb4.md` task 46.13, the rule "a DOWN never acts
+on a generation newer than its own", after its case was built in the
+emulator (98 SE without ACPI, the ASM4242 model, the ORICO model,
+`runs/run-46.md` "46.13"): the enclosure's cable pulled and put back
+about a millisecond later (`usb4-device` `x-cable`), so that the USB4
+core logs the old connection's `u4.linkdown` and the new connection's
+`u4.connect` in the same pass and the old connection's DOWN reaches the
+re-enumeration seam after the new connection began (`cm.vanish.sweep.gen`
+generation 1 with `cm.vanish.sweep.now` generation 2). Two outcomes were
+read, and they settle what the guard may and may not do:
+
+- With the tunnel port's default two-second settle (the new endpoint not
+  yet answering), the DOWN's reading found its child vanished and removed
+  it before the new connection's numbering, which the sweep's gate held;
+  the new connection's numbering then found the bridges and the drive
+  came back. That removal is necessary: the devnode it removed was the
+  old connection's, on hardware the replug had reset.
+- With the settle at 0 (`-global usb4-asm-tunnel-dsp.settle-ms=0`, the
+  new endpoint answering at once), the DOWN's reading found the child's
+  vendor and device answering again - the new hardware, the same model -
+  and removed nothing. The old connection's devnode stayed, started, over
+  reset hardware; the new connection's numbering was held because the
+  bridge's devnode still had a child (section 6.1.1's rule), its
+  re-enumeration ran anyway, and Windows found "new hardware" below the
+  reset bridge whose secondary bus reads 0 (bus 0's own functions, a
+  "PCI standard host CPU bridge" among them).
+
+So the guard section 8.2 proposed ("a sweep ends without removing
+anything once its member's generation has moved past the DOWN's own")
+would turn the first outcome into the second. What a DOWN must not touch
+is a devnode made for a newer connection, not whatever it sees after a
+newer connection began. On the owner's board the order was that one: the
+CONFIGMG worker's numbering and re-enumeration of the member, asked by
+the previous UP and run late, found the new connection's bridges and
+published them before the old DOWN's sweep read the member and removed a
+child it read vanished.
+
+**What publishes.** A member's children change only through a
+re-enumeration of its bridge: this worker's (its request's call, and the
+rescan that completes a stale removal), or one made outside the driver
+(the user's Refresh), which this section does not cover. The worker
+numbers every such call in one event order under its lock: an event when
+the call is admitted (immediately before it is made) and one when it has
+ended, drawn under the same lock as the call's busy bit is cleared, so the
+thread's snapshot of a member (`CmCfgwkPub`: in flight, the last end, the
+last fresh publication) is never one without the other. A **fresh
+publication** is a call of a request whose numbering read the bridge's
+inventory complete and empty (section 6.1.1: no child under the bridge's
+devnode) and that returned success; between that inventory and its call
+the worker makes no other call of the member, so nothing was under the
+bridge when the call began. The core's link-down upcall for a port
+(`cmU4LinkDown`, on the NHI thread inside `TbtU4Poll`, where the core logs
+`u4.linkdown`, before anything else of the teardown) draws an event too,
+kept with the connection's generation *g* for the member the port
+corresponds to (named or learned; a port whose member is not known binds
+nothing). A tunnel up of the same connection again unbinds it, so the
+connection's own later publication never counts against its DOWN.
+
+**The rule.** For a DOWN of connection *g* on its own member (bound),
+read before each of its readings and before a record its readings made
+has its query:
+
+1. **Superseded.** A fresh publication on the member admitted after *g*'s
+   link-down event: the member had no child when that call began, and the
+   call began after the link went down, so nothing it or a later call
+   made is *g*'s. The DOWN's sweep ends without reading again (its kept
+   child dropped), and a vanished record its readings made is withdrawn
+   without a call when it has no call out, no result owed, is not a
+   CONFIGMG worker's claim and its query was never accepted (a refused
+   query authorised nothing, and the devnode it named was not under the
+   member at the fresh publication's inventory); the devnode stays and
+   the new connection's own re-enumeration, which the gate held, finds
+   it. A call out is let finish; a record whose query was accepted keeps
+   its removal.
+2. **Every child the old connection's.** Otherwise, when the member's
+   port is on a newer connection than *g* and every call of the member
+   ended before *g*'s link-down event (none in flight, the last end
+   before it): every child was published from hardware read before the
+   link went down, so it is *g*'s or older, whatever answers on the bus
+   now (the core reports a connection's link down before the port's next
+   connection begins); the gate the sweep raised refuses every later
+   admission, so none is published between the reading and its removal.
+   The reading takes every child as vanished (a child whose vendor and
+   device are not read from its instance id still never is), and removes
+   it as now - before the new connection's numbering, which then finds
+   the bridges in reset state and numbers them.
+3. **Wait.** A call of the member in flight: no reading until it has
+   ended (as before, `CmCfgwkEnumBusy`); then decided again.
+4. **Otherwise as before**: the member still on connection *g* (the
+   ordinary unplug), or a call that ended after the link-down (it may
+   have read the new hardware: neither rule 1's proof nor rule 2's), the
+   vanished verdict by vendor and device.
+
+Only the DOWN's own member is bound (`CmNhiActionMember` of the action:
+the depth-1 member its port corresponds to): the other members the same
+DOWN sweeps, a chained tunnel's DOWN, a RESYNC, the service paths' sweeps
+(`CM_EJ_SWEEP_NO_GEN`), the firmware connection manager and a start other
+than the one that bound it (a start's own number) are not, and keep
+section 7.2's rules unchanged. A sweep asked again while it runs takes
+the newer ask's binding (or none); a reading out keeps the binding it was
+submitted with, and the records it makes and the child it keeps when no
+record is free carry that one. Event numbers compare in sequence order
+(less than 2^31 apart).
+
+The board's order needs rule 1 when the late call was admitted after the
+link-down upcall; a late call admitted before it and run after (blocked
+inside CONFIGMG) ends after the link-down, so rule 4 applies and the
+vanished verdict stays the vendor-and-device one, as before: that case is
+not covered, and its log says so.
+
+**Log points.** `cm.vanish.down` (the member in bits 31:24, *g* in
+23:0) and `cm.vanish.down.evt` (its event) at each link-down upcall with
+a known member; `cm.reenum.9x.call` (the member in bits 31:24, 1 in bit 8
+for a fresh publication, the CONFIGRET in 7:0) and `cm.reenum.9x.call.evt`
+(its admission's event in bits 31:16, its end's in 15:0) at each call's
+end; at each reading a bound sweep submits, and when one ends superseded,
+`cm.vanish.guard` (the member in bits 31:24, the decision in 23:16: 1 as
+before, 2 every child, 3 superseded, 4 wait; the reading's number in
+15:0), `cm.vanish.guard.gen` (*g* in bits 31:16, the port's connection
+now in 15:0, `FFFF` not known), `cm.vanish.guard.evt` (the link-down
+event) and `cm.vanish.guard.pub` (bit 31 a call in flight; the last fresh
+publication's event in 30:16, `7FFF` none; the last end's in 15:0, `FFFF`
+none); `cm.vanish.sweep.superseded` (the bridge in bits 31:8, the member
+in 7:0); and `cm.vanish.superseded` for each record withdrawn (its bridge
+in bits 31:16, its phase in 15:8), followed by `cm.vanish.cr.from` and
+`cm.vanish.cr.at` as for a removal.
+
+**Verification.** Host vectors for the decision (unbound; bound with the
+member still on *g*; bound, newer connection, every call ended before the
+link-down, none ever ended, one ended after it, one in flight, the port
+not known; a fresh publication admitted before, at and after the
+link-down event, superseding whatever is in flight; event numbers across
+the wrap). In the emulator, on this build: the instantaneous replug with
+the two-second settle (rule 2: the removal before the new numbering, the
+drive back), with the settle at 0 (rule 2 removes the old child although
+it answers; the drive back, no new-hardware dialog), and an ordinary
+unplug and replug after 1 s and after 8 s (rule 4, unchanged). Rule 1
+needs the worker's late call to publish the new connection's bridges
+while the thread is still inside the new connection's poll, the board's
+order; it rests on the argument above and on its log points, read next on
+the board.
+
 ## 9. Provenance and licence
 
 This project was GPL-2.0-only when this record was written and is
@@ -8114,6 +8469,40 @@ real work of obligation 2 in section 7. The handoff's warning stands for
 it: write it to depend on no exact device router, treat every router
 operation as possibly unsupported, discover adapter numbers rather than
 assume them, and poll completions with timeouts.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **The Windows 98 / ME configuration manager's ring-0 interface values in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1; safe eject, roadmap-usb4 task 39-A.8): CONFIGMG's VxD id `0x0033` (`VMM.H` line 175, `CONFIGMG_DEVICE_ID`), the dynalink interrupt `20h` (`VMM.INC` line 3355) and its jump bit `8000h` (`VMM.H` line 4919, `DL_Jmp_Mask`); twenty service numbers - `Get_Version` 0, `Locate_DevNode` 2, `Get_Parent` 3, `Get_Child` 4, `Get_Sibling` 5, `Get_Device_ID_Size` 6, `Get_Device_ID` 7, `Query_Remove_SubTree` 12, `Remove_SubTree` 13, `Register_Device_Driver` 14, `Lock` 22, `Unlock` 23, `Reenumerate_DevNode` 51, `Setup_DevNode` 52, `Get_DevNode_Status` 54, `Disable_DevNode` 64, `Enable_DevNode` 65, `Broadcast_Device_Change_Message` 88, `Change_DevNode_Status` 91, `Set_DevNode_Problem` 122 - each its entry's ordinal in `CONFIGMG.H`'s service table (lines 532-663: 124 entries numbered from 0 by `VMM.H` lines 353-358, with no conditional inside the table and two three-line comments at 624-626 and 645-647 that are not entries; the header's own `DEBUG_SERVICE_NAMES` array, from line 671, lists the same 124 in the same order, but for one spelling at ordinal 109, `_CONFIGMG_Register_For_Idle_Detection` at line 783 for the table's `_CONFIGMG_Register_DevNode_For_Idle_Detection` at line 648); and the `CR_`, `DN_`, `CM_PROB_` and call-flag values the file carries, among them `DN_REMOVABLE` `0x4000`, which `DN_CHANGEABLE_FLAGS` `0x79BB62E0` includes, and `CM_REGISTER_DEVICE_DRIVER_REMOVABLE` `0x2`. Each value is cited to its line in the file | static (a text read of the three headers of the Windows 98 Second Edition DDK, extracted with 7-Zip from `tools\win98ddk\win98se_ddk.exe` into `tools\win98ddk-extracted\`, SHA-256s in `docs/references/README.md`; nothing installed or executed; 2026-10-15; not tracked). The numbers, flag values and result codes alone were taken: no declaration, macro body or comment of the headers is reproduced, and the macro names in the file are this project's own. Every number `usb4-emu`'s re-enumeration experiment used (`tools/reenum-test/reenum.c` at `main` `a68bc74`: the VxD id and eleven services) agrees with these; that experiment's run-time results, recorded in design record 21 section 6.1, are `usb4-emu`'s evidence, not this driver's | `src/cm/cm_cfgmg.h`; design record 21 section 6.1 |
+| A.2 | **The configuration manager's logical-configuration services in `src/cm/cm_cfgmg.h`** (design record 28, roadmap-usb4 task 42-A.15), counted as the row above counts them: `Add_Empty_Log_Conf` 24 (line 557), `Get_First_Log_Conf` 26 (559), `Get_Next_Log_Conf` 27 (560), `Add_Res_Des` 28 (561), `Get_Next_Res_Des` 31 (564), `Get_Res_Des_Data_Size` 33 (566), `Get_Res_Des_Data` 34 (567), `Read_Registry_Value` 62 (595), `Reprocess_DevNode` 92 (628, the "4.0 OPK2" group) and `Get_Set_Log_Conf_Priority` 106 (642, the same group), with their C signatures from `MAKE_CM_HEADER` (lines 2827 to 2912); the values `BASIC_LOG_CONF` 0 (line 2212), `FORCED_LOG_CONF` 4 (2216), `PRIORITY_EQUAL_LAST` 0 (2235), `LCPRI_SUBOPTIMAL` `0x5000` (445), `LCPRI_DISABLED` `0xFFFF` (453), `CM_GET_LOG_CONF_PRIORITY` 0 and `CM_SET_LOG_CONF_PRIORITY` 1 (1342, 1343), `CM_REGISTRY_SOFTWARE` 1 (1227), `CM_REPROCESS_DEVNODE_ASYNCHRONOUS` 0 (1287), `ResType_All` 0, `ResType_Mem` 1 and `ResType_IRQ` 4 (lines 92 to 97), `CR_NO_MORE_LOG_CONF` `0x0E`, `CR_NO_MORE_RES_DES` `0x0F` and `CR_NO_SUCH_VALUE` `0x25` (951, 952, 974), and the problems `0x08`, `0x0C`, `0x10`, `0x12`, `0x1B`, `0x1C`, `0x1D` (lines 1055 to 1076); `REG_SZ` 1 (`VMM.H` line 2231). The VMM's registry services the Stor98 locator and this record use, which no row carried: VMM id 1, `_RegOpenKey` `0x148` (`VMM.H` line 2216, the table numbered on from there one a line), `_RegCloseKey` `0x149` (2217), `_RegCreateKey` `0x14A`, `_RegDeleteKey` `0x14B`, `_RegQueryValueEx` `0x151` (2225), `_RegSetValueEx` `0x152` and `_RegCreateDynKey` `0x176`, their cdecl signatures from `VXDWRAPS.H` (lines 430 and 439 for the two this task added); Stor98's INF lines `PCI\CC_010802`, `HKR,,DevLoader,,*IOS` and `HKR,,PortDriver,,stor98.mpd` (`inf/stor98-x86.inf`, read at Stor98 `4253b58`) as the ownership evidence of record 28 section 4 rule 4. For the tunnel id on 98 SE and ME (design record 31 section 5, roadmap-usb4 task 44.3), counted the same way: `Add_ID` 85 (line 618, between `Call_Enumerator_Function` 84 and `Find_Range` 86, three entries before `Broadcast_Device_Change_Message` 88 at line 621), its C signature from `MAKE_CM_HEADER` (line 2888: a devnode, a string, the flags), `CM_ADD_ID_HARDWARE` 0 and `CM_ADD_ID_COMPATIBLE` 1 (lines 1252 and 1253; `CM_ADD_ID_BITS` 1, line 1254, read and not used), `CM_REGISTRY_HARDWARE` 0 (line 1226), `CR_WRONG_TYPE` `0x26` (line 975) and `REG_BINARY` 3 (`VMM.H` line 2232) | static (a text read of the same extracted DDK headers and of Stor98's INF; nothing installed or executed; 2026-10-18 and 2026-10-19, and `CONFIGMG.H` again on 2026-10-25 for the record 31 values; not tracked). Numbers and argument orders alone; no declaration, macro body or comment reproduced | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`, `src/cm/cm_nvlinkos.c`, `src/cm/cm_cfgwk.c`; design records 28 and 31 |
+| A.3 | **The Windows 98 SE setup engine's device-installer values and ordinals in `xhciinst/di/`** (roadmap-usb4 task 42-A.1, design record 27 sections 2, 5 and 9). From the DDK's `inc16\setupx.h`: the `RETERR` values of its five error enumerations, each counting up from its base (`_ERR_IP` from `IP_ERROR` 100 + 1, sixteen; the text processor's from `TP_ERROR` 200 + 1, six; `_ERR_VCP` from `VCP_ERROR` 300 + 1, twenty-five; `_ERR_GENERIC` from `GEN_ERROR` 400 + 1, eighteen; `_ERR_DEVICE_INSTALL` from `DI_ERROR` 500, twenty-eight, in which `ERR_DI_BAD_UNREMOVEDEVICE_PARAMS` is 520, after `ERR_DI_BAD_PATH`, not where its documentation block lists it), with their names, which the helper writes into its result file; `DI_NEEDRESTART` `0x80`, `DI_NEEDREBOOT` `0x100`, `DI_ENUMSINGLEINF` `0x10000`, `DI_CLASSINSTALLPARAMS` `0x100000`, `DI_QUIETINSTALL` `0x800000`, `DNF_OLDDRIVER` `0x2`, `DNF_CURRENT_DRIVER` `0x100`. From the DDK's `setupx.lib`: the ordinals of `SETUPX.DLL` the helper imports, among them `DIGETCLASSDEVSEX` 406, `DiGetINFClass` 351, `DICREATEDEVICEINFO` 303, `DIBUILDCOMPATDRVLIST` 300, `DICALLCLASSINSTALLER` 308, `DIDESTROYDEVICEINFOLIST` 305, `CTLGETLDDPATH` 38 and `CTLSETLDDPATH` 508 (`xhciinst/di/xhcidi-imports.allow` has every row) | static (a text read of the header and a read of the library's IMPDEF records by `xhciinst/di/check-imports.ps1`, which holds every allowlist row to them at each build, and by Open Watcom's `wlib -l`; the DDK as in the CONFIGMG row above, its member hashes in `docs/references/README.md`; nothing executed; 2026-10-18; not tracked). Names and numbers alone are taken: the structure declarations the helper uses are the header's, compiled against and not reproduced, and `test/test_di.c` re-reads the five enumerations and the flags from the header wherever `tools\win98ddk-extracted\` holds it | `xhciinst/di/di_core.c`, `di_core.h`, `xhcidi-imports.allow`; design record 27 |
+| A.4 | **PCI.VXD's configuration-space services in `src/cm/cm_cfgmg.h`** (design record 21 section 6.1.1, the 9x bus numbering): PCI.VXD's VxD id `0x0043` (`VMM.H` line 197, `PCI_DEVICE_ID`, which `PCI.H` line 67 also names `ResType_PCI_Bus_Number`), and the service numbers `_PCI_Read_Config` 1 and `_PCI_Write_Config` 2, the second and third entries of `PCI.H`'s service table (line 56 on: four entries, numbered from 0 by `VMM.H` lines 353-358); their C signatures, `(BYTE bus, BYTE devfunc, BYTE offset)` returning the dword and `(BYTE bus, BYTE devfunc, BYTE offset, DWORD value)`, both `_cdecl`, from `VXDWRAPS.H` lines 313-314 | static (a text read of `PCI.H`, 8,081 bytes, SHA-256 `0acdf32afe0cc5baca1d74d08638f4f02f744d4f7ed54edb10764c136feb34f9`, and `VXDWRAPS.H`, 60,450 bytes, SHA-256 `d43708f618ad2cd5ed4b66e1e3ebc31235710df83cc9673c54c22d4b07fbe884`, of the same extracted DDK; nothing installed or executed; 2026-10-16; not tracked). Numbers and the argument order alone; no declaration or macro body is reproduced. The run-time guard and the emulator and P14s readings of record 21 section 6.1.1 are what confirm the numbers in use | `src/cm/cm_cfgmg.h`, `src/cm/cm_cfgmg.c`; design record 21 section 6.1.1 |
+| A.5 | **`usb4-emu/docs/ICM-PROTOCOL.md`, the Thunderbolt 3 client's clean-room contract (design record 21)**: `usb4-emu` `main` `a68bc74`, the same text as at `eba0cf1` (git blob `976cbbe2d4088eb86711463b3f0df3fa2d7fc414`, SHA-256 `43ee04e4326d84d6ea33a17f1b70a3e3b874221c937d3666a31e2b17768d83f8`). The file carries no licence line; its repository's `LICENSE` is MIT. It says it was written from the P14s Gen 1 captures and from a reading of Linux's client behaviour, that no client code, structure or header text is reproduced, and that its field names are its own. It tags each statement [obs] (seen in a capture, citation given) or [inf] (what the Linux client expects, not captured). This project cites it by section and keeps the tag: in `src\cm\` an [inf] fact is a hypothesis until a capture, a leg here, or Linux's `icm.c` itself (section 3, the Thunderbolt mirrors) settles it. The captures, all under `usb4-emu/tests/captures/p14s-gen1/` and named by run id: `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`.tar.gz`, SHA-256 `0638f9b857e7cf6b7b11186aed4bc140d71c622aa080d0bad88895e190bd81c2`), `p14s-linux-20261014-133751-assistON_prebootON` (`5544975d2056f342d479b378406fa785e89a348c1a3629046ea53bd617940c99`), `p14s-win11-20261014-135249-assistOff_prebootOff` (`.zip`, `89171b604592f6f4f2a242f3ad4f903e016870864116df8831d6784e39e658e0`) and the Windows 98 MS-DOS-mode matrix `win98/` (`OFF_OFF`, `OFF_OFF_N`, `OFF_ON`, `OFF_ON_N`, `ON_OFF`, `ON_OFF_N`, `ON_ON`, `ON_ON_NO`) | static (a document read, 2026-10-15; nothing executed; the captures behind its [obs] were not re-read here) | design record 21 section 9 and every section citing `ICM-PROTOCOL` |
+| A.6 | **`ICM-PROTOCOL` sections 1 and 2: NHI and switch identity, PCI topology, and the NHI's BAR0** - ids, class, BARs, capabilities, the switch's ports and buses (section 1); register values with the firmware running, the firmware status register, the NHI mailbox, ring 0, interrupts, host reset and starting stopped firmware (sections 2.1-2.7) | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`: `P:` (lspci and raw config), `M:` (BAR0 dumps per step) and `T:` (trace). The ring layout is the generic one of USB4 2.0 section 12.6 (`docs/references/README.md`) | design record 21 sections 2, 4.1-4.3, 6.3 |
+| A.7 | **`ICM-PROTOCOL` sections 0 (byte order), 3 and 4.1-4.8: ICM framing on ring 0 and the Alpine Ridge message set** - the wire byte order, the ICM header word, command and event codes, driver ready, get route, approve, device connected and disconnected, boot ACL, errors | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF`, `T:` lines. The wire byte order (section 0) is [inf] there | design record 21 sections 5.1-5.5 |
+| A.8 | **`ICM-PROTOCOL` section 4.9: how Titan Ridge differs from Alpine Ridge** - driver-ready layout, device addressing by route string, no connection key, the approve and disconnect shapes | static (a document read). **Every row is [inf]**: no Titan Ridge capture exists. The best-effort Titan Ridge message-set row of decision D9 (owner, 2026-10-15) is built from it, and is untested | design record 21 sections 1.4 and 11 (D9) |
+| A.9 | **`ICM-PROTOCOL` sections 5-7: the config-space traffic the client generates, the sequences, and security level `user`** - host and device router reads, the DMA port, the EEPROM protocol, the read order after a device-connected event, bind, rebind, unplug, plug and approve, runtime suspend and resume, unbind | static (a document read). Its [obs] rest on run `p14s-linux-20261014-122716-assistOFF_prebootOFF` (`T:`, `D:`, `S<n>:`); section 7's pre-boot statement rests on section 12.1's sources (the Windows 98 matrix and run `p14s-linux-20261014-133751-assistON_prebootON`). Section 6.1's bind order is inferred there | design record 21 sections 5.1, 5.3-5.6 |
+| A.10 | **`ICM-PROTOCOL` sections 10 and 11: Windows 11 with Intel's driver, and the platform ACPI** - driver binding (the INF's `CC_0880` match), resources (MSI-X, 16 messages), driver state and logs, the root port `RP05` (00:1c.4) `_DSD` properties, force power and `_OSC` | static (a document read). Its [obs] rest on run `p14s-win11-20261014-135249-assistOff_prebootOff` (`W:`); the ACPI tables are its `W:acpi/reg-*`, which that document says match the Linux run's, and section 11.3's `_OSC` reading also cites the dmesg of both Linux runs | design record 21 sections 1.3, 3.3, 10.4 |
+| A.11 | **`ICM-PROTOCOL` section 12: pre-boot support and BIOS Assist** - with pre-boot on, the firmware tunnels the boot-ACL dock before any OS and the BIOS enumerates it; with BIOS Assist on, pre-boot on and nothing attached at power-on (`ON_ON_NO`), the controller is down and the root port's link is down; whether Assist off does the same with nothing attached is open there (no such capture) | static (a document read). Its [obs] rest on the Windows 98 MS-DOS-mode matrix (`P98:`, each folder's `PCIDUMP.TXT`) and run `p14s-linux-20261014-133751-assistON_prebootON` | design record 21 sections 2, 6.5, 10.2, 10.4 |
+| A.12 | **Linux `drivers/thunderbolt`: NHI and bridge device ids, and which connection manager each one gets** - `nhi.h`'s `PCI_DEVICE_ID_INTEL_*` constants, `pci.c`'s `nhi_ids[]`, and `icm.c`'s `icm_probe` choice of the Falcon, Alpine and Titan Ridge and Ice Lake message sets by NHI id; FreeBSD `nhi_reg.h`'s ids as a second reading | static (a source read of the pinned mirror, section 3's Thunderbolt paragraph and `external/README.md`; nothing executed). Each id is cited by file and symbol where it is used; no table is copied | design record 21 sections 1.4 and 3.3, and the INFs, as each lands |
+| A.13 | **Linux `drivers/thunderbolt`: the ICM message codes and layouts per generation** - `tb_msgs.h`'s `enum icm_pkg_code` and its `icm_fr_`, `icm_ar_`, `icm_tr_` and `icm_icl_` request, response and event layouts, and `icm.c`'s per-generation `tb_cm_ops` (`icm_fr_ops`, `icm_ar_ops`, `icm_tr_ops`, `icm_icl_ops`) for the order of operations | static (a source read of the pinned mirror; nothing executed). Word and bit layouts are restated in this project's own names, cited by file and structure; no structure declaration or function body is copied | design record 21 section 5 and `src\cm\`, as each lands |
+| A.14 | **Linux and FreeBSD: NHI register offsets and fields, and control-packet framing** - Linux `nhi_regs.h`, `tb_regs.h` and `ctl.c` (the frame, `tb_crc`); FreeBSD `nhi_reg.h` and `tb_reg.h` | static (a source read of the pinned mirrors; nothing executed). These are cross-readings of USB4 2.0 section 12 and `usb4cm`'s `u4regs.h` (section 2a), each offset cited by file and symbol | `src\cm\tbt_regs.h` and design record 21 section 4, as each lands |
+| A.15 | **Linux `drivers/thunderbolt`: controller quirks** - `quirks.c`'s `tb_quirks[]` and the generation-specific handling in `icm.c` and `nhi.c` | static (a source read of the pinned mirror; nothing executed). A quirk is taken as a description, the ids and the register effect, cited by file and symbol, and written fresh; no quirk code is copied (section 3's Thunderbolt paragraph) | design record 21 and `src\cm\`, as each lands |
+| A.16 | **The PCI ID Repository: the Thunderbolt NHI, switch-port and tunnel root-port ids and their listed names** (design record 21 section 3.3, decision D9) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids> (the listing at <https://pci-ids.ucw.cz/>, vendor `8086`), version `2026.10.14`, dated 2026-10-14 03:15:02, fetched 2026-10-15, 1,671,991 B, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`; the file's header offers it under GPL-2.0-or-later or BSD-3-Clause and says its copyright covers only the aggregation and formatting of factual data | static (a text listing read; nothing executed). Ids only: the vendor and device ids and the names listed beside them, cross-checked against Linux `pci_ids.h` and `nhi.h`; the file is not tracked and nothing else of it is taken | design record 21 section 3.3 |
+| A.17 | **The ThinkPad P14s Gen 1's PCI configuration space, as the owner captured it, used as host-test vectors** (roadmap-usb4 task 39-A.5, design record 21 section 6.3) - `usb4-emu` `main` `a68bc74` (MIT at that commit, GPL-2.0-only from `3c74189`), `tests/captures/p14s-gen1/win98/OFF_OFF/PCIDUMP.TXT` (BIOS Assist off, pre-boot off; SHA-256 `c0ddd4ee4501b2ad21ffa01eb5ad5b55e3cd9a384039a17daff43b540a44b9cd`) and `.../OFF_ON/PCIDUMP.TXT` (pre-boot on, the dock tunnelled before POST; SHA-256 `03c1448c9d5cb56ecd456cafa2c1b7118889327dbcd116885f42e96b3b6ec1be`), read under DOS with PCI mechanism #1 on the owner's own machine, 256 bytes per function | a hardware capture, neither static nor runtime in this section's sense: the owner's machine read under DOS, not by this driver and not out of a binary. Every function's 256 bytes are reproduced unedited in `test\tbt_topo_p14s.h`, which names both files and both SHA-256s in its header, for `test_tbt_topo`'s P14s vectors | `test\tbt_topo_p14s.h`, `test\test_tbt_topo.c`; design record 21 section 6.3 |
+| A.18 | **Linux `drivers/thunderbolt`: how a domain's PCI side is associated** - `icm.c` `get_upstream_port` (the discrete switch known by its ids), `acpi.c` `tb_acpi_add_links` and `tb_acpi_add_link` (the `usb4-host-interface` references from root ports to the NHI), `usb4.c` `usb4_switch_map_pcie_down` and `tb.c` `tb_find_pcie_down` (the fabric mapping, which names an adapter and no PCI location) | static (a source read of the pinned mirror; nothing executed). Taken as descriptions of what each source can and cannot say, cited by file and symbol; nothing of them is adapted into `tbt_topo.c` | design record 21 section 6.3; `src\cm\tbt_topo.c` and `tbt_topo.h` |
+| A.19 | **The PCI ID Repository, second reading: the USB4 hosts' tunnel-port ids** (design record 22 section 3.7, roadmap-usb4 task 40-0.2) - the same `pci.ids`, version `2026.10.14`, SHA-256 `b0577d41ed389682f2a159cd97b4fd31b13810700e2823254e9689a3898cc837`, read for vendors `8086`, `1022` and `1B21`: the Barlow Ridge host bridges `8086:5780` and `5783`, AMD's "USB4/Thunderbolt PCIe tunnel" `1022:14CD` and `14EF` and "PCIe USB4 Bridge" `150A`, ASMedia's "ASM4242 PCIe Switch Downstream Port" `1B21:2423`; and the ids the gate's `CM-NOROUTER` refuses (Goshen Ridge `8086:0B26`, AMD's "USB4 Router" `1022:151C` and `151D`, "ASM2464PD USB4 Device Controller" `1B21:2463`, and the Thunderbolt 1 and 2 parts listed beside them). The listing names no Lunar, Panther or Wildcat Lake port as a Thunderbolt or USB4 port; Panther Lake's and Meteor Lake's "USB Type-C Subsystem PCIe Root Port" ids were read and not taken | static (a text listing read; nothing executed). Ids and listed names only; neither mirror names these ports (Linux finds them through ACPI, FreeBSD's identifier table is empty at its pin); the file is not tracked | `src\cm\xhcicmf.inf`, `xhcicmf-amd64.inf`, `scripts\inf-gate\check-cm-inf.ps1`; design record 21 section 3.3 |
+| A.20 | **Intel's Thunderbolt driver on Windows 10**: `tbt100x.inf` 17.4.77.13 and `TbtHostController.inf` 1.41.1379.0 and 1.41.1423.0 install the service `nhi` (`tbt100x.sys`, `TbtBusDrv.sys`), x64 only; the NHI ids by `PCI\VEN_8086&DEV_<id>&CC_0880` (Alpine Ridge and Titan Ridge, Ice Lake), bare `VEN&DEV` (1134, 1137) or `&CC_0C03` (Tiger Lake and later); 1.41.1423.0 drops the Alpine Ridge ids; no `FeatureScore`; the DCH INFs write `DmaRemappingCompatible` 1; the Thunderbolt Control Center tied by a software component (`pfn://AppUp.ThunderboltControlCenter_8j3eq9eme6ctt`) | static (the INF text read; the catalogs' signer read as data by PowerShell's `Get-AuthenticodeSignature`; nothing executed) | `docs/contributing/design/21-thunderbolt3-icm-client.md` section 3.6 |
+| A.21 | **The PCI ID Repository, fourth reading: AMD's integrated USB4 hosts** (roadmap-usb4 task 46.23) - `pci.ids` version `2026.10.31`, dated 2026-10-31 03:15:02, 1,677,859 B, SHA-256 `3af2de60a0cb598912d4ede5314fcb36a59593d08fba4f7f26ca4d4e53a7b9ea`, read for vendor `1022`: the NHIs "Rembrandt USB4/Thunderbolt NHI controller #1" and `#2` `162E`, `162F`, Phoenix's `15C4`, `15C5`, Strix's `151C`, `151D`, "Strix Halo USB4 Host Router" `158D`, `158E`, Krackan's `1120`, `1121`, Krackan2's `113B`, `113C`, Pink Sardine's `1668`, `1669`; the bridges "Rembrandt PCIe USB4 Bridge" `14CD`, "Phoenix/Phoenix2 PCIe USB4 Bridge" `14EF`, "Strix/Strix Halo PCIe USB4 Bridge" `150A`, "Krackan/Krackan2 PCIe USB4 Bridge" `1125`; no Hawk Point USB4 id. Cross-checked: Linux `drivers/thunderbolt` (the pinned mirror) names no AMD NHI id (`pci.c` matches class `0C0340`) and only the router ids `0438:0208` to `020B` (`quirks.c`, `tb_quirks[]`); `acpi.c` `tb_acpi_add_link` pairs a tunnelled root or downstream port with its NHI by the port's ACPI `usb4-host-interface` reference; FreeBSD `nhi_reg.h` names Pink Sardine alone. With it, a Strix Halo machine's Windows 11 device properties (`Get-PnpDeviceProperty`, 2026-11-03, read only): `158D` and `158E` class `0C0340`, each with a USB4 root router child; the two `150A` functions PCI Express root ports on the root bus, each listing one NHI's child as its dependency provider | static (a text listing and source read; nothing executed), and a reading of a machine's device properties (no driver of this project installed). Ids, listed names and the topology only; no board, subsystem or bus number taken; the file is not tracked | `src\cm\cm_vals.c`, `cm_ports.c`, `tbt_hw.c`, `xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf`, `xhcicmf-amd64.inf`, `src\pfw\pfw_ids.c`, `xhciinst\inst_core.c`, `xhcitr\tr_core.c`, `scripts\inf-gate\check-cm-inf.ps1`; design record 21 section 3.3 |
 
 ## Sources
 

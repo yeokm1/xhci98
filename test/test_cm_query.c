@@ -12,6 +12,7 @@
 #include <string.h>
 #include "../src/cm/cm_statb.h"
 #include "../src/cm/cm_qryb.h"
+#include "../src/xhci_log.h"
 #include "../src/cm/cm_live.h"
 #include "../src/xhci_verpk.h"
 #include "test_harness.h"
@@ -960,6 +961,161 @@ static void test_seed_inert(void)
     CHECK(CM_Q_WAIT_BUSY == 0, "a zeroed extension reads between waits");
 }
 
+/* Task 46.13 (record 21 section 8.2): the stamps, the head and the answer
+ * that carries them. */
+static UCHAR headBuf[CM_LOG_HEAD_BYTES];
+
+static void test_log_stamps_head(void)
+{
+    CM_QLOG_IN in;
+    ULONG head = 0;
+    ULONG used = 0;
+    ULONG dropped = 0;
+    ULONG info;
+    ULONG n;
+    ULONG hu;
+    ULONG full;
+    ULONG bytes;
+    ULONG i;
+    const UCHAR *t;
+    char line[40];
+    char longLabel[120];
+
+    CHECK_EQ(CmLogStampDue(5, 5, 0), 0, "same ms, nothing since");
+    CHECK_EQ(CmLogStampDue(5, 6, 0), 1, "the clock moved");
+    CHECK_EQ(CmLogStampDue(5, 5, CM_LOG_STAMP_SPAN - 1), 0,
+             "a record beginning within the span");
+    CHECK_EQ(CmLogStampDue(5, 5, CM_LOG_STAMP_SPAN), 1, "at the span");
+    CHECK_EQ(CmLogStampDue(5, 5, CM_LOG_STAMP_FORCE), 1, "after a drain");
+    CHECK(CM_LOG_STAMP_SPAN + CM_LOG_STAMP_BYTES <= CM_LOG_STAMP_LOOK,
+          "a record's stamp lies whole in the bytes searched before it");
+
+    hu = 0;
+    full = 0;
+    CHECK_EQ(CmLogHeadPut(headBuf, 40, &hu, &full, "cm.ms", 0x1234UL,
+                          &bytes), 1, "a stamp fits");
+    CHECK_EQ(bytes, 16, "16 bytes");
+    CHECK(memcmp(headBuf, "cm.ms=00001234\r\n", 16) == 0, "its form");
+    CHECK_EQ(CmLogHeadPut(headBuf, 30, &hu, &full, "u4.connect",
+                          0x00020005UL, &bytes), 0, "21 more do not fit in 30");
+    CHECK_EQ(full, 1, "full for good");
+    CHECK_EQ(hu, 16, "nothing of it");
+    CHECK_EQ(CmLogHeadPut(headBuf, 40, &hu, &full, "a", 0, &bytes), 0,
+             "nothing after full, however short");
+    memset(longLabel, 'x', sizeof(longLabel));
+    longLabel[sizeof(longLabel) - 1] = 0;
+    hu = 0;
+    full = 0;
+    (VOID)CmLogHeadPut(headBuf, CM_LOG_HEAD_BYTES, &hu, &full, longLabel, 1,
+                       &bytes);
+    CHECK_EQ(bytes, XHCI_LOG_MAX_RECORD + 2,
+             "a cut label as the ring writes it: no value");
+
+    /* A head and a small ring: head, marker, ring; no cut. */
+    hu = 0;
+    full = 0;
+    (VOID)CmLogHeadPut(headBuf, CM_LOG_HEAD_BYTES, &hu, &full, "cm.ms", 7,
+                       &bytes);
+    (VOID)CmLogHeadPut(headBuf, CM_LOG_HEAD_BYTES, &hu, &full, "u4.connect",
+                       0x00010001UL, &bytes);
+    (VOID)CmLogHeadPut(headBuf, CM_LOG_HEAD_BYTES, &hu, &full,
+                       "cm.live.bar-changed", 0xE0000004UL, &bytes);
+    ring_put(&head, &used, &dropped, "cm.ms=00000009\r\ncm.x=00000001\r\n");
+    log_in(&in, head, used, dropped);
+    in.HeadText = headBuf;
+    in.HeadBytes = hu;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    t = logOut + 64;
+    n = get32(logOut, CM_QL_O_LOG_BYTES);
+    CHECK_EQ(n, hu + 22 + used, "head, marker, ring");
+    CHECK(memcmp(t, "cm.ms=00000007\r\nu4.connect=00010001\r\n"
+                    "cm.live.bar-changed=--------\r\n", hu) == 0,
+          "the head, its address withheld");
+    CHECK(memcmp(t + hu, "cm.log.head=00000043\r\n", 22) == 0,
+          "the marker with the head's bytes");
+    CHECK(memcmp(t + hu + 22, "cm.ms=00000009\r\n", 16) == 0, "the ring");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS) & (CM_QL_F_HEAD | CM_QL_F_LOG_CUT),
+             CM_QL_F_HEAD, "the head flag, no cut");
+
+    /* A full head and a full, wrapped ring stamped as cm_log.c stamps it:
+     * the answer within CM_QL_LOG_MAX, the tail at a record boundary and
+     * timed by the stamp carried before it. */
+    hu = 0;
+    full = 0;
+    for (i = 0; !full; i++) {
+        sprintf(line, "cm.h%lu", (unsigned long)i);
+        (VOID)CmLogHeadPut(headBuf, CM_LOG_HEAD_BYTES, &hu, &full, line, i,
+                           &bytes);
+    }
+    head = used = dropped = 0;
+    n = 0;
+    for (i = 0; used < CM_QL_LOG_MAX || dropped < 5000; i++) {
+        if (n == 0 || n >= CM_LOG_STAMP_SPAN) {
+            sprintf(line, "cm.ms=%08lX\r\n", (unsigned long)i);
+            ring_put(&head, &used, &dropped, line);
+            n = CM_LOG_STAMP_BYTES;
+        }
+        sprintf(line, "cm.rec.%05lu=%08lX\r\n", (unsigned long)i,
+                (unsigned long)i);
+        ring_put(&head, &used, &dropped, line);
+        n += (ULONG)strlen(line);
+    }
+    log_in(&in, head, used, dropped);
+    in.HeadText = headBuf;
+    in.HeadBytes = hu;
+    CHECK_EQ(CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info),
+             CM_Q_ANS_WHOLE, "whole");
+    n = get32(logOut, CM_QL_O_LOG_BYTES);
+    t = logOut + 64;
+    CHECK(n <= CM_QL_LOG_MAX, "never above CM_QL_LOG_MAX");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS) & (CM_QL_F_HEAD | CM_QL_F_LOG_CUT),
+             CM_QL_F_HEAD | CM_QL_F_LOG_CUT, "head and cut");
+    CHECK(memcmp(t + hu, "cm.log.head=", 12) == 0, "the marker after it");
+    CHECK(memcmp(t + hu + 22, "cm.ms=", 6) == 0, "a stamp carried");
+    CHECK(t[hu + 22 + 14] == '\r' && t[hu + 22 + 15] == '\n', "whole");
+    CHECK(memcmp(t + hu + 22 + 16, "cm.", 3) == 0,
+          "the tail from a record boundary");
+    CHECK_EQ(t[n - 1], '\n', "ends with a whole record");
+
+    /* A drained ring (DebugView on) that begins with the stamp the drain
+     * forced keeps it when it has not wrapped since; not when it has. */
+    head = used = 0;
+    dropped = 300;
+    ring_put(&head, &used, &dropped, "cm.ms=00000042\r\ncm.y=00000002\r\n");
+    log_in(&in, head, used, dropped);
+    in.Flags |= CM_QL_F_EMITTED;
+    in.DroppedAtDrain = dropped;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(logOut + 64, "cm.ms=00000042\r\n", 16) == 0,
+          "the leading stamp kept");
+    CHECK_EQ(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_LOG_CUT, 0, "no cut");
+    in.DroppedAtDrain = dropped - 1;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    CHECK(memcmp(logOut + 64, "cm.y=00000002\r\n", 15) == 0,
+          "wrapped since the drain: cut as before");
+
+    /* A full head and a drained ring whose only stamp leads it, the tail
+     * cut shortly after that stamp: the leading stamp is carried. */
+    head = used = 0;
+    dropped = 300;
+    ring_put(&head, &used, &dropped, "cm.ms=00000077\r\n");
+    for (i = 0; i < 540; i++) {
+        sprintf(line, "cm.rec.%05lu=%08lX\r\n", (unsigned long)i,
+                (unsigned long)i);
+        ring_put(&head, &used, &dropped, line);
+    }
+    log_in(&in, head, used, dropped);
+    in.Flags |= CM_QL_F_EMITTED;
+    in.DroppedAtDrain = dropped;
+    in.HeadText = headBuf;
+    in.HeadBytes = hu;
+    (VOID)CmQueryLogAnswer(logOut, sizeof(logOut), &in, &info);
+    t = logOut + 64;
+    CHECK(get32(logOut, CM_QL_O_FLAGS) & CM_QL_F_LOG_CUT, "cut by the head");
+    CHECK(memcmp(t + hu + 22, "cm.ms=00000077\r\n", 16) == 0,
+          "the leading stamp carried");
+}
+
 int main(void)
 {
     test_layout();
@@ -969,6 +1125,7 @@ int main(void)
     test_log_lines();
     test_log_answer();
     test_log_text();
+    test_log_stamps_head();
     test_u4();
     test_icm();
     test_answer();

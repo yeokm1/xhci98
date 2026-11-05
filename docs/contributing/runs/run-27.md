@@ -685,3 +685,17 @@ and the `h98jh` churn row PASS, as in 27-V.1 above. The IDE IRQ 14 clause is
 a NOTE since `cd38a98`, because the disk is idle during the churn.
 
 Closed 2026-10-04.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Windows 98 SE's configuration manager sends a device PDO `IRP_MN_QUERY_DEVICE_RELATIONS` (BusRelations) and then `IRP_MN_QUERY_ID` after that PDO's `IRP_MN_REMOVE_DEVICE` has completed, in the same removal pass; Windows 2000 SP4 sends nothing after the REMOVE**: the trace reads `device PDO PnP minor=00000002`, `00000007`, `00000013` on every unplug of a bound device whose PDO was kept - 10 of 10 on each of two audio guests, and the HID and behind-hub mouse legs alike; 0x13 is `IRP_MN_QUERY_ID` and 0x14 `IRP_MN_QUERY_PNP_DEVICE_STATE` in the Windows 2000 DDK's `wdm.h`, and no 0x14 follows a REMOVE there. A PDO deleted inside its REMOVE took Windows 98 SE to "fatal exception 0E ... at 0028:C002A3A7" once its memory was reused | runtime (this driver's port-0xE9 trace, `qemu` flavour, Windows 98 SE under NUSB 3.3 and Windows 2000 SP4 in QEMU, 2026-10-04; traces `out\phase27\audio98\fixa-`, `fixb-`, `fhid-`, `fhmj-` and `w2k-debugcon.log` and `out\mx27\k-98-audio-fault-debugcon.log`, git-ignored, this host; the BusRelations type from diagnostic builds recorded in `c038326`'s message; nothing disassembled) | `src/hcd_pdo.c` (`RemovedPdos`, `hcdReapRemoved`); `docs/contributing/runs/run-27.md`, "The closing legs"; `lessons.md` |

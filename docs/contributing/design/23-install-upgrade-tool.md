@@ -1,6 +1,15 @@
 # Design Record 23 - The Install, Upgrade and Uninstall Tool
 
-Status: revision 51, 2026-10-31 (roadmap-usb4 task 45.54, the owner's
+Status: revision 53, 2026-11-04 (roadmap-usb4 task 46.24, the owner's decisions of that day on
+the UAS driver: on 2000 to 7 a UAS devnode not plugged in during an
+update is updated too, by model selection from the staged INF, with a
+guarded copy of `xhciuas.sys` behind it, section 5.5.1; on 8, 8.1 and 10
+the UAS driver out of the run, record 26 section 5.3.1 case 3a, draft 75);
+revision 52, 2026-11-03 (roadmap-usb4 task 46.22, the owner's
+decision of that day: on Windows 8, 8.1 and 10 without `/usb` or
+`/cmonly` the Thunderbolt question is asked, Enter for Y, section 8.5;
+record 26 section 5.3.7);
+revision 51, 2026-10-31 (roadmap-usb4 task 45.54, the owner's
 decisions of that day: fourteen more never-asked values in section 8.1's
 table, and on 98 SE and ME a controller the run installs a target of
 the values, section 8.2);
@@ -884,7 +893,7 @@ is the package's through the flat copy. The run then asks for a shut
 down and a start, not a restart. A drive first plugged after that start
 binds to the new file by itself. The update waits for the user's word,
 one box on the Summary page and one question in the console, both
-"Please disconnect all external NVMe drives before proceeding" (Enter
+"Disconnect all external NVMe drives before Setup continues." (Enter
 and `/yes` give N; under record 26 section 5.0's flow the window asks
 it as an OK/Cancel box at Install, Cancel staying on the Summary page); without it Stor98 is left for a later run, out of
 this one whole - no copy of its files, no job, no setting, no record
@@ -1317,6 +1326,67 @@ called:
   Windows' own dialog, answered by the user; the tool never changes the
   driver-signing policy. A refusal there comes back as an error the tool
   reports by number.
+
+### 5.5.1 The UAS devnodes not plugged in (roadmap-usb4 task 46.24, owner 2026-11-04; revision 53)
+
+**What was found.** `UpdateDriverForPlugAndPlayDevices` reaches present
+devices only. Updating `3.4.0.0` to `3.4.1.0` with no UAS disk plugged
+in staged the new `xhciuas.inf` beside the old one and updated the
+controller and the root hub; the known UAS disk's devnode kept the old
+INF and `DriverVersion`, and `System32\Drivers\xhciuas.sys` stayed the
+old file through restarts and replugs, with no prompt (XP x86 and 10 x64,
+`runs/run-46.md`, "46.24"). Only a new UAS devnode took the newer INF, copying the new
+file, after which every drive ran it while the old devnodes still recorded
+the old version. With the disk plugged in during the update, it moved to
+the new version.
+
+**The rule (2000 to 7).** After the per-INF passes of section 5.1, every
+devnode that is not present, whose service is `xhciuas` and whose driver
+key's `DriverVersion` is read and older than the package (with `/force`,
+equal or newer too, as for a present device) is updated, provided the UAS
+driver is in the run and its group's verdict (section 5.4) is not a refusal
+(`inst_uas_absent_runs`). The plan lists them under "UAS disks not plugged
+in now, updated too:" and the run reports each one as "Updating <name>
+(not plugged in) ... ".
+
+**The mechanism.** For each such devnode: the device information element
+is opened from a list of every devnode, present or not; whether it has
+become present is checked first (then the update by hardware id is its
+own, at the next run); install parameters `DI_ENUMSINGLEINF` with
+`DriverPath` the staged INF of section 5.6, `DI_DONOTCALLCONFIGMG` (the
+devnode has no device to start), and `DI_FLAGSEX_INSTALLEDDRIVER`
+cleared; `SetupDiBuildDriverInfoList(SPDIT_COMPATDRIVER)`, which reads the
+devnode's stored hardware and compatible ids; `DIF_SELECTBESTCOMPATDRV`,
+then the selected driver checked to come from the staged INF; and
+`DIF_INSTALLDEVICE` through `SetupDiCallClassInstaller`, on 2000, XP,
+Vista and 7 alike (newdev's `DiInstallDevice` is documented for present
+devices). The reboot flags are read back, and the driver key is read
+again: the install counts only when it names `xhciuas`, the staged INF and
+the package's version.
+
+**The fallback.** When `xhciuas.sys` itself is still older than the
+package after the passes while a devnode names `xhciuas`, it is copied
+from the local copy's `xhciuas.inf` (`[DefaultInstall]`'s `CopyFiles`)
+through a SetupAPI file queue (`SetupInstallFilesFromInfSection`,
+`SP_COPY_NEWER_ONLY`), so a file in use is replaced at the restart
+(`SetupPromptReboot` in scan mode sets the restart). It does not run when
+an `xhciuas` install of this run asked for a restart (its own copy may be
+the delayed one), nor after an install of the UAS driver, present or not,
+failed or was cancelled (a No at the signature question is never gone
+around). It repairs the file, not a devnode's record.
+
+**Rejected.** `CONFIGFLAG_REINSTALL` on the devnode: the version would
+change only at the next plug, and on XP the unsigned package's
+reinstall falls back to the Found New Hardware wizard there.
+Removing the devnode (`DIF_REMOVE`) so that the next plug is a fresh
+install: it discards the devnode's `Device Parameters` and has the same
+next-plug wizard. A plain file copy alone: Device Manager would keep
+showing the old INF and version.
+
+**Signature questions.** Each `DIF_INSTALLDEVICE` is an install of its
+own, so on XP with the default "Warn" policy Windows may ask its "has not
+passed Windows Logo testing" question once per absent devnode; the run
+neither changes the policy nor answers the question (section 5.5).
 
 ### 5.6 Pre-staging: `SetupCopyOEMInf`
 
@@ -3327,6 +3397,7 @@ host-tested case by case):
 | none is present | yes - some laptops show their controller only while a device is plugged in, or only with a BIOS setting (the P14s with Assist on and pre-boot support off) | N |
 | `/thunderbolt` | no | Y, present or not |
 | the USB drivers out of the run (`/cmonly`, Windows 8 and 8.1; revision 13, section 4.5) | no | Y, present or not |
+| (revision 52, task 46.22) the USB drivers out of the run on Windows 8, 8.1 and 10 without `/cmonly` | yes, so N leaves a run of the xHCI98 tools alone (record 26 section 5.3.7) | Y, present or not |
 | `/list` | no; the question and its default are shown | the default |
 | the package carries no Thunderbolt driver | no | - |
 
@@ -3683,7 +3754,11 @@ after it, reports what was done, and tells the user to restart and run
    it has stopped **and** every handle to it is closed - for a running
    driver, at the next start. The tool reports the state it read (running
    or stopped) beside "marked for deletion", and a running one sets the
-   restart flag.
+   restart flag. `xhcihlpr`, which both `xhci98.inf` and `xhcicm.inf`
+   install on 32-bit NT (design record 18 section 15.15), is deleted only
+   when `xhci98` and `xhcicm` were both deleted, marked or absent in this
+   step; else it and its file are kept, said, and the run ends with steps
+   left.
 6. **The files** in `%windir%\system32\drivers`: `xhci98.sys`,
    `xhciuas.sys`, `xhcicm.sys`, `xhcihlpr.sys`, `xhcimsi.sys`, each only once
    step 5 has shown its service deleted or marked. A file in use is
@@ -4265,3 +4340,19 @@ the user.
 | `xhciinst\README.TXT` | staged as `tools\xhciinst\readme.txt` |
 | `test\test_inst.c` | the host suite |
 | `scripts\build-driver.cmd`, `scripts\package\make-release.ps1`, `scripts\package\test-package.ps1`, `test\run-host-tests.cmd`, `.gitignore` | wiring |
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **The PCI ID Repository, third reading: xHCI controllers' names** (design record 23 sections 5.13.2 and 5.13.8, roadmap-usb4 task 44.55; the owner, 2026-10-27: pci.ids a source for a controller's name where no other source names it) - `pci.ids` from <https://pci-ids.ucw.cz/v2.2/pci.ids>, version `2026.10.27` (dated 2026-10-27 03:15:02), fetched 2026-10-27, SHA-256 `d74137d070767260e19a0cd4d80ae9ac39d30cbd2872306490d392bfde4d323a`: the devices whose listed name says xHCI or USB 3, and Intel's and AMD's Thunderbolt and USB4 hosts' USB controllers, of every vendor | static (a text listing read; nothing executed). Ids and listed names only, each name shortened to the record's product form; the file is not tracked | `xhciinst\inst_core.c` `instXhciNames`, `src\xhci98.inf`'s 9x models section, README.md and the release notes' tables; design record 23 section 5.13.2 |
+| A.2 | **Windows 8 and 8.1 x64 refuse a driver package with no catalog in test-signing mode; Windows 8 and 8.1 make `xhcicm` boot start when its filter goes onto a PCI bridge** (roadmap-usb4 task 43.22) - Windows 8 Pro x86 and x64 (6.2.9200) and 8.1 Pro x64 (6.3.9600) guests of the `win8-10` image set, the `3.1.0.0` package's `INSTALL /console /cmonly /yes`: `SetupCopyOEMInf` failed with `0xE000022F` in test-signing mode on both x64 systems (`setupapi.dev.log`: "Driver package does not contain a catalog file, and Code Integrity is in Test Signing mode"), and installed after the publisher prompt on a start with driver signature enforcement disabled and on 32-bit 8; on all three `setupapi.dev.log` said "Updated service 'xhcicm' to be boot start" and `sc qc xhcicm` read `BOOT_START`; 8 x64 then stopped in Automatic Repair on a start with test-signing mode off; 8.1 x64 started in test-signing mode with the NHI on `xhcicm` | runtime - but Windows' own setup log, service configuration and device state read in the running guest by a script of this session's, not this driver's counters; the Automatic Repair is a screen observed, its cause inferred; 2026-10-22, development host A, QEMU | design record 23 section 5.10 (revision 30), `runs/run-43.md` "43.22" |
+| A.3 | **Microsoft's "Driver Signing Policy" table: "Windows 8, Windows 8.1, Windows 10, versions 1507, 1511 with Secure Boot on" - architectures "64-bit, 32-bit"; "Windows Vista, Windows 7; Windows 8+ with Secure Boot off" - "64-bit only, no signature required for 32-bit"** (roadmap-usb4 task 43.22) - `https://learn.microsoft.com/en-us/windows-hardware/drivers/install/kernel-mode-code-signing-policy--windows-vista-and-later-`, `ms.date` 2024-08-19 | documentation, read 2026-10-22; not a binary reading, recorded here beside the row above because the installer's x86 note rests on it; Secure Boot on is read in no guest | design record 23 section 5.10 (revision 30) |

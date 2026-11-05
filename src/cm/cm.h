@@ -66,6 +66,7 @@
 #include "cm_irq.h"
 #include "cm_breq.h"
 #include "cm_rirqos.h"
+#include "cm_oscp.h"
 
 #define CM_POOL_TAG 'mChX'
 
@@ -84,6 +85,9 @@
 #define CM_KIND_FILTER 0x464D4358UL  /* 'XCMF' */
 #define CM_KIND_CHILD  0x434D4358UL  /* 'XCMC' (record 21 section 3.2 role 3) */
 #define CM_KIND_QUERY  0x514D4358UL  /* 'XCMQ': the query device, cm_qryos.c */
+#define CM_KIND_MEMBER 0x4D4D4358UL  /* 'XCMM': an ASM4242 mailbox member's
+                                        filter, cm_oscnt.c (record 32
+                                        section 12.8.15.7)                */
 
 /* The connection-manager thread's work (CM_NHI.WorkBits), taken in this
  * order on each wake (cm_thr.c). */
@@ -145,6 +149,40 @@ typedef struct _CM_COMMON {
     PDEVICE_OBJECT Pdo;
     PDEVICE_OBJECT Lower;
 } CM_COMMON, *PCM_COMMON;
+
+/*
+ * A member of the ASM4242 mailbox's exclusion (cm_oscnt.c; design record
+ * 32 section 12.8.15.7), NT only: the upstream port and the xHCI (each a
+ * CM_MEMBER of its own) and each downstream port (the bridge filter's
+ * Osc). Every field under cm_oscnt.c's list lock but Unused, its event.
+ * Role 0 is no member.
+ */
+typedef struct _CM_OSC_MEMBER {
+    ULONG Role;             /* CM_OSCP_R_* (cm_oscp.h)                     */
+    ULONG Slot;             /* the list's entry + 1, 0 unlisted            */
+    ULONG Started;          /* a start that succeeded below, not stopped   */
+    ULONG Closed;           /* a query-stop or query-remove succeeded      */
+    ULONG Gone;             /* surprise-removed or removed: for good       */
+    ULONG Located;
+    ULONG Bdf;              /* XHCI_TBT_BDF, read at its start             */
+    ULONG Secondary;        /* a bridge's secondary bus, read with it      */
+    LONG InFlight;          /* tracked requests between arrival and return */
+    LONG Usage;             /* a member object's device-usage notifications
+                               below it (their completion reads it)       */
+    ULONG Uses;             /* the exchange's holds on its interface       */
+    KEVENT Unused;          /* set while Uses is 0                         */
+    PDEVICE_OBJECT Pdo;
+    PDEVICE_OBJECT Lower;
+    ULONG BusHeld;          /* the upstream port: Bus taken at its start   */
+    ULONG BusStatus;        /* ... and its query's last status (logged)    */
+    BUS_INTERFACE_STANDARD Bus;
+} CM_OSC_MEMBER, *PCM_OSC_MEMBER;
+
+/* The upstream port's and the xHCI's filter (CM_KIND_MEMBER). */
+typedef struct _CM_MEMBER {
+    CM_COMMON Common;
+    CM_OSC_MEMBER Osc;
+} CM_MEMBER, *PCM_MEMBER;
 
 /* The Thunderbolt networking service (design record 35, task 45.59): the
  * network PDO's extension and the NHI's share, cm_net.c. */
@@ -225,6 +263,35 @@ typedef struct _CM_NHI {
     ULONG BusMasterSetHere;
     ULONG Started;
     ULONG Starts;
+    /* The platform's USB4 handover (cm_oscos.c, record 32 section
+     * 12.8.11): this start's tier, 0 before discovery; the upstream port
+     * last found, 0 before (bus 0 never holds one), kept across starts. */
+    ULONG OscTier;
+    ULONG OscUspBdf;
+    /* The NT routes (cm_oscnt.c, record 32 section 12.8.15): this start's
+     * flags (CM_OSCN_F_*: the guard's skip, the unknown board left at
+     * XhciCmAsm4242Reads 0), and the boot guard's marker armed by this
+     * start's or this resume's send (its kind, 0 none), cleared by the
+     * router's answer or an orderly shutdown. */
+    ULONG OscFlags;
+    ULONG OscArmed;
+    /* The start's activation deferred (record 32 section 12.8.15.16): the
+     * start's mode kept for it, its start and last try by the clock. */
+    ULONG OscDeferred;
+    ULONG OscDeferMode;
+    ULONG OscDeferAtMs;
+    ULONG OscDeferTryMs;
+    /* The board decided once a start (12.8.15.16): what this start
+     * decided and for which host, forgotten at the next start. */
+    CM_OSCP_KEPT OscKept;
+    /* The PnP start's own network step done (CmNhiPnp): a deferred
+     * activation waits for it, so the network PDO has one publisher at a
+     * time. WorkLock. */
+    LONG OscStartDone;
+    /* A deferred activation ended active: the network PDO's publication
+     * owed to the PnP path's next BusRelations (CmNhiPnp), serialised
+     * there with a surprise removal. */
+    ULONG OscNetOwed;
     ULONG Stops;
     /* Read once per start (cm_reg.c), at the start's first step. */
     ULONG ValuesRead;
@@ -233,6 +300,16 @@ typedef struct _CM_NHI {
      * and power paths. */
     KSPIN_LOCK LogLock;
     XHCI_LOG Log;
+    /* Task 46.13 (record 21 section 8.2), under LogLock: the last stamp's
+     * clock and the bytes since its start (CM_LOG_STAMP_FORCE after a
+     * drain); the head of the first connection, armed at the first
+     * u4.connect of the device's life, whole records, never wrapped. */
+    ULONG LogStampMs;
+    ULONG LogStampBytes;
+    ULONG LogHeadArmed;
+    ULONG LogHeadFull;
+    ULONG LogHeadBytes;
+    UCHAR LogHead[CM_LOG_HEAD_BYTES];
 
     /* The NHI as configuration space names it, read at start. */
     ULONG Vendor;
@@ -434,6 +511,14 @@ typedef struct _CM_NHI {
     /* IoIsWdmVersionAvailable(1, 0x10), read by the power dispatch at
      * PASSIVE_LEVEL for its completion routine (cm_pwrr.h, task 43.65). */
     BOOLEAN PowerOnNt;
+    /* 98 SE and ME: the registry's admission (cm_thr.c CmRegEnter, task
+     * 46.14), under WorkLock: closed away from S0, the accesses admitted
+     * and not yet left, signalled when none is; the closes that found
+     * one still running after their wait. */
+    ULONG RegClosed;
+    ULONG RegBusy;
+    KEVENT RegIdle;
+    ULONG RegCloseTimeouts;
 #if defined(XHCI_FLAVOUR_QEMU)
     /* XhciCmQemuFailD0, the qemu flavour's alone (cm_power.c, task
      * 45.27): which D0 the bus completes successfully is taken as failed,
@@ -443,6 +528,16 @@ typedef struct _CM_NHI {
     /* XhciCmQemuFailReenum (cm_cfgwk.c, task 45.27): how many of the 9x
      * worker's member calls are taken as failed before they are made. */
     ULONG QemuFailReenum;
+    /* XhciCmQemuOscNoClear, the qemu flavour's alone (cm_oscnt.c, task
+     * 46.12): 1 leaves the boot guard's marker as the router's answer
+     * finds it, so a QEMU quit after the start stands for a start that
+     * never finished (record 32 section 12.8.15.13's legs). */
+    ULONG QemuOscNoClear;
+    /* XhciCmQemuEcamFault, the qemu flavour's alone (cm_oscnt.c, task
+     * 46.25, record 32 section 12.8.15.18's fault legs): 1 the ECAM base
+     * taken 1 MB too high (the page one bus off, not the port), 2 MCFG
+     * taken as absent. */
+    ULONG QemuEcamFault;
 #endif
 
     CM_COUNTERS Counters;
@@ -500,6 +595,17 @@ typedef struct _CM_NHI {
     ULONG QueryCtrBytes;
     ULONG QueryCtrCut;
     UCHAR QueryCtr[CM_QL_CTR_MAX];
+    /* The firmware tables this start's handover discovery kept (task
+     * 46.21, cm_oscos.c; record 32 section 12.8.14): the body of the
+     * query device's CM_QA_IOCTL answer and its state, set on the start's
+     * thread before the device exists and handed to it by CmQueryOpen
+     * (QaBody NULL after); freed by CmQueryForgetTables. */
+    UCHAR *QaBody;
+    ULONG QaBodyBytes;
+    ULONG QaCount;
+    ULONG QaState;          /* CM_QA_S_*; 0 nothing looked for            */
+    ULONG QaOutcome;
+    ULONG QaFlags;
     /* Log.BytesDropped at the last drain for emission (cm_log.c), under
      * LogLock; and the ring as that drain took it, the emitter's own (one
      * emitter at a time: the thread, or the PnP path once it has ended). */
@@ -531,6 +637,9 @@ typedef struct _CM_QUERY_DEV {
     UCHAR Answer[CM_Q_BUILD_MAX];
     PXHCI_LOG Log;          /* the NHI's ring, and its lock               */
     PKSPIN_LOCK LogLock;
+    const UCHAR *LogHead;   /* the NHI's head (task 46.13), under LogLock */
+    const ULONG *LogHeadBytes;
+    const ULONG *LogDroppedEmitted;
     ULONG EpochLo;          /* this start's, for the log answer           */
     ULONG EpochHi;
     ULONG CtrBytes;         /* the counters' text of the last publish     */
@@ -560,6 +669,20 @@ typedef struct _CM_QUERY_DEV {
     ULONG MarksRead;
     ULONG MarksReadAny;
     UCHAR Marks[CM_QM_MAX_BYTES];
+    /* The firmware tables answer (task 46.21): the body the NHI handed
+     * over at creation, never changed after, and its state, under Lock.
+     * QaReaders counts the requests copying out of QaBody with Lock
+     * released; CmQueryClose takes QaBody away and, while a request still
+     * reads it, leaves it in QaGone for the last reader to free. */
+    UCHAR *QaBody;
+    ULONG QaBodyBytes;
+    ULONG QaCount;
+    ULONG QaState;
+    ULONG QaOutcome;
+    ULONG QaFlags;
+    ULONG QaTier;
+    ULONG QaReaders;
+    UCHAR *QaGone;
 } CM_QUERY_DEV, *PCM_QUERY_DEV;
 
 /* The PDOs a bridge filter's snapshot keeps (record 21 section 7.4). */
@@ -601,6 +724,19 @@ typedef struct _CM_FILTER {
     ULONG SafeEject;        /* Owner's XhciCmSafeEject                     */
     struct _CM_NHI *Owner;
     ULONG OwnerIndex;       /* the member's index in Owner's set           */
+    /* The ACPI-named source (record 22 section 7.6.1, NT): the bridge's
+     * id from AddDevice; its _DSD read once after the start (AcpiRead,
+     * CmDsdRead's result in AcpiRc); a claim, when it named an NHI, with
+     * the normalised reference, the firmware's port number (log only) and
+     * the publication serial it was made under. Under the list's lock,
+     * cleared at withdrawal. */
+    ULONG PortId;
+    ULONG AcpiRead;
+    ULONG AcpiRc;
+    ULONG AcpiClaim;
+    ULONG AcpiSerial;
+    ULONG AcpiPort;
+    char AcpiRef[CM_DSD_NAME_MAX + 1];
     /* The resume mark (record 21 section 6.3): set at the NHI's suspend,
      * cleared by its resume's release; no power IRP is retained. */
     ULONG Held;
@@ -731,6 +867,10 @@ typedef struct _CM_FILTER {
                                0 none yet)                                 */
     ULONG ChainMayLog;      /* a chained unit's: its Removable gate's last
                                logged reading (cm.chain.removable)         */
+
+    /* ---- an ASM4242 downstream port's mailbox member (cm_oscnt.c,
+     * record 32 section 12.8.15.7), a bridge filter's; Role 0 elsewhere */
+    CM_OSC_MEMBER Osc;
 } CM_FILTER, *PCM_FILTER;
 
 #define CM_CHAIN_UNKNOWN    0UL
@@ -868,9 +1008,153 @@ VOID CmPowerRelease(PCM_NHI nhi);
 VOID CmPowerDrain(PCM_NHI nhi);
 VOID CmPowerSetSystem(PCM_NHI nhi, SYSTEM_POWER_STATE state);
 BOOLEAN CmPowerSleeping(PCM_NHI nhi);
+/* The registry's admission on 98 SE and ME (task 46.14): CmRegEnter
+ * before each registry access of the connection manager's thread (FALSE:
+ * none may be made now), CmRegLeave after it; always admitted on NT.
+ * CmRegCloseWait from the power dispatch of a system IRP away from S0;
+ * CmRegSync from its completion, once the state is published. IRQL:
+ * Enter, Leave and CloseWait PASSIVE_LEVEL; Sync <= DISPATCH_LEVEL. */
+BOOLEAN CmRegEnter(PCM_NHI nhi);
+/* cm_oscos.c: the platform's USB4 handover on 98 SE and ME (design record
+ * 32 section 12.8, task 46.12). CmOscInit at DriverEntry; CmOscHandover
+ * in the start, on the thread, before ring 0. PASSIVE_LEVEL. */
+VOID CmOscInit(VOID);
+VOID CmOscHandover(PCM_NHI nhi);
+/* cm_oscnt.c: an NT kernel routine by its name, for any xhcicm caller
+ * (record 32 section 12.8.15.15): MmGetSystemRoutineAddress, imported by
+ * the amd64 image, handed out on x86 by the helper's channel minor 1
+ * (xhcihlpr.sys, asked once a load); NULL on 98 SE and ME, before
+ * CmOscntInit, where the helper is absent or answers without it, or when
+ * the routine is not exported. PASSIVE_LEVEL; no lock held that a
+ * caller of the handover holds. */
+PVOID CmRoutine(const WCHAR *name);
+/* The read path's discovery on NT (cm_oscos.c, record 32 section
+ * 12.8.15.17): the snapshot of the memory the system manages (Ranges,
+ * Count), the root pointer (B, D) or the root table and MCFG the system
+ * gave (C, each checked by CmOscpFwTable), the host found by bus.
+ * CmOscNtScan: E0000h to FFFFFh for the root pointer into Rsdp, a
+ * CM_OSCP_S_*; CmOscNtDiscover: a CM_OSC_* reason and, on CM_OSC_OK, the
+ * command's data byte; *refused the reads the snapshot refused. The
+ * NHI's thread, PASSIVE_LEVEL. */
+struct _CM_OSCP_RANGE;
+typedef struct _CM_OSC_NTSRC {
+    const struct _CM_OSCP_RANGE *Ranges;
+    ULONG Count;
+    UCHAR Rsdp[36];
+    const UCHAR *Root;
+    const UCHAR *Mcfg;
+    ULONG RootBdf;
+    ULONG UspBdf;
+    ULONG DspBdf;
+} CM_OSC_NTSRC;
+ULONG CmOscNtScan(const CM_OSC_NTSRC *s, UCHAR *rsdp, PULONG refused);
+ULONG CmOscNtDiscover(PCM_NHI nhi, const CM_OSC_NTSRC *s, PULONG data,
+                      PULONG ecamBase, PULONG ecamEnd, PULONG refused);
+/* Record 32 section 12.8.15.18: the root table and the MCFG pass alone
+ * (the same code as the discovery's, no SSDT read), for the ECAM base on
+ * 2000 and 32-bit XP; CM_OSC_OK with *base and *busEnd, else the reason
+ * (0x27 a read refused by the page check). PASSIVE_LEVEL. */
+ULONG CmOscNtMcfg(PCM_NHI nhi, const CM_OSC_NTSRC *s, PULONG base,
+                  PULONG busEnd, PULONG refused);
+/* The status record's handover word (section 12.8.11): the tier in bits
+ * 2:0 (cm_osc.h's CM_OSC_TIER_*), bit 3 the handover written this boot.
+ * The thread, PASSIVE_LEVEL. */
+ULONG CmOscReport(PCM_NHI nhi);
+/* cm_oscnt.c: the same handover on the NT targets (record 32 section
+ * 12.8.15; bit 7 of CmOscntReport: refused, no routine route, 108h): E, a
+ * known board's profile, and the mailbox's exclusion by
+ * the members' filters. CmOscntInit at DriverEntry; CmOscntHandover in
+ * the start beside CmOscHandover; CmOscntSystem from a system SET_POWER's
+ * completion (<= DISPATCH_LEVEL); CmOscntResume in the resume before the
+ * client's (the S4 send); CmOscntRouter where the host router first
+ * answers after a send; CmOscntShutdown at an orderly shutdown's
+ * quiesce; CmOscntReport for CmOscReport on NT (bits 2:0 the tier, 3
+ * written this boot, 4 the guard's skip, 5 a timeout this boot, 6 an
+ * unknown board left at reads 0). The thread, PASSIVE_LEVEL, but
+ * CmOscntSystem. Nothing on 98 SE and ME. */
+#define CM_OSCN_F_GUARD     0x10UL
+#define CM_OSCN_F_TIMEOUT   0x20UL
+#define CM_OSCN_F_UNKNOWN   0x40UL
+#define CM_OSCN_F_NOROUTE   0x80UL
+#define CM_OSCN_F_EXPIRED   0x100UL
+#define CM_OSCN_F_ECAMOFF   0x200UL     /* 113h: ECAM needs reads 1      */
+/* CmOscntHandover's and CmOscntRetry's answer: done (sent, refused, or
+ * nothing to do), or deferred (record 32 section 12.8.15.16). */
+#define CM_OSCN_DONE        0UL
+#define CM_OSCN_DEFER       1UL
+VOID CmOscntInit(VOID);
+ULONG CmOscntHandover(PCM_NHI nhi);
+ULONG CmOscntRetry(PCM_NHI nhi);
+/* cm_nhi.c: a deferred activation's pass, on the thread. */
+VOID CmNhiDeferPass(PCM_NHI nhi);
+VOID CmOscntSystem(PCM_NHI nhi, SYSTEM_POWER_STATE state);
+VOID CmOscntResume(PCM_NHI nhi);
+VOID CmOscntRouter(PCM_NHI nhi);
+VOID CmOscntShutdown(PCM_NHI nhi);
+ULONG CmOscntReport(PCM_NHI nhi);
+/* The members (cm_oscnt.c): AddDevice of the upstream port's and the
+ * xHCI's filter, their dispatch, and the bridge filter's member half
+ * (a downstream port), from cm_filt.c. PASSIVE_LEVEL, but
+ * CmOscmPowerEnter and CmOscmPowerDone (the power context). */
+NTSTATUS CmOscmAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
+                         ULONG role);
+NTSTATUS CmOscmPnp(PCM_MEMBER m, PIRP irp);
+NTSTATUS CmOscmPower(PCM_MEMBER m, PIRP irp);
+VOID CmOscmInit(PCM_OSC_MEMBER m, ULONG role, PDEVICE_OBJECT pdo,
+                PDEVICE_OBJECT lower);
+BOOLEAN CmOscmTracked(PIRP irp);
+VOID CmOscmEnter(PCM_OSC_MEMBER m);
+VOID CmOscmLeave(PCM_OSC_MEMBER m);
+VOID CmOscmAfter(PCM_OSC_MEMBER m, UCHAR minor, NTSTATUS status);
+VOID CmOscmSurprise(PCM_OSC_MEMBER m);
+VOID CmOscmRemove(PCM_OSC_MEMBER m);
+NTSTATUS CmOscmPowerPass(PCM_OSC_MEMBER m, PDEVICE_OBJECT lower, PIRP irp);
+/* cm_statos.c: the boot guard's marker XhciCmOscPending in the NHI's
+ * hardware key (record 32 section 12.8.15.13). Read: CM_OSCG_M_*, its
+ * kind in *kind. Write: TRUE when written and flushed (*written, *flushed
+ * each). Delete: *deleted, *flushed. The thread, PASSIVE_LEVEL. */
+ULONG CmStatusMarkerRead(PCM_NHI nhi, PULONG kind);
+VOID CmStatusMarkerWrite(PCM_NHI nhi, ULONG kind, BOOLEAN *written,
+                         BOOLEAN *flushed);
+VOID CmStatusMarkerDelete(PCM_NHI nhi, BOOLEAN *deleted, BOOLEAN *flushed);
+/* Whether the hardware key can be flushed now, nothing written (FALSE on
+ * x86 until CmStatusMarkerRoutines gave the routine). */
+BOOLEAN CmStatusMarkerFlushable(PCM_NHI nhi);
+/* x86: ZwFlushKey and ZwDeleteValueKey as cm_oscnt.c found them through
+ * the helper's channel (record 32 section 12.8.15.15), set once before
+ * any marker access; ignored on amd64, which imports both. PASSIVE_LEVEL,
+ * the NHI's thread. */
+VOID CmStatusMarkerRoutines(PVOID flushKey, PVOID deleteValueKey);
+/* cm_nvlinkos.c: the once-per-boot objects of record 32 section 12.8.13.5,
+ * \Callback\Xhci98CmOsc<bdf>[A]: CM_NVO_* of an open (`create` FALSE)
+ * or a creation (`create` TRUE) of the permanent named callback object.
+ * PASSIVE_LEVEL. */
+#define CM_NVO_FOUND    0UL
+#define CM_NVO_ABSENT   1UL
+#define CM_NVO_MADE     2UL
+#define CM_NVO_FAILED   3UL
+ULONG CmNvOscObject(ULONG bdf, BOOLEAN success, BOOLEAN create);
+VOID CmRegLeave(PCM_NHI nhi);
+VOID CmRegCloseWait(PCM_NHI nhi);
+VOID CmRegSync(PCM_NHI nhi);
 
 /* cm_filt.c */
-NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo);
+/* `portId` is the bridge's CM_PORTS_ID (record 22 section 7.6.1);
+ * `oscRole` CM_OSCP_R_DSP for an ASM4242 downstream port (its mailbox
+ * member half, cm_oscnt.c), else 0. */
+NTSTATUS CmFilterAddDevice(PDRIVER_OBJECT driver, PDEVICE_OBJECT pdo,
+                           ULONG portId, ULONG oscRole);
+
+/* cm_dsdos.c (record 22 section 7.6.1): the bridge filter's _DSD read,
+ * after its start completed and its entry was published; it returns at
+ * once below Vista (WDM 6.0: 98 SE and ME, 2000, XP, XP x64).
+ * PASSIVE_LEVEL, no lock held. */
+VOID CmDsdFilterRead(PCM_FILTER filter);
+
+/* cm_dsdos.c: the NHI's own ACPI name, normalised into `out` (cap bytes);
+ * its length, 0 when not read (an NHI not AMD's, the routine not found by
+ * CmRoutine, the property absent). PASSIVE_LEVEL. */
+ULONG CmDsdNhiName(struct _CM_NHI *nhi, char *out, ULONG cap);
 /* The child by AddDevice (record 21 section 7.4, revision 3): attached to
  * the top of what is on the PDO, passive until associated, and never a
  * failed AddDevice for want of a role (decision M7). */
@@ -940,6 +1224,10 @@ VOID CmQueryPublish(PCM_NHI nhi, BOOLEAN inert);
  * of it, every asker already posting done. On the thread, PASSIVE_LEVEL. */
 VOID CmQueryWorkerGone(PCM_NHI nhi);
 NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp);
+/* The firmware tables the NHI still holds (none handed to a query
+ * device) freed, its state cleared (task 46.21): at the next handover and
+ * at a stop. PASSIVE_LEVEL, the PnP path or the start's thread. */
+VOID CmQueryForgetTables(PCM_NHI nhi);
 
 /* cm_nhi.c: the counter blocks the stop dump writes (the NHI's, the
  * ring's, and the ICM's or the USB4 connection manager's), as text lines
@@ -957,6 +1245,13 @@ VOID CmLogNote(PCM_NHI nhi, const char *label, ULONG value);
  * record 25 revision 12). Defined in cm_nhi.c. <= DISPATCH_LEVEL. */
 VOID CmLogNoteAddress(PCM_NHI nhi, const char *label, ULONG value);
 VOID CmLogEmit(PCM_NHI nhi, ULONG reason);
+/* Task 46.13: the one record funnel, a stamp before it when due and the
+ * head's copy (address 1: XhciLogAppendAddress's level 4 rule); the log's
+ * millisecond clock (a leaf lock), set up by DriverEntry. <=
+ * DISPATCH_LEVEL. */
+VOID CmLogRecord(PCM_NHI nhi, const char *label, ULONG value, ULONG address);
+VOID CmLogClockInit(VOID);
+ULONG CmLogClockMs(VOID);
 
 /* cm_pool.c */
 VOID CmPoolInit(VOID);

@@ -177,6 +177,19 @@ typedef struct _CM_WK_PORT {
     CM_NI_IRQ NiIrqNext;
     ULONG NiIrqHave;
     ULONG NiDiagSeen;
+    /* Task 46.13 (record 21 section 8.3): the member's re-enumeration
+     * calls in the worker's event order, under the worker's Lock - the
+     * call in flight's admission event, the last call's end, and the
+     * admission event of the last fresh publication (a call made on an
+     * inventory the numbering read complete and empty, that returned
+     * success). NumEmpty and FreshNext are the worker thread's own. */
+    ULONG CallBegin;
+    ULONG CallEnd;
+    ULONG CallEndValid;
+    ULONG FreshEvt;
+    ULONG FreshValid;
+    ULONG NumEmpty;         /* this operation's numbering read it empty   */
+    ULONG FreshNext;        /* the call in flight is a fresh publication  */
 } CM_WK_PORT;
 
 /* The no-IRQ walk's stack (cmWkNiWalk). */
@@ -318,6 +331,7 @@ typedef struct _CM_CFGWK {
     char TagList[CM_WK_TAG_LIST + 2];
     CM_CFGMG Cfgmg;
     CM_CFGWK_COUNTERS C;
+    ULONG Evt;              /* task 46.13: the event number, under Lock    */
 #if defined(XHCI_FLAVOUR_QEMU)
     /* XhciCmQemuFailReenum (task 45.27): member calls still to be taken as
      * failed before they are made. The worker thread's own. */
@@ -431,6 +445,23 @@ static VOID cmWkLog(PCM_CFGWK w, const char *label, ULONG value)
 
 /* The same for a value that is a devnode handle: an address record,
  * level 4 alone (CmLogNoteAddress). <= DISPATCH_LEVEL. */
+/* Task 46.13 (record 21 section 8.2): a claim's removal whose devnode a
+ * sweep reading saw vanish: its result, the reading and where the child
+ * was. <= DISPATCH_LEVEL. */
+static VOID cmWkClaimTrace(PCM_CFGWK w, ULONG claim, ULONG cr)
+{
+    ULONG tag;
+    ULONG at;
+
+    tag = CmEjectClaimFrom(claim, &at);
+    if (tag == 0) {
+        return;
+    }
+    cmWkLog(w, "cm.vanish.claim.cr", cr);
+    cmWkLog(w, "cm.vanish.cr.from", tag);
+    cmWkLog(w, "cm.vanish.cr.at", at);
+}
+
 static VOID cmWkLogAddress(PCM_CFGWK w, const char *label, ULONG value)
 {
     KIRQL irql;
@@ -1122,6 +1153,10 @@ static BOOLEAN cmWkEnumAdmit(PCM_CFGWK w, ULONG i)
                    !CmEjectVanishHeld(w->Port[i].Bdf));
     if (ok) {
         w->EnumBusy |= 1UL << i;
+        /* Task 46.13: the call's place in the worker's event order,
+         * drawn before the call is made. */
+        w->Evt++;
+        w->Port[i].CallBegin = w->Evt;
     }
     KeReleaseSpinLock(&w->Lock, irql);
     return ok;
@@ -1133,6 +1168,67 @@ static VOID cmWkEnumDone(PCM_CFGWK w, ULONG i)
 
     KeAcquireSpinLock(&w->Lock, &irql);
     w->EnumBusy &= ~(1UL << i);
+    KeReleaseSpinLock(&w->Lock, irql);
+}
+
+/*
+ * Task 46.13 (record 21 section 8.3): a re-enumeration call admitted by
+ * cmWkEnumAdmit ends - its end drawn, and a fresh publication's admission
+ * kept (`fresh`: its numbering read the inventory complete and empty and
+ * the call returned success), under the same lock as EnumBusy is cleared,
+ * so the thread never reads the member idle without the call's events
+ * (CmCfgwkPub). `cr` for the log.
+ */
+static VOID cmWkCallDone(PCM_CFGWK w, ULONG i, BOOLEAN fresh, ULONG cr)
+{
+    KIRQL irql;
+    ULONG begin;
+    ULONG end;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->Evt++;
+    end = w->Evt;
+    begin = w->Port[i].CallBegin;
+    w->Port[i].CallEnd = end;
+    w->Port[i].CallEndValid = 1;
+    if (fresh) {
+        w->Port[i].FreshEvt = begin;
+        w->Port[i].FreshValid = 1;
+    }
+    w->EnumBusy &= ~(1UL << i);
+    KeReleaseSpinLock(&w->Lock, irql);
+    cmWkLog(w, "cm.reenum.9x.call",
+            ((i & 0xFFUL) << 24) | (fresh ? 0x100UL : 0UL) | (cr & 0xFFUL));
+    cmWkLog(w, "cm.reenum.9x.call.evt",
+            ((begin & 0xFFFFUL) << 16) | (end & 0xFFFFUL));
+}
+
+ULONG CmCfgwkEvent(PCM_CFGWK w)
+{
+    KIRQL irql;
+    ULONG e;
+
+    KeAcquireSpinLock(&w->Lock, &irql);
+    w->Evt++;
+    e = w->Evt;
+    KeReleaseSpinLock(&w->Lock, irql);
+    return e;
+}
+
+VOID CmCfgwkPub(PCM_CFGWK w, ULONG member, PCM_CFGWK_PUB pub)
+{
+    KIRQL irql;
+
+    CmZero(pub, sizeof(*pub));
+    if (member >= XHCI_TBT_MAX_TUNNELS) {
+        return;
+    }
+    KeAcquireSpinLock(&w->Lock, &irql);
+    pub->Busy = (BOOLEAN)((w->EnumBusy & (1UL << member)) != 0);
+    pub->EndValid = (BOOLEAN)(w->Port[member].CallEndValid != 0);
+    pub->End = w->Port[member].CallEnd;
+    pub->FreshValid = (BOOLEAN)(w->Port[member].FreshValid != 0);
+    pub->Fresh = w->Port[member].FreshEvt;
     KeReleaseSpinLock(&w->Lock, irql);
 }
 
@@ -1702,6 +1798,7 @@ removal:
     if (cr == CMG_CR_SUCCESS) {
         w->C.Removed++;
     }
+    cmWkClaimTrace(w, claim, cr);
     took = CmEjectClaimEnd(claim, CMG_CR_SUCCESS, cr, first, last, attempts,
                            entry, seq, egen, vanished, takeover);
     if (took || (cr != CMG_CR_SUCCESS && cr != CMG_CR_NO_SUCH_DEVNODE &&
@@ -1745,7 +1842,7 @@ removal:
      * again on seeing the call: still one new generation for every entry
      * recorded before it). */
     w->Port[i].PubGen++;
-    cmWkEnumDone(w, i);
+    cmWkCallDone(w, i, FALSE, cr);
     w->C.Calls++;
     if (cr != CMG_CR_SUCCESS) {
         w->C.CallFailures++;
@@ -1859,6 +1956,7 @@ static VOID cmWkParked(PCM_CFGWK w, ULONG i)
          * re-enumeration it makes. */
         CmCfgwkPrune(w);
     }
+    cmWkClaimTrace(w, claim, cr);
     (VOID)CmEjectClaimEnd(claim, CMG_CR_SUCCESS, cr, now, now, 1, entry, seq,
                           egen, TRUE, takeover);
 }
@@ -1894,6 +1992,49 @@ static ULONG cmWkNumberGo(PVOID context)
     return (cmWkCurrent(w, w->NumberMember, w->NumberGen) &&
             !cmWkNoCfg(w, w->NumberMember))
                ? 1UL : 0UL;
+}
+
+/*
+ * Task 46.13 (record 21 section 8.2): a function's PCI Express Link
+ * Status, read through the numbering's accessor (PCI.VXD's, behind its
+ * guard): the capability list walked from 34h, 48 entries at most, a
+ * pointer below 40h or not dword-aligned ending it; FFFFh when there is
+ * no list, no PCI Express capability or a read is refused. Read only.
+ * PASSIVE_LEVEL.
+ */
+static ULONG cmWkLinkRead(PCM_CFGWK w, ULONG bdf, ULONG offset,
+                          PULONG value)
+{
+    /* The numbering's gate before every read: the request still the one
+     * taken and no CONTROLLER_UNAVAILABLE since (cmWkNumberGo). */
+    return (cmWkNumberGo(w) && cmWkIoRead(w, bdf, offset, value)) ? 1UL
+                                                                  : 0UL;
+}
+
+static ULONG cmWkLinkStatus(PCM_CFGWK w, ULONG bdf)
+{
+    ULONG v;
+    ULONG ptr;
+    ULONG i;
+
+    if (!cmWkLinkRead(w, bdf, 0x04, &v) || (v & 0x00100000UL) == 0 ||
+        !cmWkLinkRead(w, bdf, 0x34, &v)) {
+        return 0xFFFFUL;
+    }
+    ptr = v & 0xFFUL;
+    for (i = 0; i < 48 && ptr >= 0x40 && (ptr & 3UL) == 0; i++) {
+        if (!cmWkLinkRead(w, bdf, ptr, &v)) {
+            return 0xFFFFUL;
+        }
+        if ((v & 0xFFUL) == 0x10UL) {
+            if (!cmWkLinkRead(w, bdf, ptr + 0x10, &v)) {
+                return 0xFFFFUL;
+            }
+            return (v >> 16) & 0xFFFFUL;
+        }
+        ptr = (v >> 8) & 0xFFUL;
+    }
+    return 0xFFFFUL;
 }
 
 #define CM_WK_NUMBER_TRIES   20UL   /* a chain not answering yet ...      */
@@ -2063,6 +2204,9 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     }
     complete = FALSE;
     count = cmWkChildren(w, bridge, children, 1, &complete);
+    /* Task 46.13: the inventory this operation's call publishes over
+     * (record 21 section 8.3). */
+    w->Port[i].NumEmpty = (complete && count == 0) ? 1UL : 0UL;
     if (!complete || count != 0) {
         cmWkLog(w, "cm.brnum.9x.held", (bdf << 8) | (complete ? 1UL : 0UL));
         cmWkDiag(w, bdf, NULL, 0, 1);
@@ -2115,6 +2259,9 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
     cmWkLog(w, "cm.brnum.9x.outcome", (bdf << 8) | r.Outcome);
     cmWkLog(w, "cm.brnum.9x.seen",
             (r.Functions << 16) | (r.Bridges << 8) | tries);
+    /* Task 46.13: the tunnel port's link, and below each bridge given
+     * buses its own (after the outcome, read only). */
+    cmWkLog(w, "cm.brnum.9x.link", (bdf << 16) | cmWkLinkStatus(w, bdf));
     if (r.Outcome == XHCI_TBT_BRNUM_NONE) {
         if (r.IrqOutcome != XHCI_TBT_BRIRQ_NONE) {
             /* Design record 28 section 13: no bridge, the port's own bus
@@ -2142,6 +2289,8 @@ static VOID cmWkNumber(PCM_CFGWK w, ULONG i, ULONG gen, ULONG bridge)
             cmWkLog(w, "cm.brnum.9x.bridge", r.Bdf[k]);
             cmWkLog(w, "cm.brnum.9x.buses", r.Now[k]);
             cmWkLog(w, "cm.brnum.9x.window", r.Win[k]);
+            cmWkLog(w, "cm.brnum.9x.link",
+                    (r.Bdf[k] << 16) | cmWkLinkStatus(w, r.Bdf[k]));
         }
         cmWkLog(w, "cm.brnum.9x.win-outcome", r.WinOutcome);
         /* Design record 34 section 3.3.6: the chain ports padded. */
@@ -2279,6 +2428,9 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
          * retried). */
         return FALSE;
     }
+    /* Task 46.13: not fresh unless this operation's numbering reads the
+     * bridge empty. */
+    w->Port[i].NumEmpty = 0;
     if (w->Numbering) {
         cmWkNumber(w, i, gen, bridge);
         if (!cmWkCurrent(w, i, gen)) {
@@ -2321,8 +2473,12 @@ static BOOLEAN cmWkMember(PCM_CFGWK w, ULONG i, BOOLEAN removeVanished,
         cmWkTagWindow(w, 1UL << i);
     }
     /* Admitted until its bookkeeping is done: a removal-only request
-     * posted after this sees the generation and the inventory it left. */
-    cmWkEnumDone(w, i);
+     * posted after this sees the generation and the inventory it left.
+     * Task 46.13: a fresh publication when this operation's numbering
+     * read the bridge with no child (record 21 section 8.3). */
+    cmWkCallDone(w, i,
+                 (BOOLEAN)(cr == CMG_CR_SUCCESS && w->Port[i].NumEmpty),
+                 cr);
     return (BOOLEAN)(cr == CMG_CR_SUCCESS);
 }
 

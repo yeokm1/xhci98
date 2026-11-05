@@ -177,7 +177,7 @@ Where they are set:
   `HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\stor98\Parameters\Device`, holding
   lower-case `key=value` pairs separated by semicolons, for example
   `stormaxtransferkb=128;storpollmode=1;storpollbusyus=20000`. As installed it reads
-  `stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storgonems=5000;storwriteidlems=1000`.
+  `stormaxtransferkb=256;storwritethrough=auto;storpollmode=0;storpollbusyus=1000;storpollidlems=1000;storpollspinus=500;storintwatchdog=1;storgonems=5000;storwriteidlems=1000`.
   It is read when the controller starts:
   at boot, or after disabling and enabling it in Device Manager (not at a resume from
   standby or hibernation, which keeps what was read at the start).
@@ -190,6 +190,7 @@ Where they are set:
 | Polling period while busy | `StorPollBusyUs` (DWORD or string) | `storpollbusyus=` | microseconds | 1000 (1 ms); on 2000 to 10 in effect at least 10 ms | 1000-100000; 0 = the default | clamped to the nearer end |
 | Polling period when idle | `StorPollIdleMs` (DWORD or string) | `storpollidlems=` | milliseconds | 1000 (1 s) | 100-60000; 0 = no polling when idle | clamped to the nearer end |
 | Completion spin after a request | `StorPollSpinUs` (DWORD or string) | `storpollspinus=` | microseconds | 500 on 2000 to 10, 0 on 98 SE / ME | 0-500; 0 = no spin | clamped to the nearer end |
+| Missed-interrupt watchdog (xhci98 3.4.1.0) | `StorIntWatchdog` (DWORD or string) | `storintwatchdog=` | - | 1 | 0-1; 0 = off | clamped to the nearer end |
 | Gone deadline (advanced: leave at the default) | `StorGoneMs` (DWORD or string) | `storgonems=` | milliseconds | 5000 (5 s) | 1-600000 | 0 or above the range: the default |
 | Write-idle time before a flush | `StorWriteIdleMs` (DWORD or string) | `storwriteidlems=` | milliseconds | 1000 (1 s) | 10 and up | below 10: 10 |
 | Hold before busy, 98 SE / ME (advanced: leave at the default) | `StorHold9xMs` (DWORD or string) | none | milliseconds | 4000 (4 s) | 1000-10000 | refused: the default stands |
@@ -260,6 +261,11 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollIdleMs** (`storpollidlems=`) is the period with nothing outstanding and nothing
   left to flush. 0 stops polling when idle, as with an interrupt; the timer still runs
   for unflushed writes and for the connection manager's link check.
+- **StorIntWatchdog** (`storintwatchdog=`, xhci98 3.4.1.0): with 1, the default, an adapter
+  that started on its interrupt and then finds completions at its timer three times within
+  2 s with no interrupt taken between switches to the polling mode until its next start
+  (docs/PLAN.md, "Missed-interrupt watchdog"); the performance page (XHCIPERF) shows it.
+  0 keeps waiting for interrupts.
 - **StorPollSpinUs** (`storpollspinus=`) lets the driver keep checking for a completion for
   that long right after sending a request, which helps short requests at a CPU cost (a
   busy-wait of at most that long per request while one is outstanding, only in the

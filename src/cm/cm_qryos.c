@@ -10,8 +10,17 @@
  * paths are what they were. CREATE succeeds for the device itself (on NT,
  * an open with a name past the device's is refused), CLOSE and CLEANUP
  * succeed, DEVICE_CONTROL answers CM_Q_IOCTL, CM_QL_IOCTL, CM_QP_IOCTL
- * (the PCI answer below) and CM_QM_IOCTL (the marks, below), everything
- * else is STATUS_INVALID_DEVICE_REQUEST.
+ * (the PCI answer below), CM_QM_IOCTL (the marks, below) and CM_QA_IOCTL
+ * (the firmware tables, below), everything else is
+ * STATUS_INVALID_DEVICE_REQUEST.
+ *
+ * THE FIRMWARE TABLES (design record 25 section 21, record 32 section
+ * 12.8.14; task 46.21). CM_QA_IOCTL answers, a part at a time, the body
+ * of tables the start's handover discovery kept (cm_oscos.c), which the
+ * NHI hands to the device at its creation and which never changes after.
+ * A request takes a reader count under Lock and copies with Lock
+ * released; CmQueryClose takes the body away under Lock, and the last
+ * reader frees it where one was still copying. Nothing is read for it.
  *
  * THE MARKS (design record 21 section 7.4, revision 3; task 42-A.5).
  * CM_QM_IOCTL answers the domain's marks table as the thread built it
@@ -549,9 +558,23 @@ VOID CmQueryOpen(PCM_NHI nhi)
         q->Connected = 1;
         q->Log = &nhi->Log;
         q->LogLock = &nhi->LogLock;
+        q->LogHead = nhi->LogHead;
+        q->LogHeadBytes = &nhi->LogHeadBytes;
+        q->LogDroppedEmitted = &nhi->LogDroppedEmitted;
         q->EpochLo = nhi->QueryEpochLo;
         q->EpochHi = nhi->QueryEpochHi;
         q->NhiBdf = nhi->QueryBdf;
+        /* The tables this start kept, handed over (task 46.21). */
+        q->QaBody = nhi->QaBody;
+        q->QaBodyBytes = nhi->QaBodyBytes;
+        q->QaCount = nhi->QaCount;
+        q->QaOutcome = nhi->QaOutcome;
+        q->QaFlags = nhi->QaFlags;
+        q->QaTier = nhi->OscTier;
+        q->QaState = cmQNt() ? CM_QA_S_NOT_OS
+                   : nhi->QaState != 0 ? nhi->QaState : CM_QA_S_NOT_LOOKED;
+        nhi->QaBody = NULL;
+        nhi->QaBodyBytes = 0;
         KeInitializeEvent(&q->PciGate, SynchronizationEvent, TRUE);
         cmQPorts(nhi, q);
         cmQSeed(nhi, q);
@@ -611,10 +634,24 @@ VOID CmQueryStopping(PCM_NHI nhi)
     nhi->QueryUnlinked = 1;
 }
 
+VOID CmQueryForgetTables(PCM_NHI nhi)
+{
+    if (nhi->QaBody != NULL) {
+        CmFree(nhi->QaBody);
+    }
+    nhi->QaBody = NULL;
+    nhi->QaBodyBytes = 0;
+    nhi->QaCount = 0;
+    nhi->QaState = 0;
+    nhi->QaOutcome = 0;
+    nhi->QaFlags = 0;
+}
+
 VOID CmQueryClose(PCM_NHI nhi)
 {
     PDEVICE_OBJECT self;
     PCM_QUERY_DEV q;
+    UCHAR *body;
     KIRQL irql;
 
     if (nhi->QueryDev == NULL) {
@@ -628,7 +665,21 @@ VOID CmQueryClose(PCM_NHI nhi)
     q->Connected = 0;
     q->Log = NULL;
     q->LogLock = NULL;
+    q->LogHead = NULL;
+    q->LogHeadBytes = NULL;
+    q->LogDroppedEmitted = NULL;
+    /* The tables: freed here, or by the last request still copying. */
+    body = q->QaBody;
+    q->QaBody = NULL;
+    q->QaBodyBytes = 0;
+    if (body != NULL && q->QaReaders != 0) {
+        q->QaGone = body;
+        body = NULL;
+    }
     KeReleaseSpinLock(&q->Lock, irql);
+    if (body != NULL) {
+        CmFree(body);
+    }
     nhi->QueryDev = NULL;
     nhi->QueryUnlinked = 0;
     cmQRelease(nhi->QueryIndex);
@@ -805,6 +856,82 @@ static NTSTATUS cmQAnswer(PCM_QUERY_DEV q, PIRP irp)
     return CmCompleteIrp(irp, STATUS_SUCCESS, info);
 }
 
+/* IRP_MJ_DEVICE_CONTROL's CM_QA_IOCTL (record 25 section 21, task 46.21):
+ * the header and one part of the tables' body from the input's offset. */
+static NTSTATUS cmQAcpi(PCM_QUERY_DEV q, PIRP irp)
+{
+    PIO_STACK_LOCATION stack;
+    CM_QA_IN in;
+    UCHAR *body;
+    UCHAR *gone;
+    PUCHAR out;
+    ULONG room;
+    ULONG from;
+    ULONG info;
+    ULONG rc;
+    KIRQL irql;
+
+    stack = IoGetCurrentIrpStackLocation(irp);
+    room = stack->Parameters.DeviceIoControl.OutputBufferLength;
+    out = (PUCHAR)irp->AssociatedIrp.SystemBuffer;
+    if (out == NULL) {
+        room = 0;
+    }
+    from = 0;
+    if (stack->Parameters.DeviceIoControl.InputBufferLength == sizeof(ULONG)) {
+        if (out == NULL) {
+            return CmCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+        }
+        /* METHOD_BUFFERED: the input is in the system buffer, read before
+         * the answer overwrites it. */
+        from = (ULONG)out[0] | ((ULONG)out[1] << 8) | ((ULONG)out[2] << 16) |
+               ((ULONG)out[3] << 24);
+    } else if (stack->Parameters.DeviceIoControl.InputBufferLength != 0) {
+        return CmCompleteIrp(irp, STATUS_INVALID_PARAMETER, 0);
+    }
+    CmZero(&in, sizeof(in));
+    body = NULL;
+    KeAcquireSpinLock(&q->Lock, &irql);
+    if (!q->Connected) {
+        KeReleaseSpinLock(&q->Lock, irql);
+        return CmCompleteIrp(irp, cmQNt() ? STATUS_DEVICE_REMOVED
+                                          : STATUS_NO_SUCH_DEVICE, 0);
+    }
+    body = q->QaBody;
+    if (body != NULL) {
+        q->QaReaders++;
+    }
+    in.State = q->QaState;
+    in.Outcome = q->QaOutcome;
+    in.Tier = q->QaTier;
+    in.Flags = q->QaFlags;
+    in.EpochLo = q->EpochLo;
+    in.EpochHi = q->EpochHi;
+    in.Body = body;
+    in.BodyBytes = body != NULL ? q->QaBodyBytes : 0;
+    in.Count = body != NULL ? q->QaCount : 0;
+    in.Stopping = (BOOLEAN)(q->Stopping != 0);
+    KeReleaseSpinLock(&q->Lock, irql);
+    rc = CmQaAnswer(out, room, &in, from, &info);
+    if (body != NULL) {
+        gone = NULL;
+        KeAcquireSpinLock(&q->Lock, &irql);
+        q->QaReaders--;
+        if (q->QaReaders == 0 && q->QaGone != NULL) {
+            gone = q->QaGone;
+            q->QaGone = NULL;
+        }
+        KeReleaseSpinLock(&q->Lock, irql);
+        if (gone != NULL) {
+            CmFree(gone);
+        }
+    }
+    if (rc == CM_Q_ANS_TOO_SMALL) {
+        return CmCompleteIrp(irp, STATUS_BUFFER_TOO_SMALL, 0);
+    }
+    return CmCompleteIrp(irp, STATUS_SUCCESS, info);
+}
+
 /* IRP_MJ_DEVICE_CONTROL's CM_QM_IOCTL (record 21 section 7.4, revision
  * 3): the marks as last published; a whole answer's generation recorded. */
 static NTSTATUS cmQMarks(PCM_QUERY_DEV q, PIRP irp)
@@ -919,6 +1046,13 @@ static NTSTATUS cmQLog(PCM_QUERY_DEV q, PIRP irp)
         in.Used = log->Used;
         in.Dropped = log->BytesDropped;
         in.Appends = log->Appends;
+        in.DroppedAtDrain = (q->LogDroppedEmitted != NULL)
+                                ? *q->LogDroppedEmitted
+                                : 0xFFFFFFFFUL;
+        if (q->LogHead != NULL && q->LogHeadBytes != NULL) {
+            in.HeadText = q->LogHead;
+            in.HeadBytes = *q->LogHeadBytes;
+        }
         rc = CmQueryLogAnswer(out, room, &in, &info);
         KeReleaseSpinLock(q->LogLock, logIrql);
     }
@@ -1095,6 +1229,9 @@ NTSTATUS CmQueryDispatch(PDEVICE_OBJECT device, PIRP irp)
         }
         if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QM_IOCTL) {
             return cmQMarks(q, irp);
+        }
+        if (stack->Parameters.DeviceIoControl.IoControlCode == CM_QA_IOCTL) {
+            return cmQAcpi(q, irp);
         }
         break;
     case IRP_MJ_POWER:

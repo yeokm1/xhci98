@@ -421,6 +421,13 @@ ULONG HwFoundAdapter(
                                             interruptPin, interruptLine, portGives,
                                             DevExt->PortIrqLevel, DevExt->PortIrqVector);
         DevExt->PollAlways = (BOOLEAN)(DevExt->PollWhy != POLL_WHY_INTERRUPT);
+        // A new start, an NT resume included (the device extension is
+        // reused): the missed-interrupt watchdog starts afresh (PLAN
+        // "Missed-interrupt watchdog"); controller resets within the start
+        // keep it.
+        RtlZeroMemory(&DevExt->IntWatch, sizeof(DevExt->IntWatch));
+        DevExt->IntClaims = 0;
+        DevExt->IntWatchFound = FALSE;
         DBGSTAGE(STG_POLL_PORTIRQ, (DevExt->PortIrqLevel & 0xFFFF) | (DevExt->PortIrqVector << 16));
         DBGMARK(STG_POLL_DECIDE, interruptPin | ((ULONG)interruptLine << 8) | ((ULONG)DevExt->PollWhy << 16) |
                 ((ULONG)DevExt->IntInfo.Flags << 24));
@@ -543,6 +550,133 @@ ULONG HwFoundAdapter(
 }
 
 //
+// Reads one function's configuration header into PciBuffer (zeroed first;
+// only the *BytesRead bytes returned are valid) and records its ids in the
+// device extension. TRUE when an NVMe function is there (PLAN 3.4: the
+// vendor id alone is probed first, then the header; a return too short to
+// hold the class code is "nothing here").
+//
+static BOOLEAN HwReadNvmeFunction(IN PHW_DEVICE_EXTENSION DevExt, IN ULONG BusNumber, IN ULONG SlotNumber,
+                                  OUT PUCHAR PciBuffer, OUT PULONG BytesRead)
+{
+    UCHAR baseClass, subClass, progIf;
+    ULONG bytesRead;
+
+    // The vendor id alone first: on 9x a scan may walk every bus a
+    // hot-plug port may have been given, and almost every slot it visits
+    // is empty.
+    *BytesRead = 0;
+    RtlZeroMemory(PciBuffer, 4);
+    bytesRead = ScsiPortGetBusData(
+        (PVOID)DevExt,
+        PCIConfiguration,
+        BusNumber,
+        SlotNumber,
+        PciBuffer,
+        4);
+    if (PciScanAbsent(bytesRead, *(USHORT*)&PciBuffer[PCI_VENDOR_ID_OFFSET])) {
+        return FALSE;
+    }
+
+    // Read PCI configuration space for THIS slot only, into a zeroed buffer
+    // (only the bytesRead returned are used).
+    RtlZeroMemory(PciBuffer, 256);
+    bytesRead = ScsiPortGetBusData(
+        (PVOID)DevExt,
+        PCIConfiguration,
+        BusNumber,
+        SlotNumber,
+        PciBuffer,
+        256);
+    *BytesRead = bytesRead;
+
+    // 0 (no bus), 2 (no function) or too short to hold the class code:
+    // nothing that can match here (PLAN 3.4).
+    if (bytesRead < PCI_CLASS_CODE_OFFSET + 3) {
+        return FALSE;
+    }
+
+    DevExt->VendorId = *(USHORT*)&PciBuffer[PCI_VENDOR_ID_OFFSET];
+    DevExt->DeviceId = *(USHORT*)&PciBuffer[PCI_DEVICE_ID_OFFSET];
+
+    if (DevExt->VendorId == 0xFFFF || DevExt->VendorId == 0x0000) {
+        return FALSE;
+    }
+
+    DevExt->RevisionId = PciBuffer[PCI_REVISION_ID_OFFSET];
+    progIf = PciBuffer[PCI_CLASS_CODE_OFFSET];
+    subClass = PciBuffer[PCI_CLASS_CODE_OFFSET + 1];
+    baseClass = PciBuffer[PCI_CLASS_CODE_OFFSET + 2];
+
+    return IsNvmeDevice(baseClass, subClass, progIf);
+}
+
+#ifdef NVME2K_W9X
+//
+// 9x (PLAN 3.1): TRUE when the function just read by HwReadNvmeFunction is
+// the one the port is starting, one of its memory BARs at the start of the
+// port's range (pciscan.h, PciScanIsPortFunction).
+//
+static BOOLEAN HwIsPortFunction(IN PUCHAR PciBuffer, IN ULONG BytesRead, IN ULONG RangeLo, IN ULONG RangeHi)
+{
+    ULONG bars[PCISCAN_BARS];
+    ULONG n = 0;
+
+    while (n < PCISCAN_BARS && BytesRead >= PCI_BASE_ADDRESS_0 + 4 * (n + 1)) {
+        bars[n] = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_0 + 4 * n];
+        n++;
+    }
+    return (BOOLEAN)PciScanIsPortFunction(1, bars, n, RangeLo, RangeHi);
+}
+
+//
+// 9x (PLAN 3.1, "A controller already set up"): reads the command register
+// from the header HwReadNvmeFunction read and, with memory decode on, CC and
+// CSTS through that function's BAR0 (both dwords), writing nothing; before
+// HwLocateRegisters, which turns decode off to size the BAR. *ReadOk FALSE
+// when the registers could not be read (a header too short, an I/O or
+// unassigned BAR0, BAR0 above 4 GiB, no mapping). The page is mapped
+// uncached as HwFoundAdapter maps the registers (_MapPhysToLinear,
+// Q169584).
+//
+static VOID HwReadFirmwareState(IN PUCHAR PciBuffer, IN ULONG BytesRead, OUT PUSHORT Cmd,
+                                OUT PBOOLEAN ReadOk, OUT PULONG Cc, OUT PULONG Csts)
+{
+    ULONG bar0, hi = 0;
+    PUCHAR regs;
+
+    *Cmd = 0;
+    *ReadOk = FALSE;
+    *Cc = 0;
+    *Csts = 0;
+    if (BytesRead < PCI_BASE_ADDRESS_1 + 4) {
+        // Decode unknown: the header did not hold the command register's
+        // neighbours; refused as unreadable.
+        *Cmd = PCI_ENABLE_MEMORY_SPACE;
+        return;
+    }
+    *Cmd = *(USHORT*)&PciBuffer[PCI_COMMAND_OFFSET];
+    if ((*Cmd & PCI_ENABLE_MEMORY_SPACE) == 0) {
+        return;
+    }
+    bar0 = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_0];
+    if ((bar0 & 0x6) == 0x4) {
+        hi = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_1];
+    }
+    if ((bar0 & 0x1) != 0 || hi != 0 || (bar0 & 0xFFFFFFF0) == 0) {
+        return;
+    }
+    regs = (PUCHAR)_MapPhysToLinear(bar0 & 0xFFFFFFF0, PAGE_SIZE, MPL_NonCached);
+    if (regs == NULL || (ULONG)regs == 0xFFFFFFFF) {
+        return;
+    }
+    *Cc = ScsiPortReadRegisterUlong((PULONG)(regs + NVME_REG_CC));
+    *Csts = ScsiPortReadRegisterUlong((PULONG)(regs + NVME_REG_CSTS));
+    *ReadOk = TRUE;
+}
+#endif
+
+//
 // HwFindAdapter - Locate and configure the adapter
 //
 ULONG HwFindAdapter(
@@ -557,8 +691,16 @@ ULONG HwFindAdapter(
     UCHAR pciBuffer[256];
     ULONG slotNumber;
     ULONG busNumber;
-    UCHAR baseClass, subClass, progIf;
     ULONG bytesRead;
+    ULONG rc;
+#ifdef NVME2K_W9X
+    ULONG rangeLo = 0, rangeHi = 0;
+    BOOLEAN scanned = FALSE;
+    BOOLEAN nvme, fwRead;
+    USHORT fwCmd;
+    ULONG fwCc, fwCsts;
+    PLAT_FIND_INFO fi;
+#endif
 
     UNREFERENCED_PARAMETER(BusInformation);
 
@@ -585,6 +727,120 @@ ULONG HwFindAdapter(
     ClockCalibrate(&DevExt->Clock);
     DBGMARK(STG_CLOCK_CAL, DevExt->Clock.UnitsPerMs ? DevExt->Clock.TscPerMs : 0);
 
+    // One adapter per call, on every target: the next call, if any, is the
+    // port's for another device.
+    *Again = FALSE;
+
+#ifdef NVME2K_W9X
+    // 9x (PLAN 3.1): only the function whose devnode the port is starting,
+    // never every NVMe function in the machine. The NT4-style HwContext
+    // scan from bus 0 took the first NVMe function it met, so a tunnelled
+    // drive's load brought up (and reset) an internal drive the BIOS was
+    // serving the system disk from. The port's first access range is the
+    // devnode's memory resource and names the function by BAR0's address;
+    // ConfigInfo's bus and slot (G9) are where it is looked for first, and
+    // a walk of every bus finds it when they do not hold it. HwContext is
+    // not used.
+    UNREFERENCED_PARAMETER(HwContext);
+    RtlZeroMemory(&fi, sizeof(fi));
+    // RangeInMemory is not relied on (not read on 9x): an I/O range's start
+    // cannot equal a memory BAR's address, so it names no function.
+    if (ConfigInfo->NumberOfAccessRanges != 0 && ConfigInfo->AccessRanges != NULL) {
+        rangeLo = (*(ConfigInfo->AccessRanges))[0].RangeStart.LowPart;
+        rangeHi = (ULONG)(*(ConfigInfo->AccessRanges))[0].RangeStart.HighPart;
+        fi.RangeLen = (*(ConfigInfo->AccessRanges))[0].RangeLength;
+    }
+#ifdef STOR98_TEST_FINDNONE
+    // Test only (46.20): the port's range moved 16 KiB past BAR0, as the
+    // board's refused start read it, so no function matches and the find
+    // returns NOT_FOUND (the refused plug-in path).
+    if (rangeLo != 0) {
+        rangeLo += 0x4000;
+    }
+#endif
+    busNumber = ConfigInfo->SystemIoBusNumber;
+    slotNumber = ConfigInfo->SlotNumber;
+    fi.PortBus = busNumber;
+    fi.PortSlot = slotNumber;
+    fi.RangeLo = rangeLo;
+    fi.RangeHi = rangeHi;
+    fi.Result = SP_RETURN_NOT_FOUND;
+    DBGSTAGE(STG_FIND_PORT, (busNumber << 16) | (slotNumber & 0xFFFF));
+    DBGSTAGE(STG_FIND_PORT_RANGE, rangeLo);
+    if (busNumber > PCISCAN_LAST_BUS || slotNumber >= PCISCAN_SLOTS) {
+        busNumber = 0;
+        slotNumber = 0;
+        scanned = TRUE;
+    }
+    for (;;) {
+        nvme = HwReadNvmeFunction(DevExt, busNumber, slotNumber, pciBuffer, &bytesRead);
+        if (!scanned) {
+            // What the port's own slot holds, for the find report.
+            fi.SlotBytes = bytesRead;
+            if (bytesRead >= PCI_CLASS_CODE_OFFSET + 3) {
+                fi.SlotClass = (ULONG)pciBuffer[PCI_CLASS_CODE_OFFSET] |
+                               ((ULONG)pciBuffer[PCI_CLASS_CODE_OFFSET + 1] << 8) |
+                               ((ULONG)pciBuffer[PCI_CLASS_CODE_OFFSET + 2] << 16);
+            }
+            // Every BAR dword the match compares (a 64-bit BAR's high
+            // half included), as read.
+            {
+                ULONG b;
+
+                for (b = 0; b < 6; b++) {
+                    if (bytesRead >= PCI_BASE_ADDRESS_0 + 4 * b + 4) {
+                        fi.SlotBar[b] = *(ULONG*)&pciBuffer[PCI_BASE_ADDRESS_0 + 4 * b];
+                    }
+                }
+            }
+            if (rangeLo == 0 && rangeHi == 0) {
+                // No memory range: nothing names a function, and none is
+                // taken.
+                break;
+            }
+        }
+        if (nvme && HwIsPortFunction(pciBuffer, bytesRead, rangeLo, rangeHi)) {
+            fi.Found = 1;
+            break;
+        }
+        if (!scanned) {
+            scanned = TRUE;
+            busNumber = 0;
+            slotNumber = 0;
+            continue;
+        }
+        if (!PciScanNext(&busNumber, &slotNumber)) {
+            break;
+        }
+    }
+#ifdef STOR98_TEST_FINDNONE
+    // Test only: never taken, whatever the shifted range matched.
+    fi.Found = 0;
+#endif
+    if (!fi.Found) {
+        PlatFindReport(&fi);
+        DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
+        return SP_RETURN_NOT_FOUND;
+    }
+    fi.FoundBus = busNumber;
+    fi.FoundSlot = slotNumber;
+    // A controller already set up by another owner (the BIOS serving it
+    // through INT 13h) is left to it, untouched: nothing has been written
+    // to this function yet (PLAN 3.1, "A controller already set up").
+    HwReadFirmwareState(pciBuffer, bytesRead, &fwCmd, &fwRead, &fwCc, &fwCsts);
+    fi.FwChecked = 1;
+    fi.FwCmd = fwCmd;
+    fi.FwCc = fwCc;
+    fi.FwCsts = fwCsts;
+    fi.FwState = (ULONG)PciScanFirmwareState(fwCmd, fwRead, fwCc, fwCsts);
+    DBGSTAGE(STG_FIND_FIRMWARE, fi.FwState | ((fwCc & 0xFF) << 8) | ((fwCsts & 0xFF) << 16) |
+             ((ULONG)fwRead << 24));
+    if (fi.FwState != PCISCAN_FW_TAKE) {
+        PlatFindReport(&fi);
+        DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
+        return SP_RETURN_NOT_FOUND;
+    }
+#else
     if (HwContext) {
         busNumber = ((PULONG)HwContext)[0];
         slotNumber = ((PULONG)HwContext)[1];
@@ -594,96 +850,49 @@ ULONG HwFindAdapter(
         slotNumber = ConfigInfo->SlotNumber;
     }
 
-scanloop:
-    // The vendor id alone first: on 9x the scan below walks every bus a
-    // hot-plug port may have been given, and almost every slot it visits
-    // is empty.
-    RtlZeroMemory(pciBuffer, 4);
-    bytesRead = ScsiPortGetBusData(
-        DeviceExtension,
-        PCIConfiguration,
-        busNumber,
-        slotNumber,
-        pciBuffer,
-        4);
-    if (PciScanAbsent(bytesRead, *(USHORT*)&pciBuffer[PCI_VENDOR_ID_OFFSET])) {
-        goto notmatched;
-    }
-
-    // Read PCI configuration space for THIS slot only, into a zeroed buffer
-    // (only the bytesRead returned are used).
-    RtlZeroMemory(pciBuffer, sizeof(pciBuffer));
-    bytesRead = ScsiPortGetBusData(
-        DeviceExtension,
-        PCIConfiguration,
-        busNumber,
-        slotNumber,
-        pciBuffer,
-        256);
-
-    // 0 (no bus), 2 (no function) or too short to hold the class code:
-    // nothing that can match here (PLAN 3.4).
-    if (bytesRead < PCI_CLASS_CODE_OFFSET + 3) {
-        goto notmatched;
-    }
-
-    DevExt->VendorId = *(USHORT*)&pciBuffer[PCI_VENDOR_ID_OFFSET];
-    DevExt->DeviceId = *(USHORT*)&pciBuffer[PCI_DEVICE_ID_OFFSET];
-
-    if (DevExt->VendorId == 0xFFFF || DevExt->VendorId == 0x0000) {
-        goto notmatched;
-    }
-
-    DevExt->RevisionId = pciBuffer[PCI_REVISION_ID_OFFSET];
-    progIf = pciBuffer[PCI_CLASS_CODE_OFFSET];
-    subClass = pciBuffer[PCI_CLASS_CODE_OFFSET + 1];
-    baseClass = pciBuffer[PCI_CLASS_CODE_OFFSET + 2];
-
-    if (IsNvmeDevice(baseClass, subClass, progIf)) {
-        ULONG rc;
-
-        DevExt->BusNumber = busNumber;
-        DevExt->SlotNumber = slotNumber;
-        if (HwContext) {
-            ULONG nextBus = busNumber;
-            ULONG nextSlot = slotNumber;
-
-            // The next call resumes after this slot; after the last slot
-            // of the last bus there is no next call (pciscan.h).
-            *Again = (BOOLEAN)PciScanNext(&nextBus, &nextSlot);
-            ((PULONG)HwContext)[0] = nextBus;
-            ((PULONG)HwContext)[1] = nextSlot;
-        } else {
-            *Again = FALSE;
+    for (;;) {
+        if (HwReadNvmeFunction(DevExt, busNumber, slotNumber, pciBuffer, &bytesRead)) {
+            break;
         }
-        DBGSTAGE(STG_FIND_ADAPTER, (busNumber << 16) | slotNumber);
-        rc = HwFoundAdapter(DevExt, ConfigInfo, pciBuffer, bytesRead, ArgumentString,
-                            (BOOLEAN)(HwContext == NULL));
-        if (rc == SP_RETURN_FOUND) {
-            // The CM link-state table (G3, MD-6; platform.h): last, once the
-            // adapter is found (NT: cmlinknt.c; 9x: pool9x.c).
-            PlatCmLinkOpen(DevExt, ArgumentString);
+        if (HwContext == NULL) {
+            // PnP (2000 and later): the port asked about this one function.
+            // Another NVMe function elsewhere on the buses is not ours to
+            // take while ConfigInfo describes the device PnP started.
+            return SP_RETURN_NOT_FOUND;
         }
-        DBGSTAGE(STG_FIND_RESULT, rc);
-        return rc;
+        // NT4 ABI: continue scanning, to the last bus (pciscan.h).
+        if (!PciScanNext(&busNumber, &slotNumber)) {
+            return SP_RETURN_NOT_FOUND;
+        }
     }
+    if (HwContext) {
+        ULONG nextBus = busNumber;
+        ULONG nextSlot = slotNumber;
 
-notmatched:
-    if (HwContext == NULL) {
-        // PnP (2000 and later): the port asked about this one function.
-        // Another NVMe function elsewhere on the buses is not ours to take
-        // while ConfigInfo describes the device PnP started.
-        *Again = FALSE;
-        return SP_RETURN_NOT_FOUND;
+        // The next call resumes after this slot; after the last slot of
+        // the last bus there is no next call (pciscan.h).
+        *Again = (BOOLEAN)PciScanNext(&nextBus, &nextSlot);
+        ((PULONG)HwContext)[0] = nextBus;
+        ((PULONG)HwContext)[1] = nextSlot;
     }
+#endif
 
-    // NT4 ABI (9x) or install time: Continue scanning, to the last bus
-    // (pciscan.h).
-    if (!PciScanNext(&busNumber, &slotNumber)) {
-        *Again = FALSE;
-        return SP_RETURN_NOT_FOUND;
+    DevExt->BusNumber = busNumber;
+    DevExt->SlotNumber = slotNumber;
+    DBGSTAGE(STG_FIND_ADAPTER, (busNumber << 16) | slotNumber);
+    rc = HwFoundAdapter(DevExt, ConfigInfo, pciBuffer, bytesRead, ArgumentString,
+                        (BOOLEAN)(HwContext == NULL));
+    if (rc == SP_RETURN_FOUND) {
+        // The CM link-state table (G3, MD-6; platform.h): last, once the
+        // adapter is found (NT: cmlinknt.c; 9x: pool9x.c).
+        PlatCmLinkOpen(DevExt, ArgumentString);
     }
-    goto scanloop;
+#ifdef NVME2K_W9X
+    fi.Result = rc;
+    PlatFindReport(&fi);
+#endif
+    DBGSTAGE(STG_FIND_RESULT, rc);
+    return rc;
 }
 
 //
@@ -846,9 +1055,358 @@ BOOLEAN ScsiDispatch(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
     }
 }
 
+#ifdef STOR98_TEST_VMMPROBE
+//
+// Test only (vmmprobe.h): the probe's state, for every adapter together.
+//
+static volatile LONG VpIn[VP_KINDS];
+static ULONG VpEntries[VP_KINDS];
+static ULONG VpIfSet[VP_KINDS];
+static ULONG VpIfSeen;                  // bit Kind * 2 + IF: STG_TEST_VMM_IF given
+static ULONG VpNestSeen[VP_KINDS];      // bit = set in progress: STG_TEST_VMM_NEST given
+static ULONG VpNested;
+static ULONG VpLeast[VP_KINDS];         // least headroom so far (0 = none measured yet)
+static ULONG VpTotal;
+static ULONG VpArenaSeen;               // bit What * 3 + arena: STG_TEST_VMM_ARENA given
+static ULONG VpArenaOdd;
+static ULONG VpTimerSeen;               // bit set * 2 + cancel: STG_TEST_VMM_TIMER given
+static ULONG VpTimers[16];
+
+// _CopyPageTable (Windows 98 DDK VMM.H, VMM service 0x61): nPages page-table
+// entries from linear page LinPgNum into PageBuf; nonzero on success.
+static ULONG __declspec(naked) _cdecl VpCopyPageTable(ULONG LinPgNum, ULONG nPages, PULONG PageBuf, ULONG flags)
+{
+    __asm int 0x20
+    __asm _emit 0x61
+    __asm _emit 0x80
+    __asm _emit (VMM_DEVICE_ID >> 0) & 0xFF
+    __asm _emit (VMM_DEVICE_ID >> 8) & 0xFF
+}
+
+#define VP_LOOK_PAGES   8
+
+// Bytes from Sp down to the first page below it that is not present;
+// VP_LOOK_PAGES pages' worth when all of them are (or the table cannot be
+// read).
+static ULONG VpHeadroom(IN ULONG Sp)
+{
+    ULONG ptes[VP_LOOK_PAGES];
+    ULONG page = Sp >> PAGE_SHIFT;
+    ULONG i;
+
+    if (page < VP_LOOK_PAGES || !VpCopyPageTable(page - VP_LOOK_PAGES, VP_LOOK_PAGES, ptes, 0)) {
+        return VP_LOOK_PAGES * PAGE_SIZE;
+    }
+    for (i = VP_LOOK_PAGES; i > 0; i--) {
+        if (!(ptes[i - 1] & 1)) {
+            // Page (page - VP_LOOK_PAGES + i - 1) is not present: the room
+            // ends at its top.
+            return Sp - ((page - VP_LOOK_PAGES + i) << PAGE_SHIFT);
+        }
+    }
+    return VP_LOOK_PAGES * PAGE_SIZE;
+}
+
+ULONG VpMask(VOID)
+{
+    return (VpIn[VP_STARTIO] != 0 ? 1 : 0) | (VpIn[VP_TIMER] != 0 ? 2 : 0) | (VpIn[VP_INTERRUPT] != 0 ? 4 : 0);
+}
+
+VOID VpEnter(IN ULONG Kind)
+{
+    ULONG fl, stk, mask, ifs, room, k;
+
+    __asm {
+        pushfd
+        pop eax
+        mov fl, eax
+        mov stk, esp
+    }
+    mask = VpMask();
+    ifs = (fl >> 9) & 1;
+    VpIn[Kind]++;
+    VpEntries[Kind]++;
+    if (ifs) {
+        VpIfSet[Kind]++;
+    }
+    if (!(VpIfSeen & (1UL << (Kind * 2 + ifs)))) {
+        VpIfSeen |= 1UL << (Kind * 2 + ifs);
+        DBGMARK(STG_TEST_VMM_IF, Kind | (ifs << 4) | (mask << 8));
+    }
+    if (mask != 0) {
+        VpNested++;
+        if (!(VpNestSeen[Kind] & (1UL << mask)) || (VpNested & 0xFF) == 0) {
+            VpNestSeen[Kind] |= 1UL << mask;
+            DBGMARK(STG_TEST_VMM_NEST, Kind | (mask << 4) | (ifs << 7) |
+                    ((VpNested > 0xFFFFFF ? 0xFFFFFF : VpNested) << 8));
+        }
+    }
+    room = VpHeadroom(stk);
+    if (VpLeast[Kind] == 0 || room < VpLeast[Kind]) {
+        VpLeast[Kind] = room;
+        DBGMARK(STG_TEST_VMM_STACK, (room & 0xFFFFFF) | (Kind << 24) | (mask << 28));
+    }
+    if ((++VpTotal & 0xFFFF) == 0) {
+        for (k = 0; k < VP_KINDS; k++) {
+            DBGSTAGE(STG_TEST_VMM_SUM, k | (((VpIfSet[k] >> 4) > 0xFFFFF ? 0xFFFFF : (VpIfSet[k] >> 4)) << 4) |
+                     (((VpEntries[k] >> 16) > 0xFF ? 0xFF : (VpEntries[k] >> 16)) << 24));
+        }
+    }
+}
+
+VOID VpExit(IN ULONG Kind)
+{
+    VpIn[Kind]--;
+}
+
+VOID VpArena(IN ULONG What, IN ULONG Linear, IN ULONG Bytes, IN ULONG Func, IN ULONG Cdb0)
+{
+    ULONG arena = Linear < 0x80000000UL ? 0 : (Linear < 0xC0000000UL ? 1 : 2);
+    ULONG kib = Bytes >> 10;
+    BOOLEAN first = (BOOLEAN)!(VpArenaSeen & (1UL << (What * 3 + arena)));
+
+    if (arena != 2) {
+        VpArenaOdd++;
+    }
+    if (first || (arena != 2 && (VpArenaOdd & 0xFFF) == 0)) {
+        VpArenaSeen |= 1UL << (What * 3 + arena);
+        DBGMARK(STG_TEST_VMM_ARENA, What | (arena << 2) | (VpMask() << 4) | ((Func > 0xFF ? 0xFF : Func) << 8) |
+                ((Cdb0 & 0xFF) << 16) | ((kib > 0xFF ? 0xFF : kib) << 24));
+    }
+}
+
+VOID VpCopy(IN ULONG Linear, IN ULONG Bytes, IN BOOLEAN ToCaller)
+{
+    ULONG mask = VpMask();
+
+    if (Linear < 0xC0000000UL && (mask & 6) != 0) {
+        DBGMARK(STG_TEST_VMM_COPY, Linear);
+        DBGSTAGE(STG_TEST_VMM_COPY2, (Bytes & 0xFFFFFF) | ((ULONG)(ToCaller ? 1 : 0) << 24) | (mask << 28));
+    }
+}
+
+VOID VpTimerRequest(IN ULONG PeriodUs)
+{
+    ULONG mask = VpMask();
+    ULONG cancel = PeriodUs == 0 ? 1 : 0;
+    ULONG key = mask * 2 + cancel;
+    ULONG n = ++VpTimers[key];
+
+    if (!(VpTimerSeen & (1UL << key)) || (n & 0xFFF) == 0) {
+        VpTimerSeen |= 1UL << key;
+        DBGMARK(STG_TEST_VMM_TIMER, mask | (cancel << 4) | ((n > 0xFFFFFF ? 0xFFFFFF : n) << 8));
+    }
+}
+
+#ifdef STOR98_TEST_VMMMAP
+// Test only (46.20): one deliberate fault inside a VMM service at the
+// 3000th HwStartIo, so that the STOP screen names the object and offset
+// of that service's code. STOR98_TEST_VMMMAP selects it: 1 _CopyPageTable
+// storing into a page that was never committed, 2 Cancel_Time_Out on a
+// handle in such a page, 3 _HeapFree of a block in such a page; 4
+// Cancel_Global_Event, 5 Cancel_Priority_VM_Event and 6 Signal_Semaphore
+// on a handle in such a page, 7 List_Remove of a node from a list whose
+// handle is in such a page, 8 _HeapFree of a block of its own whose 16
+// bytes before it were overwritten with addresses in such a page.
+static ULONG VpStarts;
+
+// Cancel_Time_Out (VMM service 0x3E): ESI = the time-out handle.
+static VOID __declspec(naked) _cdecl VpCancelTimeOut(ULONG Handle)
+{
+    __asm {
+        push esi
+        mov esi, [esp + 8]
+        int 0x20
+        _emit 0x3E
+        _emit 0x00
+        _emit (VMM_DEVICE_ID >> 0) & 0xFF
+        _emit (VMM_DEVICE_ID >> 8) & 0xFF
+        pop esi
+        ret
+    }
+}
+
+// _HeapFree (VMM service 0x51), C-callable.
+static ULONG __declspec(naked) _cdecl VpHeapFree(ULONG Block, ULONG Flags)
+{
+    __asm int 0x20
+    __asm _emit 0x51
+    __asm _emit 0x80
+    __asm _emit (VMM_DEVICE_ID >> 0) & 0xFF
+    __asm _emit (VMM_DEVICE_ID >> 8) & 0xFF
+}
+
+// A VMM service with its handle in ESI (Cancel_Global_Event 0x12,
+// Cancel_Priority_VM_Event 0x15): VpEsiCall(service, handle).
+#define VP_ESI_SERVICE(name, svc)                       \
+static VOID __declspec(naked) _cdecl name(ULONG Handle) \
+{                                                       \
+    __asm push esi                                      \
+    __asm mov esi, [esp + 8]                            \
+    __asm int 0x20                                      \
+    __asm _emit svc                                     \
+    __asm _emit 0x00                                    \
+    __asm _emit (VMM_DEVICE_ID >> 0) & 0xFF             \
+    __asm _emit (VMM_DEVICE_ID >> 8) & 0xFF             \
+    __asm pop esi                                       \
+    __asm ret                                           \
+}
+VP_ESI_SERVICE(VpCancelGlobalEvent, 0x12)
+VP_ESI_SERVICE(VpCancelPriorityVmEvent, 0x15)
+
+// Signal_Semaphore (VMM service 0x28): EAX = the semaphore handle.
+static VOID __declspec(naked) _cdecl VpSignalSemaphore(ULONG Handle)
+{
+    __asm {
+        mov eax, [esp + 4]
+        int 0x20
+        _emit 0x28
+        _emit 0x00
+        _emit (VMM_DEVICE_ID >> 0) & 0xFF
+        _emit (VMM_DEVICE_ID >> 8) & 0xFF
+        ret
+    }
+}
+
+// List_Remove (VMM service 0xA1): ESI = the list handle, EAX = the node.
+static VOID __declspec(naked) _cdecl VpListRemove(ULONG List, ULONG Node)
+{
+    __asm {
+        push esi
+        mov esi, [esp + 8]
+        mov eax, [esp + 12]
+        int 0x20
+        _emit 0xA1
+        _emit 0x00
+        _emit (VMM_DEVICE_ID >> 0) & 0xFF
+        _emit (VMM_DEVICE_ID >> 8) & 0xFF
+        pop esi
+        ret
+    }
+}
+
+// _HeapAllocate (VMM service 0x4F), C-callable: nbytes, flags.
+static ULONG __declspec(naked) _cdecl VpHeapAllocate(ULONG Bytes, ULONG Flags)
+{
+    __asm int 0x20
+    __asm _emit 0x4F
+    __asm _emit 0x80
+    __asm _emit (VMM_DEVICE_ID >> 0) & 0xFF
+    __asm _emit (VMM_DEVICE_ID >> 8) & 0xFF
+}
+
+// A system-arena page whose page-table entry is 0 (never committed), or 0.
+static ULONG VpUncommitted(VOID)
+{
+    ULONG lin, pte;
+
+    for (lin = 0xC1000000UL; lin < 0xFF000000UL; lin += 0x100000UL) {
+        if (VpCopyPageTable(lin >> PAGE_SHIFT, 1, &pte, 0) && pte == 0) {
+            return lin;
+        }
+    }
+    return 0;
+}
+
+static VOID VpMapFault(VOID)
+{
+    ULONG bad;
+
+    if (++VpStarts != 3000) {
+        return;
+    }
+    bad = VpUncommitted();
+    DBGMARK(STG_TEST_VMM_MAP, STOR98_TEST_VMMMAP | (bad & 0xFFFFF000UL));
+    if (bad == 0) {
+        return;
+    }
+#if STOR98_TEST_VMMMAP == 1
+    (VOID)VpCopyPageTable(0xC0001, 1, (PULONG)(bad + 0x10), 0);
+#elif STOR98_TEST_VMMMAP == 2
+    VpCancelTimeOut(bad + 0x10);
+#elif STOR98_TEST_VMMMAP == 3
+    (VOID)VpHeapFree(bad + 0x10, 0);
+#elif STOR98_TEST_VMMMAP == 4
+    VpCancelGlobalEvent(bad + 0x10);
+#elif STOR98_TEST_VMMMAP == 5
+    VpCancelPriorityVmEvent(bad + 0x10);
+#elif STOR98_TEST_VMMMAP == 6
+    VpSignalSemaphore(bad + 0x10);
+#elif STOR98_TEST_VMMMAP == 7
+    VpListRemove(bad + 0x10, bad + 0x40);
+#elif STOR98_TEST_VMMMAP == 8
+    {
+        PULONG blk;
+        ULONG i;
+
+        blk = (PULONG)VpHeapAllocate(64, 0);
+        DBGMARK(STG_TEST_VMM_MAP, 0xE0 | ((ULONG)blk & 0xFFFFFF00UL));
+        if (blk != NULL) {
+            for (i = 1; i <= 4; i++) {
+                blk[-(LONG)i] = bad + 0x10 * i;
+            }
+            (VOID)VpHeapFree((ULONG)blk, 0);
+        }
+    }
+#endif
+    DBGMARK(STG_TEST_VMM_MAP, 0xF0 | STOR98_TEST_VMMMAP);
+}
+#endif
+
+// Test only: HwStartIo and HwInterrupt counted around their bodies.
+static BOOLEAN HwStartIoBody(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb);
+static BOOLEAN HwInterruptBody(IN PVOID DeviceExtension);
+
+BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
+{
+    BOOLEAN r;
+
+    VpEnter(VP_STARTIO);
+#ifdef STOR98_TEST_VMMMAP
+    VpMapFault();
+#endif
+    r = HwStartIoBody(DeviceExtension, Srb);
+    VpExit(VP_STARTIO);
+    return r;
+}
+
+BOOLEAN HwInterrupt(IN PVOID DeviceExtension)
+{
+    BOOLEAN r;
+
+    VpEnter(VP_INTERRUPT);
+    r = HwInterruptBody(DeviceExtension);
+    VpExit(VP_INTERRUPT);
+    return r;
+}
+#define HwStartIo HwStartIoBody
+#define HwInterrupt HwInterruptBody
+#endif
+
 //
 // HwStartIo - Process SCSI request
 //
+#ifdef STOR98_TEST_REENTRY
+#ifndef STOR98_DBGPORT
+#error STOR98_TEST_REENTRY is test-only: build it with STOR98_DBGPORT=1 (out\<flavor>-dbgport, never staged)
+#endif
+// Test only: marks HwStartIo's run, so HwInterrupt can count an entry
+// inside it (STG_TEST_REENTRY).
+static BOOLEAN HwStartIoBody(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb);
+
+BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
+{
+    PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
+    BOOLEAN r;
+
+    DevExt->TestInStartIo++;
+    r = HwStartIoBody(DeviceExtension, Srb);
+    DevExt->TestInStartIo--;
+    return r;
+}
+#define HwStartIo HwStartIoBody
+#endif
+
 BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
 {
     PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
@@ -926,10 +1484,30 @@ BOOLEAN HwStartIo(IN PVOID DeviceExtension, IN PSCSI_REQUEST_BLOCK Srb)
 //
 // HwInterrupt - ISR for adapter
 //
+#ifdef STOR98_TEST_REENTRY
+#undef HwStartIo
+#endif
+
 BOOLEAN HwInterrupt(IN PVOID DeviceExtension)
 {
+#ifdef STOR98_TEST_REENTRY
+    {
+        PHW_DEVICE_EXTENSION DevExt = (PHW_DEVICE_EXTENSION)DeviceExtension;
+
+        if (DevExt->TestInStartIo != 0 || DevExt->TestInTimer != 0) {
+            if ((DevExt->TestReentries++ & 0xFF) == 0) {
+                DBGMARK(STG_TEST_REENTRY, (DevExt->TestReentries & 0xFFFFFF) |
+                        ((ULONG)((DevExt->TestInStartIo != 0 ? 1 : 0) | (DevExt->TestInTimer != 0 ? 2 : 0)) << 24));
+            }
+        }
+    }
+#endif
     return EngInterrupt((PHW_DEVICE_EXTENSION)DeviceExtension);
 }
+#ifdef STOR98_TEST_VMMPROBE
+#undef HwStartIo
+#undef HwInterrupt
+#endif
 
 //
 // HwResetBus - truthful reset (PLAN 0.10, G4); see lifecycle.c

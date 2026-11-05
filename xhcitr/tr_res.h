@@ -26,6 +26,7 @@
 #define IDM_REFRESH             40001
 #define IDM_SAVE                40002
 #define IDM_SNAPSHOT            40004
+#define IDM_ACPI                40005   /* Save Firmware Tables (46.21)  */
 #define IDM_EXIT                40003
 #define IDM_COPY                40010
 #define IDM_SELALL              40011

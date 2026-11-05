@@ -46,6 +46,11 @@ typedef struct _CM_FAMILY {
  */
 const CM_FAMILY *CmPortsFamily(ULONG nhiId);
 
+/* TRUE when `id` (CM_PORTS_ID form) is a root port id of a family whose
+ * NHIs are AMD's: the ports whose filter reads _DSD for the ACPI-named
+ * source (design record 22 section 7.6.1). */
+BOOLEAN CmPortsAcpiPort(ULONG id);
+
 /* How many families the table holds, and the n-th, for the host suite. */
 ULONG CmPortsFamilyCount(VOID);
 const CM_FAMILY *CmPortsFamilyAt(ULONG n);

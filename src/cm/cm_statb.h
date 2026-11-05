@@ -31,6 +31,14 @@ typedef struct _CM_STATUS_IN {
     ULONG IcmNoUsb3;        /* a Thunderbolt 3 ICM host (Falcon, Alpine or
                                Titan Ridge, not Maple Ridge): no USB3
                                tunnel exists                              */
+    ULONG Handover;         /* the handover's tier in bits 2:0, bit 3
+                               written this boot (CmOscReport; record 32
+                               section 12.8.11); NT: bit 4 the guard's
+                               skip, 5 a timeout this boot, 6 an unknown
+                               board at reads 0 (section 12.8.15.13), 7
+                               no routine route (12.8.15.15), 8 the
+                               deferral's bound (12.8.15.16), 9 ECAM
+                               needing reads 1 (12.8.15.18)               */
     ULONG Blocked;          /* bit n: port n blocked by a 9x eject; bit
                                4 + n: an eject in progress there
                                (CM_ST_F_BLOCKED_*, CM_ST_F_EJECTING_SHIFT;
@@ -65,7 +73,8 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
                         PULONG count, ULONG room);
 
 /* The publication's state, one per NHI (CM_NHI.StatusPub, cm_statos.c);
- * touched by the connection-manager thread alone. */
+ * touched by the connection-manager thread alone, but for the query
+ * name's fields (below). */
 /* XhciCmBridgeDiag (record 21 section 6.1.1): the bus numbering's last
  * attempt, dwords: 0 sequence, 1 port bdf, 2 outcome, 3 seen (functions
  * 23:16, bridges 15:8, tries 7:0), 4 the port's 18h, 5 window outcome,
@@ -82,6 +91,10 @@ BOOLEAN CmStatusPciPath(const XHCI_TBT_CFG *cfg, ULONG bdf, PULONG path,
  * CM_NI_DIAG_WORDS lays them out (0 the sequence). */
 #define CM_NIDIAG_WORDS 12
 
+/* XhciCmQueryName's longest name with its terminator, as cm_qryos.c's
+ * CM_Q_NAME_CHARS (task 46.14: kept until written). */
+#define CM_ST_QNAME_CHARS 24
+
 typedef struct _CM_STATUS_PUB {
     PVOID DevKey;           /* the hardware key, opened in the start      */
     PVOID DrvKey;           /* the driver key, for the ask                */
@@ -97,6 +110,14 @@ typedef struct _CM_STATUS_PUB {
     ULONG Failures;
     ULONG LastError;        /* the last failed write's NTSTATUS           */
     ULONG Dirty;            /* the last write failed: try again           */
+    ULONG Deferred;         /* 9x: writes left away from S0 (46.14)      */
+    /* XhciCmQueryName as last asked for (QNameSeq) and as last written
+     * (QNameWritten), under the NHI's BrDiagLock: set by the PnP
+     * dispatch, written by it or by the thread's next pass. */
+    ULONG QNameSeq;
+    ULONG QNameWritten;
+    ULONG QNameChars;
+    WCHAR QName[CM_ST_QNAME_CHARS];
     ULONG PathBdf[CM_ST_MAX_PORTS];     /* 98: the paths computed, for   */
     ULONG PathCount[CM_ST_MAX_PORTS];   /* these members (0: unknown)    */
     ULONG PathAtMs[CM_ST_MAX_PORTS];    /* when an unknown one was tried */

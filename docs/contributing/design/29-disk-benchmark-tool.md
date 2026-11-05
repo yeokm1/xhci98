@@ -2074,3 +2074,17 @@ space on Stor98's drive and the Windows drive's reserve, a CD drive
 refused, a half-prepared leftover offered after a power cut, a
 header without a record asked about). Nothing in the tool changed. What is left is the bench's: 98 SE at a high resolution and
 the Quick preset's 2 s steps on real hardware, and P.10.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Windows 98 SE's and ME's ASPI layer is installed by Setup, and its adapter identity is a fixed string** (roadmap-usb4 task 43.50, design record 29's reading P.0) - the owner's `Win98SE.iso` (SHA-256 begins `c048c31e414e3fe4`) and `Windows Me OEM Full.iso` (`aa7b36e0249e3fe4`): `subase.inf` (98 SE 61,683 bytes, SHA-256 `10f3852dd331dbd493ed9be68e767419d959a2c47fe541cd1e33adc24cdb16a2`; ME 52,884 bytes, `fd5435b2283717c28a1832a9734b6c62c16d827e0bb4ec3cea54e280da91c8a1`) has `[winbase]` `CopyFiles = sys.files, ios.files, ...` with `wnaspi32.dll` in `[sys.files]` (dirid 11) and `apix.vxd` in `[ios.files]` (dirid 12); `APIX.VXD` (29,497 bytes, the same file on both, SHA-256 `d98f340a537636f08933ccf282e2460040025db23a5c4204f68e3f8d2a15d571`) carries the string "OEM SCSI HBA" at file offset `0x5864` and "SCSI API XLATOR"; `WNASPI32.DLL` (98 SE, 36,864 bytes, `e4d27f9ca758dd9ae3eab762da13393989579721c65d5586372b7d559c3f90e7`) exports `SendASPI32Command` and `GetASPI32SupportInfo`. With the Windows 98 DDK's `block\wnaspi32\WNASPI32.H` (`SRC_BLOCK_WNASPI32_WNASPI32.H`, SHA-256 `19927d4bf9512c5343ea573c43df4111626838555acb117c0da326ad13298d8c`) for the SRB layouts and command codes, and `block\inc\DCB.H` and `DCB.INC` (`SRC_BLOCK_INC_DCB.H`, `50933f200fc02c042b8ee55ed89ae9440bc1d75654a56e5391f6eee7cea73d04`) for `DCB_dmd_flags` (+0x1C), `DCB_max_xfer_len` (+0x50) and `DCB_max_sg_elements` (+0x77), and `IOR.H`'s `IORF_DOUBLE_BUFFER` (0x40), which Stor98 reads (its MD-8) | static (`7z e` of the CD's cabinets, routine unpacking; the INFs read as text; a string scan of the two binaries and their export names; the DDK headers read as text; nothing executed). Whether the identifier the string supplies is what `SC_HA_INQUIRY` returns for a SCSIPORT adapter is not read; the tool does not rely on it and proves the adapter Stor98's by INQUIRY page C9h instead | design record 29 sections 6.2 and 15; `xhciperf\xhciperf.c`; Stor98 `docs/PLAN.md` MD-8, `src\stor98\src\sg9x.h` |

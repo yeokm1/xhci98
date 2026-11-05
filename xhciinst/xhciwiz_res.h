@@ -29,6 +29,9 @@
 #define IDD_HELP                115     /* Help (record 26 section 5.10)  */
 #define IDC_H_TEXT              1120
 #define IDC_H_README            1121
+/* Record 32 section 12.8.15.12: the board's identity read, with Skip. */
+#define IDD_BOARD               116
+#define IDC_B_TEXT              1122
 
 /* The controls. */
 #define IDC_TITLE               1001
@@ -73,6 +76,7 @@
 #define IDC_T_APPR_NOTE         1116
 #define IDC_T_NET               1117    /* networking (record 35 s. 9.5) */
 #define IDC_T_NET_T             1118
+#define IDC_T_SETTINGS          1119    /* Settings... (record 26 5.4.2)  */
 #define IDC_S_HEAD              1030
 #define IDC_S_ADVANCED          1031
 #define IDC_S_NOTE              1032

@@ -130,6 +130,13 @@ ntoskrnl.exe!ZwSetValueKey                   all  required  SITES=cm_statos.obj 
 ntoskrnl.exe!RtlInitUnicodeString            all  required  SITES=cm_statos.obj w2k-export; win98-precedent usbhub.sys 4.10.2222 (NTOSKRNL.EXE!RtlInitUnicodeString, hint D7) (+47 other 98 SE); ntkern-name
 ntoskrnl.exe!KeQuerySystemTime               all  required  SITES=cm_statos.obj,cm_qryos.obj w2k-export; win98-precedent uhcd.sys 4.10.2222 (NTOSKRNL.EXE!KeQuerySystemTime, hint 80) (+9 other 98 SE) (design record 13 section 7.4; Appendix A row 97). The record's stamp: the two words as returned, no arithmetic; and the query device's epoch (cm_qryos.c), compared word by word
 
+# --- the NT handover's routines on x86 (cm_oscnt.c, record 32 section
+# 12.8.15.15): the helper's channel, minor 1, opened once a load on NT
+# for its MmGetSystemRoutineAddress. xhci98.sys's own pair, its evidence
+# verbatim but for the SITES object; no amd64 twin (that image imports
+# MmGetSystemRoutineAddress itself) ---
+ntoskrnl.exe!IoGetDeviceObjectPointer        all  required  SITES=cm_oscnt.obj w2k-export; win98-precedent 1394bus.sys 4.10.2222 (NTOSKRNL.EXE!IoGetDeviceObjectPointer, hint 48) (+compbatt.sys); design record 13 Appendix A row 43; task 36.15, the x86 helper's channel (design record 18 section 3); task 44.81, on NT the probe of the controller's \DosDevices name before it is created (hcd_door.c)
+
 # --- the query device (cm_qryos.c, design record 25 section 4.2): its
 # \DosDevices\XHCICM<n> link. xhci98.sys's own pair for its HCD<n> names,
 # its evidence verbatim, and IoRegisterDeviceInterface, whose link name

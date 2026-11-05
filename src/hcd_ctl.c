@@ -105,6 +105,7 @@ ULONG XhciResourcesRequired = USBPORT_RESOURCES_MEMORY |
  * absent, another number, another type or a failed read is on. Read at
  * every start and latched for its lifetime. */
 #define HCD_VALUE_COMMAND_CHECK L"XhciCommandCheck"
+#define HCD_VALUE_ACPI_TABLES   L"XhciAcpiTables"
 /* Task 38.2 (design record 13 section 6.11.3): the silent install's gate,
  * on Windows 98 SE and ME only. Only a DWORD of exactly 1 is on; absent,
  * 0, another number, another type or a failed read is off (O6). The INFs
@@ -499,6 +500,13 @@ static VOID hcdReadValues(PHCD_CONTROLLER hc)
     hc->Usb2Bos = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
     XhciLogNote(ext, "enum.bos.usb2.on", hc->Usb2Bos);
 
+    /* Task 46.21 (design record 13 section 8.13): the firmware tables
+     * request, on unless 0. */
+    value = 0;
+    status = hcdReadDword(hc, HCD_VALUE_ACPI_TABLES, &value);
+    hc->AcpiTablesOn = (NT_SUCCESS(status) && value == 0) ? 0UL : 1UL;
+    HcdAcpiOpen(hc);
+
     /* Task 45.45: the command-state checker. */
     value = 0;
     status = hcdReadDword(hc, HCD_VALUE_COMMAND_CHECK, &value);
@@ -686,6 +694,8 @@ static VOID hcdTolApplies(PHCD_CONTROLLER hc)
      * section 4.12.4); no setting reaches it. */
     hc->QemuStreamQuirk = XhciTolQemuStreamQuirk(ext->PciVendorDevice);
     hc->Counters.QemuStreamQuirk = hc->QemuStreamQuirk;
+    hc->StreamDeqRefused = NULL;          /* issue 24 */
+    hc->StreamDeqCycled = 0;
 }
 
 /* Issue 18: a controller's own firmware version where its configuration
@@ -1755,6 +1765,145 @@ static ULONG hcdMsgCapability(PHCD_CONTROLLER hc)
     return XhciMsiCapRead(config);
 }
 
+/* --------------------------------------------------------------------- */
+/* A line another device holds asserted (design record 15 section 4.4)    */
+/* --------------------------------------------------------------------- */
+
+/*
+ * Any function's configuration header, through the HAL as hcdPirqSlot
+ * reads bus 0's: 0 bytes for a bus that does not exist. Reads only.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdHeldRead(PVOID context, ULONG bus, ULONG device,
+                         ULONG function, PUCHAR buffer, ULONG length)
+{
+    UNREFERENCED_PARAMETER(context);
+
+    return HalGetBusData(PCIConfiguration, bus,
+                         (device & 0x1FUL) | ((function & 0x7UL) << 5),
+                         buffer, length);
+}
+
+/*
+ * Whether the candidate the walk named still holds the line at each of
+ * HCD_HELD_CONFIRM reads HCD_HELD_CONFIRM_MS apart: a device some driver
+ * services drops its Interrupt Status at once. IRQL: PASSIVE_LEVEL.
+ */
+#define HCD_HELD_CONFIRM        4UL
+#define HCD_HELD_CONFIRM_MS     10UL
+
+static ULONG hcdHeldConfirm(ULONG irq, ULONG bdf)
+{
+    UCHAR cfg[XHCI_POLL_HELD_BYTES];
+    LARGE_INTEGER due;
+    ULONG i;
+
+    for (i = 0; i < HCD_HELD_CONFIRM; i++) {
+        HcdRelativeMs(&due, HCD_HELD_CONFIRM_MS);
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
+        if (hcdHeldRead(NULL, bdf >> 8, (bdf >> 3) & 0x1FUL, bdf & 0x7UL,
+                        cfg, XHCI_POLL_HELD_BYTES) < XHCI_POLL_HELD_BYTES ||
+            !XhciPollHeldStill(cfg, irq)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/*
+ * Section 4.4 (task 46.6): on 98 SE and ME, a start given an interrupt
+ * line names a function seen asserting that line at every read, before
+ * anything is connected; diagnostic only - the delivery and the
+ * connection are decided without it. The line checked (1 to 15, the IRQ
+ * given), the walk, the confirmation of each candidate it names (at most
+ * XHCI_POLL_HELD_CANDIDATES), the walk resumed past one not confirmed.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdHeldLine(PHCD_CONTROLLER hc)
+{
+    static const ULONG own[4] = {
+        XHCI_PIRQ_CFG_ID, XHCI_PIRQ_CFG_BAR0, XHCI_PIRQ_CFG_BAR1,
+        XHCI_PIRQ_CFG_SUBSYSTEM
+    };
+    XHCI_POLL_HELD_IN in;
+    XHCI_POLL_HELD_OUT out;
+    PXHCI_EXTENSION ext;
+    LARGE_INTEGER began;
+    LARGE_INTEGER ended;
+    ULONG line;
+    ULONG functions;
+    ULONG tried;
+    ULONG i;
+
+    ext = &hc->Hc;
+    if (IoIsWdmVersionAvailable(1, 0x10) || !hc->HaveInterrupt) {
+        return;
+    }
+    hc->Counters.HeldScan = XHCI_POLL_HELD_FAILED;
+    if (!hcdPswRead(hc, 0x3CUL, &line)) {
+        XhciLogNote(ext, "intr.held", 0xFFFFFFFFUL);
+        return;
+    }
+    for (i = 0; i < 4; i++) {
+        if (!hcdPswRead(hc, own[i], &in.Own[i])) {
+            XhciLogNote(ext, "intr.held", 0xFFFFFFFFUL);
+            return;
+        }
+    }
+    in.Context = NULL;
+    in.Read = hcdHeldRead;
+    in.Irq = line & 0xFFUL;
+    in.From = 0;
+    hc->Counters.HeldIrq = in.Irq;
+    if (in.Irq < 1 || in.Irq > 15 ||
+        (hc->IntRaw.Count != 0 && hc->IntRaw.Level != in.Irq)) {
+        /* No IRQ of the PC's interrupt controllers, or not the one this
+         * start was given: no sharing can be read from it. */
+        XhciLogNote(ext, "intr.held.line",
+                    (hc->IntRaw.Level << 8) | in.Irq);
+        return;
+    }
+    functions = 0;
+    tried = 0;
+    KeQuerySystemTime(&began);
+    for (;;) {
+        XhciPollHeldScan(&in, &out);
+        functions += out.Functions;
+        if (out.Result != XHCI_POLL_HELD_FOUND) {
+            break;
+        }
+        if (hcdHeldConfirm(in.Irq, out.Bdf)) {
+            break;
+        }
+        hc->Counters.HeldCandidates++;
+        tried++;
+        if (tried >= XHCI_POLL_HELD_CANDIDATES) {
+            out.Result = XHCI_POLL_HELD_INCONCLUSIVE;
+            break;
+        }
+        if (out.Bdf >= 0xFFFFUL) {
+            out.Result = XHCI_POLL_HELD_NONE;
+            break;
+        }
+        in.From = out.Bdf + 1;
+    }
+    KeQuerySystemTime(&ended);
+    /* The walk's cost in ms, for the legs (section 4.4): the low words'
+     * difference, good for spans under seven minutes. */
+    XhciLogNote(ext, "intr.held.ms",
+                (ended.LowPart - began.LowPart) / 10000UL);
+    hc->Counters.HeldScan = out.Result;
+    hc->Counters.HeldFunctions = functions;
+    if (out.Result != XHCI_POLL_HELD_FOUND) {
+        XhciLogNote(ext, "intr.held", out.Result);
+        return;
+    }
+    hc->Counters.HeldBdf = out.Bdf;
+    hc->Counters.HeldId = out.Id;
+    XhciLogNote(ext, "intr.held", (out.Bdf << 8) | out.Result);
+    XhciLogNote(ext, "intr.held.id", out.Id);
+}
+
 /*
  * The connection for the delivery settled at start (design record 15
  * section 4): the line through IoConnectInterrupt, nothing for a poll, and
@@ -1866,6 +2015,7 @@ VOID HcdControllerInitObjects(PHCD_CONTROLLER hc)
 {
     KeInitializeSpinLock(&hc->ControllerLock);
     KeInitializeSpinLock(&hc->PdoListLock);
+    HcdAcpiInit(hc);
     HcdTimersInit(hc);
     HcdDmaInitObjects(hc);
     KeInitializeDpc(&hc->IsrDpc, hcdIsrDpc, hc);
@@ -3069,6 +3219,9 @@ static NTSTATUS hcdStartBody(PHCD_CONTROLLER hc, PIRP irp)
     res.StartVA = ext->StartVA;
     res.StartPA = ext->StartPA;
 
+    /* Record 15 section 4.4 (task 46.6): a holder of the line named
+     * before anything is connected; diagnostic only. */
+    hcdHeldLine(hc);
     HcdTimersOpen(hc);
     hc->DpcClosed = 0;
 

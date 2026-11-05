@@ -185,6 +185,24 @@ static void test_profiles(void)
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "AMD Pink Sardine 1668");
     ids.Device = 0x1669;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "AMD Pink Sardine 1669");
+    {
+        /* Task 46.23: AMD's other integrated hosts, by id whatever the
+         * class code reads. */
+        static const ULONG amd[] = { 0x162E, 0x162F, 0x15C4, 0x15C5, 0x151C,
+                                     0x151D, 0x158D, 0x158E, 0x1120, 0x1121,
+                                     0x113B, 0x113C };
+        ULONG savedClass = ids.ClassCode;
+        ULONG a;
+        ids.ClassCode = 0;
+        for (a = 0; a < sizeof(amd) / sizeof(amd[0]); a++) {
+            ids.Device = amd[a];
+            CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_USB4, "an AMD host by id");
+        }
+        ids.Device = 0x1125;
+        CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN,
+                 "Krackan's bridge id is no NHI's");
+        ids.ClassCode = savedClass;
+    }
     ids.Device = 0x15BF;
     CHECK_EQ(CmProfileFor(&ids), CM_PROFILE_UNKNOWN, "an Intel id under AMD's vendor id");
     /* Task 45.46: the ASM4242's row, the profile its class gives it. */
@@ -243,6 +261,22 @@ static void test_values(void)
         CHECK_EQ(CmValueDefault(i), v.Value[i], "CmValueDefault matches the defaults");
     }
     CHECK_EQ(CmValueDefault(CM_VAL_COUNT), 0, "an index out of range");
+
+    /* Record 32 sections 12.8.6 and 12.8.15.10: the handover's values. */
+    CHECK_EQ(v.PlatformHandover, 1, "XhciCmAsm4242Handover defaults to 1");
+    CHECK_EQ(v.HandoverStructural, 0, "XhciCmAsm4242Structural defaults to 0");
+    CHECK_EQ(v.HandoverReads, 0, "XhciCmAsm4242Reads defaults to 0");
+    CmValuesTakeHandoverReads(&v, 0, 0);
+    CHECK(v.HandoverReads == 0 && !v.HandoverReadsFound, "Reads absent: 0");
+    CmValuesTakeHandoverReads(&v, 1, 1);
+    CHECK(v.HandoverReads == 1 && v.HandoverReadsFound &&
+          !v.HandoverReadsRefused, "Reads 1 taken");
+    CmValuesTakeHandoverReads(&v, 1, 2);
+    CHECK(v.HandoverReads == 0 && v.HandoverReadsRefused &&
+          v.HandoverReadsRaw == 2, "Reads 2 refused: 0 stands");
+    CmValuesTakeHandoverReads(&v, 1, 0);
+    CHECK(v.HandoverReads == 0 && !v.HandoverReadsRefused, "Reads 0 taken");
+    CmValuesDefault(&v);
 
     /* Record 35 section 8.1: each refused out of its range, the default
      * standing; the bounds taken. */

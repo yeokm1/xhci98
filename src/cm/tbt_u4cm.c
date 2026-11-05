@@ -5774,6 +5774,8 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     cm->Counters.Connects++;
     p->Generation++;
     gen = p->Generation;
+    /* Task 46.13: the start of every connection, timed by the log. */
+    tbtU4Log(cm, "u4.connect", (p->Index << 16) | (gen & 0xFFFFUL));
     p->UnplugPending = FALSE;
     p->Gen4 = FALSE;
     p->Asym = FALSE;

@@ -22,6 +22,8 @@
 # record 21 section 6.1.1); the 9x start of a function with no interrupt,
 # cm_noirq.c (test_cm_noirq; design record 28); the
 # re-enumeration's own pure half, cm_ports.c (test_cm_ports), the
+# ACPI-named tunnel-port source's _DSD reader, cm_dsd.c (test_cm_dsd;
+# task 46.23, design record 22 section 7.6.1), the
 # interrupt of a function hot-added on 2000, cm_irq.c (test_cm_irq; task
 # 44.53, record 21 section 6.2.1), the requirement lists of a hot-added
 # bridge on 2000 and XP, cm_breq.c (test_cm_breq; task 45.12, design
@@ -31,10 +33,13 @@
 # 4.5; its driver half cm_rirqos.c), the marks
 # answer's table, cm_marks.c (test_cm_marks; task 42-A.5), the 9x
 # tunnel id's pure half, cm_tagid.c (test_cm_tagid; task 44.3), and the
-# query device's answers, cm_query.c and cm_qpci.c (test_cm_query); the
+# query device's answers, cm_query.c, cm_qpci.c and cm_qacpi.c
+# (test_cm_query, test_trpci, test_tracpi); the
 # shared log ring ..\xhci_log.c (test\test_log.c), compiled in by path; and
 # the registry values' precedence, ..\xhci_regsrc.c (test\test_regsrc.c;
-# task 42-A.17), compiled in the same way.
+# task 42-A.17), compiled in the same way; and the x86 helper's channel,
+# ..\xhci_hlpr.c (test\test_msi.c), whose minor 1 cm_oscnt.c asks on
+# x86 (task 46.12, design record 32 section 12.8.15.15).
 # All DDK-free.
 # cm_pool.c is the one file that allocates pool; cm_reg.c and cm_statos.c
 # the two that open a registry key through the kernel's imports
@@ -49,6 +54,9 @@
 # (test_cm_eject; task 43.18), cm_ejectos.c their driver half.
 # cm_pwrr.c is the pure route of a system SET_POWER's device half
 # (test_cm_pwrr; task 43.65), cm_power.c its driver half.
+# cm_oscp.c is the pure half of the NT handover (test_cm_oscp; task 46.12,
+# design record 32 section 12.8.15), cm_oscnt.c its driver half and the
+# mailbox members' filters.
 #
 # ADDING A FILE. A new .c is one more line in SOURCES below (a file of
 # src\ by path, as ..\xhci_log.c is); scripts\source-stamp.ps1 reads this
@@ -72,7 +80,13 @@ SOURCES=cm_vals.c      \
         tbt_topo.c     \
         tbt_brnum.c    \
         cm_noirq.c     \
+        cm_osc.c       \
+        cm_oscc.c      \
+        cm_oscp.c      \
+        cm_oscos.c     \
+        cm_oscnt.c     \
         cm_ports.c     \
+        cm_dsd.c       \
         cm_irq.c       \
         cm_breq.c      \
         cm_iso.c               cm_rirq.c      \
@@ -82,6 +96,7 @@ SOURCES=cm_vals.c      \
         cm_nvlink.c    \
         ..\xhci_log.c  \
         ..\xhci_regsrc.c \
+        ..\xhci_hlpr.c  \
         cm_pool.c      \
         cm_reg.c       \
         cm_log.c       \
@@ -93,6 +108,7 @@ SOURCES=cm_vals.c      \
         cm_cfgmg.c     \
         cm_cfgwk.c     \
         cm_filt.c      \
+        cm_dsdos.c     \
         cm_live.c              cm_rirqos.c    \
         cm_net.c       \
         cm_pwrr.c      \
@@ -103,6 +119,7 @@ SOURCES=cm_vals.c      \
         cm_ejectos.c   \
         cm_status.c    \
         cm_qpci.c      \
+        cm_qacpi.c     \
         cm_statos.c            cm_query.c             cm_qryos.c     \
         xhcicm.rc
 

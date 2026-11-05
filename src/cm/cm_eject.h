@@ -500,6 +500,54 @@ BOOLEAN CmEjSweepHeld(const CM_EJ_SWEEP *s);
 ULONG CmEjSweepPick(const ULONG *busIds, ULONG nIds, const ULONG *childIds,
                     const ULONG *owner, ULONG n, PULONG claims);
 
+/*
+ * Task 46.13 (record 21 section 8.3): a DOWN acts on its own connection's
+ * children only. The guard of a DOWN's sweep on its own member, read
+ * before each of its readings and before a record its readings made has
+ * its query:
+ *
+ *   Bound      the sweep is the DOWN's on its own member, and the core's
+ *              link-down upcall for that connection (Gen) drew event Down
+ *              in the CONFIGMG worker's event order; unbound: as before.
+ *   GenKnown   the member's port known, GenNow its connection now.
+ *   Busy, End, Fresh: the worker's snapshot of the member's
+ *              re-enumeration calls (CM_CFGWK_PUB, cm_reenum.h).
+ *
+ * SUPERSEDED  a fresh publication admitted after Down: the member was
+ *             published over an empty inventory after the connection went
+ *             down, so nothing under it is the connection's. The sweep
+ *             ends; a record not yet queried is withdrawn.
+ * WAIT        a call in flight: decided once it has ended.
+ * ALL         the member on a newer connection and every call of the
+ *             member ended before Down: every child is the old
+ *             connection's (or older), whatever answers on its bus.
+ * ACT         otherwise as before: the vanished verdict by vendor and
+ *             device.
+ *
+ * Event numbers compare in sequence order (CmEjEvtAfter: `a` after `b`
+ * while they are less than 2^31 apart).
+ */
+#define CM_EJ_G_ACT             1UL
+#define CM_EJ_G_ALL             2UL
+#define CM_EJ_G_SUPERSEDED      3UL
+#define CM_EJ_G_WAIT            4UL
+
+typedef struct _CM_EJ_GUARD_IN {
+    BOOLEAN Bound;
+    BOOLEAN GenKnown;
+    BOOLEAN Busy;
+    BOOLEAN EndValid;
+    BOOLEAN FreshValid;
+    ULONG Gen;
+    ULONG Down;
+    ULONG GenNow;
+    ULONG End;
+    ULONG Fresh;
+} CM_EJ_GUARD_IN;
+
+BOOLEAN CmEjEvtAfter(ULONG a, ULONG b);
+ULONG CmEjSweepGuard(const CM_EJ_GUARD_IN *g);
+
 /* ---- the statement decision (part 2) ---------------------------------- */
 
 #define CM_EJ_D_IDLE            0UL
@@ -598,6 +646,13 @@ typedef struct _CM_EJ_DOM {
     ULONG DownAt;           /* the tunnel-down action's start (the ICM
                                decision's allowance is counted from it)    */
     ULONG DownAtValid;
+    /* Task 46.13 (record 21 section 8.3): this start's number (the
+     * guard's bindings are this start's alone), and per member the last
+     * link-down upcall's connection generation and worker event. */
+    ULONG StartSeq;
+    ULONG LinkDownValid;    /* bit per member                              */
+    ULONG LinkDownGen[4];
+    ULONG LinkDownEvt[4];
 } CM_EJ_DOM;
 
 #ifndef XHCI_HOST_TEST
@@ -678,7 +733,24 @@ VOID CmEjectStop(struct _CM_NHI *nhi);
  * caller holds the re-enumeration without the removal, which is the
  * sweep's. FALSE: the caller posts the removal as before. On the thread.
  */
-BOOLEAN CmEjectSweep(struct _CM_NHI *nhi, ULONG member);
+BOOLEAN CmEjectSweep(struct _CM_NHI *nhi, ULONG member, ULONG gen,
+                     BOOLEAN own, ULONG serial);
+/* Task 46.13: `gen` is the asking action's (its kind in bits 31:28, its
+ * generation in 23:0; CM_EJ_SWEEP_NO_GEN without one), kept by the sweep
+ * as the generation its readings carry. `own`: the action is a USB4
+ * TUNNEL_DOWN on this member's own port, of connection `serial` (the
+ * whole generation): the sweep is bound by section 8.3's guard when that
+ * connection's link-down upcall was seen (CmEjectLinkDown). */
+#define CM_EJ_SWEEP_NO_GEN      0x00FFFFFFUL
+
+/* Task 46.13: the core's link-down upcall for USB4 port `port`, connection
+ * `gen` (cmU4LinkDown, before anything else of it): the member the port
+ * corresponds to, when known, keeps the generation and a worker event
+ * (record 21 section 8.3). And a TUNNEL_UP of the same connection again
+ * (CmNvlinkU4Up): the binding withdrawn, so no publication of the
+ * connection's own tunnel supersedes its later DOWN. On the thread. */
+VOID CmEjectLinkDown(struct _CM_NHI *nhi, ULONG port, ULONG gen);
+VOID CmEjectLinkUp(struct _CM_NHI *nhi, ULONG port, ULONG gen);
 
 /* Task 43.47f: a tunnel up on member `member` (XHCI_TBT_NO_MEMBER: every
  * member) makes each of this start's vetoed vanished children on it due
@@ -713,6 +785,10 @@ VOID CmEjectClaimAccepted(ULONG claim, ULONG firstAt);
  * transaction - only with `takeover`, the member's call worker live (the
  * worker then leaves its request in place and makes no rescan of its
  * own); without it the claim is freed. <= DISPATCH_LEVEL. */
+/* Task 46.13: the tag of the sweep reading that saw claim's devnode vanish
+ * (0 none) and, with one, where the child was (*at, cm.vanish.cr.at's
+ * form). <= DISPATCH_LEVEL. */
+ULONG CmEjectClaimFrom(ULONG claim, PULONG at);
 BOOLEAN CmEjectClaimEnd(ULONG claim, ULONG queryCr, ULONG removeCr,
                         ULONG firstAt, ULONG lastAt, ULONG attempts,
                         ULONG entry, ULONG sequence, ULONG generation,

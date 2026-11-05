@@ -711,6 +711,30 @@ static ULONG hcdCfgFault(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         HcdCfgCycle(hc, dev);
         return 0;
     }
+    if (hc->StreamDeqRefused == dev) {
+        /* Issue 24: a stream's Set TR Dequeue the controller refused with
+         * Context State Error after the retries (hcdCfgSetDequeueOne). The
+         * controller answers every other command, so the failure is this
+         * device's endpoint, and the device alone is cycled: a controller
+         * reset dropped every device on it, an audio device among them,
+         * where Linux only warns (xhci-ring.c, the Set TR Deq handler). A
+         * device with no PDO yet keeps the reset. The mark stays until
+         * the device is gone (HcdCfgDeviceGone), so a caller's second
+         * fault for the same failure (hcdCfgReset after hcdCfgQuiesce)
+         * finds the cycle already owed and requests no reset (Codex,
+         * 4d865ccd); the cycle is queued once. */
+        if (dev->Pdo != NULL && dev->Hub == NULL) {
+            if (!hc->StreamDeqCycled) {
+                hc->StreamDeqCycled = 1;
+                XHCI_DBG_VALUE("hcd: stream dequeue refused, cycling "
+                               "location", dev->Location);
+                XhciLogNote(&hc->Hc, "cfg.deq.cycle", dev->SlotId);
+                HcdCfgCycle(hc, dev);
+            }
+            return 0;
+        }
+        hc->StreamDeqRefused = NULL;
+    }
     HcdSvcRequestReset(&hc->Hc);
     return 1;
 }
@@ -1720,6 +1744,10 @@ VOID HcdCfgDeviceGone(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
         hcdCfgStreamsFree(hc, st);
     }
     hcdCfgIsoPagesReclaim(hc, dev, 0xFFFFFFFFUL);
+    if (hc->StreamDeqRefused == dev) {
+        hc->StreamDeqRefused = NULL;    /* issue 24: never a stale match */
+        hc->StreamDeqCycled = 0;
+    }
 }
 
 /* An endpoint's own handle, if the device still has it open: never a
@@ -3487,14 +3515,26 @@ static ULONG hcdCfgSetDequeueCode(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     return built ? hcdCfgCommand(hc, dev, &trb, &control) : 0UL;
 }
 
+/* Issue 24: the retries of a stream's Set TR Dequeue refused with Context
+ * State Error. */
+#define HCD_CFG_DEQ_RETRIES 2UL
+
 /*
- * hcdCfgSetDequeueCode as success or failure. On QEMU's xHCI alone (36.54,
- * design record 17 section 4.12.4), a stream's command refused with Context
- * State Error by an endpoint that reads Running again is QEMU's own device
- * wakeup having restarted the stopped endpoint (xhci_wakeup_endpoint kicks
- * it, where a real controller restarts a Stopped endpoint only for a
- * doorbell): one more Stop Endpoint - whose stream resync runs as for any -
- * and the command once more, its position read again. Thread only.
+ * hcdCfgSetDequeueCode as success or failure. A stream's command refused
+ * with Context State Error is retried by the state the endpoint reads now,
+ * on every controller (issue 24, 2026-11-05):
+ * - Running: restarted since its stop. QEMU's own device wakeup does it
+ *   (36.54, design record 17 section 4.12.4: xhci_wakeup_endpoint kicks
+ *   it), and a user's FL1100 refused one with the endpoint read Stopped
+ *   just before, which fits a device's ERDY restarting it. One more Stop
+ *   Endpoint - whose stream resync runs as for any - and the command again.
+ * Halted, Stopped or Error read again: no retry. A Halted endpoint's
+ *   reset is the whole endpoint's and owes every stream's settling and
+ *   repair (hcdCfgQuiesce: hcdCfgRetrySettleAll, hcdCfgRecoverDequeue),
+ *   which a retry inside one stream's dequeue cannot give (Codex's review
+ *   of 5215323d); the device's cycle below recovers it instead. At most HCD_CFG_DEQ_RETRIES, each with its position read again.
+ *   Still refused, the device is marked so that its failure cycles it, not
+ *   the controller (hcdCfgFault). Thread only.
  */
 static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
                                  PHCD_PIPE pipe)
@@ -3502,16 +3542,39 @@ static ULONG hcdCfgSetDequeueOne(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev,
     XHCI_TRB trb;
     ULONG control;
     ULONG code;
+    ULONG state;
+    ULONG tries;
 
     code = hcdCfgSetDequeueCode(hc, dev, pipe);
-    if (code == XHCI_CC_CONTEXT_STATE_ERROR && hc->QemuStreamQuirk &&
-        pipe->StreamId != 0 &&
-        hcdCfgEpState(hc, dev, pipe->Dci) == XHCI_EP_STATE_RUNNING) {
-        hc->Counters.QemuStreamRestops++;
-        if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) ==
-                XHCI_RING_OK &&
-            hcdCfgCommand(hc, dev, &trb, &control) == XHCI_CC_SUCCESS) {
-            code = hcdCfgSetDequeueCode(hc, dev, pipe);
+    for (tries = 0; code == XHCI_CC_CONTEXT_STATE_ERROR &&
+                    pipe->StreamId != 0 && tries < HCD_CFG_DEQ_RETRIES;
+         tries++) {
+        state = hcdCfgEpState(hc, dev, pipe->Dci);
+        XhciLogNote(&hc->Hc, "cfg.deq.retry",
+                    (dev->SlotId << 16) | (pipe->Dci << 8) |
+                    (pipe->StreamId << 4) | (state & 0xFUL));
+        if (state == XHCI_EP_STATE_RUNNING) {
+            if (hc->QemuStreamQuirk) {
+                hc->Counters.QemuStreamRestops++;
+            }
+            if (XhciTrbStopEndpoint(&trb, dev->SlotId, pipe->Dci, 0) !=
+                    XHCI_RING_OK ||
+                hcdCfgCommand(hc, dev, &trb, &control) != XHCI_CC_SUCCESS) {
+                break;
+            }
+        } else {
+            break;
+        }
+        code = hcdCfgSetDequeueCode(hc, dev, pipe);
+    }
+    if (code == XHCI_CC_CONTEXT_STATE_ERROR && pipe->StreamId != 0) {
+        XhciLogNote(&hc->Hc, "cfg.deq.refused",
+                    (dev->SlotId << 16) | (pipe->Dci << 8) |
+                    (pipe->StreamId << 4) |
+                    (hcdCfgEpState(hc, dev, pipe->Dci) & 0xFUL));
+        if (hc->StreamDeqRefused != dev) {
+            hc->StreamDeqRefused = dev;
+            hc->StreamDeqCycled = 0;
         }
     }
     if (code == XHCI_CC_SUCCESS && pipe->StreamId != 0) {

@@ -102,11 +102,18 @@ typedef struct _CM_EJ_REC {
     ULONG SweepGone;        /* an accepted eject whose unit a sweep read
                                vanished (task 43.47): as a tunnel down on
                                its member                                 */
+    ULONG FromTag;          /* the reading that recorded it vanished (task
+                               46.13, the sweep's ReadTag then); 0 none    */
     ULONG VanishOwed;       /* a sweep read this record's devnode vanished
                                while the record held it without owning it
                                (a claim, an eject whose query was not
                                accepted): the record carries the vanished
                                child's obligation (task 43.47)            */
+    ULONG GuardOn;          /* task 46.13: made by a bound reading (record
+                               21 section 8.3): the link-down event it is
+                               bound to, and the start that bound it      */
+    ULONG GuardDown;
+    ULONG GuardStart;
     char Id[CM_EJ_ID_CHARS];
 } CM_EJ_REC;
 
@@ -121,9 +128,25 @@ typedef struct _CM_EJ_SWP {
     ULONG Member;
     ULONG OpId;             /* the reading outstanding, 0 none             */
     PVOID CallBlock;
+    ULONG ReqGen;           /* the asking action's generation (task 46.13) */
+    ULONG ReadTag;          /* the outstanding reading's: number 31:16,
+                               ReqGen 15:0                                 */
     ULONG PendNode;         /* a vanished child found with no record free:
                                kept, made a record once one is            */
     char PendId[CM_EJ_ID_CHARS];
+    /* Task 46.13 (record 21 section 8.3): the latest ask's binding (G),
+     * the outstanding reading's (R: fixed from its submission until it
+     * is taken, its records made with it) and the kept child's (P). */
+    ULONG GOn;
+    ULONG GGen;
+    ULONG GDown;
+    ULONG GStart;
+    ULONG ROn;
+    ULONG RDown;
+    ULONG RStart;
+    ULONG POn;
+    ULONG PDown;
+    ULONG PStart;
 } CM_EJ_SWP;
 
 static KSPIN_LOCK cmEjLock;
@@ -134,6 +157,9 @@ static ULONG cmEjClockMs;
 static ULONG cmEjClockLast;
 static ULONG cmEjClockRest;
 static ULONG cmEjTickUs;
+static ULONG cmEjReadNumber;    /* every sweep reading of the image, for
+                                   the readings' tags (task 46.13)     */
+static ULONG cmEjStartSeq;      /* the starts' numbers (task 46.13)    */
 
 /* ====================================================================== */
 /* The clock and configuration space                                      */
@@ -623,7 +649,7 @@ static ULONG cmEjRunSlot(PVOID route, PVOID context, const VOID *op,
 /* A vanished child's record, under cmEjLock, for the sweep `sw`: TRUE when
  * made (its start the sweep's, NULL while detached: adopted then). */
 static BOOLEAN cmEjRecordLocked(CM_EJ_SWP *sw, ULONG node, const char *id,
-                                ULONG now)
+                                ULONG now, ULONG on, ULONG down, ULONG start)
 {
     CM_EJ_REC *rec;
     ULONG i;
@@ -637,6 +663,11 @@ static BOOLEAN cmEjRecordLocked(CM_EJ_SWP *sw, ULONG node, const char *id,
         CmEjBeginVanished(&rec->Tx, sw->Bridge, node, now);
         rec->Nhi = sw->Nhi;
         rec->Member = sw->Member;
+        rec->FromTag = sw->ReadTag;
+        /* Task 46.13: the binding of the observation that made it. */
+        rec->GuardOn = on;
+        rec->GuardDown = down;
+        rec->GuardStart = start;
         cmEjIdCopy(rec->Id, id);
         return TRUE;
     }
@@ -652,20 +683,25 @@ static BOOLEAN cmEjRecordLocked(CM_EJ_SWP *sw, ULONG node, const char *id,
  * eject - given its disappearance (SweepGone).
  */
 static VOID cmEjObserveLocked(CM_EJ_SWP *sw, ULONG node, const char *id,
-                              ULONG now, PULONG made, BOOLEAN *full)
+                              ULONG now, PULONG made, BOOLEAN *full,
+                              ULONG on, ULONG down, ULONG start)
 {
     ULONG at;
     ULONG owner;
 
     owner = cmEjOwnerAtLocked(NULL, node, id, &at);
     if (owner == CM_EJ_OWN_NONE) {
-        if (cmEjRecordLocked(sw, node, id, now)) {
+        if (cmEjRecordLocked(sw, node, id, now, on, down, start)) {
             (*made)++;
         } else {
             *full = TRUE;
             if (sw->PendNode == 0) {
                 sw->PendNode = node;
                 cmEjIdCopy(sw->PendId, id);
+                /* Task 46.13: kept with its observation's binding. */
+                sw->POn = on;
+                sw->PDown = down;
+                sw->PStart = start;
             }
         }
         return;
@@ -674,10 +710,14 @@ static VOID cmEjObserveLocked(CM_EJ_SWP *sw, ULONG node, const char *id,
         /* The sweep's own kept child. */
         return;
     }
+    /* Task 46.13: the reading that saw it, kept with the obligation (a
+     * claim taken over keeps its record, CmEjectClaimEnd). */
     if (owner == CM_EJ_OWN_CLAIM) {
         cmEj[at].VanishOwed = 1;
+        cmEj[at].FromTag = sw->ReadTag;
     } else if ((cmEj[at].Tx.Flags & CM_EJ_F_VANISH) == 0) {
         cmEj[at].SweepGone = 1;
+        cmEj[at].FromTag = sw->ReadTag;
     }
 }
 
@@ -709,32 +749,44 @@ static ULONG cmEjRunSweep(PVOID route, PVOID context, const VOID *op,
     ULONG made;
     ULONG now;
     BOOLEAN full;
+    BOOLEAN all;
+    BOOLEAN vanished;
     KIRQL irql;
     char text[CM_EJ_ID_CHARS];
 
     cfg = (PCM_CFGMG)route;
     sw = (CM_EJ_SWP *)context;
     member = ((const ULONG *)op)[0];
+    /* Task 46.13 (record 21 section 8.3, rule 2): every child taken as
+     * vanished. */
+    all = (BOOLEAN)(((const ULONG *)op)[2] != 0);
     out = (PULONG)res;
     out[0] = 0;
     out[1] = 0;
     out[2] = 0;
+    /* Task 46.13: the inventory's time, the end's, the reading's tag. */
+    out[3] = 0;
+    out[4] = 0;
+    out[5] = ((const ULONG *)op)[1];
     made = 0;
     full = FALSE;
+    /* Before the inventory, so [out[3], out[4]] encloses the whole
+     * reading. */
+    out[3] = CmLogClockMs();
     nIds = CmCfgwkBusIds(member, ids, CM_EJ_SWEEP_IDS);
     if (nIds > CM_EJ_SWEEP_IDS) {
         /* Not read completely: nothing is taken for vanished. */
-        return 12;
+        return 24;
     }
     memberNode = cmEjMemberNode(cfg, member, path, &n);
     if (memberNode == 0) {
-        return 12;
+        return 24;
     }
     cr = CmCfgmgChild(cfg, memberNode, &node);
     if (cr == CMG_CR_NO_SUCH_DEVNODE) {
         node = 0;
     } else if (cr != CMG_CR_SUCCESS) {
-        return 12;
+        return 24;
     }
     for (count = 0; node != 0; count++) {
         if (count == CM_EJ_WALK_NODES ||
@@ -749,10 +801,14 @@ static ULONG cmEjRunSweep(PVOID route, PVOID context, const VOID *op,
             id = 0;
         }
         none = CM_EJ_OWN_NONE;
-        if (CmEjSweepPick(ids, nIds, &id, &none, 1, &n) == 0) {
+        vanished = all ? (BOOLEAN)(id != 0)
+                       : (BOOLEAN)(CmEjSweepPick(ids, nIds, &id, &none, 1,
+                                                 &n) == 0);
+        if (vanished) {
             now = cmEjNow();
             KeAcquireSpinLock(&cmEjLock, &irql);
-            cmEjObserveLocked(sw, node, text, now, &made, &full);
+            cmEjObserveLocked(sw, node, text, now, &made, &full, sw->ROn,
+                              sw->RDown, sw->RStart);
             KeReleaseSpinLock(&cmEjLock, irql);
         }
         cr = CmCfgmgSibling(cfg, node, &node);
@@ -768,7 +824,33 @@ static ULONG cmEjRunSweep(PVOID route, PVOID context, const VOID *op,
 incomplete:
     out[1] = made;
     out[2] = full ? 1UL : 0UL;
-    return 12;
+    out[4] = CmLogClockMs();
+    return 24;
+}
+
+/*
+ * Task 46.13 (record 21 section 8.2): where a vanished child was, from its
+ * instance id: the BUS_&DEV_&FUNC_ form as bus 15:8, device 7:3, function
+ * 2:0; the path form a hot-added function takes as 80000000h, the
+ * elements' count in 30:24 and its first three elements (its own device
+ * and function, its bridge's, that bridge's) in 23:0; FFFFFFFFh for
+ * neither. Any IRQL.
+ */
+static ULONG cmEjIdAt(const char *id)
+{
+    ULONG path[CM_PORTS_PATH_MAX];
+    ULONG n;
+    ULONG v;
+
+    if (CmPortsIdLocation(id, CM_EJ_ID_CHARS, &v)) {
+        return v & 0xFFFFUL;
+    }
+    if (CmPortsIdPath(id, CM_EJ_ID_CHARS, path, CM_PORTS_PATH_MAX, &n) &&
+        n != 0) {
+        return 0x80000000UL | ((n & 0x7FUL) << 24) | (path[0] << 16) |
+               ((n > 1 ? path[1] : 0) << 8) | (n > 2 ? path[2] : 0);
+    }
+    return 0xFFFFFFFFUL;
 }
 
 /* ====================================================================== */
@@ -1001,6 +1083,12 @@ VOID CmEjectReset(PCM_NHI nhi)
     CmZero(&nhi->Ej, sizeof(nhi->Ej));
     nhi->Ej.Owner = CM_EJ_NONE;
     KeAcquireSpinLock(&cmEjLock, &irql);
+    /* Task 46.13: a binding of an earlier start is never this one's. */
+    cmEjStartSeq++;
+    if (cmEjStartSeq == 0) {
+        cmEjStartSeq = 1;
+    }
+    nhi->Ej.StartSeq = cmEjStartSeq;
     for (i = 0; i < CM_EJ_RECORDS; i++) {
         if (cmEj[i].Nhi == nhi) {
             cmEj[i].Nhi = NULL;
@@ -1174,6 +1262,66 @@ static BOOLEAN cmEjSubmit(PCM_NHI nhi, CM_EJ_REC *rec, ULONG what)
     return (BOOLEAN)(id != 0);
 }
 
+static ULONG cmEjGuard(PCM_NHI nhi, ULONG member, ULONG on, ULONG gen,
+                       ULONG down, ULONG start, CM_EJ_GUARD_IN *g);
+
+/*
+ * Task 46.13 (record 21 section 8.3): a vanished record a bound reading
+ * made, with no call out, no result owed, its query never accepted and
+ * not a CONFIGMG worker's claim, withdrawn without a call once its member
+ * was published afresh after the link-down it is bound to: TRUE when it
+ * was (the record free). A refused query's record is withdrawn as well:
+ * the refusal authorised nothing, and the devnode it named was not under
+ * the member when the fresh publication's inventory was read. On the
+ * thread.
+ */
+static BOOLEAN cmEjWithdrawableLocked(PCM_NHI nhi, const CM_EJ_REC *rec)
+{
+    return (BOOLEAN)(rec->GuardOn && rec->Nhi == nhi && rec->OpId == 0 &&
+                     rec->LateRunning == 0 && rec->Tx.Pending == 0 &&
+                     rec->Tx.Phase != CM_EJ_P_FREE &&
+                     rec->Tx.Phase != CM_EJ_P_CLAIMED &&
+                     (rec->Tx.Flags & CM_EJ_F_VANISH) != 0 &&
+                     (rec->Tx.Flags & (CM_EJ_F_QUERIED | CM_EJ_F_AUTH)) == 0);
+}
+
+static BOOLEAN cmEjSuperseded(PCM_NHI nhi, CM_EJ_REC *rec)
+{
+    CM_EJ_GUARD_IN gin;
+    ULONG down;
+    ULONG start;
+    ULONG phase;
+    BOOLEAN can;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    can = cmEjWithdrawableLocked(nhi, rec);
+    down = rec->GuardDown;
+    start = rec->GuardStart;
+    KeReleaseSpinLock(&cmEjLock, irql);
+    if (!can || cmEjGuard(nhi, rec->Member, 1, 0, down, start, &gin) !=
+                    CM_EJ_G_SUPERSEDED) {
+        return FALSE;
+    }
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    can = (BOOLEAN)(cmEjWithdrawableLocked(nhi, rec) &&
+                    rec->GuardDown == down && rec->GuardStart == start);
+    phase = rec->Tx.Phase;
+    if (can) {
+        rec->Tx.Phase = CM_EJ_P_FREE;
+        rec->Nhi = NULL;
+        rec->GuardOn = 0;
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+    if (can) {
+        CmLogNote(nhi, "cm.vanish.superseded",
+                  (rec->Tx.Bridge << 16) | ((phase & 0xFFUL) << 8));
+        CmLogNote(nhi, "cm.vanish.cr.from", rec->FromTag);
+        CmLogNote(nhi, "cm.vanish.cr.at", cmEjIdAt(rec->Id));
+    }
+    return can;
+}
+
 /* One record's step on the thread. */
 static VOID cmEjStepRec(PCM_NHI nhi, CM_EJ_REC *rec, BOOLEAN nested)
 {
@@ -1228,8 +1376,28 @@ static VOID cmEjStepRec(PCM_NHI nhi, CM_EJ_REC *rec, BOOLEAN nested)
                           (rec->Tx.Bridge << 16) |
                               ((rec->Tx.Phase & 0xFFUL) << 8) |
                               (res[0] & 0xFFUL));
+                /* Task 46.13: the reading that recorded the child, and
+                 * where the child was. */
+                CmLogNote(nhi, "cm.vanish.cr.from", rec->FromTag);
+                CmLogNote(nhi, "cm.vanish.cr.at", cmEjIdAt(rec->Id));
+            } else if (!vanish && rec->FromTag != 0 &&
+                       r == CM_CALL_T_TAKEN && got >= 4) {
+                /* Task 46.13: an eject or a claim whose devnode a sweep's
+                 * reading saw vanish: that reading, and where the child
+                 * was, beside the call's result. */
+                CmLogNote(nhi, "cm.vanish.eject.cr",
+                          (rec->Tx.Bridge << 16) |
+                              ((rec->Tx.Phase & 0xFFUL) << 8) |
+                              (res[0] & 0xFFUL));
+                CmLogNote(nhi, "cm.vanish.cr.from", rec->FromTag);
+                CmLogNote(nhi, "cm.vanish.cr.at", cmEjIdAt(rec->Id));
             }
         }
+    }
+    if (vanish && cmEjSuperseded(nhi, rec)) {
+        /* Task 46.13 (record 21 section 8.3): withdrawn, its devnode left
+         * as it is (the newer connection's re-enumeration finds it). */
+        return;
     }
     for (n = 0; n < 12; n++) {
         CmZero(&in, sizeof(in));
@@ -1419,7 +1587,8 @@ static BOOLEAN cmEjPendLocked(CM_EJ_SWP *sw, ULONG now)
     sw->PendNode = 0;
     made = 0;
     full = FALSE;
-    cmEjObserveLocked(sw, node, text, now, &made, &full);
+    cmEjObserveLocked(sw, node, text, now, &made, &full, sw->POn, sw->PDown,
+                      sw->PStart);
     return (BOOLEAN)!full;
 }
 
@@ -1447,6 +1616,55 @@ static VOID cmEjSwLate(PVOID route, PVOID context, ULONG kind, ULONG id,
     KeReleaseSpinLock(&cmEjLock, irql);
 }
 
+/*
+ * Task 46.13 (record 21 section 8.3): the guard for member `member` of a
+ * binding (`on`, the connection `gen`, its link-down event `down`, the
+ * start `start` that bound it), the worker's snapshot read now. Unbound
+ * where the binding is not this start's, or no worker. Never under
+ * cmEjLock (the worker's lock is taken before it, cmWkEnumAdmit). On the
+ * thread.
+ */
+static ULONG cmEjGuard(PCM_NHI nhi, ULONG member, ULONG on, ULONG gen,
+                       ULONG down, ULONG start, CM_EJ_GUARD_IN *g)
+{
+    CM_CFGWK_PUB pub;
+
+    CmZero(g, sizeof(*g));
+    if (!on || start != nhi->Ej.StartSeq || nhi->Reenum.Wk == NULL ||
+        !nhi->U4On || member >= XHCI_TBT_MAX_TUNNELS) {
+        return CmEjSweepGuard(g);
+    }
+    g->Bound = TRUE;
+    g->Gen = gen;
+    g->Down = down;
+    g->GenKnown = (BOOLEAN)(CmNhiMemberPort(nhi, member) != 0);
+    g->GenNow = g->GenKnown ? CmNhiMemberGen(nhi, member) : 0;
+    CmCfgwkPub(nhi->Reenum.Wk, member, &pub);
+    g->Busy = pub.Busy;
+    g->EndValid = pub.EndValid;
+    g->End = pub.End;
+    g->FreshValid = pub.FreshValid;
+    g->Fresh = pub.Fresh;
+    return CmEjSweepGuard(g);
+}
+
+/* The guard's decision for the log (record 21 section 8.3). */
+static VOID cmEjGuardLog(PCM_NHI nhi, ULONG member, ULONG decision,
+                         ULONG reading, const CM_EJ_GUARD_IN *g)
+{
+    CmLogNote(nhi, "cm.vanish.guard",
+              ((member & 0xFFUL) << 24) | ((decision & 0xFFUL) << 16) |
+                  (reading & 0xFFFFUL));
+    CmLogNote(nhi, "cm.vanish.guard.gen",
+              ((g->Gen & 0xFFFFUL) << 16) |
+                  (g->GenKnown ? (g->GenNow & 0xFFFFUL) : 0xFFFFUL));
+    CmLogNote(nhi, "cm.vanish.guard.evt", g->Down);
+    CmLogNote(nhi, "cm.vanish.guard.pub",
+              ((g->FreshValid ? (g->Fresh & 0x7FFFUL) : 0x7FFFUL) << 16) |
+                  (g->EndValid ? (g->End & 0xFFFFUL) : 0xFFFFUL) |
+                  (g->Busy ? 0x80000000UL : 0UL));
+}
+
 /* Each sweep of this start: a stopped start's adopted, its reading taken,
  * a kept child made a record, the next reading submitted. On the thread;
  * no call, no wait. */
@@ -1454,7 +1672,14 @@ static VOID cmEjSweeps(PCM_NHI nhi)
 {
     CM_EJ_SWP *sw;
     ULONG res[CM_CALL_RES_BYTES / 4];
-    ULONG op[1];
+    ULONG op[3];
+    CM_EJ_GUARD_IN gin;
+    ULONG decision;
+    ULONG gOn;
+    ULONG gGen;
+    ULONG gDown;
+    ULONG gStart;
+    BOOLEAN ended;
     ULONG got;
     ULONG r;
     ULONG i;
@@ -1548,7 +1773,45 @@ static VOID cmEjSweeps(PCM_NHI nhi)
                 if (end != CM_EJ_SW_END_NONE) {
                     CmLogNote(nhi, "cm.vanish.sweep.end", note | member);
                 }
+                if (r == CM_CALL_T_TAKEN && got >= 24) {
+                    /* Task 46.13 (record 21 section 8.2). */
+                    CmLogNote(nhi, "cm.vanish.reading.at", res[3]);
+                    CmLogNote(nhi, "cm.vanish.reading.end", res[4]);
+                    CmLogNote(nhi, "cm.vanish.reading.tag", res[5]);
+                    CmLogNote(nhi, "cm.vanish.reading.gen",
+                              ((member & 0xFFUL) << 24) |
+                                  (CmNhiMemberGen(nhi, member) &
+                                   0xFFFFFFUL));
+                }
             }
+        }
+        /* Task 46.13 (record 21 section 8.3): a bound sweep with no
+         * reading out, its guard read now - before its kept child is made
+         * a record and whatever holds its next submission. Superseded, it
+         * ends: nothing of its connection is left under the member. */
+        KeAcquireSpinLock(&cmEjLock, &irql);
+        gOn = (sw->InUse && sw->Nhi == nhi && sw->OpId == 0) ? sw->GOn : 0;
+        gGen = sw->GGen;
+        gDown = sw->GDown;
+        gStart = sw->GStart;
+        KeReleaseSpinLock(&cmEjLock, irql);
+        decision = cmEjGuard(nhi, member, gOn, gGen, gDown, gStart, &gin);
+        if (decision == CM_EJ_G_SUPERSEDED) {
+            KeAcquireSpinLock(&cmEjLock, &irql);
+            ended = (BOOLEAN)(sw->InUse && sw->Nhi == nhi && sw->OpId == 0 &&
+                              sw->GOn && sw->GDown == gDown &&
+                              sw->GStart == gStart);
+            if (ended) {
+                sw->InUse = 0;
+                sw->PendNode = 0;
+            }
+            KeReleaseSpinLock(&cmEjLock, irql);
+            if (ended) {
+                CmLogNote(nhi, "cm.vanish.sweep.superseded",
+                          (bridge << 8) | member);
+                cmEjGuardLog(nhi, member, decision, cmEjReadNumber, &gin);
+            }
+            continue;
         }
         /* A child a full reading kept, made a record once one is free:
          * never read again for it. */
@@ -1566,17 +1829,36 @@ static VOID cmEjSweeps(PCM_NHI nhi)
                          !cmEjDecPosted(nhi, member) &&
                          (nhi->Reenum.Wk == NULL ||
                           (CmCfgwkEnumBusy(nhi->Reenum.Wk) &
-                           (1UL << member)) == 0));
+                           (1UL << member)) == 0) &&
+                         decision != CM_EJ_G_WAIT);
         now = cmEjNow();
         KeAcquireSpinLock(&cmEjLock, &irql);
+        /* The guard read above holds for this submission only while the
+         * binding it read is still the ask's. */
         submit = (BOOLEAN)(sw->InUse && sw->Nhi == nhi && sw->PendNode == 0 &&
-                           sw->OpId == 0 &&
+                           sw->OpId == 0 && sw->GOn == gOn &&
+                           sw->GDown == gDown && sw->GStart == gStart &&
                            CmEjSweepNext(&sw->S, idle, now));
         KeReleaseSpinLock(&cmEjLock, irql);
         if (!submit) {
             continue;
         }
         op[0] = bridge;
+        op[2] = (decision == CM_EJ_G_ALL) ? 1UL : 0UL;
+        KeAcquireSpinLock(&cmEjLock, &irql);
+        cmEjReadNumber++;
+        sw->ReadTag = ((cmEjReadNumber & 0xFFFFUL) << 16) |
+                      (sw->ReqGen & 0xFFFFUL);
+        op[1] = sw->ReadTag;
+        /* Task 46.13: the reading's binding, fixed until it is taken. */
+        sw->ROn = gOn;
+        sw->RDown = gDown;
+        sw->RStart = gStart;
+        note = cmEjReadNumber;
+        KeReleaseSpinLock(&cmEjLock, irql);
+        if (gin.Bound) {
+            cmEjGuardLog(nhi, member, decision, note, &gin);
+        }
         id = CmCallwkSubmit(nhi->Reenum.Callwk, member, CM_EJ_K_SWEEP,
                             cmEjRunSweep, cmEjSwLate, sw, op, sizeof(op),
                             nhi->ClockMs);
@@ -2187,7 +2469,8 @@ VOID CmEjectStop(PCM_NHI nhi)
 /* Task 43.47: the sweep's entry and the CONFIGMG worker's claims         */
 /* ====================================================================== */
 
-BOOLEAN CmEjectSweep(PCM_NHI nhi, ULONG member)
+BOOLEAN CmEjectSweep(PCM_NHI nhi, ULONG member, ULONG gen, BOOLEAN own,
+                     ULONG serial)
 {
     CM_EJ_SWP *sw;
     CM_EJ_SWP *spare;
@@ -2234,6 +2517,18 @@ BOOLEAN CmEjectSweep(PCM_NHI nhi, ULONG member)
             CmEjSweepLost(&sw->S);
         }
         CmEjSweepBegin(&sw->S, now);
+        sw->ReqGen = gen;
+        /* Task 46.13 (record 21 section 8.3): bound by the guard when the
+         * ask is a USB4 DOWN on the member's own port whose connection's
+         * link-down upcall this start saw; any other ask unbinds it. A
+         * reading out keeps its own binding (ROn). */
+        sw->GOn = (own && (nhi->Ej.LinkDownValid & (1UL << member)) != 0 &&
+                   nhi->Ej.LinkDownGen[member] == serial)
+                      ? 1UL
+                      : 0UL;
+        sw->GGen = serial;
+        sw->GDown = nhi->Ej.LinkDownEvt[member];
+        sw->GStart = nhi->Ej.StartSeq;
     }
     KeReleaseSpinLock(&cmEjLock, irql);
     if (sw == NULL) {
@@ -2248,6 +2543,66 @@ BOOLEAN CmEjectSweep(PCM_NHI nhi, ULONG member)
 ULONG CmEjectNow(VOID)
 {
     return cmEjNow();
+}
+
+/* The member USB4 port `port` corresponds to (named or learned), or
+ * XHCI_TBT_NO_MEMBER. */
+static ULONG cmEjPortMember(PCM_NHI nhi, ULONG port)
+{
+    ULONG m;
+
+    for (m = 0; m < nhi->Reenum.Members && m < XHCI_TBT_MAX_TUNNELS; m++) {
+        if (port != 0 && CmNhiMemberPort(nhi, m) == port) {
+            return m;
+        }
+    }
+    return XHCI_TBT_NO_MEMBER;
+}
+
+VOID CmEjectLinkDown(PCM_NHI nhi, ULONG port, ULONG gen)
+{
+    ULONG member;
+    ULONG e;
+    KIRQL irql;
+
+    if (!cmEj9x(nhi) || nhi->Reenum.Wk == NULL || !nhi->U4On) {
+        return;
+    }
+    member = cmEjPortMember(nhi, port);
+    if (member == XHCI_TBT_NO_MEMBER) {
+        return;
+    }
+    /* The event first, under the worker's lock alone; then the binding
+     * under cmEjLock (never the worker's lock under it). */
+    e = CmCfgwkEvent(nhi->Reenum.Wk);
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    nhi->Ej.LinkDownGen[member] = gen;
+    nhi->Ej.LinkDownEvt[member] = e;
+    nhi->Ej.LinkDownValid |= 1UL << member;
+    KeReleaseSpinLock(&cmEjLock, irql);
+    CmLogNote(nhi, "cm.vanish.down",
+              ((member & 0xFFUL) << 24) | (gen & 0xFFFFFFUL));
+    CmLogNote(nhi, "cm.vanish.down.evt", e);
+}
+
+VOID CmEjectLinkUp(PCM_NHI nhi, ULONG port, ULONG gen)
+{
+    ULONG member;
+    KIRQL irql;
+
+    if (!cmEj9x(nhi)) {
+        return;
+    }
+    member = cmEjPortMember(nhi, port);
+    if (member == XHCI_TBT_NO_MEMBER) {
+        return;
+    }
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    if ((nhi->Ej.LinkDownValid & (1UL << member)) != 0 &&
+        nhi->Ej.LinkDownGen[member] == gen) {
+        nhi->Ej.LinkDownValid &= ~(1UL << member);
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
 }
 
 VOID CmEjectNudge(PCM_NHI nhi, ULONG member)
@@ -2344,6 +2699,24 @@ VOID CmEjectClaimAccepted(ULONG claim, ULONG firstAt)
     KeAcquireSpinLock(&cmEjLock, &irql);
     CmEjClaimProgress(&cmEj[claim - 1].Tx, firstAt);
     KeReleaseSpinLock(&cmEjLock, irql);
+}
+
+ULONG CmEjectClaimFrom(ULONG claim, PULONG at)
+{
+    KIRQL irql;
+    ULONG tag;
+
+    *at = 0xFFFFFFFFUL;
+    if (claim == 0 || claim > CM_EJ_RECORDS) {
+        return 0;
+    }
+    KeAcquireSpinLock(&cmEjLock, &irql);
+    tag = cmEj[claim - 1].FromTag;
+    if (tag != 0) {
+        *at = cmEjIdAt(cmEj[claim - 1].Id);
+    }
+    KeReleaseSpinLock(&cmEjLock, irql);
+    return tag;
 }
 
 BOOLEAN CmEjectClaimEnd(ULONG claim, ULONG queryCr, ULONG removeCr,

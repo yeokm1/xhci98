@@ -1547,6 +1547,87 @@ static VOID test_vanished_sweep(VOID)
              "pick: a function answering again is present");
 }
 
+/* Task 46.13 (record 21 section 8.3): the guard of a DOWN's sweep. */
+static void test_sweep_guard(void)
+{
+    CM_EJ_GUARD_IN g;
+
+    memset(&g, 0, sizeof(g));
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT, "guard: unbound acts as before");
+    g.FreshValid = TRUE;
+    g.Fresh = 50;
+    g.Down = 40;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT,
+             "guard: unbound, a later fresh publication changes nothing");
+
+    memset(&g, 0, sizeof(g));
+    g.Bound = TRUE;
+    g.Gen = 7;
+    g.Down = 100;
+    g.GenKnown = TRUE;
+    g.GenNow = 7;
+    g.EndValid = TRUE;
+    g.End = 90;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT,
+             "guard: still on its connection (the unplug): as before");
+    g.GenNow = 8;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ALL,
+             "guard: newer connection, every call ended before the down");
+    g.EndValid = FALSE;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ALL,
+             "guard: newer connection, no call ever ended");
+    g.EndValid = TRUE;
+    g.End = 101;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT,
+             "guard: a call ended after the down: no forced removal");
+    g.End = 90;
+    g.Busy = TRUE;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_WAIT, "guard: a call in flight waits");
+    g.Busy = FALSE;
+    g.GenKnown = FALSE;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT,
+             "guard: the member's port not known: as before");
+    g.GenKnown = TRUE;
+
+    /* Fresh publications. */
+    g.FreshValid = TRUE;
+    g.Fresh = 99;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ALL,
+             "guard: a fresh publication admitted before the down never "
+             "supersedes");
+    g.Fresh = 100;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ALL,
+             "guard: the same event is not after");
+    g.Fresh = 101;
+    g.End = 102;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_SUPERSEDED,
+             "guard: a fresh publication admitted after the down supersedes");
+    g.GenNow = 7;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_SUPERSEDED,
+             "guard: superseded on its own connection too");
+    g.Busy = TRUE;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_SUPERSEDED,
+             "guard: superseded whatever is in flight");
+
+    /* Sequence order across the wrap. */
+    CHECK(CmEjEvtAfter(2UL, 0xFFFFFFFEUL), "evt: 2 after FFFFFFFE");
+    CHECK(!CmEjEvtAfter(0xFFFFFFFEUL, 2UL), "evt: FFFFFFFE not after 2");
+    CHECK(!CmEjEvtAfter(5UL, 5UL), "evt: equal is not after");
+    g.Busy = FALSE;
+    g.GenNow = 8;
+    g.Down = 0xFFFFFFF0UL;
+    g.Fresh = 3;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_SUPERSEDED,
+             "guard: fresh after the down across the wrap");
+    g.FreshValid = FALSE;
+    g.End = 0xFFFFFFE0UL;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ALL,
+             "guard: the last end before the down across the wrap");
+    g.End = 4;
+    CHECK_EQ(CmEjSweepGuard(&g), CM_EJ_G_ACT,
+             "guard: the last end after the down across the wrap");
+}
+
 int main(void)
 {
     test_qualification();
@@ -1569,6 +1650,7 @@ int main(void)
     test_vanished_claims();
     test_vanished_two();
     test_vanished_sweep();
+    test_sweep_guard();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

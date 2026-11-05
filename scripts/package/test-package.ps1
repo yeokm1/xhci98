@@ -1899,7 +1899,7 @@ try {
         $infs = @{
             "xhci98.inf"     = "[SourceDisksFiles]`r`nxhci98.sys=1`r`nxhcihlpr.sys=1`r`n"
             "xhciuas.inf"    = "[SourceDisksFiles]`r`nxhciuas.sys=1`r`n"
-            "xhcicm.inf"     = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
+            "xhcicm.inf"     = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`nxhcihlpr.sys=1`r`n"
             "nt\xhcicmf.inf" = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
             "xhcicmf.inf"    = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n"
             "stor98.inf"     = "[SourceDisksFiles]`r`nstor98.sys=1`r`n"
@@ -1912,6 +1912,7 @@ try {
             New-Item -ItemType Directory -Force -Path (Split-Path -Parent $full) | Out-Null
             $text = if ($infs.ContainsKey($flat)) { $infs[$flat] } elseif ($flat -eq "nt\xhcicm.sys") { "stand-in $Arch xhcicm.sys" } else { "stand-in $Arch $flat" }
             if ($Arch -eq "amd64" -and $flat -eq "xhci98.inf") { $text = "[SourceDisksFiles]`r`nxhci98.sys=1`r`n" }
+            if ($Arch -eq "amd64" -and $flat -eq "xhcicm.inf") { $text = "[SourceDisksFiles]`r`nxhcicm.sys=1`r`n" }
             [System.IO.File]::WriteAllText($full, $text, (New-Object System.Text.ASCIIEncoding))
         }
     }
@@ -1969,6 +1970,10 @@ try {
         @{ Why = "a stor98w9.inf"; Do = { param($r) Copy-Item (Join-Path $r "98-me\stor98\stor98.inf") (Join-Path $r "98-me\stor98\stor98w9.inf") } },
         @{ Why = "an NT-only file in 98-me"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\txtsetup.oem") (Join-Path $r "98-me\txtsetup.oem") } },
         @{ Why = "nt-x86 without the helper"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\xhcihlpr.sys") } },
+        # Design record 18 section 15.15: xhcicm.inf installs the helper too.
+        @{ Why = "nt-x86\cm without the helper xhcicm.inf names"; Do = { param($r) Remove-Item (Join-Path $r "nt-x86\cm\xhcihlpr.sys") } },
+        @{ Why = "the two helpers of nt-x86 differing"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\cm\xhcihlpr.sys"), "another build") } },
+        @{ Why = "a helper in 98-me\cm"; Do = { param($r) Copy-Item (Join-Path $r "nt-x86\cm\xhcihlpr.sys") (Join-Path $r "98-me\cm\xhcihlpr.sys") } },
         @{ Why = "98-me without the image its Stor98 INF names"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98.mpd") } },
         @{ Why = "a shared file differing"; Do = { param($r) [System.IO.File]::WriteAllText((Join-Path $r "nt-x86\xhci98.sys"), "another build") } },
         @{ Why = "a shared file in one family alone"; Do = { param($r) Remove-Item (Join-Path $r "98-me\stor98\stor98-readme.txt") } },
@@ -2052,7 +2057,12 @@ try {
                 $local = if ($flat -eq "stor98w9.inf") { "stor98.inf" } else { $flat }
                 foreach ($place in @($script:FamilyLayout[$arch][$flat])) {
                     $fam = ($place -split '\\')[0]
-                    $want[("{0}|{1}" -f $fam, $local).ToLowerInvariant()] = $place.Substring($fam.Length + 1)
+                    $key = ("{0}|{1}" -f $fam, $local).ToLowerInvariant()
+                    # A file placed twice in one family (xhcihlpr.sys, also
+                    # beside cm\xhcicm.inf; design record 18 section 15.15):
+                    # the engine copies it from its first place.
+                    if ($want.ContainsKey($key)) { continue }
+                    $want[$key] = $place.Substring($fam.Length + 1)
                 }
             }
             foreach ($flat in $script:FamilyRebuilt[$arch].Keys) {
@@ -2258,6 +2268,10 @@ try {
             }
         }
         Copy-Item -LiteralPath (Join-Path $famPub "release\xhcihlpr.sys") -Destination (Join-Path $famPub "nt-x86\xhcihlpr.sys")
+        # The helper's second place, beside cm\xhcicm.inf (design record 18
+        # section 15.15): a shared file is in every place of its family.
+        Ensure-Directory (Join-Path $famPub "nt-x86\cm")
+        Copy-Item -LiteralPath (Join-Path $famPub "release\xhcihlpr.sys") -Destination (Join-Path $famPub "nt-x86\cm\xhcihlpr.sys")
         Remove-Item -LiteralPath (Join-Path $famPub "release") -Recurse -Force
         $famUp = Join-Path $script:work "upload-family"
         Ensure-Directory $famUp
@@ -7387,6 +7401,8 @@ try {
     $gdNotInput = @{
         "src\xhci_psw.c" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
         "src\xhci_psw.h" = "make-release.ps1's staleness check for XHCITR's build, in a cut's tool step, which no case reaches"
+        "src\cm\cm_oscp.c" = "make-release.ps1's staleness check for the installer's build, in a cut's tool step, which no case reaches"
+        "src\cm\cm_oscp.h" = "make-release.ps1's staleness check for the installer's build, in a cut's tool step, which no case reaches"
         "src\xhci_cmnet.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
         "src\xhci_compat.h" = "make-release.ps1's staleness check for the network images, in a cut's leg, which no case reaches"
         "src\xhci_ring.c" = "a path the input rules' vectors and the import's fixtures classify or write in a fixture, never read here"

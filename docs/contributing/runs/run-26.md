@@ -980,3 +980,17 @@ The base was then made read-only (`vm\t26\win98-stock-base.qcow2`), and the leg 
 Shutdown was clean. The stick was c13's; storage ran before audio, while the C-Media device was in use by another leg.
 
 Notes: `out\phase26\v0\v3-98-notes.md` and its screenshots.
+
+## Appendix A. The binary readings behind `legal-provenance.md` section 4
+
+Each item is a reading of a third-party binary, in the words of the
+`docs/contributing/legal-provenance.md` section 4 row that indexes it by
+method; that row keeps the fact, the method tag, the binary and a pointer
+to the item here.
+References inside an item ("as above", "the next row", "the same",
+"section 2") are to that table and that file as the row stood there; read
+them from the row that points here and its neighbours.
+
+| Item | Fact | Method | Where recorded |
+|---|---|---|---|
+| A.1 | **Windows 2000 SP4 `usbaudio.sys` (DateStamp `3803CAD4`) builds its configuration request for the audio interfaces only and then walks `bNumInterfaces` entries**: in the function holding RVA `0x4A90`, an interface list of `(bNumInterfaces + 1) * 8` bytes from pool, not zeroed, is filled with the AudioControl interface and the AudioStreaming interfaces its class-specific header names, then a NULL-descriptor terminator; `USBD_CreateConfigurationRequestEx` (Windows 2000 `usbd.sys` RVA `0x3C74`) writes `.Interface` only for non-NULL entries; the loop `i < bNumInterfaces` then reads `list[i].Interface` (`[ecx+edx*8+4]` at `0x14A7F`) and `mov dx,[ecx]` at `0x14A90` dereferences it - an uninitialised pointer whenever the configuration carries a non-audio interface, as a whole composite device does | both (static: `DUMPBIN /disasm` over `tools\win2ksp4-extracted\class\usbaudio.sys` and `usbd.sys`; runtime: guest leg c14, STOP 0x1E at `0xBF48AA90` with `usbaudio.sys` at `0xBF486000`, reading `0x00310030`; a subagent's read, 2026-10-03, not re-read line by line by the coordinator) | `docs/contributing/runs/run-26.md`, c14 |

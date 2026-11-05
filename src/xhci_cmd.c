@@ -531,6 +531,7 @@ VOID XhciCommandInit(PXHCI_EXTENSION ext)
     ext->CommandState = XHCI_CMD_STATE_IDLE;
     xhciCommandEndOutstanding(ext);
     ext->CommandType = 0;
+    ext->CommandControl = 0;
     ext->CommandGeneration = 0;
     ext->ControllerFailed = 0;
 
@@ -1020,6 +1021,7 @@ static ULONG xhciCommandSubmitEx(PXHCI_EXTENSION ext,
             ext->CommandState = XHCI_CMD_STATE_PENDING;
             ext->CommandTrbPA = issuedPA;
             ext->CommandType = type;
+            ext->CommandControl = command->Control;
             ext->CommandsIssued++;
 
             /*
@@ -1768,6 +1770,13 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
          * driver can make, up to and including a controller reset. */
         XhciLogNoteLocked(ext, "cmd.timeout",
                           (ext->CommandOwnerOp << 16) | ext->CommandOwner);
+        /* Which command (46.19, a user's FL1100: two timeouts at start that
+         * a level-2 or level-3 log could not name): its TRB type, slot and
+         * endpoint, from the control dword it was issued with. */
+        XhciLogNoteLocked(ext, "cmd.timeout.trb",
+                          (ext->CommandType << 24) |
+                          (XHCI_TRB_GET_SLOT_ID(ext->CommandControl) << 16) |
+                          (XHCI_TRB_GET_EP_ID(ext->CommandControl) << 8));
     } else if (timeout->Phase == XHCI_CMD_PHASE_ABORT &&
                ext->CommandState == XHCI_CMD_STATE_ABORTING) {
         /*

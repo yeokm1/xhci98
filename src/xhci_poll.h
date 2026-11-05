@@ -362,4 +362,57 @@ ULONG XhciPollRetire(const XHCI_POLL_REGS *io);
 #define XHCI_POLL_RETIRED_HCRST         4UL     /* a completed HCRST       */
 #define XHCI_POLL_RETIRED_OWED          5UL     /* moved, not yet proven   */
 
+/*
+ * A line another device holds asserted, named at the start (section 4.4;
+ * roadmap-usb4 task 46.6): diagnostic only. The walk of PCI configuration
+ * space over the caller's read: every bus, device and function, the first
+ * 64 bytes of each; a candidate is a function other than this controller
+ * whose header type is 0 or 1, whose Interrupt Pin is 1 to 4, whose
+ * Interrupt Line is this controller's, whose Status has Interrupt Status
+ * (bit 3) set and whose Command has Interrupt Disable (bit 10) clear. A
+ * read of fewer than 64 bytes or a vendor of 0 or FFFFh is an absent
+ * function; no bus is skipped for one, and bus 0 device 0 answering
+ * nothing is a walk that could not run. The caller confirms a candidate
+ * and resumes the walk past one it does not. Nothing is written.
+ */
+#define XHCI_POLL_HELD_NOT_RUN          0UL
+#define XHCI_POLL_HELD_NONE             1UL
+#define XHCI_POLL_HELD_FOUND            2UL
+#define XHCI_POLL_HELD_FAILED           3UL     /* bus 0, this controller
+                                                 * or its line not read    */
+#define XHCI_POLL_HELD_INCONCLUSIVE     4UL     /* the candidates' bound
+                                                 * reached, none confirmed */
+
+#define XHCI_POLL_HELD_BYTES            64UL
+#define XHCI_POLL_HELD_BUSES            256UL
+#define XHCI_POLL_HELD_CANDIDATES       8UL     /* tried at most, a start   */
+
+typedef struct _XHCI_POLL_HELD_IN {
+    PVOID Context;
+    /* Bytes of bus/device/function read into buffer from offset 0: 0
+     * for a bus that does not exist, fewer than asked for a slot with
+     * nothing in it. */
+    ULONG (*Read)(PVOID context, ULONG bus, ULONG device, ULONG function,
+                  PUCHAR buffer, ULONG length);
+    ULONG Own[4];           /* id, BAR0, BAR1, subsystem: this controller   */
+    ULONG Irq;              /* the Interrupt Line value to match            */
+    ULONG From;             /* the first function considered, encoded as
+                             * XHCI_POLL_HELD_OUT.Bdf: a walk resumed past
+                             * a candidate not confirmed                    */
+} XHCI_POLL_HELD_IN, *PXHCI_POLL_HELD_IN;
+
+typedef struct _XHCI_POLL_HELD_OUT {
+    ULONG Result;           /* XHCI_POLL_HELD_NONE, _FOUND or _FAILED       */
+    ULONG Functions;        /* functions read in this walk                  */
+    ULONG Bdf;              /* bus 15:8, device 7:3, function 2:0           */
+    ULONG Id;               /* vendor 15:0, device 31:16                    */
+} XHCI_POLL_HELD_OUT, *PXHCI_POLL_HELD_OUT;
+
+VOID XhciPollHeldScan(const XHCI_POLL_HELD_IN *in, PXHCI_POLL_HELD_OUT out);
+
+/* Whether 64 bytes of one function's header read again still name a
+ * holder of `irq`: Interrupt Status set, Interrupt Disable clear, the
+ * same line (the caller's confirmation, section 4.4). */
+ULONG XhciPollHeldStill(const UCHAR *cfg, ULONG irq);
+
 #endif /* XHCI_POLL_H */

@@ -18,6 +18,7 @@ redistributed by it. Re-fetch it with the commands below on any machine.
 | `reactos/usbehci/` | `drivers/usb/usbehci/` | A complete USB2 miniport against that ABI; the structural template for the miniport's `src/xhci_dispatch.c`, which left the tree with the miniport (its last sources are on branch `1.2.0.0`). |
 | `reactos/usbohci/`, `reactos/usbuhci/` | `drivers/usb/usbohci/`, `usbuhci/` | USB 1.1 miniports; secondary templates showing which parts vary by controller type. |
 | `linux/` | `drivers/usb/host/` | xHCI hardware programming: `xhci-ring.c`, `xhci-mem.c`, `xhci-hub.c`, ext-caps; and the quirk references `xhci-pci.c`, `xhci-pci-renesas.c` (Renesas uPD720201/202 firmware upload), `pci-quirks.c` (BIOS handoff + Intel port switchover); and, as single files from elsewhere in the tree, `include/linux/pci_ids.h` (the vendor and device constants) and `drivers/usb/core/message.c` (`usb_set_interface`'s rollback), copied flat as `pci_ids.h` and `message.c` (2026-10-14, design record 20). |
+| `linux/usb-storage/` | `drivers/usb/storage/` (`uas.c`, `uas-detect.h`, `unusual_uas.h`, `unusual_devs.h`, `usual-tables.c`, `usb.h`, `transport.c`, `scsiglue.c`), plus `include/linux/usb_usual.h`, at the same pinned commit | The UAS and USB mass-storage class drivers (added 2026-11-04 for a user report of a UAS disk babbling on Intel 8086:1E31): how `uas` handles a data-pipe error and resets a device (`uas_data_cmplt`, `uas_eh_device_reset_handler`), and the per-device quirks (`US_FL_IGNORE_UAS`, `US_FL_NO_ATA_1X` and the rest, `unusual_uas.h`). Facts only, cited by file and symbol; nothing copied |
 | `freebsd/` | `sys/dev/usb/controller/` | Secondary. Clean xHCI register-sequence reference: `xhci.c`, `xhci.h`, `xhcireg.h`, `xhci_pci.c`. |
 | `linux/thunderbolt/` | `drivers/thunderbolt/` (all 40 files), plus `include/linux/thunderbolt.h` copied in as `include-linux-thunderbolt.h` | The Thunderbolt 3 and USB4 work (`roadmap-usb4.md`, design record 21; owner, 2026-10-15): NHI and bridge ids (`nhi.h`, `pci.c`), the ICM message set per generation (`tb_msgs.h`, `icm.c`), ring and register offsets (`nhi_regs.h`, `tb_regs.h`), control-packet framing (`ctl.c`) and quirks (`quirks.c`). Interface documentation only, cited by file and symbol; `docs/contributing/legal-provenance.md` section 3. Linux has no `include/uapi/linux/thunderbolt.h` at the pinned commit |
 | `linux/net-thunderbolt/` | `drivers/net/thunderbolt/` (all 5 files: `main.c`, `trace.c`, `trace.h`, `Kconfig`, `Makefile`), at the same pinned commit | Thunderbolt networking (`roadmap-usb4.md` task 45.59, design record 35; added 2026-10-31): `thunderbolt-net`, the USB4NET peer the legs run against - its login and logout, its `network` directory, the frame header and its Frame ID rule, what it puts on the wire, its MTU and rings (record 35 section 2.4). Facts only, cited by file and symbol; nothing adapted (`legal-provenance.md` section 3) |
@@ -64,6 +65,10 @@ only and are not to be copied into `src/`:
 - Linux `drivers/net/thunderbolt`, GPL-2.0 (SPDX `GPL-2.0` in `main.c`).
   Facts for design record 35 only, cited by file and symbol, no function
   body copied or paraphrased into `src/` or the docs.
+- Linux `drivers/usb/storage` and `include/linux/usb_usual.h`, GPL-2.0
+  (SPDX `GPL-2.0` or `GPL-2.0+` in every file). Facts on UAS error
+  handling and device quirks, cited by file and symbol, no function body
+  copied or paraphrased into `src/` or the docs.
 - FreeBSD `sys/dev/thunderbolt`, BSD 2-Clause (SPDX `BSD-2-Clause` or
   `BSD-2-Clause-FreeBSD`). The same terms.
 
@@ -118,6 +123,21 @@ git -C "$tmp/linux" sparse-checkout set drivers/usb/host
 R=https://raw.githubusercontent.com/torvalds/linux/c6859eed755df351a3978b33cb92365f9b3e8f06
 curl -sSfL -o "$tmp/linux/pci_ids.h" "$R/include/linux/pci_ids.h"   # SHA-256 55928d1f2c4f7e6b912c54baf64b876fc8cd4d083d2016a45a87ca33ebc9439d
 curl -sSfL -o "$tmp/linux/message.c" "$R/drivers/usb/core/message.c" # SHA-256 c6e1b4ce8d94b41954575aa7a9c9792ca70e2fa27558dfec400b063ffe5fc96b
+# The UAS and mass-storage class drivers (added 2026-11-04), into linux/usb-storage/.
+mkdir -p "$tmp/linux/usb-storage"
+for f in uas.c uas-detect.h unusual_uas.h unusual_devs.h usual-tables.c usb.h transport.c scsiglue.c; do
+  curl -sSfL --retry 3 -o "$tmp/linux/usb-storage/$f" "$R/drivers/usb/storage/$f"
+done
+curl -sSfL -o "$tmp/linux/usb-storage/usb_usual.h" "$R/include/linux/usb_usual.h"
+# SHA-256: uas.c 82d61ee8016f4d3a377f963df789f54dcf27aa1719f0f164bc01c7b873d07373
+#          uas-detect.h 3e11ad4c9b0552f2ea58d44479a8be767e605e3912742f51c20dcb45a49a8aa5
+#          unusual_uas.h 82d294d79e5b87daddd4f771b736c46b0bfd629f1c545ac7886851b2f8a655aa
+#          unusual_devs.h 870e4fe1d4c9882963e5e32aa4f1e229ed540a837b152cf9f6fd635297681085
+#          usual-tables.c 6eb7afb33904f0abe1aec9cf8c99508b72139d9d1d17523d6527961faa826ada
+#          usb.h 8765a449373d621721c5102e23ee5f2fb43299503153a28f65cc1b5c3b5ba7cb
+#          transport.c d0f3e12e12db2b9912252c54eea9673183aa3a1095a18b3e96e2bdd2680210e9
+#          scsiglue.c d1daaebd5e641a7f476d97605fd32270d23187e3c385f6b4e4e5f5de07e9ecf7
+#          usb_usual.h 6318f0c0e03479d6987114c48f65eb803461e871f78ad2462cba3a83c323f8c6
 
 # FreeBSD: register-sequence reference
 git clone --depth 1 --filter=blob:none --sparse https://github.com/freebsd/freebsd-src "$tmp/freebsd"
