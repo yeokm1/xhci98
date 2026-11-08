@@ -330,17 +330,15 @@ Bugs in the free USB class drivers go to [usb-wdm-free's issues](https://github.
 
 The release notes' [Known limitations](docs/using/release-notes.md#known-limitations), [Thunderbolt and USB4 limitations](docs/using/release-notes.md#thunderbolt-and-usb4-known-limitations) have the full lists. The ones most likely to matter:
 
-- **Windows 98 SE and ME**
-  - Windows 98 SE and ME: a USB disk left plugged in when the computer starts can hold Windows at startup for minutes, or stop it. Plug USB disks in after Windows has started. To help find a fix, you can send an [EDD report](docs/using/edd-reports.md) from your computer.
+- **Windows 98 SE**
   - Windows 98 SE has no USB storage driver of its own: the installer adds NUSB 3.3's storage files. HID and audio work without them.
-  - Windows ME: do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
-  - Windows ME: a UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
-  - Windows 98 SE: the first USB audio device plugged in after a boot (a webcam with a microphone included) can freeze Windows. Plug it in before switching on and leave it plugged in. If you have a webcam but do not use the microphone, you can use usb-wdm-free's `NOAUD98.INF`.
-  - Windows 98 SE: stop audio playback before unplugging a USB audio device. Unplugged while Windows' own USB audio driver plays it, the device can freeze Windows. (ME no longer does this.)
-  - Windows 98 SE: a keyboard's volume and mute keys work after a restart; its other media keys need the keyboard maker's software. ME, 2000 and XP handle them.
-  - Windows 98 SE and ME: installing the free audio or MIDI driver, Windows may ask for `wdmaudio.cat`, `ks.cat` and other files of its own from the Windows CD. Point it at the CD's `WIN98` folder, or click Skip File for the `.cat` files: they only hold signatures, which 98 SE and ME do not check.
-- **Windows 2000, XP and XP x64**
-  - A USB 3 controller the BIOS gives these systems no interrupt for (some HP laptops of 2012 with the Intel 7 Series USB 3 controller) gets the line the chipset routes it to on the listed computers, or is polled, which uses a little more processor time; on Windows 2000 on the listed computers it is always polled. Set `XhciIntelPortSwitch` to `1` there for the USB 3 ports to reach it under XP. Windows 2000 with an ACPI computer type on such a computer whose BIOS turns the controller on still stops at start (STOP 0x000000A5): install it as "Standard PC" ([Tuning](docs/using/tuning.md#an-interrupt-where-the-firmware-gives-none-xhciintelnorouteirq)).
+  - The first USB audio device plugged in after a boot (a webcam with a microphone included) can freeze Windows. Plug it in before switching on and leave it plugged in. If you have a webcam but do not use the microphone, you can use usb-wdm-free's `NOAUD98.INF`.
+  - Stop audio playback before unplugging a USB audio device. Unplugged while Windows' own USB audio driver plays it, the device can freeze Windows. (ME no longer does this.)
+- **Windows ME**
+  - Do not unplug a device while Windows is installing it. Shut Down can hang with a USB disk not opened since start; open it once (a `dir` is enough) or remove it first. (Both happen on Microsoft's own USB stack too.)
+  - A UAS drive plugged in before any ordinary stick shows Code 2. Plug in a stick once, then replug the UAS drive.
+- **Windows 98 SE and ME**
+  - Installing the free audio or MIDI driver, Windows may ask for `wdmaudio.cat`, `ks.cat` and other files of its own from the Windows CD. Point it at the CD's `WIN98` folder, or click Skip File for the `.cat` files: they only hold signatures, which 98 SE and ME do not check.
 - **Windows 2000**
   - A mounted USB drive can come back at Code 31 after a controller recovery or hibernation. Replug it to recover.
 - **Windows XP**
@@ -353,8 +351,7 @@ The release notes' [Known limitations](docs/using/release-notes.md#known-limitat
   - Standby and hibernation with a device attached are not supported. Stop and unplug the device first.
   - Windows 2000 to 7 with a TB/USB4 host: ejecting a dock, or an enclosure with its own PCIe switch, stops it safely, but its connection stays up until you physically disconnect it.
   - A dual-mode NVMe enclosure (TB/USB4, and USB) may come up as a USB (UAS) disk instead. Unplug it and plug it in again to get the Thunderbolt or USB4 connection.
-  - Windows 2000, XP and XP x64: the first time a dock or an enclosure with a switch is plugged in, its devices may stop and start again once, a few seconds after it is plugged in (after its Found New Hardware windows are answered), while xHCI98 sets up its PCI Express ports. If a drive behind it is already in use, unplug it safely and plug it in again instead. The first NVMe enclosure plugged in brings two Found New Hardware wizards: finish the first (it finds no driver), then follow the second, "Stor98 Storage Controller for NVMe SSDs", to the end.
-  - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller (on 98 SE and ME, on Vista and 7 with a Thunderbolt 3 controller, and on 2000 and XP unless xHCI98 builds the computer's USB4 tunnels itself, where the unplug is normally handled). Otherwise Windows may never finish removing the dock: it is not found again when plugged back, and Windows does not shut down.
+  - Stop a dock before unplugging it when a keyboard, mouse, tablet or similar device is on the dock's own USB controller.
   - Windows 2000 with the "Standard PC" computer type: an NVMe drive plugged in behind the tunnel after the start works, but runs polled. Drives attached at power-on are not affected ([issue 19](docs/issues/19-w2k-standard-pc-hot-plug-interrupt.md)).
 
 ## Toolchain and building
