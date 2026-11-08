@@ -744,23 +744,24 @@ XHCI_C_ASSERT(dnctrl_masks_partition_the_register,
 
 /* Bits 29:28 are RsvdZ, so software writes 0 rather than preserving what it
  * read. Bit 2 was RsvdZ in revision 1.2; revision 1.2b made it Tunneled Mode
- * (TM), a read-only USB4 flag that is "RsvdZ for a USB2 protocol port"
- * (Table 5-27, p.372), which is every port this driver manages. It stays in
- * this mask: writing 0 to a read-only bit is harmless, and on the USB2 ports
- * the spec still says 0. */
+ * (TM), a USB4 flag that is "RsvdZ for a USB2 protocol port" (Table 5-27,
+ * p.372) and read-only on a USB3 one. It stays in this mask, which serves
+ * both kinds of port this driver manages: on a USB2 port the spec says 0,
+ * and on a USB3 port writing 0 to a read-only bit changes nothing. */
 #define XHCI_PORTSC_RSVDZ_MASK  0x30000004UL
 
 /*
  * Bits a read-modify-write must never carry back. PED is RW1C - writing back
  * the 1 that says "enabled" disables the port. PR is RW1S and reads back 1
- * while a reset runs - writing that back restarts it. WPR is RW1S too but
- * "shall always return 0 when read" (5.4.8, Table 5-27) and is RsvdZ on the
- * USB2 protocol ports this driver manages, so it is stripped against a
- * *composed* value rather than a replayed read *(until after Phase 13 this
- * line lumped it with PR as "a reset in progress";
+ * while a reset runs - writing that back restarts it. WPR is RsvdZ on a USB2
+ * protocol port and RW1S on a USB3 one, where it "shall always return 0 when
+ * read" (5.4.8, Table 5-27): it is stripped against a *composed* value rather
+ * than a replayed read, so no neutral write carries it, and the warm reset
+ * of a USB3 port adds it on purpose (XhciPortscWarmReset) *(until after
+ * Phase 13 this line lumped it with PR as "a reset in progress";
  * `xhci-data-structures.md` had the right reason first)*. LWS turns the PLS
- * field into an
- * unintended link-state write. The change bits are RW1C. RsvdZ must be 0.
+ * field into an unintended link-state write. The change bits are RW1C. RsvdZ
+ * must be 0.
  */
 #define XHCI_PORTSC_UNSAFE_MASK \
     (XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_WPR | XHCI_PORTSC_LWS | \
@@ -781,11 +782,11 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
               (XHCI_PORTSC_CHANGE_MASK & ~0x00FE0000UL) == 0);
 
 /*
- * Port Link State values this driver names (spec Table 5-27, p.374). Only the
- * three a USB 2.0 port passes through are here: a USB2 port is in U0 when it is
- * running, U3 when suspended, and Resume while resume signalling is on the bus.
- * PLS is only armed by a write that also carries LWS, which is what
- * XhciPortscSetLinkState exists for.
+ * Port Link State values this driver names (spec Table 5-27, p.374). These
+ * first three are the ones a USB 2.0 port passes through: a USB2 port is in U0
+ * when it is running, U3 when suspended, and Resume while resume signalling is
+ * on the bus. The USB3 encodings follow. PLS is only armed by a write that
+ * also carries LWS, which is what XhciPortscSetLinkState exists for.
  */
 #define XHCI_PLS_U0             0
 #define XHCI_PLS_U3             3
@@ -930,6 +931,20 @@ XHCI_C_ASSERT(portsc_change_mask_is_within_rw1c_range,
 /* Ring sizes (Phase 4 roadmap: 64 command TRBs, one 256-TRB event segment) */
 #define XHCI_CMD_RING_TRBS          64UL
 #define XHCI_EVENT_RING_TRBS        256UL
+/*
+ * Task 47.30 (design record 13 section 11.10): the larger event ring, one
+ * segment of its own outside the controller block (hcd_dma.c), placed by
+ * its physical address (XhciEventRingWindow). XHCI_EVENT_RING_TRBS stays
+ * the in-block segment's count, the fall-back every start still carves;
+ * the ring in use is ext->EventRing, whichever it is.
+ */
+#define XHCI_EVENT_RING_BIG_TRBS    1024UL
+#define XHCI_EVENT_RING_BIG_BYTES   (XHCI_EVENT_RING_BIG_TRBS * XHCI_TRB_BYTES)
+/* The block asked for first, and the one asked for once when that has no
+ * window: a block of twice the segment crosses at most one 64 KiB line,
+ * and one side of it holds the segment. */
+#define XHCI_EVENT_RING_BIG_BLOCK   XHCI_EVENT_RING_BIG_BYTES
+#define XHCI_EVENT_RING_BIG_WIDE    (2UL * XHCI_EVENT_RING_BIG_BYTES)
 #define XHCI_EP0_RING_TRBS          64UL
 /* Deliberately the same as EP0's, so section 4's "a 1024-byte object at a
  * 1024-aligned offset cannot cross 64 KB" argument covers both regions with one
@@ -1097,6 +1112,16 @@ XHCI_C_ASSERT(device_switch_fits_the_pool,
 /* Ring segments are capped at 64 KB by spec Table 6-1. */
 XHCI_C_ASSERT(cmd_ring_segment_within_64k, XHCI_CMD_RING_BYTES <= 65536UL);
 XHCI_C_ASSERT(event_ring_segment_within_64k, XHCI_EVENT_RING_BYTES <= 65536UL);
+XHCI_C_ASSERT(big_event_ring_meets_spec_minimum,
+              XHCI_EVENT_RING_BIG_TRBS >= 16UL);
+XHCI_C_ASSERT(big_event_ring_meets_spec_maximum,
+              XHCI_EVENT_RING_BIG_TRBS <= 4096UL);
+XHCI_C_ASSERT(big_event_ring_segment_within_64k,
+              XHCI_EVENT_RING_BIG_BYTES <= 65536UL);
+XHCI_C_ASSERT(big_event_ring_is_larger,
+              XHCI_EVENT_RING_BIG_TRBS > XHCI_EVENT_RING_TRBS);
+XHCI_C_ASSERT(big_event_ring_wide_block_holds_a_window,
+              XHCI_EVENT_RING_BIG_WIDE >= 2UL * XHCI_EVENT_RING_BIG_BYTES);
 XHCI_C_ASSERT(ep0_ring_segment_within_64k, XHCI_EP0_RING_STRIDE <= 65536UL);
 XHCI_C_ASSERT(pool_ring_segment_within_64k, XHCI_POOL_RING_STRIDE <= 65536UL);
 
@@ -1157,8 +1182,9 @@ typedef struct _XHCI_HC_LAYOUT {
  *
  * The offending quantity is readable from any flavour: XhciDeriveControllerInfo
  * writes hc.scratchpad, hc.maxslots, hc.contextsize and the rest into the log
- * ring at CAP_DECODE, before this carve runs, and XHCISNAP reads them back off
- * the machine. The traced (qemu) build also prints them as XHCI_DBG_VALUE
+ * ring at CAP_DECODE, before this carve runs, and the snapshot reader (XHCITR
+ * /snapshot) reads them back off the machine. The traced (qemu) build also
+ * prints them as XHCI_DBG_VALUE
  * lines. (This comment said "a debug-build diagnostic" until after Phase 13,
  * which was wrong twice over after task 13-L.1: the trace is qemu's, and
  * the number was never only in it.) */
@@ -1197,6 +1223,15 @@ ULONG XhciEp0RingOffset(const XHCI_HC_LAYOUT *layout,
 ULONG XhciPoolRingOffset(const XHCI_HC_LAYOUT *layout,
                          ULONG poolIndex,
                          ULONG *offset);
+/*
+ * Task 47.30 (design record 13 section 11.10, point 2): where in a block of
+ * `blockBytes` at physical `blockPA` a segment of `segmentBytes` can sit -
+ * 64-byte aligned, inside the block, crossing no 64 KiB line. The first
+ * such offset in *offset and 1, or 0 when the block has none (a block
+ * past 4 GB's end included). Pure; IRQL: any.
+ */
+ULONG XhciEventRingWindow(ULONG blockPA, ULONG blockBytes,
+                          ULONG segmentBytes, ULONG *offset);
 
 /* ------------------------------------------------------------------ */
 /* The pooled-ring allocator (design doc 04 section 3.6)               */
@@ -1221,21 +1256,6 @@ typedef struct _XHCI_RING_POOL {
     ULONG AcquireFailuresFairness;
     ULONG AcquireFailuresCap;
     ULONG PeakInUse;
-#ifdef XHCI_FIX_NO_RING_REUSE
-    /*
-     * **EXPERIMENTAL, bench candidate W2 for Finding 3.** Present only under
-     * the define, so no shipping flavour carries it and no shipping
-     * MiniPortExtensionSize moves. A binary built with it therefore reports a
-     * SIZEOF the tracked offset table does not match, and **must not be used
-     * for a counter reading** - it is for the behavioural bench test only.
-     *
-     * Where the next scan for a free ring starts. XhciPoolAcquire is otherwise
-     * first-fit, which means the ring a device gives up at teardown is handed
-     * to the very next device that asks - the immediate reuse Finding 3's
-     * hypothesised mechanism turns on.
-     */
-    ULONG NextScan;
-#endif
 } XHCI_RING_POOL, *PXHCI_RING_POOL;
 
 #define XHCI_POOL_OK            0
@@ -1655,6 +1675,17 @@ ULONG XhciBuildEp0Params(ULONG maxPacketSize,
                          ULONG dequeuePA,
                          ULONG dcs,
                          PXHCI_EP_PARAMS params);
+
+/*
+ * **Not called by the driver, from here to XhciEndpointAddressFromDci.**
+ * These seven were the miniport's endpoint open, reading usbport's `Period` and
+ * the descriptor snoop's `bInterval` (xhci_desc.c); the HCD takes its first
+ * EP0 size from XhciEnumInitialMps0 (xhci_enum.c) and builds its endpoint
+ * parameters from the descriptors it reads itself (xhci_pipe.c). They call
+ * one another, test_ctx keeps them true to their vectors, and the DDK
+ * build's /Gy and /OPT:REF leave them out of the image. The contracts below
+ * are the miniport's, in its present tense.
+ */
 
 /* The Max Packet Size to address a device of this decoded speed class with,
  * before its device descriptor has been read. 0 for a speed this driver does
@@ -2601,35 +2632,6 @@ typedef struct _XHCI_PORT_SHADOW {
      */
     ULONG Generation;
     UCHAR Changes;      /* latched XHCI_HUB_C_PORT_* bits           */
-#ifdef XHCI_FIX_ACK_OWED
-    /*
-     * **EXPERIMENTAL, bench candidate W13 for Finding 3** (`run-13e.md`
-     * **Finding O**). Present only under the define, so no shipping flavour
-     * carries it and no shipping MiniPortExtensionSize moves.
-     *
-     * **A PORTSC change-bit acknowledgement this driver owes the hardware and
-     * has not managed to write.** `xhciRhWritePortsc` refuses every write while
-     * a Port Power change is in flight, and the acknowledgement's `ackBits` was
-     * a stack local - so a refusal *dropped the debt*. An unacknowledged change
-     * bit suppresses the controller's next Port Status Change Event for that
-     * port (`lessons.md`, "hot-plug *operations* are not hot-plug *events*"), which takes the port out of service for
-     * the life of the driver.
-     *
-     * **It is a debt against the HARDWARE, and that is what makes it a separate
-     * field from `Changes`.** `Changes` is what `RH_GetPortStatus` reports and
-     * what `CLEAR_FEATURE` clears; neither touches a register. Clearing one has
-     * never implied the other, and conflating them is what would make a
-     * usbhub-side clear look like a hardware acknowledgement.
-     *
-     * **Only the acknowledgement path may own this.** `xhciRhWritePortsc` also
-     * carries reset, resume and disable writes, whose composed values are made
-     * from the reading of the moment - replaying a stale one would restart a
-     * reset or disable a port. So the debt is *only* the RW1C change mask, it is
-     * re-composed against a **fresh** PORTSC read on every retry, and nothing
-     * but the refresh's acknowledgement writes it.
-     */
-    ULONG PortscAckOwed;
-#endif
     UCHAR Speed;        /* XHCI_SPEED_*, decoded through the PSI table */
     UCHAR Armed;        /* XHCI_PORT_OP_*, the operation in flight   */
     /* This port owes a timer arm that must be issued with the controller lock
@@ -3981,6 +3983,11 @@ typedef struct _XHCI_TRANSFER {
  * so an arriving tail is matched to it by the ordinary owner search and ends it
  * through the ordinary positional rule. That is the conforming controller's
  * whole path, and it is why this flag - not a counter - is the fix.
+ *
+ * An isochronous request carries it for one case: its final packet ended
+ * short on an earlier TRB of that packet's TD (`XhciXferIsoEvent`; the audit
+ * of 2026-11-06), every packet then being answered and only the tail
+ * outstanding. Its settle retires by group (`XhciXferDrainSettled`).
  */
 #define XHCI_XFER_FLAG_SHORT_DEFERRED 0x00000004UL
 /*
@@ -4100,8 +4107,9 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG IntermediateEvents;
     /* Transfers ended on a Short Packet Event that did **not** name the TD's
      * last TRB - the deliberate departure in `XhciXferDrainSettled`, taken only
-     * for a TD that is entirely data. It counts the transfers this driver
-     * retired *early*, and nothing more.
+     * for a TD that is entirely data, and for an isochronous request's final
+     * packet ended short on an earlier TRB of its TD. It counts the transfers
+     * this driver retired *early*, and nothing more.
      *
      * **Before task 9-0.2 it did not say which controller the machine had**,
      * and an earlier revision of this comment claimed it did. The departure was
@@ -4299,7 +4307,12 @@ typedef struct _XHCI_TRANSFER_QUEUE {
     ULONG LengthOverruns;
     ULONG SumFailures;
     ULONG ResidualIgnored;  /* nonzero residual where no length field exists */
-    ULONG SweptTransfers;   /* reclaimed with no event of their own          */
+    /* Reclaimed by a later TD's retire, no event having named their own last
+     * TRB. On an isochronous ring a swept request every packet of which an
+     * event answered keeps the status those events gave it; only one with
+     * unanswered packets is failed NOT_ACCESSED. Not an `Errors` reading:
+     * that counts the owner of the retiring event alone. */
+    ULONG SweptTransfers;
     /* A transfer ended without its TRBs being reclaimed and without the ring
      * asking for recovery - a combination this engine has no path to. Counted
      * apart from Recoveries because the two have opposite diagnoses: one is the
@@ -4347,6 +4360,13 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      * with work outstanding and nothing due. `RetriesAsked` is the reading that
      * says the mechanism ran; it climbing with `Submitted` frozen would be the
      * livelock, and neither can be inferred from the other.
+     *
+     * **Under the HCD nothing arms it**: the latch served the miniport's
+     * refused submits, which usbport re-offered, and the HCD holds a request
+     * it cannot place itself (hcd_io.c). Its three calls had no caller in the
+     * driver or the host suite and were removed by the audit of 2026-11-06;
+     * the three fields stay, reading 0, so the extension's layout does not
+     * move.
      */
     ULONG RetryArmed;
     ULONG RetryFree;
@@ -4380,8 +4400,11 @@ typedef struct _XHCI_TRANSFER_QUEUE {
      *                       that answered the last one named an *earlier* TRB,
      *                       so the group is still queued waiting for the tail
      *                       event p.201 promises. Ordinary rather than a fault -
-     *                       it is what an error or a Missed Service on a final
-     *                       packet split across two fragments looks like - and it
+     *                       it is what an error, a Missed Service or a short
+     *                       packet on a final packet split across two fragments
+     *                       looks like; the short packet is the one case also
+     *                       held for the settle (`XHCI_XFER_FLAG_SHORT_DEFERRED`),
+     *                       so it ends without a tail too - and it
      *                       is a **transient**: the reading that matters is a
      *                       count that rises while `Completed` does not, which is
      *                       a controller dropping the tails this driver is
@@ -4719,7 +4742,8 @@ typedef struct _XHCI_VHUB_BINDING {
  * bare-metal target had when this was written: a traced build's line. *(That is
  * the `qemu` flavour since task 13-L.1, and it is not a bare-metal channel at
  * all - `qemu` is never published. What a bare-metal target has now is the
- * snapshot read, `XHCISNAP` over PassThru, since `0.0.0.6`.)* The clause that wanted it
+ * snapshot read - `XHCISNAP` over PassThru from `0.0.0.6`, XHCITR's
+ * `/snapshot` since `3.1.0.0`.)* The clause that wanted it
  * - the `MTT`/`TTT` context-field readings on real translators - had no vehicle
  * and is published as a limitation; the batch and run sheet that held it were
  * deleted and the reading was never taken.
@@ -5961,7 +5985,8 @@ typedef struct _XHCI_EXTENSION {
     ULONG RearmEscalations;
     /*
      * DPC re-arms that could not observe IE set but saw an ISR claim since
-     * the snapshot taken before the write (run-24 finding 2): usbport queues
+     * the snapshot taken before the write (run-24.md, the interrupter re-arm
+     * on one CPU): usbport queues
      * its interrupt DPC again on every claim, and that pass re-arms IE, so
      * delivery is handed to it rather than lost. It does not say the write
      * landed - a shared-line claim of a pending EINT can come between the
@@ -6095,7 +6120,8 @@ typedef struct _XHCI_EXTENSION {
      * sooner". **The E460 polls at 36-80 ms** - this clock measured 354,364 ms
      * against 6,461 polls - so the argument had the error direction backwards
      * and every one of those budgets was about an order of magnitude short
-     * (docs/contributing/runs/run-13e.md, **Finding V**). The command backstop
+     * (docs/contributing/runs/run-13e.md, **the section confirming the
+     * poll-rate repair**). The command backstop
      * came out at 2.3-5.1 s against the 5 s watchdog it was meant to sit 12 s
      * behind, so it pre-empted that watchdog every time and this driver had
      * been resetting controllers over commands that were merely slow.
@@ -6211,14 +6237,20 @@ typedef struct _XHCI_EXTENSION {
      * Async callbacks that claimed nothing - and **two causes share it since
      * task 13-R.3.5**, which matters to anyone reading it off a bench. A
      * phase-COMMAND watchdog counts here when the command it was armed for has
-     * already *completed*, which is Finding V's reading (123 == 123 == 123);
+     * already *completed*, which is the poll-rate repair's confirming reading
+     * in run-13e.md (123 == 123 == 123);
      * it also counts here when the health poll's age detector got to the same
      * command first and moved the state to ABORTING, because the phase no
      * longer matches the state. The discriminator is `CommandAgeAborts`:
      * nonzero means some of these are the second kind.
      */
     ULONG CommandStaleCallbacks;
-    ULONG CommandTimerFailures;  /* submits refused for want of a timer      */
+    /* Commands already issued whose watchdog the timer service refused to
+     * arm, so they run untimed behind the thread's wait and the age
+     * detector (xhciArmCommandTimer). Not a submit refused: the pre-submit
+     * refusal, XHCI_CMD_NO_TIMER, cannot happen under the HCD, whose timer
+     * service is always present. */
+    ULONG CommandTimerFailures;
     ULONG CommandResetRequests;  /* UsbPortInvalidateController(RESET) calls */
     /*
      * How many of those requests came from a **completion code Table 6-90 calls
@@ -6311,7 +6343,7 @@ typedef struct _XHCI_EXTENSION {
      * **Every watchdog callback that reached this driver's own extension**,
      * counted before any branch decides what it was for - added
      * because the E460 could not tell two very different failures apart
-     * (run-13e.md, Finding T).
+     * (run-13e.md, the section on the attempt cap).
      *
      * Four commands there hung for more than thirty seconds each with a
      * 5,000 ms timer armed, and `CommandsTimedOut` stayed at **0** while
@@ -6400,7 +6432,8 @@ typedef struct _XHCI_EXTENSION {
      * which usbport collects no verdict. So the latch was terminal on any
      * machine nobody suspends and nobody disables in Device Manager, and a root
      * port that reached it stayed deaf until the next cold boot
-     * (docs/contributing/runs/run-13e.md, Finding S).
+     * (docs/contributing/runs/run-13e.md, the root-cause section: "The driver
+     * marks its own controller failed").
      *
      * These fields are the owner that recovery step never had.
      * `RecoveryRequested` is set by the latch itself; the 500 ms health poll -
@@ -6428,7 +6461,8 @@ typedef struct _XHCI_EXTENSION {
 
     /*
      * **What the attempt cap actually counts, corrected by the E460
-     * (run-13e.md, Finding T).** The first version bounded `RecoveryAttempts`,
+     * (run-13e.md, the section on the attempt cap).** The first version
+     * bounded `RecoveryAttempts`,
      * which is a *lifetime* total - and the bench read what that means: three
      * recoveries that all SUCCEEDED spent the entire budget, so an ordinary
      * fourth incident, retrying nothing, found nothing left and the port stayed
@@ -6810,6 +6844,8 @@ typedef struct _XHCI_EXTENSION {
      * free (static, all four builds). Set in StartController beside the
      * delivery gates, from the version presented and only if usbport wrote
      * the Ex slot; clear on every NT 5.x build, whose arms are unchanged.
+     * **The miniport's, and always 0 under the HCD** (hcd_ctl.c clears it;
+     * nothing reads it): the HCD arms through its own timer service.
      */
     ULONG ArmThroughExOnly;
     /*
@@ -6828,13 +6864,11 @@ typedef struct _XHCI_EXTENSION {
      */
     ULONG RootHubReportThroughDpc;
     /*
-     * The command watchdog a DEFER context owed: one at a time, as the engine
-     * is. Written under the controller lock by the submit and the timeout's
-     * re-arm, taken by XhciCommandDrainOwedArm, which arms it only if the
-     * command it watches is still the outstanding one. The context is held by
-     * value - `XHCI_COMMAND_TIMEOUT`'s four words, spelled out because that
-     * type is declared after this one - captured with the decision, for the
-     * reason xhciArmCommandTimer gives.
+     * The command watchdog a DEFER context owed on the miniport's Version 300
+     * tier, one at a time, as the engine is. **Unused under the HCD**: its
+     * timer service owes no arm, so nothing writes or reads these six words,
+     * which read 0; they stay so the extension's layout, and the offset
+     * tables read against it, do not move.
      */
     ULONG CommandArmOwed;
     ULONG CommandArmOwedMs;
@@ -8372,7 +8406,8 @@ typedef struct _XHCI_EXTENSION {
      *       was **built and derived** agreed with the assumption - a
      *       *measurement* over those endpoints, not a statement about every
      *       device: one that never binds or never opens the endpoint (the
-     *       Sound Blaster X4, `bInterval` 3 and 4, run-13e.md Finding Y) is
+     *       Sound Blaster X4, `bInterval` 3 and 4, run-13e.md's section on the
+     *       X4 not binding) is
      *       outside the comparison. *(Until a later revision this said equality
      *       covered "every audio device this project can reach" and named a
      *       "publish it instead" outcome that batch 13-E has since overtaken.)*
@@ -8914,7 +8949,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * miniport extension and raw PORTSC array off a running machine, through a
  * door `usbport.sys` already owns. Specified in
  * `docs\contributing\passthru-snapshot-instrument.md`; the host side is
- * `xhcisnap\`.
+ * XHCITR's snapshot reader, `xhcitr\tr_snap.c` (`xhcisnap\` up to
+ * `3.0.0.0`).
  *
  * **Why it is the answer to a question this driver could not otherwise
  * answer.** Windows 98 has exactly two logging families - ring 3 writes,
@@ -9002,7 +9038,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * **The one exception to that, and it is deliberate**: schema 2 adds a small
  * block of fields the tool can print with NO offset table at all - the flavour,
  * the verbosity tier read and applied, each switch's MPSTATUS, and the note
- * ring's location and fill. That is what makes `XHCISNAP`'s plain-text
+ * ring's location and fill. That is what makes the snapshot reader's
+ * plain-text
  * companion possible, and the companion is what a stranger can paste into an
  * issue; the `.BIN` stays the attachment a maintainer decodes. It is **not** the
  * gather table design record 08 section 13.2 rejected: every one of these is a
@@ -9055,7 +9092,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 /*
  * The HCD's enabled slots (xhci98.sys from 2.0.0.0, hcd_door.c): one record of
  * XHCI_SNAPSHOT_SLOT_WORDS ULONGs per device the bus holds a slot for, in Slot
- * ID order, so that XHCISNAP can witness the speed a device's Slot Context
+ * ID order, so that the snapshot reader can witness the speed a device's Slot
+ * Context
  * actually carries (roadmap-hcd.md 29-E.1). A new region and not a header
  * change, so the schema stays 5: an older driver answers it with
  * XHCI_SNAPSHOT_S_BAD_REGION, which the tool reports as "not served by this
@@ -9089,7 +9127,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * XHCI_SNAPSHOT_HCD_PORT_WORDS per root port (HCSPARAMS1.MaxPorts of them),
  * then the counters. A new region and not a header change, so the schema
  * stays 5, by the rule the slots region set: an older driver answers it with
- * XHCI_SNAPSHOT_S_BAD_REGION, which XHCISNAP reports as "not served by this
+ * XHCI_SNAPSHOT_S_BAD_REGION, which the snapshot reader reports as "not
+ * served by this
  * driver", and an older tool never asks. The image carries its own version
  * and its own sizes: appending a word to the record or a counter to the
  * block changes the sizes and not the version, and a reader walks by the
@@ -9114,7 +9153,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * Appended by 35-T.8 (design record 17 section 4.8), version unchanged: an
  * older tool walks past them by the header's size. The tolerance state
  * stays where it lives, in the extension the snapshot already carries; these
- * words say where it lies in the extension image, so XHCISNAP names it from
+ * words say where it lies in the extension image, so the snapshot reader
+ * names it from
  * the .BIN's own bytes with no offset table. Offsets are in bytes, the
  * first from the extension's start and the rest from XHCI_TOL_STATE's; the
  * counters (XHCI_TOL_STATS) are its first words. TERMINAL is the one value
@@ -9175,7 +9215,8 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
  * Appended by task 36.9, version unchanged: where the event delivery's six
  * extension words lie (XHCI_EXTENSION.EventDelivery to LineRetireState,
  * design record 15 section 9), in bytes from the extension's start, and
- * how many there are, so XHCISNAP names them from the .BIN's own bytes as
+ * how many there are, so the snapshot reader names them from the .BIN's own
+ * bytes as
  * it does the tolerance state. A header shorter than this is an earlier
  * driver's, which places no extension words; whether a driver has the
  * polling counters is the counter block's size to say (63 words or 96).
@@ -9268,7 +9309,59 @@ ULONG XhciImodIntervalChoose(ULONG status, ULONG requested);
 #define XHCI_SNAPSHOT_HCD_IP_IDDEFERS     3 /* arrivals deferred there    */
 #define XHCI_SNAPSHOT_HCD_IP_IDFAILS      4 /* deferrals spent there      */
 #define XHCI_SNAPSHOT_HCD_IP_RECORD_WORDS 5UL
-#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    792UL /* the entries end the header */
+/*
+ * Appended by roadmap-usb4 task 47.30, version unchanged, after 45.40's
+ * places (design record 13 section 11.10, Part B, point 3): the event
+ * ring's TRB count in use, and up to XHCI_SNAPSHOT_HCD_ISOP_COUNT open
+ * isochronous pipes in slot and DCI order, each the words below
+ * (XHCI_ISO_TIMING's, xhci_xstat.h), an unused record all 0. Counts are
+ * time-stamp counts, times XhciXstatSysUnits'. A header shorter than this
+ * is an earlier driver's, which kept none.
+ */
+#define XHCI_SNAPSHOT_HCD_ISOP_RECORDS  792 /* records                    */
+#define XHCI_SNAPSHOT_HCD_ISOP_WORDS    793 /* one record, in words       */
+#define XHCI_SNAPSHOT_HCD_ISOP_FIRST    794 /* the first record's word    */
+#define XHCI_SNAPSHOT_HCD_EVT_TRBS      795 /* the event ring's TRBs      */
+#define XHCI_SNAPSHOT_HCD_ISOP_AT       796
+#define XHCI_SNAPSHOT_HCD_ISOP_COUNT    4UL
+#define XHCI_SNAPSHOT_HCD_IO_SLOTDCI    0  /* Slot ID 15:8, DCI 7:0; 0 none */
+#define XHCI_SNAPSHOT_HCD_IO_RING       1  /* capacity 15:0, a page bit 16 */
+#define XHCI_SNAPSHOT_HCD_IO_RECS       2  /* records 7:0, their peak 15:8 */
+#define XHCI_SNAPSHOT_HCD_IO_PUBS       3  /* publications                */
+#define XHCI_SNAPSHOT_HCD_IO_PUBEMPTY   4  /* onto an empty ring          */
+#define XHCI_SNAPSHOT_HCD_IO_WAITED     5  /* of a request that waited    */
+#define XHCI_SNAPSHOT_HCD_IO_FILLMIN    6  /* fewest TRBs before one      */
+#define XHCI_SNAPSHOT_HCD_IO_FILLMAX    7  /* most TRBs after one         */
+#define XHCI_SNAPSHOT_HCD_IO_GAPMAX     8  /* the longest gap (counts)    */
+#define XHCI_SNAPSHOT_HCD_IO_GAPAT      9  /* its end (system time)       */
+#define XHCI_SNAPSHOT_HCD_IO_GAPLAG     10 /* its request's wait (counts) */
+#define XHCI_SNAPSHOT_HCD_IO_GAPFLAGS   11 /* XHCI_ISOT_F_*               */
+#define XHCI_SNAPSHOT_HCD_IO_LAGMAX     12 /* the longest wait (counts)   */
+#define XHCI_SNAPSHOT_HCD_IO_ODD        13 /* crossed 15:0, backward 31:16,
+                                            * each held at FFFF           */
+#define XHCI_SNAPSHOT_HCD_IO_DRY        14 /* Ring Underrun and Overrun   */
+#define XHCI_SNAPSHOT_HCD_IO_DRYAT      15 /* the last one (system time)  */
+#define XHCI_SNAPSHOT_HCD_IO_RECORD_WORDS 16UL
+/*
+ * Appended by issue 26 (2026-11-07), version unchanged, after 47.30's
+ * records: the UAS class driver's last failures (xhci98_xfer.h,
+ * XHCI98_FAILURES), one record per class driver record above and in the
+ * same order (XHCI_SNAPSHOT_HCD_TELE_COUNT) - the count recorded since the
+ * class driver's start, then its XHCI98_FAIL_RECORDS entries of
+ * XHCI98_FAIL_WORDS words in ring order, all 0 until a failure comes. The
+ * record count, the words of one and the first record's word index come
+ * first. A header shorter than this is an earlier driver's, which kept
+ * none.
+ */
+#define XHCI_SNAPSHOT_HCD_UFAIL_RECORDS 860 /* records                    */
+#define XHCI_SNAPSHOT_HCD_UFAIL_WORDS   861 /* one record, in words       */
+#define XHCI_SNAPSHOT_HCD_UFAIL_FIRST   862 /* the first record's word    */
+#define XHCI_SNAPSHOT_HCD_UFAIL_AT      863
+#define XHCI_SNAPSHOT_HCD_UFAIL_COUNT   XHCI_SNAPSHOT_HCD_TELE_COUNT
+#define XHCI_SNAPSHOT_HCD_UF_COUNT      0  /* failures since its start    */
+#define XHCI_SNAPSHOT_HCD_UF_RING       1  /* the ring, 8 entries of 4    */
+#define XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS 33UL
+#define XHCI_SNAPSHOT_HCD_HEAD_WORDS    929UL /* the records end the header */
 #define XHCI_SNAPSHOT_HCD_NOT_READ      0xFFFFFFFFUL
 
 /* A device record's link word: the link state (XHCI_SUSP_*) in 3:0, Ss in
@@ -9428,7 +9521,8 @@ typedef struct _XHCI_SNAPSHOT_HEADER {
     /*
      * ---- schema 2 (task 13-L.2), amended to schema 3 ---------
      *
-     * Everything below is what `XHCISNAP` can print with **no offset table**,
+     * Everything below is what the snapshot reader can print with **no offset
+     * table**,
      * and that is the whole reason it is on the wire rather than left in the
      * `.BIN`. A user has no `offsets.txt`; a maintainer does. So the companion
      * text file is built out of these fields, and the raw extension stays the

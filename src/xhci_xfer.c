@@ -910,6 +910,17 @@ static ULONG xhciXferRangeContains(const XHCI_RING *ring,
                                    ULONG count,
                                    ULONG index,
                                    ULONG *offset);
+/* The isochronous settle and the end both isochronous paths share, defined
+ * beside XhciXferIsoEvent and declared here for their callers above it. */
+static ULONG xhciXferIsoSettle(PXHCI_TRANSFER_QUEUE queue,
+                               PXHCI_RING ring,
+                               PXHCI_TRANSFER owner,
+                               ULONG ahead,
+                               PXHCI_XFER_EVENT_RESULT result);
+static VOID xhciXferIsoFinish(PXHCI_TRANSFER_QUEUE queue,
+                              PXHCI_TRANSFER owner,
+                              ULONG ahead,
+                              PXHCI_XFER_EVENT_RESULT result);
 
 ULONG XhciXferSubmitNormal(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
@@ -1211,36 +1222,6 @@ static ULONG xhciXferClaimMidTdTail(PXHCI_TRANSFER_QUEUE queue, ULONG index)
         }
     }
     return 0;
-}
-
-VOID XhciXferQueueArmRetry(PXHCI_TRANSFER_QUEUE queue, const XHCI_RING *ring)
-{
-    if (queue == NULL || ring == NULL) {
-        return;
-    }
-    queue->RetryArmed = 1;
-    queue->RetryFree = XhciRingFree(ring);
-}
-
-ULONG XhciXferQueueRetryDue(const XHCI_TRANSFER_QUEUE *queue,
-                            const XHCI_RING *ring)
-{
-    if (queue == NULL || ring == NULL || queue->RetryArmed == 0) {
-        return 0;
-    }
-    return (XhciRingFree(ring) > queue->RetryFree) ? 1UL : 0UL;
-}
-
-VOID XhciXferQueueDisarmRetry(PXHCI_TRANSFER_QUEUE queue, ULONG asked)
-{
-    if (queue == NULL) {
-        return;
-    }
-    queue->RetryArmed = 0;
-    queue->RetryFree = 0;
-    if (asked) {
-        queue->RetriesAsked++;
-    }
 }
 
 /* `steps` positions forward from `index`, stepping the way the ring does so a
@@ -2838,6 +2819,12 @@ ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
      */
     owner->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
 
+    /* An isochronous request's final packet, held the same way, is retired by
+     * group, not by advanced TD (xhciXferIsoSettle). */
+    if ((owner->Flags & XHCI_XFER_FLAG_ISOCH) != 0) {
+        return xhciXferIsoSettle(queue, ring, owner, ahead, result);
+    }
+
     /*
      * The classification is re-taken from **the TRB the short event named**,
      * not from `LastIndex`: what has to be established is that the ring's own
@@ -4266,6 +4253,12 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     if (owner == NULL) {
         queue->UnmatchedEvents++;
         result->Unattributed = 1;
+        /* The tail of a final packet that xhciXferIsoSettle retired early,
+         * arriving while its TRBs are still unowned: the same residual
+         * reading the bulk path takes (XhciXferEvent). */
+        if (xhciXferClaimMidTdTail(queue, reportedIndex)) {
+            queue->MidTdShortTails++;
+        }
         return XHCI_XFER_OK;
     }
     if ((owner->Flags & XHCI_XFER_FLAG_ISOCH) == 0 ||
@@ -4469,8 +4462,26 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
      * condition drops events outright (p.197) - is the same thing that happens
      * to any deferred TD on any ring in this driver: the next group's retire
      * jumps the dequeue pointer past it and the sweep below completes it. Behind
-     * that stands usbport's own cancellation - its transfer timeout, or a
-     * teardown - which reaches `AbortTransfer` and the quiescence chain.
+     * that stands the client's own cancellation, or a teardown, which stops the
+     * endpoint and drains the queue.
+     *
+     * **One tail is not waited on that way: a Short Packet on an earlier TRB
+     * of the request's final packet.** On a short packet the xHC advances to
+     * the next TD (4.11.5.2 p.210), so that TD is over; and QEMU's xHC sends
+     * no tail at all (docs/usb-xhci-info/xhci-data-structures.md, "The
+     * withheld second Short Packet Event"). Left to the sweep, a request with
+     * no successor queued - a client that posts one isochronous IN request and
+     * waits for it - would never complete. So that event arms the bulk path's
+     * deferral (`XHCI_XFER_FLAG_SHORT_DEFERRED`, below): a tail that arrives
+     * while the request is queued ends it here as before and counts
+     * `MidTdDeferralsTailed`, and one that has not come when a drain pass
+     * reads the event ring empty is not coming, so `XhciXferDrainSettled`
+     * retires the group then (xhciXferIsoSettle) with the packets' own
+     * results. The window that leaves - a tail written after that empty read,
+     * against TRBs a new request may already own - is the bulk path's, stated
+     * there. An *error* on an earlier TRB of the final packet arms nothing:
+     * p.201 promises its tail, and a controller that withholds that one too
+     * still leaves the request to the sweep or a cancellation.
      *
      * **Not** `StartFrame + NumberOfPackets + 1`: a draft of this comment named
      * that as the thing which gives up on the request, and it is not. That
@@ -4488,8 +4499,35 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     if (reportedIndex != owner->LastIndex) {
         if (owner->IsoPacketsAnswered >= owner->IsoPacketCount) {
             queue->IsoGroupsAwaitingTail++;
+            /* The final packet ended short before its TD's last TRB: held
+             * for its tail, or for the settle (above). The duplicate branch
+             * never reaches here with reportedIndex short of its packet's
+             * tail, so this is the event that answered the packet. */
+            if (completionCode == XHCI_CC_SHORT_PACKET &&
+                packetIndex + 1 == owner->IsoPacketCount &&
+                packetTail == owner->LastIndex &&
+                reportedIndex != packetTail &&
+                (owner->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) == 0) {
+                owner->Flags |= XHCI_XFER_FLAG_SHORT_DEFERRED;
+                owner->ShortTrbPA = eventTrbPA;
+                queue->MidTdDeferrals++;
+            }
         }
         return XHCI_XFER_OK;
+    }
+
+    /* A held final packet's tail arrived while the request was still queued:
+     * the conforming controller's path, resolved and counted as the bulk
+     * path resolves it (XhciXferEvent). Any other code on the tail leaves
+     * the flag for the unlink to count as an observation lost. */
+    if ((owner->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0) {
+        if (completionCode == XHCI_CC_SHORT_PACKET) {
+            owner->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
+            queue->MidTdDeferralsTailed++;
+        } else if (completionCode == XHCI_CC_SUCCESS) {
+            owner->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
+            queue->MidTdDeferralsTailedSpurious++;
+        }
     }
 
     if (XhciRingRetireIsoGroup(ring, owner->LastIndex) != XHCI_RING_OK) {
@@ -4513,17 +4551,55 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
         return XHCI_XFER_OK;
     }
 
-    /*
-     * Everything queued *ahead* of this group had its TRBs reclaimed by the same
-     * store, so it is completed too - the rule
-     * docs/contributing/implementation-invariants.md, "Completion Matching" states for every
-     * ring. On an isoch endpoint those are requests whose TDs the controller
-     * skipped without reporting; each one's unanswered packets are stamped at
-     * delivery by `XhciXferIsoFinalise` from the status set here.
-     */
+    xhciXferIsoFinish(queue, owner, ahead, result);
+    return XHCI_XFER_OK;
+}
+
+/*
+ * The end of an isochronous request whose group the ring has just retired,
+ * from either of its two callers: the event naming the group's last TRB
+ * (XhciXferIsoEvent), or the settle of a final packet whose tail never came
+ * (xhciXferIsoSettle). One function, for the reason xhciXferFinishGroup is
+ * one: a rule duplicated at two sites is a rule a change can delete from one.
+ *
+ * Everything queued *ahead* of `owner` had its TRBs reclaimed by the same
+ * store, so it is completed too - the rule
+ * docs/contributing/implementation-invariants.md, "Completion Matching" states
+ * for every ring. On an isoch endpoint those are requests whose last TRB no
+ * event named, and they are of two kinds:
+ *
+ *   - a request with packets no event answered: the controller skipped its
+ *     TDs without reporting, so it is failed NOT_ACCESSED, and
+ *     `XhciXferIsoFinalise` stamps its unanswered packets with that status at
+ *     delivery;
+ *   - a request every packet of which an event answered, the tail of its
+ *     final packet being what was missing: its packets' results are real, so
+ *     its own status and FAILED latch are kept as those events left them.
+ *     One held for that tail (`XHCI_XFER_FLAG_SHORT_DEFERRED`) is settled by
+ *     the sweep, counted as the early retire it is (`MidTdShortRetires`), as
+ *     xhciXferFinishGroup settles a held bulk TD.
+ *
+ * `SweptTransfers` counts both kinds; `Errors` counts the owner alone.
+ *
+ * IRQL: called at DISPATCH_LEVEL; pure, so any IRQL is safe.
+ */
+static VOID xhciXferIsoFinish(PXHCI_TRANSFER_QUEUE queue,
+                              PXHCI_TRANSFER owner,
+                              ULONG ahead,
+                              PXHCI_XFER_EVENT_RESULT result)
+{
+    PXHCI_TRANSFER walk;
+    ULONG i;
+
     for (walk = queue->Head, i = 0; i < ahead && walk != NULL; i++) {
-        walk->UsbdStatus = XHCI_USBD_STATUS_NOT_ACCESSED;
-        walk->Flags |= XHCI_XFER_FLAG_FAILED;
+        if ((walk->Flags & XHCI_XFER_FLAG_SHORT_DEFERRED) != 0) {
+            walk->Flags &= ~XHCI_XFER_FLAG_SHORT_DEFERRED;
+            queue->MidTdShortRetires++;
+        }
+        if (walk->IsoPacketsAnswered < walk->IsoPacketCount) {
+            walk->UsbdStatus = XHCI_USBD_STATUS_NOT_ACCESSED;
+            walk->Flags |= XHCI_XFER_FLAG_FAILED;
+        }
         queue->SweptTransfers++;
         walk = walk->Next;
     }
@@ -4535,5 +4611,57 @@ ULONG XhciXferIsoEvent(PXHCI_TRANSFER_QUEUE queue,
     if (owner->Flags & XHCI_XFER_FLAG_FAILED) {
         queue->Errors++;
     }
+}
+
+/*
+ * XhciXferDrainSettled's isochronous half: `owner` held its final packet for
+ * a tail (XhciXferIsoEvent), the flag is already cleared, and a drain pass
+ * has read the event ring empty or a stopped endpoint's saved dequeue shows
+ * the controller past the group (XhciXferStopPlace), so the tail is not
+ * coming. The hold is re-validated against the ring before anything is
+ * retired - every packet answered, the short event's TRB still inside this
+ * request and on an earlier TRB of its final packet, whose TD ends at the
+ * group's last TRB - and the group is retired by XhciRingRetireIsoGroup,
+ * which refuses a group the dequeue pointer has already moved past. The
+ * packets keep the results their events wrote; `owner` keeps its status.
+ *
+ * Either answer is the bulk settle's: retired and completed, counted
+ * `MidTdShortRetires` with the tail index recorded for a late tail to be
+ * recognised; or refused, counted `MidTdDeferralsLost`, the request left
+ * queued and `NeedsRecovery` with `RefusedRetire` asking the caller to stop
+ * the endpoint and drain it.
+ *
+ * IRQL: called at DISPATCH_LEVEL under the controller lock; pure.
+ */
+static ULONG xhciXferIsoSettle(PXHCI_TRANSFER_QUEUE queue,
+                               PXHCI_RING ring,
+                               PXHCI_TRANSFER owner,
+                               ULONG ahead,
+                               PXHCI_XFER_EVENT_RESULT result)
+{
+    ULONG index;
+    ULONG packetIndex;
+    ULONG packetHead;
+    ULONG packetTail;
+
+    if (owner->IsoParams != NULL && owner->IsoPacketCount != 0 &&
+        owner->IsoPacketsAnswered >= owner->IsoPacketCount &&
+        XhciRingIndexFromPA(ring, owner->ShortTrbPA, &index) ==
+            XHCI_RING_OK &&
+        xhciXferRangeContains(ring, owner->FirstIndex, owner->TrbCount,
+                              index, NULL) &&
+        xhciXferIsoPacketAt(ring, owner, index, &packetIndex, &packetHead,
+                            &packetTail) &&
+        packetIndex + 1 == owner->IsoPacketCount &&
+        packetTail == owner->LastIndex && index != packetTail &&
+        XhciRingRetireIsoGroup(ring, owner->LastIndex) == XHCI_RING_OK) {
+        queue->MidTdShortRetires++;
+        xhciXferRecordMidTdTail(queue, owner->LastIndex);
+        xhciXferIsoFinish(queue, owner, ahead, result);
+        return XHCI_XFER_OK;
+    }
+    queue->MidTdDeferralsLost++;
+    result->NeedsRecovery = 1;
+    result->RefusedRetire = 1;
     return XHCI_XFER_OK;
 }

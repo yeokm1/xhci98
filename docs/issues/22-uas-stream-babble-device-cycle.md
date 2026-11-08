@@ -82,8 +82,8 @@ device reset through `IOCTL_INTERNAL_USB_RESET_PORT` with the requests
 ended `SRB_STATUS_BUS_RESET` for the class driver to retry, and the disk
 stays present. The event is noted as `tol.stream.halt` (slot, DCI,
 code). `XhciTolStreamHaltDrain` and its host vectors carry the rule.
-Codex reviewed it twice; its first review found the pointer-above-4 GB
-path still cycling, fixed in `fc5eef40`.
+Reviewed and revised: the review found the pointer-above-4 GB path still
+cycling, fixed in `fc5eef40`.
 
 ## 6. Wrong turns and open questions
 
@@ -100,6 +100,11 @@ path still cycling, fixed in `fc5eef40`.
   UAS device overrun the data-in transfer. Linux's per-device answer is
   `US_FL_NO_ATA_1X` (`uas.c` answers ATA PASS-THROUGH itself). Not done
   here; the fix above already keeps the disk.
+  The same reporter's later snapshots on `3.4.1.0` tied the drive's trouble
+  to HWMonitor's SMART reads and found a second defect behind it, a cancel
+  that left the data-in endpoint paused for good; `3.4.2.0` fixes that and
+  adds the per-device answer, `XhciUasNoAtaPassThrough`
+  ([issue 26](26-uas-smart-passthrough-stranded-pause.md)).
 - **Why the event fell inside no TD** is not known either: a TD cancelled
   just before, or the controller's own reporting, are both possible.
 
@@ -113,7 +118,7 @@ path still cycling, fixed in `fc5eef40`.
 
 ## Sources
 
-- The user's snapshots in the owner's capture folder
+- The user's snapshots in the owner's bench folder
   (git-ignored, 2026-11-04): the `Desktop`, `too`, `tree` and `forte`
   sets (`.TXT`, `.BIN`, `.DEV`, `.PSC`, `xhcitr-report.txt`).
 - `external/linux` (`xhci-ring.c`, `xhci-pci.c`, `usb-storage/uas.c`,

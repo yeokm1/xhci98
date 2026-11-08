@@ -569,13 +569,101 @@ function Get-SelfTestCatalogCert {
     return $script:selfTestCert
 }
 
+function New-SelfTestCert {
+    # A second throwaway certificate, made the same way, for the cases that
+    # need a signer other than the one the run is told of.
+    param([string]$Subject)
+    $rsa = New-Object System.Security.Cryptography.RSACng 2048
+    $req = New-Object System.Security.Cryptography.X509Certificates.CertificateRequest(
+        $Subject, $rsa,
+        [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+        [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    return $req.CreateSelfSigned([DateTimeOffset]::UtcNow.AddDays(-1), [DateTimeOffset]::UtcNow.AddDays(1))
+}
+
+function Get-SelfTestUnsignedPe {
+    # A real PE image with no certificate table: the catalog case's sample
+    # (MakeCat hashes it as a PE member) with its own signature taken off -
+    # cut at the table, the directory entry zeroed - and padded with zeros
+    # to a multiple of 8, where a signature's table would start.
+    $src = [System.IO.File]::ReadAllBytes((Get-CatalogPeSample))
+    $layout = Get-PeSecurityLayout -Bytes $src
+    $len = if ($layout.TableOffset -ne 0) { [int]$layout.TableOffset } else { $src.Length }
+    $img = New-Object byte[] ([int]([math]::Ceiling($len / 8.0) * 8))
+    [Array]::Copy($src, $img, $len)
+    for ($i = [int]$layout.EntryOffset; $i -lt [int]$layout.EntryOffset + 8; $i++) { $img[$i] = 0 }
+    return ,$img
+}
+
+function New-SelfTestSignedPe {
+    # Get-SelfTestUnsignedPe's image with an embedded Authenticode signature
+    # by $Cert, laid out as SignTool lays one out: one WIN_CERTIFICATE
+    # (revision 2.0, PKCS #7) at the end, the directory entry pointing at
+    # it, its SpcIndirectDataContent vouching for the image's SHA-1
+    # Authenticode digest (Get-PeImageDigest). What make-release.ps1 reads
+    # back with Get-EmbeddedSignature; no Windows loader is asked.
+    param([string]$Path, $Cert)
+    $img = Get-SelfTestUnsignedPe
+    $hex = Get-PeImageDigest -Bytes $img
+    $digest = New-Object byte[] 20
+    for ($i = 0; $i -lt 20; $i++) { $digest[$i] = [Convert]::ToByte($hex.Substring(2 * $i, 2), 16) }
+    # data { SPC_PE_IMAGE_DATA_OBJID, SpcPeImageData ::= SEQUENCE {} },
+    # messageDigest { { sha1, NULL }, OCTET STRING digest }
+    $data = [byte[]](0x30, 0x0E, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x0F, 0x30, 0x00)
+    $di = [byte[]](@(0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2B, 0x0E, 0x03, 0x02, 0x1A, 0x05, 0x00, 0x04, 0x14) + $digest)
+    $content = [byte[]](@(0x30, ($data.Length + $di.Length)) + $data + $di)
+    Add-Type -AssemblyName System.Security
+    $ci = New-Object System.Security.Cryptography.Pkcs.ContentInfo((New-Object System.Security.Cryptography.Oid($script:SpcIndirectDataOid)), $content)
+    $cms = New-Object System.Security.Cryptography.Pkcs.SignedCms($ci, $false)
+    $signer = New-Object System.Security.Cryptography.Pkcs.CmsSigner($Cert)
+    $signer.DigestAlgorithm = New-Object System.Security.Cryptography.Oid($script:Sha1Oid)
+    $signer.IncludeOption = [System.Security.Cryptography.X509Certificates.X509IncludeOption]::EndCertOnly
+    $cms.ComputeSignature($signer, $true)
+    $p7 = $cms.Encode()
+    $wlen = 8 + $p7.Length
+    $tlen = [int]([math]::Ceiling($wlen / 8.0) * 8)
+    $at = $img.Length
+    $out = New-Object byte[] ($at + $tlen)
+    [Array]::Copy($img, $out, $at)
+    [BitConverter]::GetBytes([int]$wlen).CopyTo($out, $at)
+    [BitConverter]::GetBytes([uint16]0x0200).CopyTo($out, $at + 4)
+    [BitConverter]::GetBytes([uint16]0x0002).CopyTo($out, $at + 6)
+    [Array]::Copy($p7, 0, $out, $at + 8, $p7.Length)
+    $layout = Get-PeSecurityLayout -Bytes $out
+    [BitConverter]::GetBytes([uint32]$at).CopyTo($out, [int]$layout.EntryOffset)
+    [BitConverter]::GetBytes([uint32]$tlen).CopyTo($out, [int]$layout.EntryOffset + 4)
+    [System.IO.File]::WriteAllBytes($Path, $out)
+}
+
+function Add-SelfTestSignatures {
+    # What a signed x64 directory carries beside its catalogs (design record
+    # 19): every .sys under $Dir replaced by a PE image signed by the
+    # throwaway certificate, and that certificate's public half as
+    # xhci98-test.cer. make-release.ps1's upload assembly judges both
+    # against -SelfTestCatalogThumbprint.
+    # One signed image, copied to each, so two places of one binary stay
+    # the same bytes.
+    param([string]$Dir)
+    $cert = Get-SelfTestCatalogCert
+    $one = Join-Path $script:work ("selftest-signed-" + [System.IO.Path]::GetRandomFileName())
+    New-SelfTestSignedPe -Path $one -Cert $cert
+    foreach ($sys in @(Get-ChildItem -LiteralPath $Dir -Recurse -File | Where-Object { $_.Extension -ieq ".sys" })) {
+        Copy-Item -LiteralPath $one -Destination $sys.FullName -Force
+    }
+    Remove-Item -LiteralPath $one -Force
+    [System.IO.File]::WriteAllBytes((Join-Path $Dir $script:TestSignCerName), $cert.RawData)
+}
+
 function Add-SelfTestCatalogs {
     # Every catalog of $script:PackageCatalogs whose INF is at $Dir's root,
     # made over the files beside it and signed SHA-1 by the throwaway
-    # certificate; an earlier one is replaced.
-    param([string]$Dir)
+    # certificate; an earlier one is replaced. The images are signed first
+    # (Add-SelfTestSignatures) unless -NoSign, which a case uses to keep
+    # the image it has just put in place.
+    param([string]$Dir, [switch]$NoSign)
     $makeCat = Join-Path $repo "tools\WinDDK71\bin\x86\MakeCat.exe"
     if (-not (Test-Path -LiteralPath $makeCat)) { throw "the stand-in trees' x64 catalogs need WDK 7.1's MakeCat at '$makeCat'." }
+    if (-not $NoSign) { Add-SelfTestSignatures -Dir $Dir }
     $cert = Get-SelfTestCatalogCert
     foreach ($catName in $script:PackageCatalogs.Keys) {
         $spec = $script:PackageCatalogs[$catName]
@@ -1754,6 +1842,24 @@ try {
     Assert-True (Test-Path -LiteralPath $deepBystander) `
         "the foreign file below the output root was deleted."
 
+    # --- the packager's own previous package, with a file this run lacks ---
+    #
+    # A name the family table knows for this architecture is the packager's
+    # own whether or not this run stages it (a signed cut's catalogs and
+    # certificate, Stor98's files before -NoStor98): the previous package is
+    # replaced, not refused as somebody else's.
+    Write-Step "the packager replaces its own previous package that this run stages less of"
+    $ownOut = Join-Path $script:work "pkg-own-previous"
+    Ensure-Directory (Join-Path $ownOut "nt")
+    foreach ($own in @("xhcinet6.sys", "nt\xhcicmf.inf")) {
+        Set-Content -LiteralPath (Join-Path $ownOut $own) -Value "a previous run's file" -Encoding ASCII
+    }
+    $r = Invoke-Packager @("-InfPath", $plainInf, "-DriverPath", $driver, "-OutDir", $ownOut)
+    Assert-True ($r.ExitCode -eq 0) ("the packager refused its own previous package as foreign:`n" + $r.Output)
+    $leftOver = @(@("xhcinet6.sys", "nt\xhcicmf.inf") | Where-Object {
+        (Test-Path -LiteralPath (Join-Path $ownOut $_)) -and ([System.IO.File]::ReadAllText((Join-Path $ownOut $_)).Trim() -eq "a previous run's file") })
+    Assert-True ($leftOver.Count -eq 0) "the previous package's own files survived its replacement: $($leftOver -join ', ')"
+
     # --- the missing-version-resource refusal (the audit of 2026-09-07) ----
     #
     # NOT TESTED, and recorded here rather than left as a silent gap. That
@@ -2296,10 +2402,19 @@ try {
             Assert-True $false "the family tree's upload set wrote no archive."
         }
         # Refused: an nt\ in a family folder (PKG-FAMILY), and a tree with
-        # family folders and a flavour directory both.
+        # family folders and a flavour directory both. And outside the
+        # family folders, what the cut does not stage there: a stray file or
+        # directory at the version root (a hidden one too), a stray file in a
+        # tool's directory, and a Microsoft file by name in one (PKG-MSFILE
+        # over the whole set, -MsFileScanDir).
         foreach ($bad in @(
             @{ Why = "an nt\ in nt-x86\"; Do = { param($p) Ensure-Directory (Join-Path $p "nt-x86\nt"); Copy-Item (Join-Path $p "nt-x86\xhci98.sys") (Join-Path $p "nt-x86\nt\xhcicm.sys") }; Says = "PKG-FAMILY" },
-            @{ Why = "a flavour directory beside the family folders"; Do = { param($p) Ensure-Directory (Join-Path $p "release-x86"); Copy-Item (Join-Path $p "nt-x86\xhci98.inf") (Join-Path $p "release-x86\xhci98.inf") }; Says = "neither layout" })) {
+            @{ Why = "a flavour directory beside the family folders"; Do = { param($p) Ensure-Directory (Join-Path $p "release-x86"); Copy-Item (Join-Path $p "nt-x86\xhci98.inf") (Join-Path $p "release-x86\xhci98.inf") }; Says = "neither layout" },
+            @{ Why = "a stray file at the version root"; Do = { param($p) [System.IO.File]::WriteAllText((Join-Path $p "notes.txt"), "x") }; Says = "notes.txt at the version root is not a file the cut stages" },
+            @{ Why = "a hidden file at the version root"; Do = { param($p) $h = Join-Path $p "desktop.ini"; [System.IO.File]::WriteAllText($h, "x"); (Get-Item -LiteralPath $h -Force).Attributes = [System.IO.FileAttributes]::Hidden }; Says = "desktop.ini at the version root is not a file the cut stages" },
+            @{ Why = "a stray directory at the version root"; Do = { param($p) Ensure-Directory (Join-Path $p "extra"); [System.IO.File]::WriteAllText((Join-Path $p "extra\x.txt"), "x") }; Says = "extra\ at the version root is not a directory the cut stages" },
+            @{ Why = "a stray file in tools\portsw\"; Do = { param($p) [System.IO.File]::WriteAllText((Join-Path $p "tools\portsw\extra.exe"), "x") }; Says = "tools\portsw\extra.exe is not a file the cut stages there" },
+            @{ Why = "a Microsoft file in tools\silent\"; Do = { param($p) [System.IO.File]::WriteAllText((Join-Path $p "tools\silent\usbd.sys"), "x") }; Says = "PKG-MSFILE" })) {
             $badRel = Join-Path $script:work ("releases-family-bad-" + [Guid]::NewGuid().ToString("N"))
             Copy-Item -LiteralPath $famRelRoot -Destination $badRel -Recurse
             & $bad.Do (Join-Path $badRel $relVersion)
@@ -2311,7 +2426,7 @@ try {
 
         # --- assembled from the tracked directory alone ---------------------
         #
-        # roadmap Phase 20, F15. This mode used to require the gated
+        # roadmap task 20.1. This mode used to require the gated
         # out\pkg-<flavour>\ directories to exist and to hash-match the
         # published binaries, a dependency left over from when the media
         # carried Microsoft files the package supplied. Since 1.0.0.1 nothing
@@ -2816,7 +2931,7 @@ try {
         foreach ($x in @("LICENSE", "NOTICE.md", "READ.TXT", "SHA256.TXT", "STAGE.TXT")) { Assert-True ($fr.Files.Contains($x)) "the free export has no $x." }
         Assert-True ($null -eq (Read-WdmFreePin -Path (Join-Path $repo "scripts\package\wdmfree-pin.txt")) -or $true) "the repository's pin does not read."
         $repoPinText = [System.IO.File]::ReadAllText((Join-Path $repo "scripts\package\wdmfree-pin.txt"))
-        Assert-True ($repoPinText -match '(?m)^Certificate: E6A2749B78E9E4074260CF79972A57EEB6E76C0A\r?$') "the repository's pin does not name the owner's usb-wdm-free certificate (design record 26 section 6.7.11)."
+        Assert-True ($repoPinText -match '(?m)^Certificate: 7A3C6E6289EC46E6E128D87BB54E87196B824959\r?$') "the repository's pin does not name the owner's SHA-1 usb-wdm-free certificate (design record 26 section 6.7.11)."
         $badPin = Join-Path $script:work "wdmfree-pin-bad.txt"
         [System.IO.File]::WriteAllText($badPin, (($freePinLines | Where-Object { $_ -notlike "*CDCX.SYS" }) -join "`r`n") + "`r`n")
         $msg = ""
@@ -3149,6 +3264,62 @@ try {
         $pv = Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.3.0.0"
         Assert-True ($null -ne $pv -and $pv.V -eq [version]"3.2.0.0") "the previous release's otherpkgs.txt was not the newest below this version."
         Assert-True ($null -eq (Find-PreviousOtherPkgs -ReleasesDir $relDir -Version "3.1.0.0")) "a release with no earlier otherpkgs.txt found one."
+        # Record 26 section 6.7.16 (task 47.42): a pair with a package no
+        # earlier record had current is admitted COEXISTS without the proof
+        # of section 6.7.14, with no lift; a package current in any earlier
+        # record is not never-shipped; the dropped EXCLUDES with no COEXISTS
+        # is refused as before.
+        $nsDir = Join-Path $script:work "oth-never"
+        foreach ($v in @("3.2.0.0", "3.3.0.0", "3.4.0.0")) { Ensure-Directory (Join-Path $nsDir $v) }
+        $nsRecord = { param($ver, $stA, $stB) @("Version: $ver",
+                "ROW | free:audio/a | CLASS | Audio | USB audio (a): class | $stA",
+                "ROW | free:audio/m | CLASS | Audio | MIDI (m): class | current",
+                "ROW | free:audio/b | CLASS | Audio | USB audio (b): class | $stB",
+                "EXCLUDES | free:audio/a | free:audio/m | W98SE WME W2K | t") -join "`r`n" }
+        [System.IO.File]::WriteAllText((Join-Path $nsDir "3.2.0.0\otherpkgs.txt"), (& $nsRecord "3.2.0.0" "withdrawn" "current"))
+        [System.IO.File]::WriteAllText((Join-Path $nsDir "3.3.0.0\otherpkgs.txt"), (& $nsRecord "3.3.0.0" "known" "withdrawn"))
+        [System.IO.File]::WriteAllText((Join-Path $nsDir "3.4.0.0\otherpkgs.txt"), (& $nsRecord "3.4.0.0" "current" "withdrawn"))
+        Assert-True ((@(Get-OtherNeverShipped -ReleasesDir $nsDir -Version "3.4.0.0") -join ",") -ceq "free:audio/a") "a package withdrawn or known in every earlier record, and only it, was not read as never-shipped below 3.4.0.0."
+        Assert-True (@(Get-OtherNeverShipped -ReleasesDir $nsDir -Version "3.5.0.0").Count -eq 0) "a package current in an earlier record was read as never-shipped."
+        Assert-True (@(Get-OtherNeverShipped -ReleasesDir (Join-Path $script:work "oth-never-none") -Version "3.4.0.0").Count -eq 0) "no releases directory gave never-shipped packages."
+        $nsRows = @(foreach ($q in @("free:audio/a", "free:audio/m")) { [pscustomobject]@{ Id = $q; Kind = "CLASS"; Heading = "Audio"; Desc = "x"; State = "current" } }) +
+                  @([pscustomobject]@{ Id = "free:audio/b"; Kind = "CLASS"; Heading = "Audio"; Desc = "USB audio (b): class"; State = "withdrawn" })
+        $nsPrev = ConvertFrom-OtherPkgsRecord -Text (& $nsRecord "3.3.0.0" "withdrawn" "withdrawn") -Label "ns"
+        $nsNow = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $nsRows; Rels = @((& $mkRel "COEXISTS" "free:audio/m" "free:audio/a" @("W98SE")), (& $mkRel "EXCLUDES" "free:audio/a" "free:audio/m" @("WME", "W2K"))) }
+        # 98 SE and ME alone: a COEXISTS on 2000 in place of the EXCLUDES is
+        # held to the proof even for a never-shipped package of one set.
+        $nsNt = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $nsRows; Rels = @((& $mkRel "COEXISTS" "free:audio/m" "free:audio/a" @("W98SE", "W2K")), (& $mkRel "EXCLUDES" "free:audio/a" "free:audio/m" @("WME"))) }
+        $msg = ""
+        try { Get-OtherLifted -Prev $nsPrev -Now $nsNt -Sets @() -NeverShipped @("free:audio/a") | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("CLASS package") -and $msg.Contains("W2K")) ("a never-shipped pair's COEXISTS on 2000 was not held to the proof: '" + $msg + "'")
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $nsPrev -Now $nsNt -Shipped @("free:audio/a", "free:audio/m") -Lifted @() -NeverShipped @("free:audio/a") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("a never-shipped pair's COEXISTS on 2000 was admitted with no lift: '" + $msg + "'")
+        $msg = ""
+        try { Get-OtherLifted -Prev $nsPrev -Now $nsNow -Sets @() | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("CLASS package")) ("a COEXISTS of a CLASS pair with no never-shipped package was not held to the proof: '" + $msg + "'")
+        Assert-True (@(Get-OtherLifted -Prev $nsPrev -Now $nsNow -Sets @() -NeverShipped @("free:audio/a")).Count -eq 0) "a pair with a never-shipped package was read as a lift."
+        Test-OtherPkgsTransition -Prev $nsPrev -Now $nsNow -Shipped @("free:audio/a", "free:audio/m") -Lifted @() -NeverShipped @("free:audio/a")
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $nsPrev -Now $nsNow -Shipped @("free:audio/a", "free:audio/m") -Lifted @() } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("a COEXISTS in place of an EXCLUDES, no package never-shipped and no lift, was not refused: '" + $msg + "'")
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $nsPrev -Now ([pscustomobject]@{ Version = "3.4.0.0"; Rows = $nsRows; Rels = @((& $mkRel "EXCLUDES" "free:audio/a" "free:audio/m" @("WME", "W2K"))) }) -Shipped @("free:audio/a", "free:audio/m") -Lifted @() -NeverShipped @("free:audio/a") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("an EXCLUDES of a never-shipped package dropped with no COEXISTS was not refused: '" + $msg + "'")
+        # Only within one set: against a partner of the other set the
+        # never-shipped package is held to section 6.7.14's proof.
+        Assert-True ((Test-OtherNeverShippedPair -A "free:audio/a" -B "free:audio/m" -NeverShipped @("free:audio/a")) -and
+                     -not (Test-OtherNeverShippedPair -A "free:audio/a" -B "nonfree:audio/m" -NeverShipped @("free:audio/a")) -and
+                     -not (Test-OtherNeverShippedPair -A "free:audio/m" -B "free:audio/q" -NeverShipped @("free:audio/a"))) "a never-shipped pair was not read as one set with a never-shipped endpoint."
+        $xsRows = @(foreach ($q in @("free:audio/a", "nonfree:audio/m")) { [pscustomobject]@{ Id = $q; Kind = "CLASS"; Heading = "Audio"; Desc = "x"; State = "current" } })
+        $xsPrev = [pscustomobject]@{ Version = "3.3.0.0"; Rows = $xsRows; Rels = @((& $mkRel "EXCLUDES" "free:audio/a" "nonfree:audio/m" @("W98SE"))); Lifted = @() }
+        $xsNow = [pscustomobject]@{ Version = "3.4.0.0"; Rows = $xsRows; Rels = @((& $mkRel "COEXISTS" "free:audio/a" "nonfree:audio/m" @("W98SE"))) }
+        $msg = ""
+        try { Get-OtherLifted -Prev $xsPrev -Now $xsNow -Sets @() -NeverShipped @("free:audio/a") | Out-Null } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("CLASS package")) ("a never-shipped package's COEXISTS with the other set's package was not held to the proof: '" + $msg + "'")
+        $msg = ""
+        try { Test-OtherPkgsTransition -Prev $xsPrev -Now $xsNow -Lifted @() -NeverShipped @("free:audio/a") } catch { $msg = $_.Exception.Message }
+        Assert-True ($msg.Contains("drops the EXCLUDES line")) ("a never-shipped package's COEXISTS with the other set's package was admitted with no lift: '" + $msg + "'")
 
         # The record of the downloads, read back strictly.
         $dlRec = (ConvertTo-DownloadsRecord -Version $relVersion -Kinds @("base", "free", "nonfree") -Free $fr -NonFree $nf) -join "`r`n"
@@ -3648,6 +3819,38 @@ try {
         }
         Assert-True (Test-Path -LiteralPath (Join-Path $up4 ("xhci98-" + $relVersion + ".zip"))) `
             "no upload archive was written for the four-directory tree."
+        Assert-True ($r.Output -match "release-x64\\ carries 1 \.sys image\(s\), each with the embedded signature of") `
+            ("expected the x64 directory's embedded signature to be judged. Output:`n" + $r.Output)
+
+        # **The x64 signatures and certificate, which the catalogs do not
+        # vouch for** (design record 19): an x64 .sys unsigned, signed by
+        # another certificate or not a PE image, and an xhci98-test.cer that
+        # is missing, another certificate's or not one DER certificate, each
+        # refused before anything is archived - on the catalog-complete tree
+        # above, the catalogs made again over the changed files so that only
+        # the signature or the certificate is wrong.
+        Write-Step "-UploadSetOnly refuses an x64 directory whose embedded signatures or certificate are wrong"
+        $otherCert = New-SelfTestCert -Subject "CN=xhci98 packager self-test other signer"
+        foreach ($bad in @(
+            @{ Why = "an unsigned xhci98.sys"; Do = { param($d) [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98.sys"), (Get-SelfTestUnsignedPe)) }; Says = "carries no embedded signature" },
+            @{ Why = "an xhci98.sys signed by another certificate"; Do = { param($d) New-SelfTestSignedPe -Path (Join-Path $d "xhci98.sys") -Cert $otherCert }; Says = "not by the project test certificate" },
+            @{ Why = "an xhci98.sys that is not a PE image"; Do = { param($d) [System.IO.File]::WriteAllText((Join-Path $d "xhci98.sys"), "stand-in") }; Says = "its signature cannot be read" },
+            @{ Why = "no xhci98-test.cer"; Do = { param($d) Remove-Item -LiteralPath (Join-Path $d "xhci98-test.cer") }; Says = "there is no xhci98-test.cer" },
+            @{ Why = "another certificate's xhci98-test.cer"; Do = { param($d) [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98-test.cer"), $otherCert.RawData) }; Says = "not the project test certificate" },
+            @{ Why = "a PEM xhci98-test.cer"; Do = { param($d) [System.IO.File]::WriteAllText((Join-Path $d "xhci98-test.cer"), "-----BEGIN CERTIFICATE-----`r`n" + [Convert]::ToBase64String((Get-SelfTestCatalogCert).RawData) + "`r`n-----END CERTIFICATE-----`r`n") }; Says = "not a DER-encoded certificate" },
+            @{ Why = "an xhci98-test.cer with bytes after the certificate"; Do = { param($d) [System.IO.File]::WriteAllBytes((Join-Path $d "xhci98-test.cer"), [byte[]]((Get-SelfTestCatalogCert).RawData + @(0x00))) }; Says = "does not carry the certificate design record 19 prescribes" })) {
+            $badRel = Join-Path $script:work ("releases-4dir-bad-" + [Guid]::NewGuid().ToString("N"))
+            Copy-Item -LiteralPath $relRoot4 -Destination $badRel -Recurse
+            $badX64 = Join-Path (Join-Path $badRel $relVersion) "release-x64"
+            & $bad.Do $badX64
+            Add-SelfTestCatalogs -Dir $badX64 -NoSign
+            $badUp = Join-Path $script:work ("upload-4dir-bad-" + [Guid]::NewGuid().ToString("N"))
+            Ensure-Directory $badUp
+            $r = Invoke-Releaser -SelfTest (@("-UploadSetOnly", "-Version", $relVersion, "-ReleasesDir", $badRel,
+                                              "-PackageRoot", $noOut, "-UploadDir", $badUp) + $st4)
+            Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape($bad.Says)) ("-UploadSetOnly took an x64 directory with $($bad.Why):`n" + $r.Output)
+            Assert-True (-not (Test-Path -LiteralPath (Join-Path $badUp ("xhci98-" + $relVersion + ".zip")))) "an upload archive was written around an x64 directory with $($bad.Why)."
+        }
 
         # --- the connection manager's filter INF per architecture (3.1.0.0) ---
         #
@@ -3786,7 +3989,7 @@ try {
         # downstream re-derived it the same wrong way and agreed. The run
         # exited 0 with files at paths like
         # release\Data\Local\Temp\...\usbd98.sys. -UploadSetOnly no longer
-        # reads the package at all (F15, above), so what this case still holds
+        # reads the package at all (the no-out\ case above), so what this case still holds
         # is narrower: a relative -PackageRoot is resolved against the caller's
         # location by Resolve-DirectoryArgument, as every directory argument is,
         # and the asset it produces is the same complete one as the absolute
@@ -3840,12 +4043,12 @@ try {
         # **No longer drivable from here.** The two cases that held this rule
         # ran -UploadSetOnly against a package with a stray file and against one
         # missing a declared file; since the Phase 20 fix pass that mode does
-        # not read the package (F15), so both would exit 0 for the wrong reason.
+        # not read the package (task 20.1), so both would exit 0 for the wrong reason.
         # The rule itself stands in Assert-PackageMatchesDeclaredMedia, which the
         # ordinary cut still applies to each package before the publish swap,
         # and that path needs a build this suite does not have - the same limit
         # the structural check below states for the media-root refusal. What
-        # replaced the coverage is narrower and is asserted in the F15 case
+        # replaced the coverage is narrower and is asserted in the no-out\ case
         # above: the asset holds exactly the published tree, and nothing under
         # the package root is read or created.
         #
@@ -3930,11 +4133,11 @@ try {
             # published tree, which is the branch nothing exercised.
             @{ Why = "around"; UploadDir = (Split-Path -Parent $relRoot);
                Releases = (Join-Path (Join-Path $script:work "wrap") ("upload-" + $relVersion + "\releases")) },
-            # roadmap Phase 20, F4: the guard compared with the version being
+            # roadmap task 20.1: the guard compared with the version being
             # cut alone, so an -UploadDir under an OLDER cut was accepted and
             # would have written `upload-<v>\` and the zip into a written-once
             # directory .gitignore does not cover. The older cut staged for the
-            # F15 case above is the destination here.
+            # older-version refusal above is the destination here.
             @{ Why = "inside an older cut"; UploadDir = $olderRoot },
             # ...and the releases root itself, whose `upload-<v>\` and zip
             # would be siblings of every cut.
@@ -3959,7 +4162,7 @@ try {
         foreach ($c in $containment) {
             $useReleases = if ($c.Why -eq "around") { $wrapReleases } else { $relRoot }
             # What must be untouched: the whole releases tree, not only the
-            # version being assembled - the older cut is what F4 would have
+            # version being assembled - the older cut is what the old guard would have
             # written into.
             $useRoot = if ($c.Why -eq "around") { Join-Path $wrapReleases $relVersion } else { $relRoot }
             $before = @{}
@@ -4311,7 +4514,7 @@ try {
 
     # --- the readme template may not carry the two claims 1.0.1.0 shipped ----
     #
-    # roadmap Phase 20, F7. The rendered readme.txt is byte-identical to the
+    # roadmap task 20.4. The rendered readme.txt is byte-identical to the
     # template apart from its placeholders, so the template is what this reads.
     # "WINDOWS 98 ONLY" described DisableSelectiveSuspend as a Windows 98
     # setting after 1.0.1.0 had made the NT path write it too, and the shipped
@@ -4827,8 +5030,6 @@ try {
            Why  = "the publish destination is no longer the leg's own directory" },
         @{ Find = '$makePackage, "-Flavor", $f, "-Arch", $leg.PkgArch,';
            Why  = "the publisher no longer tells the packager which architecture to build, so every leg would stage the x86 package" },
-        @{ Find = 'Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."';
-           Why  = "the identical-binary refusal no longer compares within an architecture, where it is the only place a collision could happen" },
         @{ Find = '$legCopy = $declaredPublishable[$leg.Arch] + $uasPublishable + $legCmPublishable + $oemPublishable';
            Why  = "a flavour directory no longer carries exactly the INF's files, the UAS pair, the connection manager's files and txtsetup.oem" },
         @{ Find = '$legCmPublishable = @(Get-CmPublishable -Arch $leg.Arch)';

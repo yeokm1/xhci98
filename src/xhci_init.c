@@ -650,6 +650,15 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
         return XHCI_CAPS_NOT_DECODING;
     }
 
+    /*
+     * Task 47.12: the firmware's SMI enables and status as it left them for
+     * this handoff, before the ownership write can make it act - the value a
+     * reading at the MS-DOS prompt cannot stand for (design record 37 section
+     * 9). Recorded only; the masking write below takes its own fresh read.
+     */
+    XhciLogNote(ext, "handoff.legctl.before",
+                XhciRead32(ext, offset + XHCI_USBLEGCTLSTS_OFFSET));
+
     if ((dw0 & XHCI_USBLEGSUP_BIOS_OWNED) != 0 ||
         (dw0 & XHCI_USBLEGSUP_OS_OWNED) == 0) {
         /* Bits 15:0 of this DWORD are the capability ID and NEXT pointer and
@@ -703,6 +712,8 @@ static ULONG xhciBiosHandoff(PXHCI_EXTENSION ext)
     XhciWrite32(ext, offset + XHCI_USBLEGCTLSTS_OFFSET,
                 (dw1 & XHCI_USBLEGCTLSTS_RSVDP) |
                     XHCI_USBLEGCTLSTS_SMI_STATUS);
+    XhciLogNote(ext, "handoff.legctl.after",
+                XhciRead32(ext, offset + XHCI_USBLEGCTLSTS_OFFSET));
 
     XHCI_DBG_VALUE("handoff: USBLEGSUP after", XhciRead32(ext, offset));
     XHCI_DBG_VALUE("handoff: USBLEGCTLSTS after",
@@ -1204,16 +1215,21 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
 {
     const XHCI_HC_LAYOUT *layout;
     volatile ULONG *erst;
+    volatile XHCI_TRB *segment;
     ULONG status;
     ULONG segmentPA;
+    ULONG trbs;
 
     layout = &ext->Layout;
 
-    status = XhciEventRingInit(&ext->EventRing,
-                               (volatile XHCI_TRB *)
-                                   XhciCommonAt(ext, layout->EventRingOffset),
-                               XhciCommonPA(ext, layout->EventRingOffset),
-                               layout->EventRingTrbs);
+    /* Task 47.30 (design record 13 section 11.10, point 3): the segment is
+     * the HCD's to name - the larger ring's window, or the block's own
+     * page - and the ERST entry's size is the segment's, not the layout's,
+     * which keeps describing the in-block page. */
+    segment = NULL;
+    segmentPA = 0;
+    trbs = HcdSvcEventRing(ext, &segment, &segmentPA);
+    status = XhciEventRingInit(&ext->EventRing, segment, segmentPA, trbs);
     if (status != XHCI_RING_OK) {
         return status;
     }
@@ -1223,7 +1239,7 @@ static ULONG xhciProgramEventRing(PXHCI_EXTENSION ext)
     erst = XhciCommonAt(ext, layout->ErstOffset);
     erst[0] = segmentPA;                    /* Ring Segment Base Address lo */
     erst[1] = 0;                            /* hi - no 64-bit DMA           */
-    erst[2] = layout->EventRingTrbs;        /* Ring Segment Size, bits 15:0 */
+    erst[2] = ext->EventRing.Trbs;          /* Ring Segment Size, bits 15:0 */
     erst[3] = 0;                            /* RsvdZ                        */
 
     /*
@@ -1835,7 +1851,8 @@ static ULONG xhciInterruptsClaimed(PXHCI_EXTENSION ext)
  * IP is written as 0 throughout: it is RW1C, so a 0 preserves an interrupt that
  * arrived since the ISR ran instead of acknowledging one nothing has seen.
  *
- * **An ISR claim after the write also proves it** (run-24 finding 2). The DPC
+ * **An ISR claim after the write also proves it** (run-24.md, the interrupter
+ * re-arm on one CPU). The DPC
  * re-arms after its final ERDP write has released EHB, so an event already
  * waiting raises the interrupt the moment IE lands, and the ISR - at DIRQL,
  * not excluded by the controller lock, on this CPU or another - clears IE
@@ -4217,8 +4234,9 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
      * rather than a courtesy: the root hub PDO already exists and nothing
      * rescans it, so the connect the seed latched - and acknowledged in
      * hardware, which stops the controller ever mentioning it again - would
-     * otherwise be simply missing. It is the exact failure Finding 3 ends in,
-     * arrived at from the other side.
+     * otherwise be simply missing. It is the exact failure the E460's
+     * unexplained wedge ends in (run-13e.md, "two unexplained episodes,
+     * trigger unknown"), arrived at from the other side.
      *
      * From the recovery timer's callback, so an XHCI_ARM_DEFER context
      * (roadmap 24.4): the self-test's watchdog is owed, and on NT 6.x so is
@@ -4231,7 +4249,8 @@ ULONG XhciRecoverController(PXHCI_EXTENSION ext)
     ext->RecoveryCompletions++;
     /*
      * **The budget belongs to a run of failures, not to the machine's lifetime**
-     * (Finding T). Cleared here, on the success, which is what makes the cap
+     * (run-13e.md, the section on the attempt cap). Cleared here, on the
+     * success, which is what makes the cap
      * mean "this controller will not come back" instead of "this controller has
      * come back three times already, so the next fault is terminal".
      */
@@ -5259,6 +5278,17 @@ MPSTATUS XhciInitController(PXHCI_EXTENSION ext, PUSBPORT_RESOURCES resources)
         (VOID)XhciControllerUpdateFlags(ext, XHCI_EXT_FLAG_INITIALIZED, 0);
         return xhciInitFailed(ext, XHCI_INIT_STEP_ROOT_HUB, status,
                               MP_STATUS_NO_RESOURCES);
+    }
+
+    /*
+     * Task 47.12: USBLEGSUP again, after the halt, the reset and the root
+     * hub's first reading, whatever it reads - BIOS Owned released late, still
+     * held, or all ones from a window that stopped decoding (design record 37
+     * section 9). Recorded only.
+     */
+    if (ext->LegacyCapOffset != 0) {
+        XhciLogNote(ext, "handoff.legsup.later",
+                    XhciRead32(ext, ext->LegacyCapOffset));
     }
 
     /*

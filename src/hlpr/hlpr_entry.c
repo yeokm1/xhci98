@@ -6,15 +6,15 @@
  * no routine those kernels lack: not IoConnectInterruptEx and
  * IoDisconnectInterruptEx, which Vista introduced, and not
  * ExSetTimerResolution or MmGetSystemRoutineAddress, which Windows 98's
- * kernel does not export. This driver, installed by the Windows 2000, XP,
- * Vista and 7 x86 install paths of xhci98.inf alone, finds them and hands
+ * kernel does not export. This driver, installed by the 32-bit Windows 2000
+ * to 10 install paths of xhci98.inf alone, finds them and hands
  * their addresses to xhci98.sys through one internal device control on a
  * named device object (xhci_hlpr.h, channel version 2):
  *
  *   - the timer service, Windows 2000 and later: ExSetTimerResolution,
  *     imported statically - the value the loader wrote into this image's
  *     import address table from the running kernel's exports;
- *   - the MSI service, Vista and 7 only: the IoConnectInterruptEx pair,
+ *   - the MSI service, Vista and later: the IoConnectInterruptEx pair,
  *     asked of MmGetSystemRoutineAddress (the documented way to find a
  *     routine that may be absent), so the image still loads on 2000 and XP;
  *   - the routine service, channel minor 1 (record 32 section 12.8.15.15):
@@ -237,7 +237,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     UNREFERENCED_PARAMETER(RegistryPath);
 #endif
 
-    /* Step 2, the MSI service, Vista and 7 only: the pair kept only when
+    /* Step 2, the MSI service, Vista and later: the pair kept only when
      * both are found and differ. Below NT 6 the call is not made. */
     if (IoIsWdmVersionAvailable(6, 0)) {
         RtlInitUnicodeString(&name, L"IoConnectInterruptEx");

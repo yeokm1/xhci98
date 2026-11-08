@@ -163,7 +163,8 @@ static ULONG hcdCommandArm(PHCD_CONTROLLER hc)
 }
 
 /*
- * Task 36.4 (issue 12, Finding 1): the engine answered XHCI_CMD_BUSY, so an
+ * Task 36.4 (issue 12, the boot-time no-slot refusal): the engine answered
+ * XHCI_CMD_BUSY, so an
  * earlier command is outstanding or an abort is in progress - the start's
  * asynchronous No Op, whose completion on the E7250 came with no interrupt
  * and which the backstop cannot drain while this thread waits here. A drain
@@ -624,8 +625,8 @@ static ULONG hcdEp0State(PHCD_CONTROLLER hc, PHCD_USB_DEVICE dev)
  * software dequeue - the next TD's head, or the enqueue position -
  * mandatory for a control endpoint after a reset (4.6.8), and the doorbell
  * again if transfers are waiting. A device clears a control endpoint's
- * stall itself at the next SETUP, so no CLEAR_FEATURE is owed
- * (.claude\batch-c-endpoint-steps.md, from the miniport). Returns 0 when a
+ * stall itself at the next SETUP, so no CLEAR_FEATURE is owed (USB 2.0
+ * section 8.5.3.4; xhci_pipe.c, XhciPipeResetSteps). Returns 0 when a
  * command failed (EP0 then stays paused and the controller reset is
  * requested) or EP0 is Disabled. Thread only, powered.
  */
@@ -3019,7 +3020,7 @@ static ULONG hcdPerform(PHCD_CONTROLLER hc, PHCD_PORT p,
             p->Device->ConfigLength = bytes;
             XHCI_DBG_VALUE("hcd: configuration descriptor, bytes", bytes);
             /* Task 34.2: the Power tab cannot show a SuperSpeed device's
-             * current above 510 mA, so XHCISNAP's log carries the exact
+             * current above 510 mA, so the snapshot's log carries the exact
              * one, after the device's ids. */
             speedClass = HcdDeviceSpeedClass(hc, p->Device);
             if (speedClass == XHCI_SPEED_SUPER &&
@@ -6403,8 +6404,9 @@ VOID HcdEnumDetach(PHCD_CONTROLLER hc)
         return;
     }
     HcdThreadWake(hc);
-    (VOID)KeWaitForSingleObject(&hc->EnumDetachDone, Executive, KernelMode,
-                                FALSE, NULL);
+    /* Satisfied, not merely returned: the caller releases the PDOs the
+     * thread may still be listing (HcdWaitEvent). */
+    (VOID)HcdWaitEvent(&hc->EnumDetachDone, 0);
 }
 
 static ULONG hcdSettleAskLocked(PHCD_CONTROLLER hc);

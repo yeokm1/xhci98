@@ -12,8 +12,10 @@ roadmap-usb4 task 42-A.30). It is built from this source by xhci98's gated build
 (`scripts\build-driver.cmd` in the xhci98 tree), carries the xhci98 package's version and
 date (`src\stor98ver.h` takes them from xhci98's `src\xhci_version.h`; the INFs'
 `DriverVer` is held to the same by xhci98's `scripts\inf-gate\check-stor98-inf.ps1`), and
-is published in the xhci98 release's `release-x86\` and `release-x64\` directories, its x64
-`stor98.sys` signed with the other x64 drivers by xhci98's key. `0.4.0.0` was the last
+is published in the xhci98 release: since xhci98 3.4.0.0 in its family folders
+`98-me\stor98\`, `nt-x86\stor98\` and `nt-x64\stor98\` (up to 3.3.0.0 in its `release-x86\`
+and `release-x64\` directories), its x64 `stor98.sys` signed with the other x64 drivers by
+xhci98's key. `0.4.0.0` was the last
 release made here, so the next version is `3.1.0.0`, and an installed `0.4.0.0` is older
 than it. No new folder is added here; [history.md](history.md) keeps the release history,
 its newest entry the version xhci98 ships. The release script, the signing scripts and

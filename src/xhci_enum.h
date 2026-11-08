@@ -153,9 +153,9 @@ typedef struct _XHCI_ENUM_ACTION {
 } XHCI_ENUM_ACTION, *PXHCI_ENUM_ACTION;
 
 /* The EP0 packet size Address Device uses for a speed before the device
- * has said (section 10.2 step 7; the miniport's Finding 2 fix for Full
- * Speed), 512 at SuperSpeed (29-A.3). 0 for a speed the machine does not
- * take. */
+ * has said (section 10.2 step 7; for Full Speed the miniport's fix for the
+ * two Creative units that did not enumerate, run-13e.md), 512 at SuperSpeed
+ * (29-A.3). 0 for a speed the machine does not take. */
 ULONG XhciEnumInitialMps0(ULONG speed);
 
 /* The bcdUSB from which a device at High or Full Speed is asked for its
@@ -515,7 +515,8 @@ ULONG XhciEnumNoteEnd(ULONG port, ULONG state, ULONG cause, ULONG retries);
 ULONG XhciEnumNoteQuiet(ULONG port);
 
 /*
- * Task 36.4 (issue 12, Finding 1): a bus command the engine answers
+ * Task 36.4 (issue 12, a device present at boot failing "no slot"): a bus
+ * command the engine answers
  * XHCI_CMD_BUSY is not refused at once. An earlier command - the start's No
  * Op among them - may have completed with its event not yet drained, and on
  * a line that delivers nothing nothing else will drain it. The bus asks for

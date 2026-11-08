@@ -89,6 +89,7 @@ static const UCHAR compCfg[110] = {
 #define SS  XHCI_XPORT_F_SUPERSPEED
 #define STR XHCI_XPORT_F_HC_STREAMS
 #define FRC XHCI_XPORT_F_FORCE_BOT
+#define OWN XHCI_XPORT_F_BOT_OWN_ID
 
 static const char hwDualBoth[] =
     "USB\\VID_174C&PID_5106&REV_0210\0USB\\VID_174C&PID_5106\0\0";
@@ -472,9 +473,78 @@ static void test_malformed(void)
              XHCI_XPORT_BAD_PARAM, "nowhere to say the size");
 }
 
+/* UASBOT.1: OwnId follows the Bulk-Only choice under the flag and nothing
+ * else - every configuration under every combination of the four inputs,
+ * and the other fields exactly as without the flag. */
+static void test_own_id(void)
+{
+    static const struct {
+        const UCHAR *Cfg;
+        ULONG Len;
+        ULONG Iface;
+    } cfgs[] = {
+        { dualCfg, sizeof(dualCfg), 0 },
+        { uasCfg, sizeof(uasCfg), 0 },
+        { revCfg, sizeof(revCfg), 0 },
+        { botCfg, sizeof(botCfg), 0 },
+        { compCfg, sizeof(compCfg), 0 },
+        { compCfg, sizeof(compCfg), 1 },
+        { compCfg, sizeof(compCfg), 2 }
+    };
+    XHCI_XPORT off;
+    XHCI_XPORT on;
+    ULONG c;
+    ULONG f;
+    ULONG bots;
+    ULONG ownSeen;
+
+    bots = 0;
+    ownSeen = 0;
+    for (c = 0; c < sizeof(cfgs) / sizeof(cfgs[0]); c++) {
+        for (f = 0; f < 8; f++) {
+            choose(cfgs[c].Cfg, cfgs[c].Len, cfgs[c].Iface, f, &off);
+            choose(cfgs[c].Cfg, cfgs[c].Len, cfgs[c].Iface, f | OWN, &on);
+            CHECK_EQ(off.OwnId, 0, "own id: never without the flag");
+            CHECK_EQ(on.OwnId, on.Transport == XHCI_XPORT_BOT ? 1UL : 0UL,
+                     "own id: Bulk-Only and the flag, nothing else");
+            on.OwnId = 0;
+            CHECK(memcmp(&on, &off, sizeof(on)) == 0,
+                  "own id: the flag changes nothing else");
+            if (off.Transport == XHCI_XPORT_BOT) {
+                bots++;
+            }
+            if (on.Transport == XHCI_XPORT_BOT) {
+                ownSeen++;
+            }
+        }
+    }
+    /* The dual interfaces alone reach Bulk-Only (the dual device and the
+     * composite's interface 1): forced (four flag sets) and SuperSpeed
+     * without streams unforced (one), five each. */
+    CHECK_EQ(bots, 10, "own id: ten Bulk-Only choices among them");
+    CHECK_EQ(ownSeen, 10, "own id: each with the flag too");
+
+    choose(dualCfg, sizeof(dualCfg), 0, SS | OWN, &on);
+    CHECK_EQ(on.Why, XHCI_XPORT_WHY_BOT_NO_STREAMS, "own id: why 5");
+    CHECK_EQ(on.OwnId, 1, "own id: why 5 sets it");
+    choose(dualCfg, sizeof(dualCfg), 0, SS | STR | FRC | OWN, &on);
+    CHECK_EQ(on.Why, XHCI_XPORT_WHY_BOT_FORCED, "own id: why 4");
+    CHECK_EQ(on.OwnId, 1, "own id: why 4 on a streaming controller too");
+    choose(dualCfg, sizeof(dualCfg), 0, SS | STR | OWN, &on);
+    CHECK_EQ(on.Transport, XHCI_XPORT_UAS, "own id: the UAS form");
+    CHECK_EQ(on.OwnId, 0, "own id: the UAS form keeps its id");
+    choose(uasCfg, sizeof(uasCfg), 0, SS | OWN, &on);
+    CHECK_EQ(on.Transport, XHCI_XPORT_REFUSED, "own id: refused");
+    CHECK_EQ(on.OwnId, 0, "own id: the refused form keeps its id");
+    choose(botCfg, sizeof(botCfg), 0, SS | FRC | OWN, &on);
+    CHECK_EQ(on.Transport, XHCI_XPORT_NONE, "own id: Bulk-Only alone");
+    CHECK_EQ(on.OwnId, 0, "own id: a Bulk-Only-only stick keeps its id");
+}
+
 int main(void)
 {
     test_dual();
+    test_own_id();
     test_uas_only();
     test_reversed();
     test_untouched();

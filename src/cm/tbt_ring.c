@@ -1267,13 +1267,18 @@ static VOID tbtCtlHotPlug(PTBT_CTL ctl, const TBT_FRAME *f)
     e.Unplug = (BOOLEAN)((f->Dw[2] & TBT_HOTPLUG_UPG) != 0);
     tbtCtlHpAck(ctl, &e);
 
-    /* A retransmitted copy of a queued event is dropped (u4hi.c). */
-    for (k = 0; k < ctl->HpCount; k++) {
-        q = &ctl->HotPlug[(ctl->HpHead + k) % TBT_CTL_HP_QUEUE];
-        if (TbtRouteEqual(&q->Route, &e.Route) && q->Adapter == e.Adapter &&
-            q->Unplug == e.Unplug) {
-            ctl->Counters.HotPlugDuplicates++;
-            return;
+    /* A retransmitted copy of a queued event is dropped (u4hi.c): the
+     * copy of the latest queued event of this route and adapter, newest
+     * first. An older one that matches is a new event - a plug after a
+     * plug and an unplug - and is queued. */
+    for (k = ctl->HpCount; k != 0; k--) {
+        q = &ctl->HotPlug[(ctl->HpHead + k - 1) % TBT_CTL_HP_QUEUE];
+        if (TbtRouteEqual(&q->Route, &e.Route) && q->Adapter == e.Adapter) {
+            if (q->Unplug == e.Unplug) {
+                ctl->Counters.HotPlugDuplicates++;
+                return;
+            }
+            break;
         }
     }
     if (e.Unplug) {

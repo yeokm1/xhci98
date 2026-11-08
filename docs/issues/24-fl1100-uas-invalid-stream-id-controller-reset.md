@@ -86,8 +86,8 @@ treated as having no streams, and this disk falls back to Bulk-Only.
 ## Sources
 
 - The user's snapshot `B041343A` (`.TXT`, `.BIN`, `.DEV`, `.PSC`,
-  `xhcitr-report.txt`) and a screenshot, in the owner's capture folder
+  `xhcitr-report.txt`) and a screenshot, in the owner's bench folder
   (git-ignored, 2026-11-05).
-- Codex's reviews of the three commits (the second and third found a
-  Reset Endpoint retry that skipped the other streams' repair, and a
-  second fault that still reset the controller; both fixed).
+- The three commits were reviewed and revised: the review found a Reset
+  Endpoint retry that skipped the other streams' repair, and a second
+  fault that still reset the controller; both fixed.

@@ -101,7 +101,8 @@
 /* Task 36.4: milliseconds after a start for which the ISR's drains and the
  * backstop's are held back, so the No Op self-test's completion stands
  * undrained and the command engine busy into the first enumeration, as the
- * E7250's lost interrupt left it (issue 12, Finding 1), on a line that
+ * E7250's lost interrupt left it (issue 12, the boot-time no-slot
+ * refusal), on a line that
  * works. Read at each start, held to HCD_QEMU_START_HOLD_MAX: a nominal
  * margin inside the No Op's own watchdog (XHCI_COMMAND_TIMEOUT_MS, 5000),
  * not a guarantee - the watchdog runs from the No Op's submit, the hold
@@ -341,6 +342,17 @@ ULONG HcdInjEpState(PHCD_CONTROLLER hc, ULONG slot, ULONG dci, ULONG state)
     KIRQL oldIrql;
     ULONG answer;
 
+    if (hc->InjStopRaceReads != 0) {
+        /* Issue 26: fault 1A's one Running read after its Stop. */
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        if (hc->InjStopRaceReads != 0 && hc->InjStopRaceSlot == slot &&
+            hc->InjStopRaceDci == dci) {
+            hc->InjStopRaceReads = 0;
+            KeReleaseSpinLock(&hc->InjLock, oldIrql);
+            return XHCI_EP_STATE_RUNNING;
+        }
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
+    }
     if (hc->InjEp.Slot == 0) {
         return state;
     }
@@ -458,6 +470,10 @@ static VOID hcdInjClear(PHCD_CONTROLLER hc)
     hc->InjClearHalt = 0;
     hc->InjSetInterface = 0;
     hc->InjSelectConfig = 0;
+    KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+    hc->InjStopRace = 0;
+    hc->InjStopRaceReads = 0;
+    KeReleaseSpinLock(&hc->InjLock, oldIrql);
 }
 
 /*
@@ -1023,6 +1039,7 @@ static ULONG hcdInjRetrySurvives(PHCD_CONTROLLER hc, ULONG slot, ULONG dci)
 ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
                     PULONG code)
 {
+    PHCD_USB_DEVICE dev;
     KIRQL oldIrql;
     ULONG verdict;
     ULONG answer;
@@ -1032,7 +1049,47 @@ ULONG HcdInjCommand(PHCD_CONTROLLER hc, const XHCI_TRB *trb, PULONG control,
     ULONG survives;
     ULONG type;
     ULONG ended;
+    ULONG slot;
+    ULONG dci;
+    ULONG race;
 
+    /* Issue 26: fault 1A, before the endpoint faults' own pass. The Stop
+     * is sent for real, so the endpoint is truly Stopped; the driver is
+     * told Context State Error, and its next read of the context is told
+     * Running. */
+    if (!hc->InjOwnCmd && hc->InjStopRace != 0 &&
+        XHCI_TRB_GET_TYPE(trb->Control) == XHCI_TRB_TYPE_STOP_EP) {
+        slot = XHCI_TRB_GET_SLOT_ID(trb->Control);
+        dci = XHCI_TRB_GET_EP_ID(trb->Control);
+        race = 0;
+        XhciControllerLockAcquire(&hc->Hc, &oldIrql);
+        dev = (slot >= 1 && slot <= XHCI_MAX_SLOTS) ? hc->SlotDevice[slot]
+                                                    : NULL;
+        if (dev != NULL && !dev->Gone && dci >= 2 && dci < 32 &&
+            dev->Pipes[dci] != NULL && dev->Pipes[dci]->Streams != NULL) {
+            race = 1;
+        }
+        XhciControllerLockRelease(&hc->Hc, oldIrql);
+        if (race) {
+            answer = hcdInjSend(hc, trb, control);
+            if (answer != XHCI_CC_SUCCESS) {
+                /* Not proven Stopped: the real outcome, no race. */
+                *code = answer;
+                return 1;
+            }
+            KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+            if (hc->InjStopRace != 0) {
+                hc->InjStopRace--;
+            }
+            hc->InjStopRaceSlot = slot;
+            hc->InjStopRaceDci = dci;
+            hc->InjStopRaceReads = 1;
+            KeReleaseSpinLock(&hc->InjLock, oldIrql);
+            XhciLogNote(&hc->Hc, "qemu.inj.stoprace", (slot << 8) | dci);
+            *code = XHCI_CC_CONTEXT_STATE_ERROR;
+            return 1;
+        }
+    }
     if (hc->InjOwnCmd || hc->InjEp.Slot == 0) {
         return 0;
     }
@@ -2091,6 +2148,12 @@ static VOID hcdInjFire(PHCD_CONTROLLER hc, ULONG value)
         } else {
             done = 0;
         }
+        break;
+    case XHCI_INJ_STOP_RACE:
+        /* Issue 26: arg Stops (0 one, 255 held to 255). */
+        KeAcquireSpinLock(&hc->InjLock, &oldIrql);
+        hc->InjStopRace = (arg == 0) ? 1UL : arg;
+        KeReleaseSpinLock(&hc->InjLock, oldIrql);
         break;
     case XHCI_INJ_SELECT_CONFIG:
         /* arg 0/1 refused at step 3 / the rollback, 2/3 no completion. */

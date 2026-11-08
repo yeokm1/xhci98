@@ -113,8 +113,8 @@ static void test_text(void)
 }
 
 /*
- * NT finds a DriverParameter key anywhere in the string (lifecycle.c,
- * LcFind; platform.c and cmlinknt.c the same way), so no key may occur
+ * NT finds a DriverParameter key anywhere in the string (DpkFind, which
+ * lifecycle.c, platform.c and cmlinknt.c all use), so no key may occur
  * inside another. The keys come from the header the parsers use
  * (src/dpkeys.h), not from a copy of their list.
  */
@@ -139,6 +139,22 @@ static void test_keys(void)
     check((int)ok, "no DriverParameter key occurs inside another");
 }
 
+/* DpkFind, the one finder of every parser (src/dpkeys.h). */
+static void test_find(void)
+{
+    const char *p;
+
+    printf("DpkFind\n");
+    check(DpkFind(NULL, DPK_DUMP) == NULL, "no string: not found");
+    check(DpkFind("", DPK_DUMP) == NULL, "an empty string: not found");
+    check(DpkFind("dump=1;", DPK_DUMP) != NULL, "dump=1; found (2000 and XP x64 pass exactly that)");
+    check(DpkFind("x;DUMP=1;", DPK_DUMP) != NULL, "DUMP=1 found: case-insensitive, as every parser");
+    check(DpkFind("dump=0;", DPK_DUMP) == NULL, "dump=0 is not dump=1");
+    check(DpkFind("dump=", DPK_DUMP) == NULL, "a key cut short is not found");
+    p = DpkFind("storGoneMs=7000;", DPK_GONE);
+    check(p != NULL && strcmp(p, "7000;") == 0, "the text after the key is returned");
+}
+
 int main(void)
 {
     test_apply(2048, "9x");
@@ -146,6 +162,7 @@ int main(void)
     test_apply(256, "NT");
     test_text();
     test_keys();
+    test_find();
     printf("%s: %d failure(s)\n", failures ? "FAILED" : "passed", failures);
     return failures;
 }

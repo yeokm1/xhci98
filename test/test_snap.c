@@ -29,25 +29,45 @@ static void test_header(void)
 {
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_VERSION_AT), 1,
              "version 1");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3168,
-             "a 792-word header (45.40 appended 163; 35-T.8 twelve, "
-             "36.3 28, 36.21 154, 36.9 two, 36.24 and 36.25 33, 36.38 69, 44.35 323)");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_BYTES), 3716,
+             "a 929-word header (issue 26 appended 69; 47.30 68; 45.40 163; "
+             "35-T.8 "
+             "twelve, 36.3 28, 36.21 154, 36.9 two, 36.24 and 36.25 33, "
+             "36.38 69, 44.35 323)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS), 18,
              "the E460's eighteen root ports");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORT_BYTES), 80,
              "a twenty-word record (45.40 appended four)");
-    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3168,
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_PORTS_AT), 3716,
              "records right after the header");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS), 264,
              "the whole counter block (46.6's held line: 258 to 263)");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_COUNTERS_AT),
-             3168 + 18 * 80, "counters after the last record");
+             3716 + 18 * 80, "counters after the last record");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS), 32,
              "45.40: 32 places behind hubs");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_WORDS), 5,
              "of five words");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_FIRST), 632,
-             "the first at word 632, ending the header");
+             "the first at word 632");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_ISOP_RECORDS), 4,
+             "47.30: four isochronous records");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_ISOP_WORDS), 16,
+             "of sixteen words");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_ISOP_FIRST), 796,
+             "the first at word 796");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UFAIL_RECORDS), 2,
+             "issue 26: a failure record per class driver record");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UFAIL_WORDS), 33,
+             "of thirty-three words: a count and eight entries of four");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UFAIL_FIRST), 863,
+             "the first at word 863, ending the header");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_UFAIL_AT), 0,
+             "a failure record is a reading, the door's");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_EVT_TRBS), 0,
+             "the event ring's count is a reading, the door's");
+    CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_ISOP_AT), 0,
+             "an isochronous record is a reading, the door's");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_NOTE_BUDGET),
              XHCI_ENUM_NOTE_BUDGET, "the notes' budget");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_HEAD_WORDS), 0,
@@ -66,8 +86,8 @@ static void test_header(void)
              "selective suspend's block at word 114");
     CHECK_EQ(XHCI_FIELD_OFFSET(XHCIHC_COUNTERS, SuspNotesSuppressed) / 4, 141,
              "selective suspend's last word at 141");
-    CHECK_EQ(XhciSnapHcdWords(18), 792 + 18 * 20 + 264, "the E460's image");
-    CHECK_EQ(XhciSnapHcdWords(0), 792 + 264,
+    CHECK_EQ(XhciSnapHcdWords(18), 929 + 18 * 20 + 264, "the E460's image");
+    CHECK_EQ(XhciSnapHcdWords(0), 929 + 264,
              "no ports: a header and the counters");
     CHECK_EQ(XhciSnapHcdWords(1000), XhciSnapHcdWords(XHCI_MAX_ROOT_PORTS),
              "ports held to the root port maximum");
@@ -508,7 +528,12 @@ static void test_msi_words(void)
     CHECK_EQ(XHCI_MSI_OUT_UNSUPPORTED, 9, "outcomes");
     CHECK_EQ(XHCI_MSI_OUT_REPLACED, 10, "outcomes");
     CHECK_EQ(XHCI_MSI_OUT_NO_MEMORY, 11, "outcomes");
-    CHECK_EQ(XHCI_MSI_OUT_REPLACED_MESSAGE, 12, "outcomes, last");
+    CHECK_EQ(XHCI_MSI_OUT_REPLACED_MESSAGE, 12, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_NO_INTR_ADDED, 13, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_GSI_ADDED, 14, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_GSI_ONLY, 15, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_LINE_REMOVED, 16, "outcomes");
+    CHECK_EQ(XHCI_MSI_OUT_STRIP_FAILED, 17, "outcomes, last");
 }
 
 /* 36.22: XhciMaxTransferKB as each start takes it. */
@@ -909,8 +934,25 @@ static void test_xport_words(void)
     CHECK_EQ(XHCI_SNAPSHOT_HCD_XPORT_AT + 32 * 10,
              XHCI_SNAPSHOT_HCD_IDPLACE_RECORDS,
              "the records end at 45.40's places");
-    CHECK_EQ(XHCI_SNAPSHOT_HCD_IDPLACE_AT + 32 * 5, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
-             "45.40's places end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_IDPLACE_AT + 32 * 5,
+             XHCI_SNAPSHOT_HCD_ISOP_RECORDS,
+             "45.40's places end at 47.30's block");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_ISOP_RECORDS, 792, "47.30's block at 792");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_EVT_TRBS, 795, "the event ring's count at 795");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_ISOP_AT + 4 * 16,
+             XHCI_SNAPSHOT_HCD_UFAIL_RECORDS,
+             "47.30's records end at issue 26's block");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_RECORDS, 860, "issue 26's block at 860");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_AT + 2 * 33, XHCI_SNAPSHOT_HCD_HEAD_WORDS,
+             "issue 26's records end the header");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_UFAIL_RECORD_WORDS,
+             1 + XHCI98_FAIL_RECORDS * XHCI98_FAIL_WORDS,
+             "a count and the class driver's ring, word for word");
+    CHECK_EQ(XHCI98_FAIL_COUNT + 1, XHCI98_FAIL_AT,
+             "the ring right after the count, as the door copies it");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_IO_SLOTDCI, 0, "slot and DCI first");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_IO_GAPMAX, 8, "the longest gap at 8");
+    CHECK_EQ(XHCI_SNAPSHOT_HCD_IO_DRYAT, 15, "the last dry time last");
     CHECK_EQ(XhciSnapHcdHead(18, XHCI_SNAPSHOT_HCD_IDPLACE_AT), 0,
              "a place is a reading, the door's");
     CHECK_EQ(XHCI_SNAPSHOT_HCD_X_SLOT, 0, "slot first");
@@ -952,9 +994,151 @@ static void test_ssusp_words(void)
           "appended after the delivery words");
 }
 
+/* Task 47.30 (design record 13 section 11.10, Part B): the stream
+ * timing's pure half. */
+static XHCI_XSTAT_STAMP iso_st(ULONG lo, ULONG hi, ULONG cpu)
+{
+    XHCI_XSTAT_STAMP s;
+
+    s.Lo = lo;
+    s.Hi = hi;
+    s.Cpu = cpu;
+    return s;
+}
+
+static void test_iso_timing(void)
+{
+    XHCI_ISO_TIMING t;
+    XHCI_XSTAT_STAMP a;
+    XHCI_XSTAT_STAMP b;
+    XHCI_XSTAT_STAMP none;
+    ULONG n;
+    PUCHAR p;
+    ULONG i;
+
+    none = iso_st(0, 0, 0);
+    a = iso_st(100, 0, 1);
+    b = iso_st(350, 0, 1);
+    n = 7;
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_OK, "span ok");
+    CHECK_EQ(n, 250, "250 counts");
+    b = iso_st(50, 1, 1);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_OK,
+             "a borrow from the high half");
+    CHECK_EQ(n, 0xFFFFFFFFUL - 100 + 51, "the borrowed difference");
+    b = iso_st(200, 3, 1);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_OK,
+             "a long stall measured, not discarded");
+    CHECK_EQ(n, 0xFFFFFFFFUL, "saturated");
+    b = iso_st(0x80000064UL, 0, 1);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_OK,
+             "above XHCI_XSTAT_INTERVAL_MAX still measured");
+    CHECK_EQ(n, 0x80000000UL, "its counts");
+    b = iso_st(350, 0, 2);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_CROSSED,
+             "two processors");
+    b = iso_st(50, 0, 1);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_BACKWARD,
+             "an end before its start");
+    b = iso_st(50, 0, 1);
+    a = iso_st(100, 1, 1);
+    CHECK_EQ(XhciXstatSpan(&a, &b, &n), XHCI_XSTAT_SPAN_BACKWARD,
+             "a high half before");
+    CHECK_EQ(XhciXstatSpan(&none, &b, &n), XHCI_XSTAT_SPAN_NONE,
+             "an unstamped start");
+
+    CHECK_EQ(XhciXstatSysUnits(0x00000400UL, 0), 1, "1,024 x 100 ns");
+    CHECK_EQ(XhciXstatSysUnits(0xFFFFFC00UL, 0x01DB1234UL),
+             ((0x01DB1234UL << 22) | 0x003FFFFFUL),
+             "the high half's low ten bits above");
+    /* 0 is the `at` notes' "no sample": a time that lands on it is moved
+     * one unit on, so a stamped GapAt or DryAt is never 0. */
+    CHECK_EQ(XhciXstatSysUnits(0, 0), 1, "a time of 0 reads 1");
+    CHECK_EQ(XhciXstatSysUnits(0x000003FFUL, 0), 1, "under one unit reads 1");
+    CHECK_EQ(XhciXstatSysUnits(0, 0x00000400UL), 1,
+             "a wrap onto 0 reads 1");
+
+    p = (PUCHAR)&t;
+    for (i = 0; i < sizeof(t); i++) {
+        p[i] = 0;
+    }
+    /* The first publication: onto an empty ring, no gap yet. */
+    a = iso_st(1000, 0, 1);
+    b = iso_st(1100, 0, 1);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 0, 0, 32), 0,
+             "no gap at the first publication");
+    CHECK_EQ(t.PubOnEmpty, 1, "onto an empty ring");
+    CHECK_EQ(t.LagMax, 100, "its wait");
+    CHECK_EQ(t.FillMax, 32, "32 TRBs after it");
+    CHECK_EQ(t.GapFlags, 0, "no gap");
+    /* No gap measured and no dry event yet: the close would note GapAt and
+     * DryAt as 0, XHCITR's "none" (the caller stamps GapAt only on a 1). */
+    CHECK_EQ(t.GapAt, 0, "no gap: GapAt stays 0");
+    CHECK_EQ(t.Dry, 0, "no dry event");
+    CHECK_EQ(t.DryAt, 0, "no dry event: DryAt stays 0");
+    /* A second, 4,000 counts later, onto a ring of 20. */
+    a = iso_st(4500, 0, 1);
+    b = iso_st(5100, 0, 1);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 1, 20, 52), 1,
+             "the first gap is the longest");
+    CHECK_EQ(t.GapMax, 4000, "4,000 counts");
+    CHECK_EQ(t.GapLag, 600, "its own request's wait");
+    CHECK_EQ(t.GapFlags, XHCI_ISOT_F_GAP | XHCI_ISOT_F_WAITED,
+             "measured, and it had waited");
+    CHECK_EQ(t.FillMin, 20, "the floor from the first non-empty one");
+    CHECK_EQ(t.Waited, 1, "one waited");
+    CHECK_EQ(t.LagMax, 600, "the longest wait");
+    /* A shorter gap, its wait across processors: not the longest. */
+    a = iso_st(5200, 0, 2);
+    b = iso_st(6000, 0, 1);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 0, 40, 72), 0,
+             "a shorter gap");
+    CHECK_EQ(t.Crossed, 1, "the wait crossed");
+    CHECK_EQ(t.FillMin, 20, "a fuller ring leaves the floor");
+    CHECK_EQ(t.FillMax, 72, "the most");
+    /* A longer gap whose wait crossed: the sample says so. */
+    a = iso_st(9000, 0, 3);
+    b = iso_st(16000, 0, 1);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 0, 8, 40), 1,
+             "a longer gap");
+    CHECK_EQ(t.GapMax, 10000, "10,000 counts");
+    CHECK_EQ(t.GapFlags, XHCI_ISOT_F_GAP | XHCI_ISOT_F_LAG_UNMEASURED,
+             "its wait not measured, it had not waited");
+    CHECK_EQ(t.GapLag, 0, "no wait kept");
+    CHECK_EQ(t.FillMin, 8, "a lower floor");
+    CHECK_EQ(XhciIsoTimingGapLagNote(&t), XHCI_ISOT_NOTE_UNMEASURED,
+             "the close note's flags");
+    /* A publication on another processor: the gap crossed, not measured. */
+    a = iso_st(16100, 0, 2);
+    b = iso_st(90000, 0, 2);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 0, 0, 32), 0,
+             "a gap across processors is never the longest");
+    CHECK_EQ(t.Crossed, 3, "counted apart, after the two waits that crossed");
+    CHECK_EQ(t.PubOnEmpty, 2, "a restart after the ring ran dry");
+    CHECK_EQ(t.Publications, 5, "five publications");
+    CHECK_EQ(t.LastPub.Cpu, 2, "the last stamp kept");
+    /* A backward gap on that processor. */
+    a = iso_st(80000, 0, 2);
+    b = iso_st(85000, 0, 2);
+    CHECK_EQ(XhciIsoTimingPublish(&t, &a, &b, 0, 10, 42), 0,
+             "a gap backward");
+    CHECK_EQ(t.Backward, 1, "counted apart");
+    /* A saturated wait in the close note. */
+    t.GapLag = 0xFFFFFFFFUL;
+    t.GapFlags = XHCI_ISOT_F_GAP | XHCI_ISOT_F_WAITED;
+    CHECK_EQ(XhciIsoTimingGapLagNote(&t),
+             XHCI_ISOT_NOTE_WAITED | XHCI_ISOT_NOTE_COUNT_MAX,
+             "held to 30 bits, and it waited");
+    XhciIsoTimingDry(&t, 0x1234UL);
+    XhciIsoTimingDry(&t, 0x5678UL);
+    CHECK_EQ(t.Dry, 2, "two dry events");
+    CHECK_EQ(t.DryAt, 0x5678UL, "the last one's time");
+}
+
 int main(void)
 {
     test_header();
+    test_iso_timing();
     test_tol_words();
     test_pirq_words();
     test_xstat_words();

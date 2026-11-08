@@ -771,19 +771,26 @@ static void check_serial(const char *text, ULONG expect, const char *what)
     }
 }
 
-static void check_instance(const char *serial, ULONG location, ULONG mi,
-                           const char *want, const char *what)
+static void check_instance_bot(const char *serial, ULONG location, ULONG mi,
+                               ULONG bot, const char *want,
+                               const char *what)
 {
     char out[160];
     ULONG used;
 
     memset(out, 'x', sizeof(out));
     used = 0;
-    CHECK_EQ(XhciFuncInstanceId(serial, location, mi, out, sizeof(out),
+    CHECK_EQ(XhciFuncInstanceId(serial, location, mi, bot, out, sizeof(out),
                                 &used),
              XHCI_FUNC_OK, what);
     CHECK_EQ(used, (ULONG)strlen(want) + 1, what);
     CHECK_EQ(strcmp(out, want), 0, what);
+}
+
+static void check_instance(const char *serial, ULONG location, ULONG mi,
+                           const char *want, const char *what)
+{
+    check_instance_bot(serial, location, mi, 0, want, what);
 }
 
 /*
@@ -976,7 +983,8 @@ static void test_serial_ids(void)
 static void test_instance_ids(void)
 {
     char longest[XHCI_SERIAL_ID_BYTES];
-    char want[XHCI_SERIAL_ID_BYTES + 3];
+    char want[XHCI_INSTANCE_ID_BYTES];
+    char big[XHCI_INSTANCE_ID_BYTES];
     char out[8];
     ULONG used;
     ULONG i;
@@ -1012,16 +1020,53 @@ static void test_instance_ids(void)
     memcpy(want + XHCI_SERIAL_ID_CHARS, "&7F", 4);
     check_instance(longest, 1, 0x7F, want, "126 characters and &7F");
 
+    /* UASBOT.1: the Bulk-Only form's marker after either form, and only
+     * when asked for; the longest id fills XHCI_INSTANCE_ID_BYTES. */
+    check_instance_bot("ASM42SIM0001", 3, XHCI_INSTANCE_NO_MI, 0,
+                       "ASM42SIM0001", "bot 0: the serial alone");
+    check_instance_bot("ASM42SIM0001", 3, XHCI_INSTANCE_NO_MI, 1,
+                       "ASM42SIM0001&BOT", "bot 1: serial and marker");
+    check_instance_bot("ABC123", 3, 3, 1, "ABC123&03&BOT",
+                       "bot 1: a function's serial form");
+    check_instance_bot(NULL, 3, XHCI_INSTANCE_NO_MI, 1, "3&BOT",
+                       "bot 1: the location form");
+    check_instance_bot(NULL, 3, 3, 1, "303&BOT",
+                       "bot 1: a function's location form");
+    check_instance_bot(NULL, (0x31UL << 8) | 2UL, XHCI_INSTANCE_NO_MI, 1,
+                       "12546&BOT", "bot 1: behind two hubs");
+    check_instance_bot("", 3, XHCI_INSTANCE_NO_MI, 1, "3&BOT",
+                       "bot 1: an empty serial is the location form");
+    check_instance_bot("x", 3, XHCI_INSTANCE_NO_MI, 0xFFFFFFFFUL, "x&BOT",
+                       "bot: any nonzero");
+    memcpy(want + XHCI_SERIAL_ID_CHARS, "&7F&BOT", 8);
+    check_instance_bot(longest, 1, 0x7F, 1, want,
+                       "126 characters, &7F and the marker");
+    CHECK_EQ(strlen(want) + 1, XHCI_INSTANCE_ID_BYTES,
+             "the longest id fills XHCI_INSTANCE_ID_BYTES");
     used = 0;
-    CHECK_EQ(XhciFuncInstanceId("ABCDEFGH", 1, XHCI_INSTANCE_NO_MI, out,
+    CHECK_EQ(XhciFuncInstanceId(longest, 1, 0x7F, 1, big,
+                                XHCI_INSTANCE_ID_BYTES, &used),
+             XHCI_FUNC_OK, "the longest id fits exactly");
+    CHECK_EQ(used, XHCI_INSTANCE_ID_BYTES, "the longest id's size");
+    CHECK_EQ(XhciFuncInstanceId(longest, 1, 0x7F, 1, big,
+                                XHCI_INSTANCE_ID_BYTES - 1, &used),
+             XHCI_FUNC_TOO_SMALL, "one byte short");
+    CHECK_EQ(used, XHCI_INSTANCE_ID_BYTES, "the size it needs, marked");
+    CHECK_EQ(XhciFuncInstanceId("ABCD", 1, XHCI_INSTANCE_NO_MI, 1, out,
+                                sizeof(out), &used),
+             XHCI_FUNC_TOO_SMALL, "nine bytes in eight, marked");
+    CHECK_EQ(used, 9, "four, the marker and the NUL");
+
+    used = 0;
+    CHECK_EQ(XhciFuncInstanceId("ABCDEFGH", 1, XHCI_INSTANCE_NO_MI, 0, out,
                                 sizeof(out), &used),
              XHCI_FUNC_TOO_SMALL, "nine bytes in eight");
     CHECK_EQ(used, 9, "the size it needs");
-    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0x100, out, sizeof(out), &used),
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0x100, 0, out, sizeof(out), &used),
              XHCI_FUNC_BAD_PARAM, "MI past 0xFF");
-    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, NULL, 4, &used),
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, 0, NULL, 4, &used),
              XHCI_FUNC_BAD_PARAM, "a capacity with no buffer");
-    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, out, sizeof(out), NULL),
+    CHECK_EQ(XhciFuncInstanceId(NULL, 1, 0, 0, out, sizeof(out), NULL),
              XHCI_FUNC_BAD_PARAM, "nowhere to say the size");
 }
 
@@ -1668,6 +1713,103 @@ static void test_firsts(void)
     CHECK_EQ(XhciFuncOwnerOf(masks, 1, 31), 0, "unsplit: owns 31 too");
 }
 
+/* Design record 13 section 10.5.2 (task 47.10): a departed PDO's START on
+ * 98 SE and ME, and what its ghost answers from its copies. */
+static void test_ghost(void)
+{
+    static const UCHAR devDesc[8] = { 0x80, 0x06, 0x00, 0x01,
+                                      0x00, 0x00, 0x12, 0x00 };
+    static const UCHAR cfgShort[8] = { 0x80, 0x06, 0x00, 0x02,
+                                       0x00, 0x00, 0x09, 0x00 };
+    static const UCHAR cfgIndex1[8] = { 0x80, 0x06, 0x01, 0x02,
+                                        0x00, 0x00, 0x09, 0x00 };
+    static const UCHAR devLang[8] = { 0x80, 0x06, 0x00, 0x01,
+                                      0x09, 0x04, 0x12, 0x00 };
+    static const UCHAR string[8] = { 0x80, 0x06, 0x02, 0x03,
+                                     0x09, 0x04, 0xFF, 0x00 };
+    static const UCHAR hidReport[8] = { 0x81, 0x06, 0x00, 0x22,
+                                        0x00, 0x00, 0x41, 0x00 };
+    static const UCHAR toIface[8] = { 0x81, 0x06, 0x00, 0x02,
+                                      0x00, 0x00, 0x09, 0x00 };
+    static const UCHAR setIdle[8] = { 0x21, 0x0A, 0x00, 0x00,
+                                      0x00, 0x00, 0x00, 0x00 };
+    static const UCHAR vendor[8] = { 0xC0, 0x06, 0x00, 0x01,
+                                     0x00, 0x00, 0x12, 0x00 };
+    static const UCHAR setDesc[8] = { 0x00, 0x07, 0x00, 0x01,
+                                      0x00, 0x00, 0x12, 0x00 };
+    static const UCHAR getStatus[8] = { 0x80, 0x00, 0x00, 0x00,
+                                        0x00, 0x00, 0x02, 0x00 };
+    ULONG nt;
+    ULONG orphan;
+    ULONG listed;
+    ULONG role;
+    ULONG removed;
+    ULONG quar;
+    ULONG want;
+
+    /* Every input: only 9x, a controller, not listed, neither role, no
+     * REMOVE and no quarantine starts a ghost. */
+    for (nt = 0; nt < 2; nt++) {
+        for (orphan = 0; orphan < 2; orphan++) {
+            for (listed = 0; listed < 2; listed++) {
+                for (role = 0; role < 2; role++) {
+                    for (removed = 0; removed < 2; removed++) {
+                        for (quar = 0; quar < 2; quar++) {
+                            want = (!nt && !orphan && !listed && !role &&
+                                    !removed && !quar) ? 1UL : 0UL;
+                            CHECK_EQ(XhciFuncGhostStart(nt, orphan, listed,
+                                                        role, removed, quar),
+                                     want, "ghost start over every input");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    CHECK_EQ(XhciFuncGhostStart(0, 0, 0, 0, 0, 0), 1,
+             "9x, departed: a ghost");
+    CHECK_EQ(XhciFuncGhostStart(1, 0, 0, 0, 0, 0), 0,
+             "NT: refused as before");
+    CHECK_EQ(XhciFuncGhostStart(0, 0, 1, 0, 0, 0), 0, "listed: a live start");
+    CHECK_EQ(XhciFuncGhostStart(0, 0, 0, 0, 0, 1), 0,
+             "quarantined: never started again");
+
+    CHECK_EQ(XhciFuncGhostDescriptor(devDesc), XHCI_FUNC_GHOST_DEVICE,
+             "device descriptor");
+    CHECK_EQ(XhciFuncGhostDescriptor(cfgShort), XHCI_FUNC_GHOST_CONFIG,
+             "configuration descriptor, first 9 bytes");
+    CHECK_EQ(XhciFuncGhostDescriptor(cfgIndex1), XHCI_FUNC_GHOST_NONE,
+             "configuration index 1");
+    CHECK_EQ(XhciFuncGhostDescriptor(devLang), XHCI_FUNC_GHOST_NONE,
+             "a language id in wIndex");
+    CHECK_EQ(XhciFuncGhostDescriptor(string), XHCI_FUNC_GHOST_NONE,
+             "a string");
+    CHECK_EQ(XhciFuncGhostDescriptor(hidReport), XHCI_FUNC_GHOST_NONE,
+             "a HID report descriptor");
+    CHECK_EQ(XhciFuncGhostDescriptor(toIface), XHCI_FUNC_GHOST_NONE,
+             "to an interface");
+    CHECK_EQ(XhciFuncGhostDescriptor(setIdle), XHCI_FUNC_GHOST_NONE,
+             "a class request");
+    CHECK_EQ(XhciFuncGhostDescriptor(vendor), XHCI_FUNC_GHOST_NONE,
+             "a vendor request");
+    CHECK_EQ(XhciFuncGhostDescriptor(setDesc), XHCI_FUNC_GHOST_NONE,
+             "SET_DESCRIPTOR");
+    CHECK_EQ(XhciFuncGhostDescriptor(getStatus), XHCI_FUNC_GHOST_NONE,
+             "GET_STATUS");
+    CHECK_EQ(XhciFuncGhostDescriptor(NULL), XHCI_FUNC_GHOST_NONE, "NULL");
+
+    CHECK_EQ(XhciFuncGhostCopyLength(0, 18, 18), 0, "a zero-length URB");
+    CHECK_EQ(XhciFuncGhostCopyLength(64, 0, 18), 0, "wLength 0");
+    CHECK_EQ(XhciFuncGhostCopyLength(64, 18, 0), 0, "no copy");
+    CHECK_EQ(XhciFuncGhostCopyLength(18, 18, 18), 18, "all 18");
+    CHECK_EQ(XhciFuncGhostCopyLength(64, 9, 34), 9, "wLength binds");
+    CHECK_EQ(XhciFuncGhostCopyLength(9, 255, 34), 9, "the URB binds");
+    CHECK_EQ(XhciFuncGhostCopyLength(255, 255, 34), 34, "the copy binds");
+    CHECK_EQ(XhciFuncGhostCopyLength(35, 35, 34), 34, "the copy, by one");
+    CHECK_EQ(XhciFuncGhostCopyLength(0xFFFFFFFFUL, 0xFFFFUL, 0xFFFFFFFFUL),
+             0xFFFF, "wLength's top");
+}
+
 int main(void)
 {
     test_cmedia();
@@ -1692,6 +1834,7 @@ int main(void)
     test_text_picks();
     test_text();
     test_firsts();
+    test_ghost();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

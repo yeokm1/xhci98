@@ -630,49 +630,78 @@ static BOOLEAN HwIsPortFunction(IN PUCHAR PciBuffer, IN ULONG BytesRead, IN ULON
 }
 
 //
-// 9x (PLAN 3.1, "A controller already set up"): reads the command register
-// from the header HwReadNvmeFunction read and, with memory decode on, CC and
-// CSTS through that function's BAR0 (both dwords), writing nothing; before
-// HwLocateRegisters, which turns decode off to size the BAR. *ReadOk FALSE
-// when the registers could not be read (a header too short, an I/O or
-// unassigned BAR0, BAR0 above 4 GiB, no mapping). The page is mapped
-// uncached as HwFoundAdapter maps the registers (_MapPhysToLinear,
-// Q169584).
+// 9x (PLAN 3.1, "A controller already set up"): the found function's
+// command register (from the header HwReadNvmeFunction read) and CC and
+// CSTS through its BAR0, before HwLocateRegisters, which turns decode off
+// to size the BAR. With decode on nothing is written; with decode off,
+// decode is turned on for the two reads where BAR0 is shown to be this
+// devnode's, and put back (pciscan.h: PciScanFirmwareReach, then
+// PciScanReadFirmware over the config helpers, which address DevExt's bus
+// and slot: the caller sets them to the found function first). *Reach:
+// PCISCAN_REACH_*; *ReadHow: PCISCAN_READ_* (READ_NONE when not reached);
+// *TurnedOn: decode turned on for the read. The page is mapped uncached as
+// HwFoundAdapter maps the registers (_MapPhysToLinear, Q169584).
 //
-static VOID HwReadFirmwareState(IN PUCHAR PciBuffer, IN ULONG BytesRead, OUT PUSHORT Cmd,
-                                OUT PBOOLEAN ReadOk, OUT PULONG Cc, OUT PULONG Csts)
-{
-    ULONG bar0, hi = 0;
-    PUCHAR regs;
+typedef struct _HW_FW_CTX {
+    PHW_DEVICE_EXTENSION DevExt;
+    PUCHAR Regs;
+} HW_FW_CTX;
 
-    *Cmd = 0;
-    *ReadOk = FALSE;
+static int HwFwReadCmd(void *Ctx, unsigned short *Value)
+{
+    return ReadPciConfigWord(((HW_FW_CTX *)Ctx)->DevExt, PCI_COMMAND_OFFSET, (PUSHORT)Value);
+}
+
+static int HwFwWriteCmd(void *Ctx, unsigned short Value)
+{
+    return WritePciConfigWord(((HW_FW_CTX *)Ctx)->DevExt, PCI_COMMAND_OFFSET, (USHORT)Value);
+}
+
+static unsigned long HwFwReadReg(void *Ctx, unsigned long Offset)
+{
+    return ScsiPortReadRegisterUlong((PULONG)(((HW_FW_CTX *)Ctx)->Regs + Offset));
+}
+
+static VOID HwReadFirmwareState(IN PHW_DEVICE_EXTENSION DevExt, IN PUCHAR PciBuffer, IN ULONG BytesRead,
+                                IN ULONG RangeLo, IN ULONG RangeHi, IN ULONG RangeLen, OUT PUSHORT Cmd,
+                                OUT PULONG Reach, OUT PULONG ReadHow, OUT PBOOLEAN TurnedOn, OUT PULONG Cc,
+                                OUT PULONG Csts)
+{
+    HW_FW_CTX ctx;
+    PCISCAN_FW_IO io;
+    ULONG bar0, bar1;
+    int on = 0;
+
+    *Reach = PCISCAN_REACH_SHORT;
+    *ReadHow = PCISCAN_READ_NONE;
+    *TurnedOn = FALSE;
     *Cc = 0;
     *Csts = 0;
     if (BytesRead < PCI_BASE_ADDRESS_1 + 4) {
         // Decode unknown: the header did not hold the command register's
-        // neighbours; refused as unreadable.
+        // neighbours; refused as unreadable, nothing written.
         *Cmd = PCI_ENABLE_MEMORY_SPACE;
         return;
     }
     *Cmd = *(USHORT*)&PciBuffer[PCI_COMMAND_OFFSET];
-    if ((*Cmd & PCI_ENABLE_MEMORY_SPACE) == 0) {
-        return;
-    }
     bar0 = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_0];
-    if ((bar0 & 0x6) == 0x4) {
-        hi = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_1];
-    }
-    if ((bar0 & 0x1) != 0 || hi != 0 || (bar0 & 0xFFFFFFF0) == 0) {
+    bar1 = *(ULONG*)&PciBuffer[PCI_BASE_ADDRESS_1];
+    *Reach = (ULONG)PciScanFirmwareReach(BytesRead, *Cmd, bar0, bar1, RangeLo, RangeHi, RangeLen);
+    if (*Reach != PCISCAN_REACH_OK) {
         return;
     }
-    regs = (PUCHAR)_MapPhysToLinear(bar0 & 0xFFFFFFF0, PAGE_SIZE, MPL_NonCached);
-    if (regs == NULL || (ULONG)regs == 0xFFFFFFFF) {
+    ctx.DevExt = DevExt;
+    ctx.Regs = (PUCHAR)_MapPhysToLinear(bar0 & 0xFFFFFFF0, PAGE_SIZE, MPL_NonCached);
+    if (ctx.Regs == NULL || (ULONG)ctx.Regs == 0xFFFFFFFF) {
+        *Reach = PCISCAN_REACH_NO_MAP;
         return;
     }
-    *Cc = ScsiPortReadRegisterUlong((PULONG)(regs + NVME_REG_CC));
-    *Csts = ScsiPortReadRegisterUlong((PULONG)(regs + NVME_REG_CSTS));
-    *ReadOk = TRUE;
+    io.Ctx = &ctx;
+    io.ReadCmd = HwFwReadCmd;
+    io.WriteCmd = HwFwWriteCmd;
+    io.ReadReg = HwFwReadReg;
+    *ReadHow = (ULONG)PciScanReadFirmware(&io, *Cmd, Cc, Csts, &on);
+    *TurnedOn = (BOOLEAN)(on != 0);
 }
 #endif
 
@@ -696,9 +725,9 @@ ULONG HwFindAdapter(
 #ifdef NVME2K_W9X
     ULONG rangeLo = 0, rangeHi = 0;
     BOOLEAN scanned = FALSE;
-    BOOLEAN nvme, fwRead;
+    BOOLEAN nvme, fwOn;
     USHORT fwCmd;
-    ULONG fwCc, fwCsts;
+    ULONG fwCc, fwCsts, fwReach, fwHow;
     PLAT_FIND_INFO fi;
 #endif
 
@@ -825,16 +854,87 @@ ULONG HwFindAdapter(
     fi.FoundBus = busNumber;
     fi.FoundSlot = slotNumber;
     // A controller already set up by another owner (the BIOS serving it
-    // through INT 13h) is left to it, untouched: nothing has been written
-    // to this function yet (PLAN 3.1, "A controller already set up").
-    HwReadFirmwareState(pciBuffer, bytesRead, &fwCmd, &fwRead, &fwCc, &fwCsts);
+    // through INT 13h) is left to it: nothing has been written to this
+    // function yet, and the check writes only its command register, turning
+    // decode on for the read and back when it found decode off (PLAN 3.1, "A
+    // controller already set up"). The config helpers address DevExt's bus
+    // and slot.
+    DevExt->BusNumber = busNumber;
+    DevExt->SlotNumber = slotNumber;
+#ifdef STOR98_TEST_FWDECODEOFF
+    // Test only (47.9): memory decode turned off before the check, as a
+    // firmware that left its controller enabled with decode off would hand
+    // it over; the command word read right after the check (the check must
+    // have put back the decode-off word), then the word as found written
+    // back, so a drive the BIOS goes on serving keeps working. Stage 0x0B:
+    // 1 << 24 the injection took (written and read back with decode off),
+    // or 8 << 24 | the word put back when it failed (the check not run,
+    // NOT_FOUND; 16 << 24 added when the word did not go back); then the
+    // word after the check (15:0) | 2 << 24 when it equals the injected word;
+    // then 4 << 24 | the word after the restore, 16 << 24 added and the find
+    // NOT_FOUND when it did not read back as found.
+    {
+        USHORT testCmd = *(USHORT*)&pciBuffer[PCI_COMMAND_OFFSET];
+        USHORT testOff = (USHORT)(testCmd & ~PCI_ENABLE_MEMORY_SPACE);
+        USHORT testBack = 0;
+        BOOLEAN testSet = FALSE, testOk;
+
+        if (bytesRead >= PCI_BASE_ADDRESS_1 + 4 && (testCmd & PCI_ENABLE_MEMORY_SPACE) != 0) {
+            if (WritePciConfigWord(DevExt, PCI_COMMAND_OFFSET, testOff) &&
+                ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &testBack) && testBack == testOff) {
+                testSet = TRUE;
+                *(USHORT*)&pciBuffer[PCI_COMMAND_OFFSET] = testOff;
+                DBGSTAGE(STG_FIND_FWTEST, 0x01000000UL | testBack);
+            } else {
+                // A short write may still have changed the register: the
+                // word as found goes back, and the check is not run (no
+                // register read with decode perhaps off); 8 << 24.
+                testBack = 0;
+                testOk = (BOOLEAN)(WritePciConfigWord(DevExt, PCI_COMMAND_OFFSET, testCmd) &&
+                                   ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &testBack) && testBack == testCmd);
+                DBGSTAGE(STG_FIND_FWTEST, 0x08000000UL | (testOk ? 0 : 0x10000000UL) | testBack);
+                PlatFindReport(&fi);
+                DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
+                return SP_RETURN_NOT_FOUND;
+            }
+        } else {
+            DBGSTAGE(STG_FIND_FWTEST, testCmd);
+        }
+#endif
+    HwReadFirmwareState(DevExt, pciBuffer, bytesRead, rangeLo, rangeHi, fi.RangeLen, &fwCmd, &fwReach, &fwHow,
+                        &fwOn, &fwCc, &fwCsts);
+#ifdef STOR98_TEST_FWDECODEOFF
+        if (testSet) {
+            testBack = 0;
+            if (ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &testBack)) {
+                DBGSTAGE(STG_FIND_FWTEST, (testBack == fwCmd ? 0x02000000UL : 0) | testBack);
+            } else {
+                DBGSTAGE(STG_FIND_FWTEST, 0x00FF0000UL);
+            }
+            testBack = 0;
+            if (!WritePciConfigWord(DevExt, PCI_COMMAND_OFFSET, testCmd) ||
+                !ReadPciConfigWord(DevExt, PCI_COMMAND_OFFSET, &testBack) || testBack != testCmd) {
+                // Not put back: never taken (16 << 24).
+                DBGSTAGE(STG_FIND_FWTEST, 0x14000000UL | testBack);
+                PlatFindReport(&fi);
+                DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
+                return SP_RETURN_NOT_FOUND;
+            }
+            *(USHORT*)&pciBuffer[PCI_COMMAND_OFFSET] = testCmd;
+            DBGSTAGE(STG_FIND_FWTEST, 0x04000000UL | testBack);
+        }
+    }
+#endif
     fi.FwChecked = 1;
     fi.FwCmd = fwCmd;
     fi.FwCc = fwCc;
     fi.FwCsts = fwCsts;
-    fi.FwState = (ULONG)PciScanFirmwareState(fwCmd, fwRead, fwCc, fwCsts);
+    fi.FwReach = fwReach;
+    fi.FwTurnedOn = fwOn;
+    fi.FwState = (ULONG)PciScanFirmwareState((int)fwHow, fwCc, fwCsts);
     DBGSTAGE(STG_FIND_FIRMWARE, fi.FwState | ((fwCc & 0xFF) << 8) | ((fwCsts & 0xFF) << 16) |
-             ((ULONG)fwRead << 24));
+             ((ULONG)(fwHow == PCISCAN_READ_OK) << 24) | ((ULONG)fwOn << 25) |
+             ((ULONG)(fwHow == PCISCAN_READ_NOT_RESTORED) << 26) | ((fwReach & 0x7) << 27));
     if (fi.FwState != PCISCAN_FW_TAKE) {
         PlatFindReport(&fi);
         DBGSTAGE(STG_FIND_RESULT, SP_RETURN_NOT_FOUND);
@@ -906,8 +1006,8 @@ BOOLEAN HwInitialize(IN PVOID DeviceExtension)
 //
 // TRUE if ScsiDispatch answers this SRB in software, without admitting it to
 // the engine or starting any hardware work (no child, no DMA): the requests
-// the timer may replay before its hold check (lifecycle.c, EngTimer; review
-// round 3, N3). Keep in step with the switch below; anything not listed
+// the timer may replay before its hold check (lifecycle.c, EngTimer;
+// engine.c, SoftwareOnly). Keep in step with the switch below; anything not listed
 // (READ/WRITE, SYNCHRONIZE CACHE, LOG SENSE, ATA pass-through, FLUSH,
 // SHUTDOWN, IO_CONTROL) may start hardware work.
 //
@@ -921,9 +1021,7 @@ BOOLEAN ScsiCompletesInSoftware(IN PSCSI_REQUEST_BLOCK Srb)
     }
     switch (Srb->Cdb[0]) {
     case SCSIOP_TEST_UNIT_READY:
-    case SCSIOP_VERIFY6:
-    case SCSIOP_VERIFY:
-    case SCSIOP_VERIFY16:
+    case SCSIOP_VERIFY6:            // refused in software (47.22)
     case SCSIOP_START_STOP_UNIT:
     case SCSIOP_INQUIRY:
     case SCSIOP_REQUEST_SENSE:
@@ -959,12 +1057,20 @@ BOOLEAN ScsiDispatch(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb)
                     return EngSubmitReadWrite(DevExt, Srb);
 
                 case SCSIOP_TEST_UNIT_READY:
-                case SCSIOP_VERIFY6:
-                case SCSIOP_VERIFY:
-                case SCSIOP_VERIFY16:
                 case SCSIOP_START_STOP_UNIT:
                     // Accepted without NVMe work
                     return ScsiSuccess(DevExt, Srb);
+
+                case SCSIOP_VERIFY6:
+                    // A sequential-access command (SSC): for a disk an
+                    // unsupported operation code (47.22)
+                    return ScsiIllegalRequest(DevExt, Srb, SCSI_ADSENSE_ILLEGAL_COMMAND);
+
+                case SCSIOP_VERIFY:
+                case SCSIOP_VERIFY16:
+                    // Fields, range and size checked, then the medium read
+                    // (NVMe Verify or reads into the bounce pages)
+                    return ScsiHandleVerify(DevExt, Srb);
 
                 case SCSIOP_INQUIRY:
                     return ScsiHandleInquiry(DevExt, Srb);

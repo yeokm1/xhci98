@@ -2,7 +2,7 @@
 rem SPDX-License-Identifier: BSD-3-Clause
 rem build.cmd - builds cmnt.sys (Windows 2000 DDK, x86), the test-only NT
 rem link-state table stand-in, with the kits in ..\..\tools. Output: out\cmnt\.
-rem A failed build never leaves an earlier image in place (Codex round 3).
+rem A failed build never leaves an earlier image in place.
 setlocal
 for %%I in ("%~dp0..\..") do set "REPO=%%~fI"
 rem The kits root, as scripts\build.cmd finds it (STOR98_TOOLS)

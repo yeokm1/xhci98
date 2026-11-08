@@ -2,8 +2,8 @@
 # sources - WDK 7.1 build description for xhcihlpr.sys, the x86 helper
 # (design record 18, section 15 for this revision; roadmap-hcd.md tasks
 # 36.15, 36.16 and 38.3), a third binary beside xhci98.sys and
-# xhciuas.sys, installed only by the Windows 2000, XP, Vista and 7 x86
-# install paths of xhci98.inf.
+# xhciuas.sys, installed only by the 32-bit Windows 2000 to 10 install
+# paths of xhci98.inf.
 #
 # WDK 7.1, x86, Windows XP target - `setenv <WDK> fre|chk x86 WXP no_oacr` -
 # and nothing else: the x86 HCD and xhciuas.sys stay on MSVC 6 and the

@@ -120,7 +120,9 @@ NTSTATUS NTAPI DriverEntry(PDRIVER_OBJECT driver, PUNICODE_STRING path)
     driver->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = pmPass;
     driver->DriverExtension->AddDevice = pmAddDevice;
     driver->DriverUnload = pmUnload;
+#if DBG
     DbgPrint("XHCIPM: %s loaded\n", pmMarker);
+#endif
     return STATUS_SUCCESS;
 }
 
@@ -1235,8 +1237,10 @@ static NTSTATUS NTAPI pmPnp(PDEVICE_OBJECT dev, PIRP irp)
         }
         IoDetachDevice(ext->Lower);
         if (keep) {
+#if DBG
             DbgPrint("XHCIPM: REMOVE with %ld power callback(s) owed; "
                      "device object kept\n", ext->Outstanding);
+#endif
             return status;
         }
         if (ext->ReadUrb != NULL) {

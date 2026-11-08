@@ -132,7 +132,7 @@ int main(void)
     check(CmlBind(&st, BUS, SLOT) == CML_RC_BUSY && st.Entry == NULL,
           "own entry odd through every pass: generation unknown, no channel");
 
-    printf("cmlink_ut: another entry mid-update at binding (Codex round 1)\n");
+    printf("cmlink_ut: another entry mid-update at binding (bind on the own entry)\n");
     reset();
     put(1, BUS, SLOT, 2, UP);
     table.Entry[6].Sequence = 9;            /* another port's entry stuck mid-update */

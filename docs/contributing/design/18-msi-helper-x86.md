@@ -42,6 +42,33 @@ replaces one, that section says so in a line at its head. The owner
 answered its decisions the same day (section 15.13). **The code,
 2026-10-14**: section 15.14, as built; its legs are owed.
 
+**Revision 14, 2026-11-06 (roadmap-usb4 task 47.33, designed before
+code, reviewed and revised):** section 16. The requirements filter gains
+a Windows 2000, XP and XP x64 half: behind the PCI driver's one
+configuration, a copy of it without the line, so a controller no line can
+be given starts on polled delivery instead of Code 12. Nothing of the
+helper and nothing on Vista and 7 changes. **Revision 15, 2026-11-07
+(the same task, the owner's decision of 2026-11-06, designed before code,
+reviewed and revised):** section 16.1, on 64-bit XP and Server 2003 a
+configuration constrained to the I/O APIC input the chipset routes the
+xHCI's INTA to, offered between the PCI driver's own and the memory-only
+copy, behind the switch `XhciIntelNoRouteIrq`.
+**Revision 16, 2026-11-07 (the same task, the owner's decision of
+2026-11-07, designed before code, reviewed and revised):** section 16.2, the same offer on
+32-bit Windows 2000 and XP, with what each 32-bit HAL gives and what
+happens where the offer is refused.
+**Revision 17, 2026-11-07 (the same task, the owner's bench and
+decisions of that day):** section 16.3, value 1's list compiled in with
+the HP EliteBook 8570w added, and what Windows 2000 under an ACPI HAL does
+on these machines.
+**Revision 18, 2026-11-07 (the same task, the owner's decision of that
+day to design a driver fix, designed before code, reviewed and revised;
+not built until the owner chooses):** section 16.4, Windows 2000's STOP 0xA5 on the listed
+HPs: where the `_PRT` lookup happens, a list with no interrupt for those
+boards under 2000, its gate, and the alternatives.
+**Revision 19, 2026-11-07 (the owner chose option C, in 3.4.2.0):** section
+16.4's "As built".
+
 Design record 15 section 4.3 designs MSI for the HCD and fixes the seam
 this record plugs into: `hcdMsgConnect(hc, connect, disconnect)`, handed
 `IoConnectInterruptEx` and `IoDisconnectInterruptEx` by each
@@ -2057,7 +2084,9 @@ release notes say "at once" (`docs/contributing/runs/run-38.md`, evidence
 - `[XhciHlpr.AddService]` is section 7's `[XhciMsi.AddService]` renamed:
   `ServiceType` 1, `StartType` 0, `ErrorControl` 1,
   `ServiceBinary=%12%\xhcihlpr.sys`, `DisplayName=%XhciHlprSvcDesc%`
-  ("xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)").
+  ("xHCI98 helper for 32-bit Windows 2000 to 10 (xhcihlpr)" since
+  `3.4.2.0`, which the helper serves on every 32-bit NT system; "...
+  Windows 2000, XP, Vista and 7 ..." before it).
   `[XhciHlpr.CopyFiles]`: `xhcihlpr.sys,,xhcihlpr.tmp`.
 - Still never in the root hub's, the hubs' or the composite parent's
   sections, the undecorated Windows 98 sections, `DefaultInstall` or
@@ -2529,6 +2558,533 @@ code; the choices below were taken on the owner's delegation.
   `cm.osc.handover=100h` with the router answering; then the NHI's device
   removed in Device Manager with its driver software (the Thunderbolt
   part alone): the helper stays; then `/uninstall`: the helper gone.
+
+## 16. Revision 14: the filter on Windows 2000, XP and XP x64 (task 47.33)
+
+**What it answers.** On the HP EliteBook 2570p and 8470p (Intel 7-series,
+xHCI `8086:1E31`), the xHCI98 USB 3 Controller showed Code 12 under XP
+x64, while Windows 7 x64 (MSI) and Windows 10 started it. The firmware
+leaves the xHCI's memory decode off at boot (the 8470p's Command register
+reads `0000`, both EHCIs `0006`), and its ACPI `_PRT` has no entry for
+device 20 (a public Linux boot log of an 8470p: "can't derive routing for
+PCI INT A", "no GSI"; MSI-capable drivers never need it). XP's PCI
+driver reports a boot configuration, the Interrupt Line register's IRQ
+with it, only for a device whose decodes are on, so the interrupt of a
+decode-disabled controller can come only from `_PRT`: with neither, no
+line can be given, and the device's one configuration fails whole. The
+reproduction (`runs/run-47.md`, "47.33"), XP x64 under QEMU with the
+firmware state set before the loader: decodes off alone, Code 0 (no boot
+configuration, the memory placed fresh); `_PRT` entry removed alone, Code
+0 (the line register's IRQ 10 from the boot configuration); both, Code
+12; both with `/PCILOCK`, Code 12.
+
+**What changes** (`hcd_msi86.c`, `hcdMsiFilterNt5`; `xhci_msi.c`,
+`XhciMsiAppendNoIntr`):
+- On an NT kernel below 6.0 (`IoIsWdmVersionAvailable(1, 0x10)` and not
+  `(6, 0)`; Windows 98 and ME still pass the IRP down untouched), after
+  the lower drivers' list comes back, and only for the shape the PCI
+  driver gives - one alternative list, no message interrupt, no
+  configuration priority (`CmResourceTypeConfigData`), every interrupt
+  run homogeneous, no list opening on an alternative - a second list is
+  appended: the first with its interrupt runs removed, every other
+  descriptor byte for byte and in order. With one list the copy is the
+  only other choice, behind the one with the line, which is taken
+  wherever the line can be given, as before.
+- A start with memory and no interrupt is the one design record 15
+  section 4 already gives to mode 0: polled delivery (the qemu value
+  `XhciQemuNoInterrupt` exercises the same path). `hcdParseResources`
+  now clears the translated interrupt fields at entry, so a start granted
+  no line after one granted a line keeps nothing of it.
+- `XhciInterruptMode` 1 (the line) and 3 (a message, which NT 5 cannot
+  give) ask for no copy (outcome "not asked"); 0 and 2 do. The mode cache
+  (section 4.2) is filled on NT 5 too, at AddDevice and each start.
+- The NT 5 half never looks for the helper (section 15's timer-thread
+  look stays NT 5's only one).
+- Published in the filter record: the class as section 4.2 classifies
+  it, outcome 13 ("a copy without the line added") when appended, 4 under
+  modes 1 and 3, 7 for a list with no interrupt, 9 for any other refused
+  shape, 11 with no memory; the counters' list fields describe the list
+  the lower drivers gave. XHCITR names outcome 13.
+
+**Not done:** routing the line. The PCH does route INTA (on the 8470p
+`D20IR` sends it to PIRQA, GSI 16 in APIC mode), and an explicit
+interrupt alternative at that GSI might give a real line, but it needs the
+PCH's routing read in the filter and the ACPI arbiter's acceptance of a
+vector no `_PRT` names; it is left unless polling proves too slow there.
+
+**Legs:** `runs/run-47.md`, "47.33".
+
+### 16.1 Revision 15: the chipset-routed GSI offer (XP x64)
+
+**Why.** Polling serves the controller but costs a little processor time
+and latency. The PCH does route the xHCI's INTA: `D20IP` names the pin
+and `D20IR`'s IAR (bits 2:0) the PIRQ, A to H, which in APIC mode are I/O
+APIC inputs 16 to 23. On the 8470p `D20IR` is `3210`: PIRQA, GSI 16,
+which fourteen of the DSDT's routing entries also name (nine on the
+root bus, both EHCIs among them, five behind the root ports).
+
+**The switch** `XhciIntelNoRouteIrq` (DWORD, written by the INFs at 1,
+no-overwrite): 0 never offers; 1, the default and the meaning of a value
+missing, of another type or out of range, offers on value 1's allowlist;
+2 on any reviewed xHCI/LPC pair of task 36.3's table (issue 12 section
+5.1). The allowlist (owner, 2026-11-06): Intel `1E31` with HP (`103C`)
+boards `179B` (EliteBook 8470p/8470w, the owner's bench), `17A7` (8570p)
+and `17AB` (ProBook 6570b, some 8570p) - an inference within the same
+68ICE/68ICF firmware family - and `17DF` (2570p, 68ISB) and `176C` (8770w,
+68IAV), the owner's choice without a bench on their family. **It ships
+empty** (`XHCI_PIRQ_NOROUTE_LIST` undefined) until the owner's 8470p bench
+passes: the actual grant, the I/O APIC's trigger and polarity, an
+ISR-driven No Op, busy sharers, cold and warm boots, disable and enable.
+Until then value 1 offers nothing and every machine gets the memory-only
+fallback; value 2 asks for the offer. A storm, a polarity mismatch or a
+sharer's regression turns the default off again pending explanation.
+
+**The run** (`xhci_pirq.c`, `XhciPirqOffer`; `hcd_ctl.c`,
+`HcdNoRouteAddDevice`), once per FDO in AddDevice after the stack is
+attached, read-only, **64-bit XP and Server 2003 only** (an x64 HAL is
+always an I/O APIC one; under a 32-bit PIC-mode ACPI HAL the PIRQ is
+delivered through `PIRQx_ROUT` instead, so 32-bit 2000 and XP keep the
+polled fallback): the PDO's `DevicePropertyBusNumber` and
+`DevicePropertyAddress` must name 0, 00:14.0, and 00:14.0's header
+(`HalGetBusData`) must carry the controller's own id and subsystem (read
+through its PDO); then a reviewed xHCI, value 1's allowlist, a listed LPC
+at 00:1F.0, RCBA enabled, one page at RCBA+3000h mapped for `D20IP` and
+`D20IR` and unmapped, INTA on both sides, a readable `D20IR`: the GSI is
+16 + IAR. Nothing is written; Windows programs the I/O APIC for what it
+grants.
+
+**The list** (`XhciMsiAppendNt5`): the PCI driver's configuration
+unchanged, then - for one configuration whose one interrupt run is headed
+by a shared, level-sensitive line (`XhciMsiNt5LineShape`) - its clone
+with that run replaced by the head, minimum and maximum the GSI, then the
+memory-only copy. By `XhciInterruptMode`: 0 the clone and the copy
+(outcome 14, or 13 with no offer); 1 the clone alone (15); 2 the copy
+alone (13); 3 nothing (4). A firmware route that can be granted wins, being
+first.
+
+**The start.** The grant is connected as any line, with its translated
+vector, IRQL, affinity, mode and share. On 2000, XP and XP x64 under mode
+0, a line `IoConnectInterrupt` refuses no longer fails the start: it is
+polled, reason 20 ("the line granted could not be connected"), before the
+delivery is published and the poller opened. Granted but silent: the
+dead-line watcher of record 15 moves it to polling. The record is the
+snapshot's notes: `noroute.value`, `.mode`, `.decision`, `.xhci`,
+`.subsystem`, `.lpc`, `.rcba` (verbosity 4), `.d20ip`, `.d20ir`, `.pirq`,
+`.gsi`, `.offered`, `.grant` (0 memory alone, 1 the offered GSI, 2
+another line), beside `intr.delivery`, `intr.reason`,
+the filter's outcome, and the delivery evidence: `InterruptsClaimed`
+rising (the ISR's claims, which no backstop or poll drain counts) with
+`LineMoves` 0. No snapshot
+layout change; XHCITR names outcomes 14 and 15 and reason 20.
+
+The qemu flavour's `XhciQemuNoRouteGsi` offers its value with no chipset
+read (no guest has a reviewed PCH), and `XhciQemuLineConnectFail` 1 makes
+the line's connection fail, for the legs.
+
+### 16.2 Revision 16: the offer on 32-bit Windows 2000 and XP
+
+**Why.** The owner's decision of 2026-11-07: the chipset-routed GSI offer
+of section 16.1 is made on 32-bit Windows 2000 and XP too, not only on
+64-bit XP and Server 2003. Section 16.1 left them on the polled fallback
+because a 32-bit system may run a HAL with no I/O APIC, where PIRQA-H are
+not inputs 16-23. This section says what each 32-bit HAL gives, how the
+offer is made there, and what happens when it is refused.
+
+**What each HAL gives.** The HAL is chosen by Setup (or by the user, from
+Device Manager's Computer entry) and decides what a raw interrupt number
+in a requirement list means. The xHCI's INTA reaches the processor along
+one of two paths in the PCH: D20IR's IAR names PIRQA-H, which in APIC mode
+drive I/O APIC inputs 16-23 directly, and in PIC mode reach an 8259 input
+through the LPC's `PIRQx_ROUT` byte (bits 3:0 the IRQ, bit 7 clear when
+routed), which ACPI programs through the firmware's link devices.
+
+| HAL (Device Manager, Computer) | Interrupt controller the HAL drives | A raw interrupt number is | The offer 16 + IAR |
+|---|---|---|---|
+| ACPI Multiprocessor PC (`halmacpi.dll`), ACPI Uniprocessor PC (`halaacpi.dll`) | the I/O APIC | a GSI, the I/O APIC input | the PCH's own input for INTA, as on XP x64: granted, it is the line; refused, the memory-only copy is taken |
+| Advanced Configuration and Power Interface (ACPI) PC (`halacpi.dll`) | the 8259 pair only | an ISA IRQ, 0-15 | names no input: expected to be refused, and the memory-only copy taken |
+| Standard PC (`hal.dll`, no ACPI) | the 8259 pair only | an ISA IRQ, 0-15, from the PCI driver's own routing (`$PIR` or the Interrupt Line register) | behind the PCI driver's own configuration, whatever line its routing found; where that cannot be granted, as for the ACPI PC HAL |
+| MPS Uniprocessor PC, MPS Multiprocessor PC (`halapic.dll`, `halmps.dll`, no ACPI) | the I/O APIC, as the MP table describes it | a bus-relative number the HAL maps through the MP table's interrupt entries | not established (below) |
+
+Setup installs an APIC HAL on a computer whose ACPI tables describe an I/O
+APIC, as every 7-series one's MADT does (the 8470p's: one I/O APIC at GSI
+base 0), the multiprocessor one on a multi-core processor [inf]: so 32-bit XP or
+2000 on the HP EliteBooks of section 16 runs the first row unless the user
+chose another HAL. The ACPI PC HAL is what Setup installs where the
+firmware has no I/O APIC or the user forced it; the non-ACPI HALs only
+where the user forced them [inf].
+
+**Unresolved: the MPS HALs.** Under an MPS HAL the number in a
+requirement list is bus-relative and the HAL translates it through the MP
+table; what it makes of 16 + IAR for a device the MP table names no entry
+for (refused, a translation failure, or an input other than the PCH's) is
+not read here, so the PIC argument below does not carry over to it. The
+offer cannot be withheld from these HALs without telling the HALs apart.
+They are a choice the user makes against these machines' ACPI firmware;
+value 1 offers nothing while its list is empty (until section 16.3), and
+value 0 turns the offer
+off. It is recorded for the owner rather than claimed safe.
+
+**How the offer is made on x86** - section 16.1's run, unchanged, on every
+NT kernel below 6.0 in both builds: once per FDO in AddDevice, read-only,
+the PDO's location (`DevicePropertyBusNumber`, `DevicePropertyAddress`)
+0, 00:14.0, its header (`HalGetBusData`) carrying the controller's own id
+and subsystem, a reviewed xHCI, value 1's allowlist (still compiled
+empty), a listed LPC, RCBA enabled, one page at RCBA+3000h mapped and
+unmapped (`MmMapIoSpace`, as task 36.3's run already maps it at every
+start on x86, Windows 98 and ME included), INTA on both sides and a
+readable `D20IR`: the GSI is 16 + IAR. Windows 98 and ME still pass the
+filter down untouched and make no run. Every routine the run calls is
+already an import of the x86 `xhci98.sys` with its Windows 98 evidence
+(`IoGetDeviceProperty`, `HalGetBusData`, `MmMapIoSpace`,
+`MmUnmapIoSpace`), so the import surface does not change. The filter's
+list and the mode table are section 16.1's: the PCI driver's
+configuration first, then the GSI clone (one shared, level-sensitive line
+run), then the memory-only copy; `XhciInterruptMode` 0 both, 1 the clone
+alone, 2 the copy alone, 3 nothing.
+
+The driver does not tell the HALs apart, and the one offer serves every
+row: no documented interface gives a driver the HAL's interrupt model.
+Under an ACPI HAL or the Standard PC HAL none is needed, because under
+`XhciInterruptMode` 0, the default, every way a wrong number can end is
+a polled start (below); under mode 1 a refused clone leaves Code 12 and a
+silent line is not retired (record 15 section 4.2), as mode 1 asks.
+
+**Not offered on a PIC HAL: the `PIRQx_ROUT` IRQ.** An offer of the 8259
+IRQ that `PIRQx_ROUT` names for INTA's PIRQ would give the ACPI PC HAL a
+real line, but it is not made:
+1. Without the HAL's model the same number would be offered on an APIC
+   HAL too, where it names ISA input N of the I/O APIC. Whether the PCH
+   also drives that input from a PIRQ routed to IRQ N is not established
+   here; if it does, a level-sensitive pin unmasked for a line whose
+   other devices are serviced on GSI 16 to 23 can fire with no handler
+   claiming it: a storm.
+2. ACPI programs the links (`_SRS`) when it arbitrates them, after
+   AddDevice's read, so the IRQ read at AddDevice need not be the one
+   routed at the start.
+3. It serves only a HAL that Setup does not install on these machines.
+The ACPI PC HAL keeps the polled fallback of section 16.
+
+**What happens when the offer is refused or cannot serve:**
+- Refused (the arbiter will not give the GSI: beyond the I/O APIC, or a
+  conflict, or no such IRQ under a PIC HAL): the PnP manager takes the
+  next configuration, the memory-only copy; the start is polled, reason
+  "no interrupt resource was granted", `noroute.grant` 0. Under mode 1
+  there is no copy and the controller stays at Code 12, as asked.
+- Granted and not connectable (`IoConnectInterrupt` refuses the
+  translated vector, which a PIC HAL may do for a number above 15): under
+  mode 0 polled, reason 20, as in section 16.1.
+- Granted, connected and silent (the vector is one no hardware raises, as
+  under a PIC HAL that accepts the number, or the PCH routes INTA
+  elsewhere): under mode 0 record 15's dead-line watcher moves it to
+  polling; under mode 1 it stays on the line, as mode 1 asks.
+- No storm path is opened that a PCI driver's own line does not open: a
+  GSI 16-23 is the PIRQ's own input under an ACPI APIC HAL, and under a
+  PIC HAL no 8259 input carries a number above 15. The MPS HALs are the
+  exception above.
+
+**The qemu flavour** reads `XhciQemuNoRouteGsi` on x86 too (no guest has
+a reviewed PCH), and `XhciQemuLineConnectFail` as before.
+
+**Decision 15** (`XHCI_PIRQ_O_NOT_X64`, "a 32-bit Windows: no offer") is
+no longer set; the number stays reserved so a snapshot taken under the
+releases before reads as it did.
+
+**Value 1's allowlist** stays one list, compiled empty (compiled in by
+section 16.3): when the owner's
+8470p bench passes and it is compiled in, it applies to 32-bit 2000 and
+XP as well as XP x64. The owner's checklist gains 32-bit legs for any
+32-bit install on the bench machine.
+
+**The user document** (`docs/using/tuning.md`, the section, its contents
+entry and the switch table's row) names 2000, XP and XP x64, and says the
+list serves both packages.
+
+**Legs** (`runs/run-47.md`, "47.33"), the 8470p's state set at SeaBIOS's
+menu as in section 16, the qemu build: 32-bit XP SP3 (ACPI Multiprocessor
+PC) control, granted (`XhciQemuNoRouteGsi` 20, QEMU's GSI for 00:14.0),
+refused (60), silent (21) and connect failure; Windows 2000 SP4 under the
+ACPI PC HAL (the GSI offer under a PIC HAL) and under the Standard PC HAL
+(the PCI driver's own routing), each with Code 12 read first on the
+released driver, and under an ACPI APIC HAL where the vehicle allows (the
+grant, the connect failure and the silent line); on each 32-bit system
+an uninjected leg (no `XhciQemuNoRouteGsi`, which returns before the run's
+reads), whose decision shows the PDO's location and 00:14.0's header read
+on that system; XP x64 granted, for no regression.
+
+### 16.3 Revision 17: value 1's list in force, and Windows 2000 under an ACPI HAL
+
+**The owner's bench (2026-11-07).** On the owner's HP EliteBook 8470p
+(BIOS 68ICF F.74) under XP x64, the build merged as `d3a596b7`: no Code
+12; under `XhciIntelNoRouteIrq` 2, `noroute.decision` 13 (offered),
+`noroute.lpc` `1E558086`, `noroute.d20ip` 21, `noroute.d20ir` `3210`,
+`noroute.gsi` 16, `noroute.offered` 1, `noroute.grant` 1 (the offered
+GSI granted), filter outcome 14 and line delivery; a SuperSpeed stick
+enumerated; a load with both EHCIs and the xHCI in use; a cold boot and a
+warm restart with the stick plugged; disable and enable. The readings are
+held on the maintainer's disk (`temp\8470p-code12\irq\` and `polling\`,
+git-ignored). The blue ports reached the xHCI only with
+`XhciIntelPortSwitch` 1 (the firmware routes them to it only from `_OSC`
+for Windows 8 and later, section 16.1), which stays 0 by default: the user
+documents say these computers need it.
+
+**The list (owner, 2026-11-07)** is compiled in, with every guard of
+section 16.1 kept (HP `103C`, `1E31`, a reviewed 7-series LPC, the PDO's
+location and identity, the live `D20IP`/`D20IR` read, the PCI driver's own
+configuration first): `179B` (8470p, 8470w), `17A7` and `17AB` (8570p;
+`17AB` is also the ProBook 6570b's board id, which the list cannot tell
+apart), `17DF` (2570p), `176C` (8770w) and, added, `176B` (8570w, 68IAV as
+the 8770w; a public Linux log of one shows no route either). Not `1815`
+(2170p) or the ProBook 6470b. `XHCI_PIRQ_NOROUTE_LIST` is gone: the list is
+always compiled. It serves 2000, XP and XP x64 alike (section 16.2).
+
+**Windows 2000 under an ACPI HAL** (section 16.2's legs, in the emulator:
+QEMU's q35 machine with the 8470p's state set as in section 16; Windows
+2000 has not run on the HP machines). With the firmware's `_PRT` naming no
+route for device 20, Windows 2000 stops with
+STOP 0x000000A5 (0x00010003, a device object, 0x00000014, the `_PRT`
+object), the case Microsoft's ACPI_BIOS_ERROR reference gives as "ACPI
+could not find a mapping in the `_PRT` package for a device" (its
+Parameter 3 bits 5:0 the device, 20), under the ACPI PC HAL and the ACPI
+Uniprocessor PC HAL alike, with `3.4.1.0` and with this revision, whether
+the decodes are on or off, as soon as a driver is bound to the
+controller. With no driver for it the system starts. This revision's
+filter has already run when the stop comes (its trace: outcome 13, the
+memory-only copy appended; no GSI was offered there, the emulator's
+controller not being a reviewed one), so the stop comes in the
+arbitration, before the memory-only alternative could serve; whether a GSI
+clone would fare otherwise was not read, the PCI driver's own
+configuration being first in either list. XP and XP x64
+give Code 12 for the same firmware instead (section 16). Under the
+Standard PC HAL, the PCI driver's own configuration carries the line its
+routing found (in the emulator IRQ 10, the Interrupt Line register's) and
+the controller starts on it. The inference for the real machines, whose
+firmware has the same missing entry: under Windows 2000 with an ACPI HAL
+neither the offer nor the polled fallback can help them, and the Standard
+PC HAL, which the STOP screen itself names (F7 in text-mode Setup), is
+their route; the user document says so. A requirement list with
+no interrupt in any configuration might keep ACPI from being asked to
+route the line; it is not designed here, and is the owner's to decide.
+
+### 16.4 Revision 18: Windows 2000's STOP 0xA5 on the listed HPs (a design, not built)
+
+**What it answers.** Section 16.3: in the emulator, with the 8470p's
+firmware state (no `_PRT` entry for device 20; decodes off), Windows 2000
+under the ACPI PC HAL and under the ACPI Uniprocessor PC HAL stops with
+STOP 0x000000A5 (0x00010003, a device object, 0x00000014, the `_PRT`
+object) once the controller has a driver; with no driver for it the
+system starts. The owner's decision of 2026-11-07: design a driver fix,
+not only a known limitation. Nothing here is built until the owner
+chooses an option (below).
+
+**Where the lookup happens.** What is documented:
+- Microsoft's ACPI_BIOS_ERROR reference: parameter 1 0x10003, "ACPI could
+  not find a mapping in the `_PRT` package for a device", parameter 3 the
+  device (bits 5:0) and function (bits 8:6) - here device 20, function 0.
+- The Windows 2000 DDK's `ntddk.h` declares `INT_ROUTE_INTERFACE_STANDARD`
+  (`GUID_INT_ROUTE_INTERFACE_STANDARD` in `wdmguid.h`): the PCI driver's
+  interface by which another driver asks, for a PCI PDO, its bus, slot,
+  Interrupt Line and pin and its parent PDO (`GetInterruptRouting`), sets a
+  routing token (`SetInterruptRoutingToken`), and writes the Interrupt
+  Line register (`UpdateInterruptLine`). The interface exists so that the
+  driver owning the interrupt arbiter, ACPI on an ACPI HAL, can map a PCI
+  device's pin to an interrupt through the firmware's tables [inf]: the
+  `_PRT` lookup belongs to the arbitration of an interrupt resource for
+  that device, not to the PCI driver's enumeration.
+What was read in the emulator (section 16.2's legs, the port E9 log of the
+qemu build): the controller's PnP sequence reached
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS` (minor 0x0D), the filter ran and
+appended the memory-only copy behind the PCI driver's one configuration
+(trace `M86 L ... 0000000D`, outcome 13; one list, class 2, the interrupt
+`Interrupt 0-255, shared, level` of the reading in section 16), and the
+STOP followed with no further PnP minor logged: the start was never sent.
+With no driver bound (the base image) no requirements are arbitrated for
+the controller and Windows 2000 starts. So the stop comes in the
+resource assignment of the filtered list, before its first configuration
+(the one with the interrupt) is either granted or refused - Windows 2000's
+arbiter treats the missing `_PRT` entry as fatal, where XP's refuses the
+interrupt and gives Code 12. The PCI driver's boot configuration plays no
+part in the 8470p's state: with the decodes off the PCI driver reports
+none (section 16, XP's reading; 2000's in this revision's legs, below).
+
+**The idea: on Windows 2000, for the listed HPs, a list with no interrupt
+at all.** The hypothesis: if no configuration carries an interrupt
+descriptor, the arbiter is not asked to route this device's pin, and the
+memory alone is granted, so the start is polled (record 15's mode 0 path,
+as section 16's memory-only copy). The legs below confirm it for the
+8470p's state and refute it where the PCI driver reports a boot
+configuration.
+
+**The diagnostic** (2026-11-07, not committed): a qemu build of the
+3.4.2.0 tip `ae33d1b4` whose NT 5 filter, under a qemu-only value, moved
+the memory-only copy it had appended to be the list's only alternative
+(`xhci98.sys` `559aceb0...`), on development host A, the 2000 kit of
+section 16.2:
+
+| Leg | HAL | State | Result |
+|---|---|---|---|
+| d0 | ACPI PC | control | Code 0, IRQ 11, the line (the value set for the next leg) |
+| d1s | ACPI PC | the 8470p's (decodes off, no `_PRT` entry) | **no STOP**: Code 0, memory `FEBFC000` alone, POLLING, "no interrupt resource was granted", `noroute.grant` 0; the PnP sequence went on past the filter to the start (`M86 S`, minor 0x00) |
+| d3 | ACPI PC | `_PRT` entry removed, decodes **on** | **STOP 0xA5 (0x00010003, ..., 0x00000014, ...)**, and the driver's port E9 log empty: no PnP IRP of the controller's was logged, so the filter never ran |
+| q0 | ACPI Uniprocessor PC | control | Code 0, IRQ 20, the line |
+| q1s | ACPI Uniprocessor PC | the 8470p's | **no STOP**: Code 0, memory alone, POLLING, grant 0 |
+
+So with the decodes off (the PCI driver reports no boot configuration)
+the interrupt-less list avoids the stop under both ACPI HALs. With the
+decodes on, the stop came before the filter ran, so this design's filter
+cannot avoid it; whether anything earlier in the driver (AddDevice) could
+is not established - the log has no AddDevice entry line, and nothing
+here tries. The 8470p's firmware leaves the decodes off (QUALREP, section
+16); a listed board whose firmware turned them on would still stop.
+
+**The gate** - it must reach no other Windows 2000 machine:
+1. Windows 2000 itself: `IoIsWdmVersionAvailable(1, 0x10)` and not
+   `(1, 0x20)` (WDM 1.20 is XP's). XP and XP x64 keep sections 16 to 16.3.
+2. A listed board: value 1's list of section 16.3 (`1E31`, subsystem
+   `103C:179B`, `17A7`, `17AB`, `17DF`, `176C`, `176B`), read by the
+   AddDevice run of section 16.1 with every guard: the PDO at 0, 00:14.0,
+   00:14.0's identity the controller's own. Every HP firmware family read
+   has no `_PRT` entry for device 20 (section 16), so the board list is the
+   evidence of the missing route; nothing at run time can read `_PRT`
+   (Windows 2000 gives a driver no ACPI method evaluation outside its own
+   device's namespace object).
+   The list check stays mandatory at value 2 too: value 2 widens only the
+   offer of section 16.1, never this strip.
+3. `XhciIntelNoRouteIrq` not 0: the existing switch, so 0 is the way back
+   to the PCI driver's list, and no new registry value is needed (owner
+   rule: every value the driver reads is written by the INF; it already
+   is). Value 0 brings the stop back under an ACPI HAL and the line back
+   under the Standard PC HAL; it is for the Standard PC HAL alone.
+`XhciInterruptMode` is not part of the gate: under every mode the gated
+list carries no interrupt, because modes 1 and 3 would otherwise leave
+the interrupt in the list and the stop would come before their start-time
+refusal could act. Under mode 1 (the line) and mode 3 (a message) the
+start then refuses as each mode asks (Code 10 in place of the stop);
+under 0 and 2 it polls.
+
+**Recovery.** A user who set value 0 on such a machine under an ACPI HAL
+meets the stop at the next start (modes 1 and 3 do not: they refuse the
+start, Code 10, and are changed in the running system). Safe Mode is no
+way out: it loads the USB controllers' drivers, `xhci98.sys` among them,
+and stopped with the same 0xA5 in the emulator (revised after the legs,
+2026-11-07). "Last Known Good Configuration" (F8 at the start) is: it
+starts with the control set of the last successful logon, from before the
+value was changed in that session, so the 0 is gone (read in the emulator: no stop, `runs/run-47.md`).
+Where the 0 was set before an earlier successful start (it then is in the
+last known good set too), the way back is the "Standard PC" computer type
+or the Recovery Console's `disable xhci98` [inf, not read]. An
+existing 0 survives an update (the INF writes no-overwrite), so the user
+documents name it.
+
+**When the strip cannot be made** (no memory for the replacement, a list
+whose shape or walk is refused): the list that carries the line is freed
+and none is returned (`IoStatus.Information` NULL, the IRP successful): the
+device then asks for no resources, nothing is arbitrated for it, and its
+start, given no memory, is refused (Code 10). A list that already carries
+no interrupt passes unchanged. **Revised after the legs (2026-11-07):**
+the first build failed the IRP instead, as this section first said; with
+the allocation's failure injected under the ACPI Uniprocessor PC HAL the
+PnP manager went on with the PCI driver's list after the failed filter
+(`QUERY_INTERFACE` IRPs followed it in the port E9 log) and Windows 2000
+stopped with 0xA5. A failed filter is no refusal.
+
+Not part of the gate: the HAL. Under the Standard PC HAL the same board
+would start on the PCI driver's line (section 16.3's legs); the stripped
+list polls it instead. Telling the HALs apart (the lower device's driver
+object being ACPI's filter, or the root enumerator's HAL devnode) rests on
+no documented interface, and the cost on the Standard PC HAL is polling,
+not a failure.
+
+**The list it writes.** The PCI driver's one configuration with every
+interrupt run removed, as the only alternative (the memory-only copy of
+section 16, alone); no GSI clone (2000's arbiter would be asked to route
+it too, and no clone was ever granted on 2000). Outcome: a new filter
+outcome "replaced: the line removed (2000, a listed board)", named by
+XHCITR; `noroute.decision` as before. Under mode 2 the same list.
+
+**Alternatives considered:**
+- A known limitation alone (section 16.3, `tuning.md`): use the Standard
+  PC HAL under 2000 on these machines. No driver work; the user's cost is
+  a reinstall of Windows 2000 with F7 in text-mode Setup, which disables
+  ACPI system-wide (Microsoft's ACPI_BIOS_ERROR reference): no ACPI power
+  management, battery or thermal support.
+- An INF `LogConfigOverride` for the listed subsystems (an override
+  configuration with memory and no IRQ): one INF section cannot tell 2000
+  from 32-bit XP (both read the `.NTx86` half), so 32-bit XP would lose the
+  offer too, and the 32-bit INF's `[Manufacturer]` line is held to one
+  field by the gates (AGENTS.md, "The INF and install media"). Rejected.
+- Stripping on every Windows 2000 machine, or on any Intel 7/8/9-series:
+  polls machines whose firmware routes the line. Rejected.
+- A new registry value, default off: the user cannot set it before the
+  first STOP, and Safe Mode loads the controller's driver too. Rejected in
+  favour of gate 3.
+- Detecting the ACPI HAL to spare the Standard PC HAL: no documented
+  interface; see the gate.
+
+**Risk.** Gated to listed boards on Windows 2000 only: every other 2000
+machine, XP and XP x64 run the code of sections 16 to 16.3 unchanged.
+The filter is sent again on a rebalance (Microsoft's
+`IRP_MN_FILTER_RESOURCE_REQUIREMENTS` reference); each one is gated and
+stripped the same way, so a rebalance cannot bring the interrupt back.
+On a listed board whose firmware did route the line (a later BIOS) the
+controller is polled where it could have had the line: slower, not
+broken; value 0 restores the line. If the diagnostic shows the stop is not
+avoided, the design falls back to the known limitation.
+
+**Legs** (emulator, the 8470p's state at the menu; QEMU's controller is
+not a listed board, so a qemu-flavour value stands in for the board check,
+as `XhciQemuNoRouteGsi` stands in for the chipset read). Under the ACPI PC
+HAL and the ACPI Uniprocessor PC HAL: the stripped list, Code 0, the new
+filter outcome, `noroute.offered` 0, grant 0, POLLING, a stick read; a
+disable and enable, a remove and rescan; a standby and resume where the
+HAL gives one; modes 1, 2 and 3 (Code 10, polled, Code 10); value 0 (the
+stop, then Last Known Good Configuration, a normal start). Under the
+Standard PC HAL: polled (the cost). The failure policy, by qemu-only
+injections under both ACPI HALs: the replacement's allocation refused,
+and a list shape the walk refuses - each must end with the IRP failed, no
+STOP and the controller unconfigured, not with another configuration
+carrying the interrupt; if the PnP manager then stops anyway, the design
+returns to the owner. A 2000 controller not on the list,
+at value 2: the PCI driver's list untouched (outcome 13 or 14, as now).
+32-bit XP and XP x64: unchanged (the offer, decision 13/14 legs of
+sections 16.2 and 16.3). A rebalance cannot be provoked on demand in the
+vehicle; it is covered by the gate's being evaluated on every filter IRP.
+
+**Options for the owner:**
+- A. The strip as designed (code: the filter's gated branch, its outcome,
+  XHCITR's name, a qemu stand-in value, `tuning.md`; host vectors; the legs
+  above).
+- B. The known limitation alone: the `tuning.md` line of section 16.3
+  stays, and the release notes carry it.
+- C. A, plus B's line for a board whose firmware turns the decodes on (a
+  stop this filter cannot avoid).
+Recommended: C, after the 3.4.2.0 cut (B's text in 3.4.2.0): Windows 2000
+has never run on these machines, the fix is read only in the emulator, and
+its legs and gated builds take most of a day.
+
+**As built (revision 19, 2026-11-07; the owner chose C, in 3.4.2.0).**
+`xhci_pirq.c` `XhciPirqW2kStrip` is the gate (Windows 2000, a listed
+board, the run's decision past its identity guards: `XHCI_PIRQ_O_LPC_UNREAD`
+to `XHCI_PIRQ_O_OFFERED`, so a route the run could not read, a failed
+mapping of the chipset's window included, does not bring the line back;
+reviewed and revised 2026-11-07 at the merge), decided once per FDO by
+`hcd_ctl.c` `hcdNoRouteStripDecide` at the end of AddDevice's run into
+`NoRouteStrip` (the note `noroute.strip` at each start); Windows 2000 is
+`IoIsWdmVersionAvailable(1, 0x10)` and not `(1, 0x20)`. `hcd_msi86.c`
+`hcdMsiStripNt5` writes the list through `xhci_msi.c` `XhciMsiStripNt5`
+(the one configuration without its interrupt runs, the list's only
+alternative) ahead of every mode's handling; outcome 16 "the line removed"
+when written, 17 "withdrawn" where no such list could be made (no memory,
+a refused shape or walk: `hcdMsiStripNone` frees the list and returns
+none), outcome 7 for a list already without an interrupt; XHCITR names
+16 and 17. The qemu
+flavour's `XhciQemuNoRouteListed` 1 takes QEMU's controller as listed where
+`XhciQemuNoRouteGsi` stands in for the run (2: listed, and the run ended at
+`XHCI_PIRQ_O_MAP_FAILED`), and `XhciQemuStripFail` 1, 2
+or 3 injects the failures (no memory, a refused shape, a refused walk; a
+refused walk withdraws the list too where the strip is required).
+Host vectors: `test_msi` (the strip's shapes and
+refusals), `test_pirq` (the gate), `test_snap` (the outcomes). Legs:
+`runs/run-47.md`, "47.33 (continued, 2)".
 
 ## Appendix A. The binary readings behind `legal-provenance.md` section 4
 

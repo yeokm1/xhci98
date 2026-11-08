@@ -7,14 +7,16 @@ rem   build.cmd        both executables
 rem   build.cmd x86    XHCITR.EXE alone, for a host without tools\WinDDK71
 rem
 rem Nothing is installed machine-wide. XHCITR.EXE, the 32-bit build that
-rem starts on Windows 98 SE, ME, 2000, XP and 32-bit Vista and 7, is built
-rem with the in-repo MSVC 6.0 (tools\MSVC600; MSVC6 overrides it), /W3 /WX,
-rem the C runtime linked statically, /SUBSYSTEM:WINDOWS,4.0. XHCITR64.EXE is
-rem the same sources built with WDK 7.1's amd64 compiler (tools\WinDDK71;
-rem WDK71 overrides it), /MT, /SUBSYSTEM:WINDOWS,5.02, for XP x64, Vista
-rem x64 and 7 x64. Both import KERNEL32, USER32, GDI32, ADVAPI32, SHELL32,
-rem COMCTL32 and COMDLG32 alone (selftest.cmd holds them to it); every
-rem SetupAPI and configuration-manager routine is looked up at run time.
+rem starts on Windows 98 SE, ME, 2000, XP and 32-bit Vista to 10 (on 64-bit
+rem Windows it starts XHCITR64.EXE in its place), is built with the in-repo
+rem MSVC 6.0 (tools\MSVC600; MSVC6 overrides it), /W3 /WX, the C runtime
+rem linked statically, /SUBSYSTEM:WINDOWS,4.0. XHCITR64.EXE is the same
+rem sources built with WDK 7.1's amd64 compiler (tools\WinDDK71; WDK71
+rem overrides it), /MT, /SUBSYSTEM:WINDOWS,5.02, for XP x64 and 64-bit
+rem Vista to 10. Both import KERNEL32, USER32, GDI32, ADVAPI32, SHELL32,
+rem COMCTL32 and COMDLG32 alone, and each function each imports is a row of
+rem xhcitr-imports.allow (selftest.cmd holds them to it); every SetupAPI and
+rem configuration-manager routine is looked up at run time.
 rem
 rem The sources: xhcitr.c (the system half), tr_core.c (the pure half the
 rem host suite test\test_tr.c also links), tr_red.c (the red tray icon's
@@ -68,11 +70,15 @@ set "INCLUDE=%MSVC6%\VC98\Include"
 set "LIB=%MSVC6%\VC98\Lib"
 rc /fo xhcitr.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
+cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Fotr_psw.obj ..\src\xhci_psw.c
+if errorlevel 1 exit /b 1
+cl /nologo /W3 /WX /O2 /DXHCI_HOST_TEST /c /Fotr_pirq.obj ..\src\xhci_pirq.c
+if errorlevel 1 exit /b 1
+cl /nologo /W3 /WX /O2 /FeXHCITR.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr.res %LIBS% /link /SUBSYSTEM:WINDOWS,4.0
 if errorlevel 1 exit /b 1
 if not exist XHCITR.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_ej9x.obj mark_core.obj xhcitr.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr.res 2>nul
 echo Built XHCITR.EXE
 
 if "%WANT64%"=="0" goto done
@@ -84,11 +90,15 @@ set "INCLUDE=%WDK71%\inc\api;%WDK71%\inc\crt"
 set "LIB=%WDK71%\lib\wnet\amd64;%WDK71%\lib\crt\amd64"
 rc /i "%WDK71%\inc\api" /fo xhcitr64.res xhcitr.rc
 if errorlevel 1 exit /b 1
-cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
+cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Fotr_psw.obj ..\src\xhci_psw.c
+if errorlevel 1 exit /b 1
+cl /nologo /W3 /WX /O2 /MT /DXHCI_HOST_TEST /c /Fotr_pirq.obj ..\src\xhci_pirq.c
+if errorlevel 1 exit /b 1
+cl /nologo /W3 /WX /O2 /MT /FeXHCITR64.EXE xhcitr.c tr_core.c tr_set.c tr_red.c tr_log.c tr_pci.c tr_diag.c tr_acpi.c tr_pop.c tr_popw.c tr_snap.c ..\xhciinst\inst_core.c ..\xhciinst\inst_silent.c ..\xhciinst\inst_ej9x.c ..\xhcimark\mark_core.c tr_psw.obj tr_pirq.obj xhcitr64.res %LIBS% /link /SUBSYSTEM:WINDOWS,5.02 /MACHINE:X64
 if errorlevel 1 exit /b 1
 if not exist XHCITR64.EXE exit /b 1
 endlocal
-del /q xhcitr.obj tr_core.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_ej9x.obj mark_core.obj xhcitr64.res 2>nul
+del /q xhcitr.obj tr_core.obj tr_set.obj tr_red.obj tr_log.obj tr_pci.obj tr_diag.obj tr_acpi.obj tr_pop.obj tr_popw.obj tr_snap.obj inst_core.obj inst_silent.obj inst_ej9x.obj mark_core.obj tr_psw.obj tr_pirq.obj xhcitr64.res 2>nul
 echo Built XHCITR64.EXE
 
 :done

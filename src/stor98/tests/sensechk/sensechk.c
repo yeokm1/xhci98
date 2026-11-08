@@ -29,7 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  * sensechk - sense retention and REQUEST SENSE through IOCTL_SCSI_PASS_THROUGH
- * (PLAN "Sense rules", R3-9; TESTING "Sense construction", the pass-through
+ * (PLAN "Sense rules"; TESTING "Sense construction", the pass-through
  * part of cases (b)-(d)).
  *
  *   sensechk <physical drive number>

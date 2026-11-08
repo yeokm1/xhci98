@@ -1,10 +1,13 @@
 @echo off
 rem run-host-tests.cmd - build and run the host-side unit tests.
 rem
-rem These run on the Windows build host, not in DOS or QEMU: they cover the
-rem pure PCIINFO -> text logic in xhciqual\mmiodiag.c, none of which the QEMU
-rem matrix can reach (SeaBIOS always leaves MSE set and the BAR assigned, and
-rem no emulated USB controller has a PM capability). Seconds, no VM.
+rem These run on the Windows build host, not in DOS or QEMU: seven suites
+rem over the tool's pure halves - test_mmiodiag (the PCIINFO -> text logic in
+rem xhciqual\mmiodiag.c), test_verdict (verdict.c), test_route (route.c and
+rem src\xhci_pirq.c), test_sysinfo (sysinfo.c), test_stamp (stamp.c),
+rem test_edd (edd.c) and test_quirks (quirks.c) - most of which the QEMU matrix cannot reach
+rem (SeaBIOS always leaves MSE set and the BAR assigned, and no emulated USB
+rem controller has a PM capability). Seconds, no VM.
 rem
 rem Uses the same Open Watcom the xhciqual build already requires, targeting
 rem NT instead of DOS. Any C89 compiler works - the code under test has no
@@ -77,6 +80,20 @@ if not exist test_stamp.exe goto builderr
 "%~dp0test_stamp.exe"
 if not "%errorlevel%"=="0" goto testfail
 
+rem Task 47.24: --edd (edd.c) - the order of its calls through fake
+rem operations, the EDD 3.0 decode (SeaBIOS's 1Ah answer, both layouts, the
+rem checksum, a guard overrun, failed calls), no serial number printed, and
+rem no read past the buffer (a guard page, so built without -za like
+rem test_sysinfo).
+if exist test_edd.exe del test_edd.exe
+wcc386 -bt=nt -q -zq -wx -za -otexan -fo=edd.obj ..\edd.c
+if errorlevel 1 goto builderr
+wcl386 -bt=nt -q -zq -wx -otexan -fe=test_edd.exe test_edd.c edd.obj
+if errorlevel 1 goto builderr
+if not exist test_edd.exe goto builderr
+"%~dp0test_edd.exe"
+if not "%errorlevel%"=="0" goto testfail
+
 rem Task 38.10: the quirk table (quirks.c) - design record 20 section 3.1's
 rem ids per quirk, the vendor-wide rows, and the HCIVERSION floor note.
 if exist test_quirks.exe del test_quirks.exe
@@ -127,4 +144,7 @@ if exist stamp.obj del stamp.obj
 if exist test_quirks.exe del test_quirks.exe
 if exist test_quirks.obj del test_quirks.obj
 if exist quirks.obj del quirks.obj
+if exist test_edd.exe del test_edd.exe
+if exist test_edd.obj del test_edd.obj
+if exist edd.obj del edd.obj
 goto :eof

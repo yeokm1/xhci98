@@ -63,6 +63,37 @@ static void tr_ch(TR_TEXT *t, char c)
     t->Buf[t->Len] = '\0';
 }
 
+void tr_text_mark_cut(TR_TEXT *t)
+{
+    size_t n = sizeof(TR_CUT_MARK) - 1;
+    size_t keep;
+    size_t k;
+
+    if (!t->Overflow || t->Cap < n + 1) {
+        return;
+    }
+    keep = t->Len;
+    if (keep > t->Cap - n - 1) {
+        keep = t->Cap - n - 1;
+    }
+    /* Back to the last line break within 256 bytes, so no line is cut in
+     * two; else at keep, but never between a CR and its LF. */
+    for (k = keep; k > 0 && keep - k < 256; k--) {
+        if (t->Buf[k - 1] == '\n') {
+            keep = k;
+            break;
+        }
+    }
+    if (keep > 0 && t->Buf[keep - 1] == '\r') {
+        keep--;
+    }
+    if (keep >= 2 && t->Buf[keep - 1] == '\n' && t->Buf[keep - 2] == '\r') {
+        keep -= 2;
+    }
+    memcpy(t->Buf + keep, TR_CUT_MARK, n + 1);
+    t->Len = keep + n;
+}
+
 void tr_put(TR_TEXT *t, const char *s)
 {
     while (*s != '\0') {
@@ -1197,7 +1228,12 @@ const char *tr_live_text(TR_U32 live)
 void tr_gen_text(TR_U32 gen, char *out, size_t cap)
 {
     if ((gen & 0xFFUL) == CM_ST_GEN_TBT3) {
-        tr_copy(out, "Thunderbolt 3", cap);
+        /* 15:8 is the Thunderbolt generation where the software connection
+         * manager read the router, 0 (read as 3) elsewhere (record 22
+         * section 19.10 item 5). */
+        tr_copy(out, ((gen >> 8) & 0xFFUL) == 1 ? "Thunderbolt 1"
+                     : ((gen >> 8) & 0xFFUL) == 2 ? "Thunderbolt 2"
+                                                 : "Thunderbolt 3", cap);
     } else if ((gen & 0xFFUL) == CM_ST_GEN_USB4) {
         /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0
          * (Spec 8.2.1.1). */
@@ -1266,6 +1302,16 @@ void tr_link_text(TR_U32 kind, TR_U32 lanes, const TR_EXT *x, char *out,
                                                      : "lanes not known");
 }
 
+const char *tr_ho_same_text(TR_U32 flags)
+{
+    if ((flags & CM_ST_F_HO_SAMEOFF) == 0) {
+        return NULL;
+    }
+    return "  Handover not sent: this firmware is not a known build, but has "
+           "the same\n  handover code. To try it, set the Thunderbolt "
+           "setting for such firmware\n  to yes.\n";
+}
+
 int tr_gen_tbt3(TR_U32 gen)
 {
     /* A Thunderbolt 3 router behind a USB4 host reads USB4 Version major 0
@@ -1279,13 +1325,19 @@ void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
                       char *out, size_t cap)
 {
     TR_U32 width = 0;
+    TR_U32 tbt = (gen & 0xFFUL) == CM_ST_GEN_TBT3 ? (gen >> 8) & 0xFFUL : 0;
     const char *src;
+    const char *name;
 
     if (kind == CM_ST_KIND_ICM || x == NULL || x->Rate == 0 ||
         !tr_gen_tbt3(gen)) {
         tr_link_text(kind, lanes, x, out, cap);
         return;
     }
+    /* The router's own Thunderbolt generation where the record gives it
+     * (record 22 section 19.10 item 5), Thunderbolt 3 otherwise. */
+    name = tbt == 1 ? "Thunderbolt 1" : tbt == 2 ? "Thunderbolt 2"
+                                                 : "Thunderbolt 3";
     /* A lane adapter's speed is a USB4 generation only on a USB4 router;
      * a Thunderbolt 3 router's link is worded as the ICM path words it. */
     if (x->Width != 0) {
@@ -1297,12 +1349,12 @@ void tr_link_text_gen(TR_U32 gen, TR_U32 kind, TR_U32 lanes, const TR_EXT *x,
     }
     src = (x->Flags & CM_Q_XF_RATE_READ) ? " (read from the lane adapter)" : "";
     if (width != 0) {
-        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, x%lu "
-                   "(%lu Gbit/s)%s", (unsigned long)x->Rate,
-                   (unsigned long)width, (unsigned long)(x->Rate * width), src);
+        tr_sprintf(out, cap, "%s, %lu Gbit/s per lane, x%lu (%lu Gbit/s)%s",
+                   name, (unsigned long)x->Rate, (unsigned long)width,
+                   (unsigned long)(x->Rate * width), src);
     } else {
-        tr_sprintf(out, cap, "Thunderbolt 3, %lu Gbit/s per lane, lanes not "
-                   "known%s", (unsigned long)x->Rate, src);
+        tr_sprintf(out, cap, "%s, %lu Gbit/s per lane, lanes not known%s",
+                   name, (unsigned long)x->Rate, src);
     }
 }
 
@@ -1439,8 +1491,11 @@ int tr_runs_as_tbt3(TR_U32 gen, int up)
 void tr_gen_link_text(TR_U32 gen, int up, char *out, size_t cap)
 {
     char own[32];
+    TR_U32 tbt = (gen & 0xFFUL) == CM_ST_GEN_TBT3 ? (gen >> 8) & 0xFFUL : 0;
 
-    if (up == TR_UP_TBT2 && (gen & 0xFFUL) != CM_ST_GEN_UNKNOWN &&
+    /* A Thunderbolt 1 or 2 router behind a Falcon Ridge host runs at its
+     * own generation, not above it: no "running as" for it. */
+    if (up == TR_UP_TBT2 && tbt != 1 && tbt != 2 &&
         ((gen & 0xFFUL) == CM_ST_GEN_TBT3 ||
          (gen & 0xFFUL) == CM_ST_GEN_USB4)) {
         tr_gen_text(gen, own, sizeof(own));
@@ -2121,19 +2176,73 @@ int tr_parse_args(int argc, char **argv, TR_OPTS *o, char *err, size_t cap)
                 return 1;
             }
             alone++;
+        } else if (tr_switch(a, "set")) {
+            if (o->Set) {
+                tr_copy(err, "/set is given once.", cap);
+                return 1;
+            }
+            o->Set = 1;
+            while (i + 1 < argc && argv[i + 1][0] != '/' &&
+                   argv[i + 1][0] != '-') {
+                if (o->SetCount >= TR_SET_ARGS ||
+                    strlen(argv[i + 1]) >= TR_SET_ARG_CHARS ||
+                    strchr(argv[i + 1], '=') == NULL) {
+                    tr_copy(err, "/set takes Name=Value arguments (XHCITR "
+                            "/set /show lists the names).", cap);
+                    return 1;
+                }
+                tr_copy(o->SetArg[o->SetCount++], argv[++i],
+                        TR_SET_ARG_CHARS);
+            }
+            alone++;
+        } else if (o->Set && tr_switch(a, "show")) {
+            o->SetShow = 1;
+        } else if (o->Set && tr_switch(a, "request")) {
+            o->SetRequest = 1;
+        } else if (o->Set && tr_switch(a, "yes")) {
+            o->SetYes = 1;
+        } else if (o->Set && tr_switch(a, "on")) {
+            if (o->SetOn || i + 1 >= argc || argv[i + 1][0] == '\0' ||
+                strlen(argv[i + 1]) >= TR_ID_CHARS) {
+                tr_copy(err, "/on needs one controller's instance id.", cap);
+                return 1;
+            }
+            o->SetOn = 1;
+            tr_copy(o->SetOnId, argv[++i], sizeof(o->SetOnId));
         } else {
             tr_sprintf(err, cap, "Unknown switch %s. Use: XHCITR [/tray] "
                        "[/eject id=<instance id>] [/setlevel xhci98=<0-4> "
-                       "xhcicm=<0-4>] [/report <file>]", a);
+                       "xhcicm=<0-4>] [/set Name=Value ... [/on <instance "
+                       "id>] [/yes]] [/set /show] [/report <file>] [/acpi <folder>], "
+                       "or XHCITR /snapshot, /dump or /probe (XHCITR "
+                       "/snapshot /? for their help).", a);
             return 1;
         }
     }
     if (alone > 1 || (alone == 1 && o->Tray)) {
-        tr_copy(err, "/eject, /setlevel, /report, /acpi and /selftest are each "
-                "used alone.", cap);
+        tr_copy(err, "/eject, /setlevel, /set, /report, /acpi and /selftest "
+                "are each used alone.", cap);
         return 1;
     }
-    if ((o->Result && !o->Eject && !o->SetLevel) || (o->Confirmed && !o->Eject)) {
+    if (o->Set && (o->SetShow + o->SetRequest + (o->SetCount > 0 ? 1 : 0)) !=
+                      1) {
+        tr_copy(err, "/set takes Name=Value arguments, or /show alone.", cap);
+        return 1;
+    }
+    if (o->Set && o->SetOn && o->SetCount == 0) {
+        tr_copy(err, "/on goes with /set Name=Value.", cap);
+        return 1;
+    }
+    if (o->Set && o->SetYes && o->SetCount == 0) {
+        tr_copy(err, "/yes goes with /set Name=Value.", cap);
+        return 1;
+    }
+    if (o->Set && o->SetRequest != o->Result) {
+        tr_copy(err, "/set /request is the Settings window's own run.", cap);
+        return 1;
+    }
+    if ((o->Result && !o->Eject && !o->SetLevel && !o->SetRequest) ||
+        (o->Confirmed && !o->Eject)) {
         tr_copy(err, "/result goes with /eject or /setlevel, /confirmed with "
                 "/eject only.", cap);
         return 1;
@@ -2174,6 +2283,34 @@ void tr_report_node(TR_TEXT *t, int depth, const char *label,
     if (!bol) {
         tr_ch(t, '\n');
     }
+}
+
+size_t tr_report_node_bytes(int depth, const char *label,
+                            const char *details)
+{
+    size_t lead = (size_t)(depth + 2) * 2 + 2;
+    size_t n = (size_t)depth * 2 + strlen(label) + 2;
+    int bol = 1;
+
+    if (details != NULL) {
+        for (; *details != '\0'; details++) {
+            if (*details == '\r') {
+                continue;
+            }
+            if (bol) {
+                n += lead;
+                bol = 0;
+            }
+            n += *details == '\n' ? 2 : 1;
+            if (*details == '\n') {
+                bol = 1;
+            }
+        }
+        if (!bol) {
+            n += 2;
+        }
+    }
+    return n + 1;
 }
 
 const char *tr_plural(long n)
@@ -2345,7 +2482,7 @@ void tr_confirm_lead(TR_TEXT *t, const char *unitName, const char *label,
                      const char *const *diskLines, int n)
 {
     /* The unit is named by what the user knows it as (owner, 2026-11-04,
-     * the X870E 98 SE bench: the bridge's name, "PCI standard PCI-to-PCI
+     * the owner's 98 SE bench: the bridge's name, "PCI standard PCI-to-PCI
      * bridge", meant nothing): the label, its disks' names and letters
      * where it has disks (unit_label), else the unit's own name. The
      * devices that stop are listed below it as before. */
@@ -3705,6 +3842,24 @@ int tr_hover_poll(TR_HOVER *h, TR_U32 nowMs, int away, TR_U32 dblClickMs,
     return nowMs - h->Last + pollMs >= shown;
 }
 
+int tr_bkind_outstanding(const TR_BKIND *b)
+{
+    int i;
+
+    if (b == NULL) {
+        return 0;
+    }
+    if (b->Shown == TR_BK_FAST || b->Lost > 0) {
+        return 1;
+    }
+    for (i = 0; i < b->N && i < TR_BK_PENDING; i++) {
+        if (b->Wait[i] == TR_BK_FAST) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int tr_bkind_fast(const TR_BKIND *b, int reports)
 {
     if (b == NULL) {
@@ -4659,6 +4814,101 @@ void tr_snap_saved(int rc, const char *folder, const char *name,
                    "named %s was made by something else meanwhile. Run it "
                    "again.", folder, name);
     }
+}
+
+TR_U32 tr_at_age(TR_U32 nowLo, TR_U32 nowHi, TR_U32 at)
+{
+    TR_U32 now;
+
+    now = (TR_U32)(((nowHi & 0x3FFUL) << 22) | ((nowLo >> 10) & 0x3FFFFFUL));
+    return (TR_U32)((now - at) & 0xFFFFFFFFUL);
+}
+
+/* A 64-bit value hi:lo divided by d (below 2^28), the quotient back in
+ * hi:lo, the remainder returned: four bits at a time, so no step needs
+ * more than 32 bits and no compiler helper. */
+static TR_U32 tr_div64(TR_U32 *hi, TR_U32 *lo, TR_U32 d)
+{
+    TR_U32 words[2];
+    TR_U32 rem;
+    TR_U32 q;
+    int w;
+    int s;
+    TR_U32 nib;
+
+    words[0] = *hi & 0xFFFFFFFFUL;
+    words[1] = *lo & 0xFFFFFFFFUL;
+    rem = 0;
+    for (w = 0; w < 2; w++) {
+        q = 0;
+        for (s = 28; s >= 0; s -= 4) {
+            nib = (words[w] >> s) & 0xFUL;
+            rem = (rem << 4) | nib;
+            q = (q << 4) | (rem / d);
+            rem %= d;
+        }
+        words[w] = q & 0xFFFFFFFFUL;
+    }
+    *hi = words[0];
+    *lo = words[1];
+    return rem;
+}
+
+void tr_at_utc(char *out, size_t cap, TR_U32 nowLo, TR_U32 nowHi, TR_U32 age)
+{
+    TR_U32 lo;
+    TR_U32 hi;
+    TR_U32 sub;
+    TR_U32 t;
+
+    if (out == NULL || cap == 0) {
+        return;
+    }
+    /* now - age x 1024, by pairs. */
+    sub = (age << 10) & 0xFFFFFFFFUL;
+    lo = (nowLo - sub) & 0xFFFFFFFFUL;
+    hi = (nowHi - ((age >> 22) & 0x3FFUL) - (nowLo < sub ? 1UL : 0UL)) &
+         0xFFFFFFFFUL;
+    /* 100 ns to ms, then the ms of the day (the epoch, 1601-01-01, starts
+     * a day). */
+    (void)tr_div64(&hi, &lo, 10000UL);
+    t = tr_div64(&hi, &lo, 86400000UL);
+    tr_sprintf(out, cap, "%02lu:%02lu:%02lu.%03lu",
+                (unsigned long)(t / 3600000UL),
+                (unsigned long)((t / 60000UL) % 60UL),
+                (unsigned long)((t / 1000UL) % 60UL),
+                (unsigned long)(t % 1000UL));
+}
+
+int tr_at_line(const char *line, TR_U32 *value)
+{
+    TR_U32 v;
+    int i;
+    char c;
+
+    if (line == NULL || strncmp(line, "at=", 3) != 0) {
+        return 0;
+    }
+    v = 0;
+    for (i = 0; i < 8; i++) {
+        c = line[3 + i];
+        if (c >= '0' && c <= '9') {
+            v = (v << 4) | (TR_U32)(c - '0');
+        } else if (c >= 'A' && c <= 'F') {
+            v = (v << 4) | (TR_U32)(c - 'A' + 10);
+        } else if (c >= 'a' && c <= 'f') {
+            v = (v << 4) | (TR_U32)(c - 'a' + 10);
+        } else {
+            return 0;
+        }
+    }
+    if (line[11] != '\0') {
+        return 0;
+    }
+    if (value != NULL) {
+        *value = v;
+    }
+    return (v != 0) ? 1 : 2;
 }
 
 const char *tr_eject_open_text(int kind)

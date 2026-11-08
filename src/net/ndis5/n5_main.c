@@ -97,18 +97,23 @@ static const NDIS_OID netOids[] = {
 static PNET_ADAPTER netLive[NET_LIVE_MAX];
 static NDIS_SPIN_LOCK netLiveLock;
 
-static VOID netLiveSet(PNET_ADAPTER a, PNET_ADAPTER with)
+/* The slot holding `a` given `with`: 1 when one held it, 0 when none did
+ * (every slot taken, for an insertion). */
+static ULONG netLiveSet(PNET_ADAPTER a, PNET_ADAPTER with)
 {
     ULONG i;
+    ULONG done = 0;
 
     NdisAcquireSpinLock(&netLiveLock);
     for (i = 0; i < NET_LIVE_MAX; i++) {
         if (netLive[i] == a) {
             netLive[i] = with;
+            done = 1;
             break;
         }
     }
     NdisReleaseSpinLock(&netLiveLock);
+    return done;
 }
 
 static ULONG netIsLive(PNET_ADAPTER a)
@@ -165,12 +170,45 @@ static ULONG netReadMtu(NDIS_HANDLE wcc, PULONG refused)
 /* The PASSIVE_LEVEL thread                                            */
 /* ------------------------------------------------------------------ */
 
+/*
+ * Every queued send completed with `status`, the sender waited out, and
+ * what it put back meanwhile completed too: a sender that met a full ring
+ * as the link went down requeues its packet after the first flush.
+ * IRQL: PASSIVE_LEVEL.
+ */
+static VOID netSendsQuiet(PNET_ADAPTER a, NDIS_STATUS status)
+{
+    ULONG busy;
+
+    NetFlushSends(a, status);
+    for (;;) {
+        NdisAcquireSpinLock(&a->TxLock);
+        busy = a->TxServing | a->TxActive;
+        NdisReleaseSpinLock(&a->TxLock);
+        if (!busy) {
+            break;
+        }
+        NdisMSleep(1000);
+    }
+    NetFlushSends(a, status);
+    for (;;) {
+        NdisAcquireSpinLock(&a->TxLock);
+        busy = a->TxActive;
+        NdisReleaseSpinLock(&a->TxLock);
+        if (!busy) {
+            break;
+        }
+        NdisMSleep(1000);
+    }
+}
+
 /* The power OIDs' work (section 7.7): Close at D3, Open at D0, then the
  * pended set completed. IRQL: PASSIVE_LEVEL. */
 static VOID netWorker(PVOID ctx)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     ULONG req;
+    ULONG was;
 
     for (;;) {
         netWait(&a->WorkEvent);
@@ -181,16 +219,28 @@ static VOID netWorker(PVOID ctx)
             NdisReleaseSpinLock(&a->TxLock);
             break;
         }
-        KeClearEvent(&a->WorkEvent);
+        /* A stop already asked keeps the event set, so the wait after
+         * this work ends and the stop is seen. */
+        if (!a->WorkStop) {
+            KeClearEvent(&a->WorkEvent);
+        }
         NdisReleaseSpinLock(&a->TxLock);
 
         if (req == NET_WORK_D3) {
             NetCmClose(a);
             NdisAcquireSpinLock(&a->TxLock);
+            was = a->LinkUp;
             a->LinkUp = 0;
             a->LinkGen++;
             NdisReleaseSpinLock(&a->TxLock);
-            NetFlushSends(a, NET_STATUS_DOWN);
+            /* Close admits no LinkChange after it, so the stack hears of
+             * the link's end here (NDIS 6 does the same at D3). */
+            if (was) {
+                NdisMIndicateStatus(a->Handle, NDIS_STATUS_MEDIA_DISCONNECT,
+                                    NULL, 0);
+                NdisMIndicateStatusComplete(a->Handle);
+            }
+            netSendsQuiet(a, NET_STATUS_DOWN);
             NdisMSetInformationComplete(a->Handle, NDIS_STATUS_SUCCESS);
         } else if (req == NET_WORK_D0) {
             NDIS_STATUS status = NetCmOpen(a);
@@ -344,7 +394,13 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
     if (asked != 0) {
         NetCmLog(a, "net.mtu.range", asked);
     }
-    NetCmQuery(a, &info);
+    if (!NetCmIfMacWait(&a->Cm, &info)) {
+        /* No MAC from this start (record 35 section 6.5): the adapter is
+         * not registered with 00:00:00:00:00:00. */
+        NetCmLog(a, "net.mac.none", NET_CMIF_MAC_WAIT_MS);
+        netFreeAdapter(a);
+        return NDIS_STATUS_ADAPTER_NOT_FOUND;
+    }
     for (i = 0; i < 6; i++) {
         ((volatile UCHAR *)a->Mac)[i] = info.Mac[i];
     }
@@ -360,14 +416,23 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
         netFreeAdapter(a);
         return status;
     }
+    /* A slot of the live table before Open: an adapter that would answer
+     * no OID is not initialised, and none of Open's callbacks has run
+     * when this one fails. */
+    if (!netLiveSet(NULL, a)) {
+        NetCmLog(a, "net.live.full", NET_LIVE_MAX);
+        netStopWorker(a);
+        netFreeAdapter(a);
+        return NDIS_STATUS_RESOURCES;
+    }
 
     status = NetCmOpen(a);
     if (status != NDIS_STATUS_SUCCESS) {
+        (VOID)netLiveSet(a, NULL);
         netStopWorker(a);
         netFreeAdapter(a);
         return status;
     }
-    netLiveSet(NULL, a);
     NetCmLog(a, "net.init", a->Mtu);
     return NDIS_STATUS_SUCCESS;
 }
@@ -381,10 +446,9 @@ static NDIS_STATUS netInitialize(PNDIS_STATUS openError, PUINT medium,
 static VOID netHalt(NDIS_HANDLE ctx)
 {
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
-    ULONG busy;
     ULONG out;
 
-    netLiveSet(a, NULL);
+    (VOID)netLiveSet(a, NULL);
     NdisAcquireSpinLock(&a->TxLock);
     a->Halting = 1;
     NdisReleaseSpinLock(&a->TxLock);
@@ -392,36 +456,27 @@ static VOID netHalt(NDIS_HANDLE ctx)
     netStopWorker(a);
     NetCmClose(a);
     a->LinkUp = 0;
-    NetFlushSends(a, NDIS_STATUS_FAILURE);
-    for (;;) {
-        NdisAcquireSpinLock(&a->TxLock);
-        busy = a->TxServing | a->TxActive;
-        NdisReleaseSpinLock(&a->TxLock);
-        if (!busy) {
-            break;
-        }
-        NdisMSleep(1000);
-    }
-    NetFlushSends(a, NDIS_STATUS_FAILURE);
-    for (;;) {
-        NdisAcquireSpinLock(&a->TxLock);
-        busy = a->TxActive;
-        NdisReleaseSpinLock(&a->TxLock);
-        if (!busy) {
-            break;
-        }
-        NdisMSleep(1000);
-    }
+    netSendsQuiet(a, NDIS_STATUS_FAILURE);
 
-    NdisAcquireSpinLock(&a->RxLock);
-    out = a->RxOut;
-    NdisReleaseSpinLock(&a->RxLock);
-    if (out != 0) {
-        netWait(&a->RxDrained);
-        /* The last return set the event under RxLock: taking it once
-         * more waits that return out. */
+    /* No receive callback runs after Close, so RxOut only falls from
+     * here; but a split indicated after the receive callback read
+     * Halting clear can have set RxDrained between two of its packets
+     * (n5_data.c, netDeliver). So the count, not the event, decides:
+     * read under RxLock, the event cleared there while packets are out
+     * and waited for, until a read finds none. The last return sets the
+     * event and drops RxLock before this lock is taken, so nothing of
+     * the adapter is touched once zero is read. */
+    for (;;) {
         NdisAcquireSpinLock(&a->RxLock);
+        out = a->RxOut;
+        if (out != 0) {
+            KeClearEvent(&a->RxDrained);
+        }
         NdisReleaseSpinLock(&a->RxLock);
+        if (out == 0) {
+            break;
+        }
+        netWait(&a->RxDrained);
     }
     netFreeAdapter(a);
 }
@@ -507,7 +562,7 @@ static NDIS_STATUS netQuery(NDIS_HANDLE ctx, NDIS_OID oid, PVOID buf,
          * which is 100,000,000 units, within a ULONG. */
         NetCmQuery(a, &info);
         v = NetCmIfRateMbps(&info);
-        if (v == 0 || v > 400000UL) {
+        if (v == 0) {
             v = 10000UL;
         }
         v *= 10000UL;

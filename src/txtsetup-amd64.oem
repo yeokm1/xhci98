@@ -21,8 +21,12 @@
 # hidparse.sys loaded from Setup's own source; none of them is on this disk.
 #
 # The 32-bit package's file is src\txtsetup.oem;
-# scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds their sections
-# equal outside the two description strings.
+# scripts\inf-gate\check-txtsetup-oem.ps1 gates both and holds them equal
+# outside their two description strings and what only the 32-bit file
+# carries: the helper's dll line (dll = d1, xhcihlpr.sys), for which this
+# package has no file, and the Windows 2000 option XHCI98W2K with its files,
+# its hardware ids, its disk d2 and the three [Config.*] sections, which
+# XP x64 and Server 2003 x64 do not need.
 #
 # ASCII only, CRLF line endings.
 

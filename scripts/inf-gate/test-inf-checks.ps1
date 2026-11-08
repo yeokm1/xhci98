@@ -706,7 +706,12 @@ try {
             @{ Name = "rclitfile";     Pattern = '(?m)^(\s*FILEVERSION\s+)XHCI_VER_CSV'; Replace = '${1}9,9,9,9' },
             @{ Name = "rclitprod";     Pattern = '(?m)^(\s*PRODUCTVERSION\s+)XHCI_VER_CSV'; Replace = '${1}9,9,9,9' },
             @{ Name = "rclitfilestr";  Pattern = '(?m)^(\s*VALUE\s+"FileVersion"\s*,\s*)XHCI_VER_STR\s*"\\0"'; Replace = '${1}"9.9.9.9\0"' },
-            @{ Name = "rclitprodstr";  Pattern = '(?m)^(\s*VALUE\s+"ProductVersion"\s*,\s*)XHCI_VER_STR\s*"\\0"'; Replace = '${1}"9.9.9.9\0"' }
+            @{ Name = "rclitprodstr";  Pattern = '(?m)^(\s*VALUE\s+"ProductVersion"\s*,\s*)XHCI_VER_STR\s*"\\0"'; Replace = '${1}"9.9.9.9\0"' },
+            # The macro's name in a comment after a literal, and a longer
+            # name that begins with it: neither is the macro.
+            @{ Name = "rclitcomment";  Pattern = '(?m)^(\s*FILEVERSION\s+)XHCI_VER_CSV'; Replace = '${1}9,9,9,9 /* XHCI_VER_CSV */' },
+            @{ Name = "rcoldname";     Pattern = '(?m)^(\s*PRODUCTVERSION\s+)XHCI_VER_CSV'; Replace = '${1}XHCI_VER_CSV_OLD' },
+            @{ Name = "rcstrcomment";  Pattern = '(?m)^(\s*VALUE\s+"FileVersion"\s*,\s*)XHCI_VER_STR\s*"\\0"'; Replace = '${1}"9.9.9.9\0" /* XHCI_VER_STR */' }
         )
         foreach ($c in $rcLiterals) {
             $mutated = $rcText -replace $c.Pattern, $c.Replace
@@ -993,7 +998,7 @@ try {
     # the interval, so the anchor carries them; $tailFor9x and $tailForNt are
     # the same block ending in each path's own successor line, which keeps
     # the two paths apart.
-    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
+    $tolRows   = "HKR,,XhciIntelIrqRoute,0x00010003,1`r`nHKR,,XhciIntelNoRouteIrq,0x00010003,1`r`nHKR,,XhciTolerance,0x00010003,1`r`nHKR,,XhciIntervalCap,0x00010003,1`r`nHKR,,XhciAvgTrbEsit,0x00010003,0`r`nHKR,,XhciMaxTransferKB,0x00010003,1024`r`nHKR,,XhciInterruptMode,0x00010003,0`r`nHKR,,XhciPollIdleMs,0x00010003,50`r`nHKR,,XhciPollActiveMs,0x00010003,1`r`nHKR,,XhciPollFineTimer,0x00010003,0`r`nHKR,,XhciWideMap,0x00010003,0`r`nHKR,,XhciSelectiveSuspend,0x00010003,0`r`nHKR,,XhciSilentInstall,0x00010003,0`r`nHKR,,XhciUsb2HubSpeedFallback,0x00010003,1`r`nHKR,,XhciAccept096,0x00010003,1`r`nHKR,,XhciCommandCheck,0x00010003,1`r`nHKR,,XhciAcpiTables,0x00010003,1`r`n; The BOS read at High and Full Speed (design record 13 section 8.4.1), a`r`n; device kept across a resume's re-initialization (task 45.23) and across`r`n; its SuperSpeed link's recovery (task 45.41): on is each one's default`r`n; (absent, or anything but a DWORD 0, is on; src\hcd_ctl.c), written since`r`n; task 45.50 so that every value is in the key, ready to change.`r`nHKR,,XhciUsb2Bos,0x00010003,1`r`nHKR,,XhciResumeKeep,0x00010003,1`r`nHKR,,XhciLinkKeep,0x00010003,1`r`n; The event ring's size (task 47.30; design record 13 section 11.10): 1024`r`n; the larger ring, 256 the one-page ring of the releases before it.`r`n; Absent, or any other value, is 1024 (src\hcd_ctl.c).`r`nHKR,,XhciEventRingTrbs,0x00010003,1024`r`n; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record`r`n; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own`r`n; where the bus offers it as Bulk-Only; 0 the one devnode of the releases`r`n; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).`r`nHKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20`r`n; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller`r`n; where the record offers it. Absent reads as the default written here.`r`nHKR,,XhciMsiAvoid,0x00010003,1`r`nHKR,,XhciStreamsOff,0x00010003,1`r`nHKR,,XhciResumeReinit,0x00010003,1`r`nHKR,,XhciIntelShutdownToEhci,0x00010003,1`r`nHKR,,XhciShutdownReset,0x00010003,0`r`nHKR,,XhciSuspendHaltDelay,0x00010003,1`r`nHKR,,XhciSuspendHaltTimeout,0x00010003,1`r`nHKR,,XhciAsmediaFlowControl,0x00010003,1`r`nHKR,,XhciTiIntervalCap,0x00010003,1`r`nHKR,,XhciStuckLinkReset,0x00010003,1`r`nHKR,,XhciStreamRingPad,0x00010003,1`r`nHKR,,XhciControlLinkNoOp,0x00010003,1`r`nHKR,,XhciIsochSpuriousSuccess,0x00010003,1`r`nHKR,,XhciAmdSuspendBitClear,0x00010003,1`r`n"
     $tailFor9x = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`n`r`n[RootHub.Dev]"
     $tailForNt = $tolRows + "HKR,,XhciImodInterval250ns,0x00010003,160`r`nHKR,,EnumPropPages32"
     Write-Step "the Intel port switchover's switch, on both paths"
@@ -1058,6 +1063,8 @@ try {
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n"; Clob = "HKR,,XhciUsb2Bos,0x00010001,1`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeKeep,0x00010001,1`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n"; Clob = "HKR,,XhciLinkKeep,0x00010001,1`r`n" },
+        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n"; Clob = "HKR,,XhciEventRingTrbs,0x00010001,1024`r`n" },
+        @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n"; Clob = "HKR,,XhciBulkOnlyOwnId,0x00010001,1`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n"; Clob = "HKR,,XhciMsiAvoid,0x00010001,1`r`n" },
         @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n"; Clob = "HKR,,XhciStreamsOff,0x00010001,1`r`n" },
         @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n"; Clob = "HKR,,XhciResumeReinit,0x00010001,1`r`n" },
@@ -2207,6 +2214,25 @@ try {
     $r = Invoke-Gate -Path $prodInf -PackageDir $subPkg
     Assert-True ($r.ExitCode -ne 0) "a package holding usbfiles\usbd2k.sys was accepted."
     Assert-True ($r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("expected PKG-MSFILE to fire on a subdirectory copy. Output:`n" + $r.Output)
+    # A hidden copy is a file on the media like any other.
+    $hidPkg = New-StandInPackage -Name "pkg-hidden-msfile"
+    $hidFile = Join-Path $hidPkg "usbd.sys"
+    Set-Content -LiteralPath $hidFile -Value "stand-in" -Encoding ASCII
+    (Get-Item -LiteralPath $hidFile -Force).Attributes = [System.IO.FileAttributes]::Hidden
+    $r = Invoke-Gate -Path $prodInf -PackageDir $hidPkg
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("a package holding a hidden usbd.sys was accepted. Output:`n" + $r.Output)
+    # -MsFileScanDir: the upload set's root beyond the package, a hidden
+    # file in a tools-like subdirectory included; a clean tree passes.
+    $scanRoot = Join-Path $script:work "scan-root"
+    New-Item -ItemType Directory -Path (Join-Path $scanRoot "tools\xhciqual") | Out-Null
+    Set-Content -LiteralPath (Join-Path $scanRoot "readme.txt") -Value "stand-in" -Encoding ASCII
+    $r = Invoke-Gate -Path $prodInf -PackageDir $goodPkg -Extra @("-MsFileScanDir", $scanRoot)
+    Assert-True ($r.ExitCode -eq 0) ("-MsFileScanDir refused a tree with no Microsoft file:`n" + $r.Output)
+    $scanFile = Join-Path $scanRoot "tools\xhciqual\USBHUB.SYS"
+    Set-Content -LiteralPath $scanFile -Value "stand-in" -Encoding ASCII
+    (Get-Item -LiteralPath $scanFile -Force).Attributes = [System.IO.FileAttributes]::Hidden
+    $r = Invoke-Gate -Path $prodInf -PackageDir $goodPkg -Extra @("-MsFileScanDir", $scanRoot)
+    Assert-True ($r.ExitCode -ne 0 -and $r.Output -match [regex]::Escape("[PKG-MSFILE]")) ("-MsFileScanDir accepted a tree holding a hidden tools\xhciqual\USBHUB.SYS. Output:`n" + $r.Output)
 
 
     # ---- the 64-bit package's INF (roadmap task 21.3) -------------------
@@ -2762,6 +2788,8 @@ try {
         @{ Key = "usb2bos"; Row = "HKR,,XhciUsb2Bos,0x00010003,1`r`n"; Wrong = "HKR,,XhciUsb2Bos,0x00010003,0`r`n" },
         @{ Key = "resumekeep"; Row = "HKR,,XhciResumeKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeKeep,0x00010003,0`r`n" },
         @{ Key = "linkkeep"; Row = "HKR,,XhciLinkKeep,0x00010003,1`r`n"; Wrong = "HKR,,XhciLinkKeep,0x00010003,0`r`n" },
+        @{ Key = "evtring"; Row = "HKR,,XhciEventRingTrbs,0x00010003,1024`r`n"; Wrong = "HKR,,XhciEventRingTrbs,0x00010003,256`r`n" },
+        @{ Key = "botownid"; Row = "HKR,,XhciBulkOnlyOwnId,0x00010003,1`r`n"; Wrong = "HKR,,XhciBulkOnlyOwnId,0x00010003,0`r`n" },
         @{ Key = "msiavoid"; Row = "HKR,,XhciMsiAvoid,0x00010003,1`r`n"; Wrong = "HKR,,XhciMsiAvoid,0x00010003,0`r`n" },
         @{ Key = "streamsoff"; Row = "HKR,,XhciStreamsOff,0x00010003,1`r`n"; Wrong = "HKR,,XhciStreamsOff,0x00010003,0`r`n" },
         @{ Key = "resreinit"; Row = "HKR,,XhciResumeReinit,0x00010003,1`r`n"; Wrong = "HKR,,XhciResumeReinit,0x00010003,0`r`n" },

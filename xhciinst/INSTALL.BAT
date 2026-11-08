@@ -16,7 +16,7 @@ rem   INSTALL /uninstall the window's uninstall (as Add/Remove Programs)
 rem   INSTALL /console   the console tool, for scripts and the F6 floppy:
 rem   INSTALL /console /list       show what would be done; change nothing
 rem   INSTALL /console /uninstall  remove the drivers (the word REMOVE)
-rem   INSTALL /console /yes /set XhciInterruptMode=2   unattended
+rem   INSTALL /console /yes /nopause /set XhciInterruptMode=2   unattended
 rem   INSTALL /console /devices    the connected Thunderbolt and USB4
 rem                                devices; /eject removes one safely
 rem
@@ -33,7 +33,9 @@ rem so a ninth argument may mean a tenth was lost: refuse rather than run
 rem a shortened command.
 if not "%9"=="" goto toomany
 set XDIR=98-me
+rem COMMAND.COM compares case for case (no if /i): these three spellings.
 if "%1"=="/console" goto console98
+if "%1"=="/Console" goto console98
 if "%1"=="/CONSOLE" goto console98
 if not exist TOOLS\XHCIINST\XHCIWIZ.EXE goto nodir
 TOOLS\XHCIINST\XHCIWIZ.EXE %1 %2 %3 %4 %5 %6 %7 %8 %9

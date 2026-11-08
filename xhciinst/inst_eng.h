@@ -48,7 +48,10 @@ typedef struct _INST_ASK {
     const char *Text;
     int Value;              /* INST_Q_VALUE: the row of instValues        */
     int DefaultYes;         /* the yes-or-no questions                    */
-    const char *Default;    /* INST_Q_DIR: what Enter gives               */
+    const char *Default;    /* INST_Q_DIR: what Enter gives, "" when the
+                               default cannot be used; neither front end
+                               reads it (the engine maps an empty answer
+                               itself)                                     */
 } INST_ASK;
 
 /* A step of record 23's order as it begins, ends or is skipped. */
@@ -134,6 +137,8 @@ int inst_eng_read(void);
 /* The Thunderbolt question (record 23 section 8.5): the console asks it;
  * the window reads the default and gives the Components page's choice. */
 void inst_eng_tb_question(void);
+/* inst_eng_tb_state leaves the Thunderbolt component applied; the
+ * caller then gives its choice with inst_eng_tb_choose. */
 int inst_eng_tb_state(int *haveCm, int *present, int *defaultYes,
                       int *installed);
 void inst_eng_tb_choose(int include);

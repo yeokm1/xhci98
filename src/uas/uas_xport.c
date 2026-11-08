@@ -62,7 +62,12 @@
  * transfer has come back, IOCTL_INTERNAL_USB_RESET_PORT, after which the
  * bus has the streams open again on the same handles. A device whose
  * transfers do not come back, or whose port reset fails, is marked Dead and
- * every later request fails with SRB_STATUS_NO_DEVICE.
+ * every later request fails with SRB_STATUS_NO_DEVICE. Streamless (one
+ * command tag and one TMF tag), an unanswered ABORT TASK keeps its tag
+ * quarantined: unless the command's own tag has come back meanwhile, the
+ * LOGICAL UNIT RESET finds no tag and is not sent, and recovery goes on to
+ * the device reset. UAS_CTR_ABORTS and UAS_CTR_LUN_RESETS count the TMFs
+ * sent.
  *
  * IRQL: as uas.h states per entry; completion routines and the timer DPC
  * at DISPATCH_LEVEL; the lock is held by no caller of any function here
@@ -570,6 +575,93 @@ static UCHAR uasResponseStatus(ULONG code)
 }
 
 /*
+ * Issue 26: the failure ring (xhci98_xfer.h, XHCI98_FAILURES). Lock held.
+ * origin is the request's (XHCI98_FAIL_O_*); slot, when there is one, says
+ * its tag, state and transfers.
+ */
+static ULONG uasFailOrigin(PIRP request)
+{
+    if (request == NULL) {
+        return XHCI98_FAIL_O_CLASS;
+    }
+    if (request->Tail.Overlay.DriverContext[UAS_CTX_PASS] != NULL) {
+        return XHCI98_FAIL_O_PROGRAM;
+    }
+    if (request->Tail.Overlay.DriverContext[UAS_CTX_EVENT] != NULL) {
+        return XHCI98_FAIL_O_INTERNAL;
+    }
+    return XHCI98_FAIL_O_CLASS;
+}
+
+static ULONG uasFailXfers(const UAS_SLOT *slot)
+{
+    ULONG m;
+    ULONG i;
+
+    m = 0;
+    if (slot->Xfer[UAS_XFER_STATUS].Busy) {
+        m |= XHCI98_FAIL_X_STATUS;
+    }
+    if (slot->Xfer[UAS_XFER_DATA].Busy) {
+        m |= XHCI98_FAIL_X_DATA;
+    }
+    if (slot->Xfer[UAS_XFER_COMMAND].Busy) {
+        m |= XHCI98_FAIL_X_COMMAND;
+    }
+    for (i = 0; i < UAS_XFERS; i++) {
+        if (slot->Xfer[i].Cancelling || slot->Xfer[i].CancelRefs != 0) {
+            m |= XHCI98_FAIL_X_CANCELLING;
+        }
+    }
+    if (slot->State == UAS_SLOT_FINAL) {
+        m |= XHCI98_FAIL_X_FINAL;
+    }
+    if (slot->DataPosted) {
+        m |= XHCI98_FAIL_X_DATA_POSTED;
+    }
+    return m;
+}
+
+static VOID uasFailNoteLocked(PUAS_FDO fdo, PUAS_SLOT slot,
+                              PSCSI_REQUEST_BLOCK srb, PIRP request,
+                              ULONG event, ULONG srbStatus,
+                              ULONG scsiStatus, const UCHAR *sense,
+                              ULONG senseLength)
+{
+    PULONG w;
+
+    w = fdo->Fail[fdo->FailCount % XHCI98_FAIL_RECORDS];
+    UasFailPack(w, event, uasFailOrigin(request),
+                (slot != NULL) ? slot->Tag : 0,
+                (srb != NULL && srb->CdbLength != 0) ? srb->Cdb[0] : 0,
+                srbStatus, scsiStatus, sense, senseLength,
+                (slot != NULL) ? slot->State : 0,
+                (slot != NULL) ? uasFailXfers(slot) : 0,
+                (srb != NULL) ? srb->TimeOutValue : 0,
+                (slot != NULL) ? slot->DataLength
+                               : (srb != NULL ? srb->DataTransferLength : 0));
+    fdo->FailCount++;
+}
+
+VOID UasEngineNoteLocal(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
+                        ULONG length)
+{
+    UCHAR sense[UAS_INVALID_CDB_SENSE];
+    ULONG n;
+    PULONG w;
+    KIRQL irql;
+
+    n = UasInvalidCdbSense(sense, sizeof(sense));
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    w = fdo->Fail[fdo->FailCount % XHCI98_FAIL_RECORDS];
+    UasFailPack(w, XHCI98_FAIL_E_LOCAL, origin, 0,
+                (cdb != NULL) ? cdb[0] : 0, SRB_STATUS_ERROR,
+                UAS_SCSI_CHECK_CONDITION, sense, n, 0, 0, 0, length);
+    fdo->FailCount++;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
+/*
  * No lock held. A command slot uasCheckDone handed over: idle, ended by its
  * final IU or by recovery or teardown. The SRB gets its status, the MDL is
  * freed, the tag goes back, the request completes.
@@ -579,10 +671,14 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
     PSCSI_REQUEST_BLOCK srb;
     PIRP request;
     UCHAR st;
+    BOOLEAN sense;
+    BOOLEAN busy;
     KIRQL irql;
 
     srb = slot->Srb;
     request = slot->Request;
+    sense = FALSE;
+    busy = FALSE;
     if (slot->FinalSrbStatus != 0) {
         st = (UCHAR)slot->FinalSrbStatus;
         srb->ScsiStatus = 0;
@@ -593,16 +689,12 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
         st = (UCHAR)UasSrbStatus(slot->ScsiStatus, slot->DataLength,
                                  slot->Transferred);
         srb->ScsiStatus = (UCHAR)slot->ScsiStatus;
-        if (slot->ScsiStatus == UAS_SCSI_CHECK_CONDITION) {
-            fdo->Counters[UAS_CTR_SENSE]++;
-        }
+        sense = (BOOLEAN)(slot->ScsiStatus == UAS_SCSI_CHECK_CONDITION);
         if (st == SRB_STATUS_ERROR && slot->SenseLength != 0) {
             st |= SRB_STATUS_AUTOSENSE_VALID;
             srb->SenseInfoBufferLength = (UCHAR)slot->SenseLength;
         }
-        if (st == SRB_STATUS_BUSY) {
-            fdo->Counters[UAS_CTR_BUSY]++;
-        }
+        busy = (BOOLEAN)(st == SRB_STATUS_BUSY);
     }
     if (slot->NeedsData) {
         srb->DataTransferLength = slot->Transferred;
@@ -612,6 +704,33 @@ static VOID uasFinish(PUAS_FDO fdo, PUAS_SLOT slot)
     slot->DataMdl = NULL;
 
     KeAcquireSpinLock(&fdo->Lock, &irql);
+    /* Issue 26, XhciUasFastReset: a command that ended GOOD is progress,
+     * which disarms the early reset. */
+    if (SRB_STATUS(st) == SRB_STATUS_SUCCESS ||
+        SRB_STATUS(st) == SRB_STATUS_DATA_OVERRUN) {
+        fdo->FastProgress = TRUE;
+    }
+    /* Issue 26: a command that did not end GOOD - a short transfer's
+     * DATA_OVERRUN is a success - into the failure ring. */
+    if (SRB_STATUS(st) != SRB_STATUS_SUCCESS &&
+        SRB_STATUS(st) != SRB_STATUS_DATA_OVERRUN) {
+        uasFailNoteLocked(fdo, slot, srb, request,
+                          slot->FinalSrbStatus != 0 ? XHCI98_FAIL_E_ENDED
+                          : slot->ResponseOnly ? XHCI98_FAIL_E_REFUSED
+                          : sense ? XHCI98_FAIL_E_SENSE
+                                  : XHCI98_FAIL_E_OTHER,
+                          SRB_STATUS(st), srb->ScsiStatus,
+                          (UCHAR *)srb->SenseInfoBuffer,
+                          ((st & SRB_STATUS_AUTOSENSE_VALID) != 0)
+                              ? slot->SenseLength : 0);
+    }
+    /* Counters are read under the lock (the telemetry answer). */
+    if (sense) {
+        fdo->Counters[UAS_CTR_SENSE]++;
+    }
+    if (busy) {
+        fdo->Counters[UAS_CTR_BUSY]++;
+    }
     if (slot->Quarantine) {
         fdo->Quarantined |= 1UL << (slot->Tag - 1);
     } else {
@@ -646,6 +765,7 @@ static VOID uasSlotReset(PUAS_SLOT slot)
     slot->TmfSignalled = FALSE;
     slot->Finishing = FALSE;
     slot->Quarantine = FALSE;
+    slot->AbortIrp = NULL;
     slot->TmfDone = NULL;
     slot->Request = NULL;
     slot->Srb = NULL;
@@ -835,6 +955,8 @@ static VOID uasPump(PUAS_FDO fdo)
             failIrp = irp;
         } else {
             slot->State = UAS_SLOT_ACTIVE;
+            slot->StartedAt = fdo->Seconds;
+            slot->CancelWait = 0;
             fdo->Active++;
             fdo->Counters[UAS_CTR_COMMANDS]++;
             uasTeleCount(fdo, slot);
@@ -1051,7 +1173,18 @@ static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     UNREFERENCED_PARAMETER(device);
     fdo = (PUAS_FDO)context;
     KeAcquireSpinLock(&fdo->Lock, &irql);
-    if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
+    if (fdo->TeleFails) {
+        /* Issue 26: a bus before 3.4.2.0 refuses the failures' record as
+         * a malformed telemetry record: not sent again. */
+        if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
+            irp->IoStatus.Status == STATUS_INVALID_DEVICE_REQUEST ||
+            irp->IoStatus.Status == STATUS_INVALID_PARAMETER) {
+            fdo->FailOff = TRUE;
+        } else if (NT_SUCCESS(irp->IoStatus.Status)) {
+            fdo->FailSent = fdo->FailRecord.Word[XHCI98_FAIL_COUNT];
+        }
+        fdo->TeleFails = FALSE;
+    } else if (irp->IoStatus.Status == STATUS_NOT_SUPPORTED ||
         irp->IoStatus.Status == STATUS_INVALID_DEVICE_REQUEST) {
         fdo->TeleOff = TRUE;
     } else if (NT_SUCCESS(irp->IoStatus.Status)) {
@@ -1064,6 +1197,30 @@ static NTSTATUS uasTeleDone(PDEVICE_OBJECT device, PIRP irp, PVOID context)
     return STATUS_MORE_PROCESSING_REQUIRED;
 }
 
+/* Issue 26. Lock held, the send free. TRUE when the failure record was
+ * built and is to be sent (uasTeleSend): new failures, a bus that takes
+ * them. */
+static BOOLEAN uasFailBuild(PUAS_FDO fdo)
+{
+    PULONG w;
+
+    if (fdo->FailOff || fdo->FailCount == fdo->FailSent) {
+        return FALSE;
+    }
+    w = fdo->FailRecord.Word;
+    w[XHCI98_FAIL_SIG] = XHCI98_FAIL_SIGNATURE;
+    w[XHCI98_FAIL_VER] = XHCI98_FAIL_VERSION;
+    w[XHCI98_FAIL_SIZE] = sizeof(XHCI98_FAILURES);
+    w[XHCI98_FAIL_COUNT] = fdo->FailCount;
+    UasCopy(w + XHCI98_FAIL_AT, fdo->Fail, sizeof(fdo->Fail));
+    fdo->FailTurn = FALSE;
+    fdo->TeleFails = TRUE;
+    fdo->TeleBusy = TRUE;
+    fdo->TeleSubmitting = TRUE;
+    uasRef(fdo);
+    return TRUE;
+}
+
 /* Lock held. TRUE when a record was built and is to be sent; the caller
  * then sends it with uasTeleSend after the lock's release. */
 static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
@@ -1074,6 +1231,11 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
     if (fdo->TeleIrp == NULL || fdo->TeleBusy || fdo->TeleOff ||
         fdo->Gone || !fdo->Started) {
         return FALSE;
+    }
+    /* Issue 26: new failures get every other send while the telemetry
+     * keeps changing (sustained I/O moves its counters every second). */
+    if (fdo->FailTurn && uasFailBuild(fdo)) {
+        return TRUE;
     }
     w = fdo->TeleRecord.Word;
     UasZero(w, sizeof(fdo->TeleRecord));
@@ -1111,8 +1273,11 @@ static BOOLEAN uasTeleBuild(PUAS_FDO fdo)
         }
     }
     if (i == XHCI98_TELE_WORDS) {
-        return FALSE;
+        /* Issue 26: nothing new in the telemetry; the failures, when
+         * there are new ones and the bus takes them. */
+        return uasFailBuild(fdo);
     }
+    fdo->FailTurn = TRUE;
     fdo->TeleSequence++;
     w[XHCI98_TELE_SEQUENCE] = fdo->TeleSequence;
     fdo->TeleBusy = TRUE;
@@ -1134,7 +1299,10 @@ static VOID uasTeleSend(PUAS_FDO fdo)
     next = IoGetNextIrpStackLocation(irp);
     next->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
     next->Parameters.DeviceIoControl.IoControlCode = IOCTL_XHCI98_TELEMETRY;
-    next->Parameters.Others.Argument1 = &fdo->TeleRecord;
+    /* TeleFails is the build's, under the lock; read once the send is
+     * this context's alone (TeleBusy). */
+    next->Parameters.Others.Argument1 =
+        fdo->TeleFails ? (PVOID)&fdo->FailRecord : (PVOID)&fdo->TeleRecord;
     UAS_SET_COMPLETION_ALWAYS(irp, uasTeleDone, fdo);
     (VOID)IoCallDriver(fdo->Lower, irp);
     KeAcquireSpinLock(&fdo->Lock, &irql);
@@ -1175,16 +1343,41 @@ static VOID uasTick(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
         return;
     }
     uasRef(fdo);
+    fdo->Seconds++;
     for (t = 1; t <= fdo->Tags.Count; t++) {
         slot = &fdo->Slots[t];
         if (slot->State == UAS_SLOT_FREE || slot->Tmf || slot->TimedOut ||
             slot->Failed || slot->Aborted || slot->Finishing) {
             continue;
         }
+        /* Issue 26, XhciUasFastReset: a command whose final IU is in and
+         * whose data transfer this driver cancelled (a GOOD status's data
+         * still arriving keeps the ordinary timeout) and has not had back
+         * waits its own deadline, then asks for transport recovery
+         * (Failed: the device reset), not an ABORT TASK the device has no
+         * task for. */
+        if (fdo->FastReset && slot->State == UAS_SLOT_FINAL &&
+            ((slot->Xfer[UAS_XFER_DATA].Busy &&
+              slot->Xfer[UAS_XFER_DATA].Cancelling) ||
+             slot->Xfer[UAS_XFER_DATA].CancelRefs != 0)) {
+            slot->CancelWait++;
+            if (UasFinalCancelDue(1, 1, 1, slot->CancelWait)) {
+                uasFailNoteLocked(fdo, slot, slot->Srb, slot->Request,
+                                  XHCI98_FAIL_E_FAST_RESET, 0,
+                                  slot->ScsiStatus, NULL, 0);
+                slot->Failed = TRUE;
+                expired = TRUE;
+            }
+            continue;
+        }
         slot->TimeLeft--;
         if (slot->TimeLeft <= 0) {
             slot->TimedOut = TRUE;
             fdo->Counters[UAS_CTR_TIMEOUTS]++;
+            /* Issue 26: what was still outstanding when it ran out. */
+            uasFailNoteLocked(fdo, slot, slot->Srb, slot->Request,
+                              XHCI98_FAIL_E_TIMEOUT, 0, slot->ScsiStatus,
+                              NULL, 0);
             expired = TRUE;
         }
     }
@@ -1360,6 +1553,9 @@ static ULONG uasTmf(PUAS_FDO fdo, ULONG function, ULONG lun, ULONG taskTag)
     slot->ResponseCode = UAS_RC_TMF_FAILED;
     slot->Lun = lun;
     slot->State = UAS_SLOT_ACTIVE;
+    /* Counted as sent: a TMF that found no tag (above) is not. */
+    fdo->Counters[function == UAS_TMF_LOGICAL_UNIT_RESET
+                      ? UAS_CTR_LUN_RESETS : UAS_CTR_ABORTS]++;
     uasPostStatus(fdo, slot, &a);
     uasPostIu(fdo, slot, length, &a);
     KeReleaseSpinLock(&fdo->Lock, irql);
@@ -1480,7 +1676,9 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
     status = STATUS_IO_TIMEOUT;
     sent = FALSE;
     if (uasWaitAllFree(fdo)) {
+        KeAcquireSpinLock(&fdo->Lock, &irql);
         fdo->Counters[UAS_CTR_PORT_RESETS]++;
+        KeReleaseSpinLock(&fdo->Lock, irql);
         status = UasSyncIoctl(fdo, IOCTL_INTERNAL_USB_RESET_PORT);
         sent = (BOOLEAN)(status != STATUS_INSUFFICIENT_RESOURCES);
     }
@@ -1503,6 +1701,7 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
     /* The port reset lost every task the device held: quarantined tags
      * are safe again. */
     uasReleaseQuarantine(fdo);
+    fdo->FastArmed = FALSE;
     KeReleaseSpinLock(&fdo->Lock, irql);
     return TRUE;
 }
@@ -1512,7 +1711,6 @@ static BOOLEAN uasResetDevice(PUAS_FDO fdo)
  * usable. */
 static BOOLEAN uasResetLun(PUAS_FDO fdo, ULONG lun)
 {
-    fdo->Counters[UAS_CTR_LUN_RESETS]++;
     if (uasTmfOk(uasTmf(fdo, UAS_TMF_LOGICAL_UNIT_RESET, lun, 0))) {
         uasEndLun(fdo, lun, SRB_STATUS_BUS_RESET);
         return TRUE;
@@ -1535,11 +1733,17 @@ static BOOLEAN uasAbortTask(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR abortStatus)
     lun = slot->Lun;
     tag = slot->Tag;
     KeReleaseSpinLock(&fdo->Lock, irql);
-    fdo->Counters[UAS_CTR_ABORTS]++;
     if (uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, lun, tag))) {
         /* Ended only if it is still the same command (one hold). */
         uasActInit(&a);
         KeAcquireSpinLock(&fdo->Lock, &irql);
+        /* Issue 26, XhciUasFastReset: the device answered; a second
+         * timeout before any progress resets it (UasFastResetDue). */
+        if (fdo->FastReset) {
+            fdo->FastArmed = TRUE;
+            fdo->FastProgress = FALSE;
+            fdo->FastAt = fdo->Seconds;
+        }
         if (slot->Request == request) {
             uasEndSlotLocked(fdo, slot, abortStatus, FALSE, &a);
         }
@@ -1548,6 +1752,32 @@ static BOOLEAN uasAbortTask(PUAS_FDO fdo, PUAS_SLOT slot, UCHAR abortStatus)
         return TRUE;
     }
     return uasResetLun(fdo, lun);
+}
+
+/*
+ * Issue 26, XhciUasFastReset (owner, 2026-11-07): whether this timed-out
+ * command goes straight to the device reset (UasFastResetDue); when it
+ * does, the decision is entered in the failure ring and the history
+ * cleared, so the reset's own aftermath starts afresh. Always 0 at the
+ * value's default. PASSIVE_LEVEL, no lock held.
+ */
+static BOOLEAN uasFastDue(PUAS_FDO fdo, PUAS_SLOT slot)
+{
+    BOOLEAN due;
+    KIRQL irql;
+
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    due = (BOOLEAN)UasFastResetDue(fdo->FastReset, fdo->FastArmed,
+                                   fdo->FastProgress, fdo->Seconds,
+                                   fdo->FastAt, slot->StartedAt);
+    if (due) {
+        uasFailNoteLocked(fdo, slot, slot->Srb, slot->Request,
+                          XHCI98_FAIL_E_FAST_RESET, 0, slot->ScsiStatus,
+                          NULL, 0);
+        fdo->FastArmed = FALSE;
+    }
+    KeReleaseSpinLock(&fdo->Lock, irql);
+    return due;
 }
 
 /* Lock held. Whether a slot is a live command of the LUN's PDO. */
@@ -1626,7 +1856,6 @@ static VOID uasCloseLun(PUAS_FDO fdo, PUAS_PDO pdo)
         if (request == NULL) {
             continue;
         }
-        fdo->Counters[UAS_CTR_ABORTS]++;
         if (!uasTmfOk(uasTmf(fdo, UAS_TMF_ABORT_TASK, pdo->Lun, tag))) {
             escalate = TRUE;
             break;
@@ -1680,6 +1909,22 @@ static PUAS_SLOT uasFindSrb(PUAS_FDO fdo, PSCSI_REQUEST_BLOCK victim)
     return NULL;
 }
 
+/*
+ * Lock held. The in-flight command the ABORT_COMMAND in abortIrp named:
+ * the same SRB and still the command that abort was admitted against
+ * (AbortIrp). Between admission and this worker the victim can complete
+ * and the class driver send its SRB again as a new command, which another
+ * abort may name; neither matches this abort.
+ */
+static PUAS_SLOT uasFindVictim(PUAS_FDO fdo, PSCSI_REQUEST_BLOCK victim,
+                               PIRP abortIrp)
+{
+    PUAS_SLOT slot;
+
+    slot = uasFindSrb(fdo, victim);
+    return (slot != NULL && slot->AbortIrp == abortIrp) ? slot : NULL;
+}
+
 /* One held ABORT_COMMAND or reset SRB, completed with its outcome. */
 static VOID uasRecoveryRequest(PUAS_FDO fdo, PIRP irp)
 {
@@ -1693,7 +1938,7 @@ static VOID uasRecoveryRequest(PUAS_FDO fdo, PIRP irp)
     pdo = (PUAS_PDO)irp->Tail.Overlay.DriverContext[UAS_CTX_PDO];
     if (srb->Function == SRB_FUNCTION_ABORT_COMMAND) {
         KeAcquireSpinLock(&fdo->Lock, &irql);
-        slot = uasFindSrb(fdo, srb->NextSrb);
+        slot = uasFindVictim(fdo, srb->NextSrb, irp);
         KeReleaseSpinLock(&fdo->Lock, irql);
         if (slot == NULL) {
             st = SRB_STATUS_ABORT_FAILED;   /* it had already completed */
@@ -1816,6 +2061,10 @@ static VOID uasRecoveryWorker(PVOID context)
             }
             break;
         case UAS_RECOVER_TIMEOUT:
+            if (uasFastDue(fdo, slot)) {
+                (VOID)uasResetDevice(fdo);
+                break;
+            }
             (VOID)uasAbortTask(fdo, slot, SRB_STATUS_TIMEOUT);
             break;
         case UAS_RECOVER_REQUEST:
@@ -2121,6 +2370,7 @@ NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
     PLIST_ENTRY e;
     PIRP victimIrp;
     PSCSI_REQUEST_BLOCK victim;
+    PUAS_SLOT victimSlot;
     BOOLEAN admitted;
     BOOLEAN queue;
     UCHAR st;
@@ -2146,7 +2396,14 @@ NTSTATUS UasEngineAbort(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                 break;
             }
         }
-        if (victimIrp == NULL && uasFindSrb(fdo, victim) != NULL) {
+        victimSlot = (victimIrp == NULL) ? uasFindSrb(fdo, victim) : NULL;
+        if (victimSlot != NULL) {
+            /* Pinned to this command, not to its SRB's address. A second
+             * abort of the same command finds it taken and fails as for a
+             * victim already gone, once the first has ended it. */
+            if (victimSlot->AbortIrp == NULL) {
+                victimSlot->AbortIrp = irp;
+            }
             IoMarkIrpPending(irp);
             InsertTailList(&fdo->RecoveryRequests,
                            &irp->Tail.Overlay.ListEntry);

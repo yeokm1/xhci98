@@ -11,20 +11,27 @@ also stops a USB stick or disk, or a device connected through a
 Thunderbolt or USB4 port, safely, so that you can unplug it, and it sits
 in the notification area (the system tray) beside the clock.
 
-The one driver setting it changes is the drivers' logging level
-(below). It approves no Thunderbolt device and updates no firmware. It
-needs no administrator rights to start.
+It shows and changes the drivers' settings in the registry (Settings,
+below) and their logging level (Logging level, below). It approves no
+Thunderbolt device and updates no firmware. It needs no administrator
+rights to start.
 
 Which file
 ----------
 
-  XHCITR.EXE     Windows 98 SE, ME, 2000, XP, 32-bit Vista and 7
-  XHCITR64.EXE   Windows XP x64, Vista x64 and 7 x64
+  XHCITR.EXE     Windows 98 SE, ME, 2000, XP and 32-bit Vista to 10
+  XHCITR64.EXE   Windows XP x64 and 64-bit Vista to 10
 
 INSTALL.BAT copies the right one to the install directory it asks for
 (C:\XHCI98 unless you choose another, or INSTALL /to path) and starts it
 each time you log on. You can also run it from the package directly, or
-from anywhere else: it does not care where it is.
+from anywhere else: it does not care where it is. XHCITR.EXE started on
+64-bit Windows starts XHCITR64.EXE from its own folder in its place.
+When that is not there, it says so and runs itself, with limits: it reads
+the 32-bit view of HKLM\Software, so what it shows from the start at login
+(Run) and from Setup's records (Software\xhci98) may be wrong, it does not
+show the devices' resources, and Eject may fail. Its snapshot commands
+(below) run in XHCITR.EXE itself.
 
 The window
 ----------
@@ -63,6 +70,7 @@ easy to spot.
                            Descriptors on, the selected USB device's
                            descriptors are read and shown in full
   View > Logging level...  the drivers' logging levels (below)
+  View > Settings...       the drivers' settings (below)
   Action > Safely Remove   stops the selected USB stick or disk, or
                            Thunderbolt or USB4 device
   Action > Properties      opens the device in Device Manager
@@ -84,10 +92,10 @@ using the device, Windows refuses and the tool tells you which.
 Close the programs and windows that use the device first, as with
 Windows' own Safely Remove Hardware.
 
-Under the USB4 connection manager on Windows 2000 to 7, the stop also
+Under the USB4 connection manager on Windows 2000 to 10, the stop also
 closes the device's PCIe tunnel once the Thunderbolt driver has the stop
 confirmed. Run as an administrator, the tool confirms it at once. Without
-administrator rights on XP, Vista and 7 the xHCI98 mark service
+administrator rights on XP and later the xHCI98 mark service
 confirms it in the background: the tool waits up to 30 seconds for that,
 and if the tunnel is still up then it says the tunnel has not been seen
 closed and closes if the mark service confirms the eject. On Windows
@@ -116,17 +124,18 @@ stopped; until you unplug it, Device Manager's Refresh can start it
 again. On Windows 2000 and later Windows holds it stopped until you
 unplug it, and the tree shows it "[stopped - unplug it]".
 
-On Windows Vista and 7, if Windows refuses because the device needs
+On Windows Vista and later, if Windows refuses because the device needs
 administrator rights to stop, the tool offers to try again as an
 administrator.
 
-On Windows 2000 to 7, a Thunderbolt or USB4 device that Windows does not
+On Windows 2000 to 10, a Thunderbolt or USB4 device that Windows does not
 mark removable (for example the first time it is plugged in) is missing
 from Windows' own Safely Remove Hardware. The tool still stops it, with
 administrator rights: when it runs without them it says so and offers
 "Stop as administrator...", which asks for them (User Account Control on
-Vista and 7, the Run As dialog on 2000 and XP) for that one stop. If you
-cancel, nothing is stopped.
+Vista and later, the Run As dialog on 2000 and XP) for that one stop. If
+you cancel, nothing is stopped.
+
 The drivers' logs
 -----------------
 
@@ -244,12 +253,112 @@ reads its level only when it starts, so the tool then offers to restart
 Windows.
 
 On Windows 98 SE and ME, and for an administrator, Set writes the values
-at once. On Windows 2000 to 7 without administrator rights the button
+at once. On Windows 2000 to 10 without administrator rights the button
 reads "Set as administrator..." and asks for them (User Account Control
-on Vista and 7, the Run As dialog on 2000 and XP) for that one change.
+on Vista and later, the Run As dialog on 2000 and XP) for that one change.
 If you cancel, nothing is changed.
 
 The levels are also in Save Report and XHCITR /report.
+
+Settings
+--------
+
+View > Settings... (or a right click on a USB controller driven by
+xhci98 or on a Thunderbolt or USB4 controller, or the icon's menu) shows
+the drivers' settings in the registry and changes them: the ones Setup
+offers, with the same meanings, choices and defaults, and a few more.
+Each tab is shown only where its driver is installed:
+
+  USB                  the xhci98 driver's settings
+  Thunderbolt / USB4   the Thunderbolt and USB4 driver's (xhcicm)
+  Stor98               the bundled Stor98's
+  xHCI98 USB Tree      this tool's own settings, for you alone, each in
+                       force at once: Start at login, Warn when a device
+                       is removed unexpectedly (2000 and later), Tell me
+                       when a device can run faster, Watch Windows' own
+                       USB ports too, the quick-save hotkey and its sound
+                       (also in the View menu, but for the last two)
+
+The list shows the common settings; tick "Show advanced settings" for
+the rest, which you should change only if the release notes advise it.
+Each row shows the value now and the value the install writes. Select a
+row to read what it does and pick a value; the row then shows the new
+value and a *. Apply saves every change at once; Close without Apply
+saves nothing.
+
+On the USB tab the common settings are XhciIntelPortSwitch (Intel 7-, 8-
+and 9-series and C610 computers: the shared, usually blue, connectors
+moved from the USB 2.0 controller to xhci98), XhciIntelIrqRoute and
+XhciIntelNoRouteIrq (the Intel interrupt repairs; the second on Windows
+2000 and XP), XhciInterruptMode, XhciForceBulkOnly and XhciSilentInstall
+(Windows 98 SE and ME: turning it on also puts the list of device classes
+in place, as Setup and silent-on.bat do). Logging level... opens the
+logging level window (above). On the Thunderbolt / USB4 tab they are
+XhciCmMode, XhciCmApprove and XhciCmSafeEject; on the Stor98 tab
+StorWriteThrough and StorPollMode. The release notes, "Registry
+settings", say what each does.
+
+"Applies to" picks the controllers: every one (the default), or one of
+them, named with its maker, PCI ID and location. For every controller
+the value is written where the drivers read it: into the machine-wide
+key, HKLM\System\CurrentControlSet\Services\USB, where a value is set
+there (it wins for every controller), else into each controller's own
+driver key. One controller's own value can be set only while no
+machine-wide value is set. A Stor98 setting is one value for every
+Stor98 drive. Stor98's tab is read-only where its settings are shared
+with a Stor98 that Setup did not install.
+
+Changing XhciIntelPortSwitch asks first: at Windows' next start the
+shared connectors move to xhci98 (or back to the USB 2.0 controller), so
+a device on them is found again then; do not have a drive on them busy
+when you restart.
+
+Most settings take effect when the driver next starts. After Apply the
+tool says which, and offers to restart Windows now (save your work first:
+every USB device stops while Windows restarts). For some, disabling and
+enabling the controller in Device Manager applies them too, and the tool
+says so; it never does that itself. XhciForceBulkOnly and
+XhciBulkOnlyOwnId take effect when a drive is plugged in again. Until
+Windows restarts the window lists the changes made, with Restart now....
+
+On Windows 98 SE and ME, and for an administrator, Apply writes at once.
+On Windows 2000 to 10 without administrator rights the button reads
+"Apply as administrator..." and asks for them, once for all the changes.
+Apply refuses while Setup is running.
+
+The settings are also in Save Report and XHCITR /report, and File > Save
+Snapshot... writes them beside the snapshot as XHCISET.TXT.
+
+Quick save
+----------
+
+The icon's menu has "Quick save (report + snapshot)": with no question
+asked it saves the report (as Save Report), the driver's snapshot (as
+Save Snapshot), the settings (XHCISET.TXT) and a short README.TXT in a
+new folder named by the date and time, for example
+
+  C:\XHCI98\Reports\2026-11-07_121530
+
+in the folder Setup installed the tools in. Where that folder cannot be
+written (Windows Vista and later without administrator rights, for
+example), it saves in your documents folder instead, under "xHCI98
+Reports". It runs in the background; when it ends, a balloon on the icon
+(on Windows 98 SE a small window in its place) says where the files are
+and whether everything was saved; click it to open the folder (not on
+Windows 2000, whose balloons take no clicks). "Sound
+when a quick save ends" in the Settings window decides whether it plays
+a sound.
+
+The Settings window can also give quick save a key of its own (Quick-save
+hotkey, off until you tick it): Ctrl+Alt+F11, or one of the other
+keys offered (Ctrl+Shift+F11, Ctrl+Alt+F10, Ctrl+Alt+F9, Ctrl+F11,
+Ctrl+Alt+Shift+F11; the two-key Ctrl+F11 clashes with other programs
+more often). The key works only while the xHCI98 USB Tree is running (it
+starts at login with its icon), and only while Windows still takes
+keyboard input: when it has frozen altogether, no key does anything. A
+USB keyboard on the controller that is misbehaving may not get the key
+through; a PS/2 keyboard, or one on another controller, does. If another
+program has the key, the window says so; choose another.
 
 The notification-area icon
 --------------------------
@@ -257,15 +366,14 @@ The notification-area icon
   Click            a list of the devices you can stop: USB devices,
                    then Thunderbolt and USB4 devices
   Double-click     opens the window
-  Right-click      Open, Refresh, About, Start at login, Tell me when a
-                   device can run faster, Watch Windows' own USB ports
-                   too, and Exit
+  Right-click      Open, Settings..., About, Quick save (report +
+                   snapshot) and Exit
 
 Start at login
 --------------
 
 To stop the icon starting when you log on, untick "Start at login" in
-the View menu or the icon's right-click menu; tick it again to bring it
+the View menu or the Settings window; tick it again to bring it
 back. It is your own setting and needs no administrator rights. If the
 item is grey ("off for this computer"), the program was installed with
 INSTALL /notray, so it starts for nobody; run INSTALL again without
@@ -306,8 +414,8 @@ device instead. A hub is
 never listed itself: the USB 2.0 half of a USB 3 hub always runs at High
 Speed.
 
-"Tell me when a device can run faster" in the View menu and the icon's
-right-click menu turns this on or off for you. The installer's box of the
+"Tell me when a device can run faster" in the View menu and the Settings
+window turns this on or off for you. The installer's box of the
 same name (or INSTALL /faster and /nofaster) sets it for the computer;
 your own choice overrides that. It is on by default on every Windows:
 Windows' own "can perform faster" notices do not appear under xhci98.sys.
@@ -320,7 +428,7 @@ hub of 5 Gbit/s on the way holds a device to 5 Gbit/s too.
 Windows' own USB ports: by default only the ports xhci98.sys runs are
 watched. A USB 3 device on a USB 2.0 port of the board's own EHCI, OHCI
 or UHCI controller gives no notice. "Watch Windows' own USB ports too"
-in the View menu and the icon's right-click menu turns that on for you.
+in the View menu and the Settings window turns that on for you.
 It is off by default. The tool then asks such a device for its BOS
 descriptor through Windows' hub driver, once per plug, and only when it
 says USB 2.10 or later. A device that declares SuperSpeed there is
@@ -338,7 +446,10 @@ computer's firmware (ACPI) tables in the folder: one file a table
 Nothing is written if the folder already has one of these files.
 
 On XP x64, Vista and later the tables come from Windows, which gives
-one table of each name (the first SSDT of several). On 98 SE and ME
+one table of each name (the first SSDT of several). Where Windows
+gives no DSDT, as XP x64 may, the DSDT, and the FACP, FACS and RSDT
+it did not give, come from the copies Windows keeps in the registry.
+On 98 SE and ME
 the xhci98 driver reads them from memory when you save them, the DSDT
 and every SSDT included (XhciAcpiTables 0 turns this off); where the
 xhcicm driver runs, the copies it read at its start are saved too
@@ -346,6 +457,9 @@ where they differ. On 2000 and 32-bit XP they come from the copies
 Windows keeps in the registry: the DSDT, FACP, FACS and RSDT, but no
 SSDT. A table that does not check out is listed in TABLES.TXT with
 the reason and not saved.
+
+The MSDM and SLIC tables hold this computer's Windows licence data.
+They are never saved: TABLES.TXT lists each by its header alone.
 
 The files are your computer's own firmware. They help tell whether
 another board's USB4 firmware can be added; send them only if you
@@ -367,7 +481,20 @@ From a command line
   XHCITR /setlevel xhci98=<n> xhcicm=<n>
                                sets either driver's logging level (0 to
                                4; one or both) and exits; needs
-                               administrator rights on 2000 to 7
+                               administrator rights on 2000 to 10
+  XHCITR /set Name=Value [Name=Value ...] [/on <id>] [/yes]
+                               sets the named settings (as the Settings
+                               window offers them; Name=default for the
+                               value the install writes) for every
+                               controller, or with /on for the one with
+                               that Device Manager instance ID, says what
+                               it takes to apply them and exits; needs
+                               administrator rights on 2000 to 10. A
+                               change that can stop Windows from
+                               starting (XhciIntelNoRouteIrq 0 on the
+                               listed computers under Windows 2000) is
+                               refused unless /yes is given
+  XHCITR /set /show            lists the settings and exits
   XHCITR /snapshot [NAME] [/c N] [/nosysinfo]
                                writes the snapshot's four files in the
                                current directory (/c N: controller N,
@@ -375,7 +502,8 @@ From a command line
                                Windows, processor and BIOS details)
   XHCITR /dump [/c N] [/o NAME] [/nosysinfo]
                                writes the dump alone (NAME.TXT, .BIN and
-                               .PSC), replacing an earlier set of NAME
+                               .PSC; NAME is XHCITR without /o),
+                               replacing an earlier set of NAME
   XHCITR /probe                checks the route to the driver and
                                writes nothing
   XHCITR /snapshot /?          the snapshot's long help
@@ -383,8 +511,9 @@ From a command line
 The snapshot commands show their text in a message box, or write it to
 where their output is redirected.
 
-Exit codes: 0 done, 1 refused (nothing changed), 2 failed, 4 Windows
-refused or a step remains for you. /snapshot: 0 both files written in
+Exit codes: 0 done, 1 refused (nothing changed), 2 failed, 3 done and
+Windows must restart (/set), 4 Windows refused or a step remains for you
+(/set: a drive to plug in again). /snapshot: 0 both files written in
 full, 2 a name or switch refused, 3 to 8 as XHCITR /snapshot /? says.
 
 Licence

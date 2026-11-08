@@ -1,5 +1,11 @@
 # Hub Topology Tracking and Route String Derivation - Design
 
+> **Status: the `1.2.0.0` miniport's record** (branch `1.2.0.0`). The
+> host controller driver of `2.0.0.0` onward runs hubs inside the bus and
+> keeps the topology this record derives in `src/xhci_topo.c`, but no longer
+> learns it by snooping `usbhub.sys`; design record 13 section 10 is the
+> HCD's account.
+
 Design doc 02. Companion to subphase 7b's hub work in
 [`../roadmap.md`](../roadmap.md): tasks 7b-A.1 through 7b-A.3, the batch 7b-V
 VM run and the batch 7b-M hardware run (devices behind external USB 2.0 hubs,

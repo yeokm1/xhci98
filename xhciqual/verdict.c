@@ -113,6 +113,16 @@ void report_caveats(const CTRL *c)
     const PCIINFO *p = &c->pci;
     int broken;
 
+    /* Owner, 2026-11-06 (TL-7): a limit of this tool's, not a fault. */
+    if (c->mmio_ok && quick_ports_arg(c) == 0)
+        qprintf("      CAVEAT: no USB2 protocol ports, so C6 and C8 could "
+                "not exercise this\n"
+                "        controller. That is a limit of this tool, not a "
+                "fault of the\n"
+                "        controller or of xhci98.sys.\n");
+    /* The polling caveat only where polling is what the run found. */
+    if (!c->irq_force_poll && p->ipin != 0 && c->v_irq != V_POLL)
+        return;
     broken = (c->quirk != 0 && (c->quirk->flags & QF_BROKEN_MSI) != 0);
     if (c->irq_force_poll) {
         qprintf("      CAVEAT: no working interrupt - the controller's "
@@ -150,6 +160,7 @@ int final_verdict(CTRL *c, int active_requested)
     int disqualified = 0;
     int tool_limited = 0;
     int caveats = 0;
+    int ports_caveat = 0;
     int st_ok = 1;
     int quick;
 
@@ -165,7 +176,7 @@ int final_verdict(CTRL *c, int active_requested)
      * would be worse than no quick scan at all, and two copies of these
      * conditions is exactly how that happens.
      */
-    quick = quick_classify(&c->pci, c->mmio_ok, c->usb2_ports,
+    quick = quick_classify(&c->pci, c->mmio_ok, quick_ports_arg(c),
                            active_requested);
     if (quick == QUICK_DISQUALIFIED) {
         qualified = 0;
@@ -192,15 +203,20 @@ int final_verdict(CTRL *c, int active_requested)
                     "temporary state above.\n");
         return VERDICT_NOT;
     }
-    if (c->usb2_ports == 0) {
-        qprintf("  DISQUALIFIED: no USB2 protocol ports (B7 empty)\n");
+    if (c->mmio_ok && quick_ports_arg(c) == QUICK_NO_ROOT_PORTS) {
+        qprintf("  DISQUALIFIED: no root ports (MaxPorts 0, or none in "
+                "B7)\n");
+    } else if (c->usb2_ports == 0) {
+        qprintf("  NO USB2 PORTS: B7 is empty, so C6 and C8 cannot run "
+                "here (a caveat)\n");
+        ports_caveat = 1;
     }
 
     if (!active_requested) {
         qprintf("  Probe-only run: %s so far. Active tests (C1-C7) NOT "
                 "run - no qualification verdict.\n",
                 qualified ? "no disqualifiers" : "disqualified");
-        if (qualified && caveats)
+        if (qualified && (caveats || ports_caveat))
             report_caveats(c);
         return VERDICT_NOT;
     }
@@ -234,6 +250,11 @@ int final_verdict(CTRL *c, int active_requested)
                 st_ok = 0;
             }
         }
+        if (c->irq_teardown_failed) {
+            qprintf("  IRQ SELF-TEST FAILURE: C4's hook was not removed:\n"
+                    "      %s\n", c->irq_teardown_note);
+            st_ok = 0;
+        }
         if (c->cleanup_failed) {
             qprintf("  IRQ SELF-TEST FAILURE: cleanup: %s\n",
                     c->cleanup_note);
@@ -252,6 +273,8 @@ int final_verdict(CTRL *c, int active_requested)
             qprintf("  ==> IRQ SELF-TEST PASS%s - locked one-shot ISR and "
                     "teardown completed.\n",
                     warned ? " WITH HANDOFF WARNING" : "");
+            if (ports_caveat)
+                report_caveats(c);
         } else if (c->cleanup_failed) {
             qprintf("  ==> IRQ SELF-TEST FAILED - cleanup could not safely "
                     "quiesce the controller.\n");
@@ -271,7 +294,8 @@ int final_verdict(CTRL *c, int active_requested)
                 "run.\n");
         if (!qualified)
             return VERDICT_NOT;
-        return caveats ? VERDICT_CAVEATS : VERDICT_QUALIFIED;
+        return (caveats || ports_caveat) ? VERDICT_CAVEATS
+                                         : VERDICT_QUALIFIED;
     }
 
     if (c->poll_only) {
@@ -316,7 +340,7 @@ int final_verdict(CTRL *c, int active_requested)
                     "      C4 interrupt delivery NOT tested; re-run without "
                     "--poll-only to earn a verdict.\n",
                     c->v_port == V_PASS ? "/C6 port reset" : "");
-            if (caveats)
+            if (caveats || ports_caveat)
                 report_caveats(c);
         }
         return VERDICT_NOT;
@@ -356,7 +380,14 @@ int final_verdict(CTRL *c, int active_requested)
             caveats = 1;
         } else if ((c->v_dma == V_PASS || c->v_dma == V_WARN) &&
                    c->v_irq != V_PASS) {
-            if (c->v_irq == V_FAIL && c->irq_no_event) {
+            if (c->v_irq == V_FAIL && c->irq_tool_failed) {
+                /* A DPMI step of the tool's own failed: C4 was not
+                 * completed, no routing was tested, and a tool limit is
+                 * no evidence about the controller (legacy.c's rule). */
+                qprintf("  NOT QUALIFIED: C4 could not be completed by the "
+                        "tool:\n      %s\n", c->irq_note);
+                tool_limited = 1;
+            } else if (c->v_irq == V_FAIL && c->irq_no_event) {
                 /* Not an interrupt question: the command never completed,
                  * so polling would not serve it either (36.10). */
                 qprintf("  DISQUALIFIED: C4's No-Op never completed, even "
@@ -375,6 +406,15 @@ int final_verdict(CTRL *c, int active_requested)
             qualified = 0;
         }
     }
+    if (c->irq_teardown_failed) {
+        /* After C4 ended, whatever it saw: the tool's own step, and the
+         * reason C6 and C8 did not run. */
+        qprintf("  NOT QUALIFIED: the tool could not take its C4 interrupt "
+                "hook down:\n      %s - C6 and C8 were not run.\n",
+                c->irq_teardown_note);
+        qualified = 0;
+        tool_limited = 1;
+    }
     if (c->cleanup_failed) {
         qprintf("  DISQUALIFIED: cleanup could not quiesce the controller: "
                 "%s\n", c->cleanup_note);
@@ -387,7 +427,7 @@ int final_verdict(CTRL *c, int active_requested)
     if (c->v_port != V_PASS)
         warned = 1;
 
-    if (qualified && caveats) {
+    if (qualified && (caveats || ports_caveat)) {
         /* The owner's verdict (2026-10-09): not plain QUALIFIED, not the
          * warnings' wording, not a failure, not provisional. Warnings, when
          * there are any, are said beside it. */

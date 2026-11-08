@@ -203,7 +203,7 @@ static const struct {
       "Restart before using the devices." },
     { INST_HELP_FINISH_SHUT, "Finish",
       "What was done, what is left, and where the log file is.\n\n"
-      "Shut down now, then start Windows again: Finish shuts Windows down; "
+      "Shut down now: Finish shuts Windows down; "
       "start it again yourself. Stor98's update, or the storage drivers' "
       "copy, needs a fresh start rather than a restart.\n\n"
       "Shut down later: to save your work first." },

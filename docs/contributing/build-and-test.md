@@ -1,15 +1,18 @@
 # Build and Test Guide
 
-> **Since 2026-10-02 `src\` builds the successor HCD, not the miniport** (owner;
-> `docs/contributing/roadmap-hcd.md`, decisions table; design record 13
-> section 5.1). The miniport's sources left the tree and are on branch
+> **Since 2026-10-02 `src\` builds the successor HCD, not the miniport**
+> (owner; `docs/contributing/roadmap-hcd.md`, decisions table; design record
+> 13 section 5.1). The miniport's sources left the tree and are on branch
 > `1.2.0.0`; `scripts\make-usbport-lib.cmd`, `scripts\usbport-lib\` and the
 > `usbport.lib` step are gone with them, as are the probe and failed-start
-> artifacts. `scripts\build-driver.cmd` builds `xhci98.sys` from `src\` with no
-> import library, and the import and INF gates hold it to the HCD's rules
-> (design record 13 section 9). The rest of this guide - the VMs, the targets,
-> install, packaging and the bench - still describes the miniport where it
-> names usbport, and is rewritten as Phase 26 reaches each part.
+> artifacts. `scripts\build-driver.cmd` builds `xhci98.sys` from `src\` with
+> no import library, and the import and INF gates hold it to the HCD's rules
+> (design record 13 section 9). The rest of this guide - the VMs, the
+> targets, install, packaging and the bench - was written for the miniport
+> and has been brought up to the HCD section by section since: where a
+> passage still names usbport, a usbport miniport or a stack the driver
+> "binds to", it describes the `1.2.0.0` miniport, and `AGENTS.md`, design
+> record 13 and the target prerequisites below are the HCD's account.
 
 ## Prerequisites
 
@@ -17,6 +20,20 @@
 - Windows 11 x64 is the current host development machine
 - Visual C++ 6.0 unpacked from `tools/MSVC600.zip` into `tools/MSVC600`
 - Windows 2000 DDK unpacked from `tools/WIN2KDDK.EXE` into `tools/ntddk`
+- WDK 7.1 (7600.16385.1) unpacked into `tools/WinDDK71`, for **every**
+  gated build (`WDKROOT` names another place for this project's drivers,
+  but Stor98's build takes its kit from `<STOR98_TOOLS>\WinDDK71`, the
+  repository's `tools\` unless `STOR98_TOOLS` names another root, and reads
+  no `WDKROOT`: with the kit elsewhere, make `tools\WinDDK71` a directory
+  junction to it, since `STOR98_TOOLS` would move every kit Stor98 reads,
+  `MSVC600`, `ntddk` and `w98ddk` too): the amd64 drivers, and on the
+  x86 run the helper `xhcihlpr.sys` (WDK 7.1's `WXP` environment) and the
+  NDIS 6.20 miniport `xhcinet6.sys` (its `WIN7` environment);
+  `build-driver.cmd` stops without it (`:hlprnowdk`, `:net6nowdk`).
+  `README.md`, "Toolchain and building", says where it comes from
+- For Stor98's Windows 98 SE and ME image, built on the x86 run, the Windows
+  98 DDK's `SCSI.H` and `SRB.H` in `tools\w98ddk\inc\` ("Building Stor98"
+  below); its NT images do not need them
 - Open Watcom 2.0, installed to `C:\WATCOM`, used for the `xhciqual/`
   DOS qualifier and, from `3.1.0.0`, for the 16-bit Windows 98 SE and ME
   device-install helper `XHCIDI.EXE` (design record 27, its Win16
@@ -24,8 +41,12 @@
   `setupx.lib` in
   `tools/win98ddk-extracted/`), and never for the driver
 - QEMU, installed normally on the host
-- For Stor98 (`src\stor98\`) only, the Windows 98 DDK's `SCSI.H` and
-  `SRB.H` in `tools\w98ddk\inc\` ("Building Stor98" below)
+- Optional for a gated build, required for a release cut: Open Watcom 2.0
+  (above), the Windows 98 SE DDK extracted into `tools/win98ddk-extracted/`,
+  and Python on `PATH` (the VxDs' link checks). Without them `S98VSD.VXD`,
+  `XHCIPFW.VXD` and `XHCIDI.EXE` are reported not built and passed over
+  (each build's exit code 2), and `make-release.ps1` refuses a cut without
+  them
 
 Neither driver toolchain is installed machine-wide. Both live inside the
 repository, are used in place, and write no registry key: MSVC 6.0 runs from
@@ -144,34 +165,60 @@ record 30 section 6), from `src\vsd\`:
 
 Two consequences worth knowing before they bite:
 
-- A repository path containing a space is a problem for the DDK half only.
-  `setenv.bat` takes its base directory verbatim and cannot be quoted, so a
-  space splits it and every derived path is wrong. `build-driver.cmd` falls back
-  to the 8.3 short name and refuses with an explanation when the volume does not
-  generate one (8dot3 creation is off on many non-system volumes). Cloning to a
-  path without a space avoids the question.
+- A repository path containing a space is refused: `build-driver.cmd` stops
+  before anything runs (`:repospace`), because the DDK's `setenv.bat` takes
+  its base directory verbatim and cannot be quoted, so a space splits it and
+  every derived path is wrong. Only a `DDKROOT` or `WDKROOT` override
+  outside the tree can hold a space; it is shortened to its 8.3 short name,
+  or the run is refused with an explanation when the volume does not
+  generate one (8dot3 creation is off on many non-system volumes). Clone to
+  a path without a space.
 - `tools/` is git-ignored, so a fresh clone has the scripts but not the
-  toolchain. The two setup scripts below are the whole of the difference.
+  toolchain: the two setup scripts below unpack MSVC 6.0 and the Windows
+  2000 DDK, and WDK 7.1 and the Windows 98 DDK's two storage headers are
+  unpacked by hand into the places above.
 
-Both targets need the same thing, a `usbport.sys` for the miniport to register
-with, but they get it from different places, and the two prerequisites are
-mutually exclusive.
+The host controller driver needs no USB 2.0 stack on any target: it replaces
+the port and hub drivers. What a target needs is below. (The `1.2.0.0`
+miniport needed a `usbport.sys` to register with on both, from different
+places; its prerequisites are on that branch.)
 
 ### Target A: Win98 SE (guest or real machine)
-- NUSB 3.3 installed. It provides the Windows 2000-derived `usbport.sys` + `usbhub20.sys` USB 2.0 stack that `xhci98.sys` (a `usbport` miniport) binds to. See "Installing the usbport USB 2.0 Stack (NUSB)" below. Without it there is no `usbport.sys` for the miniport to register with. Installing NUSB places those files unconditionally, with no EHCI controller required (`_NUSB.INF` `[DefaultInstall]` copies them; confirmed on real xHCI-only hardware). An emulated `-device usb-ehci` in QEMU is optional, useful only as a live miniport reference.
-- `usbd.sys` present in `C:\WINDOWS\SYSTEM32\DRIVERS`. NUSB does not ship it and Win98 installs it only with the USB 1.1 stack, yet `usbhub20.sys` imports it. See Phase 2a task 6 in `docs/contributing/roadmap.md`.
+- For USB storage, NUSB's mass-storage component (NUSB 3.3 or 3.6, or its
+  seven storage files on their own; the release notes' "Windows 98 SE and
+  ME: the stock install, and storage"): `usbstor.sys` and the `USBNTMAP`
+  mapping layer that gives a USB disk a drive letter, for Bulk-Only and UAS
+  alike. The controller, hubs, HID and audio need nothing. Under the
+  `1.2.0.0` miniport, NUSB 3.3 provided the Windows 2000-derived
+  `usbport.sys` + `usbhub20.sys` stack the miniport bound to. See
+  "Installing the usbport USB 2.0 Stack (NUSB)" below. Without it there is
+  no `usbport.sys` for the miniport to register with. Installing NUSB places
+  those files unconditionally, with no EHCI controller required (`_NUSB.INF`
+  `[DefaultInstall]` copies them; confirmed on real xHCI-only hardware). An
+  emulated `-device usb-ehci` in QEMU is optional, useful only as a live
+  miniport reference.
+- `usbd.sys` and `usbui.dll`: the INF has Windows copy them from its own
+  installation source (the Windows 98 SE CD or the CABs on the disk) when
+  they are absent. Under the miniport `usbd.sys` had to be placed first, for
+  `usbhub20.sys` (Phase 2a task 6 in `docs/contributing/roadmap.md`).
 
 ### Target B: Windows 2000 SP4 (guest or real machine)
-- Service Pack 4 installed, or the standalone USB 2.0 update KB319973. This provides the same stack, natively: `usbport.sys`/`usbhub20.sys`/`usbehci.sys` are Microsoft's own builds here.
+- Service Pack 4 installed. The HCD needs none of Windows 2000's own USB
+  stack; under the miniport, SP4 or the standalone USB 2.0 update KB319973
+  provided its `usbport.sys`/`usbhub20.sys`.
 - Do not install NUSB on Win2000. It is a 9x package; the native stack is already the thing NUSB back-ports.
-- Win2000 installs the USB files on demand, per detected controller. A machine that has never had a USB controller attached has no usbport stack on disk. See "Windows 2000 SP4 Target VM" for the staging procedure and the `usbd.sys` bugcheck it avoids.
+- The INF has Windows copy `usbd.sys` and `usbui.dll` from its driver cache
+  with no prompt. Under the miniport a machine that had never had a USB
+  controller attached had no usbport stack on disk; "Windows 2000 SP4 Target
+  VM" keeps that staging procedure and the `usbd.sys` bugcheck it avoided.
 
 ## Automated Phase 1 Host Setup
 
 Use the Phase 1 PowerShell helpers from a normal Windows PowerShell prompt.
 
-From a fresh clone, the shortest path to a built driver is three commands. The
-first two are one-time, and neither needs elevation:
+From a fresh clone with WDK 7.1 and the Windows 98 DDK's storage headers in
+place ("Prerequisites" above), the shortest path to a built driver is three
+commands. The first two are one-time, and neither needs elevation:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\setup-msvc6.ps1         # -> tools\MSVC600
@@ -208,7 +255,7 @@ Setup scripts:
 | `scripts\install-w2kddk-cabs.ps1` | Unpacks the DDK build environment into `tools\ntddk` directly from the `WIN2KDDK.EXE` payload CABs: no GUI installer, no registry, nothing under `C:\`. `-DdkPath` puts it elsewhere (see notes below) |
 | `scripts\setup-qemu.ps1` | Checks/configures the Win98 SE (Phase 2a) QEMU launchers; use `-Install` to try Winget QEMU install; use `-CreateDisk` for VM images |
 | `scripts\check-flavour-marker.ps1` | Reads the flavour marker string out of a linked `.sys` and refuses anything but exactly one, matching the flavour asked for. `build-driver.cmd` runs it on each binary after the import gate; `make-release.ps1` reads the same marker to refuse publishing a `qemu` build (or an old `debug` one) as the release. It is what says a binary in `objfre` really is the release flavour, which `VS_FF_DEBUG` cannot (it marked both checked builds, `qemu` and, until task 45.45, `debug`) |
-| `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers `src\`, `test\`, `scripts\`, `xhcisnap\` and `xhciqual\` through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `scripts\check-text.ps1`, the first step of `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
+| `scripts\check-source-charset.ps1` | Refuses a byte inside tracked source that no part of this project's toolchain is meant to see: a **control byte below 0x20 other than TAB, CR and LF** anywhere in the file, **any byte >= 0x80** anywhere in the file, and a **UTF-8 BOM** at the head of a file the 1998-era toolchain reads (`.c .h .asm .rc .def .inf .bat .cmd`, `makefile`, `sources`). Covers the source trees its `$trees` list names - `src\`, `test\`, `scripts\`, `xhciinst\`, `xhcimark\`, `xhcitr\`, `xhciqual\` and `xhciperf\` (`xhcisnap\` went with the tool) - through an extension allowlist, so it never opens a binary, and skips four git-ignored paths by name. Run by `scripts\check-text.ps1`, the first step of `build-driver.cmd`. The BOM rule is deliberately narrower than the other two: five tracked files carry a BOM today and none is read by that toolchain, and on a `.ps1` the BOM is not a defect but the fix, since Windows PowerShell 5.1 reads a BOM-less script as the system ANSI codepage - so a BOM the rule permits is not then counted a second time as three non-ASCII bytes. The non-ASCII rule was taken on 2026-09-12 and cost one character, a UTF-8 section sign in an `src\xhci.h` comment. Seven in-memory self-tests run on **every** invocation and abort the gate if the detector is broken - a gate that has only ever passed reports a pass it did not establish. Roadmap task 22.7; it exists because a BEL written into `src\xhci_slot.c` by a PowerShell escape compiled all three x86 flavours and passed every other gate (`lessons.md`) |
 | `scripts\check-readme-text.ps1` | Holds the four tool readmes `make-release.ps1` publishes (`xhcimark`, `xhciinst`, `xhcitr` and `xhciperf`, each `README.TXT`; `xhciperf` since the batch 7 merge of 43.50; `xhcicln` was a fifth until the tool was dropped in `3.3.0.0`, task 44.82) to the rule the cut refuses a generated text for: no line past **78 columns** and no character that is not **printable ASCII** (TAB allowed). The rule (`Get-PlainTextFaults`), the list (`$script:ToolReadmeDirs`) and how a readme is read (`Read-ToolReadmeLines`) are `scripts\package\package-common.ps1`'s, which the cut's `Write-GeneratedText` uses too, so the two cannot drift. It also renders `releases\history.md` as the cut renders an entry of it in the top-level `readme.txt` (`ConvertFrom-MarkdownBlocks`, moved to `package-common.ps1` for it; every entry, though since roadmap-usb4 task 45.29 the readme carries the version's own entry alone, `Get-HistoryEntryLines`, and a one-line list of the earlier releases, `Get-HistoryEarlierText`) and holds that to the same rule, since the wrap cannot shorten a word longer than a line and passes a non-ASCII character through. `-SelfTest` runs the rule's own refusals in memory. Run by `scripts\check-text.ps1` on every gated build, self-tested first. The footer the cut appends to each tool readme, and the rest of the top-level readme, are `make-release.ps1`'s own text, which `check-text.ps1` reads from its templates. Roadmap-usb4 task 43.61; until it, a long line two merges had left was found only by 43.11's test cut |
 | `scripts\check-text.ps1` | Every text check of the gated build and of the release cut, run as `build-driver.cmd`'s first step so a text failure costs no build, and on its own in seconds (roadmap-usb4 task 44.1; the `3.2.0.0` builds of 2026-10-24 stopped twice on a line past 78 columns). It runs the build's three, each its own script: `xhciqual\test\check-bat-eol.ps1`, `check-source-charset.ps1` and `check-readme-text.ps1`. Then it runs the cut's checks that need no build, from the cut's own code. It reads `make-release.ps1`'s syntax tree for every text the cut publishes from a template: each here-string assigned to a variable (the readme template and its parts, the qualifier's readme, each tool's readme footer and `NOTICE.TXT`), and each line added to the readme's file list (`$contents`, a paragraph wrapped with `Format-Wrapped` included) or to an incomplete cut's list (`$missingTools`). Each line is held to 78 columns of printable ASCII. Placeholders take the width the cut gives them (`{VERSION}` from `src\xhci_version.h`, the directory names of a two-architecture cut), or nothing where the cut puts a block of its own. Expansions and format items count as nothing, or as their alignment's width, so the width is a lower bound. A placeholder that no `Replace()` on that same text substitutes is a fault, and so are a `TODO(...)` or `TBD` and a claim of `package-common.ps1`'s `$script:ReadmeForbiddenPhrases` in any of them. The readme template is also held to the cut's rules on a version written by hand and on the snapshot schema (`$allowedTemplateVersions`, `Get-SnapSchema` and `Find-DraftMarkers`, read from `make-release.ps1`). It renders `package-common.ps1`'s download readme parts for every download of every set, with and without the driver pack. It requires the changelog entry for the tree's version, one `releases\history.md` heading dated as the INF (`Get-ChangelogEntryFaults`, which the cut calls too), so a version bump carries its entry's heading from the start. It finds draft markers in the release notes and the history. And it holds the shipped silent-install batches, `SILENT.REG`, the port switchover's two batches and `portsw.vbs`, and the field report batches to `package-common.ps1`'s content checks. The cut's checks that two sources agree on a number (XHCITR's snapshot schema against the driver's, each tool's shared version macro) are not text and stay the cut's. So `make-release.ps1` keeps one shape: an error message is thrown or passed to `Stop-CutCheck` as written, never assigned, because an assigned here-string is read as published text. It does not check what the cut renders from a build or a pin: the sizes and hashes in the readme's file list, a `NOTICE.TXT`'s linker copyright lines, the driver pack's texts and the release notes' Stor98 declaration. Those are `make-release.ps1`'s, and `-CheckOnly`'s before it. Every check runs and every fault is listed; exit 1 if any. `-SelfTest` drives the readers and rules over a stand-in cut script and stand-in trees, and runs `check-readme-text.ps1 -SelfTest` |
 | `scripts\source-stamp.ps1` | `-Write <objdir>` hashes every file `src\sources` names plus every header in `src\`, and the built `xhci98.sys` itself, recording the list beside that binary; `-Check <objdir>` recomputes both. `build-driver.cmd` writes one after each successful build and `make-release.ps1` refuses to publish a `.sys` whose sources have changed since, one that is not the binary its stamp was written for, or one with no usable stamp at all (`-AllowUnstampedDriver` is the named way past that last case, and only that one) - the driver's equivalent of the "EXE newer than its own sources" refusals the release script already makes for the two DOS tools. Content, not timestamps: the script says why at length |
@@ -226,7 +273,7 @@ Setup scripts:
 | `scripts\package\test-package.ps1` | The packager's regression tests; stand-ins only, run by `build-driver.cmd` |
 | `scripts\package\cut-builds.ps1` | A cut's two gated builds at once: `build-driver.cmd all` in this tree and `all -amd64` in a second worktree (`-X64Tree`; by default `<this tree>-x64`, made or brought to this tree's HEAD by the script, task 45.3), each with its own temporary folder and log, then the amd64 build and its records imported into this tree (`Import-GatedBuild`, `package-common.ps1`); `-Serial`, `-ImportOnly`. Roadmap-usb4 task 44.31; "The cut's two builds at once" and "A faster gated build" below |
 | `scripts\build-steps.ps1` | The checks of a gated build that need no DDK, run at once as separate processes, each with its own `TEMP` and log under `out\steps-<arch>\`, at most `XHCI98_BUILD_STEPS` at a time (default 4), each step's output printed whole when it ends and a table of results and times after them; `-SelfTest` on stand-in steps. Run by `build-driver.cmd` after its text checks. Roadmap-usb4 task 45.3; "A faster gated build" below |
-| `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's `FLAVORS` grammar (release, qemu and all; `both` and `debug` refused), on synthetic allowlists, including the row that keeps `HAL.dll!WRITE_PORT_UCHAR` out of every published binary. Run by `build-driver.cmd` |
+| `scripts\import-gate\test-flavour-rules.ps1` | Regression tests for the import allowlist's `FLAVORS` grammar (release, qemu and all; `both` and `debug` refused), on synthetic allowlists, and checks of the production files before anything is linked: every common-format allowlist (each `*.allow` but Stor98's, twelve) parses, and Stor98's under its own reader (`scripts\check-stor98-build.ps1 -ParseOnly`); each x86 allowlist that carries `HAL.dll!WRITE_PORT_UCHAR` (xhci98, xhcicm, xhcipfw) carries it in exactly one `qemu required` row, the row that keeps it out of every published binary; the qemu-only rows of every allowlist are exactly the ones it names; and the net98 and net6 profiles' row rules run on synthetic rows. Run by `build-driver.cmd` |
 
 The Phase 2d SMP Win2000 VM has its own script and is not part of
 `setup-all.ps1`: it is a stress rig rather than part of a fresh host's baseline
@@ -386,15 +433,82 @@ kit's defaults and imports nothing from `usbport.sys` (the miniport's
 
 ### Versioning the driver
 
-The version and the release date are edited in one place, `src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the four-part number as four integers, which is what a `VERSIONINFO` resource takes), `XHCI_VER_STR` (the same number as a string, which is what everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the `MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and comments only, because three toolchains include it: the DDK's `rc.exe`, MSVC 6.0's `cl.exe`, and Open Watcom's `wcc386`.
+The version and the release date are edited in one place,
+`src\xhci_version.h`. It declares three macros: `XHCI_VER_CSV` (the
+four-part number as four integers, which is what a `VERSIONINFO` resource
+takes), `XHCI_VER_STR` (the same number as a string, which is what
+everything else takes) and `XHCI_DRIVERVER_DATE` (the release date, in the
+`MM/DD/YYYY` form `DriverVer` takes). The file is `#define` lines and
+comments only, because every toolchain of the tree includes it (its header
+names them: the Windows 2000 DDK's `rc.exe` and MSVC 6.0's `cl.exe`, WDK
+7.1's `cl.exe` and `rc.exe`, and Open Watcom's `wcc386` and 16-bit `wcc`).
 
-Every compiled site includes it and cannot disagree: `FILEVERSION`, `PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each driver's version resource (`src\xhci98.rc`, `src\uas\xhciuas.rc`, `src\cm\xhcicm.rc`, `src\hlpr\xhcihlpr.rc`), each driver's version string (`src\hcd_entry.c`, `src\hcd_msi86.c`, `src\uas\uas_entry.c`, `src\cm\cm_entry.c`, `src\hlpr\hlpr_entry.c`), and the user-mode tools across a directory boundary, by a path relative to the including file (which is what a quoted `#include` means to all three compilers): `TOOL_VERSION` in `xhciqual\qual.h`, `XHCISNAP_VERSION` in `xhcisnap\xhcisnap.c`, and `xhciinst\xhciinst.c`, `xhcitr\xhcitr.c` and `xhcitr\xhcitr.rc`. `XHCIQUAL` and `XHCISNAP` were the first tools published inside a release directory (`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`; before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print their number into every log a user saves and sends back, so a tool answering with a number that is not on the box ties a bug report to an artifact that does not exist.
+Every compiled site includes it and cannot disagree: `FILEVERSION`,
+`PRODUCTVERSION`, `VALUE "FileVersion"` and `VALUE "ProductVersion"` in each
+driver's version resource, each driver's version string, Stor98's
+`src\stor98\src\stor98ver.h`, and the user-mode tools across a directory
+boundary, by a path relative to the including file (which is what a quoted
+`#include` means to every compiler here): `TOOL_VERSION` in
+`xhciqual\qual.h`, `XHCITR`'s `xhcitr\tr_core.h`, `xhcitr.c`, `xhcitr.rc`
+and `tr_snap.c` (whose macro keeps the name `XHCISNAP_VERSION`, from
+`xhcisnap\xhcisnap.c`, which included it up to `3.0.0.0`), the installer's
+`xhciinst\inst_eng.c`, `xhciwiz.c`, `setup.rc`, `xhciwiz.rc` and
+`di\xhcidi.c`, `xhcimark\xhcimark.c`, and `xhciperf\xhciperf.c` and
+`xhciperf.rc`. `src\xhci_version.h`'s header lists them by kind, and `git
+grep -l xhci_version.h` is the whole list. `XHCIQUAL` and `XHCISNAP` were
+the first tools published inside a release directory
+(`releases\<version>\tools\xhciqual\`, `releases\<version>\tools\xhcisnap\`;
+before `2.4.0.0`, roadmap-hcd task 38.9, at the version root) and print
+their number into every log a user saves and sends back, so a tool answering
+with a number that is not on the box ties a bug report to an artifact that
+does not exist.
 
-The INFs cannot include anything. An INF is a data file Windows setup reads, not a compiled one, so **every `*.inf` under `src\`, `src\uas\` and `src\cm\`** keeps a `DriverVer` literal and is checked against the header instead: `src\xhci98.inf` and `src\xhci98-amd64.inf` (two since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and `src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and `xhcicmf-amd64.inf`, and since `3.1.0.0` (roadmap-usb4 task 42-A.30) Stor98's `src\stor98\inf\stor98-x86.inf` and `stor98-x64.inf` - ten literals to bump with the header, and an eleventh outside the INFs, the `version` of `xhcitr\xhcitr.manifest`'s `assemblyIdentity`, which `check-inf.ps1` holds to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`. Each has its gate: `check-inf.ps1 -Arch` cross-checks whichever of the first two it is given against the `xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and `scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule `BOTH-VERSION`, and `scripts\inf-gate\check-stor98-inf.ps1` holds Stor98's two to the same two values (one `DriverVer` line each, zero-padded). `build-driver.cmd` runs all four over every one of the ten on every build - so a bumped header with a stale date in any INF fails the build rather than shipping. Three gates cover what is left:
+The INFs cannot include anything. An INF is a data file Windows setup reads,
+not a compiled one, so **every package INF** - the thirteen
+`src\xhci_version.h`'s header lists, under `src\`, `src\uas\`, `src\cm\`,
+`src\net\` and `src\stor98\inf\` - keeps a `DriverVer` literal and is
+checked against the header instead, by five gates (`check-inf.ps1`,
+`check-uas-inf.ps1`, `check-cm-inf.ps1`, `check-net-inf.ps1` and
+`check-stor98-inf.ps1`): `src\xhci98.inf` and `src\xhci98-amd64.inf` (two
+since roadmap task 21.3), `src\uas\xhciuas.inf` and `xhciuas-amd64.inf`, and
+`src\cm\xhcicm.inf`, `xhcicm-amd64.inf`, `xhcicmf.inf` and
+`xhcicmf-amd64.inf`, from `3.4.0.0` the networking pair
+`src\net\xhcinet.inf` and `xhcinet-amd64.inf`, and since `3.1.0.0`
+(roadmap-usb4 task 42-A.30) Stor98's `src\stor98\inf\stor98-9x.inf`,
+`stor98-x86.inf` and `stor98-x64.inf` - thirteen literals to bump with the
+header - and four more outside the INFs, the `version` of the
+`assemblyIdentity` of `xhcitr\xhcitr.manifest`, which `check-inf.ps1` holds
+to `XHCI_VER_STR` under the same rule name `BOTH-VERSION`, and of
+`xhciinst\setup.manifest`, `xhciinst\xhciwiz.manifest` and
+`xhciperf\xhciperf.manifest`: seventeen in all, the list
+`src\xhci_version.h`'s header keeps. Each has its gate: `check-inf.ps1
+-Arch` cross-checks whichever of the first two it is given against the
+`xhci_version.h` beside it, and `scripts\inf-gate\check-uas-inf.ps1` and
+`scripts\inf-gate\check-cm-inf.ps1` hold the UAS and connection-manager INFs
+to the header's `XHCI_VER_STR` and `XHCI_DRIVERVER_DATE` by their rule
+`BOTH-VERSION`, and `scripts\inf-gate\check-net-inf.ps1` and
+`scripts\inf-gate\check-stor98-inf.ps1` hold the networking pair and
+Stor98's three to the same two values (one `DriverVer` line each,
+zero-padded). `build-driver.cmd` runs all five over every one of the
+thirteen on every build - so a bumped header with a stale date in any INF
+fails the build rather than shipping. No gate reads the other three
+manifests: bump them by hand. Three gates cover what is left:
 
 - `scripts\inf-gate\check-inf.ps1`, which every build runs, reads `src\xhci_version.h` as the authority and refuses four different disagreements: the header's two forms of the number differing from each other (nothing in any toolchain would notice, since `rc.exe` wants the integers and every other consumer wants the string), the header's version differing from `DriverVer`'s, the header's date differing from `DriverVer`'s, and a version literal appearing in `src\xhci98.rc` at all, or the include being dropped. That last rule is what keeps the header an authority rather than a suggestion.
 - `scripts\package\make-package.ps1` compares the built binary's own `FileVersion` with the `DriverVer` in the INF staged beside it. That is the copy a source-side gate cannot see and the only one an installed machine reads: bumping the source without rebuilding produces a package that installs cleanly, is accepted by Windows 2000 as an upgrade, and reports the older build for ever afterwards.
-- `scripts\package\make-release.ps1` refuses a cut whose declared version is not the release's, whose tool sources have stopped expanding the shared macro, or whose staged `XHCIQUAL.EXE`/`XHCISNAP.EXE` (`XHCISNAP.EXE` up to `3.0.0.0`; from `2.4.0.0` to `3.2.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`, from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll` and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than `src\xhci_version.h` as well as older than its own sources. That last input is the one non-obvious consequence of the single source: a bump no longer touches anything in `xhciqual\` or `xhcisnap\`, so without the header in that set, bumping the version and shipping yesterday's binary would pass every check in the script.
+- `scripts\package\make-release.ps1` refuses a cut whose declared version is
+  not the release's, whose tool sources have stopped expanding the shared
+  macro, or whose staged `XHCIQUAL.EXE` (with `XHCISNAP.EXE` up to
+  `3.0.0.0`; from `2.4.0.0` to `3.2.0.0` also `XHCICLN.EXE`/`XHCICL64.EXE`,
+  from `3.0.0.0` also `XHCIINST.EXE`/`XHCIIN64.EXE`, the install tool
+  `INSTALL.BAT` runs, built by `xhciinst\build.cmd` and checked by
+  `xhciinst\selftest.cmd`, which holds both import tables to `KERNEL32.dll`
+  and `ADVAPI32.dll`; `-SkipInstallTool` cuts without it) is older than
+  `src\xhci_version.h` as well as older than its own sources. That last
+  input is the one non-obvious consequence of the single source: a bump no
+  longer touches anything in `xhciqual\` or `xhcisnap\`, so without the
+  header in that set, bumping the version and shipping yesterday's binary
+  would pass every check in the script.
 
 The header spells the number out twice because `FILEVERSION` takes four comma-separated integers and cannot be given a string, and deriving one form from the other needs preprocessor stringizing that this era's `rc.exe` does not handle reliably. So both are written and the INF gate compares them. Two adjacent lines a gate reads beat one clever line no toolchain agrees about.
 
@@ -426,7 +540,15 @@ The numbering has been restarted once, at the project owner's direction: an earl
 
   Two of its other checks a caller should know exist: the staged baseline binary is not trusted by directory name (its own version resource is checked against both the expected baseline and the current version through `Test-DriverVersionMatches`, so a stale binary under `old-<baseline>-debug` cannot satisfy the prerequisite silently), and `New-DatedInf`, which rewrites the INF's date for the upgrade experiment, refuses a non-ASCII byte, an LF-only source or a mixed-EOL source rather than claiming a byte-faithful rewrite it would have silently transformed.
 
-The prose copies are not gated, and a cut has to bump them by hand. `docs/using/release-notes.md`'s opening line states the version the file describes. Nothing reads it, so nothing catches it, and it has sat stale across cuts before. Bump it in the same change as the header, and prefer pointing at `src\xhci_version.h` to restating a number anywhere a statement does not need one; `releases\README.md` stopped naming the current version for this reason.
+The prose copies are bumped by hand. `docs/using/release-notes.md`'s opening
+line states the version the file describes, and `scripts\check-text.ps1`
+holds it to `src\xhci_version.h` (`Get-ReleaseNotesHeadFaults`, "package
+version `X`" in the file's first lines), so a stale head fails the text
+checks of every gated build and cut; it sat stale across cuts before that
+check. Bump it in the same change as the header, and prefer pointing at
+`src\xhci_version.h` to restating a number anywhere a statement does not
+need one; `releases\README.md` stopped naming the current version for this
+reason.
 
 A version is only free until it is published. The single source and its three gates keep every statement of the number agreeing with the others; what they cannot check is whether the number they agree on has already been spent on bytes someone else is running. That check is against `releases\`, by eye, whenever the tree diverges from the last release. It was missed once, when development carried on under a number already published and two different binaries both answered to it.
 
@@ -501,8 +623,8 @@ log for `/Oy-`), and the command-state checker, on unless `XhciCommandCheck`
 is 0.
 
 **Every x86 run also builds `xhcihlpr.sys`**, the x86 helper for 32-bit
-Windows 2000, XP, Vista and 7 (design record 18 section 15; task 38.3; until
-then `xhcimsi.sys`, the NT 6 x86 MSI helper of task 36.15, built from
+Windows 2000 to 10 (design record 18 section 15; task 38.3; until then
+`xhcimsi.sys`, the NT 6 x86 MSI helper of task 36.15, built from
 `src\msi86\` for the Vista target), in `src\hlpr\`, with **WDK 7.1's `WXP`
 x86 environment** (`setenv <WDK> <flavour> x86 WXP no_oacr`), at subsystem
 version 5.00 (`SUBSYSTEM_VERSION=5.00` in its `sources`), `/GS` on and the
@@ -514,27 +636,27 @@ Windows 2000 DDK, and fails without it. `build-driver.cmd`'s `:buildhlpr`
 then checks the toolchain with `scripts\check-helper-build.ps1`: the build
 log's `BUILDMSG: _NT_TARGET_VERSION SET TO WINXP` line, that every library
 linked is from `lib\wxp\i386` (`lib\crt\i386\safecrtnt.lib` admitted by
-name), and the image header (native subsystem 5.00, section alignment
-0x80, a nonzero checksum); its `-SelfTest` runs among the import gate's
-self-tests before anything is built. The helper is gated by the import
-gate's `hlprx86` profile (`-GateProfile hlprx86 -AllowPath
+name), and the image header (native subsystem 5.00, section alignment 0x80,
+a nonzero checksum); its `-SelfTest` runs among the import gate's self-tests
+before anything is built. The helper is gated by the import gate's `hlprx86`
+profile (`-GateProfile hlprx86 -AllowPath
 scripts\import-gate\xhcihlpr-imports.allow`) against every x86 kernel and
 HAL of Windows 2000 SP4 (`win2k-baselines.expected`), XP SP3
 (`winxp-x86-baselines.expected`: `ntoskrnl`, `ntkrnlpa`, `ntkrnlmp`,
-`ntkrpamp` and seven HALs, staged in `tools\winxpsp3-extracted\`), Vista
-SP2 and 7 SP1 (`hlprx86-vista-baselines.expected` and
-`hlprx86-win7-baselines.expected`, renamed from `nt6x86-*`; their
-`ntkrnlpa` rows are still owed). **Every set is required**: a missing set
-fails the gate rather than warning, and the gate refuses
-`IoConnectInterruptEx` and `IoDisconnectInterruptEx` in the helper's
-import table by name. All 39 of the helper's import pairs resolve in every
-2000, XP, Vista and 7 x86 image staged (read 2026-10-14, static).
-`-NoTargetEvidence` is an allowlist-only developer mode for it, which
-`make-package.ps1` and `make-release.ps1` refuse for a package that carries
-the helper. Then the flavour marker check and `source-stamp.ps1 -Driver
-xhcihlpr`; its output is `src\hlpr\obj<flavour>\i386\xhcihlpr.sys`, which
-`make-package.ps1` stages into the x86 package (`-HlprDriverPath`
-overrides it). An `-amd64` run builds no helper.
+`ntkrpamp` and seven HALs, staged in `tools\winxpsp3-extracted\`), Vista SP2
+and 7 SP1 (`hlprx86-vista-baselines.expected` and
+`hlprx86-win7-baselines.expected`, renamed from `nt6x86-*`; their `ntkrnlpa`
+rows are still owed). **Every set is required**: a missing set fails the
+gate rather than warning, and the gate refuses `IoConnectInterruptEx` and
+`IoDisconnectInterruptEx` in the helper's import table by name. All 39 of
+the helper's import pairs resolve in every 2000, XP, Vista and 7 x86 image
+staged (read 2026-10-14, static). `-NoTargetEvidence` is an allowlist-only
+developer mode for it, which `make-package.ps1` and `make-release.ps1`
+refuse for a package that carries the helper. Then the flavour marker check
+and `source-stamp.ps1 -Driver xhcihlpr`; its output is
+`src\hlpr\obj<flavour>\i386\xhcihlpr.sys`, which `make-package.ps1` stages
+into the x86 package (`-HlprDriverPath` overrides it). An `-amd64` run
+builds no helper.
 
 **`-amd64` is a second axis, not a fourth flavour**, and it goes after the
 flavour word:
@@ -585,26 +707,35 @@ retired checked debug flavour, `objchk`, never shared).
 Do not reintroduce the DDK vocabulary anywhere else: "free" reads as free of
 charge to a user, so `releases\` never says it.
 
-In order: validate the flavour word and the optional `-NoTargetEvidence`,
-run the import gate's
-authenticated-baseline regression tests and its flavour-rules tests, run the
-INF gate's self-tests and then the gate on **both** INFs - `src\xhci98.inf`
-under `-Arch x86` and `src\xhci98-amd64.inf` under `-Arch amd64`, two runs
-whatever architecture is being built - then the UAS INF gate and the
-`txtsetup.oem` gate (`scripts\inf-gate\check-txtsetup-oem.ps1`, task 33.3),
-each self-tested first and run over both architectures' files, run the packager
-self-tests, the QEMU launcher self-tests, the vm-matrix verdict self-tests,
-the tracked batch files' line-ending check and the source charset check, run
-the snapshot self-test (`xhcitr\snaptest.cmd`, which drives `XHCITR
-/snaptest` and runs `scripts\check-counter-names.ps1` on its counter
-output; `xhcisnap\selftest.cmd` up to `3.0.0.0`)
-if `xhcitr\build.cmd` has built `XHCITR.EXE`, run `test\run-host-tests.cmd`,
-`build` each requested flavour in its own child `cmd` (`setenv.bat` is not
-idempotent across flavours), fail on a build error or on the presence of
-`src\build{chk,fre,chk_qemu}.err`, then run the post-link import gate and the
-flavour-marker check on each linked binary. Exit codes: 0 built and gated, 1
-failure, 2 host tests inconclusive (a blocked exe launch, see "Smart App
-Control" below, so just run it again).
+In order: `scripts\build-driver.cmd`'s numbered header is the authority for
+the steps and their order, and this paragraph is an outline of it. The text
+checks (`scripts\check-text.ps1`) run first; then the self-tests, in
+parallel through `scripts\build-steps.ps1`; the INF gates over all thirteen
+INFs and both `txtsetup.oem` files; the host suites; each driver's build -
+`xhci98.sys`, `xhciuas.sys`, `xhcicm.sys`, `xhcinet.sys`, `xhcinet6.sys`,
+Stor98, and on the x86 run `xhcihlpr.sys`, `S98VSD.VXD`, `XHCIPFW.VXD`,
+`XHCIPFW.SYS` and the tools - each followed by its import gate and
+flavour-marker check; and the gated record. The outline of the first builds,
+as it stood before those steps were added: validate the flavour word and the
+optional `-NoTargetEvidence`, run the import gate's authenticated-baseline
+regression tests and its flavour-rules tests, run the INF gate's self-tests
+and then the gate on **both** INFs - `src\xhci98.inf` under `-Arch x86` and
+`src\xhci98-amd64.inf` under `-Arch amd64`, two runs whatever architecture
+is being built - then the UAS INF gate and the `txtsetup.oem` gate
+(`scripts\inf-gate\check-txtsetup-oem.ps1`, task 33.3), each self-tested
+first and run over both architectures' files, run the packager self-tests,
+the QEMU launcher self-tests, the vm-matrix verdict self-tests, the tracked
+batch files' line-ending check and the source charset check, run the
+snapshot self-test (`xhcitr\snaptest.cmd`, which drives `XHCITR /snaptest`
+and runs `scripts\check-counter-names.ps1` on its counter output;
+`xhcisnap\selftest.cmd` up to `3.0.0.0`) if `xhcitr\build.cmd` has built
+`XHCITR.EXE`, run `test\run-host-tests.cmd`, `build` each requested flavour
+in its own child `cmd` (`setenv.bat` is not idempotent across flavours),
+fail on a build error or on the presence of `src\build{fre,chk_qemu}.err`
+(and, up to task 45.45, `buildchk.err`), then run the post-link import gate
+and the flavour-marker check on each linked binary. Exit codes: 0 built and
+gated, 1 failure, 2 host tests inconclusive (a blocked exe launch, see
+`lessons.md`'s Smart App Control entry, so just run it again).
 
 The host suite runs before the DDK builds: it compiles the same pure-core
 files in seconds, so a bad carve, ring or PORTSC constant should not cost two
@@ -674,7 +805,7 @@ it carries the package's version and date:
 - **Version.** `src\stor98\src\stor98ver.h` includes `src\xhci_version.h`
   (two directories up) and hands `XHCI_VER_CSV` and `XHCI_VER_STR` to
   `nvme2k.rc`, so `stor98.mpd` and both `stor98.sys` images carry the
-  package's version; its two INFs' `DriverVer` is the package's
+  package's version; its three INFs' `DriverVer` is the package's
   ("Versioning the driver" above). Stor98's interface versions
   (`STOR98CM_VERSION`, `STOR98LS_VERSION` and the others in
   `include\stor98cm.h`) are protocol versions and stay as they are; its
@@ -690,17 +821,17 @@ it carries the package's version and date:
   held to `scripts\check-stor98-build.ps1` - its fixed and string
   `FileVersion` and `ProductVersion` equal to `XHCI_VER_STR`, exactly one
   flavour marker and it `STOR98_FLAVOUR_FREE` (emitted by
-  `src\stor98\src\nvme2k.c`, `_CHECKED` or `_DBGPORT` in the other
-  builds) and none of this project's `XHCI98_FLAVOUR_*`, its machine, and
-  every by-name import listed for its target in
+  `src\stor98\src\nvme2k.c`, `_CHECKED` or `_DBGPORT` in the other builds)
+  and none of this project's `XHCI98_FLAVOUR_*`, its machine, and every
+  by-name import listed for its target in
   `scripts\import-gate\stor98-imports.allow` (Stor98 has no import gate of
   its own; this is the allowlist half of this project's, without the
-  target-evidence half) - captured into the gated record
-  (`stor98.mpd`, `stor98.sys`), and stamped (`scripts\source-stamp.ps1
-  -Driver stor98` or `stor98mpd`, `stor98.srcstamp` beside the image: its
-  `SOURCES`, its headers, `include\stor98cm.h` and `src\xhci_version.h`).
-  The INF gate runs `check-stor98-inf.ps1 -SelfTest` and then over both
-  INFs with the others.
+  target-evidence half) - captured into the gated record (`stor98.mpd`,
+  `stor98.sys`), and stamped (`scripts\source-stamp.ps1 -Driver stor98` or
+  `stor98mpd`, `stor98.srcstamp` beside the image: its `SOURCES`, its
+  headers, `include\stor98cm.h` and `src\xhci_version.h`). The INF gate runs
+  `check-stor98-inf.ps1 -SelfTest` and then over its three INFs with the
+  others.
 
 ```
 scripts\build-driver.cmd <flavours> [-amd64]   REM the drivers and Stor98, gated
@@ -737,6 +868,750 @@ the same bytes as `src\stor98\include\stor98cm.h`, the master
 `.cmd` (`.cmd` since 2026-10-29), Stor98's
 two in its `third_party\` copy among them. `check-source-charset.ps1`
 skips `src\stor98\`, which keeps Stor98's own rules.
+
+### Building the networking drivers (`src\net\`)
+
+Thunderbolt networking's two miniports (roadmap-usb4 task 45.59, design
+record 35) are built by `build-driver.cmd` in every run, after
+`xhcicm.sys`, in the run's flavours:
+
+- `xhcinet.sys` (`:buildnet`, from `src\net\ndis5\`), the NDIS 5 miniport
+  of 98 SE to 7: the same toolchain, flavour and `BUILD_ALT_DIR` as
+  `xhcicm.sys` (the Windows 2000 DDK on x86, WDK 7.1 on amd64), then the
+  import gate - on x86 its `-GateProfile net98`, which holds every
+  `NDIS.SYS` pair to the export names of 98 SE's and ME's `NDIS.VXD` as
+  well as the NT kernels' (`scripts\import-gate\xhcinet-imports.allow`,
+  `ndisvxd-baselines.expected`, `net98-runtime.list`) - the frame-pointer
+  check and the flavour marker.
+- `xhcinet6.sys` (`:buildnet6`, from `src\net\ndis6\`), the NDIS 6.20
+  miniport of 8 to 10, built with WDK 7.1's `WIN7` environment on both
+  architectures, the only kit here with NDIS 6.20, so every run needs
+  `tools\WinDDK71` (`:net6nowdk`); then the import gate's `-GateProfile
+  net6` against the 8.1 and 10 kernels', HALs' and `ndis.sys` export tables
+  (`net6-*-baselines.expected`) and the flavour marker. No frame-pointer
+  check: that rule is MSVC 6.0's.
+
+Their INFs, `src\net\xhcinet.inf` and `xhcinet-amd64.inf`, are gated by
+`scripts\inf-gate\check-net-inf.ps1` (self-tested first) with the other
+INF gates. The packager stages them in `cm\tbnet\`.
+
+### Building the VxDs and `XHCIPFW.SYS` (`src\vsd\`, `src\pfw\`)
+
+On the x86 run only, `build-driver.cmd` builds the package's three small
+images, each through its own `build.cmd`, each gated inside that build and
+again by the packager:
+
+- `S98VSD.VXD` (`src\vsd\build.cmd`, design record 30) and `XHCIPFW.VXD`
+  (`src\pfw\build.cmd`, design record 32), the release image always and
+  the `qemu` flavour's when the run builds it: Open Watcom 2.0 with no
+  runtime library and the Windows 98 SE DDK's `LINK.EXE` 5.12, gated by
+  `src\vsd\check-vsd.ps1` and `src\pfw\check-pfw.ps1` and their Python
+  link checks. Exit 2 is "not built" (no Open Watcom, no 98 SE DDK or no
+  Python on this host), said and passed over; `make-release.ps1` refuses a
+  cut without either image.
+- `XHCIPFW.SYS` (`src\pfw\nt\build.cmd`, design record 32 section 11),
+  the Windows 2000 DDK's build, as the x86 drivers are, gated by the
+  import gate's `-GateProfile hlprx86` with
+  `scripts\import-gate\xhcipfw-imports.allow` and by
+  `src\pfw\nt\check-pfwsys.ps1`. It keeps its build without `/Oy-`
+  (design record 08 section 14, the owner's decision of 2026-10-30).
+
+### The cut's builds, the self-tests' skips, Stor98 and the driver pack
+
+The seven subsections below were written under "Vista x64 and Windows 7
+x64 target VMs", where they first arose; they are the build's and the cut's,
+so they sit here, under their own titles.
+
+### The cut's two builds at once (roadmap-usb4 task 44.31)
+
+A cut needs `scripts\build-driver.cmd all` and `all -amd64`, and until
+`3.3.0.0` it ran them one after the other in the one tree the cut is made
+from: two runs in one tree write the same files outside the
+per-architecture object directories (the host suite's and the self-tests'
+outputs, the DDK's build logs and `_objects.mac`, Stor98's objects) and
+share one temporary folder. Task 44.31 (was TREESPLIT.1) runs them at
+once in two worktrees of the repository, about 30 minutes saved a cut.
+This is its design, settled before its code (2026-10-25; reviewed and
+revised).
+
+- **Two trees, two roles.** Tree A is the cut's: the x86 build, the tools,
+  `make-release.ps1` and the `releases\<version>\` it writes. Tree B is a
+  second worktree of the same repository at A's commit, made once with
+  `git worktree add --detach <B> HEAD` and its `tools\` junctioned to A's
+  toolchain, and moved to A's commit before each cut (`git -C <B> checkout
+  --detach <commit>`); it builds amd64 and nothing else. Only amd64 moves:
+  the x86 run also builds what the cut reads beside the drivers
+  (`S98VSD.VXD`, the helper's build log), and the cut is made in one tree.
+- **Why B's build is valid in A.** Neither thing that ties a build to its
+  tree names a path. A source stamp (`*.srcstamp`) lists the sources by
+  their path under `src\` with their content hashes and the binary's hash
+  (`scripts\source-stamp.ps1`), so B's stamps check against A's sources
+  when the two hold the same content. The gated record
+  (`out\gated-<arch>-<flavour>.txt`) names the architecture, the flavour,
+  the commit, whether the tree was clean, whether the import gates had
+  their target evidence, and each binary's hash; B's commit is a commit of
+  A's repository, since worktrees share one object store, so the record's
+  commit rule - HEAD that commit, or a newer one with no build input
+  changed since (task 43.9) - applies in A as it is. One thing does carry
+  B's path: the PDB path in each image's debug directory (`3.2.0.0`'s
+  `release-x64\xhci98.sys` names `...\integ12\src\objfre\amd64\xhci98.pdb`),
+  so B is named like any worktree here, with no machine or user name in
+  it.
+- **B's build is imported into A, not read where it is.** A new script,
+  `scripts\package\cut-builds.ps1`, copies B's amd64 output directories
+  into the same paths in A and then B's records into A's `out\`, and every
+  later step reads A as if A had built amd64 itself: `make-release.ps1
+  -CheckOnly` reports both architectures' records, the cut runs every gate
+  on every leg as before (the host suite, and the import gates on the
+  copies, whose `SITES` rule finds the objects beside each image because
+  whole directories are copied), and `make-package.ps1 -SignOnly` signs
+  from the imported record. Reading B in place would instead give
+  `make-package.ps1`, `make-release.ps1`, `Resolve-Stor98Build` and
+  `-CheckOnly` a second root for six binaries, their stamps and their
+  objects; the copy costs seconds. The directories are, per flavour,
+  `src\<obj>\amd64`, `src\uas\<obj>\amd64` and `src\cm\<obj>\amd64`
+  (`<obj>` `objfre` or `objchk_qemu`), and once,
+  `src\stor98\out\free\amd64`, which every flavour's record covers.
+- **What the import holds before it copies, and after.** It refuses
+  unless B is another worktree of A's repository: `git rev-parse
+  --path-format=absolute --git-common-dir` the same for both, and B not A
+  under another name (a file the import writes in A's `out\` must not
+  appear in B's, which catches a junction or another spelling of A's
+  path). No directory it deletes or copies may be, or lie under, a
+  junction or symbolic link inside either tree, so a delete in A can never
+  reach B's files. It takes `out\gated-amd64.lock` in both trees as
+  `build-driver.cmd` takes it (`mkdir`, which fails when the directory is
+  there), B's first (A's comes already held from the launcher, below),
+  and holds both until it ends, so no amd64 build can
+  start in either tree while it runs and it refuses while one is running
+  or a stopped one left its lock; a `.pending` record in B (a build that
+  did not finish) is refused too. A must be clean (`Get-GitTreeState`).
+  Then each flavour's record in B (`release`, and `qemu` where B has its
+  record; `debug` until task 45.45) is read once, as bytes, and must admit B's binaries
+  against A's HEAD and A's state exactly as `-SignOnly` admits its own
+  (`Get-GatedManifestFault` with `Get-GatedHeadAdvance`): that
+  architecture and flavour, the four binaries an amd64 build records and
+  no other, each at its recorded hash, a clean build, A's HEAD its commit
+  or an admitted advance, target evidence unless `-NoTargetEvidence`.
+  Only when every flavour is admitted does it change A. It first deletes
+  every amd64 record in A, each flavour's whatever it imports, since
+  Stor98's directory, which it replaces, is in each of them; then it
+  replaces each directory with B's; then it holds the copies to each
+  record again (`Get-GatedManifestFault` with A's paths), and only then
+  writes each record from the bytes it read, unchanged (a record with
+  `target_evidence=0` stays so, and `-SignOnly` still asks for its own
+  `-NoTargetEvidence`). If any of that fails, it deletes the records it
+  has written: after an import A's amd64 records are exactly the imported
+  ones, or there are none. A refusal names the record and the reason, as
+  `-SignOnly`'s do.
+- **The builds at once.** `cut-builds.ps1 -X64Tree <B>` starts
+  `scripts\build-driver.cmd all` in A and `scripts\build-driver.cmd all
+  -amd64` in B as two processes at once, each with `TEMP` and `TMP` set to
+  its own tree's `out\tmp-<arch>\` (the shared temporary folder is where
+  two builds collided), each writing its tree's `out\cut-build-<arch>.log`;
+  waits for both; prints each one's exit code and time; and imports when
+  both passed. Before either build starts, in both modes, it makes the
+  import's checks of the two trees (another worktree of the same
+  repository, not A under another name) and refuses unless both trees are
+  clean, B is at A's HEAD (stricter than the records: a record is admitted
+  when its commit is A's HEAD or an ancestor of it with no build input
+  changed since, but the two builds are meant to be of one commit), and
+  both have the toolchain. It then takes, by `mkdir` as above, the two
+  locks its builds do not take, A's `out\gated-amd64.lock` and B's
+  `out\gated-x86.lock`, refusing if either is held, and holds them through
+  the builds, so no build of the other architecture can start in either
+  tree beside its own (the collision two trees avoid; each build takes its
+  own architecture's lock as always). The import is handed A's amd64 lock
+  as it is held and takes B's, which B's build has dropped. The launcher
+  drops its two locks when it ends, whatever the outcome, but only once
+  every build it started has ended: on a failure with one build still
+  running (the second failing to start, say) it waits for that build
+  first, and if that wait is itself interrupted the locks stay, to be
+  deleted by hand once no build runs, as a stopped build's own lock is. `-Serial` runs the two one after the other
+  (the baseline the saving is measured against); `-ImportOnly` imports
+  builds already made, for builds run by hand. `-NoTargetEvidence`, for a
+  host with no target binaries staged, goes with `-ImportOnly` alone: an
+  x86 cut needs the evidence (the helper's import gate), so a run that
+  builds refuses it. The x86 run builds and self-tests XHCITR and
+  XHCIPERF as it always has (XHCICLN too, until it was dropped in
+  `3.3.0.0`); the tools the cut stages are built in A as before.
+- **What does not change.** `build-driver.cmd`, the record's format and
+  `write-gated-manifest.ps1`; `make-release.ps1`'s legs and its gates, so
+  a cut still runs every gate on every leg and does not take a record in
+  place of a gate ("A documentation commit after the gated build" below
+  holds as written); `make-package.ps1 -SignOnly`'s rules. What
+  `make-release.ps1 -CheckOnly` reports changes only in that both
+  architectures' records are now there to report. A cut from one tree,
+  built one architecture after the other, is made exactly as before. The
+  cut's commands, with the import between the builds and `-CheckOnly`, are
+  releases `README.md`, "Cutting a release".
+- **Checked by** `scripts\package\test-package.ps1`, on a fixture
+  repository with a second worktree and stand-in binaries and records: an
+  import that passes, with a qemu record in A that it removes; each
+  refusal above (another repository, the same tree, the same tree through
+  a junction, a lock in either tree, a pending record, A dirty, a dirty or
+  foreign-commit record, a record without target evidence, with and
+  without `-NoTargetEvidence`, a binary not its record's, a build input
+  changed since, a junction in a path it would delete); and A left with no
+  amd64 record when the copies' check fails.
+
+### A faster gated build (roadmap-usb4 task 45.3)
+
+The `3.3.0.0` cut built amd64 and then x86 in one tree, about 67 and 55
+minutes one after the other, although `cut-builds.ps1` (44.31, above)
+runs them at once: the second tree had to be made by hand first. And
+inside one build every step ran in turn, the self-tests and host suites
+that need no DDK among them (the packager's self-tests alone took 20
+minutes on 2026-10-29). Task 45.3 (was BUILDFAST.1; owner, 2026-10-28)
+takes both. This is its design, settled before its code (2026-10-29;
+reviewed and revised).
+
+- **The second tree made by the launcher.** `cut-builds.ps1`'s `-X64Tree`
+  becomes optional. Without it tree B is `<A>-x64`, beside tree A (the
+  name the PDB path of each x64 image carries, so it holds no more of a
+  person's or a machine's name than A's own path does). When that
+  directory does not exist the script makes it before any build, `git
+  worktree add --detach <B> HEAD`, and marks it as its own
+  (`out\cut-x64-tree.txt` in B, naming A; `out\` is ignored, so B stays
+  clean). It then prepares B only when B carries that mark for this A,
+  is detached, clean and holds no build lock, and it holds both of B's
+  build locks while it does: it moves B to A's HEAD (`git -C <B>
+  checkout --detach <A's HEAD>`) and links, as a junction, each
+  directory of A's `tools\` that B's lacks (the archives and installers
+  at `tools\`'s top level are no build's input and are not linked; a
+  directory B has of its own is left and said). A tree at that path
+  that the script did not make - the main checkout, a worktree on a
+  branch, any other - is never moved or linked; it is taken as it is,
+  and 44.31's checks then take or refuse it. A link that cannot be made
+  stops the run with B kept: the next run links what B lacks. A tree
+  named with `-X64Tree` is only checked, as before, and `-ImportOnly`
+  takes `<A>-x64` or the named tree as it is, since what it imports was
+  built at the commit it holds. So the cut is one command,
+  `cut-builds.ps1`, and the one-tree route stays for a host that wants
+  it. B is an ordinary worktree, listed by `git worktree list`; remove
+  its `tools\` junctions (`rmdir`, which does not follow them) before
+  `git worktree remove`.
+- **One build's checks at once.** `build-driver.cmd` keeps its order
+  around them: the text checks first (seconds, and a text failure costs no
+  build, task 44.1), then the DDK chosen and checked, then the block that
+  needs no DDK, then the Stor98, VxD and XHCIPFW builds and the flavours.
+  The block - the import gate's self-tests, the INF, UAS, CM, Stor98 and
+  `txtsetup.oem` gates with their self-tests, the packager's, the QEMU
+  launchers' and the VM matrix's self-tests, the Stor98 header check, on
+  the x86 run XHCITR and XHCIPERF rebuilt, the XHCITR, XHCIPERF,
+  XHCIINST, XHCIMARK and XHCIDI self-tests on either run when their EXEs
+  are there, the host suite and on the x86 run Stor98's unit suite - is
+  handed to one new script, `scripts\build-steps.ps1 -Arch <arch>`, which
+  holds the steps as a table and runs them as separate processes at
+  once. It is a build input like `build-driver.cmd` (`package-common.ps1`,
+  `$script:BuildInputScripts`), so a change to it is a change to the
+  gated build. The steps were written to run alone, so the runner gives
+  each its own: its own `TEMP` and `TMP` (`out\steps-<arch>\tmp\<step>\`),
+  its own log (`out\steps-<arch>\<step>.log`, stdout and stderr through
+  `cmd /c` redirection), the repository root as its working directory as
+  `build-driver.cmd` gave it (the `.cmd` steps `cd` to their own), and no
+  `U4_TRACE` (the path `test\u4_fakefab.c` writes its trace to, which two
+  host suites at once - the suite's own step and the one the packager's
+  binary-gate case starts - would share). Ordering that matters is a
+  dependency in the table: each gate waits for its own self-test, as it
+  ran after it before; on the x86 run XHCITR's and XHCIPERF's self-tests
+  wait for their rebuilds, and whether their EXE is there is read when
+  the step is due, after its build; XHCITR's snapshot self-test waits for
+  its own self-test. Two steps writing one file would be the hazard, and
+  none does: the host suite builds into a run directory of its own
+  (`/Fo`), the tool builds into their own folders, Stor98's unit suite
+  into its own, XHCITR's `/selftest` returns before its tray mutex, the
+  VM matrix's port probes skip a port in use, the packager's lock and
+  record cases use fixture trees, and the gates read the tree and write
+  under their `TEMP`. No step writes a gated record; the record's token
+  and lock stay `build-driver.cmd`'s.
+- **How many at once, and in which order.** At most `XHCI98_BUILD_STEPS`
+  processes (default 4, so a cut's two builds start eight on a host other
+  work shares; `1` runs them one at a time, in the table's order). The
+  five longest come first in the table - the packager's self-tests, the
+  host suite, the two tool builds and Stor98's unit suite - so the short
+  ones fill in beside them. A step whose EXE is absent (XHCIINST,
+  XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF where they
+  were never built) is said and passed over, as `build-driver.cmd` passed
+  over it.
+- **What the log shows.** When a step ends its log is printed whole under
+  its old `=== <title> ===` heading, followed by `--- <title>: passed
+  (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
+  with another's; the order is the order they end in. After the block, a
+  table of every step in the table's order with its result and time, and
+  the block's wall time.
+- **A failure.** No step starts after a failure, and a step that cannot be
+  started is one; the steps running then are left to finish (a `cmd /c`
+  stopped from outside leaves its children). Whatever ends the runner - a
+  failure, an exception, Ctrl+C - every step it started has ended before it
+  returns, so `build-driver.cmd` never drops its lock under a step still
+  writing. It exits 1 with each failed step's message - the texts of
+  `build-driver.cmd`'s old failure labels, moved into the table - and its
+  log's name. The host suite's own "inconclusive" (exit 2: Smart App
+  Control blocked a freshly linked EXE) stays 2 when nothing else failed,
+  and `build-driver.cmd` goes to `:inconclusive` as before.
+- **Each step timed.** Every step of `build-driver.cmd` outside the block
+  (the text checks, the block itself, the Stor98 build, `S98VSD.VXD`,
+  `XHCIPFW.VXD`, `XHCIPFW.SYS`, each flavour's build and gates) prints
+  `--- <step>: m:ss` when it has passed, and the run ends with its total.
+  The clock is `%TIME%` (labels `:stepclock` and `:steptime`): hours,
+  minutes, seconds and hundredths, the space before a one-digit hour made
+  a 0 and each field read with a 1 in front less 100, so `08` and `09` are
+  not octal; a step that crossed midnight once is given a day. Each
+  timer has a variable of its own (the run's, a step's, a flavour's), and
+  a timer is read only after its step's `if errorlevel` lines, so it never
+  changes where a failure goes. So the next cut's log says where its time
+  went.
+- **The packager's self-tests depend on no earlier build** (a problem
+  measured on 2026-10-29). `make-package.ps1` staged `XHCIPFW.VXD` and
+  `XHCIPFW.SYS` from `src\pfw\obj\` and `src\pfw\nt\objfre\i386\` of the
+  tree it runs in whatever its caller was, and gated them unless
+  `-SkipBinaryGates`; so the self-test that runs the packager with its
+  binary gates on reached the tree's own images, and a stale one (a build
+  of an earlier version) failed `check-pfw.ps1` with "no stamp
+  'XHCIPFW.VXD 3.3.0.0'" (and the same for `XHCIPFW.SYS`) before the build
+  that would rebuild them had run; a missing one was passed over. Of the
+  two ways out - build them before the self-tests, or take the self-tests
+  off them - this takes the second, because the first would still leave
+  an amd64 run (which builds neither) reading whatever x86 images the tree
+  holds, and a self-test whose verdict turns on an earlier build is not a
+  self-test. The packager's own idiom for stand-ins decides it: a caller
+  that names `-DriverPath` (the self-tests' stand-in drivers) stages
+  `XHCIPFW.VXD`, `XHCIPFW.SYS` and `S98VSD.VXD` only when it names them
+  too (`-PfwVxdPath`, `-PfwSysPath`, `-VsdPath`, as `-OemPath` and the UAS
+  pair already are), and a caller that names none - `make-release.ps1`, a
+  person staging a package - gets the tree's images exactly as before. A
+  named image must be there (a missing one is refused, never passed over
+  to the tree's), is gated unless `-SkipBinaryGates`, and is refused for
+  an amd64 package; `-VsdPath` is refused for a package without Stor98.
+  New self-tests stage stand-ins through the three and check where they
+  land, that a stand-in package naming none carries none, and the
+  refusals. So the order of `build-driver.cmd` does not matter to the
+  self-tests, and running `src\pfw\build.cmd` before a first build is no
+  longer needed.
+- **Nor on where `TEMP` is.** The same day's new self-test that "a
+  directory that is no git checkout is not read as a missing tag" made its
+  directory under `TEMP`; with `TEMP` under a worktree's `out\` (as
+  `cut-builds.ps1`, the runner and the phase's workers set it) `git -C
+  <dir>` found the enclosing worktree, and the check failed, so at the
+  phase's base commit every gated build with such a `TEMP` failed its
+  packager self-tests. `Invoke-DriverPackGit` now runs git with
+  `GIT_CEILING_DIRECTORIES` set, for that one child, to the full path of
+  the parent of the checkout it was given, so git never takes an
+  enclosing repository for the pack's; the checkout it is given must be a
+  checkout's top (a `.git` directory or a worktree's `.git` file there,
+  through a junction or not), which every caller's root-relative reads
+  already assumed. A fix of the packager, not of the test.
+- **What does not change.** The steps themselves, their order outside the
+  block, their gates and their exit codes; the gated record and its lock;
+  `cut-builds.ps1`'s checks, import and `-Serial` / `-ImportOnly` modes,
+  and a named `-X64Tree`. **Checked by** the packager's self-tests (the
+  default tree B on a fixture repository: made with its link, moved with
+  A, not moved when dirty, unmarked or on a branch, no lock left, a
+  directory that is no worktree refused; the stand-in PFW and VSD staging
+  and its refusals; the runner as a build input) and the runner's own
+  `-SelfTest` on stand-in steps (two at once, one at a time in order with a
+  dependency, a failure stopping later starts with its message, the
+  inconclusive code alone and beside a failure, an absent EXE passed over,
+  each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
+  the build's two tables), which `build-driver.cmd` runs before the block.
+
+### The INF gate's self-tests, in process and skipped when unchanged (roadmap-usb4 task 45.30)
+
+`scripts\inf-gate\test-inf-checks.ps1` ran `check-inf.ps1` as a new
+`powershell.exe` for every case, several hundred of them, and took 56 of a
+gated build's 60 minutes on 2026-10-29 (task 45.3's readings, a loaded
+host). The owner chose both ways out (2026-10-29). This is the design,
+settled before the code (reviewed and revised).
+
+- **In process.** Each case calls the gate as `& $gate -InfPath ... *>&1`
+  in the self-test's own process, not through `powershell.exe -File`. A
+  script invoked with `&` runs in a new script scope every time, so its
+  `$script:` variables (the failure and warning lists among them), its
+  functions, `Set-StrictMode` and `$ErrorActionPreference` are its own for
+  that call and gone after it: each case starts from the gate's own
+  initial state, and nothing a case sets reaches the next (what does
+  persist in one process - loaded assemblies, the error history - the gate
+  does not use; it adds no type and changes no culture). The arguments the
+  cases give as `powershell -File` words (`-Arch amd64`,
+  `-AllowUnpaddedDriverVer`) are turned into a hashtable splat, a name
+  with its value or a switch, since an array splatted on a script binds by
+  position. `exit` in the gate ends the gate, not the self-test, and sets
+  the global `$LASTEXITCODE`; the caller sets `$global:LASTEXITCODE` to 0
+  first and reads it back the same way, so a gate that ends without
+  `exit` reads as 0, and a terminating error that escapes the gate (an
+  exception, a parameter that does not bind) is caught and read as exit 1
+  with its message in the output, as the child process printed it and
+  exited 1.
+  `*>&1` takes every stream, `Write-Host`'s among them, into the text the
+  assertions read. `check-inf.ps1` itself does not change: `build-driver.cmd`,
+  `make-package.ps1` and every other caller still run it with
+  `powershell -File` exactly as before, and its exit codes and output are
+  the same either way. The one case that is about the process stays a
+  process: "a relative `-ManifestPath` after `Set-Location`", which starts
+  a `powershell.exe` from another directory on purpose. (Reshaping the
+  gate into a function returning its verdict was the other way; it would
+  mean rewriting a 3,600-line script's top level and its every `exit`, for
+  the same isolation a script scope already gives.)
+- **Skipped when nothing it reads has changed** (as task 45.30 made it;
+  task 45.51 moved the record into a store every tree shares and
+  narrowed the set: "The self-tests' skip across worktrees" below). The
+  self-test first
+  hashes (SHA-256) every file it and the gate read: the two scripts and
+  everything else under `scripts\inf-gate\` (the footprints, allowlists and
+  the other gates' files are there), `scripts\common.ps1`,
+  `scripts\test-harness.ps1`, every file directly in `src\` (the two INFs
+  and what the gate reads beside them: `xhci_version.h`, `xhci98.rc`,
+  `xhci_hub.h` and the rest) and `xhcitr\xhcitr.manifest`, each by its
+  path under the repository and its content, into one digest with the
+  PowerShell version's. When `out\inf-selftest-pass.txt` holds that digest
+  and this tree's full path, with its time and count - every field there,
+  or the record is no record - it prints one line, that it was skipped
+  and why (the time and count of the passing run, the digest), and exits
+  0. Otherwise it deletes the record before anything runs, runs the whole
+  suite and, if every check passed and the digest taken again at the end
+  is the one it began with (a file changed during the run makes it run
+  again next time), writes the record to a temporary name and moves it
+  into place. A file added, removed or changed in that set changes the
+  digest. It assumes no one edits those files while a run is reading
+  them; the end-of-run digest catches an edit that is not undone. `-Force`
+  runs it regardless, and so does `XHCI98_FULL_SELFTESTS=1`, which
+  `build-driver.cmd all` sets - `all` is what every cut builds, through
+  `cut-builds.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
+  `cut-builds.ps1` sets for its builds too, so a cut always runs it in
+  full (`make-release.ps1` runs the gate, not its self-tests). An
+  ordinary `build-driver.cmd` (`both`, or one flavour) takes the skip.
+  `out\` is git-ignored, so the record never reaches a commit or a clone.
+- **Not to the other gates.** `check-uas-inf.ps1`, `check-cm-inf.ps1`,
+  `check-stor98-inf.ps1` and `test-flavour-rules.ps1` start no process per
+  case and take seconds; they keep running in full.
+- **Checked by** the self-test itself: the in-process call's exit code,
+  output and isolation (two calls in a row, the second not seeing the
+  first's failures, and a parameter that does not bind read as exit 1),
+  and the skip's digest moving when one file in the set changes, staying
+  when a file outside it does, and the record written only after a pass.
+- **A self-test that cannot run says so.** A gated build's self-tests that
+  need git (the packager's builds fixture repositories) fail at once,
+  naming git, when it is not on `PATH`, and the two places the cut's
+  launcher read `$LASTEXITCODE` after a `git` that may not have run
+  (making and moving tree B) refuse instead of reading an earlier
+  program's code. A build whose packager self-test failed this way was
+  reported (2026-10-29) to have ended with exit 0; that could not be
+  reproduced: the self-test exits 1 and the build stops at its failure.
+
+A pre-merge build of a branch may set `XHCI98_SELFTEST_SKIP_OK=1`, and
+then `build-driver.cmd all` lets that skip stand as any other build does;
+a cut never sets it, so a cut's builds, and any caller that sets
+`XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
+2026-10-30).
+
+### The packager's self-tests, skipped when unchanged (owner, 2026-10-30)
+
+`scripts\package\test-package.ps1` takes about half an hour of each gated
+build, and the same tree often runs it twice in a row (a build that is
+repeated, or the amd64 build after the x86 one). It takes the INF gate's
+skip above, with a wider set, because the packager, the releaser and the
+cases that drive them read across the whole tree. The digest
+(`Get-PackagerSelfTestDigest`) is one SHA-256 over:
+
+- every file `git ls-files --cached --others --exclude-standard` lists -
+  each tracked file, and each untracked one that is not ignored but a
+  compiler's or linker's intermediate (`.res`, `.obj`, `.pdb` and the
+  like: a gated build's parallel steps make and delete XHCITR's and
+  XHCIPERF's `.res` beside their sources while this suite runs, which
+  read 2026-10-30 kept the end's digest from matching) - by its
+  path and content, a tracked file that is gone as absent. That covers the
+  packager scripts, `package-common.ps1`, `common.ps1` and the harness,
+  the test fixtures' sources, the INFs and `txtsetup*.oem`, the installer
+  tables (`xhciinst\inst_core.*`), the docs and release notes it checks,
+  the `releases\` records, the free set's pin and everything else a case
+  might open;
+- of what git ignores: the built images the releaser reads by content
+  (`src\pfw\obj\XHCIPFW.VXD`, `src\vsd\obj\S98VSD.VXD` and their `qemu\`
+  twins, whose build is deterministic), the names of the built drivers a
+  case may take as a sample or stage (every `*.sys` and `*.mpd` under
+  `src\`, everything under `out\free\`), and the driver sets' checkouts a
+  case reads when they are there (`scripts\local\usb-wdm-nonfree` and
+  `usb-wdm-free`): each one's presence, every ref and its working tree's
+  state;
+- what the cases run and inherit: `MakeCat.exe` and the catalog case's
+  PE sample by content (Windows' own `kernel32.dll`, a fixed file, where
+  that case used to take a driver the tree had built and every build
+  replaces); the toolchains the binary gates' host tests compile with -
+  MSVC6 and WDK 7.1 as `run-host-tests.cmd` resolves them (`MSVC6`,
+  `WDK71`, else `tools\`) and `tools\win98ddk-extracted` - by every file's
+  path, size and time; the environment variables the suite and its
+  children read (`PATH`, `TEMP`, `SystemRoot` and the rest of the
+  scripts' reads, `MSVC6`, `WDK71`, `INCLUDE`, `LIB` and the compilers'
+  others, `run-host-tests.cmd`'s own flags such as `NORUN` and the
+  suites' `getenv` reads, every `GIT_*` and every `XHCI98_*` but the gated run's token
+  and the skip's own switches), set or not - not every variable, since
+  `build-driver.cmd` sets its own per run (its step clock's times,
+  `ARCH`) - and `git config --list --show-origin` in the tree, both
+  taken once at the start, so a variable a case sets for itself does not
+  move the end's digest; and the
+  PowerShell, .NET and git versions (and whether .NET has
+  `CertificateRequest`, which the signing cases need).
+
+When git cannot list the tree there is no digest and the suite runs whole.
+The record (as task 45.48 made it; task 45.51 moved it into a store
+every tree shares and narrowed the digest: "The self-tests' skip across
+worktrees" below) is `out\packager-selftest-pass.txt`, of the INF gate's form
+(digest, the tree's full path, time, checks, `end`), taken whole or not at
+all, deleted before a run, and written only after a run in which every
+check passed and the digest taken again at the end is the one it began
+with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it whole, so every cut
+does (`cut-builds.ps1` and `package-common.ps1` set it, and
+`build-driver.cmd all` sets it unless a pre-merge build sets
+`XHCI98_SELFTEST_SKIP_OK=1`, above). A changed C source changes the
+digest too: the skip saves the repeated run of one tree, not a run after
+an edit. Checked by the self-test itself: the digest moves for a tracked
+file changed or deleted, an untracked file that is not ignored, a built
+`XHCIPFW.VXD` changed and a built driver appearing, and stays for any
+other ignored file; a checkout appearing and a tag added to it move
+it; an inherited variable moves it, and the run's token and the build's
+step-clock variables do not.
+
+### The self-tests' skip across worktrees (roadmap-usb4 task 45.51; owner, 2026-10-30)
+
+45.48's reading (`runs/run-45.md`, "45.48") showed a tree's own record
+skipping the packager's self-tests only from the tree's third gated build,
+and the INF gate's never: the first build makes outputs the digests read
+(the built drivers' names, `src\build*.log`), and each build writes a new
+`nmake` response-file name into `src\build*.log`. A pre-merge build is
+mostly a tree's first or second. The owner chose (2026-10-30) one shared
+record per suite keyed by its digest, each digest narrowed to what its
+suite reads with every built output left out, and every case that reads
+the real tree only as a seed for behaviour moved onto a fixture. This is
+the design, settled before the code and brought up to date with it
+(reviewed and revised).
+
+- **One shared store.** `Get-SelfTestPassDir` (`scripts\common.ps1`):
+  `XHCI98_SELFTEST_PASS_DIR` when set, else
+  `%LOCALAPPDATA%\xhci98\selftest-pass`, outside every worktree. A folder
+  per suite (`inf\`, `packager\`), one file per passing digest,
+  `<digest>.txt` (`digest=`, `suite=`, `time=`, `checks=`, `tree=` for the
+  reader only, `end`). A record counts when its file is whole and names
+  the digest and suite asked. The folder is made idempotently; a pass
+  writes a temporary file beside it and moves it into place; when the name
+  exists, a valid record for the same digest is left, an invalid one is
+  replaced from a fresh temporary, and any other failure warns and records
+  nothing. Nothing deletes another digest's record. The end-of-run digest
+  comparison stays. The in-tree records of 45.30 and 45.48 are retired.
+  `-Force` and `XHCI98_FULL_SELFTESTS=1` run a suite whole, so every cut
+  does; a cut's pass is recorded like any other.
+- **A digest of inputs, not of a tree.** Every row is relative to the
+  repository root: a file by its repository-relative path and content;
+  MakeCat, the catalog's PE sample and the import gate's dumpers by
+  content; path-valued environment values split, normalised and rewritten
+  against the tree's root (`<repo>`). No toolchain is listed file by file:
+  since the binary gates' case runs a fixture host runner (below), no case
+  compiles. Nothing git ignores counts, except where a kept case scans a
+  folder with `-Force` (below). `TEMP` and `TMP` leave the digest because
+  the suite sets both to one scratch root at its start.
+- **Hermetic git.** At its start each suite sets, in its own environment,
+  `GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` to a
+  configuration of its own that holds only empty `core.excludesFile` and
+  `core.attributesFile`, an empty `core.hooksPath` and `init.templateDir`
+  and signing off, an empty `GIT_TEMPLATE_DIR`, `GIT_NO_REPLACE_OBJECTS=1`
+  and `GIT_TERMINAL_PROMPT=0`, and clears the injection variables
+  (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_COUNT` and its
+  pairs, `GIT_CONFIG_PARAMETERS`, the object-directory ones and the rest of
+  `Get-SelfTestGitPolicyNames`, `scripts\common.ps1`), so the digest's
+  listing, the fixtures and every production git call the suite reaches,
+  in it and in its children, see the same git. A repository's own
+  configuration still applies: it is the tree's. The inherited rows are
+  taken before that policy is set, and the policy's own names are left out
+  of them.
+- **The INF gate's set.** Every file git lists under `scripts\inf-gate\`
+  and every INF directly in `src\` (tracked, or untracked and not
+  ignored); by name, whatever git says, `scripts\common.ps1`,
+  `scripts\test-harness.ps1`, `xhcitr\xhcitr.manifest` and, beside the
+  INFs, the files the gate's product table names (`VerHeader`, `RcName`,
+  `IdHeader` in `check-inf.ps1`, read from it at run time, so a new one
+  joins); the child `powershell.exe` the relative manifest case starts
+  (path, version, size) and the PowerShell version. No `.c`, no other
+  header and no build log.
+- **The packager's cases, sorted.** A case about the real tree's content -
+  text anchors in the scripts, the real INFs, scripts and batches staged
+  and checked, the installer's tables against the pin, the historical
+  release records, the release notes' declarations, each driver's
+  `source-stamp.ps1 -List` naming the version header and existing files -
+  stays, and what it reads is the packager's set. A case about behaviour
+  that only seeds itself from the real tree - the stamp writes and checks,
+  the sign-only record against HEAD and git status, the cut's refusals, the
+  input rules' classification vectors, the upload and import cases - moves
+  onto a hermetic fixture and keeps its assertions: only inputs move, never
+  a condition or a message, except a message that named a real path, and
+  except the digest's own cases, whose expectations follow the new digest
+  (a built image no longer moves it; a checkout's pinned tag does, an
+  unrelated tag does not). Two fixtures carry them. **Fixture repository
+  P** (`New-PackagerFixtureRepo`) is the packager's set itself, copied
+  from the tree at the suite's start with its layout and committed in a
+  repository of its own under the suite's git policy: its scripts are
+  today's, never a frozen copy, and every packager, releaser, wrapper and
+  writer case runs its copies rooted there and seeds from its files, so a
+  moved case reads nothing of a tree that the digest does not hold, and
+  the HEAD and git status it reads are P's (the sign-only case runs both a
+  clean P and a P with a change in it). Its `test\run-host-tests.cmd` is a
+  fixture host runner, which notes that it ran and fails as a failing host
+  suite does, so the binary gates' case runs the packager's default gate
+  branch and never the real host suite. **Fixture tree S**
+  (`New-SourceFixtureTree`) is today's `source-stamp.ps1` over small
+  source trees of the six drivers and a host runner with its include
+  chains: the stamp's cases and the input rules the classification
+  vectors and the import's cases use are read from it. `Invoke-Packager`
+  refuses a call without a stand-in `-DriverPath` outside the tree; each
+  case keeps the components it selects.
+- **The packager's set** (`Get-PackagerSelfTestFileSet`). Every file git
+  lists (tracked, or untracked and not ignored, a compiler's intermediate
+  left out) under `scripts\`, `releases\`, `xhciinst\`, `xhcimark\`,
+  `xhciqual\`, `xhcitr\`, `docs\using\` and `src\` - of `src\` every file
+  but a compiled source (`.c`, `.cpp`, `.asm`, `.h`) and, of `src\stor98\`,
+  its INFs alone - and every `.gitignore` and `.gitattributes`; by name
+  `LICENSE`, `README.md`, the root `.gitignore` and `.gitattributes`,
+  `docs\contributing\design\19-x64-test-signing.md`,
+  `test\stor98-settings.txt`, the headers the cases and the releaser read
+  by name (`src\xhci_version.h`, `xhci.h`, `xhci_hub.h`,
+  `src\cm\cm_status.h`, `cm_query.h`, `cm_ejask.h`, `stor98cm.h`) and
+  Stor98's bundled files (`LICENSE`, `NOTICE`, `docs\package-readme.txt`
+  and its two interface headers). Beside it in the digest: `releases\`
+  with its full membership by path and size, ignored files included,
+  since the historical checks list it with `-Force`; for each driver, the
+  names `source-stamp.ps1 -List` gives and their presence, not their
+  contents; the driver sets' checkouts under `scripts\local\` by the
+  pinned tag's commit and tree ids, every object of that tree present or
+  missing, the replace refs and the checkout's own configuration, any git
+  failure there giving no digest; MakeCat, the catalog's PE sample and
+  the dumpers the import gate would resolve, by content; the environment
+  allowlist with `PSModulePath`; and the versions. No driver source's
+  content, no HEAD, no git status, no built output. With an AutoRun set
+  for `cmd.exe` (read, never written) there is no digest at all and the
+  suite runs whole: it runs before every `cmd.exe` a case starts, and
+  what it runs is no file of the set.
+- **Each set guarded.** `Get-SelfTestUnlistedPaths` (`scripts\common.ps1`)
+  reads the scripts a suite runs for every repository-relative path
+  literal that names a tracked file, and a case of each suite fails when
+  one is outside its set and outside a short list of paths no case reads
+  as an input, each with its reason (the packager's: XHCITR's sources a
+  cut's tool step dates, a driver source the vectors classify, and the
+  host runner every case replaces by P's). A control case shows it finds
+  one. A path built from parts, a folder scanned, a child's runtime read
+  and git's own reads are the set's entries by hand. This catches an
+  addition; it is not a proof of completeness.
+- **The proof**, each a gated x86 build (`build-driver.cmd all`,
+  `XHCI98_SELFTEST_SKIP_OK=1`) under the host's lock: tree 1 builds commit
+  X and records both suites; tree 2, a fresh worktree of X, skips both on
+  its first build; a branch that changes one driver `.c` file skips both;
+  a change to a file one suite reads makes that suite run whole.
+
+### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
+
+The release download's `release-x86\` and `release-x64\` (from `3.4.0.0` the
+`stor98\` folder of `98-me\`, `nt-x86\` and `nt-x64\`) carry Stor98, the
+NVMe driver (BSD-3-Clause, `src\stor98\`). **Since `3.1.0.0` (roadmap-usb4
+task 42-A.30, owner 2026-10-19) it is the Stor98 `build-driver.cmd` built
+and gated from `src\stor98\`** ("Building Stor98" above), at the package's
+version and date, and one signature covers it with the other x64 drivers.
+`3.0.0.0` bundled a pinned Stor98 release instead (`0.4.0.0`, copied
+unchanged from its release folder under four `-Stor98*` pins, with Stor98's
+own test signature and `stor98-test.cer`); the pins and that path are gone.
+
+`make-package.ps1` bundles it by default; `-NoStor98` leaves it out, and a
+caller naming `-DriverPath` (the self-tests' stand-ins) gets it only with
+`-Stor98Root`, a substitute Stor98 tree the self-tests alone may use (with
+`-SkipBinaryGates`, like `-Stor98HeaderPath`, the substitute interface
+header). What a package carries, at its root with no `stor98\` folder,
+every name starting with `stor98`:
+
+| Package | Files | From |
+|---|---|---|
+| x86 | `stor98.mpd`, `stor98.sys`, `stor98.inf` | `src\stor98\out\free\win9x\`, `\x86\`, `inf\stor98-x86.inf` |
+| amd64 | `stor98.sys`, `stor98.inf` | `src\stor98\out\free\amd64\`, `inf\stor98-x64.inf` |
+| both | `stor98-LICENSE.txt`, `stor98-NOTICE.txt`, `stor98-readme.txt` | `LICENSE`, `NOTICE`, `docs\package-readme.txt` |
+
+Before anything is staged (`Resolve-Stor98Build`,
+`scripts\package\package-common.ps1`) every file must be there, both INFs
+must carry the package's version and pass `check-stor98-inf.ps1`, each
+image must pass `check-stor98-build.ps1` again and its source stamp must
+say it is the build of the tree as it is, and Stor98's interface header must
+be byte for byte `src\cm\stor98cm.h` (its `STOR98LS_VERSION` is printed).
+With `-TestSignPfx` the amd64 `stor98.sys` is signed in the same step and
+with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` and held
+to the same two checks (design record 19); with `-SignOnly` its bytes are
+held to the gated build's record like theirs. Each staged copy is held to
+the hash it had when it was verified or signed.
+
+`make-release.ps1` verifies the build once up front for every architecture
+it publishes, holds `src\stor98\docs\package-readme.txt`'s SETTINGS table
+to `test\stor98-settings.txt` (the table the installer's Stor98 rows were
+checked against), passed `-NoStor98` to its debug legs until task 45.45
+retired them, and **publishes the
+Stor98 files of a release leg into `releases\<version>\release-x86\` and
+`release-x64\` with this project's own** (the x64 `stor98.sys` signed), so
+the upload set and `-UploadSetOnly` take them from the published tree, the
+upload set's one-date rule and file dating cover Stor98's INFs and files,
+and each published `stor98.mpd` and `stor98.sys` is held to the release's
+version. `-NoStor98` cuts without it. The release notes' one declaration
+line ("NVMe drives behind Thunderbolt or USB4") must agree with the cut,
+exactly: "This download bundles Stor98 `<version>`." or "This download
+bundles no Stor98."; the unfilled placeholder or a disagreement is refused
+(a `-TestLabel` cut is only warned). The generated readme names the
+bundled version.
+
+The gates hold these files by exactly the paths `Get-Stor98PackageFiles`
+returns and by nothing wider: `make-release.ps1`'s declared-media check
+accepts them beside this project's files, and a name that would replace
+one of this project's files is a refusal. The package's `PKG-MSFILE` name
+rule covers every file, Stor98's included. `XHCIINST` must copy no file
+whose name starts with `stor98` into its local copy, which is on the
+hardware wizard's search path (design record 23 section 4.4).
+
+### The driver pack: NUSB 3.3's 98 SE storage files (roadmap-usb4 task 43.3)
+
+The release download carries NUSB 3.3's seven Windows 98 SE storage files as
+`USBDRV\NUSB33\`, a folder of its own beside the other driver sets, in 8.3
+names (owner, 2026-10-20; the folder 2026-10-22; the `USBDRV\` parent
+2026-10-23, design record 26 section 6.7.2; up to that change it sat at the
+download's root as `NUSB33\`): `USBDRV\NUSB33\NOTICE.md` (the pack's
+`nusb33/NOTICE.md`), `USBDRV\NUSB33\SHA256.TXT` (the seven's hashes at their
+paths under `NUSB33\`) and `USBDRV\NUSB33\W98SE\` with the seven files,
+where the installer takes them from (task 43.4). NUSB is kept apart from the
+non-free driver pack (owner, 2026-10-22): in the pack's repository its files
+are the top-level `nusb33/w98se/`, not under `non-free/`, and the download
+never puts them inside `USBDRV\NONFREE\`. This is the one Microsoft file
+exception of the download (`legal-provenance.md` section 5). Only
+`make-release.ps1` adds it, to the upload set; no package of
+`make-package.ps1`'s carries it, and `releases\<version>\` never does.
+
+The files come from the owner's `usb-wdm-nonfree` repository, a checkout at
+`scripts\local\usb-wdm-nonfree` (git-ignored: a clone there or a junction
+to one; `-DriverPackRoot` names another), **read from its git objects at
+one revision** rather than from its working tree (`Export-DriverPack`,
+`scripts\package\package-common.ps1`). The folder is refused unless it holds
+exactly the seven names as plain files, each hashing as the pack's
+`SHA256.TXT` at that revision lists it and as the allowlist in
+`package-common.ps1` (section 5's table) pins it.
+
+A cut that publishes x86 directories resolves the checkout's `HEAD` once,
+before anything is built (`-NoDriverPack` cuts without the pack). It refuses
+to start while any of the seven names is under `releases\` or among the
+tracked files, and writes `releases\<version>\drvpack.txt`: whether the pack
+is included and, if so, its revision and every file's hash. The upload set
+adds `USBDRV\NUSB33\` before its gates run, and refuses a published tree
+that already holds one; its one-date rule reads this project's INFs only,
+the pack's two INFs (`USBSTOR.INF` dated 07/01/2001, `USBNTMAP.INF`
+06/08/2000 with no version) being held to their hashes instead, and every
+file, the pack's included, is dated by the release. `-UploadSetOnly` exports
+the revision `drvpack.txt` records and refuses unless every file's bytes are
+the recorded ones; a missing checkout or revision is a refusal, not a
+download without the pack, and so is a release from `3.2.0.0` with no
+`drvpack.txt` (an older one has none and is assembled without the pack). The
+tracked-name check reads `git ls-files -z`, so git's quoting of an unusual
+path cannot hide a name. `-DriverPackAllowlist` (a stand-in allowlist) is
+for `test-package.ps1` alone and is refused with the repository's
+`releases\`. `scripts\package\test-package.ps1` holds the layout with a
+stand-in Stor98 tree.
 
 ### Post-link import-compatibility gate (Phase 3 onward)
 
@@ -3177,25 +4052,27 @@ binaries are never signed.
   SIGN.1, owner 2026-10-16). A gated `build-driver.cmd` run writes the
   git-ignored `out\gated-<arch>-<flavour>.txt` for each flavour
   (`scripts\package\write-gated-manifest.ps1`, which refuses to run outside
-  such a run): each gated binary's SHA-256, the commit, whether the tree
-  had uncommitted changes, whether its import gates had their target
-  evidence, and the time. The run holds `out\gated-<arch>.lock` throughout
-  and refuses to start while another holds it (a run stopped with Ctrl+C
-  leaves it; delete it when no build is running), and notes the commit and
-  the tree's state when it takes it, before any self-test. When a
-  flavour's build starts its old record is deleted; each binary is hashed
-  right before its own import gate and again right after it, and the two
-  must agree; once the flavour's last gate has passed each file must still
-  have that hash, and the record is written from it, with `dirty=0` only
-  if the tree was clean when the run started and still is, at the same
-  commit ("clean" also excludes untracked files and files marked
-  assume-unchanged or skip-worktree). A run that fails leaves no record for
-  the flavour that failed. `make-package.ps1 -TestSignPfx <pfx> -SignOnly`
-  reads the record for its `-Arch` and `-Flavor` before anything else,
-  reads each binary once into memory and writes those bytes to a private
-  copy that every later step uses, and refuses unless the record is for
-  that architecture and flavour, every copy has exactly its recorded
-  SHA-256, the build ran in a clean tree, the tree is still at that commit
+  such a run): each gated binary's SHA-256, the commit, whether the tree had
+  uncommitted changes, whether its import gates had their target evidence,
+  and the time. The run holds `out\gated-<arch>.lock`, and
+  `out\gated-tree.lock`, which refuses a second run of either architecture
+  in the same tree (both write the same build logs), throughout and refuses
+  to start while another holds either (a run stopped with Ctrl+C leaves it;
+  delete it when no build is running), and notes the commit and the tree's
+  state when it takes it, before any self-test. When a flavour's build
+  starts its old record is deleted; each binary is hashed right before its
+  own import gate and again right after it, and the two must agree; once the
+  flavour's last gate has passed each file must still have that hash, and
+  the record is written from it, with `dirty=0` only if the tree was clean
+  when the run started and still is, at the same commit ("clean" also
+  excludes untracked files and files marked assume-unchanged or
+  skip-worktree). A run that fails leaves no record for the flavour that
+  failed. `make-package.ps1 -TestSignPfx <pfx> -SignOnly` reads the record
+  for its `-Arch` and `-Flavor` before anything else, reads each binary once
+  into memory and writes those bytes to a private copy that every later step
+  uses, and refuses unless the record is for that architecture and flavour,
+  every copy has exactly its recorded SHA-256, the build ran in a clean
+  tree, the tree is still at that commit
   - or at a newer one, below - with no change, and the build's gates had
   target evidence (or the run passes `-NoTargetEvidence` too); each copy is checked against its hash
   again just before it is signed. It then skips the host test suite and the import gates, which
@@ -3272,695 +4149,6 @@ binaries are never signed.
   for an ordinary start, and Vista x64 shows its "Test Mode" text only while
   its activation is in grace (`-Rtc base=2026-09-20T12:00:00`); with it
   expired the not-genuine watermark replaces it and the mode is still on.
-
-#### The cut's two builds at once (roadmap-usb4 task 44.31)
-
-A cut needs `scripts\build-driver.cmd all` and `all -amd64`, and until
-`3.3.0.0` it ran them one after the other in the one tree the cut is made
-from: two runs in one tree write the same files outside the
-per-architecture object directories (the host suite's and the self-tests'
-outputs, the DDK's build logs and `_objects.mac`, Stor98's objects) and
-share one temporary folder. Task 44.31 (was TREESPLIT.1) runs them at
-once in two worktrees of the repository, about 30 minutes saved a cut.
-This is its design, settled before its code (2026-10-25; reviewed and
-revised).
-
-- **Two trees, two roles.** Tree A is the cut's: the x86 build, the tools,
-  `make-release.ps1` and the `releases\<version>\` it writes. Tree B is a
-  second worktree of the same repository at A's commit, made once with
-  `git worktree add --detach <B> HEAD` and its `tools\` junctioned to A's
-  toolchain, and moved to A's commit before each cut (`git -C <B> checkout
-  --detach <commit>`); it builds amd64 and nothing else. Only amd64 moves:
-  the x86 run also builds what the cut reads beside the drivers
-  (`S98VSD.VXD`, the helper's build log), and the cut is made in one tree.
-- **Why B's build is valid in A.** Neither thing that ties a build to its
-  tree names a path. A source stamp (`*.srcstamp`) lists the sources by
-  their path under `src\` with their content hashes and the binary's hash
-  (`scripts\source-stamp.ps1`), so B's stamps check against A's sources
-  when the two hold the same content. The gated record
-  (`out\gated-<arch>-<flavour>.txt`) names the architecture, the flavour,
-  the commit, whether the tree was clean, whether the import gates had
-  their target evidence, and each binary's hash; B's commit is a commit of
-  A's repository, since worktrees share one object store, so the record's
-  commit rule - HEAD that commit, or a newer one with no build input
-  changed since (task 43.9) - applies in A as it is. One thing does carry
-  B's path: the PDB path in each image's debug directory (`3.2.0.0`'s
-  `release-x64\xhci98.sys` names `...\integ12\src\objfre\amd64\xhci98.pdb`),
-  so B is named like any worktree here, with no machine or user name in
-  it.
-- **B's build is imported into A, not read where it is.** A new script,
-  `scripts\package\cut-builds.ps1`, copies B's amd64 output directories
-  into the same paths in A and then B's records into A's `out\`, and every
-  later step reads A as if A had built amd64 itself: `make-release.ps1
-  -CheckOnly` reports both architectures' records, the cut runs every gate
-  on every leg as before (the host suite, and the import gates on the
-  copies, whose `SITES` rule finds the objects beside each image because
-  whole directories are copied), and `make-package.ps1 -SignOnly` signs
-  from the imported record. Reading B in place would instead give
-  `make-package.ps1`, `make-release.ps1`, `Resolve-Stor98Build` and
-  `-CheckOnly` a second root for six binaries, their stamps and their
-  objects; the copy costs seconds. The directories are, per flavour,
-  `src\<obj>\amd64`, `src\uas\<obj>\amd64` and `src\cm\<obj>\amd64`
-  (`<obj>` `objfre` or `objchk_qemu`), and once,
-  `src\stor98\out\free\amd64`, which every flavour's record covers.
-- **What the import holds before it copies, and after.** It refuses
-  unless B is another worktree of A's repository: `git rev-parse
-  --path-format=absolute --git-common-dir` the same for both, and B not A
-  under another name (a file the import writes in A's `out\` must not
-  appear in B's, which catches a junction or another spelling of A's
-  path). No directory it deletes or copies may be, or lie under, a
-  junction or symbolic link inside either tree, so a delete in A can never
-  reach B's files. It takes `out\gated-amd64.lock` in both trees as
-  `build-driver.cmd` takes it (`mkdir`, which fails when the directory is
-  there), B's first (A's comes already held from the launcher, below),
-  and holds both until it ends, so no amd64 build can
-  start in either tree while it runs and it refuses while one is running
-  or a stopped one left its lock; a `.pending` record in B (a build that
-  did not finish) is refused too. A must be clean (`Get-GitTreeState`).
-  Then each flavour's record in B (`release`, and `qemu` where B has its
-  record; `debug` until task 45.45) is read once, as bytes, and must admit B's binaries
-  against A's HEAD and A's state exactly as `-SignOnly` admits its own
-  (`Get-GatedManifestFault` with `Get-GatedHeadAdvance`): that
-  architecture and flavour, the four binaries an amd64 build records and
-  no other, each at its recorded hash, a clean build, A's HEAD its commit
-  or an admitted advance, target evidence unless `-NoTargetEvidence`.
-  Only when every flavour is admitted does it change A. It first deletes
-  every amd64 record in A, each flavour's whatever it imports, since
-  Stor98's directory, which it replaces, is in each of them; then it
-  replaces each directory with B's; then it holds the copies to each
-  record again (`Get-GatedManifestFault` with A's paths), and only then
-  writes each record from the bytes it read, unchanged (a record with
-  `target_evidence=0` stays so, and `-SignOnly` still asks for its own
-  `-NoTargetEvidence`). If any of that fails, it deletes the records it
-  has written: after an import A's amd64 records are exactly the imported
-  ones, or there are none. A refusal names the record and the reason, as
-  `-SignOnly`'s do.
-- **The builds at once.** `cut-builds.ps1 -X64Tree <B>` starts
-  `scripts\build-driver.cmd all` in A and `scripts\build-driver.cmd all
-  -amd64` in B as two processes at once, each with `TEMP` and `TMP` set to
-  its own tree's `out\tmp-<arch>\` (the shared temporary folder is where
-  two builds collided), each writing its tree's `out\cut-build-<arch>.log`;
-  waits for both; prints each one's exit code and time; and imports when
-  both passed. Before either build starts, in both modes, it makes the
-  import's checks of the two trees (another worktree of the same
-  repository, not A under another name) and refuses unless both trees are
-  clean, B is at A's HEAD (stricter than the records: a record is admitted
-  when its commit is A's HEAD or an ancestor of it with no build input
-  changed since, but the two builds are meant to be of one commit), and
-  both have the toolchain. It then takes, by `mkdir` as above, the two
-  locks its builds do not take, A's `out\gated-amd64.lock` and B's
-  `out\gated-x86.lock`, refusing if either is held, and holds them through
-  the builds, so no build of the other architecture can start in either
-  tree beside its own (the collision two trees avoid; each build takes its
-  own architecture's lock as always). The import is handed A's amd64 lock
-  as it is held and takes B's, which B's build has dropped. The launcher
-  drops its two locks when it ends, whatever the outcome, but only once
-  every build it started has ended: on a failure with one build still
-  running (the second failing to start, say) it waits for that build
-  first, and if that wait is itself interrupted the locks stay, to be
-  deleted by hand once no build runs, as a stopped build's own lock is. `-Serial` runs the two one after the other
-  (the baseline the saving is measured against); `-ImportOnly` imports
-  builds already made, for builds run by hand. `-NoTargetEvidence`, for a
-  host with no target binaries staged, goes with `-ImportOnly` alone: an
-  x86 cut needs the evidence (the helper's import gate), so a run that
-  builds refuses it. The x86 run builds and self-tests XHCITR and
-  XHCIPERF as it always has (XHCICLN too, until it was dropped in
-  `3.3.0.0`); the tools the cut stages are built in A as before.
-- **What does not change.** `build-driver.cmd`, the record's format and
-  `write-gated-manifest.ps1`; `make-release.ps1`'s legs and its gates, so
-  a cut still runs every gate on every leg and does not take a record in
-  place of a gate ("A documentation commit after the gated build" above
-  holds as written); `make-package.ps1 -SignOnly`'s rules. What
-  `make-release.ps1 -CheckOnly` reports changes only in that both
-  architectures' records are now there to report. A cut from one tree,
-  built one architecture after the other, is made exactly as before. The
-  cut's commands, with the import between the builds and `-CheckOnly`, are
-  releases `README.md`, "Cutting a release".
-- **Checked by** `scripts\package\test-package.ps1`, on a fixture
-  repository with a second worktree and stand-in binaries and records: an
-  import that passes, with a qemu record in A that it removes; each
-  refusal above (another repository, the same tree, the same tree through
-  a junction, a lock in either tree, a pending record, A dirty, a dirty or
-  foreign-commit record, a record without target evidence, with and
-  without `-NoTargetEvidence`, a binary not its record's, a build input
-  changed since, a junction in a path it would delete); and A left with no
-  amd64 record when the copies' check fails.
-
-#### A faster gated build (roadmap-usb4 task 45.3)
-
-The `3.3.0.0` cut built amd64 and then x86 in one tree, about 67 and 55
-minutes one after the other, although `cut-builds.ps1` (44.31, above)
-runs them at once: the second tree had to be made by hand first. And
-inside one build every step ran in turn, the self-tests and host suites
-that need no DDK among them (the packager's self-tests alone took 20
-minutes on 2026-10-29). Task 45.3 (was BUILDFAST.1; owner, 2026-10-28)
-takes both. This is its design, settled before its code (2026-10-29;
-reviewed and revised).
-
-- **The second tree made by the launcher.** `cut-builds.ps1`'s `-X64Tree`
-  becomes optional. Without it tree B is `<A>-x64`, beside tree A (the
-  name the PDB path of each x64 image carries, so it holds no more of a
-  person's or a machine's name than A's own path does). When that
-  directory does not exist the script makes it before any build, `git
-  worktree add --detach <B> HEAD`, and marks it as its own
-  (`out\cut-x64-tree.txt` in B, naming A; `out\` is ignored, so B stays
-  clean). It then prepares B only when B carries that mark for this A,
-  is detached, clean and holds no build lock, and it holds both of B's
-  build locks while it does: it moves B to A's HEAD (`git -C <B>
-  checkout --detach <A's HEAD>`) and links, as a junction, each
-  directory of A's `tools\` that B's lacks (the archives and installers
-  at `tools\`'s top level are no build's input and are not linked; a
-  directory B has of its own is left and said). A tree at that path
-  that the script did not make - the main checkout, a worktree on a
-  branch, any other - is never moved or linked; it is taken as it is,
-  and 44.31's checks then take or refuse it. A link that cannot be made
-  stops the run with B kept: the next run links what B lacks. A tree
-  named with `-X64Tree` is only checked, as before, and `-ImportOnly`
-  takes `<A>-x64` or the named tree as it is, since what it imports was
-  built at the commit it holds. So the cut is one command,
-  `cut-builds.ps1`, and the one-tree route stays for a host that wants
-  it. B is an ordinary worktree, listed by `git worktree list`; remove
-  its `tools\` junctions (`rmdir`, which does not follow them) before
-  `git worktree remove`.
-- **One build's checks at once.** `build-driver.cmd` keeps its order
-  around them: the text checks first (seconds, and a text failure costs no
-  build, task 44.1), then the DDK chosen and checked, then the block that
-  needs no DDK, then the Stor98, VxD and XHCIPFW builds and the flavours.
-  The block - the import gate's self-tests, the INF, UAS, CM, Stor98 and
-  `txtsetup.oem` gates with their self-tests, the packager's, the QEMU
-  launchers' and the VM matrix's self-tests, the Stor98 header check, on
-  the x86 run XHCITR and XHCIPERF rebuilt, the XHCITR, XHCIPERF,
-  XHCIINST, XHCIMARK and XHCIDI self-tests on either run when their EXEs
-  are there, the host suite and on the x86 run Stor98's unit suite - is
-  handed to one new script, `scripts\build-steps.ps1 -Arch <arch>`, which
-  holds the steps as a table and runs them as separate processes at
-  once. It is a build input like `build-driver.cmd` (`package-common.ps1`,
-  `$script:BuildInputScripts`), so a change to it is a change to the
-  gated build. The steps were written to run alone, so the runner gives
-  each its own: its own `TEMP` and `TMP` (`out\steps-<arch>\tmp\<step>\`),
-  its own log (`out\steps-<arch>\<step>.log`, stdout and stderr through
-  `cmd /c` redirection), the repository root as its working directory as
-  `build-driver.cmd` gave it (the `.cmd` steps `cd` to their own), and no
-  `U4_TRACE` (the path `test\u4_fakefab.c` writes its trace to, which two
-  host suites at once - the suite's own step and the one the packager's
-  binary-gate case starts - would share). Ordering that matters is a
-  dependency in the table: each gate waits for its own self-test, as it
-  ran after it before; on the x86 run XHCITR's and XHCIPERF's self-tests
-  wait for their rebuilds, and whether their EXE is there is read when
-  the step is due, after its build; XHCITR's snapshot self-test waits for
-  its own self-test. Two steps writing one file would be the hazard, and
-  none does: the host suite builds into a run directory of its own
-  (`/Fo`), the tool builds into their own folders, Stor98's unit suite
-  into its own, XHCITR's `/selftest` returns before its tray mutex, the
-  VM matrix's port probes skip a port in use, the packager's lock and
-  record cases use fixture trees, and the gates read the tree and write
-  under their `TEMP`. No step writes a gated record; the record's token
-  and lock stay `build-driver.cmd`'s.
-- **How many at once, and in which order.** At most `XHCI98_BUILD_STEPS`
-  processes (default 4, so a cut's two builds start eight on a host other
-  work shares; `1` runs them one at a time, in the table's order). The
-  five longest come first in the table - the packager's self-tests, the
-  host suite, the two tool builds and Stor98's unit suite - so the short
-  ones fill in beside them. A step whose EXE is absent (XHCIINST,
-  XHCIMARK, XHCIDI, and on the amd64 run XHCITR and XHCIPERF where they
-  were never built) is said and passed over, as `build-driver.cmd` passed
-  over it.
-- **What the log shows.** When a step ends its log is printed whole under
-  its old `=== <title> ===` heading, followed by `--- <title>: passed
-  (exit 0, m:ss)` or `failed`, so a step's output is never interleaved
-  with another's; the order is the order they end in. After the block, a
-  table of every step in the table's order with its result and time, and
-  the block's wall time.
-- **A failure.** No step starts after a failure, and a step that cannot be
-  started is one; the steps running then are left to finish (a `cmd /c`
-  stopped from outside leaves its children). Whatever ends the runner - a
-  failure, an exception, Ctrl+C - every step it started has ended before it
-  returns, so `build-driver.cmd` never drops its lock under a step still
-  writing. It exits 1 with each failed step's message - the texts of
-  `build-driver.cmd`'s old failure labels, moved into the table - and its
-  log's name. The host suite's own "inconclusive" (exit 2: Smart App
-  Control blocked a freshly linked EXE) stays 2 when nothing else failed,
-  and `build-driver.cmd` goes to `:inconclusive` as before.
-- **Each step timed.** Every step of `build-driver.cmd` outside the block
-  (the text checks, the block itself, the Stor98 build, `S98VSD.VXD`,
-  `XHCIPFW.VXD`, `XHCIPFW.SYS`, each flavour's build and gates) prints
-  `--- <step>: m:ss` when it has passed, and the run ends with its total.
-  The clock is `%TIME%` (labels `:stepclock` and `:steptime`): hours,
-  minutes, seconds and hundredths, the space before a one-digit hour made
-  a 0 and each field read with a 1 in front less 100, so `08` and `09` are
-  not octal; a step that crossed midnight once is given a day. Each
-  timer has a variable of its own (the run's, a step's, a flavour's), and
-  a timer is read only after its step's `if errorlevel` lines, so it never
-  changes where a failure goes. So the next cut's log says where its time
-  went.
-- **The packager's self-tests depend on no earlier build** (a problem
-  measured on 2026-10-29). `make-package.ps1` staged `XHCIPFW.VXD` and
-  `XHCIPFW.SYS` from `src\pfw\obj\` and `src\pfw\nt\objfre\i386\` of the
-  tree it runs in whatever its caller was, and gated them unless
-  `-SkipBinaryGates`; so the self-test that runs the packager with its
-  binary gates on reached the tree's own images, and a stale one (a build
-  of an earlier version) failed `check-pfw.ps1` with "no stamp
-  'XHCIPFW.VXD 3.3.0.0'" (and the same for `XHCIPFW.SYS`) before the build
-  that would rebuild them had run; a missing one was passed over. Of the
-  two ways out - build them before the self-tests, or take the self-tests
-  off them - this takes the second, because the first would still leave
-  an amd64 run (which builds neither) reading whatever x86 images the tree
-  holds, and a self-test whose verdict turns on an earlier build is not a
-  self-test. The packager's own idiom for stand-ins decides it: a caller
-  that names `-DriverPath` (the self-tests' stand-in drivers) stages
-  `XHCIPFW.VXD`, `XHCIPFW.SYS` and `S98VSD.VXD` only when it names them
-  too (`-PfwVxdPath`, `-PfwSysPath`, `-VsdPath`, as `-OemPath` and the UAS
-  pair already are), and a caller that names none - `make-release.ps1`, a
-  person staging a package - gets the tree's images exactly as before. A
-  named image must be there (a missing one is refused, never passed over
-  to the tree's), is gated unless `-SkipBinaryGates`, and is refused for
-  an amd64 package; `-VsdPath` is refused for a package without Stor98.
-  New self-tests stage stand-ins through the three and check where they
-  land, that a stand-in package naming none carries none, and the
-  refusals. So the order of `build-driver.cmd` does not matter to the
-  self-tests, and running `src\pfw\build.cmd` before a first build is no
-  longer needed.
-- **Nor on where `TEMP` is.** The same day's new self-test that "a
-  directory that is no git checkout is not read as a missing tag" made its
-  directory under `TEMP`; with `TEMP` under a worktree's `out\` (as
-  `cut-builds.ps1`, the runner and the phase's workers set it) `git -C
-  <dir>` found the enclosing worktree, and the check failed, so at the
-  phase's base commit every gated build with such a `TEMP` failed its
-  packager self-tests. `Invoke-DriverPackGit` now runs git with
-  `GIT_CEILING_DIRECTORIES` set, for that one child, to the full path of
-  the parent of the checkout it was given, so git never takes an
-  enclosing repository for the pack's; the checkout it is given must be a
-  checkout's top (a `.git` directory or a worktree's `.git` file there,
-  through a junction or not), which every caller's root-relative reads
-  already assumed. A fix of the packager, not of the test.
-- **What does not change.** The steps themselves, their order outside the
-  block, their gates and their exit codes; the gated record and its lock;
-  `cut-builds.ps1`'s checks, import and `-Serial` / `-ImportOnly` modes,
-  and a named `-X64Tree`. **Checked by** the packager's self-tests (the
-  default tree B on a fixture repository: made with its link, moved with
-  A, not moved when dirty, unmarked or on a branch, no lock left, a
-  directory that is no worktree refused; the stand-in PFW and VSD staging
-  and its refusals; the runner as a build input) and the runner's own
-  `-SelfTest` on stand-in steps (two at once, one at a time in order with a
-  dependency, a failure stopping later starts with its message, the
-  inconclusive code alone and beside a failure, an absent EXE passed over,
-  each step's own `TEMP`, `TMP` and directory, a dangling wait refused, and
-  the build's two tables), which `build-driver.cmd` runs before the block.
-
-#### The INF gate's self-tests, in process and skipped when unchanged (roadmap-usb4 task 45.30)
-
-`scripts\inf-gate\test-inf-checks.ps1` ran `check-inf.ps1` as a new
-`powershell.exe` for every case, several hundred of them, and took 56 of a
-gated build's 60 minutes on 2026-10-29 (task 45.3's readings, a loaded
-host). The owner chose both ways out (2026-10-29). This is the design,
-settled before the code (reviewed and revised).
-
-- **In process.** Each case calls the gate as `& $gate -InfPath ... *>&1`
-  in the self-test's own process, not through `powershell.exe -File`. A
-  script invoked with `&` runs in a new script scope every time, so its
-  `$script:` variables (the failure and warning lists among them), its
-  functions, `Set-StrictMode` and `$ErrorActionPreference` are its own for
-  that call and gone after it: each case starts from the gate's own
-  initial state, and nothing a case sets reaches the next (what does
-  persist in one process - loaded assemblies, the error history - the gate
-  does not use; it adds no type and changes no culture). The arguments the
-  cases give as `powershell -File` words (`-Arch amd64`,
-  `-AllowUnpaddedDriverVer`) are turned into a hashtable splat, a name
-  with its value or a switch, since an array splatted on a script binds by
-  position. `exit` in the gate ends the gate, not the self-test, and sets
-  the global `$LASTEXITCODE`; the caller sets `$global:LASTEXITCODE` to 0
-  first and reads it back the same way, so a gate that ends without
-  `exit` reads as 0, and a terminating error that escapes the gate (an
-  exception, a parameter that does not bind) is caught and read as exit 1
-  with its message in the output, as the child process printed it and
-  exited 1.
-  `*>&1` takes every stream, `Write-Host`'s among them, into the text the
-  assertions read. `check-inf.ps1` itself does not change: `build-driver.cmd`,
-  `make-package.ps1` and every other caller still run it with
-  `powershell -File` exactly as before, and its exit codes and output are
-  the same either way. The one case that is about the process stays a
-  process: "a relative `-ManifestPath` after `Set-Location`", which starts
-  a `powershell.exe` from another directory on purpose. (Reshaping the
-  gate into a function returning its verdict was the other way; it would
-  mean rewriting a 3,600-line script's top level and its every `exit`, for
-  the same isolation a script scope already gives.)
-- **Skipped when nothing it reads has changed** (as task 45.30 made it;
-  task 45.51 moved the record into a store every tree shares and
-  narrowed the set: "The self-tests' skip across worktrees" below). The
-  self-test first
-  hashes (SHA-256) every file it and the gate read: the two scripts and
-  everything else under `scripts\inf-gate\` (the footprints, allowlists and
-  the other gates' files are there), `scripts\common.ps1`,
-  `scripts\test-harness.ps1`, every file directly in `src\` (the two INFs
-  and what the gate reads beside them: `xhci_version.h`, `xhci98.rc`,
-  `xhci_hub.h` and the rest) and `xhcitr\xhcitr.manifest`, each by its
-  path under the repository and its content, into one digest with the
-  PowerShell version's. When `out\inf-selftest-pass.txt` holds that digest
-  and this tree's full path, with its time and count - every field there,
-  or the record is no record - it prints one line, that it was skipped
-  and why (the time and count of the passing run, the digest), and exits
-  0. Otherwise it deletes the record before anything runs, runs the whole
-  suite and, if every check passed and the digest taken again at the end
-  is the one it began with (a file changed during the run makes it run
-  again next time), writes the record to a temporary name and moves it
-  into place. A file added, removed or changed in that set changes the
-  digest. It assumes no one edits those files while a run is reading
-  them; the end-of-run digest catches an edit that is not undone. `-Force`
-  runs it regardless, and so does `XHCI98_FULL_SELFTESTS=1`, which
-  `build-driver.cmd all` sets - `all` is what every cut builds, through
-  `cut-builds.ps1` or by hand for `-ImportOnly` or a one-tree cut - and
-  `cut-builds.ps1` sets for its builds too, so a cut always runs it in
-  full (`make-release.ps1` runs the gate, not its self-tests). An
-  ordinary `build-driver.cmd` (`both`, or one flavour) takes the skip.
-  `out\` is git-ignored, so the record never reaches a commit or a clone.
-- **Not to the other gates.** `check-uas-inf.ps1`, `check-cm-inf.ps1`,
-  `check-stor98-inf.ps1` and `test-flavour-rules.ps1` start no process per
-  case and take seconds; they keep running in full.
-- **Checked by** the self-test itself: the in-process call's exit code,
-  output and isolation (two calls in a row, the second not seeing the
-  first's failures, and a parameter that does not bind read as exit 1),
-  and the skip's digest moving when one file in the set changes, staying
-  when a file outside it does, and the record written only after a pass.
-- **A self-test that cannot run says so.** A gated build's self-tests that
-  need git (the packager's builds fixture repositories) fail at once,
-  naming git, when it is not on `PATH`, and the two places the cut's
-  launcher read `$LASTEXITCODE` after a `git` that may not have run
-  (making and moving tree B) refuse instead of reading an earlier
-  program's code. A build whose packager self-test failed this way was
-  reported (2026-10-29) to have ended with exit 0; that could not be
-  reproduced: the self-test exits 1 and the build stops at its failure.
-
-A pre-merge build of a branch may set `XHCI98_SELFTEST_SKIP_OK=1`, and
-then `build-driver.cmd all` lets that skip stand as any other build does;
-a cut never sets it, so a cut's builds, and any caller that sets
-`XHCI98_FULL_SELFTESTS=1`, still run the self-tests whole (owner,
-2026-10-30).
-
-#### The packager's self-tests, skipped when unchanged (owner, 2026-10-30)
-
-`scripts\package\test-package.ps1` takes about half an hour of each gated
-build, and the same tree often runs it twice in a row (a build that is
-repeated, or the amd64 build after the x86 one). It takes the INF gate's
-skip above, with a wider set, because the packager, the releaser and the
-cases that drive them read across the whole tree. The digest
-(`Get-PackagerSelfTestDigest`) is one SHA-256 over:
-
-- every file `git ls-files --cached --others --exclude-standard` lists -
-  each tracked file, and each untracked one that is not ignored but a
-  compiler's or linker's intermediate (`.res`, `.obj`, `.pdb` and the
-  like: a gated build's parallel steps make and delete XHCITR's and
-  XHCIPERF's `.res` beside their sources while this suite runs, which
-  read 2026-10-30 kept the end's digest from matching) - by its
-  path and content, a tracked file that is gone as absent. That covers the
-  packager scripts, `package-common.ps1`, `common.ps1` and the harness,
-  the test fixtures' sources, the INFs and `txtsetup*.oem`, the installer
-  tables (`xhciinst\inst_core.*`), the docs and release notes it checks,
-  the `releases\` records, the free set's pin and everything else a case
-  might open;
-- of what git ignores: the built images the releaser reads by content
-  (`src\pfw\obj\XHCIPFW.VXD`, `src\vsd\obj\S98VSD.VXD` and their `qemu\`
-  twins, whose build is deterministic), the names of the built drivers a
-  case may take as a sample or stage (every `*.sys` and `*.mpd` under
-  `src\`, everything under `out\free\`), and the driver sets' checkouts a
-  case reads when they are there (`scripts\local\usb-wdm-nonfree` and
-  `usb-wdm-free`): each one's presence, every ref and its working tree's
-  state;
-- what the cases run and inherit: `MakeCat.exe` and the catalog case's
-  PE sample by content (Windows' own `kernel32.dll`, a fixed file, where
-  that case used to take a driver the tree had built and every build
-  replaces); the toolchains the binary gates' host tests compile with -
-  MSVC6 and WDK 7.1 as `run-host-tests.cmd` resolves them (`MSVC6`,
-  `WDK71`, else `tools\`) and `tools\win98ddk-extracted` - by every file's
-  path, size and time; the environment variables the suite and its
-  children read (`PATH`, `TEMP`, `SystemRoot` and the rest of the
-  scripts' reads, `MSVC6`, `WDK71`, `INCLUDE`, `LIB` and the compilers'
-  others, `run-host-tests.cmd`'s own flags such as `NORUN` and the
-  suites' `getenv` reads, every `GIT_*` and every `XHCI98_*` but the gated run's token
-  and the skip's own switches), set or not - not every variable, since
-  `build-driver.cmd` sets its own per run (its step clock's times,
-  `ARCH`) - and `git config --list --show-origin` in the tree, both
-  taken once at the start, so a variable a case sets for itself does not
-  move the end's digest; and the
-  PowerShell, .NET and git versions (and whether .NET has
-  `CertificateRequest`, which the signing cases need).
-
-When git cannot list the tree there is no digest and the suite runs whole.
-The record (as task 45.48 made it; task 45.51 moved it into a store
-every tree shares and narrowed the digest: "The self-tests' skip across
-worktrees" below) is `out\packager-selftest-pass.txt`, of the INF gate's form
-(digest, the tree's full path, time, checks, `end`), taken whole or not at
-all, deleted before a run, and written only after a run in which every
-check passed and the digest taken again at the end is the one it began
-with. `-Force` and `XHCI98_FULL_SELFTESTS=1` run it whole, so every cut
-does (`cut-builds.ps1` and `package-common.ps1` set it, and
-`build-driver.cmd all` sets it unless a pre-merge build sets
-`XHCI98_SELFTEST_SKIP_OK=1`, above). A changed C source changes the
-digest too: the skip saves the repeated run of one tree, not a run after
-an edit. Checked by the self-test itself: the digest moves for a tracked
-file changed or deleted, an untracked file that is not ignored, a built
-`XHCIPFW.VXD` changed and a built driver appearing, and stays for any
-other ignored file; a checkout appearing and a tag added to it move
-it; an inherited variable moves it, and the run's token and the build's
-step-clock variables do not.
-
-#### The self-tests' skip across worktrees (roadmap-usb4 task 45.51; owner, 2026-10-30)
-
-45.48's reading (`runs/run-45.md`, "45.48") showed a tree's own record
-skipping the packager's self-tests only from the tree's third gated build,
-and the INF gate's never: the first build makes outputs the digests read
-(the built drivers' names, `src\build*.log`), and each build writes a new
-`nmake` response-file name into `src\build*.log`. A pre-merge build is
-mostly a tree's first or second. The owner chose (2026-10-30) one shared
-record per suite keyed by its digest, each digest narrowed to what its
-suite reads with every built output left out, and every case that reads
-the real tree only as a seed for behaviour moved onto a fixture. This is
-the design, settled before the code and brought up to date with it
-(reviewed and revised).
-
-- **One shared store.** `Get-SelfTestPassDir` (`scripts\common.ps1`):
-  `XHCI98_SELFTEST_PASS_DIR` when set, else
-  `%LOCALAPPDATA%\xhci98\selftest-pass`, outside every worktree. A folder
-  per suite (`inf\`, `packager\`), one file per passing digest,
-  `<digest>.txt` (`digest=`, `suite=`, `time=`, `checks=`, `tree=` for the
-  reader only, `end`). A record counts when its file is whole and names
-  the digest and suite asked. The folder is made idempotently; a pass
-  writes a temporary file beside it and moves it into place; when the name
-  exists, a valid record for the same digest is left, an invalid one is
-  replaced from a fresh temporary, and any other failure warns and records
-  nothing. Nothing deletes another digest's record. The end-of-run digest
-  comparison stays. The in-tree records of 45.30 and 45.48 are retired.
-  `-Force` and `XHCI98_FULL_SELFTESTS=1` run a suite whole, so every cut
-  does; a cut's pass is recorded like any other.
-- **A digest of inputs, not of a tree.** Every row is relative to the
-  repository root: a file by its repository-relative path and content;
-  MakeCat, the catalog's PE sample and the import gate's dumpers by
-  content; path-valued environment values split, normalised and rewritten
-  against the tree's root (`<repo>`). No toolchain is listed file by file:
-  since the binary gates' case runs a fixture host runner (below), no case
-  compiles. Nothing git ignores counts, except where a kept case scans a
-  folder with `-Force` (below). `TEMP` and `TMP` leave the digest because
-  the suite sets both to one scratch root at its start.
-- **Hermetic git.** At its start each suite sets, in its own environment,
-  `GIT_CONFIG_NOSYSTEM=1`, `GIT_ATTR_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL` to a
-  configuration of its own that holds only empty `core.excludesFile` and
-  `core.attributesFile`, an empty `core.hooksPath` and `init.templateDir`
-  and signing off, an empty `GIT_TEMPLATE_DIR`, `GIT_NO_REPLACE_OBJECTS=1`
-  and `GIT_TERMINAL_PROMPT=0`, and clears the injection variables
-  (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_COUNT` and its
-  pairs, `GIT_CONFIG_PARAMETERS`, the object-directory ones and the rest of
-  `Get-SelfTestGitPolicyNames`, `scripts\common.ps1`), so the digest's
-  listing, the fixtures and every production git call the suite reaches,
-  in it and in its children, see the same git. A repository's own
-  configuration still applies: it is the tree's. The inherited rows are
-  taken before that policy is set, and the policy's own names are left out
-  of them.
-- **The INF gate's set.** Every file git lists under `scripts\inf-gate\`
-  and every INF directly in `src\` (tracked, or untracked and not
-  ignored); by name, whatever git says, `scripts\common.ps1`,
-  `scripts\test-harness.ps1`, `xhcitr\xhcitr.manifest` and, beside the
-  INFs, the files the gate's product table names (`VerHeader`, `RcName`,
-  `IdHeader` in `check-inf.ps1`, read from it at run time, so a new one
-  joins); the child `powershell.exe` the relative manifest case starts
-  (path, version, size) and the PowerShell version. No `.c`, no other
-  header and no build log.
-- **The packager's cases, sorted.** A case about the real tree's content -
-  text anchors in the scripts, the real INFs, scripts and batches staged
-  and checked, the installer's tables against the pin, the historical
-  release records, the release notes' declarations, each driver's
-  `source-stamp.ps1 -List` naming the version header and existing files -
-  stays, and what it reads is the packager's set. A case about behaviour
-  that only seeds itself from the real tree - the stamp writes and checks,
-  the sign-only record against HEAD and git status, the cut's refusals, the
-  input rules' classification vectors, the upload and import cases - moves
-  onto a hermetic fixture and keeps its assertions: only inputs move, never
-  a condition or a message, except a message that named a real path, and
-  except the digest's own cases, whose expectations follow the new digest
-  (a built image no longer moves it; a checkout's pinned tag does, an
-  unrelated tag does not). Two fixtures carry them. **Fixture repository
-  P** (`New-PackagerFixtureRepo`) is the packager's set itself, copied
-  from the tree at the suite's start with its layout and committed in a
-  repository of its own under the suite's git policy: its scripts are
-  today's, never a frozen copy, and every packager, releaser, wrapper and
-  writer case runs its copies rooted there and seeds from its files, so a
-  moved case reads nothing of a tree that the digest does not hold, and
-  the HEAD and git status it reads are P's (the sign-only case runs both a
-  clean P and a P with a change in it). Its `test\run-host-tests.cmd` is a
-  fixture host runner, which notes that it ran and fails as a failing host
-  suite does, so the binary gates' case runs the packager's default gate
-  branch and never the real host suite. **Fixture tree S**
-  (`New-SourceFixtureTree`) is today's `source-stamp.ps1` over small
-  source trees of the six drivers and a host runner with its include
-  chains: the stamp's cases and the input rules the classification
-  vectors and the import's cases use are read from it. `Invoke-Packager`
-  refuses a call without a stand-in `-DriverPath` outside the tree; each
-  case keeps the components it selects.
-- **The packager's set** (`Get-PackagerSelfTestFileSet`). Every file git
-  lists (tracked, or untracked and not ignored, a compiler's intermediate
-  left out) under `scripts\`, `releases\`, `xhciinst\`, `xhcimark\`,
-  `xhciqual\`, `xhcitr\`, `docs\using\` and `src\` - of `src\` every file
-  but a compiled source (`.c`, `.cpp`, `.asm`, `.h`) and, of `src\stor98\`,
-  its INFs alone - and every `.gitignore` and `.gitattributes`; by name
-  `LICENSE`, `README.md`, the root `.gitignore` and `.gitattributes`,
-  `docs\contributing\design\19-x64-test-signing.md`,
-  `test\stor98-settings.txt`, the headers the cases and the releaser read
-  by name (`src\xhci_version.h`, `xhci.h`, `xhci_hub.h`,
-  `src\cm\cm_status.h`, `cm_query.h`, `cm_ejask.h`, `stor98cm.h`) and
-  Stor98's bundled files (`LICENSE`, `NOTICE`, `docs\package-readme.txt`
-  and its two interface headers). Beside it in the digest: `releases\`
-  with its full membership by path and size, ignored files included,
-  since the historical checks list it with `-Force`; for each driver, the
-  names `source-stamp.ps1 -List` gives and their presence, not their
-  contents; the driver sets' checkouts under `scripts\local\` by the
-  pinned tag's commit and tree ids, every object of that tree present or
-  missing, the replace refs and the checkout's own configuration, any git
-  failure there giving no digest; MakeCat, the catalog's PE sample and
-  the dumpers the import gate would resolve, by content; the environment
-  allowlist with `PSModulePath`; and the versions. No driver source's
-  content, no HEAD, no git status, no built output. With an AutoRun set
-  for `cmd.exe` (read, never written) there is no digest at all and the
-  suite runs whole: it runs before every `cmd.exe` a case starts, and
-  what it runs is no file of the set.
-- **Each set guarded.** `Get-SelfTestUnlistedPaths` (`scripts\common.ps1`)
-  reads the scripts a suite runs for every repository-relative path
-  literal that names a tracked file, and a case of each suite fails when
-  one is outside its set and outside a short list of paths no case reads
-  as an input, each with its reason (the packager's: XHCITR's sources a
-  cut's tool step dates, a driver source the vectors classify, and the
-  host runner every case replaces by P's). A control case shows it finds
-  one. A path built from parts, a folder scanned, a child's runtime read
-  and git's own reads are the set's entries by hand. This catches an
-  addition; it is not a proof of completeness.
-- **The proof**, each a gated x86 build (`build-driver.cmd all`,
-  `XHCI98_SELFTEST_SKIP_OK=1`) under the host's lock: tree 1 builds commit
-  X and records both suites; tree 2, a fresh worktree of X, skips both on
-  its first build; a branch that changes one driver `.c` file skips both;
-  a change to a file one suite reads makes that suite run whole.
-
-#### The bundled Stor98 build (`3.0.0.0`; built in-tree since `3.1.0.0`)
-
-The release download's `release-x86\` and `release-x64\` (from `3.4.0.0` the
-`stor98\` folder of `98-me\`, `nt-x86\` and `nt-x64\`) carry Stor98, the
-NVMe driver (BSD-3-Clause, `src\stor98\`). **Since `3.1.0.0` (roadmap-usb4
-task 42-A.30, owner 2026-10-19) it is the Stor98 `build-driver.cmd` built
-and gated from `src\stor98\`** ("Building Stor98" above), at the package's
-version and date, and one signature covers it with the other x64 drivers.
-`3.0.0.0` bundled a pinned Stor98 release instead (`0.4.0.0`, copied
-unchanged from its release folder under four `-Stor98*` pins, with Stor98's
-own test signature and `stor98-test.cer`); the pins and that path are gone.
-
-`make-package.ps1` bundles it by default; `-NoStor98` leaves it out, and a
-caller naming `-DriverPath` (the self-tests' stand-ins) gets it only with
-`-Stor98Root`, a substitute Stor98 tree the self-tests alone may use (with
-`-SkipBinaryGates`, like `-Stor98HeaderPath`, the substitute interface
-header). What a package carries, at its root with no `stor98\` folder,
-every name starting with `stor98`:
-
-| Package | Files | From |
-|---|---|---|
-| x86 | `stor98.mpd`, `stor98.sys`, `stor98.inf` | `src\stor98\out\free\win9x\`, `\x86\`, `inf\stor98-x86.inf` |
-| amd64 | `stor98.sys`, `stor98.inf` | `src\stor98\out\free\amd64\`, `inf\stor98-x64.inf` |
-| both | `stor98-LICENSE.txt`, `stor98-NOTICE.txt`, `stor98-readme.txt` | `LICENSE`, `NOTICE`, `docs\package-readme.txt` |
-
-Before anything is staged (`Resolve-Stor98Build`,
-`scripts\package\package-common.ps1`) every file must be there, both INFs
-must carry the package's version and pass `check-stor98-inf.ps1`, each
-image must pass `check-stor98-build.ps1` again and its source stamp must
-say it is the build of the tree as it is, and Stor98's interface header must
-be byte for byte `src\cm\stor98cm.h` (its `STOR98LS_VERSION` is printed).
-With `-TestSignPfx` the amd64 `stor98.sys` is signed in the same step and
-with the same key as `xhci98.sys`, `xhciuas.sys` and `xhcicm.sys` and held
-to the same two checks (design record 19); with `-SignOnly` its bytes are
-held to the gated build's record like theirs. Each staged copy is held to
-the hash it had when it was verified or signed.
-
-`make-release.ps1` verifies the build once up front for every architecture
-it publishes, holds `src\stor98\docs\package-readme.txt`'s SETTINGS table
-to `test\stor98-settings.txt` (the table the installer's Stor98 rows were
-checked against), passed `-NoStor98` to its debug legs until task 45.45
-retired them, and **publishes the
-Stor98 files of a release leg into `releases\<version>\release-x86\` and
-`release-x64\` with this project's own** (the x64 `stor98.sys` signed), so
-the upload set and `-UploadSetOnly` take them from the published tree, the
-upload set's one-date rule and file dating cover Stor98's INFs and files,
-and each published `stor98.mpd` and `stor98.sys` is held to the release's
-version. `-NoStor98` cuts without it. The release notes' one declaration
-line ("NVMe drives behind Thunderbolt or USB4") must agree with the cut,
-exactly: "This download bundles Stor98 `<version>`." or "This download
-bundles no Stor98."; the unfilled placeholder or a disagreement is refused
-(a `-TestLabel` cut is only warned). The generated readme names the
-bundled version.
-
-The gates hold these files by exactly the paths `Get-Stor98PackageFiles`
-returns and by nothing wider: `make-release.ps1`'s declared-media check
-accepts them beside this project's files, and a name that would replace
-one of this project's files is a refusal. The package's `PKG-MSFILE` name
-rule covers every file, Stor98's included. `XHCIINST` must copy no file
-whose name starts with `stor98` into its local copy, which is on the
-hardware wizard's search path (design record 23 section 4.4).
-
-#### The driver pack: NUSB 3.3's 98 SE storage files (roadmap-usb4 task 43.3)
-
-The release download carries NUSB 3.3's seven Windows 98 SE storage files
-at its root as `NUSB33\`, a folder of its own beside the installer, in 8.3
-names (owner, 2026-10-20; the folder 2026-10-22): `NUSB33\NOTICE.md` (the
-pack's `nusb33/NOTICE.md`), `NUSB33\SHA256.TXT` (the seven's hashes at
-their paths under `NUSB33\`) and `NUSB33\W98SE\` with the seven files,
-where the installer takes them from (task 43.4). NUSB is kept apart from
-the non-free driver pack (owner, 2026-10-22): in the pack's repository its
-files are the top-level `nusb33/w98se/`, not under `non-free/`, and the
-download never puts them inside a `NONFREE\`. This is the one Microsoft file
-exception of the download (`legal-provenance.md` section 5). Only
-`make-release.ps1` adds it, to the upload set; no package of
-`make-package.ps1`'s carries it, and `releases\<version>\` never does.
-
-The files come from the owner's `usb-wdm-nonfree` repository, a checkout at
-`scripts\local\usb-wdm-nonfree` (git-ignored: a clone there or a junction
-to one; `-DriverPackRoot` names another), **read from its git objects at
-one revision** rather than from its working tree (`Export-DriverPack`,
-`scripts\package\package-common.ps1`). The folder is refused unless it holds
-exactly the seven names as plain files, each hashing as the pack's
-`SHA256.TXT` at that revision lists it and as the allowlist in
-`package-common.ps1` (section 5's table) pins it.
-
-A cut that publishes x86 directories resolves the checkout's `HEAD` once,
-before anything is built (`-NoDriverPack` cuts without the pack). It
-refuses to start while any of the seven names is under `releases\` or among
-the tracked files, and writes `releases\<version>\drvpack.txt`: whether the
-pack is included and, if so, its revision and every file's hash. The upload
-set adds `NUSB33\` before its gates run, and refuses a published tree that
-already holds one; its one-date rule reads this project's INFs only, the
-pack's two INFs (`USBSTOR.INF` dated 07/01/2001, `USBNTMAP.INF` 06/08/2000
-with no version) being held to their hashes instead, and every file, the
-pack's included, is dated by the release. `-UploadSetOnly` exports the
-revision `drvpack.txt` records and refuses unless every file's bytes are the
-recorded ones; a missing checkout or revision is a refusal, not a download
-without the pack, and so is a release from `3.2.0.0` with no `drvpack.txt`
-(an older one has none and is assembled without the pack). The tracked-name
-check reads `git ls-files -z`, so git's quoting of an unusual path cannot
-hide a name. `-DriverPackAllowlist` (a stand-in allowlist) is for
-`test-package.ps1` alone and is refused with the repository's `releases\`.
-`scripts\package\test-package.ps1` holds the layout with a stand-in Stor98
-tree.
 
 #### And the install path is not the one the INF was written for
 
@@ -5083,7 +5271,7 @@ on the console, so run the leg's prompt as administrator.
 
 What QEMU can and cannot show: its xHCI (`1B36:000D`) is not an Intel
 controller, so the driver never reads the value there (design record 16
-section 7a) - an `XHCISNAP` report at verbosity 2 shows `psw.gate=00000000`
+section 7a) - a snapshot report at verbosity 2 shows `psw.gate=00000000`
 and no other `psw.` record whatever the value, and the `qemu` flavour's
 debug console prints "not an Intel xHCI, no config write". A guest leg
 therefore reads the script and the registry, the INF's 0 on a fresh install
@@ -6070,8 +6258,13 @@ to learn.
     taken after each successful package install costs seconds and is the
     difference between a revert and a rebuild.
 
-To bisect something that can only be changed at build time, `src\sources`
-reads `XHCI_EXTRA_DEFINES` from the environment:
+**Retired miniport history (2026-11-06 note).** The bisect below is the
+`1.x` miniport's: the HCD's `src\sources` and `build-driver.cmd` refuse any
+`XHCI_EXTRA_DEFINES`, and `build-driver.cmd` refuses `debug` and `both`
+(roadmap-usb4 task 45.45), so none of its commands runs today; the `qemu`
+flavour does not restore the hatch. It works on branch `1.2.0.0` alone. To
+bisect something that can only be changed at build time, the miniport's
+`src\sources` read `XHCI_EXTRA_DEFINES` from the environment:
 
 ```
 set XHCI_EXTRA_DEFINES=-DXHCI_PROBE_RESOURCES_SIZE=4096
@@ -6107,10 +6300,16 @@ that looks exactly like the clean one you asked for. Measured here.
 
 #### Staging a driver that starts and fails (task 12.3)
 
-This is the one diagnostic build that may be packaged. It exists because
-recovery from a driver that installs, loads, and then fails inside
-`StartController` had never been staged on either target; a failed load is a
-different thing and does not reach this driver's code at all.
+**Retired miniport history (2026-11-06 note).** No current build produces
+this artifact: it needs `XHCI_EXTRA_DEFINES`, which the HCD's build refuses,
+and `make-package.ps1 -Flavor` takes only `release` and `qemu`.
+`make-package.ps1 -FailStartArtifact` stays, fail-closed: it refuses any
+image without the task 12.3 marker, so it refuses every HCD image (its
+parameter help). The procedure works on branch `1.2.0.0` alone. This was the
+one diagnostic build that may be packaged. It exists because recovery from a
+driver that installs, loads, and then fails inside `StartController` had
+never been staged on either target; a failed load is a different thing and
+does not reach this driver's code at all.
 
 ```
 set XHCI_EXTRA_DEFINES=-DXHCI_FAIL_START_CONTROLLER
@@ -6226,11 +6425,16 @@ boot, not after.
 
 #### Staging the unpadded-date experiment package (task 12.4)
 
-Windows 2000 records no `DriverDate` for this package, and that is why an upgrade
-over an older build is refused. Stage B ruled out the date value; the two
-differences from Microsoft's own working entry that remain are that ours is
-unsigned and that its date is zero-padded. This package varies the second one
-and nothing else:
+**Historical (2026-11-06 note).** Task 12.4's experiment on the `1.x`
+miniport, and its command's `-Flavor debug` is refused since task 45.45.
+`make-package.ps1 -UnpaddedDriverVerExperiment` is still a switch, the same
+one-variable package (the INF's `DriverVer` date without its leading zeros)
+staged from a `release` build, for the date-format question if it is asked
+again. Windows 2000 records no `DriverDate` for this package, and that is
+why an upgrade over an older build is refused. Stage B ruled out the date
+value; the two differences from Microsoft's own working entry that remain
+are that ours is unsigned and that its date is zero-padded. This package
+varies the second one and nothing else:
 
 ```
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor debug -UnpaddedDriverVerExperiment
@@ -6317,7 +6521,7 @@ a sweep uses an ordinary package: install it once, then change only the value
 and reboot (`scripts\bench\IMOD98.BAT` or `IMOD.BAT`). The contract is the
 shipping one - 10 to 4000 used as given, anything else replaced by 4000 - so a
 sweep can no longer reach 0. The interval the driver chose, and what the
-register read back, are in every `XHCISNAP` `.TXT` under "registry values"
+register read back, are in every snapshot `.TXT` under "registry values"
 (since snapshot schema 4), and the interrupt and DPC counts still come out of the
 `.BIN` against an offsets table from the same tree. The miniport's INF wrote
 500 to `1.2.0.0`; the HCD's INFs write 160 on every install path of both
@@ -7024,8 +7228,14 @@ were inverted at 1.1.0.0, when the driver took the job over with
 now, so a section no route references is refused too.
 `test-inf-checks.ps1` watches each fire.
 
-The package. One flat, 8.3-clean directory serves both targets, and it is
-this project's two files:
+The package. Up to `1.2.0.0`, one flat, 8.3-clean directory served both
+targets, and it was this project's two files (below). Since `2.0.0.0` the
+staged package carries every driver of the package and its INFs - the
+controller's and the UAS driver's, the helper, the connection manager and
+its filter, the networking drivers, Stor98, and on x86 the VxDs and
+`XHCIPFW.SYS` - and `scripts\inf-gate\check-inf.ps1 -EmitMediaLayout` and
+`package-common.ps1`'s `$script:FamilyLayout` are the lists of what it holds
+and where each file is published. The `1.x` package, for the record:
 
 ```
 xhci98.inf   xhci98.sys
@@ -7035,16 +7245,16 @@ xhci98.inf   xhci98.sys
 powershell -ExecutionPolicy Bypass -File scripts\package\make-package.ps1 -Flavor release
 ```
 
-It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the finished
-directory, so a package is never less gated than the binary in it. A copy
-taken from a published release directory is the same two files. The packager
-has written `release-x86`, `debug-x86`, `release-x64` and `debug-x64` since
-the 2026-09-09 change, and `release-x86` and `release-x64` alone since
-roadmap-usb4 task 45.45 retired the debug flavour (`3.4.0.0` the first cut
-without them) (roadmap task 21.5, `runs\run-21.md`), and `1.1.0.0`
-will be the first cut to carry those names; the cuts up to `1.0.2.0` keep
-their flavour-only `release\` and `debug\` directories, as
-`releases\1.0.2.0\` shows. The
+It assembles `out\pkg-<flavor>-<arch>\` and runs the INF gate against the
+finished directory, so a package is never less gated than the binary in it.
+A copy taken from a published release directory up to `1.2.0.0` is the same
+two files. The cuts up to `1.0.2.0` keep their flavour-only `release\` and
+`debug\` directories, as `releases\1.0.2.0\` shows. From the 2026-09-09
+change (roadmap task 21.5, `runs\run-21.md`) the packager wrote
+`release-x86`, `debug-x86`, `release-x64` and `debug-x64`, and `1.1.0.0` was
+the first cut to carry those names. Roadmap-usb4 task 45.45 retired the
+debug flavour, so `release-x86` and `release-x64` alone are staged since,
+and from `3.4.0.0` the cut publishes them by Windows family (below). The
 reference copies of the two `usbd.sys` builds and Windows 98 SE's
 `usbhub.sys` are still staged under the git-ignored `tools\` by
 `scripts\package\extract-usbd-sources.ps1`, for the import gate's Windows 98
@@ -7317,6 +7527,7 @@ and data on every path (`[Xhci.AddReg]` for 98 SE and ME,
 | `XhciLogDebugView` | each start | 0 | 0 off, any other on | 0 | yes |
 | `XhciImodInterval250ns` | each start | 4000 | 10-4000; outside, 4000 | 160 | no, by design: 160 is the owner's shipped interval (2026-10-04) and 4000 only the fallback; a written 4000 reads as absent does |
 | `XhciForceBulkOnly` | each enumeration | 1 (37.2) | 0 off, any other on | 0 | no, by design: absent is text-mode Setup, where only Setup's own `usbstor` binds storage, so Bulk-Only; the install's 0 keeps UAS (issue 15) |
+| `XhciBulkOnlyOwnId` | each enumeration | 1 | only 0 off | 1 (since UASBOT.1, owner 2026-11-08) | yes |
 | `XhciFastPollFsLs` | each start | 0 | 0-4 (`XhciPipeFastMode`) | 0 | yes |
 | `XhciFirstEnumWaitMs` | each start | 5000 | 0-30000 | 5000 | yes |
 | `XhciFirstEnumPortMs` | each start | 2000 | 0 to the wait | 2000 | yes |
@@ -7364,12 +7575,12 @@ fourteen by task 38.10 (Linux's controller quirks, design record 20: each
 read in `src\hcd_quirk.c`, 0 off, 1 Linux's listed controllers, 2 every
 controller where the record offers it; the log notes `quirk.<label>` and
 `hc.pci.rev` at each start and the counter block's words 199 to 232 are
-record 20 section 13.5, and `XHCISNAP` prints them as its "Linux quirks"
+record 20 section 13.5, and the snapshot reader prints them as its "Linux quirks"
 block). **No
 value is a tri-state** whose absence means something no written number
 does, so none is left unwritten. Except for `XhciForceBulkOnly` since
 roadmap-hcd 37.2 (written 0, an absent one read as 1; above), what a
-written default changes is diagnostic only: the "was it read" markers - `XHCISNAP`'s
+written default changes is diagnostic only: the "was it read" markers - the snapshot's
 `XhciWideMap` line (the number instead of "not set (the default)"),
 `SuspSwitchRead` and `susp.switch.value`, `Usb2HubSpeedSwitchRead` and
 `hub.speed.value`, and the like for the older sixteen - show the written
@@ -7679,7 +7890,7 @@ reads it in place of the grant), so a leg sees a large command cut into
 more, smaller chunks than the adapter would force. Absent, another type, 0
 or a number at or above the real grant leaves the grant as given. The log
 ring notes `qemu.mapgrant` (the value read) and `qemu.mapgrant.applied`
-(the registers in force when it was applied); `XHCISNAP`'s "transfer size"
+(the registers in force when it was applied); the snapshot's "transfer size"
 section prints the grant in force. A change takes effect at the next start.
 
 With a constrained grant the controller's real grant is still what stage
@@ -7692,7 +7903,7 @@ register-free check is not run (`xfer.wide.check` 6).
 start: 1 refuses every big stream block, so each streams endpoint opens
 with 64-TRB rings and stage 2's TDs (the fallback); anything else leaves
 the blocks to the allocation. The log ring notes `qemu.bigrefuse`;
-`XHCISNAP`'s "stage 2" section counts the blocks built and refused, the
+The snapshot's "stage 2" section counts the blocks built and refused, the
 one-TD URBs, the largest TD and the TDs of exactly 256, 257, 512 and 513
 TRBs. A change takes effect at the next start.
 
@@ -7725,7 +7936,7 @@ switch off, 1 passed, 2 a base was not NULL, 3 the lists differ, 4 a list
 fell short, 5 no memory, 6 a channel request refused or a constrained grant
 under 16, 7 Windows 98 or ME, 8 a grant other than `0x80001`),
 `xfer.wide.check.waiting` (seconds the check waited for its two requests)
-and `xfer.wide.enabled`; `XHCISNAP` prints the counters as "stage 2". A
+and `xfer.wide.enabled`; the snapshot reader prints the counters as "stage 2". A
 change takes effect at the next start.
 
 **`XhciQemuNoInterrupt`, `XhciQemuPinUnreadable`, `XhciQemuDeadLine`**
@@ -7878,7 +8089,7 @@ created, 1 running, 2 creation failed, 3 joined), `TmrHeld`, `TmrHolds`,
 `TmrHeldMs`, the phase observations `TmrObsReleased{Count,SumMs,Late}` and
 `TmrObsHeld{Count,SumMs,Late}`, and the helper's `HlprMsiVerdict` and
 `HlprTimerVerdict`; the stop's counter dump prints them as `poll.timer.*`
-lines and `hlpr.msi.verdict` and `hlpr.timer.verdict`, and `XHCISNAP` as
+lines and `hlpr.msi.verdict` and `hlpr.timer.verdict`, and the snapshot reader as
 its "finer system timer" section. None has been
 read in a guest yet.
 
@@ -7907,6 +8118,7 @@ in the guest fires a fault at run time by writing it:
 | `14` to `17` | A bulk TD's short, error, stop and timeout (roadmap-hcd task 36.22) | the paragraph after the next table |
 | `18` | A SET_INTERFACE not taken (38.10) | the next SET_INTERFACE a SELECT_INTERFACE sends - from any device, so fire it just before the switch it is for - is answered and never sent, once: `arg` 0 a STALL, 1 not established (any other `arg` is refused). QEMU's devices take every SET_INTERFACE their descriptors allow, so this is how a guest reaches design record 20 section 5.3's step 4: on an interface with two settings (`usb-audio`'s streaming interface) a STALL re-instates the old one (`cfg.select.rollback`, `SelectRollbacks`, then `SelectRollbacksReopened` once the old endpoints' clears complete; isochronous endpoints get none), on an interface with one setting it is a success through CLEAR_FEATURE(ENDPOINT_HALT) on the new endpoints (`SelectStallSuccesses`), and not established leaves the interface with no pipe and its new endpoints held stale (`RingsRetained`). Noted `qemu.inj.setif` (slot, stalled) and `cfg.select.end` (slot, interface, answer, last event) |
 | `19` | A switch's Configure Endpoint not taken (38.10) | the next Configure Endpoint of an interface switch - a SELECT_INTERFACE's or a function select's step 3, or a function's unconfigure or release, which share it (`arg` 0, 2) or a rollback's (`arg` 1, 3; fire `18` with `arg` 0 as well to reach it) - is answered and never issued, once: 0 and 1 refused with Resource Error, the controller changing nothing (after `arg` 0 a select puts the old pipes back, `SelectsReattached`, while an unconfigure or release holds them closed and stale, `RingsRetained`; after `arg` 1 the new endpoints are held stale); 2 and 3 with no completion and the controller reset requested, as a command that never completes is answered (everything held pinned, `RingsPinned`, until the recovery's HCRST drops every device). Noted `qemu.inj.selcfg` (rollback, code) |
+| `1A` | A Stop Endpoint's race (issue 26) | the next `arg` Stop Endpoints (0 one) on an endpoint with streams open - a UAS drive's, so a cancel on it reaches one: a command the drive refuses with CHECK CONDITION, whose data transfer `xhciuas` then cancels - are sent for real, so the endpoint is truly Stopped, and answered Context State Error, and the next read of that endpoint's context is answered Running: the race an Intel 7 Series controller showed, which in `3.4.1.0` left the cancel's endpoint paused for good. A Stop that does not succeed for real is returned as it is, with no race. The bounded stop issues it again (`cfg.stop.again`) and, for `arg` 0 to 3, the cancel completes; from 4 every restop meets the race too, and the stop is given up (`cfg.stop.giveup`) and the device cycled. Noted `qemu.inj.stoprace` (slot `<< 8` \| DCI) |
 | `FF` | CLEAR | every emulated answer and the lost-interrupt window off, and no further `08` to `12` injection; one already in flight runs to its end (the driver's Reset Endpoint, or the slot's Disable Slot), so no endpoint is left Stopped under a driver that believes it Halted |
 
 Codes `08` to `12` (hex) are 35-T.2 to 35-T.4's, record 17 section 5's rows
@@ -8019,7 +8231,7 @@ command is recorded in the log ring - `qemu.inj.fire`, `qemu.inj.port`,
 `qemu.inj.refused`, `qemu.inj.unknown`, `qemu.inj.irq.lost`, and for `08`
 to `12` `qemu.inj.ep` (fault, slot, DCI) at each injection, `qemu.inj.done`
 when the count is spent, and the notes above - and on the port-`0xE9`
-trace, so `XHCISNAP` at verbosity 1 or more shows what was injected beside
+trace, so the snapshot at verbosity 1 or more shows what was injected beside
 the tolerance counters.
 
 Driving it from a guest: on Windows 98 SE and ME, a `.reg` file through
@@ -8052,7 +8264,7 @@ read, `FFFFFFFF` when absent) and `susp.switch`.
 
 **Counters.** Words 114 to 141 of the counter block (`src\xhci_counters.h`;
 after the MSI words 96 to 113), dumped at the stop as
-`susp.*` and `idle.*` lines and printed by name by `XHCISNAP`: the switch as
+`susp.*` and `idle.*` lines and printed by name by the snapshot reader: the switch as
 read and in effect; suspends, host resumes and device wakes begun; how the
 sequences ended (`SuspSuspended`, `SuspActive`, `SuspRefused` with
 `SuspRefusedReason`, `SuspUncertain`, `SuspGone`); remote wake set and
@@ -8079,7 +8291,7 @@ client's callback; record 14 section 3.12).
 device is served too, and DNCTRL enables FUNCTION_WAKE (`0002h`); at 0
 neither changes and DNCTRL is never written. Counters, words 142 to 159,
 dumped as `susp.ss.*`, `susp.fw.*` and `susp.dn.dropped` and named by
-`XHCISNAP`: functions armed (`SetFeature(FUNCTION_SUSPEND)` options 03h the
+the snapshot reader: functions armed (`SetFeature(FUNCTION_SUSPEND)` options 03h the
 device took) and arm steps refused; functions disarmed and disarms not taken
 (each cycles the device); SuperSpeed hub ports suspended and resumed;
 `GetStatus(interface)` reads answered and failed, the capable functions and
@@ -8096,7 +8308,7 @@ each) after each configuration's reads; `susp.fw` (slot, interface - FF past
 3-0: 1 the wake, 2 a hub observation, 3 a refusal's end, 4 dropped, 5 closed
 at receipt, 8 or'ed unattributed) per notification; `susp.ss.hub` (hub
 index, port, the link state 15-12, the step 11-4, the result 3-0) per
-SuperSpeed hub port observation, signal and verification. `XHCISNAP`'s
+SuperSpeed hub port observation, signal and verification. The snapshot's
 "selective suspend, stage B" section prints the HCD header's words 237 to
 305 (after 36.24's stage 2 counters; placed at integration wave 4): DNCTRL as read (only at 1), `DnctrlEnables`, `DnctrlReadback`, and the
 first eight devices' link state, window, armed functions, `FwFirsts`,
@@ -8149,7 +8361,7 @@ writes it at 1 (task 36.51, owner, 2026-10-11; no INF wrote it before). The
 log ring notes `hub.speed.value` (the value read,
 `FFFFFFFF` when absent) and `hub.speed.fallback` (1 on).
 
-**Counters.** Words 162 to 166 of the counter block, named by `XHCISNAP`,
+**Counters.** Words 162 to 166 of the counter block, named by the snapshot reader,
 which also prints a "USB 2.0 speed IDs behind a hub" section:
 `Usb2HubSpeedSwitchRead` (0 absent, 1 a DWORD, 2 another type),
 `Usb2HubSpeedFallbackOn`, `TopoBehindHubNoSpeed` (every behind-hub
@@ -8190,21 +8402,28 @@ trace on Windows 98 bare metal: DebugView bugchecks that machine at real
 interrupt rates, there is no serial sink, and a crash takes whatever the
 driver was holding down with it. Roadmap task 12.2 closed on that.
 
-The read channel is the other direction, added in `0.0.0.6`. The log does not
-have to be pushed at all: it sits in the miniport extension, and
-`XHCISNAP.EXE` reaches in through usbport's PassThru escape and reads it out
-of the running machine from ring 3. Three facts about it:
+The read channel is the other direction, added in `0.0.0.6`. The log does
+not have to be pushed at all: it sits in the driver's extension, and `XHCITR
+/snapshot` (`XHCISNAP.EXE` up to `3.0.0.0`) reads it out of the running
+machine from ring 3, through the HCD's own door since `2.0.0.0`
+(`src/hcd_door.c`; the same USBUSER `PassThru` request usbport's escape
+carried for the `1.x` miniport). `docs/contributing/snapshot-reader.md` is
+the reader's reference. Three facts about it:
 
-- The read channel ships in every flavour, `release` included, because the
-  person whose machine misbehaves is running the build they already have.
+- The read channel ships in the published build (in every flavour while
+  there were three), because the person whose machine misbehaves is running
+  the build they already have.
 - `XhciLogFile` and its ring-0 file sink are retired, with
-  `ntoskrnl.exe!ZwCreateFile`, `ZwWriteFile` and `ZwClose`. The two surviving
-  registry values are `XhciLogVerbosity` (`DWORD`, a 0-4 ladder, `0` and the
-  default meaning the driver does not answer the tool at all) and
-  `XhciLogDebugView` (`DWORD`, 0). The file did not disappear: `XHCISNAP`
-  writes it, in ring 3, at a path the user names.
+  `ntoskrnl.exe!ZwCreateFile`, `ZwWriteFile` and `ZwClose`. The two
+  surviving registry values are `XhciLogVerbosity` (`DWORD`, a 0-4 ladder;
+  the install writes `2`, the driver's own default, `src/xhci_log.h`, and
+  `0` means the driver does not answer the tool at all; under the miniport
+  `0` was the default) and `XhciLogDebugView` (`DWORD`, 0). The file did not
+  disappear: the reader writes it, in ring 3, at a path the user names.
 - It was measured on metal, not only designed: both builds of `0.0.0.6`
-  handed their log to `XHCISNAP` on the E460 under Windows 98 SE at stage L3.
+  handed their log to `XHCISNAP` on the E460 under Windows 98 SE at stage
+  L3, and the HCD's door has carried it off metal since (the run records of
+  Phases 28 onward).
 
 The owners are `docs/contributing/design/08-build-flavours-and-the-log-channel.md`
 section 13 for the decision and
@@ -8221,33 +8440,42 @@ not be: most trace sites run at DISPATCH_LEVEL or inside the ISR, where file
 I/O is illegal. So on metal the trace is captured by a user-mode agent inside
 the guest, and the mechanism is `DbgPrint` reaching it.
 
-Beside the trace sits the log ring (`src/xhci_log.c`), a different thing with a
-different shape. An earlier ring-0 writer could flush its contents to an
-optional `C:\XHCI.LOG`; that writer is gone and the ring is what `XHCISNAP`
-reads. What is true of the ring:
+Beside the trace sits the log ring (`src/xhci_log.c`), a different thing
+with a different shape. An earlier ring-0 writer could flush its contents to
+an optional `C:\XHCI.LOG`; that writer is gone and the ring is what the
+reader reads. What is true of the ring (each bullet says what holds under
+the HCD, then, where it differs, what held under the `1.2.0.0` miniport,
+which the readings below rest on):
 
-- it is a bounded in-memory ring in the miniport extension, appended from any
-  IRQL and never written per line;
-- it is flushed only from `StopController`, one PASSIVE-level lifecycle
-  callback. A Device Manager disable reaches it on Windows 2000 only: on
-  Windows 98 disabling any USB host controller devnode bugchecks the machine
-  before the teardown completes (see "Do not disable the controller in Device
-  Manager" above), so the stop that flushes there is the shutdown, and the
-  start that reads the switch is a reboot. `docs/contributing/runs/run-11v.md`
-  stage C carries the per-target sequence. The flush measures
-  `KeGetCurrentIrql()` and refuses above PASSIVE_LEVEL, counting the refusal
-  rather than trusting a static claim about which callbacks are passive;
-- it is off unless the driver's own software key says otherwise. The two
-  values are `XhciLogVerbosity` (`DWORD`, the 0-4 ladder, `0` by default and
-  `0` meaning the driver answers nothing) and `XhciLogDebugView` (`DWORD`, 0),
-  both on both install paths and both checked by the INF gate's `VAL-*` rules.
-  Each is read once per start through `UsbPortGetMiniportRegistryKeyValue`,
-  with no new import, and where a copy that service performs is unclamped, the
-  driver terminates the buffer itself and trusts nothing past the first NUL;
-- `XhciLogDebugView` emits the ring through `DbgPrint` from the PASSIVE flush
-  only, so `ntoskrnl.exe!DbgPrint` is an `all`-flavour row in the
-  import allowlist. It is a bulk dump and may never become live mirroring; see
-  AGENTS.md's one stated exception to the `#if DBG` rule.
+- it is a bounded in-memory ring in the driver's extension, appended from
+  any IRQL and never written per line;
+- under the HCD it is emitted, with `XhciLogDebugView` at `1`, from the
+  controller thread at PASSIVE_LEVEL only - continuously, on every wake, and
+  once more with the counter block at each stop (task 26-A.8,
+  `src/hcd_log.c`), and it is read by the snapshot at any time; under the
+  miniport it was flushed only from `StopController`, one PASSIVE-level
+  lifecycle callback. A Device Manager disable reaches it on Windows 2000
+  only: on Windows 98 disabling any USB host controller devnode bugchecks
+  the machine before the teardown completes (see "Do not disable the
+  controller in Device Manager" above), so the stop that flushes there is
+  the shutdown, and the start that reads the switch is a reboot.
+  `docs/contributing/runs/run-11v.md` stage C carries the per-target
+  sequence. The flush measures `KeGetCurrentIrql()` and refuses above
+  PASSIVE_LEVEL, counting the refusal rather than trusting a static claim
+  about which callbacks are passive;
+- its level is the driver's own software key's: `XhciLogVerbosity` (`DWORD`,
+  the 0-4 ladder, `2` by default under the HCD, `0` meaning the driver
+  answers nothing; `0` was the miniport's default) and `XhciLogDebugView`
+  (`DWORD`, 0), both on every install path and both checked by the INF
+  gate's `VAL-*` rules. Under the miniport each was read once per start
+  through `UsbPortGetMiniportRegistryKeyValue`, with no new import, and
+  where a copy that service performs is unclamped, the driver terminates the
+  buffer itself and trusts nothing past the first NUL;
+- `XhciLogDebugView` emits the ring through `DbgPrint` from the controller
+  thread alone under the HCD (from the PASSIVE flush alone under the
+  miniport), never from a DPC or the ISR, so `ntoskrnl.exe!DbgPrint` is an
+  `all`-flavour row in the import allowlist whose `SITES` admits
+  `hcd_log.obj`; see AGENTS.md's one stated exception to the `#if DBG` rule.
 
 The retired file sink earns a paragraph for what it measured. `XhciLogFile`
 was the first untrusted input this driver ever took, and it reached
@@ -8395,7 +8623,7 @@ That leaves three channels, in the order worth trying:
    and Device Manager screenshots as it happens, because the `CheckController`
    block emits through `DbgPrint` like every other trace site and that only
    exists in the `qemu` flavour. Since `0.0.0.6` this is no longer "nothing":
-   counters and the stored log are readable afterwards with `XHCISNAP`, which
+   counters and the stored log are readable afterwards with the snapshot reader (`XHCITR /snapshot`; `XHCISNAP` up to `3.0.0.0`), which
    is channel 3.
 
    A kernel debugger over serial is not an option here, by the project
@@ -8478,7 +8706,7 @@ The consequence is that roadmap task 12.2 closed with no trace
 channel at all on Windows 98 real hardware, validated behaviourally there,
 with no running trace and no capture of a crash. That is a settled outcome;
 `docs/using/release-notes.md` publishes it. It is the last word on the trace,
-not on the target: `XHCISNAP` reads the counters and the stored log off a
+not on the target: the snapshot reader (`XHCISNAP` up to `3.0.0.0`) reads the counters and the stored log off a
 Windows 98 machine on real hardware.
 
 ### QEMU xHCI trace events - the host-side hardware oracle
@@ -9312,7 +9540,30 @@ any vehicle; what it established is the block below, published in
 
 The package's third driver (design record 21; source map in `source-files.md`, "The Thunderbolt 3 connection manager"). Since task 39-A.1 it is built, gated and packaged with the other two; what it does at run time grows with the later Phase 39 tasks, and until task 39-A.4 every start is the INERT start of record 21 section 1.4.2: the NHI's devnode starts, the driver reads its values and logs, and nothing touches the hardware.
 
-**Building.** `scripts\build-driver.cmd` builds `src\cm` after `src\uas` in every x86 and `-amd64` run, every flavour, with the same toolchains (the Windows 2000 DDK for x86, WDK 7.1 for amd64) and the same `BUILD_ALT_DIR` flavours: `src\cm\objfre\<arch>\xhcicm.sys` and `objchk_qemu` (`objchk` until task 45.45). After each link it runs the import gate against `scripts\import-gate\xhcicm-imports.allow` (x86) or `xhcicm-imports-amd64.allow` (amd64), the flavour marker check and `scripts\source-stamp.ps1 -Driver xhcicm`. Every allowlist row is a pair `xhci98.sys` already imports; the registry pairs are `SITES=cm_reg.obj`, `DbgPrint` is an `all` row with `SITES=cm_log.obj` (the sink `XhciCmLogDebugView` turns on; decision D12 first made it a checked-flavours row), the qemu flavour's port-0xE9 mirror `HAL.dll!WRITE_PORT_UCHAR` a `qemu` row of the x86 file with the same site (an intrinsic on amd64), and the pool pair is `SITES=cm_pool.obj` and `optional` until task 39-A.4 allocates. `src\cm\sources` compiles the shared `..\xhci_log.c` by path, and the import gate's amd64 source scan follows a `SOURCES` entry to its path for that reason.
+**Building.** `scripts\build-driver.cmd` builds `src\cm` after `src\uas` in
+every x86 and `-amd64` run, every flavour, with the same toolchains (the
+Windows 2000 DDK for x86, WDK 7.1 for amd64) and the same `BUILD_ALT_DIR`
+flavours: `src\cm\objfre\<arch>\xhcicm.sys` and `objchk_qemu` (`objchk`
+until task 45.45). After each link it runs the import gate against
+`scripts\import-gate\xhcicm-imports.allow` (x86) or
+`xhcicm-imports-amd64.allow` (amd64), the flavour marker check and
+`scripts\source-stamp.ps1 -Driver xhcicm`. Every allowlist row but five is a
+pair `xhci98.sys` already imports, with that file's evidence (design record
+21 section 10.3); the five carry evidence of their own in their rows:
+`KeTickCount` and `KeQueryTimeIncrement`, the connection-manager thread's
+clock, and `ExCreateCallback`, `ExRegisterCallback` and
+`ExUnregisterCallback`, Stor98's link-state channel (the allowlist's
+header). The registry pairs are `SITES=cm_reg.obj,cm_statos.obj` (`ZwClose`
+also `cm_thr.obj`; `cm_statos.obj` writes the status record with
+`ZwSetValueKey`), `DbgPrint` is an `all` row with `SITES=cm_log.obj` (the
+sink `XhciCmLogDebugView` turns on; decision D12 first made it a
+checked-flavours row), the qemu flavour's port-0xE9 mirror
+`HAL.dll!WRITE_PORT_UCHAR` a `qemu` row of the x86 file with the same site
+(an intrinsic on amd64), and the pool pair is `SITES=cm_pool.obj`,
+`required` since the driver allocates (it was `optional` until task 39-A.4
+did). `src\cm\sources` compiles the shared `..\xhci_log.c` by path, and the
+import gate's amd64 source scan follows a `SOURCES` entry to its path for
+that reason.
 
 **Adding a source file.** One line in `src\cm\sources`' `SOURCES` (a file of `src\` by path, as `..\xhci_log.c` is); the source stamp reads the same list. A pure file (no DDK include, `xhci_compat.h` for its types) also gets a `call :run` line in `test\run-host-tests.cmd`, as `test_cm` has (`test_cm.c ..\src\cm\cm_vals.c`). A file that calls a gated import needs its object named in that row's `SITES=`.
 

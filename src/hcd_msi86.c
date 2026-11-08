@@ -1,5 +1,5 @@
 /*
- * hcd_msi86.c - message-signalled interrupts on Vista and 7, the kernel
+ * hcd_msi86.c - message-signalled interrupts on Vista and later, the kernel
  * half that is not the connection itself (design record 15 section 4.3;
  * design record 18; roadmap-hcd.md tasks 36.15 and 36.16).
  *
@@ -17,13 +17,19 @@
  *     configurations when x86 has no helper bound or the mode is 1 - or,
  *     under mode 3, the rewrite that keeps only the message (revision
  *     12).
+ *   - The same IRP on Windows 2000, XP and XP x64 (task 47.33): the lower
+ *     configurations kept, then a copy of each without its line, so a
+ *     controller no line can be given (decodes off at boot and no _PRT
+ *     entry: no boot configuration, no routing) starts on polled delivery
+ *     instead of Code 12.
  *   - The mode cache the filter reads, filled at AddDevice and at each
- *     start, both system-thread contexts (section 4.2).
+ *     start, both system-thread contexts (section 4.2; on NT 5 too).
  *   - The qemu flavour's checksummed trace (record 18 section 9).
  *
- * Nothing here runs below NT 6 but the timer's look: every other entry tests
- * IoIsWdmVersionAvailable(6, 0) first, so Windows 98, ME, 2000 and XP pass
- * the filter IRP down untouched, as before. HcdHlprTimerRoutine runs on
+ * Nothing here runs below NT 6 but the timer's look, the mode cache and the
+ * NT 5 filter (task 47.33): every other entry tests
+ * IoIsWdmVersionAvailable(6, 0) first, and Windows 98 and ME pass the
+ * filter IRP down untouched, as before. HcdHlprTimerRoutine runs on
  * Windows 2000 and later only, from the timer thread (never on 98 or ME).
  *
  * IRQL: PASSIVE_LEVEL throughout, in the PnP manager's threads (AddDevice,
@@ -103,7 +109,15 @@ static ULONG hcdMsiNt6(VOID)
     return IoIsWdmVersionAvailable(6, 0) ? 1UL : 0UL;
 }
 
-/* XHCI_VER packed one byte a part, for the helper's log and ours. */
+/* Windows 2000 and later: an NT kernel (98 and ME answer WDM 1.0x). */
+static ULONG hcdMsiNt(VOID)
+{
+    return IoIsWdmVersionAvailable(1, 0x10) ? 1UL : 0UL;
+}
+
+/* XHCI_VER packed one byte a part, the channel's CallerVersion: the helper
+ * keeps no log and does not read it, so it is there for a dump of the
+ * block. */
 static ULONG hcdMsiVersion(VOID)
 {
     return XhciHlprPackVersion(XHCI_VER_STR);
@@ -283,8 +297,9 @@ static VOID hcdMsiReadSwitches(PHCD_CONTROLLER hc)
 #endif
 }
 
-/* AddDevice, a system thread: the records' first state, and on NT 6 the
- * mode as the registry holds it now, for this FDO's first filter. */
+/* AddDevice, a system thread: the records' first state, and on NT (task
+ * 47.33 for NT 5) the mode as the registry holds it now, for this FDO's
+ * first filter. */
 VOID HcdMsiAddDevice(PHCD_CONTROLLER hc)
 {
     ULONG value;
@@ -294,7 +309,7 @@ VOID HcdMsiAddDevice(PHCD_CONTROLLER hc)
     hc->ModeCacheRaw = 0;
     hc->ModeCacheFound = 0;
     hc->ModeCacheFrom = HCD_MSI_FROM_NONE;
-    if (!hcdMsiNt6()) {
+    if (!hcdMsiNt()) {
         return;
     }
     value = 0;
@@ -310,7 +325,7 @@ VOID HcdMsiAddDevice(PHCD_CONTROLLER hc)
  * on this FDO (a rebalance's). The filter's snapshot is not touched. */
 VOID HcdMsiStartValues(PHCD_CONTROLLER hc, ULONG modeFound, ULONG mode)
 {
-    if (!hcdMsiNt6()) {
+    if (!hcdMsiNt()) {
         return;
     }
     hc->ModeCacheRaw = modeFound ? mode : 0UL;
@@ -396,8 +411,7 @@ static VOID hcdHlprLook(PHCD_CONTROLLER hc)
     KeInitializeEvent(&done, NotificationEvent, FALSE);
     HCD_SET_COMPLETION_ALWAYS(irp, hcdHlprDone, &done);
     if (IoCallDriver(device, irp) == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        (VOID)HcdWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     information = (ULONG)irp->IoStatus.Information;
@@ -629,14 +643,17 @@ static VOID hcdMsiSnap(PHCD_CONTROLLER hc, const UCHAR *list,
 
 /* The rewrites hcdMsiReplace writes. */
 #define HCD_MSI_REWRITE_INJ_NO_LINE 0UL     /* the qemu switch (H1a)      */
+#define HCD_MSI_REWRITE_NO_INTR     3UL     /* NT 5: copies with no line  */
 #define HCD_MSI_REWRITE_STRIP       1UL     /* the line kept              */
 #define HCD_MSI_REWRITE_MESSAGE     2UL     /* mode 3: the message kept   */
+#define HCD_MSI_REWRITE_STRIP_NT5   4UL     /* 2000, listed: no line at all */
 
 /* Replaces the list at Information with `size` bytes the rewrite fills; the
  * old list freed. Returns the new list, NULL when no memory. */
 static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size,
                             ULONG rewrite, const XHCI_MSI_WALK *walk,
-                            const XHCI_MSI_CLASSIFY *classify)
+                            const XHCI_MSI_CLASSIFY *classify, ULONG gsi,
+                            ULONG memory)
 {
     PUCHAR fresh;
     ULONG written;
@@ -649,6 +666,10 @@ static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size,
         written = XhciMsiStrip(list, walk, classify, fresh, size);
     } else if (rewrite == HCD_MSI_REWRITE_MESSAGE) {
         written = XhciMsiKeepMessage(list, walk, classify, fresh, size);
+    } else if (rewrite == HCD_MSI_REWRITE_NO_INTR) {
+        written = XhciMsiAppendNt5(list, walk, gsi, memory, fresh, size);
+    } else if (rewrite == HCD_MSI_REWRITE_STRIP_NT5) {
+        written = XhciMsiStripNt5(list, walk, fresh, size);
     } else {
         written = XhciMsiInjNoLine(list, walk, fresh, size);
     }
@@ -659,6 +680,208 @@ static PUCHAR hcdMsiReplace(PIRP irp, PUCHAR list, ULONG size,
     HcdPoolFreeForeign(list);
     irp->IoStatus.Information = (ULONG_PTR)fresh;
     return fresh;
+}
+
+/*
+ * Record 18 section 16.4, where no interrupt-free list can be made: the
+ * list that carries the line is freed and none is returned, so nothing is
+ * arbitrated for the device and its start, given no memory, is refused
+ * (Code 10). A failed IRP is no refusal: the PnP manager went on with the
+ * PCI driver's list, and Windows 2000 stopped (the injected legs, runs/
+ * run-47.md). Needs no memory. IRQL: PASSIVE_LEVEL.
+ */
+static VOID hcdMsiStripNone(PIRP irp, PUCHAR list, PULONG replaced)
+{
+    if (list != NULL) {
+        HcdPoolFreeForeign(list);
+    }
+    irp->IoStatus.Information = 0;
+    *replaced = 1;
+}
+
+/*
+ * Task 47.33, design record 18 section 16.4: Windows 2000 on a listed
+ * board (hc->NoRouteStrip, AddDevice's decision). There ACPI stops the
+ * system with 0xA5 when it is asked to route this device's line, which its
+ * firmware's _PRT does not name, so the list goes on with no interrupt in
+ * any configuration, under every XhciInterruptMode (1 and 3 then refuse
+ * the start, Code 10, instead of the stop). Where no such list can be
+ * made, no list goes on at all (hcdMsiStripNone); a list already without
+ * an interrupt passes unchanged. Returns the outcome; *replaced 1 when the
+ * list was replaced or withdrawn. IRQL: PASSIVE_LEVEL.
+ */
+static ULONG hcdMsiStripNt5(PHCD_CONTROLLER hc, PIRP irp, PUCHAR list,
+                            PULONG replaced)
+{
+    PUCHAR fresh;
+    ULONG size;
+
+    size = XhciMsiStripNt5(list, &hc->FilterWalk, NULL, 0);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuStripFail == 2) {
+        size = 0;
+    }
+#endif
+    if (size == 0) {
+        if (hc->FilterClassify.Class == XHCI_MSI_CLASS_NO_INTERRUPT) {
+            return XHCI_MSI_OUT_NO_INTERRUPT;
+        }
+        hcdMsiStripNone(irp, list, replaced);
+        return XHCI_MSI_OUT_STRIP_FAILED;
+    }
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuStripFail == 1) {
+        hcdMsiStripNone(irp, list, replaced);
+        return XHCI_MSI_OUT_STRIP_FAILED;
+    }
+#endif
+    fresh = hcdMsiReplace(irp, list, size, HCD_MSI_REWRITE_STRIP_NT5,
+                          &hc->FilterWalk, &hc->FilterClassify,
+                          XHCI_MSI_NO_GSI, 0);
+    if (fresh == NULL) {
+        /* hcdMsiReplace frees nothing when it fails. */
+        hcdMsiStripNone(irp, list, replaced);
+        return XHCI_MSI_OUT_STRIP_FAILED;
+    }
+    *replaced = 1;
+    return XHCI_MSI_OUT_LINE_REMOVED;
+}
+
+/*
+ * Task 47.33: the filter on Windows 2000, XP and XP x64. XP's PCI driver
+ * gives a controller whose decodes the firmware left off no boot
+ * configuration, so its interrupt can come only from the firmware's _PRT;
+ * where _PRT does not name it (the HP EliteBook 2570p and 8470p) no line
+ * can be given and the one configuration fails whole: Code 12. Behind the
+ * lower configurations, kept first, a copy of each without its line lets
+ * the PnP manager grant the memory alone there, and the start takes polled
+ * delivery (record 15 section 4, mode 0). XhciInterruptMode 1 (the line)
+ * and 3 (a message) ask for no copy. The x86 helper is not looked for here
+ * (the timer thread's look stays NT 5's only one, record 18 section 15).
+ * The counters' MsiFilterLists and the snapshot describe the list the
+ * lower drivers gave. IRQL: PASSIVE_LEVEL, the PnP manager's thread.
+ */
+static NTSTATUS hcdMsiFilterNt5(PHCD_CONTROLLER hc, PIRP irp)
+{
+    NTSTATUS status;
+    PUCHAR list;
+    PUCHAR fresh;
+    XHCI_POLL_VALUES values;
+    ULONG outcome;
+    ULONG size;
+    ULONG replaced;
+    ULONG gsi;
+    ULONG memory;
+
+    XhciMsiFilterBegin(&hc->MsiFilter);
+    hc->MsiAvoidFilterStrips = 0;
+    hc->FilterStripped = 0;
+    hc->FilterWalk.Verdict = XHCI_MSI_WALK_OK;
+    hc->FilterWalk.Lists = 0;
+    hc->FilterClassify.MessageMembers = 0;
+    hc->FilterClassify.LineMembers = 0;
+    hc->FilterSnapCount = 0;
+    hc->FilterModeRaw = hc->ModeCacheRaw;
+    hc->FilterModeFound = hc->ModeCacheFound;
+    hc->FilterModeFrom = hc->ModeCacheFrom;
+    XhciPollValues(&values, hc->ModeCacheFound, hc->ModeCacheRaw, 0, 0, 0,
+                   0);
+    hc->FilterMode = values.Mode;
+    /* Offered only once a filter has written the GSI clone in. */
+    hc->NoRouteOffered = 0;
+
+    status = HcdForwardAndWait(hc, irp);
+    replaced = 0;
+    if (!NT_SUCCESS(status) && status != STATUS_NOT_SUPPORTED) {
+        XhciMsiFilterPublish(&hc->MsiFilter, XHCI_MSI_CLASS_UNKNOWN,
+                             XHCI_MSI_OUT_LOWER_FAILED);
+        goto done;
+    }
+    list = (PUCHAR)irp->IoStatus.Information;
+    if (list == NULL) {
+        XhciMsiFilterPublish(&hc->MsiFilter, XHCI_MSI_CLASS_UNKNOWN,
+                             XHCI_MSI_OUT_NO_LIST);
+        goto done;
+    }
+    XhciMsiWalk(list, &hc->FilterWalk);
+#if defined(XHCI_FLAVOUR_QEMU)
+    if (hc->QemuStripFail == 3) {
+        hc->FilterWalk.Verdict = XHCI_MSI_WALK_COUNT;
+    }
+#endif
+    XhciMsiClassify(list, &hc->FilterWalk, &hc->FilterClassify);
+    if (hc->FilterWalk.Verdict != XHCI_MSI_WALK_OK) {
+        /* Record 18 section 16.4: a list the walk refuses is never passed
+         * on where the strip is required - it may carry the line. */
+        if (hc->NoRouteStrip) {
+            hcdMsiStripNone(irp, list, &replaced);
+            XhciMsiFilterPublish(&hc->MsiFilter, XHCI_MSI_CLASS_INCONSISTENT,
+                                 XHCI_MSI_OUT_STRIP_FAILED);
+            goto done;
+        }
+        XhciMsiFilterPublish(&hc->MsiFilter, XHCI_MSI_CLASS_INCONSISTENT,
+                             XHCI_MSI_OUT_INCONSISTENT);
+        goto done;
+    }
+    hcdMsiSnap(hc, list, &hc->FilterWalk);
+
+    if (hc->NoRouteStrip) {
+        outcome = hcdMsiStripNt5(hc, irp, list, &replaced);
+        XhciMsiFilterPublish(&hc->MsiFilter, hc->FilterClassify.Class,
+                             outcome);
+        goto done;
+    }
+
+    /* What each mode adds (design record 18 section 16): 0 (auto) the
+     * chipset-routed GSI where AddDevice's run offered one, then memory
+     * alone; 1 (the line) the GSI alone; 2 (poll) memory alone; 3 (a
+     * message, which NT 5 cannot give) nothing. The GSI clone only for
+     * the PCI driver's shared, level-sensitive line (XhciMsiNt5LineShape). */
+    gsi = XHCI_MSI_NO_GSI;
+    if ((hc->FilterMode == XHCI_POLL_MODE_AUTO ||
+         hc->FilterMode == XHCI_POLL_MODE_LINE) &&
+        (hc->NoRoute.Decision == XHCI_PIRQ_O_OFFERED ||
+         hc->NoRoute.Decision == XHCI_PIRQ_O_QEMU) &&
+        XhciMsiNt5LineShape(list, &hc->FilterWalk)) {
+        gsi = hc->NoRoute.Gsi;
+    }
+    memory = (hc->FilterMode == XHCI_POLL_MODE_AUTO ||
+              hc->FilterMode == XHCI_POLL_MODE_POLL) ? 1UL : 0UL;
+    if (gsi == XHCI_MSI_NO_GSI && !memory) {
+        outcome = XHCI_MSI_OUT_NOT_ASKED;
+    } else {
+        size = XhciMsiAppendNt5(list, &hc->FilterWalk, gsi, memory, NULL, 0);
+        if (size == 0) {
+            outcome = (hc->FilterClassify.Class ==
+                           XHCI_MSI_CLASS_NO_INTERRUPT)
+                          ? XHCI_MSI_OUT_NO_INTERRUPT
+                          : XHCI_MSI_OUT_UNSUPPORTED;
+        } else {
+            fresh = hcdMsiReplace(irp, list, size, HCD_MSI_REWRITE_NO_INTR,
+                                  &hc->FilterWalk, &hc->FilterClassify, gsi,
+                                  memory);
+            if (fresh == NULL) {
+                outcome = XHCI_MSI_OUT_NO_MEMORY;
+            } else {
+                outcome = (gsi == XHCI_MSI_NO_GSI)
+                              ? XHCI_MSI_OUT_NO_INTR_ADDED
+                              : (memory ? XHCI_MSI_OUT_GSI_ADDED
+                                        : XHCI_MSI_OUT_GSI_ONLY);
+                hc->NoRouteOffered = (gsi != XHCI_MSI_NO_GSI) ? 1UL : 0UL;
+                replaced = 1;
+            }
+        }
+    }
+    XhciMsiFilterPublish(&hc->MsiFilter, hc->FilterClassify.Class, outcome);
+
+done:
+    HcdMsiCountersStart(hc);
+    HcdMsiTraceLife(hc, HCD_MSI_LIFE_FILTER, hc->MsiFilter.Class,
+                    hc->MsiFilter.Outcome);
+    if (replaced) {
+        status = STATUS_SUCCESS;
+    }
+    return HcdCompleteIrp(irp, status, irp->IoStatus.Information);
 }
 
 NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
@@ -676,6 +899,9 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
     ULONG replaced;
 
     if (!hcdMsiNt6()) {
+        if (hcdMsiNt()) {
+            return hcdMsiFilterNt5(hc, irp);
+        }
         return HcdPassDown(hc, irp);
     }
     /* Step 0: the class is UNKNOWN before anything can return early. */
@@ -733,7 +959,8 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
         if (size != 0) {
             fresh = hcdMsiReplace(irp, list, size,
                                   HCD_MSI_REWRITE_INJ_NO_LINE,
-                                  &hc->FilterWalk, &hc->FilterClassify);
+                                  &hc->FilterWalk, &hc->FilterClassify,
+                                        XHCI_MSI_NO_GSI, 0);
             if (fresh != NULL) {
                 list = fresh;
                 replaced = 1;
@@ -788,7 +1015,8 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
             fresh = (size != 0)
                         ? hcdMsiReplace(irp, list, size,
                                         HCD_MSI_REWRITE_MESSAGE,
-                                        &hc->FilterWalk, &hc->FilterClassify)
+                                        &hc->FilterWalk, &hc->FilterClassify,
+                                        XHCI_MSI_NO_GSI, 0)
                         : NULL;
             if (fresh == NULL) {
                 outcome = XHCI_MSI_OUT_NO_MEMORY;
@@ -804,7 +1032,8 @@ NTSTATUS HcdMsiFilter(PHCD_CONTROLLER hc, PIRP irp)
             fresh = (size != 0)
                         ? hcdMsiReplace(irp, list, size,
                                         HCD_MSI_REWRITE_STRIP,
-                                        &hc->FilterWalk, &hc->FilterClassify)
+                                        &hc->FilterWalk, &hc->FilterClassify,
+                                        XHCI_MSI_NO_GSI, 0)
                         : NULL;
             if (fresh == NULL) {
                 outcome = XHCI_MSI_OUT_NO_MEMORY;

@@ -60,6 +60,28 @@ static int g_lastE2e;
 static LONG g_ringsAnswer;
 static unsigned long g_uuidResp;    /* UUID Responses this domain sent */
 static int g_failCs7;               /* ROUTER_CS_7 reads of this domain left unanswered */
+static long g_flood;                /* Link Status Requests the far host has left to send */
+static unsigned long g_floodSn;
+static unsigned long g_linkResp;    /* Link Status Responses this domain sent */
+
+/* One Link Status Request from the far host on port 1: answering it reads
+ * the host lane (tbtU4XdLinkRead), a control request of this domain. */
+static void floodOne(struct FAB *f)
+{
+    ULONG buf[TBT_XDP_MAX_WORDS];
+    unsigned long w[TBT_XDP_MAX_WORDS];
+    TBT_ROUTE route;
+    ULONG n;
+    ULONG i;
+
+    route.Hi = 0;
+    route.Lo = (ULONG)fabPortLane0(f, 1);
+    n = TbtXdpBuildLinkStatusRequest(buf, &route, g_floodSn++ & 3UL);
+    for (i = 0; i < n; i++) {
+        w[i] = buf[i];
+    }
+    fabInject(f, TBT_PDF_XDOMAIN_REQ, w, n);
+}
 
 static LONG netRingsUp(PVOID c, ULONG port, ULONG ring, BOOLEAN e2e)
 {
@@ -111,6 +133,12 @@ static int lpHook(struct FAB *f, unsigned long pdf, int router, unsigned long cs
     int i;
 
     (void)pdf; (void)cs; (void)adp; (void)addr; (void)n; (void)data;
+    if (g_flood > 0) {
+        /* A peer that answers each control request of this domain with
+         * one more request. */
+        g_flood--;
+        floodOne(f);
+    }
     if (g_failCs7 > 0 && router == 0 && cs == TBT_CS_ROUTER && addr == TBT_ROUTER_CS_7) {
         g_failCs7--;
         return FAB_HOOK_SWALLOW;
@@ -145,6 +173,10 @@ static void lpTx(struct FAB *f, unsigned long pdf, const unsigned long *dw,
     if (TbtXdpDecode(pdf, w, words, &k) == TBT_XDP_K_DISCOVERY && k.Response &&
         k.Type == TBT_XDP_UUID_RESP) {
         g_uuidResp++;
+    }
+    if (TbtXdpDecode(pdf, w, words, &k) == TBT_XDP_K_DISCOVERY && k.Response &&
+        k.Type == TBT_XDP_LINK_STATUS_RESP) {
+        g_linkResp++;
     }
     lp = lpOfLane(dw[1]);
     if (lp == NULL || !lp->Live) {
@@ -295,6 +327,10 @@ static void lpStart(LP *lp, int port, unsigned long uuid0, int live)
 #define OUR_UUID0   0x00004411UL    /* DW 0's low byte 11h */
 #define HI_ADP      9
 
+/* ROUTER_CS_0 of the host router for the next setup(), 0 for the fake
+ * fabric's own (test_asm_no_e2e). */
+static ULONG g_hostCs0;
+
 static void setup(int net, int bonding)
 {
     TBT_U4_CONFIG c;
@@ -303,6 +339,9 @@ static void setup(int net, int bonding)
 
     fabInit(&g_fab);
     fabHostMinimal(&g_fab);
+    if (g_hostCs0 != 0) {
+        g_fab.R[0].Rcs[0] = g_hostCs0;
+    }
     g_fab.R[0].Rcs[7] = OUR_UUID0;
     g_fab.R[0].Rcs[8] = 0x55667788UL;
     memset(g_lp, 0, sizeof(g_lp));
@@ -430,6 +469,101 @@ static void test_off(void)
     pump(2);
     CHECK_EQ(portState(1), TBT_U4_EMPTY, "the unplug: EMPTY");
     CHECK_EQ(g_fab.XdSent, sent, "still nothing sent");
+}
+
+/* Record 35 section 5.3 (revision 15): on the ASM4242's host router
+ * (ROUTER_CS_0 174C:2428) this host withdraws prtcstns bit 0, so the block
+ * it serves carries 6 and RingsUp is told no E2E, while the peer offers 7;
+ * the service still comes up. */
+static void test_asm_no_e2e(void)
+{
+    LP *lp = &g_lp[0];
+    const TBT_XDP_PEER *ours;
+
+    g_hostCs0 = TBT_U4_ASM_VENDOR | (TBT_U4_ASM_HOST << 16);
+    setup(1, 1);
+    g_hostCs0 = 0;
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "ASM4242: the service came up");
+    ours = TbtU4Peer(&g_cm, 1);
+    CHECK(ours != NULL, "ASM4242: the peer record");
+    if (ours == NULL) {
+        return;
+    }
+    CHECK_EQ(g_cm.HostRouter.Vendor, TBT_U4_ASM_VENDOR, "the ASM4242 host router read");
+    CHECK_EQ(ours->LocalProps.Prtcstns, 6, "ASM4242: bit 0 withdrawn from the block");
+    CHECK_EQ(g_ringsUp, 1, "ASM4242: RingsUp once");
+    CHECK_EQ(g_lastE2e, 0, "ASM4242: no E2E on the rings");
+    CHECK_EQ(g_cm.NetPrtcstns, 7, "the driver's own value kept");
+}
+
+/* A service up, the cable out and in, the service up again: `asm` the
+ * ASM4242's host router identity; on either router the Host Interface's
+ * Pending Packets stick after a Valid clear on every HopID (record 22
+ * section 18.9). Returns whether the second service came up. */
+static int ppReplug(int asm, unsigned long *quarantined)
+{
+    LP *lp = &g_lp[0];
+    int k;
+    int up;
+
+    g_hostCs0 = asm ? (TBT_U4_ASM_VENDOR | (TBT_U4_ASM_HOST << 16)) : 0;
+    setup(1, 1);
+    g_hostCs0 = 0;
+    for (k = 0; k < FAB_HOPS; k++) {
+        g_fab.R[0].Adp[HI_ADP].PpStuck[k] = 1;
+    }
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "stuck Pending Packets: the first service up");
+    unplug(lp);
+    pump(10);
+    CHECK_EQ(portState(1), TBT_U4_EMPTY, "the unplug: EMPTY");
+    CHECK_EQ(g_ringsDown, 1, "the rings down once");
+    CHECK(!(entry(HI_ADP, (int)TBT_U4_XD_RING, 0) & 0x80000000UL),
+          "the transmit entry invalid");
+    CHECK(g_fab.R[0].Adp[HI_ADP].Path[2 * TBT_U4_XD_RING + 1] & 0x10000000UL,
+          "the fabric's Pending Packets stuck at the transmit entry");
+    g_linkUp = 0;
+    plug(lp, 0x00002222UL, 1);
+    up = pumpUntilUp(lp, 300);
+    *quarantined = g_cm.Counters.Quarantined;
+    return up;
+}
+
+/* Record 22 section 18.9 on the ASM4242's host router: the Host
+ * Interface's stuck Pending Packets read as 0, so the transmit entry is
+ * drained at its Valid clear, nothing quarantined, and the service comes
+ * up again after a replug on the same ring and entry. */
+static void test_asm_replug_pp(void)
+{
+    unsigned long q;
+    int up;
+
+    up = ppReplug(1, &q);
+    CHECK(up, "ASM4242: the service up again after the replug");
+    CHECK_EQ(q, 0, "ASM4242: nothing quarantined");
+    CHECK_EQ(g_ringsUp, 2, "ASM4242: RingsUp twice");
+    CHECK(entry(HI_ADP, (int)TBT_U4_XD_RING, 0) & 0x80000000UL,
+          "ASM4242: the transmit entry valid again");
+    CHECK(g_cm.Counters.PendingIgnored != 0, "ASM4242: the stuck bit seen and ignored");
+    CHECK_EQ(g_cm.Counters.PendingTimeouts, 0, "ASM4242: no drain waited out");
+}
+
+/* The same stuck bit on any other host router is read as it is (record 22
+ * section 7.3): the entry quarantined, its ring held, no second service -
+ * what the ASM4242's case above departs from, by its identity alone. */
+static void test_pp_stuck_other(void)
+{
+    unsigned long q;
+    int up;
+
+    up = ppReplug(0, &q);
+    CHECK(!up, "another router: no second service while the entry is held");
+    CHECK(q != 0, "another router: the entry quarantined");
+    CHECK_EQ(g_cm.Counters.PendingIgnored, 0, "another router: nothing ignored");
+    CHECK_EQ(g_ringsUp, 1, "another router: RingsUp once");
 }
 
 /* Section 3.5 as the lower UUID (BOND_LOW), with both sides' network
@@ -1035,12 +1169,47 @@ static void test_identity(void)
     CHECK(!TbtU4NetIdentity(&g_cm, mac), "none with XhciCmNet 0");
 }
 
+/* A peer that sends a Link Status Request for every control request this
+ * domain makes: each answer reads the host lane, whose receive queues the
+ * next. One pass takes what was queued when it began, so the poll returns
+ * with the peer still sending, and what is left is answered later. */
+static void test_flood(void)
+{
+    LP *lp = &g_lp[0];
+    unsigned long first;
+
+    setup(1, 0);
+    TbtU4NetWanted(&g_cm, TRUE, 7);
+    plug(lp, 0x00002222UL, 1);
+    CHECK(pumpUntilUp(lp, 300), "flood: the service came up");
+    g_flood = 100000L;
+    floodOne(&g_fab);
+    /* This tick's receives queue the requests; the next takes them. */
+    TbtU4Poll(&g_cm);
+    CHECK(g_cm.XdCount != 0, "flood: requests queued");
+    g_linkResp = 0;
+    TbtU4Poll(&g_cm);
+    CHECK(g_flood > 0, "flood: the poll returned while the peer still sent");
+    CHECK(g_linkResp >= 1, "flood: the first request answered");
+    CHECK(g_linkResp <= TBT_U4_XD_QUEUE, "flood: at most a queue a pass");
+    first = g_linkResp;
+    TbtU4Poll(&g_cm);
+    CHECK(g_linkResp > first, "flood: the next pass answers what was left");
+    CHECK(g_linkResp - first <= TBT_U4_XD_QUEUE, "flood: again at most a queue");
+    g_flood = 0;
+    pump(3);
+    CHECK_EQ(portState(1), TBT_U4_XDOMAIN, "flood: the port still XDOMAIN");
+}
+
 #define RUN_VEC(fn) do { fabTraceMark(#fn); fn(); } while (0)
 
 int main(void)
 {
     RUN_VEC(test_off);
     RUN_VEC(test_low_bonded_service);
+    RUN_VEC(test_asm_no_e2e);
+    RUN_VEC(test_asm_replug_pp);
+    RUN_VEC(test_pp_stuck_other);
     RUN_VEC(test_high_bonded);
     RUN_VEC(test_no_bonding);
     RUN_VEC(test_silent_then_restart);
@@ -1054,6 +1223,7 @@ int main(void)
     RUN_VEC(test_unplug_midway);
     RUN_VEC(test_identity);
     RUN_VEC(test_early_uuid);
+    RUN_VEC(test_flood);
     fabTraceMark("end");
     printf("test_u4xd: %d checks, %d failures\n", checks, failures);
     return failures;

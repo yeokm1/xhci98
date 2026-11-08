@@ -133,11 +133,17 @@ the `.TXT` only at level 4; no user data and no other process's memory.
   3 and above, and kernel addresses at 4, which the driver refuses below that
   rung. So a level-4 `.TXT` is a maintainer's artifact: read it before
   publishing it, or take the report at 2.
-- `.BIN` is the raw extension image, the same artifact the QEMU live-counter
-  reader produces, so `scripts/local/regen-offsets.cmd`, `offsets.txt` and
-  `counters.py` / `readcounters.ps1` decode it. It decodes only against a table
-  from the driver's own tree, which the maintainer has and the user does not.
-  It is the attachment, not the report.
+- `.BIN` is the raw extension image, the attachment rather than the report.
+  What the tool names from it, it names from the regions' own headers
+  (below), with no offset table; anything else in it decodes only against a
+  table derived from the same driver tree, and which table depends on what
+  the image is. `scripts\vm-matrix\gen-offsets.ps1` writes the HCD's
+  counter-block table (`offsets-hcd.txt`, the `cnt->` fields of
+  `src\xhci_counters.h`, which `scripts\vm-matrix\lib\counters.ps1` reads
+  with) and keeps the 1.x miniport's extension table (`offsets.txt`,
+  `ext->`) frozen, to be regenerated only from branch `1.2.0.0`; neither
+  stands in for the other. The `scripts/local/` decoders this paragraph once
+  named are one host's, git-ignored, and a clone has none of them.
 - `.PSC` is the raw PORTSC array. When the driver reports that the controller
   has no usable register mapping (`SNAP_S_NO_MMIO`), PORTSC was not read and
   the `.PSC` is published as a 0-byte file beside a complete `.BIN`; the
@@ -395,7 +401,7 @@ survives a quoted word and protects an escaped one.
   word). `-report` says what its exit code means - at 2 the name was refused
   and why; at 3 the `.TXT` is not complete, say so; at 4 no dump, the `.DEV`
   says why, and SNAPON, restart, reproduce, SNAPGET; at 5 copy the directory
-  somewhere writable (Run as administrator on Vista and 7); at 6 the name is
+  somewhere writable (Run as administrator on Vista and later); at 6 the name is
   taken or, with none, all 26 are; at 8 run it again, under another name if
   one was given - then that the channel stays on until `SNAPOFF.BAT`, and
   last the attach line.
@@ -682,7 +688,20 @@ From the same release the header also carries the transfer-size readings
   whose two readings came from two processors is not measured but counted
   ("across two processors"), and on a machine whose processors' counters
   disagree the rate and ages are approximate. Hardware starvation itself
-  is not measured.
+  is not measured. **On a processor whose time-stamp counter is not
+  invariant** (roadmap-usb4 task 47.6, was TRTSC.1; owner, 2026-11-04) the
+  counter's rate follows the processor's speed, so one average rate
+  converts a short interval wrongly: the section then says that every
+  time in it is approximate. The tool reads it with `CPUID` on the
+  machine the dump is taken on, as it reads the rest of the "captured on"
+  block: leaf `8000_0000h` gives the highest extended leaf, and where that
+  is `8000_0007h` or above, leaf `8000_0007h`'s `EDX` bit 8 is the
+  invariant counter. A processor with no `CPUID` (the `EFLAGS` ID bit
+  cannot be changed) or no such leaf counts as not invariant. Under
+  `/nosysinfo`, which promises no processor query, it is not read and the
+  section says so instead. The `.BIN` does not carry it (the driver does
+  not record it). It was raised by the 16 ms completion pass in task
+  46.30's report, which the emulator did not reproduce (3.56 ms there).
 - **Each class driver record** (`xhciuas.sys` sends one at most once a
   second, when anything in it changed): whether its device is present or
   departed, the command size it advertises and where it came from,
@@ -981,10 +1000,12 @@ raw evidence and are still named, but the `.TXT` must not be sent as the
 report. Until the
 2026-09-05 audit (roadmap Phase 20, F5, F17) `fopen` succeeding was the whole of
 "written", and a truncated report exited 0 with a "send this" underneath it.
-`xhcisnap -selftest-report BASE` drives the report path with no controller,
-and the `XHCISNAP_FAULT` environment variable (`write` or `close`) makes the
-named step fail; `xhcisnap\selftest.cmd` runs four cases - no fault, write
-fault, close fault, and a read-only destination.
+`XHCITR /snaptest -selftest-report BASE` drives the report path with no
+controller, and the `XHCISNAP_FAULT` environment variable (`write` or
+`close`; honoured under `/snaptest` alone since 3.4.2.0, never by
+`/snapshot` or `/dump`) makes the named step fail; `xhcitr\snaptest.cmd`
+runs four cases - no fault, write fault, close fault, and a read-only
+destination - before its decodes.
 
 The help is `-help`, `-?` or `/?`; all three print the long text, and a bare
 invocation prints the short usage and exits 2 rather than taking a dump.
@@ -1031,6 +1052,36 @@ So `ep.open.ival=00020006` is a Full-Speed endpoint at Interval 6, 8 ms -
 what a stock mouse behind a virtual hub reads - and `00030005` the same
 mouse on a root port with the switch off, reported High Speed and polled
 every 4 ms.
+
+### A UAS drive's last failures and the stop notes (3.4.2.0)
+
+From `3.4.2.0` (issue 26) the `.TXT`'s "transfer size" section ends each
+class driver record with `failures:`, the last eight failure events of that
+drive, oldest first, as `xhciuas.sys` recorded them - a command that did not
+end GOOD, or a timeout as it ran out, so one timed-out command can take two
+entries; the count is of events
+(`src/xhci98_xfer.h`, `XHCI98_FAILURES`; the HCD header's words 860 to 928):
+what happened (CHECK CONDITION, timed out, ended by recovery, refused by a
+RESPONSE IU, answered by the driver under `XhciUasNoAtaPassThrough`, another
+status), whose command it was (the class driver's, a program's pass-through
+or SMART request, the driver's own), the tag, the CDB's operation code, the
+data length and timeout, the SRB and SCSI statuses, the sense key, ASC and
+ASCQ, the slot's state and which of its transfers were in flight or being
+cancelled. A timeout is entered when it runs out, before the ABORT TASK, so
+"transfers status" there means the drive's SENSE IU never came and
+"transfers data cancelling final-IU-in" that the drive answered and the bus
+never gave the cancelled data transfer back. A driver before `3.4.2.0`
+prints nothing there.
+
+The note ring carries three HCD records from the same release, from
+`src/hcd_cfg.c`: `cfg.stop.again` (a Stop Endpoint issued again because the
+endpoint read Running, or the first was answered Context State Error),
+`cfg.stop.giveup` (the endpoint would not stay stopped, or a Stop failed: the
+device is cycled - a hub, or a device whose PDO is not yet published, has the
+controller reset) and `cfg.deq.running` (a stream's Set TR Dequeue found its
+endpoint Running and stopped it first). The first two are Slot ID `<< 16` \|
+DCI `<< 8` \| Stops issued again `<< 4` \| the endpoint's state; the third is
+Slot ID `<< 16` \| DCI `<< 8` \| Stream ID `<< 4` \| state.
 
 ### The root port enumeration records (2.2.0.0)
 
@@ -1082,11 +1133,16 @@ line of output says which you have. A torn one prints the pair, `first ->
 last`, and the step between them; the detector is monotonic, so the pair is
 also a magnitude.
 
-`ExtensionBytes` is the layout key. Decode a dump only against an `offsets.txt`
-regenerated from the same tree. The tool prints the driver's own
-`ExtensionBytes` for this reason: a dump decoded against the wrong table is a
-wrong reading, not a failed one, and wrong readings are how this investigation
-has lost time before.
+`ExtensionBytes` is the layout key, and the tool prints the driver's own for
+this reason. The regions it names, the HCD region with its counter block
+among them, it decodes from their own headers with no table. A raw extension
+field outside them decodes only against a table of the same layout: the
+HCD's counter block against `scripts\vm-matrix\gen-offsets.ps1`'s default
+table, `offsets-hcd.txt`, generated from the same tree, and a `1.x`
+miniport's extension against the frozen `offsets.txt`, which no current tree
+can regenerate (branch `1.2.0.0` alone; "Three files" above). A dump decoded
+against the wrong table is a wrong reading, not a failed one, and wrong
+readings are how this investigation has lost time before.
 
 One known wart, left alone. Every line of the note ring in the `.TXT` ends
 `0D 0D 0A`: the driver stores `CRLF` in the ring, the tool emits it character
@@ -1184,27 +1240,36 @@ value is set from ring 3 without needing the IOCTL at all.
 
 ## Building
 
+The reader is `xhcitr\tr_snap.c`, built into XHCITR.EXE and XHCITR64.EXE
+since 3.1.0.0 (roadmap-usb4 task 42-A.4; `xhcisnap\` left the tree then):
+
 ```bat
-xhcisnap\build.cmd
-xhcisnap\selftest.cmd
+xhcitr\build.cmd
+xhcitr\selftest.cmd
+xhcitr\snaptest.cmd
 ```
 
-The second runs the report path four times with no controller present (no
-fault, a failing write, a failing close, a `.TXT` that cannot be created) and
-checks the exit codes and summary lines; see "Three files" above.
+`scripts\build-driver.cmd` runs the first on every x86 run and the other two
+on every run; run them through it rather than by hand. `snaptest.cmd` runs the report path four times with
+no controller present (`XHCITR /snaptest -selftest-report BASE`: no fault, a
+failing write, a failing close, a `.TXT` that cannot be created) and checks
+the exit codes and summary lines; see "Three files" above.
 
 It also drives every `-selftest-*` decode over canned data, and from 2.3.0.0
 `-selftest-sysinfo`, which withholds canned names, and the report path with
-and without `-nosysinfo`.
+and without `-nosysinfo`; from 3.4.2.0 it runs the same over XHCITR64.EXE
+on a 64-bit build host.
 
-MSVC 6.0 in place from `tools\MSVC600`; nothing is installed machine-wide and
-`MSVC6` overrides the location. `/Za` is not used here even though the driver
-and the host tests both use it: that compiler's own SDK headers are full of
-anonymous unions, which `/Za` rejects, so `windows.h` does not compile under it.
-`/WX` still makes a warning a build failure, and the source keeps the same C89
-rules by hand, since it has to run on Windows 98 SE.
+XHCITR.EXE is MSVC 6.0 in place from `tools\MSVC600` and XHCITR64.EXE WDK
+7.1's amd64 compiler from `tools\WinDDK71`; nothing is installed machine-wide
+and `MSVC6` and `WDK71` override the locations. `/Za` is not used here even
+though the driver and the host tests both use it: that compiler's own SDK
+headers are full of anonymous unions, which `/Za` rejects, so `windows.h` does
+not compile under it. `/WX` still makes a warning a build failure, and the
+source keeps the same C89 rules by hand, since it has to run on Windows 98 SE.
 
-The wire format is written out again in `xhcisnap.c` rather than included from
-`src/xhci.h`, which is a kernel header. That duplication is checked at run time:
+The wire format is written out again in `xhcitr\tr_snap.c` (and the door's
+constants in `xhcitr\tr_log.h`) rather than included from `src/xhci.h`,
+which is a kernel header. That duplication is checked at run time:
 the tool refuses any driver whose reply signature, schema version or header size
 is not the one this build knows, and says to rebuild from the same tree.

@@ -9,6 +9,11 @@
  * not expanded here. */
 #include "../xhci98_xfer.h"
 
+/* UasTeleBucket and UasTeleDepthBucket index arrays the FDO sizes with the
+ * bus's counts (uas.h): the two pairs must stay equal. */
+XHCI_C_ASSERT(uas_tele_buckets, UAS_TELE_BUCKETS == XHCI98_TELE_BUCKETS);
+XHCI_C_ASSERT(uas_tele_depths, UAS_TELE_DEPTHS == XHCI98_TELE_DEPTHS);
+
 /* ------------------------------------------------------------------ */
 /* Tags                                                               */
 /* ------------------------------------------------------------------ */
@@ -1640,4 +1645,85 @@ ULONG UasSmartResult(const UAS_SMART_PLAN *plan, PUCHAR out, ULONG room,
         *outBytes = UAS_SMART_OUT_HEADER;
     }
     return result;
+}
+
+ULONG UasNoAtaCdb(const UCHAR *cdb, ULONG cdbLength)
+{
+    if (cdb == NULL || cdbLength == 0) {
+        return 0;
+    }
+    return (cdb[0] == 0x85 || cdb[0] == 0xA1) ? 1UL : 0UL;
+}
+
+ULONG UasInvalidCdbSense(PUCHAR sense, ULONG room)
+{
+    UCHAR fixed[UAS_INVALID_CDB_SENSE];
+    ULONG n;
+
+    uasClear(fixed, sizeof(fixed));
+    fixed[0] = 0x70;
+    fixed[2] = 0x05;
+    fixed[7] = (UCHAR)(UAS_INVALID_CDB_SENSE - 8);
+    fixed[12] = 0x24;
+    n = (room < UAS_INVALID_CDB_SENSE) ? room : UAS_INVALID_CDB_SENSE;
+    if (sense != NULL && n != 0) {
+        uasBytes(sense, fixed, n);
+    } else {
+        n = 0;
+    }
+    return n;
+}
+
+VOID UasFailPack(PULONG w, ULONG event, ULONG origin, ULONG tag,
+                 ULONG opcode, ULONG srbStatus, ULONG scsiStatus,
+                 const UCHAR *sense, ULONG senseLength, ULONG slotState,
+                 ULONG xfers, ULONG timeout, ULONG length)
+{
+    ULONG key;
+    ULONG asc;
+    ULONG ascq;
+
+    key = 0xFF;
+    asc = 0;
+    ascq = 0;
+    if (sense != NULL && senseLength >= 14 && (sense[0] & 0x7E) == 0x70) {
+        key = sense[2] & 0x0FUL;
+        asc = sense[12];
+        ascq = sense[13];
+    } else if (sense != NULL && senseLength >= 4 &&
+               (sense[0] & 0x7E) == 0x72) {
+        key = sense[1] & 0x0FUL;
+        asc = sense[2];
+        ascq = sense[3];
+    }
+    w[0] = ((event & 0xFFUL) << 24) | ((origin & 0xFFUL) << 16) |
+           ((tag & 0xFFUL) << 8) | (opcode & 0xFFUL);
+    w[1] = ((srbStatus & 0xFFUL) << 24) | ((scsiStatus & 0xFFUL) << 16) |
+           (asc << 8) | ascq;
+    w[2] = (key << 24) | ((slotState & 0xFFUL) << 16) |
+           ((xfers & 0xFFUL) << 8) | ((timeout > 255) ? 255UL : timeout);
+    w[3] = length;
+}
+
+ULONG UasFastResetDue(ULONG fast, ULONG armed, ULONG progress, ULONG now,
+                      ULONG abortAt, ULONG startedAt)
+{
+    if (!fast || !armed || progress) {
+        return 0;
+    }
+    if (now - abortAt > UAS_FAST_WINDOW) {
+        return 0;
+    }
+    /* Started before the answered abort: that abort's own aftermath. */
+    if (startedAt - abortAt > 0x7FFFFFFFUL) {
+        return 0;
+    }
+    return 1;
+}
+
+ULONG UasFinalCancelDue(ULONG fast, ULONG final, ULONG dataOutstanding,
+                        ULONG waited)
+{
+    return (fast && final && dataOutstanding &&
+            waited >= UAS_FAST_CANCEL_WAIT) ? 1UL : 0UL;
 }

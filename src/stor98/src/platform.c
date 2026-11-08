@@ -47,8 +47,14 @@ ULONG PlatDmaPoolSize(VOID)
 // The port's uncached extension (MD-3 (a) on NT). Called after the DMA
 // negotiation (PLAN 0.8). The block is not assumed physically contiguous:
 // each page is translated on its own (PlatDmaPagePa, PLAN 0.4); here only
-// the base is translated, for the alignment. Fresh memory from the port on
-// every find, so it is zeroed here.
+// the base is translated, for the alignment. Zeroed here on a first find
+// only. A resume finds the same, not zeroed, extension and the port hands
+// back the same region (G7): until the controller is shown disabled the
+// controller may still own parts of it (an earlier disable that was never
+// acknowledged), so nothing is written to it here; LcEnable zeroes the
+// queues and the utility buffer once the disable is acknowledged, and the
+// rest of the region is written before each use (PLAN 0.10, "trust nothing
+// until the controller is shown fresh").
 //
 static BOOLEAN PlatPortAcquire(IN PHW_DEVICE_EXTENSION DevExt, IN PPORT_CONFIGURATION_INFORMATION ConfigInfo,
                                IN ULONG Size)
@@ -89,7 +95,9 @@ static BOOLEAN PlatPortAcquire(IN PHW_DEVICE_EXTENSION DevExt, IN PPORT_CONFIGUR
         // written to CC).
         return FALSE;
     }
-    RtlZeroMemory(DevExt->UncachedExtensionBase, DevExt->UncachedExtensionSize);
+    if (!DevExt->Resumed) {
+        RtlZeroMemory(DevExt->UncachedExtensionBase, DevExt->UncachedExtensionSize);
+    }
     return TRUE;
 }
 
@@ -461,11 +469,7 @@ VOID PlatWriteThroughSetting(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentSt
         cfg = me ? PLAT_WT_CACHEOFF : PLAT_WT_OFF;
     }
     DevExt->WtMode = cfg;
-#ifdef NVME2K_W9X
     DBGSTAGE(STG_WRITE_THROUGH, 0x100 | DevExt->WtConfig | ((ULONG)cfg << 4) | ((ULONG)me << 12));
-#else
-    DBGSTAGE(STG_WRITE_THROUGH, 0x100 | DevExt->WtConfig | ((ULONG)cfg << 4) | ((ULONG)me << 12));
-#endif
 }
 
 //
@@ -625,11 +629,13 @@ static ULONG PlatCatBdf(IN OUT PCHAR Buf, IN ULONG Pos, IN ULONG Size, IN ULONG 
 }
 
 // e.g. "port 115.0.0 slot 0 range FE600000:00000000 len 16384; read 256
-// class 010802 bar0 FE600004 bar1 00000000; found 115.0.0; cmd 0006 cc
-// 00000000 csts 00000000 taken; result 1"
+// class 010802 bars FE600004 00000000 00000000 00000000 00000000 00000000;
+// found 115.0.0; cmd 0006 cc 00000000 csts 00000000 taken; result 1"; with
+// decode found off "cmd 0004 cc 00000001 csts 00000001 decode on for the read
+// left: already set up". 320 bytes hold the longest.
 VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
 {
-    CHAR text[256];
+    CHAR text[320];
     ULONG hk = 0, n;
 
     n = PlatCat(text, 0, sizeof(text), "port ");
@@ -668,9 +674,20 @@ VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi)
         n = PlatCatHex(text, n, sizeof(text), Fi->FwCc, 8);
         n = PlatCat(text, n, sizeof(text), " csts ");
         n = PlatCatHex(text, n, sizeof(text), Fi->FwCsts, 8);
+        if ((Fi->FwCmd & 0x0002) == 0) {
+            // Decode found off: turned on for the read and put back, or not
+            // reached (PLAN 3.1).
+            n = PlatCat(text, n, sizeof(text), Fi->FwTurnedOn ? " decode on for the read" : " decode off, not read");
+        }
         n = PlatCat(text, n, sizeof(text), Fi->FwState == 0 ? " taken" :
                     Fi->FwState == 1 ? " left: already set up" :
-                    Fi->FwState == 2 ? " left: no answer" : " left: unreadable");
+                    Fi->FwState == 2 ? " left: no answer" :
+                    Fi->FwState == 4 ? " left: command not restored" : " left: unreadable");
+        if (Fi->FwReach != 0) {
+            // Why BAR0 was not reached (PCISCAN_REACH_*, pciscan.h).
+            n = PlatCat(text, n, sizeof(text), " reach ");
+            n = PlatCatDec(text, n, sizeof(text), Fi->FwReach);
+        }
     }
     n = PlatCat(text, n, sizeof(text), "; result ");
     n = PlatCatDec(text, n, sizeof(text), Fi->Result);
@@ -797,20 +814,7 @@ static VOID PlatWiden(IN const char *s, OUT PWSTR w, IN ULONG Max, OUT S98R_UNIC
 
 static BOOLEAN PlatIsDump(IN PCHAR ArgumentString)
 {
-    static const char key[] = DPK_DUMP;
-    ULONG i, k;
-
-    if (ArgumentString == NULL) {
-        return FALSE;
-    }
-    for (i = 0; ArgumentString[i] != 0; i++) {
-        for (k = 0; key[k] != 0 && ArgumentString[i + k] == key[k]; k++) {
-        }
-        if (key[k] == 0) {
-            return TRUE;
-        }
-    }
-    return FALSE;
+    return (BOOLEAN)(DpkFind(ArgumentString, DPK_DUMP) != NULL);
 }
 
 VOID PlatIrqReport(IN PHW_DEVICE_EXTENSION DevExt, IN PCHAR ArgumentString)

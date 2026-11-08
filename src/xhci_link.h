@@ -87,9 +87,9 @@
 #define XHCI_LINK_MAX_WARM_RESETS   3UL
 
 typedef struct _XHCI_LINK_PORT {
-    ULONG WarmResets;       /* spent since the link was last Enabled or
-                             * Disconnected                              */
-    ULONG GaveUp;           /* given up until the link next leaves Error  */
+    ULONG WarmResets;       /* spent since the link was last Enabled,
+                             * powered off, or Disconnected without CAS  */
+    ULONG GaveUp;           /* given up until the budget next refills     */
     ULONG LastState;        /* XHCI_LINK_*, as last classified            */
     ULONG LastReset;        /* the reset last asked: HOT_RESET, WARM_RESET */
     ULONG StuckCheck;       /* 38.10: the next reading is the first after a
@@ -152,8 +152,11 @@ ULONG XhciLinkResetDone(ULONG portsc, PULONG warmSeen);
  * included, so the link's recovery finds it Empty and the trained link's
  * reset completion, which brings no CSC when CCS never dropped, starts a new
  * enumeration (Phase 29) - and the bounded warm reset or the give-up is the
- * action. The link's record is consulted on every change, so a disconnect or
- * a trained link refills the warm-reset budget.
+ * action. The link's record is consulted on every change, so a disconnect
+ * without Cold Attach Status, or a trained link, refills the warm-reset
+ * budget; a Disconnected reading with CAS spends it and never refills it, so
+ * a CAS that persists or returns after WPR is warm-reset at most
+ * XHCI_LINK_MAX_WARM_RESETS times and then given up once.
  */
 #define XHCI_LINK_FEED_DISCONNECT   0x1UL
 #define XHCI_LINK_FEED_CONNECT      0x2UL

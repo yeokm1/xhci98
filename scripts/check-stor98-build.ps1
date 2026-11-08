@@ -36,14 +36,21 @@ win9x (stor98.mpd), x86 or amd64 (stor98.sys).
 
 .PARAMETER List
 Print the image's imports in the allowlist's form and stop.
+
+.PARAMETER ParseOnly
+Read the allowlist alone, with the reader the gate uses, and stop: every
+row a known target and one DLL!function, no row twice. Needs no image, so
+scripts\import-gate\test-flavour-rules.ps1 runs it before anything is
+built.
 #>
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string]$Image,
-    [Parameter(Mandatory = $true)][ValidateSet("win9x", "x86", "amd64")][string]$Target,
+    [string]$Image = "",
+    [ValidateSet("", "win9x", "x86", "amd64")][string]$Target = "",
     [string]$AllowPath = "",
-    [switch]$List
+    [switch]$List,
+    [switch]$ParseOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -115,6 +122,29 @@ function Get-PeImports {
     return [pscustomobject]@{ Machine = $machine; Imports = @($out | Sort-Object -Unique) }
 }
 
+function Read-Stor98Allow {
+    # The allowlist's rows as "<target> DLL!FUNCTION" keys (the target
+    # lower-cased, the pair upper-cased, as the image's imports are
+    # compared). Throws on a row that is not one known target and one
+    # DLL!function, and on a row given twice.
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "no allowlist at '$Path'." }
+    $allowed = @{}
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $l = $line.Trim()
+        if ($l -eq "" -or $l.StartsWith("#")) { continue }
+        $p = $l -split '\s+'
+        if ($p.Count -ne 2 -or @("win9x", "x86", "amd64") -cnotcontains $p[0] -or
+            $p[1] -notmatch '^[A-Za-z0-9_.]+![A-Za-z_][A-Za-z0-9_]*$') {
+            throw "'$Path': '$l' is not '<target> DLL!function' with a target of win9x, x86 or amd64."
+        }
+        $key = $p[0] + " " + $p[1].ToUpperInvariant()
+        if ($allowed.ContainsKey($key)) { throw "'$Path': '$l' is listed twice." }
+        $allowed[$key] = $true
+    }
+    return $allowed
+}
+
 function Get-XhciVersion {
     $h = [System.IO.File]::ReadAllText((Join-Path $repo "src\xhci_version.h"))
     $m = [regex]::Match($h, '(?m)^#define\s+XHCI_VER_STR\s+"(\d+\.\d+\.\d+\.\d+)"')
@@ -123,6 +153,12 @@ function Get-XhciVersion {
 }
 
 try {
+    if ($ParseOnly) {
+        $rows = Read-Stor98Allow -Path $AllowPath
+        Write-Host ("  Stor98 allowlist: {0} row(s) parse ({1})" -f $rows.Count, $AllowPath)
+        exit 0
+    }
+    if ($Image -eq "" -or $Target -eq "") { throw "-Image and -Target are required unless -ParseOnly is given." }
     if (-not (Test-Path -LiteralPath $Image -PathType Leaf)) { throw "no image at '$Image'." }
     $bytes = [System.IO.File]::ReadAllBytes($Image)
     $pe = Get-PeImports -B $bytes
@@ -155,15 +191,7 @@ try {
     if ($pe.Machine -ne $wantMachine) { $faults.Add(("its machine is 0x{0:X4}, and a {1} image is 0x{2:X4}" -f $pe.Machine, $Target, $wantMachine)) }
 
     # Imports.
-    if (-not (Test-Path -LiteralPath $AllowPath -PathType Leaf)) { throw "no allowlist at '$AllowPath'." }
-    $allowed = @{}
-    foreach ($line in [System.IO.File]::ReadAllLines($AllowPath)) {
-        $l = $line.Trim()
-        if ($l -eq "" -or $l.StartsWith("#")) { continue }
-        $p = $l -split '\s+'
-        if ($p.Count -ne 2) { throw "'$AllowPath': '$l' is not '<target> DLL!function'." }
-        $allowed[($p[0].ToLowerInvariant() + " " + $p[1].ToUpperInvariant())] = $true
-    }
+    $allowed = Read-Stor98Allow -Path $AllowPath
     foreach ($i in $pe.Imports) {
         if ($i -match '!#') { $faults.Add("it imports $i by ordinal"); continue }
         if (-not $allowed.ContainsKey($Target + " " + $i.ToUpperInvariant())) {

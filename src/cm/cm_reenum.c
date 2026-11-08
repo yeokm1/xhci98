@@ -515,8 +515,7 @@ VOID CmRegWithdraw(PCM_FILTER filter)
     cmRegRecompute();
     KeReleaseSpinLock(&cmRegLock, irql);
     if (wait != 0) {
-        (VOID)KeWaitForSingleObject(&filter->Rundown, Executive, KernelMode,
-                                    FALSE, NULL);
+        (VOID)CmWaitEvent(&filter->Rundown, 0);
     }
 }
 
@@ -2564,9 +2563,6 @@ VOID CmRegAttLink(PCM_FILTER filter)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
-/* The PDO's bus number and address, as the PnP manager's devnode has them
- * (record 21 section 7.4, revision 3: never read at the BusRelations
- * attachment, before the devnode exists). PASSIVE_LEVEL. */
 /* The location published once read. PASSIVE_LEVEL. */
 static VOID cmAttLocated(PCM_FILTER filter, ULONG bus, ULONG address)
 {
@@ -2584,6 +2580,9 @@ static VOID cmAttLocated(PCM_FILTER filter, ULONG bus, ULONG address)
     KeReleaseSpinLock(&cmRegLock, irql);
 }
 
+/* The PDO's bus number and address, as the PnP manager's devnode has them
+ * (record 21 section 7.4, revision 3: never read at the BusRelations
+ * attachment, before the devnode exists). PASSIVE_LEVEL. */
 VOID CmRegAttLocate(PCM_FILTER filter)
 {
     ULONG bus;
@@ -3572,8 +3571,7 @@ BOOLEAN CmRegConfigWrite(PCM_NHI nhi, ULONG bdf, ULONG offset, ULONG width,
         CM_SET_COMPLETION_ALWAYS(irp, cmCfgWriteDone, &done);
         status = IoCallDriver(pdo, irp);
         if (status == STATUS_PENDING) {
-            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                        NULL);
+            (VOID)CmWaitEvent(&done, 0);
         }
         status = irp->IoStatus.Status;
         written = (ULONG)irp->IoStatus.Information;

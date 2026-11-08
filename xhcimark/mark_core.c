@@ -49,7 +49,9 @@ int mk_query_parse(const unsigned char *b, size_t n, MK_QUERY *q,
         return -1;
     }
     rec = mk_get32(b, CM_Q_O_REC_OFFSET);
-    if (rec < CM_Q_HDR_BYTES || rec + CM_ST_HDR_BYTES > bytes) {
+    /* Subtraction, not rec + CM_ST_HDR_BYTES: an offset near 0xFFFFFFFF
+     * would wrap the sum past the check. */
+    if (rec < CM_Q_HDR_BYTES || rec > bytes || CM_ST_HDR_BYTES > bytes - rec) {
         return 0;
     }
     recBytes = mk_get32(b, rec + CM_ST_O_BYTES);
@@ -157,9 +159,11 @@ int mk_marks_parse(const unsigned char *b, size_t n, MK_MARKS *m,
     count = mk_get32(b, CM_QM_O_COUNT);
     entBytes = mk_get32(b, CM_QM_O_ENT_BYTES);
     off = mk_get32(b, CM_QM_O_ENT_OFFSET);
+    /* A division, not count * entBytes: an entry size of 0x01000000 or
+     * more times 256 entries would wrap the product past the check. */
     if (count > MK_MAX_ENTRIES || entBytes < CM_QM_ENT_BYTES ||
         off < CM_QM_HDR_BYTES || off > bytes ||
-        count * entBytes > bytes - off) {
+        (count != 0 && entBytes > (bytes - off) / count)) {
         return 0;
     }
     m->Bytes = bytes;
@@ -968,8 +972,20 @@ int mk_selftest(void (*report)(int ok, const char *what))
     mk_put32(b, CM_QM_O_COUNT, 2);
     mk_check(mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need) == 0,
              "a count past the size is refused");
+    /* count * entBytes wraps 32 bits to a small product: refused. */
+    mk_put32(b, CM_QM_O_COUNT, 256);
+    mk_put32(b, CM_QM_O_ENT_BYTES, 0x01000000UL);
+    mk_check(mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need) == 0,
+             "an entry size whose product with the count wraps is refused");
+    mk_put32(b, CM_QM_O_ENT_BYTES, CM_QM_ENT_BYTES);
     mk_put32(b, CM_QM_O_COUNT, 1);
     (void)mk_marks_parse(b, CM_QM_HDR_BYTES + CM_QM_ENT_BYTES, &m, &need);
+
+    /* A record offset whose sum with the record's header wraps: refused. */
+    n = mk_fake_query(b, CM_ST_STAGE_ACTIVE, 1, 0, 0x1234, 0x0518, 1);
+    mk_put32(b, CM_Q_O_REC_OFFSET, 0xFFFFFFF0UL);
+    mk_check(mk_query_parse(b, n, &q, &need) == 0,
+             "a record offset that wraps the bound is refused");
 
     n = mk_fake_query(b, CM_ST_STAGE_ACTIVE, 1, 0, 0x1234, 0x0518, 1);
     (void)mk_query_parse(b, n, &q, &need);

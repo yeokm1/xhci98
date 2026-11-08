@@ -22,14 +22,19 @@ What it proves:
     silently covering three is exactly the failure the third flavour existed
     to prevent; "debug" is refused the same way since task 45.45;
   - an image under objchk, the retired flavour's tree, is refused by name;
-  - the production allowlist puts HAL.dll!WRITE_PORT_UCHAR in "qemu required"
-    and nowhere else. That single row is task 13-L.1's repair: qemu is never
-    published, so a published binary carrying the sole import delta of the
-    build that gave the E460 a Code 2 now fails the gate instead of being noted
-    in a comment;
-  - no other row is qemu-only, so nothing else has quietly become
-    unpublishable;
-  - the three retired file-sink imports are gone (task 13-L.2);
+  - each production x86 allowlist that carries HAL.dll!WRITE_PORT_UCHAR
+    (xhci98, xhcicm, xhcipfw) carries it in exactly one row, "qemu
+    required". That row is task 13-L.1's repair: qemu is never published, so
+    a published binary carrying the sole import delta of the build that gave
+    the E460 a Code 2 fails the gate instead of being noted in a comment;
+  - the qemu-only rows of every production allowlist are exactly the ones
+    named here, so nothing else has quietly become unpublishable and none of
+    these has quietly become publishable;
+  - every common-format allowlist (*.allow but Stor98's) parses, and
+    Stor98's parses under its own reader (check-stor98-build.ps1 -ParseOnly);
+  - the net98 and net6 profiles' row rules (Test-Net98Rows, Test-Net6Rows)
+    and the net6 baseline sets (Get-Net6Sets), on synthetic rows, before any
+    networking image is linked;
   - **`-Flavor auto` can actually infer a flavour from a Windows path**, which
     it could not when this file was first written: the release and debug
     branches used `[\/]`, which .NET reads as an escaped forward slash and
@@ -64,7 +69,7 @@ try {
     # image is needed, so split-flavour rows are checked before the first link.
     & {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
-        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image')) {
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Get-RepoIncludeClosure', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image')) {
             $function = $ast.Find({ param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
             }, $true)
@@ -226,6 +231,21 @@ try {
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
         Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*compat' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a nested header: $($script:importFailures)"
         Remove-Item -LiteralPath (Join-Path $siteSrc 'compat\alias.h')
+        # A header above the sources, which a sub-driver includes by path
+        # (src\cm's ..\xhci_*.h): found through the compiled sources'
+        # #include "..." closure, bounded by the repository root.
+        $repo = $work
+        Set-Content -LiteralPath (Join-Path $work 'shared.h') -Encoding ASCII -Value '#define HCD_FREE(p) ExFreePool(p)'
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value @('#include "../shared.h"', 'void g(void) { HCD_FREE(0); }')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True (@($script:importFailures | Where-Object { $_ -match 'named in the header .*shared\.h' }).Count -eq 1) "SITES over LTCG objects refuses a restricted name in a header above the sources that a source includes: $($script:importFailures)"
+        Remove-Item -LiteralPath (Join-Path $work 'shared.h')
+        $script:importFailures = @()
+        Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
+        Assert-True ($script:importFailures.Count -eq 0) "an include that resolves to no file is not followed and is no failure: $($script:importFailures)"
+        Set-Content -LiteralPath (Join-Path $siteSrc 'hcd_pnp.c') -Encoding ASCII -Value 'void g(void) { IoCallDriver(0, 0); }'
+        Remove-Variable -Name repo
         Set-Content -LiteralPath (Join-Path $siteSrc 'notes.h') -Encoding ASCII -Value @('/* why ExFreePool and not', ' * ExFreePoolWithTag */', '// ExFreePool too', '#ifdef ExFreePool', '#undef ExFreePool', '#endif')
         $script:importFailures = @()
         Test-Image -Path $siteImage -ImageFlavor release -Rules $rules
@@ -253,7 +273,7 @@ try {
     # ---------------------------------------------------------------------
     & {
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
-        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Test-NtkernName')) {
+        foreach ($name in @('Get-ImportPairs', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Get-RepoIncludeClosure', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Test-NtkernName')) {
             $function = $ast.Find({ param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
             }, $true)
@@ -310,7 +330,7 @@ try {
     & {
         . (Join-Path $PSScriptRoot "evidence-common.ps1")
         $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
-        foreach ($name in @('Get-ImportPairs', 'Get-ExportNames', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Get-Win2kBaseline', 'Get-HlprBaseline')) {
+        foreach ($name in @('Get-ImportPairs', 'Get-ExportNames', 'Read-AllowFile', 'Get-ObjectImportRefs', 'Join-CSplices', 'Get-RepoIncludeClosure', 'Test-ImportSitesFromSource', 'Test-ImportSites', 'Test-Image', 'Get-Win2kBaseline', 'Get-HlprBaseline')) {
             $function = $ast.Find({ param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
             }, $true)
@@ -529,6 +549,157 @@ try {
         ("an image under objchk was not refused as the retired debug flavour's. Output:`n" + $out)
 
     # ---------------------------------------------------------------------
+    # The networking profiles' own rules (design record 35), before any
+    # networking image is linked: Test-Net98Rows, Test-Net6Rows and
+    # Get-Net6Sets loaded from the gate and run on synthetic rows, manifests,
+    # NDIS.VXD name tables and ndis.h headers. The functions read their
+    # manifests beside the gate ($PSScriptRoot), which a function made from
+    # text has none of, so that one name is pointed at a synthetic directory.
+    # ---------------------------------------------------------------------
+    & {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
+        foreach ($name in @('Read-AllowFile', 'Test-Net98Rows', 'Test-Net6Rows', 'Get-Net6Sets')) {
+            $function = $ast.Find({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text.Replace('$PSScriptRoot', '$netGateDir')))
+        }
+        function Write-Ok { param($Message) }
+        function Add-Warning { param($Message) $script:importWarnings += $Message }
+        function Add-Failure { param($Message) $script:importFailures += $Message }
+
+        $netGateDir = Join-Path $work "net-gate"
+        $repo = Join-Path $work "net-repo"
+        $Ndis98Dir = Join-Path $work "net-vxd98"
+        $NdisMeDir = Join-Path $work "net-vxdme"
+        foreach ($d in @($netGateDir, $Ndis98Dir, $NdisMeDir, (Join-Path $repo "tools\ntddk\inc\ddk"), (Join-Path $work "net-wdk\inc\ddk"))) {
+            New-Item -ItemType Directory -Force -Path $d | Out-Null
+        }
+        Set-Content -LiteralPath (Join-Path $netGateDir "xhci98-imports.allow") -Encoding ASCII -Value @('[imports]', 'ntoskrnl.exe!KeClearEvent all required synthetic')
+        Set-Content -LiteralPath (Join-Path $netGateDir "net98-runtime.list") -Encoding ASCII -Value @(
+            '[record both]', 'repository r', 'commit c', 'observation o', 'imports i', 'systems 98SE ME', 'NDIS.SYS!NdisGood',
+            '[record half]', 'repository r', 'commit c', 'observation o', 'imports i', 'systems 98SE', 'NDIS.SYS!NdisHalf')
+        $vxdBytes = [System.Text.Encoding]::ASCII.GetBytes("MZ`0NdisGood`0NdisOwed`0NdisHalf`0NdisNoTag`0NdisUndeclared`0")
+        $vxdRows = @()
+        foreach ($pair in @(@("98SE", $Ndis98Dir), @("ME", $NdisMeDir))) {
+            $vxd = Join-Path $pair[1] "NDIS.VXD"
+            [System.IO.File]::WriteAllBytes($vxd, $vxdBytes)
+            $vxdRows += ("{0} NDIS.VXD {1} {2}" -f $pair[0], $vxdBytes.Length, (Get-FileHash -LiteralPath $vxd -Algorithm SHA256).Hash)
+        }
+        Set-Content -LiteralPath (Join-Path $netGateDir "ndisvxd-baselines.expected") -Encoding ASCII -Value $vxdRows
+        $hdr = @()
+        foreach ($s in @("NdisGood", "NdisOwed", "NdisHalf", "NdisNoTag", "NdisNotExported", "NdisSix")) { $hdr += @("VOID", "$s(", "    IN PVOID P", "    );") }
+        $hdr += @("/*++", "VOID", "NdisInComment(", "--*/", "#define NdisMacro(a) (a)")
+        Set-Content -LiteralPath (Join-Path $repo "tools\ntddk\inc\ddk\ndis.h") -Encoding ASCII -Value $hdr
+        Set-Content -LiteralPath (Join-Path $work "net-wdk\inc\ddk\ndis.h") -Encoding ASCII -Value $hdr
+        $netAllow = Join-Path $work "net.allow"
+
+        $good = @('ntoskrnl.exe!KeClearEvent all required synthetic',
+                  'NDIS.SYS!NdisGood all required bc-header; w98-runtime both',
+                  'NDIS.SYS!NdisOwed all required bc-header; w98-owed')
+        Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good)
+        $script:importFailures = @(); $script:importWarnings = @()
+        Test-Net98Rows -AllowPath $netAllow
+        Assert-True ($script:importFailures.Count -eq 0) "net98: the good rows were refused: $($script:importFailures -join ' | ')"
+        Assert-True (@($script:importWarnings | Where-Object { $_ -match '1 NDIS\.SYS pair\(s\) are w98-owed' }).Count -eq 1) "net98: a w98-owed row is not reported owed: $($script:importWarnings -join ' | ')"
+        foreach ($c in @(
+            @{ Row = 'NDIS.SYS!NdisGood all required w98-runtime both'; Says = 'carries no bc-header tag' },
+            @{ Row = 'NDIS.SYS!NdisUndeclared all required bc-header; w98-owed'; Says = "ndis.h declares no routine of that name" },
+            @{ Row = 'NDIS.SYS!NdisInComment all required bc-header; w98-owed'; Says = "ndis.h declares no routine of that name" },
+            @{ Row = 'NDIS.SYS!NdisNotExported all required bc-header; w98-owed'; Says = "is not among 98SE's NDIS.VXD export names" },
+            @{ Row = 'NDIS.SYS!NdisGood all required bc-header; w98-runtime nosuch'; Says = "which net98-runtime.list does not hold" },
+            @{ Row = 'NDIS.SYS!NdisHalf all required bc-header; w98-runtime half'; Says = "does not list both 98SE and ME" },
+            @{ Row = 'NDIS.SYS!NdisOwed all required bc-header; w98-runtime both'; Says = "is not among record 'both''s imports" },
+            @{ Row = 'NDIS.SYS!NdisNoTag all required bc-header'; Says = "carries neither w98-runtime <record> nor w98-owed" },
+            @{ Row = 'ntoskrnl.exe!KeSetEvent all required synthetic'; Says = "is not a row of xhci98-imports.allow" },
+            @{ Row = 'usbd.sys!USBD_Foo all required synthetic'; Says = "imports from NTOSKRNL.EXE, HAL.DLL and NDIS.SYS alone" }
+        )) {
+            Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good + @($c.Row))
+            $script:importFailures = @(); $script:importWarnings = @()
+            Test-Net98Rows -AllowPath $netAllow
+            Assert-True (@($script:importFailures | Where-Object { $_.Contains($c.Says) }).Count -ge 1) "net98: '$($c.Row)' was not refused with '$($c.Says)': $($script:importFailures -join ' | ')"
+        }
+        # A staged NDIS.VXD that is not the manifest's file is a failure, not
+        # a skipped set; an unstaged one a warning.
+        [System.IO.File]::WriteAllBytes((Join-Path $NdisMeDir "NDIS.VXD"), [System.Text.Encoding]::ASCII.GetBytes("MZ`0NdisGood`0"))
+        Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good)
+        $script:importFailures = @(); $script:importWarnings = @()
+        Test-Net98Rows -AllowPath $netAllow
+        Assert-True (@($script:importFailures | Where-Object { $_.Contains("is not the ME NDIS.VXD ndisvxd-baselines.expected names") }).Count -eq 1) "net98: a changed NDIS.VXD was not refused: $($script:importFailures -join ' | ')"
+        Remove-Item -LiteralPath (Join-Path $NdisMeDir "NDIS.VXD")
+        $script:importFailures = @(); $script:importWarnings = @()
+        Test-Net98Rows -AllowPath $netAllow
+        Assert-True ($script:importFailures.Count -eq 0 -and @($script:importWarnings | Where-Object { $_.Contains("ME's NDIS.VXD is not staged") }).Count -eq 1) "net98: an unstaged NDIS.VXD is not the warning: $($script:importFailures -join ' | ') / $($script:importWarnings -join ' | ')"
+
+        # net6: the three modules, and each NDIS.SYS pair tagged and declared
+        # in the kit's ndis.h (WDKROOT, as the build takes it).
+        $savedWdk = $env:WDKROOT
+        try {
+            $env:WDKROOT = Join-Path $work "net-wdk"
+            $good6 = @('ntoskrnl.exe!KeTickCount all required synthetic', 'HAL.dll!KeGetCurrentIrql all required synthetic',
+                       'NDIS.SYS!NdisSix all required ndis620-header')
+            Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good6)
+            $script:importFailures = @()
+            Test-Net6Rows -AllowPath $netAllow
+            Assert-True ($script:importFailures.Count -eq 0) "net6: the good rows were refused: $($script:importFailures -join ' | ')"
+            foreach ($c in @(
+                @{ Row = 'NDIS.SYS!NdisSix all required synthetic'; Says = 'carries no ndis620-header tag' },
+                @{ Row = 'NDIS.SYS!NdisUndeclared all required ndis620-header'; Says = "WDK 7.1's ndis.h declares no routine of that name" },
+                @{ Row = 'usbd.sys!USBD_Foo all required synthetic'; Says = "imports from NTOSKRNL.EXE, HAL.DLL and NDIS.SYS alone" }
+            )) {
+                Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good6 + @($c.Row))
+                $script:importFailures = @()
+                Test-Net6Rows -AllowPath $netAllow
+                Assert-True (@($script:importFailures | Where-Object { $_.Contains($c.Says) }).Count -eq 1) "net6: '$($c.Row)' was not refused with '$($c.Says)': $($script:importFailures -join ' | ')"
+            }
+            $env:WDKROOT = Join-Path $work "net-no-wdk"
+            Set-Content -LiteralPath $netAllow -Encoding ASCII -Value (@('[imports]') + $good6)
+            $script:importFailures = @()
+            Test-Net6Rows -AllowPath $netAllow
+            Assert-True (@($script:importFailures | Where-Object { $_.Contains("is not there") }).Count -eq 1) "net6: a kit with no ndis.h is not a failure: $($script:importFailures -join ' | ')"
+        } finally {
+            $env:WDKROOT = $savedWdk
+        }
+
+        # Get-Net6Sets: a committed manifest is a set whose files are
+        # required, for that architecture's tag; an absent one is owed.
+        Set-Content -LiteralPath (Join-Path $netGateDir "net6-win81-x64-baselines.expected") -Encoding ASCII -Value @("# synthetic")
+        $script:importWarnings = @()
+        $sets = @(Get-Net6Sets -ForArch amd64)
+        Assert-True ($sets.Count -eq 1 -and $sets[0].Tag -eq "win81x64" -and $sets[0].AllowNdis -and $sets[0].Label -eq "Windows 8.1 x64") "net6 sets: one committed x64 manifest is not one set: $(@($sets | ForEach-Object { $_.Tag }) -join ', ')"
+        Assert-True (@($script:importWarnings | Where-Object { $_ -match 'no Windows 10 x64 baseline manifest' }).Count -eq 1) "net6 sets: the absent Windows 10 x64 manifest is not reported owed: $($script:importWarnings -join ' | ')"
+        $script:importWarnings = @()
+        $sets = @(Get-Net6Sets -ForArch x86)
+        Assert-True ($sets.Count -eq 0 -and $script:importWarnings.Count -eq 2) "net6 sets: no x86 manifest is not two owed sets: $($sets.Count), $($script:importWarnings -join ' | ')"
+    }
+
+    # The production manifests the networking profiles read parse under
+    # those functions' own readers too: net98-runtime.list and
+    # ndisvxd-baselines.expected through Test-Net98Rows on a row-less
+    # allowlist (a parse error throws; an unstaged NDIS.VXD only warns).
+    & {
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($gate, [ref]$null, [ref]$null)
+        foreach ($name in @('Read-AllowFile', 'Test-Net98Rows')) {
+            $function = $ast.Find({ param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $true)
+            . ([scriptblock]::Create($function.Extent.Text.Replace('$PSScriptRoot', '$netGateDir')))
+        }
+        function Write-Ok { param($Message) }
+        function Add-Warning { param($Message) }
+        function Add-Failure { param($Message) $script:importFailures += $Message }
+        $netGateDir = $PSScriptRoot
+        $repo = Join-Path $work "net-prod-repo"
+        $Ndis98Dir = Join-Path $work "net-prod-none98"
+        $NdisMeDir = Join-Path $work "net-prod-noneme"
+        $empty = Join-Path $work "net-empty.allow"
+        Set-Content -LiteralPath $empty -Encoding ASCII -Value @('[imports]')
+        $script:importFailures = @()
+        Test-Net98Rows -AllowPath $empty
+        Assert-True ($script:importFailures.Count -eq 0) "the production net98-runtime.list or ndisvxd-baselines.expected does not read cleanly: $($script:importFailures -join ' | ')"
+    }
+
+    # ---------------------------------------------------------------------
     # The production allowlist. These are statements about this project's own
     # decisions, not about the parser.
     # ---------------------------------------------------------------------
@@ -546,10 +717,9 @@ try {
         }
     }
     # Since 2026-10-02 the production file is the successor HCD's (design
-    # record 13). The miniport's assertions about its own rows - the qemu-only
-    # WRITE_PORT_UCHAR mirror, the retired file sink, DbgPrint in every flavour
-    # - left with it and come back as the HCD earns each row (26-A.1, 26-A.8).
-    # What holds from the scaffold on:
+    # record 13). The qemu-only rows of it and of every other production
+    # allowlist are asserted by name below; what else holds from the
+    # scaffold on:
 
     # No usbport.sys pair, ever: the HCD replaces it.
     Assert-True (@($rows | Where-Object { $_.Module -ieq "USBPORT.SYS" }).Count -eq 0) "the HCD's allowlist must carry no USBPORT.SYS row - it replaces usbport.sys"
@@ -574,6 +744,69 @@ try {
     Assert-True ($r.Text -match "allow ntoskrnl\.exe!ExSetTimerResolution all required") "the helper's allowlist requires ExSetTimerResolution"
     Assert-True ($r.Text -match "deny IoConnectInterruptEx" -and $r.Text -match "deny IoDisconnectInterruptEx") "the helper's allowlist denies the Vista interrupt pair"
     Assert-True ($r.Text -notmatch "allow ntoskrnl\.exe!Io(Dis)?connectInterruptEx") "the helper's allowlist admits neither Vista interrupt routine"
+
+    # Every common-format allowlist parses before anything is linked, and
+    # its qemu-only rows are exactly these: the port-0xE9 mirror's
+    # HAL.dll!WRITE_PORT_UCHAR in the three x86 images that carry the
+    # mirror (task 13-L.1, AGENTS.md "Build flavours": the import that must
+    # never reach a published binary), and the checked build's RtlAssert,
+    # with the helper's checked-only registry read. A row moved to "all"
+    # makes a qemu-only import publishable; a new qemu-only row makes
+    # something unpublishable; either fails here.
+    $qemuOnly = @{
+        "xhci98-imports.allow"         = @("HAL.dll!WRITE_PORT_UCHAR")
+        "xhci98-imports-amd64.allow"   = @("ntoskrnl.exe!RtlAssert")
+        "xhcicm-imports.allow"         = @("HAL.dll!WRITE_PORT_UCHAR")
+        "xhcicm-imports-amd64.allow"   = @("ntoskrnl.exe!RtlAssert")
+        "xhcihlpr-imports.allow"       = @("ntoskrnl.exe!RtlAssert", "ntoskrnl.exe!RtlQueryRegistryValues")
+        "xhcinet-imports.allow"        = @()
+        "xhcinet-imports-amd64.allow"  = @("ntoskrnl.exe!RtlAssert")
+        "xhcinet6-imports.allow"       = @("ntoskrnl.exe!RtlAssert")
+        "xhcinet6-imports-amd64.allow" = @("ntoskrnl.exe!RtlAssert")
+        "xhcipfw-imports.allow"        = @("HAL.dll!WRITE_PORT_UCHAR")
+        "xhciuas-imports.allow"        = @()
+        "xhciuas-imports-amd64.allow"  = @("ntoskrnl.exe!RtlAssert")
+    }
+    $mirrorFiles = @("xhci98-imports.allow", "xhcicm-imports.allow", "xhcipfw-imports.allow")
+    $commonFiles = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.allow" -File | Where-Object { $_.Name -ne "stor98-imports.allow" } | Sort-Object Name)
+    Assert-True ((@($commonFiles | ForEach-Object { $_.Name }) -join "|") -ceq (@($qemuOnly.Keys | Sort-Object) -join "|")) `
+        ("the common-format allowlists are not the twelve this test names: " + (@($commonFiles | ForEach-Object { $_.Name }) -join ", "))
+    foreach ($af in $commonFiles) {
+        $ar = Invoke-Parse -AllowPath $af.FullName
+        Assert-True ($ar.Code -eq 0) "$($af.Name) must parse:`n$($ar.Text)"
+        $aRows = @()
+        foreach ($line in ($ar.Text -split "`r?`n")) {
+            if ($line -match "^allow (\S+)!(\S+) (\S+) (\S+)$") {
+                $aRows += [pscustomobject]@{ Module = $Matches[1]; Symbol = $Matches[2]; Flavors = $Matches[3]; Requirement = $Matches[4] }
+            }
+        }
+        Assert-True ($aRows.Count -gt 0) "$($af.Name) parsed to no allow row"
+        $gotQ = @($aRows | Where-Object { $_.Flavors -ceq "qemu" } | ForEach-Object { "$($_.Module)!$($_.Symbol)" } | Sort-Object)
+        $wantQ = @($qemuOnly[$af.Name] | Sort-Object)
+        Assert-True (($gotQ -join "|") -ceq ($wantQ -join "|")) ("{0}'s qemu-only rows are '{1}', not '{2}'" -f $af.Name, ($gotQ -join ", "), ($wantQ -join ", "))
+        $wp = @($aRows | Where-Object { $_.Module -ieq "HAL.dll" -and $_.Symbol -ceq "WRITE_PORT_UCHAR" })
+        if ($mirrorFiles -contains $af.Name) {
+            Assert-True ($wp.Count -eq 1 -and $wp[0].Flavors -ceq "qemu" -and $wp[0].Requirement -ceq "required") `
+                ("{0} must carry HAL.dll!WRITE_PORT_UCHAR in exactly one row, 'qemu required': {1}" -f $af.Name, (@($wp | ForEach-Object { "$($_.Flavors) $($_.Requirement)" }) -join "; "))
+        } else {
+            Assert-True ($wp.Count -eq 0) "$($af.Name) carries a HAL.dll!WRITE_PORT_UCHAR row, and only the three mirror images may"
+        }
+    }
+
+    # Stor98's allowlist, in its own grammar, by its own reader.
+    $sOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) "check-stor98-build.ps1") -ParseOnly 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -eq 0 -and $sOut -match "Stor98 allowlist: \d+ row") "stor98-imports.allow must parse under check-stor98-build.ps1's reader:`n$sOut"
+    $sBad = Join-Path $work "stor98-bad.allow"
+    foreach ($bad in @(@{ Line = "win98 SCSIPORT.SYS!ScsiPortInitialize"; Why = "an unknown target" },
+                       @{ Line = "x86 NTOSKRNL.EXE"; Why = "no function" },
+                       @{ Line = "x86 NTOSKRNL.EXE!ZwClose extra"; Why = "a third field" })) {
+        Set-Content -LiteralPath $sBad -Encoding ASCII -Value @("# synthetic", "x86 NTOSKRNL.EXE!ZwClose", $bad.Line)
+        $sOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) "check-stor98-build.ps1") -ParseOnly -AllowPath $sBad 2>&1 | Out-String
+        Assert-True ($LASTEXITCODE -ne 0) "the Stor98 reader took a row with $($bad.Why): $($bad.Line)"
+    }
+    Set-Content -LiteralPath $sBad -Encoding ASCII -Value @("x86 NTOSKRNL.EXE!ZwClose", "x86 ntoskrnl.exe!ZwClose")
+    $sOut = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Split-Path -Parent $PSScriptRoot) "check-stor98-build.ps1") -ParseOnly -AllowPath $sBad 2>&1 | Out-String
+    Assert-True ($LASTEXITCODE -ne 0) "the Stor98 reader took one row twice"
 } catch {
     # An exception mid-suite is a FAILED TEST, not a crashed script. Without
     # this the run died at the throw with $ErrorActionPreference = "Stop",

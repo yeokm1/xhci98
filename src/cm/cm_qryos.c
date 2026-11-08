@@ -264,8 +264,7 @@ static ULONG cmQId(PCM_NHI nhi, BUS_QUERY_ID_TYPE type, char *id, ULONG at)
     CM_SET_COMPLETION_ALWAYS(irp, cmQDone, &done);
     status = IoCallDriver(nhi->Common.Pdo, irp);
     if (status == STATUS_PENDING) {
-        (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                    NULL);
+        (VOID)CmWaitEvent(&done, 0);
     }
     status = irp->IoStatus.Status;
     w = (PWCHAR)irp->IoStatus.Information;
@@ -790,10 +789,9 @@ VOID CmQueryWorkerGone(PCM_NHI nhi)
         return;
     }
     q = (PCM_QUERY_DEV)self->DeviceExtension;
-    /* 1 ms relative, in 100 ns units: -10,000. An asker holds WkUse only
-     * across CmCfgwkPciAsk, a spin lock and an allocation. */
-    step.LowPart = 0xFFFFD8F0UL;
-    step.HighPart = -1;
+    /* 1 ms. An asker holds WkUse only across CmCfgwkPciAsk, a spin lock
+     * and an allocation. */
+    CmRelativeMs(&step, 1);
     for (;;) {
         KeAcquireSpinLock(&q->Lock, &irql);
         q->Wk = NULL;
@@ -1130,9 +1128,12 @@ static NTSTATUS cmQPci(PCM_QUERY_DEV q, PIRP irp)
     CmZero(&in, sizeof(in));
     /* The gate first: what to read is taken after any request before this
      * one, and the device is checked again after the reads, so an answer
-     * built across a stop is never returned. */
-    (VOID)KeWaitForSingleObject(&q->PciGate, Executive, KernelMode, FALSE,
-                                NULL);
+     * built across a stop is never returned. A gate not taken (Windows
+     * 98's unsatisfied returns, CmWaitEvent) is neither entered nor
+     * released: the request is refused as busy. */
+    if (CmWaitEvent(&q->PciGate, CM_GATE_WAIT_BOUND) >= CM_GATE_WAIT_BOUND) {
+        return CmCompleteIrp(irp, STATUS_DEVICE_BUSY, 0);
+    }
     KeAcquireSpinLock(&q->Lock, &irql);
     connected = q->Connected;
     if (connected) {

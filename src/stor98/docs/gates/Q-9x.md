@@ -10,7 +10,7 @@
 > ("interface 3"). Test builds: `set NVME98_Q9X=1 && scripts\build.cmd 9x`;
 > `tests\cm9x\build.cmd`. Evidence: [Q-9x/](Q-9x/).
 >
-> **Interface 3 was revised after a Codex review and requalified on 2026-10-15**: see
+> **Interface 3 was revised after a review and requalified on 2026-10-15**: see
 > [Interface 3 revision](#interface-3-revision) at the end. The sections before it record the
 > first prototype; where they describe the withdrawn v1 interface (dynamic key `Nvme98Cm`, the
 > 1056-byte table, `RemoveCancel`, `CANCELLED`, `INVALIDATED`, pool records in the CM table,
@@ -337,7 +337,7 @@ stops re-checking once `failed`).
 
 - **Interface 3** (revised; see "Interface 3 revision"): adopt the revised
   [`include/nvme98cm.h`](../../include/nvme98cm.h) interface 3 as the 9x interface after the
-  second Codex review, or change it before xhci98 copies it.
+  second review, or change it before xhci98 copies it.
 - **"Documented APIs" for the CM on 9x**: the stand-in reaches CONFIGMG, VMM registry and PCI
   enumerator services from a WDM driver through the `INT 20h` dynalink (no WDM equivalents
   exist). Confirm this satisfies MD-5's constraint; otherwise the CM's removal and rendezvous
@@ -360,7 +360,7 @@ stops re-checking once `failed`).
 
 ## Interface 3 revision
 
-Date: 2026-10-15. A Codex review of the first interface 3 (11 findings, "not ready") led the
+Date: 2026-10-15. A review of the first interface 3 (11 items, "not ready") led the
 maintainer to choose: revise everything and requalify. During the revision the maintainer also
 approved two xhci98 proposals, which changed the layout: (a) the 9x locator is
 `HKLM\System\CurrentControlSet\Services\nvme98` `LinkState` = {`'N98L'`, 1, table linear address,
@@ -393,7 +393,7 @@ released, an open request answered) then `AckGeneration` last. On 9x nvme98 does
 `BusChangeDetected`: removal is the CM's CONFIGMG call, and a 9x port rescan in that window is
 unmeasured. The NT receiver (interface 2) is not changed here.
 
-### Per finding
+### Item by item
 
 | # | Finding | Change (header rule; receiver `src/q9x.c`; CM `tests/cm9x/cm9x.c`) | Qualified by |
 |---|---|---|---|
@@ -453,7 +453,7 @@ Emulator: usb4-emu `src/qemu/build` of 2026-10-15 13:46 copied to `E:\nvme98-vm\
 
 ## Interface 3 re-review
 
-Codex re-reviewed `qual-9x` at 531648a: not adoption-ready (3 P1, 6 P2). It confirmed the
+The re-review of `qual-9x` at 531648a found it not adoption-ready (3 P1, 6 P2). It confirmed the
 sizes and offsets, the separation from NT interface 2, the rejection of a stale HKLM locator
 without the proof, and the single-writer/exchange design. Fix commits on `qual-9x`: 13e2787,
 49927d6, 075e830, dcb9f0f, 08c92e0, 386fb85, 84c4600, 2861a76, f40f6d1, 3d1433e, 074b74b, 44119ce, a79d154 and this record.
@@ -461,11 +461,11 @@ Evidence: [Q-9x/rerev/](Q-9x/rerev/).
 
 ### Decisions (2026-10-15)
 
-- **P1-2: option A, chosen by the user.** The table address comes from the CM's resident
+- **Table authority: option A, chosen by the user.** The table address comes from the CM's resident
   provider. The proof key `HKEY_DYN_DATA\Nvme98LinkState` carries a second value,
   `TableLinear`, beside `BootCookie`. nvme98 requires it to equal the HKLM locator's address,
   size and cookie, or the channel is unavailable (rc 14).
-- **P2-4: option 1, accepted.** Without a CM there is no independent current-boot authority.
+- **Boot reference: option 1, accepted.** Without a CM there is no independent current-boot authority.
   An invalid boot-block reference counts as a new boot, recorded as a residual. With a CM, a
   reference recorded under this boot's proof cookie whose block no longer checks out fails
   closed.
@@ -481,24 +481,24 @@ Evidence: [Q-9x/rerev/](Q-9x/rerev/).
 | When written | answered by the provider from the CM's resident memory for the whole boot. It is created in the same `_RegCreateDynKey` call as `BootCookie` (two values), after the table is filled and before the HKLM locator is written (R3a, then R3b); never changed in that boot |
 | nvme98 checks | `BootCookie` == locator `Cookie` (rc 11 otherwise); `TableLinear` value present, 12 bytes, and each field equal to the locator's (rc 14 otherwise); then the address checks of R5c |
 
-### Per finding
+### Item by item
 
 | # | Finding | Change | Qualified by (98 SE / Me) |
 |---|---|---|---|
-| P1-1 | The ISR could still use queues after the block was released | `Q9DetachQueues` closes the queue gate with a locked exchange and only then clears every queue, PRP, bounce and uncached pointer. This happens before any RELEASED or `_PageFree` (terminal handshake, evidence 2, `HwAdapterState(FALSE)`). `HwInterrupt` and both completion processors return at a closed gate, which is counted. All of these run only from the timer, `HwStartIo` or `HwAdapterState`, which SCSIport never runs concurrently with the ISR | S1: instance A acknowledges CLEAN, detaches and releases. Its devnode stays registered for 40 s (`SkipQuery`, `DelayRemoveMs`). B, the other tunnel's first load, claims A's block (record 0, same linear and physical address), then writes and verifies 1 MiB. A's own `HwInterrupt` was called 391 (98 SE) / 350+ (Me) times during that window (`IsrProbe`): every call returned FALSE with null queue pointers. 9x left the endpoint behind a bridge at 00:09 (same PIRQ link) disabled (CONFIGMG problem 0x1D), so the shared-line invocation is simulated by `IsrProbe` |
-| P1-2 | Table address authority and residency | Option A (above). nvme98 also requires every table page present and writable, and locks them with `_LinPageLock` once per boot and table. R5 states the trust boundary | S7: hostile 11 (the provider's address differs) and 12 (locator rewritten with the right cookie) are both rejected with rc 14, and the disk still works without the channel |
-| P1-3 | DriverEntry succeeded without the pin | The pin device is created in DriverEntry; if that fails, DriverEntry fails and nothing is published. The publisher thread starts only with the pin (R4) | 98 SE v3: with `FailPin=1`, DriverEntry failed, nothing was published and no enumeration happened. After `FailPin=0` and a restart, the CM published normally |
-| P2-4 | An invalid boot-block reference reset the budget | The reference records the proof cookie (`BootCookie`). A reference of this boot whose block does not check out fails closed. Otherwise this is a first initialisation; without a CM that is the documented residual | S8 (`CorruptAcct` damages this boot's block): the next load reports "the reference was recorded in this boot ... accounting lost or corrupt, fail closed" and `HwFindAdapter` fails before any CC.EN write. Every fresh boot initialises a new block |
-| P2-5 | No overall acknowledgement budget | One budget measured from first sight of the request: disable forced by 5750 ms, decisions due by 8750 ms (12000 - 250 - 2 x 1500). R10 calls 250 ms a requested interval and adds `NVME98LS9X_LATE_MS`. **A fall-through bug was found and fixed** (2861a76): after a step change inside one call, the elapsed time underflowed, so a disable that needed 4 s was reported FAILED at once | S5: see the results table and the clock note |
-| P2-6 | One port's wait blocked the other's statements | Every CM wait is a per-port state of the one polling loop: link and removal acknowledgements, overlap/retry windows, delay before removal, `Remove_SubTree` retries, D2 re-enumeration, teardown. The CONFIGMG calls that can wait (`Query_Remove_SubTree`, `Remove_SubTree`, `Reenumerate_DevNode`) run on a per-port worker thread (074b74b). Header R6e, with the residual below | S2 on 98 SE: port 1's `DOWN_QUIESCED` came about 1 ms after its slot emptied while port 0 was still in its 14 s acknowledgement wait. Port 1 was acknowledged and removed before port 0 timed out. S3: same during port 0's `Remove_SubTree` retries ([Q-9x/rerev/98-v1-S2-S3-cm.txt](Q-9x/rerev/98-v1-S2-S3-cm.txt)) |
-| P2-7 | O6 missing in the isolated branch | One O6 path for CLEAN, ISOLATED_NOT_CLEAN and cancel: after 30 s the CM tears down, keeps the devnode and retries the removal until it succeeds; the next UP gets a new generation. `FailRemove=N` injects failures | S3 (CLEAN) and S4 (ISOLATED_NOT_CLEAN) on 98 SE: E517 after about 30 s, teardown, removal succeeded on the next real attempt, then UP with a new generation |
-| P2-8 | FAILED never detected a presence loss | Presence is polled in FAILED; `HwResetBus` enters GONE on all-ones from any non-terminal state; QUIESCED and STOPPED never enter GONE | S6 on 98 SE: a read was held and the reset not acknowledged (FAILED with the SRB held). Link loss with `NoFlag` (no evidence) gave FAILED -> GONE, then the MD-1 deadline after 5055 ms completed the held SRB with the block OWNED |
-| P2-9 | The ordering checker over-counted | `q9log.py` correlates port, bus and generation (new stage arguments carry them). An acknowledgement and a timeout are distinct. NO-INSTANCE needs the port's retirement between its last UP and the statement. Statements without QUIESCED or before the cutoff are NEGATIVE | Recomputed from the raw traces ([Q-9x/rerev/ordering.txt](Q-9x/rev/ordering.txt)): no FAIL. The earlier "12/12 pass" counted only true acknowledgements, but the decoder that produced it would also have passed timeouts; with the new decoder the hostile-mode and old-receiver statements are TIMEOUT, as they must be |
+| ISR after release | The ISR could still use queues after the block was released | `Q9DetachQueues` closes the queue gate with a locked exchange and only then clears every queue, PRP, bounce and uncached pointer. This happens before any RELEASED or `_PageFree` (terminal handshake, evidence 2, `HwAdapterState(FALSE)`). `HwInterrupt` and both completion processors return at a closed gate, which is counted. All of these run only from the timer, `HwStartIo` or `HwAdapterState`, which SCSIport never runs concurrently with the ISR | S1: instance A acknowledges CLEAN, detaches and releases. Its devnode stays registered for 40 s (`SkipQuery`, `DelayRemoveMs`). B, the other tunnel's first load, claims A's block (record 0, same linear and physical address), then writes and verifies 1 MiB. A's own `HwInterrupt` was called 391 (98 SE) / 350+ (Me) times during that window (`IsrProbe`): every call returned FALSE with null queue pointers. 9x left the endpoint behind a bridge at 00:09 (same PIRQ link) disabled (CONFIGMG problem 0x1D), so the shared-line invocation is simulated by `IsrProbe` |
+| Table authority | Table address authority and residency | Option A (above). nvme98 also requires every table page present and writable, and locks them with `_LinPageLock` once per boot and table. R5 states the trust boundary | S7: hostile 11 (the provider's address differs) and 12 (locator rewritten with the right cookie) are both rejected with rc 14, and the disk still works without the channel |
+| Pin | DriverEntry succeeded without the pin | The pin device is created in DriverEntry; if that fails, DriverEntry fails and nothing is published. The publisher thread starts only with the pin (R4) | 98 SE v3: with `FailPin=1`, DriverEntry failed, nothing was published and no enumeration happened. After `FailPin=0` and a restart, the CM published normally |
+| Boot reference | An invalid boot-block reference reset the budget | The reference records the proof cookie (`BootCookie`). A reference of this boot whose block does not check out fails closed. Otherwise this is a first initialisation; without a CM that is the documented residual | S8 (`CorruptAcct` damages this boot's block): the next load reports "the reference was recorded in this boot ... accounting lost or corrupt, fail closed" and `HwFindAdapter` fails before any CC.EN write. Every fresh boot initialises a new block |
+| Acknowledgement budget | No overall acknowledgement budget | One budget measured from first sight of the request: disable forced by 5750 ms, decisions due by 8750 ms (12000 - 250 - 2 x 1500). R10 calls 250 ms a requested interval and adds `NVME98LS9X_LATE_MS`. **A fall-through bug was found and fixed** (2861a76): after a step change inside one call, the elapsed time underflowed, so a disable that needed 4 s was reported FAILED at once | S5: see the results table and the clock note |
+| Port independence | One port's wait blocked the other's statements | Every CM wait is a per-port state of the one polling loop: link and removal acknowledgements, overlap/retry windows, delay before removal, `Remove_SubTree` retries, D2 re-enumeration, teardown. The CONFIGMG calls that can wait (`Query_Remove_SubTree`, `Remove_SubTree`, `Reenumerate_DevNode`) run on a per-port worker thread (074b74b). Header R6e, with the residual below | S2 on 98 SE: port 1's `DOWN_QUIESCED` came about 1 ms after its slot emptied while port 0 was still in its 14 s acknowledgement wait. Port 1 was acknowledged and removed before port 0 timed out. S3: same during port 0's `Remove_SubTree` retries ([Q-9x/rerev/98-v1-S2-S3-cm.txt](Q-9x/rerev/98-v1-S2-S3-cm.txt)) |
+| Isolated O6 | O6 missing in the isolated branch | One O6 path for CLEAN, ISOLATED_NOT_CLEAN and cancel: after 30 s the CM tears down, keeps the devnode and retries the removal until it succeeds; the next UP gets a new generation. `FailRemove=N` injects failures | S3 (CLEAN) and S4 (ISOLATED_NOT_CLEAN) on 98 SE: E517 after about 30 s, teardown, removal succeeded on the next real attempt, then UP with a new generation |
+| Presence in FAILED | FAILED never detected a presence loss | Presence is polled in FAILED; `HwResetBus` enters GONE on all-ones from any non-terminal state; QUIESCED and STOPPED never enter GONE | S6 on 98 SE: a read was held and the reset not acknowledged (FAILED with the SRB held). Link loss with `NoFlag` (no evidence) gave FAILED -> GONE, then the MD-1 deadline after 5055 ms completed the held SRB with the block OWNED |
+| Decoder | The ordering checker over-counted | `q9log.py` correlates port, bus and generation (new stage arguments carry them). An acknowledgement and a timeout are distinct. NO-INSTANCE needs the port's retirement between its last UP and the statement. Statements without QUIESCED or before the cutoff are NEGATIVE | Recomputed from the raw traces ([Q-9x/rerev/ordering.txt](Q-9x/rev/ordering.txt)): no FAIL. The earlier "12/12 pass" counted only true acknowledgements, but the decoder that produced it would also have passed timeouts; with the new decoder the hostile-mode and old-receiver statements are TIMEOUT, as they must be |
 
 ### Corrections to the "Interface 3 revision" record
 
 - "R11 O6 ... implemented ... not provoked" was wrong twice: O6 was missing from the
-  isolated/cancel branch (P2-7), and it is now provoked (S3, S4).
+  isolated/cancel branch (isolated O6), and it is now provoked (S3, S4).
 - The ordering count is superseded by the recomputation above.
 - The two 98 SE restarts that "did not complete" (r5, r6) and the same symptom in prep4 have a
   cause in the test environment, not the driver. Explorer restores the folder window of a
@@ -516,16 +516,16 @@ are in [Q-9x/rerev/](Q-9x/rerev/). Emulator: the usb4-emu build of 2026-10-15 13
 
 | Scenario | 98 SE | Me |
 |---|---|---|
-| S1 (P1-1): A terminal and released, B reuses its block, A's ISR invoked | pass (v1, v7: 392 gate-closed calls, all FALSE, null pointers; B's 1 MiB write and verify OK) | pass (v2, v8: 600+ calls, same) |
-| S2 (P2-6): port 1 surprise while port 0 waits (NoAck) | pass (v1, v7: port 1 `DOWN_QUIESCED` 3-4 ms after the slot emptied, acknowledged, removed; port 0 E3FF at 14.1 s) | port 1 statement and acknowledgement pass; port 0's timeout was delayed by the system-modal residual (below) |
-| S3 (P2-7, P2-6): CLEAN, `Remove_SubTree` failing (O6), port 1 surprise during the retries | pass (v7, v9: E517 at 28.6 s, port 1 published and removed during the retries, then UP generation +1) | pass (v8) |
-| S4 (P2-7): ISOLATED_NOT_CLEAN with O6 | pass (v7: outcome 2 after 2256 ms, E517, teardown, retired) | pass (v8) |
-| S5 (P2-5): Flush 1.9 s + SHST 1.9 s + RDY 4 s | CLEAN after 2883 ms guest (v6) | CLEAN after 2763 ms guest (v8) |
-| S5 (P2-5): SHST never + RDY never | FAILED after 7315 ms (v6) and 7326 ms (v4), E303 | FAILED after 7254 ms, E303 (v8) |
-| S6 (P2-8): FAILED with a read held, link lost without a statement | pass (v1, v7: FAILED -> GONE on all-ones, MD-1 after 5018 ms, held SRB completed, block OWNED) | pass (v8: MD-1 after 5001 ms) |
-| S7 (P1-2): hostile 11 and 12 | pass (v4: rc 14 for both; hostile 0 binds) | pass (v10: rc 14 for both) |
-| S8 (P2-4): this boot's block damaged | pass (v4: fail closed before CC.EN) | pass (v10: same) |
-| FailPin (P1-3) | pass (v3) | not run (same code) |
+| S1 (ISR after release): A terminal and released, B reuses its block, A's ISR invoked | pass (v1, v7: 392 gate-closed calls, all FALSE, null pointers; B's 1 MiB write and verify OK) | pass (v2, v8: 600+ calls, same) |
+| S2 (port independence): port 1 surprise while port 0 waits (NoAck) | pass (v1, v7: port 1 `DOWN_QUIESCED` 3-4 ms after the slot emptied, acknowledged, removed; port 0 E3FF at 14.1 s) | port 1 statement and acknowledgement pass; port 0's timeout was delayed by the system-modal residual (below) |
+| S3 (isolated O6, port independence): CLEAN, `Remove_SubTree` failing (O6), port 1 surprise during the retries | pass (v7, v9: E517 at 28.6 s, port 1 published and removed during the retries, then UP generation +1) | pass (v8) |
+| S4 (isolated O6): ISOLATED_NOT_CLEAN with O6 | pass (v7: outcome 2 after 2256 ms, E517, teardown, retired) | pass (v8) |
+| S5 (acknowledgement budget): Flush 1.9 s + SHST 1.9 s + RDY 4 s | CLEAN after 2883 ms guest (v6) | CLEAN after 2763 ms guest (v8) |
+| S5 (acknowledgement budget): SHST never + RDY never | FAILED after 7315 ms (v6) and 7326 ms (v4), E303 | FAILED after 7254 ms, E303 (v8) |
+| S6 (presence in FAILED): FAILED with a read held, link lost without a statement | pass (v1, v7: FAILED -> GONE on all-ones, MD-1 after 5018 ms, held SRB completed, block OWNED) | pass (v8: MD-1 after 5001 ms) |
+| S7 (table authority): hostile 11 and 12 | pass (v4: rc 14 for both; hostile 0 binds) | pass (v10: rc 14 for both) |
+| S8 (boot reference): this boot's block damaged | pass (v4: fail closed before CC.EN) | pass (v10: same) |
+| FailPin (pin) | pass (v3) | not run (same code) |
 
 Ordering (`q9log.py`, raw traces): 98 SE v7 PASS 5, NO-INSTANCE 1, NEGATIVE 1 (`NoFlag`);
 v9 PASS 2; Me v8 PASS 6, NO-INSTANCE 2, NEGATIVE 1; Me v10 PASS 1, NO-INSTANCE 1, TIMEOUT 2 (the
@@ -549,7 +549,7 @@ how the budget relates to wall time.
   detection and MD-1 do not depend on the CM. Recorded as residual R6e. The per-port worker
   still keeps a slow CONFIGMG call from stalling other ports when no such message is shown;
   no such call occurred in these runs.
-- P2-4 without a CM: first initialisation (decision above).
+- Boot reference without a CM: first initialisation (decision above).
 - Shared-IRQ invocation of a detached instance is simulated (`IsrProbe`), because 9x left
   the endpoint behind a bridge at 00:09 disabled (CONFIGMG problem 0x1D) on both OSes.
 - Me typing through QMP loses keystrokes under host load. Test switches are now confirmed
@@ -557,9 +557,10 @@ how the budget relates to wall time.
 
 ## Interface 3 second re-review
 
-Codex re-reviewed `qual-9x` at e95e93b. It found P1-1, P1-2, P1-3 and P2-8 fixed and the
-rest not adoption-ready: a P1 in the CM's worker handoff, plus P2-4, P2-5, P2-7, the CM's
-handling of late acknowledgements, and P2-9. Fix commits: 0e33818 (receiver, header,
+The second re-review of `qual-9x` at e95e93b found the ISR after release, table authority,
+pin and presence in FAILED fixed and the rest not adoption-ready: a P1 in the CM's worker
+handoff, plus the boot reference, the acknowledgement budget, isolated O6, the CM's
+handling of late acknowledgements, and the decoder. Fix commits: 0e33818 (receiver, header,
 CM), 0a7aca9 (decoder, recomputed ordering), 3ce3f52 (`BudgetSkewMs` test switch), and this record. Evidence:
 [Q-9x/rerev2/](Q-9x/rerev2/).
 
@@ -575,10 +576,10 @@ CM), 0a7aca9 (decoder, recomputed ordering), 3ce3f52 (`BudgetSkewMs` test switch
 
 ### Internal choices (taken on the recommended option, recorded here)
 
-- **P2-5:** chose thresholds that allow for both polling intervals (8500/5500 ms). The
+- **Acknowledgement budget:** chose thresholds that allow for both polling intervals (8500/5500 ms). The
   alternative, arming the timer at the transaction deadline, was not used: the 9x timer
   is periodic in this receiver, and the thresholds keep one code path.
-- **P2-4:** the reference gets a check word and moves to a new value, `AcctRef` (the
+- **Boot reference:** the reference gets a check word and moves to a new value, `AcctRef` (the
   unchecked `Acct` of earlier builds is ignored). A second value, `AcctBoot` (REG_DWORD),
   records the proof cookie of the boot that last initialised accounting, and is written
   before `AcctRef`. With a CM proof present, the load fails closed on any of these:
@@ -593,24 +594,24 @@ CM), 0a7aca9 (decoder, recomputed ordering), 3ce3f52 (`BudgetSkewMs` test switch
   - **Residual with a CM:** deleting both values within a boot cannot be told apart from a
     first installation. A registry-only record cannot detect its own complete removal.
   - **Residual without a CM:** unchanged (first decision).
-- **P2-7:** O6 with a call still running reports E5FF ("still running") and keeps the
+- **Isolated O6:** O6 with a call still running reports E5FF ("still running") and keeps the
   call. Its success later retires the devnode as "removed after link down".
-- **P2-9:** a transaction ends at the port's next statement or UP. The verdicts are:
+- **Decoder:** a transaction ends at the port's next statement or UP. The verdicts are:
   - INCOMPLETE: a needed event is missing (CM wait result, receipt, acknowledgement or
     removal).
   - FAIL: a receiver acknowledgement before a CM timeout, or events out of order.
   - TIMEOUT: requires a timeout event and a removal after it.
 
-### Per finding
+### Item by item
 
 | Finding | Change | Qualified by |
 |---|---|---|
-| P1 worker handoff | R6f state word and operation id (`CS_IDLE/SUBMITTED/RUNNING/DONE`, `CallId`/`DoneId`). The worker moves SUBMITTED -> RUNNING with `lock cmpxchg`, so it cannot run an operation twice. A DONE result whose id, operation or devnode differs is discarded and logged (0xBB). | W1 on both OSes (below): every result taken was the one submitted, no 0xBB discard, two concurrent slow calls on two ports. The interleaving Codex modelled can no longer happen by construction: the writer never writes the state while the worker owns it. |
-| P2-5 budget | 8500/5500 ms (R10). | S5D and S5E (below). |
-| P2-4 accounting | As above; `CorruptAcct` 2 (reference truncated) and 3 (reference cookie damaged). | S8B: fails closed on both OSes for both variants. The earlier S8 (block damaged) is unchanged. |
-| P2-7 O6 | Elapsed deadline (`O6At`); a running call is kept (`RmPhase` 1). `SlowRemoveMs` test switch (the worker delays each `Remove_SubTree`). | W1. |
+| P1 worker handoff | R6f state word and operation id (`CS_IDLE/SUBMITTED/RUNNING/DONE`, `CallId`/`DoneId`). The worker moves SUBMITTED -> RUNNING with `lock cmpxchg`, so it cannot run an operation twice. A DONE result whose id, operation or devnode differs is discarded and logged (0xBB). | W1 on both OSes (below): every result taken was the one submitted, no 0xBB discard, two concurrent slow calls on two ports. The interleaving the re-review modelled can no longer happen by construction: the writer never writes the state while the worker owns it. |
+| Acknowledgement budget | 8500/5500 ms (R10). | S5D and S5E (below). |
+| Boot reference (accounting) | As above; `CorruptAcct` 2 (reference truncated) and 3 (reference cookie damaged). | S8B: fails closed on both OSes for both variants. The earlier S8 (block damaged) is unchanged. |
+| Isolated O6 | Elapsed deadline (`O6At`); a running call is kept (`RmPhase` 1). `SlowRemoveMs` test switch (the worker delays each `Remove_SubTree`). | W1. |
 | Late acknowledgements | `EjAckStep` and `LinkAckStep` check the deadline first; a late sighting is logged (0xBD, 0xBC). | By construction. No run produced a late sighting. |
-| P2-9 decoder | Transaction boundaries, INCOMPLETE, a TIMEOUT that requires a removal. | Codex's three in-memory cases now give INCOMPLETE. All gate traces were recomputed ([Q-9x/rev/ordering.txt](Q-9x/rev/ordering.txt)): no FAIL, no INCOMPLETE. |
+| Decoder | Transaction boundaries, INCOMPLETE, a TIMEOUT that requires a removal. | The re-review's three in-memory cases now give INCOMPLETE. All gate traces were recomputed ([Q-9x/rev/ordering.txt](Q-9x/rev/ordering.txt)): no FAIL, no INCOMPLETE. |
 | R6e wording | Narrowed. | n/a |
 
 ### Results
@@ -662,8 +663,8 @@ ran about 3x slower than QEMU's virtual clock under host load: S5E took 26.4 s (
 
 ## Interface 3 third re-review
 
-Codex re-reviewed `qual-9x` at 06721f2. It found these fixed: the P1 worker handoff, P2-5
-(conditional on the 1500 ms lateness allowance), the late-acknowledgement rule and R6e.
+The third re-review of `qual-9x` at 06721f2 found these fixed: the P1 worker handoff, the
+acknowledgement budget (conditional on the 1500 ms lateness allowance), the late-acknowledgement rule and R6e.
 No P0 or P1 remain. Five P2 items were left, plus an evidence-table error. The fixes are
 in commit 7f25071, plus this record. Evidence: [Q-9x/rerev3/](Q-9x/rerev3/).
 
@@ -671,7 +672,7 @@ in commit 7f25071, plus this record. Evidence: [Q-9x/rerev3/](Q-9x/rerev3/).
 the deadline counts for the O6 retries, never as a clean removal". This is a CM behaviour
 xhci98 must follow. Nothing else in the header changed.
 
-| # | Finding | Change | Qualified by |
+| # | Issue | Change | Qualified by |
 |---|---|---|---|
 | 1 | With `AcctRef` absent, an `AcctBoot` query error or malformed marker restarted accounting | With a CM proof present and `AcctRef` absent, accounting starts only if `AcctBoot` is also absent ("not found"), or is a well-formed REG_DWORD naming another boot (corrected in the fourth re-review: the third re-review said "only when both are not found"). A marker lookup error, wrong type or wrong size fails closed, and so does a marker naming this boot. New test switch `CorruptAcct` 4 deletes `AcctRef` (documented `_RegDeleteValue`, VMM 0x14F) and rewrites `AcctBoot` as 8 bytes of REG_BINARY. | S8B variant 4 on both OSes: "reference missing and the boot marker lookup failed ... fail closed", and `HwFindAdapter` fails before CC.EN. The marker query returns an error for the oversized value, so the "lookup failed" branch fired rather than the "malformed" one; both fail closed. The logged rc is the `AcctRef` lookup's (2, not found). |
 | 2 | A removal that completes after the O6 deadline but before the writer's next poll could be taken as clean | The expired deadline wins. The worker records `DoneAt`, and a result is taken as this attempt's only if it completed before the deadline. A later one goes to the O6 retries. New test switch `WriterStallMs` stalls the writer once across the deadline. | W2 on both OSes: `SlowRemoveMs` 30100 and `WriterStallMs` 1000. The call completed during the stall, after the deadline. Result: O6, E5FF, "kept for the retries", then "removed after link down"; never C1EA. |
@@ -692,13 +693,13 @@ repeated alone as x2.
 
 ## Interface 3 fourth re-review
 
-Codex re-reviewed `qual-9x` at 97f0050 and found no P0 or P1. These are fixed: the
+The fourth re-review of `qual-9x` at 97f0050 found no P0 or P1. These are fixed: the
 `AcctBoot` handling, the bus snapshot, accepting late acknowledgements, and the w6 row.
 The header diff is the O6 clause only. Four P2 items remained, all in the cm9x stand-in or
 the decoder; the nvme98 receiver needed no change. Fix commit: 73560cc, plus this record.
-Evidence: [Q-9x/rerev4/](Q-9x/rerev4/). **`nvme98cm.h` is unchanged in this round.**
+Evidence: [Q-9x/rerev4/](Q-9x/rerev4/). **`nvme98cm.h` is unchanged in this re-review.**
 
-| # | Finding | Change | Qualified by |
+| # | Issue | Change | Qualified by |
 |---|---|---|---|
 | 1 | The O6 deadline was sampled before the result was taken, so a writer preempted in between could still report a late success as clean | Every `Remove_SubTree` result is checked against the deadline at the moment it is taken (`DoneAt` against `O6At`, logged as 0xB6 0xAE00\|port). One completed at or after the deadline goes to O6, and the retries apply it ("removed after link down"); never C1EA. New test switch `WriterStall2Ms` stalls the writer between the deadline check and taking the result. | W3 on both OSes, with `SlowRemoveMs` 30100 and `WriterStall2Ms` 1000. The result was taken with DoneAt 135 ms (98 SE) and 125 ms (Me) after O6At. Then: "completed after the O6 deadline", O6, E5FF, "late result, applied after O6", "removed after link down". |
 | 2 | `early` was computed before the legacy removals were added | Early removals are computed over every candidate. An old trace's portless `Remove_SubTree` before the CM's result gives AMBIGUOUS. | Synthetic case |

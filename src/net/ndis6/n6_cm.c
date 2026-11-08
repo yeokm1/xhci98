@@ -80,14 +80,14 @@ VOID Net6CmClose(PNET6_ADAPTER a)
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
-VOID Net6CmQuery(PNET6_ADAPTER a, PXHCI_CM_NET_INFO i)
+ULONG Net6CmQuery(PNET6_ADAPTER a, PXHCI_CM_NET_INFO i)
 {
     if (a->CmHeld) {
-        NetCmIfQuery(&a->Cm, i);
-    } else {
-        Net6Zero(i, sizeof(*i));
-        i->Size = sizeof(*i);
+        return NetCmIfQuery(&a->Cm, i);
     }
+    Net6Zero(i, sizeof(*i));
+    i->Size = sizeof(*i);
+    return 0;
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */

@@ -9,8 +9,8 @@
 #  A bring-up: the namespace is served, not refused (0x43, no 0x44).
 #  U unaligned write and verify (37 KiB, then 512 bytes), the guest answering throughout.
 #  R surprise removal with DOWN_QUIESCED on the 4 KiB namespace; re-arrival.
-# The 512-byte presentation and its read-modify-write are not implemented yet (PLAN, 4Kn
-# support after 0.4.0.0; README known limit: the drive's own sector size is reported), so the
+# The 512-byte presentation and its read-modify-write are not implemented yet (PLAN 1.7;
+# README, "Known limits": the namespace's own sector size is reported), so the
 # data checks are INCONCLUSIVE until then: their result is recorded, not judged. What is judged
 # now: the bring-up, no hang (every command answers), no double completion, the removal path.
 # Once translation lands, the data checks become PASS/FAIL (the OS sees 512-byte sectors and

@@ -477,8 +477,7 @@ VOID HcdLogFlush(PHCD_CONTROLLER hc, ULONG reason, ULONG counters)
 #ifdef XHCI_DBG_TRACE
 /*
  * One site per field, under the label matrix-hcd.psd1 names it by
- * (scripts/vm-matrix/README.md lists them; 55 since Phase 29). Change-gated,
- * so an idle poll
+ * (scripts/vm-matrix/README.md lists them). Change-gated, so an idle poll
  * prints nothing; the matrix reads the block, not these lines.
  * IRQL: PASSIVE_LEVEL (the controller thread).
  */
@@ -686,5 +685,9 @@ VOID HcdCountersPoll(PHCD_CONTROLLER hc)
     XHCI_DBG_VALUE_CHANGED("iso page largest request packets",
                            hc->IsoPageLargestPackets);
     XHCI_DBG_VALUE_CHANGED("iso BEI TDs", hc->IsoBeiTds);
+    /* Record 13 section 10.5.2: departed PDOs started on 98 SE and ME. */
+    XHCI_DBG_VALUE_CHANGED("pdo ghost starts", hc->PdoGhostStarts);
+    XHCI_DBG_VALUE_CHANGED("pdo ghost answers", hc->PdoGhostAnswers);
+    XHCI_DBG_VALUE_CHANGED("pdo ghost held", hc->PdoGhostHeld);
 #endif
 }

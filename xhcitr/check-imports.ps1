@@ -2,17 +2,39 @@
 <#
 check-imports.ps1 - the import gate of XHCITR.EXE and XHCITR64.EXE (design
 record 25 section 9), xhciinst\check-imports.ps1 with this tool's list:
-reads the PE image's import directory itself and lists every module it
-names, then requires exactly KERNEL32, USER32, GDI32, ADVAPI32, SHELL32,
-COMCTL32 and COMDLG32 (each present on Windows 98 SE) and no delay-load
-imports. Any other name - whatever its characters (api-ms-win-*.dll, a
-name with dots) - fails, and so does an image whose import table cannot
-be read. selftest.cmd runs it.
+reads the PE image's import directory itself, every module it names and
+every function it imports from each, and requires:
 
-Exit code 0 = those seven modules alone; 1 = anything else.
+  - exactly KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and
+    COMDLG32 (each present on Windows 98 SE), and no delay-load imports;
+  - each import, by name (or by ordinal, as "#<n>"), a row of
+    xhcitr-imports.allow for the image's architecture (x86 or amd64, from
+    the image's own header), and every such row imported (the list is the
+    image's, not a superset of it). A module name alone would let through
+    a function that only NT exports, and XHCITR.EXE would then not start
+    on Windows 98 SE; the x86 rows are therefore the 98 SE baseline (the
+    list's header says where they come from), the amd64 rows XP x64's;
+  - a windows-subsystem image whose subsystem version is the build's:
+    4.0 for x86 (/SUBSYSTEM:WINDOWS,4.0, which Windows 98 SE loads), 5.2
+    for amd64 (/SUBSYSTEM:WINDOWS,5.02, XP x64's).
+
+Any other module name - whatever its characters (api-ms-win-*.dll, a name
+with dots) - fails, and so does an image whose import table cannot be read.
+selftest.cmd runs it.
+
+  check-imports.ps1 -Path XHCITR.EXE          the gate
+  check-imports.ps1 -Path XHCITR.EXE -List    print each import as a list row
+
+Exit code 0 = those seven modules and the list's functions alone; 1 =
+anything else.
 #>
-param([Parameter(Mandatory = $true)][string]$Path)
+param([Parameter(Mandatory = $true)][string]$Path,
+      [string]$Allow = '',
+      [switch]$List)
 $ErrorActionPreference = 'Stop'
+if ($Allow -eq '') {
+    $Allow = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'xhcitr-imports.allow'
+}
 
 function Fail([string]$why) {
     Write-Output "ERROR: ${Path}: $why"
@@ -30,11 +52,18 @@ function U32([int]$o) { if ($o + 4 -gt $b.Length) { Fail 'truncated image' }; re
 if ($b.Length -lt 64 -or (U16 0) -ne 0x5A4D) { Fail 'not an MZ image' }
 $pe = [int](U32 0x3C)
 if ((U32 $pe) -ne 0x00004550) { Fail 'not a PE image' }
+$machine = U16 ($pe + 4)
 $nsec = [int](U16 ($pe + 6))
 $optSize = [int](U16 ($pe + 20))
 $opt = $pe + 24
 $magic = U16 $opt
-if ($magic -eq 0x10B) { $dd = $opt + 96 } elseif ($magic -eq 0x20B) { $dd = $opt + 112 } else { Fail 'unknown optional header' }
+if ($magic -eq 0x10B -and $machine -eq 0x14C) {
+    $dd = $opt + 96; $arch = 'x86'; $thunk = 4; $subsys = '4.0'
+} elseif ($magic -eq 0x20B -and $machine -eq 0x8664) {
+    $dd = $opt + 112; $arch = 'amd64'; $thunk = 8; $subsys = '5.2'
+} else {
+    Fail ("an unknown machine or optional header (0x{0:X4}, 0x{1:X4})" -f $machine, $magic)
+}
 $ndirs = [int](U32 ($dd - 4))
 $secs = $opt + $optSize
 
@@ -65,6 +94,7 @@ if ($impRva -eq 0) { Fail 'no import directory' }
 if ($ndirs -gt 13 -and (U32 ($dd + 13 * 8)) -ne 0) { Fail 'it has delay-load imports' }
 
 $names = @()
+$pairs = @()
 $d = RvaToOff $impRva
 for ($n = 0; ; $n++) {
     if ($n -gt 256) { Fail 'an import table without its end' }
@@ -74,16 +104,95 @@ for ($n = 0; ; $n++) {
     $orig = U32 $e
     if ($nameRva -eq 0 -and $first -eq 0 -and $orig -eq 0) { break }
     if ($nameRva -eq 0) { Fail 'an import entry without a name' }
-    $names += (CString (RvaToOff $nameRva))
+    $mod = (CString (RvaToOff $nameRva)).ToUpperInvariant()
+    $names += $mod
+    # The lookup table, or the address table where a linker gave none (the
+    # two are equal in an unbound image).
+    $t = $orig
+    if ($t -eq 0) { $t = $first }
+    if ($t -eq 0) { Fail "$mod has no import lookup table" }
+    $to = RvaToOff $t
+    for ($k = 0; ; $k++) {
+        if ($k -gt 4096) { Fail "$mod's lookup table has no end" }
+        $lo = U32 ($to + $thunk * $k)
+        $hi = 0
+        if ($thunk -eq 8) { $hi = U32 ($to + $thunk * $k + 4) }
+        if ($lo -eq 0 -and $hi -eq 0) { break }
+        if (($thunk -eq 4 -and $lo -ge 2147483648) -or
+            ($thunk -eq 8 -and $hi -ge 2147483648)) {
+            # By ordinal (COMCTL32's import library binds InitCommonControls
+            # as #17): listed as "#<ordinal>".
+            if (($thunk -eq 4 -and $lo -ge 2147549184) -or
+                ($thunk -eq 8 -and ($hi -ne 2147483648 -or $lo -ge 65536))) {
+                Fail "$mod has a malformed ordinal entry"
+            }
+            $pairs += ("{0} #{1}" -f $mod, ($lo % 65536))
+            continue
+        }
+        if ($thunk -eq 8 -and $hi -ne 0) { Fail "$mod has a malformed lookup entry" }
+        $pairs += ("{0} {1}" -f $mod, (CString ((RvaToOff $lo) + 2)))
+    }
+}
+
+# The pairs once each, compared exactly: the loader matches a function's
+# name case for case, so a hashtable's default (case-blind) comparer would
+# let a misspelt import through.
+$uniq = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal)
+foreach ($p in $pairs) { $uniq[$p] = 1 }
+$pairs = @($uniq.Keys | Sort-Object -CaseSensitive)
+
+if ($List) {
+    foreach ($p in $pairs) {
+        $m, $f = $p.Split(' ')
+        Write-Output ("{0,-6} {1,-13} {2}" -f $arch, $m, $f)
+    }
+    exit 0
+}
+
+if ((U16 ($opt + 68)) -ne 2) { Fail 'not a windows-subsystem image' }
+$sv = "{0}.{1}" -f (U16 ($opt + 48)), (U16 ($opt + 50))
+if ($sv -ne $subsys) {
+    Fail ("subsystem version $sv; an $arch image of this tool is $subsys")
 }
 
 $want = @('KERNEL32.DLL', 'USER32.DLL', 'GDI32.DLL', 'ADVAPI32.DLL',
           'SHELL32.DLL', 'COMCTL32.DLL', 'COMDLG32.DLL')
-$got = @($names | ForEach-Object { $_.ToUpperInvariant() })
+$got = @($names)
 $bad = @($got | Where-Object { $want -notcontains $_ })
 $missing = @($want | Where-Object { $got -notcontains $_ })
 if ($bad.Count -ne 0 -or $missing.Count -ne 0 -or $got.Count -ne $want.Count) {
     Fail ("imports " + ($names -join ', ') + "; exactly " + ($want -join ', ') + " are allowed")
 }
-Write-Output "${Path}: imports the seven allowed modules alone"
+
+# The list's rows for this architecture: "arch MODULE function"; a line
+# whose first character is '#' is a comment.
+if (-not (Test-Path -LiteralPath $Allow -PathType Leaf)) { Fail "no allowlist $Allow" }
+$rows = New-Object System.Collections.Hashtable ([StringComparer]::Ordinal)
+$ln = 0
+foreach ($line in (Get-Content -LiteralPath $Allow)) {
+    $ln++
+    $t = $line.Trim()
+    if ($t -eq '' -or $t.StartsWith('#')) { continue }
+    $f = @($t -split '\s+')
+    if ($f.Count -ne 3 -or @('x86', 'amd64') -notcontains $f[0]) {
+        Fail "${Allow} line ${ln} is not 'arch MODULE function'"
+    }
+    if ($f[0] -ne $arch) { continue }
+    $key = "{0} {1}" -f $f[1].ToUpperInvariant(), $f[2]
+    if ($rows.ContainsKey($key)) { Fail "${Allow} lists $arch $key twice" }
+    $rows[$key] = 0
+}
+if ($rows.Count -eq 0) { Fail "${Allow} has no row for $arch" }
+$unlisted = @()
+foreach ($p in $pairs) {
+    if ($rows.ContainsKey($p)) { $rows[$p] = 1 } else { $unlisted += $p }
+}
+$stale = @($rows.Keys | Where-Object { $rows[$_] -eq 0 } | Sort-Object -CaseSensitive)
+if ($unlisted.Count -ne 0) {
+    Fail ("imports what $Allow does not list for ${arch}: " + ($unlisted -join ', '))
+}
+if ($stale.Count -ne 0) {
+    Fail ("$Allow lists for $arch what the image no longer imports: " + ($stale -join ', '))
+}
+Write-Output ("${Path}: imports the seven allowed modules alone, " + $pairs.Count + " functions, each listed, subsystem $sv")
 exit 0

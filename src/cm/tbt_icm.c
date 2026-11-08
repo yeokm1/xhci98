@@ -230,7 +230,8 @@ static VOID tbtIcmLinkInfo(ULONG li, PTBT_ICM_ANNOUNCE out)
  * ICM 4.4 [obs] T:9, T:27886, T:34163 (61 DWs); Linux struct
  * icm_fr_event_device_connected, which Falcon and Alpine Ridge share:
  * header, ep_uuid, connection_key, connection_id, link_info, ep_name[55].
- * The name block is decoded from whatever of it the frame carries.
+ * A frame shorter than the whole of it is malformed (tbt_icm.h) and
+ * refused; the name block is the frame's last 55 DWs.
  */
 static BOOLEAN tbtIcmFrConnected(const ULONG *dw, ULONG words,
                                  PTBT_ICM_ANNOUNCE out)
@@ -3646,9 +3647,10 @@ static VOID tbtIcmXdNoPeer(PTBT_ICM icm, const TBT_FRAME *f)
 
 /*
  * The records' share of the thread, after the read in progress: the ends
- * pending, then the queued packets, each to the record at its route, then
- * (`tick`, the idle poll) each engine's resends and timeouts. Never inside
- * a wait.
+ * pending, then the packets queued when the pass began (no more: one
+ * answered may make requests whose receive queues more, tbt_u4cm.c's
+ * tbtU4XdTake), each to the record at its route, then (`tick`, the idle
+ * poll) each engine's resends and timeouts. Never inside a wait.
  */
 static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick)
 {
@@ -3656,13 +3658,16 @@ static VOID tbtIcmXdRun(PTBT_ICM icm, BOOLEAN tick)
     TBT_ROUTE r;
     PTBT_ICM_XD x;
     ULONG i;
+    ULONG left;
 
     if (!icm->NetOn || !icm->Bound || !tbtIcmXdNow2(icm)) {
         return;
     }
     tbtIcmXdEndPending(icm);
     icm->XdTaking = TRUE;
-    while (icm->XdCount != 0 && !icm->XdEndOwed) {
+    left = icm->XdCount;
+    while (left != 0 && icm->XdCount != 0 && !icm->XdEndOwed) {
+        left--;
         f = icm->XdQ[icm->XdHead];
         icm->XdHead = (icm->XdHead + 1) % TBT_ICM_XD_QUEUE;
         icm->XdCount--;

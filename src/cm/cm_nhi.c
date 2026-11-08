@@ -610,8 +610,8 @@ static const char *const cmU4CounterNames[] = {
     "u4.tmu.enabled", "u4.tmu.failures", "u4.pcie.built", "u4.pcie.failed",
     "u4.pcie.torn-down", "u4.pcie.lost", "u4.usb3.built", "u4.usb3.failed",
     "u4.usb3.torn-down", "u4.usb3.disconnected", "u4.detect.timeouts",
-    "u4.pending.timeouts", "u4.hca.timeouts", "u4.quarantined",
-    "u4.quarantine.lifted", "u4.ports.preserved", "u4.ports.held",
+    "u4.pending.timeouts", "u4.pending.ignored", "u4.hca.timeouts",
+    "u4.quarantined", "u4.quarantine.lifted", "u4.ports.preserved", "u4.ports.held",
     "u4.connects.deferred", "u4.resume.budgets-spent", "u4.ports.cleaned",
     "u4.dpr", "u4.hrr", "u4.quirks", "u4.statements.sent",
     "u4.statements.withheld",
@@ -779,8 +779,7 @@ VOID CmNhiRevoke(PCM_NHI nhi)
     /* An UP admitted before the revocation finishes its hand-over first;
      * none is admitted after it. The seam's call does not wait for this
      * PnP dispatch, so the wait ends. */
-    (VOID)KeWaitForSingleObject(&nhi->DeliverIdle, Executive, KernelMode,
-                                FALSE, NULL);
+    (VOID)CmWaitEvent(&nhi->DeliverIdle, 0);
     CmLogNote(nhi, "cm.live.revoked", nhi->Live.State);
 }
 
@@ -2976,8 +2975,6 @@ VOID CmNhiCounterLines(PCM_NHI nhi, UCHAR *out, ULONG room, PULONG at,
     }
 }
 
-/* The selection, on the thread. Sets StartStatus (a Code 10 refusal only
- * for BAR0 that cannot be mapped) and BindOwed. */
 /* The PnP start's network step done, under WorkLock (record 32 section
  * 12.8.15.16). <= DISPATCH_LEVEL. */
 static VOID cmStartDoneSet(PCM_NHI nhi, LONG v)
@@ -3149,6 +3146,8 @@ VOID CmNhiDeferPass(PCM_NHI nhi)
     }
 }
 
+/* The selection, on the thread. Sets StartStatus (a Code 10 refusal only
+ * for BAR0 that cannot be mapped) and BindOwed. */
 VOID CmNhiStartWork(PCM_NHI nhi)
 {
     ULONG mode;
@@ -3448,6 +3447,7 @@ static NTSTATUS cmNhiStart(PCM_NHI nhi, PIRP irp)
     /* The start's first record carries no handover tier (record 32
      * section 12.8.11): an earlier start's never stands for this one. */
     nhi->OscTier = 0;
+    nhi->OscFlags &= ~CM_OSCN_F_SAMEOFF;
     CmStatusOpen(nhi);
     CmLogApply(nhi);
     nhi->Starts++;

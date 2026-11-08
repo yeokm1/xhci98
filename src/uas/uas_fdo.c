@@ -278,6 +278,84 @@ static VOID uasReadLimit(USHORT vid, USHORT pid, UAS_DEVLIM_READ *r)
     }
 }
 
+/* RtlQueryRegistryValues' routine for one REG_DWORD: anything else is
+ * not taken, and the default stands. PASSIVE_LEVEL. */
+static NTSTATUS NTAPI uasTakeDword(PWSTR ValueName, ULONG ValueType,
+                                   PVOID ValueData, ULONG ValueLength,
+                                   PVOID Context, PVOID EntryContext)
+{
+    UAS_DEVLIM_READ *r;
+    PUCHAR from;
+
+    UNREFERENCED_PARAMETER(ValueName);
+    UNREFERENCED_PARAMETER(Context);
+    r = (UAS_DEVLIM_READ *)EntryContext;
+    r->Found = 1;
+    r->Type = ValueType;
+    r->Length = ValueLength;
+    if (ValueType == REG_DWORD && ValueLength == 4 && ValueData != NULL) {
+        from = (PUCHAR)ValueData;
+        r->Value = (ULONG)from[0] | ((ULONG)from[1] << 8) |
+                   ((ULONG)from[2] << 16) | ((ULONG)from[3] << 24);
+    }
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Issue 26 (2026-11-07): XhciUasNoAtaPassThrough, a REG_DWORD in the UAS
+ * device's hardware key (on NT its Device Parameters key; the INF writes
+ * 0 there, never over a value already set): any value but 0 has this
+ * driver answer ATA PASS-THROUGH (12) and (16) and the SMART requests
+ * itself instead of sending them to the device (uas_pdo.c), as Linux's
+ * US_FL_NO_ATA_1X does. Read at each start; absent, of another type or
+ * unreadable reads as 0. PASSIVE_LEVEL.
+ */
+static ULONG uasReadDeviceDword(HANDLE key, PCWSTR name)
+{
+    RTL_QUERY_REGISTRY_TABLE table[2];
+    UAS_DEVLIM_READ r;
+    PUCHAR p;
+    ULONG i;
+
+    UasZero(&r, sizeof(r));
+    p = (PUCHAR)table;
+    for (i = 0; i < sizeof(table); i++) {
+        p[i] = 0;
+    }
+    table[0].QueryRoutine = uasTakeDword;
+    table[0].Flags = RTL_QUERY_REGISTRY_REQUIRED | RTL_QUERY_REGISTRY_NOEXPAND;
+    table[0].Name = (PWSTR)name;
+    table[0].EntryContext = &r;
+    (VOID)RtlQueryRegistryValues(RTL_REGISTRY_HANDLE, (PWSTR)key, table, NULL,
+                                 NULL);
+    return r.Value;
+}
+
+static VOID uasReadNoAta(PUAS_FDO fdo)
+{
+    HANDLE key;
+    ULONG noAta;
+    ULONG fast;
+    KIRQL irql;
+
+    noAta = 0;
+    fast = 0;
+    if (NT_SUCCESS(IoOpenDeviceRegistryKey(fdo->Pdo, PLUGPLAY_REGKEY_DEVICE,
+                                           KEY_READ, &key))) {
+        noAta = uasReadDeviceDword(key, L"XhciUasNoAtaPassThrough");
+        /* Issue 26, the owner's option 4: XhciUasFastReset, the same key,
+         * the same rules (uas_xport.c, UasFastResetDue). */
+        fast = uasReadDeviceDword(key, L"XhciUasFastReset");
+        ZwClose(key);
+    }
+    KeAcquireSpinLock(&fdo->Lock, &irql);
+    fdo->NoAtaPt = (BOOLEAN)(noAta != 0);
+    fdo->FastReset = (BOOLEAN)(fast != 0);
+    fdo->FastArmed = FALSE;
+    fdo->FastProgress = FALSE;
+    KeReleaseSpinLock(&fdo->Lock, irql);
+}
+
 static VOID uasAskPolicy(PUAS_FDO fdo, USHORT vid, USHORT pid)
 {
     UAS_DEVLIM_READ limit;
@@ -560,6 +638,7 @@ static NTSTATUS uasFdoStart(PUAS_FDO fdo)
     }
 
     uasAskPolicy(fdo, vid, pid);
+    uasReadNoAta(fdo);
     status = uasSelect(fdo);
     if (!NT_SUCCESS(status)) {
         return status;

@@ -666,7 +666,7 @@ controller back; only a new start settles the delivery again. The move is
 kept through the in-place recovery and every resume like any delivery,
 since it lives in `EventDelivery` and `hc`.
 
-**Timing against issue 12's Finding 1.** The start's No Op is submitted
+**Timing against issue 12's boot-time no-slot refusal.** The start's No Op is submitted
 before the first look; on the E7250 with the line dead and no EHCI
 traffic, the move comes about 300 to 400 ms after the start, and its first
 service pass drains the No Op's completion. 36.4's BUSY retry waits under

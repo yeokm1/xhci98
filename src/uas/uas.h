@@ -133,6 +133,12 @@ typedef struct _UAS_SLOT {
                                      * port reset or a new configuration */
     PIRP Request;                   /* the SRB's IRP (or the internal one) */
     PSCSI_REQUEST_BLOCK Srb;
+    PIRP AbortIrp;                  /* the first ABORT_COMMAND admitted for
+                                     * this command (UasEngineAbort), held
+                                     * pending until the worker ends it;
+                                     * NULL for each new command, so an
+                                     * abort is never matched to a later
+                                     * command that reuses the SRB */
     ULONG Lun;
     LONG TimeLeft;                  /* seconds */
     PMDL DataMdl;
@@ -142,6 +148,10 @@ typedef struct _UAS_SLOT {
     ULONG SenseLength;
     ULONG ResponseCode;
     ULONG FinalSrbStatus;           /* nonzero: overrides the status fold */
+    /* Issue 26, XhciUasFastReset: the second it started (fdo->Seconds),
+     * and the seconds its final IU has waited for its data cancel. */
+    ULONG StartedAt;
+    ULONG CancelWait;
     PKEVENT TmfDone;
     UCHAR Iu[UAS_IU_COMMAND_LENGTH];
     UCHAR Stat[UAS_STATUS_BUFFER];  /* streamed: this slot's status buffer */
@@ -252,6 +262,19 @@ typedef struct _UAS_FDO {
      * stored value. */
     ULONG CommandBytes;
     ULONG PolicySource;
+    /* Issue 26: XhciUasNoAtaPassThrough as the last start read it (lock):
+     * ATA PASS-THROUGH and SMART answered here, never sent. */
+    BOOLEAN NoAtaPt;
+    /* Issue 26: XhciUasFastReset as the last start read it, and its
+     * history (lock), kept across recovery passes: FastArmed from an
+     * ABORT TASK the device answered at second FastAt until a command
+     * ends GOOD (FastProgress), a device reset or a start. Seconds counts
+     * the one-second ticks. */
+    BOOLEAN FastReset;
+    BOOLEAN FastArmed;
+    BOOLEAN FastProgress;
+    ULONG FastAt;
+    ULONG Seconds;
     /* Starts whose question fell back to 64 KiB, by why, since load. */
     ULONG PolicyUnsupported;
     ULONG PolicyMalformed;
@@ -273,6 +296,19 @@ typedef struct _UAS_FDO {
     ULONG TeleSequence;
     XHCI98_TELEMETRY TeleRecord;
     XHCI98_TELEMETRY TeleLast;
+    /* Issue 26: the last failures (lock), sent on the same IRP when the
+     * telemetry has nothing new: FailCount recorded since load, the ring
+     * of XHCI98_FAIL_RECORDS entries, FailSent the count the bus last
+     * took, FailOff once a bus refused the record (an older bus),
+     * TeleFails while the send in flight is this one, and FailTurn after
+     * a telemetry send, so new failures go next. */
+    ULONG FailCount;
+    ULONG FailSent;
+    BOOLEAN FailOff;
+    BOOLEAN TeleFails;
+    BOOLEAN FailTurn;
+    ULONG Fail[XHCI98_FAIL_RECORDS][XHCI98_FAIL_WORDS];
+    XHCI98_FAILURES FailRecord;
 
     KTIMER Timer;
     KDPC TimerDpc;
@@ -365,6 +401,7 @@ typedef struct _UAS_PCMD {
 } UAS_PCMD, *PUAS_PCMD;
 
 extern PDRIVER_OBJECT UasDriverObject;
+extern BOOLEAN UasIsNt;
 
 /* uas_mem.c - every pool and MDL call in the driver. PASSIVE or DISPATCH. */
 VOID UasPoolInit(VOID);
@@ -435,6 +472,10 @@ NTSTATUS UasEngineReset(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
 NTSTATUS UasEngineFlush(PUAS_FDO fdo, PUAS_PDO pdo, PIRP irp,
                         PSCSI_REQUEST_BLOCK srb);
 VOID UasEngineUnlockQueue(PUAS_FDO fdo);
+/* Issue 26: a request the PDO answered itself (XhciUasNoAtaPassThrough)
+ * entered in the failure ring. <= DISPATCH_LEVEL, no lock held. */
+VOID UasEngineNoteLocal(PUAS_FDO fdo, const UCHAR *cdb, ULONG origin,
+                        ULONG length);
 VOID UasEngineOpenLun(PUAS_FDO fdo, PUAS_PDO pdo);
 VOID UasEngineCloseLun(PUAS_FDO fdo, PUAS_PDO pdo, UCHAR srbStatus);
 /* Task 45.52: <= DISPATCH_LEVEL. Admits and queues a pass-through request

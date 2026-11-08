@@ -294,7 +294,6 @@ BOOLEAN CmNhiReinit(PCM_NHI nhi)
         return TRUE;
     }
     nhi->Suspended = 0;
-    lost = FALSE;
     ran = FALSE;
     if (nhi->U4On && (nhi->U4.Contained || !CmNhiHwAccess(nhi))) {
         /* Record 22 section 7.7: a contained instance is never restarted

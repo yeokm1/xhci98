@@ -77,6 +77,54 @@ static ULONG xhciPipeWord(const UCHAR *p)
     return (ULONG)p[0] | ((ULONG)p[1] << 8);
 }
 
+ULONG XhciPipeSelectWalk(const UCHAR *entries, ULONG bytes, ULONG fixed,
+                         ULONG pipeBytes, const UCHAR *config,
+                         ULONG configLength, PULONG count)
+{
+    XHCI_PIPE_IFACE iface;
+    ULONG offset;
+    ULONG length;
+    ULONG number;
+    ULONG named;
+    ULONG n;
+
+    if (entries == NULL || config == NULL || count == NULL || fixed < 4UL) {
+        return XHCI_PIPE_BAD_PARAM;
+    }
+    *count = 0;
+    offset = 0;
+    named = 0;
+    n = 0;
+    while (offset < bytes) {
+        if (bytes - offset < fixed) {
+            return XHCI_PIPE_REFUSED;
+        }
+        length = (ULONG)entries[offset] | ((ULONG)entries[offset + 1] << 8);
+        number = (ULONG)entries[offset + 2];
+        if (length < fixed || length > bytes - offset || number >= 32UL ||
+            (named & (1UL << number)) != 0 ||
+            XhciPipeFindInterface(config, configLength, number,
+                                  (ULONG)entries[offset + 3], &iface) !=
+                XHCI_PIPE_OK) {
+            return XHCI_PIPE_REFUSED;
+        }
+        /* EndpointCount is at most XHCI_PIPE_MAX_ENDPOINTS: no wrap for
+         * any pipe size a caller passes below 2^26. */
+        if (pipeBytes > 0x03FFFFFFUL ||
+            length - fixed < iface.EndpointCount * pipeBytes) {
+            return XHCI_PIPE_TOO_SMALL;
+        }
+        named |= 1UL << number;
+        n++;
+        offset += length;
+    }
+    if (n == 0) {
+        return XHCI_PIPE_REFUSED;
+    }
+    *count = n;
+    return XHCI_PIPE_OK;
+}
+
 ULONG XhciPipeFindInterface(const UCHAR *config, ULONG length,
                             ULONG interfaceNumber, ULONG alternate,
                             PXHCI_PIPE_IFACE iface)

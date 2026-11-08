@@ -606,8 +606,60 @@ static void test_unplug_nested(void)
     CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "port 1 still comes up");
     CHECK_EQ(state(&g_cm, 2), TBT_U4_EMPTY, "port 2 torn down");
     CHECK(hostClean(&g_fab, 2), "port 2's host side clean");
-    CHECK(g_cm.Counters.UnplugsNested >= 1 || g_cm.Counters.Unplugs >= 1, "counted");
+    CHECK(g_cm.Counters.UnplugsNested >= 1,
+          "port 2's teardown counted as nested in port 1's sequence");
     g_fab.Hook = NULL;
+}
+
+/* A teardown head nested at a safe point, its tail owed to the next tick,
+ * and a suspend before that tick: the resume finds the same router back
+ * with its configuration lost. The owed tail is run there, before the
+ * port is judged, so it never runs later over the connection a rebuild
+ * made; the port comes up again and the host side is left consistent. */
+static void test_resume_owed_tail(void)
+{
+    int d1;
+    int d2;
+    TBT_U4_CONFIG c;
+    const TBT_U4_PORT *p;
+    LONG rc;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    d1 = fabDevice(&g_fab, FAB_DEV_USB4);
+    d2 = fabDevice(&g_fab, FAB_DEV_USB4);
+    fabPlug(&g_fab, 2, d2);
+    cfgDefault(&c);
+    g_ldCalls = 0;
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    p = TbtU4Port(&g_cm, 2);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "owed tail: port 2 up");
+    CHECK(p->Pcie.Up && p->Usb3.Up, "owed tail: PCIe and USB3 up on port 2");
+    g_hkRouter = d1;
+    g_hkCs = TBT_CS_ROUTER;
+    g_hkAddr = 5;
+    g_hkWrite = 1;
+    g_hkPort = 2;
+    g_hkFired = 0;
+    g_hkSkip = 0;
+    g_fab.Hook = unplugHook;
+    fabPlug(&g_fab, 1, d1);
+    poll(&g_cm, &g_fab, 1);
+    g_fab.Hook = NULL;
+    CHECK(g_hkFired, "owed tail: port 2 pulled during port 1's sequence");
+    CHECK_EQ(g_cm.DeferredTail[1], 1, "owed tail: the head nested, the tail owed");
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_TEARDOWN, "owed tail: port 2 in TEARDOWN");
+    TbtU4Suspend(&g_cm);
+    /* The same router back, reset: TopologyID Valid clear. */
+    fabPlug(&g_fab, 2, d2);
+    g_fab.RxQCount = 0;
+    rc = TbtU4Resume(&g_cm);
+    CHECK_EQ(g_cm.DeferredTail[1], 0, "owed tail: run by the resume");
+    poll(&g_cm, &g_fab, 3);
+    CHECK_EQ(state(&g_cm, 2), TBT_U4_UP, "owed tail: port 2 up again");
+    CHECK(p->Pcie.Up, "owed tail: its PCIe tunnel recorded");
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "owed tail: port 1 still up");
+    (void)rc;
 }
 
 static void test_quick_replug(void)
@@ -1510,6 +1562,49 @@ static int eeEnableHook(FAB *f, unsigned long pdf, int router, unsigned long cs,
  * as found, no EEPROM read inside the discovery; its names read on the
  * first pass after the start (task 42-A.9), the DROM's unused marks not
  * applied to the adapters already discovered, the tunnel untouched. */
+/* A Thunderbolt 3 router's HopID fields are 11 bits. A rewritten entry of
+ * one has the whole field cleared under the new Output HopID (a stale high
+ * bit is not kept); one reporting a Max Input HopID above 127 is refused,
+ * never enumerated with its maximum cut to 7 bits. */
+static void test_tbt3_hop_width(void)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+    unsigned up;
+    unsigned long e0;
+    unsigned long before;
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    up = g_fab.R[dev].UpAdp;
+    /* A stale bit 10 in the Output HopID of the entry the PCIe tunnel's
+     * downstream path will take on the router's lane (HopID 8). */
+    g_fab.R[dev].Adp[up].Path[2 * 8] = 0x00000400UL;
+    fabPlug(&g_fab, 1, dev);
+    cfgDefault(&c);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK_EQ(state(&g_cm, 1), TBT_U4_UP, "TB3 hop width: UP");
+    e0 = g_fab.R[dev].Adp[up].Path[2 * 8];
+    CHECK(e0 & 0x80000000UL, "TB3 hop width: the lane entry written");
+    CHECK_EQ(e0 & 0x780UL, 0, "TB3 hop width: bits 10:7 of its Output HopID cleared");
+
+    fabInit(&g_fab);
+    fabHostMinimal(&g_fab);
+    dev = fabDevice(&g_fab, FAB_DEV_TBT3_TR);
+    up = g_fab.R[dev].UpAdp;
+    /* Bit 7 set over its own maximum: the 7-bit field alone reads as
+     * before, the 11-bit one above 127. */
+    g_fab.R[dev].Adp[up].Cs[5] |= 0x80UL;
+    fabPlug(&g_fab, 1, dev);
+    before = pathWrites(&g_fab);
+    (void)start(&g_fab, &g_ring, &g_cm, &c);
+    CHECK(state(&g_cm, 1) != TBT_U4_UP, "TB3 hop width: a Max Input HopID above 127 refused");
+    CHECK(!TbtU4Port(&g_cm, 1)->Pcie.Up, "TB3 hop width: no tunnel through it");
+    CHECK(hostClean(&g_fab, 1), "TB3 hop width: the host side clean");
+    (void)before;
+}
+
 static void test_tbt3_adopted(void)
 {
     TBT_U4_CONFIG c;
@@ -2402,9 +2497,16 @@ static void test_suspend_resume(void)
     CHECK(state(&g_cm, 1) == TBT_U4_UP && TbtU4Port(&g_cm, 1)->Dev.Uuid[0] == g_fab.R[dev].Rcs[7],
           "resume, replaced in the wait: the new router connected afresh");
 
+    /* The platform's 350 polls of 3 ms, each a sleep that may last a 10 ms
+     * tick more. */
     b = TbtU4ResumeBoundUs(0, 10000);
-    CHECK(b >= 1050000UL + TBT_U4_RESUME_HOST_US && b < 1050000UL + TBT_U4_RESUME_HOST_US + 3000000UL,
+    CHECK(b >= 350UL * (3000UL + 10000UL) + TBT_U4_RESUME_HOST_US &&
+          b < 350UL * (3000UL + 10000UL) + TBT_U4_RESUME_HOST_US + 3000000UL,
           "no obligation: the platform, the host router's budget and the margin");
+    CHECK(TbtU4ResumeBoundUs(TBT_U4_OBLIGATIONS, 55000) <
+          350UL * (3000UL + 55000UL) + TBT_U4_RESUME_HOST_US +
+          TBT_U4_OBLIGATIONS * TBT_U4_RESUME_EACH_US + 6000000UL,
+          "twelve obligations at a 55 ms tick: within 32 bits, a few minutes");
     CHECK(TbtU4ResumeBoundUs(2, 10000) > TbtU4ResumeBoundUs(1, 10000), "grows per obligation");
     CHECK(TbtU4ResumeBoundUs(1, 55000) > TbtU4ResumeBoundUs(1, 10000), "and with the tick");
     CHECK(TbtU4ResumeBoundUs(1000, 55000) == TbtU4ResumeBoundUs(TBT_U4_OBLIGATIONS, 55000),
@@ -5279,6 +5381,104 @@ static void test_recover(void)
 
 /* Instance B on the fabric instance A left: g_cm2 over g_fab, with the
  * record `carry` (NULL for none). */
+/* Section 9.3.1 (task 47.32): A at XhciCmPreOsCleanup `a`, its record;
+ * B at `b` with it. */
+static int carryAAt(TBT_U4_CARRY *out, ULONG a)
+{
+    TBT_U4_CONFIG c;
+    int dev;
+
+    cfgDefault(&c);
+    c.PreOsCleanup = a;
+    dev = setupMinimal(1, &c);
+    TbtU4Stop(&g_cm);
+    TbtU4GetCarry(&g_cm, out);
+    return dev;
+}
+
+static LONG carryStartBAt(const TBT_U4_CARRY *carry, ULONG b)
+{
+    TBT_U4_CONFIG c;
+
+    cfgDefault(&c);
+    c.PreOsCleanup = b;
+    memset(&g_ring2, 0, sizeof(g_ring2));
+    TbtU4Init(&g_cm2, &g_ring2, &g_fab.Host, &c);
+    TbtU4SetLinkDown(&g_cm2, linkDown, NULL);
+    TbtU4SetCarry(&g_cm2, carry);
+    return TbtU4Start(&g_cm2, fabMem(&g_fab), FAB_PHYS, FAB_MEM_BYTES);
+}
+
+/*
+ * Record 22 section 9.3.1 (task 47.32): XhciCmPreOsCleanup 2 cleans this
+ * driver's own tunnel once. A ran at 2 and hands Cleaned; B at 2 with that
+ * record and every test passing is left whole; a record from A at 0, a
+ * record naming a kid, an extra entry on host lane 1, on the device's
+ * downstream lane or on its USB3 Up adapter, or a stray Path Enable, each
+ * cleans as before; B at 0 or 1 hands no Cleaned on.
+ */
+static void test_preos_once(void)
+{
+    TBT_U4_CARRY k;
+    TBT_U4_CARRY k2;
+    const TBT_U4_PORT *p;
+    int dev;
+    LONG rc;
+
+    dev = carryAAt(&k, 2);
+    CHECK(k.Valid && k.Cleaned, "once: A at 2 hands Cleaned");
+    rc = carryStartBAt(&k, 2);
+    p = TbtU4Port(&g_cm2, 1);
+    CHECK_EQ(rc, TBT_OK, "once: B started");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 0, "once: B at 2 cleans nothing");
+    CHECK(g_cm2.PreOsCleaned, "once: left whole");
+    CHECK(p->State == TBT_U4_UP && p->Pcie.Own && p->Usb3.Own, "once: its own, UP");
+    CHECK(fabPcieUp(&g_fab, 1), "once: the fabric's PCIe tunnel kept");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k2);
+    CHECK(k2.Valid && k2.Cleaned, "once: B hands Cleaned on");
+
+    dev = carryAAt(&k, 0);
+    CHECK(k.Valid && !k.Cleaned, "once: A at 0 hands no Cleaned");
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(rc, TBT_OK, "once, A at 0: B started");
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "once, A at 0: B at 2 cleans");
+    TbtU4Stop(&g_cm2);
+
+    dev = carryAAt(&k, 2);
+    rc = carryStartBAt(&k, 1);
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 0, "once: B at 1 cleans nothing that verifies");
+    TbtU4Stop(&g_cm2);
+    TbtU4GetCarry(&g_cm2, &k2);
+    CHECK(k2.Valid && !k2.Cleaned, "once: B at 1 hands no Cleaned (2, 1, 2 cleans)");
+    rc = carryStartBAt(&k2, 2);
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "once: 2, 1, 2: the last start cleans");
+    TbtU4Stop(&g_cm2);
+
+    dev = carryAAt(&k, 2);
+    k.Kid[0].Used = TRUE;
+    k.Kid[0].HostLane0 = 1;
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "once: a kid recorded cleans");
+    TbtU4Stop(&g_cm2);
+
+    dev = carryAAt(&k, 2);
+    g_fab.R[0].Adp[2].Path[2 * 9] = 0x80000000UL | (5UL << 11) | 9UL;
+    g_fab.R[0].Adp[2].Path[2 * 9 + 1] = 0;
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1, "once: an extra entry on host lane 1 cleans");
+    TbtU4Stop(&g_cm2);
+
+    dev = carryAAt(&k, 2);
+    g_fab.R[dev].Adp[3].Path[2 * 8] = 0;
+    g_fab.R[dev].Adp[3].Path[2 * 8 + 1] = TBT_PATH1_PP;
+    rc = carryStartBAt(&k, 2);
+    CHECK_EQ(g_cm2.Counters.PortsCleaned, 1,
+             "once: a pending entry on the device's downstream lane cleans");
+    TbtU4Stop(&g_cm2);
+    (void)dev;
+}
+
 static LONG carryStartB(const TBT_U4_CARRY *carry)
 {
     TBT_U4_CONFIG c;
@@ -7356,6 +7556,7 @@ int main(void)
     RUN_VEC(test_isolation_word);
     RUN_VEC(test_unplug_everywhere);
     RUN_VEC(test_unplug_nested);
+    RUN_VEC(test_resume_owed_tail);
     RUN_VEC(test_quick_replug);
     RUN_VEC(test_bonding);
     RUN_VEC(test_rops);
@@ -7370,7 +7571,9 @@ int main(void)
     RUN_VEC(test_adl);
     RUN_VEC(test_tbt3);
     RUN_VEC(test_tbt3_adopted);
+    RUN_VEC(test_tbt3_hop_width);
     RUN_VEC(test_tbt_host);
+    RUN_VEC(test_preos_once);
     RUN_VEC(test_links);
     RUN_VEC(test_loss_and_eject);
     RUN_VEC(test_suspend_resume);

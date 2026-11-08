@@ -1,9 +1,19 @@
 /*
  * xhci_desc.c - the configuration-descriptor snoop, roadmap task 9-A.2.
  *
- * See src/xhci_desc.h for why an isochronous endpoint's `bInterval` can only
- * come from here, where every wire constant was transcribed from, and what this
- * file deliberately does not record.
+ * See src/xhci_desc.h for why an isochronous endpoint's `bInterval` could only
+ * come from here under the miniport, where every wire constant was transcribed
+ * from, and what this file deliberately does not record.
+ *
+ * **The snoop is host-suite-only under the HCD.** It read the configuration
+ * descriptor as it crossed the miniport's EP0 (task 7b-A.1's machinery, in
+ * the slot layer deleted 2026-10-02); the HCD reads every descriptor itself
+ * and opens an endpoint from it (hcd_cfg.c, xhci_pipe.c), so no driver file
+ * calls the snoop - XhciDescObserveSetup through XhciDescParseEnd - and
+ * test/test_desc.c is what keeps it compiling and true to its vectors. The
+ * driver calls the two power helpers at the end of the file,
+ * XhciDescMaxPowerMa (hcd_enum.c) and XhciDescPowerTabByte (hcd_door.c). The
+ * rules below are the snoop's, written in the miniport's present tense.
  *
  * Three rules, the same three src/xhci_topo.c holds:
  *
@@ -36,8 +46,9 @@
  *   `XhciDescIsoDeclared` saying the endpoint was declared all the same.
  *   `test/test_desc.c`'s "the same endpoint declared at different cadences"
  *   vector pins them, including the alternate-0 case. **The first correction of
- *   this paragraph, on the same day, named only the no-selection half** - round
- *   11 caught that, off the vector three lines below the one being cited.)*
+ *   this paragraph, on the same day, named only the no-selection half** - a
+ *   later revision the same day caught that, off the vector three lines below
+ *   the one being cited.)*
  *
  * C89 only. No MMIO, no DDK, no lock: the caller holds the controller lock
  * across every call.

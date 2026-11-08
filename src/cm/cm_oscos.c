@@ -112,7 +112,7 @@ ULONG CmOscReport(PCM_NHI nhi)
     if (IoIsWdmVersionAvailable(1, 0x10)) {
         return CmOscntReport(nhi);
     }
-    v = nhi->OscTier & 7UL;
+    v = (nhi->OscTier & 7UL) | (nhi->OscFlags & CM_OSCN_F_SAMEOFF);
     /* 0 (the extension as allocated) or no port: none found yet. */
     if (!cmOscLockReady || nhi->OscUspBdf == 0 ||
         nhi->OscUspBdf == XHCI_TBT_NO_BDF) {
@@ -591,13 +591,27 @@ static VOID cmOscWr(CM_OSC_PAGE *pg, ULONG off, ULONG v)
     WRITE_REGISTER_ULONG((PULONG)(pg->Va + off), v);
 }
 
+/* One 1 ms step of an exchange's wait, a sleep: the thread is at
+ * PASSIVE_LEVEL, so it yields the processor rather than stalling it. A
+ * step may last a clock tick, so every decision is the clock's (NowMs),
+ * the count of steps only a bound beside it. */
+static VOID cmOscStep(VOID)
+{
+    LARGE_INTEGER d;
+
+    CmRelativeMs(&d, 1);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &d);
+}
+
 /* One exchange (12.8.5 steps 1 to 3): the command written, its
  * acceptance and the reply waited for, each within CM_OSC_WAIT_MS by the
- * thread's clock and by a count of 1 ms stalls. Returns the reply, or
- * 0xFFFFFFFF (gone), 0xFFFFFFFE (not accepted), 0xFFFFFFFD (no reply). */
+ * thread's clock (and a count of 1 ms steps beside it). Returns the
+ * reply, or 0xFFFFFFFF (gone), 0xFFFFFFFE (not accepted), 0xFFFFFFFD (no
+ * reply). */
 static ULONG cmOscExchange(PCM_NHI nhi, CM_OSC_PAGE *pg, ULONG cmd)
 {
     ULONG start;
+    ULONG spent;
     ULONG v;
     ULONG i;
 
@@ -605,38 +619,38 @@ static ULONG cmOscExchange(PCM_NHI nhi, CM_OSC_PAGE *pg, ULONG cmd)
     start = nhi->Host.NowMs(nhi->Host.Context);
     for (i = 0;; i++) {
         v = cmOscRd(pg, CM_OSC_MB_CMD);
+        spent = nhi->Host.NowMs(nhi->Host.Context) - start;
         if (v == 0xFFFFFFFFUL) {
             return 0xFFFFFFFFUL;
         }
         if (!CM_OSC_MB_BUSY(v)) {
             break;
         }
-        if (i >= CM_OSC_WAIT_MS ||
-            nhi->Host.NowMs(nhi->Host.Context) - start >= CM_OSC_WAIT_MS) {
+        if (i >= CM_OSC_WAIT_MS || spent >= CM_OSC_WAIT_MS) {
             CmLogNote(nhi, "cm.osc.not-accepted", v);
             return 0xFFFFFFFEUL;
         }
-        KeStallExecutionProcessor(1000);
+        cmOscStep();
     }
-    CmLogNote(nhi, "cm.osc.accepted-ms", i);
+    CmLogNote(nhi, "cm.osc.accepted-ms", spent);
     start = nhi->Host.NowMs(nhi->Host.Context);
     for (i = 0;; i++) {
         v = cmOscRd(pg, CM_OSC_MB_REPLY);
+        spent = nhi->Host.NowMs(nhi->Host.Context) - start;
         if (v == 0xFFFFFFFFUL) {
             return 0xFFFFFFFFUL;
         }
         if (CM_OSC_MB_READY(v)) {
             break;
         }
-        if (i >= CM_OSC_WAIT_MS ||
-            nhi->Host.NowMs(nhi->Host.Context) - start >= CM_OSC_WAIT_MS) {
+        if (i >= CM_OSC_WAIT_MS || spent >= CM_OSC_WAIT_MS) {
             CmLogNote(nhi, "cm.osc.no-reply", v);
             return 0xFFFFFFFDUL;
         }
-        KeStallExecutionProcessor(1000);
+        cmOscStep();
     }
     cmOscWr(pg, CM_OSC_MB_REPLY, 0);
-    CmLogNote(nhi, "cm.osc.reply-ms", i);
+    CmLogNote(nhi, "cm.osc.reply-ms", spent);
     return v;
 }
 
@@ -782,8 +796,6 @@ typedef struct _CM_OSC_FOUND {
  * CPNV, M620 or method of these names in a firmware that works. */
 static const char *const cmOscSsdt[3] = { "CPMCMN", "DISCUSB4", "CPMMSOSC" };
 
-/* 12.8.3 steps 2 to 6 and the match of 12.8.4 but the mailbox's state:
- * CM_OSC_OK with *f, else the reason. */
 /* `n` characters (at most 4) as a dword, the first in bits 7:0, as a
  * table signature is read (the log's form of a table's ids). */
 static ULONG cmOscChars(const UCHAR *p, ULONG n)
@@ -836,6 +848,8 @@ static ULONG cmOscForms(PCM_NHI nhi, const CM_OSC_TBL *tbl,
     return reason;
 }
 
+/* 12.8.3 steps 2 to 6 and the match of 12.8.4 but the mailbox's state:
+ * CM_OSC_OK with *f, else the reason. */
 static ULONG cmOscDiscover(PCM_NHI nhi, CM_OSC_FOUND *f, CM_OSC_CAP *cap,
                             CM_OSC_RD *rd, const CM_OSC_NTSRC *g)
 {
@@ -1270,6 +1284,7 @@ static VOID cmOscRun(PCM_NHI nhi, CM_OSC_CAP *c)
     CM_OSC_FOUND f;
     CM_OSC_RD rd;
     CM_OSC_PAGE pg;
+    LARGE_INTEGER settle;
     ULONG nhiBdf;
     ULONG id;
     ULONG v;
@@ -1328,6 +1343,10 @@ static VOID cmOscRun(PCM_NHI nhi, CM_OSC_CAP *c)
     cmOscState(c, reason == CM_OSC_NO_RSDP ? CM_QA_S_NO_RSDP : CM_QA_S_KEPT,
                reason);
     if (reason != CM_OSC_OK) {
+        if (reason == CM_OSC_SAME_OFF) {
+            /* Task 47.29: the report's line (12.8.11). */
+            nhi->OscFlags |= CM_OSCN_F_SAMEOFF;
+        }
         CmLogNote(nhi, "cm.osc.refused", reason);
         return;
     }
@@ -1376,9 +1395,8 @@ static VOID cmOscRun(PCM_NHI nhi, CM_OSC_CAP *c)
         CmLogNote(nhi, "cm.osc.query", reply);
     }
     MmUnmapIoSpace(pg.Va, 0x1000);
-    for (v = 0; v < CM_OSC_SETTLE_MS; v++) {
-        KeStallExecutionProcessor(1000);
-    }
+    CmRelativeMs(&settle, CM_OSC_SETTLE_MS);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &settle);
 }
 
 /* The handover of 12.8.2 to 12.8.5, and the tables its discovery read

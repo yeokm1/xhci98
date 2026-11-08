@@ -10,16 +10,17 @@ opens the Setup window. To uninstall, use Remove in Add/Remove Programs
 scripts (INSTALL /console ...); run with no arguments it opens the same
 window.
 
-On Windows 2000, XP, XP x64, Vista and 7 it installs or updates every
-driver of the package on the devices it finds - the xHCI controller first,
-then its root hub, hubs and composite entries, then UAS disks and a
-Thunderbolt or USB4 controller - and puts the package's INFs (all but one
-whose driver has a newer release installed) where Windows finds them for a
-device plugged in later; the release notes say when Windows may still ask
-for the medium an earlier install came from. It does what the release
-notes tell you to do in Device Manager, including the traps of an update
-(Windows 2000 keeping the old driver unless Have Disk is used; Vista and 7
-keeping an old build of the same version; the root hub's own update).
+On Windows 2000, XP, XP x64, Vista and 7 (and on 8, 8.1 and 10 with the USB
+drivers ticked) it installs or updates every driver of the package on the
+devices it finds - the xHCI controller first, then its root hub, hubs and
+composite entries, then UAS disks and a Thunderbolt or USB4 controller - and
+puts the package's INFs (all but one whose driver has a newer release
+installed) where Windows finds them for a device plugged in later; the
+release notes say when Windows may still ask for the medium an earlier
+install came from. It does what the release notes tell you to do in Device
+Manager, including the traps of an update (Windows 2000 keeping the old
+driver unless Have Disk is used; Vista and 7 keeping an old build of the
+same version; the root hub's own update).
 
 On Windows 98 SE and ME it copies the package's drivers to the install
 folder (C:\XHCI98 unless you choose another), adds that folder to the
@@ -149,7 +150,7 @@ for it. Either passes its arguments on (SETUP /uninstall, INSTALL /console
 /list).
 
 The Setup window
-----------------------
+----------------
 
 Unzip the WHOLE package first: Setup runs only from its own tools\xhciinst
 folder of an unzipped package, and checks that every file of the driver
@@ -178,15 +179,18 @@ The window walks you through:
                    whether xHCI98 USB Tree starts at login (it is
                    installed either way), and the install
                    folder (Change folder...); a warning on Next for a box
-                   that does not apply there. Settings... opens one
-                   dialog with a tab each for USB, Thunderbolt and
-                   Stor98, for the components ticked; Advanced... on a
-                   tab has the rest of its settings
+                   that does not apply there. Settings... opens the
+                   USB settings (with the USB drivers ticked);
+                   Advanced... there has the rest of them
   Thunderbolt and USB4
                    (only with Thunderbolt / USB4 support ticked)
                    XHCIPFW where the system supports it, Stor98 with
-                   its 2 MiB transfer chunks (98 SE and ME), and whether
-                   PCIe devices connect automatically (XhciCmApprove)
+                   its 2 MiB transfer chunks (98 SE and ME), whether
+                   PCIe devices connect automatically (XhciCmApprove),
+                   and Thunderbolt networking. Settings... opens one
+                   dialog with a tab for Thunderbolt and, with Stor98
+                   ticked, one for Stor98; Advanced... on a tab has
+                   the rest of its settings
   Summary          everything that will happen, the warnings again;
                    nothing is changed before you click Install
   Progress         each step as it runs; Cancel stops at the next step
@@ -239,7 +243,7 @@ Thunderbolt or USB4 port an id of its own, PCI\XHCI98_TUNNEL&CC_010802,
 and on Windows 2000 to 8 Stor98's INF matches that id alone, so Windows
 never offers Stor98 for an internal drive there; on 8.1 and 10 it keeps
 3.2.0.0's model, which stornvme outranks; on 98 SE and ME Setup stages
-stor98w9.inf, which matches every NVMe controller. An update removes the
+98-me's stor98.inf, which matches every NVMe controller. An update removes the
 earlier release's Stor98 INF from the driver store (on Windows 2000 only
 once no drive uses it: Setup says which drive keeps it). A tunnel drive
 that Windows found before it had the id gets Stor98 from the safe-removal
@@ -274,8 +278,7 @@ Free USB drivers and Non-free USB drivers (the pages after Components). A
 release has up to three downloads: xhci98-<version>.zip, -free.zip, which
 adds the free USB class drivers of usb-wdm-free in USBDRV\FREE ("These
 drivers are experimental. They may not work with every device and can make
-Windows unstable. Report problems at
-https://github.com/yeokm1/usb-wdm-free."), and -nonfree.zip, which adds
+Windows unstable."), and -nonfree.zip, which adds
 the non-free USB drivers of usb-wdm-nonfree in USBDRV\NONFREE: other
 manufacturers' Ethernet, HID, serial and audio drivers, not this project's
 work. Wi-Fi drivers are not in this download: they are in
@@ -321,23 +324,23 @@ removes the copies, the DevicePath entries and the staged INFs it made; a
 driver a device installed from them stays installed, and so does a folder
 whose INF a device still uses.
 
-Switches the window takes: /uninstall (the uninstall, below), /to path
-(the install folder, preselected), /thunderbolt, /stor98 (only with
-/thunderbolt or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and
-/nos98vsd (98 SE and ME: S98VSD.VXD, Stor98 transfer chunks up to 2 MiB,
-ticked or unticked; /s98vsd needs Stor98 in the run), /xhcipfw and
-/noxhcipfw (98 SE, ME, 2000, XP and the 32-bit Vista to 8.1: XHCIPFW.VXD
-or XHCIPFW.SYS, which finds controllers and devices above 4 GB, ticked or
-unticked; /xhcipfw only with /thunderbolt or /cmonly), /tbnet and /notbnet
-(Thunderbolt networking ticked or unticked; /tbnet only with /thunderbolt
-or /cmonly), /faster and /nofaster (the "can run faster" notification on
-or off), /notray, /nouas, /storage, /nostorage, /cmonly, /usb,
-/wdmfree:copy, /wdmfree:stage=<ids>, /wdmnonfree:copy and
-/wdmnonfree:stage=<ids> (the components, preselected; /free and /nonfree
-are the copies), /set Name=Value (a setting, preselected), /defaults,
-/force (reinstall this release, or go back to it from a newer one),
-/restage (Vista to 10: replace the driver files Windows has stored for
-this package), /log path.
+Switches the window takes: /uninstall (the uninstall, below), /to path (the
+install folder, preselected), /thunderbolt, /stor98 (only with /thunderbolt
+or /cmonly), /nostor98 (Stor98 unticked), /s98vsd and /nos98vsd (98 SE and
+ME: S98VSD.VXD, Stor98 transfer chunks up to 2 MiB, ticked or unticked;
+/s98vsd needs Stor98 in the run), /xhcipfw and /noxhcipfw (98 SE, ME, 2000,
+XP and the 32-bit Vista to 8.1: XHCIPFW.VXD or XHCIPFW.SYS, which finds
+controllers and devices above 4 GB, ticked or unticked; /xhcipfw only with
+/thunderbolt or /cmonly), /tbnet and /notbnet (Thunderbolt networking ticked
+or unticked; /tbnet only with /thunderbolt or /cmonly), /faster and
+/nofaster (the "can run faster" notification on or off), /notray, /nouas,
+/storage, /nostorage, /cmonly, /usb, /wdmfree:copy, /wdmfree:stage=<ids>,
+/wdmfree:trust (above), /wdmnonfree:copy and /wdmnonfree:stage=<ids> (the
+components, preselected; /free and /nonfree are the copies), /set Name=Value
+(a setting, preselected), /defaults (every setting kept as it is; not with
+/set), /force (reinstall this release, or go back to it from a newer one),
+/restage (Vista to 10: replace the driver files Windows has stored for this
+package), /log path.
 
 The console tool
 ----------------
@@ -348,7 +351,9 @@ The console tool
   INSTALL /console /list        shows what it would do; changes nothing,
                                 asks nothing, writes no log
   INSTALL /console /yes         asks nothing, and keeps every setting
-                                /set does not name
+                                /set does not name; it still waits
+                                for Enter at the end (/nopause: it
+                                does not)
   INSTALL /console /uninstall   removes the drivers (see below)
   XHCIINST.EXE /dir 98-me       the console tool run directly names its
                                 package folder: 98-me on 98 SE and ME,
@@ -406,25 +411,23 @@ The console tool
                                 system; without either the console asks
                                 on 98 SE, and /yes takes the row's default
   INSTALL /console /wdmfree:copy
-                                copies the experimental free USB drivers
-                                in this download without asking;
-                                /wdmfree:stage=audio/uac2,video/uvc98
-                                also stages those packages so Windows
-                                installs them automatically
-                                (INSTALL /list lists the packages for
-                                this Windows); /wdmnonfree: does the same
-                                for the non-free USB drivers. /freestage
-                                and /nonfreestage are not accepted: name
-                                the packages. Without them the console
-                                asks, Enter for N, and /yes takes N. On
-                                98 SE and ME a package can be staged when
-                                its set stages it on that Windows and its
-                                folders, after those of the packages
-                                named before it, keep DevicePath within
-                                280 characters (259 on ME); any other in
-                                /wdmfree:stage= or /wdmnonfree:stage= is
-                                not accepted, with the reason and nothing
-                                changed
+                                copies the experimental free USB drivers in
+                                this download without asking;
+                                /wdmfree:stage=audio/uac2,video/uvc98 also
+                                stages those packages so Windows installs
+                                them automatically (INSTALL /console /list
+                                lists the packages for this Windows);
+                                /wdmnonfree: does the same for the non-free
+                                USB drivers. /freestage and /nonfreestage are
+                                not accepted: name the packages. Without them
+                                the console asks, Enter for N, and /yes takes
+                                N. On 98 SE and ME a package can be staged
+                                when its set stages it on that Windows and
+                                its folders, after those of the packages
+                                named before it, keep DevicePath within 280
+                                characters (259 on ME); any other in
+                                /wdmfree:stage= or /wdmnonfree:stage= is not
+                                accepted, with the reason and nothing changed
   INSTALL /console /notray      installs without starting xHCI98 USB Tree
                                 at login
   INSTALL /console /faster      turns the "can run faster" notification
@@ -434,14 +437,14 @@ The console tool
   INSTALL /console /to path     installs the xHCI98 tools in that
                                 folder without asking
 
-Its other switches are the window's, and /nopause. On Windows 98 SE and
-ME, INSTALL.BAT takes eight arguments at most, seven after /console, and
-COMMAND.COM splits them at = and at commas: /set Name=Value counts as
-three. With more it does not run a shortened command: it stops with exit
-code 1. Run TOOLS\XHCIINST\XHCIINST.EXE /dir 98-me with the same arguments
-instead for a longer one. On 98 SE and ME the console tool installs each
-device through the helper too; a Windows dialog may open (the Windows CD
-for usbd.sys): answer it as below.
+Its other switches are the window's, and /nopause (no Enter at the end, for
+scripts). On Windows 98 SE and ME, INSTALL.BAT takes eight arguments at
+most, seven after /console, and COMMAND.COM splits them at = and at commas:
+/set Name=Value counts as three. With more it does not run a shortened
+command: it stops with exit code 1. Run TOOLS\XHCIINST\XHCIINST.EXE
+/dir 98-me with the same arguments instead for a longer one. On 98 SE and ME
+the console tool installs each device through the helper too; a Windows
+dialog may open (the Windows CD for usbd.sys): answer it as below.
 
 The connection manager alone
 ----------------------------
@@ -570,7 +573,7 @@ can confirm test-signing mode (above).
 The options
 -----------
 
-The Settings dialog's tabs (and the console's questions) show a few of the
+The Settings dialogs' tabs (and the console's questions) show a few of the
 driver's settings, each only where the hardware it affects is present,
 with the current value, each allowed value with what it means, and the
 default. Only the settings you change are saved, for all controllers
@@ -588,9 +591,10 @@ only if the release notes advise it. On the USB tab: XhciInterruptMode,
 XhciLinkKeep, XhciResumeKeep, XhciUsb2Bos, XhciImodInterval250ns, the
 driver's log (XhciLogVerbosity, XhciLogDebugView), the polling periods
 (XhciPollIdleMs, XhciPollActiveMs) and XhciPollFineTimer on 2000 to 7,
-XhciSelectiveSuspend, XhciForceBulkOnly, XhciFastPollFsLs,
-XhciMaxTransferKB, XhciWideMap on 2000 to 7, and the first report's waits
-(XhciFirstEnumWaitMs, XhciFirstEnumPortMs). On the Thunderbolt tab:
+XhciSelectiveSuspend, XhciForceBulkOnly, XhciBulkOnlyOwnId,
+XhciFastPollFsLs, XhciMaxTransferKB, XhciWideMap on 2000 to 7, and the
+first report's waits (XhciFirstEnumWaitMs, XhciFirstEnumPortMs). On the
+Thunderbolt tab:
 XhciCmRingInterrupt on 2000 to 10, XhciCmReenum, XhciCmUsb3Tunnel,
 XhciCmLaneBonding, XhciCmPreOsCleanup, XhciCmUsb4V2, the connection
 manager's period, its waits and its log, XhciCmBridgeNumbering,

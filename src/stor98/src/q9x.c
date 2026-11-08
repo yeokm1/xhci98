@@ -503,7 +503,7 @@ typedef struct _Q9_ACCT {
     ULONG CreatedMs;
     volatile ULONG Lock;            // 0 free, else the holder's token (or 0xFFFFFFFF during setup)
     volatile ULONG NextToken;
-    ULONG BootCookie;               // == the reference's (current-boot authority, P2-4)
+    ULONG BootCookie;               // == the reference's (current-boot authority; Q-9x.md, the boot reference)
     volatile ULONG LockedTable;     // cookie of the CM table whose pages this boot locked
     ULONG Reserved[3];
     Q9_FUNC Func[Q9_FUNCS];
@@ -2395,7 +2395,8 @@ static VOID Q9Tick(IN PVOID DeviceExtension)
     Q9HoldTimeout(DevExt);
     Q9GoneDeadline(DevExt);
     if (DevExt->Q9Opt.IsrProbe && DevExt->Q9Terminal && !DevExt->Q9QueuesReady) {
-        // Test (P1-1): what a shared IRQ does to a detached instance while
+        // Test (Q-9x.md, the ISR after release): what a shared IRQ does to a
+        // detached instance while
         // another instance may already use its former block.
         BOOLEAN h = HwInterrupt(DevExt);
         if (DevExt->Q9IsrClosed <= 3 || (DevExt->Q9IsrClosed % 50) == 0) {

@@ -8,9 +8,15 @@
 #include <windows.h>
 #include "../src/xhci_version.h"
 #include "tr_res.h"
+#include <commctrl.h>
 
 IDI_APP ICON "xhcitr.ico"
 IDI_RED ICON "xhcitr-f.ico"
+
+/* The silent install's list, the package's tools\silent\SILENT.REG (one
+ * source, src\silent.reg), which the Settings window merges as Setup does
+ * when XhciSilentInstall is turned on (record 25 section 22). */
+IDR_SILENT RCDATA "../src/silent.reg"
 
 1 24 "xhcitr.manifest"
 
@@ -76,6 +82,7 @@ BEGIN
         MENUITEM "Watch Windows' own USB &ports too",   IDM_FAST_WIN
         MENUITEM SEPARATOR
         MENUITEM "Logging le&vel...",                   IDM_LEVEL
+        MENUITEM "Setti&ngs...",                        IDM_SETTINGS
     END
     POPUP "&Action"
     BEGIN
@@ -116,6 +123,46 @@ BEGIN
     LTEXT           "", IDC_ELEV_TEXT, 8, 8, 244, 48
     DEFPUSHBUTTON   "Stop as administrator...", IDOK, 96, 62, 100, 14
     PUSHBUTTON      "Cancel", IDCANCEL, 202, 62, 50, 14
+END
+
+IDD_SETTINGS DIALOG 0, 0, 330, 262
+STYLE DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "xHCI98 Settings"
+FONT 8, "MS Sans Serif"
+BEGIN
+    CONTROL         "", IDC_S_TAB, "SysTabControl32", WS_TABSTOP, 6, 4, 318, 14
+    LTEXT           "", IDC_S_HEAD, 8, 22, 230, 18
+    PUSHBUTTON      "&Restart now...", IDC_S_RESTART, 244, 22, 80, 14
+    LTEXT           "Applies &to:", IDC_S_SCOPE_L, 8, 44, 40, 10
+    COMBOBOX        IDC_S_SCOPE, 50, 42, 274, 100, CBS_DROPDOWNLIST |
+                    WS_VSCROLL | WS_TABSTOP
+    CONTROL         "", IDC_S_LIST, "SysListView32", LVS_REPORT |
+                    LVS_SINGLESEL | LVS_SHOWSELALWAYS | WS_BORDER |
+                    WS_TABSTOP, 8, 58, 316, 112
+    AUTOCHECKBOX    "Show &advanced settings", IDC_S_ADV, 8, 175, 150, 10
+    PUSHBUTTON      "&Logging level...", IDC_S_LEVEL, 244, 173, 80, 14
+    EDITTEXT        IDC_S_NOTE, 8, 190, 316, 28, ES_MULTILINE | ES_READONLY |
+                    ES_AUTOVSCROLL | WS_VSCROLL
+    COMBOBOX        IDC_S_CHOICE, 8, 222, 254, 100, CBS_DROPDOWNLIST |
+                    WS_VSCROLL | WS_TABSTOP
+    EDITTEXT        IDC_S_NUM, 8, 222, 60, 12, ES_NUMBER | ES_AUTOHSCROLL
+    LTEXT           "", IDC_S_RANGE, 72, 224, 190, 10
+    PUSHBUTTON      "&Default", IDC_S_DEF, 268, 221, 56, 14
+    AUTOCHECKBOX    "Start at log&in", IDC_S_LOGIN, 8, 46, 316, 10
+    AUTOCHECKBOX    "&Warn when a device is removed unexpectedly",
+                    IDC_S_WARN, 8, 60, 316, 10
+    AUTOCHECKBOX    "Tell me when a device can run &faster", IDC_S_FAST, 8,
+                    74, 316, 10
+    AUTOCHECKBOX    "Watch Windows' own USB &ports too", IDC_S_FASTWIN, 20,
+                    88, 304, 10
+    AUTOCHECKBOX    "Quick-save &hotkey:", IDC_S_HK, 8, 108, 80, 10
+    COMBOBOX        IDC_S_HKKEY, 90, 106, 110, 100, CBS_DROPDOWNLIST |
+                    WS_VSCROLL | WS_TABSTOP
+    LTEXT           "", IDC_S_HKNOTE, 206, 105, 118, 18
+    AUTOCHECKBOX    "&Sound when a quick save ends", IDC_S_SND, 8, 128, 150,
+                    10
+    DEFPUSHBUTTON   "Apply", IDOK, 152, 242, 114, 14
+    PUSHBUTTON      "Close", IDCANCEL, 272, 242, 52, 14
 END
 
 IDD_LEVEL DIALOG 0, 0, 400, 236

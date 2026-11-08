@@ -37,8 +37,11 @@ OS file, each rule named as check-inf.ps1 names its families.
            [<install>.HW] writes HKR,,upperfilters,0,"USBNTMAP.SYS" and
            nothing else - NUSB's USBSTOR.INF value, without which NUSB's
            port driver fails every unit (Code 10) - naming the file, never
-           copying it; no .NTx86.HW or .NTamd64.HW section exists, so the NT
-           path is unchanged. UAS-TMPNAME: xhciuas.sys is copied with no
+           copying it; the NT path's .NTx86.HW or .NTamd64.HW carries no
+           filter. UAS-NOATA (issue 26): every install path's hardware-key
+           section writes HKR,,XhciUasNoAtaPassThrough,0x00010003,0 and
+           HKR,,XhciUasFastReset,0x00010003,0 - DWORDs, 0, never over a
+           value already there - and the NT path's writes nothing else. UAS-TMPNAME: xhciuas.sys is copied with no
            temporary-file name, in both INFs; one would route the copy on
            Windows 98 through WININIT.INI and a restart even at a first
            install, and no NT install takes that route.
@@ -259,6 +262,13 @@ function Test-UasInfText {
         }
     }
 
+    # Issue 26: the per-device values, each a DWORD (0x00010001) with
+    # FLG_ADDREG_NOCLOBBER (0x2), at 0: a user's 1 survives an update.
+    $deviceValues = @("XhciUasNoAtaPassThrough", "XhciUasFastReset")
+    $isNoAta = {
+        param($f)
+        return ($f.Count -eq 5 -and $f[0] -ieq "HKR" -and $f[1] -eq "" -and ($deviceValues -icontains $f[2]) -and $f[3] -ieq "0x00010003" -and $f[4] -eq "0")
+    }
     foreach ($inst in ($installs | Select-Object -Unique)) {
         # Windows 98, or on amd64 its absence.
         $s9 = & $get $inst
@@ -289,6 +299,7 @@ function Test-UasInfText {
             if ($null -eq $shw) { & $add "UAS-FILTER" "no [$inst.HW]: Windows 98 needs HKR,,upperfilters,0,`"USBNTMAP.SYS`" on the device's hardware key, or every unit is Code 10." }
             else {
                 $haveFilter = $false
+                $seen9x = @()
                 foreach ($r in ((& $directive $shw "AddReg") -join ',' -split ',')) {
                     if ($r.Trim() -eq "") { continue }
                     $rs = & $get $r.Trim()
@@ -296,17 +307,38 @@ function Test-UasInfText {
                     foreach ($l in $rs.Lines) {
                         $f = @($l.Raw -split ',' | ForEach-Object { $_.Trim() })
                         if ($f.Count -eq 5 -and $f[0] -ieq "HKR" -and $f[1] -eq "" -and $f[2] -ieq "upperfilters" -and $f[3] -eq "0" -and $f[4] -ieq '"USBNTMAP.SYS"') { $haveFilter = $true }
-                        else { & $add "UAS-FILTER" "[$($rs.Name)] writes '$($l.Raw)'; the hardware key carries the USBNTMAP.SYS upper filter and nothing else." }
+                        elseif (& $isNoAta $f) { $seen9x += $f[2] }
+                        elseif ($f.Count -ge 3 -and ($deviceValues -icontains $f[2])) { & $add "UAS-NOATA" "[$($rs.Name)] writes '$($l.Raw)'; the value is written HKR,,$($f[2]),0x00010003,0 (a DWORD, 0, no overwrite)." }
+                        else { & $add "UAS-FILTER" "[$($rs.Name)] writes '$($l.Raw)'; the hardware key carries the USBNTMAP.SYS upper filter and XhciUasNoAtaPassThrough, nothing else." }
                     }
                 }
                 foreach ($d in @($shw.Lines | Where-Object { $_.Key -ine "AddReg" })) { & $add "UAS-FILTER" "[$inst.HW] carries '$($d.Raw)'; it names the filter only (the file is Microsoft's, placed by NUSB)." }
                 if (-not $haveFilter) { & $add "UAS-FILTER" "[$inst.HW] writes no HKR,,upperfilters,0,`"USBNTMAP.SYS`"." }
+                foreach ($v in $deviceValues) { if ($seen9x -inotcontains $v) { & $add "UAS-NOATA" "[$inst.HW] writes no HKR,,$v,0x00010003,0." } }
             }
         }
         if ($Profile -eq "amd64" -and $null -ne (& $get "$inst.HW")) { & $add "PATH-NO9X" "an undecorated [$inst.HW] is one a 32-bit engine would read." }
-        # The NT path is unchanged: disk.sys takes the units with no filter,
-        # and a filter named there with no service would fail the stack.
-        if ($null -ne (& $get "$inst$ntSuffix.HW")) { & $add "UAS-FILTER" "[$inst$ntSuffix.HW]: the NT targets take no filter." }
+        # The NT path's hardware key: XhciUasNoAtaPassThrough and nothing
+        # else. disk.sys takes the units with no filter, and a filter named
+        # there with no service would fail the stack.
+        $nhw = & $get "$inst$ntSuffix.HW"
+        if ($null -eq $nhw) { & $add "UAS-NOATA" "no [$inst$ntSuffix.HW] writing HKR,,XhciUasNoAtaPassThrough,0x00010003,0 for the NT targets." }
+        else {
+            $seenNt = @()
+            foreach ($r in ((& $directive $nhw "AddReg") -join ',' -split ',')) {
+                if ($r.Trim() -eq "") { continue }
+                $rs = & $get $r.Trim()
+                if ($null -eq $rs) { & $add "BOTH-XREF" "[$inst$ntSuffix.HW] AddReg names [$($r.Trim())], which does not exist."; continue }
+                foreach ($l in $rs.Lines) {
+                    $f = @($l.Raw -split ',' | ForEach-Object { $_.Trim() })
+                    if (& $isNoAta $f) { $seenNt += $f[2] }
+                    elseif ($f.Count -ge 3 -and $f[2] -ieq "upperfilters") { & $add "UAS-FILTER" "[$inst$ntSuffix.HW]: the NT targets take no filter ('$($l.Raw)')." }
+                    else { & $add "UAS-NOATA" "[$($rs.Name)] writes '$($l.Raw)' for the NT targets; their hardware key carries XhciUasNoAtaPassThrough alone." }
+                }
+            }
+            foreach ($d in @($nhw.Lines | Where-Object { $_.Key -ine "AddReg" })) { & $add "UAS-NOATA" "[$inst$ntSuffix.HW] carries '$($d.Raw)'; it writes the one value only." }
+            foreach ($v in $deviceValues) { if ($seenNt -inotcontains $v) { & $add "UAS-NOATA" "[$inst$ntSuffix.HW] writes no HKR,,$v,0x00010003,0." } }
+        }
         # NT.
         $snt = & $get "$inst$ntSuffix"
         if ($null -eq $snt) { & $add "PATH-NT" "no [$inst$ntSuffix] for the NT targets." }
@@ -416,12 +448,18 @@ if ($SelfTest) {
                 @{ Rule = "BOTH-STRINGS";  Text = $text.Replace('UasDesc="', 'UasDescription="') },
                 @{ Rule = "UAS-LAYOUT";    Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nLayoutFile=layout.inf") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]", "[Uas.Dev.Hw2]") },
-                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg", "[Uas.Dev.HW]") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg,Uas.Param.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.Param.AddReg") },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'lowerfilters,0,"USBNTMAP.SYS"') },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'upperfilters,0,"USBSTOR.SYS"') },
                 @{ Rule = "UAS-FILTER";    Text = $text.Replace('upperfilters,0,"USBNTMAP.SYS"', 'upperfilters,0x00010000,"USBNTMAP.SYS"') },
-                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`nCopyFiles=Uas.CopyFiles") },
-                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTx86.Services]", "[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.Dev.NTx86.Services]") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg,Uas.Param.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg,Uas.Param.AddReg`r`nCopyFiles=Uas.CopyFiles") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.Param.AddReg", "[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.Param.AddReg,Uas.HW.AddReg") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg,Uas.Param.AddReg", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("[Uas.Dev.NTx86.HW]`r`nAddReg=Uas.Param.AddReg", "[Uas.Dev.NTx86.Hw2]`r`nAddReg=Uas.Param.AddReg") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("XhciUasNoAtaPassThrough,0x00010003,0", "XhciUasNoAtaPassThrough,0x00010001,0") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("XhciUasNoAtaPassThrough,0x00010003,0", "XhciUasNoAtaPassThrough,0x00010003,1") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("HKR,,XhciUasFastReset,0x00010003,0`r`n", "") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("XhciUasFastReset,0x00010003,0", "XhciUasFastReset,0x00010001,0") },
                 @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbntmap.sys") },
                 @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") },
                 @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("Provider=%Provider%", "Provider=%Provider%`r`nCatalogFile=xhciuas.cat") },
@@ -438,7 +476,10 @@ if ($SelfTest) {
                 @{ Rule = "BOTH-VERSION";  Text = ($text -replace 'DriverVer=\d\d/\d\d/\d{4},[0-9.]+', 'DriverVer=01/01/2020,9.9.9.9') },
                 @{ Rule = "UAS-MSFILE";    Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys`r`nusbd.sys,,,16") },
                 @{ Rule = "UAS-TMPNAME";   Text = $text.Replace("[Uas.CopyFiles]`r`nxhciuas.sys", "[Uas.CopyFiles]`r`nxhciuas.sys,,xhciuas.tmp") },
-                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
+                @{ Rule = "UAS-FILTER";    Text = $text.Replace("[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.Param.AddReg", "[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.Param.AddReg,Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("[Uas.Dev.NTamd64.HW]`r`nAddReg=Uas.Param.AddReg", "[Uas.Dev.NTamd64.Hw2]`r`nAddReg=Uas.Param.AddReg") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("XhciUasNoAtaPassThrough,0x00010003,0", "XhciUasNoAtaPassThrough,0x00010003,1") },
+                @{ Rule = "UAS-NOATA";     Text = $text.Replace("XhciUasFastReset,0x00010003,0", "XhciUasFastReset,0x00010003,1") },
                 @{ Rule = "PATH-NO9X";     Text = $text.Replace("[Uas.Dev.NTamd64.Services]", "[Uas.Dev.HW]`r`nAddReg=Uas.HW.AddReg`r`n`r`n[Uas.HW.AddReg]`r`nHKR,,upperfilters,0,`"USBNTMAP.SYS`"`r`n`r`n[Uas.Dev.NTamd64.Services]") },
                 @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat`r`n", "") },
                 @{ Rule = "BOTH-CATALOG";  Text = $text.Replace("CatalogFile=xhciuas.cat", "CatalogFile=xhci98.cat") },

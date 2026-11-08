@@ -970,6 +970,25 @@ static void test_texts(void)
 
     tr_gen_text(CM_ST_GEN_TBT3, out, sizeof(out));
     CHECK(strcmp(out, "Thunderbolt 3") == 0, "gen TBT3");
+    /* 15:8 of a Thunderbolt entry: its generation (record 22 19.10 item 5),
+     * 0 or 3 read as Thunderbolt 3. */
+    /* Task 47.29: the structural refusal's line, from bit 26 alone. */
+    CHECK(tr_ho_same_text(CM_ST_F_HO_SAMEOFF) != NULL &&
+          strncmp(tr_ho_same_text(CM_ST_F_HO_SAMEOFF),
+                  "  Handover not sent: this firmware is not a known build",
+                  55) == 0,
+          "the structural refusal's line");
+    CHECK(tr_ho_same_text(CM_ST_HO_SAME << CM_ST_F_HO_SHIFT) == NULL,
+          "tier 3 alone: no line");
+    CHECK(tr_ho_same_text(0) == NULL, "no flags: no line");
+    tr_gen_text(CM_ST_GEN_TBT3 | 0x100UL, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 1") == 0, "gen TBT, generation 1");
+    tr_gen_text(CM_ST_GEN_TBT3 | 0x200UL, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 2") == 0, "gen TBT, generation 2");
+    tr_gen_text(CM_ST_GEN_TBT3 | 0x300UL, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3") == 0, "gen TBT, generation 3");
+    tr_gen_text(CM_ST_GEN_TBT3 | 0x400UL, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3") == 0, "gen TBT, no such generation");
     /* 15:8 is ROUTER_CS_4's USB4 Version byte: major 7:5, minor 4:0. */
     tr_gen_text(CM_ST_GEN_USB4 | 0x2000UL, out, sizeof(out));
     CHECK(strcmp(out, "USB4 v1.0") == 0, "gen USB4 v1.0 (20h)");
@@ -1041,6 +1060,7 @@ static void test_texts(void)
 
     /* A Thunderbolt 3 router behind a USB4 host (task 40-A.8). */
     CHECK(tr_gen_tbt3(CM_ST_GEN_TBT3), "TBT3 by the generation");
+    CHECK(tr_gen_tbt3(CM_ST_GEN_TBT3 | 0x100UL), "a Thunderbolt 1 router");
     CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x1000UL), "USB4 Version 10h: major 0");
     CHECK(tr_gen_tbt3(CM_ST_GEN_USB4 | 0x0200UL), "USB4 Version 02h: major 0");
     CHECK(!tr_gen_tbt3(CM_ST_GEN_USB4 | 0x2000UL), "USB4 v1.0 is not TBT3");
@@ -1066,6 +1086,20 @@ static void test_texts(void)
                      &x, out, sizeof(out));
     CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, lanes not known") == 0,
           "link: TBT3 without width");
+    /* A Thunderbolt 1 or 2 router by its generation in 15:8 (record 22
+     * section 19.10 item 5), with and without a width. */
+    tr_link_text_gen(CM_ST_GEN_TBT3 | 0x100UL, CM_ST_KIND_USB4_PORT,
+                     CM_ST_LANES_UNKNOWN, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 1, 20 Gbit/s per lane, lanes not known") == 0,
+          "link: a Thunderbolt 1 router without width");
+    tr_link_text_gen(CM_ST_GEN_TBT3 | 0x200UL, CM_ST_KIND_USB4_PORT,
+                     CM_ST_LANES_BONDED, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 2, 20 Gbit/s per lane, x2 (40 Gbit/s)") == 0,
+          "link: a Thunderbolt 2 router bonded");
+    tr_link_text_gen(CM_ST_GEN_TBT3 | 0x300UL, CM_ST_KIND_USB4_PORT,
+                     CM_ST_LANES_SINGLE, &x, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3, 20 Gbit/s per lane, x1 (20 Gbit/s)") == 0,
+          "link: a generation 3 router, one lane");
     x.Width = 2;
     x.Flags = CM_Q_XF_RATE_READ;
     tr_link_text_gen(CM_ST_GEN_USB4 | 0x2000UL, CM_ST_KIND_USB4_PORT,
@@ -1764,6 +1798,76 @@ static void test_keys_args_report(void)
     tr_text_init(&t, big, sizeof(big));
     tr_report_node(&t, 0, "A", "");
     CHECK(strcmp(big, "A\r\n") == 0, "report: empty details");
+
+    /* The node's size: exactly what tr_report_node writes, NUL included,
+     * so a buffer of that size holds it and one byte less does not. */
+    {
+        static const char *dets[4] = { "a\r\nb\nc", NULL, "x\r\n\r\ny\r\n", "" };
+        static const int depths[4] = { 1, 0, 2, 0 };
+        char small[128];
+        size_t need;
+        int k;
+        for (k = 0; k < 4; k++) {
+            tr_text_init(&t, big, sizeof(big));
+            tr_report_node(&t, depths[k], "Label", dets[k]);
+            need = tr_report_node_bytes(depths[k], "Label", dets[k]);
+            CHECK_EQ(need, t.Len + 1, "report node bytes: the written length + 1");
+            tr_text_init(&t, small, need);
+            tr_report_node(&t, depths[k], "Label", dets[k]);
+            CHECK(!t.Overflow && strcmp(small, big) == 0,
+                  "report node bytes: that buffer holds the node whole");
+            tr_text_init(&t, small, need - 1);
+            tr_report_node(&t, depths[k], "Label", dets[k]);
+            CHECK(t.Overflow, "report node bytes: one byte less overflows");
+        }
+        /* Deep and many short lines: the indent is per line, not a
+         * multiple of the details' size. */
+        tr_text_init(&t, big, sizeof(big));
+        for (k = 0; k < 400; k++) {
+            tr_put(&t, "x\n");
+        }
+        need = tr_report_node_bytes(9, "Deep", big);
+        CHECK_EQ(need, 24 + 400 * 27 + 1,
+                 "report node bytes: 400 lines at depth 9");
+    }
+
+    /* A cut text ends with the mark, at a line break, within its buffer. */
+    {
+        char cut[96];
+        size_t n = sizeof(TR_CUT_MARK) - 1;
+        int k;
+        tr_text_init(&t, cut, sizeof(cut));
+        tr_put(&t, "short\n");
+        tr_text_mark_cut(&t);
+        CHECK(strcmp(cut, "short\r\n") == 0, "cut: nothing when it fitted");
+        tr_text_init(&t, cut, sizeof(cut));
+        for (k = 0; k < 20; k++) {
+            tr_put(&t, "line\n");
+        }
+        CHECK(t.Overflow, "cut: twenty lines overflow 96 bytes");
+        tr_text_mark_cut(&t);
+        CHECK(t.Overflow, "cut: Overflow stays set");
+        CHECK_EQ(strlen(cut), t.Len, "cut: Len is the text's length");
+        CHECK(t.Len < sizeof(cut), "cut: within the buffer");
+        CHECK(t.Len >= n && strcmp(cut + t.Len - n, TR_CUT_MARK) == 0,
+              "cut: the mark at the end");
+        CHECK(strncmp(cut, "line\r\nline\r\n", 12) == 0 &&
+              cut[t.Len - n - 1] == 'e',
+              "cut: whole lines kept, the last one's CR LF the mark's");
+        tr_text_init(&t, cut, sizeof(cut));
+        for (k = 0; k < 200; k++) {
+            tr_put(&t, "z");
+        }
+        tr_text_mark_cut(&t);
+        CHECK(t.Len == sizeof(cut) - 1 && strcmp(cut + t.Len - n, TR_CUT_MARK) == 0,
+              "cut: one long line cut at the buffer's end");
+        tr_text_init(&t, cut, 8);
+        for (k = 0; k < 20; k++) {
+            tr_put(&t, "z");
+        }
+        tr_text_mark_cut(&t);
+        CHECK(strcmp(cut, "zzzzzzz") == 0, "cut: no room for the mark, left alone");
+    }
 }
 
 static void test_sizes(void)
@@ -3380,7 +3484,7 @@ static void test_bkind(void)
     tr_bkind_step(&b, TR_BE_OTHER);
     tr_bkind_step(&b, TR_BE_SHOW);
     CHECK_EQ(tr_bkind_fast(&b, 1), 0, "bkind: the reverse order too");
-    /* Round 2's case: one shown, two of different kinds sent behind it,
+    /* A reviewed case: one shown, two of different kinds sent behind it,
      * its end, then a show: in doubt, and so are three waiting; the doubt
      * clears as the shows take them away. */
     memset(&b, 0, sizeof(b));
@@ -3440,7 +3544,7 @@ static void test_bkind(void)
         tr_bkind_step(&b, TR_BE_SHOW);
         CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: drained: sure again");
     }
-    /* Round 4's case: seventeen others, then the notice, none shown yet:
+    /* A reviewed case: seventeen others, then the notice, none shown yet:
      * the two not kept come first, all the others in doubt, the notice's
      * last. */
     memset(&b, 0, sizeof(b));
@@ -3461,7 +3565,7 @@ static void test_bkind(void)
         tr_bkind_step(&b, TR_BE_SHOW);
         CHECK_EQ(tr_bkind_fast(&b, 1), 1, "bkind: the notice's, last");
     }
-    /* Round 3's case: the re-send's removal with an older balloon's show
+    /* A reviewed case: the re-send's removal with an older balloon's show
      * still on its way. */
     memset(&b, 0, sizeof(b));
     tr_bkind_step(&b, TR_BE_OTHER);
@@ -4424,6 +4528,18 @@ static void test_gen_link(void)
     tr_gen_link_text(CM_ST_GEN_TBT3, TR_UP_TBT2, out, sizeof(out));
     CHECK(strcmp(out, "Thunderbolt 3 device, running as Thunderbolt 2") == 0,
           "line: TBT3 on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_TBT3 | 0x300UL, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 3 device, running as Thunderbolt 2") == 0,
+          "line: a generation 3 router on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_TBT3 | 0x200UL, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 2") == 0,
+          "line: a Thunderbolt 2 router on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_TBT3 | 0x100UL, TR_UP_TBT2, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 1") == 0,
+          "line: a Thunderbolt 1 router on a Falcon Ridge host");
+    tr_gen_link_text(CM_ST_GEN_TBT3 | 0x100UL, TR_UP_TBT3, out, sizeof(out));
+    CHECK(strcmp(out, "Thunderbolt 1") == 0,
+          "line: a Thunderbolt 1 router on a Thunderbolt 3 host");
     tr_gen_link_text(CM_ST_GEN_UNKNOWN, TR_UP_TBT2, out, sizeof(out));
     CHECK(strcmp(out, "generation not known") == 0, "line: unknown on FR");
     tr_gen_link_text(CM_ST_GEN_UNKNOWN, TR_UP_TBT3, out, sizeof(out));
@@ -4600,9 +4716,60 @@ static void test_snap_saved(void)
     CHECK(strlen(out) == 63, "snap: the output's bound held");
 }
 
+/* Task 47.30 (design record 13 section 11.10, Part B, point 2): the `at`
+ * records' age and time of day, and the line they are read from. */
+static void test_at_records(void)
+{
+    char out[16];
+    TR_U32 v;
+    TR_U32 nowLo;
+    TR_U32 nowHi;
+
+    /* A snapshot time and a note 10 s (97,656.25 units) before it. */
+    nowLo = 0x12345400UL;
+    nowHi = 0x01DB0001UL;
+    v = ((nowHi << 22) | (nowLo >> 10)) - 97656UL;
+    CHECK_EQ(tr_at_age(nowLo, nowHi, v), 97656UL, "ten seconds before");
+    CHECK_EQ(tr_at_age(nowLo, nowHi, (nowHi << 22) | (nowLo >> 10)), 0,
+             "at the snapshot");
+    /* Across the 32-bit wrap: a note just before it, the snapshot after. */
+    CHECK_EQ(tr_at_age(0x00001400UL, 0x00000400UL, 0xFFFFFFF0UL), 0x15UL,
+             "across the wrap");
+    /* The 5.09-day edge: one unit short of a lap, then a lap (reads 0). */
+    CHECK_EQ(tr_at_age(nowLo, nowHi, ((nowHi << 22) | (nowLo >> 10)) + 1UL),
+             0xFFFFFFFFUL, "the oldest time it can place");
+    /* 2026-11-06 23:37:16.500 UTC as a FILETIME: 0x01DD6E47:0xC1D9E940
+     * (134384818365000000 x 100 ns). */
+    tr_at_utc(out, sizeof(out), 0xC1D9E940UL, 0x01DD6E47UL, 0);
+    CHECK(strcmp(out, "23:37:16.500") == 0, "the snapshot's own time");
+    tr_at_utc(out, sizeof(out), 0xC1D9E940UL, 0x01DD6E47UL, 97656UL);
+    CHECK(strcmp(out, "23:37:06.500") == 0, "ten seconds earlier");
+    /* 2026-11-07 00:00:01.000 UTC: 134384832010000000. */
+    tr_at_utc(out, sizeof(out), 0xEF281680UL, 0x01DD6E4AUL, 97656UL);
+    CHECK(strcmp(out, "23:59:51.000") == 0, "back past midnight");
+    tr_at_utc(out, sizeof(out), 0xC1D9E940UL, 0x01DD6E47UL, 0xFFFFFFFFUL);
+    CHECK(strcmp(out, "21:27:11.848") == 0, "a 5.09-day age, its time of day");
+    tr_at_utc(out, sizeof(out), 0x00000400UL, 0x01DD6E47UL, 2UL);
+    CHECK(strcmp(out, "23:31:51.271") == 0, "a borrow from the high half");
+    CHECK_EQ(tr_at_line("at=0001E848", &v), 1, "an at record");
+    CHECK_EQ(v, 0x0001E848UL, "its value");
+    CHECK_EQ(tr_at_line("at=0001e848", &v), 1, "lower case read too");
+    CHECK_EQ(tr_at_line("at=0001E84", &v), 0, "seven digits");
+    CHECK_EQ(tr_at_line("at=0001E8480", &v), 0, "nine digits");
+    CHECK_EQ(tr_at_line("xfer.error=00030E0E", &v), 0, "another record");
+    CHECK_EQ(tr_at_line("at", &v), 0, "no value");
+    CHECK_EQ(tr_at_line("at=0001G848", &v), 0, "not hexadecimal");
+    CHECK_EQ(tr_at_line(NULL, &v), 0, "no line");
+    /* The driver's "no sample" (no gap measured, no dry event): none. */
+    CHECK_EQ(tr_at_line("at=00000000", &v), 2, "no sample: none");
+    CHECK_EQ(v, 0, "its value");
+    CHECK_EQ(tr_at_line("at=00000001", &v), 1, "the first unit is a time");
+}
+
 int main(void)
 {
     test_main_title();
+    test_at_records();
     test_printf();
     test_hex_names();
     test_conn();

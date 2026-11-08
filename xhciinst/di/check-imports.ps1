@@ -1,4 +1,4 @@
-#Requires -Version 2.0
+#Requires -Version 3.0
 <#
 check-imports.ps1 - the import gate of XHCIDI.EXE (design record 27 sections
 2 and 7). A 16-bit Windows image imports by module and ordinal, and

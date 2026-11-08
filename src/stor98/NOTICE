@@ -31,10 +31,12 @@ the info") replaced the placeholder with "Copyright (c) 2025, Dominik Behr" and 
 nothing else in the file. So nvme2k 1.0.0.2 is BSD-3-Clause on the same terms as 1.2.0.0,
 and Stor98 names its author with the copyright line he filled in later.
 
-`inf/stor98-x64.inf` and the NT sections of `inf/stor98-x86.inf` derive from nvme2k
+The two NT INFs, `inf/stor98-x86.inf` and `inf/stor98-x64.inf`, derive from nvme2k
 1.2.0.0's `WDM/NVMe2K.inf` (in `third_party/nvme2k-1.2.0.0/`), whose header reads
-"Copyright (c) 2025 Dominik Behr + Ray Hinchliffe"; `LICENSE` names both. The Windows
-9x sections of `inf/stor98-x86.inf` derive from SweetLow's `nvme9x.inf` (below).
+"Copyright (c) 2025 Dominik Behr + Ray Hinchliffe"; `LICENSE` names both. The Windows 9x
+INF, `inf/stor98-9x.inf`, derives from SweetLow's `nvme9x.inf` (below). Up to xhci98
+3.3.0.0 the Windows 9x sections were part of `inf/stor98-x86.inf`, whose header still
+carries SweetLow's copyright line.
 
 ## nvme9x / nvment (SweetLow)
 
@@ -57,9 +59,14 @@ Not included. The Windows 9x build needs `SCSI.H` and `SRB.H` from the Windows 9
 DDK; place them in `tools/w98ddk/inc/` (git-ignored). The other kits (MSVC 6.0, Windows 2000
 DDK, WDK 7.1) live in `tools/` too; see `docs/BUILD.md`.
 
-## CM interface header
+## Interface headers
 
 `include/stor98cm.h` is original to this project (Yeo Kheng Meng, BSD-3-Clause). It defines
 the interface between xhci98's connection manager and stor98 and is licensed on its own as
-an interface definition, so that xhci98 (GPL-2.0) can include it unchanged; the file says
-so in its header.
+an interface definition, so that xhci98 (GPL-2.0-or-later) can include it unchanged; the
+file says so in its header.
+
+`include/stor98pf.h` is original to this project too (Yeo Kheng Meng, BSD-3-Clause). It
+defines stor98's read-only counter answer, which xhci98's disk benchmark XHCIPERF reads,
+and is licensed on its own as an interface definition on the same terms, so that XHCIPERF
+can include it unchanged; the file says so in its header.

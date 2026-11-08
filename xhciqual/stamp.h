@@ -4,7 +4,7 @@
  *
  * A batch file cannot build a name from the clock (COMMAND.COM on 98 SE, ME
  * and MS-DOS 7.x has no %DATE% or %TIME%), so the tool does. The scheme is
- * the one XHCISNAP uses for its own outputs:
+ * the one XHCITR's snapshot files use (XHCISNAP's up to 3.0.0.0):
  *
  *   mDDhhmmS.EXT
  *

@@ -281,10 +281,10 @@ int report_logging(void)
 static const char *class_name(int pc)
 {
     switch (pc) {
-    case PC_USB2_ONLY:   return "USB2-only (managed)";
-    case PC_USB2_PAIRED: return "USB2 companion (managed)";
-    case PC_USB3_PAIRED: return "USB3 companion (unmanaged)";
-    case PC_USB3_ORPHAN: return "USB3 orphan (unmanaged)";
+    case PC_USB2_ONLY:   return "USB2-only (tested)";
+    case PC_USB2_PAIRED: return "USB2 companion (tested)";
+    case PC_USB3_PAIRED: return "USB3 companion (not tested here)";
+    case PC_USB3_ORPHAN: return "USB3 orphan (not tested here)";
     default:             return "unclassified";
     }
 }
@@ -401,6 +401,8 @@ void report_controller(CTRL *c, int active_ran)
                 c->dma_note[0] ? c->dma_note : "not run");
         qprintf("  C4 IRQ:      %-4s  %s (ISR count %lu)\n",
                 verdict_name(c->v_irq), c->irq_note, c->irq_isr_count);
+        if (c->irq_teardown_failed)
+            qprintf("  C4 hook:     FAIL  %s\n", c->irq_teardown_note);
         if (c->irq_foreign_count != 0)
             qprintf("               (%lu foreign interrupt(s) on this "
                     "vector - line masked for safety)\n",

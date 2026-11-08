@@ -11,6 +11,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include "../src/xhci_msi.h"
 #include "../src/xhci_hlpr.h"
 #include "../src/xhci_poll.h"
@@ -32,6 +33,7 @@
 #define D_PA    7
 #define D_CFG   8   /* starts the next configuration */
 #define D_BA    9   /* a BAR's alternative */
+#define D_C     10  /* a configuration's priority (ConfigData) */
 
 static UCHAR in[BUF];
 static UCHAR out[BUF];
@@ -74,6 +76,9 @@ static void put_desc(UCHAR *d, int code, ULONG tag)
     case D_P:
     case D_PA:
         d[XHCI_MSI_RD_TYPE] = (UCHAR)XHCI_MSI_TYPE_DEVPRIVATE;
+        break;
+    case D_C:
+        d[XHCI_MSI_RD_TYPE] = (UCHAR)XHCI_MSI_TYPE_CONFIGDATA;
         break;
     }
     if (code == D_LA || code == D_MA || code == D_PA || code == D_BA) {
@@ -593,6 +598,325 @@ static void test_inj(void)
     XhciMsiWalk(out, &w);
     CHECK_EQ(XhciMsiInjNoLine(out, &w, in, BUF), 0,
              "a no-line list is not rewritten again");
+}
+
+/* Task 47.33: Windows 2000 / XP / XP x64 - the PCI driver's one
+ * configuration kept, then its copy without the line. */
+static ULONG nt5(const int *codes, ULONG *need)
+{
+    XHCI_MSI_WALK w;
+    ULONG size;
+
+    (void)build(codes);
+    XhciMsiWalk(in, &w);
+    *need = XhciMsiAppendNoIntr(in, &w, NULL, 0);
+    size = XhciMsiAppendNoIntr(in, &w, out, BUF);
+    if (*need != 0) {
+        CHECK_EQ(size, *need, "the writing pass is the sizing pass's size");
+        CHECK_EQ(get32(out), size, "ListSize is what was written");
+        XhciMsiWalk(out, &w);
+        CHECK_EQ(w.Verdict, XHCI_MSI_WALK_OK, "the result walks");
+        CHECK_EQ(w.Used, size, "and uses all of itself");
+    }
+    return size;
+}
+
+static void test_nt5(void)
+{
+    /* The list XP x64's PCI driver gave the 8470p's state (a3): memory,
+     * device-private, the line. */
+    static const int a3[] = { D_B, D_P, D_L, D_END };
+    /* Its control: the boot configuration preferred, an alternative BAR. */
+    static const int g0[] = { D_B, D_BA, D_P, D_L, D_END };
+    static const int lineRun[] = { D_B, D_L, D_LA, D_LA, D_P, D_END };
+    static const int two[] = { D_B, D_L, D_CFG, D_B, D_P, D_END };
+    static const int twoLine[] = { D_B, D_L, D_CFG, D_B, D_P, D_L, D_END };
+    static const int noLine[] = { D_B, D_P, D_END };
+    static const int msg[] = { D_B, D_M, D_LA, D_END };
+    static const int mixed[] = { D_B, D_L, D_PA, D_END };
+    static const int mixed2[] = { D_P, D_LA, D_END };
+    static const int lineOnly[] = { D_L, D_END };
+    static const int opensAlt[] = { D_BA, D_L, D_END };
+    static const int prio[] = { D_C, D_B, D_L, D_END };
+    XHCI_MSI_WALK w;
+    XHCI_MSI_CLASSIFY c;
+    ULONG need;
+    ULONG size;
+
+    size = nt5(a3, &need);
+    CHECK(size != 0, "a3: rewritten");
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 2, "a3: two lists");
+    CHECK_EQ(count_at(out, 0), 3, "a3: the first as given");
+    CHECK_EQ(tag_at(out, 0, 2), 2, "a3: its line kept");
+    CHECK_EQ(count_at(out, 1), 2, "a3: the copy without the line");
+    CHECK_EQ(tag_at(out, 1, 0), 0, "a3: the BAR first");
+    CHECK_EQ(tag_at(out, 1, 1), 1, "a3: then the device-private");
+    CHECK_EQ(size, XHCI_MSI_RRL_HEADER + 2 * XHCI_MSI_RL_HEADER +
+                       5 * XHCI_MSI_RD_SIZE, "a3: 136 + 72 bytes");
+    CHECK(memcmp(out + 4, in + 4, XHCI_MSI_RRL_ALTERNATIVES - 4) == 0,
+          "the header's interface, bus and slot kept");
+    CHECK(memcmp(out + XHCI_MSI_RRL_HEADER, in + XHCI_MSI_RRL_HEADER,
+                 XHCI_MSI_RL_HEADER + 3 * XHCI_MSI_RD_SIZE) == 0,
+          "the lower configuration byte for byte");
+    CHECK(memcmp(desc_at(out, 1, 0) - XHCI_MSI_RL_HEADER,
+                 in + XHCI_MSI_RRL_HEADER, 4) == 0,
+          "the copy's version and revision kept");
+
+    size = nt5(g0, &need);
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 2, "g0: two lists");
+    CHECK_EQ(count_at(out, 1), 3, "g0: BAR, its alternative, private");
+    CHECK_EQ(opt_at(out, 1, 1), XHCI_MSI_OPTION_ALTERNATIVE,
+             "g0: the BAR's alternative stays an alternative");
+    CHECK_EQ(tag_at(out, 1, 2), 2, "g0: the private last");
+
+    size = nt5(lineRun, &need);
+    CHECK_EQ(count_at(out, 1), 2, "a line run dropped whole");
+    CHECK_EQ(tag_at(out, 1, 1), 4, "the private after it kept");
+    CHECK_EQ(opt_at(out, 1, 1), 0, "and still a head");
+
+    CHECK_EQ(nt5(two, &need), 0,
+             "a configuration already without a line: nothing added");
+
+    CHECK_EQ(nt5(twoLine, &need), 0,
+             "two configurations, both with a line: not the PCI shape");
+    CHECK_EQ(nt5(prio, &need), 0, "a configuration priority: refused");
+
+    CHECK_EQ(nt5(noLine, &need), 0, "no line: nothing to add");
+    CHECK_EQ(nt5(msg, &need), 0, "a message member: refused");
+    CHECK_EQ(nt5(mixed, &need), 0, "a line run with another type: refused");
+    CHECK_EQ(nt5(mixed2, &need), 0, "a private run with a line: refused");
+    CHECK_EQ(nt5(lineOnly, &need), 0, "a copy would be empty: refused");
+    CHECK_EQ(nt5(opensAlt, &need), 0, "a list opening on an alternative");
+
+    (void)build(a3);
+    XhciMsiWalk(in, &w);
+    need = XhciMsiAppendNoIntr(in, &w, NULL, 0);
+    CHECK_EQ(XhciMsiAppendNoIntr(in, &w, out, need - 1), 0,
+             "one byte short: nothing written");
+    w.Verdict = XHCI_MSI_WALK_COUNT;
+    CHECK_EQ(XhciMsiAppendNoIntr(in, &w, out, BUF), 0,
+             "a refused walk: nothing");
+
+    /* The result classifies as lines only with one configuration without
+     * an interrupt, and a second filter on it (a rebalance's) adds
+     * nothing. */
+    (void)nt5(a3, &need);
+    XhciMsiWalk(out, &w);
+    XhciMsiClassify(out, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_MESSAGE, "still lines only");
+    CHECK_EQ(c.NoInterrupt, 1, "one configuration without an interrupt");
+    CHECK_EQ(XhciMsiAppendNoIntr(out, &w, in, BUF), 0,
+             "a rewritten list is not rewritten again");
+}
+
+/* Task 47.33, record 18 section 16.4: Windows 2000 on a listed board, the
+ * line removed and the copy the only configuration. */
+static ULONG nt5s(const int *codes)
+{
+    XHCI_MSI_WALK w;
+    ULONG need;
+    ULONG size;
+
+    (void)build(codes);
+    XhciMsiWalk(in, &w);
+    need = XhciMsiStripNt5(in, &w, NULL, 0);
+    size = XhciMsiStripNt5(in, &w, out, BUF);
+    CHECK_EQ(size, need, "strip: writing pass = sizing pass");
+    if (size != 0) {
+        CHECK_EQ(get32(out), size, "strip: ListSize is what was written");
+        XhciMsiWalk(out, &w);
+        CHECK_EQ(w.Verdict, XHCI_MSI_WALK_OK, "strip: the result walks");
+        CHECK_EQ(w.Used, size, "strip: and uses all of itself");
+    }
+    return size;
+}
+
+static void test_nt5_strip(void)
+{
+    static const int a3[] = { D_B, D_P, D_L, D_END };
+    static const int g0[] = { D_B, D_BA, D_P, D_L, D_END };
+    static const int lineRun[] = { D_B, D_L, D_LA, D_LA, D_P, D_END };
+    static const int twoLine[] = { D_B, D_L, D_CFG, D_B, D_P, D_L, D_END };
+    static const int noLine[] = { D_B, D_P, D_END };
+    static const int msg[] = { D_B, D_M, D_LA, D_END };
+    static const int mixed[] = { D_B, D_L, D_PA, D_END };
+    static const int lineOnly[] = { D_L, D_END };
+    XHCI_MSI_WALK w;
+    XHCI_MSI_CLASSIFY c;
+    ULONG size;
+
+    size = nt5s(a3);
+    CHECK_EQ(size, XHCI_MSI_RRL_HEADER + XHCI_MSI_RL_HEADER +
+                       2 * XHCI_MSI_RD_SIZE, "a3: 32 + 8 + 64 bytes");
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 1,
+             "a3: one configuration, the only one");
+    CHECK_EQ(count_at(out, 0), 2, "a3: BAR and private");
+    CHECK_EQ(tag_at(out, 0, 0), 0, "a3: the BAR first");
+    CHECK_EQ(tag_at(out, 0, 1), 1, "a3: then the private");
+    CHECK(memcmp(out + 4, in + 4, XHCI_MSI_RRL_ALTERNATIVES - 4) == 0,
+          "the header's interface, bus and slot kept");
+    CHECK(memcmp(out + XHCI_MSI_RRL_HEADER, in + XHCI_MSI_RRL_HEADER, 4) ==
+              0, "the configuration's version and revision kept");
+    XhciMsiWalk(out, &w);
+    XhciMsiClassify(out, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_INTERRUPT,
+             "no interrupt anywhere in the result");
+    CHECK_EQ(XhciMsiStripNt5(out, &w, in, BUF), 0,
+             "a stripped list (a rebalance's filter) is not stripped "
+             "again: it passes as it is");
+
+    size = nt5s(g0);
+    CHECK_EQ(count_at(out, 0), 3, "g0: BAR, its alternative, private");
+    CHECK_EQ(opt_at(out, 0, 1), XHCI_MSI_OPTION_ALTERNATIVE,
+             "g0: the BAR's alternative kept");
+
+    size = nt5s(lineRun);
+    CHECK_EQ(count_at(out, 0), 2, "a line run removed whole");
+    CHECK_EQ(opt_at(out, 0, 1), 0, "the private after it still a head");
+
+    CHECK_EQ(nt5s(noLine), 0, "no line: nothing to remove");
+    CHECK_EQ(nt5s(twoLine), 0, "two configurations: refused");
+    CHECK_EQ(nt5s(msg), 0, "a message member: refused");
+    CHECK_EQ(nt5s(mixed), 0, "a line run with another type: refused");
+    CHECK_EQ(nt5s(lineOnly), 0, "nothing would be left: refused");
+
+    (void)build(a3);
+    XhciMsiWalk(in, &w);
+    size = XhciMsiStripNt5(in, &w, NULL, 0);
+    CHECK_EQ(XhciMsiStripNt5(in, &w, out, size - 1), 0,
+             "one byte short: nothing written");
+    w.Verdict = XHCI_MSI_WALK_COUNT;
+    CHECK_EQ(XhciMsiStripNt5(in, &w, out, BUF), 0,
+             "a refused walk: nothing");
+}
+
+/* Task 47.33, part 2: the clone with the chipset-routed GSI. */
+static ULONG nt5g(const int *codes, ULONG gsi, ULONG memory)
+{
+    XHCI_MSI_WALK w;
+    ULONG need;
+    ULONG size;
+
+    (void)build(codes);
+    XhciMsiWalk(in, &w);
+    need = XhciMsiAppendNt5(in, &w, gsi, memory, NULL, 0);
+    size = XhciMsiAppendNt5(in, &w, gsi, memory, out, BUF);
+    CHECK_EQ(size, need, "writing pass = sizing pass");
+    if (size != 0) {
+        CHECK_EQ(get32(out), size, "ListSize is what was written");
+        XhciMsiWalk(out, &w);
+        CHECK_EQ(w.Verdict, XHCI_MSI_WALK_OK, "the result walks");
+        CHECK_EQ(w.Used, size, "and uses all of itself");
+    }
+    return size;
+}
+
+static ULONG gmin(const UCHAR *list, ULONG c, ULONG n)
+{
+    return get32(desc_at(list, c, n) + XHCI_MSI_RD_U);
+}
+
+static ULONG gmax(const UCHAR *list, ULONG c, ULONG n)
+{
+    return get32(desc_at(list, c, n) + XHCI_MSI_RD_U + 4);
+}
+
+static void test_nt5_gsi(void)
+{
+    static const int a3[] = { D_B, D_P, D_L, D_END };
+    static const int g0[] = { D_B, D_BA, D_P, D_L, D_END };
+    static const int lineRun[] = { D_B, D_L, D_LA, D_LA, D_P, D_END };
+    static const int twoRuns[] = { D_B, D_L, D_P, D_L, D_END };
+    static const int noLine[] = { D_B, D_P, D_END };
+    XHCI_MSI_WALK w;
+    XHCI_MSI_CLASSIFY c;
+    UCHAR head[XHCI_MSI_RD_SIZE];
+    ULONG size;
+    ULONG i;
+
+    /* Mode 0 on the 8470p's list: the PCI driver's configuration, then
+     * the GSI 16 clone, then memory alone. */
+    size = nt5g(a3, 16, 1);
+    CHECK(size != 0, "a3: rewritten");
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 3, "three lists");
+    CHECK(memcmp(out + XHCI_MSI_RRL_HEADER, in + XHCI_MSI_RRL_HEADER,
+                 XHCI_MSI_RL_HEADER + 3 * XHCI_MSI_RD_SIZE) == 0,
+          "the lower configuration first, byte for byte: a firmware route "
+          "that can be granted wins");
+    CHECK_EQ(count_at(out, 1), 3, "the clone keeps three descriptors");
+    CHECK_EQ(tag_at(out, 1, 0), 0, "the BAR");
+    CHECK_EQ(tag_at(out, 1, 1), 1, "the private");
+    CHECK_EQ((ULONG)desc_at(out, 1, 2)[XHCI_MSI_RD_TYPE],
+             XHCI_MSI_TYPE_INTERRUPT, "then the interrupt");
+    CHECK_EQ(gmin(out, 1, 2), 16, "minimum 16");
+    CHECK_EQ(gmax(out, 1, 2), 16, "maximum 16");
+    for (i = 0; i < XHCI_MSI_RD_U; i++) {
+        head[i] = desc_at(in, 0, 2)[i];
+    }
+    CHECK(memcmp(desc_at(out, 1, 2), head, XHCI_MSI_RD_U) == 0,
+          "option, type, share and flags as the PCI driver gave them");
+    CHECK_EQ(count_at(out, 2), 2, "the memory-only copy last");
+    CHECK_EQ(size, XHCI_MSI_RRL_HEADER + 3 * XHCI_MSI_RL_HEADER +
+                       8 * XHCI_MSI_RD_SIZE, "136 + 104 + 72 bytes");
+    XhciMsiWalk(out, &w);
+    XhciMsiClassify(out, &w, &c);
+    CHECK_EQ(c.Class, XHCI_MSI_CLASS_NO_MESSAGE, "lines only");
+    CHECK_EQ(XhciMsiAppendNt5(out, &w, 16, 1, in, BUF), 0,
+             "a rewritten list is not rewritten again");
+
+    /* Mode 1: the clone alone. */
+    size = nt5g(a3, 16, 0);
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 2, "two lists");
+    CHECK_EQ(gmin(out, 1, 2), 16, "the clone's GSI");
+    /* Mode 2, or no GSI offered: part 1's copy. */
+    size = nt5g(a3, XHCI_MSI_NO_GSI, 1);
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 2, "two lists");
+    CHECK_EQ(count_at(out, 1), 2, "memory only");
+    CHECK_EQ(nt5g(a3, XHCI_MSI_NO_GSI, 0), 0, "neither asked: nothing");
+
+    /* The control's list (a boot configuration preferred): the clone keeps
+     * the BAR's preference and its alternative. */
+    size = nt5g(g0, 21, 1);
+    CHECK_EQ(count_at(out, 1), 4, "BAR, alternative, private, GSI");
+    CHECK_EQ(opt_at(out, 1, 1), XHCI_MSI_OPTION_ALTERNATIVE,
+             "the BAR's alternative kept");
+    CHECK_EQ(gmin(out, 1, 3), 21, "GSI 21");
+
+    /* A line run of three: one interrupt in the clone, never more. */
+    size = nt5g(lineRun, 16, 1);
+    CHECK_EQ(count_at(out, 1), 3, "BAR, one interrupt, private");
+    CHECK(memcmp(desc_at(out, 1, 1), desc_at(in, 0, 1), XHCI_MSI_RD_U) == 0,
+          "the run's head kept (its u narrowed)");
+    CHECK_EQ(opt_at(out, 1, 1), 0, "a head");
+    CHECK_EQ(gmin(out, 1, 1), 16, "narrowed");
+    CHECK_EQ(tag_at(out, 1, 2), 4, "the private after it");
+    CHECK_EQ(count_at(out, 2), 2, "memory copy: BAR and private");
+
+    size = nt5g(twoRuns, 16, 1);
+    CHECK_EQ(get32(out + XHCI_MSI_RRL_ALTERNATIVES), 2,
+             "two interrupts asked: no clone, the memory copy alone");
+    CHECK_EQ(count_at(out, 1), 2, "BAR and private");
+    CHECK_EQ(nt5g(twoRuns, 16, 0), 0, "and in mode 1 nothing");
+    CHECK_EQ(nt5g(noLine, 16, 1), 0, "no interrupt: nothing to clone");
+
+    /* The clone only for a PCI INTx: shared and level-sensitive. */
+    (void)build(a3);
+    XhciMsiWalk(in, &w);
+    ((UCHAR *)desc_at(in, 0, 2))[XHCI_MSI_RD_SHARE] =
+        (UCHAR)XHCI_MSI_SHARE_SHARED;
+    CHECK_EQ(XhciMsiNt5LineShape(in, &w), 1, "shared level: the shape");
+    ((UCHAR *)desc_at(in, 0, 2))[XHCI_MSI_RD_FLAGS] =
+        (UCHAR)XHCI_MSI_FLAG_LATCHED;
+    CHECK_EQ(XhciMsiNt5LineShape(in, &w), 0, "edge: not the shape");
+    ((UCHAR *)desc_at(in, 0, 2))[XHCI_MSI_RD_FLAGS] = 0;
+    ((UCHAR *)desc_at(in, 0, 2))[XHCI_MSI_RD_SHARE] = 1;
+    CHECK_EQ(XhciMsiNt5LineShape(in, &w), 0, "exclusive: not the shape");
+    (void)build(twoRuns);
+    XhciMsiWalk(in, &w);
+    CHECK_EQ(XhciMsiNt5LineShape(in, &w), 0, "two runs: not the shape");
+    (void)build(noLine);
+    XhciMsiWalk(in, &w);
+    CHECK_EQ(XhciMsiNt5LineShape(in, &w), 0, "no line: not the shape");
 }
 
 /* XhciInterruptMode 3's rewrite (record 18 section 4.2, revision 12): R1's
@@ -1161,6 +1485,9 @@ int main(void)
     test_r1();
     test_admit();
     test_inj();
+    test_nt5();
+    test_nt5_gsi();
+    test_nt5_strip();
     test_keep();
     test_record();
     test_bind();

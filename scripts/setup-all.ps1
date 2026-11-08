@@ -18,6 +18,14 @@ script and its own checkpoint.
 
 Run the individual scripts directly when you only want to configure one
 component.
+
+It then checks, and only says, what no helper here stages and every build
+now needs: WDK 7.1 in tools\WinDDK71 (every x86 run builds xhcihlpr.sys and
+xhcinet6.sys with it, and the -amd64 leg is built with it) and the Windows
+98 DDK headers in tools\w98ddk\inc (Stor98's 98 SE and ME target), and Open
+Watcom, which the DOS qualifier, XHCIDI.EXE and S98VSD.VXD need. A missing
+one is a warning naming where docs\contributing\build-and-test.md says how
+to stage it; the summary says the setup is incomplete.
 #>
 
 [CmdletBinding()]
@@ -171,6 +179,39 @@ if ([string]::IsNullOrWhiteSpace($Win2KIso)) {
     Invoke-SetupChild -Name "setup-qemu-win2k.ps1" -Arguments $win2kArgs
 }
 
-Write-Step "Phase 1 setup complete"
+# What the helpers above do not stage and every build needs.
+$missing = 0
+$wdk = Join-Path $ToolsDir "WinDDK71"
+if (Test-Path -LiteralPath (Join-Path $wdk "bin\setenv.bat") -PathType Leaf) {
+    Write-Ok "WDK 7.1 found at $wdk"
+} else {
+    $missing++
+    Write-Warn ("WDK 7.1 is not at $wdk (no bin\setenv.bat). Every x86 build needs it for " +
+        "xhcihlpr.sys and xhcinet6.sys, and the -amd64 leg is built with it; unpack it there " +
+        "or set WDKROOT (docs\contributing\build-and-test.md, the x86 helper's paragraph under " +
+        """Building"").")
+}
+$w98inc = Join-Path $ToolsDir "w98ddk\inc"
+if ((Test-Path -LiteralPath (Join-Path $w98inc "SCSI.H") -PathType Leaf) -and
+    (Test-Path -LiteralPath (Join-Path $w98inc "SRB.H") -PathType Leaf)) {
+    Write-Ok "the Windows 98 DDK's SCSI.H and SRB.H found in $w98inc"
+} else {
+    $missing++
+    Write-Warn ("the Windows 98 DDK's SCSI.H and SRB.H are not in $w98inc. Stor98's 98 SE and ME " +
+        "build needs them (docs\contributing\build-and-test.md, ""Building Stor98"").")
+}
+$watcom = if ([string]::IsNullOrEmpty($env:WATCOM)) { "C:\WATCOM" } else { $env:WATCOM }
+if ((Test-Path -LiteralPath (Join-Path $watcom "binnt\wcc386.exe")) -or (Test-Path -LiteralPath (Join-Path $watcom "binnt64\wcc386.exe"))) {
+    Write-Ok "Open Watcom found at $watcom"
+} else {
+    Write-Warn ("Open Watcom is not at $watcom (WATCOM). The DOS qualifier, XHCIDI.EXE and S98VSD.VXD " +
+        "need it (docs\contributing\build-and-test.md, ""Host Machine (Windows)"").")
+}
+
+if ($missing -gt 0) {
+    Write-Step "Phase 1 setup done, but $missing toolchain(s) every build needs are missing (see the warnings above)"
+} else {
+    Write-Step "Phase 1 setup complete"
+}
 Write-Host "Useful wrappers are under $LocalScriptDir"
 Write-Host "Run setup-msvc6.ps1, setup-w2kddk.ps1, setup-qemu.ps1, or setup-qemu-win2k.ps1 directly for component-specific setup."

@@ -412,6 +412,9 @@ static void test_v2(void)
     CHECK_EQ(TR_XPORT_WHY_BOT_NO_STREAMS, XHCI_XPORT_WHY_BOT_NO_STREAMS,
              "why no streams");
     CHECK_EQ(TR_XPORT_WHY_NO_STREAMS, XHCI_XPORT_WHY_NO_STREAMS, "why none");
+    CHECK_EQ(TR_XPORT_F_SUPERSPEED, XHCI_XPORT_F_SUPERSPEED, "input SS");
+    CHECK_EQ(TR_XPORT_F_HC_STREAMS, XHCI_XPORT_F_HC_STREAMS, "input streams");
+    CHECK_EQ(TR_XPORT_F_BOT_OWN_ID, XHCI_XPORT_F_BOT_OWN_ID, "input own id");
 
     /* The part at every level, zero for the caller to fill. */
     for (lv = 0; lv <= 4; lv++) {
@@ -462,6 +465,7 @@ static void test_v2(void)
     CHECK_EQ(x.XportCount, 2, "two records");
     CHECK_EQ(tr_xhq_xport_find(&x, 3, 0, &r), 1, "root 3");
     CHECK_EQ(r.Slot, 2, "its slot");
+    CHECK_EQ(r.Driver, 0x03030000UL, "the record carries the driver's");
     tr_xport_text(&r, line, sizeof(line));
     CHECK(strcmp(line, "UAS (the device offers Bulk-Only and UAS; UAS chosen)")
               == 0, "UAS chosen");
@@ -473,12 +477,15 @@ static void test_v2(void)
     CHECK(!tr_xport_stale(&r, ""), "no driver");
     CHECK(!tr_xport_stale(&r, NULL), "no devnode");
     CHECK(!tr_xport_stale(&r, "usbstor2"), "another name");
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas"), "UAS on the UAS driver");
     CHECK_EQ(tr_xhq_xport_find(&x, 20, 0x21, &r), 1, "root 20, behind a hub");
     tr_xport_text(&r, line, sizeof(line));
     CHECK(strcmp(line, "Bulk-Only (interface 1) (the device offers UAS too; "
                        "XhciForceBulkOnly is set on this controller); and 2 "
                        "more storage interfaces") == 0, "forced, composite");
     CHECK(!tr_xport_stale(&r, "USBSTOR"), "Bulk-Only on usbstor is right");
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas"),
+          "forced Bulk-Only on xhciuas: the controller streams");
     CHECK_EQ(tr_xhq_xport_find(&x, 3, 1, &r), 0, "no such route");
     CHECK_EQ(tr_xhq_xport_find(&x, 4, 0, &r), 0, "no such port");
 
@@ -499,6 +506,65 @@ static void test_v2(void)
     tr_xport_text(&r, line, sizeof(line));
     CHECK(strcmp(line, "Bulk-Only (the device offers UAS too; this controller "
                        "cannot stream at SuperSpeed)") == 0, "no streams");
+    r.Transport = TR_XPORT_BOT;
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED;
+    CHECK(tr_xport_unrunnable(&r, "xhciuas"), "no streams, on xhciuas");
+    CHECK(tr_xport_unrunnable(&r, "XHCIUAS.SYS"), "98's file name");
+    CHECK(tr_xport_unrunnable(&r, "XhciUas"), "any case");
+    CHECK(!tr_xport_unrunnable(&r, "USBSTOR"), "no streams, on usbstor");
+    CHECK(!tr_xport_unrunnable(&r, "uaspstor"), "Windows 8's UAS driver");
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas2"), "another name");
+    CHECK(!tr_xport_unrunnable(&r, ""), "no driver");
+    CHECK(!tr_xport_unrunnable(&r, NULL), "no devnode");
+    CHECK(!tr_xport_unrunnable(NULL, "xhciuas"), "no record");
+    CHECK(!tr_xport_stale(&r, "USBSTOR"), "no streams is not stale");
+    r.Why = XHCI_XPORT_WHY_BOT_FORCED;
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED | XHCI_XPORT_F_FORCE_BOT;
+    CHECK(tr_xport_unrunnable(&r, "xhciuas"),
+          "forced on a controller that cannot stream, on xhciuas");
+    r.Inputs |= XHCI_XPORT_F_HC_STREAMS;
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas"),
+          "forced where the controller streams: UAS runs");
+    r.Inputs = XHCI_XPORT_F_FORCE_BOT;
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas"),
+          "forced below SuperSpeed: UAS runs without streams");
+    r.Transport = TR_XPORT_UAS;
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED;
+    CHECK(!tr_xport_unrunnable(&r, "xhciuas"), "UAS is not Bulk-Only");
+
+    /* UASBOT.1: the answer's driver version picks the note; the own-id
+     * input means the drive had its own entry, so no note. */
+    r.Transport = TR_XPORT_BOT;
+    r.Why = XHCI_XPORT_WHY_BOT_NO_STREAMS;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_OLD,
+             "no driver version: the uninstall note");
+    r.Driver = 0x03030000UL;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_OLD,
+             "3.3.0.0: the uninstall note");
+    r.Driver = 0x030401FFUL;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_OLD,
+             "below 3.4.2.0: the uninstall note");
+    r.Driver = 0x03040200UL;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_GATE,
+             "3.4.2.0 with the value 0: the setting's note");
+    r.Driver = 0x04000000UL;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_GATE,
+             "a later driver: the setting's note");
+    CHECK_EQ(tr_xport_unrunnable(&r, "USBSTOR"), TR_XPORT_UNRUN_NO,
+             "3.4.2.0, on usbstor: none");
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED | XHCI_XPORT_F_BOT_OWN_ID;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_NO,
+             "its own entry: none");
+    r.Driver = 0x03030000UL;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_NO,
+             "the own-id input from any driver: none");
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED | XHCI_XPORT_F_FORCE_BOT |
+               XHCI_XPORT_F_BOT_OWN_ID;
+    r.Why = XHCI_XPORT_WHY_BOT_FORCED;
+    CHECK_EQ(tr_xport_unrunnable(&r, "xhciuas"), TR_XPORT_UNRUN_NO,
+             "forced, its own entry: none");
+    r.Transport = TR_XPORT_UAS;
+    r.Inputs = XHCI_XPORT_F_SUPERSPEED;
     r.Why = XHCI_XPORT_WHY_NO_STREAMS;
     tr_xport_text(&r, line, sizeof(line));
     CHECK(strcmp(line, "none (the device offers UAS alone, at SuperSpeed on a "

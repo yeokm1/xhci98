@@ -28,9 +28,8 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  *
- * sense_ut - host unit test of src/sense.c (PLAN "Sense rules", R3-9;
- * TESTING "Sense construction", unit-harness route; review round 2 P2-7:
- * sense ownership). Built against the NT and the 9x SRB.H by
+ * sense_ut - host unit test of src/sense.c (PLAN "Sense rules";
+ * TESTING "Sense construction", unit-harness route; sense.c, "Ownership"). Built against the NT and the 9x SRB.H by
  * tests\unit\build.cmd; the exit code is the number of failed checks.
  *
  * The SRBs are built by hand with any flags and buffers, which the
@@ -154,7 +153,7 @@ int main(void)
 
     memset(&dev, 0, sizeof(dev));
 
-    printf("1. A fails without autosense, then B with autosense in the same batch (review 2, P2-7)\n");
+    printf("1. A fails without autosense, then B with autosense in the same batch (sense ownership)\n");
     failreq(&a, ba, 0, 0, SCSI_SENSE_ILLEGAL_REQUEST, 0x21);
     failreq(&b, bb, 18, 0, SCSI_SENSE_MEDIUM_ERROR, 0x11);
     check(!(a.SrbStatus & SRB_STATUS_AUTOSENSE_VALID), "A: no AUTOSENSE_VALID");
@@ -211,7 +210,7 @@ int main(void)
     check(key == 5 && asc == 0x30, "oldest returned first");
     ScsiSenseReset(&dev);
 
-    printf("7. Overflow, then replenishment: a dropped request never gets a later one's sense (review 3, N4)\n");
+    printf("7. Overflow, then replenishment: a dropped request never gets a later one's sense (overflow placeholders)\n");
     ScsiSenseReset(&dev);
     for (i = 0; i < ENG_SENSE_KEEP + 1; i++) {
         /* A-D kept (0x40..0x43), E (0x44) overflows */
@@ -246,7 +245,7 @@ int main(void)
     ScsiSenseReset(&dev);
     check(dev.SenseCount == 0 && dev.SenseLost == 0, "ScsiSenseReset ends placeholders");
 
-    printf("8. Placeholder saturation is sticky (review 4): 260 failures, 259 reads, then a refused DESC=1\n");
+    printf("8. Placeholder saturation is sticky (SENSE_LOST_STICKY): 260 failures, 259 reads, then a refused DESC=1\n");
     ScsiSenseReset(&dev);
     for (i = 0; i < 260; i++) {
         failreq(&c, bc, 0, 0, SCSI_SENSE_ILLEGAL_REQUEST, 0x21);   /* INQUIRYs failing, no autosense */

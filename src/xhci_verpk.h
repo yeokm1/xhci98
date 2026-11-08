@@ -7,8 +7,8 @@
  *
  * Made at compile time from xhci_version.h's XHCI_VER_CSV, the number the
  * version resources carry, so it cannot drift from them; xhci_version.h
- * itself stays the #define lines its three toolchains accept (its own
- * header), which is why the packing lives here. The host suite holds it
+ * itself stays the #define lines every toolchain of the tree accepts (its
+ * own header), which is why the packing lives here. The host suite holds it
  * to XHCI_VER_STR (test_xhq).
  *
  * The argument of XHCI_VER_PACK_ARGS is XHCI_VER_CSV in parentheses: the

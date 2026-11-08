@@ -123,7 +123,8 @@ NDIS_STATUS NetCmAcquire(PNET_ADAPTER a);         /* PASSIVE */
 VOID NetCmRelease(PNET_ADAPTER a);                /* PASSIVE */
 NDIS_STATUS NetCmOpen(PNET_ADAPTER a);            /* PASSIVE */
 VOID NetCmClose(PNET_ADAPTER a);                  /* PASSIVE */
-VOID NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i);  /* <= DISPATCH */
+/* 1 when the connection manager answered, else 0 and *i zeroed. */
+ULONG NetCmQuery(PNET_ADAPTER a, PNET_CM_INFO i); /* <= DISPATCH */
 VOID NetCmLog(PNET_ADAPTER a, const char *label, ULONG value);
 
 /* n5_data.c - the data path. */

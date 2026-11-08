@@ -49,7 +49,7 @@ ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 LayoutFile=layout.inf
 ; Must equal src\xhci_version.h.
-DriverVer=11/05/2026,3.4.1.0
+DriverVer=11/08/2026,3.4.2.0
 
 [Manufacturer]
 %Mfg%=XhciModels,NTx86.6.0
@@ -262,6 +262,7 @@ HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
 HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
+HKR,,XhciIntelNoRouteIrq,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
@@ -285,6 +286,15 @@ HKR,,XhciAcpiTables,0x00010003,1
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
+; The event ring's size (task 47.30; design record 13 section 11.10): 1024
+; the larger ring, 256 the one-page ring of the releases before it.
+; Absent, or any other value, is 1024 (src\hcd_ctl.c).
+HKR,,XhciEventRingTrbs,0x00010003,1024
+; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record
+; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own
+; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
+; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
+HKR,,XhciBulkOnlyOwnId,0x00010003,1
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.
@@ -357,6 +367,13 @@ HKR,,NTMPDriver,,xhci98.sys
 ; keeps the clock tick until the next boot, when the helper is there. No
 ; .HW section (no MSI below NT 6) and no DelService (xhcimsi was never
 ; installed on these systems).
+; This section keeps usbui.dll (Xhci.CopyUI), which the 64-bit file's NT 5.2
+; section dropped in 3.4.0.0 because the driver store of Vista to 10 reads
+; that section too and Windows PE has no usbui.dll. Here the NT 5.x path is
+; the undecorated models section, which the driver store leaves out when
+; NTx86.6.0 matches, so DISM takes this file into a 32-bit boot.wim as it
+; stands (design record 11, decision 13 revised 2026-11-01: 7 SP1 x86
+; boot.wim and install.wim, 10 22H2 x86 boot.wim).
 [Xhci.Dev.NTx86]
 AddReg=Xhci.AddReg.NT
 CopyFiles=Xhci.CopyFiles,Xhci.CopyOS,Xhci.CopyUI,XhciHlpr.CopyFiles
@@ -374,6 +391,7 @@ HKR,,XhciFirstEnumWaitMs,0x00010003,5000
 HKR,,XhciFirstEnumPortMs,0x00010003,2000
 HKR,,XhciIntelPortSwitch,0x00010003,0
 HKR,,XhciIntelIrqRoute,0x00010003,1
+HKR,,XhciIntelNoRouteIrq,0x00010003,1
 HKR,,XhciTolerance,0x00010003,1
 HKR,,XhciIntervalCap,0x00010003,1
 HKR,,XhciAvgTrbEsit,0x00010003,0
@@ -397,6 +415,15 @@ HKR,,XhciAcpiTables,0x00010003,1
 HKR,,XhciUsb2Bos,0x00010003,1
 HKR,,XhciResumeKeep,0x00010003,1
 HKR,,XhciLinkKeep,0x00010003,1
+; The event ring's size (task 47.30; design record 13 section 11.10): 1024
+; the larger ring, 256 the one-page ring of the releases before it.
+; Absent, or any other value, is 1024 (src\hcd_ctl.c).
+HKR,,XhciEventRingTrbs,0x00010003,1024
+; The Bulk-Only form's own instance id (roadmap-usb4 UASBOT.1; design record
+; 13 section 10.7): 1 gives a drive that offers UAS too a devnode of its own
+; where the bus offers it as Bulk-Only; 0 the one devnode of the releases
+; before. Absent, or anything but a DWORD 0, is 1 (src\hcd_ctl.c).
+HKR,,XhciBulkOnlyOwnId,0x00010003,1
 ; Linux's xHCI controller quirks (roadmap-hcd task 38.10; design record 20
 ; section 6.1): 0 off, 1 Linux's listed controllers, 2 every controller
 ; where the record offers it. Absent reads as the default written here.
@@ -672,4 +699,4 @@ HubDesc="xHCI98 USB Hub"
 Hub30Desc="xHCI98 USB 3 Hub"
 CompositeDesc="xHCI98 USB Composite Device"
 XhciSvcDesc="xHCI98 USB 3 Controller Driver"
-XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"
+XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000 to 10 (xhcihlpr)"

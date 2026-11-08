@@ -1163,9 +1163,11 @@ ULONG XhciRingRetireTd(PXHCI_RING ring, const XHCI_TD_COMPLETION *completion)
  * vendor-defined informational code says nothing about ownership at all.
  * Isochronous rings are excluded because they retire by **group** and not by
  * advanced TD - `XhciRingRetireIsoGroup` is their path, and this one accepts
- * `XHCI_RING_KIND_ENDPOINT` only. A mid-TD isoch short packet reaching here
- * would be a decision nobody has made, and refusing it costs an OrphanedGroups
- * reading rather than a silently reclaimed TRB.
+ * `XHCI_RING_KIND_ENDPOINT` only. The one mid-TD isoch short packet the
+ * transfer layer settles - on the request's final packet - goes there by group
+ * (xhci_xfer.c, xhciXferIsoSettle); any other reaching here would be a
+ * decision nobody has made, and refusing it costs an OrphanedGroups reading
+ * rather than a silently reclaimed TRB.
  *
  * *(The exclusion was written as "nothing submits on one yet (Phase 9)" until
  * a later review. Phase 9 landed: isochronous endpoints take

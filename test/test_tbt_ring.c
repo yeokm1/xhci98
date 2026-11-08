@@ -1240,6 +1240,30 @@ static void test_u4_hotplug(void)
           (TBT_EV_HP_ACK | (3UL << 8) | (3UL << 30)), "PG 11b for an unplug");
     CHECK(TbtCtlNextHotPlug(&g_ctl, &e) && e.Unplug && e.Adapter == 3, "queued as unplug");
 
+    /* Plug, unplug, plug of one adapter between two takes: three events,
+     * none a duplicate (only a copy of the latest of the adapter is). */
+    CHECK_EQ(u4Setup(0), TBT_OK, "start");
+    {
+        unsigned long f[3];
+        f[0] = 0x80000000UL;
+        f[1] = 0;
+        f[2] = 3UL;
+        fakeQueue(TBT_PDF_HOTPLUG, f, 3, 0, 0);
+        f[2] = 0x80000003UL;
+        fakeQueue(TBT_PDF_HOTPLUG, f, 3, 0, 0);
+        f[2] = 3UL;
+        fakeQueue(TBT_PDF_HOTPLUG, f, 3, 0, 0);
+        fakeQueue(TBT_PDF_HOTPLUG, f, 3, 0, 0);
+    }
+    fakePump();
+    TbtCtlService(&g_ctl);
+    CHECK(TbtCtlNextHotPlug(&g_ctl, &e) && !e.Unplug && e.Adapter == 3, "plug first");
+    CHECK(TbtCtlNextHotPlug(&g_ctl, &e) && e.Unplug && e.Adapter == 3, "then the unplug");
+    CHECK(TbtCtlNextHotPlug(&g_ctl, &e) && !e.Unplug && e.Adapter == 3,
+          "the second plug queued, not taken for the first's copy");
+    CHECK(!TbtCtlNextHotPlug(&g_ctl, &e), "its own copy dropped");
+    CHECK_EQ(g_ctl.Counters.HotPlugDuplicates, 1, "one duplicate counted");
+
     /* Overflow: the loss is recorded so every port gets a check. */
     CHECK_EQ(u4Setup(0), TBT_OK, "start");
     for (i = 0; i < TBT_CTL_HP_QUEUE + 2; i++) {

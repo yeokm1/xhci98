@@ -11,9 +11,11 @@
  * routine (record 32 section 11.2); on 8 and 8.1 an upper filter of every
  * PCI root bus that runs the step at the first IRP_MN_START_DEVICE of the
  * boot before passing it down, and passes everything else down (section
- * 11.5.2). Neither elsewhere. It decides (..\pfw_ntdec.c) from the system's
+ * 11.5.2). Neither elsewhere: on any other version (the 32-bit Windows 10
+ * among them) DriverEntry records Skipped = PFW_SKIP_SYSTEM and returns,
+ * having touched nothing. It decides (..\pfw_ntdec.c) from the system's
  * version, Safe Mode, whether it runs at the boot drivers' time, and the
- * processors; runs the step with every other processor held inside
+ * processors (on 2000 and XP one processor only); runs the step with every other processor held inside
  * KeIpiGenericCall (resolved at run time: a static import would keep the
  * image from loading on 2000) or, with one processor, at HIGH_LEVEL; and
  * writes record 32 section 6's values under its service key's Parameters,

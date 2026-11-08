@@ -32,7 +32,8 @@
 // docs/gates/Q-9x.md, "Interface 3 revision"). Built with STOR98_DMA_POOL
 // on the 9x target only. The boot block, its records, the budget, the
 // rendezvous and the evidence rules E1 and E2 follow the Q-9x prototype
-// (src/q9x.c, branch qual-9x); the record states are the engine's (N2):
+// (src/q9x.c, branch qual-9x); the record states are the engine's
+// (platform.h):
 // the engine's per-block notes are folded into one record per adapter
 // block. Design and the mapping: docs/INTEGRATION-0.2.md, "Pool wiring".
 //
@@ -1378,7 +1379,8 @@ static BOOLEAN P9PagePa(IN PHW_DEVICE_EXTENSION DevExt, IN PVOID Va, OUT PHYSICA
 //   no block OWNED, one ISOLATED       -> record ISOLATED
 //   every block relinquished (RELEASED or QUARANTINED; PlatDmaRelinquish at
 //   the end of EngStop, or at a removal transaction's acknowledged disable
-//   below, after the queue gates close: N2 as revised in the int-0.2 review)
+//   below, after the queue gates close: the record states as revised in
+//   the int-0.2 review)
 //                                      -> record QUARANTINED if any block is
 //                                         QUARANTINED, else RELEASED; then the
 //                                         instance ends.
@@ -1406,8 +1408,8 @@ static VOID P9Finish(IN PHW_DEVICE_EXTENSION DevExt, IN BOOLEAN Quarantine)
 }
 
 // TRUE if this instance still holds its record but none of its blocks is
-// held (none was carved: a resume that failed before LcCarve, Codex round 2
-// on fix-0.3.0.1), so no block transition will ever finish the record.
+// held (none was carved: a resume that failed before LcCarve; reviewed on
+// fix-0.3.0.1), so no block transition will ever finish the record.
 static BOOLEAN P9RecordOnly(IN PHW_DEVICE_EXTENSION DevExt)
 {
     ULONG i;
@@ -1429,7 +1431,7 @@ static BOOLEAN P9RecordOnly(IN PHW_DEVICE_EXTENSION DevExt)
 // Before a relinquish that carries controller-wide isolation evidence (a
 // DOWN_QUIESCED statement, a removal's acknowledged disable): a record-only
 // instance is released here, since the relinquish's own finish (no
-// evidence) would quarantine an OWNED record (Codex round 3).
+// evidence) would quarantine an OWNED record.
 static VOID P9FinishIsolated(IN PHW_DEVICE_EXTENSION DevExt)
 {
     if (P9RecordOnly(DevExt)) {
@@ -1773,7 +1775,8 @@ VOID PlatCmLinkAcknowledge(IN PHW_DEVICE_EXTENSION DevExt)
     // surprise removal left the records ISOLATED with a live owner, which no
     // later load at another PCI location could reclaim: on Me (no stop
     // callback) repeated removals with changing tunnel bus numbers used up
-    // the boot-wide budget (Codex round 1 on stor98-0.3, P2-2). A second
+    // the boot-wide budget (the review of stor98-0.3, PLAN "Known issues in
+    // 0.3.0.0"). A second
     // relinquish (EngStop, or an open removal transaction) changes nothing.
     // The boot-block record update is one non-blocking attempt (K2); if the
     // lock is busy it stays pending and PlatCmLinkPoll retries it, and with

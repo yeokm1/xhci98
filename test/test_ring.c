@@ -2398,6 +2398,64 @@ static void test_declared_ring_sizes(void)
 }
 
 /*
+ * Task 47.30 (design record 13 section 11.10, point 1): the larger event
+ * ring, one 1,024-TRB segment - a lap, its Cycle toggle at the wrap, ERDP
+ * across it, and its init refused where it would cross a 64 KiB line.
+ */
+static void test_big_event_ring(void)
+{
+    static XHCI_TRB evt[XHCI_EVENT_RING_BIG_TRBS];
+    XHCI_EVENT_RING er;
+    XHCI_TRB trb;
+    ULONG pa;
+    ULONG i;
+    ULONG got;
+
+    pa = 0x0F104000UL;
+    CHECK_EQ(XhciEventRingInit(&er, evt, pa, XHCI_EVENT_RING_BIG_TRBS),
+             XHCI_RING_OK, "a 1,024-TRB segment accepted");
+    CHECK_EQ(er.Trbs, 1024, "1,024 entries");
+    CHECK_EQ(XhciEventRingPending(&er), 0, "empty after init");
+    for (i = 0; i < XHCI_EVENT_RING_BIG_TRBS; i++) {
+        evt[i].Param0 = i;
+        evt[i].Control = XHCI_TRB_CYCLE;
+    }
+    got = 0;
+    while (XhciEventRingDequeue(&er, &trb) == XHCI_RING_OK) {
+        if (trb.Param0 != got) {
+            break;
+        }
+        got++;
+    }
+    CHECK_EQ(got, 1024, "a whole lap in order");
+    CHECK_EQ(er.Dequeue, 0, "the dequeue wrapped");
+    CHECK_EQ(er.Ccs, 0, "Ccs toggled at the wrap");
+    CHECK_EQ(XhciEventRingErdpValue(&er, 0), pa, "ERDP back at the base");
+    CHECK_EQ(XhciEventRingPending(&er), 0,
+             "the lap's old Cycle reads empty on the second");
+    evt[0].Control = 0;
+    CHECK_EQ(XhciEventRingDequeue(&er, &trb), XHCI_RING_OK,
+             "the second lap's first event");
+    CHECK_EQ(XhciEventRingErdpValue(&er, 1), (pa + 16UL) | XHCI_ERDP_EHB,
+             "ERDP one TRB on, EHB set");
+    for (i = 1; i < 1023; i++) {
+        evt[i].Control = 0;
+        (VOID)XhciEventRingDequeue(&er, &trb);
+    }
+    CHECK_EQ(er.Dequeue, 1023, "at the last entry");
+    CHECK_EQ(XhciEventRingErdpValue(&er, 0), pa + 1023UL * 16UL,
+             "ERDP at the segment's last TRB");
+    CHECK_EQ(XhciEventRingInit(&er, evt, 0x0F10D000UL,
+                               XHCI_EVENT_RING_BIG_TRBS),
+             XHCI_RING_BAD_PARAM, "refused where it crosses 64 KiB");
+    CHECK_EQ(XhciEventRingInit(&er, evt, 0x0F10D000UL, 1024UL - 768UL),
+             XHCI_RING_OK, "a page there is fine");
+    CHECK_EQ(XhciEventRingInit(&er, evt, pa + 32UL,
+                               XHCI_EVENT_RING_BIG_TRBS),
+             XHCI_RING_BAD_PARAM, "and refused off 64-byte alignment");
+}
+
+/*
  * The command TRB builders, by hand from the TRB table in
  * docs/usb-xhci-info/xhci-data-structures.md section 5.
  *
@@ -2570,8 +2628,8 @@ static void test_command_ring_stopped_classification(void)
      * It matters because "stopped" is what tells the abort ladder that the
      * controller has let go of the ring and software may reposition CRCR. A
      * command ring that failed to recognise its own stop would leave the
-     * engine answering BUSY for the life of the driver, which is Finding 3's
-     * shape exactly.
+     * engine answering BUSY for the life of the driver, which is the shape
+     * of the deaf root port of the E460 bench (run-13e.md) exactly.
      */
     CHECK_EQ(XhciRingInit(&cmd, mem, RING_PA, 8, XHCI_RING_KIND_COMMAND),
              XHCI_RING_OK, "command ring init");
@@ -3349,6 +3407,7 @@ int main(void)
     test_event_ring_erdp();
     test_event_ring_refusals();
     test_declared_ring_sizes();
+    test_big_event_ring();
     test_command_trb_encoding();
     test_endpoint_command_trb_encoding();
     test_ring_noop_rewrite();

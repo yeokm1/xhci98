@@ -436,8 +436,8 @@ nvme9x/nvment and Dominik Behr's nvme2k among it).
 docs/contributing/legal-provenance.md, "Stor98 in this tree", has the record.
 
 This project's tools are compiled binaries that statically contain
-third-party code; the drivers are not among them. For 3.3.0.0 there are four
-tools, in ten executables, and SETUP.EXE: XHCIQUAL.EXE, the DOS
+third-party code; the drivers are not among them. From 3.3.0.0 there are
+four tools, in ten executables, and SETUP.EXE: XHCIQUAL.EXE, the DOS
 qualification tool; XHCIINST.EXE and XHCIIN64.EXE, the install tool (from
 release 3.0.0.0), with its window, XHCIWIZ.EXE and XHCIWZ64.EXE, its Windows
 98 SE and ME device install helper, XHCIDI.EXE, and SETUP.EXE, which opens
@@ -450,35 +450,37 @@ release 2.4.0.0 to 3.2.0.0). None is one file: every cut keeps its own
 copies, so the repository tracks each under releases/<version>/tools/<tool>/
 (XHCIQUAL and XHCISNAP at the version root, without tools/, in a release
 before 2.4.0.0; SETUP.EXE at the version root), and a download carries them
-in the same places.
-XHCIQUAL.EXE is linked as a DOS/32 Advanced DOS Extender executable, which
-embeds that extender as the program's stub, and it statically links the Open
-Watcom C runtime. XHCIDI.EXE is a 16-bit Windows program that statically
-links modules of the Open Watcom C runtime for 16-bit Windows, and it is
-linked against the Windows 98 SE DDK's setupx.lib, an import library whose
-references name the running system's SETUPX.DLL and carry no code.
-XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE, XHCIWIZ.EXE,
-SETUP.EXE, XHCITR.EXE and XHCIMARK.EXE statically link the Microsoft Visual
-C++ 6.0 C runtime: each tool's build.cmd compiles them without /MD, so the
-runtime is bound into the image rather than reached through a DLL at run
-time, and no C runtime DLL is in their import tables. XHCICL64.EXE,
-XHCIIN64.EXE, XHCIWZ64.EXE, XHCITR64.EXE and XHCIMK64.EXE statically link the
-Windows Driver Kit 7.1's amd64 C runtime (LIBCMT, /MT) in the same way. None
-of those runtimes and extenders is covered by the grant above, and each
-carries its own terms.
-NOTICE.TXT sits beside each tool's executables in a release directory, and
-they are not all the same document: the qualifier's reproduces the DOS/32A
-licence text in full and records the Open Watcom runtime linkage, while each
-of the others records the Visual C++ or Windows Driver Kit runtime linkage
-and quotes none of its terms. Each of those executables is therefore a single
-file combining this project's code with code under other licences, and
+in the same places. XHCIQUAL.EXE is linked as a DOS/32 Advanced DOS Extender
+executable, which embeds that extender as the program's stub, and it
+statically links the Open Watcom C runtime. XHCIDI.EXE is a 16-bit Windows
+program that statically links modules of the Open Watcom C runtime for
+16-bit Windows, and it is linked against the Windows 98 SE DDK's setupx.lib,
+an import library whose references name the running system's SETUPX.DLL and
+carry no code. XHCISNAP.EXE and the 32-bit XHCICLN.EXE, XHCIINST.EXE,
+XHCIWIZ.EXE, SETUP.EXE, XHCITR.EXE and XHCIMARK.EXE statically link the
+Microsoft Visual C++ 6.0 C runtime: each tool's build.cmd compiles them
+without /MD, so the runtime is bound into the image rather than reached
+through a DLL at run time, and no C runtime DLL is in their import tables.
+XHCICL64.EXE, XHCIIN64.EXE, XHCIWZ64.EXE, XHCITR64.EXE and XHCIMK64.EXE
+statically link the Windows Driver Kit 7.1's amd64 C runtime (LIBCMT, /MT)
+in the same way. None of those runtimes and extenders is covered by the
+grant above, and each carries its own terms. NOTICE.TXT sits beside each
+tool's executables in a release directory, and they are not all the same
+document: the qualifier's reproduces the DOS/32A licence text in full and
+records the Open Watcom runtime linkage, while each of the others records
+the Visual C++ or Windows Driver Kit runtime linkage and quotes none of its
+terms. Each of those executables is therefore a single file combining this
+project's code with code under other licences, and
 docs/contributing/legal-provenance.md section 2a records what is in each.
-The drivers themselves - xhci98.sys, the host controller driver; xhciuas.sys,
-the USB Attached SCSI class driver; xhcicm.sys, the Thunderbolt 3 and USB4
-connection manager (one image, staged a second time under nt\ in the x86
-directories for its tunnel-port filter); and xhcihlpr.sys, the x86 helper of
-Windows 2000 to 7 - are described next, and after them the three smaller
-drivers of the x86 directories.
+The drivers themselves - xhci98.sys, the host controller driver;
+xhciuas.sys, the USB Attached SCSI class driver; xhcicm.sys, the Thunderbolt
+3 and USB4 connection manager (one image: from release 3.4.0.0 in each
+family folder's cm\, its tunnel-port filter's INF beside it as xhcicmf.inx;
+up to 3.3.0.0 staged a second time under nt\ in the x86 directories);
+xhcihlpr.sys, the x86 helper of Windows 2000 to 7 (from 3.4.0.0 also copied
+into nt-x86\cm\); and xhcinet.sys and xhcinet6.sys, the Thunderbolt
+networking drivers (from release 3.4.0.0, in cm\tbnet\) - are described
+next, and after them the three smaller drivers of the x86 directories.
 
 xhci98.sys, xhciuas.sys and xhcicm.sys are each linked by the Windows 2000
 DDK (the 32-bit build) or by the Windows Driver Kit 7.1 (the amd64 build)
@@ -492,56 +494,68 @@ in full. No runtime or extender is linked into any of those three. Their
 32-bit builds link no third-party object at all (docs/contributing/
 legal-provenance.md section 2 has the reading for xhci98.sys; xhciuas.sys
 and xhcicm.sys are built by the same DDK in the same way). Their amd64
-builds carry
-one object that is not this project's code: WDK 7.1 compiles amd64 drivers
-with /GS stack-buffer checks, and its libraries supply the cookie check
-(__security_check_cookie) and the handler it jumps to on a mismatch
-(__report_gsfailure, which calls KeBugCheckEx and is that import's only call
-site; each driver's amd64 import allowlist under scripts\import-gate\ says
-so). Nothing in this project's source calls it, and it runs only on a
-stack-buffer overrun. xhcihlpr.sys is linked by WDK 7.1 for x86 (the Windows
-XP target) and links objects from that kit's libraries: IoCreateDeviceSecure
-and its members from wdmsec.lib, the same /GS cookie support, and, for its
-subsystem version, safecrtnt.lib and libcntpr.lib from the kit's lib\crt
-directory. Whether any of those objects asks for a notice of its own has not
-been read; docs/contributing/legal-provenance.md section 2 records the
-composition and that open question, and records the boundary above. The
-drivers are distributed by themselves and loaded by a kernel this project
-does not ship and could not ship.
+builds carry one object that is not this project's code: WDK 7.1 compiles
+amd64 drivers with /GS stack-buffer checks, and its libraries supply the
+cookie check (__security_check_cookie) and the handler it jumps to on a
+mismatch (__report_gsfailure, which calls KeBugCheckEx and is that import's
+only call site; each driver's amd64 import allowlist under
+scripts\import-gate\ says so). Nothing in this project's source calls it,
+and it runs only on a stack-buffer overrun. xhcihlpr.sys is linked by WDK
+7.1 for x86 (the Windows XP target) and links objects from that kit's
+libraries: IoCreateDeviceSecure and its members from wdmsec.lib, the same
+/GS cookie support, and, for its subsystem version, safecrtnt.lib and
+libcntpr.lib from the kit's lib\crt directory. Whether any of those objects
+asks for a notice of its own has not been read;
+docs/contributing/legal-provenance.md section 2 records the composition and
+that open question, and records the boundary above. xhcinet.sys, the NDIS 5
+miniport, is linked as xhcicm.sys is - by the Windows 2000 DDK for x86 and
+by the Windows Driver Kit 7.1 for amd64 - against import libraries for
+ntoskrnl.exe, hal.dll and ndis.sys, and its amd64 build carries the same /GS
+cookie support. xhcinet6.sys, the NDIS 6.20 miniport of Windows 8 to 10, is
+linked by the Windows Driver Kit 7.1's Windows 7 environment, for x86 and
+for amd64, against the same kinds of import libraries, and both of its
+builds carry that /GS cookie support. docs/contributing/legal-provenance.md
+section 2 records both compositions. The drivers are distributed by
+themselves and loaded by a kernel this project does not ship and could not
+ship.
 
-The x86 directories also carry S98VSD.VXD (from release 3.2.0.0), the
-Windows 98 SE and ME layer installed with Stor98, and XHCIPFW.VXD and
-XHCIPFW.SYS (from release 3.3.0.0), which close the USB4 ports' memory
-windows above 4 GB at Windows start, the VxD on Windows 98 SE and ME and the
-.SYS on 32-bit Windows 2000 to 7. Both VxDs are this project's code,
-compiled by Open Watcom 2.0 with no runtime library linked and linked by the
-Windows 98 SE DDK's LINK.EXE 5.12, which adds its MS-DOS stub as Microsoft's
-linkers do to every PE driver of this package. XHCIPFW.SYS is this project's
-code linked by the Windows 2000 DDK as the 32-bit drivers above are.
+The x86 directories (from 3.4.0.0, 98-me\ and nt-x86\) also carry S98VSD.VXD
+(from release 3.2.0.0), the Windows 98 SE and ME layer installed with
+Stor98, and XHCIPFW.VXD and XHCIPFW.SYS (from release 3.3.0.0), which close
+the USB4 ports' memory windows above 4 GB at Windows start, the VxD on
+Windows 98 SE and ME and the .SYS on 32-bit Windows 2000, XP, Vista, 7, 8
+and 8.1 (on 32-bit Windows 10 it loads and does nothing). Both VxDs are this
+project's code, compiled by Open Watcom 2.0 with no runtime library linked
+and linked by the Windows 98 SE DDK's LINK.EXE 5.12, which adds its MS-DOS
+stub as Microsoft's linkers do to every PE driver of this package.
+XHCIPFW.SYS is this project's code linked by the Windows 2000 DDK as the
+32-bit drivers above are.
 
 This repository carries no Microsoft file. The release download carried none
 up to release 3.1.0.0; from 3.2.0.0 one built with the driver pack carries
 NUSB 3.3's seven Windows 98 SE storage files, unmodified, in a folder of
 their own with a NOTICE.md saying whose they are. They are not this
-project's work and are outside the grant above; no licence to
-redistribute them has been established (docs/contributing/legal-provenance.md
-section 5). From 3.2.0.0 the -nonfree download also carries, in
-USBDRV\NONFREE\, other manufacturers' drivers as released, two Microsoft KMDF
-co-installers among them, unmodified; they are outside the grant above too,
-and no licence to redistribute them has been found beyond the statements of
-a few makers that the pack's NOTICE.md quotes (the same section 5). Since
-release 2.0.0.0 the drivers depend on two of the operating
-systems' own files: usbd.sys, whose helper functions the class drivers above
-xhci98.sys call, and usbui.dll, which provides the controller's and the root
-hub's property pages. The INF has Windows Setup copy them from the user's own
-installation source, never overwriting a file already present, and neither is
-in the download or in this repository. The Windows Vista and Windows 7 install
-paths copy neither, because every install of those systems already carries
-both. On Windows 98 SE, xhciuas.inf names USBNTMAP.SYS as a filter but
-does not copy that file. The 64-bit txtsetup.oem copies no Microsoft file.
-The 32-bit txtsetup.oem's second Windows 2000 entry, since release 2.4.0.0,
-names three files of the Windows 2000 CD - USBD.SY_, HIDCLASS.SY_ and
-HIDPARSE.SY_ - which the user copies from their own CD to the F6 floppy;
+project's work and are outside the grant above; no licence to redistribute
+them has been established (docs/contributing/legal-provenance.md section 5).
+From 3.2.0.0 the -nonfree download also carries, in USBDRV\NONFREE\, other
+manufacturers' drivers as released, two Microsoft KMDF co-installers among
+them, unmodified; they are outside the grant above too, and no licence to
+redistribute them has been found beyond the statements of a few makers that
+the pack's NOTICE.md quotes (the same section 5). Since release 2.0.0.0 the
+drivers depend on two of the operating systems' own files: usbd.sys, whose
+helper functions the class drivers above xhci98.sys call, and usbui.dll,
+which provides the controller's and the root hub's property pages. The INF
+has Windows Setup copy them from the user's own installation source, never
+overwriting a file already present, and neither is in the download or in
+this repository. From release 3.4.0.0 the 64-bit INF's Windows XP x64 and
+Server 2003 x64 path copies usbd.sys alone, so there the two property pages
+appear only where usbui.dll is already present. The Windows Vista to 10
+install paths copy neither, because every install of those systems already
+carries both. On Windows 98 SE, xhciuas.inf names USBNTMAP.SYS as a filter
+but does not copy that file. The 64-bit txtsetup.oem copies no Microsoft
+file. The 32-bit txtsetup.oem's second Windows 2000 entry, since release
+2.4.0.0, names three files of the Windows 2000 CD - USBD.SY_, HIDCLASS.SY_
+and HIDPARSE.SY_ - which the user copies from their own CD to the F6 floppy;
 the download carries none of them. Nothing here purports to license any of
 them to anyone.
 

@@ -264,46 +264,18 @@ ULONG XhciAsyncTimerArm(PXHCI_EXTENSION ext,
 }
 
 /*
- * Does a watchdog context still watch the outstanding command, in the state
- * its phase watches? The owed arm's test, applied both where one is latched
- * and where it is made: a context one CPU captured can have been overtaken by
- * the time it reaches the latch - its command completed, a newer one owed
- * its own watchdog - and replacing the newer owe with it would leave the
- * newer command untimed (roadmap 24.4). The host
- * suite cannot put a second CPU between the capture and the latch, so that
- * half is a review property, like the epoch capture's.
- *
- * IRQL: DISPATCH_LEVEL, controller lock held.
- */
-static ULONG xhciCommandArmCurrent(PXHCI_EXTENSION ext,
-                                   const XHCI_COMMAND_TIMEOUT *context)
-{
-    return (context->Epoch == ext->StartEpoch &&
-            context->Generation == ext->CommandGeneration &&
-            ((context->Phase == XHCI_CMD_PHASE_COMMAND &&
-              ext->CommandState == XHCI_CMD_STATE_PENDING) ||
-             (context->Phase == XHCI_CMD_PHASE_ABORT &&
-              ext->CommandState == XHCI_CMD_STATE_ABORTING))) ? 1UL : 0UL;
-}
-
-/*
- * Always called with the controller lock **released**. The timer service is
- * usbport's, and on the Version 300 tier it takes usbport's own timer lock;
- * calling it under this driver's lock would nest two lock hierarchies with no
- * stated order between them, which is the shape of a deadlock rather than of
- * a race.
+ * Always called with the controller lock **released**: XhciAsyncTimerArm
+ * takes it to count a refusal. (Under the miniport the service was usbport's,
+ * which took usbport's own timer lock, and nesting the two was the hazard.)
  *
  * Nothing here fails the operation that armed it. A command that could not be
  * timed is worse off than one that could, but it is still a command that was
  * correctly issued, and the count is the record - there is no second timer
- * service to fall back to.
- *
- * `mode` is the caller's context (XHCI_ARM_*). An arm a DEFER context may not
- * make on the Version 300 tier is latched in the extension for
- * XhciCommandDrainOwedArm. One Ex refused is re-owed the same way only
- * while ArmThroughExOnly is set; the HCD leaves it clear, and its timer
- * service makes refusals rare by superseding the pending arm (hcd_svc.c),
- * with the thread's own command wait and the 32 s age detector behind it.
+ * service to fall back to. The HCD's service makes a refusal rare by
+ * superseding the pending arm (hcd_svc.c), and the thread's own command wait
+ * and the 32 s age detector stand behind it. `mode` (XHCI_ARM_*) is passed
+ * through and changes nothing under the HCD: the miniport's Version 300 tier
+ * latched a DEFER context's arm as owed, and that latch left with it.
  *
  * IRQL: <= DISPATCH_LEVEL.
  */
@@ -332,12 +304,9 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
      */
     context = *what;
 
-    /*
-     * On the 200 tier the service's answer means nothing (XhciAsyncTimerArm),
-     * so REFUSED there is only the missing pointer - which xhciCanArmTimer
-     * checked before anything was enqueued, so reaching it is a bug in this
-     * file rather than a condition.
-     */
+    /* The HCD's service answers MADE or REFUSED (XhciAsyncTimerArm). A
+     * refusal is a command already on the ring running untimed: counted in
+     * CommandTimerFailures. */
     answer = XhciAsyncTimerArm(ext, mode, milliseconds, &context,
                                sizeof(context), xhciCommandTimeout);
     if (answer == XHCI_ARM_MADE) {
@@ -345,68 +314,11 @@ static VOID xhciArmCommandTimer(PXHCI_EXTENSION ext,
     }
 
     XhciControllerLockAcquire(ext, &oldIrql);
-    if (answer == XHCI_ARM_REFUSED) {
-        ext->CommandTimerFailures++;
-    }
-    if (ext->ArmThroughExOnly && xhciCommandArmCurrent(ext, &context)) {
-        /* The engine has one command outstanding, so a current context
-         * replaces whatever an earlier one owed; a stale one owes nothing. */
-        ext->CommandArmOwed = 1;
-        ext->CommandArmOwedMs = milliseconds;
-        ext->CommandArmOwedEpoch = context.Epoch;
-        ext->CommandArmOwedGeneration = context.Generation;
-        ext->CommandArmOwedPhase = context.Phase;
-        ext->CommandArmOwedAttempt = context.Attempt;
-    }
+    ext->CommandTimerFailures++;
     XhciControllerLockRelease(ext, oldIrql);
 
-    if (answer == XHCI_ARM_REFUSED) {
-        XHCI_DBG_VALUE_CHANGED("command: watchdog not armed, generation",
-                               context.Generation);
-    }
-}
-
-/* See the contract in src/xhci_hw.h. IRQL: <= DISPATCH_LEVEL, an
- * XHCI_ARM_UNLOCKED context, controller lock released. */
-VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
-{
-    XHCI_COMMAND_TIMEOUT armed;
-    KIRQL oldIrql;
-    ULONG milliseconds;
-    ULONG arm;
-
-    if (ext == NULL || ext->Signature != XHCI_EXTENSION_SIGNATURE) {
-        return;
-    }
-
-    arm = 0;
-    milliseconds = 0;
-    armed.Epoch = 0;
-    armed.Generation = 0;
-    armed.Phase = 0;
-    armed.Attempt = 0;
-
-    XhciControllerLockAcquire(ext, &oldIrql);
-    if (ext->CommandArmOwed) {
-        ext->CommandArmOwed = 0;
-        armed.Epoch = ext->CommandArmOwedEpoch;
-        armed.Generation = ext->CommandArmOwedGeneration;
-        armed.Phase = ext->CommandArmOwedPhase;
-        armed.Attempt = ext->CommandArmOwedAttempt;
-        milliseconds = ext->CommandArmOwedMs;
-        /*
-         * Only the command still outstanding, in the state the owed phase
-         * watches: one that completed, or was aborted into the next rung, or
-         * belongs to a start usbport has since zeroed, is past needing it -
-         * and its callback would only count itself stale.
-         */
-        arm = xhciCommandArmCurrent(ext, &armed);
-    }
-    XhciControllerLockRelease(ext, oldIrql);
-
-    if (arm) {
-        xhciArmCommandTimer(ext, XHCI_ARM_UNLOCKED, milliseconds, &armed);
-    }
+    XHCI_DBG_VALUE_CHANGED("command: watchdog not armed, generation",
+                           context.Generation);
 }
 
 /*
@@ -421,7 +333,9 @@ VOID XhciCommandDrainOwedArm(PXHCI_EXTENSION ext)
  * Checked before the TRB is enqueued rather than after the doorbell, because the
  * two answers are very different: a refusal before the enqueue is a command that
  * was never issued, while a failure after it is a command that will sit on the
- * ring for the life of the driver with nothing to notice it.
+ * ring for the life of the driver with nothing to notice it. Under the HCD the
+ * service is always there, so this answers 1 and XHCI_CMD_NO_TIMER is never
+ * returned; the check stays as the place that refusal belongs.
  *
  * IRQL: any.
  */
@@ -836,7 +750,8 @@ ULONG XhciControllerHealthPoll(PXHCI_EXTENSION ext)
          * nothing had ever written CA, and a single Stop Endpoint that would not
          * complete took the whole controller out of service without the
          * specification's own remedy being tried once
-         * (docs/contributing/runs/run-13e.md, Finding S).
+         * (docs/contributing/runs/run-13e.md, the root-cause section: "The
+         * driver marks its own controller failed").
          *
          * That was wrong on its own terms rather than only in hindsight. This
          * detector's entire premise, argued three paragraphs up, is that
@@ -1713,7 +1628,9 @@ static VOID NTAPI xhciCommandTimeout(PVOID miniPortExtension, PVOID context)
 
     /*
      * **Counted here and nowhere else: after the bracket, before every
-     * decision.** Finding T needed to know whether a watchdog that produced no
+     * decision.** The E460's attempt-cap run (run-13e.md, "the wedge that is
+     * left is this project's own bound") needed to know whether a watchdog
+     * that produced no
      * verdict had *arrived* at all, and every other counter in this function is
      * written after a branch has already decided what the callback was for. It
      * cannot go above the bracket - that would be a write into a structure this

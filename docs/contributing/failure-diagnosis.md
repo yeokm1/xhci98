@@ -6,10 +6,16 @@
 > it on 2026-10-02 (`xhci_dispatch.c`, `xhci_rh.c`, `xhci_slot.c`). From
 > `2.0.0.0` `xhci98.sys` is the successor HCD, which replaces `usbport.sys`
 > (design record 13); its failure records are the issue pages under
-> `docs/issues/`, the run sheets and design records 13 to 25. The method
+> `docs/issues/`, the run sheets and design records 13 onward. The method
 > below - localise silence with instrumentation and differentials, and read
 > the trust order - still holds; a test that names a usbport callback or a
-> deleted file applies to `1.2.0.0` and earlier.
+> deleted file applies to `1.2.0.0` and earlier. **The `debug` flavour is
+> retired** (roadmap-usb4 task 45.45, design record 08 section 14): from
+> `3.4.0.0` `release` is the one published build and `qemu` the one checked
+> build, never published, so read "the published `debug` flavour" and "the
+> shipping `debug` build" below as the builds up to `3.3.0.0`; today's
+> diagnostics are the `qemu` build's per-line trace and the release build's
+> log ring and snapshot.
 
 The other docs say what to build and which invariants to keep. This one
 captures the diagnostic reasoning for when a phase checkpoint fails: for each
@@ -66,8 +72,8 @@ DOS tool runs, but available in-situ for the lifetime of the driver.
 
 ## Instrumentation ladder (cheapest first)
 
-1. `DbgPrint` in a `qemu` build, the only flavour with per-line trace sites -
-   the published `debug` flavour has none (see
+1. `DbgPrint` in a `qemu` build, the only flavour with per-line trace sites
+   - the `debug` flavour published up to `3.3.0.0` had none (see
    `docs/contributing/build-and-test.md`, "Per-line trace output, and which
    flavour has it").
 2. QEMU debug console, port 0xE9. Works even when the display is dead
@@ -97,14 +103,15 @@ DOS tool runs, but available in-situ for the lifetime of the driver.
    12.2 closed with no Windows 98 bare-metal trace channel, and that is a
    settled answer rather than a gap somebody is still working on. On Windows
    2000 metal DebugView remains the trace channel.
-6. The snapshot read, the one rung that works on Windows 98 bare metal.
-   The driver's counters and its note ring sit inside `XHCI_EXTENSION`, and
+6. The snapshot read, the one rung that works on Windows 98 bare metal. The
+   driver's counters and its note ring sit inside `XHCI_EXTENSION`, and
    `XHCITR /snapshot` (`XHCISNAP.EXE` up to `3.0.0.0`) reads them out of the
    running machine from ring 3, through the door's PassThru request
    (usbport's PassThru escape under the miniport), so nothing is pushed,
    nothing is printed, and no PASSIVE moment has to be found. It ships in
-   every flavour from `0.0.0.6`, is off until `XhciLogVerbosity` is set and
-   the machine restarted, and works the same on both targets.
+   the published build from `0.0.0.6` (in every flavour while there were
+   three), is on at `XhciLogVerbosity` `2` by default under the HCD (off
+   until set, under the miniport), and works the same on both targets.
 
    Keep the distinction clear: what task 12.2 closed is the trace, a running record of what
    happened as it happens plus a capture of a crash, and neither exists on
@@ -153,12 +160,12 @@ these labels is unique in the tree, so `grep` finds them.
 | absent | absent | absent | The root hub never rebuilt; look for `root hub: refusing, build status` |
 
 Note the spelling: `RhPortsDriventoU0`, lowercase `t` in "to", declared in
-`src/xhci.h`. `RhPortsDrivenToU0` matches nothing in `src/`. All these lines are
-`XHCI_DBG_*`, so `qemu` build only: diagnose from `out\pkg-qemu-x86\`
-(`out\pkg-qemu-amd64\` for the 64-bit build).
-`src\sources` defines `XHCI_DBG_LIVE` for that flavour and for nothing else,
-and without that define each macro compiles to nothing. The shipping `debug`
-build keeps the DDK's `DBG` (which here is `/Oy-` and `VS_FF_DEBUG`, not
+`src/xhci.h`. `RhPortsDrivenToU0` matches nothing in `src/`. All these lines
+are `XHCI_DBG_*`, so `qemu` build only: diagnose from `out\pkg-qemu-x86\`
+(`out\pkg-qemu-amd64\` for the 64-bit build). `src\sources` defines
+`XHCI_DBG_LIVE` for that flavour and for nothing else, and without that
+define each macro compiles to nothing. The `debug` build that shipped up to
+`3.3.0.0` kept the DDK's `DBG` (which here is `/Oy-` and `VS_FF_DEBUG`, not
 unoptimised code; both flavours are `/Oxs`) and the log ring, not the
 per-line trace.
 
@@ -258,15 +265,16 @@ Declare Option B only per the exit criteria in
 ### Is a silent Win98 load failure an import problem? The release/qemu bisect
 
 This procedure bisects a load failure by comparing a binary that carries the
-extra trace imports against one that does not. `release` and `debug` import
-the same set: what separates them is `/Oy-` (both compile `/Oxs`, and there
-are no asserts), `VS_FF_DEBUG`, the snapshot header's `DEBUG` bit and the
-`XHCI98_FLAVOUR_*` marker, so a release-versus-debug comparison discriminates
-nothing where imports are concerned. The flavour carrying the extra imports is
-`qemu`: `HAL.dll!WRITE_PORT_UCHAR`, plus the call sites for the two symbols
-both published binaries already import. `0.0.0.4`'s debug build was the one
-that would not load, and the flavour split is what moved that import out of
-the published binaries.
+extra trace imports against one that does not. `release` and the retired
+`debug` (up to `3.3.0.0`) import the same set: what separates them is `/Oy-`
+(both compile `/Oxs`, and there are no asserts), `VS_FF_DEBUG`, the snapshot
+header's `DEBUG` bit and the `XHCI98_FLAVOUR_*` marker, so a
+release-versus-debug comparison discriminates nothing where imports are
+concerned. The flavour carrying the extra imports is `qemu`:
+`HAL.dll!WRITE_PORT_UCHAR`, plus the call sites for the two symbols both
+published binaries already import. `0.0.0.4`'s debug build was the one that
+would not load, and the flavour split is what moved that import out of the
+published binaries.
 
 The build-time gate settles Win2000 (it resolves against real export tables)
 but can only gather evidence for Win98, whose export tables are built at init
@@ -281,15 +289,17 @@ order, and do not start by writing a symbol checker:
    successful start from silence; the release build has no trace channel,
    so "no debug line" proves nothing. Release starts, qemu does not: the
    failure is in the qemu-only import set.
-2. There is no finer import bisect inside the trace channel. `XHCI_DBG_NO_IRQL`
-   does not drop `HAL.DLL!KeGetCurrentIrql`: the flush guard (`xhciLogAtPassive`,
-   `xhci_dispatch.c` on `1.2.0.0`) calls that symbol in every flavour and the
-   allowlist carries it as `all required`. All the define still does is put
-   `0xFF` in a trace line's IRQL field, which no published binary prints. A
-   target that rejects that HAL symbol therefore cannot be bisected around, and
-   would have to be answered by removing the guard, which is a design change
-   rather than a build flag. Dropping `HAL.DLL!WRITE_PORT_UCHAR` is what
-   building `debug` instead of `qemu` means; no published binary has it at all.
+2. There is no finer import bisect inside the trace channel.
+   `XHCI_DBG_NO_IRQL` does not drop `HAL.DLL!KeGetCurrentIrql`: the flush
+   guard (`xhciLogAtPassive`, `xhci_dispatch.c` on `1.2.0.0`) calls that
+   symbol in every flavour and the allowlist carries it as `all required`.
+   All the define still does is put `0xFF` in a trace line's IRQL field,
+   which no published binary prints. A target that rejects that HAL symbol
+   therefore cannot be bisected around, and would have to be answered by
+   removing the guard, which is a design change rather than a build flag.
+   Dropping `HAL.DLL!WRITE_PORT_UCHAR` is what building `release` instead of
+   `qemu` means (`debug`, up to `3.3.0.0`); no published binary has it at
+   all.
 3. Both flavours fail: only qemu-only imports are ruled out. Compare
    both linked import tables. Any shared import remains a candidate: the two
    USBPORT names and the module/dependencies that provide them, plus every
@@ -332,7 +342,7 @@ each row's test requires nothing from the rows below it.
 | 4 | Ring programming wrong (DMA works, no completion) | CRCR written with a virtual address instead of physical, or wrong initial Ring Cycle State. Verify every address written to CRCR/DCBAAP/ERSTBA came from the common-buffer physical side. |
 | 5 | Events reach memory, ISR never fires | This is the poll-vs-interrupt differential: events visible in ring memory but no interrupt = IRQ delivery problem (Interrupt Pin = 0? routing? see `docs/contributing/implementation-invariants.md` "Interrupt Delivery"), not a driver-logic problem. |
 | 6 | ISR fires once, never again | ERDP written back without setting EHB, or USBSTS.EINT / IMAN.IP not acknowledged; the interrupter stays latched busy. |
-| 7 | Ports powered but no connect events (Intel 7/8/9-series PCH or C610/X99, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU. **Since `2.1.1.0` the driver can route them itself** on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16); since `2.3.0.0` only when `XhciIntelPortSwitch` is 1 or 2 (task 36.42: off by default, so with the default this row's symptom is expected on those ports and `portsw.vbs 1` plus a restart is the first answer), so check the switchover first, from an `XHCISNAP` report with `XhciLogVerbosity` at 2 or above: `psw.gate` 0 means the controller is not on the list (an Intel part with the mux that the list misses lands here, and the switchover never ran unless `psw.mode` reads 2: since `2.2.0.0` an Intel controller's report carries `psw.mode`, the setting in effect - 0 off, 1 on a listed part, 2 an unlisted Intel part taken past the list by `XhciIntelPortSwitch` 2, at the user's own risk (design record 16 section 4a) - so an unlisted part with the mux is answered by 2 rather than by a new release), and `psw.pci.unread` that the gate could not read the id; `psw.value.found` 1 with `psw.value` 0 means `XhciIntelPortSwitch` turned it off (`psw.value.found` 0 means no valid DWORD was read - absent, unreadable, or of the wrong type or length - and the switch is then off since `2.3.0.0`, on up to `2.2.0.0`, with `psw.value` 0 only a placeholder); `psw.board.unread` or `psw.board.refused` means the subsystem id stopped it; a `psw.route.step` other than 0 names the step that was refused; and step 0 with a read-back (`psw.usb3pssen`, `psw.xusb2pr`) unequal to its mask (`psw.usb3prm`, `psw.xusb2prm`) means a write was accepted and did not take. Since `2.2.0.0` `psw.route.written` follows each route and `psw.release.written` precedes each release, each a set of the registers written (bit 0 `USB3_PSSEN`, bit 1 `XUSB2PR`): a release gives back only what a route of the same started lifetime wrote, so an empty `psw.release.written` after a refused route is correct, not a fault. With step 0 and each read-back equal to its mask the routing is not the cause; a connector outside the masks stays on EHCI by design. Before the driver, or under a release up to `2.1.0.0`, confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Observed once: on a Lenovo B490 (1E31, Windows 98 SE, firmware on Auto) `XHCIQUAL` read `XUSB2PR` and `USB3_PSSEN` at 0 with the masks nonzero before Windows, and under the driver the route ran at step 0 with each read-back equal to its mask (`docs/contributing/runs/run-34.md`, 34.3-H2; the values themselves were not transcribed). The rest of the predicted signature (C1-C4 PASS, ports powered and no connect event at all under a driver that does not route) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
+| 7 | Ports powered but no connect events (Intel 7/8/9-series PCH or C610/X99, real hw) | XUSB2PR still routes the USB2 ports to EHCI (`docs/usb-xhci-info/xhci-programming.md`, the `XUSB2PR` section). Invisible in QEMU. **Since `2.1.1.0` the driver can route them itself** on Intel 1E31, 8C31, 9C31, 8CB1, 9CB1 and 8D31 (roadmap-hcd task 34.3, design record 16); since `2.3.0.0` only when `XhciIntelPortSwitch` is 1 or 2 (task 36.42: off by default, so with the default this row's symptom is expected on those ports and `portsw.vbs 1` plus a restart is the first answer), so check the switchover first, from a snapshot report (`XHCITR /snapshot`; `XHCISNAP` up to `3.0.0.0`) with `XhciLogVerbosity` at 2 or above: `psw.gate` 0 means the controller is not on the list (an Intel part with the mux that the list misses lands here, and the switchover never ran unless `psw.mode` reads 2: since `2.2.0.0` an Intel controller's report carries `psw.mode`, the setting in effect - 0 off, 1 on a listed part, 2 an unlisted Intel part taken past the list by `XhciIntelPortSwitch` 2, at the user's own risk (design record 16 section 4a) - so an unlisted part with the mux is answered by 2 rather than by a new release), and `psw.pci.unread` that the gate could not read the id; `psw.value.found` 1 with `psw.value` 0 means `XhciIntelPortSwitch` turned it off (`psw.value.found` 0 means no valid DWORD was read - absent, unreadable, or of the wrong type or length - and the switch is then off since `2.3.0.0`, on up to `2.2.0.0`, with `psw.value` 0 only a placeholder); `psw.board.unread` or `psw.board.refused` means the subsystem id stopped it; a `psw.route.step` other than 0 names the step that was refused; and step 0 with a read-back (`psw.usb3pssen`, `psw.xusb2pr`) unequal to its mask (`psw.usb3prm`, `psw.xusb2prm`) means a write was accepted and did not take. Since `2.2.0.0` `psw.route.written` follows each route and `psw.release.written` precedes each release, each a set of the registers written (bit 0 `USB3_PSSEN`, bit 1 `XUSB2PR`): a release gives back only what a route of the same started lifetime wrote, so an empty `psw.release.written` after a refused route is correct, not a fault. With step 0 and each read-back equal to its mask the routing is not the cause; a connector outside the masks stays on EHCI by design. Before the driver, or under a release up to `2.1.0.0`, confirm with xhciqual test C7 (`2XPOLL` or later; `1PROBE` does not print it) or the firmware's own xHCI-mode setting, per the `XUSB2PR` run sheet in `xhciqual/hardware-testing.md`. Observed once: on a Lenovo B490 (1E31, Windows 98 SE, firmware on Auto) `XHCIQUAL` read `XUSB2PR` and `USB3_PSSEN` at 0 with the masks nonzero before Windows, and under the driver the route ran at step 0 with each read-back equal to its mask (`docs/contributing/runs/run-34.md`, 34.3-H2; the values themselves were not transcribed). The rest of the predicted signature (C1-C4 PASS, ports powered and no connect event at all under a driver that does not route) is read off the Intel datasheet and Linux's `usb_enable_intel_xhci_ports()`, not off silicon. 100-series and later Intel and all modern AMD have no such mux, so on those the symptom means something else. |
 
 A release build gives two readings before any of the rows above.
 `XHCI_EXTENSION.InitStep` and `.InitStatus` record the failing step and its

@@ -94,6 +94,48 @@ cl /nologo /W3 /WX /O2 /Fo"%OUT%\nsfmt.obj" /Fe"%OUT%\nsfmt_ut.exe" "%~dp0nsfmt_
 if not defined FAILED "%OUT%\nsfmt_ut.exe" || set "FAILED=1"
 if defined NSFFAILED set "FAILED=1"
 
+rem The READ CAPACITY(16) answer and the answer length rule (src/capdata.h),
+rem no DDK header needed
+set "CAPFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\capdata.obj" /Fe"%OUT%\capdata_ut.exe" "%~dp0capdata_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\capdata_ut.exe" || set "FAILED=1"
+if defined CAPFAILED set "FAILED=1"
+
+rem 512-byte sectors on larger native blocks (src/rmw.h, PLAN "4 KiB-sector
+rem namespaces"): the plan, a 4Kn namespace model, counts, RC16, overlap
+set "RMWFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\rmw.obj" /Fe"%OUT%\rmw_ut.exe" "%~dp0rmw_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\rmw_ut.exe" || set "FAILED=1"
+if defined RMWFAILED set "FAILED=1"
+
+rem The VERIFY(10)/(16) checks (src/vfychk.h), no DDK header needed
+set "VFYFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\vfychk.obj" /Fe"%OUT%\vfychk_ut.exe" "%~dp0vfychk_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\vfychk_ut.exe" || set "FAILED=1"
+if defined VFYFAILED set "FAILED=1"
+
+rem The PRP run reuse (src/prprun.h, src/prpchk.h; C2), no DDK header needed
+set "PRPRUNFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\prprun.obj" /Fe"%OUT%\prprun_ut.exe" "%~dp0prprun_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\prprun_ut.exe" || set "FAILED=1"
+if defined PRPRUNFAILED set "FAILED=1"
+
+rem LOG SENSE page 2Fh (src/logpage.h), no DDK header needed
+set "LOGFAILED=%FAILED%"
+set "FAILED="
+set "INCLUDE=%REPO%\src;%MSVC%\VC98\Include"
+cl /nologo /W3 /WX /O2 /Fo"%OUT%\logpage.obj" /Fe"%OUT%\logpage_ut.exe" "%~dp0logpage_ut.c" || set "FAILED=1"
+if not defined FAILED "%OUT%\logpage_ut.exe" || set "FAILED=1"
+if defined LOGFAILED set "FAILED=1"
+
 rem The OS-clock cross-check under short timer periods (src/clock.c), 9x
 rem headers (the VMM clock), simulated TSC, OS clock and stall
 set "CLKFAILED=%FAILED%"

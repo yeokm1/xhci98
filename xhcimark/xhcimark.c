@@ -34,7 +34,7 @@
  * restart's fresh reads and its call, so no restart runs inside an eject
  * of the tools and no eject inside a restart.
  *
- * TARGETS AND BUILDS. Windows 2000 to 7, both architectures, installed by
+ * TARGETS AND BUILDS. Windows 2000 to 10, both architectures, installed by
  * the installer only with the Thunderbolt 3 / USB4 component, its
  * executable in %SystemRoot%\system32 (the native one: the 64-bit build on
  * x64). ANSI C89 built with the in-repo MSVC 6.0 as XHCIMARK.EXE and with
@@ -1958,7 +1958,8 @@ static void mk_reconcile_all(void)
  * LowerFilters, the other names kept, the value deleted when nothing else
  * is in it. The entries' UpperFilters copies of the filter INF are its own
  * and stay while it is installed; the uninstall removes those. Returns how
- * many values it changed; -1 when the key could not be read. */
+ * many values it changed, *complete 1 when every entry was read; a key
+ * that could not be read leaves *complete 0. */
 static int mk_cddb_scrub(int *complete)
 {
     HKEY root;

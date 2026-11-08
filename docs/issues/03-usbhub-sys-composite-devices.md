@@ -260,7 +260,7 @@ From lessons.md:
 
 `docs/contributing/lessons.md`'s `usbhub20.sys`/`USBD.SYS` and
 composite-parent entries ("Windows 98's composite parent is
-`usbhub.sys`..."); `docs/contributing/runs/run-13e.md` (Finding 1, stages
+`usbhub.sys`..."); `docs/contributing/runs/run-13e.md` (task 13-E.1's anchor result and its resolution, stages
 E1.0/E2/E5, the P4 hash record, session 2 Finding D);
 `docs/contributing/build-and-test.md` ("What NUSB 3.3 does not ship");
 `src/xhci98.inf` comment block above `[Xhci.CopyW98]`;

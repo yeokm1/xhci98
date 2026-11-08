@@ -162,10 +162,12 @@ typedef KIRQL *         PKIRQL;
  * neither, and a driver header that compiled only one way would be exactly the
  * split this file exists to prevent.
  *
- * Its one use is the snapshot header's `RingOffset`, which travels on the wire
- * so that `XHCISNAP` can print the note ring out of a raw extension dump with
- * no offset table. Deriving it from the struct is what keeps it from becoming
- * a second copy of the layout that drifts.
+ * Used where an offset travels on the wire, so that the snapshot reader
+ * (XHCITR `/snapshot`) can find a structure in a raw extension dump with no
+ * offset table: the snapshot header's `RingOffset` and its HCD region's
+ * offsets, and the layout assertions beside them (xhci_snap.c). Deriving each
+ * from the struct is what keeps it from becoming a second copy of the layout
+ * that drifts.
  */
 #define XHCI_FIELD_OFFSET(type, member) \
     ((ULONG)(ULONG_PTR)&(((type *)0)->member))

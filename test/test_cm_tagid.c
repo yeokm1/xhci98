@@ -1,8 +1,9 @@
 /*
  * test_cm_tagid.c - the pure half of the tunnel id on Windows 98 SE and ME
  * (src\cm\cm_tagid.c; design record 31 sections 5.1 and 5.2, roadmap-usb4
- * task 44.3): the id list's test in both separators, the step's decision,
- * what follows an Add_ID in each mode, and the per-boot record.
+ * task 44.3): the id list's test in both separators, the step's decision
+ * and the per-boot record. What follows an Add_ID is the worker's alone
+ * (cm_cfgwk.c rereads and logs the list) and has no pure half to test.
  */
 
 #include "../src/cm/cm_tagid.h"
@@ -78,10 +79,6 @@ static void test_decide(void)
     CHECK_EQ(CmTagDecide(1, 1, 1), CM_TAG_HAS_ID, "the id already there");
 }
 
-static void test_after(void)
-{
-}
-
 static void test_seen(void)
 {
     CM_TAG_SEEN s;
@@ -112,7 +109,6 @@ int main(void)
 {
     test_list();
     test_decide();
-    test_after();
     test_seen();
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

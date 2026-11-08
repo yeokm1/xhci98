@@ -1790,6 +1790,178 @@ static void test_smart_result(void)
     }
 }
 
+/*
+ * Issue 26: XhciUasNoAtaPassThrough's answers. The CDB test is the
+ * operation code alone, as Linux's uas.c under US_FL_NO_ATA_1X; the sense
+ * is usb_stor_sense_invalidCDB's 5/24/00; and through the writers an
+ * answered request uses, the forms come back as a drive without SAT gives
+ * them: SCSI CHECK CONDITION with the sense, ATA Error 04h and Status 51h
+ * with nothing moved, SMART not supported.
+ */
+static void test_no_ata(void)
+{
+    static const UCHAR ata16[16] = { 0x85, 0x08, 0x0E, 0, 0, 0, 1, 0, 0, 0,
+                                     0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR ata12[12] = { 0xA1, 0x08, 0x0E, 0, 1, 0, 0, 0, 0xEC,
+                                     0, 0, 0 };
+    static const UCHAR read10[10] = { 0x28, 0 };
+    static const UCHAR inquiry[6] = { 0x12, 0, 0, 0, 0x24, 0 };
+    static const UCHAR zero[8] = { 0 };
+    static const UCHAR ident[8] = { 0x00, 0x01, 0, 0, 0, 0xA0, 0xEC, 0 };
+    static const UCHAR identNoRegs[8] = { 0x04, 0x01, 0, 0, 0, 0xA0, 0x51,
+                                          0 };
+    static const UCHAR want[18] = { 0x70, 0, 0x05, 0, 0, 0, 0, 10, 0, 0,
+                                    0, 0, 0x24, 0x00, 0, 0, 0, 0 };
+    UCHAR sense[32];
+    UCHAR in[32];
+    UCHAR out[600];
+    UAS_PT_PLAN p;
+    UAS_SMART_PLAN sp;
+    ULONG info;
+    ULONG n;
+    ULONG bytes;
+    ULONG err;
+
+    CHECK_EQ(UasNoAtaCdb(ata16, 16), 1, "85h answered");
+    CHECK_EQ(UasNoAtaCdb(ata12, 12), 1, "A1h answered");
+    CHECK_EQ(UasNoAtaCdb(read10, 10), 0, "READ (10) sent");
+    CHECK_EQ(UasNoAtaCdb(inquiry, 6), 0, "INQUIRY sent");
+    CHECK_EQ(UasNoAtaCdb(NULL, 16), 0, "no CDB");
+    CHECK_EQ(UasNoAtaCdb(ata16, 0), 0, "a zero length");
+
+    memset(sense, 0xCC, sizeof(sense));
+    n = UasInvalidCdbSense(sense, sizeof(sense));
+    CHECK_EQ(n, UAS_INVALID_CDB_SENSE, "18 bytes of sense");
+    CHECK(bytes_eq(sense, want, 18), "fixed, ILLEGAL REQUEST, 24h/00h");
+    CHECK_EQ(sense[18], 0xCC, "nothing past it");
+    memset(sense, 0xCC, sizeof(sense));
+    CHECK_EQ(UasInvalidCdbSense(sense, 8), 8, "a short buffer: its room");
+    CHECK(bytes_eq(sense, want, 8), "the first 8 bytes");
+    CHECK_EQ(sense[8], 0xCC, "nothing past the room");
+    CHECK_EQ(UasInvalidCdbSense(sense, 0), 0, "no room");
+    CHECK_EQ(UasInvalidCdbSense(NULL, 18), 0, "no buffer");
+
+    /* SCSI pass-through with 85h, 512 bytes in, 32 bytes of sense. */
+    n = UasInvalidCdbSense(sense, sizeof(sense));
+    spt(ptbuf, UAS_PT_LAYOUT_32, 16, 32, 1, 512, 0, 80, 0, 44, ata16);
+    CHECK_EQ(UasPtPlan(UAS_PT_SCSI, UAS_PT_LAYOUT_32, ptbuf, 80, 592, 65536,
+                       &p), UAS_PT_OK, "85h plan");
+    CHECK_EQ(UasNoAtaCdb(p.Cdb, p.CdbLength), 1, "the plan's CDB answered");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 592, UAS_SRB_ERROR,
+                         UAS_SCSI_CHECK_CONDITION, 0, sense, n, &info),
+             UAS_PTR_SUCCESS, "SCSI: the call succeeds");
+    CHECK_EQ(ptbuf[2], UAS_SCSI_CHECK_CONDITION, "ScsiStatus CHECK CONDITION");
+    CHECK_EQ(ptbuf[7], 18, "18 bytes of sense");
+    CHECK(bytes_eq(ptbuf + 44, want, 18), "the sense in place");
+    CHECK_EQ(get32(ptbuf + 12), 0, "nothing moved");
+
+    /* ATA pass-through, IDENTIFY: the CDB this driver builds is 85h. */
+    apt(ptbuf, UAS_PT_LAYOUT_32, UAS_ATA_DATA_IN, 512, 0, 40, zero, ident);
+    CHECK_EQ(UasPtPlan(UAS_PT_ATA, UAS_PT_LAYOUT_32, ptbuf, 40, 552, 65536,
+                       &p), UAS_PT_OK, "ATA plan");
+    CHECK_EQ(UasNoAtaCdb(p.Cdb, p.CdbLength), 1, "ATA's CDB answered");
+    CHECK_EQ(UasPtResult(&p, ptbuf, 552, UAS_SRB_ERROR,
+                         UAS_SCSI_CHECK_CONDITION, 0, sense, n, &info),
+             UAS_PTR_SUCCESS, "ATA: the call succeeds");
+    CHECK(bytes_eq(ptbuf + 32, identNoRegs, 8), "Error 04h, Status 51h");
+    CHECK_EQ(get32(ptbuf + 8), 0, "ATA: nothing moved");
+
+    /* SMART READ DATA: not supported. */
+    smartIn(in, 0xD0, 1, 1, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_READ_ATTRIBS, in, 32, 529, &sp),
+             UAS_SMART_NO_ERROR, "SMART plan");
+    CHECK_EQ(UasNoAtaCdb(sp.Cdb, 16), 1, "SMART's CDB answered");
+    memset(out, 0xCC, sizeof(out));
+    CHECK_EQ(UasSmartResult(&sp, out, 529, UAS_SRB_ERROR,
+                            UAS_SCSI_CHECK_CONDITION, 0, NULL, sense, n,
+                            &bytes, &err), UAS_PTR_NOT_SUPPORTED,
+             "SMART: not supported");
+    CHECK_EQ(err, UAS_SMART_NOT_SUPPORTED, "bDriverError SMART_NOT_SUPPORTED");
+    CHECK_EQ(bytes, 16, "the header alone");
+
+    /* SMART RETURN STATUS, no data: not supported either. */
+    smartIn(in, 0xDA, 0, 0, 0x4F, 0xC2, 0xB0);
+    CHECK_EQ(UasSmartPlan(UAS_SIOC_RETURN_STATUS, in, 32, 24, &sp),
+             UAS_SMART_NO_ERROR, "RETURN STATUS plan");
+    CHECK_EQ(UasSmartResult(&sp, out, 24, UAS_SRB_ERROR,
+                            UAS_SCSI_CHECK_CONDITION, 0, NULL, sense, n,
+                            &bytes, &err), UAS_PTR_NOT_SUPPORTED,
+             "RETURN STATUS: not supported");
+}
+
+/* Issue 26: one failure's words for the bus's record. */
+static void test_fail_pack(void)
+{
+    static const UCHAR fixed[18] = { 0x70, 0, 0x05, 0, 0, 0, 0, 10, 0, 0,
+                                     0, 0, 0x24, 0x01, 0, 0, 0, 0 };
+    static const UCHAR desc[8] = { 0x72, 0x06, 0x29, 0x00, 0, 0, 0, 0 };
+    ULONG w[XHCI98_FAIL_WORDS];
+
+    UasFailPack(w, XHCI98_FAIL_E_SENSE, XHCI98_FAIL_O_PROGRAM, 3, 0x85,
+                0x04, 0x02, fixed, 18, 2, XHCI98_FAIL_X_FINAL, 30, 512);
+    CHECK_EQ(w[0], 0x01010385UL, "event, origin, tag, opcode");
+    CHECK_EQ(w[1], 0x04022401UL, "SRB status, SCSI status, ASC, ASCQ");
+    CHECK_EQ(w[2], 0x0502101EUL, "key, slot state, transfers, timeout");
+    CHECK_EQ(w[3], 512, "the data length");
+
+    UasFailPack(w, XHCI98_FAIL_E_ENDED, XHCI98_FAIL_O_CLASS, 1, 0x28, 0x22,
+                0, desc, 8, 0, 0, 10, 4096);
+    CHECK_EQ(w[1] & 0xFFFFUL, 0x2900UL, "descriptor format: ASC 29h");
+    CHECK_EQ(w[2] >> 24, 6, "descriptor format: UNIT ATTENTION");
+
+    UasFailPack(w, XHCI98_FAIL_E_TIMEOUT, XHCI98_FAIL_O_CLASS, 2, 0x00, 0,
+                0, NULL, 0, 1,
+                XHCI98_FAIL_X_STATUS | XHCI98_FAIL_X_DATA_POSTED, 1000, 0);
+    CHECK_EQ(w[2] >> 24, 0xFF, "no sense: key FFh");
+    CHECK_EQ(w[1] & 0xFFFFUL, 0, "no sense: ASC and ASCQ 0");
+    CHECK_EQ(w[2] & 0xFFUL, 255, "a timeout held at 255");
+    CHECK_EQ((w[2] >> 8) & 0xFFUL, 0x21, "the status read outstanding");
+
+    UasFailPack(w, XHCI98_FAIL_E_SENSE, 0, 0, 0, 0, 2, fixed, 13, 0, 0, 0,
+                0);
+    CHECK_EQ(w[2] >> 24, 0xFF, "fixed sense too short for its ASC: none");
+    UasFailPack(w, 0x1FF, 0x1FF, 0x1FF, 0x1FF, 0x1FF, 0x1FF, NULL, 0, 0x1FF,
+                0x1FF, 0, 0);
+    CHECK_EQ(w[0], 0xFFFFFFFFUL, "each field cut to its width");
+    CHECK_EQ(XHCI98_FAIL_TOTAL_WORDS, 36, "a header of four and eight of four");
+    CHECK_EQ(sizeof(XHCI98_FAILURES), 144, "144 bytes on the wire");
+}
+
+/* Issue 26, XhciUasFastReset: when a timeout skips the ABORT TASK, and when
+ * a final IU's data cancel asks for transport recovery. */
+static void test_fast_reset(void)
+{
+    /* (fast, armed, progress, now, abortAt, startedAt) */
+    CHECK_EQ(UasFastResetDue(0, 1, 0, 110, 100, 105), 0,
+             "value 0: never, whatever the history");
+    CHECK_EQ(UasFastResetDue(1, 0, 0, 110, 100, 105), 0,
+             "no answered abort yet: the first timeout keeps ABORT TASK");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 110, 100, 105), 1,
+             "a second timeout after an answered abort, no progress: reset");
+    CHECK_EQ(UasFastResetDue(1, 1, 1, 110, 100, 105), 0,
+             "a command ended GOOD since: ABORT TASK again");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 220, 100, 105), 1,
+             "120 s after the abort: still inside the window");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 221, 100, 105), 0,
+             "121 s after: outside the window");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 110, 100, 100), 1,
+             "started in the abort's second: after it");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 110, 100, 99), 0,
+             "started before the abort: that abort's own aftermath");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 5, 0xFFFFFFF0UL, 2), 1,
+             "the seconds count wrapped: still 21 s after, started after");
+    CHECK_EQ(UasFastResetDue(1, 1, 0, 5, 0xFFFFFFF0UL, 0xFFFFFFEFUL), 0,
+             "wrapped, started a second before the abort");
+
+    /* (fast, final, dataOutstanding, waited) */
+    CHECK_EQ(UasFinalCancelDue(1, 1, 1, 5), 1, "5 s for the data cancel");
+    CHECK_EQ(UasFinalCancelDue(1, 1, 1, 4), 0, "4 s: still waiting");
+    CHECK_EQ(UasFinalCancelDue(0, 1, 1, 100), 0, "value 0: never");
+    CHECK_EQ(UasFinalCancelDue(1, 0, 1, 100), 0, "no final IU: the timeout's");
+    CHECK_EQ(UasFinalCancelDue(1, 1, 0, 100), 0, "no data outstanding");
+    CHECK_EQ(XHCI98_FAIL_E_FAST_RESET, 7, "the ring's event 7");
+}
+
 int main(void)
 {
     test_tags();
@@ -1819,6 +1991,9 @@ int main(void)
     test_sioc();
     test_smart_plan();
     test_smart_result();
+    test_no_ata();
+    test_fail_pack();
+    test_fast_reset();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

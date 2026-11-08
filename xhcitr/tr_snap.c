@@ -87,6 +87,11 @@
 #include <io.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#if defined(_WIN64)
+/* The compiler's own CPUID intrinsic; WDK 7.1 ships no intrin.h. */
+void __cpuid(int info[4], int leaf);
+#pragma intrinsic(__cpuid)
+#endif
 
 /* ---- usbport's USBUSER escape (from the binaries, not from a header) ---- */
 
@@ -434,7 +439,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_POLL_FOUND_ACTIVE      0x4UL
 #define SNAP_POLL_DELIVERY_POLL     2UL
 #define SNAP_POLL_DELIVERIES        6UL
-#define SNAP_POLL_REASONS           20UL
+#define SNAP_POLL_REASONS           21UL
 #define SNAP_POLL_PIN_READ          1UL
 #define SNAP_POLL_PIN_UNREADABLE    2UL
 #define SNAP_POLL_RETIRED_STATES    6UL
@@ -457,7 +462,7 @@ static const unsigned long snap_guid[4] = {
 #define SNAP_MSI_STATES             5UL
 #define SNAP_MSI_REFUSALS           5UL
 #define SNAP_MSI_CLASSES            7UL
-#define SNAP_MSI_OUTCOMES           13UL
+#define SNAP_MSI_OUTCOMES           18UL
 /*
  * Controller tolerance (2.2.0.0 on, task 35-T.8; design record 17 section
  * 4.8). Its state stays in the extension, and the HCD region's header grew
@@ -991,10 +996,24 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
             printf("  the driver refused the request block\n");
             return abandon_region(file, path);
         }
+        /* The driver echoes the request's region and offset in every
+         * reply; a window of another would land at the wrong place in the
+         * file. */
+        if (header.Region != region || header.Offset != offset) {
+            printf("  the driver answered region %lu at offset %lu for region "
+                   "%lu at offset %lu -\n  refusing the reply\n",
+                   header.Region, header.Offset, region, offset);
+            return abandon_region(file, path);
+        }
         if ((header.Status & SNAP_S_NO_MMIO) != 0) {
             printf("  the controller has no usable register mapping, so "
                    "PORTSC was not read\n");
-            CloseHandle(file);
+            if (!CloseHandle(file)) {
+                printf("  %s could not be closed, error %lu\n", path,
+                       (unsigned long)GetLastError());
+                DeleteFileA(path);
+                return (unsigned long)-1;
+            }
             return 0;
         }
         if ((header.Status & SNAP_S_PAST_END) != 0) {
@@ -1087,7 +1106,14 @@ static unsigned long dump_region(HANDLE device, unsigned long region,
         return abandon_region(file, path);
     }
 
-    CloseHandle(file);
+    /* A failed close can lose what the writes left in the cache: a short
+     * write, as far as the file is concerned. */
+    if (!CloseHandle(file)) {
+        printf("  %s could not be closed, error %lu\n", path,
+               (unsigned long)GetLastError());
+        DeleteFileA(path);
+        return (unsigned long)-1;
+    }
     printf("  %s: %lu bytes in %lu window(s) (region is %lu)\n",
            path, total, windows, last->RegionBytes);
     return total;
@@ -1151,12 +1177,15 @@ static FILE *companion;
  *
  * `faultWrite` and `faultClose` are the deterministic injection for the
  * self-test: set through the XHCISNAP_FAULT environment variable ("write" or
- * "close") and read once in main. They exist because a real full disk is not
+ * "close") and read once in main, under /snaptest alone (trSnapTest), so the
+ * released tool's /snapshot and /dump never honour it. They exist because a real full disk is not
  * a reproducible test and a report path that is never made to fail is a
  * report path whose failure branch has never run.
  */
 static int companionOpened;
 static int companionFailed;
+/* 1 when the command line came through XHCITR /snaptest (xhcitr.c). */
+int trSnapTest;
 static int extMismatch;
 static int faultWrite;
 static int faultClose;
@@ -2729,6 +2758,17 @@ static void write_companion_enum_notes(const unsigned char *ring,
  * misbehaving, so anything outside printable ASCII and CRLF is shown as `.`
  * rather than sent to a console.
  */
+/*
+ * Task 47.30 (design record 13 section 11.10, Part B, point 2): the
+ * snapshot's own system time, from the HCD region's transfer readings, so
+ * an `at` record in the note ring is printed with its time of day. Set by
+ * at_clock_set before the ring is printed; atClockValid 0 leaves the
+ * records as they are.
+ */
+static int atClockValid;
+static unsigned long atNowLo;
+static unsigned long atNowHi;
+
 static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
                                  unsigned long extBytes)
 {
@@ -2737,6 +2777,13 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
     unsigned long i;
     unsigned long at;
     unsigned char c;
+    char line[64];
+    unsigned long used;
+    unsigned long value;
+    unsigned long age;
+    char clock[16];
+    int atSeen = 0;
+    int atKind;
 
     if (h->RingBytes == 0 || h->RingUsed == 0) {
         comp("\nnote ring: empty.\n");
@@ -2782,6 +2829,7 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
 
     comp("\nnote ring, oldest record first (%lu bytes):\n", h->RingUsed);
     comp("----------------------------------------------------------------\n");
+    used = 0;
     for (i = 0; i < h->RingUsed; i++) {
         at = (start + i) & mask;
         c = ext[h->RingOffset + at];
@@ -2791,14 +2839,40 @@ static void write_companion_ring(const SNAP_HEADER *h, const unsigned char *ext,
         if (c == '\r') {
             continue;
         } else if (c == '\n') {
+            /* 47.30: an `at` record gets its time of day. */
+            line[used < sizeof(line) ? used : sizeof(line) - 1] = '\0';
+            atKind = (used < sizeof(line)) ? tr_at_line(line, &value) : 0;
+            if (atKind == 2) {
+                comp("  (none: no such event before the close)");
+            } else if (atClockValid && atKind == 1) {
+                age = tr_at_age(atNowLo, atNowHi, value);
+                tr_at_utc(clock, sizeof(clock), atNowLo, atNowHi, age);
+                comp("  (%s UTC, %.3f s before the snapshot)", clock,
+                     (double)age * 1024.0 / 10000000.0);
+                atSeen = 1;
+            }
+            used = 0;
             comp("\n");
         } else if (c < 0x20 || c > 0x7E) {
+            if (used < sizeof(line)) {
+                line[used] = '.';
+            }
+            used++;
             comp(".");
         } else {
+            if (used < sizeof(line)) {
+                line[used] = (char)c;
+            }
+            used++;
             comp("%c", c);
         }
     }
     comp("\n----------------------------------------------------------------\n");
+    if (atSeen) {
+        comp("(an `at` record is the time of the record before it, placed as "
+             "the latest such\n time before this snapshot: one older than "
+             "5 days, or across a change of the\n clock, is misplaced)\n");
+    }
     write_companion_enum_notes(ext + h->RingOffset, start, mask, h->RingUsed);
 }
 
@@ -4686,6 +4760,191 @@ static void xs_hist(const char *lead, const unsigned char *p,
     comp("\n");
 }
 
+/*
+ * Task 47.6 (was TRTSC.1): whether this processor's time-stamp counter is
+ * invariant, CPUID 8000_0007h EDX bit 8. Where it is not, the counter's
+ * rate follows the processor's speed, and the one average rate below
+ * converts a short interval wrongly. A processor with no CPUID, or no
+ * such leaf, counts as not invariant. Read on the machine the dump is
+ * taken on, never under /nosysinfo, which promises no processor query.
+ */
+#define TSC_UNREAD          (-2)    /* not asked yet                     */
+#define TSC_SKIPPED         (-1)    /* /nosysinfo                        */
+#define TSC_VARIANT         0       /* not invariant, or not reported    */
+#define TSC_INVARIANT       1
+
+static int tscState = TSC_UNREAD;
+
+static int cpu_tsc_invariant(void)
+{
+#if defined(_WIN64)
+    int r[4];
+
+    __cpuid(r, (int)0x80000000UL);
+    if (((unsigned long)r[0] & 0xFFFF0000UL) != 0x80000000UL ||
+        (unsigned long)r[0] < 0x80000007UL) {
+        return TSC_VARIANT;
+    }
+    __cpuid(r, (int)0x80000007UL);
+    return ((unsigned long)r[3] & 0x100UL) ? TSC_INVARIANT : TSC_VARIANT;
+#else
+    unsigned long has = 0;
+    unsigned long maxExt = 0;
+    unsigned long leafEdx = 0;
+
+    /* CPUID exists where the EFLAGS ID bit (21) can be changed. */
+    __asm {
+        pushfd
+        pop eax
+        mov ecx, eax
+        xor eax, 0x00200000
+        push eax
+        popfd
+        pushfd
+        pop eax
+        push ecx
+        popfd
+        xor eax, ecx
+        and eax, 0x00200000
+        mov has, eax
+    }
+    if (has == 0) {
+        return TSC_VARIANT;
+    }
+    /* CPUID as bytes (0F A2), which every compiler of this tree takes. */
+    __asm {
+        push ebx
+        mov eax, 0x80000000
+        _emit 0x0F
+        _emit 0xA2
+        mov maxExt, eax
+        pop ebx
+    }
+    if ((maxExt & 0xFFFF0000UL) != 0x80000000UL || maxExt < 0x80000007UL) {
+        return TSC_VARIANT;
+    }
+    __asm {
+        push ebx
+        mov eax, 0x80000007
+        _emit 0x0F
+        _emit 0xA2
+        mov leafEdx, edx
+        pop ebx
+    }
+    return (leafEdx & 0x100UL) ? TSC_INVARIANT : TSC_VARIANT;
+#endif
+}
+
+static int tsc_state(void)
+{
+    if (tscState == TSC_UNREAD) {
+        tscState = sysinfoOff ? TSC_SKIPPED : cpu_tsc_invariant();
+    }
+    return tscState;
+}
+
+/*
+ * Issue 26: the UAS class driver's last failures (src/xhci98_xfer.h,
+ * XHCI98_FAILURES), one record per class driver record, after 47.30's
+ * block; test\test_snap.c holds the driver's layout to these numbers. A
+ * header shorter than the block is an earlier driver's, which kept none,
+ * and nothing is said.
+ */
+#define SNAP_HCD_UFAIL_HEAD_WORDS   929UL
+#define SNAP_UFAIL_RECORDS_AT       860UL
+#define SNAP_UFAIL_WORDS_AT         861UL
+#define SNAP_UFAIL_FIRST_AT         862UL
+#define SNAP_UFAIL_ENTRIES          8UL
+#define SNAP_UFAIL_ENTRY_WORDS      4UL
+
+static const char *const ufail_event[8] = {
+    "?", "CHECK CONDITION", "timed out", "ended by recovery",
+    "refused (RESPONSE IU)", "answered here, not sent", "another status",
+    "device reset at once (XhciUasFastReset)"
+};
+static const char *const ufail_origin[3] = {
+    "class driver", "program", "own command"
+};
+
+static void print_ufail(const unsigned char *hcd, unsigned long hcdBytes,
+                        unsigned long headBytes, unsigned long r)
+{
+    unsigned long records;
+    unsigned long words;
+    unsigned long first;
+    unsigned long count;
+    unsigned long n;
+    unsigned long i;
+    unsigned long k;
+    unsigned long w0;
+    unsigned long w1;
+    unsigned long w2;
+    unsigned long w3;
+    const unsigned char *f;
+    const unsigned char *e;
+
+    if (headBytes < SNAP_HCD_UFAIL_HEAD_WORDS * 4 ||
+        hcdBytes < SNAP_HCD_UFAIL_HEAD_WORDS * 4) {
+        return;
+    }
+    records = get32(hcd, SNAP_UFAIL_RECORDS_AT * 4);
+    words = get32(hcd, SNAP_UFAIL_WORDS_AT * 4);
+    first = get32(hcd, SNAP_UFAIL_FIRST_AT * 4);
+    /* Each count held to a bound first, and the extent compared by
+     * subtraction, so nothing wraps. */
+    if (records > 16 || words > 1024 ||
+        words < 1 + SNAP_UFAIL_ENTRIES * SNAP_UFAIL_ENTRY_WORDS ||
+        first > headBytes / 4 || first > hcdBytes / 4 ||
+        records * words > headBytes / 4 - first ||
+        records * words > hcdBytes / 4 - first) {
+        comp("    failures: %lu records of %lu words at word %lu - not a "
+             "shape this build reads\n", records, words, first);
+        return;
+    }
+    if (r >= records) {
+        return;
+    }
+    f = hcd + (first + r * words) * 4;
+    count = get32(f, 0);
+    if (count == 0) {
+        comp("    failures: none recorded\n");
+        return;
+    }
+    n = (count < SNAP_UFAIL_ENTRIES) ? count : SNAP_UFAIL_ENTRIES;
+    comp("    failures: %lu recorded, the last %lu, oldest first:\n", count,
+         n);
+    for (i = 0; i < n; i++) {
+        k = (count - n + i) % SNAP_UFAIL_ENTRIES;
+        e = f + (1 + k * SNAP_UFAIL_ENTRY_WORDS) * 4;
+        w0 = get32(e, 0);
+        w1 = get32(e, 4);
+        w2 = get32(e, 8);
+        w3 = get32(e, 12);
+        comp("      %s, %s, tag %lu, CDB %02lXh, %lu bytes, timeout %lu s\n",
+             (w0 >> 24) < 8 ? ufail_event[w0 >> 24] : "?",
+             ((w0 >> 16) & 0xFFUL) < 3 ? ufail_origin[(w0 >> 16) & 0xFFUL]
+                                       : "?",
+             (w0 >> 8) & 0xFFUL, w0 & 0xFFUL, w3, w2 & 0xFFUL);
+        comp("        SRB status %02lXh, SCSI status %02lXh, ", w1 >> 24,
+             (w1 >> 16) & 0xFFUL);
+        if ((w2 >> 24) == 0xFFUL) {
+            comp("no sense");
+        } else {
+            comp("sense %lX/%02lX/%02lX", w2 >> 24, (w1 >> 8) & 0xFFUL,
+                 w1 & 0xFFUL);
+        }
+        comp("; slot state %lu, transfers%s%s%s%s%s%s%s\n",
+             (w2 >> 16) & 0xFFUL,
+             ((w2 >> 8) & 0x3FUL) == 0 ? " none" : "",
+             (w2 & 0x0100UL) ? " status" : "",
+             (w2 & 0x0200UL) ? " data" : "",
+             (w2 & 0x0400UL) ? " command" : "",
+             (w2 & 0x0800UL) ? " cancelling" : "",
+             (w2 & 0x1000UL) ? " final-IU-in" : "",
+             (w2 & 0x2000UL) ? " data-posted" : "");
+    }
+}
+
 static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
 {
     static const char *const why_text[6] = {
@@ -4771,6 +5030,15 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         comp("  (times and ages converted at that rate, taken from two "
              "readings that may be\n  two processors': approximate where "
              "their counters disagree)\n");
+        if (tsc_state() == TSC_VARIANT) {
+            comp("  (this processor's time-stamp counter is not invariant: "
+                 "its rate changes with\n  the processor's speed, so every "
+                 "time in this section is approximate)\n");
+        } else if (tsc_state() == TSC_SKIPPED) {
+            comp("  (/nosysinfo: whether this processor's time-stamp counter "
+                 "is invariant was not\n  read; where it is not, every time "
+                 "in this section is approximate)\n");
+        }
     } else {
         comp("; under 1 s or no\n  clock, so times are not converted):\n");
     }
@@ -4851,6 +5119,7 @@ static void print_xstat(const unsigned char *hcd, unsigned long hcdBytes)
         comp("    the size question since load: older bus %lu, out of contract "
              "%lu, failed %lu\n", get32(b, SNAP_TL_UNSUPPORTED * 4),
              get32(b, SNAP_TL_MALFORMED * 4), get32(b, SNAP_TL_TRANSPORT * 4));
+        print_ufail(hcd, hcdBytes, headBytes, r);
     }
 #undef XW
 }
@@ -4894,7 +5163,9 @@ static const char *const poll_reason_text[SNAP_POLL_REASONS] = {
     "forced message (XhciInterruptMode 3), but this Windows has no message "
     "interrupts: the start fails",
     "automatic: a message granted, refused by XhciMsiAvoid (Linux's "
-    "XHCI_BROKEN_MSI), so polled"
+    "XHCI_BROKEN_MSI), so polled",
+    "automatic: the line granted could not be connected (2000/XP), so "
+    "polled"
 };
 
 static const char *const poll_role_text[3] = {
@@ -5438,7 +5709,15 @@ static const char *const msi_outcome_text[SNAP_MSI_OUTCOMES] = {
     "kept: a shape not admitted",
     "REPLACED: the message choices stripped, the line left",
     "kept: no memory for the replacement",
-    "REPLACED: the line choices stripped, the message left (mode 3)"
+    "REPLACED: the line choices stripped, the message left (mode 3)",
+    "REPLACED: a copy without the line added (2000/XP)",
+    "REPLACED: the chipset's GSI, then a copy without the line, added "
+    "(2000/XP)",
+    "REPLACED: the chipset's GSI added (2000/XP, XhciInterruptMode 1)",
+    "REPLACED: the line removed, the only configuration (2000, a listed "
+    "board)",
+    "WITHDRAWN: the line could not be removed, no resources asked (2000, "
+    "a listed board)"
 };
 
 /* Out of line, as poll_reason_name. */
@@ -5461,7 +5740,7 @@ static const char *msi_capability(unsigned long v)
 /*
  * Words 96 to 113 of the counter block, as the last start and the last
  * requirements filter wrote them (design record 18 section 9). The filter
- * runs on Vista and 7 only: on Windows 98, ME, 2000 and XP its sequence
+ * runs on Vista and later only: on Windows 98, ME, 2000 and XP its sequence
  * stays 0 and its mode word reads FFFFFFFF (XHCI_POLL_NOT_FOUND, no
  * filter's value), which is "not applicable" here, not a mode.
  */
@@ -5523,8 +5802,8 @@ static void print_msi(const unsigned char *hcd, unsigned long hcdBytes)
     }
     if (get32(k, 10 * 4) == 0) {
         comp("  requirements filter    none has run: not applicable (it runs "
-             "on Vista and 7\n                         only; Windows 98, ME, "
-             "2000 and XP never send one)\n");
+             "on Vista\n                         and later only; Windows 98, "
+             "ME, 2000 and XP never\n                         send one)\n");
         return;
     }
     comp("  requirements filter    #%lu: %s\n", get32(k, 10 * 4),
@@ -5859,6 +6138,182 @@ static void print_idplace(const unsigned char *image, unsigned long bytes)
 }
 
 /*
+ * Task 47.30's appended block (design record 13 section 11.10, Part B,
+ * point 3): the event ring's TRB count and the open isochronous pipes'
+ * stream timing. Counts are converted at the time-stamp counter's rate the
+ * transfer readings give; times are the `at` notes' units. A header
+ * shorter than the block is an earlier driver's, which kept none.
+ */
+#define SNAP_HCD_ISOP_HEAD          792UL
+#define SNAP_HCD_ISOP_HEAD_WORDS    860UL
+
+/* The time-stamp counter's counts a microsecond, from the transfer
+ * readings' two clock pairs; 0 when there is no reading. */
+static double hcd_tsc_per_us(const unsigned char *hcd, unsigned long bytes)
+{
+    const unsigned char *s;
+    double dTsc;
+    double dTime;
+
+    if (bytes < SNAP_HCD_XSTAT_HEAD_WORDS * 4 ||
+        get32(hcd, 4) < SNAP_HCD_XSTAT_HEAD_WORDS * 4 ||
+        get32(hcd, SNAP_XSTAT_COUNT_AT * 4) < SNAP_XSTAT_WORDS) {
+        return 0.0;
+    }
+    s = hcd + SNAP_XSTAT_AT * 4;
+    dTsc = (double)get32(s, (SNAP_XS_TSC_NOW + 1) * 4) * 4294967296.0 +
+           (double)get32(s, SNAP_XS_TSC_NOW * 4) -
+           ((double)get32(s, (SNAP_XS_TSC_START + 1) * 4) * 4294967296.0 +
+            (double)get32(s, SNAP_XS_TSC_START * 4));
+    dTime = (double)get32(s, (SNAP_XS_TIME_NOW + 1) * 4) * 4294967296.0 +
+            (double)get32(s, SNAP_XS_TIME_NOW * 4) -
+            ((double)get32(s, (SNAP_XS_TIME_START + 1) * 4) * 4294967296.0 +
+             (double)get32(s, SNAP_XS_TIME_START * 4));
+    return (dTime >= 10000000.0 && dTsc > 0.0) ? dTsc / (dTime / 10.0) : 0.0;
+}
+
+/* The snapshot's own system time for the `at` records (write_companion_ring
+ * and print_isop). */
+static void at_clock_set(const unsigned char *hcd, unsigned long bytes)
+{
+    const unsigned char *s;
+
+    atClockValid = 0;
+    if (bytes < SNAP_HCD_XSTAT_HEAD_WORDS * 4 || get32(hcd, 0) == 0 ||
+        get32(hcd, 0) > SNAP_HCD_VERSION ||
+        get32(hcd, 4) < SNAP_HCD_XSTAT_HEAD_WORDS * 4 ||
+        get32(hcd, SNAP_XSTAT_COUNT_AT * 4) < SNAP_XSTAT_WORDS) {
+        return;
+    }
+    s = hcd + SNAP_XSTAT_AT * 4;
+    atNowLo = get32(s, SNAP_XS_TIME_NOW * 4);
+    atNowHi = get32(s, (SNAP_XS_TIME_NOW + 1) * 4);
+    atClockValid = (atNowLo != 0 || atNowHi != 0) ? 1 : 0;
+}
+
+/* One time of the table: its time of day and its age, or "-" for none. */
+static void isop_time(const char *label, unsigned long at)
+{
+    char clock[16];
+    unsigned long age;
+
+    if (at == 0 || !atClockValid) {
+        comp("    %-26s -\n", label);
+        return;
+    }
+    age = tr_at_age(atNowLo, atNowHi, at);
+    tr_at_utc(clock, sizeof(clock), atNowLo, atNowHi, age);
+    comp("    %-26s %s UTC, %.3f s before the snapshot\n", label, clock,
+         (double)age * 1024.0 / 10000000.0);
+}
+
+/* One count of the table, in microseconds where the rate is known. */
+static void isop_span(const char *label, unsigned long counts, double perUs)
+{
+    if (perUs > 0.0) {
+        comp("    %-26s %.0f us%s\n", label, (double)counts / perUs,
+             counts == 0xFFFFFFFFUL ? " or more" : "");
+    } else {
+        comp("    %-26s %lu counts\n", label, counts);
+    }
+}
+
+static void print_isop(const unsigned char *image, unsigned long bytes)
+{
+    unsigned long headBytes;
+    unsigned long records;
+    unsigned long words;
+    unsigned long at;
+    unsigned long i;
+    unsigned long v;
+    unsigned long shown = 0;
+    double perUs;
+    const unsigned char *r;
+
+    headBytes = get32(image, 4);
+    comp("\nevent ring and isochronous streams (task 47.30):\n");
+    if (headBytes < SNAP_HCD_ISOP_HEAD_WORDS * 4 || bytes < headBytes) {
+        comp("  not kept by this driver (a %lu-byte header; from 3.4.2.0 "
+             "on).\n", headBytes);
+        return;
+    }
+    records = get32(image, SNAP_HCD_ISOP_HEAD * 4);
+    words = get32(image, (SNAP_HCD_ISOP_HEAD + 1) * 4);
+    at = get32(image, (SNAP_HCD_ISOP_HEAD + 2) * 4);
+    comp("  event ring                   %lu entries\n",
+         get32(image, (SNAP_HCD_ISOP_HEAD + 3) * 4));
+    if (words < 16 || words > 64 || records > 64 ||
+        at < SNAP_HCD_ISOP_HEAD + 4 || at > headBytes / 4 ||
+        records > (headBytes / 4 - at) / words) {
+        comp("  streams: %lu of %lu words at %lu - not a shape this build "
+             "reads\n", records, words, at);
+        return;
+    }
+    perUs = hcd_tsc_per_us(image, bytes);
+    for (i = 0; i < records; i++) {
+        r = image + (at + i * words) * 4;
+        v = get32(r, 0);
+        if (v == 0) {
+            continue;
+        }
+        comp("  slot %lu, endpoint %lu (DCI %lu): a ring of %lu TRBs%s; "
+             "%lu of %lu requests out at most\n",
+             (v >> 8) & 0xFFUL, (v & 0xFFUL) / 2, v & 0xFFUL,
+             get32(r, 4) & 0xFFFFUL,
+             (get32(r, 4) & 0x10000UL) != 0 ? " (its own page)" : "",
+             (get32(r, 8) >> 8) & 0xFFUL, get32(r, 8) & 0xFFUL);
+        comp("    publications               %lu, %lu onto an empty ring, "
+             "%lu after waiting\n", get32(r, 12), get32(r, 16),
+             get32(r, 20));
+        if (get32(r, 12) > get32(r, 16)) {
+            comp("    ring fill                  %lu TRBs at least before "
+                 "one, %lu at most after\n", get32(r, 24), get32(r, 28));
+        } else {
+            comp("    ring fill                  %lu TRBs at most after one\n",
+                 get32(r, 28));
+        }
+        if ((get32(r, 44) & 1UL) != 0) {
+            isop_span("longest gap", get32(r, 32), perUs);
+            isop_time("  ended", get32(r, 36));
+            if ((get32(r, 44) & 4UL) != 0) {
+                comp("      its request's wait       not measured%s\n",
+                     (get32(r, 44) & 2UL) != 0 ? "; it had waited for a "
+                                                 "record" : "");
+            } else {
+                isop_span("  its request's wait", get32(r, 40), perUs);
+                if ((get32(r, 44) & 2UL) != 0) {
+                    comp("      (it had waited for a record)\n");
+                }
+            }
+        } else {
+            comp("    longest gap                not measured yet\n");
+        }
+        isop_span("longest wait", get32(r, 48), perUs);
+        comp("    not measured               %lu across processors, %lu "
+             "backward\n", get32(r, 52) & 0xFFFFUL,
+             (get32(r, 52) >> 16) & 0xFFFFUL);
+        comp("    ran dry                    %lu (Ring Underrun or Overrun)\n",
+             get32(r, 56));
+        if (get32(r, 56) != 0) {
+            isop_time("  the last", get32(r, 60));
+        }
+        shown++;
+    }
+    if (shown == 0) {
+        comp("  no isochronous stream open.\n");
+    } else {
+        comp("  (a gap ended by a request that had waited for a record, or "
+             "one with a long wait,\n   points at this driver; one ended "
+             "by a request that neither waited nor sat\n   long is "
+             "consistent with the program sending late)\n");
+        if (perUs > 0.0 && tsc_state() == TSC_VARIANT) {
+            comp("  (this processor's time-stamp counter is not invariant, so "
+                 "these times are\n   approximate)\n");
+        }
+    }
+}
+
+/*
  * The HCD region's report: the ports and counters, then every section read
  * from the same header. When the header does not fit its image print_hcd
  * says so and nothing else is decoded from it (task 36.9),
@@ -5894,6 +6349,9 @@ static void print_hcd_sections(const unsigned char *hcd, unsigned long bytes,
     print_xport(hcd, bytes);
     /* 45.40: the identity records behind hubs, from the header alone. */
     print_idplace(hcd, bytes);
+    /* 47.30: the event ring and the isochronous streams, from the header
+     * alone. */
+    print_isop(hcd, bytes);
 }
 
 /*
@@ -6185,7 +6643,17 @@ static int selftest_xstat(void)
     put32(b, SNAP_TL_DEPTH_HIST * 4, 90);
     put32(b, (SNAP_TL_DEPTH_HIST + 1) * 4, 14);
     put32(b, SNAP_TL_MALFORMED * 4, 1);
+    /* Task 47.6: an invariant counter says nothing more; one that is not,
+     * and /nosysinfo's unread one, say the times are approximate. */
+    tscState = TSC_INVARIANT;
     print_xstat(hcd, sizeof(hcd));
+    comp("[variant counter]\n");
+    tscState = TSC_VARIANT;
+    print_xstat(hcd, sizeof(hcd));
+    comp("[nosysinfo]\n");
+    tscState = TSC_SKIPPED;
+    print_xstat(hcd, sizeof(hcd));
+    tscState = TSC_INVARIANT;
 
     /* A value out of range, no clock yet, no record. */
     put32(s, SNAP_XS_WHY * 4, 4);
@@ -9904,7 +10372,8 @@ static int take_dump(unsigned long controller, const char *base,
  * name is chosen, so the clash branch runs with no second process. */
 static int faultClash;
 
-/* Windows NT (2000 to 7) rather than 98 SE or ME: GetVersion's high bit. */
+/* Windows NT (2000 and later) rather than 98 SE or ME: GetVersion's high
+ * bit. */
 static int on_nt(void)
 {
     return ((GetVersion() & 0x80000000UL) == 0) ? 1 : 0;
@@ -10036,8 +10505,9 @@ named:
                "the disk may be full\n      or read-only. Copy this "
                "directory somewhere you can write to and run it\n      "
                "there.%s\n", devPath, errno,
-               on_nt() ? " On Vista and 7, run it from a command prompt "
-                         "started with\n      Run as administrator." : "");
+               on_nt() ? " On Vista and later, run it from a command "
+                         "prompt\n      started with Run as administrator."
+                       : "");
         report_attach_line(base, 0, 0);
         return REPORT_DEV_BAD;
     }
@@ -10212,8 +10682,8 @@ named:
         printf("%s.DEV could not be written in full: the disk may be full "
                "or read-only. Copy\nthis directory somewhere you can write "
                "to and run it there.%s\n", base,
-               on_nt() ? " On Vista and 7,\nrun it from a command prompt "
-                         "started with Run as administrator." : "");
+               on_nt() ? " On Vista and\nlater, run it from a command "
+                         "prompt started with Run as administrator." : "");
     } else if (rc == REPORT_TXT_BAD) {
         printf("The dump's .TXT is not complete: read the lines above, and "
                "say so when you\nattach it.\n");
@@ -10414,7 +10884,7 @@ static void usage(void)
 "  XHCITR /snapshot /?             the long version\n"
 "\n"
 "  /c N        controller index, opens \\\\.\\XHCI98HCN (98, ME: HCDN)\n"
-"  /o BASE     output basename (default XHCISNAP)\n"
+"  /o BASE     output basename (default XHCITR)\n"
 "  /nosysinfo  with a dump: skip reading the OS, BIOS, CPU and RAM\n"
 "\n"
 "The log needs xhci98's logging level at 2 or more (2 is the default): the\n"
@@ -10461,7 +10931,7 @@ static void usage_long(void)
 "                \\\\.\\HCDN (a driver before 3.3.0.0); on 98 SE and ME\n"
 "                \\\\.\\HCDN, where Windows' own USB stack may hold HCD0\n"
 "                and leave xhci98 at 1 or 2.\n"
-"  /o BASENAME   output basename.  Default XHCISNAP, in the current\n"
+"  /o BASENAME   output basename.  Default XHCITR, in the current\n"
 "                directory (beside /snapshot an 8.3 name only).\n"
 "  /probe        four controls on the route, for when nothing came back.\n"
 "  /nosysinfo    with a dump: do not read the system details the header\n"
@@ -10691,7 +11161,7 @@ int tr_snap_main(int argc, char **argv)
     baseGiven = 0;
     selftestReport = NULL;
     doSelftestSysinfo = 0;
-    base = "XHCISNAP";
+    base = "XHCITR";
     probeOnly = 0;
     doDump = 0;
     /* Never used unless `doSetLevel` says a level was named; seeded to the
@@ -10732,7 +11202,7 @@ int tr_snap_main(int argc, char **argv)
         }
     }
 
-    {
+    if (trSnapTest) {
         const char *fault;
 
         fault = getenv("XHCISNAP_FAULT");
@@ -11195,6 +11665,11 @@ static int take_dump(unsigned long controller, const char *base,
      * below has to describe the bytes actually saved in `ext_image`.
      */
     write_companion_header(&extLast);
+    /* 47.30: the snapshot's own clock for the note ring's `at` records and
+     * the isochronous table, whatever the level prints. */
+    if (hcdState == 1) {
+        at_clock_set(hcd_image, hcdBytes);
+    }
 
     /*
      * **The tier is a publication line, not a transport one.** The driver

@@ -23,7 +23,7 @@ Class=USB
 ClassGUID={36FC9E60-C465-11CF-8056-444553540000}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=11/05/2026,3.4.1.0
+DriverVer=11/08/2026,3.4.2.0
 ; Made and test-signed by the packager alone (design record 19).
 CatalogFile=xhciuas.cat
 
@@ -46,6 +46,18 @@ Uas.CopyFiles=10,System32\Drivers
 
 [Uas.Dev.NTamd64]
 CopyFiles=Uas.CopyFiles
+
+; The device's hardware key (its Device Parameters key). Issue 26:
+; XhciUasNoAtaPassThrough 1 has the driver answer ATA PASS-THROUGH and SMART
+; itself for this device, never sending them; XhciUasFastReset 1 resets the
+; device at a second timeout after an answered ABORT TASK
+; (docs\using\tuning.md). Each written 0, never over a value already set.
+[Uas.Dev.NTamd64.HW]
+AddReg=Uas.Param.AddReg
+
+[Uas.Param.AddReg]
+HKR,,XhciUasNoAtaPassThrough,0x00010003,0
+HKR,,XhciUasFastReset,0x00010003,0
 
 [Uas.Dev.NTamd64.Services]
 AddService=xhciuas,0x00000002,Uas.AddService

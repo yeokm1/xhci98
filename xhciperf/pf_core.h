@@ -127,16 +127,17 @@ typedef struct pf_plan {
     pf_u64 regionBytes;     /* the tests' part of the file (mapBlocks covers it, the last block maybe partial) */
     pf_u64 fileBytes;       /* with the header */
     pf_u32 maxSize;         /* the largest request */
-    pf_u32 minWrite;        /* the smallest write, the map's block */
+    pf_u32 minWrite;        /* the smallest write (0: none) */
     pf_u32 slots;           /* buffers: the most depth x threads */
     pf_u64 bufferBytes;     /* all buffers */
-    pf_u32 mapBlock;        /* the map's block: the smallest write, or with no write the smallest read */
+    pf_u32 mapBlock;        /* the map's block: the largest that every request covers whole blocks of or lies within one (pf_map_block) */
     pf_u64 mapBlocks;       /* verifiable runs */
     pf_u64 budgetWrites;    /* writes of the byte-budgeted steps, passes and warm-ups */
     pf_u32 estimateSec;
     int verify;             /* the run verifies */
     int warnSmallPart;      /* a part smaller than the depth */
     int warnCache;          /* cached reads of a file that fits in memory */
+    int stepsCut;           /* more steps were asked for than PF_MAX_STEPS */
 } PF_PLAN;
 
 /* Presets (record 29 section 3.7) */
@@ -158,6 +159,13 @@ void pf_preset(PF_PARAMS *p, int preset);
 #define PF_OK               0
 #define PF_REFUSE           1
 int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *plan, char *why, size_t whyCap);
+
+/* The verification map's block for these steps: the greatest common divisor
+ * of the write sizes (with no write, the smallest read), then made smaller
+ * until every read is a whole number of blocks or lies within one. Each
+ * request starts at a multiple of its own size, so then none covers part of
+ * a block and part of the next, and one generation per block is exact. */
+pf_u32 pf_map_block(const PF_STEP *steps, int nsteps);
 
 /* The free-space rule (section 4.3): 0, or 1 with the refusal in why. */
 int pf_free_check(const PF_ENV *env, pf_u64 fileBytes, char *why, size_t whyCap);

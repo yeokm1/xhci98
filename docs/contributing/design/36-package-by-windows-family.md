@@ -464,7 +464,7 @@ every earlier release keep working as they are, and an update over
 
 `pkg_src(rel)` today joins the flavour directory and the local name. It
 becomes a map from the local name to the download's path, one table
-(`instPkgMap`, in `inst_core.c`, a host vector holding it against
+(`instPkgFiles` (designed as `instPkgMap`), in `inst_core.c`, a host vector holding it against
 `$script:FamilyLayout`):
 
 | Local name | `98-me\` | `nt-x86\` | `nt-x64\` |

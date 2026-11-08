@@ -11,8 +11,11 @@ Every registry setting of the xHCI98 controller driver and of the Thunderbolt an
 - [The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)](#the-first-reports-wait-xhcifirstenumwaitms-xhcifirstenumportms)
 - [The Intel 7/8/9-series port switchover (`XhciIntelPortSwitch`)](#the-intel-789-series-port-switchover-xhciintelportswitch)
 - [The Intel 7/8/9-series interrupt routing repair (`XhciIntelIrqRoute`)](#the-intel-789-series-interrupt-routing-repair-xhciintelirqroute)
+- [An interrupt where the firmware gives none (`XhciIntelNoRouteIrq`)](#an-interrupt-where-the-firmware-gives-none-xhciintelnorouteirq)
 - [Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)](#polling-and-message-signalled-interrupts-xhciinterruptmode-xhcipollidlems-xhcipollactivems-xhcipollfinetimer)
 - [UAS command size and two transfer pieces at once (`XhciMaxTransferKB`, `XhciWideMap`)](#uas-command-size-and-two-transfer-pieces-at-once-xhcimaxtransferkb-xhciwidemap)
+- [A UAS drive's ATA and SMART requests answered by the driver (`XhciUasNoAtaPassThrough`)](#a-uas-drives-ata-and-smart-requests-answered-by-the-driver-xhciuasnoatapassthrough)
+- [A UAS drive reset sooner when its commands keep timing out (`XhciUasFastReset`)](#a-uas-drive-reset-sooner-when-its-commands-keep-timing-out-xhciuasfastreset)
 - [Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)](#low--and-full-speed-devices-behind-a-built-in-hub-xhciusb2hubspeedfallback)
 - [Selective suspend (`XhciSelectiveSuspend`)](#selective-suspend-xhciselectivesuspend)
 - [The silent install (`XhciSilentInstall`)](#the-silent-install-xhcisilentinstall)
@@ -35,7 +38,7 @@ Each value below is a `DWORD` in the controller's driver (software) key. Here is
 
 | Windows | Key |
 |---|---|
-| 98 SE to 7 (x86/x64) | `HKLM\System\CurrentControlSet\Services\USB` |
+| 98 SE to 10 (x86/x64) | `HKLM\System\CurrentControlSet\Services\USB` |
 
 A value there **wins** over the same value in a controller's own key, for every controller, whatever its type: a value of the wrong type there is read as "not set to a number" and its default stands. Only when the value is not there does each controller read its own key, as before. The INFs still write their numbers into each controller's own key and never into this one, so nothing changes until a value is set here. The installer's Settings dialog, its console questions and `INSTALL /set` write their value here too, never into a controller's own key, and show both; its uninstall deletes the values it names here and leaves the key. To give one controller a different value, delete the value here and set it in that controller's key. `portsw.vbs`, `portsw-on.bat`, `portsw-off.bat`, `silent.vbs`, `silent-on.bat` and `silent-off.bat` write their value here, show both and say which one is in force. Windows 2000 and later may not have this key; the scripts and the installer create it, and regedit can too (Edit > New > Key under `Services`). The key also holds `SilentClasses` and Windows' own `DisableSelectiveSuspend`, which are not this driver's values; leave them.
 
@@ -45,6 +48,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 |---|---|---|---|---|---|
 | `XhciImodInterval250ns` | The interrupt moderation interval | `10` | `4000` | `4000` | `160` |
 | `XhciForceBulkOnly` | Bulk-Only instead of UAS | `0` | `1` | `1` | `0` |
+| `XhciBulkOnlyOwnId` | From `3.4.2.0`: a drive that offers both UAS and Bulk-Only and is used as Bulk-Only (at SuperSpeed on a controller that cannot stream, or with `XhciForceBulkOnly` set) gets a Device Manager entry of its own for Bulk-Only, apart from its UAS entry, so Windows installs its own Bulk-Only driver there; `0` gives the drive one entry everywhere, as before `3.4.2.0` (see "Forcing Bulk-Only instead of UAS") | `0` | `1` | `1` | `1` |
 | `XhciFastPollFsLs` | A mouse polled above 1000 Hz: `2` and `3` a root-port Low- or Full-Speed one, `4` any interrupt endpoint set to a code `128` to `143` | `0` | `4` | `0` | `0` |
 | `XhciFirstEnumWaitMs` | The longest wait for a hub's first report | `0` | `30000` | `5000` | `5000` |
 | `XhciFirstEnumPortMs` | The longest one port may hold that wait | `0` | `XhciFirstEnumWaitMs` | `2000` | `2000` |
@@ -59,6 +63,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciSilentInstall` | Windows 98 SE and ME: `1` installs a device whose class is in the `SilentClasses` list with no wizard (`silent-on.bat` and `silent-off.bat` in `tools\silent\`; see "The silent install" below) | `0` | `1` | `0` | `0` |
 | `XhciUsb2Bos` | From `3.2.0.0`: a device declaring USB 2.1 or later asked for its BOS descriptor at High or Full Speed, which tells Windows and the xHCI98 USB Tree's "can run faster" notice that it can run at SuperSpeed; `0` stops the request for every device, any other value is on (the release notes, "XhciUsb2Bos") | `0` | `1` | `1` | `1` |
 | `XhciResumeKeep` | From `3.4.0.0`: after standby or hibernation that started the controller afresh (`XhciResumeReinit` below, and every controller that cannot save its state), a device on a root port is kept as it was - its drive letter and the files open on it - instead of being removed and found again; a UAS drive is kept under load too, its requests held from the sleep until the drive is checked after the wake (a drive found changed behind the same USB device, a different disk or medium, is found again as a new one); a hub and what is behind it, a Bulk-Only drive, a drive with no serial number or one that could not finish its requests before the sleep, an isochronous (audio, video) device and a device selective suspend held are still found again; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
+| `XhciEventRingTrbs` | From `3.4.2.0`: the size of the controller's event ring, the queue every device's completions pass through: `1024` a larger ring, which lets an audio or video stream at High Speed keep more requests queued (if the memory for it is not there, the controller uses the smaller ring); `256` the smaller ring of the releases before; any other value is `1024` | `256` | `1024` | `1024` | `1024` |
 | `XhciLinkKeep` | From `3.4.0.0`: a UAS drive with a serial number kept as it was - its drive letter and the files open on it - when its SuperSpeed link drops and recovers (behind a hub or on a root port), instead of being removed and found again; every other device is found again as before; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
 | `XhciCommandCheck` | From `3.4.0.0`: the command-state checker, which reads a device's state before each command the driver gives the controller and counts and logs what a controller that follows the xHCI specification to the letter would refuse; it changes nothing the driver does, and the xHCI98 USB Tree's snapshot shows its counters (`StrictChecked`, `StrictViolations`, `StrictUndefined`, `StrictRefusals`) and log lines (`strict.*`) for a report; `0` turns it off, any other value is on | `0` | `1` | `1` | `1` |
 | `XhciAcpiTables` | From `3.4.1.0`: Windows 98 SE and ME: the computer's firmware (ACPI) tables read when the xHCI98 USB Tree saves them (File > Save Firmware Tables..., `XHCITR /acpi`); `0` refuses it, any other value allows it; 2000 and later ignore it | `0` | `1` | `1` | `1` |
@@ -69,6 +74,7 @@ A value there **wins** over the same value in a controller's own key, for every 
 |---|---|---|---|---|---|
 | `XhciIntelPortSwitch` | The Intel 7/8/9-series port switchover; `1` turns it on, `2` applies it to any Intel controller **at your own risk** (`portsw.vbs` sets `0` or `1`) | `0` | `2` | `0` | `0` |
 | `XhciIntelIrqRoute` | The Intel 7/8/9-series interrupt routing repair; `1` the Dell Latitude E7250 only, `2` any reviewed Intel chipset, `0` report only | `0` | `2` | `1` | `1` |
+| `XhciIntelNoRouteIrq` | 2000, XP and XP x64: the chipset's interrupt line for a USB 3 controller the firmware gives none; `1` the listed computers, `2` any reviewed Intel chipset, `0` never (the controller is polled) | `0` | `2` | `1` | `1` |
 | `XhciIntervalCap` | Interrupt endpoints polled at least every 32 ms: `1` on AMD controllers and the ATI Navi10's USB-C controller (`1002:7316`), `2` on every controller, `0` off | `0` | `2` | `1` | `1` |
 | `XhciAvgTrbEsit` | A comparison switch for interrupt endpoints; leave at `0` unless comparing | `0` | `1` | `0` | `0` |
 | `XhciUsb2HubSpeedFallback` | The standard speed ID for a Low- or Full-Speed device behind a hub where the controller's USB 2.0 speed table names neither (the VIA VL805); `0` turns it off | `0` | `1` | `1` | `1` |
@@ -92,6 +98,13 @@ A value there **wins** over the same value in a controller's own key, for every 
 | `XhciControlLinkNoOp` | A SuperSpeed control transfer kept from straddling the end of its ring; `2` on every controller | `0` | `2` | `1` | `1` |
 | `XhciIsochSpuriousSuccess` | A false "success" after an audio packet's error ignored; `2` on every controller | `0` | `2` | `1` | `1` |
 | `XhciAmdSuspendBitClear` | One AMD register bit cleared before standby; `2` is read as `1` | `0` | `1` | `1` | `1` |
+
+**One UAS drive's own value**, from `3.4.2.0`: in that drive's own key, not the controller's (see "A UAS drive's ATA and SMART requests answered by the driver" below for where); not in the machine-wide key.
+
+| Value | What it sets | Minimum | Maximum | Default when absent | Written by the install |
+|---|---|---|---|---|---|
+| `XhciUasNoAtaPassThrough` | `1`: the drive's ATA pass-through and SMART requests are answered by the driver as "not supported" and never sent to the drive; `0` sends them | `0` | `1` | `0` | `0` (never over a value already set) |
+| `XhciUasFastReset` | `1`: when the drive's commands keep timing out, the drive is reset at the second timeout instead of being asked again and again to drop the command; `0` asks as before | `0` | `1` | `0` | `0` (never over a value already set) |
 
 **The driver's log**
 
@@ -145,6 +158,8 @@ A value there **wins** over the same value in a controller's own key, for every 
 
 The xHCI98 USB Tree (`XHCITR`) shows and sets `XhciLogVerbosity` in every `xhci98.sys` controller's driver key, and the Thunderbolt driver's own level, `XhciCmLogVerbosity` in its controller's driver key, beside it: View > Logging level..., with "Set as administrator..." on Windows 2000 to 7 for a user without administrator rights (the release notes, "The xHCI98 USB Tree"). It writes only `0` to `4`, and offers the restart the new level needs. From `3.1.0.0` it also shows the machine-wide value and, under it, each device's own value that it overrides; where the machine-wide value is set, "Set" writes that one, the value in force for every device.
 
+From `3.4.2.0` the xHCI98 USB Tree's View > Settings... shows and sets the values Setup offers, with Setup's meanings, choices and defaults, on a tab each for the controller driver, the Thunderbolt and USB4 driver and Stor98, and also `XhciIntelIrqRoute` and `XhciIntelNoRouteIrq`; "Show advanced settings" adds the rest of Setup's Advanced rows. For every controller it writes the machine-wide value where one is set, else each controller's own key; one controller's own value can be set while no machine-wide value is set. After a change it says what the change takes (a restart, a Device Manager disable and enable where this page says so, or a drive plugged in again) and offers the restart. On Windows 2000 to 10 it asks for administrator rights. `XHCITR /set Name=Value` does the same from a command line, and `XHCITR /set /show` lists the values (the tool's `README.TXT`). Setup's USB settings page says so too: "You can change these settings later in xHCI98 USB Tree: View > Settings." The same window holds the tool's own quick-save hotkey (the tool's `README.TXT`, "Quick save"), stored for each user, not in the driver's keys.
+
 The install writes every value in these tables, at the number in its last column (from `3.4.0.0` every value the drivers read, roadmap-usb4 task 45.50), so each one is already in the key, ready to change; a value marked with systems is written there alone, the systems that read it. An install or update writes a value only where it is missing, so a value you changed stays as you set it. To go back to the table's value, set it again, or delete the value and update the driver.
 
 Restart Windows after changing a value.
@@ -171,7 +186,9 @@ On my P14s with the MSSU10 over UAS (Windows 98 SE, 8 MB transfers), `500` gave 
 - `1`: Bulk-Only (Windows' own `usbstor.sys`) on every such device on the controller.
 - Absent: as `1`. That is how text-mode Setup sees it, before any INF has run, and Setup has only Windows' own `usbstor` for storage.
 
-A UAS-only device stays on UAS either way. The value is read each time a device enumerates, so unplug and replug the drive after changing it. On Windows 2000 and later, a drive already installed keeps its driver until you uninstall it in Device Manager and replug it.
+A UAS-only device stays on UAS either way. The value is read each time a device enumerates, so unplug and replug the drive after changing it.
+
+A drive used as Bulk-Only, with this value or at SuperSpeed on a controller that cannot stream (`XhciStreamsOff`), has a Device Manager entry of its own for Bulk-Only (`XhciBulkOnlyOwnId`, from `3.4.2.0`): Windows installs its own Bulk-Only driver on it the first time, and where the drive is used as UAS again its UAS entry is used. A drive installed as Bulk-Only by an earlier release is found once more as a new entry, and may get another drive letter. With `XhciBulkOnlyOwnId` set to `0` the drive has one entry everywhere, as before: it keeps the driver it was first installed with until you uninstall it in Device Manager and replug it, and one installed with the UAS driver stops at Code 10 on a controller that cannot stream.
 
 ## Polling a Low- or Full-Speed mouse above 1000 Hz (`XhciFastPollFsLs`)
 
@@ -200,7 +217,7 @@ A UAS-only device stays on UAS either way. The value is read each time a device 
 
 With `4`, set the value and restart first, then set hidusbf (or another filter) to the code. A device that itself asks for 128 to 143 ms is polled at its code's rate too, and a code written without `4` set means 128 ms (Low or Full Speed) or 4.096 s (High Speed or SuperSpeed).
 
-This is outside the xHCI specification for a Low- or Full-Speed device below `131` and above `138` (the specification allows 1 ms to 128 ms there), on a root port or behind a hub. A Low- or Full-Speed device behind a hub at any code is untested ground, and so is every code below `131` or above `138` at Low or Full Speed. A controller that refuses it is caught, and the device falls back to polling every 1 ms, whatever the code. A controller that accepts it and then misbehaves cannot be caught. On a controller where `XhciIntervalCap` applies, a code slower than 32 ms (`137` to `143`) is polled every 32 ms, and where `XhciTiIntervalCap` applies a High-Speed or faster code slower than 8 ms (`135` to `143`) every 8 ms.
+This is outside the xHCI specification for a Low- or Full-Speed device below `131` and above `138` (the specification allows 1 ms to 128 ms there), on a root port or behind a hub. A controller that refuses it is caught, and the device falls back to polling every 1 ms, whatever the code. A controller that accepts it and then misbehaves cannot be caught. On a controller where `XhciIntervalCap` applies, a code slower than 32 ms (`137` to `143`) is polled every 32 ms, and where `XhciTiIntervalCap` applies a High-Speed or faster code slower than 8 ms (`135` to `143`) every 8 ms.
 
 ## The first report's wait (`XhciFirstEnumWaitMs`, `XhciFirstEnumPortMs`)
 
@@ -257,6 +274,22 @@ Two chipset registers decide which interrupt line the xHCI controller's interrup
 
 It writes nothing on any other controller.
 
+## An interrupt where the firmware gives none (`XhciIntelNoRouteIrq`)
+
+Some HP EliteBooks of 2012 give Windows XP and XP x64 no interrupt for their USB 3 controller. xHCI98 then uses the interrupt line the chipset really routes the controller to (below), or starts the controller without one and polls it.
+
+On these computers the BIOS also leaves the USB 3 ports on the USB 2.0 controllers under XP and XP x64: set `XhciIntelPortSwitch` to `1` ([the port switchover](#the-intel-789-series-port-switchover-xhciintelportswitch)) for the ports to reach the USB 3 controller.
+
+On 2000, XP and XP x64, `XhciIntelNoRouteIrq` lets the driver also offer Windows the interrupt line the chipset really routes the controller to, read from two chipset registers, before falling back to polling. It writes nothing. A line the firmware does give is always taken first. On 32-bit 2000 and XP that line is the chipset's when the Computer entry in Device Manager is "ACPI Uniprocessor PC" or "ACPI Multiprocessor PC"; with "Advanced Configuration and Power Interface (ACPI) PC" or "Standard PC" Windows has no such line, and the controller is polled.
+
+Under Windows 2000 on the listed computers below, xHCI98 asks Windows for no interrupt at all for the USB 3 controller and polls it, whatever `XhciInterruptMode` says (`1` and `3` then fail to start, Code 10): with an ACPI computer type ("ACPI Uniprocessor PC", "ACPI Multiprocessor PC" or "Advanced Configuration and Power Interface (ACPI) PC"), a request that carries the interrupt stops Windows 2000 at start with STOP 0x000000A5 on these computers. `XhciIntelNoRouteIrq` `0` brings that stop back, so use it there only with the "Standard PC" computer type. A computer whose BIOS turns the USB 3 controller on before Windows starts still stops with 0x000000A5 under an ACPI computer type: install Windows 2000 there as "Standard PC" (F7 in text-mode Setup), which gives the controller a line of its own. After such a stop, press F8 at the start and choose "Last Known Good Configuration" (Safe Mode stops the same way), then set `XhciIntelNoRouteIrq` back to `1`. That works when `0` was set after the last start that reached the desktop; if Windows started with `0` before (under "Standard PC", say), Last Known Good keeps it too, and only the "Standard PC" computer type starts Windows 2000 there.
+
+- `0`: never offer it; the controller is polled (on Windows 2000, see above).
+- `1` (default): only on the listed computers, in the 32-bit and the 64-bit package alike: the HP EliteBook 8470p and 8470w, 8570p, 8570w, 8770w and 2570p (the USB 3 controller's subsystem `103C:179B`, `103C:17A7`, `103C:17AB`, `103C:17DF`, `103C:176B` or `103C:176C`).
+- `2`: on any of the Intel controllers listed under `XhciIntelIrqRoute`, each with one of its own chipset ids.
+
+The value is read when Windows first finds the controller: after a change, disable and enable the controller, or restart Windows.
+
 ## Polling and message-signalled interrupts (`XhciInterruptMode`, `XhciPollIdleMs`, `XhciPollActiveMs`, `XhciPollFineTimer`)
 
 A controller with no interrupt pin is polled instead of refused, and so is one whose line the driver sees raised and never delivered. On Windows Vista and 7 the controller may use a message-signalled interrupt (MSI or MSI-X) instead of its line: on x64 directly, on 32-bit through the helper driver `xhcihlpr.sys` in the package (`xhcimsi.sys` in `2.3.0.0` and `2.3.1.0`).
@@ -269,7 +302,7 @@ A controller with no interrupt pin is polled instead of refused, and so is one w
   3. Polling: no interrupt pin, none assigned, or a granted message that could not connect.
   4. After the start, a line the driver sees raised that never reaches it switches to polling by itself.
 - `1`: the interrupt line only. With no line, the controller fails to start (Code 10).
-- `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers. On Windows 98 SE it is also the way round an IRQ that another device holds raised with no working driver (an NVMe drive the BIOS still runs, in MS-DOS compatibility mode, for example), which makes Windows crawl or freeze once any driver uses that IRQ: under `2` the driver connects no interrupt, so Windows leaves the IRQ masked as before the install, and USB keeps working (read in QEMU on 98 SE, roadmap-usb4 task 45.33; ME is expected to behave the same, not tested). That holds only while no other working driver uses the IRQ; otherwise the device holding it needs a working driver or removing. Set it in the machine-wide key for every controller, or in the key of each controller on that IRQ, and restart Windows (or disable and enable each of those controllers): the value is read at the controller's start.
+- `2`: always poll, at the cost of more processor wake-ups. Use it for an interrupt that fails in a way the driver cannot see in the controller's registers. On Windows 98 SE it is also the way round an IRQ that another device holds raised with no working driver (an NVMe drive the BIOS still runs, in MS-DOS compatibility mode, for example), which makes Windows crawl or freeze once any driver uses that IRQ: under `2` the driver connects no interrupt, so Windows leaves the IRQ masked as before the install, and USB keeps working (roadmap-usb4 task 45.33). That holds only while no other working driver uses the IRQ; otherwise the device holding it needs a working driver or removing. Set it in the machine-wide key for every controller, or in the key of each controller on that IRQ, and restart Windows (or disable and enable each of those controllers): the value is read at the controller's start.
 - `3`: a message-signalled interrupt only (Vista and 7). With no message, the controller fails to start (Code 10).
 
 Under `1`, Vista and 7 are asked for the line, and a controller that is given a message instead (for example because it has no line) fails to start. Under `3`, Vista and 7 are asked for the message; it fails to start when none is granted or it cannot be connected, which on 32-bit means `xhcihlpr.sys` is not running. Windows 98 SE, ME, 2000 and XP have no message-signalled interrupts, so `3` always fails there.
@@ -299,6 +332,29 @@ On Windows 98 SE and ME the practical maximum is 64 KiB: Windows' storage layer 
 - `XhciWideMap`: `1` keeps two pieces of a large bulk transfer on the controller at once, on Windows 2000 to 7. **Off by default** (`0`), because a regression would show as wrong data rather than an error.
 
 Microsoft's per-device `MaximumTransferLength` under `HKLM\SYSTEM\CurrentControlSet\Control\usbstor\VVVVPPPP` (`65535` to `2097152` bytes) sets the command size for one drive model instead. The release notes, "XhciMaxTransferKB" and "XhciWideMap", have the details.
+
+## A UAS drive's ATA and SMART requests answered by the driver (`XhciUasNoAtaPassThrough`)
+
+Programs that read a drive's health (SMART), such as hardware monitors, send it ATA commands. A UAS drive that is not an ATA disk inside, such as a USB flash drive, refuses them, and some drives handle them badly: the drive stops answering for a while, drops off, or Windows loses its volume ("Wrong Volume", or 0 bytes free until the drive is plugged in again).
+
+`XhciUasNoAtaPassThrough` `1` makes the UAS driver (`xhciuas.sys`) answer those requests itself, as "not supported", for that one drive: nothing reaches the drive, and the program shows no SMART data for it. Every other request is sent as before. Linux does the same for the drives it lists.
+
+The value is a `DWORD` in the drive's own key, which the install creates with `0`:
+
+| Windows | Key |
+|---|---|
+| 98 SE, ME | `HKLM\Enum\USB\VID_vvvv&PID_pppp\<instance>` |
+| 2000 to 7 (x86/x64) | `HKLM\SYSTEM\CurrentControlSet\Enum\USB\VID_vvvv&PID_pppp\<instance>\Device Parameters` |
+
+`vvvv` and `pppp` are the drive's USB ids and `<instance>` usually its serial number; the xHCI98 USB Tree shows all three for the drive (its "VID:PID" and "Instance ID" lines). If regedit on 2000 to 7 refuses the change, give Administrators full control of that key first (Edit > Permissions...). Then unplug the drive and plug it in again, or restart.
+
+## A UAS drive reset sooner when its commands keep timing out (`XhciUasFastReset`)
+
+When a UAS drive does not finish a command in time, the driver asks the drive to drop it (ABORT TASK) and carries on. A drive that keeps answering that request but never finishes its commands can leave Windows waiting through one timeout after another: programs and Explorer hang until the drive is unplugged.
+
+`XhciUasFastReset` `1`, for that one drive, resets it at the second timeout within two minutes of a dropped command, when no command has finished in between, instead of asking again; and it resets the drive when a command it has already answered is still waiting after five seconds for its data transfer to be given back. The drive stays in Windows, and the commands in flight are sent again.
+
+What it trades: more resets. Each one ends every command in flight, and Windows checks the drive's volume again afterwards; on a removable drive a check that fails reports the volume as changed ("Wrong Volume"). Leave it at `0` unless a drive hangs this way. It is set in the same key as `XhciUasNoAtaPassThrough` above, and read when the drive is plugged in or Windows starts.
 
 ## Low- and Full-Speed devices behind a built-in hub (`XhciUsb2HubSpeedFallback`)
 

@@ -1,7 +1,7 @@
 @echo off
 rem build.cmd - build XFERTEST.EXE, the transfer-size test client (roadmap-hcd
 rem tasks 36.21, 36.22 and 36.26; xfertest.c says what it does), with the
-rem in-tree MSVC 6.0, as xhcisnap\build.cmd builds XHCISNAP.EXE. The EXE is
+rem in-tree MSVC 6.0, as xhcitr\build.cmd builds XHCITR.EXE. The EXE is
 rem not tracked and not in any package: it is copied onto a guest's transfer
 rem drive for a leg.
 setlocal

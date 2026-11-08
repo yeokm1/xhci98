@@ -9,8 +9,8 @@
  * contract puts in PagedPool. The import
  * gate's SITES= rows hold every one of
  * these imports to this object file, so a call anywhere else fails the
- * build. The outstanding count is what XHCISNAP's door reports and what reads
- * 0 after the controller's remove (rule 6).
+ * build. The outstanding count is what the door's snapshot reports and
+ * what reads 0 after the controller's remove (rule 6).
  *
  * IRQL: <= DISPATCH_LEVEL, never in the ISR or a KeSynchronizeExecution
  * callback (rule 2).

@@ -49,6 +49,32 @@ static NTSTATUS hcdStart(PHCD_CONTROLLER hc, PIRP irp)
 {
     NTSTATUS status;
 
+    /*
+     * A START to a controller already started - which the START contract
+     * allows, with resources that may have changed - is not served: the
+     * start that follows would zero the live extension and make a second
+     * thread, and a restart in place would need a rundown of every child
+     * caller the stop does not give. The running lifetime is stopped as a
+     * surprise removal stops it (its devices depart; the root hub stays),
+     * before the lower driver applies a new grant under it, and the START
+     * fails, unforwarded: on NT, PnP then removes the controller, on
+     * Windows 98 and ME it stops it. No PnP manager has been seen to send
+     * one. A start on an FDO whose map pump a fail-closed stop quarantined
+     * is refused the same way (hcd_dma.c, HcdDmaMapDrain), before anything
+     * of the lifetime is touched.
+     */
+    if (hc->ControllerStarted || hc->MapQuarantined) {
+        XhciLogNote(&hc->Hc, "pnp.start.refused",
+                    (hc->ControllerStarted ? 1UL : 0UL) |
+                        (hc->MapQuarantined ? 2UL : 0UL));
+        if (hc->ControllerStarted) {
+            HcdDoorControllerStop(hc);
+            HcdStopController(hc);
+            hc->Common.PnpState = HCD_PNP_STOPPED;
+        }
+        return HcdCompleteIrp(irp, STATUS_DEVICE_CONFIGURATION_ERROR, 0);
+    }
+
     /* Task 36.3: the routing record describes this attempt from here on,
      * whoever refuses it. */
     HcdPirqStartAttempt(hc);
@@ -127,6 +153,13 @@ static NTSTATUS hcdRemove(PHCD_CONTROLLER hc, PIRP irp)
     HcdSerialControllerRemove(hc);
     HcdRootHubDeletePdo(hc);
     IoDetachDevice(hc->LowerDevice);
+    if (hc->MapQuarantined) {
+        /* The HAL still holds a channel request on this object's wait
+         * block, and its late call reads this extension (hcd_dma.c,
+         * HcdDmaMapDrain): kept for the life of the system, detached, as
+         * the pinned common buffer and adapter are. */
+        return status;
+    }
     IoDeleteDevice(hc->Common.Self);
     return status;
 }

@@ -70,7 +70,7 @@ static VOID cmNetSleepMs(ULONG ms)
 {
     LARGE_INTEGER due;
 
-    due.QuadPart = -(LONGLONG)(ms * 10000UL);
+    CmRelativeMs(&due, ms);
     (VOID)KeDelayExecutionThread(KernelMode, FALSE, &due);
 }
 
@@ -312,7 +312,7 @@ static VOID cmNetArmLocked(PCM_NET net)
 
     (VOID)InterlockedIncrement((PLONG)&net->InFlight);
     net->TimerOn = 1;
-    due.QuadPart = -(LONGLONG)(net->PollMs * 10000UL);
+    CmRelativeMs(&due, net->PollMs);
     (VOID)KeSetTimer(&net->Timer, due, &net->TimerDpc);
 }
 
@@ -759,7 +759,9 @@ static VOID cmNetRundown(PCM_NHI nhi, BOOLEAN lost)
     }
     KeReleaseSpinLock(&net->Lock, irql);
     cmNetInFlightDown(net);     /* the rings' own share */
-    (VOID)KeWaitForSingleObject(&net->Idle, Executive, KernelMode, FALSE, NULL);
+    /* Satisfied only: the disable and the stop's free of the buffers
+     * follow, and a share's DPC may still be inside them. */
+    (VOID)CmWaitEvent(&net->Idle, 0);
     if (!lost) {
         if (cmNetRingsOff(nhi, ring)) {
             net->MemMayRun = 0;
@@ -1048,14 +1050,11 @@ static VOID cmNetDeref(PVOID context)
  * most 5 s; with no thread, the next start applies it). */
 static VOID cmNetApply(PCM_NHI nhi)
 {
-    LARGE_INTEGER due;
-
     KeClearEvent(&nhi->Net.Ack);
     if (!CmThrQueue(nhi, CM_WORK_NET, NULL)) {
         return;
     }
-    due.QuadPart = -(LONGLONG)(CM_NET_ACK_MS * 10000UL);
-    (VOID)KeWaitForSingleObject(&nhi->Net.Ack, Executive, KernelMode, FALSE, &due);
+    (VOID)CmWaitEventMs(&nhi->Net.Ack, CM_NET_ACK_MS);
 }
 
 static LONG NTAPI cmNetOpen(PVOID context, const XHCI_CM_NET_CALLBACKS *callbacks,

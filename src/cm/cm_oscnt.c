@@ -746,6 +746,7 @@ VOID CmOscmAfter(PCM_OSC_MEMBER m, UCHAR minor, NTSTATUS status)
     ULONG i;
     BOOLEAN ok;
     BOOLEAN bus;
+    BOOLEAN take;
 
     if (m->Role == CM_OSCP_R_NONE) {
         return;
@@ -758,12 +759,28 @@ VOID CmOscmAfter(PCM_OSC_MEMBER m, UCHAR minor, NTSTATUS status)
         sec = 0;
         cmOsnLocate(m, &bdf, &sec, &ok);
         bus = FALSE;
-        if (m->Role == CM_OSCP_R_USP && !m->BusHeld) {
+        take = FALSE;
+        if (m->Role == CM_OSCP_R_USP) {
+            /* One taker at a time (BusTaking, under the lock): the
+             * thread's retake (cmOsnRetakeBus) may be querying into Bus
+             * for an earlier start of this port, and two queries into one
+             * structure would leave one interface never given back. */
+            KeAcquireSpinLock(&cmOsnLock, &irql);
+            if (!m->BusHeld && !m->BusTaking) {
+                m->BusTaking = 1;
+                take = TRUE;
+            }
+            KeReleaseSpinLock(&cmOsnLock, irql);
+        }
+        if (take) {
             bus = cmOsnTakeBus(m);
         }
         KeAcquireSpinLock(&cmOsnLock, &irql);
-        if (bus) {
-            m->BusHeld = 1;
+        if (take) {
+            m->BusTaking = 0;
+            if (bus) {
+                m->BusHeld = 1;
+            }
         }
         m->Located = ok ? 1UL : 0UL;
         m->Bdf = bdf;
@@ -843,7 +860,7 @@ VOID CmOscmRemove(PCM_OSC_MEMBER m)
     m->Started = 0;
     m->Gone = 1;
     KeReleaseSpinLock(&cmOsnLock, irql);
-    ms.QuadPart = -(LONGLONG)(1UL * 10000UL);
+    CmRelativeMs(&ms, 1);
     for (;;) {
         KeAcquireSpinLock(&cmOsnLock, &irql);
         n = m->InFlight + m->Usage;
@@ -1071,7 +1088,7 @@ static BOOLEAN cmOsnHold(PCM_NHI nhi)
     cmOsnAbort = 0;
     KeClearEvent(&cmOsnOpen);
     KeReleaseSpinLock(&cmOsnLock, irql);
-    timeout.QuadPart = -(LONGLONG)(CM_OSN_WAIT_MS * 10000UL);
+    CmRelativeMs(&timeout, CM_OSN_WAIT_MS);
     status = KeWaitForSingleObject(&cmOsnQuiet, Executive, KernelMode, FALSE,
                                    &timeout);
     if (status == STATUS_SUCCESS) {
@@ -1127,12 +1144,14 @@ static VOID cmOsnRetakeBus(PCM_NHI nhi, ULONG usp)
             cmOsnList[i]->Located && cmOsnList[i]->Bdf == usp &&
             cmOsnList[i]->Started && !cmOsnList[i]->Gone) {
             m = cmOsnList[i];
-            if (m->BusHeld || m->Uses != 0) {
+            if (m->BusHeld || m->BusTaking || m->Uses != 0) {
                 m = NULL;
                 break;
             }
-            /* Held against its removal while the query runs. */
+            /* Held against its removal while the query runs, and the one
+             * taker of Bus (CmOscmAfter's start takes none meanwhile). */
             m->Uses++;
+            m->BusTaking = 1;
             KeClearEvent(&m->Unused);
         }
     }
@@ -1144,6 +1163,7 @@ static VOID cmOsnRetakeBus(PCM_NHI nhi, ULONG usp)
     ok = cmOsnTakeBus(m);
     CmLogNote(nhi, "cm.osc.bus.again", m->BusStatus);
     KeAcquireSpinLock(&cmOsnLock, &irql);
+    m->BusTaking = 0;
     if (ok) {
         m->BusHeld = 1;
     }
@@ -1293,14 +1313,31 @@ static BOOLEAN cmOsnD0(PCM_NHI nhi, PCM_OSC_MEMBER m)
 #define CM_OSN_X_NO_REPLY   0xFFFFFFFDUL
 #define CM_OSN_X_ABORTED    0xFFFFFFFCUL
 
+/* One 1 ms step of an exchange's wait, a sleep: the thread is at
+ * PASSIVE_LEVEL and holds the members' requests meanwhile, so it yields
+ * the processor rather than stalling it. A step may last a clock tick, so
+ * every decision is the clock's (NowMs), the count of steps only a bound
+ * beside it. */
+static VOID cmOsnStep(VOID)
+{
+    LARGE_INTEGER d;
+
+    CmRelativeMs(&d, 1);
+    (VOID)KeDelayExecutionThread(KernelMode, FALSE, &d);
+}
+
 /* One exchange (12.8.5) through the route: the command written, its
  * acceptance and the reply waited for, each within CM_OSN_WAIT_MS; on no
  * reply the reply dword polled CM_OSN_WAIT_MS more and cleared if one
- * comes (12.8.15.7), never retried. Returns the reply or CM_OSN_X_*. */
+ * comes (12.8.15.7), never retried. A reply is taken only when it was
+ * seen within CM_OSN_WAIT_MS by the clock; one seen later, however few
+ * steps it took, is cleared and the timeout stands. Returns the reply or
+ * CM_OSN_X_*. */
 static ULONG cmOsnExchange(PCM_NHI nhi, const CM_OSN_MB *m, ULONG cmd,
                            CM_OSN_HOST *h)
 {
     ULONG start;
+    ULONG spent;
     ULONG v;
     ULONG i;
 
@@ -1312,18 +1349,18 @@ static ULONG cmOsnExchange(PCM_NHI nhi, const CM_OSN_MB *m, ULONG cmd,
         if (!cmOsnMbRd(nhi, m, CM_OSC_MB_CMD, &v)) {
             return cmOsnAborted(nhi) ? CM_OSN_X_ABORTED : CM_OSN_X_GONE;
         }
+        spent = nhi->Host.NowMs(nhi->Host.Context) - start;
         if (v == 0xFFFFFFFFUL) {
             return CM_OSN_X_GONE;
         }
         if (!CM_OSC_MB_BUSY(v)) {
             break;
         }
-        if (i >= CM_OSN_WAIT_MS ||
-            nhi->Host.NowMs(nhi->Host.Context) - start >= CM_OSN_WAIT_MS) {
+        if (i >= CM_OSN_WAIT_MS || spent >= CM_OSN_WAIT_MS) {
             CmLogNote(nhi, "cm.osc.not-accepted", v);
             break;
         }
-        KeStallExecutionProcessor(1000);
+        cmOsnStep();
     }
     if (CM_OSC_MB_BUSY(v)) {
         /* Not accepted in time: a late acceptance's reply is cleared if
@@ -1345,34 +1382,35 @@ static ULONG cmOsnExchange(PCM_NHI nhi, const CM_OSN_MB *m, ULONG cmd,
                 CM_OSN_WAIT_MS) {
                 break;
             }
-            KeStallExecutionProcessor(1000);
+            cmOsnStep();
         }
         return CM_OSN_X_REFUSED;
     }
-    CmLogNote(nhi, "cm.osc.accepted-ms", i);
+    CmLogNote(nhi, "cm.osc.accepted-ms", spent);
     start = nhi->Host.NowMs(nhi->Host.Context);
     for (i = 0;; i++) {
         if (!cmOsnMbRd(nhi, m, CM_OSC_MB_REPLY, &v)) {
             return cmOsnAborted(nhi) ? CM_OSN_X_ABORTED : CM_OSN_X_GONE;
         }
+        /* Read after the dword, so a reply seen READY is judged by when
+         * it was seen, not by how many steps came before. */
+        spent = nhi->Host.NowMs(nhi->Host.Context) - start;
         if (v == 0xFFFFFFFFUL) {
             return CM_OSN_X_GONE;
         }
         if (CM_OSC_MB_READY(v)) {
             break;
         }
-        if (i >= 2UL * CM_OSN_WAIT_MS ||
-            nhi->Host.NowMs(nhi->Host.Context) - start >=
-                2UL * CM_OSN_WAIT_MS) {
+        if (i >= 2UL * CM_OSN_WAIT_MS || spent >= 2UL * CM_OSN_WAIT_MS) {
             h->TimedOut = 1;
             CmLogNote(nhi, "cm.osc.timeout", 2);
             CmLogNote(nhi, "cm.osc.timeout.reply", v);
             return CM_OSN_X_NO_REPLY;
         }
-        KeStallExecutionProcessor(1000);
+        cmOsnStep();
     }
     (VOID)cmOsnMbWr(nhi, m, CM_OSC_MB_REPLY, 0);
-    if (i >= CM_OSN_WAIT_MS) {
+    if (spent >= CM_OSN_WAIT_MS || i >= CM_OSN_WAIT_MS) {
         /* The reply came in the extra wait: the timeout stands, the reply
          * cleared and not taken. */
         h->TimedOut = 1;
@@ -1380,7 +1418,7 @@ static ULONG cmOsnExchange(PCM_NHI nhi, const CM_OSN_MB *m, ULONG cmd,
         CmLogNote(nhi, "cm.osc.timeout.reply", v);
         return CM_OSN_X_NO_REPLY;
     }
-    CmLogNote(nhi, "cm.osc.reply-ms", i);
+    CmLogNote(nhi, "cm.osc.reply-ms", spent);
     return v;
 }
 
@@ -1654,10 +1692,6 @@ static ULONG cmOsnMatch(PCM_NHI nhi, const CM_OSN_FOUND *f, PULONG data)
     return p;
 }
 
-/* Every function of the host but the NHI, wanted covered (12.8.15.7):
- * the upstream port, each function on its secondary bus (a downstream
- * port), and the xHCI behind one of them. FALSE when the set cannot be
- * read or is not the switch's. */
 /* A function's id through the HAL: TRUE with *id (0 absent), FALSE when
  * the read failed (neither present nor absent). */
 static BOOLEAN cmOsnIdEx(ULONG bdf, PULONG id)
@@ -2084,7 +2118,7 @@ static ULONG cmOsnSend(PCM_NHI nhi, const CM_OSN_FOUND *f, ULONG data,
     }
     cmOsnRelease();
     if (reason == 0) {
-        settle.QuadPart = -(LONGLONG)(CM_OSN_SETTLE_MS * 10000UL);
+        CmRelativeMs(&settle, CM_OSN_SETTLE_MS);
         (VOID)KeDelayExecutionThread(KernelMode, FALSE, &settle);
     }
     if (reason == CM_OSN_R_COVERAGE && !resume) {
@@ -2423,6 +2457,10 @@ static ULONG cmOsnRead(PCM_NHI nhi, const CM_OSN_FOUND *f, PULONG data,
     }
 
 done:
+    if (r == CM_OSC_SAME_OFF) {
+        /* Task 47.29: the report's line (12.8.11). */
+        nhi->OscFlags |= CM_OSCN_F_SAMEOFF;
+    }
     CmLogNote(nhi, "cm.osc.read.refused.pages", refused);
     if (root != NULL) {
         CmFree(root);
@@ -2442,6 +2480,8 @@ static BOOLEAN cmOsnBoard(PCM_NHI nhi, const CM_OSN_FOUND *f, PULONG data,
     ULONG r;
 
     nhi->OscTier = CM_OSC_TIER_UNKNOWN;
+    /* This read decides the structural refusal's bit afresh (task 47.29). */
+    nhi->OscFlags &= ~CM_OSCN_F_SAMEOFF;
     if (cmOsnMatch(nhi, f, data) != 0) {
         nhi->OscTier = CM_OSN_TIER_PROFILE;
         return TRUE;
@@ -2899,7 +2939,9 @@ static ULONG cmOsnRun(PCM_NHI nhi)
 
 ULONG CmOscntHandover(PCM_NHI nhi)
 {
-    nhi->OscFlags = 0;
+    /* 98 SE and ME: CmOscHandover, just before, may have set the
+     * structural refusal's bit (task 47.29); NT decides it here. */
+    nhi->OscFlags = cmOsnNt() ? 0 : (nhi->OscFlags & CM_OSCN_F_SAMEOFF);
     nhi->OscArmed = 0;
     /* A new start decides afresh (12.8.15.16). */
     CmZero(&nhi->OscKept, sizeof(nhi->OscKept));
@@ -2968,6 +3010,9 @@ VOID CmOscntResume(PCM_NHI nhi)
         CmLogNote(nhi, "cm.osc.resume.unserved", nhi->OscUspBdf);
         return;
     }
+    /* The resend is an attempt of its own: an earlier attempt's structural
+     * refusal does not stand for it, whichever exit it takes (task 47.29). */
+    nhi->OscFlags &= ~CM_OSCN_F_SAMEOFF;
     if (!cmOsnGates(nhi)) {
         return;
     }
@@ -3038,7 +3083,7 @@ ULONG CmOscntReport(PCM_NHI nhi)
     v = (nhi->OscTier & 7UL) |
         (nhi->OscFlags & (CM_OSCN_F_GUARD | CM_OSCN_F_UNKNOWN |
                           CM_OSCN_F_NOROUTE | CM_OSCN_F_EXPIRED |
-                          CM_OSCN_F_ECAMOFF));
+                          CM_OSCN_F_ECAMOFF | CM_OSCN_F_SAMEOFF));
     if (!cmOsnReady || nhi->OscUspBdf == 0 ||
         nhi->OscUspBdf == XHCI_TBT_NO_BDF) {
         return v;

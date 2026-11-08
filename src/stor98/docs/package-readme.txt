@@ -8,9 +8,8 @@ the drive in a Thunderbolt or USB4 enclosure, as a SCSI adapter on:
   - Windows 98 SE and Windows ME                 98-me\stor98\
   - Windows 2000 SP4, XP, Vista, 7, 8, 8.1      nt-x86\stor98\
     and 10 (32-bit; 10 below build 22000)
-  - Windows XP x64, Vista x64 and 7 x64          nt-x64\stor98\
-    (8.1 x64 and 10 x64: read in virtual machines only; 8 x64:
-    untested; see WINDOWS 8, 8.1 AND 10)
+  - Windows XP x64, Vista x64, 7 x64, 8 x64,    nt-x64\stor98\
+    8.1 x64 and 10 x64 (10 below build 22000)
 
 Each folder holds its own stor98.inf: in 98-me\stor98\ the Windows 98
 SE and ME driver, stor98.mpd; in nt-x86\stor98\ the 32-bit stor98.sys
@@ -32,9 +31,9 @@ independent and not endorsed by NVM Express or Microsoft.
 
 STATUS
 
-This is an early build for testing. Do not use it with data you cannot
-afford to lose, and do not install it on a system that boots from an
-NVMe disk through another driver.
+Do not use Stor98 with data you cannot afford to lose, and do not
+install it on a system that boots from an NVMe disk through another
+driver.
 
 Stor98 is for data disks only: Windows cannot start from a disk on a
 Stor98 controller. On Windows 2000 and later it is installed as a
@@ -55,6 +54,15 @@ System, Performance, File System, Troubleshooting, 'Disable
 write-behind caching for all drives'. (The Removable Disk tab's
 option covers only drives Windows treats as removable, which a Stor98
 disk is not.)
+
+DRIVES WITH 4 KiB SECTORS
+
+A drive set to 4 KiB (4096-byte) logical sectors works on every
+system. Windows 98 SE, ME, 2000, XP, Vista and 7 see it with
+512-byte sectors; Windows 8, 8.1 and 10 see its own 4096-byte
+sectors, as Windows' own NVMe driver does. A drive partitioned on
+one group of systems shows as empty or damaged on the other; back
+up before moving it between them.
 
 INSTALLING
 
@@ -97,16 +105,14 @@ The installer offers Stor98 on Windows 8, 8.1 and 10 (below build
 stays the tunnelled drive's driver (xhci98's roadmap 43.59). Windows
 8 has no NVMe driver of its own; Windows
 8.1 and 10 run their own (stornvme), and Stor98 takes its place on a
-drive behind a tunnel. The 32-bit package was read on Windows 8 and
-Windows 10 22H2 (32-bit); 32-bit Windows 8.1 has not been run. The
-64-bit package carries a catalog file, stor98.cat, which Windows 8 x64,
-8.1 x64 and 10 x64 require in test-signing mode (without it: 'The
-third-party INF does not contain digital signature information'):
-keep it beside stor98.inf. With it, signed and trusted, Stor98 x64 ran
-tunnelled drives on 8.1 x64 and 10 x64 in xhci98's roadmap 43.59 (on 10
-x64 only without DmaRemappingCompatible, which this INF no longer
-writes), and a surprise unplug during a copy failed at once with no
-hang; it has not yet run a drive on 8 x64.
+drive behind a tunnel. The 64-bit package carries a catalog file,
+stor98.cat, which Windows 8 x64, 8.1 x64 and 10 x64 require in
+test-signing mode (without it: 'The third-party INF does not contain
+digital signature information'): keep it beside stor98.inf. As on
+Vista x64 and 7 x64, the 64-bit stor98.sys loads there in
+test-signing mode (next section), or on a start with driver
+signature enforcement disabled, as xhci98's own 64-bit drivers do;
+xhci98's readme says what its installer needs there.
 
 TEST SIGNING (64-bit Vista and 7)
 

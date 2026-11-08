@@ -164,7 +164,8 @@ typedef UCHAR HW_INITIALIZATION_DATA_SIZE_CHECK[sizeof(HW_INITIALIZATION_DATA) =
 //   admin SQ, admin CQ, I/O SQ, I/O CQ     4 pages
 //   utility page (identify data)           1 page
 //   PRP list / log data pages              ENG_PRP_PAGES
-//   bounce pages                           ENG_BOUNCE_PAGES
+//   bounce pages                           ENG_BOUNCE_PAGES (the general
+//                                          pool and the two edge pages)
 //   physical alignment slack               1 page
 //
 #define UNCACHED_EXTENSION_PAGES    (4 + 1 + ENG_PRP_PAGES + ENG_BOUNCE_PAGES + 1)
@@ -238,6 +239,7 @@ typedef struct _NVME_SRB_EXTENSION {
 #define ADMIN_CID_IDENTIFY_NAMESPACE    4
 #define ADMIN_CID_SET_VWC               5   // D3: Set Features FID 06h, WCE=0
 #define ADMIN_CID_GET_VWC               6   // D3: Get Features FID 06h (current), verifies WCE=0
+#define ADMIN_CID_IDENTIFY_IOCS         7   // 47.22: Identify CNS 06h CSI 00h (NVM Command Set controller), optional
 
 #define STOR98_DEVEXT_MAGIC             0x3839454E  // "NE98": device extension initialised once
 
@@ -281,6 +283,14 @@ typedef struct _HW_DEVICE_EXTENSION {
     UCHAR Reserved2[3];
     ULONGLONG NamespaceSizeInBlocks;
     ULONG NamespaceBlockSize;
+    // What the OS sees (PLAN "4 KiB-sector namespaces"): 512-byte sectors,
+    // NSZE << SectorShift of them, SectorShift = LBADS - 9 (src/rmw.h).
+    ULONGLONG ExposedBlocks;
+    UCHAR SectorShift;
+    UCHAR LbaShift;                                 // SCSI LBA to native block: SectorShift (512-byte view) or 0 (native view, 47.31)
+    ULONG ExposedBytes;                             // the OS's sector: 512, or the native block in the native view (47.31)
+    UCHAR EdgeOwner;                                // parent owning the edge pages, ENG_NONE
+    UCHAR Reserved4[2];
 
     // Uncached extension and its sub-allocations (PLAN 0.5)
     PHYSICAL_ADDRESS UncachedExtensionPhys;
@@ -356,6 +366,11 @@ typedef struct _HW_DEVICE_EXTENSION {
     BOOLEAN WtFua;                                  // this bring-up: FUA on every write (FUA mode, or VWC off refused)
     BOOLEAN Vwc;                                    // Identify Controller VWC bit 0: a volatile write cache is present
     USHORT VwcSetStatus;                            // Set Features (VWC off) status of this bring-up
+    USHORT Oncs;                                    // Identify Controller ONCS (bytes 520-521) of this bring-up
+    UCHAR Vsl;                                      // Verify Size Limit (CNS 06h byte 0) of this bring-up, 0 unknown or none
+    BOOLEAN VerifyCmd;                              // this bring-up: VERIFY by NVMe Verify (ONCS bit 7 or a VSL) (47.22)
+    BOOLEAN IocsPending;                            // CNS 06h submitted, its completion not consumed (UtilityBuffer is its)
+    BOOLEAN SkipIocsProbe;                          // CNS 06h went unanswered once: not asked again in this extension
     ULONG WtFuaWrites;                              // writes issued with FUA
     BOOLEAN CapWaitLogged;
     ULONG ReplayAdmitTime;                          // admission time carried over when a held SRB is replayed
@@ -387,16 +402,16 @@ typedef struct _HW_DEVICE_EXTENSION {
 #if defined(STOR98_DMA_POOL) && defined(NVME2K_W9X)
     PLAT_POOL9X Pool9x;                             // 9x MD-4 pool provider state (pool9x.h)
 #endif
-    UCHAR SenseCount;                               // undelivered sense entries kept for LU 0 (sense.c, R3-9)
+    UCHAR SenseCount;                               // undelivered sense entries kept for LU 0 (sense.c)
     UCHAR SenseHead;                                // oldest entry
-    UCHAR SenseLost;                                // placeholders queued after the kept entries: sense lost on overflow (N4)
+    UCHAR SenseLost;                                // placeholders queued after the kept entries: sense lost on overflow (sense.c)
     UCHAR SenseQ[ENG_SENSE_KEEP][18];               // fixed-format sense, one entry per request that failed without autosense
     ULONG SenseDropped;                             // entries not kept: all ENG_SENSE_KEEP in use
     ULONG DisableRewrites;                          // quarantine: CC.EN=0 written again
     ULONG EmptyInts;                                // interrupts with nothing new in the current storm window
     ULONG StormStart;                               // clock ms of the storm window's first empty interrupt
     ULONG StormMasks;                               // interrupt storms answered by masking the vector (polling)
-    ULONG IdleFlushTimeouts;                        // idle Flushes that missed their deadline (review round 4)
+    ULONG IdleFlushTimeouts;                        // idle Flushes that missed their deadline
     ULONG StormMaskedBatches;                       // storm batches with the vector already masked (not evidence; hold extended)
     ULONG PollSince;                                // clock ms when the vector was masked for a storm
     ULONG PollHoldMs;                               // polling time before the next unmask trial
@@ -504,6 +519,7 @@ BOOLEAN NvmeCreateIoCQ(IN PHW_DEVICE_EXTENSION DevExt);
 BOOLEAN NvmeCreateIoSQ(IN PHW_DEVICE_EXTENSION DevExt);
 BOOLEAN NvmeIdentifyController(IN PHW_DEVICE_EXTENSION DevExt);
 BOOLEAN NvmeIdentifyNamespace(IN PHW_DEVICE_EXTENSION DevExt);
+BOOLEAN NvmeIdentifyIocs(IN PHW_DEVICE_EXTENSION DevExt);
 VOID NvmeToAtaIdentify(IN PHW_DEVICE_EXTENSION DevExt, OUT PATA_IDENTIFY_DEVICE_STRUCT AtaIdentify);
 BOOLEAN NvmeLogPageToScsiLogPage(IN PNVME_SMART_INFO NvmeSmart, IN UCHAR ScsiPageCode, OUT PVOID ScsiLogBuffer, IN ULONG BufferSize, OUT PULONG BytesWritten);
 VOID NvmeCompleteLogPage(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb, IN USHORT Status, IN PVOID Data);
@@ -538,6 +554,7 @@ BOOLEAN ScsiHandleInquiry(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK
 BOOLEAN ScsiHandleReadBuffer(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleReadCapacity(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleReadCapacity64(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
+BOOLEAN ScsiHandleVerify(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleLogSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleSatPassthrough(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);
 BOOLEAN ScsiHandleModeSense(IN PHW_DEVICE_EXTENSION DevExt, IN PSCSI_REQUEST_BLOCK Srb);

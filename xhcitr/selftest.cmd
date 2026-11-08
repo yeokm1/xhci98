@@ -10,7 +10,11 @@ rem THE IMPORT GATE FOR THE TOOL: each executable's import table must name
 rem KERNEL32, USER32, GDI32, ADVAPI32, SHELL32, COMCTL32 and COMDLG32 and
 rem nothing else - every SetupAPI, configuration-manager and security
 rem routine is looked up at run time, which is what lets the one image
-rem start on Windows 98 SE. check-imports.ps1 reads the PE import directory.
+rem start on Windows 98 SE - and every function it imports must be a row of
+rem xhcitr-imports.allow for its architecture, the x86 rows being the
+rem Windows 98 SE baseline (a module name alone lets an NT-only function
+rem through), and its subsystem version the build's. check-imports.ps1
+rem reads the PE import directory.
 rem
 rem The tool is a Windows program: with its standard output redirected it
 rem writes its answers there instead of showing a message box, and a batch
@@ -55,22 +59,25 @@ if errorlevel 1 exit /b 1
 exit /b 0
 
 :one
-set "OUT=%TEMP%\xhcitr-selftest-%RANDOM%%RANDOM%.txt"
+call :claim
+if errorlevel 1 exit /b 1
+set "OUT=%RUNDIR%\selftest.txt"
 ".\%~1" /selftest > "%OUT%" 2>&1
 set "RC=%ERRORLEVEL%"
 type "%OUT%"
 if not "%RC%"=="0" (
     echo ERROR: %~1 /selftest exited %RC%
-    del /q "%OUT%" 2>nul
+    rd /s /q "%RUNDIR%" 2>nul
     exit /b 1
 )
-findstr /r /c:"^[0-9][0-9]* checks, 0 failures" "%OUT%" >nul
+%SystemRoot%\System32\findstr.exe /r /c:"^[0-9][0-9]* checks, 0 failures" "%OUT%" >nul
 if errorlevel 1 (
     echo ERROR: %~1 /selftest printed no clean summary line
-    del /q "%OUT%" 2>nul
+    rd /s /q "%RUNDIR%" 2>nul
     exit /b 1
 )
-del /q "%OUT%" 2>nul
+rd /s /q "%RUNDIR%" 2>nul
+rd out 2>nul
 rem An unknown switch, /report without a file, /eject without id=, a
 rem one-shot mode with company and a /setlevel out of its form are
 rem refused with exit 1.
@@ -118,3 +125,25 @@ if not "%ERRORLEVEL%"=="1" (
 )
 echo %~1: switch refusals behaved
 exit /b 0
+
+rem A directory of this run's own under xhcitr\out\ (ignored), claimed by
+rem mkdir, not a %RANDOM% name in %TEMP%: two builds started in the same
+rem second draw the same %RANDOM% (snaptest.cmd does the same).
+:claim
+if not exist out mkdir out
+if not exist out\ (
+    echo ERROR: could not create %~dp0out
+    exit /b 1
+)
+set CLAIMTRIES=0
+:claimnext
+set /a CLAIMTRIES+=1
+if %CLAIMTRIES% GTR 20 (
+    echo ERROR: 20 run directory names under %~dp0out were already taken
+    exit /b 1
+)
+set "RUNDIR=%~dp0out\t%RANDOM%%RANDOM%"
+mkdir "%RUNDIR%" 2>nul && exit /b 0
+if exist "%RUNDIR%" goto claimnext
+echo ERROR: could not create %RUNDIR%
+exit /b 1

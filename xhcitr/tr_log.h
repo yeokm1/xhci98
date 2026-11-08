@@ -73,7 +73,8 @@ void tr_log_advice_cm(TR_TEXT *t, const char *keyPath, int nt);
 #define TR_SNAP_REGION_EXT      0UL
 #define TR_SNAP_REGION_HCD      3UL
 #define TR_SNAP_HCD_MAX_BYTES   32768UL
-#define TR_SNAP_UU_NOT_SUPPORTED 6UL            /* the channel is off      */
+/* UsbUserMiniportError: the driver's answer when the channel is off. */
+#define TR_SNAP_UU_MINIPORT_ERROR 6UL
 
 /* XHCI_SNAPSHOT_S_* */
 #define TR_SNAP_S_TRUNCATED     0x01UL
@@ -207,6 +208,7 @@ typedef struct _TR_XPORT {
     TR_U32 Inputs;              /* XHCI_XPORT_F_*                           */
     TR_U32 Triple;              /* class 7:0, subclass 15:8, protocol 23:16 */
     TR_U32 Count;
+    TR_U32 Driver;              /* the answer's DriverVersion (UASBOT.1)    */
 } TR_XPORT;
 
 /* The record of root port `port` and route `route`: 1 and *r; 0 none. */
@@ -226,6 +228,18 @@ int tr_xhq_xport_find(const TR_XHQ *x, TR_U32 port, TR_U32 route,
 #define TR_XPORT_WHY_BOT_FORCED     4UL
 #define TR_XPORT_WHY_BOT_NO_STREAMS 5UL
 #define TR_XPORT_WHY_NO_STREAMS     6UL
+#define TR_XPORT_F_SUPERSPEED       0x1UL
+#define TR_XPORT_F_HC_STREAMS       0x2UL
+#define TR_XPORT_F_BOT_OWN_ID       0x8UL
+
+/* The first xhci98.sys that reads XhciBulkOnlyOwnId (UASBOT.1), in the
+ * answer's DriverVersion form (major 31:24, minor 23:16, build 15:8). */
+#define TR_XPORT_OWN_ID_DRIVER      0x03040200UL
+
+/* tr_xport_unrunnable's answers. */
+#define TR_XPORT_UNRUN_NO           0
+#define TR_XPORT_UNRUN_OLD          1   /* a driver that has no own id    */
+#define TR_XPORT_UNRUN_GATE         2   /* XhciBulkOnlyOwnId 0            */
 
 /* The "Transport:" line's words (section 19 item 3), without the label:
  * "UAS (the device offers Bulk-Only and UAS; UAS chosen)", with
@@ -237,6 +251,18 @@ void tr_xport_text(const TR_XPORT *r, char *out, size_t cap);
  * devnode's driver: a service name, or a 9x file name) is Windows'
  * Bulk-Only usbstor, compared without case or a ".sys". */
 int tr_xport_stale(const TR_XPORT *r, const char *service);
+
+/* Section 19 item 4, the other way round: nonzero when the record says
+ * Bulk-Only at SuperSpeed on a controller that cannot stream (its inputs;
+ * why 5, or why 4 where XhciForceBulkOnly is set there too), offered
+ * without the Bulk-Only form's own instance id (the inputs lack
+ * TR_XPORT_F_BOT_OWN_ID), and `service` is the UAS driver xhciuas, which
+ * cannot start the drive there; compared as tr_xport_stale compares.
+ * TR_XPORT_UNRUN_GATE when the record's driver reads XhciBulkOnlyOwnId
+ * (TR_XPORT_OWN_ID_DRIVER or later), so the value was 0;
+ * TR_XPORT_UNRUN_OLD for an older driver, which has no such value;
+ * TR_XPORT_UNRUN_NO otherwise. */
+int tr_xport_unrunnable(const TR_XPORT *r, const char *service);
 
 /* The "Driver log (xhci98)" node's text from a parsed answer: the build,
  * recording on or off with the advice, the nonzero counters by name, the

@@ -3,8 +3,9 @@
 //
 // dpkeys.h - every key the driver looks for in the NT DriverParameter
 // string (HwFindAdapter's ArgumentString), in one place. The parsers
-// (lifecycle.c LcFind, platform.c, cmlinknt.c) find a key anywhere in the
-// string, case-insensitively, so no key may occur inside another one (a key
+// (lifecycle.c LcFind, platform.c PlatIsDump, cmlinknt.c CmlDumpArgument)
+// all find a key with DpkFind (below): anywhere in the string,
+// case-insensitively, so no key may occur inside another one (a key
 // "idle=" inside a "pollidle=" would set both). The host unit test
 // (tests/unit/xfer_ut.c) checks DPK_ALL pairwise; a key added to a parser
 // must be added here, and the parsers use only these names.
@@ -25,6 +26,7 @@
 #define DPK_HOLD9X          "hold9x="
 #define DPK_FRAG            "frag="
 #define DPK_BOUNCE          "bounce="
+#define DPK_VFYREAD         "vfyread="
 #define DPK_CALX            "calx="
 #define DPK_SHNFLUSH        "shnflush="
 #define DPK_CAPTO           "capto="
@@ -47,8 +49,36 @@
 
 // Every key above, for the overlap check.
 #define DPK_ALL \
-    DPK_GONE, DPK_IDLE, DPK_HOLD9X, DPK_FRAG, DPK_BOUNCE, DPK_CALX, DPK_SHNFLUSH, DPK_CAPTO, \
+    DPK_GONE, DPK_IDLE, DPK_HOLD9X, DPK_FRAG, DPK_BOUNCE, DPK_VFYREAD, DPK_CALX, DPK_SHNFLUSH, DPK_CAPTO, \
     DPK_STORMTEST, DPK_STORMINTS, DPK_IDLETO, DPK_POLLMODE, DPK_POLLBUSYUS, DPK_POLLIDLEMS, \
     DPK_POLLSPINUS, DPK_INTWATCH, DPK_MAXTRANSFERKB, DPK_WRITETHROUGH, DPK_DUMP
+
+// The one finder every parser uses: Key (lower case, one of the above)
+// anywhere in s, compared case-insensitively. Returns the text after it, or
+// NULL when s is NULL or has no Key.
+static const char *DpkFind(const char *s, const char *Key)
+{
+    ULONG i;
+    UCHAR c;
+
+    if (s == NULL) {
+        return NULL;
+    }
+    for (; *s; s++) {
+        for (i = 0; Key[i] != 0 && s[i] != 0; i++) {
+            c = (UCHAR)s[i];
+            if (c >= 'A' && c <= 'Z') {
+                c = (UCHAR)(c - 'A' + 'a');
+            }
+            if (c != (UCHAR)Key[i]) {
+                break;
+            }
+        }
+        if (Key[i] == 0) {
+            return s + i;
+        }
+    }
+    return NULL;
+}
 
 #endif // _STOR98_DPKEYS_H_

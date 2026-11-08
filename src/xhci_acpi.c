@@ -289,9 +289,16 @@ static BOOLEAN xhaRsdp(XHA_WORK *w, UCHAR *area)
     at = 0xFFFFFFFFUL;
     if (xhaRead(w, 0x40EUL, seg, 2, TRUE)) {
         ebda = ((ULONG)seg[0] | ((ULONG)seg[1] << 8)) << 4;
-        if (ebda >= 0x80000UL && ebda < 0xA0000UL &&
-            xhaRead(w, ebda, area, 1024, TRUE)) {
-            at = XhaFindRsdp(area, 1024);
+        /* Its first 1 KB, but never past 0xA0000, where the
+         * EBDA's conventional memory ends and the video window begins. */
+        if (ebda >= 0x80000UL && ebda < 0xA0000UL) {
+            len = 0xA0000UL - ebda;
+            if (len > 1024UL) {
+                len = 1024UL;
+            }
+            if (xhaRead(w, ebda, area, len, TRUE)) {
+                at = XhaFindRsdp(area, len);
+            }
         }
     }
     if (at == 0xFFFFFFFFUL && xhaRead(w, 0xE0000UL, area, 0x20000UL, TRUE)) {

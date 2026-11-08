@@ -363,6 +363,9 @@ typedef struct _XHCI_TOPOLOGY {
      * is recorded rather than hidden, because "enumeration is serialized" is an
      * assumption this graph would otherwise be silently built on.
      */
+    /* HOST-SUITE-ONLY under the HCD: armed in a host-suite build alone
+     * (XhciTopoObserveSetup), since nothing in the driver spends a claim; a
+     * driver build reads 0 here. */
     ULONG Pending;          /* nonzero: PendingHub/PendingPort are armed */
     ULONG PendingHub;
     ULONG PendingPort;
@@ -371,7 +374,8 @@ typedef struct _XHCI_TOPOLOGY {
     ULONG Promotions;       /* devices first identified as hubs */
     ULONG Resets;           /* SET_FEATURE(PORT_RESET) observed on a hub */
     ULONG ResetsUnknownHub; /* ...on a device with no node - the parent is lost */
-    ULONG ResetsOverwritten;/* a second reset before the first was claimed */
+    ULONG ResetsOverwritten;/* a second reset before the first was claimed:
+                             * host suite only, 0 on a target (Pending) */
     /*
      * HOST-SUITE-ONLY, from here through `MigrationsStale`, and
      * `AltForgotten` below: moved only by XhciTopoClaimChild, DropPending,

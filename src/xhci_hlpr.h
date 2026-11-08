@@ -5,7 +5,7 @@
  *
  * The helper hands the HCD's x86 image the addresses of kernel routines it
  * cannot import, because the same binary loads on Windows 98: on Vista and
- * 7 the IoConnectInterruptEx pair (the MSI service), on Windows 2000 and
+ * later the IoConnectInterruptEx pair (the MSI service), on Windows 2000 and
  * later ExSetTimerResolution (the timer service). The HCD opens the
  * helper's named device with IoGetDeviceObjectPointer and sends one
  * internal device control, METHOD_NEITHER, whose Type3InputBuffer is the

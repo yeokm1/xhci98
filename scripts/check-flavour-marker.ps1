@@ -1,6 +1,8 @@
 <#
 .SYNOPSIS
-Assert that a linked xhci98.sys carries exactly its own build-flavour marker.
+Assert that a linked image of this project's - xhci98.sys, and the helper,
+UAS, connection manager and two networking images build-driver.cmd gates
+the same way - carries exactly its own build-flavour marker.
 
 .DESCRIPTION
 Roadmap task 13-L.1 split the build three ways - release, debug and qemu - and
@@ -18,7 +20,7 @@ the same variable that decides the output tree, so the defines and the directory
 cannot disagree. `DriverEntry` reads it so the linker cannot drop it.
 
 This checks the ARTIFACT rather than the build files that were meant to produce
-it, which is the same reason `scripts\build-driver.cmd :checkmarker` reads the
+it, which is the same reason `scripts\build-driver.cmd :checkflavour` reads the
 do-not-deploy string out of the image. **Both halves are the check**: exactly
 one marker, and it must be this flavour's. An image with two would be one the
 preprocessor let through with more than one flavour define; an image with the

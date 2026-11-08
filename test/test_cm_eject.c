@@ -567,7 +567,7 @@ static VOID test_o6(VOID)
     CHECK_EQ(t.Phase, CM_EJ_P_DONE, "a later success lifts the block");
 }
 
-/* Round-5 review vectors: an NVMe function whose request was not
+/* Vectors from a review of the eject path: an NVMe function whose request was not
  * published; a removal success taken after O6's deadline; an isolation's
  * acknowledgement wait at the stop. */
 static VOID test_edges(VOID)

@@ -34,7 +34,6 @@ echo Checking the list, then setting the switch to 1:
 cscript //nologo silent.vbs 1
 if errorlevel 5 goto unverified
 if errorlevel 4 goto nolist
-if errorlevel 3 goto partial
 if errorlevel 1 goto notset
 goto end
 :unverified
@@ -49,11 +48,6 @@ echo above say what was found. The switch was not changed on any
 echo controller. The list may be merged in part. A controller whose switch
 echo was already on (the lines under Now say so) stays on over that list:
 echo run silent-off.bat if the silent install must stop.
-goto end
-:partial
-echo The switch was set on some controllers and not others; the lines above
-echo say which. Run silent-off.bat, or correct it and run silent-on.bat
-echo again.
 goto end
 :notset
 echo The switch was not set.

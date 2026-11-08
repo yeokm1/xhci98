@@ -155,8 +155,8 @@ VOID NetCmIfRelease(PXHCI_CM_NET_INTERFACE Iface)
 }
 
 /* IRQL: <= DISPATCH_LEVEL. */
-VOID NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
-                  PXHCI_CM_NET_INFO Info)
+ULONG NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
+                   PXHCI_CM_NET_INFO Info)
 {
     netCmIfZero(Info, sizeof(*Info));
     Info->Size = sizeof(*Info);
@@ -164,7 +164,54 @@ VOID NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
         Iface->QueryInfo(Iface->Header.Context, Info) != XHCI_CM_NET_OK) {
         netCmIfZero(Info, sizeof(*Info));
         Info->Size = sizeof(*Info);
+        return 0;
     }
+    return 1;
+}
+
+/* A start's MAC is read on the connection manager's thread at its first
+ * pass after the activation, which may follow the network PDO's report;
+ * an adapter registered before it would carry 00:00:00:00:00:00 for its
+ * life. The count of steps bounds the wait, whatever each step lasts.
+ * IRQL: PASSIVE_LEVEL. */
+ULONG NetCmIfMacWait(const XHCI_CM_NET_INTERFACE *Iface,
+                     PXHCI_CM_NET_INFO Info)
+{
+    LARGE_INTEGER step;
+    ULONG n;
+    ULONG i;
+
+    step.LowPart = 0UL - NET_CMIF_MAC_STEP_MS * 10000UL;
+    step.HighPart = -1;
+    for (n = 0;; n++) {
+        if (NetCmIfQuery(Iface, Info)) {
+            for (i = 0; i < 6; i++) {
+                if (Info->Mac[i] != 0) {
+                    return 1;
+                }
+            }
+        }
+        if (n >= NET_CMIF_MAC_WAIT_MS / NET_CMIF_MAC_STEP_MS) {
+            break;
+        }
+        (VOID)KeDelayExecutionThread(KernelMode, FALSE, &step);
+    }
+    netCmIfZero(Info, sizeof(*Info));
+    Info->Size = sizeof(*Info);
+    return 0;
+}
+
+/* IRQL: any. */
+ULONG NetCmIfMacMoved(const UCHAR *Kept, const XHCI_CM_NET_INFO *Info)
+{
+    ULONG i;
+
+    for (i = 0; i < 6; i++) {
+        if (Kept[i] != Info->Mac[i]) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 /* LinkMbps is the total over every lane in use (40000 for a bonded Gen 3

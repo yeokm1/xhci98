@@ -138,6 +138,7 @@ static VOID netResetDone(PNET_ADAPTER a)
 #define NET_SENT        0UL
 #define NET_FULL        1UL
 #define NET_FAILED      2UL
+#define NET_NOMAP       3UL     /* a send buffer could not be mapped      */
 
 /* Frames one packet into a reservation and posts it (section 7.2).
  * IRQL: <= DISPATCH_LEVEL; the queue's one sender. */
@@ -188,7 +189,21 @@ static ULONG netSendOne(PNET_ADAPTER a, PNDIS_PACKET p, ULONG stns)
                     a->TxErrors++;
                     return NET_FAILED;
                 }
+#if defined(NDIS51_MINIPORT)
+                /* The caller's buffer, which may have no system mapping:
+                 * on NT the plain macro maps it through
+                 * MmGetSystemAddressForMdl, which bug checks when it
+                 * cannot. The NDIS 5.0 image (98 SE to 7) has no Safe
+                 * form and keeps the plain one. */
+                NdisQueryBufferSafe(b, &va, &blen, NormalPagePriority);
+                if (va == NULL) {
+                    NetCmIfAbort(&a->Cm, &token);
+                    a->TxErrors++;
+                    return NET_NOMAP;
+                }
+#else
                 NdisQueryBuffer(b, &va, &blen);
+#endif
                 src = (const UCHAR *)va;
                 have = blen;
                 NdisGetNextBuffer(b, &b);
@@ -230,6 +245,8 @@ VOID NetServe(PNET_ADAPTER a)
     PNDIS_PACKET list;
     ULONG stns;
     ULONG r;
+    ULONG down;
+    ULONG reset;
     NDIS_STATUS status;
 
     for (;;) {
@@ -244,7 +261,7 @@ VOID NetServe(PNET_ADAPTER a)
             NdisReleaseSpinLock(&a->TxLock);
             return;
         }
-        if (!a->LinkUp || !a->CmOpen || a->Halting) {
+        if (!a->LinkUp || !a->CmOpen || a->PowerD3 || a->Halting) {
             list = netDetach(a);
             a->TxDown++;
             a->TxActive++;
@@ -270,7 +287,13 @@ VOID NetServe(PNET_ADAPTER a)
         r = netSendOne(a, p, stns);
 
         NdisAcquireSpinLock(&a->TxLock);
-        if (r == NET_FULL && !a->ResetGate && !a->Halting) {
+        /* A full ring keeps the packet only while it can still go: not
+         * once the link is down, the service closed, a D3 begun or a
+         * reset or halt under way, whose flushes may already have run. */
+        down = (!a->LinkUp || !a->CmOpen || a->PowerD3 || a->Halting)
+                   ? 1UL : 0UL;
+        reset = a->ResetGate ? 1UL : (a->Halting ? 2UL : 0UL);
+        if (r == NET_FULL && reset == 0 && !down) {
             NET_NEXT(p) = a->TxHead;
             a->TxHead = p;
             if (a->TxTail == NULL) {
@@ -292,7 +315,11 @@ VOID NetServe(PNET_ADAPTER a)
         if (r == NET_SENT) {
             status = NDIS_STATUS_SUCCESS;
         } else if (r == NET_FULL) {
-            status = NDIS_STATUS_RESET_IN_PROGRESS;
+            /* reset: 1 a reset's gate, 2 a halt, 0 the link down. */
+            status = (reset == 1) ? NDIS_STATUS_RESET_IN_PROGRESS
+                     : (reset == 2) ? NDIS_STATUS_FAILURE : NET_STATUS_DOWN;
+        } else if (r == NET_NOMAP) {
+            status = NDIS_STATUS_RESOURCES;
         } else {
             status = NDIS_STATUS_FAILURE;
         }
@@ -626,7 +653,10 @@ VOID NTAPI NetCbLinkChange(PVOID ctx, BOOLEAN up)
     PNET_ADAPTER a = (PNET_ADAPTER)ctx;
     NET_CM_INFO info;
 
-    NetCmQuery(a, &info);
+    if (NetCmQuery(a, &info) && up && NetCmIfMacMoved(a->Mac, &info)) {
+        NetCmLog(a, "net.mac.moved",
+                 ((ULONG)info.Mac[4] << 8) | (ULONG)info.Mac[5]);
+    }
     NdisAcquireSpinLock(&a->TxLock);
     a->LinkGen++;
     a->PeerStns = info.PeerPrtcstns;

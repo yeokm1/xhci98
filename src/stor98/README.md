@@ -7,17 +7,17 @@ storage driver for NVMe SSDs that xhci98's connection manager brings up behind a
 
 | Family | Targets | Binary |
 |---|---|---|
-| Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD ([PLAN.md](docs/PLAN.md) 0.12, MD-5) |
+| Windows 9x | Windows 98 SE, ME | SCSI miniport (`.mpd`); no helper VxD needed for basic operation ([PLAN.md](docs/PLAN.md) 0.12, MD-5; xhci98's optional `S98VSD.VXD` lets larger requests through, below) |
 | NT, 32-bit | Windows 2000 SP4, XP, Vista, 7, 8, 8.1, 10 (below build 22000) | SCSIport miniport (`.sys`) |
-| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64; 8.1 x64 and 10 x64 read in virtual machines only (xhci98's roadmap 43.59: tunnelled drives run, a surprise unplug fails at once; on 10 x64 without `DmaRemappingCompatible`, 43.59s); 8 x64 untested (from xhci98 3.2.0.0 the package installs there with its catalog) | SCSIport miniport (`.sys`, amd64) |
+| NT, 64-bit | XP x64 / Server 2003 x64, Vista x64, 7 x64, 8 x64, 8.1 x64, 10 x64 (below build 22000) | SCSIport miniport (`.sys`, amd64) |
 
 Windows 8, 8.1 and 10 since xhci98 3.2.0.0 (xhci98's roadmap 43.23; 10 below build 22000,
 which xhci98's installer admits beside 8 and 8.1 from its roadmap 43.34): see
-[Windows 8, 8.1 and 10](#windows-8-81-and-10) for what was read there and what was not, the
-64-bit package's install among them.
+[Windows 8, 8.1 and 10](#windows-8-81-and-10) for how Stor98 installs there and what the
+64-bit package needs.
 
 Windows NT4 is outside the product scope. The NT4 build path inherited from nvme9x/nvment
-is kept only while it costs nothing to maintain; it is not tested or shipped.
+is kept only while it costs nothing to maintain; it is not shipped.
 
 ## How Stor98 differs from nvme2k and nvme9x
 
@@ -25,8 +25,8 @@ Stor98 is a fork of **nvme9x / nvment** by SweetLow, which ports **nvme2k** 1.0.
 Dominik Behr to Windows 9x and NT4 (see [Lineage and licensing](#lineage-and-licensing)).
 Both work well on a drive that is always present. Stor98 exists for the case they were not
 built for: a drive in a USB4 or Thunderbolt enclosure that can be unplugged at any time.
-Tested in the emulator before the fork, surprise removal during I/O hung Windows 2000 with
-nvme2k and wedged the volume on XP x64 with nvme2k 1.2.0.0.
+Before the fork, surprise removal during I/O hung Windows 2000 with nvme2k and wedged the
+volume on XP x64 with nvme2k 1.2.0.0 ([docs/TESTING.md](docs/TESTING.md)).
 
 What Stor98 adds:
 
@@ -42,15 +42,15 @@ What Stor98 adds:
   removes the device without waiting. What works depends on both versions:
   - Windows 2000 to 7 with Stor98 0.4.0.0 or later and xhci98 3.0.0.0 or later: the
     driver reads the channel. xhci98 states a link-down only where it can prove the
-    drive was reset (today in the emulator, on Windows 2000 and XP x64); elsewhere it
-    says nothing and the driver's 5-second deadline applies. There is
+    drive was reset; elsewhere it says nothing and the driver's 5-second deadline
+    applies. There is
     no clean-eject handshake on these systems: an eject is Windows' own (flush and stop).
   - Windows 98 SE / ME: Stor98 reads the channel (and offers the clean-eject handshake
     that flushes and shuts the drive down before the connection manager removes it).
     xhci98 3.0.0.0 publishes the channel there. A drive plugged in after Windows started
     is announced by the connection manager only after Windows has already started the
-    driver for it, so Stor98 looks for it again for up to 10 seconds and binds it then
-    (about 0.2 s later in the emulator). A drive present at startup is started before the
+    driver for it, so Stor98 looks for it again for up to 10 seconds and binds it then.
+    A drive present at startup is started before the
     connection manager publishes the channel, so it runs without it. xhci98 3.0.0.0 and
     3.1.0.0 make no link-down statement and no clean-eject request on these systems
     (xhci98's roadmap 42-A.12 and 42-A.13), so the 5-second deadline applies and an eject
@@ -68,14 +68,13 @@ What Stor98 adds:
   up to 512 KiB:
   Windows 98 SE / ME passes a request to the driver whole only if it is at most 512 KiB
   and its buffer is page-aligned and physically contiguous enough. Only such requests
-  larger than 256 KiB gain from the higher limit: in the emulator, aligned 512 KiB reads
-  ran about three times as fast as with the earlier 256 KiB limit, and requests of
-  256 KiB or less were unchanged. Larger requests, misaligned buffers and fragmented
+  larger than 256 KiB gain from the higher limit; requests of 256 KiB or less are
+  unchanged. Larger requests, misaligned buffers and fragmented
   buffers are still cut by Windows into 63 KiB pieces, one at a time, so most other I/O
   is not faster.
-- **Every target from one source tree:** Windows 98 SE / ME, Windows 2000 to 7 32-bit, and
-  XP x64 to 7 x64 (the 64-bit build follows upstream nvme2k 1.2.0.0, which nvme9x
-  predates).
+- **Every target from one source tree:** Windows 98 SE / ME, Windows 2000 to 10 32-bit, and
+  XP x64 to 10 x64, 10 below build 22000 (the 64-bit build follows upstream nvme2k
+  1.2.0.0, which nvme9x predates).
 - **Removed:** the magic-pattern TRIM of the base, which could overwrite the caller's
   buffer.
 
@@ -84,63 +83,71 @@ The work and the evidence behind each change are in [docs/PLAN.md](docs/PLAN.md)
 ## Windows 8, 8.1 and 10
 
 Since xhci98 3.2.0.0 (its roadmap 43.23, owner 2026-10-20) xhci98's installer offers
-Stor98 on Windows 8 and 8.1 as on 2000 to 7: on NVMe drives behind a Thunderbolt or USB4
-tunnel only, its box ticked with the Thunderbolt box there, and on 10 unticked (xhci98's roadmap 43.59; xhci98's
-design record 26 section 5.0; `/nostor98` leaves it out), untested until xhci98's
-Windows 8 legs (its roadmap 43.24) pass. Windows 8 has no NVMe driver of its own;
-Windows 8.1 binds its own `stornvme` to every NVMe controller, and the installer installs
-Stor98 over it, forced, on a tunnel drive it finds at install time. Read in the emulator
-on 2026-10-22 ([docs/TESTING.md](docs/TESTING.md), "Windows 8 and 8.1" and "Windows 10"):
+Stor98 on Windows 8, 8.1 and 10 (below build 22000) as on 2000 to 7: on NVMe drives behind
+a Thunderbolt or USB4 tunnel only, its box ticked with the Thunderbolt box on 8 and 8.1,
+and unticked on 10, where Windows' own `stornvme` stays the tunnelled drive's driver
+(xhci98's roadmap 43.59; xhci98's design record 26 section 5.0; `/nostor98` leaves it out).
+Windows 8 has no NVMe driver of its own; Windows 8.1 and 10 bind their own `stornvme` to
+every NVMe controller, and the installer installs Stor98 over it, forced, on a tunnel drive
+it finds at install time.
 
-- **Windows 8, 32-bit:** the x86 package installs through the `.NTx86` sections, SCSIport
-  loads and starts Stor98 as on 2000 to 7, and a disk behind the tunnel reads and writes.
-  Unplugged during writes with no notice from Windows, the requests failed at once, the
-  disk was removed at the 5-second deadline and the copy failed at 5.4 s. Windows 8's disk
-  class driver retries a failed write whichever terminal status Stor98 uses (PLAN 2.2).
-- **Windows 8 x64 and 8.1 x64: the 64-bit package installs; Stor98 x64 runs on 8.1 x64.**
-  Without a catalog file (xhci98 3.1.0.0's package) these systems' driver store refused
-  it in test-signing mode ("The third-party INF does not contain digital signature
-  information", `0xE000022F`) before the driver was ever loaded. From xhci98 3.2.0.0
-  `stor98.inf` names `stor98.cat`, and on 8.1 x64 in test-signing mode the package with
-  it was taken into the driver store after the publisher prompt (xhci98's roadmap
-  43.36). Signed and trusted, it ran tunnelled drives on 8.1 x64 in xhci98's roadmap
-  43.59, and a surprise unplug during a copy failed at once with no hang; 8 x64 with the
-  catalog was not run.
-- **Windows 8.1, 32-bit:** not run (no install medium); its SCSIport and `stornvme` are
-  taken to be 8.1 x64's and 8 x86's, untested.
-- **Windows 10, 32-bit** (22H2, build 19045; xhci98's roadmap 43.34 admits 10 below build
-  22000 as it admits 8 and 8.1): Windows 10 binds its own `stornvme` to every NVMe
-  controller, as 8.1 does. The x86 package installed over it, forced, with the unsigned-driver
-  prompt, and SCSIport started Stor98 on both controllers as on 8. Unplugged during writes
-  with no notice from Windows, the copy failed at about 6 s, the disk was removed ("Disk 2
-  has been surprise removed") at the deadline, and Windows showed "Delayed Write Failed"
-  for the lazy writes in flight. Earlier and later 10 builds were not run.
-- **Windows 10 x64:** without a catalog the 64-bit package was refused at the driver
-  store as on 8 x64 and 8.1 x64 (`0xE000022F`, the same `setupapi` lines), the drive
-  staying with `stornvme`; with `stor98.cat` (xhci98 3.2.0.0) it was taken into the
-  driver store as on 8.1 x64 (xhci98's roadmap 43.36). Signed and trusted, it did not
-  start there while its INF wrote `DmaRemappingCompatible`; without it (xhci98's roadmap
-  43.59s, the INF as it ships) it ran tunnelled drives, and a surprise unplug during a
-  read failed at once (xhci98's roadmap 43.59).
+- **32-bit:** the x86 package installs through the `.NTx86` sections, and SCSIport loads
+  and starts Stor98 as on 2000 to 7. Windows 8's disk class driver retries a failed write
+  whichever terminal status Stor98 uses (PLAN 2.2).
+- **64-bit:** from xhci98 3.2.0.0 `stor98.inf` names a catalog file, `stor98.cat`, which
+  Windows 8 x64, 8.1 x64 and 10 x64 require in test-signing mode: without it their driver
+  store refuses the package ("The third-party INF does not contain digital signature
+  information", `0xE000022F`) before the driver is loaded. Keep `stor98.cat` beside
+  `stor98.inf`. As on Vista x64 and 7 x64, the test-signed 64-bit `stor98.sys` loads there
+  in test-signing mode, or on a start with driver signature enforcement disabled, as
+  xhci98's own 64-bit drivers do; xhci98's installer has its own requirements there (its
+  readme). The INF writes no `DmaRemappingCompatible`: with it, Stor98 does not start on
+  10 x64 (xhci98's roadmap 43.59s).
 - **Windows 11** is not a target (xhci98's installer refuses it; it has its own USB4
   support).
-- **Under 8.1's own `stornvme`** (no Stor98), a drive unplugged during a write with no
-  notice from Windows held the write for minutes, `stornvme` resetting the controller every
-  35 s, and finished it when the drive came back.
 
 The settings below apply on 8, 8.1 and 10 as on 2000 to 7: the same key, the same defaults.
+What was run on these systems is in [docs/TESTING.md](docs/TESTING.md) ("Windows 8 and
+8.1", "Windows 10").
+
+## Known limits
+
+- **Drives with 4 KiB logical sectors (4Kn).** Most NVMe drives are formatted with
+  512-byte sectors. A drive formatted with 4096-byte sectors works on every system,
+  but not every system sees the same sector size: Windows 98 SE, ME, 2000, XP, Vista
+  and 7 see 512-byte sectors (Stor98 translates); Windows 8, 8.1 and 10 see the
+  drive's own 4096-byte sectors, as Windows' own NVMe driver shows them. Drives with
+  1 KiB or 2 KiB sectors are seen with 512-byte sectors everywhere.
+  A 4Kn drive partitioned with 512-byte sectors (on 98 SE to 7, or on 8 to 10 with an
+  earlier Stor98 test build that showed 512-byte sectors) and one partitioned with
+  4096-byte sectors (on 8 to 10, with Stor98 or Windows' own driver) are not
+  interchangeable: the other view sees its partitions and files as damaged. Back up
+  first. To move a drive freely between them, reformat the drive itself to 512-byte
+  sectors with the drive maker's tool or Linux `nvme format`, or partition and format
+  it again on the system that will use it.
+- **VERIFY reads the drive** (xhci98 3.4.2.0): VERIFY(10) and VERIFY(16) read the blocks
+  asked for, by the drive's own Verify command where it has one, otherwise by reads that
+  the driver discards, so a scan that uses VERIFY finds an unreadable block: format and
+  `chkdsk /r` on Windows 2000 to 10, and MS-DOS FORMAT. ScanDisk on Windows 98 SE and ME
+  does not use VERIFY: it reads the drive, and writes to it with write-testing on. A range
+  past the end of the drive is refused (LOGICAL BLOCK ADDRESS OUT OF RANGE), and so is a
+  compare with the caller's data, a protection check or more than 32 MiB in one VERIFY
+  (INVALID FIELD IN CDB). On Windows 98 SE and ME a VERIFY that starts at or past the end
+  succeeds without reading, whatever its length (MS-DOS FORMAT asks for such blocks on a
+  volume made on another system). VERIFY(6) is refused as an unsupported command
+  ([docs/PLAN.md](docs/PLAN.md), "VERIFY").
 
 ## Updating the driver
 
 - **Windows 98 SE / ME (known issue).** Update Stor98 (or switch to it from another NVMe
   driver) with the drive unplugged, or with nothing using its volume, then shut down and
   start the computer again rather than restart it with the drive attached. If the drive
-  then reads "not ready", unplug it, restart, and plug it in again. Observed in the
-  emulator after an in-place update with the volume in use followed by a warm restart: ME
-  stopped at restart with a VCACHE error and then hung in ScanDisk (xhci98's tests, 0.3.0.0
-  to 0.3.0.1), or the volume came back "not ready" (Stor98's test). Whether the update
-  itself or the warm restart of Windows 98 SE / ME causes it was not separated.
-- **With xhci98's own USB4 connection manager (Windows 2000 to 7; on 8, 8.1 and 10 not yet read).** On a USB4 host run
+  then reads "not ready", unplug it, restart, and plug it in again. After an in-place
+  update with the volume in use followed by a warm restart, ME has stopped at restart with
+  a VCACHE error and then hung in ScanDisk, or the volume has come back "not ready";
+  whether the update itself or the warm restart of Windows 98 SE / ME causes it is not
+  known.
+- **With xhci98's own USB4 connection manager.** On a USB4 host run
   by xhci98's connection manager, changing the driver of a tunnelled NVMe drive stops the
   device, which the connection manager takes as an eject: it tears the tunnel down.
   Unplug the drive and plug it in again after the update. Under a Thunderbolt 3 host's
@@ -247,7 +254,7 @@ the controller no usable interrupt, Stor98 runs without one: it polls the contro
 completed requests, often while requests are outstanding and seldom when idle. This
 happens when the controller has no interrupt pin (an MSI-only controller: a SCSI miniport
 gets no MSI on these systems), when Windows assigned it no interrupt, or when its
-interrupt line is not set. Polling can also be forced, for testing. Four values control
+interrupt line is not set. Polling can also be forced, for testing. Five values control
 it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 
 - **StorPollMode** (`storpollmode=`): 0 polls only when there is no usable interrupt; 1
@@ -255,8 +262,8 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
 - **StorPollBusyUs** (`storpollbusyus=`) is the polling period while requests are
   outstanding. It only takes full effect on Windows 98 SE and ME. On Windows 2000 to 8.1
   the port rounds every timer period up to the OS clock tick (10-15.6 ms), so Stor98
-  uses at least 10 ms there and a value below that changes nothing; Windows 10's
-  rounding is not read yet (Stor98 asks for the same 10 ms minimum there). A shorter period
+  uses at least 10 ms there and a value below that changes nothing; on Windows 10 Stor98
+  asks for the same 10 ms minimum. A shorter period
   completes requests sooner, at a higher CPU cost while busy.
 - **StorPollIdleMs** (`storpollidlems=`) is the period with nothing outstanding and nothing
   left to flush. 0 stops polling when idle, as with an interrupt; the timer still runs
@@ -270,30 +277,11 @@ it (table above; [docs/PLAN.md](docs/PLAN.md), "Polling mode"):
   that long right after sending a request, which helps short requests at a CPU cost (a
   busy-wait of at most that long per request while one is outstanding, only in the
   polling mode). The defaults differ by family: on Windows 2000 to 8.1 the timer cannot run
-  faster than the OS clock tick (10's is not read yet, and it takes 2000's defaults), so the spin is what keeps polling close to interrupt
+  faster than the OS clock tick (10 takes 2000's defaults), so the spin is what keeps polling close to interrupt
   throughput; on 98 SE and ME the 1 ms timer works and the CPU is scarcer.
 
-Measured on Windows 98 SE in the emulator (QEMU TCG, polling forced, before the 512 KiB
-transfer of 0.4.0.0, 8 MiB written and read
-back with a data compare at queue depth 1). The figures show the settings relative to each
-other, not what real hardware does:
-
-| Mode | MB/s, 64 KiB requests | MB/s, 128 KiB requests | Time per 64 KiB request |
-|---|---|---|---|
-| Interrupt | 13-16 | 12-24 | - |
-| Polling, StorPollBusyUs 1000 (default) | 12-13 | 16-21 | about 5 ms |
-| Polling, StorPollBusyUs 10000 | 8 | 5.4-5.5 | about 8 ms |
-| Polling, StorPollBusyUs 10000, StorPollSpinUs 500 | 15-16.6 | 14.5-16.3 | - |
-| Polling, StorPollBusyUs 50000 | 1.3-1.4 | 1.8-2.7 | about 47 ms |
-
-The same on Windows 2000 (emulator, polling forced, raw disk, 16 MiB written and read back
-with a compare, 64 and 256 KiB requests):
-
-| Mode | MB/s, queue depth 1 | MB/s, queue depth 8 |
-|---|---|---|
-| Interrupt | 69-229 | 73-267 |
-| Polling, no spin (each request waits for a 10 ms tick) | 5.9-21 | 39-132 |
-| Polling, pollspinus=500 (default) | 76-178 | 84-229 |
+[docs/TESTING.md](docs/TESTING.md), "Polling-mode measurements", compares these settings
+with each other.
 
 ### Interrupt report
 
@@ -354,9 +342,9 @@ BSD-3-Clause) to Windows 9x and NT4, with 64-bit LBA support and fixes.
 - Code inherited from nvme9x/nvment (SweetLow's `nvme2k.mpd` port) is BSD-3-Clause, the
   licence of the original nvme2k, as SweetLow confirmed on 2026-10-14. Each file in `src/`
   carries both copyright lines.
-- The INFs derive from nvme2k's `NVMe2K.inf` (copyright Dominik Behr and Ray Hinchliffe)
-  and, for their Windows 9x sections, SweetLow's `nvme9x.inf`; `LICENSE` names these
-  holders too.
+- The two NT INFs derive from nvme2k's `NVMe2K.inf` (copyright Dominik Behr and Ray
+  Hinchliffe), and the Windows 9x INF (`inf/stor98-9x.inf`) from SweetLow's `nvme9x.inf`;
+  `LICENSE` names these holders too.
 - Microsoft DDK headers (for example `SCSI.H`, `SRB.H`) are never committed; builds take
   them from the git-ignored `tools/` folder.
 - The binaries ship as `stor98.mpd` / `stor98.sys`, not under the upstream names: the
@@ -366,18 +354,31 @@ BSD-3-Clause) to Windows 9x and NT4, with 64-bit LBA support and fixes.
 
 ## For redistributors
 
-Stor98 ships inside xhci98's release download (its `release-x86` and `release-x64`
-directories), built from this source with xhci98's drivers and at their version. xhci98 is
-GPL-2.0-or-later; Stor98 stays BSD-3-Clause, and its files keep their own names and licence
-there:
+Stor98 ships inside xhci98's release download, built from this source with xhci98's drivers
+and at their version. Since xhci98 3.4.0.0 the release is laid out by Windows family, and
+each family folder has a `stor98\` folder of its own. xhci98 is GPL-2.0-or-later; Stor98
+stays BSD-3-Clause, and its files keep their own names and licence there:
 
-| File in the xhci98 package | Needed for |
-|---|---|
-| `stor98.inf`, `stor98.mpd`, `stor98.sys` (32-bit package) | Windows 98 SE and ME (`stor98.mpd`) and Windows 2000, XP, Vista, 7 32-bit (`stor98.sys`). One `$CHICAGO$` INF installs the right image on each system, so the three files go together. |
-| `stor98.inf`, `stor98.sys` (64-bit package) | XP x64, Vista and 7 (64-bit). The `.sys` is test-signed with xhci98's test certificate (`xhci98-test.cer`), like xhci98's own drivers. |
-| `stor98-LICENSE.txt`, `stor98-NOTICE.txt` | **Required.** BSD-3-Clause clause 2 says the copyright notices, conditions and disclaimer must go with the binaries. |
-| `stor98-readme.txt` | Recommended: install notes and settings. |
+| Folder in the xhci98 release | Stor98 files | Systems |
+|---|---|---|
+| `98-me\stor98\` | `stor98.inf` (`$CHICAGO$`, from `inf/stor98-9x.inf`) and `stor98.mpd` | Windows 98 SE and ME |
+| `nt-x86\stor98\` | `stor98.inf` (NT only, from `inf/stor98-x86.inf`) and the 32-bit `stor98.sys` | Windows 2000 SP4, XP, Vista, 7, 8, 8.1 and 10 (32-bit, 10 below build 22000) |
+| `nt-x64\stor98\` | `stor98.inf` (from `inf/stor98-x64.inf`), `stor98.cat` and the 64-bit `stor98.sys` | XP x64 / Server 2003 x64, Vista, 7, 8, 8.1 and 10 (64-bit, 10 below build 22000) |
+| each of the three | `stor98-LICENSE.txt`, `stor98-NOTICE.txt` | **Required.** BSD-3-Clause clause 2 says the copyright notices, conditions and disclaimer must go with the binaries. |
+| each of the three | `stor98-readme.txt` | Recommended: install notes and settings. |
 
+- Each folder's `stor98.inf` names only the image beside it, so the INF and its image go
+  together; take a whole folder, not single files.
+- In `nt-x64\stor98\`, `stor98.sys` and `stor98.cat` are test-signed with xhci98's test
+  certificate, like xhci98's own drivers; the certificate's public half is
+  `nt-x64\xhci98-test.cer`. Windows 8 to 10 x64 refuse the INF without its catalog, so the
+  three files go together. The 32-bit images carry no signature and no catalog.
+- `98-me\stor98\S98VSD.VXD` beside `stor98.mpd` is xhci98's own file (GPL-2.0-or-later),
+  not part of Stor98: it lets Windows 98 SE and ME pass requests above 512 KiB to Stor98
+  whole. Stor98 works without it.
+- xhci98's flat staging packages (`make-package.ps1`), which its own tools and tests read,
+  are not the release layout: there the 9x INF is `stor98w9.inf` beside `stor98.inf`
+  ([docs/BUILD.md](docs/BUILD.md)). Take Stor98 from the published family folders.
 - Another project that bundles Stor98 takes these files from an xhci98 release, unchanged
   and complete. The releases made on their own up to `0.4.0.0` are in `releases/`.
 - Keep the Stor98 file names. Clause 3 also applies: do not use the names of the Stor98,
@@ -394,9 +395,6 @@ NVM Express and NVMe are trademarks of NVM Express, Inc.; Stor98 is independent 
 endorsed by NVM Express or Microsoft. "NVMe" appears in this project only to say which
 devices the driver is for. Windows is a trademark of Microsoft Corporation.
 
-## Testing without hardware
+## Testing
 
-The driver is developed against an emulated USB4 / Thunderbolt host for QEMU,
-[usb4-emu](https://github.com/yeokm1/usb4-emu), which puts QEMU's `nvme` device behind a
-PCIe tunnel that can be brought up, torn down and surprise-removed. See
-[docs/TESTING.md](docs/TESTING.md).
+How Stor98 is tested, and the record of each run, are in [docs/TESTING.md](docs/TESTING.md).

@@ -6,11 +6,13 @@
  * the SMBIOS structure table when it lies above 1 MB, CPUID, and three
  * real-mode services through DPMI 0300h - INT 15h E820, INT 21h 30h/3306h,
  * INT 2Fh 1600h. No PCI access, no port I/O, nothing written but the
- * 32-byte E820 buffer this file allocates and frees. Two things here are
+ * 32-byte E820 buffer this file allocates and frees. Three things here are
  * not the system description: sys_dos_creatnew, --log-stamp's exclusive
  * create (task 38.1), which is here because it needs the same real-mode
  * call, and sys_crit_install / sys_crit_remove, the INT 24h chain that
- * turns an Abort into a Fail (DOS-1), which share its DPMI services.
+ * turns an Abort into a Fail (DOS-1), which share its DPMI services; and
+ * edd_dos_ops, the machine half of --edd (task 47.24, at the end), whose
+ * PCI reads come after every INT 13h call it makes.
  *
  * No identifiers: see sysinfo.c and qual.h. Nothing here reads a serial
  * number, UUID, asset tag or SKU; the table bytes go straight to
@@ -34,8 +36,8 @@ typedef struct {
 
 /* Simulate a real-mode INT through the DPMI host; SS:SP 0 asks the host
  * for its own stack. 1 if the host made the call (the INT's own CF is in
- * rm->flags bit 0). */
-static int rm_int(u8 intno, RMREGS *rm)
+ * rm->flags bit 0); 0 if it did not, with DPMI's error code in *err. */
+static int rm_int_err(u8 intno, RMREGS *rm, u16 *err)
 {
     union REGS r;
     struct SREGS s;
@@ -49,7 +51,14 @@ static int rm_int(u8 intno, RMREGS *rm)
     r.x.edi = (unsigned int)rm;
     s.es = s.ds;
     int386x(0x31, &r, &r, &s);
+    if (err != 0)
+        *err = r.w.cflag ? r.w.ax : 0;
     return r.w.cflag == 0;
+}
+
+static int rm_int(u8 intno, RMREGS *rm)
+{
+    return rm_int_err(intno, rm, 0);
 }
 
 /* A table straddling 1 MB, assembled from its two halves. */
@@ -420,4 +429,211 @@ void sys_crit_remove(void)
     r.w.dx = crit_sel;
     int386(0x31, &r, &r);
     crit_sel = 0;
+}
+
+/*
+ * Task 47.24, --edd: the operations edd_run (edd.c) makes, in the order it
+ * makes them. INT 13h 41h and 48h only, through DPMI 0300h, with a real-mode
+ * stack and buffer of this file's own in one DPMI 0100h block: 4 KiB of
+ * stack (SS = the block, SP = 1000h; the host's default real-mode stack is
+ * small, and the firmware's disk code is not), then EDD_AREA bytes, the
+ * buffer at offset 0 of segment block + 100h (DS:SI as the BIOS wants it,
+ * never a protected-mode pointer) and its guard bytes after it. The PCI
+ * reads (pci.c, CF8h/CFCh, reads only) come after the block is freed.
+ */
+#define EDD_STACK_PARAS 0x100U
+#define EDD_BLOCK_PARAS (EDD_STACK_PARAS + EDD_AREA / 16)
+
+static u16 edd_seg, edd_sel;
+static SYSINFO *edd_si;
+static int edd_skip_si;
+static QPRINTF_FN edd_pf, edd_detail;
+
+static int op_win1600(void *ctx, u16 *ax)
+{
+    RMREGS rm;
+
+    (void)ctx;
+    memset(&rm, 0, sizeof(rm));
+    rm.eax = 0x1600;
+    if (!rm_int(0x2F, &rm))
+        return 0;
+    *ax = (u16)rm.eax;
+    return 1;
+}
+
+static int op_dos3306(void *ctx, u16 *ax, u16 *bx)
+{
+    RMREGS rm;
+
+    (void)ctx;
+    memset(&rm, 0, sizeof(rm));
+    rm.eax = 0x3306;
+    if (!rm_int(0x21, &rm))
+        return 0;
+    *ax = (u16)rm.eax;
+    *bx = (u16)rm.ebx;
+    return 1;
+}
+
+static int op_dpmi0400(void *ctx, u16 *ax, u16 *bx)
+{
+    union REGS r;
+
+    (void)ctx;
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0400;
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0;
+    *ax = r.w.ax;
+    *bx = r.w.bx;
+    return 1;
+}
+
+/* The BIOS data area's hard disk count, 0040:0075h (the flat model maps
+ * the first megabyte 1:1). */
+static unsigned op_bda_disks(void *ctx)
+{
+    (void)ctx;
+    return *(const u8 *)0x475UL;
+}
+
+static void op_sysinfo(void *ctx)
+{
+    (void)ctx;
+    if (edd_skip_si)
+        sysinfo_skip(edd_si);
+    else
+        sysinfo_probe(edd_si);
+    /* With a log, two lines on the screen and the block in the log, as the
+     * quick scan does; without one, the block on the screen. */
+    if (edd_detail != edd_pf)
+        report_sysinfo_short(edd_si, qconprintf);
+    report_sysinfo(edd_si, edd_detail);
+}
+
+static u8 *op_buf_open(void *ctx)
+{
+    union REGS r;
+
+    (void)ctx;
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0100;
+    r.w.bx = EDD_BLOCK_PARAS;
+    int386(0x31, &r, &r);
+    if (r.w.cflag)
+        return 0;
+    edd_seg = r.w.ax;
+    edd_sel = r.w.dx;
+    return (u8 *)(((u32)edd_seg + EDD_STACK_PARAS) << 4);
+}
+
+static void op_buf_close(void *ctx)
+{
+    union REGS r;
+
+    (void)ctx;
+    if (edd_sel == 0)
+        return;
+    memset(&r, 0, sizeof(r));
+    r.w.ax = 0x0101;
+    r.w.dx = edd_sel;
+    int386(0x31, &r, &r);
+    edd_sel = 0;
+    edd_seg = 0;
+}
+
+static void op_int13(void *ctx, EDD_REGS *e)
+{
+    RMREGS rm;
+    u16 err;
+
+    (void)ctx;
+    memset(&rm, 0, sizeof(rm));
+    rm.eax = e->ax;
+    rm.ebx = e->bx;
+    rm.ecx = e->cx;
+    rm.edx = e->dx;
+    rm.flags = 0x0202;                  /* IF set in the IRET frame */
+    rm.ss = edd_seg;
+    rm.sp = (u16)(EDD_STACK_PARAS * 16);
+    rm.ds = (u16)(edd_seg + EDD_STACK_PARAS);
+    rm.esi = 0;
+    err = 0;
+    e->made = rm_int_err(0x13, &rm, &err);
+    e->dpmi_err = err;
+    if (!e->made)
+        return;
+    e->ax = (u16)rm.eax;
+    e->bx = (u16)rm.ebx;
+    e->cx = (u16)rm.ecx;
+    e->dx = (u16)rm.edx;
+    e->flags = rm.flags;
+}
+
+static PCIINFO edd_pcis[EDD_MAX_XHCI];
+
+static int op_pci_scan_xhci(void *ctx, EDD_XHCI *out, int max)
+{
+    int n, i;
+
+    (void)ctx;
+    if (max > EDD_MAX_XHCI)
+        max = EDD_MAX_XHCI;
+    n = pci_scan_usb(edd_pcis, max, HC_MASK_XHCI);
+    for (i = 0; i < n; i++) {
+        out[i].bus = edd_pcis[i].bus;
+        out[i].dev = edd_pcis[i].dev;
+        out[i].fn = edd_pcis[i].fn;
+        out[i].vid = edd_pcis[i].vid;
+        out[i].did = edd_pcis[i].did;
+    }
+    return n;
+}
+
+static int op_pci_id(void *ctx, u8 bus, u8 dev, u8 fn, u16 *vid, u16 *did,
+                     u32 *classcode)
+{
+    (void)ctx;
+    *vid = pci_read16(bus, dev, fn, 0x00);
+    if (*vid == 0xFFFF)
+        return 0;
+    *did = pci_read16(bus, dev, fn, 0x02);
+    *classcode = pci_read32(bus, dev, fn, 0x08) >> 8;
+    return 1;
+}
+
+static u32 op_pci_writes(void *ctx)
+{
+    (void)ctx;
+    return pci_config_write_count;
+}
+
+static void op_flush(void *ctx)
+{
+    (void)ctx;
+    report_flush();
+}
+
+void edd_dos_ops(EDD_OPS *ops, SYSINFO *si, int skip_sysinfo,
+                 QPRINTF_FN pf, QPRINTF_FN detail)
+{
+    edd_si = si;
+    edd_skip_si = skip_sysinfo;
+    edd_pf = pf;
+    edd_detail = detail;
+    ops->ctx = 0;
+    ops->win1600 = op_win1600;
+    ops->dos3306 = op_dos3306;
+    ops->dpmi0400 = op_dpmi0400;
+    ops->bda_disks = op_bda_disks;
+    ops->sysinfo = op_sysinfo;
+    ops->buf_open = op_buf_open;
+    ops->buf_close = op_buf_close;
+    ops->int13 = op_int13;
+    ops->pci_scan_xhci = op_pci_scan_xhci;
+    ops->pci_id = op_pci_id;
+    ops->pci_writes = op_pci_writes;
+    ops->flush = op_flush;
 }

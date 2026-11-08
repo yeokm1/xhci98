@@ -18,7 +18,9 @@
  *             adapter's MaximumTransferLength: this is how 36.22's sized
  *             SRBs are sent. WRITE to a raw disk destroys what is on it.
  *   blockKB   the request size, 1 to 8192 KiB.
- *   totalMB   how much to move, 1 to 4095 MiB.
+ *   totalMB   how much to move, 1 to 4095 MiB: a whole number of blocks,
+ *             or it is refused (a raw-disk WRITE never moves more than
+ *             asked).
  *   -skew N   place the buffer N bytes past a page boundary (0 to 3584, a
  *             multiple of 512 for a raw disk): an unaligned buffer.
  *   -at N     start N MiB into the file or disk.
@@ -248,11 +250,13 @@ int main(int argc, char **argv)
         printf("XFERTEST: -nobuf is for Windows 2000 and later\n");
         return 2;
     }
+    if ((totalMB * 1024UL) % blockKB != 0) {
+        printf("XFERTEST: %lu MiB is not a whole number of %lu KiB blocks\n",
+               totalMB, blockKB);
+        return 2;
+    }
     block = blockKB * 1024UL;
     blocks = (totalMB * 1024UL) / blockKB;
-    if (blocks == 0) {
-        blocks = 1;
-    }
     sectors = block / 512UL;
 
     mem = (unsigned char *)VirtualAlloc(NULL, block + 8192UL,

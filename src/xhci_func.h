@@ -129,6 +129,31 @@ ULONG XhciFuncSetupAllowed(const UCHAR *setup, ULONG interfaceMask,
                            ULONG deviceMask);
 
 /*
+ * A departed PDO's START on Windows 98 SE and ME (design record 13 section
+ * 10.5.2, task 47.10). XhciFuncGhostStart: 1 when the START is answered
+ * success and the PDO becomes a ghost - `nt` 0 (98 SE or ME), `orphan` 0
+ * (it has a controller), `listed` 0 (its device has left), `role` 0 (a
+ * device or function PDO, not a hub PDO or a composite parent), `removed`
+ * 0 (no REMOVE since it was last listed or started) and `quarantined` 0
+ * (selective suspend's sticky quarantine, which no START ends); 0 for
+ * anything else. XhciFuncGhostDescriptor: what a ghost answers from its
+ * copies for the SETUP packet a control URB parses to - the device
+ * descriptor or the configuration descriptor, standard, to the device, at
+ * index 0 - and XHCI_FUNC_GHOST_NONE for any other request or NULL.
+ * XhciFuncGhostCopyLength: the bytes such an answer copies, the smallest
+ * of the URB's length, the request's wLength and the copy's.
+ */
+#define XHCI_FUNC_GHOST_NONE    0UL
+#define XHCI_FUNC_GHOST_DEVICE  1UL
+#define XHCI_FUNC_GHOST_CONFIG  2UL
+
+ULONG XhciFuncGhostStart(ULONG nt, ULONG orphan, ULONG listed, ULONG role,
+                         ULONG removed, ULONG quarantined);
+ULONG XhciFuncGhostDescriptor(const UCHAR *setup);
+ULONG XhciFuncGhostCopyLength(ULONG urbLength, ULONG wLength,
+                              ULONG copyLength);
+
+/*
  * How many compatible ids a function or device with the class triple
  * cls/sub/prot carries (design record 13 section 10.7.2): 2 - the
  * &SubClass_ss&Prot_pp form and the &SubClass_ss form - for the audio
@@ -172,6 +197,11 @@ ULONG XhciFuncParentId(const UCHAR *device, ULONG which, char *out,
 #define XHCI_SERIAL_ID_BYTES    127UL
 #define XHCI_FUNC_BAD_SERIAL    5UL /* a string, but no usable instance id */
 #define XHCI_INSTANCE_NO_MI     0xFFFFFFFFUL
+/* The Bulk-Only form's marker (roadmap-usb4 UASBOT.1; xhci_xport.h, OwnId),
+ * and the longest instance id with its NUL: a 126-character serial id,
+ * "&nn" and the marker. */
+#define XHCI_INSTANCE_BOT       "&BOT"
+#define XHCI_INSTANCE_ID_BYTES  (XHCI_SERIAL_ID_BYTES + 3UL + 4UL)
 
 /*
  * The serial id of the string descriptor `desc`, `bytes` of it read, into
@@ -199,11 +229,13 @@ ULONG XhciFuncSerialSame(const char *a, const char *b);
  * non-empty `serial`: the serial id, then for a function (`mi` its
  * MI_nn, not XHCI_INSTANCE_NO_MI) '&' and nn. Without: the location key
  * (XhciHubInstanceKey) in decimal, then for a function nn - section 10.7's
- * location form. nn is two upper-case hex digits. *used is the whole
- * length, the NUL included, even when it did not fit.
+ * location form. nn is two upper-case hex digits. With `bot` nonzero,
+ * either form then ends in XHCI_INSTANCE_BOT: the Bulk-Only form of a
+ * device that offers UAS too (UASBOT.1). *used is the whole length, the
+ * NUL included, even when it did not fit.
  */
 ULONG XhciFuncInstanceId(const char *serial, ULONG location, ULONG mi,
-                         char *out, ULONG capacity, PULONG used);
+                         ULONG bot, char *out, ULONG capacity, PULONG used);
 
 /*
  * Which dormant group a re-enumerated device may revive on Windows 98 SE

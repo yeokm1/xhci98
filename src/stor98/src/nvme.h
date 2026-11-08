@@ -107,6 +107,8 @@
 //
 #define NVME_CNS_NAMESPACE    0x00
 #define NVME_CNS_CONTROLLER   0x01
+#define NVME_CNS_IOCS_CONTROLLER 0x06  // I/O Command Set specific Identify Controller (CSI in CDW11 31:24)
+#define NVME_ONCS_VERIFY      0x0080  // ONCS bit 7: the Verify command (NVM Command Set)
 
 //
 // NVMe Log Page Identifiers

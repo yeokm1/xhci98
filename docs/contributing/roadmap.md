@@ -1,22 +1,21 @@
 # Development Roadmap
 
-This roadmap is the project-status index: the phase sequence, what each phase
-was for and what it delivered, the basis on which each closed, the task and
-batch ids that other documents, scripts and source comments cite, and the two
-acts that sit outside the phases (the upload and the hand-run acceptance).
-It is meant to orient a contributor. It is four files. This one carries the
-status, the conventions, the phase sequence, Phases 0-16 (the initial release)
-and the acceptance reminder;
+This roadmap is the project-status index: the phase sequence, what each
+phase was for and what it delivered, the basis on which each closed, the
+task and batch ids that other documents, scripts and source comments cite,
+and the two acts that sit outside the phases (the upload and the hand-run
+acceptance). It is meant to orient a contributor. It is four files. This one
+carries the conventions, the phase sequence, Phases 0-16 (the initial
+release) and the acceptance reminder;
 [`roadmap-miniport-updates.md`](roadmap-miniport-updates.md) carries the
 entries of Phases 17-24, the miniport's public updates, closed with the
-`1.2.0.0` cut;
-[`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02, carries Phases
-25 to 38, the miniport's successor - the monolithic host controller driver,
-which took over `src\` and the name `xhci98.sys` on 2026-10-02 - to the
-`2.4.0.0` cut; and [`roadmap-usb4.md`](roadmap-usb4.md), opened on
-2026-10-14, carries Phases 39 onward, including the open phase. The detail
-lives in
-the other documents:
+`1.2.0.0` cut; [`roadmap-hcd.md`](roadmap-hcd.md), opened on 2026-10-02,
+carries Phases 25 to 38, the miniport's successor - the monolithic host
+controller driver, which took over `src\` and the name `xhci98.sys` on
+2026-10-02 - to the `2.4.0.0` cut; and [`roadmap-usb4.md`](roadmap-usb4.md),
+opened on 2026-10-14, carries every phase from 39 on, and its status line is
+the one place that names the open phase. The detail lives in the other
+documents:
 
 - Build, VMs, install, packaging and the bench rig:
   [`build-and-test.md`](build-and-test.md).
@@ -24,13 +23,14 @@ the other documents:
 - Rules a code change must preserve:
   [`implementation-invariants.md`](implementation-invariants.md).
 - Numbered design records: [`design/`](design/README.md).
-- Measured behaviour, traps and refuted hypotheses: [`lessons.md`](lessons.md);
-  the per-run evidence in the run sheets [`run-11v.md`](runs/run-11v.md),
-  [`run-13e.md`](runs/run-13e.md), [`run-20.md`](runs/run-20.md),
-  [`run-21.md`](runs/run-21.md), [`run-22.md`](runs/run-22.md) and
-  [`run-23.md`](runs/run-23.md).
-- What a user is told (what the driver does, does not, and its known limitations):
-  [`../using/release-notes.md`](../using/release-notes.md).
+- Measured behaviour, traps and refuted hypotheses:
+  [`lessons.md`](lessons.md); the per-run evidence in the run sheets under
+  [`runs/`](runs/), from [`run-11v.md`](runs/run-11v.md) to the newest
+  phase's, which [`docs/README.md`](../README.md) lists.
+- What a user is told (what the driver does, does not, and its known
+  limitations): [`../using/release-notes.md`](../using/release-notes.md);
+  what each target has been observed doing, which the user documents do not
+  say: [`target-standing.md`](target-standing.md).
 
 Targets. Windows 98 SE and Windows 2000 SP4 are both first-class. One
 `xhci98.sys` binary must install and work on either, and from Phase 3 onward a
@@ -128,42 +128,42 @@ on branch `1.2.0.0`), and the successor's one cut is `2.0.0.0` after Phase 31. I
 `design/13-superspeed-hcd.md`, grown from the future-plans page that moved
 there the same day.
 
-**Since then** (2026-10-20): `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33),
-`2.1.1.0` (Phase 34), `2.2.0.0` (Phase 35), `2.3.0.0` (Phase 36),
-`2.3.1.0` (Phase 37, 2026-10-13), `2.4.0.0` (Phase 38, 2026-10-14),
-`3.0.0.0` (Phases 39 to 41, 2026-10-17) and `3.1.0.0` (Phase 42,
-2026-10-20) are cut, and Phase 43, release `3.2.0.0`, is open. **Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's E7250 interrupt
-routing, polled event delivery, MSI on Vista and 7, three items of
-GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
-reviewed clean at `86db9a3`), and selective suspend, off by default
-(36.28 to 36.41, joined 2026-10-09), and 36.42 to 36.48 taken in during
-the phase (the port switchover off by default, composite devices as
-devnodes, the 98 SE hot-plug hangs, string descriptors, a surplus-endpoint
-mouse, and the system named in the tools' reports). Its plan was reviewed
-and revised to clean at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer`
-`10/12/2026`) after the owner's bench of 2026-10-11, and the bench work
-that could not be read moved to planned work, "Bench follow-up after
-`2.3.0.0`". **Phase 37 is closed**, release `2.3.1.0` on
-branch `2.3.1.0`, a fix release: the X230's and E7250's STOP 0x7B in
-Windows XP x64 Setup from a USB stick (issue 15), Windows ME read on its
-stock USB stack, the shutdown latch, the event ring check after the
-re-arm and the port switchover's scripts in `portsw\`. **Phase 38 is
-closed** (2026-10-14), release `2.4.0.0` (`DriverVer` `10/14/2026`) on
-branch `phase-38`: the field-report batch files, the 98 SE and ME silent
-install, the finer timer while polling, the tools directory, the bus's ids
-under `USB\`, Linux's controller quirks and xHCI 0.96 controllers.
-[`roadmap-hcd.md`](roadmap-hcd.md), Phases 36 to 38, is the record.
-**Phases 39, 40 and 41 are closed** on the `3.0.0.0` cut of 2026-10-17:
-the Thunderbolt 3 firmware-connection-manager client with tunnel
+**Since then**: `2.0.0.0` (Phase 32), `2.1.0.0` (Phase 33), `2.1.1.0` (Phase
+34), `2.2.0.0` (Phase 35), `2.3.0.0` (Phase 36), `2.3.1.0` (Phase 37,
+2026-10-13), `2.4.0.0` (Phase 38, 2026-10-14), `3.0.0.0` (Phases 39 to 41,
+2026-10-17), `3.1.0.0` (Phase 42, 2026-10-20) and every release after them
+are cut; the phases from 39 on, and which one is open, are
+[`roadmap-usb4.md`](roadmap-usb4.md)'s, its status line the authority.
+**Phase 36 is closed**, release `2.3.0.0` on branch `2.3.0.0`: issue 12's
+E7250 interrupt routing, polled event delivery, MSI on Vista and 7, three
+items of GitHub issue 17, UAS commands of 1 MiB (36.21 to 36.27, a plan
+reviewed clean at `86db9a3`), and selective suspend, off by default (36.28
+to 36.41, joined 2026-10-09), and 36.42 to 36.48 taken in during the phase
+(the port switchover off by default, composite devices as devnodes, the 98
+SE hot-plug hangs, string descriptors, a surplus-endpoint mouse, and the
+system named in the tools' reports). Its plan was reviewed and revised to
+clean at `ef7fbac`. It was cut as `2.3.0.0` (`DriverVer` `10/12/2026`) after
+the owner's bench of 2026-10-11, and the bench work that could not be read
+moved to planned work, "Bench follow-up after `2.3.0.0`". **Phase 37 is
+closed**, release `2.3.1.0` on branch `2.3.1.0`, a fix release: the X230's
+and E7250's STOP 0x7B in Windows XP x64 Setup from a USB stick (issue 15),
+Windows ME read on its stock USB stack, the shutdown latch, the event ring
+check after the re-arm and the port switchover's scripts in `portsw\`.
+**Phase 38 is closed** (2026-10-14), release `2.4.0.0` (`DriverVer`
+`10/14/2026`) on branch `phase-38`: the field-report batch files, the 98 SE
+and ME silent install, the finer timer while polling, the tools directory,
+the bus's ids under `USB\`, Linux's controller quirks and xHCI 0.96
+controllers. [`roadmap-hcd.md`](roadmap-hcd.md), Phases 36 to 38, is the
+record. **Phases 39, 40 and 41 are closed** on the `3.0.0.0` cut of
+2026-10-17: the Thunderbolt 3 firmware-connection-manager client with tunnel
 re-enumeration and safe eject, the USB4 software connection manager, and
-`XHCITR`, the USB and Thunderbolt tree tool. **Phase 42 is closed** on
-the `3.1.0.0` cut of 2026-10-20: the windowed installer, the uninstall,
-the Windows 98 SE and ME device install, `XHCISNAP` retired, and the
-connection-manager follow-ups. **Phase 43 is open** (2026-10-20), release
+`XHCITR`, the USB and Thunderbolt tree tool. **Phase 42 is closed** on the
+`3.1.0.0` cut of 2026-10-20: the windowed installer, the uninstall, the
+Windows 98 SE and ME device install, `XHCISNAP` retired, and the
+connection-manager follow-ups. **Phase 43** (opened 2026-10-20) was release
 `3.2.0.0`: the cut's checks without a build, faster emulator legs, the
-unsafe-unplug notice, the 9x Stor98 channel, what `3.1.0.0` owed, and
-NUSB's Windows 98 SE storage drivers in the download from a separate
-driver pack.
+unsafe-unplug notice, the 9x Stor98 channel, what `3.1.0.0` owed, and NUSB's
+Windows 98 SE storage drivers in the download from a separate driver pack.
 [`roadmap-usb4.md`](roadmap-usb4.md) is the record from Phase 39 on.
 
 ---
@@ -191,7 +191,7 @@ letter would only repeat the phase name.
 | `-V` | VM. The clauses no host test can observe. |
 | `-M` | Bare metal. No live batch carries it. The last was Phase 7b's `7b-M`, whose two clauses were carried into Phase 13's machine-named batches. |
 | `-E`, `-H` | A machine, named by its initial; Phase 13's alone. `13-E` is the E460 bench; `13-H` the modern Windows host. |
-| `-R`, `-L` | A subject; also Phase 13's. `13-R` is the Finding 3 repair; `13-L` the Windows 98 log channel. Each ran on the development host and then the E460. |
+| `-R`, `-L` | A subject; also Phase 13's. `13-R` is the repair of the root port that went deaf until a cold boot (`run-13e.md`, its two unexplained episodes); `13-L` the Windows 98 log channel. Each ran on the development host and then the E460. |
 
 A task inserted between two existing ones takes a fractional id (`13-R.3.5`,
 `14.0`) and nothing is renumbered: task ids are cited from `docs/`, `src/`,
@@ -1122,12 +1122,13 @@ What shipped:
   Interval > 0 remains unexercised everywhere; the first bulk-IN class traffic
   (ASIX Ethernet) and the first data-verified round trip through a real
   USB-to-SATA bridge on this driver; `FSC = 0` read on the E460.
-- The Finding 3 repair and the `0.0.0.5` cut (batch 13-R): recovery in
-  place for the `ControllerFailed` latch (`design/07-controller-recovery-in-place.md`); the command-age
-  detector abort rung; every poll-counted threshold re-expressed in
-  milliseconds on the `PollClockMs` axis after the E460's poll period measured
-  36-80 ms rather than the assumed 500 ms; the qualifier's untested-routing
-  caveat moved out of its verdict line; the upload asset renamed
+- The repair of the deaf root port and the `0.0.0.5` cut (batch 13-R):
+  recovery in place for the `ControllerFailed` latch
+  (`design/07-controller-recovery-in-place.md`); the command-age detector
+  abort rung; every poll-counted threshold re-expressed in milliseconds on
+  the `PollClockMs` axis after the E460's poll period measured 36-80 ms
+  rather than the assumed 500 ms; the qualifier's untested-routing caveat
+  moved out of its verdict line; the upload asset renamed
   `xhci98-<version>.zip`.
 - The three-flavour build and the log channel, `0.0.0.6` (batch 13-L):
   `release`, `debug` and `qemu` with the safe configuration as the default and
@@ -1146,11 +1147,11 @@ Tasks:
   fix), 13-E.2 multi-TT hub behaviour (the behavioural half), 13-E.3 Phase 9's
   deferred audio clauses on Windows 98, 13-E.4 the trip's own record and the
   free re-observations.
-- Batch 13-R (the Finding 3 repair): 13-R.1 make the `ControllerFailed` latch
-  non-terminal, 13-R.2 the command-age abort rung, 13-R.3 read the repair off
-  the E460, 13-R.3.5 thresholds in time rather than polls, 13-R.4 remove the
-  snapshot instrument before the cut, 13-R.4.5 the qualifier caveat, 13-R.5 cut
-  `0.0.0.5`.
+- Batch 13-R (the repair of the deaf root port): 13-R.1 make the
+  `ControllerFailed` latch non-terminal, 13-R.2 the command-age abort rung,
+  13-R.3 read the repair off the E460, 13-R.3.5 thresholds in time rather
+  than polls, 13-R.4 remove the snapshot instrument before the cut, 13-R.4.5
+  the qualifier caveat, 13-R.5 cut `0.0.0.5`.
 - Batch 13-L (the Windows 98 log channel): 13-L.0 why the dead ends are dead
   (`design/08-build-flavours-and-the-log-channel.md`), 13-L.1 the three-flavour
   split, 13-L.2 the log channel and its registry values, 13-L.3 install and
@@ -1161,7 +1162,7 @@ Tasks:
 Records:
 
 - `run-13e.md` (the E460 run sheet: the finding-status table, the stages,
-  Findings 1-Y and Stage L3)
+  the findings' sections and Stage L3)
 - `test-equipment.md` (the characterisation record and the Phase 13 equipment
   requirements)
 - `build-and-test.md` ("Available Test Hardware", "The bench rig", "Getting a
@@ -1375,15 +1376,16 @@ and notes 14 and 15 for what the first run corrected).
 
 ## Phases 17 Onward
 
-Phases 0-16 above are the initial release: everything up to the `1.0.0.0` cut,
-the specification revision it was moved to afterwards, and the unattended run
-made against it. Phases 17 to 24, the rest of the miniport's life up to the
-`1.2.0.0` cut that froze it, are in
+Phases 0-16 above are the initial release: everything up to the `1.0.0.0`
+cut, the specification revision it was moved to afterwards, and the
+unattended run made against it. Phases 17 to 24, the rest of the miniport's
+life up to the `1.2.0.0` cut that froze it, are in
 [`roadmap-miniport-updates.md`](roadmap-miniport-updates.md), split out so
-that neither file grows without bound; Phases 25 onward, the successor host
-controller driver's, the open one included, are in [`roadmap-hcd.md`](roadmap-hcd.md).
-The status paragraph and the phase sequence at the head of this file cover
-all three.
+that neither file grows without bound; Phases 25 to 38, the successor host
+controller driver's, are in [`roadmap-hcd.md`](roadmap-hcd.md), which is
+closed; and every phase from 39 on, the open one included, is in
+[`roadmap-usb4.md`](roadmap-usb4.md), whose status line names it. The phase
+sequence at the head of this file covers the first three files.
 
 ## Post-Release - Run the Acceptance Test by Hand
 

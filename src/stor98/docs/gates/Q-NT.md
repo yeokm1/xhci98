@@ -11,9 +11,9 @@ PLAN "Qualification before dependent product code" (R6), NT items:
 
 1. Windows 7 x64 runs of G2, G4, G5 and G7.
 2. Combined G1 + G7: resume failure with the deferred bring-up and `ScsiRestartAdapter` not
-   advertised (R6-7), on 2000, XP x64 and 7 x64.
-3. Windows 2000 two-SHUTDOWN sequence with CC.SHN written on each SHUTDOWN (R6-5).
-4. Flush and SHST latency against the stop-callback budget (R6-3).
+   advertised, on 2000, XP x64 and 7 x64.
+3. Windows 2000 two-SHUTDOWN sequence with CC.SHN written on each SHUTDOWN.
+4. Flush and SHST latency against the stop-callback budget.
 5. The port's `SRB_STATUS_BUSY` retry limit with a never-ready controller (G1 open item).
 
 Date: 2026-10-15. usb4-emu: `src/qemu/build` binary of 2026-10-15 01:42, copied to
@@ -36,7 +36,7 @@ TCG for hibernate and resume, which does not work under WHPX, see "Harness notes
 
 With items 1, 2 and 7 x64's G7 done, G7 is a full pass on 2000, XP x64 and 7 x64 (resume
 path, allocation reuse and resume-failure semantics). G5 stays a fail on all three NT ports
-(MD-3 open). Item 4 measured the latency. The decision it feeds (R6-3 options) is still open.
+(MD-3 open). Item 4 measured the latency. The decision it feeds (the options for durability at stop) is still open.
 
 ## Prototype (what ran)
 
@@ -289,9 +289,9 @@ CC.EN=0, which fit the budget here. The adapter is dirty at the XP x64 and 7 dis
 (and eject) stop, and only a Flush issued by the stop path covers it. That Flush did not
 complete within 1 ms even in the emulator.
 
-Plan consequence (R6-3): "a durability path within the stop budget" is **not
+Plan consequence: "a durability path within the stop budget" is **not
 demonstrated, and on XP x64 and 7 disable it is refuted in the emulator**. The decision
-between the R6-3 options has to be put to the maintainer. The measurement favours **idle
+between the options for durability at stop has to be put to the maintainer. The measurement favours **idle
 flush from the timer**, combined with **accept and document** for the residual window: it
 is the only option that covers the XP x64 and 7 disable stop without stalling the
 callback. The measurement build polled 2-19 ms in `ScsiStopAdapter` without visible
@@ -375,9 +375,9 @@ Plan consequence (0.3, hybrid hold-then-BUSY):
 3. **0.0 results / G5 on 7 x64**: fail for removal, like 2000 and XP x64. MD-3 now covers
    7 x64. The contiguous pool survives on 7 x64 too.
 4. **0.11 class 2 (restartable SHUTDOWN)**: demonstrated on 2000 (CC.SHN on each of two
-   SHUTDOWNs, re-enable in about 100 ms, data verified) and on XP x64 and 7. The R6-5
+   SHUTDOWNs, re-enable in about 100 ms, data verified) and on XP x64 and 7. That
    qualification item is closed. Note that SHUTDOWN is tagged on XP x64 and 7.
-5. **0.10 durability at stop (R6-3)**: Flush within the budget is not achievable for the
+5. **0.10 durability at stop**: Flush within the budget is not achievable for the
    XP x64 and 7 disable stop, even in the emulator. Put the option choice to the
    maintainer, with idle flush plus accept-and-document as the measured recommendation.
    2000 and every hibernate stop are clean by OS flush.

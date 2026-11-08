@@ -64,7 +64,7 @@ Class=System
 ClassGUID={4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider=%Provider%
 ; Must equal src\xhci_version.h.
-DriverVer=11/05/2026,3.4.1.0
+DriverVer=11/08/2026,3.4.2.0
 
 [Manufacturer]
 %Mfg%=CmModels,NTx86.6.0
@@ -97,13 +97,15 @@ DriverVer=11/05/2026,3.4.1.0
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC2
 %U4MlDesc%=Cm.Dev,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
-; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine, Rembrandt,
-; Phoenix, Strix, Strix Halo, Krackan and Krackan2 (task 46.23) and
-; ASMedia's ASM4242 (task 45.46) named beside the class line, and any
-; other USB4 host (class 0C/03/40) by the class line, which the id lines
-; outrank.
-; All untested.
+; hosts (Phase 40). Lunar, Panther and Wildcat Lake and Barlow Ridge by
+; id, AMD's Pink Sardine, Rembrandt, Phoenix, Strix, Strix Halo, Krackan
+; and Krackan2 (task 46.23) and ASMedia's ASM4242 (task 45.46) named
+; beside the class line, and any other USB4 host (class 0C/03/40) by the
+; class line, which the id lines outrank. xhcicm.sys takes each as a USB4
+; host (cm_vals.c) and runs the software connection manager on it when the
+; selection of record 22 section 3.6 picks it (cm_nhi.c). XhciCmMode 0
+; (off) leaves it inert, and 2 (the firmware connection manager's client
+; only) never runs the software one.
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev,PCI\VEN_8086&DEV_E333
@@ -158,13 +160,15 @@ DriverVer=11/05/2026,3.4.1.0
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC2
 %U4MlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_7EC3
 ; Design record 22 section 3.7: the USB4 software connection manager's
-; hosts (Phase 40), INERT until its driver half lands. Lunar, Panther and
-; Wildcat Lake and Barlow Ridge by id, AMD's Pink Sardine, Rembrandt,
-; Phoenix, Strix, Strix Halo, Krackan and Krackan2 (task 46.23) and
-; ASMedia's ASM4242 (task 45.46) named beside the class line, and any
-; other USB4 host (class 0C/03/40) by the class line, which the id lines
-; outrank.
-; All untested.
+; hosts (Phase 40). Lunar, Panther and Wildcat Lake and Barlow Ridge by
+; id, AMD's Pink Sardine, Rembrandt, Phoenix, Strix, Strix Halo, Krackan
+; and Krackan2 (task 46.23) and ASMedia's ASM4242 (task 45.46) named
+; beside the class line, and any other USB4 host (class 0C/03/40) by the
+; class line, which the id lines outrank. xhcicm.sys takes each as a USB4
+; host (cm_vals.c) and runs the software connection manager on it when the
+; selection of record 22 section 3.6 picks it (cm_nhi.c). XhciCmMode 0
+; (off) leaves it inert, and 2 (the firmware connection manager's client
+; only) never runs the software one.
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A833
 %U4LnDesc%=Cm.Dev6,PCI\VEN_8086&DEV_A834
 %U4PlDesc%=Cm.Dev6,PCI\VEN_8086&DEV_E333
@@ -372,4 +376,4 @@ U4K2Desc="xHCI98 USB4 Router (AMD Krackan2)"
 U4AsDesc="xHCI98 USB4 Router (ASMedia ASM4242)"
 U4Desc="xHCI98 USB4 Router"
 CmSvcDesc="xHCI98 Thunderbolt and USB4 Connection Manager (xhcicm)"
-XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000, XP, Vista and 7 (xhcihlpr)"
+XhciHlprSvcDesc="xHCI98 helper for 32-bit Windows 2000 to 10 (xhcihlpr)"

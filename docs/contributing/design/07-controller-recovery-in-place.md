@@ -1,5 +1,9 @@
 # 07 - Recovering a failed controller in place
 
+> **Status: the `1.2.0.0` miniport's record** (branch `1.2.0.0`). The
+> host controller driver's recovery and controller tolerance are design
+> records 13 and 17.
+
 Phase 13, batch 13-R, task 13-R.1. This record comes out of the defect batch
 13-E found on a ThinkPad E460 and read off the machine rather than inferred:
 `docs/contributing/runs/run-13e.md`, Finding S.

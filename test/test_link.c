@@ -107,11 +107,32 @@ static void test_service(void)
                          XHCI_LINK_WANT_SERVICE, &a);
     CHECK_EQ(l.WarmResets, 0, "Enabled clears the warm-reset count");
 
-    /* Cold Attach Status on a link that is otherwise Disconnected. */
+    /* Cold Attach Status on a link that is otherwise Disconnected: the
+     * reading the warm reset is charged in does not refill the budget, so
+     * a CAS that stays asserted is bounded like SS.Inactive - three warm
+     * resets, the give-up, then nothing. */
     XhciLinkInit(&l);
+    for (i = 0; i < XHCI_LINK_MAX_WARM_RESETS; i++) {
+        CHECK_EQ(XhciLinkDecide(&l,
+                                portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CAS),
+                                XHCI_LINK_WANT_SERVICE, &a),
+                 XHCI_LINK_ACT_WARM_RESET, "CAS: warm reset");
+        CHECK_EQ(l.WarmResets, i + 1, "CAS: each warm reset charged");
+    }
     CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CAS),
                             XHCI_LINK_WANT_SERVICE, &a),
-             XHCI_LINK_ACT_WARM_RESET, "CAS: warm reset");
+             XHCI_LINK_ACT_GIVE_UP, "CAS persists: given up once");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CAS),
+                            XHCI_LINK_WANT_SERVICE, &a),
+             XHCI_LINK_ACT_NONE, "CAS persists: and then nothing");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RX_DETECT, 0),
+                            XHCI_LINK_WANT_SERVICE, &a),
+             XHCI_LINK_ACT_NONE, "CAS clear: a plain disconnect");
+    CHECK_EQ(l.WarmResets, 0, "CAS clear: the budget refilled");
+    CHECK_EQ(l.GaveUp, 0, "CAS clear: the give-up forgotten");
+    CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CAS),
+                            XHCI_LINK_WANT_SERVICE, &a),
+             XHCI_LINK_ACT_WARM_RESET, "CAS again: a new budget");
     CHECK_EQ(XhciLinkDecide(&l, portsc(XHCI_PLS_DISABLED, 0),
                             XHCI_LINK_WANT_SERVICE, &a),
              XHCI_LINK_ACT_NONE, "a held port is not recovered by service");
@@ -455,6 +476,30 @@ static void test_port_feed(void)
                            &a);
     CHECK_EQ(a.Kind, XHCI_LINK_ACT_WARM_RESET,
              "the next device's failure is recovered again");
+
+    /* Cold Attach Status that each warm reset's end shows again (PRC and
+     * WRC with CAS, the link still in RxDetect): every look is a link
+     * decision, and the budget it is charged to is never refilled by it -
+     * three warm resets, the give-up, then no write at all. */
+    XhciLinkInit(&l);
+    XhciEnumReset(&e);
+    for (i = 0; i < XHCI_LINK_MAX_WARM_RESETS; i++) {
+        feed = XhciLinkPortFeed(&l, 1,
+                                portsc(XHCI_PLS_RX_DETECT,
+                                       XHCI_PORTSC_CAS | XHCI_PORTSC_PRC |
+                                           XHCI_PORTSC_WRC),
+                                e.State, &a);
+        CHECK_EQ(a.Kind, XHCI_LINK_ACT_WARM_RESET, "CAS look: warm reset");
+        CHECK_EQ(feed, 0, "CAS look: an Empty machine is fed nothing");
+    }
+    (VOID)XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_RX_DETECT,
+                                         XHCI_PORTSC_CAS | XHCI_PORTSC_PRC |
+                                             XHCI_PORTSC_WRC),
+                           e.State, &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_GIVE_UP, "CAS look: given up once");
+    (VOID)XhciLinkPortFeed(&l, 1, portsc(XHCI_PLS_RX_DETECT, XHCI_PORTSC_CAS),
+                           e.State, &a);
+    CHECK_EQ(a.Kind, XHCI_LINK_ACT_NONE, "CAS look: then no write");
 
     /* USB 2.0 ports: section 5.3's rule, unchanged. */
     CHECK_EQ(XhciLinkPortFeed(&l, 0, XHCI_PORTSC_PP | CONN | XHCI_PORTSC_CSC,

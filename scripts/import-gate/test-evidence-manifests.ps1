@@ -8,7 +8,9 @@ evidence sources - with synthetic files under the host temporary directory, so
 it needs neither Microsoft binaries nor a built driver. It proves that a
 complete set passes, that a missing file fails for the Win2000 half and is
 skipped for the optional Win98 half, and that same-length tampering fails by
-SHA-256 in both.
+SHA-256 in both. Every committed kernel-and-HAL manifest (*.expected but
+NDIS.VXD's, whose reader test-flavour-rules.ps1 drives) is read with the
+gate's reader, so a malformed row is found before any image reaches it.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +57,18 @@ try {
     Assert-True (($xpActual -join "|") -ceq ($xpExpected -join "|")) "XP SP3 x86 manifest must name the four kernels and seven HALs: $($xpActual -join ', ')"
     Assert-True (@($xpRows | Where-Object { $_.Version -ne "5.1.2600.5512" }).Count -eq 0) "XP SP3 x86 manifest rows must all be 5.1.2600.5512"
 
+    # Every committed kernel-and-HAL manifest reads with the gate's reader:
+    # the Vista and 7 helper sets, XP x64's, and the net6 profile's 8.1 and
+    # 10 sets, whose rows may name ndis.sys too (record 35 section 7.9).
+    $allExpected = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter "*.expected" -File | Where-Object { $_.Name -ne "ndisvxd-baselines.expected" })
+    Assert-True ($allExpected.Count -ge 9) "the kernel-and-HAL manifests are not all there: $(@($allExpected | ForEach-Object { $_.Name }) -join ', ')"
+    foreach ($mf in $allExpected) {
+        $mRows = $null
+        $mWhy = ""
+        try { $mRows = @(Read-Win2kBaselineManifest -Path $mf.FullName -AllowNdis:($mf.Name -like "net6-*")) } catch { $mWhy = $_.Exception.Message }
+        Assert-True ($mWhy -eq "" -and $mRows.Count -ge 2) "$($mf.Name) does not read as a kernel-and-HAL manifest: $mWhy"
+    }
+
     # ---------------------------------------------------------------------
     # The production Win98 manifest must carry identity for both roles.
     # ---------------------------------------------------------------------
@@ -67,8 +81,9 @@ try {
     Assert-True ($nameTableRows[0].Label -ieq "ntkern.vxd") "the Win98 name-table file must be ntkern.vxd"
     Assert-True (@($win98Rows | Where-Object { $_.Sha256 -notmatch "^[0-9A-F]{64}$" }).Count -eq 0) "every Win98 row must carry a SHA-256"
     Assert-True (@($win98Rows | Where-Object { $_.Relative -notmatch "^tools\\" }).Count -eq 0) "Win98 evidence must come from tools\"
-    # usbport.sys is the module this miniport registers with, so it is the
-    # strongest precedent file there is; keep it named.
+    # NUSB's USBPORT.SYS is a precedent file the allowlists' rows cite by
+    # name and hint (it was the frozen miniport's port driver); keep it
+    # named.
     Assert-True (@($precedentRows | Where-Object { $_.Label -ieq "USBPORT.SYS" }).Count -eq 1) "NUSB's USBPORT.SYS must be a named precedent binary"
 
     # ---------------------------------------------------------------------

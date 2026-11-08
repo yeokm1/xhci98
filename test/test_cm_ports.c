@@ -180,6 +180,11 @@ static ULONG readInf(const char *path)
     n = fread(infText, 1, sizeof(infText) - 1, fp);
     fclose(fp);
     infText[n] = 0;
+    /* A file that fills the buffer may be longer than it: refused, so a
+     * truncated INF is never checked as if whole. */
+    if (n == sizeof(infText) - 1) {
+        return 0;
+    }
     return (ULONG)n;
 }
 

@@ -531,6 +531,7 @@ static void pf_add_step(PF_PLAN *pl, int kind, pf_u32 size, int depth, int threa
     PF_STEP *s;
 
     if (pl->nsteps >= PF_MAX_STEPS) {
+        pl->stepsCut = 1;
         return;
     }
     s = &pl->steps[pl->nsteps++];
@@ -545,6 +546,56 @@ static void pf_add_step(PF_PLAN *pl, int kind, pf_u32 size, int depth, int threa
     s->timeSec = timeSec;
     s->testIndex = testIndex;
     pf_test_label(kind, size, depth, threads, s->label, sizeof(s->label));
+}
+
+static pf_u32 pf_gcd(pf_u32 a, pf_u32 b)
+{
+    while (b != 0) {
+        pf_u32 t = a % b;
+
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+pf_u32 pf_map_block(const PF_STEP *steps, int nsteps)
+{
+    pf_u32 blk = 0;
+    pf_u32 smallest = 0xFFFFFFFFu;
+    int i, changed;
+
+    for (i = 0; i < nsteps; i++) {
+        if (steps[i].size == 0) {
+            continue;
+        }
+        if (steps[i].op == PF_OP_WRITE) {
+            blk = blk == 0 ? steps[i].size : pf_gcd(blk, steps[i].size);
+        }
+        if (steps[i].size < smallest) {
+            smallest = steps[i].size;
+        }
+    }
+    if (blk == 0) {
+        blk = smallest == 0xFFFFFFFFu ? 0 : smallest;
+    }
+    if (blk == 0) {
+        return 0;
+    }
+    /* Each pass only shrinks the block to a divisor of itself, and every
+     * size is a multiple of 512, so it ends (at 512 at the least). */
+    do {
+        changed = 0;
+        for (i = 0; i < nsteps; i++) {
+            pf_u32 s = steps[i].size;
+
+            if (s != 0 && s % blk != 0 && blk % s != 0) {
+                blk = pf_gcd(blk, s);
+                changed = 1;
+            }
+        }
+    } while (changed);
+    return blk;
 }
 
 int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_t whyCap)
@@ -667,7 +718,7 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
             }
         }
     }
-    if (pl->nsteps >= PF_MAX_STEPS) {
+    if (pl->stepsCut) {
         return pf_refuse(why, whyCap, "Too many tests in one run; choose fewer sizes or buffers.");
     }
 
@@ -732,11 +783,17 @@ int pf_plan(const PF_PARAMS *p, const PF_ENV *env, PF_PLAN *pl, char *why, size_
                 smallest = pl->steps[i].size;
             }
         }
-        pl->mapBlock = writes ? pl->minWrite : smallest;
+        /* One generation per block is exact only when no request covers
+         * part of a block: a 6 KiB write beside a 4 KiB one would mark one
+         * 4 KiB block of the two it covers. */
+        pl->mapBlock = pf_map_block(pl->steps, pl->nsteps);
         /* the last block may be partial: the region need not be a whole
          * number of blocks, and its tail is verified too */
         pl->mapBlocks = (region + pl->mapBlock - 1) / pl->mapBlock;
         if (pl->mapBlocks * 4 > PF_MAP_MAX_BYTES) {
+            if (pl->mapBlock < smallest) {
+                return pf_refuse(why, whyCap, "To verify, lower the file size, or choose sizes that are multiples of the smallest.");
+            }
             return pf_refuse(why, whyCap, "To verify, lower the file size or raise the smallest write size.");
         }
     }
@@ -2129,15 +2186,20 @@ int pf_cmdline(int argc, char **argv, PF_PARAMS *p, PF_CMDLINE *c, char *why, si
         } else if (pf_ieq(a, "selftest")) {
             c->selftest = 1;
         } else if (pf_ieq(a, "cached")) {
+            /* A changed workload is no longer the preset's (the window
+             * says Custom for the same edits). */
             p->access = PF_ACC_CACHED;
+            p->preset = PF_PRESET_CUSTOM;
         } else if (pf_ieq(a, "writethrough")) {
             p->writeThrough = 1;
+            p->preset = PF_PRESET_CUSTOM;
         } else if (pf_ieq(a, "nolatency")) {
             p->noLatency = 1;
             p->preset = PF_PRESET_CUSTOM;
         } else if (pf_ieq(a, "verify")) {
             p->verify = 1;
             p->pattern = PF_PAT_VERIFY;
+            p->preset = PF_PRESET_CUSTOM;
         } else if (nx == NULL) {
             pf_cpy(why, whyCap, "Unknown switch, or one without its value: /");
             pf_cat(why, whyCap, a);

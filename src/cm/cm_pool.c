@@ -2,13 +2,19 @@
  * cm_pool.c - every pool call and every DMA call xhcicm.sys makes, in one
  * object, so the import allowlists can hold them to it (SITES=cm_pool.obj;
  * the HCD's rule of design record 13 section 7.5, as uas_mem.c applies it
- * to xhciuas.sys). Nonpaged pool only, at lifetime-scoped sites, never per
- * frame, but for one paged allocation, CmAllocPaged's (design record 31
- * section 4.2). The NHI's own state is its device extension; what is allocated
- * is the stor98 link-state table (cm_nvlinkos.c), on Windows 98 SE and ME
- * the CONFIGMG thunks and worker (cm_cfgmg.c, cm_cfgwk.c), and the query
- * device's names (freed in cm_qryos.c), so the allowlists carry the pool
- * pair as required rows.
+ * to xhciuas.sys). Nonpaged pool, at lifetime-scoped sites, never per
+ * frame, but for CmAllocPaged's: the replacement lists whose IRPs' contracts
+ * put them in paged pool, all three in cm_filt.c (the rewritten
+ * BusQueryCompatibleIDs answer, design record 31 section 4.2; a child's
+ * interrupt requirements; a bridge's requirements). The NHI's own state is
+ * its device extension; the nonpaged users are the stor98 link-state table
+ * and its thunks (cm_nvlinkos.c), the member call workers (cm_callwk.c), on
+ * Windows 98 SE and ME the CONFIGMG thunks, worker and PCI requests
+ * (cm_cfgmg.c, cm_cfgwk.c), the filters' bridge snapshot and stripped
+ * start lists (cm_filt.c), the _DSD answer (cm_dsdos.c), the network PDO's
+ * ids and relations (cm_net.c), the handover's tables, scan areas and
+ * walks (cm_oscos.c, cm_oscnt.c), and the query device's names (freed in
+ * cm_qryos.c), so the allowlists carry the pool pair as required rows.
  *
  * The ring block (record 21 section 4.2): one common buffer of
  * CM_NHI.DmaBytes - TBT_RING_DMA_BYTES for the ICM client's ten-entry
@@ -73,10 +79,13 @@ PVOID CmAlloc(ULONG bytes)
 }
 
 /*
- * The one paged allocation (design record 31 section 4.2): the rewritten
- * BusQueryCompatibleIDs answer, which IRP_MN_QUERY_ID's contract puts in
- * paged pool and the PnP manager frees with ExFreePool. Not zeroed: the
- * caller writes every byte. PASSIVE_LEVEL.
+ * The paged allocations, cm_filt.c's three replacement lists: the
+ * rewritten BusQueryCompatibleIDs answer (design record 31 section 4.2),
+ * which IRP_MN_QUERY_ID's contract puts in paged pool, and the replacement
+ * IO_RESOURCE_REQUIREMENTS_LIST of a child's interrupt and of a bridge,
+ * which IRP_MN_FILTER_RESOURCE_REQUIREMENTS' contract puts there; the PnP
+ * manager frees each with ExFreePool. Not zeroed: the caller writes every
+ * byte. PASSIVE_LEVEL.
  */
 PVOID CmAllocPaged(ULONG bytes)
 {

@@ -1,6 +1,13 @@
 # Design Record 25 - XHCITR, the USB and Thunderbolt Tree with Eject and Tray Icon
 
-Status: revision 27, 2026-11-03 (roadmap-usb4 task 46.21, the owner's
+Status: revision 29, 2026-11-07 (roadmap-usb4 task 47.35, the owner's
+choices of that day: the Settings window and XHCITR /set, the
+drivers' registry values from Setup's own table on three tabs, with
+the restart they need, section 22, with sections 7.3 and 9);
+revision 28, 2026-11-06 (roadmap-usb4 task 47.34, the owner's
+of that day: where Windows' firmware-table interface gives no `DSDT`, the
+registry's copies; `MSDM` and `SLIC` never saved, on every system;
+section 21 item 10); revision 27, 2026-11-03 (roadmap-usb4 task 46.21, the owner's
 option B and XP route: on 98 SE and ME the DSDT and every SSDT read by
 `xhci98.sys` when the tool asks, on 32-bit XP and 2000 the registry's
 copies, section 21 item 9); revision 26, 2026-11-03
@@ -129,7 +136,7 @@ unit was removed unexpectedly, never that data was lost. 98 SE and ME
 have no child filter and show such a unit as disconnected, as before.
 Sections 4.3, 4.4, 7.2, 10, 11 and 12 change with it.
 
-Task 43.66, 2026-10-23 (43.28's finding 1): the "can run faster"
+Task 43.66, 2026-10-23 (from 43.28's legs, `runs/run-43.md`): the "can run faster"
 balloon the shell did not show is sent again once (section 7.7 item 9).
 
 Like record 24 it is not a Thunderbolt control panel: it approves nothing,
@@ -1527,7 +1534,9 @@ revision 11 `/eject` also takes `/result <name>` and `/confirmed <digest>`, whic
 the tool passes to its own elevated run (section 6.6) and which nothing
 else needs. Since revision 13 `/setlevel` (section 7.5) writes one or
 both drivers' levels and exits; with `/result <name>` it is the dialog's
-elevated run.
+elevated run. Since revision 29 `/set Name=Value ... [/on <id>]` and `/set
+/show` (section 22) set and list the Settings window's values;
+`/set /request /result <name>` is its elevated run.
 
 ### 7.4 Start at login, per user (revision 10)
 
@@ -2130,9 +2139,9 @@ faster" part, done here; the UAS client-contract half of 43.30 is separate.
    `tr_bsend_step`, host-tested). Item 4 gives each new key one balloon,
    and 43.28's legs found 7 dropping that balloon on a stick's first
    plug: Windows' own "Your device is ready to use" balloon held the area
-   for about 35 s and ours never followed (`runs/run-43.md`, "43.28", finding
-   1), so on 7, whose new icon sits in the overflow, the user saw
-   nothing. After `NIM_SETVERSION` 3 the shell answers a balloon with
+   for about 35 s and ours never followed (`runs/run-43.md`, "43.28", the
+   missing first balloon), so on 7, whose new icon sits in the overflow,
+   the user saw nothing. After `NIM_SETVERSION` 3 the shell answers a balloon with
    `NIN_BALLOONSHOW` (`WM_USER` + 2) when it shows it,
    `NIN_BALLOONTIMEOUT` (+ 4) or `NIN_BALLOONHIDE` (+ 3) when it goes,
    and `NIN_BALLOONUSERCLICK` (+ 5) for a click (Windows SDK
@@ -2336,7 +2345,26 @@ item 9; 44.80's for items 10 and 11 (`runs/run-44.md`, "44.80").
   COMDLG32 (all present on 98 SE); setupapi, cfgmgr32 and version.dll
   resolved at run time as XHCIINST does, and any API absent from 98 SE's
   system DLLs likewise. `xhcitr\check-imports.ps1` allows exactly the
-  seven.
+  seven, and since 3.4.2.0 holds every function each image imports to a
+  row of `xhcitr\xhcitr-imports.allow` for its architecture (the x86 rows
+  the 98 SE baseline, the amd64 rows XP x64's; an unlisted import and a
+  row no longer imported both fail) and the subsystem version to the
+  build's (4.0, 5.2).
+- XHCITR.EXE on 64-bit Windows (WOW64) would read the 32-bit registry
+  view and the x86 configuration manager, which refuses the resource
+  calls, so since 3.4.2.0 it starts XHCITR64.EXE from its own folder with
+  its command line in place of the window, the icon, `/report`, `/eject`,
+  `/setlevel` and `/acpi` (waiting for and returning the exit code of a
+  one-shot mode). When that is not there it no longer refuses (owner,
+  2026-11-06, the audit's TR-3): it says so, with what WOW64 costs (it
+  reads the 32-bit view of `HKLM\Software`, so what it shows from the
+  start at login under `Run` and from Setup's records under
+  `Software\xhci98` may be wrong; its own writes there are none, its
+  preferences being the user's; no resources; Eject may fail), in a box
+  for the window and the icon and on the console for a one-shot mode,
+  never from an elevated `/result` child, and runs itself. The snapshot
+  modes and `/selftest` stay in XHCITR.EXE; the
+  snapshot names its bitness.
 - Manifest: `asInvoker`, the Common Controls 6 dependency (XP and later
   draw themed controls; 98 SE to 2000 ignore the manifest).
 - Icon `xhcitr.ico`, drawn for this project: a controller box with a
@@ -3280,6 +3308,53 @@ devnode's driver disagrees with it.
    entry in Device Manager, then unplug the drive and plug it in again."
    The words are the reading's of item 7; if it shows another cause, the
    note says that cause instead.
+   The other way round (roadmap 47, issue 26, added 2026-11-07): where
+   the bus offers a drive as Bulk-Only at SuperSpeed on a controller
+   that cannot stream (the record's inputs: SuperSpeed without the
+   controller's streams; why 5, or why 4 where `XhciForceBulkOnly` is
+   set on such a controller too; `XhciStreamsOff` or a controller
+   without streams) and the devnode is bound to `xhciuas` (compared as
+   above), the details add: "Windows bound this
+   drive to <service>, the UAS driver, but this controller cannot stream
+   at SuperSpeed, so the UAS driver cannot start the drive here (Code
+   10). Its Device Manager entry was most likely installed on a
+   controller that streams, and Windows keeps that driver for it on
+   every controller. To use the drive here, uninstall the entry in
+   Device Manager, then unplug the drive and plug it in again: Windows'
+   Bulk-Only driver then runs it on every controller." The cause: a
+   drive with a serial number has one devnode wherever it is plugged in
+   (`UniqueID`, section 10.7 of record 13), and the transport changes
+   only its compatible ids, which Windows does not read again for an
+   installed devnode; `xhciuas` selects the UAS setting, its
+   `IOCTL_XHCI98_OPEN_STREAMS` is refused (the controller has none) and
+   its start fails. Not under `XhciForceBulkOnly` (why 4) on a
+   controller that streams, nor below SuperSpeed: there `xhciuas` opens
+   its streams, or runs without them, and the drive runs as UAS. Read on
+   XP x64 under `3.4.1.0` with a simulated
+   drive offering Bulk-Only at alternate 0 and UAS at alternate 1 (the
+   descriptor set of the reported `0781:55A9`, over `usb-redir`): the
+   entry installed with `xhciuas` while the drive was offered as UAS,
+   then `XhciStreamsOff` 2 and a replug: `XportBotNoStreams` 1, four
+   endpoints selected (the UAS setting), four control transfers, a
+   `REMOVE`, Code 10 on `xhciuas`; the same counts per cycle as the
+   report's. Windows' `usbstor` forced onto the entry: Bulk-Only at
+   alternate 0, the disk mounted.
+   **Amended by roadmap-usb4 UASBOT.1 (2026-11-08).** The bus now gives
+   that Bulk-Only form a devnode of its own (`&BOT` in its instance id,
+   design record 13 section 10.7.3) while `XhciBulkOnlyOwnId` is on, the
+   default, and says so in the record's inputs (bit 3,
+   `TR_XPORT_F_BOT_OWN_ID`): Windows then matches its `Prot_50` ids and
+   installs `usbstor`, and the note cannot arise from Windows' own
+   matching. So the predicate (`tr_xport_unrunnable`) also requires that
+   bit clear, and answers by the query answer's driver version
+   (`TR_XPORT.Driver`): from 3.4.2.0 (`TR_XPORT_OWN_ID_DRIVER`), where the
+   value was 0, the note reads "Windows bound this drive to <service>, the
+   UAS driver, but this controller cannot stream at SuperSpeed, so the UAS
+   driver cannot start the drive here (Code 10). XhciBulkOnlyOwnId is 0,
+   so the drive has one Device Manager entry on every controller. Set it
+   to 1 (the default) and plug the drive in again: it then gets an entry
+   of its own here, which Windows' Bulk-Only driver runs."; for an older
+   driver, which has no such value, the words above stand.
 5. **What it reads.** The query request's whole answer, once per
    controller per refresh, when a USB device of that controller is
    shown or a report is made - the read the "Driver log" and "PCI
@@ -3481,8 +3556,10 @@ never tracked, never a fixture (the host vectors use made-up tables).
    message box (`say`). Its exit: 0 tables written, 1 nothing to save
    on this system or the folder refused (item 5), 2 a write failed.
    Nothing but the files of item 5 is written, and only in that folder;
-   nothing is read but the route of item 2 (no registry value, no
-   device, no physical memory from the tool itself).
+   nothing is read but the routes of items 2, 9 and 10 (on NT the
+   interface and the registry's copies under `HKLM\HARDWARE\ACPI`, with
+   `KEY_READ` alone; no device but the drivers' own, and no physical
+   memory, from the tool itself).
 2. **Where the tables come from.**
    - **NT, with the interface**: where `kernel32.dll` exports both
      `EnumSystemFirmwareTables` and `GetSystemFirmwareTable` (Vista and
@@ -3497,7 +3574,8 @@ never tracked, never a fixture (the host vectors use made-up tables).
      tables with one signature (the SSDTs) it gives one: the index and
      the message say how many the list named and that the first alone
      was saved. `DSDT`, when the list does not name it, is asked by
-     name once; no answer, none.
+     name once; no answer, and since revision 28 the registry's copy is
+     read (item 10).
    - **NT without it** (2000 and 32-bit XP): nothing is read; the
      message says this Windows gives programs no way to read them. The
      driver's request of item 3 is not asked on NT (its NT answer is
@@ -3599,8 +3677,9 @@ never tracked, never a fixture (the host vectors use made-up tables).
    order read, a count after one saved more than once ("RSDP, XSDT,
    FACP, DSDT, APIC, MCFG, SSDT (3)"); a table held as its header alone
    is never in it. Where some were held as headers, the message adds
-   "<n> more are listed in TABLES.TXT, not saved." (on 98 SE and ME
-   that is every table discovery did not read whole).
+   "<n> more are listed in TABLES.TXT, not saved." ("1 more is listed
+   ..." for one, since revision 28) (on 98 SE and ME that is every
+   table discovery did not read whole).
 7. **Host vectors** (`test\test_tracpi.c`, over `xhcitr\tr_acpi.c` and
    `src\cm\cm_qacpi.c`): made-up tables only (ids such as `TESTOE`,
    `TESTTBL1`), no board's bytes: the driver's body built and read
@@ -3693,3 +3772,334 @@ never tracked, never a fixture (the host vectors use made-up tables).
      standard user, the same, its registry having the same keys. Not
      covered by a leg: ME, a DSDT near 1 MB, a refused
      mapping.
+
+10. **No `DSDT` from the interface, and the licence tables (revision 28,
+    task 47.34; the owner, 2026-11-06).**
+    - **Why.** On an HP EliteBook 8470p under XP x64 (task 47.33's
+      reading), the interface listed eleven signatures, `FACP` and four
+      SSDTs among them, and gave no `DSDT`, neither listed nor asked for
+      by name, and neither root table; so the save held no `DSDT`,
+      though Windows keeps a copy of it in the registry, which item 9
+      reads on 2000 and 32-bit XP. Until this revision the interface
+      route read nothing else. And the interface gave `MSDM` and `SLIC`,
+      which hold the computer's Windows licence data (the product key,
+      the OEM activation data), and the tool saved them whole, in a set
+      the user is asked to send.
+    - **The registry where the interface gives no `DSDT`.** On NT with
+      the interface, once the list, `DSDT` by name and the root table
+      by name are done (items 2 and 9): when the set holds a good
+      `DSDT`, nothing more is read, so where Windows gives it (Vista and
+      later, as read in run 46) the save is as before. A table is good
+      here when it is held whole, at least its 36-byte header (the
+      `FACS`: 64 bytes, as item 9 asks), its length field the bytes
+      Windows gave, and its checksum zero (the `FACS`: no checksum); a
+      `DSDT` that fails any of these does not count. Otherwise the registry is walked as item 9 walks it
+      (`KEY_READ` alone, the same keys, bounds and checks: a
+      `REG_BINARY` of the key's signature, its length field its size, at
+      most 1 MB, its checksum zero), and of each of `DSDT`, `FACP`,
+      `RSDT` and `FACS` the interface gave no good table of, every
+      registry copy is added, its "From" `registry`; one that fails a
+      check is listed "not saved" with its reason and never written, as
+      in item 9 (a value not of its key's signature: "not the table its
+      registry key names"). A signature the interface gave good is not
+      taken again; one the interface gave that is not good stays as it
+      was (saved, its Sum "BAD", or "-" for a `FACS`), the registry's
+      copy beside it. The registry's
+      `RSDT` is taken where the interface gave an `XSDT` and no `RSDT`.
+      The interface answering nothing at all is the same case: the
+      registry's copies alone, the save made when one of them checks
+      out and then indexed and said as item 9's registry set (its
+      source the registry, not Windows' interface), else "Windows gave
+      none" as before. The index's root-entry count leaves out every
+      `RSDT` and `XSDT`, whatever its size. On 98 SE and ME, the index's
+      note that a "not saved" table is one the driver read the header of
+      alone counts the driver's headers, not the licence tables.
+    - **What it says.** `TABLES.TXT`, after the interface's lines, says
+      for each signature taken "Windows gave no <SIG>; the copy it
+      keeps in the registry (HKLM\HARDWARE\ACPI) was read.", or, where
+      the interface gave one that is not good, "Windows' <SIG> did not
+      check out; the copy it keeps in the registry (HKLM\HARDWARE\ACPI)
+      was read too." The message
+      adds "<SIG> came from the copy Windows keeps in the registry."
+      (signatures joined with ", ", "copies" for more than one).
+    - **The layout.** Microsoft's public documentation does not describe
+      `HKLM\HARDWARE\ACPI`, and the DDK headers here (the 2000 DDK, WDK
+      7.1) do not name it: the WDK's ASL compiler page documents only
+      its own test override of a table (`asl /loadtable`), not this key.
+      So the layout stays what run 46 read on 32-bit XP SP3 and 2000
+      SP4, `<key>\<OEM ID>\<OEM table ID>\<revision>` with the value
+      `00000000` (`FADT` holding the `FACP`, `FACS` its value itself),
+      read again on XP x64 by this task's legs; and nothing rests on it
+      beyond the checks, which keep a value only where it is a whole
+      table of its key's signature.
+    - **Never `MSDM` or `SLIC`, on every system.** Whatever the route
+      (the interface, `xhci98.sys`'s set, `xhcicm.sys`'s copies; the
+      registry keeps neither), a table whose signature is the four bytes
+      `MSDM` or `SLIC` (not the root pointer) is held as its 36-byte
+      header alone (one shorter, as nothing) before any file is named,
+      so none is ever named or written: the rule is applied by
+      `tr_acpi_names`, which every save goes through before it writes.
+      On 98 SE and ME the merge with `xhcicm.sys`'s copies keeps such a
+      header of `xhcicm.sys`'s where `xhci98.sys`'s set has no entry of
+      that signature, so it is listed whichever driver read it.
+      `TABLES.TXT` lists it as "not saved" by its header's fields (Saved
+      0, Sum "-") with the line "not saved: licence data". The message's
+      list of saved tables leaves it out, and it is counted in "<n> more
+      are listed in TABLES.TXT, not saved."; the notice that Windows
+      gives one table of each name and "the first was saved" leaves it
+      out too. On NT the index's line on the root's entries counts the
+      tables saved, not those Windows gave ("The XSDT lists <n> tables,
+      at these addresses; <k> of them were saved (Windows gives each
+      name once), so <m> were not saved:"), the registry's copies among
+      those saved, and the licence tables among those not saved.
+    - **Host vectors** (`test\test_tracpi.c`): the registry walked when
+      the interface gave no `DSDT`, or one too short, of a length that
+      disagrees or of a bad checksum, and not asked at all when it gave
+      a good one; a registry `FACP`, `RSDT` or `FACS` not taken over the
+      interface's own good one; the registry's `RSDT` beside the
+      interface's `XSDT`; a registry `DSDT` with a bad checksum, one
+      whose length disagrees and one of another signature, listed with
+      the reason and never named; the interface answering nothing and
+      the registry alone; `MSDM` and `SLIC` whole from the interface
+      (once and listed twice), shorter than a header, as headers from
+      `xhci98.sys`'s set and from `xhcicm.sys`'s answer (with and
+      without `xhci98.sys`'s entry of it), and a whole copy merged from
+      `xhcicm.sys`: none named, each listed "not saved: licence data",
+      out of the list and the "first was saved" notice, in the count;
+      `msdm` and `MSDX` saved as any other table; the root's entries
+      counted; the index within 79 columns; the messages.
+    - **Legs**: XP x64 (`XHCITR.EXE` and `XHCITR64.EXE`): the `DSDT` from
+      the registry where the interface gives none, byte for byte as the
+      guest's memory; 32-bit XP and 2000: unchanged, the `DSDT` saved;
+      7 x64: unchanged, the `DSDT` from the interface; 98 SE: unchanged.
+      QEMU gives no `MSDM` or `SLIC`, so that rule rests on the host
+      vectors.
+
+## 22. The Settings window and `/set` (revision 29, task 47.35)
+
+The owner, 2026-11-07, from 47.33's bench (the HP EliteBook 8470p's
+ports reach the xHCI under XP only with `XhciIntelPortSwitch` 1): "xhcitr
+can have an additional function to open a window to set the registry
+settings similar to what is done in setup", with "access to more common
+settings with an advanced settings for xhci98, CM and Stor98 if it makes
+sense" and a prompt to restart where a change needs one. The design was
+put to the owner as options, reviewed and revised; the owner's choices of
+that day are the ones below.
+
+1. **Where.** View > Settings..., "Settings..." on the right-click of an
+   `xhci98` controller and of an NHI (which opens on that driver's tab with
+   that device as the scope), and the icon's menu. `settings_dialog` is the
+   one entry point. The Logging level dialog (section 7.5) stays as it is;
+   the Settings window has a "Logging level..." button that opens it, and
+   no row of its own for either level (the owner's choice).
+2. **The rows are Setup's.** XHCITR already links `xhciinst\inst_core.c`,
+   so every row's meaning, choices, range, step and system rule is
+   `instValues[]`'s or `instS98Values[]`'s, the same text Setup shows (the
+   owner's 2026-10-16 wording rules included). The Tree adds two rows of
+   its own in the same form (`trsExtra[]`, `xhcitr\tr_set.c`), which Setup
+   does not offer: `XhciIntelIrqRoute` (every system) and
+   `XhciIntelNoRouteIrq` (2000, XP and XP x64, the systems the driver
+   reads it on, greyed elsewhere), each listed only where an `xhci98`
+   controller passes `XhciPirqReviewed`. Their texts follow `tuning.md`;
+   `XhciIntelNoRouteIrq`'s is held for task 47.33's wording.
+   The Tree's own table (`trsRows[]`) gives each row its tab, view (common,
+   advanced, or out with why), what a change takes (item 6), what the
+   driver makes of a value (item 4) and the value the INFs write. The host
+   suite (`test\test_trset.c`) fails when any row of Setup's table or of
+   Stor98's is not in it, and holds each installed default to
+   `src\xhci98.inf`, `src\xhci98-amd64.inf` and `src\cm\xhcicm.inf`.
+3. **Which rows** (the owner's choice V-1 with `XhciIntelIrqRoute`).
+   USB, common: `XhciIntelPortSwitch` (0 and 1; 2 stays a hand edit, as
+   `portsw.vbs` leaves it), `XhciIntelIrqRoute`, `XhciIntelNoRouteIrq`,
+   `XhciInterruptMode`, `XhciForceBulkOnly`, `XhciSilentInstall` (98 SE and
+   ME; on 1 the Tree merges the list first with Setup's own code, item 7).
+   Advanced: Setup's USB Advanced list (record 26 section 5.4.1).
+   Thunderbolt / USB4, common: `XhciCmMode` (0 and 1; 2 and 3 with "Show
+   advanced settings"), `XhciCmApprove`, `XhciCmSafeEject` (the Tree's own
+   caution: the mark service is Setup's to install and remove); advanced:
+   Setup's Thunderbolt list, `XhciPfwNhiLine` (98 SE and ME, with
+   `XHCIPFW.VXD`'s key there) and the mark service's `Restart` (with its
+   key there) among them. Stor98, common: `StorWriteThrough`,
+   `StorPollMode`; advanced: the other eight. Out, as Setup: the log
+   levels (the dialog's), `XhciCommandCheck`, the other hardware quirks and
+   the Linux quirk values, `XhciCmTunnelBridge`, the bench switches, the
+   networking values, every `XhciQemu*` value.
+4. **A row's value** is read as raw (machine-wide and each device's own:
+   absent, a DWORD, another type), precedence (machine-wide when present,
+   of any type, as `hcdReadDword` and `cm_reg.c` read it), and what the
+   driver makes of it (`trs_effective`: a listed value or the default; any
+   non-zero as on; only 1 as on; in range or the default; clamped; 0 as
+   the default; held to another value). The Now column says it so: "1 -
+   on", "1 - on (machine-wide)", "not set (the driver uses 1 - on)", "7
+   (the driver reads it as 1 - on)", "not the same on every controller".
+   The Default column is the value the install writes.
+5. **Applies to** (the owner's choice S-3). On the USB and Thunderbolt
+   tabs: every controller (the default), by the Logging level dialog's
+   rule - the machine-wide value where one is set, else each controller's
+   own driver key - or one controller, named with its maker, PCI ID and
+   location, whose own key alone is written, offered only while no
+   machine-wide value is set (the row says why otherwise; the Tree never
+   moves or deletes one). `XhciPfwNhiLine`, `Restart` and Stor98's rows
+   are one value for the computer and take no scope.
+6. **What a change takes** (`trs_apply`). `XhciForceBulkOnly`: the drive
+   plugged in again (on 2000 and later an installed disk uninstalled
+   first), on every system. `XhciBulkOnlyOwnId` (UASBOT.1, an advanced
+   USB row after it, with the Tree's own note): the drive plugged in
+   again, on every system; with it on, the force value's change needs no
+   uninstall, and the text's 2000-and-later caveat names it. `XhciIntelPortSwitch`, the two ASM4242
+   handover rows, `XhciPfwNhiLine`, the mark service's `Restart`, every
+   Stor98 row, and every row on 98 SE and ME: a restart. `XhciIntelNoRouteIrq`:
+   the controller found again (a restart, or a Device Manager disable and
+   enable). Every other row on 2000 to 10: the driver's next start. Where
+   `tuning.md` promises that a Device Manager disable and enable applies a
+   value (`XhciIntelNoRouteIrq`, `XhciInterruptMode`, the poll values,
+   the Thunderbolt values), the text says so; the Tree never disables a
+   controller itself (the owner's choice D-1). After Apply the tool says
+   what was written and, for anything but a replug, "Restart Windows for
+   this to take effect: <names>." and asks "Restart Windows now?"
+   (`lv_restart`, unchanged). The changes this process wrote stay listed
+   in the window's head with "Restart now..." until it ends; the tool
+   never claims one is in force.
+7. **Writing.** One writer, `set_apply`, for the window, its elevated
+   run and `/set`: every change checked first (the row, `trs_parse`
+   against the offered values, the scope, Stor98's state), and none
+   written when one fails; then each written as `REG_DWORD` (Stor98's 98
+   SE and ME value as its type; on NT `DriverParameter` read whole, one
+   key changed with `inst_s98_param_set`, written back) and read back. A
+   value already as asked is not written. `XhciSilentInstall` 1 first
+   merges `tools\silent\SILENT.REG`'s list with `inst_silent_merge`
+   (`xhciinst\inst_silent.c`, moved out of `inst_eng.c` so that Setup and
+   the Tree run the same code; the Tree carries `src\silent.reg` as a
+   resource), as Setup does, even where the switch already reads 1. Each
+   Stor98 value written is named in Setup's record
+   (`Software\xhci98\Stor98\Settings`), so that Setup's uninstall removes
+   it as its own. Before any write the Tree refuses "Setup is running"
+   when Setup's maintenance lock is held or one of `XHCIINST.EXE`,
+   `XHCIIN64.EXE`, `XHCIWIZ.EXE`, `XHCIWZ64.EXE` is among the processes
+   (Toolhelp, looked up at run time; the owner's choice K-2: no lock is
+   added to Setup).
+8. **Stor98's tab** is shown where the `stor98` service key exists and a
+   devnode is bound to it (on 98 SE and ME by `PortDriver` `stor98.mpd`),
+   and is read-only, saying why, unless Setup installed that Stor98 for
+   its own drives alone: Setup's record exists and names every devnode of
+   the service, present or not (on 98 SE and ME every present one, and
+   every Stor98 driver key under `SCSIAdapter` belongs to one of them).
+   Setup holds the settings when another Stor98 shares the service
+   (record 26 section 5.6); it decides that from the tunnel's reading,
+   which the Tree does not repeat, so the Tree asks for this narrower
+   proof. The 32-bit tool on 64-bit Windows reads Setup's record through
+   the 32-bit view, so the tab is read-only there too.
+9. **Rights** (section 6.6's test). 98 SE and ME, and an administrator,
+   write directly. Otherwise Apply reads "Apply as administrator..." (the
+   shield on Vista and later) and starts `elev_launch_req` with `/set
+   /request /result <section>`: the request rides in the section the
+   window creates, never on the command line, built by `trs_req_make`,
+   which refuses a request that does not fit rather than send a part of
+   it; the child reads it once (`trs_req_parse`: its version line, one
+   line per change, `END`, nothing after), checks and writes as item 7,
+   and answers in the same section. `/set` from a command line without the
+   rights refuses. XHCITR.EXE on 64-bit Windows hands `/set` to
+   XHCITR64.EXE as it hands `/setlevel`.
+10. **The port switchover.** A change of `XhciIntelPortSwitch` asks first
+    (`trs_psw_text`): on, "the shared connectors (usually the blue ones)
+    move from the USB 2.0 (EHCI) controller to xHCI98 ... Do not have a
+    drive on them busy when you restart"; off, they stay with the USB 2.0
+    controller, and where Windows has no working driver for it a device on
+    them will not work; then the USB 2.0 controllers the walk finds (by
+    compatible id `PCI\CC_0C0320`). `/set` prints the same and asks
+    nothing. `XhciIntelNoRouteIrq` 0 on Windows 2000 where a controller
+    is on that value's list (`XhciPirqNoRouteListed` over the hardware
+    id's `SUBSYS_`; task 47.40), or where the device walk was not read
+    whole and may have missed one, asks too, No by default (`trs_a5_confirm`,
+    `trs_a5_text`): 0 there sends Windows 2000's request with the
+    interrupt, which stops it at startup with STOP 0xA5 under an ACPI
+    computer type (`tuning.md`); the question says so, that 0 is for the
+    "Standard PC" computer type only, and that the way back is Last Known
+    Good Configuration. `/set` prints the same and refuses it unless
+    `/yes` is given; the window's elevated run does not ask again. The
+    row's 0 and its note carry Windows 2000's meanings (1 and 2 poll the
+    controller there).
+11. **The command line.** `XHCITR /set Name=Value [Name=Value ...] [/on
+    <instance id>] [/yes]` and `XHCITR /set /show`. A name is any row the window
+    offers, Stor98's by either name; `Name=default` is the installed
+    default. Exit codes are record 23 section 7.4's (the owner's choice
+    E-1): 0 nothing needed a change, 1 refused, 2 failed, 3 done and a
+    restart needed, 4 done and a step left (a replug); 4 outranks 3. The
+    text ends with the same "Restart Windows for this to take effect"
+    line. `/setlevel` keeps its own codes.
+12. **The record** (the owner's choice L-1). Save Report and `/report`
+    carry a "Settings" block after "Logging levels" (`set_block`): each
+    tab's rows, the value now and the default, each device's own value
+    where they differ, and this process's changes waiting for a restart.
+    File > Save Snapshot... writes the same block beside the snapshot as
+    `XHCISET.TXT`.
+13. **Imports.** None new: the list and tab classes are registered by
+    `InitCommonControlsEx`, looked up in comctl32 at run time (under
+    Common Controls 6 `InitCommonControls` registers none), Toolhelp and
+    the resource calls are looked up in kernel32, and `xhci_psw.c` and
+    `xhci_pirq.c` are built in as Setup builds the first. The import gate
+    holds both images to their rows unchanged.
+14. **Quick save** (the owner's addition of 2026-11-07). The icon's menu
+    has "Quick save (report + snapshot)". With no dialog it starts a
+    worker thread (`qs_thread`), so neither the icon nor the window waits:
+    the folder `<InstallDir>\Reports\YYYY-MM-DD_HHMMSS` (Setup's record,
+    `HKLM\Software\xhci98` `InstallDir`; a name already there is never
+    reused, `-2` and on after it, `trs_qs_name`), or where that cannot be
+    made the user's documents' `xHCI98 Reports` (`SHGetSpecialFolderPathA`,
+    looked up; `trs_qs_where`); then three runs of the program itself,
+    each with nothing of the window's model shared: `/report`, `/snapshot`
+    (its files in the folder) and `/set /show` (`XHCISET.TXT`); then
+    `README.TXT` (the time, the version, what was saved). Its end is
+    posted to the icon's window, which plays Windows' information or
+    error sound (`MessageBeep`, looked up; "Sound when a quick save ends",
+    per user, `QuickSaveSound` under `HKCU\Software\xHCI98\XHCITR`, on
+    unless turned off) and then shows a box with the folder's full path,
+    the documents fallback said, and what was not saved. One at a time.
+    Revised by the owner the same day: the end is a balloon on the icon
+    (`tray_balloon`; 98 SE: `tr_popw`'s own window, its id
+    `TRAY_POP_QS`), "Quick save done" with "Saved to <folder>. Click to
+    open the folder." (Windows 2000, which reports no click on a balloon,
+    task 43.68: without the second sentence) (or "Quick save not complete" with what was not
+    saved, a warning), whose click opens the folder (`qs_open_folder`,
+    ShellExecuteEx); a text of 250 characters or more, or no icon, still
+    goes in a box. "Sound when a quick save ends" decides alone: the
+    balloon is always sent with NIIF_NOSOUND (7's shell plays none for an
+    information balloon, XP's does), and with the option on Windows'
+    information or error sound plays once (`MessageBeep`), on every
+    Windows.
+15. **Its hotkey.** Off until ticked in the Settings window ("Quick-save
+    hotkey", on the tool's own tab, item 16), per user (`QuickSaveKey`, the same key: the
+    `RegisterHotKey` modifiers << 16 | the virtual key). The choices
+    (the owner's, 2026-11-07) are Ctrl+Alt+F11 (the default),
+    Ctrl+Shift+F11, Ctrl+Alt+F10, Ctrl+Alt+F9, Ctrl+F11 and
+    Ctrl+Alt+Shift+F11: a function key, never F12 (NT's debugger key),
+    never the Windows key, always with Ctrl or Alt (`trs_hk_ok`); a
+    stored key that is not one of them reads as off (`trs_hk_index`).
+    Registered for the icon's window at the start and at each change
+    (`RegisterHotKey`, looked up); a refusal is said beside the choice,
+    and so, for a two-key choice (`trs_hk_keys`), is that it clashes
+    with other programs' keys more often. Its limits are the user's to
+    know: the program must be running, Windows must still take input,
+    and a USB keyboard on a misbehaving controller may not deliver it.
+16. **The icon's menu and the tool's own tab** (the owner, 2026-11-07).
+    The icon's right-click menu is Open, Settings..., About, a
+    separator, Quick save (report + snapshot), a separator, Exit. Refresh
+    (the icon polls every second and follows WM_DEVICECHANGE; the window
+    keeps its own), Start at login, Warn when a device is removed
+    unexpectedly, Tell me when a device can run faster and Watch Windows'
+    own USB ports too leave it. They stay in the window's View menu and
+    are on the Settings window's last tab, "xHCI98 USB Tree", with the
+    quick-save hotkey and its sound: each saved for the user and in force
+    at the click, as the menu items are; a notice option's scan waits for
+    the window to close (its model is held while it is open,
+    `setToolRefresh`); Apply is greyed on that tab. The driver tabs' list takes the room (about ten
+    rows at 640x480). There is no Help button: this section never listed
+    one.
+17. **Host vectors** (`test\test_trset.c`): every row classified, the
+    defaults against the INFs, the system rules on 98 SE, 2000, XP x64 and
+    7, the values offered and parsed (`default`, a step, a Stor98 word),
+    the driver's reading and the Now texts, the apply summary and the exit
+    code with record 23's precedence, the request's round trip and each
+    refusal (too small, too many, a line break, no `END`, another
+    version, no NUL), the arguments, the port switchover's texts, and
+    the quick save's folder name, its fallback and the hotkey's choices.

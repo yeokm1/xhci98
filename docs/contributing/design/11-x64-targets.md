@@ -2340,6 +2340,47 @@ publishes:
       decoration, refused by the store as above; and `usbui.dll` named in
       `[SourceDisksFiles]`, which ships a Microsoft file or sends the
       engine to this disk for one (`OS-MEDIA`).
+    - **The installer places it (roadmap-usb4 task 47.8, was XP64UI.2;
+      owner, 2026-11-06), the INF unchanged.** An install run of the x64
+      installer (`XHCIIN64.EXE`, or `XHCIWZ64.EXE`, which `SETUP.EXE`
+      reaches) on NT 5.2 with the USB drivers in the run (not a run of
+      the xHCI98 tools alone, not the uninstall) reads whether
+      `%SystemRoot%\System32\usbui.dll` exists (the engine is native
+      x64, so no WOW64 redirection). Where it does not, and a controller
+      is on `xhci98` once the devices' installs are done (a run that
+      leaves every controller on another driver has no tab to give back,
+      and no prompt), it opens the run's local copy of `xhci98.inf`,
+      appends the INF its `LayoutFile=` names (`SetupOpenAppendInfFileA`
+      with no file name, which loads the system's own
+      `%windir%\inf\layout.inf`; a failure ends the step), queues that
+      file's own file section `[Xhci.CopyUI]` (`usbui.dll,,,16`, dirid
+      11) alone (`SetupQueueCopySectionA`, looked up at run time as the
+      engine's other SetupAPI routines are) with the source root the
+      system's own `SourcePath` (`HKLM\Software\Microsoft\Windows\
+      CurrentVersion\Setup`; else its `DriverCachePath`; neither: the
+      step ends, said), never the package's directory, and commits it
+      through the default queue callback behind a filter of its own. The
+      `usbui.dll` row of `layout.inf` (disk 1, `AMD64\DRIVER.CAB`, above)
+      is what the queue resolves, from the driver cache where it holds
+      the file, as the device install's `usbd.sys` is - whether this
+      queue takes the driver cache with no prompt as the device install
+      does is the leg's first reading. Where it asks for the Windows CD,
+      the default callback's prompt stands, and a Cancel leaves the file
+      absent. The filter refuses (skips) any copy whose source path lies
+      under the package's directory or the run's local copy, a path
+      typed at the prompt included, so a `usbui.dll` lying there is never
+      the one taken. The file is read back:
+      placed, a line says so and the run counts a change (no restart: the
+      property pages are read when they are opened); not placed, a line
+      says why and that the two tabs stay absent, and the run is not
+      failed for it (the driver does not need the file). The plan says it
+      first ("Setup will copy usbui.dll from Windows' own files"), `/list`
+      too. The uninstall never removes it, as it never removes `usbd.sys`
+      (record 23 section 9.2). So an F6, an nLite or a wizard install of
+      `nt-x64\` followed by `SETUP.EXE` has the tabs, and DISM's
+      `boot.wim` reading above is untouched. Not on the 32-bit installer
+      (the 32-bit file's NT 5.x path copies the file already) and not on
+      NT 6.x (every install has it).
 
 ---
 

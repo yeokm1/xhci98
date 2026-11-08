@@ -237,13 +237,6 @@ ULONG XhciRootHubBuild(const XHCI_PORT_MAP *map, PXHCI_ROOT_HUB rh)
         rh->PortToHub[i] = 0;
         rh->Ports[i].Portsc = 0;
         rh->Ports[i].Changes = 0;
-#ifdef XHCI_FIX_ACK_OWED
-        /* A rebuild has thrown away the reading the debt was composed from, and
-         * an HCRST clears every change bit in the hardware anyway - so there is
-         * nothing left to acknowledge and a surviving mask would be written
-         * against a port this driver has not read yet. */
-        rh->Ports[i].PortscAckOwed = 0;
-#endif
         rh->Ports[i].Speed = XHCI_SPEED_UNKNOWN;
         rh->Ports[i].Armed = XHCI_PORT_OP_NONE;
         rh->Ports[i].ArmPending = 0;

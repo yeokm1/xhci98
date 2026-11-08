@@ -1357,7 +1357,7 @@ and until it is in the tree a depth-2 tunnel-up takes today's member
 rescan, which does not reach the chain port's bus (record 34 sections
 3.2 and 4.6).
 
-Host vectors (`test	est_tbt_icm.c`): `test_chain_order_ar`,
+Host vectors (`test\test_tbt_icm.c`): `test_chain_order_ar`,
 `test_chain_parent_outcomes`, `test_chain_route_rows`,
 `test_chain_rebind_and_reconcile`, `test_chain_settled_in_place`,
 `test_chain_resume_child_first`, `test_chain_queued_and_unconfirmed`

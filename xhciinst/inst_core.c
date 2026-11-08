@@ -62,7 +62,8 @@ void inst_copy(char *dst, const char *src, size_t cap)
     if (n >= cap) {
         n = cap - 1;
     }
-    memcpy(dst, src, n);
+    /* dst may be src (join(p, cap, p, name) is common): memmove. */
+    memmove(dst, src, n);
     dst[n] = '\0';
 }
 
@@ -2019,10 +2020,18 @@ const INST_VALUE instValues[] = {
       { "off", "on", NULL, NULL } },
     { "XhciForceBulkOnly", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
       "use Bulk-Only instead of UAS for disks that support both",
-      "applies when a device is plugged in. On Windows 2000 and later, an "
-      "installed disk keeps its driver until it is uninstalled in Device "
-      "Manager and plugged in again. UAS-only disks stay on UAS.", 0,
+      "applies when a device is plugged in. UAS-only disks stay on UAS. "
+      "With XhciBulkOnlyOwnId 0, an installed disk keeps its driver until it "
+      "is uninstalled in Device Manager and plugged in again.", 0,
       { "UAS where supported", "Bulk-Only", NULL, NULL } },
+    /* UASBOT.1 (owner, 2026-11-08): never asked, the USB page's Advanced
+     * rows and /set; read as each device is plugged in, as the force value
+     * above. */
+    { "XhciBulkOnlyOwnId", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL, 0x3UL,
+      "give a disk used as Bulk-Only its own Device Manager entry, apart "
+      "from its UAS entry",
+      NULL, 0,
+      { "no: one entry everywhere (before 3.4.2.0)", "yes", NULL, NULL } },
     /* Owner, 2026-10-19: never asked, the USB page's "Advanced..." row
      * and /set; 1 is not a mode (docs\using\tuning.md). */
     { "XhciFastPollFsLs", INST_INF_XHCI, INST_APPLY_ANY_XHCI, 0x0UL,
@@ -2706,11 +2715,11 @@ int inst_parse_args(int argc, char **argv, INST_OPTS *opts, char *err,
             /* Record 26 section 6.7.11: never read as a subset. */
             inst_err(err, errCap, inst_eq(a + 1, "freestage") ?
                      "/freestage staged a whole set; name the packages: "
-                     "/wdmfree:stage=<class/package>,... (INSTALL /list "
-                     "lists them)" :
+                     "/wdmfree:stage=<class/package>,... (INSTALL /console "
+                     "/list lists them)" :
                      "/nonfreestage staged a whole set; name the packages: "
                      "/wdmnonfree:stage=<class/package>,... (INSTALL "
-                     "/list lists them)", NULL);
+                     "/console /list lists them)", NULL);
             return 1;
         } else if (inst_switch(a, "wdmfree:stage") ||
                    inst_switch(a, "wdmnonfree:stage") ||
@@ -3323,6 +3332,39 @@ int inst_busy_spent(const int *tries, int n)
         }
     }
     return 0;
+}
+
+int inst_parse_dec(const char *text, INST_U32 *v)
+{
+    INST_U32 n = 0;
+    int d;
+
+    if (text == NULL || *text == '\0') {
+        return 0;
+    }
+    for (; *text != '\0'; text++) {
+        if (*text < '0' || *text > '9') {
+            return 0;
+        }
+        d = *text - '0';
+        if (n > (0xFFFFFFFFUL - (INST_U32)d) / 10UL) {
+            return 0;
+        }
+        n = n * 10UL + (INST_U32)d;
+    }
+    *v = n;
+    return 1;
+}
+
+int inst_dev_cap_next(int cap, int max)
+{
+    if (cap <= 0 || cap >= max) {
+        return cap;
+    }
+    if (cap > max / 2) {
+        return max;
+    }
+    return cap * 2;
 }
 
 int inst_parent_kind(const char *instanceId, int controller)
@@ -4384,8 +4426,10 @@ const char *inst_os_name(int nt, INST_U32 major, INST_U32 minor,
         return minor >= 90UL ? "Windows ME" : "Windows 98 SE";
     }
     if (major == 5UL) {
-        return minor == 0UL ? "Windows 2000" : minor == 1UL ? "Windows XP"
-                                                            : "Windows XP x64";
+        /* 5.2 is XP x64 and Server 2003, 32-bit or x64 alike: the line
+         * the name goes in says the architecture. */
+        return minor == 0UL ? "Windows 2000" :
+               minor == 1UL ? "Windows XP" : "Windows XP x64 / Server 2003";
     }
     if (major == 6UL) {
         return minor == 0UL ? "Windows Vista" : minor == 1UL ? "Windows 7" :
@@ -5079,6 +5123,57 @@ int inst_oem_name_ours(const char *valueName, const char *path,
     }
     return shortPath != NULL && shortPath[0] != '\0' &&
            inst_eq(valueName, shortPath);
+}
+
+static int inst_digits(const char *s)
+{
+    if (s == NULL || s[0] == '\0') {
+        return 0;
+    }
+    for (; *s != '\0'; s++) {
+        if (*s < '0' || *s > '9') {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int inst_scsi_disk_of(const char *instance, const char *unitId,
+                      const char *target, const char *lun)
+{
+    size_t n;
+    size_t i;
+    char a;
+    char b;
+
+    if (instance == NULL || unitId == NULL || unitId[0] == '\0' ||
+        !inst_digits(target) || !inst_digits(lun)) {
+        return 0;
+    }
+    n = strlen(unitId);
+    if (strlen(instance) != n + strlen(target) + strlen(lun)) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        a = unitId[i] == '\\' ? '&' : unitId[i];
+        b = instance[i];
+        if (a >= 'a' && a <= 'z') {
+            a = (char)(a - 'a' + 'A');
+        }
+        if (b >= 'a' && b <= 'z') {
+            b = (char)(b - 'a' + 'A');
+        }
+        if (a != b) {
+            return 0;
+        }
+    }
+    return inst_eqn(instance + n, target, strlen(target)) &&
+           inst_eq(instance + n + strlen(target), lun);
+}
+
+int inst_uas_unit_id(const char *id)
+{
+    return id != NULL && inst_starts(id, "XHCIUAS\\");
 }
 
 /* ======================================================================== */
@@ -6555,10 +6650,13 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "On Windows 98 SE and ME the drivers are also copied here. Folder "
       "names: 8 characters at most, no spaces.",
       284, 16 },
+    /* Task 47.35 (owner, 2026-11-07): one line pointing at the xHCI98 USB
+     * Tree's Settings window, the same values after the install. */
     { INST_PT_USB,
       "USB settings. Only the settings you change are saved for all "
-      "controllers.",
-      284, 18 },
+      "controllers. You can change these settings later in xHCI98 USB "
+      "Tree: View > Settings.",
+      284, 26 },
     { INST_PT_TBSET,
       "Thunderbolt / USB4 settings. Only the settings you change are saved "
       "for all controllers.",
@@ -6616,7 +6714,7 @@ const INST_PAGE_TEXT instPageTexts[] = {
       "Stor98 settings. Only the settings you change are saved.",
       284, 18 },
     { INST_PT_S98_UNUSED, instS98DisconnectText, 284, 10 },
-    { INST_PT_SHUT_NOW, "Shut down now, then start Windows again", 284, 10 },
+    { INST_PT_SHUT_NOW, "Shut down now", 284, 10 },
     { INST_PT_SHUT_LATER, "Shut down later", 284, 10 },
     { INST_PT_WELCOME_CM,
       "Setup will install/update xHCI98 drivers and tools. You may be "
@@ -6951,6 +7049,12 @@ int inst_resident_queued(int tmpExists, int tmpIsPkg, int dstIsPkg,
         return INST_RQ_KEEP;
     }
     return INST_RQ_BACK;
+}
+
+const char *inst_place9x_dir(const char *file)
+{
+    return file != NULL && inst_eq(file, "xhcinet.sys") ? "SYSTEM" :
+                                                          "SYSTEM32\\DRIVERS";
 }
 
 INST_U32 inst_s98_hi(int i, int nt)
@@ -10205,11 +10309,7 @@ void inst_other_line(char *out, size_t cap, int set, int state,
     if (cap == 0) {
         return;
     }
-    if (state == INST_OTHER_CARRIED && set == INST_SET_FREE) {
-        /* Shown under inst_other_sentence, whose notice (the owner's,
-         * verbatim) already gives the free set's address. */
-        inst_catv(out, cap, 1, "Latest version: see the address above.");
-    } else if (state == INST_OTHER_CARRIED) {
+    if (state == INST_OTHER_CARRIED) {
         inst_catv(out, cap, 3, "Latest version: ", addr, ".");
     } else if (state == INST_OTHER_NOTOURS && releaseHas) {
         inst_catv(out, cap, 8, "The ", inst_other_folder(set), " folder "
@@ -10277,18 +10377,20 @@ const int instOtherHeadingCount =
  * xpad98's is the owner's compatibility wording of 2026-10-23, a DEVICE
  * row, with the trademark notice in the release notes. */
 const INST_OTHER_PKG instOtherPkgs[] = {
-    /* uac1 is in no usb-wdm-free release: withdrawn, its words and id
-     * kept. ax88179, withdrawn in 3.2.0.0 (v0.1.0 lacked it), is current
-     * again with v0.1.1 (task 44.34). */
+    /* uac1, withdrawn until usb-wdm-free v0.1.9 carried it, is current
+     * with that release for Windows 98 SE alone, opt-in like every
+     * package (task 47.42; the owner's words of 2026-11-08). ax88179,
+     * withdrawn in 3.2.0.0 (v0.1.0 lacked it), is current again with
+     * v0.1.1 (task 44.34). */
     { INST_SET_FREE, "audio/uac1", INST_PKG_CLASS, "Audio",
-      "USB audio (uac1): USB Audio Class 1.0 speakers, headsets and "
-      "microphones", 1 },
+      "USB audio (uac1, Windows 98 SE): USB Audio Class 1.0 sound cards, "
+      "headsets, mics", 0 },
     { INST_SET_FREE, "audio/uac2", INST_PKG_CLASS, "Audio",
       "USB audio (uac2): USB Audio Class 2.0 sound cards and DACs", 0 },
     { INST_SET_FREE, "audio/usbmidi", INST_PKG_CLASS, "Audio",
       "MIDI (usbmidi): USB MIDI 1.0 keyboards and interfaces", 0 },
     { INST_SET_FREE, "video/uvc98", INST_PKG_CLASS, "Video",
-      "Webcams (uvc98): USB Video Class 1.0 to 1.5 cameras", 0 },
+      "Webcams (uvc98): USB Video Class 1.0 and 1.5 cameras", 0 },
     { INST_SET_FREE, "hid/xpad98", INST_PKG_DEVICE, "HID",
       "Game pads (xpad98): for Xbox 360 and Xbox One controllers", 0 },
     { INST_SET_FREE, "net/cdcnet", INST_PKG_CLASS, "Network",
@@ -10297,24 +10399,39 @@ const INST_OTHER_PKG instOtherPkgs[] = {
       "USB Ethernet (ax88179): adapters with an ASIX AX88179 or AX88178A "
       "chip", 0 },
     { INST_SET_FREE, "net/rtl815x", INST_PKG_DEVICE, "Network",
-      "USB Ethernet (rtl815x): adapters with a Realtek RTL8152 or "
-      "RTL8153 chip", 0 },
+      "USB Ethernet (rtl815x): Realtek RTL8152, 8153, 8156, 8157 and 8159 "
+      "adapters", 0 },
+    /* net/ax88772, net/sr9700 and hid/absptr: new with usb-wdm-free
+     * v0.1.9 (task 47.42), their words its PACKAGE lines'. */
+    { INST_SET_FREE, "net/ax88772", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (ax88772): ASIX AX88772B and AX88772C, CoreChips "
+      "SR9800", 0 },
+    { INST_SET_FREE, "net/sr9700", INST_PKG_DEVICE, "Network",
+      "USB Ethernet (sr9700): CoreChips SR9700 adapters", 0 },
+    { INST_SET_FREE, "hid/absptr", INST_PKG_DEVICE, "HID",
+      "Pointing (absptr): pen tablets, HID touch screens and absolute "
+      "mice", 0 },
     { INST_SET_FREE, "serial/usbcom", INST_PKG_CLASS, "Serial",
       "USB serial (usbcom): CDC ACM serial ports and modems", 0 },
     { INST_SET_FREE, "storage/usbflop", INST_PKG_CLASS, "Storage",
-      "USB floppy (usbflop): UFI floppy drives", 0 },
+      "USB floppy (usbflop): USB Mass Storage UFI floppy drives", 0 },
     /* print/usbprn: new with usb-wdm-free v0.1.7 (task 45.44), under the
      * existing Other heading. */
     { INST_SET_FREE, "print/usbprn", INST_PKG_CLASS, "Other",
       "Printers (usbprn): USB printers and USB-to-parallel printer cables",
       0 },
-    { INST_SET_FREE, "generic/libusb0", INST_PKG_CLASS, "Other",
-      "libusb (libusb0): libusb-win32 0.1, for programs that talk to a "
-      "device", 0 },
+    { INST_SET_FREE, "generic/libusb0", INST_PKG_DEVICE, "Other",
+      "libusb (libusb0): libusb-win32 0.1 for listed programmer devices",
+      0 },
     /* audio/us122: new with usb-wdm-nonfree v1.2.0 (owner, 2026-11-02),
      * under the existing Audio heading; its INF stages on 98 SE and ME. */
     { INST_SET_NONFREE, "audio/us122", INST_PKG_DEVICE, "Audio",
       "USB audio (us122): the TASCAM US-122 audio and MIDI interface", 0 },
+    /* smartcard/usbccid: new with usb-wdm-nonfree v1.3.0 (task 47.42; the
+     * owner's words, 2026-11-08), under the existing Other heading; copied
+     * only, on 2000 and XP. */
+    { INST_SET_NONFREE, "smartcard/usbccid", INST_PKG_CLASS, "Other",
+      "Smart cards (usbccid): USB CCID smart card readers and tokens", 0 },
     { INST_SET_NONFREE, "ethernet/ax88172", INST_PKG_DEVICE, "Network",
       "USB Ethernet (ax88172): adapters with an ASIX AX88172 chip", 0 },
     { INST_SET_NONFREE, "ethernet/ax88172a", INST_PKG_DEVICE, "Network",
@@ -10358,8 +10475,15 @@ const int instOtherPkgCount =
 /* Proposals for the maintainer: the generic and the specific driver of one
  * device, or two drivers of one device, not staged together. */
 const INST_OTHER_REL instOtherRels[] = {
+    /* usb-wdm-free 0.1.9 has the two side by side on 98 SE, where uac1
+     * serves no MIDI and usbmidi's hardware ids outrank uac1's class line
+     * (its STAGE.TXT COEXISTS there): COEXISTS on W98SE (0x1), EXCLUDES
+     * on the rest (0x1FFE). No release staged uac1 before 0.1.9, so no
+     * earlier staging of it is held against (record 26 section 6.7.16). */
     { INST_SET_FREE, "audio/uac1", INST_SET_FREE, "audio/usbmidi",
-      INST_SYS_ALL, 1 },
+      0x1FFEUL, 1 },
+    { INST_SET_FREE, "audio/uac1", INST_SET_FREE, "audio/usbmidi",
+      0x1UL, 0 },
     { INST_SET_FREE, "net/ax88179", INST_SET_NONFREE, "ethernet/ax88179",
       INST_SYS_ALL, 1 },
     /* usb-wdm-free 0.1.5 reads the two apart on XP to 7 x64 (its STAGE.TXT

@@ -16,10 +16,12 @@ This is the as-built record of the driver's read channel: the route a
 user-mode tool takes to read `XHCI_EXTENSION` and the PORTSC array out of a
 running machine through usbport's `PassThru` escape, the wire contract, the
 ordering rules on the kernel side, the tool's behaviour, and what has been
-executed on which target. The channel ships in all three flavours, `release`
-included, since `0.0.0.6`, and `XHCISNAP.EXE` is the tool that reads it. It is
-the only mechanism that has ever carried this driver's evidence off a Windows
-98 machine.
+executed on which target. The channel has shipped in every published flavour
+since `0.0.0.6` (in all three until roadmap-usb4 task 45.45, in `release`,
+the one published build, since), and the tool that reads it is `XHCITR
+/snapshot` since `3.1.0.0` (`XHCISNAP.EXE` before it). It is the only
+mechanism that has ever carried this driver's evidence off a Windows 98
+machine.
 
 Design record 08 (`docs/contributing/design/08-build-flavours-and-the-log-channel.md`)
 owns the why: the flavour axis, the verbosity ladder, the retirement of the
@@ -41,8 +43,8 @@ Where the code lives:
 | Half | Where |
 |---|---|
 | kernel side | `hcdDoorUserRequest` and `hcdDoorSnapshot` in `src/hcd_door.c` (on `1.2.0.0`, `xhciPassThru` and its two helpers in `xhci_dispatch.c`); the wire format in the block after `XHCI_EXTENSION` in `src/xhci.h`, and the HCD region's layout in `src/xhci_snap.c` |
-| host side | `xhcisnap/`: `xhcisnap.c`, `build.cmd`, `README.md` |
-| regression | `test/test_snap.c` for the HCD region's layout and `xhcisnap\selftest.cmd` for the tool, run on every build (on `1.2.0.0`, `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in `test/test_init.c`) |
+| host side | `xhcitr\tr_snap.c`, built into `XHCITR.EXE` by `xhcitr\build.cmd` since `3.1.0.0`, with `docs/contributing/snapshot-reader.md` its reference (up to `3.0.0.0` `xhcisnap/`: `xhcisnap.c`, `build.cmd`, `README.md`) |
+| regression | `test/test_snap.c` for the HCD region's layout and `xhcitr\snaptest.cmd` for the reader (`xhcisnap\selftest.cmd` up to `3.0.0.0`), run on every build (on `1.2.0.0`, `test_passthru_snapshot` and `test_passthru_snapshot_disabled` in `test/test_init.c`) |
 | the sanctioned PORTSC exception | the bullet in `docs/contributing/implementation-invariants.md` that follows "there is one way to acknowledge a port's change bits" ("The one sanctioned exception to that rule is an observation mode") |
 
 How it is switched on and what a user is told to run: section 8. The four
@@ -104,12 +106,14 @@ and adds no field to `XHCI_EXTENSION`.
 That last point matters for decoding. Several candidate defines add a field
 and so move `MiniPortExtensionSize`, which invalidates the tracked offset
 table, which is what a counter reader must not do. The ones known to do it
-are `XHCI_FIX_NO_RING_REUSE`, `XHCI_FIX_ACK_OWED` and the polling/gate
-candidates in `src/xhci.h`; others, such as `XHCI_FIX_QUIESCE_GATE`
-(`xhci_slot.c`, on `1.2.0.0`), are behaviour-only and change no field. This block adds no field, so a shipping
-binary decodes against the ordinary `offsets.txt`. Do not reason about a
-combination of defines from that list: measure `sizeof(XHCI_EXTENSION)` for
-whatever set you build, which is the check section 11 ends on.
+were `XHCI_FIX_NO_RING_REUSE`, `XHCI_FIX_ACK_OWED` and the polling/gate
+candidates in the miniport's `src/xhci.h` (the last two of those names left
+the tree in `3.4.2.0`); others, such as `XHCI_FIX_QUIESCE_GATE`
+(`xhci_slot.c`, on `1.2.0.0`), are behaviour-only and change no field. This
+block adds no field, so a shipping binary decodes against the ordinary
+`offsets.txt`. Do not reason about a combination of defines from that list:
+measure `sizeof(XHCI_EXTENSION)` for whatever set you build, which is the
+check section 11 ends on.
 
 ## 2. The route, in one table
 
@@ -185,11 +189,12 @@ memory is refused rather than answered.
 The HCD (`xhci98.sys` from 2.0.0.0, `src/hcd_door.c`) adds two more, each
 without a schema bump because an older driver answers an unknown region with
 `XHCI_SNAPSHOT_S_BAD_REGION` and an older tool never asks:
-`XHCI_SNAPSHOT_REGION_SLOTS` (2.0.0.0; one record per enabled slot, the speed
-its Slot Context carries) and `XHCI_SNAPSHOT_REGION_HCD` (2.2.0.0, roadmap-hcd
-task 35.3; a versioned, pointer-free image of each root port's enumeration
-state and the `XHCIHC_COUNTERS` block, neither of which is in the extension).
-`xhcisnap/README.md` describes how the tool reads both.
+`XHCI_SNAPSHOT_REGION_SLOTS` (2.0.0.0; one record per enabled slot, the
+speed its Slot Context carries) and `XHCI_SNAPSHOT_REGION_HCD` (2.2.0.0,
+roadmap-hcd task 35.3; a versioned, pointer-free image of each root port's
+enumeration state and the `XHCIHC_COUNTERS` block, neither of which is in
+the extension). `docs/contributing/snapshot-reader.md` describes how the
+reader reads both.
 
 ## 5. The kernel side, and the ordering rules that are not obvious
 
@@ -293,7 +298,7 @@ about the likelihood of tearing from how busy the machine looks.
 Decode a dump only against an `offsets.txt` regenerated from the same tree.
 The tool prints the driver's own `ExtensionBytes` for this reason: a dump
 decoded against the wrong table is a wrong reading, not a failed one, and
-wrong readings are how the Finding 3 investigation lost time. The decoder
+wrong readings are how the investigation of the deaf root port lost time. The decoder
 refuses on a size mismatch.
 
 The offset table is the repository's, and is regenerated from the tree that
@@ -407,12 +412,14 @@ with SuperSpeed ports; the E460 leaves six of its eighteen unpowered by
 design, so the headline stayed silent while the per-port table said the
 thing it was meant to shout.)
 
-It is built with MSVC 6.0 in place from `tools\MSVC600` via
-`xhcisnap\build.cmd`. `/Za` is not used here even though the driver and the
-host tests both use it: that compiler's own SDK headers are full of anonymous
-unions, which `/Za` rejects, so `windows.h` does not compile under it. `/WX`
-still makes a warning a build failure, and the source keeps the same C89
-rules by hand; it has to run on Windows 98 SE.
+It was built with MSVC 6.0 in place from `tools\MSVC600` via
+`xhcisnap\build.cmd` (up to `3.0.0.0`; since `3.1.0.0` `xhcitr\build.cmd`
+builds the reader into `XHCITR.EXE` the same way). `/Za` is not used here
+even though the driver and the host tests both use it: that compiler's own
+SDK headers are full of anonymous unions, which `/Za` rejects, so
+`windows.h` does not compile under it. `/WX` still makes a warning a build
+failure, and the source keeps the same C89 rules by hand; it has to run on
+Windows 98 SE.
 
 ## 9. The three operating traps, each of which cost a boot
 
@@ -463,8 +470,8 @@ With the candidate build:
   came back in exactly two windows and decoded against an `offsets.txt`
   regenerated from the same tree, with the header's tear detector equal to
   the `CheckCallbacks` decoded out of the body.
-- Real silicon, on the E460 in batch 13-R, where it read Finding 3's root
-  cause off a wedged machine (`run-13e.md` Findings R and S).
+- Real silicon, on the E460 in batch 13-R, where it read the deaf root port's
+  root cause off a wedged machine (`run-13e.md` Findings R and S).
 - The same contract was separately exercised on the Windows 11 development
   host, where all four controls also matched, which raises confidence in the
   derivation without being an observation on either target.

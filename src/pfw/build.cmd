@@ -82,9 +82,11 @@ if errorlevel 1 exit /b 1
 set "QF="
 if /i "%FLAV%"=="qemu" set "QF=-Qemu"
 rem Every object is disassembled. In the release image no port instruction
-rem may be outside pfw_io.obj, and pfw_io.obj's ports are CF8h and CFCh
-rem alone (record 32 section 8); the qemu image's debug-console writes are
-rem its own.
+rem may be outside pfw_io.obj (the qemu image's debug-console writes are its
+rem own). In both flavours pfw_io.obj's ports are CF8h and CFCh alone
+rem (record 32 section 8): each of its IN and OUT instructions takes its
+rem port from DX (an immediate port, OUT 80h,AL, is refused), and every
+rem value it loads into DX or EDX is CF8h or CFCh.
 for %%F in (pfw pfw_scan pfw_line pfw_io pfw_data pfw_ids) do (
     wdis %O%\%%F.obj > %O%\%%F.dis || (
         echo XHCIPFW.VXD: wdis could not disassemble %%F.obj
@@ -104,6 +106,12 @@ if /i not "%FLAV%"=="qemu" (
             exit /b 1
         )
     )
+)
+findstr /r /i /c:"[ 	]out[sbwd]*[ 	]" /c:"[ 	]in[sbwd]*[ 	]" %O%\pfw_io.dis > %O%\pfw_io.pins
+findstr /r /i /v /c:"[ 	]dx," /c:",dx" %O%\pfw_io.pins >nul && (
+    echo XHCIPFW.VXD: pfw_io.obj has a port instruction whose port is not DX
+    type %O%\pfw_io.pins
+    exit /b 1
 )
 findstr /r /i /c:"mov[ 	][ 	]*e*dx," %O%\pfw_io.dis > %O%\pfw_io.ports
 findstr /r /i /v /c:"0x00000cf8" /c:"0x00000cfc" %O%\pfw_io.ports >nul && (

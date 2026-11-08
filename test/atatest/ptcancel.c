@@ -22,7 +22,9 @@
  * finishes each inside DeviceIoControl. For cancel and wait it prints each
  * request's outcome (the call's error, 995 for cancelled, and the SCSI
  * status) and the totals; nothing is written to the disk. Exit 0 when it
- * ran, 2 on a usage or open error.
+ * ran, 2 on a usage, setup or open error. The mode and count are checked,
+ * and every buffer and event made, before the disk is opened; a buffer is
+ * released only once its request is known to have finished.
  */
 
 #include <windows.h>
@@ -62,6 +64,28 @@ typedef struct {
 static PT_BUF *g_buf[PT_MAX];
 static OVERLAPPED g_ov[PT_MAX];
 static DWORD g_sent[PT_MAX];    /* 0: pending or done; else the error */
+static int g_done[PT_MAX];      /* 1: finished, its buffer may be freed */
+
+static void ptFree(int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++) {
+        if (g_ov[i].hEvent != NULL && g_done[i]) {
+            CloseHandle(g_ov[i].hEvent);
+            g_ov[i].hEvent = NULL;
+        }
+        if (g_buf[i] != NULL && g_done[i]) {
+            VirtualFree(g_buf[i], 0, MEM_RELEASE);
+            g_buf[i] = NULL;
+        }
+    }
+}
+
+static void usage(void)
+{
+    printf("usage: PTCANCEL \\\\.\\PhysicalDriveN count cancel|exit|wait\n");
+}
 
 int main(int argc, char **argv)
 {
@@ -75,29 +99,59 @@ int main(int argc, char **argv)
     DWORD err;
     DWORD w;
     const char *mode;
+    char *end;
+    long n;
 
-    if (argc != 4 || (count = atoi(argv[2])) < 1 || count > PT_MAX) {
-        printf("usage: PTCANCEL \\\\.\\PhysicalDriveN count cancel|exit|wait\n");
+    if (argc != 4) {
+        usage();
         return 2;
     }
+    n = strtol(argv[2], &end, 10);
+    if (end == argv[2] || *end != '\0' || n < 1 || n > PT_MAX) {
+        usage();
+        return 2;
+    }
+    count = (int)n;
     mode = argv[3];
+    if (strcmp(mode, "cancel") != 0 && strcmp(mode, "exit") != 0 &&
+        strcmp(mode, "wait") != 0) {
+        printf("PTCANCEL unknown mode '%s'\n", mode);
+        usage();
+        return 2;
+    }
+    for (i = 0; i < count; i++) {
+        g_done[i] = 1;      /* nothing submitted yet */
+        memset(&g_ov[i], 0, sizeof(OVERLAPPED));
+        g_buf[i] = (PT_BUF *)VirtualAlloc(NULL, sizeof(PT_BUF), MEM_COMMIT,
+                                          PAGE_READWRITE);
+        if (g_buf[i] == NULL) {
+            printf("PTCANCEL cannot allocate buffer %d: error %lu\n", i,
+                   (unsigned long)GetLastError());
+            ptFree(i);
+            return 2;
+        }
+        g_ov[i].hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+        if (g_ov[i].hEvent == NULL) {
+            printf("PTCANCEL cannot create event %d: error %lu\n", i,
+                   (unsigned long)GetLastError());
+            ptFree(i + 1);
+            return 2;
+        }
+    }
     h = CreateFileA(argv[1], GENERIC_READ | GENERIC_WRITE,
                     FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
                     FILE_FLAG_OVERLAPPED, NULL);
     if (h == INVALID_HANDLE_VALUE) {
         printf("PTCANCEL cannot open %s: error %lu\n", argv[1],
                (unsigned long)GetLastError());
+        ptFree(count);
         return 2;
     }
     printf("PTCANCEL %s %d %s\n", argv[1], count, mode);
     for (i = 0; i < count; i++) {
         PT_BUF *b;
 
-        b = (PT_BUF *)VirtualAlloc(NULL, sizeof(PT_BUF), MEM_COMMIT,
-                                   PAGE_READWRITE);
-        g_buf[i] = b;
-        memset(&g_ov[i], 0, sizeof(OVERLAPPED));
-        g_ov[i].hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+        b = g_buf[i];
         b->spt.Length = (USHORT)sizeof(PT_SPT);
         b->spt.CdbLength = 10;
         b->spt.SenseInfoLength = sizeof(b->sense);
@@ -110,12 +164,14 @@ int main(int argc, char **argv)
         b->spt.Cdb[7] = (UCHAR)((PT_LEN / 512) >> 8);
         b->spt.Cdb[8] = (UCHAR)((PT_LEN / 512) & 0xFF);
         g_sent[i] = 0;
+        g_done[i] = 0;
         if (!DeviceIoControl(h, PT_IOCTL_SCSI_PASS_THROUGH, b, sizeof(PT_BUF),
                              b, sizeof(PT_BUF), &got, &g_ov[i])) {
             err = GetLastError();
             if (err != ERROR_IO_PENDING) {
                 /* refused at once: no completion will signal it */
                 g_sent[i] = err;
+                g_done[i] = 1;
                 printf("PTCANCEL %d: sent error %lu\n", i, (unsigned long)err);
             }
         }
@@ -146,10 +202,12 @@ int main(int argc, char **argv)
         }
         w = WaitForSingleObject(g_ov[i].hEvent, 120000);
         if (w != WAIT_OBJECT_0) {
+            /* still outstanding: its buffer and event stay until exit */
             printf("PTCANCEL %d: not done after 120 s\n", i);
             other++;
             continue;
         }
+        g_done[i] = 1;
         if (GetOverlappedResult(h, &g_ov[i], &got, FALSE)) {
             printf("PTCANCEL %d: done scsi=%02X len=%lu\n", i,
                    g_buf[i]->spt.ScsiStatus,
@@ -167,6 +225,7 @@ int main(int argc, char **argv)
     }
     printf("PTCANCEL totals: done %d cancelled %d other %d\n", ok, cancelled,
            other);
+    ptFree(count);
     CloseHandle(h);
     return 0;
 }

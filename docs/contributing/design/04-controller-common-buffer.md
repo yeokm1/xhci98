@@ -454,7 +454,7 @@ into physical space unchanged (section 2).
 |---|---|---|
 | `0x00000` | 4096 | DCBAA at `+0x000` (2048 reserved, 264 used at 32 slots); Scratchpad Buffer Array at `+0x800` (2048 reserved, 512 used at 64 buffers) |
 | `0x01000` | 4096 | Command Ring at `+0x000` (64 TRBs = 1024 B); ERST at `+0x400` (64 reserved, one 16-byte entry) |
-| `0x02000` | 4096 | Event Ring segment 0 (256 TRBs = 4096 B) |
+| `0x02000` | 4096 | Event Ring segment 0 (256 TRBs = 4096 B); since task 47.30 the fall-back, the ring in use being a 1,024-TRB segment of its own outside this block where the start gets one (design record 13 section 11.10) |
 | `0x03000` | 4096 | Input Context (2112 B worst case at CSZ = 1) |
 | `0x04000` | 65536 | 32 Device Contexts, stride 2048 |
 | `0x14000` | 32768 | 32 EP0 transfer rings, stride 1024 (64 TRBs) |

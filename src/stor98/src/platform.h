@@ -95,7 +95,7 @@ struct _HW_DEVICE_EXTENSION;
 #define PLAT_DMA_POOL           2   // driver-owned pool outside the port (9x MD-4, pool9x.c)
 
 //
-// Ownership states of an allocation record (review round 3, N2). Names and
+// Ownership states of an allocation record. Names and
 // values follow the MD-4 pool records of interface 3 (the Q-9x boot block:
 // FREE / RESERVED / OWNED / ISOLATED / RELEASED / QUARANTINED), so the pool
 // provider can mirror every Note into its record unchanged at D4. Two
@@ -265,16 +265,18 @@ VOID PlatTunMsRaw(IN OUT ULONG *GoneMs, IN OUT ULONG *WriteIdleMs,
 // 9x only (PLAN 3.1): the user-readable find report, a REG_SZ value
 // "StorFind" in the same key, written at every HwFindAdapter whatever its
 // outcome: the bus, slot and first access range the port gave, what was
-// read at that slot (length, class code, BAR0 and BAR1), where the
+// read at that slot (length, class code, its six BARs), where the
 // function was found ("none" if nowhere), the found function's command
-// register, CC and CSTS read before anything is written and whether it was
-// left as already set up (PCISCAN_FW_*), and HwFindAdapter's return. A
-// failure only leaves the value unwritten.
+// register as found, CC and CSTS read before anything else is done to it
+// (with decode off, through decode turned on for the read and put back:
+// FwTurnedOn; FwReach PCISCAN_REACH_*), whether it was left (PCISCAN_FW_*),
+// and HwFindAdapter's return. A failure only leaves the value unwritten.
 typedef struct _PLAT_FIND_INFO {
     ULONG PortBus, PortSlot, RangeLo, RangeHi, RangeLen;
     ULONG SlotBytes, SlotClass, SlotBar[6];         // the port's slot: its six BAR dwords as read
     ULONG Found, FoundBus, FoundSlot, Result;
     ULONG FwChecked, FwCmd, FwCc, FwCsts, FwState;
+    ULONG FwReach, FwTurnedOn;                      // PCISCAN_REACH_*; decode turned on for the read
 } PLAT_FIND_INFO;
 VOID PlatFindReport(IN const PLAT_FIND_INFO *Fi);
 #endif

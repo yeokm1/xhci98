@@ -189,10 +189,21 @@ rem                  printf, the USB IOCTL answers, the descriptor decoders
 rem                  over whole, truncated and malformed input, xhcicm.sys's
 rem                  query answer and its refusals, the status texts, the
 rem                  tray's event diff, the switches and the report layout
+rem   test_trset   - the Settings window and /set (xhcitr\tr_set.c, task
+rem                  47.35, design record 25 section 22): every row of
+rem                  Setup's table and of Stor98's classified (an
+rem                  unclassified row fails the build), the installed
+rem                  defaults held to the INFs, the system rules, the values
+rem                  offered, the driver's reading, the apply summary and its
+rem                  exit code, the elevated run's request and its bounds
 rem   test_trred   - the red tray icon's decision and tooltip (xhcitr\tr_red.c,
 rem                  task 43.57, design record 25 section 7.2.1): each
 rem                  condition and its clearing, the ranking, the tooltip
 rem                  at 64 and 128 bytes
+rem   test_mark    - the mark service's pure half (xhcimark\mark_core.c)
+rem                  through its own self-test, mk_selftest: since task 45.12
+rem                  the bridge inventory and the bridge marks (design record
+rem                  33 section 4.3)
 rem   test_trlog   - XHCITR's driver-log readers (xhcitr\tr_log.c, design
 rem                  record 25 sections 4.5 and 4.6): xhcicm.sys's log
 rem                  answer as its builder makes it, xhci98.sys's door
@@ -310,8 +321,8 @@ rem                  answer layout and the confirmation's checks, and
 rem                  the Removable answer's gate (design record 31)
 rem   test_cm_tagid - the tunnel id on Windows 98 SE and ME
 rem                  (src\cm\cm_tagid.c, design record 31 section 5): the
-rem                  id list's test in both separators, the step, what
-rem                  follows an Add_ID, and the per-boot record
+rem                  id list's test in both separators, the step and the
+rem                  per-boot record
 rem   test_cm_status - the status record xhcicm.sys publishes for the install
 rem                  tool's viewer (src\cm\cm_status.c, design record 24
 rem                  section 3): the record from an ICM table and a USB4
@@ -419,6 +430,11 @@ rem   test_cm_net  - the Thunderbolt networking data rings' pure half
 rem                  (src\cm\cm_netr.c, task 45.59, design record 35
 rem                  sections 5.3 and 6.3): descriptors, completion, reaping,
 rem                  the wrap and the reservation's tokens
+rem   test_net_frame - Thunderbolt networking's USB4NET framing core
+rem                  (src\net\net_frame.c, task 45.59 step S6, design record
+rem                  35 sections 7.2 to 7.4): the transmit split, the Frame
+rem                  ID rule, every receive drop and the reassembly, and the
+rem                  receive segmentation over IPv4 and IPv6
 rem   test_ej9x    - the tools' half of the 9x eject asked of xhcicm.sys
 rem                  (xhciinst\inst_ej9x.c, task 43.18) over the install
 rem                  tool's pure half
@@ -429,7 +445,7 @@ rem and its usbport callback surface). Their last copies are on branch
 rem 1.2.0.0. test_xfer and test_iso left with them and came back with task
 rem 26-A.9, unchanged, because src\xhci_xfer.c was kept whole (26-A.4).
 rem
-rem THE SECOND ARCHITECTURE (roadmap task 21.4). Three suites are compiled and
+rem THE SECOND ARCHITECTURE (roadmap task 21.4). Four suites are compiled and
 rem run twice: once with MSVC 6.0 for x86, and once with WDK 7.1's amd64 cross
 rem compiler, as test_packet_amd64, test_membuf_amd64 and (task 44.53)
 rem test_cm_irq_amd64, whose resource descriptor is larger on amd64, and
@@ -726,13 +742,17 @@ rem test_tr links XHCITR's pure half (xhcitr\tr_core.c, task 41-A.2, design
 rem record 25 section 10) and the install tool's, for the record's check,
 rem and the mark service's pure half (its self-test; task 44.52).
 call :run test_tr "test_tr.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
-rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
-rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
+rem test_trset links XHCITR's Settings rows (xhcitr\tr_set.c, task 47.35,
+rem design record 25 section 22) with Setup's table, which they reuse, and
+rem reads the INFs from ..\src to hold the installed defaults.
+call :run test_trset "test_trset.c ..\xhcitr\tr_set.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_mark runs the mark service's pure half through its own
 rem self-test (xhcimark\mark_core.c, mk_selftest; since task 45.12 the
 rem bridge inventory and the bridge marks of design record 33 section
 rem 4.3), with inst_core.c, which it links against.
 call :run test_mark "test_mark.c ..\xhcimark\mark_core.c ..\xhciinst\inst_core.c"
+rem test_trred links the red tray icon's decision and tooltip (xhcitr\tr_red.c,
+rem task 43.57, design record 25 section 7.2.1) over XHCITR's pure half.
 call :run test_trred "test_trred.c ..\xhcitr\tr_red.c ..\xhcitr\tr_core.c ..\xhciinst\inst_core.c ..\xhcimark\mark_core.c"
 rem test_ej9x links the tools' half of the 9x eject asked of xhcicm.sys
 rem (xhciinst\inst_ej9x.c, task 43.18) with the pure half it maps through.
@@ -851,7 +871,7 @@ rem test_pfw links XHCIPFW.VXD's pure half (src\pfw\pfw_scan.c, task
 rem 44.49, design record 32 section 10.1).
 call :run test_pfw "test_pfw.c ..\src\pfw\pfw_scan.c ..\src\pfw\pfw_line.c ..\src\pfw\pfw_ids.c ..\src\pfw\pfw_ntdec.c"
 
-rem The same two files, the second compiler - see "THE SECOND ARCHITECTURE".
+rem The same four suites, the second compiler - see "THE SECOND ARCHITECTURE".
 if not exist "%WDK71%\bin\x86\amd64\cl.exe" goto noamd64
 if /i "%PROCESSOR_ARCHITECTURE%"=="x86" if not defined PROCESSOR_ARCHITEW6432 set "NORUN=1"
 call :run test_packet_amd64 "test_packet.c" amd64
@@ -867,8 +887,8 @@ echo.
 echo === test_packet_amd64, test_membuf_amd64, test_cm_irq_amd64, test_cm_breq_amd64 === SKIPPED
 echo WDK 7.1 was not found at %WDK71%, and its amd64 compiler is the only thing
 echo here that compiles the _WIN64 half of src\xhci_usbport.h and the amd64
-echo resource lists of src\cm\cm_irq.c. Those are therefore unchecked in this
-echo run. Set WDK71 to a WDK 7.1 root, or read the verdict below as covering
+echo resource lists of src\cm\cm_irq.c and src\cm\cm_breq.c. Those are
+echo therefore unchecked in this run. Set WDK71 to a WDK 7.1 root, or read the verdict below as covering
 echo x86 alone.
 
 :amd64done

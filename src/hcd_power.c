@@ -427,6 +427,12 @@ static ULONG hcdDirectTransitionGated(PHCD_CONTROLLER hc)
     ULONG flush;
 
     flush = 0;
+    if (!hc->ControllerStarted) {
+        /* No lifetime to suspend or resume - a stop has ended it, or no
+         * start made one - and so no hardware of it to touch, as the
+         * device IRPs' own paths decide (hcd_ctl.c, hcdStopBody). */
+        return 0;
+    }
     if (hc->PowerDirectWant != PowerDeviceD0) {
         if (hc->Common.DevicePower == PowerDeviceD0 && !hc->SuspendedInD0) {
             /* Record 15 section 4.2: revoke, then contain an owed

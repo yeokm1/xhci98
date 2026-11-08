@@ -352,6 +352,155 @@ static ULONG netPseudo(const NET_SEG *Seg, ULONG TcpLength)
     return NetSumFold(sum);
 }
 
+#define NET_IP4_DF          0x4000UL
+#define NET_IP4_MF          0x2000UL
+#define NET_IP4_OFFSET      0x1FFFUL
+#define NET_IP4_EVIL        0x8000UL  /* the reserved flag, copied      */
+#define NET_IPOPT_EOL       0UL
+#define NET_IPOPT_NOP       1UL
+#define NET_IPOPT_COPIED    0x80UL
+
+/*
+ * IPv4 fragmentation of a datagram the TCP split does not take (record 35
+ * section 7.4; RFC 791 sections 2.3 and 3.2, "Fragmentation and
+ * reassembly", and section 3.1's options and their copied flag). Ip
+ * points at a header whose version, IHL, checksum and total length
+ * (IpBytes) NetSegBegin has checked. Every piece is an IPv4 fragment of
+ * at most MaxFrame bytes: the first with the original header whole, the
+ * others with only the options whose copied flag is set.
+ */
+static ULONG netFragBegin(NET_SEG *Seg, const UCHAR *Ip, ULONG IpBytes,
+                          ULONG MaxFrame, ULONG *Why)
+{
+    ULONG field = netGet16be(Ip + 6);
+    ULONG i;
+    ULONG n;
+    ULONG len;
+    ULONG room;
+    ULONG rest;
+    UCHAR *h = Seg->FragHdr;
+
+    if ((field & NET_IP4_DF) != 0) {
+        *Why = NET_SEGDROP_DF;
+        return 0;
+    }
+    if (MaxFrame < NET_SMALL_MAX) {
+        *Why = NET_SEGDROP_HEADER;
+        return 0;
+    }
+    Seg->Payload = IpBytes - Seg->IpLen;
+    Seg->FragOff = (field & NET_IP4_OFFSET) * 8UL;
+    Seg->FragMore = field & NET_IP4_MF;
+    /* A datagram that cannot exist: no data, a fragment with MF whose
+     * data is not a multiple of 8 (RFC 791 section 3.2: only the last
+     * fragment may end unaligned), or one that reassembled would pass
+     * 65535 bytes, header included (section 3.1, Total Length). */
+    if (Seg->Payload == 0 ||
+        (Seg->FragMore != 0 && (Seg->Payload & 7UL) != 0) ||
+        Seg->FragOff + Seg->Payload + Seg->IpLen > 0xFFFFUL) {
+        *Why = NET_SEGDROP_HEADER;
+        return 0;
+    }
+
+    /* The later pieces' header: the fixed 20 bytes, then the options
+     * with the copied flag, NOP and EOL dropped, zero-padded to a
+     * multiple of 4. A malformed list is refused before anything is
+     * written. */
+    netCopy(h, Ip, 20);
+    n = 20;
+    i = 20;
+    while (i < Seg->IpLen) {
+        ULONG type = (ULONG)Ip[i];
+
+        if (type == NET_IPOPT_EOL) {
+            break;
+        }
+        if (type == NET_IPOPT_NOP) {
+            i++;
+            continue;
+        }
+        if (i + 1 >= Seg->IpLen) {
+            *Why = NET_SEGDROP_HEADER;
+            return 0;
+        }
+        len = (ULONG)Ip[i + 1];
+        if (len < 2 || len > Seg->IpLen - i) {
+            *Why = NET_SEGDROP_HEADER;
+            return 0;
+        }
+        if ((type & NET_IPOPT_COPIED) != 0) {
+            netCopy(h + n, Ip + i, len);
+            n += len;
+        }
+        i += len;
+    }
+    while ((n & 3UL) != 0) {
+        h[n] = 0;
+        n++;
+    }
+    h[0] = (UCHAR)(0x40UL | (n / 4));
+    Seg->FragHdrLen = n;
+
+    room = MaxFrame - NET_ETH_HDR;
+    Seg->FragFirst = (room - Seg->IpLen) & ~7UL;
+    Seg->FragRest = (room - n) & ~7UL;
+    if (Seg->Payload <= Seg->FragFirst) {
+        /* Not reached for a frame above MaxFrame; refused all the same,
+         * so a caller's mistake never yields a one-piece "split". */
+        *Why = NET_SEGDROP_HEADER;
+        return 0;
+    }
+    rest = Seg->Payload - Seg->FragFirst;
+    n = 1 + (rest + Seg->FragRest - 1) / Seg->FragRest;
+    if (n > NET_SEG_PIECES) {
+        *Why = NET_SEGDROP_PIECES;
+        return 0;
+    }
+    Seg->Frag = 1;
+    Seg->Pieces = n;
+    return 1;
+}
+
+/* Piece k of an IPv4 fragmentation (netFragBegin). */
+static ULONG netFragNext(NET_SEG *Seg, UCHAR *Out)
+{
+    const UCHAR *ipIn = Seg->Frame + NET_ETH_HDR;
+    UCHAR *ip = Out + NET_ETH_HDR;
+    ULONG k = Seg->Next;
+    ULONG hlen;
+    ULONG off;
+    ULONG len;
+    ULONG field;
+
+    if (k == 0) {
+        hlen = Seg->IpLen;
+        off = 0;
+        len = Seg->FragFirst;
+        netCopy(ip, ipIn, hlen);
+    } else {
+        hlen = Seg->FragHdrLen;
+        off = Seg->FragFirst + (k - 1) * Seg->FragRest;
+        len = Seg->FragRest;
+        netCopy(ip, Seg->FragHdr, hlen);
+    }
+    if (len > Seg->Payload - off) {
+        len = Seg->Payload - off;
+    }
+    netCopy(Out, Seg->Frame, NET_ETH_HDR);
+    netCopy(ip + hlen, ipIn + Seg->IpLen + off, len);
+
+    field = netGet16be(ipIn + 6) & NET_IP4_EVIL;
+    field |= ((Seg->FragOff + off) / 8UL) & NET_IP4_OFFSET;
+    field |= (k + 1 < Seg->Pieces) ? NET_IP4_MF : Seg->FragMore;
+    netPut16be(ip + 2, hlen + len);
+    netPut16be(ip + 6, field);
+    netPut16be(ip + 10, 0);
+    netPut16be(ip + 10, (~NetSum16(ip, hlen, 0)) & 0xFFFFUL);
+
+    Seg->Next = k + 1;
+    return NET_ETH_HDR + hlen + len;
+}
+
 ULONG NetSegBegin(NET_SEG *Seg, const UCHAR *Frame, ULONG Length,
                   ULONG MaxFrame, ULONG *Why)
 {
@@ -371,6 +520,7 @@ ULONG NetSegBegin(NET_SEG *Seg, const UCHAR *Frame, ULONG Length,
     Seg->Length = Length;
     Seg->Next = 0;
     Seg->Pieces = 0;
+    Seg->Frag = 0;
 
     if (Length <= NET_ETH_HDR) {
         *Why = NET_SEGDROP_HEADER;
@@ -399,13 +549,11 @@ ULONG NetSegBegin(NET_SEG *Seg, const UCHAR *Frame, ULONG Length,
             *Why = NET_SEGDROP_LENGTH;
             return 0;
         }
-        if ((netGet16be(ip + 6) & 0x3FFFUL) != 0) {
-            *Why = NET_SEGDROP_FRAGMENT;
-            return 0;
-        }
-        if ((ULONG)ip[9] != NET_PROTO_TCP) {
-            *Why = NET_SEGDROP_NOTTCP;
-            return 0;
+        if ((netGet16be(ip + 6) & 0x3FFFUL) != 0 ||
+            (ULONG)ip[9] != NET_PROTO_TCP) {
+            /* Not the TCP split's: another protocol, or a fragment
+             * already (record 35 section 7.4, RFC 791 section 3.2). */
+            return netFragBegin(Seg, ip, ipBytes, MaxFrame, Why);
         }
     } else if (etype == NET_ETYPE_IP6) {
         Seg->Ip6 = 1;
@@ -504,6 +652,9 @@ ULONG NetSegNext(NET_SEG *Seg, UCHAR *Out)
 
     if (k >= Seg->Pieces) {
         return 0;
+    }
+    if (Seg->Frag) {
+        return netFragNext(Seg, Out);
     }
     hdrs = NET_ETH_HDR + Seg->IpLen + Seg->TcpLen;
     tcpIn = Seg->Frame + NET_ETH_HDR + Seg->IpLen;

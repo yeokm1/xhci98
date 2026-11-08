@@ -27,8 +27,9 @@
 //                           driver never supplies
 //   protection (DPS 2:0)    end-to-end protection information
 //
-// The OS sees the namespace's own block size until 512-byte presentation
-// (PLAN 1.7) is implemented.
+// The OS sees 512-byte sectors whatever the block size (PLAN 1.7, "4 KiB-
+// sector namespaces"; src/rmw.h): a namespace whose 512-byte sector count
+// does not fit 64 bits is refused by the bring-up (NSF_TOO_LARGE).
 //
 
 #ifndef _STOR98_NSFMT_H_
@@ -40,6 +41,7 @@
 #define NSF_BAD_LBADS       3
 #define NSF_METADATA        4
 #define NSF_PROTECTION      5
+#define NSF_TOO_LARGE       6       // the bring-up's: NSZE << (LBADS - 9) does not fit 64 bits (rmw.h)
 
 #define NSF_LBADS_MIN       9       // 512 bytes
 #define NSF_LBADS_MAX       12      // 4096 bytes

@@ -39,7 +39,7 @@ body:
     attributes:
       label: Driver version
       description: The version of the release you downloaded - it is at the top of its readme.txt, and in the driver's properties in Device Manager.
-      placeholder: "the four-part number from readme.txt, e.g. 3.3.0.0"
+      placeholder: "the four-part number from readme.txt, e.g. 3.4.2.0"
     validations:
       required: true
 
@@ -47,12 +47,16 @@ body:
     id: build
     attributes:
       label: Which directory of the download you installed from
-      description: release-x86 (or release-x64 on a 64-bit Windows). The debug-x86 and debug-x64 directories exist only in downloads up to 3.3.0.0.
+      description: From 3.4.0.0 the drivers are in 98-me (98 SE, ME), nt-x86 (32-bit 2000 to 10) and nt-x64 (64-bit XP x64 to 10); SETUP.EXE picks the right one. Downloads up to 3.3.0.0 had release-x86 and release-x64, and debug-x86 and debug-x64.
       options:
-        - release-x86
-        - release-x64
-        - debug-x86
-        - debug-x64
+        - SETUP.EXE chose it
+        - 98-me
+        - nt-x86
+        - nt-x64
+        - release-x86 (3.3.0.0 or earlier)
+        - release-x64 (3.3.0.0 or earlier)
+        - debug-x86 (3.3.0.0 or earlier)
+        - debug-x64 (3.3.0.0 or earlier)
         - Not sure
     validations:
       required: true

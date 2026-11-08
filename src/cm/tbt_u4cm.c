@@ -145,6 +145,44 @@ static BOOLEAN tbtU4Spent(PTBT_U4CM cm)
 
 static VOID tbtU4NotifyOf(PTBT_U4CM cm, const TBT_ROUTE *r, LONG rc);
 
+/*
+ * Record 22 section 18.9: the ASM4242's host router (ROUTER_CS_0
+ * 174C:2428, the identity tbtU4NetStns keys on) keeps Pending Packets
+ * (PATH_CS_1 bit 28) set for good on its Host Interface adapter once a
+ * path entry there has had Valid cleared ([lkml] the ASM4242 pending-bit
+ * patch; usb4-emu's `asm-quirk-pending`, its quirk a). Read as set, that
+ * bit made every teardown of an entry there wait out the drain and
+ * quarantine the entry, and the quarantine is lifted only by a drain that
+ * never comes, so the entry's HopID - the network service's ring - stayed
+ * held and no later service came up. On that adapter of that router the
+ * bit carries nothing, and every read of its path entries returns it as
+ * 0: an entry is drained when it reads Valid 0, as Linux's patch has it.
+ * Every other router and adapter is read as it is.
+ */
+static BOOLEAN tbtU4PpStuck(const TBT_U4CM *cm, const TBT_ROUTE *r, ULONG cs, ULONG adp)
+{
+    const TBT_U4_ROUTER *h = &cm->HostRouter;
+
+    return (BOOLEAN)(cs == TBT_CS_PATH && r->Hi == 0 && r->Lo == 0 &&
+                     h->Vendor == TBT_U4_ASM_VENDOR && h->Device == TBT_U4_ASM_HOST &&
+                     adp < TBT_U4_MAX_ADP && h->Adp[adp].Type == TBT_ADP_TYPE_HI);
+}
+
+static VOID tbtU4PpMask(PTBT_U4CM cm, ULONG adp, ULONG addr, ULONG n, PULONG v)
+{
+    ULONG i;
+
+    for (i = 0; i < n; i++) {
+        /* DW1 of each entry (Spec 8.2.3: two DWs a HopID). */
+        if (((addr + i) & 1UL) != 0 && (v[i] & TBT_PATH1_PP) != 0) {
+            v[i] &= ~TBT_PATH1_PP;
+            if (cm->Counters.PendingIgnored++ == 0) {
+                tbtU4Log(cm, "u4.asm.pp", (adp << 16) | ((addr + i) >> 1));
+            }
+        }
+    }
+}
+
 static LONG tbtU4RdN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
                      ULONG addr, ULONG n, PULONG v)
 {
@@ -167,6 +205,9 @@ static LONG tbtU4RdN(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG cs, ULONG adp,
     if (rc == TBT_E_HW || rc == TBT_E_STOPPED || rc == TBT_E_RING_FULL ||
         rc == TBT_E_TIMEOUT) {
         cm->HwErrors++;
+    }
+    if (rc == TBT_OK && tbtU4PpStuck(cm, r, cs, adp)) {
+        tbtU4PpMask(cm, adp, addr, n, v);
     }
     return rc;
 }
@@ -1301,7 +1342,8 @@ static VOID tbtU4ReadDrom(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
     pos = TBT_DROM_ENTRIES_TBT3;
     if (buf[13] == TBT_DROM_REV_USB4) {
         pos = TBT_DROM_ENTRIES_USB4;
-    } else if (buf[13] != TBT_DROM_REV_TBT3) {
+    } else if (buf[13] != TBT_DROM_REV_TBT3 &&
+               buf[13] != TBT_DROM_REV_TBT3_COMPAT) {
         tbtU4Log(cm, "u4.drom.revision", buf[13]);
     }
     /* Checked whole before anything is kept: a malformed list (an entry
@@ -1470,6 +1512,18 @@ static LONG tbtU4DiscoverAdapters(PTBT_U4CM cm, PTBT_U4_ROUTER rt)
             continue;
         }
         ad->Present = 1;
+        if (rt->Tbt3 &&
+            (TBT_ADP5_MAX_IN_HOP_TBT3(v[TBT_ADP_CS_5]) > TBT_HOP_MAX ||
+             TBT_ADP5_MAX_OUT_HOP_TBT3(v[TBT_ADP_CS_5]) > TBT_HOP_MAX)) {
+            /* A Thunderbolt 3 router's HopID fields are 11 bits wide. One
+             * that reports a maximum above 127 has entries this driver's
+             * scans and 128-bit HopID maps do not cover, and an unseen
+             * entry may hold an Output HopID another path would be given:
+             * the router is refused, never enumerated with its maxima
+             * cut down. */
+            tbtU4Log(cm, "u4.hopid.wide", (a << 24) | (v[TBT_ADP_CS_5] & 0x3FFFFFUL));
+            return TBT_E_REFUSED;
+        }
         ad->MaxInHop = (UCHAR)TBT_ADP5_MAX_IN_HOP(v[TBT_ADP_CS_5]);
         ad->MaxOutHop = (UCHAR)TBT_ADP5_MAX_OUT_HOP(v[TBT_ADP_CS_5]);
         ptr = TBT_ADP1_NEXT_CAP(v[TBT_ADP_CS_1]);
@@ -2077,9 +2131,19 @@ static LONG tbtU4WriteEntry(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp,
                             ULONG credits, ULONG weight, BOOLEAN lane,
                             BOOLEAN tbt3, BOOLEAN asm7, const char *label)
 {
+    const TBT_U4_ROUTER *rt;
     ULONG e[2];
     ULONG back[2];
+    ULONG hopMask;
     LONG rc;
+
+    /* The Output HopID field's width is the router's: 11 bits on a
+     * Thunderbolt 3 router, so a stale high bit read there is not kept
+     * under the new HopID (`tbt3` is the protocol-adapter rule, not the
+     * router's kind). */
+    rt = tbtU4RouterOf(cm, r);
+    hopMask = (rt != NULL && rt->Tbt3) ? TBT_PATH0_OUT_HOP_MASK_TBT3
+                                       : TBT_PATH0_OUT_HOP_MASK;
 
     rc = tbtU4RdN(cm, r, TBT_CS_PATH, adp, 2 * hop, 2, e);
     if (rc != TBT_OK) {
@@ -2089,7 +2153,7 @@ static LONG tbtU4WriteEntry(PTBT_U4CM cm, const TBT_ROUTE *r, ULONG adp,
         tbtU4Log(cm, label, e[0]);
         tbtU4Log(cm, label, e[1]);
     }
-    e[0] &= ~(TBT_PATH0_OUT_HOP_MASK | TBT_PATH0_OUT_ADP_MASK | 0x01000000UL |
+    e[0] &= ~(hopMask | TBT_PATH0_OUT_ADP_MASK | 0x01000000UL |
               TBT_PATH0_VALID);
     e[0] |= (outHop & TBT_PATH0_OUT_HOP_MASK) |
             ((outAdp << TBT_PATH0_OUT_ADP_SHIFT) & TBT_PATH0_OUT_ADP_MASK) |
@@ -2298,9 +2362,6 @@ static VOID tbtU4QDropPort(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
 }
 
-/* Each idle tick retries what is quarantined; only a proven invalidation
- * and drain, or a Path Enable read back clear, lifts it (section 7.3).
- * An entry on a device router that is gone is dropped with the router. */
 /* A held entry finally closed: whatever USB3 cleanup it was part of is
  * only now done, so the port's 500 ms teardown gap starts again (Guide
  * 5.5.1 step 1; conservative for an entry of another protocol). */
@@ -2372,6 +2433,9 @@ static BOOLEAN tbtU4KidQWait(PTBT_U4CM cm, const TBT_U4_QENTRY *q)
                      (p->ClassifyPending || p->Why == TBT_U4_WHY_RECOVER || p->Barred));
 }
 
+/* Each idle tick retries what is quarantined; only a proven invalidation
+ * and drain, or a Path Enable read back clear, lifts it (section 7.3).
+ * An entry on a device router that is gone is dropped with the router. */
 static VOID tbtU4RetryQuarantine(PTBT_U4CM cm)
 {
     ULONG i;
@@ -5460,10 +5524,6 @@ static VOID tbtU4TeardownTail(PTBT_U4CM cm, PTBT_U4_PORT p)
     }
 }
 
-/* The host's lane adapters and USB4 port back to what this driver found
- * (section 7.3 step 5): each change it made stays owned until a read-back
- * proves it undone, and is retried by the next teardown, the next
- * connection and the idle tick. TRUE when nothing is left owed. */
 /* A Thunderbolt host's link controller port reset released (PORT_MODE bit
  * 0 cleared) and read back clear; TRUE when nothing is owed. */
 static BOOLEAN tbtU4LcDprRelease(PTBT_U4CM cm, PTBT_U4_PORT p)
@@ -5487,6 +5547,10 @@ static BOOLEAN tbtU4LcDprRelease(PTBT_U4CM cm, PTBT_U4_PORT p)
     return (BOOLEAN)!p->LcDprOwed;
 }
 
+/* The host's lane adapters and USB4 port back to what this driver found
+ * (section 7.3 step 5): each change it made stays owned until a read-back
+ * proves it undone, and is retried by the next teardown, the next
+ * connection and the idle tick. TRUE when nothing is left owed. */
 static BOOLEAN tbtU4HostRestore(PTBT_U4CM cm, PTBT_U4_PORT p)
 {
     PTBT_U4_ROUTER h;
@@ -5755,8 +5819,12 @@ static VOID tbtU4Connect(PTBT_U4CM cm, PTBT_U4_PORT p, BOOLEAN asFound)
     next = TBT_U4_FAILED;
     /* What an earlier teardown could not restore or read on the host is
      * tried again; a new connection never writes over it. */
-    if (!asFound && (!tbtU4HostRestore(cm, p) || !tbtU4ResidualClear(cm, p) ||
-                     !tbtU4LanesIdle(cm, p))) {
+    if ((p->Index != 0 && p->Index <= TBT_U4_MAX_PORTS &&
+         cm->DeferredTail[p->Index - 1]) ||
+        (!asFound && (!tbtU4HostRestore(cm, p) || !tbtU4ResidualClear(cm, p) ||
+                      !tbtU4LanesIdle(cm, p)))) {
+        /* A teardown tail still owed (a head nested at a safe point)
+         * runs before any new connection of the port: it would undo it. */
         /* Guide 7.1: bonding (and every lane change) only with no path
          * enabled through the port. Paths someone else keeps there are
          * left alone; the port waits for them (the next check retries). */
@@ -10198,6 +10266,235 @@ static LONG tbtU4HostRouterReset(PTBT_U4CM cm)
     return TBT_OK;
 }
 
+/*
+ * Record 22 section 9.3.1 test 3: one adapter's path entries from HopID 8
+ * to its Max Input HopID read, none pending or unreadable, and every Valid
+ * one among `want` (pairs of adapter and HopID, `n` of them) - those found
+ * counted in *seen. Reads only.
+ */
+static BOOLEAN tbtU4OnceAdapter(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp,
+                                const ULONG *want, ULONG n, PULONG seen)
+{
+    ULONG hop;
+    ULONG k;
+    ULONG e[2];
+    BOOLEAN ok;
+
+    if (adp == 0 || adp >= TBT_U4_MAX_ADP || !rt->Adp[adp].Present) {
+        return TRUE;
+    }
+    for (hop = TBT_HOP_FIRST; hop <= rt->Adp[adp].MaxInHop; hop++) {
+        if (tbtU4Entry(cm, &rt->Route, adp, hop, e) != TBT_OK ||
+            (e[1] & TBT_PATH1_PP) != 0) {
+            return FALSE;
+        }
+        if ((e[0] & TBT_PATH0_VALID) == 0) {
+            continue;
+        }
+        ok = FALSE;
+        for (k = 0; k + 1 < n; k += 2) {
+            if (want[k] == adp && want[k + 1] == hop) {
+                ok = TRUE;
+            }
+        }
+        if (!ok) {
+            return FALSE;
+        }
+        (*seen)++;
+    }
+    return TRUE;
+}
+
+/* A protocol adapter's enable as section 9.3.1 test 3 reads it: Path
+ * Enable (bit 31) on a PCIe or USB3 adapter, Video and AUX Enable (bits 31
+ * and 30, Spec 2.0 ADP_DP_CS_0) on a DP adapter; `on` is what an owned
+ * tunnel explains. FALSE when it reads otherwise or cannot be read. */
+static BOOLEAN tbtU4OnceEnable(PTBT_U4CM cm, const TBT_U4_ROUTER *rt, ULONG adp,
+                               BOOLEAN on)
+{
+    ULONG t;
+    ULONG v;
+    ULONG mask;
+
+    if (adp == 0 || adp >= TBT_U4_MAX_ADP || !rt->Adp[adp].Present ||
+        rt->Adp[adp].CapAdp == 0) {
+        return (BOOLEAN)!on;
+    }
+    t = rt->Adp[adp].Type;
+    if (t == TBT_ADP_TYPE_DP_IN || t == TBT_ADP_TYPE_DP_OUT) {
+        mask = 0xC0000000UL;
+    } else if (t == TBT_ADP_TYPE_PCIE_DOWN || t == TBT_ADP_TYPE_PCIE_UP ||
+               t == TBT_ADP_TYPE_USB3_DOWN || t == TBT_ADP_TYPE_USB3_UP) {
+        mask = TBT_PCIE0_PE;
+    } else {
+        return (BOOLEAN)!on;
+    }
+    if (tbtU4Rd(cm, &rt->Route, TBT_CS_ADAPTER, adp, rt->Adp[adp].CapAdp, &v) != TBT_OK) {
+        return FALSE;
+    }
+    return (BOOLEAN)(((v & mask) != 0) == on);
+}
+
+/*
+ * Record 22 section 9.3.1 test 3 for one port with tunnel state: the host
+ * router's adapters of the port (both lanes, PCIe Down, USB3 Down, every
+ * DP adapter) and the whole device router hold exactly the entries and
+ * enables of the port's own verified tunnels. Reads only.
+ */
+static BOOLEAN tbtU4OnceInventory(PTBT_U4CM cm, PTBT_U4_PORT p)
+{
+    PTBT_U4_ROUTER h;
+    PTBT_U4_ROUTER d;
+    ULONG want[8];
+    ULONG n;
+    ULONG seen;
+    ULONG expect;
+    ULONG dPcie;
+    ULONG dUsb3;
+    ULONG a;
+    ULONG t;
+    BOOLEAN on;
+
+    h = &cm->HostRouter;
+    d = &p->Dev;
+    if (!d->Present) {
+        return FALSE;
+    }
+    dPcie = tbtU4FirstOf(d, TBT_ADP_TYPE_PCIE_UP);
+    dUsb3 = tbtU4FirstOf(d, TBT_ADP_TYPE_USB3_UP);
+    /* The host's side. */
+    n = 0;
+    expect = 0;
+    if (p->Pcie.Up) {
+        want[n++] = p->PcieDown;
+        want[n++] = TBT_HOP_PROTOCOL;
+        want[n++] = p->Lane0;
+        want[n++] = p->Pcie.Hu;
+        expect += 2;
+    }
+    if (p->Usb3.Up) {
+        want[n++] = p->Usb3Down;
+        want[n++] = TBT_HOP_PROTOCOL;
+        want[n++] = p->Lane0;
+        want[n++] = p->Usb3.Hu;
+        expect += 2;
+    }
+    seen = 0;
+    if (!tbtU4OnceAdapter(cm, h, p->Lane0, want, n, &seen) ||
+        !tbtU4OnceAdapter(cm, h, p->Lane0 + 1, want, n, &seen) ||
+        !tbtU4OnceAdapter(cm, h, p->PcieDown, want, n, &seen) ||
+        !tbtU4OnceAdapter(cm, h, p->Usb3Down, want, n, &seen) ||
+        !tbtU4OnceEnable(cm, h, p->PcieDown, p->Pcie.Up) ||
+        !tbtU4OnceEnable(cm, h, p->Usb3Down, p->Usb3.Up)) {
+        return FALSE;
+    }
+    for (a = 1; a <= h->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
+        t = h->Adp[a].Type;
+        if (h->Adp[a].Present &&
+            (t == TBT_ADP_TYPE_DP_IN || t == TBT_ADP_TYPE_DP_OUT) &&
+            (!tbtU4OnceAdapter(cm, h, a, want, 0, &seen) ||
+             !tbtU4OnceEnable(cm, h, a, FALSE))) {
+            return FALSE;
+        }
+    }
+    if (seen != expect) {
+        return FALSE;
+    }
+    /* The whole device router. */
+    n = 0;
+    expect = 0;
+    if (p->Pcie.Up) {
+        want[n++] = d->UpAdp;
+        want[n++] = p->Pcie.Hd;
+        want[n++] = dPcie;
+        want[n++] = TBT_HOP_PROTOCOL;
+        expect += 2;
+    }
+    if (p->Usb3.Up) {
+        want[n++] = d->UpAdp;
+        want[n++] = p->Usb3.Hd;
+        want[n++] = dUsb3;
+        want[n++] = TBT_HOP_PROTOCOL;
+        expect += 2;
+    }
+    seen = 0;
+    for (a = 1; a <= d->MaxAdp && a < TBT_U4_MAX_ADP; a++) {
+        if (!d->Adp[a].Present) {
+            continue;
+        }
+        on = (BOOLEAN)((a == dPcie && p->Pcie.Up) || (a == dUsb3 && p->Usb3.Up));
+        if (!tbtU4OnceAdapter(cm, d, a, want, n, &seen) ||
+            !tbtU4OnceEnable(cm, d, a, on)) {
+            return FALSE;
+        }
+    }
+    return (BOOLEAN)(seen == expect);
+}
+
+/*
+ * Record 22 section 9.3.1: whether a start at XhciCmPreOsCleanup 2 is left
+ * whole - the record says this boot's cleaning ran, every port's tunnels
+ * are its own and nothing else is on either router, and there is no
+ * chained link. Reads only; logged (u4.preos.once: bit 0 left whole,
+ * else the first test failed in bits 15:8 and its port in 7:4).
+ */
+static BOOLEAN tbtU4PreOsOnce(PTBT_U4CM cm)
+{
+    PTBT_U4_PORT p;
+    ULONG i;
+    ULONG k;
+    ULONG why;
+    ULONG at;
+    BOOLEAN state;
+
+    why = 0;
+    at = 0;
+    if (!cm->Carried.Valid || !cm->Carried.Cleaned) {
+        why = 1;
+    }
+    for (k = 0; k < TBT_U4_MAX_KIDS && why == 0; k++) {
+        if (cm->Carried.Kid[k].Used || cm->Kids[k].Used) {
+            why = 4;
+        }
+    }
+    for (k = 0; k < TBT_U4_MAX_LINKS && why == 0; k++) {
+        if (cm->Links[k].Used) {
+            why = 4;
+        }
+    }
+    for (k = 0; k < TBT_U4_QUARANTINE && why == 0; k++) {
+        if (cm->Quarantine[k].Used) {
+            why = 2;
+        }
+    }
+    for (i = 0; i < cm->PortCount && why == 0; i++) {
+        p = &cm->Ports[i];
+        at = p->Index;
+        if (p->State == TBT_U4_HELD || p->HostResidual) {
+            why = 2;
+            break;
+        }
+        state = (BOOLEAN)(p->Pcie.Preserved || p->Usb3.Preserved || p->DpPreserved ||
+                          p->Pcie.Up || p->Usb3.Up);
+        if (!state) {
+            continue;
+        }
+        if (!p->Discovered || p->DpPreserved || p->HostResidual ||
+            (p->Pcie.Preserved && !p->Pcie.Own) ||
+            (p->Usb3.Up && (!p->Usb3.Preserved || !p->Usb3.Own)) ||
+            (p->Pcie.Up && !p->Pcie.Preserved)) {
+            why = 2;
+            break;
+        }
+        if (!tbtU4OnceInventory(cm, p)) {
+            why = 3;
+            break;
+        }
+    }
+    tbtU4Log(cm, "u4.preos.once", why == 0 ? 1UL : ((why << 8) | ((at & 0xFUL) << 4)));
+    return (BOOLEAN)(why == 0);
+}
+
 LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
 {
     ULONG i;
@@ -10233,7 +10530,13 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
     for (i = 0; i < cm->PortCount; i++) {
         tbtU4DiscoverPort(cm, &cm->Ports[i]);
     }
-    if (cm->Config.PreOsCleanup != 0) {
+    cm->PreOsCleaned = FALSE;
+    if (cm->Config.PreOsCleanup == 2 && tbtU4PreOsOnce(cm)) {
+        /* Section 9.3.1: this boot's cleaning ran in an earlier instance
+         * on this NHI, and what is there is that instance's own: the start
+         * is left whole, as value 0 would leave it. */
+        cm->PreOsCleaned = TRUE;
+    } else if (cm->Config.PreOsCleanup != 0) {
         hrr = (BOOLEAN)(cm->Config.PreOsCleanup == 2 &&
                         TBT_HI_CAPS_VERSION(cm->Config.HostInterfaceCaps) ==
                         TBT_HI_VERSION_2);
@@ -10253,6 +10556,7 @@ LONG TbtU4Start(PTBT_U4CM cm, PVOID va, ULONG phys, ULONG bytes)
                 return tbtU4Fail(cm, rc);
             }
         }
+        cm->PreOsCleaned = (BOOLEAN)(cm->Config.PreOsCleanup == 2);
     }
     tbtU4HotPlugEnable(cm);
     cm->Stage = TBT_U4_STAGE_RUNNING;
@@ -10962,6 +11266,13 @@ LONG TbtU4Eject(PTBT_U4CM cm, ULONG port)
     if (p == NULL || cm->Failed || !p->Dev.Present) {
         return TBT_E_PARAM;
     }
+    if (p->State == TBT_U4_TEARDOWN || cm->DeferredTail[p->Index - 1]) {
+        /* Its teardown head has run, nested at a safe point, and its tail
+         * is the next tick's: nothing to eject, and its state is not
+         * this call's to overwrite. Defensive: the shipped caller
+         * (cm_nhi.c) already refuses a port whose PCIe tunnel is down. */
+        return TBT_E_STATE;
+    }
     cm->Counters.Ejects++;
     prev = cm->ActivePort;
     cm->ActivePort = p->Index;
@@ -10998,6 +11309,13 @@ LONG TbtU4EjectPcie(PTBT_U4CM cm, ULONG port)
     p = tbtU4PortOf(cm, port);
     if (p == NULL || cm->Failed || !p->Dev.Present) {
         return TBT_E_PARAM;
+    }
+    if (p->State == TBT_U4_TEARDOWN || cm->DeferredTail[p->Index - 1]) {
+        /* Its teardown head has run, nested at a safe point, and its tail
+         * is the next tick's: nothing to eject, and its state is not
+         * this call's to overwrite. Defensive: the shipped caller
+         * (cm_nhi.c) already refuses a port whose PCIe tunnel is down. */
+        return TBT_E_STATE;
     }
     cm->Counters.Ejects++;
     prev = cm->ActivePort;
@@ -11458,6 +11776,19 @@ LONG TbtU4Resume(PTBT_U4CM cm)
         /* The port's own sequence: a safe point inside it never nests
          * this port's teardown (section 7.4). */
         cm->ActivePort = p->Index;
+        if (cm->DeferredTail[p->Index - 1] && !p->RecDeparted &&
+            !cm->BudgetSpent && !moved && tbtU4RecCleanupGate(cm, p)) {
+            /* A teardown head nested at a safe point before the sleep, its
+             * tail owed to a tick that never came (TbtU4Suspend runs no
+             * poll): finished first, as TbtU4Poll would have, so that it
+             * never runs after a rebuild below over the new connection.
+             * The port is EMPTY then, the obligation met, and the next
+             * check connects whatever is there. Where it cannot run here
+             * (the budget spent, the ports moved), tbtU4Connect refuses
+             * the port until the tick has run it. */
+            tbtU4DropLinks(cm, p);
+            tbtU4Teardown(cm, p);
+        }
         if (p->State == TBT_U4_EMPTY) {
             met = TRUE;     /* already torn down on removal evidence */
         } else if (p->Generation != o->Generation) {
@@ -11552,8 +11883,8 @@ LONG TbtU4Resume(PTBT_U4CM cm)
 }
 
 /*
- * Section 7.6's bound: the platform preparation (1.05 s, a maximum counted
- * at its bound plus a tick), then the budgets TbtU4Resume enforces on the
+ * Section 7.6's bound: the platform preparation (TbtHwPlatformInit's 350
+ * polls of 3 ms, each a sleep that may last a tick more), then the budgets TbtU4Resume enforces on the
  * clock - TBT_U4_RESUME_HOST_US for the rings and the host router,
  * TBT_U4_RESUME_EACH_US per obligation - and the margin for the one step
  * running when the budget runs out: the longest single wait of a sequence
@@ -11563,7 +11894,8 @@ LONG TbtU4Resume(PTBT_U4CM cm)
  * each counted with its tick. Every wait checks the
  * budget at its next step and every request ends within its attempts, so
  * no resume returns later than this. In microseconds: a few minutes for
- * eight obligations at most, below the 32-bit limit.
+ * the twelve obligations at most (TBT_U4_OBLIGATIONS) at a 55 ms tick,
+ * below the 32-bit limit.
  */
 ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs)
 {
@@ -11576,7 +11908,7 @@ ULONG TbtU4ResumeBoundUs(ULONG obligations, ULONG tickUs)
              TBT_CTL_ATTEMPTS * (TBT_CTL_TIMEOUT_US + tickUs +
                                  2UL * (TBT_TX_CONSUME_U4_US + tickUs)) +
              TBT_U4_SERVICE_BATCH * (TBT_TX_CONSUME_U4_US + tickUs);
-    return TBT_ICL_FW_READY_POLLS * TBT_ICL_FW_READY_POLL_MS * 1000UL + tickUs +
+    return TBT_ICL_FW_READY_POLLS * (TBT_ICL_FW_READY_POLL_MS * 1000UL + tickUs) +
            TBT_U4_RESUME_HOST_US + obligations * TBT_U4_RESUME_EACH_US + margin;
 }
 
@@ -11610,6 +11942,9 @@ VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out)
         if (!cm->Disturbed && cm->Carried.Valid) {
             *out = cm->Carried;
             out->Forwarded = TRUE;
+            /* Section 9.3.1: handed on only by an instance at value 2. */
+            out->Cleaned = (BOOLEAN)(cm->Carried.Cleaned &&
+                                     cm->Config.PreOsCleanup == 2);
         }
         return;
     }
@@ -11618,6 +11953,7 @@ VOID TbtU4GetCarry(const TBT_U4CM *cm, PTBT_U4_CARRY out)
         return;
     }
     out->Valid = TRUE;
+    out->Cleaned = (BOOLEAN)(cm->PreOsCleaned && cm->Config.PreOsCleanup == 2);
     out->HostVendor = cm->HostRouter.Vendor;
     out->HostDevice = cm->HostRouter.Device;
     for (i = 0; i < cm->PortCount && i < TBT_U4_MAX_PORTS; i++) {
@@ -13170,6 +13506,22 @@ static VOID tbtU4XdLinkSync(PTBT_U4CM cm, PTBT_U4_XD x)
  * logins accepted) while the network driver holds it open and no other
  * port's is up (section 13); a change rebuilds that peer's block and tells
  * it (TbtXdpPeerSetNetWanted). */
+/* The prtcstns this host offers: the network driver's, with bit 0 (E2E)
+ * withdrawn on the ASM4242's host router (record 35 section 5.3, revision
+ * 15): its transmit ring with E2E enabled never completes a descriptor
+ * (usb4-emu's ASM4242 quirk b, from a public thunderbolt-net patch), so
+ * neither side enables E2E there (IDS 5.1.5.4), as on Falcon Ridge under
+ * the firmware CM (TbtIcmNetWanted). The host router is read at bind,
+ * before any peer exists. */
+static ULONG tbtU4NetStns(const TBT_U4CM *cm)
+{
+    if (cm->HostRouter.Vendor == TBT_U4_ASM_VENDOR &&
+        cm->HostRouter.Device == TBT_U4_ASM_HOST) {
+        return cm->NetPrtcstns & ~TBT_NET_STNS_E2E;
+    }
+    return cm->NetPrtcstns;
+}
+
 static VOID tbtU4XdOffer(PTBT_U4CM cm)
 {
     ULONG i;
@@ -13184,10 +13536,10 @@ static VOID tbtU4XdOffer(PTBT_U4CM cm)
         }
         want = (BOOLEAN)(cm->NetWanted && !tbtU4XdOtherUp(cm, x));
         if (want != x->Peer.NetWanted ||
-            (want && x->Peer.LocalProps.Prtcstns != cm->NetPrtcstns)) {
+            (want && x->Peer.LocalProps.Prtcstns != tbtU4NetStns(cm))) {
             in = cm->XdIn;
             cm->XdIn = x->Port;
-            TbtXdpPeerSetNetWanted(&x->Peer, want, cm->NetPrtcstns);
+            TbtXdpPeerSetNetWanted(&x->Peer, want, tbtU4NetStns(cm));
             cm->XdIn = in;
             tbtU4XdLinkSync(cm, x);
         }
@@ -13548,8 +13900,12 @@ static LONG tbtU4XdUp(PVOID context, ULONG txHop, ULONG rxHop)
         tbtU4Log(cm, "cm.net.credits", (p->Index << 16) | avail);
         return TBT_E_STATE;
     }
-    e2e = (BOOLEAN)((cm->NetPrtcstns & x->Peer.RemoteInfo.Prtcstns &
+    e2e = (BOOLEAN)((tbtU4NetStns(cm) & x->Peer.RemoteInfo.Prtcstns &
                      TBT_NET_STNS_E2E) != 0);
+    if ((cm->NetPrtcstns & ~tbtU4NetStns(cm)) != 0) {
+        tbtU4Log(cm, "cm.net.e2e.off",
+                 (cm->HostRouter.Vendor << 16) | cm->HostRouter.Device);
+    }
     x->Ring = TBT_U4_XD_RING;
     x->TxHop = txHop;
     x->RxHop = rxHop;
@@ -13701,7 +14057,7 @@ static BOOLEAN tbtU4XdBegin(PTBT_U4CM cm, PTBT_U4_PORT p, PTBT_U4_XD x)
     props.DeviceRevision = cm->Config.NetRevision;
     props.MaxHopId = h->Adp[p->Lane0].MaxInHop;
     props.Network = (BOOLEAN)(cm->NetWanted && !tbtU4XdOtherUp(cm, x));
-    props.Prtcstns = cm->NetPrtcstns;
+    props.Prtcstns = tbtU4NetStns(cm);
     route.Hi = 0;
     route.Lo = p->Lane0;
     TbtXdpPeerInit(&x->Peer, &ops, &route, &cm->XdLocal, NULL, FALSE, bond, &props,
@@ -13926,8 +14282,12 @@ static VOID tbtU4XdSink(PVOID context, const TBT_FRAME *frame)
 /* The queue emptied, oldest first: each packet to the peer of the port
  * whose lane 0 its route names (depth 1), a record started for a port
  * left UNSUPPORTED by the UUID step (the peer's request restarts it,
- * section 3.3 step 2); any other route counted. Packets queued while one
- * is answered are taken in the same pass. */
+ * section 3.3 step 2); any other route counted. A pass takes the packets
+ * queued when it began and no more: answering one may make control
+ * requests whose receive queues what the peer sent meanwhile, and a peer
+ * that sends one for each would otherwise keep the thread here for ever
+ * (no port checked, nothing torn down). Those are the next tick's or
+ * wake's; the queue already drops on overflow. */
 /*
  * Run-45 45-E.15 [obs]: an Alpine Ridge firmware CM at the far end sends
  * one UUID Request about 10 ms after the link is up, with no retry seen,
@@ -14076,12 +14436,15 @@ static VOID tbtU4XdTake(PTBT_U4CM cm)
     PTBT_U4_XD x;
     BOOLEAN lane1;
     ULONG prev;
+    ULONG left;
 
     if (cm->XdTaking) {
         return;
     }
     cm->XdTaking = TRUE;
-    while (cm->XdCount != 0) {
+    left = cm->XdCount;
+    while (left != 0 && cm->XdCount != 0) {
+        left--;
         f = cm->XdQ[cm->XdHead];
         cm->XdHead = (cm->XdHead + 1) % TBT_U4_XD_QUEUE;
         cm->XdCount--;

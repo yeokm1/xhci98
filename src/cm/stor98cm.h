@@ -52,7 +52,7 @@
 // Windows 9x (98 SE, Me; maintainer decisions MD-5, D1, D2, 2026-10-15)
 // uses "interface 3" below: the interface 2 table found through a registry
 // locator with a current-boot proof, plus the MD-5 removal transaction. The
-// first Q-9x prototype of interface 3 was found not ready by a Codex review
+// first Q-9x prototype of interface 3 was found not ready by a review
 // and is withdrawn (nothing produces or reads it). Status of this revision:
 // revised after that review, with xhci98's locator and REMOVE_PENDING layout
 // (maintainer, 2026-10-15), and requalified (docs/gates/Q-9x.md, "Interface
@@ -243,7 +243,7 @@ typedef struct _STOR98CM_MSG {
 // ===========================================================================
 // Interface 3 (Windows 98 SE and Me only; MD-5, MD-4, D1, D2): the
 // interface 2 table, found through a registry locator with a current-boot
-// proof, plus the removal transaction. Revised after the Codex review of the
+// proof, plus the removal transaction. Revised after the review of the
 // first prototype and with xhci98's locator and REMOVE_PENDING layout
 // (maintainer, 2026-10-15); docs/gates/Q-9x.md, "Interface 3 revision".
 // Rules are numbered (R*) so that code can cite them.
@@ -287,7 +287,8 @@ typedef struct _STOR98CM_MSG {
 //            STOR98LS9X_PROOF_TABLE_VALUE ("TableLinear"), REG_BINARY 12 bytes
 //            STOR98LS9X_PROOF_TABLE {TableLinear, 272, Cookie}.
 //          The provider value is the authority for the table address (the
-//          maintainer's choice for re-review finding P1-2, option A). Before
+//          maintainer's choice of option A for the table address
+//          authority, Q-9x.md). Before
 //          creating the key the CM opens it: if it already exists another
 //          publisher owns it and this CM publishes nothing (duplicates
 //          refused);

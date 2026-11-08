@@ -364,13 +364,13 @@ rival hypothesis and is refuted: the fix touched the max packet size
 assumption and nothing about `bcdUSB`, and both failing units declare 0200 and
 now work. `1209:4704` is therefore no longer needed as a tie-breaker, though
 it remains a Full-Speed `mps0`=8 specimen. See
-`docs/contributing/runs/run-13e.md`, "Finding 2 - FIXED".
+`docs/contributing/runs/run-13e.md`, the two Creative Full-Speed units that did not enumerate, and their fix.
 
 Still unread: `041E:30D3`, `041E:3249` and the X4 `041E:3278` were not on the
 host for this run. The X4 is High Speed, so its 64 is fixed and carries no
 information; the other two are Full Speed and would each add a specimen.
 
-### Devices held for the Finding 2 discrimination set
+### Devices held for the Creative Full-Speed discrimination set
 
 Read on the host and added to the bench bag for the next visit. None of them
 belongs to a device-table row; they exist only to settle which field is

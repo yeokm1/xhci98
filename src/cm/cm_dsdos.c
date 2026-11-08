@@ -137,8 +137,7 @@ VOID CmDsdFilterRead(PCM_FILTER filter)
         CM_SET_COMPLETION_ALWAYS(irp, cmDsdDone, &done);
         status = IoCallDriver(lower, irp);
         if (status == STATUS_PENDING) {
-            (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE,
-                                        NULL);
+            (VOID)CmWaitEvent(&done, 0);
         }
         status = irp->IoStatus.Status;
         got = (ULONG)irp->IoStatus.Information;

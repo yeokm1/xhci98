@@ -1,8 +1,8 @@
 # Controller names
 
 The names Device Manager shows for the USB 3 controllers `xhci98.sys`
-runs, by PCI vendor and device id. A controller not listed here is
-`xHCI98 USB 3 Controller`. The Thunderbolt and USB4 controllers that
+runs, by PCI vendor and device id. A hardware controller not listed here
+is `xHCI98 USB 3 Controller`. The Thunderbolt and USB4 controllers that
 `xhcicm.sys` runs are listed in the [README](../../README.md).
 
 | Controller | PCI ids | In Device Manager |
@@ -46,7 +46,6 @@ runs, by PCI vendor and device id. A controller not listed here is
 | NVIDIA TU116 | `10DE:1AEC` | xHCI98 USB 3 Controller (NVIDIA TU116) |
 | VIA VL800/VL801 | `1106:3432` | xHCI98 USB 3 Controller (VIA VL800/VL801) |
 | VIA VL805/VL806 | `1106:3483` | xHCI98 USB 3 Controller (VIA VL805/VL806) |
-| VMware USB3 xHCI | `15AD:0778`, `15AD:0779` | xHCI98 USB 3 Controller (VMware USB3 xHCI) |
 | Renesas uPD720201 | `1912:0014` | xHCI98 USB 3 Controller (Renesas uPD720201) |
 | Renesas uPD720202 | `1912:0015` | xHCI98 USB 3 Controller (Renesas uPD720202) |
 | ASMedia ASM1040 | `1B21:1040` | xHCI98 USB 3 Controller (ASMedia ASM1040) |
@@ -61,7 +60,6 @@ runs, by PCI vendor and device id. A controller not listed here is
 | ASMedia ASM3142 | `1B21:3142` | xHCI98 USB 3 Controller (ASMedia ASM3142) |
 | ASMedia ASM3241 | `1B21:3241` | xHCI98 USB 3 Controller (ASMedia ASM3241) |
 | ASMedia ASM3242 | `1B21:3242` | xHCI98 USB 3 Controller (ASMedia ASM3242) |
-| Red Hat QEMU xHCI | `1B36:000D` | xHCI98 USB 3 Controller (Red Hat QEMU xHCI) |
 | Etron EJ168 | `1B6F:7023` | xHCI98 USB 3 Controller (Etron EJ168) |
 | Etron EJ188/EJ198 | `1B6F:7052` | xHCI98 USB 3 Controller (Etron EJ188/EJ198) |
 | Fresco Logic FL1000 | `1B73:1000` | xHCI98 USB 3 Controller (Fresco Logic FL1000) |

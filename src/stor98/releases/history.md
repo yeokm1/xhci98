@@ -4,6 +4,43 @@ One entry per version, newest first, written for the person installing
 the driver; plain ASCII within 78 columns. Since 3.1.0.0 Stor98 is built
 and released as part of xhci98, with xhci98's version.
 
+## 3.4.2.0 - not yet released
+
+- A drive formatted with 4 KiB (4096-byte) sectors works on every
+  system. Windows 98 SE, ME, 2000, XP, Vista and 7 see it with 512-byte
+  sectors: Stor98 translates, reading a whole sector first where a
+  write covers only part of one. Windows 8, 8.1 and 10 see the drive's
+  own 4096-byte sectors, as Windows' own NVMe driver shows them, so a
+  volume made there under that driver stays readable under Stor98.
+  Drives with 1 KiB or 2 KiB sectors have 512-byte sectors everywhere.
+  The two views are not interchangeable: a drive partitioned in one
+  sees its partitions and files as damaged in the other (README,
+  "Known limits").
+- VERIFY(10) and VERIFY(16) read the blocks asked for, by the drive's
+  own Verify command where it has one, otherwise by reads the driver
+  discards, so a full format or `chkdsk /r` on Windows 2000 to 10, and
+  MS-DOS FORMAT, find an unreadable block. They used to succeed without
+  reading. VERIFY(6) is refused as an unsupported command.
+- READ CAPACITY(16) returns as much of its answer as the caller asks
+  for. A request for the 12-byte form got nothing, so Windows 7 showed
+  a drive larger than 2 TiB with a size of 0.
+- Windows 98 SE and ME: an NVMe drive the computer's BIOS has set up is
+  left to the BIOS also when the BIOS has turned the drive's memory
+  access off; Stor98 used to start and reset such a drive. To tell,
+  Stor98 turns the drive's memory access on for the check and back off.
+- Windows 98 SE and ME: StorFind says "decode on for the read" or
+  "decode off, not read" when the drive's memory access was off, and
+  "left: command not restored" when it could not be turned back off.
+- Windows 2000 to 10: when Windows starts Stor98 again on a drive it
+  ran before (a resume, or the controller disabled and enabled), Stor98
+  no longer clears its command queues before it has seen the drive
+  stop.
+- Requests Stor98 answers itself are answered after a shutdown request
+  without starting the drive again; MODE SENSE, LOG SENSE and the ATA
+  IDENTIFY answer are corrected.
+- Stor98 asks Windows for a request's physical addresses fewer times
+  where Windows reports the memory as one contiguous run.
+
 ## 3.4.1.0 - not yet released
 
 - Windows 98 SE and ME: Stor98 starts only the drive Windows loaded

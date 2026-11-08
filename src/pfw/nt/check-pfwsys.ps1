@@ -6,9 +6,11 @@ record 32 section 11.2), run by src\pfw\nt\build.cmd after a link:
   - a PE32 image for i386, native subsystem, a driver (no DLL flag);
   - every import a row of pfw-sys-imports.allow (module!name), and no
     module but ntoskrnl.exe and HAL.dll: each row an export of every
-    kernel and HAL from Windows 2000 on, so the one image loads on 2000
-    and on the 32-bit Vista, 7, 8, 8.1 and 10 (KeIpiGenericCall, which
-    2000 lacks, is looked up at run time, never imported);
+    kernel and HAL from Windows 2000 on, so the one image loads on 2000,
+    XP and the 32-bit Vista, 7, 8, 8.1 and 10 (KeIpiGenericCall, which
+    2000 lacks, is looked up at run time, never imported). Loading is
+    wider than acting: it closes windows on 2000 to 8.1 (2000 and XP with
+    one processor only) and on 10 records the skip and does nothing;
   - the stamp "XHCIPFW.SYS <version>" at src\xhci_version.h's XHCI_VER_STR;
   - exactly one flavour marker, XHCI98_FLAVOUR_RELEASE or (-Qemu)
     XHCI98_FLAVOUR_QEMU;

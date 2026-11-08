@@ -156,6 +156,9 @@ ULONG XhciStreamRingOffset(const XHCI_STREAM_LAYOUT *layout, ULONG streamId);
 #define XHCI_STREAM_BIG_RING_TRBS   1024UL
 #define XHCI_STREAM_BIG_ALIGN       16384UL
 
+/* The unpadded two are host-suite-only: the driver calls the `Pad` forms
+ * below (hcd_cfg.c), and XhciStreamLayoutPlaced is one of them with `pad`
+ * 0. */
 ULONG XhciStreamBigBytes(ULONG entries, ULONG streams, PULONG bytes);
 ULONG XhciStreamLayoutPlaced(ULONG entries, ULONG streams, ULONG paLow,
                              ULONG paHigh, PXHCI_STREAM_LAYOUT layout);

@@ -15,7 +15,8 @@
 /* --------------------------------------------------------------------- */
 
 /* A relative due time in 100 ns units, built without 64-bit arithmetic
- * (AGENTS.md): the magnitude fits 32 bits for any wait this driver makes. */
+ * (AGENTS.md): the magnitude fits 32 bits for any wait this driver makes.
+ * IRQL: any. */
 VOID HcdRelativeMs(PLARGE_INTEGER due, ULONG milliseconds)
 {
     ULONG ticks;
@@ -79,6 +80,7 @@ VOID HcdSvcWaitMs(PXHCI_EXTENSION ext, ULONG milliseconds)
 /* PCI configuration space                                                */
 /* --------------------------------------------------------------------- */
 
+/* The configuration IRP's completion routine. IRQL: <= DISPATCH_LEVEL. */
 static NTSTATUS NTAPI hcdConfigDone(PDEVICE_OBJECT DeviceObject, PIRP Irp,
                                     PVOID Context)
 {
@@ -169,6 +171,8 @@ MPSTATUS HcdSvcConfigSpace(PXHCI_EXTENSION ext, BOOLEAN read, PVOID buffer,
 /* The one-shot timer service                                             */
 /* --------------------------------------------------------------------- */
 
+/* A slot's callback, then its count and the idle event. IRQL:
+ * DISPATCH_LEVEL. */
 static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
                               PVOID Arg2)
 {
@@ -209,7 +213,8 @@ static VOID NTAPI hcdTimerDpc(PKDPC Dpc, PVOID Context, PVOID Arg1,
  */
 #define HCD_FRAME_SAMPLE_MS 500UL
 
-static VOID hcdFrameDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
+static VOID NTAPI hcdFrameDpc(PKDPC dpc, PVOID context, PVOID arg1,
+                              PVOID arg2)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
@@ -264,7 +269,8 @@ VOID HcdFrameTimerStart(PHCD_CONTROLLER hc)
  * nothing of this DPC touches the controller after the drain returns.
  * IRQL: DISPATCH_LEVEL.
  */
-static VOID hcdTolDpc(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2)
+static VOID NTAPI hcdTolDpc(PKDPC dpc, PVOID context, PVOID arg1,
+                            PVOID arg2)
 {
     PHCD_CONTROLLER hc;
     LARGE_INTEGER due;
@@ -471,7 +477,6 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
 {
     KIRQL oldIrql;
     ULONG i;
-
     LARGE_INTEGER due;
 
     KeAcquireSpinLock(&hc->TimerLock, &oldIrql);
@@ -501,8 +506,9 @@ VOID HcdTimersDrain(PHCD_CONTROLLER hc)
         }
         KeReleaseSpinLock(&hc->TimerLock, oldIrql);
     }
-    (VOID)KeWaitForSingleObject(&hc->TimersIdle, Executive, KernelMode, FALSE,
-                                NULL);
+    /* Satisfied, not merely returned: the release that follows unmaps
+     * what a callback still to run would touch (HcdWaitEvent). */
+    (VOID)HcdWaitEvent(&hc->TimersIdle, 0);
     /* The last callback sets the event while it still holds TimerLock, which
      * lives in this object: taking the lock once more waits until it has let
      * go, so nothing of the controller's is touched after this returns (task
@@ -557,6 +563,23 @@ VOID HcdSvcRequestReset(PXHCI_EXTENSION ext)
     }
     XhciControllerLockRelease(ext, oldIrql);
     HcdThreadWake(hc);
+}
+
+/* IRQL: any. */
+ULONG HcdSvcEventRing(PXHCI_EXTENSION ext, volatile XHCI_TRB **va,
+                      PULONG pa)
+{
+    PHCD_CONTROLLER hc;
+
+    hc = HcdControllerFromExt(ext);
+    if (hc->EvtRingVa != NULL) {
+        *va = (volatile XHCI_TRB *)hc->EvtRingVa;
+        *pa = hc->EvtRingPa;
+        return XHCI_EVENT_RING_BIG_TRBS;
+    }
+    *va = (volatile XHCI_TRB *)XhciCommonAt(ext, ext->Layout.EventRingOffset);
+    *pa = XhciCommonPA(ext, ext->Layout.EventRingOffset);
+    return ext->Layout.EventRingTrbs;
 }
 
 /* IRQL: any. */

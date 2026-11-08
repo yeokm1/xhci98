@@ -98,7 +98,9 @@ having read the exact tree it was built from.
 ## Refreshing the mirror
 
 Run from the repo root. This pulls only the relevant subtrees (blobless sparse
-checkout), copies out the files listed above, and discards the clones, so no
+checkout) at the commits the table above pins (each tree fetched by its
+commit, not by its branch tip; a refresh that moves a pin updates the table
+in the same change), copies out the files listed above, and discards the clones, so no
 git repositories are left behind under `external/`. The block is a skeleton:
 the copy step between the clones and the `rm -rf` is the table above, and it
 is spelled out there rather than duplicated here. Run as written, with the
@@ -109,14 +111,20 @@ cd external
 tmp="$(mktemp -d)"
 
 # ReactOS: usbport ABI header + port driver + template miniports
-git clone --depth 1 --filter=blob:none --sparse https://github.com/reactos/reactos "$tmp/reactos"
+git init -q "$tmp/reactos"
+git -C "$tmp/reactos" remote add origin https://github.com/reactos/reactos
 git -C "$tmp/reactos" sparse-checkout set \
   drivers/usb/usbport drivers/usb/usbehci drivers/usb/usbohci drivers/usb/usbuhci \
   sdk/include/reactos/drivers/usbport
+git -C "$tmp/reactos" fetch -q --depth 1 --filter=blob:none origin 0298e10d5d904a0230868be8f7bdf6436d589c62
+git -C "$tmp/reactos" checkout -q FETCH_HEAD
 
 # Linux: core xHCI hardware + PCI quirk/handoff + Renesas firmware
-git clone --depth 1 --filter=tree:0 --sparse https://github.com/torvalds/linux "$tmp/linux"
+git init -q "$tmp/linux"
+git -C "$tmp/linux" remote add origin https://github.com/torvalds/linux
 git -C "$tmp/linux" sparse-checkout set drivers/usb/host
+git -C "$tmp/linux" fetch -q --depth 1 --filter=tree:0 origin c6859eed755df351a3978b33cb92365f9b3e8f06
+git -C "$tmp/linux" checkout -q FETCH_HEAD
 # Two single files beside them, at the same commit (added 2026-10-14 for roadmap-hcd
 # task 38.10, design record 20): the PCI vendor/device constants xhci-pci.c names, and
 # usb_set_interface's rollback. Copied flat into linux/ as pci_ids.h and message.c.
@@ -140,12 +148,18 @@ curl -sSfL -o "$tmp/linux/usb-storage/usb_usual.h" "$R/include/linux/usb_usual.h
 #          usb_usual.h 6318f0c0e03479d6987114c48f65eb803461e871f78ad2462cba3a83c323f8c6
 
 # FreeBSD: register-sequence reference
-git clone --depth 1 --filter=blob:none --sparse https://github.com/freebsd/freebsd-src "$tmp/freebsd"
+git init -q "$tmp/freebsd"
+git -C "$tmp/freebsd" remote add origin https://github.com/freebsd/freebsd-src
 git -C "$tmp/freebsd" sparse-checkout set sys/dev/usb/controller
+git -C "$tmp/freebsd" fetch -q --depth 1 --filter=blob:none origin cb325dcedfa291c9bfe350a513694df3776a17a4
+git -C "$tmp/freebsd" checkout -q FETCH_HEAD
 
 # Haiku: readable xHCI implementation
-git clone --depth 1 --filter=blob:none --sparse https://github.com/haiku/haiku "$tmp/haiku"
+git init -q "$tmp/haiku"
+git -C "$tmp/haiku" remote add origin https://github.com/haiku/haiku
 git -C "$tmp/haiku" sparse-checkout set src/add-ons/kernel/busses/usb
+git -C "$tmp/haiku" fetch -q --depth 1 --filter=blob:none origin 618e42b86da9d041c995efe240af0a11329751fe
+git -C "$tmp/haiku" checkout -q FETCH_HEAD
 
 # QEMU: the emulated xHC the guests run against. Fetch the TAG matching the
 # installed qemu-system-x86_64, not master - what the model implements is a

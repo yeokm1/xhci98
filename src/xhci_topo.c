@@ -835,31 +835,23 @@ static VOID xhciTopoObservePortRequest(PXHCI_TOPOLOGY topo,
      * device the older reset was for either enumerated already, in which case
      * the claim was spent, or it did not, in which case nothing will spend it.
      *
-     * **OPEN, raised: this arms on the request, not on its success**,
-     * and a SET_FEATURE(PORT_RESET) the hub stalls therefore arms a claim for a
-     * port no device will appear on - and spends the root-port entitlement at
-     * `xhciDevTopoSnoopSubmit` on the way past. It is *deliberately* not moved
-     * to the completion the way the SET_INTERFACE beside it was, and the reason
-     * is that the two flags are not the same kind of thing: MTT is a statement
-     * about what the hub **is**, which a refusal falsifies outright, while this
-     * is a prediction about what usbhub will do **next**, which the machinery
-     * around it is already built to correct - the newer reset wins here, a root
-     * port reset drops the claim and re-arms the entitlement outright
-     * (`src/xhci_slot.c`, "it supersedes any pending hub claim"), and an open
-     * that spends neither is counted as a device this driver cannot place.
-     * Deferring it would also risk arming **late**: usbhub opens address 0
-     * after the reset, and a claim that has not arrived by then breaks an
-     * enumeration that works today, which is a worse failure than a stale claim
-     * and is not observable on a host. What is left uncorrected is a
-     * `ResetsOverwritten` that can count a claim which was never valid. Settling
-     * it needs a guest with a hub that stalls a port reset; nobody has run one.
+     * **The claim is armed in the host suite only.** Its spender was the
+     * miniport's slot layer (xhci_slot.c, deleted 2026-10-02): under the HCD
+     * the hub layer enumerates each hub port itself and knows the position,
+     * and nothing calls XhciTopoClaimChild, so a claim armed here would never
+     * be spent and `ResetsOverwritten` would count every second hub port reset
+     * as a claim overwritten. A driver build therefore arms none, and the two
+     * read 0 on a target; `Resets` and `ResetsUnknownHub` above count every
+     * reset in both builds.
      */
+#ifdef XHCI_HOST_TEST
     if (topo->Pending) {
         topo->ResetsOverwritten++;
     }
     topo->Pending = 1;
     topo->PendingHub = address;
     topo->PendingPort = port;
+#endif
     if (snoop != NULL) {
         snoop->Armed = 1;
         /* The armed pair's port, so the caller can ask whether the position it

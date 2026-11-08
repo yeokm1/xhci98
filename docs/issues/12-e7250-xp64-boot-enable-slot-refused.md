@@ -71,7 +71,7 @@ IRQ 16, where nothing listens. What follows:
     RESET_PIPE took 2-3 s.
   - So the HID is sluggish, and the mass-storage stack is too slow for the
     partition manager and mount to finish.
-- **A device present at boot fails "no slot"** (the user's Finding 1).
+- **A device present at boot fails "no slot"** (the user's first report).
   - The start's No Op self-test completes, but its completion is never
     delivered, so the command engine stays busy.
   - Each Enable Slot is refused `XHCI_CMD_BUSY`, and `hcdCommand` gives up
@@ -110,7 +110,7 @@ fault was in `xhci98.sys`, not `xhciuas`.
 ### 3.2 Leads that were dropped
 
 - **An interim build, `2.2.0.1`**, was made on 2026-10-07 and withdrawn
-  unsent. It held a Finding 1 fix (a drain at interrupt enable, and a BUSY
+  unsent. It held a fix for the no-slot refusal (a drain at interrupt enable, and a BUSY
   wait-and-resubmit in `hcdCommand`) and diagnostics: `xhciuas`'s START
   report and six counters. Its code was reverted. Its tasks were roadmap
   36w.1 to 36w.3.
@@ -160,7 +160,7 @@ What they showed:
 - **It failed from the first event.** In `xpstart` and `xpboot`, the first
   sample shows the start's No Op completion waiting, and "ISR entered
   never".
-- **`xpboot` reproduced Finding 1** exactly: Enable Slot "never completed"
+- **`xpboot` reproduced the no-slot refusal** exactly: Enable Slot "never completed"
   twice, and port 13 Failed with cause "no slot".
 - **The interrupt resource** came from the dump's `XHCI_EXTENSION` header:
   - Windows 7: vector `0xB2`, IRQL 11, LevelSensitive.

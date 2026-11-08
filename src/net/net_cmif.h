@@ -26,10 +26,29 @@ NTSTATUS NetCmIfAcquire(PDEVICE_OBJECT Lower, PXHCI_CM_NET_INTERFACE Iface,
 /* Drops the hold; *Iface zeroed. IRQL: PASSIVE_LEVEL. */
 VOID NetCmIfRelease(PXHCI_CM_NET_INTERFACE Iface);
 
-/* QueryInfo with its Size set; a refusal reads as the zeroed answer (link
- * down, no peer). IRQL: <= DISPATCH_LEVEL. */
-VOID NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
-                  PXHCI_CM_NET_INFO Info);
+/* QueryInfo with its Size set: 1 when answered, else 0 and the zeroed
+ * answer (link down, no peer, no MAC). IRQL: <= DISPATCH_LEVEL. */
+ULONG NetCmIfQuery(const XHCI_CM_NET_INTERFACE *Iface,
+                   PXHCI_CM_NET_INFO Info);
+
+/* The most an initialisation waits for this domain's MAC, which QueryInfo
+ * refuses until the connection manager has read it at this start (design
+ * record 35 section 6.5), in steps of NET_CMIF_MAC_STEP_MS. */
+#define NET_CMIF_MAC_WAIT_MS    5000UL
+#define NET_CMIF_MAC_STEP_MS    50UL
+
+/* QueryInfo asked until it answers with a MAC that is not all zeros, at
+ * most NET_CMIF_MAC_WAIT_MS / NET_CMIF_MAC_STEP_MS more times after the
+ * first: 1 with *Info that answer, else 0 and *Info zeroed. IRQL:
+ * PASSIVE_LEVEL. */
+ULONG NetCmIfMacWait(const XHCI_CM_NET_INTERFACE *Iface,
+                     PXHCI_CM_NET_INFO Info);
+
+/* An adapter keeps the MAC its initialisation took until its halt; a
+ * later start of the NHI under it may read another (a router whose UUID
+ * read unusable, record 35 section 4.4), which the link-up callbacks log
+ * as net.mac.moved. 1 when the six bytes differ. IRQL: any. */
+ULONG NetCmIfMacMoved(const UCHAR *Kept, const XHCI_CM_NET_INFO *Info);
 
 /* The link's total rate in Mbit/s (LinkMbps), 0 when unknown. IRQL: any. */
 ULONG NetCmIfRateMbps(const XHCI_CM_NET_INFO *Info);

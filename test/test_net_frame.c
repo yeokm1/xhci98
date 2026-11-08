@@ -630,19 +630,23 @@ static void testSegment(void)
     CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "URG");
     CHECK_EQ(why, NET_SEGDROP_FLAGS, "as flags");
 
-    len = makeTcp(pkt, 0, 4000, 0, 0x10, 1);
+    /* 4004 + 20 bytes of TCP: a multiple of 8, as a fragment with MF
+     * must carry. */
+    len = makeTcp(pkt, 0, 4004, 0, 0x10, 1);
     put16be(pkt + 14 + 6, 0x2000);
     put16be(pkt + 14 + 10, 0);
     put16be(pkt + 14 + 10, (~refSum(pkt + 14, 20, 0)) & 0xFFFF);
-    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "MF set");
-    CHECK_EQ(why, NET_SEGDROP_FRAGMENT, "as fragment");
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 1UL,
+             "a TCP fragment (MF set) is fragmented further");
+    CHECK_EQ(seg.Frag, 1UL, "at the IP layer");
 
     len = makeTcp(pkt, 0, 4000, 0, 0x10, 1);
     pkt[14 + 9] = 17;
     put16be(pkt + 14 + 10, 0);
     put16be(pkt + 14 + 10, (~refSum(pkt + 14, 20, 0)) & 0xFFFF);
-    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "UDP");
-    CHECK_EQ(why, NET_SEGDROP_NOTTCP, "as not TCP");
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL,
+             "UDP with Don't Fragment set");
+    CHECK_EQ(why, NET_SEGDROP_DF, "as DF");
 
     len = makeTcp(pkt, 1, 4000, 0, 0x10, 1);
     pkt[14 + 6] = 0;
@@ -680,6 +684,184 @@ static void testSegment(void)
              "a maximum below 1514");
 }
 
+/* ------------------------------------------------------------------ */
+/* Receive IPv4 fragmentation (record 35 section 7.4, RFC 791 3.2)     */
+/* ------------------------------------------------------------------ */
+
+/* An IPv4 datagram of protocol proto: ihl header bytes (options from
+ * opts, ihl - 20 of them), payload bytes of pattern, the fragment field
+ * frag (flags and offset in 8-byte units). Good header checksum. */
+static ULONG makeIp4(UCHAR *f, ULONG proto, ULONG payload, ULONG ihl,
+                     const UCHAR *opts, ULONG frag)
+{
+    UCHAR *ip = f + 14;
+
+    memcpy(f, macs, 12);
+    put16be(f + 12, 0x0800);
+    memset(ip, 0, ihl);
+    ip[0] = (UCHAR)(0x40 | (ihl / 4));
+    put16be(ip + 2, ihl + payload);
+    put16be(ip + 4, 0xBEEF);
+    put16be(ip + 6, frag);
+    ip[8] = 128;
+    ip[9] = (UCHAR)proto;
+    ip[12] = 169; ip[13] = 254; ip[14] = 189; ip[15] = 101;
+    ip[16] = 169; ip[17] = 254; ip[18] = 31; ip[19] = 186;
+    if (ihl > 20) {
+        memcpy(ip + 20, opts, ihl - 20);
+    }
+    put16be(ip + 10, (~refSum(ip, ihl, 0)) & 0xFFFF);
+    fillPattern(ip + ihl, payload, payload + proto + ihl);
+    return 14 + ihl + payload;
+}
+
+/* Splits the datagram in pkt and checks every fragment: within maxFrame,
+ * a good header checksum, the identification and addresses kept, DF
+ * clear, offsets contiguous in 8-byte units from the original's, MF on
+ * all but the last and the original's on the last, the first header the
+ * original's, the later ones laterOpts's options, the data joined back. */
+static void fragCheck(ULONG proto, ULONG payload, ULONG ihl,
+                      const UCHAR *opts, ULONG frag, ULONG maxFrame,
+                      const UCHAR *laterOpts, ULONG laterIhl)
+{
+    NET_SEG seg;
+    ULONG len = makeIp4(pkt, proto, payload, ihl, opts, frag);
+    ULONG why;
+    ULONG n;
+    ULONG k = 0;
+    ULONG got = 0;
+    ULONG expectOff = (frag & 0x1FFF) * 8;
+    char what[96];
+
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, maxFrame, &why), 1UL,
+             "an oversize IPv4 datagram is taken for fragmentation");
+    CHECK_EQ(why, 0UL, "no reason");
+    CHECK_EQ(seg.Frag, 1UL, "as fragmentation");
+    memcpy(pkt2, pkt, len);
+    while ((n = NetSegNext(&seg, piece)) != 0) {
+        const UCHAR *pip = piece + 14;
+        ULONG hl = (ULONG)(pip[0] & 15) * 4;
+        ULONG dl = n - 14 - hl;
+        ULONG f = get16be(pip + 6);
+        int last = (k + 1 == seg.Pieces);
+
+        sprintf(what, "proto %lu len %lu max %lu piece %lu", proto,
+                payload, maxFrame, k);
+        CHECK(n <= maxFrame, what);
+        CHECK(memcmp(piece, pkt, 14) == 0, "Ethernet header kept");
+        CHECK(ip4Good(piece), "each fragment's header checksum");
+        CHECK_EQ(get16be(pip + 2), hl + dl, "total length");
+        CHECK_EQ(get16be(pip + 4), 0xBEEFUL, "identification kept");
+        CHECK_EQ(pip[9], proto, "protocol kept");
+        CHECK(memcmp(pip + 12, pkt + 14 + 12, 8) == 0, "addresses kept");
+        CHECK_EQ(f & 0x4000, 0UL, "DF clear");
+        CHECK_EQ((f & 0x1FFF) * 8, expectOff, "offset contiguous");
+        if (!last) {
+            CHECK_EQ(dl & 7, 0UL, "a multiple of 8 but the last");
+            CHECK_EQ(f & 0x2000, 0x2000UL, "MF on all but the last");
+        } else {
+            CHECK_EQ(f & 0x2000, frag & 0x2000, "the original MF last");
+        }
+        if (k == 0) {
+            CHECK_EQ(hl, ihl, "the first keeps the whole header");
+            CHECK(memcmp(pip + 20, pkt + 14 + 20, ihl - 20) == 0,
+                  "every option on the first");
+        } else {
+            CHECK_EQ(hl, laterIhl, "the later header's length");
+            CHECK(laterIhl == 20 ||
+                  memcmp(pip + 20, laterOpts, laterIhl - 20) == 0,
+                  "only the copied options later");
+        }
+        memcpy(joined + got, pip + hl, dl);
+        got += dl;
+        expectOff += dl;
+        k++;
+    }
+    CHECK_EQ(k, seg.Pieces, "every fragment written");
+    CHECK_EQ(got, payload, "the payload's bytes");
+    CHECK(memcmp(joined, pkt + 14 + ihl, payload) == 0, "the data back");
+    CHECK(memcmp(pkt, pkt2, len) == 0, "the original unchanged");
+    CHECK_EQ(NetSegNext(&seg, piece), 0UL, "nothing after the last");
+}
+
+static void testFragment(void)
+{
+    /* Options: NOP, record route (0x07, not copied, 7 bytes), loose
+     * source route (0x83, copied, 7 bytes), NOP: 20 + 16 = 36; the
+     * later fragments carry the 7-byte copied option and one pad byte. */
+    static const UCHAR opts[16] = {
+        0x01, 0x07, 0x07, 0x04, 0, 0, 0, 0,
+        0x83, 0x07, 0x04, 10, 0, 0, 1, 0x01
+    };
+    static const UCHAR laterOpts[8] = { 0x83, 0x07, 0x04, 10, 0, 0, 1, 0 };
+    static const UCHAR badLen1[4] = { 0x83, 0x01, 0, 0 };
+    static const UCHAR badPast[4] = { 0x83, 0x08, 0, 0 };
+    static const UCHAR noCopy[4] = { 0x07, 0x03, 0x04, 0 };
+    NET_SEG seg;
+    ULONG len;
+    ULONG why;
+
+    fragCheck(17, 3008, 20, NULL, 0, 1514, NULL, 20);       /* UDP 3000 */
+    fragCheck(1, 8008, 20, NULL, 0, 1514, NULL, 20);        /* ping 8000 */
+    fragCheck(17, 61980, 20, NULL, 0, 1514, NULL, 20);      /* MTU 62000 */
+    fragCheck(17, 65515, 20, NULL, 0, 1514, NULL, 20);      /* the most */
+    fragCheck(17, 30000, 20, NULL, 0, 1515, NULL, 20);
+    fragCheck(1, 30000, 20, NULL, 0, 9014, NULL, 20);
+    fragCheck(17, 5000, 36, opts, 0, 1514, laterOpts, 28);
+    fragCheck(17, 5000, 24, noCopy, 0, 1514, NULL, 20);
+    fragCheck(17, 4000, 20, NULL, 0x2000 | 185, 1514, NULL, 20); /* middle */
+    fragCheck(17, 4000, 20, NULL, 370, 1514, NULL, 20);     /* a last one */
+    fragCheck(6, 4000, 20, NULL, 0x2000, 1514, NULL, 20);   /* TCP, MF set */
+    fragCheck(17, 4000, 20, NULL, 0x8000, 1514, NULL, 20);  /* reserved */
+
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 0x4000);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "DF set");
+    CHECK_EQ(why, NET_SEGDROP_DF, "as DF");
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 0);
+    pkt[14 + 8] ^= 1;
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "bad IP sum");
+    CHECK_EQ(why, NET_SEGDROP_IPCSUM, "as IP checksum");
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 0);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len + 2, 1514, &why), 0UL,
+             "a frame longer than its total length");
+    CHECK_EQ(why, NET_SEGDROP_LENGTH, "as length");
+    len = makeIp4(pkt, 17, 3008, 24, badLen1, 0);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "option len 1");
+    CHECK_EQ(why, NET_SEGDROP_HEADER, "as header");
+    len = makeIp4(pkt, 17, 3008, 24, badPast, 0);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL,
+             "an option past the header");
+    CHECK_EQ(why, NET_SEGDROP_HEADER, "as header");
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 8000);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL,
+             "offset and payload past 65535");
+    CHECK_EQ(why, NET_SEGDROP_HEADER, "as header");
+    /* The reassembly bound with the header: 64000 + 1520 + 20 = 65540
+     * refused; 64000 + 1512 + 20 = 65532 taken (a last fragment). */
+    len = makeIp4(pkt, 17, 1520, 20, NULL, 8000);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL,
+             "offset, payload and header past 65535");
+    CHECK_EQ(why, NET_SEGDROP_HEADER, "as header");
+    fragCheck(17, 1512, 20, NULL, 8000, 1514, NULL, 20);
+    fragCheck(17, 65488, 20, NULL, 3, 1514, NULL, 20);       /* 65532 */
+    len = makeIp4(pkt, 17, 3001, 20, NULL, 0x2000);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL,
+             "MF with data not a multiple of 8");
+    CHECK_EQ(why, NET_SEGDROP_HEADER, "as header");
+    fragCheck(17, 3001, 20, NULL, 0, 1514, NULL, 20);  /* unaligned, MF 0 */
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 0);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1000, &why), 0UL,
+             "a maximum below 1514");
+    len = makeIp4(pkt, 17, 3008, 20, NULL, 0);
+    put16be(pkt + 12, 0x0806);
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "ARP");
+    CHECK_EQ(why, NET_SEGDROP_NOTTCP, "as not TCP");
+    len = makeTcp(pkt, 1, 4000, 0, 0x10, 1);
+    pkt[14 + 6] = 17;
+    CHECK_EQ(NetSegBegin(&seg, pkt, len, 1514, &why), 0UL, "IPv6 UDP");
+    CHECK_EQ(why, NET_SEGDROP_NOTTCP, "as not TCP");
+}
+
 int main(void)
 {
     testSums();
@@ -689,6 +871,7 @@ int main(void)
     testRoundTrip();
     testRxDrops();
     testSegment();
+    testFragment();
     printf("test_net_frame: %d checks, %d failures\n", checks, failures);
     return failures != 0;
 }

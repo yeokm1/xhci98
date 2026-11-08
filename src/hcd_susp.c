@@ -3231,8 +3231,8 @@ ULONG HcdSuspPdoReopen(PHCD_CONTROLLER hc, PHCD_DEVICE_PDO pdo)
          * owes no D0 IRP (36.31). Only once the
          * device is powered - on a suspended link the thread reports it
          * when its resume reaches ACTIVE (hcdSuspReportD0) - and, inside
-         * the PDO's report mutex, never after a newer Dx's report (round
-         * 4). A hub's or a composite parent's PDO (HcdPdoIsParent, set
+         * the PDO's report mutex, never after a newer Dx's report. A hub's
+         * or a composite parent's PDO (HcdPdoIsParent, set
          * above) is reported whatever the switch; any other PDO only when
          * eligible, so with the switch at 0 it keeps today's START, which
          * reports nothing. SuperSpeed is eligible since stage B (8.2) and

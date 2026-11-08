@@ -61,7 +61,8 @@
 #define STG_HOLD9X              0x06    // arg: the 9x hold bound used, ms (StorHold9xMs or its default); 9x, every HwFindAdapter
 #define STG_HOLD9X_REFUSED      0x07    // arg: a hold bound outside 1000-10000 ms as read (StorHold9xMs, or hold9x= in a test build); the default stands
 #define STG_FIND_PORT           0x08    // arg: ConfigInfo's bus << 16 | slot (low 16 bits); 9x, every HwFindAdapter (nvme2k.c, PLAN 3.1)
-#define STG_FIND_FIRMWARE       0x0A    // arg: PCISCAN_FW_* | CC low byte << 8 | CSTS low byte << 16 | read << 24; 9x, the found function before anything is written (PLAN 3.1)
+#define STG_FIND_FIRMWARE       0x0A    // arg: PCISCAN_FW_* | CC low byte << 8 | CSTS low byte << 16 | read << 24 | decode turned on for the read << 25 | not put back << 26 | PCISCAN_REACH_* << 27; 9x, the found function before anything else is done to it (PLAN 3.1)
+#define STG_FIND_FWTEST         0x0B    // arg: STOR98_TEST_FWDECODEOFF only (nvme2k.c): the injection, the command word after the check, after the restore
 #define STG_FIND_PORT_RANGE     0x09    // arg: the low dword of the port's first access range, 0 for none; 9x
 #define STG_STARTIO             0x10    // arg: STG_SRB_ARG(Srb, state)
 #define STG_SRB_HELD            0x11    // arg: STG_SRB_ARG | TimeOutValue << 24 (low byte); held while not dispatchable
@@ -81,9 +82,10 @@
 #define STG_BRINGUP_DONE        0x43    // marker; arg: ms since HwInitialize
 #define STG_BRINGUP_FAIL        0x44    // arg: reason (ENG_FAIL_*)
 #define STG_DISABLE_ACK         0x45    // arg: ms waited for RDY=0
-#define STG_QUARANTINE          0x46    // arg: quarantined children | quarantined PRP pages << 8 | bounce pages << 16
+#define STG_QUARANTINE          0x46    // arg: quarantined children | quarantined PRP pages << 8 | bounce pages (15:0, the edge pages bits 8-9) << 16
 #define STG_TIMER_FIRST         0x47    // marker; arg: state; first timer call after HwInitialize
-#define STG_NS_REFUSED          0x48    // arg: reason (NSF_*, nsfmt.h) | FLBAS << 8 | LBADS << 16 | DPS << 24; bring-up fails
+#define STG_NS_VIEW             0x49    // arg: LBADS | native view (47.31) << 8 | LbaShift << 16; Identify Namespace accepted
+#define STG_NS_REFUSED          0x48    // arg: reason (NSF_*, nsfmt.h; 6 the 512-byte count does not fit 64 bits) | FLBAS << 8 | LBADS << 16 | DPS << 24; bring-up fails
 #define STG_RESET_BUS           0x50    // marker; arg: PathId | issued children << 8 | state << 16 | call count << 24
 #define STG_SRB_RESET_BUS       0x51    // arg: STG_SRB_ARG
 #define STG_SRB_RESET_DEVICE    0x52    // arg: STG_SRB_ARG
@@ -131,7 +133,7 @@
 #define STG_ENG_CHILD_DONE      0xB7    // arg: CID | status (SC, low byte) << 16 | parent << 24
 #define STG_ENG_PARENT_DONE     0xB8    // arg: parent | children << 8 | SrbStatus << 16 | cancel << 24
 #define STG_ENG_STALE_CQE       0xB9    // arg: CID | reason << 16 (1 not issued, 2 generation, 3 controller generation, 4 not engine CID, 5 late completion of a quarantined child | parent << 24)
-#define STG_ENG_CAP_WAIT        0xBA    // arg: reason (1 parents, 2 children, 3 PRP page, 4 bounce, 5 barrier) | waiting parents << 8
+#define STG_ENG_CAP_WAIT        0xBA    // arg: reason (1 parents, 2 children, 3 PRP page, 4 bounce, 5 barrier, 6 edge pages, 7 overlap with an edge block) | waiting parents << 8
 #define STG_ENG_CAP_RESUME      0xBB    // arg: free parents | free children << 8
 #define STG_ENG_BOUNCE          0xBC    // arg: CID | pages << 16 | forced << 24
 #define STG_ENG_MAP_FAIL        0xBD    // arg: reason (1 zero length, 2 alignment, 3 PA zero, 4 span not covered, 5 caller buffer unresolved: parent failed) | parent << 8
@@ -155,10 +157,10 @@
 #define STG_SENSE_KEPT          0xD7    // arg: key | ASC << 8 | ASCQ << 16 | sense buffer length (capped 0xFE) << 24; no autosense: kept for REQUEST SENSE; length 0xFF: not kept, every entry in use
 #define STG_SENSE_READ          0xD8    // arg: key | ASC << 8 | entries kept before << 16 | bytes returned << 24; REQUEST SENSE
 #define STG_DMA_GAP             0xD9    // marker; arg: quarantined blocks | provider << 8 | state << 16; 9x: quarantine of port memory (owned only until removal, MD-4 pending), first time
-#define STG_CQ_RESYNC           0xDA    // retired in review round 2 (was the CQ head doorbell replay on empty interrupts); never reused
+#define STG_CQ_RESYNC           0xDA    // retired (was the CQ head doorbell replay on empty interrupts); never reused
 #define STG_SHN_SUPPRESSED      0xDC    // arg: parent | cancel << 8 | state << 16; a SHUTDOWN's Flush completed outside running: no CC.SHN, the SRB completes with the recovery's status
 #define STG_WRITE_THROUGH       0xDE    // arg: HwFindAdapter 0x100 | configured | resolved << 4 | Me << 12; bring-up 0x200 | verified << 4 | fua << 5 | vwc << 6 | Get dw0 (7:0) << 8 | Set status << 16 (PLAN D3)
-#define STG_IDLE_FLUSH_TIMEOUT  0xDD    // marker; arg: ms since issue (trusted estimate, 23:0) | state << 24; the idle Flush missed its deadline: disable recovery (review round 4)
+#define STG_IDLE_FLUSH_TIMEOUT  0xDD    // marker; arg: ms since issue (trusted estimate, 23:0) | state << 24; the idle Flush missed its deadline: disable recovery
 #define STG_INT_STORM           0xDB    // marker; arg: action (1 vector masked, polling; 2 retired (was controller disabled); 3 unmask trial; 4 storm went on masked, poll hold extended) | state << 8 | count (15:0 of masks) << 16
 #define STG_DISABLE_REWRITE     0xD5    // arg: CC read; quarantined with CC.EN still 1: disable written again (first time)
 
@@ -191,6 +193,14 @@
 // Maximum transfer setting (xfertun.h; PLAN "0.4.0.0 plan", owner decision 2026-10-16), 0x160-0x16F
 #define STG_XFER_TUNABLE        0x160   // arg: limit used, KiB (15:0) | result (XFER_DEFAULT 0, XFER_SET 1, XFER_REFUSED 2) << 16 | resumed << 20 | parsed << 21; every HwFindAdapter
 #define STG_XFER_REFUSED        0x161   // arg: the refused raw value as read (KiB; 0xFFFFFFFF saturated); 0 also when it is not a number
+// 512-byte sectors on larger blocks (PLAN "4 KiB-sector namespaces"), 0x190-0x19F
+#define STG_RMW_PREREAD         0x190   // arg: parent | edges << 8 | first edge's native LBA (15:0) << 16; an unaligned write's first pre-read submitted (it owns the edge pages)
+#define STG_RMW_PATCHED         0x191   // arg: parent | edges << 8; its pre-reads completed and every edge patched, just before its first write is submitted
+// VERIFY reads the medium (xhci98 roadmap 47.22; PLAN "VERIFY"), 0x1A0-0x1AF
+#define STG_VFY_IOCS            0x1A0   // arg: CNS 06h status (SCT/SC, 10:0) | VSL << 16 | ONCS low byte << 24; bring-up, once the probe completed
+#define STG_VFY_ADMIT           0x1A1   // arg: sectors (15:0) | NVMe Verify (1) or reads (0) << 16 | sector shift << 20 | parent << 24; a VERIFY admitted
+#define STG_VFY_CHILD           0x1A2   // arg: CID | opcode (0Ch Verify, 02h Read) << 16 | blocks (at most FFh) << 24; each VERIFY child submitted
+#define STG_VFY_DONE            0x1A3   // arg: ms since admission (at most FFFFh) | children (at most FFFh) << 16 | failed << 28 | NVMe Verify << 29; a VERIFY completed
 // 9x caller-buffer resolution (sg9x.h; docs/INVESTIGATION-9X-REQUEST-SIZE.md), 0x170
 // Test-only STOR98_TEST_NOAUTOSENSE (xhci98 record 30 section 9.2 item 10), 0x17E
 #define STG_TEST_NOAS           0x17E   // arg: the READ SRB's DataBuffer; every N-th READ(10) completed CHECK CONDITION with its sense kept, autosense not given

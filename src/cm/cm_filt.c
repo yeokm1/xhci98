@@ -275,17 +275,6 @@ static NTSTATUS cmChildCapabilities(PCM_FILTER child, PIRP irp)
 }
 
 /*
- * The tunnel id (design record 31 section 4.2): a BusQueryCompatibleIDs
- * answer, on its way back, read by CmPortsTunnelIds. For an NVMe-class
- * function without the id the answer is replaced by a new list, the id
- * first, from paged pool as IRP_MN_QUERY_ID's contract requires, the old
- * one freed; the PnP manager frees the new one. Every other answer, a
- * failed request, a list over the bound and a failed allocation go up as
- * they came (the device then has its plain ids, for the mark service's
- * fallback, section 6.2), counted. What the strings say of a PCI-to-PCI
- * bridge is kept for the chain (ChainKind). PASSIVE_LEVEL.
- */
-/*
  * Whether this system takes the tunnel id: Windows 2000 to 8 alone (NT
  * 6.2 and below). 8.1 and later choose a driver again when a device
  * restarts with ids that changed since its enumeration (read on 8.1,
@@ -304,6 +293,17 @@ static BOOLEAN cmChildTagOs(VOID)
     return (BOOLEAN)(major < 6 || (major == 6 && minor < 3));
 }
 
+/*
+ * The tunnel id (design record 31 section 4.2): a BusQueryCompatibleIDs
+ * answer, on its way back, read by CmPortsTunnelIds. For an NVMe-class
+ * function without the id the answer is replaced by a new list, the id
+ * first, from paged pool as IRP_MN_QUERY_ID's contract requires, the old
+ * one freed; the PnP manager frees the new one. Every other answer, a
+ * failed request, a list over the bound and a failed allocation go up as
+ * they came (the device then has its plain ids, for the mark service's
+ * fallback, section 6.2), counted. What the strings say of a PCI-to-PCI
+ * bridge is kept for the chain (ChainKind). PASSIVE_LEVEL.
+ */
 static NTSTATUS cmChildIds(PCM_FILTER child, PIRP irp)
 {
     NTSTATUS status;
@@ -775,7 +775,7 @@ static ULONG cmChildStartIrq(PCM_FILTER child, PIRP irp, NTSTATUS *status)
         (PCM_RESOURCE_LIST)tr2;
     CM_SET_COMPLETION_ALWAYS(irp, cmIrqStartDone, &done);
     (VOID)IoCallDriver(child->Common.Lower, irp);
-    (VOID)KeWaitForSingleObject(&done, Executive, KernelMode, FALSE, NULL);
+    (VOID)CmWaitEvent(&done, 0);
     *status = irp->IoStatus.Status;
     CmFree(raw2);
     CmFree(tr2);
@@ -1076,8 +1076,7 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
             status = CmForwardSync(&filter->Common, irp);
             CmRegChainNote(filter, CM_CHAIN_EV_REMOVE);
             cmFilterRelease(filter);
-            (VOID)KeWaitForSingleObject(&filter->Drained, Executive,
-                                        KernelMode, FALSE, NULL);
+            (VOID)CmWaitEvent(&filter->Drained, 0);
             IoDetachDevice(filter->Common.Lower);
             CmRegAttRemoved(filter,
                             (BOOLEAN)(filter->QueryRemoved &&
@@ -1089,8 +1088,7 @@ static NTSTATUS cmFilterPnpBody(PCM_FILTER filter, PIRP irp, BOOLEAN sync)
         IoSkipCurrentIrpStackLocation(irp);
         status = IoCallDriver(filter->Common.Lower, irp);
         cmFilterRelease(filter);
-        (VOID)KeWaitForSingleObject(&filter->Drained, Executive, KernelMode,
-                                    FALSE, NULL);
+        (VOID)CmWaitEvent(&filter->Drained, 0);
         IoDetachDevice(filter->Common.Lower);
         CmRegAttRemoved(filter, (BOOLEAN)(filter->QueryRemoved &&
                                           !filter->SurpriseRemoved));

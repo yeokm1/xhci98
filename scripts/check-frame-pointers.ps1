@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-Assert that an x86 release build of xhci98.sys, xhciuas.sys or xhcicm.sys
-was compiled with frame pointers kept (/Oy-).
+Assert that an x86 release build of xhci98.sys, xhciuas.sys, xhcicm.sys or
+xhcinet.sys was compiled with frame pointers kept (/Oy-).
 
 .DESCRIPTION
 Roadmap-usb4 task 45.45 retired the debug flavour (design record 08 section
 14). What a user gave up by installing release instead was the checked
 build's frame pointers on the MSVC 6.0 x86 builds, so the release flavour
-keeps them: each of the three drivers' sources sets NTNOFPO=1 in its fre
+keeps them: each of the four drivers' sources sets NTNOFPO=1 in its fre
 branch, which the Windows 2000 DDK's i386mk.inc reads to compile /Oy-
 where a free build would compile /Oy.
 
@@ -16,10 +16,11 @@ did: the DDK's build log prints each compiler command line, and every one
 must carry /Oy- and none /Oy alone. A sources edit that loses the setting,
 or a DDK that ignores it, fails here rather than shipping an image without
 frame pointers. build-driver.cmd runs it on the x86 release build of each
-of the three drivers; the amd64 builds (WDK 7.1) have no such switch.
+of the four drivers; the amd64 builds (WDK 7.1) have no such switch.
 
 .PARAMETER Log
-The build log (src\buildfre.log, src\uas\buildfre.log, src\cm\buildfre.log).
+The build log (src\buildfre.log, src\uas\buildfre.log, src\cm\buildfre.log,
+src\net\ndis5\buildfre.log).
 
 .PARAMETER SelfTest
 Check the rule on synthetic logs and exit.

@@ -103,6 +103,7 @@ ULONG XhciXportChoose(const UCHAR *config, ULONG length, ULONG iface,
     out->Protocol = 0;
     out->Alternate = 0;
     out->ShortHardwareId = 1;
+    out->OwnId = 0;
     total = xhciXportTotal(config, length);
     if (total == 0) {
         return XHCI_XPORT_MALFORMED;
@@ -148,6 +149,7 @@ ULONG XhciXportChoose(const UCHAR *config, ULONG length, ULONG iface,
         out->Why = ((flags & XHCI_XPORT_F_FORCE_BOT) != 0)
                        ? XHCI_XPORT_WHY_BOT_FORCED
                        : XHCI_XPORT_WHY_BOT_NO_STREAMS;
+        out->OwnId = ((flags & XHCI_XPORT_F_BOT_OWN_ID) != 0) ? 1UL : 0UL;
         return XHCI_XPORT_OK;
     }
     /* Under UAS the VID/PID hardware id stays: a device usbstor.inf

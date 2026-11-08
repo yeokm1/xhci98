@@ -515,17 +515,6 @@ static void test_known(void)
 /* ---- the second tier: lookups and the canonical form (record 32 section
  * 12.8.10) ---------------------------------------------------------------- */
 
-typedef struct _TBUF {
-    UCHAR B[2048];
-    ULONG N;
-} TBUF;
-
-static void tb(TBUF *x, const UCHAR *p, ULONG n)
-{
-    memcpy(x->B + x->N, p, n);
-    x->N += n;
-}
-
 /* A table holding `decls` and Method (M049, flags) { body } at the root. */
 static ULONG tmethod(UCHAR *aml, const UCHAR *decls, ULONG nd,
                      const UCHAR *body, ULONG nb, UCHAR flags)

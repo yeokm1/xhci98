@@ -124,7 +124,10 @@ What it checks, grouped by the failure each rule prevents:
            task 45.50 (owner, 2026-10-30: every value a released driver
            reads is written by the install): XhciUsb2Bos, XhciResumeKeep
            and XhciLinkKeep at 1. Forty-one since task 46.21's
-           XhciAcpiTables joined at 1.
+           XhciAcpiTables joined at 1. Forty-two since task 47.30's
+           XhciEventRingTrbs joined at 1024 (owner, 2026-11-06).
+           Forty-three since UASBOT.1's XhciBulkOnlyOwnId joined at 1
+           (owner, 2026-11-08).
            (**VAL-SZ was removed with XhciLogFile.** It was the
            string half - a REG_SZ's data is text two setup engines may quote,
            trim or tokenise differently, which a DWORD's is not - and with no
@@ -202,6 +205,12 @@ Optional. A staged install-media directory: every file named in
 field), and nothing in it may be a Microsoft file. Use this to check a
 package layout before copying it to a VM.
 
+.PARAMETER MsFileScanDir
+Optional, beside -PackageDir. A further tree that PKG-MSFILE alone scans for
+the same Microsoft file names, hidden and system files included: the upload
+set's whole root (make-release.ps1), so a file at the version root or in a
+tools\ directory is refused as one in a package is.
+
 .PARAMETER AllowUnpaddedDriverVer
 Accept a `DriverVer` date whose month or day is a single digit - `8/16/2026`
 rather than `08/16/2026`. **This exists for exactly one experiment**, roadmap
@@ -278,6 +287,7 @@ param(
     [ValidateSet("x86", "amd64")]
     [string]$Arch = "x86",
     [string]$PackageDir = "",
+    [string]$MsFileScanDir = "",
     [string]$EmitMediaLayout = "",
     [string]$EmitFootprint = "",
     [string]$ManifestPath = "",
@@ -567,6 +577,11 @@ if (-not (Test-Path -LiteralPath $InfPath)) {
     exit 1
 }
 $InfPath = (Resolve-Path -LiteralPath $InfPath).Path
+# This tree's own INFs, whose version header and resource are beside them by
+# construction: for these a missing one is a failure, not the skip a staged
+# copy with no sources beside it gets (below).
+$isProductionInf = ($InfPath -ieq [System.IO.Path]::GetFullPath((Join-Path $repo "src\xhci98.inf")) -or
+                    $InfPath -ieq [System.IO.Path]::GetFullPath((Join-Path $repo "src\xhci98-amd64.inf")))
 
 Write-Step ("INF gate ({0}): {1}" -f $Arch, $InfPath)
 
@@ -708,7 +723,11 @@ if (-not (Test-SectionExists $inf "Version")) {
         $verHdrPath = Join-Path (Split-Path -Parent $InfPath) $prod.VerHeader
         $rcPath     = Join-Path (Split-Path -Parent $InfPath) $prod.RcName
         if (-not (Test-Path -LiteralPath $verHdrPath)) {
-            Write-Host ("  (no " + $prod.VerHeader + " beside this INF - DriverVer/version cross-check skipped)") -ForegroundColor DarkGray
+            if ($isProductionInf) {
+                Add-Failure "BOTH-VERSION" ("{0} is not beside {1}, this tree's own INF, so its DriverVer cannot be held to the one editable version (roadmap task 14.1.10)." -f $prod.VerHeader, (Split-Path -Leaf $InfPath))
+            } else {
+                Write-Host ("  (no " + $prod.VerHeader + " beside this INF - DriverVer/version cross-check skipped)") -ForegroundColor DarkGray
+            }
         } else {
             $infVersion = ($dv[0].Value -split ',')[1].Trim()
             $infDate    = ($dv[0].Value -split ',')[0].Trim()
@@ -837,13 +856,22 @@ if (-not (Test-SectionExists $inf "Version")) {
                         continue
                     }
                     $decl = $matches[1]
-                    if ($decl -notmatch [regex]::Escape($rule.Want)) {
+                    # The whole declaration, not a substring of it: the macro
+                    # alone for the two numeric fields, and for the two
+                    # strings the macro alone or followed by the "\0" the
+                    # .rc concatenates. A literal with the name in a comment
+                    # after it, or a longer name that begins with it, is not
+                    # the macro.
+                    $wantRx = if ($rule.Want.EndsWith("_VER_STR")) { '^' + [regex]::Escape($rule.Want) + '(\s*"\\0")?$' } else { '^' + [regex]::Escape($rule.Want) + '$' }
+                    if ($decl -cnotmatch $wantRx) {
                         Add-Failure "BOTH-VERSION" ("{0}'s {1} reads '{2}', which does not use {3}. The version is edited in {4} and nowhere else (roadmap task 14.1.10); a literal here compiles cleanly and ships a number this gate did not check." -f $rcName, $rule.Name, $decl, $rule.Want, $hdrName)
                     }
                 }
                 if ($rcText -notmatch ('(?m)^\s*#include\s+"' + [regex]::Escape($prod.VerHeader) + '"\s*$')) {
                     Add-Failure "BOTH-VERSION" ("{0} does not include the version header, so the macros above are undefined and rc.exe would compile whatever they happen to expand to." -f $rcName)
                 }
+            } elseif ($isProductionInf) {
+                Add-Failure "BOTH-VERSION" ("{0} is not beside {1}, this tree's own INF, so its version resource cannot be held to the header." -f $prod.RcName, (Split-Path -Leaf $InfPath))
             } else {
                 Write-Host ("  (no " + $prod.RcName + " beside this INF - resource declaration check skipped)") -ForegroundColor DarkGray
             }
@@ -1605,6 +1633,13 @@ $requiredValues = @(
         DefaultWhy = "1 is the driver's own default - absent, of another type or out of range reads as 1 (owner, 2026-10-08); 0 would leave the E7250 the task exists for without its interrupt, and 2 widens the write past the one verified machine, a new decision"
     },
     @{
+        Name    = "XhciIntelNoRouteIrq"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 task 47.33's chipset-routed GSI offer (design record 18 section 16, issue 25), read at AddDevice on Windows 2000, XP and XP x64 (every NT kernel below 6.0; hcdNoRouteStripDecide): where the firmware gives the xHCI no interrupt route, the requirements filter offers the I/O APIC input the PCH routes INTA to (D20IR) before the memory-only configuration, and on Windows 2000 takes the interrupt out of a listed board's list. 0 never offers, 1 on the HP boards of value 1's list (xhciPirqNoRouteBoards[] in src/xhci_pirq.c), 2 on any reviewed xHCI/LPC pair. The INF writes the 1 so the value is where a user looks for it, under 34.1's don't-overwrite rule so a user's choice survives an update (owner, 2026-11-06)"
+        DefaultWhy = "1 is the driver's own default - absent, of another type or out of range reads as 1 (owner, 2026-11-06); 2 widens the offer past the allowlist, a new decision, and 0 would keep a listed board polled"
+    },
+    @{
         Name    = "XhciTolerance"
         Type    = "0x00010003"
         Default = "1"
@@ -1835,6 +1870,20 @@ $requiredValues = @(
         Default = "1"
         Why     = "roadmap-usb4 task 45.41's device kept across its SuperSpeed link's recovery (design record 13 section 15), read at each start. Written since task 45.50 (owner, 2026-10-30) under 34.1's don't-overwrite rule so a user's 0 survives an update"
         DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 turns it off"
+    },
+    @{
+        Name    = "XhciEventRingTrbs"
+        Type    = "0x00010003"
+        Default = "1024"
+        Why     = "roadmap-usb4 task 47.30's event ring (design record 13 section 11.10), read at each start before the ring is allocated: 256 keeps the one-page ring of the releases before it, anything else the 1,024-entry ring of its own, which falls back to the one-page ring when its memory is not there. Written (owner, 2026-11-06) under 34.1's don't-overwrite rule so a user's 256 survives an update"
+        DefaultWhy = "1024 is the driver's own default - absent, another number or another type is the larger ring; only 256 asks for the one-page ring (owner, 2026-11-06)"
+    },
+    @{
+        Name    = "XhciBulkOnlyOwnId"
+        Type    = "0x00010003"
+        Default = "1"
+        Why     = "roadmap-usb4 UASBOT.1's own instance id for the Bulk-Only form of a drive that offers UAS too (design record 13 section 10.7), read at each enumeration beside XhciForceBulkOnly. Written (owner, 2026-11-08) under 34.1's don't-overwrite rule so a user's 0 survives an update"
+        DefaultWhy = "1 is the driver's own default - absent, another number or another type is on; only 0 keeps the one devnode of the releases before (owner, 2026-11-08: on by default)"
     },
     @{
         Name    = "XhciVirtualHSHub"
@@ -3682,8 +3731,9 @@ if ($PackageDir -ne "") {
         # a 1.0.0.0 media name, at the root or below it. The rules above prove
         # the INF asks the OS for usbd.sys and usbhub.sys; this proves the
         # package has not started carrying them again (legal-provenance.md
-        # section 5).
-        foreach ($item in (Get-ChildItem -LiteralPath $pkg -File -Recurse)) {
+        # section 5). -Force: a hidden or system file is a file on the media
+        # like any other.
+        foreach ($item in (Get-ChildItem -LiteralPath $pkg -File -Recurse -Force)) {
             $n = $item.Name.ToLowerInvariant()
             if ($pkgRefusedNames -contains $n) {
                 Add-Failure "PKG-MSFILE" ("the staged package holds '{0}'. The media carries no Microsoft file since 1.0.0.1: usbd.sys, usbhub.sys, usbport.sys and usbui.dll all come from the OS through LayoutFile, usbhub20.sys the OS places by itself, and usbd98.sys/usbd2k.sys/usbhub98.sys are the retired 1.0.0.0 media names. Take it out." -f $item.FullName.Substring($pkg.Length).TrimStart('\'))
@@ -3692,6 +3742,26 @@ if ($PackageDir -ne "") {
 
         if ($script:failures.Count -eq 0) {
             Write-Ok ("staged package '{0}' has every file [SourceDisksFiles] names and no Microsoft file" -f $pkg)
+        }
+    }
+}
+
+# The same names over a further tree (the upload set's root): a download
+# carries no Microsoft file outside its install media either.
+if ($MsFileScanDir -ne "") {
+    if (-not (Test-Path -LiteralPath $MsFileScanDir -PathType Container)) {
+        Add-Failure "PKG-MSFILE" ("-MsFileScanDir '{0}' does not exist." -f $MsFileScanDir)
+    } else {
+        $scan = (Resolve-Path -LiteralPath $MsFileScanDir).Path
+        $scanHits = 0
+        foreach ($item in (Get-ChildItem -LiteralPath $scan -File -Recurse -Force)) {
+            if ($pkgRefusedNames -contains $item.Name.ToLowerInvariant()) {
+                $scanHits++
+                Add-Failure "PKG-MSFILE" ("'{0}' holds '{1}', a Microsoft file this gate refuses on the media; the download carries none of them anywhere. Take it out." -f $scan, $item.FullName.Substring($scan.Length).TrimStart('\'))
+            }
+        }
+        if ($scanHits -eq 0) {
+            Write-Ok ("'{0}' holds no Microsoft file by name" -f $scan)
         }
     }
 }

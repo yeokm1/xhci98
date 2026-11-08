@@ -1185,7 +1185,7 @@ says so, then deletes the values and the key.
 ### 7.5 What the code changes in `xhciinst`
 
 Narrow, since other branches edit the installer: one component bit and
-its decision in `inst_core.c` (`inst_vsd_decide`: the defaults, the
+its decision in `inst_core.c` (`inst_vsd_mode` and `inst_vsd_box` (designed as `inst_vsd_decide`): the defaults, the
 child rule, the greyed rule, the switches and their refusals,
 host-tested), the row in the window's Components template and its
 greying, the console question, the placement, update and removal of
@@ -1239,7 +1239,7 @@ renaming another file onto `S98VSD.VXD`, a line naming `S98VSD.TMP` as a
 destination), and a queued update whose destination another installer
 replaced; and the request side's admission of a no-SRB request by
 function, a function not admitted refused. And the installer's
-decision (`inst_vsd_decide`) in the installer's host suite: every system
+decision (`inst_vsd_mode` and `inst_vsd_box` (designed as `inst_vsd_decide`)) in the installer's host suite: every system
 by every state of Stor98's box and both switches.
 
 ### 9.2 The legs

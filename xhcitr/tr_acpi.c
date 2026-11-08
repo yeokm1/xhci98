@@ -1,7 +1,7 @@
 /*
  * tr_acpi.c - the pure half of File > Save Firmware Tables... and XHCITR
- * /acpi (tr_acpi.h; design record 25 section 21, revision 26; task
- * 46.21). Written for this project.
+ * /acpi (tr_acpi.h; design record 25 section 21, revisions 26 to 28;
+ * tasks 46.21 and 47.34). Written for this project.
  */
 
 #include <stdio.h>
@@ -220,6 +220,50 @@ static char acpi_file_char(unsigned char c)
     return '_';
 }
 
+/* MSDM and SLIC, the licence tables: the signature's four bytes. */
+static int acpi_is_licence(const TR_ACPI_T *t)
+{
+    return !t->Rsdp && (memcmp(t->Sig, "MSDM", 4) == 0 ||
+                        memcmp(t->Sig, "SLIC", 4) == 0);
+}
+
+/* A good table (record 25 section 21 item 10): whole, at least its header
+ * (the FACS: 64 bytes), its length field the bytes held, its checksum zero
+ * (the FACS has none). */
+static int acpi_good(const TR_ACPI_T *t)
+{
+    return t->Held == TR_ACPI_HELD_WHOLE && !t->Rsdp && t->Data != NULL &&
+           t->Bytes >= (memcmp(t->Sig, "FACS", 4) == 0 ? 64UL
+                                                        : (TR_U32)TR_ACPI_HDR) &&
+           t->Length == t->Bytes && tr_acpi_sum(t) != TR_ACPI_SUM_BAD;
+}
+
+int tr_acpi_licence(TR_ACPI *a)
+{
+    int i;
+    int n = 0;
+
+    for (i = 0; i < a->Count; i++) {
+        TR_ACPI_T *t = &a->T[i];
+        if (!acpi_is_licence(t)) {
+            continue;
+        }
+        if (t->Data != NULL && t->Bytes >= TR_ACPI_HDR) {
+            t->Held = TR_ACPI_HELD_HEADER;
+            t->Bytes = TR_ACPI_HDR;
+        } else {
+            t->Held = TR_ACPI_HELD_NONE;
+            t->Data = NULL;
+            t->Bytes = 0;
+        }
+        t->Reason = TR_ACPI_R_LICENCE;
+        t->SameAsCm = 0;
+        t->File[0] = '\0';
+        n++;
+    }
+    return n;
+}
+
 int tr_acpi_names(TR_ACPI *a)
 {
     char stem[5];
@@ -229,6 +273,7 @@ int tr_acpi_names(TR_ACPI *a)
     int k;
     int n = 0;
 
+    (void)tr_acpi_licence(a);
     for (i = 0; i < a->Count; i++) {
         TR_ACPI_T *t = &a->T[i];
         t->File[0] = '\0';
@@ -343,6 +388,7 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
     const char *sum;
     int i;
     int headers = 0;
+    int licence = 0;
 
     tr_put(t, "This computer's firmware (ACPI) tables, saved by the xHCI98 "
               "USB Tree.\n\n");
@@ -374,8 +420,10 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
             sum = "-";
             break;
         }
-        if (x->Held != TR_ACPI_HELD_WHOLE) {
-            headers++;
+        if (x->Reason == TR_ACPI_R_LICENCE) {
+            licence++;
+        } else if (x->Held != TR_ACPI_HELD_WHOLE) {
+            headers++;      /* the driver's own headers, not the tool's */
         }
         if (x->Addr != 0 && x->Held == TR_ACPI_HELD_NONE) {
             tr_copy(sig, "?", sizeof(sig));
@@ -404,7 +452,7 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
                   "names a table by its\nsignature alone, so of several "
                   "tables with one signature it gives the first.\n");
         for (i = 0; i < a->Count; i++) {
-            if (a->T[i].Listed > 1) {
+            if (a->T[i].Listed > 1 && a->T[i].Held == TR_ACPI_HELD_WHOLE) {
                 tr_acpi_sig(&a->T[i], sig);
                 tr_printf(t, "Windows listed %s %d times; the first was "
                              "saved.\n", sig, a->T[i].Listed);
@@ -418,6 +466,34 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
             tr_put(t, "The root table was not in Windows' list and was asked "
                       "for by name.\n");
         }
+        for (i = 0; i < a->Count; i++) {
+            int j;
+            if (a->T[i].From != TR_ACPI_SRC_REG) {
+                continue;
+            }
+            for (j = 0; j < i && !(a->T[j].From == TR_ACPI_SRC_REG &&
+                                   memcmp(a->T[j].Sig, a->T[i].Sig, 4) == 0);
+                 j++) {
+            }
+            if (j < i) {
+                continue;   /* said at its first */
+            }
+            for (j = 0; j < a->Count && !(a->T[j].From == TR_ACPI_SRC_NT &&
+                                          memcmp(a->T[j].Sig, a->T[i].Sig,
+                                                 4) == 0);
+                 j++) {
+            }
+            tr_acpi_sig(&a->T[i], sig);
+            if (j < a->Count) {
+                tr_printf(t, "Windows' %s did not check out; the copy it "
+                             "keeps in the registry\n(HKLM\\HARDWARE\\ACPI) "
+                             "was read too.\n", sig);
+            } else {
+                tr_printf(t, "Windows gave no %s; the copy it keeps in the "
+                             "registry (HKLM\\HARDWARE\\ACPI)\nwas read.\n",
+                          sig);
+            }
+        }
         acpi_root_entries(a, t);
     } else if (a->Source == TR_ACPI_SRC_REG) {
         tr_put(t, "Read from the copies Windows keeps in the registry "
@@ -426,7 +502,7 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
         acpi_root_entries(a, t);
     } else if (a->Source == TR_ACPI_SRC_XHA) {
         tr_put(t, "Read by xhci98.sys from memory for this save (Windows 98 "
-                  "SE and ME give programs\nno way to read them); \"xhcicm\" "
+                  "SE and ME give\nprograms no way to read them); \"xhcicm\" "
                   "is a copy xhcicm.sys read at its start.\n");
         tr_printf(t, "Its flags %lXh.\n", (unsigned long)a->Flags);
     } else {
@@ -436,7 +512,10 @@ void tr_acpi_index(const TR_ACPI *a, TR_TEXT *t)
         tr_printf(t, "Its state %lu, outcome %lXh, tier %lu, flags %lXh.\n",
                   (unsigned long)a->State, (unsigned long)a->Outcome,
                   (unsigned long)a->Tier, (unsigned long)a->Flags);
-        if (headers != 0) {
+        if (headers != 0 && licence != 0) {
+            tr_put(t, "A table \"not saved\" other than MSDM and SLIC is one "
+                      "it read the header\nof alone; it reads no DSDT.\n");
+        } else if (headers != 0) {
             tr_put(t, "A table \"not saved\" is one it read the header of "
                       "alone; it reads no DSDT.\n");
         }
@@ -461,9 +540,9 @@ static void acpi_root_entries(const TR_ACPI *a, TR_TEXT *t)
 
     for (k = 0; k < a->Count; k++) {
         const TR_ACPI_T *x = &a->T[k];
-        if (x->Held == TR_ACPI_HELD_WHOLE && x->Bytes >= TR_ACPI_HDR &&
-            (memcmp(x->Sig, "XSDT", 4) == 0 || memcmp(x->Sig, "RSDT", 4) == 0)) {
-            if (r == NULL) {
+        if (memcmp(x->Sig, "XSDT", 4) == 0 || memcmp(x->Sig, "RSDT", 4) == 0) {
+            if (r == NULL && x->Held == TR_ACPI_HELD_WHOLE &&
+                x->Bytes >= TR_ACPI_HDR) {
                 r = x;
             }
         } else if (x->Held == TR_ACPI_HELD_WHOLE &&
@@ -502,11 +581,11 @@ static void acpi_root_entries(const TR_ACPI *a, TR_TEXT *t)
                   sig, (unsigned long)n, saved, (unsigned long)miss,
                   miss == 1 ? "was" : "were");
     } else {
-        tr_printf(t, "The %s lists %lu tables, at these addresses; Windows "
-                     "gave %d of them\n(each name once), so %lu %s not "
-                     "saved:\n",
-                  sig, (unsigned long)n, saved, (unsigned long)miss,
-                  miss == 1 ? "was" : "were");
+        tr_printf(t, "The %s lists %lu tables, at these addresses; %d of "
+                     "them %s saved\n(Windows gives each name once), so "
+                     "%lu %s not saved:\n",
+                  sig, (unsigned long)n, saved, saved == 1 ? "was" : "were",
+                  (unsigned long)miss, miss == 1 ? "was" : "were");
     }
     for (i = 0; i < n; i++) {
         TR_U32 lo = qa_get(r->Data, TR_ACPI_HDR + w * i);
@@ -656,6 +735,19 @@ void tr_acpi_merge(TR_ACPI *a, const TR_ACPI *cm)
     for (i = 0; i < cm->Count; i++) {
         c = &cm->T[i];
         if (c->Held != TR_ACPI_HELD_WHOLE) {
+            /* A licence table's header xhci98.sys's set has no entry of
+             * is kept, so it is listed (item 10); other headers are not. */
+            if (!acpi_is_licence(c)) {
+                continue;
+            }
+            for (j = 0; j < n && memcmp(a->T[j].Sig, c->Sig, 4) != 0; j++) {
+            }
+            if (j == n && a->Count < TR_ACPI_MAX) {
+                a->T[a->Count] = *c;
+                a->T[a->Count].From = TR_ACPI_SRC_CM;
+                a->T[a->Count].File[0] = '\0';
+                a->Count++;
+            }
             continue;
         }
         for (j = 0; j < n; j++) {
@@ -723,6 +815,9 @@ static void reg_take(TR_ACPI *a, const char *key, const unsigned char *buf,
     t->Listed = 1;
     t->Length = bytes >= 8 ? qa_get(buf, 4) : 0;
     r = tr_acpi_reg_check(key, type, buf, bytes);
+    if (r == XHA_R_SIGNATURE) {
+        r = TR_ACPI_R_REG_SIG;      /* no address was read */
+    }
     if (r == 0 && bytes > cap - *used) {
         r = XHA_R_LIMIT;
     }
@@ -815,6 +910,58 @@ int tr_acpi_reg_walk(const TR_REGOPS *ops, TR_ACPI *a, unsigned char *store,
     return whole;
 }
 
+int tr_acpi_reg_needed(const TR_ACPI *a)
+{
+    int i;
+
+    for (i = 0; i < a->Count; i++) {
+        if (memcmp(a->T[i].Sig, "DSDT", 4) == 0 && acpi_good(&a->T[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int tr_acpi_reg_fill(TR_ACPI *a, const TR_ACPI *reg)
+{
+    static const char *const sigs[4] = { "DSDT", "FACP", "RSDT", "FACS" };
+    int n0 = a->Count;
+    int whole = 0;
+    int i;
+    int j;
+    int k;
+
+    for (i = 0; i < reg->Count && a->Count < TR_ACPI_MAX; i++) {
+        const TR_ACPI_T *r = &reg->T[i];
+        for (k = 0; k < 4 && memcmp(r->Sig, sigs[k], 4) != 0; k++) {
+        }
+        if (k == 4 || r->Rsdp) {
+            continue;
+        }
+        for (j = 0; j < n0; j++) {
+            if (memcmp(a->T[j].Sig, r->Sig, 4) == 0 && acpi_good(&a->T[j])) {
+                break;
+            }
+        }
+        if (j < n0) {
+            continue;       /* the interface gave it good */
+        }
+        a->T[a->Count] = *r;
+        a->T[a->Count].From = TR_ACPI_SRC_REG;
+        a->T[a->Count].File[0] = '\0';
+        if (r->Held == TR_ACPI_HELD_WHOLE) {
+            whole++;
+        }
+        a->Count++;
+    }
+    /* The interface gave nothing: the set is the registry's alone, and
+     * says so as on 2000 and 32-bit XP. */
+    if (n0 == 0 && a->Count != 0) {
+        a->Source = TR_ACPI_SRC_REG;
+    }
+    return whole;
+}
+
 const char *tr_acpi_reason(TR_U32 r)
 {
     switch (r) {
@@ -838,6 +985,10 @@ const char *tr_acpi_reason(TR_U32 r)
         return "not kept by this Windows";
     case TR_ACPI_R_TYPE:
         return "not a binary value";
+    case TR_ACPI_R_LICENCE:
+        return "not saved: licence data";
+    case TR_ACPI_R_REG_SIG:
+        return "not the table its registry key names";
     default:
         return "";
     }
@@ -906,14 +1057,22 @@ void tr_acpi_message(int kind, const TR_ACPI *a, const char *folder,
     switch (kind) {
     case TR_ACPI_M_SAVED:
         tr_acpi_list(a, list, sizeof(list));
-        tr_printf(&t, "This computer's firmware (ACPI) tables were saved in "
-                      "%s: %s, and TABLES.TXT listing them.", folder, list);
+        if (list[0] == '\0') {
+            /* Every table held is a header (the licence tables alone). */
+            tr_printf(&t, "Only TABLES.TXT was saved in %s, listing this "
+                          "computer's firmware (ACPI) tables.", folder);
+        } else {
+            tr_printf(&t, "This computer's firmware (ACPI) tables were saved "
+                          "in %s: %s, and TABLES.TXT listing them.", folder,
+                      list);
+        }
         dups = 0;
         for (i = 0; i < a->Count; i++) {
             if (a->T[i].Held != TR_ACPI_HELD_WHOLE) {
                 headers++;
             }
-            if (a->Source == TR_ACPI_SRC_NT && a->T[i].Listed > 1) {
+            if (a->Source == TR_ACPI_SRC_NT && a->T[i].Listed > 1 &&
+                a->T[i].Held == TR_ACPI_HELD_WHOLE) {
                 /* One sentence for them all, as long as the list. */
                 tr_acpi_sig(&a->T[i], sig);
                 tr_printf(&t, dups == 0 ? " Windows gives one table of each "
@@ -936,6 +1095,37 @@ void tr_acpi_message(int kind, const TR_ACPI *a, const char *folder,
                           a->T[i].Listed - 1);
             }
         }
+        /* The interface's set: the signatures taken whole from the
+         * registry (item 10), each once. */
+        if (a->Source == TR_ACPI_SRC_NT) {
+            int regs = 0;
+            for (i = 0; i < a->Count; i++) {
+                int j;
+                if (a->T[i].From != TR_ACPI_SRC_REG ||
+                    a->T[i].Held != TR_ACPI_HELD_WHOLE) {
+                    continue;
+                }
+                for (j = 0; j < i; j++) {
+                    if (a->T[j].From == TR_ACPI_SRC_REG &&
+                        a->T[j].Held == TR_ACPI_HELD_WHOLE &&
+                        memcmp(a->T[j].Sig, a->T[i].Sig, 4) == 0) {
+                        break;
+                    }
+                }
+                if (j < i) {
+                    continue;
+                }
+                tr_acpi_sig(&a->T[i], sig);
+                tr_printf(&t, regs == 0 ? " %s" : ", %s", sig);
+                regs++;
+            }
+            if (regs != 0) {
+                tr_put(&t, regs == 1 ? " came from the copy Windows keeps in "
+                                       "the registry."
+                                     : " came from the copies Windows keeps "
+                                       "in the registry.");
+            }
+        }
         if (a->Source == TR_ACPI_SRC_XHA) {
             tr_put(&t, " Windows 98 SE / ME give no access to these tables; "
                        "xhci98.sys read them from memory for this save.");
@@ -950,7 +1140,9 @@ void tr_acpi_message(int kind, const TR_ACPI *a, const char *folder,
                           "SSDTs: %s.", tr_xha_why(a->XhaState));
         }
         if (headers != 0) {
-            tr_printf(&t, " %d more are listed in TABLES.TXT, not saved.",
+            tr_printf(&t, headers == 1
+                              ? " %d more is listed in TABLES.TXT, not saved."
+                              : " %d more are listed in TABLES.TXT, not saved.",
                       headers);
         }
         break;

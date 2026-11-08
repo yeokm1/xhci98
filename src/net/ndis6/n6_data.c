@@ -866,7 +866,10 @@ VOID NTAPI Net6CbLinkChange(PVOID ctx, BOOLEAN up)
     XHCI_CM_NET_INFO info;
     ULONG started;
 
-    Net6CmQuery(a, &info);
+    if (Net6CmQuery(a, &info) && up && NetCmIfMacMoved(a->Mac, &info)) {
+        Net6CmLog(a, "net.mac.moved",
+                  ((ULONG)info.Mac[4] << 8) | (ULONG)info.Mac[5]);
+    }
     NdisAcquireSpinLock(&a->Lock);
     a->LinkGen++;
     a->PeerStns = info.PeerPrtcstns;

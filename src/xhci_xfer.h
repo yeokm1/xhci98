@@ -324,6 +324,8 @@ ULONG XhciXferBuildControl(const XHCI_CONTROL_REQUEST *request,
  * Full and Backpressure". On XHCI_XFER_OK the group is published and the
  * caller must ring DB[slotId] with DCI 1, once, afterwards.
  */
+/* Host-suite-only: the HCD places its control transfers through its own
+ * paths, and no driver file calls this (test_xfer does). */
 ULONG XhciXferSubmitControl(PXHCI_TRANSFER_QUEUE queue,
                             PXHCI_RING ring,
                             const XHCI_CONTROL_REQUEST *request,
@@ -446,37 +448,6 @@ VOID XhciXferQueueInit(PXHCI_TRANSFER_QUEUE queue);
 /* ------------------------------------------------------------------ */
 /* 8-A.1: the ring-full backpressure latch                             */
 /* ------------------------------------------------------------------ */
-
-/*
- * Record that a submission was refused because the ring could not hold it.
- *
- * Takes the ring so the free count is read here rather than by the caller: the
- * whole point of the latch is that the count is the one that was true when the
- * refusal happened, and a caller that read it a line earlier or later would arm
- * against a different ring than the one that refused. Re-arming an already-armed
- * queue is deliberate and is how a second refusal at a higher free count raises
- * the bar rather than leaving the old one standing.
- */
-VOID XhciXferQueueArmRetry(PXHCI_TRANSFER_QUEUE queue, const XHCI_RING *ring);
-
-/*
- * Has enough changed since the refusal to be worth re-offering? Returns 1 when
- * the queue is armed and the ring now has **strictly more** free TRBs than it did
- * at the refusal - the terminating condition described on XHCI_TRANSFER_QUEUE.
- *
- * Answering is not consuming: `XhciXferQueueDisarmRetry` is separate, so a caller
- * that cannot act on the answer (no endpoint extension, controller not admitted)
- * leaves the debt standing instead of dropping it.
- */
-ULONG XhciXferQueueRetryDue(const XHCI_TRANSFER_QUEUE *queue,
-                            const XHCI_RING *ring);
-
-/*
- * Clear the latch, counting the re-offer if `asked` is nonzero. The two are one
- * call because a disarm that forgot to count would make the mechanism invisible
- * on a target, and a count without a disarm would re-offer for ever.
- */
-VOID XhciXferQueueDisarmRetry(PXHCI_TRANSFER_QUEUE queue, ULONG asked);
 
 /*
  * What one Transfer Event asks the caller to do. Everything needed for the
@@ -697,6 +668,12 @@ ULONG XhciXferQueueRestart(PXHCI_TRANSFER_QUEUE queue);
  * XhciXferStopPlace counts as passed. The Stop Endpoint's completion follows
  * every event the controller wrote before it, so a tail it had sent has been
  * consumed by then, as an empty pass proves for the first gate.
+ *
+ * An isochronous request held the same way (XhciXferIsoEvent: a short packet
+ * on an earlier TRB of its final packet) is settled by the same call and the
+ * same answers, retired by group through XhciRingRetireIsoGroup after the
+ * hold is checked against the ring, its packets keeping the results their
+ * events wrote.
  */
 ULONG XhciXferDrainSettled(PXHCI_TRANSFER_QUEUE queue,
                            PXHCI_RING ring,
@@ -810,6 +787,7 @@ ULONG XhciXferQueueRemove(PXHCI_TRANSFER_QUEUE queue, PXHCI_TRANSFER transfer);
  * Walks the same way XhciXferEvent resolves an event's owner, so "this index
  * belongs to that transfer" has one answer in the file rather than two.
  */
+/* Host-suite-only: no driver file calls it (test_xfer does). */
 ULONG XhciXferQueueOwnsIndex(const XHCI_TRANSFER_QUEUE *queue,
                              const XHCI_RING *ring,
                              ULONG index);
@@ -1169,10 +1147,14 @@ ULONG XhciXferSubmitIso(PXHCI_TRANSFER_QUEUE queue,
  * flattened into "no recovery at all"; a Missed Service Error
  * is the pipe resynchronizing
  * rather than a fault (4.10.3.2 p.187); the mid-TD short-packet deferral machine
- * exists to protect a *reposted bulk IN* and has no counterpart on a pipe whose
- * TDs are consumed one per interval; and the completion carries a status per
- * packet rather than one status for the request. Folding those five differences
- * into the existing branches is how five major defects of batch 9-0 happened.
+ * exists to protect a *reposted bulk IN*, and on a pipe whose TDs are consumed
+ * one per interval it is taken for one case only - a short packet ending the
+ * request's final packet on an earlier TRB of its TD, which with a controller
+ * that sends no tail would otherwise never end the request (the audit of
+ * 2026-11-06; XhciXferDrainSettled settles it by group); and the completion
+ * carries a status per packet rather than one status for the request. Folding
+ * those five differences into the existing branches is how five major defects
+ * of batch 9-0 happened.
  *
  * **Ring Underrun and Ring Overrun must not reach here.** Their TRB Pointer is
  * "the value of the Dequeue Pointer where the Overrun or Ring Underrun condition

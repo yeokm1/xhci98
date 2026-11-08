@@ -518,7 +518,7 @@ single `MajorFunction` slot. usbport owns all of those and answers on our
 behalf. That is the whole of the PassThru snapshot instrument. It is specified
 in `docs/contributing/passthru-snapshot-instrument.md`, and it is the only
 mechanism that has ever carried this driver's own evidence off a Windows 98
-machine: it read Finding 3's root cause off the E460.
+machine: it read the deaf root port's root cause off the E460 (`runs/run-13e.md`).
 
 It did not count as an answer in section 2 because it was built behind
 `XHCI_OBS_SNAPSHOT`, reachable only through `XHCI_EXTRA_DEFINES`, the gate

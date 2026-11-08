@@ -108,6 +108,12 @@ ULONG HcdSvcArmTimer(PXHCI_EXTENSION ext, ULONG milliseconds, PVOID context,
 VOID HcdSvcRequestReset(PXHCI_EXTENSION ext);
 VOID HcdSvcDmaNotStopped(PXHCI_EXTENSION ext);
 PKSPIN_LOCK HcdSvcControllerLock(PXHCI_EXTENSION ext);
+/* Task 47.30 (design record 13 section 11.10, point 3): the event ring's
+ * segment for this start - the larger ring's window when HcdDmaOpen got
+ * one, the controller block's own page otherwise - and its TRB count.
+ * Fixed from HcdDmaOpen to HcdDmaClose. IRQL: any. */
+ULONG HcdSvcEventRing(PXHCI_EXTENSION ext, volatile XHCI_TRB **va,
+                      PULONG pa);
 /* Every doorbell, after the write (xhci_pci.c): under a poll delivery the
  * poller's promotion and peek (hcd_poll.c; design record 15 sections 6.2
  * and 7.1), nothing otherwise. DISPATCH_LEVEL, controller lock held. */

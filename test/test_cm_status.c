@@ -270,6 +270,17 @@ static void test_icm_gen(void)
     CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x03FF0000UL,
              (CM_ST_HO_PROFILE << 16) | CM_ST_F_HO_ECAMOFF,
              "ECAM needing reads 1: bit 25");
+    /* Task 47.29: tier 3 refused at XhciCmAsm4242Structural 0, bit 26 of
+     * its own; tier 3 alone, as a later refusal leaves it, sets none. */
+    in.Handover = CM_ST_HO_SAME | 0x400UL;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x07FF0000UL,
+             (CM_ST_HO_SAME << 16) | CM_ST_F_HO_SAMEOFF,
+             "the same code at Structural 0: bit 26");
+    in.Handover = CM_ST_HO_SAME;
+    (void)CmStatusBuild(rec, &in, &icm, NULL, NULL);
+    CHECK_EQ(get32(rec, CM_ST_O_FLAGS) & 0x07FF0000UL, CM_ST_HO_SAME << 16,
+             "tier 3 unsent for another reason: no bit 26");
     in.Handover = 0;
 }
 
@@ -382,7 +393,8 @@ static void test_u4(void)
     CHECK(strcmp((const char *)e + CM_ST_E_MODEL, "USB4 Dock") == 0, "model");
     e = entry(rec, 1);
     CHECK_EQ(get32(e, CM_ST_E_KIND), CM_ST_KIND_USB4_LINK, "a deeper router");
-    CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_TBT3, "a Thunderbolt 3 router");
+    CHECK_EQ(get32(e, CM_ST_E_GEN), CM_ST_GEN_TBT3,
+             "a deeper link's router not read: no generation given");
     CHECK_EQ(get32(e, CM_ST_E_ROUTE_LO), 0x301UL, "its route");
     CHECK_EQ(get32(e, CM_ST_E_TUNNELS), 0x555UL, "unknown tunnels");
     CHECK_EQ(get32(e, CM_ST_E_SHORT_ID), CM_ST_UNKNOWN, "UUID not read");
@@ -592,6 +604,61 @@ static void test_path(void)
           "a bus with no parent is a root bus");
 }
 
+/*
+ * Record 22 section 19.10 item 5: a Thunderbolt router the software
+ * connection manager read carries its generation in 15:8 - on a host port
+ * (a Port Ridge router, generation 1, behind an Apple host) and as a
+ * chained router (a Falcon Ridge one, generation 2) - and a USB4 router its
+ * version, as before.
+ */
+static void test_tbt_gen(void)
+{
+    CM_STATUS_IN in;
+    XHCI_TBT_BINDS binds;
+    TBT_U4_KID *k;
+    ULONG n;
+
+    memset(&u4, 0, sizeof(u4));
+    memset(&binds, 0, sizeof(binds));
+    u4.PortCount = 1;
+    u4.Ports[0].Index = 1;
+    u4.Ports[0].State = TBT_U4_UP;
+    u4.Ports[0].Pcie.Up = TRUE;
+    u4.Ports[0].SingleLane = TRUE;
+    u4.Ports[0].Dev.Present = TRUE;
+    u4.Ports[0].Dev.Route.Lo = 0x1;
+    u4.Ports[0].Dev.Vendor = 0x8086;
+    u4.Ports[0].Dev.Device = 0x1549;
+    u4.Ports[0].Dev.Tbt3 = TRUE;
+    u4.Ports[0].Dev.TbtGen = 1;
+    k = &u4.Kids[0];
+    k->Used = TRUE;
+    k->Index = 1;
+    k->Port = 1;
+    k->State = TBT_U4_UP;
+    k->Dev.Present = TRUE;
+    k->Dev.Depth = 2;
+    k->Dev.Route.Lo = 0x0301;
+    k->Dev.Vendor = 0x8086;
+    k->Dev.Device = 0x156D;
+    k->Dev.Tbt3 = TRUE;
+    k->Dev.TbtGen = 2;
+    base_in(&in, CM_ST_CM_USB4);
+    n = CmStatusBuild(rec, &in, NULL, &u4, &binds);
+    CHECK_EQ(n, CM_ST_HDR_BYTES + 2 * CM_ST_ENTRY_BYTES, "the port and its kid");
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_TBT3 | 0x100UL,
+             "a Thunderbolt 1 router on the port");
+    CHECK_EQ(get32(entry(rec, 1), CM_ST_E_GEN), CM_ST_GEN_TBT3 | 0x200UL,
+             "a Thunderbolt 2 router chained");
+    u4.Ports[0].Dev.TbtGen = 3;
+    k->Dev.Present = FALSE;
+    (void)CmStatusBuild(rec, &in, NULL, &u4, &binds);
+    CHECK_EQ(get32(entry(rec, 0), CM_ST_E_GEN), CM_ST_GEN_TBT3 | 0x300UL,
+             "generation 3");
+    CHECK_EQ(get32(entry(rec, 1), CM_ST_E_GEN), CM_ST_GEN_UNKNOWN,
+             "a kid not read: not known");
+}
+
 int main(void)
 {
     test_icm();
@@ -600,6 +667,7 @@ int main(void)
     test_u4();
     test_kid();
     test_path();
+    test_tbt_gen();
 
     printf("\n%d checks, %d failures\n", checks, failures);
     return failures;

@@ -1,5 +1,11 @@
 # Real speeds on root ports: a virtual USB 2.0 hub for each slower device on a root port
 
+> **Status: the `1.2.0.0` miniport's record, and no longer in the tree.**
+> The virtual hub left with the miniport on 2026-10-02 (`src/xhci_vhub.h`
+> says so); the host controller driver reports every device at its true
+> speed with no virtual hub. "The tree as it stands" below is the tree of
+> 2026-09-25, branch `1.2.0.0`.
+
 Design record for roadmap task 24.3. It was
 `docs/future-plans/virtual-hub-per-root-port.md` from 2026-09-07 until
 2026-09-25, when the owner took the work up as task 24.3 in the on-demand
@@ -855,7 +861,7 @@ ports, with the interval read from the snapshot instrument.
   interval was not the same: read at 2 on NUSB's, SweetLow's, ME's, SP4's
   and XP's usbport, a High-Speed mouse behind the virtual hub opened at
   `Period` 1, Interval 0 (125 us), where on a root port at 1 it opened at
-  `Period` 32, Interval 5 (run-24.md, 24.3.4, finding 1). The cause is not
+  `Period` 32, Interval 5 (run-24.md, 24.3.4, the High-Speed interrupt endpoint behind a hub). The cause is not
   the hub: usbport's USB 2.0 budget promotes an interrupt endpoint to
   period 1 whenever its start microframe lands past 2, which on NT 5.x has
   no speed test and happens once three periodic endpoints hold microframes

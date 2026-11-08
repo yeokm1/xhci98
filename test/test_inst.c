@@ -216,7 +216,7 @@ static void test_cm_only(void)
     CHECK(strcmp(inst_os_name(1, 6, 2, 9200), "Windows 8") == 0 &&
           strcmp(inst_os_name(1, 6, 3, 9600), "Windows 8.1") == 0 &&
           strcmp(inst_os_name(1, 6, 1, 7601), "Windows 7") == 0 &&
-          strcmp(inst_os_name(1, 5, 2, 3790), "Windows XP x64") == 0 &&
+          strcmp(inst_os_name(1, 5, 2, 3790), "Windows XP x64 / Server 2003") == 0 &&
           strcmp(inst_os_name(0, 4, 90, 3000), "Windows ME") == 0 &&
           strcmp(inst_os_name(0, 4, 10, 2222), "Windows 98 SE") == 0 &&
           strcmp(inst_os_name(1, 10, 0, 19045), "Windows 10") == 0 &&
@@ -826,6 +826,7 @@ static void test_real_infs(void)
             { "XhciPollIdleMs", 50 }, { "XhciPollActiveMs", 1 },
             { "XhciPollFineTimer", 0 }, { "XhciSelectiveSuspend", 0 },
             { "XhciSilentInstall", 0 }, { "XhciForceBulkOnly", 0 },
+            { "XhciBulkOnlyOwnId", 1 },
             { "XhciFastPollFsLs", 0 }, { "XhciMaxTransferKB", 1024 },
             { "XhciWideMap", 0 }, { "XhciFirstEnumWaitMs", 5000 },
             { "XhciFirstEnumPortMs", 2000 }
@@ -1426,7 +1427,8 @@ static void test_actions(void)
              "another driver's device is left");
     CHECK_EQ(inst_remove_rank("USB\\XHCI98_NOXPORT&VID_1&PID_2\\x", "usbstor", 0),
              -1, "a refused interface is left");
-    /* NT: a root hub after its controller (run-43-24, Finding 2). */
+    /* NT: a root hub after its controller (run-43-24, the root hub that
+     * came back on 8.1 and 10). */
     CHECK_EQ(inst_remove_rank_nt("USB\\XHCI98_ROOT_HUB\\4&1", "xhci98"),
              INST_REMOVE_RANK_NT_MAX, "NT: the root hub after the controllers");
     CHECK_EQ(inst_remove_rank_nt("PCI\\VEN_1B36&DEV_000D\\3", "xhci98"), 5,
@@ -1445,7 +1447,7 @@ static void test_actions(void)
     CHECK_EQ(inst_remove_rank("USB\\XHCI98_ROOT_HUB\\4&1", "xhci98", 0), 3,
              "98 SE and ME keep the root hub before the controller");
 
-    /* The driver-store check (run-43-24, Finding 3). */
+    /* The driver-store check (run-43-24, the stor98.mpd check on NT). */
     CHECK_EQ(inst_store_verdict("stor98.sys", 1, 1, 1), INST_STORE_EQUAL,
              "store: equal");
     CHECK_EQ(inst_store_verdict("stor98.sys", 0, 1, 1), INST_STORE_DIFFERS,
@@ -1466,7 +1468,8 @@ static void test_actions(void)
              "store: the package's file not readable");
     CHECK_EQ(inst_store_verdict(NULL, -1, 1, 0), INST_STORE_UNREAD,
              "store: no name");
-    /* A tunnel port at the uninstall (run-43-24, Finding 9). */
+    /* A tunnel port at the uninstall (run-43-24, the uninstall waiting for
+     * every filtered port). */
     CHECK_EQ(inst_port_step(1, 0), INST_PORT_GIVE_BACK, "port present: given back");
     CHECK_EQ(inst_port_step(1, 1), INST_PORT_GIVE_BACK,
              "port present, other filters: given back");
@@ -1648,12 +1651,17 @@ static void test_values(void)
     CHECK(!inst_value_applies(im, &e), "98: interrupt mode not asked");
     {
         int fb = inst_value_find("XhciForceBulkOnly");
+        int bo = inst_value_find("XhciBulkOnlyOwnId");
         int ni = inst_value_find("XhciCmNoIrqStart");
         INST_ENV e2 = e;
         e2.CmNhi = 1;
         CHECK(fb >= 0 && !inst_value_applies(fb, &e) &&
               inst_value_set_mask(fb, &e) == 0x3,
               "ForceBulkOnly: Advanced, /set 0 and 1");
+        CHECK(bo == fb + 1 && !inst_value_applies(bo, &e) &&
+              inst_value_set_mask(bo, &e) == 0x3 &&
+              instValues[bo].Inf == INST_INF_XHCI && !instValues[bo].NoInf,
+              "BulkOnlyOwnId: after it, Advanced, /set 0 and 1");
         CHECK(ni >= 0 && instValues[ni].Inf == INST_INF_CM &&
               !instValues[ni].NoInf && instValues[ni].Def == 1 &&
               !inst_value_applies(ni, &e2) &&
@@ -2257,6 +2265,45 @@ static void test_flow(void)
         tries[1] = 3;
         CHECK_EQ(inst_busy_spent(tries, 3), 1, "a spent member blocks");
         CHECK_EQ(inst_busy_spent(tries, 0), 0, "nobody");
+    }
+    {
+        /* The NT device list grows past its first capacity, to a bound
+         * (audit 2026-11-06: a long-lived system lists more devnodes,
+         * present or not, than 1536). */
+        int cap = INST_DEV_CAP_FIRST;
+        int steps = 0;
+        CHECK_EQ(inst_dev_cap_next(1536, 16384), 3072, "1536 doubles");
+        CHECK_EQ(inst_dev_cap_next(12288, 16384), 16384, "the last step stops at the bound");
+        CHECK_EQ(inst_dev_cap_next(16384, 16384), 16384, "full at the bound");
+        CHECK_EQ(inst_dev_cap_next(20000, 16384), 20000, "beyond the bound: no growth");
+        CHECK_EQ(inst_dev_cap_next(0, 16384), 0, "no list: no growth");
+        CHECK_EQ(inst_dev_cap_next(-1, 16384), -1, "a negative count: no growth");
+        CHECK_EQ(inst_dev_cap_next(1536, 1536), 1536, "98 SE and ME's bound");
+        while (inst_dev_cap_next(cap, INST_DEV_CAP_NT) > cap && steps < 64) {
+            int next = inst_dev_cap_next(cap, INST_DEV_CAP_NT);
+            CHECK(next > cap && next <= INST_DEV_CAP_NT, "each step grows within the bound");
+            cap = next;
+            steps++;
+        }
+        CHECK_EQ(cap, INST_DEV_CAP_NT, "the NT list ends at its bound");
+        CHECK_EQ(steps, 4, "1536 to 16384 in four steps");
+        CHECK(INST_DEV_CAP_NT <= 0x7FFFFFFF / 8192, "the bound's bytes fit an int-sized product");
+    }
+    {
+        /* A range setting's box, typed or pasted (audit 2026-11-06). */
+        INST_U32 v = 7;
+        CHECK(inst_parse_dec("12", &v) && v == 12UL, "12");
+        CHECK(inst_parse_dec("0", &v) && v == 0UL, "0");
+        CHECK(inst_parse_dec("4294967295", &v) && v == 0xFFFFFFFFUL, "the largest");
+        v = 7;
+        CHECK(!inst_parse_dec("4294967296", &v) && v == 7UL, "one past: refused, untouched");
+        CHECK(!inst_parse_dec("99999999999", &v), "far past: refused");
+        CHECK(!inst_parse_dec("12abc", &v), "trailing text: refused");
+        CHECK(!inst_parse_dec("abc", &v), "no digits: refused");
+        CHECK(!inst_parse_dec("", &v), "empty: refused");
+        CHECK(!inst_parse_dec(" 12", &v), "a blank: refused");
+        CHECK(!inst_parse_dec("-1", &v), "a sign: refused");
+        CHECK(!inst_parse_dec(NULL, &v), "no text: refused");
     }
 
     /* A parent's job and the devices below it (98 SE, 2026-10-19). */
@@ -4155,6 +4202,53 @@ static void test_tray(void)
     CHECK_EQ(inst_oem_name_ours("", "", NULL), 0,
              "OEM Name: nothing deleted matches nothing");
 
+    /* Task 47.7: a unit's disk under Enum\SCSI, as the 3.2.0.0 matrix read
+     * them on 98 SE. */
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK01&000",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "0", "0"), 1, "SCSI disk: a Bulk-Only unit's");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "XHCIUAS&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&27842-0000:00:03.0-1&000",
+                 "XHCIUAS\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\27842-0000:00:03.0-1&0",
+                 "0", "0"), 1, "SCSI disk: a UAS unit's");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "usbstor&disk&ven_qemu&prod_qemu_harddisk&rev_2.5+&n1stick01&000",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "0", "0"), 1, "SCSI disk: case aside");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK01&101",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&1",
+                 "0", "1"), 1, "SCSI disk: LUN 1's");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK03&000",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "0", "0"), 0, "SCSI disk: another unit's");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK01&001",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "0", "0"), 0, "SCSI disk: another LUN's");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK01&0",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "", ""), 0, "SCSI disk: no target or LUN matches nothing");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "USBSTOR&DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+&N1STICK01&0x0",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "x", "0"), 0, "SCSI disk: a target not of digits");
+    CHECK_EQ(inst_scsi_disk_of("PCI&VEN_8086&DEV_7010&000", "", "0", "0"), 0,
+             "SCSI disk: no unit matches nothing");
+    CHECK_EQ(inst_scsi_disk_of(
+                 "MF&CHILD0001&PCI&VEN_8086&DEV_7010&SUBSYS_11001AF4&REV_00&BUS_00&DEV_01&FUNC_0100",
+                 "USBSTOR\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\N1STICK01&0",
+                 "0", "0"), 0, "SCSI disk: the IDE CD-ROM's is not a unit's");
+    CHECK_EQ(inst_uas_unit_id("XHCIUAS\\DISK&VEN_QEMU&PROD_QEMU_HARDDISK&REV_2.5+\\1&0"),
+             1, "UAS unit: the XHCIUAS enumerator");
+    CHECK_EQ(inst_uas_unit_id("USBSTOR\\DISK&VEN_QEMU\\1&0"), 0,
+             "UAS unit: not a Bulk-Only unit");
+    CHECK_EQ(inst_uas_unit_id("USB\\VID_46F4&PID_0003\\1"), 0,
+             "UAS unit: not the UAS device");
+
     /* A copy left in use keeps the installed tool and its Run value. */
     CHECK_EQ(inst_tray_run_action(0, 1, 1), INST_TRAY_RUN_KEEP,
              "left in use: the Run value kept");
@@ -5556,6 +5650,135 @@ static int has_text(const char *block, const char *text)
     return text == NULL || strstr(block, text) != NULL;
 }
 
+/* One column of a block of the readme's table, its lines' parts from
+ * column `from` to before `to` joined by single spaces: the table is laid
+ * out in fixed columns (unit 26, default 32, range 51). */
+static void s98_col(const char *block, size_t from, size_t to, char *out,
+                    size_t cap)
+{
+    const char *l;
+    size_t o;
+
+    o = 0;
+    out[0] = '\0';
+    for (l = block; *l != '\0';) {
+        const char *nl = strchr(l, '\n');
+        size_t len = nl != NULL ? (size_t)(nl - l) : strlen(l);
+        size_t a;
+        size_t b;
+
+        if (len > 0 && l[len - 1] == '\r') {
+            len--;
+        }
+        a = from < len ? from : len;
+        b = to < len ? to : len;
+        while (b > a && l[b - 1] == ' ') {
+            b--;
+        }
+        while (a < b && l[a] == ' ') {
+            a++;
+        }
+        if (b > a && o + (b - a) + 2 < cap) {
+            if (o > 0) {
+                out[o++] = ' ';
+            }
+            memcpy(out + o, l + a, b - a);
+            o += b - a;
+            out[o] = '\0';
+        }
+        if (nl == NULL) {
+            break;
+        }
+        l = nl + 1;
+    }
+}
+
+/* `text` in `s` as a whole: at the start or after a space or '(', and
+ * followed by the end, a space, ',' ';' or ')'. */
+static int has_whole(const char *s, const char *text)
+{
+    const char *p;
+    size_t n = strlen(text);
+
+    for (p = strstr(s, text); p != NULL; p = strstr(p + 1, text)) {
+        char after = p[n];
+        if ((p == s || p[-1] == ' ' || p[-1] == '(') &&
+            (after == '\0' || after == ' ' || after == ',' ||
+             after == ';' || after == ')')) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* The range column against a row's bounds, by the forms the table uses:
+ * "lo-hi", "lo to ..." and "lo and up" name the bottom first (and the
+ * first form the top); a choice row ("1 = ..., 0 = ...") names each value
+ * as "n =", so both bounds must be among them. */
+static int s98_range_ok(const char *range, unsigned long lo,
+                        unsigned long hi, int checkTop)
+{
+    const char *p;
+    char *e;
+    unsigned long a;
+    int haveLo;
+    int haveHi;
+
+    if (range[0] < '0' || range[0] > '9') {
+        return 0;
+    }
+    a = strtoul(range, &e, 10);
+    if (e[0] == '-' && e[1] >= '0' && e[1] <= '9') {
+        return a == lo && (!checkTop || strtoul(e + 1, NULL, 10) == hi);
+    }
+    if (strncmp(e, " to ", 4) == 0 || strncmp(e, " and up", 7) == 0) {
+        return a == lo && !checkTop;
+    }
+    if (strncmp(e, " = ", 3) != 0) {
+        return 0;
+    }
+    haveLo = 0;
+    haveHi = 0;
+    for (p = range; *p != '\0'; p++) {
+        if (*p >= '0' && *p <= '9' && (p == range || p[-1] == ' ')) {
+            a = strtoul(p, &e, 10);
+            if (strncmp(e, " = ", 3) == 0) {
+                haveLo |= (a == lo);
+                haveHi |= (a == hi);
+            }
+            p = e - 1;
+        }
+    }
+    return haveLo && (!checkTop || haveHi);
+}
+
+/* The default column against a row's two defaults: "a on 98 SE / ME" and
+ * "b on 2000 to 7" where they differ by system, else the column's first
+ * word is each. An empty default (no such system) is not asked for. */
+static int s98_default_ok(const char *col, const char *d9x, const char *dnt)
+{
+    char want[64];
+    size_t n = strcspn(col, " (");
+
+    if (strncmp(col + n, " on ", 4) == 0) {
+        if (d9x[0] != '\0') {
+            sprintf(want, "%.40s on 98 SE / ME", d9x);
+            if (!has_whole(col, want)) {
+                return 0;
+            }
+        }
+        if (dnt[0] != '\0') {
+            sprintf(want, "%.40s on 2000 to 7", dnt);
+            if (!has_whole(col, want)) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    return (d9x[0] == '\0' || (strlen(d9x) == n && strncmp(col, d9x, n) == 0)) &&
+           (dnt[0] == '\0' || (strlen(dnt) == n && strncmp(col, dnt, n) == 0));
+}
+
 /* Task 45.50: Stor98's INFs write each setting at the default the
  * installer's table gives (record 21 section 8.1), and
  * inst_s98_is_default_9x knows a default as read. */
@@ -5703,7 +5926,6 @@ static void test_s98(void)
     for (i = 0; table != NULL && i < INST_S98_COUNT; i++) {
         const INST_S98_VALUE *v = &instS98Values[i];
         char key[32];
-        char num[16];
         CHECK(s98_block(table, i, block, sizeof(block)),
               "each Stor98 row names a row of its readme's table");
         if (v->KeyNt != NULL) {
@@ -5714,16 +5936,20 @@ static void test_s98(void)
             CHECK(has_text(block, "98 SE / ME only"),
                   "a row with no DriverParameter key says so");
         }
-        CHECK(has_text(block, v->Unit[0] ? v->Unit : NULL), "the row's unit");
-        CHECK(has_text(block, v->Def9x) && has_text(block, v->DefNt),
-              "the row's defaults");
+        /* Each field in its own column, as a whole value (a bottom of 0
+         * or 1 no longer matches any digit of the block). */
+        s98_col(block, 26, 32, t, sizeof(t));
+        CHECK(v->Unit[0] ? has_whole(t, v->Unit) && strcspn(t, " ") == strlen(v->Unit)
+                         : (t[0] == '-' || t[0] == '\0'),
+              "the row's unit, in its column");
+        s98_col(block, 32, 51, t, sizeof(t));
+        CHECK(s98_default_ok(t, v->Def9x, v->DefNt),
+              "the row's defaults, each for its systems");
         if (v->Kind == INST_S98_NUMBER && i != INST_S98_POLLMODE) {
-            sprintf(num, "%lu", (unsigned long)v->Lo);
-            CHECK(has_text(block, num), "the row's range, its bottom");
-            if (i != INST_S98_MAXTRANSFERKB && i != INST_S98_IDLE) {
-                sprintf(num, "%lu", (unsigned long)v->Hi);
-                CHECK(has_text(block, num), "the row's range, its top");
-            }
+            s98_col(block, 51, 200, t, sizeof(t));
+            CHECK(s98_range_ok(t, (unsigned long)v->Lo, (unsigned long)v->Hi,
+                               i != INST_S98_MAXTRANSFERKB && i != INST_S98_IDLE),
+                  "the row's range: its bottom, and its top where it has one");
         }
         if (v->Kind == INST_S98_WORDS) {
             CHECK(has_text(block, "auto, off, cacheoff, fua"),
@@ -8605,9 +8831,10 @@ static void test_other_sets(void)
     CHECK(strstr(text, "C:\\XHCI98\\USBDRV\\FREE. ") != NULL &&
           strstr(text, INST_FREE_NOTICE) != NULL &&
           strcmp(INST_FREE_NOTICE, "These drivers are experimental. They may "
-                 "not work with every device and can make Windows unstable. "
-                 "Report problems at https://github.com/yeokm1/usb-wdm-free.")
-          == 0, "texts: the free sentence, the owner's words of 2026-10-23");
+                 "not work with every device and can make Windows unstable.")
+          == 0 && strstr(text, "github") == NULL,
+          "texts: the free sentence, the owner's words of 2026-10-23 "
+          "ending at unstable (2026-11-06)");
     inst_other_sentence(text, sizeof(text), INST_SET_NONFREE, "C:\\XHCI98", 0);
     CHECK(strcmp(text, "Setup will copy all drivers to "
                  "C:\\XHCI98\\USBDRV\\NONFREE.") == 0 &&
@@ -8632,12 +8859,12 @@ static void test_other_sets(void)
                     "3.2.0.0");
     CHECK(strcmp(text, "Latest version: https://github.com/yeokm1/usb-wdm-nonfree.")
           == 0, "line: carried");
-    /* Owner, 2026-10-31: the free set's address once, in its notice. */
+    /* Owner, 2026-11-06 (task 47.2): the notice has no address, so the
+     * free set's line gives it, as the non-free set's does. */
     inst_other_line(text, sizeof(text), INST_SET_FREE, INST_OTHER_CARRIED, 1,
                     "3.2.0.0");
-    CHECK(strcmp(text, "Latest version: see the address above.") == 0 &&
-          strstr(text, "github") == NULL,
-          "line: the free set carried names no address twice");
+    CHECK(strcmp(text, "Latest version: https://github.com/yeokm1/usb-wdm-free.")
+          == 0, "line: the free set carried gives its address");
     inst_other_line(text, sizeof(text), INST_SET_NONFREE, INST_OTHER_ABSENT, 1,
                     "3.2.0.0");
     CHECK(strcmp(text, "Not in this download. Get them from "
@@ -8881,7 +9108,27 @@ static void names_xhci_inf(const char *text, const char *section, int ids,
  * controller-names.md, the release notes' "Controller names in Device
  * Manager") against the table: every table row of that section that names
  * "xHCI98 USB 3 Controller (...)" lists its ids as `VVVV:DDDD`, each the
- * table's id for that name, and every row of the table is listed once. */
+ * table's id for that name, and every row of the table is listed once.
+ * The controllers that virtual machines emulate are the exception (owner,
+ * 2026-11-06): the user documents leave them out, and target-standing.md's
+ * "The virtual machines' controllers in the name table" lists them and
+ * nothing else (names_doc's vm = 1). */
+static const INST_U32 namesVm[][2] = {
+    { 0x15AD, 0x0778 }, { 0x15AD, 0x0779 }, { 0x1B36, 0x000D }
+};
+
+static int names_is_vm(INST_U32 ven, INST_U32 dev)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(namesVm) / sizeof(namesVm[0]); i++) {
+        if (namesVm[i][0] == ven && namesVm[i][1] == dev) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int hex4(const char *s, INST_U32 *out)
 {
     INST_U32 v = 0;
@@ -8902,7 +9149,8 @@ static int hex4(const char *s, INST_U32 *out)
     return 1;
 }
 
-static void names_doc(const char *text, const char *heading, const char *label)
+static void names_doc(const char *text, const char *heading, const char *label,
+                      int vm)
 {
     const char *s = text != NULL ? strstr(text, heading) : NULL;
     const char *end;
@@ -8969,6 +9217,10 @@ static void names_doc(const char *text, const char *heading, const char *label)
                 continue;
             }
             ids++;
+            sprintf(what, vm ? "%s: %04lX:%04lX is a virtual machine's controller"
+                             : "%s: %04lX:%04lX, a virtual machine's controller, is left out",
+                    label, (unsigned long)ven, (unsigned long)dev);
+            CHECK(names_is_vm(ven, dev) == vm, what);
             sprintf(what, "%s: %04lX:%04lX is the table's '%s'", label,
                     (unsigned long)ven, (unsigned long)dev, name);
             CHECK(inst_xhci_name(ven, dev, want, sizeof(want)) == 1 &&
@@ -8989,6 +9241,9 @@ static void names_doc(const char *text, const char *heading, const char *label)
     sprintf(what, "%s: a table of the USB 3 controllers", label);
     CHECK(rows > 0, what);
     for (i = 0; i < instXhciNameCount; i++) {
+        if (names_is_vm(instXhciNames[i].Ven, instXhciNames[i].Dev) != vm) {
+            continue;
+        }
         sprintf(what, "%s lists %04lX:%04lX", label,
                 (unsigned long)instXhciNames[i].Ven,
                 (unsigned long)instXhciNames[i].Dev);
@@ -9006,6 +9261,8 @@ static void test_names(void)
     char *a64 = load("..\\src\\xhci98-amd64.inf");
     char *readme = load("..\\docs\\using\\controller-names.md");
     char *notes = load("..\\docs\\using\\release-notes.md");
+    char *standing = load("..\\docs\\contributing\\target-standing.md");
+    size_t vi;
     int rec;
     static const char hwQ[] = "PCI\\VEN_1B36&DEV_000D&SUBSYS_11001AF4&REV_01\0"
                               "PCI\\VEN_1B36&DEV_000D\0";
@@ -9150,13 +9407,21 @@ static void test_names(void)
         names_xhci_inf(a64, "XhciModels.NTamd64.6.0", 0,
                        "xhci98-amd64.inf [XhciModels.NTamd64.6.0]");
     }
-    names_doc(readme, "# Controller names", "controller-names.md");
-    names_doc(notes, "## Controller names in Device Manager", "release-notes.md");
+    for (vi = 0; vi < sizeof(namesVm) / sizeof(namesVm[0]); vi++) {
+        CHECK(inst_xhci_name(namesVm[vi][0], namesVm[vi][1], name,
+                             sizeof(name)) == 1,
+              "each virtual machine's controller is in the table");
+    }
+    names_doc(readme, "# Controller names", "controller-names.md", 0);
+    names_doc(notes, "## Controller names in Device Manager", "release-notes.md", 0);
+    names_doc(standing, "## The virtual machines' controllers in the name table",
+              "target-standing.md", 1);
     free(cm);
     free(c64);
     free(x86);
     free(a64);
     free(readme);
+    free(standing);
     free(notes);
 }
 
@@ -9167,12 +9432,13 @@ static void test_other_pkgs(void)
     static const char *const nonfreePin[] = {
         "ethernet/ax88179", "ethernet/ax88772", "ethernet/rtl815x",
         "hid/x360c", "hid/x360wc", "serial/ch341", "serial/ft2232d",
-        "serial/ftdi"
+        "serial/ftdi", "smartcard/usbccid"
     };
     static const char *const freeReadme[] = {
         "video/uvc98", "audio/uac2", "audio/usbmidi", "net/cdcnet",
         "net/rtl815x", "net/ax88179", "serial/usbcom", "hid/xpad98",
-        "storage/usbflop", "generic/libusb0", "print/usbprn"
+        "storage/usbflop", "generic/libusb0", "print/usbprn", "audio/uac1",
+        "net/ax88772", "net/sr9700", "hid/absptr"
     };
     char ids[INST_PKG_MAX * INST_PKG_ID_CHARS];
     char pkg[INST_PKG_ID_CHARS];
@@ -9220,7 +9486,7 @@ static void test_other_pkgs(void)
           inst_other_pkg(INST_SET_NONFREE, "net/ax88179") == NULL,
           "a row belongs to its set");
     CHECK(strstr(inst_other_pkg(INST_SET_FREE, "video/uvc98")->Desc,
-                 "USB Video Class 1.0 to 1.5") != NULL &&
+                 "USB Video Class 1.0 and 1.5") != NULL &&
           strstr(inst_other_pkg(INST_SET_FREE, "audio/uac2")->Desc,
                  "USB Audio Class 2.0") != NULL &&
           strstr(inst_other_pkg(INST_SET_FREE, "audio/uac1")->Desc,
@@ -9251,8 +9517,10 @@ static void test_other_pkgs(void)
           "not empty, at most 80 characters");
     inst_other_pkg_of("audio/uac2/w98se/uac2.inf", pkg, sizeof(pkg));
     CHECK(inst_eq(pkg, "audio/uac2"), "a path's package: its first two parts");
-    CHECK(inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
-                              "audio/usbmidi", 0) &&
+    CHECK(!inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
+                               "audio/usbmidi", 0) &&
+          inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
+                              "audio/usbmidi", 1) &&
           inst_other_excludes(INST_SET_FREE, "audio/usbmidi", INST_SET_FREE,
                               "audio/uac1", 7) &&
           inst_other_excludes(INST_SET_NONFREE, "hid/x360wc", INST_SET_FREE,
@@ -9263,7 +9531,8 @@ static void test_other_pkgs(void)
                                "audio/usbmidi", 0) &&
           !inst_other_excludes(INST_SET_FREE, "audio/uac1", INST_SET_FREE,
                                "audio/usbmidi", -1),
-          "EXCLUDES both ways and across the sets; COEXISTS bars nothing");
+          "EXCLUDES both ways and across the sets; COEXISTS bars nothing; "
+          "uac1 and usbmidi side by side on 98 SE alone (task 47.42)");
     CHECK(inst_other_id_list("audio/uac2,Video/UVC98,audio/uac2", ids,
                              INST_PKG_MAX) == 2 &&
           inst_eq(ids, "audio/uac2") &&
@@ -9961,6 +10230,17 @@ static void test_resident(void)
               inst_resident_queued(1, 1, 0, INST_VE_CONFLICT, 1) ==
                   INST_RQ_HOLD,
           "resident: another's line, or an unreadable one: nothing touched");
+    /* Record 35 section 9.5 (revision 17): the network image is placed
+     * where its 9x INF section names it, SYSTEM. */
+    CHECK(strcmp(inst_place9x_dir("xhcinet.sys"), "SYSTEM") == 0 &&
+              strcmp(inst_place9x_dir("XHCINET.SYS"), "SYSTEM") == 0,
+          "place9x: xhcinet.sys in SYSTEM, any case");
+    CHECK(strcmp(inst_place9x_dir("xhciuas.sys"), "SYSTEM32\\DRIVERS") == 0 &&
+              strcmp(inst_place9x_dir("xhcicm.sys"), "SYSTEM32\\DRIVERS") ==
+                  0 &&
+              strcmp(inst_place9x_dir("xhcinet6.sys"),
+                     "SYSTEM32\\DRIVERS") == 0,
+          "place9x: the others in SYSTEM32\\DRIVERS");
 }
 
 /* Draft 67: the reserve shrunk by the share of known work left. */

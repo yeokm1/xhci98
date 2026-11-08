@@ -2549,7 +2549,7 @@ approval belongs to its connection: an unplug, a re-plug or mailbox `0x06`
 cancels it, and the firmware then answers the stale approve with the error
 flag. That answer is the error-flag case above - one `approve-failed`
 line, no retry, the instance not failed - and the disconnect that follows
-removes the entry (host-tested in `test	est_tbt_icm.c`).
+removes the entry (host-tested in `test\test_tbt_icm.c`).
 
 What 1 means for the user is written plainly in the release notes: any
 Thunderbolt 3 device plugged into the machine gets PCIe access, which on a
@@ -8298,7 +8298,13 @@ evidence for (`PsCreateSystemThread`, `KeStallExecutionProcessor`,
 an import, and `IoRegisterPlugPlayNotification` with its unregister twin
 for section 7.4's item 5, which the HCD does not import: design record 13's
 export evidence lists the first as a stock 98 SE import and a Windows 2000
-export, and `39-A.7` adds both rows to the allowlists with their evidence. `check-cm-inf.ps1` carries the four INFs' rules, the
+export, and `39-A.7` adds both rows to the allowlists with their evidence.
+As built, five pairs of `xhcicm-imports.allow` have no `xhci98.sys` row,
+each with evidence of its own in its row: `KeTickCount` and
+`KeQueryTimeIncrement` (the thread's clock; stock 98 SE imports as
+precedent), and `ExCreateCallback`, `ExRegisterCallback` and
+`ExUnregisterCallback` (the stor98 link-state channel, NT only at run
+time; the name in `ntkern.vxd` its Windows 98 evidence). `check-cm-inf.ps1` carries the four INFs' rules, the
 `CM-NO9XBRIDGE` rule of section 6.1, and the self-test the other gates have.
 
 ### 10.4 The bench (`39-E`)

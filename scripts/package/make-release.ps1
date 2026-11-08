@@ -317,7 +317,7 @@ cut (measured read-only on 2026-09-05: the 1.0.0.1 INF fails six of them, all
 added by 1.0.1.0). A `-Version` other than `src\xhci98.inf`'s `DriverVer` is
 refused with that reason; to rebuild an older cut's asset, check out the commit
 that cut it and run this mode there, where the gate is the one that cut passed.
-roadmap Phase 20, F15 has the record. Until that fix this mode also required
+roadmap task 20.1 has the record. Until that fix this mode also required
 `out\pkg-<flavour>\` to hash-match the published binaries, a dependency left
 over from when the media carried files the package supplied; since 1.0.0.1
 nothing from the package enters the asset, and the check is gone.
@@ -424,8 +424,9 @@ which -UploadSetOnly rebuilds them.
 .PARAMETER NoWdmFree
 Make no download 2, and no USBDRV\FREE\ in download 3. While
 scripts\package\wdmfree-pin.txt names no usb-wdm-free release that is what
-every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, and from 3.4.0.0
-it names v0.1.7 (v0.1.5 until task 45.44).
+every cut does; 3.2.0.0's named v0.1.0, 3.3.0.0's v0.1.4, 3.4.0.0's
+v0.1.7 (v0.1.5 until task 45.44), 3.4.1.0's v0.1.8, and from 3.4.2.0 it
+names v0.1.9.
 
 .PARAMETER WdmFreeRoot
 The usb-wdm-free checkout, overriding scripts\local\usb-wdm-free
@@ -953,6 +954,22 @@ $silentPublishable = @{
     "silent-off.bat" = "silent-off.bat"
 }
 
+# **What the cut stages in each tool's directory, and at the version root**,
+# by published name: Assert-UploadSetEntries holds the upload set to these,
+# so -UploadSetOnly, which copies a published tree it did not write, cannot
+# zip a stray file beside them. The cut's own staging below names the same
+# files; the ordinary cut assembles its upload set through the same check,
+# so a file the staging adds and this table lacks fails the cut itself.
+$toolDirFiles = @{
+    "xhciqual" = @(@($qualtoolFiles.Values) + @($reportBatches["xhciqual"].Values) + @("NOTICE.TXT", "readme.txt"))
+    "portsw"   = @($pswPublishable)
+    "silent"   = @($silentPublishable.Values)
+    "xhciinst" = @("XHCIINST.EXE", "XHCIIN64.EXE", "XHCIWIZ.EXE", "XHCIWZ64.EXE", "XHCIDI.EXE", "NOTICE.TXT", "readme.txt")
+    "xhcitr"   = @("XHCITR.EXE", "XHCITR64.EXE", "NOTICE.TXT", "readme.txt")
+    "xhcimark" = @("XHCIMARK.EXE", "XHCIMK64.EXE", "NOTICE.TXT", "readme.txt")
+}
+$uploadRootFiles = @("readme.txt", "LICENSE", "SETUP.EXE", "INSTALL.BAT", "INTEGRATE.TXT")
+
 function Get-ToolDirName {
     # A tool's directory relative to the version root: tools\<Name> for the
     # cut (no -Root) and for a tree that has tools\, <Name> for one without.
@@ -999,6 +1016,56 @@ function Assert-ToolsLayout {
     if ($faults.Count -gt 0) {
         throw ("{0} does not carry the release's tools {1} (roadmap-hcd task 38.9):`n  - {2}" -f `
                $What, $layout, ($faults -join "`n  - "))
+    }
+}
+
+function Assert-UploadSetEntries {
+    # The upload set outside its install media holds what the cut stages
+    # there and nothing else (AGENTS.md: the packager refuses to publish
+    # anything it did not itself stage). The family folders are held by
+    # PKG-FAMILY and the driver sets by their verified hashes; this holds
+    # the rest: the version root to $uploadRootFiles, the media directories
+    # ($MediaDirs), tools\ and, when this download adds them, the driver
+    # sets' $script:UsbDrvFolder\ holding $UsbDrvChildren alone; and each
+    # tools\<name>\ of $toolDirFiles to its names, with no subdirectory.
+    # Hidden and system files count like any other (-Force).
+    param([string]$Root, [string[]]$MediaDirs, [string[]]$UsbDrvChildren = @(), [string]$What)
+    $faults = @()
+    $dirsOk = @(@($MediaDirs) + @($toolsDirName) | ForEach-Object { $_.ToLowerInvariant() })
+    if ($UsbDrvChildren.Count -gt 0) { $dirsOk += $script:UsbDrvFolder.ToLowerInvariant() }
+    $filesOk = @($uploadRootFiles | ForEach-Object { $_.ToLowerInvariant() })
+    foreach ($item in @(Get-ChildItem -LiteralPath $Root -Force)) {
+        $n = $item.Name.ToLowerInvariant()
+        if ($item.PSIsContainer) {
+            if ($dirsOk -notcontains $n) { $faults += "$($item.Name)\ at the version root is not a directory the cut stages" }
+        } elseif ($filesOk -notcontains $n) {
+            $faults += "$($item.Name) at the version root is not a file the cut stages"
+        }
+    }
+    if ($UsbDrvChildren.Count -gt 0) {
+        $usbDrv = Join-Path $Root $script:UsbDrvFolder
+        $childOk = @($UsbDrvChildren | ForEach-Object { $_.ToLowerInvariant() })
+        foreach ($item in @(Get-ChildItem -LiteralPath $usbDrv -Force)) {
+            if (-not $item.PSIsContainer -or $childOk -notcontains $item.Name.ToLowerInvariant()) {
+                $faults += "$($script:UsbDrvFolder)\$($item.Name) is not one of the driver sets this download carries"
+            }
+        }
+    }
+    $tools = Join-Path $Root $toolsDirName
+    if (Test-Path -LiteralPath $tools -PathType Container) {
+        foreach ($dir in @(Get-ChildItem -LiteralPath $tools -Force -Directory)) {
+            $key = $dir.Name.ToLowerInvariant()
+            if (-not $toolDirFiles.ContainsKey($key)) { continue }
+            $known = @($toolDirFiles[$key] | ForEach-Object { $_.ToLowerInvariant() })
+            foreach ($item in @(Get-ChildItem -LiteralPath $dir.FullName -Force)) {
+                if ($item.PSIsContainer -or $known -notcontains $item.Name.ToLowerInvariant()) {
+                    $faults += "$toolsDirName\$($dir.Name)\$($item.Name) is not a file the cut stages there"
+                }
+            }
+        }
+    }
+    if ($faults.Count -gt 0) {
+        throw ("{0} holds what the cut does not stage. Do not upload it:`n  - {1}" -f $What, ($faults -join "`n  - "))
     }
 }
 function Publish-PortSwitchScripts {
@@ -1800,7 +1867,7 @@ function Assert-UploadSetOutsideRelease {
     # assembling 1.0.1.0 was accepted: the older cut's directory would have
     # gained an `upload-1.0.1.0\` and a sibling zip, and .gitignore ignores
     # neither, so the next `git add -A` would have committed them into a cut
-    # (roadmap Phase 20, F4, reproduced read-only with the extracted guard). The
+    # (roadmap task 20.1, reproduced read-only with the extracted guard). The
     # published root is still named separately because the ordinary cut's
     # staging directory sits under `releases\` too and the ancestor direction -
     # an upload directory that would CONTAIN the release - is checked against
@@ -1868,7 +1935,7 @@ function Find-TestClientFiles {
     $names = @('xhcipm.sys', 'xhcipm.inf', 'pmctl.exe')
     $marker = [System.Text.Encoding]::ASCII.GetBytes('XHCI98_TEST_CLIENT_DO_NOT_SHIP')
     $hits = @()
-    foreach ($item in (Get-ChildItem -LiteralPath $Root -File -Recurse)) {
+    foreach ($item in (Get-ChildItem -LiteralPath $Root -File -Recurse -Force)) {
         $relative = $item.FullName.Substring($Root.TrimEnd('\').Length).TrimStart('\')
         if ($item.Name.ToLowerInvariant() -in $names) {
             $hits += $relative
@@ -1929,7 +1996,7 @@ function Assert-PackageMatchesDeclaredMedia {
     $alsoKeys = @($Also | ForEach-Object { $_.ToLowerInvariant() })
     $unexpected = @()
     $seen = @{}
-    foreach ($item in (Get-ChildItem -LiteralPath $PkgDir -File -Recurse)) {
+    foreach ($item in (Get-ChildItem -LiteralPath $PkgDir -File -Recurse -Force)) {
         $relative = Get-PackageRelativePath -FullName $item.FullName -PackageDir $PkgDir
         $key = $item.Name.ToLowerInvariant()
         if ($PublishedPaths.ContainsKey($key) -and
@@ -1952,9 +2019,8 @@ function Assert-PackageMatchesDeclaredMedia {
         throw @"
 '$PkgDir' holds $($unexpected.Count) file(s) the published $InfName does not name, or names elsewhere:
   - $($unexpected -join "`n  - ")
-Since 1.0.0.1 the media carries this project's two files and nothing else: the
-operating system supplies usbd.sys, usbhub.sys, usbport.sys and usbui.dll
-through the INF's LayoutFile, and the INF gate refuses a Microsoft file on the media
+Since 1.0.0.1 the media carries this project's own files and nothing else: the
+operating system supplies usbd.sys and usbui.dll through the INF's LayoutFile, and the INF gate refuses a Microsoft file on the media
 (docs\contributing\legal-provenance.md section 5 records the decision). A file
 the INF does not name is not published; take it out of the package. Declaring a
 new media file is a release-layout decision recorded there, not a packaging step.
@@ -2023,8 +2089,8 @@ function Assert-UasPublished {
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
         Stop-CutCheck "the UAS binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
-    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    if ($info.IsDebug) {
+        Stop-CutCheck "the UAS binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG set; that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
@@ -2094,8 +2160,8 @@ function Assert-CmPublished {
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
         Stop-CutCheck "the connection manager binary for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
-    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    if ($info.IsDebug) {
+        Stop-CutCheck "the connection manager binary about to be published as $($Leg.Dir)\ has VS_FF_DEBUG set; that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
@@ -2227,8 +2293,8 @@ function Assert-HelperPublished {
     if (-not (Test-DriverVersionMatches -Reported $info.FileVersion -Declared $Version)) {
         Stop-CutCheck "the x86 helper for $($Leg.Dir)\ reports FileVersion '$($info.FileVersion)', not $Version. Rebuild: $rebuild"
     }
-    if ($info.IsDebug -ne ($Flavor -eq "debug")) {
-        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug); that is the wrong obj directory. Rebuild: $rebuild"
+    if ($info.IsDebug) {
+        Stop-CutCheck "the x86 helper about to be published as $($Leg.Dir)\ has VS_FF_DEBUG set; that is the wrong obj directory. Rebuild: $rebuild"
     }
     $marker = Get-ImageFlavourMarker -Path $Sys
     if ($marker -ne $Flavor) {
@@ -2352,12 +2418,13 @@ function New-UploadSet {
         $Stor98 = $null,
         # The driver pack (task 43.3), Export-DriverPack's result, or $null
         # for a download without it. Its folder is added at the set's root
-        # as NUSB33\, the one thing the set holds that the published tree
-        # does not.
+        # as USBDRV\NUSB33\, the one thing the set holds that the published
+        # tree does not.
         $DriverPack = $null,
         # Which of the release's downloads this is (task 43.48, design record
-        # 26 section 6.7): "base", "free" (adds WDMFREE\) or "nonfree" (adds
-        # NONFREE\, and WDMFREE\ when the release has it), -Kinds all of the
+        # 26 section 6.7): "base", "free" (adds USBDRV\FREE\) or "nonfree"
+        # (adds USBDRV\NONFREE\, and USBDRV\FREE\ when the release has it),
+        # -Kinds all of the
         # release's, and the two sets, Export-WdmFreeSet's and
         # Export-NonFreeSet's results or $null.
         [string]$Kind = "base",
@@ -2441,8 +2508,9 @@ function New-UploadSet {
         }
     }
 
-    # **The driver pack's NUSB 3.3 folder, at the download's root as
-    # NUSB33\** (task 43.3; owner, 2026-10-20 and 2026-10-22): the one thing the set holds that the published
+    # **The driver pack's NUSB 3.3 folder, in the download as
+    # USBDRV\NUSB33\** (task 43.3; owner, 2026-10-20 and 2026-10-22; the
+    # folder package-common.ps1 names): the one thing the set holds that the published
     # tree does not, where the installer takes it from. A published tree
     # holding one is refused - the pack is never in releases\.
     $packTarget = Join-Path $uploadRoot $script:DriverPackFolder
@@ -2460,8 +2528,8 @@ function New-UploadSet {
         Write-Ok ("{0}\ holds the driver pack's files, usb-wdm-nonfree {1}" -f $script:DriverPackFolder, $DriverPack.Revision)
     }
 
-    # **The other drivers' sets** (task 43.48): WDMFREE\ in downloads 2 and
-    # 3, NONFREE\ in download 3, each the folder its export verified, and
+    # **The other drivers' sets** (task 43.48): USBDRV\FREE\ in downloads 2
+    # and 3, USBDRV\NONFREE\ in download 3, each the folder its export verified, and
     # never in a published tree.
     $setTargets = @()
     foreach ($sp in @(@($script:WdmFreeFolder, $WdmFreeSet, @("free", "nonfree")), @($script:NonFreeFolder, $NonFreeSet, @("nonfree")))) {
@@ -2506,7 +2574,9 @@ function New-UploadSet {
     # the family folders themselves. A tree of a version up to 3.3.0.0 is
     # its flavour directories, read as before (section 7.2).
     $checkRoot = $uploadRoot
+    $mediaRootDirs = @($Flavors)
     if ((Get-FamilyLayoutKind -Root $uploadRoot -What "'$PublishedRoot'") -eq "family") {
+        $mediaRootDirs = @($script:FamilyNames)
         $famWhy = Test-FamilyLayout -Root $uploadRoot
         if ($famWhy -ne "") {
             throw "the assembled upload set's family folders are not the layout of design record 36. Do not upload it:`n$famWhy"
@@ -2681,7 +2751,7 @@ their defaults.
             }
         } elseif ($expected.Count -gt 0) {
             # -UploadSetOnly assembles from the tracked directory alone, and
-            # that directory carries this project's two files and nothing else.
+            # that directory carries this project's own files and nothing else.
             # An INF naming a third file on the media would need a source this
             # mode does not have - and since 1.0.0.1 no INF this gate accepts
             # names one, so this is the refusal for a future layout change
@@ -2727,7 +2797,8 @@ asset has to be assembled by the cut that publishes it.
         try {
             $gateOut = & powershell.exe @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $gate,
                                           "-InfPath", $flavorInf, "-Arch", $LegArches[$f],
-                                          "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version) 2>&1 | Out-String
+                                          "-PackageDir", $uploadFlavorDir, "-PublishedVersion", $Version,
+                                          "-MsFileScanDir", $uploadRoot) 2>&1 | Out-String
         } finally {
             $ErrorActionPreference = $savedEap
         }
@@ -2754,6 +2825,38 @@ $gateOut
                 throw "the assembled upload set's $f\ directory does not carry the catalogs design record 19 section 3a prescribes: $catWhy. Do not upload it."
             }
             Write-Ok ("{0}\ carries a catalog per INF, signed by {1} ({2})" -f $f, $(if ($catThumbForUpload -eq $script:TestSignThumbprint) { "the project test certificate" } else { "the packager self-test's throwaway certificate" }), $catThumbForUpload)
+
+            # **The embedded signatures, which the catalogs cannot vouch
+            # for**: a catalog member of a PE image is its Authenticode
+            # digest, which leaves the certificate table out, so the check
+            # above passes whether a .sys carries the project's signature,
+            # another signer's or none. Every .sys of the directory is judged
+            # against the same thumbprint (design record 19), as the cut's
+            # Assert-TestSigned judges each one it builds; -UploadSetOnly
+            # reaches here with a tree it did not write.
+            $sysSeen = 0
+            foreach ($sysItem in @(Get-ChildItem -LiteralPath $uploadFlavorDir -Recurse -Force -File | Where-Object { $_.Extension -ieq ".sys" })) {
+                $sysRel = $sysItem.FullName.Substring($uploadFlavorDir.TrimEnd('\').Length + 1)
+                $sigWhy = ""
+                try {
+                    $sigWhy = Test-ProjectTestSignature -Signature (Get-EmbeddedSignature -Path $sysItem.FullName) -Thumbprint $catThumbForUpload
+                } catch {
+                    $sigWhy = "its signature cannot be read: $($_.Exception.Message)"
+                }
+                if ($sigWhy -ne "") {
+                    throw "the assembled upload set's $f\$sysRel is not signed as every published x64 binary must be (design record 19): $sigWhy. Do not upload it."
+                }
+                $sysSeen++
+            }
+            # And the certificate's public half beside them, which the
+            # ordinary cut compares with the key it was given: here, with no
+            # key, one DER certificate and nothing else, by the same
+            # thumbprint.
+            $cerWhy = Get-PublicCertificateFault -Path (Join-Path $uploadFlavorDir $certPublishable[0]) -Thumbprint $catThumbForUpload
+            if ($cerWhy -ne "") {
+                throw "the assembled upload set's $f\ directory does not carry the certificate design record 19 prescribes: $cerWhy. Do not upload it."
+            }
+            Write-Ok ("{0}\ carries {1} .sys image(s), each with the embedded signature of {2}, and its {3}" -f $f, $sysSeen, $catThumbForUpload, $certPublishable[0])
         }
 
         # The UAS pair, by its own INF and gate. Required of a directory this
@@ -2925,6 +3028,11 @@ $gateOut
     # The test client (task 36.34) anywhere in the asset, the tools'
     # directories included, before anything is dated or zipped.
     Assert-NoTestClient -Root $uploadRoot -What "the upload set '$uploadRoot'"
+    # Nothing outside the install media but what the cut stages there.
+    $usbDrvChildren = @()
+    if ($null -ne $DriverPack) { $usbDrvChildren += (Split-Path -Leaf $script:DriverPackFolder) }
+    foreach ($st in $setTargets) { $usbDrvChildren += (Split-Path -Leaf $st.Dir) }
+    Assert-UploadSetEntries -Root $uploadRoot -MediaDirs $mediaRootDirs -UsbDrvChildren $usbDrvChildren -What "the upload set '$uploadRoot'"
     # The tools in tools\ where the tree has it, and at the version root only
     # before 2.4.0.0 (task 38.9). And the port switchover's scripts in their
     # directory alone where the tree has it (task 37.5); a version cut before
@@ -2971,7 +3079,7 @@ $gateOut
         if ($setFault -ne "") { throw "the upload set's $(Split-Path -Leaf $st.Dir)\ changed after it was verified: $setFault." }
         $setPrefixes += (Get-Item -LiteralPath $st.Dir).FullName.TrimEnd('\') + '\'
     }
-    $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse |
+    $infDates = @(Get-ChildItem -LiteralPath $uploadRoot -Filter '*.inf' -File -Recurse -Force |
                   Where-Object { $null -eq $packPrefix -or -not $_.FullName.StartsWith($packPrefix, [System.StringComparison]::OrdinalIgnoreCase) } |
                   Where-Object { $f = $_.FullName; @($setPrefixes | Where-Object { $f.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase) }).Count -eq 0 } |
                   ForEach-Object { Get-InfDriverDate -Path $_.FullName } | Sort-Object -Unique)
@@ -2980,7 +3088,7 @@ $gateOut
     }
     $fileStamp = [datetime]::ParseExact($infDates[0], 'yyyy-MM-dd',
         [Globalization.CultureInfo]::InvariantCulture).AddHours(12)
-    foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse)) {
+    foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse -Force)) {
         $item.LastWriteTime = $fileStamp
     }
     Write-Ok ("every file dated {0:yyyy-MM-dd HH:mm}, the INFs' DriverVer date" -f $fileStamp)
@@ -3013,7 +3121,7 @@ $gateOut
         $archive = [System.IO.Compression.ZipFile]::Open(
             $uploadZip, [System.IO.Compression.ZipArchiveMode]::Create)
         try {
-            foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse |
+            foreach ($item in (Get-ChildItem -LiteralPath $uploadRoot -File -Recurse -Force |
                                Sort-Object FullName)) {
                 $entry = (Get-PackageRelativePath -FullName $item.FullName -PackageDir $uploadRoot).Replace('\', '/')
                 [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
@@ -3204,7 +3312,17 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
             if (-not (Test-Path -LiteralPath $vsdImage -PathType Leaf)) {
                 Stop-CutCheck "no S98VSD.VXD at '$vsdImage': build it (scripts\build-driver.cmd builds src\vsd on the x86 run; it needs Open Watcom 2.0 and the Windows 98 SE DDK)."
             } else {
-                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\vsd\check-vsd.ps1") $vsdImage 2>&1
+                # Stderr merged with ErrorActionPreference relaxed, as every
+                # other gate call here: under "Stop" the gate's first stderr
+                # line would end the cut, -CheckOnly included, past
+                # Stop-CutCheck (the note above the packager's call).
+                $savedEap = $ErrorActionPreference
+                $ErrorActionPreference = "Continue"
+                try {
+                    $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\vsd\check-vsd.ps1") $vsdImage 2>&1
+                } finally {
+                    $ErrorActionPreference = $savedEap
+                }
                 if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("S98VSD.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
                 else {
                     # Not older than any of its inputs: the sources, the
@@ -3231,7 +3349,7 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     # The one exception to "no Microsoft file in the download"
     # (docs\contributing\legal-provenance.md section 5, the owner's decision
     # of 2026-10-20): NUSB 3.3's seven storage files, from the driver pack,
-    # in the upload set's NUSB33\ only and never in releases\ (task 43.3).
+    # in the upload set's USBDRV\NUSB33\ only and never in releases\ (task 43.3).
     # A cut resolves the checkout's HEAD here, once, before anything is
     # built; -UploadSetOnly takes the revision drvpack.txt recorded
     # instead, below. Every generated text follows $driverPackIncluded.
@@ -3264,10 +3382,11 @@ scripts\package\make-package.ps1 -Arch amd64, which is never published.
     }
     # --- the other USB drivers' sets: downloads 2 and 3 (task 43.48) --------
     #
-    # Design record 26 section 6.7. Download 1 is the package with NUSB33\
-    # (above); download 3 adds NONFREE\, the non-free/ folder of the pinned
-    # usb-wdm-nonfree tag in the same checkout, only where download 1 has
-    # NUSB33\; download 2 adds WDMFREE\, the drivers wdmfree-pin.txt names,
+    # Design record 26 section 6.7. Download 1 is the package with
+    # USBDRV\NUSB33\ (above); download 3 adds USBDRV\NONFREE\, the non-free/
+    # folder of the pinned usb-wdm-nonfree tag in the same checkout, only
+    # where download 1 has USBDRV\NUSB33\; download 2 adds USBDRV\FREE\, the
+    # drivers wdmfree-pin.txt names,
     # only while it names a release. Each set's SHA256.TXT, as written here,
     # must hash to the value the installer carries (xhciinst\inst_core.h),
     # which is how the installer knows the folder is this release's. A cut
@@ -3403,7 +3522,7 @@ Take them out (and out of history, if committed) before cutting.
             # for usbport.sys and usbhub.sys on both NT routes, SUSP-MISSING on
             # both), all added by 1.0.1.0, and the 1.0.0.0 INF names Microsoft
             # files on the media, which OS-MEDIA refuses. Weakening the gate or
-            # pinning it per version is not the answer (roadmap Phase 20, F15);
+            # pinning it per version is not the answer (roadmap task 20.1);
             # the tree that cut the older version carries the gate it passed.
             throw @"
 -UploadSetOnly rebuilds the asset of the current cut only, and $Version is not
@@ -3456,7 +3575,7 @@ docs\contributing\build-and-test.md, "Versioning the driver".
     # package supplied: since 1.0.0.1 nothing from the package enters the
     # asset, so the requirement only stopped a fresh clone - the machine a lost
     # asset is most likely to be rebuilt on - from rebuilding it
-    # (roadmap Phase 20, F15). What the asset is made of is the published tree,
+    # (roadmap task 20.1). What the asset is made of is the published tree,
     # and the INF gate on each assembled directory is what checks it.
     if ($UploadSetOnly) {
         Write-Step ("Upload set for {0}, from {1}" -f $Version, $finalRoot)
@@ -3934,7 +4053,13 @@ the result in place of the marker, then cut again. The first:
         if (-not (Test-Path -LiteralPath $pfwImage -PathType Leaf)) {
             Stop-CutCheck "no XHCIPFW.VXD at '$pfwImage': build it (scripts\build-driver.cmd builds src\pfw on the x86 run; it needs Open Watcom 2.0 and the Windows 98 SE DDK)."
         } else {
-            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\check-pfw.ps1") $pfwImage 2>&1
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\check-pfw.ps1") $pfwImage 2>&1
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
             if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.VXD failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             else {
                 # Not older than any of its inputs, as S98VSD.VXD is held above,
@@ -3959,7 +4084,13 @@ the result in place of the marker, then cut again. The first:
         if (-not (Test-Path -LiteralPath $pfwSysImage -PathType Leaf)) {
             Stop-CutCheck "no XHCIPFW.SYS at '$pfwSysImage': build it (scripts\build-driver.cmd builds src\pfw\nt on the x86 run; it needs the Windows 2000 DDK)."
         } else {
-            $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1") $pfwSysImage 2>&1
+            $savedEap = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $out = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repo "src\pfw\nt\check-pfwsys.ps1") $pfwSysImage 2>&1
+            } finally {
+                $ErrorActionPreference = $savedEap
+            }
             if ($LASTEXITCODE -ne 0) { Stop-CutCheck ("XHCIPFW.SYS failed its gate:`n" + (($out | Out-String).TrimEnd())) }
             else {
                 $pfwSysTime = (Get-Item -LiteralPath $pfwSysImage).LastWriteTimeUtc
@@ -4201,12 +4332,12 @@ Rebuild with scripts\build-driver.cmd $f$(if ($leg.Arch -eq "x64") { " -amd64" }
         # set by src\xhci98.rc under #if DBG, so it is the one field that
         # distinguishes two files that are otherwise the same name at the same
         # version. Trusting the obj directory instead would let a checked build be
-        # published as the release (or, before task 45.45 retired the debug
-        # flavour, a release build as the debug one).
-        $expectDebug = ($f -eq "debug")
-        if ($info.IsDebug -ne $expectDebug) {
+        # published as the release. Release is the one flavour a cut publishes
+        # since task 45.45 (the top of this script refuses debug and qemu by
+        # name), so the flag must be clear.
+        if ($info.IsDebug) {
             Stop-CutCheck @"
-the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG = $($info.IsDebug), expected $expectDebug.
+the binary about to be published as $($leg.Dir)\ has VS_FF_DEBUG set, and a release build has it clear.
 That is the wrong obj directory: src\objfre\$($archDirName[$leg.Arch]) is the release build;
 a checked image is the qemu flavour's or one of the debug flavour task 45.45 retired.
 Rebuild the release flavour.
@@ -4402,7 +4533,7 @@ invalidate readings already taken on these exact bytes - say so:
             Path      = $sys
             Dir       = $destDir
             # Kept so the upload set can take any file the INF declares beyond
-            # this project's two from the directory make-package.ps1 already
+            # this project's own from the directory make-package.ps1 already
             # gated - none since 1.0.0.1 - rather than re-deriving where it came
             # from or parsing [SourceDisksFiles] a second time.
             PkgDir    = $pkgDir
@@ -4415,13 +4546,6 @@ invalidate readings already taken on these exact bytes - say so:
         }
     }
 
-    # --- the DOS qualifier ---------------------------------------------------
-    #
-    # Copied, not built: it is an Open Watcom target and this script runs in the
-    # MSVC/DDK world. That makes staleness the risk, so compare it against its
-    # own sources rather than trusting that someone ran build.cmd - a qualifier
-    # older than the code it was built from would be answering for a different
-    # tool than the one the docs describe.
     # --- the family folders (task 45.44, design record 36 sections 5.1, 7.1) --
     #
     # Each leg above is a flat package, staged, gated and checked as before.
@@ -4456,6 +4580,13 @@ invalidate readings already taken on these exact bytes - say so:
             (@($script:FamilyNames | Where-Object { Test-Path -LiteralPath (Join-Path $destRoot $_) }) -join ", "))
     }
 
+    # --- the DOS qualifier ---------------------------------------------------
+    #
+    # Copied, not built: it is an Open Watcom target and this script runs in the
+    # MSVC/DDK world. That makes staleness the risk, so compare it against its
+    # own sources rather than trusting that someone ran build.cmd - a qualifier
+    # older than the code it was built from would be answering for a different
+    # tool than the one the docs describe.
     $qualtoolStaged = $null
     if (-not $SkipQualtool) {
         Write-Step "DOS qualifier"
@@ -4591,6 +4722,9 @@ cuts without the service on a host that cannot build it.
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_query.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "src\cm\cm_status.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_board.h")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_bootp.c")) +
+            @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_bootp.h")) +
             @(Get-Item -LiteralPath (Join-Path $repo "xhciinst\inst_core.h")))
         foreach ($name in $markExes) {
             $markTime = (Get-Item -LiteralPath (Join-Path $MarkToolDir $name)).LastWriteTimeUtc
@@ -4879,28 +5013,10 @@ helper (xhciinst\di\build.cmd).
     $silentStaged = Publish-SilentInstallScripts -SourceDir (Join-Path $repo "src") -DestRoot $destRoot -Map $silentPublishable -DirName (Get-ToolDirName -Name "silent")
     Write-Ok ("{0} published once, in {1}\" -f (@($silentPublishable.Values | Sort-Object) -join ", "), (Get-ToolDirName -Name "silent"))
 
-    #
-    # Two flavours that hash the same are one binary published twice. The
-    # VS_FF_DEBUG check above already makes that nearly impossible, which is the
-    # reason to keep this: it is the check that fails if that one is ever
-    # weakened, and it costs nothing.
-    #
-    # **Compared WITHIN an architecture, and it has to be.** The x86 and x64
-    # binaries of the same flavour are different builds of different machine
-    # code and could never hash alike, so a flat comparison across four staged
-    # files would find every pair distinct and say nothing - while the pair
-    # this check existed for, release and debug of one architecture, would be
-    # buried among them. Since task 45.45 retired debug there is no pair to
-    # compare and the check passes over; it stays for a cut naming two.
-    #
-    foreach ($a in $Arch) {
-        $rel = "release-$a"
-        $dbg = "debug-$a"
-        if ($staged.ContainsKey($rel) -and $staged.ContainsKey($dbg) -and
-            $staged[$rel].Sha256 -eq $staged[$dbg].Sha256) {
-            Stop-CutCheck "the release and debug $a binaries are identical - one build was packaged twice."
-        }
-    }
+    # (A cut once compared the release and debug binaries of each
+    # architecture, refusing two that hashed alike. Task 45.45 retired debug
+    # and the top of this script refuses it, so no cut has the pair; the
+    # comparison was removed on 2026-11-06.)
 
     # --- the per-version README ---------------------------------------------
     #
@@ -4911,7 +5027,7 @@ helper (xhciinst\di\build.cmd).
     # entry, in the shape of the notes the owner publishes on GitHub, a short
     # install, how to report a problem, the directory's files and the earlier
     # releases, with the full release notes (docs\using\release-notes.md:
-    # each system's standing, the registry settings, every file) linked
+    # what each system needs, the registry settings, every file) linked
     # rather than transcribed. When the install or the report steps there
     # change, change this too. A TODO(...) line here is a reading a cut owes;
     # a readme still carrying one is not ready to cut.
@@ -4977,7 +5093,7 @@ helper (xhciinst\di\build.cmd).
             $contents += "      SHA-256"
             $contents += ("      {0}" -f $s.UasSha256)
             if ($fam -eq "nt-x86") {
-                $contents += "      xhcihlpr.sys (the helper for 32-bit 2000, XP, Vista and 7)"
+                $contents += "      xhcihlpr.sys (the helper for 32-bit 2000 to 10)"
             }
             if ($fam -ne "98-me") {
                 $contents += "      txtsetup.oem (Setup's F6 disk: this folder's root files)"
@@ -5080,7 +5196,7 @@ helper (xhciinst\di\build.cmd).
         $contents += "      readme.txt"
         $contents += "      NOTICE.TXT   third-party notices these EXEs carry"
         $contents += ""
-        $contents += "      Section 4 has how to install; readme.txt here is the"
+        $contents += "      Section 2 has how to install; readme.txt here is the"
         $contents += "      command-line reference."
         $contents += ""
     }
@@ -5155,9 +5271,7 @@ helper (xhciinst\di\build.cmd).
         $contents += "      Windows ME does not need it for a keyboard, mouse, stick"
         $contents += "      or hub of its own: it installs them with no wizard"
         $contents += "      already. On 98 SE they install with no wizard once it is"
-        $contents += "      on, the keyboard and mouse after the CD prompt above (read"
-        $contents += "      in virtual machines; a composite keyboard, mouse or stick"
-        $contents += "      was not read). The"
+        $contents += "      on, the keyboard and mouse after the CD prompt above. The"
         $contents += "      information on how the silent install is decided, and the"
         $contents += "      list, are from SweetLow."
         $contents += ""
@@ -5279,8 +5393,12 @@ Driver Signature Enforcement, also works for one start.
 "@
         $readmeArchFiles = @"
 
-  XP X64          Nothing to do either: both come from Driver
-                  Cache\amd64.
+  XP X64          usbd.sys comes from Driver Cache\amd64. From 3.4.2.0
+                  SETUP.EXE copies usbui.dll from Windows' own files
+                  when it is missing, for the controller's Advanced
+                  tab and the root hub's Power tab; answer Windows'
+                  "Windows Logo testing" box with Continue Anyway.
+                  Update Driver alone does not copy it.
 "@
     }
 
@@ -5311,8 +5429,8 @@ SCSI) storage, xhcicm.sys is the Thunderbolt 3 and USB4 connection manager,
 and the bundled Stor98 drives an NVMe drive behind a Thunderbolt or USB4
 port.
 
-This file is the short guide. The full release notes - each system's
-standing, every registry setting, every file and every known limitation -
+This file is the short guide. The full release notes - what each system
+needs, every registry setting, every file and every known limitation -
 are online:
 
       https://github.com/yeokm1/xhci98/blob/main/docs/using/release-notes.md
@@ -5351,11 +5469,12 @@ Unzip the WHOLE download first.
 SETUP.EXE IS THE RECOMMENDED WAY TO INSTALL OR UPDATE. Double-click it in
 the top directory: on Windows 2000 and XP sign in as an administrator, on
 Vista and later Windows asks once for an administrator's approval. Go
-through its pages - Welcome, Components, the free and non-free USB driver
-pages when this download carries them, and Summary; the driver's options
-are under Settings. Nothing changes before you click Install. Answer
-Windows' unsigned-driver questions, do any steps its last page lists for
-you, and restart when it offers.
+through its pages - Welcome, Components, Thunderbolt and USB4 (when that
+support is ticked), the free and non-free USB driver pages when this
+download carries them, and Summary; the driver's options are under
+Settings. Nothing changes before you click Install. Answer Windows'
+unsigned-driver questions, do any steps its last page lists for you, and
+restart when it offers.
 
   - Windows 2000 to 7: it installs or updates the driver of every device
     present and stages the package for devices plugged in later.
@@ -5778,14 +5897,15 @@ WHAT THE VERDICT MEANS
       The same, but the controller has no interrupt pin. The driver reads
       its events on a timer instead (polling), or on Windows Vista and 7
       may take a message-signalled interrupt; the line says whether the
-      controller offers one. Go ahead and install.
+      controller offers one. Or the controller has no USB 2.0 ports, so
+      the tool's port tests cannot run on it: a limit of the tool, not a
+      fault of the controller or the driver. Go ahead and install.
 
   DISQUALIFIED
       Something it can see rules the machine out. It will say which:
 
         - no xHCI controller present
         - the controller's memory window is unusable, or sits above 4 GB
-        - no USB 2.0 ports on the controller
 
   CANNOT SAY
       Something the tool is not allowed to change is in the way: the
@@ -5833,6 +5953,11 @@ READ-ONLY MODES - these change nothing on the machine
                     Manager shows for the controller under the system in
                     question. Accepted only beside --quick or --probe-only;
                     alone it is a usage error
+  --edd             ask the firmware how it names each disk (INT 13h 41h
+                    and 48h: the EDD 3.0 device path), then stop. It
+                    touches no USB controller. Run it from MS-DOS itself
+                    ("Command prompt only"); it refuses under Windows. Only
+                    the modifiers below go with it
 
 
 MODIFIERS - these say what to do with the report, not what to run
@@ -5914,9 +6039,11 @@ WHAT IT RETURNS TO DOS
   0   the active tests passed
   1   not qualified, or a read-only run - which cannot pass tests it does
       not run, so 1 is the normal result of the commands above
-  2   the command line was wrong, or no controller of that kind is here
+  2   the command line was wrong, or no controller of that kind is here,
+      or --edd refused to run (Windows is running)
   3   a full active run whose controllers all qualified, at least one only
-      WITH CAVEATS (no working interrupt, so the driver polls it)
+      WITH CAVEATS (no working interrupt, so the driver polls it; or no
+      USB 2.0 ports, so the port tests could not run)
   4   --log-stamp could not name or create its log; nothing was read
 
   The verdict on screen is what to read. These are for batch files.
@@ -6594,8 +6721,14 @@ after checkout. Restore it with:  git checkout -- LICENSE
     Write-Host ""
     foreach ($leg in $legs) {
         if ($staged.ContainsKey($leg.Id)) {
-            Write-Ok ("{0}\xhci98.sys is the {1} {2} build (VS_FF_DEBUG = {3})" -f `
-                $staged[$leg.Id].Published, $leg.Arch, $leg.Flavor, ($leg.Flavor -eq "debug"))
+            # Where the image really is: the family folders of the leg's
+            # architecture (design record 36), or the flavour directory of a
+            # tree in the layout before 3.4.0.0.
+            $where = @($script:FamilyNames | Where-Object {
+                $script:FamilyArch[$_] -eq $leg.PkgArch -and (Test-Path -LiteralPath (Join-Path $destRoot "$_\xhci98.sys") -PathType Leaf)
+            } | ForEach-Object { "$_\xhci98.sys" })
+            if ($where.Count -eq 0) { $where = @("$($staged[$leg.Id].Published)\xhci98.sys") }
+            Write-Ok ("{0}: the {1} {2} build (VS_FF_DEBUG clear)" -f ($where -join " and "), $leg.Arch, $leg.Flavor)
         }
     }
     if ($null -eq $qualtoolStaged) {
@@ -6610,12 +6743,11 @@ after checkout. Restore it with:  git checkout -- LICENSE
 
     Write-Step "Done"
     Write-Host "Tracked:    $destRoot"
-    Write-Host "            Each published directory holds this project's own files only: its"
-    Write-Host "            drivers, their INFs, txtsetup.oem, in an x86 directory nt\ beside"
-    Write-Host "            them, and in an x64 directory the test certificate; tools\,"
-    Write-Host "            SETUP.EXE, INSTALL.BAT and INTEGRATE.TXT at the root; in each"
-    Write-Host "            family folder's stor98\ the Stor98 built with them. No Microsoft"
-    Write-Host "            file. Commit this."
+    Write-Host "            Each family folder (98-me\, nt-x86\, nt-x64\) holds this project's"
+    Write-Host "            own files only: the drivers its Windows installs and their INFs,"
+    Write-Host "            the connection manager in cm\ and Stor98 in stor98\, and in"
+    Write-Host "            nt-x64\ the test certificate; tools\, SETUP.EXE, INSTALL.BAT and"
+    Write-Host "            INTEGRATE.TXT at the root. No Microsoft file. Commit this."
     Write-Host ("            {0} records whether the download carries the driver pack." -f $script:DriverPackRecordName)
     if ($null -ne $uploadRoot) {
         Write-Host ""
@@ -6641,8 +6773,9 @@ after checkout. Restore it with:  git checkout -- LICENSE
         Write-Warn ("the upload set was NOT moved onto its final names (see above); rebuild it with: {0}" -f (Get-UploadSetRepairCommand))
     } else {
         Write-Warn "-SkipUploadSet: no release asset was assembled, so there is nothing to upload."
-        Write-Host "            Install from out\pkg-<flavor>\ or from the tracked directory;"
-        Write-Host "            the driver files in both are the same bytes."
+        Write-Host "            Install from the tracked directory's family folders, or from"
+        Write-Host "            out\pkg-release-<arch>\ through ConvertTo-FamilyLayout; the"
+        Write-Host "            driver files in both are the same bytes."
     }
 } catch {
     Write-Err $_.Exception.Message

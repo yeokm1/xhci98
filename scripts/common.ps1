@@ -245,17 +245,22 @@ function Test-SetupHost {
 }
 
 function Test-PathUnderRoot {
+    # Is $Path strictly inside $Root (never $Root itself)? Both are made
+    # absolute and canonical without touching the disk - nothing is created
+    # to answer - and compared on a whole path component, so C:\repo\tools2
+    # is not under C:\repo\tools. Its caller guards a recursive delete.
     param(
         [string]$Path,
         [string]$Root
     )
-    $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
-    $parent = Split-Path -Parent $Path
-    if (-not (Test-Path -LiteralPath $parent)) {
-        Ensure-Directory $parent
-    }
-    $resolvedParent = (Resolve-Path -LiteralPath $parent).Path
-    return $resolvedParent.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)
+    if ([string]::IsNullOrWhiteSpace($Path) -or [string]::IsNullOrWhiteSpace($Root)) { return $false }
+    # Against PowerShell's location, as the caller's own paths are, and
+    # without asking that either exists.
+    $ps = $ExecutionContext.SessionState.Path
+    $fullRoot = [System.IO.Path]::GetFullPath($ps.GetUnresolvedProviderPathFromPSPath($Root)).TrimEnd('\')
+    $fullPath = [System.IO.Path]::GetFullPath($ps.GetUnresolvedProviderPathFromPSPath($Path)).TrimEnd('\')
+    if ($fullRoot -eq "" -or $fullPath.Length -le $fullRoot.Length) { return $false }
+    return $fullPath.StartsWith($fullRoot + '\', [System.StringComparison]::OrdinalIgnoreCase)
 }
 
 #

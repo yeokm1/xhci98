@@ -68,6 +68,27 @@
 #     earlier releases gave it, and refuses the INFs' other device names
 #     (package-common.ps1's Get-ControllerDescFaults, task 44.75)
 #
+# THE TRACKED FILES' WORDING RULES (2026-11-06), in this script:
+#   - docs\**\*.md: no TAB and no other control byte but CR and LF, and no
+#     "releases" followed by "." and a digit - the marks an escape leaves
+#     when it is eaten as text is written (a "\3" read as a back-reference
+#     or an octal escape left releases<0x03>.4.1.0 in a roadmap line, and
+#     three "\t" became TABs in design records) (Get-DocByteFaults)
+#   - AGENTS.md, "What NOT to Do": no tracked file names the review tool, a
+#     review round or a finding number, outside the dated run sheets
+#     (docs\contributing\runs\run-*.md) and README.md's "AI usage" section,
+#     which names the agents on purpose (Get-WordingFaults). Published
+#     releases\<version>\ trees are outside it, as they are never edited.
+#     Stor98's tree (src\stor98\, with src\cm\stor98cm.h, its interface
+#     header's byte-for-byte copy) is inside it since 2026-11-06 (owner;
+#     src\stor98\AGENTS.md), apart from what is not Stor98's own text or is
+#     never edited: its ignored out\, the unmodified upstream reference copy
+#     third_party\, and the published releases\<version>\. String
+#     literals are read as any other text, a test's printed output included.
+#   Both are enforced ($script:WordingRulesEnforced): each fault is listed
+#   and fails the run. They were report-only from their addition until the
+#   tree was clean of what they found then (2026-11-06).
+#
 # Out of scope, as no text: the cut's checks that two sources agree on a
 # number (XHCITR's snapshot schema against the driver's, each tool's
 # shared version macro). They need no build either, and stay the cut's.
@@ -438,10 +459,14 @@ function Get-HistoryFaults {
         if ($h -match ' line (\d+): ' -and [int]$Matches[1] -gt $first) { $faults += "$h (a draft marker; the cut refuses it)" }
     }
     $notes = Join-Path $Root "docs\using\release-notes.md"
-    if (Test-Path -LiteralPath $notes) {
+    if (Test-Path -LiteralPath $notes -PathType Leaf) {
         $faults += @(Get-ReleaseNotesHeadFaults -Lines @(Get-Content -LiteralPath $notes) -Version $Version)
         $faults += @(Find-DraftMarkers -Lines @(Get-Content -LiteralPath $notes) -Label "docs\using\release-notes.md" |
                      ForEach-Object { "$_ (a draft marker; the cut refuses it)" })
+    } else {
+        # Missing, the head and draft-marker checks would pass by having
+        # nothing to read.
+        $faults += "docs\using\release-notes.md is missing; its head must describe $Version."
     }
     return $faults
 }
@@ -503,6 +528,120 @@ function Get-CutFaults {
     $faults += @(Get-ShippedScriptFaults -Root $Root)
     $faults += @(Get-ControllerDescFaults -Root $Root)
     return [pscustomobject]@{ Faults = $faults; Texts = @($cut.Texts).Count }
+}
+
+# ---- the tracked files' wording rules (2026-11-06) ----
+#
+# On since the tree was clean of what they found when added (2026-11-06);
+# $false makes them report-only again.
+$script:WordingRulesEnforced = $true
+
+# The review tool's name, spelled by character code so that this file, which
+# the rule reads too, does not name it.
+$script:ReviewToolWord = -join ([char[]](0x63, 0x6F, 0x64, 0x65, 0x78))
+$script:WordingPatterns = @(
+    @{ Rx = ('\b' + $script:ReviewToolWord + '\b'); Why = "names the review tool" },
+    @{ Rx = '\breview\s+round\s+\d+'; Why = "names a review round" },
+    @{ Rx = '\bround\s+\d+\s+of\s+(?:the\s+)?review'; Why = "names a review round" },
+    @{ Rx = '\bfindings?\s+#?\d+'; Why = "names a finding number" }
+)
+
+function Get-DocByteFaults {
+    # A docs\ Markdown file's bytes: a TAB or any other control byte but CR
+    # and LF, and the text "releases" followed by "." and a digit. Each fault
+    # is "<Label> line N: what".
+    param([byte[]]$Bytes, [string]$Label)
+    $faults = @()
+    $line = 1
+    for ($i = 0; $i -lt $Bytes.Length; $i++) {
+        $b = $Bytes[$i]
+        if ($b -eq 0x0A) { $line++; continue }
+        if ($b -eq 0x09) { $faults += "$Label line ${line}: a TAB (an eaten \t?)"; continue }
+        if ($b -lt 0x20 -and $b -ne 0x0D) { $faults += ("{0} line {1}: control byte 0x{2:X2} (an eaten escape?)" -f $Label, $line, $b) }
+    }
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($Bytes)
+    $lines = $text -split "`n"
+    for ($n = 0; $n -lt $lines.Count; $n++) {
+        if ($lines[$n] -cmatch 'releases\.[0-9]') { $faults += "$Label line $($n + 1): 'releases.<digit>', a path whose backslash and digit were eaten" }
+    }
+    return $faults
+}
+
+function Get-WordingFaults {
+    # The lines of one tracked file against $script:WordingPatterns. With
+    # -Readme, the "AI usage" section (its heading to the next heading of
+    # the same or a higher level) is skipped: its credit line names the
+    # agents on purpose.
+    param([string[]]$Lines, [string]$Label, [switch]$Readme)
+    $faults = @()
+    $skipLevel = 0
+    for ($n = 0; $n -lt $Lines.Count; $n++) {
+        $l = $Lines[$n]
+        if ($Readme -and $l -match '^(#+)\s') {
+            $level = $Matches[1].Length
+            if ($skipLevel -gt 0 -and $level -le $skipLevel) { $skipLevel = 0 }
+            if ($l -match '^#+\s+AI usage\s*$') { $skipLevel = $level; continue }
+        }
+        if ($skipLevel -gt 0) { continue }
+        foreach ($p in $script:WordingPatterns) {
+            if ($l -match $p.Rx) {
+                $faults += "$Label line $($n + 1): $($p.Why) ('$($Matches[0])')"
+                break
+            }
+        }
+    }
+    return $faults
+}
+
+function Get-TreeWordingFaults {
+    # Both rules over the tracked text of the tree at -Root, found by a walk
+    # (no git): the source trees, docs\ and .github\, and the named files at
+    # the root and under releases\ and external\. What is skipped is
+    # git-ignored, or outside the rules (see the file's head).
+    param([string]$Root)
+    $faults = @()
+    $kinds = @(".c", ".h", ".asm", ".rc", ".def", ".inf", ".inx", ".bat", ".cmd", ".oem", ".vbs", ".reg", ".manifest",
+               ".ps1", ".psd1", ".md", ".txt", ".list", ".expected", ".allow", ".py", ".sh", ".yml", ".example")
+    $names = @("makefile", "sources")
+    $skip = @(
+        '^src\\(.+\\)?obj[^\\]*\\',
+        '^src\\stor98\\out\\',
+        '^src\\stor98\\third_party\\',
+        '^src\\stor98\\releases\\[0-9][^\\]*\\',
+        '^docs\\contributing\\runs\\run-[^\\]*\.md$',
+        '^docs\\references\\',
+        '^scripts\\local\\',
+        '^xhciqual\\results\\',
+        '^xhciqual\\test\\(win98hdd|hdd)\\'
+    )
+    $files = @()
+    foreach ($tree in @("src", "test", "scripts", "xhciinst", "xhcimark", "xhcitr", "xhciqual", "xhciperf", "docs", ".github")) {
+        $tp = Join-Path $Root $tree
+        if (Test-Path -LiteralPath $tp -PathType Container) { $files += @(Get-ChildItem -LiteralPath $tp -Recurse -File -Force) }
+    }
+    foreach ($rel in @("README.md", "AGENTS.md", "CLAUDE.md", "LICENSE", "LICENSE-docs.md", "releases\README.md", "releases\history.md", "external\README.md")) {
+        $fp = Join-Path $Root $rel
+        if (Test-Path -LiteralPath $fp -PathType Leaf) { $files += @(Get-Item -LiteralPath $fp -Force) }
+    }
+    $rootFull = (Get-Item -LiteralPath $Root).FullName.TrimEnd('\')
+    $docByteCount = 0
+    $wordCount = 0
+    foreach ($f in $files) {
+        $rel = $f.FullName.Substring($rootFull.Length + 1)
+        $isDocMd = ($rel -match '^docs\\' -and $f.Extension -ieq ".md" -and $rel -notmatch '^docs\\references\\')
+        if ($isDocMd) {
+            $docByteCount++
+            $faults += @(Get-DocByteFaults -Bytes ([System.IO.File]::ReadAllBytes($f.FullName)) -Label $rel)
+        }
+        if (($kinds -notcontains $f.Extension.ToLowerInvariant() -and $names -notcontains $f.Name.ToLowerInvariant()) -and $f.Name -ne "LICENSE") { continue }
+        $skipped = $false
+        foreach ($pattern in $skip) { if ($rel -match $pattern) { $skipped = $true; break } }
+        if ($skipped) { continue }
+        $wordCount++
+        $text = [System.Text.Encoding]::GetEncoding(28591).GetString([System.IO.File]::ReadAllBytes($f.FullName))
+        $faults += @(Get-WordingFaults -Lines ($text -split "`n") -Label $rel -Readme:($rel -ieq "README.md"))
+    }
+    return [pscustomobject]@{ Faults = $faults; DocFiles = $docByteCount; Files = $wordCount }
 }
 
 function Invoke-Child {
@@ -647,6 +786,8 @@ if ($SelfTest) {
         [void](New-Item -ItemType Directory -Path (Join-Path $root "releases"))
         [void](New-Item -ItemType Directory -Path (Join-Path $root "docs\using"))
         $histPath = Join-Path $root "releases\history.md"
+        $notesPath = Join-Path $root "docs\using\release-notes.md"
+        [System.IO.File]::WriteAllText($notesPath, ('This file describes package version `2.0.0.0`.' + "`r`n"))
         $cases = @(
             @{ What = "an entry dated as the INF";     Text = "# H`r`nTODO( in the preamble`r`n## 2.0.0.0 - 2026-01-01`r`n`r`ntext`r`n"; Want = "" },
             @{ What = "no entry";                      Text = "# H`r`n## 1.0.0.0 - 2026-01-01`r`n";                                    Want = "has no entry for 2.0.0.0" },
@@ -669,6 +810,64 @@ if ($SelfTest) {
         [System.IO.File]::WriteAllText((Join-Path $root "docs\using\release-notes.md"), ('This file describes package version `2.0.0.0`.' + "`r`nTODO(bench)`r`n"))
         $hf = @(Get-HistoryFaults -Script $stub -Root $root -Version "2.0.0.0" -ReleaseDate "2026-01-01")
         Assert-Self ("a draft marker in the release notes: " + ($hf -join " | ")) ($hf.Count -eq 1 -and $hf[0].Contains("release-notes.md line 2: TODO(bench)"))
+        Remove-Item -LiteralPath $notesPath -Force
+        $hf = @(Get-HistoryFaults -Script $stub -Root $root -Version "2.0.0.0" -ReleaseDate "2026-01-01")
+        Assert-Self ("missing release notes: " + ($hf -join " | ")) ($hf.Count -eq 1 -and $hf[0].Contains("release-notes.md is missing"))
+
+        # The tracked files' wording rules, on stand-in texts. The words
+        # under test are assembled here, as the rules assemble them, so
+        # that this file names none of them.
+        $tw = $script:ReviewToolWord
+        $rr = "review" + " round 2"
+        $fn = "Finding" + " 3"
+        $docBytes = [System.Text.Encoding]::ASCII.GetBytes("ok`r`na`tb`r`nreleases" + [char]3 + ".4.1.0`r`nsee releases.4.1.0`r`nreleases\3.4.1.0`r`n")
+        $df = @(Get-DocByteFaults -Bytes $docBytes -Label "d.md")
+        Assert-Self ("docs bytes: a TAB, a control byte and 'releases.<digit>' each found, a whole path not: " + ($df -join " | ")) `
+            ($df.Count -eq 3 -and (Test-Has $df "d.md line 2: a TAB") -and (Test-Has $df "d.md line 3: control byte 0x03") -and (Test-Has $df "d.md line 4: 'releases.<digit>'"))
+        Assert-Self "docs bytes: CR, LF and printable text pass" (@(Get-DocByteFaults -Bytes ([System.Text.Encoding]::ASCII.GetBytes("a`r`nb`n")) -Label "d.md").Count -eq 0)
+        $wl = @("Reviewed and revised.", "The $tw reviewer said so.", "Converged at $rr.", "See $fn above.", "Findings are listed below.", "codexes and $($tw)ish are not the name")
+        $wf = @(Get-WordingFaults -Lines $wl -Label "w.c")
+        Assert-Self ("wording: the tool's name, a review round and a finding number each found, and nothing else: " + ($wf -join " | ")) `
+            ($wf.Count -eq 3 -and (Test-Has $wf "w.c line 2: names the review tool") -and (Test-Has $wf "w.c line 3: names a review round") -and (Test-Has $wf "w.c line 4: names a finding number"))
+        $rm = @("# Title", "Text by $tw.", "## AI usage", "", "- $tw as a reviewer", "### Detail", "- $tw again", "## Licence", "Not $tw here.")
+        $rf = @(Get-WordingFaults -Lines $rm -Label "README.md" -Readme)
+        Assert-Self ("wording: README.md's AI usage section is skipped and nothing else is: " + ($rf -join " | ")) `
+            ($rf.Count -eq 2 -and (Test-Has $rf "README.md line 2:") -and (Test-Has $rf "README.md line 9:"))
+        $rf = @(Get-WordingFaults -Lines $rm -Label "other.md")
+        Assert-Self "wording: the AI usage section is skipped in README.md alone" ($rf.Count -eq 4)
+
+        # The tree walk's scope (2026-11-06): Stor98's own texts and the CM's
+        # copy of its header are read; a dated run sheet, Stor98's ignored
+        # out\, its upstream reference copy and its published releases are
+        # not. Each stand-in file names the tool once.
+        $wroot = Join-Path $root "wordtree"
+        $wfiles = [ordered]@{
+            "src\stor98\docs\PLAN.md" = $true; "src\stor98\src\engine.c" = $true
+            "src\cm\stor98cm.h" = $true; "src\stor98\tests\unit\other_ut.c" = $true
+            "docs\contributing\runs\run-99.md" = $false; "src\stor98\out\build.txt" = $false
+            "src\stor98\third_party\nvme2k-1.2.0.0\nvme.c" = $false
+            "src\stor98\releases\0.4.0.0\readme.txt" = $false
+        }
+        foreach ($wk in $wfiles.Keys) {
+            $wp = Join-Path $wroot $wk
+            [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $wp))
+            [System.IO.File]::WriteAllText($wp, "line one`r`nThe $tw reviewer.`r`n")
+        }
+        $tf = @((Get-TreeWordingFaults -Root $wroot).Faults)
+        $wwant = @($wfiles.Keys | Where-Object { $wfiles[$_] })
+        Assert-Self ("wording: the tree walk reads Stor98's texts and the CM's header copy, and skips run sheets, out\, third_party\ and releases\: " + ($tf -join " | ")) `
+            ($tf.Count -eq $wwant.Count -and @($wwant | Where-Object { -not (Test-Has $tf ($_ + " line 2: names the review tool")) }).Count -eq 0)
+
+        # A string literal is text like any other: a Stor98 unit test's
+        # printed line naming the tool, and one naming a review round, are
+        # each a fault, and the same printf with neither is not.
+        $wroot2 = Join-Path $root "wordtree2"
+        $up = Join-Path $wroot2 "src\stor98\tests\unit\x_ut.c"
+        [void](New-Item -ItemType Directory -Force -Path (Split-Path -Parent $up))
+        [System.IO.File]::WriteAllText($up, ('    printf("x_ut: a case (' + $tw + ')\n");' + "`r`n" + '    printf("x_ut: a case (' + $rr + ')\n");' + "`r`n" + '    printf("x_ut: a case (sense ownership)\n");' + "`r`n"))
+        $hf = @((Get-TreeWordingFaults -Root $wroot2).Faults)
+        Assert-Self ("wording: a unit test's printed text is read: " + ($hf -join " | ")) `
+            ($hf.Count -eq 2 -and (Test-Has $hf "x_ut.c line 1: names the review tool") -and (Test-Has $hf "x_ut.c line 2: names a review round"))
 
         # The shipped scripts: this tree's copies pass, and a changed value
         # in SILENT.REG, a port switchover batch setting the other value, an
@@ -780,6 +979,31 @@ if ($faults.Count -gt 0) {
     $failedChecks += "the release cut's texts"
 } else {
     Write-Host ("the release cut's texts: OK ({0} texts of make-release.ps1, the download readme parts, the changelog entry, the release notes, the shipped scripts, the scripts' controller names; {1} columns, printable ASCII)" -f $texts, $script:PlainTextColumns)
+}
+
+# The tracked files' wording rules.
+Write-Host ""
+Write-Host "--- the tracked files' wording (docs' control bytes and TABs; AGENTS.md's review-tool, review-round and finding-number rule)"
+$wordFaults = @()
+$wordResult = $null
+try {
+    $wordResult = Get-TreeWordingFaults -Root $repo
+    $wordFaults = @($wordResult.Faults)
+} catch {
+    $wordFaults = @("the tracked files could not be read: $($_.Exception.Message)")
+}
+if ($wordFaults.Count -gt 0) {
+    $colour = if ($script:WordingRulesEnforced) { "Red" } else { "Yellow" }
+    $tag = if ($script:WordingRulesEnforced) { "FAIL" } else { "WARN" }
+    foreach ($f in $wordFaults) { Write-Host "${tag}: $f" -ForegroundColor $colour }
+    if ($script:WordingRulesEnforced) {
+        Write-Host ("{0} fault(s) in the tracked files' wording." -f $wordFaults.Count) -ForegroundColor Red
+        $failedChecks += "the tracked files' wording"
+    } else {
+        Write-Host ("{0} warning(s) in the tracked files' wording; these rules are report-only until the tree is clean (`$script:WordingRulesEnforced in this file)." -f $wordFaults.Count) -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ("the tracked files' wording: OK ({0} files, {1} of them docs\ Markdown)" -f $wordResult.Files, $wordResult.DocFiles)
 }
 
 Write-Host ""

@@ -1566,7 +1566,7 @@ and said. Section 9.2's T.7 reads both halves.
 matches every devnode against the package's INFs and keeps only the
 matched ones (`inst_eng.c`, the read's `inst_ids_match` over `infIds`
 and its `d->Inf < 0` skip), and the Stor98 baseline and shared-file
-reading do the same (`s98_base`, and `s98_base_9x`'s `Enum` read on 98
+reading do the same (`s98_baseline` (designed as `s98_base`), and `s98_base_9x`'s `Enum` read on 98
 SE and ME). With the id alone in `stor98.inf`, a tunnel drive with plain
 ids - every drive at a first install, and any drive the chain has not
 reached - would never become a candidate. So Stor98's candidates are

@@ -33,6 +33,9 @@
  * tool's own. */
 #define TR_ACPI_R_NOT_KEPT      20      /* the registry has no copy       */
 #define TR_ACPI_R_TYPE          21      /* a registry value not binary    */
+#define TR_ACPI_R_LICENCE       22      /* MSDM, SLIC: never saved        */
+#define TR_ACPI_R_REG_SIG       23      /* a registry value of another
+                                           signature than its key's      */
 
 #define TR_ACPI_HELD_NONE       0
 #define TR_ACPI_HELD_WHOLE      1
@@ -123,7 +126,9 @@ int tr_xha_body(const unsigned char *body, TR_U32 bytes, TR_U32 count,
 /* xhcicm.sys's copies (cm, read by tr_qa_body) merged into xhci98.sys's
  * set a: a whole copy the same as a's whole table of the same kind and
  * root index marks it SameAsCm; one that differs, or has no whole table
- * to match, is added (From TR_ACPI_SRC_CM, saved as <SIG><n>C.DAT). */
+ * to match, is added (From TR_ACPI_SRC_CM, saved as <SIG><n>C.DAT). A
+ * header of MSDM or SLIC a has no entry of that signature for is added
+ * too, so it is listed; no other header is. */
 void tr_acpi_merge(TR_ACPI *a, const TR_ACPI *cm);
 
 /* ---- 2000 and 32-bit XP: the registry's copies ------------------------- */
@@ -164,6 +169,26 @@ TR_U32 tr_acpi_reg_check(const char *key, TR_U32 type,
 int tr_acpi_reg_walk(const TR_REGOPS *ops, TR_ACPI *a, unsigned char *store,
                      TR_U32 cap);
 
+/* NT with the interface (record 25 section 21 item 10, revision 28): 1
+ * when a holds no DSDT whole, so the registry's copies are to be read;
+ * else 0 and nothing more is read. */
+int tr_acpi_reg_needed(const TR_ACPI *a);
+
+/* The registry's copies (reg, read by tr_acpi_reg_walk) added to the
+ * interface's set a: every copy of DSDT, FACP, RSDT and FACS whose
+ * signature a held no table of whole before the call, its From
+ * TR_ACPI_SRC_REG, a copy that failed its check listed with its reason.
+ * a's Source stays, but where a held nothing (the interface gave no
+ * table) it becomes TR_ACPI_SRC_REG. Returns the tables added whole. */
+int tr_acpi_reg_fill(TR_ACPI *a, const TR_ACPI *reg);
+
+/* MSDM and SLIC (the computer's Windows licence data) held as their
+ * 36-byte header alone (a shorter one as nothing), with the reason
+ * TR_ACPI_R_LICENCE, on every route; tr_acpi_names applies it before it
+ * names a file, so neither is ever written. Returns the tables so
+ * held. */
+int tr_acpi_licence(TR_ACPI *a);
+
 /* Why a table is not saved, as text ("" for none). */
 const char *tr_acpi_reason(TR_U32 r);
 
@@ -183,8 +208,9 @@ int tr_acpi_sum(const TR_ACPI_T *t);
 /* Each whole table's file name, by its signature (a character outside
  * A-Z and 0-9 written '_', a-z as A-Z; the root pointer "RSDP") and its
  * index, from 1, among the whole tables whose name has that same stem, so
- * two signatures written alike never share a name: "SSDT2.DAT". Returns
- * the files named. */
+ * two signatures written alike never share a name: "SSDT2.DAT". MSDM and
+ * SLIC are first held as headers (tr_acpi_licence), so never named.
+ * Returns the files named. */
 int tr_acpi_names(TR_ACPI *a);
 
 /* The signature for text: four characters, one outside printable ASCII

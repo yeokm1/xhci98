@@ -136,6 +136,89 @@ static void test_refusals(void)
     e.alignMask = 0xFFF;
     p.bufMask = 1 << PF_BUF_OFFSET;
     CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_REFUSE, "an offset against the adapter's alignment");
+
+    /* Exactly PF_MAX_STEPS steps plan: 16 tests, three buffers, both
+     * operations. */
+    env_nt(&e);
+    pf_defaults(&p, PF_OS_NT);
+    p.passes = 1;
+    p.warmup = 0;
+    p.pauseSec = 0;
+    p.timeSec = 1;
+    p.ntests = 16;
+    {
+        int i;
+
+        for (i = 0; i < 16; i++) {
+            p.tests[i] = p.tests[i % 4];
+        }
+    }
+    p.bufMask = 7;
+    p.ops = PF_OP_BOTH;
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "exactly PF_MAX_STEPS steps plan");
+    CHECK_EQ(pl.nsteps, PF_MAX_STEPS, "all of them");
+    CHECK(!pl.stepsCut, "none cut");
+}
+
+/* The verification map's block (pf_map_block): every request whole blocks
+ * or within one, so one generation per block is exact. */
+static void test_map_block(void)
+{
+    PF_STEP st[4];
+    PF_PARAMS p;
+    PF_ENV e;
+    PF_PLAN pl;
+    char why[200];
+    int i, ok;
+
+    memset(st, 0, sizeof(st));
+    st[0].op = PF_OP_WRITE;
+    st[0].size = 4096;
+    st[1].op = PF_OP_WRITE;
+    st[1].size = 6144;
+    CHECK_EQ(pf_map_block(st, 2), 2048u, "4 KiB and 6 KiB writes: 2 KiB blocks");
+    st[1].op = PF_OP_READ;
+    st[1].size = 512;
+    CHECK_EQ(pf_map_block(st, 2), 4096u, "a 512-byte read within a 4 KiB block");
+    st[1].size = 1536;
+    CHECK_EQ(pf_map_block(st, 2), 512u, "a 1.5 KiB read: 512-byte blocks");
+    st[0].op = PF_OP_READ;
+    st[1].size = 6144;
+    CHECK_EQ(pf_map_block(st, 2), 2048u, "reads alone: from the smallest, then cut");
+    st[0].op = PF_OP_WRITE;
+    st[0].size = 6144;
+    st[1].op = PF_OP_READ;
+    st[1].size = 3072;
+    st[2].op = PF_OP_READ;
+    st[2].size = 4096;
+    CHECK_EQ(pf_map_block(st, 3), 1024u, "a cut that leaves a read across blocks is cut again");
+    st[0].size = 1048576u;
+    st[1].size = 4096;
+    st[2].size = 65536;
+    CHECK_EQ(pf_map_block(st, 3), 1048576u, "powers of two: the smallest write, as before");
+
+    /* XHCIPERF /run /verify /test seq,4,1,1 /test seq,6,1,1: no request
+     * covers part of a block. */
+    env_nt(&e);
+    pf_defaults(&p, PF_OS_NT);
+    p.pattern = PF_PAT_VERIFY;
+    p.verify = 1;
+    p.ntests = 2;
+    p.tests[0].kind = PF_SEQ;
+    p.tests[0].size = 4096;
+    p.tests[0].depth = 1;
+    p.tests[0].threads = 1;
+    p.tests[1] = p.tests[0];
+    p.tests[1].size = 6144;
+    CHECK_EQ(pf_plan(&p, &e, &pl, why, sizeof(why)), PF_OK, "4 KiB and 6 KiB verified plan");
+    CHECK_EQ(pl.mapBlock, 2048u, "on 2 KiB blocks");
+    ok = 1;
+    for (i = 0; i < pl.nsteps; i++) {
+        if (pl.steps[i].size % pl.mapBlock != 0 && pl.mapBlock % pl.steps[i].size != 0) {
+            ok = 0;
+        }
+    }
+    CHECK(ok, "every step whole blocks or within one");
 }
 
 static void test_sweep_budget(void)
@@ -754,6 +837,23 @@ static void test_cmdline(void)
     CHECK(p.sweep && p.sweepMin == 131072u && p.sweepMax == 2097152u, "128 KiB to 2 MiB");
     CHECK(p.verify && p.bufMask == 7, "verified, three layouts");
     CHECK_EQ(pf_cmdline(3, a6, &p, &c, why, sizeof(why)), 1, "not a power of two");
+    {
+        /* /cached, /writethrough and /verify change the workload: the
+         * preset's name no longer goes with it. */
+        static const char *sw[3] = { "/cached", "/writethrough", "/verify" };
+        char *a7[4];
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            pf_defaults(&p, PF_OS_NT);
+            a7[0] = "x";
+            a7[1] = "/preset";
+            a7[2] = "quick";
+            a7[3] = (char *)sw[k];
+            CHECK_EQ(pf_cmdline(4, a7, &p, &c, why, sizeof(why)), 0, "a preset and a change");
+            CHECK_EQ(p.preset, PF_PRESET_CUSTOM, "the change makes it custom");
+        }
+    }
 }
 
 /* Record 29 section 16.3 */
@@ -1013,6 +1113,7 @@ int main(void)
 {
     test_presets();
     test_refusals();
+    test_map_block();
     test_sweep_budget();
     test_free();
     test_generator();

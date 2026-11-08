@@ -1,18 +1,24 @@
 # Issue 21 - On Windows 98 SE an on-board ASMedia ASM4242 USB4 host never answers the connection manager, because the firmware's USB4 handover runs only from ACPI
 
-Status: **open; the product forms are being finished for `3.4.1.0`, and
-on Windows 10 x64 the product form was read working on the owner's board
-on 2026-11-04** (section 6a). The 98 SE bench of the product form is
-owed. Before that: **cause found and a test image working on the owner's
-board, 2026-11-02** (roadmap-usb4 tasks 46.11 and 46.12; design record 32
-sections 12 and 12.7). With two board-specific test helpers in place, a
-tunnelled NVMe drive hot-plugged at the desktop is enumerated, tunnelled
-and started by Stor98 with a drive letter, and survived four further
-unplug and replug cycles. Nothing of it is in a release: the IRQ step is
-a DOS program run from `AUTOEXEC.BAT` and the handover a test build of
-`xhcicm.sys` with the board's addresses compiled in. The product forms
-are tasks 46.11 (the IRQ) and 46.12 (the handover). Problems found on
-the way are tasks 46.13 to 46.16 (section 8).
+Status: **the product forms shipped in `3.4.1.0`** (cut 2026-11-05; section
+6a): the IRQ step in `XHCIPFW.VXD` (task 46.11) and the handover in
+`xhcicm.sys` (task 46.12), read on the owner's board on 2026-11-04 under
+Windows 10 x64 and under 98 SE, where the handover was answered and a
+tunnelled NVMe drive ran on Stor98 as D: (1004/1060 MB/s sequential, no
+fault; roadmap-usb4 46.11 and 46.12). What is left is what those two tasks
+name, in "Planned - Left by `3.4.1.0`": for 46.11, the owner's question
+whether the step should leave the lines with steering enabled, and a case
+where a routing link is shown to serve the functions; for 46.12, the board's
+reading with the LAN on and off, and the items earlier partials left (the 9x
+fault legs on ME, Windows 11, the installer's texts read by the owner, the
+structural row on NT). Before the product forms: **cause found and a test
+image working on the owner's board, 2026-11-02** (design record 32 sections
+12 and 12.7): with two board-specific test helpers in place - the IRQ step a
+DOS program run from `AUTOEXEC.BAT` and the handover a test build of
+`xhcicm.sys` with the board's addresses compiled in - a tunnelled NVMe drive
+hot-plugged at the desktop was enumerated, tunnelled and started by Stor98
+with a drive letter, and survived four further unplug and replug cycles.
+Problems found on the way are tasks 46.13 to 46.16 (section 8).
 
 **Scope.** Windows 98 SE (and by the same reasoning ME, unread) on a
 machine whose USB4 host is an ASMedia ASM4242 and whose firmware hands
@@ -154,7 +160,7 @@ been placed by summing two separate excerpts of a field list, skipping
 the fields between them. The image was rebuilt before it reached the
 board.
 
-## 6a. The product forms (`3.4.1.0`, in progress)
+## 6a. The product forms (`3.4.1.0`)
 
 - **The IRQ (46.11).** `XHCIPFW.VXD` writes "no IRQ" (`FFh`) to the
   Interrupt Line of every Thunderbolt or USB4 host interface and its lone
@@ -176,8 +182,8 @@ board.
   test, and Windows 2000 is refused outright (design record 32 section
   12.8.15.16). For 2000, 32-bit XP and XP x64 the owner chose a narrow
   exception, the switch's own configuration page mapped for the two
-  mailbox dwords only, behind the same opt-in (roadmap-usb4 46.25, in
-  progress).
+  mailbox dwords only, behind the same opt-in (roadmap-usb4 46.25,
+  shipped in `3.4.1.0` with its bench owed).
 
 **Read on the owner's board, Windows 10 x64, 2026-11-04** (CSM, Above 4G
 Decoding on, the test-signed kit of `3.4.1.0`'s tree at `62b07a0f`):
@@ -207,7 +213,13 @@ the second report.
 
 ## 8. Found with it
 
-Each is its own task; none is fixed.
+Each is its own task; how each ended is its roadmap-usb4 line (Phase 46):
+46.13 partly coded (a guard against a superseded teardown) and dropped by
+the owner's review of the open tasks on 2026-11-05; 46.14 audited, one
+admission closed at a system power IRP, and dropped the same day; 46.15
+closed on 2026-11-02 with its cause found (below); 46.16 not reproduced and
+dropped on 2026-11-05, reopened only with a fresh report. Unresolved causes
+stay unresolved below.
 
 - **A connect and drop loop (46.13).** In one session, after a first
   connection whose PCIe path failed, the enclosure connected and dropped
@@ -245,12 +257,12 @@ Each is its own task; none is fixed.
 
 ## Sources
 
-- The owner's capture folder under `temp\` (git-ignored, 2026-11-01 and
-  2026-11-02): XHCITR reports `tr`, `tr2`, `tr3`, `tr4` to `tr11`, the
-  Linux folders with their kernel logs and copied ACPI tables, the
-  benchmark screenshots and the crash photos. Not tracked, and not
-  quoted beyond the values above.
-- The owner's Windows 10 x64 bench folder `temp\x870e-t11\` (2026-11-04):
+- The owner's bench folder under `temp\` (git-ignored, 2026-11-01 and
+  2026-11-02): XHCITR reports `tr`, `tr2`, `tr3`, `tr4` to `tr11`, the Linux
+  folders with their kernel logs and copied ACPI tables, the benchmark
+  screenshots and the crash photos. Not tracked, and not quoted beyond the
+  values above.
+- The owner's Windows 10 x64 bench folder under `temp\` (2026-11-04):
   `XHCIINST.LOG` and XHCITR reports `a`, `b` and `c`.
 - Design record 32 sections 12, 12.7 and 12.8; roadmap-usb4 tasks 46.11
   to 46.16 and 46.25.
